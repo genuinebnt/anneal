@@ -1,0 +1,50 @@
+title = "Bplus tree"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Trees and ordered structures"
+chapter_order = 2
+order = 169
+kind = "recipe"
+lede = "an in-memory B+ tree map with leaf chain, split, borrow and merge, arena-based"
+level = "advanced"
+code = ["examples/data_structures/bplus_tree.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>database indexes</li><li>ordered key-value stores</li><li>anything needing fast point lookups <strong>and</strong> range scans</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+`BPlusMap<K, V>` where internal nodes hold only separator keys and child ids, while leaves hold the key/value pairs and are linked left-to-right. `order` = max keys per node (M >= 3); every non-root node keeps >= M/2 keys.
+
+**Why** databases use it: a node is sized to **one** disk page (4-16 KiB), so fan-out is in the hundreds; a billion rows need only 3-4 page reads per lookup, and the top levels stay cached. Internal nodes carry no values, so they pack even more keys per page.
+
+Range scans find the first key once, then walk the leaf chain sequentially (cheap, prefetch-friendly) instead of re-descending.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+nodes live in a `Vec` addressed by `usize` (arena_ids), freed slots recycled. Separator rule: keys in kids[i] &lt; sep[i] &lt;= keys in kids[i+1]. Insert splits an overflowing node (leaf: copy up the right half's first key; internal: push the middle key up) and the root grows when it splits.
+
+Delete fixes an underflowing child by **borrowing** from a sibling with spare keys, else **merging** with one (full borrow/merge, not lazy underflow); the root shrinks when it is left with one child. Verified by `check_invariants()` after **every** operation of a 20k-op seeded differential test against `BTreeMap`.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+relational database indexes (InnoDB clustered indexes, PostgreSQL btree indexes and SQLite tables are B-tree family structures; the B+ variant keeps data in leaves); file-system directories and metadata; ordered storage engines.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/B%2B_tree>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/B%2B_tree"
+url = "https://en.wikipedia.org/wiki/B%2B_tree"

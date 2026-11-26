@@ -1,0 +1,68 @@
+title = "External sort hash aggregation"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 371
+kind = "recipe"
+lede = "external merge sort, top-N, and hash aggregation that spills (partition, recurse on skew), with IO counted in pages."
+level = "advanced"
+code = ["examples/database/external_sort_hash_aggregation.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+query operators that must work when the data does not fit in memory (**order by**, **group by**, **distinct**).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+the external sort behind **order by** and sort-merge join in PostgreSQL (tuplesort: quicksorted runs or replacement selection historically, then a tape merge), spilling hash aggregation in PostgreSQL 13+, DuckDB and Spark, LSM-tree compaction and MapReduce shuffle (both are k-way merges of sorted runs), and top-N ('ORDER BY ..
+
+**Limit** n') planned as a bounded heap instead of a sort. Course: CMU 15-445 Intro to Database Systems, Lecture 11 (External sorting, aggregations).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Model**: pages are 256 bytes; a tuple `(key u64, val i64)` is 16 bytes (16 per page), an aggregate state `(key, count, sum, min, max)` is 40 bytes (6 per page). A memory budget is B pages. Every file access is counted in **pages**, the unit the textbook cost formulas use.
+
+Files are `Vec`s; no real IO is needed to see the algorithms and their costs. **External merge sort**: pass 0 makes sorted **runs** of at most B pages (quicksort the buffer), then each merge pass merges up to B-1 runs at a time (B-1 input buffers + 1 output buffer) with a heap-based k-way merge (a loser tree does about half the comparisons; the IO is the same).
+
+Number of passes = 1 + ceil(log&#95;{B-1}(ceil(N/B))), and each pass reads and writes all N pages, so IO = 2N &#42; passes (asserted exactly).
+
+**Replacement selection** instead keeps a heap of B-2 pages: emit the smallest key not below the last emitted one, else park the tuple for the next run; runs average 2x the memory on random input (fewer runs, sometimes a pass less), one run for sorted input, and degrade to memory-sized runs on reverse-sorted input.
+
+**Double buffering** prefetches the next page of every input run while the CPU merges the current one, hiding IO latency (we count blocking "exposed" reads) at the price of halving the fan-in, hence possibly more passes. TOP-N: `ORDER BY key LIMIT n` keeps a bounded max-heap of n tuples: one sequential read of the input and no writes.
+
+**Hash aggregation** with a memory budget of (B-1)&#42;6 groups: **phase** 1 partitions by hash into B-1 partition files, **phase** 2 aggregates each partition in memory with a different hash; a partition that still has too many distinct groups is **re-partitioned** recursively with a new hash seed (skew), and after a depth cap it falls back to **sort-based** aggregation (always terminates, even if the hash is adversarial).
+
+**Early/partial aggregation** keeps a table during phase 1 and spills partial states only when it fills, so if the groups fit in memory nothing is written at all, and duplicates are combined before they hit the disk. **Sort-based** aggregation sorts then combines neighbours and delivers sorted output for free.
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+300 random relations (uniform, skewed, single hot key, all-equal, sorted, reverse, all-distinct; sizes 0..3000; budgets of 3 to 32 pages) are sorted by 4 variants and compared with `sort`; the passes formula and the exact IO are asserted; top-N equals the sort prefix; COUNT/SUM/MIN/MAX/AVG from grace-hash, early-hash and sort aggregation equal a `HashMap` oracle, as do both **distinct** variants.
+
+Targeted cases assert replacement-selection run lengths (about 2M on random data, 1 run sorted, M reverse), forced recursion and forced sort fallback, and that early aggregation does zero spill IO when the groups fit.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://15445.courses.cs.cmu.edu/fall2024/slides/11-sorting.pdf" target="_blank" rel="noreferrer">https://15445.courses.cs.cmu.edu/fall2024/slides/11-sorting.pdf</a> (CMU 15-445 sorting and aggregation lecture)</li><li><a href="https://pages.cs.wisc.edu/~dbbook/" target="_blank" rel="noreferrer">https://pages.cs.wisc.edu/~dbbook/</a> (Ramakrishnan &amp; Gehrke, Database Management Systems: external sorting chapter) and <a href="https://15445.courses.cs.cmu.edu/fall2024/notes/11-sorting.pdf" target="_blank" rel="noreferrer">https://15445.courses.cs.cmu.edu/fall2024/notes/11-sorting.pdf</a> (the lecture notes</li><li>Graefe, "Implementing sorting in database systems", ACM Computing Surveys 2006, is the survey)</li></ul>
+"""
+
+[[sources]]
+title = "15445.courses.cs.cmu.edu/fall2024/slides/11-sorting.pdf"
+url = "https://15445.courses.cs.cmu.edu/fall2024/slides/11-sorting.pdf"
+
+[[sources]]
+title = "pages.cs.wisc.edu/~dbbook"
+url = "https://pages.cs.wisc.edu/~dbbook/"
+
+[[sources]]
+title = "15445.courses.cs.cmu.edu/fall2024/notes/11-sorting.pdf"
+url = "https://15445.courses.cs.cmu.edu/fall2024/notes/11-sorting.pdf"

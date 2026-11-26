@@ -1,0 +1,483 @@
+title = "Benchmarking"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Methods: benchmarking and profiling"
+chapter_order = 6
+order = 146
+kind = "guide"
+lede = "Workloads (YCSB, TPC-C, TPC-H, TPC-DS, JOB, ClickBench) · instruments checked before they measure · skew, tails and the stall a closed loop cannot see · how much two identical runs differ · a verified comparison with SQLite"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>A benchmark answers a question; write the question first.</strong> "Which index structure serves this read-heavy workload with the least memory?" is a question. "How fast is it?" is not. The question decides the workload, the data size, the hardware, the metric and the baseline.</li> <li><strong>A benchmark is a program, and programs have bugs.</strong> Before measuring a system, check the instrument: the key generator really has the skew it claims, the latency histogram is within its error bound of the exact quantiles, the operation mix has the stated proportions, the results of the benchmark queries are <em>correct</em>. Every instrument below is tested against an exact computation, and one of them (the Zipfian generator of YCSB) turned out to be approximate in a way worth knowing.</li> <li><strong>Report a distribution, not a number.</strong> Throughput is a mean; users feel the tail. Record every latency in a histogram with bounded error (here 1.6%), report p50, p99, p99.9 and the maximum, and never average percentiles.</li> <li><strong>A closed-loop client measures the wrong thing during a stall.</strong> A client that sends the next request when the previous one returns stops sending when the server stalls, so the requests that <em>would</em> have arrived during the stall are never made and never charged. This is <strong>coordinated omission</strong>. Measure latency from when the request was <em>meant</em> to be sent (an open loop with a schedule), or correct a closed-loop histogram for the missing waits.</li> <li><strong>Two runs of the same program differ.</strong> Frequency scaling, thermal state, other processes, memory layout and caches move a result by percent. A claim of "10% faster" from one run each is a coin flip; repeat, report the median with a confidence interval, and compare with an interval for the <em>ratio</em>.</li> <li><strong>Check the answer before the time.</strong> A fast wrong answer is not a result. The comparison with SQLite below asserts that both systems return the same numbers before it prints a time.</li> </ul>
+"""
+
+[[sections]]
+heading = "The workloads, and what each tests"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Benchmark</th> <th>What it is</th> <th>What it exercises</th> <th>Beware</th> </tr> </thead> <tbody> <tr> <td><strong>YCSB</strong> (Cooper et al., 2010)</td> <td>key-value operations: six mixes (A update-heavy, B read-mostly, C read-only, D read-latest, E short ranges, F read-modify-write) over Zipfian or latest-biased keys</td> <td>point reads and writes, scans, hot keys</td> <td>tiny records and no transactions: it does not test a query engine</td> </tr> <tr> <td><strong>TPC-C</strong></td> <td>order entry for a company with warehouses: five transaction types (New-Order, Payment, Order-Status, Delivery, Stock-Level)</td> <td>OLTP: transactions with contention on hot rows, secondary indexes, many small writes; metric <code>tpmC</code></td> <td>the official rules fix the mix, the scale (warehouses per tpmC) and an audit; "TPC-C-like" runs are not TPC-C results</td> </tr> <tr> <td><strong>TPC-H</strong></td> <td>a warehouse of 8 tables with 22 analytical queries at a scale factor</td> <td>scans, joins, aggregation, subqueries; the query optimizer and the executor</td> <td>the data are uniform and independent, so cardinality estimation is easy; vendors tune for the 22 queries (Boncz, Neumann and Erling, 2013)</td> </tr> <tr> <td><strong>TPC-DS</strong></td> <td>a snowflake schema with 99 queries</td> <td>more complex SQL: windows, rollups, correlated subqueries, skewed data</td> <td>SQL dialect support decides whether a system can run it at all</td> </tr> <tr> <td><strong>JOB</strong> (Leis et al., 2015)</td> <td>the <em>Join Order Benchmark</em>: 113 queries over the real IMDB data</td> <td>join ordering and cardinality estimation with correlated, skewed data</td> <td>tests the optimizer, not raw speed</td> </tr> <tr> <td><strong>ClickBench</strong></td> <td>43 queries over a 100-million-row table of web analytics events</td> <td>column scans, aggregations, string functions on a single wide table</td> <td>single table: no joins to speak of</td> </tr> <tr> <td><strong>sysbench</strong> and workload replays</td> <td>simple OLTP transactions; a captured production workload</td> <td>throughput under concurrency; realism</td> <td>a replay is only as good as what it captured</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "The instruments, tested"
+body = """
+:::deeper Reference: a Zipfian generator (and the scrambled variant), a log-linear latency histogram, the YCSB mixes, bootstrap intervals, and a deterministic model of coordinated omission
+```rust title="src/test/bench.rs"
+//! The parts of a benchmark that are not the system under test: a key generator with the skew of real workloads, a latency histogram with
+//! a bounded error, the YCSB operation mixes, a way to state how sure a comparison is, and a deterministic model that shows how a
+//! closed-loop measurement hides a stall (coordinated omission). Each is checked against an exact computation so that the instrument can
+//! be trusted before it measures anything.
+use std::collections::BTreeMap;
+
+pub struct Rng(pub u64);
+impl Rng {
+    pub fn next_u64(&mut self) -> u64 {
+        // xorshift64*
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545F4914F6CDD1D)
+    }
+    /// Uniform in [0, 1).
+    pub fn unit(&mut self) -> f64 {
+        (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
+    }
+    pub fn below(&mut self, n: u64) -> u64 {
+        self.next_u64() % n
+    }
+    /// Standard normal by Box–Muller.
+    pub fn normal(&mut self) -> f64 {
+        let (u, v) = (self.unit().max(1e-300), self.unit());
+        (-2.0 * u.ln()).sqrt() * (2.0 * std::f64::consts::PI * v).cos()
+    }
+}
+
+// ---- the Zipfian distribution (Gray et al., "Quickly generating billion-record synthetic databases", SIGMOD 1994) ---------------------------
+
+/// Items `0..n` where item `i` has probability proportional to `1 / (i + 1)^theta`. YCSB uses theta = 0.99.
+pub struct Zipf {
+    n: u64,
+    theta: f64,
+    zetan: f64,
+    alpha: f64,
+    eta: f64,
+}
+impl Zipf {
+    pub fn new(n: u64, theta: f64) -> Zipf {
+        let zeta = |n: u64| (1..=n).map(|i| 1.0 / (i as f64).powf(theta)).sum::<f64>();
+        let (zetan, zeta2) = (zeta(n), zeta(2));
+        Zipf { n, theta, zetan, alpha: 1.0 / (1.0 - theta), eta: (1.0 - (2.0 / n as f64).powf(1.0 - theta)) / (1.0 - zeta2 / zetan) }
+    }
+    /// The exact probability of item `i`.
+    pub fn probability(&self, i: u64) -> f64 {
+        1.0 / ((i + 1) as f64).powf(self.theta) / self.zetan
+    }
+    pub fn next(&self, rng: &mut Rng) -> u64 {
+        let u = rng.unit();
+        let uz = u * self.zetan;
+        if uz < 1.0 {
+            0
+        } else if uz < 1.0 + 0.5f64.powf(self.theta) {
+            1
+        } else {
+            ((self.n as f64 * (self.eta * u - self.eta + 1.0).powf(self.alpha)) as u64).min(self.n - 1)
+        }
+    }
+    /// YCSB's "scrambled" Zipfian: the same skew, but the popular items are spread over the key space by a hash instead of being the
+    /// smallest keys (so that range partitioning does not put every hot key in one shard).
+    pub fn next_scrambled(&self, rng: &mut Rng) -> u64 {
+        fnv64(self.next(rng)) % self.n
+    }
+}
+
+pub fn fnv64(x: u64) -> u64 {
+    let mut h = 0xcbf29ce484222325u64;
+    for b in x.to_le_bytes() {
+        h = (h ^ b as u64).wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+// ---- a latency histogram with bounded relative error (the idea of HdrHistogram) -----------------------------------------------------
+
+/// Counts of values in log-linear buckets: exact below 128, and above that 64 buckets per power of two, so a recorded value is known to
+/// within 1/64 (1.6%) however large it is. Records nanoseconds, or any non-negative integer.
+#[derive(Clone)]
+pub struct Histogram {
+    counts: Vec<u64>,
+    total: u64,
+    max: u64,
+}
+const SUB: u32 = 7; // 128 values are exact; above, 64 buckets per octave
+
+fn bucket(v: u64) -> usize {
+    let bits = 64 - v.leading_zeros();
+    if bits <= SUB {
+        v as usize
+    } else {
+        let shift = bits - SUB;
+        shift as usize * 64 + (v >> shift) as usize
+    }
+}
+/// The largest value that falls in bucket `i`.
+fn bucket_high(i: usize) -> u64 {
+    if i < 128 {
+        i as u64
+    } else {
+        let shift = (i / 64 - 1) as u32;
+        let m = (i % 64 + 64) as u128;
+        ((((m + 1) << shift) - 1).min(u64::MAX as u128)) as u64
+    }
+}
+
+impl Histogram {
+    pub fn new() -> Histogram {
+        Histogram { counts: vec![0; 58 * 64 + 128], total: 0, max: 0 }
+    }
+    pub fn record(&mut self, v: u64) {
+        self.counts[bucket(v)] += 1;
+        self.total += 1;
+        self.max = self.max.max(v);
+    }
+    /// Record `v`, and, if it is longer than the interval at which requests were meant to be issued, also the waits that the requests
+    /// queued behind it would have seen: `v - interval`, `v - 2 * interval`, … (HdrHistogram's correction for coordinated omission).
+    pub fn record_corrected(&mut self, v: u64, expected_interval: u64) {
+        self.record(v);
+        let mut missing = v.saturating_sub(expected_interval);
+        while missing >= expected_interval && expected_interval > 0 {
+            self.record(missing);
+            missing -= expected_interval;
+        }
+    }
+    pub fn count(&self) -> u64 {
+        self.total
+    }
+    pub fn max(&self) -> u64 {
+        self.max
+    }
+    /// A value `x` such that at least a fraction `q` of the recorded values are `<= x`, within the bucket error.
+    pub fn quantile(&self, q: f64) -> u64 {
+        if self.total == 0 {
+            return 0;
+        }
+        let rank = ((q * self.total as f64).ceil() as u64).clamp(1, self.total);
+        let mut seen = 0;
+        for (i, &c) in self.counts.iter().enumerate() {
+            seen += c;
+            if seen >= rank {
+                return bucket_high(i).min(self.max);
+            }
+        }
+        self.max
+    }
+    pub fn merge(&mut self, other: &Histogram) {
+        for (a, b) in self.counts.iter_mut().zip(&other.counts) {
+            *a += b;
+        }
+        self.total += other.total;
+        self.max = self.max.max(other.max);
+    }
+    pub fn mean(&self) -> f64 {
+        let sum: f64 = self.counts.iter().enumerate().map(|(i, &c)| c as f64 * bucket_high(i) as f64).sum();
+        sum / self.total.max(1) as f64
+    }
+}
+impl Default for Histogram {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---- the YCSB workloads --------------------------------------------------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Op {
+    Read(u64),
+    Update(u64),
+    Insert(u64),
+    Scan(u64, usize),
+    ReadModifyWrite(u64),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Dist {
+    Zipfian,
+    Uniform,
+    /// Recently inserted keys are the most likely to be read (YCSB workload D).
+    Latest,
+}
+
+/// Operation proportions, in percent, and the distribution of the keys they touch.
+#[derive(Clone, Debug)]
+pub struct Workload {
+    pub name: &'static str,
+    pub read: u32,
+    pub update: u32,
+    pub insert: u32,
+    pub scan: u32,
+    pub rmw: u32,
+    pub dist: Dist,
+}
+impl Workload {
+    /// Workloads A to F of the Yahoo! Cloud Serving Benchmark (Cooper et al., SoCC 2010).
+    pub fn ycsb(letter: char) -> Workload {
+        let w = |name, read, update, insert, scan, rmw, dist| Workload { name, read, update, insert, scan, rmw, dist };
+        match letter {
+            'A' => w("A: update heavy (50/50)", 50, 50, 0, 0, 0, Dist::Zipfian),
+            'B' => w("B: read mostly (95/5)", 95, 5, 0, 0, 0, Dist::Zipfian),
+            'C' => w("C: read only", 100, 0, 0, 0, 0, Dist::Zipfian),
+            'D' => w("D: read latest (95/5 insert)", 95, 0, 5, 0, 0, Dist::Latest),
+            'E' => w("E: short ranges (95 scan/5 insert)", 0, 0, 5, 95, 0, Dist::Zipfian),
+            'F' => w("F: read-modify-write (50/50)", 50, 0, 0, 0, 50, Dist::Zipfian),
+            _ => panic!("no such workload"),
+        }
+    }
+}
+
+/// Generates the operations of a workload over a table that starts with `records` keys.
+pub struct Generator {
+    w: Workload,
+    zipf: Zipf,
+    pub inserted: u64,
+    rng: Rng,
+}
+impl Generator {
+    pub fn new(w: Workload, records: u64, seed: u64) -> Generator {
+        Generator { zipf: Zipf::new(records, 0.99), inserted: records, rng: Rng(seed | 1), w }
+    }
+    fn key(&mut self) -> u64 {
+        match self.w.dist {
+            Dist::Uniform => self.rng.below(self.inserted),
+            Dist::Zipfian => self.zipf.next_scrambled(&mut self.rng) % self.inserted,
+            // rank 0 is the newest key
+            Dist::Latest => self.inserted - 1 - self.zipf.next(&mut self.rng).min(self.inserted - 1),
+        }
+    }
+    pub fn next(&mut self) -> Op {
+        let r = self.rng.below(100) as u32;
+        let w = self.w.clone();
+        if r < w.read {
+            Op::Read(self.key())
+        } else if r < w.read + w.update {
+            Op::Update(self.key())
+        } else if r < w.read + w.update + w.insert {
+            self.inserted += 1;
+            Op::Insert(self.inserted - 1)
+        } else if r < w.read + w.update + w.insert + w.scan {
+            let len = 1 + self.rng.below(100) as usize;
+            Op::Scan(self.key(), len)
+        } else {
+            Op::ReadModifyWrite(self.key())
+        }
+    }
+}
+
+// ---- how sure is a comparison -----------------------------------------------------------------------------------------------------------
+
+pub fn mean(xs: &[f64]) -> f64 {
+    xs.iter().sum::<f64>() / xs.len() as f64
+}
+pub fn median(xs: &[f64]) -> f64 {
+    let mut v = xs.to_vec();
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let n = v.len();
+    if n % 2 == 1 { v[n / 2] } else { (v[n / 2 - 1] + v[n / 2]) / 2.0 }
+}
+pub fn stddev(xs: &[f64]) -> f64 {
+    let m = mean(xs);
+    (xs.iter().map(|x| (x - m).powi(2)).sum::<f64>() / (xs.len() - 1) as f64).sqrt()
+}
+
+/// A percentile bootstrap confidence interval (`level`, e.g. 0.95) for `stat` of the sample.
+pub fn bootstrap_ci(xs: &[f64], stat: fn(&[f64]) -> f64, resamples: usize, level: f64, rng: &mut Rng) -> (f64, f64) {
+    let n = xs.len();
+    let mut stats: Vec<f64> = (0..resamples)
+        .map(|_| {
+            let s: Vec<f64> = (0..n).map(|_| xs[rng.below(n as u64) as usize]).collect();
+            stat(&s)
+        })
+        .collect();
+    stats.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let lo = ((1.0 - level) / 2.0 * resamples as f64) as usize;
+    let hi = (((1.0 + level) / 2.0 * resamples as f64) as usize).min(resamples - 1);
+    (stats[lo], stats[hi])
+}
+
+/// A bootstrap interval for the ratio of the medians of two samples, `median(b) / median(a)`: if it excludes 1, the difference is not
+/// within the noise of these measurements.
+pub fn ratio_of_medians_ci(a: &[f64], b: &[f64], resamples: usize, level: f64, rng: &mut Rng) -> (f64, f64) {
+    let mut ratios: Vec<f64> = (0..resamples)
+        .map(|_| {
+            let ra: Vec<f64> = (0..a.len()).map(|_| a[rng.below(a.len() as u64) as usize]).collect();
+            let rb: Vec<f64> = (0..b.len()).map(|_| b[rng.below(b.len() as u64) as usize]).collect();
+            median(&rb) / median(&ra)
+        })
+        .collect();
+    ratios.sort_by(|x, y| x.partial_cmp(y).unwrap());
+    let lo = ((1.0 - level) / 2.0 * resamples as f64) as usize;
+    let hi = (((1.0 + level) / 2.0 * resamples as f64) as usize).min(resamples - 1);
+    (ratios[lo], ratios[hi])
+}
+
+// ---- coordinated omission, deterministically -----------------------------------------------------------------------------------------------
+
+/// A server in virtual time (nanoseconds): every request takes `service` except every `stall_every`-th, which takes `stall`.
+pub struct Server {
+    pub service: u64,
+    pub stall: u64,
+    pub stall_every: u64,
+}
+impl Server {
+    fn time(&self, i: u64) -> u64 {
+        if self.stall_every > 0 && i % self.stall_every == self.stall_every - 1 { self.stall } else { self.service }
+    }
+}
+
+/// One client that sends the next request when the previous one has returned, and records each request's own duration.
+pub fn closed_loop(server: &Server, requests: u64) -> Histogram {
+    let mut h = Histogram::new();
+    for i in 0..requests {
+        h.record(server.time(i));
+    }
+    h
+}
+
+/// Requests that are meant to arrive every `interval` ns whether or not the server is busy. Latency is measured from the moment the
+/// request was meant to start, so a request that waits behind a stall is charged the wait. The server handles one request at a time.
+pub fn open_loop(server: &Server, requests: u64, interval: u64) -> Histogram {
+    let mut h = Histogram::new();
+    let mut free_at = 0u64;
+    for i in 0..requests {
+        let arrival = i * interval;
+        let start = free_at.max(arrival);
+        free_at = start + server.time(i);
+        h.record(free_at - arrival);
+    }
+    h
+}
+
+/// The closed-loop measurement with the correction applied.
+pub fn closed_loop_corrected(server: &Server, requests: u64, interval: u64) -> Histogram {
+    let mut h = Histogram::new();
+    for i in 0..requests {
+        h.record_corrected(server.time(i), interval);
+    }
+    h
+}
+
+/// Frequencies of values, for tests.
+pub fn tally(xs: impl Iterator<Item = u64>) -> BTreeMap<u64, u64> {
+    let mut m = BTreeMap::new();
+    for x in xs {
+        *m.entry(x).or_default() += 1;
+    }
+    m
+}
+```
+:::
+
+<p><strong>Skew.</strong> Real keys are not uniform: a few are very hot. YCSB's Zipfian generator (after Gray et al., 1994) draws item <em>i</em> with probability proportional to 1/(<em>i</em>+1)&#94;0.99. The test compares 4 million draws with the exact probabilities:</p>
+
+```text title="Zipfian(1 000, 0.99): the exact probability of each rank and the frequency in 4 million draws"
+rank           exact      sample     error
+0            0.12938     0.12953      0.1%
+1            0.06514     0.06505     -0.1%
+2            0.04360     0.05104     17.1%
+3            0.03280     0.03624     10.5%
+4            0.02630     0.02831      7.7%
+5            0.02195     0.02303      4.9%
+6            0.01885     0.01969      4.5%
+7            0.01651     0.01705      3.2%
+8            0.01470     0.01506      2.5%
+9            0.01324     0.01345      1.6%
+zipfian(1000, 0.99), 4 million draws: item 0 has probability 0.1294 (sample 0.1295), items 0..9 together 0.382, total variation distance 0.0166
+busiest of 8 range partitions: 72% of requests unscrambled, 21% scrambled
+```
+
+<ul> <li><strong>Ranks 0 and 1 are exact; the generator is only an approximation for the others.</strong> Rank 2 appears 17% more often than the distribution says, rank 3 10% more, and the error falls to under 2% by rank 9. The total variation distance over all 1 000 items is 0.017, so the shape is right and the head is a little heavy. This is how YCSB's generator works (it inverts an approximation of the cumulative distribution) and any system compared with it on the same generator sees the same skew; but if you compare with a hand-computed expectation, know the difference.</li> <li><strong>Scrambling matters for range-partitioned stores.</strong> With the unscrambled generator the hot keys are the smallest keys: 72% of the requests hit one of eight range partitions. YCSB scrambles ranks with a hash so the hot keys are spread: 21%.</li> </ul>
+
+<p><strong>Tails and the stall.</strong> A server answers in 1 ms, except that one request in 10 000 takes a full second (a pause for garbage collection, a flush, a compaction). 100 000 requests, measured three ways, in virtual time so the numbers are exact:</p>
+
+```text title="latency in milliseconds, three ways of measuring the same server"
+latency in ms                            p50       p99     p99.9    p99.99       max
+closed loop, one client                 1.01      1.01      1.01       1.0    1000.0
+open loop, 2 ms arrivals                1.01    889.19    989.86    1000.0    1000.0
+closed loop, corrected                  1.01    796.92    981.47     998.2    1000.0
+```
+
+<ul> <li><strong>The closed-loop client reports p99.9 of 1.01 ms.</strong> Ten of its 100 000 requests were slow, and that is all it saw.</li> <li><strong>The open-loop client reports p99 of 889 ms.</strong> Requests were meant to arrive every 2 ms, half the server's capacity. A one-second stall leaves 500 requests waiting, and they drain at one per millisecond more than arrive; about 1% of all requests waited behind a stall. Which number describes your users depends on whether they wait for each other (a batch job) or arrive independently (a web service); for most services it is the second.</li> <li><strong>The corrected closed loop reports 797 ms</strong>, in the same range: it adds, for every slow request, the waits that the missing requests would have seen. It is an approximation (it ignores the time the queue takes to drain) and the right fix when you cannot change the client. The YCSB runs below show real stalls of this kind: an update that took 90 ms (a memtable flush) among updates whose 99.9th percentile is 5 µs.</li> </ul>
+
+<p><strong>Uncertainty.</strong> A bootstrap resamples the measurements with replacement and reads the interval off the resampled statistic. It is checked by its coverage:</p>
+
+```text title="bootstrap intervals checked against known truths"
+95% bootstrap intervals for the mean of 30 normal values: 92.2% covered the true mean
+ratio of medians: the interval contains 1 in 95% of identical pairs and excludes it in 100% of pairs 15% apart
+```
+
+<p>95% intervals for the mean of 30 normal values covered the true mean in 92% of 600 trials (slightly optimistic, as bootstrap intervals are for small samples); the interval for a ratio of medians contained 1 in 95% of pairs drawn from one distribution and excluded it in every pair 15% apart.</p>
+"""
+
+[[sections]]
+heading = "Measured on the LSM tree of Part V"
+body = """
+<p>100 000 records of 100 bytes in the LSM tree of <a href="/cookbook/p/a-durable-lsm-tree">M7</a> (in the simulated file system: this measures the engine's code, not a disk), 200 000 operations per workload from one closed-loop client, release build, the Apple M4 Pro:</p>
+
+```text title="YCSB A to F: throughput and the latency distribution of each operation"
+workload (100 000 records of 100 bytes)       ops/s   operation              p50 us   p99 us p99.9 us   max us
+A: update heavy (50/50)                     403499   read                      0.3     10.1     15.9       86
+                                                     update                    0.9      1.6      4.9    89530
+B: read mostly (95/5)                       284992   read                      0.3     10.9     15.4       57
+                                                     update                    1.1      1.6      6.3       80
+C: read only                                125491   read                      7.7     11.1     24.8      176
+D: read latest (95/5 insert)                431086   insert                    0.9      1.4      6.8       82
+                                                     read                      0.3      9.3     14.3       59
+E: short ranges (95 scan/5 insert)           31876   insert                    1.1      5.1     12.4      125
+                                                     scan                     34.8     59.9    119.8     3741
+F: read-modify-write (50/50)                257361   read                      0.3      9.6     16.3       78
+                                                     read-modify-write         1.1     10.9     19.2    87677
+```
+
+<ul> <li><strong>Workload C reads from tables; A, B and D mostly from the memtable.</strong> In C every read goes to an on-disk table (p50 7.7 µs); in A and B the hot keys were just updated and sit in the memtable (p50 0.3 µs). The same operation has a 25× different cost depending on where the data is, which is why YCSB reports mixes and why a benchmark's data size and warm-up must be stated.</li> <li><strong>The tail is long even when the median is short.</strong> Every workload has p99 of reads around 10 µs, thirty times the median, and an update maximum of 90 ms. The maximum is a stall, not a slow operation, and a closed-loop histogram is where it is hidden.</li> <li><strong>Scans are the expensive operation</strong> (workload E: 35 µs median for a scan of up to 100 keys, 32 000 operations a second).</li> </ul>
+
+```text title="run-to-run variation: the same benchmark repeated"
+workload C, 15 identical runs: median 129136 ops/s, 95% interval for the median [128163, 129969], min 121206, max 130611, coefficient of variation 1.9%
+two identical configurations: ratio of medians 0.995, 95% interval [0.967, 1.008]
+```
+
+<ul> <li><strong>Identical runs differ by 2%.</strong> Fifteen runs of workload C ranged from 121 000 to 131 000 operations a second (coefficient of variation 1.9%); the 95% interval for the median is [128 163, 129 969]. Two sets of fifteen runs of the <em>same</em> program give a ratio of medians of 0.995 with interval [0.967, 1.008]. So differences below about ±3% on this machine are noise, and a claim of an improvement smaller than that needs more runs.</li> </ul>
+"""
+
+[[sections]]
+heading = "A TPC-H-shaped scan, verified against SQLite"
+body = """
+<p>600 000 rows with the columns of <code>lineitem</code> that Q1 and Q6 use, generated here with the shapes of TPC-H (not <code>dbgen</code>, not the official distributions, not audited, and therefore <strong>not a TPC-H result</strong>), in the SQL engine of Parts I and III and in SQLite. Prices and discounts are integers so that both systems compute the same sums exactly. The test compares every number in the two result sets, and only then reports the times:</p>
+
+```text title="the engine and SQLite on the same data (results asserted equal; best of 5)"
+600000 rows shaped like lineitem; engine load 0.7 s (INSERT statements), SQLite load 0.5 s (.import)
+query (best of 5)             engine        SQLite engine/SQLite   engine rows/s
+Q1-like (6 sums, 4 groups)      270.8 ms      170.1 ms          1.59         2216026
+Q6-like (selective sum)      108.1 ms       19.4 ms          5.56         5551991
+```
+
+<p>SQL in the form: <code>Q1-like</code>: <code>SELECT flag, status, SUM(qty), SUM(price), SUM(price * (100 - disc)), AVG(qty), AVG(disc), COUNT(*) FROM lineitem WHERE ship &lt;= 10471 GROUP BY flag, status ORDER BY flag, status</code>; <code>Q6-like</code>: <code>SELECT SUM(price * disc) FROM lineitem WHERE ship &gt;= 8766 AND ship &lt; 9131 AND disc BETWEEN 5 AND 7 AND qty &lt; 24</code>.</p>
+
+<ul> <li><strong>SQLite is 1.6 times faster on the grouped aggregate and 5.6 times faster on the selective one.</strong> The engine of Part I evaluates each row through an expression tree and materializes rows between operators; SQLite compiles the query to bytecode that touches only the columns it needs. The numbers are the case for the vectorized engine and the virtual machine of Part V (<a href="/cookbook/p/a-vectorized-engine">M4</a>, <a href="/cookbook/p/a-bytecode-virtual-machine">M5</a>), measured honestly: 2.2 and 5.6 million rows per second for a scan-and-aggregate in the row engine.</li> <li><strong>A benchmark that compared them without the equality check would not have noticed a wrong answer.</strong> The check costs a few lines and a few seconds.</li> </ul>
+
+<aside data-call="note"><b>Three mistakes in the first versions of these measurements</b><p>Each one is a classic. The cold-read experiment of <a href="/cookbook/p/disk-i-o-fsync-the-page-cache-and-queues">Disk I/O</a> reported device reads of 1 µs because the file had been warmed first; the check was that the number could not be true. The first version of the ring benchmark in the same section refilled the queue after every completion and so submitted one entry per call (the table printed 1.0 entries per submit at every depth); the benchmark was measuring a thread pool, not batching, and the column that exposed it was the one added to check. The Zipfian test first asserted 6% agreement for all ten head ranks and failed at rank 2 with 17%: the generator, not the test, was approximate, and the right response was to measure and say so rather than to loosen the tolerance silently.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Fixed-size log-linear buckets, no allocation per sample.</strong> <code>Histogram</code> is a <code>Vec&lt;u64&gt;</code> of 3 840 counters; <code>record</code> is an index computation (<code>leading_zeros</code>, a shift) and an increment, so recording a latency costs a few nanoseconds and can sit in a hot loop.</li> <li><strong><code>f64</code> quantiles from counts.</strong> <code>quantile(q)</code> walks the counters until the rank <code>⌈q·n⌉</code> is reached and returns the upper edge of that bucket, capped at the true maximum: never below the exact value, at most 1/64 above.</li> <li><strong>Deterministic generators with explicit seeds.</strong> <code>Rng(seed)</code> is a 64-bit xorshift; every experiment takes a seed so that a measurement run and its verification run use the same operations.</li> <li><strong>Function pointers for statistics.</strong> <code>bootstrap_ci(xs, stat: fn(&amp;[f64]) -&gt; f64, …)</code> takes <code>mean</code>, <code>median</code> or any other statistic without generics or boxing.</li> <li><strong><code>std::hint::black_box</code></strong> keeps the optimizer from discarding a measured computation; the memory-map read in <a href="/cookbook/p/disk-i-o-fsync-the-page-cache-and-queues">Disk I/O</a> uses it.</li> <li><strong>Release builds only.</strong> <code>cargo test --release</code> is the only configuration whose numbers mean anything; a debug build is often an order of magnitude slower and slower in different places.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Zipf</strong>: the probabilities sum to 1; ranks 0 and 1 within 1% of exact, ranks 2 to 9 within 25% (the known approximation), total variation distance under 0.03; scrambling spreads the load over partitions (under 40% in the busiest of 8, against over 60% unscrambled) and the hottest scrambled key is the hash of rank 0; a second skew (theta 0.5) is also within 1% at ranks 0 and 1.</li> <li><strong>Histogram</strong>: on three distributions of 200 000 values (lognormal, uniform, bimodal with a tail), every quantile from 0.0001 to 1 is at least the exact quantile and at most 1/64 above it; merging two halves equals recording all; the extremes 0 and <code>u64::MAX</code>; values below 128 are exact.</li> <li><strong>YCSB mixes</strong>: for A to F, 200 000 operations match the nominal percentages within 0.8; inserts append the next key and grow the key space; scans are 1 to 100 long; workload D's reads have a median age under 2 000 keys; a custom mix of five equal parts is within 1 point each.</li> <li><strong>Statistics</strong>: exact values for mean, median (odd and even), sample standard deviation; <code>record_corrected(9, 3)</code> records 9, 6 and 3; bootstrap coverage and the ratio-of-medians interval as above.</li> <li><strong>Coordinated omission</strong>: the closed loop's p99.9 is within 10% of the service time and its maximum is the stall; the open loop's p99 exceeds 100 ms; the corrected closed loop is within a factor of 3 of the open loop; with no stall the three agree.</li> <li><strong>The driver</strong>: all six YCSB workloads run against the LSM tree with every read checked against a model of the expected value, and the final state of every 37th key checked.</li> <li><strong>Mutants run against these tests</strong> (12): the second Zipf boundary ignoring theta; scrambling doing nothing; histogram buckets that collide; a quantile rank rounded down; a correction that stops one wait early; an open loop that ignores the queue; inserts that do not advance the key space; a latest distribution that reads the oldest keys; the median of an even sample as the upper middle; the standard deviation divided by <em>n</em>; a one-sided bootstrap interval; mix thresholds that overlap. <strong>Eleven were killed; one is effectively equivalent</strong>: the second Zipf boundary (1.5 instead of 1 + 0.5&#94;θ) changes where rank 1 stops, but the inversion formula for larger values also returns rank 1 over most of the difference, so the distribution barely moves. Three survived at first and were killed by adding exact-count and custom-mix tests.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Continuous benchmarking in CI</strong>: MongoDB runs performance tests on every commit and uses change-point detection on the history to separate regressions from noise (the talk in the references); ClickHouse, DuckDB and DataFusion publish benchmark dashboards; Rust itself tracks compiler performance per pull request.</li> <li><strong>Benchmark suites with an audit</strong> (TPC-C, TPC-H, TPC-DS) require full disclosure reports and independent auditors; results are compared by price/performance as well as speed. Most published numbers are "TPC-like" runs, which the TPC's rules forbid calling TPC results.</li> <li><strong>Tail-latency tools</strong>: HdrHistogram (Gil Tene) is used in <code>wrk2</code> and in the metrics libraries of many systems; <code>wrk2</code> and <code>k6</code> offer constant-rate (open-loop) load with correction for coordinated omission.</li> <li><strong>A/B comparisons</strong>: <code>hyperfine</code> runs a command repeatedly and reports mean, min, max and standard deviation; Criterion.rs (Rust) and Google Benchmark add statistical comparison between runs; both detect noise but cannot remove it.</li> <li><strong>Query-performance regression detection</strong> in optimizers uses a fixed corpus of queries and compares plans and times between versions (APOLLO), and join-order benchmarks (JOB) to test cardinality estimation.</li> <li><strong>Learned and adaptive systems</strong> (auto-tuners) are benchmarked on the workloads they were tuned for; the field is aware that this overstates their gain on unseen workloads.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Warm-up and steady state.</strong> The first seconds include page faults, JIT, cold caches and lazy initialization. Discard them, say how long you warmed up, and check that the metric is stable.</li> <li><strong>Data size against memory.</strong> A working set that fits in the cache measures the CPU; one that does not measures the I/O path. State the ratio; vary it.</li> <li><strong>Best-of-N hides variance and chooses the lucky run.</strong> Report the median and an interval, or all the runs.</li> <li><strong>The environment is a variable.</strong> CPU frequency, thermal throttling (laptops and the M-series in particular), power state, background processes, other tenants. Record the machine, close what you can, and repeat on another day.</li> <li><strong>Compare against a tuned baseline.</strong> A system with default settings against yours with a day of tuning is a comparison of effort.</li> <li><strong>Do not benchmark what you did not check.</strong> Verify results; keep a model; assert on checksums. A benchmark that returns early on an error is very fast.</li> <li><strong>Averaging percentiles is wrong</strong>, and so is taking the maximum of per-thread p99s as the p99. Merge histograms and compute the quantile of the merged one (<code>Histogram::merge</code>).</li> <li><strong>Distinguish throughput at saturation from latency at a load.</strong> A system at 100% utilization has unbounded queues; report latency at several fractions of capacity.</li> <li><strong>A benchmark can become the target.</strong> Optimizing for TPC-H Q1 is not optimizing for your workload. Prefer a replay of your own queries.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Performance testing at MongoDB"
+url = "https://www.youtube.com/watch?v=elRLJ997p6A"

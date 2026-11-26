@@ -1,0 +1,56 @@
+title = "Civil dates and time from scratch"
+module = "Performance and systems"
+module_order = 7
+chapter = "Files, processes and the OS"
+chapter_order = 3
+order = 300
+kind = "recipe"
+lede = "Days<->civil, RFC 3339, month arithmetic, clocks"
+level = "intermediate"
+code = ["examples/os_and_storage/civil_dates_time.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>parsing timestamps safely</li><li>scheduling</li><li>understanding what chrono/time/jiff do</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+the proleptic Gregorian calendar as pure integer arithmetic.
+
+- `days_from_civil(y, m, d)` / `civil_from_days(z)` (Howard Hinnant's algorithms): count days since 1970-01-01 by shifting the year to start on March 1, so the leap day is the **last** day of the "year" and era math is trivial.
+- weekday = (days + 4) mod 7 (1970-01-01 was a Thursday).
+- RFC 3339 / **iso** 8601 profile `YYYY-MM-DDTHH:MM:SS[.fff](Z|+HH:MM|-HH:MM)`: strict, byte-based parser returning a typed `ParseError`, never panicking (fuzzed below). Formatting round-trips.
+- **Leap second policy**: Unix time has no second 60. We accept `:60` **only** when the UTC instant is the final second of a June 30 or December 31 (the only places leap seconds have been inserted) and **clamp** it to `:59`; anything else, such as `2024-02-29T23:59:60Z`, is `ParseError::LeapSecond`. Applications needing real UTC leap data need a table.
+- add_months clamps to the end of the month (Jan 31 + 1 month = Feb 28/29); it is **not** associative, which is why calendar periods (months, years) are different types from exact durations (seconds).
+- Instant (monotonic, never goes backwards, arbitrary origin) vs SystemTime (wall clock; NTP/manual steps can move it backwards). Use Instant for timeouts/elapsed, wall time only for timestamps shown to humans or stored.
+- `Clock` trait with a real and a manual implementation so time-dependent logic is testable.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+log/trace timestamps, API date fields, token expiry (`exp` claims are Unix seconds), billing periods ("same day next month"), cron-like schedulers, cache TTLs. In production prefer a maintained library: BurntSushi's jiff (<https://github.com/BurntSushi/jiff>), chrono or time; they add time zones/DST, which this recipe deliberately omits.
+
+(Across a DST change "+1 day" and "+24 hours" differ in a zoned type; fixed offsets here never change.)
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<http://howardhinnant.github.io/date_algorithms.html> and <https://www.rfc-editor.org/rfc/rfc3339> and <https://github.com/BurntSushi/jiff>
+"""
+
+[[sources]]
+title = "github.com/BurntSushi/jiff"
+url = "https://github.com/BurntSushi/jiff"
+
+[[sources]]
+title = "howardhinnant.github.io/date_algorithms.html"
+url = "http://howardhinnant.github.io/date_algorithms.html"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc3339"
+url = "https://www.rfc-editor.org/rfc/rfc3339"

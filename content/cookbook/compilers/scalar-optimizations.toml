@@ -1,0 +1,209 @@
+title = "Scalar optimizations"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Middle end and analysis"
+chapter_order = 5
+order = 623
+kind = "guide"
+lede = "SCCP, GVN, DCE, LICM, inlining, PRE and friends · The core of every optimizer"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>Optimizers are pipelines of small passes that enable each other. Inlining exposes constants, constant propagation removes branches, and branch removal exposes more dead code. The order matters and has no perfect answer; this is the <em>phase-ordering problem</em>. Equality saturation (<a href="/cookbook/p/e-graphs-and-equality-saturation">chapter 14</a>) is one response to it. Every pass must preserve semantics <em>under the IR's definition of undefined behavior</em>. LLVM's <code>poison</code> and <code>undef</code>, the <code>nsw</code> and <code>nuw</code> flags, and fast-math flags exist to say precisely which rewrites are legal. Getting this wrong is the most common source of real miscompiles.</p>
+"""
+
+[[sections]]
+heading = "Sparse conditional constant propagation (SCCP)"
+body = """
+<p>Wegman–Zadeck SCCP propagates constants and discovers unreachable code at the same time. That is strictly more powerful than running the two separately. Each value has a lattice cell: ⊤ (no information yet), a constant, or ⊥ (overdefined). Two worklists drive it: CFG edges that just became executable, and SSA values whose cell just dropped. A branch on a constant only marks one successor edge executable. Block parameters only meet arguments from executable edges.</p>
+
+```rust title="SCCP core"
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Lat { Top, Const(i64), Bottom }
+
+fn meet(a: Lat, b: Lat) -> Lat {
+    match (a, b) {
+        (Lat::Top, x) | (x, Lat::Top) => x,
+        (Lat::Const(x), Lat::Const(y)) if x == y => a,
+        _ => Lat::Bottom,
+    }
+}
+
+pub struct Sccp<'f> {
+    f: &'f Function,
+    val: Vec<Lat>,
+    exec_edges: HashSet<(Block, Block)>,
+    exec_blocks: HashSet<Block>,
+    cfg_work: Vec<(Block, Block)>,
+    ssa_work: Vec<Value>,
+}
+
+impl<'f> Sccp<'f> {
+    pub fn run(f: &'f Function) -> (Vec<Lat>, HashSet<Block>) {
+        let mut s = Sccp { f, val: vec![Lat::Top; f.values.len()], exec_edges: HashSet::new(),
+                           exec_blocks: HashSet::new(), cfg_work: Vec::new(), ssa_work: Vec::new() };
+        for &p in &f.blocks[f.entry].params { s.val[p.index()] = Lat::Bottom; }   // arguments are unknown
+        s.visit_block(f.entry);
+        while !s.cfg_work.is_empty() || !s.ssa_work.is_empty() {
+            while let Some((from, to)) = s.cfg_work.pop() {
+                if !s.exec_edges.insert((from, to)) { continue; }
+                s.flow_args(from, to);
+                if s.exec_blocks.insert(to) { s.visit_block(to); }
+            }
+            while let Some(v) = s.ssa_work.pop() {
+                for i in f.users(v) {
+                    if s.exec_blocks.contains(&f.inst_block(i)) { s.visit_inst(i); }
+                }
+            }
+        }
+        (s.val, s.exec_blocks)
+    }
+
+    fn visit_block(&mut self, b: Block) {
+        self.exec_blocks.insert(b);
+        for &i in &self.f.blocks[b].insts { self.visit_inst(i); }
+    }
+
+    fn lower(&mut self, v: Value, new: Lat) {
+        let m = meet(self.val[v.index()], new);
+        if m != self.val[v.index()] { self.val[v.index()] = m; self.ssa_work.push(v); }
+    }
+
+    /// Meet the branch arguments on an executable edge into the target's parameters.
+    fn flow_args(&mut self, from: Block, to: Block) {
+        let term = self.f.terminator(from);
+        for t in self.f.insts[term].targets.iter().filter(|t| t.block == to) {
+            for (&p, &a) in self.f.blocks[to].params.iter().zip(&t.args) {
+                self.lower(p, self.val[a.index()]);
+            }
+        }
+    }
+
+    fn visit_inst(&mut self, i: Inst) {
+        let d = &self.f.insts[i];
+        let b = self.f.inst_block(i);
+        match d.op {
+            Opcode::Brif => {
+                let targets = &d.targets;
+                match self.val[d.args[0].index()] {
+                    Lat::Top => {}                                         // wait for more info
+                    Lat::Const(c) => self.cfg_work.push((b, targets[if c != 0 { 0 } else { 1 }].block)),
+                    Lat::Bottom => for t in targets { self.cfg_work.push((b, t.block)); },
+                }
+                // Arguments may have changed even if the edge was already executable.
+                for t in targets { if self.exec_edges.contains(&(b, t.block)) { self.flow_args(b, t.block); } }
+            }
+            Opcode::Jump => {
+                let to = d.targets[0].block;
+                if self.exec_edges.contains(&(b, to)) { self.flow_args(b, to); } else { self.cfg_work.push((b, to)); }
+            }
+            op => if let Some(r) = d.result {
+                let args: Vec<Lat> = d.args.iter().map(|a| self.val[a.index()]).collect();
+                self.lower(r, fold(op, &args));
+            },
+        }
+    }
+}
+
+/// Constant-fold one operation over lattice values.
+fn fold(op: Opcode, args: &[Lat]) -> Lat {
+    if args.iter().any(|a| *a == Lat::Bottom) { return Lat::Bottom; }
+    if args.iter().any(|a| *a == Lat::Top) { return Lat::Top; }
+    let c: Vec<i64> = args.iter().map(|a| match a { Lat::Const(c) => *c, _ => unreachable!() }).collect();
+    match op {
+        Opcode::Iconst(k) => Lat::Const(k),
+        Opcode::Iadd => Lat::Const(c[0].wrapping_add(c[1])),
+        Opcode::Isub => Lat::Const(c[0].wrapping_sub(c[1])),
+        Opcode::Imul => Lat::Const(c[0].wrapping_mul(c[1])),
+        Opcode::Sdiv if c[1] != 0 && !(c[0] == i64::MIN && c[1] == -1) => Lat::Const(c[0] / c[1]),
+        Opcode::Icmp(Cond::Slt) => Lat::Const((c[0] < c[1]) as i64),
+        Opcode::Icmp(Cond::Eq) => Lat::Const((c[0] == c[1]) as i64),
+        _ => Lat::Bottom,                          // loads, calls, traps: unknown
+    }
+}
+```
+
+<p>After solving, rewrite: replace values whose cell is <code>Const</code> with <code>iconst</code>, turn branches whose condition is <code>Const</code> into jumps, and delete blocks that were never marked executable. Note that <code>fold</code> refuses to fold a division that would trap. Folding it would move a runtime trap to compile time or delete it, which changes behavior.</p>
+"""
+
+[[sections]]
+heading = "Global value numbering"
+body = """
+<p>Two computations with the same operator and the same operands produce the same value, so keep the first and replace the second. The dominator-tree version walks the tree with a scoped hash table. Anything defined in a dominator is visible to everything it dominates, which is exactly SSA's visibility rule. Normalize commutative operands (sort them) so <code>a+b</code> and <code>b+a</code> hash the same. Cranelift's aegraph elaboration uses this same scoped table.</p>
+
+```rust title="Dominator-scoped GVN"
+pub struct ScopedMap<K, V> { map: HashMap<K, V>, scopes: Vec<Vec<K>> }
+
+impl<K: Hash + Eq + Clone, V> ScopedMap<K, V> {
+    pub fn new() -> Self { Self { map: HashMap::new(), scopes: Vec::new() } }
+    pub fn push_scope(&mut self) { self.scopes.push(Vec::new()); }
+    pub fn pop_scope(&mut self) { for k in self.scopes.pop().unwrap() { self.map.remove(&k); } }
+    pub fn get(&self, k: &K) -> Option<&V> { self.map.get(k) }
+    pub fn insert(&mut self, k: K, v: V) { self.scopes.last_mut().unwrap().push(k.clone()); self.map.insert(k, v); }
+}
+
+pub fn gvn(f: &mut Function, dom: &DomTree) {
+    type Key = (Opcode, SmallVec<[Value; 3]>);
+    let mut table: ScopedMap<Key, Value> = ScopedMap::new();
+    let mut stack = vec![(f.entry, false)];                 // (block, leaving?)
+    while let Some((b, leaving)) = stack.pop() {
+        if leaving { table.pop_scope(); continue; }
+        table.push_scope();
+        stack.push((b, true));
+        for i in f.blocks[b].insts.clone() {
+            let d = &f.insts[i];
+            let Some(r) = d.result else { continue };
+            if !d.op.is_pure() { continue; }                  // loads, calls, stores: skip
+            let mut args = d.args.clone();
+            if d.op.is_commutative() { args.sort(); }
+            let key = (d.op, args);
+            match table.get(&key) {
+                Some(&earlier) => f.replace_all_uses(r, earlier),  // dominated duplicate
+                None => table.insert(key, r),
+            }
+        }
+        for &c in dom.children(b).iter().rev() { stack.push((c, false)); }
+    }
+}
+```
+"""
+
+[[sections]]
+heading = "Dead code elimination"
+body = """
+```rust title="Mark-and-sweep DCE on SSA"
+pub fn dce(f: &mut Function) {
+    let mut live = vec![false; f.insts.len()];
+    // Roots: anything with an effect, plus control flow.
+    let mut work: Vec<Inst> = f.all_insts()
+        .filter(|&i| f.insts[i].op.has_side_effects() || f.insts[i].op.is_terminator())
+        .collect();
+    for &i in &work { live[i.index()] = true; }
+    while let Some(i) = work.pop() {
+        let d = &f.insts[i];
+        for v in d.args.iter().chain(d.targets.iter().flat_map(|t| &t.args)) {
+            if let ValueDef::Inst(def) = f.values[*v].1 {
+                if !live[def.index()] { live[def.index()] = true; work.push(def); }
+            }
+        }
+    }
+    f.retain_insts(|i| live[i.index()]);
+}
+```
+
+<p>This keeps block parameters alive if any branch passes them, even when nothing uses them. A follow-up pass removes parameters nobody reads, along with the matching branch arguments. <em>Aggressive</em> DCE also assumes branches are dead until proven otherwise, using post-dominators and control dependence. It can then delete whole loops that compute nothing.</p>
+"""
+
+[[sections]]
+heading = "The rest of the toolbox"
+body = """
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Pass</th><th>Legality condition</th><th>Notes</th></tr></thead> <tbody> <tr><td>LICM</td><td>Instruction is pure, operands are defined outside the loop, and either it can't trap or its block dominates all loop exits</td><td>Hoist into the preheader; sink stores to exits with care for aliasing</td></tr> <tr><td>Inlining</td><td>Callee body is available and not recursive, or recursion is bounded</td><td>Bottom-up over call-graph SCCs. Cost model: callee size, constant arguments, call frequency, single call site. It's the most important and most heuristic pass</td></tr> <tr><td>PRE / lazy code motion</td><td>Insertion must not lengthen any path</td><td>Removes partially redundant computations; subsumes loop-invariant hoisting. Knoop, Rüthing and Steffen</td></tr> <tr><td>Strength reduction and induction variables</td><td>Recognize <code>i = i + c</code> in loops</td><td>Replace <code>a[i*4]</code> address computations with a running pointer; LLVM's SCEV models these as add-recurrences</td></tr> <tr><td>Loop unrolling and unswitching</td><td>Trip count known or guardable; condition loop-invariant</td><td>Trade code size for fewer branches and more ILP</td></tr> <tr><td>Vectorization</td><td>No loop-carried dependencies (dependence analysis), alignment, legal types</td><td>Loop vectorizer and SLP (superword-level parallelism), which packs isomorphic scalar ops</td></tr> <tr><td>Scalar replacement (SROA)</td><td>Aggregate's address doesn't escape</td><td>Splits structs into SSA scalars; the gateway to everything else for Rust code</td></tr> <tr><td>Escape analysis</td><td>Object doesn't outlive or leave the function</td><td>Stack-allocate or scalar-replace heap objects (JVMs, Go)</td></tr> <tr><td>Devirtualization</td><td>Receiver's dynamic type known, or guarded</td><td>Turns indirect calls into direct ones, which enables inlining</td></tr> <tr><td>Jump threading</td><td>A predecessor determines the branch outcome</td><td>Duplicates a block so the branch folds on that path</td></tr> <tr><td>Peephole / instcombine</td><td>Algebraic identity valid under the UB rules</td><td><code>x+0→x</code> is valid for integers but <em>not</em> for floats, because <code>-0.0 + 0.0 = +0.0</code></td></tr> <tr><td>Bounds-check elimination</td><td>Range analysis proves the index in bounds</td><td>ABCD (Bodík et al.) on e-SSA; matters a lot for Rust and Java</td></tr> </tbody> </table></div>
+
+<div class="cb-g-tip"><h3>Test it</h3> <p>Write a golden IR test for every rewrite: input, expected output, and a case where the rewrite must <em>not</em> fire. Then add differential testing. Interpret the IR before and after the pass on random inputs and compare results. Alive2 does this symbolically for LLVM and has found hundreds of bugs, which shows the approach is worth it.</p></div>
+"""
+
+[[sources]]
+title = "LLVM's pass documentation"
+url = "https://llvm.org/docs/Passes.html"

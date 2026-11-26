@@ -1,0 +1,7 @@
+error[E0105]: expected an item (`fn`, `struct`, `enum` or `const`), found keyword `let`
+ --> e0105_expected_item.peb:1:1
+  |
+1 | let x = 1;
+  | ^^^ expected an item (`fn`, `struct`, `enum` or `const`)
+
+error: aborting due to 1 previous error

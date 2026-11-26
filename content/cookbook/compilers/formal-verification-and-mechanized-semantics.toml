@@ -1,0 +1,69 @@
+title = "Formal verification and mechanized semantics"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Types and semantics"
+chapter_order = 4
+order = 608
+kind = "guide"
+lede = "Rocq (Coq), Lean 4, Agda, Isabelle, Iris, CompCert, Kani · Proving what chapters 1–14 only test"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>A <b>proof assistant</b> checks proofs written in a dependently typed language (<a href="/cookbook/p/bidirectional-typing-and-dependent-types">chapter 3</a>). PL research mechanizes three kinds of results:</p>
+
+<ul> <li><b>Metatheory</b>: type soundness via progress and preservation (<a href="/cookbook/p/semantics-and-the-lambda-calculus">chapter 1</a>), or via logical relations.</li> <li><b>Program verification</b>: this program meets this specification, often in separation logic.</li> <li><b>Compiler correctness</b>: the compiled program <em>refines</em> the source, meaning every behavior of the target is a behavior of the source. This is proved as a <em>simulation</em>, a relation between source and target states that each step preserves. CompCert, a verified C compiler, is the landmark. Csmith found no bugs in its verified parts.</li> </ul>
+
+<p>Key techniques:</p>
+
+<ul> <li><b>Binder representations</b>: de Bruijn indices, locally nameless, or PHOAS.</li> <li><b>Logical relations</b>, including step-indexed ones for recursive types and state, used to prove termination, parametricity and contextual equivalence.</li> <li><b>Separation logic</b>, via Iris, a framework for higher-order concurrent separation logic.</li> </ul>
+
+<p>RustBelt used Iris to prove the soundness of Rust's type system and of core <code>unsafe</code> libraries like <code>Arc</code> and <code>Mutex</code>. Stacked Borrows and Tree Borrows define which <code>unsafe</code> aliasing is allowed. Miri checks them dynamically.</p>
+
+```text title="Lean 4 sketch: constant folding preserves meaning (tactic details may need adjusting between Lean versions)"
+inductive Expr where
+  | num : Nat → Expr
+  | add : Expr → Expr → Expr
+
+def eval : Expr → Nat
+  | .num n   => n
+  | .add a b => eval a + eval b
+
+def fold : Expr → Expr
+  | .num n   => .num n
+  | .add a b =>
+    match fold a, fold b with
+    | .num x, .num y => .num (x + y)
+    | a', b'         => .add a' b'
+
+theorem fold_correct (e : Expr) : eval (fold e) = eval e := by
+  induction e with
+  | num n => rfl
+  | add a b iha ihb =>
+    simp only [fold]
+    split <;> simp_all [eval]
+```
+
+```rust title="The same property for Rust code, checked by the Kani model checker"
+#[cfg(kani)]
+#[kani::proof]
+#[kani::unwind(3)]
+fn fold_preserves_meaning() {
+    let (a, b): (i32, i32) = (kani::any(), kani::any());
+    let e = Expr::Add(Box::new(Expr::Num(a)), Box::new(Expr::Num(b)));
+    // eval uses wrapping_add, so this covers every i32 pair, overflow included.
+    assert_eq!(eval(&fold(&e)), eval(&e));
+}
+```
+
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Tool</th><th>Style</th><th>Use it for</th></tr></thead> <tbody> <tr><td>Rocq (Coq), Lean 4, Agda, Isabelle/HOL</td><td>Interactive proof</td><td>Metatheory, verified compilers, deep specifications</td></tr> <tr><td>Kani</td><td>Bounded model checking (CBMC)</td><td>Panics, overflow, UB and assertions in Rust, exhaustive up to a bound</td></tr> <tr><td>Prusti, Creusot, Verus</td><td>Deductive verification with specifications in Rust syntax</td><td>Functional correctness of Rust code</td></tr> <tr><td>Aeneas</td><td>Translate safe Rust into pure functional code for Lean</td><td>Proving Rust code in Lean</td></tr> <tr><td>Z3, cvc5</td><td>SMT solvers</td><td>The engine under most of the above, plus translation validation and symbolic execution</td></tr> <tr><td>PLT Redex, K framework</td><td>Executable semantics</td><td>Testing a semantics before proving anything</td></tr> </tbody> </table></div>
+"""
+
+[[sources]]
+title = "Pierce et al., Software Foundations"
+url = "https://softwarefoundations.cis.upenn.edu"
+
+[[sources]]
+title = "Wadler, Kokke and Siek, PLFA"
+url = "https://plfa.github.io"

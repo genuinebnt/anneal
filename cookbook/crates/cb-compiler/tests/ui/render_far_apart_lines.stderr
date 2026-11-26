@@ -1,0 +1,21 @@
+error[E0301]: mismatched types
+ --> render_far_apart_lines.peb:7:19
+  |
+7 |     let _e: str = x;
+  |             ---   ^ expected `str`, found `int`
+  |             |
+  |             expected due to this type
+  |
+  = help: convert with `to_str(..)`
+
+error[E0301]: mismatched types
+ --> render_far_apart_lines.peb:8:20
+  |
+8 |     let _y: bool = x;
+  |             ----   ^ expected `bool`, found `int`
+  |             |
+  |             expected due to this type
+  |
+  = help: compare with `!= 0` to get a `bool`
+
+error: aborting due to 2 previous errors

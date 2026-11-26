@@ -1,0 +1,37 @@
+title = "Graph algorithms, GC and life without GC"
+module = "Rust language"
+module_order = 1
+chapter = "Memory and allocators"
+chapter_order = 6
+order = 53
+kind = "guide"
+lede = "A compiler's middle and back end is mostly graph algorithms. A language runtime is mostly memory management."
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p class="cb-g-deep"><b>Deep dives</b> <a href="/cookbook/p/dominators-loops-and-control-flow-structure">11 · Dominators and loops</a> <a href="/cookbook/p/register-allocation">18 · Register allocation</a> <a href="/cookbook/p/runtime-systems-and-gc-implementation">22 · Runtimes and GC</a> <a href="/cookbook/p/implementing-rust-s-hardest-features">15 · Rust's hard features</a></p>
+"""
+
+[[sections]]
+heading = "Graph algorithms in compilers"
+body = """
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Algorithm</th><th>Used for</th><th>Where</th></tr></thead> <tbody> <tr><td>DFS orders: preorder, postorder, reverse postorder</td><td>Iteration order for dataflow, since forward analyses converge fastest in RPO</td><td><code>rustc_data_structures::graph</code></td></tr> <tr><td>Dominator trees</td><td>SSA construction, GVN, LICM, the borrow checker's reasoning about control flow. Algorithms: Cooper–Harvey–Kennedy (simple, iterative) and Lengauer–Tarjan (near-linear)</td><td>rustc <code>graph::dominators</code>, LLVM <code>DominatorTree</code></td></tr> <tr><td>Dominance frontiers</td><td>Where to place phi nodes (Cytron et al.)</td><td>Classic SSA construction</td></tr> <tr><td>Strongly connected components (Tarjan)</td><td>Region constraint graphs in NLL, call-graph cycles, generalizing mutually recursive functions in HM</td><td>rustc <code>graph::scc</code></td></tr> <tr><td>Natural loops and loop nesting forests</td><td>LICM, unrolling, vectorization. Irreducible control flow needs special handling</td><td>LLVM <code>LoopInfo</code></td></tr> <tr><td>Interference graph coloring</td><td>Register allocation (Chaitin–Briggs). SSA interference graphs are chordal, so they can be colored optimally in polynomial time</td><td>Classic allocators, CMU 15-411</td></tr> <tr><td>Union-find</td><td>Type unification, Steensgaard alias analysis, e-graph equivalence classes, SSA destruction</td><td><code>ena</code> (rustc), <code>egg</code></td></tr> <tr><td>Inclusion constraints</td><td>Andersen's points-to analysis (cubic in the worst case), solved with worklists and cycle elimination</td><td>Static analyzers</td></tr> <tr><td>Reachability and call graphs</td><td>Tree shaking, monomorphization collection, class hierarchy analysis (CHA), rapid type analysis (RTA)</td><td><code>rustc_monomorphize</code> collector, bundlers</td></tr> <tr><td>Topological sort</td><td>Build order, module initialization, instruction scheduling</td><td>Cargo, linkers, schedulers</td></tr> </tbody> </table></div>
+
+<p>For your own IR, store the graph as <code>Vec</code>s indexed by <code>u32</code> IDs, or use <code>petgraph</code> to prototype. Use bitsets for dataflow facts, the way <code>rustc_index::bit_set</code> does.</p>
+"""
+
+[[sections]]
+heading = "Garbage collection"
+body = """
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Strategy</th><th>How it works</th><th>Trade-off</th><th>Used by</th></tr></thead> <tbody> <tr><td>Mark-sweep</td><td>Trace from roots, then free anything unmarked</td><td>Simple, but fragments memory and pauses the program</td><td>clox, early Lua</td></tr> <tr><td>Mark-compact</td><td>Trace, then slide live objects together</td><td>No fragmentation, but needs several passes</td><td>Old generations in many JVM collectors</td></tr> <tr><td>Copying (Cheney)</td><td>Copy live objects to a new space in breadth-first order</td><td>Allocation is a pointer bump, and cost is proportional to live data. Uses twice the memory</td><td>Young generations, many functional languages</td></tr> <tr><td>Generational</td><td>Collect a small nursery often. A write barrier records old-to-young pointers</td><td>Most objects die young, so collections are cheap. Barriers add some cost</td><td>JVM, V8, .NET, Lua 5.4 (optional)</td></tr> <tr><td>Incremental or concurrent tri-color marking</td><td>Mark in small steps or alongside the program. Barriers preserve the tri-color invariant</td><td>Short pauses, more complexity</td><td>Go, Lua 5.x (incremental), ZGC, Shenandoah</td></tr> <tr><td>Mark-region (Immix)</td><td>Allocate by bumping through lines within blocks. Evacuate only fragmented blocks</td><td>Good locality and throughput</td><td>MMTk, a GC framework written in Rust</td></tr> <tr><td>Conservative scanning</td><td>Treat anything on the stack that looks like a pointer as a root</td><td>No stack maps needed, but some garbage is kept alive</td><td>Boehm GC, WebKit</td></tr> <tr><td>Reference counting</td><td>Count references and free at zero. Cycles need a separate cycle collector (Bacon–Rajan)</td><td>Predictable, but counting costs time and cycles leak</td><td>Swift ARC, CPython, Rust <code>Rc</code> and <code>Arc</code></td></tr> <tr><td>Optimized RC (Perceus, biased RC)</td><td>The compiler removes redundant increments and decrements and reuses memory in place. Biased RC makes owner-thread counts non-atomic</td><td>Functional code with in-place updates</td><td>Koka, Lean 4, free-threaded CPython</td></tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Without GC"
+body = """
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Approach</th><th>How it works</th><th>Used by</th></tr></thead> <tbody> <tr><td>Ownership and borrowing</td><td>Affine types plus region checking. Free happens at a statically known point</td><td>Rust</td></tr> <tr><td>Regions and arenas</td><td>Allocate into a region and free the whole region at once. Region inference can place this automatically</td><td>MLKit, Cyclone, <code>bumpalo</code>, oxc's AST, rustc's arenas</td></tr> <tr><td>Generational indices</td><td>Handles of index plus generation. A stale handle is detected instead of dereferenced</td><td>ECS game engines, <code>slotmap</code>, your clox heap</td></tr> <tr><td>Epoch-based reclamation</td><td>Free a node once every thread has moved past the epoch in which it was unlinked</td><td><code>crossbeam-epoch</code></td></tr> <tr><td>Hazard pointers and RCU</td><td>Readers announce what they're reading. Writers defer frees until no reader holds the old version</td><td><code>haphazard</code>, <code>arc-swap</code>, the Linux kernel</td></tr> </tbody> </table></div>
+
+<p><b>Build it.</b> Give clox a copying nursery plus the existing mark-sweep for old objects, with a write barrier on field and upvalue stores. Add a heap verifier that runs after every collection under <code>stress-gc</code> and asserts that every reachable handle is live. Run the full golden suite under it.</p>
+"""

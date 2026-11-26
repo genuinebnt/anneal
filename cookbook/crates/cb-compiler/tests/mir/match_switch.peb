@@ -1,0 +1,11 @@
+// passes: simplify-cfg
+// Matching on an enum dispatches with one `switch` on the tag.
+enum Shape { Circle(int), Rect(int, int), Empty }
+fn area(s: Shape) -> int {
+    match s {
+        Shape::Circle(r) => 3 * r * r,
+        Shape::Rect(w, h) => w * h,
+        Shape::Empty => 0,
+    }
+}
+fn main() { println(to_str(area(Shape::Rect(3, 4)))); }

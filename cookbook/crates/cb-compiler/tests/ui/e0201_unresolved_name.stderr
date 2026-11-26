@@ -1,0 +1,17 @@
+warning[W0501]: unused variable: `count`
+ --> e0201_unresolved_name.peb:2:9
+  |
+2 |     let count = 1;
+  |         ^^^^^ this variable is never read
+  |
+  = help: if this is intentional, prefix it with an underscore: `_count`
+
+error[E0201]: cannot find value `cuont` in this scope
+ --> e0201_unresolved_name.peb:3:20
+  |
+3 |     println(to_str(cuont));
+  |                    ^^^^^ not found in this scope
+  |
+  = help: a local variable or function with a similar name exists: `count`
+
+error: aborting due to 1 previous error; 1 warning emitted

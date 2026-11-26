@@ -1,0 +1,5 @@
+fn main() {
+    let t = true as int;
+    let f = false as int;
+    println(to_str(t + f + (3 > 2) as int));
+}

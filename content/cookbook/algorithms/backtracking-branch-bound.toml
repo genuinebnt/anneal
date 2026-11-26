@@ -1,0 +1,57 @@
+title = "Backtracking branch bound"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Dynamic programming, greedy and search"
+chapter_order = 5
+order = 208
+kind = "recipe"
+lede = "backtracking, branch and bound, and constraint propagation on NP-hard problems."
+level = "advanced"
+code = ["examples/algorithms/backtracking_branch_bound.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>exact solvers for small/medium NP-hard instances</li><li>puzzle solvers</li><li>schedulers</li><li>anywhere "try, prune, undo" fits</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Backtracking = depth-first search over partial solutions with `apply` / `undo`. It becomes practical when you **prune**: cut a subtree as soon as it provably cannot beat what you have (bounds), or cannot be completed (constraint propagation).
+
+Skiena ch. 9 and TAOCP 7.2.2 both stress the same three levers: a good variable **order** (fail first), a good **bound**, and cheap incremental state with undo. Every section prints the search-tree size with and without the lever so the benefit is visible, and asserts the answer against an independent oracle.
+
+1. A generic `Problem` trait with a recursive and an explicit-stack driver (demo: N-queens, 92 solutions at n=8).
+2. Graph colouring: naive vertex order vs DSATUR (most saturated vertex first); same chromatic number.
+3. Subset sum: meet-in-the-middle O(2&#94;(n/2) log) vs brute force O(2&#94;n).
+4. 0/1 knapsack: branch and bound with the fractional-relaxation upper bound vs the DP recurrence.
+5. TSP: branch and bound with a minimum-spanning-tree lower bound vs Held-Karp (n &lt;= 12).
+6. Max clique: Bron-Kerbosch with and without pivoting vs brute force.
+7. Vertex cover: maximal-matching 2-approximation and the O(2&#94;k) fixed-parameter branching algorithm.
+8. CSP map colouring: plain backtracking vs forward checking vs forward checking + MRV.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>exact optimisation inside larger systems (MIP solvers are branch-and-bound/cut engines)</li><li>SAT and CSP solvers</li><li>compilers' register allocation by graph colouring (heuristics)</li><li>timetabling</li><li>puzzle generators</li><li>cryptanalysis (meet-in-the-middle)</li><li>bioinformatics clique problems</li><li>parameterised-complexity kernels</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Skiena, The Algorithm Design Manual (ch. 9 Combinatorial Search and Heuristic Methods</li><li>problem catalog: Vertex Coloring, Clique, Vertex Cover, TSP, Knapsack)</li><li>Knuth, The Art of Computer Programming Vol 4B, 7.2.2 Backtrack Programming</li><li>Brelaz, "New methods to color the vertices of a graph" (DSATUR, 1979)</li><li><a href="https://www.algorist.com/" target="_blank" rel="noreferrer">https://www.algorist.com/</a>  <a href="https://www-cs-faculty.stanford.edu/~knuth/taocp.html" target="_blank" rel="noreferrer">https://www-cs-faculty.stanford.edu/~knuth/taocp.html</a> <a href="https://en.wikipedia.org/wiki/Conflict-driven_clause_learning" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Conflict-driven_clause_learning</a> (the modern descendant of backtracking+learning)</li></ul>
+"""
+
+[[sources]]
+title = "algorist.com"
+url = "https://www.algorist.com/"
+
+[[sources]]
+title = "www-cs-faculty.stanford.edu/~knuth/taocp.html"
+url = "https://www-cs-faculty.stanford.edu/~knuth/taocp.html"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Conflict-driven_clause_learning"
+url = "https://en.wikipedia.org/wiki/Conflict-driven_clause_learning"

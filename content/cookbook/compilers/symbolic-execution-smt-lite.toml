@@ -1,0 +1,72 @@
+title = "Symbolic and concolic execution with a DPLL(T)-lite solver"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Middle end and analysis"
+chapter_order = 5
+order = 631
+kind = "recipe"
+lede = "symbolic and concolic execution with a DPLL(T)-lite solver (boolean core + bounded linear-integer theory), state merging, bug finding and bounded proofs."
+level = "advanced"
+code = ["examples/compilers_runtimes/symbolic_execution_smt_lite.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>test generation</li><li>bug finding and bounded verification of small programs</li><li>the engine room of KLEE/SAGE-style tools</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a tiny imperative language (integer variables, linear arithmetic, if, while, assume, assert) executed three ways.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Concrete</div><div class="cb-g-says"><p>Interpreter: the oracle. Every claim below is replayed or compared against it.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Symbolic</div><div class="cb-g-says"><p>Engine: program inputs are unknowns. Each variable holds a <strong>linear expression</strong> over the unknowns, and a <strong>path condition</strong> (a boolean formula) records which branches were taken. At a branch both sides are checked for feasibility with the solver and the state <strong>forks</strong> when both are possible.</p><p>At <code>assert c</code> the solver is asked whether (path condition <strong>and not</strong> c) is satisfiable; a model is a <strong>counterexample</strong> input. If it is unsatisfiable on every path the assertion is <strong>proved</strong> (within the loop bound).</p><p>Loops are unrolled up to a bound; paths that would exceed it are counted as <code>bound hits</code> and are the reason a bounded "no bug found" is not an unbounded proof.</p></div></div><div class="cb-g-term"><div class="cb-g-name">State merging</div><div class="cb-g-says"><p>Instead of forking at an <code>if</code>, the two end states are joined into one: every variable that differs becomes a fresh unknown <code>v</code> <strong>defined</strong> by <code>guard_i =&gt; v = value_i</code> (an <code>ite</code>). One path survives, but the solver formulas get harder. This is the classic trade-off (veritesting, KLEE <code>--use-merge</code>): fewer paths, harder queries.</p><p>Two details keep the formulas from exploding. (a) <code>guard_i</code> is only what state i added <strong>after</strong> the states forked; the shared prefix of the path conditions is kept once. Copying whole path conditions grew them about 4x per merge (13, 67, 283, ... 294907 nodes after 8 merges) until DPLL, which recurses once per decision, overflowed the stack.</p><p>(b) The definitions live <strong>outside</strong> the path condition, so an outer merge never copies an inner merge's definitions into its guards; a query pulls in just those of the variables it mentions, transitively (cone-of-influence slicing).</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>CONCOLIC testing (<strong>dart</strong> / <strong>sage</strong>): run the program on a concrete input while tracking the symbolic path condition on the side, then <strong>negate</strong> each branch constraint in turn (keeping the prefix), solve, and run the new input.</p><p><strong>Generational</strong> search gives each child the index after the decision it negated and only negates later ones, so (with an exact solver and shadow, as here) every feasible path gets exactly one concrete run. It only negates branches of paths that really ran. In real tools, where the shadow is imprecise, a wrong guess just costs a wasted (divergent) run.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The solver** (`solve_f`), DPLL(T) in miniature:
+
+- formulas are in negation normal form over **atoms** `sum(c_i * x_i) + k <= 0` (equality = two atoms, disequality = a disjunction), all unknowns are **bounded** integers;
+- Plaisted-Greenbaum/Tseitin encoding turns the formula into CNF over boolean variables (one per distinct atom, one per and/or node);
+- the **boolean core** is DPLL: unit propagation, then branch on a literal of the first unsatisfied clause;
+- the **theory solver** decides whether a conjunction of atoms (an atom set to false means its integer negation `-sum - k + 1 <= 0`) has an integer solution: interval (bounds) propagation to a fixpoint plus bisection of domains. It is complete because the domains are finite; that finiteness is the "bit-blast fallback" in spirit (every solution is a point in a box).
+
+   Fourier-Motzkin would decide the rational relaxation of the same conjunction but is incomplete for integers;
+- on a theory conflict the solver **minimises** the conflicting literal set (deletion) and **learns** its negation as a clause (a theory lemma), the same step as in Z3/CVC5 minus watched literals and 1UIP (see sat_solver_cdcl for those).
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+(a) the solver agrees with brute force over a small box on 3000 random constraint sets and every model satisfies the formula;
+
+(b) a suite of 12 buggy and 6 safe programs: the set of assertions each engine can break equals the set found by exhaustive concrete execution, every counterexample is **replayed** concretely and trips exactly that assertion, and the safe programs report nothing;
+
+(c) the sets of explored paths of the symbolic engine and the concolic driver are equal; (d) the same checks on 400 random programs with nested ifs, input-bounded loops, assumes and several asserts; (e) the concolic driver never runs a path twice or leaves its predicted prefix; (f) merged path conditions stay linear in size.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>KLEE (symbolic execution of C/LLVM)</li><li>Microsoft <strong>sage</strong> and <strong>dart</strong> (concolic fuzzing)</li><li>angr and other binary analysers</li><li>Java PathFinder / SPF</li><li>Rust verifiers such as Kani and Prusti (bounded model checking and deductive proofs use the same path-condition ideas)</li><li>property-based test generators</li><li>SMT solvers (Z3, CVC5, Yices) built as CDCL(T)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Godefroid, Klarlund, Sen "DART: Directed Automated Random Testing" (PLDI 2005, title only, not re-read here)</li><li>Cadar et al</li><li>"KLEE: Unassisted and Automatic Generation of High-Coverage Tests" (OSDI 2008, title only)</li><li>King "Symbolic Execution and Program Testing" (CACM 1976, title only)</li><li>Nieuwenhuis, Oliveras, Tinelli "Solving SAT and SAT Modulo Theories: From an abstract DPLL procedure to DPLL(T)" (J</li><li>ACM 2006, title only)</li><li><a href="https://klee-se.org/" target="_blank" rel="noreferrer">https://klee-se.org/</a></li><li><a href="https://en.wikipedia.org/wiki/Symbolic_execution" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Symbolic_execution</a></li><li><a href="https://en.wikipedia.org/wiki/Concolic_testing" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Concolic_testing</a></li></ul>
+"""
+
+[[sources]]
+title = "klee-se.org"
+url = "https://klee-se.org/"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Symbolic_execution"
+url = "https://en.wikipedia.org/wiki/Symbolic_execution"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Concolic_testing"
+url = "https://en.wikipedia.org/wiki/Concolic_testing"

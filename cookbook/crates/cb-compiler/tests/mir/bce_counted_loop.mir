@@ -1,0 +1,79 @@
+=== before ===
+// monomorphisation: 2 function instances
+// fn#0 (main)
+fn main() -> () {
+    let _0: [int];
+    let _1: int;
+    let _2: str;
+    let _3: ();
+  bb0:
+    _0 = [1, 2, 3]
+    _1 = call fn#1(_0) -> bb1
+  bb1:
+    _2 = to_str(_1)
+    _3 = println(_2)
+    return ()
+}
+// fn#1
+fn sum(_0: [int]) -> int {
+    let _1: int;  // i
+    let _2: int;  // s
+    let _3: int;
+    let _4: bool;
+    let _5: int;
+  bb0:
+    _1 = 0
+    _2 = 0
+    goto bb1
+  bb1:
+    _3 = len(_0)
+    _4 = _1 < _3
+    branch _4 -> bb2, bb3
+  bb2:
+    _5 = _0[_1]
+    _2 = _2 + _5
+    _1 = _1 + 1
+    goto bb1
+  bb3:
+    return _2
+}
+
+=== after: bce ===
+// monomorphisation: 2 function instances
+// fn#0 (main)
+fn main() -> () {
+    let _0: [int];
+    let _1: int;
+    let _2: str;
+    let _3: ();
+  bb0:
+    _0 = [1, 2, 3]
+    _1 = call fn#1(_0) -> bb1
+  bb1:
+    _2 = to_str(_1)
+    _3 = println(_2)
+    return ()
+}
+// fn#1
+fn sum(_0: [int]) -> int {
+    let _1: int;  // i
+    let _2: int;  // s
+    let _3: int;
+    let _4: bool;
+    let _5: int;
+  bb0:
+    _1 = 0
+    _2 = 0
+    goto bb1
+  bb1:
+    _3 = len(_0)
+    _4 = _1 < _3
+    branch _4 -> bb2, bb3
+  bb2:
+    _5 = _0[_1] !nocheck
+    _2 = _2 + _5
+    _1 = _1 + 1
+    goto bb1
+  bb3:
+    return _2
+}

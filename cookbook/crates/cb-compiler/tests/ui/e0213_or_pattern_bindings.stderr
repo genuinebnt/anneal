@@ -1,0 +1,9 @@
+error[E0213]: variable `x` is not bound in all alternatives
+ --> e0213_or_pattern_bindings.peb:3:18
+  |
+3 |         (x, 0) | (0, 1) => x,
+  |          -       ^^^^^^ this alternative does not bind `x`
+  |          |
+  |          bound in the first alternative
+
+error: aborting due to 1 previous error

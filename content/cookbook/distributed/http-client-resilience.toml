@@ -1,0 +1,52 @@
+title = "A resilient HTTP client against a deliberately flaky server"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 521
+kind = "recipe"
+lede = "a resilient HTTP client against a deliberately flaky server"
+level = "advanced"
+code = ["examples/web/http_client_resilience.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+client stage (calling other services, downloading artifacts, surviving partial outages).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+What: a scripted **flaky** server (hand-written HTTP/1.1 over TCP so it can really drop connections, truncate bodies and count accepted connections) and a reqwest-based client that survives it:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>Timeouts: a connect timeout and a per-attempt total timeout (a slow response is cut and retried).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Retry policy</div><div class="cb-g-says"><p>Retry only <strong>idempotent</strong> methods (<strong>get/head/put/delete/options</strong>) or requests carrying an <code>Idempotency-Key</code>; a bare <strong>post</strong> that fails after being sent is <strong>not</strong> retried (it may have been processed). Retry 5xx, 408, 429, transport errors; never 4xx. Exponential backoff with full jitter, and <code>Retry-After</code> is honoured.</p><p>Delays use a recorded virtual clock (we assert them, then sleep only a few ms) so the recipe is fast and exact.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Circuit breaker (closed -&gt; open -&gt; half-open -&gt; closed)</div><div class="cb-g-says"><p>With an injectable clock: while open, calls fail fast <strong>without</strong> touching the server (asserted by server-side counters).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Concurrency limit</div><div class="cb-g-says"><p>With a Semaphore (server-side in-flight gauge proves the cap).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Hedging (tail-latency)</div><div class="cb-g-says"><p>If the first try is slow, fire a second one after a delay and take the first answer (only for idempotent requests, with a budget: it multiplies load).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Connection pooling</div><div class="cb-g-says"><p>Sequential requests reuse one TCP connection (server counts accepts); pooling disabled =&gt; N accepts.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Streaming download</div><div class="cb-g-says"><p>With <strong>resume</strong>: <code>Range: bytes=N-</code> + <code>If-Range</code>, then SHA-256 verification against a checksum header.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Response-size limit</div><div class="cb-g-says"><p>Reject by <code>Content-Length</code>, or abort mid-stream for chunked bodies.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>service-to-service calls</li><li>SDKs for third-party APIs</li><li>artifact/model/file downloaders</li><li>CI fetchers</li><li>anything behind a load balancer that sometimes returns 502/503</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://datatracker.ietf.org/doc/html/rfc9110" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc9110</a></li><li><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Retry-After" target="_blank" rel="noreferrer">https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Retry-After</a></li><li><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Range_requests" target="_blank" rel="noreferrer">https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Range_requests</a></li><li><a href="https://datatracker.ietf.org/doc/html/rfc7233" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc7233</a></li></ul>
+"""
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc9110"
+url = "https://datatracker.ietf.org/doc/html/rfc9110"
+
+[[sources]]
+title = "developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Retry-After"
+url = "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Retry-After"
+
+[[sources]]
+title = "developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Range_requests"
+url = "https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Range_requests"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc7233"
+url = "https://datatracker.ietf.org/doc/html/rfc7233"

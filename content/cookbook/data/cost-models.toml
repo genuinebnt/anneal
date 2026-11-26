@@ -1,0 +1,552 @@
+title = "Cost models"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 388
+kind = "guide"
+lede = "15-721 S2024 #16, S2020 #22, S2019 #24 · logical, algorithmic and physical costs · calibration by microbenchmark · six join algorithms and 40–55 plans per query timed for real · what a wrong model costs"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>A cost model turns a plan plus cardinalities into one comparable number.</strong> It estimates the cost of running a plan against the <em>current</em> state of the database; the number is only meaningful internally (to rank alternatives) and is independent of the search strategy that proposed the plans. It consumes the output sizes from <a href="/cookbook/p/statistics">Q7</a> and <a href="/cookbook/p/cardinality-estimation">Q8</a> and produces the thing <a href="/cookbook/p/optimizer-architectures">Q1</a>'s enumerators minimize.</li> <li><strong>Three kinds of cost, in increasing detail.</strong> <em>Logical</em> costs are result sizes per operator, independent of the algorithm (<code>C_out</code> is the sum of intermediate sizes). <em>Algorithmic</em> costs add the complexity of the algorithm implementing each operator (n log n for a sort, one probe per outer row for an index join). <em>Physical</em> costs predict CPU cycles, I/O, cache misses and memory use; they are the most accurate and depend on the hardware.</li> <li><strong>Cost = events × price.</strong> Every practical model is a sum over operators of (count of some event) × (cost of that event): tuples hashed, pages read, comparisons made. The <em>events</em> come from the algorithm and the cardinalities; the <em>prices</em> are constants. Most of the engineering is in the prices.</li> <li><strong>Where the prices come from decides the model.</strong> PostgreSQL uses fixed weights tuned for a disk-resident database (the lecture's summary: processing a tuple in memory is 400× cheaper than reading one from disk, sequential I/O 4× cheaper than random). DB2 stores hardware, storage, network and memory characteristics, measured by microbenchmarks, in the catalog. <strong>Smallbase</strong> automates it in two phases: enumerate the <em>execution primitives</em> (evaluate a predicate, probe an index, sort), then <strong>microbenchmark them at start-up</strong> and plug the measurements into formulas of the table sizes. DuckDB, which may see a file for the first time, has no statistics to rely on: it falls back to distinct counts for worst-case join sizes and to a magic 20% selectivity when it has no HyperLogLog.</li> <li><strong>The classic result and its limit.</strong> Leis et al. found that all optimizers they tested (on the IMDB-based Join Order Benchmark) show serious underestimation, that a good join order matters more than a fast engine, that <strong>hash joins plus sequential scans are a robust execution model</strong> (more indexes make plans brittle), and that "working on accurate cost models is a waste of time; improve cardinality estimation instead". The measurements below show <em>when</em> that holds: once the model is not wrong about the machine. A model that is wrong about it (a disk-era constant, an index cost of the wrong order of magnitude) loses a factor of 2–7 with <strong>perfect</strong> cardinalities.</li> <li><strong>What a model leaves out is part of its definition.</strong> Parallelism and thread scaling, pipelining versus materialization, memory limits and spilling, buffer-pool hit rates, sort order reuse (interesting orders), startup versus total cost for <code>LIMIT</code>, concurrent queries, and variance. Each can be added as features; none is free.</li> </ul>
+"""
+
+[[sections]]
+heading = "Anatomy"
+body = """
+<p>For each operator, the algorithm fixes <em>which events happen</em>, and the cardinalities fix <em>how many</em>. The lab's six joins, with the events a model counts (<code>nl</code>, <code>nr</code> = input sizes, <code>nout</code> = output size):</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>algorithm</th> <th>events</th> <th>notes</th> </tr> </thead> <tbody> <tr> <td>hash join, build left (or right)</td> <td><code>build</code> rows inserted, <code>probe</code> rows looked up, <code>nout</code> rows emitted</td> <td>the build side is a <em>choice</em>: the model must price it, see below</td> </tr> <tr> <td>sort-merge join</td> <td><code>nl log nl</code> + <code>nr log nr</code> comparisons to sort, <code>nl + nr</code> merged, <code>nout</code> emitted</td> <td>sort cost vanishes if an input is already ordered</td> </tr> <tr> <td>index nested-loop join</td> <td>one index descent per outer row (<code>log</code> of the inner size) and <code>nout</code> emitted</td> <td>outer must be the non-indexed side; the inner must be a base table</td> </tr> <tr> <td>block nested-loop join</td> <td><code>nl · nr</code> comparisons, <code>nout</code> emitted</td> <td>only competitive on tiny inputs</td> </tr> </tbody> </table></div>
+
+<p>On top of the events, a <em>disk</em> model counts pages (the join cost formulas of <a href="/cookbook/p/join-algorithms">L12</a>: nested loop, block nested loop, sort-merge, Grace hash join) and adds CPU terms; an <em>in-memory</em> model counts rows and cache misses; a <em>distributed</em> model adds bytes shipped; a <em>cloud warehouse</em> model may count bytes scanned. The structure is always the same: <strong>features</strong> (counts) times <strong>coefficients</strong> (prices).</p>
+"""
+
+[[sections]]
+heading = "The lab"
+body = """
+<p>One module (below) with:</p>
+
+<ol> <li><strong>Six join operators</strong> on <code>(key, payload)</code> rows: hash join (flat chained table: <code>head[]</code>, <code>next[]</code>, build on either side), sort-merge, index nested-loop (a sorted array with binary search as the "index", on either side), and block nested-loop. A reference implementation by definition (a double loop) validates all of them.</li> <li><strong>A three-table chain</strong> <code>R(a,p) ⋈ S(a,b) ⋈ T(b,q)</code> with controllable sizes and join selectivities, whose <strong>true</strong> cardinalities are computed exactly. Every join order (RS first or ST first) × every algorithm for each join is a <strong>plan</strong>: 40 to 55 plans per query once the invalid ones (an index on an intermediate result) and the hopeless ones (a block nested loop on two big inputs) are removed.</li> <li><strong>Five cost models</strong>, all fed the same true cardinalities: <code>C_out</code>; a <strong>C_mm-style</strong> model after Leis et al.; a <strong>textbook constants</strong> model (CPU cost per tuple 0.01, per operator 0.0025, each index probe a random page read of 4.0); and two <strong>calibrated</strong> models whose per-event prices are fitted by <strong>non-negative least squares</strong> to microbenchmarks of single operators (660 timed runs), one with extra features that split hash joins by whether the build table exceeds 32 768 rows (cache-size classes).</li> <li><strong>A runner</strong> that times every plan of 36 random queries (tables of 2 000 to 120 000 rows) and scores each model by rank correlation and by the <strong>slowdown of the plan it picks</strong> relative to the fastest plan.</li> </ol>
+
+:::deeper Reference: join operators, chain generator and plan space, event features, five cost models, NNLS calibration, Spearman
+```rust title="src/opt/cost.rs"
+//! Cost-model lab. Six physical join algorithms over (key, payload) rows, a three-table chain `R(a,p) ⋈ S(a,b) ⋈ T(b,q)`
+//! with every join order x algorithm combination as a plan, and several cost models that predict plan run time from
+//! cardinalities: C_out, a C_mm-style model, a textbook-constants model, and models whose per-event costs are
+//! *calibrated* by non-negative least squares on operator microbenchmarks.
+use std::time::Instant;
+use crate::joinorder::Rng;
+
+pub type Row = (u32, u32);
+
+// ----------------------------------------------------------------------------------------------- operators
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum Alg { HashBuildL, HashBuildR, SortMerge, IndexNlR, IndexNlL, Bnl }
+pub const ALGS: [Alg; 6] = [Alg::HashBuildL, Alg::HashBuildR, Alg::SortMerge, Alg::IndexNlR, Alg::IndexNlL, Alg::Bnl];
+
+/// Which two payload columns the join emits: `RL` = (r.1, l.1), `LR` = (l.1, r.1). The emitted first column is the
+/// next join's key.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Out { RL, LR }
+#[inline] fn emit(o: Out, l: Row, r: Row) -> Row { match o { Out::RL => (r.1, l.1), Out::LR => (l.1, r.1) } }
+
+/// A sorted copy with binary-search lookups: the stand-in for a B-tree index on a base table (built once, outside the timed region).
+pub struct Index { pub rows: Vec<Row> }
+impl Index {
+    pub fn new(rows: &[Row]) -> Self { let mut v = rows.to_vec(); v.sort_unstable(); Index { rows: v } }
+    fn range(&self, k: u32) -> &[Row] {
+        let lo = self.rows.partition_point(|r| r.0 < k);
+        let hi = lo + self.rows[lo..].partition_point(|r| r.0 == k);
+        &self.rows[lo..hi]
+    }
+}
+
+/// Chained hash table in three flat arrays (no per-bucket allocation): `head[h]` is the newest row with hash `h`, `next` links the rest.
+struct HashTable<'a> { rows: &'a [Row], head: Vec<u32>, next: Vec<u32>, shift: u32 }
+impl<'a> HashTable<'a> {
+    fn build(rows: &'a [Row]) -> Self {
+        let bits = (rows.len().max(1) * 2).next_power_of_two().trailing_zeros().max(1);
+        let shift = 32 - bits;
+        let mut head = vec![u32::MAX; 1 << bits];
+        let mut next = vec![u32::MAX; rows.len()];
+        for (i, r) in rows.iter().enumerate() {
+            let h = (r.0.wrapping_mul(0x9E37_79B1) >> shift) as usize;
+            next[i] = head[h];
+            head[h] = i as u32;
+        }
+        HashTable { rows, head, next, shift }
+    }
+    #[inline] fn probe(&self, k: u32, mut f: impl FnMut(Row)) {
+        let mut i = self.head[(k.wrapping_mul(0x9E37_79B1) >> self.shift) as usize];
+        while i != u32::MAX {
+            let r = self.rows[i as usize];
+            if r.0 == k { f(r); }
+            i = self.next[i as usize];
+        }
+    }
+}
+
+/// Equi-join on the first column. `idx_l` / `idx_r` are the indexes of the inputs when they are base tables.
+pub fn join(l: &[Row], r: &[Row], alg: Alg, out: Out, idx_l: Option<&Index>, idx_r: Option<&Index>) -> Vec<Row> {
+    let mut res = Vec::new();
+    match alg {
+        Alg::HashBuildL => {
+            let ht = HashTable::build(l);
+            for &y in r { ht.probe(y.0, |x| res.push(emit(out, x, y))); }
+        }
+        Alg::HashBuildR => {
+            let ht = HashTable::build(r);
+            for &x in l { ht.probe(x.0, |y| res.push(emit(out, x, y))); }
+        }
+        Alg::SortMerge => {
+            let (mut a, mut b) = (l.to_vec(), r.to_vec());
+            a.sort_unstable_by_key(|x| x.0);
+            b.sort_unstable_by_key(|x| x.0);
+            let (mut i, mut j) = (0, 0);
+            while i < a.len() && j < b.len() {
+                if a[i].0 < b[j].0 { i += 1; } else if a[i].0 > b[j].0 { j += 1; } else {
+                    let k = a[i].0;
+                    let (ie, je) = (i + a[i..].partition_point(|x| x.0 == k), j + b[j..].partition_point(|x| x.0 == k));
+                    for x in &a[i..ie] { for y in &b[j..je] { res.push(emit(out, *x, *y)); } }
+                    i = ie; j = je;
+                }
+            }
+        }
+        Alg::IndexNlR => { let ix = idx_r.expect("index on the right input"); for &x in l { for &y in ix.range(x.0) { res.push(emit(out, x, y)); } } }
+        Alg::IndexNlL => { let ix = idx_l.expect("index on the left input"); for &y in r { for &x in ix.range(y.0) { res.push(emit(out, x, y)); } } }
+        Alg::Bnl => {
+            for block in l.chunks(1024) {
+                for &y in r { for &x in block { if x.0 == y.0 { res.push(emit(out, x, y)); } } }
+            }
+        }
+    }
+    res
+}
+
+// ----------------------------------------------------------------------------------------------- the workload
+
+pub struct Chain {
+    pub r: Vec<Row>,       // (a, p)
+    pub s_ab: Vec<Row>,    // (a, b)
+    pub s_ba: Vec<Row>,    // (b, a)
+    pub t: Vec<Row>,       // (b, q)
+    pub ix_r: Index, pub ix_s_ab: Index, pub ix_s_ba: Index, pub ix_t: Index,
+    /// true cardinalities: |R⋈S|, |S⋈T|, |R⋈S⋈T|
+    pub card_rs: f64, pub card_st: f64, pub card_rst: f64,
+}
+
+fn counts(rows: &[Row], dom: usize) -> Vec<u64> { let mut c = vec![0u64; dom]; for r in rows { c[r.0 as usize] += 1; } c }
+
+impl Chain {
+    /// Sizes `nr, ns, nt`; `da` and `db` are the key domains (a join of `x` and `y` rows over domain `d` yields about `x·y/d` rows).
+    pub fn generate(rng: &mut Rng, nr: usize, ns: usize, nt: usize, da: usize, db: usize) -> Chain {
+        let r: Vec<Row> = (0..nr).map(|i| (rng.next(da as u64) as u32, i as u32)).collect();
+        let s_ab: Vec<Row> = (0..ns).map(|_| (rng.next(da as u64) as u32, rng.next(db as u64) as u32)).collect();
+        let t: Vec<Row> = (0..nt).map(|i| (rng.next(db as u64) as u32, i as u32)).collect();
+        let s_ba: Vec<Row> = s_ab.iter().map(|&(a, b)| (b, a)).collect();
+        let (cr, ct) = (counts(&r, da), counts(&t, db));
+        let cs_a = counts(&s_ab, da);
+        let cs_b = counts(&s_ba, db);
+        let card_rs = (0..da).map(|k| (cr[k] * cs_a[k]) as f64).sum();
+        let card_st = (0..db).map(|k| (cs_b[k] * ct[k]) as f64).sum();
+        let card_rst = s_ab.iter().map(|&(a, b)| (cr[a as usize] * ct[b as usize]) as f64).sum();
+        Chain { ix_r: Index::new(&r), ix_s_ab: Index::new(&s_ab), ix_s_ba: Index::new(&s_ba), ix_t: Index::new(&t), r, s_ab, s_ba, t, card_rs, card_st, card_rst }
+    }
+    pub fn sizes(&self) -> (f64, f64, f64) { (self.r.len() as f64, self.s_ab.len() as f64, self.t.len() as f64) }
+}
+
+/// First join RS (then T) or ST (then R), and an algorithm for each join. The second join has the intermediate on the left and
+/// the base table on the right, so only `IndexNlR` (outer = intermediate) and the non-index algorithms are valid there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Plan { pub st_first: bool, pub a1: Alg, pub a2: Alg }
+
+pub fn plans(c: &Chain) -> Vec<Plan> {
+    let (nr, ns, nt) = c.sizes();
+    let mut v = Vec::new();
+    for st_first in [false, true] {
+        let (n1l, n1r, n2r) = if st_first { (ns, nt, nr) } else { (nr, ns, nt) };
+        let mid = if st_first { c.card_st } else { c.card_rs };
+        for a1 in ALGS {
+            if a1 == Alg::Bnl && n1l * n1r > 3e7 { continue; }
+            for a2 in [Alg::HashBuildL, Alg::HashBuildR, Alg::SortMerge, Alg::IndexNlR, Alg::Bnl] {
+                if a2 == Alg::Bnl && mid * n2r > 3e7 { continue; }
+                v.push(Plan { st_first, a1, a2 });
+            }
+        }
+    }
+    v
+}
+
+/// Per-join (nl, nr, nout) of a plan from the table sizes and the three intermediate cardinalities `[|R⋈S|, |S⋈T|, |R⋈S⋈T|]`
+/// (true values, or estimates).
+pub fn shapes_of(sizes: (f64, f64, f64), p: &Plan, cards: &[f64; 3]) -> [(f64, f64, f64); 2] {
+    let (nr, ns, nt) = sizes;
+    if p.st_first { [(ns, nt, cards[1]), (cards[1], nr, cards[2])] } else { [(nr, ns, cards[0]), (cards[0], nt, cards[2])] }
+}
+pub fn plan_shapes(c: &Chain, p: &Plan, cards: &[f64; 3]) -> [(f64, f64, f64); 2] { shapes_of(c.sizes(), p, cards) }
+
+/// Run a plan; returns (seconds, number of result rows).
+pub fn execute(c: &Chain, p: &Plan) -> (f64, usize) {
+    let t0 = Instant::now();
+    let n = if p.st_first {
+        let x = join(&c.s_ba, &c.t, p.a1, Out::LR, Some(&c.ix_s_ba), Some(&c.ix_t)); // (a, q)
+        join(&x, &c.r, p.a2, Out::RL, None, Some(&c.ix_r)).len()
+    } else {
+        let x = join(&c.r, &c.s_ab, p.a1, Out::RL, Some(&c.ix_r), Some(&c.ix_s_ab)); // (b, p)
+        join(&x, &c.t, p.a2, Out::RL, None, Some(&c.ix_t)).len()
+    };
+    (t0.elapsed().as_secs_f64(), n)
+}
+
+/// Best of `reps` runs (the minimum is the least noisy estimate of the cost of the work itself).
+pub fn time_plan(c: &Chain, p: &Plan, reps: usize) -> f64 {
+    (0..reps).map(|_| execute(c, p).0).fold(f64::INFINITY, f64::min)
+}
+
+/// Time one operator on its own (for calibration). Inputs are generated by the caller.
+pub fn time_op(l: &[Row], r: &[Row], alg: Alg, il: &Index, ir: &Index, reps: usize) -> (f64, usize) {
+    let mut best = f64::INFINITY;
+    let mut n = 0;
+    for _ in 0..reps {
+        let t0 = Instant::now();
+        n = join(l, r, alg, Out::RL, Some(il), Some(ir)).len();
+        best = best.min(t0.elapsed().as_secs_f64());
+    }
+    (best, n)
+}
+
+// ----------------------------------------------------------------------------------------------- cost models
+
+fn lg(x: f64) -> f64 { (x + 1.0).log2() }
+/// Hash tables bigger than this many build rows no longer fit in the core-private caches.
+pub const BIG_BUILD: f64 = 32768.0;
+
+/// Features of one operator invocation: the event counts a cost formula multiplies by per-event costs.
+pub fn features(alg: Alg, nl: f64, nr: f64, nout: f64, size_classes: bool) -> Vec<f64> {
+    match alg {
+        Alg::HashBuildL | Alg::HashBuildR => {
+            let (b, p) = if alg == Alg::HashBuildL { (nl, nr) } else { (nr, nl) };
+            if size_classes {
+                let big = (b >= BIG_BUILD) as u8 as f64;
+                vec![b * (1.0 - big), p * (1.0 - big), b * big, p * big, nout]
+            } else { vec![b, p, nout] }
+        }
+        Alg::SortMerge => vec![nl * lg(nl), nr * lg(nr), nl + nr, nout],
+        Alg::IndexNlR => vec![nl, nl * lg(nr), nout],
+        Alg::IndexNlL => vec![nr, nr * lg(nl), nout],
+        Alg::Bnl => vec![nl * nr, nout],
+    }
+}
+/// Operator families that share a coefficient vector (build side and probe side are already swapped in the features).
+pub fn family(alg: Alg) -> usize { match alg { Alg::HashBuildL | Alg::HashBuildR => 0, Alg::SortMerge => 1, Alg::IndexNlR | Alg::IndexNlL => 2, Alg::Bnl => 3 } }
+
+pub trait CostModel {
+    fn name(&self) -> String;
+    fn op(&self, alg: Alg, nl: f64, nr: f64, nout: f64) -> f64;
+    fn plan(&self, shapes: &[(f64, f64, f64); 2], p: &Plan) -> f64 {
+        self.op(p.a1, shapes[0].0, shapes[0].1, shapes[0].2) + self.op(p.a2, shapes[1].0, shapes[1].1, shapes[1].2)
+    }
+}
+
+/// Sum of intermediate result sizes; blind to the algorithm.
+pub struct COut;
+impl CostModel for COut {
+    fn name(&self) -> String { "C_out".into() }
+    fn op(&self, _: Alg, _: f64, _: f64, nout: f64) -> f64 { nout }
+}
+
+/// In the spirit of the main-memory cost function of Leis et al.: a hash join costs its inputs plus its output; an index
+/// nested-loop join costs `lambda` per outer row (at least one per output row); no I/O terms.
+pub struct CMm { pub lambda: f64 }
+impl CostModel for CMm {
+    fn name(&self) -> String { "C_mm-style".into() }
+    fn op(&self, alg: Alg, nl: f64, nr: f64, nout: f64) -> f64 {
+        match alg {
+            Alg::HashBuildL | Alg::HashBuildR | Alg::SortMerge => nl + nr + nout,
+            Alg::IndexNlR => self.lambda * nl.max(nout),
+            Alg::IndexNlL => self.lambda * nr.max(nout),
+            Alg::Bnl => nl * nr,
+        }
+    }
+}
+
+/// Disk-era constants: CPU cost per tuple 0.01, per operator 0.0025, and each index probe pays a random page read of 4.0.
+/// (A textbook parametrization in the style of PostgreSQL's defaults, not PostgreSQL's exact formulas.)
+pub struct Textbook { pub cpu_tuple: f64, pub cpu_op: f64, pub random_page: f64 }
+impl Default for Textbook { fn default() -> Self { Textbook { cpu_tuple: 0.01, cpu_op: 0.0025, random_page: 4.0 } } }
+impl CostModel for Textbook {
+    fn name(&self) -> String { "textbook constants".into() }
+    fn op(&self, alg: Alg, nl: f64, nr: f64, nout: f64) -> f64 {
+        let (ct, co, rp) = (self.cpu_tuple, self.cpu_op, self.random_page);
+        match alg {
+            Alg::HashBuildL | Alg::HashBuildR => {
+                let (b, p) = if alg == Alg::HashBuildL { (nl, nr) } else { (nr, nl) };
+                b * (co + ct) + p * co + nout * ct
+            }
+            Alg::SortMerge => 2.0 * co * (nl * lg(nl) + nr * lg(nr)) + (nl + nr) * co + nout * ct,
+            Alg::IndexNlR => nl * (rp + co * lg(nr)) + nout * ct,
+            Alg::IndexNlL => nr * (rp + co * lg(nl)) + nout * ct,
+            Alg::Bnl => nl * nr * co + nout * ct,
+        }
+    }
+}
+
+/// Per-family coefficients fitted to microbenchmarks (nanoseconds per event).
+pub struct Calibrated { pub coef: [Vec<f64>; 4], pub size_classes: bool, pub label: String }
+impl CostModel for Calibrated {
+    fn name(&self) -> String { self.label.clone() }
+    fn op(&self, alg: Alg, nl: f64, nr: f64, nout: f64) -> f64 {
+        let f = features(alg, nl, nr, nout, self.size_classes);
+        f.iter().zip(&self.coef[family(alg)]).map(|(a, b)| a * b).sum()
+    }
+}
+
+/// Non-negative least squares by cyclic coordinate descent on column-normalized data: min ||A x - b||^2, x >= 0.
+pub fn nnls(a: &[Vec<f64>], b: &[f64], sweeps: usize) -> Vec<f64> {
+    let (m, n) = (a.len(), a[0].len());
+    let norm: Vec<f64> = (0..n).map(|j| a.iter().map(|r| r[j] * r[j]).sum::<f64>().sqrt().max(1e-300)).collect();
+    let an: Vec<Vec<f64>> = a.iter().map(|r| (0..n).map(|j| r[j] / norm[j]).collect()).collect();
+    let mut x = vec![0.0; n];
+    let mut res: Vec<f64> = b.to_vec();
+    for _ in 0..sweeps {
+        let mut moved = 0.0f64;
+        for j in 0..n {
+            let g: f64 = (0..m).map(|i| an[i][j] * res[i]).sum();
+            let nx = (x[j] + g).max(0.0);
+            let d = nx - x[j];
+            if d != 0.0 { for i in 0..m { res[i] -= an[i][j] * d; } x[j] = nx; moved = moved.max(d.abs()); }
+        }
+        if moved < 1e-12 { break; }
+    }
+    (0..n).map(|j| x[j] / norm[j]).collect()
+}
+
+/// One operator measurement: family, features, seconds.
+pub struct Sample { pub alg: Alg, pub nl: f64, pub nr: f64, pub nout: f64, pub secs: f64 }
+
+/// Fit one coefficient vector per family, minimizing *relative* error (each row divided by its measured time).
+pub fn calibrate(samples: &[Sample], size_classes: bool, label: &str) -> Calibrated {
+    let mut coef: [Vec<f64>; 4] = [vec![], vec![], vec![], vec![]];
+    for fam in 0..4 {
+        let rows: Vec<&Sample> = samples.iter().filter(|s| family(s.alg) == fam).collect();
+        let a: Vec<Vec<f64>> = rows.iter().map(|s| features(s.alg, s.nl, s.nr, s.nout, size_classes).iter().map(|v| v / s.secs).collect()).collect();
+        let b = vec![1.0; rows.len()];
+        coef[fam] = nnls(&a, &b, 20000);
+    }
+    Calibrated { coef, size_classes, label: label.into() }
+}
+
+// ----------------------------------------------------------------------------------------------- ranking metrics
+
+/// Spearman rank correlation (ties get the average rank).
+pub fn spearman(x: &[f64], y: &[f64]) -> f64 {
+    fn ranks(v: &[f64]) -> Vec<f64> {
+        let mut idx: Vec<usize> = (0..v.len()).collect();
+        idx.sort_by(|&a, &b| v[a].partial_cmp(&v[b]).unwrap());
+        let mut r = vec![0.0; v.len()];
+        let mut i = 0;
+        while i < idx.len() {
+            let mut j = i;
+            while j + 1 < idx.len() && v[idx[j + 1]] == v[idx[i]] { j += 1; }
+            for k in i..=j { r[idx[k]] = (i + j) as f64 / 2.0; }
+            i = j + 1;
+        }
+        r
+    }
+    let (rx, ry) = (ranks(x), ranks(y));
+    let n = x.len() as f64;
+    let (mx, my) = (rx.iter().sum::<f64>() / n, ry.iter().sum::<f64>() / n);
+    let (mut sxy, mut sxx, mut syy) = (0.0, 0.0, 0.0);
+    for i in 0..x.len() { sxy += (rx[i] - mx) * (ry[i] - my); sxx += (rx[i] - mx).powi(2); syy += (ry[i] - my).powi(2); }
+    sxy / (sxx * syy).sqrt().max(1e-300)
+}
+
+// ----------------------------------------------------------------------------------------------- shared experiment helpers
+
+fn log_uniform(r: &mut Rng, lo: f64, hi: f64) -> f64 { (lo.ln() + r.unit() * (hi.ln() - lo.ln())).exp() }
+fn gen_rows(r: &mut Rng, n: usize, dom: u64) -> Vec<Row> { (0..n).map(|i| (r.next(dom) as u32, i as u32)).collect() }
+
+/// Microbenchmark every operator on random inputs: the training data for `calibrate`.
+pub fn micro_samples(r: &mut Rng, per_alg: usize) -> Vec<Sample> {
+    let mut out = vec![];
+    for alg in ALGS {
+        let mut got = 0;
+        while got < per_alg {
+            let (lo, hi) = if alg == Alg::Bnl { (100.0, 6000.0) } else { (300.0, 300_000.0) };
+            let (nl, nr) = (log_uniform(r, lo, hi) as usize, log_uniform(r, lo, hi) as usize);
+            let dom = ((nl.max(nr) as f64) * 10f64.powf(-0.7 + 1.7 * r.unit())).max(2.0) as u64;
+            if nl as f64 * nr as f64 / dom as f64 > 3e6 { continue; }
+            let (l, rr) = (gen_rows(r, nl, dom), gen_rows(r, nr, dom));
+            let (il, ir) = (Index::new(&l), Index::new(&rr));
+            let (secs, n) = time_op(&l, &rr, alg, &il, &ir, 3);
+            out.push(Sample { alg, nl: nl as f64, nr: nr as f64, nout: n as f64, secs });
+            got += 1;
+        }
+    }
+    out
+}
+
+/// A random chain query with every plan timed: the ground truth the strategies are scored against.
+pub struct TimedQuery { pub sizes: (f64, f64, f64), pub cards: [f64; 3], pub plans: Vec<(Plan, f64)> }
+impl TimedQuery {
+    pub fn fastest(&self) -> f64 { self.plans.iter().map(|x| x.1).fold(f64::INFINITY, f64::min) }
+    pub fn secs(&self, p: &Plan) -> Option<f64> { self.plans.iter().find(|x| &x.0 == p).map(|x| x.1) }
+    pub fn slowdown(&self, p: &Plan) -> f64 { self.secs(p).expect("plan was timed") / self.fastest() }
+    pub fn plan_list(&self) -> Vec<Plan> { self.plans.iter().map(|x| x.0).collect() }
+}
+
+/// `n` random queries (tables of 2 000 to 120 000 rows, join selectivities from 0.1x to 10x); `extra` sees each chain once, while it exists.
+pub fn timed_queries(rng: &mut Rng, n: usize, reps: usize, extra: &mut dyn FnMut(&Chain, &TimedQuery)) -> Vec<TimedQuery> {
+    let mut qs = vec![];
+    while qs.len() < n {
+        let (nr, ns, nt) = (log_uniform(rng, 2000.0, 120_000.0) as usize, log_uniform(rng, 2000.0, 120_000.0) as usize, log_uniform(rng, 2000.0, 120_000.0) as usize);
+        let (u, v) = (-0.8 + 1.8 * rng.unit(), -0.8 + 1.8 * rng.unit());
+        let (da, db) = ((nr.max(ns) as f64 * 10f64.powf(u)).max(2.0) as usize, (ns.max(nt) as f64 * 10f64.powf(v)).max(2.0) as usize);
+        let c = Chain::generate(rng, nr, ns, nt, da, db);
+        if c.card_rs.max(c.card_st).max(c.card_rst) > 3e6 || c.card_rst < 1.0 { continue; }
+        let plans = plans(&c).into_iter().map(|p| { let t = time_plan(&c, &p, reps); (p, t) }).collect();
+        let q = TimedQuery { sizes: c.sizes(), cards: [c.card_rs, c.card_st, c.card_rst], plans };
+        extra(&c, &q);
+        qs.push(q);
+    }
+    qs
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>All times are wall-clock, single-threaded, in memory, on one laptop-class machine, best of 2–3 runs. The plan timings change by a few percent between runs; every conclusion below held in three complete runs, and ranges across the three runs are quoted where they matter. The tables are the third run.</p>
+
+```text title="calibration: fitted prices and held-out operator accuracy"
+fitted cost per event, nanoseconds (microbenchmarks of 660 operator runs)
+  hash join   flat: build row 0.84, probe row 1.49, output row 1.26
+              sized: small build (<32768 rows) build 0.69, probe 1.46; large build 0.81, probe 4.15; output 1.28
+  sort-merge  n·log n (left) 0.56, n·log n (right) 0.55, merge row 1.50, output row 3.83
+  index NL    outer row 0.00, outer·log2(inner) 2.76, output row 0.25
+  block NL    comparison 0.24, output row 8.14
+held-out operator predictions: relative error |pred - measured| / measured, median / p90
+operator         calibrated (flat)   calibrated (+sizes)
+hash join             28%     57%          17%     54%
+sort-merge            12%     26%          12%     26%
+index NL              18%     49%          18%     49%
+block NL               4%     11%           4%     11%
+```
+
+<ul> <li><strong>The prices are the hardware, and some are surprising.</strong> A hash-table <em>probe</em> costs more per row (1.5 ns) than an insert (0.8 ns): this table is a chained one, so a probe follows <code>head → row → next</code> (two dependent loads) while an insert needs only the head. Sorting costs 0.55 ns per <code>n log n</code>. An index descent costs 2.8 ns per level, so one probe of a 100 000-row inner is about 45 ns, <strong>thirty hash probes</strong>.</li> <li><strong>Held-out operators are predicted to 4–28% (median)</strong>, with the 90th percentile at 11–57%: noisy micro-timings and cache effects the linear features cannot express. Splitting hash joins by build-table size (+ sizes) lowers the hash join error from 28% to 17% at the median, and shows the cache effect directly: <strong>probing a large table costs 4.2 ns per row against 1.5 ns for a small one</strong> (the large build prices are 0.8 and 4.2).</li> </ul>
+
+```text title="the plan space"
+36 random chain queries (tables of 2 000 to 120 000 rows), 40–55 plans each, every plan timed (best of 2 runs)
+slowest plan / fastest plan: median 53.2x, p90 246.9x, max 479x
+fastest plan uses: hash join in both joins 92% | an index NL somewhere 8% | sort-merge somewhere 0% | block NL somewhere 0% | ST joined first 61%
+```
+
+<ul> <li><strong>The plan space is wide</strong>: the slowest plan of a query is a median 53× (p90 247×, max 479×) slower than the fastest. Choosing is worth a lot.</li> <li><strong>Hash joins win nearly everywhere</strong>: the fastest plan uses hash joins for both joins in 92% of the queries and an index join in the other 8%; sort-merge and block nested-loop never win on these inputs. That matches the lecture's summary of Leis et al.: a hash-join-and-scan engine is robust.</li> </ul>
+
+```text title="how well each model ranks plans and how slow its pick is (true cardinalities)"
+cost models with TRUE cardinalities: how well they rank the plans, and how slow the plan they pick is (vs the fastest)
+model                              Spearman |  median     p90      max | within 1.2x
+C_out                                  0.19 |    1.84    2.78     4.05 |         0%
+C_mm-style                             0.49 |    6.42   10.10    15.25 |         0%
+textbook constants                     0.86 |    2.07    2.97     4.85 |         3%
+calibrated (flat)                      0.97 |    1.00    1.31     1.60 |        89%
+calibrated (+cache size classes)       0.97 |    1.00    1.42     2.19 |        78%
+```
+
+<ul> <li><strong><code>C_out</code> ranks plans barely better than chance (Spearman 0.19) but picks the right join order</strong>: its chosen plan has the same join order as the fastest plan in 89–97% of the queries (all five models do, in all three runs). This is why <code>C_out</code> is a sound objective for the <em>join-order</em> search of <a href="/cookbook/p/join-ordering">Q4</a>. It cannot tell algorithms apart, so every hash-join variant ties and the first one wins: it never picks the fastest plan (0%), and the plan it picks is a median <strong>1.8–2.0× slower</strong>.</li> <li><strong>Textbook constants rank well (0.85–0.86) and pick poorly</strong>: the picked plan is a median 2.1–2.2× slower, within 1.2× of the best in 3–6% of the queries. It does choose hash joins everywhere (right), but it is the <strong>build side</strong> it gets wrong, below.</li> <li><strong>A C_mm-style model with λ = 2 is the worst of all (6.3–6.6×)</strong> and picks the index join in 100% of the queries. Its λ says an index probe costs two hash-join rows; the measured cost here is about thirty. See the sweep below.</li> <li><strong>The calibrated model picks the fastest plan's speed in the median query (1.00×), is within 1.2× of the best in 86–92% of queries, and its worst case is 1.44–1.60×.</strong> It picks exactly the fastest plan in 61–69% of the queries. Rank correlation is 0.97.</li> <li><strong>More features did not help the plan choice here</strong>: the cache-size-class model has the same median and better operator accuracy, but its tail is worse in every run (p90 1.37–1.42, max 2.2–2.8 against 1.17–1.31 and 1.44–1.60). One plausible reason is that two coefficients fit on a third of the samples each extrapolate worse; we did not investigate further. Add features when they fix a decision, not an error.</li> </ul>
+
+```text title="what each model picks, and the build side"
+what each model picks (share of the 36 queries), against the fastest plan
+model                              hash/hash index NL   merge   block  ST first  same order   same plan
+C_out                                   100%       0%      0%      0%       58%         97%          0%
+C_mm-style                                0%     100%      0%      0%       58%         97%          0%
+textbook constants                      100%       0%      0%      0%       58%         97%          3%
+calibrated (flat)                        89%      11%      0%      0%       58%         97%         67%
+calibrated (+cache size classes)         89%      11%      0%      0%       56%         89%         53%
+build side of the first hash join (share of queries where the model builds on the LARGER input; fastest plan for comparison)
+  fastest plan: 81%
+  C_out                             61%
+  C_mm-style                        0%
+  textbook constants                0%
+  calibrated (flat)                 100%
+  calibrated (+cache size classes)  94%
+```
+
+<p><strong>The build side is a measured fact, not a rule.</strong> Textbook wisdom says build the hash table on the smaller input; the textbook-constants model does exactly that (it builds on the larger input in 0% of the first hash joins) and is wrong: in this implementation the fastest plan builds on the <strong>larger</strong> input in 75–81% of its hash joins, because a probe costs more than an insert. A hash table with keys stored in the slot (open addressing) would shift the balance; a compressed or radix-partitioned one would shift it again. The calibrated model learns the right side (100%) from its own microbenchmarks.</p>
+
+```text title="the price of an index probe (C_mm-style lambda)"
+C_mm-style cost of an index probe (lambda, in units of one hash-join row): the right value depends on the index structure
+model                              Spearman |  median     p90      max | within 1.2x
+C_mm-style, lambda = 1                 0.09 |    6.43   10.64    15.25 |         0%
+C_mm-style, lambda = 2                 0.49 |    6.42   10.10    15.25 |         0%
+C_mm-style, lambda = 8                 0.79 |    1.92    4.56     5.40 |         6%
+C_mm-style, lambda = 32                0.80 |    1.60    2.51     2.78 |         8%
+C_mm-style, lambda = 128               0.79 |    1.60    2.69     3.61 |         3%
+```
+
+<p>One constant decides whether the model is useful: from λ = 1 to 128 the median slowdown goes 6.4×, 6.4×, 1.9×, 1.6×, 1.6× and rank correlation from 0.09 to 0.80. The right value (about 30 here) follows from the index's structure (a binary search over a sorted array); a hash index would call for a much smaller one, a B+tree on cold pages for a larger one. <strong>A model's constants describe a particular index and a particular machine.</strong></p>
+
+```text title="how much calibration is enough"
+how much calibration is enough: runs per operator type used to fit the flat model
+model                              Spearman |  median     p90      max | within 1.2x
+calibrated with 4 runs per operator     0.98 |    1.00    1.12     1.60 |        92%
+calibrated with 8 runs per operator     0.98 |    1.00    1.12     1.60 |        92%
+calibrated with 16 runs per operator     0.97 |    1.00    1.12     1.60 |        92%
+calibrated with 32 runs per operator     0.97 |    1.00    1.31     1.60 |        89%
+calibrated with 110 runs per operator     0.97 |    1.00    1.31     1.60 |        89%
+```
+
+<p><strong>Calibration is cheap.</strong> Four timed runs per operator type already give the same plan quality as 110 (median 1.00, p90 1.12–1.32 across runs), because the decisions are driven by constant-factor differences of 10–50× between algorithms, not by getting each price to 5%.</p>
+
+```text title="chosen plan's slowdown under cardinality noise"
+slowdown of the chosen plan when every intermediate cardinality is multiplied by exp(sigma * N(0,1)) (median / p90 / max, share within 1.2x)
+model                                            sigma = 0                              sigma = 0.5                              sigma = 1                               sigma = 2                
+C_out                                1.84    2.78     4.05      0%         1.88    2.78     4.05      0%         1.92    2.96     4.97      0%         2.13    3.00     5.10      0%      
+C_mm-style                           6.42   10.10    15.25      0%         6.31   10.64    23.54      0%         6.31   10.84    35.54      0%         6.31   12.61    37.92      0%      
+textbook constants                   2.07    2.97     4.85      3%         2.07    2.97     4.85      4%         2.18    3.16     4.97      4%         2.29    3.26     5.42      4%      
+calibrated (flat)                    1.00    1.31     1.60     89%         1.00    1.34     3.00     84%         1.00    1.98     6.27     69%         1.31    4.29    32.92     46%      
+calibrated (+cache size classes)     1.00    1.42     2.19     78%         1.00    1.51     6.27     74%         1.04    2.20     6.27     62%         1.36    4.29    32.92     41%      
+```
+
+<ul> <li><strong>Uncalibrated models are insensitive to noise because they are already wrong</strong>: <code>C_out</code> goes from a median 1.84× to 2.13× as σ grows to 2, the textbook model from 2.07× to 2.29×, <code>C_mm</code> stays near 6.3×. Their errors are structural, not driven by the cardinalities.</li> <li><strong>The calibrated model degrades smoothly and then sharply.</strong> Multiplying each intermediate cardinality by <code>exp(σ·N(0,1))</code> (σ = 0.5 is a typical 1.4× error, σ = 1 a typical 2×, σ = 2 a typical 4×): at σ = 0.5 it is within 1.2× in 84% of queries (max 3.0); at σ = 1 in 69% (p90 2.0, max 6.3); at σ = 2 only 46% and the tail is long (p90 4.3, max 33).</li> <li><strong>A good model with moderate estimation error beats a bad model with perfect estimates, but only up to a point.</strong> The textbook model with <em>exact</em> cardinalities has median 2.1× and p90 3.0×. The calibrated model with σ = 1 noise has median 1.00× and p90 2.0×: better. With σ = 2 noise its p90 is 4.3× — worse. This is the useful reading of "improve the cardinality estimates instead of the model": cardinality errors with q-error up to about 2–3× are tolerable if the model is right about the machine; errors of 4× and up, which <a href="/cookbook/p/cardinality-estimation">Q8</a> shows are routine after two or three joins, are not, whatever the model.</li> </ul>
+"""
+
+[[sections]]
+heading = "Calibration"
+body = """
+<p>The procedure used above, which is also the one to ship:</p>
+
+<ol> <li><strong>List the primitives</strong> your executor has: each join algorithm and build side, scans (sequential, index), sorts, aggregations (hash, sort), exchanges, spills. A primitive is anything whose time is not a constant multiple of another's.</li> <li><strong>Choose events (features) per primitive</strong> from its algorithm: rows in, rows out, <code>n log n</code>, probes × depth. Add a feature only when a decision depends on it.</li> <li><strong>Generate inputs</strong> over the size and selectivity ranges the optimizer will see (log-uniform sizes, output sizes from 0.1× to 10× of the inputs) and time each primitive in isolation, warm, taking the best of a few runs (the minimum is the noise floor).</li> <li><strong>Fit non-negative prices</strong> by NNLS with each row divided by its measured time, so the fit minimizes <em>relative</em> error (a 5 ms operator should not outweigh a 50 µs one by 100×). Non-negativity matters: a negative price makes bigger inputs cheaper.</li> <li><strong>Validate on held-out operators</strong> (error per primitive) and, more importantly, <strong>on plans</strong>: rank correlation and the slowdown of the chosen plan against the fastest, as above.</li> <li><strong>Store the prices in the catalog</strong> with the hardware identity and a version, re-run on new hardware, and treat a drift in a price as an alert (a kernel upgrade, a noisy neighbor, a changed allocator).</li> </ol>
+
+<aside data-call="note"><b>The minimum, not the mean</b><p>For calibration use the <strong>minimum</strong> of a few runs: it estimates the cost of the work itself, free of scheduler noise. For <em>validation</em> against real query workloads, report the full distribution, since the optimizer must perform in the noisy world.</p></aside>
+"""
+
+[[sections]]
+heading = "What this model leaves out"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>omitted</th> <th>consequence</th> <th>how production systems add it</th> </tr> </thead> <tbody> <tr> <td>parallelism</td> <td>the best plan at 8 threads differs from the best at 1 (hash joins scale, sorts less)</td> <td>cost per thread plus an exchange cost, divide by an efficiency factor (<a href="/cookbook/p/parallel-execution">L14</a>)</td> </tr> <tr> <td>memory limits</td> <td>a hash table bigger than its grant spills and a plan's cost jumps by an I/O multiple</td> <td>piecewise cost with a spill branch (Grace/hybrid hash)</td> </tr> <tr> <td>pipelining</td> <td>a blocking operator (build, sort) delays the first row; <code>LIMIT</code> and <code>EXISTS</code> care</td> <td>a <code>(startup, total)</code> cost pair per plan, compared lexicographically or by fraction fetched</td> </tr> <tr> <td>interesting orders</td> <td>an input already sorted by the join key makes sort-merge nearly free</td> <td>the memo keeps the best plan per (relation set, order) (<a href="/cookbook/p/a-cascades-memo-in-rust">Q2</a>)</td> </tr> <tr> <td>caching</td> <td>repeated accesses to a hot index cost memory, not I/O</td> <td>an <code>effective_cache_size</code>-style parameter, or measured hit rates</td> </tr> <tr> <td>concurrency</td> <td>other queries steal cache, bandwidth and memory</td> <td>ignored, or a utilization parameter</td> </tr> <tr> <td>variance</td> <td>the plan with the best expected cost may have a terrible worst case</td> <td>robust plan selection, runtime adaptation (<a href="/cookbook/p/adaptive-and-robust">Q10</a>)</td> </tr> </tbody> </table></div>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>One trait, five models</strong>: <code>CostModel::op(alg, nl, nr, nout)</code> is the only required method; <code>plan()</code> is a default method that sums two operators. A <code>Vec&lt;Box&lt;dyn CostModel&gt;&gt;</code> makes the comparison a loop, and the calibrated models are just data (<code>coef: [Vec&lt;f64&gt;; 4]</code>).</li> <li><strong>Features as <code>Vec&lt;f64&gt;</code></strong> keep the cost formula and the fit in one place: the model multiplies <code>features(...)</code> by <code>coef</code>, the calibration builds a matrix of <code>features(...)</code> rows. Changing a feature definition changes both together, so they cannot drift apart.</li> <li><strong>A flat chained hash table</strong> (<code>head: Vec&lt;u32&gt;</code>, <code>next: Vec&lt;u32&gt;</code>, rows borrowed as <code>&amp;'a [Row]</code>) has no per-bucket allocation, borrows the build side instead of copying it, and probes with a closure <code>impl FnMut(Row)</code>, which the compiler monomorphizes and inlines. Multiplying by an odd constant and keeping the high bits (<code>(k * 0x9E3779B1) &gt;&gt; shift</code>) is the fast multiplicative hash for 32-bit keys.</li> <li><strong><code>slice::partition_point</code></strong> is the index: two calls delimit the run of equal keys, with no hand-written binary search.</li> <li><strong>Sort by key with <code>sort_unstable_by_key</code></strong>: stability buys nothing for a join, and the unstable sort is faster; duplicate groups are delimited by <code>partition_point</code> again.</li> <li><strong>Coordinate descent for NNLS</strong> is ten lines and converges for the handful of coefficients here (columns normalized first so the step is well scaled); for hundreds of features use Lawson–Hanson or a projected gradient method.</li> <li><strong><code>Instant</code> and the minimum of several runs</strong>: <code>(0..reps).map(|_| run()).fold(f64::INFINITY, f64::min)</code> is the idiom for the least noisy time; run benchmark tests with <code>cargo test --release</code>, since a debug build changes the <em>relative</em> prices of operators.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Operators against the definition</strong>: all six join algorithms, both output orientations, on empty inputs, single rows, one key with many duplicates, low- and high-selectivity random inputs, compared with a double-loop reference (as sorted multisets).</li> <li><strong>Plan space</strong>: every plan of random chains returns exactly the true final cardinality; the first-join and second-join <code>(nl, nr, nout)</code> shapes the cost models see match the sizes of the joins actually executed, for both join orders.</li> <li><strong>Features</strong>: the hash-join features for "build left" equal those for "build right with the inputs swapped" (with and without size classes); the index-join features and the models' costs are symmetric under the same swap.</li> <li><strong>Calibration</strong>: build a synthetic machine with known exact prices, generate operator samples from it, fit, and require that the fit reproduces every sample to 0.1%.</li> <li><strong>NNLS and ranking</strong>: recovers known coefficients to 1e-6; clamps a negative true coefficient to zero; Spearman is exactly ±1 on monotone data and handles ties by average ranks.</li> <li><strong>Mutants run against these tests</strong>: forget to swap build and probe in the build-right features (killed); give the ST-first plan the wrong intermediate size (killed); collapse duplicate-key groups in sort-merge (killed); price the left-indexed nested loop with the right-indexed formula (killed); drop the key check in the hash chain (killed). One mutant (use <code>&lt;=</code> instead of <code>==</code> in the index range end) is equivalent: all rows after the start already have keys at least <code>k</code>.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>PostgreSQL</strong>: costs in arbitrary units anchored by <code>seq_page_cost = 1.0</code>; defaults <code>random_page_cost = 4.0</code>, <code>cpu_tuple_cost = 0.01</code>, <code>cpu_index_tuple_cost = 0.005</code>, <code>cpu_operator_cost = 0.0025</code>, <code>parallel_tuple_cost = 0.1</code>; <code>effective_cache_size</code> tells the planner how much of the data to expect in cache; every plan carries a <strong>startup cost and a total cost</strong>. The constants are for a spinning disk; on SSD the usual advice is to lower <code>random_page_cost</code> to about 1.1. The cost formulas live in <code>src/backend/optimizer/path/costsize.c</code>.</li> <li><strong>MySQL</strong>: costs come from tables (<code>mysql.server_cost</code>, <code>mysql.engine_cost</code>) holding per-operation constants such as the cost of evaluating a row condition or reading a block from memory or disk, which an administrator can change.</li> <li><strong>Oracle</strong>: <em>system statistics</em> (<code>DBMS_STATS.GATHER_SYSTEM_STATS</code>) measure single- and multi-block read times and CPU speed on the actual machine and feed the CPU-aware cost model: calibration as a command.</li> <li><strong>IBM Db2</strong>: hardware, storage and network characteristics in the catalog, measured by microbenchmarks (the lecture's example).</li> <li><strong>SQL Server</strong>: the cost unit is commonly described as originating from an estimated duration on a fixed reference machine, and it is not calibrated per installation; adaptive features (adaptive joins, memory-grant feedback) correct at run time what the model gets wrong.</li> <li><strong>DuckDB, HyPer, Umbra</strong>: join ordering is driven mainly by (estimated) cardinalities, a <code>C_out</code>-like objective, because a vectorized or compiled hash-join engine makes the algorithm choice almost uniform; this is consistent with the measurement that <code>C_out</code> picks the right join order here.</li> <li><strong>Learned cost models</strong> (cost from plan features with a neural or tree model, trained on executed plans) are active research and appear in some cloud systems; surveys such as Siddiqui et al. (SIGMOD 2020) report that they help most when the training workload repeats and that they struggle with new operators and data.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Constants from another era.</strong> <code>random_page_cost = 4</code> on NVMe or in-memory data makes index scans look four times more expensive than they are. Re-measure when the storage changes, and keep the constants per tablespace or device.</li> <li><strong>A tie is a decision.</strong> <code>C_out</code> cannot separate algorithms, so the plan it returns among ties is whichever the enumerator saw first: here, always the same (wrong) build side. Break ties with a secondary cost, never by enumeration order.</li> <li><strong>Costs have different units in different places.</strong> Rows, pages, nanoseconds and "units" must never be added without a conversion; keep the unit in the type or the variable name.</li> <li><strong>Non-linearities hide in the tails.</strong> A hash table that fits in cache and one that does not differ 3× per probe; a spilling hash join is 10× slower. A linear model fits the middle and mis-ranks the extremes: use piecewise features where decisions flip.</li> <li><strong>Model what you execute.</strong> The textbook model assumed a disk-era "build the smaller input" and the measured implementation builds the larger one; a vectorized engine, a compiled one and a row-at-a-time one each need their own prices.</li> <li><strong>Do not calibrate on the benchmark and report on the benchmark.</strong> Fit on microbenchmarks (single operators, random inputs) and validate on whole plans of a different generator, as here.</li> <li><strong>Extrapolation.</strong> Prices fitted on 300–300 000 rows say nothing about 300 million; check that the optimizer's plans stay inside the calibrated ranges or recalibrate at scale.</li> <li><strong>Ranking is not accuracy.</strong> A model with Spearman 0.86 (textbook constants) still picked a 2× slower plan in most queries, because the mistakes were in the <em>top</em> of the ranking where it matters; evaluate the chosen plan, not the average rank.</li> <li><strong>Compare the right baselines.</strong> A cost model must be judged with <em>true</em> cardinalities first (as here), so that cost errors and cardinality errors are not blamed on each other.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "How Good Are Query Optimizers, Really?"
+url = "https://www.vldb.org/pvldb/vol9/p204-leis.pdf"
+
+[[sources]]
+title = "Join Order Optimization with (Almost) No Statistics"
+url = "https://blobs.duckdb.org/papers/tom-ebergen-msc-thesis-join-order-optimization-with-almost-no-statistics.pdf"

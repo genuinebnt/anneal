@@ -1,0 +1,54 @@
+title = "Operational transformation"
+module = "Distributed systems"
+module_order = 10
+chapter = "Collaboration and CRDTs"
+chapter_order = 3
+order = 500
+kind = "recipe"
+lede = "operational transformation (OT) for plain text, with a central-server client/server model."
+level = "advanced"
+code = ["examples/distributed/operational_transform.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+understanding how collaborative text editors reconcile concurrent edits through a serialising server.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+two users edit the same text concurrently. Op A was made against state S, op B was **also** made against S. To apply B after A we must rewrite B so it still means the same thing: B' = "B as if A had already happened".
+
+`transform(a, b)` returns (a', b') such that TP1 holds: apply(apply(S,a), b') == apply(apply(S,b), a').
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+the server serialises all ops into one history. A client keeps a queue of its own unacknowledged ops and sends only the head, tagged with the server revision it was based on. The server transforms the op against every history entry after that revision, appends it and broadcasts it.
+
+A client receiving someone else's op transforms it through its own pending queue before applying it (the queue is rewritten in the process), so everyone applies the same linear history. **Tie-break**: two inserts at the same index need a deterministic order that both sides compute identically; here the lower site id stays left.
+
+Two deletes of the same char both become Nop.
+
+OT vs CRDT (crdts): OT keeps documents small (no per-char ids) but needs a central or totally-ordering service, and the fully decentralised variant needs the harder property TP2 (transform results independent of the order ops are transformed in), which is notoriously easy to get wrong; this simple position-based transform in fact **violates TP2** (searched for below).
+
+CRDTs (RGA in crdts) pay per-element metadata but need no server and tolerate any delivery order.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>server-mediated collaborative editors (Google Docs is widely documented as OT-based)</li><li>shared notes</li><li>chat drafts</li><li>any "everyone edits one document through one backend" product</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Operational_transformation>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Operational_transformation"
+url = "https://en.wikipedia.org/wiki/Operational_transformation"

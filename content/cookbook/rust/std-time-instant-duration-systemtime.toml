@@ -1,0 +1,74 @@
+title = "`std::time` by use case"
+module = "Standard library and core"
+module_order = 2
+chapter = "Threads, synchronisation and time"
+chapter_order = 7
+order = 100
+kind = "recipe"
+lede = "Duration, Instant, SystemTime, deadlines, backoff, testable clocks."
+level = "intermediate"
+code = ["examples/std_tour/std_time_instant_duration_systemtime.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>timeouts</li><li>retries</li><li>metrics</li><li>cache TTLs</li><li>log timestamps</li><li>token expiry</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li><code>Instant</code> for "how long" and deadlines</li><li><code>SystemTime</code> for "what time is it" (persisted or sent to others)</li><li><code>Duration</code> for every timeout argument</li><li>an injected clock for tests</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>Duration::new</code></li><li><code>Duration::from_secs</code></li><li><code>Duration::from_millis</code></li><li><code>Duration::from_micros</code></li><li><code>Duration::from_nanos</code></li><li><code>Duration::from_nanos_u128</code></li><li><code>Duration::from_mins</code></li><li><code>Duration::from_hours</code></li><li><code>Duration::from_secs_f64</code></li><li><code>Duration::try_from_secs_f64</code></li><li><code>Duration::as_secs</code></li><li><code>Duration::as_secs_f64</code></li><li><code>Duration::as_millis</code></li><li><code>Duration::as_micros</code></li><li><code>Duration::as_nanos</code></li><li><code>Duration::subsec_millis</code></li><li><code>Duration::subsec_micros</code></li><li><code>Duration::subsec_nanos</code></li><li><code>Duration::is_zero</code></li><li><code>Duration::checked_add</code></li><li><code>Duration::checked_sub</code></li><li><code>Duration::checked_mul</code></li><li><code>Duration::checked_div</code></li><li><code>Duration::saturating_add</code></li><li><code>Duration::saturating_sub</code></li><li><code>Duration::saturating_mul</code></li><li><code>Duration::mul_f64</code></li><li><code>Duration::div_f64</code></li><li><code>Duration::div_duration_f64</code></li><li><code>Duration::abs_diff</code></li><li><code>Duration::ZERO</code></li><li><code>Duration::MAX</code></li><li><code>Instant::now</code></li><li><code>Instant::elapsed</code></li><li><code>Instant::duration_since</code></li><li><code>Instant::checked_duration_since</code></li><li><code>Instant::saturating_duration_since</code></li><li><code>Instant::checked_add</code></li><li><code>Instant::checked_sub</code></li><li><code>SystemTime::now</code></li><li><code>SystemTime::UNIX_EPOCH</code></li><li><code>SystemTime::duration_since</code></li><li><code>SystemTime::elapsed</code></li><li><code>SystemTime::checked_add</code></li><li><code>SystemTime::checked_sub</code></li><li><code>SystemTimeError::duration</code></li><li><code>thread::sleep</code></li><li><code>thread::park_timeout</code></li><li><code>std::hint::black_box</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/time/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/time/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+core: `Duration` and `TryFromFloatSecsError` (`core::time`, re-exported by std); `black_box` (`core::hint`). std: `Instant`, `SystemTime`, `UNIX_EPOCH`, `SystemTimeError` (they need an OS clock); `thread::sleep`, `thread::park_timeout`. Nothing here is in alloc.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+calendar types, time zones, parsing and formatting dates (std has none: use `chrono`, `time` or `jiff`); `Duration::from_days`/`from_weeks`, `as_millis_f64`, `SystemTime::{MIN,MAX,saturating_add}` (unstable in 1.98.1); `Duration::SECOND`/`MILLISECOND` constants (unstable); async timers (tokio::time).
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Time a piece of work</td><td><code>let t = Instant::now(); ..; t.elapsed()</code></td></tr><tr><td>Give an operation a total budget</td><td><code>compute deadline = Instant::now() + budget once; pass deadline.saturating_duration_since(Instant::now())</code></td></tr><tr><td>Know whether a deadline passed</td><td><code>Instant::now() &gt;= deadline</code></td></tr><tr><td>Get "now" for a database row or a token</td><td><code>SystemTime::now().duration_since(UNIX_EPOCH)</code></td></tr><tr><td>Compare two wall-clock stamps</td><td><code>handle the Err: the clock can step backwards</code></td></tr><tr><td>Configure a timeout from a number</td><td><code>Duration::from_millis(cfg); from user floats: try_from_secs_f64</code></td></tr><tr><td>Exponential backoff without overflow</td><td><code>base.saturating_mul(1 &lt;&lt; n.min(31)).min(cap)</code></td></tr><tr><td>Print a duration for humans</td><td><code>format!("{d:.2?}") (Debug), or your own formatter; there is no Display</code></td></tr><tr><td>Test time-dependent logic</td><td><code>inject a clock trait; advance it by hand</code></td></tr><tr><td>Stop the optimiser deleting benchmark work</td><td><code>black_box the inputs AND the result (best effort only) RULES: monotonic (Instant) for intervals, wall clock (SystemTime) for points in calendar time. Never subtract wall-clock stamps to time work. PLATFORMS (from the 1.98.1 docs/source): Instant uses CLOCK_MONOTONIC on Linux, CLOCK_UPTIME_RAW on Apple targets, QueryPerformanceCounter on Windows. Whether time spent suspended counts is explicitly unspecified. SystemTime precision differs too (Windows stores 100 ns ticks).</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/time/struct.Instant.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/time/struct.Instant.html</a></li><li><a href="https://doc.rust-lang.org/std/time/struct.SystemTime.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/time/struct.SystemTime.html</a></li><li>civil-from-days algorithm <a href="https://howardhinnant.github.io/date_algorithms.html" target="_blank" rel="noreferrer">https://howardhinnant.github.io/date_algorithms.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/time/index.html"
+url = "https://doc.rust-lang.org/std/time/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/time/struct.Instant.html"
+url = "https://doc.rust-lang.org/std/time/struct.Instant.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/time/struct.SystemTime.html"
+url = "https://doc.rust-lang.org/std/time/struct.SystemTime.html"
+
+[[sources]]
+title = "howardhinnant.github.io/date_algorithms.html"
+url = "https://howardhinnant.github.io/date_algorithms.html"

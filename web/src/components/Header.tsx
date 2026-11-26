@@ -16,19 +16,20 @@ import { THEMES, applyTheme, storedTheme, type Theme } from "../theme";
 // the three areas as one switcher with their progress, a search field, the date and time, the focus timer, the accent, and the tools. The second answers "what can I do here": the pages of the current area,
 // a breadcrumb and a few counters. On a phone the areas move to a bar at the bottom.
 
-type AreaId = "dsa" | "rust" | "courses" | "sd";
+type AreaId = "dsa" | "rust" | "courses" | "sd" | "cb";
 
-const AREAS: { id: AreaId; label: string; to: "/dsa" | "/rust" | "/courses" | "/sd"; color: string }[] = [
+const AREAS: { id: AreaId; label: string; to: "/dsa" | "/rust" | "/courses" | "/sd" | "/cookbook"; color: string }[] = [
     { id: "dsa", label: "DSA", to: "/dsa", color: "var(--acc)" },
     { id: "rust", label: "Rust", to: "/rust", color: "var(--vio)" },
     { id: "courses", label: "Courses", to: "/courses", color: "var(--grn)" },
     { id: "sd", label: "System design", to: "/sd", color: "var(--warn)" },
+    { id: "cb", label: "Cookbook", to: "/cookbook", color: "var(--mac)" },
 ];
 
 /** How long the Mock page's data counts as fresh, so coming back to it within a minute shows it at once. */
 export const MOCK_FRESH = 60_000;
 
-type Tab = { to: "/dsa" | "/dsa/plan" | "/dsa/review" | "/dsa/calendar" | "/dsa/company" | "/dsa/mock" | "/dsa/graph" | "/dsa/read" | "/progress" | "/analytics" | "/settings" | "/log" | "/rust" | "/courses" | "/sd" | "/sd/learn" | "/sd/problems" | "/sd/review"; label: string; match: (path: string) => boolean; badge?: "due" };
+type Tab = { to: "/dsa" | "/dsa/plan" | "/dsa/review" | "/dsa/calendar" | "/dsa/company" | "/dsa/mock" | "/dsa/graph" | "/dsa/read" | "/progress" | "/analytics" | "/settings" | "/log" | "/rust" | "/courses" | "/sd" | "/sd/learn" | "/sd/problems" | "/sd/review" | "/cookbook"; label: string; match: (path: string) => boolean; badge?: "due" };
 
 /** Pages about everything, not one area: Progress covers DSA, Rust and Courses; it has its own place beside the areas. */
 const GLOBAL: Tab[] = [
@@ -62,13 +63,26 @@ const TABS: Record<AreaId, Tab[]> = {
         { to: "/sd/problems", label: "Problems", match: (p) => p.startsWith("/sd/problems") || p.startsWith("/sd/practice") },
         { to: "/sd/review", label: "Review", match: (p) => p.startsWith("/sd/review") },
     ],
+    // subjects, not page names (crates/content/src/cookbook.rs, SUBJECTS); a reading page lights none, its breadcrumb names the subject
+    cb: [
+        { to: "/cookbook", label: "Overview", match: (p) => p === "/cookbook" },
+        { to: "/cookbook/rust" as Tab["to"], label: "Rust", match: (p) => p === "/cookbook/rust" },
+        { to: "/cookbook/algorithms" as Tab["to"], label: "Algorithms", match: (p) => p === "/cookbook/algorithms" },
+        { to: "/cookbook/systems" as Tab["to"], label: "Systems", match: (p) => p === "/cookbook/systems" },
+        { to: "/cookbook/data" as Tab["to"], label: "Data", match: (p) => p === "/cookbook/data" },
+        { to: "/cookbook/distributed" as Tab["to"], label: "Distributed", match: (p) => p === "/cookbook/distributed" },
+        { to: "/cookbook/compilers" as Tab["to"], label: "Compilers", match: (p) => p === "/cookbook/compilers" },
+        { to: "/cookbook/testing" as Tab["to"], label: "Testing", match: (p) => p === "/cookbook/testing" },
+        { to: "/cookbook/projects" as Tab["to"], label: "Projects", match: (p) => p === "/cookbook/projects" },
+    ],
 };
 
 /** Pages that are designed but not built yet; dimmed, in the area they belong to. */
-const LATER: Record<AreaId, string[]> = { dsa: [], rust: ["Library"], courses: ["Readiness"], sd: ["Stories", "Mock interview"] };
+const LATER: Record<AreaId, string[]> = { dsa: [], rust: ["Library"], courses: ["Readiness"], sd: ["Stories", "Mock interview"], cb: [] };
 
 const AREA_KEY = "anneal.area";
 const areaFromPath = (path: string): AreaId | null => {
+    if (path.startsWith("/cookbook")) return "cb";
     if (path.startsWith("/courses")) return "courses";
     if (path.startsWith("/sd")) return "sd";
     if (path.startsWith("/rust") || path.startsWith("/t/") || path.startsWith("/p/")) return "rust";
@@ -116,6 +130,7 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
     const course = useQuery({ queryKey: ["course", "bustub"], queryFn: () => api.course("bustub") });
     const progress = useQuery({ queryKey: ["progress"], queryFn: api.progress });
     const sd = useQuery({ queryKey: ["sd"], queryFn: api.sd, staleTime: 60_000 });
+    const cookbook = useQuery({ queryKey: ["cookbook"], queryFn: api.cookbook, staleTime: 5 * 60_000 });
     const streaks = useStreaks();
     const activity = useQuery({ queryKey: ["activity", "header"], queryFn: () => api.activity(["D"]), enabled: current === "dsa" });
     const [paletteOpen, setPaletteOpen] = useState(false);
@@ -135,6 +150,8 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
         courses: { done: course.data?.done, total: course.data?.total ?? 0 },
         // system design: concept checks answered and problems drilled, over all there are
         sd: { done: sd.data ? sd.data.concepts.reduce((n, c) => n + Math.min(c.checked, c.checks), 0) + sd.data.problems.filter((p) => p.attempts > 0).length : undefined, total: sd.data ? sd.data.concepts.reduce((n, c) => n + c.checks, 0) + sd.data.problems.length : 0 },
+        // the cookbook keeps no progress: the number is how many pages it has, and its ring stays empty
+        cb: { done: cookbook.data ? cookbook.data.subjects.reduce((n, s) => n + s.pages.length, 0) + cookbook.data.samples.length : undefined, total: 0 },
     };
 
     // The page measures itself against the header: layouts that stick below it read --hdr-h.
@@ -276,7 +293,7 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
                     </div>
                 )}
             </header>
-            {stats && !compact && <StatsBar area={current} />}
+            {stats && !compact && current !== "cb" && <StatsBar area={current} />}
             <nav className="hd-dock" aria-label="Areas">
                 {AREAS.map((a) => (
                     <Link key={a.id} to={a.to} className={!global && a.id === current ? "on" : ""} style={{ "--c": a.color } as React.CSSProperties} aria-current={!global && a.id === current ? "page" : undefined}>
@@ -318,7 +335,7 @@ function AreaSwitcher({ current, counts, progress }: { current: AreaId | null; c
         void document.fonts?.ready.then(place);
         addEventListener("resize", place);
         return () => removeEventListener("resize", place);
-    }, [current, progress, counts.dsa.done, counts.rust.done, counts.courses.done, counts.sd.done]);
+    }, [current, progress, counts.dsa.done, counts.rust.done, counts.courses.done, counts.sd.done, counts.cb.done]);
     const color = current ? AREAS.find((a) => a.id === current)!.color : "var(--acc)";
     return (
         <nav className="hd-areas" ref={box} aria-label="Areas">

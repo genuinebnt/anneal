@@ -1,0 +1,9 @@
+error[E0006]: malformed number literal `12abc`
+ --> e0006_malformed_number.peb:2:13
+  |
+2 |     let x = 12abc;
+  |             ^^^^^ letters cannot follow digits
+  |
+  = help: integer literals contain only digits and `_` separators
+
+error: aborting due to 1 previous error

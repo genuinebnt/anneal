@@ -1,0 +1,66 @@
+title = "Join algorithms compared"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 369
+kind = "recipe"
+lede = "Nested loop, block NL, index NL, hash, GRACE hash, sort-merge, outer/semi/anti, Bloom."
+level = "advanced"
+code = ["examples/database/join_algorithms.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>query executors</li><li>ETL engines</li><li>data-frame libraries</li><li>any "match rows of A with rows of B on a key" code</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+every classic equi-join over relations of (key, payload) tuples, each instrumented with a **cost model**: `io` counts page transfers (page = `Cfg::page` tuples, buffer = `Cfg::buf_pages` pages) and `cmp` counts key comparisons / hash probes. The algorithms, in the order a planner would consider them:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Nested loop</div><div class="cb-g-says"><p>For every outer tuple scan the whole inner. IO = |R| * pages(S) + pages(R). Simple, no memory, ruinous.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Block nested loop</div><div class="cb-g-says"><p>Load (B-2) pages of outer, scan the inner once per block. IO = pages(R) + ceil(pages(R)/(B-2)) * pages(S).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Index nested loop</div><div class="cb-g-says"><p>Probe a sorted index (binary search) or a hash index per outer tuple; pays ~height IO per probe plus one random IO per match (unclustered). Wins when the outer is tiny and the inner is huge and indexed.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Hash join</div><div class="cb-g-says"><p>Build a hash table on the smaller input, stream the other. One pass when the build side fits in memory.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Grace hash join</div><div class="cb-g-says"><p>When it does not fit, hash-partition <strong>both</strong> inputs to (simulated) disk with the same hash, so matching keys land in the same partition pair, then join pair by pair. A partition still too big is partitioned <strong>again</strong> with a different hash seed (recursive partitioning).</p><p><strong>Skew</strong>: one hot key can never be split by any hash, so a partition whose smaller side is all one key (or a recursion depth cap) falls back to block nested loop, which is correct for any skew.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Sort-merge</div><div class="cb-g-says"><p>Sort both on the key (external-sort IO model; inputs already sorted skip the sort entirely), then merge. Equal keys form <strong>groups</strong> on both sides; the cross product of each group pair is emitted (equivalent to the mark/reset trick of textbook merge joins, done here by slicing the two runs).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Semi / anti / left outer / full outer</div><div class="cb-g-says"><p>Hash-based variants. A semi-join emits each outer tuple at most once (<code>EXISTS</code>), anti-join emits those with no match (<code>NOT EXISTS</code>), outer joins pad with <strong>null</strong> (u32::MAX).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Bloom pre-filter</div><div class="cb-g-says"><p>A bit array built from the build side's keys; probe tuples that miss it cannot match, so they are dropped <strong>before</strong> being spilled. It never has false negatives, so results are unchanged; false positives only cost extra work.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Why** the table matters: no algorithm dominates. Small inner: hash. Tiny outer + index: index NL.
+
+Both inputs already sorted (or an **order by** follows): sort-merge. Large unsorted inputs: **grace** hash (2 extra passes over the data, no sort). Skew: **grace** with a fallback, or sort-merge, which is immune to hot keys except for the unavoidable output size.
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+500 random relation pairs (empty, tiny, skewed, duplicated, pre-sorted, single-key) must give identical sorted result multisets for all algorithms against a naive oracle; measured IO of NL and BNL must equal their closed-form formulas; semi/anti partition R exactly; outer joins equal inner join plus padded unmatched rows.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>PostgreSQL (nested loop, hash join with batches, merge join)</li><li>MySQL 8 hash join</li><li>Spark SQL (broadcast hash, shuffle hash, sort-merge)</li><li>DuckDB and ClickHouse hash joins with Bloom/min-max filters pushed to scans</li><li>Grace/hybrid hash in classic System R-descended optimizers</li><li>also dataframe <code>merge</code>/<code>join</code> in pandas and polars</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Hash join <https://en.wikipedia.org/wiki/Hash_join>   Sort-merge join <https://en.wikipedia.org/wiki/Sort-merge_join>
+
+```text
+CMU 15-445 Database Systems (join lectures) https://15445.courses.cs.cmu.edu/fall2024/
+```
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Hash_join"
+url = "https://en.wikipedia.org/wiki/Hash_join"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Sort-merge_join"
+url = "https://en.wikipedia.org/wiki/Sort-merge_join"
+
+[[sources]]
+title = "15445.courses.cs.cmu.edu/fall2024"
+url = "https://15445.courses.cs.cmu.edu/fall2024/"

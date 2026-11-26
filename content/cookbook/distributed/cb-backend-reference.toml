@@ -1,0 +1,184 @@
+title = "Backend reference project"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Multi-file projects"
+chapter_order = 6
+order = 556
+kind = "project"
+lede = "One coherent, readable backend: a multi-tenant \"projects and tasks\" SaaS API (organisations, users, projects, tasks, comments, attachments). Every block a real web backend needs is here, in its own module, wired together and tested. It is a teaching reference, not a product: read [what it does not…"
+code = ["crates/cb-backend-reference/src/lib.rs", "crates/cb-backend-reference/README.md", "crates/cb-backend-reference/Cargo.toml", "crates/cb-backend-reference/build.rs", "crates/cb-backend-reference/docs/BLOCKS.md", "crates/cb-backend-reference/docs/EXTEND.md", "crates/cb-backend-reference/docs/PRODUCTION_CHECKLIST.md", "crates/cb-backend-reference/rustfmt.toml", "crates/cb-backend-reference/scripts/ci.sh", "crates/cb-backend-reference/src/auth/mod.rs", "crates/cb-backend-reference/src/auth/password.rs", "crates/cb-backend-reference/src/auth/policy.rs", "crates/cb-backend-reference/src/auth/service.rs", "crates/cb-backend-reference/src/auth/throttle.rs", "crates/cb-backend-reference/src/auth/token.rs", "crates/cb-backend-reference/src/bin/backend-demo.rs", "crates/cb-backend-reference/src/cache.rs", "crates/cb-backend-reference/src/config.rs", "crates/cb-backend-reference/src/db/accounts.rs", "crates/cb-backend-reference/src/db/mod.rs", "crates/cb-backend-reference/src/db/projects.rs", "crates/cb-backend-reference/src/db/tasks.rs", "crates/cb-backend-reference/src/error.rs", "crates/cb-backend-reference/src/http/etag.rs", "crates/cb-backend-reference/src/http/extract.rs", "crates/cb-backend-reference/src/http/handlers/accounts.rs", "crates/cb-backend-reference/src/http/handlers/events.rs", "crates/cb-backend-reference/src/http/handlers/files.rs", "crates/cb-backend-reference/src/http/handlers/mod.rs", "crates/cb-backend-reference/src/http/handlers/ops.rs", "crates/cb-backend-reference/src/http/handlers/projects.rs", "crates/cb-backend-reference/src/http/handlers/tasks.rs", "crates/cb-backend-reference/src/http/middleware.rs", "crates/cb-backend-reference/src/http/mod.rs", "crates/cb-backend-reference/src/http/openapi.rs", "crates/cb-backend-reference/src/idempotency.rs", "crates/cb-backend-reference/src/jobs/mod.rs", "crates/cb-backend-reference/src/jobs/queue.rs", "crates/cb-backend-reference/src/jobs/relay.rs", "crates/cb-backend-reference/src/jobs/schedule.rs", "crates/cb-backend-reference/src/jobs/webhook.rs", "crates/cb-backend-reference/src/jobs/worker.rs", "crates/cb-backend-reference/src/metrics.rs", "crates/cb-backend-reference/src/objstore.rs", "crates/cb-backend-reference/src/ports.rs", "crates/cb-backend-reference/src/query.rs", "crates/cb-backend-reference/src/ratelimit.rs", "crates/cb-backend-reference/src/server.rs", "crates/cb-backend-reference/src/state.rs", "crates/cb-backend-reference/src/testkit.rs", "crates/cb-backend-reference/tests/api_auth.rs", "crates/cb-backend-reference/tests/api_http.rs", "crates/cb-backend-reference/tests/common/mod.rs", "crates/cb-backend-reference/tests/concurrency.rs", "crates/cb-backend-reference/tests/faults.rs", "crates/cb-backend-reference/tests/loopback.rs"]
+
+[[sections]]
+heading = "Design notes"
+body = """
+Reference backend: a multi-tenant "projects and tasks" API built from one module per building block.
+"""
+
+[[sections]]
+heading = "About the project"
+body = """
+One coherent, readable backend: a multi-tenant "projects and tasks" SaaS API (organisations, users,
+projects, tasks, comments, attachments). Every block a real web backend needs is here, in its own module,
+wired together and tested. It is a **teaching reference**, not a product: read
+what it does not do before copying anything.
+
+```sh
+cd cookbook
+cargo run  --release -p cb-backend-reference --bin backend-demo   # scripted end-to-end transcript
+cargo test --release -p cb-backend-reference                      # the whole test pyramid
+cargo run  --release -p cb-backend-reference --bin backend-demo -- serve   # real server on :8080
+crates/cb-backend-reference/scripts/ci.sh                         # fmt, clippy, tests, demo
+```
+
+`serve` reads the TOML file named by `APP_CONFIG`, then `APP__SECTION__KEY` environment variables
+(example: `APP__SERVER__BIND=127.0.0.1:9000`). Its mailer only logs recipient and subject, never the
+body, so you cannot complete email verification against `serve` until you implement `ports::Mailer`.
+The demo and tests use the in-memory mailer.
+
+### Architecture
+
+```text
+ client ──HTTP──> axum router (/v1, built from the table in http/mod.rs)
+                    │  observe: request id, span, metrics
+                    │  security headers ─ CORS ─ compression ─ panic guard ─ timeout ─ body limit
+                    │  per route: Accept check -> authenticate + rate limit -> idempotency
+                    v
+                 handlers ──> auth::policy (may this principal do this?)
+                    │    └──> cache (stats)            objstore (attachments)
+                    v
+          ONE transaction:  domain row  +  audit_log row  +  outbox row
+                    │
+        ┌───────────┴──────────────  SQLite (WAL)  ─────────────────────┐
+        │  jobs (lease, retry, DLQ)      outbox ──relay──> events       │
+        └───────▲───────────▲───────────────│───────────────────│───────┘
+                │           │               │ webhook jobs      │ wake-up
+           scheduler     workers <──────────┘                   v
+                         │    │                          SSE /v1/events
+                      Mailer  webhook receiver (HMAC signed)
+```
+
+Rule of dependency: handlers know about repositories and policies; repositories know only SQL;
+`ports` traits hide time, ids, mail and blobs. `App` (state.rs) is the single composition point.
+
+### Life of a request: `PATCH /v1/tasks/{id}`
+
+1. `observe` takes or creates `X-Request-Id`, opens a tracing span, and later records metrics under the
+   route template.
+2. The outer layers apply: security headers, CORS, compression, panic guard, timeout, body limit.
+3. `require_json_accept` answers 406 before anything can be written.
+4. `authenticate` resolves the bearer credential to a `Principal` (reading the user row, and for sessions
+   checking the session is not revoked), then spends a rate-limit token.
+5. The handler loads the task **scoped to the principal's org** (else 404), asks the policy whether this
+   principal may modify it (else 403), requires `If-Match` (428) naming the loaded version (412), and
+   validates every field (422, all errors at once).
+6. In one transaction: `UPDATE ... WHERE version = ?`, refresh the search index, insert the audit row and
+   the outbox event. Any failure rolls back all of it.
+7. After the commit, the cache tag of the project is invalidated, and the new `ETag` is returned.
+8. Later, the relay publishes the outbox row: SSE streams wake and one webhook job per hook is queued.
+
+`PATCH` is not idempotency-wrapped: `If-Match` already makes a retry safe (it gets 412, then re-reads).
+
+### Choices, and why
+
+| Choice | Why |
+|---|---|
+| SQLite via `sqlx`, runtime queries | Real SQL, transactions and locking with no server. `query!` macros would need a database at compile time. |
+| Repositories as functions on `&mut SqliteConnection` | The caller owns the transaction. In-memory SQLite is a better test double than a hand-written fake. |
+| `chrono` (clock feature only) | Only "now in unix ms" is needed; all stored times are integers from an injected `Clock`. `time` would serve equally well. |
+| HMAC tokens, not `jsonwebtoken` | One issuer and verifier, one algorithm, no header to trust. See `auth/token.rs`. |
+| Hand-written validation | The rules are few, and every error must be collected into problem+json. `validator`/`garde` pay off with many types. |
+| Hand-written metrics and OpenAPI | Shows the mechanism. Use `metrics`/OpenTelemetry and `utoipa`/`aide` for real work. |
+
+### Reading order
+
+1. `ports.rs`, `config.rs`, `error.rs`: the vocabulary.
+2. `migrations/0001_init.sql`, then `db/mod.rs`, `db/projects.rs`, `db/tasks.rs`, `query.rs`.
+3. `auth/policy.rs`, `auth/token.rs`, `auth/password.rs`, `auth/throttle.rs`, `auth/service.rs`.
+4. `http/mod.rs` (the route table), `http/middleware.rs`, `http/extract.rs`, `http/etag.rs`.
+5. `http/handlers/projects.rs` as the template, then the other handlers.
+6. `idempotency.rs`, `ratelimit.rs`, `cache.rs`.
+7. `jobs/`: `queue.rs`, `worker.rs`, `relay.rs`, `schedule.rs`, `webhook.rs`.
+8. `objstore.rs`, `server.rs`, `metrics.rs`, `state.rs`.
+9. `testkit.rs` and `tests/`. Start with `tests/faults.rs`: it states the guarantees most directly.
+
+### Test pyramid
+
+| Layer | Where |
+|---|---|
+| Pure logic (policy matrix, cursors, filters, headers, backoff, cron), with seeded random loops | unit tests in `src/` |
+| Repositories on in-memory SQLite, including a keyset-vs-sort differential test | `src/db/`, `src/jobs/` |
+| API through `tower::ServiceExt::oneshot` | `tests/api_auth.rs`, `tests/api_http.rs` |
+| Fault injection: SQL triggers, locked database, failing mailer and receiver, timeout, cancellation | `tests/faults.rs` |
+| Races on a multi-threaded runtime, asserting invariants only | `tests/concurrency.rs` |
+| Real sockets with background tasks: SSE resume, graceful drain | `tests/loopback.rs` |
+
+No assertion depends on how long something takes. Time-dependent behaviour uses `ManualClock`; the few
+real timeouts in tests are hang guards, or force an operation that can never finish to give up.
+A passing concurrency test does not prove the absence of races.
+
+Block-by-block notes: docs/BLOCKS.md. Going to production:
+docs/PRODUCTION_CHECKLIST.md. Exercises: docs/EXTEND.md.
+"""
+
+[[sections]]
+heading = "What is in it"
+body = """
+```text title="cb-backend-reference"
+src/lib.rs
+README.md
+Cargo.toml
+build.rs
+docs/BLOCKS.md
+docs/EXTEND.md
+docs/PRODUCTION_CHECKLIST.md
+rustfmt.toml
+scripts/ci.sh
+src/auth/mod.rs
+src/auth/password.rs
+src/auth/policy.rs
+src/auth/service.rs
+src/auth/throttle.rs
+src/auth/token.rs
+src/bin/backend-demo.rs
+src/cache.rs
+src/config.rs
+src/db/accounts.rs
+src/db/mod.rs
+src/db/projects.rs
+src/db/tasks.rs
+src/error.rs
+src/http/etag.rs
+src/http/extract.rs
+src/http/handlers/accounts.rs
+src/http/handlers/events.rs
+src/http/handlers/files.rs
+src/http/handlers/mod.rs
+src/http/handlers/ops.rs
+src/http/handlers/projects.rs
+src/http/handlers/tasks.rs
+src/http/middleware.rs
+src/http/mod.rs
+src/http/openapi.rs
+src/idempotency.rs
+src/jobs/mod.rs
+src/jobs/queue.rs
+src/jobs/relay.rs
+src/jobs/schedule.rs
+src/jobs/webhook.rs
+src/jobs/worker.rs
+src/metrics.rs
+src/objstore.rs
+src/ports.rs
+src/query.rs
+src/ratelimit.rs
+src/server.rs
+src/state.rs
+src/testkit.rs
+tests/api_auth.rs
+tests/api_http.rs
+tests/common/mod.rs
+tests/concurrency.rs
+tests/faults.rs
+tests/loopback.rs
+```
+"""

@@ -1,0 +1,48 @@
+title = "Vamana diskann lite"
+module = "Search and vectors"
+module_order = 9
+chapter = "Vector search"
+chapter_order = 2
+order = 467
+kind = "recipe"
+lede = "a DiskANN / Vamana-style single-layer graph index with GreedySearch, RobustPrune and \"node read\" accounting."
+level = "advanced"
+code = ["examples/search_vectors/vamana_diskann_lite.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+billion-scale vector search where the graph and full vectors live on SSD and only a small sketch sits in RAM.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+one flat graph (no layers) with out-degree &lt;= R.
+
+**Build**: start from a random graph (so it is connected enough to search), pick the MEDOID (point nearest the dataset mean) as the fixed entry point, then for every point p, in random order: run GreedySearch(medoid, p, L) and keep every node it **visited**, RobustPrune(p, visited) to choose p's out-neighbours, and add reverse edges j -> p, re-pruning j when it overflows R.
+
+Do this twice: pass 1 with alpha = 1 (plain "closest and diverse" edges), pass 2 with alpha > 1 (keep some long edges). ROBUSTPRUNE(p, V, alpha, R): repeatedly take the closest remaining candidate p&#42;, keep it, and delete every candidate v with alpha &#42; d(p&#42;, v) &lt;= d(p, v), i.e. v is "covered" by p&#42;.
+
+With alpha = 1 only strictly closer shortcuts cover; with alpha > 1 a candidate is removed only if p&#42; is **much** closer to it, so farther, diverse edges survive. Those long edges cut the hop count (the graph's diameter), which is the quantity that matters on disk.
+
+**Parameters**: R = max degree (bigger: fewer hops, more bytes per node); L = candidate list size during build/search (bigger: better recall, more reads); alpha = how aggressively to keep long-range edges (1.0 to 1.5 typical; here 1.2). **Why one layer for SSD**: HNSW's upper layers help in RAM, but on disk every hop is a random 4 KB read (&#126;100 us).
+
+Vamana's long-range edges let a single layer reach any region in few hops, and each node's vector plus neighbour list is packed in one sector, so cost per query &#126; number of expanded nodes ("node reads"). We simulate that by counting them.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+DiskANN (Microsoft Research) and its open implementations; Vamana-style graphs in large-scale vector databases that keep compressed vectors in RAM (product quantization, see product_quantization) and full-precision vectors plus graph on NVMe, followed by exact re-ranking of the few nodes read.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+the DiskANN paper (Subramanya et al., NeurIPS 2019) <https://suhasjs.github.io/files/diskann_neurips19.pdf>
+"""
+
+[[sources]]
+title = "suhasjs.github.io/files/diskann_neurips19.pdf"
+url = "https://suhasjs.github.io/files/diskann_neurips19.pdf"

@@ -1,0 +1,5 @@
+---
+source: crates/cb-testing-tools/tests/snapshots.rs
+expression: format_expr(&parse_expr(src).unwrap())
+---
+a - (b - c) * -(d + 1) / 2

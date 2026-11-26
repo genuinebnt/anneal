@@ -1,0 +1,64 @@
+title = "Syscalls"
+module = "Performance and systems"
+module_order = 7
+chapter = "Files, processes and the OS"
+chapter_order = 3
+order = 295
+kind = "recipe"
+lede = "What they are, how Rust reaches the kernel, fd ownership, cost, and counting them."
+level = "intermediate"
+code = ["examples/os_and_storage/syscalls_portable.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>debugging slow IO</li><li>writing FFI/low-level code</li><li>understanding what std does for you</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a system call is a controlled jump from user mode into the kernel (trap instruction: `syscall` on x86-64, `svc` on AArch64). The kernel checks arguments, does the work and returns a result in a register.
+
+The layering in a Rust program is: your code -> `std` (File, TcpStream, Command) -> libc (glibc, musl, libSystem on macOS; thin wrappers that set `errno`) -> kernel.
+
+On Linux you can skip libc with `libc::syscall(SYS_x, ..)`; macOS discourages that (the stable ABI is libSystem, raw syscall numbers are private), and Windows has no stable syscall numbers at all: the stable interface is kernel32/ntdll functions.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Errors**: libc wrappers return -1 and set the thread-local `errno` (read it with `io::Error::last_os_error()`). The raw Linux kernel convention is different: the register holds `-errno` (values -4095..=-1 are errors); glibc's `syscall()` function converts that back into the -1 + errno convention for you.
+
+**Ownership**: raw `RawFd` (an `i32`) has no owner, so double close and use-after-close are easy: fd numbers are reused immediately, so a stale fd can silently refer to a different file. `OwnedFd` closes on drop (exactly once), `BorrowedFd<'a>` is a lifetime-checked view. Prefer them in every new API.
+
+**Cost**: a trivial syscall costs on the order of 100 ns to 1 us (mode switch, mitigations) versus &#126;20 ns for `clock_gettime`/`Instant::now` on Linux, which the vDSO serves in user space without entering the kernel. This is why buffering matters (see buffered_io_internals): fewer, larger syscalls. We count calls with wrapper `Read`/`Write` types.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>strace/dtruss-driven debugging</li><li>sandboxes and seccomp filters (a syscall allow-list)</li><li>container runtimes</li><li>async runtimes (epoll/kevent/io_uring)</li><li>custom allocators (mmap/brk)</li><li>performance work that batches IO</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://man7.org/linux/man-pages/man2/syscalls.2.html> <https://doc.rust-lang.org/std/os/fd/index.html> <https://docs.rs/nix> <https://github.com/microsoft/windows-rs>
+"""
+
+[[sources]]
+title = "man7.org/linux/man-pages/man2/syscalls.2.html"
+url = "https://man7.org/linux/man-pages/man2/syscalls.2.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/os/fd/index.html"
+url = "https://doc.rust-lang.org/std/os/fd/index.html"
+
+[[sources]]
+title = "docs.rs/nix"
+url = "https://docs.rs/nix"
+
+[[sources]]
+title = "github.com/microsoft/windows-rs"
+url = "https://github.com/microsoft/windows-rs"

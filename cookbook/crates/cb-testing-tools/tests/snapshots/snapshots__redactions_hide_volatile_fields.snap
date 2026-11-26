@@ -1,0 +1,11 @@
+---
+source: crates/cb-testing-tools/tests/snapshots.rs
+expression: make_report()
+---
+{
+  "run_id": "[id]",
+  "elapsed_ms": "[ms]",
+  "expr": "a * (b + 1)",
+  "nodes": 5,
+  "log": "2 entries"
+}

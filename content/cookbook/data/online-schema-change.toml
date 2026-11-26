@@ -1,0 +1,56 @@
+title = "Online schema change without locking"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 441
+kind = "recipe"
+lede = "Shadow-table copy + change log (gh-ost style), expand/contract with batched backfill"
+level = "advanced"
+code = ["examples/database/online_schema_change.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+migrating a hot production table (add/alter a column, change a type, repartition) without taking writes offline; rolling application deploys.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Why not alter table**: a blocking `ALTER` rewrites every row while holding a lock that stops writes (and, behind it, reads queue up): minutes to hours on a big table. **Online** tools never hold the lock for the copy; they hold it only for a swap. **Part a**: the **shadow-table** method (gh-ost, pt-online-schema-change, GitHub's and Percona's tools, Vitess VReplication):
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>Create an empty <strong>shadow</strong> table with the new shape (here rows gain a column <code>b = f(a)</code>);</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>Start capturing every write to the original from a <strong>change log</strong> (gh-ost reads the binlog, pt-osc uses triggers; here a <code>binlog</code> of full row images with Put/Del events);</p></div></div><div class="cb-g-term"><div class="cb-g-name">Copy</div><div class="cb-g-says"><p>Existing rows in id-ordered <strong>chunks</strong> with <code>INSERT IGNORE ... SELECT</code>: one atomic statement per chunk, and it must never overwrite a row the log already delivered. The log applier uses <strong>replace</strong> / <strong>delete</strong>: idempotent, so replays after a crash are harmless.</p><p>The copy cursor and the log offset are persisted, so a crashed migrator <strong>resumes</strong>;</p></div></div><div class="cb-g-term"><div class="cb-g-name">Throttle</div><div class="cb-g-says"><p>When the unapplied log backlog (a stand-in for replica lag) is above a threshold the migrator stops copying and only applies the log, so it never makes the system fall behind;</p></div></div><div class="cb-g-term"><div class="cb-g-name">Verify</div><div class="cb-g-says"><p>Chunk by chunk: catch the log up, then compare a checksum of <code>f(original rows)</code> with the shadow rows of an id range. A mismatch aborts the migration (nothing was exposed yet);</p></div></div><div class="cb-g-term"><div class="cb-g-name">Cut-over</div><div class="cb-g-says"><p>Lock <strong>writes</strong> only (reads continue), apply the last few log events, check, and swap with <strong>one</strong> atomic rename. The lock lasts a handful of ticks regardless of table size, versus a naive <strong>alter</strong>'s copy time. Clients see the old table or the new table, never a mixture.</p><p>Why the chunk copy is a single statement: if the migrator read a chunk, then (after concurrent writes) wrote it, a row deleted in between would come back as a <strong>zombie</strong> that no later log event removes. <code>Bug::TwoPhaseCopy</code> below reproduces that and the checksum catches it; <code>Bug::DropDeletes</code> and <code>Bug::InsertIgnoreLog</code> are the other classic mistakes.</p><p><strong>Part B</strong>: <strong>expand</strong> / <strong>contract</strong> (a.k.a. parallel change) for a change the <strong>application</strong> takes part in, no copy of the table: expand (add column, nullable) -&gt; roll out code that writes both shapes while <strong>old</strong> code is still running -&gt; only new writers -&gt; <strong>backfill</strong> old-shape rows in resumable batches -&gt; verify no old shape remains -&gt; switch readers to the new column -&gt; contract (readers go strict, old path deleted).</p><p>During the whole time a <strong>versioned reader</strong> tolerates old and new rows (derives the value when the new column is absent). Contracting early is refused while old-shape rows exist.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+1500 random workloads for each part (concurrent inserts/updates/deletes during the copy, migrator crashes before/after persisting its cursor): a **reader** probes the live table every tick and must see exactly the oracle's logical content in **one** consistent shape (so no write is ever lost or half-visible); the final table must equal the original's final state with the transformation applied.
+
+Three injected bugs must be caught by the checksums in at least one seed each, and a buggy run that happens to finish must still be correct. Lock duration is printed against a naive **alter**.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>gh-ost</li><li>pt-online-schema-change</li><li>Vitess online DDL</li><li>PlanetScale deploy requests</li><li>Postgres <code>pg_repack</code> and <code>CREATE INDEX CONCURRENTLY</code> (same capture-and-catch-up idea)</li><li>Rails strong_migrations / Django two-step deploys</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://github.com/github/gh-ost" target="_blank" rel="noreferrer">https://github.com/github/gh-ost</a></li><li><a href="https://github.com/github/gh-ost/blob/master/doc/why-triggerless.md" target="_blank" rel="noreferrer">https://github.com/github/gh-ost/blob/master/doc/why-triggerless.md</a></li><li><a href="https://martinfowler.com/bliki/ParallelChange.html" target="_blank" rel="noreferrer">https://martinfowler.com/bliki/ParallelChange.html</a></li></ul>
+"""
+
+[[sources]]
+title = "github.com/github/gh-ost"
+url = "https://github.com/github/gh-ost"
+
+[[sources]]
+title = "github.com/github/gh-ost/blob/master/doc/why-triggerless.md"
+url = "https://github.com/github/gh-ost/blob/master/doc/why-triggerless.md"
+
+[[sources]]
+title = "martinfowler.com/bliki/ParallelChange.html"
+url = "https://martinfowler.com/bliki/ParallelChange.html"

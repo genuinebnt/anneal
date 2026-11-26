@@ -1,0 +1,58 @@
+title = "Term rewriting unification logic programming"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Types and semantics"
+chapter_order = 4
+order = 618
+kind = "recipe"
+lede = "unification, term rewriting + Knuth-Bendix completion, a Prolog engine, miniKanren and Datalog."
+level = "advanced"
+code = ["examples/compilers_runtimes/term_rewriting_unification_logic_programming.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>type checkers</li><li>theorem provers</li><li>rule engines</li><li>query languages and program synthesis: everything that solves equations between terms</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+Hindley-Milner type inference (unification is its core, see hindley_milner_inference), Rust's trait solver (chalk and the next-gen solver are Prolog-style resolution over trait goals), SWI-Prolog and Scryer, core.logic / miniKanren (relational programming and program synthesis), Datalog engines (Soufflé, Datomic queries, the Rust-borrow-checker prototype Polonius, CodeQL-style code analysis), theorem provers such as Vampire/E (completion and superposition), and compiler rewrite systems (peephole rules, Cranelift **isle**, egg's e-graphs; see egraph_equality_saturation).
+
+Course: Baader and Nipkow "Term Rewriting and All That"; Friedman, Byrd, Kiselyov "The Reasoned Schemer".
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**What is in here**.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Unification</div><div class="cb-g-says"><p>Three ways: Robinson (recursive, with occurs check), Martelli-Montanari (a set of equations transformed by delete / decompose / conflict / swap / eliminate / occurs-check rules) and the near-linear union-find version (merge the classes <strong>before</strong> recursing into children, so shared subterms are visited once; cyclic structures are rejected by a final acyclicity check).</p><p>Verified: all three agree on solvability and give alpha-equivalent unified terms, and the result is a <strong>most general</strong> unifier: sigma is idempotent, sigma(s) = sigma(t), and for every ground unifier theta (brute force over all assignments of 8 small ground terms) theta(sigma(x)) = theta(x) for every variable x, which is exactly "theta = theta o sigma".</p></div></div><div class="cb-g-term"><div class="cb-g-name">Term rewriting</div><div class="cb-g-says"><p>Matching, innermost normalisation, a lexicographic path order (LPO) to <strong>prove</strong> termination of an oriented rule, critical pairs (unify a left-hand side with a non-variable subterm of another), and <strong>KNUTH-BENDIX completion</strong>: orient equations with the order, add critical pairs, interreduce.</p><p>Fed the three group axioms (e*x = x, i(x)*x = e, (x*y)*z = x*(y*z)) it produces the famous ten-rule convergent system (checked against the known list).</p><p>The result decides the equational theory: normal forms are checked against a concrete group (S3) on random terms, and commutativity, which cannot be oriented by any term order, is reported as a failure of completion (that is why AC-completion exists).</p></div></div><div class="cb-g-term"><div class="cb-g-name">PROLOG engine</div><div class="cb-g-says"><p>Horn clauses, SLD resolution with backtracking over an explicit binding trail, cut (a cut barrier id travels up as a return value), <code>&#92;+</code>, <code>is</code>, comparisons. Verified against brute-force oracles on 500 random programs (path counting on random DAGs, append/member/reverse/permutation/max on random lists).</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>MiniKANREN (microKanren core): goals are functions from states to streams, <code>disj</code> <strong>interleaves</strong> (fair search), relations run in any direction.</p><p><code>appendo</code> forwards and backwards, Peano <code>addo</code>/<code>mulo</code> (factoring 12 by running multiplication backwards), cross-checked against the Prolog engine, plus a small program-synthesis demo: find an expression with a relational evaluator from input/output examples.</p></div></div><div class="cb-g-term"><div class="cb-g-name">DATALOG</div><div class="cb-g-says"><p>Bottom-up naive vs semi-naive evaluation, which <strong>terminates</strong> on cyclic graphs where top-down SLD loops, verified against Floyd-Warshall. Top-down (Prolog) answers "what is X for this goal?" and can diverge; bottom-up (Datalog) computes the whole least model and always terminates (no function symbols).</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Baader and Nipkow, Term Rewriting and All That (title only)</li><li>Knuth and Bendix, "Simple Word Problems in Universal Algebras" (1970, title only)</li><li>Martelli and Montanari, "An Efficient Unification Algorithm" (1982, title only)</li><li>Byrd, "Relational programming in miniKanren" (title only)</li><li>Friedman et al., "microKanren: A Minimal Functional Core for Relational Programming" (title only)</li><li>miniKanren <a href="http://minikanren.org/" target="_blank" rel="noreferrer">http://minikanren.org/</a></li><li><a href="https://en.wikipedia.org/wiki/Unification_(computer_science" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Unification_(computer_science</a>)</li><li><a href="https://en.wikipedia.org/wiki/Knuth%E2%80%93Bendix_completion_algorithm" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Knuth%E2%80%93Bendix_completion_algorithm</a></li><li><a href="https://en.wikipedia.org/wiki/Datalog" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Datalog</a></li><li><a href="https://en.wikipedia.org/wiki/SLD_resolution" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/SLD_resolution</a></li></ul>
+"""
+
+[[sources]]
+title = "minikanren.org"
+url = "http://minikanren.org/"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Unification_(computer_science"
+url = "https://en.wikipedia.org/wiki/Unification_(computer_science"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Knuth%E2%80%93Bendix_completion_algorithm"
+url = "https://en.wikipedia.org/wiki/Knuth%E2%80%93Bendix_completion_algorithm"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Datalog"
+url = "https://en.wikipedia.org/wiki/Datalog"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/SLD_resolution"
+url = "https://en.wikipedia.org/wiki/SLD_resolution"

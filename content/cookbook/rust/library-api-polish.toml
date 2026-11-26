@@ -1,0 +1,54 @@
+title = "The polish high-quality libraries apply to a public API"
+module = "Rust language"
+module_order = 1
+chapter = "Types, traits and generics"
+chapter_order = 2
+order = 20
+kind = "recipe"
+lede = "the polish high-quality libraries apply to a public API."
+level = "intermediate"
+code = ["examples/language/library_api_polish.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any crate you publish or any internal crate other teams depend on.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+The mini module `shelf` below is written as if it were a library crate; `main` plays the downstream user.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p><code>#[non_exhaustive]</code> on public enums/structs: adding a variant/field later is <strong>not</strong> a breaking change, because outside the crate users must write <code>_ =&gt;</code> in matches and cannot build the struct with a literal.</p><p>(Inside the defining crate it has no effect.) API Guidelines, future-proofing: <a href="https://rust-lang.github.io/api-guidelines/future-proofing.html" target="_blank" rel="noreferrer">https://rust-lang.github.io/api-guidelines/future-proofing.html</a> (C-STRUCT-PRIVATE, C-SEALED).</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p><code>#[must_use]</code> on builders and Results-like values: ignoring them is almost certainly a bug.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Sealed</div><div class="cb-g-says"><p>Trait: public trait that outsiders can call but not implement (supertrait in a private module), so you may add methods.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Extension</div><div class="cb-g-says"><p>Trait: add methods to foreign types (<code>StrExt for str</code>) without newtype wrapping.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Builder</div><div class="cb-g-says"><p>With <code>impl Into&lt;String&gt;</code> (accepts &amp;str and String) and <code>impl AsRef&lt;str&gt;</code> (borrow only): flexible, allocation-honest.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p><code>#[deprecated(since, note)]</code> keeps old names compiling while steering users to the new one.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p><code>Default</code>, <code>From</code>/<code>TryFrom</code> for conversions (C-CONV-TRAIT, C-COMMON-TRAITS), errors implementing <code>Display</code> + <code>std::error::Error</code> with <code>source()</code> so chains work with <code>?</code>, <code>anyhow</code>, and logging. Error messages: lowercase, no trailing punctuation (C-GOOD-ERR).</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p><code>pub(crate)</code> for internals: everything <code>pub</code> is a promise. Return <code>impl Iterator&lt;Item = &amp;str&gt; + '_</code> instead of exposing a Vec field.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Feature flags</div><div class="cb-g-says"><p>In a real crate, <code>#[cfg(feature = "serde")] impl Serialize for Shelf {..}</code> with <code>[features] serde = ["dep:serde"]</code> in Cargo.toml makes dependencies opt-in; features must be <strong>additive</strong> (enabling one must never remove API). Not enabled here.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Doc tests</div><div class="cb-g-says"><p>Code blocks in <code>///</code> comments are compiled and run by <code>cargo test --doc</code>, so examples cannot rot, e.g. <code>/// let s = shelf::Shelf::builder().name("a").build().unwrap();</code> (they only run for lib crates, not examples).</p></div></div></div>
+
+Checklist: <https://rust-lang.github.io/api-guidelines/checklist.html>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>reqwest/clap-style builders</li><li><code>std::io::ErrorKind</code> (non_exhaustive)</li><li><code>tokio</code> extension traits (<code>AsyncReadExt</code>)</li><li>sealed traits in <code>futures</code>/<code>tower</code>-family crates</li><li><code>cargo-semver-checks</code> to catch accidental breaking changes</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://rust-lang.github.io/api-guidelines/" target="_blank" rel="noreferrer">https://rust-lang.github.io/api-guidelines/</a></li><li><a href="https://doc.rust-lang.org/cargo/reference/features.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/cargo/reference/features.html</a></li></ul>
+"""
+
+[[sources]]
+title = "rust-lang.github.io/api-guidelines/future-proofing.html"
+url = "https://rust-lang.github.io/api-guidelines/future-proofing.html"
+
+[[sources]]
+title = "rust-lang.github.io/api-guidelines/checklist.html"
+url = "https://rust-lang.github.io/api-guidelines/checklist.html"
+
+[[sources]]
+title = "rust-lang.github.io/api-guidelines"
+url = "https://rust-lang.github.io/api-guidelines/"
+
+[[sources]]
+title = "doc.rust-lang.org/cargo/reference/features.html"
+url = "https://doc.rust-lang.org/cargo/reference/features.html"

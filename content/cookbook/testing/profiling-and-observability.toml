@@ -1,0 +1,312 @@
+title = "Profiling and observability"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Methods: benchmarking and profiling"
+chapter_order = 6
+order = 147
+kind = "guide"
+lede = "Where the time goes, from a sampling profile · one fix guided by it (1.66× on a grouped aggregate, 1.00× where the profile said no) · the price of looking: counters, timers, per-row timing and sampling · metrics in the Prometheus text format · measured on an Apple M4 Pro"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Measure before you change.</strong> The cost of a query is rarely where the author thinks it is. A sampling profiler interrupts the program at a fixed rate, records the call stack, and counts: a function that appears in 40% of the samples accounts for about 40% of the time. It needs no change to the program and costs a few percent.</li> <li><strong>Read a profile by self time first and by call tree second.</strong> <em>Self time</em> (samples whose top frame is the function) says where the CPU is burning; the call tree (samples where the function is anywhere on the stack) says who asked for it. Group by purpose, not by symbol: five frames named <code>malloc</code>, <code>free</code> and <code>memmove</code> are one cost, the allocator.</li> <li><strong>A flat profile is an answer.</strong> If the top frame has 30% and the next ten have 5% each, there is no one thing to fix; the remaining gains come from a different design (fewer allocations per row, batches instead of rows, compiled expressions), not from tuning.</li> <li><strong>Always-on observability is a different tool.</strong> A profile is a probe you run; <em>metrics</em> (counters, gauges, latency histograms) are what the system reports about itself all the time, and what an operator sees when something is wrong at 3 a.m. They have to be cheap enough to leave on in the hot path, which constrains their design: counters sharded per thread on separate cache lines, histograms of fixed size, no allocation, no lock held across a request.</li> <li><strong>Looking costs, and the cost is not uniform.</strong> Reading the clock costs 16 ns on this machine; a timed scope 41 ns. Around a 1-ns operation that is a 30-fold slowdown; around a 200-ns operation 10%. Time every row of a cheap operator and you measure the timer. Sample (every 64th row, scaled up) and the overhead falls below 1% with an estimate within a few percent.</li> <li><strong>Three kinds of signal.</strong> <em>Metrics</em> answer "how much, how often, how slow" (cheap, aggregated); <em>logs</em> answer "what happened in this case" (detailed, expensive, sampled); <em>traces</em> answer "where did this one request spend its time" across components (a tree of timed spans). <code>EXPLAIN ANALYZE</code> is a trace of one query's operators.</li> </ul>
+"""
+
+[[sections]]
+heading = "A profile of the row engine"
+body = """
+<p>The macOS <code>sample</code> tool attaches to a running process, interrupts every thread once a millisecond for a few seconds, and writes the stacks with counts. The test below starts <code>sample</code> on its own process id while a query runs in a loop, 600 000 rows of the TPC-H-shaped table of <a href="/cookbook/p/benchmarking">Benchmarking</a>, a release build. Idle threads (the disk scheduler waiting on a semaphore) are left out; what remains is the one thread running the query.</p>
+
+```text title="where the time goes: Q1-like (a grouped aggregate), before any fix, and Q6-like (a selective scan)"
+Q1-like, before the fix  (2639 samples of the busy thread, 1 ms apart)
+   44.0%  allocator: malloc, free, memmove
+   16.6%  Expr::eval (the expression interpreter)
+    7.7%  other
+    6.2%  AggState::update (own time)
+    5.7%  hashing (SipHash of group keys)
+    4.0%  Layout::decode_col (row decoding)
+    3.8%  drop of expression trees
+    3.5%  clock read (mach_absolute_time)
+
+Q6-like  (2020 samples of the busy thread, 1 ms apart)
+   29.5%  Expr::eval (the expression interpreter)
+   24.4%  allocator: malloc, free, memmove
+   13.5%  other
+   11.3%  Layout::decode_col (row decoding)
+    6.3%  buffer pool pin/unpin
+    5.2%  SeqScan::next (own time)
+    2.7%  expr::binary (arithmetic and comparison)
+    2.3%  table heap iterator
+```
+
+<ul> <li><strong>Q1: 44% of the time is the memory allocator.</strong> <code>malloc</code>, <code>free</code> and <code>memmove</code> called from <code>AggState::update</code> (twice per aggregated value: it built an expression <code>Add(Lit(sum), Lit(value))</code> out of two <code>Box</code>es just to add two numbers and dropped it, which also explains the "drop of expression trees" line) and from the grouping loop (it cloned the group key, a <code>Vec&lt;Value&gt;</code>, for every row with <code>entry(key.clone())</code>, although almost every row belongs to a group that already exists). The interpreter itself, <code>Expr::eval</code>, is 17%.</li> <li><strong>Q6: 30% is the interpreter and 24% the allocator.</strong> A selective filter evaluates an expression tree per row and decodes all eight columns into a fresh <code>Vec&lt;Value&gt;</code> for each row, of which the filter reads three. There is no single cause: the profile is flat, and the remedy is structural.</li> </ul>
+"""
+
+[[sections]]
+heading = "One fix, measured"
+body = """
+<p>The two changes: add the two values directly, <code>binary(Add, sum, value)</code>, and look the group up with <code>get</code> before inserting. Nothing else changed. The same 15 runs of each query before and after, medians with a bootstrap interval, answers asserted identical:</p>
+
+```text title="15 runs of each query on 600 000 rows, before and after the two changes"
+query (600 000 rows, 15 runs)           median    95% interval of median     vs before
+Q1-like: 4 groups, 6 aggregates       156.8 ms         156.1 ..   158.3 ms    1.66x [1.64, 1.69]
+Q6-like: one selective sum            106.6 ms         105.8 ..   107.4 ms    1.00x [0.99, 1.01]
+Q3-like: 150 000 groups, top 10       144.1 ms         143.1 ..   145.2 ms    1.10x [1.06, 1.12]
+```
+
+<ul> <li><strong>Q1 is 1.66 times faster</strong> (interval of the ratio [1.64, 1.69]): 260 ms to 157 ms. SQLite takes 170 ms on the same query (<a href="/cookbook/p/benchmarking">Benchmarking</a>); the engine went from 1.6 times slower to slightly faster.</li> <li><strong>Q3-like (150 000 groups, top 10) is 1.10 times faster</strong>: with many groups most rows need no key clone anyway, but each aggregated value no longer builds a tree.</li> <li><strong>Q6 did not change</strong> (1.00×, [0.99, 1.01]), as the profile predicted: its aggregate runs on few rows, and its cost is the scan and the filter, which the fix did not touch. The profile of Q6 (taken after the fix) is flat: interpreter 30%, allocator 24%, decoding 11%.</li> <li><strong>The remaining gap is design.</strong> SQLite compiles the query to bytecode and reads only the columns it needs; this engine interprets a tree over fully decoded rows. The vectorized engine and the bytecode machine of Part V (<a href="/cookbook/p/a-vectorized-engine">M4</a>, <a href="/cookbook/p/a-bytecode-virtual-machine">M5</a>) are the answer, not another micro-fix.</li> </ul>
+
+<p>All the tests of the engine (differential against SQLite, the oracles of <a href="/cookbook/p/testing-a-database">Testing</a>, the wire and security tests) pass after the change, and three mutants of it (SUM adding with the wrong operator; every row of a known group starting a new group; a new group not remembered) are each caught by several suites.</p>
+"""
+
+[[sections]]
+heading = "What it costs to look"
+body = """
+```text title="the price of each observation, one thread"
+operation (one thread)                           ns each
+reading the clock (Instant::now)                    16.1
+Counter::inc (sharded)                               1.8
+AtomicU64::fetch_add (one shared cell)               1.6
+Timer::record_ns (lock + histogram)                  5.9
+a timed scope (two clock reads + record)            40.9
+```
+
+```text title="a pipeline observed in different ways: reading the clock around every row, and around a sample of rows"
+a cheap operator (1.1 ns of work per row, 20000000 rows)
+observed by …                       ns per row    overhead  reported total
+nothing (the true total)                   1.1                     21.4 ms
+timing every row                          34.7       3149%        292.7 ms
+timing every 64th row                      2.4        126%        304.0 ms
+timing every 1024th row                    2.0         88%        300.7 ms
+an expensive operator, about as costly per row as this engine's scan (226.6 ns of work per row, 1000000 rows)
+observed by …                       ns per row    overhead  reported total
+nothing (the true total)                 226.6                    226.6 ms
+timing every row                         248.8         10%        230.4 ms
+timing every 64th row                    227.1          0%        233.2 ms
+timing every 1024th row                  228.2          1%        218.8 ms
+```
+
+<ul> <li><strong>A counter increment is 1.8 ns, the same as an atomic add on one thread, and it scales.</strong> On twelve threads a sharded counter scales to 8.5 times its one-thread rate where a single shared atomic loses 96% of it (<a href="/cookbook/p/rust-for-systems-code">Rust for systems</a>); that is why <code>Counter</code> is a vector of 128-byte-aligned cells indexed by a per-thread slot.</li> <li><strong>Recording into a histogram is 6 ns</strong> (an uncontended lock and a bucket increment); a timed scope is 41 ns, 32 of them for the two clock reads.</li> <li><strong>Timing every row of a cheap operator measures the clock.</strong> At 1.1 ns of work per row the per-row timer reports 292.7 ms for a scan that takes 21.4 ms: the operator is 14 times slower with the timer and the report is wrong by the same factor. Timing every 64th row costs 126% (still too much for this operator, whose work is below the cost of the branch and counter) and reports the same wrong total. The estimate is meaningful only when the work per row is larger than the timer.</li> <li><strong>For an operator that costs as much per row as this engine's scan (227 ns), per-row timing costs 10%, and timing every 64th row costs nothing measurable</strong> (227.1 against 226.6 ns) with a reported total within 3% of the truth (233.2 against 226.6 ms). This is why production engines time batches (a vectorized engine's <code>next()</code> returns 1 024 rows) or sample, and why <code>EXPLAIN ANALYZE</code> on a row-at-a-time engine slows the query down and distorts the share of small operators.</li> </ul>
+
+:::deeper Reference: a sharded counter, a gauge, a sharded latency timer with a scoped span, a registry that renders the Prometheus text format, and an instrumented iterator
+```rust title="src/test/metrics.rs"
+//! Metrics a database exports about itself: counters that only go up, gauges that go up and down, and histograms of latencies, kept in a
+//! registry that renders them in the Prometheus text format. The design question is cost: a counter on a hot path touched by every thread
+//! must not be one shared cache line, a timer must not read the clock more often than it has to, and a histogram must not allocate.
+use crate::bench::Histogram;
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+const SHARDS: usize = 32;
+
+#[repr(align(128))]
+struct Padded<T>(T);
+
+thread_local! {
+    static SLOT: usize = {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        NEXT.fetch_add(1, Ordering::Relaxed) % SHARDS
+    };
+}
+
+/// A monotonic counter split over per-thread cells, each on its own cache line. `add` touches only the calling thread's cell; `get` sums them.
+pub struct Counter {
+    cells: Vec<Padded<AtomicU64>>,
+}
+impl Counter {
+    pub fn new() -> Counter {
+        Counter { cells: (0..SHARDS).map(|_| Padded(AtomicU64::new(0))).collect() }
+    }
+    pub fn add(&self, n: u64) {
+        SLOT.with(|s| self.cells[*s].0.fetch_add(n, Ordering::Relaxed));
+    }
+    pub fn inc(&self) {
+        self.add(1)
+    }
+    /// The sum of the cells. A reader running concurrently with writers sees a value between the counts before and after the call.
+    pub fn get(&self) -> u64 {
+        self.cells.iter().map(|c| c.0.load(Ordering::Relaxed)).sum()
+    }
+}
+impl Default for Counter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A value that moves both ways (connections open, pages pinned).
+#[derive(Default)]
+pub struct Gauge(AtomicI64);
+impl Gauge {
+    pub fn add(&self, n: i64) {
+        self.0.fetch_add(n, Ordering::Relaxed);
+    }
+    pub fn set(&self, n: i64) {
+        self.0.store(n, Ordering::Relaxed);
+    }
+    pub fn get(&self) -> i64 {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+/// A latency histogram with one lock-protected shard per thread slot: recording locks only the caller's shard (uncontended unless two
+/// threads share a slot), reading merges the shards.
+pub struct Timer {
+    shards: Vec<Padded<Mutex<Histogram>>>,
+}
+impl Timer {
+    pub fn new() -> Timer {
+        Timer { shards: (0..SHARDS).map(|_| Padded(Mutex::new(Histogram::new()))).collect() }
+    }
+    pub fn record_ns(&self, ns: u64) {
+        SLOT.with(|s| self.shards[*s].0.lock().unwrap().record(ns));
+    }
+    /// Time a scope: the elapsed time is recorded when the guard is dropped.
+    pub fn start(&self) -> Span<'_> {
+        Span { timer: self, start: Instant::now() }
+    }
+    pub fn snapshot(&self) -> Histogram {
+        let mut h = Histogram::new();
+        for s in &self.shards {
+            h.merge(&s.0.lock().unwrap());
+        }
+        h
+    }
+}
+impl Default for Timer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+pub struct Span<'a> {
+    timer: &'a Timer,
+    start: Instant,
+}
+impl Drop for Span<'_> {
+    fn drop(&mut self) {
+        self.timer.record_ns(self.start.elapsed().as_nanos() as u64);
+    }
+}
+
+#[derive(Default)]
+pub struct Registry {
+    counters: Mutex<BTreeMap<String, Arc<Counter>>>,
+    gauges: Mutex<BTreeMap<String, Arc<Gauge>>>,
+    timers: Mutex<BTreeMap<String, Arc<Timer>>>,
+}
+
+/// Names follow Prometheus: letters, digits, underscore and colon, not starting with a digit.
+pub fn valid_name(n: &str) -> bool {
+    let mut c = n.chars();
+    matches!(c.next(), Some(ch) if ch.is_ascii_alphabetic() || ch == '_' || ch == ':') && c.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == ':')
+}
+
+impl Registry {
+    pub fn new() -> Registry {
+        Registry::default()
+    }
+    pub fn counter(&self, name: &str) -> Arc<Counter> {
+        assert!(valid_name(name), "bad metric name {name:?}");
+        self.counters.lock().unwrap().entry(name.to_string()).or_default().clone()
+    }
+    pub fn gauge(&self, name: &str) -> Arc<Gauge> {
+        assert!(valid_name(name), "bad metric name {name:?}");
+        self.gauges.lock().unwrap().entry(name.to_string()).or_default().clone()
+    }
+    pub fn timer(&self, name: &str) -> Arc<Timer> {
+        assert!(valid_name(name), "bad metric name {name:?}");
+        self.timers.lock().unwrap().entry(name.to_string()).or_default().clone()
+    }
+
+    /// The Prometheus text exposition format: counters and gauges as a line each; a timer as a summary with quantiles in seconds.
+    pub fn render(&self) -> String {
+        let mut out = String::new();
+        for (n, c) in self.counters.lock().unwrap().iter() {
+            out += &format!("# TYPE {n} counter\\n{n} {}\\n", c.get());
+        }
+        for (n, g) in self.gauges.lock().unwrap().iter() {
+            out += &format!("# TYPE {n} gauge\\n{n} {}\\n", g.get());
+        }
+        for (n, t) in self.timers.lock().unwrap().iter() {
+            let h = t.snapshot();
+            out += &format!("# TYPE {n} summary\\n");
+            for q in [0.5, 0.9, 0.99, 0.999] {
+                out += &format!("{n}{{quantile=\\"{q}\\"}} {:e}\\n", h.quantile(q) as f64 / 1e9);
+            }
+            out += &format!("{n}_count {}\\n", h.count());
+            out += &format!("{n}_sum {:e}\\n", h.mean() * h.count() as f64 / 1e9);
+        }
+        out
+    }
+}
+
+// ---- timing an operator ----------------------------------------------------------------------------------------------------------------
+
+/// How an instrumented operator reads the clock.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Timing {
+    /// Around every row: exact, and expensive.
+    PerRow,
+    /// Around every `n`-th row and multiplied up: cheap, and an estimate.
+    Sampled(u64),
+}
+
+/// An iterator wrapper that adds up the time spent inside `next` and counts rows (what `EXPLAIN ANALYZE` reports for an operator).
+pub struct Timed<I> {
+    inner: I,
+    mode: Timing,
+    pub rows: u64,
+    pub nanos: u64,
+}
+impl<I: Iterator> Timed<I> {
+    pub fn new(inner: I, mode: Timing) -> Self {
+        Timed { inner, mode, rows: 0, nanos: 0 }
+    }
+}
+impl<I: Iterator> Iterator for Timed<I> {
+    type Item = I::Item;
+    fn next(&mut self) -> Option<I::Item> {
+        self.rows += 1;
+        match self.mode {
+            Timing::PerRow => {
+                let t = Instant::now();
+                let x = self.inner.next();
+                self.nanos += t.elapsed().as_nanos() as u64;
+                x
+            }
+            Timing::Sampled(n) => {
+                if self.rows % n == 0 {
+                    let t = Instant::now();
+                    let x = self.inner.next();
+                    self.nanos += t.elapsed().as_nanos() as u64 * n;
+                    x
+                } else {
+                    self.inner.next()
+                }
+            }
+        }
+    }
+}
+```
+:::
+
+<aside data-call="note"><b>The profile that was mostly asleep</b><p>The first <code>sample</code> output listed <code>semaphore_wait_trap</code> at 5 901 samples and <code>poll</code> at 2 879 on top. They are not where the query spends its time: they are the other threads of the process (the disk scheduler's workers) waiting for work. A profile of a process with idle threads is dominated by idleness; filter threads, or take the stack of the one you care about. The first reading of the query thread then showed the allocator and the <code>Box</code> for every aggregated value, which a reading of the code had not suggested: the line <code>Expr::Bin(BinOp::Add, Box::new(Expr::Lit(s)), Box::new(Expr::Lit(v))).eval(&amp;[])</code> looks harmless.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A thread slot from a <code>thread_local!</code></strong> gives each thread a small index (<code>NEXT.fetch_add(1) % SHARDS</code>) the first time it touches a metric; counters and timers shard on it, so unrelated threads rarely share a cell.</li> <li><strong><code>#[repr(align(128))] struct Padded&lt;T&gt;(T)</code></strong> puts each cell on its own cache line on this machine; the <code>Vec&lt;Padded&lt;AtomicU64&gt;&gt;</code> costs 4 KiB per counter, which is why a real system shards fewer (4 to 16) and shares them between counters of one subsystem.</li> <li><strong>A <code>Drop</code> guard for a span</strong>: <code>Timer::start()</code> returns <code>Span</code>, which records the elapsed time when it goes out of scope, including on an early <code>?</code> return and on a panic.</li> <li><strong>Iterator adaptors for operator statistics</strong>: <code>Timed&lt;I&gt;</code> implements <code>Iterator</code> by delegating <code>next</code>, so any pipeline of iterators can be instrumented by wrapping one stage, and the cost of the wrapper is visible in the type.</li> <li><strong>Format strings do the exposition</strong>: <code>{:e}</code> prints seconds in the scientific form that the text format accepts; a test reads the text back and compares values, instead of comparing strings.</li> <li><strong><code>std::hint::black_box</code></strong> stops the optimizer from removing or vectorizing the work being measured, in the cost measurements above (without it the "cheap operator" cost 0.15 ns per row, because the loop was folded away).</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Metrics under concurrency</strong>: 12 threads add to a counter 50 000 times, move a gauge and record timed scopes; the counter equals the sum, the gauge the net, the timer holds every span; the registry returns the same metric for the same name.</li> <li><strong>The text format</strong>: counter, gauge and timer rendered and read back; the counter equals 42, the gauge −3, the sum of 1 to 100 ms is 5.05 s (±0.1) and the 0.99 quantile 0.099 s (within the histogram's 1.6%); every metric name is valid; seven bad names are refused.</li> <li><strong>The instrumented iterator</strong>: it yields the same items; it counts the final <code>None</code>; with a deliberately slow source (200 µs per row) the sampled estimate is within 50% of the exact per-row total.</li> <li><strong>The engine after the fix</strong>: the full engine suites listed above; the answers of Q1, Q3 and Q6 before and after are asserted equal.</li> <li><strong>Mutants run against these tests</strong> (12): in the metrics, a counter reading one cell, a counter adding 1, quantiles in the wrong unit, a span recording nothing, names starting with a digit, sampled time not scaled up, the wrong rows timed, the sum reported as a mean, timer shards dropped when merged; in the fix, the wrong operator, every row starting a group, a new group not remembered. <strong>All 12 were killed</strong>; two survived at first (the digit-first name, because the test name also contained a space; and the scaling of the sampled estimate, which only a slow-source test can check).</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Linux</strong>: <code>perf record -g</code> and <code>perf report</code> sample with hardware counters and give call graphs; flame graphs (Brendan Gregg) render the same stacks as nested boxes of width proportional to samples; <code>perf stat</code> counts instructions, cycles, cache and branch misses; eBPF tools (<code>bpftrace</code>, <code>bcc</code>) attach to kernel and user events with low overhead; <code>strace</code> and <code>ltrace</code> trace calls at a high cost. None of these were run for this section.</li> <li><strong>macOS</strong>: <code>sample</code>, Instruments (the Time Profiler and the Allocations instrument), <code>spindump</code>, <code>xctrace</code>, <code>dtrace</code> for system-wide tracing (needing privileges).</li> <li><strong>Rust</strong>: <code>cargo flamegraph</code>, <code>samply</code>, <code>perf</code> with frame pointers or DWARF unwinding (<code>-C force-frame-pointers=yes</code>), <code>tracing</code> spans with a subscriber, <code>criterion</code> for micro-benchmarks, <code>dhat</code> and <code>heaptrack</code> for allocation profiles.</li> <li><strong>Databases ship their own</strong>: PostgreSQL's <code>pg_stat_statements</code>, <code>EXPLAIN (ANALYZE, BUFFERS)</code> and wait-event sampling in <code>pg_stat_activity</code>; MySQL's Performance Schema; ClickHouse's <code>system.query_log</code>, <code>system.trace_log</code> (a sampling profiler built into the server, with flame graph output) and <code>system.metrics</code>; DuckDB's <code>EXPLAIN ANALYZE</code> and profiling output; Oracle's Active Session History is a sampled view of what every session was doing each second.</li> <li><strong>Metrics at scale</strong>: Prometheus scrapes the text format over HTTP; OpenTelemetry standardizes metrics, logs and traces; histograms are exported as buckets so that they can be merged across servers and quantiles computed afterwards (quantiles themselves cannot be averaged, <a href="/cookbook/p/benchmarking">Benchmarking</a>).</li> <li><strong>Continuous profiling</strong> (Parca, Pyroscope, Google-Wide Profiling) samples production processes all the time at a low rate and stores the stacks, so that a regression can be diffed against yesterday.</li> <li><strong>Allocators</strong> are a recurring finding: a profile with a quarter of the time in <code>malloc</code> and <code>free</code> leads to arenas (<a href="/cookbook/p/concurrent-memory">Concurrent memory</a>), to reusing buffers, to batches that allocate once per thousand rows, or to a different allocator (jemalloc, mimalloc).</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Profile a release build with symbols.</strong> A debug build puts the time in different places; a stripped one gives addresses.</li> <li><strong>Inlining moves time between functions.</strong> A function can disappear into its caller; read the profile together with the code, and use call-tree counts, not self time alone, for small functions.</li> <li><strong>Sampling has a resolution.</strong> One millisecond over four seconds is 4 000 samples; a function at 0.5% has twenty of them, and the error is a quarter of that. Profile longer for small effects.</li> <li><strong>Idle and waiting time are invisible to a CPU profile.</strong> A query that is slow because it waits on I/O or a lock has a nearly empty CPU profile; look at off-CPU time (<code>perf sched</code>, wait-event sampling) too.</li> <li><strong>Observing changes what you observe.</strong> Per-row timers distort short operators; a profiler perturbs scheduling slightly; logging in a hot path changes the cache. Keep the probes cheap and compare against an unobserved run.</li> <li><strong>Metrics with unbounded labels explode.</strong> A counter per user or per query text creates millions of series; keep label sets small and fixed.</li> <li><strong>Averages hide; histograms do not.</strong> Export distributions, and merge histograms, never quantiles.</li> <li><strong>A fix that the profile does not point at is a guess.</strong> The first optimization of Q1 above was found by reading a profile, not the code; the optimization that the profile did not recommend for Q6 was not made.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "ScyllaDB: no-compromise performance"
+url = "https://www.youtube.com/watch?v=0S6i9BmuF8U"

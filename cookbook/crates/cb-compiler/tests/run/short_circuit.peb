@@ -1,0 +1,6 @@
+fn boom() -> bool { panic("should not run") }
+fn main() {
+    let a = false && boom();
+    let b = true || boom();
+    println(to_str(a) + " " + to_str(b));
+}

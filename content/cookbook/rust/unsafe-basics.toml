@@ -1,0 +1,50 @@
+title = "Unsafe basics"
+module = "Rust language"
+module_order = 1
+chapter = "Unsafe and FFI"
+chapter_order = 7
+order = 60
+kind = "recipe"
+lede = "The five superpowers, safe wrappers, and how to test them."
+level = "intermediate"
+code = ["examples/unsafe_ffi/unsafe_basics.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>FFI shims</li><li>hot loops</li><li>building std-like containers</li><li>auditing <code>unsafe</code> in dependencies</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+`unsafe` does **not** turn off the borrow checker. It unlocks exactly five things the compiler cannot verify:
+
+1. dereference a raw pointer (`*const T`, `*mut T`)      2. call an `unsafe fn` (or extern fn)
+3. access/modify a `static mut`                          4. implement an `unsafe trait` (Send, Sync, ...)
+5. read a field of a `union`. The discipline: keep `unsafe` blocks tiny, put the proof in a `// SAFETY:` comment, document caller duties of `unsafe fn` under `# Safety`, and wrap everything in a **safe** function whose assertions make misuse impossible (or a panic). Soundness rule: safe code must never be able to trigger UB through your API.
+
+   `static mut` is discouraged: any access can race, and in edition 2024 taking `&`/`&mut` to it is a deny-by-default lint. Prefer `AtomicUsize`, `OnceLock`, `Mutex`, or thread_local.
+
+   Testing unsafe: (a) boundary cases (0, 1, len), (b) drop counters to prove no leak / double drop, (c) run under Miri, which detects UB (out-of-bounds, aliasing violations, uninit reads, leaks): rustup +nightly component add miri &amp;&amp; cargo +nightly miri run --example unsafe_basics (Miri is not installed in this environment; the command is documentation only.)
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>slice/Vec internals in std (<code>split_at_mut</code>, <code>swap</code>)</li><li>FFI wrappers around C libraries</li><li>SIMD and zero-copy parsers</li><li>lock-free structures</li><li>custom allocators and arenas</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/nomicon/> and <https://doc.rust-lang.org/std/ptr/index.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon"
+url = "https://doc.rust-lang.org/nomicon/"
+
+[[sources]]
+title = "doc.rust-lang.org/std/ptr/index.html"
+url = "https://doc.rust-lang.org/std/ptr/index.html"

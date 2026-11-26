@@ -1,0 +1,50 @@
+title = "Incremental view maintenance with z-sets and DBSP"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 436
+kind = "recipe"
+lede = "I, D, z^-1, bilinear join, distinct, aggregates, recursion."
+level = "advanced"
+code = ["examples/database/incremental_view_maintenance_dbsp.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>materialised views</li><li>streaming SQL</li><li>incremental Datalog</li><li>any "recompute only what changed" engine</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Feldera (the DBSP implementation)</li><li>Materialize and Differential Dataflow (arrangements + deltas)</li><li>RisingWave and Flink incremental aggregation</li><li>database materialised views (Postgres extensions such as pg_ivm, DuckDB/ClickHouse incremental views)</li><li>build systems and spreadsheets re-evaluating only dirty cells. Course: CMU 15-721 (streaming / materialised views)</li><li>the DBSP paper below</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**What**. **A database change** is a Z-SET: a map row -> integer weight, where +1 is an insert, -1 a delete, and weights may be larger (duplicates) or cancel to zero (the row disappears). A table is the **sum** of all the change batches seen so far; a view is a function of tables.
+
+DBSP treats a view definition as a circuit over **streams** of z-sets and derives its incremental version mechanically:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">I (integrate)</div><div class="cb-g-says"><p>I (integrate) is the running sum  I(s)[t] = sum_{u&lt;=t} s[u];  D (differentiate) is  D(s)[t] = s[t] - s[t-1]. D and I are inverses. Both are built from the one-step <strong>delay</strong> z&#94;-1 (output the previous input): I is the feedback loop <code>out = in + z&#94;-1(out)</code>.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>The incremental version of a query Q is  Q&#94;Δ = D ∘ Q ∘ I : integrate the deltas into full tables, run Q, differentiate the result. The magic is that for most operators the composition simplifies: - <strong>linear</strong> operators (map, filter, project, union, negation, sum) satisfy Q(a+b)=Q(a)+Q(b), so Q&#94;Δ = Q: just apply the operator to the delta.</p><p>Cost is O(|delta|), not O(|table|). - <strong>a bilinear</strong> operator (join) satisfies  Δ(A ⋈ B) = ΔA ⋈ B + A ⋈ ΔB + ΔA ⋈ ΔB  where A and B are the <strong>old</strong> integrated tables. The three terms are computed with an index on each side's accumulated state. - <strong>distinct</strong> is non-linear (weight&gt;0 -&gt; 1).</p><p>Keep the integrated weights; for each changed row compare "was positive" with "is positive" and emit +1/-1 only on a flip.</p><p>This is why z-sets carry multiplicities: a delete of one of two duplicates must <strong>not</strong> remove the row (the <strong>counting pitfall</strong>, demonstrated below against a naive set-based delta). - <strong>group-by count/sum</strong> are linear in the weights (count = sum w, sum = sum w*v) so per-group state is updated by deltas; the output delta is "retract the old aggregate row, assert the new one".</p><p>MIN/MAX are <strong>not</strong> incremental under deletes without keeping the whole multiset (a deleted minimum needs the runner-up). - TOP-K keeps the full ordered group set, not just K rows: after deleting a top-K member the (K+1)th must be promoted (second pitfall demonstrated). - <strong>recursion</strong> (transitive closure) uses a <strong>nested</strong> time dimension: inside one outer step the delta of P = E + P ⋈ E is computed by <strong>semi-naive</strong> iteration, ΔP = ΔE + P_old ⋈ ΔE + ΔP ⋈ E_new, i.e.</p><p>D_0 = ΔE + P_old ⋈ ΔE and D_{i+1} = D_i ⋈ E_new, ΔP = sum D_i, the inner iteration counter being the inner timestamp. On a DAG the path <strong>counts</strong> are finite so deletes work by plain subtraction; a cyclic graph never converges (third pitfall: the iteration cap fires).</p><p>Real DBSP puts <strong>distinct</strong> inside the loop so cyclic graphs converge; path counts also grow fast, so i64 here is only safe on tiny DAGs/forests.</p></div></div></div>
+
+**The views** (all maintained together): J = R(a,b) ⋈ S(b,c) filtered by (a+c)%3 != 0 and projected to (a,c); V1 = DISTINCT(J), V2 = per-a (**count**, **sum** c), V3 = TOP-3 groups of V2 by sum, V4 = reachability over an edge table E (DAG).
+
+**Checks**. (1) Stream algebra laws: D(I(s))=s, I(D(s))=s, feedback integrator == prefix sums, Q&#94;Δ = Q for map/filter, bilinear join rule and incremental distinct equal D∘Q∘I on random streams.
+
+(2) 500 random update sequences (inserts, deletes, duplicates, 30 steps each): after **every** step the incrementally maintained views equal both a from-scratch z-set evaluation and an independent nested-loop / DFS oracle, and no maintained weight is ever negative. (3) The three pitfalls fail as described.
+
+(4) Work (rows touched, deterministic) for incremental vs recompute is printed per batch size and asserted to be >20x smaller for small deltas on a 3000-row workload.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Budiu, McSherry, Ryzhyk, Tannen, "DBSP: Automatic Incremental View Maintenance for Rich Query Languages" <https://arxiv.org/abs/2203.16684> McSherry et al., "Differential Dataflow" CIDR 2013 (cited by title; the URL guessed earlier returned 404, so no link) Gupta &amp; Mumick, "Maintenance of Materialized Views: Problems, Techniques, and Applications" (cited by title)
+"""
+
+[[sources]]
+title = "arxiv.org/abs/2203.16684"
+url = "https://arxiv.org/abs/2203.16684"

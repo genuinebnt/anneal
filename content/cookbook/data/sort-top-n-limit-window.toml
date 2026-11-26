@@ -1,0 +1,247 @@
+title = "Sort, top-N, limit, window"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 357
+kind = "guide"
+lede = "BusTub P3 Task 4 · external merge sort over buffer-pool pages · Limit · top-N heap · window functions (PARTITION BY, ORDER BY, RANK, running aggregates)"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Sort"
+body = """
+<p>Two implementations behind one plan node, chosen by <code>work_mem</code>:</p>
+
+<ul> <li><strong>In-memory sort</strong> (<code>sort_rows</code>): compute the sort keys once per row, stable sort with a comparator that applies <code>ASC</code>/<code>DESC</code> per key. <strong>NULL sorts as the largest value</strong> (PostgreSQL: last for <code>ASC</code>, first for <code>DESC</code>). SQLite and MySQL treat NULL as smallest; a differential test against them must avoid sorting on nullable columns or normalize.</li> <li><strong>External merge sort</strong> (<a href="/cookbook/p/sorting-and-aggregation">L11</a>): pass 0 sorts <code>budget</code> rows at a time and writes each as a <strong>run</strong> (a spill file); each merge pass combines up to <code>fanin</code> runs through a heap of one row per run, writing a longer run; stop at one run. Runs carry their sort keys in front of the row so merging doesn't re-evaluate expressions, and the keys are stripped at the end.</li> </ul>
+
+<p>Stability matters: SQL doesn't promise it, but an engine whose <code>ORDER BY</code> output changes between runs is painful to test. Stable sort within runs, plus <strong>ties broken by run index</strong> in the merge heap (runs are produced in input order), makes the external sort produce <em>exactly</em> the same sequence as the in-memory one, which the tests rely on.</p>
+
+:::deeper External merge sort: run generation, k-way merge with a heap, page freeing
+```rust title="src/execution/external_merge_sort.rs"
+// ---------------- external merge sort -----------------------------------------------------------------------
+pub struct ExternalSort<'e> { out: std::vec::IntoIter<Row>, child: Option<Boxed<'e>>, bpm: &'e Bpm, order: Vec<(Expr, bool)>, budget: usize, fanin: usize }
+
+impl<'e> ExternalSort<'e> {
+    pub fn new(bpm: &'e Bpm, child: Boxed<'e>, order: Vec<(Expr, bool)>, budget: usize) -> Self {
+        ExternalSort { out: vec![].into_iter(), child: Some(child), bpm, order, budget: budget.max(2), fanin: 8 }
+    }
+    fn cmp(order: &[(Expr, bool)], a: &[Value], b: &[Value]) -> Ordering {
+        for (i, (_, asc)) in order.iter().enumerate() {
+            let o = a[i].cmp(&b[i]);
+            if o != Ordering::Equal { return if *asc { o } else { o.reverse() }; }
+        }
+        Ordering::Equal
+    }
+    /// Sort rows as (sort keys ++ row) so spilled runs carry their keys; strip them at the end.
+    fn sort_chunk(&self, chunk: Vec<Row>) -> Result<Vec<Row>> {
+        let mut keyed: Vec<Row> = chunk.into_iter().map(|r| { let mut k = keys(&self.order.iter().map(|o| o.0.clone()).collect::<Vec<_>>(), &r)?; k.extend(r); Ok(k) }).collect::<Result<_>>()?;
+        let n = self.order.len();
+        keyed.sort_by(|a, b| Self::cmp(&self.order, &a[..n], &b[..n]));                  // stable
+        Ok(keyed)
+    }
+    fn run(&mut self) -> Result<()> {
+        let mut child = self.child.take().unwrap();
+        let n = self.order.len();
+        // Pass 0: sorted runs of `budget` rows.
+        let mut runs: Vec<SpillFile> = vec![];
+        let mut chunk: Vec<Row> = vec![];
+        let mut first_run_only: Option<Vec<Row>> = None;
+        while let Some(t) = child.next()? {
+            chunk.push(t.vals);
+            if chunk.len() >= self.budget {
+                let sorted = self.sort_chunk(std::mem::take(&mut chunk))?;
+                let mut w = SpillWriter::new(self.bpm);
+                for r in &sorted { w.push(r)?; }
+                runs.push(w.finish()?);
+            }
+        }
+        if runs.is_empty() { first_run_only = Some(self.sort_chunk(chunk)?); }       // everything fit: no I/O at all
+        else if !chunk.is_empty() {
+            let sorted = self.sort_chunk(chunk)?;
+            let mut w = SpillWriter::new(self.bpm);
+            for r in &sorted { w.push(r)?; }
+            runs.push(w.finish()?);
+        }
+        if let Some(rows) = first_run_only { self.out = rows.into_iter().map(|r| r[n..].to_vec()).collect::<Vec<_>>().into_iter(); return Ok(()); }
+        // Merge passes: combine up to `fanin` runs into one until a single run remains.
+        while runs.len() > 1 {
+            let mut next = vec![];
+            let mut it = runs.into_iter().peekable();
+            while it.peek().is_some() {
+                let group: Vec<SpillFile> = it.by_ref().take(self.fanin).collect();
+                next.push(self.merge(group)?);
+            }
+            runs = next;
+        }
+        let last = runs.pop().unwrap();
+        let rows: Vec<Row> = last.iter(self.bpm).map(|r| r.map(|r| r[n..].to_vec())).collect::<Result<_>>()?;
+        last.free(self.bpm);
+        self.out = rows.into_iter();
+        Ok(())
+    }
+    fn merge(&self, group: Vec<SpillFile>) -> Result<SpillFile> {
+        struct Item<'o> { row: Row, src: usize, order: &'o [(Expr, bool)] }
+        impl PartialEq for Item<'_> { fn eq(&self, o: &Self) -> bool { self.cmp(o) == Ordering::Equal } }
+        impl Eq for Item<'_> {}
+        impl PartialOrd for Item<'_> { fn partial_cmp(&self, o: &Self) -> Option<Ordering> { Some(self.cmp(o)) } }
+        impl Ord for Item<'_> {
+            fn cmp(&self, o: &Self) -> Ordering {
+                let n = self.order.len();
+                // BinaryHeap is a max-heap: reverse so the smallest key (then the earliest run) pops first.
+                ExternalSort::cmp(self.order, &self.row[..n], &o.row[..n]).then(self.src.cmp(&o.src)).reverse()
+            }
+        }
+        let mut iters: Vec<_> = group.iter().map(|f| f.iter(self.bpm)).collect();
+        let mut heap = BinaryHeap::new();
+        for (i, it) in iters.iter_mut().enumerate() { if let Some(r) = it.next() { heap.push(Item { row: r?, src: i, order: &self.order }); } }
+        let mut w = SpillWriter::new(self.bpm);
+        while let Some(Item { row, src, .. }) = heap.pop() {
+            w.push(&row)?;
+            if let Some(r) = iters[src].next() { heap.push(Item { row: r?, src, order: &self.order }); }
+        }
+        drop(iters);
+        for f in group { f.free(self.bpm); }
+        w.finish()
+    }
+}
+
+impl Exec for ExternalSort<'_> {
+    fn next(&mut self) -> Result<Option<Tuple>> {
+        if self.child.is_some() { self.run()?; }
+        Ok(self.out.next().map(|vals| Tuple { vals, rid: None }))
+    }
+}
+```
+:::
+
+:::deeper In-memory sort, top-N, blocking-operator helper
+```rust title="src/execution/sort.rs"
+// ---------------- blocking operators (pipeline breakers) -------------------------------------------
+struct Blocking<'e> { child: Option<Boxed<'e>>, f: Option<Box<dyn FnOnce(Vec<Row>) -> Result<Vec<Row>> + 'e>>, out: std::vec::IntoIter<Row> }
+fn blocking<'e>(child: Boxed<'e>, f: impl FnOnce(Vec<Row>) -> Result<Vec<Row>> + 'e) -> Boxed<'e> {
+    Box::new(Blocking { child: Some(child), f: Some(Box::new(f)), out: vec![].into_iter() })
+}
+impl Exec for Blocking<'_> {
+    fn next(&mut self) -> Result<Option<Tuple>> {
+        if let Some(mut c) = self.child.take() {
+            let mut rows = vec![];
+            while let Some(tp) = c.next()? { rows.push(tp.vals); }
+            self.out = (self.f.take().unwrap())(rows)?.into_iter();
+        }
+        Ok(self.out.next().map(t))
+    }
+}
+
+pub fn sort_rows(order: &[(Expr, bool)], rows: Vec<Row>, top: Option<usize>) -> Result<Vec<Row>> {
+    let mut keyed: Vec<(Vec<Value>, Row)> = rows.into_iter().map(|r| Ok((order.iter().map(|(e, _)| e.eval(&r)).collect::<Result<_>>()?, r))).collect::<Result<_>>()?;
+    let cmp = |a: &(Vec<Value>, Row), b: &(Vec<Value>, Row)| {
+        for (i, (_, asc)) in order.iter().enumerate() {
+            let o = a.0[i].cmp(&b.0[i]);                       // NULL sorts as the largest value (PostgreSQL semantics)
+            if o != std::cmp::Ordering::Equal { return if *asc { o } else { o.reverse() }; }
+        }
+        std::cmp::Ordering::Equal
+    };
+    match top {
+        None => keyed.sort_by(cmp),                            // stable
+        Some(n) => {
+            // Top-N: keep a buffer of ≤ 2n candidates, trimming by sort. O(N log n) overall.
+            let mut buf: Vec<(Vec<Value>, Row)> = Vec::with_capacity(2 * n + 1);
+            for item in keyed { buf.push(item); if buf.len() >= 2 * n.max(1) { buf.sort_by(cmp); buf.truncate(n); } }
+            buf.sort_by(cmp);
+            buf.truncate(n);
+            keyed = buf;
+        }
+    }
+    Ok(keyed.into_iter().map(|(_, r)| r).collect())
+}
+```
+:::
+
+<aside data-call="rust"><b>Reverse ordering for a min-heap, with a tie-break</b><p><code>BinaryHeap</code> pops the <strong>largest</strong> item, so <code>Ord</code> for the merge item is <code>cmp(...).then(src.cmp(...)).reverse()</code>: the smallest key, then the earliest run, pops first. Writing a custom <code>Ord</code> for a struct that borrows its comparison data (<code>order: &amp;'o [(Expr, bool)]</code>) needs a lifetime on the struct, and <code>PartialEq</code>/<code>PartialOrd</code> implemented <em>in terms of</em> <code>Ord</code> to keep the four traits consistent. (An inconsistent <code>PartialOrd</code> and <code>Ord</code> silently breaks <code>BinaryHeap</code> and <code>sort</code>.) Reference: <a href="https://doc.rust-lang.org/std/cmp/trait.Ord.html" target="_blank" rel="noreferrer"><code>std::cmp::Ord</code></a>.</p></aside>
+"""
+
+[[sections]]
+heading = "Limit and top-N"
+body = """
+<p><code>Limit</code> skips <code>offset</code> rows and stops pulling from its child after <code>limit</code>, so a <code>LIMIT 10</code> over a scan reads about ten tuples, which is the biggest single benefit of the pull model (<a href="/cookbook/p/query-execution">L13</a>). The optimizer rewrites <code>Limit(Sort(x))</code> into <code>Limit(TopN(x))</code>: the top-N keeps at most <code>n = limit + offset</code> rows. The reference buffers up to <code>2n</code> candidates and trims by sorting, giving O(N log n) time and O(n) memory; a binary heap of size n is the textbook version. For N = 20 000 and n = 10:</p>
+
+```text title="ORDER BY v DESC, id LIMIT 10 over 20k rows"
+Sort + Limit   3.83 ms
+TopN           2.80 ms     (and O(10) memory instead of O(20,000))
+```
+"""
+
+[[sections]]
+heading = "Window functions"
+body = """
+<p>The BusTub spec: <code>PARTITION BY</code>, <code>ORDER BY</code>, aggregates as window functions, and <code>RANK()</code>; no explicit frames. Implementation (per window call):</p>
+
+<ol> <li>Compute each row's <strong>partition key</strong> and <strong>order key</strong>.</li> <li>Sort row <em>indices</em> by (partition, order keys), stably: the input rows themselves are not moved.</li> <li>Walk each partition, grouping <strong>peers</strong> (rows with equal order keys):<ul> <li><code>ROW_NUMBER</code>: position in the partition (1-based). <code>RANK</code>: 1 + the number of rows <em>before</em> the peer group. <code>DENSE_RANK</code>: the peer group's ordinal.</li> <li><strong>Aggregates with <code>ORDER BY</code></strong>: the default frame is <code>RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW</code>, so a running aggregate where <strong>peers share the value</strong> (include all peers before reporting). <code>SUM(x) OVER (ORDER BY t)</code> with ties on <code>t</code> shows the <em>same</em> running total on all tied rows.</li> <li><strong>Aggregates without <code>ORDER BY</code></strong>: the whole partition's value on every row.</li> </ul> </li> <li>Write each result back by the row's <strong>original index</strong>, then append one column per window call to the input row.</li> </ol>
+
+:::deeper Window executor: partition, peer groups, rank, running aggregates
+```rust title="src/execution/window.rs"
+// ---------------- window functions ---------------------------------------------------------------------
+pub fn window(calls: &[WinCall], rows: Vec<Row>) -> Result<Vec<Row>> {
+    let mut extra: Vec<Vec<Value>> = vec![];
+    for c in calls {
+        let pk: Vec<Vec<Value>> = rows.iter().map(|r| c.partition_by.iter().map(|e| e.eval(r)).collect::<Result<_>>()).collect::<Result<_>>()?;
+        let ok: Vec<Vec<Value>> = rows.iter().map(|r| c.order_by.iter().map(|(e, _)| e.eval(r)).collect::<Result<_>>()).collect::<Result<_>>()?;
+        let mut order: Vec<usize> = (0..rows.len()).collect();
+        order.sort_by(|&a, &b| {                                   // stable: ties keep input order
+            pk[a].cmp(&pk[b]).then_with(|| {
+                for (i, (_, asc)) in c.order_by.iter().enumerate() {
+                    let o = ok[a][i].cmp(&ok[b][i]);
+                    if o != std::cmp::Ordering::Equal { return if *asc { o } else { o.reverse() }; }
+                }
+                std::cmp::Ordering::Equal
+            })
+        });
+        let mut out = vec![Value::Null; rows.len()];
+        let agg = match c.f { WinFn::Agg(f) => Some(Agg { f, arg: c.arg.clone(), distinct: false }), _ => None };
+        let mut i = 0;
+        while i < order.len() {
+            let mut j = i;
+            while j < order.len() && pk[order[j]] == pk[order[i]] { j += 1; }          // partition [i, j)
+            let mut st = agg.as_ref().map(AggState::new);
+            let (mut k, mut dense) = (i, 0i64);
+            if c.order_by.is_empty() {
+                if let (Some(a), Some(s)) = (&agg, &mut st) {
+                    for &r in &order[i..j] { s.update(a, &rows[r])?; }
+                    let v = s.finish(a);
+                    for &r in &order[i..j] { out[r] = v.clone(); }
+                } else { return err("ranking window functions require ORDER BY".into()); }
+            } else {
+                while k < j {
+                    let mut l = k;
+                    while l < j && ok[order[l]] == ok[order[k]] { l += 1; }              // peer group [k, l)
+                    dense += 1;
+                    if let (Some(a), Some(s)) = (&agg, &mut st) { for &r in &order[k..l] { s.update(a, &rows[r])?; } }
+                    for (pos, &r) in order[k..l].iter().enumerate() {
+                        out[r] = match c.f {
+                            WinFn::RowNumber => Value::Int((k + pos - i + 1) as i64),
+                            WinFn::Rank => Value::Int((k - i + 1) as i64),
+                            WinFn::DenseRank => Value::Int(dense),
+                            WinFn::Agg(_) => st.as_ref().unwrap().finish(agg.as_ref().unwrap()),   // RANGE frame: peers share the value
+                        };
+                    }
+                    k = l;
+                }
+            }
+            i = j;
+        }
+        extra.push(out);
+    }
+    Ok(rows.into_iter().enumerate().map(|(i, mut r)| { for e in &extra { r.push(e[i].clone()); } r }).collect())
+}
+```
+:::
+
+```text title="SQLite agrees (differential test, NULL-free partition/order keys)"
+SELECT name, RANK() OVER (PARTITION BY dept ORDER BY salary DESC), DENSE_RANK() OVER (...)
+SELECT name, SUM(salary) OVER (PARTITION BY dept ORDER BY id), SUM(salary) OVER (PARTITION BY dept)
+RANK() OVER over 20k rows, 100 partitions: 5.1 ms
+```
+
+<aside data-call="warning"><b>The classic window bugs</b><ul> <li>Computing <code>RANK</code> as the row's position instead of the position of its <strong>peer group's first row</strong>: ties must share a rank and leave a gap after.</li> <li>Applying <code>ROWS</code> semantics where <code>RANGE</code> is the default: with ties, a running sum differs between the two.</li> <li>Sorting rows themselves and forgetting the original order: a window function must not reorder the query's output rows (the result is a <em>relation</em>, but users still expect to see their <code>ORDER BY</code> applied last, and <code>ORDER BY</code> runs after windows).</li> <li><code>PARTITION BY</code> NULLs: all NULLs form one partition (grouping equality).</li> </ul></aside>
+"""

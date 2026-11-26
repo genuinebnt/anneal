@@ -1,0 +1,73 @@
+[package]
+name = "cb-crate-tour"
+version = "0.0.0"
+edition = "2024"
+description = "Cookbook chapter: popular external crates by example (chrono, time, serde, sqlx, itertools, regex, ...)"
+publish = false
+autoexamples = true
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+time = { version = "0.3", features = ["formatting", "parsing", "macros", "serde", "serde-well-known", "local-offset"] }
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+serde_json = { version = "1", features = ["raw_value"] }
+toml = "0.8"
+serde_yaml_ng = "0.10"
+bincode = "1.3"
+postcard = { version = "1", features = ["use-std"] }
+csv = "1"
+ciborium = "0.2"
+rmp-serde = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "chrono", "uuid", "json", "migrate", "macros"] }
+itertools = "0.14"
+regex = "1"
+uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
+rand = "0.9"
+rand_distr = "0.5"
+bytes = "1"
+indexmap = { version = "2", features = ["serde"] }
+smallvec = "1"
+arrayvec = "0.7"
+tinyvec = { version = "1", features = ["alloc"] }
+hashbrown = "0.15"
+ahash = "0.8"
+rustc-hash = "2"
+bitflags = "2"
+bit-set = "0.11"
+bitvec = "1"
+url = "2"
+base64 = "0.22"
+hex = "0.4"
+percent-encoding = "2"
+data-encoding = "2"
+thiserror = "2"
+anyhow = "1"
+eyre = "0.6"
+miette = "7"
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tokio = { version = "1", features = ["full", "test-util"] }
+tokio-util = "0.7"
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "cookies"] }
+axum = { version = "0.8", features = ["multipart"] }
+tower = { version = "0.5", features = ["util"] }
+tempfile = "3"
+walkdir = "2"
+globset = "0.4"
+ignore = "0.4"
+same-file = "1"
+dirs = "6"
+proptest = "1"
+insta = { version = "1", features = ["filters"] }
+assert_cmd = "2"
+predicates = "3"
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "crate_tour_bench"
+harness = false

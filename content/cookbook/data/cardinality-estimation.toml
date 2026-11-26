@@ -1,0 +1,668 @@
+title = "Cardinality estimation"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 387
+kind = "guide"
+lede = "Optimize! #13–#14, Advanced S2020 #22 · independence and its failures · extended statistics · sampling and index-based join sampling · a learned tree model · plan regret measured on a star schema"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Cardinality estimation (CE) is the weakest part of every optimizer.</strong> Join ordering, join algorithm, access path, memory grants and parallelism are all functions of estimated row counts, and the measurements in the literature (Leis et al., "How good are query optimizers, really?") are blunt: estimates are off by orders of magnitude on real data, the error <strong>grows exponentially with the number of joins</strong>, it is mostly <strong>underestimation</strong>, and fixing estimates helps plans more than refining the cost model does.</li> <li><strong>Three assumptions hold the classic model together, and real data breaks each.</strong> <em>Uniformity</em>: values inside a bucket are equally frequent. <em>Independence</em>: <code>P(a ∧ b) = P(a) × P(b)</code>, and predicates on different tables are independent of the join. <em>Inclusion</em> (containment): every join key of the smaller side finds a partner on the other side, so <code>|R ⋈ S| = |R|·|S| / max(d_R, d_S)</code>. A column pair like (country, city) violates independence; a skewed foreign key violates uniformity; a filter on a table that the join already filtered violates both.</li> <li><strong>Why underestimation dominates.</strong> Predicates in real queries are <strong>positively correlated</strong> (the city really is in that country), so multiplying selectivities gives a number that is too small, and the more predicates and joins, the smaller the product. A too-small estimate makes a nested-loop join or an index scan look free, which is the plan that blows up.</li> <li><strong>Four families of fixes</strong>, in increasing order of effort and cost: (1) <strong>extended statistics</strong> for the correlations a human declares (column groups, functional dependencies, joint MCV lists); (2) <strong>sampling</strong> at plan time, where the sample answers the question directly, including <em>across joins</em> when it is a sample of the hub table joined through indexes (<strong>index-based join sampling</strong>); (3) <strong>learned models</strong> of the data distribution (data-driven: Naru, DeepDB, BayesCard, NeuroCard) or of the workload (query-driven: MSCN), which learn the correlations instead of being told; (4) <strong>feedback and bounds</strong>: use true counts from earlier executions (LEO), re-plan mid-query, or return <strong>pessimistic upper bounds</strong> so the planner never believes in a tiny join result (<a href="/cookbook/p/adaptive-and-robust">Q10</a>).</li> <li><strong>A join's size is a statement about both key distributions.</strong> Exactly, <code>|R ⋈ S| = Σ_v f_R(v)·f_S(v)</code> over the shared key values. Uniform keys collapse that to the <code>max(d)</code> formula; skewed keys (a popular customer is also the one with the most shipments) make the real answer larger by factors the formula cannot see, which is why per-table statistics <strong>cannot</strong> fix join-crossing correlations.</li> <li><strong>Judge an estimator by the plan it produces, not by its error alone.</strong> Many large errors are harmless (they do not change the plan), a few small ones are fatal. For a sum-of-cardinalities cost such as <code>C_out</code>, if every estimate is within a factor <code>q</code> of the truth then every plan's estimated cost is within <code>q</code> of its true cost, so the chosen plan is at most <code>q²</code> worse than the best one (Moerkotte, Neumann and Steidl give the general result). The bound is loose in practice and tells you what to measure: <strong>q-error</strong> per estimate, <strong>regret</strong> per plan.</li> <li><strong>Estimates must be consistent.</strong> The size of <code>A ⋈ B ⋈ C</code> must not depend on the order in which the optimizer derives it. A memo group (<a href="/cookbook/p/a-cascades-memo-in-rust">Q2</a>) therefore stores <strong>one</strong> cardinality per set of relations, computed once, and every plan in the group shares it.</li> </ul>
+"""
+
+[[sections]]
+heading = "The lab"
+body = """
+<p>Three experiments, one module (code below):</p>
+
+<ul> <li><strong>A. One table, five estimators.</strong> A 500 000-row table with two correlated pairs (<code>b</code> is a function of <code>a</code> with 10% noise; <code>d</code> equals a function of <code>c</code> 70% of the time), one independent column, Zipf-skewed values. Estimators: <strong>independence</strong> over MCV + histogram statistics from <a href="/cookbook/p/statistics">Q7</a>; <strong>column-group counts</strong> (exact joint counts for chosen pairs); a <strong>functional-dependency</strong> model (PostgreSQL's formula); a <strong>row sample</strong> of 2 000 rows; a <strong>Chow–Liu tree</strong>, a Bayesian network learned from the data with no hints.</li> <li><strong>B. A star schema with skew and join-crossing correlation.</strong> <code>customers</code>, <code>products</code>, <code>orders</code> (hub) and <code>shipments</code>. Customers and products are numbered by popularity. The popular customers (1% of all) live in country 0 and buy half of their orders from the top-1% category-0 products and have more shipments with carriers tied to their country. Every one of these is invisible to per-table statistics. Estimators: independence plus uniform FK joins (the System R model), and <strong>index-based join sampling</strong> over a uniform sample of orders.</li> <li><strong>C. Plans from estimates.</strong> The estimates for all 11 connected subsets of the four tables go into a bushy dynamic program that minimizes <code>C_out</code> (<a href="/cookbook/p/join-ordering">Q4</a>); the chosen plan is then scored with the <strong>true</strong> cardinalities and divided by the cost of the truly best plan: its <strong>regret</strong>.</li> </ul>
+
+:::deeper Reference: correlated-table generator, independence / column-group / FD / row-sample / Chow–Liu estimators, star-schema generator, true cardinalities, independence and join-sampling estimators, plan DP and regret
+```rust title="src/opt/card.rs"
+//! Cardinality estimation lab. Part A: one table with correlated columns and five estimators for conjunctions
+//! (independence, column-group counts, functional-dependency degree, row sample, a Chow-Liu tree). Part B: a star
+//! schema with FK skew and cross-join correlation, estimated with the independence/uniformity model and with
+//! index-based join sampling. Part C: choosing a join order from estimates and scoring it with true cardinalities.
+use std::collections::HashMap;
+use crate::joinorder::Rng;
+use crate::stats::{runs, zipf, Compressed, Estimator};
+
+// =====================================================================================================
+// Part A: predicates on one table
+// =====================================================================================================
+
+#[derive(Clone, Copy, Debug)]
+pub enum Pred { Eq(usize, u32), Range(usize, u32, u32) }
+impl Pred {
+    pub fn col(&self) -> usize { match *self { Pred::Eq(c, _) | Pred::Range(c, _, _) => c } }
+    pub fn holds(&self, v: u32) -> bool { match *self { Pred::Eq(_, x) => v == x, Pred::Range(_, lo, hi) => v >= lo && v <= hi } }
+}
+
+/// Dense columns: values of column `c` lie in `0..doms[c]`.
+pub struct Table { pub cols: Vec<Vec<u32>>, pub doms: Vec<usize> }
+impl Table {
+    pub fn n(&self) -> usize { self.cols[0].len() }
+    pub fn count(&self, preds: &[Pred]) -> usize {
+        (0..self.n()).filter(|&i| preds.iter().all(|p| p.holds(self.cols[p.col()][i]))).count()
+    }
+}
+
+/// Columns: 0 `a` (Zipf, 53 values), 1 `b` (a function of `a` with 10% noise), 2 `c` (Zipf, 101 values),
+/// 3 `d` (equals a function of `c` 70% of the time), 4 `e` (uniform, 10 values, independent of everything).
+pub fn gen_table(r: &mut Rng, n: usize) -> Table {
+    let a: Vec<u32> = zipf(r, n, 53, 0.8).into_iter().map(|x| x as u32).collect();
+    let c: Vec<u32> = zipf(r, n, 101, 1.0).into_iter().map(|x| x as u32).collect();
+    let b = a.iter().map(|&x| if r.unit() < 0.9 { (x * 7 + 3) % 23 } else { r.next(23) as u32 }).collect();
+    let d = c.iter().map(|&x| if r.unit() < 0.7 { (x * 5 + 1) % 101 } else { r.next(101) as u32 }).collect();
+    let e = (0..n).map(|_| r.next(10) as u32).collect();
+    Table { cols: vec![a, b, c, d, e], doms: vec![53, 23, 101, 101, 10] }
+}
+
+pub trait TableEst {
+    fn name(&self) -> String;
+    fn est(&self, preds: &[Pred]) -> f64;
+    fn bytes(&self) -> usize;
+}
+
+/// Per-column MCV + histogram, predicates multiplied: the model of every optimizer before extended statistics.
+pub struct Indep { n: f64, cols: Vec<Compressed> }
+impl Indep {
+    pub fn new(t: &Table) -> Self {
+        let cols = t.cols.iter().map(|col| {
+            let mut v: Vec<i64> = col.iter().map(|&x| x as i64).collect();
+            v.sort_unstable();
+            Compressed::build(&runs(&v), 20, 20, 1.0)
+        }).collect();
+        Indep { n: t.n() as f64, cols }
+    }
+    pub fn sel(&self, p: &Pred) -> f64 {
+        match *p {
+            Pred::Eq(c, v) => Estimator::eq(&self.cols[c], v as i64) / self.n,
+            Pred::Range(c, lo, hi) => Estimator::range(&self.cols[c], lo as i64, hi as i64) / self.n,
+        }
+    }
+}
+impl TableEst for Indep {
+    fn name(&self) -> String { "independence".into() }
+    fn est(&self, preds: &[Pred]) -> f64 { self.n * preds.iter().map(|p| self.sel(p)).product::<f64>() }
+    fn bytes(&self) -> usize { self.cols.iter().map(|c| c.bytes()).sum() }
+}
+
+/// Exact joint counts for chosen column pairs (`CREATE STATISTICS … (mcv)` over two columns, all combinations kept);
+/// a query uses a pair only when it has an equality on both columns, and independence for everything else.
+pub struct ColGroup { base: Indep, pairs: Vec<((usize, usize), HashMap<(u32, u32), f64>)> }
+impl ColGroup {
+    pub fn new(t: &Table, pairs: &[(usize, usize)]) -> Self {
+        let pairs = pairs.iter().map(|&(x, y)| {
+            let mut m = HashMap::new();
+            for i in 0..t.n() { *m.entry((t.cols[x][i], t.cols[y][i])).or_insert(0.0) += 1.0; }
+            ((x, y), m)
+        }).collect();
+        ColGroup { base: Indep::new(t), pairs }
+    }
+}
+impl TableEst for ColGroup {
+    fn name(&self) -> String { "column-group counts".into() }
+    fn est(&self, preds: &[Pred]) -> f64 {
+        let mut used = vec![false; preds.len()];
+        let mut sel = 1.0;
+        for ((x, y), m) in &self.pairs {
+            let fx = preds.iter().position(|p| matches!(p, Pred::Eq(c, _) if c == x));
+            let fy = preds.iter().position(|p| matches!(p, Pred::Eq(c, _) if c == y));
+            if let (Some(i), Some(j)) = (fx, fy) {
+                if let (Pred::Eq(_, vx), Pred::Eq(_, vy)) = (preds[i], preds[j]) {
+                    sel *= m.get(&(vx, vy)).copied().unwrap_or(0.0) / self.base.n;
+                    used[i] = true; used[j] = true;
+                }
+            }
+        }
+        for (i, p) in preds.iter().enumerate() { if !used[i] { sel *= self.base.sel(p); } }
+        sel * self.base.n
+    }
+    fn bytes(&self) -> usize { self.base.bytes() + self.pairs.iter().map(|(_, m)| m.len() * 16).sum::<usize>() }
+}
+
+/// Functional-dependency degree `f(x -> y)` in [0, 1] (here: the share of rows that agree with the most common `y`
+/// of their `x`), applied as `P(x=u, y=v) = P(x=u) * (f + (1 - f) * P(y=v))`, the formula PostgreSQL uses.
+pub struct FdEst { base: Indep, deps: Vec<(usize, usize, f64)> }
+impl FdEst {
+    pub fn new(t: &Table, deps: &[(usize, usize)]) -> Self {
+        let deps = deps.iter().map(|&(x, y)| {
+            let mut m: HashMap<(u32, u32), f64> = HashMap::new();
+            for i in 0..t.n() { *m.entry((t.cols[x][i], t.cols[y][i])).or_insert(0.0) += 1.0; }
+            let mut best: HashMap<u32, f64> = HashMap::new();
+            for (&(xv, _), &c) in &m { let e = best.entry(xv).or_insert(0.0); if c > *e { *e = c; } }
+            (x, y, best.values().sum::<f64>() / t.n() as f64)
+        }).collect();
+        FdEst { base: Indep::new(t), deps }
+    }
+}
+impl TableEst for FdEst {
+    fn name(&self) -> String { "functional dependency".into() }
+    fn est(&self, preds: &[Pred]) -> f64 {
+        let mut used = vec![false; preds.len()];
+        let mut sel = 1.0;
+        for &(x, y, f) in &self.deps {
+            let fx = preds.iter().position(|p| matches!(p, Pred::Eq(c, _) if *c == x));
+            let fy = preds.iter().position(|p| matches!(p, Pred::Eq(c, _) if *c == y));
+            if let (Some(i), Some(j)) = (fx, fy) {
+                sel *= self.base.sel(&preds[i]) * (f + (1.0 - f) * self.base.sel(&preds[j]));
+                used[i] = true; used[j] = true;
+            }
+        }
+        for (i, p) in preds.iter().enumerate() { if !used[i] { sel *= self.base.sel(p); } }
+        sel * self.base.n
+    }
+    fn bytes(&self) -> usize { self.base.bytes() + self.deps.len() * 24 }
+}
+
+/// Count matches in a uniform row sample and scale up; with zero matches there is no information, so fall back
+/// to independence (the "0-tuple problem" every sampling estimator has).
+pub struct RowSample<'a> { rows: Vec<usize>, t: &'a Table, scale: f64, fallback: Indep, pub zero_hits: std::cell::Cell<u32> }
+impl<'a> RowSample<'a> {
+    pub fn new(t: &'a Table, r: &mut Rng, m: usize) -> Self {
+        let rows = (0..m).map(|_| r.next(t.n() as u64) as usize).collect();
+        RowSample { rows, t, scale: t.n() as f64 / m as f64, fallback: Indep::new(t), zero_hits: Default::default() }
+    }
+}
+impl TableEst for RowSample<'_> {
+    fn name(&self) -> String { format!("row sample ({})", self.rows.len()) }
+    fn est(&self, preds: &[Pred]) -> f64 {
+        let hits = self.rows.iter().filter(|&&i| preds.iter().all(|p| p.holds(self.t.cols[p.col()][i]))).count();
+        if hits == 0 { self.zero_hits.set(self.zero_hits.get() + 1); return self.fallback.est(preds); }
+        hits as f64 * self.scale
+    }
+    /// The sampled rows themselves: m rows x (columns) x 4 bytes.
+    fn bytes(&self) -> usize { self.rows.len() * self.t.cols.len() * 4 }
+}
+
+/// A Chow-Liu tree: the best tree-shaped Bayesian network by mutual information. Learned from data, stores one
+/// conditional table per column, answers any conjunction of equality/range predicates by message passing.
+pub struct ChowLiu { n: f64, parent: Vec<Option<usize>>, order: Vec<usize>, cpt: Vec<Vec<f64>>, doms: Vec<usize> }
+impl ChowLiu {
+    pub fn fit(t: &Table) -> Self {
+        let (m, n) = (t.cols.len(), t.n());
+        let joint = |x: usize, y: usize| {
+            let mut c = vec![0.0f64; t.doms[x] * t.doms[y]];
+            for i in 0..n { c[t.cols[x][i] as usize * t.doms[y] + t.cols[y][i] as usize] += 1.0; }
+            c
+        };
+        let marg: Vec<Vec<f64>> = (0..m).map(|x| {
+            let mut c = vec![0.0; t.doms[x]];
+            for &v in &t.cols[x] { c[v as usize] += 1.0; }
+            c
+        }).collect();
+        // pairwise mutual information
+        let mut mi = vec![vec![0.0f64; m]; m];
+        for x in 0..m { for y in x + 1..m {
+            let j = joint(x, y);
+            let mut s = 0.0;
+            for u in 0..t.doms[x] { for v in 0..t.doms[y] {
+                let p = j[u * t.doms[y] + v] / n as f64;
+                if p > 0.0 { s += p * (p * n as f64 * n as f64 / (marg[x][u] * marg[y][v])).ln(); }
+            } }
+            mi[x][y] = s; mi[y][x] = s;
+        } }
+        // maximum spanning tree (Prim) from column 0
+        let (mut parent, mut order, mut in_tree) = (vec![None; m], vec![0usize], vec![false; m]);
+        in_tree[0] = true;
+        while order.len() < m {
+            let mut best = (-1.0, 0, 0);
+            for &u in &order { for v in 0..m { if !in_tree[v] && mi[u][v] > best.0 { best = (mi[u][v], u, v); } } }
+            parent[best.2] = Some(best.1);
+            in_tree[best.2] = true;
+            order.push(best.2);
+        }
+        // conditional tables with a small additive smoothing
+        let alpha = 0.1;
+        let cpt = (0..m).map(|v| match parent[v] {
+            None => { let tot: f64 = marg[v].iter().sum::<f64>() + alpha * t.doms[v] as f64; marg[v].iter().map(|&c| (c + alpha) / tot).collect() }
+            Some(p) => {
+                let j = joint(p, v);
+                let mut out = vec![0.0; t.doms[p] * t.doms[v]];
+                for px in 0..t.doms[p] {
+                    let tot = marg[p][px] + alpha * t.doms[v] as f64;
+                    for x in 0..t.doms[v] { out[px * t.doms[v] + x] = (j[px * t.doms[v] + x] + alpha) / tot; }
+                }
+                out
+            }
+        }).collect();
+        ChowLiu { n: n as f64, parent, order, cpt, doms: t.doms.clone() }
+    }
+
+    /// P(all predicates hold): sum-product on the tree, children before parents.
+    pub fn prob(&self, preds: &[Pred]) -> f64 {
+        let mut allowed: Vec<Vec<bool>> = self.doms.iter().map(|&d| vec![true; d]).collect();
+        for p in preds { for x in 0..self.doms[p.col()] { if !p.holds(x as u32) { allowed[p.col()][x] = false; } } }
+        let mut below: Vec<Vec<f64>> = self.doms.iter().map(|&d| vec![1.0; d]).collect();
+        for &v in self.order.iter().rev() {
+            match self.parent[v] {
+                Some(p) => {
+                    for px in 0..self.doms[p] {
+                        let mut s = 0.0;
+                        for x in 0..self.doms[v] { if allowed[v][x] { s += self.cpt[v][px * self.doms[v] + x] * below[v][x]; } }
+                        below[p][px] *= s;
+                    }
+                }
+                None => return (0..self.doms[v]).filter(|&x| allowed[v][x]).map(|x| self.cpt[v][x] * below[v][x]).sum(),
+            }
+        }
+        unreachable!("the root is always in the order")
+    }
+    /// Probability the model assigns to one full row (the product of the conditional tables).
+    pub fn point(&self, x: &[u32]) -> f64 {
+        (0..x.len()).map(|v| match self.parent[v] {
+            None => self.cpt[v][x[v] as usize],
+            Some(p) => self.cpt[v][x[p] as usize * self.doms[v] + x[v] as usize],
+        }).product()
+    }
+    pub fn tree(&self) -> Vec<(usize, Option<usize>)> { self.order.iter().map(|&v| (v, self.parent[v])).collect() }
+}
+impl TableEst for ChowLiu {
+    fn name(&self) -> String { "Chow-Liu tree".into() }
+    fn est(&self, preds: &[Pred]) -> f64 { self.n * self.prob(preds) }
+    fn bytes(&self) -> usize { self.cpt.iter().map(|c| c.len() * 8).sum() }
+}
+
+// =====================================================================================================
+// Part B: a star schema with skew and correlation across joins
+// =====================================================================================================
+
+/// customers(id, country, seg) <- orders(cust, prod) -> products(id, cat);  shipments(order, carrier) -> orders.
+/// Customers and products are numbered by popularity (id 0 is the most ordered). The popular customers all live in
+/// country 0 or 1 and buy mostly category-0 products; their orders have more shipments, with country-specific
+/// carriers. Every one of those facts is invisible to per-table statistics.
+pub struct Shop {
+    pub cust_country: Vec<u32>, pub cust_seg: Vec<u32>, pub prod_cat: Vec<u32>,
+    pub ord_cust: Vec<u32>, pub ord_prod: Vec<u32>,
+    pub ship_carrier: Vec<u32>, pub ships_of: Vec<Vec<u32>>,
+}
+fn zipf_ranks(r: &mut Rng, n: usize, domain: usize, theta: f64) -> Vec<u32> {
+    let mut cdf = Vec::with_capacity(domain);
+    let mut s = 0.0;
+    for k in 1..=domain { s += 1.0 / (k as f64).powf(theta); cdf.push(s); }
+    (0..n).map(|_| { let u = r.unit() * s; cdf.partition_point(|&c| c < u).min(domain - 1) as u32 }).collect()
+}
+impl Shop {
+    pub fn generate(r: &mut Rng, customers: usize, products: usize, orders: usize) -> Shop {
+        let cust_country: Vec<u32> = (0..customers).map(|rank| {
+            if rank < customers / 100 { 0 } else if rank < customers / 20 { 1 } else { 2 + r.next(18) as u32 }
+        }).collect();
+        let cust_seg = cust_country.iter().map(|&c| if r.unit() < 0.8 { c % 5 } else { r.next(5) as u32 }).collect();
+        let prod_cat: Vec<u32> = (0..products).map(|rank| {
+            if rank < products / 100 { 0 } else if rank < products / 20 { 1 } else { 2 + (rank % 14) as u32 }
+        }).collect();
+        let ord_cust = zipf_ranks(r, orders, customers, 1.0);
+        let mut ord_prod = zipf_ranks(r, orders, products, 0.8);
+        for (o, p) in ord_prod.iter_mut().enumerate() {
+            if cust_country[ord_cust[o] as usize] == 0 && r.unit() < 0.5 { *p = r.next((products / 100).max(1) as u64) as u32; }
+        }
+        let mut ship_carrier = Vec::new();
+        let mut ships_of = vec![Vec::new(); orders];
+        for o in 0..orders {
+            let country = cust_country[ord_cust[o] as usize];
+            let k = if country == 0 { 1 + r.next(6) } else { r.next(3) };
+            for _ in 0..k {
+                let carrier = if r.unit() < 0.6 { (country * 3 + r.next(2) as u32) % 8 } else { r.next(8) as u32 };
+                ships_of[o].push(ship_carrier.len() as u32);
+                ship_carrier.push(carrier);
+            }
+        }
+        Shop { cust_country, cust_seg, prod_cat, ord_cust, ord_prod, ship_carrier, ships_of }
+    }
+    pub fn n_orders(&self) -> usize { self.ord_cust.len() }
+}
+
+/// SELECT … FROM customers C, orders O, products P, shipments S WHERE (joins) AND C.country = ? [AND C.seg = ?]
+/// AND P.cat = ? AND S.carrier = ?
+#[derive(Clone, Copy, Debug)]
+pub struct ShopQuery { pub country: u32, pub seg: Option<u32>, pub cat: u32, pub carrier: u32 }
+pub const C: u8 = 1; pub const O: u8 = 2; pub const P: u8 = 4; pub const S: u8 = 8;
+
+/// Predicates drawn from one random order (its customer, product and a shipment), the way a real workload
+/// looks (the query asks about something that exists), or at random with `from_row = false`.
+pub fn shop_query(s: &Shop, r: &mut Rng, from_row: bool) -> ShopQuery {
+    if from_row {
+        let o = r.next(s.n_orders() as u64) as usize;
+        let carrier = s.ships_of[o].first().map_or(r.next(8) as u32, |&i| s.ship_carrier[i as usize]);
+        let seg = if r.unit() < 0.5 { Some(s.cust_seg[s.ord_cust[o] as usize]) } else { None };
+        ShopQuery { country: s.cust_country[s.ord_cust[o] as usize], seg, cat: s.prod_cat[s.ord_prod[o] as usize], carrier }
+    } else {
+        ShopQuery { country: r.next(20) as u32, seg: if r.unit() < 0.5 { Some(r.next(5) as u32) } else { None }, cat: r.next(16) as u32, carrier: r.next(8) as u32 }
+    }
+}
+
+/// True cardinality of every connected subset of {C, O, P, S}: the joins are FK-PK around the hub O.
+pub fn shop_truth(s: &Shop, q: &ShopQuery) -> [f64; 16] {
+    let cpass = |c: u32| s.cust_country[c as usize] == q.country && q.seg.is_none_or(|g| s.cust_seg[c as usize] == g);
+    let ppass = |p: u32| s.prod_cat[p as usize] == q.cat;
+    let mut t = [0.0f64; 16];
+    t[C as usize] = s.cust_country.iter().enumerate().filter(|(i, _)| cpass(*i as u32)).count() as f64;
+    t[P as usize] = s.prod_cat.iter().filter(|&&c| c == q.cat).count() as f64;
+    t[S as usize] = s.ship_carrier.iter().filter(|&&c| c == q.carrier).count() as f64;
+    t[O as usize] = s.n_orders() as f64;
+    for o in 0..s.n_orders() {
+        let c = cpass(s.ord_cust[o]) as u8 as f64;
+        let p = ppass(s.ord_prod[o]) as u8 as f64;
+        let k = s.ships_of[o].iter().filter(|&&i| s.ship_carrier[i as usize] == q.carrier).count() as f64;
+        t[(C | O) as usize] += c;
+        t[(O | P) as usize] += p;
+        t[(O | S) as usize] += k;
+        t[(C | O | P) as usize] += c * p;
+        t[(C | O | S) as usize] += c * k;
+        t[(O | P | S) as usize] += p * k;
+        t[(C | O | P | S) as usize] += c * p * k;
+    }
+    t
+}
+
+pub trait ShopEst {
+    fn name(&self) -> String;
+    fn est(&self, q: &ShopQuery, mask: u8) -> f64;
+}
+
+/// Per-table exact single-column frequencies, selectivities multiplied, FK joins assumed uniform:
+/// |O ⋈ C'| = |O| · |C'| / |C|. What a System R-style optimizer does.
+pub struct ShopIndep {
+    nc: f64, np: f64, no: f64, ns: f64,
+    country: Vec<f64>, seg: Vec<f64>, cat: Vec<f64>, carrier: Vec<f64>,
+}
+impl ShopIndep {
+    pub fn new(s: &Shop) -> Self {
+        let freq = |v: &[u32], d: usize| { let mut f = vec![0.0; d]; for &x in v { f[x as usize] += 1.0; } f };
+        ShopIndep {
+            nc: s.cust_country.len() as f64, np: s.prod_cat.len() as f64, no: s.n_orders() as f64, ns: s.ship_carrier.len() as f64,
+            country: freq(&s.cust_country, 20), seg: freq(&s.cust_seg, 5), cat: freq(&s.prod_cat, 16), carrier: freq(&s.ship_carrier, 8),
+        }
+    }
+    fn fractions(&self, q: &ShopQuery) -> (f64, f64, f64) {
+        let fc = self.country[q.country as usize] / self.nc * q.seg.map_or(1.0, |g| self.seg[g as usize] / self.nc);
+        let fp = self.cat[q.cat as usize] / self.np;
+        let fs = self.carrier[q.carrier as usize] / self.ns;
+        (fc, fp, fs)
+    }
+}
+impl ShopEst for ShopIndep {
+    fn name(&self) -> String { "independence + uniform joins".into() }
+    fn est(&self, q: &ShopQuery, mask: u8) -> f64 {
+        let (fc, fp, fs) = self.fractions(q);
+        let mut rows = if mask & O != 0 { self.no } else { 1.0 };
+        let mut base = |present: bool, n: f64, f: f64, fk_fanout: f64| {
+            if !present { return; }
+            if mask & O != 0 { rows *= f * fk_fanout; } else { rows = n * f; }
+        };
+        base(mask & C != 0, self.nc, fc, 1.0);
+        base(mask & P != 0, self.np, fp, 1.0);
+        base(mask & S != 0, self.ns, fs, self.ns / self.no); // each order has ns/no shipments on average
+        rows
+    }
+}
+
+/// Index-based join sampling: keep a uniform sample of the hub `orders`, and evaluate every predicate on the sampled
+/// order's customer, product and shipments through the primary-key / foreign-key indexes. Correlations and skew
+/// across joins are captured; selective queries return zero sample hits and fall back to the independence model.
+pub struct JoinSample<'a> { s: &'a Shop, sample: Vec<u32>, fallback: ShopIndep, pub fell_back: std::cell::Cell<u32>, pub asked: std::cell::Cell<u32> }
+impl<'a> JoinSample<'a> {
+    pub fn new(s: &'a Shop, r: &mut Rng, m: usize) -> Self {
+        JoinSample { s, sample: (0..m).map(|_| r.next(s.n_orders() as u64) as u32).collect(), fallback: ShopIndep::new(s), fell_back: Default::default(), asked: Default::default() }
+    }
+}
+impl ShopEst for JoinSample<'_> {
+    fn name(&self) -> String { format!("join sample ({} orders)", self.sample.len()) }
+    fn est(&self, q: &ShopQuery, mask: u8) -> f64 {
+        if mask & O == 0 { return self.fallback.est(q, mask); }
+        let s = self.s;
+        let mut hits = 0.0;
+        for &o in &self.sample {
+            let o = o as usize;
+            let mut w = 1.0;
+            if mask & C != 0 {
+                let c = s.ord_cust[o] as usize;
+                if !(s.cust_country[c] == q.country && q.seg.is_none_or(|g| s.cust_seg[c] == g)) { continue; }
+            }
+            if mask & P != 0 && s.prod_cat[s.ord_prod[o] as usize] != q.cat { continue; }
+            if mask & S != 0 { w = s.ships_of[o].iter().filter(|&&i| s.ship_carrier[i as usize] == q.carrier).count() as f64; }
+            hits += w;
+        }
+        self.asked.set(self.asked.get() + 1);
+        if hits == 0.0 { self.fell_back.set(self.fell_back.get() + 1); return self.fallback.est(q, mask); }
+        hits * s.n_orders() as f64 / self.sample.len() as f64
+    }
+}
+
+// =====================================================================================================
+// Part C: plans chosen from estimates
+// =====================================================================================================
+
+fn connected(m: u8) -> bool { m.count_ones() == 1 || m & O != 0 }
+
+/// Best plan (minimum C_out = sum of the cardinalities of all join results) under a cardinality function.
+/// A subset can be a join result only if it is connected (a single table, or the hub plus anything); disconnected
+/// subsets keep infinite cost, so no cross product is ever chosen.
+/// Returns the chosen split (left submask) for every connected subset.
+pub fn plan(card: &dyn Fn(u8) -> f64) -> [u8; 16] {
+    let mut cost = [f64::INFINITY; 16];
+    let mut split = [0u8; 16];
+    for m in 1u8..16 {
+        if m.count_ones() == 1 { cost[m as usize] = 0.0; continue; }
+        let mut a = (m - 1) & m;
+        while a > 0 {
+            let b = m ^ a;
+            if connected(a) && connected(b) {
+                let c = cost[a as usize] + cost[b as usize] + card(m);
+                if c < cost[m as usize] { cost[m as usize] = c; split[m as usize] = a; }
+            }
+            a = (a - 1) & m;
+        }
+    }
+    split
+}
+
+/// Cost of an already-chosen plan under a (different) cardinality function.
+pub fn plan_cost(split: &[u8; 16], m: u8, card: &dyn Fn(u8) -> f64) -> f64 {
+    if m.count_ones() == 1 { return 0.0; }
+    let a = split[m as usize];
+    plan_cost(split, a, card) + plan_cost(split, m ^ a, card) + card(m)
+}
+
+/// The order in which dimensions join the hub (for display): e.g. "C P S".
+pub fn plan_order(split: &[u8; 16]) -> String {
+    let mut m = C | O | P | S;
+    let mut out = Vec::new();
+    while m.count_ones() > 1 {
+        let a = split[m as usize];
+        let (hub_side, other) = if a & O != 0 { (a, m ^ a) } else { (m ^ a, a) };
+        out.push(match other { C => 'C', P => 'P', S => 'S', _ => '?' });
+        m = hub_side;
+    }
+    out.reverse();
+    out.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(" ")
+}
+
+/// Standard normal from two uniforms (Box-Muller), for multiplicative estimation noise.
+pub fn gauss(r: &mut Rng) -> f64 {
+    let (u, v) = (r.unit().max(1e-12), r.unit());
+    (-2.0 * u.ln()).sqrt() * (2.0 * std::f64::consts::PI * v).cos()
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Join sizes"
+body = """
+<p>How a planner estimates <code>R ⋈ S</code> on <code>R.a = S.b</code>, from least to most informed:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>model</th> <th>formula</th> <th>breaks when</th> </tr> </thead> <tbody> <tr> <td>uniform + containment</td> <td><code>&#92;|R&#92;|·&#92;|S&#92;| / max(d_R, d_S)</code></td> <td>skewed keys, keys with no partner</td> </tr> <tr> <td>FK → PK, filtered primary side</td> <td><code>&#92;|R&#92;| · &#92;|S'&#92;| / &#92;|S&#92;|</code></td> <td>the foreign key is skewed and the filter correlates with popularity (this chapter's lab)</td> </tr> <tr> <td>MCV matching (PostgreSQL <code>eqjoinsel</code>)</td> <td>sum of <code>f_R(v)·f_S(v)</code> over values in both MCV lists, uniform for the rest</td> <td>the skew is outside the MCV list; correlated filters</td> </tr> <tr> <td>sampling</td> <td>evaluate on a sample of the hub, scale up</td> <td>selective queries (<strong>0-tuple problem</strong>)</td> </tr> <tr> <td>per-key frequency sketches (Count-Min, degree sequences)</td> <td><code>Σ_v f̂_R(v)·f̂_S(v)</code>, or an upper bound</td> <td>needs a sketch per join key; filters on top</td> </tr> <tr> <td>learned join model</td> <td>model of the full join (fanout-scaled)</td> <td>training cost, drift</td> </tr> </tbody> </table></div>
+
+<p>For a multi-way join multiply the factors (under the same independence assumption), which is why the error compounds: a 5× error per join is 3 125× after five joins.</p>
+"""
+
+[[sections]]
+heading = "A learned model, in 60 lines"
+body = """
+<p>The Chow–Liu tree is the smallest model worth calling "learned", and everything it does is what the neural estimators do, with a lookup table in place of a network:</p>
+
+<ol> <li><strong>Count</strong> pairwise joint frequencies for every pair of columns (one pass; <code>m²/2</code> count tables).</li> <li><strong>Score</strong> each pair by <strong>mutual information</strong> <code>I(X;Y) = Σ p(x,y) ln [p(x,y) / (p(x) p(y))]</code>: zero for independent columns, large for dependent ones.</li> <li><strong>Tree</strong>: the maximum spanning tree on those scores (Prim) is the best tree-shaped approximation to the joint distribution in KL divergence (Chow and Liu, 1968). Each column gets one parent.</li> <li><strong>Tables</strong>: for each column store <code>P(x | parent)</code> (additively smoothed), the root stores its marginal. The model is the product of these conditionals.</li> <li><strong>Inference</strong>: for a conjunction of predicates, each column has an <em>allowed set</em> of values (a point for <code>=</code>, an interval for ranges). A <strong>sum-product pass from the leaves up</strong> computes, for each node, <code>msg(parent value) = Σ_{x allowed} P(x | parent value) · Π_{children} msg_child(x)</code>; the root sums its own allowed values. Cost is linear in the number of columns times the product of two domain sizes, microseconds.</li> </ol>
+
+<p>Properties that matter in a database:</p>
+
+<ul> <li><strong>Any predicate combination</strong> is answered from the same model: equalities, ranges, <code>IN</code> lists, columns that appear in no declared statistic. Extended statistics answer only what was declared.</li> <li><strong>Counts are additive</strong>, so the model is updated incrementally: add the new rows' pair counts, recompute the MST, rebuild the touched tables. No retraining, and the updates parallelize and merge across partitions.</li> <li><strong>Limits</strong>: a tree captures only pairwise dependencies (three-way effects such as XOR are invisible), continuous columns need discretization, multi-table queries need a model over the <strong>join</strong> (NeuroCard trains on samples of the full outer join and corrects with fanout columns), and domain sizes make the tables large (100 × 100 doubles = 80 KB for one edge).</li> </ul>
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+```text title="one table, five estimators: q-error median / p90 / max"
+q-error of conjunctive predicates, 500k rows, 400 queries per workload (predicate values taken from a random row)
+workload                                    estimator                   median      p90       max    bytes
+independent columns (a, c, e)               independence                  1.24     2.16      5.47     3040
+independent columns (a, c, e)               column-group counts           1.24     2.16      5.47   183520
+independent columns (a, c, e)               functional dependency         1.24     2.16      5.47     3088
+independent columns (a, c, e)               row sample (2000)             1.42     3.23     31.25    40000
+independent columns (a, c, e)               Chow-Liu tree                 1.11     1.57      2.97   142688
+a = ? AND b = ?   (b ~ f(a), 10% noise)     independence                 17.44    44.04     59.54     3040
+a = ? AND b = ?   (b ~ f(a), 10% noise)     column-group counts           1.00     1.00      1.00   183520
+a = ? AND b = ?   (b ~ f(a), 10% noise)     functional dependency         1.05     1.59       536     3088
+a = ? AND b = ?   (b ~ f(a), 10% noise)     row sample (2000)             1.12     1.34     32.73    40000
+a = ? AND b = ?   (b ~ f(a), 10% noise)     Chow-Liu tree                 1.00     1.00      1.01   142688
+c = ? AND d = ?   (d ~ f(c), 30% noise)     independence                 14.66      190       263     3040
+c = ? AND d = ?   (d ~ f(c), 30% noise)     column-group counts           1.00     1.00      1.00   183520
+c = ? AND d = ?   (d ~ f(c), 30% noise)     functional dependency         1.35      249      1554     3088
+c = ? AND d = ?   (d ~ f(c), 30% noise)     row sample (2000)             1.21     2.54     17.48    40000
+c = ? AND d = ?   (d ~ f(c), 30% noise)     Chow-Liu tree                 1.00     1.00      1.10   142688
+a, b, c, d all equal                        independence                 30.39      266       582     3040
+a, b, c, d all equal                        column-group counts           1.05     1.88      3.00   183520
+a, b, c, d all equal                        functional dependency         1.56      184      1338     3088
+a, b, c, d all equal                        row sample (2000)             2.14    60.00       368    40000
+a, b, c, d all equal                        Chow-Liu tree                 1.02     1.83      3.14   142688
+c <= ? AND d = ?  (range + equality)        independence                  1.82     5.12     22.83     3040
+c <= ? AND d = ?  (range + equality)        column-group counts           1.82     5.12     22.83   183520
+c <= ? AND d = ?  (range + equality)        functional dependency         1.82     5.12     22.83     3088
+c <= ? AND d = ?  (range + equality)        row sample (2000)             1.14     1.74      4.52    40000
+c <= ? AND d = ?  (range + equality)        Chow-Liu tree                 1.00     1.00      1.01   142688
+all five columns                            independence                  5.00    83.00       151     3040
+all five columns                            column-group counts           1.06     1.79      3.98   183520
+all five columns                            functional dependency         1.57    49.06       532     3088
+all five columns                            row sample (2000)             3.00    51.01       250    40000
+all five columns                            Chow-Liu tree                 1.07     1.72      3.72   142688
+```
+
+<ul> <li><strong>Independent columns are not the problem</strong>: independence, column groups and FD are within 2.2× at p90, the tree within 1.6×; the sample is the weakest (3.2× at p90, 31× at the maximum: a rare combination it barely saw).</li> <li><strong>A correlated pair breaks independence by 15–30× at the median</strong> (17× for <code>a, b</code>, 15× for <code>c, d</code>, 30× for all four), up to <strong>582×</strong> at the maximum. Column-group counts are exact on the pairs they cover (1.00 everywhere) and the Chow–Liu tree is within 1.10. The column-group counts cost <strong>183 KB</strong> to cover two pairs, 60× the independence statistics; the tree costs 143 KB and covers every column pair it chose to link, without being told which.</li> <li><strong>The functional-dependency model is great on the median and fragile in the tail</strong>: its median is 1.05 and 1.35, but the maximum is <strong>536</strong> and <strong>1 554</strong>. The formula <code>P(a)·(f + (1 − f)·P(b))</code> is right for the dominant combination and wrong for the rare ones, because it gives every <code>b</code> value some probability even when this <code>a</code> value has never been seen with it. It is the cheapest correlation statistic (24 bytes per dependency), and a trap when the dependency is soft.</li> <li><strong>Ranges: only the learned model and the sample survive</strong>: for <code>c &lt;= ? AND d = ?</code> independence has median 1.82 and p90 5.1, column groups and FD are <strong>identical</strong> to independence (they only handle equality pairs), the sample gets 1.14, and the Chow–Liu tree gets 1.00 (max 1.01).</li> <li><strong>Four correlated columns</strong>: independence median 30, p90 266, max 582; column groups 1.05 / 1.88 / 3.0 only because they were told both pairs; the tree 1.02 / 1.83 / 3.14 with no hints; a 2 000-row sample 2.14 / 60 / 368 (a conjunction of four equalities often matches few or no sample rows, and then the estimate is the independence fallback).</li> </ul>
+
+```text title="q-error vs number of predicates (independence vs Chow-Liu)"
+q-error vs number of predicates (random subset of the 5 columns, values from one row), 600 queries per size
+ predicates | independence med / p99 / max |   Chow-Liu med / p99 / max | indep. under
+          1 |     1.00     2.16     3.05 |     1.00     1.00     1.00 |           1%
+          2 |     1.18      150      211 |     1.00     1.13     1.19 |          17%
+          3 |     4.96      175      241 |     1.04     2.58     5.00 |          52%
+          4 |     8.36      394      591 |     1.08     3.01     5.25 |          91%
+          5 |     6.00      147      174 |     1.04     3.00     4.11 |          99%
+learned tree (column <- parent): a, b<-a, c<-a, d<-c, e<-d
+```
+
+<p><strong>The underestimation grows with every predicate</strong>: with one predicate, independence is right (under by more than 2× in 1% of queries); at two it is 17%, at three 52%, at four <strong>91%</strong> and at five <strong>99%</strong>. The p99 q-error goes from 2 to 150 to 394. The tree stays at 3.0 or below at p99. The learned structure recovered both dependencies (a–b, c–d) and connected the independent components with near-uniform edges that carry almost no information.</p>
+
+```text title="one query, every subset: independence vs join sampling"
+one query: country = 0, seg = 0, category = 0, carrier = 1   (200k orders, 20k customers, 5k products)
+subset         true rows | independence  q-error |  join sample  q-error
+C'                   173 |           34     5.05 |           34     5.05
+P'                    50 |           50     1.00 |           50     1.00
+S'                147131 |       147131     1.00 |       147131     1.00
+O⋈C'               92370 |          343      269 |        92000     1.00
+O⋈P'               97127 |         2000    48.56 |        99200     1.02
+O⋈S'              147131 |       147131     1.00 |       144900     1.02
+O⋈C'⋈P'            59412 |            3    17326 |        60000     1.01
+O⋈C'⋈S'           113369 |          252      449 |       110200     1.03
+O⋈P'⋈S'            91322 |         1471    62.07 |        94900     1.04
+O⋈C'⋈P'⋈S'         72977 |            3    28930 |        74500     1.02
+```
+
+<ul> <li><strong>Per-table estimates are fine</strong> (<code>P'</code> and <code>S'</code> are exact, <code>C'</code> is off 5× because <code>seg</code> correlates with <code>country</code>); the damage is <strong>in the joins</strong>: <code>O ⋈ C'</code> is estimated at 343 rows against 92 370 (<strong>269×</strong>), because the customers of country 0 with segment 0 are the popular ones: 173 customers (0.9% of the table) place 92 370 orders (46% of all orders), while independence believes they have 343. Every wrong factor then multiplies: the full 4-way join is estimated at <strong>3 rows</strong> against 72 977.</li> <li><strong>Index-based join sampling gets every join-size estimate within 5%</strong> here (1.00–1.04), because the sample of orders is joined to the real customer, product and shipment rows through their indexes, so the popularity correlation is <em>in the sample</em>.</li> </ul>
+
+```text title="q-error by number of joins, two workloads"
+q-error by number of joins, 500 queries with predicate values taken from a random order   (under = estimate < true / 2)
+joins     estimator                         median      p90       max   under
+0         independence + uniform joins        1.00     4.20      8.31     13%
+0         join sample (1000 orders)           1.00     4.20      8.31     13%
+0         join sample (20000 orders)          1.00     4.20      8.31     13%
+1         independence + uniform joins        3.21    56.12       269     45%
+1         join sample (1000 orders)           1.02     1.20     20.27      0%
+1         join sample (20000 orders)          1.01     1.03      1.70      0%
+2         independence + uniform joins       48.00     3605     17326     72%
+2         join sample (1000 orders)           1.11     2.13       170      4%
+2         join sample (20000 orders)          1.02     1.16       126      1%
+3         independence + uniform joins         124    10464     29256     80%
+3         join sample (1000 orders)           1.34    11.10       609     16%
+3         join sample (20000 orders)          1.06     2.20       262      5%
+q-error by number of joins, 500 queries with random predicate values (often empty results)   (under = estimate < true / 2)
+joins     estimator                         median      p90       max   under
+0         independence + uniform joins        1.00     4.49      8.31      4%
+0         join sample (1000 orders)           1.00     4.49      8.31      4%
+0         join sample (20000 orders)          1.00     4.49      8.31      4%
+1         independence + uniform joins        2.45    15.57       269      6%
+1         join sample (1000 orders)           1.15     1.73     32.59      0%
+1         join sample (20000 orders)          1.02     1.11      2.67      0%
+2         independence + uniform joins        5.66    52.91      3605     11%
+2         join sample (1000 orders)           2.07    46.26      1469      4%
+2         join sample (20000 orders)          1.13    24.63       815      2%
+3         independence + uniform joins       17.67      105      4539     10%
+3         join sample (1000 orders)          16.86      105       500      5%
+3         join sample (20000 orders)         10.00      102       487      3%
+join sample fallbacks (no sample tuple qualified): 1463 of 7000 estimates for the 1 000-order sample, 503 of 7000 for the 20 000-order sample
+```
+
+<ul> <li><strong>Independence: median error 3× after one join, 48× after two, 124× after three; underestimates in 45%, 72% and 80% of the estimates.</strong> That is the "errors grow exponentially with joins" result, reproduced on a schema small enough to read.</li> <li><strong>Join sampling with 1 000 sampled orders is within 1.02× (1 join), 1.11× (2) and 1.34× (3) at the median</strong>, and with 20 000 sampled orders within 1.01×, 1.02× and 1.06×. The tail is where it still fails: p90 of 11 (1 000 orders, 3 joins) and max over 100 come from queries where few sample tuples qualify.</li> <li><strong>With random predicate values (many empty results) the picture changes</strong>: over both workloads, 21% of the estimates for the 1 000-order sample and 7% for the 20 000-order sample found no qualifying sample tuple, and the estimator <strong>falls back to the independence model</strong>. After three joins the median q-error is still 16.9 (sample) against 17.7 (independence). This is the <strong>0-tuple problem</strong>: a sample cannot say how small a tiny result is, only that it is smaller than 1/m of the hub. Index-based join sampling reduces the problem by spending more of the budget on the selective predicates first (the paper's idea; not implemented here), or by falling back to a better model than independence (the Chow–Liu tree, a sketch, an upper bound).</li> </ul>
+
+```text title="plan regret, 600 queries"
+plan regret: true C_out of the plan chosen from estimates / true C_out of the best plan, 600 queries
+estimates                           median      p90      max  regret>1.1    regret>2
+independence + uniform joins          1.22    14.09    38.00         52%         47%
+join sample (1000 orders)             1.00     1.03     1.89          6%          0%
+join sample (20000 orders)            1.00     1.00     1.35          0%          0%
+truth x lognormal(sigma = 0.5)        1.00     1.18     4.02         14%          0%
+truth x lognormal(sigma = 1)          1.00     1.52    16.49         28%          6%
+truth x lognormal(sigma = 2)          1.07     4.74    56.00         45%         18%
+truth x lognormal(sigma = 3)          1.13     8.04      949         52%         25%
+customers joined first: independence 68% of queries, best plan 50% of queries
+independence model: chosen join order vs best join order (dimension order, first joined first)
+  chosen C P S   best C P S   201 queries
+  chosen C P S   best P C S   101 queries
+  chosen P C S   best P C S   70 queries
+  chosen C P S   best P S C   59 queries
+  chosen P C S   best C P S   39 queries
+  chosen P C S   best C S P   37 queries
+  chosen P C S   best S P C   32 queries
+  chosen C P S   best C S P   25 queries
+```
+
+<ul> <li><strong>Independence picks a plan more than 10% worse than the best in 52% of the queries and more than 2× worse in 47%</strong>, with a worst case of 38×, even though the plan space has only six join orders. It joins customers first in 68% of the queries, where the best plan does in 50%: it believes the customer filter is far more selective than it is (343 orders instead of 92 370 in the example above), so it puts that join first even when the product or shipment join is the better first step.</li> <li><strong>Join sampling makes the plan optimal almost everywhere</strong>: 1 000 orders give regret 1.00 at the median, 6% of queries above 1.1 and none above 2; 20 000 orders leave under 1% of queries above 1.1 (worst 1.35).</li> <li><strong>Noise tolerance</strong>: perturbing the <em>true</em> cardinalities by an independent log-normal factor shows how much error a plan survives. At σ = 0.5 (typical factor 1.4×) 14% of plans are more than 10% worse; at σ = 1 (typical 2×) 28% and 6% above 2×; at σ = 3 (typical 8×) one query in four is more than twice as slow and the worst is <strong>949×</strong>. A 5-table star is a gentle test; with 10 tables the plan space is millions of plans, and the same noise finds the bad ones.</li> </ul>
+"""
+
+[[sections]]
+heading = "Choosing what to build"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>need</th> <th>build</th> <th>why</th> </tr> </thead> <tbody> <tr> <td>a correlation you know about (country/city, make/model)</td> <td>column-group counts or an <code>ndistinct</code>/MCV extended statistic</td> <td>exact, cheap, predictable</td> </tr> <tr> <td>correlation you cannot enumerate, ranges, ad hoc predicates</td> <td>a data-driven model (tree, sum-product network, autoregressive)</td> <td>one model for every predicate combination</td> </tr> <tr> <td>selective filters on a hot table, joins with skew</td> <td>plan-time sampling with index lookups</td> <td>handles join-crossing effects, no statistics to maintain; fails when nothing qualifies</td> </tr> <tr> <td>no tolerance for underestimates</td> <td>pessimistic bound (degree-sequence / Count-Min based)</td> <td>never believes a tiny result; may overestimate by a lot</td> </tr> <tr> <td>long-running workload that repeats</td> <td>execution feedback</td> <td>the true counts of the plans you actually run</td> </tr> </tbody> </table></div>
+
+<p>A pragmatic production stack is: single-column MCV + histogram (<a href="/cookbook/p/statistics">Q7</a>), a handful of declared extended statistics, plan-time sampling for base-table filters, an <strong>exponential backoff</strong> combination instead of a pure product (below), and feedback or runtime adaptation as the safety net (<a href="/cookbook/p/adaptive-and-robust">Q10</a>).</p>
+
+<aside data-call="note"><b>Exponential backoff</b><p>When selectivities <code>s1 ≤ s2 ≤ s3 ≤ s4</code> of conjuncts are combined, instead of <code>s1·s2·s3·s4</code> use <code>s1 · s2&#94;(1/2) · s3&#94;(1/4) · s4&#94;(1/8)</code>. SQL Server's 2014 estimator does this: it assumes the predicates are partly dependent, trusts the most selective one fully and each next one less. It is wrong in both directions, but it is wrong by much less than the product on positively correlated data (exercise 1), and it needs no statistics.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Subsets as <code>u8</code> masks</strong>: <code>const C: u8 = 1; O = 2; P = 4; S = 8;</code> and <code>m.count_ones()</code>. Enumerating the splits of a subset is the three-line loop <code>let mut a = (m - 1) &amp; m; while a &gt; 0 { …; a = (a - 1) &amp; m; }</code>, and <code>card: [f64; 16]</code> indexes by mask with no hashing.</li> <li><strong>Estimators are views over data</strong>: <code>RowSample&lt;'a&gt;</code> and <code>JoinSample&lt;'a&gt;</code> hold <code>&amp;'a Table</code> / <code>&amp;'a Shop</code>, so the borrow checker proves the data outlives the estimator, and a <code>Vec&lt;Box&lt;dyn TableEst + '_&gt;&gt;</code> carries them side by side with the owned ones.</li> <li><strong><code>Cell</code> for counters behind <code>&amp;self</code></strong>: the estimator trait takes <code>&amp;self</code> (an optimizer calls it from many places and threads would need atomics), but the experiment wants "how often did you fall back?". <code>Cell&lt;u32&gt;</code> is the cheapest interior mutability for single-threaded counters; switch to <code>AtomicU32</code> when the estimator is shared.</li> <li><strong>Flat conditional tables</strong>: <code>cpt[v][parent_value * dom_v + x]</code> is a single <code>Vec&lt;f64&gt;</code> per column, so the inner loop of message passing is a linear scan with no pointer chasing. The model is 143 KB and fits in L2.</li> <li><strong>Topological order for free</strong>: Prim's algorithm appends nodes in an order where each node's parent already appeared, so the <code>order</code> vector is a valid topological order and the upward pass is <code>order.iter().rev()</code>; no recursion, no stack.</li> <li><strong><code>Option::is_none_or</code></strong> (stable since Rust 1.82) expresses "no predicate, or it holds": <code>q.seg.is_none_or(|g| s.cust_seg[c] == g)</code>.</li> <li><strong>Edition 2024 reserves <code>gen</code></strong>: a function named <code>gen</code> stops compiling (<code>r#gen</code> or a different name; here <code>generate</code>).</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Inference against enumeration</strong>: for a 4-column table, enumerate all assignments, sum the tree's point probabilities for those matching random predicates (equalities and ranges), and require <code>prob</code> to agree to 1e-12. Run it on a <strong>chain</strong> and on a <strong>star</strong> (a hub with three children): the chain alone does not exercise "combine the messages of several children".</li> <li><strong>Structure recovery</strong>: the learned tree must link the columns that were generated dependent.</li> <li><strong>Closed forms</strong>: column-group counts are exact for the pair they cover; the independence model must satisfy <code>|O⋈C'⋈P'⋈S'| = |O⋈C'|·|O⋈P'|·|O⋈S'| / |O|²</code> and <code>|O⋈S'| = |S'|</code> exactly.</li> <li><strong>True cardinalities against a second implementation</strong>: explicit nested-loop enumeration of every join subset on a tiny shop, with and without the optional <code>seg</code> predicate, for row-derived and random predicates.</li> <li><strong>Unbiasedness</strong>: the mean of 300 independently drawn join-sample estimates must be within 6% of the truth for three subsets.</li> <li><strong>Plan DP</strong>: its cost must be at most that of all six dimension orders for 200 random cardinality assignments, and the plan must never contain a cross product.</li> <li><strong>Mutants run against these tests</strong>: replace (not multiply) the child messages in the upward pass (survived the first chain-only test, <strong>killed by the star test</strong>); ignore the shipment multiplicity in the join sample (killed); drop the <code>seg</code> predicate in the truth (killed); forget the smoothing in a parent count (killed); flip the sign of mutual information (killed); drop the FK fan-out from the independence model (survived, <strong>killed by the closed-form test</strong>). A mutant that removed a connectivity guard in the DP survived because the second guard made it equivalent, so the redundant guard was deleted.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>PostgreSQL</strong>: per-column MCV + histogram; <code>CREATE STATISTICS</code> for <code>ndistinct</code>, functional <code>dependencies</code> (the formula measured above) and multi-column <code>mcv</code> lists (PG 12+); <code>eqjoinsel</code> matches the two MCV lists and assumes uniformity for the rest; conjuncts are multiplied unless a matching extended statistic exists; <strong>no cross-table correlation statistics</strong> and no plan-time sampling.</li> <li><strong>SQL Server</strong>: the 2014 "new cardinality estimator" replaced independence with <strong>exponential backoff</strong> for conjunctions and changed join containment assumptions; Query Store and adaptive joins (batch-mode hash join that switches to nested loop at run time) are the safety nets.</li> <li><strong>Oracle</strong>: <strong>dynamic sampling</strong> at parse time when statistics are missing or the predicates are complex, column-group and expression statistics, <strong>SQL plan directives</strong> that remember a misestimate and request extended statistics or sampling on the next run, cardinality feedback.</li> <li><strong>IBM Db2</strong>: column-group statistics and the <strong>LEO</strong> learning optimizer (monitor actual counts, store adjustments), a historic example of feedback.</li> <li><strong>HyPer / Umbra</strong>: evaluate base-table predicates on a materialized <strong>sample</strong> during optimization (the idea behind index-based join sampling); Umbra adds adaptive optimization for very large join queries (Neumann and Radke, SIGMOD 2018).</li> <li><strong>MySQL</strong>: index dives for indexed predicates, optional histograms; no correlation handling.</li> <li><strong>Learned estimators in practice</strong>: widely benchmarked (MSCN, DeepDB, NeuroCard, FLAT, BayesCard; Han et al., VLDB 2022, find that data-driven models are most accurate but have high training and update cost, and that accuracy gains translate unevenly into end-to-end speedups), integrated in research prototypes and a few cloud systems, <strong>not</strong> the default in any major open-source engine.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Independence is not "unbiased", it is biased low.</strong> Correlation in real predicates is positive, so the product underestimates, and underestimates are the dangerous direction (nested loops, tiny hash tables, too few partitions). When you cannot model the correlation, prefer a damped combination (backoff) over the product.</li> <li><strong>Per-table statistics cannot see join-crossing correlation.</strong> The popular customers in this lab all buy the popular products; no single-table histogram contains that fact. Fixing it needs statistics or samples <strong>over the join</strong>.</li> <li><strong>The 0-tuple problem</strong>: a sample with no qualifying row says nothing about how rare the result is. Decide the fallback on purpose (a model, a bound, a constant), never "0 rows", and report how often it triggers.</li> <li><strong>Never trust a q-error table without the plan</strong>: a fix that lowers the median q-error and raises the tail can make plans worse. Report the regret distribution next to q-error, and look at the worst 1%.</li> <li><strong>Do not train on the benchmark's query templates and test on the same templates</strong>: learned estimators look excellent on templates they saw and degrade on new ones and on shifted data; evaluate on held-out templates and after inserting data.</li> <li><strong>Inference time is a budget</strong>: an optimizer asks for 10³–10⁶ estimates per query, mostly for subsets of the same relations; memoize per relation set, batch the model calls, and keep a microsecond-scale fast path.</li> <li><strong>Keep estimates consistent across join orders</strong>: derive the cardinality of a relation set once (the memo group does it) and let every plan inherit it, or two equivalent plans will be costed from two different numbers.</li> <li><strong>NULL join keys never match</strong>: they disappear from <code>|R ⋈ S|</code>; use the non-null fraction, not the row count, in the join formulas.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "How Good Are Query Optimizers, Really?"
+url = "https://www.vldb.org/pvldb/vol9/p204-leis.pdf"

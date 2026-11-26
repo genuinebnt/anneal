@@ -1,0 +1,82 @@
+title = "Bytes"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Data, text and encoding crates"
+chapter_order = 1
+order = 116
+kind = "recipe"
+lede = "Bytes, BytesMut, Buf, BufMut, zero-copy slicing and an incremental length-delimited decoder"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/bytes_buf_buf_mut_framing.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>network protocols</li><li>proxies</li><li>storage formats</li><li>anywhere one buffer is parsed into many owned pieces</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>the buffer type of tokio</li><li>hyper</li><li>axum</li><li>tonic and prost</li><li>TCP framing</li><li>fan-out of one message to many subscribers</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>Bytes::from_static</code></li><li><code>Bytes::copy_from_slice</code></li><li><code>Bytes::from</code></li><li><code>Bytes::slice</code></li><li><code>Bytes::slice_ref</code></li><li><code>Bytes::split_to</code></li><li><code>Bytes::split_off</code></li><li><code>Bytes::truncate</code></li><li><code>Bytes::try_into_mut</code></li><li><code>BytesMut::with_capacity</code></li><li><code>BytesMut::extend_from_slice</code></li><li><code>BytesMut::reserve</code></li><li><code>BytesMut::split</code></li><li><code>BytesMut::split_to</code></li><li><code>BytesMut::split_off</code></li><li><code>BytesMut::freeze</code></li><li><code>BytesMut::unsplit</code></li><li><code>BytesMut::resize</code></li><li><code>Buf::remaining</code></li><li><code>Buf::chunk</code></li><li><code>Buf::advance</code></li><li><code>Buf::has_remaining</code></li><li><code>Buf::get_u8</code></li><li><code>Buf::get_u16</code></li><li><code>Buf::get_u32</code></li><li><code>Buf::get_u32_le</code></li><li><code>Buf::try_get_u32</code></li><li><code>Buf::copy_to_slice</code></li><li><code>Buf::copy_to_bytes</code></li><li><code>Buf::chain</code></li><li><code>Buf::take</code></li><li><code>Buf::reader</code></li><li><code>BufMut::put_u8</code></li><li><code>BufMut::put_u16</code></li><li><code>BufMut::put_u32</code></li><li><code>BufMut::put_u32_le</code></li><li><code>BufMut::put_slice</code></li><li><code>BufMut::limit</code></li><li><code>BufMut::writer</code></li><li><code>BufMut::remaining_mut</code></li><li><code>Bytes::{from_owner, is_unique}</code></li><li><code>BytesMut::{zeroed, try_reclaim, clone}</code></li><li><code>Buf::{get_uint, get_int, get_u64, chunks_vectored}</code></li><li><code>BufMut::{put_uint, put_bytes, put}</code></li><li><code>impl Buf for your own type</code></li><li><code>std::io::Write::write_vectored</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/bytes/1/bytes/" target="_blank" rel="noreferrer">https://docs.rs/bytes/1/bytes/</a></li></ul>
+"""
+
+[[sections]]
+heading = "Crates"
+body = """
+bytes = "1"
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Mental model**
+
+```text
+Bytes    = pointer + length + shared ownership of the allocation. clone() and slice() copy no data.
+```
+
+BytesMut = a uniquely owned **window** of an allocation. split_to() hands out a disjoint window; freeze() makes it a Bytes. Buf      = a read cursor (get&#95;&#42; consume). BufMut = a write cursor (put&#95;&#42; append).
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Share a message with N tasks</td><td><code>Bytes::clone</code></td></tr><tr><td>Keep a field of a parsed message</td><td><code>slice()/split_to (zero copy) ; copy_from_slice to avoid pinning a huge buffer</code></td></tr><tr><td>Read loop</td><td><code>BytesMut, append, decode until "need more", repeat</code></td></tr><tr><td>Maybe-incomplete input</td><td><code>check remaining() BEFORE get_* (they PANIC when short) or use try_get_*</code></td></tr><tr><td>Header + body without copying</td><td><code>a.chain(b)</code></td></tr><tr><td>3, 5, 6, 7 byte integers</td><td><code>get_uint(n) / put_uint(v, n)</code></td></tr><tr><td>Several buffers, one syscall</td><td><code>chunks_vectored + write_vectored, then advance(n) (writes can be partial)</code></td></tr><tr><td>Mmap / pooled memory as Bytes</td><td><code>Bytes::from_owner</code></td></tr><tr><td>Segmented input of your own</td><td><code>impl Buf (remaining, chunk, advance) and get every get_* for free</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Pitfalls"
+body = """
+a 10-byte slice keeps its whole backing allocation alive; get_u32 is big-endian (use get_u32_le for LE); never trust a length prefix (cap it **before** reserving memory).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/bytes/1/bytes/struct.Bytes.html" target="_blank" rel="noreferrer">https://docs.rs/bytes/1/bytes/struct.Bytes.html</a></li><li><a href="https://tokio.rs/tokio/tutorial/framing" target="_blank" rel="noreferrer">https://tokio.rs/tokio/tutorial/framing</a></li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/bytes/1/bytes"
+url = "https://docs.rs/bytes/1/bytes/"
+
+[[sources]]
+title = "docs.rs/bytes/1/bytes/struct.Bytes.html"
+url = "https://docs.rs/bytes/1/bytes/struct.Bytes.html"
+
+[[sources]]
+title = "tokio.rs/tokio/tutorial/framing"
+url = "https://tokio.rs/tokio/tutorial/framing"

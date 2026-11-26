@@ -1,0 +1,59 @@
+title = "Calls and functions"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Bytecode and virtual machines"
+chapter_order = 3
+order = 591
+kind = "guide"
+lede = "Book ch. 24 · Official tests: function/ call/ return/, the limit/ file for stack overflow"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<div class="cb-g-tt"><table><thead><tr><th>Kind</th><th>Input</th><th>Expected</th></tr></thead><tbody><tr><td><span class="cb-g-pill cb-g-dis">bytecode</span></td><td><code>{ var a = 1; print a; }</code></td><td><code>Constant 1 · GetLocal 1 · Print · Pop</code>. Slot 0 now holds the function, so every local shifts by one</td></tr><tr><td><span class="cb-g-pill cb-g-dis">bytecode</span></td><td><code>fun f() { return 1; }</code></td><td>script: <code>Constant &lt;fn f&gt; · DefineGlobal f</code>; f: <code>Constant 1 · Return · Nil · Return</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>fun add(a, b) { return a + b; } print add(1, 2);</code></td><td><code>3</code></td></tr><tr><td><span class="cb-g-pill cb-g-rerr">runtime error</span></td><td><code>fun f() { f(); } f();</code></td><td><code>Stack overflow.</code> then <code>[line 1] in f()</code> repeated, ending with <code>in script</code></td></tr><tr><td><span class="cb-g-pill cb-g-rerr">runtime error</span></td><td><code>fun f() {} f(1);</code></td><td><code>Expected 0 arguments but got 1.</code></td></tr><tr><td><span class="cb-g-pill cb-g-rerr">runtime error</span></td><td><code>"x"();</code></td><td><code>Can only call functions and classes.</code></td></tr></tbody></table></div>
+
+<p>The slot-0 change shifts every local, so all of C4's disassembly snapshots break in one go. Accept them with <code>cargo insta review</code>. This is the kind of deliberate change that snapshots handle well.</p>
+
+<p>The dispatch loop is now the hot path. Keep the current frame's <code>ip</code> in a local variable and write it back only on <code>Call</code> and <code>Return</code>, as the book does in this chapter. Give <code>CallFrame</code> an <code>Rc&lt;Chunk&gt;</code> (or the function's handle plus a cached <code>Rc</code>), so reading the next op doesn't borrow the heap while the loop mutates the stack.</p>
+
+```rust title="crates/clox/src/vm.rs"
+struct CallFrame {
+    closure: ObjRef,
+    chunk: Rc<Chunk>,   // cheap clone on call; avoids borrowing the heap in the loop
+    ip: usize,
+    base: usize,        // index of slot 0 in self.stack
+}
+
+fn run(&mut self) -> Result<(), RuntimeError> {
+    let mut frame = self.frames.pop().expect("script frame");
+    loop {
+        let op = frame.chunk.code[frame.ip];
+        frame.ip += 1;
+        match op {
+            Op::Constant(i) => self.push(frame.chunk.constants[i as usize]),
+            Op::GetLocal(s) => self.push(self.stack[frame.base + s as usize]),
+            Op::JumpIfFalse(d) => if self.peek(0).is_falsey() { frame.ip += d as usize },
+            Op::Loop(d) => frame.ip -= d as usize + 1,
+            Op::Call(argc) => {
+                let callee = self.peek(argc as usize);
+                if let Some(next) = self.call_value(callee, argc, &frame)? {
+                    self.frames.push(std::mem::replace(&mut frame, next));
+                }
+            }
+            Op::Return => {
+                let result = self.pop();
+                self.close_upvalues(frame.base);
+                self.stack.truncate(frame.base);
+                let Some(caller) = self.frames.pop() else { return Ok(()) };
+                self.push(result);
+                frame = caller;
+            }
+            // …
+        }
+    }
+}
+```
+
+<p>Build the stack trace before you reset the stack. Walk the frames from the innermost, printing <code>[line N] in f()</code> for functions and <code>[line N] in script</code> for the top level. The <code>frame</code> held in the local variable is the innermost one, so include it first. Leaving it out is an easy bug to write.</p>
+"""

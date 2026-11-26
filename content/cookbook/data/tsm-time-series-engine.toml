@@ -1,0 +1,62 @@
+title = "A TSM/Prometheus-TSDB-style time-series engine"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 432
+kind = "recipe"
+lede = "Tag index with postings, WAL + head, immutable blocks, compaction, retention, tombstones, downsampling queries."
+level = "advanced"
+code = ["examples/database/tsm_time_series_engine.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>understanding how InfluxDB (TSM)</li><li>Prometheus (TSDB) and VictoriaMetrics-like engines ingest</li><li>index</li><li>compact and query metrics</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>metrics backends (Prometheus, InfluxDB, M3, Mimir/Cortex ingesters)</li><li>observability platforms where every unique label set is a "series"</li><li>cardinality limits (InfluxDB max-series-per-database, Prometheus series limits)</li><li>retention-by-dropping-blocks. Course: CMU Database Group time-series talks</li><li>Fall 2017 (InfluxDB storage engine)</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+samples (timestamp, f64) belong to a **series** identified by a sorted label set (measurement is the label `__name__`). Reads select series by label matchers, then read their samples in a time range, then optionally downsample by a step with an aggregate.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Index</div><div class="cb-g-says"><p>Every <code>(label, value)</code> has a sorted <strong>postings</strong> list of series ids. <code>=</code> is one list; <code>=~</code>/<code>!=</code>/<code>!~</code> evaluate the predicate on the values of that label and union/complement lists (a series lacking the label counts as value "").</p><p>Several matchers <strong>intersect</strong> their lists with a <strong>galloping</strong> (exponential + binary) search so a short list against a huge one costs O(small * log big), not O(big).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Write path</div><div class="cb-g-says"><p>Validate (floor, series limit) -&gt; append <strong>one</strong> checksummed WAL record (new series definitions + samples) -&gt; insert into the <strong>head</strong> (a per-series ordered map; same timestamp = last write wins; out-of-order is simply accepted, and counted).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Flush</div><div class="cb-g-says"><p>Head samples older than <code>upto</code> become an immutable <strong>block</strong> (per series a compressed chunk: delta-of-delta varint timestamps, byte-trimmed XOR values), then the WAL is rewritten from what remains in the head. A flush after old data arrived makes <strong>overlapping</strong> blocks; newer block id wins on a conflicting timestamp.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Compaction ("vertical")</div><div class="cb-g-says"><p>Connected groups of time-overlapping blocks are merged into one new block that records its <code>parents</code>; tombstones and data below the retention floor are applied physically.</p><p>Publishing = add the new block, then remove parents; a crash between leaves both, and recovery deletes any block that is a parent of another (Prometheus does the same via <code>parents</code> in meta.json).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Retention</div><div class="cb-g-says"><p>A durable <code>floor</code>; whole blocks below it are dropped, the rest are filtered at read and trimmed at the next compaction; writes below the floor are rejected. <strong>Tombstones</strong>: <code>delete</code> removes head samples now and records (series, range) on each overlapping block (not on blocks flushed later, so later writes in the range are visible).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Query</div><div class="cb-g-says"><p><code>query_raw</code> skips blocks by [mint,maxt]; <code>downsample</code> buckets by step and aggregates (sum/avg/min/max/count/last/rate; rate sums increases and treats a drop as a counter <strong>reset</strong>).</p><p><strong>Staleness</strong>: a special NaN bit pattern (Prometheus's) marks "series ended"; aggregates ignore it and <code>last</code> returns nothing when the newest sample in a bucket is stale; <code>eval_at</code> implements the lookback rule.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Cardinality</div><div class="cb-g-says"><p>Series count multiplies across label dimensions; a high-cardinality label (user id, request id) makes the index (not the samples) the bottleneck. The demo prints growth and enforces a series limit.</p><p><strong>Tests</strong>: 2000 random workloads of write/query/flush/compact/delete/retention/crash+recover (clean crash, torn WAL tail, crash after a flush wrote its block, crash after a compaction wrote its block) checked against a brute-force oracle after every op batch; no acknowledged sample is ever lost.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Prometheus TSDB blog series by Ganesh Vernekar  <https://ganeshvernekar.com/blog/prometheus-tsdb-the-head-block/>
+
+Prometheus storage docs  <https://prometheus.io/docs/prometheus/latest/storage/>
+
+InfluxDB 1.x storage engine (TSM, WAL, cache)  <https://docs.influxdata.com/influxdb/v1/concepts/storage_engine/>
+
+Pelkonen et al., "Gorilla" (VLDB 2015)  <https://www.vldb.org/pvldb/vol8/p1816-teller.pdf>
+"""
+
+[[sources]]
+title = "ganeshvernekar.com/blog/prometheus-tsdb-the-head-block"
+url = "https://ganeshvernekar.com/blog/prometheus-tsdb-the-head-block/"
+
+[[sources]]
+title = "prometheus.io/docs/prometheus/latest/storage"
+url = "https://prometheus.io/docs/prometheus/latest/storage/"
+
+[[sources]]
+title = "docs.influxdata.com/influxdb/v1/concepts/storage_engine"
+url = "https://docs.influxdata.com/influxdb/v1/concepts/storage_engine/"
+
+[[sources]]
+title = "vldb.org/pvldb/vol8/p1816-teller.pdf"
+url = "https://www.vldb.org/pvldb/vol8/p1816-teller.pdf"

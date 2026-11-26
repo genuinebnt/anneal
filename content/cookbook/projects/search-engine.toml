@@ -1,0 +1,60 @@
+title = "A mini full-text search engine"
+module = "Complete projects"
+module_order = 13
+chapter = "Capstones"
+chapter_order = 1
+order = 658
+kind = "capstone"
+lede = "Positional postings, BM25, boolean/phrase/wildcard queries, segments"
+level = "capstone"
+code = ["examples/capstones/search_engine.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>site/log/code search</li><li>embedded search in CLIs and services</li><li>learning how Lucene/tantivy work</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+documents are tokenised and written into immutable **segments**. Each segment holds (1) an inverted index whose positional postings are delta + varint compressed byte strings, (2) a trigram index over the raw lowercase text for substring and `*wildcard*` queries, and (3) per-document lengths.
+
+An `Index` is a list of segments plus global statistics, so BM25 gives the same answer however documents are split across segments.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+delta coding turns large, increasing ids into small numbers, and varints store small numbers in one byte, so postings shrink several-fold versus `Vec<u32>`. Immutable segments make incremental indexing cheap (build a new small segment, never rewrite old ones) and a background **merge** keeps the segment count, and query cost, bounded.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+a boolean query string is parsed (`NOT` > `AND` > `OR`, parentheses, "quoted phrases", `*wildcards*`) into an `Expr`; evaluation yields a sorted doc set (phrases check consecutive positions, wildcards use trigram filter-then-verify); matches are scored with BM25 over the positive terms and the best k are kept in a min-heap.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>product/site search (Lucene, Elasticsearch, tantivy)</li><li>log search with substring filters (trigram indexes as in Google Code Search)</li><li><strong>Ide</strong> "find in files"</li><li>email/notes apps</li><li>autocomplete backends</li><li>patterns: inverted index</li><li>posting compression</li><li>LSM-style immutable segments + merge</li><li>filter-then-verify</li><li>top-k heap</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://github.com/quickwit-oss/tantivy>, <https://swtch.com/~rsc/regexp/regexp4.html>, <https://en.wikipedia.org/wiki/Okapi_BM25>
+"""
+
+[[sources]]
+title = "github.com/quickwit-oss/tantivy"
+url = "https://github.com/quickwit-oss/tantivy"
+
+[[sources]]
+title = "swtch.com/~rsc/regexp/regexp4.html"
+url = "https://swtch.com/~rsc/regexp/regexp4.html"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Okapi_BM25"
+url = "https://en.wikipedia.org/wiki/Okapi_BM25"

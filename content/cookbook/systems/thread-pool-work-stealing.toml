@@ -1,0 +1,62 @@
+title = "Thread pool work stealing"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Threads, locks and channels"
+chapter_order = 1
+order = 244
+kind = "recipe"
+lede = "a work-stealing thread pool on crossbeam-deque vs a single shared-queue pool"
+level = "advanced"
+code = ["examples/concurrency/thread_pool_work_stealing.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+CPU-bound fork-join parallelism, understanding rayon/tokio schedulers.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+each worker owns a `crossbeam_deque::Worker` (LIFO for its own jobs = cache-hot, depth-first), a global `Injector` takes jobs from outside threads, and idle workers `Stealer::steal` from the **front** of other workers' deques (oldest = biggest subtrees of a recursive computation). Jobs are `Box<dyn FnOnce() + Send>`.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+a single `Mutex<VecDeque>` is one contention point every spawn/pop crosses; with many tiny recursive jobs the lock dominates. In the stealing pool the common path (push/pop on your own deque) touches no shared state.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+- a worker's deque lives in a thread-local, so a job that calls `spawn` pushes to its own deque (no lock);
+- `Batch::join` **helps**: while its jobs are pending it runs other jobs instead of blocking, so recursive fork-join cannot deadlock the pool even with fewer threads than the recursion depth;
+- idle workers sleep on a condvar using an epoch counter (spawn bumps the epoch, sleeper re-checks it under the lock: no lost wakeups; a 100 ms timed wait is only a safety net);
+- panics: every job runs under `catch_unwind`; a `Batch` records the message and `join` returns `Err(messages)`;
+- Drop sets `shutdown`, wakes everyone and joins; workers drain remaining jobs before exiting. Both pools implement the same tiny `Exec` trait so the identical parallel fib / merge sort runs on each.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>data-parallel CPU work (sorting, parsing, image tiles, parallel search)</li><li>the executors under rayon and tokio's multi-thread runtime (per-worker queues + stealing + a global injection queue)</li><li>game-engine job systems</li><li>build tools. For async I/O use tokio</li><li>for CPU-bound data parallelism use rayon</li><li>shown below</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://github.com/rayon-rs/rayon> and <https://docs.rs/crossbeam-deque> and <https://github.com/crossbeam-rs/crossbeam>
+"""
+
+[[sources]]
+title = "github.com/rayon-rs/rayon"
+url = "https://github.com/rayon-rs/rayon"
+
+[[sources]]
+title = "docs.rs/crossbeam-deque"
+url = "https://docs.rs/crossbeam-deque"
+
+[[sources]]
+title = "github.com/crossbeam-rs/crossbeam"
+url = "https://github.com/crossbeam-rs/crossbeam"

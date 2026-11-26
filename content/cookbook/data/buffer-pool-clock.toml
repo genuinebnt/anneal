@@ -1,0 +1,48 @@
+title = "A buffer pool"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 331
+kind = "recipe"
+lede = "Page frames, pin counts with an RAII guard, dirty write-back, CLOCK / LRU / LRU-2."
+level = "advanced"
+code = ["examples/database/buffer_pool_clock.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>database storage engines</li><li>file/page caches</li><li>anything with "RAM is a cache of a bigger slower store"</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+A DBMS reads and writes fixed-size **pages**. The buffer pool owns a fixed number of in-memory **frames** and a **page table** (`page_id -> frame`). `fetch(page_id)` returns a `PageGuard`: a hit pins the frame; a miss picks a free frame or asks the **replacement policy** for a victim, writes the victim back to disk if its **dirty** bit is set, then reads the wanted page.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Pin count</div><div class="cb-g-says"><p>A pinned page is in use and must never be evicted. The guard's <code>Drop</code> unpins, so a forgotten unpin (a leak that slowly makes the pool unevictable) is impossible by construction. If every frame is pinned, <code>fetch</code> returns <code>None</code>.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Dirty bit</div><div class="cb-g-says"><p><code>with_data_mut</code> sets it; eviction and <code>flush_all</code> write the page back first (write-back, not write-through). A real engine also needs the write-ahead log flushed up to the page's LSN before the page itself; omitted here.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Policies</div><div class="cb-g-says"><p>Behind a trait: plain LRU (the baseline), <strong>clock</strong> (second chance: a reference bit per frame and a sweeping hand, an O(1) approximation of LRU used where exact recency lists are too costly), and LRU-2 (O'Neil et al.: evict the page whose 2nd-most-recent access is oldest; a page touched only once has infinite distance and goes first).</p><p><strong>Sequential scans</strong> touch each page once, so LRU/CLOCK let a big scan flush the hot set ("cache pollution") while LRU-2 keeps it.</p><p>Simplification: real LRU-K retains history for recently evicted pages; here a frame's history is dropped on eviction. 2Q, ARC and "scan-resistant" ring buffers (PostgreSQL uses a small ring for big sequential scans) attack the same problem.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>The simulated <code>Disk</code> is a <code>Vec</code> of pages with read/write counters, so the test can assert exactly what was persisted.</p></div></div></div>
+
+Checked after **every** operation: no pinned page is evictable, page table &lt;-> frames agree, free frames are empty, the policy's evictable set equals {resident, unpinned frames}, and every **clean** resident page equals its disk copy (so dirty pages really are persisted before their frame is reused).
+
+Reads verify data against an expected-version model, so a lost write-back would show up as a wrong value.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+the buffer manager of relational databases (PostgreSQL's shared buffers use a clock-sweep variant; InnoDB has a buffer pool with an LRU variant), embedded stores, OS page caches, and caches of disk blocks in file systems.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://www.cs.cmu.edu/~15445/> (CMU database course, buffer pool project) and <https://dl.acm.org/doi/10.1145/170036.170081> (the LRU-K paper)
+"""
+
+[[sources]]
+title = "cs.cmu.edu/~15445"
+url = "https://www.cs.cmu.edu/~15445/"
+
+[[sources]]
+title = "dl.acm.org/doi/10.1145/170036.170081"
+url = "https://dl.acm.org/doi/10.1145/170036.170081"

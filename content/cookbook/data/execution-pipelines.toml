@@ -1,0 +1,345 @@
+title = "Execution pipelines"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 365
+kind = "guide"
+lede = "15-721 S2024 lectures #4–5 · processing models · push vs pull · exchange operators · expression evaluation · adaptive execution · measured: parallel GROUP BY strategies, adaptive predicate order, late materialization"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Three levers for a fast query</strong>: <strong>reduce instruction count</strong> (specialize the code), <strong>reduce cycles per instruction</strong> (locality, fewer cache misses and stalls), <strong>parallelize</strong>. The lecture's (unscientific) top three techniques: <strong>data parallelism</strong> (vectorization/SIMD), <strong>task parallelism</strong> (multi-threading), <strong>code specialization</strong> (compilation or pre-compiled parameters).</li> <li><strong>Vocabulary</strong>: a plan is a <strong>DAG of operators</strong>; an <strong>operator instance</strong> is one invocation on a segment of data; a <strong>task</strong> is a sequence of operator instances; a <strong>task set</strong> is the executable tasks of one <strong>pipeline</strong>.</li> <li><strong>Why X100 mattered</strong>: CPUs are superscalar and pipelined, so <strong>dependencies</strong> and <strong>branch mispredictions</strong> (a selection scan) and <strong>excess instructions from type generality</strong> waste cycles; the fix is vectorized primitives processing arrays in tight loops.</li> <li><strong>Processing models</strong>: <strong>iterator / Volcano</strong> (<code>next()</code> returns one tuple; general and pipelined, but joins, subqueries and <code>ORDER BY</code> block, and per-tuple calls dominate); <strong>materialization</strong> (each operator consumes all input and emits all output; low coordination, good for OLTP, bad for big intermediates); <strong>vectorized</strong> (<code>next()</code> returns a <strong>batch</strong>; far fewer calls, SIMD-friendly: the OLAP default).</li> <li><strong>Direction</strong>: <strong>pull</strong> (top-down, tuples cross function calls) vs <strong>push</strong> (bottom-up from the leaves; operators in a pipeline can be <strong>fused into one loop</strong>, which keeps data in registers and caches).</li> <li><strong>Filter representation</strong> inside a batch: <strong>selection vector</strong> (dense sorted list of valid ids, pre-allocated at the max size) or <strong>bitmap</strong> (positional, usable directly as a SIMD mask).</li> <li><strong>Parallelism</strong>: <strong>inter-query</strong> (scheduler: FIFO or priorities) and <strong>intra-query</strong>: <strong>inter-operator</strong> (vertical, pipelined) and <strong>intra-operator</strong> (horizontal: the same operator on disjoint data). Horizontal parallelism is wired with <strong>exchange operators</strong>: <strong>Gather</strong> (N→1), <strong>Distribute</strong> (1→N), <strong>Repartition/Shuffle</strong> (M→N).</li> <li><strong>Engines as libraries</strong>: DataFusion, Intel OAP, Polars, <strong>Velox</strong> (single-node C++ library: no parser, catalog or optimizer; physical plan DAG in, vectorized and adaptive execution, Arrow-compatible, storage connectors, a function API).</li> <li><strong>Operator output</strong>: <strong>early materialization</strong> builds full output tuples (natural for row stores); <strong>late materialization</strong> passes ids/extra columns and fetches the rest later (natural for column stores, usually better for OLAP).</li> <li><strong>Intermediate representation</strong> should be movable between tasks <strong>without (de)serialization</strong> and <strong>zero-copy</strong> shareable: <strong>Apache Arrow</strong> (columnar, fixed-size, offsets for variable-length data; Velox adds Umbra-style 16-byte strings: 4-byte size, 4-byte prefix, 8-byte pointer).</li> <li><strong>Expression evaluation</strong>: trees are CPU-hostile when interpreted per row; flatten them with <strong>constant folding</strong>, <strong>common-subexpression elimination</strong>, vectorized evaluation, or generated code (experimental in Velox).</li> <li><strong>Adaptive execution</strong> (few systems do it; it's hard): Velox reorders <strong>predicates</strong> by selectivity and cost, <strong>prefetches columns</strong> asynchronously, takes <strong>not-NULL fast paths</strong>, elides ASCII/UTF-8 checks, and reuses buffers. A good engine is only as good as the plan it receives; adaptivity patches bad estimates at run time.</li> </ul>
+"""
+
+[[sections]]
+heading = "Three experiments"
+body = """
+<p><a href="/cookbook/p/query-compilation-and-code-generation">A15</a> compared engine styles and <a href="/cookbook/p/vectorized-execution-with-simd">A14</a> selection kernels; this section measures what sits <em>around</em> them in a pipeline, with the same discipline (each strategy checked against a reference first).</p>
+
+<ol> <li><strong>Parallel GROUP BY and the exchange operator</strong>: <code>SELECT key, SUM(v), COUNT(*) GROUP BY key</code> over 32 M rows, 8 threads, as group cardinality grows from 16 to 4 M. Three plans: <strong>(A) shared table</strong> updated with atomics; <strong>(B) two-phase</strong>: each thread pre-aggregates into small tables, partitioned by key, then thread <em>p</em> merges partition <em>p</em> from every thread (exchange traffic = <em>groups</em>); <strong>(C) repartition</strong>: a shuffle exchange sends every <em>row</em> to the thread that owns its key, which then aggregates alone.</li> <li><strong>Adaptive conjunct order</strong>: <code>A AND B AND C</code> with a selection vector between predicates. A is one comparison, B a modulo, C a six-round mixing function (a stand-in for a string function, regex or UDF). Halfway through the data the selectivities of A and B <strong>swap</strong> (A 2%→90%, B 90%→2%; C stays 90%). Policies: all six fixed orders, and an <strong>adaptive</strong> one that samples 512 rows of every 8th batch, times each predicate and sorts by <em>cost per tuple eliminated</em> (<code>ns / (1 − selectivity)</code>).</li> <li><strong>Early vs late materialization</strong>: filter (50% pass) → semi-join (passes <em>s2</em>) → sum of eight 8-byte payload columns. Early gathers the payload right after the first filter and compacts the wide rows after the join; late carries only row ids and gathers the payload once, for the survivors.</li> </ol>
+
+:::deeper Reference: group-by hash table, three parallel aggregation plans, adaptive conjunction over selection vectors, early and late materialization
+```rust title="src/exec/pipeline.rs"
+//! Pipeline-level execution techniques from the "Query Execution & Processing" lectures:
+//!  1. parallel GROUP BY: shared atomic table vs two-phase (local + merge) vs repartition (exchange) aggregation
+//!  2. adaptive conjunct ordering over selection vectors
+//!  3. early vs late materialization of a wide projection
+use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering::Relaxed};
+use std::time::Instant;
+
+pub const EMPTY: u32 = u32::MAX; // keys must be < u32::MAX
+pub const BATCH: usize = 4096;
+
+pub struct Rng(pub u64);
+impl Rng {
+    pub fn next(&mut self, m: u64) -> u64 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; self.0 % m }
+}
+
+#[inline] fn slot(k: u32, bits: u32) -> usize { ((k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> (64 - bits)) as usize }
+/// Which exchange partition a key goes to (a different mix than the table hash so partitions stay well spread inside tables).
+#[inline] fn part(k: u32, parts: usize) -> usize { (((k as u64).wrapping_mul(0xD6E8_FEB8_6659_FD93) >> 32) as usize) % parts }
+
+// ------------------------------------------------------------------------------------------ 1. aggregation
+/// Open-addressing group-by table: SUM(v), COUNT(*) per u32 key. Grows at 50% load.
+pub struct AggTable { keys: Vec<u32>, sums: Vec<i64>, cnts: Vec<u64>, bits: u32, len: usize }
+impl AggTable {
+    pub fn new() -> Self { Self::with_bits(4) }
+    /// Sized for `n` entries at <= 50% load. Merging one table into another MUST presize: see `agg_two_phase`.
+    pub fn with_capacity(n: usize) -> Self { Self::with_bits((n * 2).next_power_of_two().trailing_zeros().max(4)) }
+    pub fn len(&self) -> usize { self.len }
+    fn with_bits(bits: u32) -> Self { let n = 1usize << bits; AggTable { keys: vec![EMPTY; n], sums: vec![0; n], cnts: vec![0; n], bits, len: 0 } }
+    pub fn add(&mut self, k: u32, sum: i64, cnt: u64) {
+        if (self.len + 1) * 2 > self.keys.len() { self.grow(); }
+        let mask = self.keys.len() - 1;
+        let mut i = slot(k, self.bits);
+        loop {
+            if self.keys[i] == k { break; }
+            if self.keys[i] == EMPTY { self.keys[i] = k; self.len += 1; break; }
+            i = (i + 1) & mask;
+        }
+        self.sums[i] += sum;
+        self.cnts[i] += cnt;
+    }
+    fn grow(&mut self) {
+        let mut bigger = Self::with_bits(self.bits + 1);
+        for (k, s, c) in self.iter() { bigger.add(k, s, c); }
+        *self = bigger;
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (u32, i64, u64)> + '_ {
+        (0..self.keys.len()).filter(|&i| self.keys[i] != EMPTY).map(|i| (self.keys[i], self.sums[i], self.cnts[i]))
+    }
+}
+
+fn chunks<'a, T>(v: &'a [T], threads: usize) -> impl Iterator<Item = &'a [T]> { v.chunks(v.len().div_ceil(threads).max(1)) }
+
+/// Strategy A: one shared table updated with atomics. No merge, but every update is an atomic RMW on shared memory.
+pub fn agg_shared(keys: &[u32], vals: &[i64], threads: usize) -> Vec<(u32, i64, u64)> {
+    let upper = keys.iter().copied().max().map_or(0, |m| m as usize + 1);
+    let bits = (upper * 2).next_power_of_two().trailing_zeros().max(4);
+    let n = 1usize << bits;
+    let tk: Vec<AtomicU32> = (0..n).map(|_| AtomicU32::new(EMPTY)).collect();
+    let ts: Vec<AtomicI64> = (0..n).map(|_| AtomicI64::new(0)).collect();
+    let tc: Vec<AtomicU64> = (0..n).map(|_| AtomicU64::new(0)).collect();
+    std::thread::scope(|s| {
+        for (kc, vc) in chunks(keys, threads).zip(chunks(vals, threads)) {
+            let (tk, ts, tc) = (&tk, &ts, &tc);
+            s.spawn(move || for (&k, &v) in kc.iter().zip(vc) {
+                let mut i = slot(k, bits);
+                loop {
+                    let cur = tk[i].load(Relaxed);
+                    if cur == k { break; }
+                    if cur == EMPTY { match tk[i].compare_exchange(EMPTY, k, Relaxed, Relaxed) { Ok(_) => break, Err(x) if x == k => break, Err(_) => {} } }
+                    i = (i + 1) & (n - 1);
+                }
+                ts[i].fetch_add(v, Relaxed);
+                tc[i].fetch_add(1, Relaxed);
+            });
+        }
+    });
+    (0..n).filter(|&i| tk[i].load(Relaxed) != EMPTY).map(|i| (tk[i].load(Relaxed), ts[i].load(Relaxed), tc[i].load(Relaxed))).collect()
+}
+
+/// Strategy B: two-phase. Phase 1: each thread pre-aggregates its rows into one small table per destination partition.
+/// Phase 2: thread p merges partition p of every thread's tables. Exchange traffic = number of *groups*, not rows.
+pub fn agg_two_phase(keys: &[u32], vals: &[i64], threads: usize) -> Vec<(u32, i64, u64)> {
+    let local: Vec<Vec<AggTable>> = std::thread::scope(|s| {
+        let hs: Vec<_> = chunks(keys, threads).zip(chunks(vals, threads)).map(|(kc, vc)| s.spawn(move || {
+            let mut ps: Vec<AggTable> = (0..threads).map(|_| AggTable::new()).collect();
+            for (&k, &v) in kc.iter().zip(vc) { ps[part(k, threads)].add(k, v, 1); }
+            ps
+        })).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    std::thread::scope(|s| {
+        let local = &local;
+        let hs: Vec<_> = (0..threads).map(|p| s.spawn(move || {
+            // Presize: `iter()` yields entries in hash order, and inserting a hash-ordered stream into a table that is
+            // still small piles every key into one corner of it (linear probing then degrades to O(n^2)).
+            let mut m = AggTable::with_capacity(local.iter().map(|t| t[p].len()).sum());
+            for t in local { for (k, sum, c) in t[p].iter() { m.add(k, sum, c); } }
+            m.iter().collect::<Vec<_>>()
+        })).collect();
+        hs.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    })
+}
+
+/// Strategy C: repartition (shuffle exchange) first, aggregate after. Every *row* crosses the exchange,
+/// but each thread then owns its groups exclusively: no pre-aggregation tables, no merge.
+pub fn agg_repartition(keys: &[u32], vals: &[i64], threads: usize) -> Vec<(u32, i64, u64)> {
+    let routed: Vec<Vec<Vec<(u32, i64)>>> = std::thread::scope(|s| {
+        let hs: Vec<_> = chunks(keys, threads).zip(chunks(vals, threads)).map(|(kc, vc)| s.spawn(move || {
+            let mut out: Vec<Vec<(u32, i64)>> = (0..threads).map(|_| Vec::with_capacity(kc.len() / threads + 16)).collect();
+            for (&k, &v) in kc.iter().zip(vc) { out[part(k, threads)].push((k, v)); }
+            out
+        })).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    std::thread::scope(|s| {
+        let routed = &routed;
+        let hs: Vec<_> = (0..threads).map(|p| s.spawn(move || {
+            let mut m = AggTable::new();
+            for from in routed { for &(k, v) in &from[p] { m.add(k, v, 1); } }
+            m.iter().collect::<Vec<_>>()
+        })).collect();
+        hs.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    })
+}
+
+// ------------------------------------------------------------------------------------------ 2. adaptive predicate order
+pub struct Cols<'a> { pub a: &'a [u32], pub b: &'a [u32], pub c: &'a [u32] }
+
+/// Three conjuncts with very different costs: A and B are one comparison / one modulo; C is a 6-round mixing function
+/// (a stand-in for a regex, a UDF or a string function).
+#[derive(Clone, Copy, Debug)]
+pub enum Pred { A, B, C }
+pub const THR_A: u32 = 20;       // a in [0, 1000)
+pub const THR_B: u32 = 20;       // (b ^ b >> 3) % 100
+pub const THR_C: u32 = 900;      // mix(c) % 1000
+
+#[inline] pub fn mix(x: u32) -> u32 {
+    let mut v = x as u64 | 1;
+    for _ in 0..6 { v = v.wrapping_mul(0x9E37_79B9_7F4A_7C15); v ^= v >> 29; }
+    ((v >> 20) % 1000) as u32
+}
+#[inline] fn passes(p: Pred, c: &Cols, i: usize) -> bool {
+    match p { Pred::A => c.a[i] < THR_A, Pred::B => (c.b[i] ^ (c.b[i] >> 3)) % 100 < THR_B, Pred::C => mix(c.c[i]) < THR_C }
+}
+
+/// Keep the rows of `sel` that satisfy `p`; branch-free append into `out`.
+fn filter(p: Pred, c: &Cols, sel: &[u32], out: &mut Vec<u32>) {
+    out.clear(); out.resize(sel.len(), 0);
+    let mut k = 0;
+    match p {
+        Pred::A => for &i in sel { out[k] = i; k += passes(Pred::A, c, i as usize) as usize; },
+        Pred::B => for &i in sel { out[k] = i; k += passes(Pred::B, c, i as usize) as usize; },
+        Pred::C => for &i in sel { out[k] = i; k += passes(Pred::C, c, i as usize) as usize; },
+    }
+    out.truncate(k);
+}
+
+#[derive(Clone, Copy)] pub enum Policy { Fixed([Pred; 3]), Adaptive }
+
+#[derive(Clone, Copy, Default)]
+struct Stat { ns_per_row: f64, sel: f64, seen: bool }
+
+/// Evaluate A AND B AND C over all rows. Returns (rows passing, sum of their row ids, number of times the order changed).
+pub fn run_conjunction(c: &Cols, policy: Policy) -> (u64, u64, u32) {
+    let n = c.a.len();
+    let mut order = match policy { Policy::Fixed(o) => o, Policy::Adaptive => [Pred::A, Pred::B, Pred::C] };
+    let (mut stats, mut changes) = ([Stat::default(); 3], 0u32);
+    let (mut sel, mut tmp, mut tmp2): (Vec<u32>, Vec<u32>, Vec<u32>) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut count, mut sum) = (0u64, 0u64);
+    for (bi, start) in (0..n).step_by(BATCH).enumerate() {
+        let end = (start + BATCH).min(n);
+        if let Policy::Adaptive = policy {
+            if bi % 8 == 0 {
+                // sample: run every predicate on the first 512 rows of this batch, unconditionally, and time it
+                let probe: Vec<u32> = (start as u32..(start + 512).min(end) as u32).collect();
+                for (j, p) in [Pred::A, Pred::B, Pred::C].into_iter().enumerate() {
+                    let t = Instant::now();
+                    filter(p, c, &probe, &mut tmp);
+                    let ns = t.elapsed().as_nanos() as f64 / probe.len().max(1) as f64;
+                    let sel_now = tmp.len() as f64 / probe.len().max(1) as f64;
+                    let s = &mut stats[j];
+                    if s.seen { s.ns_per_row = 0.5 * s.ns_per_row + 0.5 * ns; s.sel = 0.5 * s.sel + 0.5 * sel_now; } else { *s = Stat { ns_per_row: ns, sel: sel_now, seen: true }; }
+                }
+                // rank = cost per tuple eliminated: cheapest elimination first
+                let rank = |j: usize| stats[j].ns_per_row / (1.0 - stats[j].sel).max(1e-3);
+                let mut idx = [0usize, 1, 2];
+                idx.sort_by(|&x, &y| rank(x).partial_cmp(&rank(y)).unwrap());
+                let new = idx.map(|j| [Pred::A, Pred::B, Pred::C][j]);
+                if new.map(|p| p as u8) != order.map(|p| p as u8) { changes += 1; }
+                order = new;
+            }
+        }
+        sel.clear(); sel.extend(start as u32..end as u32);
+        filter(order[0], c, &sel, &mut tmp);
+        filter(order[1], c, &tmp, &mut tmp2);
+        filter(order[2], c, &tmp2, &mut sel);
+        count += sel.len() as u64;
+        sum += sel.iter().map(|&i| i as u64).sum::<u64>();
+    }
+    (count, sum, changes)
+}
+
+// ------------------------------------------------------------------------------------------ 3. late materialization
+pub const PAYLOAD: usize = 8;
+pub struct Wide { pub filt: Vec<u32>, pub key: Vec<u32>, pub payload: Vec<Vec<i64>> }
+
+/// SELECT sum(w1 + ... + w8) FROM t WHERE filt < thr AND dim[key]  (a semi-join against a bitmap/array `dim`).
+/// Early: gather the payload columns right after the first filter, then filter and re-compact the wide rows.
+pub fn early(t: &Wide, thr: u32, dim: &[bool]) -> (u64, i64) {
+    let n = t.filt.len();
+    let (mut count, mut total) = (0u64, 0i64);
+    let mut sel: Vec<u32> = Vec::with_capacity(BATCH);
+    for start in (0..n).step_by(BATCH) {
+        let end = (start + BATCH).min(n);
+        sel.clear();
+        sel.resize(end - start, 0);
+        let mut k = 0;
+        for i in start..end { sel[k] = i as u32; k += (t.filt[i] < thr) as usize; }
+        sel.truncate(k);
+        // materialize the wide intermediate: key + 8 payload columns for every row that passed filter 1
+        let keys: Vec<u32> = sel.iter().map(|&i| t.key[i as usize]).collect();
+        let cols: Vec<Vec<i64>> = (0..PAYLOAD).map(|c| sel.iter().map(|&i| t.payload[c][i as usize]).collect()).collect();
+        // filter 2 and compact every column of the wide intermediate
+        let keep: Vec<usize> = (0..keys.len()).filter(|&j| dim[keys[j] as usize]).collect();
+        for col in &cols { for &j in &keep { total = total.wrapping_add(col[j]); } }
+        count += keep.len() as u64;
+    }
+    (count, total)
+}
+
+/// Late: carry only row ids through both filters, then fetch the payload once for the survivors.
+pub fn late(t: &Wide, thr: u32, dim: &[bool]) -> (u64, i64) {
+    let n = t.filt.len();
+    let (mut count, mut total) = (0u64, 0i64);
+    let mut sel: Vec<u32> = Vec::with_capacity(BATCH);
+    for start in (0..n).step_by(BATCH) {
+        let end = (start + BATCH).min(n);
+        sel.clear();
+        sel.resize(end - start, 0);
+        let mut k = 0;
+        for i in start..end { sel[k] = i as u32; k += (t.filt[i] < thr) as usize; }
+        sel.truncate(k);
+        let mut k = 0;
+        for j in 0..sel.len() { let i = sel[j]; sel[k] = i; k += dim[t.key[i as usize] as usize] as usize; }
+        sel.truncate(k);
+        for col in &t.payload { for &i in &sel { total = total.wrapping_add(col[i as usize]); } }
+        count += sel.len() as u64;
+    }
+    (count, total)
+}
+```
+:::
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><code>aggregation_strategies_match_the_reference</code>: all three plans equal a <code>BTreeMap</code> aggregation for n ∈ {0, 1, 100, 50 000} × groups ∈ {1, 7, 1 000, 100 000} × threads ∈ {1, 3, 8} (negative values, empty input, a single group, more threads than rows).</li> <li><code>every_order_and_the_adaptive_policy_select_the_same_rows</code>: all six fixed orders <strong>and</strong> the adaptive policy return exactly the rows a plain scalar loop selects (count and sum of row ids), on data generated by rejection sampling so each predicate has a requested selectivity.</li> <li><code>early_and_late_materialization_agree</code>: empty input, one row, semi-join passing nothing, passing everything, and a batch size that leaves a partial last batch.</li> <li>The benchmark asserts equality of the results of every strategy before printing a number.</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+```text title="parallel GROUP BY, 32M rows, 8 threads (ms)"
+    groups   1 thread     shared    two-phase  repartition  2-phase entries
+        16         77       1481           10           23            0.00M
+      4096        100        395           14           17            0.03M
+    262144        165        276           84           25            2.10M
+   4194304        552        104          389          113           32.00M
+```
+
+<p>(<em>2-phase entries</em> is the upper bound on the number of partial results crossing the exchange: groups × 8 threads, capped by rows; repartition always moves all 32 M rows.)</p>
+
+```text title="adaptive conjunct order, 2 x 8M rows"
+order          phase 1 ms   phase 2 ms     total ms
+ABC                     5            8           12
+BAC                     8            5           13
+ACB                     4           17           21
+BCA                    17            5           22
+CAB                    15           18           33
+CBA                    18           16           34
+adaptive                                         10   (order changed 3 times)
+```
+
+```text title="late vs early materialization, 16M rows, 8 payload columns"
+      s2     early ms      late ms   speedup
+       1           84           36      2.3x
+     0.5          100           29      3.4x
+     0.1           71           25      2.9x
+    0.01           62           14      4.4x
+```
+
+<ul> <li><strong>Aggregation has a cardinality crossover.</strong> With <strong>16 groups</strong> the shared table is ~<strong>150× slower</strong> than two-phase (1481 vs 10 ms): every thread hammers the same few cache lines with atomic read-modify-writes. Two-phase scales <strong>7.7×</strong> over one thread, and repartition (23 ms) is slower because it moves 32 M rows to save nothing. At <strong>4 M groups</strong> the picture inverts: each thread sees ~3 M distinct groups, so pre-aggregation removes almost nothing, two-phase builds eight large tables and merges 26 M partials (389 ms), repartition wins (<strong>113 ms, 3.4× better</strong>) and the shared table catches up (104 ms) because contention disappears when updates spread over millions of slots. In between (262 K groups) repartition is already 3.4× faster than two-phase.</li> <li><strong>So production engines commonly adapt</strong>: start with a local partial aggregation, watch the reduction ratio (rows in / groups out), and <em>stop pre-aggregating</em> (flush and switch to shuffling) when it isn't paying: the lecture's point that the plan must adapt to data, applied to one operator.</li> <li><strong>Adaptive ordering is worth the least where you'd expect it, and protects you where it matters.</strong> Both cheap predicates cost under 1 ns per row, so the best fixed order (ABC, 12 ms) is only <strong>1.2× slower</strong> than adaptive (10 ms); but the six orders span <strong>12–34 ms</strong>, and a plan that evaluates the expensive predicate first is <strong>3.4× slower</strong> than the adaptive policy. Per phase, the best fixed order flips (ABC 5 ms vs BAC 8 ms in phase 1; BAC 5 vs ABC 8 in phase 2): the adaptive policy tracks the flip with 3 order changes. A first run changed the order 89 times: two predicates of near-equal rank kept swapping on timing noise, which is why a <strong>hysteresis</strong> margin is part of the exercises.</li> <li><strong>Late materialization wins by 2.3–4.4×</strong> even when the semi-join keeps everything (s2 = 1: early still gathers and then compacts eight wide columns for every row that passed filter 1), and the gap widens as the second filter gets more selective (s2 = 1%: 62 vs 14 ms), because late touches the payload only for the surviving 0.5% of rows. <em>Caveat</em>: here the ids stay in increasing order, so the late fetch is a near-sequential gather; after a hash join or a sort the ids are scattered and the fetch becomes random access: late materialization of wide columns after such operators needs care (fetch cheap columns early, large ones late).</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Struct-of-arrays hash table</strong>: keys, sums and counts live in separate <code>Vec</code>s so a probe touches only the 4-byte key array until it finds its slot; <code>with_bits</code>/<code>grow</code> keep the power-of-two mask arithmetic in one place, and <code>iter()</code> returns <code>impl Iterator + '_</code> so callers never see the layout.</li> <li><strong>Atomics with the weakest ordering that is correct</strong>: in <code>agg_shared</code> every operation is <code>Relaxed</code>: claiming a slot is a <code>compare_exchange(EMPTY, k)</code> (on failure, the winner may have inserted <em>our</em> key, so <code>Err(x) if x == k</code> proceeds), and <code>fetch_add</code> on commutative sums needs no ordering because the final read happens after <code>thread::scope</code> joins every worker, and join provides the happens-before.</li> <li><strong>Lockstep chunking</strong>: <code>chunks(keys).zip(chunks(vals))</code> hands each scoped thread two aligned slices; moving the chunks into <code>move</code> closures while borrowing the shared tables by reference is the whole synchronization story of phase 1.</li> <li><strong>Hoist the <code>match</code> out of the row loop</strong>: <code>filter</code> matches on the predicate once and runs one tight, monomorphic loop per predicate (the specialization idea of <a href="/cookbook/p/query-compilation-and-code-generation">A15</a> at its smallest); matching per row would put a branch and a dispatch in the hottest path.</li> <li><strong>Branch-free selection vectors</strong>: <code>out[k] = i; k += passes as usize;</code> writes unconditionally and advances conditionally; the output vector is pre-sized to the input length (<code>clear</code> + <code>resize</code>) and <strong>reused across batches</strong>, which is the "reuse buffers" adaptation in the lecture. <code>early()</code> deliberately allocates per batch to show what materialization costs; real code pools those buffers.</li> <li><strong>Exchange as data</strong>: the repartition plan's exchange is just <code>Vec&lt;Vec&lt;Vec&lt;(u32, i64)&gt;&gt;&gt;</code> (producer × destination × rows), built by one <code>scope</code> and consumed by another; a production exchange adds bounded queues for back-pressure and can stream instead of buffering everything.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Merging hash tables in hash order is quadratic</strong>: this chapter's first version built the merge table with <code>AggTable::new()</code> and inserted the partial results of other tables via <code>iter()</code>. Because <code>iter()</code> yields entries ordered by the same hash, the keys arrived sorted and crammed into one corner of a still-small table; linear probing degraded to O(n²) and a single-thread, 4 M-group aggregation <strong>took 195 seconds</strong> instead of 0.55 s. Presize the destination (<code>with_capacity</code>) or use a different hash/seed for the merge; the same trap exists in resizing hash tables with a <em>different</em> hash function than the one that ordered the iteration.</li> <li><strong>Skew breaks repartition</strong>: one hot key sends its rows to a single thread; two-phase absorbs it because the hot key collapses into one entry per thread before the exchange. Detect heavy hitters and handle them separately.</li> <li><strong>Floating-point sums are not associative</strong>: parallel plans add values in a different order than the serial plan, so <code>SUM(double)</code> can differ in the last bits between runs or thread counts; decide whether the engine promises determinism (and then use a fixed reduction tree or compensated summation).</li> <li><strong>Statistics under adaptivity are conditional</strong>: a predicate later in the order only sees survivors of the earlier ones, so its selectivity looks different; sample <strong>unconditionally</strong> (as the code does for 512 rows) and watch correlated predicates (the product of selectivities is wrong). Sampling costs ~5% extra evaluation here; add hysteresis so near-equal ranks don't flap.</li> <li><strong>Shared table sizing</strong>: <code>agg_shared</code> needs the group count in advance (a cardinality estimate; wrong estimates are a performance bug) or a concurrent resize protocol; the two-phase plan needs memory for T× the groups at high cardinality.</li> <li><strong>Exchange operators and order</strong>: a shuffle destroys input order; if a parent needs sorted input, use an <strong>order-preserving merge</strong> exchange; unbounded exchange buffers blow up memory without back-pressure.</li> <li><strong>Late materialization is not free</strong>: it requires keeping row ids and a way to fetch later, random access after joins/sorts can cost more than early copying, and operators that need the payload anyway gain nothing.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "MonetDB/X100: Hyper-Pipelining Query Execution"
+url = "https://www.cidrdb.org/cidr2005/papers/P19.pdf"
+
+[[sources]]
+title = "Everything You Always Wanted to Know About Compiled and Vectorized Queries But Were Afraid to Ask"
+url = "https://www.vldb.org/pvldb/vol11/p2209-kersten.pdf"
+
+[[sources]]
+title = "Velox: Meta's Unified Execution Engine"
+url = "https://dl.acm.org/doi/10.14778/3554821.3554829"
+
+[[sources]]
+title = "arrow"
+url = "https://docs.rs/arrow"
+
+[[sources]]
+title = "datafusion"
+url = "https://docs.rs/datafusion"
+
+[[sources]]
+title = "polars"
+url = "https://docs.rs/polars"

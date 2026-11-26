@@ -1,0 +1,60 @@
+title = "The anatomy of an HTTP/1.1 exchange"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 522
+kind = "recipe"
+lede = "Raw bytes on the wire, then the same endpoints with reqwest"
+level = "intermediate"
+code = ["examples/web/http_client_server_loopback.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+web client/server debugging, API clients.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a real axum server on 127.0.0.1:0 and two kinds of client. First a raw `TcpStream` writes a hand-typed request and prints the exact response bytes (status line, headers, blank line, body) for both a `Content-Length` body and a `Transfer-Encoding: chunked` body (we decode the chunk framing ourselves).
+
+Then reqwest exercises the same server: query strings, JSON and form bodies, custom headers, status classes and `error_for_status`, redirects (301/302/303 turn **post** into **get**, 307/308 keep method and body), timeouts, streaming, **head**, **options**/Allow, 404/405/415/400/422.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+almost every "HTTP bug" is a misunderstanding of what is actually sent. Printing a `curl -v` style transcript (volatile `date` masked) makes requests and responses visible and testable.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+`Server::start` = `axum::serve(listener, app).with_graceful_shutdown(..)`; `try_send` prints the request (`> ...`), executes it, prints the response (`< ...`). 400 = unparseable syntax, 422 = syntactically valid JSON of the wrong shape, 415 = wrong/missing Content-Type, 405 must carry `Allow`.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>debugging API clients with curl-style traces</li><li>writing contract tests against a real socket</li><li>understanding proxies/CDNs (framing: Content-Length vs chunked)</li><li>choosing correct status codes in REST APIs</li><li>redirect handling in HTTP clients (why a <strong>post</strong> silently became a <strong>get</strong> after a 302)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP" target="_blank" rel="noreferrer">https://developer.mozilla.org/en-US/docs/Web/HTTP</a></li><li><a href="https://datatracker.ietf.org/doc/html/rfc9110" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc9110</a></li><li><a href="https://datatracker.ietf.org/doc/html/rfc9112" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc9112</a></li></ul>
+"""
+
+[[sources]]
+title = "developer.mozilla.org/en-US/docs/Web/HTTP"
+url = "https://developer.mozilla.org/en-US/docs/Web/HTTP"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc9110"
+url = "https://datatracker.ietf.org/doc/html/rfc9110"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc9112"
+url = "https://datatracker.ietf.org/doc/html/rfc9112"

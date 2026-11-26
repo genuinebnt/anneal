@@ -112,12 +112,19 @@ pub const SD_CODE_LANGS: &[&str] = &["rust", "rs", "python", "py", "sql", "http"
 /// fences closed and in a known language with known options, display math and `:::steps` / `:::deeper` blocks closed, step lines
 /// shaped `- who | what` (optionally `| narration`), callouts of a known kind, margin notes `^[…]` and inline math `\( … \)` closed.
 pub fn check_markdown(text: &str) -> Vec<String> {
+    check_markdown_with(text, &["NOTE", "TIP", "WARNING", "INTERVIEW", "ASIDE"])
+}
+
+/// [`check_markdown`] with the callout kinds of the page's own section (the cookbook has its own set).
+pub(crate) fn check_markdown_with(text: &str, callouts: &[&str]) -> Vec<String> {
     let mut bad = Vec::new();
     let lines: Vec<&str> = text.lines().collect();
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
         if let Some(info) = line.strip_prefix("```") {
+            // a quoted title may hold spaces: they are joined before the options are split
+            let info = join_quoted(info);
             let mut words = info.split_whitespace();
             let lang = words.next().unwrap_or("text");
             if !SD_CODE_LANGS.contains(&lang) {
@@ -125,7 +132,7 @@ pub fn check_markdown(text: &str) -> Vec<String> {
             }
             for w in words {
                 match w.split_once('=') {
-                    Some(("title" | "group" | "id" | "setup", v)) if !v.is_empty() => {}
+                    Some(("title" | "group" | "id" | "setup" | "compile_fail", v)) if !v.is_empty() => {}
                     Some(("hl", v)) if !v.is_empty() && v.split(',').all(|p| p.split('-').all(|n| n.parse::<u32>().is_ok_and(|n| n > 0))) => {}
                     _ => bad.push(format!("code fence option {w:?} is not title=…, group=…, hl=3,5-7, or for a plan id=… and setup=…")),
                 }
@@ -177,9 +184,9 @@ pub fn check_markdown(text: &str) -> Vec<String> {
                 bad.push(format!("the :::steps block on line {} needs at least two steps", start + 1));
             }
         } else if let Some(kind) = line.strip_prefix("> [!").and_then(|r| r.split_once(']')).map(|(k, _)| k)
-            && !matches!(kind, "NOTE" | "TIP" | "WARNING" | "INTERVIEW" | "ASIDE")
+            && !callouts.contains(&kind)
         {
-            bad.push(format!("line {}: callout [!{kind}] is not NOTE, TIP, WARNING, INTERVIEW or ASIDE", i + 1));
+            bad.push(format!("line {}: callout [!{kind}] is not one of {}", i + 1, callouts.join(", ")));
         }
         i += 1;
     }
@@ -295,7 +302,18 @@ pub struct Probe {
     pub answer: String,
 }
 
-fn read_dir_toml<T: for<'de> Deserialize<'de>>(dir: &Path, issues: &mut Vec<Issue>) -> Vec<(String, std::path::PathBuf, T)> {
+/// `title="two words"` as one word: spaces inside double quotes become underscores.
+fn join_quoted(info: &str) -> String {
+    let mut quoted = false;
+    info.chars()
+        .map(|c| {
+            quoted ^= c == '"';
+            if quoted && c == ' ' { '_' } else { c }
+        })
+        .collect()
+}
+
+pub(crate) fn read_dir_toml<T: for<'de> Deserialize<'de>>(dir: &Path, issues: &mut Vec<Issue>) -> Vec<(String, std::path::PathBuf, T)> {
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut files: Vec<_> = entries.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "toml")).collect();
     files.sort();

@@ -1,0 +1,68 @@
+title = "Worst-case optimal joins"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 374
+kind = "recipe"
+lede = "AGM bound, Generic Join and Leapfrog Triejoin vs binary hash-join plans."
+level = "advanced"
+code = ["examples/database/leapfrog_triejoin_worst_case_optimal.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>graph pattern matching (triangles, cliques)</li><li>Datalog engines</li><li>RDF/SPARQL stores</li><li>any multiway join with cycles</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+LogicBlox (LogiQL) built its engine on Leapfrog Triejoin (see Veldhuizen's paper below); research and graph databases such as Umbra and Kuzu describe worst-case-optimal / multiway join operators for cyclic patterns. Triangle and clique counting in social-graph analytics, graph pattern matching in general.
+
+Course: CMU 15-721 (advanced DB) covers multiway joins; the papers below are the primary sources.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**What**. A conjunctive query is a set of **atoms** (relations over variables), e.g. the triangle `Q(a,b,c) :- R(a,b), S(b,c), T(a,c)`. The textbook executor joins two relations at a time (a left-deep plan of hash joins).
+
+That is **provably** suboptimal on cyclic queries: any binary plan can be forced to build an intermediate result of size Theta(N&#94;2) when the final output and the AGM bound are only N&#94;1.5.
+
+A worst-case optimal join (WCOJ) instead binds **one variable at a time**: for variable x it intersects, across every atom mentioning x, the set of values consistent with the variables already bound, and recurses on each value in the intersection. No intermediate result is ever materialised.
+
+**The AGM bound** (Atserias-Grohe-Marx). Give each atom e a weight x_e >= 0 such that every variable is covered with total weight >= 1 (a **fractional edge cover**). Then &#124;Q&#124; &lt;= prod_e &#124;R_e&#124;&#94;{x_e}, and the best bound minimises sum_e x_e&#42;ln&#124;R_e&#124;: a tiny LP.
+
+Triangle with all sizes N: x=(1/2,1/2,1/2) gives N&#94;1.5. Here the LP is solved by brute force: the optimum of an LP is at a **vertex** of the feasible polytope, i.e. a point where m linearly independent constraints (cover or x_e=0) are tight; with at most &#126;10 constraints we just try every subset of m of them and solve the m x m system by Gaussian elimination.
+
+**Generic join** (Ngo-Porat-Re-Rudra). For each variable, take the candidate lists from all atoms containing it, iterate over the **smallest** list and probe the others (binary search). Cost per value is bounded by the smallest list, which is what makes the total match the AGM bound (up to a log).
+
+**Leapfrog TRIEJOIN** (Veldhuizen). Same algorithm, packaged for sorted data. Each relation is a TRIE: level 0 holds the distinct first columns, below each first value sits the sorted run of second values.
+
+**A TRIE iterator** offers `open()` (descend to the children of the current key), `up()`, `next()`, `seek(k)` (jump to the first key >= k, by galloping so the cost is log of the **distance** moved) and `key()/at_end()`.
+
+The **leapfrog** intersection of k iterators keeps them in a circle sorted by key: the one holding the smallest key seeks to the current maximum; when all keys are equal a match is emitted. Because seeks skip ahead, the work is proportional to the **smaller** side of every intersection.
+
+**Variable order** matters (all orders are correct, costs differ). The relations must be sorted consistently with the variable order, so `reorder` transposes and re-sorts a relation when an atom's columns run against the chosen order. A greedy heuristic picks the most-constrained variable first and then variables connected to what is chosen.
+
+**Checks**. (1) 500 random graphs: triangle, 4-clique and 3-edge path; Leapfrog, Generic Join and a left-deep hash-join plan all equal a brute-force nested-loop oracle (also under every variable order for triangles).
+
+(2) On the classic "cross" instance R=S=T={(0,j)}U{(i,0)} every binary plan needs &#126;m&#94;2 intermediate tuples while Leapfrog stays &#126;linear: asserted via the growth ratio as m is multiplied by 8. (3) On random instances Leapfrog's operation count stays within `c * atoms * (AGM + N) * (log2 N + 2)`.
+
+Operation counts (not time) are asserted because they are deterministic.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Veldhuizen, "Leapfrog Triejoin: a worst-case optimal join algorithm" <https://arxiv.org/abs/1210.0481> Ngo, Porat, Re, Rudra, "Worst-case Optimal Join Algorithms" <https://arxiv.org/abs/1203.1952> Ngo, Re, Rudra, "Skew Strikes Back: New Developments in the Theory of Join Algorithms" (cited by title; URL not checked)
+"""
+
+[[sources]]
+title = "arxiv.org/abs/1210.0481"
+url = "https://arxiv.org/abs/1210.0481"
+
+[[sources]]
+title = "arxiv.org/abs/1203.1952"
+url = "https://arxiv.org/abs/1203.1952"

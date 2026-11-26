@@ -1,0 +1,26 @@
+# Capstones
+
+150-2300 line mini-projects that combine many recipes: LSM store, SQL engine, regex engine, query optimiser, filesystem, async runtime, ray tracer, search engine.
+
+Run any recipe from the `cookbook/` directory: `cargo run --release --example <name>` (the name is the file name without `.rs`). Each file starts with a header: what it shows, `LEVEL`, `COMMON USES` and `Read:` links.
+
+16 examples.
+
+| Example | What it shows | Level | Common uses | Crates |
+|---|---|---|---|---|
+| [`mini_kv_store`](mini_kv_store.rs) | an LSM-tree-lite key-value store: WAL + memtable + SSTables with bloom filters + k-way merge compaction | capstone | RocksDB/LevelDB/Cassandra/ScyllaDB storage engines, Kafka-style commit logs, embedded state in stream processors, sled-like | anyhow, thiserror |
+| [`tiny_sql_engine`](tiny_sql_engine.rs) | a tiny in-memory SQL engine: lex -> Pratt parse -> AST -> bind/plan -> volcano executor | capstone | query layers over in-memory data (DataFusion, DuckDB-style engines), SQLite-like embedded stores, log/CSV query tools, | thiserror |
+| [`regex_nfa_engine`](regex_nfa_engine.rs) | a regex engine: recursive-descent parser -> Thompson NFA -> linear-time simulation, checked against a backtracker | capstone | grep/ripgrep-style search, input validation, URL routers, log scrapers, WAF rules, syntax highlighters and lexers (`[a-z_]\w*`), | thiserror |
+| [`rate_limiter_lab`](rate_limiter_lab.rs) | a deterministic laboratory comparing six rate-limit algorithms | capstone | API gateway quotas (Stripe-style), login brute-force throttling, per-tenant fairness in multi-tenant | std only |
+| [`lease_fencing_sim`](lease_fencing_sim.rs) | deterministic simulation of leases, pauses and fencing tokens | capstone | ZooKeeper / etcd / Consul leases with revision numbers as fencing tokens, Chubby sequencers, HBase and | std only |
+| [`job_service_axum`](job_service_axum.rs) | an in-process image-resize job service (idempotent API, workers, SSE, graceful shutdown) | capstone | thumbnail/transcode pipelines, report generation, webhook delivery, import/export jobs, CI-style | axum, futures-util, http-body-util, serde, serde-json, thiserror, tokio, tower, tracing, tracing-subscriber |
+| [`search_engine`](search_engine.rs) | a mini full-text search engine: positional postings, BM25, boolean/phrase/wildcard queries, segments | capstone | product/site search (Lucene, Elasticsearch, tantivy), log search with substring filters (trigram | thiserror |
+| [`query_optimizer`](query_optimizer.rs) | a cost-based query optimizer in miniature: statistics -> cardinality estimates -> rewrite rules -> physical costing -> join ordering -> Volcano execution | capstone | PostgreSQL's planner (Selinger-style DP, histograms + MCV lists, `EXPLAIN`), Apache Spark Catalyst and Apache DataFusion (rule batches run to | std only |
+| [`mini_async_runtime`](mini_async_runtime.rs) | a miniature tokio: tasks, work-stealing scheduler, timer driver, sync primitives, mio reactor | capstone | tokio (multi-thread work-stealing scheduler, mio-backed IO driver, hierarchical timer wheel, `JoinHandle`, | crossbeam-deque, mio, parking-lot, tokio |
+| [`event_sourced_ledger`](event_sourced_ledger.rs) | an event-sourced bank ledger with CQRS projections, snapshots, upcasters and an outbox | capstone | bank and payment ledgers, order and inventory systems, audit trails, undo history, debugging by replay. | serde, serde-json, thiserror |
+| [`toy_filesystem`](toy_filesystem.rs) | a toy UNIX filesystem on a block device: inodes, indirect blocks, directories, a write-ahead journal, fsck, and a buffer cache | capstone | ext2 taught the inode/indirect-block/bitmap design (that is this file's layout); ext3/ext4 added the journal (crash recovery | std only |
+| [`ray_tracer`](ray_tracer.rs) | a Whitted + path-tracing ray tracer with BVH, glass, soft shadows, depth of field and PNG output | capstone | film and product-visualisation offline renderers (the same ideas as PBRT/Cycles), game-engine lightmap | std only |
+| [`mini_http_server_thread_pool`](mini_http_server_thread_pool.rs) | a mini multithreaded HTTP/1.1 server from scratch on std::net (thread pool, keep-alive, pipelining, router, static files) | capstone | the shape of Apache's worker MPM, Tomcat's connector (acceptor + executor + bounded accept queue), | tokio |
+| [`typeahead_service`](typeahead_service.rs) | a type-ahead service (axum): prefix trie + trigram typo index, merged ranking, LRU cache, live updates | capstone | search-as-you-type in e-commerce, IDE/command palettes, address and contact pickers, "frecency" ranking | axum, reqwest, serde, serde-json, tokio |
+| [`mini_redis`](mini_redis.rs) | a mini Redis: RESP2 over TCP, five data types, expiry, pub/sub, transactions, AOF + snapshots | capstone | Redis is used as a cache (GET/SET with TTL), a session store, a job/message queue (lists, BLPOP), a rate limiter | crossbeam-channel, parking-lot, tokio |
+| [`toy_language_interpreter`](toy_language_interpreter.rs) | a Lox-style scripting language: scanner, Pratt/recursive-descent parser, resolver, tree-walk interpreter AND a bytecode VM, differentially tested | capstone | game/engine scripting, configuration DSLs, rule engines, formula languages, teaching compilers; the same stages appear in | std only |

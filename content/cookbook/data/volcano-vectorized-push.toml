@@ -1,0 +1,54 @@
+title = "One query, four execution models"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 368
+kind = "recipe"
+lede = "Volcano, vectorized, push/data-centric, fused loop."
+level = "advanced"
+code = ["examples/database/volcano_vectorized_push.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>query engines</li><li>ETL/dataframe kernels</li><li>any "interpret a plan over lots of rows" code</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+`SELECT category, SUM(price*qty), COUNT(*) FROM t WHERE price > X AND qty < Y GROUP BY category` over 5M generated rows, executed four ways, with identical results asserted: (1) **volcano** (iterator/pull): `trait Operator { open/next/close }`, boxed Scan -> Filter -> Project -> HashAggregate.
+
+Every tuple costs one &#42;virtual call per operator&#42; (indirect branch, no inlining, row passed through registers/stack). (2) **vectorized** (MonetDB/X100 style): operators exchange **batches** of 1024 rows stored by column, with a **selection vector** (indices of surviving rows).
+
+The virtual call is amortised over 1024 rows and the inner loops are tight, per-column, branch-light loops that the compiler can unroll/SIMD, and whose working set (1024 &#42; few columns) stays in L1. (3) **push** / data-centric (HyPer style): the scan pushes each tuple into a fused closure chain filter -> project -> aggregate.
+
+Closures are monomorphised, so the whole pipeline inlines into **one** loop (what a query compiler would emit as code). (4) **hand-written fused loop**: the speed-of-light baseline you would write by hand for exactly this query.
+
+**Why** the gaps: the Volcano model pays interpretation overhead (virtual dispatch + unpredictable indirect branches + a data-dependent `if` per tuple + poor instruction-cache/register locality because control hops between 4 operators per row).
+
+Vectorization buys back most of it by amortising dispatch; push/compiled removes dispatch entirely and keeps values in registers across operators, but cannot SIMD as easily when it has per-tuple branches.
+
+Also shown: `Box<dyn Operator>` vs generic composition; the open/next/close lifecycle; **limit** early exit (pull stops upstream naturally; push needs an explicit cancellation signal, here a `bool` return). Numbers are chosen as multiples of 0.25 so f64 sums are exact and results can be compared with `==` whatever the order.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+analytic engines (row-at-a-time interpreters in classic OLTP engines; vectorized in column stores and many modern OLAP engines; JIT/push in compiled engines), dataframe libraries, streaming operators, iterator chains in Rust itself (`Iterator` is a pull model that the compiler monomorphises into a fused loop, i.e. model 3).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://15445.courses.cs.cmu.edu/" target="_blank" rel="noreferrer">https://15445.courses.cs.cmu.edu/</a> (Query Execution lectures)</li><li><a href="https://www.cs.cmu.edu/~15721/" target="_blank" rel="noreferrer">https://www.cs.cmu.edu/~15721/</a> (Advanced DB: vectorization vs compilation)</li><li>and the paper "MonetDB/X100: Hyper-Pipelining Query Execution" (CIDR 2005)</li></ul>
+"""
+
+[[sources]]
+title = "15445.courses.cs.cmu.edu"
+url = "https://15445.courses.cs.cmu.edu/"
+
+[[sources]]
+title = "cs.cmu.edu/~15721"
+url = "https://www.cs.cmu.edu/~15721/"

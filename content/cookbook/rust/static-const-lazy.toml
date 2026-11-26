@@ -1,0 +1,44 @@
+title = "Static const lazy"
+module = "Rust language"
+module_order = 1
+chapter = "Ownership and borrowing"
+chapter_order = 1
+order = 8
+kind = "recipe"
+lede = "const, static, OnceLock, LazyLock, thread_local, and global atomics."
+level = "simple"
+code = ["examples/language/static_const_lazy.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>config loaded once</li><li>lookup tables</li><li>global counters/ids</li><li>caches</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>global config</li><li>lookup tables built once</li><li>id generators</li><li>per-thread caches</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+const X: T      inlined at every use, evaluated at compile time. Prefer for plain values. static X: **T one** memory location with a fixed address for the whole program (`'static`). static mut      avoid: unsafe and almost always replaceable by the items below. OnceLock&lt;T>     set exactly once at runtime (e.g. config parsed from args), then read anywhere.
+
+LazyLock&lt;T>     compute on first use (e.g. a table built from a function), thread-safe.
+
+```text
+thread_local!   one value per thread.
+```
+
+Atomic&#42; statics lock-free global counters. Docs: <https://doc.rust-lang.org/std/sync/struct.OnceLock.html> and <https://doc.rust-lang.org/std/sync/struct.LazyLock.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/sync/struct.OnceLock.html"
+url = "https://doc.rust-lang.org/std/sync/struct.OnceLock.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/sync/struct.LazyLock.html"
+url = "https://doc.rust-lang.org/std/sync/struct.LazyLock.html"

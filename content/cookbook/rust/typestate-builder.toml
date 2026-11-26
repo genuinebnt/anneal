@@ -1,0 +1,38 @@
+title = "Typestate builder"
+module = "Rust language"
+module_order = 1
+chapter = "Design patterns"
+chapter_order = 5
+order = 42
+kind = "recipe"
+lede = "Invalid states do not compile."
+level = "intermediate"
+code = ["examples/patterns/typestate_builder.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any config/request type later (task specs, API clients).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>HTTP clients</li><li>connection/session objects</li><li>config types where a required step must not be skippable</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: encode "has the URL been set?" in a type parameter. `build()` only exists once it has. Zero runtime cost; the error moves from runtime to compile time.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://rust-unofficial.github.io/patterns/> (builder and "type state" material)
+"""
+
+[[sources]]
+title = "rust-unofficial.github.io/patterns"
+url = "https://rust-unofficial.github.io/patterns/"

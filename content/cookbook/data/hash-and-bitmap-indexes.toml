@@ -1,0 +1,70 @@
+title = "Hash indexes"
+module = "Databases"
+module_order = 8
+chapter = "Indexes"
+chapter_order = 3
+order = 345
+kind = "recipe"
+lede = "hash indexes (extendible, linear) and compressed bitmap indexes (equality/range encoded, WAH-style)."
+level = "advanced"
+code = ["examples/database/hash_and_bitmap_indexes.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>storage engines</li><li>OLAP/column stores</li><li>data warehouses</li><li>any index choice between B+tree</li><li>hash and bitmap</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Part a**, **dynamic hash indexes**: a static hash table must be rebuilt when it outgrows its bucket array; disk-based hash indexes grow incrementally instead. Buckets are **pages** holding at most `cap` entries.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Extendible hashing (Fagin et al.)</div><div class="cb-g-says"><p><strong>A directory</strong> of 2&#94;g pointers (g = global depth) indexed by the low g bits of the hash. Each bucket has a <strong>local</strong> depth l &lt;= g and is shared by 2&#94;(g-l) directory slots.</p><p>A full bucket <strong>splits</strong>: if l == g the directory first <strong>doubles</strong> (copy itself; cheap, just pointers), then entries are redistributed by bit l and the slots whose bit l is 1 are re-pointed to the new bucket. A lookup is exactly <strong>one</strong> bucket read (directory is in memory).</p><p>Deletes merge a bucket with its buddy (same local depth, differing in bit l-1) when they fit in one page, and the directory halves when possible.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Linear hashing (Litwin)</div><div class="cb-g-says"><p>No directory. Buckets are numbered 0..N0*2&#94;level + next. <strong>A split pointer</strong> <code>next</code> names the bucket to split <strong>next</strong>, regardless of which bucket overflowed: it is split in round-robin order using the next hash bit, and the new bucket is appended at the end.</p><p>Address = h mod (N0*2&#94;level), or h mod (N0*2&#94;(level+1)) if that bucket already split this round. Splits are triggered by <strong>load factor</strong> (controlled splitting) so overflow chains stay short and the file grows by one bucket at a time, with no directory and no big pause.</p><p><strong>Cost.</strong> Some lookups walk an overflow page. Both are checked against <code>HashMap</code> over 30 000 mixed operations with structural invariants verified along the way.</p></div></div></div>
+
+**Part B**, **bitmap indexes**: for a low-cardinality column, keep one bitmap (1 bit per row) for each distinct value. A predicate becomes word-wide bitwise operations: `A = 3 AND (B = 1 OR NOT C = 0)` is two ORs/ANDs over bitmaps, 64 rows per CPU instruction, with no random row access until the final bitmap is turned into row ids.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Equality-encoded</div><div class="cb-g-says"><p>Bitmap[v] = rows with value v. Great for <code>=</code> and small <code>IN</code>; a range of k values ORs k bitmaps.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Range-encoded</div><div class="cb-g-says"><p>Bitmap[v] = rows with value &lt;= v (cumulative). Any range <code>lo..=hi</code> costs at most two bitmaps: <code>R[hi] AND NOT R[lo-1]</code>.</p><p><strong>Cost.</strong> The cumulative bitmaps are denser, hence compress worse on unsorted data.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Compression (WAH-style, word aligned on u64)</div><div class="cb-g-says"><p>The bitmap is cut into 63-bit groups; a <strong>literal</strong> word (top bit 0) stores one group, a <strong>fill</strong> word (top bit 1, next bit = fill value, 62-bit count) stands for up to 2&#94;62 identical all-0 or all-1 groups.</p><p>AND/OR/XOR/NOT operate directly on the compressed streams: two cursors advance in lockstep, fill-vs-fill is decided for a whole run at once, and the output builder merges adjacent fills. Sorted/clustered columns compress to a few words per value.</p><p>The test builds a 3-column table, evaluates 500 random boolean/range queries on compressed bitmaps and asserts the row ids</p></div></div></div>
+
+equal a plain table scan.
+
+**When to use what**: B+**tree** for range scans, ordering, prefix and unique constraints, unknown workloads (the default; log_fanout n page reads, ordered iteration). **Hash** for equality-only point lookups on high-cardinality keys (exactly &#126;1 page read; no order, no ranges).
+
+**Bitmap** for low-cardinality columns (status, country, flag) in read-mostly analytics where many predicates are combined; poor for high cardinality (one bitmap per value) and for heavy concurrent updates (an update rewrites compressed bitmaps, and in Oracle-style systems locks a whole run of rows).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>extendible hashing in file systems and hash-based database indexes (e.g. ext3 HTree-like directory ideas, GDBM's on-disk hash)</li><li>linear hashing in Berkeley DB-style hash access methods and Erlang/OTP <code>dets</code></li><li>bitmap indexes in data warehouses (Oracle bitmap indexes)</li><li>PostgreSQL bitmap heap scans (transient bitmaps)</li><li>Lucene filter caches and search engines (Roaring)</li><li>FastBit</li><li>Druid/Pinot inverted indexes</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Linear hashing <https://en.wikipedia.org/wiki/Linear_hashing>   Extendible hashing <https://en.wikipedia.org/wiki/Extendible_hashing> Bitmap index <https://en.wikipedia.org/wiki/Bitmap_index>   **Wah** paper <https://sdm.lbl.gov/~kewu/ps/LBNL-49627.pdf> EWAH (Lemire et al.) <https://arxiv.org/abs/0901.3751>   Roaring <https://arxiv.org/abs/1402.6407>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Linear_hashing"
+url = "https://en.wikipedia.org/wiki/Linear_hashing"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Extendible_hashing"
+url = "https://en.wikipedia.org/wiki/Extendible_hashing"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Bitmap_index"
+url = "https://en.wikipedia.org/wiki/Bitmap_index"
+
+[[sources]]
+title = "sdm.lbl.gov/~kewu/ps/LBNL-49627.pdf"
+url = "https://sdm.lbl.gov/~kewu/ps/LBNL-49627.pdf"
+
+[[sources]]
+title = "arxiv.org/abs/0901.3751"
+url = "https://arxiv.org/abs/0901.3751"
+
+[[sources]]
+title = "arxiv.org/abs/1402.6407"
+url = "https://arxiv.org/abs/1402.6407"

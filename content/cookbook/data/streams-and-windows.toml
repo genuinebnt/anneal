@@ -1,0 +1,354 @@
+title = "Streams and windows"
+module = "Databases"
+module_order = 8
+chapter = "Building complete engines"
+chapter_order = 9
+order = 453
+kind = "guide"
+lede = "Event time, watermarks and late data · tumbling, sliding and session windows · retractions and revisions · exactly-once output through checkpoints · 1 000 000 events"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Streams are tables that keep arriving.</strong> <a href="/cookbook/p/streaming-and-incremental-views">S3</a> maintained a query result incrementally under inserts and deletes. Stream processing adds the concern that makes it hard in practice: events arrive <strong>out of order</strong>, and a result keyed by <em>event time</em> (when it happened) can only be finished when you are willing to say "nothing earlier will arrive".</li> <li><strong>A watermark is that statement.</strong> Here the watermark is the largest event time seen minus a <em>delay</em>. A window <code>[start, end)</code> is complete once the watermark reaches <code>end</code>; its result is emitted then. The delay is a trade: a larger delay waits for stragglers (fewer dropped events) and holds every result back by that much, a smaller one answers sooner and drops more.</li> <li><strong>Late data has three fates.</strong> Dropped (the window is closed and forgotten); counted in a side output; or applied as a <strong>revision</strong> while the window's state is still kept for a <em>grace period</em>: the operator emits a <em>retraction</em> of the old result and then the new one, so a downstream consumer that folds the stream converges on the right table. Revisions are what make "early and correct" possible at the price of downstream complexity.</li> <li><strong>Window shapes.</strong> <em>Tumbling</em>: fixed, non-overlapping; each event is in one window. <em>Sliding</em> (hopping): size larger than the slide; each event is in <code>size/slide</code> windows. <em>Session</em>: windows defined by activity: events less than a <em>gap</em> apart belong together, and a late event can merge two sessions into one.</li> <li><strong>Exactly-once means the effects, not the processing.</strong> Events may be processed twice after a failure; what must hold is that the output is as if each were processed once. The standard protocol: take a consistent <strong>checkpoint</strong> of operator state together with the input offset; hold output in a buffer that the sink makes visible only when a checkpoint covering it completes. After a crash, restore the last checkpoint and replay from its offset: the replay regenerates exactly the output that was never made visible.</li> <li><strong>State is the cost.</strong> Every open window holds an aggregate per key; lateness and grace extend its life, and a session must be remembered for one more gap after it closes (so that an event that would overlap it is recognised as late rather than starting a second, overlapping session).</li> </ul>
+"""
+
+[[sections]]
+heading = "The operator"
+body = """
+<ul> <li><strong><code>WindowOp</code></strong> takes events one at a time. For tumbling and sliding windows each event updates the aggregate (count, sum, max) of every window it falls into, unless that window ended more than the grace period before the watermark. For sessions it merges every session that overlaps the event's own <code>[ts, ts+gap)</code>, unless one of them has already been emitted (then the event is late).</li> <li><strong>Emission</strong>: a set of pending windows ordered by end time lets <code>close</code> pop exactly the windows the watermark has passed, in <code>(end, key, start)</code> order; a second ordered set expires state. Both avoid scanning the state on every event; the first version did, and ran at 0.03 million events per second for sliding windows.</li> <li><strong><code>Pipeline</code></strong> adds an input offset, a pending buffer and a committed sink: <code>checkpoint</code> commits the buffer and saves <code>(state, offset)</code>; <code>crash_and_recover</code> restores the last checkpoint.</li> </ul>
+
+:::deeper Reference: windows, watermark, revisions, session merging, and the checkpointed exactly-once pipeline
+```rust title="src/multimodel/stream.rs"
+//! Event-time stream processing: keyed windows (tumbling, sliding, session) over out-of-order events, a watermark that trails the
+//! largest timestamp seen, results emitted when a window closes, revisions (a retraction followed by the new value) for late events inside
+//! a grace period, drops beyond it, and exactly-once output through checkpoints: operator state and input offset are saved together, and
+//! the sink commits only what a checkpoint covers, so a restart replays the input without duplicating or losing results.
+use std::collections::{BTreeMap, BTreeSet};
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Event {
+    pub key: u32,
+    pub ts: i64,
+    pub val: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WindowSpec {
+    Tumbling(i64),
+    Sliding { size: i64, slide: i64 },
+    /// A session lasts as long as events arrive less than `gap` apart.
+    Session { gap: i64 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Agg {
+    pub count: i64,
+    pub sum: i64,
+    pub max: i64,
+}
+impl Agg {
+    fn add(&mut self, v: i64) {
+        if self.count == 0 || v > self.max {
+            self.max = v;
+        }
+        self.count += 1;
+        self.sum += v;
+    }
+    fn merge(&mut self, o: &Agg) {
+        if self.count == 0 || (o.count > 0 && o.max > self.max) {
+            self.max = o.max;
+        }
+        self.count += o.count;
+        self.sum += o.sum;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Kind {
+    /// The window closed: its first result.
+    Final,
+    /// A previously emitted result is withdrawn...
+    Retract,
+    /// ...and replaced by this one (a late event inside the grace period).
+    Revision,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Out {
+    pub key: u32,
+    pub start: i64,
+    pub end: i64,
+    pub agg: Agg,
+    pub kind: Kind,
+    /// The watermark when this was emitted (a window is never emitted before the watermark reaches its end).
+    pub at_watermark: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct Config {
+    pub spec: WindowSpec,
+    /// The watermark is the largest timestamp seen minus this.
+    pub delay: i64,
+    /// A window keeps accepting late events, as revisions, until the watermark passes `end + grace`.
+    pub grace: i64,
+}
+
+#[derive(Clone, Debug)]
+struct WindowState {
+    agg: Agg,
+    emitted: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct WindowOp {
+    pub cfg: Config,
+    max_ts: i64,
+    // (key, start) -> state; for sessions `end` is stored in `ends`
+    wins: BTreeMap<(u32, i64), WindowState>,
+    ends: BTreeMap<(u32, i64), i64>,
+    /// Windows not yet emitted, ordered by `(end, key, start)`, and every window ordered by the watermark at which its state may go.
+    pending: BTreeSet<(i64, u32, i64)>,
+    expiry: BTreeSet<(i64, u32, i64)>,
+    pub late_dropped: u64,
+    pub accepted: u64,
+}
+
+impl WindowOp {
+    pub fn new(cfg: Config) -> WindowOp {
+        WindowOp { cfg, max_ts: i64::MIN, wins: BTreeMap::new(), ends: BTreeMap::new(), pending: BTreeSet::new(), expiry: BTreeSet::new(), late_dropped: 0, accepted: 0 }
+    }
+    pub fn watermark(&self) -> i64 {
+        if self.max_ts == i64::MIN { i64::MIN } else { self.max_ts - self.cfg.delay }
+    }
+    pub fn state_windows(&self) -> usize {
+        self.wins.len()
+    }
+    fn windows_of(&self, ts: i64) -> Vec<(i64, i64)> {
+        match self.cfg.spec {
+            WindowSpec::Tumbling(w) => { let s = ts - ts.rem_euclid(w); vec![(s, s + w)] }
+            WindowSpec::Sliding { size, slide } => {
+                let last = ts - ts.rem_euclid(slide);
+                let mut out = vec![];
+                let mut s = last;
+                while s > ts - size {
+                    out.push((s, s + size));
+                    s -= slide;
+                }
+                out.reverse();
+                out
+            }
+            WindowSpec::Session { .. } => unreachable!(),
+        }
+    }
+    /// Process one event; results that became due (and revisions) are appended to `out`.
+    pub fn process(&mut self, e: Event, out: &mut Vec<Out>) {
+        let wm_before = self.watermark();
+        match self.cfg.spec {
+            WindowSpec::Session { gap } => self.process_session(e, gap, wm_before),
+            _ => {
+                let mut taken = false;
+                for (s, end) in self.windows_of(e.ts) {
+                    // a window that has been closed for longer than the grace period no longer takes events
+                    if end + self.cfg.grace <= wm_before {
+                        continue;
+                    }
+                    taken = true;
+                    if !self.wins.contains_key(&(e.key, s)) {
+                        self.pending.insert((end, e.key, s));
+                        self.expiry.insert((end + self.retention(), e.key, s));
+                    }
+                    let st = self.wins.entry((e.key, s)).or_insert(WindowState { agg: Agg::default(), emitted: false });
+                    let before = st.agg;
+                    st.agg.add(e.val);
+                    if st.emitted {
+                        let (key, a, b) = (e.key, before, st.agg);
+                        out.push(Out { key, start: s, end, agg: a, kind: Kind::Retract, at_watermark: wm_before });
+                        out.push(Out { key, start: s, end, agg: b, kind: Kind::Revision, at_watermark: wm_before });
+                    }
+                }
+                if taken { self.accepted += 1 } else { self.late_dropped += 1 }
+            }
+        }
+        self.max_ts = self.max_ts.max(e.ts);
+        self.close(out);
+    }
+
+    fn process_session(&mut self, e: Event, gap: i64, wm_before: i64) {
+        // merge with every session of this key whose interval [start, end) overlaps the event's own [ts, ts + gap)
+        let touching: Vec<(u32, i64)> = self.wins.range((e.key, i64::MIN)..=(e.key, i64::MAX)).map(|(k, _)| *k).filter(|k| k.1 - gap < e.ts && e.ts < self.ends[k]).collect();
+        // an event whose own session would already be closed is late, and so is one that would extend a session whose result was emitted
+        if e.ts + gap <= wm_before || touching.iter().any(|k| self.wins[k].emitted) {
+            self.late_dropped += 1;
+            return;
+        }
+        self.accepted += 1;
+        let (mut start, mut end) = (e.ts, e.ts + gap);
+        let mut agg = Agg::default();
+        agg.add(e.val);
+        for k in touching {
+            let st = self.wins.remove(&k).unwrap();
+            let en = self.ends.remove(&k).unwrap();
+            self.pending.remove(&(en, k.0, k.1));
+            self.expiry.remove(&(en + self.retention(), k.0, k.1));
+            start = start.min(k.1);
+            end = end.max(en);
+            agg.merge(&st.agg);
+        }
+        self.wins.insert((e.key, start), WindowState { agg, emitted: false });
+        self.ends.insert((e.key, start), end);
+        self.pending.insert((end, e.key, start));
+        self.expiry.insert((end + self.retention(), e.key, start));
+    }
+
+    /// How long a window's state outlives its end. A closed session is remembered for one more gap: until then an event could overlap it
+    /// and has to be recognised as late.
+    fn retention(&self) -> i64 {
+        match self.cfg.spec {
+            WindowSpec::Session { gap } => self.cfg.grace.max(gap),
+            _ => self.cfg.grace,
+        }
+    }
+
+    /// Emit every window the watermark has passed and drop state past its retention.
+    fn close(&mut self, out: &mut Vec<Out>) {
+        let wm = self.watermark();
+        while let Some(&(end, key, start)) = self.pending.iter().next() {
+            if end > wm {
+                break;
+            }
+            self.pending.remove(&(end, key, start));
+            let st = self.wins.get_mut(&(key, start)).unwrap();
+            st.emitted = true;
+            out.push(Out { key, start, end, agg: st.agg, kind: Kind::Final, at_watermark: wm });
+        }
+        while let Some(&(at, key, start)) = self.expiry.iter().next() {
+            if at > wm {
+                break;
+            }
+            self.expiry.remove(&(at, key, start));
+            self.wins.remove(&(key, start));
+            self.ends.remove(&(key, start));
+        }
+    }
+
+    /// End of input: the watermark jumps to infinity and everything pending is emitted.
+    pub fn flush(&mut self, out: &mut Vec<Out>) {
+        let delay = self.cfg.delay;
+        self.max_ts = i64::MAX / 2 + delay;
+        self.close(out);
+    }
+}
+
+// ---- exactly-once pipelines -------------------------------------------------------------------------------------------------------------
+
+/// Input offset, operator state and sink commits move together: a checkpoint saves the first two and commits the sink's pending output.
+pub struct Pipeline {
+    pub op: WindowOp,
+    pub offset: usize,
+    pub committed: Vec<Out>,
+    pending: Vec<Out>,
+    ckpt: Option<(WindowOp, usize, usize)>,
+    /// A deliberately wrong protocol for the test: make output visible as soon as it is produced instead of at the next checkpoint.
+    pub eager_commit: bool,
+    pub checkpoints: u64,
+    pub replayed: u64,
+}
+impl Pipeline {
+    pub fn new(cfg: Config) -> Pipeline {
+        let op = WindowOp::new(cfg);
+        Pipeline { ckpt: Some((op.clone(), 0, 0)), op, offset: 0, committed: vec![], pending: vec![], eager_commit: false, checkpoints: 0, replayed: 0 }
+    }
+    pub fn step(&mut self, input: &[Event]) -> bool {
+        if self.offset >= input.len() {
+            return false;
+        }
+        let mut out = vec![];
+        self.op.process(input[self.offset], &mut out);
+        self.offset += 1;
+        if self.eager_commit { self.committed.extend(out) } else { self.pending.extend(out) }
+        true
+    }
+    pub fn checkpoint(&mut self) {
+        self.committed.extend(self.pending.drain(..));
+        self.ckpt = Some((self.op.clone(), self.offset, self.committed.len()));
+        self.checkpoints += 1;
+    }
+    /// A crash loses the operator state and the uncommitted output; recovery restores the last checkpoint.
+    pub fn crash_and_recover(&mut self) {
+        let (op, off, committed) = self.ckpt.clone().unwrap();
+        self.replayed += (self.offset - off) as u64;
+        self.op = op;
+        self.offset = off;
+        let _ = committed; // committed output only ever grows at a checkpoint, so it already equals the checkpointed prefix
+        self.pending.clear();
+    }
+    /// Run the rest of the input and flush.
+    pub fn finish(&mut self, input: &[Event]) {
+        while self.step(input) {}
+        let mut out = vec![];
+        self.op.flush(&mut out);
+        self.pending.extend(out);
+        self.committed.extend(self.pending.drain(..));
+    }
+}
+
+/// Fold a stream of results into the table of current window values (retractions remove, revisions replace).
+pub fn fold(outs: &[Out]) -> BTreeMap<(u32, i64, i64), Agg> {
+    let mut t = BTreeMap::new();
+    for o in outs {
+        match o.kind {
+            Kind::Final | Kind::Revision => { t.insert((o.key, o.start, o.end), o.agg); }
+            Kind::Retract => { t.remove(&(o.key, o.start, o.end)); }
+        }
+    }
+    t
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>One million events over 1 000 keys; event time advances 7 ms per event on average and each event arrives up to 800 ms late (so arrival order is shuffled within a window of about 115 events).</p>
+
+```text title="throughput by window type, the cost of lateness, and checkpoint intervals"
+1000000 events, 1 000 keys, event time advancing 7 ms per event on average, each event up to 800 ms late
+window                             M events/s     accepted   peak windows    dropped
+tumbling 1 s                             3.68      1000000            253          0
+sliding 10 s every 1 s                   0.40      1000000           5861          0
+session, gap 200 ms                      3.24      1000000            197          0
+lateness trade-off, tumbling 1 s windows: a larger delay keeps more events and holds results back
+delay (ms)    dropped %   peak windows  result lag (ms)
+         0       31.52%            117               45
+       200       16.36%            148              245
+       400        6.12%            172              444
+       800        0.00%            228              844
+      1600        0.00%            337             1644
+checkpoint interval trade-off (tumbling 1 s windows, 1 000 keys): a checkpoint copies the operator state
+    interval  checkpoints     run time (s) events replayed per crash
+        1000         1000             0.29                    555
+       10000          100             0.28                   5555
+      100000           10             0.31                  38888
+     1000000            1             0.70                 505555
+```
+
+<ul> <li><strong>Throughput follows the number of windows an event touches</strong>: 3.7 million events per second for tumbling windows, 3.2 million for sessions, 0.4 million for 10-second windows sliding by 1 second (ten window updates per event, 5 861 windows open at a time).</li> <li><strong>The delay buys completeness with latency</strong>: with no delay and events up to 800 ms late, <strong>31.5%</strong> of events are dropped; 200 ms drops 16.4%; 400 ms drops 6.1%; at 800 ms, equal to the maximum lateness, nothing is dropped and every result trails its window by about 850 ms. State grows with the delay (117 to 337 open windows).</li> <li><strong>Checkpoint cost is state size times frequency</strong>: with only a few hundred open windows, checkpoints every 1 000 events cost nothing measurable (0.29 s for 1 000 of them); the price shows on the recovery side: a crash replays on average half an interval (555 events at an interval of 1 000, 505 555 when the only checkpoint is the start).</li> <li><strong>Correctness first</strong>: the tumbling and sliding output equals a definition-based reference for 200 random configurations (32 230 windows; 5 139 late events dropped; 4 876 revisions emitted); sessions equal a batch definition when nothing is late and a sequential reference when data is late; and the output committed by a pipeline that crashed 660 times at random points, with random checkpoint intervals, equals the crash-free output exactly (same results, same order).</li> </ul>
+
+<aside data-call="note"><b>Two semantic gaps the tests found</b><p><strong>Sessions at distance exactly the gap.</strong> The first implementation merged events whose distance equalled the gap; the batch definition (events <em>less than</em> the gap apart belong together, a session is <code>[start, last + gap)</code>) said otherwise, and the comparison with the batch oracle failed on the third seed. The window is half-open, like every other window in the operator. <strong>An emitted session forgotten too soon.</strong> The first sequential-reference comparison for late sessions failed because the operator discarded a closed session at once (grace zero) and then accepted a late event that overlapped it, producing a second, overlapping session. A closed session has to be remembered for one more gap. The rule "an event is late if it overlaps a session whose result was already emitted" is the only one that keeps the output a partition of the key's activity.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Ordered sets as priority queues</strong>: <code>BTreeSet&lt;(end, key, start)&gt;</code> for windows not yet emitted and <code>BTreeSet&lt;(expire_at, key, start)&gt;</code> for state; <code>iter().next()</code> is the minimum, and removal is <code>O(log n)</code>. A <code>BinaryHeap</code> cannot delete a window that a session merge rewrites; the ordered set can.</li> <li><strong>State and output are plain data</strong>: <code>WindowOp</code> derives <code>Clone</code>, so a checkpoint is <code>op.clone()</code> and a restore is an assignment; the sink is a <code>Vec&lt;Out&gt;</code>. Real systems write checkpoints incrementally and asynchronously, but the contract is the same.</li> <li><strong><code>Out</code> carries the watermark</strong> at emission, so the test can assert the central invariant directly: no window is emitted before the watermark reaches its end.</li> <li><strong>Floor semantics for window starts</strong>: <code>ts - ts.rem_euclid(w)</code> handles negative timestamps; sliding windows enumerate starts from the last multiple of the slide downward while the window still contains the timestamp.</li> <li><strong>A fault is a flag</strong>: <code>eager_commit</code> makes the pipeline publish output as it is produced; the test shows it duplicating results after a crash, which is the failure the checkpointed sink prevents.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Windows against the definition (200 seeds)</strong>: random out-of-order streams (four disorder levels, 1 to 4 keys), tumbling and sliding shapes, delays 0 to 700 and grace 0 to 200; the folded output equals a reference computed from the definition of window membership and lateness; stream invariants hold (a window is emitted once, never before the watermark reaches its end; a retraction withdraws exactly the last value and is followed by its revision with one more event); accepted plus dropped equals the input.</li> <li><strong>Completeness</strong>: with the delay at least the disorder nothing is dropped and counts and sums equal the input; with zero delay events are lost.</li> <li><strong>Sessions</strong>: against a batch definition (sort per key, cut at gaps) when nothing is late (200 seeds), and against a sequential list-based reference when events are late (200 seeds, more than 200 drops).</li> <li><strong>Timing</strong>: a directed test of the emission moment (the event that brings the watermark to the end closes the window), zero-grace drops and grace revisions with retraction.</li> <li><strong>Exactly once (120 seeds)</strong>: random checkpoint intervals and crashes at 1% of steps (660 crashes); committed output equals the crash-free run exactly; the eager-commit variant produces duplicates.</li> <li><strong>Mutants run against these tests</strong>: a watermark ahead of the data; the grace boundary off by one; sliding events joining a window that has just ended; windows closing a tick late; late events not announced as revisions; state dropped before the grace period; sessions merging at exactly the gap; events merged into emitted sessions; a checkpoint forgetting the offset; recovery keeping lost state; output visible before the checkpoint; aggregates losing the maximum on merge. <strong>All 12 were killed.</strong></li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Apache Flink</strong> is the reference for event-time processing: watermark generators with bounded out-of-orderness, window assigners (tumbling, sliding, session, global), allowed lateness with late firings and side outputs, and Chandy–Lamport-style barrier checkpoints with two-phase-commit sinks for exactly-once to Kafka and databases. <strong>Apache Beam/Dataflow</strong> formalized the model (event time, windows, triggers, accumulation modes: the <em>Dataflow Model</em> paper). <strong>Spark Structured Streaming</strong> has watermarks and stateful aggregations; <strong>Kafka Streams</strong> has windowed state stores with grace periods and changelog-topic checkpoints.</li> <li><strong>Streaming databases</strong> (Materialize, RisingWave, Flink SQL, ksqlDB, ClickHouse materialized views) expose these as SQL: <code>TUMBLE</code>, <code>HOP</code>, <code>SESSION</code> window functions and <code>WATERMARK FOR ts AS ts - INTERVAL '5' SECOND</code>; the maintained result is an incrementally updated table, as in <a href="/cookbook/p/streaming-and-incremental-views">S3</a>.</li> <li><strong>Time-series databases</strong> use the same idea for continuous aggregates and late data (<a href="/cookbook/p/the-time-series-engine">M15</a>: a watermark that late writes pull back).</li> <li><strong>Change data capture</strong> (Debezium) turns a database's transaction log into a stream of changes that these operators consume; exactly-once to the sink is again offsets plus transactions, as in Kafka's transactional producer.</li> <li><strong>Triggers</strong> (when to emit: at the watermark, early every N seconds, on each late element) and <strong>accumulation modes</strong> (discard, accumulate, accumulate-and-retract) are the Beam vocabulary for what this section's grace period and revisions provide in one fixed combination.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>A watermark is a heuristic.</strong> The delay encodes a belief about the data's disorder; a stalled source holds the watermark back for everyone, an idle partition must be declared idle, and a burst of very late data is simply lost unless you counted it.</li> <li><strong>Event time versus processing time</strong>: aggregating by arrival time is simpler and wrong whenever delays vary; clock skew between producers needs handling at the source.</li> <li><strong>State growth</strong> from long windows, large grace periods and high key cardinality is the usual operational failure; monitor open windows and state size, and set time-to-live on keyed state.</li> <li><strong>Exactly-once to external systems needs the sink's cooperation</strong>: idempotent writes (key by window and revision), or a transactional commit tied to the checkpoint. A non-transactional sink gives at-least-once.</li> <li><strong>Retractions must reach consumers</strong>: a downstream system that cannot apply retractions will double-count; choose append-only final results for such sinks and accept the latency.</li> <li><strong>Replay after a crash re-sends events</strong> to operators: operators must be deterministic functions of their input and state, with no hidden clocks or randomness.</li> <li><strong>Session windows and out-of-order data interact</strong>: a late event can merge sessions already emitted by an earlier version of the pipeline; decide the policy (drop, side output, revise) and document it.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "The Dataflow Model: A Practical Approach to Balancing Correctness, Latency, and Cost in Massively-Parallel, Unbounded, Out-of-Order Data Processing"
+url = "https://research.google/pubs/the-dataflow-model-a-practical-approach-to-balancing-correctness-latency-and-cost-in-massive-scale-unbounded-out-of-order-data-processing/"

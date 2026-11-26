@@ -1,0 +1,413 @@
+title = "The vector store"
+module = "Search and vectors"
+module_order = 9
+chapter = "Running a vector database"
+chapter_order = 3
+order = 473
+kind = "guide"
+lede = "Vectors as keys in the shared space, transactional with the rows that own them · an IVF index maintained by ordinary writes · a disk-resident Vamana graph (DiskANN) with product-quantized guidance · sector reads at recall 0.95 against IVF, HNSW and a scan"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>A vector index in a database has to answer two questions.</strong> <em>Is it fast?</em> (<a href="/cookbook/p/vector-databases">S2</a> built IVF, product quantization and HNSW in memory.) And <em>is it part of the database?</em> A table with an embedding column must commit the row and its embedding together, show a search the same snapshot it shows a <code>SELECT</code>, survive a crash, and be updated by ordinary inserts and deletes. This section answers the second question with the key space, and the first for data that does not fit in memory with DiskANN.</li> <li><strong>IVF fits the key space naturally.</strong> The centroids are small and live in memory; each vector is stored at <code>vector_key(index, cell, id)</code> (<a href="/cookbook/p/one-key-space">M1</a>), so a cell is a key prefix and probing a cell is a range scan. A reverse entry <code>id → cell</code> lets an update or a delete find the old copy. Every write is a key written in a transaction (<a href="/cookbook/p/transactions-on-the-key-space">M2</a>): atomicity, isolation and recovery come from the layers below, and a search at a snapshot is exactly a scan at that snapshot.</li> <li><strong>Graph indexes are harder to keep transactional.</strong> A graph node's neighbour list is rewritten by later inserts; making that atomic and versioned is research-grade work. Systems therefore either keep graphs in memory and rebuild or patch them, treat the graph as an immutable segment next to a transactional delta (searched by brute force), or accept eventual consistency for the index while the base table stays transactional.</li> <li><strong>DiskANN makes a graph work when the data lives on SSD.</strong> Its index, <em>Vamana</em>, is a single-layer graph of bounded degree <em>R</em>. Build: start from a random graph, and for every point run a greedy search from the <em>medoid</em> (the point nearest the centroid) to collect the nodes it visits, then choose the point's neighbours by <em>robust pruning</em>: repeatedly keep the closest candidate and discard the candidates that are closer to it than <code>1/α</code> of their distance to the point. With α &gt; 1 a few long edges survive, which keeps search paths short. Each node (its vector and neighbour ids) is sized to fit a disk sector.</li> <li><strong>The cost of a search is sector reads, not distance computations.</strong> A plain graph on disk needs the vector of every candidate it scores, so every candidate is a read. DiskANN keeps a <strong>product-quantized</strong> copy of all vectors in memory (8 bytes each here): candidates are ordered by their approximate distance, a node's sector is read only when it is <em>expanded</em> (which delivers its exact vector and its neighbours), and the answers are chosen by exact distance among the expanded nodes. Reads fall to the number of expansions.</li> <li><strong>Recall, reads and memory are the three dials</strong>: the beam width <em>L</em> sets recall and reads; the PQ code size sets resident memory and how well the approximate order predicts the exact one.</li> </ul>
+"""
+
+[[sections]]
+heading = "Part A: a graph on disk"
+body = """
+<ul> <li><strong>Build</strong>: <code>Vamana::build(data, R, L, α)</code> runs two passes (α = 1, then the target α), inserting reverse edges and pruning a neighbour that overflows <em>R</em>. A final <code>repair</code> links any node that the greedy construction left unreachable from the medoid.</li> <li><strong>Search</strong>: <code>search</code> is the plain best-first beam search; <code>search_pq</code> is the DiskANN search described above. Both report sector reads and distance counts.</li> <li><strong>The disk model</strong>: one node = one sector holding <code>dim × 4 + R × 4 + 4</code> bytes (260 bytes here; real systems pad to 4 KB or pack several nodes per page).</li> </ul>
+"""
+
+[[sections]]
+heading = "Part B: the transactional IVF table"
+body = """
+<p><code>VecTable::upsert</code> removes any old entry, assigns the vector to its nearest centroid and writes the vector key and the location key; <code>remove</code>, <code>get</code> and <code>search(nprobe)</code> are range scans and point reads through a transaction.</p>
+
+:::deeper Reference: Vamana build with robust pruning and repair, plain and PQ-guided search, the transactional IVF table over the key space
+```rust title="src/multimodel/vecstore.rs"
+//! Vectors in the multi-model database. (1) A Vamana graph, the index of DiskANN: a single-layer navigable graph with bounded degree whose
+//! nodes each fit one disk sector, searched by best-first beam search with product-quantized distances in memory and exact distances from
+//! the sectors it reads. (2) A transactional IVF index laid out in the shared ordered key space, so that a row and its embedding commit
+//! atomically and a search sees one consistent snapshot.
+use crate::mmkey::{decode_tuple, key, prefix_end, vector_key, Val};
+use crate::mmtxn::{Db, Txn};
+use crate::vecidx::{kmeans, l2, nearest, Cand, Data, Pq};
+use crate::joinorder::Rng;
+
+// ---- Vamana --------------------------------------------------------------------------------------------------------------------------
+
+pub struct Vamana {
+    pub dim: usize,
+    pub r: usize,
+    pub medoid: u32,
+    pub adj: Vec<Vec<u32>>,
+    vecs: Vec<f32>,
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct Probe {
+    /// Node sectors read because the node was expanded (each holds a vector and its neighbour list).
+    pub reads: u64,
+    /// Distance computations on full vectors, and on PQ codes. On a disk-resident graph without PQ every exact computation needs the
+    /// vector of a candidate, i.e. a sector read of its own; with PQ only expansions read.
+    pub exact: u64,
+    pub approx: u64,
+}
+
+struct Beam {
+    items: Vec<(Cand, bool)>, // sorted ascending; bool = already expanded
+    cap: usize,
+}
+impl Beam {
+    fn new(cap: usize) -> Beam {
+        Beam { items: Vec::with_capacity(cap + 1), cap }
+    }
+    fn insert(&mut self, c: Cand) {
+        if self.items.len() == self.cap && c >= self.items.last().unwrap().0 {
+            return;
+        }
+        let pos = self.items.partition_point(|(x, _)| *x < c);
+        self.items.insert(pos, (c, false));
+        self.items.truncate(self.cap);
+    }
+    fn next_unexpanded(&mut self) -> Option<Cand> {
+        let it = self.items.iter_mut().find(|(_, e)| !*e)?;
+        it.1 = true;
+        Some(it.0)
+    }
+}
+
+impl Vamana {
+    #[inline]
+    pub fn vec(&self, i: u32) -> &[f32] {
+        &self.vecs[i as usize * self.dim..(i as usize + 1) * self.dim]
+    }
+
+    /// Best-first search from `start` with beam width `l`. Returns the beam and every node expanded, with exact distances.
+    fn greedy(&self, q: &[f32], start: u32, l: usize, seen: &mut Vec<u32>, epoch: u32, probe: &mut Probe) -> (Vec<Cand>, Vec<Cand>) {
+        let mut beam = Beam::new(l);
+        let mut visited = vec![];
+        seen[start as usize] = epoch;
+        beam.insert(Cand(l2(q, self.vec(start)), start));
+        probe.exact += 1;
+        while let Some(c) = beam.next_unexpanded() {
+            probe.reads += 1;
+            visited.push(c);
+            for &nb in &self.adj[c.1 as usize] {
+                if seen[nb as usize] != epoch {
+                    seen[nb as usize] = epoch;
+                    probe.exact += 1;
+                    beam.insert(Cand(l2(q, self.vec(nb)), nb));
+                }
+            }
+        }
+        (beam.items.into_iter().map(|x| x.0).collect(), visited)
+    }
+
+    /// Keep at most `r` neighbours of `p`: repeatedly take the closest candidate and discard those it "covers" (closer to it than
+    /// `1/alpha` of their distance to `p`), which leaves a few long edges and many short ones.
+    fn prune(&self, p: u32, mut cands: Vec<Cand>, alpha: f32) -> Vec<u32> {
+        cands.retain(|c| c.1 != p);
+        cands.sort();
+        cands.dedup_by_key(|c| c.1);
+        let mut out: Vec<u32> = Vec::with_capacity(self.r);
+        let a2 = alpha * alpha; // distances are squared
+        while !cands.is_empty() && out.len() < self.r {
+            let best = cands.remove(0);
+            out.push(best.1);
+            cands.retain(|c| a2 * l2(self.vec(best.1), self.vec(c.1)) > c.0);
+        }
+        out
+    }
+
+    pub fn build(data: &Data, r: usize, l: usize, alpha: f32, rng: &mut Rng) -> Vamana {
+        let mut g = Vamana::build_unrepaired(data, r, l, alpha, rng);
+        g.repair();
+        g
+    }
+
+    /// Make every node reachable from the medoid.
+    pub fn repair(&mut self) {
+        let mut seen = vec![0u32; self.adj.len()];
+        let mut epoch = 0;
+        self.connect(&mut seen, &mut epoch);
+    }
+
+    /// The two-pass construction of the paper, which does not by itself promise connectivity.
+    pub fn build_unrepaired(data: &Data, r: usize, l: usize, alpha: f32, rng: &mut Rng) -> Vamana {
+        let n = data.n;
+        let dim = data.dim;
+        // medoid: the point nearest the centroid
+        let mut centroid = vec![0f32; dim];
+        for i in 0..n {
+            for (c, x) in centroid.iter_mut().zip(data.row(i as u32)) {
+                *c += x / n as f32;
+            }
+        }
+        let medoid = (0..n as u32).min_by(|&a, &b| l2(&centroid, data.row(a)).total_cmp(&l2(&centroid, data.row(b)))).unwrap();
+        let mut g = Vamana { dim, r, medoid, adj: vec![vec![]; n], vecs: data.v.clone() };
+        // a random starting graph
+        for i in 0..n {
+            while g.adj[i].len() < r.min(n - 1) {
+                let j = rng.next(n as u64) as u32;
+                if j as usize != i && !g.adj[i].contains(&j) {
+                    g.adj[i].push(j);
+                }
+            }
+        }
+        let mut seen = vec![0u32; n];
+        let mut epoch = 0;
+        let mut probe = Probe::default();
+        for pass_alpha in [1.0f32, alpha] {
+            let mut order: Vec<u32> = (0..n as u32).collect();
+            for i in (1..n).rev() {
+                let j = rng.next(i as u64 + 1) as usize;
+                order.swap(i, j);
+            }
+            for &p in &order {
+                epoch += 1;
+                let q = g.vec(p).to_vec();
+                let (_, mut visited) = g.greedy(&q, medoid, l, &mut seen, epoch, &mut probe);
+                visited.extend(g.adj[p as usize].iter().map(|&j| Cand(l2(&q, g.vec(j)), j)));
+                let nbrs = g.prune(p, visited, pass_alpha);
+                g.adj[p as usize] = nbrs.clone();
+                for &j in &nbrs {
+                    if g.adj[j as usize].contains(&p) {
+                        continue;
+                    }
+                    if g.adj[j as usize].len() < r {
+                        g.adj[j as usize].push(p);
+                    } else {
+                        let mut c: Vec<Cand> = g.adj[j as usize].iter().map(|&x| Cand(l2(g.vec(j), g.vec(x)), x)).collect();
+                        c.push(Cand(l2(g.vec(j), g.vec(p)), p));
+                        g.adj[j as usize] = g.prune(j, c, pass_alpha);
+                    }
+                }
+            }
+        }
+        g
+    }
+
+    /// Greedy construction does not promise that every node can be reached from the medoid. Link each unreachable node from the nearest
+    /// reachable one (replacing that node's farthest neighbour if it is full) until nothing is stranded.
+    fn connect(&mut self, seen: &mut Vec<u32>, epoch: &mut u32) {
+        loop {
+            let mut reach = vec![false; self.adj.len()];
+            let mut stack = vec![self.medoid];
+            reach[self.medoid as usize] = true;
+            while let Some(x) = stack.pop() {
+                for &y in &self.adj[x as usize] {
+                    if !reach[y as usize] {
+                        reach[y as usize] = true;
+                        stack.push(y);
+                    }
+                }
+            }
+            let Some(stranded) = (0..self.adj.len()).find(|&i| !reach[i]) else { return };
+            *epoch += 1;
+            let q = self.vec(stranded as u32).to_vec();
+            let (beam, _) = self.greedy(&q, self.medoid, 64, seen, *epoch, &mut Probe::default());
+            let anchor = beam.iter().find(|c| reach[c.1 as usize]).map(|c| c.1).unwrap_or(self.medoid);
+            if self.adj[anchor as usize].len() >= self.r {
+                let far = (0..self.adj[anchor as usize].len()).max_by(|&a, &b| l2(self.vec(anchor), self.vec(self.adj[anchor as usize][a])).total_cmp(&l2(self.vec(anchor), self.vec(self.adj[anchor as usize][b])))).unwrap();
+                self.adj[anchor as usize].swap_remove(far);
+            }
+            self.adj[anchor as usize].push(stranded as u32);
+        }
+    }
+
+    /// Plain search: every expanded node is a sector read that supplies its vector and its neighbours.
+    pub fn search(&self, q: &[f32], k: usize, l: usize, probe: &mut Probe) -> Vec<Cand> {
+        let mut seen = vec![0u32; self.adj.len()];
+        let (mut beam, _) = self.greedy(q, self.medoid, l.max(k), &mut seen, 1, probe);
+        beam.truncate(k);
+        beam
+    }
+
+    /// DiskANN search: candidates are ordered by PQ distance (cheap, in memory); a node's sector is read only when it is expanded, which
+    /// yields its exact distance and its neighbours. The answer is the best `k` expanded nodes by exact distance.
+    pub fn search_pq(&self, q: &[f32], k: usize, l: usize, pq: &Pq, codes: &[u8], probe: &mut Probe) -> Vec<Cand> {
+        let m = pq.m;
+        let table = pq.table(q);
+        let adc = |i: u32, probe: &mut Probe| {
+            probe.approx += 1;
+            Pq::adc(&table, &codes[i as usize * m..(i as usize + 1) * m])
+        };
+        let mut seen = vec![false; self.adj.len()];
+        let mut beam = Beam::new(l.max(k));
+        beam.insert(Cand(adc(self.medoid, probe), self.medoid));
+        seen[self.medoid as usize] = true;
+        let mut expanded: Vec<Cand> = vec![];
+        while let Some(c) = beam.next_unexpanded() {
+            probe.reads += 1;
+            probe.exact += 1;
+            expanded.push(Cand(l2(q, self.vec(c.1)), c.1));
+            for &nb in &self.adj[c.1 as usize] {
+                if !seen[nb as usize] {
+                    seen[nb as usize] = true;
+                    beam.insert(Cand(adc(nb, probe), nb));
+                }
+            }
+        }
+        expanded.sort();
+        expanded.truncate(k);
+        expanded
+    }
+
+    /// Nodes reachable from the medoid.
+    pub fn reachable(&self) -> usize {
+        let mut seen = vec![false; self.adj.len()];
+        let mut stack = vec![self.medoid];
+        seen[self.medoid as usize] = true;
+        let mut n = 1;
+        while let Some(x) = stack.pop() {
+            for &y in &self.adj[x as usize] {
+                if !seen[y as usize] {
+                    seen[y as usize] = true;
+                    n += 1;
+                    stack.push(y);
+                }
+            }
+        }
+        n
+    }
+    /// Bytes of one node sector: the vector, the neighbour ids and a count.
+    pub fn node_bytes(&self) -> usize {
+        self.dim * 4 + self.r * 4 + 4
+    }
+}
+
+// ---- a transactional IVF index in the shared key space ---------------------------------------------------------------------
+
+/// Vectors of a table live at `vector_key(index, cell, id)`; a reverse entry at `row_key`-style key `[Int(id)]` in a side namespace
+/// records the cell so that updates and deletes can find the old entry. Both are ordinary keys of the transaction layer.
+pub struct VecTable {
+    pub index: u32,
+    pub dim: usize,
+    pub centroids: Vec<f32>,
+}
+
+fn f32s_to_bytes(v: &[f32]) -> Vec<u8> {
+    v.iter().flat_map(|x| x.to_le_bytes()).collect()
+}
+fn bytes_to_f32s(b: &[u8]) -> Vec<f32> {
+    b.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect()
+}
+fn loc_key(index: u32, id: u64) -> Vec<u8> {
+    let mut k = vec![0x51];
+    k.extend(index.to_be_bytes());
+    k.extend(key(&[Val::Int(id as i64)]));
+    k
+}
+
+impl VecTable {
+    /// Train `nlist` centroids on a sample.
+    pub fn train(index: u32, data: &Data, nlist: usize, rng: &mut Rng) -> VecTable {
+        VecTable { index, dim: data.dim, centroids: kmeans(&data.v, data.dim, nlist, 8, rng) }
+    }
+    pub fn nlist(&self) -> usize {
+        self.centroids.len() / self.dim
+    }
+    pub fn upsert(&self, db: &Db, t: &mut Txn, id: u64, v: &[f32]) {
+        self.remove(db, t, id);
+        let cell = nearest(&self.centroids, self.dim, v).0 as u32;
+        db.put(t, &vector_key(self.index, cell, id), &f32s_to_bytes(v));
+        db.put(t, &loc_key(self.index, id), &cell.to_be_bytes());
+    }
+    pub fn remove(&self, db: &Db, t: &mut Txn, id: u64) -> bool {
+        match db.get(t, &loc_key(self.index, id)) {
+            Some(c) => {
+                let cell = u32::from_be_bytes(c.try_into().unwrap());
+                db.delete(t, &vector_key(self.index, cell, id));
+                db.delete(t, &loc_key(self.index, id));
+                true
+            }
+            None => false,
+        }
+    }
+    pub fn get(&self, db: &Db, t: &mut Txn, id: u64) -> Option<Vec<f32>> {
+        let c = db.get(t, &loc_key(self.index, id))?;
+        let cell = u32::from_be_bytes(c.try_into().unwrap());
+        db.get(t, &vector_key(self.index, cell, id)).map(|b| bytes_to_f32s(&b))
+    }
+    /// The `k` nearest vectors among the `nprobe` closest cells, as of the transaction's snapshot (plus its own writes).
+    pub fn search(&self, db: &Db, t: &mut Txn, q: &[f32], k: usize, nprobe: usize) -> (Vec<(f32, u64)>, usize) {
+        let mut order: Vec<(f32, usize)> = (0..self.nlist()).map(|c| (l2(q, &self.centroids[c * self.dim..(c + 1) * self.dim]), c)).collect();
+        order.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut best: Vec<(f32, u64)> = vec![];
+        let mut scanned = 0;
+        for &(_, cell) in order.iter().take(nprobe) {
+            let prefix = {
+                let mut p = vector_key(self.index, cell as u32, 0);
+                p.truncate(p.len() - key(&[Val::Int(0)]).len());      // keep model tag, index id and the cell
+                p
+            };
+            for (kk, v) in db.scan(t, &prefix, &prefix_end(&prefix).unwrap()) {
+                let id = match &decode_tuple(&kk[5..], &[]).unwrap()[1] {
+                    Val::Int(i) => *i as u64,
+                    o => panic!("{o:?}"),
+                };
+                scanned += 1;
+                best.push((l2(q, &bytes_to_f32s(&v)), id));
+            }
+        }
+        best.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        best.truncate(k);
+        (best, scanned)
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>50 000 vectors of 32 dimensions in 100 heavily overlapping clusters (a hard case for partitioning indexes), 200 queries, recall&#64;10 against an exact scan.</p>
+
+```text title="Vamana with and without PQ guidance, sector reads against IVF, HNSW and a scan, and the transactional table"
+50000 vectors, 32 dimensions, 100 overlapping clusters, recall@10 over 200 queries; a node sector holds a vector and its neighbour list
+Vamana build (R=32, L=100, alpha 1.2, two passes): 6.3 s; node sector 260 bytes (15 nodes per 4 KB page if packed); reachable 50000/50000; mean degree 31.6
+  beam L |      plain graph on disk |    PQ-guided (8 bytes per vector in RAM)
+      10 |    0.837           342.6 |    0.513            16.1          363
+      20 |    0.921           469.6 |    0.705            25.7          494
+      40 |    0.965           676.4 |    0.864            45.2          701
+      80 |    0.984          1047.2 |    0.955            84.4         1074
+     160 |    0.994          1778.5 |    0.987           163.0         1810
+     320 |    0.997          3261.1 |    0.997           322.1         3356
+sector reads per query at recall >= 0.95:
+  Vamana, plain graph on disk (L=40)             recall 0.965      676.4 sectors
+  Vamana with PQ guidance (L=80)                 recall 0.955       84.4 sectors
+  IVF-flat (nlist 200, nprobe 16)                recall 0.968      115.1 sectors
+  HNSW (M=16, ef 40), each visit one sector      recall 0.966      727.7 sectors
+  exact scan of every vector                     recall 1.000     1562.5 sectors
+transactional IVF table: 20 000 vectors inserted in 0.04 s (459325 vectors/s, 100 per transaction)
+  nprobe  recall@10  scanned/query     us/query
+       1      0.718            330          342
+       2      0.792            713          695
+       4      0.884           1451         1373
+       8      0.942           2937         2802
+      16      0.984           5841         5774
+      64      1.000          20000        20199
+```
+
+<ul> <li><strong>PQ guidance is what makes a graph viable on disk</strong>: a plain graph needs 676 sector reads per query for recall 0.965, nearly half the 1 563 of a scan; the PQ-guided search reaches 0.955 with <strong>84 reads</strong>, eight times fewer, because candidates are ranked from the 8-byte codes in memory and only expanded nodes are read. The price is memory: 8 bytes × 50 000 = 400 KB here, one sixteenth of the raw 128 bytes per vector.</li> <li><strong>Against the alternatives at recall ≥ 0.95</strong>: IVF-flat with 200 cells and 16 probes reads 115 sectors, but they are contiguous (a list is one sequential read), so its time per sector is far lower than a graph's random reads; HNSW needs 728 visits when every visit is a sector, which is why it is an in-memory index. A graph with PQ wins on random reads; an IVF index wins on bandwidth. Which one is faster depends on the device: on NVMe the random-read penalty is small and the graph's 84 reads usually win; on slow storage the sequential lists do.</li> <li><strong>Build cost</strong>: 6.3 s for 50 000 vectors (two passes of a 100-wide search each) and 31.6 neighbours per node on average. The construction is quadratic-ish in the beam width and does not parallelize trivially; production builders partition the data, build sub-graphs and merge.</li> <li><strong>The transactional table</strong>: 20 000 vectors in 200 transactions (460 000 per second, an in-memory key space, so the figure is the cost of the layout and the versioned keys, not of a disk). Probing 8 of 64 cells scans 15% of the vectors for recall 0.942; probing 16 reaches 0.984; probing all is the exact answer.</li> <li><strong>The test of transactionality is stronger than the number</strong>: 40 randomized runs of concurrent transactions inserting, moving, deleting and searching, with row keys written in the same transactions, compare every search with a brute force over that transaction's own view (its snapshot plus its writes), check that an aborted transaction leaves neither the row nor the vector, and check that probing the two nearest cells scans exactly the vectors assigned to them.</li> </ul>
+
+<aside data-call="note"><b>A graph that does not reach every node</b><p>The paper's construction does not guarantee that every node is reachable from the medoid. On the 50 000-point test set with tight clusters, the first build left a handful of points unreachable: they could never be returned by any query, whatever the beam width. <code>repair</code> finds each stranded node, searches for the nearest reachable one and links it (dropping that node's farthest neighbour if it is full), repeating until nothing is stranded. The test uses that configuration, asserts that the unrepaired construction strands nodes and the repaired one does not, and a mutant that skips the repair is killed. A recall figure that silently excludes some points is a worse failure than a slow query.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Beam as a sorted <code>Vec&lt;(Cand, bool)&gt;</code></strong>: insertion by <code>partition_point</code>, truncation to <em>L</em>, and a flag for "already expanded"; for widths of 10 to 300 this beats a pair of heaps. <code>Cand(f32, u32)</code> is <code>Ord</code> through <code>total_cmp</code> with the id as tie-breaker, so results are deterministic.</li> <li><strong>Visited marks by epoch</strong>: a <code>Vec&lt;u32&gt;</code> stamped with the query number replaces a hash set and a clear; the build reuses one array across a hundred thousand searches.</li> <li><strong>Squared distances with a squared α</strong>: <code>α² · d²(best, c) &gt; d²(p, c)</code> is the pruning rule without a square root.</li> <li><strong>Two probe counters</strong>: <code>reads</code> (expansions) and <code>exact</code> (full-vector evaluations) let one run report both the plain-on-disk cost (every exact evaluation is a read) and the PQ-guided cost (only expansions are).</li> <li><strong>Vectors as bytes in the key space</strong>: <code>f32::to_le_bytes</code> into the value of <code>vector_key(index, cell, id)</code>; the id is decoded back from the key with <code>decode_tuple</code>, so the value holds only the vector.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Graph invariants</strong> on 3 000 points: every degree ≤ <em>R</em>, no self loops or duplicate neighbours, every node reachable from the medoid, the medoid is the point nearest the centroid, and a beam as wide as the collection returns exactly the brute-force top 10 for 30 queries.</li> <li><strong>Recall behaviour</strong> on 8 000 points: recall&#64;10 never falls when the beam grows (10 to 160), is above 0.9 at <em>L</em> = 80 for exact distances and above 0.85 for PQ-guided search; every PQ-guided result carries its exact distance and the list is sorted; PQ search never reads more than twice what a plain search expands plus a constant.</li> <li><strong>Connectivity</strong>: the unrepaired construction on the 50 000-point test set strands nodes, the repaired graph reaches all, with bounded degrees; a graph from which two nodes' in-edges were removed by hand is repaired.</li> <li><strong>Transactional table (40 seeds × 150 steps)</strong>: three concurrent snapshot transactions with upserts, removals, gets and searches; every operation equals a model of the transaction's view; commits keep the row and vectors together (row key visible after commit, absent after an abort); a search with <code>nprobe</code> of 2 scans exactly the vectors of the two nearest cells; final contents equal the model.</li> <li><strong>Mutants run against these tests</strong>: pruning keeping covered candidates; no degree bound; no reverse edges (the build then does not finish within the time limit); the medoid being the farthest point; PQ search returning approximate distances; stranded nodes not reconnected; an upsert leaving the old entry; a removal leaving the location entry; a search probing one cell too many; vectors assigned to the farthest cell. <strong>All 10 were killed</strong>; the repair mutant survived until the stranding configuration was added.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>DiskANN</strong> (Microsoft Research; used in Bing and as the engine of several vector databases) and its descendants <strong>Filtered-DiskANN</strong> and <strong>FreshDiskANN</strong> (streaming inserts and deletes with a merge into the disk graph) are the reference for SSD-resident graphs. <strong>Milvus, Weaviate, Qdrant, Vespa, pgvecto.rs, SQL Server 2025 and Azure Cosmos DB</strong> offer disk-based or quantized graph indexes.</li> <li><strong>pgvector</strong> has IVFFlat and HNSW as Postgres index access methods, so vectors participate in transactions and WAL like any index; <strong>LanceDB</strong> and <strong>Turbopuffer</strong> build IVF-PQ and graph indexes over object storage; <strong>SingleStore</strong> and <strong>Elasticsearch/OpenSearch</strong> (Lucene HNSW, per-segment) keep per-segment indexes next to a transactional or near-real-time delta.</li> <li><strong>Scalar quantization and binary codes</strong> (int8, 1-bit with re-ranking), <strong>RaBitQ</strong> and <strong>ScaNN's anisotropic quantization</strong> push the resident memory per vector below PQ's at similar recall; <strong>hybrid search</strong> combines a vector score with BM25 or filters (<a href="/cookbook/p/full-text-search">M16</a>, <a href="/cookbook/p/one-planner-for-many-models">M18</a>).</li> <li><strong>Filtering</strong> is the hard part in practice: pre-filtering shrinks the candidate set but breaks graph connectivity, post-filtering wastes the search; Filtered-DiskANN builds label-aware edges; databases choose by selectivity (<a href="/cookbook/p/vector-databases">S2</a> measured the planner choice).</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Recall measured on easy data is meaningless.</strong> Well-separated clusters make any index look perfect; test on data with the overlap and the dimensionality of the real embeddings, and report the recall–work curve, not one point.</li> <li><strong>Deletes in a graph</strong> leave holes: marking a node deleted keeps routing through it; real removal needs re-linking its neighbours. Rebuild periodically.</li> <li><strong>Embedding drift</strong>: re-embedding a table with a new model invalidates every index; version the index with the model.</li> <li><strong>Normalization and metric</strong>: cosine similarity needs unit vectors (or an inner-product index over normalized data); mixing metrics between build and query is a silent recall bug.</li> <li><strong>Memory for codes grows with the table</strong>: 8 bytes per vector means 8 GB per billion; plan the residency, not only the disk.</li> <li><strong>Read amplification of a sector per node</strong> is wasted when a node is 260 bytes; pack nodes of nearby ids per page or store the neighbour lists compactly.</li> <li><strong>Transactionality of the graph itself</strong> is not provided by the key layout of Part B; if the graph is an immutable segment, the delta since its build must be searched too and merged into the results.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "DiskANN: Fast Accurate Billion-point Nearest Neighbor Search on a Single Node"
+url = "https://proceedings.neurips.cc/paper/2019/hash/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Abstract.html"

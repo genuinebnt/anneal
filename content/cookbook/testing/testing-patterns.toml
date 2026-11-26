@@ -1,0 +1,42 @@
+title = "Unit-test patterns"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Methods: test design and TDD"
+chapter_order = 1
+order = 140
+kind = "recipe"
+lede = "Table-driven, Result-returning, should_panic, fakes, builders, seeded randomness."
+level = "intermediate"
+code = ["examples/dev_tools/testing_patterns.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>every stage</li><li>unit tests live <strong>next to</strong> the code</li><li>black-box tests in <code>tests/</code></li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>every codebase: table-driven tests</li><li>injected fakes</li><li>seeded property tests</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+`cargo test` builds the `#[cfg(test)]` module only for tests. Good tests: one behaviour each, descriptive names, failure messages that show the input, no reliance on time/network/randomness (inject fakes, seed RNGs).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/book/ch11-00-testing.html> and insta (snapshot tests) <https://insta.rs>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch11-00-testing.html"
+url = "https://doc.rust-lang.org/book/ch11-00-testing.html"
+
+[[sources]]
+title = "insta.rs"
+url = "https://insta.rs"

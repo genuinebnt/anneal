@@ -1,0 +1,40 @@
+title = "Strongly connected components"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Graph algorithms"
+chapter_order = 4
+order = 197
+kind = "recipe"
+lede = "strongly connected components (iterative Tarjan): find circular groups in a directed graph."
+level = "advanced"
+code = ["examples/algorithms/tarjan_scc.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+diagnosing **which** nodes form cycles (not just "a cycle exists"), condensing a graph into a DAG.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+finding circular dependencies (build systems, module imports, Cargo features), condensing graphs to DAGs.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+An SCC is a maximal set of nodes that can all reach each other. Collapsing each SCC to one node always yields a DAG. Components of size > 1 (or a node with a self-edge) are the cycles.
+
+Tarjan does it in **one DFS**, O(V+E), using `index` (discovery order) and `low` (lowest index reachable). Here the DFS is **iterative** (explicit call stack) so deep graphs cannot overflow the stack (see stage 8). Components come out in reverse topological order of the condensation.
+
+Domain: module imports. Read: <https://en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm> and petgraph's `tarjan_scc` <https://docs.rs/petgraph/latest/petgraph/algo/fn.tarjan_scc.html>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm"
+url = "https://en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm"
+
+[[sources]]
+title = "docs.rs/petgraph/latest/petgraph/algo/fn.tarjan_scc.html"
+url = "https://docs.rs/petgraph/latest/petgraph/algo/fn.tarjan_scc.html"

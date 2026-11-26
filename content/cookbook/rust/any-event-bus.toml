@@ -1,0 +1,38 @@
+title = "A type-safe event bus built on `TypeId` and `dyn Any`"
+module = "Rust language"
+module_order = 1
+chapter = "Design patterns"
+chapter_order = 5
+order = 47
+kind = "recipe"
+lede = "Runtime dispatch with compile-time-typed handlers."
+level = "advanced"
+code = ["examples/patterns/any_event_bus.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>plugin/event systems</li><li>ECS-style registries</li><li>"service locators"</li><li>anywhere values of unrelated types share one container</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>plugin systems</li><li>UI/event buses</li><li>ECS resources (Bevy)</li><li>service locators</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+`Any` gives every `'static` type a runtime `TypeId` and lets you downcast `&dyn Any` back to the concrete type. The bus stores, per event **type**, a list of type-erased handlers. `subscribe::<E>(closure taking &E)` wraps the typed closure in a function over `&dyn Any` that downcasts first; `publish(&event)` looks up handlers by `TypeId::of::<E>()`.
+
+Callers never see `Any`. Combines generics, closures, trait objects, `'static` bounds and interior mutability. Real use: <https://docs.rs/anymap> , bevy's resource/event registries <https://github.com/bevyengine/bevy> , and `Box<dyn Any>` in `std::panic::catch_unwind` payloads.
+"""
+
+[[sources]]
+title = "docs.rs/anymap"
+url = "https://docs.rs/anymap"
+
+[[sources]]
+title = "github.com/bevyengine/bevy"
+url = "https://github.com/bevyengine/bevy"

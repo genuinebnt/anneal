@@ -1,0 +1,9 @@
+warning[W0506]: variable `x` does not need to be mutable
+ --> w0506_unused_mut.peb:2:9
+  |
+2 |     let mut x = 1;
+  |         ^^^^^ declared `mut` but never mutated
+  |
+  = help: remove this `mut`
+
+warning: 1 warning emitted

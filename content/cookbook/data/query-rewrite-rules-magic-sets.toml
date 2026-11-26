@@ -1,0 +1,95 @@
+title = "Query rewrite rules over a Query Graph Model"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 396
+kind = "recipe"
+lede = "query rewrite rules over a Query Graph Model (view merging, pushdown, join/DISTINCT elimination, outer-join simplification, unnesting) and magic sets"
+level = "advanced"
+code = ["examples/database/query_rewrite_rules_magic_sets.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>SQL planners' logical-rewrite phase</li><li>view expansion</li><li>ORM/BI query generators that emit nested SELECTs</li><li>Datalog/recursive-query engines</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Starburst/DB2 "query rewrite" (QGM boxes, rule classes, the model for most later rewriters)</li><li>PostgreSQL's planner (subquery pull-up, outer-join reduction, join removal, <strong>distinct</strong> elimination via unique keys)</li><li>Apache Calcite and Spark Catalyst rule batches run to fixpoint</li><li>Datalog engines (magic-sets / demand transformation)</li><li>SQL Server and Oracle view merging and subquery unnesting. Course: CMU 15-799 Query Optimization (Spring 2025)</li><li>lecture 03 (Starburst, query rewrites)</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a miniature of Starburst's rewrite phase. A query is a tree of **boxes**. A `Base` box is a stored table.
+
+A `Select` box owns **quantifiers** (range variables whose type says how they feed the box: FOREACH = join, **left outer** = null-supplying side, **exists** / **not exists** = subquery predicates), **predicates**, a **head** (output expressions) and a **distinct** flag. Every quantifier is ranged over another box, so views, derived tables and subqueries are all the same thing.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Rules** (each is `fn(&mut Select) -> bool`, true = it changed something), grouped into **rule classes** that the scheduler runs to a fixpoint, class by class:
+
+```text
+class 0 simplify    constant folding; CONTRADICTION detection (a=1 AND a=2, a=1 AND a>5 -> WHERE FALSE); empty-box collapse (a FALSE box drops its inputs)
+```
+
+class 1 restructure **view merging** (flatten a FOREACH over a Select box: substitute its head expressions, splice its quantifiers); **exists** -> **join** (valid when the
+
+```text
+subquery matches at most one row per outer row, i.e. an equality on a key, or when the outer box is DISTINCT so duplicates vanish);
+OUTER-JOIN SIMPLIFICATION (a null-rejecting WHERE predicate on the null-supplying side makes the padded rows die, so LEFT JOIN = inner join)
+```
+
+class 2 predicates  **predicate transitive closure** (union-find over equalities: a=b **and** b=5 => a=5, a=b **and** b=c => a=c); **pull-up** (a view's `col = const` is exported to its consumer as a derived fact so closure can use it);
+
+**Pushdown** (a consumer predicate on one view column moves into the view) class 3 eliminate   **join elimination**: a self-join on the key is one scan; a **foreign-key** join to a parent table that nothing else reads is dropped (the FK is **not null** and referentially valid, so the join neither filters nor multiplies);
+
+**Distinct elimination** when the head covers a key of every quantifier **scheduler**: sweeps the classes; inside a class repeats all rules until none fires; repeats the whole sequence until a full sweep is quiet.
+
+**A termination guard** (sweep cap) turns an oscillating rule set into an error instead of a hang; a deliberately bad "flip equalities" rule demonstrates it.
+
+**Why** classes: simplification first exposes contradictions cheaply; merging creates the flat shape that predicate rules need; predicate rules create the equalities (and the unreferenced quantifiers) that elimination needs. Rules stay local and independently testable, which is Starburst's point.
+
+**Why** the guards matter: pull-up and pushdown would ping-pong forever if each re-created what the other removed, so **pushdown** skips a predicate the view already holds, and **pull-up** skips one the consumer already holds; both are monotone, so the fixpoint exists.
+
+**Semantics**: three-valued comparison (**null** = i64::MIN, any comparison with **null** is unknown and filters the row out). That is exactly why **outer-join simplification** and FK elimination are sound only with null-rejecting predicates and **not null** foreign keys.
+
+**Magic sets**: for recursive (and correlated/aggregate-view) queries, evaluating the whole view then filtering wastes work.
+
+The rewrite first computes the **magic** set of relevant bindings (sideways information passing): for `anc(s, Y)` with `anc(X,Y) :- edge(X,Y). anc(X,Y) :- edge(X,Z), anc(Z,Y).` the magic set is `magic(s). magic(Z) :- magic(X), edge(X,Z).` and the rewritten rules are guarded by `magic(X)`, so only ancestors of reachable nodes are derived.
+
+The same trick on a **group-by** view computes the aggregate only for the groups the outer query selects (the decorrelation form), including the **count**-bug case of empty groups.
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+500 random databases x random query graphs (nested views, **distinct**, left outer/exists/not exists quantifiers, contradictions) must return the same row multiset before and after rewriting; every rule must fire somewhere; the scheduler must reach a fixpoint under the sweep cap and trip the guard on the bad rule;
+
+Magic-set answers must equal full evaluation and a BFS oracle on 500 random graphs with fewer derived facts on the sparse demo; magic group counts must equal full group counts.
+
+Work (rows visited by the executor) is printed before and after; timings are machine dependent and not used.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Extensible/Rule Based Query Rewrite Optimization in Starburst (Pirahesh, Hellerstein, Hasan, SIGMOD 1992)   Magic Sets and Other Strange Ways to Implement Logic Programs (Bancilhon, Maier, Sagiv, Ullman, **pods** 1986)
+
+```text
+Magic is Relevant (Mumick, Finkelstein, Pirahesh, Ramakrishnan, SIGMOD 1990)   CMU 15-799 schedule https://15799.courses.cs.cmu.edu/spring2025/schedule.html   Datalog https://en.wikipedia.org/wiki/Datalog
+```
+"""
+
+[[sources]]
+title = "15799.courses.cs.cmu.edu/spring2025/schedule.html"
+url = "https://15799.courses.cs.cmu.edu/spring2025/schedule.html"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Datalog"
+url = "https://en.wikipedia.org/wiki/Datalog"

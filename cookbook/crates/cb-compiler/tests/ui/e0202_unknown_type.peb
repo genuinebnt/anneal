@@ -1,0 +1,2 @@
+fn double(x: itn) -> int { x * 2 }
+fn main() { println(to_str(double(2))); }

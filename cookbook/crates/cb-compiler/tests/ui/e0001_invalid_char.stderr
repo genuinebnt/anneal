@@ -1,0 +1,21 @@
+warning[W0501]: unused variable: `x`
+ --> e0001_invalid_char.peb:2:9
+  |
+2 |     let x = 1 # 2;
+  |         ^ this variable is never read
+  |
+  = help: if this is intentional, prefix it with an underscore: `_x`
+
+error[E0001]: unknown start of token: `#`
+ --> e0001_invalid_char.peb:2:15
+  |
+2 |     let x = 1 # 2;
+  |               ^ this character is not part of the language
+
+warning[W0509]: unused value that is never used
+ --> e0001_invalid_char.peb:2:17
+  |
+2 |     let x = 1 # 2;
+  |                 ^ this value is computed and then discarded
+
+error: aborting due to 1 previous error; 2 warnings emitted

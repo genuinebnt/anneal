@@ -1,0 +1,38 @@
+title = "Exponential backoff with full jitter"
+module = "Distributed systems"
+module_order = 10
+chapter = "Streams, messaging and reliability"
+chapter_order = 4
+order = 504
+kind = "recipe"
+lede = "exponential backoff with full jitter."
+level = "simple"
+code = ["examples/distributed/retry_backoff_jitter.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+retry stage.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+every network client that retries (HTTP, RPC, queue consumers): jitter prevents synchronized retry storms.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: wait `random(0, min(cap, base * 2^attempt))`. Exponential growth backs off quickly; the random jitter stops many clients retrying in lockstep (thundering herd). Inject the RNG so tests are exact.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/> (AWS builders' library)
+"""
+
+[[sources]]
+title = "aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter"
+url = "https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/"

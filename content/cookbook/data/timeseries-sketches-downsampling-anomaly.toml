@@ -1,0 +1,52 @@
+title = "Analytics on sample streams"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 435
+kind = "recipe"
+lede = "LTTB / min-max downsampling, DDSketch and t-digest quantiles, irregular EWMA, Holt-Winters, anomaly detectors, change points, forecasting."
+level = "advanced"
+code = ["examples/database/timeseries_sketches_downsampling_anomaly.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>the analysis layer on top of a time-series store: chart rendering</li><li>latency percentiles</li><li>alerting</li><li>capacity forecasts</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>LTTB in Grafana-style chart panels</li><li>DDSketch in Datadog's agent and OpenTelemetry exponential histograms (same log-bucket idea)</li><li>t-digest in Elasticsearch</li><li>Prometheus-adjacent tools and many OLAP engines</li><li>CUSUM/EWMA control charts in SPC and alerting</li><li><strong>Pelt</strong> in the <code>ruptures</code> library</li><li>Holt-Winters in RRDtool and older Graphite/Grafana forecasts. Course: CMU 15-445/721 (approximate queries and sketches)</li><li>time-series talks (downsampling for dashboards)</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**What/how**, section by section (each is verified, then printed as a table):
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Downsampling for charts</div><div class="cb-g-says"><p>LTTB (Largest Triangle Three Buckets) keeps first and last point and, per bucket, the point forming the largest triangle with the previously chosen point and the <strong>average</strong> of the next bucket: it preserves visual shape.</p><p>MIN/MAX-per-bucket keeps both extremes of every bucket (&lt;= 2 points per bucket), so the tallest spike of a bucket can never disappear (a second one in the same bucket can); asserted: global and per-bucket extrema survive. Error = linear-interpolation reconstruction vs the original. <strong>What LTTB does not promise</strong>: it does not minimise reconstruction error.</p><p>The triangle's third corners (previous pick, next-bucket average) are fixed while a bucket is scanned, so area = 1/2 * |their x distance| * |candidate's vertical distance from the chord between them|: LTTB picks the point <strong>farthest</strong> from that chord.</p><p>On white noise those are the outliers, so its mean error is clearly <strong>worse</strong> than blind every-nth decimation (asserted, as the counterexample). What it buys is shape: the drawn line fills much more of each column's true [min, max] range ("envelope" column in the table; asserted on the noisy shapes).</p><p>Asserted exactly: every pick is the farthest-from-chord point of its bucket (separate formula as oracle), and a lone spike on a flat line is always kept.</p></div></div><div class="cb-g-term"><div class="cb-g-name">DDSKETCH</div><div class="cb-g-says"><p>Log-spaced buckets with ratio gamma = (1+a)/(1-a); a value goes to bucket ceil(log_gamma x) and the bucket answers 2 gamma&#94;i/(gamma+1), which is within <strong>relative</strong> error a of every value in it. Hence any quantile is within a (asserted against exact quantiles). Sketches <strong>merge</strong> by adding bucket counts, so shards combine exactly.</p><p>Negative values use a mirrored store; zeros a counter; a bucket cap collapses the lowest buckets: a quantile stays accurate only while it is within <code>cap</code> bucket indices of the maximum (asserted both ways).</p></div></div><div class="cb-g-term"><div class="cb-g-name">T-digest</div><div class="cb-g-says"><p>Centroids (mean, weight) whose allowed size shrinks toward the tails by the scale function k(q) = delta/(2 pi) asin(2q-1) (a cluster may span at most one unit of k), so tail quantiles are very accurate in <strong>rank</strong> error; merge = concatenate centroids and recompress. Asserted: bounded rank error and centroid count.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>EWMA with irregular spacing: alpha_t = 1 - exp(-dt / tau), so the filter depends on elapsed time, not on how many samples arrived (asserted: step response is independent of how the interval is split; zero-gap samples are no-ops; regular spacing reduces to the textbook recursion).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Decomposition-lite and holt-winters (additive)</div><div class="cb-g-says"><p>Moving-average trend + per-phase seasonal means; level/trend/season smoothing with one-step forecasts.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Anomalies</div><div class="cb-g-says"><p>Robust z-score (median and <strong>mad</strong> of a trailing window, so outliers cannot inflate the scale), CUSUM (accumulates drift above k, alarms at h) and an EWMA control chart. Measured by simulation: false alarms per sample on null noise and detection delay after injected mean shifts, with asserted bounds.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Change points</div><div class="cb-g-says"><p><strong>Pelt</strong> (optimal partitioning with pruning, exact for an additive cost such as L2) checked against the O(n&#94;2) dynamic program; binary segmentation as the greedy baseline; a penalty ~ sigma&#94;2 ln n decides how much gain a split must bring.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Forecasting</div><div class="cb-g-says"><p>AR(1), seasonal-naive, naive and Holt-Winters compared by <strong>mae</strong> on series where each should (and should not) win.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Steinarsson, "Downsampling Time Series for Visual Representation" (MSc thesis, University of Iceland, 2013</li><li>the LTTB source</li><li>link not reachable by curl here, cited by title)</li></ul>
+
+Masson, Rim, Lee, "DDSketch: A Fast and Fully-Mergeable Quantile Sketch with Relative-Error Guarantees", VLDB 2019  <https://www.vldb.org/pvldb/vol12/p2195-masson.pdf>
+
+Dunning and Ertl, "Computing Extremely Accurate Quantiles Using t-Digests"  <https://github.com/tdunning/t-digest/blob/main/docs/t-digest-paper/histo.pdf>
+
+<ul class="cb-g-reading"><li>Killick, Fearnhead, Eckley, "Optimal detection of changepoints with a linear computational cost" (PELT)</li><li>JASA 2012 (cited by title)</li></ul>
+
+<ul class="cb-g-reading"><li>Page (1954) CUSUM and Roberts (1959) EWMA control charts</li><li>Hyndman and Athanasopoulos, "Forecasting: Principles and Practice" (cited by title)</li></ul>
+"""
+
+[[sources]]
+title = "vldb.org/pvldb/vol12/p2195-masson.pdf"
+url = "https://www.vldb.org/pvldb/vol12/p2195-masson.pdf"
+
+[[sources]]
+title = "github.com/tdunning/t-digest/blob/main/docs/t-digest-paper/histo.pdf"
+url = "https://github.com/tdunning/t-digest/blob/main/docs/t-digest-paper/histo.pdf"

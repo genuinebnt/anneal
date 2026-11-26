@@ -1,0 +1,62 @@
+title = "Query compilation"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 373
+kind = "recipe"
+lede = "Data-centric produce/consume codegen (closures, register bytecode, Rust source) vs Volcano and vectorized"
+level = "advanced"
+code = ["examples/database/query_compilation_data_centric_codegen.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>query engines</li><li>rule / filter / expression engines</li><li>any interpreter that evaluates the same user-defined logic over many rows</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+`volcano_vectorized_push` (recipe 211) compares execution models on **one** hard-coded query. Here the plan is **data** (random at run time), so a "compiled" engine really has to be a **compiler**: plan in, program out. **Produce** / **consume** (Neumann, HyPer): every operator implements two things.
+
+`produce` asks the operator to start generating tuples; `consume` is what its parent does with **one** tuple that is already in registers.
+
+The compiler walks the plan once: a filter produces from its child and, in the consume step, wraps the parent's code in an `if`; a hash join first produces its **build** child with a consumer that inserts into a hash table (that ends a **pipeline**: a "pipeline breaker"), then produces its **probe** child with a consumer that probes and runs the parent's code inside the match loop.
+
+Operator boundaries disappear from the generated program: one tight loop per pipeline, and a tuple stays in registers from the scan to the next breaker. There is no JIT in std, so the same walk targets **three** backends: (a) **closure compilation** (`closure_*`): plan -> one tree of boxed closures.
+
+Decisions (which operator, which column) are made once, at compile time. What **remains** is an indirect call per closure per tuple; `col <op> const` is fused into one closure (a "superinstruction") and the saving is measured. (b) **register bytecode** (`bytecode_*`): plan -> a flat `Vec<Insn>` with jumps, run by one `match` loop.
+
+`continue` of the innermost loop is a backward jump; **and** / OR become conditional jumps. (c) **rust source** (`codegen_*`): plan -> the text a native compiler would receive. It is printed and structurally checked (balanced scopes, every register declared in an enclosing scope before use, hash tables built before they are probed, one loop per scan and per probe).
+
+It is **not** compiled by this program. Baselines: **volcano** (`next()` per tuple per operator, expression tree walked per tuple) and **vectorized** (`next_batch`, one dispatch per operator / expression node per **batch**). An independent **oracle** (materialising, nested-loop join, unoptimised expressions) defines the right answer.
+
+**Expressions and SQL null**: values are `Option<i64>`, logic is three-valued. Division by zero yields **null** here (real SQL raises an error, which also restricts reordering: an engine must not let a moved predicate raise an error the query would not).
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Constant folding</div><div class="cb-g-says"><p>Evaluate constant subtrees once. Only <strong>null</strong>-safe identities: <code>x AND FALSE -&gt; FALSE</code>, <code>x OR TRUE -&gt; TRUE</code>, <code>x AND TRUE -&gt; x</code>, <code>x OR FALSE -&gt; x</code>, <code>NOT NOT x -&gt; x</code>. <code>x * 0 -&gt; 0</code> is <strong>wrong</strong> (<strong>null</strong> * 0 is <strong>null</strong>); the unsound rule is available as an injected bug and the differential test must catch it.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Predicate order</div><div class="cb-g-says"><p><strong>A where</strong> clause keeps a row only if the predicate is <strong>true</strong>, so every conjunct can reject on <strong>false</strong> *or* <strong>null</strong> (a value-context <strong>and</strong> may only short-circuit on <strong>false</strong>). Conjuncts are ordered by rank = cost / (1 - selectivity), with selectivity estimated on a sample: cheap and very selective tests first.</p></div></div></div>
+
+**Counting**: `indirect` = calls through a vtable or boxed closure; `switch` = interpreter `match` dispatches (expression node or bytecode instruction). Both are counted by a `const COUNT: bool` instantiation, so the timed runs carry no counters. They measure the **design**, not what LLVM or the branch predictor does with it.
+
+Generated Rust has neither, by construction.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>HyPer / Umbra (data-centric compilation)</li><li>PostgreSQL's LLVM JIT for expressions</li><li>Spark whole-stage codegen (emits Java source, the shape of backend (c))</li><li>SQLite's VDBE (bytecode, backend (b))</li><li>closure compilation in many rule engines</li><li>vectorized: DuckDB</li><li>ClickHouse</li><li>Velox</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://www.vldb.org/pvldb/vol4/p539-neumann.pdf> (Neumann, "Efficiently Compiling Efficient Query Plans for Modern Hardware") and <https://www.vldb.org/pvldb/vol11/p2209-kersten.pdf> (Kersten et al., compiled vs vectorized).
+"""
+
+[[sources]]
+title = "vldb.org/pvldb/vol4/p539-neumann.pdf"
+url = "https://www.vldb.org/pvldb/vol4/p539-neumann.pdf"
+
+[[sources]]
+title = "vldb.org/pvldb/vol11/p2209-kersten.pdf"
+url = "https://www.vldb.org/pvldb/vol11/p2209-kersten.pdf"

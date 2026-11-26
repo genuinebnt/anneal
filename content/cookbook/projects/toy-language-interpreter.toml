@@ -1,0 +1,75 @@
+title = "A Lox-style scripting language"
+module = "Complete projects"
+module_order = 13
+chapter = "Capstones"
+chapter_order = 1
+order = 661
+kind = "capstone"
+lede = "Scanner, Pratt/recursive-descent parser, resolver, tree-walk interpreter AND a bytecode VM, differentially tested."
+level = "capstone"
+code = ["examples/capstones/toy_language_interpreter.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>embedded scripting</li><li>config/rule languages</li><li>learning how interpreters and compilers are layered</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a small dynamically typed language in the style of Crafting Interpreters' "Lox" (jlox + clox): numbers, strings, booleans, nil, lists (via natives), variables, blocks, `if`/`while`/`for`/`break`/`continue`, first-class functions with closures, classes with methods, `init`, `this`, single inheritance and `super`.
+
+Natives: print, len, str, num, type, assert, list, push, get, set, pop.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+every interpreter is the same pipeline; writing both a tree-walker and a bytecode VM for **one AST** lets us test each against the other.
+
+**Pipeline** (each stage is a plain function, tested alone and together): scan      source -> tokens with spans (strings with escapes, `//` and **nested** `/* */` comments); lexical errors are diagnostics, scanning continues parse     recursive descent for statements, Pratt (binding powers) for binary operators;
+
+**Panic-mode** recovery: on an error we record it, skip to the next statement boundary (`;` or a statement keyword) and go on, so one run reports many syntax errors with line:col + caret resolve   a static pass over the AST: computes for every variable use how many scopes up it lives (so closures capture the **right** variable, not whatever shadows it later), and reports use-before-define in an own initialiser, duplicate locals, `return` outside a function, `this`/`super` outside a class, `break` outside a loop;
+
+Unused locals become **warnings** run       back end A: tree-walking interpreter over environments (Rc&lt;Env> chains), call stack of names+lines for traces, call-depth limit (Stack overflow.), step **fuel** limit (so a runaway script is an error, not a hang) back end B: compile the same AST to bytecode (a Vec&lt;Op> per function) and run it on a stack VM with clox-style UPVALUES
+
+```text
+(open upvalues point into the stack and are closed, i.e. copied to the heap, when their variable goes out of scope);
+the VM covers everything except classes (compile reports "unsupported" and the differential test skips those programs)
+```
+
+`for` is desugared to `while` (+ an increment slot so `continue` still runs it). Division by zero is a runtime error (not inf) so both back ends agree. Rc cycles (closure &lt;-> environment) are never collected: acceptable for short-lived scripts, a real VM would use a GC.
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+a hand-written suite with exact expected output (fib, closures, higher-order functions, sieve, sorts, JSON printer, classes, mutual recursion, the loop-closure capture rule) and exact error messages + stack traces; then 300 seeded random programs run on **both** back ends must produce identical output and identical errors.
+
+Timing of tree-walk vs bytecode on fib(27) is printed (not asserted).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>game/engine scripting</li><li>configuration DSLs</li><li>rule engines</li><li>formula languages</li><li>teaching compilers</li><li>the same stages appear in CPython/Lua/V8 (bytecode + upvalues)</li><li>TypeScript/rustc (scanner -&gt; parser -&gt; resolver/semantic analysis -&gt; back end) and linters (resolver warnings)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Crafting Interpreters <a href="https://craftinginterpreters.com/" target="_blank" rel="noreferrer">https://craftinginterpreters.com/</a> (parts II and III)</li><li>Matklad on Pratt parsing <a href="https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html" target="_blank" rel="noreferrer">https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html</a></li><li>the Lua 5 VM paper <a href="https://www.lua.org/doc/jucs05.pdf" target="_blank" rel="noreferrer">https://www.lua.org/doc/jucs05.pdf</a></li></ul>
+"""
+
+[[sources]]
+title = "craftinginterpreters.com"
+url = "https://craftinginterpreters.com/"
+
+[[sources]]
+title = "matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html"
+url = "https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html"
+
+[[sources]]
+title = "lua.org/doc/jucs05.pdf"
+url = "https://www.lua.org/doc/jucs05.pdf"

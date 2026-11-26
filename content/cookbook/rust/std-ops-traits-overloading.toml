@@ -1,0 +1,86 @@
+title = "Std::ops look-up page"
+module = "Standard library and core"
+module_order = 2
+chapter = "Numbers, traits and formatting"
+chapter_order = 5
+order = 88
+kind = "recipe"
+lede = "Arithmetic and bit operators, Index, Deref, Drop, closure traits, ranges, Bound and ControlFlow."
+level = "intermediate"
+code = ["examples/std_tour/std_ops_traits_overloading.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>unit and vector types</li><li>permission flags</li><li>typed indexes</li><li>RAII guards</li><li>callback APIs</li><li>range queries</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>money/duration/vector types</li><li>bit-flag sets</li><li>grid[(x, y)]</li><li>guards that undo on drop</li><li>retry and visitor callbacks</li><li>BTreeMap::range pagination</li><li>early exit from internal iteration</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>std::ops::Add</code></li><li><code>std::ops::AddAssign</code></li><li><code>std::ops::Sub</code></li><li><code>std::ops::Index</code></li><li><code>std::ops::IndexMut</code></li><li><code>std::ops::Drop</code></li><li><code>std::mem::drop</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::ops::Fn</code></li><li><code>std::ops::FnMut</code></li><li><code>std::ops::FnOnce</code></li><li><code>std::ops::Range</code></li><li><code>std::ops::RangeInclusive</code></li><li><code>std::ops::RangeFrom</code></li><li><code>std::ops::RangeTo</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::ops::RangeToInclusive</code></li><li><code>std::ops::RangeFull</code></li><li><code>Range::contains</code></li><li><code>Range::is_empty</code></li><li><code>RangeInclusive::start</code></li><li><code>RangeInclusive::end</code></li></ul>
+
+<ul class="cb-g-names"><li><code>RangeInclusive::into_inner</code></li><li><code>RangeInclusive::new</code></li><li><code>RangeBounds::start_bound</code></li><li><code>RangeBounds::end_bound</code></li><li><code>RangeBounds::contains</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::ops::Bound</code></li><li><code>Bound::map</code></li><li><code>Bound::cloned</code></li><li><code>Bound::as_ref</code></li><li><code>BTreeMap::range</code></li><li><code>std::ops::ControlFlow</code></li><li><code>ControlFlow::is_break</code></li></ul>
+
+<ul class="cb-g-names"><li><code>ControlFlow::is_continue</code></li><li><code>ControlFlow::break_value</code></li><li><code>ControlFlow::continue_value</code></li><li><code>ControlFlow::map_break</code></li><li><code>ControlFlow::map_continue</code></li></ul>
+
+<ul class="cb-g-names"><li><code>ControlFlow::break_ok</code></li><li><code>ControlFlow::continue_ok</code></li><li><code>Iterator::try_for_each</code></li><li><code>Iterator::try_fold</code></li><li><code>Iterator::step_by</code></li><li><code>Iterator::rev</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::ops::Mul</code></li><li><code>std::ops::Div</code></li><li><code>std::ops::Rem</code></li><li><code>std::ops::Neg</code></li><li><code>std::ops::Not</code></li><li><code>std::ops::BitAnd</code></li><li><code>std::ops::BitOr</code></li><li><code>std::ops::BitXor</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::ops::BitOrAssign</code></li><li><code>std::ops::BitAndAssign</code></li><li><code>std::ops::Shl</code></li><li><code>std::ops::Shr</code></li><li><code>std::ops::Deref</code></li><li><code>std::ops::DerefMut</code></li></ul>
+
+std::iter::Sum, std::iter::Product, std::ops::AsyncFn
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/ops/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/ops/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+core (`core::ops`, `core::iter::{Sum, Product}`), re-exported as std::ops. Usable in no_std. BTreeMap is alloc.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+the Try / FromResidual / Residual traits and implementing Fn&#42; by hand (unstable), CoerceUnsized and DispatchFromDyn (unstable), RangeBounds intersect/IntoBounds and OneSidedRange use (unstable or niche), the remaining &#42;Assign traits (same shape as AddAssign), the new `core::range` Range types beyond this mention, Coroutine (unstable).
+
+Comparison operators come from PartialEq/PartialOrd: see std_cmp_hash_default_traits.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>A + b on my type</td><td><code>impl Add (by value; add &amp;T forms if the type is not Copy)</code></td></tr><tr><td>A += b</td><td><code>impl AddAssign (separate trait, not derived from Add)</code></td></tr><tr><td>Container[key]</td><td><code>Index (+ IndexMut); it PANICS on a miss, also offer get() -&gt; Option</code></td></tr><tr><td>Cleanup at scope end</td><td><code>Drop</code></td></tr><tr><td>Accept a callback called once</td><td><code>impl FnOnce</code></td></tr><tr><td>... many times, may mutate its state</td><td><code>impl FnMut</code></td></tr><tr><td>... many times through &amp;self (shareable)</td><td><code>impl Fn</code></td></tr><tr><td>Accept <code>..</code>, <code>a..</code>, <code>..=b</code> in my API</td><td><code>impl RangeBounds&lt;T&gt;</code></td></tr><tr><td>Keyset pagination</td><td><code>map.range((Excluded(last), Unbounded))</code></td></tr><tr><td>Stop internal iteration early with a value</td><td><code>try_for_each + ControlFlow::Break</code></td></tr><tr><td>Smart-pointer-like wrapper</td><td><code>Deref (ONLY for pointer-like types)</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/ops/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/ops/index.html</a></li><li><a href="https://rust-lang.github.io/api-guidelines/predictability.html" target="_blank" rel="noreferrer">https://rust-lang.github.io/api-guidelines/predictability.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/ops/index.html"
+url = "https://doc.rust-lang.org/std/ops/index.html"
+
+[[sources]]
+title = "rust-lang.github.io/api-guidelines/predictability.html"
+url = "https://rust-lang.github.io/api-guidelines/predictability.html"

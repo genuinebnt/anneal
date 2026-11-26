@@ -1,0 +1,58 @@
+title = "Operating a vector index"
+module = "Search and vectors"
+module_order = 9
+chapter = "Running a vector database"
+chapter_order = 3
+order = 475
+kind = "recipe"
+lede = "Deletes (tombstone vs graph repair vs rebuild), LSM segments, WAL, snapshots, crash recovery."
+level = "advanced"
+code = ["examples/search_vectors/vector_index_updates_persistence.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any vector store that must accept writes while serving queries and survive a crash (Lucene/Elasticsearch, Milvus, Weaviate, Qdrant, pgvector).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Why this is hard**: proximity graphs are built for read-mostly data. A node cannot just be removed: its neighbours lose a route, and the graph may fall apart. So production systems **do not** edit big graphs in place; they combine four ideas, all built here:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Deletes</div><div class="cb-g-says"><p>. (a) <strong>tombstone</strong>: mark the node dead, keep traversing <strong>through</strong> it (it is still a useful bridge), never return it. Recall holds, but the graph fills with ghosts and queries get slower (more hops per live result).</p><p>(b) <strong>graph repair</strong> (FreshDiskANN style): for every in-neighbour w of the deleted node x, re-select w's links from nbrs(w) U nbrs(x) so w keeps a path to x's old neighbourhood, then unlink x. Costs a scan for in-neighbours (we scan; real systems keep reverse links or batch it). (c) <strong>rebuild</strong>: build a fresh graph from the live vectors.</p><p>Highest quality, highest price; done by compaction.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Update</div><div class="cb-g-says"><p>= <strong>delete</strong> + <strong>insert</strong> (an id has exactly one live copy; <code>loc</code> maps id -&gt; memtable or segment generation).</p></div></div><div class="cb-g-term"><div class="cb-g-name">LSM-STYLE segments</div><div class="cb-g-says"><p>(Lucene segments, Milvus growing/sealed segments): a small mutable <strong>memtable</strong> searched by brute force absorbs writes; when full it is sealed into an immutable <strong>segment</strong> with its own graph (flat scan below <code>flat_threshold</code> vectors, because a graph over 20 points is slower than scanning them).</p><p>A query searches the memtable and every segment and merges the top-k lists. <strong>Compaction</strong> merges segments, drops dead vectors and <strong>rebuilds</strong> the graph (quality restored, ghosts gone).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Durability</div><div class="cb-g-says"><p>. WAL: every acknowledged write is appended as [len][crc32][payload] <strong>before</strong> it is applied; recovery replays the WAL from the manifest's <code>wal_start</code>, stops at the first torn/corrupt record and <strong>truncates</strong> there (otherwise new appends would sit behind garbage).</p><p><strong>Segment files</strong>: hand-written format <code>VSEG | version | dim | m | n | entry | ids | vectors | adjacency | crc32</code>; the parser rejects bad magic, unknown versions, truncation and any checksum mismatch.</p><p><strong>Manifest</strong>: the atomic commit point: list of live segment generations + their dead ids + <code>wal_start</code>; a segment file not named by the manifest is an <strong>orphan</strong> from a crash and is deleted. "Disk" here is an in-memory struct of byte vectors (files, wal, manifest) so crashes can be injected at exact points.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Concurrency</div><div class="cb-g-says"><p>Readers clone an <code>Arc</code> snapshot of the segment list under a short read lock and search lock-free; compaction builds the merged segment <strong>off-lock</strong> from <code>Arc</code>s (prepare), then takes the write lock only to swap (commit), re-marking vectors that were deleted or updated in the meantime (epoch/RCU-style swap of immutable segments).</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+1500 random operation sequences (put/upsert/delete/search/flush/compact + clean restart, torn WAL tail, crash after the segment file was written but before the manifest, crash mid-compaction) against a HashMap oracle: no deleted id is ever returned, search is **exact** for these tiny collections, every acknowledged put is findable after every restart;
+
+A large scenario measures recall drift after 40% deletes and 10% updates, before and after compaction, and checks a restart reproduces identical results; serialised segments round-trip bit-exactly and every sampled single-bit flip is detected; 4 reader threads x 5 passes against a writer that inserts, deletes and compacts.
+
+**Honest result** (Part A): on this clustered data recall stays &#126;0.99+ under all three strategies; the drift you can see is **cost**: tombstoned graphs need over 3x the distance computations at 80% deletes (570 vs 163-175 calls/query after repair or rebuild). Harder data (high intrinsic dimension, small ef) shows recall loss too: try it via **try next**.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Lucene HNSW segments + live-docs bitsets + merge policy</li><li>Milvus growing/sealed segments + compaction</li><li>Weaviate HNSW tombstones + cleanup cycle</li><li>Qdrant segments + WAL</li><li>FreshDiskANN (streaming inserts/deletes with consolidation)</li><li>pgvector HNSW (<strong>vacuum</strong> repairs graph links of dead tuples)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>FreshDiskANN: A Fast and Accurate Graph-Based ANN Index for Streaming Similarity Search, Singh et al. <a href="https://arxiv.org/abs/2105.09613" target="_blank" rel="noreferrer">https://arxiv.org/abs/2105.09613</a></li><li><a href="https://arxiv.org/abs/1603.09320" target="_blank" rel="noreferrer">https://arxiv.org/abs/1603.09320</a> (HNSW)</li><li><a href="https://lucene.apache.org/core/" target="_blank" rel="noreferrer">https://lucene.apache.org/core/</a> (segments, <code>SegmentInfos</code>, live docs)</li><li>Database Internals (Petrov)</li><li>ch. on LSM trees and WAL (cited by title)</li></ul>
+"""
+
+[[sources]]
+title = "arxiv.org/abs/2105.09613"
+url = "https://arxiv.org/abs/2105.09613"
+
+[[sources]]
+title = "arxiv.org/abs/1603.09320"
+url = "https://arxiv.org/abs/1603.09320"
+
+[[sources]]
+title = "lucene.apache.org/core"
+url = "https://lucene.apache.org/core/"

@@ -1,0 +1,25 @@
+error[E0314]: expected value, found tuple variant `Shape::Circle`
+ --> e0314_variant_kind.peb:3:13
+  |
+3 |     let a = Shape::Circle;
+  |             ^^^^^^^^^^^^^ this variant has fields
+  |
+  = help: call it: `Shape::Circle(..)`
+
+error[E0314]: `Shape::Empty` is a unit variant and cannot be called
+ --> e0314_variant_kind.peb:4:13
+  |
+4 |     let b = Shape::Empty(1);
+  |             ^^^^^^^^^^^^^^^ unit variant
+  |
+  = help: use `Shape::Empty` without parentheses
+
+error[E0314]: `Shape::Square` is a struct variant and cannot be called
+ --> e0314_variant_kind.peb:5:13
+  |
+5 |     let c = Shape::Square(2);
+  |             ^^^^^^^^^^^^^^^^ struct variant
+  |
+  = help: construct it: `Shape::Square { .. }`
+
+error: aborting due to 3 previous errors

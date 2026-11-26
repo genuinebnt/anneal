@@ -1,0 +1,318 @@
+title = "Production optimizers"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 390
+kind = "guide"
+lede = "15-721 S2024 #13, #15 · optimizer talks (SQL Server, Orca, Catalyst, CockroachDB, PostgreSQL, Snowflake, Trino, MySQL, Dremio) · a survey of architectures · an e-graph built and compared with DPccp"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Three components, always</strong>: a <em>search space</em> (which plans can be reached), a <em>cost model</em> (<a href="/cookbook/p/cost-models">Q9</a>) with <em>cardinality estimates</em> (<a href="/cookbook/p/cardinality-estimation">Q8</a>), and an <em>enumeration architecture</em> that explores the space. Production optimizers differ most in the third, and the lecture's taxonomy is a good map: <strong>heuristics</strong> (static rules, no cost: early Ingres, early Oracle, MongoDB, most young systems), <strong>heuristics + cost-based search</strong> (a rewrite phase, then a bottom-up search: System R, early DB2, PostgreSQL, most open-source systems), <strong>stratified search</strong> (a generator with separate rewrite and cost-based phases: Starburst, and CockroachDB's normalization-then-exploration), and <strong>unified search</strong> (one search where logical and physical transformations interleave: Volcano, Cascades, OPT++, SQL Server, Orca, optd).</li> <li><strong>Optimizer generators separate the search from the rules.</strong> The search algorithm is a framework; the transformation rules are data, often written in a declarative language, and adding an operator or a rewrite means adding a rule, not editing the search. That is the argument for Starburst, Volcano and Cascades, and the reason most new engines adopt a framework (Calcite, Orca, optd, CockroachDB's <code>optgen</code>) instead of a monolith.</li> <li><strong>Logical operators do not map one-to-one to physical ones</strong>: a logical join plus a logical sort can become one physical sort-merge join. Transformations go logical→logical, logical→physical and physical→physical, <strong>never physical back to logical</strong>.</li> <li><strong>Heuristics are not obsolete.</strong> Predicate splitting and pushdown, replacing a Cartesian product plus filter by a join, projection pushdown, constant folding and subquery unnesting are almost always beneficial and need no cost model; production systems apply them first (normalization), shrinking the space the cost-based search must cover. The danger is magic constants and rule interactions.</li> <li><strong>Optimization time is a budget.</strong> Exhaustive join search is exponential (<a href="/cookbook/p/join-ordering">Q4</a>), so every production optimizer has a <em>timeout or a size limit</em> and a <em>fallback</em>: SQL Server's search phases with cost thresholds and a time-out, PostgreSQL's <code>join_collapse_limit</code> and GEQO beyond a dozen relations, MySQL's search-depth limit. A good plan found in 1 ms beats an optimal plan found in 1 s for a 5 ms query, and a plan cache amortizes the rest.</li> <li><strong>Plans age.</strong> The best plan changes with the data, the indexes, the parameter values and the statistics. Production answers are a <strong>plan cache</strong> with invalidation, <strong>reversion</strong> to a previous plan when a new one regresses (query store), <strong>plan stitching</strong> of the best sub-plans from past executions, and the adaptive techniques of <a href="/cookbook/p/adaptive-and-robust">Q10</a>.</li> <li><strong>Equality saturation is the newest enumeration style</strong>: keep <em>every</em> equivalent form of an expression in a compact graph, apply rewrite rules until nothing new appears, then extract the cheapest. It is the Cascades memo without the guidance, and it composes with arbitrary rules. The lab below builds one, proves it finds the optimal join order, and measures what it costs.</li> </ul>
+"""
+
+[[sections]]
+heading = "Anatomy"
+body = """
+<p>Every production optimizer is a pipeline of stages, each of which can be skipped, merged or replaced by a framework:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>stage</th> <th>does</th> <th>typical form</th> <th>where bugs and surprises live</th> </tr> </thead> <tbody> <tr> <td>parse and bind</td> <td>names to catalog objects, types, views expanded</td> <td>AST → logical tree</td> <td>name resolution, implicit casts (<a href="/cookbook/p/modern-sql">L02</a>)</td> </tr> <tr> <td>normalize / rewrite</td> <td>constant folding, predicate pushdown, subquery unnesting (<a href="/cookbook/p/unnesting-subqueries">Q6</a>), view merging, outer-join simplification (<a href="/cookbook/p/plan-transformations-and-rule-soundness">Q3</a>)</td> <td>heuristic rules to a fixpoint</td> <td>rule interaction, ordering, soundness with NULLs</td> </tr> <tr> <td>statistics and estimates</td> <td>attach row counts and distinctness to each node (<a href="/cookbook/p/statistics">Q7</a>, <a href="/cookbook/p/cardinality-estimation">Q8</a>)</td> <td>bottom-up derivation or memo property</td> <td>defaults, correlation, staleness</td> </tr> <tr> <td>logical exploration</td> <td>join order, aggregation placement, set-operation rewrites (<a href="/cookbook/p/join-ordering">Q4</a>)</td> <td>DP over subsets, or rules in a memo (<a href="/cookbook/p/a-cascades-memo-in-rust">Q2</a>)</td> <td>search-space explosion, timeouts</td> </tr> <tr> <td>physical implementation</td> <td>algorithms, access paths, build sides, exchange operators (<a href="/cookbook/p/cost-models">Q9</a>)</td> <td>implementation rules + required properties and enforcers</td> <td>cost model constants, ties</td> </tr> <tr> <td>post-processing</td> <td>parallelization, distribution, memory grants, prepared-plan parameters</td> <td>tree walk</td> <td>partition pruning, skew</td> </tr> <tr> <td>plan management</td> <td>cache, invalidate, pin, compare, revert</td> <td>plan cache, query store</td> <td>stale plans, regression</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "A survey"
+body = """
+<p>What each system does, from the lecture notes, the talks above and the systems' own documentation. Architectures change between releases; read the current documentation before relying on a detail.</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>system</th> <th>search architecture</th> <th>joins</th> <th>what to study it for</th> </tr> </thead> <tbody> <tr> <td><strong>PostgreSQL</strong></td> <td>heuristics + cost-based, bottom-up dynamic programming over join levels on <em>paths</em> (each with startup and total cost, sort order)</td> <td>DP over join levels; <code>join_collapse_limit</code> and <code>from_collapse_limit</code> (default 8) bound how many items are reordered, and a genetic search (GEQO) takes over at 12 or more</td> <td>the clearest small codebase to read; <code>pathkeys</code> for interesting orders; extended statistics</td> </tr> <tr> <td><strong>MySQL / MariaDB</strong></td> <td>heuristics + cost-based; a depth-limited greedy/exhaustive left-deep search (<code>optimizer_search_depth</code>, pruning); a refactored pipeline in 8.x</td> <td>left-deep, with pruning</td> <td>an optimizer evolved from a rule-based core; the optimizer trace</td> </tr> <tr> <td><strong>SQL Server</strong></td> <td><strong>unified search</strong>: a Cascades-derived memo; staged search phases (trivial plan, then increasingly thorough phases) with cost thresholds and time-outs</td> <td>memo-based exploration with pruning</td> <td>the Cascades implementation at product scale; query store; adaptive features</td> </tr> <tr> <td><strong>Oracle</strong></td> <td>cost-based with a large set of query transformations (view merging, unnesting, star transformation) followed by join permutation search</td> <td>permutation search with limits</td> <td>transformation catalog; dynamic sampling; adaptive plans; SQL plan directives</td> </tr> <tr> <td><strong>IBM Db2</strong></td> <td>descendant of <strong>Starburst</strong>: query graph model rewrite phase, then cost-based bottom-up join enumeration</td> <td>DP</td> <td>rewrite rules over the QGM; LEO feedback; the historical reference</td> </tr> <tr> <td><strong>CockroachDB</strong></td> <td><strong>stratified</strong> memo-based: <em>normalization</em> rules fire as expressions are built; <em>exploration</em> rules are cost-based; rules written in a DSL (<code>optgen</code>) that generates Go</td> <td>DP-style exploration inside the memo</td> <td>readable rule language; statistics collection in a distributed setting</td> </tr> <tr> <td><strong>Apache Calcite</strong></td> <td>Volcano/Cascades-style planner with <em>traits</em> (calling convention, collation) plus a heuristic planner for rule programs</td> <td>memo-based join reordering rules</td> <td>the most reused framework (Hive, Flink, Drill, Beam SQL); adapters to many backends</td> </tr> <tr> <td><strong>Orca</strong> (Greenplum, Cloudberry)</td> <td><strong>Cascades</strong>, as a standalone optimizer service speaking an XML plan language (DXL); a multi-threaded job scheduler for the search</td> <td>memo-based</td> <td>the modular architecture; plan verification tooling</td> </tr> <tr> <td><strong>Spark SQL (Catalyst)</strong></td> <td>rule-based tree transformations in <em>batches</em> run to a fixpoint (analysis, logical optimization, physical planning); optional cost-based join reordering; AQE at run time</td> <td>DP when the CBO is enabled</td> <td>writing rules with pattern matching; adaptive re-optimization at stage boundaries (<a href="/cookbook/p/adaptive-and-robust">Q10</a>)</td> </tr> <tr> <td><strong>Trino / Starburst</strong></td> <td>iterative rule-based optimizer over a memo of plan groups, with cost-based rules for join order and distribution</td> <td>cost-based reordering, broadcast vs partitioned decided by cost</td> <td>plan fragments and exchanges; dynamic filtering</td> </tr> <tr> <td><strong>DuckDB</strong></td> <td>rule-based rewrites, statistics propagation, unnesting by dependent joins (<a href="/cookbook/p/unnesting-subqueries">Q6</a>), a join-order optimizer driven by estimated cardinalities</td> <td>hypergraph dynamic programming with a fallback for large queries</td> <td>a modern small optimizer for a vectorized engine; works with few statistics</td> </tr> <tr> <td><strong>HyPer / Umbra</strong></td> <td>unnesting of arbitrary subqueries, DP over join hypergraphs with an adaptive strategy for very large queries, sampling for base-table estimates</td> <td>adaptive: exact DP for small, heuristics for huge</td> <td>join ordering at scale (<a href="/cookbook/p/join-ordering">Q4</a>)</td> </tr> <tr> <td><strong>DataFusion</strong></td> <td>logical rule-based optimizer, physical planning, physical-plan optimizer rules (distribution, sorting); mostly statistics-light</td> <td>rule-based, basic reordering</td> <td>a Rust optimizer you can read and extend</td> </tr> <tr> <td><strong>optd</strong></td> <td><strong>Cascades</strong> framework in Rust (CMU), with a property-driven top-down search</td> <td>memo-based</td> <td>a research/teaching Cascades implementation</td> </tr> <tr> <td><strong>egg / egglog</strong></td> <td><strong>equality saturation</strong> with e-graphs and e-class analyses (a library for building optimizers)</td> <td>whatever the rules express</td> <td>extraction, rule interaction, the lab below</td> </tr> </tbody> </table></div>
+
+<aside data-call="note"><b>Frameworks versus monoliths</b><p>PostgreSQL and MySQL are monoliths: the search is hand-written and the rules are code. Calcite, Orca, CockroachDB and SQL Server are frameworks: the search is generic and the rules are data (or code behind a uniform interface). A monolith is easier to tune for a workload, a framework easier to extend; many systems end up hybrid (a framework for exploration, hand-written code for join enumeration and cost, as in the DP-within-memo approach).</p></aside>
+"""
+
+[[sections]]
+heading = "An e-graph"
+body = """
+<p>Equality saturation is a different answer to "how do I explore the space of equivalent plans?" The structure is exactly the memo of <a href="/cookbook/p/a-cascades-memo-in-rust">Q2</a> with the sharing made automatic:</p>
+
+<ol> <li>An <strong>e-node</strong> is an operator whose children are <strong>e-classes</strong> (here <code>Scan(i)</code> or <code>Join(class, class)</code>).</li> <li>An <strong>e-class</strong> is a set of e-nodes known to be equivalent, plus an <em>analysis</em> value that must agree across the class (here the set of relations it covers: a join tree is only equivalent to another over the same relations, so merging classes with different sets is a bug and the code asserts it).</li> <li><strong>Hash-consing</strong>: the memo maps each canonical e-node to its class, so the same expression is never stored twice.</li> <li><strong>Union-find</strong> merges classes; after merges, <strong><code>rebuild</code></strong> restores <em>congruence</em>: if two e-nodes have children that are now the same class, they are the same node, so their classes merge, which may cascade.</li> <li><strong>Rewrite rules</strong> are applied to the whole graph: commutativity <code>a ⋈ b → b ⋈ a</code> and associativity <code>(a ⋈ b) ⋈ c → a ⋈ (b ⋈ c)</code>. All right-hand sides are added first, then all unions are applied, then one rebuild (the two-phase scheme of egg).</li> <li><strong>Saturation</strong> is the fixpoint: no rule changes the graph. A node limit and a round limit guard against rule sets that never saturate.</li> <li><strong>Extraction</strong> picks, per class, the cheapest node by bottom-up dynamic programming: <code>best(class) = min over nodes of Σ best(children) + card(class)</code>. For <code>C_out</code> the cardinality of a class depends only on its relation set, so the extraction is exact.</li> </ol>
+
+:::deeper Reference: e-graph with hash-consing, union-find, congruence rebuild, equality saturation with join commutativity and associativity, cost-based extraction, and an independent oracle
+```rust title="src/opt/egraph.rs"
+//! An e-graph for join ordering: hash-consed e-nodes, union-find over e-classes, congruence closure (`rebuild`),
+//! equality saturation with the two rules every optimizer has (commutativity and associativity of joins), and
+//! extraction of the cheapest tree under `C_out`. It is the same structure as the Cascades memo of Q2 (a group
+//! is an e-class, an expression is an e-node) with two differences: nodes are deduplicated and merged by
+//! congruence automatically, and rules are applied to everything until nothing new appears instead of on demand.
+use std::collections::HashMap;
+use crate::joinorder::{Graph, Tree};
+
+pub type Id = u32;
+
+/// A safety net: saturating a join graph of n relations takes about n + 3 rounds, so this is never reached by a correct rule set.
+const MAX_ROUNDS: usize = 64;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ENode { Scan(u8), Join(Id, Id) }
+
+struct Class { nodes: Vec<ENode>, set: u64 }
+
+#[derive(Default)]
+pub struct EGraph {
+    parent: Vec<Id>,
+    classes: HashMap<Id, Class>,
+    memo: HashMap<ENode, Id>,
+}
+
+impl EGraph {
+    pub fn new() -> Self { Self::default() }
+
+    pub fn find(&self, mut x: Id) -> Id { while self.parent[x as usize] != x { x = self.parent[x as usize]; } x }
+    fn find_compress(&mut self, x: Id) -> Id {
+        let root = self.find(x);
+        let mut y = x;
+        while self.parent[y as usize] != root { let next = self.parent[y as usize]; self.parent[y as usize] = root; y = next; }
+        root
+    }
+    fn canon(&self, n: ENode) -> ENode { match n { ENode::Join(a, b) => ENode::Join(self.find(a), self.find(b)), s => s } }
+
+    /// The set of base relations an e-class covers: the *analysis* every node of the class must agree on.
+    pub fn set_of(&self, c: Id) -> u64 { self.classes[&self.find(c)].set }
+
+    /// Add a node (or find the existing class that already contains it).
+    pub fn add(&mut self, n: ENode) -> Id {
+        let n = self.canon(n);
+        if let Some(&id) = self.memo.get(&n) { return self.find(id); }
+        let id = self.parent.len() as Id;
+        self.parent.push(id);
+        let set = match n { ENode::Scan(i) => 1u64 << i, ENode::Join(a, b) => self.set_of(a) | self.set_of(b) };
+        self.classes.insert(id, Class { nodes: vec![n], set });
+        self.memo.insert(n, id);
+        id
+    }
+
+    /// Merge two classes. Their relation sets must be equal: a join tree is only equivalent to a tree over the same relations.
+    pub fn union(&mut self, a: Id, b: Id) -> Id {
+        let (a, b) = (self.find_compress(a), self.find_compress(b));
+        if a == b { return a; }
+        assert_eq!(self.classes[&a].set, self.classes[&b].set, "merging classes over different relation sets");
+        let (big, small) = if self.classes[&a].nodes.len() >= self.classes[&b].nodes.len() { (a, b) } else { (b, a) };
+        self.parent[small as usize] = big;
+        let moved = self.classes.remove(&small).unwrap();
+        self.classes.get_mut(&big).unwrap().nodes.extend(moved.nodes);
+        big
+    }
+
+    /// Restore the invariants after unions: every node is canonical (its children are class roots), the memo maps each
+    /// canonical node to its class, and two nodes that became equal because their children were merged live in the same
+    /// class (congruence closure). Group all nodes by canonical form, merge the classes that share one, and repeat.
+    pub fn rebuild(&mut self) {
+        loop {
+            let mut owner: HashMap<ENode, Id> = HashMap::new();
+            let mut merges: Vec<(Id, Id)> = vec![];
+            for (&id, cls) in &self.classes {
+                for &n in &cls.nodes {
+                    let c = self.canon(n);
+                    match owner.get(&c) { Some(&o) if o != id => merges.push((o, id)), Some(_) => {}, None => { owner.insert(c, id); } }
+                }
+            }
+            if merges.is_empty() {
+                let ids: Vec<Id> = self.classes.keys().copied().collect();
+                for id in ids {
+                    let mut seen = std::collections::HashSet::new();
+                    let fresh: Vec<ENode> = self.classes[&id].nodes.iter().map(|&n| self.canon(n)).filter(|n| seen.insert(*n)).collect();
+                    self.classes.get_mut(&id).unwrap().nodes = fresh;
+                }
+                self.memo = owner;
+                return;
+            }
+            for (a, b) in merges { self.union(a, b); }
+        }
+    }
+
+    pub fn n_classes(&self) -> usize { self.classes.len() }
+    pub fn n_nodes(&self) -> usize { self.classes.values().map(|c| c.nodes.len()).sum() }
+
+    /// Add a join tree and return its class.
+    pub fn add_tree(&mut self, t: &Tree) -> Id {
+        match t {
+            Tree::Leaf(i) => self.add(ENode::Scan(*i as u8)),
+            Tree::Join(a, b) => { let (x, y) = (self.add_tree(a), self.add_tree(b)); self.add(ENode::Join(x, y)) }
+        }
+    }
+
+    /// One round of the rewrite rules over a snapshot of the graph; returns how much the graph changed (unions + new nodes + new classes).
+    ///   commutativity   a ⋈ b      ->  b ⋈ a
+    ///   associativity   (a ⋈ b) ⋈ c ->  a ⋈ (b ⋈ c)
+    /// Two phases, as in egg: first *add* every right-hand side (no merging, so the hash-cons memo stays exact and nothing is
+    /// duplicated), then perform all the unions, then `rebuild` once.
+    fn apply_rules(&mut self, assoc: bool) -> usize {
+        let before = (self.n_nodes(), self.n_classes());
+        let snapshot: Vec<(Id, Vec<ENode>)> = self.classes.iter().map(|(&id, c)| (id, c.nodes.clone())).collect();
+        let mut equal: Vec<(Id, Id)> = vec![];
+        for (cid, nodes) in snapshot {
+            for n in nodes {
+                if let ENode::Join(x, z) = n {
+                    equal.push((cid, self.add(ENode::Join(z, x))));
+                    if assoc {
+                        let left: Vec<ENode> = self.classes[&self.find(x)].nodes.clone();
+                        for m in left {
+                            if let ENode::Join(a, b) = m {
+                                let bz = self.add(ENode::Join(b, z));
+                                equal.push((cid, self.add(ENode::Join(a, bz))));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let mut unions = 0;
+        for (a, b) in equal { if self.find(a) != self.find(b) { self.union(a, b); unions += 1; } }
+        self.rebuild();
+        unions + self.n_nodes().abs_diff(before.0) + self.n_classes().abs_diff(before.1)
+    }
+
+    /// Apply the rules until nothing changes, the graph exceeds `node_limit`, or `MAX_ROUNDS` rounds pass. Returns (rounds, saturated).
+    pub fn saturate(&mut self, assoc: bool, node_limit: usize) -> (usize, bool) {
+        for round in 1..=MAX_ROUNDS {
+            if self.apply_rules(assoc) == 0 { return (round, true); }
+            if self.n_nodes() > node_limit { return (round, false); }
+        }
+        (MAX_ROUNDS, false)
+    }
+
+    /// Cheapest tree of class `root` under C_out: the sum of the cardinalities of all join results (leaves are free).
+    /// A class's cardinality depends only on its relation set, so the best tree is a bottom-up minimum over its nodes.
+    pub fn extract(&self, root: Id, g: &Graph) -> (f64, Tree) {
+        let mut ids: Vec<Id> = self.classes.keys().copied().collect();
+        ids.sort_by_key(|&c| self.classes[&c].set.count_ones());
+        let mut best: HashMap<Id, (f64, ENode)> = HashMap::new();
+        for c in ids {
+            let cls = &self.classes[&c];
+            let card = g.card_of(cls.set);
+            let mut pick: Option<(f64, ENode)> = None;
+            for &n in &cls.nodes {
+                let cost = match n {
+                    ENode::Scan(_) => 0.0,
+                    ENode::Join(a, b) => best[&self.find(a)].0 + best[&self.find(b)].0 + card,
+                };
+                if pick.map_or(true, |p| cost < p.0) { pick = Some((cost, n)); }
+            }
+            best.insert(c, pick.unwrap());
+        }
+        fn build(eg: &EGraph, best: &HashMap<Id, (f64, ENode)>, c: Id) -> Tree {
+            match best[&eg.find(c)].1 {
+                ENode::Scan(i) => Tree::Leaf(i as usize),
+                ENode::Join(a, b) => Tree::Join(Box::new(build(eg, best, a)), Box::new(build(eg, best, b))),
+            }
+        }
+        let r = self.find(root);
+        (best[&r].0, build(self, &best, r))
+    }
+
+    /// Debug check of the invariants `rebuild` promises.
+    pub fn check_invariants(&self) -> Result<(), String> {
+        for (&id, cls) in &self.classes {
+            if self.find(id) != id { return Err(format!("class {id} is not a root")); }
+            for &n in &cls.nodes {
+                if self.canon(n) != n { return Err(format!("non-canonical node {n:?} in class {id}")); }
+                match self.memo.get(&n) {
+                    Some(&m) if self.find(m) == id => {}
+                    other => return Err(format!("memo of {n:?} is {other:?}, expected class {id}")),
+                }
+                let set = match n { ENode::Scan(i) => 1u64 << i, ENode::Join(a, b) => self.set_of(a) | self.set_of(b) };
+                if set != cls.set { return Err(format!("node {n:?} covers a different relation set than class {id}")); }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Cost (C_out) of a given tree, computed from scratch.
+pub fn tree_cost(t: &Tree, g: &Graph) -> f64 {
+    fn go(t: &Tree, g: &Graph) -> (f64, u64) {
+        match t {
+            Tree::Leaf(i) => (0.0, 1 << i),
+            Tree::Join(a, b) => { let (ca, sa) = go(a, g); let (cb, sb) = go(b, g); (ca + cb + g.card_of(sa | sb), sa | sb) }
+        }
+    }
+    go(t, g).0
+}
+
+/// An independent oracle: the best bushy tree over every subset *including cross products* (what the e-graph searches).
+pub fn best_with_cross_products(g: &Graph) -> f64 {
+    let n = g.n;
+    let mut best = vec![f64::INFINITY; 1 << n];
+    for i in 0..n { best[1 << i] = 0.0; }
+    for set in 1u64..(1 << n) {
+        if set.count_ones() < 2 { continue; }
+        let card = g.card_of(set);
+        let mut sub = (set - 1) & set;
+        while sub > 0 {
+            if sub & (set & set.wrapping_neg()) != 0 {
+                let c = best[sub as usize] + best[(set ^ sub) as usize] + card;
+                if c < best[set as usize] { best[set as usize] = c; }
+            }
+            sub = (sub - 1) & set;
+        }
+    }
+    best[(1 << n) - 1]
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+```text title="saturation size and time, and the DPccp enumerator for comparison"
+equality saturation (commutativity + associativity) from a left-deep tree, versus the DPccp enumerator (release build)
+  n |   classes    e-nodes  rounds  saturate  extract |  optimal      DPccppairs tried
+  Chain
+  4 |        15         54       6      0.1ms    0.0ms |      yes    0.002ms         10
+  5 |        31        185       7      0.3ms    0.0ms |      yes    0.001ms         20
+  6 |        63        608       8      1.1ms    0.0ms |      yes    0.002ms         35
+  7 |       127       1939       8      3.8ms    0.0ms |      yes    0.002ms         56
+  8 |       255       6058       9     16.4ms    0.1ms |      yes    0.004ms         84
+  9 |       511      18669       9     61.1ms    0.3ms |      yes    0.006ms        120
+ 10 |      1023      57012      10    299.4ms    0.8ms |      yes    0.007ms        165
+ 11 |      2047     173063      10   1388.6ms    2.3ms |      yes    0.017ms        220
+  Clique
+  4 |        15         54       6      0.1ms    0.0ms |      yes    0.001ms         25
+  5 |        31        185       7      0.2ms    0.0ms |      yes    0.003ms         90
+  6 |        63        608       8      1.1ms    0.0ms |      yes    0.008ms        301
+  7 |       127       1939       8      3.7ms    0.0ms |      yes    0.016ms        966
+  8 |       255       6058       9     16.0ms    0.1ms |      yes    0.045ms       3025
+  9 |       511      18669       9     60.8ms    0.3ms |      yes    0.139ms       9330
+ 10 |      1023      57012      10    303.4ms    0.8ms |      yes    0.418ms      28501
+ 11 |      2047     173063      10   1364.5ms    2.4ms |      yes    1.321ms      86526
+200 random 8-relation queries, random connected left-deep order: C_out(initial) / C_out(e-graph optimum): median 9838.4x, p90 17648688.7x, max 42751239493x
+a cross product beat every cross-product-free tree in 2 of 200 queries
+```
+
+<ul> <li><strong>The graph is exactly the memo</strong>: <code>2&#94;n − 1</code> classes (one per non-empty subset) and <code>3&#94;n − 2&#94;(n+1) + 1 + n</code> e-nodes (every ordered split of every subset, plus the scans), for every query shape: 54 nodes at 4 relations, 173 063 at 11. The tests check both formulas for n = 3…8.</li> <li><strong>Extraction is optimal</strong>: the cheapest tree equals the optimum over all bushy trees, cross products included, computed by an independent dynamic program, for 60 random graphs (and for every row above). A cross product beat every cross-product-free plan in 2 of 200 random 8-relation queries.</li> <li><strong>The rules are what make it work.</strong> With commutativity alone the graph saturates in two or three rounds and the extracted plan has exactly the cost of the starting tree; adding associativity reaches the optimum, and on random 5-relation queries it improves a random starting order in the large majority of cases (the test asserts more than half).</li> <li><strong>For join ordering alone it is the wrong tool.</strong> Saturation takes 1.4 s for 11 relations while DPccp finds the same optimum in 0.017 ms (chain) to 1.3 ms (clique), about 80 000 times faster on the chain and 1 000 times on the clique: the e-graph explores every ordered split of every subset, including cross products (<code>~3&#94;n</code>), where DPccp enumerates only the connected pairs (220 pairs for the 11-relation chain). Specialized enumeration beats a generic mechanism on the problem it was designed for.</li> <li><strong>Implementation matters as much as the idea.</strong> The first version of the rule loop merged classes as it went, so later insertions missed the not-yet-rebuilt hash-cons table and created duplicate classes for congruence to merge afterwards: saturating 11 relations took 53 s (chain) and 29 s (clique). Adding all right-hand sides first, merging second and rebuilding once cut it to 1.4 s, 21–38× faster, with identical graphs.</li> <li><strong>Why use equality saturation at all?</strong> Its strength is <em>rule interaction</em>: rewrites that enable each other in orders no one planned (algebraic simplification, predicate and aggregation rewrites, expression canonicalization) are found without a hand-designed phase ordering, and the cost model decides at the end. The price is the size of the graph, which is why practical uses bound the rules and the graph, or run it on the part of the plan where rewrites interact and use DP for join order.</li> <li><strong>Reading the random-order row.</strong> A random connected left-deep join order costs a median 9 838× the optimum under <code>C_out</code> (p90 1.8·10⁷) on these synthetic cardinalities (100 to 10⁶ rows per relation), which is the argument for doing the search at all.</li> </ul>
+"""
+
+[[sections]]
+heading = "Choosing"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>situation</th> <th>choice</th> </tr> </thead> <tbody> <tr> <td>a young engine, mostly simple queries</td> <td>normalization rules + greedy or DP join order + a simple cost model; add statistics before a framework</td> </tr> <tr> <td>a mature OLTP engine with a rich index design</td> <td>bottom-up DP over paths with interesting orders (PostgreSQL style), a plan cache and a cost model tuned to the hardware</td> </tr> <tr> <td>a warehouse with many large joins and operator choices</td> <td>a Cascades-style memo, DPccp/DPhyp for join order inside it, runtime filters and adaptive execution (<a href="/cookbook/p/adaptive-and-robust">Q10</a>)</td> </tr> <tr> <td>an embedded or analytical engine with unusual operators</td> <td>a framework with rules as data (Calcite, optd, or your own), so a new operator is a rule and an implementation</td> </tr> <tr> <td>many interacting algebraic rewrites</td> <td>normalization to a fixpoint, optionally equality saturation on that part, then a conventional cost-based phase</td> </tr> <tr> <td>distributed execution</td> <td>the same plus properties for data placement and enforcers for exchanges, and a model for network bytes (<a href="/cookbook/p/distributed-databases-i">L23</a>, <a href="/cookbook/p/distributed-databases-ii">L24</a>)</td> </tr> </tbody> </table></div>
+
+<aside data-call="note"><b>Cairn's planner</b><p>For the multi-model engine of Part V the structure to aim for is: a <strong>normalization</strong> stage (pushdown, unnesting, outer-join simplification, constant folding), <strong>DPccp/DPhyp</strong> for join order over the relational part, a <strong>memo with physical properties</strong> (sort order, partitioning, vector-index availability) for implementation choices, a <strong>calibrated cost model</strong> (<a href="/cookbook/p/cost-models">Q9</a>) with the cardinality estimators that fit the data models (<a href="/cookbook/p/statistics">Q7</a>, <a href="/cookbook/p/cardinality-estimation">Q8</a>), runtime filters and re-optimization at pipeline breakers (<a href="/cookbook/p/adaptive-and-robust">Q10</a>), a plan cache with invalidation, and an <code>EXPLAIN</code> that prints estimates beside actuals. Rules should be data, so a graph traversal, a vector search or a time-series window can be added as an operator with its own implementation and cost.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Ids, not references, for a graph</strong>: e-nodes hold <code>u32</code> class ids, never <code>&amp;</code> or <code>Rc</code>; the union-find is a <code>Vec&lt;Id&gt;</code>, the classes a <code>HashMap&lt;Id, Class&gt;</code>, the memo a <code>HashMap&lt;ENode, Id&gt;</code>. There is no lifetime problem and no cycle problem because nothing is owned by anything else; this is the idiomatic shape for any graph with merging (compare arenas in <a href="/cookbook/p/rust-for-systems-code">Part VI</a>).</li> <li><strong><code>#[derive(Hash, Eq)]</code> on a small <code>Copy</code> enum</strong> gives the hash-cons key for free. Keeping <code>ENode</code> at 12 bytes (<code>Join(u32, u32)</code> plus a tag) makes the memo cache-friendly; a general e-graph (<code>egg</code>) uses a generic <code>Language</code> trait with children slices instead.</li> <li><strong>Two-phase mutation to satisfy the borrow checker and the algorithm</strong>: collect <code>(class, new class)</code> pairs while only calling <code>add</code>, then union them all. It avoids invalidating iterators and, as measured, avoids creating duplicates. A snapshot (<code>clone</code> of the node lists) is the simple way to iterate while mutating; <code>egg</code> avoids the copy with an e-matching machine.</li> <li><strong><code>should_panic(expected = …)</code> for invariants</strong>: the relation-set assertion in <code>union</code> turns an unsound rule (a rewrite that changes what the expression computes) into an immediate, located failure, which is how the associativity mutant (<code>b ⋈ z</code> replaced by <code>a ⋈ z</code>) was caught.</li> <li><strong><code>check_invariants() -&gt; Result&lt;(), String&gt;</code></strong> as a debug method, called by tests after every phase, is cheaper than reasoning about whether <code>rebuild</code> is right.</li> <li><strong>Round and size limits as defaults, not options</strong>: a rewrite system that can loop must have a budget; <code>saturate</code> returns <code>(rounds, saturated)</code> so callers can tell fixpoint from cut-off.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Hash-consing</strong>: adding the same node or tree twice returns the same class; different nodes stay different until a rule merges them.</li> <li><strong>Congruence</strong>: after <code>union(x, y)</code> and <code>rebuild</code>, <code>Join(x, s)</code> and <code>Join(y, s)</code> are one class with one node; handles to either merged class are accepted by <code>add</code> and find the same class.</li> <li><strong>Soundness check</strong>: merging classes over different relation sets panics.</li> <li><strong>Closed forms</strong>: after saturation the graph has <code>2&#94;n − 1</code> classes and <code>3&#94;n − 2&#94;(n+1) + 1 + n</code> nodes for n = 3…8, invariants hold, and the root covers all relations.</li> <li><strong>Optimality</strong>: for 60 random graphs of every shape (3–7 relations) from a random starting order, the extracted cost equals an independent dynamic program over all subsets with cross products; the cost recomputed from the extracted tree matches; every relation occurs exactly once; the cost is at most DPccp's.</li> <li><strong>Rules</strong>: commutativity alone leaves the cost of the starting tree unchanged and saturates in at most three rounds; adding associativity never increases cost and improves most random starting orders; a node limit stops saturation and leaves valid invariants.</li> <li><strong>Mutants run against these tests</strong> (all killed): <code>rebuild</code> never merges congruent classes; <code>union</code> drops the merged class's nodes (the first test run <strong>hung</strong>, which showed <code>saturate</code> needed a round limit; with the limit it fails by assertion); extraction picks the most expensive node; <code>add</code> skips canonicalization (<strong>survived until a test used stale handles</strong>); associativity builds a wrong right-hand side (caught by the relation-set assertion); commutativity removed; the relation-set check removed (caught by the <code>should_panic</code> test that merges classes over different sets).</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Plan caches and plan management</strong> are as much a part of the optimizer as the search: PostgreSQL caches generic versus custom plans for prepared statements and decides by comparing costs after a few executions; SQL Server's Query Store records plans and runtime statistics and can force a previous plan; Oracle's SQL plan management captures baselines and evolves them only when the new plan is verified better; Db2 offers optimization profiles that steer or pin plans.</li> <li><strong>Optimization time limits</strong>: SQL Server stops the search at a cost-based threshold or a timeout and returns the best plan so far (visible as "TimeOut" in the plan's reason for early termination); PostgreSQL falls back to GEQO beyond its threshold; Oracle caps join permutations; Calcite and Orca expose search budgets.</li> <li><strong>Observability</strong>: PostgreSQL <code>EXPLAIN (ANALYZE, BUFFERS)</code> with estimated and actual rows per node; MySQL's <code>optimizer_trace</code> prints every decision and rejected alternative; SQL Server's actual execution plans show estimates, actuals and warnings; Orca ships verification tools that compare the chosen plan with others (TAQO). Showing estimated against actual rows is the cheapest debugging tool an optimizer can offer.</li> <li><strong>Testing</strong>: differential testing of optimized against unoptimized execution (SQLancer's ternary-logic partitioning and NoREC approaches, <a href="/cookbook/p/testing-a-database">Part VI</a>), plan-regression suites over saved queries, and join-order benchmarks (JOB). Every optimizer bug is either a wrong result (unsound rule) or a wrong plan (cost or estimate); the first kind must be caught by differential tests.</li> <li><strong>Dynamic and adaptive layers</strong>: Spark AQE, SQL Server adaptive joins, Oracle adaptive plans, and runtime filters (<a href="/cookbook/p/adaptive-and-robust">Q10</a>) sit <em>after</em> the static optimizer and fix what it could not know.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Rule soundness is the whole contract.</strong> An unsound rewrite (an outer-join reordering that changes NULL semantics, a pushdown through a window, a decorrelation that loses the <code>COUNT</code> bug) returns wrong answers, silently. Test every rule with random data against the unrewritten plan (<a href="/cookbook/p/plan-transformations-and-rule-soundness">Q3</a>, <a href="/cookbook/p/unnesting-subqueries">Q6</a>).</li> <li><strong>Rules that undo each other loop.</strong> Normalization rules need a termination argument (a measure that strictly decreases) or an iteration cap; the e-graph's <code>MAX_ROUNDS</code> and node limit are the minimum.</li> <li><strong>Search-space size is a feature to be budgeted.</strong> Exhaustive search over all subsets grows as <code>3&#94;n</code>; measure optimization time per query shape, and put a ceiling on it.</li> <li><strong>Cross products are not always bad.</strong> A tiny dimension table crossed with another before a large join can win (2 of 200 random queries here); excluding cross products is a pruning heuristic, not a law.</li> <li><strong>Do not copy an architecture without its supporting parts.</strong> A Cascades memo without good properties, a cost model and statistics is a slow way to get a worse plan than PostgreSQL's DP; the search is perhaps 20% of an optimizer.</li> <li><strong>Extraction with sharing is hard.</strong> The cost of a plan with a common subexpression is not the sum of its children's costs; e-graph extraction by per-class minimum is exact only for additive, tree-shaped costs, and extraction under sharing is NP-hard in general.</li> <li><strong>Plan changes are user-visible events.</strong> A new statistic, a new index or a new version can change a plan; ship plan hints, pinning and plan comparison before shipping a smarter optimizer.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "egg: Fast and Extensible Equality Saturation"
+url = "https://dl.acm.org/doi/10.1145/3434304"

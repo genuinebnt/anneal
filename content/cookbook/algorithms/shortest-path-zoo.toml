@@ -1,0 +1,70 @@
+title = "Shortest-path zoo"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Graph algorithms"
+chapter_order = 4
+order = 192
+kind = "recipe"
+lede = "Bellman-Ford, Floyd-Warshall, A*, bidirectional BFS, 0-1 BFS (and which to choose)."
+level = "intermediate"
+code = ["examples/algorithms/shortest_path_zoo.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>routing</li><li>pathfinding in games/robotics</li><li>currency arbitrage</li><li>all-pairs tables</li><li>grid mazes</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+No single algorithm wins; the right one depends on the weights and the question:
+
+```text
+| situation                              | choose                    | cost                    |
+```
+
+&#124;----------------------------------------&#124;---------------------------&#124;-------------------------&#124;
+
+```text
+| unweighted, one source                 | BFS                       | O(V+E)                  |
+| unweighted, one source->one target     | bidirectional BFS         | ~ 2*b^(d/2) vs b^d      |
+| weights only 0 or 1                    | 0-1 BFS (deque)           | O(V+E)                  |
+| non-negative weights                   | Dijkstra (see dijkstra)        | O((V+E) log V)          |
+| negative weights / detect neg. cycles  | Bellman-Ford              | O(V*E)                  |
+| all pairs, small dense graph           | Floyd-Warshall            | O(V^3)                  |
+| one target + admissible heuristic      | A*                        | fewer expansions        |
+```
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+Bellman-Ford relaxes every edge V-1 times; if a V-th pass still improves something, a negative cycle is reachable. Floyd-Warshall tries every node k as an intermediate and keeps a `next` matrix for path rebuilding.
+
+A&#42; is Dijkstra ordered by g+h; with a **consistent** heuristic (Manhattan on a 4-connected unit grid) the first time a node is closed its g is optimal, so it returns the same cost as BFS while expanding fewer nodes. Every algorithm is checked against a reference on seeded random graphs below (differential testing).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Bellman-Ford underlies distance-vector routing (<strong>rip</strong>) and arbitrage detection (log-rates, negative cycle = profit loop)</li><li>Floyd-Warshall for small transitive-closure / distance tables</li><li>A* in game and robot navigation</li><li>0-1 BFS for "free vs paid" moves (e.g. grid with doors, edit-distance-like graphs)</li><li>bidirectional search in social-graph "degrees of separation" queries</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://cp-algorithms.com/graph/bellman_ford.html" target="_blank" rel="noreferrer">https://cp-algorithms.com/graph/bellman_ford.html</a></li><li><a href="https://cp-algorithms.com/graph/all-pair-shortest-path-floyd-warshall.html" target="_blank" rel="noreferrer">https://cp-algorithms.com/graph/all-pair-shortest-path-floyd-warshall.html</a> and <a href="https://cp-algorithms.com/graph/01_bfs.html" target="_blank" rel="noreferrer">https://cp-algorithms.com/graph/01_bfs.html</a></li></ul>
+"""
+
+[[sources]]
+title = "cp-algorithms.com/graph/bellman_ford.html"
+url = "https://cp-algorithms.com/graph/bellman_ford.html"
+
+[[sources]]
+title = "cp-algorithms.com/graph/all-pair-shortest-path-floyd-warshall.html"
+url = "https://cp-algorithms.com/graph/all-pair-shortest-path-floyd-warshall.html"
+
+[[sources]]
+title = "cp-algorithms.com/graph/01_bfs.html"
+url = "https://cp-algorithms.com/graph/01_bfs.html"

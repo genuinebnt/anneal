@@ -1,0 +1,64 @@
+title = "The saga pattern"
+module = "Distributed systems"
+module_order = 10
+chapter = "Consensus and distributed transactions"
+chapter_order = 2
+order = 493
+kind = "recipe"
+lede = "Distributed transactions without 2PC, via compensation, a durable log and idempotent steps"
+level = "advanced"
+code = ["examples/distributed/saga_orchestrator.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+multi-service business transactions (booking, checkout, onboarding) where a global lock or two-phase commit is not available.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Problem**: a trip booking touches three independent services (flight, hotel, card) that each have their own database. One ACID transaction cannot span them. Two-phase commit can, but it **blocks**: if the coordinator dies after the participants voted yes, they hold their locks until it returns (demonstrated below).
+
+**A saga** instead runs a sequence of **local** transactions and, if one fails, runs **compensating** actions for the completed ones in **reverse** order.
+
+**Step kinds** decide a legal order: **compensatable** steps (can be undone) first, then at most one **pivot** (the go/no-go step: once it succeeds the saga must finish), then **retriable** steps (must eventually succeed, retried forever). Here: reserve flight, reserve hotel (compensatable), charge card (pivot), issue ticket (retriable).
+
+**Orchestration**: one coordinator whose entire state is a pure **fold** of the durable **saga log**; `next_action(state)` is a pure function. Each transition is appended **before** it is executed (started / done / failed / compensating / compensated), so after a crash a fresh orchestrator replays the log and simply continues; no in-memory state is needed for correctness.
+
+**Idempotency**: because a crash can land between "log appended" and "effect done" or between "effect done" and "result logged", every step and compensation may run more than once. Services key all operations by saga id (a set insert / a set remove), so repeats are harmless.
+
+A compensation also leaves a **tombstone**: otherwise a delayed duplicate of the forward request arriving **after** the cancel would re-create the effect (an orphan); a test below shows this really happens.
+
+**Retries**: transient failures retry with exponential backoff and jitter on a virtual clock; a forward step gives up after N attempts (then the saga compensates), compensations never give up. A saga-wide deadline aborts before the pivot.
+
+**Choreography**: the same saga without a coordinator: each service reacts to events and emits the next one (the bus is at-least-once with duplicates). Less coupling, but the flow lives nowhere in particular and is harder to follow. **Isolation**: sagas are ACD, not I: intermediate effects are visible.
+
+A dirty-read demo shows a reader acting on a seat count that is later compensated; the **semantic lock** countermeasure marks the seat `Pending(saga)` so readers can tell.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+seeded failure injection (permanent failures, transient errors with lost replies, duplicate and delayed deliveries, orchestrator crashes at both awkward points). 5000 random schedules must end fully **committed** or fully **compensated**, never partial, with each compensation effective at most once.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>e-commerce checkout (inventory, payment, shipping)</li><li>travel booking</li><li>order fulfilment</li><li>account provisioning. Real-world engines: Temporal and Cadence workflows</li><li>AWS Step Functions</li><li>Camunda</li><li>Eventuate Tram</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://microservices.io/patterns/data/saga.html" target="_blank" rel="noreferrer">https://microservices.io/patterns/data/saga.html</a></li><li><a href="https://www.cs.cornell.edu/andru/cs711/2002fa/reading/sagas.pdf" target="_blank" rel="noreferrer">https://www.cs.cornell.edu/andru/cs711/2002fa/reading/sagas.pdf</a> (the original 1987 paper by Garcia-Molina and Salem)</li></ul>
+"""
+
+[[sources]]
+title = "microservices.io/patterns/data/saga.html"
+url = "https://microservices.io/patterns/data/saga.html"
+
+[[sources]]
+title = "cs.cornell.edu/andru/cs711/2002fa/reading/sagas.pdf"
+url = "https://www.cs.cornell.edu/andru/cs711/2002fa/reading/sagas.pdf"

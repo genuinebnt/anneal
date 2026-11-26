@@ -1,0 +1,61 @@
+title = "Std::mem and std::ptr toolbox"
+module = "Rust language"
+module_order = 1
+chapter = "Ownership and borrowing"
+chapter_order = 1
+order = 7
+kind = "recipe"
+lede = "Replace/take/swap/forget/discriminant/copy/transmute and how they combine."
+level = "intermediate"
+code = ["examples/language/mem_functions.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>state machines</li><li>buffers</li><li>linked structures</li><li>low-level code</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+`mem::replace(&mut x, new)` returns the old value; `take` replaces with `Default`; `swap` exchanges two places.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+safe Rust forbids moving out of a `&mut` (the place would be left empty). These functions move out while leaving a valid value behind, so the borrow checker and drop logic stay happy. No unsafe is needed.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+combine them. A state enum with a `Poisoned` placeholder lets `&mut self` methods consume the old state by value. `forget` skips a destructor (a leak, safe but rarely wanted); `ptr::copy` is memmove; `copy_nonoverlapping` is memcpy.
+
+`transmute` reinterprets bits and is almost always replaceable:
+
+```text
+bytes -> int: `u32::from_ne_bytes`   | float bits: `f32::to_bits`/`from_bits`  | checked enum: `TryFrom<u8>`
+numeric cast: `as`                   | pointer <-> usize: `ptr.addr()`        | slices: `bytemuck`-style casts
+```
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li><code>Option::take</code> in linked lists and trees</li><li><code>mem::take</code> of a field inside <code>Drop</code>/<code>finish(self)</code> code</li><li>double-buffered simulations/render queues</li><li>reusing a scratch <code>Vec</code> between calls</li><li><code>mem::replace</code> in builder and state-machine code</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/mem/index.html> and <https://doc.rust-lang.org/nomicon/transmutes.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/mem/index.html"
+url = "https://doc.rust-lang.org/std/mem/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/transmutes.html"
+url = "https://doc.rust-lang.org/nomicon/transmutes.html"

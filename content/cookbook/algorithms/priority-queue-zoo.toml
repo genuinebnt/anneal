@@ -1,0 +1,84 @@
+title = "A priority queue zoo"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Caches, queues, heaps and bit sets"
+chapter_order = 3
+order = 184
+kind = "recipe"
+lede = "Pairing heap, leftist heap, indexed 4-ary heap, Dial's bucket queue, radix heap"
+level = "advanced"
+code = ["examples/data_structures/priority_queue_zoo.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>Dijkstra/Prim/A*</li><li>event simulation</li><li>schedulers</li><li>mergeable queues</li><li>anything where <code>BinaryHeap</code> lacks decrease-key</li><li>meld</li><li>a monotone fast path</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>shortest paths on road/network graphs (Dial's and radix heaps for integer weights)</li><li>discrete-event simulators and timer wheels (bucket queues)</li><li>mergeable priority queues in functional/persistent code (leftist and skew heaps)</li><li>Prim's MST and Dijkstra with decrease-key (d-ary or pairing heaps)</li><li>k-way merge</li><li>task schedulers whose keys only move forward in time (monotone queues)</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+What: five structures beyond `std::collections::BinaryHeap`, all **arena** based (parallel Vecs + `usize` indices + free list, no Box, no Rc, no unsafe):
+
+- `PNodes` pairing heap: a heap-ordered tree where the min's children form a sibling list. insert and meld are one comparison (O(1)); pop-min merges the children with the two-pass pairing rule (amortised O(log n)); decrease-key cuts the node out and re-links it with the root.
+
+   Simple, and very fast in practice, though its exact decrease-key bound is subtle (between Omega(log log n) and O(2&#94;(2&#42;sqrt(log log n))) amortised, Fredman 1999 / Pettie 2005).
+- `LNodes` leftist heap: every node keeps its rank (shortest path to a missing child) and keeps the right spine short by swapping children, so meld is O(log n) **worst** case and everything else is built on meld: insert = meld with a singleton, pop = meld(left, right).
+
+   Because both live in one arena, any two heaps in it can be melded without copying: that is the point of a mergeable queue (tested with 8 heaps melded at random).
+- `DHeap<D>` indexed d-ary heap with decrease-key (`pos[id]` tracks where each id sits). D=4 makes the tree half as deep as a binary heap and the 4 children of a node are adjacent in memory (one or two cache lines of u32 ids), so sift-down does fewer, more predictable cache misses at the price of 4 comparisons per level.
+
+   Sift-up (the cheap decrease-key path) gets strictly cheaper. Caveat measured below: this swap-based indexed version is slower than std's hole-based BinaryHeap for plain push/pop; the win needs decrease-key-heavy or very large workloads and a tuned sift.
+- `Dial` bucket queue: keys are small integers &lt;= C apart, so a circular array of C+1 buckets replaces comparisons; push is O(1), pop scans forward.
+- `Radix` heap: for **monotone** keys (never pushed below the last popped key). Bucket i holds keys whose highest differing bit versus `last` is i; popping redistributes the first non-empty bucket downward, so each element moves at most 64 times: O(log C) amortised, no weight bound needed.
+
+   Verified against `BinaryHeap`/`BTreeSet` oracles on seeded random operation sequences, and as Dijkstra queues: every variant must produce exactly the distances of the `BinaryHeap` Dijkstra on random graphs. A 1M-operation benchmark is printed only (timings are never asserted).
+
+```text
+structure        insert        pop-min        decrease-key        meld        wins when
+binary heap      O(log n)*     O(log n)       O(log n) indexed    O(n)        general purpose; std is hard to beat for plain push/pop
+4-ary indexed    O(log4 n)     O(4 log4 n)    O(log4 n)           O(n)        Dijkstra/Prim with decrease-key on big graphs (cache friendly)
+pairing          O(1)          O(log n) am.   o(log n) am. (open) O(1)        decrease-key heavy loads and cheap meld, small constants
+leftist          O(log n)      O(log n)       (cut + meld)        O(log n)    you need worst-case O(log n) meld / persistence / merging queues
+Dial (bucket)    O(1)          O(1)+scan      O(1) lazy           -           small integer weights <= C, total O(m + n*C) for Dijkstra
+radix            O(1)          O(log C) am.   O(1) lazy           -           monotone integer keys of any size (Dijkstra with u32/u64 weights)
+```
+
+(&#42; amortised O(1) average for random keys)
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://en.wikipedia.org/wiki/Pairing_heap" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Pairing_heap</a></li><li><a href="https://en.wikipedia.org/wiki/Leftist_tree" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Leftist_tree</a></li><li><a href="https://en.wikipedia.org/wiki/D-ary_heap" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/D-ary_heap</a></li><li><a href="https://en.wikipedia.org/wiki/Dial%27s_algorithm" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Dial%27s_algorithm</a></li><li><a href="https://en.wikipedia.org/wiki/Radix_heap" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Radix_heap</a></li><li><a href="https://doc.rust-lang.org/std/collections/struct.BinaryHeap.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/collections/struct.BinaryHeap.html</a></li></ul>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Pairing_heap"
+url = "https://en.wikipedia.org/wiki/Pairing_heap"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Leftist_tree"
+url = "https://en.wikipedia.org/wiki/Leftist_tree"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/D-ary_heap"
+url = "https://en.wikipedia.org/wiki/D-ary_heap"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Dial%27s_algorithm"
+url = "https://en.wikipedia.org/wiki/Dial%27s_algorithm"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Radix_heap"
+url = "https://en.wikipedia.org/wiki/Radix_heap"
+
+[[sources]]
+title = "doc.rust-lang.org/std/collections/struct.BinaryHeap.html"
+url = "https://doc.rust-lang.org/std/collections/struct.BinaryHeap.html"

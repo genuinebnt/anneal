@@ -1,0 +1,281 @@
+title = "Glossary"
+module = "Appendices"
+module_order = 15
+chapter = "Courses, reading and glossary"
+chapter_order = 1
+order = 694
+kind = "guide"
+lede = "Terms used across the guide, with a one-line meaning and where each is built or explained"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>One line per term, with a link to where it is built.</strong> The definitions are short on purpose; the section is the explanation. Terms are in alphabetical order; a term with two spellings is listed under the one the guide uses.</li> <li><strong>Where a word means different things in different places, both meanings are given.</strong> "Index", "log", "snapshot" and "transaction" each have several.</li> </ul>
+
+<p><strong>2PC (two-phase commit)</strong> — a coordinator asks all participants to <em>prepare</em>, then tells them all to <em>commit</em> or <em>abort</em>; blocks if the coordinator fails at the wrong moment. <a href="/cookbook/p/distributed-databases-i">L23</a>, <a href="/cookbook/p/distributed-transactions">M10</a>.</p>
+
+<p><strong>2PL (two-phase locking)</strong> — a transaction acquires locks in a growing phase and releases them in a shrinking phase; <em>strict</em> 2PL holds write locks to commit. <a href="/cookbook/p/two-phase-locking">L18</a>.</p>
+
+<p><strong>ABD register</strong> — a majority-quorum implementation of an atomic read/write register over message passing (Attiya, Bar-Noy, Dolev). <a href="/cookbook/p/deterministic-simulation">Simulation</a>.</p>
+
+<p><strong>ACID</strong> — atomicity, consistency, isolation, durability: the guarantees of a transaction. <a href="/cookbook/p/concurrency-control-theory">L17</a>.</p>
+
+<p><strong>Acquire / release</strong> — memory orderings: a release store publishes all earlier writes to a thread that acquires the same variable. <a href="/cookbook/p/rust-for-systems-code">Rust for systems</a>.</p>
+
+<p><strong>ANN (approximate nearest neighbour)</strong> — finding vectors close to a query without comparing against all of them. <a href="/cookbook/p/vector-databases">S2</a>, <a href="/cookbook/p/the-vector-store">M12</a>.</p>
+
+<p><strong>ARC (adaptive replacement cache)</strong> — a replacement policy that balances recency and frequency lists using ghost entries. <a href="/cookbook/p/arc-replacer">P1.1</a>.</p>
+
+<p><strong>Arena</strong> — an allocator that hands out memory by moving a pointer and frees everything at once. <a href="/cookbook/p/concurrent-memory">Concurrent memory</a>.</p>
+
+<p><strong>ARIES</strong> — the recovery algorithm: write-ahead logging, repeat history on redo, undo losers with compensation records. <a href="/cookbook/p/crash-recovery-aries">L22</a>, <a href="/cookbook/p/build-wal-and-aries">22b</a>.</p>
+
+<p><strong>Atomic (in memory models)</strong> — an operation that is indivisible with respect to other threads; with an ordering that says what else it synchronizes. <a href="/cookbook/p/rust-for-systems-code">Rust for systems</a>.</p>
+
+<p><strong>B+Tree</strong> — a balanced search tree with keys and pointers in internal nodes and all values in linked leaves. <a href="/cookbook/p/b-trees">L08</a>.</p>
+
+<p><strong>Bloom filter</strong> — a bit array that answers "possibly present" or "definitely absent". <a href="/cookbook/p/filters-tries-inverted-and-vector-indexes">L09</a>.</p>
+
+<p><strong>Bw-tree</strong> — a latch-free B-tree variant using a mapping table and delta records. <a href="/cookbook/p/latch-free-indexes-and-the-bw-tree">A5</a>.</p>
+
+<p><strong>Buffer pool</strong> — the memory cache of disk pages managed by the DBMS. <a href="/cookbook/p/buffer-pools">L04</a>, <a href="/cookbook/p/buffer-pool-manager">P1.3</a>.</p>
+
+<p><strong>Cardinality estimation</strong> — predicting how many rows an operator will produce. <a href="/cookbook/p/cardinality-estimation">Q8</a>.</p>
+
+<p><strong>Cascades</strong> — a top-down, memo-based optimizer framework with transformation and implementation rules. <a href="/cookbook/p/a-cascades-memo-in-rust">Q2</a>.</p>
+
+<p><strong>Channel binding</strong> — tying an authentication exchange to the TLS session it runs in. <a href="/cookbook/p/passwords-and-scram">M21</a>.</p>
+
+<p><strong>Checkpoint</strong> — a point from which recovery need not look further back in the log. <a href="/cookbook/p/crash-recovery-aries">L22</a>.</p>
+
+<p><strong>Clock (replacement)</strong> — an approximation of LRU with a reference bit and a sweeping hand. <a href="/cookbook/p/buffer-pools">L04</a>.</p>
+
+<p><strong>Column store</strong> — storing each column contiguously; efficient for scans of few columns. <a href="/cookbook/p/storage-models-and-compression">L06</a>, <a href="/cookbook/p/a-column-store">M3</a>.</p>
+
+<p><strong>Compaction</strong> — merging sorted runs of an LSM tree to bound read and space cost. <a href="/cookbook/p/log-structured-storage">L05</a>, <a href="/cookbook/p/a-durable-lsm-tree">M7</a>.</p>
+
+<p><strong>Consensus</strong> — agreement of a group of nodes on a value despite failures. <a href="/cookbook/p/raft">M8</a>.</p>
+
+<p><strong>Coordinated omission</strong> — a measurement error where a stalled system is not charged for the requests that were delayed by the stall. <a href="/cookbook/p/benchmarking">Benchmarking</a>.</p>
+
+<p><strong>Cost model</strong> — a function from a plan and its estimated cardinalities to an estimated cost. <a href="/cookbook/p/cost-models-and-join-ordering">L16</a>, <a href="/cookbook/p/cost-models">Q9</a>.</p>
+
+<p><strong>CRDT (conflict-free replicated data type)</strong> — a data type whose replicas converge through a merge that is commutative, associative and idempotent. <a href="/cookbook/p/crdts">M11</a>.</p>
+
+<p><strong>CSR (compressed sparse row)</strong> — an array layout for a graph's adjacency lists. <a href="/cookbook/p/the-graph-store">M13</a>.</p>
+
+<p><strong>Deadlock</strong> — transactions each waiting for a lock another holds. <a href="/cookbook/p/two-phase-locking">L18</a>.</p>
+
+<p><strong>Differential testing</strong> — comparing two implementations (or two plans) of the same query on the same data. <a href="/cookbook/p/testing-a-database">Testing</a>.</p>
+
+<p><strong>Direct I/O</strong> — reads and writes that bypass the operating system's page cache. <a href="/cookbook/p/disk-i-o-fsync-the-page-cache-and-queues">I/O</a>.</p>
+
+<p><strong>Dirty page</strong> — a page in memory that has changed since it was written to disk. <a href="/cookbook/p/buffer-pools">L04</a>.</p>
+
+<p><strong>DST (deterministic simulation testing)</strong> — running a distributed system in one thread with simulated network, disk and time, driven by a seed. <a href="/cookbook/p/deterministic-simulation">Simulation</a>.</p>
+
+<p><strong>Epoch-based reclamation</strong> — freeing a retired node when no thread that could see it remains pinned in an old epoch. <a href="/cookbook/p/concurrent-memory">Concurrent memory</a>.</p>
+
+<p><strong>Exchange operator</strong> — an operator that redistributes tuples between parallel workers. <a href="/cookbook/p/parallel-execution">L14</a>, <a href="/cookbook/p/execution-pipelines">A21</a>.</p>
+
+<p><strong>Extended protocol (pgwire)</strong> — the PostgreSQL message flow of parse, bind, execute and sync. <a href="/cookbook/p/the-postgresql-wire-protocol">M19</a>.</p>
+
+<p><strong>Fence (memory)</strong> — an instruction that orders memory operations around it. <a href="/cookbook/p/rust-for-systems-code">Rust for systems</a>.</p>
+
+<p><strong>Filter pushdown</strong> — moving a predicate toward the scan so that fewer rows flow upward. <a href="/cookbook/p/query-planning-and-rewriting">L15</a>, <a href="/cookbook/p/optimizer-rules-and-the-engine">P3.6</a>.</p>
+
+<p><strong>Foreign data wrapper</strong> — an adapter that exposes an external source as a table. <a href="/cookbook/p/distributed-databases-i">L23</a>.</p>
+
+<p><strong>False sharing</strong> — threads slowing each other by writing different variables that share a cache line. <a href="/cookbook/p/rust-for-systems-code">Rust for systems</a>.</p>
+
+<p><strong>fsync</strong> — the call that makes a file's data durable; on some systems the drive's cache is flushed only by a stronger call. <a href="/cookbook/p/disk-i-o-fsync-the-page-cache-and-queues">I/O</a>.</p>
+
+<p><strong>Full-text search</strong> — retrieval by words with an inverted index and ranking. <a href="/cookbook/p/full-text-search">M16</a>.</p>
+
+<p><strong>Garbage collection (MVCC)</strong> — removing versions no active transaction can see. <a href="/cookbook/p/multi-version-concurrency-control">L20</a>, <a href="/cookbook/p/mvcc-garbage-collection">A4</a>.</p>
+
+<p><strong>Gossip</strong> — spreading state by random pairwise exchange. <a href="/cookbook/p/distributed-databases-i">L23</a>, <a href="/cookbook/p/crdts">M11</a>.</p>
+
+<p><strong>Group commit</strong> — one log flush making many transactions durable. <a href="/cookbook/p/logging">L21</a>.</p>
+
+<p><strong>Grace hash join</strong> — a hash join that partitions both inputs to disk when the build side does not fit in memory. <a href="/cookbook/p/grace-hash-join-and-spilling">P3.4</a>.</p>
+
+<p><strong>Hash join</strong> — build a hash table on one input, probe with the other. <a href="/cookbook/p/join-algorithms">L12</a>.</p>
+
+<p><strong>HLC (hybrid logical clock)</strong> — a timestamp combining physical time and a logical counter. <a href="/cookbook/p/distributed-transactions">M10</a>.</p>
+
+<p><strong>HNSW</strong> — hierarchical navigable small-world graph for approximate nearest-neighbour search. <a href="/cookbook/p/vector-databases">S2</a>.</p>
+
+<p><strong>HTAP</strong> — a system serving transactional and analytical workloads together. <a href="/cookbook/p/htap-one-table-two-engines">M6</a>.</p>
+
+<p><strong>HyperLogLog</strong> — a sketch estimating the number of distinct values. <a href="/cookbook/p/more-primers">P0+</a>, <a href="/cookbook/p/statistics">Q7</a>.</p>
+
+<p><strong>Index-only scan</strong> — answering a query from an index without visiting the table. <a href="/cookbook/p/b-trees">L08</a>.</p>
+
+<p><strong>Intention lock</strong> — a lock on a coarse object announcing locks on finer objects below it. <a href="/cookbook/p/two-phase-locking">L18</a>.</p>
+
+<p><strong>Isolation level</strong> — which anomalies a transaction may observe: read committed, repeatable read, snapshot isolation, serializable. <a href="/cookbook/p/concurrency-control-theory">L17</a>, <a href="/cookbook/p/transactions-on-the-key-space">M2</a>.</p>
+
+<p><strong>IVM (incremental view maintenance)</strong> — updating a materialized view from the changes to its inputs. <a href="/cookbook/p/streaming-and-incremental-views">S3</a>, <a href="/cookbook/p/streams-and-windows">M17</a>.</p>
+
+<p><strong>Join ordering</strong> — choosing the sequence in which tables are joined. <a href="/cookbook/p/cost-models-and-join-ordering">L16</a>, <a href="/cookbook/p/join-ordering">Q4</a>.</p>
+
+<p><strong>Key space</strong> — an ordered space of byte-string keys into which rows, indexes, edges and documents are encoded. <a href="/cookbook/p/one-key-space">M1</a>.</p>
+
+<p><strong>Latch</strong> — a short-term lock protecting an in-memory structure, as opposed to a lock held by a transaction. <a href="/cookbook/p/index-concurrency-control">L10</a>, <a href="/cookbook/p/b-tree-concurrency">P2.5</a>.</p>
+
+<p><strong>Learned index</strong> — a model that predicts a key's position in a sorted array. <a href="/cookbook/p/learned-tuning-and-in-database-ml">S7</a>, <a href="/cookbook/p/a-durable-lsm-tree">M7</a>.</p>
+
+<p><strong>Leader election</strong> — choosing the node that sequences writes. <a href="/cookbook/p/raft">M8</a>.</p>
+
+<p><strong>Linearizability</strong> — every operation appears to take effect instantaneously between its call and its return. <a href="/cookbook/p/testing-a-database">Testing</a>.</p>
+
+<p><strong>Litmus test</strong> — a tiny concurrent program whose outcomes reveal the memory model. <a href="/cookbook/p/rust-for-systems-code">Rust for systems</a>.</p>
+
+<p><strong>Log (write-ahead)</strong> — records of changes written before the pages they change. <a href="/cookbook/p/logging">L21</a>.</p>
+
+<p><strong>LRU / LRU-K</strong> — least recently used; LRU-K uses the K-th most recent access. <a href="/cookbook/p/buffer-pools">L04</a>.</p>
+
+<p><strong>LSM tree</strong> — a log-structured merge tree: memtable, sorted runs, compaction. <a href="/cookbook/p/log-structured-storage">L05</a>, <a href="/cookbook/p/a-durable-lsm-tree">M7</a>.</p>
+
+<p><strong>Materialization (query)</strong> — producing an operator's full output before the next operator starts. <a href="/cookbook/p/query-execution">L13</a>.</p>
+
+<p><strong>Memo</strong> — the data structure of an optimizer that stores equivalent plans in groups. <a href="/cookbook/p/a-cascades-memo-in-rust">Q2</a>.</p>
+
+<p><strong>Memtable</strong> — the in-memory sorted structure that absorbs writes in an LSM tree. <a href="/cookbook/p/a-durable-lsm-tree">M7</a>.</p>
+
+<p><strong>Miri</strong> — an interpreter for Rust's mid-level IR that detects undefined behavior. <a href="/cookbook/p/rust-for-systems-code">Rust for systems</a>.</p>
+
+<p><strong>Morsel-driven parallelism</strong> — parallel execution by handing small chunks of input to worker threads. <a href="/cookbook/p/parallel-execution">L14</a>.</p>
+
+<p><strong>MVCC (multi-version concurrency control)</strong> — keeping several versions of a row so readers need not block writers. <a href="/cookbook/p/multi-version-concurrency-control">L20</a>, <a href="/cookbook/p/mvcc-protocols-compared">A3</a>.</p>
+
+<p><strong>NoREC</strong> — a testing oracle comparing a filtered count with the number of true values of the predicate as a projection. <a href="/cookbook/p/testing-a-database">Testing</a>.</p>
+
+<p><strong>Nested-loop join</strong> — for each outer row, scan the inner input. <a href="/cookbook/p/join-algorithms">L12</a>.</p>
+
+<p><strong>NUMA</strong> — non-uniform memory access: memory closer to some cores than others. <a href="/cookbook/p/databases-on-new-hardware">A20</a>.</p>
+
+<p><strong>O_DIRECT</strong> — the Linux flag for direct I/O. <a href="/cookbook/p/disk-i-o-fsync-the-page-cache-and-queues">I/O</a>.</p>
+
+<p><strong>OCC (optimistic concurrency control)</strong> — execute, then validate at commit that nothing conflicting happened. <a href="/cookbook/p/timestamp-ordering-and-occ">L19</a>.</p>
+
+<p><strong>OLAP / OLTP</strong> — analytical processing over many rows; transaction processing over few. <a href="/cookbook/p/modern-olap-systems">A11</a>, <a href="/cookbook/p/relational-model-algebra">L01</a>.</p>
+
+<p><strong>OLC (optimistic lock coupling)</strong> — traversing a tree with version checks instead of read locks. <a href="/cookbook/p/concurrent-memory">Concurrent memory</a>.</p>
+
+<p><strong>Operator</strong> — a node of a query plan (scan, filter, join, aggregate, sort). <a href="/cookbook/p/query-execution">L13</a>.</p>
+
+<p><strong>Oracle (testing)</strong> — a property that tells whether a result is correct without a reference answer. <a href="/cookbook/p/testing-a-database">Testing</a>.</p>
+
+<p><strong>Page</strong> — the fixed-size unit of storage and caching. <a href="/cookbook/p/pages-and-tuples">L03</a>.</p>
+
+<p><strong>PAX</strong> — a page layout that stores columns together inside a row-store page. <a href="/cookbook/p/storage-models-and-compression">L06</a>.</p>
+
+<p><strong>Paxos</strong> — a family of consensus protocols. <a href="/cookbook/p/distributed-databases-ii">L24</a>, <a href="/cookbook/p/raft">M8</a>.</p>
+
+<p><strong>pgwire</strong> — the PostgreSQL frontend/backend protocol. <a href="/cookbook/p/the-postgresql-wire-protocol">M19</a>.</p>
+
+<p><strong>Phantom</strong> — a row that appears in a repeated range query within one transaction. <a href="/cookbook/p/concurrency-control-theory">L17</a>, <a href="/cookbook/p/transactions-on-the-key-space">M2</a>.</p>
+
+<p><strong>Pipeline breaker</strong> — an operator that must consume all its input before producing output (sort, hash build). <a href="/cookbook/p/execution-pipelines">A21</a>.</p>
+
+<p><strong>Policy (row-level)</strong> — a predicate that decides which rows a role may see or change. <a href="/cookbook/p/roles-privileges-and-row-level-security">M22</a>.</p>
+
+<p><strong>Predicate lock</strong> — a lock on a condition rather than on rows. <a href="/cookbook/p/two-phase-locking">L18</a>.</p>
+
+<p><strong>Prepared statement</strong> — a parsed statement stored under a name and executed with parameters. <a href="/cookbook/p/the-postgresql-wire-protocol">M19</a>.</p>
+
+<p><strong>Property-based testing</strong> — checking a property on many generated inputs and shrinking a failing one. <a href="/cookbook/p/testing-a-database">Testing</a>.</p>
+
+<p><strong>Quorum</strong> — a subset of nodes (usually a majority) whose agreement suffices. <a href="/cookbook/p/raft">M8</a>.</p>
+
+<p><strong>Query optimizer</strong> — chooses an efficient plan among equivalent ones. <a href="/cookbook/p/query-planning-and-rewriting">L15</a>, Part III.</p>
+
+<p><strong>Raft</strong> — a consensus protocol with leader election and log replication. <a href="/cookbook/p/raft">M8</a>.</p>
+
+<p><strong>Recovery</strong> — restoring a consistent database after a crash. <a href="/cookbook/p/crash-recovery-aries">L22</a>.</p>
+
+<p><strong>Regret (optimizer)</strong> — the ratio of a chosen plan's actual cost to the best plan's. <a href="/cookbook/p/one-planner-for-many-models">M18</a>.</p>
+
+<p><strong>Replacement policy</strong> — decides which page to evict from the buffer pool. <a href="/cookbook/p/buffer-pools">L04</a>.</p>
+
+<p><strong>Replication</strong> — keeping copies of data on several nodes. <a href="/cookbook/p/distributed-databases-i">L23</a>, <a href="/cookbook/p/raft">M8</a>.</p>
+
+<p><strong>RLS (row-level security)</strong> — restricting rows per role by rewriting queries with a policy. <a href="/cookbook/p/roles-privileges-and-row-level-security">M22</a>.</p>
+
+<p><strong>Rollup (time series)</strong> — a precomputed aggregate over a time bucket. <a href="/cookbook/p/the-time-series-engine">M15</a>.</p>
+
+<p><strong>SASL / SCRAM</strong> — a framework for authentication exchanges; the challenge-response mechanism that stores a verifier, not a password. <a href="/cookbook/p/passwords-and-scram">M21</a>.</p>
+
+<p><strong>Savepoint</strong> — a point within a transaction to which it can roll back. <a href="/cookbook/p/concurrency-control-theory">L17</a>.</p>
+
+<p><strong>Schema</strong> — the structure of tables, columns and types. <a href="/cookbook/p/relational-model-algebra">L01</a>.</p>
+
+<p><strong>SeqCst</strong> — the strongest atomic ordering: one total order of all such operations. <a href="/cookbook/p/rust-for-systems-code">Rust for systems</a>.</p>
+
+<p><strong>Serializable</strong> — transactions behave as if executed one at a time. <a href="/cookbook/p/concurrency-control-theory">L17</a>, <a href="/cookbook/p/transactions-on-the-key-space">M2</a>.</p>
+
+<p><strong>Shard</strong> — a partition of the data placed on one node or group. <a href="/cookbook/p/sharding">M9</a>.</p>
+
+<p><strong>Shrinking</strong> — reducing a failing test case to a smaller one that still fails. <a href="/cookbook/p/deterministic-simulation">Simulation</a>, <a href="/cookbook/p/testing-a-database">Testing</a>.</p>
+
+<p><strong>SIMD</strong> — single instruction, multiple data: one instruction on a vector of values. <a href="/cookbook/p/vectorized-execution-with-simd">A14</a>.</p>
+
+<p><strong>Skip list</strong> — a probabilistic ordered structure with layered forward pointers. <a href="/cookbook/p/more-primers">P0+</a>, <a href="/cookbook/p/log-structured-storage">L05</a>.</p>
+
+<p><strong>Slotted page</strong> — a page layout with a slot directory pointing to variable-length tuples. <a href="/cookbook/p/pages-and-tuples">L03</a>.</p>
+
+<p><strong>Snapshot isolation</strong> — each transaction reads from a snapshot taken at its start and conflicts only on writes. <a href="/cookbook/p/multi-version-concurrency-control">L20</a>, <a href="/cookbook/p/transactions-on-the-key-space">M2</a>.</p>
+
+<p><strong>Sorted string table (SST)</strong> — an immutable sorted file in an LSM tree. <a href="/cookbook/p/a-durable-lsm-tree">M7</a>.</p>
+
+<p><strong>Spanner</strong> — Google's globally distributed database using synchronized clocks for external consistency. <a href="/cookbook/p/distributed-databases-ii">L24</a>, <a href="/cookbook/p/distributed-transactions">M10</a>.</p>
+
+<p><strong>Statistics (optimizer)</strong> — summaries of data (histograms, distinct counts) used for estimates. <a href="/cookbook/p/statistics">Q7</a>.</p>
+
+<p><strong>Stored procedure / UDF</strong> — code stored in and run by the database. <a href="/cookbook/p/server-side-logic-and-udfs">A19</a>.</p>
+
+<p><strong>Table heap</strong> — an unordered collection of pages holding a table's tuples. <a href="/cookbook/p/table-heap">heap</a>.</p>
+
+<p><strong>Tape (of choices)</strong> — the recorded random decisions of a simulation run, edited to shrink a failure. <a href="/cookbook/p/deterministic-simulation">Simulation</a>.</p>
+
+<p><strong>TLP (ternary logic partitioning)</strong> — a testing oracle that partitions rows by a predicate's true, false and NULL results. <a href="/cookbook/p/testing-a-database">Testing</a>.</p>
+
+<p><strong>Timestamp ordering</strong> — serializing transactions by timestamps assigned at start. <a href="/cookbook/p/timestamp-ordering-and-occ">L19</a>.</p>
+
+<p><strong>Tombstone</strong> — a marker recording that a key was deleted. <a href="/cookbook/p/delete-and-tombstones">P2.3</a>, <a href="/cookbook/p/a-durable-lsm-tree">M7</a>.</p>
+
+<p><strong>TPC-C / TPC-H</strong> — standard benchmarks for transaction processing and for decision support. <a href="/cookbook/p/benchmarking">Benchmarking</a>.</p>
+
+<p><strong>Transaction</strong> — a unit of work that is atomic, isolated and durable. <a href="/cookbook/p/concurrency-control-theory">L17</a>.</p>
+
+<p><strong>Trie / ART</strong> — a prefix tree; the adaptive radix tree uses node sizes that adapt to fan-out. <a href="/cookbook/p/tries-and-the-adaptive-radix-tree">A6</a>.</p>
+
+<p><strong>Undo / redo</strong> — reversing a change; reapplying a change. <a href="/cookbook/p/crash-recovery-aries">L22</a>.</p>
+
+<p><strong>Vectorized execution</strong> — processing batches of values per operator call. <a href="/cookbook/p/a-vectorized-engine">M4</a>, <a href="/cookbook/p/vectorized-execution-with-simd">A14</a>.</p>
+
+<p><strong>Vector store</strong> — an index and storage for embeddings. <a href="/cookbook/p/vector-databases">S2</a>, <a href="/cookbook/p/the-vector-store">M12</a>.</p>
+
+<p><strong>Verifier (SCRAM)</strong> — salt, iteration count and two derived keys, stored in place of a password. <a href="/cookbook/p/passwords-and-scram">M21</a>.</p>
+
+<p><strong>Version chain</strong> — the linked versions of one row in an MVCC store. <a href="/cookbook/p/multi-version-concurrency-control">L20</a>.</p>
+
+<p><strong>WAL</strong> — write-ahead log. <a href="/cookbook/p/logging">L21</a>.</p>
+
+<p><strong>WASI / WebAssembly</strong> — a portable binary instruction format and the system interface for it. <a href="/cookbook/p/the-engine-in-webassembly">M20</a>.</p>
+
+<p><strong>Watermark</strong> — a point in time before which no more events are expected. <a href="/cookbook/p/streams-and-windows">M17</a>, <a href="/cookbook/p/the-time-series-engine">M15</a>.</p>
+
+<p><strong>WCOJ (worst-case optimal join)</strong> — a join algorithm whose running time matches the maximum possible output size. <a href="/cookbook/p/multi-way-and-worst-case-optimal-joins">A18</a>.</p>
+
+<p><strong>Window function</strong> — a function computed over a window of rows related to the current row. <a href="/cookbook/p/modern-sql">L02</a>, <a href="/cookbook/p/sort-top-n-limit-window">P3.5</a>.</p>
+
+<p><strong>Write amplification</strong> — physical bytes written per logical byte. <a href="/cookbook/p/log-structured-storage">L05</a>, <a href="/cookbook/p/a-durable-lsm-tree">M7</a>.</p>
+
+<p><strong>YCSB</strong> — a benchmark of key-value operations with configurable mixes and key distributions. <a href="/cookbook/p/benchmarking">Benchmarking</a>.</p>
+"""

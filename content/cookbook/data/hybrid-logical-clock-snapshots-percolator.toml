@@ -1,0 +1,73 @@
+title = "Transactions without a classic 2PC coordinator"
+module = "Databases"
+module_order = 8
+chapter = "Transactions and concurrency control"
+chapter_order = 6
+order = 413
+kind = "recipe"
+lede = "PERCOLATOR (client-driven snapshot isolation) and CALVIN (deterministic ordering)"
+level = "advanced"
+code = ["examples/database/hybrid_logical_clock_snapshots_percolator.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+cross-row / cross-shard transactions on a store that only has single-row atomicity, or replicated databases that want no commit protocol.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+`two_phase_commit` shows 2PC's weakness: the coordinator's decision lives in **its** log, and participants block while it is down. Both designs here remove that blocking party in opposite ways. **Percolator** (Google; the model behind TiDB / TiKV transactions).
+
+The store offers only atomic **single-row** read-modify-write. Each key has three columns: DATA[start_ts] = value, **lock** = {start_ts, primary key, expiry}, WRITE[commit_ts] = pointer to a start_ts. **A timestamp oracle** hands out increasing numbers.
+
+The **client** drives:
+
+1. start_ts from the oracle; read at that snapshot: the newest **write** record with commit_ts &lt; start_ts names the **data** version. A lock with lock.start_ts &lt; start_ts may belong to a transaction that committed before we started: it must be **resolved**.
+2. **Prewrite**, one row at a time, the **primary** first: abort if there is a **write** record at commit_ts >= start_ts (somebody committed after our snapshot: first committer wins) or any lock; else put DATA[start_ts] and the lock.
+3. commit_ts from the oracle; **commit the primary**: only if our lock is still there, write WRITE[commit_ts] and drop the lock. That one row transaction is **the** commit point of the whole distributed transaction.
+4. Commit the secondaries (could be asynchronous: the outcome is already decided). **Crash recovery** is lazy and needs no coordinator: whoever meets a stale lock looks at the **primary**. Still locked and expired: roll the primary back first (that decides **abort**), then clean up.
+
+   **A write** record for this start_ts: committed, **roll forward**. Anything else: rolled back. A rollback leaves a **rollback** record on the primary (as TiKV does; the paper does not need it with its assumptions) so the fate stays readable and a late prewrite of the primary cannot bring the transaction back.
+
+   The lock expiry (TTL) is only a **liveness** guess: a client that is merely paused gets rolled back, then finds its primary lock gone and must abort. Safety never depends on the guess being right. **Snapshot isolation** is not serializability: two transactions that each read both rows and write **different** rows both commit (write skew).
+
+   It is demonstrated below. CALVIN (Thomson et al.). Agree on the **order** of transaction requests before executing them: a **sequencer** cuts epochs and logs each batch (replicated; that is the only agreement).
+
+   Every replica runs a **deterministic lock manager**: lock requests are queued strictly in sequence order, so a transaction runs once nothing earlier conflicts with it. Threads may then run ready transactions in any order and every replica still reaches the same state, with no vote and no deadlock. A replica that crashes replays the input log from a checkpoint.
+
+   Price: read/write sets must be declared up front. For **dependent** transactions ("pay whoever this index row points to") OLLP does a reconnaissance read, declares the predicted set, and deterministically aborts and resubmits if the index changed before execution. **Timestamps**: Percolator uses a central oracle.
+
+   Replacing it with **hybrid logical clocks** (see `vector_clocks_hlc`) removes the round trip but creates an **uncertainty** window between nodes' clocks that reads must wait out or retry (not modelled here).
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+2000 random schedules per system.
+
+Percolator: interleaved transfer clients that may **crash** or **pause** between any two RPCs, plus read-only audits; a systematic sweep crashes one transfer after every step; a post-hoc oracle checks every read against the committed history, checks first-committer-wins, conservation of money and that recovery leaves no lock and no orphaned data.
+
+Three injected protocol bugs must be caught. Calvin: three replicas with different thread schedules (one crashes and replays) must match each other and a serial execution in sequence order.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>TiDB/TiKV (Percolator-style, with additions)</li><li>Google Percolator's incremental indexing</li><li>FaunaDB described a Calvin-inspired design</li><li>deterministic execution reappears in many replicated state machines and blockchains</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://research.google/pubs/large-scale-incremental-processing-using-distributed-transactions-and-notifications/" target="_blank" rel="noreferrer">https://research.google/pubs/large-scale-incremental-processing-using-distributed-transactions-and-notifications/</a> (Peng, Dabek, "Large-scale Incremental Processing Using Distributed Transactions and Notifications")</li><li><a href="https://cs.yale.edu/homes/thomson/publications/calvin-sigmod12.pdf" target="_blank" rel="noreferrer">https://cs.yale.edu/homes/thomson/publications/calvin-sigmod12.pdf</a> (Thomson et al., "Calvin: Fast Distributed Transactions for Partitioned Database Systems")</li></ul>
+"""
+
+[[sources]]
+title = "research.google/pubs/large-scale-incremental-processing-using-distributed-tra…"
+url = "https://research.google/pubs/large-scale-incremental-processing-using-distributed-transactions-and-notifications/"
+
+[[sources]]
+title = "cs.yale.edu/homes/thomson/publications/calvin-sigmod12.pdf"
+url = "https://cs.yale.edu/homes/thomson/publications/calvin-sigmod12.pdf"

@@ -1,0 +1,64 @@
+title = "What EDITION 2024 changed and how it shows up in real code"
+module = "Rust language"
+module_order = 1
+chapter = "Everyday language"
+chapter_order = 3
+order = 32
+kind = "recipe"
+lede = "what EDITION 2024 changed and how it shows up in real code (before/after, with assertions)."
+level = "intermediate"
+code = ["examples/language/edition_2024_changes.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>migrating 2021 crates (<code>cargo fix --edition</code>)</li><li>reviewing 2024 code</li><li>explaining odd drop orders and lifetimes</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+This crate is edition 2024, so the **after** behaviour is executed and asserted; the **before** behaviour was checked by compiling the same snippet with `rustc --edition 2021` and is recorded in comments.
+
+Changes covered: RPIT lifetime capture, `if let` and tail-expression temporary scopes, `unsafe_op_in_unsafe_fn`, `unsafe extern` / `unsafe(no_mangle)`, `gen` keyword, never-type fallback, `Box<[T]>` by-value `IntoIterator`, `Future`/`IntoFuture` in the prelude, `static mut` references, Cargo resolver 3.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>finding which of your Drop guards (MutexGuard, RefCell borrow, span guards) now release earlier</li><li>fixing "does not live long enough" after upgrading</li><li>keeping FFI declarations honest</li><li>preparing for generators (<code>gen</code>). Migration: <code>cargo fix --edition</code> rewrites most of this mechanically</li><li>then set <code>edition = "2024"</code> and rerun tests</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/edition-guide/rust-2024/index.html>
+
+<https://doc.rust-lang.org/edition-guide/editions/transitioning-an-existing-project-to-a-new-edition.html>
+
+<https://doc.rust-lang.org/edition-guide/rust-2024/rpit-lifetime-capture.html>
+
+<https://doc.rust-lang.org/edition-guide/rust-2024/temporary-if-let-scope.html>
+
+<https://doc.rust-lang.org/edition-guide/rust-2024/temporary-tail-expr-scope.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/edition-guide/rust-2024/index.html"
+url = "https://doc.rust-lang.org/edition-guide/rust-2024/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/edition-guide/editions/transitioning-an-existing-project-to…"
+url = "https://doc.rust-lang.org/edition-guide/editions/transitioning-an-existing-project-to-a-new-edition.html"
+
+[[sources]]
+title = "doc.rust-lang.org/edition-guide/rust-2024/rpit-lifetime-capture.html"
+url = "https://doc.rust-lang.org/edition-guide/rust-2024/rpit-lifetime-capture.html"
+
+[[sources]]
+title = "doc.rust-lang.org/edition-guide/rust-2024/temporary-if-let-scope.html"
+url = "https://doc.rust-lang.org/edition-guide/rust-2024/temporary-if-let-scope.html"
+
+[[sources]]
+title = "doc.rust-lang.org/edition-guide/rust-2024/temporary-tail-expr-scope.html"
+url = "https://doc.rust-lang.org/edition-guide/rust-2024/temporary-tail-expr-scope.html"

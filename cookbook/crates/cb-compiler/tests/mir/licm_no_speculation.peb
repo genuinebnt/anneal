@@ -1,0 +1,16 @@
+// passes: ssa,licm,out-of-ssa
+// `100 / d` and `k * k` can trap and sit in the loop BODY, which may run zero times:
+// both must stay inside the loop. With `d == 0` and `n == 0` nothing may trap.
+fn f(n: int, d: int, k: int) -> int {
+    let mut i = 0;
+    let mut s = 0;
+    while i < n {
+        s += 100 / d;
+        s += k * k;
+        i += 1;
+    }
+    s
+}
+fn main() {
+    println(to_str(f(len(""), len(""), 4000000000)));
+}

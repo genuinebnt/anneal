@@ -1,0 +1,15 @@
+title = "The pipeline and where tests attach"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 557
+kind = "guide"
+lede = "Each stage has its own test. One suite of golden .lox files runs the whole binary, the same way the book's official suite does."
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<div class="cb-g-pipe-wrap"><div class="cb-g-pipe"> <div class="cb-g-node"><b>Source</b><span>&amp;str</span></div> <div class="cb-g-arrow">→</div> <div class="cb-g-node"><b>Lexer</b><span>Token { kind, span }</span></div> <div class="cb-g-arrow">→</div> <div class="cb-g-node"><b>Parser</b><span>Vec&lt;Stmt&gt;, Expr</span></div> <div class="cb-g-arrow">→</div> <div class="cb-g-node cb-g-opt"><b>Resolver</b><span>slice 7+: depths</span></div> <div class="cb-g-arrow">→</div> <div class="cb-g-node"><b>Interpreter</b><span>Value, stdout</span></div> <div class="cb-g-probe cb-g-tok"><i>Lexer tests</i>tokens rendered as a string: <code>Number(1) Plus Number(2) Eof</code></div> <div class="cb-g-probe cb-g-ast"><i>Parser tests</i>AST printed as S-expressions: <code>(+ 1 (* 2 3))</code></div> <div class="cb-g-probe cb-g-res"><i>Resolver tests</i>static errors such as “Can't read local variable in its own initializer.”</div> <div class="cb-g-probe cb-g-val"><i>Eval tests</i><code>Value</code> results, plus stdout captured through <code>&amp;mut dyn Write</code></div> <div class="cb-g-golden"><i>Golden files</i><span><code>tests/lox/**/*.lox</code> with <code>// expect:</code> comments. The test runs the real binary and checks stdout, stderr and the exit code (65 compile error, 70 runtime error).</span></div> </div></div>
+"""

@@ -1,0 +1,76 @@
+title = "Fmt display debug deep (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "Numbers, traits and formatting"
+chapter_order = 5
+order = 90
+kind = "recipe"
+lede = "the format string mini-language, Display and Debug by hand, Formatter methods, fmt::Write vs io::Write."
+level = "intermediate"
+code = ["examples/std_tour/std_fmt_display_debug_deep.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>logs</li><li>CLI tables</li><li>error messages</li><li>custom ID types</li><li>redacting secrets</li><li>zero-allocation rendering</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>aligned CLI output</li><li>fixed-width protocol fields</li><li>hex dumps</li><li><code>Display</code> for IDs and durations</li><li><code>Debug</code> that hides passwords</li><li>writing into one reused String</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>std::format</code></li><li><code>std::println</code></li><li><code>std::write</code></li><li><code>std::writeln</code></li><li><code>std::fmt::Display</code></li><li><code>std::fmt::Debug</code></li><li><code>ToString::to_string</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Formatter::debug_struct</code></li><li><code>Formatter::debug_tuple</code></li><li><code>Formatter::debug_list</code></li><li><code>Formatter::debug_set</code></li><li><code>Formatter::debug_map</code></li><li><code>DebugStruct::field</code></li></ul>
+
+<ul class="cb-g-names"><li><code>DebugStruct::finish</code></li><li><code>DebugStruct::finish_non_exhaustive</code></li><li><code>DebugList::entry</code></li><li><code>DebugList::entries</code></li><li><code>DebugList::finish_non_exhaustive</code></li></ul>
+
+<ul class="cb-g-names"><li><code>DebugMap::entry</code></li><li><code>DebugMap::key</code></li><li><code>DebugMap::value</code></li><li><code>Formatter::pad</code></li><li><code>Formatter::pad_integral</code></li><li><code>Formatter::width</code></li><li><code>Formatter::precision</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Formatter::alternate</code></li><li><code>Formatter::fill</code></li><li><code>Formatter::align</code></li><li><code>Formatter::sign_plus</code></li><li><code>Formatter::sign_minus</code></li><li><code>Formatter::sign_aware_zero_pad</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Formatter::write_str</code></li><li><code>Formatter::write_fmt</code></li><li><code>std::fmt::Write::write_char</code></li><li><code>std::io::Write::write_all</code></li><li><code>std::format_args</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::fmt::Arguments::as_str</code></li><li><code>std::fmt::write</code></li><li><code>std::fmt::from_fn</code></li><li><code>std::fmt::Binary</code></li><li><code>std::fmt::LowerHex</code></li><li><code>std::fmt::UpperHex</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::fmt::Octal</code></li><li><code>std::fmt::LowerExp</code></li><li><code>str::escape_debug</code></li><li><code>str::escape_default</code></li><li><code>str::escape_unicode</code></li><li><code>char::escape_default</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/fmt/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/fmt/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+traits, Formatter, Arguments, Debug builders, `write!`, `format_args!`: core (`core::fmt`). `format!` and ToString: alloc. `println!`/`eprintln!` and `io::Write`: std.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+UpperExp (same as LowerExp with 'E'), Pointer beyond a shape check (addresses are not deterministic), DebugMap::key_with/value_with, Debug&#42;::entry_with/field_with and Formatter::sign/options (unstable in 1.98.1), `{x?}`-hex forms `{:x?}` shown once.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Left / right / centre in width 8</td><td><code>{:&lt;8}  {:&gt;8}  {:&#94;8}          custom fill: {:*&#94;8}</code></td></tr><tr><td>Width or precision from a variable</td><td><code>{:&gt;w$}  {:.p$}   (positional pair: {:.*} takes precision THEN value)</code></td></tr><tr><td>Zero-pad numbers</td><td><code>{:05}      (after the sign and 0x prefix; overrides fill and align)</code></td></tr><tr><td>Always show the sign</td><td><code>{:+}</code></td></tr><tr><td>Hex / octal / binary / scientific</td><td><code>{:x} {:X} {:o} {:b} {:e}     with prefix: {:#x} {:#010b} (width includes prefix)</code></td></tr><tr><td>Debug / pretty debug / debug with hex</td><td><code>{:?}  {:#?}  {:x?}</code></td></tr><tr><td>Inline variable</td><td><code>{name}  {name:&gt;5}            (identifiers only: no {a.b}, no calls)</code></td></tr><tr><td>Literal braces</td><td><code>{{ }}</code></td></tr><tr><td>Truncate a string to N chars</td><td><code>{:.N}</code></td></tr><tr><td>Make my type honour width/precision</td><td><code>f.pad(..) / f.pad_integral(..) / forward the Formatter</code></td></tr><tr><td>Append into an existing String</td><td><code>use std::fmt::Write; write!(s, ..)</code></td></tr><tr><td>Render lazily without a new type</td><td><code>std::fmt::from_fn(|f| ..)   (since 1.93) RULE (std::fmt docs): a formatting impl returns Err only when the Formatter's writer returned Err. format! and to_string() panic if an impl reports an error of its own.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/fmt/index.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/fmt/index.html"
+url = "https://doc.rust-lang.org/std/fmt/index.html"

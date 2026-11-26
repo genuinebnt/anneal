@@ -1,0 +1,46 @@
+title = "Functions and closures"
+module = "Compilers and languages"
+module_order = 12
+chapter = "A tree-walking interpreter"
+chapter_order = 2
+order = 581
+kind = "guide"
+lede = "Book ch. 10 · Official tests: function/ call/ closure/ return/ · Split into 6a (calls and natives) and 6b (closures)"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>This slice takes the longest. Do 6a first: <code>clock()</code>, declarations, calls and <code>return</code>, all without capturing variables. Tag it, then add closures.</p>
+
+<div class="cb-g-tt"><table><thead><tr><th>Kind</th><th>Input</th><th>Expected</th></tr></thead><tbody><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>fun add(a, b) { return a + b; } print add(1, 2);</code></td><td><code>3</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>fun f() {} print f();</code></td><td><code>nil</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>fun f() {} print f;</code></td><td><code>&lt;fn f&gt;</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>print clock;</code></td><td><code>&lt;native fn&gt;</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>fun fib(n) { if (n &lt; 2) return n; return fib(n - 2) + fib(n - 1); } print fib(10);</code></td><td><code>55</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>fun mk() { var i = 0; fun c() { i = i + 1; print i; } return c; } var c = mk(); c(); c();</code></td><td><code>1</code> then <code>2</code></td></tr><tr><td><span class="cb-g-pill cb-g-rerr">runtime error</span></td><td><code>"x"();</code></td><td><code>Can only call functions and classes.</code></td></tr><tr><td><span class="cb-g-pill cb-g-rerr">runtime error</span></td><td><code>fun f(a) {} f();</code></td><td><code>Expected 1 arguments but got 0.</code></td></tr></tbody></table></div>
+
+```rust title="src/interp.rs, return as unwinding"
+pub enum Unwind {
+    Error(RuntimeError),
+    Return(Value),
+}
+
+impl From<RuntimeError> for Unwind {
+    fn from(e: RuntimeError) -> Self { Unwind::Error(e) }
+}
+
+type Exec = Result<(), Unwind>;
+
+// Stmt::Return:    return Err(Unwind::Return(value));
+// in call():
+match self.exec_block(&func.decl.body, env) {
+    Ok(()) => Ok(Value::Nil),
+    Err(Unwind::Return(v)) => Ok(v),
+    Err(Unwind::Error(e)) => Err(e),
+}
+```
+
+<p>With <code>Unwind</code>, a <code>return</code> travels up through nested blocks and loops by <code>?</code>, the same way an error does. The book uses a Java exception for this.</p>
+
+<p>Give the function value <code>Rc&lt;FunDecl&gt;</code> plus the captured <code>EnvRef</code>. Calling a function should never clone its body. Compare functions with <code>Rc::ptr_eq</code>.</p>
+
+<p>Recursion like <code>fun f() { f(); }</code> overflows the Rust stack and aborts the process with no Lox error. To prevent that, count call depth and raise a runtime error at a limit. You can also run the interpreter on a thread with a larger stack; rustc does something similar with <code>ensure_sufficient_stack</code>.</p>
+
+<p>A closure stored in the environment it captured forms an <code>Rc</code> cycle, so that memory is never freed. That's acceptable for a tree-walker. clox fixes it with a garbage collector.</p>
+"""

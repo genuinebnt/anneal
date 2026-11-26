@@ -1,0 +1,60 @@
+title = "Nonnull linked list"
+module = "Rust language"
+module_order = 1
+chapter = "Unsafe and FFI"
+chapter_order = 7
+order = 63
+kind = "recipe"
+lede = "a doubly linked `Deque<T>` with `NonNull`, `Box::into_raw` and `PhantomData`."
+level = "advanced"
+code = ["examples/unsafe_ffi/nonnull_linked_list.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>learning how std::collections::LinkedList works</li><li>intrusive/arena lists</li><li>any structure with back-pointers</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Safe Rust cannot express a node pointing both forward and back (it would need Rc&lt;RefCell&lt;..>> + Weak). So nodes are heap-allocated with `Box`, leaked into raw pointers with `Box::into_raw`, and reclaimed with `Box::from_raw`. **Invariants** (every unsafe block below relies on these): I1.
+
+Every node reachable from `head`/`tail` was created by `Box::into_raw` and is freed only by `Box::from_raw`. I2. `head` is None iff `tail` is None iff `len == 0`; `head.prev == None`, `tail.next == None`.
+
+I3. For every node n: `n.next == Some(m)` implies `m.prev == Some(n)` (and symmetrically). I4.
+
+The list owns its nodes uniquely: no other pointer is used for access while a `&mut Deque` exists. Why `NonNull<T>`: non-null (so `Option<NonNull<_>>` is pointer-sized) and **covariant** in T, unlike `*mut T`. Why `PhantomData<Box<Node<T>>>`: tells dropck that Deque **owns** (and drops) values of type T, so a `T` containing a borrow must strictly outlive the list.
+
+Iterators carry `PhantomData<&'a T>` / `<&'a mut T>` to tie the borrow of the list to the items. `Send`/`Sync` are not automatic for raw pointers, so we `unsafe impl` them with T bounds.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+LRU caches (O(1) unlink), task/timer queues, std::collections::LinkedList, intrusive lists in kernels. In practice `VecDeque` is faster for almost everything; linked lists win when you hold node handles for O(1) removal.
+
+Study (cite only): <https://rust-unofficial.github.io/too-many-lists/> and <https://github.com/rust-lang/rust/blob/master/library/alloc/src/collections/linked_list.rs>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/ptr/struct.NonNull.html> and <https://doc.rust-lang.org/nomicon/>
+"""
+
+[[sources]]
+title = "rust-unofficial.github.io/too-many-lists"
+url = "https://rust-unofficial.github.io/too-many-lists/"
+
+[[sources]]
+title = "github.com/rust-lang/rust/blob/master/library/alloc/src/collections/linked_li…"
+url = "https://github.com/rust-lang/rust/blob/master/library/alloc/src/collections/linked_list.rs"
+
+[[sources]]
+title = "doc.rust-lang.org/std/ptr/struct.NonNull.html"
+url = "https://doc.rust-lang.org/std/ptr/struct.NonNull.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon"
+url = "https://doc.rust-lang.org/nomicon/"

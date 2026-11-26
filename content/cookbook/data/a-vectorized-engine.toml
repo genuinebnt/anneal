@@ -1,0 +1,429 @@
+title = "A vectorized engine"
+module = "Databases"
+module_order = 8
+chapter = "Building complete engines"
+chapter_order = 9
+order = 445
+kind = "guide"
+lede = "Batches and selection vectors between operators · filter, project, hash aggregate and hash join over integer columns with NULLs · a tuple-at-a-time engine as the reference · batch-size sweep · selection versus compaction · measured on 4 000 000 rows"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Tuple-at-a-time pays per row for things that are per query.</strong> In the Volcano model every row crosses every operator through a virtual <code>next()</code>, and each operator re-dispatches on the expression type for each value. The work is small; the overhead around it is large.</li> <li><strong>A vectorized engine moves a batch (about a thousand rows) between operators.</strong> The virtual call, the expression dispatch and the type switch are paid once per batch, then run as a loop over a typed array. The loop is branch-light, keeps its data in L1 cache, and gives the compiler something to vectorize. This is the model of MonetDB/X100, DuckDB, ClickHouse, Velox and Arrow's compute kernels (<a href="/cookbook/p/vectorized-execution-with-simd">Part II: vectorized execution</a>, <a href="/cookbook/p/execution-pipelines">execution pipelines</a>).</li> <li><strong>A selection vector carries the filter result.</strong> A filter does not copy survivors; it records their positions in a list of row numbers, and every later operator works only on those positions. The second predicate of a conjunction then runs on the survivors of the first (the fix for the weak spot of the bitmap scan in <a href="/cookbook/p/a-column-store">M3</a>). Projection computes only selected positions, and the columns stay as they are.</li> <li><strong>Compaction is the alternative.</strong> After a selective filter, copying the survivors into dense columns makes later loops contiguous, at the cost of the copy. Selection vectors win when the filter keeps most rows or when the next operator is cheap; compaction wins when the selection is sparse and several operators follow.</li> <li><strong>Aggregation is two passes per batch.</strong> First compute a group id for every live row (the hash lookups); then update each aggregate in its own loop over <code>(group id, value)</code>. Splitting the passes keeps each loop simple, and the hash table is touched once.</li> <li><strong>Batch size is a cache and overhead trade-off.</strong> Too small and the per-batch overhead dominates (batch size 1 is slower than the row engine); too large and intermediate columns fall out of cache. The curve below is flat from a few hundred rows up.</li> <li><strong>NULLs travel as a validity vector</strong>, null-free columns have none, and a kernel for the common null-free case has no branch for validity at all.</li> </ul>
+"""
+
+[[sections]]
+heading = "The two engines"
+body = """
+```text
+plan:  Agg( Filter( Scan t ), preds, group by k )
+
+row at a time:                         batch at a time (1024 rows, selection vector):
+  Agg.next()                             Agg.next() ← Batch { cols, len, sel }
+   └─ Filter.next()  per row               └─ Filter.next(): for each pred: sel = narrow(batch, pred)
+       └─ Scan.next()  per row                  └─ Scan.next(): copy 1024 values per column
+```
+
+<ul> <li><strong>Plan language</strong>: <code>Scan</code>, <code>Filter</code> (a conjunction of comparisons over expressions with <code>+ - ×</code>, columns and literals), <code>Project</code>, <code>Agg</code> (group by up to two columns; <code>SUM</code>, <code>COUNT(*)</code>, <code>COUNT(col)</code>, <code>MIN</code>, <code>MAX</code>) and an inner equi-<code>Join</code>. NULL arithmetic gives NULL, a comparison with NULL is not satisfied, <code>SUM</code> of nothing is NULL.</li> <li><strong>Row engine</strong>: each operator is a <code>RowOp</code> with <code>next() -&gt; Option&lt;Vec&lt;Val&gt;&gt;</code> and <code>Val = Option&lt;i64&gt;</code>. It is the reference for correctness and the baseline for speed.</li> <li><strong>Vectorized engine</strong>: operators implement <code>BatchOp::next() -&gt; Option&lt;Batch&gt;</code>; <code>narrow</code> is generic over the comparison closure, so each of the six comparisons compiles to its own loop, with four variants (selected or dense input; NULL-free or not).</li> </ul>
+
+:::deeper Reference: row-at-a-time operators, batches with selection vectors, narrowing filters, projection, two-pass aggregation, hash join
+```rust title="src/multimodel/vexec.rs"
+//! Two executors for one small plan language over integer columns with NULLs: a tuple-at-a-time pull engine (the Volcano model) and a
+//! vectorized engine that passes batches of columns with a *selection vector* between operators. Filters shrink the selection, projections
+//! compute only the selected positions, aggregation computes group ids once per batch and then updates each aggregate in its own tight loop.
+use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
+use crate::wcoj::Fx;
+
+pub type Val = Option<i64>;
+type FxMap<K, V> = HashMap<K, V, BuildHasherDefault<Fx>>;
+
+#[derive(Clone, Debug)]
+pub struct Col { pub v: Vec<i64>, pub ok: Option<Vec<bool>> }
+impl Col {
+    pub fn from_vals(vals: &[Val]) -> Col {
+        let any_null = vals.iter().any(|v| v.is_none());
+        Col { v: vals.iter().map(|v| v.unwrap_or(0)).collect(), ok: any_null.then(|| vals.iter().map(|v| v.is_some()).collect()) }
+    }
+    pub fn at(&self, i: usize) -> Val { if self.ok.as_ref().is_none_or(|o| o[i]) { Some(self.v[i]) } else { None } }
+}
+#[derive(Clone, Debug)]
+pub struct Table { pub cols: Vec<Col>, pub n: usize }
+impl Table {
+    pub fn from_rows(rows: &[Vec<Val>], ncols: usize) -> Table { Table { cols: (0..ncols).map(|c| Col::from_vals(&rows.iter().map(|r| r[c]).collect::<Vec<_>>())).collect(), n: rows.len() } }
+}
+
+#[derive(Clone, Debug)]
+pub enum Expr { Col(usize), Lit(i64), Add(Box<Expr>, Box<Expr>), Sub(Box<Expr>, Box<Expr>), Mul(Box<Expr>, Box<Expr>) }
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Cmp { Lt, Le, Eq, Ne, Ge, Gt }
+/// `lhs op rhs`; a comparison involving NULL is not satisfied.
+#[derive(Clone, Debug)]
+pub struct Pred(pub Expr, pub Cmp, pub Expr);
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AggFn { Sum, CountStar, Count, Min, Max }
+#[derive(Clone, Debug)]
+pub enum Plan {
+    Scan(usize),
+    Filter(Box<Plan>, Vec<Pred>),
+    Project(Box<Plan>, Vec<Expr>),
+    /// Group by at most two columns; the output is the group columns then the aggregates.
+    Agg(Box<Plan>, Vec<usize>, Vec<(AggFn, usize)>),
+    /// Inner equi-join on `left.cols[l] = right.cols[r]`; the output is the left columns then the right columns.
+    Join(Box<Plan>, Box<Plan>, usize, usize),
+}
+
+fn cmp_ok(c: Cmp, a: i64, b: i64) -> bool { match c { Cmp::Lt => a < b, Cmp::Le => a <= b, Cmp::Eq => a == b, Cmp::Ne => a != b, Cmp::Ge => a >= b, Cmp::Gt => a > b } }
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// tuple at a time
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+trait RowOp { fn next(&mut self) -> Option<Vec<Val>>; }
+
+fn eval_row(e: &Expr, r: &[Val]) -> Val {
+    match e {
+        Expr::Col(c) => r[*c], Expr::Lit(x) => Some(*x),
+        Expr::Add(a, b) => Some(eval_row(a, r)?.wrapping_add(eval_row(b, r)?)),
+        Expr::Sub(a, b) => Some(eval_row(a, r)?.wrapping_sub(eval_row(b, r)?)),
+        Expr::Mul(a, b) => Some(eval_row(a, r)?.wrapping_mul(eval_row(b, r)?)),
+    }
+}
+fn pred_row(p: &Pred, r: &[Val]) -> bool { match (eval_row(&p.0, r), eval_row(&p.2, r)) { (Some(a), Some(b)) => cmp_ok(p.1, a, b), _ => false } }
+
+struct RScan<'a> { t: &'a Table, i: usize }
+impl RowOp for RScan<'_> {
+    fn next(&mut self) -> Option<Vec<Val>> { if self.i >= self.t.n { return None; } let r = self.t.cols.iter().map(|c| c.at(self.i)).collect(); self.i += 1; Some(r) }
+}
+struct RFilter<'a> { input: Box<dyn RowOp + 'a>, preds: &'a [Pred] }
+impl RowOp for RFilter<'_> {
+    fn next(&mut self) -> Option<Vec<Val>> { loop { let r = self.input.next()?; if self.preds.iter().all(|p| pred_row(p, &r)) { return Some(r); } } }
+}
+struct RProject<'a> { input: Box<dyn RowOp + 'a>, exprs: &'a [Expr] }
+impl RowOp for RProject<'_> { fn next(&mut self) -> Option<Vec<Val>> { let r = self.input.next()?; Some(self.exprs.iter().map(|e| eval_row(e, &r)).collect()) } }
+
+#[derive(Clone, Copy, Default)]
+struct State { sum: i64, cnt: u64, min: i64, max: i64, seen: bool }
+impl State {
+    fn add(&mut self, x: i64) { self.sum = self.sum.wrapping_add(x); self.cnt += 1; if !self.seen || x < self.min { self.min = x; } if !self.seen || x > self.max { self.max = x; } self.seen = true; }
+    fn out(&self, f: AggFn) -> Val { match f { AggFn::CountStar | AggFn::Count => Some(self.cnt as i64), AggFn::Sum => self.seen.then_some(self.sum), AggFn::Min => self.seen.then_some(self.min), AggFn::Max => self.seen.then_some(self.max) } }
+}
+fn finish_groups(groups: Vec<((Val, Val), Vec<State>)>, ng: usize, aggs: &[(AggFn, usize)], input_empty: bool) -> Vec<Vec<Val>> {
+    let mut out = vec![];
+    if groups.is_empty() && ng == 0 && input_empty {
+        out.push(aggs.iter().map(|(f, _)| match f { AggFn::CountStar | AggFn::Count => Some(0), _ => None }).collect());
+        return out;
+    }
+    for (k, st) in groups {
+        let mut row = vec![];
+        if ng >= 1 { row.push(k.0); } if ng >= 2 { row.push(k.1); }
+        for (s, (f, _)) in st.iter().zip(aggs) { row.push(s.out(*f)); }
+        out.push(row);
+    }
+    out
+}
+struct RMaterialized { rows: std::vec::IntoIter<Vec<Val>> }
+impl RowOp for RMaterialized { fn next(&mut self) -> Option<Vec<Val>> { self.rows.next() } }
+
+fn build_rows<'a>(p: &'a Plan, tables: &'a [Table]) -> Box<dyn RowOp + 'a> {
+    match p {
+        Plan::Scan(t) => Box::new(RScan { t: &tables[*t], i: 0 }),
+        Plan::Filter(i, preds) => Box::new(RFilter { input: build_rows(i, tables), preds }),
+        Plan::Project(i, exprs) => Box::new(RProject { input: build_rows(i, tables), exprs }),
+        Plan::Agg(i, g, aggs) => {
+            assert!(g.len() <= 2);
+            let mut input = build_rows(i, tables);
+            let mut idx: FxMap<(Val, Val), usize> = FxMap::default();
+            let mut groups: Vec<((Val, Val), Vec<State>)> = vec![];
+            let mut empty = true;
+            while let Some(r) = input.next() {
+                empty = false;
+                let k = (g.first().map_or(None, |&c| r[c]), g.get(1).map_or(None, |&c| r[c]));
+                let gi = *idx.entry(k).or_insert_with(|| { groups.push((k, vec![State::default(); aggs.len()])); groups.len() - 1 });
+                for (s, (f, c)) in groups[gi].1.iter_mut().zip(aggs) {
+                    match f { AggFn::CountStar => s.cnt += 1, _ => if let Some(x) = r[*c] { s.add(x) } }
+                }
+            }
+            Box::new(RMaterialized { rows: finish_groups(groups, g.len(), aggs, empty).into_iter() })
+        }
+        Plan::Join(l, r, lk, rk) => {
+            let mut right = build_rows(r, tables);
+            let mut ht: FxMap<i64, Vec<Vec<Val>>> = FxMap::default();
+            while let Some(row) = right.next() { if let Some(k) = row[*rk] { ht.entry(k).or_default().push(row); } }
+            let mut left = build_rows(l, tables);
+            let mut out = vec![];
+            while let Some(lr) = left.next() {
+                if let Some(k) = lr[*lk] { if let Some(ms) = ht.get(&k) { for m in ms { let mut row = lr.clone(); row.extend(m.iter().copied()); out.push(row); } } }
+            }
+            Box::new(RMaterialized { rows: out.into_iter() })
+        }
+    }
+}
+/// Run a plan one row at a time.
+pub fn run_rows(p: &Plan, tables: &[Table]) -> Vec<Vec<Val>> { let mut op = build_rows(p, tables); let mut out = vec![]; while let Some(r) = op.next() { out.push(r); } out }
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// vectorized
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug)]
+pub struct VecCfg {
+    pub batch: usize,
+    /// After a filter, gather the survivors into dense columns instead of carrying a selection vector.
+    pub compact: bool,
+    /// Evaluate each conjunct only on the rows that passed the previous ones (otherwise on every row, then intersect).
+    pub narrow: bool,
+}
+impl Default for VecCfg { fn default() -> Self { VecCfg { batch: 1024, compact: false, narrow: true } } }
+
+#[derive(Clone)]
+struct Batch { cols: Vec<Col>, len: usize, sel: Option<Vec<u32>> }
+impl Batch {
+    #[inline] fn each(&self, mut f: impl FnMut(usize)) { match &self.sel { Some(s) => for &i in s { f(i as usize) }, None => for i in 0..self.len { f(i) } } }
+    fn live(&self) -> usize { self.sel.as_ref().map_or(self.len, |s| s.len()) }
+    fn compact(&self) -> Batch {
+        let Some(sel) = &self.sel else { return self.clone() };
+        let cols = self.cols.iter().map(|c| Col { v: sel.iter().map(|&i| c.v[i as usize]).collect(), ok: c.ok.as_ref().map(|o| sel.iter().map(|&i| o[i as usize]).collect()) }).collect();
+        Batch { cols, len: sel.len(), sel: None }
+    }
+}
+
+enum Ev<'a> { Ref(&'a Col), Own(Col), Lit(i64) }
+impl Ev<'_> {
+    #[inline] fn val(&self, i: usize) -> i64 { match self { Ev::Ref(c) => c.v[i], Ev::Own(c) => c.v[i], Ev::Lit(x) => *x } }
+    #[inline] fn ok(&self, i: usize) -> bool { match self { Ev::Ref(c) => c.ok.as_ref().is_none_or(|o| o[i]), Ev::Own(c) => c.ok.as_ref().is_none_or(|o| o[i]), Ev::Lit(_) => true } }
+    fn nullable(&self) -> bool { match self { Ev::Ref(c) => c.ok.is_some(), Ev::Own(c) => c.ok.is_some(), Ev::Lit(_) => false } }
+}
+
+fn ev<'a>(b: &'a Batch, e: &Expr) -> Ev<'a> {
+    match e {
+        Expr::Col(c) => Ev::Ref(&b.cols[*c]),
+        Expr::Lit(x) => Ev::Lit(*x),
+        Expr::Add(l, r) => bin(b, l, r, |x, y| x.wrapping_add(y)),
+        Expr::Sub(l, r) => bin(b, l, r, |x, y| x.wrapping_sub(y)),
+        Expr::Mul(l, r) => bin(b, l, r, |x, y| x.wrapping_mul(y)),
+    }
+}
+fn bin<'a>(b: &'a Batch, l: &Expr, r: &Expr, f: impl Fn(i64, i64) -> i64) -> Ev<'a> {
+    let (x, y) = (ev(b, l), ev(b, r));
+    let mut v = vec![0i64; b.len];
+    if !x.nullable() && !y.nullable() {
+        b.each(|i| v[i] = f(x.val(i), y.val(i)));
+        return Ev::Own(Col { v, ok: None });
+    }
+    let mut ok = vec![true; b.len];
+    b.each(|i| { if x.ok(i) && y.ok(i) { v[i] = f(x.val(i), y.val(i)); } else { ok[i] = false; } });
+    Ev::Own(Col { v, ok: Some(ok) })
+}
+
+/// Rows of the batch (restricted to its selection) that satisfy the predicate.
+fn narrow(b: &Batch, p: &Pred, restrict: bool) -> Vec<u32> {
+    let (x, y) = (ev(b, &p.0), ev(b, &p.2));
+    let mut out = Vec::with_capacity(b.live());
+    let plain = !x.nullable() && !y.nullable();
+    macro_rules! go { ($c:expr) => {{
+        let test = $c;
+        match (&b.sel, restrict, plain) {
+            (Some(s), true, true) => for &i in s { if test(x.val(i as usize), y.val(i as usize)) { out.push(i); } },
+            (Some(s), true, false) => for &i in s { let i = i as usize; if x.ok(i) && y.ok(i) && test(x.val(i), y.val(i)) { out.push(i as u32); } },
+            (_, _, true) => for i in 0..b.len { if test(x.val(i), y.val(i)) { out.push(i as u32); } },
+            (_, _, false) => for i in 0..b.len { if x.ok(i) && y.ok(i) && test(x.val(i), y.val(i)) { out.push(i as u32); } },
+        }
+    }}; }
+    match p.1 { Cmp::Lt => go!(|a: i64, c: i64| a < c), Cmp::Le => go!(|a: i64, c: i64| a <= c), Cmp::Eq => go!(|a: i64, c: i64| a == c), Cmp::Ne => go!(|a: i64, c: i64| a != c), Cmp::Ge => go!(|a: i64, c: i64| a >= c), Cmp::Gt => go!(|a: i64, c: i64| a > c) }
+    out
+}
+
+fn intersect(a: &[u32], b: &[u32]) -> Vec<u32> {
+    let (mut i, mut j, mut out) = (0, 0, vec![]);
+    while i < a.len() && j < b.len() { match a[i].cmp(&b[j]) { std::cmp::Ordering::Less => i += 1, std::cmp::Ordering::Greater => j += 1, _ => { out.push(a[i]); i += 1; j += 1; } } }
+    out
+}
+fn restrict_to_sel(b: &Batch, rows: Vec<u32>) -> Vec<u32> { match &b.sel { Some(s) => intersect(s, &rows), None => rows } }
+
+trait BatchOp { fn next(&mut self) -> Option<Batch>; }
+
+struct VScan<'a> { t: &'a Table, i: usize, bs: usize }
+impl BatchOp for VScan<'_> {
+    fn next(&mut self) -> Option<Batch> {
+        if self.i >= self.t.n { return None; }
+        let (a, z) = (self.i, (self.i + self.bs).min(self.t.n));
+        self.i = z;
+        let cols = self.t.cols.iter().map(|c| Col { v: c.v[a..z].to_vec(), ok: c.ok.as_ref().map(|o| o[a..z].to_vec()) }).collect();
+        Some(Batch { cols, len: z - a, sel: None })
+    }
+}
+struct VFilter<'a> { input: Box<dyn BatchOp + 'a>, preds: &'a [Pred], cfg: VecCfg }
+impl BatchOp for VFilter<'_> {
+    fn next(&mut self) -> Option<Batch> {
+        loop {
+            let mut b = self.input.next()?;
+            if self.cfg.narrow {
+                for p in self.preds {
+                    let s = narrow(&b, p, true);
+                    let empty = s.is_empty();
+                    b.sel = Some(s);
+                    if empty { break; }
+                }
+            } else {
+                let mut acc: Option<Vec<u32>> = None;
+                for p in self.preds {
+                    let s = narrow(&b, p, false);
+                    acc = Some(match acc { None => s, Some(a) => intersect(&a, &s) });
+                }
+                if let Some(a) = acc { b.sel = Some(restrict_to_sel(&b, a)); }
+            }
+            if b.live() == 0 { continue; }
+            return Some(if self.cfg.compact { b.compact() } else { b });
+        }
+    }
+}
+struct VProject<'a> { input: Box<dyn BatchOp + 'a>, exprs: &'a [Expr] }
+impl BatchOp for VProject<'_> {
+    fn next(&mut self) -> Option<Batch> {
+        let b = self.input.next()?;
+        let cols = self.exprs.iter().map(|e| match ev(&b, e) {
+            Ev::Own(c) => c,
+            Ev::Ref(c) => c.clone(),
+            Ev::Lit(x) => Col { v: vec![x; b.len], ok: None },
+        }).collect();
+        Some(Batch { cols, len: b.len, sel: b.sel })
+    }
+}
+struct VMaterialized { rows: Vec<Vec<Val>>, at: usize, ncols: usize, bs: usize }
+impl BatchOp for VMaterialized {
+    fn next(&mut self) -> Option<Batch> {
+        if self.at >= self.rows.len() { return None; }
+        let z = (self.at + self.bs).min(self.rows.len());
+        let part = &self.rows[self.at..z];
+        let cols = (0..self.ncols).map(|c| Col::from_vals(&part.iter().map(|r| r[c]).collect::<Vec<_>>())).collect();
+        self.at = z;
+        Some(Batch { cols, len: part.len(), sel: None })
+    }
+}
+
+fn arity(p: &Plan, tables: &[Table]) -> usize {
+    match p { Plan::Scan(t) => tables[*t].cols.len(), Plan::Filter(i, _) => arity(i, tables), Plan::Project(_, e) => e.len(), Plan::Agg(_, g, a) => g.len() + a.len(), Plan::Join(l, r, _, _) => arity(l, tables) + arity(r, tables) }
+}
+
+fn build_vec<'a>(p: &'a Plan, tables: &'a [Table], cfg: VecCfg) -> Box<dyn BatchOp + 'a> {
+    match p {
+        Plan::Scan(t) => Box::new(VScan { t: &tables[*t], i: 0, bs: cfg.batch }),
+        Plan::Filter(i, preds) => Box::new(VFilter { input: build_vec(i, tables, cfg), preds, cfg }),
+        Plan::Project(i, exprs) => Box::new(VProject { input: build_vec(i, tables, cfg), exprs }),
+        Plan::Agg(i, g, aggs) => {
+            assert!(g.len() <= 2);
+            let mut input = build_vec(i, tables, cfg);
+            let mut idx: FxMap<(Val, Val), u32> = FxMap::default();
+            let mut keys: Vec<(Val, Val)> = vec![];
+            let mut states: Vec<State> = vec![];       // states[group * aggs.len() + agg]
+            let mut empty = true;
+            let mut gids: Vec<u32> = vec![];
+            while let Some(b) = input.next() {
+                if b.live() == 0 { continue; }
+                empty = false;
+                // pass 1: a group id for every live row
+                gids.clear();
+                b.each(|r| {
+                    let k = (g.first().map_or(None, |&c| b.cols[c].at(r)), g.get(1).map_or(None, |&c| b.cols[c].at(r)));
+                    let gi = *idx.entry(k).or_insert_with(|| { keys.push(k); states.extend(std::iter::repeat(State::default()).take(aggs.len())); (keys.len() - 1) as u32 });
+                    gids.push(gi);
+                });
+                // pass 2: one tight loop per aggregate
+                let na = aggs.len();
+                for (ai, (f, c)) in aggs.iter().enumerate() {
+                    let col = &b.cols[*c];
+                    let mut k = 0;
+                    b.each(|r| {
+                        let st = &mut states[gids[k] as usize * na + ai]; k += 1;
+                        match f { AggFn::CountStar => st.cnt += 1, _ => if col.ok.as_ref().is_none_or(|o| o[r]) { st.add(col.v[r]) } }
+                    });
+                }
+            }
+            let na = aggs.len();
+            let groups: Vec<((Val, Val), Vec<State>)> = keys.iter().enumerate().map(|(gi, k)| (*k, states[gi * na..(gi + 1) * na].to_vec())).collect();
+            Box::new(VMaterialized { rows: finish_groups(groups, g.len(), aggs, empty), at: 0, ncols: g.len() + aggs.len(), bs: cfg.batch })
+        }
+        Plan::Join(l, r, lk, rk) => {
+            let mut right = build_vec(r, tables, cfg);
+            let ra = arity(r, tables);
+            let mut rrows: Vec<Vec<Val>> = vec![];
+            let mut ht: FxMap<i64, Vec<u32>> = FxMap::default();
+            while let Some(b) = right.next() {
+                b.each(|i| { let row: Vec<Val> = b.cols.iter().map(|c| c.at(i)).collect(); if let Some(k) = row[*rk] { ht.entry(k).or_default().push(rrows.len() as u32); } rrows.push(row); });
+            }
+            Box::new(VJoin { left: build_vec(l, tables, cfg), ht, rrows, lk: *lk, ra, la: arity(l, tables) })
+        }
+    }
+}
+struct VJoin<'a> { left: Box<dyn BatchOp + 'a>, ht: FxMap<i64, Vec<u32>>, rrows: Vec<Vec<Val>>, lk: usize, ra: usize, la: usize }
+impl BatchOp for VJoin<'_> {
+    fn next(&mut self) -> Option<Batch> {
+        loop {
+            let b = self.left.next()?;
+            let (mut li, mut ri) = (vec![], vec![]);
+            let key = &b.cols[self.lk];
+            b.each(|i| { if key.ok.as_ref().is_none_or(|o| o[i]) { if let Some(ms) = self.ht.get(&key.v[i]) { for &m in ms { li.push(i as u32); ri.push(m); } } } });
+            if li.is_empty() { continue; }
+            let mut cols: Vec<Col> = (0..self.la).map(|c| { let s = &b.cols[c]; Col { v: li.iter().map(|&i| s.v[i as usize]).collect(), ok: s.ok.as_ref().map(|o| li.iter().map(|&i| o[i as usize]).collect()) } }).collect();
+            for c in 0..self.ra { cols.push(Col::from_vals(&ri.iter().map(|&i| self.rrows[i as usize][c]).collect::<Vec<_>>())); }
+            return Some(Batch { len: li.len(), cols, sel: None });
+        }
+    }
+}
+
+/// Run a plan with batches and selection vectors.
+pub fn run_vec(p: &Plan, tables: &[Table], cfg: VecCfg) -> Vec<Vec<Val>> {
+    let mut op = build_vec(p, tables, cfg);
+    let mut out = vec![];
+    while let Some(b) = op.next() { b.each(|i| out.push(b.cols.iter().map(|c| c.at(i)).collect())); }
+    out
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+```text title="four queries on 4 000 000 rows, a batch-size sweep, and the selection-vector variants"
+4000000 rows x 4 integer columns, best of 3 (ms); results of the two engines are compared first
+query                                          row engine   vectorized  speed-up
+filter a<50 AND b<100, SUM(d), COUNT                   98           23      4.2x
+SUM(a*b + d)                                          216           49      4.4x
+GROUP BY k: SUM, COUNT, MAX (1000 groups)             180           58      3.1x
+JOIN dim (1000 rows) GROUP BY dim.g, SUM              309           72      4.3x
+batch size sweep (ms), vectorized
+query \\ batch                                        1       4      16      64     256    1024    4096   16384   65536 1048576
+filter a<50 AND b<100                              466     149      58      32      24      23      25      23      23      24
+GROUP BY k: SUM                                    461     145      76      62      58      57      54      52      51      51
+selection vector versus compaction, and narrowing versus independent evaluation (filter query, batch 1024)
+  selection vector, narrowing                    23 ms
+  compacted survivors, narrowing                 25 ms
+  selection vector, independent conjuncts        32 ms
+```
+
+<ul> <li><strong>3 to 4.4× faster than the row engine</strong> on every query, with identical results. The row engine here is a good baseline (no boxing of values beyond one <code>Vec</code> per row); against an interpreter that allocates more per value the factor grows. The gain is bounded because both engines are single-threaded and the hash aggregation and the join spend their time in hash lookups either way (3.1× and 4.3×); the pure scan-filter-sum and arithmetic queries are where batches pay most.</li> <li><strong>The sweep has a knee at 64 to 256 rows.</strong> Batch size 1 is 2.6 to 4.8× <em>slower</em> than the row engine (466 ms against 98 ms on the filter query, 461 against 180 on the group-by): the batch machinery costs more than the work. From 256 up the filter query is flat at 23 ms; the group-by keeps improving slightly up to 64 K (57 → 51 ms) because the hash table is touched once per batch. The 1024-row default sits on the flat part.</li> <li><strong>Narrowing beats independent evaluation</strong>: running the second predicate only on the first one's survivors takes 23 ms, evaluating both on all rows and intersecting 32 ms (<strong>+39%</strong>), which is the effect that left the bitmap scan behind the row loop in M3.</li> <li><strong>Compaction did not help here</strong> (25 against 23 ms): the filter keeps 5% of the rows but the only consumer is a two-column sum, so there is no later loop to benefit. It pays in plans where several operators follow a selective filter.</li> </ul>
+
+<aside data-call="note"><b>What the tests could not see, and what did</b><p>The two engines share the aggregate <code>State</code> (sum, count, min, max). A differential test between them cannot catch a bug in code both run: the first mutation run left "MIN keeps the largest" alive. A direct computation of the groups from the input, independent of both engines, kills it. Differential testing needs <em>independent</em> implementations of everything it is meant to check.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Generic closures instead of virtual calls inside loops</strong>: the <code>go!</code> macro instantiates the loop once per comparison, so the comparison inlines. Each operator is still behind a <code>Box&lt;dyn BatchOp&gt;</code>, but that call happens once per batch.</li> <li><strong><code>Ev&lt;'a&gt;</code></strong> (<code>Ref(&amp;Col)</code>, <code>Own(Col)</code>, <code>Lit(i64)</code>) lets an expression refer to a column without copying it, own a computed column, or stay a scalar that the loop reads without indexing. It borrows the batch, so the borrow checker guarantees a result cannot outlive its input.</li> <li><strong><code>Batch::each(|i| …)</code></strong> iterates dense or selected positions through one <code>#[inline]</code> helper; every kernel is written once for both cases.</li> <li><strong><code>Option&lt;Vec&lt;bool&gt;&gt;</code> as validity</strong>: <code>None</code> means no NULLs, and <code>is_none_or</code> keeps the check one expression.</li> <li><strong>Group keys as <code>(Val, Val)</code></strong>: a <code>Copy</code> tuple, hashed with the same cheap <code>Fx</code> hasher as the join code, avoids a heap allocation per row, which a <code>Vec&lt;Val&gt;</code> key would cost.</li> <li><strong><code>wrapping_add/sub/mul</code></strong> make overflow behaviour identical in both engines; SQL engines raise an error instead, which is a design choice with its own cost (a check per row, or a range proof per batch).</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Differential</strong>: 1 500 random plans (a scan, an optional join with a second table, filters with column-versus-literal and expression-versus-expression conjuncts, a projection of random expressions, an optional second filter, an optional aggregation with 0 to 2 group columns and 1 to 3 aggregates), over tables of 0 to 200 rows with 15% NULLs, each run by the row engine and by the vectorized engine in 24 configurations (batch sizes 1, 2, 3, 7, 64, 1024 × selection or compaction × narrowing or independent conjuncts). Results are compared as multisets; 858 plans had a non-empty result, 713 an aggregation, 505 a join.</li> <li><strong>Edge cases</strong>: an ungrouped aggregate over no rows gives <code>COUNT = 0</code> and NULL for the others; a grouped one gives no rows; an all-NULL column has <code>SUM</code> NULL, <code>COUNT(col)</code> 0 and <code>COUNT(*)</code> the row count; <code>NULL + 1 &gt; 1</code> is not satisfied; NULL join keys never match.</li> <li><strong>Independent aggregate oracle</strong>: 300 random tables, groups computed directly with <code>BTreeMap</code> and iterators, compared with both engines for <code>SUM</code>, <code>COUNT(*)</code>, <code>COUNT</code>, <code>MIN</code>, <code>MAX</code> with NULLs.</li> <li><strong>Mutants run against these tests</strong>: <code>&lt;</code> as <code>&lt;=</code>; NULLs satisfying comparisons in a selected or a dense batch; arithmetic ignoring NULL operands; subtraction as addition; intersection stepping the wrong side; independent conjuncts ignoring an earlier selection; <code>MIN</code> keeping the largest; an empty aggregate with the wrong <code>COUNT</code>; <code>COUNT(col)</code> counting NULLs; a NULL join key matching; overlapping scan batches; projection dropping the selection; compaction losing the NULL flags; the join gathering the wrong right row; the second grouping column replaced by the first. <strong>16 killed.</strong> One mutant survives by design: removing the early <code>break</code> when a conjunct has emptied the selection changes only how much work is done, never the result.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>MonetDB/X100 → VectorWise → Actian Vector</strong> introduced the vectorized model ("MonetDB/X100: Hyper-Pipelining Query Execution", CIDR 2005); <strong>DuckDB</strong> processes vectors of 2 048 values with selection vectors and dictionary/constant vector types so a filter on a dictionary column compares codes; <strong>ClickHouse</strong> processes blocks of columns with SIMD kernels chosen at run time by CPU features.</li> <li><strong>Velox</strong> (Meta) and <strong>Arrow DataFusion</strong> run vectorized operators over Arrow arrays; Velox uses selectivity vectors and lazy vectors that decode a column only for the rows still alive.</li> <li><strong>SQL Server batch mode</strong> and <strong>Oracle In-Memory</strong> run vectorized operators over columnstore data; <strong>Snowflake</strong> and <strong>Databricks Photon</strong> do the same.</li> <li><strong>The alternative is compilation</strong>: HyPer and Umbra generate code per pipeline (<a href="/cookbook/p/query-compilation-and-code-generation">code generation</a>); the two approaches reach similar speeds in the "Everything You Always Wanted to Know About Compiled and Vectorized Queries" comparison (Kersten et al., VLDB 2018). Cairn's bytecode virtual machine (<a href="/cookbook/p/a-bytecode-virtual-machine">M5</a>) is a third point: a compact program run by a small interpreter.</li> <li><strong>Parallelism</strong> comes from running one pipeline per core on morsels of batches (<a href="/cookbook/p/query-scheduling">scheduling</a>, <a href="/cookbook/p/parallel-hash-joins">parallel hash joins</a>).</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Vector size is not a free parameter in a real engine</strong>: the working set of a pipeline (all intermediate vectors of all operators) should fit in L1 or L2. Wide rows or many expressions push the right size down.</li> <li><strong>Selection vectors and SIMD interact badly</strong>: a gather through a selection vector cannot use contiguous loads. Engines switch to full-vector evaluation with a mask when the selection is dense (above roughly 30 to 50%), then back.</li> <li><strong>Null handling doubles the kernels</strong>: each kernel needs a validity-aware variant; getting the common null-free path fast is worth the extra code, and the tests must exercise both.</li> <li><strong>Overflow and errors in a batch</strong>: erroring on the first overflow in row order requires care when a batch is evaluated column by column and some of its rows would have been filtered out.</li> <li><strong>Materialization inside operators</strong> (the join build side here is rows) can dominate; a real engine builds from columns.</li> <li><strong>Do not compare against a strawman.</strong> The honest baseline is a decent row engine, not one that allocates on every value; the section reports a 3 to 4× gap, not 20×, for that reason.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "MonetDB/X100: Hyper-Pipelining Query Execution"
+url = "https://www.cidrdb.org/cidr2005/papers/P19.pdf"
+
+[[sources]]
+title = "Execution Format documentation"
+url = "https://duckdb.org/docs/internals/vector"

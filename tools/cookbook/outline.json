@@ -1,0 +1,1965 @@
+[
+ {
+  "subject": "rust",
+  "module": "Rust language",
+  "order": 1,
+  "chapters": [
+   {
+    "title": "Ownership and borrowing",
+    "sections": [],
+    "recipes": [
+     "examples/language/lifetimes.rs",
+     "examples/language/borrowck_patterns.rs",
+     "examples/language/cow.rs",
+     "examples/language/ref_patterns.rs",
+     "examples/language/drop_raii.rs",
+     "examples/language/smart_pointers.rs",
+     "examples/language/mem_functions.rs",
+     "examples/language/static_const_lazy.rs"
+    ]
+   },
+   {
+    "title": "Types, traits and generics",
+    "sections": [],
+    "recipes": [
+     "examples/language/generics_bounds.rs",
+     "examples/language/generics_lifetimes_structs.rs",
+     "examples/language/hrtb_gats.rs",
+     "examples/language/dyn_vs_generic.rs",
+     "examples/language/common_traits.rs",
+     "examples/language/conversions.rs",
+     "examples/language/implementing_std_traits.rs",
+     "examples/language/extension_traits_ops.rs",
+     "examples/language/phantomdata_typed.rs",
+     "examples/language/newtype_ids.rs",
+     "examples/language/const_and_generics_advanced.rs",
+     "examples/language/library_api_polish.rs"
+    ]
+   },
+   {
+    "title": "Everyday language",
+    "sections": [
+     [
+      "co",
+      "Language features from Rust"
+     ]
+    ],
+    "recipes": [
+     "examples/language/closures_hof.rs",
+     "examples/language/iterators.rs",
+     "examples/language/iterator_adapters.rs",
+     "examples/language/pattern_matching.rs",
+     "examples/language/strings.rs",
+     "examples/language/bytes.rs",
+     "examples/language/collections_tour.rs",
+     "examples/language/io_files_paths.rs",
+     "examples/language/macro_rules.rs",
+     "examples/language/modules_visibility.rs",
+     "examples/language/edition_2024_changes.rs",
+     "examples/language/recent_stable_language_features.rs",
+     "examples/language/recent_std_apis.rs"
+    ]
+   },
+   {
+    "title": "Errors and diagnostics",
+    "sections": [],
+    "recipes": [
+     "examples/errors/anyhow_context.rs",
+     "examples/errors/diagnostics_spans.rs",
+     "examples/errors/error_chain_retryable.rs",
+     "examples/errors/error_enum.rs",
+     "examples/errors/option_result_toolbox.rs"
+    ]
+   },
+   {
+    "title": "Design patterns",
+    "sections": [],
+    "recipes": [
+     "examples/patterns/design_patterns_high.rs",
+     "examples/patterns/design_patterns_low.rs",
+     "examples/patterns/typestate_builder.rs",
+     "examples/patterns/typestate_protocol.rs",
+     "examples/patterns/state_machine.rs",
+     "examples/patterns/generic_state_machine.rs",
+     "examples/patterns/type_erasure_vtable.rs",
+     "examples/patterns/any_event_bus.rs",
+     "examples/patterns/tower_service_layer.rs",
+     "examples/patterns/sans_io_protocol.rs",
+     "examples/patterns/undo_redo_editors.rs"
+    ]
+   },
+   {
+    "title": "Memory and allocators",
+    "sections": [
+     [
+      "db",
+      "Concurrent memory"
+     ],
+     [
+      "co",
+      "Garbage collection"
+     ],
+     [
+      "co",
+      "Graph algorithms, GC and life without GC"
+     ]
+    ],
+    "recipes": [
+     "examples/memory/arena_ids.rs",
+     "examples/memory/bump_arena_allocator.rs",
+     "examples/memory/garbage_collectors.rs",
+     "examples/memory/size_class_allocator.rs",
+     "examples/memory/slab_generational.rs"
+    ]
+   },
+   {
+    "title": "Unsafe and FFI",
+    "sections": [
+     [
+      "db",
+      "Rust for systems code"
+     ]
+    ],
+    "recipes": [
+     "examples/unsafe_ffi/unsafe_basics.rs",
+     "examples/unsafe_ffi/unsafecell_cells.rs",
+     "examples/unsafe_ffi/maybeuninit_fixedvec.rs",
+     "examples/unsafe_ffi/nonnull_linked_list.rs",
+     "examples/unsafe_ffi/pin_projection.rs",
+     "examples/unsafe_ffi/repr_layout_ffi.rs",
+     "examples/unsafe_ffi/ffi_c_interop.rs"
+    ]
+   }
+  ]
+ },
+ {
+  "subject": "rust",
+  "module": "Standard library and core",
+  "order": 2,
+  "chapters": [
+   {
+    "title": "Option, Result, conversions, ownership types",
+    "sections": [],
+    "recipes": [
+     "examples/std_tour/std_option_methods.rs",
+     "examples/std_tour/std_result_methods.rs",
+     "examples/std_tour/std_convert_from_into_asref.rs",
+     "examples/std_tour/std_cow_borrow_toowned.rs",
+     "examples/std_tour/std_smart_pointers_use_cases.rs"
+    ]
+   },
+   {
+    "title": "Text",
+    "sections": [],
+    "recipes": [
+     "examples/std_tour/std_char_ascii_unicode.rs",
+     "examples/std_tour/std_str_search_split_parse.rs",
+     "examples/std_tour/std_string_building_utf8.rs"
+    ]
+   },
+   {
+    "title": "Iterators and collections",
+    "sections": [],
+    "recipes": [
+     "examples/std_tour/std_iterator_adapters_lazy.rs",
+     "examples/std_tour/std_iterator_consumers.rs",
+     "examples/std_tour/std_iterator_sources_custom.rs",
+     "examples/std_tour/std_hashmap_entry_api_patterns.rs"
+    ]
+   },
+   {
+    "title": "Vectors, slices and collections",
+    "sections": [],
+    "recipes": [
+     "examples/std_tour/std_vec_vecdeque_methods.rs",
+     "examples/std_tour/std_slice_search_sort_binary.rs",
+     "examples/std_tour/std_slice_chunks_windows_split.rs",
+     "examples/std_tour/std_collections_choice_guide.rs",
+     "examples/std_tour/std_array_tuple_unit_never.rs"
+    ]
+   },
+   {
+    "title": "Numbers, traits and formatting",
+    "sections": [],
+    "recipes": [
+     "examples/std_tour/std_integer_methods_overflow.rs",
+     "examples/std_tour/std_float_methods_total_order.rs",
+     "examples/std_tour/std_num_parsing_formatting.rs",
+     "examples/std_tour/std_cmp_hash_default_traits.rs",
+     "examples/std_tour/std_ops_traits_overloading.rs",
+     "examples/std_tour/std_any_error_marker_traits.rs",
+     "examples/std_tour/std_fmt_display_debug_deep.rs"
+    ]
+   },
+   {
+    "title": "Memory and low level",
+    "sections": [],
+    "recipes": [
+     "examples/std_tour/std_alloc_layout_global_allocator.rs",
+     "examples/std_tour/std_mem_replace_take_swap_forget.rs",
+     "examples/std_tour/std_ptr_nonnull_slices_raw.rs",
+     "examples/std_tour/std_btree_binaryheap_ordered.rs",
+     "examples/std_tour/std_hash_collections_io_serialization_formats.rs",
+     "examples/std_tour/std_vecdeque_linkedlist_ring_buffers.rs"
+    ]
+   },
+   {
+    "title": "Threads, synchronisation and time",
+    "sections": [],
+    "recipes": [
+     "examples/std_tour/std_atomics_ordering_use_cases.rs",
+     "examples/std_tour/std_sync_primitives_use_cases.rs",
+     "examples/std_tour/std_thread_scope_local_park.rs",
+     "examples/std_tour/std_time_instant_duration_systemtime.rs"
+    ]
+   },
+   {
+    "title": "Processes, signals and networking",
+    "sections": [],
+    "recipes": [
+     "examples/std_tour/std_env_args_vars.rs",
+     "examples/std_tour/std_panic_process_exit_catch.rs",
+     "examples/std_tour/std_process_command_pipelines.rs",
+     "examples/std_tour/std_signals_env_exit_hooks_ctrlc.rs",
+     "examples/std_tour/std_net_tcp_udp_ip_addr.rs",
+     "examples/std_tour/std_io_stdio_terminal_text_processing.rs",
+     "examples/std_tour/std_fs_watch_polling_tempdir_testing.rs"
+    ]
+   },
+   {
+    "title": "I/O, files and paths",
+    "sections": [],
+    "recipes": [
+     "examples/std_tour/std_bufreader_bufwriter_patterns.rs",
+     "examples/std_tour/std_io_read_write_seek_traits.rs",
+     "examples/std_tour/std_fs_file_operations_usecases.rs",
+     "examples/std_tour/std_path_pathbuf_ffi_strings.rs"
+    ]
+   }
+  ]
+ },
+ {
+  "subject": "rust",
+  "module": "Crates and tooling",
+  "order": 3,
+  "chapters": [
+   {
+    "title": "Data, text and encoding crates",
+    "sections": [],
+    "recipes": [
+     "crates/cb-crate-tour/examples/serde_attributes_enum_representations.rs",
+     "crates/cb-crate-tour/examples/serde_formats_json_toml_yaml_bincode.rs",
+     "examples/encoding_compression/serde_custom.rs",
+     "examples/encoding_compression/serde_defaults.rs",
+     "crates/cb-crate-tour/examples/bytes_buf_buf_mut_framing.rs",
+     "crates/cb-crate-tour/examples/regex_text_processing.rs",
+     "crates/cb-crate-tour/examples/url_base64_hex_percent_encoding.rs",
+     "crates/cb-crate-tour/examples/uuid_rand_ids_tokens.rs",
+     "crates/cb-crate-tour/examples/indexmap_smallvec_arrayvec_collections.rs",
+     "crates/cb-crate-tour/examples/itertools_adaptors_cookbook.rs",
+     "crates/cb-crate-tour/examples/chrono_dates_times_zones.rs",
+     "crates/cb-crate-tour/examples/time_crate_dates_formatting.rs",
+     "crates/cb-crate-tour/examples/tempfile_walkdir_glob_ignore.rs"
+    ]
+   },
+   {
+    "title": "Application crates",
+    "sections": [],
+    "recipes": [
+     "crates/cb-crate-tour/examples/anyhow_thiserror_eyre_error_design.rs",
+     "crates/cb-crate-tour/examples/clap_derive_cli_tool.rs",
+     "examples/dev_tools/clap_cli.rs",
+     "crates/cb-crate-tour/examples/tracing_spans_subscriber_layers.rs",
+     "examples/dev_tools/tracing_logs.rs",
+     "crates/cb-crate-tour/examples/tokio_runtime_tasks_channels_timers.rs",
+     "crates/cb-crate-tour/examples/reqwest_axum_http_roundtrip.rs",
+     "crates/cb-crate-tour/examples/sqlx_sqlite_queries_transactions.rs"
+    ]
+   },
+   {
+    "title": "Multi-file projects",
+    "sections": [],
+    "recipes": [],
+    "crates": [
+     "cb-macros",
+     "cb-macros-demo",
+     "cb-build-script",
+     "cb-no-std",
+     "cb-features-workspace",
+     "cb-cdylib-c-abi"
+    ]
+   }
+  ]
+ },
+ {
+  "subject": "testing",
+  "module": "Testing and benchmarking",
+  "order": 4,
+  "chapters": [
+   {
+    "title": "Methods: test design and TDD",
+    "sections": [
+     [
+      "db",
+      "Toolchain"
+     ]
+    ],
+    "recipes": [
+     "examples/dev_tools/testing_patterns.rs"
+    ]
+   },
+   {
+    "title": "Methods: property-based testing",
+    "sections": [],
+    "recipes": [
+     "examples/dev_tools/shrinking.rs",
+     "crates/cb-crate-tour/examples/criterion_proptest_insta_testing.rs"
+    ]
+   },
+   {
+    "title": "Methods: fuzzing",
+    "sections": [
+     [
+      "co",
+      "Tooling"
+     ]
+    ],
+    "recipes": []
+   },
+   {
+    "title": "Methods: concurrency testing",
+    "sections": [],
+    "recipes": [
+     "examples/concurrency/model_checker_for_concurrent_code.rs"
+    ]
+   },
+   {
+    "title": "Methods: memory-ordering bugs",
+    "sections": [],
+    "recipes": [
+     "examples/concurrency/memory_ordering_litmus.rs"
+    ]
+   },
+   {
+    "title": "Methods: benchmarking and profiling",
+    "sections": [
+     [
+      "db",
+      "Benchmarking"
+     ],
+     [
+      "db",
+      "Profiling and observability"
+     ]
+    ],
+    "recipes": [
+     "examples/perf/bench_harness.rs",
+     "examples/dev_tools/metrics_prometheus_histograms_load_testing.rs"
+    ]
+   },
+   {
+    "title": "Systems: distributed systems",
+    "sections": [
+     [
+      "db",
+      "Deterministic simulation"
+     ]
+    ],
+    "recipes": [
+     "examples/distributed/deterministic_simulation_testing.rs",
+     "examples/distributed/linearizability_checker.rs"
+    ]
+   },
+   {
+    "title": "Systems: databases",
+    "sections": [
+     [
+      "db",
+      "Testing a database"
+     ]
+    ],
+    "recipes": [
+     "examples/database/consistent_snapshots_sql_logic_tests.rs"
+    ]
+   },
+   {
+    "title": "Systems: compilers and languages",
+    "sections": [
+     [
+      "co",
+      "Testing and debugging compilers"
+     ],
+     [
+      "co",
+      "Benchmarking compilers"
+     ]
+    ],
+    "recipes": []
+   },
+   {
+    "title": "Multi-file projects",
+    "sections": [],
+    "recipes": [],
+    "crates": [
+     "cb-testing-tools"
+    ]
+   }
+  ]
+ },
+ {
+  "subject": "algorithms",
+  "module": "Data structures and algorithms",
+  "order": 5,
+  "chapters": [
+   {
+    "title": "Hashing and probabilistic structures",
+    "sections": [
+     [
+      "db",
+      "Count-min sketch"
+     ],
+     [
+      "db",
+      "More primers"
+     ],
+     [
+      "db",
+      "Hash tables"
+     ]
+    ],
+    "recipes": [
+     "examples/data_structures/hash_functions.rs",
+     "examples/data_structures/open_addressing_map.rs",
+     "examples/data_structures/cuckoo_hashing.rs",
+     "examples/data_structures/count_min_sketch.rs",
+     "examples/data_structures/hyperloglog.rs",
+     "examples/data_structures/minhash_simhash_lsh.rs",
+     "examples/data_structures/sampling.rs",
+     "examples/search_vectors/bloom_filter.rs"
+    ]
+   },
+   {
+    "title": "Trees and ordered structures",
+    "sections": [],
+    "recipes": [
+     "examples/data_structures/bplus_tree.rs",
+     "examples/data_structures/b_epsilon_tree.rs",
+     "examples/data_structures/btree_bulk_load_prefix_compression.rs",
+     "examples/data_structures/bw_tree_latch_free.rs",
+     "examples/data_structures/optimistic_lock_coupling_btree.rs",
+     "examples/data_structures/adaptive_radix_tree.rs",
+     "examples/data_structures/trie_radix.rs",
+     "examples/data_structures/skiplist.rs",
+     "examples/data_structures/treap_interval.rs",
+     "examples/data_structures/segment_fenwick.rs",
+     "examples/data_structures/gist_generalized_search_tree.rs",
+     "examples/data_structures/learned_index_rmi.rs"
+    ]
+   },
+   {
+    "title": "Caches, queues, heaps and bit sets",
+    "sections": [],
+    "recipes": [
+     "examples/data_structures/cache_policy_zoo.rs",
+     "examples/data_structures/lru_cache.rs",
+     "examples/data_structures/ring_buffer_zoo.rs",
+     "examples/data_structures/priority_queue_zoo.rs",
+     "examples/data_structures/heap_patterns.rs",
+     "examples/data_structures/heap_tiebreak.rs",
+     "examples/data_structures/bitset_rank_select_roaring.rs",
+     "examples/data_structures/bdd_zdd.rs"
+    ]
+   },
+   {
+    "title": "Graph algorithms",
+    "sections": [],
+    "recipes": [
+     "examples/algorithms/csr_graph.rs",
+     "examples/algorithms/index_graph.rs",
+     "examples/algorithms/dijkstra.rs",
+     "examples/algorithms/shortest_path_zoo.rs",
+     "examples/algorithms/mst_bridges.rs",
+     "examples/algorithms/bipartite_matching.rs",
+     "examples/algorithms/max_flow_dinic.rs",
+     "examples/algorithms/union_find.rs",
+     "examples/algorithms/tarjan_scc.rs"
+    ]
+   },
+   {
+    "title": "Dynamic programming, greedy and search",
+    "sections": [
+     [
+      "co",
+      "DP, trees and specialized algorithms"
+     ],
+     [
+      "co",
+      "Algorithms and concurrency in code"
+     ]
+    ],
+    "recipes": [
+     "examples/interview/dp_and_backtracking_questions.rs",
+     "examples/algorithms/dp_count_paths.rs",
+     "examples/algorithms/dp_edit_distance.rs",
+     "examples/algorithms/dp_knapsack.rs",
+     "examples/algorithms/dp_lcs_diff.rs",
+     "examples/algorithms/dp_memoization.rs",
+     "examples/algorithms/dp_zoo.rs",
+     "examples/algorithms/greedy_and_interval_algorithms.rs",
+     "examples/algorithms/backtracking_branch_bound.rs",
+     "examples/algorithms/heuristics_zoo.rs",
+     "examples/algorithms/problem_modeling_reductions.rs",
+     "examples/algorithms/combinatorial_generation.rs",
+     "examples/algorithms/combo_algorithms.rs",
+     "examples/algorithms/sat_solver_cdcl.rs",
+     "examples/algorithms/procedural_puzzles.rs"
+    ]
+   },
+   {
+    "title": "Sorting, strings, bits and theory",
+    "sections": [],
+    "recipes": [
+     "examples/algorithms/sorting_searching.rs",
+     "examples/algorithms/sorting_networks_external_sort.rs",
+     "examples/algorithms/kway_merge_family.rs",
+     "examples/algorithms/string_algos.rs",
+     "examples/algorithms/aho_corasick.rs",
+     "examples/algorithms/bit_tricks.rs",
+     "examples/algorithms/bit_manipulation_real_world.rs",
+     "examples/algorithms/algorithmic_optimization_toolbox.rs",
+     "examples/algorithms/amortized_analysis_online_algorithms.rs",
+     "examples/algorithms/approximation_randomized_algorithms.rs",
+     "examples/algorithms/linear_programming_simplex.rs"
+    ]
+   },
+   {
+    "title": "Mathematics and numerics",
+    "sections": [],
+    "recipes": [
+     "examples/math_science/bigint_arithmetic.rs",
+     "examples/math_science/computational_geometry.rs",
+     "examples/math_science/decimal_fixed_point_money.rs",
+     "examples/math_science/floating_point_ieee754.rs",
+     "examples/math_science/number_theory_primes.rs",
+     "examples/math_science/numerics_and_math.rs",
+     "examples/math_science/physics_simulation.rs",
+     "examples/math_science/prng_zoo.rs",
+     "examples/math_science/space_filling_curves_zorder_hilbert.rs",
+     "examples/math_science/spatial_search_structures.rs"
+    ]
+   }
+  ]
+ },
+ {
+  "subject": "systems",
+  "module": "Concurrency and async",
+  "order": 6,
+  "chapters": [
+   {
+    "title": "Threads, locks and channels",
+    "sections": [],
+    "recipes": [
+     "examples/concurrency/threads_channels.rs",
+     "examples/concurrency/mutex_condvar_channel.rs",
+     "examples/concurrency/shared_state.rs",
+     "examples/concurrency/sharded_map.rs",
+     "examples/concurrency/locks_deadlocks.rs",
+     "examples/concurrency/actor_model.rs",
+     "examples/concurrency/crossbeam_select_channels.rs",
+     "examples/concurrency/rayon_data_parallelism.rs",
+     "examples/concurrency/thread_pool_work_stealing.rs",
+     "examples/concurrency/joinset_semaphore.rs"
+    ]
+   },
+   {
+    "title": "Atomics and memory ordering",
+    "sections": [
+     [
+      "co",
+      "Effects, async and memory models"
+     ]
+    ],
+    "recipes": [
+     "examples/concurrency/atomics_ordering.rs",
+     "examples/concurrency/own_arc_refcount.rs",
+     "examples/concurrency/seqlock_and_priority_inversion.rs",
+     "examples/perf/false_sharing.rs"
+    ]
+   },
+   {
+    "title": "Concurrent data structures",
+    "sections": [],
+    "recipes": [
+     "examples/concurrency/spsc_ring_buffer.rs",
+     "examples/concurrency/mpmc_bounded_queue.rs",
+     "examples/concurrency/mpmc_queues_michael_scott_and_combining.rs",
+     "examples/concurrency/lockfree_stack_aba.rs",
+     "examples/concurrency/concurrent_counters_and_statistics.rs",
+     "examples/concurrency/concurrent_hashmap_designs.rs",
+     "examples/concurrency/concurrent_skiplist_btree_ordered_map.rs",
+     "examples/concurrency/epoch_hazard_pointer_reclamation.rs",
+     "examples/concurrency/read_copy_update_and_hazard_patterns.rs",
+     "examples/concurrency/snapshot_cow_rcu.rs"
+    ]
+   },
+   {
+    "title": "Async Rust",
+    "sections": [],
+    "recipes": [
+     "examples/async/async_cancel_safety.rs",
+     "examples/async/async_patterns.rs",
+     "examples/async/async_streams_concurrency.rs",
+     "examples/async/async_traits_dyn.rs",
+     "examples/async/futures_by_hand.rs",
+     "examples/async/waker_executor.rs",
+     "examples/async/select_cancel.rs",
+     "examples/concurrency/structured_concurrency_cancellation.rs",
+     "examples/async/graceful_shutdown.rs",
+     "examples/async/bounded_channel.rs",
+     "examples/async/worker_pool.rs"
+    ]
+   }
+  ]
+ },
+ {
+  "subject": "systems",
+  "module": "Performance and systems",
+  "order": 7,
+  "chapters": [
+   {
+    "title": "Measuring and CPU performance",
+    "sections": [
+     [
+      "co",
+      "Performance: data layout, SIMD, threads and lock-free structures"
+     ]
+    ],
+    "recipes": [
+     "examples/perf/perf_checklist.rs",
+     "examples/perf/branches_vectorization.rs",
+     "examples/perf/inlining_codegen.rs",
+     "examples/perf/simd_intrinsics.rs",
+     "examples/perf/matmul_optimization.rs",
+     "examples/perf/fast_hashing.rs"
+    ]
+   },
+   {
+    "title": "Memory layout and allocation",
+    "sections": [],
+    "recipes": [
+     "examples/perf/cache_locality.rs",
+     "examples/perf/data_layout.rs",
+     "examples/perf/struct_packing.rs",
+     "examples/perf/small_string_inline.rs",
+     "examples/perf/counting_allocator.rs",
+     "examples/perf/byte_order_keys.rs",
+     "examples/perf/bufwriter.rs"
+    ]
+   },
+   {
+    "title": "Files, processes and the OS",
+    "sections": [
+     [
+      "db",
+      "Disk I/O: fsync, the page cache and queues"
+     ],
+     [
+      "db",
+      "Databases on new hardware"
+     ]
+    ],
+    "recipes": [
+     "examples/os_and_storage/file_disk_io_patterns.rs",
+     "examples/os_and_storage/file_locking_atomic_replace.rs",
+     "examples/os_and_storage/buffered_io_internals.rs",
+     "examples/os_and_storage/mmap_files.rs",
+     "examples/os_and_storage/io_uring_model.rs",
+     "examples/os_and_storage/zero_copy_sendfile_splice.rs",
+     "examples/os_and_storage/process_pipes_signals.rs",
+     "examples/os_and_storage/syscalls_portable.rs",
+     "examples/os_and_storage/virtual_memory_sim.rs",
+     "examples/os_and_storage/scheduler_policies.rs",
+     "examples/os_and_storage/disk_scheduling_raid.rs",
+     "examples/os_and_storage/timing_wheel.rs",
+     "examples/os_and_storage/civil_dates_time.rs",
+     "examples/os_and_storage/wal_append_log.rs"
+    ]
+   },
+   {
+    "title": "High-performance computing",
+    "sections": [],
+    "recipes": [
+     "examples/hpc/jacobi_stencil_tiling.rs",
+     "examples/hpc/loop_optimization_ladder.rs",
+     "examples/hpc/mpi_collectives_simulation.rs",
+     "examples/hpc/parallel_prefix_scan_reduction.rs",
+     "examples/hpc/parallel_sample_sort_radix.rs",
+     "examples/hpc/scaling_laws_amdahl_gustafson_roofline.rs",
+     "examples/hpc/sparse_kernels_spmv_csr.rs"
+    ]
+   }
+  ]
+ },
+ {
+  "subject": "data",
+  "module": "Databases",
+  "order": 8,
+  "chapters": [
+   {
+    "title": "Foundations and SQL",
+    "sections": [
+     [
+      "db",
+      "Relational Model & Algebra"
+     ],
+     [
+      "db",
+      "Modern SQL"
+     ],
+     [
+      "db",
+      "The DBMS stack"
+     ],
+     [
+      "db",
+      "Cairn layout"
+     ]
+    ],
+    "recipes": [
+     "examples/database/relational_algebra_engine.rs",
+     "examples/database/sql_window_functions_ctes.rs"
+    ]
+   },
+   {
+    "title": "Storage and buffer management",
+    "sections": [
+     [
+      "db",
+      "Buffer pools"
+     ],
+     [
+      "db",
+      "ARC replacer"
+     ],
+     [
+      "db",
+      "Disk I/O"
+     ],
+     [
+      "db",
+      "Disk scheduler"
+     ],
+     [
+      "db",
+      "Buffer pool manager"
+     ],
+     [
+      "db",
+      "Pages and tuples"
+     ],
+     [
+      "db",
+      "Table heap"
+     ],
+     [
+      "db",
+      "Log-structured storage"
+     ],
+     [
+      "db",
+      "Storage models and compression"
+     ],
+     [
+      "db",
+      "In-memory DBMS design"
+     ],
+     [
+      "db",
+      "Larger-than-memory databases"
+     ],
+     [
+      "db",
+      "Columnar formats and nested data"
+     ],
+     [
+      "db",
+      "Modern encodings: BtrBlocks, FastLanes, BitWeaving"
+     ]
+    ],
+    "recipes": [
+     "examples/database/slotted_pages_heap_file.rs",
+     "examples/database/storage_models_nsm_dsm_pax.rs",
+     "examples/database/columnar_encodings.rs",
+     "examples/database/buffer_pool_clock.rs",
+     "examples/database/lru_k_replacer_disk_scheduler.rs",
+     "examples/database/buffer_management_vmcache_swizzling.rs",
+     "examples/database/lsm_compaction_strategies.rs"
+    ]
+   },
+   {
+    "title": "Indexes",
+    "sections": [
+     [
+      "db",
+      "B+Trees"
+     ],
+     [
+      "db",
+      "B+Tree pages"
+     ],
+     [
+      "db",
+      "Search and insert"
+     ],
+     [
+      "db",
+      "Delete and tombstones"
+     ],
+     [
+      "db",
+      "Index iterator"
+     ],
+     [
+      "db",
+      "Filters, tries, inverted and vector indexes"
+     ],
+     [
+      "db",
+      "Index concurrency control"
+     ],
+     [
+      "db",
+      "B+Tree concurrency"
+     ],
+     [
+      "db",
+      "Latch-free indexes and the Bw-tree"
+     ],
+     [
+      "db",
+      "Tries and the adaptive radix tree"
+     ]
+    ],
+    "recipes": [
+     "examples/database/hash_and_bitmap_indexes.rs",
+     "examples/database/succinct_wavelet_fm_index.rs",
+     "examples/database/database_cracking_zone_maps_imprints.rs",
+     "examples/database/bitweaving_bit_sliced_scans.rs"
+    ]
+   },
+   {
+    "title": "Query execution",
+    "sections": [
+     [
+      "db",
+      "Sorting and aggregation"
+     ],
+     [
+      "db",
+      "Join algorithms"
+     ],
+     [
+      "db",
+      "Query execution"
+     ],
+     [
+      "db",
+      "Catalog, types, expressions"
+     ],
+     [
+      "db",
+      "SQL front end"
+     ],
+     [
+      "db",
+      "Access-method executors"
+     ],
+     [
+      "db",
+      "Aggregation and nested-loop joins"
+     ],
+     [
+      "db",
+      "Grace hash join and spilling"
+     ],
+     [
+      "db",
+      "Sort, top-N, limit, window"
+     ],
+     [
+      "db",
+      "Parallel execution"
+     ],
+     [
+      "db",
+      "Vectorized execution with SIMD"
+     ],
+     [
+      "db",
+      "Query compilation and code generation"
+     ],
+     [
+      "db",
+      "Parallel hash joins"
+     ],
+     [
+      "db",
+      "Parallel sort-merge joins"
+     ],
+     [
+      "db",
+      "Multi-way and worst-case optimal joins"
+     ],
+     [
+      "db",
+      "Server-side logic and UDFs"
+     ],
+     [
+      "db",
+      "Execution pipelines"
+     ],
+     [
+      "db",
+      "Query scheduling"
+     ],
+     [
+      "co",
+      "DSLs and SQL parsing"
+     ]
+    ],
+    "recipes": [
+     "examples/database/volcano_vectorized_push.rs",
+     "examples/database/join_algorithms.rs",
+     "examples/database/radix_partitioned_hash_join.rs",
+     "examples/database/external_sort_hash_aggregation.rs",
+     "examples/database/parallel_query_morsel_exchange.rs",
+     "examples/database/query_compilation_data_centric_codegen.rs",
+     "examples/database/leapfrog_triejoin_worst_case_optimal.rs",
+     "examples/database/dremel_nested_columnar_shredding.rs",
+     "examples/database/distributed_query_shuffle_broadcast_join.rs"
+    ]
+   },
+   {
+    "title": "Query optimization",
+    "sections": [
+     [
+      "db",
+      "Query planning and rewriting"
+     ],
+     [
+      "db",
+      "Cost models and join ordering"
+     ],
+     [
+      "db",
+      "Optimizer rules and the engine"
+     ],
+     [
+      "db",
+      "Optimizer architectures"
+     ],
+     [
+      "db",
+      "A Cascades memo in Rust"
+     ],
+     [
+      "db",
+      "Plan transformations and rule soundness"
+     ],
+     [
+      "db",
+      "Join ordering"
+     ],
+     [
+      "db",
+      "Parallel search"
+     ],
+     [
+      "db",
+      "Unnesting subqueries"
+     ],
+     [
+      "db",
+      "Statistics"
+     ],
+     [
+      "db",
+      "Cardinality estimation"
+     ],
+     [
+      "db",
+      "Cost models"
+     ],
+     [
+      "db",
+      "Adaptive and robust"
+     ],
+     [
+      "db",
+      "Production optimizers"
+     ]
+    ],
+    "recipes": [
+     "examples/database/cascades_memo_optimizer.rs",
+     "examples/database/join_enumeration_dpccp_dphyp.rs",
+     "examples/database/cardinality_estimation_lab.rs",
+     "examples/database/statistics_histograms_sketches.rs",
+     "examples/database/subquery_unnesting_decorrelation.rs",
+     "examples/database/query_rewrite_rules_magic_sets.rs",
+     "examples/database/parametric_query_optimization.rs",
+     "examples/database/adaptive_feedback_reoptimization.rs",
+     "examples/database/adaptive_query_processing_eddies_sip.rs",
+     "examples/database/plan_cache_multiplan_trial.rs"
+    ]
+   },
+   {
+    "title": "Transactions and concurrency control",
+    "sections": [
+     [
+      "db",
+      "Concurrency control theory"
+     ],
+     [
+      "db",
+      "Two-phase locking"
+     ],
+     [
+      "db",
+      "Timestamp ordering and OCC"
+     ],
+     [
+      "db",
+      "Multi-version concurrency control"
+     ],
+     [
+      "db",
+      "Project 4 · MVOCC"
+     ],
+     [
+      "db",
+      "MVCC protocols compared"
+     ],
+     [
+      "db",
+      "MVCC garbage collection"
+     ]
+    ],
+    "recipes": [
+     "examples/database/transaction_theory_serializability.rs",
+     "examples/database/lock_manager_deadlock.rs",
+     "examples/database/timestamp_ordering_occ.rs",
+     "examples/database/mvcc_snapshot_isolation.rs",
+     "examples/database/mvcc_version_storage_gc.rs",
+     "examples/database/hybrid_logical_clock_snapshots_percolator.rs"
+    ]
+   },
+   {
+    "title": "Logging and recovery",
+    "sections": [
+     [
+      "db",
+      "Logging"
+     ],
+     [
+      "db",
+      "Crash recovery (ARIES)"
+     ],
+     [
+      "db",
+      "Build WAL and ARIES"
+     ],
+     [
+      "db",
+      "Recovery for main-memory systems"
+     ]
+    ],
+    "recipes": [
+     "examples/database/aries_recovery.rs",
+     "examples/database/logging_schemes_group_commit.rs"
+    ]
+   },
+   {
+    "title": "Analytics, time series and streaming",
+    "sections": [
+     [
+      "db",
+      "Modern OLAP systems"
+     ],
+     [
+      "db",
+      "Time-series databases"
+     ],
+     [
+      "db",
+      "Streaming and incremental views"
+     ],
+     [
+      "db",
+      "Lakehouses and table formats"
+     ],
+     [
+      "db",
+      "Cloud-native OLTP"
+     ],
+     [
+      "db",
+      "Building blocks"
+     ],
+     [
+      "db",
+      "Learned tuning and in-database ML"
+     ],
+     [
+      "db",
+      "Hardware-accelerated databases"
+     ],
+     [
+      "db",
+      "Query languages"
+     ],
+     [
+      "db",
+      "Embedded engines"
+     ],
+     [
+      "db",
+      "Industry systems and where next"
+     ],
+     [
+      "db",
+      "History of databases"
+     ]
+    ],
+    "recipes": [
+     "examples/database/tsm_time_series_engine.rs",
+     "examples/database/hypertables_continuous_aggregates.rs",
+     "examples/database/asof_joins_gap_filling.rs",
+     "examples/database/timeseries_sketches_downsampling_anomaly.rs",
+     "examples/database/incremental_view_maintenance_dbsp.rs",
+     "examples/database/datalog_engine_semi_naive.rs",
+     "examples/database/delta_lake_transaction_log.rs",
+     "examples/database/cloud_warehouse_micro_partitions.rs",
+     "examples/database/cdc_logical_replication_log.rs",
+     "examples/database/online_schema_change.rs"
+    ]
+   },
+   {
+    "title": "Building complete engines",
+    "sections": [
+     [
+      "db",
+      "One key space"
+     ],
+     [
+      "db",
+      "Transactions on the key space"
+     ],
+     [
+      "db",
+      "A column store"
+     ],
+     [
+      "db",
+      "A vectorized engine"
+     ],
+     [
+      "db",
+      "A bytecode virtual machine"
+     ],
+     [
+      "db",
+      "HTAP: one table, two engines"
+     ],
+     [
+      "db",
+      "A durable LSM tree"
+     ],
+     [
+      "db",
+      "The graph store"
+     ],
+     [
+      "db",
+      "The document store"
+     ],
+     [
+      "db",
+      "The time-series engine"
+     ],
+     [
+      "db",
+      "Full-text search"
+     ],
+     [
+      "db",
+      "Streams and windows"
+     ],
+     [
+      "db",
+      "One planner for many models"
+     ],
+     [
+      "db",
+      "The PostgreSQL wire protocol"
+     ],
+     [
+      "db",
+      "The engine in WebAssembly"
+     ],
+     [
+      "db",
+      "Passwords and SCRAM"
+     ],
+     [
+      "db",
+      "Roles, privileges and row-level security"
+     ],
+     [
+      "db",
+      "Passing BusTub's tests"
+     ],
+     [
+      "db",
+      "Networking protocols"
+     ]
+    ],
+    "recipes": []
+   }
+  ]
+ },
+ {
+  "subject": "data",
+  "module": "Search and vectors",
+  "order": 9,
+  "chapters": [
+   {
+    "title": "Text search and autocomplete",
+    "sections": [],
+    "recipes": [
+     "examples/search_vectors/trigram_index.rs",
+     "examples/search_vectors/autocomplete_engine.rs"
+    ]
+   },
+   {
+    "title": "Vector search",
+    "sections": [
+     [
+      "db",
+      "Vector databases"
+     ]
+    ],
+    "recipes": [
+     "examples/search_vectors/knn_bruteforce.rs",
+     "examples/search_vectors/ivf_flat.rs",
+     "examples/search_vectors/hnsw_lite.rs",
+     "examples/search_vectors/vamana_diskann_lite.rs",
+     "examples/search_vectors/spann_disk_ivf_lite.rs",
+     "examples/search_vectors/product_quantization.rs",
+     "examples/search_vectors/scalar_binary_quantization_rescoring.rs",
+     "examples/search_vectors/vector_distance_kernels_simd.rs",
+     "examples/search_vectors/dimensionality_reduction_jl_pca.rs"
+    ]
+   },
+   {
+    "title": "Running a vector database",
+    "sections": [
+     [
+      "db",
+      "The vector store"
+     ]
+    ],
+    "recipes": [
+     "examples/search_vectors/filtered_ann_hybrid_search.rs",
+     "examples/search_vectors/vector_index_updates_persistence.rs",
+     "examples/search_vectors/ann_evaluation_harness.rs",
+     "examples/search_vectors/mini_vector_database.rs"
+    ]
+   }
+  ]
+ },
+ {
+  "subject": "distributed",
+  "module": "Distributed systems",
+  "order": 10,
+  "chapters": [
+   {
+    "title": "Time, partitioning and replication",
+    "sections": [
+     [
+      "db",
+      "Distributed databases I"
+     ],
+     [
+      "db",
+      "Sharding"
+     ]
+    ],
+    "recipes": [
+     "examples/distributed/consistent_hashing.rs",
+     "examples/distributed/hash_partitioning.rs",
+     "examples/distributed/vector_clocks_hlc.rs",
+     "examples/distributed/clock_sync_and_trace_context.rs",
+     "examples/distributed/quorum_replication_dynamo.rs",
+     "examples/distributed/swim_gossip.rs",
+     "examples/distributed/chandy_lamport_snapshot.rs"
+    ]
+   },
+   {
+    "title": "Consensus and distributed transactions",
+    "sections": [
+     [
+      "db",
+      "Distributed databases II"
+     ],
+     [
+      "db",
+      "Raft"
+     ],
+     [
+      "db",
+      "Distributed transactions"
+     ]
+    ],
+    "recipes": [
+     "examples/distributed/raft_consensus.rs",
+     "examples/distributed/paxos_basic_and_multi.rs",
+     "examples/distributed/two_phase_commit.rs",
+     "examples/distributed/saga_orchestrator.rs",
+     "examples/distributed/spanner_truetime_commit_wait.rs"
+    ]
+   },
+   {
+    "title": "Collaboration and CRDTs",
+    "sections": [
+     [
+      "db",
+      "CRDTs"
+     ]
+    ],
+    "recipes": [
+     "examples/distributed/crdts.rs",
+     "examples/distributed/crdt_todo_app_no_db.rs",
+     "examples/distributed/crdt_fugue_text_editor.rs",
+     "examples/distributed/crdt_block_editor_notion_like.rs",
+     "examples/distributed/operational_transform.rs"
+    ]
+   },
+   {
+    "title": "Streams, messaging and reliability",
+    "sections": [],
+    "recipes": [
+     "examples/distributed/kafka_log_model.rs",
+     "examples/distributed/record_batch_codec.rs",
+     "examples/distributed/stream_processing_windows.rs",
+     "examples/distributed/retry_backoff_jitter.rs",
+     "examples/distributed/token_bucket.rs"
+    ]
+   },
+   {
+    "title": "Microservice patterns",
+    "sections": [],
+    "recipes": [
+     "examples/microservices/api_gateway_service_discovery.rs",
+     "examples/microservices/idempotency_dedup_leader_fencing_store.rs",
+     "examples/microservices/strangler_fig_shadow_traffic.rs",
+     "examples/microservices/transactional_outbox_inbox_sqlite.rs"
+    ]
+   }
+  ]
+ },
+ {
+  "subject": "distributed",
+  "module": "Web, networking and security",
+  "order": 11,
+  "chapters": [
+   {
+    "title": "Web services",
+    "sections": [],
+    "recipes": [
+     "examples/web/axum_errors.rs",
+     "examples/web/axum_idempotency.rs",
+     "examples/web/axum_middleware.rs",
+     "examples/web/axum_router_state.rs",
+     "examples/web/axum_sse_replay.rs",
+     "examples/web/rest_api_patterns.rs",
+     "examples/web/backend_request_validation_extractors.rs",
+     "examples/web/jsonrpc_graphql_dataloader.rs",
+     "examples/web/multipart_forms_uploads.rs",
+     "examples/web/webhooks_signatures.rs",
+     "examples/web/http_caching_conditional.rs",
+     "examples/web/http_client_resilience.rs",
+     "examples/web/http_client_server_loopback.rs",
+     "examples/web/reverse_proxy_load_balancer.rs"
+    ]
+   },
+   {
+    "title": "Authentication and web security",
+    "sections": [],
+    "recipes": [
+     "examples/web/auth_basic_bearer_jwt.rs",
+     "examples/web/oauth2_pkce_flow.rs",
+     "examples/web/cookies_sessions_csrf.rs",
+     "examples/web/cors_security_headers.rs",
+     "examples/web/backend_authz_rbac_abac_policies.rs",
+     "examples/web/backend_password_accounts_totp_mfa.rs",
+     "examples/web/security_pitfalls_secure_coding.rs"
+    ]
+   },
+   {
+    "title": "Networking and protocols",
+    "sections": [],
+    "recipes": [
+     "examples/networking/dns_message_codec.rs",
+     "examples/networking/http1_parser.rs",
+     "examples/networking/kqueue_epoll_raw.rs",
+     "examples/networking/mio_event_loop.rs",
+     "examples/networking/packet_parsing_checksums.rs",
+     "examples/networking/protobuf_grpc_wire_format.rs",
+     "examples/networking/resp_protocol.rs",
+     "examples/networking/tcp_congestion_control_sim.rs",
+     "examples/networking/tcp_framed_server.rs",
+     "examples/networking/tls_handshake_x509_der.rs",
+     "examples/networking/udp_sockets_reliable.rs",
+     "examples/networking/websocket_frames.rs"
+    ]
+   },
+   {
+    "title": "Cryptography",
+    "sections": [],
+    "recipes": [
+     "examples/cryptography/aes_modes.rs",
+     "examples/cryptography/chacha20_poly1305.rs",
+     "examples/cryptography/constant_time_side_channels.rs",
+     "examples/cryptography/hash_based_signatures.rs",
+     "examples/cryptography/hmac_hkdf_pbkdf2.rs",
+     "examples/cryptography/merkle_tree.rs",
+     "examples/cryptography/modular_arithmetic_dh_rsa.rs",
+     "examples/cryptography/secure_random_and_passwords.rs"
+    ]
+   },
+   {
+    "title": "Encodings and compression",
+    "sections": [],
+    "recipes": [
+     "examples/encoding_compression/compression_lz77_huffman.rs",
+     "examples/encoding_compression/encodings_codecs.rs",
+     "examples/encoding_compression/timeseries_gorilla.rs",
+     "examples/text_and_parsing/binary_format_parsing.rs",
+     "examples/text_and_parsing/ndjson_serde.rs"
+    ]
+   },
+   {
+    "title": "Multi-file projects",
+    "sections": [],
+    "recipes": [],
+    "crates": [
+     "cb-backend-reference"
+    ]
+   }
+  ]
+ },
+ {
+  "subject": "compilers",
+  "module": "Compilers and languages",
+  "order": 12,
+  "chapters": [
+   {
+    "title": "Lexing and parsing",
+    "sections": [
+     [
+      "co",
+      "The pipeline and where tests attach"
+     ],
+     [
+      "co",
+      "Parsing in depth"
+     ],
+     [
+      "co",
+      "Fully recoverable parsers"
+     ],
+     [
+      "co",
+      "Recoverable parsing and advanced compiler theory"
+     ],
+     [
+      "co",
+      "Rust techniques"
+     ],
+     [
+      "co",
+      "How rustc, swc and oxc handle the same problems"
+     ]
+    ],
+    "recipes": [
+     "examples/text_and_parsing/zero_copy_lexer.rs",
+     "examples/text_and_parsing/pratt_parser.rs",
+     "examples/text_and_parsing/expression_parsing_three_ways.rs",
+     "examples/text_and_parsing/parser_combinators.rs",
+     "examples/compilers_runtimes/parser_generators_lr_peg_earley.rs",
+     "examples/text_and_parsing/edge_dsl_parser.rs",
+     "examples/text_and_parsing/json_parser.rs",
+     "examples/text_and_parsing/csv_state_machine.rs",
+     "examples/text_and_parsing/markdown_block_parser.rs"
+    ]
+   },
+   {
+    "title": "A tree-walking interpreter",
+    "sections": [
+     [
+      "co",
+      "The slice loop"
+     ],
+     [
+      "co",
+      "Fix these first in rlox"
+     ],
+     [
+      "co",
+      "Project layout"
+     ],
+     [
+      "co",
+      "Test harness"
+     ],
+     [
+      "co",
+      "Arithmetic"
+     ],
+     [
+      "co",
+      "Values and comparison"
+     ],
+     [
+      "co",
+      "Statements and globals"
+     ],
+     [
+      "co",
+      "Blocks and scope"
+     ],
+     [
+      "co",
+      "Control flow"
+     ],
+     [
+      "co",
+      "Functions and closures"
+     ],
+     [
+      "co",
+      "Resolver"
+     ],
+     [
+      "co",
+      "Classes and inheritance"
+     ]
+    ],
+    "recipes": []
+   },
+   {
+    "title": "Bytecode and virtual machines",
+    "sections": [
+     [
+      "co",
+      "From jlox to clox"
+     ],
+     [
+      "co",
+      "Workspace and shared tests"
+     ],
+     [
+      "co",
+      "Chunks and the disassembler"
+     ],
+     [
+      "co",
+      "VM and the Pratt compiler"
+     ],
+     [
+      "co",
+      "Types, strings and interning"
+     ],
+     [
+      "co",
+      "Globals, locals and statements"
+     ],
+     [
+      "co",
+      "Jumps and control flow"
+     ],
+     [
+      "co",
+      "Calls and functions"
+     ],
+     [
+      "co",
+      "Closures and upvalues"
+     ],
+     [
+      "co",
+      "Classes, methods and super"
+     ],
+     [
+      "co",
+      "Optimization"
+     ],
+     [
+      "co",
+      "VM techniques in Rust"
+     ],
+     [
+      "co",
+      "clox tooling"
+     ],
+     [
+      "co",
+      "WebAssembly as a compilation target"
+     ],
+     [
+      "co",
+      "JIT compilation"
+     ],
+     [
+      "co",
+      "Runtime systems and GC implementation"
+     ]
+    ],
+    "recipes": [
+     "examples/text_and_parsing/bytecode_vm.rs",
+     "examples/compilers_runtimes/wasm_binary_interpreter.rs"
+    ]
+   },
+   {
+    "title": "Types and semantics",
+    "sections": [
+     [
+      "co",
+      "Semantics and the lambda calculus"
+     ],
+     [
+      "co",
+      "Hindley–Milner type inference"
+     ],
+     [
+      "co",
+      "Bidirectional typing and dependent types"
+     ],
+     [
+      "co",
+      "Pattern matching: compilation and exhaustiveness"
+     ],
+     [
+      "co",
+      "Name resolution, hygiene and modules"
+     ],
+     [
+      "co",
+      "Implementing Rust's hardest features"
+     ],
+     [
+      "co",
+      "Formal verification and mechanized semantics"
+     ],
+     [
+      "co",
+      "Compiling functional languages"
+     ],
+     [
+      "co",
+      "Metaprogramming, macros and staging"
+     ],
+     [
+      "co",
+      "Designing a language"
+     ]
+    ],
+    "recipes": [
+     "examples/compilers_runtimes/lambda_calculus_toolkit.rs",
+     "examples/compilers_runtimes/hindley_milner_inference.rs",
+     "examples/compilers_runtimes/system_f_bidirectional_typing.rs",
+     "examples/compilers_runtimes/dependent_types_nbe.rs",
+     "examples/compilers_runtimes/pattern_match_compilation_decision_trees.rs",
+     "examples/compilers_runtimes/algebraic_effects_handlers.rs",
+     "examples/compilers_runtimes/term_rewriting_unification_logic_programming.rs"
+    ]
+   },
+   {
+    "title": "Middle end and analysis",
+    "sections": [
+     [
+      "co",
+      "Designing an IR in Rust"
+     ],
+     [
+      "co",
+      "Dataflow analysis and abstract interpretation"
+     ],
+     [
+      "co",
+      "Dominators, loops and control flow structure"
+     ],
+     [
+      "co",
+      "SSA construction and destruction"
+     ],
+     [
+      "co",
+      "Scalar optimizations"
+     ],
+     [
+      "co",
+      "E-graphs and equality saturation"
+     ],
+     [
+      "co",
+      "Loop optimization and vectorization"
+     ]
+    ],
+    "recipes": [
+     "examples/compilers_runtimes/dataflow_analysis_framework.rs",
+     "examples/compilers_runtimes/abstract_interpretation_intervals.rs",
+     "examples/compilers_runtimes/alias_analysis_points_to.rs",
+     "examples/compilers_runtimes/egraph_equality_saturation.rs",
+     "examples/compilers_runtimes/loop_optimizations.rs",
+     "examples/compilers_runtimes/symbolic_execution_smt_lite.rs",
+     "examples/compilers_runtimes/cps_closure_conversion_lambda_lifting.rs"
+    ]
+   },
+   {
+    "title": "Back ends",
+    "sections": [
+     [
+      "co",
+      "Backends: HIR, MIR, LLVM and Cranelift"
+     ],
+     [
+      "co",
+      "Instruction selection, scheduling and emission"
+     ],
+     [
+      "co",
+      "Register allocation"
+     ],
+     [
+      "co",
+      "ABIs, object files, linking and unwinding"
+     ],
+     [
+      "co",
+      "GPU and accelerator compilation"
+     ],
+     [
+      "co",
+      "Security hardening and sanitizers"
+     ]
+    ],
+    "recipes": [
+     "examples/compilers_runtimes/ssa_register_allocation.rs"
+    ]
+   },
+   {
+    "title": "Language tooling and production",
+    "sections": [
+     [
+      "co",
+      "Rust-quality error messages"
+     ],
+     [
+      "co",
+      "Tooling around a new language"
+     ],
+     [
+      "co",
+      "Tooling in code"
+     ],
+     [
+      "co",
+      "Production compiler architecture"
+     ],
+     [
+      "co",
+      "Reading rustc and contributing to it"
+     ]
+    ],
+    "recipes": []
+   },
+   {
+    "title": "Multi-file projects",
+    "sections": [],
+    "recipes": [],
+    "crates": [
+     "cb-compiler",
+     "cb-compiler-tools"
+    ]
+   }
+  ]
+ },
+ {
+  "subject": "projects",
+  "module": "Complete projects",
+  "order": 13,
+  "chapters": [
+   {
+    "title": "Capstones",
+    "sections": [],
+    "recipes": [
+     "examples/capstones/event_sourced_ledger.rs",
+     "examples/capstones/job_service_axum.rs",
+     "examples/capstones/lease_fencing_sim.rs",
+     "examples/capstones/mini_async_runtime.rs",
+     "examples/capstones/mini_http_server_thread_pool.rs",
+     "examples/capstones/mini_kv_store.rs",
+     "examples/capstones/mini_redis.rs",
+     "examples/capstones/query_optimizer.rs",
+     "examples/capstones/rate_limiter_lab.rs",
+     "examples/capstones/ray_tracer.rs",
+     "examples/capstones/regex_nfa_engine.rs",
+     "examples/capstones/search_engine.rs",
+     "examples/capstones/tiny_sql_engine.rs",
+     "examples/capstones/toy_filesystem.rs",
+     "examples/capstones/toy_language_interpreter.rs",
+     "examples/capstones/typeahead_service.rs"
+    ]
+   },
+   {
+    "title": "Graphics",
+    "sections": [],
+    "recipes": [
+     "examples/graphics/fractals_noise_automata.rs",
+     "examples/graphics/image_processing.rs",
+     "examples/graphics/lines_curves_fills.rs",
+     "examples/graphics/png_ppm_writer.rs",
+     "examples/graphics/software_rasterizer.rs",
+     "examples/graphics/vec3_matrix_quaternion.rs"
+    ]
+   }
+  ]
+ },
+ {
+  "subject": "rust",
+  "module": "Worked questions",
+  "order": 14,
+  "chapters": [
+   {
+    "title": "Rust concept answers",
+    "sections": [],
+    "recipes": [
+     "examples/interview/rust_async_qa.rs",
+     "examples/interview/rust_errors_iterators_closures_qa.rs",
+     "examples/interview/rust_ownership_borrowing_qa.rs",
+     "examples/interview/rust_smart_pointers_send_sync_qa.rs",
+     "examples/interview/rust_traits_generics_dispatch_qa.rs",
+     "examples/interview/rust_unsafe_memory_layout_qa.rs"
+    ]
+   },
+   {
+    "title": "Coding and design questions",
+    "sections": [],
+    "recipes": [
+     "examples/interview/arrays_strings_hashmap_questions.rs",
+     "examples/interview/concurrency_interview_questions.rs",
+     "examples/interview/graphs_and_union_find_questions.rs",
+     "examples/interview/intervals_greedy_bit_questions.rs",
+     "examples/interview/stacks_queues_heaps_questions.rs",
+     "examples/interview/tries_advanced_questions.rs",
+     "examples/interview/tries_core_questions.rs",
+     "examples/interview/linked_lists_in_rust.rs",
+     "examples/interview/binary_trees_in_rust.rs",
+     "examples/interview/implement_std_from_scratch.rs",
+     "examples/interview/systems_design_in_code.rs"
+    ]
+   }
+  ]
+ },
+ {
+  "subject": "data",
+  "module": "Appendices",
+  "order": 15,
+  "chapters": [
+   {
+    "title": "Courses, reading and glossary",
+    "sections": [
+     [
+      "db",
+      "How to use this guide"
+     ],
+     [
+      "db",
+      "Courses and books"
+     ],
+     [
+      "db",
+      "Tech talks"
+     ],
+     [
+      "db",
+      "Reading database research"
+     ],
+     [
+      "db",
+      "Contributing to a database"
+     ],
+     [
+      "db",
+      "The job landscape"
+     ],
+     [
+      "db",
+      "Interviews and a portfolio"
+     ],
+     [
+      "db",
+      "Reading map"
+     ],
+     [
+      "db",
+      "Glossary"
+     ]
+    ],
+    "recipes": []
+   }
+  ]
+ },
+ {
+  "subject": "compilers",
+  "module": "Appendices",
+  "order": 15,
+  "chapters": [
+   {
+    "title": "Courses, reading and glossary",
+    "sections": [
+     [
+      "co",
+      "University courses"
+     ],
+     [
+      "co",
+      "Reading for Parts I and II"
+     ],
+     [
+      "co",
+      "What to build next"
+     ],
+     [
+      "co",
+      "Reading map, from front end to back end"
+     ],
+     [
+      "co",
+      "How to use Part IV"
+     ],
+     [
+      "co",
+      "Doing PL research"
+     ],
+     [
+      "co",
+      "Glossary"
+     ]
+    ],
+    "recipes": []
+   }
+  ]
+ }
+]

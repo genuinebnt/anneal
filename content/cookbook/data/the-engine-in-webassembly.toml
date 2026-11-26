@@ -1,0 +1,436 @@
+title = "The engine in WebAssembly"
+module = "Databases"
+module_order = 8
+chapter = "Building complete engines"
+chapter_order = 9
+order = 456
+kind = "guide"
+lede = "A module that exports seven functions · bytes in, bytes out · no threads, no files, no clock · inline I/O mode · the same answers as the native build · memory that does not leak · 23 mutants"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>A WebAssembly module is a program with one linear memory and no operating system.</strong> It exports functions that take and return integers (and floats); it imports whatever the host chooses to give it. Anything else (a string, a result set, an error) has to be written into the module's memory as bytes and handed over as an address and a length. The design question for an embedded database is therefore the <em>boundary</em>: what the host writes, what it reads, and who frees what.</li> <li><strong>The boundary here is small.</strong> Seven functions: <code>alloc</code>/<code>dealloc</code> (the host asks the module for a buffer and returns it), <code>db_open</code>/<code>db_close</code>/<code>db_count</code> (handles are small integers), <code>db_execute(handle, ptr, len)</code> (SQL text in, an address out) and <code>reply_free</code>. The reply is one byte buffer: a success tag, the result tables (column names, then values with a one-byte type tag) or an error message. Nothing else crosses.</li> <li><strong>The target decides what must change in the engine.</strong> On <code>wasm32-unknown-unknown</code> the standard library compiles, but there is no thread creation, no file system and no clock (the first is shown below; the file system by the missing <code>FileExt</code>; the clock by the platform's documentation). Two things in the engine of Part I had to change: the file-backed disk manager uses Unix <code>pread</code>, so it is compiled only for Unix; and the buffer pool's disk scheduler spawned worker threads, so it gained a mode with zero workers that performs each request on the calling thread. With the threaded scheduler the module compiles, and the first call traps (see the measured section).</li> <li><strong>Errors are values, panics are traps.</strong> A SQL error is a reply the host can display; the engine keeps running. A Rust panic in a module built with <code>panic = "abort"</code> is a WebAssembly trap: the instance is unusable and the host must discard it and create a new one. The facade therefore turns everything it can foresee into replies (bad handle, text that is not UTF-8, a statement that fails) so that a trap means a bug.</li> <li><strong>Memory is the host's problem too.</strong> WebAssembly memory grows in 64 KiB pages and never shrinks, and growing it detaches every <code>ArrayBuffer</code> the host holds on the old memory. A host must re-read <code>memory.buffer</code> after any call that can allocate, and a module that leaks one reply per call will run until the memory limit.</li> <li><strong>What the sandbox buys is portability and isolation.</strong> The same compiled module runs in a browser, in Node, in an edge worker, or inside another database as a sandboxed extension, with the same answers. This section tests exactly that: 1 512 statements give the same bytes natively and in the module.</li> </ul>
+"""
+
+[[sections]]
+heading = "The boundary"
+body = """
+```text
+ host (JavaScript, Python, Rust …)                       module (linear memory)
+ ─────────────────────────────────                       ──────────────────────
+ p = alloc(n)                              ───────────►  Vec with capacity n, forgotten (ownership passes to the host)
+ write SQL bytes at p                       ──────────►
+ r = db_execute(h, p, n)                    ──────────►  run on the engine; reply = [u32 length][reply bytes]
+ dealloc(p, n)                              ──────────►
+ read length at r, copy reply bytes out     ◄─────────
+ reply_free(r)                              ──────────►  rebuild the Box from the length prefix and drop it
+```
+
+```text
+reply  = 0 · u32 tables · table*            success
+       | 1 · u32 len · message              error
+table  = u32 columns · (u32 len · name)* · u32 rows · value*     (rows × columns values, row by row)
+value  = 0 NULL | 1 false | 2 true | 3 · i64 | 4 · f64 bits | 5 · u32 len · UTF-8 text
+```
+
+<p>All integers are little-endian, which is what WebAssembly uses natively and what every host of interest reads without conversion. A decoder must treat the buffer as hostile: every read is bounds-checked, an unknown tag is an error, trailing bytes are an error, and a table with no columns may not claim rows (a decoder that trusted the count would loop for four billion rows over an empty body).</p>
+
+:::deeper Reference: the facade (reply codec, a database over an in-memory buffer pool, handles)
+```rust title="src/product/facade.rs"
+//! A facade for embedding the SQL engine in a host that can only exchange integers and bytes with it (a WebAssembly instance, a C caller).
+//! Everything crosses the boundary as a byte buffer: the host writes SQL text into the engine's memory, calls `execute` with a database
+//! handle, and gets back one buffer holding every result table, or an error message. The engine runs on the calling thread, with the
+//! buffer pool in memory and its I/O performed inline, so the same code runs where there are no threads, no files and no clock.
+use crate::arc::ArcReplacer;
+use crate::bpm::BufferPoolManager;
+use crate::disk::{DiskManager, MemDiskManager};
+use crate::engine::{Engine, QueryResult};
+use crate::value::Value;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+/// Frames in a database's buffer pool (4 KiB each).
+pub const FRAMES: usize = 256;
+
+/// One database: an engine over its own in-memory buffer pool. The engine borrows the pool, so the pool is boxed (its address is stable) and
+/// the engine is dropped before it.
+pub struct Database {
+    engine: Option<Engine<'static>>,
+    bpm: Box<BufferPoolManager<ArcReplacer>>,
+}
+
+impl Database {
+    pub fn open() -> Database {
+        let disk: Arc<dyn DiskManager> = Arc::new(MemDiskManager::default());
+        let bpm = Box::new(BufferPoolManager::new(FRAMES, disk, ArcReplacer::new(FRAMES), 0));
+        // SAFETY: the pool lives in a Box that `Database` owns and never moves out of, and `engine` is dropped first (see `Drop`), so the
+        // reference never outlives the pool it points to.
+        let pool: &'static BufferPoolManager<ArcReplacer> = unsafe { &*(&*bpm as *const BufferPoolManager<ArcReplacer>) };
+        Database { engine: Some(Engine::new(pool)), bpm }
+    }
+
+    /// Run the statements in `sql` and return the encoded reply (see `encode_reply`).
+    pub fn execute(&mut self, sql: &[u8]) -> Vec<u8> {
+        let reply = match std::str::from_utf8(sql) {
+            Err(_) => Err("the SQL text is not valid UTF-8".to_string()),
+            Ok(text) => self.engine.as_mut().unwrap().execute(text).map_err(|e| e.0),
+        };
+        encode_reply(&reply)
+    }
+
+    pub fn pool_size(&self) -> usize {
+        self.bpm.size()
+    }
+}
+
+impl Drop for Database {
+    fn drop(&mut self) {
+        self.engine = None;
+    }
+}
+
+/// Database handles for a host that cannot hold a Rust value: small integers that are never reused for a different database while the
+/// first is open, and are refused after `close`.
+#[derive(Default)]
+pub struct Registry {
+    next: u32,
+    open: HashMap<u32, Database>,
+}
+
+impl Registry {
+    pub fn open(&mut self) -> u32 {
+        self.next += 1;
+        self.open.insert(self.next, Database::open());
+        self.next
+    }
+    pub fn close(&mut self, h: u32) -> bool {
+        self.open.remove(&h).is_some()
+    }
+    pub fn execute(&mut self, h: u32, sql: &[u8]) -> Vec<u8> {
+        match self.open.get_mut(&h) {
+            Some(db) => db.execute(sql),
+            None => encode_reply(&Err(format!("no such database handle: {h}"))),
+        }
+    }
+    pub fn count(&self) -> usize {
+        self.open.len()
+    }
+}
+
+// ---- the reply format -------------------------------------------------------------------------------------------------------------------
+//
+//   reply  = 0 · u32 tables · table*           success
+//          | 1 · u32 len · message             error
+//   table  = u32 columns · (u32 len · name)* · u32 rows · value*   (rows × columns values, row by row)
+//   value  = 0 NULL | 1 false | 2 true | 3 · i64 | 4 · f64 bits | 5 · u32 len · UTF-8
+//
+// All integers are little-endian, which is what WebAssembly and every host of interest use natively.
+
+pub type Reply = Result<Vec<QueryResult>, String>;
+
+fn put_u32(out: &mut Vec<u8>, n: usize) {
+    out.extend((n as u32).to_le_bytes());
+}
+fn put_str(out: &mut Vec<u8>, s: &str) {
+    put_u32(out, s.len());
+    out.extend(s.as_bytes());
+}
+
+pub fn encode_reply(r: &Reply) -> Vec<u8> {
+    let mut out = Vec::new();
+    match r {
+        Err(m) => {
+            out.push(1);
+            put_str(&mut out, m);
+        }
+        Ok(tables) => {
+            out.push(0);
+            put_u32(&mut out, tables.len());
+            for t in tables {
+                put_u32(&mut out, t.columns.len());
+                for c in &t.columns {
+                    put_str(&mut out, c);
+                }
+                put_u32(&mut out, t.rows.len());
+                for row in &t.rows {
+                    for v in row {
+                        match v {
+                            Value::Null => out.push(0),
+                            Value::Bool(false) => out.push(1),
+                            Value::Bool(true) => out.push(2),
+                            Value::Int(i) => {
+                                out.push(3);
+                                out.extend(i.to_le_bytes());
+                            }
+                            Value::Float(f) => {
+                                out.push(4);
+                                out.extend(f.to_bits().to_le_bytes());
+                            }
+                            Value::Text(s) => {
+                                out.push(5);
+                                put_str(&mut out, s);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+#[derive(Debug, PartialEq)]
+pub enum DecodeError {
+    Truncated,
+    BadTag(u8),
+    BadUtf8,
+    Trailing,
+    RowShape,
+}
+
+struct In<'a>(&'a [u8]);
+impl<'a> In<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8], DecodeError> {
+        if self.0.len() < n {
+            return Err(DecodeError::Truncated);
+        }
+        let (a, b) = self.0.split_at(n);
+        self.0 = b;
+        Ok(a)
+    }
+    fn u8(&mut self) -> Result<u8, DecodeError> {
+        Ok(self.take(1)?[0])
+    }
+    fn u32(&mut self) -> Result<usize, DecodeError> {
+        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()) as usize)
+    }
+    fn str(&mut self) -> Result<String, DecodeError> {
+        let n = self.u32()?;
+        String::from_utf8(self.take(n)?.to_vec()).map_err(|_| DecodeError::BadUtf8)
+    }
+}
+
+pub fn decode_reply(buf: &[u8]) -> Result<Reply, DecodeError> {
+    let mut r = In(buf);
+    let reply = match r.u8()? {
+        1 => Err(r.str()?),
+        0 => {
+            let tables = r.u32()?;
+            let mut out = Vec::new();
+            for _ in 0..tables {
+                let ncols = r.u32()?;
+                let mut columns = Vec::new();
+                for _ in 0..ncols {
+                    columns.push(r.str()?);
+                }
+                let nrows = r.u32()?;
+                if ncols == 0 && nrows > 0 {
+                    return Err(DecodeError::RowShape);
+                }
+                let mut rows = Vec::new();
+                for _ in 0..nrows {
+                    let mut row = Vec::with_capacity(ncols);
+                    for _ in 0..ncols {
+                        row.push(match r.u8()? {
+                            0 => Value::Null,
+                            1 => Value::Bool(false),
+                            2 => Value::Bool(true),
+                            3 => Value::Int(i64::from_le_bytes(r.take(8)?.try_into().unwrap())),
+                            4 => Value::Float(f64::from_bits(u64::from_le_bytes(r.take(8)?.try_into().unwrap()))),
+                            5 => Value::Text(r.str()?.into()),
+                            t => return Err(DecodeError::BadTag(t)),
+                        });
+                    }
+                    rows.push(row);
+                }
+                out.push(QueryResult { columns, rows });
+            }
+            Ok(out)
+        }
+        t => return Err(DecodeError::BadTag(t)),
+    };
+    if !r.0.is_empty() {
+        return Err(DecodeError::Trailing);
+    }
+    Ok(reply)
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "The module and its host"
+body = """
+<p>The module is a separate crate (<code>crate-type = ["cdylib"]</code>, <code>panic = "abort"</code>, <code>opt-level = "s"</code>, link-time optimization) that depends on the engine crate and exports the seven functions above. It contains no logic of its own.</p>
+
+```rust title="the module: seven exported functions over the facade (wasm/src/lib.rs)"
+//! The WebAssembly module: a handful of exported functions over `verify::facade`. The host allocates buffers inside the module's memory
+//! with `alloc`, writes SQL into them, calls `db_execute`, reads the reply (a 4-byte little-endian length followed by that many bytes) and
+//! returns it with `reply_free`. Nothing but integers crosses the boundary.
+use std::cell::RefCell;
+use verify::facade::Registry;
+
+thread_local! {
+    static REGISTRY: RefCell<Registry> = RefCell::new(Registry::default());
+}
+
+/// Allocate `len` bytes in the module's memory and return their address.
+#[unsafe(no_mangle)]
+pub extern "C" fn alloc(len: usize) -> *mut u8 {
+    let mut v = Vec::<u8>::with_capacity(len.max(1));
+    let p = v.as_mut_ptr();
+    std::mem::forget(v);
+    p
+}
+
+/// Free a buffer obtained from `alloc` with the same `len`.
+///
+/// # Safety
+/// `ptr` and `len` must be exactly what `alloc` was called with, and the buffer must not be used afterwards.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dealloc(ptr: *mut u8, len: usize) {
+    drop(unsafe { Vec::from_raw_parts(ptr, 0, len.max(1)) });
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn db_open() -> u32 {
+    REGISTRY.with(|r| r.borrow_mut().open())
+}
+
+/// Close a database; returns 1 if the handle was open.
+#[unsafe(no_mangle)]
+pub extern "C" fn db_close(handle: u32) -> u32 {
+    REGISTRY.with(|r| r.borrow_mut().close(handle)) as u32
+}
+
+/// Run the SQL text at `ptr..ptr+len`. Returns the address of a reply buffer: 4 bytes of length, then the reply. Free it with `reply_free`.
+///
+/// # Safety
+/// `ptr..ptr+len` must be readable memory (typically a buffer from `alloc`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn db_execute(handle: u32, ptr: *const u8, len: usize) -> *mut u8 {
+    let sql = unsafe { std::slice::from_raw_parts(ptr, len) };
+    let reply = REGISTRY.with(|r| r.borrow_mut().execute(handle, sql));
+    let mut framed = Vec::with_capacity(4 + reply.len());
+    framed.extend((reply.len() as u32).to_le_bytes());
+    framed.extend(reply);
+    let mut boxed = framed.into_boxed_slice();
+    let p = boxed.as_mut_ptr();
+    std::mem::forget(boxed);
+    p
+}
+
+/// Free a reply returned by `db_execute`.
+///
+/// # Safety
+/// `ptr` must be a value returned by `db_execute`, not yet freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn reply_free(ptr: *mut u8) {
+    let len = u32::from_le_bytes(unsafe { std::slice::from_raw_parts(ptr, 4) }.try_into().unwrap()) as usize;
+    drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, 4 + len)) });
+}
+
+/// Number of open databases (for the host's leak checks).
+#[unsafe(no_mangle)]
+pub extern "C" fn db_count() -> u32 {
+    REGISTRY.with(|r| r.borrow().count() as u32)
+}
+```
+
+<p>The host used by the tests is a Node script. It loads the module, runs a script of operations and prints one line per operation, with SQL given in hex so that bytes that are not UTF-8 can be sent too.</p>
+
+```text title="the host: instantiate, copy bytes in and out, free (wasm/host.mjs)"
+// Host for the module built from this directory: node host.mjs MODULE.wasm SCRIPT
+// The script has one operation per line, and the host prints one line per operation:
+//   open               -> h<handle>
+//   close <h>          -> c<0|1>
+//   exec <h> <hex>     -> the reply bytes in hex (the SQL is given in hex so any bytes, valid UTF-8 or not, can be sent)
+//   bench <h> <n> <hex>-> t<milliseconds> for n executions of the statement, boundary copies included
+//   count              -> n<open databases>
+//   mem                -> m<bytes of linear memory>
+//   mark               -> k<milliseconds on the host's clock>
+import fs from 'node:fs';
+
+const [, , wasmPath, scriptPath] = process.argv;
+const t0 = performance.now();
+const { instance } = await WebAssembly.instantiate(fs.readFileSync(wasmPath), {});
+console.log(`i${(performance.now() - t0).toFixed(2)}`);
+const x = instance.exports;
+
+function execute(handle, bytes) {
+  const p = x.alloc(bytes.length);
+  new Uint8Array(x.memory.buffer, p, bytes.length).set(bytes); // the buffer is re-read after alloc: memory.grow replaces it
+  const r = x.db_execute(handle, p, bytes.length);
+  x.dealloc(p, bytes.length);
+  const len = new DataView(x.memory.buffer).getUint32(r, true);
+  const out = Buffer.from(new Uint8Array(x.memory.buffer, r + 4, len)); // copy out before freeing
+  x.reply_free(r);
+  return out;
+}
+
+const hex = (s) => Buffer.from(s, 'hex');
+for (const line of fs.readFileSync(scriptPath, 'utf8').split('\\n')) {
+  const w = line.split(' ');
+  switch (w[0]) {
+    case 'open': console.log(`h${x.db_open()}`); break;
+    case 'close': console.log(`c${x.db_close(Number(w[1]))}`); break;
+    case 'exec': console.log(execute(Number(w[1]), hex(w[2] ?? '')).toString('hex')); break;
+    case 'bench': {
+      const bytes = hex(w[3] ?? '');
+      const t = performance.now();
+      for (let i = 0; i < Number(w[2]); i++) execute(Number(w[1]), bytes);
+      console.log(`t${(performance.now() - t).toFixed(2)}`);
+      break;
+    }
+    case 'count': console.log(`n${x.db_count()}`); break;
+    case 'mark': console.log(`k${performance.now().toFixed(2)}`); break;
+    case 'mem': console.log(`m${x.memory.buffer.byteLength}`); break;
+    case '': break;
+    default: throw new Error(`bad operation: ${line}`);
+  }
+}
+```
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>The module is built with <code>cargo build --release --target wasm32-unknown-unknown</code> and run by Node 26.8.1 (V8). The native numbers are the same facade called from Rust in the same process, timing the same operations.</p>
+
+```text title="size, start-up, and native versus WebAssembly on the same statements"
+module: 541 KiB, instantiated in 0.9 ms
+workload                                            native        wasm   ratio
+load 51 000 rows (51 statements)                   25.1 ms     37.5 ms   1.49x
+filter and aggregate over 50 000 rows               7.2 ms      9.0 ms   1.26x
+group by (1 000 groups)                             7.9 ms      9.8 ms   1.25x
+hash join (50 000 x 1 000)                         13.2 ms     14.7 ms   1.12x
+a 5 000-row result                                  5.6 ms      7.1 ms   1.26x
+SELECT 1 (the cost of the boundary)                 0.9 us      1.4 us   1.49x
+```
+
+```text title="the same statements natively and in the module (3 databases, one closed halfway, bad handles, invalid UTF-8)"
+1512 statements: 279 with ORDER BY and 1233 without are byte-identical, 0 differ only in row order; 460 are errors, 1038 result tables
+```
+
+```text title="memory of the instance, read from WebAssembly.Memory"
+memory (bytes): after warm-up 3801088, after 8 000 more statements (250 of them with 100 KB in and out) 3801088, 201 databases open 429981696, 200 closed and 200 opened again 429981696
+```
+
+<ul> <li><strong>The whole SQL engine is 541 KiB</strong> (197 062 bytes compressed with gzip, 192 KiB) with size optimization and link-time optimization, and instantiates in 1 to 3 milliseconds (0.9 ms in the run above, 3.0 ms in an earlier one).</li> <li><strong>WebAssembly ran 1.1 to 1.5 times slower than native</strong> on the same work: 1.12× for the hash join, 1.25× for aggregation and grouping, 1.49× for loading. These are single runs (20 repetitions of each query, 20 000 of <code>SELECT 1</code>) on one machine, one engine (V8) and one compiler setting; they say the cost is small, not what it is exactly.</li> <li><strong>A call across the boundary costs about 1.4 µs</strong> (<code>SELECT 1</code>, including allocating the input, copying it in, copying the reply out and freeing both), against 0.9 µs for the same call natively, whose execution is dominated by the engine. Batching statements into one call or returning large results as one buffer keeps the boundary negligible.</li> <li><strong>The answers are the same bytes.</strong> In 1 512 statements over three databases, with SQL errors, a database closed halfway through, handles that never existed, and input that is not UTF-8, every reply from the module equals the native reply byte for byte. The test is written to accept replies that differ only in row order when the query has no <code>ORDER BY</code>; none did.</li> <li><strong>No memory grows after warm-up.</strong> 8 000 further statements, 250 of them sending and receiving 100 KB, leave the instance at exactly the same size. Each <em>open</em> database costs about 2.1 MB (200 of them take 430 MB; the buffer pool is 1 MiB, and I did not investigate where the rest goes). Closing 200 and opening 200 more does not grow the memory: closing returns the pools to the allocator, but the memory is never returned to the host.</li> </ul>
+
+<aside data-call="note"><b>What the target forbids</b><p>The first attempt to compile the engine for <code>wasm32-unknown-unknown</code> failed in the disk manager: <code>std::os::unix::fs::FileExt</code> does not exist there. Gating the file-backed manager with <code>#[cfg(unix)]</code> fixed the build, but the module still could not work. The buffer pool owns a disk scheduler that creates worker threads, and a version of the facade that asked for two workers trapped on its first call with <code>RuntimeError: unreachable</code>, the form a Rust panic takes with <code>panic = "abort"</code>. The scheduler now accepts zero workers and then serves every request on the calling thread. The scheduler's tests still pass with the threaded mode, and the inline mode is covered by the tests of this section.</p></aside>
+
+<aside data-call="note"><b>Two mutants that survived because the tests were not hungry enough</b><p>The first leak test sent 30-byte statements; a mutant that never freed the input buffer leaked 240 KB in total, which fitted in the slack of the allocator, and the memory size did not change. Statements and replies of 100 KB made the same mutant grow the instance by tens of megabytes. Second, nothing in the first test suite loaded more data than the 1 MiB buffer pool holds, so mutants that dropped a write or returned zeros for a read in the inline scheduler survived; a table of 60 000 rows (3.6 MB) read back through eviction killed both. A buffer pool test that never evicts does not test the buffer pool.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong><code>#[unsafe(no_mangle)] pub extern "C" fn</code></strong> (edition 2024 spelling) gives a function a stable exported name and the C calling convention; with <code>crate-type = ["cdylib"]</code> it becomes a WebAssembly export. Arguments and results are limited to integers, floats and pointers.</li> <li><strong><code>Vec::with_capacity</code> plus <code>mem::forget</code></strong> hands a buffer to the host without freeing it; <code>Vec::from_raw_parts(ptr, 0, cap)</code> takes it back. The capacity must be the one it was created with, so <code>alloc</code> rounds a zero length up to one and <code>dealloc</code> does the same.</li> <li><strong>A length-prefixed reply</strong> lets <code>reply_free</code> rebuild the <code>Box&lt;[u8]&gt;</code> from the address alone, <code>Box::from_raw(slice_from_raw_parts_mut(ptr, 4 + len))</code>, so the host passes one number to free it.</li> <li><strong>A self-referential struct in four lines of <code>unsafe</code></strong>: <code>Engine&lt;'a&gt;</code> borrows the buffer pool. <code>Database</code> keeps the pool in a <code>Box</code> (stable address), extends the borrow to <code>'static</code>, and implements <code>Drop</code> to drop the engine first. Field order would do the same; the explicit <code>Drop</code> states the requirement. The mutant that removes it is equivalent for that reason (see the test plan).</li> <li><strong><code>thread_local!</code> with <code>RefCell&lt;Registry&gt;</code></strong> holds the handle table without <code>static mut</code>. On this target there is one thread, so it is a global with a safe interface.</li> <li><strong><code>#[cfg(unix)]</code></strong> on the file-backed disk manager, its imports and its helper types keeps the platform layer out of the build where it cannot work; the in-memory manager is portable.</li> <li><strong><code>panic = "abort"</code></strong> removes the unwinding tables from the module and turns every panic into a trap.</li> <li><strong><code>wasm/</code> has its own <code>[workspace]</code> table</strong> so it builds with its own target directory and the engine crate's <code>cargo test</code> can start the build without a lock conflict.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Reply codec (3 000 random replies)</strong>: errors and results with up to four tables, empty and non-ASCII names, NULL, booleans, 64-bit integers, floats including <code>-0.0</code>, infinity and subnormals, text with quotes and newlines; each decodes to itself; every proper prefix is <code>Truncated</code>; one extra byte is <code>Trailing</code>; NaN survives bit for bit; an unknown reply tag, an unknown value tag, bad UTF-8 and rows for a table with no columns are each rejected.</li> <li><strong>A database in bytes</strong>: several statements in one call return one table each; four kinds of SQL error come back as replies and the database still answers; text that is not UTF-8 is refused before the parser sees it; the empty statement returns no tables.</li> <li><strong>Handles</strong>: two databases are independent; a closed handle is refused, closing twice reports failure, handle 0 never exists, a closed handle is never reissued; 100 databases opened, used and closed leave the registry as it was.</li> <li><strong>Native versus module (1 512 statements, three databases)</strong>: random queries over four tables (filters, joins, left joins, three-way joins, grouping, ordering, text and float columns), inserts, updates and deletes, constant expressions, scripts with an error in the middle, statements that are not UTF-8, handles that were never opened and a handle closed halfway. The replies are compared as bytes; the test fails unless the script has at least 100 errors, 1 000 result tables and 200 ordered and 100 unordered queries.</li> <li><strong>Data larger than the pool</strong>: 60 000 rows, 3.6 MB through a 1 MiB pool, then <code>COUNT</code>, <code>SUM</code>, <code>MIN</code>, <code>MAX</code> and six point lookups natively and in the module.</li> <li><strong>Memory</strong>: the size of the instance after warm-up equals the size after 8 000 more statements of three kinds (a 15 KB reply, a failing statement, a refused input) plus 250 statements with 100 KB in and out; 200 open databases are visible in the size, and a second 200 after closing do not enlarge it; the open-database count is checked at each step.</li> <li><strong>Mutants run against these tests</strong>: reply encoder (true tagged as false, big-endian integers, floats truncated, NULL tagged as false, error tag wrong), decoder (trailing bytes accepted, off-by-one in the length check, rows allowed with no columns, false decoded as true), facade (invalid UTF-8 treated as empty SQL, handles reused after close, close always reporting success, <code>db_count</code> counting handles ever issued, an unknown handle reporting success, the engine not dropped before its pool), module (replies never freed, inputs never freed, <code>db_close</code> always returning 0, big-endian reply length, a zero-length allocation not rounded up), inline scheduler (inline mode never taken, writes dropped, reads returning zeros). <strong>Of 23 mutants, 22 were killed and 1 is equivalent</strong>: dropping the engine explicitly is the same as field order doing it. One was killed by the memory cap (the decoder believing four billion rows) and two by a hang (a dropped write corrupts the table the engine then walks).</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>SQLite</strong> ships an official WebAssembly build with a JavaScript API; persistence uses the browser's Origin Private File System through a virtual file system layer, with synchronous access handles in a worker. The file format is the same as native, so a database file moves between hosts unchanged.</li> <li><strong>DuckDB-Wasm</strong> runs the analytical engine in the browser; it returns results as Apache Arrow buffers rather than row by row, reads Parquet over HTTP range requests, and ships builds with and without threads (threads need <code>SharedArrayBuffer</code>, which needs cross-origin isolation headers).</li> <li><strong>PGlite</strong> is PostgreSQL itself compiled to WebAssembly in single-user mode, persisting to IndexedDB or the file system; it shows how much of an existing engine's global state and process model has to be reworked.</li> <li><strong>sql.js</strong> is the original SQLite-to-JavaScript port and the template for many tools that load a database file and query it in a page.</li> <li><strong>Wasm as an extension sandbox</strong>: user-defined functions and transforms compiled to WebAssembly run in the database process with memory isolation and limits on time and memory (Redpanda data transforms, ScyllaDB user-defined functions, several streaming and edge databases).</li> <li><strong>Interfaces beyond integers</strong>: <code>wasm-bindgen</code> generates JavaScript glue for strings and objects; the <strong>Component Model</strong> and WIT describe typed interfaces (strings, records, lists) between modules, replacing hand-written length-and-pointer conventions like this section's with a standard one.</li> <li><strong>WASI</strong> gives a module a file system, clock and sockets through a host interface, which would let the file-backed manager run outside the browser.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Re-read <code>memory.buffer</code> after every call that can allocate.</strong> Growing memory detaches the old <code>ArrayBuffer</code>; a view created before the call reads nothing. The host in this section creates the view after <code>alloc</code> returns and again after <code>db_execute</code>.</li> <li><strong>Copy the reply out before freeing it.</strong> A view on the module's memory is invalid once the buffer is returned to the allocator, and may point at a later reply.</li> <li><strong>A trap ends the instance.</strong> There is no unwinding with <code>panic = "abort"</code>, and an instance after a trap has inconsistent internal state. Catch <code>WebAssembly.RuntimeError</code> in the host, discard the instance and rebuild from the application's own persistent state.</li> <li><strong>Memory never shrinks.</strong> A burst of large results keeps the instance at its high-water mark; limit result sizes or stream, and recycle the instance if the host needs the memory back.</li> <li><strong>Threads are not free.</strong> They need shared memory, cross-origin isolation in browsers, and a runtime that supports them; code that spawns threads at start-up fails on first use, as the two-worker experiment above did.</li> <li><strong>No clock, no entropy by default.</strong> Code that calls <code>Instant::now()</code> or seeds a random generator from the system must be given them by the host; the engine tested here uses neither.</li> <li><strong>The module has no persistence.</strong> Everything is lost with the instance. Storing pages through a host import (IndexedDB, OPFS, a file) is the host's job and the interface to design first for a real product (<a href="/cookbook/p/a-durable-lsm-tree">M7</a> for a durable log-structured store).</li> <li><strong>32-bit address space.</strong> <code>wasm32</code> memory is at most 4 GiB, and browsers often cap well below that; a pool and a working set sized for a server will not fit.</li> <li><strong>JavaScript strings are UTF-16.</strong> Encode to UTF-8 before writing into memory, and decode replies with a decoder that rejects invalid sequences; the module also checks UTF-8 on input.</li> </ul></aside>
+"""

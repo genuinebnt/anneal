@@ -1,0 +1,233 @@
+title = "Table heap"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 321
+kind = "guide"
+lede = "A chain of slotted pages behind the buffer pool · inserts, point reads, scans · the Halloween problem · never hold a latch between iterator calls"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>A <strong>table heap</strong> is the unordered file of a table's tuples: a chain of slotted pages (<a href="/cookbook/p/pages-and-tuples">L03b</a>) accessed through page guards (<a href="/cookbook/p/buffer-pool-manager">P1.3</a>). It's the storage that sequential scans read and that indexes point into by record id. BusTub provides it; building it yourself is short and teaches three lessons that matter later.</p>
+"""
+
+[[sections]]
+heading = "Design choices"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Question</th> <th>Simple answer</th> <th>Production answer</th> </tr> </thead> <tbody> <tr> <td>Where do inserts go?</td> <td>always the <strong>last page</strong>; chain a new one when it's full</td> <td>a <strong>free-space map</strong> finds any page with room (PostgreSQL's FSM: a tree of 1-byte free-space categories per page)</td> </tr> <tr> <td>How are pages found?</td> <td><code>next_page_id</code> link in each header</td> <td>a page directory / extent map; bulk scans read extents sequentially</td> </tr> <tr> <td>What does delete do?</td> <td>mark the tuple deleted in its metadata</td> <td>the same, plus a <strong>vacuum</strong> that reclaims space once no transaction or index can still see the tuple</td> </tr> <tr> <td>Concurrent inserts?</td> <td>one mutex around "the last page"</td> <td>PostgreSQL's relation extension lock plus FSM spreading; InnoDB avoids the problem with clustered B+Tree inserts</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Lesson 1: the Halloween problem"
+body = """
+<p>In 1976, IBM's System R team ran <code>UPDATE emp SET salary = salary * 1.1 WHERE salary &lt; 25000</code> using an index on salary. Each updated row moved <em>forward</em> in the index, the scan found it again, and the query kept giving everyone raises until they all earned 25,000. It was Halloween. The same thing happens in a heap when an update is executed as "delete old version, insert new version at the end": a scan that reads until the end of the chain meets its own new versions and never terminates.</p>
+
+<p>The fix is to fix the scan's end point <strong>when the scan starts</strong>. BusTub's <code>TableIterator</code> takes a <code>stop_at_rid</code>, the last tuple that existed at creation. The reference below records the last page and its slot count. More general fixes: materialize the set of RIDs to update first (a pipeline breaker, which is what BusTub's update executor does), or rely on MVCC visibility, where versions created by your own statement are invisible to your statement's scan.</p>
+"""
+
+[[sections]]
+heading = "Lesson 2: never hold a latch between next() calls"
+body = """
+<p>An iterator could keep a <code>ReadPageGuard</code> on its current page between calls. It would be faster, since there'd be no re-fetch per tuple. But consider <code>UPDATE t SET … WHERE …</code> in a pull-based executor: the scan returns a tuple while holding page P's <strong>read</strong> latch, and the update operator above it asks for P's <strong>write</strong> latch on the same thread. <code>RwLock</code> isn't reentrant, so the thread deadlocks on itself. The rule: <strong>an operator never returns to its caller while holding a latch.</strong> Copy the tuple out (or pin without latching and re-latch per access), and release the latch before returning. This is a general Volcano-model rule. It comes back in <a href="/cookbook/p/query-execution">L13</a>.</p>
+"""
+
+[[sections]]
+heading = "Lesson 3: latch ordering for chain growth"
+body = """
+<p>Appending a page means writing two pages: the old last page (its <code>next</code> link) and the new page. The insert path holds the old page's write latch, then takes the new page's. Every path that holds two page latches takes them in <strong>chain order (old → new)</strong>, so no cycle can form. B+Tree latch crabbing (<a href="/cookbook/p/index-concurrency-control">L10</a>) is the same rule applied to a tree: always top-down.</p>
+
+:::deeper Reference TableHeap + Halloween-safe iterator
+```rust title="src/storage/table/table_heap.rs"
+//! Table heap: a linked list of slotted pages, append-only inserts, and an
+//! iterator that (1) never holds a page latch between calls and (2) stops at the
+//! last tuple that existed when it was created (no Halloween problem).
+use std::sync::Mutex;
+
+use crate::buffer::buffer_pool_manager::{BpmError, BufferPoolManager};
+use crate::common::config::PageId;
+use crate::buffer::replacer::Replacer;
+use crate::storage::page::slotted_page::{SlottedPage, SlottedPageMut, TupleMeta};
+
+pub const HEAP_PAGE: u8 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Rid { pub page: PageId, pub slot: u16 }
+
+pub struct TableHeap<'a, R: Replacer> {
+    bpm: &'a BufferPoolManager<R>,
+    first: PageId,
+    last: Mutex<PageId>,                  // the insert point; serializes appends
+}
+
+impl<'a, R: Replacer> TableHeap<'a, R> {
+    pub fn create(bpm: &'a BufferPoolManager<R>) -> Result<Self, BpmError> {
+        let first = bpm.new_page();
+        SlottedPageMut::new(bpm.write_page(first)?.data_mut()).init(HEAP_PAGE);
+        Ok(TableHeap { bpm, first, last: Mutex::new(first) })
+    }
+
+    /// Reopen an existing heap: walk the chain to find the last page.
+    pub fn open(bpm: &'a BufferPoolManager<R>, first: PageId) -> Result<Self, BpmError> {
+        let mut last = first;
+        loop {
+            let next = SlottedPage::new(bpm.read_page(last)?.data()).next_page_id();
+            if !next.is_valid() { break; }
+            last = next;
+        }
+        Ok(TableHeap { bpm, first, last: Mutex::new(last) })
+    }
+
+    pub fn first_page_id(&self) -> PageId { self.first }
+
+    pub fn insert(&self, meta: TupleMeta, data: &[u8]) -> Result<Option<Rid>, BpmError> {
+        if data.len() > SlottedPageMut::MAX_TUPLE { return Ok(None); }       // caller: overflow pages
+        let mut last = self.last.lock().unwrap();
+        let mut g = self.bpm.write_page(*last)?;
+        if let Some(slot) = SlottedPageMut::new(g.data_mut()).insert(meta, data) {
+            return Ok(Some(Rid { page: *last, slot }));
+        }
+        // Full: chain a new page. Latch order is always old -> new (forward), so no cycles.
+        let new = self.bpm.new_page();
+        let mut ng = self.bpm.write_page(new)?;
+        let mut np = SlottedPageMut::new(ng.data_mut());
+        np.init(HEAP_PAGE);
+        let slot = np.insert(meta, data).expect("fits in an empty page");
+        SlottedPageMut::new(g.data_mut()).set_next_page_id(new);
+        *last = new;
+        Ok(Some(Rid { page: new, slot }))
+    }
+
+    pub fn get(&self, rid: Rid) -> Result<Option<(TupleMeta, Vec<u8>)>, BpmError> {
+        let g = self.bpm.read_page(rid.page)?;
+        Ok(SlottedPage::new(g.data()).get(rid.slot).map(|(m, d)| (m, d.to_vec())))
+    }
+
+    pub fn update_meta(&self, rid: Rid, meta: TupleMeta) -> Result<bool, BpmError> {
+        let mut g = self.bpm.write_page(rid.page)?;
+        Ok(SlottedPageMut::new(g.data_mut()).update_meta(rid.slot, meta))
+    }
+
+    /// Iterate every tuple that exists *now*. Tuples inserted during the scan are not returned.
+    pub fn iter(&self) -> Result<TableIter<'_, 'a, R>, BpmError> {
+        let last = *self.last.lock().unwrap();
+        let n = SlottedPage::new(self.bpm.read_page(last)?.data()).num_slots();
+        Ok(TableIter { heap: self, page: self.first, slot: 0, stop_page: last, stop_slots: n, done: false })
+    }
+}
+
+pub struct TableIter<'h, 'a, R: Replacer> {
+    heap: &'h TableHeap<'a, R>,
+    page: PageId,
+    slot: u16,
+    stop_page: PageId,
+    stop_slots: u16,          // on stop_page, only slots < stop_slots existed at creation
+    done: bool,
+}
+
+impl<R: Replacer> Iterator for TableIter<'_, '_, R> {
+    type Item = Result<(Rid, TupleMeta, Vec<u8>), BpmError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while !self.done {
+            // Latch the page only for the duration of this call.
+            let g = match self.heap.bpm.read_page(self.page) { Ok(g) => g, Err(e) => { self.done = true; return Some(Err(e)) } };
+            let p = SlottedPage::new(g.data());
+            let limit = if self.page == self.stop_page { self.stop_slots.min(p.num_slots()) } else { p.num_slots() };
+            while self.slot < limit {
+                let s = self.slot;
+                self.slot += 1;
+                if let Some((m, d)) = p.get(s) {
+                    return Some(Ok((Rid { page: self.page, slot: s }, m, d.to_vec())));
+                }
+            }
+            if self.page == self.stop_page { self.done = true; break; }
+            self.page = p.next_page_id();
+            self.slot = 0;
+            if !self.page.is_valid() { self.done = true; }
+        }
+        None
+    }
+}
+```
+:::
+
+<aside data-call="rust"><b>Two lifetimes on the iterator</b><p><code>TableIter&lt;'h, 'a, R&gt;</code> borrows the heap for <code>'h</code>, and the heap borrows the buffer pool for <code>'a</code>. The compiler needs both to know the iterator can't outlive either one. When you see a lifetime error like "borrowed value does not live long enough" involving nested borrows, write the struct with one lifetime per layer first, then simplify: often <code>'_</code> in the <code>impl</code> header is enough (<code>impl&lt;R&gt; Iterator for TableIter&lt;'_, '_, R&gt;</code>). Reference: <a href="https://doc.rust-lang.org/nomicon/lifetimes.html" target="_blank" rel="noreferrer">the Rustonomicon on lifetimes</a>.</p></aside>
+
+<aside data-call="rust"><b><code>Iterator&lt;Item = Result&lt;…&gt;&gt;</code></b><p>Scans can fail (I/O errors), so the item type is <code>Result</code>. Callers can then use <code>collect::&lt;Result&lt;Vec&lt;_&gt;, _&gt;&gt;()</code> to stop at the first error, or <code>filter_map(Result::ok)</code> to skip errors (rarely correct for a database). After yielding an error, the iterator sets <code>done</code> so it doesn't keep failing. Iterators that yield <code>Err</code> forever are a common source of hangs.</p></aside>
+"""
+
+[[sections]]
+heading = "Tests"
+body = """
+```rust title="tests/table_heap.rs"
+use std::sync::Arc;
+use relational::buffer::{arc_replacer::ArcReplacer, buffer_pool_manager::BufferPoolManager};
+use relational::storage::disk::disk_manager::{DiskManager, MemDiskManager};
+use relational::storage::{page::slotted_page::TupleMeta, table::table_heap::{Rid, TableHeap}};
+
+fn bpm(frames: usize) -> BufferPoolManager<ArcReplacer> {
+    let disk: Arc<dyn DiskManager> = Arc::new(MemDiskManager::default());
+    BufferPoolManager::new(frames, disk, ArcReplacer::new(frames), 2)
+}
+const M: TupleMeta = TupleMeta { ts: 0, deleted: false };
+
+#[test]
+fn insert_and_scan_across_pages() {
+    let bpm = bpm(4);                                        // far smaller than the table: forces eviction
+    let heap = TableHeap::create(&bpm).unwrap();
+    let rows: Vec<Vec<u8>> = (0..5_000u32).map(|i| format!("row-{i:05}-{}", "x".repeat((i % 97) as usize)).into_bytes()).collect();
+    let rids: Vec<Rid> = rows.iter().map(|r| heap.insert(M, r).unwrap().unwrap()).collect();
+    let got: Vec<(Rid, Vec<u8>)> = heap.iter().unwrap().map(|r| { let (rid, _, d) = r.unwrap(); (rid, d) }).collect();
+    assert_eq!(got.len(), rows.len());
+    for ((rid, d), (want_rid, want)) in got.iter().zip(rids.iter().zip(&rows)) { assert_eq!((rid, d), (want_rid, want)); }
+    assert_eq!(heap.get(rids[4321]).unwrap().unwrap().1, rows[4321]);
+}
+
+/// UPDATE t SET x = x + 1 implemented as "scan, then insert new version": must terminate.
+#[test]
+fn halloween_safe() {
+    let bpm = bpm(8);
+    let heap = TableHeap::create(&bpm).unwrap();
+    for i in 0..1_000u32 { heap.insert(M, &i.to_le_bytes()).unwrap(); }
+    let mut seen = 0;
+    for r in heap.iter().unwrap() {
+        let (rid, _, d) = r.unwrap();
+        heap.update_meta(rid, TupleMeta { ts: 0, deleted: true }).unwrap();   // delete old version...
+        heap.insert(M, &d).unwrap();                                          // ...insert new one at the end
+        seen += 1;
+    }
+    assert_eq!(seen, 1_000);                                                  // not 1,000 × ∞
+    let live = heap.iter().unwrap().filter(|r| !r.as_ref().unwrap().1.deleted).count();
+    assert_eq!(live, 1_000);
+}
+
+#[test]
+fn concurrent_inserts() {
+    let bpm = bpm(16);
+    let heap = TableHeap::create(&bpm).unwrap();
+    std::thread::scope(|s| for t in 0..8u32 { let heap = &heap; s.spawn(move || for i in 0..2_000u32 { heap.insert(M, &(t * 1_000_000 + i).to_le_bytes()).unwrap(); }); });
+    let mut all: Vec<u32> = heap.iter().unwrap().map(|r| u32::from_le_bytes(r.unwrap().2[..4].try_into().unwrap())).collect();
+    all.sort();
+    let mut want: Vec<u32> = (0..8u32).flat_map(|t| (0..2_000u32).map(move |i| t * 1_000_000 + i)).collect();
+    want.sort();
+    assert_eq!(all, want);
+}
+
+#[test]
+fn reopen_finds_last_page() {
+    let bpm = bpm(4);
+    let first = { let h = TableHeap::create(&bpm).unwrap(); for i in 0..3_000u32 { h.insert(M, &[0u8; 100]).unwrap(); let _ = i; } h.first_page_id() };
+    let h = TableHeap::open(&bpm, first).unwrap();
+    let rid = h.insert(M, b"after reopen").unwrap().unwrap();
+    assert_eq!(h.iter().unwrap().count(), 3_001);
+    assert_eq!(h.get(rid).unwrap().unwrap().1, b"after reopen");
+}
+```
+
+<aside data-call="performance"><b>Where heap performance goes</b><ul> <li><strong>The last-page mutex</strong> serializes all inserts into a table. At 8 threads it becomes the bottleneck well before I/O does. Fix: let each thread (or each core) own a different "current insert page", and fall back to a free-space map for everything else.</li> <li><strong>Per-tuple re-fetch</strong> in the iterator costs a page-table lookup and a pin/unpin per row. The optimization that keeps the no-latch rule: copy out <em>all</em> tuples of a page in one call (a batch), then return them one at a time. That's the first step toward vectorized execution (Part II).</li> <li><strong>Scans pollute the pool.</strong> Give sequential scans a small ring of frames of their own (<a href="/cookbook/p/buffer-pools">L04</a>, "buffer pool bypass").</li> </ul></aside>
+
+<aside data-call="production"><b>In production</b><ul> <li><strong>PostgreSQL</strong>: a heap file per table (1 GiB segments), an FSM and a visibility map as separate "forks", HOT (heap-only tuple) updates that keep new versions on the same page to avoid index updates, and VACUUM to reclaim space.</li> <li><strong>InnoDB, SQLite (rowid tables), SQL Server with a clustered index</strong>: no heap at all. The table <em>is</em> a B+Tree keyed by primary key (index-organized), so a scan is a leaf-level walk.</li> <li><strong>Oracle</strong>: heap segments with extents, plus "row chaining" and "row migration" for rows that outgrow their block.</li> </ul></aside>
+"""

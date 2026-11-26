@@ -1,0 +1,42 @@
+title = "Compiler-style diagnostics"
+module = "Rust language"
+module_order = 1
+chapter = "Errors and diagnostics"
+chapter_order = 4
+order = 36
+kind = "recipe"
+lede = "Byte spans, line/column, and a caret under the problem."
+level = "intermediate"
+code = ["examples/errors/diagnostics_spans.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any DSL/config parser (see zero_copy_lexer, pratt_parser), validators that should point at the exact location.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>compilers</li><li>linters</li><li>config validators</li><li>query parsers: errors that point at the exact bytes</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Store errors as a **message** + a byte **span** (`start..end`) into the source, not a pre-formatted string. A separate renderer turns span -> (line, column) and prints the source line with `^^^` underneath. Keeping spans in your AST/tokens from day one is what makes good error messages possible later.
+
+Study real implementations: <https://github.com/biomejs/biome/tree/main/crates/biome_diagnostics> and <https://github.com/zkat/miette>  and  <https://github.com/brendanzab/codespan>
+"""
+
+[[sources]]
+title = "github.com/biomejs/biome/tree/main/crates/biome_diagnostics"
+url = "https://github.com/biomejs/biome/tree/main/crates/biome_diagnostics"
+
+[[sources]]
+title = "github.com/zkat/miette"
+url = "https://github.com/zkat/miette"
+
+[[sources]]
+title = "github.com/brendanzab/codespan"
+url = "https://github.com/brendanzab/codespan"

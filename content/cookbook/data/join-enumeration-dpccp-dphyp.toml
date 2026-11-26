@@ -1,0 +1,80 @@
+title = "Join enumeration"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 392
+kind = "recipe"
+lede = "DPsize, DPsub, DPccp, DPhyp, top-down partitioning, and GOO/IDP/linearised heuristics for huge queries"
+level = "advanced"
+code = ["examples/database/join_enumeration_dpccp_dphyp.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>query optimizers choosing a join order</li><li>plan-space explorers</li><li>benchmarks of join-ordering algorithms</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>PostgreSQL (System-R style bottom-up DP, switches to the genetic GEQO search for big joins)</li><li>DuckDB (DPhyp-style enumeration over a hypergraph with a greedy fallback for large queries)</li><li>HyPer/Umbra (DPhyp plus the adaptive linearised search of Neumann et al. for hundreds of relations)</li><li>MySQL 8 (greedy search with depth bound)</li><li>Orca/Calcite (join-order rules inside a memo)</li><li>any ORM-free SQL generator that must keep a 30-table join tractable. Course: CMU 15-799 Query Optimization (Spring 2025)</li><li>lectures 07-08 (join ordering: bottom-up and top-down)</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a join **query graph** has one node per relation and one edge per join predicate (with a selectivity). A plan is a bushy binary tree; with the classic C_out cost (the sum of the cardinalities of all intermediate results) the best tree can be found by dynamic programming over **connected subsets** of relations, never forming a cross product.
+
+The algorithms differ only in **how** they walk the subsets, which decides how many useless candidates they test before reaching the same optimum.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+- DPsize  : by plan size s, combine every plan of size s1 with every plan of size s-s1; test disjointness + connectedness. Wastes work on overlapping or unconnected pairs (chains and stars especially).
+- DPsub   : for every subset S (numeric order) try every split S = S1 + S2. Wastes work on unconnected splits.
+- DPccp   : Moerkotte/Neumann. Enumerate each connected-subgraph / connected-complement **pair** exactly once with EnumerateCsg / EnumerateCmp. The number of calls equals the number of pairs, which has closed forms: chain (n&#94;3-n)/6, star (n-1)&#42;2&#94;(n-2), clique (3&#94;n - 2&#94;(n+1) + 1)/2.
+
+   Nothing is wasted, but it needs a simple graph.
+- DPhyp   : the same neighbourhood idea over a HYPERgraph. A hyperedge (u, v) joins two **sets** of relations and models complex predicates (`R0.a + R1.b = R2.c`) or reordering constraints (an outer join may not move past a relation, so its hyperedge's endpoints contain all of that relation's inputs).
+
+   Representatives (the minimal element of each non-subsumed hypernode) keep the enumeration duplicate-free.
+- **Top-down**: memoised recursion on the set S asking a **partitioning** function for all (S1, S2) splits.
+
+   `naive` generates all 2&#94;(&#124;S&#124;-1) subsets and tests both halves for connectedness (the generate-and-test of DeHaan/Tompa); `branch` grows a connected side C branch by branch with an exclusion set, so every connected C is produced exactly once and only the complement is tested (a simplified cousin of Fender/Moerkotte's MinCutBranch, which also avoids testing the complement).
+
+   A top-down search can add branch-and-bound pruning, which bottom-up DP cannot.
+- **Heuristics** for 50-200 relations (exact DP is exponential): **goo** (greedy: always join the two linked clusters with the smallest result), IDP (iterative DP: run exact DP over at most k clusters, collapse the best sub-plan into one cluster, repeat) and the **adaptive linearised** search (order the relations by a greedy linear order, then solve the interval DP optimally in O(n&#94;3) so each subtree is a contiguous run of that order; Neumann et al. choose per query between exact, linearised and IDP by estimated search-space size, mirrored by `adaptive`).
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+the optimizer's own runtime is part of query latency. DPccp/DPhyp touch only useful pairs; chains and cycles are cheap even at 20+ relations, cliques explode at &#126;15, and beyond that a heuristic trades plan quality for time (see the table).
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+on 2000 random queries (n &lt;= 10, chain/cycle/star/clique/random) DPsize, DPsub, DPccp, DPhyp and both top-down variants return the **same** optimal cost and the same number of csg-cmp pairs; for n &lt;= 6 also equal to memo-less brute force; DPccp's pair counts match the closed forms; DPhyp equals DPsub and brute force on random HYPERgraphs; every heuristic never beats the optimum, IDP with k = n equals it, and the linearised DP never loses to its own left-deep order.
+
+Timings are printed, never asserted.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Adaptive Optimization of Very Large Join Queries (T. Neumann et al., SIGMOD 2018)   Optimal Top-Down Join Enumeration (D. DeHaan et al., SIGMOD 2007)   Counter Strike: Generic Top-Down Join Enumeration for Hypergraphs (P.
+
+Fender et al., VLDB 2013)   A New, Highly Efficient, and Easy To Implement Top-Down Join Enumeration Algorithm (P. Fender et al., VLDB
+
+```text
+2011)   Dynamic Programming Strikes Back (G. Moerkotte, T. Neumann, SIGMOD 2008)   schedule:
+https://15799.courses.cs.cmu.edu/spring2025/schedule.html
+```
+"""
+
+[[sources]]
+title = "15799.courses.cs.cmu.edu/spring2025/schedule.html"
+url = "https://15799.courses.cs.cmu.edu/spring2025/schedule.html"

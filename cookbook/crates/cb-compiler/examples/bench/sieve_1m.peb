@@ -1,0 +1,28 @@
+// Sieve of Eratosthenes over one million flags: array indexing in tight loops.
+fn main() {
+    let n = 1000000;
+    let mut flags = [];
+    let mut i = 0;
+    while i <= n {
+        push(flags, true);
+        i += 1;
+    }
+    let mut p = 2;
+    while p * p <= n {
+        if flags[p] {
+            let mut m = p * p;
+            while m <= n {
+                flags[m] = false;
+                m += p;
+            }
+        }
+        p += 1;
+    }
+    let mut count = 0;
+    let mut k = 2;
+    while k <= n {
+        if flags[k] { count += 1; }
+        k += 1;
+    }
+    println(to_str(count));
+}

@@ -1,0 +1,11 @@
+struct Counter { count: int, name: str }
+fn bump(mut c: Counter) -> Counter {
+    c.count += 1;
+    c
+}
+fn main() {
+    let mut c = Counter { count: 0, name: "hits" };
+    c.count = 5;
+    c = bump(c);
+    println(c.name + "=" + to_str(c.count));
+}

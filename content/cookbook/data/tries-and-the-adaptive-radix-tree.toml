@@ -1,0 +1,490 @@
+title = "Tries and the adaptive radix tree"
+module = "Databases"
+module_order = 8
+chapter = "Indexes"
+chapter_order = 3
+order = 344
+kind = "guide"
+lede = "15-721 lecture #7 · radix trees · ART node types, path compression, lazy expansion · Masstree, HOT · order-preserving key encoding · ART vs hash tables vs B+Trees"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>A trie (digital tree)</strong> indexes by the <em>digits of the key</em> instead of by comparisons: each level consumes a chunk (a <strong>span</strong>: bit or byte) and the path to a leaf <em>is</em> the key. Lookup cost is O(key length), independent of the number of keys; shape is deterministic (no rebalancing); ordered iteration comes for free.</li> <li><strong>The problem with naive radix trees</strong> is the span trade-off: a span of 8 bits gives a shallow tree but a 256-pointer array in every node (wasteful when sparse); a span of 1–4 bits wastes nothing but is deep (slow).</li> <li><strong>ART (Leis et al., ICDE 2013)</strong> gets both: <strong>byte-wise</strong> spans with <strong>adaptive node sizes</strong> that change with the number of children: <strong>Node4</strong> (≤ 4 keys + 4 children, linear search), <strong>Node16</strong> (sorted keys, SIMD compare), <strong>Node48</strong> (a 256-entry byte → slot index plus 48 children), <strong>Node256</strong> (direct array). Nodes grow when full and shrink when they empty. Two more tricks keep the tree shallow: <strong>path compression</strong> (a chain of single-child nodes is stored as a <em>prefix</em> in one node) and <strong>lazy expansion</strong> (a leaf stores its key remainder, so the path below the last branch isn't materialized).</li> <li><strong>Order-preserving key encoding</strong> is mandatory: a radix tree compares <em>bytes</em>, so keys must be encoded so that byte order equals the intended order: big-endian unsigned integers, sign-bit-flipped signed integers, transformed IEEE floats, escaped and terminated strings, concatenation for composite keys. The encoding must also be <strong>prefix-free</strong> (no key is a prefix of another) or a key could end in the middle of a node.</li> <li><strong>Other tries</strong>: <strong>Masstree</strong> (a trie with fan-out 2⁶⁴ whose nodes are B+Trees over 8-byte slices of the key; used by Silo, MICA; good for long keys with shared prefixes), <strong>HOT</strong> (Height Optimized Trie: compound nodes that merge several trie levels, with fan-out up to 32 via SIMD partial-key search; lower height and memory than ART), <strong>KISS-Tree</strong>, <strong>Judy arrays</strong>, <strong>adaptive hash tries</strong>.</li> <li><strong>ART vs hash table vs B+Tree</strong> (Alvarez et al., ICDE 2015): hash tables win pure <strong>point lookups</strong>; ART is <strong>competitive</strong> with them in many workloads and <em>also</em> supports ordered scans, prefix queries and min/max; versus B+Trees ART is typically faster for in-memory point lookups and scans of long keys, and denser for dense keys. HyPer/Umbra use ART with <em>optimistic lock coupling</em> for concurrency ("The ART of Practical Synchronization", 2016); DuckDB uses ART for its indexes.</li> <li><strong>Where the leaf lives</strong>: a database ART usually stores a <strong>tuple id</strong> in the leaf and, for lazy expansion, loads the key from the base table when it needs to compare. That is the main reason production ART is so compact.</li> </ul>
+"""
+
+[[sections]]
+heading = "Encoding keys so that bytes compare like values"
+body = """
+<p>A radix tree has no comparison function, only bytes. These encodings are the contract between the index and the rest of the system, and they are the most common source of silently wrong ordering. Tested over 200 000 random pairs, plus edge cases (±0, infinities, <code>i64::MIN</code>, strings containing NUL).</p>
+
+:::deeper Reference: order-preserving encodings for integers, floats, byte strings and composite keys
+```rust title="src/index/keyenc.rs"
+//! Order-preserving ("memcomparable") key encodings: byte-wise comparison of the output equals comparison of the input.
+
+pub fn u64_key(v: u64) -> [u8; 8] { v.to_be_bytes() }
+
+/// Flip the sign bit so negatives sort before positives.
+pub fn i64_key(v: i64) -> [u8; 8] { ((v as u64) ^ (1 << 63)).to_be_bytes() }
+
+/// IEEE-754: positives already sort by bits; negatives sort in reverse, so invert them (NaN sorts last, -0 < +0).
+pub fn f64_key(v: f64) -> [u8; 8] {
+    let b = v.to_bits();
+    (if b >> 63 == 1 { !b } else { b | (1 << 63) }).to_be_bytes()
+}
+
+/// Strings and byte strings: escape 0x00 as 0x00 0xFF and end with 0x00 0x00, so a prefix sorts before its extensions
+/// and the encoding is prefix-free (required by ART).
+pub fn bytes_key(v: &[u8], out: &mut Vec<u8>) {
+    for &b in v { out.push(b); if b == 0 { out.push(0xFF); } }
+    out.extend_from_slice(&[0, 0]);
+}
+
+/// Composite keys are the concatenation of their components' encodings.
+pub fn composite(user: &str, ts: i64, score: f64) -> Vec<u8> {
+    let mut k = vec![];
+    bytes_key(user.as_bytes(), &mut k);
+    k.extend(i64_key(ts));
+    k.extend(f64_key(score));
+    k
+}
+```
+:::
+
+<ul> <li><strong>Signed integers</strong>: flip the top bit (<code>-1 → 0x7FFF…</code>, <code>0 → 0x8000…</code>).</li> <li><strong>Floats</strong>: positive values already sort by their bit pattern; negative values sort <em>descending</em>, so invert all bits; positives get the sign bit set so they sort after negatives. (<code>-0.0</code> sorts before <code>+0.0</code>, matching <code>total_cmp</code>.)</li> <li><strong>Strings</strong>: terminate with <code>00 00</code> and escape embedded <code>00</code> as <code>00 FF</code>; then <code>"a" &lt; "a&#92;0" &lt; "a&#92;0b" &lt; "ab"</code> hold bytewise and no encoded key is a prefix of another.</li> <li><strong>Composite</strong>: concatenate; each component's encoding is self-delimiting, so component-wise order falls out. For <code>DESC</code> columns invert the bytes of that component.</li> <li><strong>NULLs</strong>: prepend a marker byte (<code>00</code> for NULLs-first, <code>FF</code> for NULLs-last) to every nullable component.</li> </ul>
+"""
+
+[[sections]]
+heading = "ART in Rust"
+body = """
+<p>The implementation is general (variable-length byte keys, lazy-expanded leaves that store their full key, all four node types with grow <em>and</em> shrink, one-child collapse on delete, ordered <code>scan_from</code>). A <code>check()</code> method asserts the structural invariants, and the test suite compares against <code>BTreeMap</code> for every operation.</p>
+
+:::deeper Reference: adaptive radix tree (Node4/16/48/256, path compression, lazy expansion, shrink and collapse, range scan)
+```rust title="src/index/art.rs"
+//! Adaptive radix tree (ART): path compression, lazy expansion (leaves hold the full key), and four node sizes
+//! that grow and shrink with their fan-out. Keys must be prefix-free (fixed-width integers, or strings + NUL).
+
+pub enum Node<V> { Leaf(Box<Leaf<V>>), Inner(Box<Inner<V>>) }
+pub struct Leaf<V> { key: Vec<u8>, val: V }
+
+pub struct Inner<V> { prefix: Vec<u8>, kind: Kind<V> }
+
+type Slot<V> = Option<Node<V>>;
+const EMPTY: u8 = 255;
+
+enum Kind<V> {
+    N4 { n: u8, keys: [u8; 4], ch: [Slot<V>; 4] },                       // sorted keys, linear search
+    N16 { n: u8, keys: [u8; 16], ch: Box<[Slot<V>; 16]> },              // sorted keys, SIMD-searchable; children boxed so N4 stays small
+    N48 { n: u8, idx: Box<[u8; 256]>, ch: Box<[Slot<V>; 48]> },          // byte → slot index
+    N256 { n: u16, ch: Box<[Slot<V>; 256]> },                            // direct array
+}
+
+fn none_arr<V, const N: usize>() -> [Slot<V>; N] { std::array::from_fn(|_| None) }
+
+impl<V> Inner<V> {
+    fn new4(prefix: Vec<u8>) -> Self { Inner { prefix, kind: Kind::N4 { n: 0, keys: [0; 4], ch: none_arr() } } }
+
+    fn count(&self) -> usize {
+        match &self.kind { Kind::N4 { n, .. } | Kind::N16 { n, .. } | Kind::N48 { n, .. } => *n as usize, Kind::N256 { n, .. } => *n as usize }
+    }
+
+    fn child(&self, b: u8) -> Option<&Node<V>> {
+        match &self.kind {
+            Kind::N4 { n, keys, ch } => keys[..*n as usize].iter().position(|&k| k == b).and_then(|i| ch[i].as_ref()),
+            Kind::N16 { n, keys, ch } => keys[..*n as usize].iter().position(|&k| k == b).and_then(|i| ch[i].as_ref()),
+            Kind::N48 { idx, ch, .. } => if idx[b as usize] == EMPTY { None } else { ch[idx[b as usize] as usize].as_ref() },
+            Kind::N256 { ch, .. } => ch[b as usize].as_ref(),
+        }
+    }
+
+    fn slot_mut(&mut self, b: u8) -> Option<&mut Slot<V>> {
+        match &mut self.kind {
+            Kind::N4 { n, keys, ch } => keys[..*n as usize].iter().position(|&k| k == b).map(|i| &mut ch[i]),
+            Kind::N16 { n, keys, ch } => keys[..*n as usize].iter().position(|&k| k == b).map(|i| &mut ch[i]),
+            Kind::N48 { idx, ch, .. } => if idx[b as usize] == EMPTY { None } else { Some(&mut ch[idx[b as usize] as usize]) },
+            Kind::N256 { ch, .. } => if ch[b as usize].is_some() { Some(&mut ch[b as usize]) } else { None },
+        }
+    }
+
+    /// Add a child for a byte that has none; grows the node to the next size when full.
+    fn add(&mut self, b: u8, child: Node<V>) {
+        match &mut self.kind {
+            Kind::N4 { n, keys, ch } if (*n as usize) < 4 => Self::add_sorted(n, keys, ch, b, child),
+            Kind::N16 { n, keys, ch } if (*n as usize) < 16 => Self::add_sorted(n, keys, &mut **ch, b, child),
+            Kind::N48 { n, idx, ch } if (*n as usize) < 48 => {
+                let s = ch.iter().position(|c| c.is_none()).unwrap();
+                ch[s] = Some(child);
+                idx[b as usize] = s as u8;
+                *n += 1;
+            }
+            Kind::N256 { n, ch } => { ch[b as usize] = Some(child); *n += 1; }
+            _ => { self.grow(); self.add(b, child); }
+        }
+    }
+
+    fn add_sorted<const N: usize>(n: &mut u8, keys: &mut [u8; N], ch: &mut [Slot<V>; N], b: u8, child: Node<V>) {
+        let len = *n as usize;
+        let pos = keys[..len].iter().position(|&k| k > b).unwrap_or(len);
+        for i in (pos..len).rev() { keys[i + 1] = keys[i]; ch[i + 1] = ch[i].take(); }
+        keys[pos] = b;
+        ch[pos] = Some(child);
+        *n += 1;
+    }
+
+    fn grow(&mut self) {
+        let old = std::mem::replace(&mut self.kind, Kind::N4 { n: 0, keys: [0; 4], ch: none_arr() });
+        self.kind = match old {
+            Kind::N4 { n, keys, mut ch } => {
+                let (mut k16, mut c16) = ([0u8; 16], Box::new(none_arr::<V, 16>()));
+                for i in 0..n as usize { k16[i] = keys[i]; c16[i] = ch[i].take(); }
+                Kind::N16 { n, keys: k16, ch: c16 }
+            }
+            Kind::N16 { n, keys, mut ch } => {
+                let (mut idx, mut c48) = (Box::new([EMPTY; 256]), Box::new(none_arr::<V, 48>()));
+                for i in 0..n as usize { idx[keys[i] as usize] = i as u8; c48[i] = ch[i].take(); }
+                Kind::N48 { n, idx, ch: c48 }
+            }
+            Kind::N48 { n, idx, mut ch } => {
+                let mut c256 = Box::new(none_arr::<V, 256>());
+                for b in 0..256 { if idx[b] != EMPTY { c256[b] = ch[idx[b] as usize].take(); } }
+                Kind::N256 { n: n as u16, ch: c256 }
+            }
+            Kind::N256 { .. } => unreachable!("N256 is never full"),
+        };
+    }
+
+    /// Remove the (empty) slot of byte `b`, then shrink if the node became sparse.
+    fn remove(&mut self, b: u8) {
+        match &mut self.kind {
+            Kind::N4 { n, keys, ch } => Self::remove_sorted(n, keys, ch, b),
+            Kind::N16 { n, keys, ch } => Self::remove_sorted(n, keys, &mut **ch, b),
+            Kind::N48 { n, idx, ch } => { let s = idx[b as usize] as usize; ch[s] = None; idx[b as usize] = EMPTY; *n -= 1; }
+            Kind::N256 { n, ch } => { ch[b as usize] = None; *n -= 1; }
+        }
+        self.shrink();
+    }
+
+    fn remove_sorted<const N: usize>(n: &mut u8, keys: &mut [u8; N], ch: &mut [Slot<V>; N], b: u8) {
+        let len = *n as usize;
+        let pos = keys[..len].iter().position(|&k| k == b).unwrap();
+        for i in pos..len - 1 { keys[i] = keys[i + 1]; ch[i] = ch[i + 1].take(); }
+        ch[len - 1] = None;
+        *n -= 1;
+    }
+
+    fn shrink(&mut self) {
+        let n = self.count();
+        let old = std::mem::replace(&mut self.kind, Kind::N4 { n: 0, keys: [0; 4], ch: none_arr() });
+        self.kind = match old {
+            Kind::N256 { ch, .. } if n <= 37 => {
+                let (mut idx, mut c48, mut j) = (Box::new([EMPTY; 256]), Box::new(none_arr::<V, 48>()), 0);
+                let mut ch = ch;
+                for b in 0..256 { if let Some(c) = ch[b].take() { idx[b] = j as u8; c48[j] = Some(c); j += 1; } }
+                Kind::N48 { n: n as u8, idx, ch: c48 }
+            }
+            Kind::N48 { idx, mut ch, .. } if n <= 12 => {
+                let (mut keys, mut c16, mut j) = ([0u8; 16], Box::new(none_arr::<V, 16>()), 0);
+                for b in 0..256 { if idx[b] != EMPTY { keys[j] = b as u8; c16[j] = ch[idx[b] as usize].take(); j += 1; } }
+                Kind::N16 { n: n as u8, keys, ch: c16 }
+            }
+            Kind::N16 { keys, mut ch, .. } if n <= 3 => {
+                let (mut k4, mut c4) = ([0u8; 4], none_arr::<V, 4>());
+                for i in 0..n { k4[i] = keys[i]; c4[i] = ch[i].take(); }
+                Kind::N4 { n: n as u8, keys: k4, ch: c4 }
+            }
+            other => other,
+        };
+    }
+
+    /// Children in ascending byte order.
+    fn children(&self) -> Vec<(u8, &Node<V>)> {
+        match &self.kind {
+            Kind::N4 { n, keys, ch } => (0..*n as usize).map(|i| (keys[i], ch[i].as_ref().unwrap())).collect(),
+            Kind::N16 { n, keys, ch } => (0..*n as usize).map(|i| (keys[i], ch[i].as_ref().unwrap())).collect(),
+            Kind::N48 { idx, ch, .. } => (0..256usize).filter(|&b| idx[b] != EMPTY).map(|b| (b as u8, ch[idx[b] as usize].as_ref().unwrap())).collect(),
+            Kind::N256 { ch, .. } => (0..256usize).filter_map(|b| ch[b].as_ref().map(|c| (b as u8, c))).collect(),
+        }
+    }
+
+    fn only_child(&mut self) -> (u8, Node<V>) {
+        match &mut self.kind {
+            Kind::N4 { keys, ch, .. } => (keys[0], ch[0].take().unwrap()),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn node_bytes(&self) -> usize {
+        std::mem::size_of::<Inner<V>>() + self.prefix.capacity() + match &self.kind {
+            Kind::N16 { .. } => 16 * std::mem::size_of::<Slot<V>>(),
+            Kind::N48 { .. } => 256 + 48 * std::mem::size_of::<Slot<V>>(),
+            Kind::N256 { .. } => 256 * std::mem::size_of::<Slot<V>>(),
+            _ => 0,
+        }
+    }
+}
+
+fn lcp(a: &[u8], b: &[u8]) -> usize { a.iter().zip(b).take_while(|(x, y)| x == y).count() }
+
+pub struct Art<V> { root: Slot<V>, len: usize }
+
+impl<V> Default for Art<V> { fn default() -> Self { Art { root: None, len: 0 } } }
+
+#[derive(Default, Debug, Clone, Copy)]
+pub struct Stats { pub leaves: usize, pub n4: usize, pub n16: usize, pub n48: usize, pub n256: usize, pub inner_bytes: usize, pub max_depth: usize }
+
+impl<V> Art<V> {
+    pub fn new() -> Self { Self::default() }
+    pub fn len(&self) -> usize { self.len }
+
+    pub fn get(&self, key: &[u8]) -> Option<&V> {
+        let mut node = self.root.as_ref()?;
+        let mut depth = 0;
+        loop {
+            match node {
+                Node::Leaf(l) => return (l.key == key).then_some(&l.val),
+                Node::Inner(inn) => {
+                    let p = &inn.prefix;
+                    if key.len() < depth + p.len() || &key[depth..depth + p.len()] != p.as_slice() { return None; }
+                    depth += p.len();
+                    node = inn.child(*key.get(depth)?)?;
+                    depth += 1;
+                }
+            }
+        }
+    }
+
+    pub fn insert(&mut self, key: &[u8], val: V) -> Option<V> {
+        let r = if self.root.is_none() {
+            self.root = Some(Node::Leaf(Box::new(Leaf { key: key.to_vec(), val })));
+            None
+        } else { Self::ins(&mut self.root, key, val, 0) };
+        if r.is_none() { self.len += 1; }
+        r
+    }
+
+    fn ins(slot: &mut Slot<V>, key: &[u8], val: V, depth: usize) -> Option<V> {
+        match slot.as_mut().unwrap() {
+            Node::Leaf(l) => {
+                if l.key == key { return Some(std::mem::replace(&mut l.val, val)); }
+                let m = lcp(&l.key[depth..], &key[depth..]);
+                let (old_b, new_b) = (l.key[depth + m], key[depth + m]);
+                let mut n4 = Inner::new4(key[depth..depth + m].to_vec());
+                n4.add(old_b, slot.take().unwrap());                              // the old leaf moves under the new node
+                n4.add(new_b, Node::Leaf(Box::new(Leaf { key: key.to_vec(), val })));
+                *slot = Some(Node::Inner(Box::new(n4)));
+                None
+            }
+            Node::Inner(inn) => {
+                let m = lcp(&inn.prefix, &key[depth..]);
+                if m < inn.prefix.len() {                                         // the new key diverges inside the compressed path
+                    let mut n4 = Inner::new4(inn.prefix[..m].to_vec());
+                    let old_b = inn.prefix[m];
+                    inn.prefix.drain(..=m);
+                    n4.add(old_b, slot.take().unwrap());
+                    n4.add(key[depth + m], Node::Leaf(Box::new(Leaf { key: key.to_vec(), val })));
+                    *slot = Some(Node::Inner(Box::new(n4)));
+                    return None;
+                }
+                let d = depth + inn.prefix.len();
+                let b = key[d];
+                match inn.slot_mut(b) {
+                    Some(child) => Self::ins(child, key, val, d + 1),
+                    None => { inn.add(b, Node::Leaf(Box::new(Leaf { key: key.to_vec(), val }))); None }
+                }
+            }
+        }
+    }
+
+    pub fn remove(&mut self, key: &[u8]) -> Option<V> {
+        let r = Self::rem(&mut self.root, key, 0);
+        if r.is_some() { self.len -= 1; }
+        r
+    }
+
+    fn rem(slot: &mut Slot<V>, key: &[u8], depth: usize) -> Option<V> {
+        match slot.as_mut()? {
+            Node::Leaf(l) => {
+                if l.key != key { return None; }
+                match slot.take() { Some(Node::Leaf(l)) => Some(l.val), _ => unreachable!() }
+            }
+            Node::Inner(inn) => {
+                let p = inn.prefix.len();
+                if key.len() < depth + p + 1 || key[depth..depth + p] != inn.prefix[..] { return None; }
+                let b = key[depth + p];
+                let child = inn.slot_mut(b)?;
+                let r = Self::rem(child, key, depth + p + 1)?;
+                if child.is_none() { inn.remove(b); }
+                if inn.count() == 1 {                                           // one child left: merge this node into it
+                    let (cb, c) = inn.only_child();
+                    let mut prefix = std::mem::take(&mut inn.prefix);
+                    *slot = Some(match c {
+                        Node::Leaf(l) => Node::Leaf(l),
+                        Node::Inner(mut ci) => { prefix.push(cb); prefix.extend_from_slice(&ci.prefix); ci.prefix = prefix; Node::Inner(ci) }
+                    });
+                }
+                Some(r)
+            }
+        }
+    }
+
+    /// Visit entries with `key >= lo` in ascending order until `f` returns `false`.
+    pub fn scan_from(&self, lo: &[u8], f: &mut impl FnMut(&[u8], &V) -> bool) {
+        if let Some(n) = &self.root { Self::visit(n, Some(lo), 0, f); }
+    }
+
+    pub fn iter_all(&self, f: &mut impl FnMut(&[u8], &V) -> bool) {
+        if let Some(n) = &self.root { Self::visit(n, None, 0, f); }
+    }
+
+    fn visit(node: &Node<V>, lo: Option<&[u8]>, depth: usize, f: &mut impl FnMut(&[u8], &V) -> bool) -> bool {
+        match node {
+            Node::Leaf(l) => { if lo.is_none_or(|lo| l.key.as_slice() >= lo) { f(&l.key, &l.val) } else { true } }
+            Node::Inner(inn) => {
+                let mut lo = lo;
+                if let Some(b) = lo {                                           // compare the compressed path with the bound
+                    let rest = &b[depth.min(b.len())..];
+                    let p = &inn.prefix;
+                    match p.as_slice().cmp(&rest[..p.len().min(rest.len())]) {
+                        std::cmp::Ordering::Less => return true,                // whole subtree is below the bound
+                        std::cmp::Ordering::Greater => lo = None,               // whole subtree is above it
+                        std::cmp::Ordering::Equal => if rest.len() < p.len() { lo = None },
+                    }
+                }
+                let d = depth + inn.prefix.len();
+                for (b, c) in inn.children() {
+                    let child_lo = match lo {
+                        None => None,
+                        Some(bound) => match bound.get(d) {
+                            None => None,
+                            Some(&lb) if b < lb => continue,
+                            Some(&lb) if b == lb => Some(bound),
+                            Some(_) => None,
+                        },
+                    };
+                    if !Self::visit(c, child_lo, d + 1, f) { return false; }
+                }
+                true
+            }
+        }
+    }
+
+    pub fn stats(&self) -> Stats {
+        fn go<V>(n: &Node<V>, depth: usize, s: &mut Stats) {
+            s.max_depth = s.max_depth.max(depth);
+            match n {
+                Node::Leaf(_) => s.leaves += 1,
+                Node::Inner(i) => {
+                    match i.kind { Kind::N4 { .. } => s.n4 += 1, Kind::N16 { .. } => s.n16 += 1, Kind::N48 { .. } => s.n48 += 1, Kind::N256 { .. } => s.n256 += 1 }
+                    s.inner_bytes += i.node_bytes();
+                    for (_, c) in i.children() { go(c, depth + 1, s); }
+                }
+            }
+        }
+        let mut s = Stats::default();
+        if let Some(r) = &self.root { go(r, 1, &mut s); }
+        s
+    }
+
+    /// Structural invariants, for tests: capacity bounds per node type and no one-child inner nodes.
+    pub fn check(&self) {
+        fn go<V>(n: &Node<V>) {
+            if let Node::Inner(i) = n {
+                let c = i.count();
+                assert!(c >= 2, "inner node with {c} children");
+                match i.kind {
+                    Kind::N4 { .. } => assert!(c <= 4), Kind::N16 { .. } => assert!((2..=16).contains(&c)),
+                    Kind::N48 { .. } => assert!(c <= 48), Kind::N256 { .. } => assert!(c <= 256),
+                }
+                let ch = i.children();
+                assert_eq!(ch.len(), c);
+                assert!(ch.windows(2).all(|w| w[0].0 < w[1].0));
+                for (_, c) in ch { go(c); }
+            }
+        }
+        if let Some(r) = &self.root { go(r); }
+    }
+}
+```
+:::
+
+<p><strong>Design points</strong></p>
+
+<ul> <li><strong><code>Slot&lt;V&gt; = Option&lt;Node&lt;V&gt;&gt;</code></strong> is the unit of mutation: insert and remove take <code>&amp;mut Slot</code> so a node can <em>replace itself</em> (grow, split a prefix, collapse into its only child) without the parent knowing. This is what makes ART natural in safe Rust: no raw pointers, no parent pointer.</li> <li><strong>Splitting a compressed path</strong> takes the old node out of its slot with <code>slot.take()</code>, puts it under a new <code>Node4</code> whose prefix is the common part, and adds the new leaf beside it.</li> <li><strong>Delete mirrors insert</strong>: removing a leaf may shrink the node (<code>N256 ≤ 37 → N48</code>, <code>N48 ≤ 12 → N16</code>, <code>N16 ≤ 3 → N4</code>; different thresholds from the growth points to avoid thrashing) and a node left with <strong>one</strong> child is merged into it, concatenating prefixes. The <code>check()</code> invariant "no inner node has fewer than two children" catches a forgotten collapse.</li> <li><strong>Range scans</strong> need a <em>lower bound descent</em>: compare the node's prefix with the bound's slice; if it's smaller the whole subtree is below the bound (skip), if larger the whole subtree qualifies (drop the bound), if equal continue per child byte. The code above is that logic in 15 lines.</li> </ul>
+"""
+
+[[sections]]
+heading = "Verified"
+body = """
+<ul> <li><strong>Model-based tests</strong> against <code>BTreeMap&lt;Vec&lt;u8&gt;, u64&gt;</code> with random inserts, removes, gets and range scans: 3-byte keys over a 4-letter alphabet (constant prefix splits and collapses), dense 32-bit keys (grows to Node256), random 64-bit keys, and string-like keys <code>user/N/item/M</code> with a NUL terminator; 100 seeds. Every 997 steps <code>check()</code> and a 50-entry scan from a random bound are compared with the model.</li> <li><strong>Node type transitions</strong>: 3 and 4 children → Node4; 5–16 → Node16; 17–48 → Node48; 49+ → Node256; and after removing 253 of 256 children the node is a Node4 again; removing the next two leaves a single leaf (no inner nodes).</li> </ul>
+"""
+
+[[sections]]
+heading = "Measured: 1 000 000 keys"
+body = """
+<p>A counting global allocator measures <strong>heap bytes actually requested</strong> while each structure is built. Baselines: <code>std::collections::BTreeMap</code> and <code>HashMap&lt;u64, u64&gt;</code>. Lookups are 1M random hits; scans read 1 000 consecutive entries from random starts.</p>
+
+```text title="Apple M-series, release build"
+sequential 0..1M       insert ns/key  ART     36  BTreeMap     40  HashMap     24
+                       bytes/key       ART   56.4  BTreeMap   34.3  HashMap   35.7
+                       get ns          ART     95  BTreeMap    123  HashMap     19
+                       scan ns/entry   ART      5  BTreeMap      1
+                       nodes: N4 0 N16 1 N48 0 N256 3923, depth 4; production-layout estimate 8.1 B/key
+random 32-bit          insert ns/key  ART     89  BTreeMap    103  HashMap     24
+                       bytes/key       ART   82.6  BTreeMap   27.1  HashMap   35.7
+                       get ns          ART    128  BTreeMap    134  HashMap     21
+                       scan ns/entry   ART     29  BTreeMap      6
+                       nodes: N4 28384 N16 44968 N48 20530 N256 257, depth 5; production-layout estimate 22.7 B/key
+random 64-bit          insert ns/key  ART     94  BTreeMap    110  HashMap     23
+                       bytes/key       ART   82.7  BTreeMap   27.1  HashMap   35.7
+                       get ns          ART    126  BTreeMap    120  HashMap     20
+                       scan ns/entry   ART     28  BTreeMap      6
+                       nodes: N4 28660 N16 44909 N48 20578 N256 257, depth 6; production-layout estimate 22.7 B/key
+```
+
+<p>Honest reading:</p>
+
+<ul> <li><strong>Point lookups: ART ≈ B-tree, hash table 5–6× faster.</strong> (95 vs 123 ns sequential, parity on random keys, 19 ns for the hash table.) At a million keys the lookup is dominated by cache misses on the way down, and ART's depth is 4–6 nodes. A hash table is the right structure when you never need order.</li> <li><strong>Insert is cheaper than <code>BTreeMap</code></strong> (36–94 ns vs 40–110) and has no rebalancing, but pays one heap allocation per leaf here.</li> <li><strong>Memory is where this safe-Rust version loses: 56–83 B/key vs 27–34 for <code>BTreeMap</code>.</strong> The reasons are layout, not algorithm: every leaf is a <code>Box&lt;Leaf&gt;</code> plus a separate <code>Vec&lt;u8&gt;</code> key (≈ 40 B per key), every child slot is a 16-byte enum, and each inner node carries a <code>Vec</code> prefix. The <em>last line</em> of each block recomputes the same tree with <strong>production layout</strong> (16-byte node header, 8-byte child pointers, leaves are tuple ids stored directly in the slot with tag bits): <strong>8 B/key for dense keys and 23 B/key for random 64-bit keys</strong>, in line with the ART paper's numbers. That's an estimate from the measured node counts, not a measurement, but it shows how much of the gap is representation.</li> <li><strong>Scans: 5–29 ns/entry vs 1–6 for the B-tree.</strong> <code>children()</code> allocates a <code>Vec</code> at every node visited; an iterator or in-place sorted-slot walk removes that. B-trees keep neighbours adjacent in memory, so they stay ahead on scans; ART's win is on <em>prefix</em> and <em>skewed-prefix</em> workloads (many keys sharing long prefixes), not on sequential entry throughput.</li> <li><strong>Dense keys compress extremely well</strong>: sequential keys build 3 923 Node256s and one Node16; with 8-byte pointers that is <strong>8 B/key</strong>, versus a B+Tree's ≥ 16 B/key (key + value) before fill-factor waste.</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong><code>const</code> generics for the sorted-array nodes</strong>: <code>add_sorted::&lt;N&gt;</code> and <code>remove_sorted::&lt;N&gt;</code> serve both Node4 and Node16, and <code>std::array::from_fn</code> builds the <code>[Option&lt;Node&gt;; N]</code> that <code>Default</code> can't.</li> <li><strong>Box the big variants</strong> (Node16's children, Node48's tables, Node256's array) so the enum's size is set by the <em>small</em> variant. The first version stored Node16's children inline and every Node4 cost 280 bytes.</li> <li><strong><code>std::mem::take</code> and <code>Option::take</code> for ownership transfer</strong>: restructuring a node while it's borrowed is awkward; moving children out, rebuilding the node, and moving them back is the idiom (<code>grow</code>, <code>shrink</code>).</li> <li><strong>To reach 8 B/slot in production</strong>: a tagged pointer (low bit = leaf) in a <code>NonNull&lt;u8&gt;</code> newtype, one allocation per node (header + keys + children via a manual <code>Layout</code>), and <code>std::arch</code> SIMD for Node16's key search (<code>_mm_cmpeq_epi8</code> on x86, <code>vceqq_u8</code> on NEON).</li> <li><strong>A counting <code>#[global_allocator]</code></strong> (20 lines in the test) is the quickest honest memory profiler: it measures requested bytes, independent of the allocator's own overhead.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Keys that are not prefix-free</strong> break ART (a key ending at an inner node has nowhere to live). Always terminate or fix the width.</li> <li>**Wrong encodings give wrong *order***, not crashes: signed integers without the sign flip, floats without the negative inversion, and strings without NUL escaping all pass point-lookup tests and fail scans. Test every encoding against its native comparison.</li> <li><strong>Long shared prefixes with lazy expansion</strong> make each lookup compare the full key at the leaf; fine, but remember to compare <em>before</em> returning a value.</li> <li><strong>Concurrency</strong>: a mutable ART with in-place growth is hard to make thread-safe. Use <strong>optimistic lock coupling</strong> (a version word per node: read, traverse, validate; writers take the node's lock and bump the version), or <strong>ROWEX</strong> (readers never block, writers lock nodes), as in Leis et al. 2016.</li> <li><strong>Shrink thresholds</strong>: shrinking at the same count where you grew makes a node oscillate between sizes on an insert/delete alternation; keep hysteresis (grow at full, shrink well below).</li> <li><strong>Memory reclamation</strong> for lock-free variants again needs epochs (<a href="/cookbook/p/latch-free-indexes-and-the-bw-tree">A5</a>).</li> </ul></aside>
+"""
+
+[[sources]]
+title = "The Adaptive Radix Tree: ARTful Indexing for Main-Memory Databases"
+url = "https://db.in.tum.de/~leis/papers/ART.pdf"
+
+[[sources]]
+title = "A Comparison of Adaptive Radix Trees and Hash Tables"
+url = "https://bigdata.uni-saarland.de/publications/ARCD15.pdf"
+
+[[sources]]
+title = "The ART of Practical Synchronization"
+url = "https://db.in.tum.de/~leis/papers/artsync.pdf"
+
+[[sources]]
+title = "HOT: A Height Optimized Trie Index for Main-Memory Database Systems"
+url = "https://dl.acm.org/doi/10.1145/3183713.3196896"
+
+[[sources]]
+title = "Cache Craftiness for Fast Multicore Key-Value Storage (Masstree)"
+url = "https://pdos.csail.mit.edu/papers/masstree:eurosys12.pdf"
+
+[[sources]]
+title = "SuRF: Practical Range Query Filtering with Fast Succinct Tries"
+url = "https://www.cs.cmu.edu/~pavlo/papers/mod601-zhangA-hm.pdf"
+
+[[sources]]
+title = "art-tree"
+url = "https://crates.io/crates/art-tree"
+
+[[sources]]
+title = "congee"
+url = "https://github.com/XiangpengHao/congee"
+
+[[sources]]
+title = "radix_trie"
+url = "https://crates.io/crates/radix_trie"

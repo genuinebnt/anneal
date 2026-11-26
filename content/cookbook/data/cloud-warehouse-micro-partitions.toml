@@ -1,0 +1,66 @@
+title = "Cloud data warehouse core ideas"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 439
+kind = "recipe"
+lede = "Micro-partitions, pruning metadata, clustering, time travel, zero-copy clone, elastic compute."
+level = "advanced"
+code = ["examples/database/cloud_warehouse_micro_partitions.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+cloud warehouses and lakehouse engines, any system that stores immutable columnar files plus a metadata catalog.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Snowflake (micro-partitions, clustering, time travel, zero-copy clone, virtual warehouses, result cache)</li><li>BigQuery and Redshift RA3 (storage separated from compute)</li><li>Delta Lake / Iceberg / Hudi (file lists + min/max stats)</li><li>ClickHouse parts. Course: CMU 15-721 Advanced Database Systems (Spring)</li><li>lecture on cloud databases and the Snowflake architecture</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a tiny in-memory model of the architecture in the Snowflake paper, with three decoupled layers:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Storage</div><div class="cb-g-says"><p>An object store of <strong>immutable</strong> micro-partitions (columnar, ~500 rows here, tens of MB in real systems). Files are never edited; DML writes new files. Each file is reference counted by the table versions that list it.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Metadata / catalog</div><div class="cb-g-says"><p>Per partition and column min, max, null count and a distinct-count estimate (linear-counting bitmap), kept <strong>outside</strong> the files so a planner can skip a file without opening it. A table <strong>version</strong> is just a list of partition ids.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Compute</div><div class="cb-g-says"><p>Stateless <strong>virtual warehouses</strong> (worker pools) that read partitions from storage into a local cache, plus a <strong>result cache</strong> keyed by query and table version.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Why** it works: because versions are lists of immutable ids, **time travel** is "read an older list", a **zero-copy clone** is "copy a list" (copy-on-write: the clone's later DML creates new files and leaves shared ones alone), and a file is physically freed only when its reference count reaches zero.
+
+**Partition pruning** turns min/max metadata into skipped I/O; it is only effective when the data is **clustered** on the filter column, so a background **clustering** service rewrites files when the average overlap depth (how many partitions cover a typical key value) is too high.
+
+**How** compute scales: queries are split per surviving partition and routed by hash(partition id) % workers so a given file keeps landing on the same worker (cache affinity); adding workers adds cache capacity, so the hit ratio rises with size. The result cache stores (version, answer); any DML bumps the table version, which invalidates dependent entries.
+
+**Multi-cluster autoscaling** is a feedback controller on queue depth: add a cluster when the backlog per cluster exceeds a threshold, remove one after a quiet period.
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+results through the pruned, cached, multi-worker path equal a plain full scan oracle; on 2000 random predicates pruning never drops a partition that holds a matching row (for 3 layouts); clustering improves the pruned fraction; time travel returns the exact historical contents; modifying a clone leaves the original unchanged and shares storage; refcounts free exactly the unreferenced files; the autoscaler beats a fixed single cluster on tail wait.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+The Snowflake Elastic Data Warehouse (SIGMOD 2016), summarized in the micro-partition docs <https://docs.snowflake.com/en/user-guide/tables-clustering-micropartitions> CMU 15-721 course schedule (cloud data warehouse lectures) <https://15721.courses.cs.cmu.edu/spring2024/> Delta Lake: High-Performance ACID Table Storage over Cloud Object Stores <https://www.vldb.org/pvldb/vol13/p3411-armbrust.pdf>
+"""
+
+[[sources]]
+title = "docs.snowflake.com/en/user-guide/tables-clustering-micropartitions"
+url = "https://docs.snowflake.com/en/user-guide/tables-clustering-micropartitions"
+
+[[sources]]
+title = "15721.courses.cs.cmu.edu/spring2024"
+url = "https://15721.courses.cs.cmu.edu/spring2024/"
+
+[[sources]]
+title = "vldb.org/pvldb/vol13/p3411-armbrust.pdf"
+url = "https://www.vldb.org/pvldb/vol13/p3411-armbrust.pdf"

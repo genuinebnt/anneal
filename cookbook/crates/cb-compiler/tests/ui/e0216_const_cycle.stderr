@@ -1,0 +1,17 @@
+error[E0216]: constant `A` depends on itself
+ --> e0216_const_cycle.peb:1:7
+  |
+1 | const A: int = B + 1;
+  |       ^ cycle detected when evaluating this constant
+  |
+  = note: constants are evaluated before `main` runs, so they cannot be cyclic
+
+error[E0216]: constant `B` depends on itself
+ --> e0216_const_cycle.peb:2:7
+  |
+2 | const B: int = A + 1;
+  |       ^ cycle detected when evaluating this constant
+  |
+  = note: constants are evaluated before `main` runs, so they cannot be cyclic
+
+error: aborting due to 2 previous errors

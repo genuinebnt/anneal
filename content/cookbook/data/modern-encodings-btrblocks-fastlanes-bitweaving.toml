@@ -1,0 +1,573 @@
+title = "Modern encodings: BtrBlocks, FastLanes, BitWeaving"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 327
+kind = "guide"
+lede = "15-721 S2024 lecture #3 · lightweight encodings and bit-packing · BtrBlocks cascades and sampling · FSST, Roaring, pseudodecimals · FastLanes transposed layout · BitWeaving bit-sliced scans"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Parquet-style decoding is CPU-bound.</strong> Variable-length runs and sequential dependencies (delta encoding: each value needs the previous one) waste cycles in both scalar and vectorized code and cannot use SIMD lanes. Three research formats attack this: <strong>BtrBlocks</strong> (better encodings and a smarter way to <em>choose</em> them), <strong>FastLanes</strong> (a layout that makes decoding data-parallel), <strong>BitWeaving</strong> (scan predicates directly on bit-sliced compressed data).</li> <li><strong>BtrBlocks</strong> (TU Munich): an open columnar format for data lakes minimizing <em>total cost</em> = storage + fast decompression. <strong>Seven existing schemes plus one new one for doubles</strong>, applied in a <strong>cascade</strong> (RLE, then bit-pack the run lengths; dictionary, then bit-pack the codes). Choice per column chunk by a <strong>greedy sampling algorithm</strong>: take a sample made of <em>several small runs from non-overlapping random positions</em> (so the sample captures both <strong>locality</strong> and <strong>distribution</strong>; runs of ≥ 16 tuples all work about equally), try every viable scheme on it, keep the best, and recurse on its outputs for up to three rounds. Reported: scans <strong>2.2× faster and 1.8× cheaper</strong> than Parquet on real data. Metadata is stored <em>separately</em> from data so a reader can prune before touching a high-latency object.</li> <li><strong>BtrBlocks' schemes</strong>: <strong>RLE and One-Value</strong>; <strong>Frequency</strong> (store the top value, a bitmap of "is the top value", and the <em>exceptions</em>: for skewed data); <strong>FOR + bit-packing</strong>; <strong>dictionary</strong>; <strong>FSST</strong> (Fast Static Symbol Table: replaces frequent substrings of up to 8 bytes with 1-byte codes from a table of ≤ 255 symbols built by an evolutionary, gain-driven algorithm; keeps <strong>random access</strong> to each string, unlike LZ4 blocks, and handles many unique-but-similar strings that a dictionary can't); <strong>Roaring bitmaps</strong> for NULLs and exceptions (dense 2¹⁶-value chunks as bitmaps, sparse chunks as sorted 16-bit arrays); <strong>pseudodecimals</strong> (a double as <em>(sign·digits, exponent)</em> when some power of ten maps it exactly to an integer, e.g. 3.25 → (+325, 2); exceptions for −0, ±∞, NaN and values like 5.5×10⁻⁴²; useless for few-unique or exception-heavy columns).</li> <li><strong>FastLanes</strong> (CWI): <strong>delta encoding</strong> has a serial dependency chain; FastLanes splits the values into runs (16 runs of 8, or here 32 of 32), gives <strong>each run its own base</strong>, and <strong>transposes</strong> the layout (the <em>Unified Transposed Layout</em>, UTL) so that a SIMD register holds one value <em>from each run</em>: resolving the deltas takes a few vector adds instead of a long chain. It exploits that relational algebra is over unordered sets, so tuple order inside a block is free to change. It is defined over a <strong>virtual 1024-bit instruction set (FLMM1024)</strong> of simple loops over 16 <code>u64</code> words, which optimizing compilers auto-vectorize to whatever the hardware offers, so it is <strong>portable</strong> across register widths and ISAs, and decodes &gt; 100 G integers/s with scalar-written code.</li> <li><strong>BitWeaving</strong> (Wisconsin, in Quickstep): traditional encodings process one value per operation and cannot short-circuit a comparison, because CPUs work on whole words, and codes narrower than 32 bits waste most of each SIMD lane. <strong>Bit-sliced</strong> layouts store <em>bit 15 of many values together, then bit 14, …</em>; a predicate walks planes from the <strong>most significant bit</strong> with word-wide AND/OR/XOR and can <strong>stop as soon as every tuple is decided</strong> (<em>early pruning</em>); SUM falls out of <strong>popcount</strong> per plane. <strong>BitWeaving/V</strong> (vertical: plane = one bit of many tuples; fast scans, slow to reassemble a value) and <strong>BitWeaving/H</strong> (horizontal: all bits of a value together plus a delimiter bit; fast value fetch, no early pruning, up to 2× slower scans). Result bit vectors feed the next predicate and are converted to positions via a <strong>pre-computed positions table</strong>. Reported: <strong>20× faster than SIMD-scan at 4-bit codes, 4× faster above 12 bits</strong>.</li> <li><strong>Take-away</strong>: pick encodings <em>by measuring the data</em> (sampling), keep decode loops <strong>branch-free and dependency-free</strong> (transposed layouts), and evaluate predicates <strong>on the encoded form</strong> when you can.</li> </ul>
+"""
+
+[[sections]]
+heading = "The encoding library"
+body = """
+<p>All the lightweight encodings in this part (the chooser in <a href="/cookbook/p/networking-protocols">A9</a>, the PAX writer in <a href="/cookbook/p/columnar-formats-and-nested-data">A12</a>) sit on one small library: variable-length integers, zigzag, a <strong>bit-packer</strong> (a <code>u128</code> accumulator that streams <code>w</code>-bit fields into bytes), and the integer and dictionary encoders. Round-trip tests run <strong>every bit width from 1 to 64</strong> at lengths straddling 8 and 64, and check that the scheme chooser picks the expected scheme for constant, sorted, small-range, random and run-heavy data (4 bytes for 1 000 equal values, 21 bytes for 1 000 values in ten runs, plain for random 64-bit values).</p>
+
+:::deeper Reference: bit-packing, varints, FOR / delta / RLE integer encoding and dictionary strings
+```rust title="src/storage/fmtlib.rs"
+//! Lightweight columnar encodings (bit-packing, frame of reference, delta, RLE, dictionary) with a tiny
+//! "pick the smallest" scheme chooser: the building blocks of Parquet-like formats and compact wire protocols.
+
+pub fn bits_for(max: u64) -> u32 { (64 - max.leading_zeros()).max(1) }
+
+pub fn put_varint(mut v: u64, out: &mut Vec<u8>) {
+    while v >= 0x80 { out.push((v as u8) | 0x80); v >>= 7; }
+    out.push(v as u8);
+}
+pub fn get_varint(b: &[u8], pos: &mut usize) -> u64 {
+    let (mut v, mut s) = (0u64, 0);
+    loop { let x = b[*pos]; *pos += 1; v |= ((x & 0x7F) as u64) << s; if x < 0x80 { return v; } s += 7; }
+}
+pub fn zigzag(v: i64) -> u64 { ((v << 1) ^ (v >> 63)) as u64 }
+pub fn unzigzag(v: u64) -> i64 { ((v >> 1) as i64) ^ -((v & 1) as i64) }
+
+/// Pack `vals` (each < 2^w) into a little-endian bit stream.
+pub fn pack_bits(vals: &[u64], w: u32, out: &mut Vec<u8>) {
+    let (mut acc, mut nb) = (0u128, 0u32);
+    for &v in vals {
+        acc |= (v as u128) << nb;
+        nb += w;
+        while nb >= 8 { out.push(acc as u8); acc >>= 8; nb -= 8; }
+    }
+    if nb > 0 { out.push(acc as u8); }
+}
+
+pub fn packed_len(n: usize, w: u32) -> usize { (n * w as usize).div_ceil(8) }
+
+pub fn unpack_bits(buf: &[u8], w: u32, n: usize) -> Vec<u64> {
+    let mask = if w == 64 { u64::MAX } else { (1u64 << w) - 1 };
+    let (mut acc, mut nb, mut pos) = (0u128, 0u32, 0usize);
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        while nb < w { acc |= (buf[pos] as u128) << nb; pos += 1; nb += 8; }
+        out.push((acc as u64) & mask);
+        acc >>= w;
+        nb -= w;
+    }
+    out
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum IntScheme { Plain = 0, For = 1, DeltaFor = 2, Rle = 3 }
+
+/// Encode with the smallest of: plain 8-byte, frame-of-reference + bit-packing, delta + zigzag + FOR, run-length.
+pub fn encode_ints(v: &[i64], out: &mut Vec<u8>) -> IntScheme {
+    let mut best: (IntScheme, Vec<u8>) = (IntScheme::Plain, v.iter().flat_map(|x| x.to_le_bytes()).collect());
+    let mut consider = |s: IntScheme, buf: Vec<u8>| if buf.len() < best.1.len() { best = (s, buf); };
+    if !v.is_empty() {
+        let (min, max) = (*v.iter().min().unwrap(), *v.iter().max().unwrap());
+        let w = bits_for(max.wrapping_sub(min) as u64);
+        let mut b = vec![]; b.extend(min.to_le_bytes()); b.push(w as u8);
+        pack_bits(&v.iter().map(|&x| x.wrapping_sub(min) as u64).collect::<Vec<_>>(), w, &mut b);
+        consider(IntScheme::For, b);
+
+        let d: Vec<u64> = v.windows(2).map(|p| zigzag(p[1].wrapping_sub(p[0]))).collect();
+        let dw = bits_for(d.iter().copied().max().unwrap_or(0));
+        let mut b = vec![]; b.extend(v[0].to_le_bytes()); b.push(dw as u8);
+        pack_bits(&d, dw, &mut b);
+        consider(IntScheme::DeltaFor, b);
+
+        let mut b = vec![]; let mut i = 0;
+        while i < v.len() { let mut j = i; while j < v.len() && v[j] == v[i] { j += 1; } put_varint(zigzag(v[i]), &mut b); put_varint((j - i) as u64, &mut b); i = j; }
+        consider(IntScheme::Rle, b);
+    }
+    out.push(best.0 as u8);
+    out.extend(&best.1);
+    best.0
+}
+
+pub fn decode_ints(b: &[u8], n: usize) -> Vec<i64> {
+    let (tag, b) = (b[0], &b[1..]);
+    match tag {
+        0 => b[..n * 8].chunks_exact(8).map(|c| i64::from_le_bytes(c.try_into().unwrap())).collect(),
+        1 => {
+            let min = i64::from_le_bytes(b[..8].try_into().unwrap());
+            unpack_bits(&b[9..], b[8] as u32, n).into_iter().map(|x| min.wrapping_add(x as i64)).collect()
+        }
+        2 => {
+            let first = i64::from_le_bytes(b[..8].try_into().unwrap());
+            let d = unpack_bits(&b[9..], b[8] as u32, n.saturating_sub(1));
+            let mut out = Vec::with_capacity(n);
+            let mut cur = first;
+            if n > 0 { out.push(cur); }
+            for x in d { cur = cur.wrapping_add(unzigzag(x)); out.push(cur); }
+            out
+        }
+        3 => {
+            let (mut out, mut pos) = (Vec::with_capacity(n), 0);
+            while out.len() < n { let v = unzigzag(get_varint(b, &mut pos)); let run = get_varint(b, &mut pos) as usize; out.extend(std::iter::repeat_n(v, run)); }
+            out
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// Dictionary encoding: sorted distinct values + bit-packed codes. Returns bytes written.
+pub fn encode_dict(vals: &[&str], out: &mut Vec<u8>) {
+    let mut d: Vec<&str> = vals.to_vec();
+    d.sort_unstable(); d.dedup();
+    put_varint(d.len() as u64, out);
+    for s in &d { put_varint(s.len() as u64, out); out.extend(s.as_bytes()); }
+    let codes: Vec<u64> = vals.iter().map(|v| d.binary_search(v).unwrap() as u64).collect();
+    let w = bits_for(d.len().saturating_sub(1) as u64);
+    out.push(w as u8);
+    pack_bits(&codes, w, out);
+}
+
+pub fn decode_dict(b: &[u8], n: usize) -> Vec<String> {
+    let mut pos = 0;
+    let k = get_varint(b, &mut pos) as usize;
+    let mut d = Vec::with_capacity(k);
+    for _ in 0..k { let l = get_varint(b, &mut pos) as usize; d.push(String::from_utf8(b[pos..pos + l].to_vec()).unwrap()); pos += l; }
+    let w = b[pos] as u32;
+    unpack_bits(&b[pos + 1..], w, n).into_iter().map(|c| d[c as usize].clone()).collect()
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "BtrBlocks-style cascade with sampling"
+body = """
+<p><code>encode</code> tries the candidate schemes on a <strong>sample</strong> (10 runs of 64 values spread over the block), picks the smallest, then encodes the <em>full</em> block with that scheme, recursively compressing the scheme's outputs (RLE's values and lengths, the dictionary and its codes, Frequency's exceptions, the deltas) up to a depth limit. <code>Pick::Exhaustive</code> tries each scheme on all the data, as the yardstick.</p>
+
+:::deeper Reference: scheme set, sampling selector, cascading encode/decode, and pseudodecimal doubles
+```rust title="src/storage/btr.rs"
+//! BtrBlocks-style cascading compression: pick a scheme per block by *sampling*, then recursively compress
+//! the scheme's outputs (run lengths, dictionary codes, exceptions) the same way.
+use crate::fmtlib::*;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Scheme { Plain = 0, OneValue = 1, For = 2, DeltaFor = 3, Rle = 4, Dict = 5, Frequency = 6 }
+
+const ALL: [Scheme; 7] = [Scheme::Plain, Scheme::OneValue, Scheme::For, Scheme::DeltaFor, Scheme::Rle, Scheme::Dict, Scheme::Frequency];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Pick { Sample, Exhaustive }
+
+fn put_block(out: &mut Vec<u8>, b: &[u8]) { put_varint(b.len() as u64, out); out.extend(b); }
+fn get_block<'a>(b: &'a [u8], p: &mut usize) -> &'a [u8] { let l = get_varint(b, p) as usize; let s = &b[*p..*p + l]; *p += l; s }
+
+/// Encode with one specific scheme; nested streams are compressed again while `depth > 0`.
+pub fn encode_with(v: &[i64], s: Scheme, depth: u8, pick: Pick) -> Option<Vec<u8>> {
+    let sub = |x: &[i64]| -> Vec<u8> { if depth == 0 { let mut o = vec![]; encode_with_plain(x, &mut o); o } else { encode(x, depth - 1, pick) } };
+    let mut o = vec![s as u8];
+    match s {
+        Scheme::Plain => { for x in v { o.extend(x.to_le_bytes()); } }
+        Scheme::OneValue => { if v.is_empty() || v.iter().any(|x| *x != v[0]) { return None; } o.extend(v[0].to_le_bytes()); }
+        Scheme::For => {
+            let min = *v.iter().min()?;
+            let w = bits_for(v.iter().map(|x| x.wrapping_sub(min) as u64).max()?);
+            o.extend(min.to_le_bytes()); o.push(w as u8);
+            pack_bits(&v.iter().map(|x| x.wrapping_sub(min) as u64).collect::<Vec<_>>(), w, &mut o);
+        }
+        Scheme::DeltaFor => {
+            if v.len() < 2 { return None; }
+            let d: Vec<i64> = v.windows(2).map(|p| p[1].wrapping_sub(p[0])).collect();
+            o.extend(v[0].to_le_bytes());
+            put_block(&mut o, &sub(&d));
+        }
+        Scheme::Rle => {
+            let (mut vals, mut lens) = (vec![], vec![]);
+            let mut i = 0;
+            while i < v.len() { let mut j = i; while j < v.len() && v[j] == v[i] { j += 1; } vals.push(v[i]); lens.push((j - i) as i64); i = j; }
+            if vals.len() * 2 > v.len() { return None; }               // not run-heavy: skip
+            put_varint(vals.len() as u64, &mut o);
+            put_block(&mut o, &sub(&vals)); put_block(&mut o, &sub(&lens));
+        }
+        Scheme::Dict => {
+            let mut d: Vec<i64> = v.to_vec(); d.sort_unstable(); d.dedup();
+            if d.len() * 2 > v.len() { return None; }
+            let codes: Vec<i64> = v.iter().map(|x| d.binary_search(x).unwrap() as i64).collect();
+            put_varint(d.len() as u64, &mut o);
+            put_block(&mut o, &sub(&d)); put_block(&mut o, &sub(&codes));
+        }
+        Scheme::Frequency => {
+            // the most common value + a bitmap of "is the top value" + the exceptions in order
+            let mut counts = std::collections::HashMap::new();
+            for x in v { *counts.entry(*x).or_insert(0usize) += 1; }
+            let (&top, &n) = counts.iter().max_by_key(|(k, c)| (**c, std::cmp::Reverse(**k)))?;
+            if n * 10 < v.len() * 6 { return None; }                       // needs a clearly dominant value (≥ 60%)
+            let exc: Vec<i64> = v.iter().copied().filter(|x| *x != top).collect();
+            o.extend(top.to_le_bytes());
+            let mut bm = vec![]; pack_bits(&v.iter().map(|x| (*x != top) as u64).collect::<Vec<_>>(), 1, &mut bm);
+            put_block(&mut o, &bm);
+            put_block(&mut o, &sub(&exc));
+        }
+    }
+    Some(o)
+}
+
+fn encode_with_plain(v: &[i64], o: &mut Vec<u8>) { o.push(Scheme::Plain as u8); for x in v { o.extend(x.to_le_bytes()); } }
+
+/// A sample of `runs` runs of `len` values from evenly spread, non-overlapping positions.
+fn sample(v: &[i64], runs: usize, len: usize) -> Vec<i64> {
+    if v.len() <= runs * len { return v.to_vec(); }
+    let stride = v.len() / runs;
+    (0..runs).flat_map(|i| v[i * stride..i * stride + len].iter().copied()).collect()
+}
+
+pub fn encode(v: &[i64], depth: u8, pick: Pick) -> Vec<u8> {
+    let probe: Vec<i64>;
+    let basis: &[i64] = match pick { Pick::Exhaustive => v, Pick::Sample => { probe = sample(v, 10, 64); &probe } };
+    let best = ALL.iter().filter_map(|&s| encode_with(basis, s, depth.min(1), Pick::Exhaustive).map(|b| (b.len(), s))).min().map(|x| x.1).unwrap_or(Scheme::Plain);
+    encode_with(v, best, depth, pick).or_else(|| encode_with(v, Scheme::Plain, 0, pick)).unwrap()
+}
+
+pub fn decode(b: &[u8], n: usize) -> Vec<i64> {
+    let (tag, body) = (b[0], &b[1..]);
+    match tag {
+        0 => body.chunks_exact(8).take(n).map(|c| i64::from_le_bytes(c.try_into().unwrap())).collect(),
+        1 => vec![i64::from_le_bytes(body[..8].try_into().unwrap()); n],
+        2 => { let min = i64::from_le_bytes(body[..8].try_into().unwrap()); unpack_bits(&body[9..], body[8] as u32, n).into_iter().map(|x| min.wrapping_add(x as i64)).collect() }
+        3 => {
+            let first = i64::from_le_bytes(body[..8].try_into().unwrap());
+            let mut p = 8; let d = decode(get_block(body, &mut p), n.saturating_sub(1));
+            let mut out = Vec::with_capacity(n); let mut cur = first; if n > 0 { out.push(cur); }
+            for x in d { cur = cur.wrapping_add(x); out.push(cur); }
+            out
+        }
+        4 => {
+            let mut p = 0; let runs = get_varint(body, &mut p) as usize;
+            let vals = decode(get_block(body, &mut p), runs); let lens = decode(get_block(body, &mut p), runs);
+            vals.iter().zip(&lens).flat_map(|(v, l)| std::iter::repeat_n(*v, *l as usize)).collect()
+        }
+        5 => {
+            let mut p = 0; let k = get_varint(body, &mut p) as usize;
+            let d = decode(get_block(body, &mut p), k);
+            decode(get_block(body, &mut p), n).iter().map(|c| d[*c as usize]).collect()
+        }
+        6 => {
+            let top = i64::from_le_bytes(body[..8].try_into().unwrap());
+            let mut p = 8; let bm = get_block(body, &mut p);
+            let flags = unpack_bits(bm, 1, n);
+            let n_exc = flags.iter().filter(|&&f| f == 1).count();
+            let exc = decode(get_block(body, &mut p), n_exc);
+            let mut it = exc.into_iter();
+            flags.iter().map(|&f| if f == 1 { it.next().unwrap() } else { top }).collect()
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// Which scheme was chosen at the top level.
+pub fn top_scheme(b: &[u8]) -> Scheme { ALL[b[0] as usize] }
+
+// ---------------- doubles: pseudodecimal ----------------
+
+/// A double becomes (integer digits, decimal exponent) if some e ≤ 15 reproduces it exactly; otherwise it is an exception.
+pub fn encode_f64(v: &[f64]) -> Vec<u8> {
+    let (mut digits, mut exps, mut exc_pos, mut exc_val) = (vec![], vec![], vec![], vec![]);
+    for (i, &x) in v.iter().enumerate() {
+        let hit = (0..=15i32).find_map(|e| { let s = (x * 10f64.powi(e)).round(); (s.abs() < 9.0e15 && s / 10f64.powi(e) == x && !(x == 0.0 && x.is_sign_negative())).then_some((s as i64, e as i64)) });
+        match hit { Some((d, e)) => { digits.push(d); exps.push(e); } None => { exc_pos.push(i as i64); exc_val.push(x.to_bits() as i64); digits.push(0); exps.push(0); } }
+    }
+    let mut o = vec![];
+    put_varint(exc_pos.len() as u64, &mut o);
+    put_block(&mut o, &encode(&digits, 2, Pick::Sample));
+    put_block(&mut o, &encode(&exps, 2, Pick::Sample));
+    put_block(&mut o, &encode(&exc_pos, 2, Pick::Sample));
+    put_block(&mut o, &encode(&exc_val, 0, Pick::Sample));
+    o
+}
+
+pub fn decode_f64(b: &[u8], n: usize) -> Vec<f64> {
+    let mut p = 0;
+    let n_exc = get_varint(b, &mut p) as usize;
+    let digits = decode(get_block(b, &mut p), n);
+    let exps = decode(get_block(b, &mut p), n);
+    let pos = decode(get_block(b, &mut p), n_exc);
+    let val = decode(get_block(b, &mut p), n_exc);
+    let mut out: Vec<f64> = digits.iter().zip(&exps).map(|(d, e)| *d as f64 / 10f64.powi(*e as i32)).collect();
+    for (p, v) in pos.iter().zip(&val) { out[*p as usize] = f64::from_bits(*v as u64); }
+    out
+}
+```
+:::
+
+```text title="65 536 values per column; bytes per value (plain = 8)"
+data (64k values, bytes/value)    plain  FOR only   sampled exhaustive  select ms s/e  chosen (sampled)
+constant                           8.00      0.13     0.000      0.000     0.07/3.88   OneValue
+sequential ids                     8.00      2.00     0.000      0.000     0.15/8.69   DeltaFor
+small range (0..50)                8.00      0.75     0.750      0.750     0.19/4.51   For
+90% one value, rest random         8.00      2.50     0.375      0.375     0.97/9.68   Frequency
+runs of ~100                       8.00      1.25     0.081      0.002     0.20/4.59   Rle
+100 distinct 64-bit values         8.00      8.00     0.887      0.887     0.63/10.43  Dict
+timestamps with jitter             8.00      3.13     1.250      1.250     0.23/9.29   DeltaFor
+random 64-bit                      8.00      8.00     8.000      8.000     0.09/6.46   Plain
+runs of dictionary values          8.00      8.00     0.017      0.017     0.20/4.64   Rle
+total: sampled 744577 bytes vs exhaustive 739356 bytes (0.7% larger)
+```
+
+<ul> <li><strong>There is no best scheme, only a best scheme for this block</strong>: FOR alone is excellent for small ranges and useless for 100 distinct 64-bit values (8.0 B) where a dictionary needs 0.89 B; Frequency gets the "90% one value" column to 0.375 B/value where FOR needs 2.5.</li> <li><strong>Cascades multiply</strong>: sequential ids go DeltaFor → all deltas equal 1 → OneValue: effectively zero bytes per value; runs of dictionary values go RLE → dictionary → bit-packed codes (0.017 B). A single-level scheme can't do that.</li> <li><strong>Sampling picks almost the same encodings for a fraction of the effort</strong>: <strong>0.7% larger output in total, selection 20–60× faster</strong> (0.07–0.97 ms against 3.9–10.4 ms per 64k-value block), which matters because encoding happens on every write and compaction. The one visible miss (<code>runs of ~100</code>: 0.081 vs 0.002 B/value) comes from the <em>nested</em> choice for the small run-value stream, where a 10×64-value sample covers almost all of it: samples help most on <em>large</em> streams.</li> <li><strong>Random data stays plain</strong>: the chooser must never expand data. Every scheme returns <code>None</code> or a bigger encoding and the minimum wins.</li> </ul>
+
+```text title="pseudodecimal doubles"
+doubles                      bytes/val     vs 8 B
+prices (2 decimals)               2.26       3.5x
+2% arbitrary doubles              7.02       1.1x
+sensor (full mantissa)            9.01       0.9x
+```
+
+<p>Prices become small integers and cascade to 2.26 B/value (3.5× smaller), and are <strong>bit-exact</strong> on decode (the test compares <code>to_bits</code>, including −0.0, ±∞, NaN and 5.5×10⁻⁴²). With 2% arbitrary doubles the exceptions dominate (7.0 B), and <strong>full-mantissa sensor data expands to 9.0 B</strong>: a production encoder samples first and falls back to plain (or to XOR-based floating-point schemes such as Gorilla/ALP-like) when the exception rate is high.</p>
+"""
+
+[[sections]]
+heading = "FastLanes: decode 32 lanes at once"
+body = """
+<p>The layout: a block of <strong>1 024 values</strong> is 32 lanes of 32 sequential values; lane <em>l</em> is the run <code>vals[l·32 .. l·32+32]</code>. Fields of <code>w</code> bits are packed so that <em>word <code>wi</code> of lane <code>l</code></em> lives at <code>packed[wi·32 + l]</code>: the 32 lanes' words are <strong>adjacent</strong>, so a row's decode is one load, one shift (the <em>same</em> shift for every lane), one mask and one store across 32 contiguous words. The delta variant keeps one <strong>base per lane</strong> and a prefix sum that runs <em>down the rows</em> (<code>cur[l] += delta[r][l]</code> for all <code>l</code> together).</p>
+
+:::deeper Reference: unified transposed layout, bit-packing and delta decode over 32 lanes
+```rust title="src/storage/fastlanes.rs"
+//! FastLanes-style layouts: 1024 values as 32 independent lanes × 32 rows, so decoding is 32-wide data parallel.
+//! Lane `l` holds the sequential run `vals[l*32 .. l*32+32]`; the output comes out *transposed* (row-major), which is
+//! fine because relational operators don't care about tuple order.
+
+pub const LANES: usize = 32;
+pub const ROWS: usize = 32;
+pub const BLOCK: usize = LANES * ROWS;
+
+/// Pack a block with `w`-bit fields in the unified transposed layout: word `wi` of lane `l` lives at `packed[wi*32 + l]`.
+pub fn pack_block(vals: &[u32; BLOCK], w: u32) -> Vec<u32> {
+    let mut packed = vec![0u32; w as usize * LANES];
+    for r in 0..ROWS {
+        let (bit, wi) = (r as u32 * w, (r as u32 * w / 32) as usize);
+        let sh = (r as u32 * w) % 32;
+        for l in 0..LANES {
+            let v = vals[l * ROWS + r];
+            debug_assert!(w == 32 || v < (1 << w));
+            packed[wi * LANES + l] |= v << sh;
+            if sh + w > 32 { packed[(wi + 1) * LANES + l] |= v >> (32 - sh); }
+        }
+        let _ = bit;
+    }
+    packed
+}
+
+/// Decode into row-major order: `out[r*32 + l] = vals[l*32 + r]`. The inner loop runs over the 32 lanes with the same
+/// shift for all of them: no data dependency between lanes, no branches inside, so the compiler vectorizes it.
+pub fn unpack_block(packed: &[u32], w: u32, out: &mut [u32; BLOCK]) {
+    let mask = if w == 32 { u32::MAX } else { (1u32 << w) - 1 };
+    for r in 0..ROWS {
+        let wi = (r as u32 * w / 32) as usize;
+        let sh = (r as u32 * w) % 32;
+        let lo = &packed[wi * LANES..wi * LANES + LANES];
+        let dst = &mut out[r * LANES..r * LANES + LANES];
+        if sh + w <= 32 {
+            for l in 0..LANES { dst[l] = (lo[l] >> sh) & mask; }
+        } else {
+            let hi = &packed[(wi + 1) * LANES..(wi + 1) * LANES + LANES];
+            for l in 0..LANES { dst[l] = ((lo[l] >> sh) | (hi[l] << (32 - sh))) & mask; }
+        }
+    }
+}
+
+pub fn untranspose(row_major: &[u32; BLOCK]) -> [u32; BLOCK] {
+    let mut o = [0u32; BLOCK];
+    for r in 0..ROWS { for l in 0..LANES { o[l * ROWS + r] = row_major[r * LANES + l]; } }
+    o
+}
+
+/// Delta layout: each lane keeps its own base; increments (≥ 0, < 2^w) are packed like any other field.
+pub fn pack_delta_block(vals: &[u32; BLOCK], w: u32) -> (Vec<u32>, [u32; LANES]) {
+    let mut bases = [0u32; LANES];
+    let mut deltas = [0u32; BLOCK];
+    for l in 0..LANES {
+        bases[l] = vals[l * ROWS];
+        for r in 1..ROWS { deltas[l * ROWS + r] = vals[l * ROWS + r] - vals[l * ROWS + r - 1]; }
+    }
+    (pack_block(&deltas, w), bases)
+}
+
+/// Prefix sums run *down the rows*: `cur[l] += delta[r][l]` for all 32 lanes at once.
+pub fn unpack_delta_block(packed: &[u32], w: u32, bases: &[u32; LANES], out: &mut [u32; BLOCK]) {
+    let mut tmp = [0u32; BLOCK];
+    unpack_block(packed, w, &mut tmp);
+    let mut cur = *bases;
+    out[..LANES].copy_from_slice(bases);
+    for r in 1..ROWS {
+        for l in 0..LANES { cur[l] = cur[l].wrapping_add(tmp[r * LANES + l]); out[r * LANES + l] = cur[l]; }
+    }
+}
+```
+:::
+
+```text title="ns per value to decode 4M values, Apple M-series (NEON)"
+ width  sequential bit-unpack FastLanes lane-parallel    speedup   (ns per value, decode only)
+     3                  1.333                  0.057      23.2x
+     8                  1.192                  0.059      20.1x
+    13                  1.452                  0.073      19.9x
+    16                  1.546                  0.062      24.8x
+    24                  2.035                  0.073      28.0x
+delta decode (6-bit increments): sequential unpack + serial prefix sum 1.683 ns/value, FastLanes 0.133 ns/value (12.6x)
+```
+
+<ul> <li><strong>20–28× faster bit-unpacking</strong> (0.06 ns/value ≈ <strong>16 billion values/s on one core</strong>), for every width. The sequential decoder carries a bit accumulator from one value to the next; the lane-parallel decoder has <em>no dependency between iterations of the inner loop</em>, so the compiler emits vector loads, shifts, masks and stores with <strong>no intrinsics in the source</strong>.</li> <li><strong>Delta decode is 12.6× faster</strong> (0.13 vs 1.68 ns/value): the sequential version needs unpack <em>then</em> a serial prefix sum, where each value waits for its predecessor.</li> <li>The price: output is in <strong>transposed order</strong> (<code>out[r·32 + l]</code>); <code>untranspose</code> restores it for tests. Operators that don't need order (filters, aggregates, hash-join build) consume the transposed block as is; operators that do (order-preserving output) need one more pass.</li> <li>Correctness: every width 1–32 round-trips exactly (a block is <code>w</code> words per lane), and the delta layout round-trips at several widths.</li> </ul>
+"""
+
+[[sections]]
+heading = "BitWeaving/V: predicates on bit planes"
+body = """
+<p>A column of <code>w</code>-bit codes becomes <code>w</code> bit planes per 64 tuples (plane 0 = the most significant bit of 64 values packed into one <code>u64</code>). <code>value &lt; c</code> walks the planes from the top keeping two masks, <strong><code>lt</code></strong> (already decided smaller) and <strong><code>eq</code></strong> (still tied with <code>c</code>); when <code>eq</code> is zero for a segment, the remaining planes are never read.</p>
+
+:::deeper Reference: BitWeaving/V build, < and = scans with early pruning, and popcount SUM
+```rust title="src/storage/bitweaving.rs"
+//! BitWeaving/V: values stored as bit planes (plane b = bit b of 64 consecutive values in one u64), so a predicate
+//! on w-bit codes touches at most w words per 64 tuples and can stop as soon as no tuple is still undecided.
+
+pub struct Column { pub w: u32, pub n: usize, planes: Vec<u64> }   // planes[seg * w + b], b = 0 is the MOST significant bit
+
+impl Column {
+    pub fn build(vals: &[u32], w: u32) -> Column {
+        let segs = vals.len().div_ceil(64);
+        let mut planes = vec![0u64; segs * w as usize];
+        for (i, &v) in vals.iter().enumerate() {
+            debug_assert!(w == 32 || v < (1 << w));
+            let (seg, bit) = (i / 64, i % 64);
+            for b in 0..w { if (v >> (w - 1 - b)) & 1 == 1 { planes[seg * w as usize + b as usize] |= 1 << bit; } }
+        }
+        Column { w, n: vals.len(), planes }
+    }
+
+    fn seg_mask(&self, seg: usize) -> u64 { let rem = self.n - seg * 64; if rem >= 64 { u64::MAX } else { (1u64 << rem) - 1 } }
+
+    /// Result bitmap of `value < c`. Walks planes from the MSB; stops for a segment once every tuple is decided.
+    pub fn lt(&self, c: u32, planes_read: &mut u64) -> Vec<u64> {
+        let w = self.w as usize;
+        let mut out = vec![0u64; self.n.div_ceil(64)];
+        for seg in 0..out.len() {
+            let (mut lt, mut eq) = (0u64, self.seg_mask(seg));
+            for b in 0..w {
+                *planes_read += 1;
+                let plane = self.planes[seg * w + b];
+                let cbit = if (c >> (w - 1 - b)) & 1 == 1 { u64::MAX } else { 0 };
+                lt |= eq & !plane & cbit;              // still tied so far, my bit is 0 and c's bit is 1 ⇒ smaller
+                eq &= !(plane ^ cbit);                 // still tied only where the bits match
+                if eq == 0 { break; }                  // early pruning: nothing left undecided in these 64 tuples
+            }
+            out[seg] = lt;
+        }
+        out
+    }
+
+    pub fn eq(&self, c: u32, planes_read: &mut u64) -> Vec<u64> {
+        let w = self.w as usize;
+        let mut out = vec![0u64; self.n.div_ceil(64)];
+        for seg in 0..out.len() {
+            let mut eq = self.seg_mask(seg);
+            for b in 0..w {
+                *planes_read += 1;
+                let cbit = if (c >> (w - 1 - b)) & 1 == 1 { u64::MAX } else { 0 };
+                eq &= !(self.planes[seg * w + b] ^ cbit);
+                if eq == 0 { break; }
+            }
+            out[seg] = eq;
+        }
+        out
+    }
+
+    /// SUM of all values, from popcounts of the planes: Σ popcount(plane_b) · 2^(w-1-b).
+    pub fn sum(&self) -> u64 {
+        let w = self.w as usize;
+        let mut total = 0u64;
+        for seg in 0..self.n.div_ceil(64) { for b in 0..w { total += (self.planes[seg * w + b].count_ones() as u64) << (w - 1 - b); } }
+        total
+    }
+}
+
+pub fn popcount(bm: &[u64]) -> u64 { bm.iter().map(|x| x.count_ones() as u64).sum() }
+```
+:::
+
+```text title="16M values, ns per value for value < c at ~10% selectivity (count only)"
+width      u32 array       bit-packed     BitWeaving/V   planes/seg    vs u32 scan
+4          0.279            1.480            0.045         4.00           6.3x
+8          0.276            1.402            0.123         6.88           2.2x
+12          0.278            1.527            0.141         7.31           2.0x
+16          0.270            1.733            0.131         7.34           2.1x
+24          0.280            2.183            0.163         7.34           1.7x
+```
+
+- **Against the naive `u32` scan the win is 6.3× at 4-bit codes and shrinks to ~2× at 8–16 bits** (1.7× at 24). The lecture quotes ~20× vs SIMD-scan at 4 bits; here the baseline is the *compiler-vectorized* scan of an uncompressed array on an M-series core, which is a much stronger baseline than a 2013 SIMD-scan of packed codes. Against the **bit-packed** column (decode, then compare: 1.4–2.2 ns/value) BitWeaving is **11–33× faster**.
+- **Early pruning is visible in the plane counts**: at 4 bits all 4 planes are read (nothing to skip); at 8+ bits the average is **~7.3 planes per segment, not 8–24**. For a constant like `c = 10%` of the domain, almost every 64-tuple segment is decided within the first 7 bits.
+- **BitWeaving's strengths are the compact result bitmaps** (they feed the next predicate directly) and **no decompression**: the scan works on the stored form. Its weaknesses are the **vertical layout** (reconstructing one tuple's value touches *w* planes in different cache lines) and the planes' dependence on small codes: wide columns are better served by dictionary-coding to ≤ 16 bits first.
+- **Verified** against a plain scan for widths 1–20 and lengths 0, 1, 63, 64, 65, 1 000, 4 097 (partial last segments!): `<`, `=`, bit-by-bit result positions, and `SUM` via popcount.
+
+
+
+Rust notes
+Make the inner loop a fixed-size for l in 0..LANES over slices of exactly 32 elements: that is the shape LLVM's loop vectorizer recognizes. Avoid if inside it (hoist per-row conditions out, as unpack_block does with sh + w &lt;= 32), and avoid get/index with data-dependent values.
+Check that it vectorized: cargo asm/cargo show-asm, RUSTFLAGS="--emit asm", or Compiler Explorer; and compile with -C target-cpu=native when you control the deployment. For explicit control use std::arch intrinsics (NEON: vld1q_u32, vshlq_u32; x86: _mm256_srlv_epi32) behind #[cfg(target_arch)] with a scalar fallback, or the portable std::simd (nightly) when it stabilizes.
+u128 as a bit accumulator (pack_bits/unpack_bits) avoids splitting a field across two u64 operations; it is not fast (1.2–2 ns/value above), which is the point of the FastLanes comparison.
+Const generics (unpack_block::&lt;W>) let the compiler specialize shifts and masks per width; generate all 32 widths with a macro and dispatch with a match.
+Pop counts: u64::count_ones compiles to popcnt (x86) or cnt + addv (NEON); the BitWeaving sum is bounded by it.
+
+
+
+
+
+
+
+Pitfalls
+Bit-packing needs a width per block; a single outlier makes the whole block wide. Patched schemes (PFOR, BtrBlocks' Frequency and exception lists) store outliers separately; sampling must see them.
+Delta and FOR overflow: use wrapping arithmetic and test i64::MIN/MAX ranges (the library's tests do); max − min can exceed i64.
+Order-changing layouts leak into operators: a transposed decoder is only valid for consumers that tolerate permuted tuples; carry the permutation (or a selection vector) through the pipeline.
+Sampling bias: a sample from the start of a block misses a late change in distribution; spread runs across the whole block, as above, and re-sample per block, not per file.
+FSST and Roaring need real implementations for production: symbol tables are learned from a sample per column chunk and shipped with it; Roaring switches container type at 4 096 entries per 2¹⁶ chunk.
+Don't compress what you can't decode fast: measure decode ns/value next to bytes/value; a 10% smaller block that decodes 3× slower loses on fast networks.
+
+
+
+
+
+
+
+Exercises
+Implement FSST (symbol table of ≤ 255 symbols up to 8 bytes, built by iterating "count symbol and pair gains, keep the best 255, repeat" for 5 rounds; escape byte for unmatched bytes) and compare against dictionary encoding on URL-like strings (many unique, similar values), with random access to value i.
+Add Roaring-style NULL bitmaps to the PAX writer (A12): array containers below 4 096 entries, bitmap containers above; measure size vs a flat bitmap at 0.1%, 10% and 50% NULLs.
+Extend the FastLanes decoder with const-generic widths and a fused decode + filter loop that produces a selection bitmap per 1 024 block; compare with decode-then-filter.
+Implement BitWeaving/H (values with a delimiter bit packed into words, the Y + (X ⊕ mask) comparison from the lecture) and compare scan, lookup and early-pruning behaviour with /V.
+Make the sampling cascade cost-aware: choose the scheme minimizing bytes + λ·decode_ns with measured decode costs, and show how λ changes the choice for the "100 distinct 64-bit values" column.
+Add the string schemes (dictionary, FSST, front coding) to the cascade and a double scheme (XOR/Gorilla or ALP-style) next to pseudodecimals; evaluate on a public dataset (e.g. NYC taxi columns).
+Port the FastLanes unpack to explicit NEON/AVX2 intrinsics with a cfg fallback and measure whether you beat the autovectorized loop.
+
+
+
+
+
+
+
+Sources and further reading
+A. Afroozeh, P. Boncz, The FastLanes Compression Layout: Decoding > 100 Billion Integers per Second with Scalar Code, VLDB 2023.
+M. Kuschewski, D. Sauerwein, A. Alhomssi, V. Leis, BtrBlocks: Efficient Columnar Compression for Data Lakes, SIGMOD 2023.
+Y. Li, J. Patel, BitWeaving: Fast Scans for Main Memory Data Processing, SIGMOD 2013; P. O'Neil, D. Quass, Improved Query Performance with Variant Indexes, SIGMOD 1997 (bit-sliced indexes).
+P. Boncz, T. Neumann, V. Leis, FSST: Fast Random Access String Compression, VLDB 2020; S. Chambi, D. Lemire et al., Better Bitmap Performance with Roaring Bitmaps, 2016.
+D. Abadi et al., Integrating Compression and Execution in Column-Oriented Database Systems, SIGMOD 2006; T. Willhalm et al., SIMD-Scan, VLDB 2009; D. Lemire, L. Boytsov, Decoding Billions of Integers per Second through Vectorization, 2015 (SIMD-BP128).
+A. Afroozeh et al., ALP: Adaptive Lossless Floating-Point Compression, SIGMOD 2024; Pelkonen et al., Gorilla: A Fast, Scalable, In-Memory Time Series Database, VLDB 2015.
+Rust: fastlanes and vortex (cascading encodings), fsst-rs, roaring.
+
+
+
+
+
+
+
+Done whenYou can explain why delta and bit-packed decoding is slow in scalar form and how a transposed lane layout removes the dependencyYou can describe BtrBlocks' cascade and sampling, and what each of its schemes (RLE, frequency, FOR, dictionary, FSST, Roaring, pseudodecimal) is forYou can implement bit-sliced predicate scans with early pruning and popcount aggregationYou can read the measurements: sampling's size and speed trade, FastLanes's 12–28×, BitWeaving's 2–6× over a vectorized scanYou know the pitfalls: outliers, overflow, order-changing layouts and sampling bias
+"""

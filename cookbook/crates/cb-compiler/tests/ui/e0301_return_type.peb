@@ -1,0 +1,4 @@
+fn f() -> int {
+    "no"
+}
+fn main() { println(to_str(f())); }

@@ -1,0 +1,176 @@
+title = "Storage models and compression"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 323
+kind = "guide"
+lede = "OLTP / OLAP / HTAP · NSM, DSM, PAX · RLE, bit-packing, FOR, delta, dictionary, bitmaps · late materialization"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Workloads decide layout.</strong> OLTP: short, repetitive queries touching one entity, write-heavy. OLAP: long queries scanning much of the database, read-heavy, with aggregates. HTAP: both on one system.</li> <li><strong>NSM (row store)</strong>: all attributes of a tuple together. Fast inserts, updates and deletes and whole-tuple reads; wasteful for scans over a few columns, and hard to compress (mixed value domains in each page).</li> <li><strong>DSM (column store)</strong>: each attribute stored contiguously. Reads only the needed columns, gets better cache locality, and compresses far better. Point queries and updates are slow, because tuples must be split and stitched back together.</li> <li><strong>Reconstructing tuples</strong>: <em>fixed-length offsets</em> (the i-th value of every column belongs to tuple i; the common approach) or embedded tuple ids (a large overhead).</li> <li><strong>PAX</strong>: rows split into <strong>row groups</strong>, and columns stored within each group. Columnar scans with row-ish locality. This is Parquet's and ORC's layout.</li> <li><strong>Compression trades CPU for I/O</strong>, and disk I/O is almost always the bottleneck. Good schemes give <strong>fixed-length</strong> values (so offsets still work), allow <strong>late materialization</strong> (operate on compressed data as long as possible), and are <strong>lossless</strong>.</li> <li><strong>Granularity</strong>: block, tuple (NSM), attribute, or column (DSM, which enables the best schemes).</li> <li><strong>Naive compression</strong> (LZ4, Snappy, Zstd on pages) must decompress before any read, and it ignores data semantics, so no late materialization is possible.</li> <li><strong>Columnar encodings</strong>: <strong>RLE</strong> (value, start, length; sort first to lengthen runs); <strong>bit-packing</strong> (fewer bits when values are small); <strong>patching / mostly</strong> encoding (bit-pack, with outliers kept in a side table); <strong>bitmaps</strong> (one bit-vector per distinct value; only for low cardinality; use Roaring for sparse data); <strong>delta</strong> (differences between neighbours, often combined with RLE); <strong>dictionary</strong> (the most common: codes plus a dictionary, <strong>order-preserving</strong> so range predicates can run on codes).</li> </ul>
+"""
+
+[[sections]]
+heading = "NSM vs DSM vs PAX"
+body = """
+<figure class="cb-g-fig"><svg viewBox="0 0 820 190" role="img" aria-label="Storage models"> <g font-size="12"> <text x="10" y="16" class="cb-g-mut">NSM (row)</text> <rect x="10" y="24" width="240" height="22" class="cb-g-boxa"></rect><text x="16" y="40">a1 b1 c1 d1 | a2 b2 c2 d2 | …</text> <rect x="10" y="50" width="240" height="22" class="cb-g-box"></rect><text x="16" y="66">a5 b5 c5 d5 | a6 b6 c6 d6 | …</text> <text x="290" y="16" class="cb-g-mut">DSM (column)</text> <rect x="290" y="24" width="240" height="22" class="cb-g-boxa"></rect><text x="296" y="40">a1 a2 a3 a4 a5 a6 a7 a8 …</text> <rect x="290" y="50" width="240" height="22" class="cb-g-box"></rect><text x="296" y="66">b1 b2 b3 b4 b5 b6 b7 b8 …</text> <rect x="290" y="76" width="240" height="22" class="cb-g-box"></rect><text x="296" y="92">c1 c2 c3 …   d1 d2 d3 …</text> <text x="570" y="16" class="cb-g-mut">PAX (row groups of columns)</text> <rect x="570" y="24" width="240" height="74" class="cb-g-box"></rect><text x="578" y="40">row group 1: a1..a4 | b1..b4</text><text x="578" y="60">             c1..c4 | d1..d4</text><text x="578" y="84" class="cb-g-mut">header: min/max, offsets</text> <rect x="570" y="104" width="240" height="40" class="cb-g-box"></rect><text x="578" y="128">row group 2: a5..a8 | b5..b8 …</text> <text x="10" y="120">SELECT SUM(c) WHERE a &lt; 10:</text> <text x="10" y="140" class="cb-g-mut">NSM reads every byte of every row · DSM reads only a and c</text> <text x="10" y="160" class="cb-g-mut">PAX reads a and c within each group, and skips whole groups via min/max (zone maps)</text> </g></svg></figure>
+
+```text title="SUM(c3) WHERE c5 < 100 · 2M rows × 32 BIGINT columns (256 B rows) · Apple M4 Pro, in memory"
+NSM (row) scan:     8.60 ms      ← drags ≥ 64 B per row through the cache: 128+ MB of 512 MB
+DSM (column) scan:  0.68–1.77 ms ← reads exactly two 16 MB columns
+```
+
+<p>That's 5–12× from layout alone, in memory. On disk, the ratio is the fraction of bytes read: 32 MB vs 512 MB, or 16×. Add compression and the column store reads far less again.</p>
+"""
+
+[[sections]]
+heading = "Compression schemes"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Scheme</th> <th>Best for</th> <th>Decode</th> <th>Operate on compressed?</th> </tr> </thead> <tbody> <tr> <td><strong>RLE</strong></td> <td>sorted or clustered low-cardinality columns</td> <td>sequential</td> <td>yes: <code>SUM</code> = Σ value·length; filters per run</td> </tr> <tr> <td><strong>Bit-packing</strong></td> <td>small integers</td> <td>random access by index</td> <td>yes: SIMD compares on packed lanes (BitWeaving, FastLanes)</td> </tr> <tr> <td><strong>Frame of reference (FOR)</strong></td> <td>values clustered around a base</td> <td>random access</td> <td>yes: shift the predicate by the base</td> </tr> <tr> <td><strong>Delta</strong> (+ bit-pack or RLE)</td> <td>sorted ids, timestamps</td> <td>sequential (prefix sum)</td> <td>partially</td> </tr> <tr> <td><strong>Dictionary</strong> (order-preserving)</td> <td>strings, low/medium cardinality</td> <td>random access</td> <td>yes: <code>=</code> and <code>&lt;</code> become integer compares on codes</td> </tr> <tr> <td><strong>Bitmap</strong> (+ Roaring)</td> <td>very low cardinality, many predicates</td> <td>per value</td> <td>yes: AND/OR of bitmaps</td> </tr> <tr> <td><strong>Patched / PFOR</strong></td> <td>mostly small with rare outliers</td> <td>random access + exception list</td> <td>yes</td> </tr> <tr> <td><strong>General-purpose</strong> (LZ4, Zstd, Snappy)</td> <td>anything, as a last layer</td> <td>whole block</td> <td>no</td> </tr> </tbody> </table></div>
+
+:::deeper Reference encodings: RLE, bit-packing, FOR, delta, order-preserving dictionary
+```rust title="src/columnar/encodings.rs"
+//! Lightweight columnar encodings. Each one works on a whole column segment and
+//! keeps values fixed-width or random-accessible, so scans can run on codes.
+
+// ---------- Run-length encoding --------------------------------------------------
+/// (value, run length) pairs. Start offsets are implied by prefix sums.
+pub fn rle_encode<T: PartialEq + Copy>(col: &[T]) -> Vec<(T, u32)> {
+    let mut out: Vec<(T, u32)> = Vec::new();
+    for &v in col {
+        match out.last_mut() {
+            Some((last, n)) if *last == v => *n += 1,
+            _ => out.push((v, 1)),
+        }
+    }
+    out
+}
+pub fn rle_decode<T: Copy>(runs: &[(T, u32)]) -> Vec<T> {
+    runs.iter().flat_map(|&(v, n)| std::iter::repeat_n(v, n as usize)).collect()
+}
+/// Aggregates run on runs directly: SUM over RLE is Σ value·length, no decoding.
+pub fn rle_sum(runs: &[(i64, u32)]) -> i64 { runs.iter().map(|&(v, n)| v * n as i64).sum() }
+
+// ---------- Bit-packing ------------------------------------------------------------
+/// Pack each value into `bits` bits (values must fit). Little-endian bit order.
+pub fn bitpack(vals: &[u32], bits: u32) -> Vec<u64> {
+    assert!((1..=32).contains(&bits));
+    let mut out = vec![0u64; (vals.len() * bits as usize).div_ceil(64)];
+    for (i, &v) in vals.iter().enumerate() {
+        debug_assert!(bits == 32 || v < (1 << bits), "value {v} does not fit in {bits} bits");
+        let bit = i * bits as usize;
+        let (w, o) = (bit / 64, bit % 64);
+        out[w] |= (v as u64) << o;
+        if o + bits as usize > 64 { out[w + 1] |= (v as u64) >> (64 - o); }   // straddles two words
+    }
+    out
+}
+/// Random access into a packed array: the property that makes it usable by scans.
+#[inline]
+pub fn bitunpack_one(packed: &[u64], bits: u32, i: usize) -> u32 {
+    let bit = i * bits as usize;
+    let (w, o) = (bit / 64, bit % 64);
+    let mask = if bits == 32 { u32::MAX as u64 } else { (1u64 << bits) - 1 };
+    let mut v = packed[w] >> o;
+    if o + bits as usize > 64 { v |= packed[w + 1] << (64 - o); }
+    (v & mask) as u32
+}
+pub fn bits_needed(max: u32) -> u32 { (32 - max.leading_zeros()).max(1) }
+
+// ---------- Frame of reference + delta ------------------------------------------------
+/// Frame-of-reference: store min once, then bit-pack (v - min).
+pub struct For { pub min: i64, pub bits: u32, pub packed: Vec<u64>, pub len: usize }
+pub fn for_encode(col: &[i64]) -> For {
+    let min = col.iter().copied().min().unwrap_or(0);
+    let offs: Vec<u32> = col.iter().map(|&v| u32::try_from(v - min).expect("range fits 32 bits")).collect();
+    let bits = bits_needed(offs.iter().copied().max().unwrap_or(0));
+    For { min, bits, packed: bitpack(&offs, bits), len: col.len() }
+}
+pub fn for_get(f: &For, i: usize) -> i64 { f.min + bitunpack_one(&f.packed, f.bits, i) as i64 }
+
+/// Delta: first value, then successive differences (good for sorted ids, timestamps).
+pub fn delta_encode(col: &[i64]) -> (i64, Vec<i64>) {
+    let first = col.first().copied().unwrap_or(0);
+    (first, col.windows(2).map(|w| w[1] - w[0]).collect())
+}
+pub fn delta_decode(first: i64, deltas: &[i64]) -> Vec<i64> {
+    let mut out = Vec::with_capacity(deltas.len() + 1);
+    out.push(first);
+    let mut acc = first;
+    for &d in deltas { acc += d; out.push(acc); }
+    out
+}
+
+// ---------- Order-preserving dictionary ---------------------------------------------
+/// Codes are ranks in the sorted distinct values, so code order == value order.
+pub struct Dict { pub values: Vec<String>, pub codes: Vec<u32> }
+pub fn dict_encode(col: &[&str]) -> Dict {
+    let mut values: Vec<String> = col.iter().map(|s| s.to_string()).collect();
+    values.sort_unstable();
+    values.dedup();
+    let codes = col.iter().map(|s| values.binary_search_by(|v| v.as_str().cmp(s)).unwrap() as u32).collect();
+    Dict { values, codes }
+}
+impl Dict {
+    /// Rewrite `col < lit` into `code < k` once, then filter integers: no string compares per row.
+    pub fn filter_lt(&self, lit: &str) -> Vec<usize> {
+        let k = self.values.partition_point(|v| v.as_str() < lit) as u32;
+        self.codes.iter().enumerate().filter(|&(_, &c)| c < k).map(|(i, _)| i).collect()
+    }
+    pub fn filter_eq(&self, lit: &str) -> Vec<usize> {
+        match self.values.binary_search_by(|v| v.as_str().cmp(lit)) {
+            Ok(k) => self.codes.iter().enumerate().filter(|&(_, &c)| c == k as u32).map(|(i, _)| i).collect(),
+            Err(_) => vec![],                  // literal not in the dictionary: no row can match
+        }
+    }
+    pub fn decode(&self, i: usize) -> &str { &self.values[self.codes[i] as usize] }
+}
+```
+:::
+
+```text title="compression on typical columns (5M rows, i64 = 64 bits uncompressed)"
+status (4 values, clustered):   RLE → 500 runs                      ≈ 6,667×
+timestamps (≈1 s apart):        delta + bit-pack → 10 bits/value    ≈ 6×
+small ints 0..999:              FOR / bit-pack → 10 bits/value      ≈ 6.4×
+```
+
+<aside data-call="rust"><b>Bit tricks worth knowing</b><ul> <li><code>x.leading_zeros()</code> gives the bit width in one instruction: <code>32 - max.leading_zeros()</code> is the number of bits needed.</li> <li>A value that straddles two <code>u64</code> words needs the high part shifted in from the next word. Handle that with the <code>o + bits &gt; 64</code> branch, or pad each block so values never straddle (FastLanes' "interleaved" layout removes the branch entirely).</li> <li><code>std::iter::repeat_n(v, n)</code> (stable since 1.82) makes RLE decoding allocation-free when chained into <code>flat_map</code>.</li> <li>For real speed, decode 1024 values at a time into a stack buffer with a width-specialized function (one monomorphized function per bit width via <code>const</code> generics: <code>fn unpack&lt;const B: u32&gt;(…)</code>). LLVM will vectorize it.</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "Late materialization"
+body = """
+<p>A column-store query plan passes <strong>positions</strong> (row ids or selection bitmaps) between operators instead of tuples, and fetches ("materializes") other columns only when a later operator needs them. <code>SELECT name FROM t WHERE age &gt; 30 AND city = 'Pune'</code> filters <code>age</code> (on FOR-encoded values), then filters <code>city</code> only at the surviving positions (on dictionary codes), and decodes <code>name</code> only for the final positions. Early materialization builds full tuples first and loses most of the benefit. Part II covers this in depth (Abadi et al., ICDE 2007).</p>
+"""
+
+[[sections]]
+heading = "Row, column, or both"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>System</th> <th>Layout</th> </tr> </thead> <tbody> <tr> <td>PostgreSQL, MySQL/InnoDB, SQLite, Oracle (default)</td> <td>NSM</td> </tr> <tr> <td>DuckDB, ClickHouse, Snowflake, BigQuery, Redshift, Vertica</td> <td>DSM / PAX with heavy encoding</td> </tr> <tr> <td>Parquet, ORC (file formats)</td> <td>PAX: row groups → column chunks → pages, with dictionary + RLE + bit-packing + general-purpose compression</td> </tr> <tr> <td>SQL Server (columnstore indexes), Oracle In-Memory, SAP HANA, TiDB (TiFlash), SingleStore</td> <td><strong>HTAP</strong>: a row store for writes plus a column copy or delta for analytics</td> </tr> </tbody> </table></div>
+"""
+
+[[sources]]
+title = "Column-Stores vs. Row-Stores: How Different Are They Really?"
+url = "https://www.cs.umd.edu/~abadi/papers/abadi-sigmod08.pdf"
+
+[[sources]]
+title = "Weaving Relations for Cache Performance"
+url = "https://www.vldb.org/conf/2001/P169.pdf"
+
+[[sources]]
+title = "Integrating Compression and Execution in Column-Oriented Database Systems"
+url = "https://www.cs.umd.edu/~abadi/papers/abadisigmod06.pdf"
+
+[[sources]]
+title = "Decoding billions of integers per second through vectorization"
+url = "https://arxiv.org/abs/1209.2137"
+
+[[sources]]
+title = "roaringbitmap.org"
+url = "https://roaringbitmap.org/"

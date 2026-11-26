@@ -1,0 +1,313 @@
+title = "Query compilation and code generation"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 360
+kind = "guide"
+lede = "15-721 S2024 lecture #7 and vectorization vs compilation · code specialization · transpilation vs JIT · data-centric pipelines · adaptive execution · real systems · six engines measured, with real rustc-generated code"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>After I/O is minimized, speed comes only from executing fewer instructions</strong>: to go 10× faster a DBMS must execute 90% fewer instructions, for 100× it must execute 99% fewer. The 2010s literature made it sound as if vectorization and JIT compilation were exclusive; they are two ways to cut instructions.</li> <li><strong>Code specialization</strong>: generate code <em>specific to one query</em> for CPU-heavy tasks with a repeated pattern: predicate evaluation (most common), operator execution, access methods, stored procedures, logging. Interpretation pays for generality: virtual calls per tuple in Volcano, expression-tree walks per tuple, type dispatch. Because schemas are known, specialized code can <strong>cast pointers inline instead of calling accessors, compare primitives directly, and have no function calls inside loops</strong>, so values stay in registers and caches are reused.</li> <li><strong>Two ways to generate</strong>: <strong>transpilation</strong> (source-to-source: emit C/C++ (or Rust), run an off-the-shelf compiler, load the shared object, call <code>exec</code>; easy to integrate (the generated code may call any DBMS function) and to debug by stepping through source; but compilers are slow: HIQUE reported <strong>100–600 ms</strong> per query, and pipelining was limited) and <strong>JIT compilation</strong> (emit a compact <strong>IR</strong> (LLVM IR, JVM bytecode, a custom IR) that compiles quickly; HyPer's data-centric push model fuses operators within a <strong>pipeline</strong> so a tuple stays in registers from scan to the next pipeline breaker). LLVM compile cost is negligible for OLTP queries but <strong>grows super-linearly with query size</strong> (joins, predicates, aggregates) for OLAP.</li> <li><strong>Hiding the compile time: adaptive execution</strong> (Kohn, Leis, Neumann, ICDE 2018): generate IR, <strong>start interpreting it immediately</strong>, compile in the background, and <strong>switch per morsel</strong> when the compiled code is ready. <strong>Umbra's Flying Start</strong> goes further: a custom IR translated to x86 in a single pass (no LLVM) with hand-done dead-code elimination, <em>basically a compiler inside the DBMS</em>, down to its own debugger.</li> <li><strong>Who does what</strong> (lecture's survey): <em>transpilation</em>: Redshift (templated C++ fragments + local and fleet-wide caches), Oracle, MemSQL ≤ 2016 (gcc, parameterized cached plans); <em>custom</em>: System R (1970s: assembly templates per operator, abandoned in DB2/SQL-DS days for cost, portability and engineering reasons), Hekaton (C → DLL), HyPer, Umbra, SQLite (a bytecode VM, VDBE, for portability), QuestDB (asmjit); <em>JVM</em>: Spark Tungsten (2015; Databricks dropped it for Photon), Presto/Trino, Neo4j, Derby; <em>LLVM</em>: SingleStore (since 2016: DSL → opcodes → LLVM), PostgreSQL 11 (JIT of predicates and tuple deforming, enabled by optimizer cost estimates), NoisePage (HyPer-style interpret-then-compile), LingoDB. <strong>Vectorwise</strong>-style systems skip compilation: thousands of <strong>pre-compiled typed primitives</strong> called per vector, amortizing call overhead.</li> <li><strong>Vectorized vs compiled</strong> (Kersten et al., VLDB 2018, <em>Tectorwise</em> vs <em>Typer</em>): both reach roughly the same performance, ~100× faster than row-oriented engines. <strong>Data-centric compilation is better for computation-heavy queries with few cache misses; vectorization is slightly better at hiding cache-miss latency.</strong> The lecture's verdict: compilation makes a difference but is nontrivial; newer systems choose Vectorwise-style vectorization instead.</li> </ul>
+"""
+
+[[sections]]
+heading = "One query, six execution engines"
+body = """
+<p>The same query, <code>SELECT sum(agg) FROM t WHERE pred</code>, over four <code>i64</code> columns (4 million rows, one thread), is run by engines that differ only in <em>how the expression tree becomes work</em>. They agree on 300 random queries (random predicates and aggregate expressions up to depth 3, compared against the tree walker), and three random queries go all the way through the compiler.</p>
+
+<ol> <li><strong>Tree walking</strong>: recursive <code>eval(&amp;E, row)</code> per tuple (a <code>match</code> per node).</li> <li><strong>Bytecode</strong>: compile the tree to a postfix op list and run a small stack machine per tuple (SQLite's VDBE idea).</li> <li><strong>Closures</strong>: compile each node into a <code>Box&lt;dyn Fn&gt;</code> composing child closures (no tree walk, one indirect call per node).</li> <li><strong>Vectorized primitives</strong>: evaluate each node over a <strong>batch of 1 024 values</strong> in a tight loop (Vectorwise/DuckDB style), mask-multiplying instead of branching.</li> <li><strong>Hand-fused Rust</strong>: what a perfect compiler would emit for the benchmark query, written by hand.</li> <li><strong>Generated Rust</strong>: <code>emit_query</code> writes a complete Rust source file for <em>this</em> query, <code>rustc -C opt-level=N --crate-type cdylib</code> compiles it, and <code>dlopen</code>/<code>dlsym</code> loads the function, which is called with column pointers.</li> </ol>
+
+:::deeper Reference: five interpreters/compilers plus a source-to-source query compiler loaded with dlopen
+```rust title="src/exec/codegen.rs"
+//! One query (`SELECT sum(agg) FROM t WHERE pred`) executed six ways: tree walking, bytecode, closures,
+//! vectorized primitives, hand-fused Rust, and *generated Rust source compiled with rustc and loaded at run time*.
+use std::ffi::{c_char, c_int, c_void, CString};
+use std::path::PathBuf;
+use std::process::Command;
+
+#[derive(Clone, Debug)]
+pub enum E { Col(usize), Const(i64), Add(Box<E>, Box<E>), Sub(Box<E>, Box<E>), Mul(Box<E>, Box<E>), Lt(Box<E>, Box<E>), Gt(Box<E>, Box<E>), And(Box<E>, Box<E>) }
+
+pub fn col(i: usize) -> E { E::Col(i) }
+pub fn k(v: i64) -> E { E::Const(v) }
+pub fn add(a: E, b: E) -> E { E::Add(Box::new(a), Box::new(b)) }
+pub fn sub(a: E, b: E) -> E { E::Sub(Box::new(a), Box::new(b)) }
+pub fn mul(a: E, b: E) -> E { E::Mul(Box::new(a), Box::new(b)) }
+pub fn lt(a: E, b: E) -> E { E::Lt(Box::new(a), Box::new(b)) }
+pub fn gt(a: E, b: E) -> E { E::Gt(Box::new(a), Box::new(b)) }
+pub fn and(a: E, b: E) -> E { E::And(Box::new(a), Box::new(b)) }
+
+#[derive(Clone, Debug)]
+pub struct Query { pub pred: E, pub agg: E }
+
+// ---------------- 1. tree walking ----------------
+fn eval(e: &E, cols: &[&[i64]], i: usize) -> i64 {
+    match e {
+        E::Col(c) => cols[*c][i], E::Const(v) => *v,
+        E::Add(a, b) => eval(a, cols, i).wrapping_add(eval(b, cols, i)),
+        E::Sub(a, b) => eval(a, cols, i).wrapping_sub(eval(b, cols, i)),
+        E::Mul(a, b) => eval(a, cols, i).wrapping_mul(eval(b, cols, i)),
+        E::Lt(a, b) => (eval(a, cols, i) < eval(b, cols, i)) as i64,
+        E::Gt(a, b) => (eval(a, cols, i) > eval(b, cols, i)) as i64,
+        E::And(a, b) => (eval(a, cols, i) != 0 && eval(b, cols, i) != 0) as i64,
+    }
+}
+pub fn run_tree(q: &Query, cols: &[&[i64]]) -> i64 {
+    let mut s = 0i64;
+    for i in 0..cols[0].len() { if eval(&q.pred, cols, i) != 0 { s = s.wrapping_add(eval(&q.agg, cols, i)); } }
+    s
+}
+
+// ---------------- 2. bytecode (stack machine) ----------------
+#[derive(Clone, Copy)]
+enum Op { Col(usize), Const(i64), Add, Sub, Mul, Lt, Gt, And }
+
+fn compile_ops(e: &E, out: &mut Vec<Op>) {
+    match e {
+        E::Col(c) => out.push(Op::Col(*c)), E::Const(v) => out.push(Op::Const(*v)),
+        E::Add(a, b) | E::Sub(a, b) | E::Mul(a, b) | E::Lt(a, b) | E::Gt(a, b) | E::And(a, b) => {
+            compile_ops(a, out); compile_ops(b, out);
+            out.push(match e { E::Add(..) => Op::Add, E::Sub(..) => Op::Sub, E::Mul(..) => Op::Mul, E::Lt(..) => Op::Lt, E::Gt(..) => Op::Gt, _ => Op::And });
+        }
+    }
+}
+fn exec(ops: &[Op], cols: &[&[i64]], i: usize, stack: &mut [i64; 32]) -> i64 {
+    let mut sp = 0;
+    for op in ops {
+        match *op {
+            Op::Col(c) => { stack[sp] = cols[c][i]; sp += 1; }
+            Op::Const(v) => { stack[sp] = v; sp += 1; }
+            _ => {
+                let (b, a) = (stack[sp - 1], stack[sp - 2]);
+                sp -= 1;
+                stack[sp - 1] = match *op { Op::Add => a.wrapping_add(b), Op::Sub => a.wrapping_sub(b), Op::Mul => a.wrapping_mul(b), Op::Lt => (a < b) as i64, Op::Gt => (a > b) as i64, _ => (a != 0 && b != 0) as i64 };
+            }
+        }
+    }
+    stack[0]
+}
+pub fn run_bytecode(q: &Query, cols: &[&[i64]]) -> i64 {
+    let (mut p, mut a) = (vec![], vec![]);
+    compile_ops(&q.pred, &mut p); compile_ops(&q.agg, &mut a);
+    let mut st = [0i64; 32];
+    let mut s = 0i64;
+    for i in 0..cols[0].len() { if exec(&p, cols, i, &mut st) != 0 { s = s.wrapping_add(exec(&a, cols, i, &mut st)); } }
+    s
+}
+
+// ---------------- 3. closure compilation ----------------
+type F = Box<dyn Fn(&[&[i64]], usize) -> i64>;
+fn closure(e: &E) -> F {
+    match e {
+        E::Col(c) => { let c = *c; Box::new(move |cols, i| cols[c][i]) }
+        E::Const(v) => { let v = *v; Box::new(move |_, _| v) }
+        E::Add(a, b) => { let (a, b) = (closure(a), closure(b)); Box::new(move |c, i| a(c, i).wrapping_add(b(c, i))) }
+        E::Sub(a, b) => { let (a, b) = (closure(a), closure(b)); Box::new(move |c, i| a(c, i).wrapping_sub(b(c, i))) }
+        E::Mul(a, b) => { let (a, b) = (closure(a), closure(b)); Box::new(move |c, i| a(c, i).wrapping_mul(b(c, i))) }
+        E::Lt(a, b) => { let (a, b) = (closure(a), closure(b)); Box::new(move |c, i| (a(c, i) < b(c, i)) as i64) }
+        E::Gt(a, b) => { let (a, b) = (closure(a), closure(b)); Box::new(move |c, i| (a(c, i) > b(c, i)) as i64) }
+        E::And(a, b) => { let (a, b) = (closure(a), closure(b)); Box::new(move |c, i| (a(c, i) != 0 && b(c, i) != 0) as i64) }
+    }
+}
+pub fn run_closures(q: &Query, cols: &[&[i64]]) -> i64 {
+    let (p, a) = (closure(&q.pred), closure(&q.agg));
+    let mut s = 0i64;
+    for i in 0..cols[0].len() { if p(cols, i) != 0 { s = s.wrapping_add(a(cols, i)); } }
+    s
+}
+
+// ---------------- 4. vectorized primitives (batch of 1024, one tight loop per node) ----------------
+const BATCH: usize = 1024;
+fn veval(e: &E, cols: &[&[i64]], base: usize, len: usize, out: &mut Vec<i64>) {
+    out.clear();
+    match e {
+        E::Col(c) => out.extend_from_slice(&cols[*c][base..base + len]),
+        E::Const(v) => out.resize(len, *v),
+        E::Add(a, b) | E::Sub(a, b) | E::Mul(a, b) | E::Lt(a, b) | E::Gt(a, b) | E::And(a, b) => {
+            let (mut x, mut y) = (Vec::with_capacity(len), Vec::with_capacity(len));
+            veval(a, cols, base, len, &mut x); veval(b, cols, base, len, &mut y);
+            match e {
+                E::Add(..) => out.extend(x.iter().zip(&y).map(|(a, b)| a.wrapping_add(*b))),
+                E::Sub(..) => out.extend(x.iter().zip(&y).map(|(a, b)| a.wrapping_sub(*b))),
+                E::Mul(..) => out.extend(x.iter().zip(&y).map(|(a, b)| a.wrapping_mul(*b))),
+                E::Lt(..) => out.extend(x.iter().zip(&y).map(|(a, b)| (a < b) as i64)),
+                E::Gt(..) => out.extend(x.iter().zip(&y).map(|(a, b)| (a > b) as i64)),
+                _ => out.extend(x.iter().zip(&y).map(|(a, b)| ((*a != 0) & (*b != 0)) as i64)),
+            }
+        }
+    }
+}
+pub fn run_vectorized(q: &Query, cols: &[&[i64]]) -> i64 {
+    let n = cols[0].len();
+    let (mut p, mut a) = (Vec::with_capacity(BATCH), Vec::with_capacity(BATCH));
+    let mut s = 0i64;
+    let mut base = 0;
+    while base < n {
+        let len = BATCH.min(n - base);
+        veval(&q.pred, cols, base, len, &mut p);
+        veval(&q.agg, cols, base, len, &mut a);
+        s = s.wrapping_add(p.iter().zip(&a).map(|(m, v)| v & (0i64.wrapping_sub((*m != 0) as i64))).fold(0i64, |x, y| x.wrapping_add(y)));
+        base += len;
+    }
+    s
+}
+
+// ---------------- 5. hand-fused (what a perfect compiler would emit for the benchmark query) ----------------
+pub fn handwritten_q1(cols: &[&[i64]]) -> i64 {
+    let (a, b, c, d) = (cols[0], cols[1], cols[2], cols[3]);
+    let mut s = 0i64;
+    for i in 0..a.len() { if c[i] < 500 && d[i] > 100 { s = s.wrapping_add(a[i].wrapping_mul(b[i])); } }
+    s
+}
+
+// ---------------- 6. source-to-source: generate Rust, compile with rustc, dlopen ----------------
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Style { Branchy, Predicated }
+
+pub fn emit_expr(e: &E) -> String { emit_expr_in(e, Style::Branchy) }
+
+fn emit_expr_in(e: &E, st: Style) -> String {
+    match e {
+        E::Col(c) => format!("c{c}[i]"), E::Const(v) => format!("({v}i64)"),
+        E::Add(a, b) => format!("{}.wrapping_add({})", emit_expr_in(a, st), emit_expr_in(b, st)),
+        E::Sub(a, b) => format!("{}.wrapping_sub({})", emit_expr_in(a, st), emit_expr_in(b, st)),
+        E::Mul(a, b) => format!("{}.wrapping_mul({})", emit_expr_in(a, st), emit_expr_in(b, st)),
+        E::Lt(a, b) => format!("({} < {})", emit_expr_in(a, st), emit_expr_in(b, st)),
+        E::Gt(a, b) => format!("({} > {})", emit_expr_in(a, st), emit_expr_in(b, st)),
+        // `&&` short-circuits (a branch per conjunct); `&` evaluates both sides and keeps the loop free of control flow
+        E::And(a, b) => format!("({} {} {})", emit_expr_in(a, st), if st == Style::Branchy { "&&" } else { "&" }, emit_expr_in(b, st)),
+    }
+}
+
+fn max_col(e: &E) -> usize {
+    match e { E::Col(c) => *c, E::Const(_) => 0, E::Add(a, b) | E::Sub(a, b) | E::Mul(a, b) | E::Lt(a, b) | E::Gt(a, b) | E::And(a, b) => max_col(a).max(max_col(b)) }
+}
+
+/// The whole pipeline as one loop: scan → filter → aggregate, with constants and column types baked in.
+pub fn emit_query(q: &Query, st: Style) -> String {
+    let ncols = max_col(&q.pred).max(max_col(&q.agg)) + 1;
+    let mut s = String::from("#[no_mangle]\\npub extern \\"C\\" fn query(cols: *const *const i64, n: usize) -> i64 {\\n");
+    for c in 0..ncols { s += &format!("    let c{c} = unsafe {{ std::slice::from_raw_parts(*cols.add({c}), n) }};\\n"); }
+    s += "    let mut sum = 0i64;\\n    for i in 0..n {\\n";
+    match st {
+        Style::Branchy => s += &format!("        if {} {{ sum = sum.wrapping_add({}); }}\\n", emit_expr_in(&q.pred, st), emit_expr_in(&q.agg, st)),
+        Style::Predicated => s += &format!("        let m = {};\\n        sum = sum.wrapping_add({} & 0i64.wrapping_sub(m as i64));\\n", emit_expr_in(&q.pred, st), emit_expr_in(&q.agg, st)),
+    }
+    s += "    }\\n    sum\\n}\\n";
+    s
+}
+
+unsafe extern "C" {
+    fn dlopen(path: *const c_char, flags: c_int) -> *mut c_void;
+    fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
+}
+
+pub struct Compiled { pub source: String, pub compile_ms: f64, f: extern "C" fn(*const *const i64, usize) -> i64 }
+
+impl Compiled {
+    pub fn run(&self, cols: &[&[i64]]) -> i64 {
+        let ptrs: Vec<*const i64> = cols.iter().map(|c| c.as_ptr()).collect();
+        (self.f)(ptrs.as_ptr(), cols[0].len())
+    }
+}
+
+/// Generate, compile (`rustc -C opt-level=N`), and load. The library is never unloaded (the handle is leaked on purpose).
+pub fn compile(q: &Query, opt_level: u8, st: Style, tag: &str) -> Compiled {
+    let source = emit_query(q, st);
+    let dir: PathBuf = std::env::temp_dir().join(format!("codegen-{}-{tag}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("query.rs");
+    let lib = dir.join(if cfg!(target_os = "macos") { "libquery.dylib" } else { "libquery.so" });
+    std::fs::write(&src, &source).unwrap();
+    let t = std::time::Instant::now();
+    let out = Command::new("rustc").args(["--edition", "2021", "--crate-type", "cdylib", "-C", &format!("opt-level={opt_level}"), "-C", "panic=abort", "-o"]).arg(&lib).arg(&src).output().expect("rustc not found");
+    let compile_ms = t.elapsed().as_secs_f64() * 1e3;
+    assert!(out.status.success(), "rustc failed:\\n{}", String::from_utf8_lossy(&out.stderr));
+    let path = CString::new(lib.to_str().unwrap()).unwrap();
+    let h = unsafe { dlopen(path.as_ptr(), 2) };
+    assert!(!h.is_null(), "dlopen failed");
+    let sym = unsafe { dlsym(h, CString::new("query").unwrap().as_ptr()) };
+    assert!(!sym.is_null(), "dlsym failed");
+    let f: extern "C" fn(*const *const i64, usize) -> i64 = unsafe { std::mem::transmute(sym) };
+    Compiled { source, compile_ms, f }
+}
+```
+:::
+
+```text title="ns per row"
+4000000 rows × 4 i64 columns, single thread; ns per row
+query                                   tree  bytecode  closures  vectorized  hand-fused    gen branchy   gen predicated
+Q1: sum(a*b) where c<500 and d>100     12.60      8.81      7.48        1.21        2.90           2.53             0.30
+Q2: 3 predicates, 6 arithmetic ops     25.07     15.81     13.54        3.18           -           2.20             0.71
+```
+
+<ul> <li><strong>Interpretation costs 10–40× over the best code</strong>: tree walking 12.6 ns/row vs 0.30 ns/row for the predicated generated loop on Q1 (<strong>42×</strong>); bytecode and closures (the usual first optimizations) are only <strong>1.4–1.7× better than the tree walker</strong>: they remove the recursion but still pay one dispatch per node per row.</li> <li><strong>Vectorized primitives get most of the way without a compiler</strong>: 1.21 ns/row, <strong>10× faster than the tree walker</strong>, because per-node dispatch is amortized over 1 024 values and the inner loops are branch-free and vectorizable. This is why Photon, Velox and DuckDB are vectorized interpreters.</li> <li><strong>Naively generated code can be <em>slower</em> than vectorized primitives</strong>: the "branchy" version (<code>if c &lt; 500 &amp;&amp; d &gt; 100 { sum += … }</code>, i.e. what you get by transliterating the plan) runs at <strong>2.5 ns/row, 2× slower than the vectorized interpreter</strong>, and so does the hand-fused loop (2.9): the predicate is true for about 45% of rows, so the branch is unpredictable and each misprediction costs ~10–20 cycles. <strong>Compilation only wins if the code it emits is good.</strong></li> <li><strong>Emit predicated code and the compiler vectorizes it</strong>: replacing <code>&amp;&amp;</code> by <code>&amp;</code> and the <code>if</code> by a mask multiply (<code>sum += value &amp; 0 - m</code>) gives <strong>0.30 ns/row, 4× faster than the vectorized interpreter</strong> and 8× faster than the branchy loop, because the whole pipeline is now one fused, SIMD-friendly loop with no intermediate vectors written to memory. This is the "counter control-flow divergence" lesson of Lang et al., and the reason ROF and refill strategies exist (<a href="/cookbook/p/vectorized-execution-with-simd">A14</a>).</li> <li><strong>Q2 (three predicates, six arithmetic ops)</strong>: tree 25.1, vectorized 3.18, generated predicated 0.71 ns/row: the gap to the interpreters <em>grows</em> with expression size, because every extra node is another dispatch (or another pass over a temp vector) for them and just more arithmetic for the compiled loop.</li> </ul>
+
+<h4>What compiling costs</h4>
+
+```text title="compile time of the generated Rust, and when it pays off"
+query                              opt-level   compile ms     run ns/row  break-even rows
+Q1: sum(a*b) where c<500 and d>100         0           75           4.99            never
+Q1: sum(a*b) where c<500 and d>100         1           78           0.68         146.68 M
+Q1: sum(a*b) where c<500 and d>100         2           91           0.65         162.06 M
+Q1: sum(a*b) where c<500 and d>100         3           93           0.53         136.59 M
+Q2: 3 predicates, 6 arithmetic ops         0           93           7.34            never
+Q2: 3 predicates, 6 arithmetic ops         1           78           1.22          39.81 M
+Q2: 3 predicates, 6 arithmetic ops         2           85           1.20          42.82 M
+Q2: 3 predicates, 6 arithmetic ops         3           84           1.12          40.98 M
+```
+
+<p>(Break-even = compile time ÷ per-row saving <em>against the vectorized interpreter</em>; "never" = the generated code is slower. Timings are best of 7 runs.)</p>
+
+<ul> <li><strong><code>rustc</code> takes 75–105 ms for a 10-line source file</strong>: mostly fixed start-up and linking cost: the lecture's "100–600 ms for HIQUE" is the same regime, and <strong>opt-level hardly changes it for tiny queries</strong>. For a 500-line generated pipeline with joins it is seconds.</li> <li><strong>Against the <em>tree walker</em> the compile cost is repaid after ~8 million rows</strong> (93 ms ÷ (12.6 − 0.53) ns); against bytecode ~11 M rows. <strong>Against a good vectorized interpreter it takes 40–160 million rows</strong>, i.e. hundreds of milliseconds of scanning at 0.5 ns/row, which is why systems with fast vectorized engines only compile for large or repeated queries (and cache compiled fragments: Redshift's fleet-wide cache, SingleStore's parameterized plans).</li> <li><strong><code>-O0</code> code is slower than the interpreters</strong> (5–7 ns/row): never ship unoptimized generated code. Levels 1–3 are within 25% here; higher levels matter on bigger pipelines but cost more compile time (HyPer's observed super-linear growth), which is the argument for <strong>adaptive execution</strong>: run in the vectorized/bytecode interpreter now, compile in the background, switch per morsel.</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong><code>rustc</code> as the backend is the slow-and-simple option</strong>; faster Rust-native routes are <strong>Cranelift</strong> (<code>cranelift-jit</code>, <code>cranelift-codegen</code>: far faster compilation than LLVM (often an order of magnitude) for somewhat slower code; used by Wasmtime and by <code>rustc_codegen_cranelift</code>), <strong>LLVM via <code>inkwell</code>/<code>llvm-sys</code></strong> (best code, slowest compile, heavy dependency), <strong>WebAssembly</strong> (generate wasm and run in <code>wasmtime</code>/<code>wasmer</code>: sandboxed, portable, good for untrusted UDFs (<a href="/cookbook/p/server-side-logic-and-udfs">A19</a>)), and <strong>copy-and-patch</strong> (stitch pre-compiled machine-code templates, microsecond compile; used by CPython's JIT and studied for databases).</li> <li><strong>Loading generated code</strong> needs <code>dlopen</code>/<code>dlsym</code> (declared as <code>unsafe extern "C"</code> here, since the 2024 edition requires <code>unsafe</code> extern blocks; the <code>libloading</code> crate wraps them safely), a stable ABI (<code>extern "C"</code>, raw pointers and lengths), <code>#[no_mangle]</code> on the generated function, and <strong>never unloading</strong> a library that code may still be running (the handle is leaked on purpose).</li> <li><strong>Safety</strong>: generated code runs with the DBMS's privileges. Generate from a <em>typed plan</em>, never by splicing user strings; constants come from the AST (<code>i64</code> printed as numbers), identifiers from the catalog by index (<code>c0</code>, <code>c1</code>), so SQL injection into the <em>compiler</em> is impossible.</li> <li><strong><code>wrapping_add</code>/<code>wrapping_mul</code> everywhere</strong> keeps debug and release behaviours identical and avoids overflow checks that block vectorization; real SQL semantics need checked arithmetic with a vectorizable overflow flag.</li> <li><strong>Specialize on types and constants, not data</strong>: bake in column types and predicate constants (the main win), but keep data pointers as arguments so one compiled function serves every morsel and every execution of the same plan shape (parameterize literals to make caching effective).</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Compile latency dominates short queries</strong>: gate compilation on estimated cost or row count (PostgreSQL's <code>jit_above_cost</code>), cache by <strong>plan fingerprint with literals parameterized</strong>, and keep an interpreter path for everything.</li> <li><strong>Debuggability</strong>: generated code needs source-level debug info, readable names, and a way to dump it (<code>EXPLAIN (CODEGEN)</code>); step through it with a normal debugger (the lecture's argument for transpilation). Profilers need symbols for the loaded library.</li> <li><strong>Code bloat and i-cache misses</strong>: fusing many operators into one function produces huge functions; the compiler gives up optimizations on very large functions (LLVM's super-linear passes), so split into pipeline-stage functions.</li> <li><strong>Hot-loop quality is the real work</strong>: branch-free predicates, hoisted null checks, selection-vector or bitmap choice, prefetching. A naive transliteration of the plan can be slower than a vectorized interpreter (measured above).</li> <li><strong>Correctness</strong>: two implementations (interpreter + compiler) must agree on <em>every</em> semantic corner (NULLs, overflow, collation, division by zero). Differential-test them against each other on random plans, as the 300-query test does.</li> <li><strong>Adaptive switching</strong> needs the interpreted and compiled code to share state layouts (hash tables, aggregation state) so a morsel boundary is a safe switch point.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Efficiently Compiling Efficient Query Plans for Modern Hardware"
+url = "https://www.vldb.org/pvldb/vol4/p539-neumann.pdf"
+
+[[sources]]
+title = "Generating Code for Holistic Query Evaluation"
+url = "https://ieeexplore.ieee.org/document/5447892"
+
+[[sources]]
+title = "Adaptive Execution of Compiled Queries"
+url = "https://db.in.tum.de/~leis/papers/adaptiveexecution.pdf"
+
+[[sources]]
+title = "Tidy Tuples and Flying Start: Fast Compilation and Fast Execution of Relational Queries in Umbra"
+url = "https://link.springer.com/article/10.1007/s00778-020-00643-4"
+
+[[sources]]
+title = "Everything You Always Wanted to Know About Compiled and Vectorized Queries But Were Afraid to Ask"
+url = "https://www.vldb.org/pvldb/vol11/p2209-kersten.pdf"
+
+[[sources]]
+title = "Cranelift"
+url = "https://cranelift.dev/"
+
+[[sources]]
+title = "inkwell"
+url = "https://github.com/TheDan64/inkwell"
+
+[[sources]]
+title = "libloading"
+url = "https://docs.rs/libloading"
+
+[[sources]]
+title = "wasmtime"
+url = "https://wasmtime.dev/"
+
+[[sources]]
+title = "JIT"
+url = "https://www.postgresql.org/docs/current/jit.html"

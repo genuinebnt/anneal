@@ -1,0 +1,717 @@
+title = "Raft"
+module = "Distributed systems"
+module_order = 10
+chapter = "Consensus and distributed transactions"
+chapter_order = 2
+order = 488
+kind = "guide"
+lede = "Consensus written from the paper · elections with randomized timeouts and pre-vote · log replication with pipelining and batching · the commit rule and Figure 8 · durable state · exactly-once commands · tested under loss, duplication, partitions and crashes, and for linearizability"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Replicated state machine.</strong> To keep several copies of a deterministic service identical, give every copy the same sequence of commands. Raft maintains that sequence, the <em>log</em>, on a majority of servers even when some crash and the network drops, delays, duplicates and partitions messages. A command is <em>committed</em> when it is on a majority; every committed command will be in the log of every future leader.</li> <li><strong>One leader per term.</strong> Time is divided into <em>terms</em>, numbered. A follower that hears nothing from a leader for a randomized <em>election timeout</em> becomes a candidate, increments its term, votes for itself and asks the others. A server gives at most one vote per term and only to a candidate whose log is at least as up to date (higher last term, or same last term and at least as long). A majority of votes makes a leader; two leaders cannot share a term because two majorities intersect.</li> <li><strong>The leader's log is the truth.</strong> The leader sends <code>AppendEntries(prev_index, prev_term, entries, commit)</code>. A follower accepts only if its log has the entry <code>(prev_index, prev_term)</code>; otherwise it replies with a hint and the leader backs up. If the follower has entries that conflict with the leader's, it deletes them and everything after. This <em>log matching</em> rule gives the property that two logs agreeing on one entry agree on everything before it.</li> <li><strong>Only entries of the leader's own term commit by counting.</strong> A leader marks index <em>N</em> committed when <em>N</em> is stored on a majority <em>and</em> the entry at <em>N</em> is from the current term. Entries of earlier terms then commit indirectly, as a prefix. Counting replicas of an old entry is unsafe (the paper's Figure 8: an old entry on a majority can still be overwritten by a leader whose log ends with a newer term), which is why every new leader appends a <em>no-op</em> of its own term at once.</li> <li><strong>Persist before replying.</strong> A server's current term, its vote and its log must be on stable storage before it answers a message that depends on them. A restart that forgets a vote can vote twice in one term; one that forgets a term can accept an old leader.</li> <li><strong>Pre-vote.</strong> A server cut off from the others keeps timing out and raising its term. When it returns, its inflated term deposes a healthy leader. With pre-vote it first asks "would you vote for me?" without changing any term, and nobody that has recently heard from a leader says yes; the partitioned server never inflates its term.</li> <li><strong>Clients need exactly-once semantics.</strong> A timed-out client cannot know whether its command was applied, so it retries; the state machine remembers, per client, the last sequence number and its result, and applies a command only once.</li> <li><strong>What Raft does not give you for free</strong>: reads (a stale leader may answer from old state, so reads go through the log, a heartbeat round or a lease), membership changes, log compaction and snapshots, and flow control. They are the exercises.</li> </ul>
+"""
+
+[[sections]]
+heading = "The protocol in code"
+body = """
+<ul> <li><strong>State per server</strong>: durable <code>term</code>, <code>voted_for</code> and <code>log</code>; volatile <code>role</code>, <code>commit</code>, the applied state machine, and, on a leader, <code>next[p]</code> and <code>matched[p]</code> for each follower.</li> <li><strong>Messages</strong>: <code>Vote</code>/<code>VoteResp</code> and <code>PreVote</code>/<code>PreVoteResp</code>; <code>Append</code> with <code>prev_index</code>, <code>prev_term</code>, entries and the leader's commit index; <code>AppendResp</code> with success, the highest matching index and a <em>hint</em> where to resume after a failed check.</li> <li><strong>Replication</strong> uses <em>optimistic pipelining</em>: when the leader sends entries it advances <code>next[p]</code> at once, so a second proposal sends only its own entry; a rejection moves <code>next[p]</code> back to the hint. A heartbeat is an <code>Append</code> with whatever the follower still lacks.</li> <li><strong>Commit index</strong>: sort the match indices (the leader counts its own last index), take the quorum-th largest, and commit it if its entry is from the current term.</li> <li><strong>Restart</strong> reloads term, vote and log from the simulated disk and forgets everything else, the state machine included, which is rebuilt as the commit index advances again.</li> </ul>
+
+:::deeper Reference: Raft node, replicated key-value state machine, and the deterministic cluster simulator with its safety checks
+```rust title="src/multimodel/raft.rs"
+//! Raft consensus, written from the paper: leader election with randomized timeouts (and optional pre-vote), log replication with
+//! consistency checks and fast backtracking, commitment by majority in the leader's own term, durable state that survives restarts,
+//! and a replicated key-value state machine with exactly-once client commands. A deterministic cluster simulator with message delay,
+//! loss, duplication, partitions and crashes drives it and checks the safety properties of the paper after every few steps.
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Cmd {
+    /// Appended by every new leader so that entries of earlier terms can be committed.
+    Noop,
+    Put { client: u64, seq: u64, key: u64, val: u64 },
+    Get { client: u64, seq: u64, key: u64 },
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct Entry {
+    pub term: u64,
+    pub cmd: Cmd,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub enum Resp {
+    Ok,
+    Value(Option<u64>),
+}
+
+#[derive(Clone, Debug)]
+pub enum Msg {
+    PreVote { term: u64, last_index: u64, last_term: u64 },
+    PreVoteResp { term: u64, granted: bool },
+    Vote { term: u64, last_index: u64, last_term: u64 },
+    VoteResp { term: u64, granted: bool },
+    Append { term: u64, prev_index: u64, prev_term: u64, entries: Vec<Entry>, commit: u64 },
+    AppendResp { term: u64, ok: bool, match_index: u64, hint: u64 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Role {
+    Follower,
+    PreCandidate,
+    Candidate,
+    Leader,
+}
+
+/// The replicated state machine: a map with per-client duplicate suppression.
+#[derive(Default, Clone, Debug, PartialEq)]
+pub struct Sm {
+    pub kv: HashMap<u64, u64>,
+    last: HashMap<u64, (u64, Resp)>,
+}
+impl Sm {
+    pub fn apply(&mut self, c: &Cmd) -> Resp {
+        match c {
+            Cmd::Noop => Resp::Ok,
+            Cmd::Put { client, seq, key, val } => {
+                if let Some((s, r)) = self.last.get(client) {
+                    if seq <= s {
+                        return r.clone();
+                    }
+                }
+                self.kv.insert(*key, *val);
+                self.last.insert(*client, (*seq, Resp::Ok));
+                Resp::Ok
+            }
+            Cmd::Get { client, seq, key } => {
+                if let Some((s, r)) = self.last.get(client) {
+                    if seq <= s {
+                        return r.clone();
+                    }
+                }
+                let r = Resp::Value(self.kv.get(key).copied());
+                self.last.insert(*client, (*seq, r.clone()));
+                r
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct Durable {
+    term: u64,
+    voted_for: Option<usize>,
+    log: Vec<Entry>, // log[0] is a placeholder, so that indices start at 1
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Config {
+    pub election_ticks: u64, // timeouts are drawn from [election_ticks, 2 * election_ticks)
+    pub heartbeat_ticks: u64,
+    pub pre_vote: bool,
+    pub max_batch: usize,
+}
+impl Default for Config {
+    fn default() -> Self {
+        Config { election_ticks: 10, heartbeat_ticks: 3, pre_vote: false, max_batch: 64 }
+    }
+}
+
+pub struct Node {
+    pub id: usize,
+    n: usize,
+    pub cfg: Config,
+    pub role: Role,
+    d: Durable,
+    disk: Durable,
+    dirty_from: usize,
+    pub commit: u64,
+    pub applied: u64,
+    pub sm: Sm,
+    pub leader: Option<usize>,
+    pub results: HashMap<u64, Resp>,
+    elapsed: u64,
+    timeout: u64,
+    rng: u64,
+    votes: HashSet<usize>,
+    next: Vec<u64>,
+    matched: Vec<u64>,
+}
+
+impl Node {
+    pub fn new(id: usize, n: usize, cfg: Config, seed: u64) -> Node {
+        let d = Durable { term: 0, voted_for: None, log: vec![Entry { term: 0, cmd: Cmd::Noop }] };
+        let mut node = Node {
+            id, n, cfg, role: Role::Follower, disk: d.clone(), d, dirty_from: 1, commit: 0, applied: 0, sm: Sm::default(), leader: None,
+            results: HashMap::new(), elapsed: 0, timeout: 0, rng: seed.wrapping_mul(0x9E3779B97F4A7C15) | 1, votes: HashSet::new(), next: vec![1; n], matched: vec![0; n],
+        };
+        node.reset_timer();
+        node
+    }
+    pub fn term(&self) -> u64 {
+        self.d.term
+    }
+    pub fn log_len(&self) -> u64 {
+        self.last_index()
+    }
+    pub fn entry(&self, i: u64) -> &Entry {
+        &self.d.log[i as usize]
+    }
+    fn last_index(&self) -> u64 {
+        self.d.log.len() as u64 - 1
+    }
+    fn last_term(&self) -> u64 {
+        self.d.log.last().unwrap().term
+    }
+    fn rnd(&mut self, m: u64) -> u64 {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        self.rng % m
+    }
+    fn reset_timer(&mut self) {
+        self.elapsed = 0;
+        self.timeout = self.cfg.election_ticks + self.rnd(self.cfg.election_ticks);
+    }
+    /// Make the current term, vote and log durable. Messages that depend on them are sent after this.
+    fn persist(&mut self) {
+        self.disk.term = self.d.term;
+        self.disk.voted_for = self.d.voted_for;
+        let from = self.dirty_from.min(self.d.log.len());
+        self.disk.log.truncate(from);
+        self.disk.log.extend_from_slice(&self.d.log[from..]);
+        self.dirty_from = self.d.log.len();
+    }
+    /// A restart loses everything that is not on disk.
+    pub fn restart(&mut self) {
+        self.d = self.disk.clone();
+        self.dirty_from = self.d.log.len();
+        self.role = Role::Follower;
+        self.commit = 0;
+        self.applied = 0;
+        self.sm = Sm::default();
+        self.results.clear();
+        self.leader = None;
+        self.votes.clear();
+        self.reset_timer();
+    }
+
+    fn up_to_date(&self, last_index: u64, last_term: u64) -> bool {
+        last_term > self.last_term() || (last_term == self.last_term() && last_index >= self.last_index())
+    }
+    fn step_down(&mut self, term: u64) {
+        if term > self.d.term {
+            self.d.term = term;
+            self.d.voted_for = None;
+            self.persist();
+        }
+        self.role = Role::Follower;
+    }
+    fn quorum(&self) -> usize {
+        self.n / 2 + 1
+    }
+    fn broadcast(&self, out: &mut Vec<(usize, Msg)>, f: impl Fn(usize) -> Msg) {
+        for p in 0..self.n {
+            if p != self.id {
+                out.push((p, f(p)));
+            }
+        }
+    }
+
+    pub fn on_tick(&mut self, out: &mut Vec<(usize, Msg)>) {
+        self.elapsed += 1;
+        match self.role {
+            Role::Leader => {
+                if self.elapsed >= self.cfg.heartbeat_ticks {
+                    self.elapsed = 0;
+                    self.replicate_all(out, true);
+                }
+            }
+            _ => {
+                if self.elapsed >= self.timeout {
+                    if self.cfg.pre_vote && self.n > 1 {
+                        self.role = Role::PreCandidate;
+                        self.votes = HashSet::from([self.id]);
+                        self.reset_timer();
+                        let (t, li, lt) = (self.d.term + 1, self.last_index(), self.last_term());
+                        self.broadcast(out, |_| Msg::PreVote { term: t, last_index: li, last_term: lt });
+                    } else {
+                        self.start_election(out);
+                    }
+                }
+            }
+        }
+    }
+
+    fn start_election(&mut self, out: &mut Vec<(usize, Msg)>) {
+        self.d.term += 1;
+        self.d.voted_for = Some(self.id);
+        self.persist();
+        self.role = Role::Candidate;
+        self.leader = None;
+        self.votes = HashSet::from([self.id]);
+        self.reset_timer();
+        if self.votes.len() >= self.quorum() {
+            return self.become_leader(out);
+        }
+        let (t, li, lt) = (self.d.term, self.last_index(), self.last_term());
+        self.broadcast(out, |_| Msg::Vote { term: t, last_index: li, last_term: lt });
+    }
+
+    fn become_leader(&mut self, out: &mut Vec<(usize, Msg)>) {
+        self.role = Role::Leader;
+        self.leader = Some(self.id);
+        self.next = vec![self.last_index() + 1; self.n];
+        self.matched = vec![0; self.n];
+        self.elapsed = 0;
+        self.d.log.push(Entry { term: self.d.term, cmd: Cmd::Noop });
+        self.persist();
+        self.advance_commit();
+        self.replicate_all(out, true);
+    }
+
+    fn replicate_all(&mut self, out: &mut Vec<(usize, Msg)>, heartbeat: bool) {
+        for p in 0..self.n {
+            if p != self.id && (self.next[p] <= self.last_index() || heartbeat) {
+                self.replicate_to(p, out);
+            }
+        }
+    }
+    /// Send the entries a follower is missing. `next` advances optimistically as soon as they are sent (pipelining), so entries are not
+    /// sent twice while the first copy is in flight; a rejection moves it back.
+    fn replicate_to(&mut self, p: usize, out: &mut Vec<(usize, Msg)>) {
+        let prev = self.next[p] - 1;
+        let end = (self.next[p] as usize + self.cfg.max_batch).min(self.d.log.len());
+        let entries = self.d.log[self.next[p] as usize..end].to_vec();
+        self.next[p] += entries.len() as u64;
+        out.push((p, Msg::Append { term: self.d.term, prev_index: prev, prev_term: self.d.log[prev as usize].term, entries, commit: self.commit }));
+    }
+
+    /// Like `propose` but only appends to the log; `flush` makes the batch durable once and sends it (group commit).
+    pub fn propose_buffered(&mut self, cmd: Cmd) -> Option<u64> {
+        if self.role != Role::Leader {
+            return None;
+        }
+        self.d.log.push(Entry { term: self.d.term, cmd });
+        Some(self.last_index())
+    }
+    pub fn flush(&mut self, out: &mut Vec<(usize, Msg)>) {
+        if self.role == Role::Leader {
+            self.persist();
+            self.advance_commit();
+            self.replicate_all(out, false);
+        }
+    }
+
+    /// Client entry point: only a leader accepts a command. Returns the log index it was given.
+    pub fn propose(&mut self, cmd: Cmd, out: &mut Vec<(usize, Msg)>) -> Option<u64> {
+        if self.role != Role::Leader {
+            return None;
+        }
+        self.d.log.push(Entry { term: self.d.term, cmd });
+        self.persist();
+        self.advance_commit();
+        self.replicate_all(out, false);
+        Some(self.last_index())
+    }
+
+    fn advance_commit(&mut self) {
+        // the largest index stored on a majority (the quorum-th largest match, counting our own log); it commits only if its entry is
+        // from the current term, and then everything before it, including entries of earlier terms, commits with it
+        let mut m: Vec<u64> = (0..self.n).map(|p| if p == self.id { self.last_index() } else { self.matched[p] }).collect();
+        m.sort_unstable_by(|a, b| b.cmp(a));
+        let n = m[self.quorum() - 1];
+        if n > self.commit && self.d.log[n as usize].term == self.d.term {
+            self.commit = n;
+        }
+        self.apply();
+    }
+    fn apply(&mut self) {
+        while self.applied < self.commit {
+            self.applied += 1;
+            let r = self.sm.apply(&self.d.log[self.applied as usize].cmd);
+            self.results.insert(self.applied, r);
+        }
+    }
+
+    pub fn on_msg(&mut self, from: usize, m: Msg, out: &mut Vec<(usize, Msg)>) {
+        match m {
+            Msg::PreVote { term, last_index, last_term } => {
+                // grant only if we would vote for this candidate and have not heard from a leader recently
+                let heard = self.role == Role::Leader || (self.leader.is_some() && self.elapsed < self.cfg.election_ticks);
+                let granted = term > self.d.term && self.up_to_date(last_index, last_term) && !heard;
+                out.push((from, Msg::PreVoteResp { term, granted }));
+            }
+            Msg::PreVoteResp { term, granted } => {
+                if self.role == Role::PreCandidate && term == self.d.term + 1 && granted {
+                    self.votes.insert(from);
+                    if self.votes.len() >= self.quorum() {
+                        self.start_election(out);
+                    }
+                }
+            }
+            Msg::Vote { term, last_index, last_term } => {
+                if term > self.d.term {
+                    self.step_down(term);
+                }
+                let granted = term == self.d.term && self.d.voted_for.is_none_or(|v| v == from) && self.up_to_date(last_index, last_term);
+                if granted {
+                    self.d.voted_for = Some(from);
+                    self.persist();
+                    self.reset_timer();
+                }
+                out.push((from, Msg::VoteResp { term: self.d.term, granted }));
+            }
+            Msg::VoteResp { term, granted } => {
+                if term > self.d.term {
+                    return self.step_down(term);
+                }
+                if self.role == Role::Candidate && term == self.d.term && granted {
+                    self.votes.insert(from);
+                    if self.votes.len() >= self.quorum() {
+                        self.become_leader(out);
+                    }
+                }
+            }
+            Msg::Append { term, prev_index, prev_term, entries, commit } => {
+                if term < self.d.term {
+                    return out.push((from, Msg::AppendResp { term: self.d.term, ok: false, match_index: 0, hint: 0 }));
+                }
+                if term > self.d.term || self.role != Role::Follower {
+                    self.step_down(term);
+                }
+                self.leader = Some(from);
+                self.reset_timer();
+                // the entry before the new ones must match
+                if prev_index > self.last_index() {
+                    return out.push((from, Msg::AppendResp { term: self.d.term, ok: false, match_index: 0, hint: self.last_index() + 1 }));
+                }
+                if self.d.log[prev_index as usize].term != prev_term {
+                    let bad = self.d.log[prev_index as usize].term;
+                    let mut first = prev_index;
+                    while first > 1 && self.d.log[first as usize - 1].term == bad {
+                        first -= 1;
+                    }
+                    return out.push((from, Msg::AppendResp { term: self.d.term, ok: false, match_index: 0, hint: first }));
+                }
+                // append, replacing only entries that conflict
+                let mut changed = false;
+                for (k, e) in entries.iter().enumerate() {
+                    let idx = prev_index as usize + 1 + k;
+                    if idx < self.d.log.len() {
+                        if self.d.log[idx].term != e.term {
+                            self.d.log.truncate(idx);
+                            self.dirty_from = self.dirty_from.min(idx);
+                            self.d.log.push(e.clone());
+                            changed = true;
+                        }
+                    } else {
+                        self.d.log.push(e.clone());
+                        changed = true;
+                    }
+                }
+                if changed {
+                    self.persist();
+                }
+                let last_new = prev_index + entries.len() as u64;
+                if commit > self.commit {
+                    self.commit = commit.min(last_new);
+                    self.apply();
+                }
+                out.push((from, Msg::AppendResp { term: self.d.term, ok: true, match_index: last_new, hint: 0 }));
+            }
+            Msg::AppendResp { term, ok, match_index, hint } => {
+                if term > self.d.term {
+                    return self.step_down(term);
+                }
+                if self.role != Role::Leader || term != self.d.term {
+                    return;
+                }
+                if ok {
+                    self.matched[from] = self.matched[from].max(match_index);
+                    self.next[from] = self.next[from].max(self.matched[from] + 1);
+                    self.advance_commit();
+                    if self.next[from] <= self.last_index() {
+                        self.replicate_to(from, out);
+                    }
+                } else {
+                    self.next[from] = hint.clamp(1, self.last_index() + 1);
+                    self.replicate_to(from, out);
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// the simulated cluster
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+pub struct Cluster {
+    pub nodes: Vec<Node>,
+    pub up: Vec<bool>,
+    pub now: u64,
+    net: Vec<(u64, usize, usize, Msg)>,
+    rng: u64,
+    /// `cut[a][b]`: messages from `a` to `b` are lost.
+    pub cut: Vec<Vec<bool>>,
+    pub drop_pct: u64,
+    pub dup_pct: u64,
+    pub max_delay: u64,
+    /// Deliver messages between each pair of nodes in the order they were sent (like a TCP connection) instead of reordering them.
+    pub fifo: bool,
+    last_at: Vec<Vec<u64>>,
+    pub sent: u64,
+    pub leaders_by_term: BTreeMap<u64, usize>,
+    pub committed: Vec<Entry>,
+    pub violation: Option<String>,
+    /// Turn the per-step safety checks off for long measurement runs.
+    pub check: bool,
+}
+
+impl Cluster {
+    pub fn new(n: usize, cfg: Config, seed: u64) -> Cluster {
+        Cluster {
+            nodes: (0..n).map(|i| Node::new(i, n, cfg, seed * 1000 + i as u64 + 1)).collect(),
+            up: vec![true; n], now: 0, net: vec![], rng: seed.wrapping_mul(0x2545F4914F6CDD1D) | 1, cut: vec![vec![false; n]; n], drop_pct: 0, dup_pct: 0, max_delay: 3,
+            fifo: false,
+            last_at: vec![vec![0; n]; n],
+            sent: 0, leaders_by_term: BTreeMap::new(), committed: vec![], violation: None, check: true,
+        }
+    }
+    pub fn rnd(&mut self, m: u64) -> u64 {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        self.rng % m
+    }
+    fn send(&mut self, from: usize, out: Vec<(usize, Msg)>) {
+        for (to, m) in out {
+            self.sent += 1;
+            let mut delay = 1 + self.rnd(self.max_delay);
+            if self.fifo {
+                // never overtake an earlier message on the same link
+                delay = delay.max(self.last_at[from][to].saturating_sub(self.now));
+                self.last_at[from][to] = self.now + delay;
+            }
+            if self.dup_pct > 0 && self.rnd(100) < self.dup_pct {
+                let extra = self.rnd(self.max_delay);
+                self.net.push((self.now + delay + extra, from, to, m.clone()));
+            }
+            self.net.push((self.now + delay, from, to, m));
+        }
+    }
+    pub fn partition(&mut self, groups: &[&[usize]]) {
+        let n = self.nodes.len();
+        for a in 0..n {
+            for b in 0..n {
+                self.cut[a][b] = !groups.iter().any(|g| g.contains(&a) && g.contains(&b)) && a != b;
+            }
+        }
+    }
+    pub fn heal(&mut self) {
+        for row in self.cut.iter_mut() {
+            row.iter_mut().for_each(|c| *c = false);
+        }
+    }
+    pub fn crash(&mut self, i: usize) {
+        self.up[i] = false;
+    }
+    pub fn restart(&mut self, i: usize) {
+        self.nodes[i].restart();
+        self.up[i] = true;
+    }
+    /// Replicate what a leader has buffered with `propose_buffered`.
+    pub fn flush(&mut self, i: usize) {
+        if !self.up[i] {
+            return;
+        }
+        let mut out = vec![];
+        self.nodes[i].flush(&mut out);
+        self.send(i, out);
+        self.check_cheap();
+    }
+    pub fn leader(&self) -> Option<usize> {
+        (0..self.nodes.len()).filter(|&i| self.up[i] && self.nodes[i].role == Role::Leader).max_by_key(|&i| self.nodes[i].term())
+    }
+    pub fn propose(&mut self, to: usize, cmd: Cmd) -> Option<u64> {
+        if !self.up[to] {
+            return None;
+        }
+        let mut out = vec![];
+        let r = self.nodes[to].propose(cmd, &mut out);
+        self.send(to, out);
+        self.check_cheap();
+        r
+    }
+
+    /// One tick of simulated time: deliver what is due, then fire timers.
+    pub fn step(&mut self) {
+        self.now += 1;
+        let mut due: Vec<(usize, usize, Msg)> = vec![];
+        let mut keep = Vec::with_capacity(self.net.len());
+        for (at, f, t, m) in std::mem::take(&mut self.net) {
+            if at <= self.now {
+                due.push((f, t, m));
+            } else {
+                keep.push((at, f, t, m));
+            }
+        }
+        self.net = keep;
+        if !self.fifo {
+            // arrival order within a tick is random
+            for k in (1..due.len()).rev() {
+                let j = self.rnd(k as u64 + 1) as usize;
+                due.swap(k, j);
+            }
+        }
+        for (f, t, m) in due {
+            if !self.up[t] || self.cut[f][t] || (self.drop_pct > 0 && self.rnd(100) < self.drop_pct) {
+                continue;
+            }
+            let mut out = vec![];
+            self.nodes[t].on_msg(f, m, &mut out);
+            self.send(t, out);
+        }
+        for i in 0..self.nodes.len() {
+            if self.up[i] {
+                let mut out = vec![];
+                self.nodes[i].on_tick(&mut out);
+                self.send(i, out);
+            }
+        }
+        self.check_cheap();
+        if self.check && self.now % 10 == 0 {
+            self.check_logs();
+        }
+    }
+    pub fn run(&mut self, ticks: u64) {
+        for _ in 0..ticks {
+            self.step();
+        }
+    }
+
+    fn fail(&mut self, msg: String) {
+        if self.violation.is_none() {
+            self.violation = Some(msg);
+        }
+    }
+    /// Election safety and state-machine safety, checked after every step.
+    fn check_cheap(&mut self) {
+        if !self.check {
+            return;
+        }
+        for i in 0..self.nodes.len() {
+            if self.nodes[i].role == Role::Leader {
+                let t = self.nodes[i].term();
+                match self.leaders_by_term.get(&t) {
+                    Some(&j) if j != i => self.fail(format!("two leaders in term {t}: {j} and {i}")),
+                    _ => {
+                        self.leaders_by_term.insert(t, i);
+                    }
+                }
+            }
+            for k in 1..=self.nodes[i].commit as usize {
+                let e = self.nodes[i].d.log[k].clone();
+                if k <= self.committed.len() {
+                    if self.committed[k - 1] != e {
+                        self.fail(format!("node {i} committed a different entry at index {k}: {:?} against {:?}", e, self.committed[k - 1]));
+                    }
+                } else if k == self.committed.len() + 1 {
+                    self.committed.push(e);
+                } else {
+                    unreachable!("commit index skipped an entry");
+                }
+            }
+        }
+    }
+    /// Log matching: entries with the same index and term imply identical prefixes.
+    fn check_logs(&mut self) {
+        let n = self.nodes.len();
+        for a in 0..n {
+            for b in a + 1..n {
+                let (la, lb) = (&self.nodes[a].d.log, &self.nodes[b].d.log);
+                let common = la.len().min(lb.len());
+                if let Some(i) = (1..common).rev().find(|&i| la[i].term == lb[i].term) {
+                    if la[..=i] != lb[..=i] {
+                        let msg = format!("logs of {a} and {b} agree on (index {i}, term {}) but differ before it", la[i].term);
+                        self.fail(msg);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    /// The state machine of every node that has applied `k` entries equals a replay of the committed prefix.
+    pub fn check_state_machines(&self) -> Result<(), String> {
+        for (i, nd) in self.nodes.iter().enumerate() {
+            let mut sm = Sm::default();
+            for e in self.committed.iter().take(nd.applied as usize) {
+                sm.apply(&e.cmd);
+            }
+            if sm != nd.sm {
+                return Err(format!("node {i}'s state machine differs from a replay of {} committed entries", nd.applied));
+            }
+        }
+        Ok(())
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>The harness is a deterministic cluster: messages are delayed by 1 to 3 ticks, may be dropped, duplicated, reordered or cut by a partition; nodes crash and restart from their disks. After every step it checks, independently of the nodes' own logic: <em>election safety</em> (at most one leader per term), <em>state-machine safety</em> (the committed prefix is identical on every node and no node ever commits something different at an index another node committed), and, every ten ticks, <em>log matching</em> (equal term at an index implies equal prefix).</p>
+
+```text title="safety under faults, linearizability of the replicated store, and pre-vote"
+pre-vote false: isolated node's term 27 (cluster's 1); after healing the leader's term is 28, leader changed: true
+pre-vote  true: isolated node's term 1 (cluster's 1); after healing the leader's term is 1, leader changed: false
+120 runs: 1081 operations completed, 3714 retried, 1385 left pending; every per-key history is linearizable
+300 chaotic runs: 3169 leaders elected over 14926 partitions and 5187 crashes, 12532 entries committed, highest term 100; no safety violation
+```
+
+<ul> <li><strong>300 chaotic runs</strong> (3 or 5 nodes, up to 20% loss, 10% duplication, partitions of a node or into two halves, crashes and restarts, random client commands to random nodes): <strong>no safety violation</strong> in 1 500 ticks each, 3 169 leaders elected, 12 532 entries committed, terms up to 100. At the end each run heals the cluster and requires a leader within 300 ticks, every log entry of earlier terms committed without any new client command (the no-op), and a fresh command applied on all nodes.</li> <li><strong>Linearizability</strong>: 120 runs of three clients issuing reads and writes through crashes and partitions, retrying timed-out commands on other nodes. 1 081 operations completed, 3 714 were retried, 1 385 stayed pending (the client gave up); a Wing and Gong checker finds a legal sequential order for every key's history, with pending writes free to have taken effect or not. The checker itself is tested: it rejects a read after a completed write that returns the old value.</li> <li><strong>Pre-vote in numbers</strong>: a node isolated for 400 ticks raises its term to <strong>27</strong> without pre-vote and then deposes the leader at the heal (leader's term 28); with pre-vote it stays at term 1 and nothing changes.</li> </ul>
+
+```text title="leader failure, and the cost of replication"
+leader crash in a 5-node cluster (message delay 1 to 3 ticks), 150 crashes per row; ticks from the crash until a new leader exists / until a command commits
+election ticks  heartbeat   leader p50   leader p99   commit p50   commit p99
+             5          2            9           34           15           49
+            10          3           15           54           21           61
+            20          5           28           68           33           77
+            40         10           50          112           56          117
+steady state: 5 nodes, 8 commands proposed per tick for 4 000 ticks, ordered links, no faults
+              leader sends  max batch    committed   messages/entry   commit lag p50
+         on every proposal          1        32000             8.34              5 t
+         on every proposal         64        32000             8.34              5 t
+             once per tick          1        32000             8.19              7 t
+             once per tick         64        32000             1.34              4 t
+```
+
+<ul> <li><strong>Unavailability after a leader failure is about the election timeout plus an election</strong>: the median new leader appears 15 ticks after the crash with a timeout of 10 to 20 ticks, and a command commits 21 ticks after the crash. The 99th percentile is 3 to 4 times the median because split votes need a second round; larger timeouts trade recovery time for fewer spurious elections.</li> <li><strong>A message per entry is the cost of sending on every proposal</strong>: 4 appends and 4 acknowledgements per entry (8.34). Sending once per tick with a batch of 64 entries takes <strong>1.34 messages per entry, six times fewer</strong>, and a lower commit lag (4 ticks against 5). Batching only helps if the batch limit allows it: with one entry per message the coalesced leader still sends 8.19.</li> </ul>
+
+<aside data-call="note"><b>Three things the measurements forced</b><p><strong>Quadratic commit.</strong> The first <code>advance_commit</code> walked down from the last index looking for the highest replicated entry; a leader whose followers fall behind scans the whole backlog on every acknowledgement, and a 32 000-entry run did not finish. It now sorts the match indices (O(n log n), independent of the backlog) and the Figure 8 test still passes. <strong>A message storm.</strong> The first replication sent the missing entries on every proposal and again on every acknowledgement, and moved <code>next</code> only when an acknowledgement arrived. With reordered messages the leader sent the same entries many times over: <strong>780 messages per entry</strong> at a batch limit of 1. Optimistic pipelining plus ordered links (the transport Raft is normally built on) brought it to 8.3. <strong>A mistaken client.</strong> Even a perfectly correct cluster loses a command proposed to a leader that is about to be deposed; the first measurement client waited forever. Clients must retry at the current leader, and the state machine's duplicate suppression makes that safe.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A node is a pure state machine</strong>: <code>on_msg(from, msg, &amp;mut out)</code> and <code>on_tick(&amp;mut out)</code> take and produce messages and touch nothing else. The simulator owns the network, time and failures, so a run is a function of a seed and any failure replays exactly.</li> <li><strong>Durable versus volatile state</strong>: <code>Durable { term, voted_for, log }</code> is cloned to a <code>disk</code> copy by <code>persist()</code>, which copies only the suffix of the log that changed (<code>dirty_from</code>); <code>restart()</code> rebuilds the node from the disk copy. Forgetting a <code>persist()</code> call is then a visible, testable bug.</li> <li><strong>Enums for roles and messages</strong>: every message is a variant of <code>Msg</code>; the handler is one <code>match</code>. <code>Option&lt;usize&gt;</code> for <code>voted_for</code>, <code>is_none_or(|v| v == from)</code> for the vote rule.</li> <li><strong>Index 0 is a sentinel entry</strong> so that <code>prev_index = 0</code> needs no special case and log indices equal Vec indices.</li> <li><strong>The cluster checks, the node doesn't</strong>: <code>Cluster</code> records which node led each term and the globally committed prefix, so the safety properties are asserted by code that shares nothing with the protocol logic.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Chaos (300 seeds)</strong>: loss, duplication, delay, partitions, crashes, random client commands, with pre-vote on and off, checked every step for election safety and state-machine safety and every ten ticks for log matching; at the end the cluster is healed and must elect a leader, commit all earlier-term entries without new commands, replicate a fresh command everywhere, and have state machines equal to a replay of the committed prefix.</li> <li><strong>Linearizability (120 seeds)</strong>: three clients with retries against crashes and partitions; per-key Wing and Gong check with pending writes; the checker is itself tested on accepted and rejected histories.</li> <li><strong>Scenarios</strong>: a cluster of 1, 3 and 5 nodes elects exactly one leader and converges; a leader isolated with one follower accepts three commands that never commit and loses them when the partition heals, while the majority's commands survive; a duplicated command is applied once; pre-vote leaves the term unchanged for an isolated node.</li> <li><strong>Single-node rules that random runs reach only by luck</strong>: a vote given in a term is refused to another candidate after a restart; a term learned from a vote or a heartbeat survives a restart; a restarted candidate remembers it voted for itself; a follower caps the leader's commit index by what it received; a vote reply from an earlier term does not count; pre-vote is refused after a recent heartbeat and granted after silence.</li> <li><strong>Figure 8</strong>: scripted by hand with message-by-message delivery: entry 2 of term 1 reaches a majority through a leader of term 3 that crashes before replicating its own entry; the leader must not have committed it, and when a node with a term-2 entry wins a later election, nothing committed may be lost.</li> <li><strong>Mutants run against these tests</strong>: a candidate with a stale log winning; a vote, a candidate's own vote, or a new term not persisted; counting replicas to commit an earlier-term entry; one replica too few; conflicting entries not truncated; the previous-entry check skipped; a follower committing beyond what it has; a follower not resetting its timer on appends; a node voting twice in a term; a leader ignoring a higher term in a reply; no no-op after an election; duplicate commands applied again; pre-vote ignoring a recent leader; stale vote replies counted; the leader's own entry not persisted. <strong>All 17 were killed.</strong> Seven survived the random runs and needed the directed tests above (the three persistence rules, Figure 8, the commit cap, the pre-vote rule, the stale vote); random crashes cannot be relied on to hit the one tick where a missing <code>persist</code> matters.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>etcd</strong> (Go, the Raft behind Kubernetes) and <strong>Consul</strong>/<strong>Nomad</strong> (HashiCorp's Raft library) are the best-known implementations; both use pre-vote, leader leases or ReadIndex for reads, snapshots, and learner (non-voting) members.</li> <li><strong>TiKV</strong> runs one Raft group per <em>region</em> (about 96 MB of keys) with thousands of groups per node, batching their messages together; <strong>CockroachDB</strong> and <strong>YugabyteDB</strong> do the same per range or tablet; <strong>MongoDB</strong> has a Raft-like protocol for its replica sets; <strong>Kafka</strong> replaced ZooKeeper by KRaft.</li> <li><strong>Variants</strong>: Multi-Paxos (the same guarantees, differently organized), Viewstamped Replication, EPaxos (leaderless, for commutative commands), Raft with <em>joint consensus</em> or single-server changes for membership, and witness replicas that vote without storing data.</li> <li><strong>What the implementations add to the paper</strong>: flow control and pipelining with inflight windows, log compaction with <code>InstallSnapshot</code>, check-quorum so a leader that cannot reach a majority steps down, batching of fsyncs (group commit), disk-failure handling, and persistence formats with checksums (<a href="/cookbook/p/a-durable-lsm-tree">a durable log</a>).</li> <li><strong>Testing</strong>: Jepsen tests find bugs in every system that claims consensus; FoundationDB's deterministic simulation, and its descendants (TigerBeetle, Antithesis), are the model for what this section's simulator does at small scale (<a href="/cookbook/p/deterministic-simulation">deterministic simulation</a>).</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>A missing <code>fsync</code> is an invisible bug.</strong> The protocol is correct only if the persisted term, vote and log are on stable storage before any reply that depends on them. Test restart at every message boundary.</li> <li><strong>Reads need care.</strong> A deposed leader that has not noticed can serve stale reads. Send reads through the log, confirm leadership with a heartbeat round (ReadIndex), or use a lease with a bounded clock-drift assumption.</li> <li><strong>Timeouts are a trade-off and a hazard.</strong> Too short and a slow disk or GC pause causes elections; too long and failures take long to notice. Use at least ten times the heartbeat interval and measure the real latency distribution. Check-quorum and pre-vote prevent the worst cascades.</li> <li><strong>Membership changes are subtle.</strong> Switching a configuration all at once can create two disjoint majorities. Change one server at a time, or use joint consensus.</li> <li><strong>Unbounded logs</strong>: without snapshots the log grows forever and a restarted node replays it all.</li> <li><strong>Reordering and duplicates</strong> are normal in the paper's model but expensive in practice; run on ordered, reliable connections and keep retransmission logic simple.</li> <li><strong>Each Raft group has one leader</strong>: a single group caps throughput at one machine's. Scale by running many groups (<a href="/cookbook/p/sharding">sharding</a>).</li> </ul></aside>
+"""
+
+[[sources]]
+title = "In Search of an Understandable Consensus Algorithm"
+url = "https://raft.github.io/raft.pdf"
+
+[[sources]]
+title = "visualization"
+url = "https://raft.github.io"
+
+[[sources]]
+title = "Jepsen"
+url = "https://jepsen.io"

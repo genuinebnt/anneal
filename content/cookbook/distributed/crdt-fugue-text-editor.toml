@@ -1,0 +1,59 @@
+title = "A collaborative plain-text engine"
+module = "Distributed systems"
+module_order = 10
+chapter = "Collaboration and CRDTs"
+chapter_order = 3
+order = 498
+kind = "recipe"
+lede = "Fugue (and a YATA/Yjs-style integrate to compare) with an O(log n) order-statistic treap, run-length ops, stable cursors, undo/redo and a diff adapter."
+level = "advanced"
+code = ["examples/distributed/crdt_fugue_text_editor.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+the core of a Google-Docs-like or code-editor collaboration feature.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>collaborative text editing (Yjs/Automerge style engines)</li><li>shared notes</li><li>in-browser <strong>ide</strong> pair programming</li><li>local-first apps. Course: Weidner &amp; Kleppmann</li><li>"The Art of the Fugue: Minimizing Interleaving in Collaborative Text Editing"</li><li>Yjs internals (YATA, Nicolaescu et al.)</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+every character is a node with a unique id (replica, counter). Two list CRDTs decide where a concurrent insert lands:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Fugue</div><div class="cb-g-says"><p>The node names a <strong>parent</strong> and a <strong>side</strong> (left/right child). Rule for a local insert after visible char L: if L has no right child, be L's right child; otherwise be a <strong>left</strong> child of the next node in the full traversal (tombstones included). Siblings sort by id.</p><p>The document is the in-order traversal (left kids, node, right kids). That construction is what makes two authors' runs stay contiguous.</p></div></div><div class="cb-g-term"><div class="cb-g-name">YATA (Yjs)</div><div class="cb-g-says"><p>The node names a <strong>left</strong> and a <strong>right</strong> origin; <code>Yata::integrate</code> scans the gap between them with the conflict rules of Yjs. <strong>Why</strong> a treap: an editor speaks "index 17", a CRDT speaks "after id (3,9)".</p><p><code>Treap</code> is an arena (Vec) of nodes with subtree counts (total and visible) and parent pointers, so index -&gt; node (<code>by_visible</code>) and node -&gt; index (<code>rank_*</code>) are both O(log n), and so is insertion at a position (rotations restore the heap property).</p><p>Remote Fugue inserts find their slot from the sibling set: after the <strong>last</strong> node of the previous sibling's subtree (<code>FugueDoc::last</code>), or before the first node of the next one. Local inserts use the shortcut and assert it agrees.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+- runs: consecutive typing is one `Run{id, parent, text}` on the wire instead of one op per char (`batch_runs`), deletes compact into id ranges (`compact_deletes`); `overhead_report` prints bytes per character for both encodings,
+- cursors are `Anchor`s (an id plus left/right stickiness), not integers, so remote edits move them correctly (`index_of`),
+- undo/redo are per user and use **inverse** ops (undo of an insert deletes those ids; undo of a delete re-inserts the text at an anchor),
+- `Peer::set_text` takes any new string, computes an LCS diff with prefix/suffix trimming, and emits minimal inserts/deletes. Delivery is causal-by-dependency: an op waits in `pending` until every id it references exists; duplicates are ignored. Honest limits: no garbage collection.
+
+   Local editing and cursors are O(log n) (checked: no full-document walk), but placing a node that has earlier siblings calls `FugueDoc::last`, which walks a right spine (O(length of a typed run); run-based storage like Yjs's items avoids that), and `first` does the same on a left spine.
+
+   `set_text` (O(old &#42; new) LCS table on the differing middle), the YATA engine and the causal buffer's retry loop are not O(log n). Tombstones stay one treap node each: run-length compaction is applied to the **wire** form only. This is basic Fugue, not FugueMax.
+
+   FugueMax orders right-side siblings by their right origins (reverse order, ids break ties) and is the variant the paper proves "maximally non-interleaving"; basic Fugue may interleave more than necessary where some interleaving is unavoidable.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Fugue paper <a href="https://arxiv.org/abs/2305.00583" target="_blank" rel="noreferrer">https://arxiv.org/abs/2305.00583</a></li><li>Yjs <a href="https://github.com/yjs/yjs" target="_blank" rel="noreferrer">https://github.com/yjs/yjs</a></li><li>YATA paper "Near Real-Time Peer-to-Peer Shared Editing on Extensible Data Types" (title only, not fetched)</li></ul>
+"""
+
+[[sources]]
+title = "arxiv.org/abs/2305.00583"
+url = "https://arxiv.org/abs/2305.00583"
+
+[[sources]]
+title = "github.com/yjs/yjs"
+url = "https://github.com/yjs/yjs"

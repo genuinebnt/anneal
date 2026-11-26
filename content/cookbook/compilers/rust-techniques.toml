@@ -1,0 +1,181 @@
+title = "Rust techniques"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 561
+kind = "guide"
+lede = "Patterns from rustc, swc and oxc, scaled down to Lox. The tags show which project each one comes from."
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Lexer"
+body = """
+<div class="cb-g-tip"><h3>Cursor over <code>Chars</code>, offset from what's left <span class="cb-g-src"><span>oxc</span><span>rustc_lexer</span></span></h3> <p>Your <code>offset()</code> is already this pattern. <code>Chars</code> is just two pointers, so cloning it to peek costs almost nothing. <code>rustc_lexer</code>'s <code>Cursor</code> uses <code>first()</code> and <code>second()</code> for the same job.</p></div>
+
+```rust title="src/lexer.rs"
+fn offset(&self) -> u32 {
+    (self.src.len() - self.chars.as_str().len()) as u32
+}
+fn peek(&self) -> Option<char> { self.chars.clone().next() }
+fn peek2(&self) -> Option<char> { let mut c = self.chars.clone(); c.next(); c.next() }
+fn eat(&mut self, want: char) -> bool {
+    if self.peek() == Some(want) { self.chars.next(); true } else { false }
+}
+fn eat_while(&mut self, pred: impl Fn(char) -> bool) {
+    while self.peek().is_some_and(&pred) { self.chars.next(); }
+}
+
+pub fn next_token(&mut self) -> Token {
+    self.skip_trivia();                       // whitespace and // comments
+    let start = self.offset();
+    let kind = self.next_kind(start);
+    Token { kind, span: Span { start, end: self.offset() } }
+}
+
+fn next_kind(&mut self, start: u32) -> TokenKind {
+    use TokenKind::*;
+    let Some(c) = self.chars.next() else { return Eof };
+    match c {
+        '(' => LParen,
+        '!' => if self.eat('=') { BangEqual } else { Bang },
+        '"' => self.string(),
+        '0'..='9' => self.number(),
+        c if c.is_ascii_alphabetic() || c == '_' => {
+            self.eat_while(|c| c.is_ascii_alphanumeric() || c == '_');
+            keyword(&self.src[start as usize..self.offset() as usize]).unwrap_or(Identifier)
+        }
+        _ => Unknown,                         // report, keep lexing
+    }
+}
+
+fn keyword(s: &str) -> Option<TokenKind> {
+    use TokenKind::*;
+    Some(match s {
+        "and" => And, "class" => Class, "else" => Else, "false" => False,
+        "for" => For, "fun" => Fun, "if" => If, "nil" => Nil, "or" => Or,
+        "print" => Print, "return" => Return, "super" => Super, "this" => This,
+        "true" => True, "var" => Var, "while" => While,
+        _ => return None,
+    })
+}
+```
+
+<div class="cb-g-tip"><h3>Numbers need two characters of lookahead</h3> <p>In Lox, <code>12.</code> lexes as <code>Number Dot</code>. Only eat the dot when <code>peek2()</code> is a digit. The slice-1 lexer tests check this.</p></div>
+
+<div class="cb-g-tip"><h3>The lexer never fails <span class="cb-g-src"><span>rustc_lexer</span></span></h3> <p><code>rustc_lexer</code> has no error type. An unknown character becomes an <code>Unknown</code> token, and a string literal has a <code>terminated: bool</code> flag. The next layer turns these into diagnostics. For Lox, emit <code>Unknown</code> or an unterminated <code>String</code> token and let the parser report it. That gives you a single error path.</p></div>
+
+<div class="cb-g-tip"><h3>Tokens carry spans, not values <span class="cb-g-src"><span>rustc_lexer</span><span>oxc</span></span></h3> <p><code>rustc_lexer</code> tokens store only a kind and a length. oxc reads identifier and literal text back from the source using the span. Parse the number in the parser with <code>src[span].parse::&lt;f64&gt;()</code>. The token then becomes <code>Copy</code> and 12 bytes.</p></div>
+
+<div class="cb-g-tip"><h3>Compute line numbers when you need them <span class="cb-g-src"><span>rustc SourceMap</span></span></h3> <p>Don't count lines in the hot loop. Build a table of line starts once, and search it with a binary search when you report an error.</p></div>
+
+```rust title="src/span.rs"
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Span { pub start: u32, pub end: u32 }
+
+pub struct LineIndex { starts: Vec<u32> }
+
+impl LineIndex {
+    pub fn new(src: &str) -> Self {
+        let starts = std::iter::once(0)
+            .chain(src.match_indices('\\n').map(|(i, _)| i as u32 + 1))
+            .collect();
+        Self { starts }
+    }
+    /// 1-based line for a byte offset.
+    pub fn line(&self, offset: u32) -> usize {
+        self.starts.partition_point(|&s| s <= offset)
+    }
+}
+
+const _: () = assert!(std::mem::size_of::<Token>() == 12);
+```
+
+<div class="cb-g-tip"><h3>Assert the sizes of hot types <span class="cb-g-src"><span>rustc</span><span>oxc</span></span></h3> <p>rustc uses <code>static_assert_size!</code> on its AST and type nodes, and oxc asserts on its AST node sizes. A <code>const</code> assert like the last line above breaks the build when a new variant makes <code>Token</code>, <code>Expr</code> or <code>Value</code> bigger without you noticing.</p></div>
+"""
+
+[[sections]]
+heading = "Parser"
+body = """
+<div class="cb-g-tip"><h3>Use <code>at</code>, <code>eat</code>, <code>expect</code> and <code>bump</code> <span class="cb-g-src"><span>rustc</span><span>oxc</span></span></h3> <p>Both parsers are built on this small set of helpers. The parser holds the current token and the end of the previous one, which lets you build a node's span from its first and last tokens.</p></div>
+
+```rust title="src/parser.rs"
+pub struct Parser<'a> {
+    src: &'a str,
+    lexer: Lexer<'a>,
+    token: Token,
+    prev_end: u32,
+    diags: Vec<Diagnostic>,
+}
+
+impl<'a> Parser<'a> {
+    fn at(&self, k: TokenKind) -> bool { self.token.kind == k }
+    fn bump(&mut self) {
+        self.prev_end = self.token.span.end;
+        self.token = self.lexer.next_token();
+    }
+    fn eat(&mut self, k: TokenKind) -> bool {
+        if self.at(k) { self.bump(); true } else { false }
+    }
+    fn expect(&mut self, k: TokenKind, msg: &str) -> PResult<Token> {
+        if !self.at(k) { return Err(self.error_at(self.token, msg)); }
+        let t = self.token;
+        self.bump();
+        Ok(t)
+    }
+}
+
+/// The diagnostic is already recorded when this is returned. It only unwinds.
+pub struct ParseError;
+type PResult<T> = Result<T, ParseError>;
+```
+
+<div class="cb-g-tip"><h3>Pratt parsing for binary operators <span class="cb-g-src"><span>matklad</span></span></h3> <p>The book writes one function per precedence level. A binding-power table replaces the equality, comparison, term and factor functions with one loop. Adding an operator is then one row in the table. Keep assignment and unary as ordinary functions.</p></div>
+
+```rust title="src/parser.rs"
+fn binary(&mut self, min_bp: u8) -> PResult<Expr> {
+    let mut lhs = self.unary()?;
+    while let Some((l_bp, r_bp, op)) = infix(self.token.kind) {
+        if l_bp < min_bp { break; }
+        self.bump();
+        let rhs = self.binary(r_bp)?;
+        lhs = Expr::binary(lhs, op, rhs);
+    }
+    Ok(lhs)
+}
+
+fn infix(k: TokenKind) -> Option<(u8, u8, BinOp)> {
+    use {BinOp as B, TokenKind as T};
+    Some(match k {
+        T::EqualEqual => (1, 2, B::Eq),   T::BangEqual => (1, 2, B::Ne),
+        T::Less => (3, 4, B::Lt),         T::LessEqual => (3, 4, B::Le),
+        T::Greater => (3, 4, B::Gt),      T::GreaterEqual => (3, 4, B::Ge),
+        T::Plus => (5, 6, B::Add),        T::Minus => (5, 6, B::Sub),
+        T::Star => (7, 8, B::Mul),        T::Slash => (7, 8, B::Div),
+        _ => return None,                 // left bp < right bp: left-associative
+    })
+}
+```
+
+<div class="cb-g-tip"><h3>Recover, then keep going <span class="cb-g-src"><span>rustc</span><span>matklad</span></span></h3> <p>rustc recovers from most syntax errors so it can report more than one per build. For Lox, the book's <code>synchronize()</code> is enough. Catch <code>ParseError</code> at the declaration level, skip to a statement boundary, and return all diagnostics at the end.</p></div>
+"""
+
+[[sections]]
+heading = "AST"
+body = """
+<div class="cb-g-tip"><h3><code>Box</code> is enough. Arenas are the upgrade <span class="cb-g-src"><span>oxc</span><span>rustc</span></span></h3> <p>oxc allocates its whole AST in a bump arena (<code>oxc_allocator::Box&lt;'a, T&gt;</code>), and rustc uses typed arenas for its later IRs. For a Lox tree-walker, <code>Box&lt;Expr&gt;</code> is fast enough and simpler. If you try an arena, use <code>Vec&lt;Expr&gt;</code> with <code>ExprId(u32)</code> indices. The IDs then double as resolver keys.</p></div>
+
+<div class="cb-g-tip"><h3>Use <code>match</code> instead of the Visitor pattern <span class="cb-g-src"><span>rustc</span><span>swc</span></span></h3> <p>Java needs visitors because it has no sum types. In Rust, each pass is a function that matches on the enum, and the compiler checks that every case is handled. rustc's <code>Visitor</code> trait and swc's generated <code>Visit</code>, <code>VisitMut</code> and <code>Fold</code> exist to walk hundreds of node types. Lox has about 20.</p></div>
+
+<div class="cb-g-tip"><h3>Identifiers: <code>Rc&lt;str&gt;</code> now, interning later <span class="cb-g-src"><span>rustc Symbol</span><span>swc Atom</span><span>oxc Atom</span></span></h3> <p>All three projects intern identifiers, so comparing two names is an integer compare and cloning one is free. Start with <code>Rc&lt;str&gt;</code>. If profiling shows <code>HashMap&lt;Rc&lt;str&gt;, _&gt;</code> hashing is slow, switch to a <code>Symbol(u32)</code> interner. matklad's interner post is about 40 lines, and the <code>lasso</code> crate is the ready-made version.</p></div>
+"""
+
+[[sections]]
+heading = "Interpreter and errors"
+body = """
+<div class="cb-g-tip"><h3>Write output to an injected writer</h3> <p>Pass <code>&amp;mut dyn Write</code> to the interpreter. Tests pass a <code>Vec&lt;u8&gt;</code>, the CLI passes locked stdout, and fuzzing can pass <code>io::sink()</code>.</p></div>
+
+<div class="cb-g-tip"><h3><code>thiserror</code> in the library, <code>anyhow</code> only in <code>main</code></h3> <p>Tests need to match on error kinds, so give the library a typed <code>LoxError</code> with <code>Compile(Vec&lt;Diagnostic&gt;)</code> and <code>Runtime(RuntimeError)</code>. Its <code>Display</code> should print jlox's exact text, because the golden tests compare against it.</p></div>
+
+<div class="cb-g-tip"><h3>Pretty errors behind a flag <span class="cb-g-src"><span>oxc → miette</span></span></h3> <p>Your tokens already have spans, so rendering a source excerpt with a caret takes very little work. Use <code>ariadne</code> or <code>miette</code> in the REPL or behind <code>--pretty</code>. Keep the plain jlox format as the default so the official tests still pass.</p></div>
+"""

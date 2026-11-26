@@ -1,0 +1,11 @@
+// passes: ssa,gvn,out-of-ssa
+// `a * b` in the entry block is reused in both arms and after the join (local CSE cannot).
+fn f(a: int, b: int) -> int {
+    let x = a * b;
+    let mut r = 0;
+    if x > 10 { r = a * b + 1; } else { r = b * a + 2; }
+    r + a * b
+}
+fn main() {
+    println(to_str(f(3, len("abcd"))));
+}

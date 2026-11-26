@@ -1,0 +1,58 @@
+title = "Procedural puzzles with ASCII pictures"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Dynamic programming, greedy and search"
+chapter_order = 5
+order = 214
+kind = "recipe"
+lede = "Mazes, Sudoku, queens, WFC, tours, Hanoi, Gray codes."
+level = "advanced"
+code = ["examples/algorithms/procedural_puzzles.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>game level generation</li><li>constraint solving</li><li>combinatorial search</li><li>test-data generation</li><li>algorithm interviews</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>roguelike/maze level generators</li><li>puzzle apps and solvers (exact cover)</li><li>constraint propagation in procedural content (wave function collapse)</li><li>enumerating permutations/subsets in brute-force search</li><li>Gray codes in rotary encoders and Karnaugh maps</li><li>flood fill/connected components in image processing and paint tools</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Each section is a small, classic algorithm with a **self-check** that does not trust the algorithm: mazes (4 generators) are verified to be spanning trees; solvers are verified shortest and unique; Sudoku solutions are validated and solver counts are cross-checked between Dancing Links and a backtracker;
+
+N-queens counts must equal the known sequence; WFC output is re-checked cell by cell against the adjacency rules; flood fill is cross-checked against union-find; knight's tours are re-walked; Hanoi, Gray codes and permutation generators are checked against their defining properties.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Maze_generation_algorithm>
+
+<https://en.wikipedia.org/wiki/Dancing_Links>
+
+<https://en.wikipedia.org/wiki/Wave_function_collapse>
+
+<https://cp-algorithms.com/data_structures/disjoint_set_union.html>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Maze_generation_algorithm"
+url = "https://en.wikipedia.org/wiki/Maze_generation_algorithm"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Dancing_Links"
+url = "https://en.wikipedia.org/wiki/Dancing_Links"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Wave_function_collapse"
+url = "https://en.wikipedia.org/wiki/Wave_function_collapse"
+
+[[sources]]
+title = "cp-algorithms.com/data_structures/disjoint_set_union.html"
+url = "https://cp-algorithms.com/data_structures/disjoint_set_union.html"

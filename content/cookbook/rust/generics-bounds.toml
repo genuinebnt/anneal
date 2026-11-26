@@ -1,0 +1,38 @@
+title = "Generics bounds"
+module = "Rust language"
+module_order = 1
+chapter = "Types, traits and generics"
+chapter_order = 2
+order = 9
+kind = "recipe"
+lede = "generics, trait bounds, `impl Trait`, associated types, const generics, blanket impls."
+level = "intermediate"
+code = ["examples/language/generics_bounds.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+reusable engine code (`Scheduler<S: Store>`, `fn run(tasks: impl Iterator<..>)`).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>reusable library code: generic containers</li><li>trait-bounded algorithms</li><li>extension methods on foreign types</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Generics are monomorphised: the compiler stamps out one specialised copy per concrete type (fast, bigger binary).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Rust Book ch. 10 <https://doc.rust-lang.org/book/ch10-00-generics.html> and ch. 17/19 on advanced traits.
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch10-00-generics.html"
+url = "https://doc.rust-lang.org/book/ch10-00-generics.html"

@@ -1,0 +1,179 @@
+title = "Optimizer architectures"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 380
+kind = "guide"
+lede = "Optimize! #1–#3, 15-721 S2024 #13 · logical vs physical · heuristics, System R, Starburst, Volcano/Cascades · search termination · measured: rule-based vs cost-based orders, interesting orders, convergence of top-down search"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>What an optimizer does</strong>: it turns a declarative statement into an executable plan. A <strong>logical plan</strong> is a tree of relational-algebra-like operators that says <em>what</em> the result is; a <strong>physical plan</strong> picks <em>how</em> (hash vs merge join, index vs sequential scan) and depends on the data's physical format. Logical operators don't map 1-to-1 to physical ones (a logical join plus a logical sort may become one physical sort-merge join).</li> <li><strong>Cost is a comparison device, not a time</strong>: an estimate computed from the current database state (statistics, sizes) that is <em>only</em> meaningful relative to other plans of the same query. It routinely <strong>underestimates by a large margin</strong>, so the plan with the lowest cost is not necessarily the fastest; and enumerating everything is impossible, so the search space is trimmed. The goal is <em>a correct plan, ideally cheap</em>.</li> <li><strong>Three components</strong>: a <strong>search space</strong> (which plans are considered), a <strong>cost model</strong> (<a href="/cookbook/p/cost-models">Q9</a>) with cardinality estimates (<a href="/cookbook/p/cardinality-estimation">Q8</a>), and an <strong>enumeration architecture</strong>. Transformations are logical→logical, logical→physical, physical→physical; never physical back to logical.</li> <li><strong>Heuristic optimizers</strong>: static rules (if-then-else): split conjunctive predicates, push predicates down, turn Cartesian products into joins, push projections; cheap and predictable but they rely on <strong>magic constants</strong> and fail on anything complex. <em>Ingres</em> originally couldn't even join: it <strong>decomposed</strong> a multi-table query into single-table queries and one-variable substitutions. Oracle (until the mid-90s), early versions of most systems, and MongoDB are in this family.</li> <li><strong>Heuristics + cost-based search</strong> (<strong>System R</strong>, early DB2, PostgreSQL, most open-source systems): a heuristic rewrite phase, then a <strong>cost-based enumeration</strong> of access paths and join orders. System R searched <strong>bottom-up</strong> (best plan for one relation, then two, …), considered only <strong>left-deep trees</strong>, and tagged sub-plans with <strong>physical properties</strong> (sort order) so a costlier ordered plan survives if a later operator can use the order (<em>interesting orders</em>).</li> <li><strong>Stratified search</strong> (<strong>Starburst</strong>, CockroachDB): an optimizer <em>generator</em>: the search algorithm is decoupled from declaratively written rules, but optimization still runs in distinct stages with rule subsets (a rewrite stage over the <em>Query Graph Model</em>, then cost-based planning); Starburst is System R's optimizer rebuilt as a framework.</li> <li><strong>Unified search</strong> (<strong>Volcano, Cascades</strong>, SQL Server, Orca; see <a href="/cookbook/p/a-cascades-memo-in-rust">Q2</a>): one search with logical and physical rules together, memoized and <strong>top-down</strong> with branch-and-bound, physical properties handled by <strong>enforcers</strong>.</li> <li><strong>Randomized search</strong> (simulated annealing, PostgreSQL's genetic GEQO; <a href="/cookbook/p/join-ordering">Q4</a>): jump around the space, keep the best; low memory and escapes local minima, but plans are hard to explain and reproduce.</li> <li><strong>When to stop</strong>: <strong>wall-clock time</strong> (non-deterministic: plans depend on machine load), <strong>cost threshold</strong> (stop at a plan "good enough"), <strong>exhaustion</strong> (usually per sub-plan), or <strong>transformation count</strong> (deterministic: SQL Server's choice).</li> <li><strong>When to optimize</strong>: <strong>static</strong> (before execution; quality limited by the cost model), <strong>dynamic</strong> (on the fly; hard to debug) or <strong>adaptive</strong> (static plan, re-planned when estimates prove wrong; <a href="/cookbook/p/adaptive-and-robust">Q11</a>).</li> </ul>
+"""
+
+[[sections]]
+heading = "Three measurements that motivate the architectures"
+body = """
+<p>All three reuse the verified enumerators of <a href="/cookbook/p/join-ordering">Q4</a> and <a href="/cookbook/p/a-cascades-memo-in-rust">Q2</a>, so the optimal reference plans come from algorithms already checked against brute force and an independent DP. The queries are synthetic (log-uniform table sizes from 10² to 10⁶, selectivities that make the full result ~10⁵ rows), so the absolute ratios depend on the generator; the <em>ordering</em> of the architectures does not.</p>
+
+<ol> <li><strong>Join order by architecture</strong> (n = 8 relations): the join order a <strong>rule-based</strong> optimizer produces <em>without statistics</em> (the order the tables are <em>listed</em> in the query, never creating a cross product), a <strong>magic-constant rule</strong> ("join the smallest base table next"), <strong>System R's</strong> cost-based left-deep DP, and the cost-based bushy optimum.</li> <li><strong>The value of interesting orders</strong>: best plan cost with merge joins disabled over best plan cost with merge joins and order properties, with and without an <code>ORDER BY</code>.</li> <li><strong>Convergence of top-down search</strong>: how many physical alternatives the pruned Cascades search has costed when the root first has <em>any</em> plan, a plan within 25%, within 5%, and the final plan: the data a <strong>termination criterion</strong> needs.</li> </ol>
+
+:::deeper Reference: heuristic join orders and the experiment harness (uses joinorder.rs and cascades.rs)
+```rust title="tests/arch.rs"
+use verify::cascades::*;
+use verify::joinorder::*;
+
+fn left_deep_cost(g: &Graph, order: &[usize]) -> f64 {
+    let (mut set, mut card, mut cost) = (1u64 << order[0], g.card[order[0]], 0.0);
+    for &r in &order[1..] { card *= g.card[r] * g.cross_sel(1 << r, set); set |= 1 << r; cost += card; }
+    cost
+}
+fn is_connected_order(g: &Graph, order: &[usize]) -> bool {
+    let mut set = 1u64 << order[0];
+    for &r in &order[1..] { if g.neighbors(set) >> r & 1 == 0 { return false; } set |= 1 << r; }
+    true
+}
+/// Rule-based "no statistics" join order: take the relations in the order the query lists them, but never create a
+/// cross product (always take the first listed relation that is joined to the prefix).
+fn syntactic(g: &Graph, listed: &[usize]) -> Vec<usize> { pick(g, listed, |_, _, _| 0.0) }
+/// "Join the smallest table next" rule (a magic-constant heuristic: uses base table sizes only).
+fn smallest_first(g: &Graph) -> Vec<usize> { let all: Vec<usize> = (0..g.n).collect(); let mut start = all.clone(); start.sort_by(|&a, &b| g.card[a].total_cmp(&g.card[b])); pick(g, &start, |g, _, r| g.card[r]) }
+fn pick(g: &Graph, listed: &[usize], score: impl Fn(&Graph, u64, usize) -> f64) -> Vec<usize> {
+    let mut left: Vec<usize> = listed.to_vec();
+    let mut order = vec![left.remove(0)];
+    let mut set = 1u64 << order[0];
+    while !left.is_empty() {
+        let mut best: Option<(usize, f64)> = None;
+        for (i, &r) in left.iter().enumerate() { if g.neighbors(set) >> r & 1 == 1 { let s = score(g, set, r); if best.map_or(true, |b| s < b.1) { best = Some((i, s)); } } }
+        let (i, _) = best.expect("connected");
+        let r = left.remove(i); order.push(r); set |= 1 << r;
+    }
+    order
+}
+
+#[test]
+fn heuristic_orders_are_valid_and_never_beat_the_optimum() {
+    let mut rng = Rng(2);
+    for round in 0..100 {
+        let g = Graph::new([Shape::Chain, Shape::Star, Shape::Cycle, Shape::Clique, Shape::Random][round % 5], 3 + round % 6, &mut rng);
+        let opt = dp_ccp(&g).cost;
+        let mut listed: Vec<usize> = (0..g.n).collect();
+        for i in (1..g.n).rev() { listed.swap(i, rng.next(i as u64 + 1) as usize); }
+        for o in [syntactic(&g, &listed), smallest_first(&g)] { assert!(is_connected_order(&g, &o)); assert!(left_deep_cost(&g, &o) >= opt * (1.0 - 1e-9)); }
+    }
+}
+
+fn pct(v: &mut Vec<f64>, p: f64) -> f64 { v.sort_by(|a, b| a.total_cmp(b)); v[((v.len() - 1) as f64 * p) as usize] }
+
+#[test]
+fn measure() {
+    let mut rng = Rng(77);
+    println!("1. Join order chosen by each architecture vs the optimal bushy plan (C_out ratio; p50 / p90; 100 queries per shape, n = 8)");
+    println!("{:<8} {:>18} {:>18} {:>20} {:>18}", "shape", "listed order", "smallest table", "System R (left-deep)", "cost-based bushy");
+    for shape in [Shape::Chain, Shape::Star, Shape::Cycle, Shape::Clique, Shape::Random] {
+        let mut r: [Vec<f64>; 3] = Default::default();
+        for _ in 0..100 {
+            let g = Graph::new(shape, 8, &mut rng);
+            let opt = dp_ccp(&g).cost;
+            let mut listed: Vec<usize> = (0..8).collect();
+            for i in (1..8).rev() { listed.swap(i, rng.next(i as u64 + 1) as usize); }
+            r[0].push(left_deep_cost(&g, &syntactic(&g, &listed)) / opt);
+            r[1].push(left_deep_cost(&g, &smallest_first(&g)) / opt);
+            r[2].push(left_deep(&g).cost / opt);
+        }
+        let f = |v: &mut Vec<f64>| format!("{:.2} / {:.2}", pct(v, 0.5), pct(v, 0.9));
+        println!("{:<8} {:>18} {:>18} {:>20} {:>18}", format!("{shape:?}"), f(&mut r[0]), f(&mut r[1]), f(&mut r[2]), "1.00 / 1.00");
+    }
+
+    println!("\\n2. Value of interesting orders: best plan cost without merge joins / with merge joins (n = 8, 100 queries per shape; p50 / p90 / max)");
+    println!("{:<8} {:>26} {:>26}", "shape", "no ORDER BY", "ORDER BY a join key");
+    for shape in [Shape::Chain, Shape::Star, Shape::Clique, Shape::Random] {
+        let (mut a, mut b) = (vec![], vec![]);
+        for _ in 0..100 {
+            let g = Graph::new(shape, 8, &mut rng);
+            let cat = Catalog::new(g, &mut rng);
+            let req = Prop::Order(rng.next(cat.edges.len() as u64) as usize);
+            for (v, r) in [(&mut a, Prop::Any), (&mut b, req)] {
+                let hash_only = plan(&cat, r, Config { merge_joins: false, ..Config::full() }).0.unwrap().cost;
+                let full = plan(&cat, r, Config::full()).0.unwrap().cost;
+                assert!(full <= hash_only * (1.0 + 1e-9));
+                v.push(hash_only / full);
+            }
+        }
+        let f = |v: &mut Vec<f64>| format!("{:.3} / {:.3} / {:.2}", pct(v, 0.5), pct(v, 0.9), pct(v, 1.0));
+        println!("{:<8} {:>26} {:>26}", format!("{shape:?}"), f(&mut a), f(&mut b));
+    }
+
+    println!("\\n3. Convergence of top-down search: alternatives costed before the root's best plan is within X% of the final plan (median of 30 queries, n = 9)");
+    println!("{:<8} {:>12} {:>12} {:>12} {:>12} {:>14} {:>14}", "shape", "first plan", "within 25%", "within 5%", "optimal", "total costed", "first plan cost/opt");
+    for shape in [Shape::Chain, Shape::Star, Shape::Cycle, Shape::Clique] {
+        let mut cols: [Vec<f64>; 6] = Default::default();
+        for _ in 0..30 {
+            let g = Graph::new(shape, 9, &mut rng);
+            let cat = Catalog::new(g, &mut rng);
+            let (p, st) = plan(&cat, Prop::Any, Config::full());
+            let opt = p.unwrap().cost;
+            let reach = |x: f64| st.trace.iter().find(|t| t.1 <= opt * (1.0 + x)).unwrap().0 as f64;
+            cols[0].push(st.trace[0].0 as f64); cols[1].push(reach(0.25)); cols[2].push(reach(0.05)); cols[3].push(reach(1e-12));
+            cols[4].push(st.alts_costed as f64); cols[5].push(st.trace[0].1 / opt);
+        }
+        println!("{:<8} {:>12.0} {:>12.0} {:>12.0} {:>12.0} {:>14.0} {:>14.2}", format!("{shape:?}"), pct(&mut cols[0], 0.5), pct(&mut cols[1], 0.5), pct(&mut cols[2], 0.5), pct(&mut cols[3], 0.5), pct(&mut cols[4], 0.5), pct(&mut cols[5], 0.5));
+    }
+}
+```
+:::
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><code>heuristic_orders_are_valid_and_never_beat_the_optimum</code>: for 100 random queries the "listed order" and "smallest table" heuristics return cross-product-free permutations whose recomputed cost is <strong>never below the DP optimum</strong> (a heuristic that appeared to beat the optimum would expose a bug in either the heuristic's costing or the optimizer).</li> <li>The experiment asserts, for every query, that the full optimizer is never worse than the same optimizer with merge joins disabled. The enumerators and Cascades themselves are verified in <a href="/cookbook/p/join-ordering">Q4</a> and <a href="/cookbook/p/a-cascades-memo-in-rust">Q2</a> (brute force, DPccp pair counts, an independent bottom-up DP, mutation tests).</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+```text title="1. join order by architecture: cost ÷ optimal bushy cost, p50 / p90, n = 8"
+shape          listed order     smallest table System R (left-deep)   cost-based bushy
+Chain         5.88 / 383.23        1.24 / 8.96          1.01 / 3.43        1.00 / 1.00
+Star         11.50 / 234.90        1.00 / 1.03          1.00 / 1.00        1.00 / 1.00
+Cycle      125.85 / 5272.93        2.25 / 9.65          1.49 / 3.77        1.00 / 1.00
+Clique   5748.91 / 743822.74        1.73 / 5.32          1.02 / 1.79        1.00 / 1.00
+Random   14586.59 / 16539425.92   29.83 / 27274.00          1.00 / 1.40        1.00 / 1.00
+```
+
+```text title="2. value of interesting orders: cost without merge joins ÷ cost with them (p50 / p90 / max)"
+shape                   no ORDER BY        ORDER BY a join key
+Chain          1.000 / 1.000 / 1.00       1.000 / 1.375 / 3.70
+Star           1.000 / 1.000 / 1.00       1.000 / 1.441 / 4.10
+Clique         1.000 / 1.000 / 1.00       1.000 / 1.000 / 1.11
+Random         1.000 / 1.000 / 1.00       1.000 / 1.000 / 2.51
+```
+
+```text title="3. convergence of pruned top-down search: alternatives costed (median of 30 queries, n = 9)"
+shape      first plan   within 25%    within 5%      optimal   total costed first plan cost/opt
+Chain              97          108          113          116            127           1.15
+Star               98          103          117          117            117           1.16
+Cycle              94          135          142          142            163          58.74
+Clique            318          370          387          387            396           7.45
+```
+
+<ul> <li><strong>No statistics, no chance</strong>: a rule-based "listed order" plan is <strong>5.9× (chain) to 14 586× (random graphs) worse at the median</strong>, and its p90 reaches millions: without cardinalities the optimizer can't tell a selective join from an explosive one. A magic-constant rule ("smallest table next") is far better (median 1.0–2.3× on the four regular shapes) but still <strong>30× worse at the median on random graphs</strong> and 27 000× at p90, because table size alone says nothing about join selectivity. This is the quantitative case for cost-based search and for <em>good statistics</em>.</li> <li><strong>System R's restriction is mostly harmless but not free</strong>: cost-based left-deep DP is within 1.5× at the median everywhere and 1.4–3.8× at p90 (stars: always optimal, p90 1.00). Bushy plans matter on chains and cycles (<a href="/cookbook/p/join-ordering">Q4</a>).</li> <li><strong>Interesting orders pay off only when someone wants the order</strong>: without <code>ORDER BY</code> merge joins and orders never helped under this cost model (a sort costs more than the hash build it avoids, and indexed inputs are rare), so keeping ordered sub-plans around did <strong>nothing</strong> (every ratio 1.000). With <code>ORDER BY</code> on a join key, <strong>1 query in 10 gains ≥ 1.37×</strong> on chains and stars and the best case is <strong>4.1×</strong> (the ordered result comes from an index scan feeding merge joins, with no final sort). A property-aware search costs more bookkeeping; whether it pays depends on the workload's <code>ORDER BY</code>/<code>GROUP BY</code> mix and on how much of the data is clustered.</li> <li><strong>Top-down search finds a plan late, and the first plan can be terrible</strong>: nearly all the work is spent descending to the leaves before the root has <em>any</em> plan (94–98 of ~120–160 alternatives on chains, stars, cycles); on chains and stars that first plan is already within 1.2× of optimal. On <strong>cycles the first plan is 58× worse</strong> than the optimum and on cliques 7.5×: the first plan follows the <em>seed</em> join order the memo started from, and the best plan only appears at <strong>87% (cycles) to 98% (cliques)</strong> of the total effort. So a <strong>cost-threshold or "stop at the first plan" termination is dangerous on cyclic queries</strong>; a transformation-count budget with a good heuristic seed (SQL Server pre-fills the memo with a join order chosen by heuristic analysis) is safer.</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A heuristic is a function from a graph to an order</strong>: <code>pick(g, listed, score)</code> is one generic routine parameterised by a scoring closure (<code>impl Fn(&amp;Graph, u64, usize) -&gt; f64</code>); "listed order" is the constant-zero score, "smallest table" scores base cardinality. Real rule-based planners are <em>ordered lists of such functions</em> (<a href="/cookbook/p/plan-transformations-and-rule-soundness">Q3</a>, <a href="/cookbook/p/query-planning-and-rewriting">L15</a>); keeping each a pure function over the plan makes them testable in isolation.</li> <li><strong>Verification by oracle ratio</strong>: every experiment divides by a cost from an algorithm already verified elsewhere; an architecture comparison is only as trustworthy as its reference plan.</li> <li><strong><code>total_cmp</code> for floats</strong>: sorting estimates with <code>partial_cmp().unwrap()</code> would panic on a NaN; <code>f64::total_cmp</code> orders every value.</li> <li><strong>Deterministic seeds</strong> (<code>Rng(77)</code>) make every printed table reproducible; changing the generator changes the absolute ratios, never the ordering of the architectures.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>"Optimal" means optimal under the model</strong>: all of the above optimize <em>estimated</em> cost. A cost model that underestimates systematically (as production models do) can make the "optimal" plan slower than a simpler one (<a href="/cookbook/p/cardinality-estimation">Q8</a>, <a href="/cookbook/p/cost-models">Q9</a>).</li> <li><strong>Magic constants rot</strong>: PostgreSQL's cost constants assume a disk-resident database with little memory (in-memory tuple processing 400× cheaper than a disk read; sequential I/O 4× cheaper than random); DuckDB falls back to a fixed 20% selectivity without HyperLogLog statistics. Heuristics encode the hardware and workload of the year they were written.</li> <li><strong>Time-based termination makes plans non-deterministic</strong>: the same query gets different plans on a loaded machine; budget by <em>work</em> (transformations, alternatives costed) instead.</li> <li><strong>First plan ≠ good plan</strong>: see measurement 3; never ship an optimizer whose early-exit path returns the seed plan unchecked.</li> <li><strong>Stratified vs unified is also an engineering decision</strong>: a staged optimizer (rewrite, then cost-based) is easier to reason about and to debug, but rules in an early stage can't be undone by cost; a unified memo can, at the price of a much larger search and subtler bugs.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Access Path Selection in a Relational Database Management System"
+url = "https://dl.acm.org/doi/10.1145/582095.582099"
+
+[[sources]]
+title = "Grammar-like Functional Rules for Representing Query Optimization Alternatives"
+url = "https://dl.acm.org/doi/10.1145/50202.50204"
+
+[[sources]]
+title = "An Overview of Query Optimization in Relational Systems"
+url = "https://dl.acm.org/doi/10.1145/275487.275492"

@@ -1,0 +1,78 @@
+title = "An embedded mini vector database"
+module = "Search and vectors"
+module_order = 9
+chapter = "Running a vector database"
+chapter_order = 3
+order = 477
+kind = "capstone"
+lede = "Schema'd collections, WAL + memtable + immutable HNSW-lite segments, SQ8 with rescoring, filtered and hybrid search, snapshots, crash recovery, a text protocol."
+level = "capstone"
+code = ["examples/search_vectors/mini_vector_database.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>understanding what a vector database adds on top of an ANN index</li><li>combines bytes and recovery</li><li>graph search</li><li>bitmaps</li><li>a parser</li><li>BM25</li><li>locks and model tests</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a vector index answers "nearest ids". A vector **database** also has to accept writes while serving reads, delete and update, survive a crash, filter on metadata, mix keyword and vector relevance, and say what it is doing. This file does all of that in one process.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Layers**, bottom up:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Schema</div><div class="cb-g-says"><p>A collection has a vector dimension, a metric (l2 | cosine | dot) and typed fields (keyword, int, bool, text). Every write is validated <strong>before</strong> it is logged, so the log never contains a record that cannot be applied. Cosine vectors are normalised once, on the way in, and <code>get</code> returns the normalised form.</p><p>Every metric is turned into a <strong>distance</strong> (lower is better): squared L2, 1 - cos, -dot.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Write path</div><div class="cb-g-says"><p>Validate -&gt; append a [len][crc32][lsn, op] frame to the WAL -&gt; apply to the <strong>memtable</strong> (exact, brute force). Returning Ok is the acknowledgement. A full memtable is <strong>flushed</strong> into an immutable <strong>segment</strong>.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Segment (immutable, shared by Arc)</div><div class="cb-g-says"><p>Ids, full-precision vectors, metadata, SQ8 codes, an inverted index from (field, value) to a bitmap, BM25 postings for text fields, and an HNSW-lite graph unless it is small (then a flat exact scan is cheaper and exact). The <strong>only</strong> mutable per-segment state is a tombstone bitmap kept beside the Arc. Delete = set a bit.</p><p>Update = delete + insert.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Compaction</div><div class="cb-g-says"><p>Compaction is split in three so the slow part runs without any lock: <strong>plan</strong> (read lock: pick segments, clone Arcs and tombstones), <strong>build</strong> (no lock: copy live rows, build a new graph), <strong>commit</strong> (write lock: swap, and tombstone every row that was deleted or updated while we were building).</p><p>A job whose inputs have meanwhile disappeared is rejected, never half-applied.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Durability</div><div class="cb-g-says"><p><code>checkpoint</code> writes a snapshot (every segment byte for byte, graphs included, plus the memtable and the last LSN) with an atomic replace, then truncates the WAL. Recovery loads the snapshot and replays WAL records with LSN &gt; the snapshot's. A crash between those two steps is therefore harmless: old records are skipped by LSN.</p><p><strong>A torn tail</strong> (the last frame is incomplete) is cut off; a complete frame with a bad checksum and more data <strong>after</strong> it is corruption of acknowledged history and is reported, not discarded. <strong>Limit</strong>: a damaged <strong>length</strong> field can make mid-log corruption look like a torn tail; real logs add a checksum on the header and block framing.</p><p>The "disk" is a struct of byte vectors so that crashes can be injected at exact points; there is no real fsync here.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Queries</div><div class="cb-g-says"><p><code>Query</code> builder (top_k, filter, score threshold, ef, exact, text) and a filter language <code>genre = "jazz" and (year in 1990..1999 or not live = true) and label in ["a", "b"]</code>. Predicates are two-valued: a comparison on a missing field is false, so <code>not x = 1</code> <strong>includes</strong> rows without x (SQL would not).</p><p>Each segment turns the filter into a bitmap and a <strong>planner</strong> picks per segment: <strong>flat</strong>  no graph: exact scan of the matching rows. <strong>Pre</strong>   few matches: exact scan of just those rows. <strong>Post</strong>  most rows match: ordinary graph search with a widened ef, then drop non-matches.</p><p>IN    otherwise: graph search that walks through every node but keeps only matches. Graph traversal scores SQ8 codes; the surviving <code>oversample * k</code> candidates are <strong>rescored</strong> with full-precision vectors. If a graph plan returns fewer than min(k, matches) rows, the segment falls back to <strong>pre</strong>, so a filtered query is never silently short.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Hybrid</div><div class="cb-g-says"><p>BM25 over the text fields with <strong>global</strong> statistics of the <strong>live</strong> rows (all segments + memtable), so scores are comparable across segments and deletes do not skew IDF (Lucene, by contrast, keeps counting deleted docs until segments merge; that is cheaper: here every text query walks the postings of its terms and sums document lengths).</p><p>The two ranked lists are fused by <strong>reciprocal rank fusion</strong>: score = sum 1/(60 + rank).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Concurrency</div><div class="cb-g-says"><p>One <code>RwLock</code> around the whole database state. Any number of readers search in parallel; writes are serialised by the write lock. Searches <strong>hold</strong> the read lock (simple, but a long search delays the writer; a production design publishes an immutable view through an Arc swap so readers never block writes).</p><p>Compaction's expensive step holds nothing.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Interface</div><div class="cb-g-says"><p>A tiny line protocol (<strong>create</strong>, <strong>insert</strong>, <strong>search</strong>, ...) driven in process, with <code>+</code>, <code>-ERR</code> and <code>*n</code> replies as in <strong>resp</strong>, and atomic <strong>metrics</strong> counters.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+bitmaps against BTreeSet; the filter printer and parser round-trip on 3000 random expressions, and malformed or over-deep input gives an error; WAL cut at **every** byte offset recovers exactly the acknowledged prefix; mid-log corruption is reported;
+
+A model test of 3000 random operations over three metrics (insert, upsert, delete, get, count, exact and approximate filtered search, BM25, flush, compaction including writes that race a compaction job, checkpoint, restart, torn append, crash between snapshot and WAL truncation) against a brute-force oracle: exact queries and BM25 match exactly, approximate queries never return a dead or non-matching row, are never short of min(k, matches) when no score threshold is set, and keep mean recall above 0.95;
+
+A larger collection keeps recall@10 above a threshold per filter, uses all four plans, and still does so after deletes, updates and compaction; snapshots round-trip bit-exactly and sampled bit flips are rejected; 4 reader threads x 5 passes against a writer that updates, deletes and compacts; 3000 mangled protocol lines never panic;
+
+A scripted session is printed and its replies checked.
+
+**Limits**: single process, everything in RAM, no real files, no replication, no per-tenant limits, no query cancellation; recall figures are for these small synthetic data sets only, and clustered data like this is easy (the large run stays at or near 1.0). **The planner is a fixed rule** (two thresholds), **not a cost model**, and it is not optimal.
+
+Read the larger-collection table: after full compaction the filter matching 261 of 4600 rows runs IN-filter and spends about ten times more distance calls than an exact scan of the matches would (an SQ8 distance and a full one are not equally expensive, but the gap is large). `filtered_ann_hybrid_search` shows a calibrated planner.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>the same shape appears in Qdrant (segments, payload index, optimizer)</li><li>Milvus (growing and sealed segments, compaction)</li><li>Weaviate (hybrid search with rank fusion)</li><li>LanceDB</li><li>Elasticsearch/Lucene (immutable segments + live docs)</li><li>pgvector (inherits WAL and MVCC from Postgres)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>HNSW, Malkov and Yashunin <a href="https://arxiv.org/abs/1603.09320" target="_blank" rel="noreferrer">https://arxiv.org/abs/1603.09320</a></li><li>SPANN <a href="https://arxiv.org/abs/2111.08566" target="_blank" rel="noreferrer">https://arxiv.org/abs/2111.08566</a></li><li>RaBitQ <a href="https://arxiv.org/abs/2405.12497" target="_blank" rel="noreferrer">https://arxiv.org/abs/2405.12497</a></li><li>ann-benchmarks <a href="https://ann-benchmarks.com" target="_blank" rel="noreferrer">https://ann-benchmarks.com</a></li><li>DiskANN, Subramanya et al. <a href="https://proceedings.neurips.cc/paper/2019/file/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Paper.pdf" target="_blank" rel="noreferrer">https://proceedings.neurips.cc/paper/2019/file/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Paper.pdf</a></li><li>cited by title: Jegou, Douze and Schmid, "Product Quantization for Nearest Neighbor Search"</li><li>Gollapudi et al., "Filtered-DiskANN"</li><li>Cormack, Clarke and Buettcher, "Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods" (SIGIR 2009)</li></ul>
+"""
+
+[[sources]]
+title = "arxiv.org/abs/1603.09320"
+url = "https://arxiv.org/abs/1603.09320"
+
+[[sources]]
+title = "arxiv.org/abs/2111.08566"
+url = "https://arxiv.org/abs/2111.08566"
+
+[[sources]]
+title = "arxiv.org/abs/2405.12497"
+url = "https://arxiv.org/abs/2405.12497"
+
+[[sources]]
+title = "ann-benchmarks.com"
+url = "https://ann-benchmarks.com"
+
+[[sources]]
+title = "proceedings.neurips.cc/paper/2019/file/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Paper…"
+url = "https://proceedings.neurips.cc/paper/2019/file/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Paper.pdf"

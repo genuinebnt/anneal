@@ -1,0 +1,62 @@
+title = "A Kafka-style record batch codec"
+module = "Distributed systems"
+module_order = 10
+chapter = "Streams, messaging and reliability"
+chapter_order = 4
+order = 502
+kind = "recipe"
+lede = "Zigzag varints, CRC32C, delta-encoded records, zero-copy decode."
+level = "intermediate"
+code = ["examples/distributed/record_batch_codec.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>message brokers</li><li>log/event storage</li><li>any length-prefixed binary wire format</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a simplified version of Kafka's v2 record batch.
+
+Layout (big endian header, varint body): base_offset i64 &#124; batch_length i32 &#124; magic u8 &#124; crc u32 &#124; attributes u16 &#124; count u32 &#124; base_timestamp i64 &#124; records... batch_length counts the bytes **after** the length field (so a reader can skip a batch it does not understand), and the CRC32C covers everything after the crc field. base_offset is deliberately **not** covered, as in Kafka: a broker assigns offsets after the producer computed the checksum, so it may rewrite that field without re-checksumming the payload.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Why** deltas + varints: consecutive records have nearly identical timestamps and consecutive offsets, so storing (offset - base_offset) and (timestamp - base_timestamp) as zigzag varints costs 1 byte each instead of 16. Zigzag maps small negative numbers to small unsigned ones (0,-1,1,-2 -> 0,1,2,3) so they stay short in LEB128 varint form.
+
+Lengths are zigzag too, which lets -1 mean "null" (a null key is not an empty key; a null value is a tombstone).
+
+**How** it stays safe: every read goes through `Reader`, which bounds-checks and returns a typed `CodecError`; counts and lengths coming off the wire are never trusted for allocation.
+
+Decoding is split in two phases so lifetimes are honest: `parse_batch` verifies framing and CRC and borrows the payload; `decode_records` yields `Record<'b>` whose key, value and header slices point **into** the input buffer (zero copy).
+
+If the payload was compressed, the decompressed bytes live in a caller-owned scratch buffer and the records borrow from that instead.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Kafka-compatible brokers and clients batch records exactly like this to amortize per-message overhead</li><li>protobuf and many columnar/log formats use zigzag varints</li><li>storage engines checksum blocks with CRC32C (also used by iSCSI and ext4 metadata)</li><li>the borrow-from-input pattern is how parsers like <code>httparse</code> avoid allocation</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://kafka.apache.org/documentation/#recordbatch" target="_blank" rel="noreferrer">https://kafka.apache.org/documentation/#recordbatch</a></li><li><a href="https://protobuf.dev/programming-guides/encoding/" target="_blank" rel="noreferrer">https://protobuf.dev/programming-guides/encoding/</a> (varint, zigzag)</li><li><a href="https://en.wikipedia.org/wiki/Cyclic_redundancy_check" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Cyclic_redundancy_check</a></li></ul>
+"""
+
+[[sources]]
+title = "kafka.apache.org/documentation/#recordbatch"
+url = "https://kafka.apache.org/documentation/#recordbatch"
+
+[[sources]]
+title = "protobuf.dev/programming-guides/encoding"
+url = "https://protobuf.dev/programming-guides/encoding/"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Cyclic_redundancy_check"
+url = "https://en.wikipedia.org/wiki/Cyclic_redundancy_check"

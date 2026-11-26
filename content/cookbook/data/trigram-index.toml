@@ -1,0 +1,42 @@
+title = "Trigram inverted index"
+module = "Search and vectors"
+module_order = 9
+chapter = "Text search and autocomplete"
+chapter_order = 1
+order = 461
+kind = "recipe"
+lede = "Filter with the index, then verify."
+level = "advanced"
+code = ["examples/search_vectors/trigram_index.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+search/lineage roadmap (searching task logs).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>log search</li><li>code search (ripgrep-style/zoekt)</li><li>Postgres pg_trgm <strong>like</strong> acceleration</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: map every 3-byte window to the documents containing it. A query's trigrams must **all** appear in a matching document, so intersect their posting lists to get candidates, then confirm each candidate with a real substring check (trigrams give false positives, never false negatives).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://swtch.com/~rsc/regexp/regexp4.html> (Russ Cox) and <https://github.com/quickwit-oss/tantivy>
+"""
+
+[[sources]]
+title = "swtch.com/~rsc/regexp/regexp4.html"
+url = "https://swtch.com/~rsc/regexp/regexp4.html"
+
+[[sources]]
+title = "github.com/quickwit-oss/tantivy"
+url = "https://github.com/quickwit-oss/tantivy"

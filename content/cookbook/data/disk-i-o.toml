@@ -1,0 +1,239 @@
+title = "Disk I/O"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 317
+kind = "guide"
+lede = "Lecture #03, first half · Textbook 12.1–12.4 · storage hierarchy, why not mmap, files, heap-file organization, pread/pwrite, O_DIRECT, fsync · what P1's disk scheduler sits on"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Disk-oriented design.</strong> The primary copy lives on non-volatile storage; memory is a cache. The goal is to manage databases larger than memory without stalling on I/O.</li> <li><strong>Volatile vs non-volatile.</strong> Memory is byte-addressable and fast. Disk is block-addressable: reading one byte means loading a whole page. If L1 took 1 s, an SSD read would take about 4.4 hours and an HDD read about 3.3 weeks.</li> <li><strong>Sequential beats random.</strong> Maximize sequential I/O, for example by buffering random writes and flushing them in the background.</li> <li><strong>Don't let the OS manage it (no mmap).</strong> Page faults block threads; the OS can flush dirty pages at any time; errors arrive as signals. <code>madvise</code>/<code>mlock</code>/<code>msync</code> help, but using them correctly is as much work as doing it yourself. The DBMS knows its access patterns better than the OS does.</li> <li><strong>Storage manager.</strong> It owns the files, presents them as pages, and tracks free space. Replication lives above it (logical) or below it (RAID), never inside.</li> <li><strong>Pages.</strong> Fixed-size blocks with ids mapped to (file, offset). Three sizes: hardware (≈4 KiB, the atomic-write unit), OS (4 KiB), database (1–16 KiB; larger for read-mostly systems). A database page larger than the atomic unit can be <strong>torn</strong> by a crash.</li> <li><strong>Heap files.</strong> An unordered collection of pages, located through a <strong>page directory</strong> that also tracks free space and page types, and must stay in sync with the pages.</li> </ul>
+"""
+
+[[sections]]
+heading = "Latency"
+body = """
+<p>The database is larger than memory and has to survive power loss. So the primary copy lives on non-volatile storage, which is slow, block-addressed and asymmetric, and every layer from here up exists to hide that fact. A <strong>disk-oriented</strong> DBMS treats memory as a cache of disk, while an <strong>in-memory</strong> DBMS treats disk only as a durability log (Part II). Every design choice in this lecture follows from the latency gap:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Tier</th> <th>Latency</th> <th>"If 1 ns were 1 second"</th> <th>Unit of access</th> </tr> </thead> <tbody> <tr> <td>L1 cache</td> <td>~1 ns</td> <td>1 s</td> <td>64 B line</td> </tr> <tr> <td>L3 cache</td> <td>~10–20 ns</td> <td>15 s</td> <td>64 B line</td> </tr> <tr> <td>DRAM</td> <td>~80–100 ns</td> <td>1.5 min</td> <td>64 B line</td> </tr> <tr> <td>CXL-attached memory</td> <td>~200–400 ns</td> <td>5 min</td> <td>64 B line</td> </tr> <tr> <td>NVMe SSD read</td> <td>~10–100 µs</td> <td>3 h – 1 day</td> <td>4 KiB page</td> </tr> <tr> <td>Network (same AZ)</td> <td>~50–500 µs</td> <td>1–6 days</td> <td>packet</td> </tr> <tr> <td>Object store (S3) GET</td> <td>~10–50 ms</td> <td>4–20 months</td> <td>object, ranges</td> </tr> <tr> <td>HDD seek</td> <td>~5–10 ms</td> <td>2–4 months</td> <td>512 B – 4 KiB sector</td> </tr> </tbody> </table></div>
+
+<p>Two consequences shape everything else. First, <strong>sequential access beats random access</strong>. That's by orders of magnitude on HDDs and still by 2–10× on SSDs, because of prefetching, fewer commands, and erase-block alignment. Algorithms that turn random I/O into sequential I/O (LSMs, external sort, bulk loading) keep winning. Second, <strong>the unit of transfer is a block</strong>. Reading one byte costs as much as reading 4 KiB, so data that is used together should live together.</p>
+"""
+
+[[sections]]
+heading = "Why not mmap"
+body = """
+<p>It's tempting: map the whole database file, let the OS page it in and out, and dereference pointers. Crotty, Leis and Pavlo's <a href="https://db.cs.cmu.edu/papers/2022/cidr2022-p13-crotty.pdf" target="_blank" rel="noreferrer"><em>Are You Sure You Want to Use MMAP in Your DBMS?</em></a> (CIDR 2022) documents why systems that tried this (MongoDB's MMAPv1, InfluxDB, SingleStore, early LMDB-alikes) backed away from it:</p>
+
+<ol> <li><strong>Transactional safety.</strong> The OS may write a dirty page back <em>at any time</em>, including before the WAL record describing the change is durable. That violates the WAL rule (<a href="/cookbook/p/logging">L21</a>). Workarounds like shadow copies, <code>mlock</code> or <code>MAP_PRIVATE</code> plus manual write-back reinvent the buffer pool badly.</li> <li><strong>I/O stalls.</strong> A page fault blocks the thread, and the DBMS can't know in advance that a dereference will fault, so it can't schedule around it. <code>madvise</code> hints are advisory only.</li> <li><strong>Error handling.</strong> An I/O error during a fault arrives as <code>SIGBUS</code>, not as an error code. Every pointer dereference becomes a place the process can crash.</li> <li><strong>Performance at scale.</strong> Page-table contention, a single-threaded kernel eviction path, and <strong>TLB shootdowns</strong> (IPIs to every core on every unmap) cap throughput. The paper measures mmap falling far behind explicit I/O on fast NVMe arrays.</li> </ol>
+
+<p>So Cairn does what PostgreSQL, InnoDB, SQL Server and BusTub do: explicit <code>pread</code>/<code>pwrite</code> behind its own buffer pool (<a href="/cookbook/p/buffer-pools">L04</a>). LMDB is the notable, principled exception. It is read-mostly, single-writer and copy-on-write, and it accepts those constraints to get zero-copy reads.</p>
+"""
+
+[[sections]]
+heading = "Files and pages"
+body = """
+<p>The DBMS stores data in one or more ordinary files. The <strong>storage manager</strong> (BusTub's <code>DiskManager</code>) owns them: it maps page ids to file offsets, allocates and frees pages, and does the reads and writes. Some systems used raw devices to bypass the file system; almost nobody does now, because modern file systems with <code>O_DIRECT</code> are close enough.</p>
+
+<p>A <strong>page</strong> is a fixed-size block of data with a unique id. There are three different page sizes to keep straight:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Kind</th> <th>Size</th> <th>Guarantee</th> </tr> </thead> <tbody> <tr> <td>Hardware / device sector</td> <td>512 B – 4 KiB (NVMe: often 4 KiB atomic)</td> <td>an aligned write of this size is atomic <em>on some devices</em>, and that is what "atomic write unit" means</td> </tr> <tr> <td>OS page</td> <td>4 KiB (16 KiB on Apple Silicon; huge pages 2 MiB)</td> <td>memory-management unit</td> </tr> <tr> <td>Database page</td> <td>4–64 KiB: SQLite 4 KiB, PostgreSQL 8 KiB, BusTub 8 KiB, InnoDB 16 KiB, SQL Server 8 KiB</td> <td><strong>no</strong> atomicity guarantee: an 8 KiB write can be <strong>torn</strong> by a crash</td> </tr> </tbody> </table></div>
+
+<aside data-call="warning"><b>Torn pages are real</b><p>If a crash interrupts an 8 KiB <code>pwrite</code>, the page on disk can be half old and half new. Production systems defend against this in one of three ways. PostgreSQL uses <strong>full-page writes</strong>: the first modification of a page after a checkpoint logs the entire page image to the WAL. InnoDB uses a <strong>doublewrite buffer</strong>: it writes pages to a scratch area first, then in place. Others rely on <strong>page checksums</strong> to <em>detect</em> the tear, then repair from the log. Cairn: put a CRC32C in every page header now. The fault-injecting disk below can tear writes on purpose.</p></aside>
+"""
+
+[[sections]]
+heading = "Heap files"
+body = """
+<p>A <strong>heap file</strong> is an unordered collection of pages holding tuples. It needs to support: find the page with free space for an insert, iterate over all pages, and fetch a page by id.</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Organization</th> <th>How</th> <th>Trade-off</th> </tr> </thead> <tbody> <tr> <td>Linked list</td> <td>header page → "free" list and "full" list</td> <td>O(n) to find space; simple. BusTub's <code>TableHeap</code> chains pages via <code>next_page_id</code>.</td> </tr> <tr> <td>Page directory</td> <td>special pages track each data page's location and free bytes</td> <td>O(1)-ish space search; the directory must stay in sync with the data pages (same WAL). PostgreSQL's <em>free space map</em> is a tree-structured directory.</td> </tr> </tbody> </table></div>
+
+<p>Page id → file location: with one file, it's just <code>offset = page_id × PAGE_SIZE</code>. With many files (per table, or split at 1 GiB like PostgreSQL's segments), keep a directory. Deallocated pages go on a <strong>free list</strong>, which BusTub's <code>DiskManager::DeletePage</code> maintains in memory.</p>
+"""
+
+[[sections]]
+heading = "Disk manager"
+body = """
+<p>Put the I/O behind a trait from the first commit. You get an in-memory disk for tests and loom, a fault-injecting disk for recovery tests, a WebAssembly build that has no filesystem, and later an <code>io_uring</code> implementation, all without touching the buffer pool.</p>
+
+```rust title="src/storage/disk/disk_manager.rs"
+use std::io;
+#[cfg(unix)]
+use std::fs::{File, OpenOptions};
+#[cfg(unix)]
+use std::os::unix::fs::FileExt;            // read_exact_at / write_all_at = pread / pwrite
+#[cfg(unix)]
+use std::path::Path;
+use std::sync::Mutex;
+
+use crate::common::config::{PageId, PAGE_SIZE};
+
+pub type PageBuf = [u8; PAGE_SIZE];
+
+/// Everything the buffer pool needs from storage. `&self` everywhere: implementations
+/// synchronize internally, so the disk scheduler's worker threads can share one.
+pub trait DiskManager: Send + Sync {
+    fn read_page(&self, id: PageId, buf: &mut PageBuf) -> io::Result<()>;
+    fn write_page(&self, id: PageId, buf: &PageBuf) -> io::Result<()>;
+    /// Durability point: after this returns, every completed write is on stable storage.
+    fn sync(&self) -> io::Result<()>;
+    fn allocate_page(&self) -> PageId;
+    fn deallocate_page(&self, id: PageId);
+    fn num_pages(&self) -> u32;
+}
+
+#[cfg(unix)]
+pub struct FileDiskManager {
+    file: File,
+    alloc: Mutex<Alloc>,
+}
+
+#[cfg(unix)]
+struct Alloc { next: u32, free: Vec<PageId> }
+
+#[cfg(unix)]
+impl FileDiskManager {
+    pub fn open(path: &Path) -> io::Result<Self> {
+        let file = OpenOptions::new().read(true).write(true).create(true).open(path)?;
+        let len = file.metadata()?.len();
+        if len % PAGE_SIZE as u64 != 0 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "db file not page-aligned"));
+        }
+        let next = (len / PAGE_SIZE as u64) as u32;
+        Ok(Self { file, alloc: Mutex::new(Alloc { next, free: Vec::new() }) })
+    }
+
+    #[inline]
+    fn offset(id: PageId) -> u64 { u64::from(id.0) * PAGE_SIZE as u64 }
+}
+
+#[cfg(unix)]
+impl DiskManager for FileDiskManager {
+    fn read_page(&self, id: PageId, buf: &mut PageBuf) -> io::Result<()> {
+        match self.file.read_exact_at(buf, Self::offset(id)) {
+            // Reading a page that was allocated but never written: define it as zeros.
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => { buf.fill(0); Ok(()) }
+            r => r,
+        }
+    }
+
+    fn write_page(&self, id: PageId, buf: &PageBuf) -> io::Result<()> {
+        self.file.write_all_at(buf, Self::offset(id))
+    }
+
+    fn sync(&self) -> io::Result<()> {
+        // sync_data = fdatasync: flushes data + the metadata needed to read it (e.g. size),
+        // skips mtime. That's what a DBMS wants.
+        self.file.sync_data()
+    }
+
+    fn allocate_page(&self) -> PageId {
+        let mut a = self.alloc.lock().unwrap();
+        a.free.pop().unwrap_or_else(|| { let id = PageId(a.next); a.next += 1; id })
+    }
+
+    fn deallocate_page(&self, id: PageId) {
+        // Free list is in memory only; after a restart, freed pages leak until a
+        // free-space map (persisted, WAL-logged) exists. BusTub accepts the same leak.
+        self.alloc.lock().unwrap().free.push(id);
+    }
+
+    fn num_pages(&self) -> u32 { self.alloc.lock().unwrap().next }
+}
+
+/// In-memory disk for unit tests, loom models, and the wasm build.
+#[derive(Default)]
+pub struct MemDiskManager { pages: Mutex<Vec<Box<PageBuf>>>, free: Mutex<Vec<PageId>> }
+
+impl DiskManager for MemDiskManager {
+    fn read_page(&self, id: PageId, buf: &mut PageBuf) -> io::Result<()> {
+        let pages = self.pages.lock().unwrap();
+        match pages.get(id.0 as usize) { Some(p) => buf.copy_from_slice(&p[..]), None => buf.fill(0) }
+        Ok(())
+    }
+    fn write_page(&self, id: PageId, buf: &PageBuf) -> io::Result<()> {
+        let mut pages = self.pages.lock().unwrap();
+        let i = id.0 as usize;
+        if pages.len() <= i { pages.resize_with(i + 1, || Box::new([0u8; PAGE_SIZE])); }
+        pages[i].copy_from_slice(buf);
+        Ok(())
+    }
+    fn sync(&self) -> io::Result<()> { Ok(()) }
+    fn allocate_page(&self) -> PageId {
+        if let Some(id) = self.free.lock().unwrap().pop() { return id; }
+        let mut pages = self.pages.lock().unwrap();
+        pages.push(Box::new([0u8; PAGE_SIZE]));
+        PageId((pages.len() - 1) as u32)
+    }
+    fn deallocate_page(&self, id: PageId) { self.free.lock().unwrap().push(id); }
+    fn num_pages(&self) -> u32 { self.pages.lock().unwrap().len() as u32 }
+}
+```
+
+<aside data-call="rust"><b><code>FileExt::read_exact_at</code> over <code>Seek + Read</code></b><p><code>seek</code> followed by <code>read</code> takes two syscalls and mutates a shared file cursor, so two threads interleaving <code>seek</code>/<code>read</code> read the wrong pages. <code>pread</code> (<code>read_exact_at</code>) is a single positioned syscall with no shared state, so <code>&amp;File</code> can be used from any number of threads without a lock. That's why the trait takes <code>&amp;self</code>. It's in <a href="https://doc.rust-lang.org/std/os/unix/fs/trait.FileExt.html" target="_blank" rel="noreferrer"><code>std::os::unix::fs::FileExt</code></a> (Windows: <code>std::os::windows::fs::FileExt::seek_read</code>). Note that <code>Box&lt;[u8; 8192]&gt;</code> created with <code>Box::new([0; N])</code> may build the array on the stack first. At 8 KiB that's fine; for large arrays, use <code>vec![0u8; N].into_boxed_slice().try_into()</code>.</p></aside>
+"""
+
+[[sections]]
+heading = "Direct I/O"
+body = """
+<p>With plain <code>pwrite</code>, every page is cached twice: once in the buffer pool and once in the kernel's page cache. That wastes memory, and it hides the real I/O cost from your benchmarks. Production engines open data files with <code>O_DIRECT</code> on Linux, which requires the buffer, the offset and the length all to be aligned to the logical block size, usually 4 KiB. PostgreSQL is the famous holdout. It has used buffered I/O for decades and is only now moving to AIO with direct I/O in versions 16–18. <a href="https://www.youtube.com/watch?v=3Oj7fBAqVTw" target="_blank" rel="noreferrer">Andres Freund's talk</a> covers why that took so long.</p>
+
+```rust title="aligned buffers for O_DIRECT (Linux) / F_NOCACHE (macOS)"
+use std::alloc::{alloc_zeroed, dealloc, Layout};
+
+/// A page-sized buffer aligned to 4096 bytes, as O_DIRECT requires.
+pub struct AlignedPage { ptr: std::ptr::NonNull<u8> }
+
+const ALIGN: usize = 4096;
+
+impl AlignedPage {
+    pub fn new() -> Self {
+        let layout = Layout::from_size_align(PAGE_SIZE, ALIGN).unwrap();
+        // SAFETY: layout has non-zero size.
+        let ptr = unsafe { alloc_zeroed(layout) };
+        let ptr = std::ptr::NonNull::new(ptr).unwrap_or_else(|| std::alloc::handle_alloc_error(layout));
+        AlignedPage { ptr }
+    }
+    pub fn as_mut(&mut self) -> &mut [u8; PAGE_SIZE] {
+        // SAFETY: ptr is valid for PAGE_SIZE bytes, uniquely owned, and we hand out one &mut.
+        unsafe { &mut *(self.ptr.as_ptr() as *mut [u8; PAGE_SIZE]) }
+    }
+}
+impl Drop for AlignedPage {
+    fn drop(&mut self) {
+        // SAFETY: same layout as the allocation.
+        unsafe { dealloc(self.ptr.as_ptr(), Layout::from_size_align(PAGE_SIZE, ALIGN).unwrap()) }
+    }
+}
+// SAFETY: AlignedPage owns its allocation exclusively, like Box<[u8; N]>.
+unsafe impl Send for AlignedPage {}
+unsafe impl Sync for AlignedPage {}
+
+#[cfg(target_os = "linux")]
+pub fn open_direct(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new().read(true).write(true).create(true)
+        .custom_flags(libc::O_DIRECT).open(path)
+}
+
+#[cfg(target_os = "macos")]
+pub fn open_direct(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::io::AsRawFd;
+    let f = std::fs::OpenOptions::new().read(true).write(true).create(true).open(path)?;
+    // SAFETY: valid fd; F_NOCACHE disables the unified buffer cache for this fd.
+    if unsafe { libc::fcntl(f.as_raw_fd(), libc::F_NOCACHE, 1) } == -1 { return Err(std::io::Error::last_os_error()); }
+    Ok(f)
+}
+```
+
+<aside data-call="rust"><b>A simpler aligned buffer</b><p>An aligned wrapper type avoids raw allocation entirely: <code>#[repr(C, align(4096))] struct Aligned([u8; PAGE_SIZE]);</code> then <code>Box::new(Aligned([0; PAGE_SIZE]))</code>. <code>Box</code> respects the type's alignment, so the whole <code>unsafe</code> block above disappears. The frames in the buffer pool can be a <code>Box&lt;[Aligned]&gt;</code>. Use the manual-<code>Layout</code> version only if the size is decided at runtime. Reference: <a href="https://doc.rust-lang.org/reference/type-layout.html#the-alignment-modifiers" target="_blank" rel="noreferrer">Reference: <code>repr(align)</code></a>.</p></aside>
+
+<aside data-call="warning"><b><code>fsync</code> is where durability actually lives</b><p><code>write</code> returning successfully means nothing about durability; the data may still be in the page cache. <code>fsync</code>/<code>fdatasync</code> means durable, <strong>if</strong> it returns success. The 2018 "fsyncgate" (PostgreSQL mailing list; Rebello et al., <a href="https://www.usenix.org/conference/atc20/presentation/rebello" target="_blank" rel="noreferrer"><em>Can Applications Recover from fsync Failures?</em></a>, ATC 2020) showed that on Linux, after an fsync <em>error</em>, the kernel may mark the dirty pages clean and drop them. A retried fsync then "succeeds" while the data is lost. The only safe response to an fsync error is to <strong>panic and recover from the WAL</strong>, and PostgreSQL now does exactly that. Also, a newly created file needs an fsync of its <strong>parent directory</strong>, or the file itself can vanish after a crash. On macOS, <code>fsync</code> does not flush the drive cache; use <code>F_FULLFSYNC</code>.</p></aside>
+"""

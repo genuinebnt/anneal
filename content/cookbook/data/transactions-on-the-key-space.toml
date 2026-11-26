@@ -1,0 +1,298 @@
+title = "Transactions on the key space"
+module = "Databases"
+module_order = 8
+chapter = "Building complete engines"
+chapter_order = 9
+order = 443
+kind = "guide"
+lede = "Multi-version keys · snapshot isolation by first committer wins · serializable by read validation · write skew and phantoms shown and prevented · garbage collection by watermark · tables with unique and secondary indexes on top"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>One transaction layer serves every model.</strong> Rows, index entries, edges, document leaves and vector cells are all keys (<a href="/cookbook/p/one-key-space">M1</a>). A transaction that reads and writes keys therefore gives a row, its secondary indexes and a graph edge to the same account the same atomicity and isolation, without each model implementing its own.</li> <li><strong>Versions live in the key.</strong> A write of <code>k</code> at timestamp <code>ts</code> stores <code>escape(k) | (MAX − ts)</code>. The newest version sorts first, a snapshot read at <code>r</code> is a single seek to <code>escape(k) | (MAX − r)</code>, and old versions need no chain walk. A scan skips from one user key to the next with <code>prefix_end</code>. This is the layout of CockroachDB's MVCC keys and of TiKV's write column family.</li> <li><strong>Snapshot isolation is cheap to validate.</strong> A transaction reads the committed state as of its start timestamp and buffers its writes. At commit it aborts if any key it wrote has a version newer than its snapshot (<em>first committer wins</em>). That one check prevents lost updates and dirty reads and gives repeatable reads. It does not prevent <em>write skew</em>: two transactions that read overlapping data and write disjoint keys can both commit and break an invariant neither saw broken.</li> <li><strong>Serializable adds the reads.</strong> If a committing transaction's snapshot differs from the state at its commit point <em>on anything it read</em> (a point read, or a scanned range, which covers phantoms), it could not have been run at the commit point, so it aborts. This is optimistic backward validation: simple and correct, at the price of more aborts than Postgres's SSI, which aborts only on a dangerous structure of read-write dependencies.</li> <li><strong>A read-only transaction needs no validation.</strong> Its reads come from one consistent snapshot, which is a prefix of the commit order; it can be placed at its snapshot point in the serial order.</li> <li><strong>Constraints are reads.</strong> A unique-index check is a range scan of the index prefix; under serializable, the scan is validated, so two concurrent inserts of the same email cannot both commit. Under snapshot isolation they both see "no entry" and write different keys (the primary keys differ), so uniqueness fails; the layer has to take a write on the <em>unique key itself</em> to make first-committer-wins catch it (see the pitfalls).</li> <li><strong>Garbage collection is a watermark.</strong> Versions older than the oldest active snapshot, except the newest of them, can never be read again. A tombstone that is that newest version can go too. One long reader holds the watermark and everything above it.</li> </ul>
+"""
+
+[[sections]]
+heading = "The structure"
+body = """
+<ul> <li><strong>Keys</strong>: <code>escape(user key) | (MAX − commit_ts)</code>. The escape is the bytes codec of <a href="/cookbook/p/one-key-space">M1</a>, self-delimiting and order-preserving, so the versions of one key are adjacent and sorted newest first, and different keys never interleave.</li> <li><strong>Reads</strong>: <code>get(k)</code> returns the transaction's own buffered write if there is one; otherwise it records <code>k</code> in the read set and seeks for the newest version with <code>ts ≤ read_ts</code>. A tombstone is a version with no value.</li> <li><strong>Scans</strong>: iterate <code>[lo, hi)</code> by seeking to the next user key after each one, read the visible version of each, then overlay the transaction's own writes. The range is recorded for validation.</li> <li><strong>Commit</strong>: validate (below), take <code>commit_ts = clock + 1</code>, insert all versions. A transaction with no writes commits without touching the clock.</li> <li><strong>Validation</strong>: <em>snapshot</em>: every written key's newest version has <code>ts ≤ read_ts</code>. <em>Serializable and writing</em>: additionally every read key, and every key version inside every scanned range, has <code>ts ≤ read_ts</code>.</li> <li><strong>Tables</strong>: a row is <code>row_key(table, pk)</code>; each index entry is <code>index_key(table, index, cols, pk)</code>; insert, update and delete write or tombstone the row and all its index entries in the same transaction; a unique index is checked by a range scan.</li> </ul>
+
+:::deeper Reference: versioned keys, transactions, validation, garbage collection, and the table layer with unique and secondary indexes
+```rust title="src/multimodel/mmtxn.rs"
+//! A multi-version transaction layer over an ordered key-value map, and a relational table layer on top of it.
+//!
+//! Every write creates a *version*: the stored key is the user key (self-delimiting, order-preserving) followed by `u64::MAX - ts`, so
+//! the newest version of a key sorts first and a snapshot read at timestamp `r` is one seek to `key | (MAX - r)`. Transactions read a
+//! snapshot, buffer their writes, and validate at commit: snapshot isolation aborts a transaction whose written keys changed since its
+//! snapshot (first committer wins); serializable adds validation of everything it read, point reads and scanned ranges.
+use crate::mmkey::*;
+use std::collections::{BTreeMap, BTreeSet};
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Isolation { Snapshot, Serializable }
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum TxnError { WriteConflict, ReadConflict, Duplicate, UniqueViolation(u16), NotFound }
+
+fn esc(user: &[u8]) -> Vec<u8> { let mut o = vec![]; encode_val(&Val::Bytes(user.to_vec()), false, &mut o); o }
+fn vkey(user: &[u8], ts: u64) -> Vec<u8> { let mut o = esc(user); o.extend((u64::MAX - ts).to_be_bytes()); o }
+fn split(vk: &[u8]) -> (Vec<u8>, u64) {
+    let n = vk.len() - 8;
+    let mut pos = 0;
+    let user = match decode_val(&vk[..n], &mut pos, false) { Ok(Val::Bytes(b)) => b, _ => unreachable!("corrupt versioned key") };
+    (user, u64::MAX - u64::from_be_bytes(vk[n..].try_into().unwrap()))
+}
+
+#[derive(Default)]
+pub struct Db {
+    pub kv: BTreeMap<Vec<u8>, Option<Vec<u8>>>,
+    clock: u64,
+    active: BTreeMap<u64, usize>,
+    pub commits: u64,
+    pub aborts: u64,
+}
+
+pub struct Txn {
+    pub read_ts: u64,
+    pub iso: Isolation,
+    writes: BTreeMap<Vec<u8>, Option<Vec<u8>>>,
+    reads: BTreeSet<Vec<u8>>,
+    ranges: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
+impl Db {
+    pub fn new() -> Db { Db::default() }
+    pub fn now(&self) -> u64 { self.clock }
+    pub fn versions(&self) -> usize { self.kv.len() }
+
+    pub fn begin(&mut self, iso: Isolation) -> Txn {
+        *self.active.entry(self.clock).or_insert(0) += 1;
+        Txn { read_ts: self.clock, iso, writes: BTreeMap::new(), reads: BTreeSet::new(), ranges: vec![] }
+    }
+    fn release(&mut self, ts: u64) { if let Some(c) = self.active.get_mut(&ts) { *c -= 1; if *c == 0 { self.active.remove(&ts); } } }
+    pub fn abort(&mut self, t: Txn) { self.release(t.read_ts); self.aborts += 1; }
+
+    /// The value of `key` as of `ts`, and the timestamp of the version that holds it.
+    fn read_at(&self, key: &[u8], ts: u64) -> Option<(u64, Option<&Vec<u8>>)> {
+        let prefix = esc(key);
+        let (k, v) = self.kv.range(vkey(key, ts)..).next()?;
+        if !k.starts_with(&prefix) { return None; }   // the escaped key is prefix-free, so this is a version of `key`
+        Some((split(k).1, v.as_ref()))
+    }
+    fn newest_ts(&self, key: &[u8]) -> Option<u64> {
+        let prefix = esc(key);
+        let (k, _) = self.kv.range(vkey(key, u64::MAX)..).next()?;
+        if k.starts_with(&prefix) { Some(split(k).1) } else { None }
+    }
+
+    pub fn get(&self, t: &mut Txn, key: &[u8]) -> Option<Vec<u8>> {
+        if let Some(w) = t.writes.get(key) { return w.clone(); }
+        t.reads.insert(key.to_vec());
+        self.read_at(key, t.read_ts).and_then(|(_, v)| v.cloned())
+    }
+    pub fn put(&self, t: &mut Txn, key: &[u8], val: &[u8]) { t.writes.insert(key.to_vec(), Some(val.to_vec())); }
+    pub fn delete(&self, t: &mut Txn, key: &[u8]) { t.writes.insert(key.to_vec(), None); }
+
+    /// Keys in `[lo, hi)` visible to the transaction (its snapshot plus its own writes), in key order.
+    pub fn scan(&self, t: &mut Txn, lo: &[u8], hi: &[u8]) -> Vec<(Vec<u8>, Vec<u8>)> {
+        t.ranges.push((lo.to_vec(), hi.to_vec()));
+        let mut out: BTreeMap<Vec<u8>, Option<Vec<u8>>> = BTreeMap::new();
+        let mut from = esc(lo);
+        let end = esc(hi);
+        while let Some((k, _)) = self.kv.range(from.clone()..end.clone()).next() {
+            let (user, _) = split(k);
+            if user.as_slice() >= hi { break; }
+            if let Some((_, v)) = self.read_at(&user, t.read_ts) { out.insert(user.clone(), v.cloned()); }
+            from = prefix_end(&esc(&user)).unwrap();
+        }
+        for (k, v) in t.writes.range(lo.to_vec()..hi.to_vec()) { out.insert(k.clone(), v.clone()); }
+        out.into_iter().filter_map(|(k, v)| v.map(|v| (k, v))).collect()
+    }
+
+    pub fn commit(&mut self, t: Txn) -> Result<u64, TxnError> {
+        let r = self.validate(&t);
+        self.release(t.read_ts);
+        if let Err(e) = r { self.aborts += 1; return Err(e); }
+        if t.writes.is_empty() { self.commits += 1; return Ok(t.read_ts); }
+        self.clock += 1;
+        let ts = self.clock;
+        for (k, v) in t.writes { self.kv.insert(vkey(&k, ts), v); }
+        self.commits += 1;
+        Ok(ts)
+    }
+    fn validate(&self, t: &Txn) -> Result<(), TxnError> {
+        for k in t.writes.keys() { if self.newest_ts(k).is_some_and(|ts| ts > t.read_ts) { return Err(TxnError::WriteConflict); } }
+        if t.iso == Isolation::Serializable && !t.writes.is_empty() {
+            for k in &t.reads { if self.newest_ts(k).is_some_and(|ts| ts > t.read_ts) { return Err(TxnError::ReadConflict); } }
+            for (lo, hi) in &t.ranges {
+                for (k, _) in self.kv.range(esc(lo)..esc(hi)) { if split(k).1 > t.read_ts { return Err(TxnError::ReadConflict); } }
+            }
+        }
+        Ok(())
+    }
+
+    /// Drop versions no reader can see: for every key keep the versions newer than the oldest active snapshot and the newest older one
+    /// (unless it is a tombstone, which only hides versions that are being dropped too). Returns the number of versions removed.
+    pub fn gc(&mut self) -> usize {
+        let w = self.active.keys().next().copied().unwrap_or(self.clock);
+        let mut drop = vec![];
+        let mut current: Option<Vec<u8>> = None;
+        let mut kept_old = false;
+        for (k, v) in &self.kv {
+            let (user, ts) = split(k);
+            if current.as_ref() != Some(&user) { current = Some(user); kept_old = false; }
+            if ts > w { continue; }
+            if kept_old || v.is_none() { drop.push(k.clone()); if v.is_none() { kept_old = true; } } else { kept_old = true; }
+        }
+        let n = drop.len();
+        for k in drop { self.kv.remove(&k); }
+        n
+    }
+}
+
+// ---- relational tables on the transaction layer ---------------------------------------------------------------------------------
+
+#[derive(Clone, Debug)]
+pub struct IndexDef { pub id: u16, pub cols: Vec<usize>, pub unique: bool }
+#[derive(Clone, Debug)]
+pub struct Table { pub id: u32, pub ncols: usize, pub pk: Vec<usize>, pub indexes: Vec<IndexDef> }
+
+impl Table {
+    fn pk_of(&self, row: &[Val]) -> Vec<Val> { self.pk.iter().map(|&c| row[c].clone()).collect() }
+    fn cols_of(row: &[Val], cols: &[usize]) -> Vec<Val> { cols.iter().map(|&c| row[c].clone()).collect() }
+
+    pub fn get(&self, db: &Db, t: &mut Txn, pk: &[Val]) -> Option<Vec<Val>> {
+        db.get(t, &row_key(self.id, pk)).map(|v| decode_tuple(&v, &[]).unwrap())
+    }
+    pub fn insert(&self, db: &Db, t: &mut Txn, row: &[Val]) -> Result<(), TxnError> {
+        assert_eq!(row.len(), self.ncols);
+        let pk = self.pk_of(row);
+        if db.get(t, &row_key(self.id, &pk)).is_some() { return Err(TxnError::Duplicate); }
+        for ix in self.indexes.iter().filter(|i| i.unique) {
+            let cols = Self::cols_of(row, &ix.cols);
+            // a NULL in a unique column never conflicts (SQL semantics)
+            if !cols.iter().any(|v| *v == Val::Null) && !db.scan(t, &index_prefix(self.id, ix.id, &cols), &prefix_end(&index_prefix(self.id, ix.id, &cols)).unwrap()).is_empty() {
+                return Err(TxnError::UniqueViolation(ix.id));
+            }
+        }
+        self.write_row(db, t, row, &pk);
+        Ok(())
+    }
+    fn write_row(&self, db: &Db, t: &mut Txn, row: &[Val], pk: &[Val]) {
+        db.put(t, &row_key(self.id, pk), &key(row));
+        for ix in &self.indexes { db.put(t, &index_key(self.id, ix.id, &Self::cols_of(row, &ix.cols), pk), &[]); }
+    }
+    fn erase_row(&self, db: &Db, t: &mut Txn, row: &[Val], pk: &[Val]) {
+        db.delete(t, &row_key(self.id, pk));
+        for ix in &self.indexes { db.delete(t, &index_key(self.id, ix.id, &Self::cols_of(row, &ix.cols), pk)); }
+    }
+    pub fn delete(&self, db: &Db, t: &mut Txn, pk: &[Val]) -> Result<(), TxnError> {
+        let old = self.get(db, t, pk).ok_or(TxnError::NotFound)?;
+        self.erase_row(db, t, &old, pk);
+        Ok(())
+    }
+    /// Replace the row with this primary key; the primary key itself cannot change.
+    pub fn update(&self, db: &Db, t: &mut Txn, row: &[Val]) -> Result<(), TxnError> {
+        let pk = self.pk_of(row);
+        let old = self.get(db, t, &pk).ok_or(TxnError::NotFound)?;
+        self.erase_row(db, t, &old, &pk);
+        for ix in self.indexes.iter().filter(|i| i.unique) {
+            let cols = Self::cols_of(row, &ix.cols);
+            if !cols.iter().any(|v| *v == Val::Null) && !db.scan(t, &index_prefix(self.id, ix.id, &cols), &prefix_end(&index_prefix(self.id, ix.id, &cols)).unwrap()).is_empty() {
+                return Err(TxnError::UniqueViolation(ix.id));
+            }
+        }
+        self.write_row(db, t, row, &pk);
+        Ok(())
+    }
+    pub fn scan_all(&self, db: &Db, t: &mut Txn) -> Vec<Vec<Val>> {
+        let p = { let mut k = vec![ns::ROW]; k.extend(self.id.to_be_bytes()); k };
+        db.scan(t, &p, &prefix_end(&p).unwrap()).into_iter().map(|(_, v)| decode_tuple(&v, &[]).unwrap()).collect()
+    }
+    /// Rows whose index columns lie in `[lo, hi)` (compared as tuples), fetched through the index.
+    pub fn index_range(&self, db: &Db, t: &mut Txn, index: u16, lo: &[Val], hi: &[Val]) -> Vec<Vec<Val>> {
+        let ix = self.indexes.iter().find(|i| i.id == index).expect("no such index");
+        let n = ix.cols.len();
+        let entries = db.scan(t, &index_prefix(self.id, index, lo), &index_prefix(self.id, index, hi));
+        let head = 1 + 4 + 2;
+        entries.into_iter().filter_map(|(k, _)| {
+            let vals = decode_tuple(&k[head..], &[]).unwrap();
+            self.get(db, t, &vals[n..])
+        }).collect()
+    }
+    /// Every index entry points at a live row and every live row has all its entries: the consistency a transaction must preserve.
+    pub fn check_consistency(&self, db: &Db) -> Result<(), String> {
+        let mut t = db.clone_reader();
+        let rows = self.scan_all(db, &mut t);
+        for ix in &self.indexes {
+            let p = { let mut k = vec![ns::INDEX]; k.extend(self.id.to_be_bytes()); k.extend(ix.id.to_be_bytes()); k };
+            let entries = db.scan(&mut t, &p, &prefix_end(&p).unwrap());
+            if entries.len() != rows.len() { return Err(format!("index {} has {} entries for {} rows", ix.id, entries.len(), rows.len())); }
+            for (k, _) in entries {
+                let vals = decode_tuple(&k[7..], &[]).unwrap();
+                let n = ix.cols.len();
+                match self.get(db, &mut t, &vals[n..]) {
+                    Some(r) if Self::cols_of(&r, &ix.cols) == vals[..n] => {}
+                    other => return Err(format!("index {} entry {:?} does not match row {:?}", ix.id, vals, other)),
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Db {
+    /// A throwaway read transaction at the current time, for checks.
+    pub fn clone_reader(&self) -> Txn { Txn { read_ts: self.clock, iso: Isolation::Snapshot, writes: BTreeMap::new(), reads: BTreeSet::new(), ranges: vec![] } }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>The harness runs random interleavings of up to three open transactions, with reads, writes, deletes, scans, commits and aborts on 12 keys, and compares every operation with an independent model: the committed state after each commit, and for each key the timestamp of its newest version. The model predicts what every read and scan returns, and whether each commit succeeds, and with which error. For serializable runs it also checks, without using the validation code, that everything a committed transaction read is unchanged between its snapshot and its commit point.</p>
+
+```text title="throughput on 200 000 keys, the cost of old versions, and contention"
+200 000 keys of 100 bytes, one thread, interleaving simulated:
+  read-only transaction of 10 point reads:    170571 txn/s (586 ns per read)
+  transaction of 5 reads and 2 writes:        216757 txn/s
+  transaction scanning 100 keys:               14385 txn/s (695 ns per key)
+scan of 1000 keys: 649 us with one version each; 704 us with 101 versions each for the scanned keys (499999 versions in the store, a reader holding the old ones); 618 us after garbage collection (299999 versions removed in 0.07 s)
+contention: 4 interleaved transactions, each reads 3 keys and writes 2, keys drawn from a skewed distribution
+      keys  isolation            commits             aborts
+     10000   Snapshot              19692         308 ( 1.5%)
+     10000 Serializable              19236         764 ( 3.8%)
+      1000   Snapshot              18738        1262 ( 6.3%)
+      1000 Serializable              17272        2728 (13.6%)
+       100   Snapshot              15498        4502 (22.5%)
+       100 Serializable              12199        7801 (39.0%)
+        20   Snapshot              11184        8816 (44.1%)
+        20 Serializable               8025       11975 (59.9%)
+```
+
+<ul> <li><strong>300 + 300 random runs agreed with the model</strong>: 12 979 commits and 1 975 aborts under snapshot isolation; 12 341 commits and 2 805 aborts under serializable. Every abort was predicted, with the right error (<code>WriteConflict</code> or <code>ReadConflict</code>), and every commit was predicted to succeed.</li> <li><strong>Old versions are cheap to skip</strong>: scanning 1 000 keys takes 649 µs with one version each and 704 µs with 101 versions each (+8%), because the scan seeks past a key's older versions instead of walking them; garbage collection removed 299 999 versions in 0.07 s and the scan is back to 618 µs. What old versions cost is space (499 999 versions for 200 000 live keys) and GC work, not read latency.</li> <li><strong>Point reads cost about 0.6 µs and a 7-operation read-write transaction about 4.6 µs</strong> on one thread, over an in-memory <code>BTreeMap</code> with 200 000 keys; the layers above (a real storage engine, replication) will dominate.</li> <li><strong>Serializable costs aborts, and the cost grows with contention</strong>: 3.8% versus 1.5% when conflicts are rare, 39% versus 22.5% at 100 hot keys, 60% versus 44% at 20. Validating reads aborts every transaction whose reads were overwritten, whether or not the result would have been wrong; it is the price of a check that needs no dependency tracking.</li> </ul>
+
+<aside data-call="note"><b>Write skew, in three lines</b><p>Two doctors are on call and each may go off call if the other stays. Both transactions read both rows (2 on call), each writes only its own row, the write sets are disjoint, and snapshot isolation commits both: <strong>zero doctors on call</strong>. Under serializable the second transaction's read of the first's row is stale at commit time: <code>ReadConflict</code>, one doctor stays. The test asserts both outcomes.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong><code>Db::get(&amp;self, &amp;mut Txn, …)</code></strong>: the database is shared immutably while each transaction is a separate value holding its own read set, write buffer and ranges. Several <code>Txn</code>s coexist, and <code>commit(&amp;mut self, Txn)</code> consumes the transaction, so a transaction cannot be committed twice or used afterwards.</li> <li><strong><code>BTreeMap::range</code> seeks</strong> for point reads and for skipping to the next key; <code>prefix_end(&amp;esc(user))</code> is the seek target that jumps over every version of <code>user</code>.</li> <li><strong><code>Option&lt;Vec&lt;u8&gt;&gt;</code> as a version value</strong>: <code>None</code> is a tombstone, so deletes are ordinary writes and need no special structure.</li> <li><strong>Errors as data</strong>: <code>TxnError</code> is <code>Clone + PartialEq</code>, so the test compares the whole result, including which conflict, with the model's prediction.</li> <li><strong>A watermark from a <code>BTreeMap&lt;u64, usize&gt;</code></strong> of active read timestamps and counts gives the oldest snapshot in O(log n); <code>begin</code> and <code>commit</code> or <code>abort</code> maintain it, which is why a forgotten transaction pins garbage.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Model-based random interleavings (600 runs)</strong>: up to three open transactions over 12 keys; every <code>get</code>, <code>scan</code>, and commit result matches the model; commit timestamps are consecutive and read-only commits do not advance the clock.</li> <li><strong>Serial equivalence check</strong> for serializable runs, independent of the validation code: for each committed writer, every read key and every scanned range is identical at its snapshot and just before its commit.</li> <li><strong>Scenarios</strong>: lost update (second committer aborts, the counter is 11); write skew (allowed under snapshot, <code>ReadConflict</code> under serializable); phantom (a repeated scan returns the same rows in both modes; the writer based on the stale count commits under snapshot and aborts under serializable); a unique-index race (two concurrent inserts of the same email both commit under snapshot and one aborts under serializable).</li> <li><strong>Garbage collection</strong>: with a long-lived reader open, 40 rounds of random writes and deletes with GC every ten rounds leave the reader's whole view unchanged; with no readers, exactly one version per live key remains and deleted keys leave nothing.</li> <li><strong>Table layer (40 seeds × 150 transactions)</strong>: random inserts, updates and deletes with a nullable unique email index and a non-unique age index; duplicates, unique violations (NULLs never conflict) and missing rows return the model's errors; after every transaction the table equals the model, every index entry points at a row with matching columns, and the number of entries equals the number of rows; an index range scan returns what a filter does.</li> <li><strong>Mutants run against these tests</strong>: versions sorting oldest first; conflicts on versions at the transaction's own snapshot; no write validation; no point-read validation; no range validation; read-only transactions validated; scans or reads ignoring the transaction's own writes; GC ignoring readers, keeping tombstones or dropping the version a reader needs; read-only commits advancing the clock; rows written without index entries; deletes leaving index entries; duplicate keys accepted; NULLs conflicting in unique indexes; unique indexes not enforced. <strong>All 18 were killed.</strong> A 19th mutant removed a length check in the point read and survived: the key escape is prefix-free, so the check was redundant; the code now relies on that property and says so.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>CockroachDB</strong> stores MVCC versions as <code>key | timestamp</code> (newest first) in Pebble, runs serializable by default with timestamp-ordered reads that are <em>refreshed</em> (re-validated) when a transaction's timestamp has to move, and uses intents (provisional writes) to resolve write-write conflicts.</li> <li><strong>TiKV</strong> (Percolator) stores a lock column, a write column and a data column in RocksDB; snapshot isolation is the default and <code>SELECT … FOR UPDATE</code> takes locks. See distributed transactions for the protocol that replaces the single-node validation above.</li> <li><strong>PostgreSQL</strong> keeps versions in the heap with <code>xmin</code>/<code>xmax</code> and offers snapshot isolation as REPEATABLE READ and <strong>serializable snapshot isolation (SSI)</strong>, which tracks read-write dependencies and aborts on dangerous structures; it needs less aborting than backward read validation. <strong>MySQL/InnoDB</strong> uses locks plus MVCC reads; <strong>Oracle</strong>'s "serializable" is snapshot isolation.</li> <li><strong>FoundationDB</strong> validates read ranges against writes committed since the read version (optimistic, strictly serializable) and has a five-second transaction limit so its conflict history stays small.</li> <li><strong>Spanner</strong> uses two-phase locking with TrueTime commit timestamps for read-write transactions and lock-free snapshot reads at a timestamp for read-only ones.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Snapshot isolation is not serializable.</strong> Write skew on an invariant over several rows is the standard failure; either run serializable, or turn the invariant into a write on a shared key (<code>SELECT … FOR UPDATE</code>, a materialized conflict row).</li> <li><strong>Unique constraints under snapshot isolation need a unique key to write.</strong> Two concurrent inserts of the same email write different primary keys. Make the unique index entry's key <code>index | email</code> (without the primary key) so that the two inserts write the <em>same</em> key and first-committer-wins sees the conflict, as production systems do. The layer here checks by range scan, which the serializable validation covers; under snapshot it leaves the gap.</li> <li><strong>A forgotten transaction pins garbage.</strong> Show the oldest active transaction age in monitoring and set a timeout.</li> <li><strong>Validation cost grows with the read set.</strong> A transaction that scans a million keys validates a million versions at commit (the range check iterates the versions in range); production systems keep a timestamp cache or track ranges.</li> <li><strong>Time must be monotonic across nodes.</strong> One counter is fine on a single node; across nodes use a timestamp oracle or hybrid logical clocks (distributed transactions).</li> <li><strong>Aborts are normal.</strong> Clients must retry transactions that fail with a conflict; test the retry path, and retry with a new snapshot, not the old one.</li> <li><strong>Deletes are writes.</strong> A tombstone conflicts like any version, and an unbounded delete of a million rows is a million tombstones until GC.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "A Critique of ANSI SQL Isolation Levels"
+url = "https://arxiv.org/abs/cs/0701157"
+
+[[sources]]
+title = "Large-scale Incremental Processing Using Distributed Transactions and Notifications"
+url = "https://research.google/pubs/large-scale-incremental-processing-using-distributed-transactions-and-notifications/"

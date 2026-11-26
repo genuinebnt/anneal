@@ -1,0 +1,72 @@
+title = "Serde beyond derive"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Data, text and encoding crates"
+chapter_order = 1
+order = 114
+kind = "recipe"
+lede = "Hand-written impls, attributes, borrowing, seeds, and a custom data format"
+level = "advanced"
+code = ["examples/encoding_compression/serde_custom.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>wire formats</li><li>config schemas</li><li>protocol codecs</li><li>zero-copy parsers</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+five layers of serde control, each asserted: (1) hand-written `Serialize`/`Deserialize` with a `Visitor` for types whose wire form differs from their fields (`"1h30m"`, `"#rrggbb"` or a 3-tuple, a flag set as a list of names);
+
+(2) the attribute toolbox (`with`, `serialize_with`, `flatten`, `untagged`, `tag/content`, `deny_unknown_fields`, `default`, `skip_serializing_if`, `rename_all`, `alias`) including the error messages each one produces; (3) **borrowed** deserialisation (`&str`, `Cow<str>` + `#[serde(borrow)]`) checked by pointer-range;
+
+(4) `DeserializeSeed` for context-dependent parsing (string interning, shape validation); (5) a **complete** custom data format: a `Serializer` and `Deserializer` for a compact self-describing binary format (varint ints, length-prefixed strings, tagged enums) that works with derived impls on nested types.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+serde separates the data **model** (29 types) from the data **format**; once you implement either side by hand you see the whole contract. **How**: the format is &#126;300 lines; the demos round-trip 2000 random values and fuzz malformed input.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>human-friendly config values (durations, colours, sizes)</li><li>versioned protocols with tagged enums</li><li>zero-copy log/record parsing</li><li>interning repeated strings while decoding</li><li>internal RPC/storage codecs (bincode, postcard, rmp-serde are exactly this shape)</li><li>strict validation that reports the offending byte</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>serde.rs: Custom serialization <a href="https://serde.rs/custom-serialization.html" target="_blank" rel="noreferrer">https://serde.rs/custom-serialization.html</a></li><li>Deserializer lifetimes <a href="https://serde.rs/lifetimes.html" target="_blank" rel="noreferrer">https://serde.rs/lifetimes.html</a></li></ul>
+
+<ul class="cb-g-reading"><li>Implementing a Serializer <a href="https://serde.rs/impl-serializer.html" target="_blank" rel="noreferrer">https://serde.rs/impl-serializer.html</a></li><li>Implementing a Deserializer <a href="https://serde.rs/impl-deserializer.html" target="_blank" rel="noreferrer">https://serde.rs/impl-deserializer.html</a></li></ul>
+
+<ul class="cb-g-reading"><li>Container/field attributes <a href="https://serde.rs/attributes.html" target="_blank" rel="noreferrer">https://serde.rs/attributes.html</a></li><li>Enum representations <a href="https://serde.rs/enum-representations.html" target="_blank" rel="noreferrer">https://serde.rs/enum-representations.html</a></li></ul>
+"""
+
+[[sources]]
+title = "serde.rs/custom-serialization.html"
+url = "https://serde.rs/custom-serialization.html"
+
+[[sources]]
+title = "serde.rs/lifetimes.html"
+url = "https://serde.rs/lifetimes.html"
+
+[[sources]]
+title = "serde.rs/impl-serializer.html"
+url = "https://serde.rs/impl-serializer.html"
+
+[[sources]]
+title = "serde.rs/impl-deserializer.html"
+url = "https://serde.rs/impl-deserializer.html"
+
+[[sources]]
+title = "serde.rs/attributes.html"
+url = "https://serde.rs/attributes.html"
+
+[[sources]]
+title = "serde.rs/enum-representations.html"
+url = "https://serde.rs/enum-representations.html"

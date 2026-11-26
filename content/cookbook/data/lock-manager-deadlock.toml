@@ -1,0 +1,48 @@
+title = "A lock manager"
+module = "Databases"
+module_order = 8
+chapter = "Transactions and concurrency control"
+chapter_order = 6
+order = 409
+kind = "recipe"
+lede = "Multi-granularity intention locks, FIFO queues, upgrades, deadlock detection and prevention."
+level = "advanced"
+code = ["examples/database/lock_manager_deadlock.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>lock-based DBMS concurrency control (strict 2PL)</li><li>filesystems and resource schedulers</li><li>any "wait for a resource" system</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**A lock manager** maps resources to queues of requests. Modes: S (shared read), X (exclusive write) and the **intention** modes for a hierarchy database > table > row: IS ("I will read-lock something below"), IX ("I will write-lock something below") and **six** (S on the whole table plus intent to X-lock rows).
+
+To lock a row you first take intention locks on every ancestor, root to leaf, so a table-level S/X request only has to look at **one** lock to know whether any row below is in use.
+
+The **compatibility matrix** decides who may share a resource; modes form a lattice (IS &lt; IX,S &lt; **six** &lt; X) and a request by a transaction that already holds the resource becomes an **upgrade** to the join of the two modes (S + IX = **six**).
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">FIFO fairness</div><div class="cb-g-says"><p>A new request is granted only if it is compatible with every granted <strong>and</strong> every already-waiting request. Otherwise a steady stream of readers would starve a waiting writer forever. Upgrades go to the <strong>front</strong> of the wait queue.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Strict two-phase locking</div><div class="cb-g-says"><p>Locks are only taken while running and <strong>all</strong> are released at commit/abort. This guarantees conflict-serializable and recoverable (no cascading abort) schedules; the demo verifies it with a precedence graph.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Deadlock</div><div class="cb-g-says"><p>Waiting creates a <strong>wait-for graph</strong> (edge T -&gt; U: T waits for a lock U holds, or for an incompatible request queued ahead of it). A cycle is a deadlock; <strong>detection</strong> searches the graph after every block and aborts a <strong>victim</strong> (youngest, or the one holding the fewest locks = least work lost). Classic upgrade deadlock: two readers both ask to upgrade S -&gt; X.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Prevention</div><div class="cb-g-says"><p>Needs no graph, only a fixed timestamp per transaction (kept across restarts so the oldest eventually wins): <strong>wait-die</strong> (old waits for young; a young requester <strong>dies</strong> = aborts itself) and <strong>wound-wait</strong> (an old requester <strong>wounds</strong> = aborts the young holder; a young one waits). Waits always point one way along age, so no cycle can form.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>The scheduler is deterministic (seeded xorshift) and single threaded: a blocked transaction simply is not scheduled.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>PostgreSQL</li><li>MySQL InnoDB and SQL Server row/table locking</li><li>Oracle</li><li>Spanner-style wound-wait for distributed transactions</li><li>file locks (flock/fcntl)</li><li>Java/OS monitors with deadlock detectors</li><li>any ordered-resource allocator</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>"Database System Concepts" ch. on concurrency control, "Transaction Processing" (Gray, Reuter)</li><li>Mohan et al. (ARIES, locking)</li><li><a href="https://www.postgresql.org/docs/current/explicit-locking.html" target="_blank" rel="noreferrer">https://www.postgresql.org/docs/current/explicit-locking.html</a></li><li><a href="https://dev.mysql.com/doc/refman/8.4/en/innodb-locking.html" target="_blank" rel="noreferrer">https://dev.mysql.com/doc/refman/8.4/en/innodb-locking.html</a></li></ul>
+"""
+
+[[sources]]
+title = "postgresql.org/docs/current/explicit-locking.html"
+url = "https://www.postgresql.org/docs/current/explicit-locking.html"
+
+[[sources]]
+title = "dev.mysql.com/doc/refman/8.4/en/innodb-locking.html"
+url = "https://dev.mysql.com/doc/refman/8.4/en/innodb-locking.html"

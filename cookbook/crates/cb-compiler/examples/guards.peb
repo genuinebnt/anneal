@@ -1,0 +1,14 @@
+fn classify(n: int) -> str {
+    match n {
+        0 => "zero",
+        x if x < 0 => "negative",
+        x if x % 2 == 0 => "even",
+        _ => "odd",
+    }
+}
+fn main() {
+    println(classify(0));
+    println(classify(-5));
+    println(classify(8));
+    println(classify(7));
+}

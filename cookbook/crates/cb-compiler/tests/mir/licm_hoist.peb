@@ -1,0 +1,16 @@
+// passes: ssa,licm,out-of-ssa
+// `n * 3` is in the header's trap-free prefix; `k > 100` and `% 7` cannot trap and move from the body.
+fn f(n: int, k: int) -> int {
+    let mut i = 0;
+    let mut s = 0;
+    while i < n * 3 {
+        let big = k > 100;
+        let m = k % 7;
+        if big { s += m; } else { s += i; }
+        i += 1;
+    }
+    s
+}
+fn main() {
+    println(to_str(f(len("abcd"), len("ab"))));
+}

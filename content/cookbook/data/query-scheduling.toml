@@ -1,0 +1,187 @@
+title = "Query scheduling"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 366
+kind = "guide"
+lede = "15-721 S2024 lecture #8 · process models · worker allocation and NUMA · push vs pull · morsel-driven scheduling · Umbra's adaptive morsels and stride scheduling · SAP HANA, SQLOS · flow control"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>A query plan is a DAG of operators</strong>; an <em>operator instance</em> runs an operator on a slice of data, a <strong>task</strong> is a sequence of operator instances (a pipeline fragment), a <strong>task set</strong> is the tasks of one pipeline. The scheduler decides <strong>how many tasks, how many cores, which cores, where the output goes</strong>, and the DBMS should do this itself: it knows query shape, data layout and priorities; the OS does not.</li> <li><strong>Goals</strong>: high throughput with <strong>low scheduling overhead</strong>, <strong>fairness</strong> (no starvation), and low <strong>tail latency</strong>; short queries must be prioritized over long ones, since users notice a slow short query far more than a slow report.</li> <li><strong>Process models</strong>: <em>process per worker</em> (DB2, PostgreSQL, Oracle: isolated crashes, shared memory, heavier switches), <em>process pool</em> (workers are reused across requests), <em>thread per worker</em> (one process, shared address space, cheaper switches; a thread crash can kill everything). Being multithreaded doesn't imply <strong>intra-query parallelism</strong> (MySQL runs one thread per query).</li> <li><strong>Worker allocation</strong>: <em>pin one worker per core</em> (<code>sched_setaffinity</code>): no cache thrashing or migration, but the core idles during I/O; <em>many workers per core</em>: hides I/O stalls but lets threads interfere. Compute-bound engines pin.</li> <li><strong>Data placement and NUMA</strong>: on multi-socket machines memory is <em>non-uniform</em>; a core reading another socket's DIMMs crosses the interconnect (UPI/Infinity Fabric). Memory is physically placed on <strong>first touch</strong> (the allocating thread's socket; favoured) or <strong>interleaved</strong>. Placement should follow partitioning (round-robin, ranges, hash, replication) and tasks should be assigned to workers <em>near their data</em>.</li> <li><strong>Task assignment</strong>: <strong>push</strong> (a central dispatcher assigns tasks and tracks progress) vs <strong>pull</strong> (workers take tasks from a shared queue: decentralized, adapts to stragglers).</li> <li><strong>Static scheduling</strong> (one task per core, fixed up front) assumes uniform data and cost: in practice work per partition differs (skew, selectivity) and the slowest task sets the latency. <strong>Morsel-driven scheduling</strong> (HyPer): one worker per core; the input is cut into <strong>morsels</strong> of ~100 k tuples; a worker pulls the next morsel (preferring NUMA-local ones) and runs a whole pipeline over it; stragglers vanish because idle workers just take more morsels (work stealing across queues when local ones run out). The global queue itself becomes a contention point at high core counts.</li> <li><strong>Umbra's morsel scheduling 2.0</strong>: ① <strong>adaptive morsel size</strong>: tasks are timed and the morsel size is steered (exponentially up/down) towards a <strong>target of ~1 ms per task</strong>, so selectivity doesn't create uneven tasks; ② <strong>automatic priority decay with stride scheduling</strong> for long-running queries, so short queries aren't starved; per-worker state and bitmask notifications replace a locked global queue.</li> <li><strong>SAP HANA's NUMA-aware scheduler</strong>: pull-based <strong>thread groups</strong> per socket, each with soft and hard priority queues (threads steal only from other groups' <em>soft</em> queues), four thread states (working, inactive (blocked on a latch), free, parked), and a watchdog that rebalances. Work stealing across many sockets gets less beneficial since moving data costs more.</li> <li><strong>SQLOS</strong> (SQL Server): a user-mode OS layer with <em>cooperative</em> scheduling via coroutines and a 4 ms quantum it can't enforce, relying on developers to place yield points.</li> <li><strong>Flow control</strong>: if requests arrive faster than they complete, the OS can't help. <strong>Admission control</strong> (reject or delay new queries when resources would be exceeded) and <strong>throttling</strong> (delay responses so synchronous clients slow down) are used together; the crude alternative is to crash.</li> </ul>
+"""
+
+[[sections]]
+heading = "Two experiments on a virtual-time model"
+body = """
+<p>Real schedulers are hard to measure precisely on a laptop (OS jitter, frequency scaling), and the interesting effects are <em>policy</em> effects. So both experiments run on a <strong>discrete-event simulation</strong> with virtual milliseconds, which is exact and reproducible: <code>W</code> workers pull tasks (morsels), each of known duration; all queries are work-conserving; every run asserts that <strong>total busy time equals total work</strong>.</p>
+
+:::deeper Reference: virtual-time scheduler model (FIFO, round-robin, stride with priority decay) and a task-sizing model
+```rust title="src/exec/qsched.rs"
+//! A discrete-event model of a pull-based, morsel-driven scheduler: which query gets the next free worker?
+//! Time is virtual (milliseconds), so results are exactly reproducible.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Policy {
+    /// Oldest query first: a long query hogs every worker until it finishes.
+    Fifo,
+    /// Cycle through active queries.
+    RoundRobin,
+    /// Stride scheduling; each query's weight decays with the CPU it has consumed (Umbra-style).
+    StrideDecay,
+}
+
+#[derive(Clone, Debug)]
+pub struct Query { pub arrival: f64, pub morsels: usize, pub morsel_ms: f64 }
+
+struct Live { q: Query, remaining: usize, consumed: f64, pass: f64, last_end: f64, done: Option<f64> }
+
+pub struct Outcome { pub latencies: Vec<f64>, pub makespan: f64, pub busy_ms: f64, pub workers: usize }
+
+impl Outcome {
+    pub fn pct(&self, idx: &[usize], p: f64) -> f64 {
+        let mut v: Vec<f64> = idx.iter().map(|&i| self.latencies[i]).collect();
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v[((v.len() - 1) as f64 * p) as usize]
+    }
+    pub fn utilization(&self) -> f64 { self.busy_ms / (self.makespan * self.workers as f64) }
+}
+
+pub fn simulate(queries: &[Query], workers: usize, policy: Policy, decay_ms: f64) -> Outcome {
+    let mut live: Vec<Live> = queries.iter().map(|q| Live { q: q.clone(), remaining: q.morsels, consumed: 0.0, pass: 0.0, last_end: 0.0, done: None }).collect();
+    let mut free_at = vec![0.0f64; workers];
+    let mut rr = 0usize;
+    let mut busy = 0.0;
+    loop {
+        // the earliest-free worker takes the next decision
+        let (w, mut now) = free_at.iter().cloned().enumerate().min_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).unwrap();
+        let active = |t: f64, l: &Live| l.q.arrival <= t && l.remaining > 0;
+        if !live.iter().any(|l| active(now, l)) {
+            // nothing runnable now: jump to the next arrival, or finish
+            match live.iter().filter(|l| l.remaining > 0).map(|l| l.q.arrival).min_by(|a, b| a.partial_cmp(b).unwrap()) {
+                Some(t) => { now = t; free_at[w] = t; }
+                None => break,
+            }
+        }
+        let ids: Vec<usize> = (0..live.len()).filter(|&i| active(now, &live[i])).collect();
+        let pick = match policy {
+            Policy::Fifo => *ids.iter().min_by(|&&a, &&b| live[a].q.arrival.partial_cmp(&live[b].q.arrival).unwrap().then(a.cmp(&b))).unwrap(),
+            Policy::RoundRobin => { rr += 1; ids[rr % ids.len()] }
+            Policy::StrideDecay => {
+                // a query that has just arrived joins at the *lowest pass among queries already running*; starting at 0
+                // would let it monopolize every worker until its pass caught up with the veterans'
+                let floor = ids.iter().filter(|&&i| live[i].consumed > 0.0).map(|&i| live[i].pass).fold(f64::MAX, f64::min);
+                if floor != f64::MAX { for &i in &ids { if live[i].consumed == 0.0 { live[i].pass = floor; } } }
+                *ids.iter().min_by(|&&a, &&b| live[a].pass.partial_cmp(&live[b].pass).unwrap().then(live[a].consumed.partial_cmp(&live[b].consumed).unwrap()).then(a.cmp(&b))).unwrap()
+            }
+        };
+        let l = &mut live[pick];
+        let dur = l.q.morsel_ms;
+        l.remaining -= 1;
+        l.consumed += dur;
+        let priority = 1.0 / (1.0 + l.consumed / decay_ms);                   // decays as the query keeps running
+        if policy == Policy::StrideDecay { l.pass += dur / priority; }
+        let end = now + dur;
+        l.last_end = l.last_end.max(end);
+        if l.remaining == 0 { l.done = Some(l.last_end); }
+        free_at[w] = end;
+        busy += dur;
+    }
+    let makespan = live.iter().map(|l| l.done.unwrap()).fold(0.0, f64::max);
+    Outcome { latencies: live.iter().map(|l| l.done.unwrap() - l.q.arrival).collect(), makespan, busy_ms: busy, workers }
+}
+
+/// Makespan of scanning `n` tuples whose cost varies by position, with `workers` threads, for a task-sizing strategy.
+#[derive(Clone, Copy, Debug)]
+pub enum Sizing { Static, Fixed(usize), AdaptiveMs(f64) }
+
+pub fn scan_makespan(n: usize, cost_us: &dyn Fn(usize) -> f64, workers: usize, sizing: Sizing, overhead_us: f64) -> (f64, usize) {
+    // tasks are claimed by the earliest-free worker (pull), in key order
+    let mut free_at = vec![0.0f64; workers];
+    let (mut pos, mut tasks, mut size) = (0usize, 0usize, 1000usize);
+    let cost = |a: usize, b: usize| -> f64 { (a..b).map(cost_us).sum::<f64>() };
+    while pos < n {
+        let (w, t) = free_at.iter().cloned().enumerate().min_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).unwrap();
+        let len = match sizing { Sizing::Static => n.div_ceil(workers), Sizing::Fixed(m) => m, Sizing::AdaptiveMs(_) => size }.min(n - pos);
+        let c = cost(pos, pos + len);
+        free_at[w] = t + c + overhead_us;
+        if let Sizing::AdaptiveMs(target) = sizing {                           // exponential steering towards the target duration
+            let ms = c / 1000.0;
+            size = if ms < target / 2.0 { size * 2 } else if ms > target * 2.0 { (size / 2).max(16) } else { size };
+        }
+        pos += len;
+        tasks += 1;
+    }
+    (free_at.iter().cloned().fold(0.0, f64::max) / 1000.0, tasks)
+}
+```
+:::
+
+<h4>1. Which query gets the next worker?</h4>
+
+<p>Eight workers; two 10-second long scans, twenty medium queries (400 ms of CPU each), and about 200 short queries (5 ms of CPU) at ~100 per second. Latencies are <em>completion minus arrival</em> in milliseconds.</p>
+
+```text title="latency by query class and policy"
+8 workers, 203 short (5 ms CPU) + 20 medium (400 ms CPU) + 2 long (10 s CPU) queries, 29015 ms of CPU in total
+policy                  short p50  short p99   medium p50   medium p99    long finish
+FIFO                       1805.6     2292.8         1953         2350           2500
+round-robin                   3.9        6.0          222          231           3627
+stride, no decay              3.7        4.9          226          235           3627
+stride, decay 1000 ms         2.3        3.5           91          143           3627
+stride, decay 100 ms          1.6        2.9           67           86           3627
+stride, decay 10 ms           1.5        2.7           63           79           3627
+```
+
+<ul> <li><strong>FIFO is catastrophic for short queries</strong>: a short query waits behind the scans (median 1.8 <em>seconds</em> for 5 ms of work). It "wins" only the long scans' finish time (2 500 vs 3 627 ms), because it simply finishes them first.</li> <li><strong>Round-robin and plain stride (no decay) fix the shorts (≈ 4 ms)</strong> by sharing the workers equally among <em>queries</em>, but a medium query still gets only a 1/N share and takes <strong>~225 ms for 400 ms of CPU</strong>, since it competes equally with the two scans.</li> <li><strong>Priority decay is the multi-level-feedback idea in one line</strong>: weight <code>1 / (1 + consumed / decay)</code>. A query's <code>pass</code> advances faster the more CPU it has already used, so <em>new and cheap queries get the workers first</em>. With a 100 ms decay constant, short p50 falls to <strong>1.6 ms (1 morsel of latency, the floor)</strong> and medium p50 to <strong>67 ms (3.4× better than round-robin)</strong>; the long scans' completion time is unchanged (3 627 ms: <strong>total work and utilization are the same</strong>, since the policy only decides <em>who waits</em>).</li> <li><strong>Tuning the constant</strong>: smaller decay penalizes long queries sooner (better for shorts and mediums, worse for the scans' <em>individual</em> progress rate); larger decay approaches plain fair sharing. 10–100 ms is a sensible range when morsels are ~1 ms.</li> </ul>
+
+<aside data-call="why"><b>Two bugs worth remembering from building the model</b><ol> <li><strong>New queries must join at the veterans' current pass, not at zero.</strong> Starting at 0 made every medium query monopolize all workers until its pass caught up with the scans' (hundreds of ms of accumulated pass): the decay constant then had <em>no effect</em> (all rows identical).</li> <li><strong>Ties must favour the query that has consumed less.</strong> With ties broken by query id, a just-arrived query was re-initialised to the floor at every decision and <em>never won a tie against an older query</em>, so stride degenerated to FIFO (short p50 2 155 ms). Both mistakes are invisible to a throughput check; only per-class latency exposed them.</li> </ol></aside>
+
+<h4>2. How big should a morsel be?</h4>
+
+<p>A scan filter with <strong>skewed cost</strong>: the first 5% of 10 M tuples are 100× more expensive per tuple than the rest (selective predicates, long strings, or a hot partition). Eight workers pull tasks; each task has a fixed 3 µs of scheduling overhead.</p>
+
+```text title="makespan by task sizing (ideal: 74 ms)"
+10M tuples, total work 595 ms, 8 workers (ideal 74 ms), 3 µs overhead per task
+task sizing             makespan ms      tasks
+static (n / workers)          507.5          8
+fixed 1 000 000               505.0         10
+fixed 100 000                 100.0        100
+fixed 1 000                    78.1      10000
+fixed 10                      449.4    1000000
+adaptive, 1 ms target          74.8        654
+```
+
+<ul> <li><strong>Static partitioning is 6.8× slower than ideal</strong> (507 ms): one worker gets the expensive eighth of the table and everyone else waits. Fixed 1 M-tuple morsels have the same problem (the first 5 morsels are slow).</li> <li><strong>Fixed 100 000 (HyPer's choice) lands at 100 ms (1.35× ideal)</strong>: small enough that the heavy region spreads over all workers.</li> <li><strong>Too small is also bad</strong>: 10-tuple morsels spend 3 µs of overhead per task, <strong>449 ms</strong> in total (1 000 000 tasks).</li> <li><strong>The adaptive rule gets within 1% of ideal (74.8 ms) with 654 tasks</strong>: grow the morsel when a task ran under half the target time, shrink it when it ran over twice the target. <em>Time</em> per task, not tuples per task, is the invariant that matters.</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Prefer a purpose-built pool to a general task runtime for query execution.</strong> <code>rayon</code>'s work stealing is excellent for CPU-bound data parallelism, but a DBMS also needs <em>query-level priorities, per-query cancellation, memory accounting and NUMA-aware queues</em>, which means owning the scheduler. A morsel loop is small: <code>loop { let m = queue.next_morsel()?; run_pipeline(m); }</code> with <code>std::thread::scope</code> workers.</li> <li><strong>Don't run query operators on an async executor.</strong> Async tasks are cooperative with unbounded poll time; a 10-second scan inside <code>poll</code> blocks the executor. Use async for <strong>I/O</strong> (network, object storage) and hand CPU work to the pool via channels (<code>spawn_blocking</code>).</li> <li><strong>Pin threads</strong> with the <code>core_affinity</code> crate (or <code>libc::sched_setaffinity</code> on Linux; macOS has no affinity API, only QoS classes); query NUMA topology with <code>hwloc</code>/<code>libnuma</code>.</li> <li><strong>Cancellation is cooperative</strong>: check an <code>AtomicBool</code> at morsel boundaries, which is why ~1 ms morsels also bound cancellation latency.</li> <li><strong>Per-worker state, merged at the end</strong>: each worker owns its partial hash table or output buffer (no sharing during the pipeline); merge in a final single-threaded or parallel step.</li> <li><strong>A global queue is the first scalability wall</strong>: split it (one deque per worker, steal from the busiest) once workers exceed ~16–32; <code>crossbeam-deque</code> implements Chase–Lev deques.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li>**Fairness among <em>queries</em>, not among *tasks***: round-robin over tasks lets a query with 1 000 tiny tasks outrun one with 10 large ones. Charge CPU time, not task count.</li> <li><strong>Tail latency hides in unbounded tasks</strong>: one operator that can't yield (a giant sort, a regex) defeats priorities. Bound task duration or make operators resumable.</li> <li><strong>Priority inversion</strong>: a low-priority query holding a latch or a lock that a high-priority query needs; bound critical sections and use priority inheritance for internal latches.</li> <li><strong>Oversubscription</strong>: more runnable workers than cores means the OS scheduler preempts at arbitrary points (inside a latch); size the pool to cores and let queries queue.</li> <li><strong>Admission control without feedback</strong> oscillates; use memory estimates, concurrency limits per workload class, and queue time budgets.</li> <li><strong>NUMA misplacement</strong>: allocate on the thread that will use the memory (first touch), not on a loading thread; otherwise all data lands on one socket and the interconnect saturates.</li> <li><strong>Don't trust CPU-time measurements of <code>sleep</code>-based simulations</strong>: for scheduling policy research, use virtual time as above or a deterministic runtime.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Morsel-Driven Parallelism: A NUMA-Aware Query Evaluation Framework for the Many-Core Age"
+url = "https://db.in.tum.de/~leis/papers/morsels.pdf"
+
+[[sources]]
+title = "Scaling Up Concurrent Main-Memory Column-Store Scans: Towards Adaptive NUMA-aware Data and Task Placement"
+url = "https://www.vldb.org/pvldb/vol8/p1442-psaroudakis.pdf"
+
+[[sources]]
+title = "Self-Tuning Query Scheduling for Analytical Workloads"
+url = "https://db.in.tum.de/~wagner/papers/selftuning.pdf"
+
+[[sources]]
+title = "crossbeam-deque"
+url = "https://docs.rs/crossbeam-deque"
+
+[[sources]]
+title = "rayon"
+url = "https://docs.rs/rayon"
+
+[[sources]]
+title = "core_affinity"
+url = "https://docs.rs/core_affinity"

@@ -1,0 +1,68 @@
+title = "Linked-list interview questions in Rust"
+module = "Worked questions"
+module_order = 14
+chapter = "Coding and design questions"
+chapter_order = 2
+order = 682
+kind = "recipe"
+lede = "linked-list interview questions in Rust (Box lists, Rc sharing, Weak back-pointers, arenas, iterative Drop)."
+level = "intermediate"
+code = ["examples/interview/linked_lists_in_rust.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>coding interviews (LeetCode-style <code>Option&lt;Box&lt;ListNode&gt;&gt;</code>)</li><li>any code that builds lists</li><li>stacks or deques by hand</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>reverse/merge/partition/rotate drills</li><li>cycle detection</li><li>LRU-style deques</li><li>undo stacks</li><li>intrusive-list discussions</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://www.techinterview.org/post/3233460609/linked-list-interview-patterns/" target="_blank" rel="noreferrer">https://www.techinterview.org/post/3233460609/linked-list-interview-patterns/</a></li><li><a href="https://rust-unofficial.github.io/too-many-lists/" target="_blank" rel="noreferrer">https://rust-unofficial.github.io/too-many-lists/</a></li><li><a href="https://dev.to/seanchen1991/implementing-an-lru-cache-in-rust-33pp" target="_blank" rel="noreferrer">https://dev.to/seanchen1991/implementing-an-lru-cache-in-rust-33pp</a></li><li><a href="https://interviewing.io/rust-interview-questions" target="_blank" rel="noreferrer">https://interviewing.io/rust-interview-questions</a></li><li><a href="https://www.techinterviewhandbook.org/grind75" target="_blank" rel="noreferrer">https://www.techinterviewhandbook.org/grind75</a> See also (unsafe doubly linked list, not rewritten here): examples/unsafe_ffi/nonnull_linked_list.rs</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Question bank Q1**. Reverse a singly linked list, iteratively and recursively. [Easy] [asked: very common] Q2. Reverse the nodes of a list k at a time (leave a short tail as is). [Hard] [asked: common] Q3.
+
+Reverse the sublist between positions m and n (1-indexed) in one pass. [Medium] [asked: common] Q4. Merge two sorted linked lists into one sorted list. [Easy] [asked: very common] Q5. Merge k sorted linked lists. [Hard] [asked: very common] Q6.
+
+Find the middle node of a list (second middle when even) in one pass. [Easy] [asked: very common] Q7. Remove the n-th node from the end of a list. [Medium] [asked: very common] Q8. Delete duplicates from a sorted list (keep one / remove all) and remove all nodes with value x. [Medium] [asked: common] Q9.
+
+Partition a list around x, keeping relative order. [Medium] [asked: common] Q10. Rotate a list to the right by k places. [Medium] [asked: common] Q11. Is a linked list a palindrome?
+
+O(n) time, O(1) extra space. [Easy] [asked: very common] Q12. Add two numbers stored as reversed-digit lists. [Medium] [asked: very common] Q13. Group the odd-indexed nodes together followed by the even-indexed nodes. [Medium] [asked: occasional] Q14.
+
+Find the node where two lists intersect (shared tail). [Easy] [asked: common] Q15. Detect a cycle and find where it starts (Floyd). Why can't you build one with Box? [Medium] [asked: very common] Q16.
+
+Deep-copy a list whose nodes have a random pointer. [Medium] [asked: very common] Q17. Flatten a multilevel list (nodes with child lists). [Medium] [asked: common] Q18. Why does dropping a 1,000,000-node Box list overflow the stack, and how do you fix it? [Medium] [asked: common] Q19.
+
+Implement a generic singly linked stack with push/pop/peek/iter/iter_mut/into_iter. [Medium] [asked: very common] Q20. Implement a doubly linked list safely with Rc&lt;RefCell> and Weak. [Hard] [asked: common] Q21. Implement a doubly linked list with indices (arena); when would you reach for unsafe NonNull? [Hard] [asked: common]
+"""
+
+[[sources]]
+title = "techinterview.org/post/3233460609/linked-list-interview-patterns"
+url = "https://www.techinterview.org/post/3233460609/linked-list-interview-patterns/"
+
+[[sources]]
+title = "rust-unofficial.github.io/too-many-lists"
+url = "https://rust-unofficial.github.io/too-many-lists/"
+
+[[sources]]
+title = "dev.to/seanchen1991/implementing-an-lru-cache-in-rust-33pp"
+url = "https://dev.to/seanchen1991/implementing-an-lru-cache-in-rust-33pp"
+
+[[sources]]
+title = "interviewing.io/rust-interview-questions"
+url = "https://interviewing.io/rust-interview-questions"
+
+[[sources]]
+title = "techinterviewhandbook.org/grind75"
+url = "https://www.techinterviewhandbook.org/grind75"

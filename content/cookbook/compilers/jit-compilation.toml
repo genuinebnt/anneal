@@ -1,0 +1,128 @@
+title = "JIT compilation"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Bytecode and virtual machines"
+chapter_order = 3
+order = 598
+kind = "guide"
+lede = "V8, HotSpot, LuaJIT, PyPy, GraalVM, CPython 3.13 · Tiering, shapes, inline caches, deoptimization"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>A JIT compiles at runtime, when it knows which types actually flow, which branches are hot, and which methods are called. It uses that knowledge <em>speculatively</em>. It compiles code assuming “this <code>+</code> always sees small integers”, guards the assumption, and <em>deoptimizes</em> back to the interpreter when a guard fails. The standard architecture is <b>tiered</b>:</p>
+
+<ul> <li>An interpreter collects profiles: type feedback per operation and counters per function and loop.</li> <li>A baseline compiler removes dispatch overhead quickly.</li> <li>An optimizing compiler speculates heavily on hot code.</li> </ul>
+
+<p><b>On-stack replacement</b> (OSR) moves a long-running loop from one tier to the next mid-execution.</p>
+"""
+
+[[sections]]
+heading = "Shapes and inline caches"
+body = """
+<p>In dynamic languages, <code>obj.x</code> is a hash lookup. <b>Hidden classes</b> (V8 “maps”, SpiderMonkey “shapes”; originally SELF) give objects built the same way a shared layout descriptor, so a property becomes a fixed slot index. An <b>inline cache</b> at each property-access site remembers the last shape it saw and the slot. The fast path is one comparison and one load. Caches go <em>monomorphic → polymorphic</em> (a few shapes) <em>→ megamorphic</em> (give up, use a global cache). The optimizing tier reads these caches as type feedback.</p>
+
+```rust title="Shapes with transition chains, and a monomorphic inline cache"
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ShapeId(u32);
+
+pub struct Shape {
+    fields: HashMap<Symbol, u32>,              // property → slot
+    transitions: HashMap<Symbol, ShapeId>,     // adding property p leads to shape s
+}
+pub struct Object { shape: ShapeId, slots: Vec<Value> }
+
+#[derive(Clone, Copy, Default)]
+pub struct InlineCache { shape: Option<ShapeId>, slot: u32 }   // one per GetProperty site
+
+pub fn get_property(vm: &Vm, ic: &mut InlineCache, obj: &Object, name: Symbol) -> Option<Value> {
+    if ic.shape == Some(obj.shape) {
+        return Some(obj.slots[ic.slot as usize]);                     // hit: compare + load
+    }
+    let slot = *vm.shapes[obj.shape.0 as usize].fields.get(&name)?;   // miss: hash lookup
+    *ic = InlineCache { shape: Some(obj.shape), slot };               // re-cache
+    Some(obj.slots[slot as usize])
+}
+
+pub fn add_property(vm: &mut Vm, obj: &mut Object, name: Symbol, v: Value) {
+    let cur = obj.shape.0 as usize;
+    let next = match vm.shapes[cur].transitions.get(&name) {
+        Some(&s) => s,                                                 // objects built alike share shapes
+        None => {
+            let mut fields = vm.shapes[cur].fields.clone();
+            fields.insert(name, fields.len() as u32);
+            let id = ShapeId(vm.shapes.len() as u32);
+            vm.shapes.push(Shape { fields, transitions: HashMap::new() });
+            vm.shapes[cur].transitions.insert(name, id);
+            id
+        }
+    };
+    obj.shape = next;
+    obj.slots.push(v);
+}
+```
+"""
+
+[[sections]]
+heading = "A baseline JIT with Cranelift"
+body = """
+```rust title="Compile and call x*x + 1 at runtime (cranelift-jit; API as of recent releases, see cranelift-jit-demo)"
+use cranelift::prelude::*;
+use cranelift_jit::{JITBuilder, JITModule};
+use cranelift_module::{default_libcall_names, Linkage, Module};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut module = JITModule::new(JITBuilder::new(default_libcall_names())?);
+    let mut ctx = module.make_context();
+    ctx.func.signature.params.push(AbiParam::new(types::I64));
+    ctx.func.signature.returns.push(AbiParam::new(types::I64));
+
+    let mut fb_ctx = FunctionBuilderContext::new();
+    let mut b = FunctionBuilder::new(&mut ctx.func, &mut fb_ctx);
+    let entry = b.create_block();
+    b.append_block_params_for_function_params(entry);
+    b.switch_to_block(entry);
+    b.seal_block(entry);
+    let x = b.block_params(entry)[0];
+    let sq = b.ins().imul(x, x);
+    let r = b.ins().iadd_imm(sq, 1);
+    b.ins().return_(&[r]);
+    b.finalize();
+
+    let id = module.declare_function("sq_plus_one", Linkage::Export, &ctx.func.signature)?;
+    module.define_function(id, &mut ctx)?;
+    module.clear_context(&mut ctx);
+    module.finalize_definitions()?;
+
+    let code = module.get_finalized_function(id);
+    let f: extern "C" fn(i64) -> i64 = unsafe { std::mem::transmute(code) };
+    assert_eq!(f(7), 50);
+    Ok(())
+}
+```
+
+<p>For clox, the simplest baseline JIT compiles each function's bytecode one op at a time into Cranelift IR. It keeps the VM stack in memory and calls runtime helpers (<code>extern "C" fn</code>) for anything complex. That alone removes dispatch overhead. Next, keep stack slots in SSA values with <code>declare_var</code>/<code>use_var</code>, and add type guards based on the interpreter's feedback.</p>
+
+<div class="cb-g-tip"><h3>Deoptimization</h3> <p>Every guard in optimized code carries a <em>frame state</em>: the bytecode PC, and where each interpreter local and stack slot currently lives (register, stack slot, constant, or “rematerialize this allocation”). Inlined callers have their own frame states. When a guard fails, the runtime builds interpreter frames from this description and resumes. It usually also records the failure so the next compilation doesn't speculate the same way. Getting frame states right through every optimization is the hardest part of a speculative JIT.</p></div>
+
+<div class="cb-g-tip"><h3>Other JIT designs</h3> <ul> <li><b>Tracing</b> (LuaJIT, TraceMonkey): record the operations of one hot loop iteration as a linear trace with guards, optimize the trace, and link side exits into trace trees.</li> <li><b>Meta-tracing</b> (PyPy/RPython): trace the <em>interpreter</em> running the user program. You write an interpreter and get a JIT.</li> <li><b>Partial evaluation</b> (Truffle/Graal): specialize an AST interpreter against the program being run, producing compiled code.</li> <li><b>Copy-and-patch</b> (CPython 3.13): precompile machine-code templates for each bytecode with LLVM at build time, then at runtime copy them and patch in operands. It's very fast to compile, with decent code.</li> </ul></div>
+
+<div class="cb-g-tip"><h3>Platform details</h3> <ul> <li><b>W&#94;X.</b> Pages shouldn't be writable and executable at once. On Apple silicon, use <code>MAP_JIT</code> and toggle per thread with <code>pthread_jit_write_protect_np</code>.</li> <li><b>Instruction cache.</b> On AArch64 and RISC-V, flush it after writing code.</li> <li><b>GC.</b> Code objects embed heap pointers, so they are roots and need relocation if objects move.</li> <li><b>Security.</b> Use constant blinding against JIT spraying, and keep code and data regions separate.</li> </ul></div>
+"""
+
+[[sources]]
+title = "Xu and Kjolstad 2021, “Copy-and-Patch Compilation”"
+url = "https://arxiv.org/abs/2011.13127"
+
+[[sources]]
+title = "V8 blog"
+url = "https://v8.dev/blog"
+
+[[sources]]
+title = "cranelift-jit-demo"
+url = "https://github.com/bytecodealliance/cranelift-jit-demo"
+
+[[sources]]
+title = "Max Bernstein's blog"
+url = "https://bernsteinbear.com"

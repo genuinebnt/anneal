@@ -1,0 +1,50 @@
+title = "CPU scheduling policies"
+module = "Performance and systems"
+module_order = 7
+chapter = "Files, processes and the OS"
+chapter_order = 3
+order = 297
+kind = "recipe"
+lede = "FCFS, SJF/SRTF, round-robin, priority+aging, MLFQ, DRR, stride"
+level = "advanced"
+code = ["examples/os_and_storage/scheduler_policies.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>OS/runtime scheduler design</li><li>task executors</li><li>network schedulers</li><li>interview prep</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Domain**: operating-system style processes (arrival time + CPU burst), **not** a DAG workflow engine. A deterministic unit-time simulator asks a `Policy` "who runs this tick?" and records, per process: turnaround = finish - arrival;  waiting = turnaround - burst;  response = first_run - arrival.
+
+Jain's fairness index J = (sum x)&#94;2 / (n &#42; sum x&#94;2) lies in (1/n, 1]; 1 = perfectly equal. Here x_i = burst_i / turnaround_i (the share of "wall time" each process effectively got); for weighted policies x_i = service_i / weight_i.
+
+**Policies**: FCFS (non-preemptive), SJF (non-preemptive shortest job), SRTF (preemptive; provably minimises mean waiting time when bursts are known), RR(quantum), static **priority** with **aging** (effective priority improves while waiting, so nothing starves), MLFQ (new jobs start at the top queue, burning a full quantum demotes, periodic boost rescues starved or phase-changed jobs), DRR (deficit round robin: each round a flow earns `quantum * weight` credit, spends it per tick, unspent credit carries over) and **stride** (a weighted-fair-queuing style virtual-time scheduler: run the process with the smallest `pass`, then `pass += BIG / weight`).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+SRTF/SJF reasoning appears in shortest-job-first request scheduling and tail-latency work; round robin and MLFQ ideas underlie time-sharing OS schedulers (classic Unix, BSD and Solaris style; Linux's CFS/EEVDF is a weighted-fair design in the same family as stride/WFQ); deficit round robin is widely used in network packet schedulers and fair multi-tenant queues; aging is the standard cure for starvation in priority queues.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://pages.cs.wisc.edu/~remzi/OSTEP/cpu-sched.pdf> and <https://pages.cs.wisc.edu/~remzi/OSTEP/cpu-sched-mlfq.pdf> and <https://pages.cs.wisc.edu/~remzi/OSTEP/cpu-sched-lottery.pdf> (stride scheduling is covered there)
+"""
+
+[[sources]]
+title = "pages.cs.wisc.edu/~remzi/OSTEP/cpu-sched.pdf"
+url = "https://pages.cs.wisc.edu/~remzi/OSTEP/cpu-sched.pdf"
+
+[[sources]]
+title = "pages.cs.wisc.edu/~remzi/OSTEP/cpu-sched-mlfq.pdf"
+url = "https://pages.cs.wisc.edu/~remzi/OSTEP/cpu-sched-mlfq.pdf"
+
+[[sources]]
+title = "pages.cs.wisc.edu/~remzi/OSTEP/cpu-sched-lottery.pdf"
+url = "https://pages.cs.wisc.edu/~remzi/OSTEP/cpu-sched-lottery.pdf"

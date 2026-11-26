@@ -1,0 +1,35 @@
+# cb-no-std: `#![no_std]` library
+
+Contents: `Stack<T, N>` and `Ring<T, N>` (inline `[MaybeUninit<T>; N]` storage, const
+generics, no heap; `push` returns `Err(value)` when full as in `heapless`),
+`FmtBuf<N>` (`write!` into a byte array through `core::fmt::Write`), `Bump<N>` (bump
+arena with address alignment), `parse_u64/i64` (core only). `std` feature (default)
+adds `Error` impls and `to_vec` via `alloc`; `--no-default-features` is pure core.
+
+## core vs alloc vs std
+- `core`: language-level items: `Option`, `Result`, iterators, `fmt`, `mem`, `str`,
+  `cell`, atomics, slices. No allocation, no OS.
+- `alloc`: `Vec`, `String`, `Box`, `Rc`, `Arc`, `BTreeMap`, `format!`. Needs a heap.
+  `extern crate alloc;` and a `#[global_allocator]` in the final binary.
+- `std`: re-exports core+alloc plus files, threads, networking, `HashMap`
+  (needs OS randomness), `Mutex`, `println!`.
+
+## Binaries need two more things (libraries do not)
+- `#[panic_handler] fn panic(_: &PanicInfo) -> ! { loop {} }` (or depend on
+  `panic-halt`/`panic-probe`); only one per final binary.
+- `#[global_allocator] static A: SomeAlloc = ...;` if anything uses `alloc`
+  (e.g. `embedded-alloc`). Plus an entry point (`cortex-m-rt`'s `#[entry]`) and
+  `#![no_main]`.
+
+## Cross-compiling
+`rustup target add thumbv7em-none-eabihf` (Cortex-M4F/M7F), then
+`cargo check --no-default-features --target thumbv7em-none-eabihf`. The target has
+no `std`, so a crate that accidentally uses it fails to compile: that is the test.
+The last test in `tests/no_std.rs` does exactly this when the target is installed
+(it was on the machine that produced this recipe) and skips otherwise.
+Tests themselves run on the host with std, since the test harness needs it.
+
+Reference: <https://docs.rust-embedded.org/book/intro/no-std.html>
+
+## Run
+`CARGO_TARGET_DIR=/tmp/cb_target_shared cargo test -q --release -p cb-no-std`

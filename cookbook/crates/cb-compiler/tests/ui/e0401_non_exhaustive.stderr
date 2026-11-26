@@ -1,0 +1,10 @@
+error[E0401]: non-exhaustive patterns: `Color::Blue` not covered
+ --> e0401_non_exhaustive.peb:3:11
+  |
+3 |     match c {
+  |           ^ pattern `Color::Blue` not covered
+  |
+  = note: the matched value has type `Color`
+  = help: add the missing arms or a wildcard arm `_ => ...`
+
+error: aborting due to 1 previous error

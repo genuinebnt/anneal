@@ -1,0 +1,7 @@
+error[E0103]: expected a type, found `)`
+ --> e0103_expected_type.peb:1:9
+  |
+1 | fn f(x: ) {}
+  |         ^ expected a type
+
+error: aborting due to 1 previous error

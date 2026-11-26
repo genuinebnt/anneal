@@ -1,0 +1,40 @@
+title = "Dijkstra's shortest paths with a binary heap"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Graph algorithms"
+chapter_order = 4
+order = 191
+kind = "recipe"
+lede = "Dijkstra's shortest paths with a binary heap (lazy deletion) and path reconstruction."
+level = "intermediate"
+code = ["examples/algorithms/dijkstra.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>weighted routing</li><li>cost-aware scheduling</li><li>anything "cheapest way to get from A to B" with non-negative weights</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>routing</li><li>cheapest paths</li><li>cost-aware planning</li><li>latency-aware load balancing</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Maintain `dist[]`; repeatedly take the closest unfinalised node from a min-heap and relax its edges. "Lazy deletion": instead of decreasing a key in the heap, push a **new** (smaller) entry and ignore stale ones when popped. O((V+E) log V).
+
+**Requires** non-negative weights (use Bellman-Ford for negatives). BFS (index_graph) is Dijkstra with all weights 1.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://cp-algorithms.com/graph/dijkstra_sparse.html> and petgraph's `dijkstra`.
+"""
+
+[[sources]]
+title = "cp-algorithms.com/graph/dijkstra_sparse.html"
+url = "https://cp-algorithms.com/graph/dijkstra_sparse.html"

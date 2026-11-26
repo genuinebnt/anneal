@@ -1,0 +1,108 @@
+title = "Collection crates"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Data, text and encoding crates"
+chapter_order = 1
+order = 120
+kind = "recipe"
+lede = "Indexmap, smallvec, arrayvec, tinyvec, hashbrown, fast hashers, bitflags, bit-set, bitvec"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/indexmap_smallvec_arrayvec_collections.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>deterministic output</li><li>allocation-sensitive hot paths</li><li>fixed-capacity code</li><li>compact flag sets</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>indexmap keeps JSON/TOML key order and gives dense indices to graph nodes</li><li>smallvec is common in compilers</li><li>rustc-hash is the Rust compiler's hasher</li><li>hashbrown is the table behind std's HashMap</li><li>bitflags wraps OS and protocol flags</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>IndexMap::insert</code></li><li><code>IndexMap::insert_full</code></li><li><code>IndexMap::entry</code></li><li><code>Entry::or_insert</code></li><li><code>IndexMap::get_index</code></li><li><code>IndexMap::get_index_of</code></li><li><code>IndexMap::get_full</code></li><li><code>IndexMap::swap_remove</code></li><li><code>IndexMap::shift_remove</code></li><li><code>IndexMap::sort_keys</code></li><li><code>IndexMap::sort_by</code></li><li><code>IndexMap::binary_search_keys</code></li><li><code>IndexMap::move_index</code></li><li><code>IndexMap::retain</code></li><li><code>IndexMap::pop</code></li><li><code>IndexSet::insert_full</code></li><li><code>IndexSet::difference</code></li><li><code>SmallVec::new</code></li><li><code>SmallVec::push</code></li><li><code>SmallVec::spilled</code></li><li><code>SmallVec::inline_size</code></li><li><code>SmallVec::into_vec</code></li><li><code>smallvec::smallvec</code></li><li><code>ArrayVec::try_push</code></li><li><code>ArrayVec::remaining_capacity</code></li><li><code>ArrayVec::is_full</code></li><li><code>ArrayString::try_push_str</code></li><li><code>TinyVec::is_inline</code></li><li><code>hashbrown::HashMap::entry_ref</code></li><li><code>hashbrown::HashTable::entry</code></li><li><code>hashbrown::HashTable::find</code></li><li><code>FxHashMap</code></li><li><code>FxBuildHasher</code></li><li><code>ahash::AHashMap</code></li><li><code>ahash::RandomState</code></li><li><code>bitflags::bitflags</code></li><li><code>Flags::from_bits</code></li><li><code>Flags::from_bits_truncate</code></li><li><code>Flags::from_bits_retain</code></li><li><code>Flags::contains</code></li><li><code>Flags::intersects</code></li><li><code>Flags::insert</code></li><li><code>Flags::remove</code></li><li><code>Flags::toggle</code></li><li><code>Flags::iter_names</code></li><li><code>bitflags::parser::from_str</code></li><li><code>bitflags::parser::to_writer</code></li><li><code>IndexMap::{insert_sorted, shift_insert, swap_indices, drain, extract_if, get_range, get_disjoint_mut, reverse}</code></li><li><code>SmallVec::{retain, drain, extend_from_slice, shrink_to_fit, insert}</code></li><li><code>hashbrown::HashMap::{get_many_mut, extract_if}</code></li><li><code>bit_set::BitSet::{insert, remove, contains, count, union_with, intersect_with, difference_with, union, intersection, is_subset, is_disjoint, get_ref, make_empty}</code></li><li><code>bitvec::{bitvec!, bits!, array::BitArray, order::{Lsb0, Msb0}, view::BitView::{view_bits, view_bits_mut}, field::BitField::{load_be, store_be, load_le}, slice::BitSlice::{first_zero, iter_ones, count_ones, split_at, fill}}</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/indexmap/2/" target="_blank" rel="noreferrer">https://docs.rs/indexmap/2/</a></li><li><a href="https://docs.rs/smallvec/1/" target="_blank" rel="noreferrer">https://docs.rs/smallvec/1/</a></li><li><a href="https://docs.rs/arrayvec/0.7/" target="_blank" rel="noreferrer">https://docs.rs/arrayvec/0.7/</a></li><li><a href="https://docs.rs/tinyvec/1/" target="_blank" rel="noreferrer">https://docs.rs/tinyvec/1/</a></li><li><a href="https://docs.rs/hashbrown/0.15/" target="_blank" rel="noreferrer">https://docs.rs/hashbrown/0.15/</a></li><li><a href="https://docs.rs/rustc-hash/2/" target="_blank" rel="noreferrer">https://docs.rs/rustc-hash/2/</a></li><li><a href="https://docs.rs/ahash/0.8/" target="_blank" rel="noreferrer">https://docs.rs/ahash/0.8/</a></li><li><a href="https://docs.rs/bitflags/2/" target="_blank" rel="noreferrer">https://docs.rs/bitflags/2/</a></li><li><a href="https://docs.rs/bit-set/0.11/" target="_blank" rel="noreferrer">https://docs.rs/bit-set/0.11/</a></li><li><a href="https://docs.rs/bitvec/1/" target="_blank" rel="noreferrer">https://docs.rs/bitvec/1/</a></li></ul>
+"""
+
+[[sections]]
+heading = "Crates"
+body = """
+indexmap = "2", smallvec = "1", arrayvec = "0.7", tinyvec = "1" (alloc), hashbrown = "0.15" (not the newest line), rustc-hash = "2", ahash = "0.8", bitflags = "2", bit-set = "0.11", bitvec = "1"
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Hash map that remembers insertion order</td><td><code>IndexMap (swap_remove: O(1), reorders; shift_remove: O(n), keeps order)</code></td></tr><tr><td>Usually &lt;= N elements, sometimes more</td><td><code>SmallVec&lt;[T; N]&gt; (spills to the heap)</code></td></tr><tr><td>Never more than N, no heap</td><td><code>ArrayVec&lt;T, N&gt; (try_push returns the item back)</code></td></tr><tr><td>Same, without unsafe in the crate</td><td><code>tinyvec (elements need Default)</code></td></tr><tr><td>Look up by &amp;str, own the String only on insert</td><td><code>hashbrown entry_ref</code></td></tr><tr><td>Key stored elsewhere (index into an arena)</td><td><code>hashbrown::HashTable</code></td></tr><tr><td>Set of small dense integers (node ids)</td><td><code>BitSet (set algebra) ; fixed universe &lt;= 64 -&gt; a u64</code></td></tr><tr><td>Individual bits, bit fields in wire formats</td><td><code>bitvec (BitSlice over your own bytes; order is Msb0 or Lsb0)</code></td></tr><tr><td>Trusted integer keys, speed</td><td><code>FxHashMap ; untrusted keys -&gt; std or ahash with random state</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Pitfalls"
+body = """
+BitSet memory is proportional to the **largest** element, not to the number of elements; bitvec's Msb0 and Lsb0 number the bits of a byte in opposite directions, and load_be/load_le is a second, independent choice.
+
+SmallVec's inline buffer makes the **value** big (moves cost more, so measure); FxHash has no random seed, so an attacker who chooses keys can force collisions; IndexMap `==` ignores order.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://nnethercote.github.io/perf-book/heap-allocations.html" target="_blank" rel="noreferrer">https://nnethercote.github.io/perf-book/heap-allocations.html</a></li><li><a href="https://nnethercote.github.io/perf-book/hashing.html" target="_blank" rel="noreferrer">https://nnethercote.github.io/perf-book/hashing.html</a></li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/indexmap/2"
+url = "https://docs.rs/indexmap/2/"
+
+[[sources]]
+title = "docs.rs/smallvec/1"
+url = "https://docs.rs/smallvec/1/"
+
+[[sources]]
+title = "docs.rs/arrayvec/0.7"
+url = "https://docs.rs/arrayvec/0.7/"
+
+[[sources]]
+title = "docs.rs/tinyvec/1"
+url = "https://docs.rs/tinyvec/1/"
+
+[[sources]]
+title = "docs.rs/hashbrown/0.15"
+url = "https://docs.rs/hashbrown/0.15/"
+
+[[sources]]
+title = "docs.rs/rustc-hash/2"
+url = "https://docs.rs/rustc-hash/2/"
+
+[[sources]]
+title = "docs.rs/ahash/0.8"
+url = "https://docs.rs/ahash/0.8/"
+
+[[sources]]
+title = "docs.rs/bitflags/2"
+url = "https://docs.rs/bitflags/2/"
+
+[[sources]]
+title = "docs.rs/bit-set/0.11"
+url = "https://docs.rs/bit-set/0.11/"
+
+[[sources]]
+title = "docs.rs/bitvec/1"
+url = "https://docs.rs/bitvec/1/"
+
+[[sources]]
+title = "nnethercote.github.io/perf-book/heap-allocations.html"
+url = "https://nnethercote.github.io/perf-book/heap-allocations.html"
+
+[[sources]]
+title = "nnethercote.github.io/perf-book/hashing.html"
+url = "https://nnethercote.github.io/perf-book/hashing.html"

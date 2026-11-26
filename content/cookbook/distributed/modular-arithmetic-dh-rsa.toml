@@ -1,0 +1,79 @@
+title = "Modular arithmetic dh rsa"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Cryptography"
+chapter_order = 4
+order = 549
+kind = "recipe"
+lede = "modular arithmetic, Miller-Rabin, Diffie-Hellman, toy RSA (+CRT, malleability), Shamir secret sharing."
+level = "advanced"
+code = ["examples/cryptography/modular_arithmetic_dh_rsa.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>understanding public-key crypto</li><li>number theory code</li><li>secret splitting</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+!!! **Educational implementation**. **Not** constant-time-audited, **not** for production.
+
+Parameters here are tiny on purpose !!! (they are breakable in milliseconds). For real systems use audited libraries (RustCrypto <https://github.com/RustCrypto> , !!! ring <https://github.com/briansmith/ring>) and **never** roll your own crypto.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+the number theory under public-key crypto, in &#126;400 lines of std-only Rust.
+
+1. `mulmod` via u128 (a&#42;b never overflows for 64-bit moduli), square-and-multiply `powmod`, extended Euclid and `modinv`.
+2. Miller-Rabin, **deterministic** for all u64 with the first 12 primes as witnesses (proven sufficient below 3.3e24); checked against a sieve for every n &lt; 100000 and against known tricky composites (Carmichael 561, strong pseudoprimes).
+3. Diffie-Hellman over a safe prime p = 2q+1 with a generator of the order-q subgroup. Both sides get g&#94;(ab). A 22-bit group is broken here by brute-force discrete log: the security is **only** the size of the group.
+4. Toy RSA: textbook example (61, 53), then &#126;62-bit moduli from our own prime generator; sign/verify; CRT decryption (two half-size exponentiations + Garner recombination, &#126;3-4x faster in real sizes).
+5. **Textbook RSA** is deterministic (same message -> same ciphertext, so equality leaks) and **malleable** (E(m1)&#42;E(m2) = E(m1&#42;m2)). Real RSA needs padding: OAEP for encryption, PSS for signatures (RFC 8017).
+6. Shamir secret sharing over GF(p), p = 2&#94;61-1: a random degree k-1 polynomial with f(0)=secret; share i is (i, f(i)). Any k shares reconstruct by Lagrange interpolation at 0; k-1 shares are consistent with **every** possible secret (information-theoretic security), which we demonstrate by constructing a valid polynomial for a wrong guess.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Miller-Rabin in key generation (RSA/DH primes)</li><li>Diffie-Hellman (finite-field and its elliptic-curve variant) in TLS and SSH key exchange</li><li>RSA in X.509 certificates and PKCS#1 (with OAEP/PSS padding)</li><li>CRT optimisation inside RSA libraries</li><li>Shamir sharing for splitting master keys (e.g. HashiCorp Vault unseal keys, SLIP-39 wallet backups)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://www.rfc-editor.org/rfc/rfc8017> (PKCS#1 v2.2: RSA, OAEP, PSS)
+
+<https://www.rfc-editor.org/rfc/rfc7919> (named finite-field DH groups for TLS)
+
+<https://en.wikipedia.org/wiki/Miller%E2%80%93Rabin_primality_test>
+
+<https://dl.acm.org/doi/10.1145/359168.359176> (Shamir, "How to share a secret", 1979)
+"""
+
+[[sources]]
+title = "github.com/RustCrypto"
+url = "https://github.com/RustCrypto"
+
+[[sources]]
+title = "github.com/briansmith/ring"
+url = "https://github.com/briansmith/ring"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc8017"
+url = "https://www.rfc-editor.org/rfc/rfc8017"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc7919"
+url = "https://www.rfc-editor.org/rfc/rfc7919"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Miller%E2%80%93Rabin_primality_test"
+url = "https://en.wikipedia.org/wiki/Miller%E2%80%93Rabin_primality_test"
+
+[[sources]]
+title = "dl.acm.org/doi/10.1145/359168.359176"
+url = "https://dl.acm.org/doi/10.1145/359168.359176"

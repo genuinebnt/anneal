@@ -1,0 +1,62 @@
+title = "A length-prefixed TCP message server, built twice"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Networking and protocols"
+chapter_order = 3
+order = 539
+kind = "recipe"
+lede = "Thread-per-connection (std) and task-per-connection (tokio)"
+level = "advanced"
+code = ["examples/networking/tcp_framed_server.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>custom RPC / database wire protocols</li><li>game servers</li><li>brokers</li><li>anything speaking over raw TCP</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+TCP is a byte **stream**: one `write` of 100 bytes may arrive as 3 reads, and 3 writes may arrive as 1 read. So every protocol needs framing. Here: `[len: u32 big-endian][payload]`, with a MAX frame size so a hostile or buggy peer cannot make us allocate 4 GiB.
+
+Request payload = `[op][data]` (0 echo, 1 upper-case, 2 length-as-u32); response payload = `[status][data]` (0 ok, 1 error text).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Details that bite in production** (all exercised below):
+
+- partial reads: loop until the whole header/payload is in. A read timeout can fire mid-frame, and `read_exact` discards what it already read on error, so we hand-roll `read_full` that keeps its progress.
+- EOF at a frame boundary = polite close (also what a client `shutdown(Write)` half-close looks like: we still answer everything already sent, then close). EOF mid-frame = protocol error.
+- oversized frame: reply with an error and close; the stream cannot be resynchronised after a bad length.
+- timeouts: an idle or slowloris client (sends 2 header bytes, then nothing) would pin a thread forever. Every socket has read **and** write timeouts; the idle limit closes quiet peers.
+- limits: a connection cap (reject with a "busy" frame instead of accepting unbounded work).
+- graceful shutdown: stop accepting (drop the listener), let connections finish what they have received, then close; the accept loop joins them. Connections notice shutdown only between frames, so in-flight requests complete (drain).
+- `TCP_NODELAY`: request/response ping-pong with Nagle on can stall &#126;40 ms on delayed ACKs. Everything binds 127.0.0.1:0 (ephemeral port) and never talks outside the machine.
+
+**Threads** vs **tasks**: a thread costs a stack (MBs of virtual memory, a kernel object) and context switches, so it suits dozens to a few thousand connections with simple blocking code.
+
+A tokio task costs &#126;hundreds of bytes and multiplexes thousands of sockets on a few threads via epoll/kqueue (see mio_event_loop), at the price of `async` colouring and cancel-safety care (note we read the first byte with a cancel-safe `read`, not `read_exact`).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Redis-style and Postgres-style wire protocols (length-prefixed messages)</li><li>gRPC/HTTP2 frames</li><li>Kafka's size-prefixed requests</li><li>MQTT</li><li>internal service RPC</li><li>chat/game servers</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://tokio.rs/tokio/tutorial/framing> and <https://doc.rust-lang.org/std/net/struct.TcpStream.html>
+"""
+
+[[sources]]
+title = "tokio.rs/tokio/tutorial/framing"
+url = "https://tokio.rs/tokio/tutorial/framing"
+
+[[sources]]
+title = "doc.rust-lang.org/std/net/struct.TcpStream.html"
+url = "https://doc.rust-lang.org/std/net/struct.TcpStream.html"

@@ -1,0 +1,58 @@
+title = "An LSM-tree-lite key-value store"
+module = "Complete projects"
+module_order = 13
+chapter = "Capstones"
+chapter_order = 1
+order = 652
+kind = "capstone"
+lede = "WAL + memtable + SSTables with bloom filters + k-way merge compaction."
+level = "capstone"
+code = ["examples/capstones/mini_kv_store.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>embedded storage engines</li><li>durable job/state stores</li><li>the DBMS roadmap</li><li>combines bytes</li><li>IO</li><li>errors</li><li>heaps</li><li>model tests</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+writes go to a write-ahead log (WAL, [len][crc32][payload] frames) and then to an in-memory sorted memtable (BTreeMap; a delete is a **tombstone**, i.e. `None`, because older files may still hold the key).
+
+When the memtable grows past a threshold it is **flushed** into an immutable SSTable file: sorted records, a **sparse** index (one key per 16 records, so memory stays small) and a **bloom** filter.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+appends and sequential writes are the fastest thing disks do; sorting once per flush gives binary-searchable files without ever updating in place. Reads pay for that: they check the memtable, then SSTables newest to oldest, and the bloom filter lets a read skip a file that definitely lacks the key.
+
+**Compaction** merges all tables with a BinaryHeap (k-way merge), keeping only the newest version of each key and dropping tombstones (safe only because nothing older remains). **Recovery** = reopen the directory: load tables, replay the WAL, stop at the first torn/corrupt frame and truncate it away.
+
+A WAL reset after a flush is safe to crash through: replay is idempotent. **Verified** by a model test: thousands of seeded random operations (put/delete/get/scan/flush/compact/crash/torn-tail) against a BTreeMap.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>RocksDB/LevelDB/Cassandra/ScyllaDB storage engines</li><li>Kafka-style commit logs</li><li>embedded state in stream processors</li><li>sled-like stores</li><li>search-index segments (Lucene merges)</li><li>time-series ingest (write-optimised)</li><li>any "append fast, compact later" system</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://github.com/skyzh/mini-lsm" target="_blank" rel="noreferrer">https://github.com/skyzh/mini-lsm</a></li><li><a href="https://github.com/google/leveldb/blob/main/doc/impl.md" target="_blank" rel="noreferrer">https://github.com/google/leveldb/blob/main/doc/impl.md</a></li><li><a href="https://docs.rs/crc32fast" target="_blank" rel="noreferrer">https://docs.rs/crc32fast</a></li></ul>
+"""
+
+[[sources]]
+title = "github.com/skyzh/mini-lsm"
+url = "https://github.com/skyzh/mini-lsm"
+
+[[sources]]
+title = "github.com/google/leveldb/blob/main/doc/impl.md"
+url = "https://github.com/google/leveldb/blob/main/doc/impl.md"
+
+[[sources]]
+title = "docs.rs/crc32fast"
+url = "https://docs.rs/crc32fast"

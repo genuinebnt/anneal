@@ -1,0 +1,68 @@
+title = "Binary-tree interview questions in Rust"
+module = "Worked questions"
+module_order = 14
+chapter = "Coding and design questions"
+chapter_order = 2
+order = 683
+kind = "recipe"
+lede = "binary-tree interview questions in Rust (Option<Box<Tree>>, Option<Rc<RefCell<Tree>>>, Weak parents, arenas)."
+level = "intermediate"
+code = ["examples/interview/binary_trees_in_rust.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>coding interviews (LeetCode trees)</li><li>parsers/ASTs</li><li>any recursive data structure</li><li>ordered maps (BST) and tree serialisation</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>traversals</li><li>depth/diameter/balance</li><li>BST validation and updates</li><li>LCA</li><li>serialisation</li><li>ASTs and file-system trees</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://www.techinterview.org/post/3233460609/linked-list-interview-patterns/" target="_blank" rel="noreferrer">https://www.techinterview.org/post/3233460609/linked-list-interview-patterns/</a></li><li><a href="https://rust-unofficial.github.io/too-many-lists/" target="_blank" rel="noreferrer">https://rust-unofficial.github.io/too-many-lists/</a></li><li><a href="https://interviewing.io/rust-interview-questions" target="_blank" rel="noreferrer">https://interviewing.io/rust-interview-questions</a></li><li><a href="https://www.techinterviewhandbook.org/grind75" target="_blank" rel="noreferrer">https://www.techinterviewhandbook.org/grind75</a></li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Question bank Q1**. Inorder, preorder and postorder traversal: recursive, iterative with an explicit stack, and Morris (O(1) space). [Easy] [asked: very common] Q2. Level-order, zigzag level-order and right-side view of a binary tree. [Medium] [asked: very common] Q3.
+
+Maximum depth and minimum depth of a binary tree. [Easy] [asked: very common] Q4. Invert (mirror) a binary tree, recursively and iteratively. [Easy] [asked: very common] Q5. Same tree, symmetric tree and subtree of another tree. [Easy] [asked: very common] Q6.
+
+Is a binary tree height-balanced? Do it in one pass, O(n). [Easy] [asked: very common] Q7. Diameter of a binary tree and the maximum path sum (any node to any node). [Hard] [asked: very common] Q8.
+
+Path sum I (does a root-to-leaf path sum to target) and Path sum II (return all such paths). [Medium] [asked: common] Q9. Validate a binary search tree (bounds, not parent-only checks; also via inorder). [Medium] [asked: very common] Q10. Kth smallest element in a BST. [Medium] [asked: very common] Q11.
+
+Lowest common ancestor of two nodes: general binary tree and BST. [Medium] [asked: very common] Q12. Insert into and delete from a BST (three delete cases). [Medium] [asked: very common] Q13. Serialize and deserialize a binary tree. [Hard] [asked: common] Q14.
+
+Construct a binary tree from preorder and inorder traversals. [Medium] [asked: very common] Q15. Convert a sorted array (or sorted list) to a height-balanced BST. [Easy] [asked: common] Q16. Flatten a binary tree to a linked list in preorder, in place. [Medium] [asked: common] Q17.
+
+Count the nodes of a complete binary tree in better than O(n) (O(log&#94;2 n)). [Medium] [asked: common] Q18. Convert a binary tree to a circular doubly linked list in inorder (reuse the pointers). [Medium] [asked: occasional] Q19. Vertical order traversal of a binary tree. [Hard] [asked: common] Q20.
+
+Recover a BST in which exactly two nodes were swapped. [Hard] [asked: occasional] Q21. Rust: which borrow-checker patterns do recursive Option&lt;Box&lt;Tree>> functions use (as_ref, as_deref, map, &amp;mut cursor)? [Medium] [asked: common] Q22.
+
+Rust: LeetCode's Option&lt;Rc&lt;RefCell&lt;TreeNode>>>: how do you traverse and mutate it, what is Rc::clone vs a deep copy, and why does a double borrow_mut panic? [Medium] [asked: very common] Q23. Rust: how do you give tree nodes parent pointers without leaking (Rc + Weak)? [Hard] [asked: common] Q24.
+
+Rust: a degenerate tree 100,000 levels deep: what overflows the stack and how do iterative versions fix it? [Medium] [asked: common]
+"""
+
+[[sources]]
+title = "techinterview.org/post/3233460609/linked-list-interview-patterns"
+url = "https://www.techinterview.org/post/3233460609/linked-list-interview-patterns/"
+
+[[sources]]
+title = "rust-unofficial.github.io/too-many-lists"
+url = "https://rust-unofficial.github.io/too-many-lists/"
+
+[[sources]]
+title = "interviewing.io/rust-interview-questions"
+url = "https://interviewing.io/rust-interview-questions"
+
+[[sources]]
+title = "techinterviewhandbook.org/grind75"
+url = "https://www.techinterviewhandbook.org/grind75"

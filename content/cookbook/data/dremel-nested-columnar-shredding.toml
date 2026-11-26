@@ -1,0 +1,86 @@
+title = "Dremel/Parquet nested record shredding"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 375
+kind = "recipe"
+lede = "Repetition and definition levels, the assembly FSM, level encoding."
+level = "advanced"
+code = ["examples/database/dremel_nested_columnar_shredding.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>columnar file formats (Parquet, <strong>orc</strong>-like layouts)</li><li>nested/JSON analytics</li><li>BigQuery-style engines</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Apache Parquet (every nested column is stored exactly this way)</li><li>Google Dremel/BigQuery (Capacitor descends from it)</li><li>Apache Arrow's list/struct to Parquet conversion</li><li>Spark/Trino/DuckDB Parquet readers</li><li>Impala</li><li>Drill. Course: CMU 15-721 Advanced Database Systems (Spring)</li><li>lecture on storage models and columnar/nested data formats (Dremel, Parquet)</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a record with nested, optional and repeated fields is flattened into **one column per leaf path** without losing structure. Each stored value carries two small integers:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Repetition</div><div class="cb-g-says"><p>Level r: at which <strong>repeated</strong> ancestor of the leaf this value repeats. r = 0 means "first value of a new record"; r = k means "a new element of the k-th repeated field on the path (counting from the root)".</p></div></div><div class="cb-g-term"><div class="cb-g-name">Definition</div><div class="cb-g-says"><p>Level d: how many of the optional/repeated fields on the path are actually present. d = max means the value itself exists; d &lt; max means a <strong>null</strong>, and d tells exactly <strong>which</strong> ancestor was missing (so <code>Links{}</code> and absent <code>Links</code> differ). Required fields add nothing to either level, which is why a flat required column has no levels at all.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+a scan of `Name.Url` must not touch `Name.Language.Code`. Row-wise nested storage (JSON, protobuf) reads everything; shredded storage reads one narrow column and yet can still rebuild whole records or answer per-record questions (a **count** of a repeated field is just "count the entries, split at r = 0") from the levels alone.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+walk the record against the schema recursively. For a child field with no values, emit one **null** entry (r of the parent walk, d of the parent) into every leaf below it. For the j-th value of a child, r is the incoming r if j = 0 and otherwise the child's own repetition level; d is the child's definition level.
+
+Both maxima come from the schema alone.
+
+a finite-state machine of leaf readers.
+
+After reading a value from leaf g, peek the **next** repetition level r' of g's column: r' = 0 continues with the next leaf in schema order (or ends the record); r' > 0 means the repeated ancestor A of level r' gets another element, so if the next leaf still lies inside A we finish the current element first, otherwise we jump back to A's first leaf.
+
+A forward move reuses the ancestors shared with the previous leaf; a backward move appends a new element of A at level r and reuses everything above it. The d level truncates descent (NULLs create no nodes beyond d).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Parquet level encoding**: levels are small ints (bit width = ceil(log2(max+1))), mostly runs, so Parquet uses the RLE / **bit-packed hybrid**: a varint header whose low bit selects the run kind.
+
+Even header = RLE run (count &lt;&lt; 1) followed by the value in ceil(width/8) bytes; odd header = bit-packed run ((groups of 8) &lt;&lt; 1 &#124; 1) followed by groups&#42;width bytes, LSB-first. A max level of 0 needs no bytes at all. Implemented below with a round-trip test on random level sequences.
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+the paper's two-record Document example must give the published columns exactly (values, r, d); 3000 random records over the paper schema plus 1000 over a deeper schema round-trip shred -> assemble exactly; levels survive the hybrid encoding; projection, **count** and a per-record predicate computed from columns alone match an oracle over the records.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Dremel: Interactive Analysis of Web-Scale Datasets <https://research.google/pubs/dremel-interactive-analysis-of-web-scale-datasets/> Parquet file format (nested encoding, RLE/bit-packing) <https://parquet.apache.org/docs/file-format/>
+
+```text
+parquet-format README https://github.com/apache/parquet-format/blob/master/README.md
+```
+"""
+
+[[sources]]
+title = "research.google/pubs/dremel-interactive-analysis-of-web-scale-datasets"
+url = "https://research.google/pubs/dremel-interactive-analysis-of-web-scale-datasets/"
+
+[[sources]]
+title = "parquet.apache.org/docs/file-format"
+url = "https://parquet.apache.org/docs/file-format/"
+
+[[sources]]
+title = "github.com/apache/parquet-format/blob/master/README.md"
+url = "https://github.com/apache/parquet-format/blob/master/README.md"

@@ -1,0 +1,5 @@
+fn main() {
+    let mut xs: [int] = [];
+    let v = pop(xs);
+    println(to_str(v));
+}

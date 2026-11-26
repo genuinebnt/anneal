@@ -1,0 +1,406 @@
+title = "Fully recoverable parsers"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 559
+kind = "guide"
+lede = "A complete resilient parser: never fails, never loops, keeps every byte, reports “expected one of …” · The rust-analyzer and matklad design"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>An IDE parser runs on every keystroke, so it sees broken code almost all the time. “Fully recoverable” means five guarantees:</p>
+
+<ol> <li><b>Total</b>: every input produces a tree. There is no <code>Result</code> at the top.</li> <li><b>Lossless</b>: every byte, including whitespace, comments and garbage, is in the tree, so printing the tree gives back the input.</li> <li><b>Local</b>: an error affects only the smallest enclosing construct. A missing <code>)</code> in one function doesn't swallow the next function.</li> <li><b>Terminating</b>: no input can make it loop.</li> <li><b>Informative</b>: errors say what was expected, at the right place, once.</li> </ol>
+
+<p>The design below implements all five in about 250 lines. It is the architecture of matklad's “Resilient LL Parsing” tutorial and of rust-analyzer's parser, applied to a small language:</p>
+
+```text title="The language: functions, let, return, calls, + and *"
+File      = FnDecl*
+FnDecl    = 'fun' 'name' ParamList Block
+ParamList = '(' Param* ')'
+Param     = 'name' ','?
+Block     = '{' Stmt* '}'
+Stmt      = LetStmt | ReturnStmt | ExprStmt
+LetStmt   = 'let' 'name' '=' Expr ';'
+Expr      = Literal | NameRef | ParenExpr | BinExpr | CallExpr
+```
+"""
+
+[[sections]]
+heading = "Mechanism 1: events, open/close markers, and a flat token list"
+body = """
+<p>The parser sees only significant tokens, with trivia filtered out, and emits events. A separate builder turns events and the full token list back into a lossless tree, re-attaching trivia. <code>open_before</code> wraps an already-finished node, which handles left-associative binary expressions and calls without backtracking.</p>
+
+```rust title="Parser state, markers, fuel and “expected one of”"
+use std::cell::{Cell, RefCell};
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    // tokens
+    Fun, Let, Return, Ident, Int, LParen, RParen, LBrace, RBrace, Comma, Semi, Eq, Plus, Star,
+    Whitespace, Comment, Unknown, Eof,
+    // nodes
+    File, FnDecl, ParamList, Param, Block, LetStmt, ReturnStmt, ExprStmt,
+    Literal, NameRef, ParenExpr, BinExpr, CallExpr, ArgList, Error,
+}
+
+impl Kind {
+    pub fn is_trivia(self) -> bool { matches!(self, Kind::Whitespace | Kind::Comment) }
+    pub fn text(self) -> &'static str {
+        match self {
+            Kind::Fun => "`fun`", Kind::Let => "`let`", Kind::Return => "`return`",
+            Kind::Ident => "an identifier", Kind::Int => "a number",
+            Kind::LParen => "`(`", Kind::RParen => "`)`", Kind::LBrace => "`{`", Kind::RBrace => "`}`",
+            Kind::Comma => "`,`", Kind::Semi => "`;`", Kind::Eq => "`=`", Kind::Plus => "`+`", Kind::Star => "`*`",
+            _ => "something else",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Token { pub kind: Kind, pub start: u32, pub len: u32 }
+
+pub enum Event { Open(Kind), Close, Advance }
+
+pub struct Parser<'t> {
+    tokens: &'t [Token],               // significant tokens only
+    pos: usize,
+    fuel: Cell<u32>,                   // guards against infinite loops
+    expected: RefCell<Vec<Kind>>,      // everything we checked for since the last advance
+    events: Vec<Event>,
+    pub errors: Vec<(usize, String)>,  // (token index, message)
+}
+
+pub struct MarkOpened(usize);
+pub struct MarkClosed(usize);
+
+impl<'t> Parser<'t> {
+    pub fn new(tokens: &'t [Token]) -> Self {
+        Parser { tokens, pos: 0, fuel: Cell::new(256), expected: RefCell::new(Vec::new()),
+                 events: Vec::new(), errors: Vec::new() }
+    }
+
+    fn open(&mut self) -> MarkOpened {
+        self.events.push(Event::Open(Kind::Error));      // real kind filled in by close()
+        MarkOpened(self.events.len() - 1)
+    }
+    fn open_before(&mut self, m: MarkClosed) -> MarkOpened {
+        self.events.insert(m.0, Event::Open(Kind::Error));
+        MarkOpened(m.0)
+    }
+    fn close(&mut self, m: MarkOpened, kind: Kind) -> MarkClosed {
+        self.events[m.0] = Event::Open(kind);
+        self.events.push(Event::Close);
+        MarkClosed(m.0)
+    }
+
+    fn nth(&self, n: usize) -> Kind {
+        // Every lookahead burns fuel and only advance() refills it. A loop that forgets to
+        // consume a token panics in tests instead of hanging in the editor.
+        let f = self.fuel.get();
+        assert!(f > 0, "parser is stuck at token {}", self.pos);
+        self.fuel.set(f - 1);
+        self.tokens.get(self.pos + n).map_or(Kind::Eof, |t| t.kind)
+    }
+    fn at(&self, k: Kind) -> bool {
+        let hit = self.nth(0) == k;
+        if !hit { self.expected.borrow_mut().push(k); }
+        hit
+    }
+    fn at_any(&self, ks: &[Kind]) -> bool { ks.iter().any(|&k| self.at(k)) }
+    /// Check a recovery set without adding it to “expected”: these tokens belong to
+    /// enclosing rules, so listing them in this rule's error would mislead.
+    fn at_recovery(&self, ks: &[Kind]) -> bool { ks.contains(&self.nth(0)) }
+    fn eof(&self) -> bool { self.pos == self.tokens.len() }
+
+    fn advance(&mut self) {
+        assert!(!self.eof());
+        self.fuel.set(256);
+        self.expected.borrow_mut().clear();
+        self.events.push(Event::Advance);
+        self.pos += 1;
+    }
+    fn eat(&mut self, k: Kind) -> bool {
+        if self.at(k) { self.advance(); true } else { false }
+    }
+
+    /// Missing token: report it and consume nothing. This is a “virtual insertion”; parsing
+    /// continues as if the token had been there.
+    fn expect(&mut self, k: Kind) {
+        if !self.eat(k) { self.error_expected(); }
+    }
+    fn error_expected(&mut self) {
+        let mut exp = self.expected.borrow().clone();
+        exp.sort_by_key(|k| k.text());
+        exp.dedup();
+        let list: Vec<&str> = exp.iter().map(|k| k.text()).collect();
+        let msg = match list.as_slice() {
+            [one] => format!("expected {one}"),
+            many => format!("expected one of {}", many.join(", ")),
+        };
+        self.errors.push((self.pos, msg));
+    }
+    /// Unexpected token: wrap it in an Error node so it stays in the tree ("deletion").
+    fn advance_with_error(&mut self, msg: &str) {
+        let m = self.open();
+        self.errors.push((self.pos, msg.to_string()));
+        self.advance();
+        self.close(m, Kind::Error);
+    }
+}
+```
+"""
+
+[[sections]]
+heading = "Mechanism 2: recovery sets"
+body = """
+<p>Each list-parsing loop knows which tokens belong to an <em>enclosing</em> rule. When it sees one of those, it stops instead of consuming it, and lets the outer rule resynchronize. A <code>fun</code> keyword inside a block most likely means the block's <code>}</code> is missing, so the block stops and the file-level loop starts a new function. Any other unexpected token is wrapped in an error node and skipped, which guarantees progress.</p>
+
+```rust title="The grammar functions"
+const ITEM_START: &[Kind] = &[Kind::Fun];
+const PARAM_STOP: &[Kind] = &[Kind::Fun, Kind::LBrace];
+const STMT_STOP: &[Kind] = &[Kind::Fun];
+const EXPR_FOLLOW: &[Kind] = &[Kind::Semi, Kind::RParen, Kind::RBrace, Kind::Comma, Kind::Fun];
+
+pub fn file(p: &mut Parser) {
+    let m = p.open();
+    while !p.eof() {
+        if p.at(Kind::Fun) { fn_decl(p) } else { p.advance_with_error("expected a function") }
+    }
+    p.close(m, Kind::File);
+}
+
+fn fn_decl(p: &mut Parser) {
+    let m = p.open();
+    p.expect(Kind::Fun);
+    p.expect(Kind::Ident);
+    if p.at(Kind::LParen) { param_list(p) } else { p.error_expected() }
+    if p.at(Kind::LBrace) { block(p) } else { p.error_expected() }
+    p.close(m, Kind::FnDecl);
+}
+
+fn param_list(p: &mut Parser) {
+    let m = p.open();
+    p.expect(Kind::LParen);
+    while !p.at(Kind::RParen) && !p.eof() {
+        if p.at(Kind::Ident) { param(p) }
+        else if p.at_recovery(PARAM_STOP) { break }              // `fun f(a {`: let the block parse
+        else { p.advance_with_error("expected a parameter") }
+    }
+    p.expect(Kind::RParen);
+    p.close(m, Kind::ParamList);
+}
+
+fn param(p: &mut Parser) {
+    let m = p.open();
+    p.expect(Kind::Ident);
+    if !p.at(Kind::RParen) && !p.at_recovery(PARAM_STOP) { p.expect(Kind::Comma); }
+    p.close(m, Kind::Param);
+}
+
+fn block(p: &mut Parser) {
+    let m = p.open();
+    p.expect(Kind::LBrace);
+    while !p.at(Kind::RBrace) && !p.eof() {
+        if p.at(Kind::Let) { let_stmt(p) }
+        else if p.at(Kind::Return) { return_stmt(p) }
+        else if p.at_recovery(STMT_STOP) { break }                // probably a missing `}`
+        else if at_expr_start(p) { expr_stmt(p) }
+        else { p.advance_with_error("expected a statement") }
+    }
+    p.expect(Kind::RBrace);
+    p.close(m, Kind::Block);
+}
+
+fn let_stmt(p: &mut Parser) {
+    let m = p.open();
+    p.expect(Kind::Let);
+    p.expect(Kind::Ident);
+    p.expect(Kind::Eq);
+    expr(p);
+    p.expect(Kind::Semi);
+    p.close(m, Kind::LetStmt);
+}
+
+fn return_stmt(p: &mut Parser) {
+    let m = p.open();
+    p.expect(Kind::Return);
+    if at_expr_start(p) { expr(p); }
+    p.expect(Kind::Semi);
+    p.close(m, Kind::ReturnStmt);
+}
+
+fn expr_stmt(p: &mut Parser) {
+    let m = p.open();
+    expr(p);
+    p.expect(Kind::Semi);
+    p.close(m, Kind::ExprStmt);
+}
+
+fn at_expr_start(p: &Parser) -> bool { p.at_any(&[Kind::Ident, Kind::Int, Kind::LParen]) }
+
+fn expr(p: &mut Parser) { expr_bp(p, 0) }
+
+fn expr_bp(p: &mut Parser, min_bp: u8) {
+    let mut lhs = atom(p);
+    loop {
+        if p.at(Kind::LParen) { lhs = call(p, lhs); continue; }      // postfix binds tightest
+        let (l_bp, r_bp) = if p.at(Kind::Plus) { (1, 2) } else if p.at(Kind::Star) { (3, 4) } else { break };
+        if l_bp < min_bp { break; }
+        let m = p.open_before(lhs);
+        p.advance();
+        expr_bp(p, r_bp);
+        lhs = p.close(m, Kind::BinExpr);
+    }
+}
+
+fn atom(p: &mut Parser) -> MarkClosed {
+    let m = p.open();
+    let kind = if p.eat(Kind::Int) {
+        Kind::Literal
+    } else if p.eat(Kind::Ident) {
+        Kind::NameRef
+    } else if p.eat(Kind::LParen) {
+        expr(p);
+        p.expect(Kind::RParen);
+        Kind::ParenExpr
+    } else {
+        // Report, but don't consume tokens an enclosing rule can use.
+        p.error_expected();
+        if !p.eof() && !p.at_recovery(EXPR_FOLLOW) { p.advance(); }
+        Kind::Error
+    };
+    p.close(m, kind)
+}
+
+fn call(p: &mut Parser, callee: MarkClosed) -> MarkClosed {
+    let m = p.open_before(callee);
+    let args = p.open();
+    p.expect(Kind::LParen);
+    while !p.at(Kind::RParen) && !p.eof() {
+        if at_expr_start(p) {
+            expr(p);
+            if !p.at(Kind::RParen) && !p.at_recovery(STMT_STOP) { p.expect(Kind::Comma); }
+        } else if p.at_recovery(&[Kind::Semi, Kind::RBrace, Kind::Fun]) {
+            break;
+        } else {
+            p.advance_with_error("expected an argument");
+        }
+    }
+    p.expect(Kind::RParen);
+    p.close(args, Kind::ArgList);
+    p.close(m, Kind::CallExpr)
+}
+```
+"""
+
+[[sections]]
+heading = "Mechanism 3: a lossless tree builder"
+body = """
+```rust title="Events plus all tokens become a tree; trivia attaches to the innermost open node"
+pub struct Tree { pub kind: Kind, pub children: Vec<Child> }
+pub enum Child { Token(Token), Tree(Tree) }
+
+pub fn build_tree(events: Vec<Event>, all: &[Token]) -> Tree {
+    let mut stack: Vec<Tree> = Vec::new();
+    let mut i = 0;
+    let push_trivia = |stack: &mut Vec<Tree>, i: &mut usize| {
+        while *i < all.len() && all[*i].kind.is_trivia() {
+            stack.last_mut().unwrap().children.push(Child::Token(all[*i]));
+            *i += 1;
+        }
+    };
+    for ev in events {
+        match ev {
+            Event::Open(kind) => stack.push(Tree { kind, children: Vec::new() }),
+            Event::Close => {
+                if stack.len() == 1 { push_trivia(&mut stack, &mut i); }   // trailing comments
+                let t = stack.pop().unwrap();
+                match stack.last_mut() {
+                    Some(parent) => parent.children.push(Child::Tree(t)),
+                    None => return t,
+                }
+            }
+            Event::Advance => {
+                push_trivia(&mut stack, &mut i);
+                stack.last_mut().unwrap().children.push(Child::Token(all[i]));
+                i += 1;
+            }
+        }
+    }
+    unreachable!("File is always closed last")
+}
+
+pub fn parse(src: &str) -> (Tree, Vec<(usize, String)>) {
+    let all = lex(src);                                        // every byte → some token, junk → Unknown
+    let significant: Vec<Token> = all.iter().copied().filter(|t| !t.kind.is_trivia()).collect();
+    let mut p = Parser::new(&significant);
+    file(&mut p);
+    let errors = std::mem::take(&mut p.errors);
+    (build_tree(p.events, &all), errors)
+}
+```
+"""
+
+[[sections]]
+heading = "What it produces for broken code"
+body = """
+```text title="Input fun f(a { let x = ; } fun g() { h(1 2) }: four errors, all local"
+error at `{`: expected one of `)`, an identifier
+error at `;`: expected one of `(`, a number, an identifier
+error at `2`: expected one of `(`, `)`, `*`, `+`, `,`
+error at `}`: expected one of `(`, `*`, `+`, `;`
+File
+  FnDecl  "fun" "f"
+    ParamList  "("  Param "a"                 ← `)` missing: recorded, not consumed
+    Block  "{"
+      LetStmt  "let" "x" "="
+        Error                                 ← empty expression, `;` left for the let
+        ";"
+      "}"
+  FnDecl  "fun" "g"
+    ParamList "(" ")"
+    Block "{"
+      ExprStmt
+        CallExpr  NameRef "h"
+          ArgList "("  Literal "1"  Literal "2"  ")"
+      "}"
+```
+
+<p>Every error is local. The second function parses perfectly even though the first is broken in two places. The “expected one of” lists come from recording every <code>at()</code> check since the last token was consumed. That's how rustc builds its messages too; its parser keeps an <code>expected_token_types</code> set.</p>
+
+<div class="cb-g-tip"><h3>Recovery strategies, from simple to heavy</h3> <ul> <li><b>Panic mode</b>: skip to a synchronizing token. This is jlox's <code>synchronize()</code>.</li> <li><b>Phrase-level</b>: insert or delete a single token. Here <code>expect</code> inserts and <code>advance_with_error</code> deletes.</li> <li><b>Recovery sets</b>: stop at FOLLOW tokens of enclosing rules (Wirth, 1976). That's this chapter's main tool.</li> <li><b>Error productions</b>: grammar rules for common mistakes, so the message can be specific. rustc parses <code>if a = b</code> and suggests <code>==</code>, and accepts <code>fn f() -&gt; i32;</code> in trait-like positions with a targeted error.</li> <li><b>Speculative parsing with snapshots</b>: rustc clones parser state, tries an alternative interpretation, and keeps it only if it helps the diagnostic.</li> <li><b>Minimum-cost repair</b>: search for the cheapest sequence of insertions and deletions (Burke–Fisher; CPCT+ in grmtools).</li> <li><b>GLR with error costs</b>: tree-sitter.</li> </ul></div>
+
+<div class="cb-g-tip"><h3>Delimiters are special</h3> <p>rustc's lexer groups tokens into <em>token trees</em> of matched delimiters before parsing. An unclosed <code>{</code> is detected once, globally. The error uses indentation to guess where the missing <code>}</code> belonged (“this file contains an unclosed delimiter”, with a hint at the likely spot). Macros consume token trees too, so the parser never sees unbalanced input. For an IDE, balance delimiters first, then parse inside each group. An edit that doesn't change balance can then be reparsed locally.</p></div>
+
+<div class="cb-g-tip"><h3>Downstream passes must cooperate</h3> <p>Name resolution skips <code>Error</code> nodes. The type checker assigns them an <code>{error}</code> type that unifies with anything and suppresses further messages. Code actions and completion work <em>on</em> error nodes: completing after <code>h(</code> is the main thing an IDE does. Roslyn attaches skipped tokens as trivia instead of error nodes; both designs work.</p></div>
+
+<div class="cb-g-tip"><h3>Test it</h3> <ul> <li>Property test: for any string, <code>parse</code> returns, and the tree's text equals the input.</li> <li>Mutation test: take every valid golden program, delete, duplicate or swap one random token, and check the parser terminates, stays lossless and reports at least one error.</li> <li>Snapshot the tree and error list for a curated corpus of broken inputs. Review every change to those snapshots by hand.</li> </ul></div>
+
+```rust title="The two properties every resilient parser must satisfy"
+proptest! {
+    #[test]
+    fn total_and_lossless(src in "\\\\PC{0,300}") {
+        let (tree, _) = parse(&src);                // must not panic (fuel catches loops)
+        prop_assert_eq!(tree.text(&src), src);      // concatenated token text
+    }
+
+    #[test]
+    fn single_token_mutations(prog in valid_program(), cut in any::<prop::sample::Index>()) {
+        let toks = lex(&prog);
+        let t = toks[cut.index(toks.len())];
+        let broken = format!("{}{}", &prog[..t.start as usize], &prog[(t.start + t.len) as usize..]);
+        let (tree, errors) = parse(&broken);
+        prop_assert_eq!(tree.text(&broken), broken.clone());
+        prop_assert!(!errors.is_empty() || parses_cleanly(&broken));
+    }
+}
+```
+"""
+
+[[sources]]
+title = "matklad 2023, “Resilient LL Parsing Tutorial”"
+url = "https://matklad.github.io/2023/05/21/resilient-ll-parsing-tutorial.html"

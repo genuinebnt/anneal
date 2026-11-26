@@ -1,0 +1,293 @@
+title = "Modern SQL"
+module = "Databases"
+module_order = 8
+chapter = "Foundations and SQL"
+chapter_order = 1
+order = 310
+kind = "guide"
+lede = "the semantics your binder and executors must reproduce exactly · Homework 1"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>SQL is declarative</strong> and still evolving: windows (2003), JSON (2016), property graphs (2023). SQL-92 is the baseline everyone claims; every vendor extends it.</li> <li><strong>Bags, not sets.</strong> SQL keeps duplicates unless you ask for <code>DISTINCT</code>, because deduplication costs work.</li> <li><strong>Aggregates</strong> collapse a bag into one value. A non-aggregated column must be in <code>GROUP BY</code>, or its value is undefined (<code>ANY_VALUE</code> makes that explicit). <code>HAVING</code> filters groups; <code>WHERE</code> filters rows.</li> <li><strong><code>GROUPING SETS</code>/<code>ROLLUP</code>/<code>CUBE</code></strong> compute several groupings in one scan instead of a <code>UNION</code> of scans.</li> <li><strong>Order is never implicit.</strong> Without <code>ORDER BY</code>, the row order, and therefore what <code>LIMIT</code> returns, can change between runs.</li> <li><strong>Window functions</strong> compute over related rows <em>without collapsing them</em>: partition, sort within the partition, frame, compute. <code>ROW_NUMBER</code> vs <code>RANK</code> differ on ties.</li> <li><strong>Nested queries</strong> can appear in <code>SELECT</code>, <code>FROM</code> and <code>WHERE</code>, and are notoriously hard to optimize. <code>IN</code> ≡ <code>= ANY</code>; <code>EXISTS</code>/<code>NOT EXISTS</code> are semi- and anti-joins. The inner query sees the outer scope, not the reverse.</li> <li><strong><code>LATERAL</code></strong> is a for-each: the subquery runs per outer row and can reference it.</li> <li><strong>CTEs</strong> name a query-scoped temporary result. <strong><code>WITH RECURSIVE</code></strong> makes SQL Turing-complete and handles graph traversals.</li> <li><strong>Portability is low.</strong> String case-sensitivity, quoting, date/time functions and regex syntax all vary by system.</li> </ul>
+
+<p>SQL is the contract the engine has to honour. Everything below is behaviour that users, ORMs and sqllogictest files depend on, and each item corresponds to a line of code somewhere in a binder, planner or executor. Learn the semantics as an implementer: for every feature, ask <em>which operator computes this, and what does it do with NULL and with empty input?</em></p>
+"""
+
+[[sections]]
+heading = "The standard"
+body = """
+<p>SQL-86 → SQL-92 (the core everyone implements) → SQL:1999 (recursive CTEs, triggers, arrays) → SQL:2003 (window functions, <code>MERGE</code>, XML) → SQL:2011 (temporal) → SQL:2016 (JSON, row pattern matching <code>MATCH_RECOGNIZE</code>) → <strong>SQL:2023</strong> (SQL/PGQ: <em>property graph queries</em>, <code>GRAPH_TABLE … MATCH (a)-[e]-&gt;(b)</code>, and JSON as a native type). SQL/PGQ matters for a multi-model system: it's the standard answer to "how do you query a graph from SQL", and DuckDB's <code>duckpgq</code> extension and Oracle 23ai both ship it. Pavlo's rule of thumb from the lecture is that nobody implements the whole standard, so pick a reference dialect. This guide uses <strong>PostgreSQL semantics</strong>, and DuckDB and SQLite serve as differential oracles.</p>
+"""
+
+[[sections]]
+heading = "Evaluation order"
+body = """
+<p>The order clauses are <em>written</em> in is not the order they're <em>evaluated</em> in. The binder has to resolve names in evaluation order, which explains why <code>WHERE</code> can't see a <code>SELECT</code> alias but <code>ORDER BY</code> can.</p>
+
+```text title="Logical order of a SELECT (what the planner builds, bottom to top)"
+1. FROM / JOIN … ON        -- build the input relation (joins, lateral, table functions)
+2. WHERE                   -- row filter; no aggregates allowed here
+3. GROUP BY                -- partition into groups (ROLLUP / CUBE / GROUPING SETS expand here)
+4. HAVING                  -- group filter; may reference aggregates
+5. WINDOW functions        -- computed over the post-HAVING rows
+6. SELECT list             -- projections; aliases become visible after this point
+7. DISTINCT                -- duplicate elimination over the projected rows
+8. UNION / INTERSECT / EXCEPT
+9. ORDER BY                -- may reference SELECT aliases *and* input columns
+10. LIMIT / OFFSET (FETCH FIRST)
+```
+"""
+
+[[sections]]
+heading = "NULL and 3VL"
+body = """
+<p><code>NULL</code> means "unknown", so any comparison involving <code>NULL</code> is <code>UNKNOWN</code>, not <code>FALSE</code>. <code>WHERE</code> and <code>HAVING</code> keep a row only when the predicate is <strong>TRUE</strong>. <code>CHECK</code> constraints reject a row only when the predicate is <strong>FALSE</strong>, so UNKNOWN passes: an asymmetry worth a test.</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>a</th> <th>b</th> <th>a AND b</th> <th>a OR b</th> <th>NOT a</th> </tr> </thead> <tbody> <tr> <td>T</td> <td>U</td> <td>U</td> <td>T</td> <td>F</td> </tr> <tr> <td>F</td> <td>U</td> <td>F</td> <td>U</td> <td>T</td> </tr> <tr> <td>U</td> <td>U</td> <td>U</td> <td>U</td> <td>U</td> </tr> </tbody> </table></div>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Construct</th> <th>Semantics</th> <th>Classic trap</th> </tr> </thead> <tbody> <tr> <td><code>x = NULL</code></td> <td>always UNKNOWN</td> <td><code>WHERE x = NULL</code> returns nothing; must write <code>IS NULL</code></td> </tr> <tr> <td><code>x IN (1, NULL)</code></td> <td>TRUE if x=1, else UNKNOWN</td> <td>—</td> </tr> <tr> <td><code>x NOT IN (1, NULL)</code></td> <td>FALSE or UNKNOWN, <strong>never TRUE</strong></td> <td><code>NOT IN (subquery)</code> returns zero rows if the subquery yields any NULL</td> </tr> <tr> <td><code>x IS DISTINCT FROM y</code></td> <td>NULL-safe equality (<code>NULL IS NOT DISTINCT FROM NULL</code> is TRUE)</td> <td>what <code>GROUP BY</code>, <code>DISTINCT</code>, <code>UNION</code> and <code>PARTITION BY</code> actually use</td> </tr> <tr> <td><code>COUNT(*)</code> vs <code>COUNT(x)</code></td> <td>rows vs non-NULL values of x</td> <td>—</td> </tr> <tr> <td><code>SUM</code>/<code>AVG</code>/<code>MIN</code>/<code>MAX</code> over zero non-NULL rows</td> <td><code>NULL</code> (not 0)</td> <td>BusTub's P3 test: empty table → <code>COUNT(*)=0</code>, others NULL</td> </tr> <tr> <td>aggregate with no <code>GROUP BY</code> over empty input</td> <td><strong>one</strong> row</td> <td>with <code>GROUP BY</code> over empty input: <strong>zero</strong> rows</td> </tr> <tr> <td><code>ORDER BY</code> with NULLs</td> <td>Postgres: NULLS LAST for ASC; SQLite/MySQL: NULLS FIRST</td> <td>a differential-test mismatch you'll hit on day one</td> </tr> <tr> <td><code>NULL</code> in <code>CASE WHEN x THEN</code></td> <td>UNKNOWN → falls through to <code>ELSE</code></td> <td>—</td> </tr> <tr> <td><code>UNIQUE</code> constraint</td> <td>multiple NULLs allowed (they're not equal)</td> <td><code>NULLS NOT DISTINCT</code> in PG 15+ changes it</td> </tr> </tbody> </table></div>
+
+<aside data-call="rust"><b>Encode the two equalities as two functions</b><p>Every engine needs <strong>SQL equality</strong>, which is partial and yields three values, and <strong>grouping equality</strong>, which is total and treats NULL as equal to NULL. Put them side by side on <code>Value</code> with distinct names so no one can call the wrong one: <code>fn sql_eq(&amp;self, o: &amp;Value) -&gt; Option&lt;bool&gt;</code> and <code>impl Eq for Value</code> (grouping). Hash tables for joins use <code>sql_eq</code> semantics, so NULL keys never match. Hash tables for aggregation use <code>Eq</code>, so NULL is its own group. The same code with the wrong equality gives the wrong answer and no error.</p></aside>
+
+```rust title="src/types/value.rs — the NULL-aware core every executor calls"
+use std::cmp::Ordering;
+
+#[derive(Clone, Debug)]
+pub enum Value {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Text(std::sync::Arc<str>),      // cheap clones through the executor pipeline
+}
+
+impl Value {
+    /// SQL comparison: None = UNKNOWN. Used by WHERE, ON, CASE, <, =, …
+    pub fn sql_cmp(&self, other: &Value) -> Option<Ordering> {
+        use Value::*;
+        match (self, other) {
+            (Null, _) | (_, Null) => None,
+            (Bool(a), Bool(b)) => Some(a.cmp(b)),
+            (Int(a), Int(b)) => Some(a.cmp(b)),
+            (Float(a), Float(b)) => a.partial_cmp(b),              // NaN: UNKNOWN (PG treats NaN = NaN, pick & document)
+            (Int(a), Float(b)) => (*a as f64).partial_cmp(b),      // numeric promotion; binder should insert casts
+            (Float(a), Int(b)) => a.partial_cmp(&(*b as f64)),
+            (Text(a), Text(b)) => Some(a.as_ref().cmp(b.as_ref())), // byte order = "C" collation
+            _ => None,                                              // binder should have rejected this
+        }
+    }
+    pub fn sql_eq(&self, other: &Value) -> Option<bool> { self.sql_cmp(other).map(|o| o == Ordering::Equal) }
+    pub fn is_null(&self) -> bool { matches!(self, Value::Null) }
+}
+
+/// Grouping / DISTINCT / sort order: total. NULL == NULL, NULL sorts last (PostgreSQL ASC).
+impl PartialEq for Value { fn eq(&self, o: &Self) -> bool { self.cmp(o) == Ordering::Equal } }
+impl Eq for Value {}
+impl PartialOrd for Value { fn partial_cmp(&self, o: &Self) -> Option<Ordering> { Some(self.cmp(o)) } }
+impl Ord for Value {
+    fn cmp(&self, o: &Self) -> Ordering {
+        use Value::*;
+        match (self, o) {
+            (Null, Null) => Ordering::Equal,
+            (Null, _) => Ordering::Greater,
+            (_, Null) => Ordering::Less,
+            (Bool(a), Bool(b)) => a.cmp(b),
+            (Int(a), Int(b)) => a.cmp(b),
+            (Text(a), Text(b)) => a.as_ref().cmp(b.as_ref()),
+            // Every numeric pair goes through one canonical f64 order: -0.0 == 0.0, all NaNs equal and last.
+            (Int(_) | Float(_), Int(_) | Float(_)) => canon(self.as_f64()).total_cmp(&canon(o.as_f64())),
+            _ => self.type_rank().cmp(&o.type_rank()),
+        }
+    }
+}
+impl std::hash::Hash for Value {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        use Value::*;
+        match self {
+            Null => 0u8.hash(h),
+            Bool(b) => b.hash(h),
+            Int(_) | Float(_) => canon(self.as_f64()).to_bits().hash(h),  // Int(1) and Float(1.0) hash equal
+            Text(s) => s.hash(h),
+        }
+    }
+}
+/// Canonical float for grouping: one zero, one NaN.
+fn canon(f: f64) -> f64 { if f == 0.0 { 0.0 } else if f.is_nan() { f64::NAN } else { f } }
+impl Value {
+    fn type_rank(&self) -> u8 { match self { Value::Bool(_) => 0, Value::Int(_) | Value::Float(_) => 1, Value::Text(_) => 2, Value::Null => 3 } }
+    fn as_f64(&self) -> f64 { match self { Value::Int(i) => *i as f64, Value::Float(f) => *f, _ => unreachable!() } }
+}
+```
+
+<aside data-call="warning"><b>The <code>Hash</code>/<code>Eq</code> contract</b><p>If <code>a == b</code>, then <code>hash(a) == hash(b)</code>. With mixed numeric types that means <code>Int(1)</code> and <code>Float(1.0)</code> must hash identically, which is why both <code>Ord</code> and <code>Hash</code> route every number through one canonical <code>f64</code> (one zero, one NaN). (That loses precision above 2⁵³. A production engine avoids this entirely by having the binder cast both sides to one type before any hash table sees them.) <code>canon</code> also collapses <code>-0.0</code> into <code>0.0</code> and every NaN into one NaN, so <code>Ord</code> stays a genuine total order. Without that, <code>total_cmp</code> would call <code>-0.0 &lt; 0.0</code> while <code>sql_eq</code> calls them equal. Breaking this contract gives you a hash join that <em>usually</em> works. Reference: <a href="https://doc.rust-lang.org/std/hash/trait.Hash.html#hash-and-eq" target="_blank" rel="noreferrer"><code>std::hash::Hash</code> docs, "Hash and Eq"</a>.</p></aside>
+"""
+
+[[sections]]
+heading = "Aggregates"
+body = """
+<ul> <li>Every non-aggregated column in <code>SELECT</code>, <code>HAVING</code> or <code>ORDER BY</code> must appear in <code>GROUP BY</code>, or be functionally dependent on a key (PostgreSQL allows the latter). The binder enforces this, and it is one of the more intricate binder checks.</li> <li><code>COUNT(DISTINCT x)</code> needs a per-group set. The planner usually rewrites it as a two-level aggregation.</li> <li><code>GROUPING SETS</code>, <code>ROLLUP</code> and <code>CUBE</code> are unions of group-bys. Implement them by expanding into one aggregation per grouping set, or with a single pass using a <code>grouping_id</code> bitmask column.</li> <li><code>FILTER (WHERE …)</code> on an aggregate: <code>COUNT(*) FILTER (WHERE status = 'late')</code>. It's cheap to implement, since it is just a predicate inside <code>step()</code>.</li> </ul>
+"""
+
+[[sections]]
+heading = "Windows"
+body = """
+<p>A window function computes over a <strong>partition</strong> of rows related to the current row without collapsing them, which is what distinguishes it from <code>GROUP BY</code>. P3 Task 4 asks for <code>PARTITION BY</code>, <code>ORDER BY</code> and <code>RANK()</code>, plus aggregates as window functions. Without an explicit frame, the default frame with an <code>ORDER BY</code> is <code>RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW</code>. So <code>SUM(x) OVER (ORDER BY t)</code> is a <strong>running sum</strong>, and <em>peers</em> (rows with equal <code>t</code>) share the same value.</p>
+
+```sql title="Window semantics that trip implementers"
+SELECT name, dept, salary,
+       ROW_NUMBER() OVER w AS rn,      -- 1,2,3,4 always distinct
+       RANK()       OVER w AS rk,      -- 1,2,2,4 gaps after ties
+       DENSE_RANK() OVER w AS drk,     -- 1,2,2,3
+       SUM(salary)  OVER (PARTITION BY dept ORDER BY salary) AS running,   -- peers share a value!
+       SUM(salary)  OVER (PARTITION BY dept) AS dept_total,               -- no ORDER BY: whole partition
+       LAG(salary)  OVER w AS prev
+FROM emp
+WINDOW w AS (PARTITION BY dept ORDER BY salary DESC);
+```
+
+```rust title="RANK and running SUM over one sorted partition (the P3 window-executor core)"
+/// `rows` is already sorted by (partition keys, order keys). `part` and `ord` extract keys.
+/// Returns (rank, running_sum) per row, honouring RANGE-frame peer semantics.
+pub fn rank_and_running_sum<R>(
+    rows: &[R],
+    part: impl Fn(&R) -> &[Value],
+    ord: impl Fn(&R) -> &[Value],
+    val: impl Fn(&R) -> Option<i64>,
+) -> Vec<(u64, Option<i64>)> {
+    let mut out = vec![(0, None); rows.len()];
+    let mut i = 0;
+    while i < rows.len() {
+        // [i, j) is one partition
+        let mut j = i;
+        while j < rows.len() && part(&rows[j]) == part(&rows[i]) { j += 1; }
+        let mut sum: Option<i64> = None;
+        let mut k = i;
+        while k < j {
+            // [k, l) is one peer group: equal ORDER BY keys
+            let mut l = k;
+            while l < j && ord(&rows[l]) == ord(&rows[k]) {
+                if let Some(v) = val(&rows[l]) { sum = Some(sum.unwrap_or(0) + v); }
+                l += 1;
+            }
+            let rank = (k - i + 1) as u64;                  // RANK = 1 + rows strictly before this peer group
+            for slot in &mut out[k..l] { *slot = (rank, sum); } // peers share rank AND running sum
+            k = l;
+        }
+        i = j;
+    }
+    out
+}
+```
+"""
+
+[[sections]]
+heading = "Subqueries, CTEs, lateral"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Form</th> <th>Planner treatment</th> </tr> </thead> <tbody> <tr> <td><code>WHERE x IN (SELECT …)</code></td> <td>semi-join (watch NULLs)</td> </tr> <tr> <td><code>WHERE NOT EXISTS (SELECT … WHERE inner.k = outer.k)</code></td> <td>anti-join</td> </tr> <tr> <td>scalar subquery in <code>SELECT</code></td> <td>left outer join + max-one-row check, or apply</td> </tr> <tr> <td>correlated subquery</td> <td><em>dependent join</em> → decorrelation (Neumann's unnesting, Part III)</td> </tr> <tr> <td><code>WITH cte AS (…)</code></td> <td>inline (PG ≥ 12 default) or materialize (<code>MATERIALIZED</code>)</td> </tr> <tr> <td><code>WITH RECURSIVE</code></td> <td>fixpoint iteration: the working table plus a union with the new rows</td> </tr> <tr> <td><code>LATERAL (SELECT … WHERE uses outer)</code></td> <td>explicit dependent join; top-N-per-group idiom</td> </tr> </tbody> </table></div>
+
+<p><code>WITH RECURSIVE</code> is where SQL meets graphs: reachability, bill-of-materials, shortest paths. Evaluate it <strong>semi-naively</strong>, where each iteration joins only the <em>new</em> rows (the delta) against the base relation, never the whole accumulated result. The same algorithm powers Datalog engines, and the graph store in Part V reuses it.</p>
+
+```rust title="Semi-naive fixpoint: WITH RECURSIVE reach(n) AS (SELECT start UNION SELECT e.dst FROM reach JOIN edges e ON e.src = reach.n)"
+use std::collections::{HashMap, HashSet};
+
+pub fn reachable(edges: &[(u32, u32)], start: u32) -> HashSet<u32> {
+    let mut adj: HashMap<u32, Vec<u32>> = HashMap::new();
+    for &(s, d) in edges { adj.entry(s).or_default().push(d); }
+
+    let mut all: HashSet<u32> = HashSet::from([start]);   // accumulated result (UNION = set semantics)
+    let mut delta: Vec<u32> = vec![start];                // rows produced by the previous iteration
+    while !delta.is_empty() {
+        let mut next = Vec::new();
+        for n in delta {                                   // join ONLY the delta with edges
+            for &d in adj.get(&n).into_iter().flatten() {
+                if all.insert(d) { next.push(d); }         // UNION dedup: new facts only
+            }
+        }
+        delta = next;                                      // fixpoint when no new rows
+    }
+    all
+}
+```
+
+<aside data-call="note"><b><code>UNION</code> vs <code>UNION ALL</code> in recursion</b><p>With <code>UNION ALL</code>, a cycle in the graph makes the recursion non-terminating. PostgreSQL will loop until it runs out of memory or hits a <code>LIMIT</code>. With <code>UNION</code>, the dedup check is exactly <code>all.insert(d)</code> above, and the fixpoint is guaranteed on finite data. SQL:2023 adds <code>CYCLE</code> and <code>SEARCH</code> clauses for this; PostgreSQL 14 implements them.</p></aside>
+"""
+
+[[sections]]
+heading = "Differential tests"
+body = """
+<p>Write the semantics down as <code>.slt</code> files, and use two other engines to decide what the expected output is. If DuckDB, SQLite and PostgreSQL agree, your engine is wrong. If they disagree, pick PostgreSQL and write down why.</p>
+
+```text title="tests/sql/null_semantics.slt"
+statement ok
+CREATE TABLE t(a INT, b INT);
+
+statement ok
+INSERT INTO t VALUES (1, NULL), (2, 20), (NULL, 30);
+
+query I rowsort
+SELECT a FROM t WHERE b <> 20;
+----
+NULL
+
+query I
+SELECT COUNT(*) FROM t WHERE a NOT IN (1, NULL);
+----
+0
+
+query II
+SELECT COUNT(*), SUM(a) FROM t WHERE a > 100;
+----
+0 NULL
+
+query I
+SELECT COUNT(*) FROM (SELECT a FROM t WHERE a > 100 GROUP BY a) s;
+----
+0
+
+query I rowsort
+SELECT DISTINCT b IS NULL FROM t;
+----
+false
+true
+```
+
+```rust title="generate expected output with a reference engine"
+# DuckDB CLI makes a quick oracle for any query you're unsure of
+duckdb :memory: -c "CREATE TABLE t(a INT, b INT); INSERT INTO t VALUES (1,NULL),(2,20),(NULL,30);
+                    SELECT a, RANK() OVER (ORDER BY b NULLS LAST) FROM t;"
+# sqllogictest-rs can also *record* results from a DB: run once against DuckDB, then diff against Cairn
+```
+"""
+
+[[sources]]
+title = "Value Expressions"
+url = "https://www.postgresql.org/docs/current/sql-expressions.html"
+
+[[sources]]
+title = "Window Functions"
+url = "https://www.postgresql.org/docs/current/functions-window.html"
+
+[[sources]]
+title = "WITH Queries"
+url = "https://www.postgresql.org/docs/current/queries-with.html"
+
+[[sources]]
+title = "modern-sql.com"
+url = "https://modern-sql.com/"
+
+[[sources]]
+title = "talk, SQL or Death series"
+url = "https://www.youtube.com/watch?v=TBAf5l1RmcA"
+
+[[sources]]
+title = "SQL Has Problems. We Can Fix Them: Pipe Syntax in SQL"
+url = "https://research.google/pubs/sql-has-problems-we-can-fix-them-pipe-syntax-in-sql/"
+
+[[sources]]
+title = "talk"
+url = "https://www.youtube.com/watch?v=ZIkjAQ7AwSM"

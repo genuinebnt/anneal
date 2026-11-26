@@ -1,0 +1,58 @@
+title = "Disk-head scheduling"
+module = "Performance and systems"
+module_order = 7
+chapter = "Files, processes and the OS"
+chapter_order = 3
+order = 298
+kind = "recipe"
+lede = "disk-head scheduling (FCFS/SSTF/SCAN/C-SCAN/LOOK/C-LOOK), RAID 0/1/5, and checksum scrubbing."
+level = "intermediate"
+code = ["examples/os_and_storage/disk_scheduling_raid.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>understanding storage stacks</li><li>OS courses</li><li>designing redundancy and repair in your own store</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+(a) a spinning-disk model where service cost = seek distance (cylinders) + 1 transfer tick, with six head-scheduling policies run on seeded random workloads; (b) **raid** levels 0, 1 and 5 over in-memory block devices with per-disk I/O counters, degraded reads, rebuild, and the **raid** 5 write hole; (c) a checksummed mirror whose scrub detects silent corruption and heals from the good copy.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Scheduling**: FCFS is fair but seeks wildly. SSTF (shortest seek first) minimises each hop but can **starve** far requests while a stream of nearby ones keeps arriving. **Scan** (elevator) sweeps to the disk edge and back; C-SCAN sweeps one way and jumps back (more uniform waits); LOOK/C-LOOK turn around at the last request instead of the edge.
+
+SSDs/NVMe have no moving head, so seek-aware ordering mostly disappears; what matters there is queue depth (parallelism across flash channels; NVMe has many deep queues), write amplification (flash is erased in large blocks and rewritten out of place, so small random writes cost more internal writes than the host sent) and **trim**.
+
+**Raid**: **raid** 0 stripes (speed, no redundancy). **Raid** 1 mirrors (survives N-1 losses, capacity of one disk). **Raid** 5 keeps one XOR parity block per stripe, rotated across disks so no disk becomes the parity bottleneck.
+
+Because p = d0&#94;d1&#94;...&#94;dk, any one lost block = XOR of all the others. A small write needs read-modify-write: new_parity = old_parity &#94; old_data &#94; new_data, i.e. 2 reads + 2 writes (the "write penalty" of 4 I/Os), whereas a full-stripe write computes parity from the new data alone with no reads.
+
+**The write hole**: data and parity are two separate writes; a crash between them leaves parity stale, and a later disk loss silently reconstructs **wrong** data for blocks that were never being written. Fixes: a journal / write-intent log, battery-backed cache, or copy-on-write with variable stripe width (ZFS RAID-Z).
+
+**Scrub**: checksums stored apart from the data they cover (ZFS keeps them in the parent block pointer, Btrfs checksums data and metadata) let you tell **which** mirror copy is right; a plain mirror can only notice that copies differ.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>OS schedulers (Linux has mq-deadline/BFQ/none; NVMe usually uses none)</li><li>storage arrays</li><li>home <strong>nas</strong></li><li>cloud block stores</li><li>periodic <code>zpool scrub</code>-style integrity checks</li><li>erasure coding in object stores (<strong>raid</strong> 5 generalised)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://pages.cs.wisc.edu/~remzi/OSTEP/file-disks.pdf> <https://pages.cs.wisc.edu/~remzi/OSTEP/file-raid.pdf>
+"""
+
+[[sources]]
+title = "pages.cs.wisc.edu/~remzi/OSTEP/file-disks.pdf"
+url = "https://pages.cs.wisc.edu/~remzi/OSTEP/file-disks.pdf"
+
+[[sources]]
+title = "pages.cs.wisc.edu/~remzi/OSTEP/file-raid.pdf"
+url = "https://pages.cs.wisc.edu/~remzi/OSTEP/file-raid.pdf"

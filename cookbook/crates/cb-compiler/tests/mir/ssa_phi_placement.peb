@@ -1,0 +1,13 @@
+// passes: ssa
+// Pruned SSA: `i` and `s` need a phi at the loop header, `dead` (never read after the join) does not.
+fn main() {
+    let n = len("abc");
+    let mut i = 0;
+    let mut s = 0;
+    let mut dead = 0;
+    while i < n {
+        if s > 1 { dead = 1; s = s + 2; } else { s = s + 1; }
+        i += 1;
+    }
+    println(to_str(s + i));
+}

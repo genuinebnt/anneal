@@ -1,0 +1,6 @@
+enum Shape { Circle(int), Square { side: int }, Empty }
+fn main() {
+    let a = Shape::Circle;
+    let b = Shape::Empty(1);
+    let c = Shape::Square(2);
+}

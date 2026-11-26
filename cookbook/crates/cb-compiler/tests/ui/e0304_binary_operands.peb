@@ -1,0 +1,4 @@
+fn main() {
+    let s = "n = " + 1;
+    let t = true - 1;
+}

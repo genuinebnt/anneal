@@ -1,0 +1,13 @@
+error[E0301]: `if` and `else` have incompatible types
+ --> e0301_multiline_if.peb:5:12
+  |
+3 |       let x = if c {
+  |                    - this is of type `int`
+4 |           1
+5 |       } else {
+  |  ____________^
+6 | |         "one"
+7 | |     };
+  | |_____^ expected `int`, found `str`
+
+error: aborting due to 1 previous error

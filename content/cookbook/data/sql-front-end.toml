@@ -1,0 +1,1075 @@
+title = "SQL front end"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 353
+kind = "guide"
+lede = "BusTub uses PostgreSQL's parser (libpg_query); a Rust engine writes its own · lexer · precedence-climbing parser · AST · binder · planner (aggregates, windows, ORDER BY, DISTINCT) · Track C"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>BusTub avoids this layer by linking PostgreSQL's real parser. A Rust engine has three options: wrap <a href="https://github.com/apache/datafusion-sqlparser-rs" target="_blank" rel="noreferrer"><code>sqlparser-rs</code></a> (DataFusion and many others do), generate a parser, or hand-write one. A hand-written recursive-descent parser for a SQL subset is about 330 lines, gives the best error messages, and is the best way to understand what the binder consumes.</p>
+"""
+
+[[sections]]
+heading = "The pipeline"
+body = """
+<div class="cb-g-ladder"><div><b>Lexer</b><span>text → tokens (keywords, identifiers, literals, symbols)</span></div><i>→</i><div><b>Parser</b><span>tokens → AST (syntax only: no catalog)</span></div><i>→</i><div><b>Binder</b><span>AST + catalog → resolved names, types, desugaring</span></div><i>→</i><div><b>Planner</b><span>bound AST → logical plan tree</span></div></div>
+"""
+
+[[sections]]
+heading = "Lexer"
+body = """
+<p>One pass over the bytes. Details that matter: identifiers fold to lowercase and keywords to uppercase (SQL is case-insensitive); <code>''</code> inside a string is an escaped quote; <code>--</code> starts a comment; two-character operators (<code>&lt;=</code>, <code>&gt;=</code>, <code>&lt;&gt;</code>, <code>!=</code>, <code>||</code>) are matched before one-character ones; an integer literal that overflows <code>i64</code> is a lex <strong>error</strong>, not a wrap.</p>
+"""
+
+[[sections]]
+heading = "Parser: precedence climbing"
+body = """
+<p>Expression grammar, lowest to highest binding:</p>
+
+```text
+expr       → or
+or         → and ( "OR" and )*
+and        → not ( "AND" not )*
+not        → "NOT" not | comparison
+comparison → additive ( ("=" | "<>" | "<" | "<=" | ">" | ">=") additive
+                       | "IS" ["NOT"] "NULL"
+                       | ["NOT"] "BETWEEN" additive "AND" additive
+                       | ["NOT"] "IN" "(" expr ("," expr)* ")" )?
+additive   → term ( ("+" | "-" | "||") term )*
+term       → unary ( ("*" | "/" | "%") unary )*
+unary      → "-" unary | primary
+primary    → literal | column | func "(" args ")" [ "OVER" "(" window ")" ] | "(" expr ")"
+```
+
+<p>The implementation uses a single <code>binary(min_prec)</code> loop instead of one function per level: read a left operand, then while the next operator's precedence ≥ <code>min_prec</code>, consume it and parse the right side with <code>prec + 1</code> (left-associative). <code>BETWEEN … AND …</code> is the classic trap: its <code>AND</code> is part of the construct, so the bounds are parsed at additive precedence, which stops them from swallowing the boolean <code>AND</code>.</p>
+
+:::deeper Lexer, AST and recursive-descent parser for the supported SQL subset
+```rust title="src/sql/parser.rs"
+//! SQL front end: lexer + recursive-descent parser with precedence climbing for expressions.
+use crate::storage::table::tuple_codec::ColType;
+use crate::types::value::Value;
+use super::expr::{BinOp, ScalarFn};
+use super::{err, Result};
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Tok { Ident(String), Kw(String), Int(i64), Float(f64), Str(String), Sym(&'static str), Eof }
+
+const KEYWORDS: &[&str] = &["SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "INSERT", "INTO", "VALUES", "CREATE", "TABLE",
+    "INDEX", "ON", "UPDATE", "SET", "DELETE", "JOIN", "INNER", "LEFT", "OUTER", "CROSS", "GROUP", "BY", "HAVING", "ORDER", "ASC",
+    "DESC", "LIMIT", "OFFSET", "AS", "NULL", "IS", "TRUE", "FALSE", "DISTINCT", "BETWEEN", "IN", "EXPLAIN", "INTEGER", "INT",
+    "BIGINT", "VARCHAR", "TEXT", "BOOLEAN", "FLOAT", "DOUBLE", "DECIMAL", "OVER", "PARTITION"];
+
+pub fn lex(src: &str) -> Result<Vec<Tok>> {
+    let b = src.as_bytes();
+    let (mut i, mut out) = (0, Vec::new());
+    while i < b.len() {
+        let c = b[i] as char;
+        if c.is_whitespace() { i += 1; continue; }
+        if c == '-' && b.get(i + 1) == Some(&b'-') { while i < b.len() && b[i] != b'\\n' { i += 1; } continue; }
+        if c.is_ascii_alphabetic() || c == '_' {
+            let s = i;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') { i += 1; }
+            let w = &src[s..i];
+            let up = w.to_ascii_uppercase();
+            out.push(if KEYWORDS.contains(&up.as_str()) { Tok::Kw(up) } else { Tok::Ident(w.to_ascii_lowercase()) });
+            continue;
+        }
+        if c.is_ascii_digit() {
+            let s = i;
+            while i < b.len() && b[i].is_ascii_digit() { i += 1; }
+            if i < b.len() && b[i] == b'.' && b.get(i + 1).is_some_and(|d| d.is_ascii_digit()) {
+                i += 1;
+                while i < b.len() && b[i].is_ascii_digit() { i += 1; }
+                out.push(Tok::Float(src[s..i].parse().unwrap()));
+            } else {
+                out.push(Tok::Int(src[s..i].parse().map_err(|_| super::Error(format!("integer literal too large: {}", &src[s..i])))?));
+            }
+            continue;
+        }
+        if c == '\\'' {
+            let mut s = String::new();
+            i += 1;
+            loop {
+                match b.get(i) {
+                    None => return err("unterminated string literal".into()),
+                    Some(b'\\'') if b.get(i + 1) == Some(&b'\\'') => { s.push('\\''); i += 2; }   // '' escapes a quote
+                    Some(b'\\'') => { i += 1; break; }
+                    Some(_) => { let ch = src[i..].chars().next().unwrap(); s.push(ch); i += ch.len_utf8(); }
+                }
+            }
+            out.push(Tok::Str(s));
+            continue;
+        }
+        let two = src.get(i..i + 2).unwrap_or("");
+        let sym: &'static str = match two { "<=" => "<=", ">=" => ">=", "<>" => "<>", "!=" => "<>", "||" => "||", _ => "" };
+        if !sym.is_empty() { out.push(Tok::Sym(sym)); i += 2; continue; }
+        let sym: &'static str = match c { '(' => "(", ')' => ")", ',' => ",", ';' => ";", '*' => "*", '+' => "+", '-' => "-",
+            '/' => "/", '%' => "%", '=' => "=", '<' => "<", '>' => ">", '.' => ".", _ => return err(format!("unexpected character '{c}'")) };
+        out.push(Tok::Sym(sym));
+        i += 1;
+    }
+    out.push(Tok::Eof);
+    Ok(out)
+}
+
+// ---------------- AST -------------------------------------------------------------------------
+#[derive(Clone, Debug, PartialEq)]
+pub enum Ast {
+    Ident(Option<String>, String),
+    Lit(Value),
+    Bin(BinOp, Box<Ast>, Box<Ast>),
+    Not(Box<Ast>),
+    Neg(Box<Ast>),
+    IsNull(Box<Ast>, bool),
+    Between(Box<Ast>, Box<Ast>, Box<Ast>, bool),
+    InList(Box<Ast>, Vec<Ast>, bool),
+    Call { name: String, args: Vec<Ast>, star: bool, distinct: bool, over: Option<WindowSpec> },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WindowSpec { pub partition_by: Vec<Ast>, pub order_by: Vec<(Ast, bool)> }
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum JoinKind { Inner, Left }
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum From { Table { name: String, alias: Option<String> }, Join { left: Box<From>, right: Box<From>, kind: JoinKind, on: Option<Ast> } }
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Item { Star, Expr(Ast, Option<String>) }
+
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Select {
+    pub distinct: bool, pub items: Vec<Item>, pub from: Option<From>, pub filter: Option<Ast>,
+    pub group_by: Vec<Ast>, pub having: Option<Ast>, pub order_by: Vec<(Ast, bool)>, pub limit: Option<u64>, pub offset: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Stmt {
+    CreateTable { name: String, cols: Vec<(String, ColType)> },
+    CreateIndex { name: String, table: String, col: String },
+    Insert { table: String, cols: Option<Vec<String>>, rows: Option<Vec<Vec<Ast>>>, select: Option<Box<Select>> },
+    Select(Box<Select>),
+    Update { table: String, sets: Vec<(String, Ast)>, filter: Option<Ast> },
+    Delete { table: String, filter: Option<Ast> },
+    Explain(Box<Stmt>),
+}
+
+pub fn parse(src: &str) -> Result<Vec<Stmt>> {
+    let mut p = Parser { t: lex(src)?, i: 0, depth: 0 };
+    let mut out = Vec::new();
+    while p.peek() != &Tok::Eof {
+        if p.eat_sym(";") { continue; }
+        out.push(p.stmt()?);
+        if p.peek() != &Tok::Eof { p.expect_sym(";")?; }
+    }
+    Ok(out)
+}
+
+/// Depth of the expression tree the parser will build: nested parentheses, chains of unary operators, and the length of a left-associative
+/// chain such as `a + b + c + …`. Every later stage (binding, simplifying, evaluating, dropping) walks the tree recursively, so the depth
+/// is bounded here: a statement of a million nested parentheses must be an error, not a stack overflow that ends the process.
+pub const MAX_EXPR_DEPTH: usize = 1000;
+
+struct Parser { t: Vec<Tok>, i: usize, depth: usize }
+
+impl Parser {
+    fn peek(&self) -> &Tok { &self.t[self.i] }
+    fn bump(&mut self) -> Tok { let t = self.t[self.i].clone(); if t != Tok::Eof { self.i += 1; } t }
+    fn is_kw(&self, k: &str) -> bool { matches!(self.peek(), Tok::Kw(w) if w == k) }
+    fn eat_kw(&mut self, k: &str) -> bool { if self.is_kw(k) { self.i += 1; true } else { false } }
+    fn eat_sym(&mut self, s: &str) -> bool { if matches!(self.peek(), Tok::Sym(x) if *x == s) { self.i += 1; true } else { false } }
+    fn expect_kw(&mut self, k: &str) -> Result<()> { if self.eat_kw(k) { Ok(()) } else { err(format!("expected {k}, found {:?}", self.peek())) } }
+    fn expect_sym(&mut self, s: &str) -> Result<()> { if self.eat_sym(s) { Ok(()) } else { err(format!("expected '{s}', found {:?}", self.peek())) } }
+    fn ident(&mut self) -> Result<String> { match self.bump() { Tok::Ident(s) => Ok(s), t => err(format!("expected identifier, found {t:?}")) } }
+    fn uint(&mut self) -> Result<u64> { match self.bump() { Tok::Int(n) if n >= 0 => Ok(n as u64), t => err(format!("expected a number, found {t:?}")) } }
+
+    fn stmt(&mut self) -> Result<Stmt> {
+        if self.eat_kw("EXPLAIN") { return Ok(Stmt::Explain(Box::new(self.stmt()?))); }
+        if self.eat_kw("SELECT") { return Ok(Stmt::Select(Box::new(self.select_body()?))); }
+        if self.eat_kw("CREATE") {
+            if self.eat_kw("TABLE") {
+                let name = self.ident()?;
+                self.expect_sym("(")?;
+                let mut cols = vec![];
+                loop {
+                    let c = self.ident()?;
+                    let ty = match self.bump() {
+                        Tok::Kw(k) if k == "INTEGER" || k == "INT" => ColType::Int,
+                        Tok::Kw(k) if k == "BIGINT" => ColType::BigInt,
+                        Tok::Kw(k) if k == "VARCHAR" || k == "TEXT" => { if self.eat_sym("(") { self.uint()?; self.expect_sym(")")?; } ColType::Varchar }
+                        Tok::Kw(k) if k == "BOOLEAN" => ColType::Bool,
+                        Tok::Kw(k) if k == "FLOAT" || k == "DOUBLE" || k == "DECIMAL" => ColType::Float,
+                        t => return err(format!("unknown type {t:?}")),
+                    };
+                    cols.push((c, ty));
+                    if !self.eat_sym(",") { break; }
+                }
+                self.expect_sym(")")?;
+                return Ok(Stmt::CreateTable { name, cols });
+            }
+            self.expect_kw("INDEX")?;
+            let name = self.ident()?;
+            self.expect_kw("ON")?;
+            let table = self.ident()?;
+            self.expect_sym("(")?;
+            let col = self.ident()?;
+            self.expect_sym(")")?;
+            return Ok(Stmt::CreateIndex { name, table, col });
+        }
+        if self.eat_kw("INSERT") {
+            self.expect_kw("INTO")?;
+            let table = self.ident()?;
+            let cols = if self.eat_sym("(") { let mut c = vec![self.ident()?]; while self.eat_sym(",") { c.push(self.ident()?); } self.expect_sym(")")?; Some(c) } else { None };
+            if self.eat_kw("SELECT") { return Ok(Stmt::Insert { table, cols, rows: None, select: Some(Box::new(self.select_body()?)) }); }
+            self.expect_kw("VALUES")?;
+            let mut rows = vec![];
+            loop {
+                self.expect_sym("(")?;
+                let mut r = vec![self.expr()?];
+                while self.eat_sym(",") { r.push(self.expr()?); }
+                self.expect_sym(")")?;
+                rows.push(r);
+                if !self.eat_sym(",") { break; }
+            }
+            return Ok(Stmt::Insert { table, cols, rows: Some(rows), select: None });
+        }
+        if self.eat_kw("UPDATE") {
+            let table = self.ident()?;
+            self.expect_kw("SET")?;
+            let mut sets = vec![];
+            loop { let c = self.ident()?; self.expect_sym("=")?; sets.push((c, self.expr()?)); if !self.eat_sym(",") { break; } }
+            let filter = if self.eat_kw("WHERE") { Some(self.expr()?) } else { None };
+            return Ok(Stmt::Update { table, sets, filter });
+        }
+        if self.eat_kw("DELETE") {
+            self.expect_kw("FROM")?;
+            let table = self.ident()?;
+            let filter = if self.eat_kw("WHERE") { Some(self.expr()?) } else { None };
+            return Ok(Stmt::Delete { table, filter });
+        }
+        err(format!("unexpected {:?} at start of statement", self.peek()))
+    }
+
+    fn select_body(&mut self) -> Result<Select> {
+        let mut s = Select { distinct: self.eat_kw("DISTINCT"), ..Default::default() };
+        loop {
+            if self.eat_sym("*") { s.items.push(Item::Star); }
+            else {
+                let e = self.expr()?;
+                let alias = if self.eat_kw("AS") { Some(self.ident()?) } else if let Tok::Ident(_) = self.peek() { Some(self.ident()?) } else { None };
+                s.items.push(Item::Expr(e, alias));
+            }
+            if !self.eat_sym(",") { break; }
+        }
+        if self.eat_kw("FROM") {
+            let mut f = self.from_item()?;
+            loop {
+                if self.eat_sym(",") { f = From::Join { left: Box::new(f), right: Box::new(self.from_item()?), kind: JoinKind::Inner, on: None }; continue; }
+                let kind = if self.eat_kw("LEFT") { self.eat_kw("OUTER"); self.expect_kw("JOIN")?; JoinKind::Left }
+                    else if self.eat_kw("INNER") { self.expect_kw("JOIN")?; JoinKind::Inner }
+                    else if self.eat_kw("CROSS") { self.expect_kw("JOIN")?; f = From::Join { left: Box::new(f), right: Box::new(self.from_item()?), kind: JoinKind::Inner, on: None }; continue; }
+                    else if self.eat_kw("JOIN") { JoinKind::Inner }
+                    else { break };
+                let right = self.from_item()?;
+                self.expect_kw("ON")?;
+                f = From::Join { left: Box::new(f), right: Box::new(right), kind, on: Some(self.expr()?) };
+            }
+            s.from = Some(f);
+        }
+        if self.eat_kw("WHERE") { s.filter = Some(self.expr()?); }
+        if self.eat_kw("GROUP") { self.expect_kw("BY")?; s.group_by = self.expr_list()?; }
+        if self.eat_kw("HAVING") { s.having = Some(self.expr()?); }
+        if self.eat_kw("ORDER") { self.expect_kw("BY")?; s.order_by = self.order_list()?; }
+        if self.eat_kw("LIMIT") { s.limit = Some(self.uint()?); }
+        if self.eat_kw("OFFSET") { s.offset = Some(self.uint()?); }
+        Ok(s)
+    }
+
+    fn from_item(&mut self) -> Result<From> {
+        let name = self.ident()?;
+        let alias = if self.eat_kw("AS") { Some(self.ident()?) } else if let Tok::Ident(_) = self.peek() { Some(self.ident()?) } else { None };
+        Ok(From::Table { name, alias })
+    }
+    fn expr_list(&mut self) -> Result<Vec<Ast>> { let mut v = vec![self.expr()?]; while self.eat_sym(",") { v.push(self.expr()?); } Ok(v) }
+    fn order_list(&mut self) -> Result<Vec<(Ast, bool)>> {
+        let mut v = vec![];
+        loop { let e = self.expr()?; let asc = if self.eat_kw("DESC") { false } else { self.eat_kw("ASC"); true }; v.push((e, asc)); if !self.eat_sym(",") { break; } }
+        Ok(v)
+    }
+
+    // ---- expressions: precedence climbing --------------------------------------------------------
+    // OR < AND < NOT < comparison / IS / BETWEEN / IN < + - || < * / % < unary - < primary
+    pub fn expr(&mut self) -> Result<Ast> { self.binary(0) }
+
+    fn enter(&mut self) -> Result<()> {
+        self.depth += 1;
+        if self.depth > MAX_EXPR_DEPTH { return err(format!("expression too deeply nested: more than {MAX_EXPR_DEPTH} levels")); }
+        Ok(())
+    }
+
+    fn binary(&mut self, min: u8) -> Result<Ast> {
+        let base = self.depth;
+        let mut lhs = self.unary(min)?;
+        loop {
+            let (op, prec) = match self.peek() {
+                Tok::Kw(k) if k == "OR" => (BinOp::Or, 1),
+                Tok::Kw(k) if k == "AND" => (BinOp::And, 2),
+                Tok::Sym("=") => (BinOp::Eq, 4), Tok::Sym("<>") => (BinOp::Ne, 4),
+                Tok::Sym("<") => (BinOp::Lt, 4), Tok::Sym("<=") => (BinOp::Le, 4),
+                Tok::Sym(">") => (BinOp::Gt, 4), Tok::Sym(">=") => (BinOp::Ge, 4),
+                Tok::Sym("+") => (BinOp::Add, 5), Tok::Sym("-") => (BinOp::Sub, 5), Tok::Sym("||") => (BinOp::Concat, 5),
+                Tok::Sym("*") => (BinOp::Mul, 6), Tok::Sym("/") => (BinOp::Div, 6), Tok::Sym("%") => (BinOp::Mod, 6),
+                Tok::Kw(k) if (k == "IS" || k == "BETWEEN" || k == "IN" || k == "NOT") && min <= 4 => { self.enter()?; lhs = self.postfix(lhs)?; continue; }
+                _ => break,
+            };
+            if prec < min { break; }
+            self.bump();
+            self.enter()?;                                            // each operator of a chain is one level deeper than the last
+            let rhs = self.binary(prec + 1)?;                         // left-associative
+            lhs = Ast::Bin(op, Box::new(lhs), Box::new(rhs));
+        }
+        self.depth = base;
+        Ok(lhs)
+    }
+
+    fn postfix(&mut self, lhs: Ast) -> Result<Ast> {
+        if self.eat_kw("IS") { let not = self.eat_kw("NOT"); self.expect_kw("NULL")?; return Ok(Ast::IsNull(Box::new(lhs), not)); }
+        let not = self.eat_kw("NOT");
+        if self.eat_kw("BETWEEN") {
+            let lo = self.binary(5)?;
+            self.expect_kw("AND")?;
+            let hi = self.binary(5)?;
+            return Ok(Ast::Between(Box::new(lhs), Box::new(lo), Box::new(hi), not));
+        }
+        self.expect_kw("IN")?;
+        self.expect_sym("(")?;
+        let list = self.expr_list()?;
+        self.expect_sym(")")?;
+        Ok(Ast::InList(Box::new(lhs), list, not))
+    }
+
+    fn unary(&mut self, min: u8) -> Result<Ast> {
+        if min <= 3 && self.eat_kw("NOT") { self.enter()?; let e = self.binary(3)?; self.depth -= 1; return Ok(Ast::Not(Box::new(e))); }
+        if self.eat_sym("-") { self.enter()?; let e = self.unary(7)?; self.depth -= 1; return Ok(Ast::Neg(Box::new(e))); }
+        self.primary()
+    }
+
+    fn primary(&mut self) -> Result<Ast> {
+        Ok(match self.bump() {
+            Tok::Int(i) => Ast::Lit(Value::Int(i)),
+            Tok::Float(f) => Ast::Lit(Value::Float(f)),
+            Tok::Str(s) => Ast::Lit(Value::Text(s.into())),
+            Tok::Kw(k) if k == "NULL" => Ast::Lit(Value::Null),
+            Tok::Kw(k) if k == "TRUE" => Ast::Lit(Value::Bool(true)),
+            Tok::Kw(k) if k == "FALSE" => Ast::Lit(Value::Bool(false)),
+            Tok::Sym("(") => { self.enter()?; let e = self.expr()?; self.expect_sym(")")?; self.depth -= 1; e }
+            Tok::Ident(name) => {
+                if self.eat_sym(".") { return Ok(Ast::Ident(Some(name), self.ident()?)); }
+                if !self.eat_sym("(") { return Ok(Ast::Ident(None, name)); }
+                let distinct = self.eat_kw("DISTINCT");
+                let (args, star) = if self.eat_sym("*") { (vec![], true) } else if matches!(self.peek(), Tok::Sym(")")) { (vec![], false) } else { (self.expr_list()?, false) };
+                self.expect_sym(")")?;
+                let over = if self.eat_kw("OVER") {
+                    self.expect_sym("(")?;
+                    let mut w = WindowSpec { partition_by: vec![], order_by: vec![] };
+                    if self.eat_kw("PARTITION") { self.expect_kw("BY")?; w.partition_by = self.expr_list()?; }
+                    if self.eat_kw("ORDER") { self.expect_kw("BY")?; w.order_by = self.order_list()?; }
+                    self.expect_sym(")")?;
+                    Some(w)
+                } else { None };
+                Ast::Call { name, args, star, distinct, over }
+            }
+            t => return err(format!("unexpected {t:?} in expression")),
+        })
+    }
+}
+
+pub fn scalar_fn(name: &str) -> Option<ScalarFn> {
+    Some(match name { "upper" => ScalarFn::Upper, "lower" => ScalarFn::Lower, "length" => ScalarFn::Length, "abs" => ScalarFn::Abs, "coalesce" => ScalarFn::Coalesce, _ => return None })
+}
+```
+:::
+
+<aside data-call="rust"><b>Error messages as part of the design</b><p>Every <code>expect_*</code> returns <code>err(format!("expected {k}, found {:?}", self.peek()))</code>. That one line gives <code>expected ON, found Ident("x")</code>, which beats a generic "syntax error". Production parsers add <strong>spans</strong> (byte offsets) to tokens so a renderer can underline the problem, and <strong>recovery</strong> to report several errors per statement. The same techniques as in any compiler front end apply: recovery sets and a lossless token stream.</p></aside>
+"""
+
+[[sections]]
+heading = "Binder and planner"
+body = """
+<p>The binder turns names into positions and checks semantics. The planner builds the operator tree in <strong>logical evaluation order</strong> (<a href="/cookbook/p/modern-sql">L02</a>). The decisions embedded in the reference:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Step</th> <th>What it does</th> <th>Why</th> </tr> </thead> <tbody> <tr> <td><code>FROM</code></td> <td>builds scans (schema re-qualified by alias) and left-deep join nodes</td> <td>self-joins; <code>ON</code> conjuncts stay on the join</td> </tr> <tr> <td><code>WHERE</code></td> <td><code>Filter</code> over the <code>FROM</code> tree; aggregates are rejected</td> <td>aggregates aren't defined per row</td> </tr> <tr> <td><code>*</code> expansion</td> <td>replaced by every input column</td> <td>needs the schema</td> </tr> <tr> <td><code>BETWEEN</code>, <code>IN</code>, <code>NOT BETWEEN</code></td> <td><strong>desugared</strong> to comparisons and <code>OR</code>/<code>AND</code></td> <td>executors and the optimizer see fewer node kinds</td> </tr> <tr> <td>aggregates</td> <td>collected from <code>SELECT</code>/<code>HAVING</code>/<code>ORDER BY</code>, deduplicated, evaluated by one <code>Aggregation</code> node</td> <td><code>SUM(x)</code> used twice is computed once</td> </tr> <tr> <td>post-aggregation binding</td> <td>a column is legal only if it's a <code>GROUP BY</code> expression; aggregate calls become references to the aggregation output</td> <td>the "must appear in GROUP BY" rule falls out of the binding order</td> </tr> <tr> <td>window functions</td> <td>collected into a <code>Window</code> node <em>after</em> aggregation, appending one column per call</td> <td>windows are computed over post-<code>HAVING</code> rows</td> </tr> <tr> <td><code>ORDER BY</code></td> <td>may use select-list aliases; expressions not in the select list become <strong>hidden trailing columns</strong> dropped by a final projection</td> <td><code>SELECT a FROM t ORDER BY b</code></td> </tr> <tr> <td><code>DISTINCT</code></td> <td><code>Aggregation</code> grouping on every output column, no aggregates</td> <td>one mechanism for dedup and grouping</td> </tr> <tr> <td><code>LIMIT</code>/<code>OFFSET</code></td> <td><code>Limit</code> over <code>Sort</code></td> <td>the optimizer fuses <code>Limit(Sort)</code> into <code>TopN</code></td> </tr> </tbody> </table></div>
+
+:::deeper Plan nodes, EXPLAIN printer, binder and planner (aggregates, windows, ORDER BY, DISTINCT)
+```rust title="src/planner/plan.rs"
+//! Plan nodes and the binder/planner: AST -> bound logical plan.
+use std::fmt::Write;
+use crate::storage::table::tuple_codec::ColType;
+use crate::types::value::Value;
+use super::catalog::{Catalog, Column, Schema};
+use super::expr::{BinOp, Expr, ScalarFn};
+use super::sql::{scalar_fn, Ast, From, Item, JoinKind, Select};
+use super::{err, Result};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AggFn { CountStar, Count, Sum, Min, Max, Avg }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Agg { pub f: AggFn, pub arg: Option<Expr>, pub distinct: bool }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WinFn { RowNumber, Rank, DenseRank, Agg(AggFn) }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WinCall { pub f: WinFn, pub arg: Option<Expr>, pub partition_by: Vec<Expr>, pub order_by: Vec<(Expr, bool)> }
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum IndexLookup { Points(Vec<i64>), Ordered }
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Plan {
+    Values { rows: Vec<Vec<Expr>>, schema: Schema },
+    SeqScan { table: String, schema: Schema, filter: Option<Expr> },
+    IndexScan { table: String, index: String, schema: Schema, lookup: IndexLookup, filter: Option<Expr> },
+    Filter { pred: Expr, child: Box<Plan> },
+    Projection { exprs: Vec<Expr>, schema: Schema, child: Box<Plan> },
+    NestedLoopJoin { left: Box<Plan>, right: Box<Plan>, pred: Option<Expr>, kind: JoinKind },
+    HashJoin { left: Box<Plan>, right: Box<Plan>, left_keys: Vec<Expr>, right_keys: Vec<Expr>, residual: Option<Expr>, kind: JoinKind },
+    NestedIndexJoin { left: Box<Plan>, table: String, index: String, key: Expr, inner_schema: Schema, residual: Option<Expr>, kind: JoinKind },
+    Aggregation { group_by: Vec<Expr>, aggs: Vec<Agg>, schema: Schema, child: Box<Plan> },
+    Window { calls: Vec<WinCall>, schema: Schema, child: Box<Plan> },
+    Sort { order_by: Vec<(Expr, bool)>, child: Box<Plan> },
+    TopN { order_by: Vec<(Expr, bool)>, n: u64, child: Box<Plan> },
+    Limit { limit: Option<u64>, offset: u64, child: Box<Plan> },
+    Insert { table: String, child: Box<Plan> },
+    Update { table: String, sets: Vec<(usize, Expr)>, child: Box<Plan> },
+    Delete { table: String, child: Box<Plan> },
+}
+
+impl Plan {
+    pub fn schema(&self) -> Schema {
+        match self {
+            Plan::Values { schema, .. } | Plan::SeqScan { schema, .. } | Plan::IndexScan { schema, .. } | Plan::Projection { schema, .. }
+            | Plan::Aggregation { schema, .. } | Plan::Window { schema, .. } => schema.clone(),
+            Plan::Filter { child, .. } | Plan::Sort { child, .. } | Plan::TopN { child, .. } | Plan::Limit { child, .. } => child.schema(),
+            Plan::NestedLoopJoin { left, right, .. } | Plan::HashJoin { left, right, .. } => left.schema().join(&right.schema()),
+            Plan::NestedIndexJoin { left, inner_schema, .. } => left.schema().join(inner_schema),
+            Plan::Insert { .. } | Plan::Update { .. } | Plan::Delete { .. } => Schema::new(vec![Column { name: "count".into(), ty: ColType::BigInt, table: None }]),
+        }
+    }
+
+    pub fn explain(&self) -> String { let mut s = String::new(); self.fmt_into(&mut s, 0); s }
+    fn fmt_into(&self, s: &mut String, d: usize) {
+        let pad = "  ".repeat(d);
+        let line = match self {
+            Plan::Values { rows, .. } => format!("Values rows={}", rows.len()),
+            Plan::SeqScan { table, filter, .. } => format!("SeqScan {table}{}", filter.as_ref().map(|f| format!(" filter={f:?}")).unwrap_or_default()),
+            Plan::IndexScan { table, index, lookup, filter, .. } => format!("IndexScan {table} via {index} {lookup:?}{}", filter.as_ref().map(|f| format!(" filter={f:?}")).unwrap_or_default()),
+            Plan::Filter { pred, .. } => format!("Filter {pred:?}"),
+            Plan::Projection { exprs, .. } => format!("Projection {exprs:?}"),
+            Plan::NestedLoopJoin { pred, kind, .. } => format!("NestedLoopJoin {kind:?} {pred:?}"),
+            Plan::HashJoin { left_keys, right_keys, kind, residual, .. } => format!("HashJoin {kind:?} {left_keys:?} = {right_keys:?}{}", residual.as_ref().map(|r| format!(" residual={r:?}")).unwrap_or_default()),
+            Plan::NestedIndexJoin { table, index, key, kind, .. } => format!("NestedIndexJoin {kind:?} {table} via {index} key={key:?}"),
+            Plan::Aggregation { group_by, aggs, .. } => format!("Aggregation group_by={group_by:?} aggs={aggs:?}"),
+            Plan::Window { calls, .. } => format!("Window {}", calls.len()),
+            Plan::Sort { order_by, .. } => format!("Sort {order_by:?}"),
+            Plan::TopN { order_by, n, .. } => format!("TopN n={n} {order_by:?}"),
+            Plan::Limit { limit, offset, .. } => format!("Limit {limit:?} offset {offset}"),
+            Plan::Insert { table, .. } => format!("Insert {table}"),
+            Plan::Update { table, .. } => format!("Update {table}"),
+            Plan::Delete { table, .. } => format!("Delete {table}"),
+        };
+        writeln!(s, "{pad}{line}").unwrap();
+        for c in self.children() { c.fmt_into(s, d + 1); }
+    }
+    pub fn children(&self) -> Vec<&Plan> {
+        match self {
+            Plan::Values { .. } | Plan::SeqScan { .. } | Plan::IndexScan { .. } => vec![],
+            Plan::NestedLoopJoin { left, right, .. } | Plan::HashJoin { left, right, .. } => vec![left, right],
+            Plan::Filter { child, .. } | Plan::Projection { child, .. } | Plan::Aggregation { child, .. } | Plan::Window { child, .. }
+            | Plan::Sort { child, .. } | Plan::TopN { child, .. } | Plan::Limit { child, .. } | Plan::Insert { child, .. }
+            | Plan::Update { child, .. } | Plan::Delete { child, .. } | Plan::NestedIndexJoin { left: child, .. } => vec![child],
+        }
+    }
+}
+
+// ---------------- binder / planner -----------------------------------------------------------
+pub struct Binder<'c, 'a> { pub cat: &'c Catalog<'a> }
+
+fn types(s: &Schema) -> Vec<ColType> { s.cols.iter().map(|c| c.ty).collect() }
+fn anon(name: &str, ty: ColType) -> Column { Column { name: name.to_string(), ty, table: None } }
+
+impl<'c, 'a> Binder<'c, 'a> {
+    /// Bind an expression with no aggregates or windows against `schema`.
+    pub fn bind(&self, e: &Ast, schema: &Schema) -> Result<Expr> {
+        Ok(match e {
+            Ast::Ident(q, n) => Expr::Col(schema.resolve(q.as_deref(), n)?),
+            Ast::Lit(v) => Expr::Lit(v.clone()),
+            Ast::Bin(op, a, b) => Expr::Bin(*op, Box::new(self.bind(a, schema)?), Box::new(self.bind(b, schema)?)),
+            Ast::Not(a) => Expr::Not(Box::new(self.bind(a, schema)?)),
+            Ast::Neg(a) => match &**a { Ast::Lit(Value::Int(i)) => Expr::Lit(Value::Int(-i)), a => Expr::Neg(Box::new(self.bind(a, schema)?)) },
+            Ast::IsNull(a, not) => Expr::IsNull(Box::new(self.bind(a, schema)?), *not),
+            // Desugar: x BETWEEN a AND b  =>  x >= a AND x <= b ;  x IN (a, b)  =>  x = a OR x = b
+            Ast::Between(x, lo, hi, not) => {
+                let x = self.bind(x, schema)?;
+                let e = Expr::Bin(BinOp::And, Box::new(Expr::Bin(BinOp::Ge, Box::new(x.clone()), Box::new(self.bind(lo, schema)?))),
+                                  Box::new(Expr::Bin(BinOp::Le, Box::new(x), Box::new(self.bind(hi, schema)?))));
+                if *not { Expr::Not(Box::new(e)) } else { e }
+            }
+            Ast::InList(x, list, not) => {
+                let x = self.bind(x, schema)?;
+                let alternatives = list.iter().map(|v| Ok(Expr::Bin(BinOp::Eq, Box::new(x.clone()), Box::new(self.bind(v, schema)?)))).collect::<Result<Vec<Expr>>>()?;
+                let e = Expr::or_balanced(alternatives);       // a balanced tree: an IN list of 100 000 values must not be 100 000 levels deep
+                if *not { Expr::Not(Box::new(e)) } else { e }
+            }
+            Ast::Call { name, args, over: None, .. } if scalar_fn(name).is_some() => {
+                Expr::Func(scalar_fn(name).unwrap(), args.iter().map(|a| self.bind(a, schema)).collect::<Result<_>>()?)
+            }
+            Ast::Call { name, .. } => return err(format!("{name}() is not allowed here")),
+        })
+    }
+
+    pub fn plan_select(&self, s: &Select) -> Result<Plan> {
+        // FROM
+        let mut plan = match &s.from {
+            None => Plan::Values { rows: vec![vec![]], schema: Schema::default() },
+            Some(f) => self.plan_from(f)?,
+        };
+        if let Some(w) = &s.filter {
+            if contains_agg(w) { return err("aggregate functions are not allowed in WHERE".into()); }
+            let pred = self.bind(w, &plan.schema())?;
+            plan = Plan::Filter { pred, child: Box::new(plan) };
+        }
+        let input = plan.schema();
+        // Expand * and collect (ast, name) for the select list.
+        let mut items: Vec<(Ast, String)> = vec![];
+        for it in &s.items {
+            match it {
+                Item::Star => for c in &input.cols { items.push((Ast::Ident(c.table.clone(), c.name.clone()), c.name.clone())) },
+                Item::Expr(e, alias) => items.push((e.clone(), alias.clone().unwrap_or_else(|| default_name(e)))),
+            }
+        }
+        // ORDER BY may reference select aliases: substitute the aliased expression.
+        let order_asts: Vec<(Ast, bool)> = s.order_by.iter().map(|(e, asc)| {
+            if let Ast::Ident(None, n) = e { if let Some((ast, _)) = items.iter().find(|(_, name)| name == n) { return (ast.clone(), *asc); } }
+            (e.clone(), *asc)
+        }).collect();
+
+        // Aggregation
+        let has_agg = !s.group_by.is_empty() || items.iter().any(|(e, _)| contains_agg(e)) || s.having.as_ref().is_some_and(contains_agg)
+            || order_asts.iter().any(|(e, _)| contains_agg(e));
+        let mut scope = AggScope::default();
+        if has_agg {
+            let group_by: Vec<Expr> = s.group_by.iter().map(|g| self.bind(g, &input)).collect::<Result<_>>()?;
+            scope.group_asts = s.group_by.clone();
+            for (e, _) in &items { self.collect_aggs(e, &input, &mut scope)?; }
+            if let Some(h) = &s.having { self.collect_aggs(h, &input, &mut scope)?; }
+            for (e, _) in &order_asts { self.collect_aggs(e, &input, &mut scope)?; }
+            let it = types(&input);
+            let mut cols: Vec<Column> = group_by.iter().zip(&s.group_by).map(|(g, a)| Column { name: default_name(a), ty: g.ty(&it), table: match a { Ast::Ident(q, _) => q.clone().or_else(|| input.cols[match g { Expr::Col(i) => *i, _ => 0 }].table.clone()), _ => None } }).collect();
+            for a in &scope.aggs { cols.push(anon("agg", agg_type(a, &it))); }
+            plan = Plan::Aggregation { group_by, aggs: scope.aggs.iter().map(|(a, _)| a.clone()).collect(), schema: Schema::new(cols), child: Box::new(plan) };
+            if let Some(h) = &s.having {
+                let pred = self.bind_post_agg(h, &input, &scope)?;
+                plan = Plan::Filter { pred, child: Box::new(plan) };
+            }
+        }
+        let post = plan.schema();
+        // Window functions
+        let mut wins: Vec<(Ast, WinCall)> = vec![];
+        for (e, _) in &items { self.collect_windows(e, &post, has_agg, &input, &scope, &mut wins)?; }
+        if !wins.is_empty() {
+            let mut cols = post.cols.clone();
+            let pt = types(&post);
+            for (_, w) in &wins { cols.push(anon("win", match w.f { WinFn::Agg(f) => agg_type(&(Agg { f, arg: w.arg.clone(), distinct: false }, Ast::Lit(Value::Null)), &pt), _ => ColType::BigInt })); }
+            plan = Plan::Window { calls: wins.iter().map(|w| w.1.clone()).collect(), schema: Schema::new(cols), child: Box::new(plan) };
+        }
+        let pre = plan.schema();
+        let bind_final = |e: &Ast| -> Result<Expr> {
+            if let Some(i) = wins.iter().position(|(w, _)| w == e) { return Ok(Expr::Col(post.len() + i)); }
+            if has_agg { self.bind_post_agg_win(e, &input, &scope, &wins, post.len()) } else { self.bind_with_windows(e, &pre, &wins, post.len()) }
+        };
+        let mut exprs: Vec<Expr> = items.iter().map(|(e, _)| bind_final(e)).collect::<Result<_>>()?;
+        let pt = types(&pre);
+        let mut cols: Vec<Column> = items.iter().zip(&exprs).map(|((e, name), x)| Column {
+            name: name.clone(), ty: x.ty(&pt), table: match e { Ast::Ident(q, _) => q.clone(), _ => None } }).collect();
+        // ORDER BY expressions not in the select list become hidden trailing columns.
+        let visible = exprs.len();
+        let mut order: Vec<(Expr, bool)> = vec![];
+        for (e, asc) in &order_asts {
+            let b = bind_final(e)?;
+            let idx = match exprs.iter().position(|x| *x == b) {
+                Some(i) => i,
+                None => {
+                    if s.distinct { return err("for SELECT DISTINCT, ORDER BY expressions must appear in select list".into()); }
+                    exprs.push(b.clone()); cols.push(anon("__order", b.ty(&pt))); exprs.len() - 1
+                }
+            };
+            order.push((Expr::Col(idx), *asc));
+        }
+        plan = Plan::Projection { exprs, schema: Schema::new(cols.clone()), child: Box::new(plan) };
+        if s.distinct {
+            let n = cols.len();
+            plan = Plan::Aggregation { group_by: (0..n).map(Expr::Col).collect(), aggs: vec![], schema: Schema::new(cols.clone()), child: Box::new(plan) };
+        }
+        if !order.is_empty() { plan = Plan::Sort { order_by: order, child: Box::new(plan) }; }
+        if s.limit.is_some() || s.offset.is_some() { plan = Plan::Limit { limit: s.limit, offset: s.offset.unwrap_or(0), child: Box::new(plan) }; }
+        if cols.len() > visible {
+            plan = Plan::Projection { exprs: (0..visible).map(Expr::Col).collect(), schema: Schema::new(cols[..visible].to_vec()), child: Box::new(plan) };
+        }
+        Ok(plan)
+    }
+
+    fn plan_from(&self, f: &From) -> Result<Plan> {
+        Ok(match f {
+            From::Table { name, alias } => {
+                let t = self.cat.table(name)?;
+                Plan::SeqScan { table: t.name.clone(), schema: t.schema.with_qualifier(alias.as_deref().unwrap_or(&t.name)), filter: None }
+            }
+            From::Join { left, right, kind, on } => {
+                let (l, r) = (self.plan_from(left)?, self.plan_from(right)?);
+                let both = l.schema().join(&r.schema());
+                let pred = on.as_ref().map(|e| self.bind(e, &both)).transpose()?;
+                Plan::NestedLoopJoin { left: Box::new(l), right: Box::new(r), pred, kind: *kind }
+            }
+        })
+    }
+
+    fn collect_aggs(&self, e: &Ast, input: &Schema, sc: &mut AggScope) -> Result<()> {
+        match e {
+            Ast::Call { over: Some(_), args, .. } => { for a in args { self.collect_aggs(a, input, sc)?; } }
+            Ast::Call { name, args, star, distinct, over: None } if agg_fn(name, *star).is_some() => {
+                if sc.aggs.iter().any(|(_, a)| a == e) { return Ok(()); }
+                if args.iter().any(contains_agg) { return err("aggregate calls cannot be nested".into()); }
+                let f = agg_fn(name, *star).unwrap();
+                let arg = if *star { None } else { Some(self.bind(args.first().ok_or_else(|| super::Error(format!("{name}() needs an argument")))?, input)?) };
+                sc.aggs.push((Agg { f, arg, distinct: *distinct }, e.clone()));
+            }
+            Ast::Bin(_, a, b) => { self.collect_aggs(a, input, sc)?; self.collect_aggs(b, input, sc)?; }
+            Ast::Not(a) | Ast::Neg(a) | Ast::IsNull(a, _) => self.collect_aggs(a, input, sc)?,
+            Ast::Between(a, b, c, _) => { for x in [a, b, c] { self.collect_aggs(x, input, sc)?; } }
+            Ast::InList(a, l, _) => { self.collect_aggs(a, input, sc)?; for x in l { self.collect_aggs(x, input, sc)?; } }
+            Ast::Call { args, .. } => { for a in args { self.collect_aggs(a, input, sc)?; } }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Bind over the aggregation output: group-by expressions and aggregate calls become column refs.
+    fn bind_post_agg(&self, e: &Ast, input: &Schema, sc: &AggScope) -> Result<Expr> {
+        if let Some(i) = sc.group_asts.iter().position(|g| same_ast(g, e, input)) { return Ok(Expr::Col(i)); }
+        if let Some(i) = sc.aggs.iter().position(|(_, a)| a == e) { return Ok(Expr::Col(sc.group_asts.len() + i)); }
+        Ok(match e {
+            Ast::Ident(q, n) => return err(format!("column {}{n} must appear in the GROUP BY clause or be used in an aggregate function", q.as_ref().map(|q| format!("{q}.")).unwrap_or_default())),
+            Ast::Lit(v) => Expr::Lit(v.clone()),
+            Ast::Bin(op, a, b) => Expr::Bin(*op, Box::new(self.bind_post_agg(a, input, sc)?), Box::new(self.bind_post_agg(b, input, sc)?)),
+            Ast::Not(a) => Expr::Not(Box::new(self.bind_post_agg(a, input, sc)?)),
+            Ast::Neg(a) => Expr::Neg(Box::new(self.bind_post_agg(a, input, sc)?)),
+            Ast::IsNull(a, n) => Expr::IsNull(Box::new(self.bind_post_agg(a, input, sc)?), *n),
+            Ast::Call { name, args, over: None, .. } if scalar_fn(name).is_some() => Expr::Func(scalar_fn(name).unwrap(), args.iter().map(|a| self.bind_post_agg(a, input, sc)).collect::<Result<_>>()?),
+            other => { let s = Schema::default(); return self.bind(other, &s).or_else(|_| err(format!("unsupported expression after GROUP BY: {other:?}"))); }
+        })
+    }
+    fn bind_post_agg_win(&self, e: &Ast, input: &Schema, sc: &AggScope, wins: &[(Ast, WinCall)], base: usize) -> Result<Expr> {
+        if let Some(i) = wins.iter().position(|(w, _)| w == e) { return Ok(Expr::Col(base + i)); }
+        self.bind_post_agg(e, input, sc)
+    }
+    fn bind_with_windows(&self, e: &Ast, pre: &Schema, wins: &[(Ast, WinCall)], base: usize) -> Result<Expr> {
+        if let Some(i) = wins.iter().position(|(w, _)| w == e) { return Ok(Expr::Col(base + i)); }
+        Ok(match e {
+            Ast::Bin(op, a, b) => Expr::Bin(*op, Box::new(self.bind_with_windows(a, pre, wins, base)?), Box::new(self.bind_with_windows(b, pre, wins, base)?)),
+            Ast::Call { name, .. } if agg_fn(name, false).is_some() || agg_fn(name, true).is_some() => return err(format!("aggregate {name}() without GROUP BY context")),
+            e => self.bind(e, pre)?,
+        })
+    }
+
+    fn collect_windows(&self, e: &Ast, post: &Schema, has_agg: bool, input: &Schema, sc: &AggScope, out: &mut Vec<(Ast, WinCall)>) -> Result<()> {
+        match e {
+            Ast::Call { name, args, star, over: Some(w), .. } => {
+                if out.iter().any(|(a, _)| a == e) { return Ok(()); }
+                let b = |x: &Ast| if has_agg { self.bind_post_agg(x, input, sc) } else { self.bind(x, post) };
+                let f = match name.as_str() { "row_number" => WinFn::RowNumber, "rank" => WinFn::Rank, "dense_rank" => WinFn::DenseRank,
+                    n => WinFn::Agg(agg_fn(n, *star).ok_or_else(|| super::Error(format!("unknown window function {n}")))?) };
+                let arg = if *star || args.is_empty() { None } else { Some(b(&args[0])?) };
+                let call = WinCall { f, arg, partition_by: w.partition_by.iter().map(&b).collect::<Result<_>>()?, order_by: w.order_by.iter().map(|(x, a)| Ok((b(x)?, *a))).collect::<Result<_>>()? };
+                out.push((e.clone(), call));
+            }
+            Ast::Bin(_, a, b) => { self.collect_windows(a, post, has_agg, input, sc, out)?; self.collect_windows(b, post, has_agg, input, sc, out)?; }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct AggScope { group_asts: Vec<Ast>, aggs: Vec<(Agg, Ast)> }
+
+fn same_ast(a: &Ast, b: &Ast, input: &Schema) -> bool {
+    // `t.a` and `a` name the same group key if they resolve to the same column.
+    match (a, b) {
+        (Ast::Ident(q1, n1), Ast::Ident(q2, n2)) => match (input.resolve(q1.as_deref(), n1), input.resolve(q2.as_deref(), n2)) { (Ok(x), Ok(y)) => x == y, _ => false },
+        _ => a == b,
+    }
+}
+
+pub fn agg_fn(name: &str, star: bool) -> Option<AggFn> {
+    Some(match (name, star) { ("count", true) => AggFn::CountStar, ("count", false) => AggFn::Count, ("sum", _) => AggFn::Sum,
+        ("min", _) => AggFn::Min, ("max", _) => AggFn::Max, ("avg", _) => AggFn::Avg, _ => return None })
+}
+fn contains_agg(e: &Ast) -> bool {
+    match e {
+        Ast::Call { over: Some(_), .. } => false,
+        Ast::Call { name, star, args, .. } => agg_fn(name, *star).is_some() || args.iter().any(contains_agg),
+        Ast::Bin(_, a, b) => contains_agg(a) || contains_agg(b),
+        Ast::Not(a) | Ast::Neg(a) | Ast::IsNull(a, _) => contains_agg(a),
+        Ast::Between(a, b, c, _) => contains_agg(a) || contains_agg(b) || contains_agg(c),
+        Ast::InList(a, l, _) => contains_agg(a) || l.iter().any(contains_agg),
+        _ => false,
+    }
+}
+fn agg_type((a, _): &(Agg, Ast), input: &[ColType]) -> ColType {
+    match a.f { AggFn::CountStar | AggFn::Count => ColType::BigInt, AggFn::Avg => ColType::Float,
+        _ => a.arg.as_ref().map_or(ColType::BigInt, |e| match e.ty(input) { ColType::Int => ColType::BigInt, t => t }) }
+}
+fn default_name(e: &Ast) -> String {
+    match e { Ast::Ident(_, n) => n.clone(), Ast::Call { name, .. } => name.clone(), _ => "?column?".into() }
+}
+
+pub fn lower_fn(f: ScalarFn) -> ScalarFn { f }
+```
+:::
+
+<aside data-call="warning"><b>Where binders go wrong</b><ul> <li><strong>Aggregates inside <code>WHERE</code>/<code>GROUP BY</code></strong> must be rejected before they reach an executor that has no aggregate state.</li> <li><strong>Column in <code>HAVING</code> that isn't grouped</strong> (<code>HAVING dept &gt; 1</code> when grouped by <code>name</code>) must error, not silently read an arbitrary row.</li> <li><strong><code>ORDER BY</code> an alias that shadows a column name</strong>: SQL prefers the select-list alias for a bare identifier, but an expression using the name refers to the column.</li> <li><strong>Output column names</strong> for <code>SELECT *</code> over a join keep their qualifiers, or the next <code>ORDER BY e.name</code> can't resolve.</li> <li><strong>Hidden sort columns</strong> must not leak into the result: a final <code>Projection</code> trims them.</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "Beyond the basics: the SQL that BusTub's tests use"
+body = """
+<p>The parser and planner above handle the core subset. BusTub's public <code>.slt</code> files (the P3 tests) go further, and a handful of features account for almost every remaining failure when you run them. Each is small. All the code below is excerpted from <code>verify/src/engine/</code> and is exercised by <code>tests/engine_dialect.rs</code>, <code>engine_like.rs</code>, <code>engine_vector.rs</code> and, for the security side, <code>tests/security.rs</code>.</p>
+
+<h4>Derived tables and parenthesised join groups</h4>
+
+<p><code>SELECT … FROM (SELECT …) [alias]</code> and <code>FROM (a JOIN b ON …) JOIN c ON …</code> both appear throughout the join and integration tests. The AST gets one new <code>FROM</code> variant (<code>From::Subquery { select, alias }</code>). A parenthesised join group needs no variant at all: parse the inner <code>FROM</code> expression recursively and return it.</p>
+
+```rust title="parser: FROM items (src/sql/parser.rs, excerpt)"
+    fn from_item(&mut self) -> Result<From> {
+        if self.eat_sym("(") {
+            // Each open parenthesis here is one more level of recursion in the parser, the planner and the executor.
+            self.subs += 1;
+            if self.subs > MAX_SUBQUERY_DEPTH {
+                return err(format!("FROM clauses nested more than {MAX_SUBQUERY_DEPTH} levels deep"));
+            }
+            let f = if self.eat_kw("SELECT") {
+                let select = Box::new(self.select_body()?);
+                self.expect_sym(")")?;
+                let alias = if self.eat_kw("AS") {
+                    Some(self.ident()?)
+                } else if let Tok::Ident(_) = self.peek() {
+                    Some(self.ident()?)
+                } else {
+                    None
+                };
+                From::Subquery { select, alias }
+            } else {
+                let inner = self.from_expr()?; // a parenthesised join group
+                self.expect_sym(")")?;
+                inner
+            };
+            self.subs -= 1;
+            return Ok(f);
+        }
+        let name = self.ident()?;
+        let alias = if self.eat_kw("AS") {
+            Some(self.ident()?)
+        } else if let Tok::Ident(_) = self.peek() {
+            Some(self.ident()?)
+        } else {
+            None
+        };
+        Ok(From::Table { name, alias })
+    }
+```
+
+<p>Three rules that the tests depend on:</p>
+
+<ol> <li><strong>Qualifiers.</strong> With an alias, every column of the derived table is qualified by the alias. <em>Without</em> one, BusTub's tests still write <code>result.dst</code> for a column that came out of <code>(SELECT * FROM result WHERE …)</code>, so a plain column keeps the qualifier of the column it reads (the projection copies <code>table</code> from its input column).</li> <li><strong><code>*</code> is positional.</strong> <code>SELECT * FROM (SELECT 1, 1)</code> has two columns with the same name, and <code>*</code> expanded into names would be ambiguous. Expand <code>*</code> into <code>Ast::Col(i)</code> (the i-th input column) instead of into identifiers.</li> <li><strong>Nesting is bounded.</strong> The planner and executor recurse once per level through large frames. A statement of 100,000 nested parentheses must be an error, not a stack overflow, so the parser counts open parenthesised <code>FROM</code> items (<code>MAX_SUBQUERY_DEPTH</code>, 64). <code>tests/engine_dialect.rs::nesting_is_bounded</code> found this: with only the expression-depth limit of 1,000, 999 nested join groups overflowed the stack.</li> </ol>
+
+```rust title="planner: the derived-table arm of plan_from (src/planner/plan.rs, excerpt)"
+            From::Subquery { select, alias } => {
+                let p = self.plan_select(select)?;
+                match alias {
+                    // The derived table's columns belong to the alias, not to the tables inside it.
+                    Some(a) => {
+                        let schema = p.schema().with_qualifier(a);
+                        Plan::Projection {
+                            exprs: (0..schema.len()).map(Expr::Col).collect(),
+                            schema,
+                            child: Box::new(p),
+                        }
+                    }
+                    None => p,
+                }
+            }
+```
+
+<aside data-call="warning"><b>A derived table must not bypass security</b><p>If your engine has privileges or row-level security (see <a href="/cookbook/p/passwords-and-scram">Security</a>), <code>FROM (SELECT * FROM secret)</code> is a way to name <code>secret</code> without the checker seeing it unless the checker recurses into the subquery. <code>verify/src/security.rs</code> secures the inner <code>SELECT</code> as a statement of its own (privileges, policies, <code>current_user</code>), and refuses a join group on the <em>right</em> of a join because there is no obvious place for its policies. <code>tests/security.rs::derived_tables_do_not_bypass_privileges_or_policies</code> compares every derived-table form against the plain query for four roles; with the recursion removed it fails on the first role.</p></aside>
+
+<h4><code>ORDER BY … NULLS FIRST | LAST</code>, and where NULL sorts</h4>
+
+<p>SQL leaves the position of NULLs under <code>ORDER BY</code> to the implementation. Postgres treats NULL as the <em>greatest</em> value (last under <code>ASC</code>, first under <code>DESC</code>); SQLite, MySQL and <strong>BusTub</strong> treat it as the <em>smallest</em>. BusTub's <code>p3.16-sort-limit.slt</code> expects the second, and also uses explicit <code>NULLS FIRST</code> and <code>NULLS LAST</code>. The engine here keeps the Postgres default and has a catalog switch, <code>nulls_smallest</code>, for the other; an explicit clause overrides either.</p>
+
+<p>The implementation needs no change to the sort, top-N or external-sort executors. <code>Value</code>'s total order already puts NULL last, so where the requested placement differs from where the plain sort would put NULLs, the binder adds a leading sort key <code>expr IS NULL</code> (ascending to push NULLs last, descending to push them first):</p>
+
+```rust title="parser: ORDER BY with NULLS (excerpt)"
+    /// `ORDER BY e [ASC|DESC] [NULLS FIRST|LAST], ...`
+    fn select_order_list(&mut self) -> Result<(Vec<(Ast, bool)>, Vec<Option<bool>>)> {
+        let (mut keys, mut nulls) = (vec![], vec![]);
+        loop {
+            let e = self.expr()?;
+            let asc = if self.eat_kw("DESC") {
+                false
+            } else {
+                self.eat_kw("ASC");
+                true
+            };
+            let n = if self.eat_word("nulls") {
+                if self.eat_word("first") {
+                    Some(true)
+                } else if self.eat_word("last") {
+                    Some(false)
+                } else {
+                    return err("expected FIRST or LAST after NULLS".into());
+                }
+            } else {
+                None
+            };
+            keys.push((e, asc));
+            nulls.push(n);
+            if !self.eat_sym(",") {
+                break;
+            }
+        }
+        Ok((keys, nulls))
+    }
+```
+
+```rust title="planner: expanding the placement into sort keys (excerpt)"
+        let mut order_asts: Vec<(Ast, bool)> = Vec::new();
+        for (i, (e, asc)) in s.order_by.iter().enumerate() {
+            let e = match e {
+                Ast::Ident(None, n) => items.iter().find(|(_, name)| name == n).map_or(e, |(ast, _)| ast),
+                _ => e,
+            };
+            // NULL placement. `Value`'s order puts NULL greatest (Postgres: last for ASC, first for DESC);
+            // `nulls_smallest` flips the default (SQLite / MySQL / BusTub). An explicit NULLS FIRST/LAST
+            // that differs from where the plain sort would put them gets a leading `e IS NULL` key.
+            let natural_first = !*asc;
+            let default_first = if self.cat.nulls_smallest { *asc } else { natural_first };
+            let want_first = s.order_nulls.get(i).copied().flatten().unwrap_or(default_first);
+            if want_first != natural_first {
+                order_asts.push((Ast::IsNull(Box::new(e.clone()), false), !want_first));
+            }
+            order_asts.push((e.clone(), *asc));
+        }
+```
+
+<p>Do this after substituting select-list aliases, or <code>ORDER BY alias NULLS FIRST</code> will fail to bind.</p>
+
+<h4>Subqueries in expressions</h4>
+
+<p><code>(SELECT …)</code> as a value, <code>EXISTS (SELECT …)</code> and <code>x IN (SELECT …)</code> are what the SQLite corpus asked for most: 2,923 of its 2,978 failures were <code>unexpected SELECT in expression</code> before this existed (<a href="/cookbook/p/testing-a-database">Outside suites</a>). With them, <code>select1.test</code>, <code>select2.test</code> and <code>select3.test</code> (5,413 records, many of them compared by MD5) pass in full.</p>
+
+<p><strong>Design: parameters, not outer-row access.</strong> A correlated subquery needs the enclosing row. The obvious design, giving the inner plan a pointer to the outer row, ties the inner plan to the outer one's column numbering, so the optimizer cannot move or renumber the outer expression (predicate pushdown does exactly that) without rewriting plans inside expressions. Instead the binder turns every reference from inside a subquery to an enclosing column into <code>Param(i)</code> and records, next to the subquery, the expression over the <em>enclosing</em> row that supplies it. At run time the parameter values are pushed on a stack, the plan is run, the stack is popped. The inner plan is closed; only the list of parameter expressions refers to the outer query, and that list is an ordinary expression to the optimizer (<code>cols()</code> reports its columns, <code>map_cols</code> renumbers it). A column of the <em>grandparent</em> is threaded down: the middle query receives it as its own parameter and passes it on.</p>
+
+```rust title="binder: resolving a name from an enclosing query (src/planner/plan.rs, excerpt)"
+    /// A name that is not in the subquery's own schema: look for it in the enclosing queries. Returns an expression valid
+    /// inside the subquery's plan (`Param(i)`), after recording in the frame what supplies it. A name found two levels up
+    /// is first made a parameter of the middle query, then passed down from there.
+    fn resolve_outer(&self, depth: usize, q: Option<&str>, n: &str) -> Option<Expr> {
+        let mut frames = self.frames.borrow_mut();
+        // climb to the nearest enclosing query that has the column
+        let mut at = depth;
+        let (mut expr, found_at) = loop {
+            match frames[at].enclosing.resolve(q, n) {
+                Ok(i) => break (Expr::Col(i), at),
+                Err(_) if at == 0 => return None,
+                Err(_) => at -= 1,
+            }
+        };
+        // then thread it back down: every frame between passes it on as a parameter of its own
+        for f in found_at..=depth {
+            let params = &mut frames[f].params;
+            let idx = params.iter().position(|p| *p == expr).unwrap_or_else(|| {
+                params.push(expr.clone());
+                params.len() - 1
+            });
+            expr = Expr::Param(idx);
+        }
+        Some(expr)
+    }
+
+    /// Bind a subquery: a fresh frame whose enclosing schema is the row the expression will be evaluated against.
+    fn bind_subquery(&self, sel: &Select, enclosing: &Schema, columns: Option<usize>) -> Result<super::subq::SubqRef> {
+        self.frames.borrow_mut().push(Frame { enclosing: enclosing.clone(), params: vec![] });
+        let plan = self.plan_select(sel);
+        let frame = self.frames.borrow_mut().pop().unwrap();
+        let plan = plan?;
+        if let Some(n) = columns {
+            if plan.schema().len() != n {
+                return err(format!("subquery must return {n} column{}, not {}", if n == 1 { "" } else { "s" }, plan.schema().len()));
+            }
+        }
+        Ok(super::subq::SubqRef::new(plan, frame.params))
+    }
+```
+
+<p><strong>Strategy: nested loops, cached when uncorrelated.</strong> A correlated subquery runs once per outer row; one with no parameters runs once per statement and its rows are cached. Turning correlated subqueries into joins (decorrelation) is the optimization this does not do, and it is the standard next step: the corpus does not need it for correctness, only for speed.</p>
+
+```rust title="running a subquery, and IN with NULLs (src/execution/subquery.rs, excerpt)"
+impl SubqRef {
+    pub fn new(plan: Plan, params: Vec<Expr>) -> Self {
+        SubqRef { plan: Arc::new(plan), params, cache: Arc::new(Cache { optimized: OnceLock::new(), rows: OnceLock::new() }) }
+    }
+
+    /// The subquery's rows for the enclosing row `row`.
+    pub fn run(&self, row: &[Value]) -> Result<Vec<Row>> {
+        if self.params.is_empty() {
+            if let Some(r) = self.cache.rows.get() {
+                return Ok(r.clone());
+            }
+        }
+        let vals = self.params.iter().map(|p| p.eval(row)).collect::<Result<Vec<_>>>()?;
+        let ptr = CATALOG.with(|c| c.get());
+        if ptr.is_null() {
+            return err("a subquery needs a statement context to run in".into());
+        }
+        // SAFETY: the pointer was set by `with_catalog` from a live `&Catalog` further up this same thread's stack, and is
+        // restored before that frame returns; we are executing inside it.
+        let cat: &Catalog = unsafe { &*(ptr as *const Catalog) };
+        let plan = self.cache.optimized.get_or_init(|| optimizer::optimize((*self.plan).clone(), cat));
+        struct Pop;
+        impl Drop for Pop {
+            fn drop(&mut self) {
+                PARAMS.with(|p| {
+                    p.borrow_mut().pop();
+                });
+            }
+        }
+        PARAMS.with(|p| p.borrow_mut().push(vals));
+        let _pop = Pop;
+        let rows = exec::run(plan, cat)?;
+        if self.params.is_empty() {
+            let _ = self.cache.rows.set(rows.clone());
+        }
+        Ok(rows)
+    }
+
+/// `lhs IN (rows of one column)` with SQL's three-valued logic: true if any equals; else NULL if `lhs` is NULL or any
+/// element is NULL (and the set is non-empty); else false. An empty set is false whatever `lhs` is.
+pub fn in_rows(lhs: &Value, rows: &[Row]) -> Value {
+    if rows.is_empty() {
+        return Value::Bool(false);
+    }
+    if lhs.is_null() {
+        return Value::Null;
+    }
+    let mut saw_null = false;
+    for r in rows {
+        match lhs.sql_cmp(&r[0]) {
+            Some(std::cmp::Ordering::Equal) => return Value::Bool(true),
+            None => saw_null = true,
+            _ => {}
+        }
+    }
+    if saw_null { Value::Null } else { Value::Bool(false) }
+}
+```
+
+<p>Semantics the tests pin down:</p>
+
+<ul> <li><strong>Scalar</strong>: zero rows is NULL; more than one row is an error (SQLite returns the first; the standard and Postgres raise), and more than one column is a bind-time error.</li> <li><strong><code>IN</code> is three-valued.</strong> True if any element equals; otherwise NULL if the left side is NULL or any element is NULL; otherwise false. An empty set is false for every left side, NULL included, and <code>NOT IN</code> an empty set is true. Hence <code>x NOT IN (SELECT …)</code> over a set containing a NULL keeps <em>no</em> row that is absent from it: the classic surprise, written down in <code>in_follows_three_valued_logic</code>.</li> <li><strong>A parameter is not a constant.</strong> Constant folding evaluates column-free subtrees at plan time; <code>Param(0)</code> mentions no column, so it must be excluded explicitly, or the planner evaluates it with no parameter stack and fails (or, worse, caches a value).</li> <li><strong>The catalog reaches an expression through a thread-local pointer</strong> set by <code>exec::run</code> for the duration of the call. That is the one <code>unsafe</code> in the feature (a lifetime erased and restored within one stack frame) and the price of keeping <code>Expr::eval(&amp;self, row)</code> free of an execution context.</li> <li><strong>Nesting is bounded</strong> like derived tables: a hundred thousand nested <code>(SELECT …)</code> is an error at parse time.</li> <li><strong>A new arm in a recursive function costs every level of the recursion.</strong> The first version of this feature put the <code>CASE</code> and subquery arms straight into <code>primary</code>, <code>bind</code> and <code>eval</code>. A function's stack frame is sized for its largest arm, so each level of a nested expression got bigger, and the depth limit (1,000 levels, chosen when the frames were small) no longer fit in a 2 MiB test thread: <code>deep_expressions_are_errors_and_long_lists_are_fine</code> aborted with a stack overflow, found only by the full regression, not by the subquery tests. The rare arms now live in <code>#[inline(never)]</code> helpers (<code>case_expr</code>, <code>subquery_value</code>, <code>bind_rare</code>, <code>eval_rare</code>), which keeps the hot path's frame as it was.</li> </ul>
+
+<aside data-call="warning"><b>A subquery is another way to name a table</b><p><code>WHERE x IN (SELECT secret FROM hidden)</code> reads <code>hidden</code> without the checker seeing a table in <code>FROM</code>. The security layer secures every subquery in an expression as a statement of its own: privileges on its tables, their row-level policies, and <code>current_user</code> inside it, in <code>SELECT</code> items, <code>WHERE</code>, <code>ON</code>, <code>GROUP BY</code>, <code>HAVING</code>, <code>ORDER BY</code>, <code>UPDATE … SET</code>/<code>WHERE</code>, <code>DELETE … WHERE</code> and <code>INSERT … VALUES</code>. A policy may not itself contain a subquery (it would run with the caller's rights and no check of its own). <code>tests/security.rs::subqueries_do_not_bypass_privileges_or_policies</code> fails with the securing step removed: a user then counts 70 documents instead of the 36 the policy lets them see.</p></aside>
+
+<p>Verification: seven hand-written cases (NULL and empty-set semantics, two levels of correlation, subqueries in <code>ORDER BY</code>, <code>UPDATE</code>, <code>DELETE</code>, <code>INSERT … VALUES</code>, the error cases) and a differential run: 40 random databases with NULLs, ten query shapes each (<code>IN</code>, <code>NOT IN</code>, <code>EXISTS</code>, <code>NOT EXISTS</code>, correlated scalars with aggregates, three levels, <code>CASE</code> over <code>IN</code>), results identical to SQLite's.</p>
+
+<h4>Smaller forms</h4>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Form</th> <th>Where it appears</th> <th>What to do</th> </tr> </thead> <tbody> <tr> <td><code>INSERT INTO t (SELECT …)</code></td> <td>joins, nested-index-join</td> <td>the parenthesised select looks like a column list; peek one token ahead for <code>SELECT</code></td> </tr> <tr> <td><code>CREATE INDEX i ON t USING bplustree (col)</code></td> <td><code>index.slt</code></td> <td>accept <code>USING &lt;method&gt;</code> and ignore the method: the engine has one index kind</td> </tr> <tr> <td><code>SELECT a, b, FROM t</code></td> <td>sort and top-N tests</td> <td>allow a trailing comma before <code>FROM</code></td> </tr> <tr> <td><code>set &lt;knob&gt;=&lt;value&gt;</code></td> <td>optimizer toggles in several files</td> <td>a session variable; <code>force_optimizer_starter_rule=yes</code> restricts the optimizer to BusTub's starter rules (<a href="/cookbook/p/optimizer-rules-and-the-engine">P3.6</a>); unknown names are accepted and ignored. Administrators only when privileges exist</td> </tr> <tr> <td><code>count(col)</code> over an empty table</td> <td><code>p3.07-simple-agg.slt</code></td> <td><strong>BusTub expects NULL; SQL says 0.</strong> The engine follows SQL and the runner records the divergence. Decide deliberately which you want before you submit</td> </tr> <tr> <td>window functions with <code>ORDER BY</code></td> <td><code>p3.20-window-function.slt</code></td> <td>the rows are expected <strong>in window-sort order</strong>, as Postgres and DuckDB return them. Emit rows in the order the last window call sorted them into</td> </tr> </tbody> </table></div>
+
+<h4><code>LIKE</code> and <code>ILIKE</code></h4>
+
+<p>Not part of BusTub's curriculum (its string functions are only <code>lower</code> and <code>upper</code>), but it is the first thing anyone types, and it makes a good small exercise in matching. <code>%</code> matches any run of characters (including none), <code>_</code> exactly one character, <code>&#92;</code> escapes the next character. Postgres semantics: case-sensitive <code>LIKE</code>, case-insensitive <code>ILIKE</code>; any NULL operand gives NULL; non-text operands are an error. The parser adds <code>LIKE</code>/<code>ILIKE</code> next to <code>IN</code>/<code>BETWEEN</code> at comparison precedence, and <code>NOT LIKE</code> is <code>NOT (a LIKE b)</code>, so NULL stays NULL.</p>
+
+<p>The matcher must not be a naive recursive one: <code>'aaaa…a' LIKE '%a%a%a%a%b'</code> is exponential if each <code>%</code> tries every split. The standard fix remembers only the <em>last</em> <code>%</code> and, on a mismatch, lets it swallow one more character. That is O(text × pattern) in the worst case, and no backtracking stack is needed:</p>
+
+```rust title="expr: LIKE matching (src/execution/expr.rs, excerpt)"
+/// SQL LIKE matching. Linear-time greedy matching with a single backtrack point (the last `%`), so a
+/// pattern like `%a%a%a%b` cannot go exponential on a long run of `a`s.
+pub fn like(text: &str, pattern: &str, ignore_case: bool) -> bool {
+    let fold = |s: &str| -> Vec<char> {
+        if ignore_case { s.chars().flat_map(|c| c.to_lowercase()).collect() } else { s.chars().collect() }
+    };
+    let (t, p) = (fold(text), fold(pattern));
+    // Parse the pattern once into tokens so an escaped `\\%` is a literal and not a wildcard.
+    #[derive(PartialEq, Clone, Copy)]
+    enum Tk { Any, One, Lit(char) }
+    let mut toks = Vec::with_capacity(p.len());
+    let mut i = 0;
+    while i < p.len() {
+        match p[i] {
+            '%' => toks.push(Tk::Any),
+            '_' => toks.push(Tk::One),
+            '\\\\' if i + 1 < p.len() => {
+                i += 1;
+                toks.push(Tk::Lit(p[i]));
+            }
+            c => toks.push(Tk::Lit(c)),
+        }
+        i += 1;
+    }
+    let (mut ti, mut pi) = (0usize, 0usize);
+    let (mut star_p, mut star_t) = (usize::MAX, 0usize);
+    while ti < t.len() {
+        match toks.get(pi) {
+            Some(Tk::Any) => {
+                star_p = pi;
+                star_t = ti;
+                pi += 1;
+            }
+            Some(Tk::One) => {
+                ti += 1;
+                pi += 1;
+            }
+            Some(Tk::Lit(c)) if *c == t[ti] => {
+                ti += 1;
+                pi += 1;
+            }
+            _ if star_p != usize::MAX => {
+                star_t += 1; // let the last % swallow one more character
+                ti = star_t;
+                pi = star_p + 1;
+            }
+            _ => return false,
+        }
+    }
+    toks[pi..].iter().all(|k| *k == Tk::Any)
+}
+```
+
+<p><code>tests/engine_like.rs</code> checks it three ways: hand-picked cases (escapes, multi-byte characters, the exponential pattern), three-valued logic through SQL, and a differential run against SQLite on 3,000 random text/pattern pairs for both <code>LIKE</code> and <code>ILIKE</code> (SQLite with <code>case_sensitive_like=ON</code> and <code>ESCAPE '&#92;'</code> means the same thing).</p>
+
+<h4><code>VECTOR(n)</code></h4>
+
+<p><code>vector.slt</code> creates a <code>VECTOR(3)</code> column and inserts <code>ARRAY [1.0, 1.0, 1.0]</code> literals. Supporting it end to end touches every layer that knows about types, which makes it a good checklist:</p>
+
+<ul> <li><strong>Value</strong>: <code>Value::Vector(Arc&lt;[f64]&gt;)</code>, compared lexicographically; hashed and ordered with the same canonical-float rule as <code>Float</code>, so <code>DISTINCT</code>, <code>GROUP BY</code> and <code>ORDER BY</code> work.</li> <li><strong>Column type</strong>: <code>ColType::Vector(n)</code>; the dimension is part of the type, capped (<code>MAX_VECTOR_DIM</code> = 400 here so that a row fits a 4 KiB page). Stored in the tuple's variable region as <code>n</code> little-endian <code>f64</code>s, like a <code>VARCHAR</code>.</li> <li><strong>Parser</strong>: <code>VECTOR(n)</code> in <code>CREATE TABLE</code>; <code>ARRAY[e, …]</code> as an expression whose elements must be numeric constants (a leading <code>-</code> is fine), folded to a constant at bind time.</li> <li><strong>Coercion</strong>: storing a vector of the wrong dimension is an error (<code>expected 3 dimensions, not 2</code>), not a truncation.</li> <li><strong>Spill and wire formats</strong>: the external sort writes rows to buffer-pool pages with its own value encoding, and the wire/facade protocol has its own tags; both need a new case, or <code>ORDER BY</code> over a big vector table, or a client, hits an <code>unreachable</code>.</li> <li><strong>Functions</strong>: <code>l2_dist(a, b)</code>, <code>inner_product(a, b)</code>, <code>cosine_similarity(a, b)</code>, all returning a float; mismatched dimensions are an error, and the cosine of a zero vector is NULL.</li> </ul>
+
+<p><code>SELECT id FROM pts ORDER BY l2_dist(v, ARRAY[7, 3]) LIMIT 1</code> is a complete exact nearest-neighbour search. An index for it is the subject of <a href="/cookbook/p/vector-databases">Vector search</a>.</p>
+"""

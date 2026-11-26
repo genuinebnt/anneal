@@ -1,0 +1,44 @@
+title = "Non-locking concurrency control"
+module = "Databases"
+module_order = 8
+chapter = "Transactions and concurrency control"
+chapter_order = 6
+order = 410
+kind = "recipe"
+lede = "Basic timestamp ordering, the Thomas write rule, optimistic CC (Kung-Robinson), and strict 2PL wait-die for comparison."
+level = "advanced"
+code = ["examples/database/timestamp_ordering_occ.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>in-memory OLTP engines</li><li>main-memory stores</li><li>validation-based commit protocols</li><li>STMs</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Locking decides the serial order dynamically (whoever gets the lock first). The protocols here fix or discover the order **without** locks held across the transaction, and pay in aborts instead of waiting.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Basic timestamp ordering (T/O)</div><div class="cb-g-says"><p>Each transaction gets a timestamp at start and must behave as if it ran at that instant. Each object keeps <code>rts</code> (largest reader ts) and <code>wts</code> (largest writer ts). A read with ts &lt; wts arrives "too late" (a younger transaction already overwrote the value it should see): abort.</p><p>A write with ts &lt; rts (a younger reader already missed it) or ts &lt; wts is late: abort. Every conflict edge then points from the smaller to the larger timestamp, so the precedence graph is acyclic by construction (the checker verifies exactly this).</p></div></div><div class="cb-g-term"><div class="cb-g-name">THOMAS write rule</div><div class="cb-g-says"><p>A late write with rts &lt;= ts &lt; wts is merely <strong>obsolete</strong>, nobody read what it would have written and a younger write already replaced it, so skip it instead of aborting. The result is view- but not conflict-serializable (blind writes), and it accepts strictly more schedules. We count that on random schedules.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Dirty data</div><div class="cb-g-says"><p>Writes here go in place with an undo record; a transaction that touches an object with an <strong>uncommitted</strong> writer <strong>waits</strong> for it (strict T/O). Waits only ever go toward smaller timestamps, so there are no deadlocks.</p><p>(A late Thomas write behind an uncommitted writer aborts instead of waiting: waiting on a younger writer could deadlock.) MVTO (multi-version T/O) keeps old versions so that late <strong>reads</strong> succeed; it is covered by the MVCC recipes.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Optimistic concurrency control (Kung and Robinson 1981)</div><div class="cb-g-says"><p>, three phases. <strong>Read</strong>: run against the committed state, reads go to a read set, writes to a <strong>private workspace</strong>. <strong>Validation</strong>: <strong>backward</strong> validation checks our read set against the write sets of transactions that committed after we started (conflict -&gt; abort ourselves).</p><p><strong>Forward</strong> validation instead checks our write set against the read sets of still-<strong>active</strong> transactions, and may abort them (early) instead of us. <strong>Write</strong>: install the workspace. Validation + write run in one critical section here (serial validation).</p><p><strong>Parallel validation</strong> lets several transactions validate at once by also checking against the write sets of transactions that are validating but not yet written (the <code>finish_active</code> set): sketched in <code>parallel_validation_demo</code>.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Strict</div><div class="cb-g-says"><p>2PL <strong>with wait-die</strong>: locks until commit; an <strong>older</strong> requester waits for a younger holder, a <strong>younger</strong> requester dies and restarts <strong>keeping</strong> its original timestamp (so it eventually becomes the oldest: no starvation).</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>Every committed history of every protocol (3000 random workloads x 5 protocols) goes through the precedence-graph checker, T/O must also respect timestamp order and OCC commit order, and the final store must equal the last committed write per key (so undo works).</p><p>A table compares abort rates under low and high contention, and 8 real threads move money between accounts with OCC validation while the total balance must stay constant.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+Silo / Hekaton / TicToc-style in-memory engines (OCC validation), Spanner-style timestamp ordering with MVCC, software transactional memory, optimistic version checks in application code (`UPDATE .. WHERE version = ?`). Course: CMU 15-445 Lecture 19 (timestamp ordering and optimistic concurrency control).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>"On Optimistic Methods for Concurrency Control" (Kung, Robinson, 1981) <a href="https://www.eecs.harvard.edu/~htk/publication/1981-tods-kung-robinson.pdf" target="_blank" rel="noreferrer">https://www.eecs.harvard.edu/~htk/publication/1981-tods-kung-robinson.pdf</a></li><li>"An Evaluation of Concurrency Control with One Thousand Cores" (Yu et al.)</li><li>CMU 15-445 notes <a href="https://15445.courses.cs.cmu.edu/" target="_blank" rel="noreferrer">https://15445.courses.cs.cmu.edu/</a></li></ul>
+"""
+
+[[sources]]
+title = "eecs.harvard.edu/~htk/publication/1981-tods-kung-robinson.pdf"
+url = "https://www.eecs.harvard.edu/~htk/publication/1981-tods-kung-robinson.pdf"
+
+[[sources]]
+title = "15445.courses.cs.cmu.edu"
+url = "https://15445.courses.cs.cmu.edu/"

@@ -1,0 +1,66 @@
+title = "Buffered IO internals"
+module = "Performance and systems"
+module_order = 7
+chapter = "Files, processes and the OS"
+chapter_order = 3
+order = 290
+kind = "recipe"
+lede = "Build BufReader, BufWriter, LineWriter and a prefetching reader from scratch."
+level = "advanced"
+code = ["examples/os_and_storage/buffered_io_internals.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>parsers</li><li>log writers</li><li>network protocols</li><li>any code that does many small reads/writes</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+`MyBufReader`, `MyBufWriter`, `MyLineWriter`, a double-buffered (prefetching) reader and a vectored-write coalescing sink, each tested against `std` and against hostile mocks (short reads/writes, `Interrupted`).
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+every `read`/`write` on a `File`/`TcpStream` is a syscall (syscalls_portable), &#126;100 ns-1 us even when it moves one byte. A buffer turns N tiny calls into N&#42;size/BUF big ones. Reading 1 MiB byte by byte through an 8 KiB `BufReader` costs exactly 128 underlying reads; unbuffered it would be 1,048,576.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+reader: `fill_buf` refills only when empty; `read` bypasses the buffer when it is empty and the caller's buffer is at least as large as ours (no double copy); `seek` must discard the buffer and, for `SeekFrom::Current`, subtract the unread bytes because the inner cursor is ahead of the logical position. writer: append when it fits, flush first when it would overflow, send writes >= capacity straight through.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Footguns**: (1) `BufWriter` flushes on `Drop` but **swallows** the error (drop cannot return one): call `flush()` or `into_inner()` and check the result before you consider the data written. (2) Do not wrap in-memory data (`&[u8]`, `Cursor<Vec<u8>>`, `Vec<u8>`): a `BufReader` there only adds a memcpy; a `BufWriter` over a `Vec` the same.
+
+Wrap files, sockets and pipes. (3) `write_all` retry loops are mandatory: `write` may accept fewer bytes than offered. (4) A `LineWriter` (stdout when it is a terminal) syscalls once per line; piping stdout to a file makes it block-buffered in other languages, but Rust's stdout is always line-buffered, so wrap it in a `BufWriter` for bulk output.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>log/CSV/JSON-lines writers</li><li>line-oriented protocol parsers (Redis/SMTP-style)</li><li>file copy tools</li><li>decompression pipelines that overlap IO with CPU (prefetch)</li><li>network servers coalescing responses with writev</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/io/struct.BufReader.html> <https://doc.rust-lang.org/std/io/struct.BufWriter.html> <https://man7.org/linux/man-pages/man2/readv.2.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/io/struct.BufReader.html"
+url = "https://doc.rust-lang.org/std/io/struct.BufReader.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/io/struct.BufWriter.html"
+url = "https://doc.rust-lang.org/std/io/struct.BufWriter.html"
+
+[[sources]]
+title = "man7.org/linux/man-pages/man2/readv.2.html"
+url = "https://man7.org/linux/man-pages/man2/readv.2.html"

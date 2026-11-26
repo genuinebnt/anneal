@@ -1,0 +1,50 @@
+title = "A split/merge treap with pluggable augmentation"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Trees and ordered structures"
+chapter_order = 2
+order = 177
+kind = "recipe"
+lede = "Order statistics and an interval tree"
+level = "advanced"
+code = ["examples/data_structures/treap_interval.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>leaderboards (rank/k-th)</li><li>calendar and booking overlap checks</li><li>genome interval queries</li><li>any "augmented BST"</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a treap is a BST on keys that is simultaneously a max-heap on random priorities.
+
+Random priorities make its shape that of a random BST, so depth is O(log n) **expected** with no rotations or balance bookkeeping: everything is built from two primitives, `split(t, key)` (cut into &lt; key and >= key) and `merge(a, b)` (join two treaps where all of a &lt; all of b). insert = split + merge; remove = split twice + merge; arena-based (`Vec` of nodes, `usize` ids, arena_ids).
+
+**Augmentation** is the general technique: each node caches an aggregate of its subtree, recomputed in `pull` after any structural change. `size` gives order statistics (rank, k-th, range count).
+
+A `max hi` aggregate over (lo, hi, id) keys gives an **interval tree**: a whole subtree whose max endpoint is &lt; a can be skipped, so "which intervals overlap [a, b]" is output-sensitive. The augmentation is a trait (`Augment`), so the same treap code serves both uses.
+
+Verified against a sorted `Vec` / naive interval scan with 10k seeded random operations each, plus a structural checker.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>order-statistic trees (rank/percentile queries)</li><li>interval trees in calendar double-booking checks</li><li>range-based scheduling</li><li>genomics tools that intersect regions (<strong>bed</strong>-style intervals)</li><li>Cartesian-tree/rope style sequences (implicit treaps)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Treap> and <https://en.wikipedia.org/wiki/Interval_tree>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Treap"
+url = "https://en.wikipedia.org/wiki/Treap"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Interval_tree"
+url = "https://en.wikipedia.org/wiki/Interval_tree"

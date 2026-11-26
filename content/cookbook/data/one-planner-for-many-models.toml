@@ -1,0 +1,366 @@
+title = "One planner for many models"
+module = "Databases"
+module_order = 8
+chapter = "Building complete engines"
+chapter_order = 9
+order = 454
+kind = "guide"
+lede = "A query that mixes relational filters, text, graph reachability and vector similarity · sets versus probes · exact versus approximate ranking · a cost model over per-model statistics · plans checked against an oracle and costed by the work they do · 100 000 items"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>A multi-model query is a join of access paths, not a union of products.</strong> "The ten items most similar to this vector, in categories 2 or 4, under 700, mentioning <code>raft</code>, within three hops of this item" touches four indexes: a relational index, an inverted index, a graph, a vector index. Each can either <strong>produce the set</strong> of ids matching its predicate or <strong>answer a probe</strong> for one candidate id. The planner's job is to decide which predicates to materialize, which to probe, and how to rank.</li> <li><strong>The cheapest plan depends on selectivity, and selectivity differs by model.</strong> A rare term is best materialized and everything else probed on its few matches. A predicate that keeps 90% of items is best probed (materializing it costs more than the work it saves). A neighbourhood of a seed item is usually tiny. With no filter at all the best plan is an approximate nearest-neighbour search; with filters, approximate search must over-fetch and filter afterwards, and its recall depends on whether the filters correlate with vector locality.</li> <li><strong>Plans are sets of choices.</strong> For <em>p</em> predicates there are 2&#94;p exact plans: the subset computed as sets (intersected smallest-first) and the rest probed one by one on the survivors, followed by an exact distance ranking of what remains. Plus the approximate plan: ask the vector index for <em>m</em> neighbours, filter them, double <em>m</em> until <em>k</em> survive.</li> <li><strong>A cost model is statistics plus a unit.</strong> Each model contributes an estimate of how many items its predicate keeps (exact counts for categories, a sorted array for price, document frequencies from the text index combined under independence, average degree to the power of hops for the graph), a cost to produce the set, and a cost to probe. The unit is one touched row, posting or edge; a vector distance costs <code>dim/8</code> units.</li> <li><strong>The model must be tested against the work actually done.</strong> Execution counts rows, postings, edges and distance computations. The planner's quality is the ratio of the chosen plan's <em>actual</em> work to the best plan's actual work (its <em>regret</em>), measured over many queries. Without that measurement a cost model is an opinion.</li> <li><strong>Correctness comes first and is easy to state</strong>: every exact plan returns the same top-k as evaluating every predicate on every item, in the same order, ties by id.</li> </ul>
+"""
+
+[[sections]]
+heading = "The query and the plans"
+body = """
+```sql
+SELECT id FROM items
+ WHERE category IN (…) AND price BETWEEN a AND b          -- relational
+   AND text CONTAINS ALL (…)                              -- inverted index
+   AND id IN NEIGHBOURS(seed, hops)                       -- graph
+ ORDER BY distance(vec, q) LIMIT k                        -- vector
+```
+
+<ul> <li><strong><code>Plan::Sets { sets, probes }</code></strong>: build the id set of each predicate in <code>sets</code> (category: union of lists; price: a range of a sorted array; text: the required-term search; neighbours: breadth-first search limited to <em>hops</em>), intersect them smallest first, probe the survivors with the predicates in <code>probes</code>, rank them by exact distance.</li> <li><strong><code>Plan::Ann</code></strong>: IVF search for <code>m = max(4k, 16)</code> neighbours, probe all predicates on them, double <code>m</code> while fewer than <em>k</em> pass.</li> <li><strong>Costing</strong> (<code>est_cost</code>): sum of set costs, intersection cost, then for each probe the number of surviving candidates times the probe cost, shrinking by the predicate's selectivity; plus <code>candidates × dim/8</code> for ranking. For <code>Ann</code>: the cost of the index probe, the neighbour set if any, and <code>m</code> probes, with <code>m</code> estimated as <code>k / (combined selectivity)</code>.</li> <li><strong><code>choose</code></strong> returns the plan of minimum estimated cost among the exact plans, and optionally the approximate one.</li> </ul>
+
+:::deeper Reference: the multi-model query, set and probe execution of each predicate, exact and approximate ranking, statistics, cost model, the oracle
+```rust title="src/multimodel/plan.rs"
+//! A planner for queries that mix models: relational filters (category, price range), full-text conditions, graph reachability from a seed
+//! item, and nearest-neighbour ranking by vector distance. Every predicate can be answered two ways (produce the set of matching ids from
+//! its index, or probe one candidate), and the vector step can rank an exact candidate set or ask an ANN index and filter afterwards. The
+//! planner estimates the cost of each strategy from statistics and picks the cheapest; execution counts the work it really did.
+use crate::fts::{Index, Mode, Query as TextQuery};
+use crate::graph::{bfs, Bfs, Csr, UNREACHED};
+use crate::vecidx::{l2, Cand, Data, Ivf};
+
+#[derive(Clone, Debug)]
+pub struct Q {
+    pub cats: Option<Vec<u16>>,
+    pub price: Option<(u16, u16)>,
+    pub text: Option<Vec<String>>,
+    /// Items within `hops` edges of the seed item.
+    pub near: Option<(u32, u32)>,
+    pub vec: Vec<f32>,
+    pub k: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum P {
+    Cat,
+    Price,
+    Text,
+    Near,
+}
+
+pub struct World {
+    pub n: usize,
+    pub category: Vec<u16>,
+    pub price: Vec<u16>,
+    pub terms: Vec<Vec<String>>,
+    pub by_cat: Vec<Vec<u32>>,
+    pub by_price: Vec<(u16, u32)>,
+    pub text: Index,
+    pub graph: Csr,
+    pub rev: Csr,
+    pub vecs: Data,
+    pub ivf: Ivf,
+    pub nprobe: usize,
+    /// Number of categories; the first statistics are exact counts.
+    pub ncat: usize,
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct Work {
+    /// Rows, postings and edges touched.
+    pub rows: u64,
+    /// Vector distance computations.
+    pub dists: u64,
+}
+impl Work {
+    pub fn cost(&self, dim: usize) -> f64 {
+        self.rows as f64 + self.dists as f64 * (dim as f64 / 8.0)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Plan {
+    /// Compute the id set of every listed predicate, intersect, probe the rest on the survivors, rank exactly.
+    Sets { sets: Vec<P>, probes: Vec<P> },
+    /// Ask the ANN index for `m` neighbours (doubling while too few pass), then check every predicate on them.
+    Ann,
+}
+
+impl World {
+    fn has_pred(q: &Q, p: P) -> bool {
+        match p { P::Cat => q.cats.is_some(), P::Price => q.price.is_some(), P::Text => q.text.is_some(), P::Near => q.near.is_some() }
+    }
+    pub fn preds(q: &Q) -> Vec<P> {
+        [P::Cat, P::Price, P::Text, P::Near].into_iter().filter(|p| Self::has_pred(q, *p)).collect()
+    }
+
+    // ---- executing a predicate as a set or as a probe ----------------------------------------------------------------------------------
+
+    fn set_of(&self, q: &Q, p: P, w: &mut Work) -> Vec<u32> {
+        match p {
+            P::Cat => {
+                let mut ids: Vec<u32> = q.cats.as_ref().unwrap().iter().flat_map(|c| self.by_cat[*c as usize].iter().copied()).collect();
+                w.rows += ids.len() as u64;
+                ids.sort_unstable();
+                ids.dedup();                      // a category listed twice must not duplicate its items
+                ids
+            }
+            P::Price => {
+                let (lo, hi) = q.price.unwrap();
+                let a = self.by_price.partition_point(|x| x.0 < lo);
+                let b = self.by_price.partition_point(|x| x.0 <= hi);
+                let mut ids: Vec<u32> = self.by_price[a..b].iter().map(|x| x.1).collect();
+                w.rows += ids.len() as u64;
+                ids.sort_unstable();
+                ids
+            }
+            P::Text => {
+                let (hits, st) = self.text.search(&TextQuery { must: q.text.clone().unwrap(), ..Default::default() }, self.n, Mode::Exhaustive);
+                // the search reads every posting list of the required terms and scores the documents that contain all of them
+                let listed: usize = q.text.as_ref().unwrap().iter().map(|t| self.text.segments.iter().map(|sg| sg.postings.get(t).map_or(0, |ps| ps.len())).sum::<usize>()).sum();
+                w.rows += listed as u64 + st.docs_scored;
+                let mut ids: Vec<u32> = hits.into_iter().map(|h| h.0 as u32).collect();
+                ids.sort_unstable();
+                ids
+            }
+            P::Near => {
+                let (seed, hops) = q.near.unwrap();
+                // breadth-first search limited to `hops` levels
+                let mut dist = vec![UNREACHED; self.n];
+                dist[seed as usize] = 0;
+                let mut frontier = vec![seed];
+                let mut out = vec![];
+                for level in 1..=hops {
+                    let mut next = vec![];
+                    for &u in &frontier {
+                        for &v in self.graph.adj(u) {
+                            w.rows += 1;
+                            if dist[v as usize] == UNREACHED {
+                                dist[v as usize] = level;
+                                next.push(v);
+                                out.push(v);
+                            }
+                        }
+                    }
+                    frontier = next;
+                }
+                out.sort_unstable();
+                out
+            }
+        }
+    }
+    fn probe(&self, q: &Q, p: P, id: u32, near: Option<&Vec<u32>>, w: &mut Work) -> bool {
+        w.rows += 1;
+        match p {
+            P::Cat => q.cats.as_ref().unwrap().contains(&self.category[id as usize]),
+            P::Price => { let (lo, hi) = q.price.unwrap(); (lo..=hi).contains(&self.price[id as usize]) }
+            P::Text => { w.rows += 2; let t = &self.terms[id as usize]; q.text.as_ref().unwrap().iter().all(|x| t.binary_search(x).is_ok()) }
+            P::Near => near.expect("the neighbour set is computed before probing").binary_search(&id).is_ok(),
+        }
+    }
+
+    // ---- executing a plan ---------------------------------------------------------------------------------------------------------------
+
+    /// Returns the top `k` item ids by distance (ties by id) and the work done.
+    pub fn execute(&self, q: &Q, plan: &Plan) -> (Vec<u32>, Work) {
+        let mut w = Work::default();
+        let dist = |id: u32, w: &mut Work| { w.dists += 1; l2(&q.vec, self.vecs.row(id)) };
+        let rank = |cands: Vec<u32>, w: &mut Work| -> Vec<u32> {
+            let mut v: Vec<Cand> = cands.into_iter().map(|id| Cand(dist(id, w), id)).collect();
+            v.sort();
+            v.truncate(q.k);
+            v.into_iter().map(|c| c.1).collect()
+        };
+        match plan {
+            Plan::Sets { sets, probes } => {
+                let mut near_set: Option<Vec<u32>> = None;
+                let mut cur: Option<Vec<u32>> = None;
+                let mut computed: Vec<(P, Vec<u32>)> = sets.iter().map(|&p| (p, self.set_of(q, p, &mut w))).collect();
+                computed.sort_by_key(|(_, s)| s.len());
+                for (p, s) in computed {
+                    if p == P::Near { near_set = Some(s.clone()); }
+                    cur = Some(match cur {
+                        None => s,
+                        Some(c) => { w.rows += (c.len() + s.len()) as u64; let mut o = vec![]; crate::graph::intersect(&c, &s, &mut o); o }
+                    });
+                }
+                if probes.contains(&P::Near) && near_set.is_none() { near_set = Some(self.set_of(q, P::Near, &mut w)); }
+                let cands: Vec<u32> = match cur { Some(c) => c, None => (0..self.n as u32).collect() };
+                let mut keep = vec![];
+                for id in cands {
+                    if probes.iter().all(|&p| self.probe(q, p, id, near_set.as_ref(), &mut w)) { keep.push(id); }
+                }
+                (rank(keep, &mut w), w)
+            }
+            Plan::Ann => {
+                let near_set = q.near.map(|_| self.set_of(q, P::Near, &mut w));
+                let preds = Self::preds(q);
+                let mut m = (q.k * 4).max(16);
+                loop {
+                    let (cands, scanned) = self.ivf.search(&q.vec, m.min(self.n), self.nprobe);
+                    w.dists += scanned as u64;
+                    let mut ok: Vec<Cand> = vec![];
+                    for c in &cands {
+                        if preds.iter().all(|&p| self.probe(q, p, c.1, near_set.as_ref(), &mut w)) { ok.push(*c); }
+                    }
+                    if ok.len() >= q.k || m >= self.n || cands.len() < m {
+                        ok.sort();
+                        ok.truncate(q.k);
+                        return (ok.into_iter().map(|c| c.1).collect(), w);
+                    }
+                    m *= 2;
+                }
+            }
+        }
+    }
+
+    // ---- statistics and the cost model --------------------------------------------------------------------------------------------------
+
+    /// Estimated number of items matching one predicate.
+    pub fn est_size(&self, q: &Q, p: P) -> f64 {
+        let n = self.n as f64;
+        match p {
+            P::Cat => q.cats.as_ref().unwrap().iter().map(|c| self.by_cat[*c as usize].len() as f64).sum(),
+            P::Price => { let (lo, hi) = q.price.unwrap(); let a = self.by_price.partition_point(|x| x.0 < lo); let b = self.by_price.partition_point(|x| x.0 <= hi); (b - a) as f64 }
+            P::Text => {
+                // document frequencies from the index, combined under independence
+                let mut sel = 1.0;
+                for t in q.text.as_ref().unwrap() {
+                    let df: usize = self.text.segments.iter().map(|s| s.postings.get(t).map_or(0, |ps| ps.len())).sum();
+                    sel *= df as f64 / n;
+                }
+                sel * n
+            }
+            P::Near => { let (_, hops) = q.near.unwrap(); let d = self.graph.edges() as f64 / n; (d.powi(hops as i32)).min(n) }
+        }
+    }
+    fn est_set_cost(&self, q: &Q, p: P) -> f64 {
+        match p {
+            P::Text => q.text.as_ref().unwrap().iter().map(|t| self.text.segments.iter().map(|s| s.postings.get(t).map_or(0, |ps| ps.len())).sum::<usize>() as f64).sum::<f64>() + self.est_size(q, P::Text),
+            P::Near => self.est_size(q, P::Near),
+            _ => self.est_size(q, p),
+        }
+    }
+    fn est_probe_cost(&self, _q: &Q, p: P) -> f64 {
+        match p {
+            P::Text => 3.0,
+            _ => 1.0,
+        }
+    }
+
+    /// Estimated cost of a plan in the same units as `Work::cost`.
+    pub fn est_cost(&self, q: &Q, plan: &Plan) -> f64 {
+        let n = self.n as f64;
+        let dim = self.vecs.dim as f64;
+        let sel = |p: P| (self.est_size(q, p) / n).min(1.0);
+        match plan {
+            Plan::Sets { sets, probes } => {
+                let mut cost: f64 = sets.iter().map(|&p| self.est_set_cost(q, p)).sum();
+                let mut sizes: Vec<f64> = sets.iter().map(|&p| self.est_size(q, p)).collect();
+                sizes.sort_by(|a, b| a.total_cmp(b));
+                cost += sizes.iter().sum::<f64>();                                  // intersecting
+                let mut cands = if sets.is_empty() { n } else { n * sets.iter().map(|&p| sel(p)).product::<f64>() };
+                if probes.contains(&P::Near) && !sets.contains(&P::Near) { cost += self.est_set_cost(q, P::Near); }
+                for &p in probes {
+                    cost += cands * self.est_probe_cost(q, p);
+                    cands *= sel(p);
+                }
+                cost + cands * dim / 8.0
+            }
+            Plan::Ann => {
+                let total_sel = Self::preds(q).iter().map(|&p| sel(p)).product::<f64>().max(1.0 / n);
+                let m = ((q.k as f64 / total_sel) * 1.2).clamp(16.0, n);
+                let per = self.ivf.search(&q.vec, 1, self.nprobe).1 as f64 * dim / 8.0;
+                let near = if q.near.is_some() { self.est_set_cost(q, P::Near) } else { 0.0 };
+                per + near + m * Self::preds(q).iter().map(|&p| self.est_probe_cost(q, p)).sum::<f64>()
+            }
+        }
+    }
+
+    /// All exact plans: every nonempty subset of predicates computed as sets (the rest probed), plus an exact scan with probes.
+    pub fn exact_plans(&self, q: &Q) -> Vec<Plan> {
+        let preds = Self::preds(q);
+        let mut out = vec![];
+        for mask in 0..(1u32 << preds.len()) {
+            let sets: Vec<P> = preds.iter().enumerate().filter(|(i, _)| mask >> i & 1 == 1).map(|(_, p)| *p).collect();
+            let probes: Vec<P> = preds.iter().enumerate().filter(|(i, _)| mask >> i & 1 == 0).map(|(_, p)| *p).collect();
+            out.push(Plan::Sets { sets, probes });
+        }
+        out
+    }
+    pub fn choose(&self, q: &Q, allow_ann: bool) -> Plan {
+        let mut plans = self.exact_plans(q);
+        if allow_ann { plans.push(Plan::Ann); }
+        plans.into_iter().min_by(|a, b| self.est_cost(q, a).total_cmp(&self.est_cost(q, b))).unwrap()
+    }
+
+    /// The reference: evaluate every predicate on every item, rank exactly.
+    pub fn oracle(&self, q: &Q) -> Vec<u32> {
+        let near: Option<Vec<u32>> = q.near.map(|(seed, hops)| {
+            let (d, _) = bfs(&self.graph, &self.rev, seed, Bfs::TopDown);
+            (0..self.n as u32).filter(|&v| v != seed && d[v as usize] != UNREACHED && d[v as usize] <= hops).collect()
+        });
+        let mut v: Vec<Cand> = (0..self.n as u32)
+            .filter(|&id| {
+                q.cats.as_ref().is_none_or(|c| c.contains(&self.category[id as usize]))
+                    && q.price.is_none_or(|(lo, hi)| (lo..=hi).contains(&self.price[id as usize]))
+                    && q.text.as_ref().is_none_or(|t| t.iter().all(|x| self.terms[id as usize].contains(x)))
+                    && near.as_ref().is_none_or(|s| s.binary_search(&id).is_ok())
+            })
+            .map(|id| Cand(l2(&q.vec, self.vecs.row(id)), id))
+            .collect();
+        v.sort();
+        v.truncate(q.k);
+        v.into_iter().map(|c| c.1).collect()
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>100 000 items. Category (40 values, Zipf), price 0 to 999, eight terms each from a 300-term Zipf vocabulary, a 16-dimensional vector (20 overlapping clusters), six random out-edges per item. Costs below are in the work units defined above (rows, postings and edges touched plus <code>dim/8</code> per distance).</p>
+
+```text title="the planner's choice on seven query shapes, with the best plan's cost and the approximate plan's recall"
+100000 items: category (40, Zipf), price (0-999), 8 terms of a 300-term Zipf vocabulary, a 16-d vector (20 clusters), 6 random out-edges; built in 1.8 s
+workload                                         chosen plan                    est cost     actual      best   regret
+vector only                                      sets [] probe []                 200000     200000    200000     1.0x   (2.0 ms; scan with probes 200000)
+                                                 ann (approximate)                  5118       5118                      (recall 0.60, 0.0 ms)
+rare text terms + wide price range               sets [t] probe [p]                 1094       1092      1092     1.0x   (0.1 ms; scan with probes 369949)
+                                                 ann (approximate)                405118      54627                      (recall 0.00, 0.9 ms)
+narrow price range + one category                sets [p] probe [c]                 6656       4566      4566     1.0x   (0.0 ms; scan with probes 106409)
+                                                 ann (approximate)                 23551      41242                      (recall 0.40, 0.4 ms)
+neighbours of a seed (2 hops) + wide price       sets [n] probe [p]                  166        156       156     1.0x   (0.0 ms; scan with probes 180080)
+                                                 ann (approximate)                 88527      45030                      (recall 0.10, 0.4 ms)
+two broad filters (price 0-900, categories 0-2)  sets [c] probe [p]               179717     142160    142160     1.0x   (1.0 ms; scan with probes 204716)
+                                                 ann (approximate)                  5189       5171                      (recall 0.80, 0.0 ms)
+frequent text term + category                    sets [c] probe [t]                46557      38716     38716     1.0x   (0.4 ms; scan with probes 130811)
+                                                 ann (approximate)                  6483      27112                      (recall 0.50, 0.2 ms)
+text + category + price + neighbours             sets [n] probe [c, p, t]            718        603       603     1.0x   (0.0 ms; scan with probes 132290)
+                                                 ann (approximate)                605334      42922                      (recall 1.00, 0.5 ms)
+```
+
+<ul> <li><strong>The estimates track the work</strong>: on six of seven shapes the estimate is within 30% of the actual cost (1 094 against 1 092; 166 against 156; 718 against 603), and in all seven the chosen exact plan <em>was</em> the cheapest of its 2&#94;p alternatives. Over 300 random queries on a smaller world the median regret is <strong>1.00×</strong>, the 90th percentile 1.00× and the worst <strong>1.4×</strong>.</li> <li><strong>Plans differ by orders of magnitude</strong>: for the rare text terms the best plan costs 1 092 units and the exact scan 369 949 (340×); for the seed's neighbourhood 156 against 180 080 (1 150×). The planner finds them without a search of results, from statistics alone.</li> <li><strong>Approximate ranking helps when filters are weak and hurts when they are strong</strong>: with no filter, or two broad filters, the ANN plan costs 5 118 and 5 171 units against 200 000 and 142 160 for the exact plans, at recall 0.60 and 0.80; with a rare term it fails (recall 0.0) because the matching items are not near the query vector, and the over-fetch loop ends up scanning for 54 627 units. A planner can choose ANN only when it is allowed to lose recall; the estimate of its cost is right on the broad cases and wrong by 7× on the rare one, which is the signal that filtered ANN needs the correlation between filter and vector locality in its statistics.</li> <li><strong>The exact scan with probes is never the winner here</strong> except for the vector-only query, where it is the only exact option (200 000 units: a distance per item).</li> </ul>
+
+<aside data-call="note"><b>The 196× regret that was a counting bug</b><p>The first run reported a worst-case regret of 196×, and the diagnostic showed plans whose <em>actual</em> cost was 0 or 5 where the estimate said 700. The text search charges only the documents it scores, so a conjunction with one rare term scored almost nothing and looked free, although the engine had read every posting list of the required terms. The executor now charges the lists it reads, the estimate charges the same, and the worst regret fell to 1.4×. The planner had been right and the accounting wrong: when a cost model and its measurements disagree, check what the measurement counts. A second bug was found by the oracle comparison: a query that named a category twice (<code>IN (2, 13, 0, 0)</code>) produced duplicate ids in the set, and the top-k contained the same item twice. Sets must be deduplicated after a union.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Predicates as an enum <code>P</code> and plans as data</strong>: <code>Plan::Sets { sets: Vec&lt;P&gt;, probes: Vec&lt;P&gt; }</code> is a value the planner builds, costs and the executor interprets. The 2&#94;p enumeration is a loop over bit masks, with the predicates present in the query as the universe.</li> <li><strong><code>Work</code> counters threaded through execution</strong> (<code>&amp;mut Work</code>) rather than global state: the same function that executes also measures, so the measurement cannot drift from what ran.</li> <li><strong>Closures for shared steps</strong>: <code>rank</code> and <code>dist</code> are local closures capturing the query, used by both plan variants.</li> <li><strong>Reuse of earlier sections</strong>: <code>Index::search</code> (full-text, <a href="/cookbook/p/full-text-search">M16</a>) for the text set, <code>Csr</code> and the intersection routine (<a href="/cookbook/p/the-graph-store">M13</a>) for graph sets and set intersection, <code>Ivf::search</code> (<a href="/cookbook/p/vector-databases">S2</a>) for ANN. The planner is a few hundred lines because the models expose set production and probing, not because it reimplements them.</li> <li><strong><code>Option&lt;T&gt;</code> fields for optional predicates</strong> make "the query has a price filter" a pattern match, and <code>World::preds(q)</code> the list of predicates present.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Oracle equivalence (300 random queries, 4 000 items)</strong>: each query includes each predicate with probability one half (1 to 4 categories, a price range, 1 or 2 text terms, a 1 to 3 hop neighbourhood); for every one of the 2&#94;p exact plans the returned ids equal the oracle's (evaluate every predicate on every item, rank exactly, ties by id); 60 of the queries have no answer and must return an empty list from every plan.</li> <li><strong>The approximate plan</strong> returns only items that satisfy every predicate (no false positives), and its recall against the exact answer is reported.</li> <li><strong>Plan choice</strong>: rare text terms with a wide price range choose the text set; a 95% price range is probed, not materialized; a narrow price range alone is answered from the price index; no filter and ANN allowed chooses ANN, exact-only chooses the scan; a one-hop neighbourhood is chosen as the driver.</li> <li><strong>Regret</strong>: median ≤ 1.5× and 90th percentile ≤ 4× of the best plan's actual work over the 300 queries.</li> <li><strong>Mutants run against these tests</strong>: a price range excluding its upper end; duplicate items from a repeated category; the neighbourhood stopping a hop short; the neighbour probe accepting everything; a text probe needing only one term; sets not intersected; a candidate passing if any probe passes; the ranking returning one result too many; the approximate plan skipping the predicates; the planner choosing the most expensive plan; price ranges estimated as the whole table; probing estimated as free. <strong>All 12 were killed</strong>; the price estimate survived until the narrow-price test was added.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Hybrid search engines</strong> (Elasticsearch/OpenSearch k-NN with filters, Vespa, Weaviate, Qdrant, Milvus, pgvector with <code>WHERE</code> clauses) choose between <strong>pre-filtering</strong> (apply the filter, then search the matching vectors exactly or in a filtered index), <strong>post-filtering</strong> (search, then filter, over-fetching) and in-graph filtering, using filter selectivity estimates; Qdrant, for example, switches strategy by the estimated cardinality of the payload filter.</li> <li><strong>PostgreSQL</strong> plans <code>ORDER BY embedding &lt;-&gt; q LIMIT k</code> with <code>WHERE</code> clauses as an index scan on the vector index with post-filtering or a different index on the filter, by cost; the cost of an ANN index scan is a known weak spot in the planner.</li> <li><strong>Multi-model databases</strong> (ArangoDB AQL, SurrealDB, Cosmos DB, Oracle converged DB, SQL Server graph + JSON + full-text) plan across models with per-model statistics and rewrite rules; the shared transaction layer gives all of them one snapshot (<a href="/cookbook/p/transactions-on-the-key-space">M2</a>).</li> <li><strong>Cascades-style optimizers</strong> treat each access path as an implementation rule of a logical operator and cost the alternatives in one memo (<a href="/cookbook/p/a-cascades-memo-in-rust">Part III</a>); this section's enumeration is that search for a star-shaped query, where the number of plans is small enough to enumerate.</li> <li><strong>Learned cardinality estimators and adaptive execution</strong> (<a href="/cookbook/p/adaptive-and-robust">Part III</a>) address the independence assumption this planner makes between text terms and between predicates; for filters correlated with vector locality, per-cluster statistics are the usual fix.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Independence is the common error.</strong> Text terms and categories correlate in real data; a combined estimate that multiplies selectivities will be off by large factors. Collect correlated statistics (multi-column histograms, samples) for the predicate pairs that matter.</li> <li><strong>Approximate plans change semantics</strong>: the same query returns different answers under different plans. Make approximate search an explicit choice, report recall, and never silently switch.</li> <li><strong>Cost units that mix models are fragile</strong>: a graph edge, a posting and a distance are different costs on different hardware; calibrate by measurement (<a href="/cookbook/p/cost-models">Part III</a>) rather than by guess.</li> <li><strong>Probing can be expensive when it is not a point lookup</strong>: here a graph probe needs the whole neighbour set; a text probe needs a forward index. Check that each model offers the probe you cost.</li> <li><strong>Ties and ordering must be specified</strong> (here: distance, then id), or plans will return different but equally valid answers and tests will flake.</li> <li><strong>Hot paths of one model dominate</strong>: a wide text conjunction can cost more than the rest of the query together; per-model limits and timeouts protect the system.</li> <li><strong>Plan caches</strong> keyed by the query shape must include the selectivity regime, or a plan chosen for a rare term will be reused for a frequent one.</li> </ul></aside>
+"""

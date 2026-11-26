@@ -1,0 +1,88 @@
+title = "Std::any"
+module = "Standard library and core"
+module_order = 2
+chapter = "Numbers, traits and formatting"
+chapter_order = 5
+order = 89
+kind = "recipe"
+lede = "std::any (Any, TypeId, downcast), std::error::Error (source chains, boxing), marker and auto traits."
+level = "intermediate"
+code = ["examples/std_tour/std_any_error_marker_traits.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>error design</li><li>type-keyed registries</li><li>plugin payloads</li><li>thread-safety bounds</li><li>layout checks</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>request "extensions" maps in web frameworks</li><li>event buses</li><li>logging a whole error chain</li><li>finding an io::Error inside a wrapped error to decide whether to retry</li><li><code>Send + Sync + 'static</code> bounds on spawned work</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>std::error::Error</code></li><li><code>Error::source</code></li><li><code>std::fmt::Display</code></li><li><code>Box&lt;dyn Error + Send + Sync&gt;</code></li><li><code>From::from</code></li></ul>
+
+<ul class="cb-g-names"><li><code>&lt;dyn Error&gt;::downcast_ref</code></li><li><code>&lt;dyn Error&gt;::downcast_mut</code></li><li><code>&lt;dyn Error&gt;::is</code></li><li><code>Box&lt;dyn Error&gt;::downcast</code></li><li><code>std::io::Error::new</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::io::Error::other</code></li><li><code>std::io::Error::kind</code></li><li><code>std::io::Error::get_ref</code></li><li><code>std::io::Error::into_inner</code></li><li><code>std::io::Error::downcast</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::any::Any</code></li><li><code>std::any::TypeId::of</code></li><li><code>Any::type_id</code></li><li><code>&lt;dyn Any&gt;::is</code></li><li><code>&lt;dyn Any&gt;::downcast_ref</code></li><li><code>&lt;dyn Any&gt;::downcast_mut</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Box&lt;dyn Any&gt;::downcast</code></li><li><code>Rc&lt;dyn Any&gt;::downcast</code></li><li><code>Arc&lt;dyn Any + Send + Sync&gt;::downcast</code></li><li><code>std::any::type_name</code></li><li><code>std::any::type_name_of_val</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Send</code></li><li><code>Sync</code></li><li><code>Sized</code></li><li><code>Unpin</code></li><li><code>Copy</code></li><li><code>std::marker::PhantomData</code></li><li><code>std::marker::PhantomPinned</code></li><li><code>std::mem::size_of</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/any/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/any/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+core: `core::any`, `core::error::Error` (in core since 1.81), `core::marker`. alloc: `Box`, the `From<E> for Box<dyn Error>` impls and `Box::downcast`; Rc/Arc downcasts. std: `std::io::Error`, `std::thread`. Also: <https://doc.rust-lang.org/std/error/trait.Error.html> , <https://doc.rust-lang.org/std/marker/index.html>
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+Error::description/cause (deprecated), Error::provide/request_ref and Error::sources (unstable in 1.98.1), downcast_unchecked&#95;&#42; (unsafe), writing `unsafe impl Send/Sync` (see the unsafe chapter), negative impls `impl !Send` (nightly).
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Make my type an error</td><td><code>derive Debug, impl Display, impl Error (override source if wrapping)</code></td></tr><tr><td>Let <code>?</code> convert a lower error</td><td><code>impl From&lt;Lower&gt; for Mine</code></td></tr><tr><td>"any error" in an application</td><td><code>Box&lt;dyn Error + Send + Sync + 'static&gt;</code></td></tr><tr><td>An error from a string</td><td><code>Err("msg".into()) or io::Error::other("msg")</code></td></tr><tr><td>Print the whole cause chain</td><td><code>loop over source()</code></td></tr><tr><td>Was the cause an io::Error?</td><td><code>walk the chain with downcast_ref::&lt;io::Error&gt;()</code></td></tr><tr><td>Get the concrete error back by value</td><td><code>Box&lt;dyn Error&gt;::downcast::&lt;T&gt;() (Err returns the box)</code></td></tr><tr><td>Value of unknown type</td><td><code>Box&lt;dyn Any&gt; + downcast</code></td></tr><tr><td>One value per type</td><td><code>HashMap&lt;TypeId, Box&lt;dyn Any + Send + Sync&gt;&gt;</code></td></tr><tr><td>Print a type for debugging</td><td><code>type_name::&lt;T&gt;()  (never parse or compare it)</code></td></tr><tr><td>Prove a type is thread-safe</td><td><code>const _: () = assert_send_sync::&lt;T&gt;();</code></td></tr><tr><td>Zero-cost type tag</td><td><code>PhantomData&lt;T&gt; DISPLAY CONVENTION (from the Error docs): messages are typically lowercase, no trailing punctuation; a wrapping error returns the cause from source() OR includes it in its Display output, NOT both (otherwise chain printers repeat it).</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/error/trait.Error.html> , <https://doc.rust-lang.org/std/any/index.html> ,
+
+```text
+https://doc.rust-lang.org/nomicon/send-and-sync.html
+```
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/any/index.html"
+url = "https://doc.rust-lang.org/std/any/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/error/trait.Error.html"
+url = "https://doc.rust-lang.org/std/error/trait.Error.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/marker/index.html"
+url = "https://doc.rust-lang.org/std/marker/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/send-and-sync.html"
+url = "https://doc.rust-lang.org/nomicon/send-and-sync.html"

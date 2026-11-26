@@ -1,0 +1,56 @@
+title = "Tower service layer"
+module = "Rust language"
+module_order = 1
+chapter = "Design patterns"
+chapter_order = 5
+order = 48
+kind = "recipe"
+lede = "a mini re-implementation of tower's Service/Layer model with timeout, retry, limits and a circuit breaker."
+level = "advanced"
+code = ["examples/patterns/tower_service_layer.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>HTTP clients/servers (axum, hyper, tonic)</li><li>RPC middleware</li><li>resilience policies around any async call</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+tower (<https://github.com/tower-rs/tower> , <https://docs.rs/tower>) models everything as `Service<Request>`: an async function `Request -> Result<Response, Error>`. A `Layer` wraps one service in another (decorator pattern), and `ServiceBuilder` stacks layers.
+
+The real trait is `fn poll_ready(&mut self, cx)` + `fn call(&mut self, req) -> Self::Future`, which lets a service apply **backpressure** before accepting work.
+
+Here we simplify to `async fn call(&self, req)` (shared `&self`, readiness folded into `call`), so the middleware logic is easy to read; concurrency limit and rate limit therefore wait/reject inside `call`. Everything is generic (static dispatch): a whole stack monomorphises into one concrete type with no boxing.
+
+Layer **order** is behaviour. `ServiceBuilder::new().layer(A).layer(B).service(s)` is `A(B(s))`: A is **outermost** (sees the request first, the response last). So `Retry` outside `Timeout` gives **each** attempt its own deadline; `Timeout` outside `Retry` puts **one** deadline over all attempts including backoff sleeps.
+
+A circuit breaker outside a retry counts the final outcome, inside it counts every attempt. Both orders are tested below.
+
+axum: every `Router`, every handler, and every `MethodRouter` is a `tower::Service<Request>`; that is why `.layer(...)` accepts anything from `tower` or `tower-http` (CORS, tracing, compression) and why `ServiceExt::oneshot` can call an app directly in tests (shown at the end, using the real `tower` crate from this cookbook's dependencies).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>client resilience (timeouts, retries with backoff, circuit breakers, rate limits) in hyper/tonic/reqwest-style stacks</li><li>server middleware (auth, tracing, compression)</li><li>load shedding and concurrency limiting at service boundaries</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://github.com/tower-rs/tower" target="_blank" rel="noreferrer">https://github.com/tower-rs/tower</a></li><li><a href="https://docs.rs/tower" target="_blank" rel="noreferrer">https://docs.rs/tower</a></li><li><a href="https://tokio.rs/blog/2021-05-14-inventing-the-service-trait" target="_blank" rel="noreferrer">https://tokio.rs/blog/2021-05-14-inventing-the-service-trait</a></li></ul>
+"""
+
+[[sources]]
+title = "github.com/tower-rs/tower"
+url = "https://github.com/tower-rs/tower"
+
+[[sources]]
+title = "docs.rs/tower"
+url = "https://docs.rs/tower"
+
+[[sources]]
+title = "tokio.rs/blog/2021-05-14-inventing-the-service-trait"
+url = "https://tokio.rs/blog/2021-05-14-inventing-the-service-trait"

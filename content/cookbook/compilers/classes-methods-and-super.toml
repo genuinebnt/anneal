@@ -1,0 +1,19 @@
+title = "Classes, methods and super"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Bytecode and virtual machines"
+chapter_order = 3
+order = 593
+kind = "guide"
+lede = "Book ch. 27–29 · Official tests: class/ field/ method/ constructor/ this/ inheritance/ super/ regression/"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<div class="cb-g-tt"><table><thead><tr><th>Kind</th><th>Input</th><th>Expected</th></tr></thead><tbody><tr><td><span class="cb-g-pill cb-g-dis">bytecode</span></td><td><code>class A { f() {} }</code></td><td><code>Class A · DefineGlobal A · GetGlobal A · Closure &lt;fn f&gt; · Method f · Pop</code></td></tr><tr><td><span class="cb-g-pill cb-g-dis">bytecode</span></td><td><code>a.f();</code></td><td><code>GetGlobal a · Invoke f (0 args) · Pop</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>class A { hi() { print "A"; } } class B &lt; A { hi() { super.hi(); print "B"; } } B().hi();</code></td><td><code>A</code> then <code>B</code></td></tr><tr><td><span class="cb-g-pill cb-g-rerr">runtime error</span></td><td><code>class A {} A().x;</code></td><td><code>Undefined property 'x'.</code></td></tr><tr><td><span class="cb-g-pill cb-g-rerr">runtime error</span></td><td><code>1.x;</code></td><td><code>Only instances have properties.</code></td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>class A &lt; A {}</code></td><td><code>[line 1] Error at 'A': A class can't inherit from itself.</code></td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>class A { f() { super.f(); } }</code></td><td><code>[line 1] Error at 'super': Can't use 'super' in a class with no superclass.</code></td></tr></tbody></table></div>
+
+<p>The book adds <code>Invoke</code> and <code>SuperInvoke</code> in ch. 28–29 as an optimization. They skip allocating a bound method for a direct call like <code>a.f()</code>. Write the plain <code>GetProperty</code> then <code>Call</code> version first and tag it. Then add <code>Invoke</code> and check with <code>hyperfine</code> on <code>bench/method_call.lox</code> that it actually helps.</p>
+
+<p>Classes, instances and bound methods each add GC edges: methods tables, fields, the receiver, the superclass. Every new edge needs a line in <code>blacken()</code>. The stress-gc run catches a missing one.</p>
+"""

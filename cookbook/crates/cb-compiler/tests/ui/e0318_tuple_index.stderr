@@ -1,0 +1,9 @@
+error[E0318]: tuple index 5 is out of range
+ --> e0318_tuple_index.peb:3:22
+  |
+3 |     println(to_str(t.5));
+  |                      ^ the tuple has only 2 elements
+  |
+  = note: the tuple has type `(int, int)`
+
+error: aborting due to 1 previous error

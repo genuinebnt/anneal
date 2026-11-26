@@ -1,0 +1,52 @@
+title = "VM and the Pratt compiler"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Bytecode and virtual machines"
+chapter_order = 3
+order = 587
+kind = "guide"
+lede = "Book ch. 15–17 · Official tests: none yet, since print arrives in C4"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>The walking skeleton again. Compile arithmetic, run it on the stack, and print the value left on top.</p>
+
+<div class="cb-g-tt"><table><thead><tr><th>Kind</th><th>Input</th><th>Expected</th></tr></thead><tbody><tr><td><span class="cb-g-pill cb-g-dis">bytecode</span></td><td><code>1 + 2 * 3</code></td><td><code>Constant 1 · Constant 2 · Constant 3 · Multiply · Add</code></td></tr><tr><td><span class="cb-g-pill cb-g-dis">bytecode</span></td><td><code>1 - 2 - 3</code></td><td><code>Constant 1 · Constant 2 · Subtract · Constant 3 · Subtract</code></td></tr><tr><td><span class="cb-g-pill cb-g-dis">bytecode</span></td><td><code>-(1)</code></td><td><code>Constant 1 · Negate</code></td></tr><tr><td><span class="cb-g-pill cb-g-val">value</span></td><td><code>(-1 + 2) * 3 - -4</code></td><td><code>7</code></td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>1 +</code></td><td><code>[line 1] Error at end: Expect expression.</code></td></tr></tbody></table></div>
+
+<p>The book's rule table exists because C has no <code>match</code>. In Rust, dispatch prefix and infix parsing with <code>match</code>, and derive <code>Ord</code> on <code>Prec</code> so you can compare precedence levels directly.</p>
+
+```rust title="crates/clox/src/compiler.rs"
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Prec { None, Assignment, Or, And, Equality, Comparison, Term, Factor, Unary, Call, Primary }
+
+fn parse_precedence(&mut self, prec: Prec) {
+    self.bump();
+    let can_assign = prec <= Prec::Assignment;
+    if !self.prefix(self.prev.kind, can_assign) {
+        return self.error("Expect expression.");
+    }
+    while prec <= infix_prec(self.token.kind) {
+        self.bump();
+        self.infix(self.prev.kind, can_assign);
+    }
+    if can_assign && self.eat(TokenKind::Equal) {
+        self.error("Invalid assignment target.");
+    }
+}
+
+fn prefix(&mut self, kind: TokenKind, can_assign: bool) -> bool {
+    match kind {
+        TokenKind::LParen => self.grouping(),
+        TokenKind::Minus | TokenKind::Bang => self.unary(),
+        TokenKind::Number => self.number(),
+        TokenKind::Identifier => self.variable(can_assign),
+        _ => return false,
+    }
+    true
+}
+```
+
+<p>The Part I lexer already produces tokens on demand through <code>next_token()</code>, which is exactly how the clox compiler pulls them. Read literal text with <code>&amp;src[span]</code>.</p>
+"""

@@ -1,0 +1,70 @@
+title = "Cardinality estimation lab"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 393
+kind = "recipe"
+lede = "Independence, histogram-join, wander-join sampling, Fast-AGMS sketches and a learned regressor on an IMDB-like schema."
+level = "advanced"
+code = ["examples/database/cardinality_estimation_lab.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>query optimizers</li><li>benchmark harnesses for estimators</li><li>approximate query processing</li><li>learned-optimizer research</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+PostgreSQL / System R style estimators (independence, uniformity, inclusion: join selectivity 1/max(ndv)), sampling-based estimation (index-based join sampling in HyPer-style research systems, wander join in online aggregation), AGMS / Fast-AGMS sketches for join-size estimation in stream and distributed engines, equi-depth histogram joins in commercial optimizers, MSCN-style learned estimators evaluated with q-error in the Join Order Benchmark literature.
+
+Course: CMU 15-799 Query Optimization (Spring 2025), lectures 13-15 (Cardinality Estimation, More Cardinality Estimation, Learned Approaches)
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a **lab**.
+
+A seeded generator builds six tables of an IMDB-like schema (title, person, cast_info, company, movie_company, movie_keyword) with the properties that break textbook estimators: Zipf-skewed foreign keys (a few blockbuster titles own most cast rows, companies and keywords), a column correlation inside one table (title.kind determines title.genre 85% of the time), a correlation **across** a join (person.gender determines cast.role) and a fanout correlation (hot titles are mostly kind 0, so `kind = 0` selects the high-fanout titles).
+
+Random 1-4 table conjunctive queries (FK/PK equi-joins plus range/equality filters) are then estimated five ways and compared with the **true** cardinality obtained by executing the query (bottom-up weight propagation over the join tree, exact):
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Independence</div><div class="cb-g-says"><p>Prod(filtered base cardinalities) / prod over joins of max(ndv). Perfect single-column marginals are given on purpose, so every remaining error is caused by the independence / uniformity / inclusion assumptions, not by coarse histograms.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Histogram join</div><div class="cb-g-says"><p>Per join edge, intersect aligned key buckets (64 equi-width buckets with count and ndv, size = sum c1*c2/max(ndv1,ndv2)); fixes skewed fanout across buckets, still assumes predicates independent of join keys.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Wander join (index-based join sampling)</div><div class="cb-g-says"><p>Pick a random row of the filtered root, follow indexes to a random matching row of each neighbour, multiply the observed fanouts. Each walk is an unbiased (Horvitz-Thompson) estimate; more walks, less variance.</p></div></div><div class="cb-g-term"><div class="cb-g-name">FAST-AGMS sketch</div><div class="cb-g-says"><p>Signed counters per (row, bucket); the dot product of two key sketches is an unbiased estimate of the join size of the <strong>filtered</strong> inputs, so predicate selectivity and key skew are both captured per edge; multiple edges still combine by independence.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Learned</div><div class="cb-g-says"><p>Ridge regression (normal equations, hand-written Gaussian elimination) of ln(true cardinality) on a query featurisation: table and edge indicators, per-column ln-selectivities, the independence and histogram-join estimates, and a few interaction features (a linear stand-in for the hidden layers of an MSCN).</p><p>Trained on 1200 queries, evaluated on 500 unseen ones.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+Leis et al. showed estimation errors grow exponentially with the number of joins and that they, not the cost model, dominate bad plans.
+
+The second half of the lab measures exactly that: for 100 queries over 3-5 tables, every connected left-deep join order is costed with C_out (sum of intermediate result sizes) using **true** vs **estimated** cardinalities, and the **regret** of the order each estimator picks (true cost of its pick / true cost of the optimum) is reported.
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+the wander-join estimator is unbiased on average (many walks); on queries with correlated predicates the median q-error of the independence estimator exceeds those of the sampling and the learned estimator; independence gets worse with the number of joins; the true-cardinality planner has regret exactly 1 and every estimator regret >= 1.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Cost Models: Cardinality Estimation, CMU 15-799 lectures 13-15 <https://15799.courses.cs.cmu.edu/spring2025/schedule.html> How Good are Query Optimizers, Really?
+
+(Leis et al., VLDB 2015) Query Optimization Through the Looking Glass, and What We Found Running the Join Order Benchmark (Leis et al., VLDB Journal 2017) Analyzing the Impact of Cardinality Estimation on Execution Plans in Microsoft SQL Server (Lee et al., VLDB 2023) Learned Cardinality Estimation: An In-depth Study (Kim et al., SIGMOD 2022)
+
+```text
+PostgreSQL planner statistics https://www.postgresql.org/docs/current/planner-stats.html
+```
+"""
+
+[[sources]]
+title = "15799.courses.cs.cmu.edu/spring2025/schedule.html"
+url = "https://15799.courses.cs.cmu.edu/spring2025/schedule.html"
+
+[[sources]]
+title = "postgresql.org/docs/current/planner-stats.html"
+url = "https://www.postgresql.org/docs/current/planner-stats.html"

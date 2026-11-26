@@ -1,0 +1,44 @@
+title = "Product Quantization"
+module = "Search and vectors"
+module_order = 9
+chapter = "Vector search"
+chapter_order = 2
+order = 469
+kind = "recipe"
+lede = "Compress vectors to m bytes and search with Asymmetric Distance Computation (ADC)."
+level = "advanced"
+code = ["examples/search_vectors/product_quantization.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+fitting huge vector collections in RAM (16-64x smaller) while keeping approximate search fast.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+split each D-dim vector into `m` sub-vectors of D/m dims. For each subspace run k-means with 256 centroids (a CODEBOOK). A vector is stored as m bytes: the index of the nearest centroid in each subspace. 256 = 2&#94;8 so one centroid id is exactly a u8.
+
+The implicit vocabulary is 256&#94;m reconstructed points, far finer than one k-means with 256 centres could give, while the codebooks stay tiny (m &#42; 256 &#42; D/m floats). ADC: for a query, compute once a lookup table T[j][c] = &#124;&#124;q_j - centroid_j[c]&#124;&#124;&#94;2 (m &#42; 256 distances).
+
+The distance to any stored vector is then sum_j T[j][code[j]]: m table lookups and adds, no float vectors touched. "Asymmetric" because the query stays UNquantised (only the database side is lossy), which is more accurate than comparing two codes. **Parameters**: `m` = bytes per vector; bigger m means finer sub-vectors, lower error, less compression.
+
+Typical: 8 to 64. **Re-ranking**: PQ distances are noisy, so take the top R (here 100) by ADC and recompute **exact** distances for just those R; that recovers most of the lost recall for R full-vector reads. The raw vectors may live on slow storage since only R are touched.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>FAISS IVFPQ and PQ indexes</li><li>the in-RAM compressed sketch in DiskANN-style systems (see vamana_diskann_lite)</li><li>vector databases with a "product quantization" option to cut memory</li><li>coarse-then-fine pipelines (IVF to select, PQ to score, exact to re-rank)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Jegou, Douze, Schmid, "Product quantization for nearest neighbor search" (IEEE TPAMI 2011) and <https://github.com/facebookresearch/faiss>
+"""
+
+[[sources]]
+title = "github.com/facebookresearch/faiss"
+url = "https://github.com/facebookresearch/faiss"

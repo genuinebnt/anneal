@@ -1,0 +1,315 @@
+title = "Filters, tries, inverted and vector indexes"
+module = "Databases"
+module_order = 8
+chapter = "Indexes"
+chapter_order = 3
+order = 340
+kind = "guide"
+lede = "Bloom, blocked Bloom, cuckoo filters · skip lists · tries and radix trees · inverted indexes (Lucene, GIN) · vector indexes (IVF, HNSW) · partial and covering indexes"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Index vs filter</strong>: an index answers <em>where</em> the data is; a filter answers <em>whether</em> it exists. A cheap "no" saves an expensive search (a filter per hash bucket, per SSTable, per partition).</li> <li><strong>Bloom filter</strong>: a bit array plus k hash functions. Insert sets k bits; a lookup checks them. There are <strong>no false negatives</strong>, and the false-positive rate is tunable with m and k. You can't delete. Variants: <strong>counting Bloom</strong> (counters, supports delete), <strong>cuckoo filter</strong> (fingerprints in cuckoo buckets, supports delete), <strong>succinct range filters</strong> (an immutable compact trie that also answers range queries, e.g. SuRF).</li> <li><strong>Skip list</strong>: layered linked lists, each level about half the size of the one below. O(log n) expected, ordered, no rebalancing. Insert bottom-up (so readers never see a half-linked node; a single CAS per level suffices), and delete by marking first and unlinking top-down later. It's the classic <strong>memtable</strong> structure. The downsides: poor cache and disk locality, and awkward reverse scans.</li> <li><strong>Trie</strong>: keys as sequences of digits (bits or bytes). The shape depends only on the key set, not insertion order; there's no rebalancing; operations are O(key length); and a trie can answer "no such key" early, unlike a B+Tree, which must reach a leaf. <strong>Span</strong> = bits per level = fan-out. <strong>Horizontal compression</strong> stores nodes as arrays; <strong>vertical compression</strong> (a <em>radix tree</em>) collapses single-child chains, so matches must be verified against the tuple.</li> <li><strong>Inverted index</strong>: term → <strong>posting list</strong> of record ids, for keyword search. Lucene stores the term dictionary as an immutable <strong>finite state transducer</strong> (merged in the background), with delta-compressed and bit-packed postings. PostgreSQL's <strong>GIN</strong> uses a B+Tree of terms, with a posting list or posting tree per term and a <em>pending list</em> that batches inserts. Enhancements: ranking (term frequency), tokenizers and n-grams for fuzzy search and autocomplete.</li> <li><strong>Vector index</strong>: embeddings (float arrays) where semantic similarity is geometric closeness. Nearest-neighbour queries have <strong>no single correct answer</strong>, and filtering before or after the search matters. <strong>IVF</strong> (k-means centroids plus inverted lists; probe the nearest lists; quantize to shrink them) and <strong>graph indexes</strong> (a neighbour graph with greedy search; <strong>HNSW</strong> adds skip-list-like layers). Implementations: FAISS, hnswlib, pgvector.</li> <li><strong>Index optimizations</strong>: <strong>partial indexes</strong> (<code>CREATE INDEX … WHERE …</code>) index a subset; <strong>include columns</strong> store extra non-key columns in the leaves for <strong>index-only scans</strong>.</li> </ul>
+"""
+
+[[sections]]
+heading = "Filters, measured"
+body = """
+```text title="1M keys inserted, 1M absent keys probed · Apple M4 Pro"
+Bloom        FPR 1.018%  16.1 ns/probe     ← k = 7 probes scattered over 1.2 MB: ~7 cache misses
+Blocked      FPR 0.951%  11.5 ns/probe     ← all probes inside one 64-byte line: 1 cache miss
+Cuckoo(16b)  FPR 0.006%   3.5 ns/probe     ← ≤ 2 buckets; but 33.5 bits/key here (power-of-two table at 48% load) vs 10
+```
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Filter</th> <th>Bits/key for ~1% FPR</th> <th>Delete</th> <th>Probe cost</th> <th>Used in</th> </tr> </thead> <tbody> <tr> <td>Bloom</td> <td>≈ 9.6</td> <td>✗</td> <td>k random bit reads</td> <td>LevelDB SSTables, Cassandra, join pushdown</td> </tr> <tr> <td>Blocked Bloom (register/cache-line)</td> <td>≈ 10–11</td> <td>✗</td> <td>one cache line (SIMD-friendly)</td> <td>RocksDB (<code>format_version=5</code> FastLocalBloom), join filters in compiled/vectorized engines</td> </tr> <tr> <td>Cuckoo</td> <td>≈ 10 (f ≈ 10-bit fingerprints at load 0.95); beats Bloom below ≈ 0.4% FPR</td> <td>✓</td> <td>≤ 2 buckets</td> <td>RedisBloom, networking</td> </tr> <tr> <td>Xor / Ribbon</td> <td>≈ 8.6 / ≈ 7 (static sets)</td> <td>✗</td> <td>3 reads</td> <td>RocksDB Ribbon filters (saves ~30% memory vs Bloom)</td> </tr> <tr> <td>SuRF (range filter)</td> <td>≈ 10+</td> <td>✗</td> <td>trie walk</td> <td>range queries on LSM levels</td> </tr> </tbody> </table></div>
+
+:::deeper Reference: Bloom, blocked Bloom, cuckoo filter, inverted index with galloping + BM25, IVF-flat
+```rust title="src/storage/index/filters.rs"
+//! L09: filters (Bloom, blocked Bloom, cuckoo), an inverted index, and an IVF vector index.
+use std::collections::HashMap;
+
+#[inline]
+fn mix(x: u64, seed: u64) -> u64 {
+    let mut z = x ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+// ---------------- Bloom filter: k probes anywhere in m bits -------------------------------
+pub struct Bloom { bits: Vec<u64>, m: u64, k: u32 }
+impl Bloom {
+    /// Size for n keys at false-positive rate p: m = -n ln p / (ln 2)^2, k = (m/n) ln 2.
+    pub fn new(n: usize, p: f64) -> Self {
+        let m = ((-(n.max(1) as f64) * p.ln()) / std::f64::consts::LN_2.powi(2)).ceil().max(64.0) as u64;
+        let k = ((m as f64 / n.max(1) as f64) * std::f64::consts::LN_2).round().max(1.0) as u32;
+        Bloom { bits: vec![0; m.div_ceil(64) as usize], m, k }
+    }
+    pub fn insert(&mut self, key: u64) {
+        let (h1, h2) = (mix(key, 1), mix(key, 2) | 1);
+        for i in 0..self.k as u64 { let b = h1.wrapping_add(i.wrapping_mul(h2)) % self.m; self.bits[(b / 64) as usize] |= 1 << (b % 64); }
+    }
+    pub fn may_contain(&self, key: u64) -> bool {
+        let (h1, h2) = (mix(key, 1), mix(key, 2) | 1);
+        (0..self.k as u64).all(|i| { let b = h1.wrapping_add(i.wrapping_mul(h2)) % self.m; self.bits[(b / 64) as usize] & (1 << (b % 64)) != 0 })
+    }
+}
+
+// ---------------- Blocked Bloom: all k probes inside one 512-bit (cache-line) block -------
+#[derive(Clone, Copy, Default)]
+#[repr(align(64))]
+struct Block([u64; 8]);
+pub struct BlockedBloom { blocks: Vec<Block>, k: u32 }
+impl BlockedBloom {
+    pub fn new(n: usize, bits_per_key: usize) -> Self {
+        let nblocks = (n * bits_per_key).div_ceil(512).max(1);
+        let k = ((bits_per_key as f64) * std::f64::consts::LN_2).round().max(1.0) as u32;
+        BlockedBloom { blocks: vec![Block::default(); nblocks], k }
+    }
+    #[inline]
+    fn probes(&self, key: u64) -> (usize, impl Iterator<Item = u32>) {
+        let h = mix(key, 7);
+        let block = ((h as u128 * self.blocks.len() as u128) >> 64) as usize;   // fast range reduction
+        let mut g = mix(key, 11);
+        (block, (0..self.k).map(move |_| { let b = (g & 511) as u32; g = g.rotate_right(9); b }))
+    }
+    pub fn insert(&mut self, key: u64) {
+        let (bi, ps) = self.probes(key);
+        let ps: Vec<u32> = ps.collect();
+        let blk = &mut self.blocks[bi].0;
+        for b in ps { blk[(b / 64) as usize] |= 1 << (b % 64); }
+    }
+    pub fn may_contain(&self, key: u64) -> bool {
+        let (bi, mut ps) = self.probes(key);
+        let blk = &self.blocks[bi].0;
+        ps.all(|b| blk[(b / 64) as usize] & (1 << (b % 64)) != 0)                // one cache line touched
+    }
+}
+
+// ---------------- Cuckoo filter: 16-bit fingerprints, 4-way buckets, supports delete -------
+pub struct CuckooFilter { buckets: Vec<[u16; 4]>, mask: usize, len: usize }
+impl CuckooFilter {
+    pub fn new(n: usize) -> Self {
+        let nb = (n.div_ceil(4) * 100 / 95).next_power_of_two().max(1);            // ~95% max load
+        CuckooFilter { buckets: vec![[0; 4]; nb], mask: nb - 1, len: 0 }
+    }
+    fn fp(key: u64) -> u16 { (mix(key, 3) as u16).max(1) }                        // 0 = empty slot
+    fn i1(&self, key: u64) -> usize { mix(key, 4) as usize & self.mask }
+    fn alt(&self, i: usize, fp: u16) -> usize { (i ^ mix(fp as u64, 5) as usize) & self.mask }  // involution
+    pub fn insert(&mut self, key: u64) -> bool {
+        let fp = Self::fp(key);
+        let (a, b) = (self.i1(key), self.alt(self.i1(key), fp));
+        for i in [a, b] { if let Some(s) = self.buckets[i].iter_mut().find(|s| **s == 0) { *s = fp; self.len += 1; return true; } }
+        let (mut i, mut fp) = (a, fp);
+        for n in 0..500 {                                                          // kick fingerprints around
+            let slot = (mix(n, fp as u64) & 3) as usize;
+            std::mem::swap(&mut fp, &mut self.buckets[i][slot]);
+            i = self.alt(i, fp);
+            if let Some(s) = self.buckets[i].iter_mut().find(|s| **s == 0) { *s = fp; self.len += 1; return true; }
+        }
+        false                                                                      // full: caller must resize
+    }
+    pub fn may_contain(&self, key: u64) -> bool {
+        let fp = Self::fp(key);
+        let a = self.i1(key);
+        self.buckets[a].contains(&fp) || self.buckets[self.alt(a, fp)].contains(&fp)
+    }
+    /// Only delete keys that were inserted: deleting a false positive removes someone else's fp.
+    pub fn delete(&mut self, key: u64) -> bool {
+        let fp = Self::fp(key);
+        let a = self.i1(key);
+        for i in [a, self.alt(a, fp)] {
+            if let Some(s) = self.buckets[i].iter_mut().find(|s| **s == fp) { *s = 0; self.len -= 1; return true; }
+        }
+        false
+    }
+}
+
+// ---------------- Inverted index: term -> sorted posting list, BM25 ranking ------------------
+#[derive(Default)]
+pub struct InvertedIndex { postings: HashMap<String, Vec<(u32, u32)>>, doc_len: Vec<u32> }   // (doc, tf)
+
+pub fn tokenize(s: &str) -> impl Iterator<Item = String> + '_ {
+    s.split(|c: char| !c.is_alphanumeric()).filter(|t| !t.is_empty()).map(|t| t.to_lowercase())
+}
+
+impl InvertedIndex {
+    pub fn add(&mut self, text: &str) -> u32 {
+        let doc = self.doc_len.len() as u32;
+        let mut tf: HashMap<String, u32> = HashMap::new();
+        let mut n = 0;
+        for t in tokenize(text) { *tf.entry(t).or_default() += 1; n += 1; }
+        for (t, f) in tf { self.postings.entry(t).or_default().push((doc, f)); }   // docs arrive in order: lists stay sorted
+        self.doc_len.push(n);
+        doc
+    }
+    fn list(&self, t: &str) -> &[(u32, u32)] { self.postings.get(t).map_or(&[], |v| v.as_slice()) }
+
+    /// Conjunctive query: intersect posting lists, smallest first, galloping through the larger ones.
+    pub fn and_query(&self, q: &str) -> Vec<u32> {
+        let mut lists: Vec<&[(u32, u32)]> = tokenize(q).map(|t| self.list(&t)).collect();
+        if lists.is_empty() { return vec![]; }
+        lists.sort_by_key(|l| l.len());
+        let mut out: Vec<u32> = lists[0].iter().map(|p| p.0).collect();
+        for l in &lists[1..] {
+            let mut lo = 0;
+            out.retain(|&d| {
+                // Gallop: exponential probe, then binary search. O(m log(n/m)) for sizes m ≤ n.
+                let mut step = 1;
+                while lo + step < l.len() && l[lo + step].0 < d { step *= 2; }
+                let hi = (lo + step + 1).min(l.len());
+                lo += l[lo..hi].partition_point(|p| p.0 < d);
+                lo < l.len() && l[lo].0 == d
+            });
+        }
+        out
+    }
+
+    /// BM25 top-k for a disjunctive query (k1 = 1.2, b = 0.75).
+    pub fn bm25(&self, q: &str, k: usize) -> Vec<(u32, f64)> {
+        let n = self.doc_len.len() as f64;
+        let avg = self.doc_len.iter().map(|&l| l as f64).sum::<f64>() / n.max(1.0);
+        let mut score: HashMap<u32, f64> = HashMap::new();
+        for t in tokenize(q) {
+            let l = self.list(&t);
+            let idf = ((n - l.len() as f64 + 0.5) / (l.len() as f64 + 0.5) + 1.0).ln();
+            for &(d, tf) in l {
+                let (tf, dl) = (tf as f64, self.doc_len[d as usize] as f64);
+                *score.entry(d).or_default() += idf * tf * 2.2 / (tf + 1.2 * (0.25 + 0.75 * dl / avg));
+            }
+        }
+        let mut v: Vec<(u32, f64)> = score.into_iter().collect();
+        v.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+        v.truncate(k);
+        v
+    }
+}
+
+// ---------------- IVF-flat vector index: k-means centroids + inverted lists ----------------
+pub fn l2(a: &[f32], b: &[f32]) -> f32 { a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum() }
+
+pub struct IvfFlat { dim: usize, centroids: Vec<Vec<f32>>, lists: Vec<Vec<(u32, Vec<f32>)>> }
+
+impl IvfFlat {
+    /// Train `nlist` centroids with Lloyd's k-means (fixed iterations), then assign every vector.
+    pub fn build(data: &[Vec<f32>], nlist: usize, iters: usize, seed: u64) -> Self {
+        let dim = data[0].len();
+        let mut centroids: Vec<Vec<f32>> = (0..nlist).map(|i| data[(mix(i as u64, seed) as usize) % data.len()].clone()).collect();
+        for _ in 0..iters {
+            let mut sums = vec![vec![0f32; dim]; nlist];
+            let mut counts = vec![0usize; nlist];
+            for v in data {
+                let c = nearest(&centroids, v);
+                counts[c] += 1;
+                for (s, x) in sums[c].iter_mut().zip(v) { *s += x; }
+            }
+            for c in 0..nlist {
+                if counts[c] > 0 { centroids[c] = sums[c].iter().map(|s| s / counts[c] as f32).collect(); }
+            }
+        }
+        let mut lists = vec![Vec::new(); nlist];
+        for (i, v) in data.iter().enumerate() { lists[nearest(&centroids, v)].push((i as u32, v.clone())); }
+        IvfFlat { dim, centroids, lists }
+    }
+
+    /// Search the `nprobe` closest lists exhaustively; return the k nearest ids.
+    pub fn search(&self, q: &[f32], k: usize, nprobe: usize) -> Vec<u32> {
+        assert_eq!(q.len(), self.dim);
+        let mut cs: Vec<(f32, usize)> = self.centroids.iter().enumerate().map(|(i, c)| (l2(c, q), i)).collect();
+        cs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut cand: Vec<(f32, u32)> = cs.iter().take(nprobe)
+            .flat_map(|&(_, c)| self.lists[c].iter().map(|(id, v)| (l2(v, q), *id))).collect();
+        cand.sort_by(|a, b| a.0.total_cmp(&b.0));
+        cand.into_iter().take(k).map(|(_, id)| id).collect()
+    }
+}
+
+fn nearest(cs: &[Vec<f32>], v: &[f32]) -> usize {
+    cs.iter().enumerate().map(|(i, c)| (l2(c, v), i)).min_by(|a, b| a.0.total_cmp(&b.0)).unwrap().1
+}
+
+pub fn brute_force(data: &[Vec<f32>], q: &[f32], k: usize) -> Vec<u32> {
+    let mut v: Vec<(f32, u32)> = data.iter().enumerate().map(|(i, x)| (l2(x, q), i as u32)).collect();
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    v.into_iter().take(k).map(|(_, i)| i).collect()
+}
+```
+:::
+
+<aside data-call="rust"><b><code>#[repr(align(64))]</code> makes the cache line explicit</b><p><code>struct Block([u64; 8])</code> with <code>#[repr(align(64))]</code> guarantees each block starts on a cache-line boundary, so a probe touches exactly one line. That's the whole trick behind blocked Bloom filters. The fast range reduction <code>(h as u128 * n as u128) &gt;&gt; 64</code> maps a 64-bit hash onto <code>0..n</code> without a division (Lemire's "multiply-shift" trick). Integer <code>%</code> costs 20–40 cycles; the multiply costs 3.</p></aside>
+
+<p>FPR comparisons are only fair at equal bits per key. The cuckoo filter wins on probe cost here because it touches at most two adjacent slots, not because its fingerprints make it cheaper in memory; sized with power-of-two tables it can waste half its space unless you allow non-power-of-two bucket counts.</p>
+"""
+
+[[sections]]
+heading = "Tries and radix trees"
+body = """
+<p>A trie answers "is this key absent?" as soon as a prefix is missing, without descending to a leaf. It also needs no rebalancing, and its shape is canonical. The memory cost of 256-way nodes is what <strong>adaptive radix trees</strong> (ART, Leis et al. ICDE 2013) solve: nodes of 4, 16, 48 or 256 children, chosen by occupancy, plus path compression. ART is the primary index in HyPer and DuckDB. Masstree (a trie of B+Trees) and HOT (height-optimized trie) are relatives. Part II covers them with latching (OLTP indexes). The copy-on-write trie in <a href="/cookbook/p/more-primers">P0+</a> is the simplest member of the family.</p>
+"""
+
+[[sections]]
+heading = "Inverted indexes"
+body = """
+```text title="inverted index tests"
+AND "wu clan" → docs [0, 3]        galloping intersection, smallest list first
+BM25 "wu tang clan" top-2 → {0, 3}
+20k docs, AND over lists of 20000/6667/2858/20 → only 20 candidates ever probed
+```
+
+<p>Intersecting the rarest list first, and galloping (exponential then binary search) through the longer ones, makes the cost proportional to the <em>shortest</em> list times log of the ratio, not the sum of the lengths. That's how search engines answer multi-term AND queries in microseconds. BM25 is the standard relevance score: term frequency with saturation (k₁), document-length normalization (b), and inverse document frequency.</p>
+"""
+
+[[sections]]
+heading = "Vector indexes"
+body = """
+```text title="IVF-flat: 20k × 32-d clustered vectors, 100 lists, recall@10 vs exact brute force"
+IVF nprobe= 1: recall@10 = 0.791,   5.1 µs/query
+IVF nprobe= 4: recall@10 = 0.997,  12.9 µs/query
+IVF nprobe=16: recall@10 = 1.000,  47.2 µs/query
+brute force:                        400.9 µs/query   ← the baseline every ANN index is measured against
+```
+
+<p>The knob is always <strong>recall vs latency</strong>. IVF trades them with <code>nprobe</code>, and HNSW with <code>ef_search</code>. A vector index is only honest when it reports recall against brute force, which is why the vector store in Part V starts with an exact scan. <strong>Filtered search</strong> (<code>WHERE category = 'x' ORDER BY embedding &lt;-&gt; q LIMIT 10</code>) is where these indexes stop composing cleanly with the rest of the query plan. Pre-filtering breaks graph connectivity; post-filtering can return fewer than k results. That's an open research area.</p>
+
+<aside data-call="production"><b>Where these live in real systems</b><ul> <li><strong>PostgreSQL</strong>: GIN (inverted: full-text, JSONB, arrays), GiST and SP-GiST (generalized trees: geometric, trigram, radix), BRIN (block range min/max), <code>pgvector</code> (IVFFlat, HNSW). Also partial and covering (<code>INCLUDE</code>) B-trees.</li> <li><strong>Elasticsearch / OpenSearch / Tantivy (Rust)</strong>: Lucene-style segments of immutable inverted indexes, merged in the background: an LSM for text.</li> <li><strong>DuckDB</strong>: ART for primary keys and constraints, min/max zone maps per row group, a vector similarity extension.</li> <li><strong>Vector databases</strong> (Qdrant, Weaviate, Milvus, LanceDB): HNSW, IVF-PQ and DiskANN, plus payload filtering. See the ML⇄DB seminar.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Space/Time Trade-offs in Hash Coding with Allowable Errors"
+url = "https://dl.acm.org/doi/10.1145/362686.362692"
+
+[[sources]]
+title = "Cuckoo Filter: Practically Better Than Bloom"
+url = "https://www.cs.cmu.edu/~dga/papers/cuckoo-conext2014.pdf"
+
+[[sources]]
+title = "SuRF: Practical Range Query Filtering with Fast Succinct Tries"
+url = "https://www.cs.cmu.edu/~huanche1/publications/surf_paper.pdf"
+
+[[sources]]
+title = "The Adaptive Radix Tree"
+url = "https://db.in.tum.de/~leis/papers/ART.pdf"
+
+[[sources]]
+title = "Efficient and robust approximate nearest neighbor search using HNSW graphs"
+url = "https://arxiv.org/abs/1603.09320"
+
+[[sources]]
+title = "Product Quantization for Nearest Neighbor Search"
+url = "https://inria.hal.science/inria-00514462/document"
+
+[[sources]]
+title = "pgvector HNSW (Jonathan Katz)"
+url = "https://www.youtube.com/watch?v=YU66YlZW6dA"
+
+[[sources]]
+title = "Qdrant"
+url = "https://www.youtube.com/watch?v=bU38Ovdh3NY"
+
+[[sources]]
+title = "Lance"
+url = "https://www.youtube.com/watch?v=ixpbVyrsuL8"

@@ -1,0 +1,12 @@
+// passes: bce
+// `i < len(xs)` with `i` starting at 0 and only increasing proves `xs[i]` in bounds.
+fn sum(xs: [int]) -> int {
+    let mut i = 0;
+    let mut s = 0;
+    while i < len(xs) {
+        s += xs[i];
+        i += 1;
+    }
+    s
+}
+fn main() { println(to_str(sum([1, 2, 3]))); }

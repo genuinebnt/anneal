@@ -1,0 +1,407 @@
+title = "Lakehouses and table formats"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 423
+kind = "guide"
+lede = "Future Data Systems #1–#12 (Iceberg, Hudi, DuckLake, Vortex, ADBC, SingleStore, Databricks transactions, Mooncake, Firebolt, XTDB, Polaris, Fluss) · snapshots, manifests, optimistic commit by conditional put · history checked against a serial replay under concurrent writers · commit rate, lost updates and metadata growth measured"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<p><em>(No notes exist for these talks and I have not transcribed them. The points below are the design space the systems share, from the Iceberg, Delta Lake and Hudi specifications and papers, not a summary of any talk.)</em></p>
+
+<ul> <li><strong>The lakehouse claim</strong>: warehouse semantics (ACID transactions, schema, consistent reads, <code>UPDATE</code>/<code>DELETE</code>/<code>MERGE</code>) on <strong>cheap object storage</strong>, with many engines reading and writing the same tables. Object stores give you immutable objects, ranged reads, listing and (now) conditional writes, and nothing else; a <strong>table format</strong> is the metadata protocol that turns a directory of files into a table.</li> <li><strong>Immutable files + a metadata tree + one atomic pointer swap.</strong> Data files are never modified. A table's state is a <strong>snapshot</strong>: a list of data files, recorded in <strong>manifests</strong> (which also carry per-file statistics), referenced from a <strong>manifest list</strong>, referenced from the <strong>table metadata</strong>. Every change writes new files and a new snapshot, then <strong>atomically replaces the pointer</strong> to the current metadata. Readers load one metadata version and see a consistent snapshot no matter what writers do afterwards: <strong>snapshot isolation and time travel come for free</strong>.</li> <li><strong>The commit is the hard part.</strong> Several writers race to produce version <code>N+1</code>. The protocol is <strong>optimistic concurrency control</strong> on a single atomic primitive: <em>create version N+1 only if it does not exist</em> (Delta Lake: the next <code>_delta_log/N+1.json</code>; Iceberg: the catalog's compare-and-swap of the metadata pointer; the lab: <code>put_if_absent</code>). A loser re-reads, re-validates or re-executes its operation against the new latest version, and tries again. Without the conditional primitive, concurrent writers silently overwrite one another.</li> <li><strong>Commits do not scale like database transactions.</strong> Every commit is several sequential object-store round trips (read the latest metadata, read the manifest list, write new manifest, write the new list, conditional-put the metadata), tens of milliseconds each; one table can therefore sustain only a handful to a few dozen commits per second, and contention multiplies the wasted work. The remedies are <strong>bigger commits</strong> (micro-batches, not one commit per row), <strong>partitioned or sharded tables</strong>, a <strong>database-backed catalog</strong> (DuckLake keeps the metadata in a SQL database, so a commit is a transaction), and coordinated commits through a service.</li> <li><strong>Metadata is a cost.</strong> Planning a query reads manifests: with thousands of tiny manifests, planning dominates. Table formats <strong>merge manifests</strong>, <strong>checkpoint</strong> the log (Delta writes a checkpoint every few commits so readers do not replay the whole log), and keep statistics so files can be skipped without opening them.</li> <li><strong>Small files and deletes drive maintenance.</strong> Streaming ingestion creates many small files; deletes and updates either <strong>rewrite files</strong> (<em>copy-on-write</em>) or write <strong>delete files / deletion vectors</strong> that readers apply (<em>merge-on-read</em>, Hudi's and Iceberg's second mode). <strong>Compaction</strong> merges small files (and re-sorts them, restoring min/max pruning), <strong>snapshot expiry</strong> shortens history, and <strong>orphan removal</strong> deletes unreferenced objects, with a grace period so that files of in-flight commits are never deleted.</li> <li><strong>Beyond the basics in the seminar</strong>: <strong>bitemporal</strong> history (XTDB: valid time and system time, not just snapshot time), <strong>multi-statement and multi-table transactions</strong> (needs commit coordination beyond a single pointer), <strong>catalogs as services</strong> (Polaris, the REST catalog: access control, credential vending, commit arbitration), <strong>streaming storage as the lake's front door</strong> (Fluss, Mooncake), <strong>file formats with cheaper random access</strong> (Vortex, Lance) and <strong>driver protocols</strong> that move Arrow instead of rows (ADBC).</li> </ul>
+"""
+
+[[sections]]
+heading = "The format in miniature"
+body = """
+```text
+t/meta/v00000007          table metadata version 7 (created with put_if_absent)
+   version 7 / current 7 / snap 7 parent 6 list=t/list/w3-12 / earlier snapshots …
+t/list/w3-12              manifest list of snapshot 7: one manifest path per line
+t/manifest/w3-12 …        manifest: "A path rows min max" (file added) / "D path" (file removed)
+t/data/w3-11              data file: rows "key value", with min/max recorded in the manifest
+```
+
+<ul> <li><strong>Live files of a snapshot</strong> = replay its manifests in order: <code>A</code> adds a file, <code>D</code> removes it.</li> <li><strong>Append</strong>: write one data file and one manifest; the new snapshot's list is the parent's list plus the new manifest. An append never needs to know the existing files.</li> <li><strong>Delete range</strong>: for each live file overlapping the range, read it, drop the matching rows, write the remainder as a new file (copy-on-write), and record <code>D old</code>, <code>A new</code> in one manifest. Files entirely inside the range simply get a <code>D</code>.</li> <li><strong>Compaction</strong>: merge live files smaller than a target into sorted files of the target size (<code>D</code> all old, <code>A</code> all new): the multiset of rows is unchanged, the file count drops, and the new files have disjoint key ranges.</li> <li><strong>Commit</strong>: compute the new metadata version from the latest one; <code>put_if_absent("meta/v{N+1}")</code>. On failure (another writer won <code>N+1</code>), count a conflict, back off briefly, and <strong>re-run the operation against the new latest snapshot</strong>. Because the operation is planned against exactly the snapshot it replaces, the history is the serial execution of the committed operations in version order.</li> <li><strong>Maintenance</strong>: <code>rewrite_manifests</code> (one manifest listing the live files; a metadata-only commit), <code>expire_snapshots(keep)</code>, and <code>remove_orphans(cutoff)</code> (delete data, manifest and list objects that no retained snapshot references and that were created before the cutoff).</li> <li><strong>The DuckLake variant</strong> keeps the file list in a transactional catalog: upload the data file, then one catalog transaction appends the file entry; the database serializes writers and there is no metadata object chain to race on.</li> </ul>
+
+:::deeper Reference: conditional-put object store, metadata encodings, table with scan / append / delete / compact / commit, unsafe commit, manifest rewrite, expiry, orphan removal, catalog variant
+```rust title="src/lake/mod.rs"
+//! A miniature lakehouse table format over an object store. Data files and manifests are immutable objects; a table version is the
+//! object `meta/v{N}` and a commit is `put_if_absent(meta/v{N+1})`, so exactly one of several concurrent writers wins each
+//! version. Snapshots form a linear history (time travel); a writer that loses re-executes its operation on the new latest
+//! snapshot. Includes copy-on-write deletes, compaction, snapshot expiry with orphan removal, and a catalog-in-a-database variant.
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering::*};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+// ----------------------------------------------------------------------------------------------- store
+
+pub trait Store: Send + Sync {
+    fn get(&self, key: &str) -> Option<Vec<u8>>;
+    /// Unconditional overwrite (what a naive commit would use).
+    fn put(&self, key: &str, bytes: Vec<u8>);
+    /// Atomic create-if-absent: returns false and changes nothing if the key exists (S3 `If-None-Match`, GCS preconditions).
+    fn put_if_absent(&self, key: &str, bytes: Vec<u8>) -> bool;
+    /// Keys with the prefix, sorted.
+    fn list(&self, prefix: &str) -> Vec<String>;
+    fn delete(&self, key: &str);
+    /// Logical creation order of an object (for orphan removal grace periods).
+    fn created(&self, key: &str) -> Option<u64>;
+    fn clock(&self) -> u64;
+}
+
+/// In-memory store with a fixed latency per operation (slept outside the lock) and operation counters.
+pub struct MemObjects { map: Mutex<BTreeMap<String, (Vec<u8>, u64)>>, latency: Duration, seq: AtomicU64, pub ops: AtomicU64 }
+impl MemObjects {
+    pub fn new(latency: Duration) -> Arc<Self> { Arc::new(MemObjects { map: Mutex::new(BTreeMap::new()), latency, seq: AtomicU64::new(1), ops: AtomicU64::new(0) }) }
+    fn delay(&self) { self.ops.fetch_add(1, Relaxed); if !self.latency.is_zero() { std::thread::sleep(self.latency); } }
+    pub fn object_count(&self) -> usize { self.map.lock().unwrap().len() }
+}
+impl Store for MemObjects {
+    fn get(&self, key: &str) -> Option<Vec<u8>> { self.delay(); self.map.lock().unwrap().get(key).map(|x| x.0.clone()) }
+    fn put(&self, key: &str, bytes: Vec<u8>) { self.delay(); let s = self.seq.fetch_add(1, Relaxed); self.map.lock().unwrap().insert(key.into(), (bytes, s)); }
+    fn put_if_absent(&self, key: &str, bytes: Vec<u8>) -> bool {
+        self.delay();
+        let mut m = self.map.lock().unwrap();
+        if m.contains_key(key) { return false; }
+        let s = self.seq.fetch_add(1, Relaxed);
+        m.insert(key.into(), (bytes, s));
+        true
+    }
+    fn list(&self, prefix: &str) -> Vec<String> { self.delay(); self.map.lock().unwrap().range(prefix.to_string()..).take_while(|(k, _)| k.starts_with(prefix)).map(|(k, _)| k.clone()).collect() }
+    fn delete(&self, key: &str) { self.delay(); self.map.lock().unwrap().remove(key); }
+    fn created(&self, key: &str) -> Option<u64> { self.map.lock().unwrap().get(key).map(|x| x.1) }
+    fn clock(&self) -> u64 { self.seq.load(Relaxed) }
+}
+
+// ----------------------------------------------------------------------------------------------- metadata
+
+pub type Row = (i64, i64);
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FileMeta { pub path: String, pub rows: u64, pub min: i64, pub max: i64 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Entry { Added(FileMeta), Deleted(String) }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Snapshot { pub id: u64, pub parent: Option<u64>, /// object holding the snapshot's manifest paths, one per line
+    pub list: String }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableMeta { pub version: u64, pub current: Option<u64>, pub snapshots: Vec<Snapshot> }
+
+fn enc_rows(rows: &[Row]) -> Vec<u8> { rows.iter().map(|(k, v)| format!("{k} {v}\\n")).collect::<String>().into_bytes() }
+fn dec_rows(b: &[u8]) -> Vec<Row> {
+    String::from_utf8_lossy(b).lines().filter(|l| !l.is_empty()).map(|l| { let mut it = l.split(' '); (it.next().unwrap().parse().unwrap(), it.next().unwrap().parse().unwrap()) }).collect()
+}
+fn enc_manifest(es: &[Entry]) -> Vec<u8> {
+    es.iter().map(|e| match e { Entry::Added(f) => format!("A {} {} {} {}\\n", f.path, f.rows, f.min, f.max), Entry::Deleted(p) => format!("D {p}\\n") }).collect::<String>().into_bytes()
+}
+fn dec_manifest(b: &[u8]) -> Vec<Entry> {
+    String::from_utf8_lossy(b).lines().filter(|l| !l.is_empty()).map(|l| {
+        let p: Vec<&str> = l.split(' ').collect();
+        if p[0] == "A" { Entry::Added(FileMeta { path: p[1].into(), rows: p[2].parse().unwrap(), min: p[3].parse().unwrap(), max: p[4].parse().unwrap() }) } else { Entry::Deleted(p[1].into()) }
+    }).collect()
+}
+impl TableMeta {
+    fn encode(&self) -> Vec<u8> {
+        let mut s = format!("version {}\\ncurrent {}\\n", self.version, self.current.map_or("-".into(), |c| c.to_string()));
+        for sn in &self.snapshots { s += &format!("snap {} {} {}\\n", sn.id, sn.parent.map_or("-".into(), |p| p.to_string()), sn.list); }
+        s.into_bytes()
+    }
+    fn decode(b: &[u8]) -> TableMeta {
+        let text = String::from_utf8_lossy(b);
+        let mut m = TableMeta { version: 0, current: None, snapshots: vec![] };
+        for l in text.lines() {
+            let p: Vec<&str> = l.split(' ').collect();
+            match p[0] {
+                "version" => m.version = p[1].parse().unwrap(),
+                "current" => m.current = p[1].parse().ok(),
+                "snap" => m.snapshots.push(Snapshot { id: p[1].parse().unwrap(), parent: p[2].parse().ok(), list: p[3].to_string() }),
+                _ => {}
+            }
+        }
+        m
+    }
+}
+
+// ----------------------------------------------------------------------------------------------- table
+
+#[derive(Clone, Debug)]
+pub enum Op { Append(Vec<Row>), DeleteRange { lo: i64, hi: i64 }, Compact { target_rows: usize } }
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CommitStats { pub attempts: u32, pub conflicts: u32 }
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ScanStats { pub manifests_read: usize, pub files_total: usize, pub files_read: usize }
+
+pub struct Table<S: Store> { pub store: Arc<S>, pub name: String, writer: String, counter: AtomicU64 }
+
+impl<S: Store> Table<S> {
+    pub fn create(store: Arc<S>, name: &str) -> Table<S> {
+        store.put_if_absent(&format!("{name}/meta/v{:08}", 0), TableMeta { version: 0, current: None, snapshots: vec![] }.encode());
+        Table::open(store, name, "w0")
+    }
+    /// A handle for one writer; writers must use distinct ids so that their object names never collide.
+    pub fn open(store: Arc<S>, name: &str, writer: &str) -> Table<S> { Table { store, name: name.into(), writer: writer.into(), counter: AtomicU64::new(0) } }
+    fn fresh(&self, kind: &str) -> String { format!("{}/{kind}/{}-{}", self.name, self.writer, self.counter.fetch_add(1, Relaxed)) }
+
+    pub fn latest(&self) -> TableMeta {
+        let keys = self.store.list(&format!("{}/meta/", self.name));
+        TableMeta::decode(&self.store.get(keys.last().expect("table exists")).expect("metadata object"))
+    }
+    fn meta_key(&self, v: u64) -> String { format!("{}/meta/v{:08}", self.name, v) }
+
+    fn manifests_of(&self, meta: &TableMeta, snap: Option<u64>) -> (Vec<FileMeta>, usize) {
+        let Some(id) = snap.or(meta.current) else { return (vec![], 0) };
+        let sn = meta.snapshots.iter().find(|s| s.id == id).expect("snapshot exists");
+        let manifests = self.read_list(&sn.list);
+        let mut live: Vec<FileMeta> = vec![];
+        for m in &manifests {
+            for e in dec_manifest(&self.store.get(m).expect("manifest object")) {
+                match e { Entry::Added(f) => live.push(f), Entry::Deleted(p) => live.retain(|f| f.path != p) }
+            }
+        }
+        (live, manifests.len())
+    }
+    fn read_list(&self, key: &str) -> Vec<String> { String::from_utf8_lossy(&self.store.get(key).expect("manifest list object")).lines().filter(|l| !l.is_empty()).map(String::from).collect() }
+    fn write_list(&self, manifests: &[String]) -> String { let k = self.fresh("list"); self.store.put(&k, manifests.join("\\n").into_bytes()); k }
+
+    /// Rows with `lo <= key <= hi` in a snapshot (the current one by default). Files whose min/max cannot match are not read.
+    pub fn scan(&self, snap: Option<u64>, lo: i64, hi: i64) -> (Vec<Row>, ScanStats) {
+        let meta = self.latest();
+        let (files, nm) = self.manifests_of(&meta, snap);
+        let mut stats = ScanStats { manifests_read: nm, files_total: files.len(), files_read: 0 };
+        let mut out = vec![];
+        for f in &files {
+            if f.max < lo || f.min > hi { continue; }
+            stats.files_read += 1;
+            out.extend(dec_rows(&self.store.get(&f.path).expect("data object")).into_iter().filter(|r| r.0 >= lo && r.0 <= hi));
+        }
+        (out, stats)
+    }
+    pub fn files(&self) -> Vec<FileMeta> { self.manifests_of(&self.latest(), None).0 }
+
+    fn write_file(&self, rows: &[Row]) -> FileMeta {
+        let path = self.fresh("data");
+        self.store.put(&path, enc_rows(rows));
+        FileMeta { path, rows: rows.len() as u64, min: rows.iter().map(|r| r.0).min().unwrap_or(0), max: rows.iter().map(|r| r.0).max().unwrap_or(0) }
+    }
+
+    /// Plan the operation against `files` (the live set of the base snapshot): which entries to add and delete.
+    fn plan(&self, op: &Op, files: &[FileMeta], precomputed: &mut Option<Vec<Entry>>) -> Vec<Entry> {
+        match op {
+            Op::Append(rows) => precomputed.get_or_insert_with(|| if rows.is_empty() { vec![] } else { vec![Entry::Added(self.write_file(rows))] }).clone(),
+            Op::DeleteRange { lo, hi } => {
+                let mut es = vec![];
+                for f in files {
+                    if f.max < *lo || f.min > *hi { continue; }
+                    let rows = dec_rows(&self.store.get(&f.path).expect("data object"));
+                    let keep: Vec<Row> = rows.iter().copied().filter(|r| r.0 < *lo || r.0 > *hi).collect();
+                    if keep.len() == rows.len() { continue; }
+                    es.push(Entry::Deleted(f.path.clone()));
+                    if !keep.is_empty() { es.push(Entry::Added(self.write_file(&keep))); }
+                }
+                es
+            }
+            Op::Compact { target_rows } => {
+                let small: Vec<&FileMeta> = files.iter().filter(|f| (f.rows as usize) < *target_rows).collect();
+                if small.len() < 2 { return vec![]; }
+                let mut rows: Vec<Row> = vec![];
+                let mut es = vec![];
+                for f in &small { rows.extend(dec_rows(&self.store.get(&f.path).expect("data object"))); es.push(Entry::Deleted(f.path.clone())); }
+                rows.sort();
+                for chunk in rows.chunks(*target_rows) { es.push(Entry::Added(self.write_file(chunk))); }
+                es
+            }
+        }
+    }
+
+    /// Commit an operation with optimistic concurrency. Returns the committed version.
+    pub fn commit(&self, op: &Op) -> (u64, CommitStats) {
+        let mut stats = CommitStats::default();
+        let mut precomputed: Option<Vec<Entry>> = None;           // appends write their data file and manifest once, not once per attempt
+        let mut manifest_key: Option<String> = None;
+        loop {
+            stats.attempts += 1;
+            let base = self.latest();
+            // an append needs no knowledge of the existing files; deletes and compactions read the live file list of the base snapshot
+            let files = if matches!(op, Op::Append(_)) { vec![] } else { self.manifests_of(&base, None).0 };
+            let entries = self.plan(op, &files, &mut precomputed);
+            let new_manifest = if entries.is_empty() { None } else if matches!(op, Op::Append(_)) && manifest_key.is_some() { manifest_key.clone() } else {
+                let k = self.fresh("manifest");
+                self.store.put(&k, enc_manifest(&entries));
+                if matches!(op, Op::Append(_)) { manifest_key = Some(k.clone()); }
+                Some(k)
+            };
+            let mut meta = base.clone();
+            meta.version = base.version + 1;
+            let parent = base.current;
+            let id = base.snapshots.iter().map(|s| s.id).max().unwrap_or(0) + 1;
+            let mut manifests = parent.and_then(|p| base.snapshots.iter().find(|s| s.id == p)).map_or(vec![], |s| self.read_list(&s.list));
+            manifests.extend(new_manifest);
+            let list = self.write_list(&manifests);
+            meta.snapshots.push(Snapshot { id, parent, list });
+            meta.current = Some(id);
+            if self.store.put_if_absent(&self.meta_key(meta.version), meta.encode()) { return (meta.version, stats); }
+            stats.conflicts += 1;
+            if matches!(op, Op::DeleteRange { .. } | Op::Compact { .. }) { precomputed = None; }
+            std::thread::sleep(Duration::from_micros(50 * (1 + (stats.conflicts as u64).min(8))));     // small backoff
+        }
+    }
+
+    /// The naive commit: read the latest metadata, write version+1 *unconditionally*. Concurrent writers silently overwrite each other.
+    pub fn commit_unsafe(&self, rows: Vec<Row>) -> u64 {
+        let base = self.latest();
+        let file = self.write_file(&rows);
+        let k = self.fresh("manifest");
+        self.store.put(&k, enc_manifest(&[Entry::Added(file)]));
+        let mut meta = base.clone();
+        meta.version += 1;
+        let id = base.snapshots.iter().map(|s| s.id).max().unwrap_or(0) + 1;
+        let mut manifests = base.current.and_then(|p| base.snapshots.iter().find(|s| s.id == p)).map_or(vec![], |s| self.read_list(&s.list));
+        manifests.push(k);
+        let list = self.write_list(&manifests);
+        meta.snapshots.push(Snapshot { id, parent: base.current, list });
+        meta.current = Some(id);
+        self.store.put(&self.meta_key(meta.version), meta.encode());
+        meta.version
+    }
+
+    /// Replace all manifests of the current snapshot by one manifest listing only the live files (a metadata-only commit).
+    pub fn rewrite_manifests(&self) -> u64 {
+        loop {
+            let base = self.latest();
+            let (files, n) = self.manifests_of(&base, None);
+            if n <= 1 { return base.version; }
+            let k = self.fresh("manifest");
+            self.store.put(&k, enc_manifest(&files.iter().cloned().map(Entry::Added).collect::<Vec<_>>()));
+            let mut meta = base.clone();
+            meta.version += 1;
+            let id = base.snapshots.iter().map(|s| s.id).max().unwrap() + 1;
+            let list = self.write_list(&[k]);
+            meta.snapshots.push(Snapshot { id, parent: base.current, list });
+            meta.current = Some(id);
+            if self.store.put_if_absent(&self.meta_key(meta.version), meta.encode()) { return meta.version; }
+        }
+    }
+
+    /// Keep only the newest `keep` snapshots in a new metadata version (history is shortened; data stays until orphans are removed).
+    pub fn expire_snapshots(&self, keep: usize) -> u64 {
+        loop {
+            let base = self.latest();
+            let mut meta = base.clone();
+            meta.version += 1;
+            let cut = meta.snapshots.len().saturating_sub(keep.max(1));
+            meta.snapshots.drain(..cut);
+            if let Some(first) = meta.snapshots.first_mut() { first.parent = None; }
+            if self.store.put_if_absent(&self.meta_key(meta.version), meta.encode()) { return meta.version; }
+        }
+    }
+
+    /// Delete data and manifest objects that no retained snapshot of the latest metadata references and that were created before
+    /// `cutoff` (a logical clock value; objects of in-flight commits are newer and survive). Metadata versions are never deleted here.
+    pub fn remove_orphans(&self, cutoff: u64) -> usize {
+        let meta = self.latest();
+        let mut live: HashSet<String> = HashSet::new();
+        for sn in &meta.snapshots {
+            live.insert(sn.list.clone());
+            for m in self.read_list(&sn.list) {
+                for e in dec_manifest(&self.store.get(&m).expect("manifest")) { if let Entry::Added(f) = e { live.insert(f.path); } }
+                live.insert(m);
+            }
+        }
+        let mut removed = 0;
+        for prefix in ["data/", "manifest/", "list/"] {
+            for k in self.store.list(&format!("{}/{prefix}", self.name)) {
+                if !live.contains(&k) && self.store.created(&k).is_some_and(|c| c < cutoff) { self.store.delete(&k); removed += 1; }
+            }
+        }
+        removed
+    }
+
+    /// All rows of every historical snapshot, for tests: snapshot id -> sorted rows.
+    pub fn history(&self) -> BTreeMap<u64, Vec<Row>> {
+        let meta = self.latest();
+        meta.snapshots.iter().map(|s| { let (files, _) = self.manifests_of(&meta, Some(s.id)); let mut rows: Vec<Row> = files.iter().flat_map(|f| dec_rows(&self.store.get(&f.path).unwrap())).collect(); rows.sort(); (s.id, rows) }).collect()
+    }
+    pub fn referenced_objects(&self) -> BTreeSet<String> {
+        let meta = self.latest();
+        let mut s = BTreeSet::new();
+        for sn in &meta.snapshots { s.insert(sn.list.clone()); for m in self.read_list(&sn.list) { for e in dec_manifest(&self.store.get(&m).unwrap()) { if let Entry::Added(f) = e { s.insert(f.path); } } s.insert(m); } }
+        s
+    }
+}
+
+// ----------------------------------------------------------------------------------------------- catalog in a database
+
+/// The DuckLake idea: keep table metadata (snapshots, file lists) in a transactional database instead of in manifest objects. A commit
+/// is one database transaction after the data files are uploaded; there is no metadata chain to race on, and the database serializes
+/// writers (here a mutex stands in for a SQL transaction with a round trip of `catalog_latency`).
+pub struct Catalog { state: Mutex<(u64, Vec<FileMeta>)>, latency: Duration }
+impl Catalog {
+    pub fn new(latency: Duration) -> Arc<Catalog> { Arc::new(Catalog { state: Mutex::new((0, vec![])), latency }) }
+    pub fn commit_append(&self, store: &impl Store, writer: &str, n: u64, rows: &[Row]) -> u64 {
+        let path = format!("data/{writer}-{n}");
+        store.put(&path, enc_rows(rows));
+        let f = FileMeta { path, rows: rows.len() as u64, min: rows.iter().map(|r| r.0).min().unwrap_or(0), max: rows.iter().map(|r| r.0).max().unwrap_or(0) };
+        if !self.latency.is_zero() { std::thread::sleep(self.latency); }
+        let mut st = self.state.lock().unwrap();
+        st.0 += 1;
+        st.1.push(f);
+        st.0
+    }
+    pub fn files(&self) -> Vec<FileMeta> { self.state.lock().unwrap().1.clone() }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>Object store with a fixed latency per operation (1 ms, slept outside the store's lock; the absolute rates scale with latency, the shapes do not). Writers are threads; every writer commits 40 appends of 10 rows.</p>
+
+```text title="concurrent commits, lost updates, and metadata growth"
+concurrent appenders on an object store with 1 ms per operation; 40 commits of 10 rows per writer
+ writers |  optimistic metadata chain |   attempts    p50 ms    p99 ms   max try |    catalog in a database
+       1 |               95 commits/s |       1.00      10.6      10.6         1 |               332 commits/s
+       2 |              110 commits/s |       1.99      18.2      26.1         3 |               665 commits/s
+       4 |              120 commits/s |       3.94      33.2      49.5         6 |              1326 commits/s
+       8 |              124 commits/s |       7.31      47.5     274.8        71 |              2661 commits/s
+      16 |              134 commits/s |      12.74      45.2     749.7       190 |              5423 commits/s
+the same workload with an unconditional commit (read latest, write version + 1): 8 writers x 40 commits of 10 rows
+rows committed: 3200, rows in the table afterwards: 400 (88% of the commits were lost)
+metadata growth: N appends of 10 rows with random keys 0..1M; a range query touching 0.1% of the keys, then a manifest rewrite, then a compaction into 8 files (planning reads = metadata, list and manifest objects fetched before any data file)
+     N | range query: files   manifests  planning reads |     after rewrite | files left range query: files
+   100 |          100 of 100         100             103 |                 4 |          8               1
+   500 |          497 of 500         500             503 |                 4 |          8               1
+  2000 |         1985 of 2000       2000            2003 |                 4 |          8               1
+```
+
+<ul> <li><strong>One writer is limited by sequential round trips</strong>: 95 commits/s, p50 10.6 ms, i.e. about ten operations in a row (list, get metadata, get the parent manifest list, put data, put manifest, put list, conditional put, plus scheduling). At real object-store latencies (10–30 ms per operation) the same chain of about ten operations gives roughly 3 to 10 commits per second per table.</li> <li><strong>More writers do not give more commits</strong>: from 1 to 16 writers the rate rises only from <strong>95 to 134 commits/s</strong> (1.4×), while <strong>attempts per commit climb from 1.0 to 12.7</strong>: each winner invalidates every other in-flight attempt, so most of the work is thrown away. The tail is worse than the average: at 16 writers p99 commit latency is <strong>750 ms</strong>, and one commit needed <strong>190 attempts</strong> (the protocol has no fairness).</li> <li><strong>Without the conditional put, writers destroy each other's work</strong>: with 8 writers the unconditional "write version + 1" commit lost <strong>88% of the commits</strong> (400 rows survive out of 3 200), silently. Nothing fails; the table is just wrong. The conditional create is the one primitive the whole design rests on (S3 added <code>If-None-Match</code>/<code>If-Match</code> conditional writes in 2024; before that Delta Lake on S3 needed an external lock service).</li> <li><strong>A database catalog scales where the object chain cannot</strong>: with the same per-operation latency, committing through a transactional catalog gives <strong>332 commits/s with one writer and 5 423 with sixteen</strong> (linear), because the data file uploads proceed in parallel and the only serialized step is a short transaction. This is the case DuckLake and database-backed catalogs make; the price is operating a database and having it be the source of truth.</li> <li><strong>Metadata scales with the number of commits, not with the query.</strong> With <code>N</code> single-file commits, planning a range query reads <code>N + 3</code> metadata objects (<code>N</code> manifests, the manifest list, the metadata version and the listing) before any data file; with 2 000 commits that is 2 003 reads, about 3 s at 16 parallel connections of 25 ms each. <code>rewrite_manifests</code> (a metadata-only commit) cuts it to <strong>4</strong>.</li> <li><strong>Small files hurt reads twice.</strong> The range query touching 0.1% of the keys has to open <strong>1 985 of 2 000 files</strong> because each small file spans the whole key range; after compacting into 8 sorted files it opens <strong>1</strong>. Compaction here both reduces the file count and <em>re-clusters</em> the data, which is what makes the min/max statistics useful again (<a href="/cookbook/p/building-blocks">S4</a>).</li> </ul>
+
+<aside data-call="note"><b>Reading the commit protocol as a proof</b><p>Every successful commit created <code>meta/v{N+1}</code> while <code>meta/vN</code> was the latest object, and planned its changes against exactly the snapshot of <code>vN</code>; the conditional put guarantees at most one commit per version. So the history is a chain (<code>snapshot k+1</code> has parent <code>k</code>) and snapshot <code>k</code> equals the serial application of the first <code>k</code> committed operations. The concurrent test checks this literally: it replays the operations in version order on a model and compares <em>every</em> historical snapshot, not just the last one.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>One trait, one atomic method</strong>: <code>Store::put_if_absent</code> is the only synchronization primitive; everything else (thread-safety of the table, the history chain) follows from it. <code>Store: Send + Sync</code> and <code>Arc&lt;S&gt;</code> let many writer threads share one store; each writer gets its own <code>Table</code> handle with a distinct writer id so that generated object names (<code>{writer}-{counter}</code>) never collide.</li> <li><strong>Sleep outside the lock</strong>: the in-memory store simulates latency with <code>thread::sleep</code> <em>before</em> taking its <code>Mutex</code>, so the lock protects only the map operation; sleeping inside it would serialize all operations and hide the very concurrency being studied.</li> <li><strong>Retry loops with bounded backoff</strong>: <code>commit</code> loops until the conditional put succeeds, counting attempts and conflicts, with a short sleep that grows to a cap (<code>50 µs × (1 + min(conflicts, 8))</code>). Unbounded retries without jitter or fairness are the reason for the 190-attempt tail; production clients add jitter and a retry budget.</li> <li><strong>Do the work once when you can</strong>: an append writes its data file and manifest on the first attempt and reuses them on retries (<code>precomputed</code>, <code>manifest_key</code>); deletes and compactions depend on the base snapshot and must re-plan on every attempt. Wasted writes become orphans.</li> <li><strong>Line-oriented text formats</strong> (<code>A path rows min max</code>) make the metadata readable in tests and in <code>cat</code>; production formats are Avro (Iceberg manifests), JSON (Delta log) or Parquet checkpoints, with schemas for evolution.</li> <li><strong><code>BTreeMap</code> for the store</strong> gives sorted <code>list(prefix)</code> with a range scan, the same ordering guarantee object stores provide and the property the "latest version = last key" trick relies on (zero-padded version numbers sort numerically).</li> <li><strong>Linearizability checking in tests</strong> without a checker library: collect <code>(version, op)</code> from every thread, sort by version, replay on a model, compare every historical snapshot; any lost or duplicated commit shows up as a mismatch at a specific version.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Round trips (property test)</strong>: arbitrary <code>(i64, i64)</code> rows written through the table read back as the same multiset.</li> <li><strong>Sequential history against a model</strong>: 6 seeds × 60 random operations (appends, range deletes, compactions); after each commit the scan equals the model; every historical snapshot, read by time travel, equals the model state at that version; range scans return exactly the rows in range.</li> <li><strong>Concurrent linearizability</strong>: 3 rounds × 6 writers × 25 random operations with 150 µs store latency; versions are exactly <code>1..=150</code> with no gaps or duplicates; <strong>every snapshot equals the serial replay of the committed operations up to its version</strong>; the final table equals the model; snapshot parents form a chain.</li> <li><strong>Unconditional commits lose updates</strong>: 8 writers × 15 commits through <code>commit_unsafe</code> end with fewer rows than were committed.</li> <li><strong>Pruning</strong>: min/max pruning reads one file for a range inside it, includes both boundaries, and reads none for a range between files.</li> <li><strong>Compaction</strong>: 40 small files become 4 files of exactly 50 rows, all rows survive, key ranges are disjoint, and a second compaction does nothing.</li> <li><strong>Maintenance</strong>: after expiry to two snapshots and orphan removal, live data and every referenced object are intact, an object newer than the cutoff survives, a second removal removes nothing, and only after the grace period is the stray object deleted. <code>rewrite_manifests</code> changes no data file, reduces the manifests read to one, and old snapshots remain readable.</li> <li><strong>Catalog variant</strong>: 8 writers × 30 appends produce versions <code>1..=240</code> and 240 files.</li> <li><strong>Mutants run against these tests</strong>: the metadata put without the condition; versions skipping a number; the new snapshot forgetting its parent's manifests; deletes dropping partially matching files; compaction keeping the files it merged; deleted entries ignored when reading; expiry removing every snapshot; orphan removal ignoring references or ignoring the grace period; pruning off by one at the bound; the manifest rewrite losing a file; catalog versions not advancing; time travel reading the current snapshot.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Apache Iceberg</strong>: <code>metadata.json</code> (schema, partition specs, snapshots, snapshot log) → manifest list per snapshot → manifests of data and delete files with column statistics, partition values and counts. The <strong>catalog</strong> (Hive metastore, JDBC, Glue, Nessie, the REST catalog implemented by Polaris and others) performs the atomic compare-and-swap of the metadata pointer. Commits validate according to the isolation level (snapshot or serializable) and fail only on real conflicts (for example, the same data files rewritten twice). Manifests are merged when their number passes a threshold; hidden partitioning and partition evolution avoid rewriting data; v2 adds position and equality delete files, v3 deletion vectors.</li> <li><strong>Delta Lake</strong>: <code>_delta_log/00000000000000000042.json</code> holds <em>actions</em> (<code>add</code>, <code>remove</code>, <code>metaData</code>, <code>txn</code>); a commit is the atomic creation of the next log file (put-if-absent, historically needing an external lock store on S3); <strong>checkpoints</strong> (Parquet snapshots of the log state, by default every 10 commits) bound replay; deletion vectors, <code>MERGE</code>, change data feed, and, as the seminar's Databricks talk addresses, coordinated commits and multi-statement transactions.</li> <li><strong>Apache Hudi</strong>: a <em>timeline</em> of instants (requested, inflight, completed), copy-on-write and merge-on-read table types, record-level indexes for upserts, and streaming-friendly incremental queries; designed around frequent small updates.</li> <li><strong>DuckLake</strong>: stores the table metadata (snapshots, file lists, statistics) in an ordinary SQL database (DuckDB, PostgreSQL, SQLite) and only the data in Parquet files; the commit is a SQL transaction and the metadata can be queried and joined with SQL.</li> <li><strong>XTDB</strong>: bitemporal tables (valid time and system time), so a query can ask for the data as it was valid at one time as known at another.</li> <li><strong>Polaris and REST catalogs</strong>: access control, credential vending for the object store, and commit arbitration as a service, so engines need not each speak to a metastore.</li> <li><strong>File formats</strong>: Parquet remains the default; Lance and Vortex target faster random access, cascaded lightweight encodings and wide or vector columns.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Never commit without a conditional primitive.</strong> "Read latest, write latest + 1" on a plain object store loses commits (88% here). If the store lacks conditional writes, an external lock or a database must arbitrate.</li> <li><strong>One commit per row.</strong> At 10–30 ms per object-store operation, commit rates are tens per second per table; ingest in micro-batches, and watch the conflict rate (attempts per commit above 2 means writers are fighting).</li> <li><strong>Starvation</strong>: optimistic retry has no fairness; add jitter, a retry budget and, for hot tables, a single writer or a service that serializes commits.</li> <li><strong>Metadata growth</strong>: thousands of manifests turn planning into the bottleneck; merge manifests, expire snapshots, and checkpoint logs on a schedule.</li> <li><strong>Orphan removal races</strong>: deleting "unreferenced" files while a writer has uploaded but not yet committed them destroys data. Use a conservative age threshold (days, not seconds) and never remove files created after the oldest in-flight operation started.</li> <li><strong>Copy-on-write write amplification</strong>: updating one row rewrites a whole file; with large files and frequent updates prefer merge-on-read with deletion vectors and compact later.</li> <li><strong>Statistics need clustering</strong> (<a href="/cookbook/p/building-blocks">S4</a>): compaction that re-sorts is what keeps range pruning effective; compaction that merely concatenates restores the file count and not the skipping.</li> <li><strong>Time travel is not free</strong>: old snapshots pin old files; retention policies decide how long deleted data stays recoverable (and, for privacy deletion requests, how long it stays <em>stored</em>).</li> <li><strong>Cross-engine compatibility</strong>: every engine implements a subset of the spec; features such as delete files, column mapping or deletion vectors can make a table unreadable by an older reader. Pin protocol versions and test with every engine in use.</li> <li><strong>Conditional writes are not transactions across tables</strong>: a single pointer swap makes one table atomic; atomically changing two tables needs a catalog-level commit or a log shared by both.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Delta Lake: High-Performance ACID Table Storage over Cloud Object Stores"
+url = "https://www.vldb.org/pvldb/vol13/p3411-armbrust.pdf"

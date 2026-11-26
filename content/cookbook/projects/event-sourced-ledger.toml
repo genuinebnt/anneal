@@ -1,0 +1,68 @@
+title = "Event sourced ledger"
+module = "Complete projects"
+module_order = 13
+chapter = "Capstones"
+chapter_order = 1
+order = 647
+kind = "capstone"
+lede = "an event-sourced bank ledger with CQRS projections, snapshots, upcasters and an outbox"
+level = "capstone"
+code = ["examples/capstones/event_sourced_ledger.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any system that must explain **how** it reached its state (finance, inventory, audit-heavy domains); also the core idea behind database logs.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+state is never stored, only the facts that produced it. The **event store** is append-only, has one totally ordered global log plus a version counter per stream, and `append(stream, expected_version, events)` fails with a Conflict when another writer got there first (optimistic concurrency, no locks).
+
+Two stores share one trait: in memory, and file-backed with the framing of wal_append_log (len + crc32 per **batch**, so a torn write loses a whole batch, never half of one).
+
+**Command side**: `decide(state, command) -> Result<Vec<Event>, DomainError>` is pure; `evolve(state, event) -> state` is pure and total (an event is a fact that already happened, so it must never fail). Commands carry an id; the aggregate remembers the ids it has seen, so a retried or duplicated command is a no-op.
+
+**Snapshots** every N events bound replay cost and are only an optimisation: snapshot + tail must equal full replay (asserted). **Query side** (CQRS): read models (balances, daily totals, top spenders) subscribe to the global log with a **checkpoint**. They are disposable: rebuilding from position 0 must give exactly the incrementally maintained model (asserted).
+
+**Evolution**: events live forever, so old shapes are kept as stored and **upcast** on read (v1 -> v2) instead of rewriting history. **Undo**: a mistake is corrected by a compensating event (`Reversed`), never by deleting; the audit trail stays complete.
+
+**Outbox**: events to publish to the outside world are recorded in the same log as the state change (one atomic write), and a relay delivers them **at least once** (acks get lost); the consumer dedupes by event id, giving effectively-once. **Transfers** span two aggregates, which a single-stream append cannot make atomic.
+
+So a transfer is two commands: the source emits `TransferredOut`, a reactor (process manager) later sends `ReceiveTransfer` to the target with a deterministic command id (idempotent under redelivery). Money is conserved as: balances + in-flight (out - in) == external net.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+seeded xorshift drives several writers whose load / commit steps are interleaved deterministically (so stale reads and conflicts really happen), a flaky reactor and relay, then checks every invariant. Finally the file store is truncated mid-batch, reopened, and reprojected.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>bank and payment ledgers</li><li>order and inventory systems</li><li>audit trails</li><li>undo history</li><li>debugging by replay. Real-world: EventStoreDB</li><li>Axon</li><li>Marten (.NET)</li><li>Kafka log + Kafka Streams as projections</li><li>DynamoDB Streams</li><li>the transactional-outbox pattern with Debezium</li><li>double-entry accounting is the oldest event-sourced system</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://martinfowler.com/eaaDev/EventSourcing.html" target="_blank" rel="noreferrer">https://martinfowler.com/eaaDev/EventSourcing.html</a></li><li><a href="https://martinfowler.com/bliki/CQRS.html" target="_blank" rel="noreferrer">https://martinfowler.com/bliki/CQRS.html</a></li><li><a href="https://microservices.io/patterns/data/transactional-outbox.html" target="_blank" rel="noreferrer">https://microservices.io/patterns/data/transactional-outbox.html</a> and <a href="https://martin.kleppmann.com/2012/12/05/schema-evolution-in-avro-protocol-buffers-thrift.html" target="_blank" rel="noreferrer">https://martin.kleppmann.com/2012/12/05/schema-evolution-in-avro-protocol-buffers-thrift.html</a></li></ul>
+"""
+
+[[sources]]
+title = "martinfowler.com/eaaDev/EventSourcing.html"
+url = "https://martinfowler.com/eaaDev/EventSourcing.html"
+
+[[sources]]
+title = "martinfowler.com/bliki/CQRS.html"
+url = "https://martinfowler.com/bliki/CQRS.html"
+
+[[sources]]
+title = "microservices.io/patterns/data/transactional-outbox.html"
+url = "https://microservices.io/patterns/data/transactional-outbox.html"
+
+[[sources]]
+title = "martin.kleppmann.com/2012/12/05/schema-evolution-in-avro-protocol-buffers-thr…"
+url = "https://martin.kleppmann.com/2012/12/05/schema-evolution-in-avro-protocol-buffers-thrift.html"

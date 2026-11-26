@@ -1,0 +1,62 @@
+=== before ===
+// monomorphisation: 2 function instances
+// fn#0 (main)
+fn main() -> () {
+    let _0: int;
+    let _1: str;
+    let _2: ();
+  bb0:
+    _0 = call fn#1(1) -> bb1
+  bb1:
+    _1 = to_str(_0)
+    _2 = println(_1)
+    return ()
+}
+// fn#1
+fn f(_0: int) -> int {
+    let _1: int;  // b
+    let _2: int;  // c
+    let _3: int;
+    let _4: int;  // d
+    let _5: int;  // e
+    let _6: int;
+    let _7: int;
+  bb0:
+    _1 = _0
+    _2 = _1
+    _4 = _2 + 1
+    _5 = _4
+    _4 = 100
+    _6 = _5 + _4
+    _7 = _6 + _2
+    return _7
+}
+
+=== after: copy-prop, dce ===
+// monomorphisation: 2 function instances
+// fn#0 (main)
+fn main() -> () {
+    let _0: int;
+    let _1: str;
+    let _2: ();
+  bb0:
+    _0 = call fn#1(1) -> bb1
+  bb1:
+    _1 = to_str(_0)
+    _2 = println(_1)
+    return ()
+}
+// fn#1
+fn f(_0: int) -> int {
+    let _1: int;  // d
+    let _2: int;  // e
+    let _3: int;
+    let _4: int;
+  bb0:
+    _1 = _0 + 1
+    _2 = _1
+    _1 = 100
+    _3 = _2 + _1
+    _4 = _3 + _0
+    return _4
+}

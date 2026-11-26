@@ -1,0 +1,48 @@
+title = "MVCC snapshot isolation"
+module = "Databases"
+module_order = 8
+chapter = "Transactions and concurrency control"
+chapter_order = 6
+order = 411
+kind = "recipe"
+lede = "Version chains, first-committer-wins, GC, write skew, and SSI."
+level = "advanced"
+code = ["examples/database/mvcc_snapshot_isolation.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>PostgreSQL / Oracle / MySQL-InnoDB style engines</li><li>CockroachDB-style stores</li><li>any "readers never block writers" system</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Multi-version concurrency control** keeps every committed value of a key as a **version** `[begin_ts, end_ts)` in a chain instead of overwriting it. **A timestamp oracle** hands out commit timestamps (here: a counter).
+
+A transaction remembers the last commit timestamp it saw at `begin` (its **snapshot**) and reads, for every key, the version whose interval contains that timestamp.
+
+**Consequences.** Readers never block or abort, a read-only transaction sees one frozen database (no dirty reads, no non-repeatable reads, no phantoms), and writers only fight writers.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Writes</div><div class="cb-g-says"><p>Writes are buffered in the transaction (so nobody can read them dirty) and installed atomically at commit with one new commit timestamp. A read first looks at the own buffer: <strong>read-your-writes</strong>.</p></div></div><div class="cb-g-term"><div class="cb-g-name">First-committer-wins</div><div class="cb-g-says"><p>At commit, if any key we wrote has a version committed after our snapshot, a concurrent transaction already won; we abort. This is what prevents <strong>lost update</strong> (read-modify-write races). Real engines often do first-<strong>updater</strong>-wins (lock at write time) but the outcome is the same.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Garbage collection</div><div class="cb-g-says"><p>A version whose <code>end_ts</code> is &lt;= the oldest active snapshot is invisible to everyone, now and later, so it can be dropped. One long-running transaction therefore pins every version created after it started (bloat).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Snapshot isolation (SI)</div><div class="cb-g-says"><p>Snapshot isolation (SI) is <strong>not</strong> serializable: two concurrent transactions that read overlapping data and write <strong>disjoint</strong> keys both pass first-committer-wins. <strong>Write skew</strong> (two on-call doctors each see the other on duty and both go off duty) is the classic result.</p><p>In dependency-graph terms (Adya) SI forbids cycles of wr/ww edges but allows a cycle containing two consecutive RW-ANTIDEPENDENCY edges <code>A -rw-&gt; P -rw-&gt; B</code> between concurrent transactions (Fekete et al.).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Serializable snapshot isolation (SSI, Cahill; PostgreSQL's SERIALIZABLE)</div><div class="cb-g-says"><p>Serializable snapshot isolation (SSI, Cahill; PostgreSQL's <strong>serializable</strong>) runs SI and additionally tracks rw edges (T1 read something a concurrent T2 wrote). A transaction that would become a <strong>pivot</strong> (an incoming and an outgoing rw edge, with the outgoing target already committed) is aborted. This is conservative (some false aborts) but never misses a cycle.</p><p>Here the read sets double as SIREAD locks, and a scan reads every key of its range (the key universe is a small integer domain), which makes phantoms visible as ordinary rw edges. A real engine uses predicate / gap / page-level SIREAD locks.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Serializability checker</div><div class="cb-g-says"><p>Serializability checker builds the dependency graph of the committed history (wr, ww, rw edges from the version order) and searches for a cycle. Acyclic &lt;=&gt; conflict-serializable. 2000 random interleavings are run per isolation level.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>PostgreSQL</li><li>Oracle</li><li>SQL Server (snapshot mode)</li><li>MySQL InnoDB (repeatable read)</li><li>CockroachDB and TiDB transactions</li><li>FoundationDB</li><li>in-memory STMs (software transactional memory)</li><li>long analytical reads on live data</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>"A Critique of ANSI SQL Isolation Levels" (Berenson et al.)</li><li>"Serializable Snapshot Isolation in PostgreSQL" (Ports, Grittner)</li><li>"Making Snapshot Isolation Serializable" (Fekete et al.)</li><li><a href="https://www.postgresql.org/docs/current/transaction-iso.html" target="_blank" rel="noreferrer">https://www.postgresql.org/docs/current/transaction-iso.html</a></li><li><a href="https://www.vldb.org/pvldb/vol5/p1850_michaelcahill_vldb2012.pdf" target="_blank" rel="noreferrer">https://www.vldb.org/pvldb/vol5/p1850_michaelcahill_vldb2012.pdf</a></li></ul>
+"""
+
+[[sources]]
+title = "postgresql.org/docs/current/transaction-iso.html"
+url = "https://www.postgresql.org/docs/current/transaction-iso.html"
+
+[[sources]]
+title = "vldb.org/pvldb/vol5/p1850_michaelcahill_vldb2012.pdf"
+url = "https://www.vldb.org/pvldb/vol5/p1850_michaelcahill_vldb2012.pdf"

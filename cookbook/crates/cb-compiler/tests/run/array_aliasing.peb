@@ -1,0 +1,8 @@
+fn add_one(mut xs: [int]) { push(xs, 1); }
+fn main() {
+    let mut a = [0];
+    let b = a;
+    add_one(a);
+    push(a, 2);
+    println(to_str(len(a)) + " " + to_str(len(b)));
+}

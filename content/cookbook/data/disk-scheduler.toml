@@ -1,0 +1,272 @@
+title = "Disk scheduler"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 318
+kind = "guide"
+lede = "BusTub P1 Task 2 · request queues, worker threads, completion handles, per-page ordering, shutdown · where io_uring fits"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>The buffer pool shouldn't call <code>pread</code> itself. A thread that does its own I/O can't batch, can't prioritize, and can't overlap I/O with other I/O. The <strong>disk scheduler</strong> sits between the pool and the disk manager: callers enqueue requests and receive completion handles, and worker threads issue the I/O. It's where the DBMS takes control of I/O ordering away from the OS, which L04's notes list as a key reason not to use mmap.</p>
+"""
+
+[[sections]]
+heading = "BusTub's contract"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Piece</th> <th>BusTub (C++)</th> <th>Rust equivalent</th> </tr> </thead> <tbody> <tr> <td>Request</td> <td><code>DiskRequest { bool is_write; char *data; page_id_t page_id; std::promise&lt;bool&gt; callback; }</code></td> <td><code>enum DiskRequest { Read { page, buf, done }, Write { page, buf, done } }</code></td> </tr> <tr> <td>Queue</td> <td><code>Channel&lt;std::optional&lt;DiskRequest&gt;&gt;</code> (mutex + condvar MPMC queue)</td> <td><code>std::sync::mpsc</code> channel (or crossbeam)</td> </tr> <tr> <td>Completion</td> <td><code>std::promise&lt;bool&gt;</code> / <code>std::future&lt;bool&gt;</code></td> <td>a one-shot channel: <code>Pending::wait() -&gt; io::Result&lt;Box&lt;PageBuf&gt;&gt;</code></td> </tr> <tr> <td>Worker</td> <td>one background thread; <code>StartWorkerThread()</code> loops until it receives <code>std::nullopt</code></td> <td>N threads; each loops until its channel closes</td> </tr> <tr> <td>Shutdown</td> <td>destructor pushes <code>nullopt</code>, joins</td> <td><code>Drop</code> drops the senders, workers drain and exit, <code>join</code></td> </tr> <tr> <td>Deallocate</td> <td><code>DeallocatePage(page_id)</code> → disk manager</td> <td>same, synchronous</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "The Rust problem: who owns the buffer?"
+body = """
+<p>BusTub's request carries a raw <code>char *data</code> pointing into a buffer-pool frame. The worker writes into it, and the requester promises not to touch the frame until the future resolves. That promise is a comment, not a type. In Rust you have three honest options:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Option</th> <th>How</th> <th>Cost</th> </tr> </thead> <tbody> <tr> <td><strong>Move an owned buffer through the request</strong></td> <td>the request takes a <code>Box&lt;PageBuf&gt;</code>, the completion gives it back</td> <td>one 8 KiB <code>memcpy</code> into the frame (≈100 ns, invisible next to 10–100 µs of I/O) and one allocation (pool the boxes to avoid it)</td> </tr> <tr> <td>Share the frame</td> <td>the request holds an <code>Arc&lt;Frame&gt;</code>, and the worker takes the frame's write latch itself</td> <td>the requester can't also hold that latch while waiting: latch hand-off gets subtle</td> </tr> <tr> <td>Raw pointer + <code>unsafe</code></td> <td><code>*mut PageBuf</code> in the request, with a <code>SAFETY:</code> argument that the requester blocks until completion</td> <td>zero-copy; a violated assumption is UB, not a test failure</td> </tr> </tbody> </table></div>
+
+<p>Start with owned buffers. They are safe, easy to test, and fast enough for everything short of a leaderboard. Move to zero-copy only when a profile says the copy matters.</p>
+"""
+
+[[sections]]
+heading = "Ordering"
+body = """
+<p>With one worker, requests run in FIFO order and read-after-write on a page is automatic. With several workers, a read of page 7 could overtake an earlier write of page 7 that went to a different worker. The simple fix is to <strong>shard by page</strong>: <code>worker = page_id % n</code>, so every request for one page goes through one queue, in order. Different pages still proceed in parallel. (A production scheduler reorders freely <em>across</em> pages, merging adjacent pages into one vectored I/O and prioritizing foreground reads over background writes, but it still preserves order <em>within</em> a page.)</p>
+
+:::deeper Reference scheduler: sharded workers, owned buffers, drain-on-drop
+```rust title="src/storage/disk/disk_scheduler.rs"
+//! Disk scheduler: a pool of worker threads in front of a DiskManager.
+//!
+//! * Requests for the same page always go to the same worker (shard = page % n),
+//!   so a read issued after a write to the same page observes that write.
+//! * Buffers are owned: a read hands back a filled `Box<PageBuf>`, a write takes
+//!   one by value. No raw pointers cross threads.
+//! * Dropping the scheduler closes the queues, drains what's already queued, and
+//!   joins the workers.
+//! * With zero workers there are no threads at all: a request runs on the calling thread
+//!   before `schedule` returns (the mode for platforms without threads, such as wasm).
+use std::io;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
+use std::thread::{self, JoinHandle};
+
+use crate::common::config::{PageId, PAGE_SIZE};
+use crate::storage::disk::disk_manager::{DiskManager, PageBuf};
+
+pub enum DiskRequest {
+    Read { page: PageId, buf: Box<PageBuf>, done: Sender<io::Result<Box<PageBuf>>> },
+    Write { page: PageId, buf: Box<PageBuf>, done: Sender<io::Result<Box<PageBuf>>> },
+}
+
+impl DiskRequest {
+    fn page(&self) -> PageId { match self { DiskRequest::Read { page, .. } | DiskRequest::Write { page, .. } => *page } }
+}
+
+/// A completion handle: BusTub's `std::future<bool>`, returning the buffer too.
+#[must_use = "a scheduled request is only complete once you wait on it"]
+pub struct Pending(Receiver<io::Result<Box<PageBuf>>>);
+
+impl Pending {
+    pub fn wait(self) -> io::Result<Box<PageBuf>> {
+        self.0.recv().unwrap_or_else(|_| Err(io::Error::other("disk scheduler shut down")))
+    }
+}
+
+pub struct DiskScheduler {
+    queues: Vec<Sender<DiskRequest>>,
+    workers: Vec<JoinHandle<()>>,
+    disk: Arc<dyn DiskManager>,
+}
+
+impl DiskScheduler {
+    pub fn new(disk: Arc<dyn DiskManager>, workers: usize) -> Self {
+        let (mut queues, mut handles) = (Vec::new(), Vec::new());
+        for i in 0..workers {
+            let (tx, rx) = mpsc::channel::<DiskRequest>();
+            let disk = Arc::clone(&disk);
+            handles.push(thread::Builder::new()
+                .name(format!("disk-worker-{i}"))
+                .spawn(move || worker(disk, rx))
+                .expect("spawn disk worker"));
+            queues.push(tx);
+        }
+        DiskScheduler { queues, workers: handles, disk }
+    }
+
+    pub fn schedule(&self, req: DiskRequest) {
+        if self.queues.is_empty() {
+            return serve(&*self.disk, req);
+        }
+        let shard = req.page().0 as usize % self.queues.len();
+        // send fails only if the worker died (panicked); surface that loudly.
+        self.queues[shard].send(req).expect("disk worker is gone");
+    }
+
+    pub fn read(&self, page: PageId) -> Pending {
+        let (done, rx) = mpsc::channel();
+        self.schedule(DiskRequest::Read { page, buf: Box::new([0u8; PAGE_SIZE]), done });
+        Pending(rx)
+    }
+
+    pub fn write(&self, page: PageId, buf: Box<PageBuf>) -> Pending {
+        let (done, rx) = mpsc::channel();
+        self.schedule(DiskRequest::Write { page, buf, done });
+        Pending(rx)
+    }
+
+    pub fn deallocate(&self, page: PageId) { self.disk.deallocate_page(page) }
+    pub fn allocate(&self) -> PageId { self.disk.allocate_page() }
+}
+
+fn worker(disk: Arc<dyn DiskManager>, rx: Receiver<DiskRequest>) {
+    // recv() keeps returning queued requests after the sender is dropped, then Err: a natural drain.
+    while let Ok(req) = rx.recv() {
+        serve(&*disk, req);
+    }
+}
+
+fn serve(disk: &dyn DiskManager, req: DiskRequest) {
+    match req {
+        DiskRequest::Read { page, mut buf, done } => {
+            let r = disk.read_page(page, &mut buf).map(|_| buf);
+            let _ = done.send(r);                 // requester may have given up; that's fine
+        }
+        DiskRequest::Write { page, buf, done } => {
+            let r = disk.write_page(page, &buf).map(|_| buf);
+            let _ = done.send(r);
+        }
+    }
+}
+
+impl Drop for DiskScheduler {
+    fn drop(&mut self) {
+        self.queues.clear();                          // close every queue: workers drain, then exit
+        for h in self.workers.drain(..) {
+            if let Err(e) = h.join() { std::panic::resume_unwind(e); }
+        }
+    }
+}
+```
+:::
+
+<aside data-call="rust"><b>Drop order is the shutdown protocol</b><p><code>Drop for DiskScheduler</code> does three things in order: drop every <code>Sender</code>, then <code>join</code> every worker, then re-raise any worker panic. Dropping the senders is the "poison pill". <code>Receiver::recv</code> keeps returning messages already in the queue and only returns <code>Err</code> once the queue is empty <em>and</em> every sender is gone. That makes drain-then-exit free, with no <code>Option&lt;Request&gt;</code> sentinel as in BusTub. Clearing the <code>Vec&lt;Sender&gt;</code> explicitly <em>before</em> joining matters: fields drop only after <code>drop()</code> returns, so joining first would deadlock, with each worker waiting for a message that can never arrive. Reference: <a href="https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html#method.recv" target="_blank" rel="noreferrer"><code>std::sync::mpsc::Receiver::recv</code></a>.</p></aside>
+
+<aside data-call="rust"><b><code>#[must_use]</code> on completion handles</b><p>A <code>Pending</code> that nobody waits on is almost always a bug: the write may not have happened yet when the caller moves on. <code>#[must_use = "…"]</code> on the type turns <code>s.write(p, buf);</code> (result dropped) into a compiler warning. Put it on every future-like handle you define. Reference: <a href="https://doc.rust-lang.org/reference/attributes/diagnostics.html#the-must_use-attribute" target="_blank" rel="noreferrer">the <code>must_use</code> attribute</a>.</p></aside>
+
+<aside data-call="rust"><b>Building BusTub's <code>Channel</code> yourself</b><p>BusTub hands you a <code>Channel&lt;T&gt;</code>: a <code>std::queue</code> behind a mutex, with a condition variable to block <code>Get()</code> until an element exists. Writing it in Rust is worth doing once, because it teaches <code>Condvar</code>:</p>  <p><code>wait_while</code> re-checks the predicate after every wakeup, which handles spurious wakeups for you. Notify <em>after</em> releasing the lock where you can (here the guard is a temporary, dropped at the end of the statement). Reference: <a href="https://doc.rust-lang.org/std/sync/struct.Condvar.html#method.wait_while" target="_blank" rel="noreferrer"><code>Condvar::wait_while</code></a>.</p></aside>
+
+```rust
+pub struct Channel<T> { q: Mutex<VecDeque<T>>, cv: Condvar }
+impl<T> Channel<T> {
+    pub fn put(&self, x: T) { self.q.lock().unwrap().push_back(x); self.cv.notify_one(); }
+    pub fn get(&self) -> T {
+        let mut q = self.cv.wait_while(self.q.lock().unwrap(), |q| q.is_empty()).unwrap();
+        q.pop_front().unwrap()
+    }
+}
+```
+"""
+
+[[sections]]
+heading = "Tests"
+body = """
+```rust title="tests/disk_scheduler.rs (BusTub's ScheduleWriteReadPageTest, plus ordering, shutdown and latency)"
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use relational::common::config::{PageId, PAGE_SIZE};
+use relational::storage::disk::{disk_manager::{DiskManager, MemDiskManager, PageBuf}, disk_scheduler::DiskScheduler};
+
+fn page_with(tag: u8) -> Box<PageBuf> { let mut b = Box::new([0u8; PAGE_SIZE]); b[0] = tag; b[PAGE_SIZE - 1] = tag; b }
+
+#[test]
+fn schedule_write_then_read() {
+    let disk: Arc<dyn DiskManager> = Arc::new(MemDiskManager::default());
+    let s = DiskScheduler::new(disk, 4);
+    let mut data = Box::new([0u8; PAGE_SIZE]);
+    data[..14].copy_from_slice(b"A test string.");
+    let w = s.write(PageId(0), data.clone());
+    let r = s.read(PageId(0));                 // issued before the write completes
+    w.wait().unwrap();
+    assert_eq!(&r.wait().unwrap()[..], &data[..]);
+}
+
+#[test]
+fn same_page_requests_are_ordered() {
+    let disk: Arc<dyn DiskManager> = Arc::new(MemDiskManager::default());
+    let s = DiskScheduler::new(disk, 8);
+    let mut pending = vec![];
+    for round in 0..50u8 {
+        for p in 0..32u32 { pending.push(s.write(PageId(p), page_with(round))); }
+    }
+    let reads: Vec<_> = (0..32u32).map(|p| s.read(PageId(p))).collect();
+    for r in reads { let b = r.wait().unwrap(); assert_eq!((b[0], b[PAGE_SIZE - 1]), (49, 49)); }
+    for w in pending { w.wait().unwrap(); }
+}
+
+#[test]
+fn drop_drains_queued_work() {
+    let disk: Arc<dyn DiskManager> = Arc::new(MemDiskManager::default());
+    let s = DiskScheduler::new(Arc::clone(&disk), 2);
+    let ws: Vec<_> = (0..100u32).map(|p| s.write(PageId(p), page_with(7))).collect();
+    drop(s);                                   // must not hang, must not lose writes
+    for w in ws { w.wait().unwrap(); }
+    let mut b = [0u8; PAGE_SIZE];
+    disk.read_page(PageId(99), &mut b).unwrap();
+    assert_eq!(b[0], 7);
+}
+
+/// A disk with fixed latency per request, to show why more workers help.
+struct Slow(MemDiskManager, Duration);
+impl DiskManager for Slow {
+    fn read_page(&self, id: PageId, buf: &mut PageBuf) -> std::io::Result<()> { std::thread::sleep(self.1); self.0.read_page(id, buf) }
+    fn write_page(&self, id: PageId, buf: &PageBuf) -> std::io::Result<()> { std::thread::sleep(self.1); self.0.write_page(id, buf) }
+    fn sync(&self) -> std::io::Result<()> { Ok(()) }
+    fn allocate_page(&self) -> PageId { self.0.allocate_page() }
+    fn deallocate_page(&self, id: PageId) { self.0.deallocate_page(id) }
+    fn num_pages(&self) -> u32 { self.0.num_pages() }
+}
+
+#[test]
+fn more_workers_hide_latency() {
+    for workers in [1usize, 4, 16] {
+        let s = DiskScheduler::new(Arc::new(Slow(MemDiskManager::default(), Duration::from_millis(1))), workers);
+        let t = Instant::now();
+        let reads: Vec<_> = (0..256u32).map(|p| s.read(PageId(p))).collect();
+        for r in reads { r.wait().unwrap(); }
+        eprintln!("{workers:>2} workers: 256 reads @1ms in {:?}", t.elapsed());
+    }
+}
+```
+
+```text title="cargo test --release --test disk_scheduler more_workers -- --nocapture (1 ms simulated latency)"
+ 1 workers: 256 reads @1ms in 325.66ms
+ 4 workers: 256 reads @1ms in 81.30ms
+16 workers: 256 reads @1ms in 20.53ms    ← ~16× : independent requests overlap
+```
+
+<p>That scaling is the whole argument for a scheduler. Latency-bound I/O parallelizes almost perfectly until the device saturates. A real NVMe SSD needs a queue depth of 32–128 outstanding requests to reach its rated IOPS. <strong>One synchronous thread gets maybe 1% of the device.</strong></p>
+
+<aside data-call="testing"><b>Crash and fault testing starts here</b><p>Wrap the disk manager in a <code>FaultyDisk</code> that can (1) return <code>Err</code> on the Nth write, (2) tear a write so that only the first 4 KiB lands, or (3) "crash": drop every write after a chosen point. Route it through the scheduler in tests. Every error path the buffer pool has to handle later (a failed flush during eviction, a failed read of a page someone is waiting on) is reachable only through this seam.</p></aside>
+"""
+
+[[sections]]
+heading = "Beyond threads: io_uring"
+body = """
+<p>Worker threads fake asynchrony: each blocks in <code>pread</code>. Linux's <strong>io_uring</strong> is genuinely asynchronous. You write submission entries into a shared ring, the kernel executes them, and completions appear in a second ring, with batching, no syscall per I/O, and optionally a kernel polling thread. The scheduler's API doesn't change: <code>schedule</code> pushes an SQE, and one reaper thread (or the caller) drains CQEs and fulfils the <code>Pending</code> handles. With <code>O_DIRECT</code>, fixed (registered) buffers and polled completions, a single core can drive millions of IOPS.</p>
+
+<aside data-call="production"><b>What production schedulers do</b><ul> <li><strong>PostgreSQL 18</strong> adds asynchronous I/O (<code>io_method = worker | io_uring</code>) and read streams that issue ahead for sequential scans and vacuum. Until then, backends did synchronous <code>pread</code> through the OS cache.</li> <li><strong>InnoDB</strong> has dedicated read and write I/O threads (<code>innodb_read_io_threads</code>, <code>innodb_write_io_threads</code>) and uses Linux native AIO.</li> <li><strong>ScyllaDB</strong> (Seastar) runs a userspace I/O scheduler per core, with per-class shares (queries vs compaction vs streaming) so background work can't starve foreground latency.</li> <li><strong>TigerBeetle</strong> and <strong>Turso</strong> use io_uring directly, and put it behind an interface so deterministic simulation can replace it in tests.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Efficient IO with io_uring"
+url = "https://kernel.dk/io_uring.pdf"
+
+[[sources]]
+title = "What Modern NVMe Storage Can Do, And How To Exploit It"
+url = "https://www.vldb.org/pvldb/vol16/p2090-haas.pdf"
+
+[[sources]]
+title = "IO in PostgreSQL: Past, Present, Future"
+url = "https://www.youtube.com/watch?v=3Oj7fBAqVTw"

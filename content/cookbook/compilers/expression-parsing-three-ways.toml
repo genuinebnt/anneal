@@ -1,0 +1,72 @@
+title = "One expression language, four parsers"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 565
+kind = "recipe"
+lede = "one expression language, four parsers (recursive descent, precedence climbing, Pratt, shunting-yard) that must agree."
+level = "advanced"
+code = ["examples/text_and_parsing/expression_parsing_three_ways.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>the DSL / filter-expression layer</li><li>calculators</li><li>spreadsheet formulas</li><li>any "parse infix text" task</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a rich expression language: integers, variables, `+ - * / %`, `**` (right assoc), `== != < <= > >=` (**non**-associative), `&& ||`, prefix `- !`, ternary `c ? a : b` (right assoc), calls `f(a, b)`, indexing `a[i]`, member access `a.b`. The same token stream is parsed by four algorithms and the ASTs are compared as fully parenthesised strings.
+
+**Grammar** (lowest to highest precedence; this is what recursive descent mirrors, one function per line):
+
+```text
+expr    := or ( '?' expr ':' expr )?                  -- right assoc: the else branch recurses into the same rule
+or      := and ( '||' and )*     and := cmp ( '&&' cmp )*
+cmp     := add ( CMPOP add )?                         -- `?` not `*`: `a < b < c` is rejected with a clear error
+add     := mul ( ('+'|'-') mul )*    mul := unary ( ('*'|'/'|'%') unary )*
+unary   := ('-'|'!') unary | power                    -- so `-2 ** 2` is -(2 ** 2), as in Python/maths
+power   := postfix ( '**' unary )?                    -- right operand is `unary`: `2 ** -1` works and `a ** b ** c` is right assoc
+postfix := primary ( '(' args ')' | '[' expr ']' | '.' ID )*      primary := NUM | ID | '(' expr ')'
+```
+
+**Left recursion**: the natural rule `add := add '+' mul | mul` recurses forever in a top-down parser. Rewrite as `mul ('+' mul)*` and build the tree **inside** the loop (`lhs = Bin(lhs, rhs)`), which keeps left associativity. **Right** associativity needs no loop, just recursion on the right operand.
+
+Non-associative operators take `?` and then look for a second operator to reject it.
+
+**The four methods**: (a) recursive descent: one function per level, easiest to read and to give good errors, but adding an operator means a new function; (b) precedence climbing: one function plus a table `(prec, assoc)`, the min-precedence argument replaces the per-level functions; (c) Pratt: binding powers (left, right) per operator, prefix/postfix/mixfix (ternary) are first class; (d) shunting-yard: an explicit operator stack that emits RPN.
+
+It has NO recursion at all, so depth is unbounded. **Errors** are `Diag { span, message, expected }` rendered with a caret line; all methods report the same span for the same input (checked by 20 000 fuzzed strings).
+
+**Recovery**: on a bad statement we record the diagnostic, skip to the next `;` (stray `)` are skipped on the way) and keep parsing, so one run reports many errors. A lexer error inside a statement suppresses the parse cascade for it.
+
+**Safety**: recursive parsers share a depth guard (MAX_DEPTH) so `((((...` gives an error instead of a stack overflow; left-assoc chains are loops, so a 100 000-token flat expression is parsed on a 512 KiB thread; dropping a 50 000-deep tree uses an explicit worklist.
+
+**Evaluation** is **strict** (`&&`, `||` and `?:` evaluate every operand) because RPN has no jumps; real languages compile to jumps (see toy_language_interpreter). Reference evaluator = tree walk; it must equal the RPN stack machine and the Rust oracle values.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>query-language <strong>where</strong> clauses</li><li>spreadsheet formulas</li><li>feature-flag/rule expressions</li><li>calculators</li><li>template engines</li><li>config languages</li><li>learning which parser style to pick (Pratt for rich operator sets, shunting-yard when you want RPN or no recursion)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Crafting Interpreters <a href="https://craftinginterpreters.com/parsing-expressions.html" target="_blank" rel="noreferrer">https://craftinginterpreters.com/parsing-expressions.html</a></li><li>Matklad "Simple but Powerful Pratt Parsing" <a href="https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html" target="_blank" rel="noreferrer">https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html</a></li><li>Wikipedia "Shunting yard algorithm" <a href="https://en.wikipedia.org/wiki/Shunting_yard_algorithm" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Shunting_yard_algorithm</a></li></ul>
+"""
+
+[[sources]]
+title = "craftinginterpreters.com/parsing-expressions.html"
+url = "https://craftinginterpreters.com/parsing-expressions.html"
+
+[[sources]]
+title = "matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html"
+url = "https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Shunting_yard_algorithm"
+url = "https://en.wikipedia.org/wiki/Shunting_yard_algorithm"

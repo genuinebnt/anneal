@@ -1,0 +1,133 @@
+title = "Bidirectional typing and dependent types"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Types and semantics"
+chapter_order = 4
+order = 604
+kind = "guide"
+lede = "The architecture of modern checkers: Rust, Scala, TypeScript, Lean, Agda, Idris · Builds on 1–2"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>Full inference breaks down once you add subtyping, higher-rank polymorphism or dependent types. <b>Bidirectional</b> type checking splits the judgment into two modes. <em>Synthesis</em> (<code>Γ ⊢ e ⇒ τ</code>) computes a type from the term. <em>Checking</em> (<code>Γ ⊢ e ⇐ τ</code>) verifies a term against a known type. Pfenning's recipe: introduction forms (lambdas, constructors) are checked; elimination forms (application, projection) synthesize; variables and annotations synthesize. At the boundary, a <em>subsumption</em> rule checks <code>e ⇐ τ</code> by synthesizing <code>e ⇒ σ</code> and testing <code>σ ≤ τ</code>. Annotations are only needed at redexes, which programmers rarely write. Error messages also improve, because the checker knows what type it expected.</p>
+
+```rust title="Bidirectional STLC"
+#[derive(Clone, Debug, PartialEq)]
+pub enum Type { Bool, Arrow(Box<Type>, Box<Type>) }
+
+pub enum Term {
+    Var(usize),
+    Lam(Box<Term>),                        // no annotation needed: it is checked
+    App(Box<Term>, Box<Term>),
+    Ann(Box<Term>, Type),                  // (e : τ) switches from checking to synthesis
+    True, False,
+    If(Box<Term>, Box<Term>, Box<Term>),
+}
+
+pub fn synth(ctx: &[Type], t: &Term) -> Result<Type, String> {
+    match t {
+        Term::Var(i) => ctx.iter().rev().nth(*i).cloned().ok_or_else(|| "unbound".to_string()),
+        Term::Ann(e, ty) => { check(ctx, e, ty)?; Ok(ty.clone()) }
+        Term::App(f, a) => match synth(ctx, f)? {
+            Type::Arrow(p, r) => { check(ctx, a, &p)?; Ok(*r) }
+            ty => Err(format!("expected a function, found {ty:?}")),
+        },
+        Term::True | Term::False => Ok(Type::Bool),
+        Term::Lam(_) | Term::If(..) => Err("cannot infer this term's type; add an annotation".into()),
+    }
+}
+
+pub fn check(ctx: &[Type], t: &Term, ty: &Type) -> Result<(), String> {
+    match (t, ty) {
+        (Term::Lam(body), Type::Arrow(p, r)) => {
+            let mut inner = ctx.to_vec();
+            inner.push((**p).clone());
+            check(&inner, body, r)
+        }
+        (Term::If(c, a, b), _) => { check(ctx, c, &Type::Bool)?; check(ctx, a, ty)?; check(ctx, b, ty) }
+        _ => {
+            let got = synth(ctx, t)?;                        // subsumption (here: equality)
+            if &got == ty { Ok(()) } else { Err(format!("expected {ty:?}, found {got:?}")) }
+        }
+    }
+}
+```
+"""
+
+[[sections]]
+heading = "Dependent types"
+body = """
+<p>In a dependent type theory, types can mention terms. <code>Vec A n</code> depends on the number <code>n</code>. The dependent function type <code>Π(x : A). B x</code> has a return type that depends on the argument value. Type checking then has to decide whether two types are <em>definitionally equal</em>, for example whether <code>Vec A (1 + n)</code> equals <code>Vec A (suc n)</code>. That means evaluating terms inside types.</p>
+
+<p><b>Normalization by evaluation (NbE)</b> is the standard way. Evaluate syntax into a semantic domain where functions are host-language closures, then <em>quote</em> values back into normal-form syntax. Variables that aren't bound to anything become <em>neutral</em> terms that block computation. Two terms are definitionally equal if their normal forms are equal. Real checkers compare values directly with “conversion checking” rather than quoting both.</p>
+
+```rust title="NbE for the untyped lambda calculus: de Bruijn indices in syntax, levels in values"
+use std::rc::Rc;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Tm { Var(usize), Lam(Rc<Tm>), App(Rc<Tm>, Rc<Tm>) }   // indices
+
+#[derive(Clone)]
+pub enum Val { Lam(Vec<Val>, Rc<Tm>), Neutral(Neu) }            // closure = env + body
+
+#[derive(Clone)]
+pub enum Neu { Var(usize), App(Box<Neu>, Box<Val>) }            // levels: count from the outside
+
+pub fn eval(env: &[Val], t: &Tm) -> Val {
+    match t {
+        Tm::Var(i) => env[env.len() - 1 - i].clone(),
+        Tm::Lam(body) => Val::Lam(env.to_vec(), body.clone()),
+        Tm::App(f, a) => apply(eval(env, f), eval(env, a)),
+    }
+}
+
+fn apply(f: Val, a: Val) -> Val {
+    match f {
+        Val::Lam(mut env, body) => { env.push(a); eval(&env, &body) }
+        Val::Neutral(n) => Val::Neutral(Neu::App(Box::new(n), Box::new(a))),   // stuck
+    }
+}
+
+/// Read a value back as a β-normal term. `depth` = number of binders we are under.
+pub fn quote(depth: usize, v: &Val) -> Tm {
+    match v {
+        Val::Lam(env, body) => {
+            let mut env = env.clone();
+            env.push(Val::Neutral(Neu::Var(depth)));           // fresh variable, as a level
+            Tm::Lam(Rc::new(quote(depth + 1, &eval(&env, body))))
+        }
+        Val::Neutral(n) => quote_neu(depth, n),
+    }
+}
+
+fn quote_neu(depth: usize, n: &Neu) -> Tm {
+    match n {
+        Neu::Var(level) => Tm::Var(depth - 1 - level),         // level → index
+        Neu::App(f, a) => Tm::App(Rc::new(quote_neu(depth, f)), Rc::new(quote(depth, a))),
+    }
+}
+
+pub fn normalize(t: &Tm) -> Tm { quote(0, &eval(&[], t)) }
+pub fn conv(a: &Tm, b: &Tm) -> bool { normalize(a) == normalize(b) }
+```
+
+<p>Using indices in syntax and levels in values means values never need shifting. That is the main trick. The <code>Vec</code> environment makes closure creation linear; use a persistent list or <code>Rc</code> chain in a real checker.</p>
+
+<p>A full dependently typed checker adds, in roughly this order:</p>
+
+<ol> <li>Π and universe types, with a bidirectional checker that calls <code>eval</code> on types.</li> <li>Metavariables for implicit arguments and holes, solved by <em>pattern unification</em> (Miller patterns).</li> <li>Inductive families with dependent pattern matching and coverage checking.</li> <li>A termination checker for recursive definitions.</li> <li>Universe levels, to avoid Girard's paradox.</li> </ol>
+
+<p>Kovács's <em>elaboration-zoo</em> implements each step in a few hundred lines.</p>
+
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Advanced type feature</th><th>What it gives you</th><th>Where to start</th></tr></thead> <tbody> <tr><td>Linear and affine types</td><td>Resources used exactly once, or at most once (Rust's moves)</td><td>Wadler 1990 “Linear types can change the world!”; Bernardy et al. 2018 “Linear Haskell”</td></tr> <tr><td>Quantitative type theory</td><td>Dependent types plus usage counts; erase proofs at runtime</td><td>Atkey 2018; Brady 2021 “Idris 2”</td></tr> <tr><td>Refinement types</td><td><code>{v: Int | v &gt; 0}</code>, with SMT-checked predicates</td><td>Rondon, Kawaguchi and Jhala 2008 “Liquid Types”; Liquid Haskell; Flux for Rust</td></tr> <tr><td>Gradual typing</td><td>Mix typed and untyped code with runtime casts at the boundary</td><td>Siek and Taha 2006; Siek et al. 2015 “Refined criteria for gradual typing”</td></tr> <tr><td>Effect types</td><td>Track exceptions, state and async in types</td><td>Leijen 2017 “Type directed compilation of row-typed algebraic effects” (Koka)</td></tr> <tr><td>Session types</td><td>Protocols as types for channels</td><td>Honda 1993; Gay and Vasconcelos 2010</td></tr> <tr><td>GADTs</td><td>Type refinement in pattern matches</td><td>Xi, Chen and Chen 2003; Peyton Jones et al. 2006 “Simple unification-based type inference for GADTs”</td></tr> </tbody> </table></div>
+"""
+
+[[sources]]
+title = "Dunfield and Krishnaswami 2013, “Complete and Easy Bidirectional Typechecking for Higher-Rank Polymorphism”"
+url = "https://arxiv.org/abs/1306.6032"
+
+[[sources]]
+title = "Kovács, elaboration-zoo"
+url = "https://github.com/AndrasKovacs/elaboration-zoo"

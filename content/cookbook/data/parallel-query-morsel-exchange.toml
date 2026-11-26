@@ -1,0 +1,91 @@
+title = "Parallel query execution"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 372
+kind = "recipe"
+lede = "Morsel-driven pipelines, exchange operators, parallel build/probe, sample sort."
+level = "advanced"
+code = ["examples/database/parallel_query_morsel_exchange.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>analytical engines</li><li>parallel dataframe libraries</li><li>shuffle layers of distributed SQL</li><li>anything that must use all cores on one query</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+HyPer / Umbra (the morsel-driven design below), DuckDB's pipeline executor, Spark SQL and other shuffle based engines (hash-partition / broadcast / range exchange between stages), the Volcano "exchange operator" of Graefe, partitioned parallel aggregation in PostgreSQL's Parallel Hash and ClickHouse's two-level aggregation.
+
+Course: CMU 15-445 Lecture 14 (parallel query execution) and CMU 15-721 (parallel databases: morsels, exchange, parallel joins).
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a miniature parallel executor running two TPC-H flavoured queries over generated tables (all integer arithmetic, so parallel and serial answers are **exactly** equal, not just close):
+
+- Q1-like: scan lineitem, filter on shipdate, **group by** (flag, status), **sum/count**. A scan-filter-aggregate pipeline.
+- Q3-like: customer -> orders -> lineitem three-way join, **group by** orderkey, SUM(revenue), top-10. Three pipelines separated by **pipeline breakers** (the hash table builds), the last one probes both tables and feeds an aggregation.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Inter**- vs **intra**-operator parallelism. Inter-operator: different operators (or pipelines) run at once on different threads, connected by queues; parallelism is capped by the plan's depth and one slow stage throttles the rest. Intra-operator: the **same** operator runs on many threads over different slices of its input; parallelism scales with data.
+
+The exchange section below shows the inter-operator style (producer threads feed consumer threads through channels), everything else is intra-operator.
+
+**Morsel-driven parallelism** (Leis et al.): the input of a pipeline is cut into small fixed-size **morsels** (here 1024 rows, in the paper &#126;100k).
+
+Worker threads pull the next morsel from a shared dispatcher (one atomic `fetch_add`), run the **whole** pipeline on it (filter, probe, partial aggregate) and keep their results in **thread-local** state, so the hot loop touches no locks.
+
+Because morsels are claimed dynamically, a fast or lucky thread simply takes more of them: load balancing is automatic and skew (a few morsels that cost 100x more) cannot idle the other cores. `StealQueues` is the NUMA-flavoured variant: every worker first drains its **own** contiguous lane (locality) and only then steals single morsels from the others.
+
+Static partitioning (one slice per thread, decided up front) is the contrast: it is only as fast as its unluckiest slice.
+
+**Pipeline breakers**: a hash-join build must finish before probing starts, an aggregation must see all input before emitting. A pipeline is the maximal chain of operators between breakers; the scheduler runs pipelines one after another, each one morsel-parallel. Three ways to build the shared table (`Mode`):
+
+- Serial: workers scan in parallel but **one** thread inserts everything. Simple, and the textbook Amdahl bottleneck.
+- Striped: all workers insert concurrently into one logical table made of 64 lock-protected stripes (lock striping stands in for the lock-free CAS table of the paper; no unsafe needed). Contention is low because stripes are many.
+- Partitioned: workers first hash-partition rows into thread-local buffers, then phase two builds each partition's table in parallel with NO sharing at all. Costs one extra pass, scales best. The same trick parallelises the final aggregate merge (a thread-local table per worker merged serially vs. partition-wise merge in parallel).
+
+**Exchange** operators move rows between pipelines running on different threads: **hash-partition** (equal keys meet at one consumer, so a **group by** needs no merge), **broadcast** (a small table is copied to every consumer so the big side never moves), **gather** / **merge** (many sorted streams become one; a k-way merge keeps the order).
+
+**Parallel sort** is a sample sort: sample, pick splitters, range-partition exchange, sort each range independently, concatenate: no serial merge at all, compared here against local sort + gather-merge whose final merge is serial.
+
+AMDAHL: speed-up &lt;= 1 / (s + (1 - s)/n) where s is the serial fraction. The scaling table prints the serial seconds that were measured inside the 1-worker run, the Amdahl prediction from them, and the observed speed-up. Serial build and serial merge are exactly the `s`.
+
+(Timings are printed, never asserted: they depend on the machine and its core count.)
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+200 random queries (Q1 with random cutoffs, Q3 with random segment / date / build mode) on skewed tables; each answer for 1, 2, 4 and 8 workers must equal a row-at-a-time oracle written independently of the parallel code. Exchanges, sorts and the stealing dispatcher are checked the same way (every morsel processed exactly once).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Morsel-Driven Parallelism <https://db.in.tum.de/~leis/papers/morsels.pdf>   CMU 15-445 <https://15445.courses.cs.cmu.edu/fall2024/>
+
+```text
+CMU 15-721 https://15721.courses.cs.cmu.edu/spring2024/
+```
+"""
+
+[[sources]]
+title = "db.in.tum.de/~leis/papers/morsels.pdf"
+url = "https://db.in.tum.de/~leis/papers/morsels.pdf"
+
+[[sources]]
+title = "15445.courses.cs.cmu.edu/fall2024"
+url = "https://15445.courses.cs.cmu.edu/fall2024/"
+
+[[sources]]
+title = "15721.courses.cs.cmu.edu/spring2024"
+url = "https://15721.courses.cs.cmu.edu/spring2024/"

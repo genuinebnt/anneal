@@ -1,0 +1,19 @@
+error[E0302]: this function takes 2 arguments but 1 was supplied
+ --> e0302_wrong_arity.peb:3:20
+  |
+1 | fn add(a: int, b: int) -> int { a + b }
+  |    --- function defined here
+2 | fn main() {
+3 |     println(to_str(add(1)));
+  |                    ^^^^^^ expected 2 arguments, found 1
+
+error[E0302]: this function takes 2 arguments but 3 were supplied
+ --> e0302_wrong_arity.peb:4:20
+  |
+1 | fn add(a: int, b: int) -> int { a + b }
+  |    --- function defined here
+...
+4 |     println(to_str(add(1, 2, 3)));
+  |                    ^^^^^^^^^^^^ expected 2 arguments, found 3
+
+error: aborting due to 2 previous errors

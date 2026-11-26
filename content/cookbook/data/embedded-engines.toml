@@ -1,0 +1,369 @@
+title = "Embedded engines"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 429
+kind = "guide"
+lede = "Databaseology (WiredTiger, SQLite, LMDB, RocksDB, SQL Anywhere, BerkeleyDB) and Seven Databases in Seven Weeks (MemSQL, Hekaton, NuoDB, MongoDB, Tokutek, VoltDB) · an LMDB-style copy-on-write B+tree with two meta pages · crash injection with torn writes · what a snapshot costs"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<p><em>(I have not watched these talks and no notes exist for them. The points below come from each system's documentation and papers and describe the design space the talks cover, not what any speaker said.)</em></p>
+
+<ul> <li><strong>An embedded engine is a library, not a server.</strong> The application links it and calls it in-process: no network hop, no separate administration, one process owns the files. SQLite, LMDB, BerkeleyDB and RocksDB live here; WiredTiger is a library too, embedded by MongoDB. The price is that the application inherits the engine's failure modes (a crash of the host is a crash of the database) and its concurrency model.</li> <li><strong>The choice that shapes everything is how an update becomes durable.</strong> <em>Write-ahead log plus buffer pool</em> (SQLite in WAL mode, BerkeleyDB, WiredTiger's journal, SQL Anywhere): change pages in memory, log first, checkpoint later; recovery replays the log (<a href="/cookbook/p/build-wal-and-aries">recovery</a>). <em>Copy-on-write</em> (LMDB): never overwrite a page that a committed tree uses; publish a new root by flipping a small pointer; there is no log and no replay. <em>Log-structured merge</em> (RocksDB, WiredTiger's LSM option): turn random writes into sequential ones and pay later in compaction (<a href="/cookbook/p/log-structured-storage">log-structured storage</a>). <em>Buffered tree</em> (Tokutek's fractal tree, the Bε-tree): keep a message buffer in every internal node so many updates travel down together.</li> <li><strong>Copy-on-write buys readers for free.</strong> A reader pins a root and sees that tree unchanged however many transactions commit; no locks, no undo, no validation. The cost is <em>write amplification</em> (a one-key update rewrites a root-to-leaf path), <em>space</em> (old pages stay until nobody can reach them) and a <em>single writer</em>.</li> <li><strong>Memory-first engines change the bottleneck.</strong> Hekaton (SQL Server's in-memory OLTP), MemSQL (SingleStore) and VoltDB hold data in memory and remove the buffer pool, the lock manager and latches from the hot path: Hekaton with lock-free indexes (<a href="/cookbook/p/latch-free-indexes-and-the-bw-tree">Bw-tree</a>) and optimistic multi-version concurrency, VoltDB by partitioning data and running each partition's transactions one at a time in a single thread (stored procedures, no locks, a command log for durability). NuoDB distributes memory-resident objects across peers and keeps multi-version state; MongoDB is a document model over a pluggable engine (WiredTiger since 3.2).</li> <li><strong>"Embedded" is about operations as much as speed.</strong> SQLite's selling points are a single-file format with a stable promise of backward compatibility, extreme testing, and zero configuration; LMDB's are a tiny code base, memory-mapped reads without copies, and no tuning. Both choose simplicity over peak throughput, and for most applications that is the right trade.</li> </ul>
+"""
+
+[[sections]]
+heading = "Copy-on-write in one picture"
+body = """
+<p>A tree of 4 KB pages lives in a file. To change one key, a write transaction <strong>copies the leaf, then its parent, then the root</strong> into fresh pages. The old pages are untouched. Then it makes the new pages durable (<code>fsync</code>), writes a <strong>meta page</strong> holding <code>(txn, root, …)</code> and a checksum, and makes that durable. There are two meta pages, written alternately by transaction number; recovery reads both, throws away any whose checksum fails, and takes the one with the higher transaction number. Everything else follows from that:</p>
+
+<ul> <li>A crash before the meta write leaves the old meta pointing at the old, intact tree. A crash during it either tears the new meta (checksum fails, the other one wins), loses it, or completes it. In every case the database is one of the committed states.</li> <li>A page may be <strong>reused</strong> only when no state that could still be recovered or read reaches it. Pages replaced by transaction <em>f</em> are free once <code>f</code> is older than the previous commit (the older meta is still the fallback if the newest is torn) and older than the oldest reader.</li> <li>Pages created and then dropped inside one transaction are garbage at once.</li> </ul>
+
+<p>The model below is the real algorithm over a simulated disk that can crash between any two events and, at the crash, persists every unsynced write independently with probability one half.</p>
+
+:::deeper Reference: copy-on-write tree, free-page rule, meta pages, simulated crashing disk
+```rust title="src/embedded/cowtree.rs"
+//! An LMDB-style copy-on-write B+tree. Pages are never modified in place: a write transaction copies the path from the root to each
+//! changed leaf into fresh pages, syncs them, and then publishes the new root by writing one of two alternating *meta pages*. A crash
+//! before the meta write leaves the old tree untouched; a torn meta write is detected by its checksum and the other meta is used.
+//! There is no write-ahead log. Readers pin a snapshot (a root) and see it unchanged while writers commit; pages replaced by a
+//! transaction are reused only once no recoverable meta page and no reader can reach them.
+use std::collections::BTreeMap;
+
+#[derive(Clone, Copy, Debug)]
+pub struct Config { pub leaf_cap: usize, pub branch_cap: usize }
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Node {
+    Leaf { keys: Vec<u64>, vals: Vec<u64> },
+    /// `keys[i]` is the smallest key reachable through `kids[i + 1]`.
+    Branch { keys: Vec<u64>, kids: Vec<u32> },
+}
+
+/// One meta page: everything needed to open the tree at a commit. `freed` lists, per transaction, the pages that transaction replaced
+/// (in a real engine this free list is itself stored in pages of the tree).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Meta { pub txn: u64, pub root: Option<u32>, pub next_page: u32, pub freed: Vec<(u64, Vec<u32>)>, pub crc: u64 }
+impl Meta {
+    fn new(txn: u64, root: Option<u32>, next_page: u32, freed: Vec<(u64, Vec<u32>)>) -> Meta { let mut m = Meta { txn, root, next_page, freed, crc: 0 }; m.crc = m.checksum(); m }
+    /// FNV-style hash over every field, standing in for the page checksum a real engine stores in the meta page.
+    pub fn checksum(&self) -> u64 {
+        let mut h = 0xcbf29ce484222325u64;
+        let mut mix = |x: u64| { h ^= x; h = h.wrapping_mul(0x100000001b3); };
+        mix(self.txn); mix(self.root.map_or(u64::MAX, |r| r as u64)); mix(self.next_page as u64);
+        for (f, ps) in &self.freed { mix(*f); for p in ps { mix(*p as u64); } }
+        h
+    }
+    pub fn valid(&self) -> bool { self.crc == self.checksum() }
+}
+
+/// The simulated disk: durable pages, writes buffered until `sync`, two meta slots, and a crash plan.
+pub struct Disk {
+    pub pages: Vec<Option<Node>>,
+    pending: Vec<(u32, Node)>,
+    pending_meta: Option<(usize, Meta)>,
+    pub metas: [Option<Meta>; 2],
+    /// Number of disk events (page write, sync, meta write) left before the power fails; `None` = never.
+    pub budget: Option<usize>,
+    pub crashed: bool,
+    seed: u64,
+    pub events: u64,
+    pub pages_written: u64,
+    /// Meta writes that the simulated power failure tore in half (their checksum fails on recovery).
+    pub torn_meta_writes: u64,
+}
+impl Disk {
+    pub fn new() -> Self { Disk { pages: vec![], pending: vec![], pending_meta: None, metas: [None, None], budget: None, crashed: false, seed: 1, events: 0, pages_written: 0, torn_meta_writes: 0 } }
+    pub fn crash_after(&mut self, events: usize, seed: u64) { self.budget = Some(events); self.seed = seed.max(1); }
+    fn rnd(&mut self) -> u64 { self.seed ^= self.seed << 13; self.seed ^= self.seed >> 7; self.seed ^= self.seed << 17; self.seed }
+    fn tick(&mut self) -> bool {
+        if self.crashed { return false; }
+        if let Some(b) = self.budget.as_mut() {
+            if *b == 0 {
+                // power failure: every write that was not yet synced independently may or may not have reached the platter
+                self.crashed = true;
+                for (id, n) in std::mem::take(&mut self.pending) { if self.rnd() % 2 == 0 { self.install(id, n); } }
+                if let Some((slot, m)) = self.pending_meta.take() {
+                    match self.rnd() % 3 { 0 => {} , 1 => { self.torn_meta_writes += 1; let mut t = m.clone(); t.root = Some(t.root.map_or(0, |r| r ^ 1)); t.next_page ^= 1; self.metas[slot] = Some(t); } _ => self.metas[slot] = Some(m) }
+                }
+                return false;
+            }
+            *b -= 1;
+        }
+        self.events += 1;
+        true
+    }
+    fn install(&mut self, id: u32, n: Node) { if self.pages.len() <= id as usize { self.pages.resize(id as usize + 1, None); } self.pages[id as usize] = Some(n); }
+    pub fn write_page(&mut self, id: u32, n: Node) { if self.tick() { self.pending.push((id, n)); self.pages_written += 1; } }
+    /// Make every earlier write durable (pages and meta).
+    pub fn sync(&mut self) {
+        if self.tick() {
+            for (id, n) in std::mem::take(&mut self.pending) { self.install(id, n); }
+            if let Some((slot, m)) = self.pending_meta.take() { self.metas[slot] = Some(m); }
+        }
+    }
+    /// A meta write is one page and is durable only after the next `sync`; if the power fails first it may be lost, torn (its
+    /// checksum then fails and the slot reads as invalid) or completely written.
+    pub fn write_meta(&mut self, slot: usize, m: Meta) {
+        if self.crashed { return; }
+        self.pending_meta = Some((slot, m));
+        self.tick();
+    }
+    pub fn read(&self, id: u32) -> &Node { self.pages.get(id as usize).and_then(|n| n.as_ref()).unwrap_or_else(|| panic!("page {id} was never written (or was lost in a crash)")) }
+    pub fn file_pages(&self) -> usize { self.pages.len() }
+}
+
+pub struct Store { pub disk: Disk, pub cfg: Config, meta: Meta, readers: Vec<(u64, u64)>, next_reader: u64,
+    /// LMDB's `MDB_NOMETASYNC`: do not sync after writing the meta page; it becomes durable with the next commit's sync. Faster,
+    /// but a crash can then lose the newest commit, and the previous meta page and its tree must still be intact.
+    pub no_meta_sync: bool }
+
+pub struct Snapshot { pub id: u64, pub txn: u64, root: Option<u32> }
+
+#[derive(Debug, PartialEq)] pub enum Error { Crashed }
+
+#[derive(Clone, Debug)]
+pub enum Op { Put(u64, u64), Delete(u64) }
+
+impl Store {
+    pub fn create(cfg: Config) -> Store { Store { disk: Disk::new(), cfg, meta: Meta::new(0, None, 0, vec![]), readers: vec![], next_reader: 0, no_meta_sync: false } }
+
+    /// Reopen after a crash: use the valid meta page with the highest transaction number.
+    pub fn recover(mut disk: Disk, cfg: Config) -> Store {
+        disk.crashed = false; disk.budget = None; disk.pending.clear();
+        let meta = disk.metas.iter().flatten().filter(|m| m.valid()).max_by_key(|m| m.txn).cloned().unwrap_or(Meta::new(0, None, 0, vec![]));
+        Store { disk, cfg, meta, readers: vec![], next_reader: 0, no_meta_sync: false }
+    }
+    pub fn txn(&self) -> u64 { self.meta.txn }
+    pub fn root(&self) -> Option<u32> { self.meta.root }
+
+    // ---- readers
+    pub fn begin_read(&mut self) -> Snapshot { self.next_reader += 1; self.readers.push((self.next_reader, self.meta.txn)); Snapshot { id: self.next_reader, txn: self.meta.txn, root: self.meta.root } }
+    pub fn end_read(&mut self, s: Snapshot) { self.readers.retain(|r| r.0 != s.id); }
+    pub fn get_at(&self, s: &Snapshot, key: u64) -> Option<u64> { self.get_from(s.root, key) }
+    pub fn get(&self, key: u64) -> Option<u64> { self.get_from(self.meta.root, key) }
+    fn get_from(&self, root: Option<u32>, key: u64) -> Option<u64> {
+        let mut id = root?;
+        loop {
+            match self.disk.read(id) {
+                Node::Leaf { keys, vals } => return keys.binary_search(&key).ok().map(|i| vals[i]),
+                Node::Branch { keys, kids } => id = kids[keys.partition_point(|&k| k <= key)],
+            }
+        }
+    }
+    /// Height (number of pages read per lookup).
+    pub fn height(&self) -> usize { let mut h = 0; let mut id = self.meta.root; while let Some(i) = id { h += 1; id = match self.disk.read(i) { Node::Leaf { .. } => None, Node::Branch { kids, .. } => Some(kids[0]) }; } h }
+    pub fn scan_at(&self, root: Option<u32>, lo: u64, hi: u64) -> Vec<(u64, u64)> {
+        let mut out = vec![];
+        fn go(d: &Disk, id: u32, lo: u64, hi: u64, out: &mut Vec<(u64, u64)>) {
+            match d.read(id) {
+                Node::Leaf { keys, vals } => for (k, v) in keys.iter().zip(vals) { if *k >= lo && *k <= hi { out.push((*k, *v)); } },
+                Node::Branch { keys, kids } => for (i, &c) in kids.iter().enumerate() {
+                    let (clo, chi) = (if i == 0 { 0 } else { keys[i - 1] }, if i == keys.len() { u64::MAX } else { keys[i] });
+                    if !(chi < lo || clo > hi) { go(d, c, lo, hi, out); }
+                },
+            }
+        }
+        if let Some(r) = root { go(&self.disk, r, lo, hi, &mut out); }
+        out
+    }
+    pub fn scan(&self, lo: u64, hi: u64) -> Vec<(u64, u64)> { self.scan_at(self.meta.root, lo, hi) }
+    pub fn scan_snapshot(&self, s: &Snapshot, lo: u64, hi: u64) -> Vec<(u64, u64)> { self.scan_at(s.root, lo, hi) }
+
+    // ---- writer
+    /// Pages that a transaction may reuse: those replaced by transactions `f <= txn - 1` (so neither recoverable meta page reaches them)
+    /// and not reachable by any reader (`f <= oldest reader's snapshot`).
+    fn reusable(&self) -> Vec<u32> {
+        let limit_meta = self.meta.txn.saturating_sub(1);
+        let limit_reader = self.readers.iter().map(|r| r.1).min().unwrap_or(u64::MAX);
+        self.meta.freed.iter().filter(|(f, _)| *f <= limit_meta && *f <= limit_reader).flat_map(|(_, p)| p.iter().copied()).collect()
+    }
+
+    /// Run one write transaction: apply the operations to a copy-on-write version of the tree, write the new pages, sync, and publish.
+    pub fn commit(&mut self, ops: &[Op]) -> Result<(), Error> {
+        let mut reuse = self.reusable();
+        reuse.sort_unstable_by(|a, b| b.cmp(a));
+        let mut tx = Tx { st: self, dirty: BTreeMap::new(), freed: vec![], next_page: 0, reuse, taken: vec![], released: vec![] };
+        tx.next_page = tx.st.meta.next_page;
+        let mut root = tx.st.meta.root;
+        for op in ops {
+            match op {
+                Op::Put(k, v) => root = Some(tx.put(root, *k, *v)),
+                Op::Delete(k) => root = tx.delete(root, *k),
+            }
+        }
+        let (dirty, mut freed, next_page, taken) = (tx.dirty, tx.freed, tx.next_page, tx.taken);
+        freed.extend(tx.released);                    // pages created and discarded within this transaction: free for later transactions
+        let st = tx.st;
+        if st.disk.crashed { return Err(Error::Crashed); }
+        for (id, n) in dirty { st.disk.write_page(id, n); }
+        st.disk.sync();
+        let mut m = st.meta.clone();
+        m.txn += 1; m.root = root; m.next_page = next_page;
+        m.freed.retain(|(_, pages)| !pages.iter().all(|p| taken.contains(p)));
+        for (_, pages) in m.freed.iter_mut() { pages.retain(|p| !taken.contains(p)); }
+        m.freed.retain(|(_, pages)| !pages.is_empty());
+        if !freed.is_empty() { m.freed.push((m.txn, freed)); }
+        m.crc = m.checksum();
+        let slot = (m.txn % 2) as usize;
+        st.disk.write_meta(slot, m.clone());
+        if !st.no_meta_sync { st.disk.sync(); }
+        if st.disk.crashed { return Err(Error::Crashed); }
+        st.meta = m;
+        Ok(())
+    }
+    /// Page ids ever allocated (the high-water mark of the file).
+    pub fn allocated_pages(&self) -> usize { self.meta.next_page as usize }
+    pub fn live_pages(&self) -> usize {
+        fn go(d: &Disk, id: u32) -> usize { 1 + match d.read(id) { Node::Leaf { .. } => 0, Node::Branch { kids, .. } => kids.iter().map(|&k| go(d, k)).sum() } }
+        self.meta.root.map_or(0, |r| go(&self.disk, r))
+    }
+    /// Pages a transaction started now could reuse (the rest are held by a recoverable meta page or a reader).
+    pub fn reusable_pages(&self) -> usize { self.reusable().len() }
+    pub fn pending_free_pages(&self) -> usize { self.meta.freed.iter().map(|f| f.1.len()).sum() }
+}
+
+struct Tx<'a> { st: &'a mut Store, dirty: BTreeMap<u32, Node>, freed: Vec<u32>, next_page: u32, reuse: Vec<u32>, taken: Vec<u32>, released: Vec<u32> }
+
+impl Tx<'_> {
+    fn alloc(&mut self) -> u32 {
+        if let Some(p) = self.released.pop() { return p; }
+        if let Some(p) = self.reuse.pop() { self.taken.push(p); return p; }
+        self.next_page += 1; self.next_page - 1
+    }
+    fn load(&self, id: u32) -> Node { self.dirty.get(&id).cloned().unwrap_or_else(|| self.st.disk.read(id).clone()) }
+    /// Replace page `old` by a new copy holding `n` (a page already created in this transaction is updated in place).
+    fn replace(&mut self, old: Option<u32>, n: Node) -> u32 {
+        if let Some(o) = old { if self.dirty.contains_key(&o) { self.dirty.insert(o, n); return o; } self.freed.push(o); }
+        let id = self.alloc();
+        self.dirty.insert(id, n);
+        id
+    }
+    fn put(&mut self, root: Option<u32>, k: u64, v: u64) -> u32 {
+        let Some(r) = root else { return self.replace(None, Node::Leaf { keys: vec![k], vals: vec![v] }) };
+        match self.insert(r, k, v) {
+            (id, None) => id,
+            (left, Some((sep, right))) => self.replace(None, Node::Branch { keys: vec![sep], kids: vec![left, right] }),
+        }
+    }
+    /// Insert below `id`; returns the page that replaces it and, if it split, (separator, right sibling).
+    fn insert(&mut self, id: u32, k: u64, v: u64) -> (u32, Option<(u64, u32)>) {
+        match self.load(id) {
+            Node::Leaf { mut keys, mut vals } => {
+                match keys.binary_search(&k) { Ok(i) => vals[i] = v, Err(i) => { keys.insert(i, k); vals.insert(i, v); } }
+                if keys.len() <= self.st.cfg.leaf_cap { return (self.replace(Some(id), Node::Leaf { keys, vals }), None); }
+                let mid = keys.len() / 2;
+                let (rk, rv) = (keys.split_off(mid), vals.split_off(mid));
+                let sep = rk[0];
+                let left = self.replace(Some(id), Node::Leaf { keys, vals });
+                let right = self.replace(None, Node::Leaf { keys: rk, vals: rv });
+                (left, Some((sep, right)))
+            }
+            Node::Branch { mut keys, mut kids } => {
+                let ci = keys.partition_point(|&x| x <= k);
+                let (newchild, split) = self.insert(kids[ci], k, v);
+                kids[ci] = newchild;
+                if let Some((sep, right)) = split { keys.insert(ci, sep); kids.insert(ci + 1, right); }
+                if kids.len() <= self.st.cfg.branch_cap { return (self.replace(Some(id), Node::Branch { keys, kids }), None); }
+                let mid = keys.len() / 2;
+                let sep = keys[mid];
+                let (rkeys, rkids) = (keys.split_off(mid + 1), kids.split_off(mid + 1));
+                keys.pop();
+                let left = self.replace(Some(id), Node::Branch { keys, kids });
+                let right = self.replace(None, Node::Branch { keys: rkeys, kids: rkids });
+                (left, Some((sep, right)))
+            }
+        }
+    }
+    /// Delete `k`; empty leaves are removed from their parents and single-child branches collapse (no rebalancing).
+    fn delete(&mut self, root: Option<u32>, k: u64) -> Option<u32> {
+        let r = root?;
+        match self.remove(r, k) {
+            Removed::Unchanged => Some(r),
+            Removed::Replaced(id) => {
+                // collapse a root with a single child
+                let mut id = id;
+                loop { match self.load(id) { Node::Branch { kids, .. } if kids.len() == 1 => { let c = kids[0]; self.free_page(id); id = c; } _ => break } }
+                Some(id)
+            }
+            Removed::Empty => None,
+        }
+    }
+    fn free_page(&mut self, id: u32) { if self.dirty.remove(&id).is_none() { self.freed.push(id); } else { self.released.push(id); } }
+    fn remove(&mut self, id: u32, k: u64) -> Removed {
+        match self.load(id) {
+            Node::Leaf { mut keys, mut vals } => match keys.binary_search(&k) {
+                Err(_) => Removed::Unchanged,
+                Ok(i) => {
+                    keys.remove(i); vals.remove(i);
+                    if keys.is_empty() { self.free_page(id); Removed::Empty } else { Removed::Replaced(self.replace(Some(id), Node::Leaf { keys, vals })) }
+                }
+            },
+            Node::Branch { mut keys, mut kids } => {
+                let ci = keys.partition_point(|&x| x <= k);
+                match self.remove(kids[ci], k) {
+                    Removed::Unchanged => Removed::Unchanged,
+                    Removed::Replaced(c) => { kids[ci] = c; Removed::Replaced(self.replace(Some(id), Node::Branch { keys, kids })) }
+                    Removed::Empty => {
+                        kids.remove(ci);
+                        if !keys.is_empty() { keys.remove(if ci == 0 { 0 } else { ci - 1 }); }
+                        if kids.is_empty() { self.free_page(id); Removed::Empty } else { Removed::Replaced(self.replace(Some(id), Node::Branch { keys, kids })) }
+                    }
+                }
+            }
+        }
+    }
+}
+enum Removed { Unchanged, Replaced(u32), Empty }
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+```text title="1 000 000 keys, the price of a transaction, space with and without a reader, 500 crash scenarios in each sync mode"
+loaded 1000000 random keys in 100 transactions of 10 000 in 0.8 s; height 3, 11509 live pages (47.1 MB), file 24816 pages
+random point lookups: 52 ns each (3 pages read per lookup, 1000000 hits of 1 000 000)
+write cost of updating existing keys at random, by transaction size (pages written per transaction, 4 KB each)
+    txn size      pages/txn   pages per update     bytes per update   txn per second
+           1            3.0               3.00                12288             6123
+          10           20.6               2.06                 8423             3998
+         100          165.1               1.65                 6763             2439
+        1000         1064.2               1.06                 4359              670
+       10000         6690.7               0.67                 2741              103
+(a write-ahead-log engine writes about 30 bytes of log per such update, plus each dirty page once per checkpoint)
+space under steady churn (100 000 updates in transactions of 100), with and without a long-lived reader
+no reader:     file 24979 -> 24979 pages (live tree 11509 pages, 2.17x), 13470 pages waiting to be reused
+reader pinned: file 24979 -> 176638 pages (15.35x the live tree), 165129 pages pinned by the reader
+reader gone:   165129 pages waiting to be reused after 10 more commits
+meta pages synced at every commit: 500 scenarios, 137 transactions finished before the crash point; of 363 crashes during a commit, 341 recovered an older committed state and 22 the new one; 14 meta writes were torn
+meta pages synced lazily (NOMETASYNC): 500 scenarios, 165 transactions finished before the crash point; of 335 crashes during a commit, 318 recovered an older committed state and 17 the new one; 104 meta writes were torn
+```
+
+<ul> <li><strong>Reads are cheap</strong>: 3 pages per lookup (height 3 for a million keys), about 50 ns each with every page in memory. There is nothing to latch: a reader follows immutable pages.</li> <li><strong>Writes pay for the path</strong>: one update per transaction writes <strong>3 pages = 12 KB</strong>, a height's worth, to change a 16-byte record. Batching amortizes the root and upper levels: 2.06 pages per update at 10 per transaction, 1.06 at 1 000, 0.67 at 10 000. A write-ahead-log engine writes about 30 bytes of log per update; this is why LMDB is a read-optimized engine and why batching matters.</li> <li><strong>Space needs a reader policy</strong>: with no reader the file stays at 2.17× the live tree under steady updates (24 979 pages for 11 509 live). One long-lived read transaction pins everything replaced after its snapshot: the same updates grew the file to <strong>15.35×</strong> (176 638 pages, 165 129 of them held by the reader). When the reader ends, those pages become reusable at once but the file does not shrink, which is why an LMDB application must not hold read transactions open.</li> <li><strong>Crashes</strong>: in 500 scenarios per mode (a few dozen warm-up transactions with page reuse, then a crash at a random event of the next commit, with each unsynced write kept or lost at random) every recovery was one of the committed states, passed the structural check, and the recovered store accepted 20 more transactions. With the meta synced at every commit, no acknowledged commit was ever lost. In the lazy mode (LMDB's <code>MDB_NOMETASYNC</code>: skip the second <code>fsync</code>, so the meta reaches disk with the next commit's sync) recovery may return the state <em>before</em> the last acknowledged commit, never a torn mix; the test accepts exactly that and nothing else. 14 and 104 meta writes were torn, and all were detected.</li> </ul>
+
+<aside data-call="note"><b>What the second fsync is for</b><p>Pages first, then the meta. If the meta could reach the disk before the pages it points to, a crash would leave a root that refers to pages never written. The mutant that removes the page <code>fsync</code> was caught immediately; the one that skips the meta <code>fsync</code> is caught by the strict-durability check (a commit that returned must survive). The two modes are the two points on the durability dial: <code>fsync</code> twice per commit, or once and risk losing the last transaction.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A <code>Disk</code> that can crash</strong> is the whole trick of the test: every <code>write_page</code>, <code>write_meta</code> and <code>sync</code> is an <em>event</em>, <code>crash_after(n, seed)</code> makes the n-th one fail, and at that instant each buffered write survives or not by a seeded coin. A real power loss can do exactly this because the drive may reorder and cache; modelling it is what makes the recovery code testable.</li> <li><strong>Checksummed meta</strong> (<code>Meta::new</code> seals, <code>valid</code> checks): the torn write in the simulation flips fields without updating the checksum, so recovery's filter is exercised rather than assumed.</li> <li><strong><code>Option&lt;u32&gt;</code> for the root</strong> and <code>Result&lt;(), Error&gt;</code> from <code>commit</code>: an empty tree is <code>None</code>; a crash is an <code>Err(Crashed)</code> that leaves the in-memory store untouched, as in a process that died.</li> <li><strong>Ownership mirrors the algorithm</strong>: a <code>Tx</code> borrows the store, holds the <code>dirty</code> page map and the <code>freed</code>/<code>released</code> lists, and <code>commit</code> consumes it in one place; a page id that the transaction created can be modified again in place (<code>dirty.contains_key</code>), one that belongs to a committed tree never can.</li> <li><strong>Testing without a file system</strong>: pages live in a <code>Vec&lt;Option&lt;Node&gt;&gt;</code>; "the file" is its length, so the space measurements are exact and deterministic.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Model</strong>: after every transaction of random puts and deletes (small pages so splits, empty leaves and root collapses are frequent) the store equals a <code>BTreeMap</code>, passes a structural check (sorted keys, separators bracket their subtrees, uniform depth), and range scans agree.</li> <li><strong>No leaks, no sharing</strong>: <code>allocated pages == live pages + pages waiting on the free list</code> after every commit; no page id is reachable twice; a separate test inserts and deletes hundreds of fresh keys inside one transaction, and the file must stay small across rounds.</li> <li><strong>Readers</strong>: a snapshot taken at transaction <em>t</em> returns the same contents after 100 more commits; while it is open the number of reusable pages stays small and the file grows; after it ends the pages become reusable.</li> <li><strong>Crashes</strong>: 500 scenarios per sync mode as above, plus a directed test where the newest meta is torn and recovery must fall back to the other one.</li> <li><strong>Mutants run against these tests</strong>: the previous commit's pages reused at once; readers not pinning pages; meta pages not alternating; recovery choosing the oldest meta; no <code>fsync</code> before the meta; no <code>fsync</code> after the meta; replaced pages forgotten; pages created and dropped in a transaction forgotten; a committed page modified in place; an off-by-one separator; reused pages left on the free list; a deleted empty leaf not freed; recovery not checking the checksum. <strong>All 13 were killed.</strong> Three survived the first version of the suite: reusing the previous commit's pages (the model did not have unsynced meta writes), forgetting transient pages (no test created and discarded pages in one transaction) and the torn-meta path (a torn write was simply "lost", so the checksum was never needed); each led to a model change or a new test, described above.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>LMDB</strong> (C, used by OpenLDAP, Monero, many caches) is this design on a memory-mapped file: one writer, unlimited lock-free readers, two meta pages, a free-page database, no recovery step; <code>MDB_NOMETASYNC</code> and <code>MDB_NOSYNC</code> trade durability for speed. Descendants: <strong>BoltDB/bbolt</strong> (Go, used by etcd) and <strong>redb</strong> (Rust).</li> <li><strong>SQLite</strong> keeps a B-tree in a single file with either a rollback journal (old page images saved before overwriting) or a write-ahead log (readers see the database as of when they began; a checkpoint copies the log back); one writer at a time; SQL is compiled to bytecode (<a href="/cookbook/p/execution-pipelines">execution</a>).</li> <li><strong>WiredTiger</strong> (C, MongoDB's default engine) has B-trees with hazard-pointer-protected in-memory pages, multi-version records at document level, a journal and periodic checkpoints that are copy-on-write on disk, and optional LSM and column-store layouts.</li> <li><strong>RocksDB</strong> (C++, a LevelDB fork from Facebook) is the standard embeddable LSM engine, with leveled, universal and FIFO compaction, column families, and wide use inside other databases (TiKV, MyRocks).</li> <li><strong>BerkeleyDB</strong> (C, now Oracle) offers B-tree, hash, queue and record-number access methods with transactions and logging; <strong>SQL Anywhere</strong> (SAP) is a full SQL database designed to run unattended on small devices.</li> <li><strong>Memory-first</strong>: <strong>Hekaton</strong> (SQL Server In-Memory OLTP) with lock-free hash and Bw-tree indexes, optimistic MVCC and compiled stored procedures; <strong>SingleStore (MemSQL)</strong> with an in-memory skip-list rowstore and a disk columnstore; <strong>VoltDB</strong> with single-threaded partitions executing stored procedures serially; <strong>NuoDB</strong> with a peer-to-peer memory-centric architecture; <strong>Tokutek's TokuDB</strong> (fractal trees, since discontinued) brought write-optimized trees to MySQL and MongoDB.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong><code>fsync</code> lies if you let it</strong>: disks and file systems cache; <code>fsync</code> on the file may not flush the directory entry; macOS needs <code>F_FULLFSYNC</code>. Test on the media you deploy on; this model cannot find a lying drive.</li> <li><strong>Reader leaks</strong> make a copy-on-write file grow without bound; put a deadline and a monitor on read transactions.</li> <li><strong>Single-writer means a queue</strong>: a slow writer blocks all others; keep write transactions short and batch.</li> <li><strong>Torn pages</strong>: pages bigger than the device's atomic write unit can be half written; checksums, not luck, tell you.</li> <li><strong>Memory-mapped I/O hides stalls</strong>: a page fault inside a read can block like any disk read, and on an I/O error a mapped file raises a signal, not a <code>Result</code>.</li> <li><strong>Write amplification of CoW</strong> is real for small transactions: a million single-row commits write 12 GB of pages for 16 MB of data in the measurement above.</li> <li><strong>Do not benchmark an embedded engine against a server on one workload</strong>: the network and the client library often dominate the difference.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "How SQLite Is Tested"
+url = "https://sqlite.org/testing.html"
+
+[[sources]]
+title = "Atomic Commit in SQLite"
+url = "https://sqlite.org/atomiccommit.html"

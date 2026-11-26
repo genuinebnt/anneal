@@ -1,0 +1,99 @@
+=== before ===
+// monomorphisation: 1 function instances
+// fn#0 (main)
+fn main() -> () {
+    let _0: int;
+    let _1: int;  // n
+    let _2: int;  // i
+    let _3: int;  // s
+    let _4: int;  // dead
+    let _5: bool;
+    let _6: bool;
+    let _7: int;
+    let _8: int;
+    let _9: int;
+    let _10: str;
+    let _11: ();
+  bb0:
+    _1 = len("abc")
+    _2 = 0
+    _3 = 0
+    _4 = 0
+    goto bb1
+  bb1:
+    _5 = _2 < _1
+    branch _5 -> bb2, bb3
+  bb2:
+    _6 = _3 > 1
+    branch _6 -> bb4, bb5
+  bb3:
+    _9 = _3 + _2
+    _10 = to_str(_9)
+    _11 = println(_10)
+    return ()
+  bb4:
+    _4 = 1
+    _3 = _3 + 2
+    goto bb6
+  bb5:
+    _3 = _3 + 1
+    goto bb6
+  bb6:
+    _2 = _2 + 1
+    goto bb1
+}
+
+=== after: ssa ===
+// monomorphisation: 1 function instances
+// fn#0 (main)
+fn main() -> () {  // ssa
+    let _0: int;
+    let _1: int;  // n
+    let _2: int;  // i
+    let _3: int;  // s
+    let _4: int;  // dead
+    let _5: bool;
+    let _6: bool;
+    let _7: int;
+    let _8: int;
+    let _9: int;
+    let _10: str;
+    let _11: ();
+    let _12: int;  // i
+    let _13: int;  // s
+    let _14: int;  // s
+    let _15: int;  // dead
+    let _16: int;  // s
+    let _17: int;  // s
+    let _18: int;  // i
+  bb0:
+    _1 = len("abc")
+    _2 = 0
+    _3 = 0
+    _4 = 0
+    goto bb1
+  bb1:
+    _12 = phi [bb0: _2, bb6: _18]
+    _13 = phi [bb0: _3, bb6: _17]
+    _5 = _12 < _1
+    branch _5 -> bb2, bb3
+  bb2:
+    _6 = _13 > 1
+    branch _6 -> bb4, bb5
+  bb3:
+    _9 = _13 + _12
+    _10 = to_str(_9)
+    _11 = println(_10)
+    return ()
+  bb4:
+    _15 = 1
+    _16 = _13 + 2
+    goto bb6
+  bb5:
+    _14 = _13 + 1
+    goto bb6
+  bb6:
+    _17 = phi [bb4: _16, bb5: _14]
+    _18 = _12 + 1
+    goto bb1
+}

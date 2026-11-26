@@ -1,0 +1,65 @@
+title = "A small actor framework on tokio"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Threads, locks and channels"
+chapter_order = 1
+order = 241
+kind = "recipe"
+lede = "Mailboxes, request/reply, supervision with restarts, registry."
+level = "advanced"
+code = ["examples/concurrency/actor_model.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>services with many independent stateful entities (accounts, sessions, devices)</li><li>fault isolation</li><li>"let it crash" designs</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+an `Actor` owns its state **exclusively** and processes one message at a time from a bounded mailbox (`tokio::sync::mpsc`). Nobody else touches the state, so there are no locks around it and no data races by construction. `Addr<A>` is the cloneable handle: `send().await` applies back-pressure when the mailbox is full, `try_send` fails fast.
+
+Request/reply = put a `oneshot::Sender` in the message (`Addr::ask`).
+
+A supervisor task runs the actor as a child task, catches a panic through the `JoinHandle` (`JoinError::is_panic`), waits an exponentially growing backoff, builds a **fresh** actor from a factory (state is intentionally reset: "let it crash") and resumes on the **same** mailbox: the receiver lives in an `Arc<tokio::sync::Mutex<..>>` owned by the supervisor, so queued messages survive (only the message being handled when it crashed is lost).
+
+After `max_restarts` it gives up and the mailbox closes (senders get `Err`). Graceful stop: a `Stop` envelope (or `Control::Stop`) closes the mailbox to **new** sends and then **drains** everything already queued before exiting. A `Registry` maps names to type-erased `Addr`s (`Box<dyn Any>` + downcast).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Actors** vs **shared-state locks** (see shared_state/locks_deadlocks for the lock side):
+
+- Locks: simplest and fastest for small shared data (counter, cache) and short critical sections; but lock ordering, deadlock and holding guards across `.await` are your problem, and one panic can poison state.
+- Actors: better when state is large/long-lived, operations are multi-step or call out (await IO), you want serialised per-entity ordering, back-pressure, isolation and restart-on-failure.
+
+   Costs: a channel hop per call, reply plumbing, and deadlock is still possible (two actors awaiting each other's reply): keep call graphs acyclic. Here the bank demo has 10k concurrent transfers across 8 account actors, driven by a coordinator actor, and the invariant
+
+"total money is conserved" is asserted.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Erlang/OTP supervision trees (the original "let it crash" design)</li><li>actix and ractor are Rust actor frameworks worth reading</li><li>the same pattern appears as per-connection/per-session tasks owning their state in servers</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://tokio.rs/tokio/tutorial/channels" target="_blank" rel="noreferrer">https://tokio.rs/tokio/tutorial/channels</a></li><li><a href="https://www.erlang.org/doc/system/design_principles.html" target="_blank" rel="noreferrer">https://www.erlang.org/doc/system/design_principles.html</a></li><li><a href="https://docs.rs/tokio/latest/tokio/sync/mpsc/index.html" target="_blank" rel="noreferrer">https://docs.rs/tokio/latest/tokio/sync/mpsc/index.html</a></li></ul>
+"""
+
+[[sources]]
+title = "tokio.rs/tokio/tutorial/channels"
+url = "https://tokio.rs/tokio/tutorial/channels"
+
+[[sources]]
+title = "erlang.org/doc/system/design_principles.html"
+url = "https://www.erlang.org/doc/system/design_principles.html"
+
+[[sources]]
+title = "docs.rs/tokio/latest/tokio/sync/mpsc/index.html"
+url = "https://docs.rs/tokio/latest/tokio/sync/mpsc/index.html"

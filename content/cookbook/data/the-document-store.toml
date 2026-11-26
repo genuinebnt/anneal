@@ -1,0 +1,655 @@
+title = "The document store"
+module = "Databases"
+module_order = 8
+chapter = "Building complete engines"
+chapter_order = 9
+order = 450
+kind = "guide"
+lede = "JSON parsed, encoded with offset tables and flattened into keys · path indexes including array elements · merge-patch updates that write only changed leaves · measured on 20 000 documents"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>A document is a tree; the question is how to lay the tree out.</strong> Three layouts compete. <em>Text</em>: store the JSON string and parse on every access: simple, large, slow. <em>Binary with offset tables</em> (BSON, PostgreSQL's JSONB, SQLite's JSONB): each object and array starts with a table of member offsets, objects sort their keys, so a field is found by binary search and a jump, without parsing its siblings. <em>Flattened into keys</em>: one key per scalar leaf, <code>collection | id | path</code>, with the path as a tuple of field names and array indexes (<a href="/cookbook/p/one-key-space">M1</a>).</li> <li><strong>Flattening is the multi-model layout.</strong> In the shared key space a document is a prefix scan, a field is a point read, an update of one field writes one key, a transaction sees a consistent snapshot of a document, and the same sharding, replication and MVCC apply as to rows. Its price is space: every leaf repeats the path.</li> <li><strong>Merge patch makes updates small.</strong> RFC 7386: a patch is a JSON value; an object patch merges member by member, a <code>null</code> member deletes, anything else replaces. Applied to a flattened document, a patch that changes one field writes one key, and one that removes a subtree deletes exactly its leaves.</li> <li><strong>Secondary indexes work on paths.</strong> An index on <code>$.age</code> maps each value to the documents that have it; an index on <code>$.tags[*]</code> is <em>multikey</em>: one entry per array element, so "tags contains x" is an index probe. Index entries are keys in the index namespace and are written in the same transaction as the document, so an index can never disagree with its data.</li> <li><strong>Types need a defined order.</strong> JSON has numbers, strings, booleans, null, arrays and objects with no schema. The index uses the same memcomparable codec as every other key: null &lt; false &lt; true &lt; numbers &lt; strings. A range over numbers cannot return strings. Numbers are 64-bit floats here (as in JavaScript and many JSON stores), so integers beyond 2⁵³ lose precision, a documented limitation.</li> <li><strong>A query is a predicate over paths, with existential semantics.</strong> <code>tags[*] = "raft"</code> holds if <em>some</em> element matches; <code>Not</code> negates the whole condition. An index narrows the candidate set; every candidate is still checked against the full predicate, because an index covers one condition, not the document.</li> </ul>
+"""
+
+[[sections]]
+heading = "The layers"
+body = """
+<ul> <li><strong>Text</strong> (<code>parse</code>, <code>to_text</code>): a recursive-descent parser with <code>&#92;uXXXX</code> escapes and surrogate pairs; the last of duplicate keys wins; objects keep their keys sorted.</li> <li><strong>Binary</strong> (<code>encode</code>, <code>decode</code>, <code>locate</code>): tag byte; for containers a length, a member count, an offset table and the members; object members are <code>key length | key | value</code> in key order. <code>locate(bytes, path)</code> walks the tables, binary-searching object keys, and returns the offset of the value.</li> <li><strong>Flat</strong> (<code>flatten</code>, <code>unflatten</code>): scalars and empty containers become leaves.</li> <li><strong>Store</strong> (<code>DocStore</code>): <code>put</code>, <code>get</code>, <code>delete</code>, <code>patch</code>, <code>ids</code>, <code>find(predicate)</code> over the transaction layer.</li> </ul>
+
+:::deeper Reference: JSON parser and printer, the binary form with offset tables, flattening, merge patch, the store with path indexes and a predicate planner
+```rust title="src/multimodel/doc.rs"
+//! A document store on the shared key space. JSON documents are parsed into a tree, serialized to a binary form with offset tables (so a
+//! field can be found without parsing its siblings), and stored *flattened*: one key per scalar leaf, `collection | id | path`, so a whole
+//! document is a prefix scan, a field is a point read and a field update writes one key. Secondary indexes on paths (including array
+//! elements, "multikey") live in the index namespace and are maintained in the same transaction. Updates use JSON merge patch (RFC 7386).
+use crate::mmkey::{decode_tuple, doc_key, index_key, index_prefix, key, prefix_end, ns, Val};
+use crate::mmtxn::{Db, Txn};
+use std::collections::BTreeMap;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Json {
+    Null,
+    Bool(bool),
+    Num(f64),
+    Str(String),
+    Arr(Vec<Json>),
+    Obj(BTreeMap<String, Json>),
+}
+
+// ---- text ----------------------------------------------------------------------------------------------------------------------------
+
+pub fn parse(s: &str) -> Result<Json, String> {
+    let b = s.as_bytes();
+    let mut p = 0;
+    let v = value(b, &mut p)?;
+    ws(b, &mut p);
+    if p != b.len() {
+        return Err(format!("trailing characters at {p}"));
+    }
+    Ok(v)
+}
+fn ws(b: &[u8], p: &mut usize) {
+    while *p < b.len() && matches!(b[*p], b' ' | b'\\t' | b'\\n' | b'\\r') {
+        *p += 1;
+    }
+}
+fn value(b: &[u8], p: &mut usize) -> Result<Json, String> {
+    ws(b, p);
+    let c = *b.get(*p).ok_or("unexpected end")?;
+    match c {
+        b'n' => lit(b, p, "null", Json::Null),
+        b't' => lit(b, p, "true", Json::Bool(true)),
+        b'f' => lit(b, p, "false", Json::Bool(false)),
+        b'"' => Ok(Json::Str(string(b, p)?)),
+        b'[' => {
+            *p += 1;
+            let mut v = vec![];
+            ws(b, p);
+            if b.get(*p) == Some(&b']') {
+                *p += 1;
+                return Ok(Json::Arr(v));
+            }
+            loop {
+                v.push(value(b, p)?);
+                ws(b, p);
+                match b.get(*p) {
+                    Some(b',') => *p += 1,
+                    Some(b']') => {
+                        *p += 1;
+                        return Ok(Json::Arr(v));
+                    }
+                    _ => return Err(format!("expected , or ] at {p}")),
+                }
+            }
+        }
+        b'{' => {
+            *p += 1;
+            let mut m = BTreeMap::new();
+            ws(b, p);
+            if b.get(*p) == Some(&b'}') {
+                *p += 1;
+                return Ok(Json::Obj(m));
+            }
+            loop {
+                ws(b, p);
+                if b.get(*p) != Some(&b'"') {
+                    return Err(format!("expected a key at {p}"));
+                }
+                let k = string(b, p)?;
+                ws(b, p);
+                if b.get(*p) != Some(&b':') {
+                    return Err(format!("expected : at {p}"));
+                }
+                *p += 1;
+                let v = value(b, p)?;
+                m.insert(k, v);
+                ws(b, p);
+                match b.get(*p) {
+                    Some(b',') => *p += 1,
+                    Some(b'}') => {
+                        *p += 1;
+                        return Ok(Json::Obj(m));
+                    }
+                    _ => return Err(format!("expected , or }} at {p}")),
+                }
+            }
+        }
+        b'-' | b'0'..=b'9' => {
+            let st = *p;
+            while *p < b.len() && matches!(b[*p], b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9') {
+                *p += 1;
+            }
+            std::str::from_utf8(&b[st..*p]).unwrap().parse::<f64>().map(Json::Num).map_err(|e| format!("bad number: {e}"))
+        }
+        _ => Err(format!("unexpected character {:?} at {p}", c as char)),
+    }
+}
+fn lit(b: &[u8], p: &mut usize, word: &str, v: Json) -> Result<Json, String> {
+    if b[*p..].starts_with(word.as_bytes()) {
+        *p += word.len();
+        Ok(v)
+    } else {
+        Err(format!("bad literal at {p}"))
+    }
+}
+fn string(b: &[u8], p: &mut usize) -> Result<String, String> {
+    *p += 1;
+    let mut out: Vec<u8> = vec![];
+    loop {
+        let c = *b.get(*p).ok_or("unterminated string")?;
+        *p += 1;
+        match c {
+            b'"' => return String::from_utf8(out).map_err(|e| e.to_string()),
+            b'\\\\' => {
+                let e = *b.get(*p).ok_or("bad escape")?;
+                *p += 1;
+                match e {
+                    b'"' | b'\\\\' | b'/' => out.push(e),
+                    b'b' => out.push(8),
+                    b'f' => out.push(12),
+                    b'n' => out.push(b'\\n'),
+                    b'r' => out.push(b'\\r'),
+                    b't' => out.push(b'\\t'),
+                    b'u' => {
+                        let hex = |p: &mut usize| -> Result<u32, String> {
+                            let h = std::str::from_utf8(b.get(*p..*p + 4).ok_or("short \\\\u escape")?).map_err(|e| e.to_string())?;
+                            *p += 4;
+                            u32::from_str_radix(h, 16).map_err(|e| e.to_string())
+                        };
+                        let mut cp = hex(p)?;
+                        if (0xD800..0xDC00).contains(&cp) && b.get(*p) == Some(&b'\\\\') && b.get(*p + 1) == Some(&b'u') {
+                            *p += 2;
+                            let lo = hex(p)?;
+                            cp = 0x10000 + ((cp - 0xD800) << 10) + (lo.wrapping_sub(0xDC00) & 0x3FF);
+                        }
+                        let ch = char::from_u32(cp).ok_or("invalid code point")?;
+                        out.extend(ch.to_string().as_bytes());
+                    }
+                    _ => return Err("bad escape".into()),
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+}
+impl Json {
+    pub fn to_text(&self) -> String {
+        let mut s = String::new();
+        self.write(&mut s);
+        s
+    }
+    fn write(&self, s: &mut String) {
+        match self {
+            Json::Null => s.push_str("null"),
+            Json::Bool(b) => s.push_str(if *b { "true" } else { "false" }),
+            Json::Num(n) => {
+                if n.fract() == 0.0 && n.abs() < 1e15 { s.push_str(&format!("{}", *n as i64)) } else { s.push_str(&format!("{n}")) }
+            }
+            Json::Str(x) => {
+                s.push('"');
+                for c in x.chars() {
+                    match c {
+                        '"' => s.push_str("\\\\\\""),
+                        '\\\\' => s.push_str("\\\\\\\\"),
+                        '\\n' => s.push_str("\\\\n"),
+                        '\\r' => s.push_str("\\\\r"),
+                        '\\t' => s.push_str("\\\\t"),
+                        c if (c as u32) < 0x20 => s.push_str(&format!("\\\\u{:04x}", c as u32)),
+                        c => s.push(c),
+                    }
+                }
+                s.push('"');
+            }
+            Json::Arr(v) => {
+                s.push('[');
+                for (i, x) in v.iter().enumerate() {
+                    if i > 0 { s.push(','); }
+                    x.write(s);
+                }
+                s.push(']');
+            }
+            Json::Obj(m) => {
+                s.push('{');
+                for (i, (k, x)) in m.iter().enumerate() {
+                    if i > 0 { s.push(','); }
+                    Json::Str(k.clone()).write(s);
+                    s.push(':');
+                    x.write(s);
+                }
+                s.push('}');
+            }
+        }
+    }
+}
+
+// ---- binary form with offset tables ---------------------------------------------------------------------------------------------
+
+fn put_varint(mut v: u64, out: &mut Vec<u8>) {
+    while v >= 0x80 {
+        out.push((v as u8) | 0x80);
+        v >>= 7;
+    }
+    out.push(v as u8);
+}
+fn get_varint(b: &[u8], p: &mut usize) -> u64 {
+    let (mut v, mut s) = (0u64, 0);
+    loop {
+        let x = b[*p];
+        *p += 1;
+        v |= ((x & 0x7f) as u64) << s;
+        if x < 0x80 { return v; }
+        s += 7;
+    }
+}
+const T_NULL: u8 = 0;
+const T_FALSE: u8 = 1;
+const T_TRUE: u8 = 2;
+const T_NUM: u8 = 3;
+const T_STR: u8 = 4;
+const T_ARR: u8 = 5;
+const T_OBJ: u8 = 6;
+
+/// `tag | [for containers: u32 length of the rest | varint count | u32 offsets | members]`. An array member is a value; an object member is
+/// `varint key length | key | value`, in key order. An offset is relative to the start of the member area.
+pub fn encode(j: &Json) -> Vec<u8> {
+    let mut out = vec![];
+    enc(j, &mut out);
+    out
+}
+fn enc(j: &Json, out: &mut Vec<u8>) {
+    match j {
+        Json::Null => out.push(T_NULL),
+        Json::Bool(false) => out.push(T_FALSE),
+        Json::Bool(true) => out.push(T_TRUE),
+        Json::Num(n) => { out.push(T_NUM); out.extend(n.to_le_bytes()); }
+        Json::Str(s) => { out.push(T_STR); put_varint(s.len() as u64, out); out.extend(s.as_bytes()); }
+        Json::Arr(v) => container(T_ARR, v.iter().map(|x| { let mut m = vec![]; enc(x, &mut m); m }).collect(), out),
+        Json::Obj(m) => container(T_OBJ, m.iter().map(|(k, x)| { let mut e = vec![]; put_varint(k.len() as u64, &mut e); e.extend(k.as_bytes()); enc(x, &mut e); e }).collect(), out),
+    }
+}
+fn container(tag: u8, members: Vec<Vec<u8>>, out: &mut Vec<u8>) {
+    let mut head = vec![];
+    put_varint(members.len() as u64, &mut head);
+    let mut off = 0u32;
+    for m in &members { head.extend(off.to_le_bytes()); off += m.len() as u32; }
+    out.push(tag);
+    out.extend((head.len() as u32 + off).to_le_bytes());
+    out.extend(head);
+    for m in members { out.extend(m); }
+}
+
+pub fn decode(b: &[u8]) -> Json {
+    dec(b, &mut 0)
+}
+fn dec(b: &[u8], p: &mut usize) -> Json {
+    let tag = b[*p];
+    *p += 1;
+    match tag {
+        T_NULL => Json::Null,
+        T_FALSE => Json::Bool(false),
+        T_TRUE => Json::Bool(true),
+        T_NUM => { let n = f64::from_le_bytes(b[*p..*p + 8].try_into().unwrap()); *p += 8; Json::Num(n) }
+        T_STR => { let l = get_varint(b, p) as usize; let s = String::from_utf8(b[*p..*p + l].to_vec()).unwrap(); *p += l; Json::Str(s) }
+        T_ARR | T_OBJ => {
+            let _len = u32::from_le_bytes(b[*p..*p + 4].try_into().unwrap());
+            *p += 4;
+            let n = get_varint(b, p) as usize;
+            *p += 4 * n;
+            if tag == T_ARR {
+                Json::Arr((0..n).map(|_| dec(b, p)).collect())
+            } else {
+                let mut m = BTreeMap::new();
+                for _ in 0..n {
+                    let kl = get_varint(b, p) as usize;
+                    let k = String::from_utf8(b[*p..*p + kl].to_vec()).unwrap();
+                    *p += kl;
+                    m.insert(k, dec(b, p));
+                }
+                Json::Obj(m)
+            }
+        }
+        t => panic!("bad tag {t}"),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Seg {
+    Key(String),
+    Idx(usize),
+    /// Every element of an array (only in index definitions and query paths).
+    Any,
+}
+/// Offset of the value at `path` inside the encoded document, found by jumping through offset tables; nothing else is decoded.
+pub fn locate(b: &[u8], path: &[Seg]) -> Option<usize> {
+    let mut at = 0;
+    for seg in path {
+        let tag = b[at];
+        if tag != T_ARR && tag != T_OBJ {
+            return None; // a scalar has no members
+        }
+        let mut p = at + 1 + 4;
+        let n = get_varint(b, &mut p) as usize;
+        let offs = p;
+        let area = p + 4 * n;
+        let off = |i: usize| u32::from_le_bytes(b[offs + 4 * i..offs + 4 * i + 4].try_into().unwrap()) as usize;
+        match (seg, tag) {
+            (Seg::Idx(i), T_ARR) if *i < n => at = area + off(*i),
+            (Seg::Key(k), T_OBJ) => {
+                let (mut lo, mut hi) = (0, n);
+                let mut found = None;
+                while lo < hi {
+                    let mid = (lo + hi) / 2;
+                    let mut q = area + off(mid);
+                    let kl = get_varint(b, &mut q) as usize;
+                    match b[q..q + kl].cmp(k.as_bytes()) {
+                        std::cmp::Ordering::Less => lo = mid + 1,
+                        std::cmp::Ordering::Greater => hi = mid,
+                        std::cmp::Ordering::Equal => { found = Some(q + kl); break; }
+                    }
+                }
+                at = found?;
+            }
+            _ => return None,
+        }
+    }
+    Some(at)
+}
+pub fn decode_at(b: &[u8], at: usize) -> Json {
+    dec(b, &mut at.clone())
+}
+
+// ---- paths into trees and into the key space --------------------------------------------------------------------------------------
+
+/// All values at a path in a tree (several when the path crosses `Any`).
+pub fn values_at<'a>(j: &'a Json, path: &[Seg]) -> Vec<&'a Json> {
+    match path.split_first() {
+        None => vec![j],
+        Some((Seg::Key(k), rest)) => match j { Json::Obj(m) => m.get(k).map_or(vec![], |x| values_at(x, rest)), _ => vec![] },
+        Some((Seg::Idx(i), rest)) => match j { Json::Arr(v) => v.get(*i).map_or(vec![], |x| values_at(x, rest)), _ => vec![] },
+        Some((Seg::Any, rest)) => match j { Json::Arr(v) => v.iter().flat_map(|x| values_at(x, rest)).collect(), _ => vec![] },
+    }
+}
+
+fn leaf_val(j: &Json) -> Val {
+    match j {
+        Json::Null => Val::Null,
+        Json::Bool(b) => Val::Bool(*b),
+        Json::Num(n) => Val::Float(*n),
+        Json::Str(s) => Val::Text(s.clone()),
+        Json::Arr(_) => Val::Bytes(b"[]".to_vec()),     // only empty containers are leaves
+        Json::Obj(_) => Val::Bytes(b"{}".to_vec()),
+    }
+}
+/// One `(path, leaf)` per scalar and per empty container.
+pub fn flatten(j: &Json) -> Vec<(Vec<Val>, Val)> {
+    fn go(j: &Json, path: &mut Vec<Val>, out: &mut Vec<(Vec<Val>, Val)>) {
+        match j {
+            Json::Obj(m) if !m.is_empty() => for (k, v) in m { path.push(Val::Text(k.clone())); go(v, path, out); path.pop(); },
+            Json::Arr(a) if !a.is_empty() => for (i, v) in a.iter().enumerate() { path.push(Val::Int(i as i64)); go(v, path, out); path.pop(); },
+            _ => out.push((path.clone(), leaf_val(j))),
+        }
+    }
+    let mut out = vec![];
+    go(j, &mut vec![], &mut out);
+    out
+}
+/// Rebuild a document from its leaves (in key order).
+pub fn unflatten(leaves: &[(Vec<Val>, Val)]) -> Json {
+    fn leaf(v: &Val) -> Json {
+        match v {
+            Val::Null => Json::Null,
+            Val::Bool(b) => Json::Bool(*b),
+            Val::Float(f) => Json::Num(*f),
+            Val::Int(i) => Json::Num(*i as f64),
+            Val::Text(s) => Json::Str(s.clone()),
+            Val::Bytes(b) if b == b"[]" => Json::Arr(vec![]),
+            Val::Bytes(_) => Json::Obj(BTreeMap::new()),
+        }
+    }
+    fn put(node: &mut Option<Json>, path: &[Val], v: &Val) {
+        match path.split_first() {
+            None => *node = Some(leaf(v)),
+            Some((Val::Text(k), rest)) => {
+                if !matches!(node, Some(Json::Obj(_))) { *node = Some(Json::Obj(BTreeMap::new())); }
+                if let Some(Json::Obj(m)) = node {
+                    let mut child = m.remove(k);
+                    put(&mut child, rest, v);
+                    m.insert(k.clone(), child.unwrap());
+                }
+            }
+            Some((Val::Int(i), rest)) => {
+                if !matches!(node, Some(Json::Arr(_))) { *node = Some(Json::Arr(vec![])); }
+                if let Some(Json::Arr(a)) = node {
+                    // leaves arrive in index order, so an element is either the next one or an extension of the last
+                    let i = *i as usize;
+                    let mut child = if i < a.len() { Some(a.remove(i)) } else { None };
+                    put(&mut child, rest, v);
+                    a.insert(i.min(a.len()), child.unwrap());
+                }
+            }
+            Some((o, _)) => panic!("bad path segment {o:?}"),
+        }
+    }
+    let mut root = None;
+    for (p, v) in leaves { put(&mut root, p, v); }
+    root.unwrap_or(Json::Null)
+}
+
+// ---- RFC 7386 merge patch ---------------------------------------------------------------------------------------------------------
+
+pub fn merge_patch(target: &Json, patch: &Json) -> Json {
+    match patch {
+        Json::Obj(p) => {
+            let mut t = match target { Json::Obj(m) => m.clone(), _ => BTreeMap::new() };
+            for (k, v) in p {
+                if *v == Json::Null { t.remove(k); } else { let cur = t.get(k).cloned().unwrap_or(Json::Null); t.insert(k.clone(), merge_patch(&cur, v)); }
+            }
+            Json::Obj(t)
+        }
+        other => other.clone(),
+    }
+}
+
+// ---- the store ----------------------------------------------------------------------------------------------------------------------
+
+#[derive(Clone, Debug)]
+pub struct PathIndex {
+    pub id: u16,
+    pub path: Vec<Seg>,
+}
+#[derive(Clone, Debug)]
+pub enum Pred {
+    Eq(Vec<Seg>, Json),
+    /// Inclusive bounds on numbers or on strings.
+    Range(Vec<Seg>, Json, Json),
+    Exists(Vec<Seg>),
+    And(Vec<Pred>),
+    Or(Vec<Pred>),
+    Not(Box<Pred>),
+}
+pub fn matches(d: &Json, p: &Pred) -> bool {
+    match p {
+        Pred::Eq(path, v) => values_at(d, path).iter().any(|x| *x == v),
+        Pred::Range(path, lo, hi) => values_at(d, path).iter().any(|x| match (x, lo, hi) {
+            (Json::Num(a), Json::Num(l), Json::Num(h)) => l <= a && a <= h,
+            (Json::Str(a), Json::Str(l), Json::Str(h)) => l <= a && a <= h,
+            _ => false,
+        }),
+        Pred::Exists(path) => !values_at(d, path).is_empty(),
+        Pred::And(ps) => ps.iter().all(|q| matches(d, q)),
+        Pred::Or(ps) => ps.iter().any(|q| matches(d, q)),
+        Pred::Not(q) => !matches(d, q),
+    }
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct QueryStats {
+    pub index_entries: usize,
+    pub docs_fetched: usize,
+    pub used_index: bool,
+}
+
+pub struct DocStore {
+    pub coll: u32,
+    pub indexes: Vec<PathIndex>,
+}
+fn doc_prefix(coll: u32, id: u64) -> Vec<u8> {
+    doc_key(coll, id, &[])
+}
+fn path_of_key(k: &[u8]) -> (u64, Vec<Val>) {
+    let mut t = decode_tuple(&k[5..], &[]).unwrap();
+    let id = match t.remove(0) { Val::Int(i) => i as u64, o => panic!("{o:?}") };
+    (id, t)
+}
+
+impl DocStore {
+    pub fn new(coll: u32) -> DocStore {
+        DocStore { coll, indexes: vec![] }
+    }
+    fn write_indexes(&self, db: &Db, t: &mut Txn, id: u64, d: &Json, present: bool) {
+        for ix in &self.indexes {
+            for v in values_at(d, &ix.path).into_iter().filter(|v| !matches!(v, Json::Arr(_) | Json::Obj(_))) {
+                let k = index_key(self.coll, ix.id, &[leaf_val(v)], &[Val::Int(id as i64)]);
+                if present { db.put(t, &k, &[]) } else { db.delete(t, &k) }
+            }
+        }
+    }
+    pub fn get(&self, db: &Db, t: &mut Txn, id: u64) -> Option<Json> {
+        let p = doc_prefix(self.coll, id);
+        let leaves: Vec<(Vec<Val>, Val)> = db
+            .scan(t, &p, &prefix_end(&p).unwrap())
+            .into_iter()
+            .map(|(k, v)| (path_of_key(&k).1, decode_tuple(&v, &[]).unwrap().remove(0)))
+            .collect();
+        if leaves.is_empty() { None } else { Some(unflatten(&leaves)) }
+    }
+    pub fn put(&self, db: &Db, t: &mut Txn, id: u64, d: &Json) {
+        self.delete(db, t, id);
+        for (path, leaf) in flatten(d) { db.put(t, &doc_key(self.coll, id, &path), &key(&[leaf])); }
+        self.write_indexes(db, t, id, d, true);
+    }
+    pub fn delete(&self, db: &Db, t: &mut Txn, id: u64) -> bool {
+        let Some(old) = self.get(db, t, id) else { return false };
+        for (path, _) in flatten(&old) { db.delete(t, &doc_key(self.coll, id, &path)); }
+        self.write_indexes(db, t, id, &old, false);
+        true
+    }
+    /// Apply a merge patch, writing only the leaves that changed. Returns the number of keys written or deleted.
+    pub fn patch(&self, db: &Db, t: &mut Txn, id: u64, patch: &Json) -> Option<usize> {
+        let old = self.get(db, t, id)?;
+        let new = merge_patch(&old, patch);
+        let (ol, nl): (BTreeMap<_, _>, BTreeMap<_, _>) = (flatten(&old).into_iter().map(|(p, v)| (key(&p), (p, v))).collect(), flatten(&new).into_iter().map(|(p, v)| (key(&p), (p, v))).collect());
+        let mut writes = 0;
+        for (k, (path, _)) in &ol {
+            if !nl.contains_key(k) { db.delete(t, &doc_key(self.coll, id, path)); writes += 1; }
+        }
+        for (k, (path, leaf)) in &nl {
+            if ol.get(k).map(|(_, v)| key(&[v.clone()])) != Some(key(&[leaf.clone()])) { db.put(t, &doc_key(self.coll, id, path), &key(&[leaf.clone()])); writes += 1; }
+        }
+        self.write_indexes(db, t, id, &old, false);
+        self.write_indexes(db, t, id, &new, true);
+        Some(writes)
+    }
+    pub fn ids(&self, db: &Db, t: &mut Txn) -> Vec<u64> {
+        let mut p = vec![ns::DOC];
+        p.extend(self.coll.to_be_bytes());
+        let mut out: Vec<u64> = db.scan(t, &p, &prefix_end(&p).unwrap()).into_iter().map(|(k, _)| path_of_key(&k).0).collect();
+        out.dedup();
+        out
+    }
+    /// Documents matching the predicate. A top-level equality or range condition on an indexed path narrows the candidates through the
+    /// index; every candidate is then checked against the whole predicate.
+    pub fn find(&self, db: &Db, t: &mut Txn, p: &Pred) -> (Vec<u64>, QueryStats) {
+        let mut st = QueryStats::default();
+        let conds: Vec<&Pred> = match p { Pred::And(v) => v.iter().collect(), o => vec![o] };
+        let usable = conds.iter().find_map(|c| {
+            let (path, lo, hi) = match c {
+                Pred::Eq(path, v) => (path, v, v),
+                Pred::Range(path, lo, hi) => (path, lo, hi),
+                _ => return None,
+            };
+            if matches!(lo, Json::Arr(_) | Json::Obj(_)) { return None; }
+            self.indexes.iter().find(|ix| ix.path == *path).map(|ix| (ix, lo, hi))
+        });
+        let candidates: Vec<u64> = match usable {
+            Some((ix, lo, hi)) => {
+                st.used_index = true;
+                let (a, b) = (index_prefix(self.coll, ix.id, &[leaf_val(lo)]), prefix_end(&index_prefix(self.coll, ix.id, &[leaf_val(hi)])).unwrap());
+                let entries = db.scan(t, &a, &b);
+                st.index_entries = entries.len();
+                let mut ids: Vec<u64> = entries.into_iter().map(|(k, _)| match &decode_tuple(&k[7..], &[]).unwrap()[1] { Val::Int(i) => *i as u64, o => panic!("{o:?}") }).collect();
+                ids.sort_unstable();
+                ids.dedup();
+                ids
+            }
+            None => self.ids(db, t),
+        };
+        let mut out = vec![];
+        for id in candidates {
+            st.docs_fetched += 1;
+            if let Some(d) = self.get(db, t, id) {
+                if matches(&d, p) { out.push(id); }
+            }
+        }
+        (out, st)
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>20 000 synthetic user records of about 240 bytes of JSON each (nine fields, a nested address, two arrays).</p>
+
+```text title="sizes, field access, load, and queries with and without indexes"
+20000 documents of about 241 bytes of JSON text
+  JSON text 4.8 MB; binary with offset tables 6.5 MB (+35%); flattened into keys 11.4 MB (2.4x text: each leaf repeats the path)
+  reading addr.zip: parse text 1145 ns, decode the whole binary 770 ns, jump through offsets 26 ns per document (44x faster than parsing)
+  load into the key space: 16 us per document without indexes, 20 us with three (age, tags[*], addr.city)
+  query (20 000 documents)                          matches    fetched    scan (ms)   index (ms)
+  age = 30                                              314        314          686            6   (fetched 20000 vs 314)
+  age between 30 and 34                                1695       1695          698           33   (fetched 20000 vs 1695)
+  tags contains 'raft'                                 4554       4554          686           87   (fetched 20000 vs 4554)
+  city = 'Oslo' and age between 20 and 29               338       2015          680           39   (fetched 20000 vs 2015)
+  age between 18 and 77 (everything)                  20000      20000          683          372   (fetched 20000 vs 20000)
+```
+
+<ul> <li><strong>The offset tables cost 35% more space than text and buy a 44× faster field read</strong>: 26 ns to find <code>addr.zip</code> by jumping through two tables, against 1 145 ns to parse the text and 770 ns to decode the whole binary document. Binary formats exist for this one operation.</li> <li><strong>Flattening costs 2.4× the text</strong> (11.4 MB against 4.8 MB): each leaf carries its path, the tag bytes and a version suffix. It pays back in partial updates, in index-like scans over one field, and in using the machinery of the key space unchanged.</li> <li><strong>Three indexes add 25% to the load cost</strong> (16 → 20 µs per document), one write per indexed value, including one per array element.</li> <li><strong>Indexes make selective queries 100× faster and cost nothing when selectivity is poor</strong>: <code>age = 30</code> fetches 314 documents instead of 20 000 (6 ms against 686); the compound condition <code>city = 'Oslo' and age between 20 and 29</code> uses one index and fetches 2 015 candidates to find 338 matches; a range that selects everything is still faster (372 against 683 ms) here only because this scan implementation reads each document twice (<code>ids</code> then <code>get</code>). A planner would pick the more selective of the two indexed conditions, which is the exercise on cost.</li> <li><strong>A scan of 20 000 documents takes ~0.7 s through the transaction layer</strong>, 34 µs per document: the prefix scan, key decoding and tree rebuild dominate. A real engine decodes the binary form or scans a column of one path; this is the argument for storing both.</li> </ul>
+
+<aside data-call="note"><b>Two bugs the tests found</b><p><code>locate</code> indexed past the end of the buffer when a path continued through a <em>scalar</em> (<code>$.name.first</code> where <code>name</code> is a string): the code read a container header from a string's bytes. The random-path test, which mixes real and nonexistent paths, found it on the first run; the fix is to return <code>None</code> unless the current value is a container. The second: the first oracle for the store compared index-assisted results with full scans and passed, yet a mutant that left stale index entries behind after a delete also passed, because a stale entry costs one wasted fetch, never a wrong answer (the fetched document is re-checked). A directed test now asserts the <em>count of index entries</em> after deletes and replacements. Correct results do not prove that an index is correct, only that it is not wrong.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong><code>BTreeMap&lt;String, Json&gt;</code> for objects</strong> keeps keys sorted, which the binary form needs for binary search and which makes equality and printing canonical; <code>Json</code> derives <code>PartialEq</code>, so a round trip is <code>assert_eq!</code>.</li> <li><strong>A hand-written parser over <code>&amp;[u8]</code> and an index</strong>: no dependencies, error messages with positions, and <code>&#92;u</code> escapes assembled into <code>char</code>s with a check for lone surrogates. The printer escapes control characters as <code>&#92;u00XX</code>.</li> <li><strong>Varints and fixed offsets together</strong>: lengths and counts are LEB128 varints; offsets are <code>u32</code> little-endian so that <code>off(i)</code> is a constant-time read of the table.</li> <li><strong><code>Seg::{Key, Idx, Any}</code></strong> is the one path type for locating, querying and indexing; <code>values_at</code> returns <code>Vec&lt;&amp;Json&gt;</code> because <code>Any</code> fans out.</li> <li><strong>The store is generic over the transaction</strong>: every method takes <code>&amp;Db</code> and <code>&amp;mut Txn</code> like the table layer of <a href="/cookbook/p/transactions-on-the-key-space">M2</a>; nothing here knows about versions or conflicts.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Text</strong>: 3 000 random documents (nesting to depth 3; strings with quotes, backslashes, tabs, accents, emoji; integers and fractions) round-trip through the printer and the parser; an explicit input with <code>é</code>, a surrogate pair and escapes parses to the expected text; the last duplicate key wins; 13 malformed inputs are rejected.</li> <li><strong>Binary</strong>: 2 000 documents decode back; 12 000 random paths (real and nonexistent, through objects, arrays and scalars) find the same value through <code>locate</code> as <code>values_at</code> does on the tree.</li> <li><strong>Flat</strong>: 3 000 documents rebuild from their leaves, including empty arrays and objects at any depth.</li> <li><strong>Merge patch</strong>: the fifteen test vectors of RFC 7386, Appendix A.</li> <li><strong>The store (50 seeds × 120 steps)</strong>: three concurrent snapshot transactions put, patch, delete, get and query documents (25 ids; documents with indexed <code>age</code>, <code>tags[*]</code> and <code>addr.city</code>); every get equals the model's view of the transaction, every query (equality, ranges, exists, and, or, not, nested to depth 2) returns exactly the documents the predicate matches in the model, 409 of 695 queries through an index; final ids equal the model's.</li> <li><strong>Locality of updates</strong>: a patch changing one field writes one key; removing a nested object deletes its two leaves; an unchanged value writes nothing. <strong>Index hygiene</strong>: after a delete or a replacement the index holds no entry for the old values.</li> <li><strong>Mutants run against these tests</strong>: the object key search reversed; an array offset off by one; surrogate pairs combined wrongly; a patch <code>null</code> keeping the member, or merging into a non-object; empty containers lost in flattening; index entries written when removing; a patch not deleting removed leaves; an index range excluding its upper bound; candidates not checked against the full predicate; deleted documents leaving index entries; a path through a scalar reading past the end. <strong>All 12 were killed.</strong></li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>MongoDB</strong> stores BSON (length-prefixed, typed, field-ordered, with no offset table: fields are found by scanning), indexes paths including multikey arrays, and updates in place with <code>$set</code> operators; <strong>PostgreSQL</strong> <code>jsonb</code> stores a binary tree with sorted keys and offset tables, supports GIN indexes over keys and values and containment (<code>&#64;&gt;</code>); <strong>SQLite</strong> has JSON functions and, since 3.45, a binary JSONB format; <strong>MySQL</strong> has a binary JSON type with partial in-place updates.</li> <li><strong>Couchbase, Cosmos DB, DynamoDB, Firestore</strong> are document stores with per-path indexes; Cosmos DB indexes every path by default; <strong>CockroachDB</strong> and <strong>YugabyteDB</strong> support <code>JSONB</code> with inverted indexes; <strong>SurrealDB</strong> and <strong>FoundationDB's Document Layer</strong> flatten documents into ordered keys as in this section.</li> <li><strong>Columnar JSON</strong>: <strong>Snowflake VARIANT</strong>, <strong>ClickHouse JSON</strong>, <strong>DuckDB</strong> and <strong>Parquet's shredding</strong> (Dremel encoding, <a href="/cookbook/p/columnar-formats-and-nested-data">columnar formats</a>) split frequent paths into typed columns for analytics and keep the rest in binary form.</li> <li><strong>Merge patch and JSON Patch</strong> (RFC 6902) are the two standard update formats; MongoDB's update operators, Elasticsearch's partial <code>_update</code> and Firestore's field masks are the same idea.</li> <li><strong>Schema-on-read with constraints</strong>: JSON Schema validation (MongoDB <code>$jsonSchema</code>, PostgreSQL extensions) gives back some of what a relational schema enforces.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Schema-less does not mean schema-free.</strong> Queries assume field names and types; a field that is a number in one document and a string in another is two index populations. Validate on write or document the types.</li> <li><strong>Numbers</strong>: JSON has one number type; storing as 64-bit float silently rounds large integers (ids!). Store such values as strings or use an exact decimal type.</li> <li><strong>Index explosion</strong>: a multikey index writes one entry per array element; a 10 000-element array is 10 000 index writes per update. Cap array sizes or avoid indexing them.</li> <li><strong>Existential semantics surprise</strong>: <code>NOT (tags = 'x')</code> over arrays means "no element equals x", not "some element differs". Be explicit in the query language.</li> <li><strong>Large documents are one conflict domain</strong> if updates rewrite the whole document; flattened leaves and merge patches reduce conflicts to the fields actually touched (<a href="/cookbook/p/transactions-on-the-key-space">M2</a>).</li> <li><strong>Key order is canonical here</strong> (sorted); applications that rely on insertion order of object members will be surprised, as with most binary formats.</li> <li><strong>Do not embed unbounded lists.</strong> A document that grows without limit (all comments of a post) becomes a hot, huge value; model it as a separate collection keyed by the parent.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "JSON Merge Patch"
+url = "https://www.rfc-editor.org/rfc/rfc7386"
+
+[[sources]]
+title = "JSON Patch"
+url = "https://www.rfc-editor.org/rfc/rfc6902"
+
+[[sources]]
+title = "The JSON Data Interchange Syntax"
+url = "https://www.rfc-editor.org/rfc/rfc8259"
+
+[[sources]]
+title = "BSON specification"
+url = "https://bsonspec.org/spec.html"
+
+[[sources]]
+title = "JSONB"
+url = "https://sqlite.org/draft/jsonb.html"

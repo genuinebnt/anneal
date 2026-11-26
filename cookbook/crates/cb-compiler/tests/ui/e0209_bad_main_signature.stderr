@@ -1,0 +1,9 @@
+error[E0209]: `main` has an invalid signature
+ --> e0209_bad_main_signature.peb:1:4
+  |
+1 | fn main() -> int {
+  |    ^^^^ `main` must be `fn main()` with no parameters and no return value
+  |
+  = note: found `fn() -> int`
+
+error: aborting due to 1 previous error

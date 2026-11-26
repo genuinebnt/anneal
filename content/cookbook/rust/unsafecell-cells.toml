@@ -1,0 +1,54 @@
+title = "UnsafeCell"
+module = "Rust language"
+module_order = 1
+chapter = "Unsafe and FFI"
+chapter_order = 7
+order = 61
+kind = "recipe"
+lede = "Build your own `Cell` and `RefCell` (interior mutability from first principles)."
+level = "advanced"
+code = ["examples/unsafe_ffi/unsafecell_cells.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+understanding Cell/RefCell/Mutex/atomics, writing custom synchronisation primitives or caches.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+The compiler assumes data behind `&T` is immutable (and may cache reads / mark it `noalias readonly`). Mutating it anyway, e.g. `*(r as *const T as *mut T) = v`, is UB.
+
+`UnsafeCell<T>` is the **one** language primitive that opts out of that assumption: `UnsafeCell::get(&self) -> *mut T` is how mutation through `&` is allowed.
+
+`Cell`, `RefCell`, `OnceCell`, `Mutex`, `RwLock` and every atomic are all `UnsafeCell` plus a rule that keeps accesses from overlapping: Cell never hands out references (copy in/out), RefCell counts borrows at runtime, Mutex uses an OS lock, atomics use hardware instructions.
+
+`UnsafeCell` is already `!Sync`; we also add `PhantomData<*const ()>` to make that intent explicit (raw pointers are neither Send nor Sync). Without !Sync, two threads could call `set` at once: a data race.
+
+```text
+fn assert_sync<T: Sync>() {}  assert_sync::<MyCell<i32>>();   // error[E0277]: `*const ()` cannot be shared between threads
+```
+
+Our RefCell invariant: `state == 0` free, `n > 0` means n live `Ref`s, `-1` means one live `RefMut`. A guard exists only while it holds its slice of that state, so `&mut T` is never aliased.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>shared mutable state in single-threaded graphs/trees (Rc&lt;RefCell&lt;_&gt;&gt;)</li><li>caches behind <code>&amp;self</code></li><li>lazy initialisation</li><li>test doubles that record calls</li><li>GUI widget trees</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/cell/struct.UnsafeCell.html> and <https://doc.rust-lang.org/nomicon/>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/cell/struct.UnsafeCell.html"
+url = "https://doc.rust-lang.org/std/cell/struct.UnsafeCell.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon"
+url = "https://doc.rust-lang.org/nomicon/"

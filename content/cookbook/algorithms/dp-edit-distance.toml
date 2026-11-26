@@ -1,0 +1,40 @@
+title = "Edit distance"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Dynamic programming, greedy and search"
+chapter_order = 5
+order = 202
+kind = "recipe"
+lede = "edit distance (Levenshtein) and \"did you mean ...?\" suggestions."
+level = "intermediate"
+code = ["examples/algorithms/dp_edit_distance.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>friendly error messages for unknown names/commands/ids</li><li>fuzzy matching</li><li>spell-check</li><li>dedup</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>"did you mean ...?" suggestions in CLIs/compilers</li><li>fuzzy matching</li><li>spell checking</li><li>DNA alignment</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+d[i][j] = minimum edits to turn the first i chars of A into the first j chars of B
+
+```text
+d[i][j] = min( d[i-1][j] + 1            // delete a char of A
+             , d[i][j-1] + 1            // insert a char
+             , d[i-1][j-1] + (A[i]!=B[j]) )   // substitute (free if equal)
+```
+
+Only the previous row is needed, so memory is O(len B). Work on `chars`, not bytes, for correct Unicode. Real use: cargo/clap suggestions use Jaro-Winkler/Levenshtein-style similarity; see <https://github.com/rapidfuzz/strsim-rs>
+"""
+
+[[sources]]
+title = "github.com/rapidfuzz/strsim-rs"
+url = "https://github.com/rapidfuzz/strsim-rs"

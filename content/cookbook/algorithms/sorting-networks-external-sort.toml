@@ -1,0 +1,62 @@
+title = "TAOCP Vol 3 sorting"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Sorting, strings, bits and theory"
+chapter_order = 6
+order = 216
+kind = "recipe"
+lede = "Sorting networks (0-1 principle), merge insertion, replacement selection, external k-way merge, optimal BST (Knuth)."
+level = "advanced"
+code = ["examples/algorithms/sorting_networks_external_sort.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>SIMD/GPU sorting kernels</li><li>tiny fixed-size sorts</li><li>sorting data larger than RAM</li><li>database run generation</li><li>search-tree design</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+five chapters of Knuth's The Art of Computer Programming, Volume 3 (Sorting and Searching), each self-checked.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Sorting networks</div><div class="cb-g-says"><p>A fixed list of comparators (i, j) meaning "put the min on wire i and the max on wire j". The comparator sequence does not depend on the data, so it is branch-free and SIMD/GPU friendly.</p><p>We generate bubble, odd-even transposition, Batcher's BITONIC sorter and Batcher's <strong>odd-even merge</strong> sorter, count comparators and depth (parallel rounds), and prove each correct with the 0-1 <strong>principle</strong>: a network sorts every input iff it sorts all 2&#94;n inputs made of 0s and 1s (Knuth 5.3.4, Theorem Z).</p><p>That reduces n! permutations to 2&#94;n tests; we test n &lt;= 16 exhaustively and show that deleting any one comparator from a minimal network is caught.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Merge insertion (Ford-Johnson)</div><div class="cb-g-says"><p>Pair up, sort the winners recursively, then insert the losers in Jacobsthal order (1,3,5,11,21,...) so every binary search is over exactly 2&#94;k - 1 slots. A counting comparator shows it matches the information-theoretic bound ceil(log2 n!) for n &lt;= 11 (and is one over at n = 12, which is provably optimal).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Replacement selection</div><div class="cb-g-says"><p>A heap of M records tagged with a run number; a record smaller than the one just output must wait for the next run. On random data runs average 2M (Knuth 5.4.1: the snowplow argument); on sorted data a single run; on reversed data runs of exactly M.</p></div></div><div class="cb-g-term"><div class="cb-g-name">External</div><div class="cb-g-says"><p><strong>K-WAY merge sort</strong> on a simulated disk (blocks, read/write counters): replacement selection makes the runs, then each pass merges k runs at a time with a heap and one input buffer block per run. Passes = ceil(log_k(runs)), and every pass reads and writes every block once, so total I/O = blocks * 2 * (passes + 1).</p><p>Larger k = fewer passes but more buffers (k+1 blocks of RAM).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Optimal binary search tree</div><div class="cb-g-says"><p>Choose roots minimising sum p_i * depth_i. The O(n&#94;3) DP, then KNUTH's observation that root[i][j-1] &lt;= root[i][j] &lt;= root[i+1][j], which makes it O(n&#94;2). Equal cost asserted on 500 random tables, then compared with a sorted-insert (degenerate) BST, a random-insert BST and a perfectly balanced BST.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+when a problem is 'sort fixed small arrays', 'sort more than fits in memory' or 'build the best static search structure', these are the textbook answers; every one is also an **oracle**-friendly algorithm (0-1 principle, counting).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+sorting networks in SIMD/GPU sort kernels and small fixed-size sorts (e.g. sorting 3-16 keys inside larger sort implementations); replacement selection and k-way merging for run generation and merge phases in database engines and in external sorts such as **gnu** sort's merge of temporary files; optimal/weight-balanced BSTs for static dictionaries with known access frequencies (compilers' keyword lookup, Huffman-like alphabetic codes).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>The Art of Computer Programming Vol 3 (Sorting and Searching): 5.3.4 (networks)</li><li>5.3.1 (merge insertion)</li><li>5.4.1 (replacement selection)</li><li>5.4 (external sorting)</li><li>6.2.2 (optimal BSTs)</li></ul>
+
+<ul class="cb-g-reading"><li>The Algorithm Design Manual (Skiena)</li><li>catalog entries "Sorting" and "Searching" and the chapter on dynamic programming</li></ul>
+
+<https://en.wikipedia.org/wiki/Sorting_network>
+
+<https://en.wikipedia.org/wiki/Merge-insertion_sort>
+
+<https://en.wikipedia.org/wiki/Optimal_binary_search_tree>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Sorting_network"
+url = "https://en.wikipedia.org/wiki/Sorting_network"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Merge-insertion_sort"
+url = "https://en.wikipedia.org/wiki/Merge-insertion_sort"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Optimal_binary_search_tree"
+url = "https://en.wikipedia.org/wiki/Optimal_binary_search_tree"

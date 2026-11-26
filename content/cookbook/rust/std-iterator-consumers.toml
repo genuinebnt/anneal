@@ -1,0 +1,88 @@
+title = "Every consuming Iterator method, with a use case each"
+module = "Standard library and core"
+module_order = 2
+chapter = "Iterators and collections"
+chapter_order = 3
+order = 76
+kind = "recipe"
+lede = "every consuming Iterator method, with a use case each."
+level = "intermediate"
+code = ["examples/std_tour/std_iterator_consumers.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>any data pipeline</li><li>look-up page for <code>Iterator::fold</code></li><li><code>try_fold</code></li><li><code>collect</code></li><li><code>partition</code></li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>parsing and validating input (collect into Result)</li><li>aggregates (sum/min/max/fold)</li><li>searching (find/position)</li><li>grouping (collect into maps)</li><li>early-exit loops (try_fold / try_for_each)</li><li>comparing sequences (eq/cmp/lt)</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>Iterator::collect</code></li><li><code>Iterator::sum</code></li><li><code>Iterator::count</code></li><li><code>Iterator::max</code></li><li><code>Iterator::min</code></li><li><code>Iterator::fold</code></li><li><code>Iterator::any</code></li><li><code>Iterator::all</code></li><li><code>Iterator::find</code></li><li><code>Iterator::position</code></li><li><code>Iterator::for_each</code></li><li><code>Iterator::last</code></li><li><code>Iterator::nth</code></li><li><code>Iterator::product</code></li><li><code>Iterator::min_by_key</code></li><li><code>Iterator::max_by_key</code></li><li><code>Iterator::max_by</code></li><li><code>Iterator::min_by</code></li><li><code>Iterator::find_map</code></li><li><code>Iterator::rposition</code></li><li><code>Iterator::reduce</code></li><li><code>Iterator::try_fold</code></li><li><code>Iterator::try_for_each</code></li><li><code>Iterator::unzip</code></li><li><code>Iterator::partition</code></li><li><code>Iterator::cmp</code></li><li><code>Iterator::partial_cmp</code></li><li><code>Iterator::eq</code></li><li><code>Iterator::ne</code></li><li><code>Iterator::lt</code></li><li><code>Iterator::le</code></li><li><code>Iterator::gt</code></li><li><code>Iterator::ge</code></li><li><code>Iterator::is_sorted</code></li><li><code>Iterator::is_sorted_by</code></li><li><code>Iterator::is_sorted_by_key</code></li><li><code>Iterator::size_hint</code></li><li><code>Iterator::rev</code></li><li><code>Iterator::rfold</code></li><li><code>Iterator::rfind</code></li><li><code>DoubleEndedIterator::next_back</code></li><li><code>DoubleEndedIterator::nth_back</code></li><li><code>ExactSizeIterator::len</code></li><li><code>FromIterator::from_iter</code></li><li><code>Extend::extend</code></li><li><code>std::iter::Sum</code></li><li><code>std::iter::Product</code></li><li><code>Iterator::by_ref</code></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+core: `Iterator`, `DoubleEndedIterator`, `ExactSizeIterator`, `FromIterator`, `Extend`, `Sum`, `Product` live in `core::iter` (std re-exports them). The `collect` **target** impls live with the type: `Vec`, `String`, `VecDeque`, `BTreeMap`, `Box<[T]>` in alloc; `HashMap`/`HashSet` in std.
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/iter/trait.Iterator.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/iter/trait.Iterator.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+Iterator::try_reduce, Iterator::try_collect, Iterator::collect_into, Iterator::partition_in_place, Iterator::is_partitioned, Iterator::array_chunks, Iterator::intersperse, Iterator::map_windows, Iterator::cmp_by (all unstable in 1.98; probed with rustc); adapters live in std_iterator_adapters_lazy.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Cheat sheet (I want to ... -> use ...): count items                         -> `count()` (consumes; use `len()` on ExactSize instead when you can) total / product                     -> `sum::<T>()` / `product::<T>()`  (annotate the type!)
+
+```text
+biggest / smallest                  -> `max()` / `min()`; by a key: `max_by_key`; floats: `max_by(|a,b| a.total_cmp(b))`
+```
+
+custom accumulate                   -> `fold(init, |acc, x| ..)`; no init value: `reduce` stop early on error                 -> `try_fold` / `try_for_each` (or `collect::<Result<_,_>>()`) does any / every item match         -> `any` / `all` (short-circuit)
+
+```text
+first match / its index             -> `find` / `position`; last index: `rposition`; first Some(map): `find_map`
+```
+
+validate every item                 -> `collect::<Result<Vec<_>, E>>()` (first Err wins) skip the failures                   -> `filter_map(Result::ok)` or `flatten()` split in two by predicate           -> `partition` split pairs into two Vecs           -> `unzip` to a map / set / string / deque     -> `collect::<HashMap<_,_>>()`, `BTreeSet`, `String`, `VecDeque` compare two sequences               -> `eq`, `cmp`, `lt` (lexicographic)
+
+```text
+is it sorted                        -> `is_sorted()` / `is_sorted_by_key`
+```
+
+last / nth element                  -> `last()` (walks everything!) / `nth(n)`; from the back: `next_back`, `nth_back` sum Options / Results               -> `sum::<Option<i32>>()` (None if any None) reason about length                 -> `size_hint()` (lower, Some(upper)); `ExactSizeIterator::len`
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>The Rust Book ch13-02 <a href="https://doc.rust-lang.org/book/ch13-02-iterators.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/book/ch13-02-iterators.html</a></li><li>std::iter module docs <a href="https://doc.rust-lang.org/std/iter/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/iter/index.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/iter/trait.Iterator.html"
+url = "https://doc.rust-lang.org/std/iter/trait.Iterator.html"
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch13-02-iterators.html"
+url = "https://doc.rust-lang.org/book/ch13-02-iterators.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/iter/index.html"
+url = "https://doc.rust-lang.org/std/iter/index.html"

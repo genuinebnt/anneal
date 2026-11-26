@@ -1,0 +1,40 @@
+title = "Bounded concurrency with Streams"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Async Rust"
+chapter_order = 4
+order = 263
+kind = "recipe"
+lede = "`buffer_unordered`, `buffered`, `FuturesUnordered`, `for_each_concurrent`."
+level = "intermediate"
+code = ["examples/async/async_streams_concurrency.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+"run these N async jobs, at most K at a time" without hand-rolling Semaphore + JoinSet (compare joinset_semaphore).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>crawlers</li><li>batch API calls</li><li>ETL: at most K concurrent futures with streaming results</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+A `Stream` is an async iterator.
+
+Turn a list of inputs into a stream, `map` each to a future, then: .buffer_unordered(k)  run up to k futures at once; yield results as they **complete** (fastest first) .buffered(k)          same concurrency but yield results in **input** order FuturesUnordered      a dynamic set you can keep pushing futures into These run on the **same** task (concurrent, not parallel).
+
+To use many threads, `tokio::spawn` each future first. Docs: <https://docs.rs/futures-util/latest/futures_util/stream/trait.StreamExt.html> and <https://tokio.rs/tokio/tutorial/streams>
+"""
+
+[[sources]]
+title = "docs.rs/futures-util/latest/futures_util/stream/trait.StreamExt.html"
+url = "https://docs.rs/futures-util/latest/futures_util/stream/trait.StreamExt.html"
+
+[[sources]]
+title = "tokio.rs/tokio/tutorial/streams"
+url = "https://tokio.rs/tokio/tutorial/streams"

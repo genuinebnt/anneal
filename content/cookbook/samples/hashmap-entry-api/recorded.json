@@ -1,0 +1,9 @@
+[
+ {
+  "stamp": "Recorded run · 26 Nov 2026 · rustc 1.98.1",
+  "problems": "No errors and no warnings in the recorded build.",
+  "run": "count_words : {\"cat\": 1, \"dog\": 1, \"end\": 1, \"the\": 3}\ngroup_by_len: {1: [\"a\", \"c\"], 2: [\"bb\", \"dd\"], 3: [\"eee\"]}\ntake_one    : Some(1), keys left: 1\ntake_one    : Some(0), keys left: 0\ntake_one    : None, keys left: 0\nentry miss  : len stays 3, capacity 3 -> 7",
+  "tests": "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 2 tests\ntest entry_hashes_once_where_check_then_insert_hashes_more ... ok\ntest entry_with_a_borrowed_str_allocates_even_on_a_hit ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 10 tests\ntest a_hit_keeps_the_key_already_in_the_map ... ok\ntest a_miss_reserves_room_even_if_nothing_is_inserted ... ok\ntest capacity_can_drop_after_removals_and_comes_back_after_clear ... ok\ntest and_modify_does_not_run_for_the_value_or_insert_adds ... ok\ntest or_insert_evaluates_its_argument_on_every_call ... ok\ntest grouping_keeps_input_order_inside_a_group ... ok\ntest take_one_never_stores_zero ... ok\ntest the_other_tasks ... ok\ntest a_panic_in_the_closure_inserts_nothing ... ok\ntest counting_matches_a_simple_oracle ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+  "passed": 12
+ }
+]

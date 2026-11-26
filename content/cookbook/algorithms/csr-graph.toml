@@ -1,0 +1,58 @@
+title = "Csr graph"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Graph algorithms"
+chapter_order = 4
+order = 189
+kind = "recipe"
+lede = "CSR (compressed sparse row) graph: counting-sort build, reverse graph, BFS and PageRank vs Vec<Vec<u32>>."
+level = "intermediate"
+code = ["examples/algorithms/csr_graph.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>big read-mostly graphs</li><li>sparse matrices</li><li>graph analytics</li><li>anywhere <code>Vec&lt;Vec&lt;_&gt;&gt;</code> costs too much memory or cache misses</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+two flat arrays describe the whole graph. `offsets[u]..offsets[u+1]` is the slice of `targets` holding u's out-neighbours, so `neighbors(u)` is just `&targets[offsets[u]..offsets[u+1]]`. Optional edge weights live in a parallel array indexed the same way as `targets`.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+a counting sort keyed by source node. Pass 1 counts out-degrees, a prefix sum turns counts into start offsets, pass 2 drops every edge into its slot. O(V+E), no per-node allocation, and the sort is stable so neighbour order equals input order (which is why the two representations below give bit-identical PageRank).
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+`Vec<Vec<u32>>` pays 24 bytes of header per node, one heap allocation per node, spare capacity, and a pointer chase on every neighbour list. CSR is one contiguous scan: fewer cache misses, 4 bytes per edge, trivially serialisable / mmap-able. The price: it is static (inserting an edge means rebuilding), so use it after loading.
+
+CSC is just CSR of the reversed graph: it gives in-neighbours, needed for "pull" algorithms and for backward search.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+graph databases and analytics engines keep an immutable CSR/CSC adjacency for scans and joins; sparse-matrix libraries store matrices as CSR/CSC and compute SpMV (y = A x) as a loop over rows, which is exactly "for each node, sum over neighbours" (PageRank is repeated SpMV); GNN / graph frameworks (e.g.
+
+PyTorch Geometric, DGL) keep message-passing adjacency in compressed sparse formats so aggregation over neighbours is a segmented scan.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Sparse_matrix#Compressed_sparse_row_(CSR>,&#95;CRS_or_Yale_format) and <https://en.wikipedia.org/wiki/PageRank>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Sparse_matrix#Compressed_sparse_row_(CSR"
+url = "https://en.wikipedia.org/wiki/Sparse_matrix#Compressed_sparse_row_(CSR"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/PageRank"
+url = "https://en.wikipedia.org/wiki/PageRank"

@@ -1,0 +1,40 @@
+title = "Generic state machine"
+module = "Rust language"
+module_order = 1
+chapter = "Design patterns"
+chapter_order = 5
+order = 45
+kind = "recipe"
+lede = "a generic state-machine trait, replaying event logs, and table-driven transitions."
+level = "advanced"
+code = ["examples/patterns/generic_state_machine.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+lifecycles you want to **test** exhaustively and **replay** from an event log (event sourcing).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>order/account/ticket lifecycles</li><li>event sourcing (replay events to rebuild state)</li><li>exhaustive model checking</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Separate the **pure** transition function from everything else: `step(&state, &event) -> Result<state, error>`. Because it is pure, you can (1) replay a stored event list to rebuild state, (2) fuzz it with random events and assert invariants, (3) reuse one generic `replay` for many machines. This is the core of event sourcing.
+
+Associated types let each machine pick its own State/Event/Error; `replay<M: Machine>` works for all of them.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://martinfowler.com/eaaDev/EventSourcing.html" target="_blank" rel="noreferrer">https://martinfowler.com/eaaDev/EventSourcing.html</a> and state_machine (enum FSM)</li><li>typestate_protocol (typestate)</li></ul>
+"""
+
+[[sources]]
+title = "martinfowler.com/eaaDev/EventSourcing.html"
+url = "https://martinfowler.com/eaaDev/EventSourcing.html"

@@ -1,0 +1,5 @@
+fn main() {
+    let a = missing + 1;
+    let b = a * 2 + undefined_thing;
+    if b == "x" { println("hi"); }
+}

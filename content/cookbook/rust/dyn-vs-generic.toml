@@ -1,0 +1,30 @@
+title = "Trait with generics"
+module = "Rust language"
+module_order = 1
+chapter = "Types, traits and generics"
+chapter_order = 2
+order = 12
+kind = "recipe"
+lede = "trait with generics (static dispatch) vs `dyn` (dynamic dispatch), and fakes for tests."
+level = "intermediate"
+code = ["examples/language/dyn_vs_generic.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+executor stages (a `TaskRunner` trait you can fake).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>swappable backends and test fakes: storage</li><li>clocks</li><li>mailers</li><li>generics in hot paths</li><li>dyn at plugin boundaries</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: define behaviour as a trait. Use a generic `<R: Runner>` when the type is known at compile time (fast, inlinable, one copy of code per type). Use `Box<dyn Runner>` when you need a heterogeneous collection or runtime choice (one vtable call, smaller binary).
+
+A fake implementation makes tests easy.
+"""

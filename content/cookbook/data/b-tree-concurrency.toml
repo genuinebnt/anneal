@@ -1,0 +1,126 @@
+title = "B+Tree concurrency"
+module = "Databases"
+module_order = 8
+chapter = "Indexes"
+chapter_order = 3
+order = 342
+kind = "guide"
+lede = "BusTub P2 Task 4 · read crabbing, pessimistic write crabbing with safe-node release, optimistic insert and remove with restart, the header latch · correctness tests and throughput"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>The reference tree from P2.2–P2.4 is already concurrent. This slice explains the protocol it uses, how it's tested, and why it doesn't scale, which motivates Part II.</p>
+"""
+
+[[sections]]
+heading = "The protocol"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Operation</th> <th>Descent</th> <th>Held at the leaf</th> <th>Restart?</th> </tr> </thead> <tbody> <tr> <td><code>get</code></td> <td>read-latch the header, then each node; release the parent once the child is latched</td> <td>leaf read latch</td> <td>never</td> </tr> <tr> <td><code>insert</code>, optimistic</td> <td>read latches down to the leaf's parent (known from the parent's <code>level</code> byte = 1), <strong>write</strong> latch on the leaf</td> <td>leaf write latch only</td> <td>if the leaf would split → release everything, go pessimistic</td> </tr> <tr> <td><code>insert</code>, pessimistic</td> <td><strong>write</strong> latches from the header down; when a node is safe (not full), release every ancestor</td> <td>the path from the highest unsafe node</td> <td>never</td> </tr> <tr> <td><code>remove</code>, optimistic</td> <td>read latches down to the leaf's parent, <strong>write</strong> latch on the leaf</td> <td>leaf write latch only</td> <td>if the leaf would underflow (or the root leaf would empty) → release everything, go pessimistic</td> </tr> <tr> <td><code>remove</code>, pessimistic</td> <td><strong>write</strong> latches from the header down, with safe = more than min (a root inner node: more than 2 children)</td> <td>the path from the highest unsafe node</td> <td>never</td> </tr> </tbody> </table></div>
+
+<p><code>Latching::Optimistic</code> (the default) runs the optimistic row and falls back to the pessimistic one; <code>Latching::Pessimistic</code> runs only the pessimistic rows. BusTub's tests expect the former. Everything below is tested under both modes.</p>
+
+<p>Rules the implementation keeps:</p>
+
+<ol> <li><strong>Always top-down</strong>: header → root → … → leaf. Never latch a parent while holding a child.</li> <li><strong>The header page's latch guards the root id.</strong> Anything that may change the root keeps the header write latch until it knows the root is safe.</li> <li><strong>Siblings are latched only while holding their parent's write latch</strong>, so no other writer can be between them.</li> <li><strong>Never acquire the same latch twice in one thread.</strong> <code>RwLock</code> isn't reentrant, so reading a page you already write-latch deadlocks immediately (BusTub warns about this too).</li> <li><strong>Optimistic descents re-check what they assumed</strong> once the leaf is latched. If the "leaf" isn't a leaf because the root changed in between, fall back to pessimistic.</li> </ol>
+
+<p>The reference code for these rules is in <a href="/cookbook/p/search-and-insert">P2.2</a> (<code>insert_optimistic</code>, <code>insert_pessimistic</code>) and <a href="/cookbook/p/delete-and-tombstones">P2.3</a> (<code>remove_optimistic</code>, <code>remove_pessimistic</code>, <code>fix_underflow</code>).</p>
+"""
+
+[[sections]]
+heading = "Testing concurrency"
+body = """
+```rust title="tests/b_plus_tree_concurrent.rs"
+use std::collections::BTreeSet;
+use std::sync::Arc;
+use relational::buffer::{arc_replacer::ArcReplacer, buffer_pool_manager::BufferPoolManager};
+use relational::storage::{disk::disk_manager::{DiskManager, MemDiskManager}, index::b_plus_tree::{BPlusTree, Latching}};
+
+/// 8 threads: each owns a key stripe (inserts + deletes), and all threads read everything.
+/// Afterwards the tree must contain exactly each thread's surviving keys.
+#[test]
+fn concurrent_mixed() {
+    for (mode, (leaf_max, int_max, k)) in [Latching::Optimistic, Latching::Pessimistic]
+        .into_iter()
+        .flat_map(|m| [(4usize, 4usize, 0usize), (6, 5, 2), (32, 32, 0)].map(move |c| (m, c)))
+    {
+        let disk: Arc<dyn DiskManager> = Arc::new(MemDiskManager::default());
+        let bpm = BufferPoolManager::new(64, disk, ArcReplacer::new(64), 4);
+        let t = BPlusTree::new(&bpm, leaf_max, int_max, k).unwrap().with_latching(mode);
+        let survivors: Vec<BTreeSet<u64>> = std::thread::scope(|s| {
+            let hs: Vec<_> = (0..8u64).map(|tid| { let t = &t; s.spawn(move || {
+                let mut mine = BTreeSet::new();
+                let mut x = tid * 7919 + 1;
+                for _ in 0..4_000 {
+                    x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+                    let key = (x % 2_000) * 8 + tid;                   // stripe: key % 8 == tid
+                    match x % 5 {
+                        0 | 1 => { let fresh = mine.insert(key); assert_eq!(t.insert(key, key).unwrap(), fresh); }
+                        2 => { t.remove(key).unwrap(); mine.remove(&key); }
+                        _ => {                                          // read someone's key; ours must be exact
+                            let got = t.get(key).unwrap();
+                            assert_eq!(got.is_some(), mine.contains(&key), "own key {key} visibility");
+                        }
+                    }
+                }
+                mine
+            })}).collect();
+            hs.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        t.check_invariants().unwrap();
+        let want: Vec<u64> = survivors.iter().flatten().copied().collect::<BTreeSet<_>>().into_iter().collect();
+        let got: Vec<u64> = t.iter_from(None).unwrap().map(|r| r.unwrap().0).collect();
+        assert_eq!(got, want, "{mode:?} leaf_max {leaf_max} int_max {int_max} k {k}");
+        eprintln!("ok: {mode:?}, leaf_max {leaf_max}, int_max {int_max}, tombs {k}: {} keys", got.len());
+    }
+}
+
+#[test]
+fn throughput() {
+    for threads in [1usize, 4, 8] {
+        let disk: Arc<dyn DiskManager> = Arc::new(MemDiskManager::default());
+        let bpm = BufferPoolManager::new(4096, disk, ArcReplacer::new(4096), 4);
+        let t = BPlusTree::new(&bpm, 255, 255, 0).unwrap();
+        let per = 400_000 / threads as u64;
+        let s0 = std::time::Instant::now();
+        std::thread::scope(|s| for tid in 0..threads as u64 { let t = &t; s.spawn(move || {
+            let mut x = tid + 1;
+            for _ in 0..per { x ^= x << 13; x ^= x >> 7; x ^= x << 17; t.insert(x >> 1, x).unwrap(); }
+        }); });
+        let ins = s0.elapsed();
+        let s1 = std::time::Instant::now();
+        std::thread::scope(|s| for tid in 0..threads as u64 { let t = &t; s.spawn(move || {
+            let mut x = tid + 1;
+            for _ in 0..per { x ^= x << 13; x ^= x >> 7; x ^= x << 17; assert!(t.get(x >> 1).unwrap().is_some()); }
+        }); });
+        let get = s1.elapsed();
+        eprintln!("{threads} threads: insert {:.2} M/s, lookup {:.2} M/s", 0.4 / ins.as_secs_f64(), 0.4 / get.as_secs_f64());
+    }
+}
+```
+
+<p>Each thread owns a key stripe (<code>key % 8 == tid</code>), so it can predict exactly what it should see for its <em>own</em> keys at every moment, while all threads race on the same pages. The final tree must equal the union of every thread's surviving keys, and <code>check_invariants</code> must hold. Run it with tiny nodes (max 4) so splits and merges happen constantly, and with tombstones on.</p>
+
+```text title="cargo test --release --test b_plus_tree_concurrent -- --nocapture --test-threads=1"
+ok: Optimistic, leaf_max 4, int_max 4, tombs 0: 5587 keys
+ok: Optimistic, leaf_max 6, int_max 5, tombs 2: 5587 keys
+ok: Optimistic, leaf_max 32, int_max 32, tombs 0: 5587 keys
+ok: Pessimistic, leaf_max 4, int_max 4, tombs 0: 5587 keys
+ok: Pessimistic, leaf_max 6, int_max 5, tombs 2: 5587 keys
+ok: Pessimistic, leaf_max 32, int_max 32, tombs 0: 5587 keys
+1 threads: insert 3.32 M/s, lookup 4.57 M/s
+4 threads: insert 0.92 M/s, lookup 1.09 M/s
+8 threads: insert 0.57 M/s, lookup 0.76 M/s      ← correct, and slower with more threads
+```
+"""
+
+[[sections]]
+heading = "Why it doesn't scale"
+body = """
+<p>Every operation read-latches the <strong>header page</strong> and the <strong>root</strong>. As the <a href="/cookbook/p/index-concurrency-control">L10 measurements</a> show, a reader-writer latch's reader count is a shared cache line, so eight threads reading the root serialize on it. On top of that, every page access goes through the buffer pool's global latch (<a href="/cookbook/p/buffer-pool-manager">P1.3</a>). The protocol is right; the primitives are wrong for many cores. The ways forward, in increasing order of effort:</p>
+
+<ol> <li>Cache the root id in an <code>AtomicU32</code> instead of latching the header page on every read. Only root changes take a latch.</li> <li>Shard the buffer pool's page table (<a href="/cookbook/p/buffer-pool-manager">P1.3 exercises</a>).</li> <li>Replace the page <code>RwLock</code>s with <strong>optimistic version latches</strong> for inner nodes: readers validate instead of latching, so there are no shared writes on the read path. This is optimistic lock coupling (<a href="/cookbook/p/index-concurrency-control">L10</a>, Part II).</li> <li>Swizzle child pointers so a descent needs no page-table lookup at all (LeanStore).</li> </ol>
+
+<aside data-call="testing"><b>Deterministic concurrency testing</b><p>The striped stress test finds real bugs, but only on the interleavings the OS happens to produce. Two stronger tools: <strong>shuttle</strong> (randomized scheduling with seeds you can replay; it wraps <code>std::sync</code> like loom does), and a <strong>scheduler-aware latch</strong> that yields to a seeded RNG at every acquire. With either, a failing interleaving becomes a seed you can check in as a regression test.</p></aside>
+"""

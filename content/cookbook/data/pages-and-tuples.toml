@@ -1,0 +1,444 @@
+title = "Pages and tuples"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 320
+kind = "guide"
+lede = "Lecture #03, second half · Textbook 13.2–13.3 · page headers, slotted pages, record ids, tuple encoding, NULLs, overflow · Cairn stage 1b, after the buffer pool exists"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Page header</strong>: size, checksum, version, visibility info, and optionally everything needed to interpret the page on its own (self-contained pages).</li> <li><strong>Three layouts</strong>: tuple-oriented (slotted pages), log-structured and index-organized.</li> <li><strong>Slotted pages.</strong> A slot array grows from the front and tuple data grows from the back; the page is full when they meet. The slot array is an indirection that lets tuples move within a page without changing their external id.</li> <li><strong>Record id</strong> = (page, slot): a physical address, typically 4–10 bytes, not stored in the tuple. Never expose it to applications as a stable identifier.</li> <li><strong>Tuples</strong> are bytes interpreted using the schema. The header holds visibility info and a NULL bitmap (not the schema). Attributes are stored in declaration order, word-aligned, and a tuple normally doesn't span pages.</li> <li><strong>Types.</strong> Integers are native. Floats are IEEE-754: fast but inexact. <code>DECIMAL</code> is exact but slower. Varlen values are stored as a length plus bytes, or in overflow pages, or in external files (with no transactional guarantees). Timestamps are integers since the epoch.</li> <li><strong>NULLs.</strong> A header bitmap (row stores), sentinel values (column stores), or a per-attribute flag (wasteful because of padding).</li> </ul>
+
+<p>Now that the buffer pool hands out 8 KiB frames behind page guards, the next question is what goes <em>inside</em> a page. This slice designs the page and tuple formats that the table heap, and later P3's executors, read and write through <code>ReadPageGuard</code> and <code>WritePageGuard</code>.</p>
+"""
+
+[[sections]]
+heading = "Page layout"
+body = """
+<p>Every page starts with a header: page size, checksum, DBMS version, transaction visibility info, the <strong>page LSN</strong> (the last WAL record that modified it, used by recovery), and a type tag. After the header, the two big families are:</p>
+
+<ul> <li><strong>Tuple-oriented</strong> (slotted pages): this lecture.</li> <li><strong>Log-structured</strong>: pages hold <em>changes</em> to records, not the records themselves. That's <a href="/cookbook/p/log-structured-storage">L05</a>.</li> </ul>
+
+<p>(<strong>Index-organized</strong> storage, where tuples live inside B+Tree leaves ordered by key as in InnoDB and SQLite, is a slotted page placed inside an index. <a href="/cookbook/p/b-trees">L08</a>.)</p>
+
+<h4>Slotted pages</h4>
+
+<figure class="cb-g-fig"><svg viewBox="0 0 760 180" role="img" aria-label="Slotted page layout"> <g font-size="12"> <rect x="10" y="20" width="740" height="120" rx="4" class="cb-g-box"></rect> <rect x="10" y="20" width="150" height="40" class="cb-g-boxa"></rect><text x="20" y="45">header (24 B)</text> <rect x="160" y="20" width="44" height="40" class="cb-g-box"></rect><text x="168" y="45">s0</text> <rect x="204" y="20" width="44" height="40" class="cb-g-box"></rect><text x="212" y="45">s1</text> <rect x="248" y="20" width="44" height="40" class="cb-g-box"></rect><text x="256" y="45">s2</text> <text x="300" y="45" class="cb-g-mut">→ slot array grows</text> <text x="420" y="95" class="cb-g-mut">free space</text> <text x="470" y="125" class="cb-g-mut">tuples grow ←</text> <rect x="560" y="100" width="70" height="40" class="cb-g-box"></rect><text x="572" y="125">t2</text> <rect x="630" y="100" width="50" height="40" class="cb-g-box"></rect><text x="640" y="125">t1</text> <rect x="680" y="100" width="70" height="40" class="cb-g-box"></rect><text x="692" y="125">t0</text> <path d="M182 60 C 182 160, 715 170, 715 140" class="cb-g-lna"></path> <path d="M226 60 C 226 150, 655 165, 655 140" class="cb-g-lna"></path> <path d="M270 60 C 270 140, 595 160, 595 140" class="cb-g-lna"></path> <text x="10" y="170" class="cb-g-mut">free space = free_end − (HEADER + n_slots × SLOT)   ·   RID = (page_id, slot #) stays valid while tuples move within the page</text> </g></svg></figure>
+
+<p>The slot array maps a <strong>slot number</strong> to the tuple's current (offset, length) within the page. Outside the page, a tuple is named by its <strong>record id</strong>, <code>RID = (page_id, slot)</code>. Because indexes store RIDs, the page can move tuples around internally (to compact, or to grow one in place) without breaking any outside reference. The slot array is the indirection that makes that possible.</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>System</th> <th>Header</th> <th>Slot (line pointer)</th> <th>Notes</th> </tr> </thead> <tbody> <tr> <td>PostgreSQL</td> <td>24 B <code>PageHeaderData</code>: LSN, checksum, flags, <code>pd_lower</code>, <code>pd_upper</code>, <code>pd_special</code>, version, prune xid</td> <td>4 B <code>ItemIdData</code>: <code>lp_off:15, lp_flags:2, lp_len:15</code></td> <td><code>lp_flags</code> = unused/normal/redirect/dead; <em>redirect</em> powers HOT updates</td> </tr> <tr> <td>BusTub</td> <td>8 B: next page id, num tuples, num deleted</td> <td>24 B: offset, size, <code>TupleMeta{ts, is_deleted}</code></td> <td>tuple meta lives in the slot, not the tuple</td> </tr> <tr> <td>SQLite</td> <td>8–12 B B-tree page header</td> <td>2 B cell pointer</td> <td>cells are varint-encoded; index-organized by rowid</td> </tr> <tr> <td>InnoDB</td> <td>38 B FIL header + 56 B index header</td> <td>"page directory" of every ~4–8th record</td> <td>records form a singly-linked list in key order; directory slots binary-searched</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Designing a slotted page"
+body = """
+<p>The page format is a design decision you'll live with for the life of the engine. Before writing code, answer these questions in the module doc:</p>
+
+<ol> <li><strong>What's in the header?</strong> At minimum: page LSN (u64, needed by ARIES), checksum (u32), <code>num_slots</code>, and <code>free_end</code>. Also a page type (heap, B+Tree leaf, internal, overflow…) so a hexdump or recovery can tell what kind of page it's looking at.</li> <li><strong>Where does tuple metadata live?</strong> BusTub keeps <code>TupleMeta</code> in the slot, which makes the slot 24 B. Putting it in the tuple prefix keeps slots at 4 B. Which makes a sequential scan that filters out deleted tuples cheaper?</li> <li><strong>What does delete do?</strong> Marking a tuple deleted is logical, and physically freeing the space is a separate step. When is it safe to <strong>reuse a slot number</strong>? Hint: an index or an MVCC undo record may still hold that RID. PostgreSQL reuses a line pointer only after VACUUM has removed every index entry that points to it.</li> <li><strong>When do you compact?</strong> Eagerly on every delete, lazily when an insert doesn't fit into the contiguous gap, or never, leaving it to a vacuum?</li> <li><strong>What's the largest tuple?</strong> Page size minus the header minus one slot. Larger values need overflow pages (below).</li> <li><strong>How are offsets typed?</strong> A u16 covers pages up to 64 KiB. Use <code>u16::try_from(x)</code> rather than <code>as u16</code> so that growing the page size later fails loudly instead of corrupting data silently.</li> </ol>
+
+:::deeper Reference slotted page: typed view over a byte buffer, u16 offsets, logical delete + purge, compaction
+```rust title="src/storage/page/slotted_page.rs"
+//! Layout (little-endian):
+//!   0..8    page_lsn     u64
+//!   8..12   checksum     u32   (crc32c of bytes 12..PAGE_SIZE, computed on flush)
+//!   12..16  next_page_id u32
+//!   16..17  page_type    u8
+//!   17..18  flags        u8
+//!   18..20  num_slots    u16
+//!   20..22  free_end     u16   (offset of the lowest tuple byte; tuples grow down from PAGE_SIZE)
+//!   22..24  frag_bytes   u16   (dead bytes inside the tuple region, reclaimable by compact)
+//!   24..    slots: [offset u16 | len u16] * num_slots ; offset == 0 means "empty slot"
+//! Tuple record at `offset`: [ts u64][flags u8][data ...], flags bit0 = deleted.
+use crate::common::config::{PageId, PAGE_SIZE};
+
+pub const HEADER: usize = 24;
+pub const SLOT: usize = 4;
+pub const META: usize = 9;
+const DELETED: u8 = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TupleMeta { pub ts: u64, pub deleted: bool }
+
+/// Read-only view.
+pub struct SlottedPage<'a> { b: &'a [u8; PAGE_SIZE] }
+/// Mutable view. Both are zero-cost wrappers; the bytes stay in the buffer-pool frame.
+pub struct SlottedPageMut<'a> { b: &'a mut [u8; PAGE_SIZE] }
+
+#[inline] fn rd16(b: &[u8], at: usize) -> u16 { u16::from_le_bytes([b[at], b[at + 1]]) }
+#[inline] fn wr16(b: &mut [u8], at: usize, v: u16) { b[at..at + 2].copy_from_slice(&v.to_le_bytes()) }
+#[inline] fn rd64(b: &[u8], at: usize) -> u64 { u64::from_le_bytes(b[at..at + 8].try_into().unwrap()) }
+
+macro_rules! read_api {
+    () => {
+        pub fn num_slots(&self) -> u16 { rd16(&self.b[..], 18) }
+        pub fn free_end(&self) -> u16 { rd16(&self.b[..], 20) }
+        pub fn next_page_id(&self) -> PageId { PageId(u32::from_le_bytes(self.b[12..16].try_into().unwrap())) }
+        pub fn page_lsn(&self) -> u64 { rd64(&self.b[..], 0) }
+        fn slot(&self, i: u16) -> (u16, u16) {
+            let at = HEADER + i as usize * SLOT;
+            (rd16(&self.b[..], at), rd16(&self.b[..], at + 2))
+        }
+        /// Contiguous free bytes between the slot array and the tuple region.
+        pub fn free_space(&self) -> usize {
+            self.free_end() as usize - (HEADER + self.num_slots() as usize * SLOT)
+        }
+        pub fn get(&self, slot: u16) -> Option<(TupleMeta, &[u8])> {
+            if slot >= self.num_slots() { return None; }
+            let (off, len) = self.slot(slot);
+            if off == 0 { return None; }
+            let (off, len) = (off as usize, len as usize);
+            let meta = TupleMeta { ts: rd64(&self.b[..], off), deleted: self.b[off + 8] & DELETED != 0 };
+            Some((meta, &self.b[off + META..off + len]))
+        }
+        /// Iterate live slot numbers (including logically deleted tuples; callers filter by meta).
+        pub fn slots(&self) -> impl Iterator<Item = u16> + '_ {
+            (0..self.num_slots()).filter(move |&i| self.slot(i).0 != 0)
+        }
+    };
+}
+
+impl<'a> SlottedPage<'a> {
+    pub fn new(b: &'a [u8; PAGE_SIZE]) -> Self { Self { b } }
+    read_api!();
+}
+
+impl<'a> SlottedPageMut<'a> {
+    pub fn new(b: &'a mut [u8; PAGE_SIZE]) -> Self { Self { b } }
+    read_api!();
+
+    pub fn init(&mut self, page_type: u8) {
+        self.b.fill(0);
+        self.b[16] = page_type;
+        wr16(self.b, 20, PAGE_SIZE as u16 /* 8192 fits in u16 */);
+        self.set_next_page_id(PageId::INVALID);
+    }
+    pub fn set_next_page_id(&mut self, id: PageId) { self.b[12..16].copy_from_slice(&id.0.to_le_bytes()) }
+    pub fn set_page_lsn(&mut self, lsn: u64) { self.b[0..8].copy_from_slice(&lsn.to_le_bytes()) }
+    fn set_slot(&mut self, i: u16, off: u16, len: u16) {
+        let at = HEADER + i as usize * SLOT;
+        wr16(self.b, at, off);
+        wr16(self.b, at + 2, len);
+    }
+
+    /// Largest payload that can ever fit in an empty page.
+    pub const MAX_TUPLE: usize = PAGE_SIZE - HEADER - SLOT - META;
+
+    /// Insert a tuple; returns its slot, or None if it doesn't fit even after compaction.
+    pub fn insert(&mut self, meta: TupleMeta, data: &[u8]) -> Option<u16> {
+        let need = META + data.len();
+        let reuse = self.slots_all().find(|&i| self.slot(i).0 == 0);
+        let slot_cost = if reuse.is_some() { 0 } else { SLOT };
+        if self.free_space() < need + slot_cost {
+            let reclaimable = rd16(&self.b[..], 22) as usize;
+            if self.free_space() + reclaimable < need + slot_cost { return None; }
+            self.compact();
+        }
+        let off = self.free_end() as usize - need;
+        self.b[off..off + 8].copy_from_slice(&meta.ts.to_le_bytes());
+        self.b[off + 8] = if meta.deleted { DELETED } else { 0 };
+        self.b[off + META..off + need].copy_from_slice(data);
+        let off16 = u16::try_from(off).expect("offset fits u16");
+        wr16(self.b, 20, off16);
+        let slot = match reuse {
+            Some(s) => s,
+            None => { let n = self.num_slots(); wr16(self.b, 18, n + 1); n }
+        };
+        self.set_slot(slot, off16, u16::try_from(need).expect("tuple fits u16"));
+        Some(slot)
+    }
+
+    fn slots_all(&self) -> std::ops::Range<u16> { 0..self.num_slots() }
+
+    pub fn update_meta(&mut self, slot: u16, meta: TupleMeta) -> bool {
+        if slot >= self.num_slots() { return false; }
+        let (off, _) = self.slot(slot);
+        if off == 0 { return false; }
+        let off = off as usize;
+        self.b[off..off + 8].copy_from_slice(&meta.ts.to_le_bytes());
+        self.b[off + 8] = if meta.deleted { DELETED } else { 0 };
+        true
+    }
+
+    /// Replace a tuple's bytes in place if the new image is not larger (BusTub's
+    /// UpdateTupleInPlaceUnsafe). Larger images: caller deletes + reinserts elsewhere.
+    pub fn update_in_place(&mut self, slot: u16, meta: TupleMeta, data: &[u8]) -> bool {
+        if slot >= self.num_slots() { return false; }
+        let (off, len) = self.slot(slot);
+        if off == 0 || META + data.len() > len as usize { return false; }
+        let (o, new_len) = (off as usize, META + data.len());
+        self.b[o..o + 8].copy_from_slice(&meta.ts.to_le_bytes());
+        self.b[o + 8] = if meta.deleted { DELETED } else { 0 };
+        self.b[o + META..o + new_len].copy_from_slice(data);
+        let frag = rd16(&self.b[..], 22) + (len - new_len as u16);
+        wr16(self.b, 22, frag);
+        self.set_slot(slot, off, new_len as u16);
+        true
+    }
+
+    /// Physically remove a tuple and free its slot for reuse. Only call when nothing
+    /// (index entry, undo record, open cursor) can still reference this RID.
+    pub fn purge(&mut self, slot: u16) -> bool {
+        if slot >= self.num_slots() { return false; }
+        let (off, len) = self.slot(slot);
+        if off == 0 { return false; }
+        self.set_slot(slot, 0, 0);
+        let frag = rd16(&self.b[..], 22) + len;
+        wr16(self.b, 22, frag);
+        // Trailing empty slots can be dropped entirely.
+        let mut n = self.num_slots();
+        while n > 0 && self.slot(n - 1).0 == 0 { n -= 1; }
+        wr16(self.b, 18, n);
+        true
+    }
+
+    /// Slide every live tuple to the end of the page, eliminating holes. Slot numbers
+    /// (and therefore RIDs) are unchanged — that's the point of the slot array.
+    pub fn compact(&mut self) {
+        let mut live: Vec<(u16, u16, u16)> = self.slots_all()
+            .filter_map(|i| { let (o, l) = self.slot(i); (o != 0).then_some((i, o, l)) })
+            .collect();
+        live.sort_by_key(|&(_, off, _)| std::cmp::Reverse(off));    // highest offset first
+        let mut end = PAGE_SIZE;
+        for (i, off, len) in live {
+            let (off, len) = (off as usize, len as usize);
+            let dst = end - len;
+            self.b.copy_within(off..off + len, dst);                // memmove: ranges may overlap
+            self.set_slot(i, dst as u16, len as u16);
+            end = dst;
+        }
+        wr16(self.b, 20, end as u16);
+        wr16(self.b, 22, 0);
+    }
+}
+```
+:::
+
+<aside data-call="rust"><b>Views over bytes, not <code>reinterpret_cast</code></b><p>BusTub gets a typed page with <code>reinterpret_cast&lt;TablePage *&gt;(page-&gt;GetData())</code> and reads the fields through the struct. The Rust equivalent (<code>&amp;*(ptr as *const TablePage)</code>) is <strong>unsound</strong> unless the struct is <code>#[repr(C)]</code>, correctly aligned, and valid for <em>every</em> bit pattern. A <code>bool</code> field read from an arbitrary byte, for example, is UB. A typed <strong>view</strong> over <code>&amp;[u8; PAGE_SIZE]</code>, with explicit little-endian reads at fixed offsets, is safe, portable across endianness, and compiles to the same loads. If you later want struct-style access to fixed headers, <a href="https://docs.rs/zerocopy" target="_blank" rel="noreferrer"><code>zerocopy</code></a> (<code>FromBytes</code>, <code>IntoBytes</code>, <code>KnownLayout</code>, and its <code>little_endian::U16</code> types) proves the layout conditions at compile time. <code>bytemuck</code> is its lighter cousin.</p></aside>
+
+<aside data-call="rust"><b><code>copy_within</code> is <code>memmove</code></b><p>Compaction moves bytes to overlapping ranges. <a href="https://doc.rust-lang.org/std/primitive.slice.html#method.copy_within" target="_blank" rel="noreferrer"><code>slice::copy_within</code></a> handles overlap correctly (it's <code>ptr::copy</code>, not <code>copy_nonoverlapping</code>), with bounds checked once for the whole range. Processing tuples from the highest offset down guarantees each destination is at or above its source, so no live tuple is overwritten before it has moved.</p></aside>
+"""
+
+[[sections]]
+heading = "Tuple layout"
+body = """
+<p>A tuple is a sequence of bytes that the DBMS interprets using the <strong>schema</strong> from the catalog. The page doesn't know about columns.</p>
+
+<ul> <li><strong>Header</strong>: visibility info (MVCC timestamps or transaction ids), and a <strong>null bitmap</strong> with one bit per nullable column. The header does <em>not</em> repeat the schema.</li> <li><strong>Fixed-length attributes</strong>: stored inline at offsets precomputed from the schema.</li> <li><strong>Variable-length attributes</strong>: an inline <code>(offset, len)</code> pair, with the bytes stored after the fixed region. Order columns so the fixed ones come first.</li> <li><strong>Alignment</strong>: many CPUs and compilers want 8-byte values at 8-byte offsets. PostgreSQL pads (<code>typalign</code>), so column order changes the row size. Try <code>(bool, bigint, bool, bigint)</code> versus <code>(bigint, bigint, bool, bool)</code>: 32 bytes vs 18 before the header. Unaligned loads on x86 and ARMv8 are cheap, and <code>u64::from_le_bytes</code> handles any alignment, so Cairn can choose to pack.</li> <li><strong>NULL</strong>: a bitmap (PostgreSQL, InnoDB, Cairn) or a <strong>sentinel</strong> value (BusTub: <code>INT32_MIN</code> means NULL for <code>INTEGER</code>, which makes <code>INT32_MIN</code> itself unstorable). Bitmaps cost ⌈n/8⌉ bytes; sentinels cost nothing but steal one value from every domain.</li> </ul>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Type</th> <th>Representation</th> <th>Pitfall</th> </tr> </thead> <tbody> <tr> <td><code>INTEGER</code>/<code>BIGINT</code>/<code>SMALLINT</code></td> <td>native two's complement, little-endian</td> <td>endianness if the file moves between machines: pick one (LE) and always convert</td> </tr> <tr> <td><code>FLOAT</code>/<code>REAL</code></td> <td>IEEE-754</td> <td><code>0.1 + 0.2 ≠ 0.3</code>; never for money</td> </tr> <tr> <td><code>NUMERIC</code>/<code>DECIMAL</code></td> <td>fixed-point: sign + scale + base-10ⁿ digits (PostgreSQL: base 10000 digit groups)</td> <td>10–100× slower arithmetic than ints; DuckDB/ClickHouse use i64/i128 with scale when precision ≤ 38</td> </tr> <tr> <td><code>VARCHAR</code>/<code>TEXT</code></td> <td>length prefix + bytes (UTF-8)</td> <td>collation ≠ byte order; comparison needs a collation table (ICU)</td> </tr> <tr> <td><code>TIMESTAMP</code></td> <td>i64 microseconds since epoch (PostgreSQL: 2000-01-01)</td> <td>time zones are a display concern — store UTC</td> </tr> <tr> <td>large values</td> <td>overflow pages (SQLite), TOAST (PostgreSQL: compress, then out-of-line chunks &gt; ~2 KiB), external files</td> <td>an overflow chain needs its own WAL + GC story</td> </tr> </tbody> </table></div>
+
+:::deeper Reference tuple codec: null bitmap, fixed region, (offset,len) varlen slots
+```rust title="src/storage/table/tuple_codec.rs"
+use crate::types::value::Value;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColType { Bool, Int, BigInt, Float, Varchar }
+
+impl ColType {
+    /// Bytes this column takes in the fixed region (varlen: a u16 offset + u16 len).
+    pub fn fixed_width(self) -> usize {
+        match self { ColType::Bool => 1, ColType::Int => 4, ColType::BigInt | ColType::Float => 8, ColType::Varchar => 4 }
+    }
+}
+
+pub struct Layout { types: Vec<ColType>, offsets: Vec<usize>, fixed_end: usize }
+
+impl Layout {
+    pub fn new(types: &[ColType]) -> Self {
+        let bitmap = types.len().div_ceil(8);
+        let mut at = bitmap;
+        let offsets = types.iter().map(|t| { let o = at; at += t.fixed_width(); o }).collect();
+        Layout { types: types.to_vec(), offsets, fixed_end: at }
+    }
+
+    pub fn encode(&self, row: &[Value], out: &mut Vec<u8>) {
+        assert_eq!(row.len(), self.types.len());
+        out.clear();
+        out.resize(self.fixed_end, 0);
+        for (i, (v, (&t, &off))) in row.iter().zip(self.types.iter().zip(&self.offsets)).enumerate() {
+            if v.is_null() { out[i / 8] |= 1 << (i % 8); continue; }
+            match (t, v) {
+                (ColType::Bool, Value::Bool(b)) => out[off] = *b as u8,
+                (ColType::Int, Value::Int(x)) => out[off..off + 4].copy_from_slice(&i32::try_from(*x).expect("INT overflow").to_le_bytes()),
+                (ColType::BigInt, Value::Int(x)) => out[off..off + 8].copy_from_slice(&x.to_le_bytes()),
+                (ColType::Float, Value::Float(x)) => out[off..off + 8].copy_from_slice(&x.to_le_bytes()),
+                (ColType::Varchar, Value::Text(s)) => {
+                    let start = u16::try_from(out.len()).expect("tuple < 64 KiB");
+                    let len = u16::try_from(s.len()).expect("varchar < 64 KiB");
+                    out[off..off + 2].copy_from_slice(&start.to_le_bytes());
+                    out[off + 2..off + 4].copy_from_slice(&len.to_le_bytes());
+                    out.extend_from_slice(s.as_bytes());
+                }
+                (t, v) => panic!("type mismatch: column {t:?} given {v:?} (binder bug)"),
+            }
+        }
+    }
+
+    pub fn decode_col(&self, bytes: &[u8], i: usize) -> Value {
+        if bytes[i / 8] & (1 << (i % 8)) != 0 { return Value::Null; }
+        let off = self.offsets[i];
+        let rd = |n: usize| &bytes[off..off + n];
+        match self.types[i] {
+            ColType::Bool => Value::Bool(bytes[off] != 0),
+            ColType::Int => Value::Int(i32::from_le_bytes(rd(4).try_into().unwrap()) as i64),
+            ColType::BigInt => Value::Int(i64::from_le_bytes(rd(8).try_into().unwrap())),
+            ColType::Float => Value::Float(f64::from_le_bytes(rd(8).try_into().unwrap())),
+            ColType::Varchar => {
+                let start = u16::from_le_bytes(rd(2).try_into().unwrap()) as usize;
+                let len = u16::from_le_bytes(bytes[off + 2..off + 4].try_into().unwrap()) as usize;
+                // Stored bytes came from a &str; from_utf8 re-validates (use _unchecked only with a checksum-verified page).
+                Value::Text(std::str::from_utf8(&bytes[start..start + len]).expect("valid utf8").into())
+            }
+        }
+    }
+
+    pub fn decode(&self, bytes: &[u8]) -> Vec<Value> { (0..self.types.len()).map(|i| self.decode_col(bytes, i)).collect() }
+}
+```
+:::
+
+<aside data-call="performance"><b>Decode lazily</b><p>A scan with <code>WHERE a = 5</code> needs one column from most tuples. <code>decode_col</code> touches only the bitmap and that column's bytes, while <code>decode</code> materializes every <code>Value</code>, including <code>Arc&lt;str&gt;</code> allocations for every varchar. Build executors over a borrowed-tuple type such as <code>TupleRef&lt;'a&gt; { bytes: &amp;'a [u8], layout: &amp;Layout }</code> that decodes on demand, and allocate only in operators that must outlive the page guard (sorts, hash tables). This single choice is often worth 2–5× in scan-heavy benchmarks.</p></aside>
+"""
+
+[[sections]]
+heading = "Hex dump"
+body = """
+<p>The best proof that you understand your storage format is explaining every byte of a page in a hex dump. Build the tool first; you'll use it for every page type.</p>
+
+```rust title="src/storage/page/hexdump.rs — xxd-style dumper with slot annotations"
+use std::fmt::Write;
+
+pub fn hexdump(bytes: &[u8], annotate: impl Fn(usize) -> Option<&'static str>) -> String {
+    let mut s = String::new();
+    let mut last_blank = false;
+    for (row, chunk) in bytes.chunks(16).enumerate() {
+        let off = row * 16;
+        if chunk.iter().all(|&b| b == 0) {
+            if !last_blank { s.push_str("*\\n"); }       // collapse zero runs like xxd -a
+            last_blank = true;
+            continue;
+        }
+        last_blank = false;
+        write!(s, "{off:08x}: ").unwrap();
+        for (i, b) in chunk.iter().enumerate() {
+            write!(s, "{b:02x}{}", if i % 2 == 1 { " " } else { "" }).unwrap();
+        }
+        s.push(' ');
+        s.extend(chunk.iter().map(|&b| if b.is_ascii_graphic() || b == b' ' { b as char } else { '.' }));
+        if let Some(note) = annotate(off) { write!(s, "  ← {note}").unwrap(); }
+        s.push('\\n');
+    }
+    s
+}
+```
+
+```text title="cargo test hexdump_demo -- --nocapture (rows: (1,'cairn') then (2,NULL); schema INT, VARCHAR)"
+00000000: 0000 0000 0000 0000 0000 0000 ffff ffff  ................   lsn=0 · crc=0 · next_page_id=INVALID
+00000010: 0100 0200 d71f 0000 e91f 1700 d71f 1200  ................   type=1 · nslots=2 · free_end=0x1fd7 · frag=0
+                                                                      slot0=(0x1fe9, 23) · slot1=(0x1fd7, 18)
+*                                                                     (zero rows elided; tuple 1's ts+flags live here)
+00001fe0: 0202 0000 0000 0000 0000 0000 0000 0000  ................   t1 data: nullbm=0b10 · int=2 · varchar slot unused
+00001ff0: 0000 0001 0000 0009 0005 0063 6169 726e  ...........cairn   t0: flags=0 · nullbm=0 · int=1 · (off=9,len=5) · "cairn"
+```
+
+<p>This is the actual output of the reference page and codec above. Your bytes will differ with your layout; the point is that you can explain every non-zero byte. Notice that tuple 0 sits at the <em>end</em> of the page and tuple 1 below it, and that the NULL costs one bitmap bit plus an unused 4-byte varchar slot.</p>
+"""
+
+[[sections]]
+heading = "Tests"
+body = """
+```rust title="tests for the page — model-based, the same shape as every data structure test"
+use proptest::prelude::*;
+
+#[derive(Debug, Clone)]
+enum PageOp { Insert(Vec<u8>), Delete(u16), Purge(u16), Update(u16, Vec<u8>), Compact }
+
+fn page_op() -> impl Strategy<Value = PageOp> {
+    let data = prop::collection::vec(any::<u8>(), 0..600);
+    prop_oneof![
+        5 => data.clone().prop_map(PageOp::Insert),
+        1 => (0u16..40).prop_map(PageOp::Delete),
+        2 => (0u16..40).prop_map(PageOp::Purge),
+        2 => ((0u16..40), data).prop_map(|(s, d)| PageOp::Update(s, d)),
+        1 => Just(PageOp::Compact),
+    ]
+}
+
+proptest! {
+    #[test]
+    fn slotted_page_matches_model(ops in prop::collection::vec(page_op(), 1..300)) {
+        let mut buf = [0u8; PAGE_SIZE];
+        let mut page = SlottedPageMut::new(&mut buf);
+        page.init(1);
+        let mut model: Vec<Option<(TupleMeta, Vec<u8>)>> = Vec::new();
+        for op in ops {
+            match op {
+                PageOp::Insert(d) => {
+                    let m = TupleMeta { ts: 7, deleted: false };
+                    if let Some(s) = page.insert(m, &d) {
+                        let s = s as usize;
+                        if s == model.len() { model.push(Some((m, d))) } else { prop_assert!(model[s].is_none()); model[s] = Some((m, d)); }
+                    } else {
+                        // Rejection is only legal if it truly doesn't fit.
+                        let used: usize = model.iter().flatten().map(|(_, d)| META + d.len()).sum();
+                        let slots = model.len() + usize::from(!model.iter().any(|s| s.is_none()));
+                        prop_assert!(HEADER + slots * SLOT + used + META + d.len() > PAGE_SIZE);
+                    }
+                }
+                PageOp::Delete(s) => if let Some(Some((m, _))) = model.get_mut(s as usize) {
+                    m.deleted = true; prop_assert!(page.update_meta(s, *m));
+                },
+                PageOp::Purge(s) => {
+                    let had = model.get(s as usize).is_some_and(|x| x.is_some());
+                    prop_assert_eq!(page.purge(s), had);
+                    if had { model[s as usize] = None; }
+                    while matches!(model.last(), Some(None)) { model.pop(); }
+                }
+                PageOp::Update(s, d) => if let Some(Some((m, old))) = model.get_mut(s as usize) {
+                    if d.len() <= old.len() { prop_assert!(page.update_in_place(s, *m, &d)); *old = d; }
+                },
+                PageOp::Compact => page.compact(),
+            }
+            prop_assert_eq!(page.num_slots() as usize, model.len());
+            for (i, want) in model.iter().enumerate() {
+                let got = page.get(i as u16).map(|(m, d)| (m, d.to_vec()));
+                prop_assert_eq!(&got, want);
+            }
+        }
+    }
+}
+```
+
+<aside data-call="testing"><b>Also fuzz the decoder</b><p>A page read from disk is <strong>untrusted input</strong>. It can be torn, bit-rotted, or written by a buggy older version. <code>get()</code> indexes with offsets read from the page itself, so a corrupt slot means a panic at best. Write a <code>cargo fuzz</code> target that feeds arbitrary 8 KiB buffers to <code>SlottedPage::new(buf).slots().map(get)</code> and requires no panic. Then decide on a policy: verify the checksum on read and return <code>Error::Corrupt</code> before any decoding, or bounds-check every slot. Production systems do both.</p></aside>
+"""
+
+[[sources]]
+title = "Are You Sure You Want to Use MMAP in Your Database Management System?"
+url = "https://db.cs.cmu.edu/papers/2022/cidr2022-p13-crotty.pdf"
+
+[[sources]]
+title = "video"
+url = "https://www.youtube.com/watch?v=1BRGU_AS25c"
+
+[[sources]]
+title = "Database Page Layout"
+url = "https://www.postgresql.org/docs/current/storagepage.html"
+
+[[sources]]
+title = "Database File Format"
+url = "https://www.sqlite.org/fileformat2.html"
+
+[[sources]]
+title = "innodb_ruby"
+url = "https://github.com/jeremycole/innodb_ruby"
+
+[[sources]]
+title = "All File Systems Are Not Created Equal: On the Complexity of Crafting Crash-Consistent Applications"
+url = "https://www.usenix.org/conference/osdi14/technical-sessions/presentation/pillai"

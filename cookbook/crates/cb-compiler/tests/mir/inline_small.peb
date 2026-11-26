@@ -1,0 +1,4 @@
+// passes: inline,const-prop,copy-prop,dce,simplify-cfg
+// A small non-recursive function is inlined and its constants fold.
+fn double(x: int) -> int { x + x }
+fn main() { println(to_str(double(21))); }

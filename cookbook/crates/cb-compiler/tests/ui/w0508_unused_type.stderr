@@ -1,0 +1,13 @@
+warning[W0508]: struct `Lonely` is never used
+ --> w0508_unused_type.peb:1:8
+  |
+1 | struct Lonely { x: int }
+  |        ^^^^^^ never mentioned
+
+warning[W0508]: enum `Alone` is never used
+ --> w0508_unused_type.peb:2:6
+  |
+2 | enum Alone { A }
+  |      ^^^^^ never mentioned
+
+warning: 2 warnings emitted

@@ -1,0 +1,52 @@
+title = "A bump"
+module = "Rust language"
+module_order = 1
+chapter = "Memory and allocators"
+chapter_order = 6
+order = 55
+kind = "recipe"
+lede = "a bump (arena) allocator: alignment, checkpoints, drop glue, chunked growth."
+level = "advanced"
+code = ["examples/memory/bump_arena_allocator.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>compilers (AST/IR nodes)</li><li>per-request scratch memory</li><li>parsers</li><li>game frames. Unsafe recipe: also try <code>cargo +nightly miri run --example bump_arena_allocator</code></li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+A bump allocator keeps one cursor into a block of memory. `alloc` = round the cursor UP to the requested alignment, add the size, compare with the end. That is a handful of instructions, no free list, no per-object header.
+
+Freeing individual objects is not possible: everything is released at once by `reset`, or back to a **checkpoint** (a scoped arena, like a stack of lifetimes).
+
+Key points implemented below:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Alignment</div><div class="cb-g-says"><p>Alignment is applied to the real <strong>address</strong> (<code>base + used</code>), not to the offset, so alignments larger than the chunk's own work. Every addition is <code>checked_*</code>: a huge <code>Layout</code> yields <code>None</code> instead of wrapping around and handing out aliasing memory.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p><code>&amp;self</code> allocation (interior mutability via RefCell) lets many <code>&amp;mut T</code> coexist: each points into disjoint bytes. <code>rewind</code>/<code>reset</code> take <code>&amp;mut self</code>, so the borrow checker proves no reference into the arena is alive when memory is reused.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Drop glue</div><div class="cb-g-says"><p><code>alloc_value</code> never runs destructors (like bumpalo's <code>alloc</code>: a <code>String</code> or <code>Rc</code> placed there <strong>leaks</strong> its heap buffer / refcount).</p><p><code>alloc_with_drop</code> records <code>(ptr, drop_in_place::&lt;T&gt;)</code> and runs the records in <strong>reverse</strong> order on rewind/Drop, like stack unwinding. bumpalo's <code>Bump</code> never drops; oxc's <code>oxc_allocator</code> wraps bumpalo and keeps AST nodes free of Drop types (it provides arena-backed <code>Vec</code>/<code>String</code>/<code>Box</code> that are never "dropped" individually).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Chunked growth</div><div class="cb-g-says"><p>When the current chunk is full, a new chunk of double size is allocated (old chunks never move, so references stay valid), capped by a total <code>limit</code>. Rewinding frees chunks created after the checkpoint.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>compiler front ends (parse the file, build the AST in an arena, drop it all at once)</li><li>per-frame/per-request scratch memory</li><li>regex/graph builders</li><li>anything where all objects share one lifetime. Wins: allocation is ~pointer bump</li><li>excellent locality</li><li>deallocation is O(chunks). Costs: no individual free</li><li>memory held until reset</li><li>no Drop by default</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://github.com/fitzgen/bumpalo> and <https://docs.rs/bumpalo> and <https://github.com/oxc-project/oxc> (crates/oxc_allocator)
+"""
+
+[[sources]]
+title = "github.com/fitzgen/bumpalo"
+url = "https://github.com/fitzgen/bumpalo"
+
+[[sources]]
+title = "docs.rs/bumpalo"
+url = "https://docs.rs/bumpalo"
+
+[[sources]]
+title = "github.com/oxc-project/oxc"
+url = "https://github.com/oxc-project/oxc"

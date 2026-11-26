@@ -1,0 +1,62 @@
+title = "The B^epsilon-tree"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Trees and ordered structures"
+chapter_order = 2
+order = 170
+kind = "recipe"
+lede = "A B-tree whose internal nodes carry a MESSAGE BUFFER, trading a little read cost for far fewer writes."
+level = "advanced"
+code = ["examples/data_structures/b_epsilon_tree.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>write-heavy ordered stores on disks/SSDs</li><li>file systems and databases with random-insert workloads</li><li>anywhere B+tree write amplification hurts</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a node has room for B records. A fraction of it, F = B&#94;epsilon, holds **pivots** (fanout F); the rest, B - F, is a **buffer** of pending messages (Put / Delete / Upsert-add-delta) addressed to keys below this node. Updates never descend to a leaf: they are appended to the **root**'s buffer.
+
+When a buffer overflows, the child receiving the most messages gets a whole **batch** pushed into it (and may overflow in turn); a leaf finally **applies** its messages. A message therefore pays I/O once per level, but shares each node write with &#126;B/F other messages.
+
+That is the whole trick: amortised writes per insert are O(F &#42; log_F(N) / B) node writes, versus 1 page write per insert for a B+tree that cannot keep its leaves cached.
+
+**Queries**: walk root to leaf collecting the matching messages from each buffer; a message in a higher node is **newer** than anything below it, so the answer is the leaf value with the messages applied deepest-first, top level last ("newest wins").
+
+The read cost is still one node per level (a bit more levels than a B+tree because F &lt; B, i.e. log_F N instead of log_B N). epsilon is the knob: epsilon = 1 is a B+tree (no buffer), epsilon -> 0 gives huge buffers, fast inserts, slow-ish reads (epsilon = 0.5 is the usual sweet spot: reads cost 2x a B-tree, inserts cost &#126;sqrt(B) times less I/O).
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+nodes live in a `Vec` arena. Buffers keep messages in arrival order, which IS recency, so a stable partition when flushing preserves it. A flush may split a leaf into several pieces (a batch can add more than one node's worth) and the parent absorbs the new pivots and may split too; a root split grows the tree.
+
+Deletes are tombstones and leaves are not merged (lazy, as in most production trees; the verifier only demands the upper fill bounds).
+
+Verified by a 20k-op differential test per parameter set (several B and epsilon) against `BTreeMap` with Put/Delete/Upsert and point reads checked at every get, an invariant checker (uniform depth, key ranges respected by buffers and pivots, fanout and buffer caps), and an I/O cost model asserting node writes per random insert fall far below the B+tree's.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>TokuDB / PerconaFT and BetrFS (a file system built on it) use B&#94;epsilon-trees</li><li>the same buffering idea appears in fractal-tree indexes and</li><li>conceptually</li><li>in LSM engines which buffer in memtables and compact in batches. Course: CMU 15-746 (Storage Systems) write-optimised data structures</li><li>CMU 15-445 lectures on B+tree and LSM storage for the baselines</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Jannen et al., "BetrFS: A Right-Optimized Write-Optimized File System" (**fast** 2015): <https://www.usenix.org/conference/fast15/technical-sessions/presentation/jannen>
+
+Bender et al., "An Introduction to B&#94;epsilon-trees and Write-Optimization" (USENIX ;login:, Oct 2015): <https://www.usenix.org/system/files/login/articles/login_oct15_05_bender.pdf>
+"""
+
+[[sources]]
+title = "usenix.org/conference/fast15/technical-sessions/presentation/jannen"
+url = "https://www.usenix.org/conference/fast15/technical-sessions/presentation/jannen"
+
+[[sources]]
+title = "usenix.org/system/files/login/articles/login_oct15_05_bender.pdf"
+url = "https://www.usenix.org/system/files/login/articles/login_oct15_05_bender.pdf"

@@ -1,0 +1,183 @@
+title = "Test harness"
+module = "Compilers and languages"
+module_order = 12
+chapter = "A tree-walking interpreter"
+chapter_order = 2
+order = 575
+kind = "guide"
+lede = "Four layers of tests. The first three are ordinary #[test] functions. The fourth is a single integration test that runs every golden file."
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<div class="cb-g-tt"><table> <thead><tr><th>Layer</th><th>Where</th><th>Asserts</th><th>Tool</th></tr></thead> <tbody> <tr><td><span class="cb-g-pill cb-g-tok">tokens</span></td><td><code>lexer.rs</code> unit</td><td>One compact string per input</td><td><code>assert_eq!</code>, <code>pretty_assertions</code></td></tr> <tr><td><span class="cb-g-pill cb-g-ast">ast</span></td><td><code>parser.rs</code> unit</td><td>S-expression of the tree</td><td><code>insta</code> inline snapshots</td></tr> <tr><td><span class="cb-g-pill cb-g-val">value</span></td><td><code>interp.rs</code> unit</td><td>Value, or captured <code>print</code> output</td><td><code>Vec&lt;u8&gt;</code> as the writer</td></tr> <tr><td><span class="cb-g-pill cb-g-out">golden</span></td><td><code>tests/lang.rs</code></td><td>stdout, stderr and exit code of the binary</td><td><code>env!("CARGO_BIN_EXE_rlox")</code></td></tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Golden file format"
+body = """
+<p>Use the book's annotation format. Then the files you write and the roughly 250 official test files run through the same runner.</p>
+
+```text title="tests/lox/slice3/vars.lox"
+var a = 1;
+print a + 2;       // expect: 3
+print "x" + "y";   // expect: xy
+print b;           // expect runtime error: Undefined variable 'b'.
+```
+
+<div class="cb-g-tt"><table> <thead><tr><th>Comment</th><th>Meaning</th><th>Exit</th></tr></thead> <tbody> <tr><td><code>// expect: TEXT</code></td><td>Next line of stdout is <code>TEXT</code></td><td>0</td></tr> <tr><td><code>// Error at 'x': MSG</code></td><td>stderr has <code>[line N] Error at 'x': MSG</code>, where N is this comment's line</td><td>65</td></tr> <tr><td><code>// [line 3] Error …</code></td><td>Same, with an explicit line. <code>[java line 3]</code> applies to jlox; skip <code>[c line 3]</code></td><td>65</td></tr> <tr><td><code>// expect runtime error: MSG</code></td><td>stderr is <code>MSG</code> followed by <code>[line N]</code></td><td>70</td></tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "The runner"
+body = """
+<p>This version needs no dependencies. It collects every failure before it asserts, so one run lists all of them. Set <code>LOX_FILTER=closure</code> to run a subset.</p>
+
+```rust title="tests/lang.rs"
+use std::{fs, path::{Path, PathBuf}, process::Command};
+
+#[derive(Default)]
+struct Expect {
+    stdout: Vec<String>,
+    stderr: Vec<String>,
+    code: i32,
+}
+
+impl Expect {
+    fn parse(src: &str) -> Self {
+        let mut e = Expect::default();
+        for (i, line) in src.lines().enumerate() {
+            let n = i + 1;
+            if let Some((_, rest)) = line.split_once("// expect: ") {
+                e.stdout.push(rest.to_string());
+            } else if let Some((_, msg)) = line.split_once("// expect runtime error: ") {
+                e.stderr.push(msg.to_string());
+                e.stderr.push(format!("[line {n}]"));
+                e.code = 70;
+            } else if let Some((_, rest)) = line.split_once("// [") {
+                let rest = rest.strip_prefix("java ").unwrap_or(rest);
+                if rest.starts_with("line ") {          // "[c line N]" is clox-only
+                    e.stderr.push(format!("[{rest}"));
+                    e.code = 65;
+                }
+            } else if let Some((_, rest)) = line.split_once("// Error") {
+                e.stderr.push(format!("[line {n}] Error{rest}"));
+                e.code = 65;
+            }
+        }
+        e
+    }
+}
+
+fn check(path: &Path) -> Result<(), String> {
+    let src = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let want = Expect::parse(&src);
+    let out = Command::new(env!("CARGO_BIN_EXE_rlox"))
+        .arg(path)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let got_out: Vec<&str> = stdout.lines().collect();
+    let got_err: Vec<&str> = stderr.lines().collect();
+    let code = out.status.code().unwrap_or(-1);
+
+    let mut diffs = Vec::new();
+    if want.stdout != got_out {
+        diffs.push(format!("  stdout want {:?}\\n         got  {:?}", want.stdout, got_out));
+    }
+    if want.stderr != got_err {
+        diffs.push(format!("  stderr want {:?}\\n         got  {:?}", want.stderr, got_err));
+    }
+    if want.code != code {
+        diffs.push(format!("  exit   want {} got {code}", want.code));
+    }
+    if diffs.is_empty() { Ok(()) } else { Err(diffs.join("\\n")) }
+}
+
+fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            collect(&path, out);
+        } else if path.extension().is_some_and(|e| e == "lox") {
+            out.push(path);
+        }
+    }
+}
+
+#[test]
+fn lox_files() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lox");
+    let filter = std::env::var("LOX_FILTER").unwrap_or_default();
+    let mut files = Vec::new();
+    collect(&root, &mut files);
+    files.sort();
+
+    let failures: Vec<String> = files
+        .iter()
+        .filter(|p| p.to_string_lossy().contains(&filter))
+        .filter_map(|p| check(p).err().map(|d| format!("✗ {}\\n{d}", p.display())))
+        .collect();
+
+    assert!(failures.is_empty(), "{} failing\\n\\n{}", failures.len(), failures.join("\\n\\n"));
+}
+```
+
+<p>Once you're past about 50 files, switch to <code>datatest-stable</code> or <code>libtest-mimic</code>. Both give each file its own named test, so <code>cargo nextest</code> can run them in parallel and report them one by one.</p>
+"""
+
+[[sections]]
+heading = "The library and CLI boundary"
+body = """
+<p>The library returns errors and never exits the process. <code>main</code> turns each error into a sysexits code, which the official runner checks.</p>
+
+```rust title="src/main.rs"
+use std::{env, fs, io::{self, BufRead, Write}, process::ExitCode};
+
+fn main() -> ExitCode {
+    let args: Vec<String> = env::args().collect();
+    match args.as_slice() {
+        [_] => repl(),
+        [_, path] => run_file(path),
+        _ => {
+            eprintln!("Usage: rlox [script]");
+            ExitCode::from(64)
+        }
+    }
+}
+
+fn run_file(path: &str) -> ExitCode {
+    let Ok(src) = fs::read_to_string(path) else {
+        eprintln!("Could not read {path}");
+        return ExitCode::from(66);
+    };
+    let mut out = io::stdout().lock();
+    match rlox::run(&src, &mut out) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::from(e.exit_code()) // 65 compile, 70 runtime
+        }
+    }
+}
+
+fn repl() -> ExitCode {
+    let mut interp = rlox::Interpreter::new();   // globals survive between lines
+    let mut out = io::stdout();
+    loop {
+        print!("> ");
+        out.flush().ok();
+        let mut line = String::new();
+        if io::stdin().lock().read_line(&mut line).unwrap_or(0) == 0 {
+            return ExitCode::SUCCESS;
+        }
+        if let Err(e) = interp.run(&line, &mut out) {
+            eprintln!("{e}");
+        }
+    }
+}
+```
+"""

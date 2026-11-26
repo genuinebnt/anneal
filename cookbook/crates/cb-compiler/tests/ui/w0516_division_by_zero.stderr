@@ -1,0 +1,7 @@
+warning[W0516]: this operation will always trap: division by zero
+ --> w0516_division_by_zero.peb:2:18
+  |
+2 |     let x = 10 / 0;
+  |                  ^ the divisor is the literal `0`
+
+warning: 1 warning emitted

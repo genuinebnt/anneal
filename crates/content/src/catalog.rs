@@ -21,6 +21,8 @@ pub struct Catalog {
     pub retired: HashSet<String>,
     /// System design prep: concept pages and practice problems (`content/sd`, docs/SYSTEM_DESIGN.md).
     pub sd: crate::sd::SdCatalog,
+    /// The cookbook: reference pages by subject, and the draft sample pages (`content/cookbook`).
+    pub cookbook: crate::cookbook::Cookbook,
 }
 
 #[derive(Debug)]
@@ -114,11 +116,12 @@ impl Catalog {
         check_unlocks(&tracks, &mut issues);
         let retired = read_retired(root);
         let sd = crate::sd::load(root, &mut issues);
+        let cookbook = crate::cookbook::load(root, &mut issues);
         for id in tracks.iter().flat_map(|t| &t.problems).map(|p| &p.id).filter(|id| retired.contains(*id)) {
             issues.push(Issue { path: root.join("retired.txt"), message: format!("{id} is retired but also a current problem") });
         }
         Ok(Loaded {
-            catalog: Catalog { tracks, dsa, practice_tracks, retired, sd },
+            catalog: Catalog { tracks, dsa, practice_tracks, retired, sd, cookbook },
             issues,
         })
     }

@@ -1,0 +1,71 @@
+title = "Clock synchronisation"
+module = "Distributed systems"
+module_order = 10
+chapter = "Time, partitioning and replication"
+chapter_order = 1
+order = 483
+kind = "recipe"
+lede = "clock synchronisation (Cristian, NTP, Berkeley, slew vs step) and W3C Trace Context"
+level = "intermediate"
+code = ["examples/distributed/clock_sync_and_trace_context.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+timestamps you can compare across machines; propagating trace ids through service calls.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Two halves of "what happened when, across machines":
+
+(a) **clocks**. Machines disagree about the time (offset) and the disagreement grows (drift, tens of ppm).
+
+- Cristian: ask a time server, add half the round trip to its answer. Error is exactly (d_req - d_resp)/2 and never more than RTT/2 - min_one_way_delay.
+- NTP's four timestamps t1 (client send), t2 (server receive), t3 (server send), t4 (client receive): offset = ((t2-t1)+(t3-t4))/2 = O + (d_req-d_resp)/2 and delay = (t4-t1)-(t3-t2) = d_req+d_resp. Server processing time cancels.
+
+   The error is **half the asymmetry** and is bounded by delay/2; it cannot be detected from the timestamps (two different worlds give identical t1..t4), which is why NTP keeps the sample with the smallest delay out of the last 8.
+- Berkeley: no reference clock; a coordinator polls everyone, drops outliers, averages the rest and tells each node a **relative** adjustment (so request delay never enters absolute time).
+- Applying a correction: **stepping** sets the clock at once and can make time run backwards (breaks timers, ordering, "elapsed = now - start"); **slewing** changes the clock rate by at most 500 ppm until the error is gone (monotonic, but 100 ms takes 200 s). NTP steps only above &#126;128 ms.
+
+(b) **trace context**. The W3C `traceparent` header `version-traceid-parentid-flags` (`00-<32 hex>-<16 hex>-<2 hex>`) carries the trace id and the caller's span id across process boundaries; `tracestate` carries vendor data (comma separated `key=value`, newest first, max 32 members).
+
+Rules implemented and tested: lowercase hex only, exact length for version 00, version ff forbidden, all-zero trace or parent ids invalid, unknown higher versions accepted if the first four fields are well-formed (forward compatibility), and an invalid header means the callee starts a **new** trace.
+
+A 5-service simulation propagates headers, each service creates a child span, spans arrive at the collector in completion order (out of order), and the tree is rebuilt from (span id, parent id) only.
+
+(c) **critical path**: the chain of spans that actually gated the end-to-end latency. Walk backwards from the parent's end: the last-finishing child gates it; time between children is the parent's own (self) time; then continue from that child's start. Parallel siblings that finished earlier are off the critical path.
+
+The segments tile the root's duration exactly, which the simulation asserts for every trace.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+OpenTelemetry, Jaeger and Zipkin propagate exactly this header (W3C Trace Context); distributed databases use bounded clock error for timestamps (Spanner's TrueTime exposes the error interval; hybrid logical clocks tolerate it); chrony/ntpd/PTP keep servers in sync; log correlation across microservices; critical-path analysis is how "which service should I optimise" is answered in tracing UIs.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+```text
+Trace Context (W3C Recommendation)   https://www.w3.org/TR/trace-context/
+```
+
+RFC 5905 Network Time Protocol Version 4   <https://datatracker.ietf.org/doc/html/rfc5905>
+
+Time, Clocks, and the Ordering of Events in a Distributed System (Lamport, 1978) <https://lamport.azurewebsites.net/pubs/time-clocks.pdf>
+"""
+
+[[sources]]
+title = "w3.org/TR/trace-context"
+url = "https://www.w3.org/TR/trace-context/"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc5905"
+url = "https://datatracker.ietf.org/doc/html/rfc5905"
+
+[[sources]]
+title = "lamport.azurewebsites.net/pubs/time-clocks.pdf"
+url = "https://lamport.azurewebsites.net/pubs/time-clocks.pdf"

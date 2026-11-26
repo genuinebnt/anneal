@@ -1,0 +1,907 @@
+title = "Testing unsafe code and finding unsoundness"
+module = "4. Testing and benchmarking"
+chapter = "Methods: unsafe code and unsoundness"
+order = 1
+kind = "testing"
+level = "advanced"
+status = "draft"
+illustrative = ["fuzz-target-not-compiled", "kani-harness-not-compiled"]
+lede = "How to test a safe API that is built on `unsafe` code: attack it the way hostile safe code could, and run those attacks under tools that can see undefined behaviour."
+
+summary = [
+  "A safe API is **unsound** if some safe code can make it cause undefined behaviour (UB). Code that is only buggy gives wrong results without UB.",
+  "Write down the invariants your `unsafe` blocks rely on, and keep them true whenever caller code runs: closures, iterators, destructors.",
+  "Well-behaved tests are not enough: in the example here, all three planted soundness bugs pass the well-behaved model test, even under Miri.",
+  "Write hostile tests (lying trait impls, re-entrancy, panics) and run them under Miri, which checks only the executions you give it.",
+  "You need two kinds of oracle: a model checks answers, while Miri and sanitizers look for UB.",
+  "Break the code on purpose and require each check to fail for the expected reason.",
+  "Before you keep the `unsafe`, compare it with a safe version.",
+]
+
+[[glance]]
+label = "Example"
+value = "`Shelf<T, N>`: a fixed-capacity list with `push(&self)`, in `code/`, no dependencies"
+
+[[glance]]
+label = "Run here"
+value = "stable tests, Miri (Stacked and Tree Borrows), AddressSanitizer, Clippy, compile-fail doctests, a benchmark"
+
+[[glance]]
+label = "Not run here"
+value = "cargo-fuzz, Kani, cargo-careful (not installed), MemorySanitizer, ThreadSanitizer"
+
+[[glance]]
+label = "Needs nightly"
+value = "Miri, sanitizers, and enforcing the error codes of `compile_fail` doctests"
+
+[[sections]]
+heading = "Unsound or just wrong"
+body = '''
+**Use this page** when a type or function has `unsafe` inside and a safe signature outside. **The main cost** of such code: the compiler no longer proves all of that module's memory safety, so you have to argue the rest and test it.
+
+The Rust Reference puts the duty on the author of the `unsafe` code. It is **sound** if no safe client can trigger undefined behaviour through it, and **unsound** if safe code can misuse it into UB ([Reference](https://doc.rust-lang.org/reference/behavior-considered-undefined.html)). "No safe client" includes clients that are wrong or deliberately strange.
+
+| | Buggy but sound | Unsound |
+|---|---|---|
+| What goes wrong | wrong result, panic, leak, deadlock | safe code can reach undefined behaviour |
+| What you can still rely on | the language's guarantees | nothing about a program that executes the UB |
+| Must your program hit it for it to be a defect? | it hurts when it happens | no: the API is already broken if *some* safe caller can do it |
+| What finds it | assertions, a model, property tests | the same attacks run under a UB detector, plus review |
+| Planted in this page's code | `planted-wrong-get` | `planted-lying-len`, `planted-stale-index`, `planted-early-len` |
+
+Two consequences are easy to miss:
+
+- **A change to safe code can make `unsafe` code wrong.** The Rustonomicon changes `<` to `<=` in the bounds check that guards a `get_unchecked`. Only safe code changed, and the function became unsound ([Working with unsafe](https://doc.rust-lang.org/nomicon/working-with-unsafe.html)). Review all the code that can touch the data an `unsafe` block depends on.
+- **You cannot trust code your caller supplies.** Anyone can implement a safe trait such as `Ord` or `ExactSizeIterator` wrongly, without writing `unsafe`. Your type may then give wrong answers, but it must not turn them into UB ([How safe and unsafe interact](https://doc.rust-lang.org/nomicon/safe-unsafe-meaning.html)).
+
+> [!NOTE]
+> Leaking memory is safe in Rust: `std::mem::forget` is a safe function. A leak is a bug, not unsoundness. It is still a useful alarm, because in `unsafe` code it often means the bookkeeping is wrong.
+'''
+
+[[sections]]
+heading = "The example: a small safe wrapper"
+body = '''
+`Shelf<T, N>` is a fixed-capacity, append-only list. Its special feature: `push` takes `&self` and returns a reference that stays valid while you push more. `Vec::push` takes `&mut self`, so the borrow checker does not let you do that with a `Vec`.
+
+```rust title=src/lib.rs
+pub struct Shelf<T, const N: usize> {
+    // One `UnsafeCell` per slot, not one around the whole array: writing slot `i` must not touch the other slots.
+    slots: [UnsafeCell<MaybeUninit<T>>; N],
+    len: Cell<usize>,
+}
+```
+
+Four invariants are written on the type, and every `unsafe` block depends on some of them.
+
+| | Invariant | What relies on it |
+|---|---|---|
+| 1 | `len <= N` | indexing |
+| 2 | slots `0..len` hold a live `T`; slots `len..N` hold nothing the shelf owns | `get` reads, `clear` drops |
+| 3 | while any `&self` borrow lives, a slot below `len` is not written, moved or dropped | every reference the shelf hands out |
+| 4 | only one thread uses `&self` at a time | `push` has no synchronisation |
+
+```rust title=src/lib.rs
+/// Stores `value` and returns a reference to it, or gives it back if the shelf is full.
+pub fn push(&self, value: T) -> Result<&T, T> {
+    let index = self.len.get();
+    let Some(slot) = self.slots.get(index) else { return Err(value) };
+    // SAFETY: `index == len`, so by invariant 2 the slot holds nothing and no reference into it exists. By invariant 4 no
+    // other thread is here. No user code runs between reading `len` and updating it.
+    let stored: &T = unsafe { (*slot.get()).write(value) };
+    self.len.set(index + 1);
+    Ok(stored)
+}
+```
+
+> [!RUST]
+> `UnsafeCell` is what permits mutation through `&self`. The Reference says memory behind a live `&T` must not be mutated, **except** data inside an `UnsafeCell`. That exception belongs to references to the cell. The `&T` that `get` returns points at the contents as a plain `T`, so overwriting that slot while the reference is live is UB (for a `T` with no `UnsafeCell` of its own). Hence invariant 3. The Reference also warns that the exact aliasing rules are not settled.
+
+Three methods run code the shelf did not write: `extend_exact` consumes a caller's iterator, `fill_with` calls a caller's closure to make values, and `clear` runs the elements' destructors.
+
+The crate also has `SafeShelf`, the same idea built on `OnceCell` with no `unsafe` at all. It is a second oracle and the benchmark baseline.
+'''
+
+[[sections]]
+heading = "Choose the oracle first"
+body = '''
+An **oracle** is whatever tells a test that something went wrong. UB has no reliable symptom: the program may crash, give wrong answers or seem to work. One oracle is not enough.
+
+| Oracle | Catches | Blind to | Here |
+|---|---|---|---|
+| **A model**: a `Vec` that gets the same operations | wrong length, order, contents, return values | UB that changes no answer | `tests/model.rs`, `src/script.rs` |
+| **A second implementation** without `unsafe` | disagreement between the two | mistakes both share | `src/safe.rs`, `tests/twin.rs` |
+| **Held references**: keep every `&T`, re-read all after each operation | a value changing under a shared reference | damage nobody reads back | `src/script.rs` |
+| **A drop ledger**: count destructor calls per element | double drop, missing drop | reads of dead memory | `script::Ledger` |
+| **Miri** | many kinds of UB, and leaks, on the paths that run | paths that do not run; wrong answers | `cargo +nightly miri test` |
+| **A sanitizer** | the errors it instruments, in native code | other kinds of UB | AddressSanitizer |
+| **The compiler** | uses that the types forbid | anything about run-time values | `compile_fail` doctests |
+
+The model, held references and ledger are ordinary Rust. They work under `cargo test` and under Miri, and are written so a fuzzer can drive them. The script driver checks them after each operation:
+
+```rust title=src/script.rs
+// The oracle, after every operation.
+assert_eq!(shelf.len(), model.len(), "length");
+assert!(shelf.iter().map(|t| &t.text).eq(model.iter()), "contents differ from the model");
+for (r, text) in &held {
+    assert_eq!(&r.text, text, "a reference handed out earlier changed under its owner");
+}
+```
+
+> [!TIP]
+> Give test elements a heap allocation **and** a destructor (here a `String` plus a drop counter). With `u64` elements there is nothing to leak or double-free, so the memory tools have less to find.
+'''
+
+[[sections]]
+heading = "Write invariants you can test"
+body = '''
+A safety comment should say which invariants it relies on and why they hold **at this line**. "This is fine" cannot be reviewed.
+
+```rust title=src/lib.rs
+/// Drops every element. If a destructor panics, the elements not yet dropped stay in the shelf and no element is dropped twice.
+pub fn clear(&mut self) {
+    while self.len.get() > 0 {
+        let last = self.len.get() - 1;
+        // Shrink FIRST: if the destructor below panics, the shelf no longer claims to own this element.
+        self.len.set(last);
+        // SAFETY: slot `last` was initialised (invariant 2, before the line above), `&mut self` proves no references into
+        // the shelf are alive, and `len` no longer covers the slot, so it cannot be dropped again.
+        unsafe { self.slots[last].get_mut().assume_init_drop() };
+    }
+}
+```
+
+The rule to test is: **the invariants hold whenever code you did not write runs.** Find each such point. Then ask what happens if that code calls back into your type, and what happens if it panics and never returns.
+
+| Where foreign code runs | In the shelf | Ask |
+|---|---|---|
+| a closure parameter | `make` in `fill_with` | can it call `push` or `get`? can it panic? |
+| an iterator's `next` or `len` | `extend_exact` | is `len` a lie? does `next` change the container? |
+| a destructor | `clear`, `Drop` | if it panics, will something drop this element again? |
+| `Clone`, `Eq`, `Ord`, `Hash`, `Deref`, `Borrow` | none | can two calls disagree? can one panic half-way? |
+
+Keep the fields private. When soundness depends on a field, the whole module that can reach the field is part of the proof. Privacy stops code outside the module from breaking it ([Working with unsafe](https://doc.rust-lang.org/nomicon/working-with-unsafe.html)).
+
+This crate denies two lints in `Cargo.toml`:
+
+```text
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"      # an unsafe fn body still needs unsafe blocks
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"  # every unsafe block needs a SAFETY comment
+```
+
+Tested here: after deleting the comment in `push`, `cargo clippy` fails with `unsafe block missing a safety comment`. The lint checks that a comment **exists**, not that it is true. The planted variants carry comments that say `SAFETY: WRONG`, which is enough for the lint.
+'''
+
+[[sections]]
+heading = "Attack your own safe API"
+body = '''
+Write tests as the worst caller safe Rust allows. `tests/hostile.rs` has a test for each attack. Each planted variant is a plausible "optimisation" of one method, behind a Cargo feature that is off by default.
+
+| Safe code may | Attack in the test | What a sound version does |
+|---|---|---|
+| return any number from `len()` | claim 0 and yield 7; claim `usize::MAX` | uses `len` only to refuse early, and checks the real bound on every write |
+| change the container from inside an iterator | `next()` pushes to the shelf | re-reads `len` after every call into caller code |
+| call back from a closure | push and keep the `&T`; read everything while filling | publishes an element only once it is written, and does not cache `len` across the call |
+| panic anywhere | the closure panics on its third call | never lets `len` cover an unwritten slot |
+| panic in `Drop` | one destructor panics during `clear` | shrinks `len` before dropping |
+
+> [!WARNING]
+> The planted variants execute real UB. The crate refuses to compile them in a normal build: `compile_error!` fires unless the build is under Miri (`cfg(miri)`) or you pass `--cfg planted_native` for a sanitizer run. So plain `cargo test` and `cargo run` cannot reach them. One side effect: `cargo test --all-features` fails to compile, on purpose.
+
+### A trait that lies {#lying-trait}
+
+This takes no `unsafe` to write:
+
+```rust title=src/script.rs
+/// An `ExactSizeIterator` that lies: `len()` returns `claimed`, whatever it really yields. Writing this needs no `unsafe`.
+pub struct Liar<I> {
+    pub claimed: usize,
+    pub inner: I,
+}
+
+impl<I: Iterator> Iterator for Liar<I> {
+    type Item = I::Item;
+    fn next(&mut self) -> Option<I::Item> {
+        self.inner.next()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.claimed, Some(self.claimed))
+    }
+}
+
+impl<I: Iterator> ExactSizeIterator for Liar<I> {
+    fn len(&self) -> usize {
+        self.claimed
+    }
+}
+```
+
+The planted `extend_exact` checks `len()` once, then writes without a bounds check:
+
+```rust title=src/lib.rs
+let mut stored = 0;
+for value in items {
+    let index = self.len.get();
+    // SAFETY: WRONG. Assumes the iterator yields no more than `len()` items.
+    unsafe { (*self.slots.get_unchecked(index).get()).write(value) };
+    self.len.set(index + 1);
+    stored += 1;
+}
+Ok(stored)
+```
+
+The standard library's docs for `ExactSizeIterator` say the same thing: it is a safe trait, so `unsafe` code **must not** rely on its length being correct ([docs](https://doc.rust-lang.org/std/iter/trait.ExactSizeIterator.html)).
+
+An honest iterator can break this code too. In `iterator_that_pushes_while_being_consumed`, `len()` is correct and there is room when it is checked. Then each call to `next()` pushes to the shelf, and the room is gone. The sound version asks `push`, which checks the real bound each time:
+
+```rust title=src/lib.rs
+let items = items.into_iter();
+if items.len() > N - self.len() {
+    return Err(NoRoom); // a hint used only to refuse early: nothing unsafe depends on it
+}
+let mut stored = 0;
+for value in items {
+    if self.push(value).is_err() {
+        break; // `push` checks the real bound every time
+    }
+    stored += 1;
+}
+Ok(stored)
+```
+
+### Re-entrancy {#re-entrancy}
+
+A method that takes `&self` can be called again while it is already running. The sound `fill_with` keeps nothing from before the call to `make` that `make` could have changed:
+
+```rust title=src/lib.rs
+pub fn fill_with(&self, count: usize, mut make: impl FnMut(usize) -> T) -> usize {
+    let mut stored = 0;
+    for k in 0..count {
+        if self.len() == N {
+            break;
+        }
+        let value = make(k); // user code: it may push (so `len` may change) or panic (so we may never get past this line)
+        if self.push(value).is_err() {
+            break; // `make` filled the shelf itself
+        }
+        stored += 1;
+    }
+    stored
+}
+```
+
+The planted `stale-index` version reads `len` once, before the loop:
+
+:::steps How the stale index breaks a live reference
+- fill_with | `start = len = 0` | The planted version saves the index before calling out.
+- closure | calls `shelf.push("from inside")` | The push writes slot 0, sets `len = 1` and returns a `&String` into slot 0.
+- closure | keeps that reference, returns `"from outside"` | Safe code: the reference borrows the shelf, and both calls only need `&self`.
+- fill_with | writes slot `start + 0`, which is slot 0 | A live `&String` points here. Invariant 3 is broken.
+- test | reads the kept reference | Miri reports the UB here. A native build reads `"from outside"`.
+:::
+
+The standard library meets the same hazard in `OnceCell`: its docs say re-entrant initialisation from the closure is an error and panics. A comment in the implementation says some forms of re-entrant initialisation might lead to UB ([`once.rs`, Rust 1.98.1](https://github.com/rust-lang/rust/blob/1.98.1/library/core/src/cell/once.rs)).
+
+### A panic half-way {#panic-half-way}
+
+The planted `early-len` version reserves the whole range first:
+
+```rust title=src/lib.rs
+pub fn fill_with(&self, count: usize, mut make: impl FnMut(usize) -> T) -> usize {
+    let start = self.len.get();
+    let count = count.min(N - start);
+    self.len.set(start + count); // invariant 2 is false until the loop ends, and `make` runs meanwhile
+    for k in 0..count {
+        let value = make(k);
+        // SAFETY: WRONG, for the reason above.
+        unsafe { (*self.slots[start + k].get()).write(value) };
+    }
+    count
+}
+```
+
+If `make` panics, the stack unwinds, `Drop` runs and drops slots that were never written. `make` can also simply call `get` and read one. The Rustonomicon calls the minimum requirement here *minimal exception safety*: unwinding must not break memory safety. Its example is this mistake: `set_len` first, then a `clone` that can panic ([Exception safety](https://doc.rust-lang.org/nomicon/exception-safety.html)). The standard library's general `Vec` extend loop raises the length once per element, and its comment says why: `next()` is user code that can panic ([`extend_desugared`, Rust 1.98.1](https://github.com/rust-lang/rust/blob/1.98.1/library/alloc/src/vec/mod.rs)).
+
+```rust title=tests/hostile.rs
+#[test]
+fn closure_that_panics_half_way() {
+    let ledger = Rc::new(Ledger::default());
+    {
+        let shelf = Shelf::<_, 4>::new();
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            shelf.fill_with(4, |k| {
+                assert!(k < 2, "boom");
+                ledger.make()
+            })
+        }));
+        assert!(result.is_err());
+        assert_eq!(shelf.len(), 2, "the two finished elements stay, nothing else is claimed");
+    } // the shelf is dropped here: it must drop exactly the elements it owns
+    ledger.assert_all_dropped_once();
+}
+```
+
+### A destructor that panics {#panicking-drop}
+
+The same rule, mirrored. `clear` shrinks `len` **before** it drops, so a panic leaves the shelf claiming only elements it still owns. The test's element panics only on its first drop:
+
+```rust title=tests/hostile.rs
+#[test]
+fn destructor_that_panics_during_clear() {
+    // No heap memory in `Grenade`: elements that are never reached stay in the shelf, so nothing is lost or reported as leaked.
+    let counts = [Cell::new(0), Cell::new(0), Cell::new(0)];
+    let mut shelf = Shelf::<Grenade<'_>, 3>::new();
+    for (i, drops) in counts.iter().enumerate() {
+        assert!(shelf.push(Grenade { drops, armed: i == 1 }).is_ok());
+    }
+    assert!(panic::catch_unwind(AssertUnwindSafe(|| shelf.clear())).is_err());
+    let left = shelf.len();
+    drop(shelf);
+    assert_eq!(counts.each_ref().map(Cell::get), [1, 1, 1], "each destructor ran exactly once");
+    assert_eq!(left, 1, "after the panic, only element 0 was still owned");
+}
+```
+
+> [!TESTING]
+> The "first drop only" detail matters. An element that panics on *every* drop turns a double drop into a panic during unwinding, which aborts the test process instead of failing one assertion. That happened to an earlier form of this test when the bug was planted.
+
+Also test the shapes that have no bad intent: capacity 0, a zero-sized `T` and an over-aligned `T`. One test in `tests/hostile.rs` covers all three.
+'''
+
+[[sections]]
+heading = "Miri"
+body = '''
+[Miri](https://github.com/rust-lang/miri) is an interpreter that runs your tests and stops at the first undefined behaviour it detects. It needs nightly.
+
+```sh
+cargo +nightly miri test                                        # Stacked Borrows, the default
+MIRIFLAGS=-Zmiri-tree-borrows cargo +nightly miri test          # the other aliasing model
+cargo +nightly miri test --features planted-stale-index \
+    --test hostile -- --exact closure_that_pushes_and_keeps_the_reference
+```
+
+**Tested here, sound version:** all tests and doctests pass under both aliasing models. Each full run took about 15 to 18 s of wall time on this machine, including cargo's own steps. The test harness's "finished in" line is not wall time under Miri: one test reported 25.68 s inside a run of about 15 s. By default Miri replaces the clock with a deterministic fake one.
+
+The crate scales its random tests down under Miri with `cfg!(miri)`: 4 honest rounds instead of 2,000, and 24 scripts instead of 5,000. Under Miri you search far fewer inputs, so keep the native run too.
+
+**Tested here, planted versions** (same results under both aliasing models):
+
+| Variant | Well-behaved `model` test | Hostile tests where Miri reports UB | Hostile tests that fail only by assertion | Random `script` test |
+|---|---|---|---|---|
+| `planted-lying-len` | **passes** | claims too little; pushes while consumed | none | stops at std's bounds precondition |
+| `planted-stale-index` | **passes** | pushes and keeps the reference | none | fails: length differs from model |
+| `planted-early-len` | **passes** | reads while filling; panics half-way | pushes and keeps the reference | fails: contents differ from model |
+| `planted-wrong-get` | fails by assertion | none | five of the eight | fails: contents differ from model |
+
+Read the first three rows again. **A well-behaved test suite under Miri says nothing about hostile callers.** Miri's README says it directly: it can only tell you whether a particular way of using your code caused UB in a particular execution. A passing run does not show the code is sound.
+
+The last row is the other half: Miri had no complaint about wrong answers. Only the assertions caught them.
+
+### Real output: the re-entrant write {#miri-reentrant}
+
+Stacked Borrows, trimmed where marked `[...]`:
+
+```text
+test closure_that_pushes_and_keeps_the_reference ... error: Undefined Behavior: trying to retag from <139672> for SharedReadOnly permission at alloc44750[0x0], but that tag does not exist in the borrow stack for this location
+   --> [...]/library/core/src/cell.rs:558:18
+[...]
+    = help: this indicates a potential bug in the program: it performed an invalid operation, but the Stacked Borrows rules it violated are still experimental
+[...]
+help: <139672> was created by a SharedReadOnly retag at offsets [0x0..0x18]
+   --> tests/hostile.rs:42:9
+    |
+ 42 |         kept.set(shelf.push("from inside".to_string()).ok());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: <139672> was later invalidated at offsets [0x0..0x18] by a Unique function-entry retag inside this call
+   --> src/lib.rs:236:22
+    |
+236 |             unsafe { (*self.slots[start + k].get()).write(value) };
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+Read the two `help:` blocks first. They give the line that **created** the reference and the line that **invalidated** it. The headline error is only where the dead reference was next used.
+
+Tree Borrows reports the same two lines in other words: `reborrow through <136033> at alloc44374[0x0] is forbidden`, because the tag became `Disabled due to a foreign write access`. Both messages call the aliasing rules experimental.
+
+### Real output: the panic half-way {#miri-panic}
+
+```text
+test closure_that_panics_half_way ... error: Undefined Behavior: reading memory at alloc44271[0x90..0x98], but memory is uninitialized at [0x90..0x98], and this operation requires initialized memory
+```
+
+The backtrace under it runs from `Shelf::drop` through `clear` and `assume_init_drop` into the element's destructor. For `reads_the_shelf_while_filling` the report also comes from a destructor: the test's own length assertion panics first, and unwinding then drops the unwritten slots.
+
+### The lying length: std reports first {#miri-lying-length}
+
+For `planted-lying-len` the first thing to fire is not a Miri diagnostic. It is a debug check inside the standard library.
+
+:::deeper Both outputs | how to reach Miri's own diagnostic
+
+```text
+thread 'iterator_that_claims_too_little' (1001) panicked at src/lib.rs:203:35:
+unsafe precondition(s) violated: slice::get_unchecked requires that the index is within the slice
+
+This indicates a bug in the program. This Undefined Behavior check is optional, and cannot be relied on for safety.
+[...]
+thread caused non-unwinding panic. aborting.
+```
+
+With `RUSTFLAGS=-Zub-checks=no` that check is off, and Miri reports the UB itself:
+
+```text
+test iterator_that_claims_too_little ... error: Undefined Behavior: `assume` called with `false`
+   --> src/lib.rs:203:24
+    |
+203 |             unsafe { (*self.slots.get_unchecked(index).get()).write(value) };
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Undefined Behavior occurred here
+```
+:::
+
+### Leaks {#miri-leaks}
+
+A variation (a scratch test, not in `code/`): the re-entrant push **without** keeping the reference, under `planted-stale-index`. No dead reference is ever used. The test itself passes, then Miri reports `memory leaked: alloc42076 (Rust heap, size: 11, align: 1)`: the overwritten `String` was never dropped.
+
+### What Miri does not do {#miri-limits}
+
+These points are from its [README](https://github.com/rust-lang/miri):
+
+- It checks only what runs, with the inputs you give. Addresses and thread schedules are choices too; `-Zmiri-many-seeds` tries more of them. This crate has no threads, so it was not used here.
+- It supports few foreign functions and platform APIs, so some FFI and I/O code cannot run.
+- Stacked Borrows and Tree Borrows are experimental models. It follows its own approximation of what is UB and makes no promise about future compiler versions.
+- If your code depends on unspecified layout, a run can pass and the code can still break on another compiler or platform.
+'''
+
+[[sections]]
+heading = "Sanitizers"
+body = '''
+A sanitizer adds checks to the **native** program. It runs real system calls and foreign code, and does not interpret. The flags are unstable. The [unstable book](https://doc.rust-lang.org/beta/unstable-book/compiler-flags/sanitizer.html) lists AddressSanitizer (ASan) and ThreadSanitizer for `aarch64-apple-darwin`; its MemorySanitizer list has no macOS target.
+
+```sh
+RUSTFLAGS="-Zsanitizer=address --cfg planted_native" \
+  cargo +nightly test --target aarch64-apple-darwin --features planted-lying-len --test hostile -- \
+  --exact iterator_that_claims_too_little
+```
+
+`--cfg planted_native` unlocks the planted code, so this command **does execute UB** natively. Run it only on purpose. With an explicit `--target`, cargo keeps `RUSTFLAGS` off build scripts and procedural macros.
+
+**Tested here**, one test per process. Adding `-Zbuild-std` (which also instruments the standard library) gave the same pass or fail results.
+
+| Build | Hostile test | ASan | What failed the test |
+|---|---|---|---|
+| sound | the five iterator and closure tests | silent | nothing, all pass |
+| `lying-len` | claims too little; pushes while consumed | silent: std's debug check fired first | the precondition panic |
+| `lying-len`, `-Zub-checks=no` | the same two | **`stack-buffer-overflow`** | ASan |
+| `stale-index` | pushes and keeps the reference | **silent** | only the test's assertion |
+| `early-len` | reads while filling; pushes and keeps the reference | silent | only the tests' assertions |
+| `early-len` | panics half-way | `SEGV on unknown address 0x000000000010` | a crash inside the destructor |
+
+(The `-Zub-checks=no` run was done without `-Zbuild-std`.)
+
+```text
+==88894==ERROR: AddressSanitizer: stack-buffer-overflow on address 0x00016fade508 [...]
+WRITE of size 24 at 0x00016fade508 thread T1
+[...]
+    [160, 264) 'shelf' (line 11) <== Memory access at offset 264 overflows this variable
+```
+
+ASan saw the write past the end of the stack object. It said nothing about overwriting a slot that a live reference pointed to: that address is valid memory. The `SEGV` is not a diagnosis of uninitialised memory either. The program followed a bad pointer and crashed.
+
+With `ASAN_OPTIONS=detect_leaks=1`, the leak variation from the Miri section also produced `LeakSanitizer: detected memory leaks`, `Direct leak of 11 byte(s)`, on this Mac.
+
+ThreadSanitizer was not run: `Shelf` is `!Sync`, and the crate starts no threads of its own. `cargo careful`, which rebuilds the standard library with debug assertions and extra checks, was not installed ([its README](https://github.com/RalfJung/cargo-careful) says it works with FFI and is much faster than Miri, but detects less).
+
+> [!PRODUCTION]
+> Use a sanitizer where Miri cannot go: code that calls C, or workloads too slow to interpret. Instrument the C side too when you can. The unstable book says ASan works with uninstrumented code but detects less.
+'''
+
+[[sections]]
+heading = "Fuzz the safe wrapper"
+body = '''
+Do not fuzz one method with one random argument. Fuzz **sequences of operations, including hostile caller behaviour**. `script::run(&[u8])` reads a byte string as a program: which method to call, how much the iterator lies, whether the closure pushes, reads or panics. Any byte string is a valid program.
+
+In `code/`, `tests/script.rs` feeds it 5,000 seeded random strings natively and 24 under Miri. This is random testing, **not** coverage-guided fuzzing. It needs no dependencies and replays from a seed. It also asserts that the hostile paths were reached, so a decoding mistake cannot turn it into a test of nothing:
+
+```rust title=tests/script.rs
+for seed in 0..seeds {
+    let script = random_script(seed, 120);
+    // Name the seed if the shelf disagrees with the model, so the failure can be replayed.
+    let reached = std::panic::catch_unwind(|| run(&script)).unwrap_or_else(|_| panic!("seed {seed} failed"));
+    total += reached;
+}
+// A random test that never reaches the hostile paths proves nothing, so assert that it does.
+assert!(total.lies > 0 && total.reentrant_pushes > 0 && total.reentrant_reads > 0, "{total:?}");
+assert!(total.panics > 0 && total.clears > 0, "{total:?}");
+```
+
+One trap with injected panics: `libfuzzer-sys` installs a panic hook that **aborts** the process ([source](https://github.com/rust-fuzz/libfuzzer/blob/main/src/lib.rs), read at version 0.4.12). A closure that calls `panic!` would end the fuzz run, even inside `catch_unwind`. `resume_unwind` starts unwinding [without calling the hook](https://doc.rust-lang.org/std/panic/fn.resume_unwind.html):
+
+```rust title=src/script.rs
+/// Unwinds like a panic, but does not call the panic hook. `libfuzzer-sys` installs a hook that aborts the process, so an
+/// injected `panic!` would end a fuzz run; this one reaches our `catch_unwind`.
+fn injected_panic() -> ! {
+    panic::resume_unwind(Box::new("injected"))
+}
+```
+
+This needs `panic = "unwind"`. With `panic = "abort"`, nothing can be caught.
+
+The [cargo-fuzz](https://rust-fuzz.github.io/book/cargo-fuzz/tutorial.html) target would be as follows. **It was not compiled or run**, because cargo-fuzz is not installed here.
+
+```rust title=fuzz-target-not-compiled
+#![no_main]
+use libfuzzer_sys::fuzz_target;
+
+fuzz_target!(|data: &[u8]| {
+    shelf::script::run(data);
+});
+```
+
+A fuzzer finds only what its oracle notices. Keep the model and ledger in the target. libFuzzer builds can add AddressSanitizer, which has the blind spots shown above. So keep the inputs it finds and replay them under Miri.
+
+For richer inputs, the Rust Fuzz Book describes [structure-aware fuzzing](https://rust-fuzz.github.io/book/cargo-fuzz/structure-aware-fuzzing.html), including a data structure compared with a known-good model.
+'''
+
+[[sections]]
+heading = "Bounded model checking with Kani"
+body = '''
+[Kani](https://model-checking.github.io/kani/tutorial-first-steps.html) treats a *proof harness* like a test whose inputs are **all** possible values: `kani::any()` stands for every value of a type. It checks panics, failed assertions and several kinds of memory error. **Kani was not installed or run for this page.** This section reports its documentation.
+
+```rust title=kani-harness-not-compiled
+#[cfg(kani)]
+#[kani::proof]
+#[kani::unwind(6)] // a guess: raise it until no unwinding assertion fails
+fn extend_with_any_claim_never_stores_more_than_capacity() {
+    let shelf = shelf::Shelf::<u8, 2>::new();
+    let claimed: usize = kani::any();
+    let actual: usize = kani::any();
+    kani::assume(actual <= 4);
+    let items = shelf::script::Liar { claimed, inner: (0..actual).map(|_| kani::any::<u8>()) };
+    let _ = shelf.extend_exact(items);
+    assert!(shelf.len() <= 2);
+}
+```
+
+Where it fits: small, loop-bounded cores such as index arithmetic, where "every `claimed` value" is worth more than thousands of random ones.
+
+| Limit, from Kani's docs | What it means here |
+|---|---|
+| Loops need a bound, and a proof covers only sizes within it ([unwinding](https://model-checking.github.io/kani/tutorial-loop-unwinding.html)) | a result for capacity 2 and 4 items says nothing certain about 1,000 |
+| It does not track reference lifetimes, so it does not detect aliasing violations as such ([UB page](https://model-checking.github.io/kani/undefined-behaviour.html)) | the `stale-index` bug would need an assertion that sees the changed value |
+| Detecting reads of uninitialised memory is partial and experimental ([feature support](https://model-checking.github.io/kani/rust-feature-support.html)) | do not rely on it for `early-len` by default |
+| It focuses on sequential code (UB page) | it does not look for data races |
+
+So a successful Kani run is not "no UB". It is "these properties hold for these bounded inputs, for the kinds of error Kani checks".
+'''
+
+[[sections]]
+heading = "Compile-fail tests"
+body = '''
+Some of the safety argument is carried by types: "this cannot be shared between threads", "you cannot call `clear` while holding a reference". Test that the forbidden programs **do not compile**. Otherwise a later `unsafe impl`, or a signature changed from `&mut self` to `&self`, removes the guarantee and every run-time test still passes.
+
+rustdoc's [`compile_fail`](https://doc.rust-lang.org/rustdoc/write-documentation/documentation-tests.html) code blocks do this with no extra crate. `src/lib.rs` has five:
+
+| Must not compile | Expected error | What it protects |
+|---|---|---|
+| require `Shelf<u8, 4>: Sync` | E0277 | invariant 4 |
+| require `Shelf<Rc<u8>, 4>: Send` | E0277 | no `Rc` crosses threads |
+| `clear()` while a returned `&T` is alive | E0502 | `clear`'s safety comment |
+| move the shelf while a `&T` is alive | E0505 | elements are stored inline |
+| view `Shelf<&'static str>` as `Shelf<&'a str>` | lifetime error with no code | invariance |
+
+The idea in the first row, reduced to the standard library: a type that holds a `Cell` is not `Sync`. This snippet is compiled by the page checker, which requires this error code.
+
+```rust compile_fail=E0277 title=cell-is-not-sync.rs
+fn needs_sync<T: Sync>() {}
+
+fn main() {
+    needs_sync::<std::cell::Cell<usize>>();
+}
+```
+
+### Why invariance is on the list {#invariance}
+
+The last row matters because of `push(&self)`. If `Shelf<T>` were covariant, safe code could view a shelf of long-lived references as a shelf of short-lived ones, push a short-lived reference, and read it through the original shelf after it died. `UnsafeCell<T>` makes the type invariant in `T`. Compiling the same signature against a small `UnsafeCell` wrapper, rustc reported `lifetime may not live long enough` and named invariance as the reason.
+
+### Two ways to pass for the wrong reason {#wrong-reason}
+
+
+1. **Any error counts.** A misspelt name also fails to compile. Here each is paired with a twin block that differs only by the forbidden step and **must** compile. The first two share one twin, which asks whether `Shelf<u8, 4>` is `Send`.
+2. **Stable ignores the error code.** Checking the code in `compile_fail,E0277` is a [nightly feature](https://doc.rust-lang.org/nightly/rustdoc/unstable-features.html). Tested here: after changing `E0277` to the wrong code `E0502`, stable `cargo test --doc` passed all 9 doctests. Nightly failed two with `Some expected error codes were not found`. Run `cargo +nightly test --doc` in CI.
+
+For many cases, or to check full compiler messages, look at a crate such as `trybuild` (not used or reviewed here).
+'''
+
+[[sections]]
+heading = "Show that each check can fail"
+body = '''
+A test that has never failed has not been shown to test anything. Break the code and require a specific failure.
+
+**Planted soundness bugs.** `code/check-planted.sh` runs four planted variants under Miri. For each it demands a failing run **and** the expected text. "The command failed" alone is not evidence: a typo also fails. Real output:
+
+```text
+caught   planted-lying-len: iterator_that_claims_too_little
+caught   planted-stale-index: closure_that_pushes_and_keeps_the_reference
+caught   planted-early-len: closure_that_panics_half_way
+caught   planted-wrong-get: honest_random_operations_match_a_vec
+```
+
+With one expected string changed to nonsense in a copy of the script, that line read `MISSED` and the script exited 1.
+
+**One-off mutations**, made in a scratch copy with stable (nightly for the `Sync` one):
+
+| Mutation | What failed |
+|---|---|
+| `clear` drops before it shrinks `len` | `destructor_that_panics_during_clear`: a destructor ran twice |
+| `Drop` does nothing | the destructor test, `closure_that_panics_half_way`, the script ledger |
+| add `unsafe impl Sync` | the `Sync` compile-fail doctest |
+| remove the early `NoRoom` refusal | `iterator_that_claims_too_much`, the model test, the script test |
+| remove the "full" check in `fill_with` | the capacity-0 test: `make` ran with no room |
+| `get` hides the last element | eight tests, including the model, the script and the twin comparison |
+
+The invariance doctest has **not** been mutated this way: making the real type covariant means rewriting its fields.
+
+> [!TIP]
+> After you fix a real soundness bug, keep the hostile test that reproduced it, and confirm once that it fails without the fix under the tool that is meant to catch it.
+'''
+
+[[sections]]
+heading = "What did the unsafe buy?"
+body = '''
+Benchmark the `unsafe` version against the **best safe version you can write**, not against a careless one. Here that is `SafeShelf`, built on `OnceCell`:
+
+```rust title=src/safe.rs
+    let index = self.len.get();
+    let Some(slot) = self.slots.get(index) else { return Err(value) };
+    self.len.set(index + 1);
+    // The slot is empty, so the closure runs. If that reasoning were wrong we would get a wrong value, not UB.
+    Ok(slot.get_or_init(move || value))
+}
+
+pub fn get(&self, index: usize) -> Option<&T> {
+    self.slots.get(index)?.get()
+}
+```
+
+`examples/bench.rs` times two workloads with `u64` elements and `N = 1024`: create a shelf, push `N` values and sum them through `get`; and sum an already filled shelf. It takes 31 samples of 2,000 repetitions per case, alternates the cases, and prints median, fastest and slowest.
+
+```sh
+cargo run --release --example bench
+```
+
+**Measured here**: Apple M4 Pro, macOS 27.0, rustc 1.98.1, default release profile, 2026-11-26. Range of the medians over four runs, in ns per element:
+
+| Workload | `Shelf` | `SafeShelf` | Safe takes |
+|---|---|---|---|
+| new + fill + sum | 0.744 to 0.804 | 1.110 to 1.185 | about 1.5 times as long |
+| sum only | 0.347 to 0.369 | 0.393 to 0.416 | about 13% longer |
+
+Some single samples were far slower than the median (up to 14.5 ns in one run). That is why the table uses medians. The machine was not isolated: other builds may have been running.
+
+Size is exact, from `size_of`, and depends on `T`:
+
+| `N = 1024` | `Shelf` | `SafeShelf` |
+|---|---|---|
+| `u64` | 8,200 bytes | 16,392 bytes |
+| `String` | 24,584 bytes | 24,584 bytes |
+
+`OnceCell<T>` has to record whether it is filled. With `u64` there is no spare bit pattern for that, so each slot doubles. `String` has one on this compiler, so the sizes match. This is an observation about this compiler, not a layout guarantee. The benchmark does **not** time `String` elements, and the timing differences were not profiled.
+
+How to read it: for `u64`-like elements on a hot path, the `unsafe` version has a measured speed and size advantage. If your elements look like `String` or your path is not hot, this page gives no evidence that the `unsafe` is worth it, and **the safe version is the sensible default**: it needs none of the machinery above to rule out memory errors in its own code.
+
+> [!TIP]
+> Report the machine, compiler, profile, element type, size, sample count and spread. Say what you did **not** measure. A single speed-up factor with none of these cannot be checked.
+'''
+
+[[sections]]
+heading = "When each check runs in CI"
+body = '''
+This schedule is advice. Adjust it to your crate's run times.
+
+| When | Check | Command |
+|---|---|---|
+| every pull request | native tests, including hostile, script and doctests | `cargo test` |
+| every pull request | safety-comment lint | `cargo clippy --all-targets -- -D warnings` |
+| every pull request that can affect the `unsafe` code | Miri, both aliasing models | the first two commands in the Miri section |
+| every pull request that can affect it | compile-fail error codes | `cargo +nightly test --doc` |
+| nightly | AddressSanitizer on the sound build, leak detection on | `ASAN_OPTIONS=detect_leaks=1` with the command under Sanitizers, without features |
+| nightly or continuous | coverage-guided fuzzing for a fixed time; replay the corpus under tests | `cargo fuzz run` (not run here) |
+| nightly | the checks still catch the planted bugs | `./check-planted.sh` |
+| before a release, or when a bounded core changes | Kani harnesses | `cargo kani` (not run here) |
+| when there are threads | ThreadSanitizer, `-Zmiri-many-seeds`, a model checker such as loom | does not apply to this crate |
+
+Pin the nightly version in CI. A new nightly can change what Miri or a sanitizer reports, and you want that to arrive as a deliberate update. Do not let a tool's skip count as a pass: if Miri cannot run a test, mark it `#[cfg_attr(miri, ignore)]` with a reason, and cover it another way.
+
+> [!PRODUCTION]
+> Review remains part of the process. These tools check executions, bounded inputs or types. None of the ones used here proves that every safe caller is harmless. The research tool [Rudra](https://github.com/sslab-gatech/Rudra) (now archived) searched for three patterns worth checking by hand: panic safety, assumptions about what safe trait methods return, and wrong `Send`/`Sync` bounds on generic types.
+'''
+
+[[terms]]
+term = "undefined behaviour (UB)"
+means = "An operation the language rules forbid; a program that performs it has no guaranteed meaning."
+section = "Unsound or just wrong"
+
+[[terms]]
+term = "sound"
+means = "No use of the API from safe code can cause undefined behaviour."
+section = "Unsound or just wrong"
+
+[[terms]]
+term = "invariant"
+means = "A fact about the data that `unsafe` code assumes is true at the points where it relies on it."
+section = "Write invariants you can test"
+
+[[terms]]
+term = "oracle"
+means = "The part of a test that decides whether a behaviour was wrong."
+section = "Choose the oracle first"
+
+[[terms]]
+term = "re-entrancy"
+means = "Caller code, run by a method, calls back into the same object before the method has finished."
+section = "Attack your own safe API"
+
+[[terms]]
+term = "panic safety"
+means = "An unwind from any call leaves data that can be dropped or used without breaking memory safety."
+section = "Attack your own safe API"
+
+[[labs]]
+title = "The shelf and its hostile callers"
+after = "Attack your own safe API"
+files = ["src/lib.rs", "tests/hostile.rs", "src/script.rs", "tests/model.rs", "tests/script.rs", "src/safe.rs", "src/main.rs"]
+run = true
+test = true
+
+[[sources]]
+title = "The Rust Reference: behaviour considered undefined"
+url = "https://doc.rust-lang.org/reference/behavior-considered-undefined.html"
+kind = "docs"
+note = "The definition of sound and unsound, the list of UB and the aliasing rules. Read in the nightly toolchain's local copy."
+read = true
+
+[[sources]]
+title = "The Rustonomicon: How Safe and Unsafe Interact"
+url = "https://doc.rust-lang.org/nomicon/safe-unsafe-meaning.html"
+kind = "book"
+note = "Why unsafe code must not trust safe trait implementations."
+read = true
+
+[[sources]]
+title = "The Rustonomicon: Working with Unsafe"
+url = "https://doc.rust-lang.org/nomicon/working-with-unsafe.html"
+kind = "book"
+note = "A safe-code change that makes unsafe code unsound, and privacy as the boundary."
+read = true
+
+[[sources]]
+title = "The Rustonomicon: Exception Safety"
+url = "https://doc.rust-lang.org/nomicon/exception-safety.html"
+kind = "book"
+note = "Panics from caller code in the middle of unsafe operations."
+read = true
+
+[[sources]]
+title = "std::iter::ExactSizeIterator"
+url = "https://doc.rust-lang.org/std/iter/trait.ExactSizeIterator.html"
+kind = "docs"
+note = "Says unsafe code must not rely on the reported length. Read in the local library source."
+read = true
+
+[[sources]]
+title = "Rust 1.98.1: library/core/src/cell/once.rs"
+url = "https://github.com/rust-lang/rust/blob/1.98.1/library/core/src/cell/once.rs"
+kind = "code"
+note = "OnceCell's documented re-entrancy panic and the implementation comment about it. Only those parts were read."
+read = true
+
+[[sources]]
+title = "Rust 1.98.1: library/alloc/src/vec/mod.rs (extend_desugared)"
+url = "https://github.com/rust-lang/rust/blob/1.98.1/library/alloc/src/vec/mod.rs"
+kind = "code"
+note = "Raises the length per element because next() can panic. Only this function was read."
+read = true
+
+[[sources]]
+title = "Miri"
+url = "https://github.com/rust-lang/miri"
+kind = "code"
+note = "README: what it detects, what it cannot show, flags and CI setup."
+read = true
+
+[[sources]]
+title = "The Unstable Book: sanitizer"
+url = "https://doc.rust-lang.org/beta/unstable-book/compiler-flags/sanitizer.html"
+kind = "docs"
+note = "Flags and supported targets. The ASan, LeakSanitizer and MemorySanitizer parts were read."
+read = true
+
+[[sources]]
+title = "rustdoc book: documentation tests"
+url = "https://doc.rust-lang.org/rustdoc/write-documentation/documentation-tests.html"
+kind = "docs"
+note = "The compile_fail attribute. Read in the local copy."
+read = true
+
+[[sources]]
+title = "rustdoc book: unstable features"
+url = "https://doc.rust-lang.org/nightly/rustdoc/unstable-features.html"
+kind = "docs"
+note = "Error numbers for compile_fail doctests are nightly-only. That section was read."
+read = true
+
+[[sources]]
+title = "std::panic::resume_unwind"
+url = "https://doc.rust-lang.org/std/panic/fn.resume_unwind.html"
+kind = "docs"
+note = "Unwinds without invoking the panic hook. Read in the local library source."
+read = true
+
+[[sources]]
+title = "rust-fuzz/libfuzzer: src/lib.rs"
+url = "https://github.com/rust-fuzz/libfuzzer/blob/main/src/lib.rs"
+kind = "code"
+note = "The panic hook that aborts. The initialisation function was read, also in libfuzzer-sys 0.4.12."
+read = true
+
+[[sources]]
+title = "Rust Fuzz Book: cargo-fuzz tutorial"
+url = "https://rust-fuzz.github.io/book/cargo-fuzz/tutorial.html"
+kind = "guide"
+note = "The shape of a fuzz target. The tool itself was not run."
+read = true
+
+[[sources]]
+title = "Rust Fuzz Book: structure-aware fuzzing"
+url = "https://rust-fuzz.github.io/book/cargo-fuzz/structure-aware-fuzzing.html"
+kind = "guide"
+note = "Typed inputs and differential fuzzing of a data structure. The introduction and first examples were read."
+read = true
+
+[[sources]]
+title = "Kani: first steps"
+url = "https://model-checking.github.io/kani/tutorial-first-steps.html"
+kind = "docs"
+note = "Proof harnesses and kani::any."
+read = true
+
+[[sources]]
+title = "Kani: loops, unwinding and bounds"
+url = "https://model-checking.github.io/kani/tutorial-loop-unwinding.html"
+kind = "docs"
+note = "Why a result is only as large as its bound."
+read = true
+
+[[sources]]
+title = "Kani: undefined behaviour"
+url = "https://model-checking.github.io/kani/undefined-behaviour.html"
+kind = "docs"
+note = "Which kinds of UB Kani does not detect."
+read = true
+
+[[sources]]
+title = "Kani: Rust feature support"
+url = "https://model-checking.github.io/kani/rust-feature-support.html"
+kind = "docs"
+note = "Only the part on uninitialised memory was relied on."
+read = true
+
+[[sources]]
+title = "cargo-careful"
+url = "https://github.com/RalfJung/cargo-careful"
+kind = "code"
+note = "README. The tool was not run."
+read = true
+
+[[sources]]
+title = "Rudra"
+url = "https://github.com/sslab-gatech/Rudra"
+kind = "code"
+note = "README only: three bug patterns with real examples. The paper was not read."
+read = true
+
+[verified]
+toolchain = "rustc and cargo 1.98.1; rustc 1.100.0-nightly (5a2be9f5f 2026-09-06) with Miri 0.1.0"
+date = "2026-11-26"
+platform = "aarch64-apple-darwin, Apple M4 Pro, macOS 27.0"
+not_checked = "cargo-fuzz, Kani and cargo-careful are not installed: the fuzz target and Kani harness are not compiled. MemorySanitizer, ThreadSanitizer, -Zmiri-many-seeds, trybuild and the CI schedule were not run. Miri runs far fewer random cases than native runs. The invariance compile-fail doctest was not shown to fail by mutating Shelf itself (only the same signature on a small stand-in type). Benchmark covers u64 only, on a machine that was not isolated; the cause of the differences was not profiled. Results about Miri, ASan and error text belong to these tool versions."

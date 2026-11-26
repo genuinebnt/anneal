@@ -1,0 +1,68 @@
+title = "Virtual memory"
+module = "Performance and systems"
+module_order = 7
+chapter = "Files, processes and the OS"
+chapter_order = 3
+order = 296
+kind = "recipe"
+lede = "A 4-level page-table + TLB + demand-paging simulator, and the real thing via mmap/mprotect."
+level = "advanced"
+code = ["examples/os_and_storage/virtual_memory_sim.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>understanding page faults</li><li>allocators</li><li>guard pages</li><li>memory-mapped IO</li><li>why RSS != virtual size</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+Part A simulates an x86-64-style MMU: 48-bit virtual addresses = 9+9+9+9 index bits + 12 offset bits, a radix page table whose leaf entries carry present/writable/accessed/dirty bits, a small set-associative LRU TLB, page faults, demand paging from a simulated disk and four page-replacement policies (FIFO, LRU, **clock**, **opt**) behind one trait.
+
+Part B uses the real kernel (Unix only): anonymous `mmap`, `mprotect`, lazy commit (RSS grows only when pages are touched), `madvise`, guard pages and controlled SIGSEGV/SIGBUS deaths observed from a forked child.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+virtual memory gives isolation, lazy allocation and the illusion of more memory than RAM. The costs are TLB misses (a 4-level walk = up to 4 memory reads) and page faults (microseconds to milliseconds).
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+replacement policies see the reference string; **opt** (Belady's **min**) looks at the future, so it is the lower bound. LRU and **opt** are "stack algorithms": more frames never means more faults. FIFO is not: Belady's anomaly.
+
+In the real VM, a fault on a PROT_NONE page or an unmapped page delivers SIGSEGV (macOS may deliver SIGBUS).
+
+After `munmap` the address range is unmapped (or, worse, reused by another allocation): touching it is undefined behaviour in Rust and a crash at best, silent corruption at worst. macOS differences: the page size is 16 KiB on Apple Silicon, `MADV_DONTNEED` is advisory (does not zero), and `ru_maxrss` is in bytes (KiB on Linux).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>allocators (jemalloc/glibc malloc use mmap + madvise to return memory)</li><li>language runtimes with guard pages for stack overflow detection</li><li>JVM/Go heap reservation (reserve with PROT_NONE, commit with mprotect)</li><li>databases and memory-mapped files</li><li>copy-on-write fork</li><li>OS course exercises on paging policies</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://pages.cs.wisc.edu/~remzi/OSTEP/vm-tlbs.pdf> <https://pages.cs.wisc.edu/~remzi/OSTEP/vm-beyondphys-policy.pdf> <https://man7.org/linux/man-pages/man2/mmap.2.html> <https://man7.org/linux/man-pages/man2/mprotect.2.html>
+"""
+
+[[sources]]
+title = "pages.cs.wisc.edu/~remzi/OSTEP/vm-tlbs.pdf"
+url = "https://pages.cs.wisc.edu/~remzi/OSTEP/vm-tlbs.pdf"
+
+[[sources]]
+title = "pages.cs.wisc.edu/~remzi/OSTEP/vm-beyondphys-policy.pdf"
+url = "https://pages.cs.wisc.edu/~remzi/OSTEP/vm-beyondphys-policy.pdf"
+
+[[sources]]
+title = "man7.org/linux/man-pages/man2/mmap.2.html"
+url = "https://man7.org/linux/man-pages/man2/mmap.2.html"
+
+[[sources]]
+title = "man7.org/linux/man-pages/man2/mprotect.2.html"
+url = "https://man7.org/linux/man-pages/man2/mprotect.2.html"

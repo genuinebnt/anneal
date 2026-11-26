@@ -1,0 +1,56 @@
+title = "Gorilla time-series compression"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Encodings and compression"
+chapter_order = 5
+order = 553
+kind = "recipe"
+lede = "Delta-of-delta timestamps, XOR floats, Chimp/Chimp128, an Elf-style eraser, simple8b integers, dictionary+RLE tags."
+level = "advanced"
+code = ["examples/encoding_compression/timeseries_gorilla.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any TSDB or metrics pipeline that must keep millions of (timestamp, float) samples in RAM or in small blocks.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+the Gorilla scheme (Facebook, 2015) is the in-memory chunk format of Prometheus/VictoriaMetrics-style engines (Prometheus's XOR chunks follow it closely) and of InfluxDB's float blocks; simple8b packs the integer columns of InfluxDB TSM files; dictionary + RLE is how columnar stores keep low-cardinality tag columns; Chimp and Elf are 2022-23 research improvements of the XOR idea.
+
+Course: CMU Database Group time-series talks (InfluxDB storage engine); paper: Gorilla (VLDB 2015), Chimp (VLDB 2022).
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+monitoring data is (timestamp, f64) pairs where consecutive timestamps are almost equally spaced and consecutive values are almost equal. A raw sample is 128 bits; Gorilla reports &#126;1.37 bytes per sample on Facebook's data.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Timestamps</div><div class="cb-g-says"><p>Delta-of-delta. dod = (t[i]-t[i-1]) - (t[i-1]-t[i-2]). Prefix codes: <code>0</code> (dod 0), <code>10</code>+7 bits, <code>110</code>+9, <code>1110</code>+12, <code>1111</code>+64 raw bits (the paper uses 32; 64 keeps i64 extremes exact). A perfectly regular series therefore costs <strong>one</strong> bit per timestamp.</p><p>All arithmetic is wrapping, so even i64::MIN..MAX jumps and out-of-order input round-trip.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Gorilla XOR</div><div class="cb-g-says"><p>X = bits(v) &#94; bits(prev). <code>0</code> = identical. <code>10</code> = x fits in the previous (leading, trailing) zero window: write only the window bits.</p><p><code>11</code> = new window: 5 bits leading zeros (capped at 31), 6 bits length (64 stored as 0), payload.</p></div></div><div class="cb-g-term"><div class="cb-g-name">CHIMP</div><div class="cb-g-says"><p>Observes that the window-reuse code is rarely worth it and trailing zeros only pay off when there are <strong>many</strong>. Flags (2 bits): <code>00</code> same, <code>01</code> trailing zeros &gt; 6 (3-bit rounded leading, 6-bit length, payload), <code>10</code> same rounded leading as before (write 64-lead bits), <code>11</code> new rounded leading.</p><p>Leading zeros are rounded <strong>down</strong> to {0,8,12,16,18,20,22,24} so 3 bits suffice. Constant series cost 2 bits per value (Gorilla: 1), noisy series cost less.</p></div></div><div class="cb-g-term"><div class="cb-g-name">CHIMP128</div><div class="cb-g-says"><p>CHIMP128 also considers the last 128 values: a hash on the low 14 bits finds a previous value whose XOR with the current one has &gt; 13 trailing zeros (6 + log2 128); the 7-bit ring index is the price. Wins on periodic data.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Elf-style (simplified)</div><div class="cb-g-says"><p>Sensor values are usually decimals like 21.3. If v has d decimal places, the low mantissa bits can be <strong>erased</strong> (zeroed) as long as formatting the erased value to d places and parsing it returns exactly v. The erased value XORs with long trailing-zero runs; the decoder restores v by <code>parse(format("{:.d}"))</code>.</p><p>We search the largest erasable bit count by binary search and <strong>verify</strong> it, so the scheme is lossless by construction (the real Elf derives it arithmetically and spends fewer header bits; here 1 flag bit + 4 bits for d).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Integers</div><div class="cb-g-says"><p>Delta (or delta-of-delta) + zigzag + simple8b: a 64-bit word = 4-bit selector + 60 payload bits holding 240..1 values; here selectors 0/1 are runs of <strong>zeros</strong> (InfluxDB uses ones), values &gt;= 2&#94;60 fall back to raw 8-byte mode.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Tags</div><div class="cb-g-says"><p>Dictionary (distinct strings once) + RLE of dictionary indexes as (index, run) varint pairs.</p><p><strong>Tests</strong>: 3000 random series (regular, jittery, bursty, constant, random walk, decimals, counters, random bits, NaN/inf/-0.0/ subnormals, i64 extreme timestamps, unsorted) round-trip <strong>bit-exact</strong> through all four value codecs; truncation is an error, not a panic; out-of-order <code>append</code> is rejected. Then a bits-per-sample table vs the raw 128 bits.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Pelkonen et al., "Gorilla: A Fast, Scalable, In-Memory Time Series Database", VLDB 2015  <https://www.vldb.org/pvldb/vol8/p1816-teller.pdf>
+
+Liakos et al., "Chimp: Efficient Lossless Floating Point Compression for Time Series Databases", VLDB 2022  <https://www.vldb.org/pvldb/vol15/p3058-liakos.pdf>
+
+<ul class="cb-g-reading"><li>Li et al., "Elf: Erasing-based Lossless Floating-Point Compression", VLDB 2023 (cited by title</li><li>link not checked)</li></ul>
+
+<ul class="cb-g-reading"><li>Anh &amp; Moffat, "Index compression using 64-bit words" (simple8b)</li><li>Software: Practice &amp; Experience 2010 (cited by title)</li></ul>
+"""
+
+[[sources]]
+title = "vldb.org/pvldb/vol8/p1816-teller.pdf"
+url = "https://www.vldb.org/pvldb/vol8/p1816-teller.pdf"
+
+[[sources]]
+title = "vldb.org/pvldb/vol15/p3058-liakos.pdf"
+url = "https://www.vldb.org/pvldb/vol15/p3058-liakos.pdf"

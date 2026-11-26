@@ -1,0 +1,38 @@
+title = "Serde beyond structs"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Encodings and compression"
+chapter_order = 5
+order = 555
+kind = "recipe"
+lede = "Tagged enums, renames, streaming NDJSON, tolerant line-by-line parsing."
+level = "simple"
+code = ["examples/text_and_parsing/ndjson_serde.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>event logs</li><li>SSE payloads</li><li>API request/response bodies</li><li>persisted event streams</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>event logs</li><li>webhooks</li><li>queue messages: tagged enums</li><li>tolerant NDJSON ingestion</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+`#[serde(tag = "type")]` turns an enum into JSON objects with a discriminator field: perfect for event streams. Newline-delimited JSON (one JSON value per line) can be consumed **lazily**: parse each line independently so one bad line does not lose the rest, and memory stays flat for huge logs.
+
+Docs: <https://serde.rs/enum-representations.html> and <https://serde.rs/attributes.html>
+"""
+
+[[sources]]
+title = "serde.rs/enum-representations.html"
+url = "https://serde.rs/enum-representations.html"
+
+[[sources]]
+title = "serde.rs/attributes.html"
+url = "https://serde.rs/attributes.html"

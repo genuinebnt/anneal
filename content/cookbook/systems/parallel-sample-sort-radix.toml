@@ -1,0 +1,52 @@
+title = "Parallel sample sort and parallel LSD/MSD radix sort"
+module = "Performance and systems"
+module_order = 7
+chapter = "High-performance computing"
+chapter_order = 4
+order = 306
+kind = "recipe"
+lede = "parallel sample sort and parallel LSD/MSD radix sort (histogram + prefix-sum scatter)"
+level = "advanced"
+code = ["examples/hpc/parallel_sample_sort_radix.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>database sort/merge-join/group-by</li><li>external sort run generation</li><li>building indexes</li><li>GPU/CPU sort libraries</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>sorting 64-bit keys fast (columnar databases, graph edge lists, suffix-array construction)</li><li>partitioning for hash/sort-merge joins</li><li>rendering (sort by depth/tile id). Course: CMU 15-445 (sorting and aggregation lecture)</li><li>CMU 15-418 (parallel sorting)</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Two families beat `sort_unstable` when n is large and the keys are integers:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Radix</div><div class="cb-g-says"><p>No comparisons. Per digit: histogram, exclusive prefix sum (= where each bucket starts), scatter. LSD (least significant digit first) needs d stable passes over everything; MSD partitions by the top digit and recurses into independent buckets (which is where the parallelism comes from).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Sample sort</div><div class="cb-g-says"><p>Pick p-1 splitters from a random sample, partition all keys into p ranges (each thread partitions its own chunk), then sort the ranges independently and in parallel. Comparison-based, works for any Ord key.</p><p>Parallel LSD: every thread histograms <strong>its</strong> chunk, a global prefix over (digit, thread) order gives each thread a private write cursor per digit, and the scatter needs no locks. Because chunks are ordered, the pass stays <strong>stable</strong>, which LSD requires.</p><p>The scatter writes to disjoint but interleaved destinations, which safe Rust cannot express as slices; we use <code>Vec&lt;AtomicU64&gt;</code> with Relaxed stores (same machine code as plain stores) instead of <code>unsafe</code>. Skew: sorted/reversed/duplicate-heavy inputs are where naive samples collapse.</p><p>Sample sort uses <strong>equality buckets</strong> (keys equal to a splitter go to their own bucket that needs no sorting; IPS4o idea), radix skips passes where one digit holds every key, and MSD starts at the highest byte where keys actually differ.</p><p>Memory-bandwidth view: one LSD pass reads n*8 and writes n*8 bytes, so 8 passes of 8 bits move ~128 bytes per key; 11-bit digits need 6 passes but the 2048-entry histogram/cursors still fit in L1. The printed table compares against a memcpy baseline. Signed ints and floats sort with the same code after a key transform (see <code>i64_key</code>, <code>f64_key</code>).</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Wikipedia, Radix sort <https://en.wikipedia.org/wiki/Radix_sort> and Samplesort <https://en.wikipedia.org/wiki/Samplesort>
+
+<ul class="cb-g-reading"><li>Axtmann et al., "Engineering In-place (Shared-memory) Sorting Algorithms" (IPS4o</li><li>cited by title, not re-read here)</li></ul>
+
+<https://doc.rust-lang.org/std/primitive.slice.html#method.sort_unstable> (pdqsort-based baseline) and the rayon crate's `par_sort_unstable`
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Radix_sort"
+url = "https://en.wikipedia.org/wiki/Radix_sort"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Samplesort"
+url = "https://en.wikipedia.org/wiki/Samplesort"
+
+[[sources]]
+title = "doc.rust-lang.org/std/primitive.slice.html#method.sort_unstable"
+url = "https://doc.rust-lang.org/std/primitive.slice.html#method.sort_unstable"

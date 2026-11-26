@@ -1,0 +1,339 @@
+title = "Concurrency control theory"
+module = "Databases"
+module_order = 8
+chapter = "Transactions and concurrency control"
+chapter_order = 6
+order = 401
+kind = "guide"
+lede = "ACID · schedules · conflicts and anomalies · conflict and view serializability · dependency graphs · recoverability · isolation levels"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Two problems</strong>: <strong>lost updates</strong> (concurrent writers: concurrency control) and <strong>durability</strong> (crashes: recovery).</li> <li><strong>Transaction</strong> = a sequence of reads and writes on shared data forming one logical unit, atomic by definition. The client defines its boundaries with <code>BEGIN</code> and <code>COMMIT</code>/<code>ABORT</code>. The DBMS only controls what is read from and written to the database: an email sent by an aborted transaction can't be unsent.</li> <li><strong>Strawman</strong>: run one transaction at a time on a <em>copy</em> of the whole database (shadow paging at its crudest). Correct, but gives up all parallelism. We want concurrent execution that is still <em>equivalent</em> to a serial one, while treating transactions fairly (no starvation). Temporary inconsistency is unavoidable and harmless; permanent inconsistency is not.</li> <li><strong>ACID</strong>: <strong>Atomicity</strong> (all or nothing; implemented by <em>logging</em> (undo records) or <em>shadow paging</em> (copy pages, publish on commit, rarely used because runtime is slower)); <strong>Consistency</strong> (constraints hold before and after; the application defines them, the DBMS enforces them; the trend is away from eventual consistency); <strong>Isolation</strong> (the illusion of running alone, equivalent to some serial order); <strong>Durability</strong> (committed effects survive power loss and crashes; logging or shadow paging on non-volatile storage).</li> <li><strong>Concurrency control protocol</strong>: how the DBMS chooses interleavings at runtime. <strong>Pessimistic</strong> (assume conflicts; prevent them) vs <strong>optimistic</strong> (assume rarity; detect and repair afterwards).</li> <li><strong>Schedules</strong>: the order in which operations execute. A <strong>serial</strong> schedule doesn't interleave transactions. Two schedules are <strong>equivalent</strong> if they leave the same database state for every initial state. A schedule is <strong>serializable</strong> if equivalent to <em>some</em> serial schedule (different serial orders may give different results; all are accepted). Serializable schedules of consistency-preserving transactions preserve consistency.</li> <li><strong>Conflict</strong> = two operations from different transactions on the same object with at least one write. <strong>R–W</strong> (unrepeatable read), <strong>W–R</strong> (dirty read), <strong>W–W</strong> (lost update / overwriting uncommitted data). Phantoms and write skew come later.</li> <li><strong>Conflict serializability</strong> (what real systems enforce): conflict-equivalent to a serial schedule, i.e. every pair of conflicting operations ordered the same way. Test with a <strong>dependency (precedence) graph</strong>: a node per transaction, an edge Tᵢ → Tⱼ when an operation of Tᵢ conflicts with a <em>later</em> operation of Tⱼ. <strong>Serializable ⇔ the graph is acyclic.</strong></li> <li><strong>View serializability</strong> is weaker (also admits <strong>blind writes</strong>), more permissive, but hard to enforce because the DBMS doesn't know how the application interprets values; not used in practice. <strong>Universe</strong>: serial ⊂ conflict-serializable ⊂ view-serializable ⊂ all schedules.</li> </ul>
+"""
+
+[[sections]]
+heading = "Schedules, enumerated"
+body = """
+<p>The lecture's example: <code>T1: A -= 100; B += 100</code> and <code>T2: A *= 1.06; B *= 1.06</code>, each a read-then-write on both objects. Counting <em>every</em> interleaving that keeps each transaction's own order:</p>
+
+```text title="4 operations per transaction, two transactions: C(8, 4) = 70 interleavings"
+70 interleavings: 2 serial, 12 conflict-serializable, 12 view-serializable, 58 NOT serializable
+```
+
+<p>Only <strong>2 of 70</strong> are serial, and only <strong>12</strong> are conflict-serializable. Those 12 are the target for any concurrency control protocol: <strong>maximize how many of them it allows, never produce one of the other 58.</strong> A two-phase lock manager (<a href="/cookbook/p/two-phase-locking">L18</a>) produces a subset of the 12; an optimistic protocol can allow more. The lecture's "bad" schedule ends with <code>A + B = 2114</code> instead of <code>2120</code>, which is precisely the cycle in its dependency graph:</p>
+
+```text
+R1(A) W1(A)  R2(A) W2(A) R2(B) W2(B)  R1(B) W1(B)
+                T1 → T2 via A (W1(A) before R2(A))
+                T2 → T1 via B (W2(B) before R1(B))        ⇒ cycle ⇒ not serializable
+```
+"""
+
+[[sections]]
+heading = "The theorem, verified by running it"
+body = """
+<p>The interpreter executes any schedule over a tiny deterministic database (each write stores a function of what that transaction has read). The test then checks, for <strong>all 70</strong> schedules:</p>
+
+<ul> <li>if the dependency graph is acyclic, the schedule produces the <strong>identical final database and identical read values</strong> as the serial schedule ordered by a topological sort of the graph;</li> <li>if it has a cycle, <strong>neither</strong> serial order (T1 T2, T2 T1) reproduces its result.</li> </ul>
+
+:::deeper Reference: schedule parser, dependency graph, serial order, view equivalence, recoverability classes, interpreter, interleaving enumerator
+```rust title="src/concurrency/schedule.rs"
+//! L17: schedules, conflict/view serializability, and recoverability classes.
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Op { R(u8, char), W(u8, char), C(u8), A(u8) }
+
+impl Op {
+    pub fn txn(&self) -> u8 { match *self { Op::R(t, _) | Op::W(t, _) | Op::C(t) | Op::A(t) => t } }
+    pub fn obj(&self) -> Option<char> { match *self { Op::R(_, o) | Op::W(_, o) => Some(o), _ => None } }
+}
+
+/// "R1(A) W2(A) C1 C2"  ->  [R(1,'A'), W(2,'A'), C(1), C(2)]
+pub fn parse(s: &str) -> Vec<Op> {
+    s.split_whitespace().map(|t| {
+        let n: u8 = t[1..2].parse().unwrap();
+        match t.as_bytes()[0] {
+            b'R' => Op::R(n, t.as_bytes()[3] as char),
+            b'W' => Op::W(n, t.as_bytes()[3] as char),
+            b'C' => Op::C(n),
+            b'A' => Op::A(n),
+            _ => panic!("bad op {t}"),
+        }
+    }).collect()
+}
+
+fn conflicts(a: &Op, b: &Op) -> bool {
+    a.txn() != b.txn() && a.obj().is_some() && a.obj() == b.obj() && matches!((a, b), (Op::W(..), _) | (_, Op::W(..)))
+}
+
+/// Dependency (precedence) graph: edge Ti -> Tj when an op of Ti conflicts with a LATER op of Tj.
+pub fn dependency_graph(s: &[Op]) -> BTreeMap<u8, BTreeSet<u8>> {
+    let mut g: BTreeMap<u8, BTreeSet<u8>> = s.iter().map(|o| (o.txn(), BTreeSet::new())).collect();
+    for (i, a) in s.iter().enumerate() { for b in &s[i + 1..] { if conflicts(a, b) { g.get_mut(&a.txn()).unwrap().insert(b.txn()); } } }
+    g
+}
+
+/// Topological order of the dependency graph (Kahn); None if it has a cycle.
+pub fn serial_order(s: &[Op]) -> Option<Vec<u8>> {
+    let g = dependency_graph(s);
+    let mut indeg: BTreeMap<u8, usize> = g.keys().map(|&k| (k, 0)).collect();
+    for tos in g.values() { for t in tos { *indeg.get_mut(t).unwrap() += 1; } }
+    let mut ready: Vec<u8> = indeg.iter().filter(|(_, d)| **d == 0).map(|(k, _)| *k).collect();
+    let mut out = vec![];
+    while let Some(n) = ready.pop() {
+        out.push(n);
+        for t in &g[&n] { let d = indeg.get_mut(t).unwrap(); *d -= 1; if *d == 0 { ready.push(*t); } }
+    }
+    (out.len() == g.len()).then_some(out)
+}
+pub fn is_conflict_serializable(s: &[Op]) -> bool { serial_order(s).is_some() }
+
+/// The serial schedule that runs each transaction's operations contiguously, in `order`.
+pub fn serial_schedule(s: &[Op], order: &[u8]) -> Vec<Op> { order.iter().flat_map(|&t| s.iter().filter(move |o| o.txn() == t).copied()).collect() }
+
+/// View signature: who each read reads from (None = initial value) and who writes each object last.
+fn view(s: &[Op]) -> (Vec<(u8, char, Option<u8>)>, BTreeMap<char, u8>) {
+    let (mut last_w, mut reads) = (HashMap::<char, u8>::new(), vec![]);
+    let mut counts: HashMap<(u8, char), usize> = HashMap::new();
+    for o in s {
+        match *o {
+            Op::R(t, x) => { *counts.entry((t, x)).or_default() += 1; reads.push((t, x, last_w.get(&x).copied())); }
+            Op::W(t, x) => { last_w.insert(x, t); }
+            _ => {}
+        }
+    }
+    reads.sort();
+    (reads, last_w.into_iter().collect())
+}
+pub fn view_equivalent(a: &[Op], b: &[Op]) -> bool { view(a) == view(b) }
+
+fn permutations(xs: &[u8]) -> Vec<Vec<u8>> {
+    if xs.len() <= 1 { return vec![xs.to_vec()]; }
+    (0..xs.len()).flat_map(|i| { let mut rest = xs.to_vec(); let x = rest.remove(i); permutations(&rest).into_iter().map(move |mut p| { p.insert(0, x); p }) }).collect()
+}
+
+pub fn is_view_serializable(s: &[Op]) -> bool {
+    let txns: Vec<u8> = s.iter().map(|o| o.txn()).collect::<BTreeSet<_>>().into_iter().collect();
+    permutations(&txns).iter().any(|p| view_equivalent(s, &serial_schedule(s, p)))
+}
+pub fn is_serial(s: &[Op]) -> bool {
+    let mut seen = BTreeSet::new(); let mut cur = None;
+    s.iter().all(|o| { let t = o.txn(); if cur != Some(t) { if !seen.insert(t) { return false; } cur = Some(t); } true })
+}
+
+// ---------------- recoverability classes -----------------------------------------------------------------
+/// Recoverable: if Ti reads data written by Tj, Tj must commit before Ti commits.
+pub fn is_recoverable(s: &[Op]) -> bool {
+    let pos = |op: Op| s.iter().position(|&o| o == op);
+    for (i, o) in s.iter().enumerate() {
+        let Op::R(t, x) = *o else { continue };
+        let Some(w) = s[..i].iter().rev().find_map(|p| match *p { Op::W(u, y) if y == x && u != t => Some(u), _ => None }) else { continue };
+        if let (Some(ct), Some(cw)) = (pos(Op::C(t)), pos(Op::C(w))) { if ct < cw { return false; } }
+        if pos(Op::C(t)).is_some() && pos(Op::A(w)).is_some() { return false; }          // committed after reading from an aborted txn
+        if pos(Op::C(t)).is_some() && pos(Op::C(w)).is_none() { return false; }
+    }
+    true
+}
+/// Avoids cascading aborts (ACA): reads only see COMMITTED writes.
+pub fn avoids_cascading_aborts(s: &[Op]) -> bool {
+    for (i, o) in s.iter().enumerate() {
+        let Op::R(t, x) = *o else { continue };
+        if let Some(w) = s[..i].iter().rev().find_map(|p| match *p { Op::W(u, y) if y == x && u != t => Some(u), _ => None }) {
+            if !s[..i].contains(&Op::C(w)) { return false; }
+        }
+    }
+    true
+}
+/// Strict: no read OR write of an object until the last transaction that wrote it has ended.
+pub fn is_strict(s: &[Op]) -> bool {
+    for (i, o) in s.iter().enumerate() {
+        let (t, x) = match *o { Op::R(t, x) | Op::W(t, x) => (t, x), _ => continue };
+        if let Some(w) = s[..i].iter().rev().find_map(|p| match *p { Op::W(u, y) if y == x && u != t => Some(u), _ => None }) {
+            if !s[..i].contains(&Op::C(w)) && !s[..i].contains(&Op::A(w)) { return false; }
+        }
+    }
+    true
+}
+
+// ---------------- an interpreter, to test the theorems against actual values -----------------------------
+/// Execute a schedule: every object starts at 0. W(t, x) writes (sum of values t has read so far) + 10·t + 1.
+/// Returns the final database and every read's observed value.
+pub fn run(s: &[Op]) -> (BTreeMap<char, i64>, Vec<(u8, char, i64)>) {
+    let (mut db, mut seen, mut reads): (BTreeMap<char, i64>, HashMap<u8, i64>, Vec<(u8, char, i64)>) = (BTreeMap::new(), HashMap::new(), vec![]);
+    for o in s {
+        match *o {
+            Op::R(t, x) => { let v = *db.entry(x).or_insert(0); *seen.entry(t).or_default() += v; reads.push((t, x, v)); }
+            Op::W(t, x) => { let v = *seen.get(&t).unwrap_or(&0) + 10 * t as i64 + 1; db.insert(x, v); }
+            _ => {}
+        }
+    }
+    reads.sort();
+    (db, reads)
+}
+
+/// All interleavings of the given per-transaction operation lists (each transaction's order preserved).
+pub fn interleavings(txns: &[Vec<Op>]) -> Vec<Vec<Op>> {
+    fn go(txns: &[Vec<Op>], pos: &mut Vec<usize>, cur: &mut Vec<Op>, out: &mut Vec<Vec<Op>>) {
+        if pos.iter().zip(txns).all(|(p, t)| *p == t.len()) { out.push(cur.clone()); return; }
+        for i in 0..txns.len() {
+            if pos[i] < txns[i].len() { cur.push(txns[i][pos[i]]); pos[i] += 1; go(txns, pos, cur, out); pos[i] -= 1; cur.pop(); }
+        }
+    }
+    let mut out = vec![]; go(txns, &mut vec![0; txns.len()], &mut vec![], &mut out); out
+}
+```
+:::
+
+```rust title="tests/schedule.rs"
+use relational::concurrency::schedule::*;
+use Op::*;
+
+#[test]
+fn the_lecture_bank_example() {
+    // T1: A -= 100; B += 100      T2: A *= 1.06; B *= 1.06      (each reads then writes)
+    let t1 = vec![R(1, 'A'), W(1, 'A'), R(1, 'B'), W(1, 'B')];
+    let t2 = vec![R(2, 'A'), W(2, 'A'), R(2, 'B'), W(2, 'B')];
+    let all = interleavings(&[t1.clone(), t2.clone()]);
+    let serial: Vec<_> = all.iter().filter(|s| is_serial(s)).collect();
+    let csr = all.iter().filter(|s| is_conflict_serializable(s)).count();
+    let vsr = all.iter().filter(|s| is_view_serializable(s)).count();
+    eprintln!("{} interleavings: {} serial, {} conflict-serializable, {} view-serializable, {} NOT serializable", all.len(), serial.len(), csr, vsr, all.len() - vsr);
+    assert_eq!(all.len(), 70);
+    assert_eq!(serial.len(), 2);
+
+    // THE theorem, checked by execution: every conflict-serializable schedule produces exactly the
+    // database and the read values of the serial schedule its dependency graph orders.
+    for s in &all {
+        match serial_order(s) {
+            Some(order) => assert_eq!(run(s), run(&serial_schedule(s, &order)), "{s:?}"),
+            None => {
+                // not conflict-serializable: no serial order reproduces it (for this deterministic interpreter)
+                let r = run(s);
+                assert!([vec![1u8, 2], vec![2, 1]].iter().all(|o| run(&serial_schedule(s, o)) != r), "{s:?}");
+            }
+        }
+    }
+    // The lecture's bad schedule: T1 touches A, T2 does both, T1 touches B afterwards.
+    let bad = parse("R1(A) W1(A) R2(A) W2(A) R2(B) W2(B) R1(B) W1(B)");
+    assert!(!is_conflict_serializable(&bad));
+    let g = dependency_graph(&bad);
+    assert!(g[&1].contains(&2) && g[&2].contains(&1), "cycle T1 <-> T2");
+}
+
+#[test]
+fn universe_of_schedules() {
+    // serial ⊂ conflict-serializable ⊂ view-serializable ⊂ all, and each inclusion is strict:
+    let blind = parse("R1(A) W2(A) W1(A) W3(A)");                 // the classic blind-write schedule
+    assert!(!is_conflict_serializable(&blind));                    // cycle T1 -> T2 -> T1 in the dependency graph
+    assert!(is_view_serializable(&blind));                         // but equivalent to T1 T2 T3: the final write is T3's either way
+    assert!(!is_serial(&parse("R1(A) R2(A) W1(A) W2(A)")) && !is_view_serializable(&parse("R1(A) R2(A) W1(A) W2(A)")));   // lost update
+    let ser = parse("R1(A) W1(A) R2(A) W2(A)");
+    assert!(is_serial(&ser) && is_conflict_serializable(&ser));
+    let interleaved = parse("R1(A) R2(B) W1(A) W2(B)");            // not serial, but conflict-serializable
+    assert!(!is_serial(&interleaved) && is_conflict_serializable(&interleaved));
+    // over every interleaving of three small transactions, the inclusions hold
+    let ts = vec![vec![R(1, 'A'), W(1, 'B')], vec![R(2, 'B'), W(2, 'A')], vec![W(3, 'A'), W(3, 'B')]];
+    let all = interleavings(&ts);
+    let (mut s, mut c, mut v) = (0, 0, 0);
+    for x in &all {
+        let (is_s, is_c, is_v) = (is_serial(x), is_conflict_serializable(x), is_view_serializable(x));
+        assert!(!is_s || is_c, "serial => CSR"); assert!(!is_c || is_v, "CSR => VSR");
+        s += is_s as usize; c += is_c as usize; v += is_v as usize;
+    }
+    eprintln!("3 txns × 2 ops: {} interleavings → {s} serial ⊂ {c} conflict-serializable ⊂ {v} view-serializable", all.len());
+}
+
+#[test]
+fn recoverability_hierarchy() {
+    // strict ⊂ ACA ⊂ recoverable ⊂ all
+    let dirty_read_commit_first = parse("W1(A) R2(A) C2 C1");      // T2 commits after reading T1's uncommitted write, before T1
+    assert!(!is_recoverable(&dirty_read_commit_first));
+    let cascading = parse("W1(A) R2(A) W2(B) C1 C2");              // recoverable, but if T1 aborts T2 must abort too
+    assert!(is_recoverable(&cascading) && !avoids_cascading_aborts(&cascading));
+    let aca_not_strict = parse("W1(A) W2(A) C1 C2");               // overwrites uncommitted data: no cascading abort, but not strict
+    assert!(avoids_cascading_aborts(&aca_not_strict) && !is_strict(&aca_not_strict));
+    let strict = parse("W1(A) C1 R2(A) W2(A) C2");
+    assert!(is_strict(&strict) && avoids_cascading_aborts(&strict) && is_recoverable(&strict));
+    let abort_after_read = parse("W1(A) R2(A) A1 C2");              // T2 committed data derived from an aborted txn
+    assert!(!is_recoverable(&abort_after_read));
+}
+```
+
+```text title="3 transactions of 2 operations each: 90 interleavings"
+6 serial ⊂ 10 conflict-serializable ⊂ 10 view-serializable      (the inclusions are strict only with blind writes, below)
+```
+"""
+
+[[sections]]
+heading = "Why view serializability exists and why nobody uses it"
+body = """
+```text
+R1(A) W2(A) W1(A) W3(A)       T1 reads A, T2 and T1 write it, T3 blind-writes it
+  dependency graph:  R1(A) → W2(A) gives T1 → T2;   W2(A) → W1(A) gives T2 → T1   ⇒ cycle ⇒ NOT conflict-serializable
+  but it's view-equivalent to  T1 T2 T3: T1 reads the initial A (same), and T3's write is last (same), so every value anyone can observe is the same.
+```
+
+<p>Blind writes (a write that overwrites a value without reading it) are what separate the two. Recognizing view serializability is NP-complete (Papadimitriou 1979), and it requires knowing the transactions in advance. Conflict serializability is a graph-cycle check, which is why it's the criterion every real protocol implements.</p>
+"""
+
+[[sections]]
+heading = "Recoverability: surviving aborts"
+body = """
+<p>Serializability talks about committed transactions. It says nothing about what happens when one <strong>aborts</strong> after others have read its writes:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Class</th> <th>Rule</th> <th>Failure when violated</th> </tr> </thead> <tbody> <tr> <td><strong>Recoverable</strong></td> <td>if Tᵢ reads from Tⱼ, Tⱼ commits before Tᵢ does</td> <td>Tᵢ commits data derived from a write that Tⱼ later aborts: unrecoverable</td> </tr> <tr> <td><strong>Avoids cascading aborts (ACA)</strong></td> <td>transactions read only <em>committed</em> writes</td> <td>one abort drags down every transaction that read its data (a <em>cascade</em>)</td> </tr> <tr> <td><strong>Strict</strong></td> <td>no read <em>or write</em> of an object until its last writer has committed or aborted</td> <td>undo needs the <strong>before-image</strong>, which a later overwrite would destroy; strict schedules let abort restore old values simply</td> </tr> </tbody> </table></div>
+
+```text
+strict ⊂ avoids cascading aborts ⊂ recoverable ⊂ all
+W1(A) R2(A) C2 C1        not recoverable   (T2 committed after reading T1's uncommitted write)
+W1(A) R2(A) W2(B) C1 C2  recoverable, but T1's abort would cascade to T2
+W1(A) W2(A) C1 C2        no cascades, not strict (T2 overwrites uncommitted data)
+W1(A) C1 R2(A) W2(A) C2  strict
+```
+
+<p>Strict two-phase locking (<a href="/cookbook/p/two-phase-locking">L18</a>) produces exactly the strict schedules, and that's why it is the textbook protocol: serializable <strong>and</strong> trivially recoverable.</p>
+"""
+
+[[sections]]
+heading = "Anomalies and isolation levels"
+body = """
+<p>Full serializability costs concurrency, so SQL lets applications choose weaker <strong>isolation levels</strong>, each defined by the anomalies it permits. The ANSI definitions (1992) were ambiguous, and the standard is usually supplemented by Berenson et al.'s critique (1995) and Adya's formalization (1999):</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Anomaly</th> <th>What happens</th> </tr> </thead> <tbody> <tr> <td><strong>Dirty read</strong></td> <td>read another transaction's uncommitted write</td> </tr> <tr> <td><strong>Non-repeatable read</strong></td> <td>read X twice and see different committed values</td> </tr> <tr> <td><strong>Lost update</strong></td> <td>two read-modify-write cycles interleave; one update vanishes</td> </tr> <tr> <td><strong>Phantom</strong></td> <td>the same range or predicate query returns different <em>sets of rows</em></td> </tr> <tr> <td><strong>Write skew</strong></td> <td>two transactions read overlapping data, each writes a <em>different</em> item, and together violate an invariant (two on-call doctors both go off call)</td> </tr> </tbody> </table></div>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Isolation level</th> <th>Dirty read</th> <th>Non-repeatable</th> <th>Lost update</th> <th>Phantom</th> <th>Write skew</th> </tr> </thead> <tbody> <tr> <td>Read Uncommitted</td> <td>possible</td> <td>possible</td> <td>possible</td> <td>possible</td> <td>possible</td> </tr> <tr> <td>Read Committed</td> <td>–</td> <td>possible</td> <td>possible</td> <td>possible</td> <td>possible</td> </tr> <tr> <td>Repeatable Read (ANSI, lock-based)</td> <td>–</td> <td>–</td> <td>–</td> <td>possible</td> <td>possible</td> </tr> <tr> <td><strong>Snapshot Isolation</strong> (PostgreSQL's "Repeatable Read", Oracle's "Serializable")</td> <td>–</td> <td>–</td> <td>– (first-committer-wins)</td> <td>– (for snapshot reads)</td> <td><strong>possible</strong></td> </tr> <tr> <td><strong>Serializable</strong></td> <td>–</td> <td>–</td> <td>–</td> <td>–</td> <td>–</td> </tr> </tbody> </table></div>
+
+<p>Two traps worth memorizing: <strong>snapshot isolation is not serializable</strong> (write skew survives it, see <a href="/cookbook/p/multi-version-concurrency-control">L20</a>), and the same <em>name</em> means different things in different systems. PostgreSQL's <code>REPEATABLE READ</code> is snapshot isolation; its <code>SERIALIZABLE</code> is SSI (serializable snapshot isolation, Cahill et al. 2008); Oracle's <code>SERIALIZABLE</code> is snapshot isolation. Kyle Kingsbury's <a href="https://jepsen.io/consistency" target="_blank" rel="noreferrer">Jepsen</a> and Martin Kleppmann's <a href="https://github.com/ept/hermitage" target="_blank" rel="noreferrer">Hermitage</a> test what each product really provides.</p>
+
+<aside data-call="production"><b>What systems actually offer</b><ul> <li><strong>PostgreSQL</strong>: read committed (default), repeatable read (= SI), serializable (SSI with predicate locks).</li> <li><strong>MySQL/InnoDB</strong>: repeatable read (default, with next-key/gap locks, so it prevents most phantoms), serializable (turns plain reads into shared locks).</li> <li><strong>SQL Server</strong>: read committed (locking by default, or snapshot-based with RCSI), snapshot, serializable.</li> <li><strong>Oracle</strong>: read committed (default), "serializable" (= SI), read-only.</li> <li><strong>CockroachDB, Spanner, FoundationDB</strong>: serializable by default; <strong>TiDB</strong>: SI by default. The trend the lecture mentions: away from weak and eventual consistency, because developers cannot reason about the anomalies.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "A Critique of ANSI SQL Isolation Levels"
+url = "https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/tr-95-51.pdf"
+
+[[sources]]
+title = "Weak Consistency: A Generalized Theory and Optimistic Implementations for Distributed Transactions"
+url = "https://pmg.csail.mit.edu/papers/adya-phd.pdf"
+
+[[sources]]
+title = "Concurrency Control and Recovery in Database Systems"
+url = "https://www.microsoft.com/en-us/research/people/philbe/book/"
+
+[[sources]]
+title = "The Transaction Concept: Virtues and Limitations"
+url = "https://jimgray.azurewebsites.net/papers/thetransactionconcept.pdf"
+
+[[sources]]
+title = "Elle: Inferring Isolation Anomalies from Experimental Observations"
+url = "https://arxiv.org/abs/2003.10554"
+
+[[sources]]
+title = "talk"
+url = "https://www.youtube.com/watch?v=OPJ_IcdSqig"

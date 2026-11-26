@@ -1,0 +1,52 @@
+title = "Smart pointers"
+module = "Rust language"
+module_order = 1
+chapter = "Ownership and borrowing"
+chapter_order = 1
+order = 6
+kind = "recipe"
+lede = "Box, Rc, Arc, Cell, RefCell, Weak, and when to use each."
+level = "simple"
+code = ["examples/language/smart_pointers.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>recursive types</li><li>shared ownership</li><li>graphs with parent links</li><li>shared state across threads</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>trees with parent links (DOM, ASTs)</li><li>shared config</li><li>Arc&lt;Mutex&gt; state</li><li>recursive types</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Box&lt;T>          one owner, heap allocated. Recursive types, trait objects (`Box<dyn Trait>`), big values.
+
+```text
+Rc<T>           MANY owners, single thread, immutable. Clone = bump a counter (cheap).
+```
+
+Arc&lt;T>          Rc but thread-safe (atomic counter). Use with Mutex/RwLock to mutate. Cell&lt;T>         interior mutability for small Copy values (get/set), no borrowing at all.
+
+RefCell&lt;T>      interior mutability checked **at runtime** (panics if you break the borrow rules).
+
+```text
+Weak<T>         non-owning pointer from Rc/Arc: break cycles (child -> parent).
+```
+
+Guidance: reach for plain ownership and indices first. `Rc<RefCell<T>>` everywhere is a smell (see index_graph/arena_ids).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/book/ch15-00-smart-pointers.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch15-00-smart-pointers.html"
+url = "https://doc.rust-lang.org/book/ch15-00-smart-pointers.html"

@@ -1,0 +1,73 @@
+title = "Optimizer statistics"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 394
+kind = "recipe"
+lede = "Histograms (equi-width, equi-depth, V-optimal, MaxDiff), MCV lists, NDV sketches, sampling, multi-column stats."
+level = "advanced"
+code = ["examples/database/statistics_histograms_sketches.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>cost-based optimizers</li><li><strong>Analyze</strong> / <strong>update statistics</strong> implementations</li><li>approximate query engines</li><li>data catalogs</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+PostgreSQL `ANALYZE` (most-common-values list plus an equi-depth histogram of the rest, `n_distinct`, extended statistics for column groups and functional dependencies), SQL Server and Oracle histograms (equi-height, hybrid, frequency), Spark/Trino column statistics (NDV via HyperLogLog, min/max, null counts), BigQuery and Redis `PFCOUNT` style HLL merging, Count-Min sketches for heavy hitters in stream processors, auto-analyze triggers based on modification counters.
+
+Course: CMU 15-799 Query Optimization (Spring 2025), lecture 12 (Cost Models: Statistics)
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+the statistics an optimizer keeps per column and how each one turns into a **selectivity** (fraction of rows) for `=`, `<` and range predicates. Everything is checked against ground truth obtained by executing the predicate on the generated column.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">EQUI-WIDTH</div><div class="cb-g-says"><p>Buckets cover equal slices of the value domain. Cheap, but a hot value drags a whole wide bucket's mass onto its neighbours (uniformity-within-bucket assumption: every value of a bucket gets count / ndv).</p></div></div><div class="cb-g-term"><div class="cb-g-name">EQUI-DEPTH (equi-height)</div><div class="cb-g-says"><p>Buckets hold ~equal row counts, so dense regions get narrow buckets and skew is isolated.</p></div></div><div class="cb-g-term"><div class="cb-g-name">V-OPTIMAL</div><div class="cb-g-says"><p>The partition into B buckets that <strong>minimises</strong> the within-bucket sum of squared deviations of the value frequencies (dynamic programming, O(B * D&#94;2) with prefix sums). Provably the best B-bucket histogram for that error metric.</p></div></div><div class="cb-g-term"><div class="cb-g-name">MAXDIFF</div><div class="cb-g-says"><p>Put the B-1 bucket boundaries between the neighbouring values whose frequencies differ the most. Linear time, close to V-optimal in practice.</p></div></div><div class="cb-g-term"><div class="cb-g-name">MCV + histogram (PostgreSQL style)</div><div class="cb-g-says"><p>Remember the k most common values <strong>exactly</strong>, and keep an equi-depth histogram of the rest. The head of a Zipf distribution is where the damage of bucket averaging is largest, and MCVs remove it.</p></div></div><div class="cb-g-term"><div class="cb-g-name">NDV</div><div class="cb-g-says"><p>Sampling estimators (naive, <strong>gee</strong> = sqrt(n/r) * f1 + sum_{j&gt;=2} f_j, Chao1 = d + f1&#94;2 / (2 f2)) against HyperLogLog, which sees every row once, and whose sketches <strong>merge</strong> by register-wise max, so per-partition sketches combine into the global one.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Count-min</div><div class="cb-g-says"><p>+ top-k candidates for skew, Hoeffding confidence bounds for sampled selectivities (sample size vs error curve).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Multi-column</div><div class="cb-g-says"><p>Independence multiplies marginals and fails on correlated columns; a 2-D grid histogram, a column-group NDV (HLL on the pair) and a functional-dependency strength ndv(a)/ndv(a,b) repair it.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Maintenance</div><div class="cb-g-says"><p>Incremental bucket counters on insert/delete, an auto-analyze staleness rule (mods &gt; 50 + 10% of rows) and a skew check (largest bucket / mean bucket) deciding between "keep patching" and "rebuild".</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+every plan choice multiplies estimated selectivities; a factor-100 error on one predicate flips join orders and access paths. Statistics are a space/accuracy/maintenance trade-off, so each structure here is measured, not just described.
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+equi-depth beats equi-width on Zipf equality estimates; V-optimal SSE &lt;= equi-depth, MaxDiff and equi-width SSE for the same bucket count; MCV makes the Zipf head exact; HLL error &lt; 6% and its partition merge equals the one-pass sketch; Count-Min never underestimates and finds the true heavy hitters;
+
+Hoeffding bound coverage >= 95% and error shrinks &#126;1/sqrt(m); 2-D histogram beats independence on correlated columns; FD strength is exactly 1.0 for a true FD; maintained histograms beat stale ones.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Cost Models: Statistics, CMU 15-799 lecture 12 <https://15799.courses.cs.cmu.edu/spring2025/schedule.html> Every Row Counts: Combining Sketches and Sampling for Accurate Group-By Result Estimates (Freitag et al., CIDR 2019) Effective Use of Block-Level Sampling in Statistics Estimation (Chaudhuri et al., SIGMOD 2004)
+
+```text
+PostgreSQL planner statistics https://www.postgresql.org/docs/current/planner-stats.html
+HyperLogLog https://en.wikipedia.org/wiki/HyperLogLog   Count-min sketch https://en.wikipedia.org/wiki/Count%E2%80%93min_sketch
+```
+"""
+
+[[sources]]
+title = "15799.courses.cs.cmu.edu/spring2025/schedule.html"
+url = "https://15799.courses.cs.cmu.edu/spring2025/schedule.html"
+
+[[sources]]
+title = "postgresql.org/docs/current/planner-stats.html"
+url = "https://www.postgresql.org/docs/current/planner-stats.html"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/HyperLogLog"
+url = "https://en.wikipedia.org/wiki/HyperLogLog"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Count%E2%80%93min_sketch"
+url = "https://en.wikipedia.org/wiki/Count%E2%80%93min_sketch"

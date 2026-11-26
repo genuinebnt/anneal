@@ -1,0 +1,75 @@
+title = "3D math from scratch"
+module = "Complete projects"
+module_order = 13
+chapter = "Graphics"
+chapter_order = 2
+order = 668
+kind = "recipe"
+lede = "Vec3, Mat4, projections, quaternions, gimbal lock, ray intersections"
+level = "intermediate"
+code = ["examples/graphics/vec3_matrix_quaternion.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>renderers</li><li>game engines</li><li><strong>Cad</strong> viewers</li><li>robotics kinematics</li><li>anything that moves points in 3D</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+the small kit every 3D program needs, written with plain f64 and no crates: a `Vec3` with dot/cross/reflect/ refract/Schlick, a row-major `Mat4` acting on **column** vectors (p' = M &#42; p), look-at and perspective/orthographic projection, unit quaternions with SLERP, Euler angles (and why they gimbal-lock), barycentric coordinates, and the three classic ray tests (Moller-Trumbore triangle, sphere, AABB slab).
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+these formulas are tiny but easy to get subtly wrong (handedness, row vs column, w division, epsilon). Each is checked here against a known value or a property test with a seeded RNG, so a wrong sign fails loudly.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+reflect(i, n)  = i - 2 (i.n) n                          (n unit) refract(i,n,e) = e i + (e c - sqrt(1 - e&#94;2 (1 - c&#94;2))) n, c = -i.n, e = n1/n2; radicand &lt; 0 => total internal reflection
+
+```text
+Schlick(c)     = R0 + (1 - R0)(1 - c)^5, R0 = ((n1-n2)/(n1+n2))^2
+```
+
+point vs direction: points use w = 1 (translation applies, then divide by w), directions use w = 0 (no translation). perspective (OpenGL, right-handed, camera looks down -z, NDC cube [-1,1]&#94;3):
+
+```text
+x' = x/(r), y' = y/t scaled by n; z' = (-(f+n) z - 2fn)/(f-n) before dividing by w = -z.
+The near-plane corner (r, t, -n) maps to (1, 1, -1); the far-plane corner (r f/n, t f/n, -f) maps to (1, 1, 1).
+```
+
+quaternion q = (cos(a/2), sin(a/2) axis); rotate v: q v q&#42;; SLERP(a,b,t) = sin((1-t)W)/sin(W) a + sin(tW)/sin(W) b, cos(W) = a.b (negate b if the dot is negative to take the short arc). Moller-Trumbore: solve o + t d = (1-u-v) a + u b + v c with Cramer's rule: e1 = b-a, e2 = c-a, p = d x e2,
+
+```text
+det = e1.p, u = (o-a).p / det, q = (o-a) x e1, v = d.q / det, t = e2.q / det.
+```
+
+**Gimbal lock**: with R = Rz(yaw) Ry(pitch) Rx(roll), at pitch = 90 degrees R depends only on yaw - roll, so one degree of freedom is lost: many (yaw, roll) pairs give the **same** rotation. Quaternions have no such singularity.
+
+**Shadow acne**: a ray starting exactly on a surface can re-hit it at t &#126; 1e-7 from rounding; fix with a t_min epsilon or by offsetting the origin along the normal.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>games (cameras, skeletal animation with slerp)</li><li><strong>Cad/cam</strong> viewers</li><li>film VFX and offline renderers</li><li>robotics (orientation interpolation, frame transforms)</li><li>synthetic image generation for ML datasets</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://raytracing.github.io/> and <https://www.pbr-book.org/>
+"""
+
+[[sources]]
+title = "raytracing.github.io"
+url = "https://raytracing.github.io/"
+
+[[sources]]
+title = "pbr-book.org"
+url = "https://www.pbr-book.org/"

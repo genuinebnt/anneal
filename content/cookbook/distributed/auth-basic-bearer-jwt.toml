@@ -1,0 +1,66 @@
+title = "Authentication on the wire"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Authentication and web security"
+chapter_order = 2
+order = 524
+kind = "recipe"
+lede = "Basic, API keys, Bearer tokens and a from-scratch HS256 JWT"
+level = "advanced"
+code = ["examples/web/auth_basic_bearer_jwt.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+API security, auth middleware.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+four schemes behind one axum server: HTTP Basic (parse `Authorization: Basic`, 401 + `WWW-Authenticate` challenge), API keys (`X-API-Key`, stored hashed), opaque Bearer tokens (RFC 6750) and a JWT (RFC 7519, HS256) implemented from scratch: base64url without padding, `header.payload.signature`, HMAC-SHA256, `exp/nbf/iat/iss/aud/sub` validation with an injectable clock and leeway, `kid` key rotation, all behind an axum `FromRequestParts` extractor.
+
+The classic attacks are mounted and **rejected**: `alg:none`, algorithm confusion, tampered payload, expired / not-yet-valid tokens, wrong audience/issuer, unknown `kid`, plus the timing leak of a naive signature compare versus a constant-time one.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+authentication bugs are catastrophic and almost always come from trusting the token to describe how it should be verified. Rules used here: the **verifier** fixes the algorithm and the key set; the signature is checked **before** any claim is believed; claims are checked against the server's expectations.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+401 = "I do not know who you are" (always with `WWW-Authenticate`); 403 = "I know you, you may not". The access log records `auth=present|absent`, never the header value (asserted). Refresh flow: short-lived access JWT + single-use rotating refresh token stored hashed; reusing a consumed refresh token signals theft and revokes the whole token family.
+
+RS256 (asymmetric) needs big-integer RSA and is not implemented: with it, pin the allowed `alg` per key so a public key can never be reused as an HMAC secret (shown in the confusion demo with a deliberately vulnerable verifier).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>protecting REST APIs and microservices (service-to-service JWTs)</li><li>mobile/<strong>spa</strong> access+refresh tokens</li><li>webhook/API-key partners</li><li>simple internal tools behind Basic over TLS</li><li>key rotation without downtime</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://datatracker.ietf.org/doc/html/rfc7519" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc7519</a></li><li><a href="https://datatracker.ietf.org/doc/html/rfc6750" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc6750</a></li><li><a href="https://datatracker.ietf.org/doc/html/rfc9110" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc9110</a></li><li><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication" target="_blank" rel="noreferrer">https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication</a></li></ul>
+"""
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc7519"
+url = "https://datatracker.ietf.org/doc/html/rfc7519"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc6750"
+url = "https://datatracker.ietf.org/doc/html/rfc6750"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc9110"
+url = "https://datatracker.ietf.org/doc/html/rfc9110"
+
+[[sources]]
+title = "developer.mozilla.org/en-US/docs/Web/HTTP/Authentication"
+url = "https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication"

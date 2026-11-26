@@ -1,0 +1,10 @@
+error[E0309]: cannot cast `int` as `bool`
+ --> e0309_invalid_cast.peb:2:13
+  |
+2 |     let b = 1 as bool;
+  |             ^^^^^^^^^ invalid cast
+  |
+  = note: `as` only converts `bool` to `int`
+  = help: compare with `!= 0` instead
+
+error: aborting due to 1 previous error

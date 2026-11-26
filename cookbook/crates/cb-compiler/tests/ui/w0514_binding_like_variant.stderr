@@ -1,0 +1,17 @@
+warning[W0514]: this pattern binds a new variable named `None`, it does not match a variant
+ --> w0514_binding_like_variant.peb:5:9
+  |
+5 |         None => println("none"),
+  |         ^^^^ this is a binding
+  |
+  = help: to match the variant, qualify it: `Option::None`
+
+warning[W0501]: unused variable: `None`
+ --> w0514_binding_like_variant.peb:5:9
+  |
+5 |         None => println("none"),
+  |         ^^^^ this variable is never read
+  |
+  = help: if this is intentional, prefix it with an underscore: `_None`
+
+warning: 2 warnings emitted

@@ -1,0 +1,56 @@
+title = "A mini DEFLATE"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Encodings and compression"
+chapter_order = 5
+order = 551
+kind = "recipe"
+lede = "LZ77 hash-chain matcher + canonical Huffman + CRC32 framing."
+level = "advanced"
+code = ["examples/encoding_compression/compression_lz77_huffman.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>file/wire formats</li><li>HTTP bodies</li><li>archives</li><li>log shipping</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a compressor in two stages, like gzip/zlib. Stage 1 (LZ77) removes **redundancy**: repeated byte strings become (length, distance) back-references into a 32 KiB sliding window. Stage 2 (Huffman) removes **skewed symbol frequencies**: common symbols get short bit codes.
+
+Entropy is the floor for stage 2 (order-0 Shannon entropy, bits/byte); redundancy (repeats, long-range structure) is what stage 1 exploits and entropy can't see. Random bytes have no redundancy and maximal entropy, so nothing helps: we fall back to a **stored** block.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+(1) a hash chain over 3-byte prefixes finds earlier matches (`head[h]` = newest position with hash h, `prev[i]` = older position with the same hash); we walk at most MAX_CHAIN links, trading ratio for speed. (2) Lazy matching: if the match at i+1 is longer, emit a literal now.
+
+(3) Symbols: 0..=255 literals, 256 = end-of-block, 257.. = match lengths 3..=258; distances use 30 log-spaced buckets plus raw extra bits. (4) Code lengths come from a Huffman tree built with a BinaryHeap, capped at 15 bits by flattening the frequencies; codes are **canonical** so only the length table is stored. (5) Frame: magic, mode, length, CRC32.
+
+The decoder treats input as hostile: every read is bounds-checked, output size is capped by the header, and every loop consumes bits, so corrupt data returns `Err` and never panics or spins.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>gzip/zlib/PNG-style <strong>deflate</strong> streams</li><li>HTTP Content-Encoding</li><li>backup/archive tools</li><li>columnar storage and log blocks (usually LZ4/zstd-class codecs, same LZ + entropy-coder shape)</li><li>RLE for fax-like or sparse bitmaps. Real code: use the <code>flate2</code> crate or <code>zstd</code></li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+```text
+https://www.rfc-editor.org/rfc/rfc1951  (DEFLATE)   https://docs.rs/flate2
+```
+"""
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc1951"
+url = "https://www.rfc-editor.org/rfc/rfc1951"
+
+[[sources]]
+title = "docs.rs/flate2"
+url = "https://docs.rs/flate2"

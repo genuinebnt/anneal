@@ -1,0 +1,67 @@
+title = "Crash recovery (ARIES)"
+module = "Databases"
+module_order = 8
+chapter = "Logging and recovery"
+chapter_order = 7
+order = 415
+kind = "guide"
+lede = "LSNs · commit and abort · compensation log records · fuzzy checkpoints · analysis, redo, undo"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>ARIES</strong> (IBM, early 1990s, DB2) is the recovery algorithm nearly every serious DBMS descends from. Three principles: <strong>① write-ahead logging</strong> (STEAL + NO-FORCE), <strong>② repeat history during redo</strong> (restore the <em>exact</em> pre-crash state, including the effects of transactions that will then be undone), <strong>③ log changes during undo</strong> (undo writes <strong>compensation log records</strong>, so a crash during recovery never repeats work).</li> <li><strong>Log sequence numbers</strong>: every record has a globally unique, increasing <strong>LSN</strong>. <strong>pageLSN</strong> (in each page) = newest update applied to it. <strong>flushedLSN</strong> (memory) = last LSN durable. <strong>recLSN</strong> (in the dirty page table) = oldest update that dirtied a page since its last flush. <strong>lastLSN</strong> (in the active transaction table) = a transaction's newest record. <strong>MasterRecord</strong> (disk) = LSN of the last checkpoint. Rule: a page may be written only when <code>pageLSN ≤ flushedLSN</code>.</li> <li><strong>Commit</strong>: append COMMIT, <strong>flush the log</strong> through it (sequential, synchronous), acknowledge, later append TXN-END (no flush). <strong>Abort</strong>: append ABORT, walk the transaction's <code>prevLSN</code> chain backwards, for each update write a <strong>CLR</strong> and restore the old value, then TXN-END. A <strong>CLR</strong> has all the fields of an update plus <strong>undoNextLSN</strong> (the next record still to be undone); CLRs are redo-only and <strong>never undone</strong>; the abort needn't wait for them to be flushed.</li> <li><strong>Tables</strong>: <strong>ATT</strong> (active transaction table: id, status Running/Committing/Undo, lastLSN; holds every transaction without a TXN-END) and <strong>DPT</strong> (dirty page table: page → recLSN; every dirty page regardless of who dirtied it).</li> <li><strong>Checkpoints</strong>: <em>non-fuzzy</em> halts transactions and flushes (consistent but a stall); a <em>slightly better</em> blocking version records the ATT and DPT without waiting for transactions; <strong>fuzzy</strong> (ARIES) lets everything keep running: <strong>CHECKPOINT-BEGIN</strong>, then a <strong>CHECKPOINT-END</strong> carrying the ATT and DPT <em>as of the begin record</em>; the MasterRecord is updated to the begin LSN once the end record is durable.</li> <li><strong>Recovery = three passes.</strong> <strong>Analysis</strong>: from the checkpoint, scan forward; TXN-END removes a transaction from the ATT; any other record adds it with status <em>Undo</em>, COMMIT flips it to <em>Commit</em>; an UPDATE/CLR on a page not in the DPT adds it with that LSN as recLSN. <strong>Redo</strong>: from the <strong>smallest recLSN</strong> in the DPT, re-apply every update and CLR unless ① the page isn't in the DPT, ② its LSN is below the page's recLSN, or ③ the page on disk already has <code>pageLSN ≥ LSN</code>; redoing sets pageLSN, logs nothing and forces nothing; at the end write TXN-END for committed transactions. <strong>Undo</strong>: reverse every transaction still in <em>Undo</em> status, always taking the largest lastLSN next, writing a CLR for each undone update; when all are done, flush the log and open for business.</li> </ul>
+"""
+
+[[sections]]
+heading = "The timeline"
+body = """
+```text
+log:   ──────[ckpt begin]──[ckpt end]──────────────────────────────── crash ▼
+                │                                            
+ Analysis       └──────────────────────────────────────────►   rebuild ATT + DPT           (forward from the MasterRecord)
+ Redo                    ◄ smallest recLSN in DPT ─────────►   repeat history, losers too   (forward)
+ Undo           ◄───────────────────── oldest record of any loser ◄──────────────────────   (backward, writing CLRs)
+```
+
+<p>Why <strong>repeat history</strong> instead of redoing only winners? Because pages and the log are about <em>states</em>. Redoing everything leaves each page exactly as it was at the crash, so undo can work from exact before-images; CLRs, written during undo, mean the <em>undo itself</em> is part of history, so a second crash redoes it rather than redoing it differently.</p>
+"""
+
+[[sections]]
+heading = "A worked example"
+body = """
+<p>T1 updates A (uncommitted); T2 updates B and commits. The commit forces the log, which carries T1's update too. Then the buffer manager steals T1's dirty page (legal: its log record is durable). Crash.</p>
+
+```text
+disk before restart:   A = 10 (uncommitted, stolen)     B = 0 (committed, never forced)
+analysis:  ATT = {T1: Undo}   DPT = {page(A): rec 2, page(B): rec 4}
+redo:      page(A) already has the update (pageLSN ≥ LSN) → skipped      page(B): apply B = 20
+undo:      T1 is a loser → write CLR(A := 0, undoNext = nil), apply it, write TXN-END(T1)
+after:     A = 0, B = 20.  A second crash right here: analysis sees TXN-END(T1), so undo has nothing to do.
+```
+
+<p>That is exactly the walkthrough test in <a href="/cookbook/p/build-wal-and-aries">the build section</a>: <code>redo_applied = 1</code>, <code>clrs_written = 1</code>, <code>losers = 1</code>, then a second restart writes <strong>0</strong> CLRs.</p>
+"""
+
+[[sections]]
+heading = "The three passes in detail"
+body = """
+<p><strong>Analysis</strong> only reads the log and builds two tables, no page I/O at all. Edge cases: a transaction in the checkpoint's ATT that ended <em>after</em> the checkpoint began must not be resurrected by the checkpoint-end record (remember TXN-ENDs you've seen); the checkpoint's DPT recLSN values are merged with what the scan finds, taking the older; and <strong>transaction ids must survive a restart</strong> (store the next id in the checkpoint) or a new transaction reuses an id that old log records still carry.</p>
+
+<p><strong>Redo</strong> is a forward scan from <code>min(recLSN)</code>. The three skip tests are ordered cheapest first; only the third needs the page itself from disk. Each applied record bumps the page's pageLSN to the record's LSN. Redo must decide from the <strong>DPT as analysis left it</strong>: if you flush pages during redo and <em>remove them from the DPT</em>, later records of that page get skipped as "not dirty", and an undo already in the log is silently lost (a bug the crash-injection harness found in the reference implementation).</p>
+
+<p><strong>Undo</strong> uses a max-heap on <code>lastLSN</code> so the log is read once, newest to oldest, across all losers. On an UPDATE: write the CLR (with <code>undoNextLSN = prevLSN</code>), apply the before-image. On a CLR: don't undo it, jump to its <code>undoNextLSN</code>. On BEGIN: write TXN-END.</p>
+
+<aside data-call="warning"><b>Gotchas</b><ul> <li><strong>Check <code>pageLSN</code> before redoing</strong>, always. Physical set-value records are idempotent, but physiological ones ("insert tuple at slot 3", "increment counter") are not, and redoing them twice corrupts the page.</li> <li><strong>Don't write dirty pages during analysis</strong>; during redo do it only through the same WAL-rule path.</li> <li><strong>A CLR is not an UPDATE</strong>: it has no before-image and is never undone. Rolling back a rollback is how you get unbounded log growth during repeated crashes.</li> <li><strong>Index and structure changes</strong> (page splits) are logged as <em>nested top actions</em>: a record sequence that, once completed, is never undone even if the transaction rolls back. Otherwise undo of "insert key" would try to undo a split other transactions already relied on (ARIES/IM).</li> <li><strong>Logical undo</strong> is needed when physical undo is impossible (the row moved to another page): undo re-executes the inverse <em>operation</em> ("delete key k") instead of restoring bytes.</li> <li><strong>Locks on restart</strong>: ARIES can accept new transactions after redo while undo continues in the background, by re-acquiring locks for the losers during analysis. Most simple implementations just finish undo first.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "ARIES"
+url = "https://web.stanford.edu/class/cs345d-01/rl/aries.pdf"
+
+[[sources]]
+title = "Accelerated Database Recovery"
+url = "https://learn.microsoft.com/en-us/sql/relational-databases/accelerated-database-recovery-concepts"

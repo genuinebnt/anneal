@@ -1,0 +1,109 @@
+title = "Testing and debugging compilers"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Systems: compilers and languages"
+chapter_order = 9
+order = 155
+kind = "guide"
+lede = "Csmith, YARPGen, EMI, crater, C-Reduce, Alive2 · Beyond golden files"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>Compilers are unusually testable. There's an executable specification (an interpreter), programs are data, and outputs can be compared. A production compiler uses layers:</p>
+
+<ol> <li><b>Unit tests</b> on passes and data structures.</li> <li><b>Golden IR tests</b> (FileCheck, filetests).</li> <li><b>UI tests</b> of diagnostics (rustc's <code>tests/ui</code>).</li> <li><b>Execution tests</b> of compiled programs.</li> <li><b>Conformance suites</b>: test262 for JavaScript, the Lox suite for you.</li> <li><b>Randomized testing</b> to find what nobody thought to write.</li> <li><b>Ecosystem testing</b>: rustc's <em>crater</em> builds and tests every crate on crates.io before risky changes.</li> </ol>
+
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Technique</th><th>Oracle</th><th>Finds</th></tr></thead> <tbody> <tr><td>Differential testing (Csmith, YARPGen)</td><td>Two compilers, or two optimization levels, must agree</td><td>Miscompiles; Csmith found hundreds in GCC and LLVM</td></tr> <tr><td>Equivalence modulo inputs (EMI)</td><td>Deleting code that doesn't run on a given input must not change the output</td><td>Optimizer bugs, using real programs as seeds</td></tr> <tr><td>Metamorphic testing</td><td>Semantics-preserving rewrites of the input must preserve output</td><td>Bugs with no second implementation to compare against</td></tr> <tr><td>Grammar-based fuzzing</td><td>No crash, no hang, no internal compiler error (ICE)</td><td>Parser and front-end crashes</td></tr> <tr><td>Well-typed program generation</td><td>Type checker accepts; runtime agrees with the reference interpreter</td><td>Type checker, optimizer and runtime bugs together</td></tr> <tr><td>Translation validation (Alive2)</td><td>An SMT solver proves output refines input</td><td>Unsound peephole rules</td></tr> <tr><td>Mutation testing (<code>cargo-mutants</code>)</td><td>A mutated compiler should fail some test</td><td>Gaps in the test suite itself</td></tr> </tbody> </table></div>
+
+```rust title="A random Lox program generator for jlox vs clox differential testing (rand 0.8)"
+use rand::Rng;
+
+fn gen_expr(rng: &mut impl Rng, depth: u32, vars: &[String]) -> String {
+    if depth == 0 || rng.gen_bool(0.3) {
+        return match rng.gen_range(0..3) {
+            0 if !vars.is_empty() => vars[rng.gen_range(0..vars.len())].clone(),
+            1 => rng.gen_range(0..100).to_string(),
+            _ => ["true", "false", "nil"][rng.gen_range(0..3)].to_string(),
+        };
+    }
+    let ops = ["+", "-", "*", "<", "==", "and", "or"];
+    let op = ops[rng.gen_range(0..ops.len())];
+    format!("({} {op} {})", gen_expr(rng, depth - 1, vars), gen_expr(rng, depth - 1, vars))
+}
+
+pub fn gen_program(rng: &mut impl Rng, stmts: usize) -> String {
+    let (mut vars, mut out) = (Vec::new(), String::new());
+    for i in 0..stmts {
+        let e = gen_expr(rng, 4, &vars);
+        if rng.gen_bool(0.5) {
+            let v = format!("v{i}");
+            out += &format!("var {v} = {e};\\n");
+            vars.push(v);
+        } else {
+            out += &format!("print {e};\\n");
+        }
+    }
+    out
+}
+// Run both binaries on each program; stdout, stderr and exit code must match.
+// Type errors are fine; both must report the same runtime error on the same line.
+```
+"""
+
+[[sections]]
+heading = "Test-case reduction"
+body = """
+<p>A fuzzer's failing input is usually thousands of lines. <b>Delta debugging</b> (Zeller's <em>ddmin</em>) shrinks it automatically. Try removing chunks, keep any removal that still fails, and refine the chunk size. C-Reduce adds language-aware transformations. Perses and <code>treereduce</code> reduce along the grammar, so every candidate still parses.</p>
+
+```rust title="ddmin (complement-removal variant)"
+/// Shrink `input` (e.g. the lines of a program) while `fails` keeps returning true.
+pub fn ddmin<T: Clone>(mut input: Vec<T>, fails: impl Fn(&[T]) -> bool) -> Vec<T> {
+    let mut n = 2;
+    while input.len() >= 2 {
+        let chunk = input.len().div_ceil(n);
+        let mut reduced = false;
+        for i in 0..n {
+            let (lo, hi) = (i * chunk, ((i + 1) * chunk).min(input.len()));
+            if lo >= hi { continue; }
+            let without: Vec<T> = input[..lo].iter().chain(&input[hi..]).cloned().collect();
+            if fails(&without) {
+                input = without;
+                n = (n - 1).max(2);
+                reduced = true;
+                break;
+            }
+        }
+        if !reduced {
+            if n >= input.len() { break; }            // already at single-element granularity
+            n = (n * 2).min(input.len());
+        }
+    }
+    input
+}
+```
+
+```rust title="A minimal FileCheck: ordered substring checks over IR output"
+pub fn filecheck(output: &str, checks: &[&str]) -> Result<(), String> {
+    let mut lines = output.lines();
+    'next: for want in checks {
+        for line in lines.by_ref() {
+            if line.contains(want) { continue 'next; }
+        }
+        return Err(format!("CHECK not found (in order): {want}"));
+    }
+    Ok(())
+}
+```
+
+<div class="cb-g-tip"><h3>Debugging a miscompile</h3> <ol> <li>Reduce the program.</li> <li>Bisect which pass breaks it by running passes one at a time, or using LLVM's <code>-opt-bisect-limit</code>.</li> <li>Diff the IR before and after that pass.</li> <li>Run the verifier.</li> </ol> <p>Bisect the <em>compiler's history</em> with <code>git bisect</code>, or with <code>cargo-bisect-rustc</code> for rustc. Record ICEs with a stack trace and a request to report them, the way rustc prints “this is a bug” with a link.</p></div>
+"""
+
+[[sources]]
+title = "Zeller et al., The Fuzzing Book"
+url = "https://www.fuzzingbook.org"
+
+[[sources]]
+title = "rustc dev guide: testing"
+url = "https://rustc-dev-guide.rust-lang.org/tests/intro.html"

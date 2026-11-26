@@ -1,0 +1,44 @@
+title = "Count-Min Sketch + heavy hitters"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Hashing and probabilistic structures"
+chapter_order = 1
+order = 164
+kind = "recipe"
+lede = "Count-Min Sketch + heavy hitters (top-k) in sublinear memory."
+level = "intermediate"
+code = ["examples/data_structures/count_min_sketch.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>frequency estimation over huge streams</li><li>trending keys</li><li>hot-key detection</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a `depth x width` grid of counters. Each row has its own hash function; `add(key)` bumps one cell per row, `estimate(key)` returns the **minimum** of the key's cells. **Why** min: collisions only ever **add** to a cell, so every cell >= true count, and the least-polluted row is the best guess.
+
+Hence `estimate >= true` **always** (one-sided error, no underestimates). **Guarantee**: choose width = ceil(e/eps), depth = ceil(ln(1/delta)). Then with probability >= 1-delta, `estimate <= true + eps * N` where N is the total count added.
+
+Memory is independent of key count. **Variants**: conservative update only raises cells that are below (current min + c); still never underestimates, and in practice the error is much smaller (but it cannot support deletions).
+
+TOP-K: a sketch cannot enumerate keys, so we pair it with a tiny candidate set + min-heap: on each event, estimate the key and keep it if it beats the smallest candidate (lazy-deletion heap).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>per-key rate estimation and hot-key / heavy-hitter detection in network and ad-click streams</li><li>"trending" counters</li><li>approximate frequency tables inside query engines and stream processors</li><li>rate limiting by key without storing every key</li><li>as the building block of sketch-based telemetry. Mergeable by cell-wise addition</li><li>so shards can be combined</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Count%E2%80%93min_sketch>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Count%E2%80%93min_sketch"
+url = "https://en.wikipedia.org/wiki/Count%E2%80%93min_sketch"

@@ -1,0 +1,36 @@
+title = "Cancellation safety"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Async Rust"
+chapter_order = 4
+order = 261
+kind = "recipe"
+lede = "Why `select!` can silently lose data, and the fix."
+level = "advanced"
+code = ["examples/async/async_cancel_safety.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any loop with `select!`/`timeout` around a multi-step async operation (framing, handshakes, batching).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+every select!/timeout loop: do not lose half-read frames or half-built batches.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+When a `select!` branch loses, its future is DROPPED mid-way. If that future had already taken data out of a channel/socket but not yet returned it, the data is gone. `mpsc::Receiver::recv` is cancel-safe (nothing is consumed unless it returns).
+
+A user-written `async fn` that does recv + recv is **not**: the first value lives only in the future's local variable. Fix: keep progress in state **owned by the caller** (outside the future) and only await cancel-safe primitives inside `select!`.
+
+Tokio documents the cancel-safety of every method: <https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety>
+"""
+
+[[sources]]
+title = "docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety"
+url = "https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety"

@@ -1,0 +1,13 @@
+fn main() {
+    let mut xs = [3, 1, 2];
+    push(xs, 10);
+    xs.push(20);
+    println(to_str(len(xs)) + " " + to_str(xs.len()));
+    let last = pop(xs);
+    println(to_str(last));
+    xs[0] = xs[0] * 100;
+    xs[1] += 5;
+    println(to_str(xs[0]) + " " + to_str(xs[1]) + " " + to_str(xs[3]));
+    let words = chars("héy");
+    println(to_str(len(words)) + ":" + words[1]);
+}

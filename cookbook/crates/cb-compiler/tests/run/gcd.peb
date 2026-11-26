@@ -1,0 +1,8 @@
+fn gcd(a: int, b: int) -> int {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+fn main() {
+    println(to_str(gcd(48, 18)));
+    println(to_str(gcd(17, 5)));
+    println(to_str(gcd(0, 9)));
+}

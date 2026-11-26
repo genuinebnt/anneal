@@ -1,0 +1,64 @@
+title = "Metrics prometheus histograms load testing"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Methods: benchmarking and profiling"
+chapter_order = 6
+order = 149
+kind = "recipe"
+lede = "a small metrics library with Prometheus text output, and a load-testing lab: coordinated omission, Little's law, M/M/c, the knee"
+level = "advanced"
+code = ["examples/dev_tools/metrics_prometheus_histograms_load_testing.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>instrumenting a service</li><li>reading dashboards correctly</li><li>not being fooled by your own load test</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Prometheus client libraries</li><li>HdrHistogram and DDSketch latency recording</li><li>wrk2 / k6 / Vegeta constant-rate load generation</li><li>capacity planning from queueing formulas</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Metric types**: **counter** only goes up (a restart resets it to 0, which `rate` must handle). **Gauge** goes both ways. **Histogram** counts observations into buckets with upper bounds `le`; buckets are **cumulative** in the exposition, and because they are counters they can be summed across instances, then turned into a quantile.
+
+**A summary** computes quantiles in the client: percentiles of different instances **cannot** be averaged. The summary here is a log-bucketed sketch (the DDSketch idea): bucket i holds (g&#94;(i-1), g&#94;i] with g = (1+a)/(1-a), so the reported value is within relative error `a` of the true quantile **value**, and sketches merge.
+
+A fixed-bucket histogram guarantees only the right **bucket**; interpolation inside it is a guess. **Labels** multiply: every distinct label set is a new time series. A user id as a label is an outage of your monitoring system, so the registry caps series per metric and folds the excess into one `__overflow__` series (and counts it).
+
+**Load generators**: **closed** loop = N users, each waits for the reply before sending again: when the server stalls, the tester **stops sending**, so the stall yields N bad samples instead of hundreds. That is **coordinated omission**. **Open** loop = requests arrive on a schedule regardless of replies, and latency is measured from the **intended** send time.
+
+If you only have closed-loop data taken at a fixed intended rate, HdrHistogram's correction back-fills: a sample v > interval also records v-i, v-2i, ...; it is an **estimate** that assumes the missing requests would have waited out the same stall; it ignores the time the backlog takes to drain, so it errs low (quantified and asserted below).
+
+**Queueing**: Little's law L = lambda x W holds for any stable system and any discipline. M/M/1: W = 1/(mu - lambda). M/M/c: W = C/(c mu - lambda) + 1/mu with C the Erlang C probability of waiting.
+
+Latency explodes as utilisation -> 1. Simulations below use a **virtual** clock in microseconds; arrivals and service times are seeded exponential draws.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://prometheus.io/docs/instrumenting/exposition_formats/> and <https://prometheus.io/docs/practices/histograms/>
+
+<https://github.com/HdrHistogram/HdrHistogram> and <https://arxiv.org/abs/1908.10693> (DDSketch)
+"""
+
+[[sources]]
+title = "prometheus.io/docs/instrumenting/exposition_formats"
+url = "https://prometheus.io/docs/instrumenting/exposition_formats/"
+
+[[sources]]
+title = "prometheus.io/docs/practices/histograms"
+url = "https://prometheus.io/docs/practices/histograms/"
+
+[[sources]]
+title = "github.com/HdrHistogram/HdrHistogram"
+url = "https://github.com/HdrHistogram/HdrHistogram"
+
+[[sources]]
+title = "arxiv.org/abs/1908.10693"
+url = "https://arxiv.org/abs/1908.10693"

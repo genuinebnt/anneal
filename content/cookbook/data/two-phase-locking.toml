@@ -1,0 +1,367 @@
+title = "Two-phase locking"
+module = "Databases"
+module_order = 8
+chapter = "Transactions and concurrency control"
+chapter_order = 6
+order = 402
+kind = "guide"
+lede = "locks vs latches · 2PL, strict and rigorous · deadlock detection and prevention · intention locks · lock manager"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Locks vs latches</strong>: latches protect the DBMS's <em>internal data structures</em> from threads, are held for microseconds, and are managed by discipline (ordering, crabbing). <strong>Locks</strong> protect <em>database objects</em> from <em>transactions</em>, are held until commit, and live in a central <strong>lock manager</strong> because the DBMS can't control application logic. The lock table needn't be durable: after a crash every active transaction aborts anyway.</li> <li><strong>Modes</strong>: <strong>S</strong> (many readers) and <strong>X</strong> (one writer). Locks alone don't give serializability; a <em>protocol</em> for how they are used does.</li> <li><strong>2PL</strong>: <em>growing</em> phase (only acquire), then <em>shrinking</em> phase (only release; begins at the first release). Pessimistic, needs no knowledge of future queries, <strong>guarantees an acyclic dependency graph</strong>: the order in which transactions reach their <em>lock point</em> is a valid serial order. Weaknesses: <strong>cascading aborts</strong> (releases before commit expose dirty data), dirty reads, deadlocks, and it rejects some serializable schedules.</li> <li><strong>Strong strict 2PL (rigorous)</strong>: release <em>everything at commit or abort</em>. Schedules are <strong>strict</strong>, so abort is a plain restore of before-images, there are no cascades, and it is what the DBMS actually runs. <em>Strict 2PL</em> (release only S locks early) is weaker. Universe: serial ⊂ strong strict 2PL ⊂ conflict-serializable ⊂ view-serializable ⊂ all.</li> <li><strong>Deadlock</strong> = a cycle of waiters. <strong>Detection</strong>: a <strong>waits-for graph</strong> (edge Tᵢ → Tⱼ: Tᵢ waits for a lock Tⱼ holds); a background thread looks for cycles (no latches needed: a missed cycle is found next pass) and aborts a <strong>victim</strong>. Frequency trades CPU against how long deadlocked transactions stall. Victim heuristics: age, progress, locks held, work to undo, number of past restarts (anti-starvation). Rollback fully or to a <strong>savepoint</strong>.</li> <li><strong>Prevention</strong>: transactions get a <strong>timestamp priority</strong> (older = higher), and it is reused on restart so nobody starves. <strong>Wait-Die</strong>: older requester <em>waits</em>, younger requester <em>dies</em>. <strong>Wound-Wait</strong>: older requester <em>wounds</em> (aborts) the holder, younger requester <em>waits</em>. Mnemonic for X-Y: if the requester has <em>higher</em> priority it does X, otherwise Y. Both only allow waiting in one direction, so no cycles.</li> <li><strong>Granularity</strong>: locking a billion rows one at a time kills the lock manager; locking the table for one read kills parallelism. A <strong>hierarchy</strong> (database → table → page → tuple → attribute) with <strong>intention locks</strong>: <strong>IS</strong>, <strong>IX</strong>, <strong>SIX</strong> on ancestors announce explicit locks below. Escalate to a coarser lock when a transaction holds many fine ones.</li> <li><strong>In practice</strong>: applications rarely lock explicitly, but <code>SELECT … FOR UPDATE / FOR SHARE</code> avoids the read-then-upgrade deadlock in read-modify-write code, and <code>SKIP LOCKED</code> turns a table into a work queue.</li> </ul>
+"""
+
+[[sections]]
+heading = "Lock manager design"
+body = """
+<p>The table maps each resource to a <strong>queue</strong>: the <em>granted group</em> and a FIFO of <em>waiting requests</em>. Five rules make it correct and fair:</p>
+
+<ol> <li><strong>Compatibility matrix.</strong> A request is granted when its mode is compatible with every holder:</li> </ol>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th></th> <th>IS</th> <th>IX</th> <th>S</th> <th>SIX</th> <th>X</th> </tr> </thead> <tbody> <tr> <td><strong>IS</strong></td> <td>✓</td> <td>✓</td> <td>✓</td> <td>✓</td> <td></td> </tr> <tr> <td><strong>IX</strong></td> <td>✓</td> <td>✓</td> <td></td> <td></td> <td></td> </tr> <tr> <td><strong>S</strong></td> <td>✓</td> <td></td> <td>✓</td> <td></td> <td></td> </tr> <tr> <td><strong>SIX</strong></td> <td>✓</td> <td></td> <td></td> <td></td> <td></td> </tr> <tr> <td><strong>X</strong></td> <td></td> <td></td> <td></td> <td></td> <td></td> </tr> </tbody> </table></div>
+
+<ol start="2"> <li><strong>FIFO.</strong> A fresh request is also blocked by <em>incompatible requests queued ahead of it</em>. Without this, a steady stream of readers starves a waiting writer forever.</li> <li><strong>Re-entrancy and upgrade.</strong> A transaction asking for a mode it already covers returns immediately; asking for more computes the <em>least upper bound</em> (IX + S = SIX, anything + X = X) and waits only for <em>other holders</em>. Upgrades jump the queue; otherwise an upgrade would wait behind requests that wait for it.</li> <li><strong>Intention locks go on top-down, release bottom-up.</strong> To lock a row in S take IS on the table first; to lock a row in X take IX. A table-level S (scan) then conflicts with IX, so writers below can't sneak in, while IS/IS and IX/IX proceed in parallel.</li> <li><strong>Release only at commit/abort</strong> (strong strict 2PL). <code>release_all(t)</code> is the only exit; an <code>unlock</code> for plain 2PL flips the transaction into <em>shrinking</em> and every later <code>lock</code> is refused.</li> </ol>
+
+<aside data-call="rust"><b>Rust design notes</b><ul> <li><strong>One <code>Mutex&lt;Inner&gt;</code> plus one <code>Condvar</code></strong> is enough to be correct and simple; waiters re-check their predicate after every <code>notify_all</code> (spurious wakeups are normal). A production lock manager shards the table by <code>hash(resource)</code> and gives each queue its own mutex and condvar (or parks threads individually) to avoid the thundering herd.</li> <li><strong>Abort as a value</strong>: <code>Result&lt;(), Abort&gt;</code> makes "you were chosen as victim" an ordinary error that <code>?</code> propagates up to the retry loop, where the transaction's undo and <code>release_all</code> run. Never abort by panicking.</li> <li><strong>Condemned flags</strong>: a victim might be <em>running</em>, not waiting, when it is wounded. The manager records it in a <code>victims</code> map; the next <code>lock()</code> or an explicit <code>check()</code> before commit reports it. Waiting victims are woken by <code>notify_all</code> and see the flag.</li> <li><strong>Resources are <code>Copy</code> enums</strong> (<code>Table(u32)</code>, <code>Row(u32, u64)</code>): cheap hash keys, no allocation per lock.</li> <li><strong><code>try_lock</code></strong> shares the same code path with <code>block = false</code>: that is <code>NOWAIT</code> / <code>SKIP LOCKED</code> for free.</li> </ul></aside>
+
+:::deeper Reference: lock manager (modes, queues, upgrades, wait-die, wound-wait, waits-for detector)
+```rust title="src/txn/lock_manager.rs"
+//! Transaction lock manager: S/X/IS/IX/SIX modes, FIFO queues, upgrades,
+//! three deadlock policies (detection, wait-die, wound-wait), strict 2PL release.
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Condvar, Mutex};
+use std::time::Duration;
+
+/// Doubles as the priority: a smaller id is an older, higher-priority transaction.
+pub type TxnId = u64;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum Mode { IS, IX, S, SIX, X }
+
+impl Mode {
+    /// Compatibility matrix (symmetric). Rows/cols: IS IX S SIX X.
+    pub fn compatible(self, other: Mode) -> bool {
+        const T: [[bool; 5]; 5] = [
+            [true, true, true, true, false],
+            [true, true, false, false, false],
+            [true, false, true, false, false],
+            [true, false, false, false, false],
+            [false, false, false, false, false],
+        ];
+        T[self as usize][other as usize]
+    }
+
+    /// `self` grants at least everything `other` does.
+    pub fn covers(self, other: Mode) -> bool {
+        use Mode::*;
+        self == other
+            || matches!((self, other), (X, _) | (SIX, IS | IX | S) | (S, IS) | (IX, IS))
+    }
+
+    /// Least upper bound: the weakest mode that covers both (used for upgrades).
+    pub fn lub(self, other: Mode) -> Mode {
+        use Mode::*;
+        if self.covers(other) { self }
+        else if other.covers(self) { other }
+        else if matches!((self, other), (IX, S) | (S, IX)) { SIX }
+        else { X }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum Resource { Table(u32), Row(u32, u64) }
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Policy { Detect, WaitDie, WoundWait }
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Abort { Deadlock, Die, Wounded, Shrinking }
+
+struct Req { txn: TxnId, mode: Mode }
+
+#[derive(Default)]
+struct Queue { granted: Vec<(TxnId, Mode)>, waiting: VecDeque<Req> }
+
+impl Queue {
+    /// Everyone `t` must wait for to get `target`: incompatible holders, plus (for a
+    /// fresh request) incompatible requests queued ahead of it, which keeps the queue FIFO.
+    fn blockers(&self, t: TxnId, target: Mode, upgrade: bool) -> Vec<TxnId> {
+        let mut out: Vec<TxnId> = self.granted.iter()
+            .filter(|&&(o, m)| o != t && !m.compatible(target)).map(|&(o, _)| o).collect();
+        if !upgrade {
+            for w in self.waiting.iter().take_while(|w| w.txn != t) {
+                if !w.mode.compatible(target) { out.push(w.txn); }
+            }
+        }
+        out
+    }
+}
+
+#[derive(Default)]
+struct Inner {
+    q: HashMap<Resource, Queue>,
+    held: HashMap<TxnId, Vec<Resource>>,
+    shrinking: HashSet<TxnId>,
+    victims: HashMap<TxnId, Abort>,
+}
+
+pub struct LockManager { policy: Policy, inner: Mutex<Inner>, cv: Condvar }
+
+impl LockManager {
+    pub fn new(policy: Policy) -> Self {
+        Self { policy, inner: Mutex::new(Inner::default()), cv: Condvar::new() }
+    }
+
+    pub fn lock(&self, t: TxnId, r: Resource, m: Mode) -> Result<(), Abort> {
+        self.acquire(t, r, m, true).map(|_| ())
+    }
+
+    /// Never blocks: `Ok(false)` if the lock isn't immediately available (SKIP LOCKED).
+    pub fn try_lock(&self, t: TxnId, r: Resource, m: Mode) -> Result<bool, Abort> {
+        self.acquire(t, r, m, false)
+    }
+
+    /// Row lock with the matching intention lock on its table.
+    pub fn lock_row(&self, t: TxnId, table: u32, row: u64, m: Mode) -> Result<(), Abort> {
+        assert!(matches!(m, Mode::S | Mode::X));
+        self.lock(t, Resource::Table(table), if m == Mode::S { Mode::IS } else { Mode::IX })?;
+        self.lock(t, Resource::Row(table, row), m)
+    }
+
+    fn acquire(&self, t: TxnId, r: Resource, want: Mode, block: bool) -> Result<bool, Abort> {
+        let mut g = self.inner.lock().unwrap();
+        loop {
+            let inn = &mut *g;
+            if let Some(&why) = inn.victims.get(&t) {
+                if let Some(q) = inn.q.get_mut(&r) { q.waiting.retain(|w| w.txn != t); }
+                return Err(why);
+            }
+            if inn.shrinking.contains(&t) { return Err(Abort::Shrinking); }
+            let q = inn.q.entry(r).or_default();
+            let held = q.granted.iter().find(|g| g.0 == t).map(|g| g.1);
+            let target = match held {
+                Some(h) if h.covers(want) => return Ok(true),
+                Some(h) => h.lub(want),
+                None => want,
+            };
+            let blockers = q.blockers(t, target, held.is_some());
+            if blockers.is_empty() {
+                q.waiting.retain(|w| w.txn != t);
+                match held {
+                    Some(_) => q.granted.iter_mut().find(|g| g.0 == t).unwrap().1 = target,
+                    None => {
+                        q.granted.push((t, target));
+                        inn.held.entry(t).or_default().push(r);
+                    }
+                }
+                return Ok(true);
+            }
+            if !block {
+                q.waiting.retain(|w| w.txn != t);
+                return Ok(false);
+            }
+            match self.policy {
+                Policy::Detect => {}
+                // older waits for younger; a younger requester dies instead of waiting
+                Policy::WaitDie => if blockers.iter().any(|&b| b < t) {
+                    q.waiting.retain(|w| w.txn != t);
+                    return Err(Abort::Die);
+                },
+                // a younger holder is wounded; the requester then waits for it to let go
+                Policy::WoundWait => {
+                    let mut any = false;
+                    for &b in blockers.iter().filter(|&&b| b > t) {
+                        any |= inn.victims.insert(b, Abort::Wounded).is_none();
+                    }
+                    if any { self.cv.notify_all(); }
+                }
+            }
+            let q = inn.q.get_mut(&r).unwrap();
+            if !q.waiting.iter().any(|w| w.txn == t) {
+                let req = Req { txn: t, mode: target };
+                // upgrades jump the queue: otherwise two S holders upgrading would wait on each other's queue slot
+                if held.is_some() { q.waiting.push_front(req) } else { q.waiting.push_back(req) }
+            }
+            g = self.cv.wait(g).unwrap();
+        }
+    }
+
+    /// Plain 2PL: release one lock early. Afterwards `t` may not acquire anything.
+    pub fn unlock(&self, t: TxnId, r: Resource) {
+        let mut g = self.inner.lock().unwrap();
+        g.shrinking.insert(t);
+        Self::release(&mut g, t, r);
+        self.cv.notify_all();
+    }
+
+    /// Strict 2PL: called once, at commit or after rollback.
+    pub fn release_all(&self, t: TxnId) {
+        let mut g = self.inner.lock().unwrap();
+        for r in g.held.remove(&t).unwrap_or_default() { Self::release(&mut g, t, r); }
+        g.shrinking.remove(&t);
+        g.victims.remove(&t);
+        self.cv.notify_all();
+    }
+
+    fn release(g: &mut Inner, t: TxnId, r: Resource) {
+        if let Some(v) = g.held.get_mut(&t) { v.retain(|x| *x != r); }
+        if let Some(q) = g.q.get_mut(&r) {
+            q.granted.retain(|x| x.0 != t);
+            q.waiting.retain(|w| w.txn != t);
+            if q.granted.is_empty() && q.waiting.is_empty() { g.q.remove(&r); }
+        }
+    }
+
+    /// A wounded or deadlock-victim transaction must find out even if it never calls `lock` again.
+    pub fn check(&self, t: TxnId) -> Result<(), Abort> {
+        match self.inner.lock().unwrap().victims.get(&t) { Some(&a) => Err(a), None => Ok(()) }
+    }
+
+    /// Edges `waiter → holder-or-earlier-waiter`, skipping transactions already condemned.
+    pub fn waits_for(&self) -> Vec<(TxnId, TxnId)> { Self::edges(&self.inner.lock().unwrap()) }
+
+    fn edges(g: &Inner) -> Vec<(TxnId, TxnId)> {
+        let mut e = Vec::new();
+        for q in g.q.values() {
+            for w in &q.waiting {
+                if g.victims.contains_key(&w.txn) { continue; }
+                let up = q.granted.iter().any(|x| x.0 == w.txn);
+                for b in q.blockers(w.txn, w.mode, up) { e.push((w.txn, b)); }
+            }
+        }
+        e.sort(); e.dedup(); e
+    }
+
+    /// One detector pass: find cycles, condemn the youngest member of each. Returns the victims.
+    pub fn detect_once(&self) -> Vec<TxnId> {
+        let mut g = self.inner.lock().unwrap();
+        let mut victims = Vec::new();
+        while let Some(cycle) = Self::find_cycle(&Self::edges(&g)) {
+            let v = *cycle.iter().max().unwrap();
+            g.victims.insert(v, Abort::Deadlock);
+            victims.push(v);
+        }
+        if !victims.is_empty() { self.cv.notify_all(); }
+        victims
+    }
+
+    /// Run in a background thread: wake every `every` until `stop`.
+    pub fn run_detector(&self, stop: &AtomicBool, every: Duration) {
+        while !stop.load(Ordering::Relaxed) {
+            std::thread::sleep(every);
+            self.detect_once();
+        }
+    }
+
+    fn find_cycle(edges: &[(TxnId, TxnId)]) -> Option<Vec<TxnId>> {
+        let mut adj: HashMap<TxnId, Vec<TxnId>> = HashMap::new();
+        for &(a, b) in edges { adj.entry(a).or_default().push(b); }
+        // 0 = unseen, 1 = on the DFS stack, 2 = done
+        fn dfs(u: TxnId, adj: &HashMap<TxnId, Vec<TxnId>>, color: &mut HashMap<TxnId, u8>, stack: &mut Vec<TxnId>) -> Option<Vec<TxnId>> {
+            color.insert(u, 1);
+            stack.push(u);
+            for &v in adj.get(&u).into_iter().flatten() {
+                match color.get(&v).copied().unwrap_or(0) {
+                    1 => { let i = stack.iter().position(|&x| x == v).unwrap(); return Some(stack[i..].to_vec()); }
+                    0 => if let Some(c) = dfs(v, adj, color, stack) { return Some(c); },
+                    _ => {}
+                }
+            }
+            stack.pop();
+            color.insert(u, 2);
+            None
+        }
+        let mut color = HashMap::new();
+        let mut keys: Vec<_> = adj.keys().copied().collect();
+        keys.sort();
+        for k in keys {
+            if color.get(&k).copied().unwrap_or(0) == 0 {
+                if let Some(c) = dfs(k, &adj, &mut color, &mut Vec::new()) { return Some(c); }
+            }
+        }
+        None
+    }
+
+    pub fn is_idle(&self) -> bool {
+        let g = self.inner.lock().unwrap();
+        g.q.is_empty() && g.held.values().all(|v| v.is_empty())
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Deadlock detection and prevention, compared"
+body = """
+<p>Each decision procedure is a few lines inside <code>acquire</code>:</p>
+
+```rust
+// Wait-Die: an older requester waits; a younger one dies instead of waiting for anyone older.
+Policy::WaitDie => if blockers.iter().any(|&b| b < t) { return Err(Abort::Die) },
+
+// Wound-Wait: a younger blocker is wounded (condemned); the requester then waits for it to let go.
+Policy::WoundWait => for &b in blockers.iter().filter(|&&b| b > t) { victims.insert(b, Abort::Wounded); },
+
+// Detection: wait, and let a background pass find cycles in the waits-for graph.
+Policy::Detect => {}
+```
+
+<p>Detection runs a DFS over <code>waiter → blocker</code> edges, condemns the <strong>youngest</strong> member of each cycle, and repeats until the graph is acyclic (ignoring condemned waiters). The test makes the lecture's example happen with real threads: T1 holds A and wants B, T2 holds B and wants A; the graph shows <code>[(1,2), (2,1)]</code>, the detector picks T2, T2's <code>lock</code> returns <code>Err(Deadlock)</code>, it releases, and T1 proceeds. The <em>upgrade deadlock</em> (two S holders both asking for X on the same row) is detected the same way, with no special case.</p>
+"""
+
+[[sections]]
+heading = "Measured: 8 threads, transfers between random accounts"
+body = """
+<p>Each transaction moves 1 unit between two accounts, 8 000 transactions per row; <em>X first</em> locks both rows exclusively up front (the <code>FOR UPDATE</code> style), <em>S then X</em> reads under S locks and then upgrades; <em>sorted</em> acquires locks in a global order. The detector wakes every 1 ms.</p>
+
+```text title="txn/s and abort rate, 4 hot accounts vs 64 accounts"
+policy     access     lockorder accts      txn/s    aborts    abort%
+Detect     X first    random        4       3506      1772     18.1%
+Detect     S then X   random        4       1214      7822     49.4%
+Detect     X first    sorted        4      63357         0      0.0%
+WaitDie    X first    random        4      51872     57605     87.8%
+WaitDie    S then X   random        4      21942    117740     93.6%
+WaitDie    X first    sorted        4      75145     45422     85.0%
+WoundWait  X first    random        4      19232     21524     72.9%
+WoundWait  S then X   random        4      11284     35500     81.6%
+WoundWait  X first    sorted        4      49621      4229     34.6%
+Detect     X first    random       64     195570         5      0.1%
+Detect     S then X   random       64      12859       803      9.1%
+Detect     X first    sorted       64     310286         0      0.0%
+WaitDie    X first    random       64     304018      2434     23.3%
+WaitDie    S then X   random       64     228687      6267     43.9%
+WaitDie    X first    sorted       64     333023      4480     35.9%
+WoundWait  X first    random       64     207174       236      2.9%
+WoundWait  S then X   random       64     127924      1390     14.8%
+WoundWait  X first    sorted       64     208793       253      3.1%
+```
+
+<p>What the table teaches:</p>
+
+<ul> <li><strong>Taking the right lock first is the biggest lever.</strong> <em>S then X</em> versus <em>X first</em> costs 3× throughput under detection (1 214 vs 3 506/s) and 15× at 64 accounts (12 859 vs 195 570/s), because every pair of concurrent upgraders deadlocks. This is why <code>SELECT … FOR UPDATE</code> exists.</li> <li><strong>A global lock order removes deadlocks entirely</strong>, and detection then costs nothing: 0 aborts, 63 357/s (18× the random-order run). Applications and internal code that can sort their keys should.</li> <li><strong>Prevention is conservative.</strong> Wait-Die aborts on <em>possible</em> deadlock, not actual: even with sorted locks it aborts 85% of attempts at 4 accounts (no deadlock was possible!). It still wins on the hot random-order workload (51 872/s vs 3 506/s), because a detection-based deadlock stalls two threads for up to a detector interval, while prevention kills the loser immediately and retries. Wound-Wait aborts far less when sorted (34.6%) and stays calm when contention is low (2.9% at 64 accounts).</li> <li><strong>When deadlocks are rare, detection wins</strong> (0.1% aborts at 64 accounts, no restarts needed); when they are frequent, a short detector interval or prevention wins. The interval is the knob: 1 ms here, 1 s by default in PostgreSQL (<code>deadlock_timeout</code>, which first <em>waits</em> and only then runs the detector, so most lock waits never pay for a graph search).</li> </ul>
+
+<aside data-call="testing"><b>Verifying a lock manager</b><ul> <li><strong>Matrix and lattice</strong>: assert the full 5×5 compatibility table against a literal, symmetry, <code>lub(IX, S) = SIX</code>, <code>X.covers(everything)</code>.</li> <li><strong>Deterministic scenarios with real threads</strong>: spin until <code>waits_for()</code> shows the edge you expect instead of sleeping, then act. No flaky timing.</li> <li><strong>Fairness</strong>: queue a writer behind a reader and assert a <em>new</em> reader is refused.</li> <li><strong>Policies</strong>: wait-die and wound-wait outcomes for older/younger requesters; wounded transaction's <em>next</em> lock call fails; <code>release_all</code> lets the wounder proceed.</li> <li><strong>Conservation workload</strong>: 6 threads of random transfers under all 3 policies × 2 access styles; the total balance is invariant and the lock table is empty at the end (no leaked locks).</li> <li><strong>Close the loop with L17</strong>: record every read, write and commit while holding the locks, keep the committed attempts, and feed the schedule to <code>is_conflict_serializable</code> and <code>is_strict</code>. All six policy/style combinations produce conflict-serializable, strict schedules.</li> </ul></aside>
+
+<aside data-call="warning"><b>Lock manager pitfalls</b><ul> <li><strong>Releasing the lock table's mutex before blocking</strong> without re-checking state: you wake up and use a stale decision. Always loop: <em>check → decide → wait → re-check</em>.</li> <li><strong>Forgetting to remove a waiter</strong> when it is aborted or times out: the phantom request blocks everyone behind it. Every exit path must <code>retain(|w| w.txn != t)</code>.</li> <li><strong>Restarting with a fresh timestamp</strong> under wait-die/wound-wait: the victim stays young and may starve. Keep the original priority; assign new ids only under detection.</li> <li><strong>Undo after release</strong>: roll back changes <em>before</em> releasing locks, or someone reads a half-undone row.</li> <li><strong>Lock escalation under concurrency</strong>: converting 10 000 row locks to a table lock can deadlock with another escalator; escalate with a <code>try</code> and fall back to staying fine-grained.</li> </ul></aside>
+
+<aside data-call="production"><b>Locking in real systems</b><ul> <li><strong>PostgreSQL</strong>: row locks live in the <em>tuple header</em> (xmax + infomask bits), not in the lock table, so locking a million rows costs no memory; the heavyweight lock manager (8 modes, table level) handles tables, relations, and advisory locks. Deadlock detector runs after <code>deadlock_timeout</code> (1 s).</li> <li><strong>MySQL/InnoDB</strong>: record locks, <strong>gap locks</strong> and <strong>next-key locks</strong> (record + gap before it) on index entries prevent phantoms under REPEATABLE READ; deadlock detection on a waits-for graph, victim with the least undo.</li> <li><strong>SQL Server / DB2</strong>: lock escalation after ~5 000 row locks; many lock modes beyond S/X/I* (update locks <code>U</code> avoid the upgrade deadlock: take U when you read for update, and only one U can be held).</li> <li><strong>Spanner, CockroachDB</strong>: distributed 2PL or lock-table-per-range with wound-wait for deadlock avoidance (Spanner), because a global waits-for graph is impractical.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Granularity of Locks and Degrees of Consistency in a Shared Data Base"
+url = "https://jimgray.azurewebsites.net/papers/granularity%20of%20locks%20and%20degrees%20of%20consistency%20rdb%20.pdf"
+
+[[sources]]
+title = "Staring into the Abyss: An Evaluation of Concurrency Control with One Thousand Cores"
+url = "https://www.vldb.org/pvldb/vol8/p209-yu.pdf"
+
+[[sources]]
+title = "explicit locking"
+url = "https://www.postgresql.org/docs/current/explicit-locking.html"

@@ -1,0 +1,32 @@
+title = "Arena of nodes addressed by typed ids"
+module = "Rust language"
+module_order = 1
+chapter = "Memory and allocators"
+chapter_order = 6
+order = 54
+kind = "recipe"
+lede = "arena of nodes addressed by typed ids (no Box per node)."
+level = "simple"
+code = ["examples/memory/arena_ids.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+stage 8 (allocation), and later the DSL / bytecode compiler.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>compiler ASTs</li><li>game entities</li><li>graph nodes: allocate in one Vec and refer by index (oxc, rustc use arenas)</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: store all nodes in one `Vec`; children are `ExprId`s, not `Box<Expr>`. One allocation grows the whole tree, nodes are cache-friendly, dropping is a single free, and there are no borrow-checker fights over parent/child references. Real code: oxc's bump arena -> <https://github.com/oxc-project/oxc/tree/main/crates/oxc_allocator>
+"""
+
+[[sources]]
+title = "github.com/oxc-project/oxc/tree/main/crates/oxc_allocator"
+url = "https://github.com/oxc-project/oxc/tree/main/crates/oxc_allocator"

@@ -1,0 +1,53 @@
+title = "Statements and globals"
+module = "Compilers and languages"
+module_order = 12
+chapter = "A tree-walking interpreter"
+chapter_order = 2
+order = 578
+kind = "guide"
+lede = "Book ch. 8, first half · Official tests: assignment/ bool/ comments/ nil/ number/ operator/ print/ string/ variable/ (partly), precedence.lox, empty_file.lox, unexpected_character.lox"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>With <code>print</code> in place, the golden runner and most of the official suite start to work. From this slice on, <code>rlox::run</code> writes output to an injected writer.</p>
+
+```text
+program     → declaration* EOF ;
+declaration → varDecl | statement ;
+varDecl     → "var" IDENTIFIER ( "=" expression )? ";" ;
+statement   → exprStmt | printStmt ;
+expression  → assignment ;
+assignment  → IDENTIFIER "=" assignment | equality ;
+```
+
+<div class="cb-g-tt"><table><thead><tr><th>Kind</th><th>Input</th><th>Expected</th></tr></thead><tbody><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>print 1 + 2;</code></td><td><code>3</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>var a; print a;</code></td><td><code>nil</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>var a = 1; a = 2; print a;</code></td><td><code>2</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>var a; var b; a = b = 3; print a;</code></td><td><code>3</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>var a = 1; var a = 2; print a;</code></td><td><code>2</code>: redeclaring a global is allowed</td></tr><tr><td><span class="cb-g-pill cb-g-ast">ast</span></td><td><code>a = b = c</code></td><td><code>(= a (= b c))</code></td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>1 = 2;</code></td><td><code>[line 1] Error at '=': Invalid assignment target.</code></td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>print 1</code></td><td><code>[line 1] Error at end: Expect ';' after value.</code></td></tr><tr><td><span class="cb-g-pill cb-g-rerr">runtime error</span></td><td><code>print x;</code></td><td><code>Undefined variable 'x'.</code></td></tr><tr><td><span class="cb-g-pill cb-g-rerr">runtime error</span></td><td><code>x = 1;</code></td><td><code>Undefined variable 'x'.</code></td></tr></tbody></table></div>
+
+```rust title="src/interp.rs"
+pub struct Interpreter {
+    globals: HashMap<Rc<str>, Value>,
+}
+
+impl Interpreter {
+    pub fn run(&mut self, src: &str, out: &mut dyn Write) -> Result<(), LoxError> {
+        let program = parser::parse(src)?;          // LoxError::Compile(Vec<Diagnostic>)
+        for stmt in &program {
+            self.exec(stmt, out)?;                  // LoxError::Runtime(RuntimeError)
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn print_goes_to_writer() {
+    let mut out = Vec::new();
+    Interpreter::new().run("print 1 + 2;", &mut out).unwrap();
+    assert_eq!(String::from_utf8(out).unwrap(), "3\\n");
+}
+```
+
+<p>Parse assignment the way the book does. Parse the left side as an ordinary expression, and when you then see <code>=</code>, check that it was a <code>Var</code>. A Pratt table can't handle this case, because the target is not an ordinary operand.</p>
+
+<p>Error recovery starts here. When a statement fails to parse, record the diagnostic, skip tokens up to the next <code>;</code> or statement keyword, and keep parsing. A file with three mistakes then reports all three.</p>
+"""

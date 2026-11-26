@@ -1,0 +1,345 @@
+title = "Buffer pools"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 315
+kind = "guide"
+lede = "frames, page table, pin counts, locks vs latches, replacement policies, sequential flooding, prefetch, scan sharing"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>The buffer pool makes disk look like memory.</strong> It is a write-back cache of fixed-size frames. Optimize <strong>where</strong> pages live (spatial) and <strong>when</strong> they move (temporal).</li> <li><strong>Page table ≠ page directory.</strong> The page table maps page id → frame, in memory only. The directory maps page id → disk location and is persistent.</li> <li><strong>Per-frame state</strong>: dirty flag (write before reuse), <strong>pin count</strong> (never evict while &gt; 0), and access history for the policy. Pinning doesn't block concurrent readers.</li> <li><strong>Locks vs latches.</strong> Locks protect logical contents from other transactions, last long, and support rollback. Latches protect in-memory structures from other threads, are short, and have no rollback.</li> <li><strong>Why not the OS</strong>: unordered flushes (breaks WAL), fault stalls, SIGBUS on errors, TLB shootdowns. The DBMS wants to control flush order, prefetching, replacement and scheduling.</li> <li><strong>LRU</strong> is costly to maintain exactly. <strong>CLOCK</strong> approximates it with a reference bit and a sweeping hand.</li> <li><strong>Sequential flooding.</strong> A single scan evicts the hot working set under LRU or CLOCK. For scans, the most recently used page is often the best victim.</li> <li><strong>Fixes</strong>: LRU-K (evict by K-th most recent access, with a ghost history for evicted pages); MySQL's two-segment LRU (young/old lists); per-query localization; priority hints; <strong>ARC</strong> (recency list T1 plus frequency list T2, with ghost lists steering an adaptive split <em>p</em>).</li> <li><strong>Dirty pages.</strong> Clean eviction is free; dirty eviction needs a write. Background writers clean pages ahead of time.</li> <li><strong>I/O scheduling.</strong> The DBMS prioritizes by sequential vs random, foreground vs background, table/index/log, and transaction importance. Most systems use <code>O_DIRECT</code> to skip the OS page cache (PostgreSQL is the exception). <code>fsync</code> failures can be silent and mark pages clean.</li> </ul>
+"""
+
+[[sections]]
+heading = "Purpose"
+body = """
+<p>The buffer pool is the DBMS's own page cache: a fixed array of <strong>frames</strong> in memory, each able to hold one page. It makes three promises to every layer above it:</p>
+
+<ol> <li><strong>Access by page id.</strong> <code>fetch(page_id)</code> returns a frame holding that page, reading it from disk if needed. Callers never deal with file offsets.</li> <li><strong>No eviction while in use.</strong> A page is <em>pinned</em> while someone holds it, and a pinned page's frame is never reused.</li> <li><strong>Dirty pages are written back before their frame is reused.</strong> Later, with the WAL, it adds a fourth promise: <em>never before the log records describing the change are durable</em>.</li> </ol>
+
+<p>The DBMS does this itself rather than leaving it to the OS for the reasons in <a href="/cookbook/p/disk-i-o">L03a</a>: it knows its access patterns (a scan is not a point lookup), it has to control <em>when</em> pages are written (WAL), and it wants to schedule I/O rather than stall on page faults.</p>
+
+<figure class="cb-g-fig"><svg viewBox="0 0 800 250" role="img" aria-label="Buffer pool structure"> <g font-size="12"> <text x="10" y="20" class="cb-g-mut">page table: HashMap&lt;PageId, FrameId&gt;</text> <rect x="10" y="30" width="200" height="120" rx="4" class="cb-g-box"></rect> <text x="24" y="54">p7 → f2</text><text x="24" y="78">p3 → f0</text><text x="24" y="102">p9 → f3</text><text x="24" y="126">p1 → f1</text> <text x="300" y="20" class="cb-g-mut">frames (Box&lt;[Frame]&gt;), each: latch · pin · dirty · page_id · 8 KiB</text> <rect x="300" y="30" width="110" height="120" rx="4" class="cb-g-boxa"></rect><text x="312" y="54">f0: p3</text><text x="312" y="78" class="cb-g-mut">pin 2</text><text x="312" y="102" class="cb-g-mut">dirty</text> <rect x="420" y="30" width="110" height="120" rx="4" class="cb-g-box"></rect><text x="432" y="54">f1: p1</text><text x="432" y="78" class="cb-g-mut">pin 0</text><text x="432" y="102" class="cb-g-mut">clean</text> <rect x="540" y="30" width="110" height="120" rx="4" class="cb-g-boxa"></rect><text x="552" y="54">f2: p7</text><text x="552" y="78" class="cb-g-mut">pin 1</text><text x="552" y="102" class="cb-g-mut">clean</text> <rect x="660" y="30" width="110" height="120" rx="4" class="cb-g-box"></rect><text x="672" y="54">f3: p9</text><text x="672" y="78" class="cb-g-mut">pin 0</text><text x="672" y="102" class="cb-g-mut">dirty</text> <text x="10" y="190">free list: [ ]   (all frames hold pages)</text> <text x="10" y="214">replacer tracks evictable frames: {f1, f3}  →  evict picks one by policy; f3 dirty ⇒ write back first</text> <text x="10" y="238" class="cb-g-mut">highlighted = pinned (not evictable)</text> </g></svg></figure>
+"""
+
+[[sections]]
+heading = "Frame metadata"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Field</th> <th>Type (Cairn)</th> <th>Protected by</th> <th>Why</th> </tr> </thead> <tbody> <tr> <td><code>page_id</code></td> <td><code>PageId</code></td> <td>pool latch (changes only on load/evict)</td> <td>reverse map: which page is here</td> </tr> <tr> <td><code>pin_count</code></td> <td><code>AtomicU32</code></td> <td>atomic; transitions 0↔1 also under pool latch</td> <td>how many threads hold the page right now</td> </tr> <tr> <td><code>dirty</code></td> <td><code>AtomicBool</code></td> <td>set by writers holding the page latch</td> <td>must write back before reuse</td> </tr> <tr> <td>page latch</td> <td><code>RwLock&lt;PageBuf&gt;</code></td> <td>itself</td> <td>readers share; one writer excludes all</td> </tr> <tr> <td><code>data</code></td> <td><code>[u8; PAGE_SIZE]</code></td> <td>page latch</td> <td>the page</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Locks vs latches"
+body = """
+<p>This distinction runs through the rest of the course, so learn it here:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th></th> <th>Lock</th> <th>Latch</th> </tr> </thead> <tbody> <tr> <td>Protects</td> <td>logical database contents (tuples, tables, key ranges) from other <strong>transactions</strong></td> <td>in-memory data structures (a frame, a B+Tree node, a hash bucket) from other <strong>threads</strong></td> </tr> <tr> <td>Held for</td> <td>the transaction's duration (or until commit under strict 2PL)</td> <td>a critical section: microseconds</td> </tr> <tr> <td>Modes</td> <td>S, X, IS, IX, SIX… (lock compatibility matrix)</td> <td>read, write</td> </tr> <tr> <td>Deadlock</td> <td>detected (waits-for graph) or prevented (wound-wait)</td> <td>avoided by <strong>coding discipline</strong>: fixed acquisition order</td> </tr> <tr> <td>Rollback</td> <td>changes undone on abort</td> <td>nothing to undo</td> </tr> <tr> <td>Lives in</td> <td>the lock manager's hash table</td> <td>inside the protected structure</td> </tr> <tr> <td>In Rust</td> <td>a <code>LockManager</code> with a request queue per resource</td> <td><code>Mutex</code>, <code>RwLock</code>, <code>parking_lot</code>, atomics, OLC version counters</td> </tr> </tbody> </table></div>
+
+<p>The buffer pool uses only latches. Transactions and locks come in <a href="/cookbook/p/concurrency-control-theory">L17–L20</a>.</p>
+"""
+
+[[sections]]
+heading = "Optimizations"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Technique</th> <th>Idea</th> <th>Who does it</th> </tr> </thead> <tbody> <tr> <td>Multiple buffer pools</td> <td>per table, per page type, or hash-partitioned by page id, so each pool has its own latch and policy</td> <td>InnoDB <code>innodb_buffer_pool_instances</code>; DB2 per-tablespace pools; SQL Server buffer partitions</td> </tr> <tr> <td>Pre-fetching</td> <td>a sequential scan requests the next N pages before it needs them; an index scan requests the leaves it will visit</td> <td>PostgreSQL read streams (v17+); every commercial system</td> </tr> <tr> <td>Scan sharing (synchronized scans)</td> <td>a second scan of the same table attaches to the in-progress one, then wraps around for the part it missed</td> <td>PostgreSQL <code>synchronize_seqscans</code>; SQL Server "merry-go-round" scans; DB2</td> </tr> <tr> <td>Buffer pool bypass</td> <td>large sequential scans use a small private ring instead of polluting the main pool</td> <td>PostgreSQL ring buffers (<code>BAS_BULKREAD</code>, 256 KiB); Informix "light scans"</td> </tr> <tr> <td>Background writer</td> <td>flushes dirty pages ahead of eviction, so evictions don't wait for writes</td> <td>PostgreSQL <code>bgwriter</code> + checkpointer; InnoDB page cleaners</td> </tr> <tr> <td>Huge pages</td> <td>map frames with 2 MiB pages: fewer TLB misses</td> <td>PostgreSQL <code>huge_pages</code>, Oracle SGA</td> </tr> <tr> <td>Pointer swizzling</td> <td>replace page ids in parents with direct pointers while both are resident; no hash lookup</td> <td>LeanStore, Umbra (<a href="/cookbook/p/larger-than-memory-databases">Part II</a>)</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Replacement policies"
+body = """
+<p>When a page must be read and there's no free frame, the pool has to evict something. A good policy maximizes the hit rate for the <em>workload the database actually sees</em>, which mixes point lookups (skewed and hot), index traversals (the upper tree levels are very hot) and large scans (each page touched once).</p>
+
+<h4>LRU</h4>
+
+<p>Evict the least recently used page. It's exact, simple, and O(1) with a hash map plus a doubly-linked list. Its failure is <strong>sequential flooding</strong>: one full scan of a table larger than the pool touches every page once, and each of those pages becomes "most recently used", so the scan evicts the entire hot working set. Every point lookup afterwards misses. For a scan, the <em>most</em> recently used page is the one least likely to be needed again, which is exactly backwards for LRU.</p>
+
+<h4>CLOCK</h4>
+
+<p>An approximation of LRU that needs no list maintenance on a hit. Each frame gets a reference bit, which a hit sets. The clock hand sweeps the frames: if the bit is set, clear it and move on; if it's clear and the frame is evictable, evict it. A hit costs one atomic store, with no latch and no list surgery. That's why PostgreSQL uses a variant: <strong>clock-sweep with a usage count</strong> from 0 to 5, incremented on each pin and decremented as the hand passes.</p>
+
+```rust title="src/buffer/clock_replacer.rs — CLOCK with usage counts (PostgreSQL-style)"
+use crate::buffer::replacer::Replacer;
+use crate::common::config::{FrameId, PageId};
+
+const MAX_USAGE: u8 = 5;        // PostgreSQL's BM_MAX_USAGE_COUNT
+
+pub struct ClockReplacer {
+    usage: Vec<u8>,
+    evictable: Vec<bool>,
+    present: Vec<bool>,          // frame is tracked (holds a page)
+    hand: usize,
+    size: usize,                 // number of evictable frames
+}
+
+impl ClockReplacer {
+    pub fn new(num_frames: usize) -> Self {
+        Self { usage: vec![0; num_frames], evictable: vec![false; num_frames], present: vec![false; num_frames], hand: 0, size: 0 }
+    }
+}
+
+impl Replacer for ClockReplacer {
+    fn size(&self) -> usize { self.size }
+
+    fn record_access(&mut self, f: FrameId, _page: PageId) {
+        let i = f.0 as usize;
+        self.present[i] = true;
+        self.usage[i] = (self.usage[i] + 1).min(MAX_USAGE);
+    }
+
+    fn set_evictable(&mut self, f: FrameId, ev: bool) {
+        let i = f.0 as usize;
+        assert!(self.present[i], "set_evictable on untracked frame {f:?}");
+        if self.evictable[i] != ev { self.evictable[i] = ev; if ev { self.size += 1 } else { self.size -= 1 } }
+    }
+
+    fn evict(&mut self) -> Option<FrameId> {
+        if self.size == 0 { return None; }
+        // Bounded: after MAX_USAGE+1 full sweeps every evictable frame's count is 0.
+        for _ in 0..(MAX_USAGE as usize + 1) * self.usage.len() + 1 {
+            let i = self.hand;
+            self.hand = (self.hand + 1) % self.usage.len();
+            if !self.present[i] || !self.evictable[i] { continue; }
+            if self.usage[i] == 0 {
+                self.present[i] = false;
+                self.evictable[i] = false;
+                self.size -= 1;
+                return Some(FrameId(i as u32));
+            }
+            self.usage[i] -= 1;
+        }
+        unreachable!("size > 0 but no victim found")
+    }
+
+    fn remove(&mut self, f: FrameId) {
+        let i = f.0 as usize;
+        if !self.present[i] { return; }
+        assert!(self.evictable[i], "remove on pinned frame {f:?}");
+        self.present[i] = false;
+        self.evictable[i] = false;
+        self.usage[i] = 0;
+        self.size -= 1;
+    }
+}
+```
+
+<h4>LRU-K</h4>
+
+<p>O'Neil, O'Neil and Weikum (SIGMOD 1993) proposed tracking the last <em>K</em> access times of each page and evicting the page with the largest <strong>backward K-distance</strong>: now minus the time of its K-th most recent access. Pages with fewer than K accesses have infinite distance and go first, with ties broken by earliest first access (plain LRU among them). With K=2, a page touched once by a scan has infinite distance and is evicted before any page that has been used twice. That largely solves sequential flooding.</p>
+
+<p>The textbook implementation scans every frame on each eviction, which is O(n). That's fine for 128 frames and painful for 100,000. The O(log n) version keeps evictable frames in an ordered set keyed by eviction priority:</p>
+
+:::deeper LRU-K in O(log n): an ordered set of (priority, frame) instead of a scan
+```rust title="src/buffer/lru_k_replacer.rs (fast version)"
+use std::collections::{BTreeSet, HashMap, VecDeque};
+use crate::buffer::replacer::Replacer;
+use crate::common::config::{FrameId, PageId};
+
+/// Eviction order key: smaller = evict first.
+/// Frames with < K accesses: (0, first_access)   → infinite k-distance, LRU among them.
+/// Frames with   K accesses: (1, kth_recent_ts)  → larger k-distance = older kth access = smaller ts.
+type Key = (u8, u64, FrameId);
+
+struct Node { hist: VecDeque<u64>, evictable: bool }
+
+pub struct LruKReplacer {
+    k: usize,
+    now: u64,
+    nodes: HashMap<FrameId, Node>,
+    order: BTreeSet<Key>,          // only evictable frames live here
+}
+
+impl LruKReplacer {
+    pub fn new(_num_frames: usize, k: usize) -> Self {
+        assert!(k >= 1);
+        Self { k, now: 0, nodes: HashMap::new(), order: BTreeSet::new() }
+    }
+
+    fn key(&self, f: FrameId, n: &Node) -> Key { key_of(self.k, f, n) }
+}
+
+fn key_of(k: usize, f: FrameId, n: &Node) -> Key {
+    // hist[0] is the earliest retained access: the first access if < k, else the k-th most recent.
+    (u8::from(n.hist.len() >= k), n.hist[0], f)
+}
+
+impl Replacer for LruKReplacer {
+    fn size(&self) -> usize { self.order.len() }
+
+    fn record_access(&mut self, f: FrameId, _p: PageId) {
+        self.now += 1;
+        let (k, now) = (self.k, self.now);
+        let n = self.nodes.entry(f).or_insert_with(|| Node { hist: VecDeque::with_capacity(k + 1), evictable: false });
+        let old = n.evictable.then(|| key_of(k, f, n));     // evictable frames are in `order`
+        n.hist.push_back(now);
+        if n.hist.len() > k { n.hist.pop_front(); }
+        if let Some(old) = old {
+            let new = key_of(k, f, n);                        // `n` borrows self.nodes; self.order is a
+            self.order.remove(&old);                          // disjoint field, so this borrow is fine
+            self.order.insert(new);
+        }
+    }
+
+    fn set_evictable(&mut self, f: FrameId, ev: bool) {
+        let Some(n) = self.nodes.get(&f) else { return };
+        if n.evictable == ev { return; }
+        let key = self.key(f, n);
+        if ev { self.order.insert(key); } else { self.order.remove(&key); }
+        self.nodes.get_mut(&f).unwrap().evictable = ev;
+    }
+
+    fn evict(&mut self) -> Option<FrameId> {
+        let (_, _, f) = self.order.pop_first()?;
+        self.nodes.remove(&f);
+        Some(f)
+    }
+
+    fn remove(&mut self, f: FrameId) {
+        if let Some(n) = self.nodes.get(&f) {
+            assert!(n.evictable, "remove on non-evictable frame {f:?}");
+            let key = self.key(f, n);
+            self.order.remove(&key);
+            self.nodes.remove(&f);
+        }
+    }
+}
+```
+:::
+
+<aside data-call="rust"><b>Keep the priority key derivable, never stored twice</b><p>The only way an ordered-set replacer goes wrong is if the key stored in the set drifts from the key you'd compute from the node. The rule: <strong>remove with the old key, mutate, insert with the new key</strong>, with all three inside one <code>&amp;mut self</code> method so no other code can interleave. <code>BTreeSet::pop_first</code> (stable since 1.66) gives the minimum in O(log n). A binary heap can't do this, because it has no <code>remove(key)</code>. An indexed heap or a lazy-deletion heap (push new keys, skip stale ones on pop) are the alternatives, and the lazy heap is usually fastest.</p></aside>
+
+<h4>Other policies</h4>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Policy</th> <th>Mechanism</th> <th>Scan-resistant?</th> <th>Adapts?</th> <th>Used by</th> </tr> </thead> <tbody> <tr> <td>LRU</td> <td>recency list</td> <td>✗</td> <td>✗</td> <td>textbook, many caches</td> </tr> <tr> <td>CLOCK / clock-sweep</td> <td>reference bit / usage count</td> <td>partly</td> <td>✗</td> <td>PostgreSQL, OS page caches</td> </tr> <tr> <td>LRU-K</td> <td>K-th access time</td> <td>✓ (K ≥ 2)</td> <td>✗</td> <td>SQL Server (LRU-2 variant); BusTub ≤ S2025</td> </tr> <tr> <td>2Q (Johnson &amp; Shasha, VLDB 1994)</td> <td>FIFO probation queue A1in, ghost queue A1out, main LRU Am; promote on a second hit</td> <td>✓</td> <td>fixed split</td> <td>PostgreSQL 8.0.x briefly, some caches</td> </tr> <tr> <td>InnoDB midpoint LRU</td> <td>new pages enter at the 3/8 point ("old" sublist); promote only if re-accessed after <code>innodb_old_blocks_time</code> ms</td> <td>✓</td> <td>✗</td> <td>MySQL InnoDB</td> </tr> <tr> <td><strong>ARC</strong> (Megiddo &amp; Modha, FAST 2003)</td> <td>T1 (seen once), T2 (seen twice or more), ghost lists B1/B2; target size <em>p</em> adapts on ghost hits</td> <td>✓</td> <td><strong>✓</strong></td> <td>ZFS ARC, IBM DS8000; <strong>BusTub Fall 2025 P1</strong></td> </tr> <tr> <td>LIRS (Jiang &amp; Zhang, SIGMETRICS 2002)</td> <td>inter-reference recency</td> <td>✓</td> <td>✓</td> <td>MySQL NDB, Infinispan</td> </tr> <tr> <td>TinyLFU / W-TinyLFU</td> <td>admission filter by frequency sketch (a count-min sketch!) + windowed LRU</td> <td>✓</td> <td>✓</td> <td>Caffeine (Java), Moka (Rust)</td> </tr> </tbody> </table></div>
+
+<p>ARC gets its own slice next (<a href="/cookbook/p/arc-replacer">P1 · ARC</a>).</p>
+"""
+
+[[sections]]
+heading = "Experiment: sequential flooding"
+body = """
+<p>Before writing the ARC replacer, <em>watch</em> LRU lose. Build a small lab in <code>crates/scratch/</code>: a <code>Policy</code> trait whose only question is "was that a hit?", a runner, a table printer, and trace generators (Zipf lookups, cyclic scans, hot-then-scan, shifting working sets). Two pieces make it trustworthy: Belady's offline optimum as the ceiling, and an adapter so that any real <code>Replacer</code> can run in the same lab.</p>
+
+```rust title="crates/scratch/src/lab/opt.rs — Belady's OPT: the offline ceiling every policy is measured against"
+use std::collections::{BTreeSet, HashMap};
+use super::harness::{PageId, Policy};   // PageId = usize; Policy { name, access(page) -> hit, resident }
+
+/// Evicts the resident page whose next use is furthest in the future. Needs the whole
+/// trace up front, so it's a benchmark, never a policy you can deploy.
+pub struct Opt { next_use: Vec<usize>, pos: usize, cap: usize,
+                 resident: HashMap<PageId, usize>,          // page -> its next-use position
+                 by_next: BTreeSet<(usize, PageId)> }       // ordered by next use
+
+impl Opt {
+    pub fn new(trace: &[PageId], cap: usize) -> Self {
+        let mut next_use = vec![usize::MAX; trace.len()];
+        let mut last: HashMap<PageId, usize> = HashMap::new();
+        for (i, &p) in trace.iter().enumerate().rev() {
+            next_use[i] = last.get(&p).copied().unwrap_or(usize::MAX);
+            last.insert(p, i);
+        }
+        Opt { next_use, pos: 0, cap, resident: HashMap::new(), by_next: BTreeSet::new() }
+    }
+}
+
+impl Policy for Opt {
+    fn name(&self) -> String { "OPT (Belady)".into() }
+    fn access(&mut self, page: PageId) -> bool {
+        let nu = self.next_use[self.pos];
+        self.pos += 1;
+        let hit = if let Some(old) = self.resident.insert(page, nu) {
+            self.by_next.remove(&(old, page));
+            true
+        } else {
+            if self.resident.len() > self.cap {
+                let &(far, victim) = self.by_next.iter().next_back().unwrap();   // furthest next use
+                self.by_next.remove(&(far, victim));
+                self.resident.remove(&victim);
+            }
+            false
+        };
+        self.by_next.insert((nu, page));
+        hit
+    }
+    fn resident(&self) -> usize { self.resident.len() }
+}
+```
+
+```rust title="crates/scratch/src/lab/adapter.rs — run any Replacer inside the lab"
+use std::collections::HashMap;
+use relational::buffer::replacer::Replacer;
+use relational::common::config::{FrameId, PageId};
+use super::harness::Policy;
+
+/// Plays buffer pool around a Replacer: page table + free frames, unpin immediately.
+pub struct AsPolicy<R> { r: R, name: String, table: HashMap<u32, u32>, owner: Vec<Option<u32>>, free: Vec<u32> }
+
+impl<R: Replacer> AsPolicy<R> {
+    pub fn new(name: &str, r: R, frames: usize) -> Self {
+        AsPolicy { r, name: name.into(), table: HashMap::new(), owner: vec![None; frames],
+                   free: (0..frames as u32).rev().collect() }
+    }
+}
+
+impl<R: Replacer> Policy for AsPolicy<R> {
+    fn name(&self) -> String { self.name.clone() }
+    fn access(&mut self, page: usize) -> bool {
+        let p = page as u32;
+        if let Some(&f) = self.table.get(&p) { self.r.record_access(FrameId(f), PageId(p)); return true; }
+        let f = self.free.pop().or_else(|| self.r.evict().map(|f| f.0)).expect("no evictable frame");
+        if let Some(old) = self.owner[f as usize].replace(p) { self.table.remove(&old); }
+        self.table.insert(p, f);
+        self.r.record_access(FrameId(f), PageId(p));
+        self.r.set_evictable(FrameId(f), true);           // the lab never pins; a BPM does
+        false
+    }
+    fn resident(&self) -> usize { self.table.len() }
+}
+```
+
+```text title="measured: 512 frames · Zipf(0.9) lookups over 5,000 pages · 400k accesses · hit rate on the lookups only"
+policy               no scans   1,000-page scan / 1,000 lookups   2,000-page scan / 500 lookups
+LRU                    0.539         0.438                              0.373    ← flooded
+CLOCK (usage ≤ 5)      0.549         0.454                              0.374    ← flooded too
+LRU-2                  0.618         0.612                              0.605    ← scan pages have infinite k-distance
+ARC                    0.608         0.624                              0.621    ← ghost hits move p toward frequency
+OPT (Belady)           0.734         0.733                              0.729    ← offline ceiling
+```
+
+<p>These are real numbers from <code>~/dbms-guide/verify/tests/hitrates.rs</code>, running the reference replacers in this guide. Each scan reads pages that are never touched again (cold data), so the lookup-only hit rate isolates the damage the scans do to the hot set. Two things stand out. LRU and CLOCK lose about 30% of their hits once scans are frequent. And ARC gets <em>better</em> with scans than without them: the ghost hits push <em>p</em> toward the frequency side, and the scan pages flow through T1 without disturbing T2.</p>
+
+<aside data-call="testing"><b>Implement Belady's OPT as the ceiling</b><p>The offline-optimal policy (Belady, 1966) evicts the page whose next use is furthest in the future. It's impossible online, but trivial on a recorded trace: precompute each position's next use, then keep a max-heap by next use. Report every policy as a <em>fraction of OPT's hit rate</em>. That tells you how much room is left, and it catches simulator bugs, because a policy that "beats" OPT means the simulator is wrong.</p></aside>
+
+<aside data-call="performance"><b>What actually limits a buffer pool</b><p>On a many-core machine running an in-memory-resident workload, the bottleneck is <strong>not</strong> the policy but the <strong>pool latch</strong>: every fetch takes a global mutex for the page-table lookup and the replacer update. Fixes, in order of effort: (1) hash-partition the page table, e.g. 64 shards by <code>page_id % 64</code>, each with its own mutex; (2) use CLOCK, where a hit is just an atomic store with no replacer latch; (3) make the fast path lock-free with optimistic reads, as LeanStore and Umbra do with pointer swizzling (Part II); (4) use per-core pools. Measure first: <code>perf lock contention</code> on Linux, or a criterion bench at 1, 2, 4, 8 and 16 threads that plots throughput. BusTub's P1 leaderboard is exactly this benchmark.</p></aside>
+
+<aside data-call="production"><b>How production systems pick</b><ul> <li><strong>PostgreSQL</strong>: clock-sweep with <code>usage_count</code> capped at 5, plus ring buffers for bulk reads, VACUUM and <code>COPY</code>. <code>src/backend/storage/buffer/README</code> is short and excellent.</li> <li><strong>InnoDB</strong>: LRU with midpoint insertion (the old sublist is the last 3/8), <code>innodb_old_blocks_time</code> (1000 ms) against scans, and multiple instances.</li> <li><strong>SQL Server</strong>: an LRU-2-style policy (it tracks the last two reference times), plus a lazywriter.</li> <li><strong>Oracle</strong>: touch-count-based LRU with hot and cold halves.</li> <li><strong>LeanStore/Umbra</strong>: no LRU at all. Random sampling picks candidates, which go into a "cooling" FIFO stage; a page accessed during cooling is re-swizzled. Near-zero overhead on hits.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "The LRU-K Page Replacement Algorithm For Database Disk Buffering"
+url = "https://www.cs.cmu.edu/~natassa/courses/15-721/papers/p297-o_neil.pdf"
+
+[[sources]]
+title = "2Q: A Low Overhead High Performance Buffer Management Replacement Algorithm"
+url = "https://www.vldb.org/conf/1994/P439.PDF"
+
+[[sources]]
+title = "ARC: A Self-Tuning, Low Overhead Replacement Cache"
+url = "https://www.usenix.org/legacy/events/fast03/tech/full_papers/megiddo/megiddo.pdf"
+
+[[sources]]
+title = "src/backend/storage/buffer/README"
+url = "https://github.com/postgres/postgres/blob/master/src/backend/storage/buffer/README"
+
+[[sources]]
+title = "Making the Buffer Pool Scan Resistant"
+url = "https://dev.mysql.com/doc/refman/8.4/en/innodb-performance-midpoint_insertion.html"
+
+[[sources]]
+title = "TinyLFU: A Highly Efficient Cache Admission Policy"
+url = "https://arxiv.org/abs/1512.00727"

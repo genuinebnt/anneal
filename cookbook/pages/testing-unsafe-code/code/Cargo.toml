@@ -1,0 +1,25 @@
+[package]
+name = "shelf"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+# Off by default. Each one swaps ONE method for a broken version, so you can watch the tools catch it (or miss it).
+# The three `planted-*` unsound ones only compile under Miri (or with `--cfg planted_native`, for sanitizer runs).
+planted-lying-len = []
+planted-stale-index = []
+planted-early-len = []
+# Wrong, but NOT unsound: it contains no new unsafe code and may be built and run natively.
+planted-wrong-get = []
+
+[dependencies]
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(planted_native)"] }
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+
+[workspace]

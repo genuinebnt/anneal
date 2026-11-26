@@ -1,0 +1,14 @@
+fn main() {
+    let mut found = 0;
+    let mut i = 1;
+    while i < 20 {
+        let mut j = i;
+        while j < 20 {
+            if i * j == 91 { found = i * 100 + j; break; }
+            j += 1;
+        }
+        if found > 0 { break; }
+        i += 1;
+    }
+    println(to_str(found));
+}

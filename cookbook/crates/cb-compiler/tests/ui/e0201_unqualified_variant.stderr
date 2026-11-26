@@ -1,0 +1,17 @@
+warning[W0501]: unused variable: `x`
+ --> e0201_unqualified_variant.peb:3:9
+  |
+3 |     let x: Option<int> = Some(1);
+  |         ^ this variable is never read
+  |
+  = help: if this is intentional, prefix it with an underscore: `_x`
+
+error[E0201]: cannot find value `Some` in this scope
+ --> e0201_unqualified_variant.peb:3:26
+  |
+3 |     let x: Option<int> = Some(1);
+  |                          ^^^^ not found in this scope
+  |
+  = help: enum variants are qualified: `Option::Some`
+
+error: aborting due to 1 previous error; 1 warning emitted

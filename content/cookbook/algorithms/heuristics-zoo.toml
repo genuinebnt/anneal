@@ -1,0 +1,73 @@
+title = "Heuristics zoo"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Dynamic programming, greedy and search"
+chapter_order = 5
+order = 209
+kind = "recipe"
+lede = "heuristics and approximation zoo, each checked against an exact solver on small instances."
+level = "advanced"
+code = ["examples/algorithms/heuristics_zoo.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+NP-hard optimisation you cannot solve exactly at scale (packing, covering, routing, join ordering).
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+when the exact problem is NP-hard you pick one of three tools. The trick that makes them trustworthy is to test every one against an **exact** solver on tiny seeded instances, so claims like "within 11/9 **opt**" are asserted rather than believed.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+```text
+| kind                       | guarantee                 | here                                            | typical use                              |
+```
+
+&#124;----------------------------&#124;---------------------------&#124;-------------------------------------------------&#124;------------------------------------------&#124;
+
+```text
+| exact (B&B, DP, Held-Karp) | optimal, exponential cost | bin packing B&B, subset enumeration, Held-Karp  | small n, ground truth for tests          |
+| approximation algorithm    | PROVEN ratio to OPT       | FFD <= 11/9 OPT+1, greedy set cover <= H(n),    | schedulers, covering, when you need a    |
+|                            |                           | MST-doubling TSP <= 2 OPT (metric)              | worst-case promise                       |
+| heuristic / metaheuristic  | none (empirically good)   | 2-opt, annealing, restarts, beam, genetic       | many-join optimisers, routing, tuning    |
+```
+
+Where used: PostgreSQL optimises joins with exhaustive dynamic programming for few tables and switches to a genetic algorithm (GEQO) above a table-count threshold; compilers allocate registers by graph-colouring heuristics or linear scan because optimal allocation is NP-hard;
+
+Bin-packing style first-fit/best-fit heuristics are the core of resource placement and cutting-stock tools; A&#42; with an admissible heuristic is exact, with an inadmissible one it trades optimality for speed.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+seeded xorshift everywhere (deterministic); every section ends with assert!s on ratios against the exact answer.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>query join ordering</li><li>VM/container placement</li><li>cutting stock</li><li>vehicle routing</li><li>test-suite minimisation (set cover)</li><li>chip placement (annealing)</li><li>feature selection (beam/genetic)</li><li>pathfinding in games and robotics</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://15445.courses.cs.cmu.edu/" target="_blank" rel="noreferrer">https://15445.courses.cs.cmu.edu/</a> (join ordering)</li><li><a href="https://www.cs.cmu.edu/~15721/" target="_blank" rel="noreferrer">https://www.cs.cmu.edu/~15721/</a></li><li><a href="https://theory.stanford.edu/~amitp/GameProgramming/Heuristics.html" target="_blank" rel="noreferrer">https://theory.stanford.edu/~amitp/GameProgramming/Heuristics.html</a></li></ul>
+"""
+
+[[sources]]
+title = "15445.courses.cs.cmu.edu"
+url = "https://15445.courses.cs.cmu.edu/"
+
+[[sources]]
+title = "cs.cmu.edu/~15721"
+url = "https://www.cs.cmu.edu/~15721/"
+
+[[sources]]
+title = "theory.stanford.edu/~amitp/GameProgramming/Heuristics.html"
+url = "https://theory.stanford.edu/~amitp/GameProgramming/Heuristics.html"

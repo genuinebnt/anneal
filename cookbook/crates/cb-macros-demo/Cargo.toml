@@ -1,0 +1,12 @@
+[package]
+name = "cb-macros-demo"
+version = "0.1.0"
+edition = "2024"
+description = "Behaviour and trybuild compile-fail tests for the cb-macros procedural macros."
+publish = false
+
+[dependencies]
+cb-macros = { path = "../cb-macros" }
+
+[dev-dependencies]
+trybuild = "1"

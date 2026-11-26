@@ -1,0 +1,76 @@
+title = "A Cascades-style top-down optimiser"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 391
+kind = "recipe"
+lede = "Memo of groups, transformation + implementation rules, enforcers, branch-and-bound."
+level = "advanced"
+code = ["examples/database/cascades_memo_optimizer.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>query optimisers that must stay extensible (new rules, new operators, new physical properties)</li><li>SQL planners</li><li><strong>Explain</strong> tooling</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Microsoft SQL Server's optimiser (Cascades descendant)</li><li>Greenplum/Pivotal Orca</li><li>Apache Calcite's VolcanoPlanner (memo = RelSet/RelSubset, traits = physical properties, converters = enforcers)</li><li>CockroachDB's <code>opt</code> package (memo + normalisation and exploration rules)</li><li>Apache Doris "Nereids" and StarRocks (Cascades-style planners). Course: CMU 15-799 Query Optimization (Spring 2025)</li><li>lectures 04-06 (Volcano, Cascades, transformations)</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+the heart of a Cascades optimiser in one std-only file, for select-filter-join queries with an optional **order by**.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Memo</div><div class="cb-g-says"><p>A table of <strong>groups</strong>. A group is a set of logically <strong>equivalent</strong> expressions (same result), identified here by (set of tables, set of applied filters). Its <strong>logical properties</strong> (schema = the table set, a cardinality estimate) are computed <strong>once</strong> per group, because every member must produce the same relation.</p><p><strong>A group expression</strong> is an operator whose inputs are <strong>groups</strong>, not trees: Join(g3, g5). One memo entry therefore stands for exponentially many trees. <strong>Duplicate detection</strong>: every expression is hashed (its fingerprint is the derived <code>Hash</code>/<code>Eq</code> of <code>LOp</code>); inserting an expression that already exists returns the existing group, so the rules cannot loop forever.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Transformation rules (logical -&gt; logical)</div><div class="cb-g-says"><p>Join <strong>commutativity</strong>, join <strong>associativity</strong> (Join(Join(A,B),C) -&gt; Join(A,Join(B,C)), only when B-C is connected so no cross product is invented), <strong>selection pushdown</strong> through a join (creating new groups for the filtered inputs), <strong>selection merge</strong>.</p><p>Each rule has a <strong>pattern</strong> (operator plus the operator of an input group; binding enumerates the input group's expressions) and a <strong>promise</strong> (a priority so the likeliest-useful rules fire first, which finds cheap plans early and makes pruning bite).</p><p>Not implemented: projection pushdown and aggregate pushdown (the memo shape is the same; they add operators, not machinery).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Implementation rules (logical -&gt; physical)</div><div class="cb-g-says"><p>SeqScan, IndexScan (index on column 0 of every table, delivers rows sorted by it, or a range scan when a filter hits column 0), Filter, NestedLoop/Hash/MergeJoin. Physical expressions are costed with one shared cost model (<code>cost</code> module).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Physical properties</div><div class="cb-g-says"><p>The required <strong>sort order</strong> (a column id). A plan delivers an order or not: an IndexScan delivers col 0, a MergeJoin delivers its join columns (they are equal on matches), a Filter preserves its input's order, hash/NL joins deliver nothing. Each (group, required order) pair has its <strong>own</strong> winner.</p><p><strong>Enforcer</strong>: when no candidate delivers the required order, a Sort over the same group with no requirement competes with the rest. Required properties also propagate to inputs: a MergeJoin asks its children for sorted inputs, which a child satisfies for free with an IndexScan (an <strong>interesting order</strong>) instead of paying a Sort.</p><p>This is Selinger's insight embedded in the search rather than the DP table.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Search</div><div class="cb-g-says"><p>An explicit <strong>task stack</strong> (no recursion) with the five Cascades tasks: OptimizeGroup, ExploreGroup, ExploreExpr (OptimizeExpr in the paper), ApplyRule, OptimizeInputs. Exploration is demand-driven (only groups reachable from the root, only when a group is first optimised).</p><p>OptimizeInputs costs a physical expression child by child, accumulating cost, and abandons it the moment cost-so-far exceeds the <strong>limit</strong>.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Branch-and-bound</div><div class="cb-g-says"><p>The limit for a candidate is min(caller's limit, cheapest complete plan found so far for this (group, order)). Children get limit - local cost - accumulated cost. A group that fails under limit L records Failed(L): asked again with limit &lt;= L it answers instantly.</p><p>A group that succeeds records its <strong>winner</strong> per (group, required order), so each combination is solved once (memoisation = dynamic programming).</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Comparison**. **Volcano** generator (Graefe/McKenna 1993): the ancestor. It first expands **all** logical alternatives (exhaustive), then runs top-down directed dynamic programming with memoisation and branch-and-bound.
+
+Rules were compiled from a model file into C. Cascades (Graefe 1995) turns rules and tasks into objects: exploration becomes lazy, rules carry promise, the search can be guided and abandoned, and enforcers/properties are first-class.
+
+ORCA keeps Cascades (a **memo** with groups, rules, enforcers, property requests), adds a multi-threaded job scheduler (the task stack becomes parallel jobs) and a stateless interface to the host database.
+
+**Calcite**'s VolcanoPlanner keeps a memo (RelSet = group, RelSubset = group under one trait set) but fires rules from a priority queue, bottom-up and cost-propagating, rather than driving a goal-oriented top-down search; its newer top-down rule driver moves toward Cascades.
+
+Bottom-up DP (the `query_optimizer` capstone, PostgreSQL) is simpler and faster for plain join ordering; a memo pays for generality: new rewrite rules and physical properties plug in without touching the search.
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+(a) chosen cost == brute force over **all** bushy join trees (n &lt;= 5) with the same cost model, and the tree counts match the closed forms; (b) a clique query on n tables yields exactly 2&#94;n - 1 groups, a chain n(n+1)/2 (connected subsets); (c) pruning explores strictly fewer physical expressions in total and never changes the optimum;
+
+(d) every (expression, rule) pair fires at most once; (e) executing the chosen plan on random data equals the naive reference result (multiset) on 400 queries + 40 six-table queries;
+
+(f) interesting orders: two index-scanned inputs feed a MergeJoin with NO Sort when the order is satisfied, and a Sort enforcer appears exactly when no cheaper source of the order exists; no plan ever sorts an already-sorted input.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+"The Volcano Optimizer Generator: Extensibility and Efficient Search" (Graefe, McKenna, 1993)   "The Cascades Framework for Query Optimization" (Graefe, 1995) "Orca: A Modular Query Optimizer Architecture for Big Data" (Soliman et al., 2014)   CMU 15-799 schedule <https://15799.courses.cs.cmu.edu/spring2025/schedule.html>
+
+```text
+Apache Calcite https://calcite.apache.org/docs/   CMU 15-445 https://15445.courses.cs.cmu.edu/
+```
+"""
+
+[[sources]]
+title = "15799.courses.cs.cmu.edu/spring2025/schedule.html"
+url = "https://15799.courses.cs.cmu.edu/spring2025/schedule.html"
+
+[[sources]]
+title = "calcite.apache.org/docs"
+url = "https://calcite.apache.org/docs/"
+
+[[sources]]
+title = "15445.courses.cs.cmu.edu"
+url = "https://15445.courses.cs.cmu.edu/"

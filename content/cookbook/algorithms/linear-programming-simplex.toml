@@ -1,0 +1,56 @@
+title = "Linear programming"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Sorting, strings, bits and theory"
+chapter_order = 6
+order = 225
+kind = "recipe"
+lede = "The simplex method, duality, sensitivity, LP models, branch and bound."
+level = "advanced"
+code = ["examples/algorithms/linear_programming_simplex.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>resource allocation</li><li>scheduling relaxations</li><li>flow/matching</li><li>any "maximise a linear objective under linear limits" problem</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>production planning and diet/blending models</li><li>network flow and transport</li><li>LP relaxations inside MIP solvers (branch and bound)</li><li>pricing/revenue management</li><li>cluster schedulers that round LP solutions. Course: CMU 15-850 / 15-859 style LP lectures</li><li>Chvatal "Linear Programming" chapters 2-5 (tableaus, degeneracy, duality)</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a dense-tableau simplex solver for  max c.x  s.t. A x &lt;= b,  x >= 0  (rows with b &lt; 0 are allowed).
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>Phase 1 / phase 2: rows with negative b are multiplied by -1 and receive an artificial variable; phase 1 maximises -(sum of artificials); a negative optimum proves <strong>infeasibility</strong>. Phase 2 optimises c.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>Two pivot rules: Dantzig (most negative reduced cost, fast in practice, can <strong>cycle</strong> on degenerate vertices) and Bland (smallest index for entering and leaving variable, provably terminates). Beale's classic example below cycles under Dantzig and is detected by remembering every basis visited.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Unbounded</div><div class="cb-g-says"><p>Unbounded is detected when the entering column has no positive entry (the ratio test has no leaving row).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Dual</div><div class="cb-g-says"><p>Values are read off the final tableau (reduced cost of each slack column). We check dual feasibility (y &gt;= 0, A&#94;T y &gt;= c), strong duality (b.y == c.x), complementary slackness, and cross-check by solving the dual LP as an independent LP.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Sensitivity</div><div class="cb-g-says"><p>The interval of each b_i over which the final basis stays feasible (so the optimum moves exactly y_i per unit), and how far a non-basic cost can rise before the variable enters the basis (its reduced cost).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Models</div><div class="cb-g-says"><p>Diet problem (&gt;= constraints =&gt; phase 1), max-flow as an LP (checked against Edmonds-Karp), bipartite matching (the LP is integral: totally unimodular matrix), and a tiny branch and bound for integer programs (0/1 knapsack against a DP oracle, assignment against brute-force permutations).</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+the simplex method walks along vertices of the feasible polytope, improving the objective each pivot. Degenerate vertices (several bases for one vertex) are where the walk can stall or loop; Bland's rule trades speed for a termination proof. Duality gives a certificate of optimality and economic meaning (shadow prices).
+
+Verification: 1500 random small LPs (made bounded by a box row) are compared with brute-force enumeration of all vertices (every choice of n tight constraints among the m rows and n non-negativity bounds).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Chvatal, "Linear Programming" (W.H</li><li>Freeman, 1983)</li><li>Beale 1955 "Cycling in the dual simplex algorithm" (title only, not read)</li><li><a href="https://en.wikipedia.org/wiki/Bland%27s_rule" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Bland%27s_rule</a> and <a href="https://en.wikipedia.org/wiki/Simplex_algorithm" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Simplex_algorithm</a> and <a href="https://en.wikipedia.org/wiki/Linear_programming" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Linear_programming</a></li></ul>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Bland%27s_rule"
+url = "https://en.wikipedia.org/wiki/Bland%27s_rule"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Simplex_algorithm"
+url = "https://en.wikipedia.org/wiki/Simplex_algorithm"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Linear_programming"
+url = "https://en.wikipedia.org/wiki/Linear_programming"

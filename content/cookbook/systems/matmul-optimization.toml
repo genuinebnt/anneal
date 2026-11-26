@@ -1,0 +1,78 @@
+title = "Matrix multiplication optimisation ladder"
+module = "Performance and systems"
+module_order = 7
+chapter = "Measuring and CPU performance"
+chapter_order = 1
+order = 277
+kind = "recipe"
+lede = "Loop order, transposition, tiling, register blocking, SIMD, threads."
+level = "intermediate"
+code = ["examples/perf/matmul_optimization.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>any dense linear algebra</li><li>convolution/attention kernels</li><li>understanding why "same O(n&#94;3)" can differ 100x</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+C = A &#42; B for row-major f32/f64, written 8 ways: (1) naive `ijk`, (2) `ikj` (stream rows of B), (3) transposed B (both operands read sequentially), (4) cache-blocked (tile sweep 8..256), (5) register-blocked 4x4 micro-kernel, (6) 4xW micro-kernel shaped for auto-vectorisation, (7) explicit **neon** 8x8 FMA kernel (AArch64; an AVX2+FMA 4x16 twin is compiled on x86_64 but could not be run here), (8) rayon over blocks of C rows.
+
+GFLOPS for N=256/512/1024.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Why** (roofline reasoning). The multiply does 2&#42;N&#94;3 flops (one mul + one add per inner step). The ideal traffic is only the three matrices, 3&#42;N&#94;2&#42;sizeof(T) bytes, so the best-case **arithmetic intensity** is 2N&#94;3 / 12N&#94;2 = N/6 flop/byte for f32 (about 170 flop/byte at N=1024): hugely compute-bound, if every loaded value is reused many times from cache/registers.
+
+The naive loop reuses nothing: each inner step loads two f32 (8 bytes) for 2 flops = 0.25 flop/byte, and the B access strides by a whole row (N&#42;4 bytes: a new cache line every step, a TLB miss per page). A core with &#126;100 GB/s of memory bandwidth would then top out near 25 GFLOPS at best; in practice the strided pattern gets 1-3% of peak.
+
+Machine balance = peak flops / bandwidth: a modern core retires &#126;100+ GFLOPS of f32 FMA (e.g. 4 **neon FMA** pipes x 4 lanes x 2 flops x &#126;4 GHz) against &#126;100 GB/s, so you need roughly >1 flop per byte moved from **dram**, and far more from L2: tiling raises the intensity (each tile of B is reused by every row of the A tile), and registers raise it again (a 4x8 accumulator block does 32 FMAs per 4 + 8 loaded values).
+
+**How** each rung helps: ikj: the innermost loop `c[j] += a_ip * b[p][j]` walks C and B sequentially, so cache lines are fully used and LLVM vectorises it (no loop-carried dependency: every j is independent).
+
+C and B rows (N&#42;4 bytes each) stay in L1/L2. transposed: the dot product `sum a[i][p] * bt[j][p]` is also sequential but is a reduction: floats are not associative so LLVM will not vectorise it; we use 8 independent accumulators by hand.
+
+Transposition costs O(N&#94;2) and is timed. blocked: process TxT tiles so the working set (3 tiles) fits L1/L2 and B is not re-streamed from **dram** for every row. register-blocked: keep a 4x4 (or 4xW) block of C in locals across the whole k loop: C is loaded and stored once per k-block instead of once per k step, and each A/B value loaded is used 4 times.
+
+NEON/AVX: fused multiply-add on 4/8 lanes with all accumulators in vector registers (8x8: 16 accumulators + 2 B + broadcast A). rayon: C row blocks are independent (disjoint `&mut` slices via `par_chunks_mut`): no locks, near-linear scaling until memory bandwidth or the core count is the limit.
+
+Production libraries (**blas**: OpenBLAS, BLIS, MKL, Apple Accelerate) add **packing** of A/B panels into contiguous buffers, three cache levels of blocking and hand-written assembly micro-kernels; this recipe stops before packing.
+
+**Honest result** (Apple M4 Pro, big caches): plain tiling (T=64 ikj) is **slower** than ikj here because B's rows (4 KiB) already fit the large L2 and the tile loops add overhead; tiling pays when matrices or rows exceed the cache, and it is the prerequisite for packing. The big wins are loop order (ikj &#126;10-15x over naive), register blocking + SIMD, and threads.
+
+**Footguns**: (1) float results differ by association order: compare against a rigorous error bound (k&#42;eps&#42;sum&#124;a&#124;&#124;b&#124;), not ==; the integer-valued test is the exact check. (2) N a power of two (1024 &#42; 4 B = 4 KiB stride) maps column elements to the same cache set (conflict misses); the naive version is worst there. (3) Never benchmark in debug builds.
+
+(4) Timings here are single runs of a shared machine: believe the ordering and the orders of magnitude, not the third digit.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>the GEMM at the heart of neural-network layers (<strong>blas</strong> <code>sgemm</code>/<code>dgemm</code>, <code>ndarray</code>'s <code>dot</code>, the <code>matrixmultiply</code> crate)</li><li>image convolution via im2col</li><li>PCA/linear regression normal equations</li><li>graphics transforms</li><li>scientific simulation</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>"Algorithms for Modern Hardware", matrix multiplication chapter <a href="https://en.algorithmica.org/hpc/algorithms/matmul/" target="_blank" rel="noreferrer">https://en.algorithmica.org/hpc/algorithms/matmul/</a></li><li>"How to Optimize a CUDA/CPU Matmul" style walk-through <a href="https://siboehm.com/articles/22/Fast-MMM-on-CPU" target="_blank" rel="noreferrer">https://siboehm.com/articles/22/Fast-MMM-on-CPU</a></li><li>Goto &amp; van de Geijn, "Anatomy of High-Performance Matrix Multiplication" <a href="https://www.cs.utexas.edu/~flame/pubs/GotoTOMS_revision.pdf" target="_blank" rel="noreferrer">https://www.cs.utexas.edu/~flame/pubs/GotoTOMS_revision.pdf</a></li><li>Roofline model <a href="https://en.wikipedia.org/wiki/Roofline_model" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Roofline_model</a></li></ul>
+"""
+
+[[sources]]
+title = "en.algorithmica.org/hpc/algorithms/matmul"
+url = "https://en.algorithmica.org/hpc/algorithms/matmul/"
+
+[[sources]]
+title = "siboehm.com/articles/22/Fast-MMM-on-CPU"
+url = "https://siboehm.com/articles/22/Fast-MMM-on-CPU"
+
+[[sources]]
+title = "cs.utexas.edu/~flame/pubs/GotoTOMS_revision.pdf"
+url = "https://www.cs.utexas.edu/~flame/pubs/GotoTOMS_revision.pdf"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Roofline_model"
+url = "https://en.wikipedia.org/wiki/Roofline_model"

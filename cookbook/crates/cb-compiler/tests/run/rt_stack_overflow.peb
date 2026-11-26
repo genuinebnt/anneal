@@ -1,0 +1,2 @@
+fn forever(n: int) -> int { forever(n + 1) + 1 }
+fn main() { println(to_str(forever(0))); }

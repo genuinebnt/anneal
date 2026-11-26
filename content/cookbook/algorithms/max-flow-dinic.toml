@@ -1,0 +1,50 @@
+title = "Max flow dinic"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Graph algorithms"
+chapter_order = 4
+order = 195
+kind = "recipe"
+lede = "max-flow with Dinic's algorithm, min-cut extraction, bipartite matching and project selection."
+level = "advanced"
+code = ["examples/algorithms/max_flow_dinic.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>assignment/matching</li><li>scheduling relaxations</li><li>image segmentation</li><li>"what to build vs what it needs" selection</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+MAX-FLOW: push as much as possible from source s to sink t without exceeding edge capacities. Each edge is stored with a paired reverse edge (ids `e` and `e^1`) in one Vec; the reverse edge's capacity is the flow pushed so far, so "undoing" flow is just another residual edge.
+
+**Dinic**: repeat { BFS builds a **level** graph (distance from s in the residual graph); a DFS finds a **blocking** flow that only walks edges going exactly one level deeper } until t is unreachable.
+
+The `it[u]` CURRENT-ARC pointer remembers how far u's edge list has been exhausted, so no dead edge is rescanned within a phase: O(V&#94;2 E) worst case, and O(E sqrt(V)) on unit-capacity bipartite graphs. The DFS here is iterative (explicit path stack), no recursion.
+
+**Min-cut**: after max-flow, nodes still reachable from s in the residual graph form side S; original edges from S to the rest are saturated and their capacities sum to the max-flow value (max-flow min-cut theorem). **Reductions**: bipartite matching = flow with unit capacities (s->left, left->right, right->t).
+
+Project selection = min cut: profitable projects hang off s, costly tools off t, "project needs tool" edges are infinite, so no cut can take a project without paying for all its tools. Answer = sum of profits - min cut.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>job/worker/task assignment and roster scheduling</li><li>bin-packing / transport relaxations (LP bounds)</li><li>image segmentation by graph cuts (foreground/background as s/t sides)</li><li>supply-chain and network capacity planning</li><li>baseball-elimination style "can this team still win" questions</li><li>open-pit mining / dependency-closure problems. Differential tests: Dinic vs a simple Edmonds-Karp on 2000 random networks</li><li>flow matching vs Kuhn's algorithm</li><li>project selection vs brute force over all subsets</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://cp-algorithms.com/graph/dinic.html> and <https://cp-algorithms.com/graph/edmonds_karp.html>
+"""
+
+[[sources]]
+title = "cp-algorithms.com/graph/dinic.html"
+url = "https://cp-algorithms.com/graph/dinic.html"
+
+[[sources]]
+title = "cp-algorithms.com/graph/edmonds_karp.html"
+url = "https://cp-algorithms.com/graph/edmonds_karp.html"

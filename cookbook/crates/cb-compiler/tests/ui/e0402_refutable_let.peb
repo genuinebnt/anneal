@@ -1,0 +1,6 @@
+enum Option<T> { None, Some(T) }
+fn main() {
+    let o = Option::Some(1);
+    let Option::Some(x) = o;
+    println(to_str(x));
+}

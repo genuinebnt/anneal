@@ -1,0 +1,13 @@
+// passes: bce
+// `let n = len(xs)` before the loop and no `push`/`pop`/call inside: still provable.
+fn sum(xs: [int]) -> int {
+    let n = len(xs);
+    let mut i = 0;
+    let mut s = 0;
+    while i < n {
+        s += xs[i];
+        i += 1;
+    }
+    s
+}
+fn main() { println(to_str(sum([4, 5, 6]))); }

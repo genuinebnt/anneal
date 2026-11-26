@@ -1,0 +1,70 @@
+title = "Safe memory reclamation for lock-free structures"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Concurrent data structures"
+chapter_order = 3
+order = 258
+kind = "recipe"
+lede = "Leak vs hazard pointers vs epochs."
+level = "advanced"
+code = ["examples/concurrency/epoch_hazard_pointer_reclamation.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+lock-free stacks/queues/maps with heap nodes, anywhere readers traverse memory that writers unlink.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The problem**: in a lock-free structure a thread unlinks a node, but other threads may still hold a pointer to it (they read `head`, then were preempted). Freeing at once is a use-after-free; and if the allocator reuses the address, the stale CAS in a Treiber pop can even **succeed** on a recycled node (**aba**, see lockfree_stack_aba).
+
+A GC would solve it; Rust must do it by hand: unlinked nodes are **retired** and freed only once no thread can hold a pointer. **One trait**, **four strategies** (`Reclaim`): `enter/leave` bracket an operation, `protect` loads a shared pointer safely, `retire` hands over an unlinked node. A Treiber stack and a Michael-Scott queue are written once over it.
+
+(a) `Leak`: never free. Correct, simplest, fastest, memory grows without bound (fine for short-lived programs). (b) `HazardDomain` (Maged Michael): each thread has 2 published hazard slots.
+
+`protect` = publish the pointer, fence, re-read the source, retry if it changed. `retire` appends to the thread's list; at **thresh** entries a **scan** collects every hazard slot and frees the unprotected nodes. Per-thread unfreed nodes are bounded by **thresh**, even if another thread stalls forever.
+
+**Cost.** A SeqCst fence per protect. (c) `EpochDomain` (Fraser; crossbeam-epoch): a global epoch; a thread **pins** by publishing the epoch it saw. The epoch advances only when every pinned thread has observed the current one.
+
+A node retired in epoch e goes to limbo list e%3 and is freed when the global epoch reaches e+2 (no pinned thread can still be in epoch &lt;= e). Reads are cheap (a plain load), but **one** stalled pinned thread blocks all reclamation: memory is unbounded. (d) `Naive`: free immediately: the bug.
+
+The scripted demo replays the interleaving with a manual scheduler. **How we prove it** (no real `free`, on purpose): freed nodes are **quarantined**, never returned to the OS until the end: `free` poisons the node (`magic = POISON`, value overwritten) and counts it; a second free of the same node is counted as a double free.
+
+Every node read under protection checks `magic == LIVE`; a poisoned read is a use-after-free that real memory could hide. Quarantine keeps the program sound (all accesses are atomics on valid memory) while still detecting premature frees. With `recycle`, freed nodes are handed out again FIFO, which provokes **aba**.
+
+Swap `Alloc::free` for `dealloc` for production (and use crossbeam-epoch instead of this recipe). Run `cargo +nightly miri run --example epoch_hazard_pointer_reclamation` after reducing the constants to check the unsafe code.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>crossbeam-epoch backs crossbeam's SkipMap/deque/queue</li><li>hazard pointers are in folly (Meta)</li><li>the C++26 <code>std::hazard_pointer</code></li><li>the <code>haphazard</code> crate</li><li>epoch-style schemes in the Linux kernel RCU and in concurrent maps</li><li>leaking is used by short-lived tools and arenas</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Maged M</li><li>Michael, "Hazard Pointers: Safe Memory Reclamation for Lock-Free Objects" (IEEE TPDS 2004) <a href="https://www.research.ibm.com/people/m/michael/ieeetpds-2004.pdf" target="_blank" rel="noreferrer">https://www.research.ibm.com/people/m/michael/ieeetpds-2004.pdf</a> and Keir Fraser, "Practical lock-freedom" (PhD thesis, 2004) <a href="https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-579.pdf" target="_blank" rel="noreferrer">https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-579.pdf</a> and Michael &amp; Scott, "Simple, Fast, and Practical Non-Blocking and Blocking Concurrent Queue Algorithms" <a href="https://www.cs.rochester.edu/~scott/papers/1996_PODC_queues.pdf" target="_blank" rel="noreferrer">https://www.cs.rochester.edu/~scott/papers/1996_PODC_queues.pdf</a> and crossbeam-epoch <a href="https://github.com/crossbeam-rs/crossbeam" target="_blank" rel="noreferrer">https://github.com/crossbeam-rs/crossbeam</a> and Aaron Turon, "Lock-freedom without garbage collection" <a href="https://aturon.github.io/blog/2015/08/27/epoch/" target="_blank" rel="noreferrer">https://aturon.github.io/blog/2015/08/27/epoch/</a></li></ul>
+"""
+
+[[sources]]
+title = "research.ibm.com/people/m/michael/ieeetpds-2004.pdf"
+url = "https://www.research.ibm.com/people/m/michael/ieeetpds-2004.pdf"
+
+[[sources]]
+title = "cl.cam.ac.uk/techreports/UCAM-CL-TR-579.pdf"
+url = "https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-579.pdf"
+
+[[sources]]
+title = "cs.rochester.edu/~scott/papers/1996_PODC_queues.pdf"
+url = "https://www.cs.rochester.edu/~scott/papers/1996_PODC_queues.pdf"
+
+[[sources]]
+title = "github.com/crossbeam-rs/crossbeam"
+url = "https://github.com/crossbeam-rs/crossbeam"
+
+[[sources]]
+title = "aturon.github.io/blog/2015/08/27/epoch"
+url = "https://aturon.github.io/blog/2015/08/27/epoch/"

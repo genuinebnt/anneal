@@ -1,0 +1,34 @@
+title = "Server-Sent Events with `Last-Event-ID` replay"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 514
+kind = "recipe"
+lede = "Server-Sent Events with `Last-Event-ID` replay."
+level = "intermediate"
+code = ["examples/web/axum_sse_replay.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+SSE / execution event stream stage.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>live progress feeds: build logs</li><li>job status</li><li>notifications</li><li>reconnect-safe via Last-Event-ID</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: persist events with increasing ids. When a client reconnects it sends `Last-Event-ID: N`; the server replays only events with id > N, then continues live. `KeepAlive` sends comment lines so proxies do not close idle connections.
+
+Here the "live" part is omitted; the replay logic is the lesson. Spec: <https://html.spec.whatwg.org/multipage/server-sent-events.html>
+"""
+
+[[sources]]
+title = "html.spec.whatwg.org/multipage/server-sent-events.html"
+url = "https://html.spec.whatwg.org/multipage/server-sent-events.html"

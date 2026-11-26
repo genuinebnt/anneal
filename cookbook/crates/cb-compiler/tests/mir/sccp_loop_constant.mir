@@ -1,0 +1,63 @@
+=== before ===
+// monomorphisation: 1 function instances
+// fn#0 (main)
+fn main() -> () {
+    let _0: int;
+    let _1: int;  // n
+    let _2: int;  // x
+    let _3: int;  // i
+    let _4: bool;
+    let _5: bool;
+    let _6: str;
+    let _7: ();
+  bb0:
+    _1 = len("abc")
+    _2 = 1
+    _3 = 0
+    goto bb1
+  bb1:
+    _4 = _3 < _1
+    branch _4 -> bb2, bb3
+  bb2:
+    _5 = _2 != 1
+    branch _5 -> bb4, bb5
+  bb3:
+    _6 = to_str(_2)
+    _7 = println(_6)
+    return ()
+  bb4:
+    _2 = 2
+    goto bb6
+  bb5:
+    goto bb6
+  bb6:
+    _3 = _3 + 1
+    goto bb1
+}
+
+=== after: ssa, sccp, out-of-ssa ===
+// monomorphisation: 1 function instances
+// fn#0 (main)
+fn main() -> () {
+    let _0: bool;
+    let _1: str;
+    let _2: ();
+    let _3: int;  // i
+  bb0:
+    _3 = 0
+    goto bb1
+  bb1:
+    _0 = _3 < 3
+    branch _0 -> bb2, bb3
+  bb2:
+    goto bb4
+  bb3:
+    _1 = to_str(1)
+    _2 = println(_1)
+    return ()
+  bb4:
+    goto bb5
+  bb5:
+    _3 = _3 + 1
+    goto bb1
+}

@@ -1,0 +1,498 @@
+title = "Time-series databases"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 421
+kind = "guide"
+lede = "Time Series Database Lectures #1–#6 (InfluxDB, Streamlio, Two Sigma, kdb+, QuasarDB, TimescaleDB) · series and cardinality · Gorilla and frame-of-reference compression · chunks with summaries · rollups · as-of joins · all measured"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<p><em>(These are first-person system talks without published notes. The points below are the design space the systems share, drawn from their public papers and documentation, not a summary of what each speaker said.)</em></p>
+
+<ul> <li><strong>The workload is the definition.</strong> A time-series workload is <strong>append-mostly and time-ordered</strong> (points arrive roughly in timestamp order), <strong>write-heavy</strong> (millions of points per second), <strong>recent-biased</strong> (dashboards read the last hour; analysis reads ranges), <strong>aggregation-heavy</strong> (<code>avg</code>, <code>max</code>, percentiles per time window, grouped by tags), and <strong>retention-bounded</strong> (old data is dropped or downsampled by age, not updated). A database that exploits those facts beats a general one by an order of magnitude on storage and often on speed; one that does not is just a table with a timestamp column.</li> <li><strong>A series is a metric plus a set of tags; a point is a timestamp and values.</strong> <code>cpu,host=a,region=eu usage=0.42 1700000000000</code>: the <em>tags</em> identify the series and are indexed; the <em>fields</em> are the measured values and are not. The <strong>cardinality</strong> (the number of distinct tag combinations) drives index size and memory, not the point count: one tag with a million distinct values (a request id, a container id) turns a cheap workload into an unbounded index.</li> <li><strong>Time is the partition key.</strong> Data is cut into <strong>time chunks</strong> (Timescale hypertable chunks, InfluxDB shards, kdb+ date partitions). Writes touch the newest chunk, range queries touch only overlapping chunks, and <strong>retention is dropping whole chunks</strong>, an <code>O(1)</code> metadata operation instead of a delete that rewrites data.</li> <li><strong>Compression is the main tool, because the data is regular.</strong> Timestamps are almost evenly spaced: store the <strong>delta of deltas</strong>, which is zero most of the time. Values are close to their predecessors: <strong>XOR</strong> consecutive floats (Gorilla), or <strong>delta and bit-pack</strong> integers and fixed-precision decimals. Real systems choose a codec <strong>per column and per block</strong> from the data. Typical results are 1–2 bytes per point for regular, low-entropy series.</li> <li><strong>Pre-aggregate, then prune.</strong> Keep <strong>per-chunk summaries</strong> (count, sum, min, max, time range) so a query that covers whole chunks never decodes them, and <strong>rollups</strong> (continuous aggregates) so a dashboard over months reads hundreds of buckets instead of millions of points. Multi-resolution retention (raw for a week, one-minute rollups for a quarter, hourly forever) is the standard tiering.</li> <li><strong>Time-aware joins and windows are first-class.</strong> The <strong>as-of join</strong> ("for each trade, the last quote at or before it, for the same symbol") is the operation that quantitative-finance time-series systems (kdb+'s <code>aj</code>) are built around; gap filling, interpolation and sliding windows are the others.</li> <li><strong>Out-of-order and late data are a fact.</strong> Sensors buffer, networks retry, backfills happen. A design that only appends in order must have a side path for late points that does not rewrite old chunks.</li> <li><strong>Architectures differ in where the recent data lives.</strong> A common shape (kdb+'s real-time database and historical database, the memtable and sealed files of an LSM, Influx's cache and TSM files) keeps the last window in memory with a write-ahead log and seals it into immutable compressed blocks, so reads see both.</li> </ul>
+"""
+
+[[sections]]
+heading = "The data model"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>concept</th> <th>example</th> <th>indexed?</th> <th>cost driver</th> </tr> </thead> <tbody> <tr> <td>measurement / metric</td> <td><code>cpu</code></td> <td>yes (name)</td> <td>few</td> </tr> <tr> <td>tag</td> <td><code>host=a</code>, <code>region=eu</code></td> <td>yes: tag → set of series ids</td> <td><strong>number of distinct combinations</strong></td> </tr> <tr> <td>field</td> <td><code>usage=0.42</code></td> <td>no</td> <td>points × bytes per point</td> </tr> <tr> <td>timestamp</td> <td><code>1700000000000</code> ms</td> <td>partition key</td> <td>order and regularity</td> </tr> </tbody> </table></div>
+
+<p>The series count is the <strong>product</strong> of tag cardinalities that actually occur together: 1 000 hosts × 20 services × 5 regions is at most 100 000 series, cheap; adding a <code>request_id</code> tag makes it one series per request, which is a table scan with extra steps. The index is an <strong>inverted index</strong> from <code>(tag, value)</code> to a sorted list of series ids; a query <code>host=a AND region=eu</code> intersects two lists. Rule of thumb: tags are what you filter and group by with <em>bounded</em> values; unbounded identifiers belong in fields or in a different system.</p>
+"""
+
+[[sections]]
+heading = "Compression"
+body = """
+<p>Two codecs, chosen per block by size.</p>
+
+<p><strong>Gorilla</strong> (Pelkonen et al., Facebook, VLDB 2015; the basis of the Prometheus, InfluxDB and M3 encodings and of many variants) codes a block as a bit stream:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>part</th> <th>bits</th> <th>rule</th> </tr> </thead> <tbody> <tr> <td>first timestamp, first value</td> <td>64 + 64</td> <td>raw</td> </tr> <tr> <td>timestamp, delta-of-delta <code>D</code> = 0</td> <td><code>0</code> (1 bit)</td> <td>the common case on a regular grid</td> </tr> <tr> <td><code>D</code> in −64..=63</td> <td><code>10</code> + 7</td> <td>small jitter</td> </tr> <tr> <td><code>D</code> in −256..=255</td> <td><code>110</code> + 9</td> <td></td> </tr> <tr> <td><code>D</code> in −2048..=2047</td> <td><code>1110</code> + 12</td> <td></td> </tr> <tr> <td>anything else</td> <td><code>1111</code> + 64</td> <td>the paper uses 32; 64 bits makes any <code>i64</code> timestamp legal</td> </tr> <tr> <td>value equal to the previous</td> <td><code>0</code></td> <td>repeated gauge</td> </tr> <tr> <td>value, XOR fits the previous window</td> <td><code>10</code> + meaningful bits</td> <td>the window of leading and trailing zeros is reused</td> </tr> <tr> <td>value, new window</td> <td><code>11</code> + 5 (leading zeros, capped at 31) + 6 (length, 64 stored as 0) + bits</td> <td></td> </tr> </tbody> </table></div>
+
+<p>A regular series that does not change costs <strong>2 bits per point</strong>. The scheme is excellent when consecutive values share most bits (integers stored as floats, slowly varying readings) and poor when they do not.</p>
+
+<p><strong>Frame-of-reference packing</strong> for fixed-precision data (a temperature to 0.1, a price to 0.01, a percentage to 0.01): detect that every value is <code>k / 10&#94;d</code> exactly (<code>d ≤ 6</code>, bitwise-exact on the round trip, and no <code>-0.0</code>), turn values into integers, take <strong>zigzag deltas</strong> of values and <strong>zigzag delta-of-deltas</strong> of timestamps, and pack them in frames of 128 at the width of the largest entry. This is what the integer codecs of Timescale and InfluxDB do for integer columns (with Simple8b or similar), and the idea behind <strong>ALP</strong> (Afroozeh et al., SIGMOD 2024), which finds the decimal exponent per vector for floating-point columns. It rejects any block that is not exactly decimal, so it never loses a bit.</p>
+"""
+
+[[sections]]
+heading = "A series store"
+body = """
+<p>A store ties the pieces together:</p>
+
+<ol> <li><strong>Head</strong>: in-order points are appended to an in-memory vector; when it reaches <code>chunk_points</code> it is <em>sealed</em>.</li> <li><strong>Sealing</strong> encodes the block with both codecs, keeps the smaller (a tag records which), and stores the block's <strong>time range</strong> and an <strong>aggregate summary</strong> (count, sum, min, max) next to the bytes.</li> <li><strong>Late points</strong> (older than the newest point) go to a small sorted side buffer and are merged at query time, so a late arrival never rewrites a sealed block.</li> <li><strong><code>range(t0, t1)</code></strong> decodes only blocks whose time range overlaps; <strong><code>aggregate(t0, t1)</code></strong> merges stored summaries for blocks fully inside the window and decodes only the (at most two) blocks cut by its ends, plus the head and late buffer.</li> <li>A <strong>rollup</strong> is a tumbling-window aggregate (<code>bucket = floor(t / width) × width</code>) updated on every insert, so a late point simply updates its bucket.</li> </ol>
+"""
+
+[[sections]]
+heading = "As-of joins"
+body = """
+<p><code>aj(trades, quotes, on symbol, time)</code>: for each trade, the quote with the same symbol and the greatest time not after the trade's (greatest index among equal times), optionally within a tolerance. Three algorithms:</p>
+
+<ul> <li><strong>Naive</strong>: scan all quotes per trade, <code>O(n·m)</code>; the definition and the test oracle.</li> <li><strong>Per-key binary search</strong>: group quotes by symbol into time-sorted vectors; one <code>partition_point</code> per trade, <code>O(n log m)</code>, no ordering needed on the trades.</li> <li><strong>Merge</strong>: when both sides are sorted by time, walk them together and remember the latest quote per symbol; <code>O(n + m)</code>. This is the shape of kdb+'s <code>aj</code> and of <code>ASOF JOIN</code> in modern engines.</li> </ul>
+
+:::deeper Reference: bit reader/writer, Gorilla encode/decode, frame-of-reference packing, chunked series store with summaries and codec choice, rollups, as-of joins
+```rust title="src/ts.rs"
+//! Time-series building blocks: a bit-level reader/writer, Gorilla compression (delta-of-delta timestamps, XOR floats),
+//! a frame-of-reference integer packer for fixed-precision data, a chunked series store with summaries for pruning,
+//! incrementally maintained rollups, and as-of joins.
+use std::collections::BTreeMap;
+
+// ----------------------------------------------------------------------------------------------- bits
+
+#[derive(Default)]
+pub struct BitWriter { buf: Vec<u8>, cur: u8, cur_bits: u32, pub nbits: usize }
+impl BitWriter {
+    pub fn new() -> Self { Self::default() }
+    /// Append the low `n` bits of `v`, most significant first (`n` in 0..=64).
+    pub fn put(&mut self, v: u64, n: u32) {
+        debug_assert!(n <= 64);
+        let mut left = n;
+        while left > 0 {
+            let take = left.min(8 - self.cur_bits);
+            let shift = left - take;
+            let part = ((v >> shift) & ((1u64 << take) - 1)) as u8;
+            self.cur = if take == 8 { part } else { (self.cur << take) | part };
+            self.cur_bits += take;
+            left -= take;
+            if self.cur_bits == 8 { self.buf.push(self.cur); self.cur = 0; self.cur_bits = 0; }
+        }
+        self.nbits += n as usize;
+    }
+    pub fn finish(mut self) -> Vec<u8> {
+        if self.cur_bits > 0 { self.buf.push(self.cur << (8 - self.cur_bits)); }
+        self.buf
+    }
+}
+
+pub struct BitReader<'a> { buf: &'a [u8], pos: usize }
+impl<'a> BitReader<'a> {
+    pub fn new(buf: &'a [u8]) -> Self { BitReader { buf, pos: 0 } }
+    /// Read `n` bits (0..=64) as the low bits of the result; `None` past the end.
+    pub fn get(&mut self, n: u32) -> Option<u64> {
+        if self.pos + n as usize > self.buf.len() * 8 { return None; }
+        let mut out = 0u64;
+        let mut left = n;
+        while left > 0 {
+            let byte = self.buf[self.pos / 8];
+            let avail = 8 - (self.pos % 8) as u32;
+            let take = left.min(avail);
+            let bits = (byte >> (avail - take)) & (((1u16 << take) - 1) as u8);
+            out = (out << take) | bits as u64;
+            self.pos += take as usize;
+            left -= take;
+        }
+        Some(out)
+    }
+    pub fn bit(&mut self) -> Option<bool> { self.get(1).map(|b| b == 1) }
+}
+
+#[inline] fn sign_extend(v: u64, bits: u32) -> i64 { ((v << (64 - bits)) as i64) >> (64 - bits) }
+#[inline] fn zigzag(v: i64) -> u64 { ((v << 1) ^ (v >> 63)) as u64 }
+#[inline] fn unzigzag(z: u64) -> i64 { ((z >> 1) as i64) ^ -((z & 1) as i64) }
+
+// ----------------------------------------------------------------------------------------------- Gorilla
+
+/// Bits spent on timestamps and on values (for the tables), plus the encoded bytes.
+pub struct Encoded { pub bytes: Vec<u8>, pub ts_bits: usize, pub val_bits: usize }
+
+/// Facebook's Gorilla scheme (Pelkonen et al., VLDB 2015) with two deviations: the first delta is coded like any other delta-of-delta
+/// (against 0), and the widest delta-of-delta escape carries 64 bits so any `i64` timestamps round-trip.
+///   timestamps: delta-of-delta D: `0` | `10`+7b (-64..=63) | `110`+9b (-256..=255) | `1110`+12b (-2048..=2047) | `1111`+64b
+///   values:     XOR with the previous value: `0` if equal; `10` + the meaningful bits when they fit the previous window of
+///               (leading, trailing) zeros; `11` + 5b leading zeros (capped at 31) + 6b length (64 stored as 0) + the meaningful bits
+pub fn gorilla_encode(ts: &[i64], vs: &[f64]) -> Encoded {
+    assert_eq!(ts.len(), vs.len());
+    let mut w = BitWriter::new();
+    w.put(ts.len() as u64, 32);
+    let (mut ts_bits, mut val_bits) = (32usize, 0usize);
+    if ts.is_empty() { return Encoded { bytes: w.finish(), ts_bits, val_bits }; }
+    w.put(ts[0] as u64, 64);
+    w.put(vs[0].to_bits(), 64);
+    ts_bits += 64; val_bits += 64;
+    let (mut prev_t, mut prev_delta) = (ts[0], 0i64);
+    let (mut prev_v, mut lead_p, mut trail_p) = (vs[0].to_bits(), u32::MAX, 0u32);
+    for i in 1..ts.len() {
+        let before = w.nbits;
+        let delta = ts[i].wrapping_sub(prev_t);
+        let d = delta.wrapping_sub(prev_delta);
+        match d {
+            0 => w.put(0, 1),
+            -64..=63 => { w.put(0b10, 2); w.put((d as u64) & 0x7f, 7); }
+            -256..=255 => { w.put(0b110, 3); w.put((d as u64) & 0x1ff, 9); }
+            -2048..=2047 => { w.put(0b1110, 4); w.put((d as u64) & 0xfff, 12); }
+            _ => { w.put(0b1111, 4); w.put(d as u64, 64); }
+        }
+        prev_t = ts[i]; prev_delta = delta;
+        ts_bits += w.nbits - before;
+        let before = w.nbits;
+        let bits = vs[i].to_bits();
+        let x = bits ^ prev_v;
+        if x == 0 { w.put(0, 1); } else {
+            let lead = x.leading_zeros().min(31);
+            let trail = x.trailing_zeros();
+            if lead_p != u32::MAX && lead >= lead_p && trail >= trail_p {
+                w.put(0b10, 2);
+                w.put(x >> trail_p, 64 - lead_p - trail_p);
+            } else {
+                let len = 64 - lead - trail;
+                w.put(0b11, 2);
+                w.put(lead as u64, 5);
+                w.put((len & 63) as u64, 6);
+                w.put(x >> trail, len);
+                lead_p = lead; trail_p = trail;
+            }
+        }
+        prev_v = bits;
+        val_bits += w.nbits - before;
+    }
+    Encoded { bytes: w.finish(), ts_bits, val_bits }
+}
+
+pub fn gorilla_decode(bytes: &[u8]) -> Option<(Vec<i64>, Vec<f64>)> {
+    let mut r = BitReader::new(bytes);
+    let n = r.get(32)? as usize;
+    let (mut ts, mut vs) = (Vec::with_capacity(n), Vec::with_capacity(n));
+    if n == 0 { return Some((ts, vs)); }
+    ts.push(r.get(64)? as i64);
+    let mut prev_v = r.get(64)?;
+    vs.push(f64::from_bits(prev_v));
+    let (mut prev_delta, mut lead_p, mut trail_p) = (0i64, 0u32, 0u32);
+    for _ in 1..n {
+        let d = if !r.bit()? { 0 }
+            else if !r.bit()? { sign_extend(r.get(7)?, 7) }
+            else if !r.bit()? { sign_extend(r.get(9)?, 9) }
+            else if !r.bit()? { sign_extend(r.get(12)?, 12) }
+            else { r.get(64)? as i64 };
+        prev_delta = prev_delta.wrapping_add(d);
+        let t = ts.last().unwrap().wrapping_add(prev_delta);
+        ts.push(t);
+        if r.bit()? {
+            if r.bit()? {
+                lead_p = r.get(5)? as u32;
+                let mut len = r.get(6)? as u32;
+                if len == 0 { len = 64; }
+                trail_p = 64 - lead_p - len;
+            }
+            let meaningful = 64 - lead_p - trail_p;
+            prev_v ^= r.get(meaningful)? << trail_p;
+        }
+        vs.push(f64::from_bits(prev_v));
+    }
+    Some((ts, vs))
+}
+
+// ----------------------------------------------------------------------------------------------- frame-of-reference packing
+
+/// If every value is a decimal number with at most 6 fractional digits (exactly: `round(v·10^d)/10^d == v` bitwise, and no `-0.0`,
+/// which an integer cannot represent), return `d`.
+pub fn decimals(vs: &[f64]) -> Option<u32> {
+    'outer: for d in 0..=6u32 {
+        let scale = 10f64.powi(d as i32);
+        for &v in vs {
+            let k = (v * scale).round();
+            if !v.is_finite() || v.to_bits() == (-0.0f64).to_bits() || k.abs() >= 9.0e15 || (k / scale).to_bits() != v.to_bits() { continue 'outer; }
+        }
+        return Some(d);
+    }
+    None
+}
+
+const FRAME: usize = 128;
+fn pack_frames(w: &mut BitWriter, z: &[u64]) {
+    for frame in z.chunks(FRAME) {
+        let width = 64 - frame.iter().fold(0, |a, &x| a | x).leading_zeros();
+        w.put(width as u64, 7);
+        for &x in frame { w.put(x, width); }
+    }
+}
+fn unpack_frames(r: &mut BitReader, count: usize) -> Option<Vec<u64>> {
+    let mut out = Vec::with_capacity(count);
+    while out.len() < count {
+        let width = r.get(7)? as u32;
+        for _ in 0..FRAME.min(count - out.len()) { out.push(r.get(width)?); }
+    }
+    Some(out)
+}
+
+/// Fixed-precision data: values become integers (`v·10^d`), timestamps and values become zigzag deltas, packed in frames of 128 at the
+/// width of the largest entry (a "frame of reference" layout that decodes 128 values with a tight loop and no per-value branching).
+pub fn scaled_encode(ts: &[i64], vs: &[f64]) -> Option<Encoded> {
+    assert_eq!(ts.len(), vs.len());
+    let d = decimals(vs)?;
+    let scale = 10f64.powi(d as i32);
+    let ints: Vec<i64> = vs.iter().map(|&v| (v * scale).round() as i64).collect();
+    let mut w = BitWriter::new();
+    w.put(ts.len() as u64, 32);
+    w.put(d as u64, 4);
+    if ts.is_empty() { let b = w.nbits; return Some(Encoded { bytes: w.finish(), ts_bits: b, val_bits: 0 }); }
+    w.put(ts[0] as u64, 64);
+    w.put(ints[0] as u64, 64);
+    let mut tz = Vec::with_capacity(ts.len());
+    let mut vz = Vec::with_capacity(ts.len());
+    let mut prev_delta = 0i64;
+    for i in 1..ts.len() {
+        let delta = ts[i].wrapping_sub(ts[i - 1]);
+        tz.push(zigzag(delta.wrapping_sub(prev_delta)));
+        prev_delta = delta;
+        vz.push(zigzag(ints[i].wrapping_sub(ints[i - 1])));
+    }
+    let head = w.nbits;
+    pack_frames(&mut w, &tz);
+    let mid = w.nbits;
+    pack_frames(&mut w, &vz);
+    let total = w.nbits;
+    Some(Encoded { bytes: w.finish(), ts_bits: head - 64 + (mid - head), val_bits: 64 + (total - mid) })
+}
+
+pub fn scaled_decode(bytes: &[u8]) -> Option<(Vec<i64>, Vec<f64>)> {
+    let mut r = BitReader::new(bytes);
+    let n = r.get(32)? as usize;
+    let d = r.get(4)? as i32;
+    if n == 0 { return Some((vec![], vec![])); }
+    let scale = 10f64.powi(d);
+    let t0 = r.get(64)? as i64;
+    let v0 = r.get(64)? as i64;
+    let tz = unpack_frames(&mut r, n - 1)?;
+    let vz = unpack_frames(&mut r, n - 1)?;
+    let (mut ts, mut vs) = (vec![t0], vec![v0 as f64 / scale]);
+    let (mut delta, mut iv) = (0i64, v0);
+    for i in 0..n - 1 {
+        delta = delta.wrapping_add(unzigzag(tz[i]));
+        ts.push(ts[i].wrapping_add(delta));
+        iv = iv.wrapping_add(unzigzag(vz[i]));
+        vs.push(iv as f64 / scale);
+    }
+    Some((ts, vs))
+}
+
+// ----------------------------------------------------------------------------------------------- aggregates
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Agg { pub count: u64, pub sum: f64, pub min: f64, pub max: f64 }
+impl Agg {
+    pub const EMPTY: Agg = Agg { count: 0, sum: 0.0, min: f64::INFINITY, max: f64::NEG_INFINITY };
+    pub fn add(&mut self, v: f64) { self.count += 1; self.sum += v; self.min = self.min.min(v); self.max = self.max.max(v); }
+    pub fn merge(&mut self, o: &Agg) { self.count += o.count; self.sum += o.sum; self.min = self.min.min(o.min); self.max = self.max.max(o.max); }
+}
+
+// ----------------------------------------------------------------------------------------------- series store
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Codec { Gorilla, Packed }
+
+/// A sealed block: time range, aggregate summary, the codec that won for this block, and the encoded bytes.
+pub struct Chunk { pub t_min: i64, pub t_max: i64, pub agg: Agg, pub codec: Codec, pub blob: Vec<u8> }
+impl Chunk {
+    pub fn decode(&self) -> (Vec<i64>, Vec<f64>) {
+        match self.codec { Codec::Gorilla => gorilla_decode(&self.blob), Codec::Packed => scaled_decode(&self.blob) }.expect("valid chunk")
+    }
+}
+
+/// One series: in-order points go to the head and are sealed into compressed chunks of `chunk_points`; late (out-of-order) points
+/// are kept in a small sorted side buffer and merged at query time. Every sealed chunk keeps its time range and an aggregate summary.
+pub struct SeriesStore {
+    chunk_points: usize,
+    pub sealed: Vec<Chunk>,
+    head_t: Vec<i64>, head_v: Vec<f64>,
+    late: Vec<(i64, f64)>,
+    pub chunks_decoded: std::cell::Cell<u64>,
+}
+impl SeriesStore {
+    pub fn new(chunk_points: usize) -> Self { SeriesStore { chunk_points, sealed: vec![], head_t: vec![], head_v: vec![], late: vec![], chunks_decoded: Default::default() } }
+    fn last_t(&self) -> Option<i64> { self.head_t.last().copied().or_else(|| self.sealed.last().map(|c| c.t_max)) }
+    pub fn append(&mut self, t: i64, v: f64) {
+        if self.last_t().is_some_and(|l| t < l) {
+            let at = self.late.partition_point(|x| x.0 <= t);
+            self.late.insert(at, (t, v));
+            return;
+        }
+        self.head_t.push(t); self.head_v.push(v);
+        if self.head_t.len() == self.chunk_points { self.seal(); }
+    }
+    fn seal(&mut self) {
+        if self.head_t.is_empty() { return; }
+        let mut agg = Agg::EMPTY;
+        for &v in &self.head_v { agg.add(v); }
+        // try both codecs and keep the smaller: fixed-precision blocks pack into a few bits, everything else falls back to Gorilla
+        let g = gorilla_encode(&self.head_t, &self.head_v).bytes;
+        let (codec, blob) = match scaled_encode(&self.head_t, &self.head_v) {
+            Some(p) if p.bytes.len() < g.len() => (Codec::Packed, p.bytes),
+            _ => (Codec::Gorilla, g),
+        };
+        self.sealed.push(Chunk { t_min: self.head_t[0], t_max: *self.head_t.last().unwrap(), agg, codec, blob });
+        self.head_t.clear(); self.head_v.clear();
+    }
+    pub fn len(&self) -> usize { self.sealed.iter().map(|c| c.agg.count as usize).sum::<usize>() + self.head_t.len() + self.late.len() }
+    pub fn compressed_bytes(&self) -> usize { self.sealed.iter().map(|c| c.blob.len()).sum() }
+
+    /// All points with `t0 <= t < t1`, in time order. Chunks whose range does not overlap are never decoded.
+    pub fn range(&self, t0: i64, t1: i64) -> Vec<(i64, f64)> {
+        let mut out: Vec<(i64, f64)> = vec![];
+        for c in &self.sealed {
+            if c.t_max < t0 || c.t_min >= t1 { continue; }
+            self.chunks_decoded.set(self.chunks_decoded.get() + 1);
+            let (ts, vs) = c.decode();
+            out.extend(ts.into_iter().zip(vs).filter(|p| p.0 >= t0 && p.0 < t1));
+        }
+        out.extend(self.head_t.iter().copied().zip(self.head_v.iter().copied()).filter(|p| p.0 >= t0 && p.0 < t1));
+        out.extend(self.late.iter().copied().filter(|p| p.0 >= t0 && p.0 < t1));
+        out.sort_by_key(|p| p.0);          // stable: ties keep the order chunk, head, late
+        out
+    }
+
+    /// Aggregate over `t0 <= t < t1`. A chunk fully inside the window contributes its stored summary without being decoded.
+    pub fn aggregate(&self, t0: i64, t1: i64) -> Agg {
+        let mut a = Agg::EMPTY;
+        for c in &self.sealed {
+            if c.t_max < t0 || c.t_min >= t1 { continue; }
+            if c.t_min >= t0 && c.t_max < t1 { a.merge(&c.agg); continue; }
+            self.chunks_decoded.set(self.chunks_decoded.get() + 1);
+            let (ts, vs) = c.decode();
+            for (t, v) in ts.into_iter().zip(vs) { if t >= t0 && t < t1 { a.add(v); } }
+        }
+        for (&t, &v) in self.head_t.iter().zip(&self.head_v) { if t >= t0 && t < t1 { a.add(v); } }
+        for &(t, v) in &self.late { if t >= t0 && t < t1 { a.add(v); } }
+        a
+    }
+}
+
+/// A continuous aggregate: tumbling windows of `width`, updated on every insert, so a dashboard query reads a few buckets instead of raw points.
+pub struct Rollup { pub width: i64, pub buckets: BTreeMap<i64, Agg> }
+impl Rollup {
+    pub fn new(width: i64) -> Self { Rollup { width, buckets: BTreeMap::new() } }
+    pub fn insert(&mut self, t: i64, v: f64) { self.buckets.entry(t.div_euclid(self.width) * self.width).or_insert(Agg::EMPTY).add(v); }
+    /// Windows that start in `[t0, t1)`; exact when `t0` and `t1` are multiples of the width.
+    pub fn aggregate(&self, t0: i64, t1: i64) -> Agg { let mut a = Agg::EMPTY; for (_, b) in self.buckets.range(t0..t1) { a.merge(b); } a }
+}
+
+// ----------------------------------------------------------------------------------------------- as-of join
+
+#[derive(Clone, Copy, Debug)]
+pub struct Event { pub t: i64, pub key: u32 }
+
+/// For each left event, the right event with the same key and the greatest `(t, index)` such that `t_right <= t_left` (and, with
+/// a tolerance, `t_left - t_right <= tol`). Reference implementation: scan everything.
+pub fn asof_naive(left: &[Event], right: &[Event], tol: Option<i64>) -> Vec<Option<usize>> {
+    left.iter().map(|l| {
+        let mut best: Option<usize> = None;
+        for (j, r) in right.iter().enumerate() {
+            if r.key == l.key && r.t <= l.t && tol.is_none_or(|w| l.t - r.t <= w) && best.is_none_or(|b| (r.t, j) >= (right[b].t, b)) { best = Some(j); }
+        }
+        best
+    }).collect()
+}
+
+/// Per-key sorted index of the right side and a binary search per left event: `O(n log m)`, no ordering needed on the left.
+pub fn asof_bsearch(left: &[Event], right: &[Event], tol: Option<i64>) -> Vec<Option<usize>> {
+    let mut by_key: std::collections::HashMap<u32, Vec<(i64, usize)>> = Default::default();
+    for (j, r) in right.iter().enumerate() { by_key.entry(r.key).or_default().push((r.t, j)); }
+    for v in by_key.values_mut() { v.sort(); }
+    left.iter().map(|l| {
+        let v = by_key.get(&l.key)?;
+        let i = v.partition_point(|x| x.0 <= l.t);
+        let (t, j) = *v.get(i.checked_sub(1)?)?;
+        tol.is_none_or(|w| l.t - t <= w).then_some(j)
+    }).collect()
+}
+
+/// Merge join in time order, remembering the last right event per key: `O(n + m)` for inputs sorted by time (kdb+'s `aj` shape).
+pub fn asof_merge(left: &[Event], right: &[Event], tol: Option<i64>) -> Vec<Option<usize>> {
+    debug_assert!(left.windows(2).all(|w| w[0].t <= w[1].t) && right.windows(2).all(|w| w[0].t <= w[1].t));
+    let mut last: std::collections::HashMap<u32, usize> = Default::default();
+    let mut j = 0;
+    left.iter().map(|l| {
+        while j < right.len() && right[j].t <= l.t { last.insert(right[j].key, j); j += 1; }
+        last.get(&l.key).copied().filter(|&k| tol.is_none_or(|w| l.t - right[k].t <= w))
+    }).collect()
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>All single-threaded, release build. The compression series are 200 000 points each; the store experiments use 5 million points.</p>
+
+```text title="bits per point, and codec throughput"
+bits per point (timestamp + value), 200000 points per series; raw is 128 bits (two 64-bit words)
+series                        |    G ts   G val  Gorilla |    P ts   P val   packed | best/raw
+counter (+0..5 per 10 s)      |    1.00   15.84    16.85 |    0.06    4.06     4.12 |   31.1x
+CPU gauge, 2 decimals, 10 s   |    1.00   63.87    64.87 |    0.06    7.05     7.12 |   18.0x
+temperature, full f64, 1 s    |    1.00   54.98    55.98 |       -       -      n/a |    2.3x
+temperature, 0.1 resolution   |    1.00    7.05     8.05 |    0.06    1.98     2.04 |   62.7x
+constant 42.0                 |    1.00    1.00     2.00 |    0.06    0.06     0.12 | 1091.4x
+gauge, jittered timestamps    |   10.18   56.64    66.83 |    9.06    7.05    16.11 |    7.9x
+stock price, irregular ms     |   12.74   42.02    54.76 |   11.82    3.06    14.88 |    8.6x
+uniform random f64            |    1.00   58.69    59.69 |       -       -      n/a |    2.1x
+throughput (million points per second, single thread)
+series                           Gorilla enc   Gorilla dec    packed enc    packed dec
+CPU gauge, 2 decimals, 10 s            103.7          93.9         235.0         187.7
+temperature, full f64, 1 s             109.8          98.7           n/a           n/a
+```
+
+<ul> <li><strong>Regular timestamps cost about 1 bit per point</strong> in Gorilla (the delta-of-delta is zero) and 0.06 bit in the packed form (a 7-bit width header per frame of 128). <strong>Jitter breaks that</strong>: ±50 ms of noise on a 1 s grid costs 10.2 bits per timestamp in Gorilla (an escape code plus 9 or 12 bits) and 9.1 in the packed form; irregular exponential arrivals cost 12.7 and 11.8. If timestamps are noisy, they, not the values, are the cost.</li> <li><strong>Gorilla is not good at decimals.</strong> A CPU gauge rounded to two decimals costs <strong>63.9 bits per value</strong> in Gorilla: a decimal like 50.37 is not a short binary fraction, so consecutive values differ in most mantissa bits. The packed form needs <strong>7.1 bits</strong> (about 9× smaller). Integer-valued floats (a counter) are the good case for Gorilla (15.8 bits) and still 4× larger than packed (4.1). Full-precision floats (a noisy sensor, uniform random values) cost 55–59 bits in Gorilla and <strong>cannot be packed</strong>: the floor is the entropy of the mantissa.</li> <li><strong>Best-of-both reaches 18–63× over raw 16-byte points for decimal data</strong> (counter 31×, gauge 18×, 0.1-resolution sensor 63×, constant series 1 091×), 8–9× for decimal values with noisy timestamps, and only <strong>2.1–2.3×</strong> for full-precision floats (where the 16 raw bytes are mostly the 8-byte value).</li> <li><strong>Throughput</strong>: Gorilla encodes at 104–110 and decodes at 94–99 million points per second per core; the packed form encodes at 235 and decodes at 188. At 100 M points/s a core decodes 1.6 GB/s of raw-equivalent data; compression here is not a CPU problem.</li> </ul>
+
+```text title="chunk size, pruning and rollups"
+chunk size trade-off: 5000000 points of a CPU gauge (10 s interval), window queries
+   chunk  bytes/pt    chunks  packed |  0.1% window (range) |    aggregate, 30% window | aggregate, 0.1% window
+      64      3.06     78125    100% |       120 us  79.0 dec |           57 us   1.5 dec |         48 us   1.7 dec
+     256      1.91     19531    100% |        57 us  20.5 dec |           18 us   1.9 dec |         15 us   1.9 dec
+    1024      1.15      4882    100% |        40 us   5.9 dec |           15 us   2.0 dec |         14 us   2.0 dec
+    4096      0.96      1220    100% |        51 us   2.2 dec |           42 us   2.0 dec |         42 us   2.0 dec
+   16384      0.91       305    100% |       107 us   1.3 dec |          155 us   2.0 dec |        102 us   1.3 dec
+raw Vec scan of a 30% aggregate: 1999 us (1500000 points, sum 78678616); 16 bytes per point
+continuous aggregate: hourly buckets over 578 days of data; the query is the daily average for 90 days
+ingest: store 17 ns/point, rollup update 16 ns/point (13890 buckets)
+90 daily averages: chunk summaries + decoding edge chunks 1234 us, rollup 10 us (results 4600.482 / 4600.482)
+```
+
+<ul> <li><strong>Storage with per-chunk codec choice is 0.91–1.15 bytes per point for the gauge at chunk sizes of 1 024 or more</strong> (every chunk chose the packed codec), against 16 for raw. Small chunks pay a fixed header and a frame header each: 3.06 bytes per point at 64 points per chunk, 1.91 at 256.</li> <li><strong>Window queries decode at most two chunks regardless of chunk size</strong> for an aggregate: the stored summaries answer the interior. A 30% window aggregate takes <strong>15 µs</strong> at 1 024 points per chunk against <strong>1 999 µs</strong> for scanning the raw vectors (130× faster, with about 14 times less memory). The cost grows with chunk size only because the two edge chunks are decoded (155 µs at 16 384 points).</li> <li><strong>A narrow range query (0.1% of the data) is best at 1 024 points per chunk</strong> (40 µs, 5.9 chunks decoded): smaller chunks decode more of them (79 at 64 points), larger ones decode more points that are then discarded (107 µs at 16 384). The right chunk size balances header overhead and edge waste; 256 to 4 096 points is a safe range, and real systems use time-based sizes (hours or days) with a point-count cap.</li> <li><strong>A rollup answers 90 daily averages in 10 µs</strong>, against 1 234 µs for chunk summaries plus edge decoding (about 120×), at a cost of 16 ns per point to maintain (the store's own ingest costs 17 ns per point, including compression). Late points update their bucket in place. The price is storage for each resolution and the fact that only the aggregates you defined are available.</li> </ul>
+
+```text title="as-of join"
+as-of join: 1000000 trades against 2000000 quotes, 500 symbols
+naive scan:               558445 ns/trade (measured on 2000 trades; it is O(n·m))
+per-key binary search:        63 ns/trade (index build included)
+merge, last per key:          23 ns/trade
+merge with 1 ms tolerance: 24 ns/trade, 33.0% of trades matched (against 100.0% without tolerance)
+```
+
+<ul> <li><strong>Sorted input turns the join into a merge</strong>: 23 ns per trade against 63 ns for the per-key binary search and <strong>558 000 ns</strong> for the naive scan (an <code>O(n·m)</code> loop over 2 million quotes). The merge is 24 000× faster than naive here, and the binary-search version, which does not need sorted trades, is 8 800× faster.</li> <li><strong>A tolerance changes the answer, not the cost</strong>: with a 1 ms window only 33% of trades find a quote (the quotes of a symbol arrive on average 2.5 ms apart), at the same ~24 ns. Without it every trade matches an arbitrarily stale quote; a tolerance is a correctness parameter.</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A <code>BitWriter</code> over <code>Vec&lt;u8&gt;</code></strong> with a current byte and a bit count; <code>put(value, n)</code> writes the low <code>n</code> bits most significant first in a loop of at most <code>n/8 + 1</code> iterations. The reader mirrors it and returns <code>Option</code>, so truncated input becomes <code>None</code> instead of a panic or a wrong value. Decoders for stored data must treat bytes as untrusted.</li> <li><strong>Wrapping arithmetic for timestamps</strong>: <code>wrapping_sub</code>/<code>wrapping_add</code> make delta-of-delta total over all <code>i64</code>, so the round trip is exact even for <code>i64::MIN</code> and decreasing sequences. A property test with arbitrary <code>i64</code> pairs checks it.</li> <li><strong><code>f64::to_bits</code> / <code>from_bits</code> everywhere</strong> values cross the codec: equality of floats is the wrong test (<code>NaN != NaN</code>, <code>-0.0 == 0.0</code>); the tests compare bit patterns, including NaN payloads.</li> <li><strong>Interior mutability for counters</strong>: <code>chunks_decoded: Cell&lt;u64&gt;</code> lets read methods taking <code>&amp;self</code> count decodes, so the tests can assert "this query decoded at most two chunks".</li> <li><strong><code>partition_point</code> is the whole index</strong>: the late buffer insertion point, the as-of lookup and the per-key search are each one call on a sorted slice.</li> <li><strong>Enum plus method for codec dispatch</strong> (<code>Chunk::decode</code> matches on <code>Codec</code>) keeps the store ignorant of the formats; adding a third codec is one variant and one arm.</li> <li><strong><code>debug_assert!</code> on preconditions that are expensive</strong> (the merge join requires time-sorted inputs; checking costs <code>O(n)</code> and is compiled out of release builds).</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Bit I/O</strong>: 5 000 random <code>(value, width)</code> pairs with widths 0–64 round-trip; reading past the end fails.</li> <li><strong>Gorilla, bit-exact (property tests)</strong>: arbitrary <code>(i64, u64)</code> pairs as timestamps and value bit patterns (NaNs, subnormals, infinities included) decode to the same bits; realistic series (regular grids with small jitter, eighth-valued floats) too.</li> <li><strong>Boundaries</strong>: delta-of-deltas exactly at and around ±64, ±256, ±2048, 2&#94;31 and the extremes of <code>i64</code>; XOR patterns with 1, 31, 32, 33, 62, 63 leading zeros, a lone low bit, a lone high bit and all 64 bits, with windows that fit, shrink, grow and move; a constant series costs exactly 2 bits per point; truncated streams at several cut points return <code>None</code>.</li> <li><strong>Packing</strong>: fixed-precision data (0–4 decimals, arbitrary timestamp steps, wrapping) round-trips bit-exactly; π, NaN and <code>-0.0</code> are refused.</li> <li><strong>Store against brute force</strong>: 600 appends with 10% late points, chunk sizes 1, 2, 7 and 64; 80 random windows each; <code>range</code> equals the sorted filter, <code>aggregate</code> equals count, sum, min and max of the filter.</li> <li><strong>Pruning</strong>: a narrow window decodes at most two chunks; the aggregate of the whole range decodes none; a window cutting two chunks decodes exactly two; window ends are exclusive and starts inclusive exactly at chunk boundaries.</li> <li><strong>Codec choice</strong>: blocks of two-decimal data pick the packed codec, blocks of full-precision floats pick Gorilla, each is no larger than the other codec's encoding of the same block, and the whole series reads back unchanged.</li> <li><strong>Rollups against recomputation</strong>: 5 000 inserts including negative and out-of-order times, 100 random aligned windows.</li> <li><strong>As-of</strong>: the three algorithms equal the naive definition on 200 random inputs with duplicate timestamps, missing keys and tolerances of none, 0, 3 and 25; an unsorted left side works for the binary-search version.</li> <li><strong>Mutants run against these tests</strong> (all killed): the 7-bit and 9-bit escape ranges off by one (random inputs rarely land exactly on an escape edge, so these are <strong>killed by the boundary test</strong>); the XOR window reuse test changed from AND to OR; leading zeros not capped at 31 (<strong>survived every random test, killed by the extreme-XOR test</strong>: random 64-bit values never differ only in their low 32 bits); the decoder forgetting that length 0 means 64; <code>-0.0</code> accepted by the packer; the frame width off by one; chunk end treated as inclusive in the aggregate; a chunk ending at <code>t0</code> skipped; truncating division in the rollup bucket; late points dropped from aggregates; strict <code>&lt;</code> in either as-of algorithm; tolerance ignored in the merge; the store keeping the larger codec, decoding with the wrong codec, or never trying the packed one.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>InfluxDB</strong>: the TSM (time-structured merge tree) engine keeps an in-memory cache with a WAL and immutable compressed files per shard (a time range), with type-specific encodings (delta and Simple8b-style packing for integers and timestamps, Gorilla-style for floats, snappy for strings) and an inverted tag index (TSI) on disk. InfluxDB 3.0 moves the data to Parquet files queried by DataFusion over Arrow (see <a href="/cookbook/p/building-blocks">S4</a> when written).</li> <li><strong>TimescaleDB</strong>: PostgreSQL extension; <em>hypertables</em> partitioned into chunks by time (and optionally a space dimension), <em>continuous aggregates</em> as materialized views maintained incrementally, and a <em>columnar compression</em> of older chunks (arrays per column per series segment, with delta-of-delta, Gorilla-style and dictionary encodings), with retention policies that drop chunks.</li> <li><strong>kdb+/q</strong>: a column store in a vector language, with a real-time database in memory plus a write-ahead tickerplant log, and a historical database as date-partitioned, column-per-file ("splayed") tables; the <code>aj</code> as-of join and <code>wj</code> window join are core operators.</li> <li><strong>Prometheus</strong>: a per-series Gorilla-style chunk compressor with a 2-hour head block, a write-ahead log, and immutable blocks with an inverted index; a famous high-cardinality failure mode.</li> <li><strong>ClickHouse, DuckDB and general warehouses</strong> are widely used for time series as plain columnar tables sorted by time, with codecs like <code>DoubleDelta</code>, <code>Gorilla</code> and <code>Delta</code> chosen per column, and <code>ASOF JOIN</code> as a built-in.</li> <li><strong>Streaming ingest</strong> (Pulsar, Kafka) in front of the database provides the buffering, ordering and replay that an in-process memtable cannot.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Cardinality is the budget.</strong> The series index lives in memory in most systems; a tag with unbounded values is an outage, not a slowdown. Cap distinct values per tag, reject or drop offending writes, and monitor the series count.</li> <li><strong>Gorilla on decimals.</strong> A sensor with two decimals stored as <code>f64</code> compresses poorly with XOR coding and well with integer scaling (or ALP); look at the data's actual precision before choosing a codec, and keep exactness: only accept a scaling that reproduces every value bit for bit.</li> <li><strong>Floating-point sums are order-dependent.</strong> Chunk summaries, rollups and a direct scan add the same numbers in different orders and can differ in the last digits; for exact results use integers (scaled decimals) or compensated summation, and test with tolerances only where unavoidable.</li> <li><strong>Window ends.</strong> Use half-open intervals <code>[t0, t1)</code> everywhere; an inclusive end double-counts the boundary point when windows tile. The chunk-boundary tests exist for exactly this.</li> <li><strong>Late data and summaries.</strong> A late point inside a sealed chunk's range must not be missed by the chunk's summary; here late points live outside the chunks and are always scanned. Systems that merge late points into old chunks must refresh the summary.</li> <li><strong>Retention and rollups interact</strong>: dropping raw data after a week makes a later change of the rollup definition impossible for old data; choose the rollups you need before the raw data expires.</li> <li><strong>Time zones, leap seconds and units</strong>: store UTC instants as integers with a documented unit (ms, µs or ns); do windowing in a calendar-aware layer, not by dividing by 86 400 000.</li> <li><strong>As-of semantics need a tie rule and a tolerance.</strong> "Last quote at or before the trade" must define what happens with equal timestamps and with stale quotes, or two engines return different answers.</li> <li><strong>Do not benchmark compression on synthetic perfection</strong>: constant and perfectly regular series give 1 000× ratios that no real source achieves; report the realistic rows (noisy timestamps, full-precision floats).</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Gorilla: A Fast, Scalable, In-Memory Time Series Database"
+url = "https://www.vldb.org/pvldb/vol8/p1816-teller.pdf"

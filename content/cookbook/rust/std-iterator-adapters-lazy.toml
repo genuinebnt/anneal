@@ -1,0 +1,96 @@
+title = "Iterator adapters lazy (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "Iterators and collections"
+chapter_order = 3
+order = 75
+kind = "recipe"
+lede = "every lazy Iterator adapter, with laziness proven by side-effect logs."
+level = "intermediate"
+code = ["examples/std_tour/std_iterator_adapters_lazy.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>any pipeline</li><li>look-up page for <code>map</code></li><li><code>filter_map</code></li><li><code>flat_map</code></li><li><code>peekable</code></li><li><code>scan</code></li><li><code>take_while</code></li><li><code>by_ref</code></li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>log/CSV processing</li><li>tokenisers (peekable)</li><li>pagination (flat_map)</li><li>running totals (scan)</li><li>batching</li><li>windowing</li><li>dedup of adjacent items</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>Iterator::map</code></li><li><code>Iterator::filter</code></li><li><code>Iterator::filter_map</code></li><li><code>Iterator::enumerate</code></li><li><code>Iterator::zip</code></li><li><code>Iterator::take</code></li><li><code>Iterator::skip</code></li><li><code>Iterator::chain</code></li><li><code>Iterator::flat_map</code></li><li><code>Iterator::flatten</code></li><li><code>Iterator::rev</code></li><li><code>Iterator::cloned</code></li><li><code>Iterator::copied</code></li><li><code>Iterator::take_while</code></li><li><code>Iterator::skip_while</code></li><li><code>Iterator::map_while</code></li><li><code>Iterator::step_by</code></li><li><code>Iterator::peekable</code></li><li><code>Peekable::peek</code></li><li><code>Peekable::peek_mut</code></li><li><code>Peekable::next_if</code></li><li><code>Peekable::next_if_eq</code></li><li><code>Iterator::fuse</code></li><li><code>Iterator::inspect</code></li><li><code>Iterator::cycle</code></li><li><code>Iterator::scan</code></li><li><code>Iterator::by_ref</code></li><li><code>Iterator::unzip</code></li><li><code>Iterator::zip</code></li><li><code>std::iter::zip</code></li><li><code>slice::windows</code></li><li><code>slice::chunks</code></li><li><code>Iterator::last</code></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+core: every adapter is an `Iterator` method in `core::iter`; `windows`/`chunks` are `core` slice methods. All of this works in no_std.
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/iter/trait.Iterator.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/iter/trait.Iterator.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+Iterator::array_chunks, Iterator::intersperse, Iterator::map_windows, Iterator::advance_by (nightly in 1.98, probed with rustc); Iterator::partition_in_place, Iterator::collect_into (nightly). `windows`/`chunks` on slices are the stable stand-ins and **are** shown.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Cheat sheet (I want to ... -> use ...):
+
+```text
+transform each item                      -> `map`
+```
+
+drop items                               -> `filter`; drop and transform at once: `filter_map` each item expands to many                -> `flat_map` / `map(..).flatten()`; flatten Options/Results: `flatten()` index with item                          -> `enumerate` (then `.rev()` **order** matters, see section 6) first n / all but first n                -> `take(n)` / `skip(n)`
+
+```text
+while a condition holds                  -> `take_while`; `skip_while`; and map+stop at first None: `map_while`
+every k-th                               -> `step_by(k)`
+```
+
+join sequences / pair them               -> `chain` / `zip` (stops at the **shorter**) look ahead without consuming             -> `peekable()` + `peek` / `next_if` / `next_if_eq`
+
+```text
+running total / stateful map             -> `scan`
+debug a pipeline                         -> `inspect(|x| eprintln!(..))`
+```
+
+repeat forever / round robin             -> `cycle` (+ `take`)
+
+```text
+use a prefix then continue               -> `by_ref()`
+```
+
+iterate references as values             -> `copied()` (Copy) / `cloned()` (Clone) overlapping / non-overlapping groups     -> slice `windows(n)` / `chunks(n)`
+
+```text
+safe after first None                    -> `fuse`
+```
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Iterator docs <a href="https://doc.rust-lang.org/std/iter/trait.Iterator.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/iter/trait.Iterator.html</a></li><li>Rust by Example iterators <a href="https://doc.rust-lang.org/rust-by-example/trait/iter.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/rust-by-example/trait/iter.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/iter/trait.Iterator.html"
+url = "https://doc.rust-lang.org/std/iter/trait.Iterator.html"
+
+[[sources]]
+title = "doc.rust-lang.org/rust-by-example/trait/iter.html"
+url = "https://doc.rust-lang.org/rust-by-example/trait/iter.html"

@@ -1,0 +1,33 @@
+title = "DSLs and SQL parsing"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 367
+kind = "guide"
+lede = "Most language work in industry is small languages: configs, queries, templates, rule engines. How you parse them depends on the grammar and on how good the error messages need to be."
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p class="cb-g-deep"><b>Deep dives</b> <a href="/cookbook/p/parsing-in-depth">5 · Parsing in depth</a> <a href="/cookbook/p/metaprogramming-macros-and-staging">26 · Metaprogramming</a> <a href="/cookbook/p/algorithms-and-concurrency-in-code">36 · Algorithms in code</a> <a href="/cookbook/p/fully-recoverable-parsers">6 · Recoverable parsers</a></p>
+
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Approach</th><th>Rust crates</th><th>Good for</th><th>Watch out for</th></tr></thead> <tbody> <tr><td>Hand-written recursive descent plus Pratt</td><td>none (rustc, oxc, rust-analyzer)</td><td>Best error messages and recovery, and the fastest option</td><td>You maintain the grammar only in code</td></tr> <tr><td>Lexer generator</td><td><code>logos</code></td><td>Compiles token regexes into one DFA at build time</td><td>Context-dependent tokens, such as template strings, need lexer modes</td></tr> <tr><td>Parser combinators</td><td><code>nom</code>, <code>winnow</code>, <code>chumsky</code></td><td>Binary formats and small DSLs. <code>chumsky</code> has built-in error recovery</td><td>Compile times and deeply nested types</td></tr> <tr><td>PEG</td><td><code>pest</code>, <code>peg</code></td><td>Writing the grammar as a file</td><td>Ordered choice can hide ambiguity; left recursion needs care</td></tr> <tr><td>LR generators</td><td><code>lalrpop</code>, <code>grmtools</code> (lrpar)</td><td>Grammars with conflicts detected at build time. grmtools implements automatic error recovery (CPCT+)</td><td>Shift/reduce conflicts take some learning</td></tr> <tr><td>Incremental GLR</td><td><code>tree-sitter</code></td><td>Editors: syntax highlighting, structural search, and reparsing on every keystroke</td><td>Produces a concrete syntax tree, not a typed AST</td></tr> <tr><td>Embedded DSL</td><td><code>macro_rules!</code>, proc macros with <code>syn</code> and <code>quote</code></td><td>DSLs checked at compile time, such as <code>sqlx</code> queries or HTML templates</td><td>Macro error spans take care to get right</td></tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "The SQL pipeline"
+body = """
+<div class="cb-g-ladder" aria-label="SQL query pipeline"> <div><b>SQL text</b><span>dialect-specific lexer</span></div><i>→</i> <div><b>AST</b><span>sqlparser-rs</span></div><i>→</i> <div><b>Logical plan</b><span>relational algebra; names bound</span></div><i>→</i> <div><b>Optimizer</b><span>rewrite rules, cost-based join order</span></div><i>→</i> <div><b>Physical plan</b><span>hash join, sort-merge, index scan</span></div><i>→</i> <div><b>Execution</b><span>Volcano, vectorized or compiled</span></div> </div>
+
+<div class="cb-g-tip"><h3>Parsing SQL</h3> <p>SQL expressions are a Pratt problem with unusual operators: <code>NOT</code> binds more loosely than comparison, <code>BETWEEN … AND …</code> reuses <code>AND</code>, and <code>IS [NOT] NULL</code> is postfix. Many keywords are also valid identifiers, and dialects differ. Read <code>sqlparser-rs</code> (<code>apache/datafusion-sqlparser-rs</code>) for how it parameterizes dialects and precedence.</p></div>
+
+<div class="cb-g-tip"><h3>Planning and optimizing</h3> <p>Rule-based rewrites include predicate pushdown, projection pruning, constant folding, and turning subqueries into joins. Cost-based join ordering is a dynamic program over subsets of tables, the Selinger algorithm. DataFusion is a production Rust query engine you can read end to end.</p></div>
+
+<div class="cb-g-tip"><h3>Executing</h3> <p>The Volcano model has each operator implement <code>next()</code>, like an iterator. Vectorized engines process batches in columnar form, like MonetDB/X100 and Arrow. Compiled engines fuse a pipeline into one loop, like HyPer. Plans are trees and predicates are small expression languages, so everything from Parts I and II applies here.</p></div>
+
+<div class="cb-g-tip"><h3>Testing: sqllogictest</h3> <p>SQLite's sqllogictest format is a golden-file format for queries: a statement, then the expected rows. <code>sqllogictest-rs</code> runs it, and DataFusion and RisingWave use it. It works the same way as your <code>// expect:</code> runner.</p></div>
+
+<p><b>Build it.</b> <code>SELECT … FROM … WHERE … JOIN … GROUP BY</code> over CSV files. Use a Pratt parser for expressions, a <code>LogicalPlan</code> enum, a pushdown rule with snapshot tests of the plan before and after, and a Volcano executor. RisingLight is an educational Rust database that follows this path.</p>
+"""

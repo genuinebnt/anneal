@@ -44,6 +44,8 @@ RUN rustup component add rust-analyzer rust-src rustfmt clippy \
 COPY --from=docker:29-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=build /usr/local/bin/anneal-api /usr/local/bin/anneal /usr/local/bin/
 COPY content /app/content
+# The cookbook's own code, which its pages show (content/cookbook names the files).
+COPY cookbook /app/cookbook
 # Search by meaning embeds the query text on this machine; nothing leaves it (crates/api/src/meaning.rs).
 COPY --from=model / /app/models/bge-small-en-v1.5
 # Course definitions for the Courses pages. The reference solution is not in git and is excluded by .dockerignore.

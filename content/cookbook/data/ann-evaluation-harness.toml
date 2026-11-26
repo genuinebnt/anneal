@@ -1,0 +1,76 @@
+title = "Evaluating ANN indexes honestly"
+module = "Search and vectors"
+module_order = 9
+chapter = "Running a vector database"
+chapter_order = 3
+order = 476
+kind = "recipe"
+lede = "Recall definitions, Pareto curves, tail latency, dataset difficulty (contrast, LID, hubness), out-of-distribution queries."
+level = "intermediate"
+code = ["examples/search_vectors/ann_evaluation_harness.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>choosing or tuning a vector index</li><li>reading vendor benchmarks</li><li>regression-testing recall in CI</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The question** a benchmark must answer is not "how fast is index X" but "at the recall I need, on data like mine, what does a query cost, what does the index cost to build and to hold, and how bad is the slowest 1%". A speed number without a recall number means nothing, because every ANN index can be made arbitrarily fast by returning worse answers.
+
+**Three recall definitions** (all in this file, all checked on hand-computed cases):
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">ID recall</div><div class="cb-g-says"><p>|returned ids intersect true ids| / k. Simple, but <strong>wrong</strong> under ties: with duplicate or equidistant vectors there are many correct answer sets and an index is punished for picking a different one.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Distance-threshold recall (what ann-benchmarks uses)</div><div class="cb-g-says"><p>Count returned items whose distance is &lt;= the true k-th distance (+ epsilon). Tie-safe. Requires the returned <strong>distances</strong> to be recomputed or trusted: an index that reports approximate distances (PQ, SQ) must be scored with exact distances of the ids it returned, which is what <code>evaluate</code> does.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Approximation ratio</div><div class="cb-g-says"><p>Mean over ranks i of dist(returned_i) / dist(true_i) with <strong>true</strong> (not squared) distances. 1.0 is perfect. It says how much worse the misses are: recall 0.5 with ratio 1.01 may be fine for a recommender, recall 0.5 with ratio 3 is not. It hides short results, so the count of missing results is reported next to it.</p></div></div></div>
+
+**Methodology** (the ann-benchmarks method, reproduced in miniature): sweep each index's **query-time** knob (nprobe, ef) on a fixed build, plot (recall, queries per second) and keep only the **PARETO frontier**: points for which no other point has both higher-or-equal recall and lower-or-equal cost, with one strictly better.
+
+Compare indexes by their frontiers, never by one hand-picked setting each. Report build time and memory beside the curve. Here the frontier is computed on **distance computations per query**, which is deterministic and machine-independent; QPS and p50/p95/p99 latency are **printed only**.
+
+Distance counts are a proxy, not speed: they ignore cache misses (graph traversal jumps through memory, a scan streams), so two indexes with equal counts can differ severalfold in wall-clock time. **Tail latency**: report percentiles, not means.
+
+A query fanned out to 100 shards waits for the slowest, so with independent shards the chance that at least one is above its own p99 is 1 - 0.99&#94;100 = 63%.
+
+**DATASET difficulty**. Results do not transfer between datasets, and these numbers say why:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Distance concentration</div><div class="cb-g-says"><p>In high dimension, for i.i.d. coordinates, (d_max - d_min)/d_min shrinks: the "nearest" neighbour is hardly nearer than a random point (Beyer et al., "When Is Nearest Neighbor Meaningful?").</p></div></div><div class="cb-g-term"><div class="cb-g-name">Relative contrast</div><div class="cb-g-says"><p>(He, Kumar, Chang, "On the Difficulty of Nearest Neighbor Search"): mean distance / nearest distance. Near 1 = hard.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Local intrinsic dimensionality</div><div class="cb-g-says"><p>How fast the number of points grows with the radius around a query. Maximum-likelihood estimate from the k nearest distances r_1 &lt;= ... &lt;= r_k:  <strong>lid</strong> = -1 / mean_i ln(r_i / r_k). It measures the manifold, not the ambient dimension: 8-dim data embedded in 64 dims scores like 8-dim data.</p><p>The estimator is noisy and tends to read <strong>low</strong> when the true dimension is high.</p></div></div><div class="cb-g-term"><div class="cb-g-name">HUBNESS (Radovanovic et al., "Hubs in Space")</div><div class="cb-g-says"><p>N_k(x) = how many points list x among their k nearest. In high intrinsic dimension the distribution of N_k gets a long right tail: a few "hubs" appear in very many neighbour lists and some points in none.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Out-of-distribution queries</div><div class="cb-g-says"><p>(text queries against image embeddings is the classic case): the index was built (k-means centroids, graph edges) for the data distribution, so recall measured on in-distribution queries need not transfer. It is <strong>not</strong> automatically lower: a mild shift can leave recall unchanged or raise it (the run prints one).</p><p>Tune on queries drawn like <strong>production</strong> queries and measure.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+recall, ratio and percentile functions on hand-computed cases; metamorphic properties on random inputs (replacing a wrong result by a missing true one never lowers recall, result order does not matter, an exact answer scores 1); ties: with duplicated vectors id recall is below 1 while distance recall is exactly 1;
+
+The Pareto function against an O(n&#94;2) oracle and its invariants; brute force has recall exactly 1.0; IVF-lite recall is non-decreasing in nprobe per query and 1.0 at nprobe = nlist; the HNSW-lite reaches recall >= 0.95 on the low-intrinsic-dimension set at fewer than 25% of the brute-force distance computations;
+
+Relative contrast falls and hubness skew rises with dimension on uniform data; **lid** recovers the dimension of a 2-dim and 8-dim manifold embedded in 64 dims; the uniform set has higher **lid** than the manifold set and more than 0.2 lower IVF recall at nprobe = 4;
+
+Queries drawn around **unseen** cluster centres lose more than 0.1 IVF recall at nprobe 1 and 2.
+
+**Limits**: n is a few thousand, so every number is about the **method**, not about which index wins at scale. The last two claims are observations on these seeded datasets, not theorems.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>ann-benchmarks and VectorDBBench reports</li><li>recall regression tests in Lucene/Qdrant/Weaviate CI</li><li>choosing <code>ef_search</code> / <code>nprobe</code> for a service-level objective</li><li>shadow evaluation of a new index against exact search on sampled production queries</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>ann-benchmarks <a href="https://ann-benchmarks.com" target="_blank" rel="noreferrer">https://ann-benchmarks.com</a> and its paper, Aumueller, Bernhardsson, Faithfull <a href="https://arxiv.org/abs/1807.05614" target="_blank" rel="noreferrer">https://arxiv.org/abs/1807.05614</a></li><li>HNSW, Malkov and Yashunin <a href="https://arxiv.org/abs/1603.09320" target="_blank" rel="noreferrer">https://arxiv.org/abs/1603.09320</a></li><li>cited by title only: Beyer et al., "When Is Nearest Neighbor Meaningful?" (ICDT 1999)</li><li>He, Kumar and Chang, "On the Difficulty of Nearest Neighbor Search" (ICML 2012)</li><li>Radovanovic, Nanopoulos and Ivanovic, "Hubs in Space" (JMLR 2010)</li><li>Amsaleg et al., "Estimating Local Intrinsic Dimensionality" (KDD 2015)</li><li>Dean and Barroso, "The Tail at Scale" (CACM 2013)</li></ul>
+"""
+
+[[sources]]
+title = "ann-benchmarks.com"
+url = "https://ann-benchmarks.com"
+
+[[sources]]
+title = "arxiv.org/abs/1807.05614"
+url = "https://arxiv.org/abs/1807.05614"
+
+[[sources]]
+title = "arxiv.org/abs/1603.09320"
+url = "https://arxiv.org/abs/1603.09320"

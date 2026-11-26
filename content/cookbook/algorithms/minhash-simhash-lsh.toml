@@ -1,0 +1,60 @@
+title = "MinHash + banded LSH + SimHash for near-duplicate detection"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Hashing and probabilistic structures"
+chapter_order = 1
+order = 166
+kind = "recipe"
+lede = "MinHash + banded LSH + SimHash for near-duplicate detection."
+level = "advanced"
+code = ["examples/data_structures/minhash_simhash_lsh.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>dedup of documents/pages</li><li>plagiarism and clone detection</li><li>similar-item search</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+MINHASH: represent a document as a set of k-word shingles. For a random hash function h, P[min h(A) == min h(B)] = Jaccard(A,B) exactly (the min is equally likely to be any element of A u B, and it is shared only if it lies in A n B). Use n hash functions -> an n-slot signature; the fraction of equal slots estimates Jaccard with std error sqrt(J(1-J)/n).
+
+LSH (banding): comparing all pairs is O(N&#94;2). Split the n = b&#42;r signature into b bands of r rows; two docs become **candidates** if **any** band matches entirely (bucket by band hash). With similarity s:
+
+```text
+P[candidate] = 1 - (1 - s^r)^b          (the "S-curve")
+```
+
+The threshold sits near (1/b)&#94;(1/r): above it nearly always found, below it nearly never. More rows per band = sharper &amp; stricter; more bands = more recall &amp; more false candidates. SIMHASH: a different idea for text.
+
+Hash every token to 64 bits, add +1/-1 per bit position across tokens, keep the sign of each sum. Similar docs get fingerprints with **small HAMMING distance** (cosine-like similarity), unrelated docs &#126;32 of 64 bits. Cheap: one u64 per document.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>web crawlers dropping near-duplicate pages</li><li>news/article clustering</li><li>spam and plagiarism detection</li><li>deduplicating training corpora for ML</li><li>finding similar records or products</li><li>(SimHash) near-duplicate detection in large web-scale crawls. MinHash also estimates set similarity for recommendation and entity matching</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/MinHash>
+
+<https://en.wikipedia.org/wiki/Locality-sensitive_hashing>
+
+<https://en.wikipedia.org/wiki/SimHash>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/MinHash"
+url = "https://en.wikipedia.org/wiki/MinHash"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Locality-sensitive_hashing"
+url = "https://en.wikipedia.org/wiki/Locality-sensitive_hashing"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/SimHash"
+url = "https://en.wikipedia.org/wiki/SimHash"

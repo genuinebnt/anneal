@@ -1,0 +1,38 @@
+title = "An LRU cache"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Caches, queues, heaps and bit sets"
+chapter_order = 3
+order = 182
+kind = "recipe"
+lede = "HashMap + a doubly linked list stored in a Vec with INDICES (no unsafe, no Rc<RefCell>)."
+level = "advanced"
+code = ["examples/data_structures/lru_cache.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+caches (lookups, compiled plans, parsed files), and the "index graph" pattern for linked structures.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+caches of every kind (LRU in browsers, DBs, CDNs); the index-linked-list pattern for any ordered structure.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Operations must be O(1): the HashMap finds a node by key; the linked list orders nodes by recency; touching a node unlinks it and relinks it at the head; evicting removes the tail. A linked list with pointers fights Rust ownership, so the nodes live in a `Vec` and "pointers" are `usize` indices (index_graph, arena_ids). Generic over K, V with trait bounds.
+
+Verified by a **model test**: run random operations against both this cache and a trivially-correct slow model; they must agree. Real code: <https://github.com/jeromefroe/lru-rs> (uses unsafe pointers) and <https://github.com/moka-rs/moka> (concurrent).
+"""
+
+[[sources]]
+title = "github.com/jeromefroe/lru-rs"
+url = "https://github.com/jeromefroe/lru-rs"
+
+[[sources]]
+title = "github.com/moka-rs/moka"
+url = "https://github.com/moka-rs/moka"

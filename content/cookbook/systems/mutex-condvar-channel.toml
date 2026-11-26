@@ -1,0 +1,64 @@
+title = "Mutex condvar channel"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Threads, locks and channels"
+chapter_order = 1
+order = 237
+kind = "recipe"
+lede = "build locks, a condvar, a bounded MPMC channel, a semaphore and a barrier from simpler pieces."
+level = "advanced"
+code = ["examples/concurrency/mutex_condvar_channel.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+understanding what std/parking_lot/crossbeam do under the hood; choosing a lock for a latency-critical path.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+(1) `TicketLock`, FIFO-fair spinlock: take a ticket with fetch_add, spin until `now_serving == ticket`. (2) `TtasLock`, test-and-test-and-set spinlock: spin on a plain **load** (cache-line stays shared, no coherence storm) and only then try the CAS; exponential backoff via `spin_loop` hints, escalating to `yield_now` when oversubscribed.
+
+(3) `ParkMutex`, a futex-**style** mutex: one `AtomicU32` state (0 unlocked, 1 locked, 2 locked+contended) so the uncontended path is one CAS and unlock is one swap with NO syscall unless state == 2. Waiters sleep with `thread::park` and sit in a queue.
+
+Real implementations (std on Linux, parking_lot, Linux pthread) wait on the state word itself with the futex syscall (the kernel keeps the queue and checks "value still == 2" atomically).
+
+We emulate that check by enqueueing first and then re-trying the swap, which closes the lost-wakeup window: either the unlocker sees our queue entry (we enqueued before our swap, it saw our `2`), or our swap sees `0` and we take the lock.
+
+(4) `MyCondvar` on top of it: each waiter registers a (thread, flag) pair **before** releasing the mutex, so a notify issued after the release cannot be missed; the flag makes spurious `park` wakeups harmless. (5) A bounded MPMC channel = `Mutex<VecDeque>` + two Condvars (not_full / not_empty) with close semantics.
+
+(6) A counting `Semaphore` and a reusable generation-counting `Barrier`.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+spin locks are for critical sections of a few instructions with threads &lt;= cores; with more threads than cores a preempted holder makes everyone spin, so production locks spin briefly and then sleep. Ticket locks give fairness at the price of convoying (every waiter must be scheduled in turn). Always re-check the predicate in a loop around a condvar wait.
+
+Each lock is tested for exact totals on a **non**-atomic counter, so a broken lock shows up as a wrong sum.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>spinlocks in kernels (Linux uses ticket/queued spinlocks)</li><li>parking_lot-style small mutexes</li><li>work queues and pipelines (bounded channels give back-pressure)</li><li>semaphores for connection/IO limits</li><li>barriers in phase-based simulations</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://marabos.nl/atomics/building-locks.html" target="_blank" rel="noreferrer">https://marabos.nl/atomics/building-locks.html</a></li><li><a href="https://doc.rust-lang.org/std/thread/fn.park.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/thread/fn.park.html</a></li><li><a href="https://doc.rust-lang.org/std/sync/struct.Condvar.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/sync/struct.Condvar.html</a></li></ul>
+"""
+
+[[sources]]
+title = "marabos.nl/atomics/building-locks.html"
+url = "https://marabos.nl/atomics/building-locks.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/thread/fn.park.html"
+url = "https://doc.rust-lang.org/std/thread/fn.park.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/sync/struct.Condvar.html"
+url = "https://doc.rust-lang.org/std/sync/struct.Condvar.html"

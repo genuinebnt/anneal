@@ -31,9 +31,9 @@ type Lens = { type: "about"; kind: "pro" | "tec" | "co"; id: string; title: stri
 type Did = { id: string; title: string; label: string; at: number; undone?: boolean };
 
 /** The order the groups are shown in. */
-const GROUPS = ["Read", "Now", "Did", "Recent", "Alike", "Matching", "Log", "Action", "Page", "Problem", "Concept", "Drill", "Technique", "Company", "Stage", "Challenge", "Track", "About"];
-const HEADINGS: Record<string, string> = { Read: "READ AS", Alike: "LOOKS LIKE IT", Matching: "MATCHING", Did: "WHAT I DID", Technique: "TECHNIQUES", Company: "COMPANIES", Now: "DO NEXT", Recent: "RECENT", Log: "LOG A PROBLEM", Action: "ACTIONS", Page: "PAGES", Problem: "PROBLEMS", Concept: "SYSTEM DESIGN PAGES", Drill: "SYSTEM DESIGN DRILLS", Stage: "COURSE STAGES", Challenge: "COURSE CHALLENGES", Track: "RUST TRACKS" };
-const KIND_WORD: Record<string, string> = { Problem: "problem", Technique: "technique", Company: "company", Page: "page", Action: "action", Concept: "page", Drill: "drill", Stage: "stage", Challenge: "challenge", Track: "track", Log: "log", Alike: "problem", Matching: "problem", Now: "next", Did: "log", Read: "list", About: "" };
+const GROUPS = ["Read", "Now", "Did", "Recent", "Alike", "Matching", "Log", "Action", "Page", "Problem", "Concept", "Drill", "Cookbook", "Technique", "Company", "Stage", "Challenge", "Track", "About"];
+const HEADINGS: Record<string, string> = { Cookbook: "COOKBOOK", Read: "READ AS", Alike: "LOOKS LIKE IT", Matching: "MATCHING", Did: "WHAT I DID", Technique: "TECHNIQUES", Company: "COMPANIES", Now: "DO NEXT", Recent: "RECENT", Log: "LOG A PROBLEM", Action: "ACTIONS", Page: "PAGES", Problem: "PROBLEMS", Concept: "SYSTEM DESIGN PAGES", Drill: "SYSTEM DESIGN DRILLS", Stage: "COURSE STAGES", Challenge: "COURSE CHALLENGES", Track: "RUST TRACKS" };
+const KIND_WORD: Record<string, string> = { Cookbook: "page", Problem: "problem", Technique: "technique", Company: "company", Page: "page", Action: "action", Concept: "page", Drill: "drill", Stage: "stage", Challenge: "challenge", Track: "track", Log: "log", Alike: "problem", Matching: "problem", Now: "next", Did: "log", Read: "list", About: "" };
 const DIFF_COL: Record<string, string> = { easy: "var(--grn)", medium: "var(--warn)", hard: "var(--bad)" };
 const OUTCOMES: [Grade, string][] = [["good", "on my own"], ["hard", "with help"], ["again", "attempted"], ["easy", "instant"]];
 const REFRESH = ["dsa", "activity", "tracks", "progress", "stats", "reviews", "dsa-preview", "practice", "dsa-mock"];
@@ -156,6 +156,7 @@ export function Palette({ onClose }: { onClose: () => void }) {
     const dsa = useQuery({ queryKey: ["dsa"], queryFn: api.dsa });
     const course = useQuery({ queryKey: ["course", "bustub"], queryFn: () => api.course("bustub") });
     const sd = useQuery({ queryKey: ["sd"], queryFn: api.sd });
+    const cookbook = useQuery({ queryKey: ["cookbook"], queryFn: api.cookbook, staleTime: 5 * 60_000 });
     const [q, setQ] = useState("");
     const [sel, setSel] = useState(0);
     const [lens, setLens] = useState<Lens | null>(null);
@@ -275,6 +276,8 @@ export function Palette({ onClose }: { onClose: () => void }) {
             page("p-sd-learn", "System design: Learn", "/sd/learn", sd.data ? `${sd.data.concepts.length} pages` : undefined),
             page("p-sd-problems", "System design: Problems", "/sd/problems", sd.data ? `${sd.data.problems.length} drills` : undefined),
             page("p-sd-review", "System design: Review", "/sd/review", sd.data ? `${sd.data.due} due` : undefined, "↺"),
+            page("p-cb", "Cookbook", "/cookbook", "reference pages"),
+            ...(cookbook.data?.subjects ?? []).map((s) => page(`p-cb-${s.id}`, `Cookbook: ${s.title}`, `/cookbook/${s.id}`, `${s.pages.length} pages`)),
             page("p-rust", "Rust tracks", "/rust"),
             page("p-courses", "BusTub course", "/courses"),
             page("p-progress", "Progress", "/progress"),
@@ -349,6 +352,10 @@ export function Palette({ onClose }: { onClose: () => void }) {
             const go = close(() => nav({ to: "/sd/practice/$id", params: { id: d.id } }), `sdp-${d.id}`);
             hits.push({ key: `sdp-${d.id}`, label: d.title, kind: "Drill", glyph: "▶", color: "var(--vio)", sub: `system design · ${d.minutes} min${d.best != null ? ` · best ${Math.round(d.best * 100)}%` : ""}`, rows: [["Rubric points", String(d.points)], ["Attempts", String(d.attempts)], ["Asked at", d.companies.slice(0, 3).join(", ")]], go, acts: [{ label: "Start the drill", run: go }] });
         }
+        for (const p of [...(cookbook.data?.subjects.flatMap((s) => s.pages) ?? []), ...(cookbook.data?.samples ?? [])]) {
+            const go = close(() => nav({ to: "/cookbook/p/$id", params: { id: p.id } }), `cb-${p.id}`);
+            hits.push({ key: `cb-${p.id}`, label: p.title, kind: "Cookbook", glyph: "≡", color: "var(--mac)", sub: `cookbook · ${p.module} · ${p.chapter}`, rows: [["Chapter", p.chapter]], go, acts: [{ label: "Open", run: go }, { label: "Open in a new tab", run: () => window.open(`/cookbook/p/${p.id}`, "_blank", "noopener") }] });
+        }
         for (const t of tracks.data ?? []) hits.push({ key: `t-${t.slug}`, label: `${t.code} · ${t.name}`, kind: "Track", glyph: "R", color: "var(--vio)", go: close(() => nav({ to: "/t/$track", params: { track: t.slug } }), `t-${t.slug}`) });
         for (const p of course.data?.projects ?? [])
             for (const m of p.modules)
@@ -356,7 +363,7 @@ export function Palette({ onClose }: { onClose: () => void }) {
                     hits.push({ key: `s-${s.id}`, label: `${s.id} · ${s.title}`, kind: s.kind === "challenge" ? "Challenge" : "Stage", glyph: s.kind === "challenge" ? "★" : "§", color: "var(--grn)", go: close(() => nav({ to: "/courses/$course/$stage", params: { course: "bustub", stage: s.id } }), `s-${s.id}`) });
         return hits;
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tracks.data, o, course.data, sd.data, recent, appearance]);
+    }, [tracks.data, o, course.data, sd.data, recent, appearance, cookbook.data]);
 
     const didHits = (rows: Did[]): Hit[] => {
         const latest = new Map<string, number>();

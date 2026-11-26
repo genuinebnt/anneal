@@ -1,0 +1,334 @@
+title = "Multi-version concurrency control"
+module = "Databases"
+module_order = 8
+chapter = "Transactions and concurrency control"
+chapter_order = 6
+order = 404
+kind = "guide"
+lede = "version chains · snapshot isolation · write skew · version storage · garbage collection · indexes · deletes"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>MVCC is a whole-system design</strong>, not just a protocol: keep <strong>several physical versions per logical tuple</strong>; a write creates a new version, a read picks <strong>the newest version that existed when its snapshot was taken</strong>. Almost every DBMS built in the last decade does this, even NoSQL systems without multi-statement transactions.</li> <li><strong>Payoff</strong>: <em>writers don't block readers and readers don't block writers</em>; read-only transactions get a consistent snapshot with <strong>no locks at all</strong>. Writers still conflict with other writers on the same object. Keeping old versions forever gives <strong>time-travel queries</strong> (<code>AS OF</code>).</li> <li><strong>Mechanics</strong>: timestamps decide visibility; a transaction's snapshot is effectively a <strong>copy of the transaction-status table</strong> taken at begin. A version is visible iff its creator committed before the snapshot and no committed successor did.</li> <li><strong>Snapshot isolation (SI)</strong>: reads see only committed data as of the snapshot, writes are private until commit, <strong>first writer (committer) wins</strong> on a write-write conflict. SI prevents dirty/unrepeatable reads, lost updates and (for snapshot reads) phantoms, but permits <strong>write skew</strong>: two transactions read overlapping data, write <em>different</em> objects, and break an invariant (the lecture's marbles: one flips whites to black, the other blacks to white). SI ≠ serializable.</li> <li><strong>Five design decisions</strong>: ① concurrency-control protocol (2PL, T/O or OCC, per the previous lectures), ② <strong>version storage</strong>, ③ <strong>garbage collection</strong>, ④ <strong>index management</strong>, ⑤ <strong>deletes</strong>.</li> <li><strong>Version storage</strong>: a per-tuple <strong>version chain</strong> (linked list ordered by time); indexes point at the chain head. <em>Append-only</em>: new versions in the same table, chain <strong>O2N</strong> (cheap append, long walks) or <strong>N2O</strong> (short walks, must update the head pointer, which is what most systems prefer because most reads want the newest). <em>Time-travel</em>: old versions copied to a side table, latest stays in place. <em>Delta</em>: side segment holds only <strong>changes</strong> (undo records); rebuild an old version by applying deltas backwards; faster writes and smaller storage, slower old reads.</li> <li><strong>Garbage collection</strong>: a version is reclaimable if <strong>no active (or future) snapshot can see it</strong> or its creator aborted. <strong>Tuple-level</strong>: <em>background vacuum</em> (works with any layout; a dirty-page bitmap lets it skip untouched pages) or <em>cooperative cleaning</em> (readers prune while walking an O2N chain; cold data never gets cleaned). <strong>Transaction-level</strong>: each transaction tracks the versions it superseded; when it is older than every active snapshot, its garbage is dropped without scanning.</li> <li><strong>Indexes</strong>: primary-key index → chain head; updating a key column = delete + insert. Secondary indexes: <strong>logical pointers</strong> (stable tuple id or PK, one indirection, cheap updates) vs <strong>physical pointers</strong> (point at the chain head; every new head means touching every index). <strong>Duplicate-key problem</strong>: indexes don't store versions, so one key can map to several versions; a lookup may return several entries and must filter by visibility.</li> <li><strong>Deletes</strong>: physically remove only when <em>no version is visible</em>. A logical delete is a <strong>deleted flag</strong> in the header or a <strong>tombstone</strong> version (small, from a separate pool). After a delete no new version can follow, so there's no write-write conflict beyond the first writer.</li> </ul>
+"""
+
+[[sections]]
+heading = "Visibility in one rule"
+body = """
+<p>With commit timestamps and a read timestamp <code>read_ts</code> taken at begin:</p>
+
+```text
+version v is visible to T  ⇔  v.owner == T                                   (T's own uncommitted write)
+                              ∨ (v is committed ∧ v.begin ≤ T.read_ts)       (committed before T's snapshot)
+T reads: scan the chain newest → oldest, take the first visible version.
+T writes key k: abort immediately (first writer wins) if the head is
+      - uncommitted by someone else, or
+      - committed with begin > T.read_ts (it changed after our snapshot);
+   otherwise push a new uncommitted head owned by T.
+commit: under the commit latch, stamp every owned version with ts = clock+1, then publish clock = ts
+        (the whole write set becomes visible atomically; snapshots taken earlier have read_ts < ts and never see it).
+abort:  pop the owned heads. Drop does it for you.
+```
+
+<p>This is the heart of Postgres (xmin/xmax + snapshot), InnoDB (read view + undo), Hekaton and HyPer, with different storage layouts.</p>
+
+:::deeper Reference: MVCC store (chains, SI, serializable validation, watermark GC) and version-storage schemes
+```rust title="src/mvcc/store.rs"
+//! Multi-version store: snapshot isolation, first-writer-wins, optional serializable validation, watermark GC.
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicU64, Ordering::*};
+use std::sync::Mutex;
+
+#[derive(Clone, Copy, Debug)]
+struct Version {
+    begin: u64,        // commit timestamp (meaningless while `owner != 0`)
+    owner: u64,        // 0 = committed; otherwise the id of the transaction that wrote it and hasn't committed
+    val: Option<i64>,  // None = tombstone
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Isolation { Snapshot, Serializable }
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Error { WriteConflict, ValidationFailed }
+
+pub struct Db {
+    chains: Vec<Mutex<Vec<Version>>>,         // per key, oldest → newest (push is O(1); readers scan from the back)
+    clock: AtomicU64,                         // last committed timestamp
+    commit: Mutex<()>,                        // serializes validation + stamping, not execution
+    active: Mutex<BTreeMap<u64, usize>>,      // read_ts → number of live transactions (for the GC watermark)
+    next_txn: AtomicU64,
+}
+
+impl Db {
+    pub fn new(keys: usize) -> Self {
+        Self { chains: (0..keys).map(|_| Mutex::new(Vec::new())).collect(), clock: AtomicU64::new(0),
+               commit: Mutex::new(()), active: Mutex::new(BTreeMap::new()), next_txn: AtomicU64::new(1) }
+    }
+
+    pub fn begin(&self, iso: Isolation) -> Txn<'_> {
+        let mut active = self.active.lock().unwrap();
+        let read_ts = self.clock.load(Acquire);                  // registered under the lock so GC can't miss us
+        *active.entry(read_ts).or_default() += 1;
+        Txn { db: self, id: self.next_txn.fetch_add(1, Relaxed), read_ts, iso,
+              reads: BTreeSet::new(), writes: BTreeSet::new(), done: false }
+    }
+
+    /// Oldest snapshot any live transaction can still read.
+    pub fn watermark(&self) -> u64 {
+        self.active.lock().unwrap().keys().next().copied().unwrap_or_else(|| self.clock.load(Acquire))
+    }
+
+    /// Drop every version no live or future snapshot can see; returns how many were reclaimed.
+    pub fn gc(&self) -> usize {
+        let wm = self.watermark();
+        let mut freed = 0;
+        for c in &self.chains {
+            let mut c = c.lock().unwrap();
+            // newest committed version visible at the watermark: everything older is unreachable
+            let Some(i) = c.iter().rposition(|v| v.owner == 0 && v.begin <= wm) else { continue };
+            freed += i;
+            c.drain(..i);
+            if c.len() == 1 && c[0].val.is_none() { c.clear(); freed += 1; }   // a tombstone with nothing under it
+        }
+        freed
+    }
+
+    pub fn version_count(&self) -> usize { self.chains.iter().map(|c| c.lock().unwrap().len()).sum() }
+    pub fn clock(&self) -> u64 { self.clock.load(Acquire) }
+}
+
+pub struct Txn<'d> {
+    db: &'d Db,
+    id: u64,
+    pub read_ts: u64,
+    iso: Isolation,
+    reads: BTreeSet<usize>,
+    writes: BTreeSet<usize>,
+    done: bool,
+}
+
+impl Txn<'_> {
+    pub fn read(&mut self, k: usize) -> Option<i64> {
+        if self.iso == Isolation::Serializable { self.reads.insert(k); }
+        let c = self.db.chains[k].lock().unwrap();
+        c.iter().rev()
+            .find(|v| v.owner == self.id || (v.owner == 0 && v.begin <= self.read_ts))
+            .and_then(|v| v.val)
+    }
+
+    pub fn write(&mut self, k: usize, val: Option<i64>) -> Result<(), Error> {
+        let mut c = self.db.chains[k].lock().unwrap();
+        match c.last_mut() {
+            Some(h) if h.owner == self.id => h.val = val,
+            Some(h) if h.owner != 0 => return Err(Error::WriteConflict),          // another uncommitted writer: first writer wins
+            Some(h) if h.begin > self.read_ts => return Err(Error::WriteConflict), // committed after our snapshot
+            _ => c.push(Version { begin: 0, owner: self.id, val }),
+        }
+        self.writes.insert(k);
+        Ok(())
+    }
+
+    pub fn delete(&mut self, k: usize) -> Result<(), Error> { self.write(k, None) }
+
+    pub fn commit(mut self) -> Result<(), Error> {
+        let db = self.db;
+        let _g = db.commit.lock().unwrap();
+        if self.iso == Isolation::Serializable {
+            for &k in &self.reads {
+                let c = db.chains[k].lock().unwrap();
+                if c.iter().rev().find(|v| v.owner == 0).is_some_and(|v| v.begin > self.read_ts) {
+                    drop(c); drop(_g);
+                    self.rollback();
+                    return Err(Error::ValidationFailed);
+                }
+            }
+        }
+        let ts = db.clock.load(Relaxed) + 1;
+        for &k in &self.writes {
+            let mut c = db.chains[k].lock().unwrap();
+            let v = c.iter_mut().rev().find(|v| v.owner == self.id).expect("own version");
+            v.begin = ts;
+            v.owner = 0;
+        }
+        db.clock.store(ts, Release);                              // whole write set becomes visible at once
+        self.finish();
+        Ok(())
+    }
+
+    pub fn abort(mut self) { self.rollback(); }
+
+    fn rollback(&mut self) {
+        for &k in &self.writes {
+            let mut c = self.db.chains[k].lock().unwrap();
+            if c.last().is_some_and(|v| v.owner == self.id) { c.pop(); }
+        }
+        self.writes.clear();
+        self.finish();
+    }
+
+    fn finish(&mut self) {
+        if std::mem::replace(&mut self.done, true) { return; }
+        let mut a = self.db.active.lock().unwrap();
+        let n = a.get_mut(&self.read_ts).unwrap();
+        *n -= 1;
+        if *n == 0 { a.remove(&self.read_ts); }
+    }
+}
+
+impl Drop for Txn<'_> {
+    /// A transaction that falls out of scope (early `?`, panic) rolls back instead of leaking its versions.
+    fn drop(&mut self) { if !self.done { self.rollback(); } }
+}
+
+/// Where old versions live: whole copies vs undo deltas.
+pub mod schemes {
+    pub const W: usize = 16;
+    pub type Row = [u64; W];
+
+    /// Append-only, full copy per version (oldest → newest).
+    pub struct FullChain { pub versions: Vec<(u64, Row)> }
+    impl FullChain {
+        pub fn new(row: Row) -> Self { Self { versions: vec![(0, row)] } }
+        pub fn update(&mut self, ts: u64, col: usize, val: u64) {
+            let mut r = self.versions.last().unwrap().1;
+            r[col] = val;
+            self.versions.push((ts, r));
+        }
+        pub fn read_at(&self, ts: u64) -> &Row { &self.versions.iter().rev().find(|v| v.0 <= ts).unwrap().1 }
+        pub fn bytes(&self) -> usize { self.versions.len() * std::mem::size_of::<(u64, Row)>() }
+    }
+
+    /// Newest version in place, older ones as undo deltas (what changed, and when the overwritten version began).
+    pub struct DeltaChain { head: Row, head_ts: u64, undo: Vec<(u64, u32, u64)> }
+    impl DeltaChain {
+        pub fn new(row: Row) -> Self { Self { head: row, head_ts: 0, undo: Vec::new() } }
+        pub fn update(&mut self, ts: u64, col: usize, val: u64) {
+            self.undo.push((self.head_ts, col as u32, self.head[col]));
+            self.head[col] = val;
+            self.head_ts = ts;
+        }
+        pub fn read_at(&self, ts: u64) -> Row {
+            let (mut r, mut cur) = (self.head, self.head_ts);
+            for &(prev, col, old) in self.undo.iter().rev() {
+                if cur <= ts { break; }
+                r[col as usize] = old;
+                cur = prev;
+            }
+            r
+        }
+        pub fn bytes(&self) -> usize { std::mem::size_of::<Row>() + self.undo.len() * std::mem::size_of::<(u64, u32, u64)>() }
+    }
+}
+```
+:::
+
+<aside data-call="rust"><b>Rust design notes</b><ul> <li><strong><code>Drop</code> = abort.</strong> If a transaction returns early with <code>?</code> or panics, <code>Drop</code> rolls it back and deregisters its snapshot from the <em>active set</em>, so a bug can neither leak uncommitted versions nor pin the GC watermark forever. <code>commit(self)</code>/<code>abort(self)</code> take <code>self</code> by value, so using a finished transaction is a compile error.</li> <li><strong>Commit as a two-step publish</strong>: stamp every owned version, then <code>clock.store(ts, Release)</code>. Readers capture <code>clock.load(Acquire)</code> as <code>read_ts</code>; a snapshot taken mid-stamp has an <em>older</em> <code>read_ts</code> and ignores the half-stamped versions.</li> <li><strong>Registering the snapshot under the same lock GC reads the watermark from</strong> closes the race where GC computes a watermark newer than a transaction that is just beginning. Production engines use per-thread slots or epochs to avoid this lock.</li> <li><strong>Chains are oldest → newest</strong> in a <code>Vec</code>, so appends are O(1) and scanning with <code>.iter().rev()</code> is the "N2O walk". A linked list of arena slots, or per-version <code>AtomicPtr</code>, is what a lock-free design needs.</li> <li><strong>Visibility is a pure function</strong> of <code>(version, snapshot)</code>; keep it free of side effects and test it exhaustively.</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "Snapshot isolation, serializable on top"
+body = """
+<p>SI's first-writer-wins check covers <em>write–write</em> conflicts only. To make it serializable, <strong>validate the read set at commit</strong> (the OCC trick from <a href="/cookbook/p/timestamp-ordering-and-occ">L19</a>): abort if any key I read now has a committed version newer than my snapshot. The test runs the doctors-on-call write skew in both modes:</p>
+
+```text title="two doctors, each reads both and goes off call if the other is on"
+Snapshot: second commit = Ok(()), doctors on call = 0
+Serializable: second commit = Err(ValidationFailed), doctors on call = 1
+```
+
+<p>And as a stress test: 4 threads, 32 pairs of rows with invariant <code>x + y ≥ 1</code>, 120 000 transactions:</p>
+
+```text title="how many transactions observed a committed state that broke the invariant"
+Snapshot: transactions that observed a pair with nobody on call: 1749
+Serializable: transactions that observed a pair with nobody on call: 0
+```
+
+<p>This is <em>backward validation of reads</em>; production systems (PostgreSQL's <strong>SSI</strong>, Cahill 2008; Fekete's dangerous structures) validate far less: they track only <strong>rw-antidependencies</strong> between concurrent transactions and abort when two consecutive ones form a cycle pivot, so non-conflicting reads never fail.</p>
+"""
+
+[[sections]]
+heading = "Readers never abort"
+body = """
+<p>Same 16-account transfer workload as the OCC audit (<a href="/cookbook/p/timestamp-ordering-and-occ">L19</a>): 4 writers moving money, one reader summing every account 20 000 times.</p>
+
+```text title="OCC: 214 of 20 000 audits committed. MVCC:"
+audits: 20000 committed, 0 aborted, all consistent (writers retried 528164 write-write conflicts)
+```
+
+<p>The cost moved to the <em>writers</em>: 528 164 first-writer-wins retries against 16 hot rows (they fail instantly instead of waiting). Read-only transactions on a snapshot need no validation and cannot fail, which is the single biggest reason OLTP systems adopted MVCC.</p>
+"""
+
+[[sections]]
+heading = "Version storage: full copy vs deltas"
+body = """
+<p>A 128-byte tuple (16 × u64), one column changed per update, a chain of 100 000 versions:</p>
+
+```text title="update cost, space, and reading an old version k steps back"
+update: full copy 15.6 ns, delta 3.7 ns | bytes per version: 136 vs 24 | chain of 100000: 13.6 MB vs 2.4 MB
+versions back   full ns/read  delta ns/read
+           0            0.9            1.4
+           1            0.9            1.6
+          10            3.0            5.9
+         100           23.9           39.5
+        1000          236.6          366.7
+       10000         5347.6         3821.9
+```
+
+<ul> <li><strong>Deltas: 4× faster writes and 5.7× less space</strong> (and a wider tuple widens the gap), because an update copies 24 bytes instead of the whole row.</li> <li><strong>Reads of the newest version are slightly slower</strong> (copy the head instead of borrowing it) and <strong>old reads cost O(depth)</strong> either way: ~0.24 µs at 1 000 versions back, ~5 µs at 10 000. Both are cheap only if chains are short, <strong>which is the garbage collector's job</strong>.</li> <li>Deltas win again at extreme depth because walking 24-byte entries is more cache-friendly than 136-byte ones; but nobody should <em>plan</em> for 10 000-deep chains.</li> <li>With wide updates (most columns change) the delta is as big as the row and the advantage vanishes; some engines choose per update.</li> </ul>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>System</th> <th>Version storage</th> <th>Chain</th> <th>Old data cleaned by</th> </tr> </thead> <tbody> <tr> <td>PostgreSQL</td> <td>append-only in the heap</td> <td>O2N (<code>t_ctid</code> forward links), HOT chains within a page</td> <td><code>VACUUM</code> / autovacuum, visibility-map bitmap</td> </tr> <tr> <td>MySQL InnoDB</td> <td>delta (undo log)</td> <td>N2O (roll pointer)</td> <td>purge threads by undo-log history</td> </tr> <tr> <td>Oracle</td> <td>delta (undo segments)</td> <td>N2O</td> <td>undo retention</td> </tr> <tr> <td>SQL Server</td> <td>time-travel (version store in <code>tempdb</code> / PVR)</td> <td>N2O</td> <td>background cleanup</td> </tr> <tr> <td>Hekaton</td> <td>append-only</td> <td>N2O</td> <td>cooperative, by transactions</td> </tr> <tr> <td>HyPer, BusTub</td> <td>delta (undo buffers / undo logs)</td> <td>N2O</td> <td>transaction-level GC</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Garbage collection and the long-reader problem"
+body = """
+<p><code>gc()</code> computes the <strong>watermark</strong> (oldest live <code>read_ts</code>) and, per chain, keeps the newest version visible at that point plus everything newer, discarding everything older. A tombstone with nothing underneath it takes the whole chain with it.</p>
+
+```text title="10 000 updates over 64 keys"
+no long reader : 10 000 updates on 64 keys, GC freed 10000, versions left 64
+with long reader: 10 000 updates, GC freed 0, versions left 10064
+reader finishes : GC freed 10000, versions left 64
+```
+
+<p>One idle snapshot pins the watermark and every update since piles up (157 versions per key): this is <strong>PostgreSQL's bloat from <code>idle in transaction</code></strong> sessions and InnoDB's growing <em>history list length</em>. Defences: <code>idle_in_transaction_session_timeout</code>, <code>statement_timeout</code>, cap on snapshot age (<code>old_snapshot_threshold</code> was added and later removed from PostgreSQL), alert on <code>xmin</code> horizon age, and for analytics, run on a replica.</p>
+
+<aside data-call="testing"><b>Testing an MVCC engine</b><ul> <li><strong>Visibility oracle</strong>: a model that keeps <em>all</em> committed states by timestamp (<code>BTreeMap&lt;ts, HashMap&lt;key, value&gt;&gt;</code>); every read in a randomized concurrent run must equal <code>model[read_ts][key]</code>. Any mismatch is a visibility bug.</li> <li><strong>Invariant workloads</strong>: bank totals (lost updates), doctors on call (write skew), counters (<code>x = x + 1</code> must equal commit count), two-key linked lists. Run every isolation level and assert only the anomalies that level allows.</li> <li><strong>GC safety</strong>: after <code>gc()</code>, replay <em>all still-live</em> snapshots against the oracle; nothing they could read may have disappeared. Then check that quiescent GC returns to exactly one version per live key.</li> <li><strong>Abort paths</strong>: transactions that panic, error mid-write, or drop without commit must leave zero uncommitted versions (<code>version_count</code> stable).</li> <li><strong>Jepsen-style</strong>: run the <code>Elle</code> checker over a recorded history to infer cycles (<a href="/cookbook/p/concurrency-control-theory">L17</a> refs).</li> <li><strong>Hermitage</strong> (Kleppmann) tests: the same isolation-anomaly scripts against many products to see what each level really allows.</li> </ul></aside>
+
+<aside data-call="warning"><b>MVCC pitfalls</b><ul> <li><strong>Reading <code>clock</code> outside the active-set lock</strong> when beginning a transaction lets GC drop versions your snapshot needs.</li> <li><strong>Secondary index entries that outlive their versions</strong>: GC must remove index entries along with tuples, or lookups chase dangling pointers. (PostgreSQL's vacuum scans indexes for this reason.)</li> <li><strong>Updating the key column</strong> is delete + insert; it changes what an index scan <em>should</em> find at older snapshots.</li> <li><strong>Counting rows</strong> (<code>COUNT(*)</code>) needs a visibility check per tuple, so there is no free metadata count; it's O(n) in PostgreSQL.</li> <li><strong>First-writer-wins</strong> needs a policy when the uncommitted writer later <em>aborts</em>; retrying immediately busy-loops (see the 528 164 retries above). Use waiting on the writer's transaction id or bounded backoff.</li> <li><strong>Long scans on an hot table</strong> under SI don't block anyone but still pin garbage. Offload to replicas or time-box.</li> <li><strong>Write skew in application code</strong> is invisible until production; use <code>SERIALIZABLE</code> or explicit <code>SELECT … FOR UPDATE</code> on the rows that guard an invariant.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Concurrency Control in Distributed Database Systems"
+url = "https://dl.acm.org/doi/10.1145/356842.356846"
+
+[[sources]]
+title = "An Empirical Evaluation of In-Memory Multi-Version Concurrency Control"
+url = "https://www.vldb.org/pvldb/vol10/p781-Wu.pdf"
+
+[[sources]]
+title = "Serializable Isolation for Snapshot Databases"
+url = "https://www.cs.cornell.edu/~mkorosec/papers/ssi.pdf"
+
+[[sources]]
+title = "Serializable Snapshot Isolation in PostgreSQL"
+url = "https://arxiv.org/abs/1208.4179"
+
+[[sources]]
+title = "Fast Serializable MVCC for Main-Memory Database Systems"
+url = "https://db.in.tum.de/~muehlbau/papers/mvcc.pdf"
+
+[[sources]]
+title = "Scalable Garbage Collection for In-Memory MVCC Systems"
+url = "https://www.vldb.org/pvldb/vol13/p128-bottcher.pdf"
+
+[[sources]]
+title = "MVCC internals"
+url = "https://www.interdb.jp/pg/pgsql05.html"
+
+[[sources]]
+title = "Hermitage"
+url = "https://github.com/ept/hermitage"

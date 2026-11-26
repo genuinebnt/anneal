@@ -1,0 +1,62 @@
+title = "Partitioning keys across N nodes"
+module = "Distributed systems"
+module_order = 10
+chapter = "Time, partitioning and replication"
+chapter_order = 1
+order = 481
+kind = "recipe"
+lede = "Modulo, consistent-hash ring, rendezvous (HRW), Jump Consistent Hash, Maglev table."
+level = "intermediate"
+code = ["examples/distributed/hash_partitioning.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>sharding caches/databases</li><li>load balancers</li><li>work distribution</li><li>choosing how much data moves when the cluster resizes</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+five ways to answer "which node owns this key?", all behind one `Partitioner` trait, measured on 100k keys and 10 nodes.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+with `hash % N`, changing N reassigns almost **every** key (a cache stampede or a mass data migration). Good schemes move only about 1/(N+1) of keys when a node is added, the theoretical minimum, and those keys all move TO the new node.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+- modulo: O(1) time and memory, but moves &#126;N/(N+1) of the keys on resize.
+- ring (consistent_hashing style): nodes get many virtual points on a u64 ring; a key goes to the next point clockwise. Memory N&#42;vnodes, lookup O(log) via BTreeMap; balance improves with more vnodes (about 1/sqrt(vnodes) spread).
+- rendezvous / highest random weight: score every (key,node) pair and take the max. No state, perfect balance in expectation, but O(N) per lookup.
+- jump hash (Lamping &amp; Veach, <https://arxiv.org/abs/1406.2294>): a few lines, no memory, O(ln N) time, near-perfect balance; but nodes are only numbered 0..N, so you can only add or remove the **last** one (fine for shards, not for arbitrary failures).
+- Maglev (Google's load balancer): fill a prime-sized lookup table by letting nodes take turns claiming slots along their own permutation. O(1) lookup; balance is within about 1% of ideal; resizing disrupts a bit more than the minimum.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>cache-cluster sharding (client-side hashing in memcached-style clients)</li><li>Dynamo-style stores using ring partitioning</li><li>load balancers (Maglev)</li><li>shard assignment by numeric shard id (jump hash)</li><li>choosing replicas per key (HRW top-k)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://arxiv.org/abs/1406.2294> and <https://en.wikipedia.org/wiki/Rendezvous_hashing> and <https://research.google/pubs/maglev-a-fast-and-reliable-software-network-load-balancer/>
+"""
+
+[[sources]]
+title = "arxiv.org/abs/1406.2294"
+url = "https://arxiv.org/abs/1406.2294"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Rendezvous_hashing"
+url = "https://en.wikipedia.org/wiki/Rendezvous_hashing"
+
+[[sources]]
+title = "research.google/pubs/maglev-a-fast-and-reliable-software-network-load-balancer"
+url = "https://research.google/pubs/maglev-a-fast-and-reliable-software-network-load-balancer/"

@@ -1,0 +1,40 @@
+title = "Structured logging with `tracing`"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Application crates"
+chapter_order = 2
+order = 129
+kind = "recipe"
+lede = "Events, spans, fields, levels."
+level = "intermediate"
+code = ["examples/dev_tools/tracing_logs.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+services and workers where you must answer "what happened to job X?" (and later OpenTelemetry).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>production services: structured logs with request/job ids</li><li>spans across await points</li><li>later OpenTelemetry</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+event  = something happened (`info!`, `warn!`, `error!`)     span = a period of time with context Fields are structured key=value pairs, not interpolated strings: machines can filter/aggregate them.
+
+A span's fields are attached to every event inside it, so you log `job_id` **once** and see it everywhere, including across `.await` points when you use `#[instrument]` or `.instrument(span)`. A &#42;subscriber&#42; decides where output goes (stdout, JSON, OpenTelemetry). Libraries emit; the app installs one.
+
+Docs: <https://docs.rs/tracing> and <https://tokio.rs/tokio/topics/tracing>
+"""
+
+[[sources]]
+title = "docs.rs/tracing"
+url = "https://docs.rs/tracing"
+
+[[sources]]
+title = "tokio.rs/tokio/topics/tracing"
+url = "https://tokio.rs/tokio/topics/tracing"

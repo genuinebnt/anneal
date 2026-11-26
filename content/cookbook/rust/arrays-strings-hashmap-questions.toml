@@ -1,0 +1,70 @@
+title = "Arrays strings HashMap questions"
+module = "Worked questions"
+module_order = 14
+chapter = "Coding and design questions"
+chapter_order = 2
+order = 675
+kind = "recipe"
+lede = "arrays, strings, hash maps and bit tricks: the most-asked coding questions, answered in Rust."
+level = "intermediate"
+code = ["examples/interview/arrays_strings_hashmap_questions.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+preparing for coding interviews; recognising the pattern (two pointers, sliding window, prefix sums, ...) behind a question.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>phone screens and on-sites (NeetCode / Blind 75 / Grind 75 style)</li><li>log and text processing</li><li>interval merging</li><li>windowed statistics</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://www.techinterviewhandbook.org/grind75" target="_blank" rel="noreferrer">https://www.techinterviewhandbook.org/grind75</a></li><li><a href="https://neetcode.io/practice" target="_blank" rel="noreferrer">https://neetcode.io/practice</a></li><li><a href="https://interviewing.io/rust-interview-questions" target="_blank" rel="noreferrer">https://interviewing.io/rust-interview-questions</a></li><li><a href="https://cp-algorithms.com/" target="_blank" rel="noreferrer">https://cp-algorithms.com/</a></li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Question bank** (numbering restarts in each interview file; a generator reads these lines) Q1. Two Sum: return indices of two numbers adding to a target (unsorted input, one pass with a hash map). [Easy] [asked: very common] Q2.
+
+Two Sum II (sorted input, two pointers) and Two Sum IV (find a pair in a BST). [Easy] [asked: very common] Q3. 3Sum and 4Sum: all unique triplets/quadruplets summing to a target (sort + two pointers + dedupe). [Medium] [asked: very common] Q4. Contains Duplicate, Valid Anagram and Group Anagrams. [Easy] [asked: very common] Q5.
+
+Top K Frequent Elements (hash map + bucket sort). [Medium] [asked: very common] Q6. Product of Array Except Self without division. [Medium] [asked: very common] Q7. Maximum Subarray (Kadane), with indices and the circular follow-up. [Medium] [asked: very common] Q8.
+
+Maximum Product Subarray. [Medium] [asked: common] Q9. Best Time to Buy and Sell Stock I, II, III (and IV with k transactions). [Easy] [asked: very common] Q10. Merge Intervals, Insert Interval and Non-overlapping Intervals. [Medium] [asked: very common] Q11.
+
+Rotate Array (three reversals), Move Zeroes and Remove Duplicates in place. [Easy] [asked: very common] Q12. Container With Most Water and Trapping Rain Water (two pointers). [Hard] [asked: very common] Q13. Subarray Sum Equals K (prefix sums + hash map). [Medium] [asked: very common] Q14.
+
+Longest Consecutive Sequence in O(n) with a hash set. [Medium] [asked: very common] Q15. Longest Substring Without Repeating Characters (sliding window). [Medium] [asked: very common] Q16. Minimum Window Substring (sliding window with a need counter). [Hard] [asked: very common] Q17.
+
+Longest Repeating Character Replacement and Permutation in String. [Medium] [asked: common] Q18. Longest Palindromic Substring (expand around centre and Manacher) and Palindromic Substrings count. [Medium] [asked: very common] Q19. Valid Palindrome and String to Integer (atoi) with every edge case. [Medium] [asked: very common] Q20.
+
+Integer to Roman and Roman to Integer. [Medium] [asked: common] Q21. Longest Common Prefix, implement strStr (KMP), Reverse Words in a String, Encode and Decode Strings. [Medium] [asked: common] Q22. Spiral Matrix, Rotate Image and Set Matrix Zeroes. [Medium] [asked: very common] Q23.
+
+Search in Rotated Sorted Array and Find Minimum in Rotated Sorted Array. [Medium] [asked: very common] Q24. First Missing Positive, Majority Element (Boyer-Moore) and Single Number I/II. [Hard] [asked: common] Q25.
+
+Count Bits, Reverse Bits, Power of Two, Sum of Two Integers without `+`. [Easy] [asked: common] Q26. 3Sum Closest and Next Permutation. [Medium] [asked: common] Q27. Binary search variants: lower/upper bound, search insert position, sqrt(x), Koko Eating Bananas (search on the answer). [Medium] [asked: very common]
+
+Every question: statement, approach (brute force then optimal, complexity, pattern), Rust wrinkle, the solution, a brute-force oracle with 2000 seeded xorshift cases plus edge cases, and what the interviewer is really testing.
+"""
+
+[[sources]]
+title = "techinterviewhandbook.org/grind75"
+url = "https://www.techinterviewhandbook.org/grind75"
+
+[[sources]]
+title = "neetcode.io/practice"
+url = "https://neetcode.io/practice"
+
+[[sources]]
+title = "interviewing.io/rust-interview-questions"
+url = "https://interviewing.io/rust-interview-questions"
+
+[[sources]]
+title = "cp-algorithms.com"
+url = "https://cp-algorithms.com/"

@@ -1,0 +1,66 @@
+title = "Learned indexes"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Trees and ordered structures"
+chapter_order = 2
+order = 180
+kind = "recipe"
+lede = "A two-stage Recursive Model Index (RMI), a PGM-style piecewise-linear index with a hard epsilon, and an updatable PGM with a delta buffer."
+level = "advanced"
+code = ["examples/data_structures/learned_index_rmi.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+read-mostly sorted lookups (static SSTable/segment indexes, analytics columns, dictionaries), research into replacing B-trees by models.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+an index is a function key -> position in a sorted array, i.e. the key's CDF scaled by n. A learned index **fits** that CDF with a model and then fixes the model's mistakes with a small bounded search, instead of walking a tree. RMI  : stage 1 is one linear model over all keys; its prediction picks one of m stage-2 linear models; that model predicts the position.
+
+Every stage-2 model remembers the **min** and MAX of (true position - predicted position) over the keys it was trained on, so a lookup binary-searches only the window [pred+min_err, pred+max_err]. Guarantee: every key that was trained on is inside its window (routing is a deterministic function of the key), so present keys are never missed.
+
+PGM  : one greedy pass cuts the sorted keys into segments, each a line that is within **epsilon** positions of every key it covers (the "shrinking cone": keep the interval of slopes that still satisfies all points so far, cut when it empties). The segment start keys are indexed the same way, recursively, until one segment remains.
+
+A lookup is a few model evaluations plus a binary search over at most 2&#42;eps+3 slots. Unlike the RMI the bound is a **parameter**, not a measurement.
+
+Updatable PGM : the learned part is immutable, so inserts go to a small sorted delta set, deletes of base keys to a tombstone set, and when those exceed a fraction of the base the structure is rebuilt by a linear merge (an LSM in miniature).
+
+**Why** it can win: for smooth key distributions a few dozen bytes of model replace a whole tree level hierarchy, and a model evaluation is a multiply-add instead of a cache-missing pointer hop.
+
+**Why** it can lose: a straight line is a poor fit for clustered or stepped keys (windows blow up or you need many segments), models need retraining on updates, and the guarantee is only about keys the model was built on (absent keys need a fix-up walk to find their insertion point).
+
+Comparisons are counted in an instrumented binary search so the numbers are reproducible; wall-clock time is **not** measured or asserted.
+
+Verified by exactness checks on 2000 random datasets (uniform, lognormal, clustered, step, quadratic): every present key is found **inside** its predicted window (zero fix-up steps, i.e. the error bound is never violated), absent keys get the exact insertion point, and range queries equal the oracle's; plus a 20k-op differential test of the updatable PGM against `BTreeSet`.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+the idea comes from "The Case for Learned Index Structures"; PGM-index is an open-source library; learned models also index sorted runs in research LSM engines (for example Bourbon) and are used as cardinality/CDF estimators. Course: CMU 15-721 (Advanced Database Systems): learned indexes / index structures lecture; CMU 15-445 for the B+tree baseline.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Kraska et al., "The Case for Learned Index Structures": <https://arxiv.org/pdf/1712.01208>
+
+Ferragina, Vinciguerra, "The PGM-index: a fully-dynamic compressed learned index with provable worst-case bounds": <http://www.vldb.org/pvldb/vol13/p1162-ferragina.pdf>
+
+Ding et al., "ALEX: An Updatable Adaptive Learned Index": <https://arxiv.org/pdf/1905.08898>
+"""
+
+[[sources]]
+title = "arxiv.org/pdf/1712.01208"
+url = "https://arxiv.org/pdf/1712.01208"
+
+[[sources]]
+title = "vldb.org/pvldb/vol13/p1162-ferragina.pdf"
+url = "http://www.vldb.org/pvldb/vol13/p1162-ferragina.pdf"
+
+[[sources]]
+title = "arxiv.org/pdf/1905.08898"
+url = "https://arxiv.org/pdf/1905.08898"

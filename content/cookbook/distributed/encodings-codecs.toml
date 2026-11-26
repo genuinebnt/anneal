@@ -1,0 +1,58 @@
+title = "From-scratch codecs"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Encodings and compression"
+chapter_order = 5
+order = 552
+kind = "recipe"
+lede = "Hex, base64/32, percent-encoding, UTF-8/16, varints, checksums."
+level = "intermediate"
+code = ["examples/encoding_compression/encodings_codecs.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>wire formats</li><li>tokens/URLs</li><li>file formats</li><li>protocol parsers</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+the small encodings every backend meets. Each is a pure function bytes &lt;-> text/bytes, so each is pinned by (1) reference vectors (RFC 4648 "foobar"), (2) round-trip fuzzing on seeded random input, and (3) for decoders, a **strictness** property: if `decode(s)` succeeds then `encode(decode(s)) == s`.
+
+Lenient decoders (accepting stray padding, non-zero trailing bits, overlong UTF-8) are a classic source of signature-bypass and smuggling bugs because two different strings mean the same bytes.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+base64 and base32 share one bit-accumulator codec parameterised by alphabet (6 vs 5 bits per char); padding is explicit (`pad: bool`). UTF-8 is validated against `std::str::from_utf8` on 100k random byte strings; UTF-16 against `char::decode_utf16`.
+
+Zigzag maps signed to unsigned so small magnitudes stay small (0,-1,1,-2 -> 0,1,2,3) before LEB128 (7 bits/byte, high bit = continue).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>base64 in JWTs</li><li>data: URLs</li><li><strong>Mime</strong> and PEM</li><li>base32 in TOTP secrets and some content ids</li><li>percent-encoding of URL components</li><li>LEB128/zigzag varints in protobuf and WebAssembly</li><li>Adler-32 in zlib</li><li>CRC32 in gzip/PNG/Ethernet. Real code: the <code>base64</code></li><li><code>hex</code></li><li><code>percent-encoding</code> crates</li><li>std for UTF-8/16</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+```text
+https://www.rfc-editor.org/rfc/rfc4648   https://www.rfc-editor.org/rfc/rfc3986   https://www.rfc-editor.org/rfc/rfc3629
+```
+"""
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc4648"
+url = "https://www.rfc-editor.org/rfc/rfc4648"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc3986"
+url = "https://www.rfc-editor.org/rfc/rfc3986"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc3629"
+url = "https://www.rfc-editor.org/rfc/rfc3629"

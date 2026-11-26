@@ -1,0 +1,64 @@
+title = "AES-128 from scratch with ECB, CBC"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Cryptography"
+chapter_order = 4
+order = 543
+kind = "recipe"
+lede = "AES-128 from scratch with ECB, CBC (+padding oracle), CTR and GCM"
+level = "advanced"
+code = ["examples/cryptography/aes_modes.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+understanding TLS/disk-encryption/token formats and why modes matter.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+!!! **Educational implementation**. **Not** constant-time-audited.
+
+**Not for production**. !!! This file uses table lookups indexed by secret data, which leak through cache timing. Use audited libraries (RustCrypto <https://github.com/RustCrypto> , ring <https://github.com/briansmith/ring>) and never roll your own crypto for real systems.
+
+What: AES-128 (**fips** 197): the S-box is **generated** (multiplicative inverse in GF(2&#94;8) mod x&#94;8+x&#94;4+x&#94;3+x+1, then an affine map), key expansion, SubBytes / ShiftRows / MixColumns / AddRoundKey and their inverses. Modes (NIST SP 800-38A and 800-38D): ECB, CBC with PKCS#7, CTR, GCM (GHASH = carry-less multiply in GF(2&#94;128)).
+
+Why modes matter: a block cipher only encrypts 16 bytes. ECB maps equal plaintext blocks to equal ciphertext blocks (the "ECB penguin": image structure survives).
+
+CBC hides patterns but is **malleable** (flip a bit in C[i-1] and the same bit flips in P[i]) and has no integrity; if a server reveals whether padding was valid (a "padding oracle"), an attacker decrypts any block byte by byte with &#126;256 queries per byte, no key needed.
+
+This is why AEAD (GCM, ChaCha20-Poly1305) is the default: confidentiality **and** integrity, verified before use. GCM caveat: never reuse a (key, nonce) pair; it leaks plaintext XORs and the GHASH key.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>AES-GCM in TLS 1.2/1.3 and QUIC</li><li>AES-CTR in SSH</li><li>AES-CBC in legacy TLS and old file formats (and the origin of many padding-oracle bugs)</li><li>AES-XTS in disk encryption (a different mode, not shown)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://csrc.nist.gov/pubs/fips/197/final" target="_blank" rel="noreferrer">https://csrc.nist.gov/pubs/fips/197/final</a></li><li><a href="https://csrc.nist.gov/pubs/sp/800/38/a/final" target="_blank" rel="noreferrer">https://csrc.nist.gov/pubs/sp/800/38/a/final</a></li><li><a href="https://csrc.nist.gov/pubs/sp/800/38/d/final" target="_blank" rel="noreferrer">https://csrc.nist.gov/pubs/sp/800/38/d/final</a></li></ul>
+"""
+
+[[sources]]
+title = "github.com/RustCrypto"
+url = "https://github.com/RustCrypto"
+
+[[sources]]
+title = "github.com/briansmith/ring"
+url = "https://github.com/briansmith/ring"
+
+[[sources]]
+title = "csrc.nist.gov/pubs/fips/197/final"
+url = "https://csrc.nist.gov/pubs/fips/197/final"
+
+[[sources]]
+title = "csrc.nist.gov/pubs/sp/800/38/a/final"
+url = "https://csrc.nist.gov/pubs/sp/800/38/a/final"
+
+[[sources]]
+title = "csrc.nist.gov/pubs/sp/800/38/d/final"
+url = "https://csrc.nist.gov/pubs/sp/800/38/d/final"

@@ -1,0 +1,67 @@
+title = "Scalar binary quantization rescoring"
+module = "Search and vectors"
+module_order = 9
+chapter = "Vector search"
+chapter_order = 2
+order = 470
+kind = "recipe"
+lede = "scalar, binary and RaBitQ-style quantisation with oversample-and-rescore, compared with product quantisation."
+level = "intermediate"
+code = ["examples/search_vectors/scalar_binary_quantization_rescoring.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+cutting vector memory 4x-32x (or more) while keeping recall, by searching compressed codes and re-ranking a few candidates exactly.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+six compressed representations of the same vectors, all searched the same way ("compressed scan, then exact rerank"):
+
+- sq8 (per-dimension min/max): one byte per dimension, step_d = (max_d - min_d)/255. Error per coordinate &lt;= step_d/2.
+- sq8 per-vector scale (symmetric i8): x &#126; scale &#42; q with scale = max&#124;x&#124;/127, one f32 per vector extra. Error &lt;= scale/2.
+- binary (1 bit per dimension): bit = [x_d > mean_d]. Distance = Hamming (XOR + popcount). 32x smaller than f32.
+- thermometer (2 bits/dim -> 3 bits): level L in 0..=3 from per-dimension **quartiles**, stored as 3 bits (L>=1, L>=2, L>=3). The Hamming distance between two thermometer codes is **exactly** &#124;L1 - L2&#124;, so popcount computes an L1 distance on 4 levels.
+- rabitq-style: centre on the data mean, normalise to unit length, rotate by a random orthogonal matrix P, keep only the **signs**. The code is a unit vector o_bar = sign/sqrt(D); the unbiased inner-product estimator is &lt;o_bar, q'> / &lt;o_bar, o> (both sides rotated).
+
+   Because P is random, &lt;o_bar,o> concentrates near sqrt(2/pi) &#126; 0.8 and the estimator's error is O(1/sqrt(D)) with high probability (RaBitQ proves this bound; we only **measure** it: mean &#126; 0 and sd close to sqrt(1-x&#94;2)/(x sqrt(D-1))). The query stays float (**asymmetric**): a 1-bit code on one side only is far more accurate than 1 bit on both.
+- pq (m=8 sub-quantisers x 256 centroids, ADC lookup tables): the classic learned codebook; 8 bytes per vector here. **Rescoring**: take the top k&#42;oversample candidates by compressed distance, recompute exact distances from the full-precision vectors (kept on slow storage in real systems), return the top k.
+
+   Recall@10 vs oversample is the knob that trades a few exact reads for the 4x-32x memory saving. Candidate sets are **nested** (prefixes of one sorted list), so recall per query can only go up.
+
+   **Data**: gaussian clusters, uniform noise (hard: no structure to exploit), and an anisotropic "real-like" set whose points live near an 8-dimensional subspace of 64 dims with decaying axis scales (embeddings look like this).
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+(1) every sq8/i8 round trip error &lt;= half a step, and the ADC distance error obeys the triangle-inequality bound &#124;d(q,x_hat) - d(q,x)&#124; &lt;= &#124;x - x_hat&#124;; (2) Hamming/popcount and thermometer codes equal bit-level oracles; (3) rescoring with k&#42;oversample >= n gives recall exactly 1.0 for every method;
+
+(4) the reranked result equals exact top-k **restricted** to the candidate set; (5) recall is monotone non-decreasing in oversample for every query and method; (6) RaBitQ estimator bias and sd.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Qdrant scalar/binary quantisation with rescore</li><li>Weaviate BQ/SQ/PQ</li><li>pgvector halfvec/bit types</li><li>Lucene int7/int4/bit vector formats</li><li>Elasticsearch "bbq" (better binary quantisation, a RaBitQ-inspired scheme)</li><li>Faiss <code>IndexScalarQuantizer</code></li><li><code>IndexIVFPQ</code></li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>RaBitQ, Gao and Long, <a href="https://arxiv.org/abs/2405.12497" target="_blank" rel="noreferrer">https://arxiv.org/abs/2405.12497</a></li><li>Product Quantization for Nearest Neighbor Search, Jegou, Douze and Schmid, IEEE TPAMI 2011 (cited by title</li><li>the ieeexplore URL returned 202 so it is not confirmed)</li><li><a href="https://github.com/facebookresearch/faiss/wiki/Faiss-indexes" target="_blank" rel="noreferrer">https://github.com/facebookresearch/faiss/wiki/Faiss-indexes</a></li><li><a href="https://arxiv.org/abs/1603.09320" target="_blank" rel="noreferrer">https://arxiv.org/abs/1603.09320</a> (HNSW) for the graph indexes that these codes are usually attached to</li></ul>
+"""
+
+[[sources]]
+title = "arxiv.org/abs/2405.12497"
+url = "https://arxiv.org/abs/2405.12497"
+
+[[sources]]
+title = "github.com/facebookresearch/faiss/wiki/Faiss-indexes"
+url = "https://github.com/facebookresearch/faiss/wiki/Faiss-indexes"
+
+[[sources]]
+title = "arxiv.org/abs/1603.09320"
+url = "https://arxiv.org/abs/1603.09320"

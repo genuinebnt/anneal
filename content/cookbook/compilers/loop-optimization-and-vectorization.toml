@@ -1,0 +1,156 @@
+title = "Loop optimization and vectorization"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Middle end and analysis"
+chapter_order = 5
+order = 625
+kind = "guide"
+lede = "Induction variables, dependence analysis, tiling, the loop vectorizer, the polyhedral model · LLVM SCEV, LoopVectorize, Polly, MLIR affine"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>Numeric programs spend most of their time in loops, and most loop speedups come from two sources. <b>Memory locality</b>: reorder iterations so data is reused while it's still in cache. <b>Parallelism</b>: run independent iterations at once, in SIMD lanes or on cores. Both are only legal if they preserve every <em>dependence</em> between iterations. This chapter builds on the canonical loop form from <a href="/cookbook/p/dominators-loops-and-control-flow-structure">chapter 11</a>: preheader, single latch, dedicated exits.</p>
+"""
+
+[[sections]]
+heading = "Induction variables and scalar evolution"
+body = """
+<p>A <b>basic induction variable</b> is a loop-header value that starts at <code>s</code> and grows by a loop-invariant step <code>c</code> each iteration. LLVM's <em>scalar evolution</em> (SCEV) writes this as the <em>add recurrence</em> <code>{s,+,c}&lt;loop&gt;</code>. Chains of recurrences compose: if <code>i = {0,+,1}</code> then <code>4*i + 8 = {8,+,4}</code> and <code>i*i = {0,+,1,+,2}</code>. With these closed forms the compiler can:</p>
+
+<ul> <li>compute <b>trip counts</b>: <code>for i in s..n step c</code> runs <code>⌈(n−s)/c⌉</code> times when <code>c &gt; 0</code>;</li> <li>do <b>strength reduction</b>: replace <code>base + 4*i</code> with a pointer bumped by 4;</li> <li>rewrite values used after the loop in terms of the trip count;</li> <li>answer dependence questions about array subscripts.</li> </ul>
+
+```rust title="Recognizing a basic induction variable in the block-parameter IR"
+pub struct Loop { pub header: Block, pub preheader: Block, pub latch: Block }
+
+/// If `param` (a header block parameter) is a basic IV, return (start value, constant step):
+/// the preheader passes `start`, and the latch passes `param + step`.
+pub fn basic_iv(f: &Function, lp: &Loop, param: Value) -> Option<(Value, i64)> {
+    let idx = f.blocks[lp.header].params.iter().position(|&p| p == param)?;
+    let start = f.branch_arg(lp.preheader, lp.header, idx);
+    let next = f.branch_arg(lp.latch, lp.header, idx);
+    let ValueDef::Inst(i) = f.values[next].1 else { return None };
+    let d = &f.insts[i];
+    match (d.op, &d.args[..]) {
+        // The guard runs for each or-alternative, so `step + param` is also recognized.
+        (Opcode::Iadd, [x, s]) | (Opcode::Iadd, [s, x]) if *x == param => Some((start, f.const_value(*s)?)),
+        _ => None,
+    }
+}
+
+/// Trip count of `for (i = start; i < end; i += step)` with step > 0.
+pub fn trip_count(start: i64, end: i64, step: i64) -> u64 {
+    assert!(step > 0);
+    if end <= start { 0 } else { ((end - start + step - 1) / step) as u64 }
+}
+```
+"""
+
+[[sections]]
+heading = "Dependence analysis"
+body = """
+<p>Two memory accesses <em>depend</em> on each other if they may touch the same location and at least one is a write. There are three kinds:</p>
+
+<ul> <li><b>flow</b> (read after write);</li> <li><b>anti</b> (write after read);</li> <li><b>output</b> (write after write).</li> </ul>
+
+<p>A dependence is <em>loop-carried</em> if it crosses iterations. For a loop nest, the <b>distance vector</b> says how many iterations apart the two accesses are, per loop. In <code>A[i][j] = A[i-1][j+1]</code> the distance is <code>(1, −1)</code>. The <b>direction vector</b> keeps only the signs, <code>(&lt;, &gt;)</code>. The central legality rule: <em>a transformation is legal if every dependence vector stays lexicographically positive</em>, meaning the source still runs before the sink.</p>
+
+<p>Deciding whether <code>A[f(i)]</code> and <code>A[g(j)]</code> can alias within the loop bounds is integer programming, so compilers use a hierarchy of tests. Cheap exact tests handle the common cases (ZIV for constant subscripts; strong SIV for <code>a·i+b</code> vs <code>a·i+d</code>). The GCD test and Banerjee's inequalities are fast, conservative filters. The Omega test solves the general case of affine constraints exactly.</p>
+
+```rust title="GCD and strong-SIV dependence tests"
+fn gcd(x: i64, y: i64) -> i64 { if y == 0 { x.abs() } else { gcd(y, x % y) } }
+
+/// Can a·i + b = c·j + d have an integer solution? If not, A[a·i+b] and A[c·j+d] never
+/// touch the same element and are independent. (Ignores loop bounds: conservative.)
+pub fn gcd_test_may_depend(a: i64, b: i64, c: i64, d: i64) -> bool {
+    let g = gcd(a, c);
+    if g == 0 { return b == d; }
+    (d - b) % g == 0
+}
+
+/// Strong SIV: write A[a·i + b], read A[a·i + d], loop i in 0..n.
+/// Returns the dependence distance (read iteration − write iteration), or None if independent.
+pub fn strong_siv(a: i64, b: i64, d: i64, n: i64) -> Option<i64> {
+    assert!(a != 0);
+    if (b - d) % a != 0 { return None; }              // never the same element
+    let dist = (b - d) / a;
+    (dist.abs() < n).then_some(dist)                  // must fit inside the iteration space
+}
+// A[i+1] = A[i] * 2  →  write a=1,b=1; read a=1,d=0  →  distance 1: iteration i+1 reads
+// what iteration i wrote, so iterations can't all run in parallel (but can be pipelined).
+```
+"""
+
+[[sections]]
+heading = "Loop transformations"
+body = """
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Transformation</th><th>What it does</th><th>Legal when</th><th>Why</th></tr></thead> <tbody> <tr><td>Interchange</td><td>Swap loop order</td><td>No dependence becomes (&gt;, &lt;) after the swap</td><td>Make the innermost loop walk memory contiguously</td></tr> <tr><td>Tiling (blocking)</td><td>Split loops into blocks and iterate block by block</td><td>The loops involved are fully permutable</td><td>Reuse a cache-sized tile many times: the biggest win for matrix code</td></tr> <tr><td>Fusion</td><td>Merge adjacent loops over the same range</td><td>No dependence from a later iteration of loop 1 to an earlier one of loop 2</td><td>Reuse values while they're in registers or cache</td></tr> <tr><td>Fission (distribution)</td><td>Split one loop body into several loops</td><td>Statements in a dependence cycle stay together</td><td>Isolate a vectorizable part from a non-vectorizable one</td></tr> <tr><td>Unroll, unroll-and-jam</td><td>Replicate the body; for nests, unroll the outer loop and fuse the inner copies</td><td>Always (with a remainder loop); jam needs the interchange rules</td><td>Fewer branches, more instruction-level parallelism, register reuse</td></tr> <tr><td>Peeling, splitting</td><td>Pull out the first or last iterations, or split the range</td><td>Always</td><td>Remove special cases such as alignment or boundary conditions</td></tr> <tr><td>Unswitching</td><td>Hoist a loop-invariant <code>if</code> out, duplicating the loop</td><td>The condition is invariant</td><td>Remove a branch from the hot body</td></tr> <tr><td>Skewing</td><td>Re-index so a wavefront of iterations becomes independent</td><td>Always; enables interchange and tiling for stencils</td><td>Parallelize stencils with (1, −1) dependences</td></tr> <tr><td>Software pipelining</td><td>Overlap iterations: start iteration i+1 before i finishes</td><td>Respects dependences and resources</td><td>In-order and VLIW cores (modulo scheduling)</td></tr> <tr><td>Versioning</td><td>Emit a fast loop behind a runtime check (no aliasing, enough iterations)</td><td>Always</td><td>When static analysis can't prove independence</td></tr> </tbody> </table></div>
+
+```rust title="Interchange plus tiling for matrix multiply (row-major n×n)"
+/// Naive i-j-k order walks B column-wise: a cache miss on every step for large n.
+/// i-k-j order makes the innermost loop contiguous in B and C, and tiling keeps
+/// T×T blocks of all three matrices hot in cache while they're reused.
+pub fn matmul_tiled(a: &[f32], b: &[f32], c: &mut [f32], n: usize) {
+    const T: usize = 64;
+    for ii in (0..n).step_by(T) {
+        for kk in (0..n).step_by(T) {
+            for jj in (0..n).step_by(T) {
+                let j_end = (jj + T).min(n);
+                for i in ii..(ii + T).min(n) {
+                    for k in kk..(kk + T).min(n) {
+                        let aik = a[i * n + k];
+                        let c_row = &mut c[i * n + jj..i * n + j_end];
+                        let b_row = &b[k * n + jj..k * n + j_end];
+                        // Zipped slices: no bounds checks, contiguous, and LLVM vectorizes it.
+                        for (cij, bkj) in c_row.iter_mut().zip(b_row) { *cij += aik * bkj; }
+                    }
+                }
+            }
+        }
+    }
+}
+```
+"""
+
+[[sections]]
+heading = "Vectorization"
+body = """
+<p>A <b>loop vectorizer</b> runs VF (vectorization factor) iterations at once in SIMD lanes. It needs:</p>
+
+<ul> <li>no loop-carried dependence with distance smaller than VF;</li> <li>recognizable <b>induction variables</b> and <b>reductions</b> (sum, min, max, and, or);</li> <li>if-converted control flow, where branches become masks or selects;</li> <li>a plan for the leftover iterations: a scalar epilogue loop or masked tail;</li> <li>a cost model that says it's worth it.</li> </ul>
+
+<p>When aliasing can't be ruled out statically, it adds runtime overlap checks and keeps a scalar fallback. <b>SLP</b> (superword-level parallelism) vectorization instead packs isomorphic independent scalar operations in straight-line code (<a href="/cookbook/p/scalar-optimizations">chapter 13</a>). LLVM models vectorization candidates as <em>VPlans</em> so it can compare strategies.</p>
+
+<p><b>Floating point:</b> a vectorized sum adds numbers in a different order. IEEE addition isn't associative, so without fast-math (or an explicit reassociation in the source) LLVM will <em>not</em> vectorize a float reduction. This is why <code>xs.iter().sum::&lt;f32&gt;()</code> stays scalar in Rust while the integer version vectorizes.</p>
+
+```rust title="Making a float reduction vectorizable by reassociating explicitly"
+/// Eight independent accumulators: the reassociation is now in the source program,
+/// so the compiler may keep them in one 8-lane register (AVX) or two 4-lane ones (NEON).
+pub fn sum_f32(xs: &[f32]) -> f32 {
+    let mut acc = [0.0f32; 8];
+    let chunks = xs.chunks_exact(8);
+    let tail = chunks.remainder();
+    for c in chunks {
+        for i in 0..8 { acc[i] += c[i]; }
+    }
+    acc.iter().sum::<f32>() + tail.iter().sum::<f32>()
+}
+```
+
+<div class="cb-g-tip"><h3>Writing Rust that vectorizes</h3> <ul> <li>Iterate with zipped slices or <code>chunks_exact</code> so bounds checks disappear.</li> <li>Hoist a length check before the loop (<code>assert!(a.len() == b.len())</code>) to let LLVM drop per-iteration checks.</li> <li>Avoid early exits in hot loops.</li> <li>Check the result with <code>cargo-show-asm</code>, or with <code>RUSTFLAGS="-C target-cpu=native"</code> and <code>-C llvm-args=-pass-remarks=loop-vectorize</code>. Remarks also explain why a loop <em>didn't</em> vectorize.</li> </ul></div>
+"""
+
+[[sections]]
+heading = "The polyhedral model"
+body = """
+<p>For <em>static control parts</em> (SCoPs), meaning loop nests whose bounds, conditions and array subscripts are affine in the loop counters and parameters, everything above becomes linear algebra over integer points:</p>
+
+<ul> <li>Each statement's <b>iteration domain</b> is a polyhedron, such as <code>{ (i, j) : 0 ≤ i &lt; n, 0 ≤ j ≤ i }</code>.</li> <li>Accesses are affine maps.</li> <li>Dependences are polyhedra relating source and sink iterations.</li> <li>A <b>schedule</b> is an affine function assigning each iteration a (multi-dimensional) time.</li> </ul>
+
+<p>Finding a legal schedule that maximizes locality and parallelism is an integer linear program; Feautrier's algorithm and Pluto's tiling-hyperplane method are the classics. The polyhedral library <code>isl</code> performs the set operations and generates code back from the transformed polyhedra. Polly (LLVM), GCC's Graphite and MLIR's <code>affine</code> dialect use this approach. Tensor compilers borrow it for fusion and tiling (<a href="/cookbook/p/gpu-and-accelerator-compilation">chapter on GPUs</a>).</p>
+"""
+
+[[sources]]
+title = "LLVM auto-vectorization documentation"
+url = "https://llvm.org/docs/Vectorizers.html"

@@ -1,0 +1,56 @@
+title = "A mini compiler backend"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Back ends"
+chapter_order = 6
+order = 639
+kind = "recipe"
+lede = "CFG, dominators, SSA, optimisation, liveness, register allocation, out-of-SSA."
+level = "advanced"
+code = ["examples/compilers_runtimes/ssa_register_allocation.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>compilers</li><li>JITs</li><li>query-expression engines and anything that turns a high-level program into straight machine-like code</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Pipeline** (every stage is checked by **running** the program, not by eyeballing): structured AST -> three-address IR over a CFG of basic blocks -> dominators (Cooper-Harvey-Kennedy) + dominance frontiers -> SSA (phis at the iterated dominance frontier, renaming down the dominator tree) -> SSA optimisations (constant folding/propagation, copy propagation, dead code elimination, branch folding) -> out-of-SSA (split critical edges, **parallel** copies sequentialised) -> liveness (backward dataflow to a fixpoint) -> interference graph -> register allocation two ways (Chaitin-Briggs graph colouring and Poletto-Sarkar linear scan, both with spill-and-retry) -> assembly for a K-register machine, which a tiny emulator runs.
+
+**Why SSA**: every variable has exactly one definition, so "which definition reaches here?" is just the variable name, and optimisations become simple map lookups. Phi nodes merge values at joins. Dominance makes it sound: every use must be dominated by its definition (we assert it).
+
+**Why CHK**: the iterative dominator algorithm over reverse postorder with a two-finger `intersect` is shorter than Lengauer-Tarjan and as fast in practice on real CFGs; we cross-check it against the textbook set-intersection definition. **The two classic OUT-OF-SSA bugs**, both reproduced here with a naive lowering and then fixed:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Swap</div><div class="cb-g-says"><p>Problem: <code>a = phi(a0, b); b = phi(b0, a)</code> are <strong>parallel</strong> copies; emitting <code>a = b; b = a</code> in order loses a value. Fix: sequentialise the parallel copy, breaking cycles with a temporary.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Lost-copy</div><div class="cb-g-says"><p>Problem: a phi copy placed at the end of a block that also branches elsewhere clobbers a value the other path still needs. Fix: split critical edges so the copy lives on its own edge block.</p><p><strong>Allocation</strong>: graph colouring simplifies nodes of degree &lt; K, optimistically pushes the cheapest spill candidate when stuck (Briggs), colours in reverse (biased towards move partners so copies vanish), and rewrites spilled variables with load-before-use / store-after-def temporaries that are themselves unspillable, then retries.</p><p>Spill cost weights uses by 10&#94;loop-depth (loops found from dominator back edges). Linear scan keeps one [start,end] interval per variable and spills the active interval that ends furthest away. Spilled values live in stack slots (<code>ld</code>/<code>st</code>).</p><p>Both allocators work after phi lowering, so the IR is no longer SSA there; liveness and interference do not need SSA.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+the backend shape of LLVM/Cranelift/V8/HotSpot-style compilers (SSA IR, dominators, linear-scan or graph colouring allocators, parallel-copy resolution), bytecode JITs, shader compilers, and SQL/expression JIT engines.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Cooper, Harvey, Kennedy "A Simple, Fast Dominance Algorithm"</li><li>Cytron et al</li><li>"Efficiently Computing SSA Form"</li><li>Poletto and Sarkar "Linear Scan Register Allocation" <a href="https://web.cs.ucla.edu/~palsberg/course/cs132/linearscan.pdf" target="_blank" rel="noreferrer">https://web.cs.ucla.edu/~palsberg/course/cs132/linearscan.pdf</a></li><li>Boissinot et al</li><li>"Revisiting Out-of-SSA Translation" <a href="https://inria.hal.science/inria-00349925v1/document" target="_blank" rel="noreferrer">https://inria.hal.science/inria-00349925v1/document</a></li><li><a href="https://en.wikipedia.org/wiki/Static_single-assignment_form" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Static_single-assignment_form</a> and <a href="https://en.wikipedia.org/wiki/Register_allocation" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Register_allocation</a></li></ul>
+"""
+
+[[sources]]
+title = "web.cs.ucla.edu/~palsberg/course/cs132/linearscan.pdf"
+url = "https://web.cs.ucla.edu/~palsberg/course/cs132/linearscan.pdf"
+
+[[sources]]
+title = "inria.hal.science/inria-00349925v1/document"
+url = "https://inria.hal.science/inria-00349925v1/document"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Static_single-assignment_form"
+url = "https://en.wikipedia.org/wiki/Static_single-assignment_form"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Register_allocation"
+url = "https://en.wikipedia.org/wiki/Register_allocation"

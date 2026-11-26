@@ -1,0 +1,46 @@
+title = "Extension traits ops"
+module = "Rust language"
+module_order = 1
+chapter = "Types, traits and generics"
+chapter_order = 2
+order = 16
+kind = "recipe"
+lede = "extension traits, custom iterator adapters, and operator overloading on a generic type."
+level = "intermediate"
+code = ["examples/language/extension_traits_ops.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>adding methods to types you do not own (Iterator, str, Vec)</li><li>math/vector-like types</li><li>ergonomic APIs</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>itertools-style helper methods</li><li>vector/matrix math types</li><li>domain-specific method sugar</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Extension trait: define `trait IterExt: Iterator { fn my_adapter(self) -> MyAdapter<Self> }` and a blanket `impl<I: Iterator> IterExt for I {}`: now **every** iterator has `.my_adapter()`. That is exactly how `itertools` works (<https://docs.rs/itertools>). Operators are traits too: `impl Add for V2<T>`; derive nothing, implement what makes sense.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://rust-lang.github.io/api-guidelines/predictability.html> and <https://doc.rust-lang.org/std/ops/index.html>
+"""
+
+[[sources]]
+title = "docs.rs/itertools"
+url = "https://docs.rs/itertools"
+
+[[sources]]
+title = "rust-lang.github.io/api-guidelines/predictability.html"
+url = "https://rust-lang.github.io/api-guidelines/predictability.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/ops/index.html"
+url = "https://doc.rust-lang.org/std/ops/index.html"

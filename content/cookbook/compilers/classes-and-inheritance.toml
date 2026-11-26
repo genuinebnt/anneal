@@ -1,0 +1,38 @@
+title = "Classes and inheritance"
+module = "Compilers and languages"
+module_order = 12
+chapter = "A tree-walking interpreter"
+chapter_order = 2
+order = 583
+kind = "guide"
+lede = "Book ch. 12–13 · Official tests: class/ field/ method/ constructor/ this/ inheritance/ super/"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<div class="cb-g-tt"><table><thead><tr><th>Kind</th><th>Input</th><th>Expected</th></tr></thead><tbody><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>class A {} print A;</code></td><td><code>A</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>class A {} print A();</code></td><td><code>A instance</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>class P { init(x) { this.x = x; } } print P(3).x;</code></td><td><code>3</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>class A { f() { return this; } } var a = A(); var m = a.f; print m() == a;</code></td><td><code>true</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>class A { hi() { print "A"; } } class B &lt; A { hi() { super.hi(); print "B"; } } B().hi();</code></td><td><code>A</code> then <code>B</code></td></tr><tr><td><span class="cb-g-pill cb-g-rerr">runtime error</span></td><td><code>class A {} A().x;</code></td><td><code>Undefined property 'x'.</code></td></tr><tr><td><span class="cb-g-pill cb-g-rerr">runtime error</span></td><td><code>var N = "x"; class B &lt; N {}</code></td><td><code>Superclass must be a class.</code></td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>class A &lt; A {}</code></td><td><code>[line 1] Error at 'A': A class can't inherit from itself.</code></td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>print this;</code></td><td><code>[line 1] Error at 'this': Can't use 'this' outside of a class.</code></td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>class A { init() { return 1; } }</code></td><td><code>[line 1] Error at 'return': Can't return a value from an initializer.</code></td></tr></tbody></table></div>
+
+```rust title="src/value.rs"
+pub struct Class {
+    pub name: Rc<str>,
+    pub superclass: Option<Rc<Class>>,
+    pub methods: HashMap<Rc<str>, Rc<Function>>,
+}
+
+pub struct Instance {
+    pub class: Rc<Class>,
+    pub fields: RefCell<HashMap<Rc<str>, Value>>,
+}
+
+pub enum Value {
+    Nil, Bool(bool), Number(f64), Str(Rc<str>),
+    Native(Rc<Native>), Function(Rc<Function>),
+    Class(Rc<Class>), Instance(Rc<Instance>),
+}
+```
+
+<p>To bind a method, create a new <code>Env</code> whose parent is the method's closure, define <code>this</code> in it, and return a new <code>Function</code>. That's why <code>a.f</code> keeps working after you store it in a variable. The resolver pushes matching <code>this</code> and <code>super</code> scopes, so the depths line up.</p>
+
+<p>Instances compare by identity, so use <code>Rc::ptr_eq</code>.</p>
+"""

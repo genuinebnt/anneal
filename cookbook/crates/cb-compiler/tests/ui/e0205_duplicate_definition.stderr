@@ -1,0 +1,17 @@
+error[E0205]: the value `helper` is defined multiple times
+ --> e0205_duplicate_definition.peb:2:4
+  |
+1 | fn helper() -> int { 1 }
+  |    ------ previous definition here
+2 | fn helper() -> int { 2 }
+  |    ^^^^^^ `helper` redefined here
+
+warning[W0502]: function `helper` is never used
+ --> e0205_duplicate_definition.peb:2:4
+  |
+2 | fn helper() -> int { 2 }
+  |    ^^^^^^ not reachable from `main`
+  |
+  = help: if this is intentional, prefix it with an underscore
+
+error: aborting due to 1 previous error; 1 warning emitted

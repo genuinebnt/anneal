@@ -1,0 +1,9 @@
+error[E0005]: integer literal is too large
+ --> e0005_int_too_large.peb:2:13
+  |
+2 |     let x = 99999999999999999999;
+  |             ^^^^^^^^^^^^^^^^^^^^ does not fit in a 64-bit `int`
+  |
+  = note: the largest `int` is 9223372036854775807
+
+error: aborting due to 1 previous error

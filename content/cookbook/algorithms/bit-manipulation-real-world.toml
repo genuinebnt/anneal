@@ -1,0 +1,78 @@
+title = "Bit manipulation with REAL examples"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Sorting, strings, bits and theory"
+chapter_order = 6
+order = 221
+kind = "recipe"
+lede = "Flags, CIDR, packed headers, Snowflake/ULID ids, bit streams, chess bitboards, bitmask DP, XOR tricks, Rust pitfalls."
+level = "intermediate"
+code = ["examples/algorithms/bit_manipulation_real_world.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>permission systems</li><li>routers and firewalls</li><li>protocol parsers</li><li>id generators</li><li>compressors</li><li>game engines</li><li>DP interviews</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>feature/permission flag sets</li><li>longest-prefix match in IP routing tables</li><li>network and file-format headers</li><li>time-ordered unique ids</li><li>varint encodings (protobuf-style) and entropy-coder bit streams</li><li>chess/Go engines (bitboards)</li><li>bitmap indexes and Bloom filters</li><li>bitmask DP</li><li>Sudoku/exact-cover solvers</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+examples/algorithms/bit_tricks.rs is the &#42;toolbox&#42; (popcount, SWAR, Morton, PDEP/PEXT, clmul...). This file is the &#42;applications&#42;: sixteen small, self-contained sections, each a real use of bits, each with an **oracle** (an obviously-correct slow version, an exhaustive loop, or seeded random inputs).
+
+To avoid duplication it only re-derives a trick when the application needs it; see also examples/algorithms/heuristics_zoo.rs (Held-Karp TSP as an exact oracle) and examples/data_structures/bitset_rank_select_roaring.rs (the full rank/select + Roaring story; section 12 here is the 40-line version).
+
+Interview versions: examples/interview/intervals_greedy_bit_questions.rs.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Sections**: 1 flag sets  2 CIDR + longest-prefix match  3 packed headers + toy CPU  4 Snowflake/ULID ids  5 varint/zigzag/gamma/Rice bit streams 6 chess bitboards + perft  7 bitmask DP (TSP, subset sum, **sos**)  8 Gray code, bit reversal, popcount (+ timing)  9 branchless tricks (exhaustive) 10 XOR tricks  11 submasks and Gosper  12 bitmap index, Bloom, rank/select  13 Sudoku candidate masks  14 endianness  15 Rust pitfalls.
+
+**Rust notes**: shifting by >= the bit width **panics** in debug builds and is masked (wraps the count) in release: never write `1u32 << n` with n possibly 32; use `checked_shl`, or branch (section 2 shows the prefix-mask case). `<<` on signed integers never checks lost bits, only the shift **count**. Edition 2024: `gen` is reserved, so generators are called `next_id`.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://graphics.stanford.edu/~seander/bithacks.html" target="_blank" rel="noreferrer">https://graphics.stanford.edu/~seander/bithacks.html</a>  <a href="https://www.chessprogramming.org/Bitboards" target="_blank" rel="noreferrer">https://www.chessprogramming.org/Bitboards</a>  <a href="https://www.chessprogramming.org/Hyperbola_Quintessence" target="_blank" rel="noreferrer">https://www.chessprogramming.org/Hyperbola_Quintessence</a> <a href="https://www.chessprogramming.org/Magic_Bitboards" target="_blank" rel="noreferrer">https://www.chessprogramming.org/Magic_Bitboards</a>  <a href="https://www.chessprogramming.org/Perft_Results" target="_blank" rel="noreferrer">https://www.chessprogramming.org/Perft_Results</a>  <a href="https://github.com/twitter-archive/snowflake" target="_blank" rel="noreferrer">https://github.com/twitter-archive/snowflake</a>  <a href="https://github.com/ulid/spec" target="_blank" rel="noreferrer">https://github.com/ulid/spec</a> <a href="https://doc.rust-lang.org/std/primitive.u32.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/primitive.u32.html</a>  (Henry S</li><li>Warren, Hacker's Delight 2nd ed</li><li>Knuth TAOCP 4A 7.1.3 cited by title only.)</li></ul>
+"""
+
+[[sources]]
+title = "graphics.stanford.edu/~seander/bithacks.html"
+url = "https://graphics.stanford.edu/~seander/bithacks.html"
+
+[[sources]]
+title = "chessprogramming.org/Bitboards"
+url = "https://www.chessprogramming.org/Bitboards"
+
+[[sources]]
+title = "chessprogramming.org/Hyperbola_Quintessence"
+url = "https://www.chessprogramming.org/Hyperbola_Quintessence"
+
+[[sources]]
+title = "chessprogramming.org/Magic_Bitboards"
+url = "https://www.chessprogramming.org/Magic_Bitboards"
+
+[[sources]]
+title = "chessprogramming.org/Perft_Results"
+url = "https://www.chessprogramming.org/Perft_Results"
+
+[[sources]]
+title = "github.com/twitter-archive/snowflake"
+url = "https://github.com/twitter-archive/snowflake"
+
+[[sources]]
+title = "github.com/ulid/spec"
+url = "https://github.com/ulid/spec"
+
+[[sources]]
+title = "doc.rust-lang.org/std/primitive.u32.html"
+url = "https://doc.rust-lang.org/std/primitive.u32.html"

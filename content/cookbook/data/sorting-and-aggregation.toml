@@ -1,0 +1,207 @@
+title = "Sorting and aggregation"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 349
+kind = "guide"
+lede = "top-N heap sort · external merge sort and its cost formula · double buffering · comparison optimizations · sort vs hash aggregation · external hashing"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Query plans</strong> are trees or DAGs of operators. Disk-oriented operators spill through the buffer pool; minimize I/O and prefer sequential I/O.</li> <li><strong>Why sort</strong>: the relational model is unordered, so <code>ORDER BY</code> needs it, and <code>GROUP BY</code>, <code>JOIN</code> and <code>DISTINCT</code> can use it. In memory: quicksort, pdqsort, vergesort. Too big for memory: <strong>external</strong> sort. Sort (key, value) pairs, where the value is the whole tuple (<strong>early</strong> materialization) or a record id (<strong>late</strong>).</li> <li><strong>Top-N heap sort</strong>: <code>ORDER BY … LIMIT n [WITH TIES]</code> needs one pass with a bounded priority queue. With ties, the queue grows on demand.</li> <li><strong>External merge sort</strong>: <strong>pass 0</strong> sorts chunks of B pages and writes runs; <strong>merge passes</strong> combine up to <strong>B−1</strong> runs using one output page. Passes = <strong>1 + ⌈log<sub>B−1</sub> ⌈N/B⌉⌉</strong>, and I/O = <strong>2N × passes</strong>. (Two-way merge with 3 buffers: 1 + ⌈log₂ N⌉ passes.)</li> <li><strong>Double buffering</strong>: prefetch the next page of each run in the background while processing the current one. It halves the effective buffers, but keeps the disk busy (needs a second thread or async I/O).</li> <li><strong>Comparison optimizations</strong>: <strong>code specialization</strong> (a comparator per key type, not a function pointer), <strong>suffix truncation</strong> (compare binary prefixes of long strings first) and <strong>key normalization</strong> (encode keys into fixed-length, byte-comparable strings).</li> <li><strong>Using a B+Tree to sort</strong>: a <strong>clustered</strong> index is always better (a sequential leaf walk with no computation). An <strong>unclustered</strong> one is almost always worse (one random I/O per record), except for small top-N.</li> <li><strong>Aggregation</strong> by <strong>sorting</strong> (sort on the group keys, then one scan; filter first to sort less) or by <strong>hashing</strong> (an in-memory hash table of key → running value). If it spills: <strong>partition</strong> with h₁ into B−1 partitions on disk, then <strong>rehash</strong> each partition with h₂ ≠ h₁ in memory, recursing if a partition is still too big. Running values depend on the function (<code>AVG</code> keeps (sum, count)).</li> <li><strong>Hash usually beats sort</strong> for aggregation, unless the input is already sorted or the output must be sorted.</li> </ul>
+"""
+
+[[sections]]
+heading = "External merge sort, verified against the formula"
+body = """
+<figure class="cb-g-fig"><svg viewBox="0 0 820 160" role="img" aria-label="External merge sort"> <g font-size="12"> <text x="10" y="16" class="cb-g-mut">N = 108 pages, B = 5 buffer pages</text> <rect x="10" y="26" width="170" height="30" rx="4" class="cb-g-box"></rect><text x="20" y="46">pass 0: 22 runs × 5 pp</text> <text x="190" y="46" class="cb-g-acc">→</text> <rect x="210" y="26" width="170" height="30" rx="4" class="cb-g-box"></rect><text x="220" y="46">pass 1: 6 runs × 20 pp</text> <text x="390" y="46" class="cb-g-acc">→</text> <rect x="410" y="26" width="170" height="30" rx="4" class="cb-g-box"></rect><text x="420" y="46">pass 2: 2 runs × 80 pp</text> <text x="590" y="46" class="cb-g-acc">→</text> <rect x="610" y="26" width="200" height="30" rx="4" class="cb-g-boxa"></rect><text x="620" y="46">pass 3: 1 run × 108 pp</text> <text x="10" y="90">each merge pass: B−1 = 4 input pages (one per run) + 1 output page; every pass reads and writes all N pages</text> <text x="10" y="114">passes = 1 + ⌈log₄ ⌈108/5⌉⌉ = 1 + ⌈log₄ 22⌉ = 4   ·   I/O = 2 · 108 · 4 = 864</text> <text x="10" y="138" class="cb-g-mut">more memory helps logarithmically: B = 101 sorts 1,000 pages in 2 passes; almost everything sorts in ≤ 3 passes</text> </g></svg></figure>
+
+```text title="cargo test --release --test extsort -- --nocapture (measured page reads + writes)"
+N=   100 pages, B=  3: passes 7, I/O 1400 (formula 1400)
+N=  1000 pages, B=  5: passes 5, I/O 10000 (formula 10000)
+N=  1000 pages, B=101: passes 2, I/O 4000 (formula 4000)
+N= 10000 pages, B= 11: passes 4, I/O 80000 (formula 80000)
+N=   108 pages, B=  5: passes 4, I/O 864 (formula 864)      ← the lecture's example
+replacement selection, m=1000: 101 runs, avg length 1980 (≈2m)
+```
+
+:::deeper Reference: external sort with I/O accounting, replacement selection, top-N with ties, spilling hash aggregation
+```rust title="src/execution/sort_agg.rs"
+//! L11: external merge sort with page-I/O accounting, replacement selection,
+//! top-N with ties, and a two-phase (partition + rehash) hash aggregation.
+use std::cmp::{Ordering, Reverse};
+use std::collections::{BinaryHeap, HashMap};
+use std::hash::{BuildHasher, Hash};
+
+/// Simulated disk of fixed-capacity pages; counts every page read and write.
+pub struct PageStore<T> { pub page_cap: usize, pub reads: u64, pub writes: u64, _t: std::marker::PhantomData<T> }
+pub type Run<T> = Vec<Vec<T>>;                        // a run = a sequence of pages
+
+impl<T: Clone> PageStore<T> {
+    pub fn new(page_cap: usize) -> Self { PageStore { page_cap, reads: 0, writes: 0, _t: Default::default() } }
+    fn write_run(&mut self, items: Vec<T>) -> Run<T> {
+        let run: Run<T> = items.chunks(self.page_cap).map(|c| c.to_vec()).collect();
+        self.writes += run.len() as u64;
+        run
+    }
+}
+
+/// Sort `input` using `b` buffer pages (b ≥ 3). Returns the sorted output and the number of passes.
+pub fn external_sort<T: Ord + Clone>(store: &mut PageStore<T>, input: Run<T>, b: usize) -> (Run<T>, usize) {
+    assert!(b >= 3);
+    store.reads += input.len() as u64;
+    // Pass 0: read b pages at a time, sort in memory, write a run of b pages.
+    let mut runs: Vec<Run<T>> = input.chunks(b).map(|pages| {
+        let mut buf: Vec<T> = pages.iter().flatten().cloned().collect();
+        buf.sort_unstable();
+        store.write_run(buf)
+    }).collect();
+    let mut passes = 1;
+    // Merge passes: (b - 1) input buffers + 1 output buffer.
+    while runs.len() > 1 {
+        runs = runs.chunks(b - 1).map(|group| merge_runs(store, group)).collect();
+        passes += 1;
+    }
+    (runs.pop().unwrap_or_default(), passes)
+}
+
+fn merge_runs<T: Ord + Clone>(store: &mut PageStore<T>, runs: &[Run<T>]) -> Run<T> {
+    // One cursor per run: (run, page, slot). Reading a new page = one page read.
+    let mut heap = BinaryHeap::new();
+    let mut pos = vec![(0usize, 0usize); runs.len()];
+    for (i, r) in runs.iter().enumerate() {
+        if let Some(p) = r.first() { store.reads += 1; heap.push(Reverse((p[0].clone(), i))); }
+    }
+    let mut out = Vec::new();
+    while let Some(Reverse((v, i))) = heap.pop() {
+        out.push(v);
+        let (pg, slot) = &mut pos[i];
+        *slot += 1;
+        if *slot == runs[i][*pg].len() { *pg += 1; *slot = 0; if *pg < runs[i].len() { store.reads += 1; } }
+        if *pg < runs[i].len() { heap.push(Reverse((runs[i][*pg][*slot].clone(), i))); }
+    }
+    store.write_run(out)
+}
+
+/// Textbook cost: passes = 1 + ⌈log_{b-1} ⌈N/b⌉⌉, I/O = 2N · passes.
+pub fn predicted(n_pages: usize, b: usize) -> (usize, u64) {
+    let mut runs = n_pages.div_ceil(b);
+    let mut passes = 1;
+    while runs > 1 { runs = runs.div_ceil(b - 1); passes += 1; }
+    (passes, 2 * n_pages as u64 * passes as u64)
+}
+
+/// Replacement selection: with a heap of `m` records, produces runs of average length ~2m
+/// on random input (and one run on sorted input): fewer runs, fewer merge passes.
+pub fn replacement_selection<T: Ord + Clone>(input: impl IntoIterator<Item = T>, m: usize) -> Vec<Vec<T>> {
+    let mut it = input.into_iter();
+    // Heap entries: (run number, value); a value smaller than the last output belongs to the next run.
+    let mut heap: BinaryHeap<Reverse<(usize, T)>> = it.by_ref().take(m).map(|v| Reverse((0, v))).collect();
+    let (mut runs, mut cur): (Vec<Vec<T>>, Vec<T>) = (vec![], vec![]);
+    let mut run_no = 0;
+    while let Some(Reverse((r, v))) = heap.pop() {
+        if r != run_no { runs.push(std::mem::take(&mut cur)); run_no = r; }
+        if let Some(next) = it.next() {
+            let tag = if next >= v { r } else { r + 1 };
+            heap.push(Reverse((tag, next)));
+        }
+        cur.push(v);
+    }
+    if !cur.is_empty() { runs.push(cur); }
+    runs
+}
+
+/// ORDER BY key LIMIT n [WITH TIES] in one pass with a bounded max-heap.
+pub fn top_n<T: Clone, K: Ord + Clone>(input: impl IntoIterator<Item = T>, n: usize, key: impl Fn(&T) -> K, with_ties: bool) -> Vec<T> {
+    if n == 0 { return vec![]; }
+    let mut heap: BinaryHeap<(K, usize)> = BinaryHeap::new();       // max-heap of the n smallest keys
+    let mut rows: Vec<T> = Vec::new();
+    let mut ties: Vec<usize> = Vec::new();                            // rows equal to the current nth key
+    for (i, t) in input.into_iter().enumerate() {
+        let k = key(&t);
+        rows.push(t);
+        if heap.len() < n { heap.push((k, i)); continue; }
+        let top = heap.peek().unwrap().0.clone();
+        match k.cmp(&top) {
+            Ordering::Less => {
+                let (old, j) = heap.pop().unwrap();
+                heap.push((k, i));
+                let new_top = heap.peek().unwrap().0.clone();
+                // the evicted row survives as a tie only if it still equals the new boundary
+                ties.retain(|&x| key(&rows[x]) == new_top);
+                if with_ties && old == new_top { ties.push(j); }
+            }
+            Ordering::Equal if with_ties => ties.push(i),
+            _ => {}
+        }
+    }
+    let mut idx: Vec<usize> = heap.into_iter().map(|(_, i)| i).chain(ties).collect();
+    idx.sort_by(|&a, &b| key(&rows[a]).cmp(&key(&rows[b])).then(a.cmp(&b)));
+    idx.dedup();
+    idx.into_iter().map(|i| rows[i].clone()).collect()
+}
+
+/// GROUP BY key → SUM(val), with a memory budget in groups. Phase 1 partitions the input by h1
+/// when the table would exceed the budget; phase 2 aggregates each partition with h2.
+pub fn hash_aggregate<K: Hash + Eq + Clone>(input: impl IntoIterator<Item = (K, i64)>, budget: usize, fanout: usize) -> (HashMap<K, i64>, usize) {
+    let mut table: HashMap<K, i64> = HashMap::new();
+    let mut spilled: Option<Vec<Vec<(K, i64)>>> = None;
+    let h1 = std::hash::RandomState::new();
+    for (k, v) in input {
+        match &mut spilled {
+            None => {
+                if let Some(acc) = table.get_mut(&k) { *acc += v; continue; }
+                if table.len() < budget { table.insert(k, v); continue; }
+                // Out of memory: partition everything seen so far (partial aggregates) and continue.
+                let mut parts = vec![Vec::new(); fanout];
+                for (k2, v2) in table.drain() { parts[(h1.hash_one(&k2) as usize) % fanout].push((k2, v2)); }
+                parts[(h1.hash_one(&k) as usize) % fanout].push((k, v));
+                spilled = Some(parts);
+            }
+            Some(parts) => parts[(h1.hash_one(&k) as usize) % fanout].push((k, v)),
+        }
+    }
+    let Some(parts) = spilled else { return (table, 0) };
+    let mut out = HashMap::new();
+    let mut depth = 1;
+    for p in parts {
+        // Each partition is aggregated with a fresh hash table (a different hash function: h2).
+        // If a partition is still too big, recurse with a new seed (depth + 1).
+        let (m, d) = hash_aggregate(p, budget, fanout);
+        depth = depth.max(1 + d);
+        out.extend(m);
+    }
+    (out, depth)
+}
+```
+:::
+
+<aside data-call="rust"><b>Sorting fast in Rust</b><ul> <li><code>sort_unstable</code> (pdqsort, and ipnsort in newer std) is faster than the stable <code>sort</code> and allocates nothing. Use it unless ties need input order.</li> <li><code>sort_by_cached_key</code> computes an expensive key once per element (for example, normalizing a string for collation).</li> <li>For multi-column <code>ORDER BY</code>, <strong>normalize keys</strong> into <code>Vec&lt;u8&gt;</code> with the memcomparable encoding from <a href="/cookbook/p/b-trees">L08</a>, then sort byte strings. One <code>memcmp</code> per comparison replaces a per-column dispatch loop. DuckDB does exactly this for its sort.</li> <li><code>BinaryHeap</code> is a max-heap: wrap in <code>Reverse</code> for a min-heap. For k-way merges over many runs, a <strong>loser tree</strong> does one comparison per level instead of two, which matters when comparisons are expensive.</li> <li><code>select_nth_unstable(k)</code> finds the top-k <em>unsorted</em> in O(n). Use it, then sort just those k, when k is large and the input already fits in memory.</li> </ul></aside>
+
+<div class="cb-g-tip"><h3>Replacement selection</h3><p>Pass 0 doesn't have to produce runs of exactly B pages. Keep a heap of the buffered records and output the smallest one that is ≥ the last output. A smaller record is tagged for the <em>next</em> run. On random input, runs average <strong>2×</strong> the memory size (the "snowplow" argument), and on already-sorted input there is exactly one run. Fewer runs mean fewer merge passes. The trade-off: heap operations per record, instead of one big in-place sort, make it CPU-heavier. That's why most modern systems sort fixed chunks with a fast in-memory sort and merge them.</p> </div>
+"""
+
+[[sections]]
+heading = "Aggregation: hash vs sort"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Situation</th> <th>Choose</th> <th>Why</th> </tr> </thead> <tbody> <tr> <td>Output order doesn't matter, groups fit in memory</td> <td><strong>hash</strong></td> <td>one pass, O(1) per row</td> </tr> <tr> <td>Input already sorted on the group key (index scan, merge join output)</td> <td><strong>sort (streaming)</strong></td> <td>no memory at all: emit a group when the key changes</td> </tr> <tr> <td><code>GROUP BY … ORDER BY same keys</code></td> <td>sort</td> <td>order for free</td> </tr> <tr> <td>Groups far exceed memory</td> <td>hash with partitioning, or external sort</td> <td>the same I/O shape: one partition/run pass plus one merge/rehash pass</td> </tr> <tr> <td>High-cardinality <code>COUNT(DISTINCT)</code></td> <td>hash, or HLL for approximate answers (<a href="/cookbook/p/more-primers">P0+</a>)</td> <td></td> </tr> </tbody> </table></div>
+
+<aside data-call="performance"><b>What production aggregation does</b><ul> <li><strong>Two-phase (local/global) aggregation</strong>: each thread pre-aggregates into a small thread-local table, then partitions merge. It's the parallel form of the partition-then-rehash algorithm (<a href="/cookbook/p/parallel-execution">L14</a>, Part II).</li> <li><strong>Adaptive</strong>: start hashing; if the table isn't reducing rows (high cardinality), stop and just partition. DuckDB, Umbra and Velox all adapt at runtime.</li> <li><strong>Spilling</strong>: DuckDB and Velox radix-partition the hash table and spill partitions independently, so only the partitions that don't fit go to disk.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Implementing Sorting in Database Systems"
+url = "https://dl.acm.org/doi/10.1145/1132960.1132964"
+
+[[sources]]
+title = "Query Evaluation Techniques for Large Databases"
+url = "https://dl.acm.org/doi/10.1145/152610.152611"
+
+[[sources]]
+title = "Fastest Table Sort in the West"
+url = "https://duckdb.org/2021/08/27/external-sorting.html"

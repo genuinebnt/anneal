@@ -1,0 +1,32 @@
+[package]
+name = "cb-features-workspace"
+version = "0.1.0"
+edition = "2024"
+description = "Cargo features: default/additive features, optional dependencies, cfg gating, unification and a test driver."
+publish = false
+
+[features]
+# `default` is itself a feature: users opt out with --no-default-features.
+default = ["json"]
+# `dep:` makes the optional dependency NOT create an implicit feature named
+# `serde_json`; the public feature is `json` only.
+json = ["dep:serde_json"]
+stats = []
+# Features that enable other features: implied, additive.
+full = ["json", "stats"]
+# Two "backends": both may be on at once (unification!), so the code picks
+# deterministically instead of using compile_error!.
+backend-a = []
+backend-b = []
+
+[dependencies]
+serde_json = { version = "1", optional = true }
+
+[lints.rust]
+# `docsrs` is set by docs.rs, not by cargo; tell the lint it is expected.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
+
+[package.metadata.docs.rs]
+# docs.rs builds with all features and passes `--cfg docsrs`.
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

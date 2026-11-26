@@ -1,0 +1,64 @@
+title = "Atomic commit"
+module = "Distributed systems"
+module_order = 10
+chapter = "Consensus and distributed transactions"
+chapter_order = 2
+order = 492
+kind = "recipe"
+lede = "Two-phase commit with write-ahead logs, crash recovery, blocking, presumed abort/commit, and 3PC"
+level = "advanced"
+code = ["examples/distributed/two_phase_commit.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+understanding XA / distributed database transactions, and why modern systems layer 2PC over Paxos/Raft or use sagas instead.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+**Atomic commit** means every participant of a transaction commits or every one aborts. Two-phase commit (2PC): phase 1 the coordinator asks everyone to **prepare**; a participant that can commit force-writes a **prepared** record to its write-ahead log (WAL) and votes **yes**, which is a **promise** it can no longer abort on its own; any NO (or silence) means abort.
+
+Phase 2: the coordinator force-writes the decision (the **commit point**) and tells everyone; participants force-write it, apply it, acknowledge. The sim runs coordinator + 3 participants on a deterministic event queue (seeded xorshift, lossy/duplicating network) with **crash points** between every protocol step. **Why** the logs: a crash must never change a promise.
+
+A participant that crashed after voting **yes** comes back **in doubt**: it must keep the locks and ask (coordinator first, then peers); it may not guess. A coordinator that crashed before logging a decision may abort on restart; one that logged **commit** must re-send it until acknowledged.
+
+**Blocking**: if the coordinator dies after the participants voted **yes** and before they learn the outcome, they cannot decide alone: committing may contradict a (lost) abort, aborting may contradict a commit that another participant already applied. They sit holding locks until the coordinator returns.
+
+Cooperative termination (ask the other participants) only helps if somebody already knows the outcome or never voted; the demo shows both cases. **Optimisations** (log forces are the expensive part; the sim counts real forces and messages):
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Presumed abort</div><div class="cb-g-says"><p>No information about a transaction means "aborted". So aborts need no forced record at the coordinator, no acks and no participant force; abort is nearly free. Commits cost the same as basic 2PC.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Presumed commit</div><div class="cb-g-says"><p>No information means "committed". The coordinator force-writes a <strong>collecting</strong> record before sending <strong>prepare</strong> (so a crash can be told apart from "committed and forgotten"), but commits need no acks and no forced commit record at participants. Commit is cheaper, abort slightly dearer.</p><p>Used when most transactions commit. 3PC (Skeen): adds a <strong>pre-commit</strong> phase so no participant can be in a state adjacent to both commit and abort; with timeouts</p></div></div></div>
+
+(uncertain => abort, pre-committed => commit) and a termination protocol it does not block when processes crash-stop and the network is reliable.
+
+But a **partition** lets the two sides take opposite decisions: it trades blocking for atomicity violations, which is why real systems prefer Paxos Commit (consensus on the decision) or Spanner-style 2PC over Paxos groups, where the coordinator state itself is replicated.
+
+**Sagas** (examples/distributed/saga_orchestrator.rs) drop atomicity and isolation: each step commits locally at once and failures are undone by compensating actions, so nothing is ever locked across services (no blocking) but intermediate states are visible. Use 2PC inside one database/cluster, sagas across independent services.
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+crash **every** point of **every** role (each of the three flavours, all-**yes** and one-NO), then 3000 random schedules with loss, duplication and multiple crashes: atomicity is checked after every event and, once the system is calm and everyone restarted, every participant must have decided.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>XA transactions (Java JTA, PostgreSQL <strong>prepare transaction</strong>, MySQL XA)</li><li>Microsoft DTC</li><li>Google Spanner and CockroachDB (2PC over replicated groups)</li><li>Percolator-style systems</li><li>Kafka transactions (a coordinator log)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Bernstein, Hadzilacos and Goodman, "Concurrency Control and Recovery in Database Systems", chapter 7 <a href="https://www.microsoft.com/en-us/research/people/philbe/book/" target="_blank" rel="noreferrer">https://www.microsoft.com/en-us/research/people/philbe/book/</a></li><li>Gray and Lamport, "Consensus on Transaction Commit" <a href="https://www.microsoft.com/en-us/research/publication/consensus-on-transaction-commit/" target="_blank" rel="noreferrer">https://www.microsoft.com/en-us/research/publication/consensus-on-transaction-commit/</a></li><li>Mohan, Lindsay and Obermarck, "Transaction Management in the R* Distributed Database Management System" (presumed abort/commit, ACM TODS 1986)</li></ul>
+"""
+
+[[sources]]
+title = "microsoft.com/en-us/research/people/philbe/book"
+url = "https://www.microsoft.com/en-us/research/people/philbe/book/"
+
+[[sources]]
+title = "microsoft.com/en-us/research/publication/consensus-on-transaction-commit"
+url = "https://www.microsoft.com/en-us/research/publication/consensus-on-transaction-commit/"

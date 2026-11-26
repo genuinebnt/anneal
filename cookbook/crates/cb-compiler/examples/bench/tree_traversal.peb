@@ -1,0 +1,52 @@
+// Struct/enum heavy: build a binary search tree functionally, then fold over it.
+enum Tree { Leaf, Node(Tree, int, Tree) }
+
+fn insert(t: Tree, k: int) -> Tree {
+    match t {
+        Tree::Leaf => Tree::Node(Tree::Leaf, k, Tree::Leaf),
+        Tree::Node(l, v, r) => {
+            if k < v { Tree::Node(insert(l, k), v, r) }
+            else if k > v { Tree::Node(l, v, insert(r, k)) }
+            else { Tree::Node(l, v, r) }
+        }
+    }
+}
+
+fn sum(t: Tree) -> int {
+    match t {
+        Tree::Leaf => 0,
+        Tree::Node(l, v, r) => sum(l) + v + sum(r),
+    }
+}
+
+fn height(t: Tree) -> int {
+    match t {
+        Tree::Leaf => 0,
+        Tree::Node(l, _, r) => {
+            let a = height(l);
+            let b = height(r);
+            1 + if a > b { a } else { b }
+        }
+    }
+}
+
+fn count(t: Tree) -> int {
+    match t {
+        Tree::Leaf => 0,
+        Tree::Node(l, _, r) => count(l) + 1 + count(r),
+    }
+}
+
+fn main() {
+    let mut t = Tree::Leaf;
+    let mut x = 777;
+    let mut i = 0;
+    while i < 20000 {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        t = insert(t, x % 100000);
+        i += 1;
+    }
+    println(to_str(count(t)));
+    println(to_str(sum(t)));
+    println(to_str(height(t)));
+}

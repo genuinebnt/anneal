@@ -1,0 +1,50 @@
+title = "DNS wire format"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Networking and protocols"
+chapter_order = 3
+order = 531
+kind = "recipe"
+lede = "DNS wire format (RFC 1035): header, questions, A/AAAA/CNAME/NS/MX/TXT records, name compression."
+level = "advanced"
+code = ["examples/networking/dns_message_codec.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>DNS clients/servers/stub resolvers</li><li>mDNS/DoH tooling</li><li>packet inspectors</li><li>any format with back-references</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a DNS message is a 12-byte header (id, flags, four big-endian counts) followed by question, answer, authority and additional sections. Each resource record is `NAME TYPE(2) CLASS(2) TTL(4) RDLENGTH(2) RDATA`. All integers are big-endian (network order).
+
+**A name** is a sequence of length-prefixed labels ending in a zero byte (`3www7example3com0`). **Compression**: because the same suffix repeats constantly, a label position may instead be a 2-byte **pointer**: top two bits `11` plus a 14-bit offset from the start of the message, meaning "the rest of the name is over there".
+
+The encoder keeps a map suffix -> first offset where it was written and emits a pointer on every repeat (only offsets below 0x4000 are addressable). A pointer ends the name, so a name's consumed length is its bytes up to and including the first pointer.
+
+**Why pointers are a classic vulnerability source**: the decoder follows attacker-controlled offsets inside the same buffer.
+
+Without guards a pointer to itself (or A -> B -> A) loops forever (CPU DoS); a pointer past the end reads out of bounds; and expansion can make a tiny packet decode to a huge name (labels reused through pointer chains) overflowing a fixed 255-byte buffer in C.
+
+Our decoder (1) requires every pointer to point **strictly backward**, so pointer-only chains must terminate, (2) caps total jumps, (3) caps the expanded name at 255 bytes (labels at 63, which the 6-bit length gives for free), (4) rejects the reserved label types `01` and `10`, and (5) bounds-checks every read.
+
+Record counts are also untrusted: we never allocate from them, and reject counts that cannot fit in the bytes left.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>stub resolvers and recursive resolvers</li><li>authoritative servers</li><li>DNS-over-HTTPS/TLS proxies</li><li>mDNS/Bonjour service discovery</li><li>DNS-based service discovery (SRV/TXT)</li><li>packet capture tools</li><li>fuzz targets (DNS parsers have a long CVE history, exactly because of compression)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://datatracker.ietf.org/doc/html/rfc1035>
+"""
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc1035"
+url = "https://datatracker.ietf.org/doc/html/rfc1035"

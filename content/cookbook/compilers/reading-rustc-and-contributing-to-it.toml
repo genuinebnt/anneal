@@ -1,0 +1,128 @@
+title = "Reading rustc and contributing to it"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Language tooling and production"
+chapter_order = 7
+order = 644
+kind = "guide"
+lede = "Build it, find your way around it, debug it, and land a first PR · Details drift; the rustc dev guide is the authority"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>rustc is a large compiler, over 70 crates in <code>compiler/</code>, but it's well documented and welcoming to new contributors. Everything in Parts I–IV maps onto it: tokens, AST, HIR, THIR, MIR, LLVM IR; queries; the trait solver; borrowck on MIR; monomorphization; diagnostics. The fastest way in is to <b>improve one diagnostic</b> or <b>fix one ICE</b>. Both come with a small reproducer, touch one area, and are easy to test.</p>
+"""
+
+[[sections]]
+heading = "Build and test"
+body = """
+```rust title="Setup (commands as of 2025; see the dev guide's “How to build and run the compiler”)"
+git clone https://github.com/rust-lang/rust && cd rust
+./x setup                          # choose "compiler"; writes bootstrap.toml (formerly config.toml)
+                                   # and editor settings for rust-analyzer
+./x check                          # fastest feedback loop: type-check the compiler
+./x build library                  # stage 1 compiler + std
+rustup toolchain link stage1 build/host/stage1
+cargo +stage1 build                # use your compiler on any project, or: rustc +stage1 foo.rs
+
+./x test tests/ui                  # the UI test suite (source file + expected .stderr)
+./x test tests/ui/borrowck         # a subdirectory
+./x test tests/ui --bless          # update .stderr files after an intended change, then review the diff
+./x test tidy                      # formatting and lint checks that CI runs
+./x test tests/mir-opt --bless     # MIR snapshot tests for optimization passes
+```
+
+<p>Useful <code>bootstrap.toml</code> settings for development: <code>rust.debug-logging = true</code> enables <code>debug!</code>/<code>RUSTC_LOG</code> output; <code>rust.incremental = true</code>; and <code>llvm.download-ci-llvm</code> (on by default) so you never build LLVM yourself.</p>
+"""
+
+[[sections]]
+heading = "A map of the repository"
+body = """
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Pipeline stage</th><th>Crates in <code>compiler/</code></th><th>Guide chapter in this page</th></tr></thead> <tbody> <tr><td>Driver, sessions, queries</td><td><code>rustc_driver_impl</code>, <code>rustc_interface</code>, <code>rustc_session</code>, <code>rustc_query_system</code>, <code>rustc_query_impl</code>, <code>rustc_middle</code> (TyCtxt, the query list, Ty, MIR types)</td><td><a href="/cookbook/p/production-compiler-architecture">Production architecture</a></td></tr> <tr><td>Lexing and parsing</td><td><code>rustc_lexer</code>, <code>rustc_parse</code>, <code>rustc_ast</code></td><td><a href="/cookbook/p/parsing-in-depth">Parsing</a>, <a href="/cookbook/p/fully-recoverable-parsers">Resilient parsing</a></td></tr> <tr><td>Macros and names</td><td><code>rustc_expand</code>, <code>rustc_builtin_macros</code>, <code>rustc_resolve</code></td><td><a href="/cookbook/p/name-resolution-hygiene-and-modules">Names and hygiene</a>, <a href="/cookbook/p/metaprogramming-macros-and-staging">Metaprogramming</a></td></tr> <tr><td>AST → HIR</td><td><code>rustc_ast_lowering</code>, <code>rustc_hir</code></td><td><a href="/cookbook/p/designing-an-ir-in-rust">IR design</a></td></tr> <tr><td>Type checking</td><td><code>rustc_hir_analysis</code> (item signatures, well-formedness, coherence, variance), <code>rustc_hir_typeck</code> (function bodies, method probing), <code>rustc_infer</code></td><td><a href="/cookbook/p/hindley-milner-type-inference">HM</a>, <a href="/cookbook/p/bidirectional-typing-and-dependent-types">Bidirectional</a>, <a href="/cookbook/p/implementing-rust-s-hardest-features">Hard features</a></td></tr> <tr><td>Traits</td><td><code>rustc_trait_selection</code>, <code>rustc_next_trait_solver</code>, <code>rustc_type_ir</code></td><td><a href="/cookbook/p/implementing-rust-s-hardest-features">Hard features §1</a></td></tr> <tr><td>THIR, patterns, MIR build</td><td><code>rustc_mir_build</code>, <code>rustc_pattern_analysis</code></td><td><a href="/cookbook/p/pattern-matching-compilation-and-exhaustiveness">Pattern matching</a></td></tr> <tr><td>Borrow checking</td><td><code>rustc_borrowck</code>, <code>rustc_mir_dataflow</code></td><td><a href="/cookbook/p/dataflow-analysis-and-abstract-interpretation">Dataflow</a>, <a href="/cookbook/p/implementing-rust-s-hardest-features">Hard features §2</a></td></tr> <tr><td>MIR optimization, const eval</td><td><code>rustc_mir_transform</code>, <code>rustc_const_eval</code> (also the engine of Miri)</td><td><a href="/cookbook/p/scalar-optimizations">Scalar optimizations</a></td></tr> <tr><td>Monomorphization and codegen</td><td><code>rustc_monomorphize</code>, <code>rustc_codegen_ssa</code>, <code>rustc_codegen_llvm</code>; also <code>rustc_codegen_cranelift</code> and <code>rustc_codegen_gcc</code></td><td><a href="/cookbook/p/implementing-rust-s-hardest-features">Hard features §3</a>, <a href="/cookbook/p/instruction-selection-scheduling-and-emission">Instruction selection</a></td></tr> <tr><td>Diagnostics and lints</td><td><code>rustc_errors</code>, <code>rustc_lint</code>, <code>rustc_error_codes</code>, <code>rustc_span</code></td><td><a href="/cookbook/p/rust-quality-error-messages">Error messages</a></td></tr> <tr><td>Shared infrastructure</td><td><code>rustc_data_structures</code>, <code>rustc_index</code>, <code>rustc_arena</code>, <code>rustc_metadata</code></td><td></td></tr> </tbody> </table></div>
+
+<p>Outside <code>compiler/</code>: <code>library/</code> (core, alloc, std), <code>tests/</code> (<code>ui</code>, <code>mir-opt</code>, <code>codegen</code>, <code>assembly</code>, <code>run-make</code>, <code>incremental</code>, <code>crashes</code>), <code>src/bootstrap</code> (the <code>./x</code> build system), <code>src/tools</code> (clippy, rustfmt, miri and rust-analyzer are synced here), and <code>src/doc/rustc-dev-guide</code>.</p>
+"""
+
+[[sections]]
+heading = "Concepts to learn first"
+body = """
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Concept</th><th>What it is</th></tr></thead> <tbody> <tr><td><code>TyCtxt&lt;'tcx&gt;</code></td><td>The central context. Almost everything is a query method on it: <code>tcx.type_of(def_id)</code>, <code>tcx.optimized_mir(def_id)</code>. <code>'tcx</code> is the lifetime of the arenas everything is interned in</td></tr> <tr><td><code>DefId</code>, <code>LocalDefId</code>, <code>HirId</code></td><td>IDs for items (possibly in other crates), items in this crate, and HIR nodes</td></tr> <tr><td><code>Ty&lt;'tcx&gt;</code>, <code>TyKind</code>, <code>GenericArgs</code></td><td>Interned types, where comparison is pointer equality, and the generic arguments of an item</td></tr> <tr><td><code>Span</code>, <code>Symbol</code></td><td>Compact source ranges with macro-expansion info, and interned strings (<code>sym::…</code>, <code>kw::…</code> for well-known ones)</td></tr> <tr><td><code>TypingEnv</code> / <code>ParamEnv</code></td><td>The where-clauses and typing mode in scope, which trait solving needs</td></tr> <tr><td><code>mir::Body</code></td><td>Basic blocks of statements and terminators over locals and places; see it with <code>-Z unpretty=mir</code></td></tr> <tr><td><code>Diag</code>, <code>#[derive(Diagnostic)]</code></td><td>Diagnostic builders and struct-based diagnostics with messages in Fluent <code>.ftl</code> files</td></tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Reading and debugging techniques"
+body = """
+```text title="The flags that make rustc explain itself"
+rustc +stage1 -Z track-diagnostics foo.rs     # prints the compiler source location that emitted each error
+rustc +stage1 -Z treat-err-as-bug=1 foo.rs    # turn the first error into an ICE with a backtrace (RUST_BACKTRACE=1)
+RUSTC_LOG=rustc_hir_typeck::method=debug rustc +stage1 foo.rs    # tracing output (needs debug-logging)
+rustc +stage1 -Z unpretty=hir foo.rs          # also: hir-tree, thir-tree, mir, expanded
+rustc +stage1 -Z dump-mir=main foo.rs         # MIR before/after every pass, into mir_dump/
+rustc +stage1 -Z verbose-internals foo.rs     # show more type detail in output
+rustc --explain E0382                         # the long explanation for an error code
+```
+
+<div class="cb-g-tip"><h3>How to find the code for anything</h3> <ol> <li>Reproduce the behavior in a small file.</li> <li>For a diagnostic, run with <code>-Z track-diagnostics</code>, which prints the file and line that emitted it. Or search for its error code or message text; messages live in <code>messages.ftl</code> files next to the code.</li> <li>Read the module-level <code>//!</code> docs of that file, then the matching rustc dev guide chapter.</li> <li>Turn on <code>RUSTC_LOG</code> for that module. Most functions are <code>#[instrument]</code>ed, so you get a call tree with arguments.</li> <li>Use rust-analyzer's go-to-definition across the whole compiler; <code>./x setup</code> configures it.</li> </ol></div>
+"""
+
+[[sections]]
+heading = "A first change: a lint"
+body = """
+<p>Lints are self-contained: a declaration, a pass over HIR, a diagnostic and a UI test. The shape below matches rustc's late lint passes. It's illustrative, and clippy already has a <code>self_assignment</code> lint. In Clippy, <code>cargo dev new_lint --name=my_lint --pass=late --category=style</code> generates all the boilerplate, which makes it an easier first contribution.</p>
+
+```rust title="A late lint pass (shape as of 2025; copy the patterns of a neighboring lint)"
+declare_lint! {
+    /// The `self_assign` lint detects assigning a variable to itself.
+    ///
+    /// ### Example
+    ///
+    /// ```rust
+    /// let mut x = 1;
+    /// x = x;
+    /// ```
+    ///
+    /// ### Explanation
+    ///
+    /// This has no effect and is usually a typo for a different variable.
+    pub SELF_ASSIGN,
+    Warn,
+    "assigning a variable to itself"
+}
+
+declare_lint_pass!(SelfAssign => [SELF_ASSIGN]);
+
+impl<'tcx> LateLintPass<'tcx> for SelfAssign {
+    fn check_expr(&mut self, cx: &LateContext<'tcx>, e: &'tcx hir::Expr<'tcx>) {
+        if let hir::ExprKind::Assign(lhs, rhs, _) = e.kind
+            && let (hir::ExprKind::Path(l), hir::ExprKind::Path(r)) = (&lhs.kind, &rhs.kind)
+            && cx.qpath_res(l, lhs.hir_id) == cx.qpath_res(r, rhs.hir_id)
+        {
+            cx.emit_span_lint(SELF_ASSIGN, e.span, SelfAssignDiag);
+        }
+    }
+}
+
+// lints.rs:      #[derive(LintDiagnostic)] #[diag(lint_self_assign)] pub(crate) struct SelfAssignDiag;
+// messages.ftl:  lint_self_assign = assigning a variable to itself
+// Register the pass in rustc_lint/src/lib.rs, add tests/ui/lint/self-assign.rs, run with --bless.
+```
+"""
+
+[[sections]]
+heading = "The contribution workflow"
+body = """
+<ol> <li><b>Find an issue.</b> Look for labels <code>E-easy</code>, <code>E-mentor</code> (a mentor has written instructions) and <code>E-help-wanted</code>, or <code>A-diagnostics</code> for message improvements. ICE reproducers in <code>tests/crashes</code> are self-contained starting points. Comment <code>&#64;rustbot claim</code> to assign yourself.</li> <li><b>Ask early.</b> Use the rust-lang Zulip, in <code>#t-compiler/help</code> and <code>#new members</code>. People are responsive, and asking first saves days.</li> <li><b>Make it small.</b> One logical change, a UI test that fails before and passes after, and blessed <code>.stderr</code> diffs you have read line by line.</li> <li><b>Open the PR.</b> Triagebot assigns a reviewer, or request one with <code>r? &#64;name</code>. The reviewer approves with <code>&#64;bors r+</code>, and bors merges after the full CI suite, often batched in a rollup. Performance-sensitive changes get <code>&#64;bors try &#64;rust-timer queue</code> for a perf run.</li> <li><b>Bigger changes.</b> Compiler-internal redesigns go through a Major Change Proposal (MCP) in the compiler-team repository. Language changes need an RFC and go behind a feature gate with a tracking issue.</li> </ol>
+
+<div class="cb-g-tip"><h3>A reading path through the compiler</h3> <ol> <li>The dev guide's “Overview of the compiler” and “Queries: demand-driven compilation”.</li> <li>Follow one <code>fn main() { let x = 1 + 2; }</code> through <code>-Z unpretty=ast-tree</code>, <code>hir-tree</code>, <code>thir-tree</code> and <code>mir</code>.</li> <li>Method resolution: <code>rustc_hir_typeck/src/method/probe.rs</code>, with <code>RUSTC_LOG</code> on a small autoderef example.</li> <li>Borrowck: <code>rustc_borrowck</code>, running a failing example with <code>-Z dump-mir</code> and <code>-Z track-diagnostics</code>.</li> <li>A MIR pass in <code>rustc_mir_transform</code>, with its <code>tests/mir-opt</code> snapshots.</li> <li>Pick an <code>E-easy</code> diagnostic issue and ship it.</li> </ol></div>
+
+<div class="cb-g-tip"><h3>Related projects that take contributions</h3> <p>Clippy (lints; the easiest entry), rust-analyzer (the IDE front end: rowan, salsa, resilient parsing), Miri (interpreter for UB detection), rustfmt, Cargo, and the rustc dev guide itself. Documentation fixes are welcome, and they're a good way to learn the review process.</p></div>
+"""
+
+[[sources]]
+title = "The rustc dev guide"
+url = "https://rustc-dev-guide.rust-lang.org"
+
+[[sources]]
+title = "The Rust Forge"
+url = "https://forge.rust-lang.org"

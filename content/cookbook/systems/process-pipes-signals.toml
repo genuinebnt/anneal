@@ -1,0 +1,67 @@
+title = "Process pipes signals"
+module = "Performance and systems"
+module_order = 7
+chapter = "Files, processes and the OS"
+chapter_order = 3
+order = 294
+kind = "recipe"
+lede = "child processes, pipes, exit status vs signals, timeouts, and async-signal-safe signal handlers"
+level = "intermediate"
+code = ["examples/os_and_storage/process_pipes_signals.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>task runners</li><li>CI agents</li><li>supervisors</li><li>CLIs that shell out</li><li>daemons that need clean shutdown</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+`std::process::Command` spawns children (fork+exec on Unix). Each of stdin/stdout/stderr can be inherited, piped, or nulled. `output()` runs to completion and captures; `spawn()` gives a `Child` you drive yourself.
+
+An `ExitStatus` is either "exited with code N" or "killed by signal S" (`ExitStatusExt::signal()`); `code()` is `None` in the second case, so never `unwrap` it.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Pipe deadlocks**: a pipe has a small kernel buffer (64 KiB on Linux, 16-64 KiB on macOS). If you write a large input to a child's stdin from the same thread that should be draining its stdout, the child blocks writing stdout (full), you block writing stdin (full): deadlock.
+
+Fix: write stdin from another thread (or use async IO), read stdout on this one, and **drop** stdin so the child sees EOF.
+
+TIMEOUTS: std has no `wait_timeout`; poll `try_wait()` with a short sleep, then `kill()` + `wait()` (always reap, or you leak a zombie).
+
+**Signals**: a handler runs asynchronously, interrupting any code, possibly inside `malloc`. So it may only call async-signal-safe functions: set an atomic, write to a pipe, `_exit`. No allocation, no locks, no `println!`.
+
+The pattern here: handler sets `AtomicBool`/`AtomicI32`; the main loop polls it. We install without SA_RESTART so blocking syscalls return EINTR and the loop notices promptly.
+
+**TOKIO alternative**: `tokio::signal::unix::signal(SignalKind::terminate())` returns a stream; internally tokio installs a tiny handler that writes to a self-pipe, and a task wakes up and delivers events, so you can `select!` on `sig.recv()` and never write unsafe code:
+
+```text
+let mut term = signal(SignalKind::terminate())?;
+tokio::select! { _ = term.recv() => shutdown().await, _ = work() => {} }
+```
+
+and `tokio::signal::ctrl_c().await` for SIGINT. `tokio::process::Command` mirrors std's API with async `wait()` and async pipes (no thread needed to avoid the deadlock).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>build systems and CI runners spawning and timing out jobs</li><li>process supervisors restarting children</li><li>shells' pipelines</li><li>servers draining connections on SIGTERM (Kubernetes sends SIGTERM, waits a grace period, then SIGKILL)</li><li>wrapping external tools (git, ffmpeg) and capturing their output</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/process/index.html> and <https://man7.org/linux/man-pages/man7/signal-safety.7.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/process/index.html"
+url = "https://doc.rust-lang.org/std/process/index.html"
+
+[[sources]]
+title = "man7.org/linux/man-pages/man7/signal-safety.7.html"
+url = "https://man7.org/linux/man-pages/man7/signal-safety.7.html"

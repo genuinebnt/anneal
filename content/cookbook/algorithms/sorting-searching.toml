@@ -1,0 +1,54 @@
+title = "Sorting and searching toolkit, differential-tested against std"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Sorting, strings, bits and theory"
+chapter_order = 6
+order = 215
+kind = "recipe"
+lede = "sorting and searching toolkit, differential-tested against std."
+level = "advanced"
+code = ["examples/algorithms/sorting_searching.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>choosing a sort</li><li>writing a correct binary search</li><li>"search on the answer" problems</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+insertion, merge (stable), introsort-lite (quicksort + heapsort fallback + 3-way partition), LSD radix, counting sort, quickselect; then lower/upper bound, first-true search, galloping, interpolation, ternary search and binary search on the answer. Every function is checked against `sort`/`binary_search` or a brute-force oracle on seeded random inputs.
+
+**Why** each exists: insertion sort is the fastest for tiny or nearly sorted slices (and is the base case of the others); merge sort is stable and O(n log n) always; quicksort is fast on average but can degrade to O(n&#94;2) on bad pivots, so introsort counts depth and switches to heapsort (O(n log n) worst case);
+
+A three-way partition makes many-duplicate inputs linear; radix/counting sorts skip comparisons entirely (O(n &#42; key bytes)) when keys are small integers;
+
+Quickselect finds the k-th smallest in expected O(n) without fully sorting (worst case O(n&#94;2); median-of-medians makes it worst-case O(n) but with a large constant, so it is rarely used in practice).
+
+**Why** std's sort is a hybrid (as documented by the Rust team, details may change between releases): since Rust 1.81 `slice::sort` is driftsort and `sort_unstable` is ipnsort.
+
+Both combine several ideas from the list above: they detect already-sorted/reversed runs, use small-sort networks/insertion for short pieces, and keep a worst-case guarantee, because no single algorithm wins on every input shape. See the table printed below for how shape changes the winner.
+
+Binary search recipe: pick a predicate that is false...false true...true over a range, then find the first true. Bounds are half-open [lo, hi) and `mid = lo + (hi - lo) / 2` never overflows.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>database index scans and sort-merge joins</li><li>rank/percentile queries</li><li>capacity planning ("smallest N that satisfies the SLA")</li><li>version bisecting</li><li>numeric root finding</li><li>radix sorts on ids/IPs/timestamps</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/primitive.slice.html#method.sort> and <https://en.wikipedia.org/wiki/Introsort>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/primitive.slice.html#method.sort"
+url = "https://doc.rust-lang.org/std/primitive.slice.html#method.sort"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Introsort"
+url = "https://en.wikipedia.org/wiki/Introsort"

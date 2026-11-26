@@ -1,0 +1,54 @@
+title = "Concurrent counters and statistics"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Concurrent data structures"
+chapter_order = 3
+order = 255
+kind = "recipe"
+lede = "Sharded, thread-local+flush, sloppy, Morris, histograms, HyperLogLog merge."
+level = "advanced"
+code = ["examples/concurrency/concurrent_counters_and_statistics.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>metrics libraries</li><li>rate counters on hot paths</li><li>per-request statistics</li><li>cardinality estimation across shards or threads</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Prometheus/StatsD client libraries (sharded or per-thread counters)</li><li>the Linux kernel's per-CPU counters and "sloppy counters" (Boyd-Wickizer et al.)</li><li>Redis <code>PFADD/PFMERGE</code> (HyperLogLog)</li><li>HdrHistogram-style latency recording. Course: CMU 15-445 (statistics for query optimisation) for sketches</li><li>MIT 6.S081/OSDI "An Analysis of Linux Scalability to Many Cores" for sloppy counters</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The point**: a counter looks trivial, but on 8 cores one `AtomicU64::fetch_add` is a cache-line ping-pong; the fix is **always** the same idea, trade read precision/cost for write scalability: keep the write path local and merge on read.
+
+1. `Shared`       : one atomic. Exact, simple, the baseline that stops scaling.
+2. `Sharded`      : N cache-line-padded atomics, a thread picks `tid % N`; `read` sums them. Exact at quiescence; while running the sum lies between "increments **finished** before the read started" and "increments **started** before it ended" (we assert exactly that bracket).
+3. Thread-local   : a plain `Cell<u64>` per thread flushed to a global atomic every K increments and on exit. Writes touch no shared line at all.
+4. `Sloppy`       : the same with an explicit error bound: reads under-count by at most `threads * (threshold - 1)`; asserted below.
+5. `Morris`       : an **approximate** counter in 1 byte: increment with probability (1+a)&#94;-c, estimate ((1+a)&#94;c - 1)/a. Unbiased; relative std &#126; sqrt(a/2).
+6. `Histogram`    : log-linear buckets (8 sub-buckets per power of two, relative error &lt;= 12.5%) with `AtomicU64` per bucket: exact count and sum, quantiles accurate to one bucket, verified against a sorted vector.
+7. `Hll`          : HyperLogLog (p = 12, 4096 one-byte registers). Merge = element-wise max, so per-thread sketches combine into **exactly** the sketch a single thread would have built (asserted), and a shared sketch can update registers lock-free with `fetch_max`.
+
+   **False sharing** is measured at the end: the same 8 threads incrementing 8 **different** counters, adjacent in memory vs padded to 128 bytes. (Times printed, never asserted.)
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Boyd-Wickizer et al., "An Analysis of Linux Scalability to Many Cores" (OSDI 2010, title only, not re-read)</li><li>Flajolet et al., "HyperLogLog: the analysis of a near-optimal cardinality estimation algorithm" (2007, title only)</li></ul>
+
+<ul class="cb-g-reading"><li>Morris, "Counting large numbers of events in small registers" (CACM 1978, title only)</li><li><a href="https://docs.rs/crossbeam-utils/latest/crossbeam_utils/struct.CachePadded.html" target="_blank" rel="noreferrer">https://docs.rs/crossbeam-utils/latest/crossbeam_utils/struct.CachePadded.html</a> and <a href="https://hdrhistogram.org/" target="_blank" rel="noreferrer">https://hdrhistogram.org/</a></li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/crossbeam-utils/latest/crossbeam_utils/struct.CachePadded.html"
+url = "https://docs.rs/crossbeam-utils/latest/crossbeam_utils/struct.CachePadded.html"
+
+[[sources]]
+title = "hdrhistogram.org"
+url = "https://hdrhistogram.org/"

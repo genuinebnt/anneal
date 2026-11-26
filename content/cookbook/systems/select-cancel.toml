@@ -1,0 +1,34 @@
+title = "Cancellation with `select!`, and timeouts"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Async Rust"
+chapter_order = 4
+order = 267
+kind = "recipe"
+lede = "cancellation with `select!`, and timeouts."
+level = "intermediate"
+code = ["examples/async/select_cancel.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+cancellation and timeout stages.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>request timeouts</li><li>shutdown signals</li><li>racing a cache against a database: select!/timeout drop the loser</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: race the real work against a cancel signal. When one branch wins, the other future is DROPPED, which cancels it at its next `.await`. A future must therefore be "cancel-safe": dropping it midway must not lose data.
+
+`timeout` is the same idea with a clock. Tokio docs: <https://tokio.rs/tokio/tutorial/select>
+"""
+
+[[sources]]
+title = "tokio.rs/tokio/tutorial/select"
+url = "https://tokio.rs/tokio/tutorial/select"

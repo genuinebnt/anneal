@@ -1,0 +1,5 @@
+---
+source: crates/cb-testing-tools/tests/snapshots.rs
+expression: parse_expr(src).unwrap_err().to_string()
+---
+at byte 0: NumberTooLarge

@@ -1,0 +1,415 @@
+title = "Building blocks"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 425
+kind = "guide"
+lede = "Database Building Blocks seminar #1–#10 (DataFusion, Comet, ParadeDB, Spice.ai, Exon, Synnada, InfluxDB 3.0 / FDAP, GlareDB, OpenDAL, GreptimeDB) · Arrow, Parquet, Flight, object stores · a Parquet-like file read through a request-counting object store · pruning, projection, coalescing and concurrency measured"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<p><em>(No notes exist for these talks and I have not transcribed them. The points below are the design space the systems share, from their documentation, source and the composable-systems literature, not a summary of any talk.)</em></p>
+
+<ul> <li><strong>A database is now an assembly of components that exist as libraries.</strong> The seminar's systems each reuse most of a stack and build only what makes them different: a <em>columnar in-memory format</em> (<strong>Apache Arrow</strong>), a <em>columnar file format</em> (<strong>Apache Parquet</strong>), a <em>wire protocol and driver layer</em> that moves Arrow batches (<strong>Arrow Flight</strong>, <strong>ADBC</strong>), a <em>query engine</em> (<strong>DataFusion</strong>, in Rust; Velox, in C++), a <em>plan interchange format</em> (<strong>Substrait</strong>), <em>storage access</em> (<strong>object_store</strong>, <strong>OpenDAL</strong>: one API over S3, GCS, Azure, local disks), and a <em>table format and catalog</em> (Iceberg, Delta, Polaris; see <a href="/cookbook/p/lakehouses-and-table-formats">S5</a>). InfluxDB 3.0's name for its choice is <strong>FDAP</strong>: Flight, DataFusion, Arrow, Parquet.</li> <li><strong>Why composition works</strong>: the interfaces are data, not code. Two components that agree on Arrow's memory layout exchange batches by pointer with no serialization; two that agree on Parquet share files; a plan expressed in Substrait runs on any engine that reads it. The cost of a new database falls from years to months, and the cost of a <em>bug</em> in a shared component is paid by everyone.</li> <li><strong>Arrow</strong>: each column is a set of contiguous buffers (values; a validity bitmap for nulls; offsets for variable-length data), identical in every language, so a batch can be memory-mapped, sent over a socket or handed to another process without conversion. Parquet is the same idea <em>at rest</em>: encoded and compressed, laid out for skipping.</li> <li><strong>DataFusion</strong> is extensible at every seam: custom table sources (<code>TableProvider</code>), user-defined functions, optimizer rules, physical operators, and a streaming, partitioned, asynchronous execution model on <code>tokio</code>. Systems differ in what they plug in: <strong>Comet</strong> replaces Spark's execution with DataFusion natively; <strong>ParadeDB</strong> adds search and analytics to Postgres; <strong>Spice.ai</strong> federates sources and caches hot data; <strong>Exon</strong> exposes bioinformatics file formats as tables; <strong>Synnada</strong> pushes streaming and unified batch/stream; <strong>GreptimeDB</strong> and <strong>InfluxDB 3.0</strong> build time-series databases; <strong>GlareDB</strong> rebuilt its engine around the stack.</li> <li><strong>The cloud object store changes the physical design.</strong> A request costs ~10–30 ms before the first byte and money per request, bandwidth per connection is modest (tens to ~100 MB/s) but aggregate bandwidth scales with parallel connections, and objects are immutable (append means rewrite). Formats and readers are therefore built around <strong>few, large, parallel range reads</strong>: footer at the end (one tail read finds the layout), column chunks grouped in row groups, statistics for skipping, and a reader that <em>coalesces</em> nearby ranges and issues them concurrently.</li> <li><strong>Skipping is the optimization that matters</strong>: statistics per row group (and per page), dictionaries and Bloom filters let a reader avoid fetching or decoding data that cannot match. It only works if the data is <strong>clustered</strong> on the filtered columns (sorted, or partitioned by a correlated key); on randomly ordered data every group's min/max covers the domain.</li> <li><strong>Metadata is data.</strong> The footer of a wide, many-row-group file can be megabytes; table formats keep file lists and statistics in separate manifests so that planning does not read every file's footer.</li> </ul>
+"""
+
+[[sections]]
+heading = "The stack in one picture"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>layer</th> <th>role</th> <th>examples</th> <th>what changes when you swap it</th> </tr> </thead> <tbody> <tr> <td>table format / catalog</td> <td>which files make a table, snapshots, schema evolution</td> <td>Iceberg, Delta, Hudi, DuckLake, Polaris</td> <td>commit protocol, time travel, partition evolution</td> </tr> <tr> <td>file format</td> <td>encoded columns at rest, statistics</td> <td>Parquet, ORC, Lance, Vortex</td> <td>skipping granularity, decode speed, random access</td> </tr> <tr> <td>storage access</td> <td>bytes by range, listing, conditional writes</td> <td><code>object_store</code>, OpenDAL, local fs</td> <td>latency, retries, caching, credentials</td> </tr> <tr> <td>memory format</td> <td>columns in RAM, null bitmaps, offsets</td> <td>Arrow</td> <td>zero-copy exchange, SIMD-friendly kernels</td> </tr> <tr> <td>engine</td> <td>plan, optimize, execute</td> <td>DataFusion, Velox, DuckDB</td> <td>operators, optimizer, concurrency model</td> </tr> <tr> <td>transport / driver</td> <td>move batches between processes</td> <td>Arrow Flight, ADBC, ODBC</td> <td>serialization cost, streaming</td> </tr> <tr> <td>plan interchange</td> <td>share a plan across engines</td> <td>Substrait</td> <td>portability of optimized plans</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "The lab: a Parquet-like file over a counting object store"
+body = """
+<ol> <li><strong><code>ObjectStore</code> trait</strong> with <code>size</code> and <code>get_range</code> (HTTP range semantics: clamped to the object). <code>MemStore</code> implements it and logs every request, so the experiments can report <strong>requests</strong> and <strong>bytes</strong> exactly.</li> <li><strong>File layout</strong> <code>magic | row group 0 (one chunk per column) | row group 1 | … | footer | footer length | magic</code>. A chunk is one column of one row group, encoded by type: integers as first value plus <strong>zigzag deltas in frames</strong> of 128 (as in <a href="/cookbook/p/time-series-databases">S1</a>), floats as <strong>decimal integers</strong> when exactly representable (else plain), strings <strong>dictionary-encoded</strong> with bit-packed codes. The footer holds, for every chunk, offset, length, codec and <strong>min/max statistics</strong> (not for strings).</li> <li><strong>Reader</strong>: one <strong>tail read</strong> (a configurable guess, say 64 KiB) to find the footer, a second request only if the footer is larger; then for a query <code>SUM(col) WHERE lo ≤ filter ≤ hi</code>: prune row groups whose min/max cannot match, list the needed chunks (filter and sum columns of the surviving groups), <strong>coalesce</strong> ranges whose gap is at most a threshold, fetch each merged range, slice the chunks out, decode and aggregate.</li> <li><strong>Network model</strong>: each request costs <code>latency + size / bandwidth</code>; with <code>c</code> connections, requests are scheduled in order onto the first free one, and the makespan is the time. The parameters are assumptions, labelled in the tables: an object store (25 ms, 90 MB/s per connection) and a local SSD (0.1 ms, 2 GB/s per connection).</li> </ol>
+
+:::deeper Reference: object-store trait and counting store, network model, column codecs, file writer, footer, tail-read reader with pruning, projection and coalescing
+```rust title="src/blocks/objfile.rs"
+//! A Parquet-like columnar file read through an object-store interface that counts requests and bytes: row groups of column
+//! chunks, per-chunk min/max statistics, a footer found by a tail read, column projection and row-group pruning, range
+//! coalescing, and a network cost model with parallel requests.
+use std::collections::HashMap;
+use std::sync::Mutex;
+use crate::ts::{BitReader, BitWriter};
+
+// ----------------------------------------------------------------------------------------------- object store
+
+pub trait ObjectStore {
+    fn size(&self, key: &str) -> u64;
+    /// Bytes `[start, start + len)`, clamped to the object's size (HTTP range semantics).
+    fn get_range(&self, key: &str, start: u64, len: u64) -> Vec<u8>;
+}
+
+/// In-memory store that logs every request as `(start, len actually returned)`.
+#[derive(Default)]
+pub struct MemStore { objs: HashMap<String, Vec<u8>>, log: Mutex<Vec<(u64, u64)>> }
+impl MemStore {
+    pub fn new() -> Self { Self::default() }
+    pub fn put(&mut self, key: &str, bytes: Vec<u8>) { self.objs.insert(key.into(), bytes); }
+    pub fn log(&self) -> Vec<(u64, u64)> { self.log.lock().unwrap().clone() }
+    pub fn reset(&self) { self.log.lock().unwrap().clear(); }
+    pub fn requests(&self) -> usize { self.log.lock().unwrap().len() }
+    pub fn bytes(&self) -> u64 { self.log.lock().unwrap().iter().map(|x| x.1).sum() }
+}
+impl ObjectStore for MemStore {
+    fn size(&self, key: &str) -> u64 { self.objs[key].len() as u64 }
+    fn get_range(&self, key: &str, start: u64, len: u64) -> Vec<u8> {
+        let o = &self.objs[key];
+        let s = (start as usize).min(o.len());
+        let e = (start.saturating_add(len) as usize).min(o.len());
+        self.log.lock().unwrap().push((start, (e - s) as u64));
+        o[s..e].to_vec()
+    }
+}
+
+/// A network model: each request pays `latency` seconds and then transfers at `bandwidth` bytes/s; up to `concurrency` requests
+/// are in flight. Returns the makespan when requests are issued in the given order to the first free connection.
+#[derive(Clone, Copy, Debug)]
+pub struct Net { pub latency: f64, pub bandwidth: f64, pub concurrency: usize }
+pub fn simulate(net: &Net, sizes: &[u64]) -> f64 {
+    let mut free = vec![0.0f64; net.concurrency.max(1)];
+    for &s in sizes {
+        let (i, _) = free.iter().enumerate().min_by(|a, b| a.1.total_cmp(b.1)).unwrap();
+        free[i] += net.latency + s as f64 / net.bandwidth;
+    }
+    free.into_iter().fold(0.0, f64::max)
+}
+
+// ----------------------------------------------------------------------------------------------- columns and codecs
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Col { I64(Vec<i64>), F64(Vec<f64>), Str(Vec<String>) }
+impl Col {
+    pub fn len(&self) -> usize { match self { Col::I64(v) => v.len(), Col::F64(v) => v.len(), Col::Str(v) => v.len() } }
+    fn slice(&self, a: usize, b: usize) -> Col { match self { Col::I64(v) => Col::I64(v[a..b].to_vec()), Col::F64(v) => Col::F64(v[a..b].to_vec()), Col::Str(v) => Col::Str(v[a..b].to_vec()) } }
+    fn type_id(&self) -> u8 { match self { Col::I64(_) => 0, Col::F64(_) => 1, Col::Str(_) => 2 } }
+}
+pub struct Table { pub names: Vec<String>, pub cols: Vec<Col> }
+
+#[inline] fn zigzag(v: i64) -> u64 { ((v << 1) ^ (v >> 63)) as u64 }
+#[inline] fn unzigzag(z: u64) -> i64 { ((z >> 1) as i64) ^ -((z & 1) as i64) }
+
+/// First value, then zigzag deltas in frames of 128 packed at the frame's maximum width.
+fn put_ints(w: &mut BitWriter, v: &[i64]) {
+    w.put(v.first().copied().unwrap_or(0) as u64, 64);
+    let z: Vec<u64> = v.windows(2).map(|p| zigzag(p[1].wrapping_sub(p[0]))).collect();
+    for f in z.chunks(128) {
+        let width = 64 - f.iter().fold(0, |a, &x| a | x).leading_zeros();
+        w.put(width as u64, 7);
+        for &x in f { w.put(x, width); }
+    }
+}
+fn get_ints(r: &mut BitReader, n: usize) -> Option<Vec<i64>> {
+    if n == 0 { return Some(vec![]); }
+    let mut out = Vec::with_capacity(n);
+    let mut cur = r.get(64)? as i64;
+    out.push(cur);
+    while out.len() < n {
+        let width = r.get(7)? as u32;
+        for _ in 0..128.min(n - out.len()) { cur = cur.wrapping_add(unzigzag(r.get(width)?)); out.push(cur); }
+    }
+    Some(out)
+}
+
+pub const C_INT: u8 = 0; pub const C_DEC: u8 = 1; pub const C_PLAIN: u8 = 2; pub const C_DICT: u8 = 3;
+
+/// Encode one column chunk; returns (codec, bytes, has_stats, min bits, max bits).
+pub fn encode_col(c: &Col) -> (u8, Vec<u8>, bool, u64, u64) {
+    let mut w = BitWriter::new();
+    match c {
+        Col::I64(v) => {
+            put_ints(&mut w, v);
+            let (mn, mx) = (v.iter().copied().min().unwrap_or(0), v.iter().copied().max().unwrap_or(0));
+            (C_INT, w.finish(), !v.is_empty(), mn as u64, mx as u64)
+        }
+        Col::F64(v) => {
+            let (mn, mx) = v.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |a, &x| (a.0.min(x), a.1.max(x)));
+            let stats = !v.is_empty() && v.iter().all(|x| x.is_finite());
+            match crate::ts::decimals(v) {
+                Some(d) => {
+                    let scale = 10f64.powi(d as i32);
+                    w.put(d as u64, 4);
+                    put_ints(&mut w, &v.iter().map(|&x| (x * scale).round() as i64).collect::<Vec<_>>());
+                    (C_DEC, w.finish(), stats, mn.to_bits(), mx.to_bits())
+                }
+                None => { for &x in v { w.put(x.to_bits(), 64); } (C_PLAIN, w.finish(), stats, mn.to_bits(), mx.to_bits()) }
+            }
+        }
+        Col::Str(v) => {
+            let mut dict: Vec<&str> = vec![];
+            let mut ix: HashMap<&str, u32> = HashMap::new();
+            let codes: Vec<u32> = v.iter().map(|s| *ix.entry(s.as_str()).or_insert_with(|| { dict.push(s); dict.len() as u32 - 1 })).collect();
+            w.put(dict.len() as u64, 32);
+            for s in &dict { w.put(s.len() as u64, 32); for b in s.bytes() { w.put(b as u64, 8); } }
+            let width = 64 - (dict.len().max(1) as u64 - 1).leading_zeros();
+            w.put(width as u64, 7);
+            for c in codes { w.put(c as u64, width); }
+            (C_DICT, w.finish(), false, 0, 0)
+        }
+    }
+}
+
+pub fn decode_col(ty: u8, codec: u8, bytes: &[u8], n: usize) -> Option<Col> {
+    let mut r = BitReader::new(bytes);
+    Some(match (ty, codec) {
+        (0, C_INT) => Col::I64(get_ints(&mut r, n)?),
+        (1, C_DEC) => { let d = r.get(4)? as i32; let s = 10f64.powi(d); Col::F64(get_ints(&mut r, n)?.into_iter().map(|k| k as f64 / s).collect()) }
+        (1, C_PLAIN) => Col::F64((0..n).map(|_| r.get(64).map(f64::from_bits)).collect::<Option<Vec<_>>>()?),
+        (2, C_DICT) => {
+            let nd = r.get(32)? as usize;
+            let mut dict = Vec::with_capacity(nd);
+            for _ in 0..nd { let l = r.get(32)? as usize; dict.push(String::from_utf8((0..l).map(|_| r.get(8).map(|b| b as u8)).collect::<Option<Vec<_>>>()?).ok()?); }
+            let width = r.get(7)? as u32;
+            Col::Str((0..n).map(|_| r.get(width).map(|c| dict[c as usize].clone())).collect::<Option<Vec<_>>>()?)
+        }
+        _ => return None,
+    })
+}
+
+// ----------------------------------------------------------------------------------------------- file layout
+
+const MAGIC: &[u8; 4] = b"CLF1";
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChunkMeta { pub offset: u64, pub len: u64, pub codec: u8, pub has_stats: bool, pub min: u64, pub max: u64 }
+#[derive(Clone, Debug, PartialEq)]
+pub struct RgMeta { pub rows: u32, pub chunks: Vec<ChunkMeta> }
+#[derive(Clone, Debug, PartialEq)]
+pub struct Footer { pub names: Vec<String>, pub types: Vec<u8>, pub rgs: Vec<RgMeta> }
+
+impl Footer {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut b = vec![];
+        b.extend((self.names.len() as u32).to_le_bytes());
+        for (n, t) in self.names.iter().zip(&self.types) { b.extend((n.len() as u32).to_le_bytes()); b.extend(n.as_bytes()); b.push(*t); }
+        b.extend((self.rgs.len() as u32).to_le_bytes());
+        for g in &self.rgs {
+            b.extend(g.rows.to_le_bytes());
+            for c in &g.chunks { b.extend(c.offset.to_le_bytes()); b.extend(c.len.to_le_bytes()); b.push(c.codec); b.push(c.has_stats as u8); b.extend(c.min.to_le_bytes()); b.extend(c.max.to_le_bytes()); }
+        }
+        b
+    }
+    pub fn from_bytes(b: &[u8]) -> Option<Footer> {
+        let mut p = 0usize;
+        let mut take = |n: usize| -> Option<&[u8]> { let s = b.get(p..p + n)?; p += n; Some(s) };
+        let u32_ = |s: &[u8]| u32::from_le_bytes(s.try_into().unwrap());
+        let u64_ = |s: &[u8]| u64::from_le_bytes(s.try_into().unwrap());
+        let nc = u32_(take(4)?) as usize;
+        let (mut names, mut types) = (vec![], vec![]);
+        for _ in 0..nc { let l = u32_(take(4)?) as usize; names.push(String::from_utf8(take(l)?.to_vec()).ok()?); types.push(take(1)?[0]); }
+        let ng = u32_(take(4)?) as usize;
+        let mut rgs = vec![];
+        for _ in 0..ng {
+            let rows = u32_(take(4)?);
+            let mut chunks = vec![];
+            for _ in 0..nc {
+                let offset = u64_(take(8)?); let len = u64_(take(8)?);
+                let codec = take(1)?[0]; let has_stats = take(1)?[0] == 1;
+                let min = u64_(take(8)?); let max = u64_(take(8)?);
+                chunks.push(ChunkMeta { offset, len, codec, has_stats, min, max });
+            }
+            rgs.push(RgMeta { rows, chunks });
+        }
+        Some(Footer { names, types, rgs })
+    }
+}
+
+/// `magic | row group 0: chunk per column | row group 1 | … | footer | footer length (u32) | magic`
+pub fn write_table(t: &Table, rg_rows: usize) -> Vec<u8> {
+    let n = t.cols[0].len();
+    let mut out = MAGIC.to_vec();
+    let mut rgs = vec![];
+    let mut start = 0;
+    while start < n || (n == 0 && rgs.is_empty()) {
+        let end = (start + rg_rows).min(n);
+        let mut chunks = vec![];
+        for c in &t.cols {
+            let (codec, bytes, has_stats, min, max) = encode_col(&c.slice(start, end));
+            chunks.push(ChunkMeta { offset: out.len() as u64, len: bytes.len() as u64, codec, has_stats, min, max });
+            out.extend(bytes);
+        }
+        rgs.push(RgMeta { rows: (end - start) as u32, chunks });
+        start = end;
+        if n == 0 { break; }
+    }
+    let footer = Footer { names: t.names.clone(), types: t.cols.iter().map(|c| c.type_id()).collect(), rgs };
+    let fb = footer.to_bytes();
+    out.extend(&fb);
+    out.extend((fb.len() as u32).to_le_bytes());
+    out.extend(MAGIC);
+    out
+}
+
+// ----------------------------------------------------------------------------------------------- reading
+
+/// `SELECT SUM(sum_col), COUNT(*) FROM t WHERE lo <= filter_col <= hi` (or without the filter).
+#[derive(Clone, Copy, Debug)]
+pub struct Query { pub filter_col: Option<usize>, pub lo: i64, pub hi: i64, pub sum_col: usize }
+
+#[derive(Clone, Copy, Debug)]
+pub struct ReadPlan {
+    /// Merge two needed ranges into one request when the gap between them is at most this many bytes (`None`: one request per chunk).
+    pub coalesce_gap: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ScanStats { pub row_groups: usize, pub row_groups_read: usize, pub requests: usize, pub bytes_fetched: u64, pub bytes_needed: u64, pub sizes: Vec<u64> }
+
+pub struct Reader<'a, S: ObjectStore> { store: &'a S, key: String, pub footer: Footer, pub file_size: u64, pub open_sizes: Vec<u64> }
+
+impl<'a, S: ObjectStore> Reader<'a, S> {
+    /// Read the last `tail_guess` bytes; if the footer is longer than that, one more request fetches the rest.
+    pub fn open(store: &'a S, key: &str, tail_guess: u64) -> Option<Self> {
+        let size = store.size(key);
+        let start = size.saturating_sub(tail_guess);
+        let tail = store.get_range(key, start, tail_guess);
+        let mut open_sizes = vec![tail.len() as u64];
+        if tail.len() < 8 || &tail[tail.len() - 4..] != MAGIC { return None; }
+        let flen = u32::from_le_bytes(tail[tail.len() - 8..tail.len() - 4].try_into().unwrap()) as usize;
+        let footer_bytes = if flen + 8 <= tail.len() { tail[tail.len() - 8 - flen..tail.len() - 8].to_vec() } else {
+            let need_start = size - 8 - flen as u64;
+            let head = store.get_range(key, need_start, flen as u64 + 8 - tail.len() as u64);
+            open_sizes.push(head.len() as u64);
+            let mut all = head; all.extend(&tail); all[..flen].to_vec()
+        };
+        Some(Reader { store, key: key.into(), footer: Footer::from_bytes(&footer_bytes)?, file_size: size, open_sizes })
+    }
+
+    fn fetch_chunks(&self, wanted: &mut Vec<(usize, usize)>, plan: &ReadPlan, stats: &mut ScanStats) -> HashMap<(usize, usize), Vec<u8>> {
+        wanted.sort_by_key(|&(g, c)| self.footer.rgs[g].chunks[c].offset);
+        let mut ranges: Vec<(u64, u64, Vec<(usize, usize)>)> = vec![];                // (start, end, chunks inside)
+        for &(g, c) in wanted.iter() {
+            let m = &self.footer.rgs[g].chunks[c];
+            stats.bytes_needed += m.len;
+            match ranges.last_mut() {
+                Some(r) if plan.coalesce_gap.is_some_and(|gap| m.offset <= r.1 + gap) => { r.1 = r.1.max(m.offset + m.len); r.2.push((g, c)); }
+                _ => ranges.push((m.offset, m.offset + m.len, vec![(g, c)])),
+            }
+        }
+        let mut out = HashMap::new();
+        for (s, e, chunks) in ranges {
+            let data = self.store.get_range(&self.key, s, e - s);
+            stats.requests += 1; stats.bytes_fetched += data.len() as u64; stats.sizes.push(data.len() as u64);
+            for (g, c) in chunks {
+                let m = &self.footer.rgs[g].chunks[c];
+                out.insert((g, c), data[(m.offset - s) as usize..(m.offset - s + m.len) as usize].to_vec());
+            }
+        }
+        out
+    }
+
+    fn col_stats_overlap(&self, m: &ChunkMeta, ty: u8, lo: i64, hi: i64) -> bool {
+        if !m.has_stats { return true; }
+        match ty { 0 => !((m.max as i64) < lo || (m.min as i64) > hi), _ => true }
+    }
+
+    /// Run the query with row-group pruning from the statistics, column projection, and the given request-coalescing plan.
+    pub fn scan(&self, q: &Query, plan: &ReadPlan) -> (f64, u64, ScanStats) {
+        let mut stats = ScanStats { row_groups: self.footer.rgs.len(), ..Default::default() };
+        let keep: Vec<usize> = (0..self.footer.rgs.len()).filter(|&g| match q.filter_col {
+            Some(fc) => self.col_stats_overlap(&self.footer.rgs[g].chunks[fc], self.footer.types[fc], q.lo, q.hi),
+            None => true,
+        }).collect();
+        stats.row_groups_read = keep.len();
+        let mut wanted: Vec<(usize, usize)> = vec![];
+        for &g in &keep { if let Some(fc) = q.filter_col { wanted.push((g, fc)); } if q.filter_col != Some(q.sum_col) { wanted.push((g, q.sum_col)); } }
+        let data = self.fetch_chunks(&mut wanted, plan, &mut stats);
+        self.aggregate(q, &keep, &data, &mut stats)
+    }
+
+    /// Baseline: download the whole object, then do the same work.
+    pub fn scan_whole_file(&self, q: &Query) -> (f64, u64, ScanStats) {
+        let all = self.store.get_range(&self.key, 0, self.file_size);
+        let mut stats = ScanStats { row_groups: self.footer.rgs.len(), row_groups_read: self.footer.rgs.len(), requests: 1, bytes_fetched: all.len() as u64, sizes: vec![all.len() as u64], ..Default::default() };
+        let mut data = HashMap::new();
+        for g in 0..self.footer.rgs.len() { for c in 0..self.footer.names.len() { let m = &self.footer.rgs[g].chunks[c]; data.insert((g, c), all[m.offset as usize..(m.offset + m.len) as usize].to_vec()); } }
+        let keep: Vec<usize> = (0..self.footer.rgs.len()).collect();
+        self.aggregate(q, &keep, &data, &mut stats)
+    }
+
+    fn aggregate(&self, q: &Query, keep: &[usize], data: &HashMap<(usize, usize), Vec<u8>>, stats: &mut ScanStats) -> (f64, u64, ScanStats) {
+        let (mut sum, mut count) = (0.0, 0u64);
+        for &g in keep {
+            let rows = self.footer.rgs[g].rows as usize;
+            let dec = |c: usize| decode_col(self.footer.types[c], self.footer.rgs[g].chunks[c].codec, &data[&(g, c)], rows).expect("valid chunk");
+            let mask: Option<Vec<bool>> = q.filter_col.map(|fc| match dec(fc) { Col::I64(v) => v.iter().map(|&x| x >= q.lo && x <= q.hi).collect(), _ => panic!("filter column must be integer") });
+            let vals: Vec<f64> = match dec(q.sum_col) { Col::I64(v) => v.into_iter().map(|x| x as f64).collect(), Col::F64(v) => v, Col::Str(_) => panic!("cannot sum strings") };
+            for i in 0..rows { if mask.as_ref().is_none_or(|m| m[i]) { sum += vals[i]; count += 1; } }
+        }
+        (sum, count, std::mem::take(stats))
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>2 000 000 rows with four columns (a clustered timestamp, a random 20-bit user id, an amount with two decimals, a 50-valued country), row groups of 32 768 rows (62 groups). Times are the <strong>model's</strong> predictions from the measured request sizes, not wall-clock network measurements.</p>
+
+```text title="layout, three queries, pruning and footer reads"
+2000000 rows (ts clustered, user random 0..1M, amount with 2 decimals, country with 50 values), row groups of 32768 rows = 62 groups
+file size 13.3 MB against 68.0 MB raw (8+8+8+~10 bytes per row), footer 8727 bytes
+column           bytes   bytes/row   of file  codec
+ts             1264168        0.63        9%  integer deltas
+user           5264044        2.63       39%  integer deltas
+amount         5264044        2.63       39%  decimal integers
+country        1543710        0.77       12%  dictionary
+A. SUM(amount) WHERE ts in a 1% window (the filter column is clustered)
+plan                                reqs   MB read MB needed groups |    S3 1 conn   S3 16 conn |   SSD 1 conn  SSD 16 conn
+download the whole file                1     13.34         -     62 |        173 ms        173 ms |       6.77 ms       6.77 ms
+one request per chunk                  4      0.21      0.21      2 |        128 ms         52 ms |       0.64 ms       0.28 ms
+coalesce gap 64 KB                     3      0.24      0.21      2 |        103 ms         52 ms |       0.55 ms       0.30 ms
+coalesce gap 1 MB                      1      0.41      0.21      2 |         55 ms         55 ms |       0.44 ms       0.44 ms
+coalesce gap 16 MB                     1      0.41      0.21      2 |         55 ms         55 ms |       0.44 ms       0.44 ms
+B. SUM(amount) WHERE user in a 1% range (the filter column is random: statistics cannot prune)
+plan                                reqs   MB read MB needed groups |    S3 1 conn   S3 16 conn |   SSD 1 conn  SSD 16 conn
+download the whole file                1     13.34         -     62 |        173 ms        173 ms |       6.77 ms       6.77 ms
+one request per chunk                124     10.53     10.53     62 |       3243 ms        233 ms |      17.80 ms       1.28 ms
+coalesce gap 64 KB                     1     13.31     10.53     62 |        199 ms        199 ms |       6.89 ms       6.89 ms
+coalesce gap 1 MB                      1     13.31     10.53     62 |        199 ms        199 ms |       6.89 ms       6.89 ms
+coalesce gap 16 MB                     1     13.31     10.53     62 |        199 ms        199 ms |       6.89 ms       6.89 ms
+C. SUM(amount) over the whole table (projection only)
+plan                                reqs   MB read MB needed groups |    S3 1 conn   S3 16 conn |   SSD 1 conn  SSD 16 conn
+download the whole file                1     13.34         -     62 |        173 ms        173 ms |       6.77 ms       6.77 ms
+one request per chunk                 62      5.26      5.26     62 |       1634 ms        130 ms |       8.96 ms       0.71 ms
+coalesce gap 64 KB                    61      5.29      5.26     62 |       1610 ms        130 ms |       8.88 ms       0.72 ms
+coalesce gap 1 MB                      1     13.23      5.26     62 |        198 ms        198 ms |       6.85 ms       6.85 ms
+coalesce gap 16 MB                     1     13.23      5.26     62 |        198 ms        198 ms |       6.85 ms       6.85 ms
+row groups read by the width of the filter range, starting at the smallest value (62 groups in total)
+range as share of values        0.1%        1%       10%       50%      100%
+ts, clustered                      1         1         7        31        62
+user, random order                62        62        62        62        62
+user, file sorted by user          1         1         7        31        62
+opening the file: requests and bytes by tail-read size (the footer is 8727 bytes)
+tail guess      requests  bytes read
+512                    2        8735
+4096                   2        8735
+65536                  1       65536
+1048576                1     1048576
+a table of 1000 columns in 1000 row groups would carry a footer of about 34 MB in this format (34 bytes per chunk), which is why wide tables need column-subset footers or splitting
+```
+
+<ul> <li><strong>The file is 5× smaller than raw</strong>: 13.3 MB against 68 MB. Timestamps take 0.63 byte per row (clustered, small deltas), the amount 2.63 bytes (decimal integers), the random user id 2.63 bytes (20 random bits plus delta sign: no codec helps random values), the dictionary-coded country 0.77 byte.</li> <li><strong>Selective, clustered filter (A)</strong>: reading the footer, pruning to 2 of 62 groups and fetching only the timestamp and amount chunks of those groups reads <strong>0.21 MB instead of 13.3 MB</strong> (64× fewer bytes). On the object-store model that is 52–55 ms against 173 ms for downloading the file; on the SSD model 0.3–0.6 ms against 6.8 ms.</li> <li><strong>The request/bytes trade-off flips with the storage.</strong> With one connection on the object-store model, four separate chunk requests cost 128 ms (latency dominates) while one coalesced 0.41 MB request (the gap of 1 MB merged the chunks and the column in between) costs 55 ms: reading twice the bytes in a quarter of the requests is <strong>2.3× faster</strong>. With 16 connections both take about 52–55 ms. On the SSD the opposite holds: 16 concurrent exact chunk reads (0.28 ms) beat the coalesced read (0.44 ms) because bytes, not requests, cost. The right coalescing threshold is a property of the storage, not of the file.</li> <li><strong>A filter that cannot prune is expensive if done chunk by chunk (B).</strong> The user id is random, so every row group's min/max spans the domain and all 62 groups are read: 124 requests for 10.5 MB. On the object-store model with one connection that is <strong>3 243 ms</strong>, with 16 connections 233 ms: <em>slower than downloading the whole 13.3 MB file in one request (173 ms)</em>. Coalescing turns it into one large request (199 ms). The lesson is a planner rule: when the estimated skip fraction is small, read big and sequential.</li> <li><strong>Projection helps bytes more than time (C).</strong> Summing one column over the whole table needs 5.3 MB, but its chunks are interleaved with the other columns' inside each row group: 62 requests, 1 634 ms on one connection and 130 ms on 16, against 173 ms for the whole file. A coalescing gap of 1 MB merges them into one request of 13.2 MB, which reads everything again. Column-contiguous layouts (larger row groups; formats that store a column's pages together across the file) are the fix; row-group size is a trade-off between fewer requests and coarser pruning.</li> <li><strong>Pruning depends entirely on clustering</strong>: a range of 1% of the values reads 1 group when the column is the file's sort order (timestamps; or the user id when the <em>file is sorted by user</em>), and <strong>all 62</strong> when the column is in random order. Sorting or partitioning by the common filter column is the cheapest query optimization a lake can do (<a href="/cookbook/p/lakehouses-and-table-formats">S5</a>).</li> <li><strong>Opening a file</strong>: the footer is 8 727 bytes. A tail guess smaller than that (512 or 4 096 bytes) costs a second request; a guess of 64 KiB or 1 MiB gets it in one, reading 7× to 120× more bytes than needed. Real readers guess 64 KiB or cache footers. The format's footer would reach about 34 MB for a table of 1 000 columns in 1 000 row groups at 34 bytes per chunk, which is why wide tables need column-subset footers or separate manifests.</li> </ul>
+
+<aside data-call="note"><b>Arrow and Parquet are not alternatives</b><p>Arrow is the <em>in-memory</em> layout of decoded columns (fixed-width values, validity bitmaps, offsets); Parquet is the <em>at-rest</em> layout of encoded, compressed columns with statistics. A scan decodes Parquet pages into Arrow arrays, and the engine's kernels, the Flight stream and the Python process on the other side all see the same Arrow buffers. The lab's <code>decode_col</code> is the Parquet-to-Arrow step in miniature.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A trait for the store, a struct for the reader</strong>: <code>Reader&lt;'a, S: ObjectStore&gt;</code> is generic over the store, so the same reader runs against the in-memory counting store here and <code>object_store</code>/OpenDAL in production; monomorphization makes the abstraction free. Production APIs are <code>async</code> (<code>get_range</code>, <code>get_ranges</code> returning <code>Bytes</code>); the lab is synchronous to keep the request accounting obvious.</li> <li><strong><code>Mutex&lt;Vec&lt;(u64, u64)&gt;&gt;</code> as an interior-mutable request log</strong>: <code>get_range</code> takes <code>&amp;self</code>, so a store can be shared by many readers; the log makes "how many requests did that query make?" a one-line assertion in tests.</li> <li><strong><code>bytes::Bytes</code> instead of <code>Vec&lt;u8&gt;</code></strong>: the lab copies each range with <code>to_vec()</code>; real code returns reference-counted slices, so slicing a chunk out of a coalesced range is free. Arrow arrays hold their buffers the same way (<code>Buffer</code> over <code>Bytes</code>).</li> <li><strong>List scheduling in six lines</strong>: <code>simulate</code> keeps a vector of connection-free times and assigns each request to the earliest one (<code>min_by(total_cmp)</code>); the makespan is the maximum. Good enough to compare plans; real clients add per-connection setup, TLS, throttling and retries.</li> <li><strong>Small binary formats by hand</strong>: the footer is little-endian integers written with <code>to_le_bytes</code> and read with checked slicing (<code>b.get(p..p+n)?</code>), so a truncated or corrupt footer returns <code>None</code> instead of panicking; production code uses a schema language (Thrift for Parquet, FlatBuffers for Arrow) for evolution.</li> <li><strong>Reuse of the bit I/O from <a href="/cookbook/p/time-series-databases">S1</a></strong>: the same <code>BitWriter</code> writes the delta frames and the dictionary codes; sharing the primitive across formats is how real libraries stay small.</li> <li><strong><code>Option::is_none_or</code></strong> and <code>is_some_and</code> keep the pruning predicates readable: <code>plan.coalesce_gap.is_some_and(|gap| m.offset &lt;= r.1 + gap)</code>.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Codecs (property tests)</strong>: arbitrary <code>i64</code> columns round-trip; arbitrary <code>f64</code> bit patterns (NaN payloads included) round-trip bit-exactly; two-decimal floats choose the decimal codec and round-trip; string columns (including empty strings) round-trip through the dictionary.</li> <li><strong>Footer and open</strong>: the footer serializes and parses to itself; opening with tail guesses of 16, 100, 4 096 and 1 MiB issues exactly one request when the footer fits and two otherwise; a damaged magic number is rejected.</li> <li><strong>Every plan equals a scan of the table</strong>: 40 random tables (1 to 6 000 rows), random row-group sizes, queries with no filter, a clustered filter and a random filter, random ranges (including empty and out-of-domain), and for each: whole-file download and coalescing gaps of none, 0, 100 bytes and unbounded return the same sum and count; bytes fetched are at least the bytes needed, the request sizes add up, and without coalescing the fetch is exactly the needed chunks.</li> <li><strong>Pruning boundaries</strong>: ranges that touch only the maximum of one group or only the minimum of the next read exactly the right groups; ranges above or below the data read none.</li> <li><strong>Coalescing</strong>: reading two columns of every group gives 12 requests unmerged, between 6 and 12 with gap 0, and exactly 1 with an unbounded gap (reading more bytes than needed but fewer than the whole file); with neighbouring columns, a gap of 0 merges each adjacent pair into one request per group without extra bytes, and the gap that bridges two groups merges them at exactly the size of what lies between and not one byte less.</li> <li><strong>Network model</strong>: more connections never increase the makespan; one connection is the sum of the request times; enough connections give the longest single request; no requests take no time.</li> <li><strong>Mutants run against these tests</strong>: pruning that drops boundary groups, or that keeps everything (killed); coalescing that ignores the gap limit (killed), is off by one at the boundary (<strong>survived until the adjacency test with exact request counts</strong>), or keeps the wrong end of a merged range (equivalent: chunks are sorted by offset and never nest); chunks sliced one byte off; the footer's split read returning the wrong bytes; a scheduler that gives every request its own connection; a dictionary width one bit short; the decimal codec dropping its scale; a filter column that is also the sum column fetched twice; a whole-file baseline that reads half the file (all killed).</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Parquet readers</strong> (arrow-rs/DataFusion, DuckDB, Spark, Trino) follow the lab's protocol with more refinement: a tail read then footer, row-group pruning from statistics, <strong>page-level pruning</strong> from the column index and offset index, Bloom filters for equality predicates, dictionary-aware filtering, late materialization (decode the filter column first, then only matching rows of the others), parallel column and row-group reads, <strong>range coalescing</strong> (the Rust <code>object_store</code> crate merges ranges closer than about 1 MiB), and metadata caches.</li> <li><strong>Object-store clients</strong> hide the network: retries with backoff, parallel multipart downloads, request hedging for slow tails, on-disk and in-memory block caches (OpenDAL layers; Alluxio-style caches; Snowflake, Databricks and others keep a local SSD cache in front of S3), and credentials/region handling.</li> <li><strong>DataFusion</strong> executes a plan as a tree of asynchronous streams of Arrow <code>RecordBatch</code>es (default 8 192 rows), partitioned across cores, with an <code>ExecutionPlan</code> trait for custom operators and a <code>TableProvider</code> trait for custom sources; Comet registers native operators under Spark's physical plan; ParadeDB maps Postgres tables and search indexes into providers.</li> <li><strong>InfluxDB 3.0 (FDAP)</strong> ingests line protocol into an in-memory buffer with a WAL, writes Parquet files to object storage, and answers SQL and InfluxQL with DataFusion over Arrow, using the file statistics for time-range pruning: the arrangement the lab's query A measures.</li> <li><strong>Flight and ADBC</strong> carry Arrow over gRPC (parallel streams per endpoint) and replace row-oriented drivers, removing the serialization step between a columnar server and a columnar client.</li> <li><strong>Table formats</strong> (Iceberg, Delta, Hudi) add a manifest layer above Parquet files so that listing and statistics come from metadata, and add atomic commits (<a href="/cookbook/p/lakehouses-and-table-formats">S5</a>).</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Many small requests.</strong> Object stores charge latency and money per request. A plan of one request per column chunk is the easy implementation and the slow one (3 243 ms against 173 ms for the same bytes here). Coalesce, issue concurrently, and cap the number of in-flight requests.</li> <li><strong>Coalescing too eagerly.</strong> Merging with a huge gap turns projection into a whole-file download. Choose the gap from the storage's <code>latency × bandwidth</code> product (the bytes you could have transferred in one request's latency: ~2 MB for the 25 ms, 90 MB/s model, ~200 KB for a fast SSD).</li> <li><strong>Statistics lie on unsorted data.</strong> Pruning needs clustering; a million-row group with a user id between 0 and 1 000 000 prunes nothing. Sort or partition by the common filter columns when writing, and check the actual skip rate on the workload.</li> <li><strong>Tiny row groups and huge footers.</strong> Too many row groups bloat the footer and the number of requests; too few lose pruning and strain memory. Aim for row groups of tens of MB on object storage, and keep file counts reasonable.</li> <li><strong>Reading the footer repeatedly.</strong> Planning a query over thousands of files by opening every footer is slow; cache footers, or keep statistics in the table format's manifests.</li> <li><strong>Floats, NaN and statistics.</strong> Min/max for floating-point columns must define how NaN is ordered and must not claim a skip when NaNs may match; the lab leaves statistics off for non-finite columns.</li> <li><strong>Version skew in a composed stack</strong>: Arrow, Parquet, DataFusion and the table format release independently; pin versions together, test on real files from other writers, and be careful with feature flags (encodings, page indexes) that another reader may not support.</li> <li><strong>Do not treat the model's times as measurements.</strong> The network model has two parameters; real object stores add tail latency, throttling and per-prefix limits. Use it to compare plans, then measure on the real store.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "The Composable Data Management System Manifesto"
+url = "https://www.vldb.org/pvldb/vol16/p2679-pedreira.pdf"

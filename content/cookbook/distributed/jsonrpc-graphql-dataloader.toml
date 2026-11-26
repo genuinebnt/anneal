@@ -1,0 +1,52 @@
+title = "Jsonrpc graphql dataloader"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 517
+kind = "recipe"
+lede = "JSON-RPC 2.0, a mini GraphQL executor, and the DataLoader fix for N+1"
+level = "advanced"
+code = ["examples/web/jsonrpc_graphql_dataloader.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+API styles stage (RPC vs query language vs REST).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+What: three API styles over the same in-memory library (5 authors, 10 books), all behind a real axum server:
+
+1. JSON-RPC 2.0 on `POST /rpc`: request/response objects, notifications (no response, HTTP 204), batches, and the error codes -32700 parse, -32600 invalid request, -32601 method not found, -32602 invalid params, -32603 internal. The assertions replay the examples from the specification.
+2. A tiny GraphQL executor on `POST /graphql`: hand-written lexer + recursive-descent parser (operations, variables with defaults, nested selection sets, arguments, aliases, `__typename`), resolvers per type/field, and a result containing **exactly** the requested shape. Errors come back as `{"errors":[..]}` with HTTP 200 (the historic GraphQL-over-HTTP convention).
+3. The N+1 problem: resolving `books` once per author hits the backend 1+N times. A per-request DATALOADER collects the keys requested "at the same time", issues **one** batched call, and caches results for the rest of the request: 1+5 backend calls become 2 (and 1+5+10 become 3).
+
+   Batching here waits until the scheduler is quiescent (no new key arrived during a whole polling round), the same idea as the "next tick" of JS DataLoader. The loader **must** be per request: a global cache would leak data between users and go stale. And a comparison with REST on the same data: under-fetching (1 + N round trips) and over-fetching (whole objects).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>GraphQL gateways (GitHub, Shopify)</li><li>BFFs for mobile clients</li><li>JSON-RPC in Ethereum nodes / LSP / MCP / editors</li><li>any resolver-based API where list items trigger per-item lookups</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://www.jsonrpc.org/specification" target="_blank" rel="noreferrer">https://www.jsonrpc.org/specification</a></li><li><a href="https://graphql.org/learn/queries/" target="_blank" rel="noreferrer">https://graphql.org/learn/queries/</a></li><li><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP" target="_blank" rel="noreferrer">https://developer.mozilla.org/en-US/docs/Web/HTTP</a></li></ul>
+"""
+
+[[sources]]
+title = "jsonrpc.org/specification"
+url = "https://www.jsonrpc.org/specification"
+
+[[sources]]
+title = "graphql.org/learn/queries"
+url = "https://graphql.org/learn/queries/"
+
+[[sources]]
+title = "developer.mozilla.org/en-US/docs/Web/HTTP"
+url = "https://developer.mozilla.org/en-US/docs/Web/HTTP"

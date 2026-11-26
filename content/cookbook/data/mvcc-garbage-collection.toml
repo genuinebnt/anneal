@@ -1,0 +1,222 @@
+title = "MVCC garbage collection"
+module = "Databases"
+module_order = 8
+chapter = "Transactions and concurrency control"
+chapter_order = 6
+order = 407
+kind = "guide"
+lede = "15-721 lecture #5 · what is garbage · tuple-level vs transaction-level · precision (watermark vs interval) · long readers · measured cost and space"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>GC is a first-class part of MVCC</strong>: without it version chains grow without bound, reads walk longer chains, indexes bloat, and memory or disk fill. A version is <strong>garbage</strong> when <em>no active or future snapshot can read it</em> (or its creator aborted). Three questions define a collector: <strong>how are garbage versions found?</strong> (tuple-level scan vs transaction-level tracking), <strong>how precisely?</strong> (the watermark rule vs interval/visibility-based rules), and <strong>when and who runs it?</strong> (background threads, workers cooperatively, epochs).</li> <li><strong>Tuple-level</strong>: <em>background vacuuming</em> scans tables for dead versions (works with any storage scheme; PostgreSQL's autovacuum; a <strong>dirty-page bitmap</strong> or visibility map skips untouched pages) or <em>cooperative cleaning</em> (threads prune what they walk; only works for O2N chains; <strong>data that is never read is never cleaned</strong>). <strong>Transaction-level</strong>: each transaction records the versions it replaced; once the transaction is older than every active snapshot, its garbage is freed directly (HyPer, Hekaton, Steam), so the cost is proportional to the <em>garbage</em>, not the table.</li> <li><strong>The watermark rule</strong> is conservative: a version is reclaimable only if it is older than the <em>oldest</em> active snapshot. <strong>One long-running transaction therefore pins everything created after it began.</strong> <strong>Interval-based</strong> collectors (SAP HANA's hybrid GC, Böttcher et al.'s Steam) reclaim a version if <strong>no active snapshot lies within its lifetime</strong> <code>[begin, replacement)</code>, even if it is newer than a long reader.</li> <li><strong>Version GC vs memory reclamation</strong>: freeing a version <em>logically</em> is not freeing its memory. Latch-free readers may still hold a pointer, so memory goes through <strong>epoch-based reclamation</strong> (free when every thread has advanced past the retire epoch) or hazard pointers.</li> <li><strong>Indexes need cleaning too</strong>: dead versions leave index entries behind; a collector must remove them (PostgreSQL vacuum scans indexes; others use logical pointers).</li> <li><strong>Operational reality</strong>: long transactions, idle-in-transaction sessions, and lagging replicas are the usual cause of bloat; databases cap them (<code>idle_in_transaction_session_timeout</code>, snapshot age limits) and monitor the oldest snapshot.</li> </ul>
+"""
+
+[[sections]]
+heading = "Six collectors on one store"
+body = """
+<p>The store keeps a chain of begin timestamps per key (oldest first) and a multiset of live snapshots, so <code>watermark()</code> is the minimum. Updates append; reads walk back from the newest version to the first with <code>begin ≤ snapshot</code>. The six strategies share the same <code>update</code> and <code>read</code> and differ only in <em>who frees what</em>. Every freed version is accounted, and a read that cannot find its version <strong>panics</strong> ("GC freed something a snapshot needed"), so the safety test is the store itself.</p>
+
+:::deeper Reference: version store with six collection strategies and cost accounting
+```rust title="src/concurrency/gc.rs"
+//! MVCC garbage collection strategies on a version-chain store, driven deterministically.
+use std::collections::{BTreeMap, VecDeque};
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Strategy {
+    None,
+    /// Background thread scans every chain.
+    Vacuum,
+    /// Same, but only chains modified since the last pass (the "dirty page bitmap").
+    VacuumDirty,
+    /// Workers prune the chain they happen to touch.
+    Cooperative,
+    /// Each committed transaction hands its superseded versions to the collector; free when below the watermark.
+    TxnLevel,
+    /// Transaction-level, but a version is garbage as soon as *no active snapshot lies inside its lifetime*.
+    TxnLevelInterval,
+}
+
+pub struct Store {
+    chains: Vec<Vec<u64>>,                 // begin timestamps, ascending (oldest first)
+    pub clock: u64,
+    active: BTreeMap<u64, usize>,          // live snapshots (read timestamps)
+    dirty: Vec<bool>,
+    queue: VecDeque<(u64, usize, u64)>,    // (replacement commit ts, key, superseded version's begin ts)
+    deferred: Vec<(u64, usize, u64)>,      // interval GC: versions a live snapshot still needs, rechecked later
+    strategy: Strategy,
+    pub live: usize,
+    pub peak: usize,
+    pub inspected: u64,                    // versions looked at by the collector (its CPU cost)
+    pub freed: u64,
+    pub read_steps: u64,                   // versions walked by readers to find theirs
+}
+
+impl Store {
+    pub fn new(keys: usize, strategy: Strategy) -> Self {
+        Self { chains: vec![vec![0]; keys], clock: 0, active: BTreeMap::new(), dirty: vec![false; keys], queue: VecDeque::new(), deferred: vec![],
+               strategy, live: keys, peak: keys, inspected: 0, freed: 0, read_steps: 0 }
+    }
+
+    pub fn begin_snapshot(&mut self) -> u64 { *self.active.entry(self.clock).or_default() += 1; self.clock }
+    pub fn end_snapshot(&mut self, ts: u64) {
+        let n = self.active.get_mut(&ts).unwrap();
+        *n -= 1;
+        if *n == 0 { self.active.remove(&ts); }
+    }
+    pub fn watermark(&self) -> u64 { self.active.keys().next().copied().unwrap_or(self.clock) }
+    pub fn max_chain(&self) -> usize { self.chains.iter().map(|c| c.len()).max().unwrap() }
+
+    pub fn update(&mut self, k: usize) {
+        self.clock += 1;
+        let prev = *self.chains[k].last().unwrap();
+        self.chains[k].push(self.clock);
+        self.live += 1;
+        self.peak = self.peak.max(self.live);
+        self.dirty[k] = true;
+        if matches!(self.strategy, Strategy::TxnLevel | Strategy::TxnLevelInterval) { self.queue.push_back((self.clock, k, prev)); }
+        if self.strategy == Strategy::Cooperative { self.prune(k); }
+    }
+
+    /// Read key `k` as of snapshot `ts`: walk from the newest version back to the first with `begin ≤ ts`.
+    pub fn read(&mut self, k: usize, ts: u64) -> u64 {
+        if self.strategy == Strategy::Cooperative { self.prune(k); }
+        let c = &self.chains[k];
+        let mut i = c.len();
+        while i > 0 { i -= 1; self.read_steps += 1; if c[i] <= ts { return c[i]; } }
+        unreachable!("no visible version: GC freed something a snapshot needed")
+    }
+
+    /// Drop every version older than the newest one visible at the watermark.
+    fn prune(&mut self, k: usize) {
+        let wm = self.watermark();
+        let c = &mut self.chains[k];
+        self.inspected += c.len() as u64;
+        let keep_from = c.iter().rposition(|&b| b <= wm).unwrap_or(0);
+        self.freed += keep_from as u64;
+        self.live -= keep_from;
+        c.drain(..keep_from);
+    }
+
+    /// One collector pass (the background thread's wake-up).
+    pub fn collect(&mut self) {
+        match self.strategy {
+            Strategy::None | Strategy::Cooperative => {}
+            Strategy::Vacuum => for k in 0..self.chains.len() { self.prune(k); },
+            Strategy::VacuumDirty => for k in 0..self.chains.len() { if std::mem::take(&mut self.dirty[k]) { self.prune(k); } },
+            Strategy::TxnLevel => {
+                let wm = self.watermark();
+                while let Some(&(commit, k, v)) = self.queue.front() {
+                    if commit > wm { break; }                              // someone may still need the old version
+                    self.queue.pop_front();
+                    self.free_version(k, v);
+                }
+            }
+            Strategy::TxnLevelInterval => {
+                // a version lives in [begin, replacement commit); it is garbage if no snapshot lies in that interval
+                let mut retry = std::mem::take(&mut self.deferred);
+                while let Some(e) = self.queue.pop_front() { retry.push(e); }
+                for (end, k, v) in retry {
+                    self.inspected += 1;
+                    if self.active.range(v..end).next().is_none() { self.free_version(k, v); } else { self.deferred.push((end, k, v)); }
+                }
+            }
+        }
+    }
+
+    fn free_version(&mut self, k: usize, begin: u64) {
+        self.inspected += 1;
+        let c = &mut self.chains[k];
+        let i = c.iter().position(|&b| b == begin).expect("queued version still present");
+        c.remove(i);
+        self.freed += 1;
+        self.live -= 1;
+    }
+}
+```
+:::
+
+:::deeper Reference: the workload (hot/cold skew, optional long-running reader)
+```rust title="tests/gc.rs"
+/// 10 000 keys; 80% of operations hit 100 hot keys. Half updates, half short reads. Optionally a long reader
+/// holds a snapshot from 25% to 75% of the run and reads a random key every 50 operations.
+fn run(strategy: Strategy, long_reader: bool) -> Out {
+    let (keys, hot, ops) = (10_000usize, 100usize, 400_000usize);
+    let mut st = Store::new(keys, strategy);
+    let mut rng = Rng(42);
+    let (mut samples, mut sum) = (0u64, 0u64);
+    let mut long: Option<u64> = None;
+    let (mut lr_steps, mut lr_reads) = (0u64, 0u64);
+    for i in 0..ops {
+        if long_reader && i == ops / 4 { long = Some(st.begin_snapshot()); }
+        if long_reader && i == 3 * ops / 4 { st.end_snapshot(long.take().unwrap()); }
+        let k = if rng.next(100) < 80 { rng.next(hot as u64) } else { rng.next(keys as u64) } as usize;
+        if rng.next(2) == 0 {
+            st.update(k);
+        } else {
+            let s = st.begin_snapshot();
+            st.read(k, s);
+            st.end_snapshot(s);
+        }
+        if let Some(ts) = long { if i % 50 == 0 { let before = st.read_steps; let kk = rng.next(keys as u64) as usize; st.read(kk, ts); lr_steps += st.read_steps - before; lr_reads += 1; } }
+        if i % 1000 == 999 { st.collect(); samples += 1; sum += st.live as u64; }
+    }
+    st.collect();
+    Out { peak: st.peak, mean: sum as f64 / samples as f64, end: st.live, max_chain: st.max_chain(), inspected: st.inspected, freed: st.freed,
+          read_steps: st.read_steps, long_reader_steps: if lr_reads > 0 { lr_steps as f64 / lr_reads as f64 } else { 0.0 } }
+}
+```
+:::
+
+<p>The workload: 10 000 keys, 80% of operations hit 100 hot keys, half updates and half short snapshot reads, 400 000 operations, a collector pass every 1 000 operations. In the second run one snapshot is held from 25% to 75% of the run and reads a random key every 50 operations. <em>inspect/free</em> is how many versions the collector looked at per version it freed: its CPU cost.</p>
+
+```text title="short transactions only"
+strategy            peak live  mean live   end live  max chain   inspect/free reader steps long rdr steps
+None                   210114     110351     210114       1697              -       199886          0.0
+Vacuum                  10546      10000      10000          1           21.0       199886          0.0
+VacuumDirty             10546      10000      10000          1            1.4       199886          0.0
+Cooperative             10001      10000      10000          1            3.0       199886          0.0
+TxnLevel                10546      10000      10000          1            1.0       199886          0.0
+TxnLevelInterval        10546      10000      10000          1            2.0       199886          0.0
+```
+
+```text title="with one long-running reader (25%–75% of the run)"
+strategy            peak live  mean live   end live  max chain   inspect/free reader steps long rdr steps
+None                   210432     110435     210432       1702              -       223129          5.9
+Vacuum                 110530      35180      10000          1           71.3       223129          5.9
+VacuumDirty            110530      38309      17281         11           42.5       223129          5.9
+Cooperative            109989      37305      12717         10          328.6       223129          5.9
+TxnLevel               110530      35180      10000          1            1.0       223129          5.9
+TxnLevelInterval        19213      12900      10000          1            7.8       205994          1.6
+```
+
+<p>Reading the tables:</p>
+
+<ul> <li><strong>No GC</strong> ends with 210 114 live versions for 10 000 keys (21×) and a <strong>1 697-deep chain</strong> on the hottest key: reads of old snapshots would walk thousands of versions.</li> <li><strong>Short transactions: every collector holds the table at ~1× its size</strong>, but the <em>cost</em> differs by 20×: a <strong>full vacuum scan inspects 21 versions for every one it frees</strong> (it re-reads 10 000 chains every pass to find a few hundred dead versions); with a dirty bitmap that drops to 1.4; <strong>transaction-level GC inspects exactly 1 per freed version</strong> because the queue <em>is</em> the garbage list.</li> <li><strong>A long reader changes the picture.</strong> Under the watermark rule (Vacuum, Cooperative, TxnLevel) <strong>110 000 versions pile up while it runs</strong>, 11× the live data, and nothing the collectors do helps: every version created after the reader began is still "possibly visible". Vacuum burns <strong>71 versions inspected per freed</strong> repeatedly re-scanning chains it can't shrink; cooperative cleaning's 329 shows how wasteful opportunistic pruning is when the answer is "no".</li> <li><strong>Interval-based GC keeps peak at 19 213 (5.7× smaller)</strong>: only the version the long reader needs and the newest one are live per key; the rest are not visible to any snapshot and go immediately. As a bonus, <strong>the long reader's own reads shorten from 5.9 to 1.6 versions per read</strong>, since chains stay short for it too.</li> <li><strong>Stranded garbage</strong>: <code>VacuumDirty</code> and <code>Cooperative</code> end with 17 281 and 12 717 live versions <em>after</em> the reader ended and chains up to 11 deep. Both clear their "needs attention" signal (the dirty flag, the access) when they visit a chain they <em>can't</em> prune yet, and never revisit it. A collector must <strong>keep a chain marked until it has been cleaned</strong>, not until it has been looked at.</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong><code>BTreeMap::range(v..end)</code></strong> answers "is any snapshot inside this version's lifetime?" in O(log n); that single call is the whole interval rule.</li> <li><strong><code>VecDeque</code> as the transaction-level garbage list</strong>: pushes at commit, pops from the front when the watermark passes; amortized O(1) with no scanning.</li> <li><strong><code>std::mem::take</code> on the dirty flag</strong> reads-and-clears atomically in the sense that matters (and shows the stranded-garbage bug in one line: it clears even when the prune does nothing).</li> <li><strong>Memory reclamation is separate</strong>: in a concurrent Rust implementation the freed <code>Box&lt;Version&gt;</code> goes into an epoch-retire list; <code>Drop</code> runs when all threads have left the epoch.</li> </ul></aside>
+
+<aside data-call="testing"><b>How to test a collector</b><ul> <li><strong>Safety by construction</strong>: make "a snapshot can't find its version" a panic and run randomized overlapping snapshots with a collector pass every few dozen steps (the included test). Include an <em>old</em> snapshot started before most updates.</li> <li><strong>Liveness</strong>: after all snapshots end and one more pass runs, <strong>live versions must equal live keys</strong> (here <code>end live == 10 000</code> for the three correct collectors) and no chain is longer than 1.</li> <li><strong>Cost accounting</strong>: assert <code>inspect/free</code> stays bounded for transaction-level collectors; a regression to a table scan shows as an order-of-magnitude jump.</li> <li><strong>Crash consistency</strong> (for durable stores): GC itself may be logged or idempotent; after recovery no dangling version links may remain reachable from a live snapshot.</li> </ul></aside>
+
+<aside data-call="production"><b>GC in real systems</b><ul> <li><strong>PostgreSQL</strong>: append-only heap, <code>VACUUM</code>/autovacuum scans pages with dead tuples (visibility map skips all-visible pages), <strong>HOT pruning</strong> cleans a page opportunistically during access (cooperative). A long transaction or replication slot holds back the <code>xmin</code> horizon and causes bloat.</li> <li><strong>MySQL/InnoDB</strong>: <strong>purge threads</strong> walk the <em>history list</em> of undo logs (transaction-level), bounded by the oldest read view; long transactions grow the history length.</li> <li><strong>SAP HANA</strong>: hybrid of table-level GC, <strong>interval-based</strong> and group GC.</li> <li><strong>HyPer / Umbra</strong>: transaction-level garbage lists; <strong>Steam</strong> (Böttcher 2019) adds interval-based pruning at update time and scales to many cores.</li> <li><strong>Hekaton</strong>: <strong>cooperative</strong> cleaning plus a background sweep, since latch-free readers see dead versions anyway.</li> <li><strong>Spanner / CockroachDB</strong>: GC by <em>timestamp threshold</em> (<code>gc_ttl</code>): versions older than the retention window disappear regardless of readers; reads below the GC threshold fail.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Scalable Garbage Collection for In-Memory MVCC Systems"
+url = "https://www.vldb.org/pvldb/vol13/p128-bottcher.pdf"
+
+[[sources]]
+title = "Hybrid Garbage Collection for Multi-Version Concurrency Control in SAP HANA"
+url = "https://dl.acm.org/doi/10.1145/2882903.2903734"
+
+[[sources]]
+title = "An Empirical Evaluation of In-Memory MVCC"
+url = "https://www.vldb.org/pvldb/vol10/p781-Wu.pdf"
+
+[[sources]]
+title = "Routine Vacuuming"
+url = "https://www.postgresql.org/docs/current/routine-vacuuming.html"

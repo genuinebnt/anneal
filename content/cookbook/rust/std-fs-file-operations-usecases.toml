@@ -1,0 +1,70 @@
+title = "`std::fs` by use case"
+module = "Standard library and core"
+module_order = 2
+chapter = "I/O, files and paths"
+chapter_order = 9
+order = 110
+kind = "recipe"
+lede = "OpenOptions matrix, metadata, directories, atomic writes, walks, append log, rotation."
+level = "intermediate"
+code = ["examples/std_tour/std_fs_file_operations_usecases.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>config/state files</li><li>caches</li><li>log rotation</li><li>build tools</li><li>installers</li><li>anything touching disk</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li><code>fs::read_to_string</code> for config</li><li>temp file + <code>rename</code> for atomic saves</li><li><code>read_dir</code> walks for build/size tools</li><li>append-only logs (WAL-style) with recovery</li><li>size-based log rotation</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>std::fs::read_to_string</code></li><li><code>std::fs::write</code></li><li><code>std::fs::read</code></li><li><code>std::fs::create_dir_all</code></li><li><code>std::fs::remove_file</code></li><li><code>std::fs::File::open</code></li><li><code>std::fs::File::create</code></li><li><code>std::fs::OpenOptions</code></li><li><code>OpenOptions::read</code></li><li><code>OpenOptions::write</code></li><li><code>OpenOptions::append</code></li><li><code>OpenOptions::create</code></li><li><code>OpenOptions::create_new</code></li><li><code>OpenOptions::truncate</code></li><li><code>std::fs::copy</code></li><li><code>std::fs::rename</code></li><li><code>std::fs::remove_dir_all</code></li><li><code>std::fs::read_dir</code></li><li><code>std::fs::metadata</code></li><li><code>Metadata::len</code></li><li><code>Metadata::is_file</code></li><li><code>Metadata::is_dir</code></li><li><code>Metadata::file_type</code></li><li><code>Metadata::modified</code></li><li><code>Metadata::permissions</code></li><li><code>std::fs::symlink_metadata</code></li><li><code>std::fs::canonicalize</code></li><li><code>std::fs::hard_link</code></li><li><code>std::fs::set_permissions</code></li><li><code>File::set_len</code></li><li><code>File::sync_all</code></li><li><code>File::sync_data</code></li><li><code>File::try_clone</code></li><li><code>File::lock</code></li><li><code>File::try_lock</code></li><li><code>File::unlock</code></li><li><code>std::fs::exists</code></li><li><code>std::fs::DirEntry</code></li><li><code>DirEntry::file_name</code></li><li><code>DirEntry::file_type</code></li><li><code>DirEntry::metadata</code></li><li><code>DirEntry::path</code></li><li><code>std::fs::create_dir</code></li><li><code>std::fs::remove_dir</code></li><li><code>std::fs::read_link</code></li><li><code>std::fs::FileType</code></li><li><code>FileType::is_symlink</code></li><li><code>File::set_modified</code></li><li><code>File::metadata</code></li><li><code>Permissions::readonly</code></li><li><code>Permissions::set_readonly</code></li><li><code>PermissionsExt::mode</code></li><li><code>std::os::unix::fs::symlink</code></li><li><code>MetadataExt::nlink</code></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+std: everything in `std::fs` and the `std::os::unix::fs` extension traits. There is no filesystem API in core or alloc.
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/fs/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/fs/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+fs::soft_link (deprecated); fs::read_dir on Windows-only flags; File::set_times (shown only by set_modified); OpenOptionsExt::custom_flags/mode (platform specific; mode shown via set_permissions). Course: none. Beyond `io_files_paths` (basics), `file_locking_atomic_replace` (flock/rename internals) and `file_disk_io_patterns`.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Read a whole text file</td><td><code>fs::read_to_string(p); bytes: fs::read(p)</code></td></tr><tr><td>Write a whole file (not crash-safe)</td><td><code>fs::write(p, bytes)</code></td></tr><tr><td>Replace a file crash-safely</td><td><code>temp in SAME dir + sync_all + rename + fsync parent dir</code></td></tr><tr><td>Append a line</td><td><code>OpenOptions::new().create(true).append(true).open(p)</code></td></tr><tr><td>Create only if absent (lockfile, unique)</td><td><code>create_new(true) (atomic; AlreadyExists on conflict)</code></td></tr><tr><td>Mkdir -p</td><td><code>create_dir_all (idempotent)</code></td></tr><tr><td>List a directory deterministically</td><td><code>read_dir -&gt; collect names -&gt; sort()</code></td></tr><tr><td>Size / type / mtime</td><td><code>metadata(p); do not follow links: symlink_metadata(p)</code></td></tr><tr><td>Truncate / preallocate</td><td><code>File::set_len</code></td></tr><tr><td>Make durable</td><td><code>sync_all (data+metadata) / sync_data</code></td></tr><tr><td>Does it exist</td><td><code>fs::exists(p)? (errors are reported, unlike Path::exists)</code></td></tr><tr><td>Exclusive access between processes</td><td><code>File::lock / try_lock (since 1.89)</code></td></tr><tr><td>Share one open file between threads</td><td><code>File::try_clone (shares the cursor!)</code></td></tr><tr><td>Delete a tree</td><td><code>remove_dir_all Design: every section creates its own TempDir (pid + counter, RAII cleanup). Unix-only bits are behind cfg(unix).</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/fs/struct.OpenOptions.html>  and  <https://doc.rust-lang.org/std/fs/struct.File.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/fs/index.html"
+url = "https://doc.rust-lang.org/std/fs/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/fs/struct.OpenOptions.html"
+url = "https://doc.rust-lang.org/std/fs/struct.OpenOptions.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/fs/struct.File.html"
+url = "https://doc.rust-lang.org/std/fs/struct.File.html"

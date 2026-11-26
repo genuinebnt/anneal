@@ -1,0 +1,19 @@
+title = "Control flow"
+module = "Compilers and languages"
+module_order = 12
+chapter = "A tree-walking interpreter"
+chapter_order = 2
+order = 580
+kind = "guide"
+lede = "Book ch. 9 · Official tests: if/ while/ for/ logical_operator/"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<div class="cb-g-tt"><table><thead><tr><th>Kind</th><th>Input</th><th>Expected</th></tr></thead><tbody><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>if (true) print 1; else print 2;</code></td><td><code>1</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>if (true) if (false) print 1; else print 2;</code></td><td><code>2</code>: <code>else</code> binds to the nearest <code>if</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>print nil or "x";</code></td><td><code>x</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>print 0 and 1;</code></td><td><code>1</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>print false and 1;</code></td><td><code>false</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>var i = 0; while (i &lt; 3) { print i; i = i + 1; }</code></td><td><code>0</code>, <code>1</code>, <code>2</code> on separate lines</td></tr><tr><td><span class="cb-g-pill cb-g-ast">ast</span></td><td><code>a or b and c</code></td><td><code>(or a (and b c))</code></td></tr><tr><td><span class="cb-g-pill cb-g-ast">ast</span></td><td><code>for (var i = 0; i &lt; 2; i = i + 1) print i;</code></td><td><code>({ (var i 0) (while (&lt; i 2) ({ (print i) (= i (+ i 1)) })))</code></td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>if true print 1;</code></td><td><code>[line 1] Error at 'true': Expect '(' after 'if'.</code></td></tr></tbody></table></div>
+
+<p>Make <code>Logical</code> a separate variant instead of another <code>BinOp</code>. It returns an operand instead of a bool, and it doesn't evaluate the right side when it doesn't have to. Keeping it separate means the <code>Binary</code> arm can't accidentally evaluate both sides.</p>
+
+<p>Desugar <code>for</code> into <code>while</code> in the parser. rustc does something similar: it rewrites <code>for</code> into <code>loop</code> plus <code>match</code> on <code>Iterator::next</code> when it lowers the AST to HIR. The S-expression test above checks the desugared shape.</p>
+"""

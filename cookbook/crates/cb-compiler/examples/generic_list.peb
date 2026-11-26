@@ -1,0 +1,12 @@
+enum List<T> { Nil, Cons(T, List<T>) }
+fn length<T>(l: List<T>) -> int {
+    match l { List::Nil => 0, List::Cons(_, rest) => 1 + length(rest) }
+}
+fn sum(l: List<int>) -> int {
+    match l { List::Nil => 0, List::Cons(h, t) => h + sum(t) }
+}
+fn main() {
+    let l = List::Cons(1, List::Cons(2, List::Cons(3, List::Nil)));
+    println(to_str(length(l)));
+    println(to_str(sum(l)));
+}

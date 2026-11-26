@@ -1,0 +1,8 @@
+// Naive recursion: call overhead and integer arithmetic.
+fn fib(n: int) -> int {
+    if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn main() {
+    println(to_str(fib(30)));
+}

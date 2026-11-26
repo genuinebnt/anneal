@@ -1,0 +1,80 @@
+title = "Hash functions from scratch"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Hashing and probabilistic structures"
+chapter_order = 1
+order = 161
+kind = "recipe"
+lede = "hash functions from scratch (FNV-1a, Fx, fmix64, a wyhash-style mixer) and how to MEASURE their quality."
+level = "intermediate"
+code = ["examples/data_structures/hash_functions.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>choosing/validating a hasher for HashMap</li><li>sharding</li><li>sketches</li><li>bloom filters</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+four small `std::hash::Hasher`s plugged into `HashMap` through `BuildHasherDefault`, plus a deliberately bad one (sum of bytes).
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+"looks random" is not a property you can eyeball; hash tables, bloom filters and partitioners all silently degrade on a biased hash.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+three measurements.
+
+1. Avalanche: flip **one** input bit; a good 64-bit hash flips about 32 of 64 output bits (we assert 28..36 for the mixers that should pass). Plain FNV-1a and Fx only push entropy **upward** (multiplication carries go to higher bits), so low output bits barely react; that is why hashbrown-style tables pair them with a finalizer or use the top bits.
+
+   `fmix64` (MurmurHash3's finalizer) fixes exactly this.
+2. Bucket uniformity: chi-square over 1024 buckets (low 10 bits). Perfectly random gives about 1023 +- 45.
+3. Collisions of the full 64-bit value on 200k keys (expected: 0). Finally a HashDoS demo: keys crafted to share a weak hash make a std map quadratic; std's randomly keyed SipHash (`RandomState`) is immune.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+```text
+| kind              | examples            | goal                                  | use when                                          |
+```
+
+&#124;-------------------&#124;---------------------&#124;---------------------------------------&#124;---------------------------------------------------&#124;
+
+```text
+| non-cryptographic | FNV, Fx, xxHash, wyhash | speed + good spread                | trusted keys, internal tables, sharding, sketches |
+| keyed PRF (SipHash)| SipHash-1-3 (std)  | speed + resists chosen-key flooding   | keys an attacker can choose (HTTP params, JSON)   |
+| cryptographic     | SHA-256, BLAKE3     | preimage/collision resistance         | integrity, signatures, content addressing         |
+```
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>HashMap/HashSet hasher selection (fast_hashing)</li><li>consistent hashing and sharding (consistent_hashing, hash_partitioning)</li><li>bloom/cuckoo filters (bloom_filter, cuckoo_hashing)</li><li>content-defined chunking</li><li>deduplication fingerprints</li><li>HashDoS hardening of servers that build maps from request data</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://nnethercote.github.io/perf-book/hashing.html> and <https://github.com/aappleby/smhasher> and <https://github.com/aappleby/smhasher/wiki/MurmurHash3>
+"""
+
+[[sources]]
+title = "nnethercote.github.io/perf-book/hashing.html"
+url = "https://nnethercote.github.io/perf-book/hashing.html"
+
+[[sources]]
+title = "github.com/aappleby/smhasher"
+url = "https://github.com/aappleby/smhasher"
+
+[[sources]]
+title = "github.com/aappleby/smhasher/wiki/MurmurHash3"
+url = "https://github.com/aappleby/smhasher/wiki/MurmurHash3"

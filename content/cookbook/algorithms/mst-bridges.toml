@@ -1,0 +1,58 @@
+title = "Minimum spanning tree"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Graph algorithms"
+chapter_order = 4
+order = 193
+kind = "recipe"
+lede = "minimum spanning tree (Prim, Kruskal) and bridges / articulation points via iterative low-link DFS."
+level = "advanced"
+code = ["examples/algorithms/mst_bridges.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>network design and reliability</li><li>single-linkage clustering</li><li>finding single points of failure</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+MST: the cheapest set of edges connecting every node. Prim grows one tree from a start node, always taking the cheapest edge leaving it (binary heap, lazy deletion). Kruskal sorts all edges and adds each one that joins two different components (union-find).
+
+Different tie-breaks may give different trees but **always** the same total weight, which is what the test asserts. **Bridges**: an edge whose removal disconnects its component. **Articulation points**: the same for vertices.
+
+One DFS records `tin[v]` (discovery time) and `low[v]` (earliest tin reachable from v's subtree using at most one back edge). Tree edge v->c is a bridge iff `low[c] > tin[v]`; v is an articulation point iff some child has `low[c] >= tin[v]` (v non-root), or v is a root with 2+ DFS children.
+
+The DFS is **iterative** (explicit stack): a 200k-node path would overflow the call stack recursively. The parent is skipped by **edge ID**, not by vertex, so parallel edges are handled (two parallel edges are not bridges). 2-edge-connected components = what remains after deleting all bridges.
+
+A brute-force oracle (delete each edge/vertex, recount components) cross-checks everything on small random graphs.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>network reliability (which links/routers are single points of failure)</li><li>cable / pipe / circuit layout (MST = least wiring)</li><li>single-linkage clustering (build the MST, cut the k-1 heaviest edges)</li><li>approximate TSP (2x MST bound)</li><li>road-network resilience analysis</li><li>finding critical dependencies in service graphs</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://cp-algorithms.com/graph/mst_kruskal.html" target="_blank" rel="noreferrer">https://cp-algorithms.com/graph/mst_kruskal.html</a></li><li><a href="https://cp-algorithms.com/graph/mst_prim.html" target="_blank" rel="noreferrer">https://cp-algorithms.com/graph/mst_prim.html</a></li><li><a href="https://cp-algorithms.com/graph/bridge-searching.html" target="_blank" rel="noreferrer">https://cp-algorithms.com/graph/bridge-searching.html</a> and <a href="https://cp-algorithms.com/graph/cutpoints.html" target="_blank" rel="noreferrer">https://cp-algorithms.com/graph/cutpoints.html</a></li></ul>
+"""
+
+[[sources]]
+title = "cp-algorithms.com/graph/mst_kruskal.html"
+url = "https://cp-algorithms.com/graph/mst_kruskal.html"
+
+[[sources]]
+title = "cp-algorithms.com/graph/mst_prim.html"
+url = "https://cp-algorithms.com/graph/mst_prim.html"
+
+[[sources]]
+title = "cp-algorithms.com/graph/bridge-searching.html"
+url = "https://cp-algorithms.com/graph/bridge-searching.html"
+
+[[sources]]
+title = "cp-algorithms.com/graph/cutpoints.html"
+url = "https://cp-algorithms.com/graph/cutpoints.html"

@@ -1,0 +1,408 @@
+title = "Full-text search"
+module = "Databases"
+module_order = 8
+chapter = "Building complete engines"
+chapter_order = 9
+order = 452
+kind = "guide"
+lede = "Tokenizing, inverted indexes with positions, immutable segments with refresh and merge · BM25 · boolean and phrase queries · WAND top-k · 100 000 documents"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Full-text search is an index from words to documents.</strong> A <em>tokenizer</em> turns text into terms (here: lower-cased runs of letters and digits). The <em>inverted index</em> maps each term to its <em>posting list</em>: the documents containing it, each with the term's frequency and its positions in the document. A query becomes operations on posting lists: intersection for AND, union for OR, subtraction for NOT, and adjacency of positions for a phrase.</li> <li><strong>Ranking is a statistical model.</strong> BM25 scores a document for a term as <code>idf × tf·(k1+1) / (tf + k1·(1−b+b·len/avglen))</code>: rare terms count more (<code>idf</code>), more occurrences count more but with saturation (<code>k1</code>), and long documents are discounted (<code>b</code>). A query's score is the sum over its terms. The statistics are global: the number of documents, their average length, and each term's document frequency.</li> <li><strong>Segments make the index updatable.</strong> Posting lists are compressed by delta-coding document ids and positions, which makes them expensive to modify. So the index is a set of <em>immutable segments</em>: new documents go to a buffer and become a segment at <em>refresh</em> (near-real-time search); a delete marks the document in its segment and the mark is honoured at query time; <em>merge</em> combines segments into one and drops the marked documents. Lucene, Elasticsearch, Tantivy and Postgres' GIN pending list work this way.</li> <li><strong>Top-k without scoring everything.</strong> Most queries want the ten best documents out of millions of matches. <em>WAND</em> (weak AND) keeps one cursor per query term, each with an upper bound on what that term can contribute, and skips to the first document where the bounds of the cursors that can reach it add up to more than the score of the k-th best result so far. Documents that cannot enter the top-k are never scored. The answer is the same as scoring everything; the work is not.</li> <li><strong>Positions pay for phrases.</strong> "raft log" must match documents where <code>log</code> follows <code>raft</code>. Storing positions multiplies the index size but makes phrase and proximity queries exact; without them an engine can only approximate with term pairs (bigrams).</li> <li><strong>A search index is a secondary structure over a primary store.</strong> Here a document is an external id (a row or document key from the other models) plus text; hits return ids. Keeping the index consistent with its source is the same problem as keeping a vector index consistent (<a href="/cookbook/p/the-vector-store">M12</a>): index in the same transaction, or accept a bounded delay and say so.</li> </ul>
+"""
+
+[[sections]]
+heading = "The pieces"
+body = """
+<ul> <li><strong><code>Segment</code></strong>: per document its external id, length and a deleted flag; per term a sorted list of <code>(doc, tf, positions)</code>. <code>encoded_bytes</code> is the size of the delta-coded form; <code>raw_bytes</code> the size with fixed-width fields.</li> <li><strong><code>Index</code></strong>: <code>add</code> (replaces any earlier document with that id), <code>delete</code>, <code>refresh</code>, <code>merge</code>, <code>merge_all</code>, <code>search(query, k, mode)</code>.</li> <li><strong><code>Query</code></strong>: <code>should</code> (scored alternatives; a plain disjunction if nothing else is given), <code>must</code> (all required), <code>must_not</code>, and <code>phrase</code> (adjacent in order).</li> <li><strong>Modes</strong>: <code>Exhaustive</code> scores every document that has any query term; <code>Wand</code> prunes. Queries with <code>must</code> or <code>phrase</code> terms first intersect the required lists, then score the survivors.</li> </ul>
+
+:::deeper Reference: tokenizer, segments with positions, refresh and merge, BM25 with global statistics, boolean and phrase evaluation, cursor-based exhaustive and WAND retrieval
+```rust title="src/multimodel/fts.rs"
+//! Full-text search: a tokenizer, an inverted index with term frequencies and positions built as immutable segments (new documents are
+//! buffered and made searchable by `refresh`, segments are combined by `merge`, deletes are marks dropped at merge), BM25 ranking,
+//! boolean and phrase queries, and top-k retrieval by exhaustive document-at-a-time scoring or by WAND, which skips documents whose
+//! best possible score cannot reach the current k-th best.
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BinaryHeap, HashMap};
+
+pub fn tokenize(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(|w| w.to_lowercase()).collect()
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Posting {
+    pub doc: u32,
+    pub tf: u32,
+    pub pos: Vec<u32>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Segment {
+    pub ext: Vec<u64>,
+    pub doc_len: Vec<u32>,
+    pub deleted: Vec<bool>,
+    pub postings: BTreeMap<String, Vec<Posting>>,
+}
+impl Segment {
+    pub fn build(docs: &[(u64, Vec<String>)]) -> Segment {
+        let mut s = Segment::default();
+        for (i, (ext, toks)) in docs.iter().enumerate() {
+            s.ext.push(*ext);
+            s.doc_len.push(toks.len() as u32);
+            s.deleted.push(false);
+            let mut per: BTreeMap<&str, Vec<u32>> = BTreeMap::new();
+            for (p, t) in toks.iter().enumerate() {
+                per.entry(t.as_str()).or_default().push(p as u32);
+            }
+            for (t, pos) in per {
+                s.postings.entry(t.to_string()).or_default().push(Posting { doc: i as u32, tf: pos.len() as u32, pos });
+            }
+        }
+        s
+    }
+    pub fn live(&self) -> usize {
+        self.deleted.iter().filter(|d| !**d).count()
+    }
+    /// Bytes of the postings with delta-coded document ids and positions in LEB128, plus the terms: what a segment file would hold.
+    pub fn encoded_bytes(&self) -> usize {
+        fn vb(mut v: u32) -> usize {
+            let mut n = 1;
+            while v >= 128 {
+                v >>= 7;
+                n += 1;
+            }
+            n
+        }
+        let mut total = 0;
+        for (t, ps) in &self.postings {
+            total += t.len() + 1 + vb(ps.len() as u32);
+            let mut last = 0;
+            for p in ps {
+                total += vb(p.doc - last) + vb(p.tf);
+                last = p.doc;
+                let mut lp = 0;
+                for &x in &p.pos {
+                    total += vb(x - lp);
+                    lp = x;
+                }
+            }
+        }
+        total + self.doc_len.len() * 3
+    }
+    pub fn raw_bytes(&self) -> usize {
+        self.postings.iter().map(|(t, ps)| t.len() + ps.iter().map(|p| 8 + 4 * p.pos.len()).sum::<usize>()).sum()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Query {
+    /// Scored alternatives (a disjunction when there are no `must` terms).
+    pub should: Vec<String>,
+    /// Every one of these must occur.
+    pub must: Vec<String>,
+    /// None of these may occur.
+    pub must_not: Vec<String>,
+    /// These terms must occur next to each other, in this order.
+    pub phrase: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Mode {
+    Exhaustive,
+    Wand,
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct SearchStats {
+    pub docs_scored: u64,
+    pub postings_advanced: u64,
+}
+
+const K1: f64 = 1.2;
+const B: f64 = 0.75;
+
+/// A candidate result: higher score first, ties by smaller external id.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Hit(f64, u64);
+impl Eq for Hit {}
+impl Ord for Hit {
+    fn cmp(&self, o: &Self) -> Ordering {
+        // a "smaller" hit is a worse one, so that a BinaryHeap<Reverse<..>>-style min-heap pops the worst
+        self.0.total_cmp(&o.0).then(o.1.cmp(&self.1))
+    }
+}
+impl PartialOrd for Hit {
+    fn partial_cmp(&self, o: &Self) -> Option<Ordering> {
+        Some(self.cmp(o))
+    }
+}
+
+/// Keep the `k` best hits in a min-heap (the root is the worst kept hit).
+fn push_hit(heap: &mut BinaryHeap<std::cmp::Reverse<Hit>>, k: usize, h: Hit) {
+    if heap.len() < k {
+        heap.push(std::cmp::Reverse(h));
+    } else if h > heap.peek().unwrap().0 {
+        heap.pop();
+        heap.push(std::cmp::Reverse(h));
+    }
+}
+
+pub struct Index {
+    pub segments: Vec<Segment>,
+    buffer: Vec<(u64, Vec<String>)>,
+}
+
+struct GlobalStats {
+    n: f64,
+    avg_len: f64,
+    df: HashMap<String, f64>,
+}
+
+impl Index {
+    pub fn new() -> Index {
+        Index { segments: vec![], buffer: vec![] }
+    }
+    pub fn add(&mut self, ext: u64, text: &str) {
+        self.delete(ext);
+        self.buffer.push((ext, tokenize(text)));
+    }
+    /// Remove a document (if present) from the buffer and mark it deleted in every segment.
+    pub fn delete(&mut self, ext: u64) -> bool {
+        let mut found = false;
+        self.buffer.retain(|(e, _)| { let keep = *e != ext; found |= !keep; keep });
+        for s in &mut self.segments {
+            for (i, e) in s.ext.iter().enumerate() {
+                if *e == ext && !s.deleted[i] {
+                    s.deleted[i] = true;
+                    found = true;
+                }
+            }
+        }
+        found
+    }
+    /// Make buffered documents searchable by turning them into a new segment.
+    pub fn refresh(&mut self) {
+        if !self.buffer.is_empty() {
+            let docs = std::mem::take(&mut self.buffer);
+            self.segments.push(Segment::build(&docs));
+        }
+    }
+    pub fn live_docs(&self) -> usize {
+        self.segments.iter().map(|s| s.live()).sum()
+    }
+    /// Combine the given segments into one, dropping deleted documents.
+    pub fn merge(&mut self, which: &[usize]) {
+        let mut docs: Vec<(u64, Vec<String>)> = vec![];
+        for &si in which {
+            let s = &self.segments[si];
+            let mut toks: Vec<Vec<String>> = (0..s.ext.len()).map(|i| vec![String::new(); s.doc_len[i] as usize]).collect();
+            for (t, ps) in &s.postings {
+                for p in ps {
+                    for &x in &p.pos {
+                        toks[p.doc as usize][x as usize] = t.clone();
+                    }
+                }
+            }
+            for (i, tk) in toks.into_iter().enumerate() {
+                if !s.deleted[i] {
+                    docs.push((s.ext[i], tk));
+                }
+            }
+        }
+        let mut keep: Vec<Segment> = self.segments.iter().enumerate().filter(|(i, _)| !which.contains(i)).map(|(_, s)| s.clone()).collect();
+        if !docs.is_empty() {
+            keep.push(Segment::build(&docs));
+        }
+        self.segments = keep;
+    }
+    pub fn merge_all(&mut self) {
+        let all: Vec<usize> = (0..self.segments.len()).collect();
+        self.merge(&all);
+    }
+
+    fn stats(&self, terms: &[String]) -> GlobalStats {
+        let mut n = 0.0;
+        let mut total = 0.0;
+        let mut df: HashMap<String, f64> = terms.iter().map(|t| (t.clone(), 0.0)).collect();
+        for s in &self.segments {
+            for i in 0..s.ext.len() {
+                if !s.deleted[i] {
+                    n += 1.0;
+                    total += s.doc_len[i] as f64;
+                }
+            }
+            for t in terms {
+                if let Some(ps) = s.postings.get(t) {
+                    *df.get_mut(t).unwrap() += ps.iter().filter(|p| !s.deleted[p.doc as usize]).count() as f64;
+                }
+            }
+        }
+        GlobalStats { n, avg_len: if n > 0.0 { total / n } else { 1.0 }, df }
+    }
+    fn idf(g: &GlobalStats, t: &str) -> f64 {
+        let df = g.df[t];
+        (1.0 + (g.n - df + 0.5) / (df + 0.5)).ln()
+    }
+    fn term_score(idf: f64, tf: u32, dl: u32, avg: f64) -> f64 {
+        let tf = tf as f64;
+        idf * tf * (K1 + 1.0) / (tf + K1 * (1.0 - B + B * dl as f64 / avg))
+    }
+
+    /// Top `k` documents for the query, best first, with the number of documents scored and postings advanced.
+    pub fn search(&self, q: &Query, k: usize, mode: Mode) -> (Vec<(u64, f64)>, SearchStats) {
+        let mut terms: Vec<String> = q.should.iter().chain(&q.must).chain(&q.phrase).cloned().collect();
+        terms.sort();
+        terms.dedup();
+        let g = self.stats(&terms);
+        let mut st = SearchStats::default();
+        let mut heap: BinaryHeap<std::cmp::Reverse<Hit>> = BinaryHeap::new();
+        for s in &self.segments {
+            self.search_segment(s, q, k, mode, &g, &mut heap, &mut st);
+        }
+        let mut out: Vec<Hit> = heap.into_iter().map(|r| r.0).collect();
+        out.sort_by(|a, b| b.cmp(a));
+        (out.into_iter().map(|h| (h.1, h.0)).collect(), st)
+    }
+
+    fn search_segment(&self, s: &Segment, q: &Query, k: usize, mode: Mode, g: &GlobalStats, heap: &mut BinaryHeap<std::cmp::Reverse<Hit>>, st: &mut SearchStats) {
+        let empty: Vec<Posting> = vec![];
+        let list = |t: &String| s.postings.get(t).unwrap_or(&empty);
+        let mut distinct: Vec<&String> = q.should.iter().chain(&q.must).chain(&q.phrase).collect();
+        distinct.sort();
+        distinct.dedup();
+        let scored: Vec<(&String, f64)> = distinct.into_iter().map(|t| (t, Self::idf(g, t))).collect();
+        let excluded: std::collections::HashSet<u32> = q.must_not.iter().flat_map(|t| list(t).iter().map(|p| p.doc)).collect();
+        let constrained = !q.must.is_empty() || !q.phrase.is_empty();
+        if !constrained {
+            // a plain disjunction: the same cursor walk, with pruning on (WAND) or off (score every document that has any term)
+            return self.wand(s, q, k, g, heap, st, &excluded, mode == Mode::Wand);
+        }
+        // candidates: documents satisfying all the constraints, or the union of the optional terms
+        let mut cands: Vec<u32> = if constrained {
+            let required: Vec<&String> = q.must.iter().chain(&q.phrase).collect();
+            let mut cur: Vec<u32> = list(required[0]).iter().map(|p| p.doc).collect();
+            for t in &required[1..] {
+                let other: Vec<u32> = list(t).iter().map(|p| p.doc).collect();
+                cur = cur.into_iter().filter(|d| other.binary_search(d).is_ok()).collect();
+            }
+            cur
+        } else {
+            let mut u: Vec<u32> = q.should.iter().flat_map(|t| list(t).iter().map(|p| p.doc)).collect();
+            u.sort_unstable();
+            u.dedup();
+            u
+        };
+        cands.retain(|d| !s.deleted[*d as usize] && !excluded.contains(d));
+        if !q.phrase.is_empty() {
+            cands.retain(|&d| {
+                let lists: Vec<&Vec<u32>> = q.phrase.iter().map(|t| &list(t)[list(t).binary_search_by_key(&d, |p| p.doc).unwrap()].pos).collect();
+                lists[0].iter().any(|&p0| lists.iter().enumerate().all(|(i, l)| l.binary_search(&(p0 + i as u32)).is_ok()))
+            });
+        }
+        for d in cands {
+            st.docs_scored += 1;
+            let mut score = 0.0;
+            for (t, idf) in &scored {
+                st.postings_advanced += 1;
+                if let Ok(i) = list(t).binary_search_by_key(&d, |p| p.doc) {
+                    score += Self::term_score(*idf, list(t)[i].tf, s.doc_len[d as usize], g.avg_len);
+                }
+            }
+            push_hit(heap, k, Hit(score, s.ext[d as usize]));
+        }
+    }
+
+    /// WAND over the optional terms: each term's score is at most `idf * (k1 + 1)`; a document is only scored if the terms that can still
+    /// reach it add up to more than the k-th best score so far.
+    fn wand(&self, s: &Segment, q: &Query, k: usize, g: &GlobalStats, heap: &mut BinaryHeap<std::cmp::Reverse<Hit>>, st: &mut SearchStats, excluded: &std::collections::HashSet<u32>, prune: bool) {
+        struct Cur<'a> {
+            ps: &'a [Posting],
+            at: usize,
+            idf: f64,
+            ub: f64,
+        }
+        let mut terms: Vec<String> = q.should.clone();
+        terms.sort();
+        terms.dedup();
+        let mut cur: Vec<Cur> = terms.iter().filter_map(|t| s.postings.get(t).map(|ps| { let idf = Self::idf(g, t); Cur { ps, at: 0, idf, ub: idf * (K1 + 1.0) } })).collect();
+        loop {
+            cur.retain(|c| c.at < c.ps.len());
+            if cur.is_empty() {
+                return;
+            }
+            cur.sort_by_key(|c| c.ps[c.at].doc);
+            let theta = if !prune || heap.len() < k { f64::NEG_INFINITY } else { heap.peek().unwrap().0 .0 };
+            // the pivot is the first position where the bounds of the cursors up to it can beat the threshold
+            let mut acc = 0.0;
+            let mut pivot = None;
+            for (i, c) in cur.iter().enumerate() {
+                acc += c.ub;
+                if acc >= theta {
+                    pivot = Some(i);
+                    break;
+                }
+            }
+            let Some(p) = pivot else { return };
+            let pd = cur[p].ps[cur[p].at].doc;
+            if cur[0].ps[cur[0].at].doc == pd {
+                // all cursors up to the pivot sit on the pivot document: score it
+                let mut score = 0.0;
+                for c in cur.iter_mut() {
+                    if c.ps[c.at].doc == pd {
+                        score += Self::term_score(c.idf, c.ps[c.at].tf, s.doc_len[pd as usize], g.avg_len);
+                        c.at += 1;
+                        st.postings_advanced += 1;
+                    }
+                }
+                st.docs_scored += 1;
+                if !s.deleted[pd as usize] && !excluded.contains(&pd) {
+                    push_hit(heap, k, Hit(score, s.ext[pd as usize]));
+                }
+            } else {
+                // skip the first cursor forward to the pivot document
+                let c = &mut cur[0];
+                let from = c.at;
+                c.at += c.ps[c.at..].partition_point(|p| p.doc < pd);
+                st.postings_advanced += (c.at - from) as u64;
+            }
+        }
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>100 000 documents of 30 to 70 words drawn from a Zipf distribution over 20 000 terms (a few terms in most documents, most terms in few), indexed as five segments of 20 000.</p>
+
+```text title="index size, WAND against exhaustive scoring on two workloads, and a conjunction"
+100000 documents of 30 to 70 words over a Zipf vocabulary of 20000: indexed in 2.6 s into 5 segments
+postings: 54.3 MB as fixed-width fields, 15.9 MB delta-coded with variable-length integers (3.4x smaller); 19981 distinct terms
+top-10 of 2-5 term disjunctions                    us/query      docs scored
+terms drawn from the Zipf distribution                  677            54604   exhaustive [5 segments]
+                                                        486             4810   WAND: 1.4x faster, 11.4x fewer documents scored
+terms among the 40 most frequent                       1285            66864   exhaustive [5 segments]
+                                                       2020            10627   WAND: 0.6x faster, 6.3x fewer documents scored
+after merging into one segment (1.3 s): Zipf queries take 640 us exhaustive and 503 us with WAND; results unchanged
+conjunction of the two most frequent terms: 82673 hits scored, top score 0.37
+```
+
+<ul> <li><strong>Delta coding and variable-length integers make the postings 3.4× smaller</strong> (54 MB to 16 MB), because document ids in a sorted list differ by small amounts and positions by smaller ones. Real engines add block-wise bit-packing (<code>PForDelta</code>, SIMD-BP128) for another factor of about two and fast decoding.</li> <li><strong>WAND scores 6 to 11 times fewer documents and was not always faster.</strong> On queries with Zipf-distributed terms (mostly rare terms, short lists) it scored 4 810 documents against 54 604 and ran 1.4× faster; on queries made of the most frequent terms (long lists) it scored 10 627 against 66 864 but ran 0.6× as fast, because every step re-sorts the cursors, scans for the pivot and skips by binary search. The saving only turns into time when the bookkeeping per document is cheaper than scoring one: production engines use block-max WAND (per-block score bounds so whole blocks are skipped), keep cursors ordered incrementally, and decode compressed blocks lazily.</li> <li><strong>Merging into one segment changed no result</strong> and saved little here (exhaustive 677 → 640 µs): five segments cost five sets of cursors per query. Segment counts matter more with hundreds of small segments, which is why merges are scheduled continuously.</li> <li><strong>A conjunction of the two most frequent terms</strong> has 82 673 matching documents and must score all of them; its top score is only 0.37 because both terms are everywhere (idf near zero). Frequent terms are cheap to match and nearly worthless to rank, the reason search engines treat them as stop words or give them tiny weights.</li> </ul>
+
+<aside data-call="note"><b>Pruning bounds must be strict, and ties are part of the answer</b><p>WAND is correct only if each term's upper bound is at least any score it can contribute. <code>idf × (k1+1)</code> is such a bound because <code>tf/(tf + k1·…)</code> is always below 1. A mutant that shrinks the bound to <code>idf × 1</code> returns wrong top-k lists and the reference comparison catches it. Ties are subtler: results are ordered by score and, among equal scores, by the smaller external id, so that two runs and two modes agree. The random corpus almost never produces exact ties; a directed test with identical documents spread over two segments does, and a mutant that orders ties by the larger id is killed by it. A mutant that prunes documents <em>equal</em> to the threshold (<code>&gt;</code> instead of <code>≥</code>) is equivalent here: the bound is strictly above any real score, so a tie is never pruned.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Segments as <code>BTreeMap&lt;String, Vec&lt;Posting&gt;&gt;</code></strong>: sorted terms (useful for prefix queries) and posting vectors sorted by document id, so intersection and <code>partition_point</code> skipping work on slices.</li> <li><strong>A <code>Hit(score, id)</code> with a hand-written <code>Ord</code></strong> (<code>total_cmp</code> on the score, then the reversed id) makes "greater" mean "better". The top-k is a <code>BinaryHeap&lt;Reverse&lt;Hit&gt;&gt;</code>, whose root is the worst kept hit and is replaced when something better arrives.</li> <li><strong>The same walk with pruning on or off</strong>: <code>wand(.., prune: bool)</code> is both the exhaustive disjunction (a threshold of −∞ makes every first cursor the pivot) and WAND, so the comparison measures pruning rather than two different loops. Independent checking comes from a separate naive reference.</li> <li><strong>Global statistics across segments</strong> (<code>N</code>, average length, document frequency) are computed over live documents only; per-segment statistics would make scores depend on how documents are partitioned into segments.</li> <li><strong><code>encoded_bytes</code> computes what a file would hold</strong> without writing one: variable-length integer sizes of document deltas, frequencies and position deltas.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Reference comparison (80 seeds × 40 steps × 3 queries, both modes)</strong>: random adds (with replacement), deletes, refreshes, partial and full merges over a 16-word Zipf vocabulary; a naive implementation computes BM25 from the live documents from scratch and the evaluated query forms (optional terms, required terms, excluded terms, a phrase of two or three words, each combined) must give identical top-k lists, up to floating-point rounding of the sums. 9 600 queries; the live document count always equals the model's.</li> <li><strong>WAND exactness</strong>: on 3 000 documents and 200 random disjunctions the pruned and exhaustive top-10 lists are identical and WAND scores fewer documents.</li> <li><strong>Directed</strong>: deleted documents never appear and merging changes no result; replacing a document removes its old terms; a phrase must be adjacent and in order; the tokenizer lower-cases and splits on every non-alphanumeric character; identical documents spread over two segments come back ordered by id for every <code>k</code> and both modes.</li> <li><strong>Mutants run against these tests</strong>: WAND thresholds too high or bounds too small; BM25 without length normalization or with a wrong idf; deleted documents counted in the statistics or returned; excluded terms ignored; phrases matching in any order; conjunctions as disjunctions; merges keeping deleted documents; a replaced document keeping its old text; ties ordered the other way; case-sensitive tokens. <strong>All 13 non-equivalent mutants were killed</strong>; the tie-pruning mutant is equivalent for the reason above.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Lucene</strong> (and with it <strong>Elasticsearch, OpenSearch, Solr</strong>) builds immutable segments with block-compressed postings (FOR/PFOR), skip data, and per-block maximum impacts for block-max WAND; a <em>refresh</em> makes buffered documents searchable (every second by default), a tiered <em>merge policy</em> combines segments in the background, deletes are bitsets applied at query time. <strong>Tantivy</strong> (Rust) and <strong>Bleve</strong> (Go) follow the design.</li> <li><strong>PostgreSQL</strong> offers <code>tsvector</code> with GIN indexes (a pending list absorbs updates and is merged into the main structure) and ranking by <code>ts_rank</code>; <strong>SQLite FTS5</strong> stores an inverted index in its own tables with segment merges and BM25; <strong>MySQL</strong> has InnoDB full-text indexes; <strong>ClickHouse</strong> and <strong>Vespa</strong> add inverted indexes and hybrid ranking.</li> <li><strong>Hybrid search</strong> combines BM25 with vector similarity (<a href="/cookbook/p/the-vector-store">M12</a>), by reciprocal-rank fusion or learned weights; the planner of <a href="/cookbook/p/one-planner-for-many-models">M18</a> is where the two retrieval paths and the relational filters are combined.</li> <li><strong>Analyzers</strong> (stemming, stop words, synonyms, n-grams, language-specific tokenization, ICU for CJK and Thai) decide what a "term" is, and the same analyzer must run at index and query time.</li> <li><strong>Learned sparse retrieval</strong> (SPLADE) and dense retrieval replace or extend BM25, but still use inverted indexes with WAND-like top-k over learned term weights.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Tokenization is the model.</strong> Query and index must use the same analyzer; changing it means reindexing. Case, accents, apostrophes, numbers and hyphenated words are decisions, not details.</li> <li><strong>Statistics drift with segments</strong>: document frequencies including deleted documents (what Lucene does until a merge) change scores slightly; exact scores need exact live counts, as computed here at a cost.</li> <li><strong>Phrase queries over long position lists are slow</strong>; engines add bigram or shingle indexes for the common phrases.</li> <li><strong>Deletes are not free</strong>: a segment full of deleted documents is scanned and scored (then discarded) until a merge removes them; a high delete rate needs aggressive merging.</li> <li><strong>Merging is I/O heavy</strong> and competes with queries and ingest; throttle it, and avoid merging the largest segments often.</li> <li><strong>Top-k is only exact if pruning bounds are valid</strong>: approximate bounds (for speed) change the answer; label such modes as approximate.</li> <li><strong>Short queries of frequent terms are the hard case</strong> for ranking and for speed alike.</li> </ul></aside>
+"""

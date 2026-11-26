@@ -1,0 +1,201 @@
+title = "Parallel execution"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 358
+kind = "guide"
+lede = "parallel vs distributed · process models · inter- vs intra-query parallelism · exchange operators · morsels · parallel aggregation and hash join · I/O parallelism"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Why parallelism</strong>: data bigger than one machine, higher performance, redundancy. <strong>Parallel DBMS</strong>: nodes close together, fast, cheap, reliable interconnect. <strong>Distributed DBMS</strong>: nodes far apart, slow and unreliable links, failures can't be ignored. Either way the application sees one logical database, and a query must return the same result.</li> <li><strong>Process models</strong>: <strong>process per worker</strong> (each worker an OS process; the OS schedules; shared memory for global structures; a crash is contained; PostgreSQL, Oracle, DB2 originally, because <code>fork()</code> predated portable threads). <strong>Thread per worker</strong> (one process, many threads; the DBMS controls scheduling; cheaper context switches; a bad thread can kill the process; nearly every system of the last 20 years). <strong>Embedded</strong> (the DBMS runs in the application's address space and the app schedules; DuckDB, SQLite, RocksDB).</li> <li><strong>Scheduling</strong> decisions: how many tasks and cores, which cores, where to put output. The DBMS knows more than the OS, so it decides.</li> <li><strong>Inter-query parallelism</strong>: different queries run concurrently: more throughput, lower latency. Read-only queries need little coordination; concurrent writers need concurrency control (L17+).</li> <li><strong>Intra-query parallelism</strong> (one query on many workers) as a producer/consumer pipeline: <strong>intra-operator (horizontal)</strong>: the same operator on disjoint data fragments, combined by an <strong>exchange</strong>; <strong>inter-operator (vertical, pipelined)</strong>: operators overlap, passing data between workers without materializing (stream processing); <strong>bushy</strong>: different subtrees of the plan run at once, joined by exchanges.</li> <li><strong>Exchange operator kinds</strong>: <strong>gather</strong> (many streams → one, the most common), <strong>distribute</strong> (one → many), <strong>repartition</strong> (many → many, re-hashing on a different key).</li> <li><strong>I/O parallelism</strong>: threads don't help if the disk is the bottleneck. <strong>Multi-disk</strong> (RAID/appliances; transparent to the DBMS) or <strong>database partitioning</strong> (disjoint subsets on different devices; logical table partitioning that's transparent to the application; the log is usually shared).</li> </ul>
+"""
+
+[[sections]]
+heading = "What a parallel plan looks like"
+body = """
+<figure class="cb-g-fig"><svg viewBox="0 0 820 190" role="img" aria-label="Exchange operators"> <g font-size="12"> <text x="10" y="16" class="cb-g-mut">SELECT k, SUM(v) FROM t WHERE p GROUP BY k  ·  intra-operator parallelism with two exchanges</text> <rect x="330" y="26" width="160" height="30" rx="4" class="cb-g-boxa"></rect><text x="342" y="46">Gather (single stream)</text> <rect x="150" y="76" width="130" height="30" rx="4" class="cb-g-box"></rect><text x="160" y="96">Merge agg · part 0</text> <rect x="340" y="76" width="130" height="30" rx="4" class="cb-g-box"></rect><text x="350" y="96">Merge agg · part 1</text> <rect x="530" y="76" width="130" height="30" rx="4" class="cb-g-box"></rect><text x="540" y="96">Merge agg · part 2</text> <rect x="150" y="124" width="510" height="26" rx="4" class="cb-g-boxa"></rect><text x="320" y="142">Repartition by hash(k): all-to-all</text> <rect x="60" y="164" width="170" height="22" rx="3" class="cb-g-box"></rect><text x="70" y="180">worker 1: scan→filter→local agg</text> <rect x="320" y="164" width="170" height="22" rx="3" class="cb-g-box"></rect><text x="330" y="180">worker 2: scan→filter→local agg</text> <rect x="580" y="164" width="170" height="22" rx="3" class="cb-g-box"></rect><text x="590" y="180">worker 3: scan→filter→local agg</text> </g></svg></figure>
+"""
+
+[[sections]]
+heading = "Morsel-driven scheduling"
+body = """
+<p>Static partitioning (thread <em>i</em> gets pages <em>i</em>, <em>i + n</em>, …) fails when some pages are slower (cache misses, skew, a noisy neighbour): the whole query waits for the slowest thread. The <strong>morsel-driven</strong> model (Leis et al., SIGMOD 2014; HyPer, DuckDB, Velox) cuts the input into small <strong>morsels</strong> (~10–100k rows) and lets every worker take the next one from a <strong>shared atomic counter</strong>. Fast workers simply take more morsels, so load balances itself and the scheduler is one <code>fetch_add</code>. Each worker owns <strong>thread-local state</strong> (a partial aggregate, a local hash table) that nobody else touches, and the pipeline's <strong>sink</strong> combines the local states when the input is exhausted.</p>
+
+:::deeper Reference: morsel-driven scan, gather exchange, three parallel GROUP BY strategies, radix-partitioned hash join
+```rust title="src/execution/parallel.rs"
+//! L14: intra-query parallelism over in-memory columns. Work is cut into morsels that threads pull
+//! from a shared atomic counter (dynamic load balancing); results meet at an exchange.
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use std::sync::mpsc;
+use std::sync::Mutex;
+
+pub const MORSEL: usize = 16 * 1024;
+
+/// Run `f(range)` over [0, n) in morsels on `threads` threads; each thread owns a local state `S`
+/// (created by `init`) so workers never share mutable data. Returns every thread's final state.
+pub fn morsel_driven<S: Send>(n: usize, threads: usize, init: impl Fn() -> S + Sync, f: impl Fn(&mut S, std::ops::Range<usize>) + Sync) -> Vec<S> {
+    let next = AtomicUsize::new(0);
+    std::thread::scope(|s| {
+        let hs: Vec<_> = (0..threads).map(|_| s.spawn(|| {
+            let mut st = init();
+            loop {
+                let start = next.fetch_add(MORSEL, Relaxed);          // claim the next morsel: the whole scheduler
+                if start >= n { break; }
+                f(&mut st, start..(start + MORSEL).min(n));
+            }
+            st
+        })).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    })
+}
+
+/// SELECT SUM(v) WHERE k % 3 = 0, in parallel: a partial sum per worker, combined at the end.
+pub fn filter_sum(k: &[i64], v: &[i64], threads: usize) -> i64 {
+    morsel_driven(k.len(), threads, || 0i64, |acc, r| for i in r { if k[i] % 3 == 0 { *acc += v[i]; } }).into_iter().sum()
+}
+
+/// Gather exchange: workers push batches into a channel; one consumer drains it.
+pub fn gather_filter(k: &[i64], v: &[i64], threads: usize) -> Vec<i64> {
+    let (tx, rx) = mpsc::channel::<Vec<i64>>();
+    let next = AtomicUsize::new(0);
+    std::thread::scope(|s| {
+        for _ in 0..threads {
+            let tx = tx.clone();
+            let next = &next;
+            s.spawn(move || loop {
+                let start = next.fetch_add(MORSEL, Relaxed);
+                if start >= k.len() { break; }
+                let batch: Vec<i64> = (start..(start + MORSEL).min(k.len())).filter(|&i| k[i] % 3 == 0).map(|i| v[i]).collect();
+                if !batch.is_empty() { tx.send(batch).unwrap(); }
+            });
+        }
+        drop(tx);                                                      // the consumer ends when every producer drops its sender
+        rx.into_iter().flatten().collect()
+    })
+}
+
+// ---------------- parallel GROUP BY k: SUM(v) -----------------------------------------------------
+/// Strategy 1: one shared hash table behind a mutex. Correct, and the scalability counter-example.
+pub fn group_shared(k: &[i64], v: &[i64], threads: usize) -> HashMap<i64, i64> {
+    let table: Mutex<HashMap<i64, i64>> = Mutex::new(HashMap::new());
+    morsel_driven(k.len(), threads, || (), |_, r| for i in r { *table.lock().unwrap().entry(k[i]).or_default() += v[i]; });
+    table.into_inner().unwrap()
+}
+
+/// Strategy 2: thread-local tables, then a sequential merge (the "combine" step is serial).
+pub fn group_local_merge(k: &[i64], v: &[i64], threads: usize) -> HashMap<i64, i64> {
+    let locals = morsel_driven(k.len(), threads, HashMap::<i64, i64>::new, |m, r| for i in r { *m.entry(k[i]).or_default() += v[i]; });
+    let mut out: HashMap<i64, i64> = HashMap::new();
+    for l in locals { for (g, s) in l { *out.entry(g).or_default() += s; } }
+    out
+}
+
+/// Strategy 3: thread-local tables partitioned by hash; then the merge itself runs in parallel,
+/// one worker per partition (a repartition exchange between the two phases).
+pub fn group_partitioned(k: &[i64], v: &[i64], threads: usize) -> HashMap<i64, i64> {
+    let parts = threads.next_power_of_two().max(1);
+    let part_of = |g: i64| (crate::hashing::hash64(g as u64, 5) as usize) & (parts - 1);
+    let locals = morsel_driven(k.len(), threads, || vec![HashMap::<i64, i64>::new(); parts], |m, r| for i in r { *m[part_of(k[i])].entry(k[i]).or_default() += v[i]; });
+    let merged: Vec<HashMap<i64, i64>> = std::thread::scope(|s| {
+        let locals = &locals;
+        let hs: Vec<_> = (0..parts).map(|p| s.spawn(move || {
+            let mut out: HashMap<i64, i64> = HashMap::new();
+            for l in locals { for (g, sum) in &l[p] { *out.entry(*g).or_default() += sum; } }
+            out
+        })).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    merged.into_iter().flatten().collect()
+}
+
+// ---------------- parallel radix-partitioned hash join ----------------------------------------------
+/// Count of matching pairs in R ⋈ S on key. Phase 1: each worker partitions its slice of both inputs by
+/// the low bits of the key hash. Phase 2: one partition per task, build then probe, each partition's
+/// table small enough to stay cache-resident.
+pub fn radix_join_count(r: &[u64], s: &[u64], threads: usize, bits: u32) -> u64 {
+    let p = 1usize << bits;
+    let part = |x: u64| (crate::hashing::hash64(x, 9) as usize) & (p - 1);
+    let split = |data: &[u64]| -> Vec<Vec<Vec<u64>>> {
+        let chunk = data.len().div_ceil(threads).max(1);
+        std::thread::scope(|sc| {
+            let hs: Vec<_> = data.chunks(chunk).map(|c| sc.spawn(move || {
+                let mut out = vec![Vec::with_capacity(c.len() / p + 1); p];
+                for &x in c { out[part(x)].push(x); }
+                out
+            })).collect();
+            hs.into_iter().map(|h| h.join().unwrap()).collect()
+        })
+    };
+    let (rp, sp) = (split(r), split(s));
+    let next = AtomicUsize::new(0);
+    std::thread::scope(|sc| {
+        let hs: Vec<_> = (0..threads).map(|_| sc.spawn(|| {
+            let mut total = 0u64;
+            loop {
+                let i = next.fetch_add(1, Relaxed);
+                if i >= p { break; }
+                let mut ht: HashMap<u64, u32> = HashMap::new();
+                for w in &rp { for &x in &w[i] { *ht.entry(x).or_default() += 1; } }
+                for w in &sp { for &y in &w[i] { total += ht.get(&y).copied().unwrap_or(0) as u64; } }
+            }
+            total
+        })).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).sum()
+    })
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured scaling"
+body = """
+```text title="20M rows · Apple M4 Pro (12 cores) · wall time at 1 / 2 / 4 / 8 / 12 threads · verify/tests/parallel.rs"
+scan + filter + SUM                       57.8 ms   23.5   12.8    6.7    5.3     ← 11× : embarrassingly parallel
+GROUP BY 1k groups, shared table + mutex  280.6 ms  447    923    2000   1700    ← 6× SLOWER with 8 threads
+  … thread-local tables, serial merge     232.0 ms  116     62     32     26     ← 9×
+  … local tables, parallel merge          284.0 ms  144     72     40     32     ← 9× (partitioning costs a little here)
+GROUP BY 5M groups, local + serial merge  1.3 s     1.1 s  970   1100   1100    ← the serial merge is the bottleneck: 1×
+  … local tables, parallel merge          1.5 s     945    594    435    358     ← 4×
+hash join 4M ⋈ 20M (radix, 256 parts)     321.6 ms  165     95     52     44     ← 7×
+```
+
+<p>Three lessons, each visible in a row:</p>
+
+<ol> <li><strong>Shared mutable state kills scaling.</strong> The mutex version gets <em>slower</em> with more threads: every update bounces the same cache line, and the lock serializes everything. The fix is structural (<strong>thread-local state + a combine step</strong>), not a faster lock.</li> <li><strong>The combine step can become the new bottleneck</strong> (Amdahl's law). With 1k groups the merge costs nothing. With 5M groups a serial merge of twelve 5M-entry tables dominates, so the merge itself has to be parallelized: <strong>repartition</strong> the partial results by hash (an exchange) and let each worker merge one partition.</li> <li><strong>Partitioning pays when state is big.</strong> The radix join splits both inputs into 256 partitions so that each build table is small and stays in cache. That's why it scales, and why the single-threaded join is also faster than one global table for large inputs.</li> </ol>
+
+<aside data-call="rust"><b>Scoped threads make this borrow-checker-friendly</b><p><code>std::thread::scope</code> lets worker closures <strong>borrow</strong> <code>k</code>, <code>v</code> and the shared atomic counter from the caller's stack, with no <code>Arc</code> and no <code>'static</code> bound: the scope guarantees every thread is joined before it returns. Each worker returns its local state from the thread's closure (<code>h.join().unwrap()</code>), so there is no shared <code>Mutex&lt;Vec&lt;…&gt;&gt;</code> to collect results. This single API removes most of the reasons people reach for <code>Arc&lt;Mutex&lt;_&gt;&gt;</code> in parallel query code. For production, use a pool (<code>rayon</code>, or your own with a work queue) instead of spawning threads per query. Reference: <a href="https://doc.rust-lang.org/std/thread/fn.scope.html" target="_blank" rel="noreferrer"><code>std::thread::scope</code></a>.</p></aside>
+
+<aside data-call="rust"><b>Channels as exchange operators</b><p><code>gather_filter</code> is a gather exchange in 12 lines: workers hold cloned <code>Sender</code>s, the consumer iterates the <code>Receiver</code>, and the channel closes when the last sender drops. That's the whole protocol. For a <em>repartition</em> exchange you need one channel per consumer, plus a hash on the key at the producer. For backpressure (so a fast producer can't buffer unbounded batches), use <code>mpsc::sync_channel(capacity)</code> or <code>crossbeam</code>'s bounded channels.</p></aside>
+
+<aside data-call="performance"><b>What production engines add</b><ul> <li><strong>NUMA awareness</strong>: allocate each morsel's data on the socket of the worker that will process it (HyPer/Umbra).</li> <li><strong>Work stealing for pipeline breakers</strong>: when a hash table build finishes, the probe phase starts immediately with the same workers, and the scheduler prioritizes morsels by query to avoid starvation.</li> <li><strong>Adaptive parallelism</strong>: don't parallelize a query that processes 1,000 rows. Thread startup costs ~50 µs; the optimizer decides the degree of parallelism from cardinality estimates (PostgreSQL's <code>max_parallel_workers_per_gather</code> and per-table cost thresholds).</li> <li><strong>Parallel I/O</strong>: more workers than cores to keep the SSD's queue deep (<a href="/cookbook/p/disk-scheduler">P1.2</a>).</li> </ul></aside>
+
+<aside data-call="production"><b>Where each model shows up</b><ul> <li><strong>PostgreSQL</strong>: process per connection; parallel query via <em>Gather</em> / <em>Gather Merge</em> nodes and background worker processes with a dynamic shared-memory segment; parallel hash join with a shared hash table.</li> <li><strong>DuckDB, Umbra, Velox</strong>: thread pools, morsel-driven pipelines, a thread-local sink state combined at the end.</li> <li><strong>SQL Server, Oracle</strong>: exchange operators (<em>Parallelism</em> / <em>Table Queue</em>), degree of parallelism (DOP) as a user-visible knob.</li> <li><strong>Distributed engines</strong> (Spark, Presto/Trino, Snowflake): the same exchange model with network shuffles instead of memory channels (<a href="/cookbook/p/distributed-databases-i">L23</a>).</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Morsel-Driven Parallelism: A NUMA-Aware Query Evaluation Framework for the Many-Core Age"
+url = "https://db.in.tum.de/~leis/papers/morsels.pdf"
+
+[[sources]]
+title = "Encapsulation of Parallelism in the Volcano Query Processing System"
+url = "https://dl.acm.org/doi/10.1145/93605.98720"
+
+[[sources]]
+title = "Main-Memory Hash Joins on Multi-Core CPUs: Tuning to the Underlying Hardware"
+url = "https://www.systems.ethz.ch/sites/default/files/file/PublicationsFiles/icde13.pdf"
+
+[[sources]]
+title = "scheduling"
+url = "https://www.youtube.com/watch?v=VZjzKVfU46k"
+
+[[sources]]
+title = "parallel hash joins"
+url = "https://www.youtube.com/watch?v=S40K8iGa8Ek"

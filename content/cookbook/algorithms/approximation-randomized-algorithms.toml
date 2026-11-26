@@ -1,0 +1,66 @@
+title = "Approximation randomized algorithms"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Sorting, strings, bits and theory"
+chapter_order = 6
+order = 224
+kind = "recipe"
+lede = "approximation algorithms with proven ratios, and randomised algorithms with measured error probabilities."
+level = "advanced"
+code = ["examples/algorithms/approximation_randomized_algorithms.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>NP-hard optimisation where "within a guaranteed factor, fast" beats "optimal, maybe never" (routing, scheduling, covering, clustering)</li><li>primality testing</li><li>randomised verification</li><li>global min-cut</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>cryptographic prime generation (Miller-Rabin)</li><li>verifying big matrix products or pipelines cheaply (Freivalds-style fingerprints)</li><li>list scheduling and LPT in job schedulers</li><li>greedy set cover for test-suite minimisation and monitor placement</li><li>Gonzalez k-center for picking cluster seeds and replica sites</li><li>quickselect in std's select_nth_unstable</li><li>network reliability via Karger min-cut. Course: CMU 15-451/651 (approximation and randomised algorithms lectures)</li><li>Vazirani</li><li>"Approximation Algorithms"</li><li>Motwani and Raghavan</li><li>"Randomized Algorithms"</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Part** 1, approximation: an algorithm is a rho-approximation if on **every** instance it returns a feasible answer within a factor rho of the optimum. Each routine below is paired with a brute-force optimum on tiny instances, and the ratio is **asserted** on 1500 random instances (never timings):
+
+- vertex cover, maximal matching: take both ends of each greedily picked disjoint edge; size &lt;= 2&#42;**opt** because **opt** needs one endpoint per matched edge.
+- set cover, greedy (take the set covering the most uncovered elements): &lt;= H(d)&#42;**opt**, d = largest set size, H = harmonic.
+- metric TSP: MST doubling (shortcut a preorder walk) &lt;= 2&#42;**opt** since MST &lt;= **opt**; Christofides-lite (MST + minimum matching on odd-degree vertices, brute-forced since the instances are tiny, Euler tour, shortcut) &lt;= 1.5&#42;**opt**.
+- max-cut: a uniformly random side per vertex cuts m/2 edges in expectation; local search (flip a vertex while it improves) ends with every vertex having at least half its edges cut, hence cut >= m/2 >= OPT/2.
+- k-center, Gonzalez farthest-first traversal: radius &lt;= 2&#42;**opt** (a pigeonhole argument on k+1 chosen points).
+- knapsack FPTAS: scale values by K = eps&#42;vmax/n, exact DP on the scaled values, result >= (1-eps)&#42;**opt**, running time polynomial in n and 1/eps (this is the textbook way to trade accuracy for time on a weakly NP-hard problem).
+- load balancing, LPT (sort jobs descending, assign to least loaded machine): &lt;= (4/3 - 1/(3m))&#42;**opt** (Graham 1969). **Part** 2, randomised algorithms (Las Vegas: always right, random time; Monte Carlo: random answer, bounded error):
+- randomised quicksort: expected comparisons exactly 2(n+1)H_n - 4n; the deterministic first-pivot rule degrades to n&#94;2/2 on sorted input, the random rule does not (no input is bad, only unlucky coin flips). Quickselect: expected &#126;3.4n for the median.
+- Karger contraction: a fixed min cut survives with probability >= 2/(n(n-1)); repeating C(n,2) ln n times drives the failure below 1/n. We **measure** the single-run success rate and the amplified failure rate.
+- Miller-Rabin: for an odd composite at most 1/4 of the bases are strong liars; we count the liars exactly for every odd composite below 5000, then compare the deterministic 12-base test with a sieve.
+- Freivalds: checking A&#42;B == C in O(n&#94;2) per round with a random 0/1 vector; a wrong C is missed with probability &lt;= 1/2 per round (we measure exactly 1/2 for a single-entry error) and 2&#94;-k after k rounds.
+
+   Referenced only (not implemented here): skip lists and treaps (random priorities give expected O(log n) height), and MinHash (the collision probability of min-of-hash equals Jaccard similarity), see the hashing/probabilistic recipes for sketches.
+
+**Why** exact optima on tiny instances: a ratio can only be "asserted" against the true **opt**; for n &lt;= 10 brute force is cheap and the proofs' worst cases (factor close to rho) show up often enough on random small inputs to catch an off-by-one in the algorithm.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://en.wikipedia.org/wiki/Approximation_algorithm" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Approximation_algorithm</a></li><li><a href="https://en.wikipedia.org/wiki/Karger%27s_algorithm" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Karger%27s_algorithm</a></li><li><a href="https://en.wikipedia.org/wiki/Miller%E2%80%93Rabin_primality_test" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Miller%E2%80%93Rabin_primality_test</a></li><li><a href="https://en.wikipedia.org/wiki/Freivalds%27_algorithm" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Freivalds%27_algorithm</a></li><li>Vazirani "Approximation Algorithms" and Motwani/Raghavan "Randomized Algorithms" (books, cited by title only)</li></ul>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Approximation_algorithm"
+url = "https://en.wikipedia.org/wiki/Approximation_algorithm"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Karger%27s_algorithm"
+url = "https://en.wikipedia.org/wiki/Karger%27s_algorithm"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Miller%E2%80%93Rabin_primality_test"
+url = "https://en.wikipedia.org/wiki/Miller%E2%80%93Rabin_primality_test"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Freivalds%27_algorithm"
+url = "https://en.wikipedia.org/wiki/Freivalds%27_algorithm"

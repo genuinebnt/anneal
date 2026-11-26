@@ -1,0 +1,16 @@
+enum Option<T> { None, Some(T) }
+fn first<T>(xs: [T]) -> Option<T> {
+    if len(xs) == 0 { Option::None } else { Option::Some(xs[0]) }
+}
+fn unwrap_or(o: Option<int>, d: int) -> int {
+    match o { Option::Some(v) => v, Option::None => d }
+}
+fn main() {
+    println(to_str(unwrap_or(first([7, 8]), -1)));
+    let empty: [int] = [];
+    println(to_str(unwrap_or(first(empty), -1)));
+    match first(["a", "b"]) {
+        Option::Some(s) => println("str " + s),
+        Option::None => println("none"),
+    }
+}

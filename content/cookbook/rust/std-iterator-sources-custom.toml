@@ -1,0 +1,78 @@
+title = "Iterator sources custom (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "Iterators and collections"
+chapter_order = 3
+order = 77
+kind = "recipe"
+lede = "iterator sources, writing your own iterators, and iterator-returning APIs."
+level = "advanced"
+code = ["examples/std_tour/std_iterator_sources_custom.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>library APIs that return sequences</li><li>parsers</li><li>pagination</li><li>tree walks</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>paginated API clients</li><li>tokenisers</li><li>tree/graph traversals without recursion</li><li>extension traits (itertools-style)</li><li>merging sorted streams</li><li>sequences (fib/collatz)</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>std::iter::once</code></li><li><code>std::iter::once_with</code></li><li><code>std::iter::repeat</code></li><li><code>std::iter::repeat_n</code></li><li><code>std::iter::repeat_with</code></li><li><code>std::iter::empty</code></li><li><code>std::iter::from_fn</code></li><li><code>std::iter::successors</code></li><li><code>std::iter::zip</code></li><li><code>Iterator::next</code></li><li><code>Iterator::size_hint</code></li><li><code>DoubleEndedIterator::next_back</code></li><li><code>ExactSizeIterator::len</code></li><li><code>std::iter::FusedIterator</code></li><li><code>IntoIterator::into_iter</code></li><li><code>Iterator::by_ref</code></li><li><code>Iterator::peekable</code></li><li><code>Iterator::collect</code></li><li><code>std::ops::Range</code></li><li><code>std::ops::RangeInclusive</code></li><li><code>Box&lt;dyn Iterator&gt;</code></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+core: the source functions and iterator traits are in `core::iter`, ranges in `core::ops`. `Box<dyn Iterator>` needs alloc.
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/iter/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/iter/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+std::iter::Step (unstable to implement), TrustedLen (unstable), Iterator::advance_by / array_chunks / intersperse (nightly).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Cheat sheet (I want to ... -> use ...): one value as an iterator               -> `iter::once(x)`; lazily computed: `once_with(|| ..)` n copies / forever                     -> `repeat_n(x, n)` / `repeat(x)`; fresh value each time: `repeat_with(f)`
+
+```text
+nothing                                -> `iter::empty()`
+```
+
+stateful generator, closure style      -> `from_fn(|| ..)`;
+
+Next from previous: `successors(first, |prev| ..)` a range of numbers/chars               -> `0..n`, `a..=b`, `'a'..='z'`, `.rev()`, `.step_by(k)` make my struct iterable                -> `impl Iterator for It` (+ `IntoIterator` for T, &amp;T, &amp;mut T) iterate a field of &amp;self               -> `fn iter(&self) -> impl Iterator<Item=&T> + '_` return different iterators             -> `Box<dyn Iterator<Item = T> + '_>` (or `Either`) add `.my_method()` to every iterator   -> extension trait with a blanket `impl<I: Iterator> Ext for I {}` hand out &amp;mut windows                  -> **not** possible with Iterator (lending problem): use indices or `chunks_mut` tell collect how many items            -> implement `size_hint` honestly (or `ExactSizeIterator`)
+
+```text
+promise None stays None                -> `impl FusedIterator`
+```
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>std::iter docs <a href="https://doc.rust-lang.org/std/iter/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/iter/index.html</a></li><li>Rust API Guidelines (C-ITER, C-ITER-TY) <a href="https://rust-lang.github.io/api-guidelines/naming.html" target="_blank" rel="noreferrer">https://rust-lang.github.io/api-guidelines/naming.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/iter/index.html"
+url = "https://doc.rust-lang.org/std/iter/index.html"
+
+[[sources]]
+title = "rust-lang.github.io/api-guidelines/naming.html"
+url = "https://rust-lang.github.io/api-guidelines/naming.html"

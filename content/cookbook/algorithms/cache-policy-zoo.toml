@@ -1,0 +1,70 @@
+title = "A cache replacement policy zoo"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Caches, queues, heaps and bit sets"
+chapter_order = 3
+order = 181
+kind = "recipe"
+lede = "FIFO, LRU, LFU, CLOCK, 2Q, ARC, SIEVE, W-TinyLFU-lite and Belady's OPT"
+level = "advanced"
+code = ["examples/data_structures/cache_policy_zoo.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>choosing/evaluating an eviction policy for page caches</li><li>CDN/object caches</li><li>DB buffer pools</li><li>memoization</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+OS page replacement (**clock** variants), database buffer pools (2Q, ARC-like, LRU-K), CDN and object caches (**sieve**, S3-FIFO, TinyLFU), **caveat** (measured, not fully explained): on the abrupt "shifting" trace **sieve** and W-TinyLFU lose to LRU/CLOCK/ARC at large cache sizes (e.g. 65% and 59% vs 90% at c=1024), and LFU collapses (stale frequencies).
+
+Their state scales with the cache size, so they adapt slowly when the whole working set is replaced at once.
+
+This was not cross-checked against a reference implementation (try libCacheSim or caffeine on the same trace): treat the numbers as a property of **these** implementations on **this** trace, and the lesson as "no policy wins every workload". in-process application caches (W-TinyLFU is what the Java library Caffeine uses), and offline "what hit ratio could **any** policy reach" analysis (**opt**).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+What: nine policies behind one `trait Cache { fn access(&mut self, key) -> bool /*hit*/; fn len(&self) }`. Only keys matter (no values), because eviction policy is independent of payload.
+
+Everything is arena based: one `Arena` of nodes (parallel Vecs) with `usize` links and a free list, many intrusive doubly linked `List`s over it, and a `HashMap<key, node index>`. No unsafe, no Rc (see lru_cache for the single-list version).
+
+Why: no policy wins everywhere.
+
+LRU collapses on scans and on loops slightly larger than the cache; LFU never forgets; **clock** approximates LRU cheaply (one bit, no list reordering on a hit); ARC and 2Q resist scans; **sieve** gets scan resistance with a single FIFO queue, a visited bit and a moving hand (hits only set a bit: no lock or reordering, which is why it is attractive for concurrent caches); W-TinyLFU adds **admission**: a candidate only displaces the victim if a count-min sketch says it is more frequent.
+
+**Opt** (Belady: evict the key used farthest in the future, bypass a newcomer that would be used later than everything resident) needs the whole trace and is the unreachable upper bound.
+
+How: seeded traces (Zipf, hot-set + scan pollution, a loop slightly larger than the cache, a shifting working set) are replayed against every policy at three sizes; the table is printed and then **asserted**: **opt** >= all, capacity never exceeded, ARC/SIEVE/2Q beat LRU under scan pollution, LRU &#126;0 on the loop while CLOCK/LFU/OPT are not, and ARC's four invariants from the paper are checked after **every** access.
+
+ARC (Megiddo &amp; Modha): T1 = resident seen once, T2 = resident seen 2+ times, B1/B2 = ghost (key only) lists of what was evicted from T1/T2; a ghost hit in B1 means "recency deserved more room" so target p (the wanted size of T1) grows, a ghost hit in B2 shrinks it.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://www.usenix.org/legacy/events/fast03/tech/full_papers/megiddo/megiddo.pdf" target="_blank" rel="noreferrer">https://www.usenix.org/legacy/events/fast03/tech/full_papers/megiddo/megiddo.pdf</a> (ARC, FAST 2003)</li><li><a href="https://www.usenix.org/system/files/nsdi24-zhang-yazhuo.pdf" target="_blank" rel="noreferrer">https://www.usenix.org/system/files/nsdi24-zhang-yazhuo.pdf</a> (SIEVE, NSDI 2024)</li><li><a href="https://github.com/ben-manes/caffeine" target="_blank" rel="noreferrer">https://github.com/ben-manes/caffeine</a> (production W-TinyLFU)</li><li><a href="https://en.wikipedia.org/wiki/Cache_replacement_policies" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Cache_replacement_policies</a></li><li><a href="https://en.wikipedia.org/wiki/Count%E2%80%93min_sketch" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Count%E2%80%93min_sketch</a></li></ul>
+"""
+
+[[sources]]
+title = "usenix.org/legacy/events/fast03/tech/full_papers/megiddo/megiddo.pdf"
+url = "https://www.usenix.org/legacy/events/fast03/tech/full_papers/megiddo/megiddo.pdf"
+
+[[sources]]
+title = "usenix.org/system/files/nsdi24-zhang-yazhuo.pdf"
+url = "https://www.usenix.org/system/files/nsdi24-zhang-yazhuo.pdf"
+
+[[sources]]
+title = "github.com/ben-manes/caffeine"
+url = "https://github.com/ben-manes/caffeine"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Cache_replacement_policies"
+url = "https://en.wikipedia.org/wiki/Cache_replacement_policies"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Count%E2%80%93min_sketch"
+url = "https://en.wikipedia.org/wiki/Count%E2%80%93min_sketch"

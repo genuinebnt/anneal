@@ -1,0 +1,50 @@
+title = "Sampling"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Hashing and probabilistic structures"
+chapter_order = 1
+order = 167
+kind = "recipe"
+lede = "Reservoir (Algorithm R), weighted (A-Res), shuffles, replacement."
+level = "intermediate"
+code = ["examples/data_structures/sampling.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>sampling logs/traces/metrics</li><li>A/B and test-data selection</li><li>shuffling</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Reservoir** (Algorithm R): keep k items from a stream of **unknown** length in O(k) memory. Fill the first k; for item i (0-based, i >= k) pick j uniformly in 0..=i and, if j &lt; k, overwrite slot j. Induction shows every item seen so far is in the reservoir with probability exactly k/(i+1).
+
+**Weighted** (A-Res, Efraimidis-Spirakis): give item with weight w the key u&#94;(1/w), u &#126; U(0,1), and keep the k largest keys. For k=1 the chance of being chosen is exactly w / sum(w). **Shuffle**: Fisher-Yates swaps position i with a random j in i..n, giving each of the n! orderings probability exactly 1/n!.
+
+The "naive" shuffle picks j from the **whole** range 0..n for each i: that makes n&#94;n equally likely swap sequences, which cannot divide evenly into n! permutations (n&#94;n is not a multiple of n! for n>=3), so some orders are more likely. We count it exactly for n=3.
+
+**With** vs **without** replacement: with = independent draws (duplicates possible, n draws from n items see &#126;63% distinct); without = partial Fisher-Yates (a prefix of a shuffle), never repeats.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>taking a fixed-size uniform sample of a log or event stream</li><li>trace/request sampling</li><li>picking test rows or training mini-batches</li><li>weighted sampling for load balancing or importance sampling</li><li>shuffling playlists / cards / experiment assignments</li><li>bootstrapping (with replacement)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Reservoir_sampling>
+
+<https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Reservoir_sampling"
+url = "https://en.wikipedia.org/wiki/Reservoir_sampling"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle"
+url = "https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle"

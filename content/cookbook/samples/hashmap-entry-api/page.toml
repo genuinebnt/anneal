@@ -1,0 +1,512 @@
+title = "HashMap's Entry API"
+module = "2. Standard library and core"
+chapter = "Iterators and collections"
+order = 4
+kind = "api"
+level = "simple"
+status = "draft"
+lede = "`map.entry(key)` finds the key's place once and hands it to you as `Occupied` or `Vacant`, so you can read, insert, update or remove without looking it up again."
+summary = [
+  "Use `entry` when what you do next depends on whether the key is there, and you may insert.",
+  "Counting is `*map.entry(k).or_insert(0) += 1`; grouping is `map.entry(k).or_default().push(v)`.",
+  "Use `or_insert_with` when building the value costs something, because the argument of `or_insert` is evaluated on every call.",
+  "`entry` takes the key by value, so with `String` keys and borrowed input you build a `String` even on a hit.",
+  "If you only read, or only change keys that already exist, use `get` or `get_mut`.",
+  "A miss makes room for one more item before it returns, even if you then insert nothing.",
+]
+
+[[glance]]
+label = "Defined in"
+value = "`std::collections::hash_map` (`std` only; not in `core` or `alloc`)"
+
+[[glance]]
+label = "Stable since"
+value = "`entry` and `Entry`: Rust 1.0.0. The method list gives the version for each method."
+
+[[glance]]
+label = "Allocates"
+value = "A miss may grow the table. `entry` itself never clones the key, but you must pass an owned one."
+
+[[glance]]
+label = "Ordered map"
+value = "`BTreeMap::entry` (in `alloc`) has the same method names on its `Entry`; there `insert_entry` is stable since 1.92.0."
+
+[[sections]]
+heading = "The short answer"
+body = '''
+```rust title=src/lib.rs
+/// Count: one counter per distinct word.
+pub fn count_words(text: &str) -> HashMap<&str, usize> {
+    let mut counts = HashMap::new();
+    for word in text.split_whitespace() {
+        *counts.entry(word).or_insert(0) += 1;
+    }
+    counts
+}
+```
+
+`counts.entry(word)` returns an `Entry`: an enum that is either `Occupied` (the key is there) or `Vacant` (it is not). Both hold a mutable borrow of the map and remember the result of the search. `or_insert(0)` handles both cases and returns `&mut V`.
+
+`entry` alone inserts nothing. Something has to be called on the `Entry`.
+'''
+
+[[sections]]
+heading = "Common tasks"
+body = '''
+All of these are in the lab and tested there. Counting is shown above.
+
+### Group values by key {#group}
+
+```rust title=src/lib.rs
+let mut groups: HashMap<usize, Vec<&str>> = HashMap::new();
+for &word in words {
+    groups.entry(word.len()).or_default().push(word);
+}
+```
+
+### Keep the best value per key {#best}
+
+```rust title=src/lib.rs
+best.entry(name)
+    .and_modify(|old| *old = (*old).max(score))
+    .or_insert(score);
+```
+
+`and_modify` runs only on a hit. It does not also run on the value that `or_insert` has just added.
+
+### Nested maps {#nested}
+
+```rust title=src/lib.rs
+*by_user.entry(user).or_default().entry(event).or_insert(0) += 1;
+```
+
+### Remove, or branch on both cases {#branch}
+
+Match on the enum when a hit and a miss need different logic. Here a count that reaches zero removes the key.
+
+```rust title=src/lib.rs hl=2,5,11
+match stock.entry(item) {
+    Entry::Occupied(mut slot) => {
+        let left = slot.get().saturating_sub(1);
+        if left == 0 {
+            slot.remove();
+        } else {
+            *slot.get_mut() = left;
+        }
+        Some(left)
+    }
+    Entry::Vacant(_) => None,
+}
+```
+
+Import the enum with `use std::collections::hash_map::Entry;`.
+
+### Build a value that can fail {#fallible}
+
+The fallible methods are unstable, so match. The `?` leaves before anything is inserted.
+
+```rust title=src/lib.rs
+match cache.entry(text) {
+    Entry::Occupied(slot) => Ok(slot.into_mut()),
+    Entry::Vacant(slot) => {
+        let value = slot.key().parse()?;
+        Ok(slot.insert(value))
+    }
+}
+```
+
+### `String` keys with borrowed input {#borrowed-keys}
+
+If most calls are hits, look up with the `&str` first and build the `String` only on a miss.
+
+```rust title=src/lib.rs
+if let Some(n) = counts.get_mut(word) {
+    *n += 1;
+} else {
+    counts.insert(word.to_owned(), 1);
+}
+```
+
+A miss now searches twice. A hit searches once and allocates nothing. The shorter `counts.entry(word.to_owned())` is fine when most keys are new, or when you already own the `String` and can move it in.
+
+### Memoise a recursive function {#memo}
+
+You cannot recurse inside `or_insert_with`, because the entry already borrows the map. Look up, compute, then insert.
+
+```rust title=src/lib.rs
+if let Some(&len) = memo.get(&n) {
+    return len;
+}
+let next = if n.is_multiple_of(2) {
+    n / 2
+} else {
+    3 * n + 1
+};
+let len = 1 + collatz_len(next, memo);
+memo.insert(n, len);
+len
+```
+'''
+
+[[sections]]
+heading = "Pitfalls"
+body = '''
+### Work that happens on every call {#every-call}
+
+> [!WARNING]
+> **`or_insert(expensive())` always calls `expensive()`.** It is an ordinary argument, evaluated before the method runs, hit or miss. Write `or_insert_with(expensive)` or `or_insert_with(|| ...)`. Tested here: three calls evaluate the `or_insert` argument three times and run the closure once.
+
+> [!WARNING]
+> **`entry(word.to_owned())` allocates on every call.** `get` accepts any borrowed form of the key (`&str` for `String` keys). `entry` takes `K` itself. Tested here with a counting allocator: 100 hits cost 100 allocations through `entry`, and none through `get_mut`.
+
+### The closure cannot use the map {#closure}
+
+This does not compile (E0502):
+
+```rust compile_fail=E0502 title=closure-reads-map.rs
+use std::collections::HashMap;
+pub fn f(m: &mut HashMap<u32, usize>) { m.entry(1).or_insert_with(|| m.len()); }
+```
+
+Read what you need into a local before you call `entry`: `let n = m.len();`.
+
+### Returning early from `get_mut` is rejected {#early-return}
+
+You might try to avoid both the extra allocation and the extra look-up like this. Rustc 1.98.1 rejects it with E0499, although the `return` means the two borrows never overlap when it runs.
+
+```rust compile_fail=E0499 title=early-return.rs
+use std::collections::HashMap;
+pub fn counter<'a>(m: &'a mut HashMap<String, u32>, k: &str) -> &'a mut u32 {
+    if let Some(v) = m.get_mut(k) {
+        return v;
+    }
+    m.entry(k.to_owned()).or_insert(0)
+}
+```
+
+The NLL RFC calls this shape "problem case #3". The version below compiles. It pays for one or two extra searches and allocates only on a miss.
+
+```rust title=src/lib.rs
+if !counts.contains_key(word) {
+    counts.insert(word.to_owned(), 0);
+}
+counts
+    .get_mut(word)
+    .expect("present: inserted above if it was missing")
+```
+
+### A miss can grow the map even if you insert nothing {#reserve}
+
+When the key is absent, `entry` reserves room for one item before it returns the `VacantEntry`. On a full table that means growing, even if you then drop the entry. In the lab, a map created with `with_capacity(3)` and filled up goes from capacity 3 to 7 after `let _ = map.entry(new_key);`. The test asserts only that capacity grows; 7 is what this toolchain printed.
+
+This matters if you use `entry` just to check for a key while relying on the map not to reallocate. Use `get` or `contains_key` to check.
+
+### The map keeps its old key {#old-key}
+
+On a hit, the key you passed is dropped and the stored key stays, even after `insert_entry`. This only shows when two keys are equal but not identical, such as a case-insensitive key type. Tested here.
+
+### Do not assert that `capacity()` stays the same {#capacity}
+
+The docs promise only that `capacity()` is a lower bound on what fits without reallocating, and removing items can lower it. Which removals do so depends on where keys landed. The default hasher is randomly seeded, so a test that expects an unchanged capacity can pass in one run and fail in the next. An earlier version of the cookbook's HashMap recipe did exactly that. Assert `>=` against what you need, never `==` against an old reading.
+
+The lab forces the effect: every key gets the same hash, 64 go in, 32 come out, and `capacity()` ends below its starting value.
+
+:::deeper Why capacity can drop | hashbrown 0.17.1
+Here `capacity()` is `len` plus the free room left. Removing an item can leave a "deleted" marker that does not give its room back. `clear` and `drain` reset the markers.
+:::
+'''
+
+[[sections]]
+heading = "When not to use entry"
+body = '''
+| Situation | Better | Why |
+|---|---|---|
+| read only | `get` | needs only `&self`, takes a borrowed key, and never reserves space |
+| update existing keys only | `get_mut` | takes a borrowed key; a miss cannot grow the map |
+| overwrite regardless | `insert` | says what you mean, and returns the old value |
+| borrowed key, mostly hits | `get_mut`, then `insert` on a miss | no allocation on a hit |
+| the value needs the rest of the map | `get`, compute, `insert` | an `Entry` holds the only borrow of the map |
+
+Not stable in 1.98.1, outside the `Entry` types: `HashMap::try_insert` (`map_try_insert`), and `HashSet::entry` and `get_or_insert_with` (`hash_set_entry`). The `std` hash map source has no `raw_entry` method.
+
+> [!NOTE]
+> The `hashbrown` crate, which `std`'s map is built on, has `entry_ref`: it takes a borrowed key and makes the owned one only if you insert. `std`'s `HashMap` does not offer it. This comes from reading the hashbrown 0.17.1 source; the lab does not use the crate.
+'''
+
+[[sections]]
+heading = "What it costs"
+body = '''
+The claim often made for `entry` is "one look-up instead of two". The lab checks it without a stopwatch, using a `BuildHasher` that counts how often the map starts a hash. The map has spare room, so nothing is rehashed, and holds one other key, because an empty map can answer a look-up without hashing.
+
+| Operation | Hashes |
+|---|---|
+| `*m.entry(k).or_insert(0) += 1`, miss | 1 |
+| the same, hit | 1 |
+| `contains_key`, then `insert`, then `get_mut` (miss) | 3 |
+| `get_mut`, hit | 1 |
+| `get_mut`, then `insert` (miss) | 2 |
+
+```rust title=tests/costs.rs
+let entry_miss = hashes(|m| *m.entry(2).or_insert(0) += 1);
+let entry_hit = hashes(|m| *m.entry(1).or_insert(0) += 1);
+```
+
+> [!TIP]
+> Clippy's `clippy::map_entry` lint suggests `entry` where it sees `contains_key` followed by `insert` (Clippy 1.98 flagged the lab's three-call test). With a borrowed `String` key, weigh the suggestion against the allocation described under Pitfalls.
+
+> [!NOTE]
+> This counts hashes, not time. No timing was measured for this page. How much a saved hash matters depends on the key, the hasher and the hit rate, so measure your own workload before you restructure code for it. On a hit, `get_mut` and `entry` both hash once; with `String` keys the difference is the allocation.
+'''
+
+[[sections]]
+heading = "How it works"
+body = '''
+> [!RUST]
+> **Return the result of a check as a value.** `entry` does not return a `bool`. It returns an enum whose variants hold what the search found, plus the `&mut` borrow of the map. Only `VacantEntry` has `into_key`, only `OccupiedEntry` has `remove`, and while either one is alive no other code can change the map, so the answer cannot go stale. The methods that consume `self` stop you using a slot after it is gone. You can copy this shape whenever "check, then act" must not be split.
+
+:::deeper A miss through or_insert, and why entry reserves room | from hashbrown's rustc_entry.rs
+1. `entry` hashes the key and searches the table.
+2. The key is absent, so `entry` reserves room for one item. This is where the table may grow.
+3. The `VacantEntry` keeps the hash, the owned key and the borrow of the table. Nothing is inserted yet.
+4. `or_insert` writes with the saved hash: no second hash and no growth check.
+
+Growing a table means rehashing its items, which needs the map's hasher. `std`'s `Entry` type has no type parameter for the hasher, so `VacantEntry::insert` cannot do the growing. A comment in the source says that reserving in `insert` would be better, but adding that parameter to `Entry` would be a breaking change. This is an implementation detail, not a documented promise.
+:::
+'''
+
+[[methods]]
+type = "HashMap"
+name = "entry"
+signature = "pub fn entry(&mut self, key: K) -> Entry<'_, K, V>"
+since = "1.0.0"
+use_when = "what happens next depends on whether the key is there, and you may insert"
+common = true
+anchor = "The short answer"
+
+[[methods]]
+type = "Entry"
+name = "or_insert"
+signature = "pub fn or_insert(self, default: V) -> &'a mut V"
+since = "1.0.0"
+use_when = "insert a cheap value if absent; the argument is evaluated even on a hit"
+common = true
+anchor = "every-call"
+
+[[methods]]
+type = "Entry"
+name = "or_insert_with"
+signature = "pub fn or_insert_with<F: FnOnce() -> V>(self, default: F) -> &'a mut V"
+since = "1.0.0"
+use_when = "insert if absent, and build the value only then"
+common = true
+anchor = "every-call"
+
+[[methods]]
+type = "Entry"
+name = "or_default"
+signature = "pub fn or_default(self) -> &'a mut V where V: Default"
+since = "1.28.0"
+use_when = "insert `V::default()` if absent, for example an empty `Vec` or a nested map"
+common = true
+anchor = "group"
+
+[[methods]]
+type = "Entry"
+name = "and_modify"
+signature = "pub fn and_modify<F>(self, f: F) -> Self where F: FnOnce(&mut V)"
+since = "1.26.0"
+use_when = "update on a hit, then chain `or_insert` for the miss"
+common = true
+anchor = "best"
+
+[[methods]]
+type = "Entry"
+name = "or_insert_with_key"
+signature = "pub fn or_insert_with_key<F: FnOnce(&K) -> V>(self, default: F) -> &'a mut V"
+since = "1.50.0"
+use_when = "build the value from the key without cloning the key"
+
+[[methods]]
+type = "Entry"
+name = "insert_entry"
+signature = "pub fn insert_entry(self, value: V) -> OccupiedEntry<'a, K, V>"
+since = "1.83.0"
+use_when = "set the value whether or not the key exists, and keep a handle on the slot"
+anchor = "old-key"
+
+[[methods]]
+type = "Entry"
+name = "key"
+signature = "pub fn key(&self) -> &K"
+since = "1.10.0"
+use_when = "read the key before deciding"
+
+[[methods]]
+type = "Entry"
+name = "or_try_insert_with"
+signature = "pub fn or_try_insert_with<F: FnOnce() -> Result<V, E>, E>(self, default: F) -> Result<&'a mut V, E>"
+since = "unstable (try_entry)"
+use_when = "building the value can fail; on stable, match instead"
+unstable = true
+anchor = "fallible"
+
+[[methods]]
+type = "Entry"
+name = "or_try_insert_with_key"
+signature = "pub fn or_try_insert_with_key<F: FnOnce(&K) -> Result<V, E>, E>(self, default: F) -> Result<&'a mut V, E>"
+since = "unstable (try_entry)"
+use_when = "building the value from the key can fail; on stable, match instead"
+unstable = true
+anchor = "fallible"
+
+[[methods]]
+type = "OccupiedEntry"
+name = "get"
+signature = "pub fn get(&self) -> &V"
+since = "1.0.0"
+use_when = "read the value"
+common = true
+anchor = "branch"
+
+[[methods]]
+type = "OccupiedEntry"
+name = "get_mut"
+signature = "pub fn get_mut(&mut self) -> &mut V"
+since = "1.0.0"
+use_when = "change the value and keep using the entry; the reference borrows the entry"
+common = true
+anchor = "branch"
+
+[[methods]]
+type = "OccupiedEntry"
+name = "into_mut"
+signature = "pub fn into_mut(self) -> &'a mut V"
+since = "1.0.0"
+use_when = "you need a reference that borrows the map, so it can outlive the entry"
+common = true
+anchor = "fallible"
+
+[[methods]]
+type = "OccupiedEntry"
+name = "insert"
+signature = "pub fn insert(&mut self, value: V) -> V"
+since = "1.0.0"
+use_when = "replace the value and get the OLD one back"
+common = true
+
+[[methods]]
+type = "OccupiedEntry"
+name = "remove"
+signature = "pub fn remove(self) -> V"
+since = "1.0.0"
+use_when = "delete the key and get the value"
+common = true
+anchor = "branch"
+
+[[methods]]
+type = "OccupiedEntry"
+name = "remove_entry"
+signature = "pub fn remove_entry(self) -> (K, V)"
+since = "1.12.0"
+use_when = "delete and get back both the stored key and the value"
+
+[[methods]]
+type = "OccupiedEntry"
+name = "key"
+signature = "pub fn key(&self) -> &K"
+since = "1.10.0"
+use_when = "read the stored key"
+anchor = "old-key"
+
+[[methods]]
+type = "VacantEntry"
+name = "insert"
+signature = "pub fn insert(self, value: V) -> &'a mut V"
+since = "1.0.0"
+use_when = "fill the empty slot and get a reference to the NEW value"
+common = true
+anchor = "fallible"
+
+[[methods]]
+type = "VacantEntry"
+name = "key"
+signature = "pub fn key(&self) -> &K"
+since = "1.10.0"
+use_when = "read the key you passed in, for example to build the value"
+anchor = "fallible"
+
+[[methods]]
+type = "VacantEntry"
+name = "into_key"
+signature = "pub fn into_key(self) -> K"
+since = "1.12.0"
+use_when = "take the key back and insert nothing"
+
+[[methods]]
+type = "VacantEntry"
+name = "insert_entry"
+signature = "pub fn insert_entry(self, value: V) -> OccupiedEntry<'a, K, V>"
+since = "1.83.0"
+use_when = "fill the slot and keep an OccupiedEntry"
+
+[[terms]]
+term = "Entry"
+means = "An enum describing one key's place in a map: `Occupied` or `Vacant`."
+section = "The short answer"
+
+[[terms]]
+term = "lower bound capacity"
+means = "At least this many items fit without reallocating; more may."
+section = "Pitfalls"
+
+[[sources]]
+title = "std docs: hash_map::Entry"
+url = "https://doc.rust-lang.org/1.98.1/std/collections/hash_map/enum.Entry.html"
+kind = "docs"
+note = "Every method of Entry. Read as the doc comments in the local 1.98.1 source, which these pages are generated from."
+read = true
+
+[[sources]]
+title = "std source: collections/hash/map.rs"
+url = "https://github.com/rust-lang/rust/blob/1.98.1/library/std/src/collections/hash/map.rs"
+kind = "code"
+note = "Signatures, stability attributes, the `capacity` doc and the `Entry` method bodies."
+scope = "`entry`, `capacity`, the `Entry` types and their impl blocks, in the local sysroot copy"
+read = true
+
+[[sources]]
+title = "hashbrown 0.17.1: rustc_entry.rs"
+url = "https://github.com/rust-lang/hashbrown/blob/v0.17.1/src/rustc_entry.rs"
+kind = "code"
+note = "What `std`'s `entry` calls: the search, the early `reserve(1)` and `insert_no_grow`."
+scope = "`rustc_entry` and the vacant insert methods, in the copy vendored with the toolchain"
+read = true
+
+[[sources]]
+title = "hashbrown 0.17.1: raw.rs"
+url = "https://github.com/rust-lang/hashbrown/blob/v0.17.1/src/raw.rs"
+kind = "code"
+note = "Why capacity can drop."
+scope = "`capacity`, `erase`, `clear_no_drop`, `reserve` and the drop of `RawDrain`"
+read = true
+
+[[sources]]
+title = "RFC 2094 (non-lexical lifetimes): problem case #3"
+url = "https://rust-lang.github.io/rfcs/2094-nll.html"
+kind = "standard"
+note = "Why returning a reference from one branch keeps the map borrowed. For what compiles today, trust the compiler."
+scope = "problem case #3 only"
+read = true
+
+[[labs]]
+title = "Entry tasks, pitfalls and cost checks"
+after = "What it costs"
+files = ["src/lib.rs", "tests/entry.rs", "tests/costs.rs", "src/main.rs"]
+run = true
+test = true
+
+[verified]
+toolchain = "rustc 1.98.1 (48a229cea 2026-09-01); vendored hashbrown 0.17.1"
+date = "2026-11-26"
+platform = "aarch64-apple-darwin"
+not_checked = "No timing. Capacity and hash-count behaviour were run on aarch64 only; hashbrown's group width differs between targets. The closure, early-return and capacity behaviour is stated for 1.98.1 only. Method signatures were compared with the source by a script, leaving out the allocator parameter and stability attributes. entry_ref and the BTreeMap method list come from reading source and were not run. Stable-since values were read from attributes, not checked on old compilers. Mutation checks in a scratch copy (each made a test fail): keeping zero counts in take_one, using entry in bump, inserting before parsing in parsed, overwriting in record_best, a wrong initial count, an eager or_insert in the laziness test, a present key in the reserve test, no removals in the capacity test, and entry in place of the three-call version in the hash count."

@@ -1,0 +1,64 @@
+title = "Low-level, data-oriented patterns"
+module = "Rust language"
+module_order = 1
+chapter = "Design patterns"
+chapter_order = 5
+order = 41
+kind = "recipe"
+lede = "Arenas, interning, SoA, zero-copy, pools, bitfields, inline storage."
+level = "advanced"
+code = ["examples/patterns/design_patterns_low.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>compilers</li><li>game/ECS code</li><li>parsers</li><li>databases</li><li>network stacks</li><li>anything where allocation count and cache lines matter</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Idea: replace pointer-chasing object graphs with flat arrays and small integers. Benefits: fewer allocations, better cache locality, trivially `Copy` handles, no lifetimes or `Rc<RefCell<..>>` tangles, and the borrow checker stays happy because relationships are **indices**, not references.
+
+Every claim below is asserted (`size_of`, counted allocations), not asserted in prose.
+
+1. arena + typed indices   `IdxVec<I, T>`: a `Vec` you can only index with the right newtype (no mixing node ids and type ids)
+2. string interning        `Symbol(u32)`: O(1) equality/hash, one allocation per distinct string
+3. struct-of-arrays        columns with a row-view accessor (scan one field without dragging the others through cache)
+4. zero-copy view          `Header<'a>` borrows from `&'a [u8]`: parsing allocates nothing
+5. index-linked list       doubly linked list inside a `Vec` with a free list (stable ids, no `unsafe`, no `Rc`)
+6. inline small vector     enum of `[T; N]` inline or heap `Vec`: no allocation until it spills
+7. object pool + RAII      buffers go back to the pool on `Drop`; allocation count stays flat
+8. bitfield packing        several small fields in one `u32` with masks and shifts
+9. `Cow`                   borrow when unchanged, allocate only when modified
+10. tagged-union enum vs `Box<dyn Trait>`   one allocation for N values vs N allocations (plus `#[repr(u8)]` tags)
+11. split borrows by index  two `&mut` into one `Vec` via `split_at_mut` instead of `unsafe` or `RefCell`
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>rustc/rust-analyzer style id-indexed IRs and symbol interners</li><li>ECS and game engines (struct-of-arrays)</li><li>database columnar engines</li><li>zero-copy packet/record parsing</li><li>LRU caches</li><li>buffer pools in servers</li><li><code>smallvec</code>-style inline storage</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://nnethercote.github.io/perf-book/" target="_blank" rel="noreferrer">https://nnethercote.github.io/perf-book/</a></li><li><a href="https://doc.rust-lang.org/std/borrow/enum.Cow.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/borrow/enum.Cow.html</a></li><li><a href="https://docs.rs/smallvec" target="_blank" rel="noreferrer">https://docs.rs/smallvec</a></li><li><a href="https://docs.rs/bumpalo" target="_blank" rel="noreferrer">https://docs.rs/bumpalo</a></li></ul>
+"""
+
+[[sources]]
+title = "nnethercote.github.io/perf-book"
+url = "https://nnethercote.github.io/perf-book/"
+
+[[sources]]
+title = "doc.rust-lang.org/std/borrow/enum.Cow.html"
+url = "https://doc.rust-lang.org/std/borrow/enum.Cow.html"
+
+[[sources]]
+title = "docs.rs/smallvec"
+url = "https://docs.rs/smallvec"
+
+[[sources]]
+title = "docs.rs/bumpalo"
+url = "https://docs.rs/bumpalo"

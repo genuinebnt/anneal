@@ -1,0 +1,36 @@
+title = "Property testing with SHRINKING"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Methods: property-based testing"
+chapter_order = 2
+order = 141
+kind = "recipe"
+lede = "property testing with SHRINKING (what quickcheck/proptest do for you)."
+level = "advanced"
+code = ["examples/dev_tools/shrinking.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+testing invariants (stage 7 onwards).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+finding minimal failing inputs in any property test (proptest/quickcheck do this automatically).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: generate random input until the property fails, then greedily simplify the failing input (remove elements, shrink values) while it **still** fails. You get a tiny counterexample instead of a 40-element wall of noise. In real projects use the crates: <https://github.com/BurntSushi/quickcheck> and <https://github.com/proptest-rs/proptest>
+"""
+
+[[sources]]
+title = "github.com/BurntSushi/quickcheck"
+url = "https://github.com/BurntSushi/quickcheck"
+
+[[sources]]
+title = "github.com/proptest-rs/proptest"
+url = "https://github.com/proptest-rs/proptest"

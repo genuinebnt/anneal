@@ -1,0 +1,59 @@
+=== before ===
+// monomorphisation: 2 function instances
+// fn#0 (main)
+fn main() -> () {
+    let _0: int;
+    let _1: str;
+    let _2: ();
+  bb0:
+    _0 = call fn#1() -> bb1
+  bb1:
+    _1 = to_str(_0)
+    _2 = println(_1)
+    return ()
+}
+// fn#1
+fn f() -> int {
+    let _0: int;
+    let _1: int;  // x
+    let _2: bool;
+    let _3: int;
+    let _4: int;
+    let _5: int;  // y
+    let _6: int;
+  bb0:
+    _1 = 2 + 3
+    _2 = _1 > 4
+    branch _2 -> bb1, bb2
+  bb1:
+    _4 = _1 * 2
+    _3 = _4
+    goto bb3
+  bb2:
+    _3 = 0
+    goto bb3
+  bb3:
+    _5 = _3
+    _6 = _5 + _1
+    return _6
+}
+
+=== after: const-prop, dce, simplify-cfg ===
+// monomorphisation: 2 function instances
+// fn#0 (main)
+fn main() -> () {
+    let _0: int;
+    let _1: str;
+    let _2: ();
+  bb0:
+    _0 = call fn#1() -> bb1
+  bb1:
+    _1 = to_str(_0)
+    _2 = println(_1)
+    return ()
+}
+// fn#1
+fn f() -> int {
+  bb0:
+    return 15
+}

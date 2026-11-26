@@ -1,0 +1,237 @@
+title = "Recovery for main-memory systems"
+module = "Databases"
+module_order = 8
+chapter = "Logging and recovery"
+chapter_order = 7
+order = 417
+kind = "guide"
+lede = "15-721 lecture #10 · redo-only logging · command vs value logs · consistent checkpoints · parallel recovery · constant-time recovery (ADR) · write-behind logging"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Main-memory systems change the recovery problem.</strong> Uncommitted data never reaches disk (no <em>steal</em>), so <strong>UNDO records and the before-image disappear</strong>; there is no page-level <code>pageLSN</code> protocol; the whole database is rebuilt in RAM at restart, so <strong>recovery time is dominated by reloading the checkpoint and replaying the log</strong>, and replay speed matters more than anything.</li> <li><strong>Logging choices</strong>: <strong>value (physical/physiological) logs</strong> record <em>after-images</em> (key, new value): larger, deterministic, <strong>replayable in any order per key</strong>, so recovery parallelises. <strong>Command (logical) logs</strong> (H-Store/VoltDB) record <em>the stored procedure call and arguments</em>: tiny and cheap to write, but recovery must <strong>re-execute the transactions serially in the original order</strong> (a single-threaded partition's order <em>is</em> the log), and <strong>every procedure must be deterministic</strong> (random numbers, timestamps, and any external input must be captured in the log record).</li> <li><strong>Checkpoints</strong> bound replay. A <strong>fuzzy</strong> checkpoint copies live data while transactions run (cheap, needs the log to repair inconsistencies). A <strong>consistent snapshot</strong> is exact: <strong>fork-based</strong> (HyPer/Redis: <code>fork()</code> gives a copy-on-write image from the OS, with page-granularity copying costs), <strong>copy-on-update</strong> (a flag plus a per-record stash of the old value; Calvin's CALC, Zig-Zag), or <strong>MVCC-based</strong> (checkpoint reads a snapshot timestamp). The log then only needs records <em>after</em> the snapshot.</li> <li><strong>Parallel logging and recovery</strong> (SiloR, Zheng et al., OSDI 2014): each worker logs to its own device; <strong>epochs</strong> (tens of milliseconds) group commits; a transaction is durable when its epoch is persisted on all loggers; at restart, records are replayed <strong>in parallel, in any order, keeping the highest transaction id per key</strong> (because after-images are idempotent and ordered by TID).</li> <li><strong>Constant Time Recovery (Azure SQL Database / Accelerated Database Recovery, VLDB 2019)</strong>: keep the versions in a <strong>persistent version store</strong> inside the database; a rolled-back transaction is just marked <em>aborted</em> in a transaction map and its versions become invisible, so <strong>undo is O(1)</strong> instead of proportional to the work done. ARIES still runs analysis and redo, but redo is bounded by aggressive log truncation, so recovery time no longer depends on the longest-running transaction.</li> <li><strong>Write-behind logging (WBL)</strong> for <strong>non-volatile memory</strong> (Arulraj et al., VLDB 2016): data lives in NVM, so there is no need to redo; the log records only <strong>commit timestamp ranges</strong> (which timestamps <em>may</em> have partially reached NVM); at restart the DBMS uses MVCC visibility to ignore tuples written by transactions in those ranges. Recovery is near-instant and the log is far smaller than a redo log.</li> <li><strong>Fast restarts without a log</strong>: keep the in-memory state in <strong>shared memory</strong> (Facebook's Scuba/Presto-style) so a <em>process</em> restart (software upgrade, crash of the server code) doesn't reload anything; only machine failures use the disk path.</li> </ul>
+"""
+
+[[sections]]
+heading = "Value log vs command log, measured"
+body = """
+<p>The experiment executes a stream of transactions (transfers, "reprice" procedures that read <em>R</em> neighbouring rows and write one, and optional bulk updates), records both logs, and recovers a fresh state from each; every recovery is checked equal to the live state. State: 100 000 integers; 400 000 transactions (100 000 when <em>R</em> = 1000).</p>
+
+:::deeper Reference: command and value logging, serial and parallel replay, and copy-on-update snapshots
+```rust title="src/recovery/cmdlog.rs"
+//! Logging for main-memory databases: command (logical) logs vs value logs, and consistent snapshots by copy-on-update.
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::*};
+use std::sync::{Mutex, RwLock};
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Proc {
+    Transfer { a: u32, b: u32, amt: i64 },
+    /// Deterministic but heavy: reads `rounds` neighbouring keys, writes one.
+    Reprice { a: u32, rounds: u32 },
+    /// Touches many rows with one command (a batch update).
+    Bulk { start: u32, len: u32, delta: i64 },
+    /// Non-deterministic: its result depends on `entropy`, which a command log must capture.
+    Lottery { a: u32, entropy: u64 },
+}
+
+pub type Write = (u32, i64);
+
+/// Execute against the state and return the writes it made (the value-log payload).
+pub fn exec(db: &mut [i64], p: &Proc, entropy_now: u64) -> Vec<Write> {
+    let n = db.len() as u32;
+    match *p {
+        Proc::Transfer { a, b, amt } => { db[a as usize] -= amt; db[b as usize] += amt; vec![(a, db[a as usize]), (b, db[b as usize])] }
+        Proc::Reprice { a, rounds } => {
+            let mut h = 0i64;
+            for i in 1..=rounds { h = h.wrapping_mul(31).wrapping_add(db[((a + i) % n) as usize]); }
+            db[a as usize] = h % 1000;
+            vec![(a, db[a as usize])]
+        }
+        Proc::Bulk { start, len, delta } => (0..len).map(|i| { let k = (start + i) % n; db[k as usize] += delta; (k, db[k as usize]) }).collect(),
+        Proc::Lottery { a, .. } => { db[a as usize] = (entropy_now % 1000) as i64; vec![(a, db[a as usize])] }
+    }
+}
+
+// ---- encodings ----
+pub fn encode_cmd(p: &Proc, out: &mut Vec<u8>) {
+    match *p {
+        Proc::Transfer { a, b, amt } => { out.push(1); out.extend(a.to_le_bytes()); out.extend(b.to_le_bytes()); out.extend(amt.to_le_bytes()); }
+        Proc::Reprice { a, rounds } => { out.push(2); out.extend(a.to_le_bytes()); out.extend(rounds.to_le_bytes()); }
+        Proc::Bulk { start, len, delta } => { out.push(4); out.extend(start.to_le_bytes()); out.extend(len.to_le_bytes()); out.extend(delta.to_le_bytes()); }
+        Proc::Lottery { a, entropy } => { out.push(3); out.extend(a.to_le_bytes()); out.extend(entropy.to_le_bytes()); }
+    }
+}
+
+pub fn decode_cmds(mut b: &[u8]) -> Vec<Proc> {
+    let mut v = vec![];
+    let u32_ = |s: &[u8]| u32::from_le_bytes(s[..4].try_into().unwrap());
+    while !b.is_empty() {
+        match b[0] {
+            1 => { v.push(Proc::Transfer { a: u32_(&b[1..]), b: u32_(&b[5..]), amt: i64::from_le_bytes(b[9..17].try_into().unwrap()) }); b = &b[17..]; }
+            2 => { v.push(Proc::Reprice { a: u32_(&b[1..]), rounds: u32_(&b[5..]) }); b = &b[9..]; }
+            4 => { v.push(Proc::Bulk { start: u32_(&b[1..]), len: u32_(&b[5..]), delta: i64::from_le_bytes(b[9..17].try_into().unwrap()) }); b = &b[17..]; }
+            3 => { v.push(Proc::Lottery { a: u32_(&b[1..]), entropy: u64::from_le_bytes(b[5..13].try_into().unwrap()) }); b = &b[13..]; }
+            _ => unreachable!(),
+        }
+    }
+    v
+}
+
+pub fn encode_values(w: &[Write], out: &mut Vec<u8>) {
+    out.extend((w.len() as u16).to_le_bytes());
+    for &(k, v) in w { out.extend(k.to_le_bytes()); out.extend(v.to_le_bytes()); }
+}
+
+pub fn decode_values(mut b: &[u8]) -> Vec<Vec<Write>> {
+    let mut txns = vec![];
+    while !b.is_empty() {
+        let n = u16::from_le_bytes([b[0], b[1]]) as usize;
+        let mut w = Vec::with_capacity(n);
+        for i in 0..n {
+            let o = 2 + i * 12;
+            w.push((u32::from_le_bytes(b[o..o + 4].try_into().unwrap()), i64::from_le_bytes(b[o + 4..o + 12].try_into().unwrap())));
+        }
+        txns.push(w);
+        b = &b[2 + n * 12..];
+    }
+    txns
+}
+
+/// Command-log recovery: re-execute every procedure, serially, in log order.
+pub fn replay_commands(db: &mut [i64], cmds: &[Proc], mut entropy: impl FnMut(usize) -> u64) {
+    for (i, p) in cmds.iter().enumerate() { exec(db, p, entropy(i)); }
+}
+
+/// Value-log recovery, serial: just assign.
+pub fn replay_values(db: &mut [i64], txns: &[Vec<Write>]) {
+    for t in txns { for &(k, v) in t { db[k as usize] = v; } }
+}
+
+/// Value-log recovery in parallel: one pass buckets the writes by key range (keeping log order inside each bucket),
+/// then each thread applies its bucket to its own slice of the state.
+pub fn replay_values_parallel(db: &mut [i64], txns: &[Vec<Write>], threads: usize) {
+    let chunk = db.len().div_ceil(threads);
+    let mut buckets: Vec<Vec<Write>> = vec![vec![]; threads];
+    for t in txns { for &(k, v) in t { buckets[k as usize / chunk].push((k, v)); } }
+    std::thread::scope(|s| {
+        for ((t, part), bucket) in db.chunks_mut(chunk).enumerate().zip(&buckets) {
+            s.spawn(move || { let base = t * chunk; for &(k, v) in bucket { part[k as usize - base] = v; } });
+        }
+    });
+}
+
+// ---------------- consistent snapshots by copy-on-update ----------------
+
+struct Cell { live: i64, saved: Option<i64> }
+
+/// Transactions run concurrently with a checkpoint. `begin_checkpoint` pauses writers just long enough to flip a flag;
+/// from then on the first write to each key stashes its old value, and the checkpointer reads the stash if there is one.
+pub struct CowStore {
+    cells: Vec<Mutex<Cell>>,
+    gate: RwLock<()>,                  // writers hold it shared for a whole transaction; checkpoint start takes it exclusively
+    checkpointing: AtomicBool,
+    pub stashed: AtomicUsize,
+}
+
+impl CowStore {
+    pub fn new(n: usize, init: i64) -> Self {
+        Self { cells: (0..n).map(|_| Mutex::new(Cell { live: init, saved: None })).collect(), gate: RwLock::new(()), checkpointing: AtomicBool::new(false), stashed: AtomicUsize::new(0) }
+    }
+
+    pub fn transfer(&self, a: usize, b: usize, amt: i64) {
+        let _g = self.gate.read().unwrap();
+        let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+        let mut l = self.cells[lo].lock().unwrap();
+        let mut h = self.cells[hi].lock().unwrap();
+        let ck = self.checkpointing.load(Acquire);
+        for c in [&mut *l, &mut *h] { if ck && c.saved.is_none() { c.saved = Some(c.live); self.stashed.fetch_add(1, Relaxed); } }
+        let (ca, cb) = if a < b { (&mut *l, &mut *h) } else { (&mut *h, &mut *l) };
+        ca.live -= amt;
+        cb.live += amt;
+    }
+
+    /// Returns a reference copy of the state at the instant the checkpoint began (for tests), taken inside the quiesced window.
+    pub fn begin_checkpoint(&self, take_reference: bool) -> Option<Vec<i64>> {
+        let _w = self.gate.write().unwrap();
+        self.checkpointing.store(true, Release);
+        take_reference.then(|| self.cells.iter().map(|c| c.lock().unwrap().live).collect())
+    }
+
+    /// Walk every key once, writing the value as of `begin_checkpoint`, and release the stashes.
+    pub fn write_checkpoint(&self) -> Vec<i64> {
+        let out = self.cells.iter().map(|c| { let mut c = c.lock().unwrap(); c.saved.take().unwrap_or(c.live) }).collect();
+        self.checkpointing.store(false, Release);
+        out
+    }
+
+    pub fn total(&self) -> i64 { let _w = self.gate.write().unwrap(); self.cells.iter().map(|c| c.lock().unwrap().live).sum() }
+}
+```
+:::
+
+```text title="log bytes per transaction and recovery time"
+  rounds   bulk   cmd B/txn   value B/txn      cmd ms    value ms   value ×4 ms      txns
+       0      0        12.2          18.8         6.6         1.3           2.2    400000
+      10      0        12.2          18.8         7.9         1.2           2.1    400000
+     100      0        12.2          18.8        21.1         1.4           2.1    400000
+    1000      0        12.2          18.8        36.7         0.3           0.5    100000
+      10    100        13.0         137.3        11.0         4.5          12.7    400000
+```
+
+<ul> <li><strong>Size flips with transaction shape.</strong> For tiny transactions the command log is only 1.5× smaller (12 vs 19 bytes, since a transfer's 2 value writes are cheap to log). With one <strong>bulk update touching 100 rows</strong> the value log is <strong>137 bytes per transaction and the command log 13</strong>, 10× more, and that factor grows with the amount of data a command touches.</li> <li><strong>Recovery time flips the other way.</strong> Replaying commands means <em>running the program again</em>: its cost grows with the work per transaction (6.6 ms → 36.7 ms as the procedure reads more), while replaying values is <strong>a pure memory write, independent of the logic</strong> (0.3–1.4 ms). Value replay is 5–120× faster. A command log buys cheap normal operation at the price of slow, strictly serial recovery; a value log pays more bytes at runtime for fast restart.</li> <li><strong>Parallel value replay doesn't help for plain assignments</strong>: the loop is bound by memory bandwidth and the extra bucketing pass costs as much as it saves (2.1 vs 1.2 ms). It pays when applying a write involves <strong>index maintenance or decompression</strong>, which is what SiloR parallelises.</li> </ul>
+
+<aside data-call="testing"><b>Non-determinism is a correctness bug, not a performance issue</b><p>A procedure <code>Lottery(a)</code> writes <code>entropy % 1000</code>. Re-executing it during recovery with <em>fresh</em> entropy produces a different database:</p>  <p>Any procedure that calls <code>random()</code>, <code>now()</code>, reads a sequence, depends on hash-table iteration order, floating-point reduction order across threads, or an external system must have those inputs <strong>logged with the command</strong> (VoltDB does this for <code>RAND</code>/<code>NOW</code>) or be forbidden. Also replicate-by-command systems (H-Store, Calvin) require it for <em>replicas</em> to agree, not only for recovery.</p></aside>
+
+```text title="naive command-log replay vs entropy captured in the log record"
+naive replay differs from the original in 100 of 100 keys; with entropy captured in the command: identical
+```
+"""
+
+[[sections]]
+heading = "Consistent snapshots by copy-on-update"
+body = """
+<p>A checkpoint that copies live data while writers run is <strong>fuzzy</strong> (it may contain half of a transaction). To make it <em>exactly</em> the state at one instant without stopping the world, the store uses a flag and a one-slot stash per key:</p>
+
+<ol> <li><code>begin_checkpoint</code>: take an exclusive gate for an instant (writers hold it shared for a whole transaction) and set <code>checkpointing = true</code>.</li> <li>Writers: <strong>before the first change to a key after the flag flipped, copy its current value into the key's stash</strong>; then write.</li> <li>The checkpointer walks the keys: for each, <strong>the stash if present, else the live value</strong>, and clears the stash. When it's done, clear the flag.</li> </ol>
+
+<p>The result is the database as of step 1, and writers pay one extra copy per key per checkpoint. The test takes a reference copy <em>inside</em> the quiesced window of step 1, runs 4 writers throughout the checkpoint, and demands exact equality (20 rounds, each with 2 000 keys and total-money invariants):</p>
+
+```text title="snapshots and their cost"
+20 rounds × 4 writers: every concurrent snapshot equals the state at its begin instant
+commit rate (M txn/s, 4 writers): 4.76 outside a checkpoint, 3.91 during one; checkpoint wall time 2.5 ms; 17542 of 100000 keys stashed on average
+```
+
+<p>Writers slowed by <strong>18%</strong> during the 2.5 ms checkpoint (they lock cells the checkpointer is also walking, and pay the stash copies), and only 17.5% of the keys had to be stashed. Fork-based snapshots pay the same kind of cost at page granularity: the first write to each 4 KB page triggers a kernel copy and a TLB shootdown, which is why Redis's <code>BGSAVE</code> can double memory and stall under write-heavy load.</p>
+"""
+
+[[sections]]
+heading = "Production designs, one by one"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>System / paper</th> <th>Idea</th> <th>Log content</th> <th>Recovery</th> </tr> </thead> <tbody> <tr> <td><strong>H-Store / VoltDB</strong></td> <td>single-threaded partitions, stored procedures</td> <td><strong>commands</strong> (+ captured inputs)</td> <td>load snapshot, re-execute commands; replicas replay the same stream</td> </tr> <tr> <td><strong>HyPer</strong></td> <td>fork-based consistent snapshots + redo log</td> <td>redo (after-images)</td> <td>load snapshot, redo</td> </tr> <tr> <td><strong>Silo / SiloR</strong></td> <td>OCC with epochs; per-core loggers</td> <td>values + TIDs, per epoch</td> <td>parallel, any-order replay keeping the max TID per key; parallel checkpoint</td> </tr> <tr> <td><strong>Hekaton</strong></td> <td>MVCC, log only committed after-images</td> <td>committed new versions only (no undo)</td> <td>checkpoint files of data/delta + log tail</td> </tr> <tr> <td><strong>Azure SQL DB (ADR)</strong></td> <td>persistent version store, <code>sLog</code> for unversioned changes, aborted-transaction map</td> <td>ARIES-style but redo-only for most</td> <td><strong>constant-time</strong>: abort = flip state, undo disappears; log truncated aggressively</td> </tr> <tr> <td><strong>WBL (NVM)</strong></td> <td>data durable in place</td> <td><em>commit timestamp ranges</em> only</td> <td>mark ranges invisible; no redo, no undo</td> </tr> <tr> <td><strong>Redis</strong></td> <td>AOF (command log) + RDB (fork snapshot)</td> <td>commands, rewritten/compacted</td> <td>load RDB then replay the AOF tail</td> </tr> </tbody> </table></div>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Non-deterministic procedures</strong> in a command log (above). Also <strong>version skew</strong>: an upgraded procedure body re-executed against an old log gives different results; version procedures or log values.</li> <li><strong>Checkpoint plus log must agree on the cut</strong>: the log position that the snapshot reflects must be recorded <em>atomically</em> with the snapshot; replaying records already in the snapshot is harmless only for idempotent after-images, not for commands.</li> <li><strong>Log truncation after checkpoint</strong> needs the <em>oldest needed LSN</em>, not the checkpoint LSN, if any transaction spans it.</li> <li><strong>Group commit still matters</strong> (<a href="/cookbook/p/logging">L21</a>): the log device is the throughput ceiling (SiloR: epochs; VoltDB: batched command-log flushes with a configurable fsync interval, trading latency for throughput).</li> <li><strong>Fork-based snapshots</strong> can double RSS and cause latency spikes proportional to write rate × page size; transparent huge pages make it worse (2 MB copies).</li> <li><strong>Recovery time needs a budget</strong>: measure <em>restart</em> (load + replay + index rebuild + warm-up), not just replay; index rebuild often dominates.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Constant Time Recovery in Azure SQL Database"
+url = "https://www.vldb.org/pvldb/vol12/p2143-antonopoulos.pdf"
+
+[[sources]]
+title = "Fast Databases with Fast Durability and Recovery Through Multicore Parallelism"
+url = "https://www.usenix.org/conference/osdi14/technical-sessions/presentation/zheng_wenting"
+
+[[sources]]
+title = "Rethinking Main Memory OLTP Recovery"
+url = "https://dl.acm.org/doi/10.1109/ICDE.2014.6816682"
+
+[[sources]]
+title = "Low-Overhead Asynchronous Checkpointing in Main-Memory Database Systems"
+url = "https://dl.acm.org/doi/10.1145/2882903.2915966"
+
+[[sources]]
+title = "Write-Behind Logging"
+url = "https://www.vldb.org/pvldb/vol10/p337-arulraj.pdf"

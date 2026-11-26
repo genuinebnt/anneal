@@ -1,0 +1,56 @@
+title = "The k-way merge family"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Sorting, strings, bits and theory"
+chapter_order = 6
+order = 217
+kind = "recipe"
+lede = "Heap, loser tree, lazy iterator, LSM compaction, merge path."
+level = "advanced"
+code = ["examples/algorithms/kway_merge_family.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>external sort</li><li>LSM-tree compaction</li><li>merging sorted shards/logs</li><li>top-k</li><li>parallel merge</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>external merge sort passes in databases</li><li>LSM compaction (newest wins, tombstones)</li><li>merging per-shard sorted query results</li><li>log aggregation</li><li>"k-th smallest" interview problems</li><li>Timsort's galloping merge</li><li>parallel merge. Course: CMU 15-445 (external merge sort, LSM trees) for the database uses</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+one idea (repeatedly take the smallest head among k sorted sources) and its many costumes.
+
+Part 1 compares a binary-heap merge with a loser (tournament) tree by **counting** key comparisons: the heap needs about 2 log k per output (compare the two children, then the better child with the parent), the loser tree needs about log k because each node remembers who **lost** the match, so after a source advances it replays only its own leaf-to-root path.
+
+Part 2 is a lazy `Iterator` adapter generic over `Ord`, stable on ties by source index (the tie-break is part of the heap key). Part 3 applies it: external-sort passes with block buffers and IO counts, LSM compaction with newest-wins dedupe and tombstones, k sorted linked lists.
+
+Part 4 is the interview classics that are all "k-way merge in disguise": smallest range covering one element of each list, k-th smallest in a sorted matrix, k smallest pair sums, k-th ugly number, top-k from a stream, median of k sorted arrays.
+
+Part 5 is two-way merge variants: galloping (Timsort), branchless, and merge path (split the output by anti-diagonals so p threads merge independent slices). **Why** the stable tie-break matters: LSM compaction must prefer the newest run, a database sort-merge join must keep input order, and parallel merge must give the same bytes as the sequential one.
+
+Every piece is checked against a "concatenate and sort" oracle on 2000 seeded random inputs including empty lists, many duplicates and all-equal keys. Comparison counts are asserted (loser tree total &lt;= heap total); timings are not.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://en.wikipedia.org/wiki/K-way_merge_algorithm" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/K-way_merge_algorithm</a> and <a href="https://en.wikipedia.org/wiki/Tournament_sort" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Tournament_sort</a> and <a href="https://github.com/python/cpython/blob/main/Objects/listsort.txt" target="_blank" rel="noreferrer">https://github.com/python/cpython/blob/main/Objects/listsort.txt</a> (galloping mode, section "Galloping")</li><li>Merge path: Green, McColl, Bader, "GPU Merge Path" (ICS 2012)</li><li>cited by title only (not re-read here)</li></ul>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/K-way_merge_algorithm"
+url = "https://en.wikipedia.org/wiki/K-way_merge_algorithm"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Tournament_sort"
+url = "https://en.wikipedia.org/wiki/Tournament_sort"
+
+[[sources]]
+title = "github.com/python/cpython/blob/main/Objects/listsort.txt"
+url = "https://github.com/python/cpython/blob/main/Objects/listsort.txt"

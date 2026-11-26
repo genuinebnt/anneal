@@ -1,0 +1,70 @@
+title = "Itertools"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Data, text and encoding crates"
+chapter_order = 1
+order = 121
+kind = "recipe"
+lede = "Grouping, merging, windows, combinatorics and folding, each checked against a std-only version"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/itertools_adaptors_cookbook.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>report building</li><li>log processing</li><li>test-case generation</li><li>any pipeline where hand-written loops hide the intent</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>run-length grouping of sorted data</li><li>merging sorted shards</li><li>exhaustive combinations in tests</li><li>frequency maps</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>Itertools::chunk_by</code></li><li><code>Itertools::chunks</code></li><li><code>Itertools::sorted_by</code></li><li><code>Itertools::sorted_by_key</code></li><li><code>Itertools::sorted_by_cached_key</code></li><li><code>Itertools::sorted_unstable_by</code></li><li><code>Itertools::k_largest_by_key</code></li><li><code>Itertools::tail</code></li><li><code>Itertools::sorted_unstable</code></li><li><code>Itertools::unique</code></li><li><code>Itertools::unique_by</code></li><li><code>Itertools::dedup</code></li><li><code>Itertools::dedup_with_count</code></li><li><code>Itertools::duplicates</code></li><li><code>Itertools::tuple_windows</code></li><li><code>Itertools::tuples</code></li><li><code>Itertools::circular_tuple_windows</code></li><li><code>Itertools::interleave</code></li><li><code>Itertools::intersperse</code></li><li><code>Itertools::kmerge</code></li><li><code>Itertools::merge</code></li><li><code>Itertools::merge_join_by</code></li><li><code>itertools::EitherOrBoth</code></li><li><code>itertools::iproduct</code></li><li><code>Itertools::cartesian_product</code></li><li><code>Itertools::multi_cartesian_product</code></li><li><code>Itertools::permutations</code></li><li><code>Itertools::combinations</code></li><li><code>Itertools::combinations_with_replacement</code></li><li><code>Itertools::powerset</code></li><li><code>Itertools::zip_longest</code></li><li><code>itertools::izip</code></li><li><code>itertools::zip_eq</code></li><li><code>Itertools::fold_while</code></li><li><code>Itertools::fold_ok</code></li><li><code>Itertools::process_results</code></li><li><code>Itertools::try_collect</code></li><li><code>Itertools::minmax</code></li><li><code>Itertools::position_max</code></li><li><code>Itertools::min_set</code></li><li><code>Itertools::k_smallest</code></li><li><code>Itertools::counts</code></li><li><code>Itertools::counts_by</code></li><li><code>Itertools::into_group_map</code></li><li><code>Itertools::into_grouping_map_by</code></li><li><code>Itertools::join</code></li><li><code>Itertools::format_with</code></li><li><code>Itertools::sum1</code></li><li><code>Itertools::positions</code></li><li><code>Itertools::find_position</code></li><li><code>Itertools::exactly_one</code></li><li><code>Itertools::at_most_one</code></li><li><code>Itertools::with_position</code></li><li><code>Itertools::batching</code></li><li><code>Itertools::tee</code></li><li><code>Itertools::peekable</code></li><li><code>Itertools::peeking_take_while</code></li><li><code>Itertools::take_while_ref</code></li><li><code>Itertools::collect_vec</code></li><li><code>Itertools::collect_tuple</code></li><li><code>Itertools::partition_map</code></li><li><code>Itertools::all_equal</code></li><li><code>Itertools::pad_using</code></li><li><code>Itertools::while_some</code></li><li><code>Itertools::merge_by</code></li><li><code>Itertools::kmerge_by</code></li><li><code>Itertools::coalesce</code></li><li><code>Itertools::map_ok</code></li><li><code>Itertools::filter_ok</code></li><li><code>Itertools::flatten_ok</code></li><li><code>Itertools::partition_result</code></li><li><code>Itertools::tree_reduce</code></li><li><code>Itertools::minmax_by_key</code></li><li><code>Itertools::max_set_by_key</code></li><li><code>Itertools::all_unique</code></li><li><code>Itertools::array_combinations</code></li><li><code>Itertools::collect_array</code></li><li><code>Itertools::next_tuple</code></li><li><code>Itertools::map_into</code></li><li><code>Itertools::update</code></li><li><code>Itertools::multipeek</code></li><li><code>Itertools::take_while_inclusive</code></li><li><code>GroupingMap::{sum, max_by_key, min, collect, aggregate}</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/itertools/0.14/itertools/trait.Itertools.html" target="_blank" rel="noreferrer">https://docs.rs/itertools/0.14/itertools/trait.Itertools.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Crates"
+body = """
+itertools = "0.14"
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Group ADJACENT equal keys</td><td><code>chunk_by (sort first to group globally)</code></td></tr><tr><td>Group globally into a map</td><td><code>into_group_map / into_grouping_map_by (aggregate without building Vecs)</code></td></tr><tr><td>Count occurrences</td><td><code>counts / counts_by</code></td></tr><tr><td>Merge sorted inputs</td><td><code>merge (2), kmerge (k), merge_join_by (full outer join)</code></td></tr><tr><td>Sort in the middle of a chain</td><td><code>sorted_by / sorted_by_key (stable) ; sorted_by_cached_key if the key is costly</code></td></tr><tr><td>Best k of many</td><td><code>k_smallest / k_largest_by_key (O(n log k), O(k) memory) instead of sorted().take(k)</code></td></tr><tr><td>Neighbours</td><td><code>tuple_windows (tuple items must be Clone)</code></td></tr><tr><td>All pairs / subsets / orderings</td><td><code>combinations, powerset, permutations, cartesian_product</code></td></tr><tr><td>Results inside an iterator</td><td><code>try_collect, process_results, fold_ok</code></td></tr><tr><td>Zip of unequal lengths</td><td><code>zip_longest ; "must be equal" -&gt; zip_eq (panics)</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Pitfalls"
+body = """
+`chunk_by` is lazy and **not** an Iterator by itself (iterate `&grouping`); `unique`, `counts` and `sorted` buffer or hash everything (memory is O(distinct) or O(n)); `sorted` and `permutations` on an infinite iterator never return; method names can collide with newer std methods (e.g. `intersperse`), so call `Itertools::intersperse(it, x)` if warned.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/itertools/0.14/itertools/" target="_blank" rel="noreferrer">https://docs.rs/itertools/0.14/itertools/</a></li><li><a href="https://github.com/rust-itertools/itertools" target="_blank" rel="noreferrer">https://github.com/rust-itertools/itertools</a></li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/itertools/0.14/itertools/trait.Itertools.html"
+url = "https://docs.rs/itertools/0.14/itertools/trait.Itertools.html"
+
+[[sources]]
+title = "docs.rs/itertools/0.14/itertools"
+url = "https://docs.rs/itertools/0.14/itertools/"
+
+[[sources]]
+title = "github.com/rust-itertools/itertools"
+url = "https://github.com/rust-itertools/itertools"

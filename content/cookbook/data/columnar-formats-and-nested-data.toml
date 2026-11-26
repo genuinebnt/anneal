@@ -1,0 +1,450 @@
+title = "Columnar formats and nested data"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 326
+kind = "guide"
+lede = "15-721 S2024 lecture #2 · NSM / DSM / PAX · Parquet and ORC design decisions · dictionary, zone maps, Bloom filters · nested data: Dremel shredding vs length+presence · measured file-format effects"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Storage models</strong>: <strong>NSM</strong> (n-ary: all of a tuple's attributes together in a small (~4 KB) page; OLTP: whole-entity access and inserts), <strong>DSM</strong> (decomposition: one attribute for all tuples contiguously in large (~100 MB) blocks; OLAP: scans of a few columns; variable-length data must become fixed-length (dictionary compression) so offsets are arithmetic; tuples are found by <strong>fixed-length offsets</strong> or by <strong>embedded tuple ids</strong>), <strong>PAX</strong> (Partition Attributes Across): <em>horizontally</em> partition into <strong>row groups</strong>, then <em>vertically</em> into <strong>column chunks</strong> inside each. Parquet and ORC are PAX files, with the <strong>global metadata at the end</strong> because object stores and HDFS are append-friendly, not update-friendly.</li> <li><strong>Format design decisions</strong> (Parquet, ORC, Arrow): <strong>self-contained files</strong> (schema, row-group offsets and lengths, tuple counts and zone maps all serialized inside); <strong>row-group sizing</strong> (Parquet: tuple count, e.g. 1 M; ORC: bytes, e.g. 250 MB; Arrow: 1 Mi tuples); a <strong>type system</strong> split into <em>physical</em> types (IEEE-754, int64) and <em>logical</em> types (timestamp as int64 since epoch); <strong>encodings</strong> that can be <strong>cascaded</strong>.</li> <li><strong>Dictionary encoding</strong> maps frequent values to small fixed-width codes (sorted dictionaries also give order-preserving codes). Formats must handle <em>too many distinct values</em>: <strong>Parquet caps the dictionary at ~1 MB per chunk</strong> and falls back to plain; <strong>ORC computes the NDV first</strong> and skips the dictionary if it is too large. Also <strong>RLE, bit-packing, delta, frame-of-reference</strong>.</li> <li><strong>Block compression</strong> (zstd, snappy, gzip) on top: saves space but costs CPU and makes data opaque to the engine; it mattered when disks and networks were slow; with <strong>cheap object stores and fast networks</strong> it matters less.</li> <li><strong>Filters</strong>: <strong>zone maps</strong> (min/max per column per file and per row group; effective when values are <em>clustered</em>) and <strong>Bloom filters</strong> (existence per row group; false positives possible, no false negatives).</li> <li><strong>Nested data</strong> (JSON, protobuf) is shredded into columns. <strong>Dremel shredding</strong> stores for each leaf value two small integers: the <strong>repetition level</strong> (at which repeated field in the path <em>this value repeated</em>) and the <strong>definition level</strong> (how many of the optional/repeated fields on the path are actually present). Alternative: <strong>length + presence</strong> columns (a count of children per parent and a presence bit per optional field; used by newer formats).</li> <li><strong>Lessons from real data</strong> (<em>An Empirical Evaluation of Columnar Storage Formats</em>, Zeng et al., VLDB 2023, on Parquet/ORC libraries): real data repeats, so <strong>dictionary encoding is viable for all types, not only strings</strong>; <strong>simple encodings decode much faster</strong> because they avoid branch mispredictions; and <strong>block compression is becoming unnecessary</strong> as networks and disks speed up and the CPU is the bottleneck.</li> </ul>
+"""
+
+[[sections]]
+heading = "A PAX file in 200 lines"
+body = """
+<p>The implementation writes <code>Parquet</code>'s skeleton: a magic number, <strong>row groups</strong> of N tuples, each with one <strong>column chunk</strong> per column, the chunk <strong>encoded by whichever lightweight scheme is smallest</strong> (the encodings of <a href="/cookbook/p/networking-protocols">A9</a>, library in <a href="/cookbook/p/modern-encodings-btrblocks-fastlanes-bitweaving">A13</a>), and a <strong>footer</strong> that records for every chunk its byte offset, length, encoding name and <strong>zone map (min and max)</strong>. The footer is found from the file's last 8 bytes (length + magic), which is why readers start with a tail read. An <code>ObjectStore</code> wrapper serves <strong>byte-range reads</strong> and counts requests and bytes, so queries are measured the way a cloud bill sees them.</p>
+
+<p>Writer decisions that mirror Parquet/ORC: <em>integers</em> use FOR, delta+FOR or RLE, whichever is smaller; <em>doubles</em> that are exact two-decimal values are stored as <strong>integer cents</strong> and then encoded as integers; <em>strings</em> use a <strong>dictionary only if values actually repeat</strong> (distinct ≤ half the rows and fewer than 65 536, a stand-in for Parquet's dictionary-size cap), else plain length-prefixed bytes.</p>
+
+:::deeper Reference: PAX writer/reader with zone maps, encoding choice and pushdown over an object store
+```rust title="src/storage/pax.rs"
+//! A minimal PAX (Parquet-like) file: row groups → column chunks, self-describing footer with zone maps,
+//! per-chunk encoding choice, and a reader that fetches only the byte ranges a query needs from an "object store".
+use crate::fmtlib::*;
+use std::cell::Cell;
+
+const MAGIC: &[u8; 4] = b"PAX1";
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Col { Int(Vec<i64>), Float(Vec<f64>), Str(Vec<String>) }
+
+impl Col {
+    pub fn len(&self) -> usize { match self { Col::Int(v) => v.len(), Col::Float(v) => v.len(), Col::Str(v) => v.len() } }
+    fn slice(&self, a: usize, b: usize) -> Col {
+        match self { Col::Int(v) => Col::Int(v[a..b].to_vec()), Col::Float(v) => Col::Float(v[a..b].to_vec()), Col::Str(v) => Col::Str(v[a..b].to_vec()) }
+    }
+    fn tag(&self) -> u8 { match self { Col::Int(_) => 0, Col::Float(_) => 1, Col::Str(_) => 2 } }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Table { pub names: Vec<String>, pub cols: Vec<Col> }
+
+/// Zone map entry for one column chunk.
+#[derive(Clone, Debug)]
+pub struct Chunk { pub offset: u64, pub len: u64, pub encoding: String, pub min: Vec<u8>, pub max: Vec<u8> }
+
+#[derive(Clone, Debug)]
+pub struct Footer { pub names: Vec<String>, pub types: Vec<u8>, pub groups: Vec<(u32, Vec<Chunk>)> }   // rows, chunks per column
+
+// ---------------- writing ----------------
+
+fn encode_chunk(c: &Col) -> (Vec<u8>, String, Vec<u8>, Vec<u8>) {
+    let mut out = vec![];
+    match c {
+        Col::Int(v) => {
+            let s = encode_ints(v, &mut out);
+            (out, format!("{s:?}"), v.iter().min().unwrap().to_be_bytes().to_vec(), v.iter().max().unwrap().to_be_bytes().to_vec())
+        }
+        Col::Float(v) => {
+            let cents: Option<Vec<i64>> = v.iter().map(|&x| { let c = (x * 100.0).round(); (c / 100.0 == x).then_some(c as i64) }).collect();
+            let (mn, mx) = (v.iter().cloned().fold(f64::MAX, f64::min), v.iter().cloned().fold(f64::MIN, f64::max));
+            let name = match cents {
+                Some(c) => { out.push(1); let s = encode_ints(&c, &mut out); format!("cents+{s:?}") }
+                None => { out.push(0); for x in v { out.extend(x.to_le_bytes()); } "plain f64".into() }
+            };
+            (out, name, mn.to_be_bytes().to_vec(), mx.to_be_bytes().to_vec())
+        }
+        Col::Str(v) => {
+            let mut d: Vec<&str> = v.iter().map(|s| s.as_str()).collect();
+            d.sort_unstable(); d.dedup();
+            let (mn, mx) = (d[0].as_bytes().to_vec(), d[d.len() - 1].as_bytes().to_vec());
+            let name = if d.len() * 2 <= v.len() && d.len() < 65_536 {            // dictionary only when it actually repeats (Parquet caps it at 1 MB)
+                out.push(1); encode_dict(&v.iter().map(|s| s.as_str()).collect::<Vec<_>>(), &mut out); "dictionary"
+            } else {
+                out.push(0); for s in v { put_varint(s.len() as u64, &mut out); out.extend(s.as_bytes()); } "plain strings"
+            };
+            (out, name.into(), mn, mx)
+        }
+    }
+}
+
+pub fn write(t: &Table, group_rows: usize) -> Vec<u8> {
+    let n = t.cols[0].len();
+    let mut file = MAGIC.to_vec();
+    let mut groups = vec![];
+    let mut a = 0;
+    while a < n {
+        let b = (a + group_rows).min(n);
+        let mut chunks = vec![];
+        for c in &t.cols {
+            let (bytes, encoding, min, max) = encode_chunk(&c.slice(a, b));
+            chunks.push(Chunk { offset: file.len() as u64, len: bytes.len() as u64, encoding, min, max });
+            file.extend(bytes);
+        }
+        groups.push(((b - a) as u32, chunks));
+        a = b;
+    }
+    let mut f = vec![];
+    put_varint(t.names.len() as u64, &mut f);
+    for (name, c) in t.names.iter().zip(&t.cols) { put_varint(name.len() as u64, &mut f); f.extend(name.as_bytes()); f.push(c.tag()); }
+    put_varint(groups.len() as u64, &mut f);
+    for (rows, chunks) in &groups {
+        put_varint(*rows as u64, &mut f);
+        for c in chunks {
+            put_varint(c.offset, &mut f); put_varint(c.len, &mut f);
+            put_varint(c.encoding.len() as u64, &mut f); f.extend(c.encoding.as_bytes());
+            put_varint(c.min.len() as u64, &mut f); f.extend(&c.min);
+            put_varint(c.max.len() as u64, &mut f); f.extend(&c.max);
+        }
+    }
+    let flen = f.len() as u32;
+    file.extend(f);
+    file.extend(flen.to_le_bytes());
+    file.extend(MAGIC);
+    file
+}
+
+// ---------------- reading ----------------
+
+/// An immutable object with range reads; counts what a cloud object store would charge for.
+pub struct ObjectStore { data: Vec<u8>, pub requests: Cell<u64>, pub bytes: Cell<u64> }
+impl ObjectStore {
+    pub fn new(data: Vec<u8>) -> Self { Self { data, requests: Cell::new(0), bytes: Cell::new(0) } }
+    pub fn len(&self) -> usize { self.data.len() }
+    pub fn get(&self, off: usize, len: usize) -> &[u8] { self.requests.set(self.requests.get() + 1); self.bytes.set(self.bytes.get() + len as u64); &self.data[off..off + len] }
+    pub fn reset(&self) { self.requests.set(0); self.bytes.set(0); }
+}
+
+pub fn read_footer(store: &ObjectStore) -> Footer {
+    let n = store.len();
+    let tail = store.get(n - 8, 8);
+    assert_eq!(&tail[4..], MAGIC);
+    let flen = u32::from_le_bytes(tail[..4].try_into().unwrap()) as usize;
+    let f = store.get(n - 8 - flen, flen);
+    let mut p = 0;
+    let ncols = get_varint(f, &mut p) as usize;
+    let (mut names, mut types) = (vec![], vec![]);
+    for _ in 0..ncols {
+        let l = get_varint(f, &mut p) as usize; names.push(String::from_utf8(f[p..p + l].to_vec()).unwrap()); p += l;
+        types.push(f[p]); p += 1;
+    }
+    let ngroups = get_varint(f, &mut p) as usize;
+    let mut groups = vec![];
+    for _ in 0..ngroups {
+        let rows = get_varint(f, &mut p) as u32;
+        let mut chunks = vec![];
+        for _ in 0..ncols {
+            let offset = get_varint(f, &mut p); let len = get_varint(f, &mut p);
+            let l = get_varint(f, &mut p) as usize; let encoding = String::from_utf8(f[p..p + l].to_vec()).unwrap(); p += l;
+            let l = get_varint(f, &mut p) as usize; let min = f[p..p + l].to_vec(); p += l;
+            let l = get_varint(f, &mut p) as usize; let max = f[p..p + l].to_vec(); p += l;
+            chunks.push(Chunk { offset, len, encoding, min, max });
+        }
+        groups.push((rows, chunks));
+    }
+    Footer { names, types, groups }
+}
+
+pub fn read_chunk(store: &ObjectStore, ty: u8, c: &Chunk, rows: usize) -> Col {
+    let b = store.get(c.offset as usize, c.len as usize);
+    match ty {
+        0 => Col::Int(decode_ints(b, rows)),
+        1 => Col::Float(if b[0] == 1 { decode_ints(&b[1..], rows).into_iter().map(|c| c as f64 / 100.0).collect() }
+                        else { b[1..].chunks_exact(8).map(|x| f64::from_le_bytes(x.try_into().unwrap())).collect() }),
+        _ => Col::Str(if b[0] == 1 { decode_dict(&b[1..], rows) } else {
+            let (mut p, mut v) = (1, Vec::with_capacity(rows));
+            for _ in 0..rows { let l = get_varint(b, &mut p) as usize; v.push(String::from_utf8(b[p..p + l].to_vec()).unwrap()); p += l; }
+            v
+        }),
+    }
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+pub struct ScanStats { pub groups_total: usize, pub groups_skipped: usize, pub rows_decoded: u64 }
+
+/// `SELECT sum(agg) [WHERE filter BETWEEN lo AND hi]`: zone maps prune row groups, then only the needed chunks are fetched.
+pub fn sum_where(store: &ObjectStore, f: &Footer, agg: &str, filter: Option<(&str, i64, i64)>) -> (f64, ScanStats) {
+    let ai = f.names.iter().position(|n| n == agg).unwrap();
+    let fi = filter.map(|(c, ..)| f.names.iter().position(|n| n == c).unwrap());
+    let mut st = ScanStats { groups_total: f.groups.len(), ..Default::default() };
+    let mut total = 0.0;
+    for (rows, chunks) in &f.groups {
+        let rows = *rows as usize;
+        let mut keep: Option<Vec<bool>> = None;
+        if let (Some(fi), Some((_, lo, hi))) = (fi, filter) {
+            let (mn, mx) = (i64::from_be_bytes(chunks[fi].min[..8].try_into().unwrap()), i64::from_be_bytes(chunks[fi].max[..8].try_into().unwrap()));
+            if mx < lo || mn > hi { st.groups_skipped += 1; continue; }                      // zone map: nothing can match
+            let Col::Int(v) = read_chunk(store, f.types[fi], &chunks[fi], rows) else { panic!("filter column must be an integer") };
+            keep = Some(v.iter().map(|&x| x >= lo && x <= hi).collect());
+        }
+        st.rows_decoded += rows as u64;
+        match read_chunk(store, f.types[ai], &chunks[ai], rows) {
+            Col::Int(v) => total += v.iter().enumerate().filter(|(i, _)| keep.as_ref().is_none_or(|k| k[*i])).map(|(_, &x)| x as f64).sum::<f64>(),
+            Col::Float(v) => total += v.iter().enumerate().filter(|(i, _)| keep.as_ref().is_none_or(|k| k[*i])).map(|(_, &x)| x).sum::<f64>(),
+            Col::Str(_) => panic!("cannot sum strings"),
+        }
+    }
+    (total, st)
+}
+```
+:::
+
+<p>The test table has 2 000 000 rows and eight columns that behave like real ones: a sequential <code>id</code>, a <strong>clustered</strong> timestamp, a random <code>user</code>, a skewed 30-value <code>country</code>, a 4-value <code>status</code>, a two-decimal <code>amount</code>, a small <code>qty</code>, and a high-cardinality 20-character <code>note</code>.</p>
+
+```text title="file size and what each column costs"
+2000000 rows × 8 columns: row-binary 179.5 MB, PAX 56.5 MB (3.2× smaller), 20 row groups
+column      bytes/row  % of file  chosen encodings (first row group)
+id               0.25       0.9%  DeltaFor
+ts               0.38       1.3%  DeltaFor
+user             2.50       8.8%  For
+country          0.63       2.2%  dictionary
+status           0.25       0.9%  dictionary
+amount           2.50       8.8%  cents+For
+qty              0.75       2.7%  For
+note            21.00      74.3%  plain strings
+```
+
+<ul> <li><strong>The encodings do their jobs</strong>: the sequential <code>id</code> costs <strong>0.25 bytes/row</strong> (a delta of 1 zigzags to 2: a 2-bit field), <code>status</code> 0.25 (a 2-bit dictionary code), <code>qty</code> 6 bits, <code>amount</code> 2.5 bytes (cents fit in 20 bits). <strong>One incompressible text column is 74% of the file</strong>: columnar layout makes the cost of each column visible and <em>separable</em>: a query that doesn't read <code>note</code> never pays for it.</li> <li>A whole-file ratio of <strong>3.2×</strong> against fixed-width row binary is typical of un-gzipped Parquet-like files on this kind of data, with no block compression at all.</li> </ul>
+
+```text title="bytes fetched from the object store"
+SUM(amount)                                          bytes read    5000220 (  8.8% of file) groups skipped  0/20 rows decoded  2000000
+SUM(amount) WHERE ts in a 1% window (clustered column) bytes read     575042 (  1.0% of file) groups skipped 18/20 rows decoded   200000
+SUM(amount) WHERE user in a 1% range (random column) bytes read   10000420 ( 17.7% of file) groups skipped  0/20 rows decoded  2000000
+… file re-sorted by user, same query                 bytes read     300021 (  0.5% of file) groups skipped 19/20 rows decoded   100000
+file size after sorting by user: 62.1 MB (was 56.5 MB)
+```
+
+<ul> <li><strong>Projection pushdown</strong>: <code>SUM(amount)</code> reads one column chunk per row group: <strong>8.8% of the file</strong> (5.0 MB of 56.5 MB); a row store would read everything.</li> <li><strong>Zone maps win only on clustered data</strong>: the timestamp predicate skips 18 of 20 row groups and reads <strong>1.0% of the file</strong>. The same 1% selectivity on the <em>random</em> <code>user</code> column skips <strong>nothing</strong> and reads 17.7% (the predicate column plus the aggregate column, every row group): every chunk's min/max spans the whole domain.</li> <li><strong>Clustering is the fix, and it has a price</strong>: re-sorting the file by <code>user</code> makes the identical query skip 19 of 20 groups and read <strong>0.5% of the file (33× less)</strong>, at the cost of a <strong>10% larger file</strong> (62.1 vs 56.5 MB: sorting by <code>user</code> destroys the <code>id</code>/<code>ts</code> delta runs). This is Z-ordering/clustering in lakehouse table formats, and why <strong>sort keys</strong> are a first-class table property in warehouses.</li> </ul>
+
+```text title="row-group size: pruning granularity vs metadata"
+  rows/group     groups    file MB    footer KB    1% ts query       bytes read
+        1000       1000      28.95        294.5       11/1000             31856
+       10000        100      28.32         29.7        2/100              57542
+      100000         10      28.26          3.1        1/10              287521
+     1000000          1      28.25          0.4        1/1              2875021
+```
+
+<ul> <li><strong>Small row groups prune precisely</strong> (a 1% window reads 11 of 1 000 groups, 32 KB) <strong>but the footer grows linearly</strong>: 294 KB at 1 000 rows per group, which is <em>more than the data the query reads</em>. A cloud reader must fetch the footer on every file open; ten-thousand-column or ten-thousand-group footers are a known pain point (Parquet's thrift footer; newer formats such as Lance and Nimble move to lazily readable metadata).</li> <li><strong>Large row groups are cheap to open and coarse to prune</strong>: one 1 M-row group reads 2.9 MB for a 1% query. The sweet spot (here ~10 000–100 000 rows) balances footer cost, pruning, compression (bigger chunks compress slightly better: 28.3 vs 28.9 MB) and the I/O request size (cloud reads want 1–8 MB ranges).</li> </ul>
+
+<aside data-call="testing"><b>What the PAX tests check</b><ul> <li><strong>Round trip at row-group sizes 1, 7, 999, 1000, 5000 and 100 000</strong> (so partial last groups, one-row groups and a single group all work): every column of every type comes back identical.</li> <li><strong>Pruning is invisible to results</strong>: 150 random timestamp ranges over three row-group sizes: the pruned scan's <code>SUM</code> equals a brute-force scan.</li> <li>Size and bytes-read numbers above are asserted indirectly (the sums in the output equal for the unsorted and sorted file: <code>100496972</code> both).</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "Nested data: Dremel shredding and assembly"
+body = """
+<p>Flat columns can't hold <code>Name[Language[Code, Country?], Url?]</code>. <strong>Shredding</strong> gives every leaf path its own column of triples <code>(value or NULL, r, d)</code>:</p>
+
+<ul> <li><strong><code>d</code> (definition level)</strong>: how many of the <em>optional or repeated</em> fields on the path are present for this value. A value whose <code>d</code> is below the leaf's maximum is a NULL, and <code>d</code> says <em>how far down the structure existed</em> (record had no <code>Name</code> at all, vs had a <code>Name</code> but no <code>Language</code>).</li> <li><strong><code>r</code> (repetition level)</strong>: <code>0</code> starts a new record; otherwise the <strong>depth of the repeated field that repeated</strong> (1 = a new <code>Name</code> in the same document, 2 = a new <code>Language</code> in the same <code>Name</code>).</li> </ul>
+
+<p>The code below reproduces the lecture's figure exactly (asserted in the test), then <strong>assembles</strong> records back from the columns using only the triples and the schema.</p>
+
+:::deeper Reference: Dremel shredding and record assembly (repetition and definition levels)
+```rust title="src/storage/dremel.rs"
+//! Dremel record shredding and assembly: nested records ⇄ flat columns of (value, repetition level, definition level).
+use std::collections::BTreeMap;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Rep { Required, Optional, Repeated }
+
+#[derive(Clone, Debug)]
+pub enum Ty { Int, Str, Group(Vec<Field>) }
+
+#[derive(Clone, Debug)]
+pub struct Field { pub name: &'static str, pub rep: Rep, pub ty: Ty }
+
+/// A value: leaves, or a group mapping each child field to its 0..n occurrences (required: 1, optional: ≤ 1).
+#[derive(Clone, Debug, PartialEq)]
+pub enum V { Int(i64), Str(String), Group(Vec<(&'static str, Vec<V>)>) }
+
+impl V {
+    fn occurrences(&self, name: &str) -> &[V] {
+        match self { V::Group(g) => g.iter().find(|(n, _)| *n == name).map(|(_, v)| v.as_slice()).unwrap_or(&[]), _ => &[] }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Column {
+    pub path: String,
+    pub vals: Vec<Option<V>>,           // leaf values; None = NULL (field absent at that position)
+    pub r: Vec<u8>,
+    pub d: Vec<u8>,
+    pub max_r: u8,
+    pub max_d: u8,
+}
+
+/// Field descriptors along the path to one leaf: (name, repetition type).
+struct Leaf { path: Vec<(&'static str, Rep)> }
+
+fn leaves(fields: &[Field], prefix: &mut Vec<(&'static str, Rep)>, out: &mut Vec<Leaf>) {
+    for f in fields {
+        prefix.push((f.name, f.rep));
+        match &f.ty { Ty::Group(c) => leaves(c, prefix, out), _ => out.push(Leaf { path: prefix.clone() }) }
+        prefix.pop();
+    }
+}
+
+fn count_leaves(f: &Field) -> usize { match &f.ty { Ty::Group(c) => c.iter().map(count_leaves).sum(), _ => 1 } }
+
+pub fn columns_of(schema: &[Field]) -> Vec<Column> {
+    let mut ls = vec![];
+    leaves(schema, &mut vec![], &mut ls);
+    ls.iter().map(|l| Column {
+        path: l.path.iter().map(|p| p.0).collect::<Vec<_>>().join("."),
+        vals: vec![], r: vec![], d: vec![],
+        max_r: l.path.iter().filter(|p| p.1 == Rep::Repeated).count() as u8,
+        max_d: l.path.iter().filter(|p| p.1 != Rep::Required).count() as u8,
+    }).collect()
+}
+
+pub fn shred(schema: &[Field], records: &[V]) -> Vec<Column> {
+    let mut cols = columns_of(schema);
+    for rec in records { shred_group(schema, rec, 0, 0, 0, 0, &mut cols); }
+    cols
+}
+
+/// `r`: repetition level for the first value written under these fields; `d`: definition level reached by the parent;
+/// `rdepth`: number of repeated ancestors; `ci`: index of the first leaf column below.
+fn shred_group(fields: &[Field], rec: &V, r: u8, d: u8, rdepth: u8, mut ci: usize, cols: &mut Vec<Column>) {
+    for f in fields {
+        let occ = rec.occurrences(f.name);
+        let n_leaves = count_leaves(f);
+        if occ.is_empty() {
+            for c in ci..ci + n_leaves { cols[c].vals.push(None); cols[c].r.push(r); cols[c].d.push(d); }   // absent: parent's level
+        } else {
+            let depth = rdepth + (f.rep == Rep::Repeated) as u8;
+            let dd = d + (f.rep != Rep::Required) as u8;
+            for (i, v) in occ.iter().enumerate() {
+                let ri = if i == 0 { r } else { depth };               // later occurrences repeat at this field's level
+                match &f.ty {
+                    Ty::Group(children) => shred_group(children, v, ri, dd, depth, ci, cols),
+                    _ => { cols[ci].vals.push(Some(v.clone())); cols[ci].r.push(ri); cols[ci].d.push(dd); }
+                }
+            }
+        }
+        ci += n_leaves;
+    }
+}
+
+/// Inverse of `shred`: place every (value, r, d) triple by its occurrence counters and rebuild the records.
+pub fn assemble(schema: &[Field], cols: &[Column]) -> Vec<V> {
+    let mut ls = vec![];
+    leaves(schema, &mut vec![], &mut ls);
+    // per record: a tree keyed by occurrence-index paths
+    const LEAF_STRIDE: usize = 1 << 20;
+    #[derive(Default)]
+    struct Node { children: BTreeMap<(usize, usize), Node>, leaf: Vec<(usize, V)> }   // child key: (field position, occurrence index)
+    let n_records = cols[0].r.iter().filter(|&&r| r == 0).count();
+    let mut trees: Vec<Node> = (0..n_records).map(|_| Node::default()).collect();
+    for (ci, col) in cols.iter().enumerate() {
+        let path = &ls[ci].path;
+        let mut counters = vec![0usize; path.len() + 1];                 // occurrence index per repeated depth
+        let mut rec = usize::MAX;
+        for i in 0..col.r.len() {
+            let (r, d) = (col.r[i], col.d[i]);
+            if r == 0 { rec = rec.wrapping_add(1); counters.iter_mut().for_each(|c| *c = 0); }
+            else { counters[r as usize] += 1; for c in &mut counters[r as usize + 1..] { *c = 0; } }
+            // walk the path: a field exists in this position iff the definition level reaches it
+            let (mut node, mut def, mut rd) = (&mut trees[rec], 0u8, 0usize);
+            let mut fields = schema;
+            for (depth, (name, rep)) in path.iter().enumerate() {
+                if *rep != Rep::Required { def += 1; }
+                if def > d { break; }                                      // undefined from here down
+                let pos = fields.iter().position(|f| f.name == *name).unwrap();
+                let occ = if *rep == Rep::Repeated { rd += 1; counters[rd] } else { 0 };
+                if depth + 1 == path.len() {
+                    if let Some(v) = &col.vals[i] { node.leaf.push((pos * LEAF_STRIDE + occ, v.clone())); }   // sort key keeps occurrence order
+                } else {
+                    node = node.children.entry((pos, occ)).or_default();
+                    if let Ty::Group(c) = &fields[pos].ty { fields = c; }
+                }
+            }
+        }
+    }
+    fn build(fields: &[Field], n: &Node) -> V {
+        let mut g: Vec<(&'static str, Vec<V>)> = vec![];
+        for (pos, f) in fields.iter().enumerate() {
+            let mut occs: Vec<V> = vec![];
+            match &f.ty {
+                Ty::Group(c) => for ((p, _), child) in n.children.iter().filter(|((p, _), _)| *p == pos) { let _ = p; occs.push(build(c, child)); },
+                _ => { let mut vs: Vec<&(usize, V)> = n.leaf.iter().filter(|(k, _)| k / LEAF_STRIDE == pos).collect(); vs.sort_by_key(|(k, _)| *k); occs.extend(vs.into_iter().map(|(_, v)| v.clone())); }
+            }
+            if !occs.is_empty() { g.push((f.name, occs)); }
+        }
+        V::Group(g)
+    }
+    trees.iter().map(|t| build(schema, t)).collect()
+}
+```
+:::
+
+```text title="the lecture's two documents, shredded"
+Name.Url               [("http://A", 0, 2), ("http://B", 1, 2), ("NULL", 1, 1), ("http://C", 0, 2)]
+Name.Language.Code     [("en-us", 0, 2), ("en", 2, 2), ("NULL", 1, 1), ("en-gb", 1, 2), ("NULL", 0, 1)]
+Name.Language.Country  [("us", 0, 3), ("NULL", 2, 2), ("NULL", 1, 1), ("gb", 1, 3), ("NULL", 0, 1)]
+```
+
+<p>Read one: <code>Name.Language.Country</code> is <code>us, NULL, NULL, gb, NULL</code>. The <code>NULL</code> with <code>(r=2, d=2)</code> means "a second <code>Language</code> inside the same <code>Name</code> exists (r = 2), but it has no country (d = 2 &lt; max 3)". The <code>NULL</code> with <code>(1, 1)</code> means "a second <code>Name</code> exists with no <code>Language</code> at all". The final <code>(0, 1)</code> is record 2: a <code>Name</code> exists (d=1), no <code>Language</code>.</p>
+
+<ul> <li><strong>How the encoder works</strong>: recurse over the schema; for each field, <em>absent</em> ⇒ write one NULL to every leaf beneath it with the parent's <code>d</code>; <em>present</em> ⇒ for each occurrence, the first gets the repetition level handed down, later ones get <strong>this field's own repeated depth</strong>, and <code>d</code> increases by one for each optional or repeated field passed.</li> <li><strong>How assembly works</strong>: a triple's repetition level says which counter to increment (a new occurrence at that repeated depth, resetting deeper counters); its definition level says how much of the path to create. Two columns that share an ancestor (<code>Name.Url</code>, <code>Name.Language.Code</code>) agree on its occurrence index because both count <code>Name</code> occurrences with the same rule. (The Dremel paper builds a finite-state machine that reads columns in the right order for streaming assembly; this implementation merges per-column trees, which is simpler and equivalent.)</li> <li><strong>Why levels instead of offsets?</strong> A column of <code>(value, r, d)</code> can be read, filtered and aggregated <strong>without touching any ancestor</strong>: <code>SUM(Name.Language.Code)</code> never reads <code>DocId</code>. Levels are tiny integers that compress extremely well with RLE and bit-packing.</li> <li><strong>Tests</strong>: the lecture's figure (asserted triple by triple), then <strong>300 random documents</strong> (0–3 names, 0–2 languages, optional fields) round-tripped through shred and assemble. Maximum levels per column match the schema (<code>Country</code>: r ≤ 2, d ≤ 3).</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A nested value as a Rust enum</strong> (<code>V::Group(Vec&lt;(&amp;'static str, Vec&lt;V&gt;)&gt;)</code>): each field maps to <em>its occurrences</em>, so required/optional/repeated all look alike to the shredder. The schema, not the data, says what's legal.</li> <li><strong><code>&amp;'static str</code> field names</strong> keep records cheap to build in tests; production code interns names into integer ids.</li> <li><strong>Recursion returning leaf counts</strong> (<code>count_leaves</code>) lets the shredder compute each subtree's slice of the column vector without a separate pass.</li> <li>Real implementations use <strong><code>arrow-rs</code>/<code>parquet</code></strong> crates: the <code>parquet</code> crate's <code>ColumnWriter</code> and <code>RecordReader</code> implement exactly these levels.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>A footer that must be read whole</strong>: a file with 50 000 columns × 100 row groups has a multi-MB footer; plan for column-selective metadata or split metadata into its own object.</li> <li><strong>Zone maps on strings</strong> truncate: store min/max as prefixes (and mark them as <em>bounds</em>, not exact values) or compare carefully, since a truncated max can be smaller than the real maximum.</li> <li><strong>Dictionary fallbacks</strong> must be per chunk: a column whose NDV grows over the file switches encodings mid-file; readers must handle both, and the writer must not buffer an unbounded dictionary.</li> <li><strong>Statistics lie after updates</strong>: lakehouse formats make files immutable and rewrite them, so stats stay correct; in-place formats must invalidate them.</li> <li><strong>Floating-point zone maps</strong>: NaN breaks min/max ordering (use <code>total_cmp</code> and a separate NaN flag), and <code>-0.0</code> vs <code>0.0</code> must be handled.</li> <li><strong>Nested levels with lists of lists</strong>: an <em>empty list</em> and a <em>null list</em> must be distinguishable (a <code>d</code> level for "list present"); formats that omit it can't round-trip <code>[]</code> vs <code>NULL</code>.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "An Empirical Evaluation of Columnar Storage Formats"
+url = "https://www.vldb.org/pvldb/vol17/p148-zeng.pdf"
+
+[[sources]]
+title = "Dremel: Interactive Analysis of Web-Scale Datasets"
+url = "https://research.google/pubs/pub36632/"
+
+[[sources]]
+title = "Weaving Relations for Cache Performance"
+url = "https://www.vldb.org/conf/2001/P169.pdf"
+
+[[sources]]
+title = "format specification"
+url = "https://parquet.apache.org/docs/file-format/"
+
+[[sources]]
+title = "encodings"
+url = "https://parquet.apache.org/docs/file-format/data-pages/encodings/"
+
+[[sources]]
+title = "specification"
+url = "https://orc.apache.org/specification/"
+
+[[sources]]
+title = "columnar format"
+url = "https://arrow.apache.org/docs/format/Columnar.html"
+
+[[sources]]
+title = "parquet"
+url = "https://docs.rs/parquet"
+
+[[sources]]
+title = "arrow"
+url = "https://docs.rs/arrow"
+
+[[sources]]
+title = "lance"
+url = "https://github.com/lancedb/lance"

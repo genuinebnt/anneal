@@ -1,0 +1,272 @@
+title = "Multi-way and worst-case optimal joins"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 363
+kind = "guide"
+lede = "15-721 S2024 lecture #10 · AGM bound · leapfrog triejoin · hash trie join · when binary joins explode · measured on a worst-case instance and on skewed graphs"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>The problem</strong>: a cascade of binary joins can produce an intermediate result <strong>much larger than both the inputs and the final output</strong>; cyclic queries (triangles, cliques, graph patterns) do this routinely. Any pair of tables in the lecture's example joins into something larger than its inputs.</li> <li><strong>Worst-case optimal join (WCOJ)</strong>: an algorithm whose running time is bounded by the <strong>worst-case output size</strong> the query <em>could</em> have for inputs of those sizes (the <strong>AGM bound</strong>), not by the size of any intermediate. For a triangle over three relations of N rows the bound is <strong>N&#94;1.5</strong>, while a binary plan can need <strong>N²</strong>. The trick: <strong>join one variable at a time, not one relation at a time</strong>.</li> <li><strong>Leapfrog Triejoin</strong> (Veldhuizen): sort each table by the join attributes, <strong>in one global attribute order</strong>, and view it as a <strong>trie</strong> (one level per attribute). Pick a variable; the tables that contain it each give an iterator; <strong>leapfrog</strong>: whoever is behind seeks to the largest key seen so far until all iterators agree (a <em>common match</em>). Bind the variable, descend one level in every table that has it, and move to the next variable. Output a tuple when all variables are bound.</li> <li><strong>Limitation</strong>: the tries must be <strong>built in the global attribute order</strong>; choosing the order at run time would need a trie for every permutation, which is impractical. Fine for precomputed indexes, painful for ad-hoc queries.</li> <li><strong>Hash Trie Join</strong> (Freitag et al., Umbra): build the trie <strong>on the fly from hashes</strong> of the keys instead of the keys; each bucket points to the next level or the tuple. Tricks: <strong>singleton pruning</strong> (a lower level with one entry is skipped: jump to the leaf), <strong>lazy child expansion</strong> (don't build inner nodes the filters never reach), and <strong>pointer tagging</strong> (16 unused upper bits of a 64-bit pointer carry metadata).</li> <li><strong>The optimizer decides</strong>: multi-way joins are <strong>slower</strong> than binary joins when intermediates aren't bigger than the inputs, so the DBMS needs a heuristic (and cardinality estimates, see Part III) to choose per query or even per subplan.</li> <li><strong>Factorization</strong>: instead of materializing duplicated tuples in an intermediate, keep <strong>a counter</strong> of the duplicates (DuckPGQ); it shrinks outputs but every operator downstream must understand the counters.</li> </ul>
+"""
+
+[[sections]]
+heading = "Two implementations, one query"
+body = """
+<p>The query is the triangle <code>R(a,b) ⋈ S(b,c) ⋈ T(a,c)</code>, relations as sorted, de-duplicated pairs, variable order <code>a, b, c</code>.</p>
+
+<ol> <li><strong>Binary plan</strong>: hash <code>S</code> by <code>b</code>, hash <code>T</code> on <code>(a,c)</code>; for each <code>R</code> row look up matching <code>S</code> rows (the <strong>intermediate</strong>: every <code>(a,b,c)</code> wedge) and probe <code>T</code> for each.</li> <li><strong>Leapfrog Triejoin</strong> over the sorted pairs: a two-level <strong>trie iterator</strong> per relation (<code>open</code>, <code>up</code>, <code>key</code>, <code>next</code>, <code>seek</code>, <code>at_end</code>) whose seeks <strong>gallop</strong> (exponential then binary search), and one recursive <strong>leapfrog</strong> loop per variable.</li> <li><strong>CSR generic join</strong> for the case where all three relations are <em>one edge list</em>: build <code>adj(a)</code> (sorted neighbours) once; for each edge <code>(a,b)</code>, the triangles through it are <code>|adj(a) ∩ adj(b)|</code>. This is the leapfrog loop with the trie flattened into arrays, and it is how graph engines run triangle counting.</li> </ol>
+
+:::deeper Reference: binary baseline, trie iterator with galloping seeks, generic leapfrog triejoin, CSR intersection (serial and parallel)
+```rust title="src/exec/wcoj.rs"
+//! Multi-way joins: Leapfrog Triejoin over sorted relations vs a cascade of binary hash joins.
+//! Relations are binary, sorted lexicographically and de-duplicated; attributes appear in one global variable order.
+use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasherDefault, Hasher};
+
+pub type Rel = Vec<(u32, u32)>;
+
+pub fn normalize(mut r: Rel) -> Rel { r.sort_unstable(); r.dedup(); r }
+
+// ---- a cheap hasher so the binary-join baseline is not penalised by SipHash ----
+#[derive(Default)] pub struct Fx(u64);
+impl Hasher for Fx {
+    fn finish(&self) -> u64 { self.0 }
+    fn write(&mut self, b: &[u8]) { for &x in b { self.0 = (self.0.rotate_left(5) ^ x as u64).wrapping_mul(0x517c_c1b7_2722_0a95); } }
+    fn write_u32(&mut self, x: u32) { self.0 = (self.0.rotate_left(5) ^ x as u64).wrapping_mul(0x517c_c1b7_2722_0a95); }
+    fn write_u64(&mut self, x: u64) { self.0 = (self.0.rotate_left(5) ^ x).wrapping_mul(0x517c_c1b7_2722_0a95); }
+}
+type FxBuild = BuildHasherDefault<Fx>;
+
+/// Baseline: ((R ⋈ S on b) ⋈ T on (a, c)), executed as a hash join then a hash probe.
+/// Returns (result rows, intermediate rows produced by R ⋈ S).
+pub fn binary_triangles(r: &[(u32, u32)], s: &[(u32, u32)], t: &[(u32, u32)]) -> (u64, u64) {
+    let mut by_b: HashMap<u32, Vec<u32>, FxBuild> = HashMap::default();
+    for &(b, c) in s { by_b.entry(b).or_default().push(c); }
+    let tset: HashSet<u64, FxBuild> = t.iter().map(|&(a, c)| (a as u64) << 32 | c as u64).collect();
+    let (mut inter, mut out) = (0u64, 0u64);
+    for &(a, b) in r {
+        if let Some(cs) = by_b.get(&b) {
+            for &c in cs { inter += 1; if tset.contains(&((a as u64) << 32 | c as u64)) { out += 1; } }
+        }
+    }
+    (out, inter)
+}
+
+/// Iterator over a sorted relation viewed as a two-level trie: level 0 = first column, level 1 = second.
+struct Trie<'a> { rel: &'a [(u32, u32)], level: i8, pos: [usize; 2], hi: [usize; 2] }
+
+impl<'a> Trie<'a> {
+    fn new(rel: &'a [(u32, u32)]) -> Self { Trie { rel, level: -1, pos: [0; 2], hi: [0; 2] } }
+    #[inline] fn col(&self, i: usize) -> u32 { if self.level == 0 { self.rel[i].0 } else { self.rel[i].1 } }
+    #[inline] fn key(&self) -> u32 { self.col(self.pos[self.level as usize]) }
+    #[inline] fn at_end(&self) -> bool { let l = self.level as usize; self.pos[l] >= self.hi[l] }
+    /// First index in [from, hi) where `before(key)` is false, found by galloping then binary search:
+    /// cost O(log distance travelled), not O(log n), which is what makes leapfrog seeks cheap.
+    fn partition(&self, from: usize, hi: usize, before: impl Fn(u32) -> bool) -> usize {
+        let (mut lo, mut step) = (from, 1);
+        while lo + step < hi && before(self.col(lo + step)) { lo += step; step *= 2; }
+        let (mut l, mut h) = (lo, (lo + step + 1).min(hi));
+        while l < h { let m = (l + h) / 2; if before(self.col(m)) { l = m + 1 } else { h = m } }
+        l
+    }
+    fn open(&mut self) {
+        if self.level < 0 { self.level = 0; self.pos[0] = 0; self.hi[0] = self.rel.len(); }
+        else {
+            let (p, h) = (self.pos[0], self.hi[0]);
+            let key = self.rel[p].0;
+            self.pos[1] = p;
+            self.hi[1] = self.partition(p, h, |x| x <= key);   // end of the group sharing this first-column value
+            self.level = 1;
+        }
+    }
+    fn up(&mut self) { self.level -= 1; }
+    fn next(&mut self) {
+        if self.level == 0 { let key = self.key(); self.pos[0] = self.partition(self.pos[0], self.hi[0], |x| x <= key); }
+        else { self.pos[1] += 1; }
+    }
+    fn seek(&mut self, k: u32) { let l = self.level as usize; self.pos[l] = self.partition(self.pos[l], self.hi[l], |x| x < k); }
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct Visited { pub per_level: Vec<u64> }
+
+/// Leapfrog Triejoin. `plan[v]` lists the relations that contain variable v (in global variable order); each relation
+/// must list its columns in the same relative order. `emit` receives each binding of all variables.
+pub fn lftj(rels: &[&[(u32, u32)]], plan: &[Vec<usize>], emit: &mut dyn FnMut(&[u32])) -> Visited {
+    let mut tries: Vec<Trie> = rels.iter().map(|r| Trie::new(r)).collect();
+    let mut vis = Visited { per_level: vec![0; plan.len()] };
+    let mut binding = Vec::with_capacity(plan.len());
+    rec(0, &mut tries, plan, &mut binding, emit, &mut vis);
+    vis
+}
+
+fn rec(v: usize, tries: &mut [Trie], plan: &[Vec<usize>], binding: &mut Vec<u32>, emit: &mut dyn FnMut(&[u32]), vis: &mut Visited) {
+    if v == plan.len() { emit(binding); return; }
+    let part = &plan[v];
+    let k = part.len();
+    assert!(k >= 1 && k <= 8);
+    for &r in part { tries[r].open(); }
+    if part.iter().all(|&r| !tries[r].at_end()) {
+        let mut order = [0usize; 8];
+        order[..k].copy_from_slice(part);
+        order[..k].sort_unstable_by_key(|&r| tries[r].key());
+        let mut p = 0;
+        'outer: loop {
+            let x = tries[order[p]].key();
+            let max = tries[order[(p + k - 1) % k]].key();
+            if x == max {
+                vis.per_level[v] += 1;
+                binding.push(x);
+                rec(v + 1, tries, plan, binding, emit, vis);
+                binding.pop();
+                tries[order[p]].next();
+            } else {
+                tries[order[p]].seek(max);
+            }
+            if tries[order[p]].at_end() { break 'outer; }
+            p = (p + 1) % k;
+        }
+    }
+    for &r in part { tries[r].up(); }
+}
+
+/// R(a,b) ⋈ S(b,c) ⋈ T(a,c), variable order a, b, c.
+pub fn lftj_triangles(r: &[(u32, u32)], s: &[(u32, u32)], t: &[(u32, u32)]) -> (u64, Visited) {
+    let mut n = 0u64;
+    let vis = lftj(&[r, s, t], &[vec![0, 2], vec![0, 1], vec![1, 2]], &mut |_| n += 1);
+    (n, vis)
+}
+
+/// Reference by nested loops with a binary-search probe: O(|R| · |S|).
+pub fn brute_triangles(r: &[(u32, u32)], s: &[(u32, u32)], t: &[(u32, u32)]) -> u64 {
+    let mut n = 0;
+    for &(a, b) in r { for &(b2, c) in s { if b == b2 && t.binary_search(&(a, c)).is_ok() { n += 1; } } }
+    n
+}
+
+/// The trie of an edge list materialised as CSR: `adj(a)` = sorted neighbours of `a`. Both trie levels are array slices,
+/// so "open" is two loads and "seek" is a search inside one slice.
+pub struct Csr { off: Vec<usize>, dst: Vec<u32> }
+
+impl Csr {
+    pub fn build(e: &[(u32, u32)]) -> Csr {
+        let n = e.last().map_or(0, |&(a, _)| a as usize + 1).max(e.iter().map(|&(_, b)| b as usize + 1).max().unwrap_or(0));
+        let mut off = vec![0usize; n + 1];
+        for &(a, _) in e { off[a as usize + 1] += 1; }
+        for i in 0..n { off[i + 1] += off[i]; }
+        Csr { off, dst: e.iter().map(|&(_, b)| b).collect() }
+    }
+    #[inline] pub fn adj(&self, a: u32) -> &[u32] {
+        match self.off.get(a as usize + 1) { Some(&hi) => &self.dst[self.off[a as usize]..hi], None => &[] }
+    }
+}
+
+/// |x ∩ y| for sorted slices: merge when sizes are similar, gallop the smaller list through the larger otherwise.
+pub fn intersect_count(x: &[u32], y: &[u32]) -> u64 {
+    let (small, large) = if x.len() <= y.len() { (x, y) } else { (y, x) };
+    if small.is_empty() { return 0; }
+    let mut n = 0;
+    if large.len() / small.len() < 16 {
+        let (mut i, mut j) = (0, 0);
+        while i < small.len() && j < large.len() {
+            let (p, q) = (small[i], large[j]);
+            n += (p == q) as u64;
+            i += (p <= q) as usize;
+            j += (p >= q) as usize;
+        }
+    } else {
+        let mut lo = 0;
+        for &p in small {
+            let mut step = 1;
+            while lo + step < large.len() && large[lo + step] < p { lo += step; step *= 2; }
+            let hi = (lo + step + 1).min(large.len());
+            lo += large[lo..hi].partition_point(|&q| q < p);
+            if lo == large.len() { break; }
+            n += (large[lo] == p) as u64;
+        }
+    }
+    n
+}
+
+/// Triangles of an oriented edge list E (a<b): for every edge (a,b), |adj(a) ∩ adj(b)|. This is the generic-join /
+/// leapfrog loop specialised to one relation used three times: bound a, bound b, intersect to find c.
+pub fn csr_triangles(e: &[(u32, u32)]) -> u64 {
+    let g = Csr::build(e);
+    e.iter().map(|&(a, b)| intersect_count(g.adj(a), g.adj(b))).sum()
+}
+
+/// Same, with the edge loop split across threads.
+pub fn csr_triangles_par(e: &[(u32, u32)], threads: usize) -> u64 {
+    let g = Csr::build(e);
+    let chunk = e.len().div_ceil(threads).max(1);
+    std::thread::scope(|s| {
+        let hs: Vec<_> = e.chunks(chunk).map(|c| { let g = &g; s.spawn(move || c.iter().map(|&(a, b)| intersect_count(g.adj(a), g.adj(b))).sum::<u64>()) }).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).sum()
+    })
+}
+```
+:::
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><code>lftj_matches_brute_force</code>: 200 random triples of relations over domains of 3, 10, 40 and 200 values (tiny domains give heavy duplication of keys and many empty levels), compared with a nested-loop reference <strong>and</strong> with the binary hash plan.</li> <li><code>lftj_emits_the_right_tuples_and_handles_other_shapes</code>: the generic driver, not just triangles: a two-way join (a variable present in only one relation at the first and last level) compared as a <em>sorted list of tuples</em>, and a <strong>4-cycle</strong> <code>R(a,b) S(b,c) T(c,d) U(a,d)</code> compared with a nested-loop count.</li> <li><code>csr_intersection_matches_lftj</code>: 100 random skewed graphs, serial and 4-thread CSR counts equal the leapfrog count, an empty graph, and the galloping branch (a 5-element list against a 10 000-element list).</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p><strong>Worst-case instance</strong>: each relation is <code>{(0,i)} ∪ {(i,0)}</code> for <code>i ≤ n</code> (2n+1 rows). Every pair of relations joins into ~n² rows, but only O(n) triangles exist.</p>
+
+```text title="worst-case triangle instance"
+      n  triangles binary interm.    binary ms   LFTJ visited      LFTJ ms
+   1000       3001        1003001          1.9           6003         0.10
+   2000       6001        4006001          7.8          12003         0.21
+   4000      12001       16012001         35.0          24003         0.41
+   8000      24001       64024001        136.3          48003         0.76
+```
+
+<p><strong>Graphs</strong>: triangle counting with <code>R = S = T =</code> the oriented edge list (a &lt; b). "Skewed" draws endpoints with density ∝ x² (a few hub vertices); <em>wedges</em> are the binary plan's intermediate rows.</p>
+
+```text title="graph triangle counting"
+graph                 edges  triangles      wedges  binary ms   LFTJ ms    CSR ms   CSR 8thr
+uniform 200k/1M      999975        174     3330366         81       182        31          7
+skewed 200k/1M       986698     307020    11542989        129       362       143         68
+skewed 100k/2M      1924851    3435140    67108300        924      1658       745        295
+skewed 50k/3M       2748520   18951402   213027718       5627      4791      2035        745
+```
+
+<ul> <li><strong>The asymptotics are real</strong>: on the adversarial instance the binary plan's intermediate <strong>quadruples</strong> when n doubles (1 M → 64 M rows) and so does its time; the leapfrog join visits 48 003 trie nodes for n = 8000 and its time only doubles with n: <strong>180× faster</strong> at n = 8000, and the gap keeps growing.</li> <li><strong>Real graphs are less adversarial</strong>: wedges are 3.3×, 11.7×, 34.9× and 77.5× the number of edges, and the generic <strong>leapfrog over sorted pairs does not beat the binary plan</strong> until the skew is the highest (4.8 s vs 5.6 s). The trie iterators pay a galloping <code>open</code>/<code>seek</code> at every level and the baseline's hash probes are cheap with a fast hasher.</li> <li><strong>What wins is the data layout, not the name</strong>: the <strong>CSR intersection</strong> is <strong>2.6× faster</strong> than the binary plan on the uniform graph and <strong>2.8×</strong> on the most skewed one, single-threaded, and <strong>scales with threads</strong> (8 threads: 4.4× faster on the uniform graph, 31 → 7 ms, and 2.7× on the skewed 50k/3M graph, 2035 → 745 ms: the hubs make per-edge work uneven, see the pitfalls). Intersections of lists of very different lengths are where the gallop branch matters.</li> <li><strong>Do not take only the headline</strong>: without the adversarial structure the binary plan was within a small factor, so the multi-way operator must be chosen by the optimizer <strong>only for cyclic subqueries with a large estimated intermediate</strong> (as the lecture says), not used for every join. Not measured here: the cost of building the sorted copies (each relation must be sorted in the global attribute order, the binary plan needs no sorted input), which is amortized only if the index already exists.</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A trie as a borrowed slice</strong>: <code>Trie&lt;'a&gt;</code> holds <code>&amp;'a [(u32, u32)]</code> and four <code>usize</code>s; no allocation, no copies of the relation. The two levels are views over the same sorted array: level 0 ranges over runs of equal first columns, level 1 over the second column inside one run.</li> <li><strong><code>partition(from, hi, before: impl Fn(u32) -&gt; bool)</code></strong> is one galloping search that serves <em>lower bound</em>, <em>upper bound</em> and <em>end of group</em> (<code>|x| x &lt; k</code> vs <code>|x| x &lt;= key</code>); the closure is inlined, so the abstraction is free. Galloping makes a seek cost O(log <em>distance</em>), which is what the leapfrog complexity analysis assumes.</li> <li><strong>No allocation in the recursion</strong>: the participants' sort order lives in a <code>[usize; 8]</code> on the stack with <code>copy_from_slice</code> (a <code>Vec</code> per trie node would put an allocation on the hottest path).</li> <li><strong><code>&amp;mut dyn FnMut(&amp;[u32])</code> as the output sink</strong> keeps the recursive function non-generic (one copy of the code); for a production operator make the sink a generic or write into a vectorized output batch (<a href="/cookbook/p/columnar-formats-and-nested-data">A12</a>) instead of an indirect call per tuple.</li> <li><strong>Branchless merge</strong>: in <code>intersect_count</code>, <code>i += (p &lt;= q) as usize; j += (p &gt;= q) as usize; n += (p == q) as u64;</code> replaces three unpredictable branches with arithmetic; it wins when the lists have similar size and the match pattern is random.</li> <li><strong>Parallelism is one line</strong>: the edge loop <code>chunks(..)</code> over <code>thread::scope</code>, sharing <code>&amp;Csr</code> immutably; the index is read-only, so there are no locks and no <code>unsafe</code>.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>The global attribute order is a planning decision</strong>: the triangle is symmetric, most queries are not. A bad order creates large partial bindings (the same blow-up the algorithm avoids); picking it needs cardinality and distinct-count statistics (Part III), or a heuristic such as "most selective / most constrained variable first".</li> <li><strong>Set vs bag semantics</strong>: the tries here are de-duplicated (<code>normalize</code>); SQL is a multiset. Carry a <strong>multiplicity per leaf</strong> (the lecture's <em>factorization</em> counter) and multiply them in the output, or duplicate rows will be lost or over-counted.</li> <li><strong>Every relation must be sorted in the order its attributes appear in the plan</strong>: a relation joined on <code>(c, a)</code> needs its own <code>(c, a)</code>-ordered copy; the global order determines which copies exist.</li> <li><strong>Skew in the parallel version</strong>: chunks of edges have equal size but not equal work (an edge between two hubs costs far more than one between two leaves); use many small morsels with work stealing (<a href="/cookbook/p/query-scheduling">A10</a>) instead of one chunk per thread.</li> <li><strong>Not every cycle is expensive</strong>: acyclic queries have <strong>linear-time</strong> plans (Yannakakis: semi-join reductions then binary joins), so multi-way joins are for the cyclic part; production systems combine both (Umbra, and Mhedhbi &amp; Salihoglu for graph queries).</li> <li><strong>At_end after open</strong>: an empty trie level must be checked immediately after <code>open</code>; leapfrog on an exhausted iterator reads out of range (the loop in <code>rec</code> guards this).</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Leapfrog Triejoin: a Worst-Case Optimal Join Algorithm"
+url = "https://arxiv.org/abs/1210.0481"
+
+[[sources]]
+title = "Adopting Worst-Case Optimal Joins in Relational Database Systems"
+url = "https://www.vldb.org/pvldb/vol13/p1891-freitag.pdf"
+
+[[sources]]
+title = "Optimizing Subgraph Queries by Combining Binary and Worst-Case Optimal Joins"
+url = "https://www.vldb.org/pvldb/vol12/p1692-mhedhbi.pdf"
+
+[[sources]]
+title = "DuckPGQ: Efficient Property Graph Queries in an Analytical RDBMS"
+url = "https://www.cidrdb.org/cidr2023/papers/p66-wolde.pdf"
+
+[[sources]]
+title = "datafrog"
+url = "https://docs.rs/datafrog"
+
+[[sources]]
+title = "differential-dataflow"
+url = "https://docs.rs/differential-dataflow"

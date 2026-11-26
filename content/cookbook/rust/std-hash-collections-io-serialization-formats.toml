@@ -1,0 +1,89 @@
+title = "Hand-rolled serialisation on `std::io`"
+module = "Standard library and core"
+module_order = 2
+chapter = "Memory and low level"
+chapter_order = 6
+order = 95
+kind = "recipe"
+lede = "Endian integers, varints, length-prefixed records, checksums, versioned headers, hostile input."
+level = "advanced"
+code = ["examples/std_tour/std_hash_collections_io_serialization_formats.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+snapshot and log files, simple wire protocols, cache files, anywhere a serde dependency is not wanted or the byte layout must be exact. Run: cargo run --release --example std_hash_collections_io_serialization_formats
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>persisting a map to disk</li><li>appending records to a log</li><li>framing messages</li><li>escaping a line-based text export</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>Read::read_exact</code></li><li><code>Read::read</code></li><li><code>Read::take</code></li><li><code>Read::by_ref</code></li><li><code>Read::read_to_end</code></li><li><code>Write::write_all</code></li><li><code>Write::flush</code></li><li><code>u16::to_le_bytes</code></li><li><code>u32::from_le_bytes</code></li><li><code>u32::to_be_bytes</code></li><li><code>i64::from_be_bytes</code></li><li><code>String::from_utf8</code></li><li><code>std::io::ErrorKind::UnexpectedEof</code></li><li><code>std::error::Error::source</code></li><li><code>From (for ?)</code></li><li><code>HashMap</code></li><li><code>BTreeMap</code></li><li><code>slice::sort_unstable_by</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/io/trait.Read.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/io/trait.Read.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+core: the integer `to_*_bytes`/`from_*_bytes` methods, `str::from_utf8`. alloc: `String`, `Vec`, `BTreeMap`. std: `Read`, `Write` (`std::io`), `HashMap`, `DefaultHasher`. std has NO serialisation framework and NO checksum function: CRC-32 is written out below.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+serde/bincode/protobuf (see the crate tour); zero-copy slice parsing, TLV skipping and bit readers (see `binary_format_parsing`, which this file complements with the **streaming** side); compression and encryption; schema evolution beyond a version number.
+
+**Scope of claims**: CRC-32 detects accidental corruption, **not** tampering (anyone can recompute it): use a MAC for that. The fuzz section checks "no panic, no oversized buffer" on seeded random inputs; it is not coverage-guided fuzzing (use cargo-fuzz for that).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Format** (all integers little endian): header  = "FFKV" &#124; version u16 &#124; flags u16 (must be 0) &#124; crc32(previous 8 bytes) u32 record  = tag u8 (1 = entry, 0 = end) &#124; len varint &#124; payload[len] &#124; crc32(tag, len, payload) u32
+
+```text
+entry   = key_len varint | key (UTF-8) | value i64
+end     = number of entries, varint        (without it, a file cut at a record boundary would look complete)
+```
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Integer to bytes and back</td><td><code>x.to_le_bytes(), u32::from_le_bytes(buf); read with read_exact(&amp;mut buf)</code></td></tr><tr><td>Choose a byte order</td><td><code>pick one, write it in the spec; to_ne_bytes is wrong for files and networks</code></td></tr><tr><td>Read N bytes where N comes from the input</td><td><code>check N against a limit, then r.by_ref().take(N).read_to_end(&amp;mut v) and compare lengths</code></td></tr><tr><td>Tell "clean end" from "cut off"</td><td><code>a first read returning 0 at a boundary vs EOF inside a record (retry Interrupted yourself)</code></td></tr><tr><td>Same data =&gt; same bytes</td><td><code>sort HashMap entries (or use BTreeMap) before writing</code></td></tr><tr><td>Persist a checksum or hash</td><td><code>a specified algorithm (CRC-32, SHA-256); never DefaultHasher (unspecified, may change)</code></td></tr><tr><td>Evolve the format</td><td><code>magic + version first; reject unknown versions and unknown mandatory features</code></td></tr><tr><td>Many small writes</td><td><code>wrap in BufWriter and flush explicitly</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Pitfalls"
+body = """
+`Vec::with_capacity(len_from_input)` lets 10 bytes of input demand gigabytes; `read` may return fewer bytes than asked; `as u32` silently truncates a length; a decoder that accepts several encodings of one value breaks hashing and signatures.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://protobuf.dev/programming-guides/encoding/" target="_blank" rel="noreferrer">https://protobuf.dev/programming-guides/encoding/</a> (varints)</li><li><a href="https://www.w3.org/TR/png/#D-CRCAppendix" target="_blank" rel="noreferrer">https://www.w3.org/TR/png/#D-CRCAppendix</a> (CRC-32 reference code)</li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/io/trait.Read.html"
+url = "https://doc.rust-lang.org/std/io/trait.Read.html"
+
+[[sources]]
+title = "protobuf.dev/programming-guides/encoding"
+url = "https://protobuf.dev/programming-guides/encoding/"
+
+[[sources]]
+title = "w3.org/TR/png/#D-CRCAppendix"
+url = "https://www.w3.org/TR/png/#D-CRCAppendix"

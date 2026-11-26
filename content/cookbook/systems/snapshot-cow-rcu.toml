@@ -1,0 +1,64 @@
+title = "Read-mostly shared state with copy-on-write snapshots"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Concurrent data structures"
+chapter_order = 3
+order = 260
+kind = "recipe"
+lede = "read-mostly shared state with copy-on-write snapshots (RCU style)."
+level = "advanced"
+code = ["examples/concurrency/snapshot_cow_rcu.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>hot-reloaded config</li><li>routing tables</li><li>feature flags</li><li>certificate stores</li><li>ACLs read on every request</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+`Snapshot<T>` = `RwLock<Arc<T>>`. A reader takes the read lock only long enough to clone the `Arc` (a refcount bump), releases the lock, then works on its private, immutable version for as long as it likes. A writer builds a complete **new** `T` off to the side and swaps the pointer under the write lock.
+
+Readers holding the old version keep it alive via the Arc; it is freed when the last one drops it. No reader ever sees a half-updated value.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+guarding a multi-field struct with per-field atomics gives torn reads (a was updated, b not yet). The demo below runs both: the snapshot version must show **zero** torn reads; the racy per-field-atomic version typically shows many (timing-dependent, so only printed). The racy version is not UB; it is a logic race.
+
+RCU ("read-copy-update") is the same idea in the Linux kernel: readers are wait-free, writers copy, publish with a pointer swap, and reclaim the old version after a grace period. Here `Arc` refcounting does the reclamation.
+
+`arc-swap` (<https://github.com/vorner/arc-swap>) replaces the RwLock with a lock-free pointer swap so even the Arc clone never blocks; same API shape (`load`, `store`). `update` is a read-modify-write under the write lock (so concurrent updates are not lost); `store` just replaces. **Persistent data structures**: copying the whole value per write is O(n).
+
+Persistent structures share unchanged parts between versions, so a new version costs O(change). Below, `PStack` is an immutable linked list: pushing creates one new node pointing at the old list via `Arc`, and old versions stay valid and unchanged.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>config reload on SIGHUP</li><li>service discovery tables</li><li>compiled regex/rule sets swapped atomically</li><li>Rust crates like <code>im</code> and <code>rpds</code> provide full persistent collections for this pattern</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://docs.rs/arc-swap/latest/arc_swap/> and <https://marabos.nl/atomics/> and <https://en.wikipedia.org/wiki/Read-copy-update>
+"""
+
+[[sources]]
+title = "github.com/vorner/arc-swap"
+url = "https://github.com/vorner/arc-swap"
+
+[[sources]]
+title = "docs.rs/arc-swap/latest/arc_swap"
+url = "https://docs.rs/arc-swap/latest/arc_swap/"
+
+[[sources]]
+title = "marabos.nl/atomics"
+url = "https://marabos.nl/atomics/"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Read-copy-update"
+url = "https://en.wikipedia.org/wiki/Read-copy-update"

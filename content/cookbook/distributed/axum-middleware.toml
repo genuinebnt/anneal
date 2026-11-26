@@ -1,0 +1,30 @@
+title = "Middleware with `from_fn`"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 512
+kind = "recipe"
+lede = "Correlation ids on every request and response."
+level = "intermediate"
+code = ["examples/web/axum_middleware.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+REST API stage ("correlation IDs propagated across services").
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>request ids/correlation ids across microservices</li><li>the same layer shape hosts auth</li><li>metrics</li><li>tracing</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: a middleware is `async fn(Request, Next) -> Response`. It can inspect/modify the request before calling `next.run(req)` and the response after. Here: reuse the caller's `x-request-id` or mint one, and echo it back so logs across services can be joined.
+
+Layers wrap routes added **before** `.layer(..)`.
+"""

@@ -1,0 +1,87 @@
+title = "Tooling"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Methods: fuzzing"
+chapter_order = 3
+order = 143
+kind = "guide"
+lede = "Enough tools to cover the loop, snapshots, property tests, fuzzing and profiling."
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+```text title="Cargo.toml"
+[dev-dependencies]
+insta = "1"
+pretty_assertions = "1"
+proptest = "1"
+
+[profile.release]
+debug = true          # symbols for samply / Instruments
+```
+
+```sh title="shell"
+cargo install bacon cargo-insta cargo-nextest cargo-llvm-cov hyperfine samply
+
+bacon test                                   # re-run tests on save
+cargo insta test --review                    # accept or reject parser snapshots
+LOX_FILTER=closure cargo test --test lang    # one golden folder
+cargo llvm-cov --html                        # which match arms never ran
+
+cargo build --release
+hyperfine --warmup 3 'target/release/rlox bench/fib.lox'
+samply record target/release/rlox bench/fib.lox
+
+# official suite
+git clone https://github.com/munificent/craftinginterpreters /tmp/ci
+cp -r /tmp/ci/test tests/lox/official
+```
+"""
+
+[[sections]]
+heading = "Property test: the lexer never panics and spans cover the source in order"
+body = """
+```rust title="src/lexer.rs, tests"
+use proptest::prelude::*;
+
+proptest! {
+    #[test]
+    fn lexer_total(src in "\\\\PC*") {
+        let mut prev = 0;
+        for t in Lexer::new(&src) {
+            prop_assert!(t.span.start >= prev);
+            prop_assert!(t.span.end > t.span.start);
+            prop_assert!(src.is_char_boundary(t.span.start as usize));
+            prop_assert!(src.is_char_boundary(t.span.end as usize));
+            prev = t.span.end;
+        }
+    }
+}
+```
+"""
+
+[[sections]]
+heading = "Fuzz the front end"
+body = """
+<p>Fuzz the parser, not the interpreter. A fuzzer will quickly find <code>while (true) {}</code> and stall on it.</p>
+
+```rust title="fuzz/fuzz_targets/parse.rs (cargo +nightly fuzz run parse)"
+#![no_main]
+use libfuzzer_sys::fuzz_target;
+
+fuzz_target!(|data: &[u8]| {
+    if let Ok(src) = std::str::from_utf8(data) {
+        let _ = rlox::parse(src);
+    }
+});
+```
+"""
+
+[[sections]]
+heading = "Official test folders by slice"
+body = """
+<div class="cb-g-tt"><table class="cb-g-map"> <thead><tr><th>Slice</th><th>Enable these folders in <code>tests/lox/official</code></th></tr></thead> <tbody> <tr><td>1–2</td><td>None. Use unit tests. <code>scanning/</code> and <code>expressions/</code> expect the book's debug output modes, so skip them unless you add those modes</td></tr> <tr><td>3</td><td><code>assignment/ bool/ comments/ nil/ number/ operator/ print/ string/ variable/</code>, <code>precedence.lox</code>, <code>empty_file.lox</code>, <code>unexpected_character.lox</code></td></tr> <tr><td>4</td><td><code>block/</code></td></tr> <tr><td>5</td><td><code>if/ while/ for/ logical_operator/</code></td></tr> <tr><td>6</td><td><code>function/ call/ closure/ return/</code></td></tr> <tr><td>7</td><td>The resolver-error files in <code>variable/</code>, <code>closure/</code> and <code>return/</code></td></tr> <tr><td>8</td><td><code>class/ field/ method/ constructor/ this/ inheritance/ super/ regression/</code></td></tr> <tr><td>never</td><td><code>limit/</code> (clox limits), <code>benchmark/</code> (use with hyperfine)</td></tr> </tbody> </table></div>
+
+<p>The book's runner in <code>tool/bin/test.dart</code> lists exactly which files each chapter includes and skips. When a folder mixes features from different slices, use that list to decide which files to enable.</p>
+"""

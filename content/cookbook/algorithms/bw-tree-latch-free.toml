@@ -1,0 +1,68 @@
+title = "A Bw-tree style latch-free B+tree"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Trees and ordered structures"
+chapter_order = 2
+order = 172
+kind = "recipe"
+lede = "Mapping table, delta chains, consolidation, split deltas, epochs."
+level = "advanced"
+code = ["examples/data_structures/bw_tree_latch_free.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+latch-free ordered indexes for multicore main-memory and flash storage engines.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a B+tree where NO thread ever takes a latch and pages are never updated in place. Every page is named by a page id (PID); a **mapping table** maps PID -> pointer to the head of that page's chain. A page is an immutable BASE (sorted entries) with a chain of immutable **delta** records prepended on top: `Ins(k,v)` (insert or update), `Del(k)`, and `Split(sep, right)`.
+
+A write allocates a delta whose `next` is the head it saw and installs it with **one** compare-and-swap on the table slot; if the CAS fails somebody else changed the page, so rebuild the delta against the new head. The CAS is the linearization point.
+
+Because parents refer to children by PID, a page can be replaced wholesale (consolidated) with a single CAS, and no parent pointer ever needs updating. **Consolidation**: when a chain reaches **consol** deltas, a thread merges base+deltas into a fresh base and CASes it in; the old chain is retired.
+
+**Split** is two steps: (1) if the merged page is too big, the same CAS installs `Split(sep,right)` over the new left half instead (its `high` becomes `sep`, and keys >= sep are redirected through the `right` sibling link, so the tree is already correct); (2) post an index entry `Ins(sep,right)` on the **parent**.
+
+Any thread that sees a Split delta without a parent entry **helps** finish step 2 ("help-along"), so a stalled splitter never blocks anyone. Root split installs a new root with a CAS on the root pointer. Inner pages use the same records: an inner base is `(separator, child PID)` pairs and routing is "largest separator &lt;= key".
+
+**Reclamation**: readers hold raw pointers into old chains, so a retired chain may be freed only when no reader can still see it. A simplified epoch scheme: a global epoch, a per-thread pinned-epoch slot, per-thread garbage tagged with the retire epoch, freed once the global epoch is >= tag + 2.
+
+(Alloc/free counters are checked to match at shutdown: nothing leaks or double frees.) Unsafe is confined to dereferencing record pointers; **safety** comments say why each is protected by the epoch pin.
+
+Verified by: a sequential 20k-op differential test vs `BTreeMap`; 8 threads x 25k ops on **disjoint** keys (every result checked against a per-thread model, final contents equal the merged model);
+
+8 threads x 25k ops on **overlapping** hot keys where every insert writes a unique token and the per-key log is checked for linearizability (each token consumed at most once, None-states balance, final state consistent); structural checks of the leaf level (ordered, contiguous [low, high) ranges).
+
+**Liveness** vs **progress** (a real bug this file had): "some CAS always succeeds" (lock-free) does not mean the tree stays usable. A writer needs one cheap CAS; a consolidator must first materialize the **whole** chain. So on a busy page the consolidator loses, the chain gets longer, consolidating gets slower, and it loses even more surely.
+
+Chains reached tens of thousands of records; `materialize` (one `Vec::insert` per delta) became quadratic and a sub-second run could take minutes while every thread burned CPU. Backoff on CAS losers did not stop it, and neither could a "no progress" watchdog, since operations still finished, just very slowly.
+
+Fix: (1) MAX_CHAIN: nobody appends to a full chain; they consolidate it first, so its head is frozen against everything but consolidation and one consolidator must win. (2) A split is part of that **same CAS**, so page size is bounded too. Both bounds are asserted, and `starved_consolidators_stay_bounded` replays the worst schedule deterministically.
+
+**Helping the root**: if the root's splitter is slow, its right sibling can itself split before any parent level exists; the helper must install the new root first (`stalled_splitter_is_helped`).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+the Bw-tree is the index in Microsoft's Hekaton (SQL Server in-memory OLTP), Azure Cosmos DB's indexing and the Deuteronomy/**llama** stack; the ideas (immutable deltas + CAS on an indirection table) also appear in log-structured stores. Course: CMU 15-445 Lecture 10 (Index Concurrency Control), and 15-721 (latch-free indexes / Bw-tree).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Levandoski, Lomet, Sengupta, "The Bw-Tree: A B-tree for New Hardware Platforms": <https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/bw-tree-icde2013-final.pdf>
+
+Wang et al., "Building a Bw-Tree Takes More Than Just Buzz Words": <https://www.cs.cmu.edu/~huanche1/publications/open_bwtree.pdf>
+"""
+
+[[sources]]
+title = "microsoft.com/en-us/research/wp-content/uploads/2016/02/bw-tree-icde2013-fina…"
+url = "https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/bw-tree-icde2013-final.pdf"
+
+[[sources]]
+title = "cs.cmu.edu/~huanche1/publications/open_bwtree.pdf"
+url = "https://www.cs.cmu.edu/~huanche1/publications/open_bwtree.pdf"

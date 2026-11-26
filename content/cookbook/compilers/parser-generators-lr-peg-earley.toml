@@ -1,0 +1,60 @@
+title = "Three general parsing techniques on the same grammars"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 567
+kind = "recipe"
+lede = "Packrat PEG, SLR(1) LR generator, Earley."
+level = "advanced"
+code = ["examples/compilers_runtimes/parser_generators_lr_peg_earley.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>language front ends</li><li>config/DSL parsers</li><li>tooling that must accept ambiguous or left-recursive grammars</li><li>grammar debugging</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**One grammar notation**, **three engines**. Grammars are written `E->E+T|T;T->T*F|F;F->(E)|n` (uppercase = nonterminal, `_` = empty). (a) PEG / PACKRAT: a grammar is a **recipe**, not a set of derivations: `/` is **ordered** choice (first success wins, no retry), plus greedy repetition and lookahead `&e` `!e`.
+
+Naive backtracking can be exponential; PACKRAT memoises (rule, position) -> result so each pair is computed once, giving O(n) time for O(n) memory. **Left recursion** (`E <- E '+' T`) re-enters the same (rule, position) forever; we detect it and show the standard rewrite `E <- T ('+' T)*`. Lookahead lets PEG recognise a&#94;n b&#94;n c&#94;n, which is not even context-free.
+
+(b) LR: from the grammar we compute **nullable/first/follow**, the LR(0) item-set automaton, and SLR(1) ACTION/GOTO tables (reduce on **follow**). Table cells holding two actions are **conflicts** (shift/reduce, reduce/reduce) and are reported, not hidden. Yacc-style precedence/associativity resolves shift/reduce conflicts of the ambiguous `E->E+E|E*E|...`.
+
+The driver is the classic shift-reduce loop with a state stack and yields a parse tree. (c) EARLEY: a chart of items `rule . dot @origin`; predictor/scanner/completer handle **any** context-free grammar (left recursive, ambiguous, nullable) in O(n&#94;3) worst case, O(n&#94;2) for unambiguous, O(n) for many LR grammars.
+
+Over the finished chart we count (or enumerate) parse trees, e.g. S -> S S &#124; a has Catalan(n-1) trees for a&#94;n. **Why all three**: they fail differently.
+
+PEG never reports ambiguity (the first match silently wins, so it can reject strings the CFG generates, e.g. palindromes). LR gives the best speed and static ambiguity detection but rejects non-LR grammars at generator time. Earley accepts everything context-free but is slower and leaves ambiguity to you.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>PEG: Python's CPython parser since 3.9</li><li>many hand-written DSL and Markdown/TOML parsers</li><li>LR: yacc/bison</li><li>most language grammars in compiler courses and tools (LALR in practice)</li><li>Earley: natural-language and ambiguous-grammar toolkits</li><li>grammar-based fuzzers and syntax highlighters where the grammar is data supplied at runtime</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Ford "Parsing Expression Grammars" <a href="https://bford.info/pub/lang/peg.pdf" target="_blank" rel="noreferrer">https://bford.info/pub/lang/peg.pdf</a></li><li>Aho, Lam, Sethi, Ullman "Compilers" ch. 4 (items, SLR)</li><li>Earley "An Efficient Context-Free Parsing Algorithm" (CACM 1970)</li><li><a href="https://en.wikipedia.org/wiki/Packrat_parser" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Packrat_parser</a></li><li><a href="https://en.wikipedia.org/wiki/Simple_LR_parser" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Simple_LR_parser</a></li><li><a href="https://en.wikipedia.org/wiki/Earley_parser" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Earley_parser</a></li></ul>
+"""
+
+[[sources]]
+title = "bford.info/pub/lang/peg.pdf"
+url = "https://bford.info/pub/lang/peg.pdf"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Packrat_parser"
+url = "https://en.wikipedia.org/wiki/Packrat_parser"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Simple_LR_parser"
+url = "https://en.wikipedia.org/wiki/Simple_LR_parser"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Earley_parser"
+url = "https://en.wikipedia.org/wiki/Earley_parser"

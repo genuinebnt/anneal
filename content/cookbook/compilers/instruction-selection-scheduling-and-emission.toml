@@ -1,0 +1,114 @@
+title = "Instruction selection, scheduling and emission"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Back ends"
+chapter_order = 6
+order = 634
+kind = "guide"
+lede = "LLVM SelectionDAG and GlobalISel, Cranelift ISLE · From IR to machine instructions"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>Instruction selection covers the IR with machine instructions. Each instruction is a <em>tile</em>, a pattern over IR nodes with a cost. One RISC-V <code>lw rd, 8(rs)</code> covers <code>load(add(rs, 8))</code>. x86's <code>lea</code> covers <code>a + b*4 + 12</code>. On trees, <b>maximal munch</b> greedily takes the largest tile matching at the root and recurses on the uncovered subtrees. It's simple and locally optimal. <b>Dynamic programming</b> (BURS, iburg) computes the minimum-cost tiling bottom-up, and is optimal for trees. On DAGs with shared values, optimal selection is NP-complete. Production selectors therefore split DAGs into trees or use greedy heuristics.</p>
+
+<p>Before selection comes <b>legalization</b>. Types the target lacks are split or widened: an <code>i128</code> add becomes two 64-bit ops with carry, and an <code>i8</code> is promoted to 32 bits. Operations the target lacks are expanded, such as division on some cores, or turned into libcalls.</p>
+
+```rust title="Maximal munch from expression trees to RISC-V assembly (virtual registers)"
+pub enum Tree { Const(i64), Temp(u32), Add(Box<Tree>, Box<Tree>), Mul(Box<Tree>, Box<Tree>), Load(Box<Tree>) }
+
+fn fits12(c: i64) -> bool { (-2048..=2047).contains(&c) }       // RISC-V I-type immediate
+
+pub struct Emitter { next: u32, pub out: Vec<String> }
+
+impl Emitter {
+    fn fresh(&mut self) -> String { self.next += 1; format!("v{}", self.next) }
+
+    /// Match the biggest tile at the root, recurse on the subtrees it leaves uncovered.
+    pub fn munch(&mut self, t: &Tree) -> String {
+        match t {
+            // lw rd, imm(rs) covers load(add(base, const))
+            Tree::Load(addr) => {
+                let (base, off) = match &**addr {
+                    Tree::Add(b, o) if matches!(**o, Tree::Const(c) if fits12(c)) => {
+                        let Tree::Const(c) = **o else { unreachable!() };
+                        (self.munch(b), c)
+                    }
+                    other => (self.munch(other), 0),
+                };
+                let d = self.fresh();
+                self.out.push(format!("lw   {d}, {off}({base})"));
+                d
+            }
+            // addi rd, rs, imm covers add(x, small const)
+            Tree::Add(a, b) if matches!(**b, Tree::Const(c) if fits12(c)) => {
+                let Tree::Const(c) = **b else { unreachable!() };
+                let s = self.munch(a);
+                let d = self.fresh();
+                self.out.push(format!("addi {d}, {s}, {c}"));
+                d
+            }
+            Tree::Add(a, b) => self.binary("add", a, b),
+            Tree::Mul(a, b) => self.binary("mul", a, b),
+            Tree::Const(c) => { let d = self.fresh(); self.out.push(format!("li   {d}, {c}")); d }
+            Tree::Temp(n) => format!("t{n}"),
+        }
+    }
+
+    fn binary(&mut self, op: &str, a: &Tree, b: &Tree) -> String {
+        let (x, y) = (self.munch(a), self.munch(b));
+        let d = self.fresh();
+        self.out.push(format!("{op:<4} {d}, {x}, {y}"));
+        d
+    }
+}
+// load(add(t0, 8)) * 3  →  lw v1, 8(t0) ; li v2, 3 ; mul v3, v1, v2
+```
+
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Selector</th><th>How it works</th><th>Trade-off</th></tr></thead> <tbody> <tr><td>LLVM SelectionDAG</td><td>Per-block DAG, legalize, combine, pattern-match with TableGen-generated tables</td><td>Good code, slow, and blind across blocks</td></tr> <tr><td>LLVM GlobalISel</td><td>Works on generic machine IR across the whole function: IRTranslator, Legalizer, RegBankSelect, InstructionSelect</td><td>Faster, and sees across blocks; now the default on AArch64 at -O0</td></tr> <tr><td>LLVM FastISel</td><td>Direct, local, no DAG</td><td>For -O0 only</td></tr> <tr><td>Cranelift ISLE</td><td>A term-rewriting DSL: <code>(rule (lower (iadd x y)) (x64_add x y))</code> with priorities, compiled to Rust matchers</td><td>Declarative, checkable, fast to compile</td></tr> <tr><td>Tree DP (BURS / iburg)</td><td>Bottom-up cost labeling, then top-down reduction</td><td>Optimal on trees; the classic textbook approach</td></tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Instruction scheduling"
+body = """
+<p>Modern cores are out-of-order, but scheduling still matters for in-order cores, long-latency operations, and register pressure. <b>List scheduling</b> builds a dependency DAG per block. It gives each instruction a priority, usually its critical-path length to the end of the block, then repeatedly issues the highest-priority ready instruction. Scheduling before register allocation increases parallelism but also register pressure; scheduling after is constrained by the allocation. LLVM does both.</p>
+
+```rust title="Critical-path list scheduling for one block"
+/// deps[i] = earlier instructions that i depends on (all indices < i).
+pub fn list_schedule(latency: &[u32], deps: &[Vec<usize>]) -> Vec<usize> {
+    let n = latency.len();
+    let mut succs = vec![Vec::new(); n];
+    for (i, ds) in deps.iter().enumerate() { for &d in ds { succs[d].push(i); } }
+
+    // Priority: latency-weighted longest path to the end of the block.
+    let mut prio = vec![0u32; n];
+    for i in (0..n).rev() {
+        prio[i] = latency[i] + succs[i].iter().map(|&s| prio[s]).max().unwrap_or(0);
+    }
+
+    let mut waiting: Vec<usize> = deps.iter().map(Vec::len).collect();
+    let mut ready: Vec<usize> = (0..n).filter(|&i| waiting[i] == 0).collect();
+    let mut order = Vec::with_capacity(n);
+    while let Some(k) = (0..ready.len()).max_by_key(|&k| prio[ready[k]]) {
+        let i = ready.swap_remove(k);
+        order.push(i);
+        for &s in &succs[i] {
+            waiting[s] -= 1;
+            if waiting[s] == 0 { ready.push(s); }
+        }
+    }
+    order   // a cycle-accurate version also tracks when each result becomes available
+}
+```
+
+<div class="cb-g-tip"><h3>Emission details</h3> <ul> <li><b>Encoding.</b> x86 has prefixes, REX, ModRM, SIB, displacement and immediate fields. Use an encoder crate: <code>iced-x86</code> for x86, <code>dynasm-rs</code> for runtime assembly with a macro syntax. Cranelift carries its own encoders.</li> <li><b>Branch relaxation.</b> Short jumps have limited range. Emit short forms optimistically, then iterate: any branch out of range grows, which moves code, which may push other branches out of range.</li> <li><b>Constant pools and islands.</b> AArch64 and RISC-V can't embed 64-bit immediates. Materialize them with instruction sequences, or load from a nearby pool that must stay in range.</li> <li><b>Peephole passes</b> clean up after selection and allocation: remove <code>mov r, r</code>, fold jumps to the next instruction, merge compare-and-branch.</li> </ul></div>
+"""
+
+[[sources]]
+title = "Agner Fog's optimization manuals and instruction tables"
+url = "https://www.agner.org/optimize/"
+
+[[sources]]
+title = "uops.info"
+url = "https://uops.info"

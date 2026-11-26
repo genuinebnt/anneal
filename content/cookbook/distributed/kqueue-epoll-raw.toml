@@ -1,0 +1,62 @@
+title = "A raw readiness poller over kqueue"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Networking and protocols"
+chapter_order = 3
+order = 533
+kind = "recipe"
+lede = "a raw readiness poller over kqueue (macOS/BSD) and epoll (Linux) behind one trait; level vs edge; 20-client echo server."
+level = "advanced"
+code = ["examples/networking/kqueue_epoll_raw.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>understanding mio/tokio internals</li><li>custom event loops</li><li>proxies</li><li>anything with thousands of sockets per thread</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+"readiness" I/O: you register file descriptors with the kernel, sleep in **one** blocking call, and the kernel returns the subset that can now be read/written without blocking. All sockets are nonblocking (`set_nonblocking` = fcntl O_NONBLOCK) so a spurious wakeup costs one `WouldBlock`, never a stalled loop.
+
+Compare `select`/`poll`, which rescan the whole fd list per call (O(n)); kqueue and epoll keep the interest set inside the kernel and return only ready fds (O(ready)). Linux:  `epoll_create1`, `epoll_ctl(ADD/MOD/DEL)`, `epoll_wait`. A token travels in `epoll_event.u64`. macOS:  `kqueue`, `kevent` (the **same** call both submits changes and collects events).
+
+A token travels in `kevent.udata`. kqueue has one filter per direction (EVFILT_READ, EVFILT_WRITE), so a readable+writable fd arrives as two events. `trait Poller` hides the difference. Only the implementation for the host OS is compiled; the Linux one is written against `libc` and kept correct by `cfg`, the macOS one is what runs here.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Level** vs **edge**: level-triggered ("is it ready **now**?") re-reports every wait until you drain the fd, forgiving but chatty. Edge-triggered (EPOLLET / EV_CLEAR) reports a transition **once**; if you read only part of the data you are not told again, so you must read/accept/write until `WouldBlock`.
+
+This recipe asserts the counts: a pipe with unread bytes yields an event on every wait in level mode, but exactly one in edge mode until more data arrives. The echo server uses level for the listener and edge for connections.
+
+mio (mio_event_loop) is exactly this trait made portable: `Poll`/`Registry`/`Token`/`Interest`, edge-triggered everywhere (it emulates it on Windows with IOCP/wepoll). tokio's reactor wraps mio: each socket gets a ScheduledIo holding readiness bits and the wakers of tasks blocked on it; the driver thread does `poll`, sets readiness, and wakes those tasks.
+
+`read().await` = try read, on WouldBlock park the waker.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>the event loop under nginx</li><li>Redis</li><li>libuv (Node.js)</li><li>Netty</li><li>tokio and async-std/smol (via polling)</li><li>game servers</li><li>load balancers</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://man7.org/linux/man-pages/man7/epoll.7.html" target="_blank" rel="noreferrer">https://man7.org/linux/man-pages/man7/epoll.7.html</a></li><li><a href="https://man.freebsd.org/cgi/man.cgi?query=kqueue" target="_blank" rel="noreferrer">https://man.freebsd.org/cgi/man.cgi?query=kqueue</a></li><li><a href="https://docs.rs/mio" target="_blank" rel="noreferrer">https://docs.rs/mio</a></li></ul>
+"""
+
+[[sources]]
+title = "man7.org/linux/man-pages/man7/epoll.7.html"
+url = "https://man7.org/linux/man-pages/man7/epoll.7.html"
+
+[[sources]]
+title = "man.freebsd.org/cgi/man.cgi?query=kqueue"
+url = "https://man.freebsd.org/cgi/man.cgi?query=kqueue"
+
+[[sources]]
+title = "docs.rs/mio"
+url = "https://docs.rs/mio"

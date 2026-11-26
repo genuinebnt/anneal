@@ -1,0 +1,40 @@
+title = "JSON parser"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 569
+kind = "recipe"
+lede = "a complete recursive-descent JSON parser with error positions, escapes, and a depth limit."
+level = "advanced"
+code = ["examples/text_and_parsing/json_parser.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+learning how real parsers handle **every** edge case; template for any recursive format.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>config/IO boundaries</li><li>understanding serde_json internals</li><li>hardening recursive parsers against hostile input</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+One function per grammar rule (`value`, `array`, `object`, `string`, `number`) over a byte cursor. Production concerns shown:
+
+- errors carry a **BYTE position** (turn into line/col with diagnostics_spans)       &#42; escape sequences incl. &#92;uXXXX and surrogate pairs
+- a **depth limit**: recursion on untrusted input must be bounded or `[[[[...` overflows the stack (see stage 8)
+- reject trailing garbage, leading zeros, lone surrogates, control characters in strings Reference implementations: <https://github.com/serde-rs/json/blob/master/src/de.rs> and <https://www.json.org/>
+"""
+
+[[sources]]
+title = "github.com/serde-rs/json/blob/master/src/de.rs"
+url = "https://github.com/serde-rs/json/blob/master/src/de.rs"
+
+[[sources]]
+title = "json.org"
+url = "https://www.json.org/"

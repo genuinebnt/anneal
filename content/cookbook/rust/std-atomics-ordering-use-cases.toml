@@ -1,0 +1,80 @@
+title = "Atomics ordering use cases (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "Threads, synchronisation and time"
+chapter_order = 7
+order = 97
+kind = "recipe"
+lede = "atomic types by method and by use case, with the ordering each use needs and why."
+level = "advanced"
+code = ["examples/std_tour/std_atomics_ordering_use_cases.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>metrics</li><li>stop flags</li><li>id generators</li><li>once-flags</li><li>small lock-free structures</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>request counters</li><li>high-water marks</li><li>cooperative cancellation</li><li>"first caller wins"</li><li>state bit sets</li><li>handing a batch of nodes to a consumer without a lock</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>AtomicBool</code></li><li><code>AtomicUsize</code></li><li><code>AtomicU64</code></li><li><code>AtomicI64</code></li><li><code>AtomicU8</code></li><li><code>AtomicPtr</code></li><li><code>new</code></li><li><code>load</code></li><li><code>store</code></li><li><code>swap</code></li><li><code>compare_exchange</code></li><li><code>compare_exchange_weak</code></li><li><code>fetch_add</code></li><li><code>fetch_sub</code></li><li><code>fetch_and</code></li><li><code>fetch_or</code></li><li><code>fetch_xor</code></li><li><code>fetch_nand</code></li><li><code>fetch_not</code></li><li><code>fetch_max</code></li><li><code>fetch_min</code></li><li><code>try_update</code></li><li><code>update</code></li><li><code>fetch_update</code></li><li><code>get_mut</code></li><li><code>into_inner</code></li><li><code>as_ptr</code></li><li><code>from_ptr</code></li><li><code>from_mut</code></li><li><code>from_mut_slice</code></li><li><code>std::sync::atomic::fence</code></li><li><code>std::sync::atomic::compiler_fence</code></li><li><code>std::hint::spin_loop</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/sync/atomic/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/sync/atomic/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+core: all of it (`core::sync::atomic`, `core::hint::spin_loop`); std re-exports. `AtomicU64` and friends exist only where the target supports that width (`cfg(target_has_atomic = "64")`). alloc: `Box`, used by the pointer examples.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+128-bit and other nightly-only atomics; `AtomicPtr::fetch_ptr_add`/`fetch_byte_add` and the tag-bit ops (specialist; see the ptr docs); safe memory reclamation (hazard pointers, epochs: see `epoch_hazard_pointer_reclamation`); **aba** in a popping stack (see `lockfree_stack_aba`); `futex`-style waiting (not in std).
+
+Litmus tests that show reordering live in `memory_ordering_litmus`; seqlocks in `seqlock_and_priority_inversion`. **What the assertions prove**: exact totals and invariants on **this** run and **this** machine. A passing test does **not** prove an ordering is strong enough: the orderings below rest on the happens-before argument written next to them.
+
+Miri (rustc 1.100.0-nightly (5a2be9f5f 2026-09-06), 2026-11-26) reported nothing on the default run, seeds 1-6 and Tree Borrows, with reduced loop counts; that samples some schedules, it does not explore all of them. loom was not run. **Portability**: `from_mut` / `from_mut_slice` exist only on targets where the atomic's alignment equals the integer's size.
+
+**Version note**: in the 1.98.1 source `fetch_update` is marked deprecated since 1.99.0 ("renamed to `try_update`"); `try_update` and `update` are 1.95.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Count events; read the total after joining</td><td><code>fetch_add(1, Relaxed): atomicity is enough, join provides the ordering</code></td></tr><tr><td>Unique ids</td><td><code>fetch_add(1, Relaxed) (it WRAPS on overflow)</code></td></tr><tr><td>High / low water mark</td><td><code>fetch_max / fetch_min, Relaxed</code></td></tr><tr><td>Publish data, then flag it</td><td><code>writer: write data; store(true, Release). reader: load(Acquire); then read data</code></td></tr><tr><td>Stop flag that carries no data</td><td><code>Relaxed is enough; use Release/Acquire if the reader reads what the setter wrote before</code></td></tr><tr><td>"only one caller wins"</td><td><code>swap(true, AcqRel) or compare_exchange(false, true, AcqRel, Acquire)</code></td></tr><tr><td>Lock / unlock</td><td><code>acquire with Acquire, release with Release</code></td></tr><tr><td>Arbitrary read-modify-write</td><td><code>try_update (may refuse) / update; the closure can run more than once</code></td></tr><tr><td>Set / clear / toggle bits</td><td><code>fetch_or(mask) / fetch_and(!mask) / fetch_xor(mask)</code></td></tr><tr><td>Two threads each write one flag then read the other</td><td><code>SeqCst (Release/Acquire does NOT order a store against a later load of another location)</code></td></tr><tr><td>Unsure</td><td><code>use a Mutex. If it must be atomic, SeqCst is the easiest to reason about; weaken only with an argument FACTS: load panics with Release/AcqRel; store panics with Acquire/AcqRel; a compare_exchange FAILURE ordering cannot be Release/AcqRel. fetch_add/fetch_sub wrap around, even in debug builds. compare_exchange_weak may fail spuriously: only use it in a retry loop.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Mara Bos, Rust Atomics and Locks <a href="https://marabos.nl/atomics/memory-ordering.html" target="_blank" rel="noreferrer">https://marabos.nl/atomics/memory-ordering.html</a></li><li><a href="https://doc.rust-lang.org/nomicon/atomics.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/nomicon/atomics.html</a></li><li><a href="https://doc.rust-lang.org/std/sync/atomic/fn.fence.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/sync/atomic/fn.fence.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/sync/atomic/index.html"
+url = "https://doc.rust-lang.org/std/sync/atomic/index.html"
+
+[[sources]]
+title = "marabos.nl/atomics/memory-ordering.html"
+url = "https://marabos.nl/atomics/memory-ordering.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/atomics.html"
+url = "https://doc.rust-lang.org/nomicon/atomics.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/sync/atomic/fn.fence.html"
+url = "https://doc.rust-lang.org/std/sync/atomic/fn.fence.html"

@@ -1,0 +1,177 @@
+title = "Index concurrency control"
+module = "Databases"
+module_order = 8
+chapter = "Indexes"
+chapter_order = 3
+order = 341
+kind = "guide"
+lede = "physical vs logical correctness · spin latches, OS mutexes, reader-writer latches · hash table latching · latch crabbing, optimistic crabbing, leaf-scan deadlocks · optimistic lock coupling"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Why concurrency</strong>: use all the cores, and hide I/O stalls. (Single-threaded designs like Redis and VoltDB partitions avoid latches entirely. One global RW lock is easy and doesn't scale.)</li> <li><strong>Correctness has two levels</strong>: <strong>logical</strong> (a thread reads what it expects, e.g. its own writes; that's transactions, later) and <strong>physical</strong> (the internal representation is sound: no dangling pointers, no torn nodes). Latches give physical correctness.</li> <li><strong>Locks vs latches</strong>: locks protect database contents for a transaction's duration, with deadlock detection and rollback provided by the system. Latches protect in-memory structures for a short critical section, and avoiding deadlock is the programmer's job. Latch modes are <strong>read</strong> (shared) and <strong>write</strong> (exclusive).</li> <li><strong>Latch goals</strong>: a small footprint, a fast uncontended path, decentralized management, and no syscalls in the common case. The building block is an atomic instruction such as <strong>compare-and-swap</strong>.</li> <li><strong>Test-and-set spin latch</strong>: one CAS to lock, and the DBMS controls what happens on failure. It's cheap uncontended, but it wastes cycles and bounces cache lines under contention (worse on NUMA).</li> <li><strong>Blocking OS mutex</strong> (futex: user-space spin, then kernel wait): simple, but about 25 ns per lock/unlock plus scheduler involvement. Generally a poor fit inside a DBMS's hot paths.</li> <li><strong>Reader-writer latch</strong>: shared readers, with queues of waiting readers and writers. The policy (reader-preferring, writer-preferring or fair) differs across implementations, and it costs more metadata.</li> <li><strong>Hash tables</strong> are easy to latch: every thread moves in one direction and touches one slot or page at a time, so deadlock is impossible. Use <strong>page latches</strong> (fewer latches, less parallelism) or <strong>slot latches</strong> (more parallelism, more overhead). Resizing takes a global latch. <strong>Latch-free</strong> linear probing uses CAS on the slot.</li> <li><strong>B+Tree latching</strong> must prevent concurrent modification of a node <em>and</em> a traversal racing with a split or merge. <strong>Latch crabbing / coupling</strong>: latch the parent, latch the child, release the parent <strong>if the child is safe</strong> (safe = won't split on insert (not full), won't merge on delete (more than half full)). Readers always release the parent.</li> <li><strong>Release the highest latches first</strong> for performance: they block the most of the tree.</li> <li><strong>Optimistic crabbing</strong>: splits and merges are rare, so descend with <strong>read latches</strong>, write-latch only the leaf, and if the leaf turns out unsafe, restart with the pessimistic protocol. (Read-to-write latch upgrades can avoid the restart, but they're tricky.)</li> <li><strong>Leaf-node scans break the top-down rule</strong>: a scan moving sideways and a writer moving down can deadlock, and latches have no deadlock detection. The fix is coding discipline: <strong>no-wait</strong> acquisition of sibling latches. On failure, release everything and restart (possibly with backoff), with a higher-level scheduler handling starvation.</li> </ul>
+"""
+
+[[sections]]
+heading = "Latch implementations, measured"
+body = """
+```text title="2M total ops · wall time / total ops · Apple M4 Pro (12 cores) · verify/tests/latch.rs"
+1 thread  · write-contended: Mutex   8.3 ns, TTAS spin 2.3 ns · read-only: RwLock   6.9 ns, OLC 0.84 ns
+4 threads · write-contended: Mutex  70.1 ns, TTAS spin 1.9 ns · read-only: RwLock  51.2 ns, OLC 0.19 ns
+8 threads · write-contended: Mutex  12.3 ns, TTAS spin 3.1 ns · read-only: RwLock 129.7 ns, OLC 0.14 ns
+```
+
+<p>Read these carefully, because they're easy to misread:</p>
+
+<ul> <li><strong>The TTAS numbers look excellent because the spin latch is unfair.</strong> The thread that releases it usually re-acquires it immediately, since the line is already in its cache. That thread runs its loop while the others back off. Throughput is high, and tail latency for the losers is terrible. Fair locks (MCS, ticket, queued) trade some throughput for bounded waiting.</li> <li><strong>Reader-writer latches don't scale for readers.</strong> Every <code>read()</code> increments and decrements a shared reader count, which is a <em>write</em> to one cache line. Eight readers of the same B+Tree root serialize on that line: 6.9 ns at 1 thread becomes 130 ns at 8. That is the B+Tree's root-latch problem in miniature, and the reason the tree's lookup throughput <em>falls</em> with more threads (<a href="/cookbook/p/b-tree-concurrency">P2.5</a>).</li> <li><strong>Optimistic latches (version counters) make reads free.</strong> A reader loads the version, reads the node, and re-checks the version. It never writes shared memory, so reads scale perfectly. Writers pay by making readers restart.</li> </ul>
+
+:::deeper Reference: TTAS spin latch with backoff, optimistic version latch, latch-free linear probing
+```rust title="src/common/latch.rs"
+//! Latch primitives from L10. All use Acquire on lock and Release on unlock: the pair that
+//! makes writes inside the critical section visible to the next holder.
+use std::cell::UnsafeCell;
+use std::hint::spin_loop;
+use std::sync::atomic::{AtomicU64, AtomicBool, Ordering::{Acquire, Relaxed, Release}};
+
+// ---------------- Test-and-test-and-set spin latch with exponential backoff --------------
+pub struct SpinLatch<T> { locked: AtomicBool, value: UnsafeCell<T> }
+// SAFETY: the latch serializes all access to `value`.
+unsafe impl<T: Send> Sync for SpinLatch<T> {}
+
+pub struct SpinGuard<'a, T> { l: &'a SpinLatch<T> }
+
+impl<T> SpinLatch<T> {
+    pub const fn new(v: T) -> Self { SpinLatch { locked: AtomicBool::new(false), value: UnsafeCell::new(v) } }
+    pub fn lock(&self) -> SpinGuard<'_, T> {
+        let mut backoff = 1u32;
+        loop {
+            // "Test" with a plain load first: spinning on a shared cache line is cheap,
+            // spinning with CAS (TAS) would bounce the line in exclusive mode on every try.
+            if !self.locked.load(Relaxed) && self.locked.compare_exchange_weak(false, true, Acquire, Relaxed).is_ok() {
+                return SpinGuard { l: self };
+            }
+            for _ in 0..backoff { spin_loop(); }
+            if backoff < 1 << 10 { backoff <<= 1 } else { std::thread::yield_now() }   // don't burn a core forever
+        }
+    }
+}
+impl<T> std::ops::Deref for SpinGuard<'_, T> { type Target = T; fn deref(&self) -> &T { unsafe { &*self.l.value.get() } } }
+impl<T> std::ops::DerefMut for SpinGuard<'_, T> { fn deref_mut(&mut self) -> &mut T { unsafe { &mut *self.l.value.get() } } }
+impl<T> Drop for SpinGuard<'_, T> { fn drop(&mut self) { self.l.locked.store(false, Release); } }
+
+// ---------------- Optimistic version latch (the OLC primitive) ---------------------------
+/// state = version << 1 | locked_bit. Readers never write shared memory: they read the version,
+/// read the data, and re-check the version. Writers set the bit, write, bump the version.
+pub struct OptLatch { state: AtomicU64 }
+
+impl Default for OptLatch { fn default() -> Self { OptLatch { state: AtomicU64::new(0) } } }
+
+impl OptLatch {
+    /// Returns a version to validate against, or None if a writer holds the latch (restart).
+    #[inline]
+    pub fn read_begin(&self) -> Option<u64> {
+        let v = self.state.load(Acquire);
+        (v & 1 == 0).then_some(v)
+    }
+    /// True if nothing was written since `read_begin` returned `v`.
+    #[inline]
+    pub fn read_validate(&self, v: u64) -> bool {
+        std::sync::atomic::fence(Acquire);        // order the data reads before this check
+        self.state.load(Relaxed) == v
+    }
+    pub fn write_lock(&self) {
+        loop {
+            let v = self.state.load(Relaxed);
+            if v & 1 == 0 && self.state.compare_exchange_weak(v, v | 1, Acquire, Relaxed).is_ok() { return; }
+            spin_loop();
+        }
+    }
+    /// Upgrade a validated read to a write without releasing: fails if anyone wrote meanwhile.
+    pub fn try_upgrade(&self, v: u64) -> bool { self.state.compare_exchange(v, v | 1, Acquire, Relaxed).is_ok() }
+    pub fn write_unlock(&self) { self.state.fetch_add(1, Release); }   // clears bit 0 and bumps version: +1 from odd
+}
+
+// ---------------- Latch-free linear probing insert (CAS on the key slot) -----------------
+/// Keys are u64 != 0 (0 = empty). Values published after the key; readers spin until set.
+pub struct LockFreeTable { keys: Box<[AtomicU64]>, vals: Box<[AtomicU64]> }
+impl LockFreeTable {
+    pub fn new(cap: usize) -> Self {
+        let cap = cap.next_power_of_two();
+        LockFreeTable { keys: (0..cap).map(|_| AtomicU64::new(0)).collect(), vals: (0..cap).map(|_| AtomicU64::new(0)).collect() }
+    }
+    fn h(k: u64) -> u64 { let z = k.wrapping_mul(0x9E37_79B9_7F4A_7C15); z ^ (z >> 29) }
+    /// Insert-if-absent. Returns false if the key was already present. Panics when full.
+    pub fn insert(&self, k: u64, v: u64) -> bool {
+        assert!(k != 0 && v != 0);
+        let mask = self.keys.len() - 1;
+        let mut i = Self::h(k) as usize & mask;
+        for _ in 0..self.keys.len() {
+            match self.keys[i].compare_exchange(0, k, Acquire, Acquire) {
+                Ok(_) => { self.vals[i].store(v, Release); return true; }    // we claimed the empty slot
+                Err(existing) if existing == k => return false,
+                Err(_) => i = (i + 1) & mask,                                  // someone else's key: probe on
+            }
+        }
+        panic!("table full")
+    }
+    pub fn get(&self, k: u64) -> Option<u64> {
+        let mask = self.keys.len() - 1;
+        let mut i = Self::h(k) as usize & mask;
+        loop {
+            match self.keys[i].load(Acquire) {
+                0 => return None,
+                x if x == k => loop {                                          // key visible, value may lag
+                    let v = self.vals[i].load(Acquire);
+                    if v != 0 { return Some(v); }
+                    spin_loop();
+                },
+                _ => i = (i + 1) & mask,
+            }
+        }
+    }
+}
+```
+:::
+
+<aside data-call="rust"><b>Acquire/Release is the whole memory-model story for latches</b><p>Lock with <code>Acquire</code>; unlock with <code>Release</code>. Everything the previous holder wrote before its <code>Release</code> is then visible to the next holder after its <code>Acquire</code>. The optimistic latch needs one more step: a reader's data loads must not be reordered <em>after</em> its validation load, hence the <code>fence(Acquire)</code> before re-reading the version. The data fields themselves must be atomics (or read with <code>ptr::read_volatile</code> plus careful reasoning), because a torn non-atomic read racing a write is UB in Rust even if you plan to discard it. This is why OLC in Rust usually stores node fields as <code>AtomicU64</code> and loads them <code>Relaxed</code>. References: <a href="https://marabos.nl/atomics/" target="_blank" rel="noreferrer">Rust Atomics and Locks, ch. 3 and 9</a>; the <a href="https://doc.rust-lang.org/std/sync/atomic/" target="_blank" rel="noreferrer"><code>std::sync::atomic</code> docs</a>.</p></aside>
+
+<aside data-call="testing"><b>Verify latches with loom, not with faith</b><p>A latch that works 10⁹ times on x86 can fail on ARM, whose memory model is weaker. Model the primitives with loom: two writers and one OLC reader, asserting the reader never validates a torn pair. The stress test above (<code>olc_readers_never_see_torn_state</code>) is the cheap version, and loom is the thorough one. Change a <code>Release</code> to <code>Relaxed</code> and watch loom produce the interleaving that breaks it.</p></aside>
+"""
+
+[[sections]]
+heading = "Latch crabbing, and why optimism wins"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Protocol</th> <th>Readers</th> <th>Writers</th> <th>Root contention</th> </tr> </thead> <tbody> <tr> <td>Global RW latch</td> <td>shared</td> <td>exclusive on the whole tree</td> <td>total</td> </tr> <tr> <td>Pessimistic crabbing</td> <td>read latches, parent released after child</td> <td><strong>write</strong> latches from the root, released when a node is safe</td> <td>every writer write-latches the root</td> </tr> <tr> <td>Optimistic crabbing (Bayer &amp; Schkolnick 1977)</td> <td>same</td> <td>read latches down, write latch on the leaf only; restart pessimistically if the leaf is unsafe</td> <td>readers still bump the root's reader count</td> </tr> <tr> <td>B-link tree (Lehman &amp; Yao 1981)</td> <td><strong>no</strong> latch coupling; follow right-links if a split moved the key</td> <td>latch only the node being changed</td> <td>low</td> </tr> <tr> <td><strong>Optimistic lock coupling</strong> (Leis et al. 2016)</td> <td><strong>no writes at all</strong>: read version, read node, validate</td> <td>latch only the nodes being changed</td> <td>none for readers</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Leaf scans and deadlock"
+body = """
+<p>Crabbing is deadlock-free because every thread acquires latches <strong>top-down</strong>. A forward leaf scan acquires them <strong>left to right</strong>. A delete that merges a leaf into its <em>left</em> sibling holds the right leaf and wants the left one, while the scan holds the left one and wants the right: deadlock. Latches have no deadlock detector. The fix is <strong>no-wait</strong>: acquire sibling latches with <code>try_lock</code>, and on failure release everything and restart. <code>RwLock::try_read</code> exists for exactly this purpose. The reference iterator (<a href="/cookbook/p/index-iterator">P2.4</a>) avoids the whole issue by never holding a leaf latch while acquiring the next one.</p>
+
+<aside data-call="production"><b>What production trees do</b><ul> <li><strong>PostgreSQL nbtree</strong>: Lehman–Yao B-link tree. Readers hold one page latch at a time and move right via the right-link and high key if a concurrent split moved their key. Page deletion is a two-phase process to keep scans safe.</li> <li><strong>InnoDB</strong>: an index-level RW latch (SX mode) plus page latches; pessimistic operations take the index latch in SX mode.</li> <li><strong>LeanStore, Umbra, HyPer</strong>: optimistic lock coupling with version counters, plus epoch-based memory reclamation for deleted nodes.</li> <li><strong>Bw-tree</strong> (SQL Server Hekaton): latch-free, with delta records and CAS on a mapping table (Part II).</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Concurrency of Operations on B-Trees"
+url = "https://dl.acm.org/doi/10.1007/BF00263762"
+
+[[sources]]
+title = "Efficient Locking for Concurrent Operations on B-Trees"
+url = "https://www.csd.uoc.gr/~hy460/pdf/p650-lehman.pdf"
+
+[[sources]]
+title = "The ART of Practical Synchronization"
+url = "https://db.in.tum.de/~leis/papers/artsync.pdf"
+
+[[sources]]
+title = "A Survey of B-Tree Locking Techniques"
+url = "https://15721.courses.cs.cmu.edu/spring2017/papers/06-latching/a16-graefe.pdf"
+
+[[sources]]
+title = "Algorithms for Scalable Synchronization on Shared-Memory Multiprocessors"
+url = "https://www.cs.rochester.edu/u/scott/papers/1991_TOCS_synch.pdf"

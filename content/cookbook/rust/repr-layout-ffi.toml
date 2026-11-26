@@ -1,0 +1,52 @@
+title = "Repr layout FFI"
+module = "Rust language"
+module_order = 1
+chapter = "Unsafe and FFI"
+chapter_order = 7
+order = 65
+kind = "recipe"
+lede = "repr(transparent/u8/C/packed), offset_of!, extern \"C\" fn pointers, CStr, and a binary round trip."
+level = "intermediate"
+code = ["examples/unsafe_ffi/repr_layout_ffi.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>FFI boundaries</li><li>binary file/wire formats</li><li>mmap'd structures</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+default `repr(Rust)` layout is unspecified. To match C or a byte format you opt in explicitly:
+
+- `repr(transparent)`: a one-field newtype has exactly the ABI/layout of the field (safe to pass where the inner type goes).
+- `repr(u8)` on a fieldless enum: fixed size and explicit discriminants. Turn bytes into it with `TryFrom<u8>`, **not** `transmute` (an out-of-range byte transmuted into an enum is instant UB).
+- `repr(C)`: fields in declaration order with C padding rules. `repr(C, packed)`: no padding, so fields may be unaligned; never take `&field` of a packed struct, copy the value out.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+parse bytes by hand (`from_le_bytes`, portable and safe) and, as a cross-check, with `ptr::read_unaligned` (one unsafe line, valid because every bit pattern is a valid `Header`). Decoders must return errors on bad input, never panic. `extern "C" fn` items are plain Rust functions with the C calling convention; no linking is needed to call them via pointer.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>wrapping C library handles</li><li>reading on-disk headers and network packet formats</li><li>passing callbacks to C APIs</li><li><code>CString</code>/<code>CStr</code> at every C-string boundary</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/reference/type-layout.html> and <https://doc.rust-lang.org/nomicon/other-reprs.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/reference/type-layout.html"
+url = "https://doc.rust-lang.org/reference/type-layout.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/other-reprs.html"
+url = "https://doc.rust-lang.org/nomicon/other-reprs.html"

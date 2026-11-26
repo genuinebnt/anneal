@@ -1,0 +1,15 @@
+warning[W0501]: unused variable: `p`
+ --> generics_inference_conflict.peb:3:9
+  |
+3 |     let p = pair(1, "two");
+  |         ^ this variable is never read
+  |
+  = help: if this is intentional, prefix it with an underscore: `_p`
+
+error[E0301]: mismatched types
+ --> generics_inference_conflict.peb:3:21
+  |
+3 |     let p = pair(1, "two");
+  |                     ^^^^^ expected `int`, found `str`
+
+error: aborting due to 1 previous error; 1 warning emitted

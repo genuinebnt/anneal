@@ -1,0 +1,15 @@
+title = "Fix these first in rlox"
+module = "Compilers and languages"
+module_order = 12
+chapter = "A tree-walking interpreter"
+chapter_order = 2
+order = 573
+kind = "guide"
+lede = "Six small issues in the current code. The first four will stop slice 1 from running."
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<div class="cb-g-repo"> <ol> <li><b>Argument check is off by one.</b> In <code>src/main.rs</code>, <code>args.len() &gt; 1</code> prints usage whenever you pass a file, and the <code>== 1</code> branch reads <code>args[1]</code>, which panics. <code>args[0]</code> is the program name, so the tests should be <code>&gt; 2</code> and <code>== 2</code>. You can also match on <code>args.as_slice()</code>, as shown in the harness section.</li> <li><b><code>for token in lexer.next()</code> runs at most once.</b> It loops over an <code>Option</code>, so it only sees the first token. Write <code>for token in lexer</code>.</li> <li><b>Whitespace panics.</b> <code>next_kind</code> sends every character it doesn't recognize to <code>unimplemented!()</code>, so <code>1 + 2</code> crashes on the space. Skip trivia before you record <code>start</code>, and return an error token for anything unknown.</li> <li><b>The Iterator hides <code>Eof</code>.</b> That's fine for tests. The parser should call <code>next_token()</code> directly and hold a current <code>Eof</code> token, which is how oxc's parser works.</li> <li><b>Tokens own a <code>String</code>.</b> <code>TokenValue::String</code> makes <code>Token</code> non-<code>Copy</code> and allocates for every literal. Store only the kind and span, and read the text back with <code>&amp;src[span]</code> when you need it.</li> <li><b><code>run</code> lives in the binary.</b> Move it to <code>lib.rs</code> as <code>rlox::run(src, out)</code> so tests can call it without starting a process.</li> </ol> </div>
+"""

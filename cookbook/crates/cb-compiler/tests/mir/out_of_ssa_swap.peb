@@ -1,0 +1,16 @@
+// passes: ssa,gvn,out-of-ssa
+// After GVN removes the temporary, the header phis read each other: leaving SSA
+// needs a temporary on the back edge (the swap problem).
+fn main() {
+    let n = len("abc");
+    let mut a = 1;
+    let mut b = 2;
+    let mut i = 0;
+    while i < n {
+        let t = a;
+        a = b;
+        b = t;
+        i += 1;
+    }
+    println(to_str(a * 10 + b));
+}

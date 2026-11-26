@@ -1,0 +1,82 @@
+title = "Array tuple unit never (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "Vectors, slices and collections"
+chapter_order = 4
+order = 83
+kind = "recipe"
+lede = "arrays [T; N], tuples, the unit type (), and \"never\" (`!`, Infallible, empty enums), plus zero-sized types."
+level = "intermediate"
+code = ["examples/std_tour/std_array_tuple_unit_never.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>fixed-size buffers</li><li>matrices</li><li>composite map keys</li><li>multiple return values</li><li>APIs that cannot fail</li><li>typestate</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>[u8; 32] digests</li><li>ring buffers sized by a const generic</li><li>(tenant, user) cache keys</li><li>multi-key sort</li><li>Result&lt;()</li><li>E&gt;</li><li>HashMap&lt;K</li><li>()&gt; as a set</li><li><code>type Err = Infallible</code> for a parser that always succeeds</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>array::len</code></li><li><code>array::iter</code></li><li><code>array::into_iter</code></li><li><code>array::map</code></li><li><code>array::contains</code></li><li><code>std::array::from_fn</code></li><li><code>std::array::repeat</code></li></ul>
+
+<ul class="cb-g-names"><li><code>array::each_ref</code></li><li><code>array::each_mut</code></li><li><code>array::as_slice</code></li><li><code>array::as_mut_slice</code></li><li><code>std::array::from_ref</code></li><li><code>std::array::from_mut</code></li></ul>
+
+<ul class="cb-g-names"><li><code>TryFrom::try_from</code></li><li><code>TryInto::try_into</code></li><li><code>slice::first_chunk</code></li><li><code>slice::concat</code></li><li><code>slice::as_flattened</code></li><li><code>slice::windows</code></li><li><code>Default::default</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::mem::replace</code></li><li><code>std::mem::swap</code></li><li><code>Iterator::unzip</code></li><li><code>Iterator::zip</code></li><li><code>Iterator::enumerate</code></li><li><code>Ord::cmp</code></li><li><code>From::from</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::convert::Infallible</code></li><li><code>std::marker::PhantomData</code></li><li><code>std::mem::size_of</code></li><li><code>std::mem::align_of</code></li><li><code>Iterator::sum</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/primitive.array.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/primitive.array.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+arrays, tuples, unit, `!`, `core::array`, `Infallible`, `PhantomData`, size_of are all core. Vec/HashMap used in the scenarios are alloc/std. Also: <https://doc.rust-lang.org/std/primitive.tuple.html> , <https://doc.rust-lang.org/std/primitive.never.html>
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+array::try_map/try_from_fn/zip/split_array&#95;&#42; (unstable in 1.98.1), `!` as an ordinary type name (unstable: it is only writable as a return type), hint::unreachable_unchecked is named but not called (unsafe). The slice methods arrays get by coercion are in std_slice_search_sort_binary and std_slice_chunks_windows_split.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>N computed values</td><td><code>std::array::from_fn(|i| ..)</code></td></tr><tr><td>N copies of a non-Copy value</td><td><code>std::array::repeat(v)  (Clone, since 1.91)   or from_fn</code></td></tr><tr><td>N empty/None slots of a non-Copy type</td><td><code>[const { None }; N]</code></td></tr><tr><td>Transform each element, keep the size</td><td><code>map</code></td></tr><tr><td>Map without consuming the array</td><td><code>each_ref().map(..)</code></td></tr><tr><td>Slice</td><td><code>array of exactly N                -&gt; &lt;[T; N]&gt;::try_from(slice) / slice.try_into()</code></td></tr><tr><td>First N elements as an array</td><td><code>slice.first_chunk::&lt;N&gt;()</code></td></tr><tr><td>Sort by several keys</td><td><code>sort_by_key(|x| (x.a, Reverse(x.b)))</code></td></tr><tr><td>Two vectors from pairs</td><td><code>let (a, b): (Vec&lt;_&gt;, Vec&lt;_&gt;) = it.unzip();</code></td></tr><tr><td>"succeeds or fails, no data"</td><td><code>Result&lt;(), E&gt;</code></td></tr><tr><td>"this error cannot happen"</td><td><code>Result&lt;T, Infallible&gt;   then let Ok(v) = r;</code></td></tr><tr><td>Function that never returns</td><td><code>fn f() -&gt; !</code></td></tr><tr><td>A compile-time tag with no storage</td><td><code>PhantomData&lt;Tag&gt; LIMITS (std docs): Default for arrays exists only up to length 32. Tuples implement Eq/Ord/Hash/Debug/Default only up to arity 12 (Clone/Copy for any length). Arrays implement the comparison traits and Debug for every length.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/primitive.array.html> , <https://doc.rust-lang.org/std/primitive.tuple.html> ,
+
+```text
+https://doc.rust-lang.org/std/primitive.never.html
+```
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/primitive.array.html"
+url = "https://doc.rust-lang.org/std/primitive.array.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/primitive.tuple.html"
+url = "https://doc.rust-lang.org/std/primitive.tuple.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/primitive.never.html"
+url = "https://doc.rust-lang.org/std/primitive.never.html"

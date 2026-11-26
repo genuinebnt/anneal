@@ -1,0 +1,70 @@
+title = "Stack, queue and heap interview questions in Rust"
+module = "Worked questions"
+module_order = 14
+chapter = "Coding and design questions"
+chapter_order = 2
+order = 679
+kind = "recipe"
+lede = "stack, queue and heap interview questions in Rust (monotonic stacks, deques, BinaryHeap with Reverse, k-way merge)."
+level = "intermediate"
+code = ["examples/interview/stacks_queues_heaps_questions.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>coding interviews (LeetCode stack/queue/heap tags)</li><li>schedulers</li><li>streaming statistics</li><li>top-k and merge pipelines</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>parsers and calculators</li><li>next-greater problems</li><li>sliding windows</li><li>top-k</li><li>k-way merge (external sort)</li><li>task schedulers</li><li>medians</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://www.techinterviewhandbook.org/grind75" target="_blank" rel="noreferrer">https://www.techinterviewhandbook.org/grind75</a></li><li><a href="https://interviewing.io/rust-interview-questions" target="_blank" rel="noreferrer">https://interviewing.io/rust-interview-questions</a></li><li><a href="https://dev.to/seanchen1991/implementing-an-lru-cache-in-rust-33pp" target="_blank" rel="noreferrer">https://dev.to/seanchen1991/implementing-an-lru-cache-in-rust-33pp</a></li><li><a href="https://rust-unofficial.github.io/too-many-lists/" target="_blank" rel="noreferrer">https://rust-unofficial.github.io/too-many-lists/</a></li><li><a href="https://www.techinterview.org/post/3233460609/linked-list-interview-patterns/" target="_blank" rel="noreferrer">https://www.techinterview.org/post/3233460609/linked-list-interview-patterns/</a> See also: examples/data_structures/lru_cache.rs (the O(1) LRU)</li><li>examples/interview/linked_lists_in_rust.rs (merge k lists on Box lists)</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Question bank Q1**. Valid parentheses: are the brackets ()[]{} in a string balanced and properly nested? [Easy] [asked: very common] Q2. Design a stack that returns its minimum (and maximum) in O(1). [Medium] [asked: very common] Q3.
+
+Implement a queue using two stacks, and a stack using two queues. [Easy] [asked: very common] Q4. Evaluate an expression in reverse Polish notation. [Medium] [asked: very common] Q5. Basic calculator: evaluate a string with + - ( ) and spaces (including unary minus). [Hard] [asked: common] Q6.
+
+Decode string: "3[a2[c]]" becomes "accaccacc". [Medium] [asked: common] Q7. Simplify a Unix absolute path ("/a/./b/../../c/" becomes "/c"). [Medium] [asked: common] Q8. Next greater element (I, circular II) and daily temperatures with a monotonic stack. [Medium] [asked: very common] Q9.
+
+Largest rectangle in a histogram, and the maximal rectangle of 1s in a binary matrix. [Hard] [asked: common] Q10. Trapping rain water: two pointers and monotonic stack. [Hard] [asked: very common] Q11. Sliding window maximum with a deque in O(n). [Hard] [asked: very common] Q12.
+
+Design a circular queue (ring buffer) with fixed capacity. [Medium] [asked: common] Q13. Implement an LRU cache the naive way with a VecDeque (the O(n) baseline) and say why it is naive. [Medium] [asked: common] Q14. Kth largest element: min-heap of size k versus quickselect. [Medium] [asked: very common] Q15.
+
+Top k frequent elements: heap and bucket sort. [Medium] [asked: very common] Q16. Merge k sorted arrays: heap with Reverse, divide and conquer, and counting comparisons. [Hard] [asked: very common] Q17. Find the median of a data stream (two heaps) and the median of every sliding window. [Hard] [asked: very common] Q18.
+
+Task scheduler with cooldown, and reorganize a string so no two neighbours are equal (heap + greedy). [Medium] [asked: common] Q19. Meeting rooms II: the minimum number of rooms for a set of intervals. [Medium] [asked: very common] Q20. K closest points to the origin. [Medium] [asked: very common] Q21.
+
+Connect ropes with minimum total cost (Huffman-like merging). [Medium] [asked: common] Q22. Smallest range that includes at least one number from each of k sorted lists. [Hard] [asked: occasional] Q23. Implement a binary heap from scratch: sift up/down, O(n) heapify, and decrease-key with an indexed heap. [Medium] [asked: common] Q24.
+
+Rust: BinaryHeap is a max-heap; how do you get a min-heap, order custom structs, and handle f64 (not Ord)? [Medium] [asked: very common] Q25. Rust: what are peek_mut and PeekMut::pop, and why is VecDeque (not Vec) the queue type? [Medium] [asked: common]
+"""
+
+[[sources]]
+title = "techinterviewhandbook.org/grind75"
+url = "https://www.techinterviewhandbook.org/grind75"
+
+[[sources]]
+title = "interviewing.io/rust-interview-questions"
+url = "https://interviewing.io/rust-interview-questions"
+
+[[sources]]
+title = "dev.to/seanchen1991/implementing-an-lru-cache-in-rust-33pp"
+url = "https://dev.to/seanchen1991/implementing-an-lru-cache-in-rust-33pp"
+
+[[sources]]
+title = "rust-unofficial.github.io/too-many-lists"
+url = "https://rust-unofficial.github.io/too-many-lists/"
+
+[[sources]]
+title = "techinterview.org/post/3233460609/linked-list-interview-patterns"
+url = "https://www.techinterview.org/post/3233460609/linked-list-interview-patterns/"

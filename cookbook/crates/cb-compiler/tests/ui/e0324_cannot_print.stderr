@@ -1,0 +1,9 @@
+error[E0324]: cannot print a value of type `[int]`
+ --> e0324_cannot_print.peb:3:13
+  |
+3 |     println(xs);
+  |             ^^ only `int`, `bool`, `str` and `()` can be printed
+  |
+  = help: convert with `to_str(..)` or print the parts
+
+error: aborting due to 1 previous error

@@ -1,0 +1,68 @@
+title = "LSM compaction strategies"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 334
+kind = "recipe"
+lede = "LSM compaction strategies (leveled, size-tiered, lazy leveling, FIFO) with exact amplification accounting and Monkey-style bloom filters."
+level = "advanced"
+code = ["examples/database/lsm_compaction_strategies.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+choosing and tuning the compaction policy of an LSM key-value store or log-structured table.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+leveled compaction is RocksDB/LevelDB's default, size-tiered is Cassandra's STCS (and RocksDB "universal"), FIFO/TTL tables are used for time-series and cache-like data (RocksDB FIFO compaction, Cassandra TWCS is the windowed cousin), and lazy leveling / Monkey bloom-filter allocation come from the Dostoevsky and Monkey research on tuning LSM-trees.
+
+Course: CMU 15-445 Intro to Database Systems, Lecture 05 (Storage Models and the LSM tree; see also CMU 15-746 Storage Systems).
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+an LSM tree buffers writes in a memtable, flushes it as an immutable sorted run (SSTable) and relies on **compaction** to keep the number of runs a read must visit small.
+
+Compaction policy trades three amplifications against each other: **write** amp  = entries written to storage (flushes + compaction output) / user writes, **read** amp   = table reads (IOs) per point lookup (a run is only read when its key range and its bloom filter admit the key), **space** amp  = entries stored / live distinct keys (overwritten values and tombstones that compaction has not yet purged).
+
+**Policies** (size ratio T = 4, memtable M = 128 entries; runs here are whole sorted runs, the analysis model of Monkey and Dostoevsky; RocksDB compacts file-sized slices of a level but has the same asymptotics):
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Leveled</div><div class="cb-g-says"><p>One run per level, level i holds up to M*T&#94;(i+1); a run merging into the next level rewrites it, so each entry is rewritten about T/2 times per level: high write amp, minimal space amp, fewest runs to read.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Size-tiered (Cassandra STCS)</div><div class="cb-g-says"><p>Size-tiered (Cassandra STCS) runs of similar size are bucketed and merged when a bucket has T of them: each entry is rewritten about once per size class (low write amp), but overlapping runs pile up: more runs per lookup, more space amp.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Lazy leveling (Dostoevsky)</div><div class="cb-g-says"><p>Tiering at every level except the largest, which is leveled: near-tiered write cost and near leveled space/point-read cost, because most data (and most space waste) lives in the single last-level run.</p></div></div><div class="cb-g-term"><div class="cb-g-name">FIFO/TTL</div><div class="cb-g-says"><p>FIFO/TTL never merge; drop the oldest run when over a size cap or older than a TTL. Write amp is the minimum possible (every entry is written once, at flush), and data disappears: right for time-series or caches, wrong for a database of record. <strong>Tombstones</strong>: a delete is a record.</p><p>It may be dropped only when no run outside the merge still holds an older version of the key (otherwise the old value would come back from the dead); here this is checked exactly, usually true only when the merge reaches the bottom. <strong>Bloom filters</strong>: one per run.</p><p>With the same total memory, <strong>monkey</strong> allocates fewer bits per key to the big deep runs and more to the small shallow ones (false-positive rate proportional to run size, found by bisection on the Lagrange multiplier), which lowers the sum of false-positive rates, i.e. the IO of lookups for absent keys.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+for every policy, on 20k-operation seeded workloads (uniform and zipf, write- and read-heavy), every get matches a `BTreeMap` model, and after **every** flush (the main workload; every 4th on the others) all keys (present and absent) and a range scan are re-checked, plus structural invariants (level shapes, sorted runs, unique (key, seq) versions).
+
+FIFO is held to the weaker contract that it may forget old data but never returns a stale or deleted value.
+
+The textbook ordering is asserted: leveled write amp > tiered, leveled space amp &lt; tiered, lazy write amp &lt; leveled, scans cheaper under leveled, point lookups for absent keys: no bloom > uniform bloom > Monkey bloom at equal memory, leveled &lt; tiered with blooms.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://www.cs.umb.edu/~poneil/lsmtree.pdf" target="_blank" rel="noreferrer">https://www.cs.umb.edu/~poneil/lsmtree.pdf</a> (O'Neil et al., The Log-Structured Merge-Tree)</li><li><a href="https://nivdayan.github.io/dostoevsky.pdf" target="_blank" rel="noreferrer">https://nivdayan.github.io/dostoevsky.pdf</a> (Dayan &amp; Idreos, Dostoevsky: lazy leveling</li><li>its sibling paper Monkey derives the bloom allocation)</li><li><a href="https://github.com/facebook/rocksdb/wiki/Leveled-Compaction" target="_blank" rel="noreferrer">https://github.com/facebook/rocksdb/wiki/Leveled-Compaction</a> and <a href="https://github.com/facebook/rocksdb/wiki/Universal-Compaction" target="_blank" rel="noreferrer">https://github.com/facebook/rocksdb/wiki/Universal-Compaction</a> (RocksDB's two main policies)</li></ul>
+"""
+
+[[sources]]
+title = "cs.umb.edu/~poneil/lsmtree.pdf"
+url = "https://www.cs.umb.edu/~poneil/lsmtree.pdf"
+
+[[sources]]
+title = "nivdayan.github.io/dostoevsky.pdf"
+url = "https://nivdayan.github.io/dostoevsky.pdf"
+
+[[sources]]
+title = "github.com/facebook/rocksdb/wiki/Leveled-Compaction"
+url = "https://github.com/facebook/rocksdb/wiki/Leveled-Compaction"
+
+[[sources]]
+title = "github.com/facebook/rocksdb/wiki/Universal-Compaction"
+url = "https://github.com/facebook/rocksdb/wiki/Universal-Compaction"

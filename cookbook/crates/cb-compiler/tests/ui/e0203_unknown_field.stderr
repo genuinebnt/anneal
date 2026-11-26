@@ -1,0 +1,23 @@
+error[E0203]: no field `xx` on type `Point`
+ --> e0203_unknown_field.peb:4:22
+  |
+1 | struct Point { x: int, y: int }
+  |        ----- `Point` defined here
+...
+4 |     println(to_str(p.xx));
+  |                      ^^ unknown field
+  |
+  = help: a field with a similar name exists: `x`
+
+error[E0203]: no field `zzzzzz` on type `Point`
+ --> e0203_unknown_field.peb:5:22
+  |
+1 | struct Point { x: int, y: int }
+  |        ----- `Point` defined here
+...
+5 |     println(to_str(p.zzzzzz));
+  |                      ^^^^^^ unknown field
+  |
+  = note: available fields: x, y
+
+error: aborting due to 2 previous errors

@@ -1,0 +1,306 @@
+title = "Parallel search"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 384
+kind = "guide"
+lede = "Optimize! #9–#10 · parallelizing bottom-up dynamic programming and top-down memo search · layer-synchronous DPsub, work-sharing inside a subset, shared-memo top-down with and without claiming · measured on 12 cores"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<p><em>(These two lectures have no published notes; the ideas below are the problem's own, not a summary of what was said in them.)</em></p>
+
+<ul> <li><strong>Why parallelize the optimizer at all?</strong> For most queries it does not pay: planning a 5-table query takes microseconds, a thread start costs more, and a server already runs many queries in parallel (one optimizer thread per query <em>is</em> the parallelism). It matters for <strong>one big query</strong>: BI tools and ORMs generate 20–100-table joins, where exhaustive dynamic programming takes seconds, the user is waiting, and the cores are idle. The measurements below put the break-even near 14 relations.</li> <li><strong>Bottom-up dynamic programming parallelizes by layers.</strong> The best plan for a set of relations depends only on the best plans of its <em>smaller</em> subsets, so all sets of the same size are independent: a parallel loop per size, a barrier between sizes. No locks are needed during a layer if the table is read-only inside it; results are collected and written after the barrier.</li> <li><strong>Work per subset grows as 2&#94;k</strong>, but the number of subsets of size k is C(n, k): the middle layers hold most of the work, and the top layers have a handful of subsets each. That is the Amdahl worry (few parallel tasks at the end) and the reason to consider splitting <em>one</em> subset's split enumeration across workers. Whether that matters is an empirical question; here it does not.</li> <li><strong>Top-down (memoized, Cascades-style) search is harder to parallelize.</strong> All threads want the same memo entries: if each computes any missing entry it needs, the same subset is computed several times (<strong>duplicated work</strong>); if an entry is <em>claimed</em> by the first thread and the others wait for it, work is not duplicated but threads <strong>stall</strong>. Waiting cannot deadlock here because a thread computing a set only waits on strictly smaller sets, so wait chains end.</li> <li><strong>Branch-and-bound pruning fights parallelism.</strong> The reason to search top-down is to prune: a bound from a plan found early cuts the rest of the space. Threads exploring different branches find bounds at different times, so the amount of work depends on the schedule and, worse, <strong>which plan is returned can depend on timing</strong> unless ties and bounds are resolved canonically. An optimizer that returns different plans on different runs is a debugging nightmare.</li> <li><strong>Granularity and overhead decide.</strong> Starting threads per layer costs on the order of 50–100 µs; a layer must carry far more than that in work. Production designs use a thread pool, a job queue with dependencies (Orca's search is a scheduler running jobs such as "explore group", "implement expression", each declaring its prerequisites), and fall back to one thread for small queries.</li> <li><strong>Cheaper than parallelism</strong>: for very large joins the right answer is rarely more cores but a smaller space: linearized DP, iterative DP and greedy heuristics (<a href="/cookbook/p/join-ordering">Q4</a>) turn <code>3&#94;n</code> into a polynomial.</li> </ul>
+"""
+
+[[sections]]
+heading = "The lab"
+body = """
+<p>A cross-product-free DPsub over connected subsets with <code>C_out</code>, in four variants, all returning the same optimum as the sequential algorithm and DPccp (<a href="/cookbook/p/join-ordering">Q4</a>):</p>
+
+<ol> <li><strong>Bottom-up layers.</strong> Precompute dense tables over all <code>2&#94;n</code> subsets (cardinality, connectivity). For each size <code>k</code>, split that layer's connected subsets into one chunk per thread (<code>std::thread::scope</code>), compute each subset's best split from the read-only cost table, then write the layer's results.</li> <li><strong>Layers + split big subsets.</strong> When a layer has fewer than <code>2 × threads</code> subsets, share each subset between the workers instead: the lowest relation is fixed on the left side, the top <code>log2(threads)</code> of the remaining bits select a pattern, and each worker enumerates the submasks for its patterns.</li> <li><strong>Top-down, shared memo, duplicates allowed.</strong> Per subset an atomic state and the cost bits; each thread takes every <code>threads</code>-th valid split of the full set and recurses into both sides through the shared memo, computing whatever it finds missing.</li> <li><strong>Top-down, claim and wait.</strong> The first thread to compare-and-swap a subset's state from <code>unseen</code> to <code>computing</code> computes it; any other thread yields and retries until the state is <code>done</code>.</li> </ol>
+
+:::deeper Reference: dense preparation, sequential and layered DPsub, work-sharing inside a subset, shared-memo top-down with and without claiming
+```rust title="src/opt/pdp.rs"
+//! Parallel join-order search over connected subsets (DPsub), cross-product free, `C_out` cost.
+//!   * bottom-up, layer by layer: all subsets of size k depend only on smaller subsets, so a layer is a parallel loop; the top layers
+//!     have fewer subsets than threads, so the *hybrid* variant also splits one subset's split enumeration across threads;
+//!   * top-down with a shared memo: every thread recurses from the root; with `claim` a subset is computed by exactly one thread
+//!     (others wait for it), without it threads may compute the same subset twice.
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering::*};
+use crate::joinorder::Graph;
+
+/// Dense tables over all 2^n subsets: cardinality of the join of the subset and whether it is connected.
+pub struct Prep { pub n: usize, pub card: Vec<f64>, pub conn: Vec<bool> }
+pub fn prep(g: &Graph) -> Prep {
+    let n = g.n;
+    assert!(n <= 24);
+    let full = 1usize << n;
+    let mut card = vec![1.0; full];
+    let mut conn = vec![false; full];
+    for s in 1..full {
+        let low = s & s.wrapping_neg();
+        let rest = s ^ low;
+        let i = low.trailing_zeros() as usize;
+        card[s] = if rest == 0 { g.card[i] } else { card[rest] * g.card[i] * g.cross_sel(1 << i, rest as u64) };
+        conn[s] = g.connected(s as u64);
+    }
+    Prep { n, card, conn }
+}
+impl Prep {
+    /// Is `a ⋈ (s \\ a)` a valid split of the connected set `s`? Both sides must be connected; an edge between them then exists
+    /// automatically (otherwise `s` would be disconnected), so no further check is needed.
+    #[inline] fn valid(&self, a: u32, b: u32) -> bool { self.conn[a as usize] && self.conn[b as usize] }
+}
+
+/// Best split of `s` over the submasks `a` of `s` with fixed bits `fixed` and any subset of `free` (always containing the lowest bit of s).
+fn best_split(p: &Prep, cost: &[f64], s: u32, fixed: u32, free: u32) -> (f64, u32) {
+    let mut best = (f64::INFINITY, 0u32);
+    let mut sub = free;
+    loop {
+        let a = fixed | sub;
+        if a != 0 && a != s {
+            let b = s ^ a;
+            if p.valid(a, b) {
+                let c = cost[a as usize] + cost[b as usize] + p.card[s as usize];
+                if c < best.0 { best = (c, a); }
+            }
+        }
+        if sub == 0 { break; }
+        sub = (sub - 1) & free;
+    }
+    best
+}
+
+/// Sequential reference.
+pub fn dpsub_seq(g: &Graph) -> f64 { dpsub_layers(&prep(g), 1, false).0 }
+
+/// Bottom-up by layers with `threads` workers. With `hybrid`, a layer that has fewer subsets than `2 * threads` splits the work
+/// inside each subset instead (the lowest bit is fixed in `a`; the other bits are divided between workers by their top bits).
+/// Returns (cost of the full set, number of valid subsets).
+pub fn dpsub_layers(p: &Prep, threads: usize, hybrid: bool) -> (f64, usize) {
+    let n = p.n;
+    let full = (1u32 << n) - 1;
+    let mut cost = vec![f64::INFINITY; 1 << n];
+    for i in 0..n { cost[1 << i] = 0.0; }
+    let mut by_size: Vec<Vec<u32>> = vec![vec![]; n + 1];
+    for s in 1..=full { if p.conn[s as usize] { by_size[s.count_ones() as usize].push(s); } }
+    let mut valid_sets = n;
+    for k in 2..=n {
+        let sets = &by_size[k];
+        valid_sets += sets.len();
+        let mut results: Vec<(u32, f64)> = Vec::with_capacity(sets.len());
+        if threads == 1 {
+            for &s in sets { let low = s & s.wrapping_neg(); results.push((s, best_split(p, &cost, s, low, s ^ low).0)); }
+        } else if hybrid && sets.len() < 2 * threads {
+            // few, expensive subsets: share each one between the workers
+            let r = (threads as f64).log2().floor() as u32;
+            for &s in sets {
+                let low = s & s.wrapping_neg();
+                let rest = s ^ low;
+                // the top r bits of `rest` select a pattern; each worker takes patterns round-robin
+                let mut hi_bits: Vec<u32> = vec![];
+                let mut x = rest;
+                while x != 0 && (hi_bits.len() as u32) < r { let b = 31 - x.leading_zeros(); hi_bits.push(1 << b); x ^= 1 << b; }
+                let patterns = 1u32 << hi_bits.len();
+                let lo_free = x;
+                let cost_ref = &cost;
+                let best = std::thread::scope(|sc| {
+                    let hs: Vec<_> = (0..threads).map(|t| {
+                        let hb = hi_bits.clone();
+                        sc.spawn(move || {
+                            let mut best = f64::INFINITY;
+                            let mut pat = t as u32;
+                            while pat < patterns {
+                                let fixed = low | hb.iter().enumerate().filter(|(i, _)| pat >> i & 1 == 1).fold(0, |m, (_, b)| m | b);
+                                best = best.min(best_split(p, cost_ref, s, fixed, lo_free).0);
+                                pat += threads as u32;
+                            }
+                            best
+                        })
+                    }).collect();
+                    hs.into_iter().map(|h| h.join().unwrap()).fold(f64::INFINITY, f64::min)
+                });
+                results.push((s, best));
+            }
+        } else {
+            let chunk = sets.len().div_ceil(threads).max(1);
+            let cost_ref = &cost;
+            std::thread::scope(|sc| {
+                let hs: Vec<_> = sets.chunks(chunk).map(|part| sc.spawn(move || {
+                    part.iter().map(|&s| { let low = s & s.wrapping_neg(); (s, best_split(p, cost_ref, s, low, s ^ low).0) }).collect::<Vec<_>>()
+                })).collect();
+                for h in hs { results.extend(h.join().unwrap()); }
+            });
+        }
+        for (s, c) in results { cost[s as usize] = c; }
+    }
+    (cost[full as usize], valid_sets)
+}
+
+/// Shared memo for the top-down search: per subset a state (0 unseen, 1 being computed, 2 done), the cost bits and the left side.
+pub struct Memo { state: Vec<AtomicU8>, cost: Vec<AtomicU64>, pub computed: AtomicU64, pub waits: AtomicU64 }
+impl Memo {
+    fn new(n: usize) -> Self {
+        let m = Memo { state: (0..1usize << n).map(|_| AtomicU8::new(0)).collect(), cost: (0..1usize << n).map(|_| AtomicU64::new(0)).collect(), computed: AtomicU64::new(0), waits: AtomicU64::new(0) };
+        for i in 0..n { m.cost[1 << i].store(0f64.to_bits(), Relaxed); m.state[1 << i].store(2, Relaxed); }
+        m
+    }
+}
+fn solve(p: &Prep, m: &Memo, s: u32, claim: bool) -> f64 {
+    loop {
+        match m.state[s as usize].load(Acquire) {
+            2 => return f64::from_bits(m.cost[s as usize].load(Relaxed)),
+            1 if claim => { m.waits.fetch_add(1, Relaxed); std::thread::yield_now(); continue; }
+            0 if claim => { if m.state[s as usize].compare_exchange(0, 1, AcqRel, Acquire).is_err() { continue; } }
+            _ => {}
+        }
+        break;
+    }
+    // compute (without `claim`, several threads may get here for the same subset)
+    let low = s & s.wrapping_neg();
+    let free = s ^ low;
+    let mut best = f64::INFINITY;
+    let mut sub = free;
+    loop {
+        let a = low | sub;
+        if a != s {
+            let b = s ^ a;
+            if p.valid(a, b) { best = best.min(solve(p, m, a, claim) + solve(p, m, b, claim) + p.card[s as usize]); }
+        }
+        if sub == 0 { break; }
+        sub = (sub - 1) & free;
+    }
+    m.computed.fetch_add(1, Relaxed);
+    m.cost[s as usize].store(best.to_bits(), Relaxed);
+    m.state[s as usize].store(2, Release);
+    best
+}
+
+/// Top-down with `threads` workers sharing one memo. The root's valid splits are dealt out to the workers round-robin; each worker
+/// recurses into its splits' two sides through the shared memo. Returns (cost, subsets computed (> the number of distinct
+/// subsets means duplicated work), spin waits).
+pub fn topdown(p: &Prep, threads: usize, claim: bool) -> (f64, u64, u64) {
+    let n = p.n;
+    let full = (1u32 << n) - 1;
+    let memo = Memo::new(n);
+    let low = full & full.wrapping_neg();
+    let mut splits = vec![];
+    let free = full ^ low;
+    let mut sub = free;
+    loop {
+        let a = low | sub;
+        if a != full && p.valid(a, full ^ a) { splits.push(a); }
+        if sub == 0 { break; }
+        sub = (sub - 1) & free;
+    }
+    let mins: Vec<f64> = std::thread::scope(|sc| {
+        let hs: Vec<_> = (0..threads).map(|t| {
+            let (memo, splits) = (&memo, &splits);
+            sc.spawn(move || {
+                let mut best = f64::INFINITY;
+                for &a in splits.iter().skip(t).step_by(threads) { best = best.min(solve(p, memo, a, claim) + solve(p, memo, full ^ a, claim) + p.card[full as usize]); }
+                best
+            })
+        }).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    (mins.into_iter().fold(f64::INFINITY, f64::min), memo.computed.load(Relaxed), memo.waits.load(Relaxed))
+}
+
+/// Number of connected subsets of size >= 2 (the number of subsets a duplicate-free search computes, besides the root).
+pub fn connected_subsets(p: &Prep) -> usize { (1..(1usize << p.n)).filter(|&s| p.conn[s] && s.count_ones() >= 2).count() }
+
+/// Sequential time per layer: (size k, number of subsets, seconds). Shows where the work is.
+pub fn layer_profile(p: &Prep) -> Vec<(usize, usize, f64)> {
+    let n = p.n;
+    let full = (1u32 << n) - 1;
+    let mut cost = vec![f64::INFINITY; 1 << n];
+    for i in 0..n { cost[1 << i] = 0.0; }
+    let mut by_size: Vec<Vec<u32>> = vec![vec![]; n + 1];
+    for s in 1..=full { if p.conn[s as usize] { by_size[s.count_ones() as usize].push(s); } }
+    let mut out = vec![];
+    for k in 2..=n {
+        let t0 = std::time::Instant::now();
+        for &s in &by_size[k] { let low = s & s.wrapping_neg(); cost[s as usize] = best_split(p, &cost, s, low, s ^ low).0; }
+        out.push((k, by_size[k].len(), t0.elapsed().as_secs_f64()));
+    }
+    out
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>Wall-clock, best of 3, on a 12-core machine (8 performance cores and 4 efficiency cores). Speedups are against the <strong>sequential bottom-up</strong> run (the first column); run-to-run differences are a few percent.</p>
+
+```text title="parallel search: speedups, duplicated work and waiting"
+Clique, 16 relations: 65519 connected subsets
+sequential time by layer (size: subsets, share of total): 7: 11440 sets 5%; 8: 12870 sets 9%; 9: 11440 sets 15%; 10: 8008 sets 18%; 11: 4368 sets 20%; 12: 1820 sets 15%; 13: 560 sets 9%; 14: 120 sets 4%;
+  the top layers (sizes 14..16) hold 5% of the work in 137 subsets
+variant (time ms, speedup vs 1 thread)         1 thr         2 thr         4 thr         8 thr        12 thr
+bottom-up layers                      23 ms 1.0x    13 ms 1.8x     7 ms 3.3x     7 ms 3.5x     7 ms 3.6x
+bottom-up layers + split big subsets    23 ms 1.0x    13 ms 1.9x     8 ms 3.0x     7 ms 3.5x     8 ms 2.9x
+top-down, shared memo, duplicates     93 ms 0.3x    68 ms 0.4x    58 ms 0.4x    47 ms 0.5x    39 ms 0.6x
+top-down, shared memo, claim+wait     90 ms 0.3x    70 ms 0.4x    65 ms 0.4x    64 ms 0.4x    34 ms 0.7x
+top-down work done and waiting (threads: subsets computed incl. duplicates | spin waits with claiming):
+   1: 65518 computed (1.00x the 65518 distinct) | claiming: 65518 computed, 0 waits
+   2: 80223 computed (1.22x the 65518 distinct) | claiming: 65518 computed, 102596 waits
+   4: 103154 computed (1.57x the 65518 distinct) | claiming: 65518 computed, 326971 waits
+   8: 98771 computed (1.51x the 65518 distinct) | claiming: 65518 computed, 214737 waits
+  12: 109034 computed (1.66x the 65518 distinct) | claiming: 65518 computed, 37178 waits
+Star, 18 relations: 131071 connected subsets
+sequential time by layer (size: subsets, share of total): 9: 24310 sets 5%; 10: 24310 sets 10%; 11: 19448 sets 16%; 12: 12376 sets 20%; 13: 6188 sets 21%; 14: 2380 sets 13%; 15: 680 sets 7%;
+  the top layers (sizes 16..18) hold 4% of the work in 154 subsets
+variant (time ms, speedup vs 1 thread)         1 thr         2 thr         4 thr         8 thr        12 thr
+bottom-up layers                      85 ms 1.0x    46 ms 1.9x    26 ms 3.3x    24 ms 3.6x    20 ms 4.3x
+bottom-up layers + split big subsets    85 ms 1.0x    44 ms 2.0x    27 ms 3.2x    22 ms 4.0x    24 ms 3.6x
+top-down, shared memo, duplicates     82 ms 1.0x    57 ms 1.5x    39 ms 2.2x    32 ms 2.7x    29 ms 3.0x
+top-down, shared memo, claim+wait     83 ms 1.0x    59 ms 1.5x    42 ms 2.1x    40 ms 2.1x    29 ms 2.9x
+top-down work done and waiting (threads: subsets computed incl. duplicates | spin waits with claiming):
+   1: 131070 computed (1.00x the 131070 distinct) | claiming: 131070 computed, 0 waits
+   2: 167188 computed (1.28x the 131070 distinct) | claiming: 131070 computed, 174139 waits
+   4: 189328 computed (1.44x the 131070 distinct) | claiming: 131070 computed, 273315 waits
+   8: 192658 computed (1.47x the 131070 distinct) | claiming: 131070 computed, 191765 waits
+  12: 193208 computed (1.47x the 131070 distinct) | claiming: 131070 computed, 42368 waits
+```
+
+<ul> <li><strong>Layer-parallel DP speeds up 1.8–1.9× with 2 threads, 3.3× with 4 and about 3.5× with 8 and 12 on a 16-relation clique (23 ms to 7 ms), 4.3× on an 18-relation star (85 ms to 20 ms).</strong> It is correct at every thread count: all variants return the same cost as DPccp for 60 random graphs.</li> <li><strong>It does not scale past about 4× on this machine, and Amdahl is not the reason</strong>: the top three layers (sizes <code>n−2…n</code>) hold only 4–5% of the work, so a serial tail cannot cap the speedup near 4. The evidence below points at fixed costs per layer and at the mix of core types (12 threads are no faster than 8 here); we did not isolate which dominates.</li> <li><strong>Splitting big subsets inside a layer buys nothing</strong>: 3.5× against 3.5× at 8 threads, and slightly worse at 12 (2.9×, more threads to start for no more work). The idea is sound where the last layers dominate (a cost structure with few huge subsets); for DPsub's work distribution they do not.</li> <li><strong>Top-down with a shared memo is slower than sequential bottom-up at every thread count here</strong> (0.3–0.7× on the clique, 1.0–3.0× on the star; the speedups are relative to the sequential bottom-up baseline, and sequential top-down is about 4× slower than it on the clique (93 ms against 23 ms) but equal on the star (82 ms against 85 ms). Recursion and an atomic load or store on every memo access are the suspects; we did not isolate the cause). Against its own single-thread time it speeds up 2.4× at 12 threads on the clique (93 ms to 39 ms) and 2.8× on the star (82 ms to 29 ms).</li> <li><strong>Without claiming, threads duplicate 1.2–1.7× of the work</strong> (clique: 80 223 to 109 034 subset computations instead of 65 518 as more threads race to the same missing entries). <strong>With claiming, every subset is computed exactly once at every thread count</strong> (the test asserts it), but threads spend their time spinning: up to 327 000 waits at 4 threads for 65 518 subsets. Neither version wins: the time saved by not duplicating is spent waiting.</li> <li><strong>Branch-and-bound is absent, and that is the point.</strong> This top-down search has no pruning, so it computes the same set of subsets as the bottom-up one, and parallelizing it only adds coordination. Top-down is worth its cost when pruning cuts the space; parallel pruning is the unsolved part (below).</li> </ul>
+
+```text title="bottom-up speedup as the problem grows"
+bottom-up layers (time, speedup) as the problem grows: clique
+  n   work 3^n/2 |         1 thr         2 thr         4 thr         8 thr        12 thr
+ 10        29524 |  0.04 ms 1.1x  0.31 ms 0.2x  0.46 ms 0.1x  0.71 ms 0.1x  1.05 ms 0.0x
+ 12       265720 |  0.33 ms 1.1x  0.60 ms 0.6x  0.67 ms 0.5x  0.93 ms 0.4x  1.04 ms 0.3x
+ 14      2391484 |  2.54 ms 1.0x  1.92 ms 1.4x  1.40 ms 1.8x  1.73 ms 1.5x  1.88 ms 1.4x
+ 16     21523360 | 23.67 ms 1.0x 13.29 ms 1.8x  8.27 ms 2.9x  7.23 ms 3.3x  6.88 ms 3.4x
+ 18    193710244 |219.30 ms 1.0x120.41 ms 1.8x 70.20 ms 3.1x 57.20 ms 3.8x 49.86 ms 4.4x
+```
+
+<ul> <li><strong>Small problems get slower with threads</strong>: for 10 relations the sequential search takes 0.04 ms and 2 threads take 0.31 ms, 12 threads 1.05 ms: roughly 0.1 ms of thread start-up and join per layer, times nine layers. At 12 relations the sequential run (0.33 ms) still beats every parallel one. The break-even is near 14 relations (2.5 ms sequential, 1.4–1.9 ms with 2–4 threads).</li> <li><strong>Larger problems scale better</strong> (speedup at 12 threads: 1.4× at n = 14, 3.4× at n = 16, 4.4× at n = 18), as fixed per-layer costs get amortized. The practical rule: choose the thread count from the estimated work (<code>3&#94;n</code>-ish), and use one thread below a threshold.</li> </ul>
+
+<aside data-call="note"><b>The break-even rule</b><p>Estimate the sequential time from the number of connected subsets (the lab's <code>prep</code> already counts them) and multiply by a measured cost per subset; use <code>min(cores, estimated_ms / 0.3)</code> threads, so a layer carries at least a few hundred microseconds of work per thread. Re-measure the constants when the hardware changes (<a href="/cookbook/p/cost-models">Q9</a>).</p></aside>
+"""
+
+[[sections]]
+heading = "Parallel pruning"
+body = """
+<p>What the lab leaves open, and where the research is:</p>
+
+<ul> <li><strong>Shared bounds.</strong> Threads publish the best complete plan cost found so far in an atomic; every thread prunes against it. The result is the optimum whatever the schedule, but the amount of work and the discovery order vary run to run.</li> <li><strong>Determinism.</strong> Resolve ties by a canonical order (lowest left mask, then lowest rule id) and never prune with <code>&lt;</code> against a bound found by another thread when <code>=</code> would change the chosen plan.</li> <li><strong>Job-based search.</strong> Decompose the memo search into jobs with dependencies (explore group G, apply rule R to expression E, optimize G under properties P) and run them on a pool, as Orca does. Parallelism comes from many independent groups, not from a single recursion, and duplicate jobs are avoided by marking groups as "being explored".</li> <li><strong>Distributed or GPU search.</strong> Layered DP maps naturally to a GPU (every subset of a layer is a thread block) and to a cluster (partition subsets by hash); the research systems show speedups for 20–30 relation joins where sequential DP takes minutes.</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong><code>std::thread::scope</code> for borrowed parallelism.</strong> Workers borrow the read-only cost table and graph tables (<code>&amp;Prep</code>, <code>&amp;[f64]</code>) with no <code>Arc</code>, no <code>'static</code>, and are all joined before the scope ends, so a layer is a few lines. <code>scope</code> is the idiomatic way to parallelize a computation over local data without a runtime.</li> <li><strong>Collect, then write.</strong> Each worker returns a <code>Vec&lt;(subset, cost)&gt;</code>; the main thread applies them after the barrier. That avoids shared mutable state during the layer entirely: no atomics, no locks, no <code>unsafe</code>, and the borrow checker proves it (the read-only borrow of <code>cost</code> ends before the writes). The alternative, writing disjoint entries through a raw pointer, saves a memcpy-sized merge and costs a proof obligation.</li> <li><strong>Atomics for the top-down memo</strong>: <code>AtomicU8</code> states and <code>AtomicU64</code> cost bits (<code>f64::to_bits</code>), claims by <code>compare_exchange(0, 1, AcqRel, Acquire)</code>, publication by a <code>Release</code> store of the state after the cost is written, and <code>Acquire</code> loads before reading it. The cost itself can be <code>Relaxed</code> because the state flag orders it.</li> <li><strong>Spinning with <code>yield_now</code></strong> keeps the lab simple; a production system parks the thread on a condition variable per bucket or uses a work-stealing pool (Rayon) that runs other jobs while one waits.</li> <li><strong>Rayon</strong> would reduce the layer to <code>sets.par_iter().map(best_split).collect()</code> with a work-stealing pool that is <em>reused</em> between layers; the lab spawns threads per layer on purpose, so that the per-layer start-up cost is visible and measurable (exercise 2).</li> <li><strong>Dense arrays beat hash maps</strong> for <code>n ≤ 24</code>: <code>Vec&lt;f64&gt;</code> indexed by the subset bitmask is a cache-friendly table with no hashing; <code>Vec&lt;bool&gt;</code> for connectivity. Past 24 relations use a hash map or a different algorithm.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>All variants agree with DPccp</strong>: for 60 random graphs (3–11 relations, every shape) and thread counts 1, 2, 3, 4 and 8, the layered search with and without work-sharing and the top-down search with and without claiming return the DPccp optimum (to 1e-9, relative).</li> <li><strong>Work accounting</strong>: the number of valid subsets equals the number of connected subsets; with claiming, the top-down search computes each connected subset of size ≥ 2 exactly once (the root is not stored); without it, never fewer.</li> <li><strong>Edge cases</strong>: two relations; thread counts larger than the number of subsets in a layer; threads that get no work.</li> <li><strong>Mutants run against these tests</strong>: skip the empty rest (the split <code>a = low</code>) in the enumeration (killed); skip the last submask (killed); the worker starts one pattern late (killed); the pattern bits are ignored (killed); the claim never reserves a subset (killed by the exactly-once assertion); the right side's connectivity is not checked (killed); the layer writes results to the wrong set (killed). Two plausible mutants were <em>equivalent</em> and survived for good reasons: stepping through patterns by <code>2 × threads</code> (when there are at most <code>threads</code> patterns it changes nothing) and using one pattern bit fewer (the free bits then cover the same splits). The explicit "an edge exists between the halves" check was removed as redundant, since both halves being connected inside a connected set implies it.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Most optimizers are single-threaded per query</strong> and parallel across queries: to our knowledge PostgreSQL, MySQL, SQL Server and Oracle plan each statement on the calling session's thread. The cost of a big plan is handled by <em>limits</em> (join collapse limits, search timeouts, GEQO, linearized fallbacks) rather than by more threads.</li> <li><strong>Orca</strong> (Greenplum/Cloudberry) runs its Cascades-style search as a <strong>multi-threaded job scheduler</strong>: jobs for exploring groups, implementing expressions and optimizing under properties, with explicit dependencies, a thread pool and group-level locking; the paper reports speedups from the scheduler on many-core machines.</li> <li><strong>Research on parallel dynamic programming</strong> (shared-memory and shared-nothing) parallelizes DPsize/DPsub/DPccp by layer or by size-pair, with load balancing by skip vectors, and on GPUs; report good speedups on many cores for large joins; the curve above shows the same pattern in miniature: nothing to gain below about a dozen relations.</li> <li><strong>Compile-time budgets</strong> are the real production constraint: an optimizer that spends 200 ms to save 20 ms on a 30 ms query is a regression, so engines choose the strategy (full DP, linearized DP, greedy) from the query's join count before choosing a thread count.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Thread start-up per layer</strong> (as in the lab) is a cost of 0.05–0.1 ms; below about 14 relations the parallel search loses. Reuse a pool and fall back to one thread for small queries.</li> <li><strong>Nondeterministic plans</strong> are a correctness problem for the <em>product</em> (cached plans differ between nodes, a test fails once a week). Break ties canonically and test with different thread counts.</li> <li><strong>Parallel results must equal sequential ones</strong>: make "same cost as the sequential run for every thread count" a test, not a hope.</li> <li><strong>Shared-memo contention hides in the counters</strong>: the <code>waits</code> and <code>computed</code> counters show what the clock cannot; report them next to the speedup.</li> <li><strong>Efficiency cores and hyperthreads</strong>: going from 8 to 12 threads added nothing here (3.6× against 3.5×); measure on the target machine and do not read a core count as a capacity.</li> <li><strong>Do not parallelize what a better algorithm shortcuts</strong>: DPccp finds the same optimum for a clique-16 in a fraction of the time (<a href="/cookbook/p/join-ordering">Q4</a>); a connected-pairs enumerator beats 12 threads of subset enumeration for sparse graphs.</li> <li><strong>False sharing and write contention</strong>: per-thread output vectors that are later merged avoid both; a shared <code>Vec&lt;AtomicU64&gt;</code> indexed by subset puts neighbouring subsets on one cache line.</li> </ul></aside>
+"""

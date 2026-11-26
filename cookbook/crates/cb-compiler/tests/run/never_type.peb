@@ -1,0 +1,8 @@
+fn pick(c: bool) -> int {
+    let x: int = if c { 1 } else { return 0 };
+    x + 100
+}
+fn main() {
+    println(to_str(pick(true)));
+    println(to_str(pick(false)));
+}

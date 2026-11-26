@@ -1,0 +1,33 @@
+title = "Resolver"
+module = "Compilers and languages"
+module_order = 12
+chapter = "A tree-walking interpreter"
+chapter_order = 2
+order = 582
+kind = "guide"
+lede = "Book ch. 11 · Official tests: the remaining variable/, closure/ and return/ files"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>A static pass between the parser and the interpreter. It fixes closure binding and reports scope errors before any code runs.</p>
+
+```text title="tests/lox/slice7/binding.lox"
+var a = "global";
+{
+  fun showA() { print a; }
+  showA();          // expect: global
+  var a = "block";
+  showA();          // expect: global   (prints "block" without a resolver)
+}
+```
+
+<div class="cb-g-tt"><table><thead><tr><th>Kind</th><th>Input</th><th>Expected</th></tr></thead><tbody><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>{ var a = a; }</code></td><td><code>[line 1] Error at 'a': Can't read local variable in its own initializer.</code></td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>{ var a = 1; var a = 2; }</code></td><td><code>[line 1] Error at 'a': Already a variable with this name in this scope.</code></td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>return 1;</code></td><td><code>[line 1] Error at 'return': Can't return from top-level code.</code></td></tr></tbody></table></div>
+
+<p>The book stores resolution results in a map keyed by Java object identity. Rust has no equivalent, so give each variable-reading expression an ID. There are two common ways:</p>
+
+<ul> <li><b>IDs.</b> The parser gives every <code>Var</code> and <code>Assign</code> an <code>ExprId(u32)</code> from a counter. The resolver fills a <code>HashMap&lt;ExprId, usize&gt;</code> of depths. rustc does the same with <code>NodeId</code>.</li> <li><b>In-node cell.</b> Store <code>depth: Cell&lt;Option&lt;u32&gt;&gt;</code> in the node, and let the resolver set it through <code>&amp;Expr</code>. This avoids a map lookup on every read.</li> </ul>
+
+<p>Update the slice-4 test <code>var a = a + 1;</code> inside a block. It now has to fail. Changing an existing test when behavior changes on purpose is normal, and the per-slice tags record when it happened.</p>
+"""

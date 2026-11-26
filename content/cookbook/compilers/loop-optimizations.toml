@@ -1,0 +1,60 @@
+title = "Loop optimisations on a CFG IR"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Middle end and analysis"
+chapter_order = 5
+order = 630
+kind = "recipe"
+lede = "Natural loops, LICM, strength reduction, unrolling, bounds-check hoisting, plus dependence-driven interchange / fusion / fission."
+level = "intermediate"
+code = ["examples/compilers_runtimes/loop_optimizations.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>optimising compilers (LLVM LICM / IndVars / LoopUnroll / LoopInterchange, GCC, V8 TurboFan, HotSpot C2)</li><li>query-expression JITs</li><li>numeric kernels</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Why loops**: programs spend nearly all their time in loops, so a saving per iteration is multiplied by the trip count. IR: registers hold i64, three arrays of 16 cells, blocks end in `Jmp/Br/Ret`. `Load`/`Store` are **unchecked** (out of range is an `Ub` error in the interpreter, never legal), the front end emits an explicit `Check(idx, arr)` that traps.
+
+This makes bounds checks a visible, optimisable instruction. `CheckRange(lo, hi, arr)` is the hoisted form: "if lo &lt; hi, every index in [lo, hi) is in range".
+
+**Costs.** Mul = 3, Load/Store = 2, everything else (and every terminator) = 1. **Part** 1, loop structure: Cooper-Harvey-Kennedy dominators (checked against the textbook set intersection on random graphs including irreducible ones), **back edge** = edge u->h where h dominates u, **natural loop** = h plus everything that reaches u without passing h. Loops sorted inner first.
+
+**Part** 2, transformations on the CFG (each one is verified on 1500 random programs x 3 inputs by comparing the interpreter before and after; a trap must stay a trap, everything else must be identical):
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>LICM. An instruction is hoisted to the preheader when (1) its operands are loop invariant, (2) its destination has <strong>one</strong> def in the loop and every in-loop use is dominated by that def, and (3) it is <strong>safe</strong>: either its block dominates all loop exits (so it ran anyway) or it is a pure op whose destination is dead after the loop (speculation is harmless).</p><p><code>Load</code>/<code>Check</code> can trap so they only get (3a); a Load also needs "no store to that array in the loop". That is why a load in the body of a top-tested <code>for</code> stays put but moves out of a <code>do-while</code> (demo). Needs liveness (backward dataflow).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Strength reduction</div><div class="cb-g-says"><p>. A basic induction variable i (<code>i = i + c</code>, one def) makes <code>j = i * k</code> a recurrence: keep <code>s = i*k</code> initialised in the preheader and bump it by <code>c*k</code> right after the increment; replace the Mul by <code>Mov j, s</code>. DCE removes the leftovers.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Unroll</div><div class="cb-g-says"><p>By 4 <strong>with remainder</strong>, for the shape <code>H: c = i &lt; n; br c, B, X; B: ...; i += step; jmp H</code>. The new fast loop tests <code>i + 3*step &lt; n</code> and runs four bodies back to back; the <strong>original</strong> loop stays behind as the remainder loop (no divisibility assumption). Saves 3 of every 4 loop tests, branches and jumps.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Bounds-check hoisting</div><div class="cb-g-says"><p>. <code>Check(i + c)</code> in a counted loop with step 1 that runs every iteration, before the increment, is replaced by one <code>CheckRange</code> in the preheader. Imprecise exceptions: the trap fires <strong>before</strong> the loop's earlier side effects, so on a trapping run memory differs; this is the accepted trade (Java JITs do this too) and why equality ignores memory after a trap.</p><p><strong>Part</strong> 3, affine loop nests (separate tiny IR: 2-deep nests, array subscripts <code>var + const</code>): dependence distances by solving the subscript equations, the GCD test on 1-D (checked against brute force: "independent" must never be wrong), then legality:</p></div></div><div class="cb-g-term"><div class="cb-g-name">Interchange</div><div class="cb-g-says"><p>Legal iff every dependence vector stays lexicographically non-negative after swapping its components.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Fusion</div><div class="cb-g-says"><p>Fusion is prevented by a dependence from a later iteration of loop A to an earlier one of loop B; <strong>fission</strong> is the same test. Each "legal" verdict is run against a concrete evaluator; "illegal" verdicts are shown to be non-vacuous by finding a witness where the transformed nest really computes something else.</p><p>A tiny LRU cache simulator shows why interchange matters</p></div></div></div>
+
+(stride-N versus stride-1 walks, misses printed).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>LLVM passes LICM</li><li>IndVarSimplify</li><li>LoopStrengthReduce</li><li>LoopUnroll</li><li>LoopInterchange</li><li>LoopFuse/LoopDistribute and the bounds-check elimination of JVM and V8 JITs</li><li>polyhedral tools (Polly, Pluto) generalise Part 3</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Cooper, Harvey, Kennedy "A Simple, Fast Dominance Algorithm"</li><li>Allen and Kennedy "Optimizing Compilers for Modern Architectures" (dependence analysis, interchange, fusion)</li><li>Muchnick "Advanced Compiler Design and Implementation" (LICM, strength reduction)</li><li><a href="https://en.wikipedia.org/wiki/Loop_optimization" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Loop_optimization</a></li><li><a href="https://en.wikipedia.org/wiki/Loop-invariant_code_motion" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Loop-invariant_code_motion</a></li><li><a href="https://en.wikipedia.org/wiki/Loop_interchange" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Loop_interchange</a></li><li><a href="https://en.wikipedia.org/wiki/Strength_reduction" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Strength_reduction</a></li></ul>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Loop_optimization"
+url = "https://en.wikipedia.org/wiki/Loop_optimization"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Loop-invariant_code_motion"
+url = "https://en.wikipedia.org/wiki/Loop-invariant_code_motion"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Loop_interchange"
+url = "https://en.wikipedia.org/wiki/Loop_interchange"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Strength_reduction"
+url = "https://en.wikipedia.org/wiki/Strength_reduction"

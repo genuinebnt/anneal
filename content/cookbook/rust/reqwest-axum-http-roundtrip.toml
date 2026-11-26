@@ -1,0 +1,68 @@
+title = "Axum server and reqwest client in one process"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Application crates"
+chapter_order = 2
+order = 131
+kind = "recipe"
+lede = "Extractors, errors, timeouts, redirects, retries, streaming, multipart, cookies"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/reqwest_axum_http_roundtrip.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+HTTP APIs and their clients, and especially their integration tests.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>JSON services</li><li>webhooks</li><li>uploads and downloads</li><li>testing a client against a real server on a random port</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+axum::Router::route, Router::with_state, axum::serve, Serve::with_graceful_shutdown, axum::extract::{State, Path, Query, Multipart, ConnectInfo, DefaultBodyLimit}, axum::Json, axum::response::{IntoResponse, Redirect}, axum::http::{StatusCode, HeaderMap, header}, axum::body::{Body, Bytes}, Body::from_stream, reqwest::Client::builder, ClientBuilder::{timeout, redirect, cookie_store, default_headers, user_agent, no_proxy}, RequestBuilder::{query, json, header, bearer_auth, multipart, timeout, send, body}, Response::{status, headers, json, text, bytes, bytes_stream, error_for_status, url, content_length}, reqwest::redirect::Policy::{none, limited}, reqwest::multipart::{Form, Part}, reqwest::Body::wrap_stream, reqwest::Error::{is_timeout, is_connect, is_status, is_redirect, is_decode, status, url, without_url}, RequestBuilder::{form, basic_auth, try_clone}, Response::chunk, axum::Form, axum::extract::{FromRequestParts, rejection::JsonRejection}, axum::middleware::{from_fn, from_fn_with_state, Next}, Router::{layer, route_layer, nest, merge, fallback}, tower::ServiceExt::oneshot, axum::body::to_bytes
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/axum/0.8/axum/" target="_blank" rel="noreferrer">https://docs.rs/axum/0.8/axum/</a></li><li><a href="https://docs.rs/reqwest/0.12/reqwest/" target="_blank" rel="noreferrer">https://docs.rs/reqwest/0.12/reqwest/</a></li></ul>
+"""
+
+[[sections]]
+heading = "Crates"
+body = """
+axum = "0.8" (multipart), reqwest = "0.12" (no default features; json, stream, multipart, cookies; so NO TLS here, plain http on loopback), tokio = "1", futures-util = "0.3", tower = "0.5" (util)
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Reuse ONE Client</td><td><code>it holds the connection pool; creating one per request wastes handshakes</code></td></tr><tr><td>4xx/5xx are not Err</td><td><code>call error_for_status() or match on status()</code></td></tr><tr><td>Always set a timeout</td><td><code>reqwest has no overall timeout by default</code></td></tr><tr><td>Path syntax in axum 0.8</td><td><code>"/items/{id}" (older versions used :id)</code></td></tr><tr><td>Extractor order</td><td><code>the one that consumes the BODY (Json, Multipart, Bytes) comes last</code></td></tr><tr><td>Retry</td><td><code>only idempotent requests (or with an idempotency key), with a budget and backoff</code></td></tr><tr><td>Test server</td><td><code>bind 127.0.0.1:0 and read local_addr()</code></td></tr><tr><td>Test routes without any socket</td><td><code>router.oneshot(request)   (tower::ServiceExt)</code></td></tr><tr><td>Middleware</td><td><code>from_fn ; layer wraps only routes added BEFORE it; the last layer runs first</code></td></tr><tr><td>Auth for matched routes only</td><td><code>route_layer (unknown paths stay 404 instead of becoming 401)</code></td></tr><tr><td>Your own error body for bad JSON</td><td><code>take Result&lt;Json&lt;T&gt;, JsonRejection&gt;</code></td></tr><tr><td>Typed data from headers</td><td><code>impl FromRequestParts</code></td></tr><tr><td>URL may carry a token</td><td><code>error.without_url() before logging</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/axum/latest/axum/extract/index.html" target="_blank" rel="noreferrer">https://docs.rs/axum/latest/axum/extract/index.html</a></li><li><a href="https://docs.rs/axum/latest/axum/error_handling/index.html" target="_blank" rel="noreferrer">https://docs.rs/axum/latest/axum/error_handling/index.html</a></li><li>see also examples/web/http_client_resilience.rs</li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/axum/0.8/axum"
+url = "https://docs.rs/axum/0.8/axum/"
+
+[[sources]]
+title = "docs.rs/reqwest/0.12/reqwest"
+url = "https://docs.rs/reqwest/0.12/reqwest/"
+
+[[sources]]
+title = "docs.rs/axum/latest/axum/extract/index.html"
+url = "https://docs.rs/axum/latest/axum/extract/index.html"
+
+[[sources]]
+title = "docs.rs/axum/latest/axum/error_handling/index.html"
+url = "https://docs.rs/axum/latest/axum/error_handling/index.html"

@@ -1,0 +1,68 @@
+title = "Hindley milner inference"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Types and semantics"
+chapter_order = 4
+order = 613
+kind = "recipe"
+lede = "Hindley-Milner type inference with let-polymorphism, level-based generalisation and source-span errors."
+level = "advanced"
+code = ["examples/compilers_runtimes/hindley_milner_inference.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>language implementations</li><li>DSL type checkers</li><li>config/query languages with inferred types</li><li>understanding what rustc's inference does and does not do</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The idea**: give every unknown a type variable, walk the term emitting equations, solve them by **unification** (structural matching that binds variables) and, at each 'let', **generalise** the bound expression's type: variables that are not tied to the surrounding context become 'forall'-bound, so 'let id = &#92;x. x in (id 1, id true)' works while the lambda-bound '(&#92;id.
+
+(id 1, id true)) (&#92;x. x)' does not (a lambda parameter has ONE monomorphic type). The result is the PRINCIPAL type: the most general one, from which every other valid type is an instance.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+each type variable carries the let-nesting **level** at which it was created. Entering a `let` right-hand side bumps the level; afterwards any variable still at a deeper level than the current one cannot be reachable from the environment, so it is generalised.
+
+Unifying a variable with a type lowers the levels of all variables inside that type to the variable's own level (this is what stops `\\y. let f = \\x. y in f` from generalising y's type). The bindings live in a vector (union-find style), so no substitution is ever composed or applied.
+
+**Occurs check**: binding `a := a -> b` would create an infinite type; that is exactly why `\\x. x x` and the Y combinator are rejected, and why recursion needs `let rec` (typed with the name monomorphic inside its own body) instead.
+
+**Language**: ints, bools, lambda, application, let, let rec, if, pairs `(a, b)`, lists `[]` / `::`, a few primitives (fst snd uncons not + - &#42; &lt; ==).
+
+`uncons xs nil_case (\\h t. cons_case)` is a total list eliminator, so well-typed programs never fail at runtime (no `head []`): the soundness test below needs "well-typed programs do not go wrong" to be literally true.
+
+**How rust differs**: rustc does not generalise local bindings: `let id = |x| x; id(1); id(true)` fails because a closure is monomorphic (only items, i.e. `fn`s with explicit generics, are polymorphic).
+
+Its inference is **bidirectional** and order-dependent: expected types flow inward (a closure's parameter type is read off the `Fn` bound it is passed to), method calls need the receiver type known at that point ("type annotations needed"), and unification variables carry pending **trait obligations** (`?T: Add<?U>`) solved as information arrives, with integer-literal fallback to i32.
+
+Subtyping only exists for lifetimes. HM, by contrast, is complete and needs no annotations at all, at the price of no overloading or subtyping.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>ML</li><li>OCaml</li><li>Haskell (as the core of a richer system)</li><li>Elm and PureScript inference</li><li>typed configuration and query DSLs</li><li>type checkers for spreadsheet-like formula languages</li><li>teaching how generics are checked</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Damas and Milner "Principal type-schemes for functional programs" (POPL 1982)</li><li>Pierce "Types and Programming Languages" ch. 22 <a href="https://www.cis.upenn.edu/~bcpierce/tapl/" target="_blank" rel="noreferrer">https://www.cis.upenn.edu/~bcpierce/tapl/</a></li><li><a href="https://okmij.org/ftp/ML/generalization.html" target="_blank" rel="noreferrer">https://okmij.org/ftp/ML/generalization.html</a> (levels) and <a href="https://en.wikipedia.org/wiki/Hindley%E2%80%93Milner_type_system" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Hindley%E2%80%93Milner_type_system</a></li></ul>
+"""
+
+[[sources]]
+title = "cis.upenn.edu/~bcpierce/tapl"
+url = "https://www.cis.upenn.edu/~bcpierce/tapl/"
+
+[[sources]]
+title = "okmij.org/ftp/ML/generalization.html"
+url = "https://okmij.org/ftp/ML/generalization.html"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Hindley%E2%80%93Milner_type_system"
+url = "https://en.wikipedia.org/wiki/Hindley%E2%80%93Milner_type_system"

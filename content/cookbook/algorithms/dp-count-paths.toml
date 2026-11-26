@@ -1,0 +1,47 @@
+title = "Counting routes through a DAG"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Dynamic programming, greedy and search"
+chapter_order = 5
+order = 201
+kind = "recipe"
+lede = "Top-down memoization vs bottom-up, on the same recurrence."
+level = "intermediate"
+code = ["examples/algorithms/dp_count_paths.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any "combine results from predecessors" computation over a DAG (counts, sums, best-of); learn the **shape**.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>counting/aggregating over DAGs: build graphs</li><li>probabilistic inference</li><li>combinatorics</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+DAG DP pattern: the answer for a node depends only on the answers of its **predecessors**, so process nodes in an order where predecessors come first. Two equivalent ways:
+
+- bottom-up: iterate nodes in that order, filling a table (no recursion, no stack risk)
+- top-down: recursive function + memo table `Vec<Option<T>>` (computes only what is asked, simple to write) Here: number of distinct routes from node 0 to each node. The combine step is **sum**; think about which operation and which per-node weight you would use for a different question (longest, cheapest, earliest).
+
+   Domain: delivery hubs, nodes are numbered so every edge goes from a lower to a higher number (a valid order for free).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://cp-algorithms.com/dynamic_programming/intro-to-dp.html> and <https://en.wikipedia.org/wiki/Directed_acyclic_graph#Computational_problems>
+"""
+
+[[sources]]
+title = "cp-algorithms.com/dynamic_programming/intro-to-dp.html"
+url = "https://cp-algorithms.com/dynamic_programming/intro-to-dp.html"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Directed_acyclic_graph#Computational_problems"
+url = "https://en.wikipedia.org/wiki/Directed_acyclic_graph#Computational_problems"

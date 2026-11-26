@@ -1,0 +1,19 @@
+title = "Globals, locals and statements"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Bytecode and virtual machines"
+chapter_order = 3
+order = 589
+kind = "guide"
+lede = "Book ch. 21–22 · Official tests: the Part I slice 3 and 4 folders, plus limit/ files for constants and locals"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>With <code>print</code> in place, the golden suite starts running against clox. Every file that passed on jlox slices 3 and 4 should now pass on clox as well.</p>
+
+<div class="cb-g-tt"><table><thead><tr><th>Kind</th><th>Input</th><th>Expected</th></tr></thead><tbody><tr><td><span class="cb-g-pill cb-g-dis">bytecode</span></td><td><code>print 1;</code></td><td><code>Constant 1 · Print</code></td></tr><tr><td><span class="cb-g-pill cb-g-dis">bytecode</span></td><td><code>1;</code></td><td><code>Constant 1 · Pop</code></td></tr><tr><td><span class="cb-g-pill cb-g-dis">bytecode</span></td><td><code>var a = 1;</code></td><td><code>Constant 1 · DefineGlobal a</code></td></tr><tr><td><span class="cb-g-pill cb-g-dis">bytecode</span></td><td><code>{ var a = 1; print a; }</code></td><td><code>Constant 1 · GetLocal 0 · Print · Pop</code></td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>{ var a = a; }</code></td><td><code>[line 1] Error at 'a': Can't read local variable in its own initializer.</code></td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>{ var a; var a; }</code></td><td><code>[line 1] Error at 'a': Already a variable with this name in this scope.</code></td></tr><tr><td><span class="cb-g-pill cb-g-rerr">runtime error</span></td><td><code>print x;</code></td><td><code>Undefined variable 'x'.</code></td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>256+ locals in one function</code></td><td><code>Too many local variables in function.</code></td></tr></tbody></table></div>
+
+<p>Locals live on the VM stack, so a block's locals are removed with <code>Pop</code> when the block ends. Keep the compiler's <code>locals: Vec&lt;Local&gt;</code> in the same order as the runtime stack. A <code>Local</code> holds its name as a <code>&amp;'src str</code>, which is cheap because the source outlives compilation.</p>
+"""

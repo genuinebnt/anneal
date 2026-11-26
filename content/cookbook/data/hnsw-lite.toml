@@ -1,0 +1,52 @@
+title = "A simplified HNSW"
+module = "Search and vectors"
+module_order = 9
+chapter = "Vector search"
+chapter_order = 2
+order = 466
+kind = "recipe"
+lede = "Layered proximity graphs, greedy descent, best-first search with `ef`."
+level = "advanced"
+code = ["examples/search_vectors/hnsw_lite.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+low-latency approximate nearest-neighbour search with high recall on in-memory vectors.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+every vector is a node. Each node draws a random top level L = floor(-ln(U) &#42; mL) with mL = 1/ln(M), so level l holds roughly a 1/M&#94;l fraction of nodes (a skip list over a graph). Each level is a proximity graph (neighbour lists, ids = `usize` indices into one arena `Vec`).
+
+Search enters at the top, greedily walks to the closest node on each upper level (few, long hops), drops down, and on level 0 runs a best-first search keeping the `ef` best candidates.
+
+**Insert**: descend greedily to the node's level, then at each level &lt;= L run the same search with `ef_construction`, choose up to M neighbours from the result, link both ways, and **prune** any neighbour whose list grew past its cap (M, or 2M = M0 at level 0).
+
+**Parameters**: `M` = out-degree (memory and recall up, build slower); `ef_construction` = how hard each insert looks for good neighbours (graph quality); `ef` at query time = candidate list size, the recall/latency dial (must be >= k). **NEIGHBOUR selection**: "simple" keeps the M closest.
+
+The **heuristic** (paper Algorithm 4) walks candidates nearest-first and keeps candidate e only if it is closer to the new node q than to every neighbour already kept; otherwise e is "covered" by a kept neighbour in that direction.
+
+That yields links in **different** directions (including bridges between clusters) instead of M links into the same blob, which is what keeps clustered data navigable. Discarded candidates top the list up when fewer than M survive.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>the default ANN index in Qdrant</li><li>pgvector (hnsw index type) and Lucene/Elasticsearch/OpenSearch dense-vector search</li><li>hnswlib is the reference implementation. Costs: memory heavy (graph + raw vectors)</li><li>slow to build</li><li>no cheap deletes</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://arxiv.org/abs/1603.09320> (Malkov and Yashunin, HNSW) and <https://github.com/nmslib/hnswlib>
+"""
+
+[[sources]]
+title = "arxiv.org/abs/1603.09320"
+url = "https://arxiv.org/abs/1603.09320"
+
+[[sources]]
+title = "github.com/nmslib/hnswlib"
+url = "https://github.com/nmslib/hnswlib"

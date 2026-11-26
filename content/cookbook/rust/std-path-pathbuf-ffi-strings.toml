@@ -1,0 +1,70 @@
+title = "Path PathBuf FFI strings (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "I/O, files and paths"
+chapter_order = 9
+order = 111
+kind = "recipe"
+lede = "`Path`, `PathBuf`, `OsStr`, `OsString`, `CString`, `CStr`: paths, safe joins, platform strings, FFI strings."
+level = "intermediate"
+code = ["examples/std_tour/std_path_pathbuf_ffi_strings.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>CLIs</li><li>servers that serve files (path traversal!)</li><li>build tools</li><li>FFI wrappers</li><li>anything crossing OS or C boundaries</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li><code>base.join(user_input)</code> safely</li><li>extension/stem manipulation for output names</li><li><code>OsString</code> for argv/env that may not be UTF-8</li><li><code>CString::new</code> before calling C APIs (<code>open</code>, <code>getenv</code>)</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>Path::new</code></li><li><code>PathBuf::from</code></li><li><code>Path::join</code></li><li><code>PathBuf::push</code></li><li><code>PathBuf::pop</code></li><li><code>Path::file_name</code></li><li><code>Path::extension</code></li><li><code>Path::parent</code></li><li><code>Path::with_extension</code></li><li><code>Path::display</code></li><li><code>Path::to_str</code></li><li><code>Path::to_string_lossy</code></li><li><code>Path::file_stem</code></li><li><code>Path::file_prefix</code></li><li><code>PathBuf::set_extension</code></li><li><code>PathBuf::set_file_name</code></li><li><code>Path::with_file_name</code></li><li><code>Path::ancestors</code></li><li><code>Path::components</code></li><li><code>Path::iter</code></li><li><code>Path::strip_prefix</code></li><li><code>Path::starts_with</code></li><li><code>Path::ends_with</code></li><li><code>Path::is_absolute</code></li><li><code>Path::is_relative</code></li><li><code>Path::has_root</code></li><li><code>Path::canonicalize</code></li><li><code>Path::as_os_str</code></li><li><code>PathBuf::into_os_string</code></li><li><code>std::path::Component</code></li><li><code>std::path::MAIN_SEPARATOR</code></li><li><code>std::path::is_separator</code></li><li><code>OsStr::new</code></li><li><code>OsStr::to_str</code></li><li><code>OsStr::to_string_lossy</code></li><li><code>OsString::into_string</code></li><li><code>OsString::push</code></li><li><code>OsStr::len</code></li><li><code>OsStrExt::as_bytes</code></li><li><code>OsStringExt::from_vec</code></li><li><code>OsStrExt::from_bytes</code></li><li><code>CString::new</code></li><li><code>NulError::nul_position</code></li><li><code>CString::as_bytes_with_nul</code></li><li><code>CString::as_ptr</code></li><li><code>CString::into_string</code></li><li><code>CString::into_bytes</code></li><li><code>CStr::from_bytes_with_nul</code></li><li><code>CStr::from_bytes_until_nul</code></li><li><code>CStr::to_str</code></li><li><code>CStr::to_string_lossy</code></li><li><code>CStr::to_bytes</code></li><li><code>CStr::to_owned</code></li><li><code>c_char</code></li><li><code>c_int</code></li><li><code>CString::into_raw</code></li><li><code>CString::from_raw</code></li><li><code>std::path::StripPrefixError</code></li><li><code>PathBuf::extend</code></li><li><code>PathBuf::as_path</code></li><li><code>Path::to_path_buf</code></li><li><code>Path::exists</code></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+std: `Path`, `PathBuf`, `Component` (`std::path`), `OsStr`, `OsString` (`std::ffi`), `std::os::unix::ffi`. core: `CStr`, `c_char` (`core::ffi`). alloc: `CString` (`alloc::ffi`). `std::ffi` re-exports all of them.
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/path/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/path/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+Path::normalize_lexically (unstable in 1.98.1; we hand-roll normalisation, which is the interesting part); Path::as_mut_os_str; Windows-only `PrefixComponent` internals (described and cfg(windows)-asserted, not executable here). Course: none.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Build a path</td><td><code>base.join("a").join("b"), or PathBuf::from_iter([..])</code></td></tr><tr><td>Append in place / go up</td><td><code>push / pop</code></td></tr><tr><td>File name / extension / name sans ext</td><td><code>file_name(), extension(), file_stem() (all return Option)</code></td></tr><tr><td>Change extension</td><td><code>with_extension("md") (new) / set_extension (in place)</code></td></tr><tr><td>Show to a user / log</td><td><code>path.display() (lossy, never {:?} for UX)</code></td></tr><tr><td>Need a &amp;str</td><td><code>to_str() (None if not UTF-8) or to_string_lossy() (Cow)</code></td></tr><tr><td>Is X inside Y</td><td><code>starts_with (component-wise!), then strip_prefix for the rest</code></td></tr><tr><td>Iterate parents</td><td><code>ancestors()</code></td></tr><tr><td>Untrusted relative path under a base</td><td><code>reject absolute + .., normalise lexically, then canonicalize check</code></td></tr><tr><td>Resolve symlinks / <code>..</code> on disk</td><td><code>canonicalize (path must exist)</code></td></tr><tr><td>Non-UTF-8 bytes (unix)</td><td><code>OsStrExt::as_bytes, OsStringExt::from_vec</code></td></tr><tr><td>Pass a string to C</td><td><code>CString::new(s)? then .as_ptr() (keep the CString alive)</code></td></tr><tr><td>Read a C string</td><td><code>CStr::from_ptr (unsafe) or CStr::from_bytes_until_nul</code></td></tr><tr><td>C literal</td><td><code>c"hello" (since 1.77) Design: pure path logic never touches the disk, except the symlink-escape check. Windows behaviour is described in comments and asserted under #[cfg(windows)].</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/path/struct.Path.html>  and  <https://doc.rust-lang.org/std/ffi/struct.CString.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/path/index.html"
+url = "https://doc.rust-lang.org/std/path/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/path/struct.Path.html"
+url = "https://doc.rust-lang.org/std/path/struct.Path.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/ffi/struct.CString.html"
+url = "https://doc.rust-lang.org/std/ffi/struct.CString.html"

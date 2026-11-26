@@ -1,0 +1,33 @@
+title = "Recoverable parsing and advanced compiler theory"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 560
+kind = "guide"
+lede = "IDE-grade front ends, and the theory behind the middle of the compiler."
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p class="cb-g-deep"><b>Deep dives</b> <a href="/cookbook/p/semantics-and-the-lambda-calculus">1 · Semantics and λ-calculus</a> <a href="/cookbook/p/bidirectional-typing-and-dependent-types">3 · Bidirectional and dependent</a> <a href="/cookbook/p/parsing-in-depth">5 · Parsing in depth</a> <a href="/cookbook/p/dataflow-analysis-and-abstract-interpretation">10 · Dataflow and abstract interp.</a> <a href="/cookbook/p/production-compiler-architecture">30 · Production architecture</a> <a href="/cookbook/p/formal-verification-and-mechanized-semantics">32 · Verification</a> <a href="/cookbook/p/fully-recoverable-parsers">6 · Recoverable parsers</a></p>
+"""
+
+[[sections]]
+heading = "Front ends for IDEs"
+body = """
+<div class="cb-g-tip"><h3>Lossless syntax trees <span class="cb-g-src"><span>rust-analyzer</span><span>Roslyn</span><span>Swift</span></span></h3> <p>Keep every byte, including whitespace, comments and errors. A “green” tree is immutable, has no parent pointers, and shares nodes that are identical. A “red” layer on top computes parents and absolute offsets on demand. A typed AST is then a set of views over the tree. The <code>rowan</code> crate implements this.</p></div>
+
+<div class="cb-g-tip"><h3>Error recovery strategies</h3> <p><b>Panic mode</b> skips tokens to a synchronization point, like the book's <code>synchronize()</code>. <b>Recovery sets</b> stop at any token in the FOLLOW set of an enclosing rule, and matklad's resilient LL tutorial builds on this idea. <b>Repair-based</b> recovery searches for the cheapest insertions and deletions that let parsing continue (CPCT+ in grmtools). <b>GLR with error costs</b> is what tree-sitter uses.</p></div>
+
+<div class="cb-g-tip"><h3>Incremental and query-based compilers <span class="cb-g-src"><span>salsa</span><span>rustc queries</span></span></h3> <p>Model the compiler as memoized functions, such as <code>parse(file)</code>, <code>type_of(item)</code> and <code>diagnostics(file)</code>, and record which queries each one reads. After an edit, recompute only the results whose inputs changed. rustc calls this red-green incremental compilation. rust-analyzer uses salsa. Tree-sitter reparses only the edited region and reuses the rest of the tree.</p></div>
+"""
+
+[[sections]]
+heading = "Theory map"
+body = """
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Area</th><th>Key ideas</th><th>Start with</th></tr></thead> <tbody> <tr><td>Grammars and parsing</td><td>The Chomsky hierarchy; LL(k), LR(k), LALR, GLR, GLL, Earley and PEG; ambiguity; left recursion; lexer modes; indentation-sensitive syntax (INDENT and DEDENT tokens)</td><td><em>Parsing Techniques</em> (Grune and Jacobs)</td></tr> <tr><td>Type systems</td><td>The simply typed lambda calculus, System F, Hindley–Milner, bidirectional typing, subtyping, row polymorphism, type classes, linear and affine types (Rust's ownership is affine), effect systems, dependent types</td><td><em>Types and Programming Languages</em> (Pierce)</td></tr> <tr><td>Program analysis</td><td>Lattices and monotone frameworks, worklist fixpoints, liveness and reaching definitions, abstract interpretation, alias analysis (Andersen, Steensgaard), escape analysis, analyses written in Datalog</td><td><em>Static Program Analysis</em> (Møller and Schwartzbach, free)</td></tr> <tr><td>Intermediate representations</td><td>SSA and dominance frontiers, block arguments versus phi nodes, sea of nodes, CPS and ANF, closure conversion, defunctionalization</td><td><em>SSA-based Compiler Design</em>; Appel's <em>Compiling with Continuations</em></td></tr> <tr><td>Optimization theory</td><td>Equality saturation, superoptimization (Souper, STOKE), the polyhedral model for loop nests, partial evaluation and the Futamura projections (Truffle, PyPy)</td><td>The egg paper; Würthinger et al. on Truffle</td></tr> <tr><td>Verification</td><td>Verified compilers (CompCert, CakeML), translation validation (Alive2 for LLVM), fuzzing compilers (Csmith, YARPGen)</td><td>The Alive2 paper and online tool</td></tr> </tbody> </table></div>
+
+<p><b>Build it.</b> Port the rlox parser to <code>rowan</code> with error nodes. Snapshot-test the tree for broken inputs such as <code>fun f( {</code>. Then add an LSP server with <code>lsp-server</code> or <code>tower-lsp</code> that publishes diagnostics as you type.</p>
+"""

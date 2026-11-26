@@ -1,0 +1,138 @@
+title = "Index iterator"
+module = "Databases"
+module_order = 8
+chapter = "Indexes"
+chapter_order = 3
+order = 339
+kind = "guide"
+lede = "BusTub P2 Task 3 · range scans over the leaf chain · skipping tombstones · why the iterator copies a leaf instead of holding its latch"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>Range scans are why B+Trees exist. Descend once to the leaf containing the start key, then walk the <strong>sibling chain</strong> left to right. BusTub's iterator exposes <code>IsEnd</code>, <code>operator++</code>, <code>operator*</code> and equality, and must skip tombstoned entries. In Rust it's simply an <code>Iterator&lt;Item = Result&lt;(Key, Value)&gt;&gt;</code>.</p>
+"""
+
+[[sections]]
+heading = "Design: batch per leaf, no latch between calls"
+body = """
+<p>An iterator that holds the current leaf's read latch across <code>next()</code> calls breaks two rules at once. It keeps a latch across operator boundaries (the self-deadlock from <a href="/cookbook/p/table-heap">the table heap</a>: an <code>UPDATE</code> that scans the index and writes to the same leaf). And it walks the leaf chain <strong>left to right</strong> while writers crab <strong>top-down</strong>, which is the leaf-scan deadlock from <a href="/cookbook/p/index-concurrency-control">L10</a>. BusTub sidesteps this by not testing concurrent scans.</p>
+
+<p>The reference copies the live entries of one leaf into a small buffer while holding its read latch, records the sibling id, and releases the latch. <code>next()</code> serves from the buffer and only latches the next leaf when the buffer runs dry. The costs: one copy per leaf (≤ 509 entries), and a scan that may observe a key inserted into a later leaf after the scan started. That is weaker than a snapshot, which is fine: transactional visibility comes from MVCC (<a href="/cookbook/p/project-4-mvocc">P4</a>), not from index latches.</p>
+
+:::deeper Iterator: seek to the start leaf, batch-copy live entries, follow next
+```rust title="src/storage/index/b_plus_tree.rs (part 4: iteration)"
+    // ---- inspection (tests / EXPLAIN-style tooling) ------------------------------------------
+    pub fn root_page_id(&self) -> Res<PageId> {
+        Ok(root_of(self.bpm.read_page(self.header)?.data()))
+    }
+
+    /// Leaves left to right, with physically present keys (tombstoned ones included) and the
+    /// pending tombstones as keys, oldest deletion first. Not atomic: for quiescent trees.
+    pub fn leaves(&self) -> Res<Vec<LeafInfo>> {
+        let root = self.root_page_id()?;
+        let mut out = Vec::new();
+        if !root.is_valid() {
+            return Ok(out);
+        }
+        let mut pid = root;
+        loop {
+            let g = self.bpm.read_page(pid)?;
+            if is_leaf(g.data()) {
+                break;
+            }
+            pid = ichild(g.data(), 0);
+        }
+        while pid.is_valid() {
+            let g = self.bpm.read_page(pid)?;
+            let b = g.data();
+            out.push(LeafInfo {
+                page: pid,
+                keys: (0..size(b)).map(|i| lkey(b, i)).collect(),
+                tombstones: tombs(b).into_iter().map(|i| lkey(b, i)).collect(),
+                min_size: self.leaf_min(),
+                max_size: self.leaf_max,
+            });
+            pid = next_leaf(b);
+        }
+        Ok(out)
+    }
+
+    // ---- iteration: batch per leaf, no latch held between calls --------------------------------
+    pub fn iter_from(&self, start: Option<u64>) -> Res<TreeIter<'_, 'a, R>> {
+        let h = self.bpm.read_page(self.header)?;
+        let root = root_of(h.data());
+        let mut it = TreeIter {
+            tree: self,
+            buf: VecDeque::new(),
+            next: PageId::INVALID,
+            start,
+        };
+        if !root.is_valid() {
+            return Ok(it);
+        }
+        let mut g = self.bpm.read_page(root)?;
+        drop(h);
+        while !is_leaf(g.data()) {
+            let i = start.map_or(0, |k| child_idx(g.data(), k));
+            g = self.bpm.read_page(ichild(g.data(), i))?;
+        }
+        it.fill(g.data());
+        Ok(it)
+    }
+
+#[derive(Debug, Clone)]
+pub struct LeafInfo {
+    pub page: PageId,
+    pub keys: Vec<u64>,
+    pub tombstones: Vec<u64>,
+    pub min_size: usize,
+    pub max_size: usize,
+}
+
+pub struct TreeIter<'t, 'a, R: Replacer> {
+    tree: &'t BPlusTree<'a, R>,
+    buf: VecDeque<(u64, u64)>,
+    next: PageId,
+    start: Option<u64>,
+}
+
+impl<R: Replacer> TreeIter<'_, '_, R> {
+    fn fill(&mut self, b: &Buf) {
+        for i in 0..size(b) {
+            let k = lkey(b, i);
+            if self.start.is_some_and(|s| k < s) || is_tomb(b, i) {
+                continue;
+            }
+            self.buf.push_back((k, lval(b, i)));
+        }
+        self.next = next_leaf(b);
+    }
+}
+
+impl<R: Replacer> Iterator for TreeIter<'_, '_, R> {
+    type Item = Res<(u64, u64)>;
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.buf.is_empty() && self.next.is_valid() {
+            let g = match self.tree.bpm.read_page(self.next) {
+                Ok(g) => g,
+                Err(e) => {
+                    self.next = PageId::INVALID;
+                    return Some(Err(e));
+                }
+            };
+            let b = *g.data();
+            drop(g);
+            self.fill(&b);
+        }
+        self.buf.pop_front().map(Ok)
+    }
+}
+```
+:::
+
+<aside data-call="rust"><b><code>VecDeque</code> as the batch buffer</b><p><code>pop_front</code> on a <code>Vec</code> is O(n). <code>VecDeque</code> gives O(1) pops from the front and reuses its allocation across leaves, since <code>clear()</code> keeps the capacity. For a scan-heavy engine, go one step further and yield <em>batches</em> (<code>&amp;[(Key, Value)]</code> or a column vector) to the executor, the way vectorized engines do (Part II).</p></aside>
+
+<aside data-call="testing"><b>Iterator tests worth having</b><ul> <li><code>iter_from(Some(k))</code> where k falls <strong>between</strong> keys, <strong>before</strong> the first key, <strong>after</strong> the last, and <strong>on a tombstoned key</strong>.</li> <li>A scan whose start leaf is the last leaf, and a scan over an empty tree.</li> <li>A scan interleaved with inserts to <em>other</em> leaves: it must not crash or loop. Whether it sees them is defined as "maybe".</li> <li>The model test already covers ordered scans from random start keys after every operation.</li> </ul></aside>
+"""

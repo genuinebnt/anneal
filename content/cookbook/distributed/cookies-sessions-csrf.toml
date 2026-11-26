@@ -1,0 +1,64 @@
+title = "Cookies sessions csrf"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Authentication and web security"
+chapter_order = 2
+order = 526
+kind = "recipe"
+lede = "cookies, server-side sessions, signed cookies and CSRF protection, by hand"
+level = "advanced"
+code = ["examples/web/cookies_sessions_csrf.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>login flows</li><li>web apps</li><li>any stateful HTTP service</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+(1) `Set-Cookie` serialization and parsing (Path, Domain, Max-Age, Expires, Secure, HttpOnly, SameSite) and a client-side cookie **jar** that applies RFC 6265 domain/path/expiry/Secure/SameSite rules (we assert which cookies go to which request).
+
+(2) Server-side **sessions**: random 256-bit id from /dev/urandom, store, **rotation** on login (session-fixation defence), idle and absolute timeouts driven by an injectable clock. (3) **signed** cookies: `value.base64url(HMAC-SHA256(secret, value))`, tamper detection with a constant-time compare.
+
+(4) CSRF: signed double-submit token (cookie + `X-CSRF-Token` header, bound to the session by HMAC) and what SameSite=Lax/Strict do. (5) A login -> authenticated call -> logout transcript through reqwest (which has NO cookie feature here) with the jar handled manually.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+cookies are ambient authority: the browser attaches them to every matching request, including ones a hostile page triggers. Sessions and CSRF defences exist because of that single fact.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+the session cookie is an opaque random id (state lives on the server, revocable); `HttpOnly` hides it from scripts; no `Max-Age` makes it a browser-session cookie while the **server** enforces idle/absolute limits; `Secure` keeps it off plain HTTP (our jar refuses to send it over http://).
+
+SameSite: Strict = same-site requests only; Lax (browser default) = also top-level cross-site **get** navigations; None = always (needs Secure). SameSite is defence in depth, the CSRF token is the primary control for state-changing requests. Ids and tokens are redacted in the transcripts (`<TOKEN>`) because they are random.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>login/logout for server-rendered apps and SPAs with a same-site API</li><li>"remember me" vs session cookies</li><li>signed preference/flash cookies without server storage</li><li>CSRF defence for cookie-authenticated APIs</li><li>building HTTP clients/test harnesses that need cookie persistence (crawlers, API test suites)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://datatracker.ietf.org/doc/html/rfc6265" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc6265</a></li><li><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Cookies" target="_blank" rel="noreferrer">https://developer.mozilla.org/en-US/docs/Web/HTTP/Cookies</a></li><li><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP" target="_blank" rel="noreferrer">https://developer.mozilla.org/en-US/docs/Web/HTTP</a></li></ul>
+"""
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc6265"
+url = "https://datatracker.ietf.org/doc/html/rfc6265"
+
+[[sources]]
+title = "developer.mozilla.org/en-US/docs/Web/HTTP/Cookies"
+url = "https://developer.mozilla.org/en-US/docs/Web/HTTP/Cookies"
+
+[[sources]]
+title = "developer.mozilla.org/en-US/docs/Web/HTTP"
+url = "https://developer.mozilla.org/en-US/docs/Web/HTTP"

@@ -1,0 +1,11 @@
+// passes: copy-prop,dce
+// Copies of locals are replaced by their source; reassigning the source kills the copy.
+fn f(a: int) -> int {
+    let b = a;
+    let c = b;
+    let mut d = c + 1;
+    let e = d;
+    d = 100;
+    e + d + c
+}
+fn main() { println(to_str(f(1))); }

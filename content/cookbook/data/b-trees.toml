@@ -1,0 +1,61 @@
+title = "B+Trees"
+module = "Databases"
+module_order = 8
+chapter = "Indexes"
+chapter_order = 3
+order = 335
+kind = "guide"
+lede = "the structure, its invariants, insert and delete, composite keys, duplicates, clustering, node design, and the classic optimizations"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>An index is a replica</strong> of some attributes, organized for fast lookup and always kept logically in sync with the table. More indexes speed up reads but cost storage, maintenance, and concurrency overhead.</li> <li><strong>Hash indexes can't do ranges or partial keys</strong>, which is why almost every order-preserving index is a <strong>B+Tree</strong>: self-balancing, sorted, O(log n) search, insert and delete, and designed for block I/O.</li> <li><strong>B+Tree vs B-Tree</strong>: values live only in leaves. Inner nodes hold <strong>guide-post</strong> keys, which may not exist in any leaf. Modern trees borrow <strong>sibling pointers</strong> from the B-link tree.</li> <li><strong>Invariants</strong> (m-way tree): perfectly balanced; every non-root inner node at least half full (⌈m/2⌉−1 ≤ keys ≤ m−1); an inner node with k keys has k+1 children.</li> <li><strong>Leaf values</strong>: record ids (pointers to tuples; secondary index) or the tuple data itself (index-organized / clustered). NULLs go first or last, per index spec.</li> <li><strong>Insert</strong>: find the leaf and insert in sorted order. If it overflows, split it in half, <strong>copy up</strong> the middle key into the parent. Inner-node splits <strong>push up</strong> the middle key (it moves; it isn't copied).</li> <li><strong>Delete</strong>: remove from the leaf. If it underflows, <strong>borrow</strong> from a sibling; if that fails, <strong>merge</strong> and delete the separator from the parent (which may cascade upward).</li> <li><strong>Composite keys</strong> <code>(a, b, c)</code>: usable for any <strong>prefix</strong> of the key (a hash index needs the full key). Conjunctions (<code>AND</code>) map well; disjunctions (<code>OR</code>) mostly don't.</li> <li><strong>Duplicate keys</strong>: append the RID to make keys unique (common), or overflow chains per key.</li> <li><strong>Clustered index</strong>: the table stored in key order (some systems always cluster, with a hidden row id if there's no PK). For unclustered index scans, <strong>sort the RIDs by page id</strong> first so each heap page is fetched once.</li> <li><strong>Design choices</strong>: node size (larger on slow storage and for scans; smaller in memory and for point queries); <strong>merge threshold</strong> (merging lazily avoids split/merge thrashing; PostgreSQL leaves underfull nodes); <strong>variable-length keys</strong> (use a key map / indirection inside the node, as in a slotted page); <strong>intra-node search</strong> (linear with SIMD, binary, or interpolation).</li> <li><strong>Optimizations</strong>: prefix compression, deduplication, suffix truncation (inner keys only need enough bytes to route), pointer swizzling, <strong>bulk loading</strong> (sort, build leaves, build upward), and write-optimized variants (<strong>Bε-trees</strong> buffer changes in inner nodes and push them down lazily).</li> </ul>
+"""
+
+[[sections]]
+heading = "The shape"
+body = """
+<figure class="cb-g-fig"><svg viewBox="0 0 820 190" role="img" aria-label="B+Tree"> <g font-size="12"> <rect x="330" y="10" width="160" height="34" rx="4" class="cb-g-boxa"></rect><text x="342" y="32">[ · 20 · 40 · ]</text> <rect x="60" y="80" width="160" height="34" rx="4" class="cb-g-box"></rect><text x="72" y="102">[ · 8 · 14 · ]</text> <rect x="330" y="80" width="160" height="34" rx="4" class="cb-g-box"></rect><text x="342" y="102">[ · 27 · 33 · ]</text> <rect x="600" y="80" width="160" height="34" rx="4" class="cb-g-box"></rect><text x="612" y="102">[ · 50 · 61 · ]</text> <line x1="360" y1="44" x2="140" y2="80" class="cb-g-ln"></line><line x1="410" y1="44" x2="410" y2="80" class="cb-g-ln"></line><line x1="460" y1="44" x2="680" y2="80" class="cb-g-ln"></line> <g font-size="11"> <rect x="10" y="150" width="84" height="28" rx="3" class="cb-g-box"></rect><text x="16" y="168">1 3 5 7</text> <rect x="100" y="150" width="84" height="28" rx="3" class="cb-g-box"></rect><text x="106" y="168">8 9 12</text> <rect x="190" y="150" width="84" height="28" rx="3" class="cb-g-box"></rect><text x="196" y="168">14 16 19</text> <rect x="290" y="150" width="84" height="28" rx="3" class="cb-g-box"></rect><text x="296" y="168">20 22 25</text> <rect x="380" y="150" width="84" height="28" rx="3" class="cb-g-box"></rect><text x="386" y="168">27 30</text> <rect x="470" y="150" width="84" height="28" rx="3" class="cb-g-box"></rect><text x="476" y="168">33 35 39</text> <rect x="570" y="150" width="84" height="28" rx="3" class="cb-g-box"></rect><text x="576" y="168">40 44</text> <rect x="660" y="150" width="70" height="28" rx="3" class="cb-g-box"></rect><text x="666" y="168">50 55</text> <rect x="736" y="150" width="74" height="28" rx="3" class="cb-g-box"></rect><text x="742" y="168">61 70</text> </g> <text x="10" y="140" class="cb-g-mut">leaves: sorted (key, RID) pairs, linked left → right for range scans</text> <text x="520" y="62" class="cb-g-mut">inner: k keys, k+1 children; child i holds keys in [key_i, key_{i+1})</text> </g></svg></figure>
+
+<p><strong>Why fan-out matters.</strong> With 8 KiB pages, 8-byte keys and 4-byte child pointers, an inner node holds about 680 children. Three levels address 680³ ≈ 314 million leaves. In practice, all inner levels of even a huge index fit in the buffer pool, so a point lookup costs <strong>one</strong> leaf I/O. That's the whole reason B+Trees have dominated for 50 years.</p>
+"""
+
+[[sections]]
+heading = "Split and merge rules"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Operation</th> <th>Leaf</th> <th>Inner node</th> </tr> </thead> <tbody> <tr> <td><strong>Split</strong> (overflow)</td> <td>new right node takes the upper half; <strong>copy</strong> its first key up as the separator (the key stays in the leaf)</td> <td>new right node takes the upper half of the children; the middle key is <strong>pushed</strong> up (removed from both halves)</td> </tr> <tr> <td><strong>Borrow</strong> (underflow, rich sibling)</td> <td>move one entry across; set the parent separator to the right node's new first key</td> <td><strong>rotate</strong> through the parent: the separator comes down into the poor node, and the sibling's boundary key goes up</td> </tr> <tr> <td><strong>Merge</strong> (underflow, poor sibling)</td> <td>append right onto left; fix the sibling pointer; delete the separator and the right child from the parent</td> <td>pull the separator <strong>down</strong> between the two key lists; delete it from the parent</td> </tr> <tr> <td><strong>Root</strong></td> <td>grows when the root splits; shrinks when the root is an inner node with one child</td> <td></td> </tr> </tbody> </table></div>
+
+<p>A useful sanity bound: with max <em>m</em> children and min ⌈m/2⌉, a merge of a node at min−1 with a sibling at min gives 2⌈m/2⌉−1 ≤ m, so a merge always fits in one node. That's exactly why the minimum is ⌈m/2⌉ and not more.</p>
+"""
+
+[[sections]]
+heading = "Design choices that matter in practice"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Choice</th> <th>Options</th> <th>What production systems do</th> </tr> </thead> <tbody> <tr> <td>Node size</td> <td>4–16 KiB on SSD; 256 B–4 KiB in memory</td> <td>InnoDB 16 KiB; PostgreSQL 8 KiB; in-memory trees use cache-line multiples</td> </tr> <tr> <td>Key encoding</td> <td>fixed-width, or variable via an in-node slot array</td> <td><strong>memcmp-able key encoding</strong> (big-endian ints with the sign bit flipped, escaped strings) so one byte comparison orders any composite key</td> </tr> <tr> <td>Intra-node search</td> <td>linear (SIMD), binary, interpolation</td> <td>binary search on a slot array; prefix-compressed leaves with restart points</td> </tr> <tr> <td>Duplicates</td> <td>RID suffix, posting lists</td> <td>PostgreSQL 13+ <strong>deduplicates</strong> into posting lists; InnoDB appends the PK</td> </tr> <tr> <td>Merge policy</td> <td>eager at half, lazy, never</td> <td>PostgreSQL never merges non-empty pages (only deletes empty ones); many systems merge at a lower threshold (e.g. 1/4) to avoid thrashing</td> </tr> <tr> <td>Unique check</td> <td>in the tree</td> <td>the unique constraint check needs locking/MVCC care (<a href="/cookbook/p/project-4-mvocc">P4</a>)</td> </tr> <tr> <td>Bulk load</td> <td>sort, then build bottom-up</td> <td><code>CREATE INDEX</code> in every serious system; leaves filled to a <em>fill factor</em> (PostgreSQL's default is 90%)</td> </tr> </tbody> </table></div>
+
+<aside data-call="rust"><b>Memcomparable keys</b><p>Composite keys <code>(INT, VARCHAR, DATE)</code> compared field by field need a schema-aware comparator on every node probe. The alternative used by CockroachDB, TiKV, FoundationDB and MyRocks is to <strong>encode keys into bytes whose lexicographic order equals the logical order</strong>. Then every comparison is a <code>&amp;[u8]</code> compare. The encoding: a signed int becomes big-endian with the sign bit flipped (<code>(x as u64 &#94; 1 &lt;&lt; 63).to_be_bytes()</code>); descending order inverts every byte; strings are escaped (<code>0x00</code> → <code>0x00 0xFF</code>, then terminated with <code>0x00 0x01</code>), so a prefix sorts before its extensions; NULL is a leading <code>0x00</code>/<code>0x01</code> marker. Write the encoder with a property test: <code>encode(a).cmp(&amp;encode(b)) == a.cmp(&amp;b)</code> for random tuples. That one test catches every mistake.</p></aside>
+"""
+
+[[sections]]
+heading = "Bulk loading"
+body = """
+<p>Inserting n sorted keys one by one causes n/2 splits and leaves every leaf half full. Bulk loading builds the tree bottom-up instead: fill leaves to a fill factor, chain them, then build each inner level from the first keys of the level below. It's O(n) with perfect sequential writes, and it's how <code>CREATE INDEX</code> and <code>ANALYZE</code>-sized rebuilds work. <a href="/cookbook/p/search-and-insert">P2.2</a> includes a verified bulk loader for the page layout used there.</p>
+
+<aside data-call="production"><b>B-tree variants you'll meet</b><ul> <li><strong>B-link tree</strong> (Lehman &amp; Yao 1981): a right-link and a high key per node. Readers need no latch coupling, and a split is visible through the right link. PostgreSQL's nbtree is a B-link tree (<a href="/cookbook/p/index-concurrency-control">L10</a>).</li> <li><strong>Bε-tree</strong> (buffered B-tree): each inner node has a message buffer, so inserts are batched down the tree, as in TokuDB/PerconaFT and BetrFS. BusTub's Fall 2025 leaf <strong>tombstone buffer</strong> is a small step in that direction.</li> <li><strong>Bw-tree</strong> (Hekaton, Part II): latch-free, with delta records and a mapping table.</li> <li><strong>Copy-on-write B-trees</strong>: LMDB, Btrfs, redb. Never overwrite a page; readers see a stable snapshot without latches.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Organization and Maintenance of Large Ordered Indices"
+url = "https://infolab.usc.edu/csci585/Spring2010/den_ar/indexing.pdf"
+
+[[sources]]
+title = "Modern B-Tree Techniques"
+url = "https://w6113.github.io/files/papers/btreesurvey-graefe.pdf"
+
+[[sources]]
+title = "src/backend/access/nbtree/README"
+url = "https://github.com/postgres/postgres/blob/master/src/backend/access/nbtree/README"

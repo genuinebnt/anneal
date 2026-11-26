@@ -1,0 +1,55 @@
+title = "Authorisation"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Authentication and web security"
+chapter_order = 2
+order = 528
+kind = "recipe"
+lede = "RBAC + ABAC + ownership + tenant scoping as a pure, truth-table-tested policy."
+level = "advanced"
+code = ["examples/web/backend_authz_rbac_abac_policies.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any multi-user API (who may do **what** to **which** resource)
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>SaaS admin consoles</li><li>document/project tools</li><li>internal platforms</li><li>API keys with scopes</li><li>audit-sensitive systems</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Extends: auth_basic_bearer_jwt (that recipe answers "who are you?"; this one answers "what may you do?"), axum_middleware.
+
+Model: `decide(&Request) -> Decision` is a **pure** function: no I/O, no clock (the hour comes in via context), so it can be exhaustively tested with a truth table and a differential oracle. Rules are `Allow` or `Deny`; **deny overrides**; default is deny.
+
+HTTP glue: middleware does authentication + coarse route checks ("must be admin"), the handler does the fine resource check (ownership/tenant), because only the handler has loaded the resource. IDOR (insecure direct object reference) is shown as an exploit test against a vulnerable route and the fixed route.
+
+Every decision is appended to an audit log with the rule names.
+
+Cheat sheet (I want to ... -> use ...):
+
+```text
+401 vs 403 vs 404            -> no/invalid credential = 401 (+WWW-Authenticate); known but not allowed = 403; hide existence = 404
+role hierarchy               -> derive `Ord` on the enum; perms(role) = union of perms of every role <= role
+```
+
+resource ownership           -> rule `owner => read/write` that is still subject to deny rules tenant isolation             -> a **deny** rule `resource.tenant != subject.tenant` (and also scope the SQL, see backend_multi_tenancy_patterns) attribute rules              -> deny classification > clearance, deny writes on archived, deny delete after hours API key scopes               -> effective permission = user permission **and** key scope (intersection, never union) coarse check on a route group-> `route_layer(from_fn(require_role))` fine check on a resource     -> call `authorize()` inside the handler after loading the resource audit                        -> append (subject, action, resource, effect, rules) for allow **and** deny production crates            -> `casbin`, `oso`, `cedar-policy` (AWS Cedar), `openfga` clients;
+
+OPA/Rego as a sidecar
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>OWASP Authorization Cheat Sheet (<a href="https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html" target="_blank" rel="noreferrer">https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html</a>)</li><li>OWASP API Security Top 10 "Broken Object Level Authorization" (title only)</li><li>Google Zanzibar paper (title only)</li><li>AWS Cedar docs (not fetched)</li></ul>
+"""
+
+[[sources]]
+title = "cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html"
+url = "https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html"

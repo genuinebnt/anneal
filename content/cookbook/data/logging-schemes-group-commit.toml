@@ -1,0 +1,48 @@
+title = "Write-ahead logging schemes"
+module = "Databases"
+module_order = 8
+chapter = "Logging and recovery"
+chapter_order = 7
+order = 419
+kind = "recipe"
+lede = "Write-ahead logging schemes (physical, logical, physiological), group commit, async commit, log ring buffer, checkpoints."
+level = "advanced"
+code = ["examples/database/logging_schemes_group_commit.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>any durable store: what goes into a log record</li><li>how commits share an fsync</li><li>how checkpoints bound recovery time</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Part** 1, **what to log**. A toy store of 16 pages x 512 slots (4 KB pages) is updated by serial transactions (Add / Set / SetSeq on a key). The same workload is logged three ways:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Physical</div><div class="cb-g-says"><p>Before and after <strong>image</strong> of the whole page per update (~8 KB). Redo is a memcpy, trivially idempotent, but the log is huge and the format is tied to the page layout.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Physiological (ARIES)</div><div class="cb-g-says"><p>Page id + slot + a <strong>logical</strong> operation inside the page (<code>Add(delta)</code> or <code>Set(before, after)</code>), ~30 bytes. Page layout inside the page may be reorganised freely, every record touches one page, and the page LSN makes redo idempotent: apply only if <code>page.lsn &lt; record.lsn</code>.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Logical (command logging, VoltDB-style)</div><div class="cb-g-says"><p>One record per transaction at <strong>commit</strong> carrying the commands (~13 bytes each). Tiny log, but recovery must <strong>re-execute</strong> the commands on a transaction-consistent snapshot, in order, exactly once, with no steal (the disk never sees uncommitted data, because the log cannot undo anything).</p><p>Hazards demonstrated and asserted: replaying twice double-applies, and <strong>nondeterministic</strong> commands (here <code>SetSeq</code>, a sequence value that aborted transactions also consumed; the same issue arises with NOW(), RANDOM(), triggers) re-execute differently, so a safe logical log records the <strong>resolved</strong> values (<code>Set(key, 2)</code>), which is what the recovery tests use.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Recovery (physical / physiological)</div><div class="cb-g-says"><p>Analysis finds the transactions with a commit or end record, <strong>redo</strong> repeats history from the redo start point (page LSN test), <strong>undo</strong> removes losers newest-first using before values; an abort writes compensation records (CLRs, redo-only) and an end record, and undo skips what was already compensated.</p><p>Disk pages are <strong>stolen</strong> at random (uncommitted data reaches disk) and the log is forced at commit (no-force for pages), under the WAL rule. Serial transactions keep the undo simple (only the last transaction can be a loser); <code>aries_recovery</code> has the concurrent version and crashes during recovery itself.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Crash test</div><div class="cb-g-says"><p>For each scheme x checkpoint policy, 150 random workloads are crashed at 12 random events each (every log append / flush / page write / checkpoint step is an event); the recovered state must equal "exactly the transactions whose commit record reached the durable log", no more, no less.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Checkpoints</div><div class="cb-g-says"><p>Bound recovery. <strong>Blocking</strong>: stop, flush every dirty page, then redo starts at the checkpoint. <strong>Sharp</strong>: the same but only at a transaction boundary (transaction-consistent; the only kind logical logging can use, as a snapshot).</p><p><strong>Fuzzy</strong>: no flush; record the dirty page table and the active transactions; <strong>redo start</strong> = min(recLSN of dirty pages) and the log may be truncated below min(redo start, first LSN of any active transaction) (undo still needs those records). <strong>Part</strong> 2, <strong>group commit</strong> with real threads. Each commit must wait for its record to be fsynced.</p><p>One fsync per commit caps throughput at 1 / fsync-time; with a <strong>leader/follower</strong> protocol the first committer fsyncs everything appended so far while the others wait on a condition variable, so a batch costs one fsync. Fsync is simulated (1 ms sleep inside a single-queue device); throughput is printed but never asserted (batching is asserted via fsync counts).</p><p>A device crash is injected at the n-th fsync (batch lost, or durable but unacknowledged); every <strong>acknowledged</strong> commit must be in the durable set. <strong>Asynchronous commit</strong> acknowledges before the flush: higher throughput but a window of acknowledged commits that a crash loses (asserted on a scripted run), like PostgreSQL's synchronous_commit = off.</p><p><strong>Part</strong> 3, <strong>log buffer ring</strong>: writers claim space with an atomic <code>fetch_add</code> on the LSN (LSN = word offset), copy their record into a ring of atomics, then publish it by storing the header last; a flusher consumes the contiguous completed prefix and writers back-pressure when the ring is full (Aether / InnoDB / PostgreSQL WAL insertion all do variants of this). 8 threads fill a small ring many times over and the flushed stream is verified record by record.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>PostgreSQL WAL (physiological + full page images after checkpoints, group commit via commit_delay, async commit)</li><li>MySQL InnoDB redo log</li><li>SQLite WAL</li><li>VoltDB command logging</li><li>SQL Server log buffer</li><li>Kafka-style log append with batched fsync. Course: CMU 15-445 Lecture 21 (database logging) and the CMU 15-721 logging / recovery lectures</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>"ARIES: A Transaction Recovery Method Supporting Fine-Granularity Locking" (Mohan et al., 1992) <a href="https://web.stanford.edu/class/cs345d-01/rl/aries.pdf" target="_blank" rel="noreferrer">https://web.stanford.edu/class/cs345d-01/rl/aries.pdf</a></li><li>PostgreSQL WAL asynchronous commit docs <a href="https://www.postgresql.org/docs/current/wal-async-commit.html" target="_blank" rel="noreferrer">https://www.postgresql.org/docs/current/wal-async-commit.html</a></li><li>PostgreSQL WAL configuration (checkpoints, commit_delay) <a href="https://www.postgresql.org/docs/current/wal-configuration.html" target="_blank" rel="noreferrer">https://www.postgresql.org/docs/current/wal-configuration.html</a></li></ul>
+"""
+
+[[sources]]
+title = "web.stanford.edu/class/cs345d-01/rl/aries.pdf"
+url = "https://web.stanford.edu/class/cs345d-01/rl/aries.pdf"
+
+[[sources]]
+title = "postgresql.org/docs/current/wal-async-commit.html"
+url = "https://www.postgresql.org/docs/current/wal-async-commit.html"
+
+[[sources]]
+title = "postgresql.org/docs/current/wal-configuration.html"
+url = "https://www.postgresql.org/docs/current/wal-configuration.html"

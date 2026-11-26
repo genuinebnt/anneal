@@ -1,0 +1,66 @@
+title = "Algorithmic optimisation toolbox"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Sorting, strings, bits and theory"
+chapter_order = 6
+order = 222
+kind = "recipe"
+lede = "Naive vs optimised pairs with asserted operation counts."
+level = "advanced"
+code = ["examples/algorithms/algorithmic_optimization_toolbox.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any "it passes the small tests but times out" moment; choosing the right asymptotic idea before micro-tuning.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>query engines (sort+merge instead of nested loops, prefix sums for range aggregates)</li><li>monitoring (sliding-window max/min)</li><li>scheduling and partitioning DPs</li><li>path finding (A*)</li><li>randomised selection in analytics</li><li>cache-friendly matrix code</li><li>contest/interview problems. Course: MIT 6.006 / 6.046 (amortised analysis, divide and conquer, DP)</li><li>CMU 15-451 for randomised algorithms</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+12 sections of pairs (naive, optimised).
+
+For each pair: (1) both are run on seeded random inputs and must return the same answer; (2) both increment an explicit **operation counter** (comparisons, cell updates, pointer moves, cache misses of a simulated cache); (3) the asymptotic gap is **asserted** on the counters, never on wall-clock time, so the asserts hold on any machine.
+
+The counts are printed so you can see O(n&#94;2) vs O(n log n) as actual numbers.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+micro-optimisation (SIMD, unrolling; see `loop_optimization_ladder`) multiplies by a constant; the ideas here change the exponent. The order of attack is: better algorithm, better data layout, then constant factors.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+each section is one idea in &#126;20 lines. Ideas only described (not coded) are marked **described**:
+
+- SMAWK: row minima of a totally monotone matrix in O(n + m); generalises divide-and-conquer DP optimisation.
+- van Emde Boas layout: store a search tree recursively by halving height so any block size B is served at O(log_B n) misses without knowing B (cache-oblivious); section 12 shows the same trick on transposition.
+- HyperLogLog: approximate distinct counting in O(log log n) space; see the probabilistic data structure recipes.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://en.wikipedia.org/wiki/Amortized_analysis" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Amortized_analysis</a> and <a href="https://en.wikipedia.org/wiki/Cache-oblivious_algorithm" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Cache-oblivious_algorithm</a> and <a href="https://cp-algorithms.com/" target="_blank" rel="noreferrer">https://cp-algorithms.com/</a> (sections: sqrt decomposition, Mo's algorithm, convex hull trick, divide and conquer DP, Knuth optimisation</li><li>page names checked only at the site root, so search there)</li></ul>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Amortized_analysis"
+url = "https://en.wikipedia.org/wiki/Amortized_analysis"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Cache-oblivious_algorithm"
+url = "https://en.wikipedia.org/wiki/Cache-oblivious_algorithm"
+
+[[sources]]
+title = "cp-algorithms.com"
+url = "https://cp-algorithms.com/"

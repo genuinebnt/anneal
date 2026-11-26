@@ -1,0 +1,32 @@
+# NOT YET RUN. "App + database": the database is SQLite, embedded in the app process, so there is no
+# database container. What would be the database service is the named volume below. Run ONE replica:
+# SQLite on a shared network volume is unsafe, and the rate limiter, login throttle, cache and event
+# wake-ups are per process. Moving to Postgres is exercise 9 in docs/EXTEND.md.
+#
+#   APP_TOKEN_SECRET=... APP_SIGNING_SECRET=... docker compose \
+#     -f crates/cb-backend-reference/docker-compose.yml up --build
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: crates/cb-backend-reference/Dockerfile
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      APP__ENVIRONMENT: prod
+      APP__PUBLIC_URL: https://api.example.com
+      # No defaults: compose refuses to start without them. Use a secret manager in real deployments.
+      APP__AUTH__TOKEN_SECRET: ${APP_TOKEN_SECRET:?set APP_TOKEN_SECRET (32+ random bytes)}
+      APP__STORAGE__SIGNING_SECRET: ${APP_SIGNING_SECRET:?set APP_SIGNING_SECRET (32+ random bytes)}
+    volumes:
+      - app-data:/data
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    # Longer than server.shutdown_grace_ms (10 s), or the drain is cut off by SIGKILL.
+    stop_grace_period: 15s
+
+volumes:
+  app-data:

@@ -1,0 +1,30 @@
+title = "Shared state"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Threads, locks and channels"
+chapter_order = 1
+order = 238
+kind = "recipe"
+lede = "`Arc<Mutex<_>>` vs an actor that owns the state."
+level = "intermediate"
+code = ["examples/concurrency/shared_state.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>schedulers</li><li>caches</li><li>execution state</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>caches</li><li>registries and schedulers: mutex for tiny sections</li><li>actor task when invariants span several fields</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern A: `Arc<std::sync::Mutex<T>>`: fine for tiny critical sections. **Never** hold the guard across an `.await` (it is not Send, and it blocks the runtime thread). Pattern B: one task owns the data; others send it commands over a channel and get replies on a `oneshot`.
+
+No locks, one place to reason about invariants.
+"""

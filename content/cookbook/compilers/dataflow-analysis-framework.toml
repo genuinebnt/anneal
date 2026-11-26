@@ -1,0 +1,76 @@
+title = "A generic monotone dataflow framework"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Middle end and analysis"
+chapter_order = 5
+order = 626
+kind = "recipe"
+lede = "a generic monotone dataflow framework (lattice + transfer + worklist) with six classic analyses."
+level = "intermediate"
+code = ["examples/compilers_runtimes/dataflow_analysis_framework.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>optimising compilers</li><li>linters</li><li><strong>Ide</strong> "unused variable" checks</li><li>bytecode verifiers and any tool that asks "what is true at this program point?"</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+LLVM and GCC passes (liveness for register allocation, available expressions for GVN/CSE, constant propagation, reaching definitions for def-use chains), rustc's MIR borrow checker and `rustc_mir_dataflow` crate (a generic framework with the same shape as this one: an `Analysis` trait with a lattice, a transfer function and a direction), Java/Android bytecode verifiers, security taint analysers.
+
+Course: Cornell CS 6120 (Advanced Compilers) dataflow lessons; Moller and Schwartzbach "Static Program Analysis" chapters 5-6.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The framework**. A dataflow analysis is a tuple (lattice L, join, bottom, boundary value, transfer function per instruction, direction). If the transfer functions are **monotone** (a &lt;= b implies f(a) &lt;= f(b)) and L has finite height, the iteration "start every block at bottom, re-apply transfers until nothing changes" reaches the **least** fixpoint (Kleene / Tarski).
+
+The order in which the worklist hands out blocks changes only how fast we get there, never the answer. We run three orders (FIFO, LIFO, priority by reverse postorder) and assert the solutions are identical, then print the number of transfer evaluations.
+
+Reverse postorder visits a block after (most of) its predecessors, so forward problems converge in about loop-depth + 2 passes; for **backward** problems the mirror order (postorder) is the fast one. rustc's engine does the same (it visits blocks in RPO).
+
+**The six analyses** (forward/backward x may/must is the classic 2x2 table):
+
+```text
+reaching definitions   forward  may   (join = union)       "which assignments might have produced this value?"
+live variables         backward may   (join = union)       "may this value still be read?"   (dead store elimination, regalloc)
+```
+
+available expressions  forward  must  (join = intersect)   "was `a+b` computed on **every** path, operands unchanged?" (CSE) very busy expressions  backward must  (join = intersect)   "is `a+b` computed on **every** path from here before operands change?" (code hoisting)
+
+```text
+constant propagation   forward        lattice Bot < Const(k) < Top per variable (not a bit-vector problem; join of Const 1 and Const 2 is Top)
+sign analysis          forward        powerset of {neg, zero, pos}: a tiny abstract interpretation
+```
+
+For must-analyses the lattice order is flipped: **bottom** (the identity of join) is the universal set, which is why unreachable blocks keep "everything" and why the boundary value (empty set at the entry) is what makes the answer non-trivial.
+
+**How we know it is right** (every check below runs on 1500 random CFGs with loops, unreachable blocks and saturating arithmetic):
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>All worklist orders return the same solution, and that solution is a FIXPOINT (in[b] = join of predecessor outs, out[b] = transfer(in[b]));</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>Transfer functions are monotone on random pairs a &lt;= join(a, b), and join is commutative and idempotent;</p></div></div><div class="cb-g-term"><div class="cb-g-name">Soundness</div><div class="cb-g-says"><p>Against a concrete interpreter: on random inputs we record the trace; at every executed program point the concrete state must be inside the abstract fact (constants equal, signs inside the set, last definition inside the reaching set, every variable read later is live, available expressions were really computed with the same operand values, very busy expressions really are evaluated later with the same operand values);</p></div></div><div class="cb-g-term"><div class="cb-g-name">Failure injection</div><div class="cb-g-says"><p>A deliberately buggy liveness (it forgets that <code>br x</code> reads x) is caught by the same checker. Arithmetic is <strong>saturating</strong> so that sign and constant facts stay simple (wrapping would make <code>pos + pos</code> possibly negative).</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Kildall, "A Unified Approach to Global Program Optimization" (POPL 1973</li><li>the original lattice formulation, cited by title only)</li><li>Moller and Schwartzbach, Static Program Analysis <a href="https://cs.au.dk/~amoeller/spa/" target="_blank" rel="noreferrer">https://cs.au.dk/~amoeller/spa/</a></li><li>Cornell CS 6120 dataflow lesson <a href="https://www.cs.cornell.edu/courses/cs6120/2020fa/lesson/4/" target="_blank" rel="noreferrer">https://www.cs.cornell.edu/courses/cs6120/2020fa/lesson/4/</a></li><li>rustc dev guide on dataflow <a href="https://rustc-dev-guide.rust-lang.org/mir/dataflow.html" target="_blank" rel="noreferrer">https://rustc-dev-guide.rust-lang.org/mir/dataflow.html</a></li><li><a href="https://en.wikipedia.org/wiki/Data-flow_analysis" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Data-flow_analysis</a></li></ul>
+"""
+
+[[sources]]
+title = "cs.au.dk/~amoeller/spa"
+url = "https://cs.au.dk/~amoeller/spa/"
+
+[[sources]]
+title = "cs.cornell.edu/courses/cs6120/2020fa/lesson/4"
+url = "https://www.cs.cornell.edu/courses/cs6120/2020fa/lesson/4/"
+
+[[sources]]
+title = "rustc-dev-guide.rust-lang.org/mir/dataflow.html"
+url = "https://rustc-dev-guide.rust-lang.org/mir/dataflow.html"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Data-flow_analysis"
+url = "https://en.wikipedia.org/wiki/Data-flow_analysis"

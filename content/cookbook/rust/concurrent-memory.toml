@@ -1,0 +1,704 @@
+title = "Concurrent memory"
+module = "Rust language"
+module_order = 1
+chapter = "Memory and allocators"
+chapter_order = 6
+order = 51
+kind = "guide"
+lede = "Arenas that free everything at once · epoch-based reclamation for a lock-free stack · optimistic version locks that readers never write · 585× faster frees, 4 000 million reads a second, and an early free caught by Miri on 2 seeds of 24 · 18 mutants"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>A concurrent data structure has two problems: who may change it, and when its memory may be reused.</strong> Locks answer both at once and cost throughput. Lock-free and optimistic structures answer the first with compare-and-swap and version checks, and then meet the second: a thread that has read a node's address may be about to read the node's fields, and another thread has just removed the node. Freeing it is a use after free; freeing it and allocating a new node at the same address makes a stale compare-and-swap succeed when it should not (the <em>ABA problem</em>).</li> <li><strong>An arena removes the problem when lifetimes end together.</strong> A query's tuples, a hash table's nodes, a parse tree: all die when the query ends. Allocate by moving a pointer inside big chunks, never free anything alone, free all chunks at once. Allocation becomes a handful of instructions, freeing becomes <code>free</code> of a few chunks, and nothing can be freed too early because nothing is freed early.</li> <li><strong>Epochs remove the problem when lifetimes do not end together.</strong> A thread <em>pins</em> the current global epoch while it touches shared nodes. A removed node is <em>retired</em>, tagged with the epoch at which it was removed. The global epoch advances only when every pinned thread is in the current epoch; a node retired in epoch <em>e</em> is freed when the global epoch reaches <em>e + 2</em>, at which point every thread that could have seen the node before it was removed has unpinned. The reader pays two stores and a fence per operation, not a lock; the cost of reclamation moves to the retiring thread.</li> <li><strong>Optimistic version locks remove the problem for readers.</strong> A node carries a version word with a lock bit. A reader reads the version, reads the node, and re-reads the version: if it changed or a writer holds the lock, the read is thrown away and retried. Readers never write a shared word, so they do not bounce a cache line, and read throughput scales with cores where a reader-writer lock collapses. In Rust the fields a reader may read during a write must themselves be atomics, because a plain read racing with a write is undefined behavior; the ordering comes from the version word and two fences.</li> <li><strong>All three are small, all three are <code>unsafe</code>, and none of them is believable without tests that try to break them.</strong> Here each is checked against a model, stress-tested with drop counters and invariants, run under Miri on many scheduler seeds, and mutated.</li> </ul>
+"""
+
+[[sections]]
+heading = "Arenas"
+body = """
+:::deeper Reference: a bump arena for Copy values and strings, and an index arena for any type
+```rust title="src/test/arena.rs"
+//! Bump allocation. A query allocates millions of small objects (tuples, hash-table nodes, expression results) that all die together when
+//! the query ends; giving each its own `malloc` and `free` costs time and memory for lifetimes nobody needs. An arena hands out memory
+//! by moving a pointer forward inside large chunks, never frees an object alone, and releases everything at once. Two arenas:
+//! `Arena` returns references to `Copy` values and strings (nothing to drop), `TypedArena<T>` stores any `T` and returns indices, and
+//! drops its values when it is dropped or cleared.
+use std::alloc::{alloc, dealloc, Layout};
+use std::cell::{Cell, RefCell};
+
+const CHUNK: usize = 64 * 1024;
+
+pub struct Arena {
+    chunks: RefCell<Vec<(*mut u8, Layout)>>,
+    ptr: Cell<*mut u8>,
+    end: Cell<*mut u8>,
+    allocated: Cell<usize>,
+}
+
+impl Arena {
+    pub fn new() -> Arena {
+        Arena { chunks: RefCell::new(vec![]), ptr: Cell::new(std::ptr::null_mut()), end: Cell::new(std::ptr::null_mut()), allocated: Cell::new(0) }
+    }
+
+    /// Bytes handed out so far (not counting padding).
+    pub fn allocated(&self) -> usize {
+        self.allocated.get()
+    }
+    pub fn chunks(&self) -> usize {
+        self.chunks.borrow().len()
+    }
+
+    fn new_chunk(&self, min: usize, align: usize) {
+        let size = CHUNK.max(min + align);
+        let layout = Layout::from_size_align(size, 16.max(align)).expect("a valid layout");
+        // SAFETY: the layout has non-zero size.
+        let p = unsafe { alloc(layout) };
+        assert!(!p.is_null(), "out of memory");
+        self.chunks.borrow_mut().push((p, layout));
+        self.ptr.set(p);
+        // SAFETY: `p + size` is one past the end of the chunk.
+        self.end.set(unsafe { p.add(size) });
+    }
+
+    /// `size` bytes at alignment `align` (a power of two), valid until the arena is reset or dropped.
+    pub fn alloc_raw(&self, size: usize, align: usize) -> *mut u8 {
+        debug_assert!(align.is_power_of_two());
+        loop {
+            let base = self.ptr.get();
+            if !base.is_null() {
+                // bytes to skip so that the next object is aligned
+                let pad = (base as usize).wrapping_neg() & (align - 1);
+                let room = self.end.get() as usize - base as usize;
+                if pad + size <= room {
+                    // SAFETY: `pad + size <= room`, so both offsets stay inside the current chunk (or one past its end).
+                    let out = unsafe { base.add(pad) };
+                    self.ptr.set(unsafe { out.add(size) });
+                    self.allocated.set(self.allocated.get() + size);
+                    return out;
+                }
+            }
+            self.new_chunk(size, align);
+        }
+    }
+
+    /// Store a copy of `value`. `T: Copy` means no destructor will be skipped.
+    #[allow(clippy::mut_from_ref)]
+    pub fn alloc<T: Copy>(&self, value: T) -> &mut T {
+        let p = self.alloc_raw(std::mem::size_of::<T>(), std::mem::align_of::<T>()) as *mut T;
+        // SAFETY: `p` is aligned for `T`, points to `size_of::<T>()` bytes owned by the arena and not given out before, and lives as long
+        // as `&self`; writing initializes it.
+        unsafe {
+            p.write(value);
+            &mut *p
+        }
+    }
+
+    /// Store a copy of a slice.
+    #[allow(clippy::mut_from_ref)]
+    pub fn alloc_slice<T: Copy>(&self, values: &[T]) -> &mut [T] {
+        let p = self.alloc_raw(std::mem::size_of_val(values), std::mem::align_of::<T>()) as *mut T;
+        // SAFETY: as in `alloc`, for `values.len()` elements; the source and the new memory cannot overlap (the new memory is fresh).
+        unsafe {
+            std::ptr::copy_nonoverlapping(values.as_ptr(), p, values.len());
+            std::slice::from_raw_parts_mut(p, values.len())
+        }
+    }
+
+    pub fn alloc_str(&self, s: &str) -> &str {
+        let bytes = self.alloc_slice(s.as_bytes());
+        // SAFETY: the bytes are a copy of a valid `str`.
+        unsafe { std::str::from_utf8_unchecked(bytes) }
+    }
+
+    /// Forget every allocation and reuse the first chunk. `&mut self` guarantees that no reference handed out earlier is alive.
+    pub fn reset(&mut self) {
+        let mut chunks = self.chunks.borrow_mut();
+        for (p, layout) in chunks.drain(1..) {
+            // SAFETY: allocated by `alloc` with this layout and not freed.
+            unsafe { dealloc(p, layout) }
+        }
+        if let Some(&(p, layout)) = chunks.first() {
+            self.ptr.set(p);
+            // SAFETY: one past the end of the first chunk.
+            self.end.set(unsafe { p.add(layout.size()) });
+        }
+        self.allocated.set(0);
+    }
+}
+
+impl Default for Arena {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for Arena {
+    fn drop(&mut self) {
+        for (p, layout) in self.chunks.borrow_mut().drain(..) {
+            // SAFETY: allocated by `alloc` with this layout and not freed.
+            unsafe { dealloc(p, layout) }
+        }
+    }
+}
+
+/// An arena of `T` that returns indices instead of references: no `unsafe`, values are dropped with the arena, and an index stays valid
+/// when the arena grows (a reference into a `Vec` would not). The usual shape for trees and graphs: nodes refer to each other by index.
+pub struct TypedArena<T> {
+    items: Vec<T>,
+}
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+pub struct Id(pub u32);
+impl<T> TypedArena<T> {
+    pub fn new() -> Self {
+        TypedArena { items: vec![] }
+    }
+    pub fn alloc(&mut self, x: T) -> Id {
+        self.items.push(x);
+        Id(self.items.len() as u32 - 1)
+    }
+    pub fn get(&self, id: Id) -> &T {
+        &self.items[id.0 as usize]
+    }
+    pub fn get_mut(&mut self, id: Id) -> &mut T {
+        &mut self.items[id.0 as usize]
+    }
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+    pub fn clear(&mut self) {
+        self.items.clear();
+    }
+}
+impl<T> Default for TypedArena<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+```
+:::
+
+<p>An <code>Arena</code> owns a list of chunks (64 KiB, or larger for a big request), a pointer into the current one and the end of it. <code>alloc_raw(size, align)</code> rounds the pointer up to <code>align</code>, checks that <code>size</code> bytes remain, and bumps; otherwise it gets a new chunk. <code>alloc</code> writes a <code>Copy</code> value and returns <code>&amp;mut T</code> tied to the arena's borrow; <code>alloc_slice</code> and <code>alloc_str</code> copy slices; <code>reset</code> frees all but the first chunk and rewinds. Because an arena never runs destructors it accepts only <code>Copy</code> data; <code>TypedArena&lt;T&gt;</code> takes any <code>T</code>, returns an index (a <code>Copy</code> handle that stays valid when the vector grows) and drops its contents when it is cleared or dropped. Trees and graphs stored as indices into a <code>TypedArena</code> need no <code>unsafe</code>, no reference counting and no lifetimes.</p>
+"""
+
+[[sections]]
+heading = "Epochs"
+body = """
+:::deeper Reference: an epoch collector (pin, retire, advance), a lock-free stack that uses it, and the same stack with the bug
+```rust title="src/test/epoch.rs"
+//! Epoch-based memory reclamation. A lock-free structure removes a node by unlinking it with a compare-and-swap, but another thread may
+//! have read the node's address a moment before and be about to read its fields; freeing the node at once is a use after free. Epochs
+//! solve it without per-pointer bookkeeping: a thread *pins* the current epoch while it touches shared nodes; an unlinked node is
+//! *retired* with the epoch at which it was unlinked; it is freed only when the global epoch is two ahead, which cannot happen while any
+//! thread that could have seen the node is still pinned. This is a small, readable version of the scheme of Fraser (2004) and of
+//! `crossbeam-epoch`: one global epoch, one slot per thread, and one shared list of retired nodes.
+use std::sync::atomic::{fence, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Mutex;
+
+const UNPINNED: u64 = u64::MAX;
+pub const MAX_THREADS: usize = 32;
+
+#[repr(align(128))]
+struct Slot(AtomicU64);
+
+pub struct Collector {
+    global: AtomicU64,
+    slots: Vec<Slot>,
+    next_slot: AtomicUsize,
+    /// Retired nodes: the epoch they were retired in, and how to free them.
+    garbage: Mutex<Vec<(u64, Box<dyn FnOnce() + Send>)>>,
+    freed: AtomicUsize,
+}
+
+impl Collector {
+    pub fn new() -> Collector {
+        Collector { global: AtomicU64::new(0), slots: (0..MAX_THREADS).map(|_| Slot(AtomicU64::new(UNPINNED))).collect(), next_slot: AtomicUsize::new(0), garbage: Mutex::new(vec![]), freed: AtomicUsize::new(0) }
+    }
+
+    /// A handle for one thread. At most `MAX_THREADS` handles are created over the collector's life.
+    pub fn register(&self) -> Handle<'_> {
+        let slot = self.next_slot.fetch_add(1, Ordering::Relaxed);
+        assert!(slot < MAX_THREADS, "too many threads for this collector");
+        Handle { c: self, slot }
+    }
+
+    pub fn epoch(&self) -> u64 {
+        self.global.load(Ordering::SeqCst)
+    }
+    pub fn freed(&self) -> usize {
+        self.freed.load(Ordering::SeqCst)
+    }
+    pub fn pending(&self) -> usize {
+        self.garbage.lock().unwrap().len()
+    }
+
+    /// Advance the global epoch if every pinned thread has caught up with it.
+    fn try_advance(&self) {
+        let g = self.global.load(Ordering::SeqCst);
+        let behind = self.slots.iter().any(|s| {
+            let e = s.0.load(Ordering::SeqCst);
+            e != UNPINNED && e != g
+        });
+        if !behind {
+            let _ = self.global.compare_exchange(g, g + 1, Ordering::SeqCst, Ordering::SeqCst);
+        }
+    }
+
+    /// Free everything that was retired at least two epochs ago.
+    fn collect(&self) {
+        self.try_advance();
+        let g = self.global.load(Ordering::SeqCst);
+        let ready: Vec<_> = {
+            let mut garbage = self.garbage.lock().unwrap();
+            let (ready, keep): (Vec<_>, Vec<_>) = garbage.drain(..).partition(|(e, _)| e + 2 <= g);
+            *garbage = keep;
+            ready
+        };
+        for (_, free) in ready {
+            free();
+            self.freed.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// Free everything that is still retired. Only sound when no thread is pinned (for example at the end of a test).
+    pub fn flush(&self) {
+        assert!(self.slots.iter().all(|s| s.0.load(Ordering::SeqCst) == UNPINNED), "flush while a thread is pinned");
+        for (_, free) in self.garbage.lock().unwrap().drain(..) {
+            free();
+            self.freed.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
+impl Default for Collector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for Collector {
+    fn drop(&mut self) {
+        for (_, free) in self.garbage.get_mut().unwrap().drain(..) {
+            free();
+        }
+    }
+}
+
+/// A raw pointer that may be moved to the thread that frees it.
+struct SendPtr<T>(*mut T);
+// SAFETY: the pointee is `Send` (`retire` requires it) and the pointer is used by exactly one thread, the one that frees it.
+unsafe impl<T: Send> Send for SendPtr<T> {}
+
+pub struct Handle<'c> {
+    c: &'c Collector,
+    slot: usize,
+}
+
+/// While a `Guard` lives, nodes retired after it was created are not freed.
+pub struct Guard<'h, 'c> {
+    h: &'h Handle<'c>,
+}
+
+impl<'c> Handle<'c> {
+    pub fn pin<'h>(&'h self) -> Guard<'h, 'c> {
+        let slot = &self.c.slots[self.slot].0;
+        // Publish "I am in epoch g" and make sure the publication is visible before any shared load that follows. Without the fence a
+        // thread could read a node, be preempted, and not yet have announced itself when the node is retired and freed.
+        let g = self.c.global.load(Ordering::SeqCst);
+        slot.store(g, Ordering::SeqCst);
+        fence(Ordering::SeqCst);
+        Guard { h: self }
+    }
+}
+
+impl Guard<'_, '_> {
+    /// Hand over a node that has been unlinked from the shared structure. It is freed once no pinned thread can still hold a pointer to it.
+    ///
+    /// # Safety
+    /// `ptr` must be unreachable for threads that pin after this call, and must not be retired twice.
+    pub unsafe fn retire<T: Send + 'static>(&self, ptr: *mut T) {
+        let ptr = SendPtr(ptr);
+        let free: Box<dyn FnOnce() + Send> = Box::new(move || {
+            let ptr = ptr;
+            // SAFETY: by the contract of `retire`, the pointer came from `Box::into_raw` and is retired once; the epoch rule guarantees
+            // that no pinned thread can still read it.
+            drop(unsafe { Box::from_raw(ptr.0) });
+        });
+        let e = self.h.c.global.load(Ordering::SeqCst);
+        self.h.c.garbage.lock().unwrap().push((e, free));
+        self.h.c.collect();
+    }
+}
+
+impl Drop for Guard<'_, '_> {
+    fn drop(&mut self) {
+        self.h.c.slots[self.h.slot].0.store(UNPINNED, Ordering::SeqCst);
+    }
+}
+
+// ---- a lock-free stack that uses it -----------------------------------------------------------------------------------------------------
+
+struct Node<T> {
+    value: Option<T>,
+    next: *mut Node<T>,
+}
+// SAFETY: a node is owned by one thread at a time: by the pusher until published, then by whichever thread unlinks it, and its memory is
+// freed by whichever thread collects it. The `next` pointer is only followed under the rules above.
+unsafe impl<T: Send> Send for Node<T> {}
+
+/// The Treiber stack: `push` and `pop` are single compare-and-swap loops on the head pointer. `pop` reads `head.next` after loading
+/// `head`; if another thread popped and freed `head` in between, that read would be a use after free. The epoch guard prevents it.
+pub struct Stack<T> {
+    head: AtomicPtr<Node<T>>,
+}
+unsafe impl<T: Send> Send for Stack<T> {}
+unsafe impl<T: Send> Sync for Stack<T> {}
+
+impl<T: Send + 'static> Stack<T> {
+    pub fn new() -> Stack<T> {
+        Stack { head: AtomicPtr::new(std::ptr::null_mut()) }
+    }
+
+    pub fn push(&self, value: T) {
+        let node = Box::into_raw(Box::new(Node { value: Some(value), next: std::ptr::null_mut() }));
+        loop {
+            let head = self.head.load(Ordering::Relaxed);
+            // SAFETY: `node` is ours until the compare-and-swap publishes it.
+            unsafe { (*node).next = head };
+            if self.head.compare_exchange_weak(head, node, Ordering::Release, Ordering::Relaxed).is_ok() {
+                return;
+            }
+        }
+    }
+
+    pub fn pop(&self, handle: &Handle<'_>) -> Option<T> {
+        let guard = handle.pin();
+        loop {
+            let head = self.head.load(Ordering::Acquire);
+            if head.is_null() {
+                return None;
+            }
+            // SAFETY: `head` was reachable from the stack after we pinned, so it is not freed while we are pinned.
+            let next = unsafe { (*head).next };
+            if self.head.compare_exchange_weak(head, next, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                // SAFETY: the successful exchange made us the only thread that unlinked `head`, so we may take its value; nobody who pins
+                // from now on can reach it, and threads that pinned before are protected until the epoch has advanced twice.
+                let value = unsafe { (*head).value.take() };
+                unsafe { guard.retire(head) };
+                return value;
+            }
+        }
+    }
+}
+
+impl<T: Send + 'static> Default for Stack<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> Drop for Stack<T> {
+    fn drop(&mut self) {
+        let mut p = *self.head.get_mut();
+        while !p.is_null() {
+            // SAFETY: exclusive access in `drop`; each node came from `Box::into_raw` and is freed once.
+            let b = unsafe { Box::from_raw(p) };
+            p = b.next;
+        }
+    }
+}
+
+/// The same stack, but a popped node is freed at once: the bug that epochs exist to prevent.
+pub struct UnsafeStack<T> {
+    inner: Stack<T>,
+}
+impl<T: Send + 'static> UnsafeStack<T> {
+    pub fn new() -> Self {
+        UnsafeStack { inner: Stack::new() }
+    }
+    pub fn push(&self, v: T) {
+        self.inner.push(v)
+    }
+    pub fn pop(&self) -> Option<T> {
+        loop {
+            let head = self.inner.head.load(Ordering::Acquire);
+            if head.is_null() {
+                return None;
+            }
+            // SAFETY: none. Another thread may have popped and freed `head` since the load.
+            let next = unsafe { (*head).next };
+            if self.inner.head.compare_exchange_weak(head, next, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                let mut b = unsafe { Box::from_raw(head) };
+                return b.value.take();
+            }
+        }
+    }
+}
+impl<T: Send + 'static> Default for UnsafeStack<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+```
+:::
+
+<p>A <code>Collector</code> has one global epoch, one slot per thread (128-byte aligned to avoid false sharing) holding the epoch the thread is pinned in or <code>UNPINNED</code>, and a list of retired nodes with their epochs. <code>pin</code> writes the thread's slot and issues a <code>SeqCst</code> fence so that the announcement is visible before any shared load; dropping the guard unpins. <code>retire</code> pushes the node and tries to collect: the epoch advances if no pinned thread lags, and anything retired two epochs ago is freed. The stack is the Treiber stack: <code>push</code> links a new node to the head with a compare-and-swap; <code>pop</code> loads the head, reads <code>head.next</code>, and swaps; the read of <code>next</code> is the one that an early free would turn into a use after free. <code>UnsafeStack</code> is the same code that frees a popped node immediately.</p>
+"""
+
+[[sections]]
+heading = "Optimistic locks"
+body = """
+:::deeper Reference: a version lock (read, validate, upgrade, unlock), a pair kept equal under it, and a sorted leaf with optimistic lookups
+```rust title="src/test/olc.rs"
+//! Optimistic lock coupling. A reader does not lock: it reads the node's version, reads the node, and re-reads the version; if the version
+//! changed or a writer holds the lock, the read is discarded and retried. Readers write nothing shared, so they scale with the number
+//! of cores, where a reader-writer lock bounces the lock word between caches on every read. Writers take an exclusive lock (a bit in the
+//! same word) and bump the version when they release it. This is the sequence lock of Linux, in the form used by B-tree nodes of
+//! LeanStore and Umbra (Leis et al., "The ART of Practical Synchronization", DaMoN 2016).
+//!
+//! In Rust the data a reader may read while a writer writes must itself be atomic (a plain read racing with a write is undefined
+//! behavior), so the protected fields are `AtomicU64` accessed with `Relaxed`, and the ordering comes from the lock word and two fences,
+//! as in Boehm's "Can seqlocks get along with programming language memory models?" (2012).
+use std::sync::atomic::{fence, AtomicU64, Ordering};
+
+const LOCKED: u64 = 1;
+const OBSOLETE: u64 = 2;
+const STEP: u64 = 4; // the version lives above the two flag bits
+
+/// A version number with a lock bit and an "obsolete" bit (set when the node has been removed from the structure for good).
+pub struct VersionLock(AtomicU64);
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Restart;
+
+impl VersionLock {
+    pub fn new() -> Self {
+        VersionLock(AtomicU64::new(0))
+    }
+
+    /// Start an optimistic read: the version to validate against, or `Restart` if a writer holds the lock or the node is obsolete.
+    pub fn read_lock(&self) -> Result<u64, Restart> {
+        let v = self.0.load(Ordering::Acquire);
+        if v & (LOCKED | OBSOLETE) != 0 { Err(Restart) } else { Ok(v) }
+    }
+
+    /// Did nothing change since `read_lock` returned `v`? Call after reading the data.
+    pub fn validate(&self, v: u64) -> Result<(), Restart> {
+        // The data reads before this point must not move below the version read: an acquire fence orders them.
+        fence(Ordering::Acquire);
+        if self.0.load(Ordering::Relaxed) == v { Ok(()) } else { Err(Restart) }
+    }
+
+    /// Turn an optimistic read at version `v` into the exclusive lock, if nothing changed since.
+    pub fn upgrade(&self, v: u64) -> Result<(), Restart> {
+        // After the exchange succeeds the writer's data stores must not move above it: the exchange is an acquire, and the fence below
+        // keeps the stores that follow from being seen before the lock bit by a reader doing `validate`.
+        match self.0.compare_exchange(v, v | LOCKED, Ordering::Acquire, Ordering::Relaxed) {
+            Ok(_) => {
+                fence(Ordering::Release);
+                Ok(())
+            }
+            Err(_) => Err(Restart),
+        }
+    }
+
+    /// Release the exclusive lock and publish a new version.
+    pub fn write_unlock(&self) {
+        // locked version v|1 becomes v + STEP (lock bit cleared, version advanced); the release store publishes the data writes
+        let v = self.0.load(Ordering::Relaxed);
+        debug_assert!(v & LOCKED != 0);
+        self.0.store((v & !LOCKED) + STEP, Ordering::Release);
+    }
+
+    /// Release the exclusive lock and mark the node obsolete: every later optimistic read of it restarts.
+    pub fn write_unlock_obsolete(&self) {
+        let v = self.0.load(Ordering::Relaxed);
+        self.0.store(((v & !LOCKED) + STEP) | OBSOLETE, Ordering::Release);
+    }
+}
+
+impl Default for VersionLock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Two fields that every writer keeps equal. A reader must never return a pair that differs.
+pub struct Pair {
+    lock: VersionLock,
+    a: AtomicU64,
+    b: AtomicU64,
+}
+
+impl Pair {
+    pub fn new() -> Pair {
+        Pair { lock: VersionLock::new(), a: AtomicU64::new(0), b: AtomicU64::new(0) }
+    }
+
+    /// Set both fields to `x`, in two separate stores with a window between them.
+    pub fn write(&self, x: u64) {
+        loop {
+            let Ok(v) = self.lock.read_lock() else { std::hint::spin_loop(); continue };
+            if self.lock.upgrade(v).is_ok() {
+                self.a.store(x, Ordering::Relaxed);
+                std::hint::spin_loop(); // widen the window in which the pair is torn
+                self.b.store(x, Ordering::Relaxed);
+                self.lock.write_unlock();
+                return;
+            }
+        }
+    }
+
+    /// Read both fields optimistically; retry until the read was consistent. Returns the pair and the number of retries.
+    pub fn read(&self) -> ((u64, u64), u64) {
+        let mut retries = 0;
+        loop {
+            if let Ok(v) = self.lock.read_lock() {
+                let a = self.a.load(Ordering::Relaxed);
+                let b = self.b.load(Ordering::Relaxed);
+                if self.lock.validate(v).is_ok() {
+                    return ((a, b), retries);
+                }
+            }
+            retries += 1;
+            std::hint::spin_loop();
+        }
+    }
+
+    /// The same read with the validation left out: the bug.
+    pub fn read_without_validation(&self) -> (u64, u64) {
+        (self.a.load(Ordering::Relaxed), self.b.load(Ordering::Relaxed))
+    }
+}
+
+impl Default for Pair {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A sorted array of up to `N` keys protected by one version lock: lookups are optimistic and retry, inserts are exclusive.
+pub struct Leaf<const N: usize> {
+    lock: VersionLock,
+    count: AtomicU64,
+    keys: [AtomicU64; N],
+}
+
+impl<const N: usize> Leaf<N> {
+    pub fn new() -> Self {
+        Leaf { lock: VersionLock::new(), count: AtomicU64::new(0), keys: [const { AtomicU64::new(0) }; N] }
+    }
+
+    /// Does the leaf contain `key`? Never blocks and never writes a shared word.
+    pub fn contains(&self, key: u64) -> bool {
+        loop {
+            let Ok(v) = self.lock.read_lock() else { std::hint::spin_loop(); continue };
+            let n = (self.count.load(Ordering::Relaxed) as usize).min(N);
+            // binary search over what may be a torn array: every step reads a valid index, and the answer is used only if validation passes
+            let (mut lo, mut hi) = (0usize, n);
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                if self.keys[mid].load(Ordering::Relaxed) < key { lo = mid + 1 } else { hi = mid }
+            }
+            let found = lo < n && self.keys[lo].load(Ordering::Relaxed) == key;
+            if self.lock.validate(v).is_ok() {
+                return found;
+            }
+        }
+    }
+
+    /// Insert `key` keeping the keys sorted; `Ok(true)` if added, `Ok(false)` if present, `Err(())` if the leaf is full.
+    pub fn insert(&self, key: u64) -> Result<bool, ()> {
+        loop {
+            let Ok(v) = self.lock.read_lock() else { std::hint::spin_loop(); continue };
+            if self.lock.upgrade(v).is_err() {
+                continue;
+            }
+            let n = self.count.load(Ordering::Relaxed) as usize;
+            let mut pos = 0;
+            while pos < n && self.keys[pos].load(Ordering::Relaxed) < key {
+                pos += 1;
+            }
+            let result = if pos < n && self.keys[pos].load(Ordering::Relaxed) == key {
+                Ok(false)
+            } else if n == N {
+                Err(())
+            } else {
+                for i in (pos..n).rev() {
+                    self.keys[i + 1].store(self.keys[i].load(Ordering::Relaxed), Ordering::Relaxed);
+                }
+                self.keys[pos].store(key, Ordering::Relaxed);
+                self.count.store(n as u64 + 1, Ordering::Relaxed);
+                Ok(true)
+            };
+            self.lock.write_unlock();
+            return result;
+        }
+    }
+
+    pub fn snapshot(&self) -> Vec<u64> {
+        loop {
+            let Ok(v) = self.lock.read_lock() else { continue };
+            let n = (self.count.load(Ordering::Relaxed) as usize).min(N);
+            let keys: Vec<u64> = (0..n).map(|i| self.keys[i].load(Ordering::Relaxed)).collect();
+            if self.lock.validate(v).is_ok() {
+                return keys;
+            }
+        }
+    }
+}
+
+impl<const N: usize> Default for Leaf<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+```
+:::
+
+<p>The version word holds a lock bit, an "obsolete" bit (the node has been removed for good) and a version in the upper bits. <code>read_lock</code> returns the version unless the word says locked or obsolete; <code>validate</code> issues an acquire fence and checks that the word is unchanged; <code>upgrade</code> turns an optimistic read into the exclusive lock with a compare-and-swap on that exact version, so it fails if anything intervened; <code>write_unlock</code> stores the next version with <code>Release</code>. <code>Pair</code> is the smallest structure with an invariant: two fields that every writer sets to the same value, in two separate stores. A reader that returns <code>(a, b)</code> with <code>a != b</code> has seen a state that never existed. <code>Leaf&lt;N&gt;</code> is a sorted array under one lock, as a B-tree leaf would be: lookups are optimistic binary searches that retry, inserts take the lock and shift keys.</p>
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+```text title="4 million 16-byte nodes, built and freed one at a time and in an arena"
+4 million 16-byte nodes: Box::new 34.3 ms to build, 24.4 ms to free; arena 10.9 ms to build, 0.04 ms to free; build 3.2x faster, free 585x faster
+```
+
+```text title="one writer updating every ~2 000 spins, reader threads reading a pair under each kind of lock"
+reader                       1       2       4       8      11   (million reads per second, all reader threads)
+optimistic version lock     650    1299    2479    3093    3816
+RwLock                     204      90      23      14       9
+Mutex                      232     156      84      89      94
+```
+
+```text title="readers of a pair that two writers update continuously: with validation and without"
+validated reads: 3000000 reads, 2243022 retries, 0 torn; unvalidated reads: 4969369 torn of 5000000
+```
+
+```text title="Miri, 24 scheduler seeds each: a stack that frees early, and the epoch stack"
+$ MIRIFLAGS=-Zmiri-many-seeds=0..24 cargo +nightly miri run --bin early_free
+error: Undefined Behavior: in-bounds pointer arithmetic failed: alloc6057 has been freed, so this pointer is dangling
+error: Undefined Behavior: in-bounds pointer arithmetic failed: alloc5805 has been freed, so this pointer is dangling
+$ MIRIFLAGS=-Zmiri-many-seeds=0..24 cargo +nightly miri run --bin epoch_ok
+popped everything, freed 4 nodes        (printed once for each of the 24 seeds)
+```
+
+<ul> <li><strong>The arena builds 4 million nodes 3.2× faster and frees them 585× faster.</strong> 10.9 ms against 34.3 ms to build, and 0.04 ms against 24.4 ms to free: freeing 4 million boxes is 4 million <code>free</code> calls, freeing the arena is about 1 000 chunk releases (64 MB in 64 KiB chunks). It also stores the nodes contiguously (16 bytes each, no allocator header), which the later traversal benefits from. The price is that nothing is freed before the end.</li> <li><strong>Optimistic readers scale; locked readers do not.</strong> With 11 reader threads the version lock reads 3 816 million pairs per second, up from 650 on one thread (5.9×). The reader-writer lock <em>loses</em> throughput as readers are added: 204 million on one thread, 9 on eleven, because every read acquisition writes the lock word and the cache line ping-pongs. The mutex is flat near 90. The single writer, pausing about 2 000 spins between updates, makes the readers retry, but a retry costs only the reads again.</li> <li><strong>Validation is what makes the read correct.</strong> Two writers storing continuously and three readers: 3 million validated reads took 2.2 million retries and returned <strong>no torn pair</strong>; the same reads without validation returned <strong>4 969 369 torn pairs out of 5 million</strong> (99%, helped by the spin the writer inserts between its two stores). A missing validation is not a rare bug here; in production it is rare because the window is nanoseconds wide, which is why a test must widen it.</li> <li><strong>Miri finds the early free on 2 of 24 seeds, and none for the epoch version.</strong> Miri chooses thread interleavings by a seeded scheduler; one seed does not prove absence, 24 give a sample. The error is at the read of <code>head.next</code> after another thread freed <code>head</code>.</li> </ul>
+
+<aside data-call="note"><b>What the mutants showed</b><p>18 mutants were run against the ordinary tests (not Miri): an arena that does not align; one that hands out a byte past a chunk; a reset that does not rewind; a copied slice one element short; an allocation counter that forgets; chunks never larger than the standard size; garbage freed in its own epoch, one epoch early, or by an epoch that advances past pinned threads; a pushed node not linked to the old head; a popped node never retired; validation that always succeeds; an upgrade that succeeds after losing the race; an unlock that does not publish a new version; readers that ignore the lock bit; an obsolete flag that is not set; a leaf insert that shifts the wrong way; a lookup that reports a hit whenever the position is in range. <strong>All 18 were killed</strong>, three of them by the test process crashing (use after free, wild writes), which is what a lock-free bug looks like when it is caught at all. One survived at first: the off-by-one that hands out the byte after a chunk corrupts the heap silently. A test that fills a chunk exactly and asks for the next byte kills it, and Miri would have caught it on its own. Two changes are <em>not</em> detected by any outcome-based test and need Miri or a model checker: the <code>SeqCst</code> fence in <code>pin</code> and the memory orderings of the compare-and-swaps. They are where a correct-looking lock-free structure is wrong on a weaker processor.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong><code>Cell&lt;*mut u8&gt;</code> and <code>RefCell&lt;Vec&lt;…&gt;&gt;</code> for the arena's interior mutability</strong>: <code>alloc(&amp;self)</code> must hand out <code>&amp;mut T</code> from a shared reference, which is sound only because each call returns a disjoint region; the arena is <code>!Sync</code> (the cells prevent it), so one thread allocates.</li> <li><strong>Pointer arithmetic keeps provenance; integer round trips lose it.</strong> <code>base.add(pad)</code> stays a pointer into the chunk; <code>addr as *mut T</code> conjures one and Miri warns. The retired node is carried in a <code>SendPtr&lt;T&gt;</code> rather than as a <code>usize</code>.</li> <li><strong><code>Box::into_raw</code> / <code>Box::from_raw</code></strong> convert between owned boxes and raw pointers; each node is created once, retired once, and rebuilt into a <code>Box</code> exactly once to be dropped.</li> <li><strong><code>Box&lt;dyn FnOnce() + Send&gt;</code> for deferred destructors</strong> erases the node's type so one garbage list holds nodes of every type.</li> <li><strong>Lifetimes tie a guard to its handle</strong>: <code>Guard&lt;'h, 'c&gt;</code> borrows the <code>Handle&lt;'c&gt;</code> for <code>'h</code>, so a guard cannot outlive the thread's registration, and the compiler rejects <code>retire</code> after unpinning.</li> <li><strong><code>unsafe impl&lt;T: Send&gt; Send for Node&lt;T&gt;</code></strong> is the promise that a node is owned by one thread at a time, stated once with a <code>SAFETY</code> comment where the raw pointer is declared.</li> <li><strong>Atomics for the protected fields</strong> (<code>AtomicU64</code> with <code>Relaxed</code>) keep the optimistic read free of data races; <code>fence(Acquire)</code> before the second version read and <code>fence(Release)</code> after taking the lock are Boehm's seqlock rules.</li> <li><strong><code>const { AtomicU64::new(0) }</code> in an array repeat</strong> builds <code>[AtomicU64; N]</code> without <code>Copy</code>.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Arena</strong>: 20 000 random allocations of random sizes (0 to 200 bytes and some above 64 KiB) and alignments (1 to 64), each filled with a pattern; every address is aligned, and at the end every pattern is intact (no overlap, no overwrite); typed values, slices, strings, a 64-byte-aligned type, zero-sized values; a chunk filled exactly and the next byte in a new one; <code>reset</code> keeps one chunk, zeroes the counter and hands out the same memory again; <code>TypedArena</code> drops each value once on <code>clear</code> and on drop.</li> <li><strong>Epochs (deterministic)</strong>: with one thread pinned in an old epoch, nodes retired by another are not freed however many collections run; after it unpins and others retire more, the old nodes are freed; <code>flush</code> frees the rest and <code>pending</code> is zero.</li> <li><strong>Epochs (stress)</strong>: 8 threads push 20 000 values each and pop until all 160 000 are popped; every value is popped once, none twice, every value is dropped exactly once (a drop-tracking type fails on a double drop), and every node is freed.</li> <li><strong>Optimistic locks</strong>: the lock protocol (a write-locked node cannot be read, a second writer cannot enter, unlocking publishes a new version, an obsolete node always restarts readers); two writers and three readers on a <code>Pair</code>, with no validated read torn, and the unvalidated read observed torn (so that the test would notice a missing validation); three writers inserting into a <code>Leaf&lt;64&gt;</code> while three readers check that inserted keys are found, never-inserted keys are not, and every validated snapshot is strictly sorted; the final leaf equals the keys whose inserts succeeded.</li> <li><strong>Miri</strong>: every test above except the measurements, with small iteration counts, on 6 seeds (155 s); the two demonstration programs on 24 seeds.</li> <li><strong>Mutants</strong>: 18, all killed (previous note).</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Epoch-based reclamation</strong> is used by <code>crossbeam-epoch</code> (the Rust standard for lock-free structures), by the Bw-tree and its descendants, by Silo and other in-memory engines (for both indexes and MVCC garbage), and by Linux's RCU in a stronger form (a grace period instead of two epochs). <strong>Hazard pointers</strong> (Michael 2004) protect individual pointers with bounded garbage at higher per-read cost; Folly and the C++ standard (<code>std::hazard_pointer</code>, C++26) provide them.</li> <li><strong>Optimistic lock coupling</strong> is the concurrency control of the in-memory B-trees and ARTs of HyPer, Umbra and LeanStore; <strong>sequence locks</strong> are the Linux kernel's way to read a structure that is written rarely; PostgreSQL's buffer manager uses its own spinlock-in-header scheme for buffer descriptors.</li> <li><strong>Arenas</strong> are everywhere in query engines: PostgreSQL's <em>memory contexts</em> (a tree of arenas freed at the end of a query, a transaction or a function call), Arrow's memory pools, DuckDB's arena allocators for aggregates and strings, Rust's <code>bumpalo</code> and <code>typed-arena</code>, protobuf arenas.</li> <li><strong>Allocators matter</strong>: engines replace <code>malloc</code> with jemalloc, mimalloc or tcmalloc for per-thread caches and low fragmentation, and some (TigerBeetle) allocate everything at start-up and never again.</li> <li><strong>Lock-free is not wait-free and not always faster</strong>: under low contention a good mutex wins; many engines use latches with optimistic reads only on hot read paths (index internal nodes), exactly where the table above shows the gap.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Use after free by a stale reader is the lock-free bug.</strong> Any structure that frees a node while another thread may hold its address needs a reclamation scheme; "the other thread is probably done" is not one.</li> <li><strong>A pin that is announced late protects nothing.</strong> Publish the epoch, fence, and only then read shared pointers; the fence is part of the protocol, not an optimization.</li> <li><strong>A thread that stays pinned stops reclamation for everyone.</strong> A reader that blocks while pinned (on I/O, on a lock) lets garbage grow without bound; keep pinned sections short, and monitor <code>pending</code>.</li> <li><strong>Optimistic reads see states that never existed.</strong> Everything done between <code>read_lock</code> and <code>validate</code> must tolerate garbage: no dereferencing a pointer read from the node, no indexing with a value read from it unless clamped, no allocation or side effect. The binary search above clamps the count and uses only in-range indices.</li> <li><strong>Do not hand out a reference under an optimistic read.</strong> Copy the data out, validate, then use the copy.</li> <li><strong>ABA with reused addresses.</strong> Even with epochs, a structure that stores raw pointers in a CAS must not recycle nodes within the same epoch window.</li> <li><strong>Arena references outlive logic, not memory.</strong> After <code>reset</code> the compiler rejects old references (it needs <code>&amp;mut self</code>), but indices from a <code>TypedArena</code> are not checked: an <code>Id</code> kept across <code>clear</code> points at nothing or at a new value.</li> <li><strong><code>Drop</code> for arena contents is your job</strong>: <code>Arena</code> accepts only <code>Copy</code> data for a reason; a <code>Vec</code> allocated in it would leak its heap buffer.</li> </ul></aside>
+"""

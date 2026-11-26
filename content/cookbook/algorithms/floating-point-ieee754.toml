@@ -1,0 +1,69 @@
+title = "IEEE 754 in depth"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Mathematics and numerics"
+chapter_order = 7
+order = 229
+kind = "recipe"
+lede = "Bit layouts, soft-float rounding, ulps, cancellation, summation, comparison, round-trip printing."
+level = "advanced"
+code = ["examples/math_science/floating_point_ieee754.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>numeric code review</li><li>writing float tests</li><li>picking a summation algorithm</li><li>deciding when <strong>not</strong> to use floats (money)</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>tolerance-based float tests</li><li>reproducible sums in databases/analytics (Kahan/pairwise/exact)</li><li>sorting floats (total order)</li><li>serialising floats losslessly (JSON, protobuf text)</li><li>GPU/ML low-precision formats (binary16, bfloat, 8-bit floats)</li><li>compilers deciding which float optimisations are legal. Course: Goldberg</li><li>"What Every Computer Scientist Should Know About Floating-Point Arithmetic"</li><li>Kahan's notes on IEEE 754</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**What**, in order of the demo:
+
+1. Decode/encode by hand for any (exponent bits, mantissa bits) layout and check against `to_bits`/`from_bits` on random bit patterns of f64 and f32 (including subnormals, infinities, NaNs).
+2. **Soft float**: addition and multiplication built from integer arithmetic only, for any small layout, with all five rounding modes (nearest-even, nearest-away, toward zero, up, down).
+
+   The 8-bit minifloat (1-4-3) is checked **exhaustively** (all 65536 operand pairs, all modes) against an independent reference: exact f64 arithmetic (exact because operands are tiny) followed by "pick the nearest representable value" from a table of all codes. binary16 (1-5-10) is checked on random pairs.
+
+   Ties-to-even is the default because it is unbiased: ties go up and down equally often, so errors do not drift.
+3. ulp, next_up/next_down by bit twiddling (compared with std), and a monotone integer key that turns float comparison into integer comparison; ulp distance; why "relative + absolute + ulps" tolerance tests.
+4. Catastrophic cancellation: (1-cos x)/x&#94;2 and the quadratic formula, naive vs stable.
+5. FMA: exact product error `fma(a,b,-a*b)`, checked against Dekker's FMA-free two_prod; Kahan's accurate 2x2 determinant.
+6. Summation: naive, Kahan, Neumaier, pairwise, and exact (Shewchuk partials, as in Python's `math.fsum`), with the exact one verified against i128 integer arithmetic and the others ranked by measured error.
+7. Comparison pitfalls: NaN != NaN, `total_cmp`, signed zero, `min`/`max` with NaN, floats as hash keys.
+8. Shortest round-trip printing (Rust's `{}`/`{:?}`): parse(print(x)) == x for random bit patterns and no shorter digit string round-trips; why 0.1 + 0.2 != 0.3; why money should use integers (see `decimal_fixed_point_money`).
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+a double is a 53-bit significand scaled by a power of two. Every rounding error is "half an ulp", errors accumulate predictably, and almost every surprise (0.1+0.2, NaN keys, non-associative sums) follows from that.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://docs.oracle.com/cd/E19957-01/806-3568/ncg_goldberg.html> (Goldberg) and <https://en.wikipedia.org/wiki/IEEE_754> and <https://en.wikipedia.org/wiki/Kahan_summation_algorithm> and <https://www.h-schmidt.net/FloatConverter/IEEE754.html> (Shewchuk's "Adaptive Precision Floating-Point Arithmetic" cited by title only, not read)
+"""
+
+[[sources]]
+title = "docs.oracle.com/cd/E19957-01/806-3568/ncg_goldberg.html"
+url = "https://docs.oracle.com/cd/E19957-01/806-3568/ncg_goldberg.html"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/IEEE_754"
+url = "https://en.wikipedia.org/wiki/IEEE_754"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Kahan_summation_algorithm"
+url = "https://en.wikipedia.org/wiki/Kahan_summation_algorithm"
+
+[[sources]]
+title = "h-schmidt.net/FloatConverter/IEEE754.html"
+url = "https://www.h-schmidt.net/FloatConverter/IEEE754.html"

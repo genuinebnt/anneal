@@ -1,0 +1,11 @@
+// passes: strength,dce
+// x * 2 -> x + x, x + 0 -> x, x * 1 -> x, x - x -> 0, x % 1 -> 0.
+fn f(x: int) -> int {
+    let a = x * 2;
+    let b = x + 0;
+    let c = b * 1;
+    let d = x - x;
+    let e = x % 1;
+    a + c + d + e
+}
+fn main() { println(to_str(f(21))); }

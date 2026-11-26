@@ -1,0 +1,80 @@
+title = "Delta Lake style table format"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 438
+kind = "recipe"
+lede = "A transaction log over an object store with optimistic concurrency."
+level = "advanced"
+code = ["examples/database/delta_lake_transaction_log.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>lakehouse table formats</li><li>ACID tables on S3/GCS/Azure blobs</li><li>any log-structured metadata over put-if-absent storage</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Delta Lake (numbered JSON commits plus Parquet checkpoints)</li><li>Apache Iceberg (snapshot/manifest lists with atomic pointer swap)</li><li>Apache Hudi timeline</li><li>Databricks Delta</li><li>Snowflake and BigQuery managed-table metadata</li><li>LSM manifests (RocksDB <strong>manifest</strong>). Course: CMU 15-721 Advanced Database Systems (Spring)</li><li>lecture on lakehouse / table formats and cloud storage (Delta Lake paper)</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a table is a **directory** of immutable data files plus a **log** of numbered commit files `_delta_log/00000000000000000007.json`. Each commit is a list of **actions**: `Protocol` (reader/writer versions), `Metadata` (schema), `Add` (file + stats), `Remove` (file tombstone) and `CommitInfo`. The table at version v is the result of replaying commits 0..=v.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Why** it works on a dumb object store: the store offers only **put-if-absent** for new keys and an atomic sorted **listing**. Writing commit v+1 with put-if-absent is the single atomic step: exactly one writer wins each version number, so the log is a totally ordered history, and a commit becomes visible all at once.
+
+Data files are written first under unique names; a crash before the commit leaves harmless **orphans** that no snapshot references.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+**Optimistic concurrency**. A transaction plans actions against snapshot S, then tries to commit S+1. If put-if-absent fails another writer won; read the winning commits and test for **conflict**: a winner removed a file I read, a winner added a file whose stats overlap my predicate (a phantom), or both changed the schema.
+
+No conflict: **rebase** (retry at the next version number with the same actions, cheap). Conflict: re-plan against the fresh snapshot, or abort when the logic is now invalid (adding a column that already exists). Blind appends never conflict.
+
+**Checkpoints** every 10 commits store the whole state so a reader replays at most 10 commits. **Snapshot isolation**: a reader loads one version and only touches files it lists, so concurrent commits are invisible to it; **time travel** is the same with an older version.
+
+**Data skipping** uses per-file min/max/null stats in the Add action; a file lacking a column (written before **add column**) reads as all **null** and can be skipped for a range filter. **Optimize** rewrites small files into one (a Remove set plus one Add, no data change).
+
+**Vacuum** deletes files that are unreferenced **and** older than a **retention** period, measured from the file's removal time; the retention is what keeps long-running readers and in-flight writers safe.
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+8 writer threads (appends, range updates, optimize) with 2 concurrent reader threads; no lost commits (contiguous versions, count of successes = commit files); the final table equals applying the committed operations in version order (serial equivalence); every snapshot a reader saw matches the model at that version;
+
+Checkpoint replay equals full replay at sampled versions; crash injection leaves invisible orphans that **vacuum** removes while young in-flight files survive; a reader inside the retention window survives vacuum; schema evolution backfills **null**, rejects incompatible changes and resolves racing **add** COLUMNs.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Delta Lake: High-Performance ACID Table Storage over Cloud Object Stores <https://www.vldb.org/pvldb/vol13/p3411-armbrust.pdf> Delta Lake transaction log protocol <https://github.com/delta-io/delta/blob/master/PROTOCOL.md>
+
+```text
+CMU 15-721 course schedule https://15721.courses.cs.cmu.edu/spring2024/
+```
+"""
+
+[[sources]]
+title = "vldb.org/pvldb/vol13/p3411-armbrust.pdf"
+url = "https://www.vldb.org/pvldb/vol13/p3411-armbrust.pdf"
+
+[[sources]]
+title = "github.com/delta-io/delta/blob/master/PROTOCOL.md"
+url = "https://github.com/delta-io/delta/blob/master/PROTOCOL.md"
+
+[[sources]]
+title = "15721.courses.cs.cmu.edu/spring2024"
+url = "https://15721.courses.cs.cmu.edu/spring2024/"

@@ -1,0 +1,7 @@
+fn main() {
+    let mut x = 1;
+    while true {
+        x *= 10;
+        println(to_str(x));
+    }
+}

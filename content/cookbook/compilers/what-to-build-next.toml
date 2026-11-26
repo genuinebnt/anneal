@@ -1,0 +1,15 @@
+title = "What to build next"
+module = "Appendices"
+module_order = 15
+chapter = "Courses, reading and glossary"
+chapter_order = 1
+order = 697
+kind = "guide"
+lede = "A suggested order. Each project reuses the lexer, test runner and slice discipline from Parts I and II, and each one leads into one or two of the sections below."
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<ol class="cb-g-steps"> <li><b>Resilient front end and tooling</b><p>Rebuild the rlox parser to produce a lossless tree with error nodes, then build a highlighter, formatter, LSP server and debugger on top of it. Covered in <a href="/cookbook/p/recoverable-parsing-and-advanced-compiler-theory">Parsing and theory</a> and <a href="/cookbook/p/tooling-around-a-new-language">Tooling</a>.</p></li> <li><b>Typed Lox</b><p>Add enums, <code>match</code>, and Hindley–Milner inference. Covered in <a href="/cookbook/p/language-features-from-rust">Rust features</a>.</p></li> <li><b>An IR and optimizer</b><p>Lower typed Lox to an SSA IR, then write constant folding, DCE and GVN against it. Covered in <a href="/cookbook/p/backends-hir-mir-llvm-and-cranelift">Backends</a> and <a href="/cookbook/p/graph-algorithms-gc-and-life-without-gc">Graphs</a>.</p></li> <li><b>Native code</b><p>Emit Wasm first, then Cranelift IR, running the same golden files. Covered in <a href="/cookbook/p/backends-hir-mir-llvm-and-cranelift">Backends</a>.</p></li> <li><b>Mini SQL engine</b><p>SQL over CSV: parser, logical plan, rewrite rules, Volcano executor, tested with sqllogictest. Covered in <a href="/cookbook/p/dsls-and-sql-parsing">DSLs and SQL</a>.</p></li> <li><b>Faster runtime</b><p>A generational or incremental GC for clox, inline caches, parallel marking, and SIMD in the lexer. Covered in <a href="/cookbook/p/graph-algorithms-gc-and-life-without-gc">Memory</a> and <a href="/cookbook/p/performance-data-layout-simd-threads-and-lock-free-structure">Performance</a>.</p></li> </ol>
+"""

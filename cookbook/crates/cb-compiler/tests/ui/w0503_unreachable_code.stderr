@@ -1,0 +1,9 @@
+warning[W0503]: unreachable statement
+ --> w0503_unreachable_code.peb:3:5
+  |
+2 |     return 1;
+  |     -------- any code following this expression is unreachable
+3 |     println("never");
+  |     ^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: 1 warning emitted

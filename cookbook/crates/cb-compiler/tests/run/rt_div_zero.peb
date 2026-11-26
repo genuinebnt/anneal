@@ -1,0 +1,6 @@
+fn div(a: int, b: int) -> int { a / b }
+fn main() {
+    println("before");
+    println(to_str(div(10, 0)));
+    println("after");
+}

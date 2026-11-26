@@ -1,0 +1,9 @@
+error[E0308]: no method named `lenght` found
+ --> e0308_unknown_method.peb:3:23
+  |
+3 |     println(to_str(xs.lenght()));
+  |                       ^^^^^^ unknown method
+  |
+  = note: methods are sugar for built-ins: len, push, pop, to_str, chars
+
+error: aborting due to 1 previous error

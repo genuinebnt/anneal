@@ -1,0 +1,66 @@
+title = "A mini loom"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Methods: concurrency testing"
+chapter_order = 4
+order = 144
+kind = "recipe"
+lede = "Exhaustive interleaving exploration with sleep sets and a store-buffer (TSO) memory model."
+level = "advanced"
+code = ["examples/concurrency/model_checker_for_concurrent_code.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+**Proving** small lock/queue/counter designs correct (or finding the exact interleaving that breaks them), understanding what loom/shuttle/CHESS/TLA+ do.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li><code>loom</code> (tokio, crossbeam, parking_lot test their atomics with it)</li><li><code>shuttle</code> (AWS, randomised scheduling)</li><li>Microsoft <strong>chess</strong></li><li>CDSChecker/GenMC for C11 atomics</li><li>TLA+/TLC and Jepsen-style reasoning at the protocol level. Course: Godefroid</li><li>"Partial-Order Methods for the Verification of Concurrent Systems" (sleep sets)</li><li>Flanagan &amp; Godefroid</li><li>"Dynamic Partial-Order Reduction" (POPL 2005)</li><li>Sewell et al</li><li>"x86-TSO" (CACM 2010)</li></ul>
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+stress tests only sample interleavings; a bug that needs 4 specific preemptions can survive a billion runs. A model checker turns "I ran it a lot" into "I tried **every** schedule up to the bound". It works because each thread is a tiny program of **atomic steps** and the checker owns the scheduler.
+
+**The model**
+
+- Threads run a mini instruction set (`Ins`): Load/Store, indexed Load/Store (for linked structures), Xchg and Cas (atomic RMW), ALU, jumps, `CsEnter`/`CsExit` (critical-section marker: two threads inside at once = **violation**), `Fence`. One instruction = one scheduling point.
+- **Memory modes**. `SC` (sequential consistency): a store hits memory immediately. `TSO` (x86-like store buffer): a store goes into the thread's FIFO buffer, loads read the newest own buffered value first, and the scheduler may **flush** the oldest buffered store at any time as a separate action.
+
+   `Xchg`, `Cas` and `Fence` are enabled only on an empty buffer (they drain it, like a locked x86 instruction). This is enough to reproduce the store-buffering litmus test, and to show why Peterson's lock needs a fence on real hardware.
+- The checker explores **all** schedules depth-first. Spin loops would make schedules infinite, so each thread may take at most `LOOP_BOUND` backward jumps; longer executions are counted as `pruned` (a **bounded** proof: "no violation within the bound", say so honestly).
+
+   **Partial-order reduction** (sleep sets): if two actions are **independent** (different threads, no read/write or write/write overlap on a variable) then doing a-then-b and b-then-a reach the same state, so exploring both is redundant.
+
+   After exploring action `a` from a state, `a` is put to sleep in the sibling branches: it need not be tried again until something **dependent** on it runs. This keeps every reachable state and verdict but cuts redundant schedules, often by orders of magnitude.
+
+   We check soundness **empirically**: the set of final states and the violation verdict are identical with and without reduction, on every program here.
+
+   (DPOR, as in loom, computes the dependencies lazily at run time and prunes more; sleep sets are the simple static cousin.) **counterexamples**: a breadth-first search over distinct states finds the **shortest** violating schedule and prints it as a readable trace.
+
+   **Programs**: a correct **tas** spinlock (proved in SC and TSO), a broken load-then-store lock (bug found), Peterson's lock (proved under SC, **fails** under TSO, proved again with a fence: the famous result), a lost-update counter (bug found) vs a CAS-loop counter (proved), and a lock-free stack pop with **aba** (bug found with plain pointers, proved with a tagged head).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://github.com/tokio-rs/loom> and <https://docs.rs/shuttle/latest/shuttle/> and <https://www.cl.cam.ac.uk/~pes20/weakmemory/cacm.pdf> (x86-TSO, Owens, Sarkar, Sewell)
+
+Flanagan &amp; Godefroid, "Dynamic Partial-Order Reduction for Model Checking Software" (POPL 2005, title only)
+"""
+
+[[sources]]
+title = "github.com/tokio-rs/loom"
+url = "https://github.com/tokio-rs/loom"
+
+[[sources]]
+title = "docs.rs/shuttle/latest/shuttle"
+url = "https://docs.rs/shuttle/latest/shuttle/"
+
+[[sources]]
+title = "cl.cam.ac.uk/~pes20/weakmemory/cacm.pdf"
+url = "https://www.cl.cam.ac.uk/~pes20/weakmemory/cacm.pdf"

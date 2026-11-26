@@ -1,0 +1,68 @@
+title = "Write and read images without crates"
+module = "Complete projects"
+module_order = 13
+chapter = "Graphics"
+chapter_order = 2
+order = 666
+kind = "recipe"
+lede = "PPM (P6) and a minimal PNG encoder + decoder, sRGB, ASCII preview"
+level = "intermediate"
+code = ["examples/graphics/png_ppm_writer.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>renderers and simulators that must dump pictures</li><li>dataset generation</li><li>debugging pixel buffers</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+PPM P6 is `P6\\nW H\\n255\\n` + raw RGB bytes: the simplest image format. PNG is a signature, then chunks [length u32 BE][type 4 bytes][data][CRC-32 of type+data]. We write IHDR, IDAT, IEND.
+
+The IDAT payload is a ZLIB stream: 2 header bytes (0x78 0x01), **deflate** blocks, then the Adler-32 of the uncompressed data (big endian).
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+knowing the byte layout lets you emit pictures from any program, and a decoder for the same subset proves the encoder correct by round trip (including CRC and Adler checks) instead of "it opens in a viewer".
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+scanline = [filter type byte] + row bytes. Filters: 0 None, 1 Sub (x - left), 2 Up (x - above), 3 Average (x - floor((left+above)/2)), 4 Paeth (x - predictor(left, above, upper-left) choosing the closest to left+above-upleft). Undoing them is the same arithmetic modulo 256 in the reverse direction.
+
+**Deflate stored** block: 1 byte (BFINAL bit &#124; BTYPE=00 &lt;&lt; 1), LEN u16 LE, NLEN = !LEN u16 LE, then LEN raw bytes (&lt;= 65535).
+
+**Deflate FIXED-HUFFMAN** block: BTYPE=01; literals 0-143 use 8-bit codes 00110000+n, 144-255 use 9-bit codes, end-of-block (256) is the 7-bit code 0; length/distance pairs (LZ77 matches, length 3..258, distance 1..32768) use tables plus extra bits. Huffman codes are packed MSB-first into an LSB-first bit stream; extra bits are LSB-first.
+
+CRC-32: reflected polynomial 0xEDB88320, init 0xFFFFFFFF, final xor. Adler-32: a = 1 + sum(bytes), b = sum(a) (mod 65521),
+
+```text
+result = b << 16 | a.
+```
+
+sRGB: encode(c) = 12.92 c if c &lt;= 0.0031308 else 1.055 c&#94;(1/2.4) - 0.055. Linear 0.5 -> 0.7354 -> 188/255.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>ray/path tracers and simulators dumping frames</li><li>ML data generation (synthetic images)</li><li>game tools</li><li>test fixtures</li><li>PPM is also popular as a zero-dependency debug output</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://raytracing.github.io/> and <https://www.pbr-book.org/>
+"""
+
+[[sources]]
+title = "raytracing.github.io"
+url = "https://raytracing.github.io/"
+
+[[sources]]
+title = "pbr-book.org"
+url = "https://www.pbr-book.org/"

@@ -1,0 +1,386 @@
+title = "The time-series engine"
+module = "Databases"
+module_order = 8
+chapter = "Building complete engines"
+chapter_order = 9
+order = 451
+kind = "guide"
+lede = "Series identified by tag sets · samples as keys · tag postings · out-of-order writes · bucketed aggregation grouped by tags · rollups with a watermark that late data pulls back · retention · 1 000 000 samples"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>A time-series table is a key layout plus an index.</strong> Samples are keys <code>series | timestamp</code> (<a href="/cookbook/p/one-key-space">M1</a>), so a series' time range is a range scan, a write at any timestamp (late, duplicated, out of order) is an ordinary put, and a later write at the same timestamp replaces the earlier. Everything the earlier parts say about compression and chunking (<a href="/cookbook/p/time-series-databases">S1</a>) applies to how those keys are stored below; this section is about the model above them.</li> <li><strong>The series is the unit of cardinality.</strong> A series is one combination of tags (<code>host=web-1, metric=cpu</code>). Its id here is a hash of the canonical tag string, so writers need no shared counter and no coordination; a collision is detected by comparing the stored tag string. Cardinality, the number of distinct tag combinations, is what limits time-series databases; the number of <em>samples</em> is easy by comparison.</li> <li><strong>Tags are indexed by posting lists.</strong> For every <code>(tag, value)</code> there is a sorted list of the series that have it, stored as keys <code>(tag, value, series id)</code>. A query's matchers become set operations: equality and <code>in</code> are lists (a union for <code>in</code>), existence is the union over all values, several matchers intersect, and negation subtracts (<code>dc != "eu"</code> also matches series with no <code>dc</code> tag, the Prometheus rule). Starting from the smallest list keeps the work proportional to the answer.</li> <li><strong>A query is selection, scan, bucket, group.</strong> Select series by matchers, scan <code>[from, to)</code> of each, assign each sample to a bucket (<code>ts − ts mod step</code>, with floor semantics for negative times), combine per bucket with a mergeable state (count, sum, min, max, latest), and merge series that fall in the same group (the <code>group_by</code> tags). <code>avg</code> is sum over count across the whole group, not an average of averages.</li> <li><strong>Rollups trade space for speed.</strong> A rollup stores, for each series and each fixed-width bucket, the state needed to answer coarser queries; a query whose step is a multiple of the rollup width reads rollup entries instead of raw samples. The hazard is staleness: a late sample landing in an already rolled-up bucket would be missed. A per-series <strong>watermark</strong> says "buckets before this are rolled up"; a late write pulls the watermark back to the start of its bucket, so queries read raw samples again exactly where the rollup might be wrong, and the next roll-up recomputes from there. Retention does the same: deleting old samples invalidates the rollups it touches.</li> <li><strong>Retention is a delete.</strong> In an MVCC key space deleting a sample writes a tombstone, which costs about a write (<a href="/cookbook/p/transactions-on-the-key-space">M2</a>); engines with time-partitioned files drop a whole partition instead. The tombstone version is garbage-collected later.</li> </ul>
+"""
+
+[[sections]]
+heading = "The pieces"
+body = """
+<ul> <li><strong>Keys</strong>: samples <code>series_key(id, ts)</code> → 8-byte float; registry <code>id → canonical tags</code>; postings <code>(tag, value, id)</code>; rollups <code>(id, bucket)</code> → <code>(count, sum, min, max, last ts, last value)</code>; watermark per series.</li> <li><strong><code>write</code></strong> registers a new series and its postings the first time, puts the sample, and pulls the watermark back for a late sample.</li> <li><strong><code>select</code></strong> evaluates matchers into a set of series ids.</li> <li><strong><code>query</code></strong> takes <code>from</code>, <code>to</code>, <code>step</code>, an aggregate and <code>group_by</code> tags, and a flag for rollups; it returns <code>group → bucket → value</code> and statistics (samples read, rollup buckets read, posting entries).</li> <li><strong><code>roll_up(upto)</code></strong> computes the rollup of every complete bucket below <code>upto</code> for every series (idempotent) and advances watermarks; <strong><code>delete_before(cutoff)</code></strong> removes old samples and invalidates rollups.</li> </ul>
+
+:::deeper Reference: series identity, posting lists, bucketed grouped aggregation, rollups with watermarks, retention
+```rust title="src/multimodel/tsdb.rs"
+//! A time-series table on the shared key space. A series is identified by its tag set (the id is a hash of the canonical form, so writers
+//! need no shared counter); samples are keys `series | timestamp`, so out-of-order and duplicate writes are ordinary puts; tags are
+//! indexed by *posting lists* stored as keys; queries select series by tag matchers, scan a time range, bucket and aggregate, and group by
+//! tags. Rollups (per-bucket count, sum, min, max) answer coarse queries, with a per-series watermark that late writes pull back so that a
+//! rollup is never trusted past the data it covers.
+use crate::mmkey::{decode_tuple, key, prefix_end, series_key, Val};
+use crate::mmtxn::{Db, Txn};
+use std::collections::{BTreeMap, BTreeSet};
+
+pub type Tags = BTreeMap<String, String>;
+pub type SeriesId = u64;
+
+const REGISTRY: u8 = 0x44;
+const POSTING: u8 = 0x43;
+const ROLLUP: u8 = 0x41;
+const WATERMARK: u8 = 0x45;
+
+fn fnv64(s: &str) -> u64 {
+    let mut h = 0xcbf29ce484222325u64;
+    for b in s.bytes() {
+        h = (h ^ b as u64).wrapping_mul(0x100000001b3);
+    }
+    h
+}
+pub fn canonical(tags: &Tags) -> String {
+    tags.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(",")
+}
+pub fn series_id(tags: &Tags) -> SeriesId {
+    fnv64(&canonical(tags))
+}
+fn registry_key(id: SeriesId) -> Vec<u8> {
+    let mut k = vec![REGISTRY];
+    k.extend(key(&[Val::Int(id as i64)]));
+    k
+}
+fn posting_key(tk: &str, tv: &str, id: SeriesId) -> Vec<u8> {
+    let mut k = vec![POSTING];
+    k.extend(key(&[Val::Text(tk.into()), Val::Text(tv.into()), Val::Int(id as i64)]));
+    k
+}
+fn posting_prefix(tk: &str, tv: Option<&str>) -> Vec<u8> {
+    let mut k = vec![POSTING];
+    match tv {
+        Some(v) => k.extend(key(&[Val::Text(tk.into()), Val::Text(v.into())])),
+        None => k.extend(key(&[Val::Text(tk.into())])),
+    }
+    k
+}
+fn rollup_key(id: SeriesId, bucket: i64) -> Vec<u8> {
+    let mut k = vec![ROLLUP];
+    k.extend(key(&[Val::Int(id as i64), Val::Int(bucket)]));
+    k
+}
+fn watermark_key(id: SeriesId) -> Vec<u8> {
+    let mut k = vec![WATERMARK];
+    k.extend(key(&[Val::Int(id as i64)]));
+    k
+}
+fn bucket_of(ts: i64, step: i64) -> i64 {
+    ts - ts.rem_euclid(step)
+}
+fn f64_bytes(v: f64) -> Vec<u8> {
+    v.to_le_bytes().to_vec()
+}
+fn bytes_f64(b: &[u8]) -> f64 {
+    f64::from_le_bytes(b.try_into().unwrap())
+}
+
+#[derive(Clone, Debug)]
+pub enum Matcher {
+    Eq(String, String),
+    Ne(String, String),
+    In(String, Vec<String>),
+    Exists(String),
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Agg {
+    Count,
+    Sum,
+    Min,
+    Max,
+    Avg,
+    Last,
+}
+#[derive(Clone, Debug)]
+pub struct Query {
+    pub matchers: Vec<Matcher>,
+    pub from: i64,
+    pub to: i64,
+    pub step: i64,
+    pub agg: Agg,
+    pub group_by: Vec<String>,
+}
+pub type Result_ = BTreeMap<Vec<String>, BTreeMap<i64, f64>>;
+
+#[derive(Default, Debug, Clone)]
+pub struct QueryStats {
+    pub series_matched: usize,
+    pub samples_read: usize,
+    pub rollup_buckets: usize,
+    pub posting_entries: usize,
+}
+
+/// Mergeable per-bucket state.
+#[derive(Clone, Copy, Debug)]
+struct Acc {
+    count: f64,
+    sum: f64,
+    min: f64,
+    max: f64,
+    last: (i64, SeriesId, f64),
+}
+impl Acc {
+    fn new() -> Acc {
+        Acc { count: 0.0, sum: 0.0, min: f64::INFINITY, max: f64::NEG_INFINITY, last: (i64::MIN, 0, 0.0) }
+    }
+    fn add(&mut self, ts: i64, id: SeriesId, v: f64) {
+        self.count += 1.0;
+        self.sum += v;
+        self.min = self.min.min(v);
+        self.max = self.max.max(v);
+        if (ts, id) > (self.last.0, self.last.1) {
+            self.last = (ts, id, v);
+        }
+    }
+    fn merge(&mut self, o: &Acc) {
+        self.count += o.count;
+        self.sum += o.sum;
+        self.min = self.min.min(o.min);
+        self.max = self.max.max(o.max);
+        if (o.last.0, o.last.1) > (self.last.0, self.last.1) {
+            self.last = o.last;
+        }
+    }
+    fn value(&self, a: Agg) -> f64 {
+        match a {
+            Agg::Count => self.count,
+            Agg::Sum => self.sum,
+            Agg::Min => self.min,
+            Agg::Max => self.max,
+            Agg::Avg => self.sum / self.count,
+            Agg::Last => self.last.2,
+        }
+    }
+}
+
+pub struct Tsdb {
+    /// Width of the rollup buckets; 0 disables rollups.
+    pub rollup: i64,
+}
+
+impl Tsdb {
+    pub fn new(rollup: i64) -> Tsdb {
+        Tsdb { rollup }
+    }
+
+    /// Write one sample, registering the series and its tag postings the first time it is seen. A second write at the same timestamp
+    /// replaces the first. A write behind the series' rollup watermark pulls the watermark back to the start of its bucket.
+    pub fn write(&self, db: &Db, t: &mut Txn, tags: &Tags, ts: i64, v: f64) -> SeriesId {
+        let id = series_id(tags);
+        let rk = registry_key(id);
+        match db.get(t, &rk) {
+            Some(existing) => assert_eq!(existing, canonical(tags).into_bytes(), "series id collision"),
+            None => {
+                db.put(t, &rk, canonical(tags).as_bytes());
+                for (k, val) in tags {
+                    db.put(t, &posting_key(k, val, id), &[]);
+                }
+            }
+        }
+        db.put(t, &series_key(id, ts), &f64_bytes(v));
+        if self.rollup > 0 {
+            if let Some(w) = db.get(t, &watermark_key(id)) {
+                let w = i64::from_le_bytes(w.try_into().unwrap());
+                if ts < w {
+                    db.put(t, &watermark_key(id), &bucket_of(ts, self.rollup).to_le_bytes());
+                }
+            }
+        }
+        id
+    }
+
+    pub fn tags_of(&self, db: &Db, t: &mut Txn, id: SeriesId) -> Option<Tags> {
+        let b = db.get(t, &registry_key(id))?;
+        Some(String::from_utf8(b).unwrap().split(',').filter(|s| !s.is_empty()).map(|kv| { let (k, v) = kv.split_once('=').unwrap(); (k.to_string(), v.to_string()) }).collect())
+    }
+
+    fn posting(&self, db: &Db, t: &mut Txn, tk: &str, tv: Option<&str>, st: &mut QueryStats) -> BTreeSet<SeriesId> {
+        let p = posting_prefix(tk, tv);
+        let entries = db.scan(t, &p, &prefix_end(&p).unwrap());
+        st.posting_entries += entries.len();
+        entries.into_iter().map(|(k, _)| match decode_tuple(&k[1..], &[]).unwrap().last() { Some(Val::Int(i)) => *i as u64, o => panic!("{o:?}") }).collect()
+    }
+    fn all_series(&self, db: &Db, t: &mut Txn) -> BTreeSet<SeriesId> {
+        let p = vec![REGISTRY];
+        db.scan(t, &p, &prefix_end(&p).unwrap()).into_iter().map(|(k, _)| match &decode_tuple(&k[1..], &[]).unwrap()[0] { Val::Int(i) => *i as u64, o => panic!("{o:?}") }).collect()
+    }
+    /// Series ids satisfying every matcher: intersect the posting lists of the positive matchers, then subtract the negative ones.
+    pub fn select(&self, db: &Db, t: &mut Txn, ms: &[Matcher], st: &mut QueryStats) -> BTreeSet<SeriesId> {
+        let mut cur: Option<BTreeSet<SeriesId>> = None;
+        let mut negatives = vec![];
+        for m in ms {
+            let set = match m {
+                Matcher::Eq(k, v) => self.posting(db, t, k, Some(v), st),
+                Matcher::In(k, vs) => vs.iter().flat_map(|v| self.posting(db, t, k, Some(v), st)).collect(),
+                Matcher::Exists(k) => self.posting(db, t, k, None, st),
+                Matcher::Ne(k, v) => { negatives.push((k, v)); continue; }
+            };
+            cur = Some(match cur { None => set, Some(c) => c.intersection(&set).copied().collect() });
+        }
+        let mut cur = cur.unwrap_or_else(|| self.all_series(db, t));
+        for (k, v) in negatives {
+            for id in self.posting(db, t, k, Some(v), st) {
+                cur.remove(&id);
+            }
+        }
+        cur
+    }
+
+    /// Run a range query. Buckets are `step` wide, aligned to multiples of `step`; the result maps each group (the values of the
+    /// `group_by` tags) to its bucket → aggregate series.
+    pub fn query(&self, db: &Db, t: &mut Txn, q: &Query, use_rollups: bool) -> (Result_, QueryStats) {
+        let mut st = QueryStats::default();
+        let ids = self.select(db, t, &q.matchers, &mut st);
+        st.series_matched = ids.len();
+        let mut groups: BTreeMap<Vec<String>, BTreeMap<i64, Acc>> = BTreeMap::new();
+        for id in ids {
+            let tags = self.tags_of(db, t, id).unwrap();
+            let g: Vec<String> = q.group_by.iter().map(|k| tags.get(k).cloned().unwrap_or_default()).collect();
+            let acc = groups.entry(g).or_default();
+            // buckets entirely below the watermark and aligned to the rollup width come from the rollup; the rest from raw samples
+            let mut raw_from = q.from;
+            if use_rollups && self.rollup > 0 && q.step % self.rollup == 0 {
+                if let Some(w) = db.get(t, &watermark_key(id)) {
+                    let w = i64::from_le_bytes(w.try_into().unwrap());
+                    let first = bucket_of(q.from, q.step) + if q.from % q.step == 0 { 0 } else { q.step };
+                    let mut b = first;
+                    // rollup buckets are used per query bucket, only for query buckets fully inside [from, min(to, watermark))
+                    while b + q.step <= q.to.min(w) {
+                        let mut sum = Acc::new();
+                        let mut r = b;
+                        while r < b + q.step {
+                            if let Some(v) = db.get(t, &rollup_key(id, r)) {
+                                st.rollup_buckets += 1;
+                                let f: Vec<f64> = v.chunks_exact(8).map(bytes_f64).collect();
+                                let mut part = Acc::new();
+                                part.count = f[0]; part.sum = f[1]; part.min = f[2]; part.max = f[3]; part.last = (f[4] as i64, id, f[5]);
+                                if part.count > 0.0 { sum.merge(&part); }
+                            }
+                            r += self.rollup;
+                        }
+                        if sum.count > 0.0 { acc.entry(b).or_insert_with(Acc::new).merge(&sum); }
+                        b += q.step;
+                    }
+                    // raw samples before `first` and from `b` on
+                    if b > first {
+                        self.scan_raw(db, t, id, q.from, first, q.step, acc, &mut st);
+                        raw_from = b;
+                    }
+                }
+            }
+            self.scan_raw(db, t, id, raw_from, q.to, q.step, acc, &mut st);
+        }
+        let out = groups.into_iter().filter(|(_, b)| !b.is_empty()).map(|(g, b)| (g, b.into_iter().map(|(k, a)| (k, a.value(q.agg))).collect())).collect();
+        (out, st)
+    }
+    fn scan_raw(&self, db: &Db, t: &mut Txn, id: SeriesId, from: i64, to: i64, step: i64, acc: &mut BTreeMap<i64, Acc>, st: &mut QueryStats) {
+        if from >= to {
+            return;
+        }
+        for (k, v) in db.scan(t, &series_key(id, from), &series_key(id, to)) {
+            let ts = match &decode_tuple(&k[9..], &[]).unwrap()[0] { Val::Int(i) => *i, o => panic!("{o:?}") };
+            st.samples_read += 1;
+            acc.entry(bucket_of(ts, step)).or_insert_with(Acc::new).add(ts, id, bytes_f64(&v));
+        }
+    }
+
+    /// Compute rollups for every complete bucket of every series below `upto` and advance the watermarks. Idempotent.
+    pub fn roll_up(&self, db: &Db, t: &mut Txn, upto: i64) -> usize {
+        assert!(self.rollup > 0);
+        let mut written = 0;
+        for id in self.all_series(db, t) {
+            let from = db.get(t, &watermark_key(id)).map_or(i64::MIN / 2, |w| i64::from_le_bytes(w.try_into().unwrap()));
+            let to = bucket_of(upto, self.rollup);
+            if to <= from {
+                continue;
+            }
+            let mut buckets: BTreeMap<i64, Acc> = BTreeMap::new();
+            self.scan_raw(db, t, id, from, to, self.rollup, &mut buckets, &mut QueryStats::default());
+            // drop stale rollup entries of buckets that have lost all their samples, then write the current ones
+            let mut b = bucket_of(from.max(i64::MIN / 4), self.rollup);
+            let _ = &mut b;
+            for (b, a) in &buckets {
+                let mut v = vec![];
+                for x in [a.count, a.sum, a.min, a.max, a.last.0 as f64, a.last.2] { v.extend(f64_bytes(x)); }
+                db.put(t, &rollup_key(id, *b), &v);
+                written += 1;
+            }
+            db.put(t, &watermark_key(id), &to.to_le_bytes());
+        }
+        written
+    }
+
+    /// Delete every sample older than `cutoff` (and the rollups below it). Returns the number of samples removed.
+    pub fn delete_before(&self, db: &Db, t: &mut Txn, cutoff: i64) -> usize {
+        let mut n = 0;
+        for id in self.all_series(db, t) {
+            for (k, _) in db.scan(t, &series_key(id, i64::MIN / 2), &series_key(id, cutoff)) {
+                db.delete(t, &k);
+                n += 1;
+            }
+            if self.rollup > 0 {
+                // buckets below the cutoff lost their samples and the bucket holding it is partial: every rollup of the series is stale.
+                // Forget them all; the watermark moves back to the cutoff's bucket so that the next roll-up recomputes from there.
+                let from = bucket_of(cutoff, self.rollup);
+                for (k, _) in db.scan(t, &rollup_key(id, i64::MIN / 2), &rollup_key(id, i64::MAX / 2)) {
+                    db.delete(t, &k);
+                }
+                if let Some(w) = db.get(t, &watermark_key(id)) {
+                    if i64::from_le_bytes(w.try_into().unwrap()) > from {
+                        db.put(t, &watermark_key(id), &from.to_le_bytes());
+                    }
+                }
+            }
+        }
+        n
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>1 000 series (200 hosts × 5 metrics) with 1 000 samples each at 10-second intervals, 2.8 hours, 1 000 000 samples in all.</p>
+
+```text title="ingest, roll-up, queries raw and with rollups, tag selection, and retention"
+1000 series (200 hosts x 5 metrics), 1000000 samples at 10 s intervals (2.8 hours): ingested in 2.2 s (458048 samples/s, 100 per transaction batch of 1000 series)
+roll-up of 1-minute buckets: 166000 rollup entries in 1.1 s
+query                                                            series   raw (ms)    samples rollup (ms)    samples
+one series, whole range, 1-minute average                             1          1       1000          0          4  (rollup buckets read: 166)
+metric = cpu, 10-minute max per dc                                  200        178     200000         29       8000  (rollup buckets read: 32000)
+everything, 1-hour sum per metric                                  1000        888    1000000        326     280000  (rollup buckets read: 120000)
+dc != us and metric = disk, 5-minute count                          133        117     133000         16       1330  (rollup buckets read: 21945)
+selecting host = host-042 reads 5 posting entries and yields 5 series in 10 us; host != host-042 reads the registry and 5 entries and yields 995 series in 0.7 ms
+retention: deleting the older half removed 500000 samples in 1.0 s (2 us per sample: one tombstone each)
+```
+
+<ul> <li><strong>Ingest at 458 000 samples per second</strong> into the transactional key space (batches of one sample from each of 1 000 series), with series registration and posting writes amortized to the first sample of each series.</li> <li><strong>Rollups cut the work in proportion to the ratio of step to sample interval</strong>: the 10-minute maximum per datacentre reads 8 000 samples instead of 200 000 (the edges of the range) plus 32 000 rollup entries, and takes 29 ms instead of 178 (6×); the five-minute count of one metric: 117 ms to 16 ms (7×). Where the answer is one series (the first row), a millisecond becomes immeasurable. The hour-level query is only 2.7× faster because the range ends in a partial hour (280 000 samples are still read raw) and because the rollup entries themselves are 120 000 key reads.</li> <li><strong>Tag selection is a handful of reads</strong>: <code>host = host-042</code> reads 5 posting entries and finds its five series in 10 µs. Negation needs the universe: <code>host != host-042</code> reads the registry (1 000 series) and takes 0.7 ms.</li> <li><strong>Retention costs a write per sample</strong>: deleting 500 000 samples took 1.0 s (2 µs each), one tombstone per sample. Time-partitioned storage makes expiry free; this key layout trades that for uniformity.</li> <li><strong>The correctness checks are more demanding than the numbers</strong>: 14 400 random queries over 60 runs (out-of-order and duplicate writes with negative timestamps too; random roll-ups at random watermarks; random retention cutoffs; matchers of all four kinds; six aggregates; three groupings; steps that do and do not divide the rollup width) equal a brute-force model both with and without rollups; 42 586 rollup buckets were read in place of raw samples along the way.</li> </ul>
+
+<aside data-call="note"><b>The rollup invariant, and the bug it prevents</b><p>A rollup is a cache, and a cache needs an invalidation rule. The rule here is a single comparison: <em>a rollup bucket may be used only if it lies below the series' watermark, and any write below the watermark lowers it</em>. The late-write test (a sample written into bucket 30–40 after the roll-up) shows the three states: before, the whole range is served from rollups with zero raw reads; after the write, buckets below the new watermark still come from rollups while the affected bucket and those after it are read raw; after another roll-up the range is served from rollups again. The retention path needed the same care: deleting samples below a cutoff leaves the bucket that contains the cutoff partial, so all of the series' rollups are dropped and the watermark moves back. A mutant that skipped that step was caught only by the random test that mixes retention with rollup queries.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A mergeable accumulator</strong> (<code>Acc</code>: count, sum, min, max, and the latest <code>(ts, series id, value)</code>) is the whole aggregation algebra: <code>add</code> folds a sample, <code>merge</code> combines two accumulators (a rollup entry with a raw bucket, one series with another), and <code>value(agg)</code> projects. Average is derived, never stored.</li> <li><strong>Queries return <code>BTreeMap&lt;Vec&lt;String&gt;, BTreeMap&lt;i64, f64&gt;&gt;</code></strong>: group-by values in tuple order, then buckets in time order, which is what the tests compare directly.</li> <li><strong>Floor division for buckets</strong>: <code>ts − ts.rem_euclid(step)</code>; <code>ts % step</code> is wrong for negative timestamps, and a mutant that uses it is killed.</li> <li><strong>Canonical tag strings and <code>fnv64</code></strong>: tags live in a <code>BTreeMap</code> so iteration order is canonical; the hash is a few lines; the registry value is the canonical string so the collision check is a byte comparison.</li> <li><strong>Posting lists as sets</strong>: <code>BTreeSet&lt;u64&gt;</code> with <code>intersection</code>, <code>remove</code>, extension; merge-based on sorted ids, like the graph store's adjacency intersection (<a href="/cookbook/p/the-graph-store">M13</a>).</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Against a model (60 seeds × 60 steps × 4 queries)</strong>: ten tag sets over three tag keys (some series lack <code>dc</code> or <code>svc</code>); writes at random timestamps from −100 to 600 with duplicates; random roll-ups at random times; random retention; random queries with 0 to 2 matchers (equality, inequality, <code>in</code>, exists, on a key some series lack and one nobody has), random ranges (including negative starts), steps 5, 7, 10, 20, 50, 100, all six aggregates and three groupings. Each result must equal the model both from raw samples and with rollups; the number of samples deleted equals the model's.</li> <li><strong>Tag semantics</strong>: <code>dc != eu</code> matches the series with no <code>dc</code>; existence, combined existence and inequality, <code>in</code> with an unknown value, an empty matcher list selecting everything; tags round-trip through the registry.</li> <li><strong>Late data</strong>: a sample overwritten inside a rolled-up bucket changes that bucket's result at once, buckets below keep coming from rollups, and a further roll-up restores rollup-only answers.</li> <li><strong>Mutants run against these tests</strong>: postings united instead of intersected; negatives subtracting nothing; an all-negative query selecting nothing; negative timestamps bucketed toward zero; the latest-sample tie broken the other way; rollups used for steps they do not divide; queries ignoring the watermark; late writes not pulling it back; an unaligned watermark; retention leaving rollups behind; the first full query bucket miscomputed; new series without postings. <strong>All 12 were killed.</strong></li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Prometheus</strong> identifies series by label sets, indexes them with an inverted index of postings (sorted ids, intersected and subtracted exactly as above, with the same <code>!=</code> semantics), stores samples in 2-hour blocks with delta-of-delta timestamps and XOR floats (<a href="/cookbook/p/time-series-databases">S1</a>), and expires by deleting whole blocks. <strong>VictoriaMetrics, Mimir, Thanos and Cortex</strong> keep the model and shard it.</li> <li><strong>InfluxDB</strong> (TSM, then IOx on Arrow and DataFusion), <strong>TimescaleDB</strong> (hypertables of time chunks over PostgreSQL, with continuous aggregates, the rollups of this section, refreshed incrementally and with a materialization watermark for real-time views), <strong>QuestDB</strong>, <strong>ClickHouse</strong> (a MergeTree sorted by series and time, with materialized views for rollups) and <strong>Druid/Pinot</strong> (segments by time with pre-aggregation at ingest) are the main alternatives.</li> <li><strong>Late data</strong> is handled by watermarks in streaming systems too (Flink, Beam): the same idea of a boundary behind which results are final until a late event pulls it back; Timescale's continuous aggregates invalidate regions on late writes in the same way (<a href="/cookbook/p/streams-and-windows">M17</a>).</li> <li><strong>High cardinality</strong> is the production problem: millions of series make the postings and the registry the memory hog; systems cap labels, shard postings and keep per-series state small.</li> <li><strong>Downsampling</strong> with retention tiers (raw for days, 1-minute for weeks, 1-hour for years) is a standard policy built from rollups and <code>delete_before</code>.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Cardinality explosions</strong> come from putting unbounded values (user ids, URLs, request ids) into tags. Each distinct combination is a series with its own postings and registry entry.</li> <li><strong>Rollups of non-decomposable aggregates are wrong</strong>: percentiles and distinct counts cannot be combined from per-bucket values; store sketches (t-digest, HyperLogLog) instead, and say so in the schema.</li> <li><strong>Average of averages</strong>: combine counts and sums, not averages.</li> <li><strong>Alignment</strong>: buckets aligned to multiples of the step in UTC; a query whose range cuts a bucket gets partial buckets at the edges; define whether they are returned.</li> <li><strong>Time zones and daylight saving</strong> change bucket widths for day-level aggregates; do day buckets in the zone of the question, not in UTC.</li> <li><strong>Clock skew and future timestamps</strong> from bad producers poison a series' range; clamp or reject timestamps far from now.</li> <li><strong>A watermark that never advances</strong> (a roll-up job that stopped) silently turns every query into a raw scan; export the watermark lag as a metric.</li> <li><strong>Delete-heavy retention in an LSM</strong> produces tombstones that compaction must work through (<a href="/cookbook/p/a-durable-lsm-tree">M7</a>); partition by time when expiry is the norm.</li> </ul></aside>
+"""

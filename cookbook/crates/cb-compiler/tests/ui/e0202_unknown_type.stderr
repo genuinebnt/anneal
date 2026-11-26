@@ -1,0 +1,9 @@
+error[E0202]: cannot find type `itn` in this scope
+ --> e0202_unknown_type.peb:1:14
+  |
+1 | fn double(x: itn) -> int { x * 2 }
+  |              ^^^ not found
+  |
+  = help: a type with a similar name exists: `int`
+
+error: aborting due to 1 previous error

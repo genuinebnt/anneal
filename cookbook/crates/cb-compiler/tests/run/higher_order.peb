@@ -1,0 +1,29 @@
+fn map<T, U>(xs: [T], f: fn(T) -> U) -> [U] {
+    let mut out = [];
+    let mut i = 0;
+    while i < len(xs) { push(out, f(xs[i])); i += 1; }
+    out
+}
+fn filter<T>(xs: [T], p: fn(T) -> bool) -> [T] {
+    let mut out = [];
+    let mut i = 0;
+    while i < len(xs) { if p(xs[i]) { push(out, xs[i]); } i += 1; }
+    out
+}
+fn fold<T, A>(xs: [T], init: A, f: fn(A, T) -> A) -> A {
+    let mut acc = init;
+    let mut i = 0;
+    while i < len(xs) { acc = f(acc, xs[i]); i += 1; }
+    acc
+}
+fn double(x: int) -> int { x * 2 }
+fn is_even(x: int) -> bool { x % 2 == 0 }
+fn add(a: int, b: int) -> int { a + b }
+fn show(x: int) -> str { "<" + to_str(x) + ">" }
+fn main() {
+    let xs = [1, 2, 3, 4, 5, 6];
+    println(to_str(fold(map(filter(xs, is_even), double), 0, add)));
+    let strs = map(xs, show);
+    println(fold(strs, "", fn_concat));
+}
+fn fn_concat(a: str, b: str) -> str { a + b }

@@ -1,0 +1,253 @@
+title = "Toolchain"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Methods: test design and TDD"
+chapter_order = 1
+order = 139
+kind = "guide"
+lede = "Set up once, use in every stage · nextest, proptest, loom, shuttle, miri, sanitizers, criterion, sqllogictest, cargo-fuzz, tracing"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>BusTub gives you CMake, GoogleTest, AddressSanitizer and clang-tidy. The Rust equivalents are better in most respects, but you have to assemble them yourself. Set them up before stage 1. Adding a model checker after a concurrency bug has already shipped is much harder than having one from the start.</p>
+"""
+
+[[sections]]
+heading = "Install"
+body = """
+```sh title="one-time setup"
+rustup component add clippy rustfmt llvm-tools-preview miri rust-src
+rustup toolchain install nightly --component miri rust-src   # miri + sanitizers need nightly
+cargo install cargo-nextest cargo-llvm-cov cargo-fuzz flamegraph cargo-criterion \\
+              cargo-expand cargo-asm cargo-udeps cargo-deny cargo-machete
+cargo install sqllogictest-bin        # the `sqllogictest` runner binary
+brew install hyperfine                 # CLI benchmarking (macOS)
+# Linux boxes for perf work: perf, bpftrace, valgrind (cachegrind), heaptrack
+```
+"""
+
+[[sections]]
+heading = "Workspace config"
+body = """
+```rust title="Cargo.toml (workspace root)"
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]          # pin versions once, inherit with `dep.workspace = true`
+proptest = "1"
+loom = "0.7"
+shuttle = "0.8"
+criterion = { version = "0.5", features = ["html_reports"] }
+parking_lot = "0.12"
+crossbeam = "0.8"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tempfile = "3"
+rand = "0.9"
+bytes = "1"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"   # every `unsafe {}` needs a // SAFETY: comment
+cast_possible_truncation = "warn"     # page offsets: u16 <- usize truncation is a classic bug
+dbg_macro = "warn"
+
+[profile.release]
+debug = "line-tables-only"            # symbolized flame graphs without bloat
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+inherits = "release"
+
+[profile.dev.package."*"]
+opt-level = 2                          # deps optimized even in debug: tests run faster
+```
+
+<aside data-call="rust"><b>Lints as a contract</b><p><code>clippy::undocumented_unsafe_blocks</code> is the cheapest safety process there is. It makes every <code>unsafe</code> block carry a <code>// SAFETY:</code> comment stating the invariant it relies on, and code review then checks the invariant, not the code. <code>cast_possible_truncation</code> catches <code>offset as u16</code> in slot arrays. That bug corrupts pages silently once they grow past 64 KiB, or once a test uses a larger page. Each crate opts in with <code>[lints] workspace = true</code>. Reference: <a href="https://doc.rust-lang.org/cargo/reference/manifest.html#the-lints-section" target="_blank" rel="noreferrer">Cargo book, <code>[lints]</code></a>.</p></aside>
+"""
+
+[[sections]]
+heading = "Test pyramid"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Layer</th> <th>Tool</th> <th>Use it for</th> <th>Command</th> </tr> </thead> <tbody> <tr> <td>Unit</td> <td><code>#[test]</code> + <code>cargo nextest</code></td> <td>Each function's contract; each BusTub test ported</td> <td><code>cargo nextest run -p relational</code></td> </tr> <tr> <td>Property</td> <td><code>proptest</code></td> <td>Model-based testing of every data structure against a <code>std</code> model</td> <td><code>PROPTEST_CASES=10000 cargo nextest run</code></td> </tr> <tr> <td>Concurrency: exhaustive</td> <td><code>loom</code></td> <td>Latch protocols on small instances (2–3 threads, a few ops): pin count, page guard, OLC version counter</td> <td><code>RUSTFLAGS="--cfg loom" cargo test --release -p relational loom_</code></td> </tr> <tr> <td>Concurrency: randomized</td> <td><code>shuttle</code></td> <td>Bigger scenarios than loom can exhaust: B+Tree with 4 threads, lock manager</td> <td><code>cargo test shuttle_</code></td> </tr> <tr> <td>Concurrency: stress</td> <td>plain threads + <code>std::thread::scope</code></td> <td>Throughput and "does it deadlock" on real hardware</td> <td><code>cargo nextest run --release stress_</code></td> </tr> <tr> <td>UB detection</td> <td><code>miri</code></td> <td>Any module with <code>unsafe</code>: page casts, raw frame pointers, lock-free code</td> <td><code>cargo +nightly miri test -p relational storage::page</code></td> </tr> <tr> <td>Sanitizers</td> <td>ASan / TSan (nightly)</td> <td>Data races across FFI or in <code>unsafe</code> code miri can't run (threads + I/O)</td> <td><code>RUSTFLAGS=-Zsanitizer=thread cargo +nightly test -Zbuild-std --target aarch64-apple-darwin</code></td> </tr> <tr> <td>SQL end-to-end</td> <td><code>sqllogictest</code></td> <td>Executors, optimizer, the whole engine: BusTub's own <code>.slt</code> files</td> <td><code>cargo run --bin cairn-slt -- tests/sql/*.slt</code></td> </tr> <tr> <td>Fuzz</td> <td><code>cargo-fuzz</code> (libFuzzer)</td> <td>Parser, page decoders, WAL record decoder, recovery</td> <td><code>cargo +nightly fuzz run page_decode</code></td> </tr> <tr> <td>Crash</td> <td>fault-injecting <code>DiskManager</code></td> <td>Recovery: kill at every write, recover, check invariants</td> <td><code>cargo nextest run crash_</code></td> </tr> <tr> <td>Simulation</td> <td>deterministic runtime (Part VI)</td> <td>Raft, distributed transactions, the whole server</td> <td><code>cargo test sim_ -- --seed 42</code></td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Model-based property tests"
+body = """
+<p>Nearly every data structure in this guide gets tested the same way. You generate a random sequence of operations, apply each one to both your implementation and a trivially-correct model, and compare the results after every step. When proptest finds a failure, it <strong>shrinks</strong> it to a minimal sequence, which usually has three to five operations.</p>
+
+```rust title="tests/model.rs — the reusable shape"
+use proptest::prelude::*;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone)]
+enum Op { Insert(u32, u64), Remove(u32), Get(u32), Scan(u32, u32) }
+
+fn op() -> impl Strategy<Value = Op> {
+    // Keys from a small range force collisions, splits and merges.
+    let k = 0u32..512;
+    prop_oneof![
+        4 => (k.clone(), any::<u64>()).prop_map(|(k, v)| Op::Insert(k, v)),
+        2 => k.clone().prop_map(Op::Remove),
+        2 => k.clone().prop_map(Op::Get),
+        1 => (k.clone(), k).prop_map(|(a, b)| Op::Scan(a.min(b), a.max(b))),
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 512, ..ProptestConfig::default() })]
+    #[test]
+    fn btree_matches_model(ops in prop::collection::vec(op(), 1..2000)) {
+        let (bpm, _dir) = test_bpm(64);                      // small pool: forces eviction
+        let tree = BPlusTree::new(&bpm, /*leaf_max*/ 4, /*internal_max*/ 4);
+        let mut model = BTreeMap::new();
+        for op in ops {
+            match op {
+                Op::Insert(k, v) => {
+                    let fresh = !model.contains_key(&k);
+                    prop_assert_eq!(tree.insert(k, v)?, fresh);   // unique keys: dup insert is false
+                    model.entry(k).or_insert(v);
+                }
+                Op::Remove(k) => { tree.remove(k)?; model.remove(&k); }
+                Op::Get(k) => prop_assert_eq!(tree.get(k)?, model.get(&k).copied()),
+                Op::Scan(a, b) => {
+                    let got: Vec<_> = tree.range(a..=b)?.collect::<Result<_, _>>()?;
+                    let want: Vec<_> = model.range(a..=b).map(|(k, v)| (*k, *v)).collect();
+                    prop_assert_eq!(got, want);
+                }
+            }
+            tree.check_invariants()?;                          // half-full, sorted, sibling links
+        }
+    }
+}
+```
+
+<aside data-call="testing"><b>Every structure gets a <code>check_invariants()</code></b><p>Write it before <code>insert</code>. For a B+Tree it checks: keys are sorted within each node; every node except the root is at least half full; all leaves are at the same depth; each separator key bounds its children; and the leaf sibling chain visits every leaf in key order. It runs in O(n), so it only goes in tests (<code>#[cfg(any(test, feature = "invariants"))]</code>). The model test finds a divergence; the invariant check tells you <em>which</em> operation broke the structure, several steps before the output goes wrong.</p></aside>
+"""
+
+[[sections]]
+heading = "Loom for latch code"
+body = """
+<p><code>loom</code> runs a closure many times, once per possible thread interleaving (bounded, with partial-order reduction). It finds bugs that stress tests take weeks to hit. It needs its own <code>Arc</code>, <code>Mutex</code> and atomics, so route every sync primitive through one module:</p>
+
+```rust title="src/common/sync.rs"
+#[cfg(loom)]
+pub use loom::sync::{atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering}, Arc, Condvar, Mutex, RwLock};
+#[cfg(loom)]
+pub use loom::thread;
+
+#[cfg(not(loom))]
+pub use std::sync::{atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering}, Arc, Condvar, Mutex, RwLock};
+#[cfg(not(loom))]
+pub use std::thread;
+```
+
+```rust title="a loom test for the pin-count protocol"
+#[cfg(loom)]
+#[test]
+fn loom_pinned_page_is_never_evicted() {
+    loom::model(|| {
+        let bpm = Arc::new(BufferPoolManager::new(1, MemDisk::new()));   // ONE frame
+        let p0 = bpm.new_page().unwrap();
+        let p1 = bpm.new_page().unwrap();
+        let a = { let bpm = bpm.clone(); thread::spawn(move || {
+            let g = bpm.read_page(p0).unwrap();
+            assert_eq!(g.page_id(), p0);           // if the frame was stolen mid-read, this trips
+            g.data()[0]
+        })};
+        let b = { let bpm = bpm.clone(); thread::spawn(move || {
+            let _ = bpm.read_page(p1);              // may fail (no frame): that's fine
+        })};
+        a.join().unwrap();
+        b.join().unwrap();
+    });
+}
+```
+
+<aside data-call="warning"><b>Loom's limits</b><p>Loom explores every interleaving, so the state space explodes. Keep models to 2–3 threads and fewer than roughly 10 synchronization operations per thread. Set <code>LOOM_MAX_PREEMPTIONS=3</code>, which catches nearly every real bug at a fraction of the cost. Loom can't see I/O, so give it an in-memory disk. For larger scenarios, like a B+Tree with four writers, use <code>shuttle</code>: it samples schedules at random, is probabilistic rather than exhaustive, and scales much further. References: <a href="https://docs.rs/loom" target="_blank" rel="noreferrer">loom</a>, <a href="https://github.com/awslabs/shuttle" target="_blank" rel="noreferrer">shuttle</a>, and the AWS paper <a href="https://www.amazon.science/publications/using-lightweight-formal-methods-to-validate-a-key-value-storage-node-in-amazon-s3" target="_blank" rel="noreferrer"><em>Lightweight Formal Methods for S3</em></a> (SOSP 2021), which explains why shuttle exists.</p></aside>
+"""
+
+[[sections]]
+heading = "Running BusTub's SQL tests"
+body = """
+<p>BusTub's <code>test/sql/*.slt</code> files use the sqllogictest format that SQLite introduced, and <code>sqllogictest-rs</code> (maintained by the RisingWave team) runs it. You implement one trait and every <code>.slt</code> file becomes a test.</p>
+
+```rust title="crates/relational/src/bin/cairn-slt.rs"
+use sqllogictest::{DBOutput, DefaultColumnType, DB};
+
+struct CairnSlt { db: relational::Instance }
+
+impl DB for CairnSlt {
+    type Error = relational::Error;
+    type ColumnType = DefaultColumnType;
+
+    fn run(&mut self, sql: &str) -> Result<DBOutput<Self::ColumnType>, Self::Error> {
+        let result = self.db.execute(sql)?;
+        Ok(match result {
+            relational::QueryResult::Rows { schema, rows } => DBOutput::Rows {
+                types: schema.columns().iter().map(|_| DefaultColumnType::Any).collect(),
+                rows: rows.iter().map(|r| r.values().iter().map(|v| v.to_string()).collect()).collect(),
+            },
+            relational::QueryResult::Count(n) => DBOutput::StatementComplete(n as u64),
+            relational::QueryResult::Ok => DBOutput::StatementComplete(0),
+        })
+    }
+}
+
+fn main() {
+    for path in std::env::args().skip(1) {
+        let mut tester = sqllogictest::Runner::new(|| async { Ok(CairnSlt { db: relational::Instance::in_memory() }) });
+        tester.run_file(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        println!("ok  {path}");
+    }
+}
+```
+
+<aside data-call="note"><b>BusTub's dialect extensions</b><p>BusTub's <code>.slt</code> files use a few non-standard directives: <code>query rowsort</code>, <code>query +ensure:index_scan</code>, which asserts the plan uses an index, <code>query +timing:x10</code>, and <code>explain (o)</code>. Parse the <code>+ensure:</code> flags yourself, before handing the record to the runner, and check the plan string. That turns BusTub's optimizer tests into Cairn optimizer tests. The <code>__mock_*</code> tables are generated by BusTub's <code>MockScanExecutor</code>, so implement a <code>mock_table(name)</code> table function that produces the same rows. <code>src/execution/mock_scan_executor.cpp</code> has the generator formulas.</p></aside>
+"""
+
+[[sections]]
+heading = "Benchmarks"
+body = """
+```rust title="benches/replacer.rs — criterion skeleton used throughout"
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+
+fn bench_replacers(c: &mut Criterion) {
+    let mut g = c.benchmark_group("replacer/record_access+evict");
+    for &frames in &[64usize, 1024, 16_384] {
+        let trace = zipf_trace(frames * 8, 1_000_000, 0.99);   // skewed page ids
+        g.throughput(Throughput::Elements(trace.len() as u64));
+        g.bench_with_input(BenchmarkId::new("lru_k", frames), &trace, |b, t| {
+            b.iter(|| run_trace(LruKReplacer::new(frames, 2), t))
+        });
+        g.bench_with_input(BenchmarkId::new("arc", frames), &trace, |b, t| {
+            b.iter(|| run_trace(ArcReplacer::new(frames), t))
+        });
+    }
+    g.finish();
+}
+criterion_group!(benches, bench_replacers);
+criterion_main!(benches);
+```
+
+<aside data-call="performance"><b>Measure hit rate and throughput separately</b><p>For a replacer there are two different numbers: <strong>ops/sec</strong>, which measures the data structure, and <strong>hit rate on a trace</strong>, which measures the policy. Report both. A policy that hits 3% more often but costs 10× per operation can still win once each miss costs a 100 µs disk read. Always print the hit rate from the harness, not only the criterion time.</p></aside>
+"""
+
+[[sections]]
+heading = "Tracing"
+body = """
+<p>Use <code>tracing</code> with spans per query and per transaction. With <code>tracing-subscriber</code>'s <code>EnvFilter</code>, <code>RUST_LOG=relational::buffer=trace cargo test the_failing_test -- --nocapture</code> shows every pin, unpin, evict and flush for the test that failed. That is the Rust equivalent of BusTub's <code>LOG_DEBUG</code>, and it compiles away entirely at <code>max_level_off</code>.</p>
+"""

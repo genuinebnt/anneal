@@ -1,0 +1,62 @@
+title = "Trie interview questions in Rust"
+module = "Worked questions"
+module_order = 14
+chapter = "Coding and design questions"
+chapter_order = 2
+order = 681
+kind = "recipe"
+lede = "Three ways to build a trie, wildcards, prefix tricks, autocomplete, radix tries, Unicode."
+level = "intermediate"
+code = ["examples/interview/tries_core_questions.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+coding interviews (LeetCode 208, 211, 14, 648, 720, 677, 1268, 139, 642) and any code that does prefix search, autocomplete or routing.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>autocomplete/typeahead</li><li>spell checkers</li><li>T9 keypads</li><li>dictionary lookups</li><li>IP longest-prefix routing</li><li>search suggestions</li><li>word games</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://www.techinterview.org/post/3233463531/trie-interview-patterns-autocomplete/" target="_blank" rel="noreferrer">https://www.techinterview.org/post/3233463531/trie-interview-patterns-autocomplete/</a></li><li><a href="https://www.techinterview.org/post/3233474786/word-search-ii-trie-pattern-recognition/" target="_blank" rel="noreferrer">https://www.techinterview.org/post/3233474786/word-search-ii-trie-pattern-recognition/</a></li><li><a href="https://rust-unofficial.github.io/too-many-lists/" target="_blank" rel="noreferrer">https://rust-unofficial.github.io/too-many-lists/</a> See also: examples/data_structures/trie_radix.rs, examples/search_vectors/autocomplete_engine.rs, examples/interview/tries_advanced_questions.rs</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Question bank Q1**. Implement a Trie with insert, search, starts_with, count of words with a prefix, and delete (array children). [Medium] [asked: very common] Q2. Implement the same Trie with HashMap children so it handles any char, not just a-z. [Medium] [asked: very common] Q3.
+
+Implement the same Trie as an arena: nodes in a Vec, children are u32 indices. Why would you? [Medium] [asked: common] Q4. Add and search words where '.' matches any single letter (LeetCode 211). [Medium] [asked: very common] Q5.
+
+Longest common prefix of a set of words (LeetCode 14): is a trie the right tool? [Easy] [asked: very common] Q6. Replace every word in a sentence with the shortest dictionary root that prefixes it (LeetCode 648). [Medium] [asked: common] Q7.
+
+Longest word in a dictionary that can be built one character at a time from other words (LeetCode 720). [Medium] [asked: common] Q8. Map Sum Pairs: insert(key, val) with overwrite, sum(prefix) (LeetCode 677). [Medium] [asked: common] Q9.
+
+Count the distinct substrings of a string with a suffix trie; why are a suffix array and a suffix automaton better? [Hard] [asked: occasional] Q10. Autocomplete: top-k most frequent words for a prefix, with a per-node top-k cache versus DFS plus a heap (LeetCode 642 idea). [Hard] [asked: very common] Q11.
+
+Search suggestions system: after each typed letter, the 3 lexicographically smallest products with that prefix (LeetCode 1268): sorted array vs trie. [Medium] [asked: very common] Q12. Word break: can a string be split into dictionary words? Use a trie to walk (LeetCode 139). [Medium] [asked: very common] Q13.
+
+T9 phone keypad: all dictionary words that a digit sequence can spell. [Medium] [asked: occasional] Q14. Spell checker: all dictionary words within edit distance k of a typo, pruning the trie with a Levenshtein row. [Hard] [asked: occasional] Q15.
+
+Compress a trie into a radix (Patricia) tree: split edges on insert, and prove it uses at most 2n nodes. [Hard] [asked: common] Q16. Trie vs hash set vs sorted Vec: which wins for prefix queries, and what does each cost in memory? [Medium] [asked: common] Q17. Unicode: should the trie walk bytes or chars?
+
+What breaks with normalization and case folding? [Medium] [asked: common] Q18. Longest-prefix match for IPv4-style routing with a binary trie. [Medium] [asked: common]
+"""
+
+[[sources]]
+title = "techinterview.org/post/3233463531/trie-interview-patterns-autocomplete"
+url = "https://www.techinterview.org/post/3233463531/trie-interview-patterns-autocomplete/"
+
+[[sources]]
+title = "techinterview.org/post/3233474786/word-search-ii-trie-pattern-recognition"
+url = "https://www.techinterview.org/post/3233474786/word-search-ii-trie-pattern-recognition/"
+
+[[sources]]
+title = "rust-unofficial.github.io/too-many-lists"
+url = "https://rust-unofficial.github.io/too-many-lists/"

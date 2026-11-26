@@ -1,0 +1,608 @@
+title = "Distributed databases II"
+module = "Distributed systems"
+module_order = 10
+chapter = "Consensus and distributed transactions"
+chapter_order = 2
+order = 487
+kind = "guide"
+lede = "atomic commit · two-phase commit · Paxos · CAP and PACELC · distributed joins · semi-joins and shuffles"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>OLTP vs OLAP</strong>: OLTP = short read/write transactions with a small footprint and repetitive operations; OLAP = long read-only queries with complex joins and exploratory access. They stress distributed systems differently: OLTP needs cheap atomic commit, OLAP needs cheap data movement.</li> <li><strong>Atomic commit protocols</strong> decide the fate of a multi-node transaction (commit or abort) among <strong>resource managers</strong> (RMs): 2PC (1970s), 3PC (1983), Viewstamped Replication (1988), Paxos (1989), ZAB (ZooKeeper), Raft (2013). Required properties: <strong>stability</strong> (a decided fate never changes), <strong>consistency</strong> (all RMs end in the same state, even after failures), <strong>liveness</strong> (the protocol can always make progress while enough nodes are up and connected).</li> <li><strong>Two-phase commit</strong>: client → coordinator <em>commit request</em>. <strong>Phase 1</strong>: coordinator sends <strong>Prepare</strong>; each participant that can commit <strong>forces a prepared record</strong> and votes <strong>Yes</strong>, otherwise <strong>No</strong>. <strong>Phase 2</strong>: all Yes ⇒ coordinator logs <strong>Commit</strong> (the commit point) and tells everyone; any No ⇒ <strong>Abort</strong>. Participants <strong>Ack</strong>; either everyone commits or no one does. Every node keeps a non-volatile log of each phase's outcome. If the coordinator fails after Prepare, prepared participants are <strong>blocked</strong> (in doubt) until it returns; safe fallback is to abort if a participant hasn't yet voted, or ask peers. A crashed participant is treated as having voted No if it hadn't acknowledged. <strong>Optimizations</strong>: <em>early prepare voting</em> (the last query's result carries the vote), <em>early acknowledgement</em> (tell the client once all Yes votes are in).</li> <li><strong>Paxos</strong>: a <em>proposer</em> offers an outcome and <em>acceptors</em> vote. <strong>Propose</strong> → acceptors <strong>Agree</strong> unless they've agreed to a higher timestamp (then <strong>Reject</strong>) → on a majority of Agrees the proposer sends <strong>Commit/Accept</strong> → success after a <strong>majority of Accepts</strong>. Uses 2F+1 nodes and progresses with F+1 alive; <strong>2PC is the F = 0 special case</strong>. Use <strong>exponential backoff</strong> after a failed proposal to avoid dueling proposers. <strong>Multi-Paxos</strong>: a stable elected leader skips the propose phase until it fails. If nodes share a datacenter, fail rarely and aren't malicious, 2PC wins on round trips; Paxos/Raft win on availability.</li> <li><strong>CAP</strong>: during a network <strong>P</strong>artition a system can keep <strong>C</strong>onsistency (linearizability: once a write completes every later read returns it or something newer) or <strong>A</strong>vailability (every live node answers), not both. CP systems refuse writes without a majority; AP systems (many NoSQL) accept and reconcile. <strong>PACELC</strong>: <em>if</em> partitioned, choose A or C; <strong>E</strong>lse (normal operation), choose <strong>L</strong>atency or <strong>C</strong>onsistency.</li> <li><strong>Distributed joins</strong> (the data must meet): ① one table <strong>replicated</strong> everywhere ⇒ join locally; ② both tables <strong>partitioned on the join key</strong> (co-located) ⇒ join locally, gather; ③ different keys, one table small ⇒ <strong>broadcast join</strong>; ④ neither partitioned on the key ⇒ <strong>shuffle join</strong> (repartition both on the key, the network version of the exchange operator; fails if there's no space). Always ship the minimum.</li> <li><strong>Semi-join optimization</strong>: before moving a table, send a compact filter of the other side's join keys (a <strong>Bloom filter</strong>) and drop rows that can't match. A <strong>shuffle</strong> is also the general tool for rebalancing data and capacity.</li> </ul>
+"""
+
+[[sections]]
+heading = "Two-phase commit, as a state machine"
+body = """
+```text
+coordinator                                participant
+  ─ Prepare ─────────────────────────────►   can I commit?  force PREPARED to the log, then vote
+  ◄──────────────────────────────  Yes / No
+  all Yes ⇒ force COMMIT to the log        ◄─ ← the commit point is this log write
+  ─ Commit / Abort ──────────────────────►   force outcome, release locks
+  ◄─────────────────────────────────  Ack
+```
+
+<p>Two rules make it atomic: a participant <strong>must not vote Yes until its prepared record is durable</strong> (after that it can no longer abort on its own), and the coordinator <strong>must not announce a decision before logging it</strong>. The <em>window of uncertainty</em> for a prepared participant is from its Yes vote to the decision, during which it holds locks and cannot decide alone.</p>
+
+<p><strong>Presumed abort</strong> (used here) removes work: the coordinator logs nothing for an aborted transaction and doesn't log before the votes are in; a participant that <em>inquires</em> and finds the coordinator with no record is told "abort". A restarted coordinator that never logged a decision simply answers abort.</p>
+
+:::deeper Reference: deterministic network simulator (random delivery, drops, duplicates, crashes with durable state)
+```rust title="src/dist/sim.rs"
+//! A deterministic network simulator: random delivery order, drops, duplicates, crashes with durable state.
+use std::fmt::Debug;
+
+pub struct Rng(pub u64);
+impl Rng {
+    pub fn next(&mut self, m: u64) -> u64 { self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407); (self.0 >> 33) % m }
+    pub fn chance(&mut self, pct: u64) -> bool { self.next(100) < pct }
+}
+
+pub trait Node {
+    type Msg: Clone + Debug;
+    fn on_msg(&mut self, from: usize, m: Self::Msg, out: &mut Vec<(usize, Self::Msg)>);
+    /// Timer: retransmit, time out, start a new attempt.
+    fn on_tick(&mut self, out: &mut Vec<(usize, Self::Msg)>);
+    /// Lose all volatile state, keep what was made durable.
+    fn restart(&mut self);
+}
+
+pub struct Sim<N: Node> {
+    pub nodes: Vec<N>,
+    pub up: Vec<bool>,
+    flight: Vec<(usize, usize, N::Msg)>,
+    pub rng: Rng,
+    pub drop_pct: u64,
+    pub dup_pct: u64,
+    pub delivered: u64,
+}
+
+impl<N: Node> Sim<N> {
+    pub fn new(nodes: Vec<N>, seed: u64) -> Self {
+        let n = nodes.len();
+        Self { nodes, up: vec![true; n], flight: vec![], rng: Rng(seed.wrapping_mul(0x9E3779B97F4A7C15) | 1), drop_pct: 0, dup_pct: 0, delivered: 0 }
+    }
+
+    pub fn send(&mut self, from: usize, out: Vec<(usize, N::Msg)>) { for (to, m) in out { self.flight.push((from, to, m)); } }
+    pub fn in_flight(&self) -> usize { self.flight.len() }
+    pub fn clear_flight(&mut self) { self.flight.clear(); }
+
+    /// Deliver one random in-flight message (possibly dropping or duplicating it). `false` if none are in flight.
+    pub fn step(&mut self) -> bool {
+        if self.flight.is_empty() { return false; }
+        let i = self.rng.next(self.flight.len() as u64) as usize;
+        let (from, to, m) = self.flight.swap_remove(i);
+        if self.rng.chance(self.drop_pct) || !self.up[to] { return true; }
+        if self.rng.chance(self.dup_pct) { self.flight.push((from, to, m.clone())); }
+        let mut out = vec![];
+        self.nodes[to].on_msg(from, m, &mut out);
+        self.delivered += 1;
+        self.send(to, out);
+        true
+    }
+
+    pub fn tick_all(&mut self) {
+        for i in 0..self.nodes.len() {
+            if !self.up[i] { continue; }
+            let mut out = vec![];
+            self.nodes[i].on_tick(&mut out);
+            self.send(i, out);
+        }
+    }
+
+    pub fn crash(&mut self, i: usize) { self.up[i] = false; }
+    pub fn restart(&mut self, i: usize) { if !self.up[i] { self.up[i] = true; self.nodes[i].restart(); } }
+}
+```
+:::
+
+:::deeper Reference: two-phase commit with presumed abort, as message-passing state machines
+```rust title="src/dist/twopc.rs"
+//! Two-phase commit with presumed abort, as message-passing state machines.
+use crate::sim::Node;
+use std::collections::HashSet;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Msg { Prepare, Yes, No, Commit, Abort, Ack, Inquire, Outcome(bool) }
+
+/// Node 0 is the coordinator; nodes 1..=n are participants.
+pub struct Coord {
+    pub n: usize,
+    pub decision: Option<bool>,       // DURABLE: logged *before* any participant hears it
+    votes: HashSet<usize>,
+    acks: HashSet<usize>,
+    active: bool,                     // volatile: still collecting votes in this incarnation
+    waited: u32,
+    pub abort_after: u32,
+}
+
+#[derive(Default)]
+pub struct Part {
+    pub vote_yes: bool,
+    pub prepared: bool,               // DURABLE: forced to the log before voting yes
+    pub outcome: Option<bool>,        // DURABLE
+    pub in_doubt_ticks: u64,          // volatile statistic
+}
+
+pub enum Tpc { C(Coord), P(Part) }
+
+impl Tpc {
+    pub fn coordinator(n: usize) -> Self { Tpc::C(Coord { n, decision: None, votes: HashSet::new(), acks: HashSet::new(), active: false, waited: 0, abort_after: 40 }) }
+    pub fn participant(vote_yes: bool) -> Self { Tpc::P(Part { vote_yes, ..Default::default() }) }
+    pub fn part(&self) -> &Part { match self { Tpc::P(p) => p, _ => panic!() } }
+    pub fn coord(&self) -> &Coord { match self { Tpc::C(c) => c, _ => panic!() } }
+
+    /// Client asks the coordinator to commit.
+    pub fn begin(&mut self, out: &mut Vec<(usize, Msg)>) {
+        let Tpc::C(c) = self else { panic!() };
+        c.active = true;
+        for p in 1..=c.n { out.push((p, Msg::Prepare)); }
+    }
+}
+
+impl Coord {
+    fn decide(&mut self, commit: bool, out: &mut Vec<(usize, Msg)>) {
+        if self.decision.is_none() { self.decision = Some(commit); }          // the commit point: durable before sending
+        for p in 1..=self.n { out.push((p, if self.decision == Some(true) { Msg::Commit } else { Msg::Abort })); }
+    }
+}
+
+impl Node for Tpc {
+    type Msg = Msg;
+
+    fn on_msg(&mut self, from: usize, m: Msg, out: &mut Vec<(usize, Msg)>) {
+        match self {
+            Tpc::C(c) => match m {
+                Msg::Yes => {
+                    if c.decision.is_some() { return; }
+                    c.votes.insert(from);
+                    if c.votes.len() == c.n { c.decide(true, out); }
+                }
+                Msg::No => if c.decision.is_none() { c.decide(false, out); },
+                Msg::Ack => { c.acks.insert(from); }
+                Msg::Inquire => match c.decision {
+                    Some(d) => out.push((from, Msg::Outcome(d))),
+                    None if !c.active => { c.decision = Some(false); out.push((from, Msg::Outcome(false))); }   // presumed abort
+                    None => {}                                                                                     // still collecting votes
+                },
+                _ => {}
+            },
+            Tpc::P(p) => match m {
+                Msg::Prepare => match p.outcome {
+                    Some(true) => out.push((0, Msg::Yes)),
+                    Some(false) => out.push((0, Msg::No)),
+                    None if p.prepared => out.push((0, Msg::Yes)),
+                    None if p.vote_yes => { p.prepared = true; out.push((0, Msg::Yes)); }
+                    None => { p.outcome = Some(false); out.push((0, Msg::No)); }       // may abort unilaterally before preparing
+                },
+                Msg::Commit | Msg::Abort => {
+                    let commit = m == Msg::Commit;
+                    assert!(p.outcome.is_none_or(|o| o == commit), "conflicting outcomes delivered");
+                    if p.outcome.is_none() { p.outcome = Some(commit); }
+                    out.push((0, Msg::Ack));
+                }
+                Msg::Outcome(b) => { if p.outcome.is_none() { p.outcome = Some(b); } }
+                _ => {}
+            },
+        }
+    }
+
+    fn on_tick(&mut self, out: &mut Vec<(usize, Msg)>) {
+        match self {
+            Tpc::C(c) => {
+                if let Some(d) = c.decision {                                  // keep telling everyone who hasn't acked
+                    for p in 1..=c.n { if !c.acks.contains(&p) { out.push((p, if d { Msg::Commit } else { Msg::Abort })); } }
+                } else if c.active {
+                    c.waited += 1;
+                    for p in 1..=c.n { if !c.votes.contains(&p) { out.push((p, Msg::Prepare)); } }
+                    if c.waited > c.abort_after { c.decide(false, out); }      // a silent participant counts as a No
+                }
+            }
+            Tpc::P(p) => if p.prepared && p.outcome.is_none() {
+                p.in_doubt_ticks += 1;
+                out.push((0, Msg::Inquire));                                    // in doubt: ask the coordinator
+            },
+        }
+    }
+
+    fn restart(&mut self) {
+        match self {
+            Tpc::C(c) => { c.votes.clear(); c.acks.clear(); c.active = false; c.waited = 0; }
+            Tpc::P(p) => p.in_doubt_ticks = 0,
+        }
+    }
+}
+```
+:::
+
+<p>Every node is a <code>Node</code>: it reacts to messages and timer ticks and exposes <code>restart()</code> that <strong>throws away volatile state and keeps the durable fields</strong>. The simulator delivers a random in-flight message each step, with configurable loss and duplication, so reordering is on by default. The tests drive 3 participants (85% vote Yes) through 400 steps of chaos, then heal and require termination:</p>
+
+```text title="2PC, 4000 seeds"
+2PC: 4000 seeds with 10% loss, 5% duplication and random crashes of any node (coordinator included): atomicity held at every step; after healing every run terminated (1998 committed, 2002 aborted)
+```
+
+<p>And the two scenarios the lecture is about:</p>
+
+```text title="the blocking window, and presumed abort"
+coordinator down for 500 ticks: outcomes [None, None, None], ticks spent in doubt [500, 500, 500] (locks held the whole time)
+coordinator restarted without a decision record: outcomes [Some(false), Some(false), Some(false)]
+```
+
+<p>The first run kills the coordinator right after it logged COMMIT and lost the messages: three prepared participants are <strong>stuck for as long as it stays down</strong>, holding their locks (they can't abort, since the coordinator might have told someone to commit; they can't commit either). When the coordinator restarts it resends its logged decision and all three commit. In the second run the coordinator dies <em>before</em> deciding; on restart it has no record, so inquiring participants are told abort, and every participant ends aborted.</p>
+
+<aside data-call="warning"><b>2PC gotchas</b><ul> <li><strong>Blocking is the protocol's price, not a bug.</strong> Mitigate by replicating the <em>coordinator</em> (and each participant) with Paxos/Raft so that "the coordinator" never really goes down: that's Spanner and CockroachDB's design.</li> <li><strong>Heuristic decisions</strong>: a DBA unblocks an in-doubt participant by forcing commit or abort; if the guess is wrong the database is permanently inconsistent. Log and alert.</li> <li><strong>Locks held across the round trips</strong> reduce concurrency; keep distributed transactions short and rare. Co-locate data so most transactions are single-node (<a href="/cookbook/p/distributed-databases-i">L23</a>).</li> <li><strong>Timeouts must be conservative before voting, final after deciding</strong>: a participant may abort unilaterally only <em>before</em> it prepares.</li> <li><strong>Garbage collection</strong>: forget a transaction's log records only after every participant acknowledged.</li> <li><strong>Read-only participants</strong> can vote "read-only" and drop out of phase 2 (a standard optimization).</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "Paxos, single decree"
+body = """
+<p>One value must be chosen by a majority despite crashes, lost, delayed and duplicated messages. Roles: <strong>acceptors</strong> hold durable state <code>(promised ballot, accepted (ballot, value))</code>; <strong>proposers</strong> drive two phases with a unique, totally ordered <strong>ballot</strong>; <strong>learners</strong> observe Accepted messages (here every node plays all three roles).</p>
+
+```text
+phase 1  proposer ── Prepare(b) ──► acceptors     acceptor: if b > promised: promised := b; reply Promise(b, accepted)
+                  ◄── Promise ────  majority      (a promise means "I will never accept a ballot below b")
+phase 2  proposer picks v := the value with the HIGHEST ballot among the promises' accepted values, else its own value
+                  ── Accept(b, v) ─► acceptors     acceptor: if b ≥ promised: accepted := (b, v); broadcast Accepted(b, v)
+chosen   a value is chosen when a majority of acceptors accepted the same (ballot, value)
+```
+
+<p><strong>Why it is safe</strong>: any two majorities intersect, so a later proposer's majority of promises contains at least one acceptor that saw every earlier chosen value; adopting the highest accepted value forces the later proposer to re-propose it. <strong>Why it can stall</strong>: two proposers can keep pre-empting each other's ballots (dueling proposers); randomized backoff breaks the tie.</p>
+
+:::deeper Reference: single-decree Paxos (acceptor, proposer with backoff, learner)
+```rust title="src/dist/paxos.rs"
+//! Single-decree Paxos: every node is proposer, acceptor and learner.
+use crate::sim::{Node, Rng};
+use std::collections::{HashMap, HashSet};
+
+pub type Ballot = (u64, usize);                       // (round, proposer): totally ordered, unique per proposer
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Msg {
+    Prepare(Ballot),
+    Promise { b: Ballot, accepted: Option<(Ballot, u64)> },
+    Nack(Ballot),                                     // carries the higher ballot the acceptor has promised
+    Accept(Ballot, u64),
+    Accepted(Ballot, u64),
+    /// Gossip: "a value has been chosen". Safe to trust, since only a learner that saw a majority sends it.
+    Learned(u64),
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct Faults { pub no_adopt: bool, pub forget_promise: bool }
+
+#[derive(Default, Clone)]
+struct Acceptor { promised: Ballot, accepted: Option<(Ballot, u64)> }   // DURABLE
+
+#[derive(PartialEq, Clone, Copy)]
+enum Phase { Idle, Preparing, Accepting }
+
+pub struct PaxosNode {
+    pub id: usize,
+    n: usize,
+    acc: Acceptor,
+    pub want: Option<u64>,                            // value this node would like chosen
+    phase: Phase,
+    ballot: Ballot,
+    max_seen: u64,
+    promises: HashMap<usize, Option<(Ballot, u64)>>,
+    backoff: u32,
+    waited: u32,
+    seen: HashMap<(Ballot, u64), HashSet<usize>>,     // learner: who accepted what
+    pub learned: Option<u64>,
+    pub ever_learned: Vec<u64>,                       // not reset by a restart: only for the checker
+    rng: Rng,
+    pub faults: Faults,
+}
+
+impl PaxosNode {
+    pub fn new(id: usize, n: usize, want: Option<u64>, seed: u64, faults: Faults) -> Self {
+        Self { id, n, acc: Acceptor::default(), want, phase: Phase::Idle, ballot: (0, id), max_seen: 0, promises: HashMap::new(),
+               backoff: 0, waited: 0, seen: HashMap::new(), learned: None, ever_learned: vec![], rng: Rng(seed.wrapping_mul(0x9E3779B97F4A7C15) | 1), faults }
+    }
+    fn majority(&self) -> usize { self.n / 2 + 1 }
+    fn all(&self) -> impl Iterator<Item = usize> { 0..self.n }
+
+    fn start_round(&mut self, out: &mut Vec<(usize, Msg)>) {
+        self.max_seen += 1;
+        self.ballot = (self.max_seen, self.id);
+        self.phase = Phase::Preparing;
+        self.promises.clear();
+        self.waited = 0;
+        for to in self.all() { out.push((to, Msg::Prepare(self.ballot))); }
+    }
+
+    fn give_up(&mut self, higher: u64) {
+        self.max_seen = self.max_seen.max(higher);
+        self.phase = Phase::Idle;
+        self.backoff = 1 + self.rng.next(8) as u32;     // randomized backoff keeps dueling proposers from livelocking
+    }
+}
+
+impl Node for PaxosNode {
+    type Msg = Msg;
+
+    fn on_msg(&mut self, from: usize, m: Msg, out: &mut Vec<(usize, Msg)>) {
+        match m {
+            // ----- acceptor -----
+            Msg::Prepare(b) => {
+                if b > self.acc.promised {
+                    self.acc.promised = b;                                       // durable before replying
+                    out.push((from, Msg::Promise { b, accepted: self.acc.accepted }));
+                } else { out.push((from, Msg::Nack(self.acc.promised))); }
+            }
+            Msg::Accept(b, v) => {
+                if b >= self.acc.promised {
+                    self.acc.promised = b;
+                    self.acc.accepted = Some((b, v));                            // durable before replying
+                    for to in 0..self.n { out.push((to, Msg::Accepted(b, v))); }
+                } else { out.push((from, Msg::Nack(self.acc.promised))); }
+            }
+            // ----- proposer -----
+            Msg::Promise { b, accepted } => {
+                if self.phase != Phase::Preparing || b != self.ballot { return; }
+                self.promises.insert(from, accepted);
+                if self.promises.len() >= self.majority() {
+                    // the safety rule: if anyone already accepted something, propose the highest-ballot such value
+                    let adopted = self.promises.values().flatten().max_by_key(|(bal, _)| *bal).map(|&(_, v)| v);
+                    let v = if self.faults.no_adopt { self.want.unwrap() } else { adopted.or(self.want).unwrap() };
+                    self.phase = Phase::Accepting;
+                    self.waited = 0;
+                    for to in 0..self.n { out.push((to, Msg::Accept(self.ballot, v))); }
+                }
+            }
+            Msg::Nack(higher) => { if self.phase != Phase::Idle { self.give_up(higher.0); } }
+            // ----- learner -----
+            Msg::Learned(v) => if self.learned.is_none() { self.learned = Some(v); self.ever_learned.push(v); },
+            Msg::Accepted(b, v) => {
+                let s = self.seen.entry((b, v)).or_default();
+                s.insert(from);
+                if s.len() >= self.n / 2 + 1 && self.learned.is_none() {
+                    self.learned = Some(v);
+                    self.ever_learned.push(v);
+                }
+            }
+        }
+    }
+
+    fn on_tick(&mut self, out: &mut Vec<(usize, Msg)>) {
+        if let Some(v) = self.learned {                    // tell the others, in case their Accepted messages were lost
+            for to in 0..self.n { if to != self.id { out.push((to, Msg::Learned(v))); } }
+            return;
+        }
+        if self.want.is_none() { return; }
+        match self.phase {
+            Phase::Idle => if self.backoff > 0 { self.backoff -= 1 } else { self.start_round(out) },
+            _ => { self.waited += 1; if self.waited > 12 { self.give_up(self.max_seen); } }   // lost messages: try a fresh ballot
+        }
+    }
+
+    fn restart(&mut self) {
+        if self.faults.forget_promise { self.acc = Acceptor::default(); }        // the bug: acceptor state wasn't durable
+        self.phase = Phase::Idle;
+        self.promises.clear();
+        self.seen.clear();
+        self.learned = None;
+        self.backoff = 0;
+    }
+}
+```
+:::
+
+```text title="Paxos, 3000 seeds: 5 nodes, 3 competing proposers, 20% loss, 10% duplication, crashes"
+Paxos: 3000 seeds, 5 nodes, 3 competing proposers, 20% loss, 10% duplication, crashes: 0 safety violations; after healing 3000 of 3000 runs had every node learn the value
+0 of 5 nodes down: value chosen = true
+1 of 5 nodes down: value chosen = true
+2 of 5 nodes down: value chosen = true
+3 of 5 nodes down: value chosen = false
+```
+
+<ul> <li><strong>2F + 1 nodes tolerate F failures</strong>: with 5 nodes, 2 down still chooses a value; with 3 down it <strong>stays safe but stuck</strong> (no majority). This is what 2PC (F = 0) can't do.</li> <li><strong>Agreement was checked after every single step</strong>, over every value any node <em>ever</em> learned, including values learned before a crash.</li> <li>A <em>passive learner</em> can miss every Accepted message; adding a periodic <code>Learned(v)</code> gossip took "all nodes learn after healing" from 2941/3000 to 3000/3000.</li> </ul>
+
+<p>Removing a rule must make the checker fail, otherwise it proves nothing:</p>
+
+```text title="mutation tests, 3000 seeds each"
+proposer ignores previously accepted values: safety violation in 17 of 3000 seeds (seed 36: two different values chosen: [104, 102])
+acceptor forgets its promise on restart    : safety violation in 4 of 3000 seeds (seed 212: two different values chosen: [100, 102, 102, 102, 102, 102])
+```
+
+<p>Both bugs are classic: skipping the "adopt the highest accepted value" rule, and an acceptor whose promise isn't durable. Both are rare (a fraction of a percent of runs, and need an unlucky interleaving), which is exactly why <strong>fuzzing with thousands of seeds</strong> is the only way to find consensus bugs.</p>
+"""
+
+[[sections]]
+heading = "Atomic commit vs consensus, and how real systems combine them"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th></th> <th><strong>2PC</strong></th> <th><strong>Paxos / Raft</strong></th> </tr> </thead> <tbody> <tr> <td>nodes needed</td> <td>all participants</td> <td>majority of replicas</td> </tr> <tr> <td>coordinator failure</td> <td><strong>blocks</strong> until it restarts</td> <td>new leader elected; continues</td> </tr> <tr> <td>message delays</td> <td>2 round trips</td> <td>2 (1 with a stable leader)</td> </tr> <tr> <td>scope</td> <td>one transaction across <em>different data</em></td> <td>one value across <em>replicas of the same data</em></td> </tr> </tbody> </table></div>
+
+<p>They solve <strong>different problems</strong> and are <strong>layered</strong>: data is split into shards; each shard is a Paxos/Raft group (replication, availability); a transaction spanning shards runs <strong>2PC across the groups</strong> (atomicity). Spanner, CockroachDB, TiDB, YugabyteDB all work this way, and Gray &amp; Lamport's <em>Paxos Commit</em> shows 2PC is the F = 0 case of using consensus to store the commit decision. Calvin and its descendants avoid 2PC entirely by agreeing on a <strong>global transaction order first</strong> and executing deterministically.</p>
+
+<aside data-call="production"><b>Commit protocols in real systems</b><ul> <li><strong>PostgreSQL</strong>: <code>PREPARE TRANSACTION</code> / <code>COMMIT PREPARED</code> expose the participant side of 2PC (used by XA and external coordinators); <strong>MySQL/InnoDB</strong> supports XA, and uses 2PC internally between the binlog and the redo log.</li> <li><strong>Google Spanner</strong>: 2PC across Paxos groups with TrueTime commit timestamps; <strong>CockroachDB</strong>: <em>parallel commits</em> write the transaction record and intents concurrently and treat the txn as committed once all intents exist, saving a round trip.</li> <li><strong>TiDB / Percolator</strong>: 2PC over a key-value store with a timestamp oracle; primary-lock-first commit makes the commit point a single atomic write.</li> <li><strong>Kafka, ZooKeeper, etcd</strong>: ZAB / Raft for replicated logs and coordination; <strong>ZooKeeper</strong> is where many systems keep membership and leader leases.</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "CAP and PACELC, honestly"
+body = """
+<p><strong>CAP</strong> is narrower than its slogan: it's about <strong>linearizability vs availability <em>during a partition***. A CP system (Spanner, etcd, CockroachDB) stops serving the minority side; an AP system (Cassandra at low consistency levels, Dynamo) answers from both sides and reconciles later (versions, CRDTs, last-writer-wins). Partitions are not optional in a real network, so the actual choice is C or A *when they happen</em>. **PACELC</strong> adds the everyday cost: even <strong>without</strong> a partition, strong consistency needs coordination (a quorum or a leader round trip): you trade <strong>latency for consistency</strong> all the time. Dynamo/Cassandra are PA/EL; Spanner and CockroachDB are PC/EC; MongoDB defaults are PA/EC.</p>
+"""
+
+[[sections]]
+heading = "Distributed joins: bytes are the cost"
+body = """
+<p>On a simulated 8-node cluster the same join (R: 400 000 rows with a foreign key into a 2M key space; S: the dimension table; 16-byte rows) runs four ways and is verified against a single-node hash join:</p>
+
+:::deeper Reference: colocated, broadcast, shuffle and Bloom semi-join strategies, with a byte-count cost model
+```rust title="src/dist/join.rs"
+//! Distributed join strategies on a simulated shared-nothing cluster; the cost that matters is bytes shipped.
+use crate::partition::hash64;
+use std::collections::HashMap;
+
+/// (key, payload). R joins S on `R.1 == S.0`.
+pub type Row = (u64, u64);
+pub const ROW_BYTES: u64 = 16;
+
+pub struct Cluster { pub n: usize, pub r: Vec<Vec<Row>>, pub s: Vec<Vec<Row>> }
+
+pub fn owner(key: u64, n: usize) -> usize { (hash64(key, 3) % n as u64) as usize }
+
+impl Cluster {
+    /// Place rows by an arbitrary function of the row (not necessarily the join key).
+    pub fn new(n: usize, r: &[Row], s: &[Row], r_place: impl Fn(&Row) -> usize, s_place: impl Fn(&Row) -> usize) -> Self {
+        let mut c = Cluster { n, r: vec![vec![]; n], s: vec![vec![]; n] };
+        for x in r { c.r[r_place(x) % n].push(*x); }
+        for x in s { c.s[s_place(x) % n].push(*x); }
+        c
+    }
+}
+
+pub struct Report { pub bytes: u64, pub result: Vec<(u64, u64)> }
+
+fn local_join(r: &[Row], s: &[Row], out: &mut Vec<(u64, u64)>) {
+    let mut h: HashMap<u64, Vec<u64>> = HashMap::with_capacity(s.len());
+    for &(k, v) in s { h.entry(k).or_default().push(v); }
+    for &(id, fk) in r { if let Some(vs) = h.get(&fk) { for &v in vs { out.push((id, v)); } } }
+}
+
+/// Both tables already partitioned on the join key with the same function: no data moves.
+pub fn colocated(c: &Cluster) -> Report {
+    let mut result = vec![];
+    for i in 0..c.n { local_join(&c.r[i], &c.s[i], &mut result); }
+    Report { bytes: 0, result }
+}
+
+/// Send every row of S to every node; R never moves.
+pub fn broadcast(c: &Cluster) -> Report {
+    let all_s: Vec<Row> = c.s.iter().flatten().copied().collect();
+    let mut result = vec![];
+    for i in 0..c.n { local_join(&c.r[i], &all_s, &mut result); }
+    Report { bytes: all_s.len() as u64 * (c.n as u64 - 1) * ROW_BYTES, result }
+}
+
+/// Repartition both sides on the join key (the exchange operator from the parallel-execution lecture, across the network).
+pub fn shuffle(c: &Cluster) -> Report { shuffle_with(c, |_| true, 0) }
+
+fn shuffle_with(c: &Cluster, r_keep: impl Fn(&Row) -> bool, extra_bytes: u64) -> Report {
+    let n = c.n;
+    let (mut r2, mut s2) = (vec![vec![]; n], vec![vec![]; n]);
+    let mut bytes = extra_bytes;
+    for (i, part) in c.r.iter().enumerate() {
+        for x in part.iter().filter(|x| r_keep(x)) {
+            let d = owner(x.1, n);
+            if d != i { bytes += ROW_BYTES; }
+            r2[d].push(*x);
+        }
+    }
+    for (i, part) in c.s.iter().enumerate() {
+        for x in part {
+            let d = owner(x.0, n);
+            if d != i { bytes += ROW_BYTES; }
+            s2[d].push(*x);
+        }
+    }
+    let mut result = vec![];
+    for i in 0..n { local_join(&r2[i], &s2[i], &mut result); }
+    Report { bytes, result }
+}
+
+pub struct Bloom { bits: Vec<u64>, m: u64 }
+impl Bloom {
+    pub fn new(keys: impl Iterator<Item = u64>, count: usize, bits_per_key: usize) -> Self {
+        let m = ((count * bits_per_key).max(64) as u64).next_power_of_two();
+        let mut b = Bloom { bits: vec![0; (m / 64) as usize], m };
+        for k in keys { for i in 0..3 { let p = hash64(k, 11 + i) & (m - 1); b.bits[(p / 64) as usize] |= 1 << (p % 64); } }
+        b
+    }
+    pub fn may_contain(&self, k: u64) -> bool { (0..3).all(|i| { let p = hash64(k, 11 + i) & (self.m - 1); self.bits[(p / 64) as usize] >> (p % 64) & 1 == 1 }) }
+    pub fn bytes(&self) -> u64 { self.m / 8 }
+}
+
+/// Semi-join reduction: broadcast a Bloom filter of S's keys, drop R rows that can't match, then shuffle what is left.
+pub fn bloom_semijoin(c: &Cluster, bits_per_key: usize) -> Report {
+    let count: usize = c.s.iter().map(|p| p.len()).sum();
+    let bloom = Bloom::new(c.s.iter().flatten().map(|x| x.0), count, bits_per_key);
+    shuffle_with(c, |x| bloom.may_contain(x.1), bloom.bytes() * (c.n as u64 - 1))
+}
+
+/// What a planner would estimate before running anything.
+pub fn estimate(n: usize, r_rows: u64, s_rows: u64, match_fraction: f64, bits_per_key: u64) -> [(&'static str, u64); 3] {
+    let moved = |rows: u64| rows * (n as u64 - 1) / n as u64 * ROW_BYTES;           // a row stays put with probability 1/n
+    [
+        ("broadcast S", s_rows * (n as u64 - 1) * ROW_BYTES),
+        ("shuffle both", moved(r_rows) + moved(s_rows)),
+        ("bloom + shuffle", (s_rows * bits_per_key / 8) * (n as u64 - 1) + moved((r_rows as f64 * (match_fraction + 0.02)) as u64) + moved(s_rows)),
+    ]
+}
+```
+:::
+
+```text title="bytes shipped for each strategy"
+case                               strategy         MB shipped      join ms  (R has 400k rows, key space 2M; rows are 16 B)
+S small (10k rows, 0.5% match)     colocated              0.00          5.6
+S small (10k rows, 0.5% match)     broadcast S            1.12          8.1
+S small (10k rows, 0.5% match)     shuffle both           5.74          6.4
+S small (10k rows, 0.5% match)     bloom + shuffle        0.28          1.5
+S medium (100k rows, 5% match)     colocated              0.00          9.2
+S medium (100k rows, 5% match)     broadcast S           11.20         33.8
+S medium (100k rows, 5% match)     shuffle both           7.00         13.9
+S medium (100k rows, 5% match)     bloom + shuffle        2.60         13.3
+S large (1M rows, 50% match)       colocated              0.00         44.4
+S large (1M rows, 50% match)       broadcast S          112.00        771.9
+S large (1M rows, 50% match)       shuffle both          19.60         52.2
+S large (1M rows, 50% match)       bloom + shuffle       31.47         50.9
+```
+
+<ul> <li><strong>Co-location moves nothing</strong>: that's the best plan, and the reason partition keys follow the join keys.</li> <li><strong>Broadcast cost = |S| × (N − 1)</strong> and grows with the cluster: great for a small dimension table (1.1 MB), terrible for a big one (112 MB and 15× the join time as every node builds a hash table of all of S).</li> <li><strong>Shuffle cost ≈ (N − 1)/N of both tables</strong> regardless of selectivity (5.7 → 19.6 MB here), the general-purpose fallback.</li> <li><strong>The Bloom semi-join wins when the match rate is low</strong> (0.28 MB vs 1.1 and 5.7 for the small S, 2.7× less than a shuffle at 5% match), and <strong>loses when most rows match</strong> (31 vs 19.6 MB: the filter ships but filters nothing).</li> <li>A <strong>planner</strong> needs only table sizes and the match fraction (the cardinality estimate from <a href="/cookbook/p/cost-models-and-join-ordering">L16</a>) to pick the winner: the byte model in the reference picked the measured best in all three cases.</li> </ul>
+
+<aside data-call="warning"><b>Distributed join pitfalls</b><ul> <li><strong>Shuffle spills</strong>: a shuffle materializes the repartitioned data on the receiving nodes; if it doesn't fit you need spilling hash join / sort-merge (<a href="/cookbook/p/join-algorithms">L12</a>), not a failure.</li> <li><strong>Skew</strong>: one hot join key sends most rows to one node; split it (broadcast the hot keys' rows from the small side) or use <em>skew-aware</em> partitioning.</li> <li><strong>Estimation errors</strong> change the best strategy: a wrong match fraction picks broadcast over shuffle; adaptive engines <strong>switch at runtime</strong> after seeing the real size of one side (Spark AQE, Trino).</li> <li><strong>Network is not free in the cloud</strong>: cross-AZ transfers cost money and have lower bandwidth than memory by 100×.</li> <li><strong>Result gathering</strong> is a cost too: a coordinator receiving all results becomes the bottleneck; push down <code>LIMIT</code> and aggregates, and do final aggregation as a tree.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Paxos Made Simple"
+url = "https://lamport.azurewebsites.net/pubs/paxos-simple.pdf"
+
+[[sources]]
+title = "In Search of an Understandable Consensus Algorithm (Raft)"
+url = "https://raft.github.io/raft.pdf"
+
+[[sources]]
+title = "Paxos vs Raft"
+url = "https://arxiv.org/abs/2004.05074"
+
+[[sources]]
+title = "Consensus on Transaction Commit"
+url = "https://www.microsoft.com/en-us/research/publication/consensus-on-transaction-commit/"
+
+[[sources]]
+title = "Brewer's Conjecture and the Feasibility of Consistent, Available, Partition-Tolerant Web Services"
+url = "https://users.ece.cmu.edu/~adrian/731-sp04/readings/GL-cap.pdf"
+
+[[sources]]
+title = "Spanner"
+url = "https://research.google/pubs/pub39966/"
+
+[[sources]]
+title = "Calvin"
+url = "https://cs.yale.edu/homes/thomson/publications/calvin-sigmod12.pdf"
+
+[[sources]]
+title = "Large-scale Incremental Processing Using Distributed Transactions and Notifications (Percolator)"
+url = "https://research.google/pubs/pub36726/"
+
+[[sources]]
+title = "Jepsen analyses"
+url = "https://jepsen.io/analyses"
+
+[[sources]]
+title = "A Critique of the CAP Theorem"
+url = "https://arxiv.org/abs/1509.05393"
+
+[[sources]]
+title = "Distributed Systems lectures"
+url = "https://www.youtube.com/playlist?list=PLeKd45zvjcDFUEv_ohr_HdUFe97RItdiB"
+
+[[sources]]
+title = "Raft talk"
+url = "https://www.youtube.com/watch?v=YbZ3zDzDnrw"

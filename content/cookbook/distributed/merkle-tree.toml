@@ -1,0 +1,61 @@
+title = "Merkle tree"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Cryptography"
+chapter_order = 4
+order = 548
+kind = "recipe"
+lede = "SHA-256 from scratch + Merkle tree, inclusion proofs, append-only log, anti-entropy."
+level = "advanced"
+code = ["examples/cryptography/merkle_tree.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>replica repair</li><li>tamper-evident logs</li><li>content-addressed storage</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a Merkle tree hashes leaves, then hashes pairs of hashes up to one root. Equal roots mean equal data (up to hash collisions); a different root means "something differs", and the tree tells you **where**.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+- Domain separation: leaf = H(0x00 &#124;&#124; data), node = H(0x01 &#124;&#124; left &#124;&#124; right). Without it, the 64 bytes `h(a)||h(b)` could be presented as a &#42;leaf&#42; and hash to the same value as the inner node (second-preimage attack on the tree). `naive_forgery` below demonstrates this on a prefix-free tree.
+- Odd node count: NO duplication of the last node (Bitcoin-style duplication makes [a,b,c] and [a,b,c,c] share a root). Instead split n leaves at the largest power of two k &lt; n: MTH(D) = H(1 &#124;&#124; MTH(D[..k]) &#124;&#124; MTH(D[k..])). A lone leaf is simply promoted into a shallower position.
+
+   This shape is also exactly what an append-only "frontier" of perfect subtrees produces, so the incremental log and the batch tree agree (tested).
+- Proof = sibling hashes bottom-up, each tagged with which side it sits on; verify re-folds to the root.
+- Anti-entropy: two replicas with the same leaf slots compare roots, then descend only into children whose hashes differ: cost &#126; O(k log n) hash comparisons for k differing leaves, instead of n.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Git and Mercurial-style content-addressed object graphs (hash-linked trees)</li><li>Bitcoin block headers committing to transactions (SPV proofs)</li><li>Certificate Transparency logs (RFC 6962)</li><li>Dynamo-style anti-entropy and Cassandra's repair</li><li>which compare Merkle trees of key ranges to find divergent replicas</li><li>content-addressed stores/packages that verify chunks against a trusted root</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://www.rfc-editor.org/rfc/rfc6962> (section 2.1)
+
+<https://csrc.nist.gov/pubs/fips/180-4/upd1/final> (SHA-256 spec)
+
+<https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf>
+"""
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc6962"
+url = "https://www.rfc-editor.org/rfc/rfc6962"
+
+[[sources]]
+title = "csrc.nist.gov/pubs/fips/180-4/upd1/final"
+url = "https://csrc.nist.gov/pubs/fips/180-4/upd1/final"
+
+[[sources]]
+title = "allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf"
+url = "https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf"

@@ -1,0 +1,333 @@
+title = "Latch-free indexes and the Bw-tree"
+module = "Databases"
+module_order = 8
+chapter = "Indexes"
+chapter_order = 3
+order = 343
+kind = "guide"
+lede = "15-721 lectures #6–7 (2019/2020) · latching recap · skip lists · Bw-tree mapping table, deltas, consolidation, splits · what latch-free does and doesn't buy"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Latches protect index internals, locks protect database contents</strong> (<a href="/cookbook/p/two-phase-locking">L18</a>). Index designs differ in how they synchronise: <strong>latch crabbing</strong> (hold a parent's latch until the child is known safe; <a href="/cookbook/p/index-concurrency-control">L10</a>), <strong>optimistic lock coupling</strong> (read a version counter, traverse without writing shared memory, validate; the fastest B+Tree synchronization in practice), <strong>latch-free</strong> (no latches at all; threads make progress with compare-and-swap), and <strong>partitioning</strong> (one thread owns a key range).</li> <li><strong>Latch-free</strong> means a stalled thread can't block others. Updates are published by a <strong>single CAS</strong> on a pointer; readers never wait. It does <strong>not</strong> mean "no contention": a failed CAS retries, and cache-line transfers still cost.</li> <li><strong>Skip lists</strong> are the easy latch-free ordered index: each level is a linked list; insert links bottom-up with CAS; delete <strong>marks</strong> the next-pointer then unlinks (to avoid a lost insertion next to a deleted node). Simple, but pointer chasing is cache-hostile and range scans touch many lines.</li> <li><strong>The Bw-tree</strong> (Levandoski, Lomet, Sengupta, Microsoft Hekaton/Azure Cosmos DB) is a latch-free B+Tree built from three tricks: ① a <strong>mapping table</strong> (page id → current physical pointer) so a page can be replaced by swapping <em>one entry</em>, with parents unchanged; ② <strong>delta records</strong>: updates are prepended to a page's chain with one CAS instead of modifying the page in place; ③ <strong>consolidation</strong> when a chain gets long: build a new sorted base page and CAS it into the mapping table. Structure changes (splits, merges) are multi-step but each step is a CAS, and any thread that sees a half-finished one <strong>helps complete it</strong>.</li> <li><strong>Costs</strong>: delta chains slow reads (search the chain, then the base); every node access pays the mapping-table indirection; consolidation allocates; <strong>memory reclamation</strong> needs epochs because readers may still hold pointers to replaced pages; and updates create write-amplification of small objects. <em>Building a Bw-Tree Takes More Than Just Buzz Words</em> (Wang et al., SIGMOD 2018) implemented it carefully (OpenBw-Tree) and found it <strong>outperformed by a skip list in several workloads and by a B+Tree with OLC or ART everywhere</strong>, concluding that latch-free is not automatically faster. <em>Latch-free Synchronization in Database Systems: Silver Bullet or Fool's Gold?</em> (Faleiro, Abadi 2017) agrees: under contention, retries can cost more than waiting.</li> <li><strong>Rule of thumb</strong>: use <strong>OLC B+Tree</strong> or <strong>ART</strong> for in-memory ordered indexes, a <strong>lock-free hash table</strong> for point lookups, and a Bw-tree or skip list when you need <em>simple, non-blocking</em> behaviour (log-structured storage, flash-friendly append-only updates, or fault isolation) more than raw speed.</li> </ul>
+"""
+
+[[sections]]
+heading = "A Bw-tree in 200 lines"
+body = """
+<p>Design of this implementation (an ordered <code>u64 → u64</code> map):</p>
+
+```text
+index (copy-on-write sorted vec):  [(0, p0), (410, p7), (902, p3) …]      routes a key to a leaf pid
+mapping table:        p0 ──► Δinsert(15) ──► Δdelete(7) ──► Base{keys [1,7,9,…], high=410, side=p7}
+                      p7 ──► Base{ … high=902, side=p3 }
+update:   new Δ{key, next: current head} ;  CAS(table[pid], head, Δ)       ← the linearization point
+read:     walk the chain: first delta for the key wins, else binary-search the base;
+          a key ≥ base.high belongs to the right sibling (`side`): follow it
+consolidate (chain ≥ threshold): replay deltas into a sorted vec ⇒ new Base ;  CAS(table[pid], head, Base)
+split (Base > 256 keys): allocate right page R = upper half (invisible), then ONE CAS replaces the left chain by
+          Base{lower half, high = sep, side = R} ; afterwards add (sep → R) to the index (copy-on-write CAS)
+```
+
+<p>Notes on the choices:</p>
+
+<ul> <li>The <strong>right sibling is published before the left page's CAS</strong>, so the moment the CAS makes the new left page visible (with <code>high = sep</code>), every key ≥ <code>sep</code> is reachable through <code>side</code>. Between the CAS and the index update, routing may still send keys to the left page; the <code>high</code>/<code>side</code> check repairs that. That "route, then verify the range" step plays the role of the Bw-tree's <em>help-along</em>.</li> <li>The paper installs a <strong>split delta</strong> and then an <strong>index-entry delta</strong> on the parent as two separate CASes (and may be interrupted between them). Replacing the left chain with a split base by one CAS is simpler and still lock-free; the cost is that a competing update to the old chain makes the CAS fail, and the split is retried by someone else.</li> <li>A <strong>lost race</strong> just wastes work: a failed consolidation CAS drops the new page; a failed split leaves the right page unreferenced (here it is retired).</li> <li><strong>Retired nodes are kept until the tree is dropped.</strong> This is <em>deliberately incomplete</em>: a real index frees them with epoch-based reclamation (below), otherwise memory grows with every update.</li> </ul>
+
+:::deeper Reference: latch-free ordered map (mapping table, delta chains, consolidation, split-by-CAS, range scan)
+```rust title="src/index/bwtree.rs"
+//! A latch-free ordered map in the Bw-tree style: a mapping table of page ids, delta records installed with CAS,
+//! consolidation into a fresh base page, and a split done by a single CAS on the left page.
+//! Retired nodes are kept until the tree drops (a real system frees them with epoch-based reclamation).
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering::*};
+use std::sync::Mutex;
+
+pub type Pid = usize;
+const NONE: Pid = usize::MAX;
+const MAX_PIDS: usize = 1 << 20;
+const MAX_LEAF: usize = 256;
+
+struct Base { keys: Vec<u64>, vals: Vec<u64>, high: u64, side: Pid }   // owns keys < high; right sibling at `side`
+
+enum Node {
+    Base(Base),
+    Insert { key: u64, val: u64, next: *mut Node, len: u32 },
+    Delete { key: u64, next: *mut Node, len: u32 },
+}
+
+impl Node {
+    fn len(&self) -> u32 { match self { Node::Base(_) => 0, Node::Insert { len, .. } | Node::Delete { len, .. } => *len } }
+}
+
+pub struct BwTree {
+    table: Vec<AtomicPtr<Node>>,                     // the mapping table: Pid → head of its delta chain
+    next_pid: AtomicUsize,
+    index: AtomicPtr<Vec<(u64, Pid)>>,               // (lowest key, leaf pid), copy-on-write, sorted
+    retired: Mutex<Vec<*mut Node>>,
+    retired_idx: Mutex<Vec<*mut Vec<(u64, Pid)>>>,
+    consolidate_at: u32,
+    pub consolidations: AtomicUsize,
+    pub splits: AtomicUsize,
+}
+
+unsafe impl Send for BwTree {}
+unsafe impl Sync for BwTree {}
+
+enum Step { Found(Option<u64>), Move(Pid) }
+
+impl BwTree {
+    pub fn new(consolidate_at: u32) -> Self {
+        let table: Vec<AtomicPtr<Node>> = (0..MAX_PIDS).map(|_| AtomicPtr::new(std::ptr::null_mut())).collect();
+        let first = Box::into_raw(Box::new(Node::Base(Base { keys: vec![], vals: vec![], high: u64::MAX, side: NONE })));
+        table[0].store(first, Release);
+        let idx = Box::into_raw(Box::new(vec![(0u64, 0 as Pid)]));
+        Self { table, next_pid: AtomicUsize::new(1), index: AtomicPtr::new(idx), retired: Mutex::new(vec![]), retired_idx: Mutex::new(vec![]),
+               consolidate_at, consolidations: AtomicUsize::new(0), splits: AtomicUsize::new(0) }
+    }
+
+    fn route(&self, key: u64) -> Pid {
+        let idx = unsafe { &*self.index.load(Acquire) };
+        idx[idx.partition_point(|e| e.0 <= key) - 1].1
+    }
+
+    /// Walk the chain: the newest delta for `key` wins; otherwise the base; a key past `high` belongs to the sibling.
+    fn step(&self, mut p: *mut Node, key: u64) -> Step {
+        loop {
+            match unsafe { &*p } {
+                Node::Insert { key: k, val, next, .. } => { if *k == key { return Step::Found(Some(*val)); } p = *next; }
+                Node::Delete { key: k, next, .. } => { if *k == key { return Step::Found(None); } p = *next; }
+                Node::Base(b) => {
+                    if key >= b.high { return Step::Move(b.side); }
+                    return Step::Found(b.keys.binary_search(&key).ok().map(|i| b.vals[i]));
+                }
+            }
+        }
+    }
+
+    pub fn get(&self, key: u64) -> Option<u64> {
+        let mut pid = self.route(key);
+        loop {
+            match self.step(self.table[pid].load(Acquire), key) { Step::Found(v) => return v, Step::Move(q) => pid = q }
+        }
+    }
+
+    pub fn insert(&self, key: u64, val: u64) { self.push(key, Some(val)); }
+    pub fn remove(&self, key: u64) { self.push(key, None); }
+
+    fn base_high(&self, mut p: *mut Node) -> (u64, Pid) {
+        loop { match unsafe { &*p } { Node::Insert { next, .. } | Node::Delete { next, .. } => p = *next, Node::Base(b) => return (b.high, b.side) } }
+    }
+
+    fn push(&self, key: u64, val: Option<u64>) {
+        let mut pid = self.route(key);
+        loop {
+            let head = self.table[pid].load(Acquire);
+            let (high, side) = self.base_high(head);
+            if key >= high { pid = side; continue; }                       // the page was split: this key lives to the right
+            let len = unsafe { &*head }.len() + 1;
+            let new = Box::into_raw(Box::new(match val {
+                Some(v) => Node::Insert { key, val: v, next: head, len },
+                None => Node::Delete { key, next: head, len },
+            }));
+            match self.table[pid].compare_exchange(head, new, AcqRel, Acquire) {
+                Ok(_) => { if len >= self.consolidate_at { self.consolidate(pid); } return; }
+                Err(_) => unsafe { drop(Box::from_raw(new)) },             // somebody else changed the chain: retry
+            }
+        }
+    }
+
+    /// Replace the chain by one sorted base page (splitting it if it grew too big). One CAS publishes the result;
+    /// if it fails, another thread got there first and nothing is lost.
+    fn consolidate(&self, pid: Pid) {
+        let head = self.table[pid].load(Acquire);
+        let mut deltas: Vec<&Node> = vec![];
+        let mut p = head;
+        let base = loop {
+            match unsafe { &*p } {
+                n @ (Node::Insert { next, .. } | Node::Delete { next, .. }) => { deltas.push(n); p = *next; }
+                Node::Base(b) => break b,
+            }
+        };
+        let mut map: BTreeMap<u64, Option<u64>> = base.keys.iter().zip(&base.vals).map(|(&k, &v)| (k, Some(v))).collect();
+        for d in deltas.iter().rev() {                                      // oldest delta first
+            match d { Node::Insert { key, val, .. } => { map.insert(*key, Some(*val)); } Node::Delete { key, .. } => { map.insert(*key, None); } _ => {} }
+        }
+        let live: Vec<(u64, u64)> = map.into_iter().filter_map(|(k, v)| v.map(|v| (k, v))).collect();
+        let mk = |items: &[(u64, u64)], high, side| Node::Base(Base { keys: items.iter().map(|x| x.0).collect(), vals: items.iter().map(|x| x.1).collect(), high, side });
+
+        if live.len() > MAX_LEAF {
+            let mid = live.len() / 2;
+            let sep = live[mid].0;
+            let right_pid = self.next_pid.fetch_add(1, Relaxed);
+            assert!(right_pid < MAX_PIDS, "mapping table full");
+            let right = Box::into_raw(Box::new(mk(&live[mid..], base.high, base.side)));
+            self.table[right_pid].store(right, Release);                    // unreachable until the left page's CAS succeeds
+            let left = Box::into_raw(Box::new(mk(&live[..mid], sep, right_pid)));
+            if self.table[pid].compare_exchange(head, left, AcqRel, Acquire).is_ok() {
+                self.retire_chain(head);
+                self.splits.fetch_add(1, Relaxed);
+                self.add_separator(sep, right_pid);
+            } else {
+                unsafe { drop(Box::from_raw(left)); }                        // lost the race: the right page stays unreferenced garbage
+                self.table[right_pid].store(std::ptr::null_mut(), Release);
+                self.retired.lock().unwrap().push(right);
+            }
+        } else {
+            let new = Box::into_raw(Box::new(mk(&live, base.high, base.side)));
+            if self.table[pid].compare_exchange(head, new, AcqRel, Acquire).is_ok() {
+                self.retire_chain(head);
+                self.consolidations.fetch_add(1, Relaxed);
+            } else { unsafe { drop(Box::from_raw(new)); } }
+        }
+    }
+
+    fn add_separator(&self, sep: u64, pid: Pid) {
+        loop {
+            let cur = self.index.load(Acquire);
+            let mut v = unsafe { &*cur }.clone();
+            let at = v.partition_point(|e| e.0 < sep);
+            v.insert(at, (sep, pid));
+            let new = Box::into_raw(Box::new(v));
+            if self.index.compare_exchange(cur, new, AcqRel, Acquire).is_ok() { self.retired_idx.lock().unwrap().push(cur); return; }
+            unsafe { drop(Box::from_raw(new)); }
+        }
+    }
+
+    fn retire_chain(&self, mut p: *mut Node) {
+        let mut r = self.retired.lock().unwrap();
+        loop {
+            r.push(p);
+            match unsafe { &*p } { Node::Insert { next, .. } | Node::Delete { next, .. } => p = *next, Node::Base(_) => return }
+        }
+    }
+
+    /// Ordered range scan; each leaf is read through one head snapshot, so a leaf's contribution is consistent.
+    pub fn range(&self, lo: u64, hi: u64) -> Vec<(u64, u64)> {
+        let mut out = vec![];
+        let mut pid = self.route(lo);
+        while pid != NONE {
+            let head = self.table[pid].load(Acquire);
+            let (mut deltas, mut p) = (vec![], head);
+            let base = loop {
+                match unsafe { &*p } {
+                    n @ (Node::Insert { next, .. } | Node::Delete { next, .. }) => { deltas.push(n); p = *next; }
+                    Node::Base(b) => break b,
+                }
+            };
+            let mut map: BTreeMap<u64, Option<u64>> = base.keys.iter().zip(&base.vals).map(|(&k, &v)| (k, Some(v))).collect();
+            for d in deltas.iter().rev() {
+                match d { Node::Insert { key, val, .. } => { map.insert(*key, Some(*val)); } Node::Delete { key, .. } => { map.insert(*key, None); } _ => {} }
+            }
+            out.extend(map.range(lo..hi).filter_map(|(&k, v)| v.map(|v| (k, v))).filter(|(k, _)| *k < base.high));
+            if base.high >= hi { break; }
+            pid = base.side;
+        }
+        out
+    }
+
+    pub fn leaf_count(&self) -> usize { unsafe { &*self.index.load(Acquire) }.len() }
+    pub fn max_chain(&self) -> u32 { (0..self.next_pid.load(Relaxed)).filter_map(|p| unsafe { self.table[p].load(Acquire).as_ref() }.map(|n| n.len())).max().unwrap_or(0) }
+}
+
+impl Drop for BwTree {
+    fn drop(&mut self) {
+        unsafe {
+            for r in self.retired.get_mut().unwrap().drain(..) { drop(Box::from_raw(r)); }
+            for r in self.retired_idx.get_mut().unwrap().drain(..) { drop(Box::from_raw(r)); }
+            drop(Box::from_raw(self.index.load(Relaxed)));
+            for p in 0..self.next_pid.load(Relaxed) {
+                let mut n = self.table[p].load(Relaxed);
+                while !n.is_null() {
+                    let next = match &*n { Node::Insert { next, .. } | Node::Delete { next, .. } => *next, Node::Base(_) => std::ptr::null_mut() };
+                    drop(Box::from_raw(n));
+                    n = next;
+                }
+            }
+        }
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Tests that can fail"
+body = """
+<ul> <li><strong>Sequential model test</strong>: random inserts, removes, gets and range scans against <code>BTreeMap</code>, with chain thresholds 2, 4, 8 and 16 and key spaces from 100 to 50 000 (so both tiny trees with constant consolidation and trees with hundreds of leaves are covered).</li> <li><strong>Concurrent oracle test</strong>: 8 threads, each owning the keys ≡ <em>w</em> (mod 8) so its private <code>BTreeMap</code> is an exact oracle for <em>its</em> keys even while other threads split and consolidate the shared leaves; each thread checks every <code>get</code> against its model (a lost update fails immediately), then the final scan must equal the union of all models. A <strong>scanner thread runs throughout</strong> and asserts every range it reads is strictly sorted with no duplicates.</li> <li><strong>Contended inserts</strong>: 8 threads insert the <em>same</em> 30 000 ascending keys with different values; the result must contain each key exactly once with a value from some thread.</li> </ul>
+
+```text title="structure after the tests"
+seed 3: 23053 keys, 128 leaves, 127 splits, 2803 consolidations, longest chain 15
+8 writers × 100k ops: 117553 keys, 614 leaves, 613 splits, 75645 consolidations, longest chain 7
+8 threads inserting the same 30k ascending keys: 136 leaves after 135 splits
+```
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>200 000 pre-loaded keys, uniform random keys, 300 000 operations per thread, million operations per second (whole machine):</p>
+
+```text title="Bw-tree vs one RwLock<BTreeMap> vs 64 mutex-protected shards"
+workload        threads      Bw-tree  RwLock<BTree>      64 shards
+95% reads             1        15.43          13.70          16.91   (M ops/s)
+95% reads             2        23.78          12.66          23.48   (M ops/s)
+95% reads             4        41.35           6.91          31.18   (M ops/s)
+95% reads             8        75.97           5.11          43.02   (M ops/s)
+50% writes            1         6.85          13.50          16.23   (M ops/s)
+50% writes            2        11.76          12.58          21.85   (M ops/s)
+50% writes            4        19.67           7.25          28.58   (M ops/s)
+50% writes            8        30.17           4.34          23.77   (M ops/s)
+```
+
+<ul> <li><strong>Reads scale</strong>: the Bw-tree reaches 76 M ops/s on 8 threads, <strong>5× the single-thread rate</strong> and 15× the one-lock design, which <em>gets slower</em> with threads (13.7 → 5.1) as readers fight over one reader-count word.</li> <li><strong>Writes: not the best at low thread counts.</strong> One thread inserts at 6.9 M/s versus 13–16 for the lock-based maps, since every update <strong>allocates a delta</strong> and later a consolidated page; the single-lock map collapses at 8 threads (4.3) and the Bw-tree overtakes the 64-shard map (30.2 vs 23.8) once contention appears.</li> <li>A <strong>well-sharded plain B-tree is a strong baseline</strong>: it wins on both workloads at 1–4 threads, which is the kind of finding the OpenBw-Tree paper reports.</li> </ul>
+
+```text title="chain-length threshold (4 threads)"
+ threshold   read M ops/s  write M ops/s
+         2          35.57           5.28
+         4          45.46           9.94
+         8          48.47          16.25
+        16          41.82          19.92
+        32          29.53          18.20
+        64          23.01          12.16
+```
+
+<p>The threshold is a <strong>read–write trade-off</strong>: short chains read fast but consolidate (and allocate) constantly; long chains make writes cheap but force every read to walk them. Reads peak near 8, writes near 16; 8–16 is the usual compromise (the paper's default is similar).</p>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Raw pointers and <code>unsafe</code> are the honest tool here.</strong> The CAS target is a pointer in an <code>AtomicPtr&lt;Node&gt;</code>; Rust's ownership can't express "this node is shared by readers until nobody can see it". Confine every <code>unsafe</code> to <strong>five small operations</strong> (deref, CAS-publish, retire, drop) and document the invariant for each: <em>every node reachable from the table stays allocated until the tree drops</em>.</li> <li><strong>Ordering</strong>: publish with <code>AcqRel</code> on the successful CAS (so the node's contents are visible to any thread that loads the pointer with <code>Acquire</code>); a failed CAS needs only <code>Acquire</code>. Plain <code>Relaxed</code> would let a reader see a node whose fields aren't initialized yet on ARM.</li> <li><strong>Allocate then CAS then maybe free</strong>: on CAS failure the new node is still exclusively yours, so reclaiming it with <code>Box::from_raw</code> is safe; on success never touch it again except through the structure.</li> <li><strong><code>Send</code>/<code>Sync</code> by hand</strong> (<code>unsafe impl</code>) is a promise: the type must really be safe to share. Test it with ThreadSanitizer (<code>RUSTFLAGS=-Zsanitizer=thread</code>), Miri (single-threaded UB), and <strong>loom</strong> (exhaustive interleavings of a small model).</li> <li><strong>Preallocate the mapping table</strong> (<code>Vec&lt;AtomicPtr&lt;_&gt;&gt;</code> of fixed size). Growing it concurrently is a design problem of its own; real implementations use a chunked or paged table.</li> <li><strong>A double-free</strong> appeared during development: a lost split race retired the right page <em>and</em> left it in the table, so <code>Drop</code> freed it twice. Rule: a node must have <strong>exactly one owner list</strong> (table or retired), never both.</li> </ul></aside>
+
+<aside data-call="warning"><b>Latch-free pitfalls</b><ul> <li><strong>ABA</strong>: a CAS succeeds when the pointer value is the same, even if the object behind it was freed and reallocated. Here retired nodes are never reused, which sidesteps it; with a freelist you need tagged pointers or epochs.</li> <li><strong>Safe memory reclamation is the hard part</strong>: epoch-based reclamation (a thread announces the epoch it entered; garbage retired in epoch <em>e</em> is freed when all threads have reached <em>e + 2</em>), hazard pointers (publish what you're about to dereference), or reference counts (slow). Pick one <em>before</em> writing the data structure.</li> <li><strong>Starvation</strong>: lock-free ≠ wait-free; a thread can retry indefinitely under extreme contention. Bound retries and fall back (help, back off, or lock).</li> <li><strong>Readers and long chains</strong>: if consolidation falls behind (one slow thread, high write rate), chains grow and <em>all</em> reads pay.</li> <li><strong>Range scans are not snapshots</strong>: the scan above reads each leaf consistently, but concurrent updates can appear in later leaves and not earlier ones. Transactional isolation comes from MVCC on top (<a href="/cookbook/p/mvcc-protocols-compared">A3</a>).</li> <li><strong>Debugging</strong>: heisenbugs. Add counters (retries, consolidations), assertions on structure invariants, and a deterministic single-threaded replay mode.</li> </ul></aside>
+
+<aside data-call="production"><b>Latch-free and lock-free indexes in practice</b><ul> <li><strong>Hekaton (SQL Server)</strong>: latch-free hash indexes and the <strong>Bw-tree</strong> for range indexes; <strong>Azure Cosmos DB</strong> uses a Bw-tree-based engine; <strong>Peloton / NoisePage</strong> (CMU) used the OpenBw-Tree.</li> <li><strong>MemSQL / SingleStore</strong>: lock-free <strong>skip lists</strong>; <strong>RocksDB/LevelDB memtables</strong> use (concurrent) skip lists; <strong>Redis</strong> sorted sets use skip lists.</li> <li><strong>Most B+Tree engines</strong> (LMDB: copy-on-write with a single writer; InnoDB, PostgreSQL: latch crabbing; HyPer/Umbra/DuckDB: <strong>OLC</strong> with ART) <em>don't</em> go fully latch-free.</li> <li><strong>Lock-free hash tables</strong> (split-ordered lists, Cliff Click's NBHM, libcuckoo) are widely used for point lookups where order isn't needed.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "The Bw-Tree: A B-tree for New Hardware Platforms"
+url = "https://www.microsoft.com/en-us/research/publication/the-bw-tree-a-b-tree-for-new-hardware/"
+
+[[sources]]
+title = "Building a Bw-Tree Takes More Than Just Buzz Words"
+url = "https://www.cs.cmu.edu/~huanche1/publications/open_bwtree.pdf"
+
+[[sources]]
+title = "The ART of Practical Synchronization"
+url = "https://db.in.tum.de/~leis/papers/artsync.pdf"
+
+[[sources]]
+title = "A Survey of B-Tree Locking Techniques"
+url = "https://dl.acm.org/doi/10.1145/1806907.1806908"
+
+[[sources]]
+title = "loom"
+url = "https://github.com/tokio-rs/loom"
+
+[[sources]]
+title = "Miri"
+url = "https://github.com/rust-lang/miri"
+
+[[sources]]
+title = "crossbeam-epoch"
+url = "https://docs.rs/crossbeam-epoch"

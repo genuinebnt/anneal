@@ -1,0 +1,145 @@
+title = "Algorithms and concurrency in code"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Dynamic programming, greedy and search"
+chapter_order = 5
+order = 199
+kind = "guide"
+lede = "Implementations for the algorithms and performance sections"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Edit distance for “did you mean”"
+body = """
+```rust title="Two-row Levenshtein DP, plus a length-scaled suggestion threshold"
+pub fn levenshtein(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut cur = vec![i + 1; b.len() + 1];
+        for (j, &cb) in b.iter().enumerate() {
+            cur[j + 1] = (prev[j] + (ca != cb) as usize)   // substitute (or match)
+                .min(prev[j + 1] + 1)                      // delete
+                .min(cur[j] + 1);                          // insert
+        }
+        prev = cur;
+    }
+    prev[b.len()]
+}
+
+pub fn did_you_mean<'a>(name: &str, candidates: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    let max = name.chars().count().max(3) / 3;            // allow about one edit per three chars
+    candidates.into_iter()
+        .map(|c| (levenshtein(name, c), c))
+        .filter(|&(d, _)| d <= max)
+        .min_by_key(|&(d, _)| d)
+        .map(|(_, c)| c)
+}
+```
+"""
+
+[[sections]]
+heading = "Join ordering by subset DP"
+body = """
+```rust title="Selinger-style DP over table subsets (left-deep plans, cost = sum of intermediate sizes)"
+/// card[i] = rows in table i; sel(i, j) = selectivity of the join predicate (1.0 if none).
+pub fn best_join_order(card: &[f64], sel: impl Fn(usize, usize) -> f64) -> (f64, Vec<usize>) {
+    let n = card.len();
+    let full = (1usize << n) - 1;
+    // best[set] = (cost, output rows, order)
+    let mut best: Vec<Option<(f64, f64, Vec<usize>)>> = vec![None; 1 << n];
+    for i in 0..n { best[1 << i] = Some((0.0, card[i], vec![i])); }
+    for set in 1..=full {
+        if set.count_ones() < 2 { continue; }
+        for last in (0..n).filter(|&t| set & (1 << t) != 0) {
+            let Some((cost, rows, order)) = &best[set & !(1 << last)] else { continue };
+            let s: f64 = order.iter().map(|&t| sel(t, last)).product();
+            let out = rows * card[last] * s;
+            let total = cost + out;
+            if best[set].as_ref().map_or(true, |(c, _, _)| total < *c) {
+                let mut o = order.clone();
+                o.push(last);
+                best[set] = Some((total, out, o));
+            }
+        }
+    }
+    let (cost, _, order) = best[full].clone().unwrap();
+    (cost, order)                                        // O(2^n · n²): fine up to ~15 tables
+}
+```
+"""
+
+[[sections]]
+heading = "SWAR scanning in a lexer"
+body = """
+```rust title="Find the first non-space byte eight bytes at a time, and test a word for a given byte"
+pub fn skip_spaces(s: &[u8]) -> usize {
+    let mut i = 0;
+    while i + 8 <= s.len() {
+        let word = u64::from_le_bytes(s[i..i + 8].try_into().unwrap());
+        let diff = word ^ 0x2020_2020_2020_2020;           // space bytes become zero
+        if diff != 0 {
+            return i + (diff.trailing_zeros() / 8) as usize; // lowest non-zero byte = first non-space
+        }
+        i += 8;
+    }
+    while i < s.len() && s[i] == b' ' { i += 1; }
+    i
+}
+
+/// True if any byte of `x` equals `b` (Hacker's Delight “has zero byte”, after XOR).
+pub fn has_byte(x: u64, b: u8) -> bool {
+    const LO: u64 = 0x0101_0101_0101_0101;
+    const HI: u64 = 0x8080_8080_8080_8080;
+    let y = x ^ (LO * b as u64);
+    y.wrapping_sub(LO) & !y & HI != 0
+}
+```
+"""
+
+[[sections]]
+heading = "A lock-free stack with epoch reclamation"
+body = """
+```rust title="Treiber stack on crossbeam-epoch 0.9"
+use crossbeam_epoch::{self as epoch, Atomic, Owned};
+use std::{mem::ManuallyDrop, ptr, sync::atomic::Ordering::{Acquire, Relaxed, Release}};
+
+pub struct Stack<T> { head: Atomic<Node<T>> }
+struct Node<T> { data: ManuallyDrop<T>, next: Atomic<Node<T>> }
+
+impl<T> Stack<T> {
+    pub fn new() -> Self { Stack { head: Atomic::null() } }
+
+    pub fn push(&self, t: T) {
+        let mut node = Owned::new(Node { data: ManuallyDrop::new(t), next: Atomic::null() });
+        let guard = epoch::pin();
+        loop {
+            let head = self.head.load(Relaxed, &guard);
+            node.next.store(head, Relaxed);
+            match self.head.compare_exchange(head, node, Release, Relaxed, &guard) {
+                Ok(_) => return,
+                Err(e) => node = e.new,                        // lost the race: retry with our node
+            }
+        }
+    }
+
+    pub fn pop(&self) -> Option<T> {
+        let guard = epoch::pin();
+        loop {
+            let head = self.head.load(Acquire, &guard);
+            let node = unsafe { head.as_ref() }?;              // null → empty
+            let next = node.next.load(Relaxed, &guard);
+            if self.head.compare_exchange(head, next, Relaxed, Relaxed, &guard).is_ok() {
+                unsafe {
+                    // Other threads may still be reading `node`: free it only after they unpin.
+                    guard.defer_destroy(head);
+                    return Some(ManuallyDrop::into_inner(ptr::read(&node.data)));
+                }
+            }
+        }
+    }
+}
+```
+
+<p>Why it's correct: the <code>Release</code> on push pairs with the <code>Acquire</code> on pop, so a popped node's data is fully visible. The ABA problem can't occur, because a node isn't reused while any thread that might hold it is still pinned. Test it with <code>loom</code> (swap in <code>loom</code>'s atomics under <code>cfg(loom)</code>) and under Miri.</p>
+"""

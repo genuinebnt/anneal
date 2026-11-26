@@ -1,0 +1,38 @@
+title = "Jumps and control flow"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Bytecode and virtual machines"
+chapter_order = 3
+order = 590
+kind = "guide"
+lede = "Book ch. 23 · Official tests: if/ while/ for/ logical_operator/. The limit/ loop-size file needs care, see below"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<div class="cb-g-tt"><table><thead><tr><th>Kind</th><th>Input</th><th>Expected</th></tr></thead><tbody><tr><td><span class="cb-g-pill cb-g-dis">bytecode</span></td><td><code>if (true) print 1;</code></td><td><code>True · JumpIfFalse → 6 · Pop · Constant 1 · Print · Jump → 7 · Pop</code></td></tr><tr><td><span class="cb-g-pill cb-g-dis">bytecode</span></td><td><code>while (false) print 1;</code></td><td><code>False · JumpIfFalse → 6 · Pop · Constant 1 · Print · Loop → 0 · Pop</code></td></tr><tr><td><span class="cb-g-pill cb-g-dis">bytecode</span></td><td><code>print true and false;</code></td><td><code>True · JumpIfFalse → 4 · Pop · False · Print</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>for (var i = 0; i &lt; 3; i = i + 1) print i;</code></td><td><code>0</code>, <code>1</code>, <code>2</code> on separate lines</td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>a loop body past the u16 limit</code></td><td><code>Loop body too large.</code></td></tr></tbody></table></div>
+
+<p>Jump patching with <code>Op</code> variants: emit <code>JumpIfFalse(0xffff)</code>, keep its index, and overwrite the variant once you know the target. The distance counts ops, not bytes, so a body has to be bigger than in the book before it hits the <code>u16</code> limit. The official loop-size file in <code>limit/</code> assumes bytes. Either add up each op's book-encoded size when you check the limit, or put that file on clox's skip list and write your own test for it.</p>
+
+```rust title="crates/clox/src/compiler.rs"
+fn emit_jump(&mut self, op: fn(u16) -> Op) -> usize {
+    self.emit(op(u16::MAX));
+    self.chunk().code.len() - 1
+}
+
+fn patch_jump(&mut self, at: usize) {
+    let dist = self.chunk().code.len() - at - 1;
+    let Ok(dist) = u16::try_from(dist) else {
+        return self.error("Too much code to jump over.");
+    };
+    self.chunk_mut().code[at] = match self.chunk().code[at] {
+        Op::Jump(_) => Op::Jump(dist),
+        Op::JumpIfFalse(_) => Op::JumpIfFalse(dist),
+        op => unreachable!("patching {op:?}"),
+    };
+}
+
+// call site: let then_jump = self.emit_jump(Op::JumpIfFalse);
+```
+"""

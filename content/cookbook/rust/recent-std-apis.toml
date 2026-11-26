@@ -1,0 +1,46 @@
+title = "Recent std apis"
+module = "Rust language"
+module_order = 1
+chapter = "Everyday language"
+chapter_order = 3
+order = 34
+kind = "recipe"
+lede = "recent STANDARD-LIBRARY additions, grouped by area, each with a use case and an assert."
+level = "intermediate"
+code = ["examples/language/recent_std_apis.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+replacing hand-rolled helpers and small crates with std, reviewing code written for older compilers.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Everything here compiled on rustc 1.98.1 without `#![feature]`. A version in a comment was read in the release notes (<https://doc.rust-lang.org/stable/releases.html>); "recent" means the item compiles but its version was not checked. Areas: collections, slices/arrays, numbers, iterators/options, sync/cells, io/fs/paths, time/char/errors, pointers.
+
+Each demo states the pre-feature workaround it replaces.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>queue/cache eviction (extract_if, pop_if)</li><li>batch processing and protocol framing (chunk_by, as_chunks, first_chunk)</li><li>pagination maths (div_ceil)</li><li>checked arithmetic in parsers (checked_*, strict_*)</li><li>global config (LazyLock/OnceLock)</li><li>single-instance locks (File::lock)</li><li>pointer tagging (strict provenance)</li><li>timeouts (Duration::from_mins)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/stable/releases.html>
+
+<https://doc.rust-lang.org/std/>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/stable/releases.html"
+url = "https://doc.rust-lang.org/stable/releases.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std"
+url = "https://doc.rust-lang.org/std/"

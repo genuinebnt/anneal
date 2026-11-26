@@ -1,0 +1,267 @@
+title = "Adaptive and robust"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 389
+kind = "guide"
+lede = "15-721 S2024 #15 · progressive optimization, adaptive joins, runtime filters, plan robustness · re-optimization, robust choice, feedback and lookahead filters measured on real executions"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>If estimates cannot be fixed ahead of time, move the decision to when the information exists.</strong> <a href="/cookbook/p/statistics">Q7</a> and <a href="/cookbook/p/cardinality-estimation">Q8</a> showed that errors of 10× to 1000× survive any estimator that stays in the optimizer. There are three moments to act on that: <strong>before</strong> execution (choose a plan that tolerates the error), <strong>during</strong> execution (observe the truth and change course), and <strong>after</strong> (remember what happened for the next query).</li> <li><strong>The lecture's taxonomy</strong> (15-721 S2024 #15): <em>static</em> optimization picks the plan before execution and lives or dies by the cost model; <em>dynamic</em> optimization chooses as the query runs (flexible, hard to debug, non-deterministic); <em>adaptive</em> optimization compiles a plan, detects bad estimates during execution, and then either <strong>modifies future invocations</strong> (plan correction, feedback into the statistics catalog, <strong>reversion</strong> to an earlier plan that was faster, <strong>plan stitching</strong> of the best sub-plans of past plans), <strong>replans the current invocation</strong> (start over, or keep the intermediates already computed; Quickstep's lookahead information passing computes Bloom filters on dimension tables first and probes them with fact tuples to decide the join order), or inserts <strong>plan pivot points</strong> (a <code>CHOOSE</code> node that switches a nested-loop join to a hash join when the data turns out larger, or <em>proactive re-optimization</em> with bounding boxes on the uncertainty). The experiments below measure one tool from each group.</li> <li><strong>A materialized intermediate result is a free checkpoint.</strong> At a <strong>pipeline breaker</strong> (a hash build, a sort, a shuffle) the operator already holds all of its input, so its exact size is known at no extra cost. Mid-query re-optimization (Kabra and DeWitt 1998; progressive optimization, POP, in DB2: Markl et al. 2004) compares the observed size with the estimate and, if the plan chosen is no longer sensible, re-plans the <em>rest</em> of the query with the exact number, reusing the materialized result.</li> <li><strong>A validity range makes the check cheap.</strong> POP annotates each checkpoint with the range of cardinalities in which the chosen plan stays optimal (computed by a sensitivity analysis of the plan's cost against its alternatives). Staying inside the range costs nothing; leaving it triggers re-optimization. The threshold trades the benefit of a better plan against the cost of re-planning and of throwing away pipelined work.</li> <li><strong>Adaptive operators decide at the last moment, inside one plan.</strong> An <em>adaptive join</em> buffers the first rows of its build side and chooses hash join or index nested-loop join according to how many rows arrive (SQL Server, Oracle adaptive plans); a <em>runtime broadcast switch</em> turns a shuffle join into a broadcast join when a side turns out to be small (Spark's adaptive query execution, which re-optimizes at every stage boundary). <em>Eddies</em> route every tuple through the operators individually, the ultimate adaptivity at a per-tuple price few systems pay.</li> <li><strong>Robust plans are chosen for the worst case, not the average.</strong> Instead of the plan with the lowest estimated cost, pick the one whose cost is acceptable across a <em>set</em> of plausible cardinalities (minimax regret), run a <strong>bouquet</strong> of plans with a cost budget doubling each round, or use an operator that degrades gracefully (a <em>smooth scan</em> that morphs from an index probe to a sequential scan as the number of matches grows). Robustness has a price: a slightly worse plan when the estimates are right.</li> <li><strong>Feedback learns the systematic part of the error.</strong> LEO (DB2) compares estimated and observed cardinalities of executed plans and stores adjustment factors; Oracle's SQL plan directives remember a misestimate and request sampling next time. This repairs a consistent <em>bias</em> (the optimizer is always 8× low on this predicate) but not random noise, and it suffers from <strong>selection bias</strong>: the plan you run is the one whose estimate was too optimistic, so you only learn about the intermediates of plans you chose.</li> <li><strong>Make the plan space flatter instead.</strong> <em>Lookahead information passing</em> (LIP; also <em>sideways information passing</em>, <em>runtime filters</em>, <em>predicate transfer</em>) builds a Bloom filter from each small input and applies it to the large inputs before the joins, so intermediate results shrink whatever the join order. The best order matters less because the worst order is not so bad. Yannakakis' algorithm does the same exactly for acyclic queries: semijoin-reduce first, then join, for a running time linear in input plus output.</li> </ul>
+"""
+
+[[sections]]
+heading = "The lab"
+body = """
+<p>The chain-join lab of <a href="/cookbook/p/cost-models">Q9</a> again, with the same calibrated cost model and measured plan times: 36 random queries, 40–55 plans each, every plan timed. A strategy chooses a plan from <em>noisy</em> estimates (the true cardinalities times <code>exp(bias + σ·N(0,1))</code>), the plan it ends up running is looked up in the timing table, and the score is its slowdown against the fastest plan of that query. Four experiments:</p>
+
+<ul> <li><strong>E1 · Re-optimization.</strong> Choose with the estimates, run the first join, observe its true output size, and if the estimate was off by more than a threshold, re-choose the algorithm of the second join with the observed size (and the final estimate rescaled by the same factor). Threshold ∞ is "never", 1 is an adaptive join.</li> <li><strong>E2 · Robust choice.</strong> Evaluate every plan in all 27 combinations of {÷e&#94;u, ×1, ×e&#94;u} for the three intermediate sizes and pick the plan with the lowest <em>worst</em> cost (minimax) or <em>mean</em> cost.</li> <li><strong>E3 · Feedback.</strong> Learn, from the first <code>k</code> executions, the mean log ratio of observed to estimated size per intermediate and multiply later estimates by it. Compare two executors: one that reports only the intermediates its plan computed, and one that reports all three.</li> <li><strong>E4 · Lookahead filters.</strong> Build Bloom filters of <code>R.a</code> and <code>T.b</code>, drop the rows of <code>S</code> that cannot match, then run the hash-only plans, with the filter construction inside the timed region. First on the random queries, then on <strong>adversarial</strong> chains where one join order explodes.</li> </ul>
+
+:::deeper Reference: plan choice, mid-query re-optimization, robust choice, execution feedback, Bloom filter, lookahead-filtered hash plans
+```rust title="src/opt/adaptive.rs"
+//! Adaptive and robust query execution, on the chain-join lab of `cost`: mid-query re-optimization at a pipeline breaker,
+//! robust plan choice over a set of cardinality scenarios, learning a multiplicative correction from execution feedback,
+//! and lookahead information passing (Bloom-filter pre-filtering) that makes the join order matter less.
+use std::time::Instant;
+use crate::cost::*;
+
+// ----------------------------------------------------------------------------------------------- plan choice
+
+/// The plan with the lowest model cost for the given cardinalities.
+pub fn choose(model: &dyn CostModel, sizes: (f64, f64, f64), plans: &[Plan], cards: &[f64; 3]) -> Plan {
+    *plans.iter().min_by(|a, b| model.plan(&shapes_of(sizes, a, cards), a).partial_cmp(&model.plan(&shapes_of(sizes, b, cards), b)).unwrap()).unwrap()
+}
+
+/// q-error of an estimate against what was observed (both clamped to one row).
+pub fn q_err(est: f64, obs: f64) -> f64 { let (e, o) = (est.max(1.0), obs.max(1.0)); (e / o).max(o / e) }
+
+/// Mid-query re-optimization. The first join runs as planned and is materialized, so its true output size is known. If
+/// the estimate was off by more than `threshold` (a q-error), the remaining decision (the algorithm of the second join) is
+/// re-made with the observed size, and the final-result estimate is rescaled by the same factor. Returns the plan that
+/// actually executes. `threshold = 1.0` re-plans always (an *adaptive join*); `f64::INFINITY` never.
+pub fn reoptimize(model: &dyn CostModel, sizes: (f64, f64, f64), plans: &[Plan], est: &[f64; 3], observed_first: f64, chosen: Plan, threshold: f64) -> Plan {
+    let first = if chosen.st_first { 1 } else { 0 };
+    if q_err(est[first], observed_first) <= threshold { return chosen; }
+    let scale = observed_first.max(1.0) / est[first].max(1.0);
+    let mut cards = *est;
+    cards[first] = observed_first;
+    cards[2] = (est[2] * scale).max(1.0);
+    let rest: Vec<Plan> = plans.iter().copied().filter(|p| p.st_first == chosen.st_first && p.a1 == chosen.a1).collect();
+    choose(model, sizes, &rest, &cards)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Robust { /// minimize the worst cost over the scenarios
+    Minimax, /// minimize the average cost over the scenarios
+    Mean }
+
+/// Robust choice: every cardinality may be off by a factor `exp(±u)`; evaluate each plan in all 27 combinations of
+/// {÷e^u, 1, ×e^u} for the three intermediate sizes and take the worst or the mean.
+pub fn choose_robust(model: &dyn CostModel, sizes: (f64, f64, f64), plans: &[Plan], est: &[f64; 3], u: f64, mode: Robust) -> Plan {
+    let f = [(-u).exp(), 1.0, u.exp()];
+    let mut scenarios = vec![];
+    for a in f { for b in f { for c in f { scenarios.push([(est[0] * a).max(1.0), (est[1] * b).max(1.0), (est[2] * c).max(1.0)]); } } }
+    let score = |p: &Plan| {
+        let costs = scenarios.iter().map(|c| model.plan(&shapes_of(sizes, p, c), p));
+        match mode { Robust::Minimax => costs.fold(0.0, f64::max), Robust::Mean => costs.sum::<f64>() / scenarios.len() as f64 }
+    };
+    *plans.iter().min_by(|a, b| score(a).partial_cmp(&score(b)).unwrap()).unwrap()
+}
+
+/// Execution feedback: after each run the executor reports the observed cardinalities; the optimizer keeps the running mean
+/// of `ln(observed / estimated)` per intermediate and multiplies later estimates by its exponential. This corrects a
+/// *systematic* bias (the estimator is always 8x low) and cannot correct noise (it is 8x low or 8x high at random).
+#[derive(Default, Clone)]
+pub struct Feedback { sum: [f64; 3], n: [u32; 3] }
+impl Feedback {
+    /// `seen[i]` says whether the executed plan produced intermediate `i` (a plan computes only one of RS, ST and the final result).
+    pub fn observe(&mut self, est: &[f64; 3], obs: &[f64; 3], seen: [bool; 3]) {
+        for i in 0..3 { if seen[i] { self.sum[i] += obs[i].max(1.0).ln() - est[i].max(1.0).ln(); self.n[i] += 1; } }
+    }
+    pub fn correct(&self, est: &[f64; 3]) -> [f64; 3] {
+        [0, 1, 2].map(|i| if self.n[i] == 0 { est[i] } else { (est[i].max(1.0) * (self.sum[i] / self.n[i] as f64).exp()).max(1.0) })
+    }
+    pub fn runs(&self) -> u32 { self.n.iter().copied().max().unwrap_or(0) }
+}
+
+// ----------------------------------------------------------------------------------------------- lookahead information passing
+
+/// A Bloom filter over `u32` keys with two probes per key: no false negatives, false positives about
+/// `(1 - e^(-2n/m))^2`. Sized at 16 bits per key (about 1.4% false positives).
+pub struct Bloom { bits: Vec<u64>, mask: u64 }
+fn mix(k: u32) -> u64 { let z = (k as u64 ^ 0x9E37_79B9_7F4A_7C15).wrapping_mul(0xBF58_476D_1CE4_E5B9); z ^ (z >> 31) }
+impl Bloom {
+    pub fn new(keys: usize) -> Self {
+        let nbits = (keys.max(1) * 16).next_power_of_two().max(64);
+        Bloom { bits: vec![0; nbits / 64], mask: nbits as u64 - 1 }
+    }
+    #[inline] fn positions(&self, k: u32) -> (u64, u64) { let h = mix(k); (h & self.mask, (h >> 32) & self.mask) }
+    pub fn insert(&mut self, k: u32) { let (a, b) = self.positions(k); self.bits[(a >> 6) as usize] |= 1 << (a & 63); self.bits[(b >> 6) as usize] |= 1 << (b & 63); }
+    #[inline] pub fn contains(&self, k: u32) -> bool {
+        let (a, b) = self.positions(k);
+        self.bits[(a >> 6) as usize] >> (a & 63) & 1 == 1 && self.bits[(b >> 6) as usize] >> (b & 63) & 1 == 1
+    }
+}
+
+/// The rows of `S` that survive Bloom filters built from the keys of `R` (on `a`) and `T` (on `b`): a row that cannot match both
+/// neighbours is dropped before any join sees it. `ab_order` = rows as `(a, b)`, otherwise as `(b, a)`.
+pub fn lip_filter(c: &Chain, ab_order: bool) -> Vec<Row> {
+    let (mut fr, mut ft) = (Bloom::new(c.r.len()), Bloom::new(c.t.len()));
+    for r in &c.r { fr.insert(r.0); }
+    for t in &c.t { ft.insert(t.0); }
+    if ab_order { c.s_ab.iter().copied().filter(|&(a, b)| fr.contains(a) && ft.contains(b)).collect() }
+    else { c.s_ba.iter().copied().filter(|&(b, a)| ft.contains(b) && fr.contains(a)).collect() }
+}
+
+/// Run a hash-only plan on the pre-filtered `S`. The filters are built and applied inside the timed region.
+pub fn execute_lip(c: &Chain, p: &Plan) -> (f64, usize) {
+    let hash = |a: Alg| matches!(a, Alg::HashBuildL | Alg::HashBuildR);
+    assert!(hash(p.a1) && hash(p.a2), "lookahead passing is shown with hash joins");
+    let t0 = Instant::now();
+    let n = if p.st_first {
+        let s = lip_filter(c, false);
+        let x = join(&s, &c.t, p.a1, Out::LR, None, None);
+        join(&x, &c.r, p.a2, Out::RL, None, None).len()
+    } else {
+        let s = lip_filter(c, true);
+        let x = join(&c.r, &s, p.a1, Out::RL, None, None);
+        join(&x, &c.t, p.a2, Out::RL, None, None).len()
+    };
+    (t0.elapsed().as_secs_f64(), n)
+}
+
+/// Fraction of `S` that survives both Bloom filters (how selective the pre-filter is for this query).
+pub fn lip_retained(c: &Chain) -> f64 { lip_filter(c, true).len() as f64 / c.s_ab.len() as f64 }
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>Timings are wall-clock and move by a few percent between runs; every conclusion below held in three complete runs. The tables are the last run. "Within 1.2×" is the share of (query, noise draw) pairs whose plan ran within 1.2× of the fastest plan.</p>
+
+```text title="E1 · re-optimization after the first join"
+E1 re-optimization after the first join (estimates = truth x exp(bias + sigma N(0,1)), 20 draws per query)
+error model                 re-plan if q-error >                     slowdown  plan changed
+sigma = 1                   never                1.00    1.56     3.32     71%            0%
+sigma = 1                   4                    1.00    1.55     2.65     76%            8%
+sigma = 1                   2                    1.00    1.37     2.65     78%           16%
+sigma = 1                   always (adaptive join)   1.00    1.37     2.65     79%           22%
+sigma = 2                   never                1.17    2.43     9.01     56%            0%
+sigma = 2                   4                    1.03    2.01     6.08     68%           27%
+sigma = 2                   2                    1.03    2.01     6.08     71%           37%
+sigma = 2                   always (adaptive join)   1.00    2.01     6.08     71%           40%
+8x too low + sigma 0.5      never                1.27    2.52     7.06     45%            0%
+8x too low + sigma 0.5      4                    1.00    1.36     2.52     78%           49%
+8x too low + sigma 0.5      2                    1.00    1.32     2.49     80%           51%
+8x too low + sigma 0.5      always (adaptive join)   1.00    1.32     2.49     80%           51%
+true cardinalities          (oracle)             1.00    1.26     1.55     86%
+```
+
+<ul> <li><strong>Re-optimization repairs a biased estimator almost completely.</strong> When the optimizer is 8× too low (the Q8 pattern), the static choice has median 1.27× and p90 2.52×, within 1.2× in 45% of the cases; re-planning the second join after seeing the first join's true size gives median 1.00×, p90 1.32× and 80% within 1.2×, close to the 86% of an optimizer with true cardinalities. It changes the plan in about half of the runs.</li> <li><strong>With random errors it helps less but never hurts</strong>: at σ = 2 the median goes from 1.17× to 1.00–1.03×, p90 from 2.43× to 2.01×, max from 9.0× to 6.1×. It re-plans in 27–40% of the runs.</li> <li><strong>The gap that remains is the first decision.</strong> After the first join only the second join's algorithm can still change; the join order and the first algorithm are sunk. At σ = 2 the p90 stays at 2.0× (true cardinalities: 1.26×). Re-optimization is a safety net for later decisions, which is why systems place checkpoints early and often.</li> <li><strong>Threshold: 2 behaves like "always".</strong> A threshold of 4 gives up some of the benefit (σ = 1: p90 1.55× against 1.37×). Here re-planning is free because every intermediate is materialized anyway; in a pipelined engine each re-plan can discard work, which is what the threshold is for.</li> </ul>
+
+```text title="E2 · robust plan choice"
+E2 robust plan choice: scenarios {/e^u, 1, *e^u}^3 over the three intermediate sizes (true error sigma shown; 20 draws per query)
+true sigma    strategy                                           slowdown
+0             point estimate                   1.00    1.26     1.55     86%
+0             minimax, u = 0.5                 1.00    1.21     1.55     89%
+0             mean, u = 0.5                    1.00    1.21     1.55     89%
+0             minimax, u = 1 (fixed)           1.02    1.32     1.56     75%
+0.5           point estimate                   1.00    1.28     2.52     83%
+0.5           minimax, u = 0.5                 1.00    1.28     2.70     83%
+0.5           mean, u = 0.5                    1.00    1.28     2.52     83%
+0.5           minimax, u = 1 (fixed)           1.00    1.48     2.70     77%
+1             point estimate                   1.00    1.55     4.07     74%
+1             minimax, u = 1                   1.03    1.56     2.70     71%
+1             mean, u = 1                      1.00    1.55     4.07     74%
+1             minimax, u = 1 (fixed)           1.03    1.56     2.70     71%
+2             point estimate                   1.08    2.43    14.20     57%
+2             minimax, u = 2                   1.19    2.17     6.08     52%
+2             mean, u = 2                      1.08    2.15    14.20     57%
+2             minimax, u = 1 (fixed)           1.08    2.15    14.20     57%
+```
+
+<ul> <li><strong>Minimax buys the tail and pays in the middle.</strong> At σ = 2 (typical error 4×) the worst case drops from 14.2× to 6.1× and p90 from 2.43× to 2.17×; the median rises from 1.08× to 1.19× and the share within 1.2× falls from 57% to 52%. At σ = 1 the tail improves (max 4.07× to 2.70×) at a small cost (within 1.2×: 71% against 74%); at σ = 0.5 it changes almost nothing.</li> <li><strong>Averaging scenarios is not robust</strong>: the mean-cost choice stays close to the point estimate (the largest difference is p90 2.15× against 2.43× at σ = 2, with the same 14.2× worst case), plausibly because a mean is dominated by the central scenarios while the damage sits in the corners.</li> <li><strong>Paranoia has a price.</strong> Minimax with <code>u = 1</code> when the estimates are exact loses 11 points of "within 1.2×" (75% against 86%): it avoids plans that are best in the central scenario but risky at the corners. The uncertainty <code>u</code> has to come from measurements of the estimator's error (<a href="/cookbook/p/cardinality-estimation">Q8</a>), not from fear.</li> <li><strong>Reading</strong>: robust choice is worth it when the cost of a bad plan is far larger than the cost of a slightly worse typical plan (interactive dashboards with an SLA, queries that can run for hours), and not for a workload of cheap queries.</li> </ul>
+
+```text title="E3 · execution feedback"
+E3 execution feedback: the optimizer learns a per-intermediate correction from the first k runs; scored on the other 16 queries, 30 draws
+estimator errors          what a run reports             k                     slowdown
+8x too low, sigma 0.3     executed plan's two            0   1.17    2.27     4.14     68%
+8x too low, sigma 0.3     executed plan's two            1   1.18    3.29     4.07     58%
+8x too low, sigma 0.3     executed plan's two            3   1.00    1.55     2.18     76%
+8x too low, sigma 0.3     executed plan's two           10   1.00    1.28     2.14     85%
+8x too low, sigma 0.3     executed plan's two           20   1.00    1.28     1.79     85%
+8x too low, sigma 0.3     all three intermediates        1   1.00    1.55     2.18     75%
+8x too low, sigma 0.3     all three intermediates        3   1.00    1.28     2.18     85%
+8x too low, sigma 0.3     all three intermediates       10   1.00    1.28     1.55     86%
+8x too low, sigma 0.3     all three intermediates       20   1.00    1.28     2.06     84%
+4.5x too low, sigma 1     executed plan's two            0   1.08    2.27    10.63     69%
+4.5x too low, sigma 1     executed plan's two            1   1.20    3.04     8.71     54%
+4.5x too low, sigma 1     executed plan's two            3   1.18    2.18     4.07     55%
+4.5x too low, sigma 1     executed plan's two           10   1.18    2.14     4.07     57%
+4.5x too low, sigma 1     executed plan's two           20   1.00    1.66     3.64     69%
+4.5x too low, sigma 1     all three intermediates        1   1.20    2.46     5.70     54%
+4.5x too low, sigma 1     all three intermediates        3   1.00    1.69     4.07     71%
+4.5x too low, sigma 1     all three intermediates       10   1.00    1.55     4.07     76%
+4.5x too low, sigma 1     all three intermediates       20   1.00    1.55     3.29     79%
+unbiased, sigma 1.5       executed plan's two            0   1.00    2.00     6.63     71%
+unbiased, sigma 1.5       executed plan's two            1   1.28    2.46     8.71     49%
+unbiased, sigma 1.5       executed plan's two            3   1.27    2.46     4.07     50%
+unbiased, sigma 1.5       executed plan's two           10   1.28    2.46     4.07     49%
+unbiased, sigma 1.5       executed plan's two           20   1.18    2.28     5.70     54%
+unbiased, sigma 1.5       all three intermediates        1   1.28    2.46     8.71     46%
+unbiased, sigma 1.5       all three intermediates        3   1.00    2.14     4.07     65%
+unbiased, sigma 1.5       all three intermediates       10   1.00    2.00     4.14     68%
+unbiased, sigma 1.5       all three intermediates       20   1.00    2.00     5.70     70%
+```
+
+<ul> <li><strong>Feedback fixes bias.</strong> For the 8×-too-low estimator, the first three executions already bring the median from 1.17× to 1.00× and p90 from 2.27× to 1.28–1.55×; with ten executions 85–86% of the plans are within 1.2×.</li> <li><strong>It does nothing for noise.</strong> With an unbiased estimator of σ = 1.5, feedback from all three intermediates leaves the plan quality where it started (median 1.00×, p90 2.0×, 65–70% against 71%), and a run reports random errors that average out only slowly. Expect nothing from feedback on a predicate whose estimate is wrong in both directions.</li> <li><strong>Partial observations make it worse, in every scenario with noise.</strong> An executor that reports only what the executed plan computed (two of the three intermediates) gets <em>worse</em> with feedback than without it: for σ = 1.5 the median goes from 1.00× to 1.18–1.28× and the share within 1.2× from 71% to 49–54%, and for the mixed case (4.5× low, σ = 1) it stays worse until about 20 executions. Reporting all three intermediates removes most of the damage. This is consistent with selection bias: the plan that runs is the one whose estimates were optimistic, so the observed/estimated ratios are measured only where the estimator looked too good, and correcting some intermediates and not their competitors tilts every later comparison. We did not isolate the mechanism further.</li> <li><strong>One observation is the worst number of observations.</strong> For every scenario, <code>k = 1</code> with partial reporting is worse than <code>k = 0</code> (p90 up to 3.3×): a single noisy ratio is a bad correction. Feedback needs a floor on the number of observations or a shrinkage towards no correction.</li> </ul>
+
+```text title="E4 · lookahead information passing, random queries"
+E4 lookahead information passing: hash-only plans (2 orders x 2 build sides x 2 build sides = 8 per query), S pre-filtered by Bloom filters of R.a and T.b
+                                                  median     p90      max
+slowest / fastest hash plan, no LIP                 3.01    4.49     9.48
+slowest / fastest hash plan, with LIP               1.98    2.36     3.00
+fastest plan with LIP / fastest without             1.87    2.35     2.95
+median plan with LIP / median plan without          1.30    1.78     2.07
+slowest plan with LIP / slowest without             1.25    1.66     2.23
+LIP's best plan beats the no-LIP best in 0% of the queries
+by how much of S survives the filters (retained fraction):
+retained               queriesfastest LIP / fastest plain      spread: plain -> LIP
+0% to 25%                   31                      1.89             3.1x ->  2.0x
+25% to 75%                   3                      1.58             2.6x ->  2.1x
+75% to 100%                  2                      1.47             2.8x ->  2.5x
+```
+
+<ul> <li><strong>On typical queries the pre-filter is a loss.</strong> In 31 of 36 queries the filters keep under a quarter of <code>S</code>, yet the best plan with filters is a median <strong>1.87× slower</strong> than the best plan without (never faster: 0% of the queries) because the Bloom filter construction and the extra pass cost as much as the small joins they save. The spread between the slowest and fastest join order shrinks (3.0× to 2.0×) only because the fastest plan got slower, and the slowest plan with filters is 1.25× <em>slower</em> than without: plausibly this is because the blow-ups of a bad order on these queries come from many-to-many joins whose duplicates a semijoin filter cannot remove.</li> </ul>
+
+```text title="E4b · lookahead information passing, adversarial chains"
+E4b adversarial chains: each S row matches ~20 R rows but only 10% of S rows match any T row (RS-first builds a 20x intermediate; ST-first is cheap)
+                                                  median     p90      max
+slowest / fastest hash plan, no LIP                15.00   15.71    16.41
+slowest / fastest hash plan, with LIP               2.06    2.14     2.14
+fastest plan with LIP / fastest without             1.18    1.49     1.51
+median plan with LIP / median plan without          0.17    0.28     0.28
+slowest plan with LIP / slowest without             0.17    0.20     0.21
+(fastest plain plan 0.4 ms median, fastest LIP plan 0.5 ms median)
+```
+
+<ul> <li><strong>On the shape the technique is made for, it is insurance with a small premium.</strong> When every <code>S</code> row matches about 20 <code>R</code> rows but only 10% of <code>S</code> rows match any <code>T</code> row, joining <code>R ⋈ S</code> first builds an intermediate 20× the size of <code>S</code>. Without filters the slowest join order is <strong>15.0×</strong> slower than the fastest; with filters 2.06×. The slowest plan is <strong>6× faster</strong> (0.17), and the premium is 1.18× on the best plan. The pre-filter turns "I must pick the right join order" into "any join order is acceptable".</li> <li><strong>Reading</strong>: use runtime filters where the join graph has selective, hash-joinable edges and the estimates are not trusted (star and snowflake schemas, large fact tables); skip them when joins are cheap and results are small. Systems make this decision with costs and with a cheap-to-check estimate of the filter's selectivity.</li> </ul>
+
+<aside data-call="note"><b>Four moments, four tools</b><div class="cb-g-tt"><table> <thead> <tr> <th>moment</th> <th>tool</th> <th>fixes</th> <th>cannot fix</th> </tr> </thead> <tbody> <tr> <td>before</td> <td>robust choice, bouquets, upper-bound estimates</td> <td>variance of the error</td> <td>systematic bias; the typical plan gets slower</td> </tr> <tr> <td>during</td> <td>re-optimization at checkpoints, adaptive joins</td> <td>any error that shows up at a checkpoint</td> <td>decisions already executed; pipelined work thrown away</td> </tr> <tr> <td>during</td> <td>runtime filters, semijoin reduction</td> <td>the blow-up of a bad join order</td> <td>cheap queries (the filters cost more than they save)</td> </tr> <tr> <td>after</td> <td>feedback, plan directives</td> <td>consistent bias on repeated shapes</td> <td>noise; new query shapes; partial observations</td> </tr> </tbody> </table></div></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A strategy is a function from estimates to a plan</strong>: <code>choose</code>, <code>choose_robust</code> and <code>reoptimize</code> all take <code>&amp;dyn CostModel</code> and slices of <code>Plan</code>, so a strategy is a few lines over <code>shapes_of</code> and the model, and the experiments just loop. Keeping the plan space as a plain <code>Vec&lt;Plan&gt;</code> (not a tree of references) made "re-plan among the plans with the same first join" a one-line <code>filter</code>.</li> <li><strong><code>[bool; 3]</code> for "which intermediates did this run observe"</strong>: a fixed-size array copies for free, indexes by the same <code>0..3</code> as the cardinality array, and the feedback accumulators are plain <code>[f64; 3]</code> and <code>[u32; 3]</code>. Per-index counts matter: dividing by a global run count was a bug the tests found.</li> <li><strong>Scenario enumeration with nested loops over a <code>[f64; 3]</code></strong> of factors is more readable than a recursive product for three variables, and evaluates in microseconds; for a dozen variables sample scenarios instead of enumerating them.</li> <li><strong>A Bloom filter in 30 lines</strong>: <code>Vec&lt;u64&gt;</code> of bits, size a power of two so the position is <code>hash &amp; mask</code>, two positions from the high and low halves of one 64-bit mixed hash. <code>x &gt;&gt; (a &amp; 63) &amp; 1 == 1</code> reads a bit; the sizing rule of 16 bits per key gives about 1.4% false positives with two probes.</li> <li><strong><code>&amp;mut dyn FnMut(&amp;Chain, &amp;TimedQuery)</code></strong> lets the timing harness hand each generated chain to an extra measurement (the lookahead timing) while it exists, and then drop it: 36 chains never live in memory at once.</li> <li><strong>Seeds, not randomness, in strategies</strong>: every noise draw is an <code>Rng(seed)</code>; the results of E1–E3 can be reproduced exactly, and only the wall-clock plan timings vary between runs.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Bloom filter</strong>: every inserted key is found (no false negatives) among 100 000, and the false positive rate over keys never inserted is under 3%.</li> <li><strong>Lookahead filter against the exact semijoin</strong>: for random chains the filtered <code>S</code> contains every row that has partners on both sides and at most 5% more; every hash-only plan on the filtered input returns the true final cardinality.</li> <li><strong>Re-optimization with toy models</strong>: a model in which the winner flips with the intermediate's size shows that (1) threshold ∞ never changes the plan, (2) threshold 1 changes only the second join, (3) an estimate within the threshold keeps the plan, (4) an exact estimate keeps the plan even at threshold 1; a second model in which the cost is the <em>output size</em> shows that the final estimate is rescaled by the observed/estimated ratio of the first join and that a first join that already ran cannot change.</li> <li><strong>Robust choice</strong>: with <code>u = 0</code> it equals the point choice; for random cardinalities the minimax plan's worst-case cost is no larger than that of any other plan over the 27 scenarios.</li> <li><strong>Feedback</strong>: a biased estimator (always ÷8, small noise) is corrected to within 3% after 200 runs; a noisy unbiased one leaves the correction near 1; separate observation counts per intermediate give exact corrections for unequal counts; no observations means no correction.</li> <li><strong>Mutants run against these tests</strong>: minimax takes the best case instead of the worst (killed); feedback divides by the global run count (<strong>survived the first tests, killed by the unequal-count test</strong>); the Bloom filter tests with OR instead of AND, or sets only one bit (killed); the pre-filter ignores one of its two filters, in either row order (a filter changes only speed, so the cardinality test alone cannot see it; <strong>killed by the comparison with the exact semijoin</strong>); re-optimization forgets to rescale the final estimate, or re-plans the first join too (<strong>both survived the first toy model, killed by the output-size model</strong>).</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Spark</strong> (3.0+): <em>adaptive query execution</em> re-optimizes at every shuffle-stage boundary using the actual shuffle statistics: coalesces small partitions, switches a sort-merge join to a broadcast join when a side turns out to be small, and splits skewed partitions. Materialized stages are the checkpoints.</li> <li><strong>SQL Server</strong>: <em>adaptive joins</em> (batch mode) buffer the build side and choose hash or nested loops at run time by row count; <em>memory grant feedback</em> adjusts the memory of a repeated query from its last execution; <em>interleaved execution</em> pauses to execute a part of the plan whose estimate is hardest (multi-statement table functions) and re-plans with the true count.</li> <li><strong>Oracle</strong>: <em>adaptive plans</em> put statistics collectors in the plan and switch nested loops to hash joins (and back) at run time; <em>automatic reoptimization</em> re-plans the next execution using what the first learned; <em>SQL plan directives</em> store a misestimate so the next parse samples or creates extended statistics.</li> <li><strong>IBM Db2</strong>: LEO (the original feedback optimizer) and progressive optimization with validity ranges and CHECK operators.</li> <li><strong>PostgreSQL</strong>: no mid-query re-planning in the core; plan quality is fixed by statistics (<a href="/cookbook/p/statistics">Q7</a>, <a href="/cookbook/p/cardinality-estimation">Q8</a>) and by extensions such as pg_hint_plan and learned-feedback extensions.</li> <li><strong>Runtime filters</strong> are everywhere in analytical engines: Bloom and min/max filters built from the hash-join build side and pushed to the probe-side scan (Impala, Trino's dynamic filtering, Spark's bloom-filter joins, SQL Server's bitmap filters in batch mode, Oracle's join filters). Zone maps (<a href="/cookbook/p/columnar-formats-and-nested-data">A12</a>) make a pushed-down min/max range skip whole row groups.</li> <li><strong>Research prototypes</strong> with strong results: plan bouquets (robust execution by repeated budgeted plans), smooth scan (a robust access path), predicate transfer (a Yannakakis-style reduction pass before joins), and learned query optimizers with execution feedback (Bao, Neo).</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Plan instability.</strong> Re-optimizing and feedback change plans between runs; users and test suites that expect a fixed plan will report it as a bug. Log every re-plan with the reason, and offer a way to pin plans.</li> <li><strong>Wasted work.</strong> Abandoning a pipeline mid-execution discards what it has done; place checkpoints where the intermediate is materialized anyway, and charge the restart cost in the threshold.</li> <li><strong>Selection bias in feedback.</strong> You only observe what the chosen plan computes, and that plan is the one the estimator liked. Observe the intermediates of competing plans cheaply (a sample, a sketch) or shrink the correction.</li> <li><strong>Feedback on one query is a guess.</strong> A single observation corrects noise as eagerly as bias (the <code>k = 1</code> rows). Aggregate over query templates and weigh by the number of observations.</li> <li><strong>Robustness is not free.</strong> Minimax with too wide an uncertainty (<code>u = 1</code> at zero error) cost 11 points of near-optimal plans. Estimate <code>u</code> from the observed q-error distribution of the estimator.</li> <li><strong>Filters have a break-even point.</strong> A Bloom filter pass costs about as much as a small hash join; apply runtime filters when the probe side is large and the filter is selective, and measure the filter's actual selectivity at run time to turn it off when it keeps most rows.</li> <li><strong>Adaptive operators need their own tests</strong>: the interesting inputs are the ones at the switch point (the row count where the adaptive join changes algorithm); test just below, at, and just above it, and prove both branches return the same bag.</li> <li><strong>Re-optimization must preserve semantics</strong>: a re-planned remainder must read the materialized intermediate with the same ordering and duplicate semantics the old plan promised, and side effects (writes, sequence values) must not run twice.</li> </ul></aside>
+"""

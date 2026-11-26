@@ -1,0 +1,7 @@
+error[E0312]: missing fields in initialiser of `P`: `y`, `z`
+ --> e0312_missing_fields.peb:3:13
+  |
+3 |     let p = P { x: 1 };
+  |             ^ missing `y`, `z`
+
+error: aborting due to 1 previous error

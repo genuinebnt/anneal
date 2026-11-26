@@ -1,0 +1,252 @@
+title = "Streaming and incremental views"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 422
+kind = "guide"
+lede = "CMU Database Seminar #5 (DBSP), Databases! #8 (RisingWave), flash talks (Confluent, RelationalAI, dbt) · Z-sets, bilinear delta rule, counted state for MIN and DISTINCT · each circuit checked against recomputation · break-even and hot-key costs measured"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<p><em>(No notes exist for these talks and I have not transcribed them. The points below are the design space the systems share, from the DBSP, differential dataflow and view-maintenance literature and the systems' documentation, not a summary of any talk.)</em></p>
+
+<ul> <li><strong>The problem</strong>: a view <code>V = Q(DB)</code> is expensive to compute and wanted fresh. When the database changes by a small <code>Δ</code>, recomputing <code>Q</code> over everything wastes work proportional to the data; <strong>incremental view maintenance (IVM)</strong> computes the <em>change of the view</em> <code>ΔV</code> from <code>Δ</code> and some retained state. A streaming database is an IVM engine whose views are always on: SQL views over unbounded inputs, results kept current.</li> <li><strong>Changes are rows with signed weights.</strong> Represent a collection as a <strong>Z-set</strong>: a map from row to an integer weight, where an insertion is <code>+1</code>, a deletion is <code>-1</code>, an update is a deletion plus an insertion, and weights add. Z-sets form a group (every change has an inverse), which makes <em>retraction</em> a first-class operation instead of a special case.</li> <li><strong>DBSP</strong> (Budiu et al., VLDB 2023) reduces IVM to four ideas: <em>lift</em> any query to operate on streams of Z-sets, <em>integrate</em> <code>I</code> (a running sum turns a stream of changes into the stream of states), <em>differentiate</em> <code>D</code> (the inverse: states to changes) and <em>delay</em>. The incremental version of any query is <code>Q&#94;Δ = D ∘ Q ∘ I</code>, and algebra on that formula derives efficient circuits: <strong>linear operators</strong> (filter, projection, union, sum) are their own incremental versions, because <code>Q(a + b) = Q(a) + Q(b)</code>; the <strong>join is bilinear</strong>, with <code>Δ(A ⋈ B) = ΔA ⋈ B_old + A_old ⋈ ΔB + ΔA ⋈ ΔB</code>; <strong>non-linear operators</strong> (distinct, min, max, top-k) need state that records enough of the input to react to a deletion. Operators compose by the chain rule, so incrementalizing a whole query is mechanical.</li> <li><strong>State is the price.</strong> An incremental join keeps both inputs (indexed by the join key); a group-by keeps one accumulator per group; <code>MIN</code> keeps a counted multiset per group, because deleting the minimum requires knowing the next one; <code>DISTINCT</code> keeps counts. Streaming engines therefore live or die by their <strong>state store</strong>: in memory, on local disk as an LSM tree, or on object storage with a cache (RisingWave's design), with TTLs and watermarks to bound growth.</li> <li><strong>Updates have a fan-out.</strong> One changed dimension row must retract and re-insert every fact row joined to it; with skewed keys a single update can cost as much as thousands of ordinary ones.</li> <li><strong>Time and consistency are the other half.</strong> Streams arrive out of order and in parallel: engines use <em>watermarks</em> (a promise that no earlier event will arrive), <em>epochs</em> or <em>barriers</em> (a consistent cut across all operators, as in Chandy–Lamport snapshots) so that views reflect a transaction-consistent prefix of the input and recovery restores a checkpoint, and <em>windows</em> to bound state for time-based aggregates.</li> <li><strong>Recursion</strong> (graph reachability, transitive closure) is incrementalized by nested streams (DBSP, differential dataflow) or by classical algorithms for views: <em>counting</em> derivations, and <em>delete-and-rederive</em> (DRed) for deletions.</li> <li><strong>Incremental is not always faster.</strong> The per-change cost of IVM is a constant times a hash-table update, several times a recomputation's per-row cost; it wins when the delta is small relative to the data and loses for bulk loads, which is why systems batch changes per epoch and fall back to a full refresh for huge deltas.</li> </ul>
+"""
+
+[[sections]]
+heading = "The model in code"
+body = """
+<p>A <strong>Z-set</strong> is a <code>HashMap&lt;K, i64&gt;</code> that never stores zero weights. The module defines the group operations (add, merge, negate) and the linear operators (filter, map), then a small query as a circuit:</p>
+
+```sql
+SELECT region, SUM(amount), COUNT(*)
+FROM orders o JOIN customers c ON o.cust = c.id
+WHERE o.amount >= thr
+GROUP BY region
+```
+
+<p>The circuit receives one batch of changes <code>(Δorders, Δcustomers)</code> per step and returns the change of the view:</p>
+
+<ol> <li><strong>Filter</strong> the order delta (linear: deletions are filtered exactly like insertions).</li> <li><strong>Join</strong> with the three-term formula: <code>Δorders ⋈ customers_state</code>, <code>orders_state ⋈ Δcustomers</code>, <code>Δorders ⋈ Δcustomers</code>, all against the <em>old</em> state; only then fold the deltas into the state. Both inputs are indexed by the join key.</li> <li><strong>Aggregate</strong>: add each joined row's weight to the group's <code>(sum, count)</code>; for every group that changed emit the old row with weight <code>-1</code> and the new row with weight <code>+1</code>, and drop groups whose count reaches zero.</li> <li>Elsewhere in the module: <strong>MIN</strong> with a counted multiset per group, and <strong>DISTINCT</strong> emitting only when a count crosses zero.</li> </ol>
+
+<p>The tests compare the incrementally maintained table with a from-scratch <code>recompute</code> after <em>every</em> batch of random inserts, deletes and customer region changes.</p>
+
+:::deeper Reference: Z-sets and linear operators, the incremental join + aggregate circuit, MIN with counted state, DISTINCT
+```rust title="src/ivm/mod.rs"
+//! Incremental view maintenance in the style of DBSP: collections are Z-sets (rows with integer weights; a deletion is a negative
+//! weight), a query is a circuit of operators that consume *deltas* and emit deltas, and the state each operator keeps is the
+//! integral of its inputs. Linear operators (filter, project, union, sum) are their own incremental versions; the join is
+//! bilinear and needs both integrated inputs; MIN and DISTINCT are non-linear and keep counted state.
+use std::collections::{BTreeMap, HashMap};
+use std::hash::Hash;
+
+pub type Z<K> = HashMap<K, i64>;
+
+/// `z[k] += w`, dropping the entry when the weight becomes zero (a Z-set never stores zeros).
+pub fn z_add<K: Hash + Eq + Clone>(z: &mut Z<K>, k: K, w: i64) {
+    if w == 0 { return; }
+    let e = z.entry(k.clone()).or_insert(0);
+    *e += w;
+    if *e == 0 { z.remove(&k); }
+}
+pub fn z_merge<K: Hash + Eq + Clone>(a: &mut Z<K>, b: &Z<K>) { for (k, w) in b { z_add(a, k.clone(), *w); } }
+pub fn z_neg<K: Hash + Eq + Clone>(a: &Z<K>) -> Z<K> { a.iter().map(|(k, w)| (k.clone(), -w)).collect() }
+/// Linear operator: filter. Applies to insertions and deletions alike, since both are just weighted rows.
+pub fn z_filter<K: Hash + Eq + Clone>(a: &Z<K>, p: impl Fn(&K) -> bool) -> Z<K> { a.iter().filter(|(k, _)| p(k)).map(|(k, w)| (k.clone(), *w)).collect() }
+/// Linear operator: map / project (rows that collide add their weights).
+pub fn z_map<K: Hash + Eq + Clone, R: Hash + Eq + Clone>(a: &Z<K>, f: impl Fn(&K) -> R) -> Z<R> { let mut o = Z::new(); for (k, w) in a { z_add(&mut o, f(k), *w); } o }
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub struct Order { pub id: u32, pub cust: u32, pub amount: i64 }
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub struct Cust { pub id: u32, pub region: u32 }
+
+/// `SELECT region, SUM(amount), COUNT(*) FROM orders o JOIN customers c ON o.cust = c.id WHERE o.amount >= thr GROUP BY region`
+/// as a row `(region, sum, count)` per non-empty group, recomputed from scratch (the reference semantics).
+pub fn recompute(orders: &Z<Order>, custs: &Z<Cust>, thr: i64) -> HashMap<u32, (i64, i64)> {
+    let mut by_cust: HashMap<u32, Vec<(u32, i64)>> = HashMap::new();
+    for (c, w) in custs { by_cust.entry(c.id).or_default().push((c.region, *w)); }
+    let mut out: HashMap<u32, (i64, i64)> = HashMap::new();
+    for (o, wo) in orders {
+        if o.amount < thr { continue; }
+        for &(region, wc) in by_cust.get(&o.cust).map_or(&[][..], |v| &v[..]) {
+            let e = out.entry(region).or_insert((0, 0));
+            e.0 += wo * wc * o.amount;
+            e.1 += wo * wc;
+        }
+    }
+    out.retain(|_, v| v.1 != 0);
+    out
+}
+
+/// The incremental circuit for the query above. State = the integral of each input after the filter, indexed by join key, plus the
+/// current aggregate per region.
+pub struct View {
+    thr: i64,
+    orders: HashMap<u32, Z<Order>>,
+    custs: HashMap<u32, Z<Cust>>,
+    pub agg: HashMap<u32, (i64, i64)>,
+    pub join_rows: u64,
+}
+pub type ViewDelta = Z<(u32, i64, i64)>;
+
+impl View {
+    pub fn new(thr: i64) -> Self { View { thr, orders: HashMap::new(), custs: HashMap::new(), agg: HashMap::new(), join_rows: 0 } }
+
+    /// Consume one batch of changes and return the change of the view as a Z-set of `(region, sum, count)` rows
+    /// (the old row with weight -1 and the new row with weight +1 for every region that changed).
+    pub fn step(&mut self, d_orders: &Z<Order>, d_custs: &Z<Cust>) -> ViewDelta {
+        let thr = self.thr;
+        let fo = z_filter(d_orders, |o| o.amount >= thr);                    // linear: its own incremental version
+        // Δ(O ⋈ C) = ΔO ⋈ C_old  +  O_old ⋈ ΔC  +  ΔO ⋈ ΔC
+        let mut joined: Z<(u32, i64)> = Z::new();                            // (region, amount) with weight
+        let mut emit = |region: u32, amount: i64, w: i64, rows: &mut u64| { z_add(&mut joined, (region, amount), w); *rows += 1; };
+        let mut rows = 0u64;
+        for (o, wo) in &fo {
+            if let Some(cs) = self.custs.get(&o.cust) { for (c, wc) in cs { emit(c.region, o.amount, wo * wc, &mut rows); } }
+        }
+        for (c, wc) in d_custs {
+            if let Some(os) = self.orders.get(&c.id) { for (o, wo) in os { emit(c.region, o.amount, wo * wc, &mut rows); } }
+        }
+        let mut dc_by_key: HashMap<u32, Vec<(Cust, i64)>> = HashMap::new();
+        for (c, wc) in d_custs { dc_by_key.entry(c.id).or_default().push((*c, *wc)); }
+        for (o, wo) in &fo {
+            if let Some(cs) = dc_by_key.get(&o.cust) { for (c, wc) in cs { emit(c.region, o.amount, wo * wc, &mut rows); } }
+        }
+        self.join_rows += rows;
+        // integrate the inputs (after the join used the old state)
+        for (o, w) in &fo { let m = self.orders.entry(o.cust).or_default(); z_add(m, *o, *w); if m.is_empty() { self.orders.remove(&o.cust); } }
+        for (c, w) in d_custs { let m = self.custs.entry(c.id).or_default(); z_add(m, *c, *w); if m.is_empty() { self.custs.remove(&c.id); } }
+        // incremental SUM / COUNT by region: linear, so the state just accumulates
+        let mut touched: HashMap<u32, (i64, i64)> = HashMap::new();
+        for (&(region, amount), &w) in &joined {
+            let e = touched.entry(region).or_insert((0, 0));
+            e.0 += w * amount;
+            e.1 += w;
+        }
+        let mut out = ViewDelta::new();
+        for (region, (ds, dc)) in touched {
+            if ds == 0 && dc == 0 { continue; }
+            let old = self.agg.get(&region).copied();
+            let new = (old.map_or(0, |o| o.0) + ds, old.map_or(0, |o| o.1) + dc);
+            if let Some(o) = old { z_add(&mut out, (region, o.0, o.1), -1); }
+            if new.1 != 0 { z_add(&mut out, (region, new.0, new.1), 1); self.agg.insert(region, new); } else { self.agg.remove(&region); }
+        }
+        out
+    }
+    pub fn state_rows(&self) -> usize { self.orders.values().map(|m| m.len()).sum::<usize>() + self.custs.values().map(|m| m.len()).sum::<usize>() + self.agg.len() }
+}
+
+/// Integrate a stream of view deltas into a materialized table (what a downstream consumer would do).
+pub fn apply_delta(table: &mut HashMap<u32, (i64, i64)>, d: &ViewDelta) {
+    for (&(region, s, c), &w) in d { if w < 0 { table.remove(&region); } else if w > 0 { table.insert(region, (s, c)); } }
+    // a region present with weight -1 and +1 in the same delta ends up with the new row: apply removals first, then insertions
+    for (&(region, s, c), &w) in d { if w > 0 { table.insert(region, (s, c)); } }
+}
+
+/// `SELECT cust, MIN(amount) FROM orders GROUP BY cust`. MIN is not linear: after a deletion the new minimum is unknown without the
+/// other values, so each group keeps a counted multiset (`amount -> count`).
+#[derive(Default)]
+pub struct MinView { groups: HashMap<u32, BTreeMap<i64, i64>>, pub current: HashMap<u32, i64> }
+impl MinView {
+    pub fn step(&mut self, d: &Z<Order>) -> Z<(u32, i64)> {
+        let mut changed: Vec<u32> = vec![];
+        for (o, w) in d {
+            let g = self.groups.entry(o.cust).or_default();
+            let c = g.entry(o.amount).or_insert(0);
+            *c += w;
+            if *c == 0 { g.remove(&o.amount); }
+            changed.push(o.cust);
+        }
+        changed.sort_unstable(); changed.dedup();
+        let mut out = Z::new();
+        for c in changed {
+            let new = self.groups.get(&c).and_then(|g| g.keys().next().copied());
+            let old = self.current.get(&c).copied();
+            if new != old {
+                if let Some(o) = old { z_add(&mut out, (c, o), -1); }
+                if let Some(n) = new { z_add(&mut out, (c, n), 1); self.current.insert(c, n); } else { self.current.remove(&c); }
+            }
+            if self.groups.get(&c).is_some_and(|g| g.is_empty()) { self.groups.remove(&c); }
+        }
+        out
+    }
+}
+pub fn recompute_min(orders: &Z<Order>) -> HashMap<u32, i64> {
+    let mut m: HashMap<u32, i64> = HashMap::new();
+    for (o, w) in orders { if *w > 0 { let e = m.entry(o.cust).or_insert(i64::MAX); *e = (*e).min(o.amount); } }
+    m
+}
+
+/// Incremental DISTINCT: emits a row only when its count crosses zero.
+#[derive(Default)]
+pub struct Distinct<K: Hash + Eq + Clone> { counts: Z<K> }
+impl<K: Hash + Eq + Clone> Distinct<K> {
+    pub fn new() -> Self { Distinct { counts: Z::new() } }
+    pub fn step(&mut self, d: &Z<K>) -> Z<K> {
+        let mut out = Z::new();
+        for (k, w) in d {
+            let before = self.counts.get(k).copied().unwrap_or(0);
+            z_add(&mut self.counts, k.clone(), *w);
+            let after = self.counts.get(k).copied().unwrap_or(0);
+            match (before > 0, after > 0) { (false, true) => z_add(&mut out, k.clone(), 1), (true, false) => z_add(&mut out, k.clone(), -1), _ => {} }
+        }
+        out
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>1 000 000 orders whose customers follow a Zipf(1.0) distribution over 10 007 customers (the hottest customer has about 57 000 orders), 50 regions. The view is the query above with <code>amount &gt;= 10</code>. A batch is a mix of changes (60% new orders, 30% order deletes, 9% customer region changes, 1% customers appearing or disappearing). Single thread, release build; after every measured batch the maintained table is compared with a full recomputation.</p>
+
+```text title="incremental maintenance versus recomputation"
+1000000 orders (customers Zipf-skewed over 10007), 10007 customers, 50 regions; view = SUM/COUNT of orders >= 10 joined to customers, grouped by region
+initial load as one huge delta: 122 ms (8.2 M rows/s, 909558 state rows); full recomputation: 21 ms
+incremental step vs recomputation, by batch size (mix per change: 60% new order, 30% order delete, 9% customer region change, 1% customers appear or disappear)
+    batch |    incremental      recompute |       speedup  changes/s (inc)
+        1 |         1.3 us        19.6 ms |        14848x           759474
+       10 |        10.7 us        21.5 ms |         2015x           935493
+      100 |        81.7 us        18.7 ms |          228x          1223805
+     1000 |       547.6 us        19.2 ms |           35x          1826297
+    10000 |      4097.3 us        19.2 ms |            5x          2440606
+   100000 |     31442.0 us        23.0 ms |            1x          3180456
+   500000 |     93084.4 us        26.4 ms |            0x          5371468
+cost of one customer region change by how many orders the customer has (the join fan-out)
+customer                          orders     join rows     step time
+hottest customer                   57235        114470     1347.3 us
+rank 10                             2469          4938       66.4 us
+rank 100                             306           612       15.6 us
+rank 1000                            114           228        9.4 us
+rank 5000                             67           134        6.0 us
+MIN(amount) per customer: load 136 ms, recompute 18 ms; incremental batches of 10 changes: 1.7 us each (10653x faster than recomputing)
+```
+
+<ul> <li><strong>A single change costs 1.3 µs; recomputing costs 19.6 ms</strong>: the incremental view is <strong>14 848× cheaper</strong> for one change, 2 015× for ten, 228× for a hundred, 35× for a thousand, 5× for ten thousand.</li> <li><strong>The break-even is a few percent of the data</strong>: at 100 000 changes (10% of the table) the incremental step (31.4 ms) is already slower than recomputing (23.0 ms), and at 500 000 changes it is 3.5× slower. Per change the incremental path costs 0.2 to 1.3 µs (hash updates on two indexes plus the join probes), while a recomputation costs about 20 ns per input row; IVM wins by touching few rows, not by being cheaper per row. This is why streaming engines batch by epoch and why bulk loads bypass the incremental path (the initial load here, one huge delta, takes 122 ms against 21 ms for a direct computation: a 6× overhead).</li> <li><strong>State is roughly the size of the input</strong>: 909 558 rows of state for 1 000 000 inputs (orders that pass the filter, plus customers and the 50 groups). Without state there is no incremental join.</li> <li><strong>Hot keys make updates expensive.</strong> Moving one customer to another region retracts and re-inserts every joined order: for the hottest customer (57 235 orders) that is 114 470 join rows and <strong>1.35 ms</strong>, for the customer of rank 10 66 µs, rank 100 16 µs, rank 5 000 6 µs. A single dimension update to a hot key costs as much as roughly 1 000 to 2 500 order inserts. Systems handle it by batching, by pre-aggregating the fact side before the join, or by rewriting the query so the dimension is joined after the aggregation when possible.</li> <li><strong><code>MIN</code> is non-linear but still incremental</strong>: with a counted multiset per customer, a batch of ten changes costs 1.7 µs against 18 ms for recomputation (10 653×), at the price of the multiset state (the first load takes 136 ms against 18 ms to scan).</li> </ul>
+
+<aside data-call="note"><b>Why the join formula needs the old state</b><p>The identity is <code>(A + ΔA) ⋈ (B + ΔB) − A ⋈ B = ΔA ⋈ B_old + A_old ⋈ ΔB + ΔA ⋈ ΔB</code>. Equivalently <code>ΔA ⋈ B_new + A_old ⋈ ΔB</code>, since <code>B_new = B_old + ΔB</code>. Mixing the two forms (the new state in both terms, or the new state in one term <em>and</em> the cross term) counts rows that arrive together twice; leaving out the cross term loses them. The test <code>same_batch_insert_of_customer_and_orders_is_counted_once</code> exists because dropping the third term is the classic bug.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A Z-set is <code>HashMap&lt;K, i64&gt;</code> with one invariant</strong> (no zero weights) enforced in a single function, <code>z_add</code>; every operator builds on it, so the invariant cannot be violated by accident, and a property test checks it.</li> <li><strong>Operators are structs owning their state with a <code>step(&amp;mut self, delta) -&gt; delta</code> method.</strong> The type system documents that state is private to the operator and updated in place; no <code>Rc&lt;RefCell&lt;…&gt;&gt;</code> is needed for a linear pipeline. For a DAG with fan-out, operators are stored in a <code>Vec</code> and wired by index.</li> <li><strong>Generic over the row type</strong>: <code>Z&lt;K: Hash + Eq + Clone&gt;</code> with closures for <code>filter</code> and <code>map</code> (<code>impl Fn(&amp;K) -&gt; bool</code>) monomorphizes into tight loops; rows are small <code>Copy</code> structs, so cloning is free.</li> <li><strong>Closures capturing the output set</strong>: the <code>emit</code> closure borrows <code>joined</code> mutably for the three join loops and ends before the aggregation reads it; shortening the closure's life is how the borrow checker accepts the code without restructuring.</li> <li><strong>Indexing the second delta by key</strong> (<code>dc_by_key</code>) turns the <code>ΔO ⋈ ΔC</code> term from a nested loop over the batches into a hash probe; the first version was quadratic in the batch size.</li> <li><strong>Unordered maps in tests</strong>: results are compared as maps and sets, never as iteration orders. For deterministic output (golden tests, replay), emit sorted <code>Vec</code>s or use <code>BTreeMap</code>.</li> <li><strong>Test-harness data structures matter</strong>: sampling a random live row from a <code>HashMap</code> with <code>.keys().nth(i)</code> is <code>O(n)</code> and made a million-row benchmark unusable; the harness keeps a <code>Vec</code> plus position map for <code>O(1)</code> sampling and swap-removal.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Group laws (property tests)</strong>: Z-sets never store zero weights; merge is commutative; a set plus its negation is empty; <code>filter(a + b) = filter(a) + filter(b)</code> and the same for <code>map</code> (linearity: the reason these operators are their own incremental versions).</li> <li><strong>The view against recomputation</strong>: 12 seeds × 150 batches of 1–30 random changes (order inserts and deletes, customers appearing, moving region and disappearing, including delete-and-insert of the same customer in one batch); after each batch the materialized table built from the emitted deltas, and the circuit's own state, equal a from-scratch recomputation; every emitted row has weight ±1.</li> <li><strong>The third join term</strong>: an order and its customer inserted in the same batch are counted once; inserting both and deleting both cancels exactly and releases all state; a region change moves the contribution.</li> <li><strong>Filter on deletions</strong>: deleting a row the filter rejected changes nothing.</li> <li><strong>MIN</strong> against recomputation over 10 seeds × 200 batches with deletions of current minima; <strong>DISTINCT</strong> emits only on zero crossings and ignores <code>+3 −3</code>.</li> <li><strong>Mutants run against these tests</strong> (all 11 killed at the first run): the delta-delta join term dropped; customer or order state never integrated; the filter passing every deletion; the old aggregate row not retracted; empty groups kept; zero weights stored; MIN keeping a stale minimum or looking at the maximum; DISTINCT emitting on every change; delta application ignoring removals.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Feldera</strong> (Rust) implements DBSP directly: SQL compiled to incremental circuits over Z-sets, with the formal theory as its specification.</li> <li><strong>Materialize</strong> is built on Timely and Differential Dataflow (McSherry et al.): incrementally maintained SQL views with strict-serializability semantics, arrangements (indexed state shared between operators), and a persistence layer on object storage.</li> <li><strong>RisingWave</strong> (Rust, PostgreSQL-compatible): streaming jobs defined as materialized views; operator state kept in an LSM-tree state store on object storage (Hummock) with in-memory caching; periodic <em>barriers</em> (Chandy–Lamport style, as in Flink) give consistent checkpoints and define the epochs at which results become visible.</li> <li><strong>Apache Flink SQL</strong> represents streams as <em>changelogs</em> with row kinds (insert, update-before, update-after, delete); operators such as joins and aggregations keep keyed state in RocksDB and emit retractions; watermarks and TTLs bound the state.</li> <li><strong>Databases</strong>: PostgreSQL has no built-in incremental materialized views (<code>REFRESH MATERIALIZED VIEW</code> recomputes; the <code>pg_ivm</code> extension maintains simple views on write); Oracle offers <em>fast refresh</em> from materialized view logs; SQL Server maintains <em>indexed views</em> synchronously inside the transaction; Snowflake <em>dynamic tables</em> and Databricks materialized views refresh incrementally on a schedule; ClickHouse materialized views are insert-time transformations, not general IVM.</li> <li><strong>Classical algorithms</strong> behind them: the <em>counting</em> algorithm for non-recursive views (Gupta–Mumick–Subrahmanian) and <em>DRed</em> for recursive ones; <strong>DBToaster</strong> compiles higher-order deltas (the delta of the delta) to avoid keeping join state at all for some queries.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>State grows without bound</strong> unless something bounds it: a join between two unbounded streams keeps both forever. Use windows, watermarks and TTLs, and size the state store for the join, not for the final view.</li> <li><strong>Deletions need the right operators.</strong> MIN, MAX, top-k, DISTINCT and any aggregate that is not invertible need counted or ordered state; <code>SUM</code> and <code>COUNT</code> are invertible and free. A circuit built only from "append-only" assumptions breaks the first time an upstream table is updated.</li> <li><strong>Floating-point sums are not invertible exactly</strong>: adding then subtracting a float does not return the original, so a long-lived incremental <code>SUM(f64)</code> drifts from the recomputed value. Use integers or decimals for money, or periodically recompute.</li> <li><strong>Hot keys are a latency bomb</strong>: one update to a popular dimension row touches every joined fact. Measure the degree distribution of join keys and bound the worst case (batching, pre-aggregation, join reordering).</li> <li><strong>Order of operations inside a step matters</strong>: the join must see the old state; integrating a delta before joining double counts. Make the order explicit and test with same-batch inserts and deletes.</li> <li><strong>Consistency across views</strong>: two views fed by the same input must reflect the same input prefix, or a query joining them sees a state that never existed. Epoch- or timestamp-based visibility is part of the design, not an afterthought.</li> <li><strong>Recomputation is the oracle</strong>: every incremental operator needs a differential test against its batch definition on random streams with deletions, including empty batches and cancelling changes; most production IVM bugs are visible there.</li> <li><strong>Do not incrementalize bulk loads</strong>: for deltas above a few percent of the data, refresh from scratch; the break-even in this lab was about 7%.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "DBSP: Automatic Incremental View Maintenance for Rich Query Languages"
+url = "https://www.vldb.org/pvldb/vol16/p1601-budiu.pdf"
+
+[[sources]]
+title = "Differential Dataflow"
+url = "https://www.cidrdb.org/cidr2013/Papers/CIDR13_Paper111.pdf"

@@ -1,0 +1,86 @@
+title = "Cmp hash default traits (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "Numbers, traits and formatting"
+chapter_order = 5
+order = 87
+kind = "recipe"
+lede = "PartialEq/Eq/PartialOrd/Ord, Ordering, Reverse, sorting by key, Hash/Hasher/BuildHasher, Default."
+level = "intermediate"
+code = ["examples/std_tour/std_cmp_hash_default_traits.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>sort orders for API results</li><li>priority queues</li><li>map keys</li><li>case-insensitive keys</li><li>config structs with defaults</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li><strong>Order by</strong> with several columns</li><li>newest-first listings</li><li>BinaryHeap schedulers</li><li>dedupe keys</li><li>HashMap with a deterministic or faster hasher</li><li><code>..Default::default()</code> option structs</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>Ord::cmp</code></li><li><code>PartialOrd::partial_cmp</code></li><li><code>PartialEq::eq</code></li><li><code>Ordering::then</code></li><li><code>Ordering::then_with</code></li><li><code>Ordering::reverse</code></li><li><code>std::cmp::Reverse</code></li></ul>
+
+<ul class="cb-g-names"><li><code>slice::sort</code></li><li><code>slice::sort_by</code></li><li><code>slice::sort_by_key</code></li><li><code>slice::sort_by_cached_key</code></li><li><code>slice::sort_unstable</code></li><li><code>slice::sort_unstable_by</code></li></ul>
+
+<ul class="cb-g-names"><li><code>slice::sort_unstable_by_key</code></li><li><code>slice::is_sorted</code></li><li><code>slice::is_sorted_by_key</code></li><li><code>Ord::max</code></li><li><code>Ord::min</code></li><li><code>Ord::clamp</code></li><li><code>std::cmp::max</code></li><li><code>std::cmp::min</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::cmp::max_by</code></li><li><code>std::cmp::min_by</code></li><li><code>std::cmp::max_by_key</code></li><li><code>std::cmp::min_by_key</code></li><li><code>Iterator::max</code></li><li><code>Iterator::min</code></li><li><code>Iterator::max_by</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Iterator::min_by</code></li><li><code>Iterator::max_by_key</code></li><li><code>Iterator::min_by_key</code></li><li><code>f64::total_cmp</code></li><li><code>f64::max</code></li><li><code>f64::min</code></li><li><code>f64::clamp</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Ordering::is_eq</code></li><li><code>Ordering::is_ne</code></li><li><code>Ordering::is_lt</code></li><li><code>Ordering::is_le</code></li><li><code>Ordering::is_gt</code></li><li><code>Ordering::is_ge</code></li><li><code>Iterator::cmp</code></li><li><code>Iterator::eq</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Iterator::partial_cmp</code></li><li><code>Hash::hash</code></li><li><code>Hash::hash_slice</code></li><li><code>Hasher::finish</code></li><li><code>Hasher::write</code></li><li><code>BuildHasher::hash_one</code></li><li><code>BuildHasher::build_hasher</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::hash::DefaultHasher</code></li><li><code>std::hash::RandomState</code></li><li><code>std::hash::BuildHasherDefault</code></li><li><code>HashMap::with_hasher</code></li><li><code>HashMap::with_capacity_and_hasher</code></li></ul>
+
+Default::default, std::mem::take
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/cmp/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/cmp/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+core (`core::cmp`, `core::hash` traits, `core::default`, f64::total_cmp). DefaultHasher/RandomState are std (`std::hash`), HashMap is std, the stable slice sorts `sort`/`sort_by*` are alloc (they allocate), `sort_unstable*` are core. See also <https://doc.rust-lang.org/std/hash/index.html>
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+cmp::minmax&#42; and Ordering::then_ignore-style helpers (unstable), PartialOrd::lt/le/gt/ge (these are the `< <= > >=` operators), AssertParamIsEq (internal), SipHasher (deprecated), the per-integer Hasher::write_u8.. (provided methods that forward to write by default).
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Sort by one cheap key</td><td><code>sort_by_key(|x| x.a)</code></td></tr><tr><td>Sort by an expensive/allocating key</td><td><code>sort_by_cached_key (key computed at most once per element)</code></td></tr><tr><td>Sort by a borrowed field (String)</td><td><code>sort_by(|a, b| a.name.cmp(&amp;b.name))   (sort_by_key cannot return a borrow)</code></td></tr><tr><td>Several columns</td><td><code>a.x.cmp(&amp;b.x).then_with(|| ...)   or a tuple key</code></td></tr><tr><td>One column descending</td><td><code>Reverse(key) inside the tuple, or .reverse() on the Ordering</code></td></tr><tr><td>Don't care about equal-element order</td><td><code>sort_unstable* (no allocation)</code></td></tr><tr><td>Sort floats</td><td><code>sort_by(f64::total_cmp)</code></td></tr><tr><td>Min-heap</td><td><code>BinaryHeap&lt;Reverse&lt;T&gt;&gt;</code></td></tr><tr><td>Keep a value inside bounds</td><td><code>clamp</code></td></tr><tr><td>Custom equality for a map key</td><td><code>impl PartialEq + Eq + Hash so that all three agree (or a normalising newtype)</code></td></tr><tr><td>Reproducible hash within one build</td><td><code>BuildHasherDefault&lt;MyHasher&gt; (never persist DefaultHasher output)</code></td></tr><tr><td>Struct with many optional knobs</td><td><code>#[derive(Default)] + ..Default::default() THE LAWS. Eq: reflexive, symmetric, transitive. Ord must agree with Eq and PartialOrd (a.cmp(b) == Equal iff a == b). Hash: k1 == k2 implies hash(k1) == hash(k2). The compiler checks none of this; breaking it is not undefined behaviour, but maps and sorts then give wrong answers, and sorting with a broken total order may panic.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/cmp/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/cmp/index.html</a></li><li><a href="https://doc.rust-lang.org/std/hash/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/hash/index.html</a></li><li><a href="https://doc.rust-lang.org/std/default/trait.Default.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/default/trait.Default.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/cmp/index.html"
+url = "https://doc.rust-lang.org/std/cmp/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/hash/index.html"
+url = "https://doc.rust-lang.org/std/hash/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/default/trait.Default.html"
+url = "https://doc.rust-lang.org/std/default/trait.Default.html"

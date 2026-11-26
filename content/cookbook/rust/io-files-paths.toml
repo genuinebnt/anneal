@@ -1,0 +1,40 @@
+title = "I/O files paths"
+module = "Rust language"
+module_order = 1
+chapter = "Everyday language"
+chapter_order = 3
+order = 29
+kind = "recipe"
+lede = "files, paths, `Read`/`Write`, buffering, and crash-safe writes."
+level = "intermediate"
+code = ["examples/language/io_files_paths.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>persistence (saving executions/state)</li><li>reading workflow files</li><li>log output</li><li>testing IO code</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>saving state safely</li><li>reading config</li><li>testing IO code with in-memory readers/writers</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Key ideas:
+
+- `Read` and `Write` are traits. Write functions over `impl Write` / `impl Read` and you can test with `Vec<u8>` and `&[u8]` instead of real files.
+- Wrap files in `BufReader`/`BufWriter` for many small reads/writes (see bufwriter).
+- To update a file safely: write a temp file, flush+sync, then `rename` over the target (atomic on POSIX), so a crash never leaves a half-written file. Docs: <https://doc.rust-lang.org/std/io/index.html> and <https://doc.rust-lang.org/std/fs/index.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/io/index.html"
+url = "https://doc.rust-lang.org/std/io/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/fs/index.html"
+url = "https://doc.rust-lang.org/std/fs/index.html"

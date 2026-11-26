@@ -1,0 +1,282 @@
+title = "Implementing Rust's hardest features"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Types and semantics"
+chapter_order = 4
+order = 607
+kind = "guide"
+lede = "Trait solving, borrow checking, monomorphization, trait objects, variance, closure captures · Small working versions of what rustc does"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>Each section gives the core algorithm in a form small enough to write in an afternoon, then lists what rustc adds and why. Read them alongside the rustc dev guide chapters in the references. They are also the best preparation for <a href="/cookbook/p/reading-rustc-and-contributing-to-it">contributing to rustc</a>.</p>
+"""
+
+[[sections]]
+heading = "1. Trait resolution"
+body = """
+<p>Proving a goal <code>Vec&lt;u8&gt;: Debug</code> is logic programming. Each impl is a Horn clause: <code>impl&lt;T: Debug&gt; Debug for Vec&lt;T&gt;</code> reads “<code>Vec&lt;T&gt;: Debug</code> if <code>T: Debug</code>”. The solver matches the goal against every impl's self type, binds the impl's type parameters, and recursively proves the where-clauses. rustc's chalk project wrote this literally as Prolog, and the new trait solver is built the same way.</p>
+
+```rust title="A tiny trait solver: impl selection by matching, where-clauses by recursion"
+#[derive(Clone, PartialEq, Debug)]
+pub enum Ty { Con(&'static str, Vec<Ty>), Var(u32) }         // Vec<T> = Con("Vec", [T])
+
+/// impl<T0..Tn> Trait for SelfTy where (Trait_i: Ty_i)...
+pub struct Impl { pub trait_: &'static str, pub vars: u32, pub self_ty: Ty, pub where_: Vec<(&'static str, Ty)> }
+
+pub fn holds(impls: &[Impl], trait_: &str, ty: &Ty, depth: u32) -> bool {
+    if depth > 64 { return false; }        // rustc: "overflow evaluating the requirement"
+    impls.iter().filter(|i| i.trait_ == trait_).any(|imp| {
+        let mut subst = vec![None; imp.vars as usize];
+        match_ty(&imp.self_ty, ty, &mut subst)
+            && imp.where_.iter().all(|(tr, t)| holds(impls, tr, &apply(t, &subst), depth + 1))
+    })
+}
+
+/// One-way matching: bind impl variables so that `pat` equals the (fully known) goal type.
+fn match_ty(pat: &Ty, ty: &Ty, subst: &mut Vec<Option<Ty>>) -> bool {
+    match (pat, ty) {
+        (Ty::Var(v), t) => match &subst[*v as usize] {
+            Some(bound) => bound == t,
+            None => { subst[*v as usize] = Some(t.clone()); true }
+        },
+        (Ty::Con(a, xs), Ty::Con(b, ys)) => {
+            a == b && xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| match_ty(x, y, subst))
+        }
+        _ => false,   // goal has an inference variable: a real solver answers "ambiguous"
+    }
+}
+
+fn apply(t: &Ty, subst: &[Option<Ty>]) -> Ty {
+    match t {
+        Ty::Var(v) => subst[*v as usize].clone().expect("impl parameter not constrained by self type (E0207)"),
+        Ty::Con(n, args) => Ty::Con(n, args.iter().map(|a| apply(a, subst)).collect()),
+    }
+}
+
+// impls: Debug for u8;  impl<T: Debug> Debug for Vec<T>
+// holds("Debug", Vec<Vec<u8>>) → match Vec<T0>, T0 = Vec<u8> → prove Vec<u8>: Debug → … → u8: Debug ✓
+```
+
+<div class="cb-g-tip"><h3>What rustc adds</h3> <ul> <li><b>Inference variables in goals.</b> Goals like <code>?X: Debug</code> produce <em>ambiguity</em>, and are retried later when more is known. That's why type checking and trait solving are interleaved.</li> <li><b>Associated types.</b> <code>&lt;T as Iterator&gt;::Item</code> must be <em>normalized</em> by finding the impl and reading its definition.</li> <li><b>The param-env.</b> Where-clauses on the current function act as extra facts.</li> <li><b>Coherence.</b> Two impls <em>overlap</em> if their headers unify, and that's an error. The orphan rules stop two crates from writing conflicting impls. Negative reasoning (“<code>u8</code> will never implement this”) is restricted to keep adding impls a non-breaking change.</li> <li><b>Auto traits</b> (<code>Send</code>, <code>Sync</code>) are proven <em>coinductively</em>, so cycles count as success.</li> <li><b>Caching</b> of canonicalized goals, and <b>method resolution</b>, which probes autoderef steps and then asks the solver about each candidate.</li> </ul></div>
+"""
+
+[[sections]]
+heading = "2. Borrow checking with non-lexical lifetimes"
+body = """
+<p>A <em>loan</em> is created by <code>&amp;x</code> or <code>&amp;mut x</code>. The key NLL idea: a loan is live only while the reference it produced may still be used later, which is a <em>liveness</em> question (<a href="/cookbook/p/dataflow-analysis-and-abstract-interpretation">chapter 10</a>), not a lexical scope question. The rules:</p>
+
+<ul> <li>While a <b>shared</b> loan of <code>x</code> is live, writing or moving <code>x</code> is an error.</li> <li>While a <b>mutable</b> loan of <code>x</code> is live, <em>any</em> other access to <code>x</code> is an error.</li> <li>After a move, any use is an error until the place is reassigned.</li> </ul>
+
+<p>The version below works on straight-line code to keep the idea visible. rustc's runs over the MIR CFG with dataflow.</p>
+
+```rust title="NLL on straight-line code: loans die when their reference is dead"
+pub type Local = u32;
+
+pub enum Stmt {
+    Borrow { dest: Local, place: Local, mutable: bool },   // dest = &place / &mut place
+    Use(Local),                                           // read (including through a reference)
+    Write(Local),                                         // place = <new value>
+    Move { dest: Local, src: Local },                     // dest = src (non-Copy)
+}
+
+fn defs_uses(s: &Stmt) -> (Vec<Local>, Vec<Local>) {
+    match *s {
+        Stmt::Use(p) => (vec![], vec![p]),
+        Stmt::Write(p) => (vec![p], vec![]),
+        Stmt::Borrow { dest, place, .. } => (vec![dest], vec![place]),
+        Stmt::Move { dest, src } => (vec![dest], vec![src]),
+    }
+}
+
+pub fn borrowck(body: &[Stmt]) -> Vec<String> {
+    // live_in[i]: locals that will be read at statement i or later, before being overwritten.
+    let mut live_in = vec![HashSet::new(); body.len() + 1];
+    for i in (0..body.len()).rev() {
+        let (defs, uses) = defs_uses(&body[i]);
+        let mut live = live_in[i + 1].clone();
+        for d in defs { live.remove(&d); }
+        live.extend(uses);
+        live_in[i] = live;
+    }
+
+    let mut errors = Vec::new();
+    let mut loans: Vec<(Local, Local, bool)> = Vec::new();        // (reference, place, mutable)
+    let mut moved: HashSet<Local> = HashSet::new();
+    for (i, s) in body.iter().enumerate() {
+        // A loan conflicts only if its reference is still live here: the "non-lexical" part.
+        let conflicting = |place: Local, only_mut: bool| loans.iter()
+            .any(|&(r, p, m)| p == place && live_in[i].contains(&r) && (m || !only_mut));
+        match *s {
+            Stmt::Use(p) => {
+                if moved.contains(&p) { errors.push(format!("#{i}: use of moved value `_{p}`")); }
+                if conflicting(p, true) { errors.push(format!("#{i}: cannot use `_{p}` because it is mutably borrowed")); }
+            }
+            Stmt::Write(p) => {
+                if conflicting(p, false) { errors.push(format!("#{i}: cannot assign to `_{p}` because it is borrowed")); }
+                moved.remove(&p);                                     // reinitialized
+            }
+            Stmt::Borrow { dest, place, mutable } => {
+                if moved.contains(&place) { errors.push(format!("#{i}: borrow of moved value `_{place}`")); }
+                if conflicting(place, !mutable) {
+                    let how = if mutable { "mutable" } else { "immutable" };
+                    errors.push(format!("#{i}: cannot borrow `_{place}` as {how} because it is also borrowed"));
+                }
+                loans.push((dest, place, mutable));
+            }
+            Stmt::Move { dest, src } => {
+                if moved.contains(&src) { errors.push(format!("#{i}: use of moved value `_{src}`")); }
+                if conflicting(src, false) { errors.push(format!("#{i}: cannot move out of `_{src}` because it is borrowed")); }
+                moved.insert(src);
+                moved.remove(&dest);
+            }
+        }
+    }
+    errors
+}
+```
+
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Program</th><th>Result</th><th>Why</th></tr></thead> <tbody> <tr><td><code>r = &amp;mut x; use x; use r</code></td><td>error at <code>use x</code></td><td><code>r</code> is used afterwards, so the mutable loan is live</td></tr> <tr><td><code>r = &amp;mut x; use r; use x</code></td><td>accepted</td><td>after <code>use r</code>, <code>r</code> is dead, so the loan is dead. Lexical lifetimes rejected this</td></tr> <tr><td><code>y = move x; use x</code></td><td>error: use of moved value</td><td><code>x</code> is in the moved set</td></tr> <tr><td><code>y = move x; x = 1; use x</code></td><td>accepted</td><td>the write reinitializes <code>x</code></td></tr> </tbody> </table></div>
+
+<div class="cb-g-tip"><h3>What rustc adds</h3> <ul> <li><b>Regions as sets of CFG points</b>, inferred from <em>outlives constraints</em>. <code>'a: 'b</code> arises from assignments, subtyping and calls, and is solved by computing SCCs of the constraint graph and propagating.</li> <li><b>Loans in scope</b> as a forward dataflow over the CFG.</li> <li><b>Places with projections</b>: <code>x.f</code>, <code>*p</code>, <code>a[i]</code>. Borrowing <code>x.a</code> doesn't conflict with <code>x.b</code>.</li> <li><b>Two-phase borrows</b>, so <code>v.push(v.len())</code> works.</li> <li><b>Move paths</b> and drop elaboration.</li> <li><b>Polonius</b>, the next formulation, which tracks which loans each reference may contain (origins). It accepts more correct programs, such as the conditional-return case NLL rejects.</li> </ul></div>
+"""
+
+[[sections]]
+heading = "3. Monomorphization"
+body = """
+<p>Generic code is compiled once per set of concrete type arguments. The <em>collector</em> starts from <code>main</code> and walks the MIR of each instance it finds. It substitutes the caller's type arguments into each call's generic arguments and queues new instances. An unsizing cast to <code>dyn Trait</code> means every method of that trait for that type may be called, so all of them become instances, along with the vtable.</p>
+
+```rust title="The collector, as a worklist over (function, type arguments)"
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Instance { pub func: FnId, pub args: Vec<Ty> }        // all args concrete
+
+pub fn collect(entry: Instance, bodies: &Bodies) -> Vec<Instance> {
+    let mut seen = HashSet::new();
+    let mut work = vec![entry];
+    let mut out = Vec::new();
+    while let Some(inst) = work.pop() {
+        if !seen.insert(inst.clone()) { continue; }
+        let body = &bodies[inst.func];
+        for call in body.calls() {
+            // The call's generic args may mention the caller's params: substitute them.
+            let args = call.generic_args.iter().map(|t| substitute(t, &inst.args)).collect();
+            work.push(resolve(call.callee, args));     // trait method → the impl's method
+        }
+        for (trait_id, ty) in body.unsize_casts() {    // `&x as &dyn Trait`
+            let concrete = substitute(&ty, &inst.args);
+            for m in trait_methods(trait_id) { work.push(resolve(m, vec![concrete.clone()])); }
+        }
+        out.push(inst);
+    }
+    out   // then partition into codegen units for parallel LLVM compilation
+}
+// Polymorphic recursion (fn f<T>() { f::<Vec<T>>() }) never terminates here;
+// rustc stops at the recursion limit with "reached the recursion limit while instantiating".
+```
+"""
+
+[[sections]]
+heading = "4. Trait objects and vtables"
+body = """
+<p><code>&amp;dyn Shape</code> is a fat pointer: a data pointer plus a pointer to a vtable. rustc's vtable layout is <code>[drop_in_place, size, align, method_0, method_1, …]</code>, with supertrait methods and, for trait upcasting, pointers to supertrait vtables. Building one by hand shows exactly what the compiler emits:</p>
+
+```rust title="A hand-built Box<dyn Shape>"
+use std::mem::{align_of, size_of};
+
+pub trait Shape { fn area(&self) -> f64; }
+
+#[repr(C)]
+pub struct VTable {
+    drop: unsafe fn(*mut ()),
+    size: usize,
+    align: usize,
+    area: unsafe fn(*const ()) -> f64,
+}
+
+unsafe fn drop_box<T>(p: *mut ()) { unsafe { drop(Box::from_raw(p as *mut T)) } }
+unsafe fn area_of<T: Shape>(p: *const ()) -> f64 { unsafe { (*(p as *const T)).area() } }
+
+/// One vtable per concrete type, in static memory: the compiler emits exactly this.
+trait HasVTable: Shape + Sized {
+    const VTABLE: VTable = VTable {
+        drop: drop_box::<Self>, size: size_of::<Self>(), align: align_of::<Self>(), area: area_of::<Self>,
+    };
+}
+impl<T: Shape> HasVTable for T {}
+
+pub struct DynShape { data: *mut (), vtable: &'static VTable }
+
+impl DynShape {
+    pub fn new<T: Shape>(v: T) -> Self {
+        DynShape { data: Box::into_raw(Box::new(v)) as *mut (), vtable: &T::VTABLE }
+    }
+    pub fn area(&self) -> f64 { unsafe { (self.vtable.area)(self.data) } }   // one indirect call
+}
+
+impl Drop for DynShape {
+    fn drop(&mut self) { unsafe { (self.vtable.drop)(self.data) } }
+}
+```
+"""
+
+[[sections]]
+heading = "5. Variance"
+body = """
+<p>Is <code>Foo&lt;&amp;'static str&gt;</code> usable where <code>Foo&lt;&amp;'a str&gt;</code> is expected? That depends on the <em>variance</em> of <code>Foo</code>'s parameter. It is <b>covariant</b> if used only in covariant positions (<code>&amp;T</code>, <code>Box&lt;T&gt;</code>, fields), <b>contravariant</b> in function arguments (<code>fn(T)</code>), and <b>invariant</b> under mutation (<code>&amp;mut T</code>, <code>Cell&lt;T&gt;</code>) or with mixed uses. rustc <em>infers</em> variance: every parameter starts bivariant, and a fixpoint over all type definitions joins the variance of each use, transformed by its context.</p>
+
+```rust title="The variance lattice and its two operations"
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Variance { Bi, Co, Contra, In }     // Bi = unused (bottom), In = top
+use Variance::*;
+
+impl Variance {
+    /// Two uses of the same parameter.
+    pub fn join(self, o: Variance) -> Variance {
+        match (self, o) { (Bi, x) | (x, Bi) => x, (a, b) if a == b => a, _ => In }
+    }
+    /// A use with variance `inner` inside a context of variance `self`.
+    pub fn xform(self, inner: Variance) -> Variance {
+        match (self, inner) {
+            (Bi, _) => Bi,
+            (Co, x) => x,
+            (Contra, Co) => Contra,
+            (Contra, Contra) => Co,
+            (Contra, x) => x,                   // In stays In, Bi stays Bi
+            (In, Bi) => Bi,
+            (In, _) => In,
+        }
+    }
+}
+// struct S<T> { f: fn(T) -> T }:  arg position Contra, return position Co → join = In
+```
+"""
+
+[[sections]]
+heading = "6. Closures: captures and kinds"
+body = """
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Closure body does</th><th>Capture (without <code>move</code>)</th><th>Closure implements</th></tr></thead> <tbody> <tr><td>reads <code>x</code></td><td><code>&amp;x</code></td><td><code>Fn</code> (and <code>FnMut</code>, <code>FnOnce</code>)</td></tr> <tr><td>mutates <code>x</code></td><td><code>&amp;mut x</code></td><td><code>FnMut</code> (and <code>FnOnce</code>)</td></tr> <tr><td>moves <code>x</code> out (non-<code>Copy</code>)</td><td>by value</td><td><code>FnOnce</code> only</td></tr> <tr><td>uses <code>x.a.b</code> (edition 2021)</td><td>only the path <code>x.a.b</code>, not all of <code>x</code></td><td>depends on use</td></tr> </tbody> </table></div>
+
+<p>Capture analysis runs after type checking. It walks the closure body, records each captured <em>place</em> with the strongest access mode, truncates paths where precision isn't allowed (through raw pointers and some derefs), and picks the closure kind from the modes. The closure then becomes a struct of captures plus an impl of the Fn traits, which is closure conversion (<a href="/cookbook/p/compiling-functional-languages">chapter 23</a>) with Rust's ownership rules applied to each field.</p>
+"""
+
+[[sources]]
+title = "trait resolution"
+url = "https://rustc-dev-guide.rust-lang.org/traits/resolution.html"
+
+[[sources]]
+title = "MIR borrow check"
+url = "https://rustc-dev-guide.rust-lang.org/borrow_check.html"
+
+[[sources]]
+title = "monomorphization"
+url = "https://rustc-dev-guide.rust-lang.org/backend/monomorph.html"
+
+[[sources]]
+title = "variance"
+url = "https://rustc-dev-guide.rust-lang.org/variance.html"
+
+[[sources]]
+title = "closure capture inference"
+url = "https://rustc-dev-guide.rust-lang.org/closure.html"

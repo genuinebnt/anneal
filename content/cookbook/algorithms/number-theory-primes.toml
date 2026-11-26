@@ -1,0 +1,86 @@
+title = "Number-theory toolkit"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Mathematics and numerics"
+chapter_order = 7
+order = 230
+kind = "recipe"
+lede = "Sieves (plain/odd/wheel/segmented/linear), phi & mu, Pollard-Brent, CRT, BSGS, Tonelli-Shanks, Fibonacci doubling, Josephus, Pell, Collatz, Lucas."
+level = "advanced"
+code = ["examples/math_science/number_theory_primes.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>competitive/contest number theory</li><li>crypto groundwork</li><li>any code that needs primes</li><li>factorisation or modular roots</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+fifteen classical number-theory algorithms in std-only Rust, **each** checked against a naive oracle in main().
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>Sieve of Eratosthenes: plain <code>Vec&lt;bool&gt;</code>, <strong>odd-only</strong> (half the memory), a 6k+-1 <strong>wheel</strong> (a third), and a <strong>segmented</strong> sieve that lists primes in [lo, lo+len) for lo ~ 10&#94;12 using only the base primes up to sqrt(hi) (O(sqrt(hi)+len) memory). Timings are printed; counts are checked against pi(10&#94;7) = 664579.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Linear</div><div class="cb-g-says"><p>Sieve (Euler): every composite is crossed off exactly once, by its smallest prime factor, so we get the smallest-prime-factor table, Euler's phi and the Moebius mu in O(n). Checked against the definitions for n &lt;= 10&#94;4 (phi = count of k &lt;= n coprime to n; mu from trial-division factorisation).</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>Miller-Rabin, deterministic for every u64 (the first 12 primes as witnesses) + <strong>pollard's rho</strong>, Brent's variant (batched gcds, cycle detection by powers of two). 200 random 60-bit semiprimes are split; product and primality of the factors are asserted. Expected work is O(p&#94;(1/2)) for the smallest prime factor p.</p></div></div><div class="cb-g-term"><div class="cb-g-name">CHINESE remainder theorem</div><div class="cb-g-says"><p>For <strong>non</strong>-coprime moduli: combine x = a1 (m1), x = a2 (m2) iff a1 = a2 (mod gcd); the answer is modulo lcm. Oracle: scan 0..lcm.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Baby-step giant-step</div><div class="cb-g-says"><p>Discrete log g&#94;x = h (mod p) in O(sqrt p) time and memory. Oracle: linear scan.</p></div></div><div class="cb-g-term"><div class="cb-g-name">TONELLI-SHANKS</div><div class="cb-g-says"><p>Sqrt(a) mod an odd prime p. Oracle: all squares for every prime &lt; 400.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>FIBONACCI by <strong>fast doubling</strong>: F(2k) = F(k)(2F(k+1) - F(k)), F(2k+1) = F(k)&#94;2 + F(k+1)&#94;2, O(log n). Oracles: 2x2 matrix exponentiation and plain iteration.</p></div></div><div class="cb-g-term"><div class="cb-g-name">JOSEPHUS</div><div class="cb-g-says"><p>Closed form J(n,2) = 2(n - 2&#94;floor(log2 n)) + 1, and the O(n) recurrence for any k; oracle: simulation.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Pell</div><div class="cb-g-says"><p>Equation x&#94;2 - D y&#94;2 = 1 from the continued fraction of sqrt(D) (convergents); oracle: scan small y.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>Perfect numbers (Euclid-Euler: 2&#94;(p-1)(2&#94;p - 1) with Mersenne prime via Lucas-Lehmer) vs a sigma sieve; Collatz stopping times with a <strong>cache</strong> (memoisation of every value below the limit).</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>LUCAS' <strong>theorem</strong>: C(n, k) mod p = prod C(n_i, k_i) over base-p digits. Oracle: Pascal's triangle mod p.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+most contest/crypto problems reduce to a handful of these primitives. The recurring trick is a u128 widening multiply, which makes every 64-bit modulus safe.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>primes and factorisation in RSA/DH key generation and in attacks on weak keys</li><li>CRT inside RSA and in residue-number-system arithmetic</li><li>discrete logs in the analysis of Diffie-Hellman groups</li><li>modular square roots in elliptic-curve point decompression (Tonelli-Shanks / Cipolla)</li><li>fast Fibonacci/linear-recurrence evaluation (matrix powers) in combinatorics</li><li>Lucas' theorem for binomials modulo small primes in counting problems</li><li>segmented sieves for prime tables far from zero</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>The Art of Computer Programming Vol 2 (Seminumerical Algorithms)</li><li>sections 4.5 (arithmetic/factoring) and 4.5.4</li></ul>
+
+<ul class="cb-g-reading"><li>The Algorithm Design Manual (Skiena)</li><li>the catalog entries "Factoring and Primality Testing" and "Modular Arithmetic" (chapter 16)</li></ul>
+
+<https://en.wikipedia.org/wiki/Sieve_of_Eratosthenes>
+
+<https://en.wikipedia.org/wiki/Pollard%27s_rho_algorithm>
+
+<https://en.wikipedia.org/wiki/Miller%E2%80%93Rabin_primality_test>
+
+<https://en.wikipedia.org/wiki/Baby-step_giant-step>
+
+<https://en.wikipedia.org/wiki/Tonelli%E2%80%93Shanks_algorithm>
+
+<https://en.wikipedia.org/wiki/Josephus_problem>
+
+<https://en.wikipedia.org/wiki/Lucas%27s_theorem>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Sieve_of_Eratosthenes"
+url = "https://en.wikipedia.org/wiki/Sieve_of_Eratosthenes"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Pollard%27s_rho_algorithm"
+url = "https://en.wikipedia.org/wiki/Pollard%27s_rho_algorithm"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Miller%E2%80%93Rabin_primality_test"
+url = "https://en.wikipedia.org/wiki/Miller%E2%80%93Rabin_primality_test"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Baby-step_giant-step"
+url = "https://en.wikipedia.org/wiki/Baby-step_giant-step"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Tonelli%E2%80%93Shanks_algorithm"
+url = "https://en.wikipedia.org/wiki/Tonelli%E2%80%93Shanks_algorithm"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Josephus_problem"
+url = "https://en.wikipedia.org/wiki/Josephus_problem"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Lucas%27s_theorem"
+url = "https://en.wikipedia.org/wiki/Lucas%27s_theorem"

@@ -1,0 +1,64 @@
+title = "A ring buffer zoo"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Caches, queues, heaps and bit sets"
+chapter_order = 3
+order = 183
+kind = "recipe"
+lede = "Fixed ring, growable deque, flight recorder, byte ring, sliding-window stats"
+level = "intermediate"
+code = ["examples/data_structures/ring_buffer_zoo.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>logging/telemetry</li><li>I/O buffers (pipes, UART, sockets)</li><li>queues</li><li>moving statistics</li><li>as the base of an SPSC channel</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>the Linux kernel's pipe and kfifo buffers</li><li>UART/serial drivers</li><li>network receive buffers (read into the tail, parse from the head)</li><li>audio sample queues</li><li>"last N events" crash/flight recorders</li><li>moving averages in monitoring</li><li>std's <code>VecDeque</code> itself (a growable ring)</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+What: five ring-buffer flavours built from scratch, all safe code (the only `unsafe` in the file is the 3-line counting allocator wrapper used to **prove** the steady state does not allocate, same pattern as counting_allocator).
+
+1. `Ring<T, N>`: fixed capacity, N a power of two so `counter & (N-1)` replaces `%`. `head` and `tail` are free-running **wrapping** counters (never reduced), so `len = tail - head` (wrapping) and full (`len == N`) is distinguishable from empty (`len == 0`) with NO wasted slot. The naive "head == tail" design needs a spare slot or a flag.
+
+   Wrapping arithmetic stays correct when the counters overflow usize (tested by starting them near usize::MAX).
+2. `MyDeque<T>`: a growable ring like `VecDeque`. When full it doubles and **unwraps**: element i goes to slot i of the new buffer so head = 0. `as_slices` returns the two segments, `make_contiguous` rotates the buffer so the live data is one slice.
+
+   (Storage is `Vec<T>` with `T: Default` so no `MaybeUninit`/unsafe is needed; std uses uninitialised slots.)
+3. `FlightRecorder`: overwrite-on-full ring of log lines (keeps the **last N**); lines are formatted into reused Strings, so logging is allocation free once each slot has grown to the longest line.
+4. `ByteRing`: bytes with `write`/`read` that copy in at most **two** segments (to the end of the buffer, then from the start), plus zero-copy views (`readable`, `writable`, `commit`, `consume`) returning contiguous slices: the shape of `read(fd, ring.writable())` then parse in place.
+5. `WindowStats`: moving average/min/max over the last W samples; min/max use a **monotonic** deque (each sample is pushed and popped at most once, so amortised O(1)) built on `MyDeque`. Verified by differential tests against `VecDeque` (50k seeded random operations), brute-force window statistics, and an allocation count of 0
+
+over 100k operations after warm-up. **Promoting to SPSC** (see spsc_ring_buffer): make `head` and `tail` atomics, the producer owns `tail` and the consumer owns `head`.
+
+The producer writes the slot **first**, then publishes with `tail.store(.., Release)`; the consumer reads `tail` with Acquire before touching the slot, then frees it with `head.store(.., Release)`, which the producer observes with an Acquire load of `head` before reusing the slot.
+
+Each side may cache the other's counter and reload only when the ring looks full/empty. Put head and tail on separate cache lines (false sharing). Slots need interior mutability (UnsafeCell), which is where the unsafe in spsc_ring_buffer comes from; the wrapping-counter indexing carries over unchanged.
+
+Relaxed is **not** enough: it would let the consumer see the new tail before the slot's contents.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://en.wikipedia.org/wiki/Circular_buffer" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Circular_buffer</a></li><li><a href="https://doc.rust-lang.org/std/collections/struct.VecDeque.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/collections/struct.VecDeque.html</a></li><li><a href="https://marabos.nl/atomics/" target="_blank" rel="noreferrer">https://marabos.nl/atomics/</a></li></ul>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Circular_buffer"
+url = "https://en.wikipedia.org/wiki/Circular_buffer"
+
+[[sources]]
+title = "doc.rust-lang.org/std/collections/struct.VecDeque.html"
+url = "https://doc.rust-lang.org/std/collections/struct.VecDeque.html"
+
+[[sources]]
+title = "marabos.nl/atomics"
+url = "https://marabos.nl/atomics/"

@@ -1,0 +1,86 @@
+title = "Dimensionality reduction for vector search"
+module = "Search and vectors"
+module_order = 9
+chapter = "Vector search"
+chapter_order = 2
+order = 472
+kind = "recipe"
+lede = "Johnson-Lindenstrauss projections (Gaussian, sparse, Hadamard), PCA, whitening, OPQ-style rotation before PQ, Matryoshka-style prefixes."
+level = "intermediate"
+code = ["examples/search_vectors/dimensionality_reduction_jl_pca.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>shrinking embeddings to save memory and scan time</li><li>preparing vectors for product quantisation</li><li>two-stage retrieval with short prefixes</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Two families**. **Random projection** never looks at the data: it comes with a worst-case guarantee for **any** point set, but spends dimensions evenly. PCA looks at the data: it is the best linear reduction for squared reconstruction error on the data it was fitted on, promises nothing about individual pairs, and must be refitted when the data drifts.
+
+JOHNSON-LINDENSTRAUSS. For m points, a random linear map R&#94;D -> R&#94;k with k = O(log m / eps&#94;2) keeps **every** pairwise squared distance within a factor 1 +- eps with high probability; k does not depend on D. For a Gaussian matrix with entries N(0, 1/k), one fixed pair has
+
+```text
+P( | |Px|^2/|x|^2 - 1 | > eps ) <= 2 exp( -k (eps^2 - eps^3) / 4 ).
+```
+
+A union bound over the m(m-1)/2 pairs with total failure probability delta gives  k >= 4 ln( m(m-1)/delta ) / (eps&#94;2 - eps&#94;3). The bound is **conservative** (union bounds ignore dependence); the run measures how much.
+
+Note how fast it grows as eps shrinks, and that it can exceed D: JL is a statement about very high D, not a way to get 128-dim vectors down to 32 with 10% error. Three constructions:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">GAUSSIAN</div><div class="cb-g-says"><p>Dense, O(kD) per vector. |Px|&#94;2/|x|&#94;2 is chi-squared(k)/k: mean 1, variance 2/k, for every x.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Sparse (Achlioptas; Li, Hastie, Church)</div><div class="cb-g-says"><p>Entries +-sqrt(s/k) with probability 1/(2s) each, else 0. Only 1/s of the work. The variance of |Px|&#94;2/|x|&#94;2 is ( 2 + (s - 3) * sum x_i&#94;4 / |x|&#94;4 ) / k.</p><p>With s = 3 (Achlioptas) it is exactly 2/k for every x. With large s it depends on how <strong>spiky</strong> x is: for a one-hot vector it is (s - 1)/k.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>SRHT / fast JL (Ailon and Chazelle): sqrt(D/k) * S H D, where D flips signs at random, H is the orthonormal Walsh-Hadamard transform (O(D log D) by the butterfly) and S keeps k random coordinates. H D smears a spiky vector evenly over all coordinates, which is what makes plain coordinate sampling safe afterwards.</p><p>Without H D, sampling a one-hot vector usually returns zero. Its tail bound has extra log factors, so the Gaussian formula above is <strong>not</strong> a theorem for it; here it is only measured.</p></div></div></div>
+
+PCA. Centre the data, form the covariance C = X&#94;T X / n, diagonalise C = V diag(l1 >= l2 >= ...) V&#94;T, keep the first k columns of V. The mean squared reconstruction error on the fitted data is **exactly** the sum of the discarded eigenvalues (checked for every k), and no other k-dimensional affine subspace does better (Eckart-Young).
+
+Two solvers: cyclic JACOBI rotations (all eigenpairs, very accurate, O(d&#94;3) per sweep, fine to a few hundred dims) and **power iteration** with deflation (top few only; slow when neighbouring eigenvalues are close). **Whitening** divides each PCA coordinate by sqrt(lambda) so the covariance becomes the identity.
+
+It **changes the metric** (to Mahalanobis distance): low-variance directions, often noise, are amplified. It helps when the useful signal is not in the high-variance directions; if plain L2 is your ground truth, it makes results worse (measured below).
+
+**OPQ-STYLE rotation**. Product quantisation cuts the vector into m blocks and gives each block the same code budget. If one block holds most of the variance it is quantised badly while the others waste bits.
+
+Any orthogonal rotation keeps L2 distances unchanged, so rotate first. **PCA alone** is the wrong rotation: it sorts variance, which packs the large components into the first block.
+
+**Eigenvalue allocation** (the parametric solution in Ge et al., "Optimized Product Quantization") deals the principal components to blocks, largest first, always to the block whose **product** of eigenvalues is smallest and still has room. Full OPQ also optimises the rotation iteratively against the codebooks; that step is not implemented here.
+
+**MATRYOSHKA-STYLE prefixes**. Matryoshka embedding models are **trained** so that the first d' coordinates are a usable embedding on their own. Training is out of scope: here PCA ordering stands in (importance sorted by coordinate), and a random rotation of the same data is the control where information is spread evenly.
+
+A prefix gives (a) cheaper first-stage search then full-dimension rerank, and (b) for L2 an **exact lower bound**: partial squared distance only grows as coordinates are added, so a scan can stop early without changing results. For cosine similarity, re-normalise after truncating (and note the lower-bound trick above is for L2 only).
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+the fast Hadamard transform equals the explicit matrix, H H&#94;T = I, H(H x) = x and &#124;H x&#124; = &#124;x&#124;;
+
+For a fixed seed, over 200 independent trials per construction at the Gaussian-bound k, the fraction of trials with **any** pair outside 1 +- eps is &lt;= delta (Gaussian and Achlioptas: the theorem's promise; SRHT: measurement only), and at k/12 more than delta of trials fail;
+
+The variance of the norm ratio matches the formulas on dense and one-hot vectors; coordinate sampling without H D loses a one-hot vector;
+
+Eigenvectors are orthonormal with tiny residual &#124;Cv - lv&#124;, trace is preserved, power iteration agrees with Jacobi, reconstruction MSE equals the discarded eigenvalue sum for **every** k and beats random subspaces; whitened covariance is the identity; rotations keep distances;
+
+Eigenvalue allocation lowers PQ distortion and raises recall over raw and PCA-only PQ on this anisotropic data; PCA prefixes beat random-rotation prefixes in recall; prefix-pruned exact search returns exactly the brute-force result.
+
+**Limits**: the PQ, whitening and prefix comparisons are measurements on one synthetic anisotropic distribution, where the importance of directions is very uneven. On isotropic data none of PCA, OPQ rotation or PCA prefixes has anything to exploit.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Faiss <code>PCAMatrix</code></li><li><code>OPQMatrix</code></li><li><code>RandomRotationMatrix</code> pre-transforms</li><li>OpenAI/Nomic style truncatable embeddings with rerank</li><li>random rotation before 1-bit codes (RaBitQ)</li><li>sketching in numerical linear algebra</li><li>feature hashing's cousin in ML pipelines</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Dasgupta and Gupta, "An Elementary Proof of a Theorem of Johnson and Lindenstrauss" (cited by title)</li><li>Achlioptas, "Database-friendly random projections" (cited by title)</li><li>Li, Hastie and Church, "Very sparse random projections" (cited by title)</li><li>Ailon and Chazelle, "The fast Johnson-Lindenstrauss transform" (cited by title)</li><li>Ge, He, Ke and Sun, "Optimized Product Quantization" (cited by title)</li><li>Matryoshka Representation Learning, Kusupati et al. <a href="https://arxiv.org/abs/2205.13147" target="_blank" rel="noreferrer">https://arxiv.org/abs/2205.13147</a></li><li><a href="https://github.com/facebookresearch/faiss/wiki/Pre--and-post-processing" target="_blank" rel="noreferrer">https://github.com/facebookresearch/faiss/wiki/Pre--and-post-processing</a></li></ul>
+"""
+
+[[sources]]
+title = "arxiv.org/abs/2205.13147"
+url = "https://arxiv.org/abs/2205.13147"
+
+[[sources]]
+title = "github.com/facebookresearch/faiss/wiki/Pre--and-post-processing"
+url = "https://github.com/facebookresearch/faiss/wiki/Pre--and-post-processing"

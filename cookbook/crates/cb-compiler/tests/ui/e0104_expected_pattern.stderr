@@ -1,0 +1,18 @@
+error[E0301]: mismatched types
+ --> e0104_expected_pattern.peb:2:5
+  |
+1 |   fn main() {
+  |      ---- expected `()` because of this return type
+2 |       match 1 {
+  |  _____^
+3 | |         => 2,
+4 | |     }
+  | |_____^ expected `()`, found `int`
+
+error[E0104]: expected a pattern, found `=>`
+ --> e0104_expected_pattern.peb:3:9
+  |
+3 |         => 2,
+  |         ^^ expected a pattern
+
+error: aborting due to 2 previous errors

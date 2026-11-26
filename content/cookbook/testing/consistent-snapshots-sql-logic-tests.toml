@@ -1,0 +1,74 @@
+title = "How database engines are tested"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Systems: databases"
+chapter_order = 8
+order = 154
+kind = "recipe"
+lede = "Sqllogictest scripts, differential testing, TLP and NoREC, test-case reduction, coverage-guided fuzzing."
+level = "intermediate"
+code = ["examples/database/consistent_snapshots_sql_logic_tests.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>any query engine</li><li>rules engine</li><li>compiler or optimiser where "what is the right answer?" is expensive to know</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>the sqllogictest script format from SQLite (adopted in variants by other engines; sqllogictest-rs is a Rust runner)</li><li>SQLancer (TLP, NoREC, PQS) against production DBMSs</li><li>C-Reduce / delta debugging for bug reports</li><li>coverage-guided fuzzers (AFL, libFuzzer, SQLsmith-style generators)</li><li>optimiser-on vs optimiser-off differential tests inside CI</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The oracle problem**. A random query is cheap; knowing its correct result is not. Four answers, all implemented here:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Scripts (sqllogictest)</div><div class="cb-g-says"><p>. A human (or a trusted engine) wrote the expected output once. Records are <code>statement ok</code>, <code>statement error &lt;substring&gt;</code>, <code>query &lt;types&gt; &lt;sortmode&gt; [label]</code>.</p><p>Row order is unspecified in SQL without <strong>order by</strong>, so the <strong>sort mode</strong> (nosort / rowsort / valuesort) is part of the test. Big results are stored as "N values hashing to H" once they exceed <code>hash-threshold</code> (the real tool hashes with MD5; this one uses FNV-1a to stay std-only). Queries sharing a <strong>label</strong> must give the same result.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Differential</div><div class="cb-g-says"><p>. Run two implementations (here: a naive nested-loop <strong>reference</strong> and an <strong>optimised</strong> engine with hash join and predicate pushdown) and compare multisets. Needs a second engine, and shared bugs are invisible.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>TLP (ternary logic partitioning, metamorphic: no second engine). In SQL's three-valued logic every row makes a predicate p exactly one of <strong>true</strong>, <strong>false</strong> or <strong>null</strong>, so <code>WHERE p</code>, <code>WHERE NOT p</code> and <code>WHERE (p) IS NULL</code> must partition the unfiltered result: their bag union equals it.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>NoREC (non-optimising reference engine construction). <code>SELECT * ... WHERE p</code> is a target for the optimiser; the same p moved into the <strong>select</strong> list (<code>SELECT p ...</code>) has to be evaluated row by row.</p><p>The row count of the first must equal the number of TRUEs in the second.</p></div></div></div>
+
+**The injected bugs** (switched on with `Bug`), both real classes of optimiser defect:
+
+- PushBelowLeftJoin: pushes a **where** conjunct about the **null**-supplying side below a **left join**. That is only legal when the predicate rejects NULLs (and then the join can become **inner**). Done blindly, filtered-out right rows turn into **null**-padded rows that never get re-checked.
+- PushedNullIsTrue: the pushed-down scan filter keeps rows whose predicate is "not **false**" instead of "**true**".
+
+**Reduction**. A failing case has two tables of rows and a nested predicate. Delta debugging (ddmin) removes chunks of rows while the failure persists, then the predicate is shrunk by replacing a node with one of its children or a simpler leaf.
+
+The loop repeats to a fixed point. The failing oracle is the only thing the reducer needs.
+
+**Coverage guidance**. The evaluator and optimiser record **features** (operator x parent x truth value, rules fired). A query that reaches a new feature joins the corpus and gets mutated further.
+
+This is the AFL idea at the level of query plans. Real systems use compiler edge coverage or query-plan fingerprints (as in "query plan guidance").
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+sqllogictest documentation <https://sqlite.org/sqllogictest/doc/trunk/about.wiki>
+
+```text
+sqllogictest-rs https://github.com/risinglightdb/sqllogictest-rs
+SQLancer https://github.com/sqlancer/sqlancer
+Rigger, Su, "Finding Bugs in Database Systems via Query Partitioning" (TLP), OOPSLA 2020 (cited by title)
+Rigger, Su, "Detecting Optimization Bugs in Database Engines via Non-Optimizing Reference Engine Construction" (NoREC)
+https://arxiv.org/abs/2007.08292
+Zeller, Hildebrandt, "Simplifying and Isolating Failure-Inducing Input" (delta debugging) (cited by title)
+```
+"""
+
+[[sources]]
+title = "sqlite.org/sqllogictest/doc/trunk/about.wiki"
+url = "https://sqlite.org/sqllogictest/doc/trunk/about.wiki"
+
+[[sources]]
+title = "github.com/risinglightdb/sqllogictest-rs"
+url = "https://github.com/risinglightdb/sqllogictest-rs"
+
+[[sources]]
+title = "github.com/sqlancer/sqlancer"
+url = "https://github.com/sqlancer/sqlancer"
+
+[[sources]]
+title = "arxiv.org/abs/2007.08292"
+url = "https://arxiv.org/abs/2007.08292"

@@ -1,0 +1,9 @@
+error[E0101]: expected `;`, found keyword `let`
+ --> e0101_missing_semicolon.peb:2:14
+  |
+2 |     let x = 1
+  |              ^ expected `;` here
+  |
+  = help: add a semicolon
+
+error: aborting due to 1 previous error

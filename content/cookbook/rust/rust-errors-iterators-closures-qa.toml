@@ -1,0 +1,70 @@
+title = "Error handling, iterators and closures"
+module = "Worked questions"
+module_order = 14
+chapter = "Rust concept answers"
+chapter_order = 1
+order = 670
+kind = "recipe"
+lede = "The everyday idioms interviewers probe."
+level = "intermediate"
+code = ["examples/interview/rust_errors_iterators_closures_qa.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>interview preparation</li><li>code review of error types</li><li>explaining lazy iterator pipelines and closure captures</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>library error types</li><li>CLI/application error reporting</li><li>data pipelines</li><li>callbacks and event handlers</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://www.techinterview.org/post/3233474457/rust-interview-questions-2025-ownership-borrowing-lifetimes-traits-async-await-error-handling-smart-pointers-concurrency/>
+
+<https://www.techinterview.org/post/3233460429/rust-interview-questions/> and <https://codeforgeek.com/rust-interview-questions/>
+
+<https://github.com/devinterview-io/rust-interview-questions> and <https://flakm.github.io/posts/rust_interview_questions>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Question bank Q1**. Result vs Option vs panic: when do you use each? [Easy] [asked: very common] Q2. What does the `?` operator desugar to, and how does `From` conversion fit in? [Medium] [asked: very common] Q3.
+
+When do you use `Box<dyn Error + Send + Sync>`? [Medium] [asked: common] Q4. How do you write a custom error enum with `std::error::Error` and `source()`? [Medium] [asked: very common] Q5. thiserror vs anyhow: library vs application. What do they generate? [Medium] [asked: very common] Q6.
+
+What is your `unwrap`/`expect` policy? [Easy] [asked: very common] Q7. What do `catch_unwind` and `panic = "abort"` do? [Hard] [asked: occasional] Q8. Iterators are lazy: what does that mean and how do you prove it? [Easy] [asked: very common] Q9.
+
+`iter()` vs `iter_mut()` vs `into_iter()`; what does `for x in &v` desugar to? [Medium] [asked: very common] Q10. Adapters vs consumers; `collect` into Vec/HashMap/String/Result; how does `sum` infer its type? [Medium] [asked: very common] Q11. `map` vs `for_each` vs `filter_map` vs `flat_map`. [Easy] [asked: common] Q12.
+
+Tour of `zip`, `chain`, `enumerate`, `windows`, `chunks`, `peekable`, `rev`, `step_by`. [Easy] [asked: common] Q13. Implement a custom `Iterator` and `IntoIterator for &MyType`. [Medium] [asked: common] Q14. Why is iterator invalidation impossible in safe Rust? [Medium] [asked: common] Q15.
+
+Are iterators really zero-cost? Compare a pipeline with a manual loop. [Medium] [asked: common] Q16. How do closures capture variables (by ref, by mut ref, by move)? [Medium] [asked: very common] Q17.
+
+How do you return closures, and what is E0373? [Medium] [asked: common]
+"""
+
+[[sources]]
+title = "techinterview.org/post/3233474457/rust-interview-questions-2025-ownership-bor…"
+url = "https://www.techinterview.org/post/3233474457/rust-interview-questions-2025-ownership-borrowing-lifetimes-traits-async-await-error-handling-smart-pointers-concurrency/"
+
+[[sources]]
+title = "techinterview.org/post/3233460429/rust-interview-questions"
+url = "https://www.techinterview.org/post/3233460429/rust-interview-questions/"
+
+[[sources]]
+title = "codeforgeek.com/rust-interview-questions"
+url = "https://codeforgeek.com/rust-interview-questions/"
+
+[[sources]]
+title = "github.com/devinterview-io/rust-interview-questions"
+url = "https://github.com/devinterview-io/rust-interview-questions"
+
+[[sources]]
+title = "flakm.github.io/posts/rust_interview_questions"
+url = "https://flakm.github.io/posts/rust_interview_questions"

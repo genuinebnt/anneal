@@ -1,0 +1,600 @@
+title = "Roles, privileges and row-level security"
+module = "Databases"
+module_order = 8
+chapter = "Building complete engines"
+chapter_order = 9
+order = 458
+kind = "guide"
+lede = "Who may run what · policies as a query rewrite · why the policy goes first · an error that leaks a hidden row, and the fix · a copy of the database with only the visible rows as the oracle · 36 mutants"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Three questions, three mechanisms.</strong> <em>Who are you</em> is authentication (<a href="/cookbook/p/passwords-and-scram">M21</a>). <em>May you run this kind of statement on this table</em> is a <strong>privilege</strong> (<code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code> granted to a role). <em>Which rows may you see and change</em> is <strong>row-level security</strong>: a predicate on the table's columns, written once by an administrator and applied to every statement of every other role.</li> <li><strong>Enforce it by rewriting the query, before the planner.</strong> The statement <code>SELECT … FROM docs WHERE c</code> from role <code>ann</code> becomes <code>SELECT … FROM docs WHERE COALESCE(policy(ann), FALSE) AND c</code>. The planner, the optimizer and the executor see an ordinary query over the rows <code>ann</code> may see, so every operator (joins, grouping, ordering, limits, window functions) respects the policy without knowing it exists. This is where PostgreSQL does it too: in the rewriter, which adds <em>security quals</em> to the query tree.</li> <li><strong>Where the predicate goes depends on the join.</strong> A table's policy removes rows of <em>that table</em>. For the first table it belongs in <code>WHERE</code>. For a table joined in, it belongs in the <code>ON</code> of its join: in <code>a LEFT JOIN b ON … AND policy(b)</code> a hidden row of <code>b</code> simply does not match and <code>a</code>'s row is kept with NULLs, which is what a database with only the visible rows of <code>b</code> would return. Putting it in <code>WHERE</code> would turn the left join into an inner join.</li> <li><strong>A hidden row can still be felt through an error.</strong> <code>SELECT id FROM docs WHERE 100 / (level - 1) &gt; 1</code> raises <em>division by zero</em> for a document of level 1. If another user's hidden document has level 1, the error tells the first user that it exists. The standard says nothing about the order in which the conditions of an <code>AND</code> are evaluated, so the engine evaluated both sides, in every row. The policy must therefore be the <em>first</em> conjunct, and the engine must <em>stop</em> at it: <code>AND</code> and <code>OR</code> now short-circuit.</li> <li><strong>A NULL policy hides a row, but does not stop the evaluation.</strong> <code>NULL AND x</code> is <code>FALSE</code> or <code>NULL</code> depending on <code>x</code>, so the engine has to look at <code>x</code>. A document whose <code>owner</code> is NULL has a NULL policy for everyone, and the user's condition was then evaluated on it. Wrapping the policy in <code>COALESCE(policy, FALSE)</code> makes "not visible" a definite <code>FALSE</code> that ends the evaluation.</li> <li><strong>The oracle is a copy of the database.</strong> For a role, build a second database holding only the rows that satisfy the policy (selected by a plain <code>WHERE</code>, not by the rewrite), run the same query there with no security at all, and compare. Equal answers, and equal <em>errors</em>, for thousands of random queries: that is the definition of "the role sees a database with only its rows", tested directly.</li> </ul>
+"""
+
+[[sections]]
+heading = "The rewrite"
+body = """
+```text
+policy(docs) = owner = current_user OR level >= 3        check(docs) = same unless WITH CHECK is given
+
+ role ann runs                                          the engine runs
+ ──────────────                                         ───────────────
+ SELECT … FROM docs d WHERE c                       →   … FROM docs d WHERE COALESCE(d.owner = 'ann' OR d.level >= 3, FALSE) AND (c)
+ SELECT … FROM docs d JOIN t ON k WHERE c           →   … FROM docs d JOIN t ON COALESCE(policy(t), FALSE) AND (k) WHERE COALESCE(policy(d), FALSE) AND (c)
+ SELECT … FROM docs d LEFT JOIN t ON k              →   … LEFT JOIN t ON COALESCE(policy(t), FALSE) AND (k)             (WHERE would turn it into an inner join)
+ UPDATE docs SET body = … WHERE c                   →   UPDATE … WHERE COALESCE(policy, FALSE) AND (c)        refused if SET names a column the policy reads
+ DELETE FROM docs WHERE c                           →   DELETE … WHERE COALESCE(policy, FALSE) AND (c)
+ INSERT INTO docs VALUES (…)                        →   the values are evaluated, coerced to the column types, tested against `check`
+                                                        (true, not NULL), and inserted as constants: the rows stored are the rows tested
+ INSERT INTO docs SELECT …                          →   refused while docs has a policy
+ CREATE …, ANALYZE, EXPLAIN                         →   administrators only (statistics and plans show data the role cannot see)
+```
+
+<p><code>current_user</code> is replaced by the role's name as a constant in the policy and in the user's own statement. Policy columns are qualified with the table's alias, so one table appearing twice in a query (<code>docs a JOIN docs b</code>) gets its policy twice, once per alias.</p>
+
+<p>Privileges are checked on every table the statement names, the right-hand tables of joins included. An <code>UPDATE</code> that reads columns (a <code>WHERE</code>, or a <code>SET</code> that mentions a column) needs <code>SELECT</code> as well as <code>UPDATE</code>; a <code>DELETE</code> with a <code>WHERE</code> needs <code>SELECT</code>. Administrators bypass privileges and policies. Administration is SQL, in the same session: <code>CREATE ROLE name [ADMIN] [PASSWORD 'pw']</code>, <code>GRANT SELECT, UPDATE ON t TO name</code>, <code>REVOKE … FROM name</code>, <code>CREATE POLICY ON t USING (expr) [WITH CHECK (expr)]</code>, <code>DROP POLICY ON t</code>.</p>
+
+:::deeper Reference: roles, grants, policies, the statement rewrite, administration statements, the handler that plugs it into the wire server
+```rust title="src/product/security.rs"
+//! Roles, privileges and row-level security in front of the SQL engine. A statement from a role other than an administrator is checked
+//! against the privileges granted to that role, and then *rewritten* before it reaches the planner: the policy of every table it reads or
+//! changes is added to the query as a condition that is placed first, so the engine sees an ordinary query over the rows the role may see.
+//! Nothing below the rewrite knows about security. An administrator bypasses all of it.
+use crate::auth::{random_bytes, Verifier};
+use crate::codec::ColType;
+use crate::engine::catalog::coerce;
+use crate::engine::expr::BinOp;
+use crate::engine::sql::{self, Ast, From, Item, Select, Stmt, Tok, WindowSpec};
+use crate::engine::Engine;
+use crate::facade::Database;
+use crate::pgwire::{run_stmts, Credential, Handler, Reply, Server};
+use crate::value::Value;
+use std::collections::{HashMap, HashSet};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Priv {
+    Select,
+    Insert,
+    Update,
+    Delete,
+}
+
+const ALL: [Priv; 4] = [Priv::Select, Priv::Insert, Priv::Update, Priv::Delete];
+
+#[derive(Default)]
+struct Role {
+    admin: bool,
+    verifier: Option<Verifier>,
+    grants: HashMap<String, HashSet<Priv>>,
+}
+
+/// A row-level security policy: which rows of a table a role may see and change. `using` filters what is read, updated and deleted;
+/// `check` (default: `using`) must hold for every row that is inserted.
+struct Policy {
+    using: Ast,
+    check: Ast,
+    columns: HashSet<String>,
+}
+
+#[derive(Default)]
+pub struct Security {
+    roles: HashMap<String, Role>,
+    policies: HashMap<String, Policy>,
+    secret: Vec<u8>,
+}
+
+type Res<T> = Result<T, String>;
+
+// ---- walking an expression -------------------------------------------------------------------------------------------------------------
+
+/// Rebuild `a`, replacing every subexpression for which `f` returns a replacement.
+fn map_ast(a: &Ast, f: &mut dyn FnMut(&Ast) -> Option<Ast>) -> Ast {
+    if let Some(r) = f(a) {
+        return r;
+    }
+    let mut m = |x: &Ast| map_ast(x, f);
+    match a {
+        Ast::Ident(..) | Ast::Lit(_) => a.clone(),
+        Ast::Bin(op, l, r) => Ast::Bin(*op, Box::new(m(l)), Box::new(m(r))),
+        Ast::Not(x) => Ast::Not(Box::new(m(x))),
+        Ast::Neg(x) => Ast::Neg(Box::new(m(x))),
+        Ast::IsNull(x, n) => Ast::IsNull(Box::new(m(x)), *n),
+        Ast::Between(x, lo, hi, n) => Ast::Between(Box::new(m(x)), Box::new(m(lo)), Box::new(m(hi)), *n),
+        Ast::InList(x, list, n) => Ast::InList(Box::new(m(x)), list.iter().map(&mut m).collect(), *n),
+        Ast::Call { name, args, star, distinct, over } => Ast::Call {
+            name: name.clone(),
+            args: args.iter().map(&mut m).collect(),
+            star: *star,
+            distinct: *distinct,
+            over: over.as_ref().map(|w| WindowSpec {
+                partition_by: w.partition_by.iter().map(&mut m).collect(),
+                order_by: w.order_by.iter().map(|(e, d)| (m(e), *d)).collect(),
+            }),
+        },
+    }
+}
+
+fn is_current_user(a: &Ast) -> bool {
+    matches!(a, Ast::Ident(None, n) if n.eq_ignore_ascii_case("current_user"))
+}
+
+/// `current_user` becomes the role's name, as a constant.
+fn bind_user(a: &Ast, role: &str) -> Ast {
+    map_ast(a, &mut |x| is_current_user(x).then(|| Ast::Lit(Value::Text(role.into()))))
+}
+
+/// Unqualified column names become `alias.name`, so a policy keeps its meaning when the table appears under an alias in a join.
+fn qualify(a: &Ast, alias: &str) -> Ast {
+    map_ast(a, &mut |x| match x {
+        Ast::Ident(None, n) => Some(Ast::Ident(Some(alias.into()), n.clone())),
+        _ => None,
+    })
+}
+
+fn columns_of(a: &Ast) -> HashSet<String> {
+    let mut cols = HashSet::new();
+    map_ast(a, &mut |x| {
+        if let Ast::Ident(_, n) = x {
+            cols.insert(n.to_lowercase());
+        }
+        None
+    });
+    cols
+}
+
+fn and(a: Ast, b: Ast) -> Ast {
+    Ast::Bin(BinOp::And, Box::new(a), Box::new(b))
+}
+
+/// `first AND rest`, with the policy first: the engine evaluates the left side first and stops when it is false, so the user's own
+/// conditions, and the errors they can raise, are never evaluated on a row the policy hides. A policy that is NULL for a row (an
+/// owner that is NULL, say) hides the row as well, but `NULL AND x` still has to look at `x`; `COALESCE(policy, FALSE)` turns the
+/// NULL into FALSE so the engine can stop there too.
+fn guard(policy: Option<Ast>, rest: Option<Ast>) -> Option<Ast> {
+    let policy = policy.map(|p| Ast::Call { name: "coalesce".into(), args: vec![p, Ast::Lit(Value::Bool(false))], star: false, distinct: false, over: None });
+    match (policy, rest) {
+        (Some(p), Some(r)) => Some(and(p, r)),
+        (p, r) => p.or(r),
+    }
+}
+
+fn tables_of(f: &From, out: &mut Vec<String>) {
+    match f {
+        From::Table { name, .. } => out.push(name.to_lowercase()),
+        From::Join { left, right, .. } => {
+            tables_of(left, out);
+            tables_of(right, out);
+        }
+    }
+}
+
+fn eval_const(engine: &mut Engine, a: Ast) -> Res<Value> {
+    let sel = Select { items: vec![Item::Expr(a, None)], ..Default::default() };
+    let mut r = engine.execute_stmts(vec![Stmt::Select(Box::new(sel))]).map_err(|e| e.0)?;
+    r.pop().and_then(|t| t.rows.into_iter().next()).and_then(|row| row.into_iter().next()).ok_or_else(|| "no value".to_string())
+}
+
+// ---- the catalog -----------------------------------------------------------------------------------------------------------------------
+
+impl Security {
+    pub fn new() -> Security {
+        Security { secret: random_bytes(32), ..Default::default() }
+    }
+
+    pub fn create_role(&mut self, name: &str, admin: bool, password: Option<&str>) -> Res<()> {
+        let name = name.to_lowercase();
+        if self.roles.contains_key(&name) {
+            return Err(format!("role \\"{name}\\" already exists"));
+        }
+        let verifier = password.map(|p| Verifier::new(p, &random_bytes(16), 4096));
+        self.roles.insert(name, Role { admin, verifier, grants: HashMap::new() });
+        Ok(())
+    }
+
+    pub fn grant(&mut self, role: &str, table: &str, privs: &[Priv]) -> Res<()> {
+        let r = self.roles.get_mut(&role.to_lowercase()).ok_or_else(|| format!("role \\"{role}\\" does not exist"))?;
+        r.grants.entry(table.to_lowercase()).or_default().extend(privs);
+        Ok(())
+    }
+
+    pub fn revoke(&mut self, role: &str, table: &str, privs: &[Priv]) -> Res<()> {
+        let r = self.roles.get_mut(&role.to_lowercase()).ok_or_else(|| format!("role \\"{role}\\" does not exist"))?;
+        if let Some(g) = r.grants.get_mut(&table.to_lowercase()) {
+            for p in privs {
+                g.remove(p);
+            }
+        }
+        Ok(())
+    }
+
+    /// Set the policy of a table. The expressions are checked against the table before they are stored.
+    pub fn set_policy(&mut self, engine: &mut Engine, table: &str, using: &str, check: Option<&str>) -> Res<()> {
+        let parse = |text: &str| -> Res<Ast> {
+            let stmts = sql::parse(&format!("SELECT 1 FROM {table} WHERE {text}")).map_err(|e| e.0)?;
+            match stmts.into_iter().next() {
+                Some(Stmt::Select(s)) => s.filter.ok_or_else(|| "empty policy".to_string()),
+                _ => Err("not an expression".to_string()),
+            }
+        };
+        let using = parse(using)?;
+        let check = check.map(parse).transpose()?.unwrap_or_else(|| using.clone());
+        for e in [&using, &check] {
+            // run it once over the table with a made-up user: unknown columns and type errors show up now, not at the first query
+            let count = Ast::Call { name: "count".into(), args: vec![], star: true, distinct: false, over: None };
+            let probe = Select {
+                items: vec![Item::Expr(count, None)],
+                from: Some(From::Table { name: table.into(), alias: None }),
+                filter: Some(bind_user(e, "")),
+                ..Default::default()
+            };
+            engine.execute_stmts(vec![Stmt::Select(Box::new(probe))]).map_err(|e| format!("policy does not apply to \\"{table}\\": {}", e.0))?;
+        }
+        let columns = columns_of(&using).union(&columns_of(&check)).cloned().collect();
+        self.policies.insert(table.to_lowercase(), Policy { using, check, columns });
+        Ok(())
+    }
+
+    pub fn drop_policy(&mut self, table: &str) -> bool {
+        self.policies.remove(&table.to_lowercase()).is_some()
+    }
+
+    /// How a user may log in. A name that is not a role, or a role with no password, gets a made-up verifier: the exchange runs and fails.
+    pub fn credential(&self, user: &str) -> Credential {
+        match self.roles.get(&user.to_lowercase()).and_then(|r| r.verifier.clone()) {
+            Some(v) => Credential::Scram(v),
+            None => Credential::Scram(Verifier::mock(user, &self.secret, 4096)),
+        }
+    }
+
+    // ---- authorization and rewriting -----------------------------------------------------------------------------------------------
+
+    fn has(&self, role: &Role, table: &str, p: Priv) -> bool {
+        role.grants.get(&table.to_lowercase()).is_some_and(|g| g.contains(&p))
+    }
+
+    fn need(&self, role: &Role, table: &str, p: Priv) -> Res<()> {
+        if self.has(role, table, p) { Ok(()) } else { Err(format!("permission denied for table {table}")) }
+    }
+
+    /// Check `stmts` for `user` and return the statements to run. An administrator's statements come back unchanged.
+    pub fn authorize(&self, engine: &mut Engine, user: &str, stmts: Vec<Stmt>) -> Res<Vec<Stmt>> {
+        let user = user.to_lowercase();
+        let role = self.roles.get(&user).ok_or_else(|| format!("role \\"{user}\\" does not exist"))?;
+        if role.admin {
+            return Ok(stmts);
+        }
+        stmts.into_iter().map(|s| self.authorize_one(engine, role, &user, s)).collect()
+    }
+
+    fn authorize_one(&self, engine: &mut Engine, role: &Role, user: &str, stmt: Stmt) -> Res<Stmt> {
+        match stmt {
+            Stmt::CreateTable { .. } | Stmt::CreateIndex { .. } | Stmt::Analyze { .. } | Stmt::Explain(_) => {
+                Err("permission denied: only an administrator can run this statement".into())
+            }
+            Stmt::Select(sel) => Ok(Stmt::Select(Box::new(self.secure_select(role, user, *sel)?))),
+            Stmt::Insert { table, cols, rows, select } => {
+                self.need(role, &table, Priv::Insert)?;
+                let policy = self.policies.get(&table.to_lowercase());
+                match (rows, select) {
+                    (_, Some(sel)) => {
+                        if policy.is_some() {
+                            return Err(format!("INSERT ... SELECT into \\"{table}\\" is not supported while it has a row-level security policy"));
+                        }
+                        let sel = self.secure_select(role, user, *sel)?;
+                        Ok(Stmt::Insert { table, cols, rows: None, select: Some(Box::new(sel)) })
+                    }
+                    (Some(rows), None) => {
+                        let rows = self.checked_rows(engine, user, &table, &cols, rows, policy)?;
+                        Ok(Stmt::Insert { table, cols, rows: Some(rows), select: None })
+                    }
+                    (None, None) => Ok(Stmt::Insert { table, cols, rows: None, select: None }),
+                }
+            }
+            Stmt::Update { table, sets, filter } => {
+                self.need(role, &table, Priv::Update)?;
+                let reads = filter.is_some() || sets.iter().any(|(_, e)| !columns_of(e).is_empty());
+                if reads {
+                    self.need(role, &table, Priv::Select)?;
+                }
+                let policy = self.policies.get(&table.to_lowercase());
+                if let Some(p) = policy {
+                    // a row could be moved out of view (or into another role's view) by changing a column the policy reads
+                    if let Some((c, _)) = sets.iter().find(|(c, _)| p.columns.contains(&c.to_lowercase())) {
+                        return Err(format!("cannot update column \\"{c}\\": it is used by the row-level security policy on \\"{table}\\""));
+                    }
+                }
+                let bind = |a: &Ast| bind_user(a, user);
+                Ok(Stmt::Update {
+                    sets: sets.iter().map(|(c, e)| (c.clone(), bind(e))).collect(),
+                    filter: guard(policy.map(|p| bind(&p.using)), filter.as_ref().map(bind)),
+                    table,
+                })
+            }
+            Stmt::Delete { table, filter } => {
+                self.need(role, &table, Priv::Delete)?;
+                if filter.is_some() {
+                    self.need(role, &table, Priv::Select)?;
+                }
+                let policy = self.policies.get(&table.to_lowercase());
+                Ok(Stmt::Delete { filter: guard(policy.map(|p| bind_user(&p.using, user)), filter.as_ref().map(|f| bind_user(f, user))), table })
+            }
+        }
+    }
+
+    /// Privileges for every table read, the policies of those tables, `current_user` bound. A table's policy goes where it removes rows
+    /// from that table only: into the `ON` of the join that brings the table in, or into `WHERE` for the first table.
+    fn secure_select(&self, role: &Role, user: &str, mut sel: Select) -> Res<Select> {
+        let bind = |a: &Ast| bind_user(a, user);
+        let mut policy_where: Option<Ast> = None;
+        if let Some(from) = sel.from.take() {
+            let mut names = vec![];
+            tables_of(&from, &mut names);
+            for t in &names {
+                self.need(role, t, Priv::Select)?;
+            }
+            let (from, first) = self.secure_from(from, user)?;
+            sel.from = Some(from);
+            policy_where = first;
+        }
+        sel.items = sel.items.into_iter().map(|i| match i { Item::Expr(e, a) => Item::Expr(bind(&e), a), s => s }).collect();
+        sel.filter = guard(policy_where, sel.filter.as_ref().map(bind));
+        sel.group_by = sel.group_by.iter().map(bind).collect();
+        sel.having = sel.having.as_ref().map(bind);
+        sel.order_by = sel.order_by.iter().map(|(e, d)| (bind(e), *d)).collect();
+        Ok(sel)
+    }
+
+    /// Returns the rewritten `FROM` and the policy of its first table, which belongs in `WHERE`.
+    fn secure_from(&self, from: From, user: &str) -> Res<(From, Option<Ast>)> {
+        let policy_of = |name: &str, alias: &Option<String>| -> Option<Ast> {
+            self.policies.get(&name.to_lowercase()).map(|p| qualify(&bind_user(&p.using, user), alias.as_deref().unwrap_or(name)))
+        };
+        match from {
+            From::Table { name, alias } => {
+                let p = policy_of(&name, &alias);
+                Ok((From::Table { name, alias }, p))
+            }
+            From::Join { left, right, kind, on } => {
+                let (left, first) = self.secure_from(*left, user)?;
+                let From::Table { name, alias } = *right else {
+                    // only left-deep joins are produced by the parser; anything else is refused rather than guessed at
+                    return Err("unsupported join shape under row-level security".into());
+                };
+                let p = policy_of(&name, &alias);
+                let on = guard(p, on.as_ref().map(|o| bind_user(o, user)));
+                Ok((From::Join { left: Box::new(left), right: Box::new(From::Table { name, alias }), kind, on }, first))
+            }
+        }
+    }
+
+    /// Evaluate the rows of an `INSERT … VALUES` once, coerce them to the column types, test them against the policy's `check`, and return
+    /// them as constants, so the rows that are stored are exactly the rows that were tested.
+    fn checked_rows(&self, engine: &mut Engine, user: &str, table: &str, cols: &Option<Vec<String>>, rows: Vec<Vec<Ast>>, policy: Option<&Policy>) -> Res<Vec<Vec<Ast>>> {
+        let schema: Vec<(String, ColType)> = engine.cat.table(table).map_err(|e| e.0)?.schema.cols.iter().map(|c| (c.name.clone(), c.ty)).collect();
+        let targets: Vec<usize> = match cols {
+            None => (0..schema.len()).collect(),
+            Some(names) => names
+                .iter()
+                .map(|n| schema.iter().position(|(c, _)| c.eq_ignore_ascii_case(n)).ok_or_else(|| format!("column {n} not found")))
+                .collect::<Res<_>>()?,
+        };
+        let mut out = vec![];
+        for row in rows {
+            if row.len() != targets.len() {
+                return Err(format!("INSERT has {} values for {} columns", row.len(), targets.len()));
+            }
+            let mut values = vec![Value::Null; schema.len()];
+            let mut consts = vec![];
+            for (a, &i) in row.iter().zip(&targets) {
+                let v = coerce(eval_const(engine, bind_user(a, user))?, schema[i].1).map_err(|e| e.0)?;
+                values[i] = v.clone();
+                consts.push(Ast::Lit(v));
+            }
+            if let Some(p) = policy {
+                let probe = map_ast(&bind_user(&p.check, user), &mut |x| match x {
+                    Ast::Ident(_, n) => schema.iter().position(|(c, _)| c.eq_ignore_ascii_case(n)).map(|i| Ast::Lit(values[i].clone())),
+                    _ => None,
+                });
+                if !matches!(eval_const(engine, probe)?, Value::Bool(true)) {
+                    return Err(format!("new row violates row-level security policy for table \\"{table}\\""));
+                }
+            }
+            out.push(consts);
+        }
+        Ok(out)
+    }
+
+    // ---- administration ------------------------------------------------------------------------------------------------------------
+
+    /// Run `CREATE ROLE`, `GRANT`, `REVOKE`, `CREATE POLICY` and `DROP POLICY` for an administrator. `None` when `sql` is not one of them.
+    pub fn admin_statement(&mut self, engine: &mut Engine, user: &str, sql: &str) -> Option<Reply> {
+        let toks = sql::lex(sql).ok()?;
+        let words: Vec<String> = toks.iter().map_while(|t| match t { Tok::Ident(s) | Tok::Kw(s) => Some(s.to_uppercase()), _ => None }).take(2).collect();
+        let kind = match words.as_slice() {
+            [a, b] if a == "CREATE" && b == "ROLE" => "CREATE ROLE",
+            [a, b] if a == "CREATE" && b == "POLICY" => "CREATE POLICY",
+            [a, b] if a == "DROP" && b == "POLICY" => "DROP POLICY",
+            [a, ..] if a == "GRANT" => "GRANT",
+            [a, ..] if a == "REVOKE" => "REVOKE",
+            _ => return None,
+        };
+        let is_admin = self.roles.get(&user.to_lowercase()).is_some_and(|r| r.admin);
+        if !is_admin {
+            return Some(Err("permission denied: only an administrator can run this statement".into()));
+        }
+        Some(self.run_admin(engine, kind, sql, &toks).map(|_| vec![(vec![], vec![], kind.to_string())]))
+    }
+
+    fn run_admin(&mut self, engine: &mut Engine, kind: &str, sql: &str, toks: &[Tok]) -> Res<()> {
+        let word = |i: usize| -> Option<String> { match toks.get(i) { Some(Tok::Ident(s) | Tok::Kw(s)) => Some(s.clone()), _ => None } };
+        let up = |i: usize| word(i).map(|s| s.to_uppercase());
+        let end_ok = |i: usize| matches!(toks.get(i), Some(Tok::Eof)) || (matches!(toks.get(i), Some(Tok::Sym(";"))) && matches!(toks.get(i + 1), Some(Tok::Eof)));
+        let bad = || Err::<(), String>(format!("syntax error in {kind}"));
+        match kind {
+            "CREATE ROLE" => {
+                let name = word(2).ok_or("role name expected")?;
+                let (mut i, mut admin, mut pw) = (3, false, None);
+                loop {
+                    match up(i).as_deref() {
+                        Some("ADMIN") => { admin = true; i += 1; }
+                        Some("PASSWORD") => match toks.get(i + 1) { Some(Tok::Str(s)) => { pw = Some(s.clone()); i += 2; } _ => return bad() },
+                        _ => break,
+                    }
+                }
+                if !end_ok(i) { return bad(); }
+                self.create_role(&name, admin, pw.as_deref())
+            }
+            "GRANT" | "REVOKE" => {
+                let mut privs = vec![];
+                let mut i = 1;
+                loop {
+                    match up(i).as_deref() {
+                        Some("ALL") => privs.extend(ALL),
+                        Some("SELECT") => privs.push(Priv::Select),
+                        Some("INSERT") => privs.push(Priv::Insert),
+                        Some("UPDATE") => privs.push(Priv::Update),
+                        Some("DELETE") => privs.push(Priv::Delete),
+                        _ => return bad(),
+                    }
+                    i += 1;
+                    if matches!(toks.get(i), Some(Tok::Sym(","))) { i += 1 } else { break }
+                }
+                let (link, who) = if kind == "GRANT" { ("TO", "role") } else { ("FROM", "role") };
+                if up(i).as_deref() != Some("ON") { return bad(); }
+                let table = word(i + 1).ok_or("table name expected")?;
+                if up(i + 2).as_deref() != Some(link) { return bad(); }
+                let role = word(i + 3).ok_or(format!("{who} name expected"))?;
+                if !end_ok(i + 4) { return bad(); }
+                engine.cat.table(&table).map_err(|e| e.0)?;
+                if kind == "GRANT" { self.grant(&role, &table, &privs) } else { self.revoke(&role, &table, &privs) }
+            }
+            "CREATE POLICY" | "DROP POLICY" => {
+                if up(2).as_deref() != Some("ON") { return bad(); }
+                let table = word(3).ok_or("table name expected")?;
+                engine.cat.table(&table).map_err(|e| e.0)?;
+                if kind == "DROP POLICY" {
+                    if !end_ok(4) { return bad(); }
+                    return if self.drop_policy(&table) { Ok(()) } else { Err(format!("table \\"{table}\\" has no policy")) };
+                }
+                let using = parenthesized(sql, "USING").ok_or("USING (expression) expected")?;
+                let check = parenthesized(sql, "WITH CHECK");
+                self.set_policy(engine, &table, &using, check.as_deref())
+            }
+            _ => bad(),
+        }
+    }
+}
+
+/// The text between the parentheses that follow `keyword` (case-insensitive), skipping parentheses inside quoted strings.
+fn parenthesized(sql: &str, keyword: &str) -> Option<String> {
+    let at = sql.to_uppercase().find(keyword)? + keyword.len();
+    let rest = &sql[at..];
+    let open = rest.find('(')?;
+    if !rest[..open].trim().is_empty() {
+        return None;
+    }
+    let (mut depth, mut quoted) = (0, false);
+    for (i, c) in rest[open..].char_indices() {
+        match c {
+            '\\'' => quoted = !quoted,
+            '(' if !quoted => depth += 1,
+            ')' if !quoted => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(rest[open + 1..open + i].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+// ---- the handler ---------------------------------------------------------------------------------------------------------------------
+
+/// One database with roles: every user logs in with SCRAM, and every statement goes through `Security`.
+pub struct SecureHandler {
+    pub db: Database,
+    pub sec: Security,
+}
+
+impl SecureHandler {
+    pub fn new(admin: &str, password: &str) -> SecureHandler {
+        let mut sec = Security::new();
+        sec.create_role(admin, true, Some(password)).unwrap();
+        SecureHandler { db: Database::with_pool(1024, 2), sec }
+    }
+
+    /// What the wire server does with a statement string from `user`.
+    pub fn run(&mut self, user: &str, sql: &str) -> Reply {
+        if let Some(r) = self.sec.admin_statement(self.db.engine(), user, sql) {
+            return r;
+        }
+        let stmts = sql::parse(sql).map_err(|e| e.0)?;
+        let stmts = self.sec.authorize(self.db.engine(), user, stmts)?;
+        run_stmts(self.db.engine(), stmts)
+    }
+}
+
+impl Handler for SecureHandler {
+    fn credential(&mut self, user: &str) -> Credential {
+        self.sec.credential(user)
+    }
+    fn execute(&mut self, user: &str, sql: &str) -> Reply {
+        self.run(user, sql)
+    }
+}
+
+/// A server with one administrator; everything else is done in SQL by that administrator.
+pub fn start_secure(admin: &str, password: &str) -> Server {
+    let (admin, password) = (admin.to_string(), password.to_string());
+    Server::start_with(move || SecureHandler::new(&admin, &password))
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>The workload has three tables, <code>docs(id, owner, level, body)</code>, <code>tags(doc, tag)</code> and <code>orgs(owner, region)</code>, four roles with every privilege, and the policies <code>docs: owner = current_user OR level &gt;= 3</code>, <code>tags: tag &lt;&gt; 'secret'</code>, <code>orgs: owner = current_user</code>. About one document in fifteen has a NULL owner and one in fifteen a NULL level, and the levels include the values that make <code>100 / (level - k)</code> fail. 600 random queries per role (single-table filters with the dangerous divisions, grouping with <code>HAVING</code>, <code>DISTINCT</code>, <code>ORDER BY … LIMIT</code>, inner and left joins with conditions in <code>ON</code> and in <code>WHERE</code>, three-table joins, a self-join under two aliases, aggregates without a <code>GROUP BY</code>) are run twice: as the role on the full database, and as an administrator on the copy that holds only the rows the role may see.</p>
+
+```text title="the same queries under the policy and on a database with only the visible rows"
+1735 queries answered the same, 665 failed the same way; 37734 rows compared
+```
+
+```text title="a long run of statements that change data, compared with the copy after each one"
+182 updates and deletes matched the copy, 129 inserts accepted, 169 statements refused; hidden rows never changed
+```
+
+```text title="the cost of the policy on 100 000 documents, and the plan the engine runs"
+query                                            admin      role ann   admin saw     ann saw   ratio
+scan, filter, aggregate                        17.2 ms       22.4 ms count 66739 count 54270   1.30x
+group by                                       17.5 ms       22.6 ms      4 rows      4 rows   1.29x
+join with a table that has no policy           34.3 ms       38.8 ms count 50000 count 31117   1.13x
+point lookup (a scan)                          13.0 ms       13.0 ms      1 rows      1 rows   1.00x
+authorize + rewrite of a join query: 1.9 us per statement
+plan for ann's SELECT id FROM docs WHERE 100 / (level - 1) > 2:
+  Projection [Col(0)]
+    SeqScan docs filter=Bin(And, Func(Coalesce, [Bin(Or, Bin(Eq, Col(1), Lit(Text("ann"))), Bin(Ge, Col(2), Lit(Int(3)))), Lit(Bool(false))]), Bin(Gt, Bin(Div, Lit(Int(100)), Bin(Sub, Col(2), Lit(Int(1)))), Lit(Int(2))))
+```
+
+<ul> <li><strong>Under the policy, every answer equals the answer on the visible rows</strong>: 1 735 results (37 734 rows) are equal as multisets, or in the same order when the query orders by a unique key, and 665 queries fail with the same message in both worlds. The failures are the point of the test: a role that owns a document at the dangerous level legitimately gets <em>division by zero</em>, and a role that does not own it must not.</li> <li><strong>Changes touch only visible rows.</strong> After each of 480 random statements the test checks two things: the rows of <code>docs</code> that the role cannot see are unchanged, and the rows it can see equal the copy to which the same statement was applied. 129 inserts that satisfy the policy were accepted; 169 statements were refused (an insert that violates it, an update of a policy column).</li> <li><strong>The rewrite costs 1.9 µs; the policy costs 0% to 30% of a scan.</strong> The policy is evaluated for every row, before the user's condition: a query that is mostly decoding rows pays little (13.0 ms in both columns for the scan with <code>id = …</code>), one that is mostly evaluating pays more (1.30× for filter plus aggregate). The plan shows the rewrite as an ordinary scan filter: the policy under <code>COALESCE</code>, then the user's condition.</li> <li><strong>The policy is a scan filter, and no index helped it here.</strong> None of the measured queries uses an index. Whether a policy can use one depends on its shape (an equality on an indexed column such as a tenant id can; an <code>OR</code> of a comparison and a range cannot), and the policy is evaluated for every row that is fetched either way.</li> </ul>
+
+<aside data-call="note"><b>The leak the tests found, and the two fixes</b><p>The first version of the rewrite put the policy first and passed the first test run on queries without errors. The test that asks ann for <code>WHERE 100 / (level - 1) &gt; 1</code> while bob owns a hidden document of level 1 failed: <code>division by zero</code>. Reading the plan showed the filter was <code>policy AND condition</code>, correctly ordered, so the engine itself evaluated both sides of every <code>AND</code> (before the change the same experiment, <code>WHERE owner = 'alice' AND 10 / x &gt; 1</code>, raised <em>division by zero</em> for another user's row). <code>AND</code> and <code>OR</code> now evaluate the right side only when the left side does not decide the answer, which is allowed by the standard because the order of evaluation is unspecified. The part of the Part III listing that evaluates expressions was updated accordingly. That was not enough. The random oracle test then failed for a query whose hidden row had a <strong>NULL owner</strong>: the policy was NULL, not FALSE, and <code>NULL AND x</code> has to evaluate <code>x</code>. <code>COALESCE(policy, FALSE)</code> fixed it. The first fix needed the targeted test; the second needed the random one, because no one thinks of NULL owners when writing the targeted test.</p></aside>
+
+<aside data-call="note"><b>Policies that could not be checked this way</b><p>Two restrictions are deliberate. <code>INSERT … SELECT</code> into a table with a policy is refused, because the rows that would be inserted are known only after the query runs, and without transactions there is no way to undo an insert that violates <code>WITH CHECK</code>. <code>UPDATE</code> may not assign a column that the policy (or its <code>WITH CHECK</code>) reads, because that could move a row out of view, or into another role's view; PostgreSQL allows it and checks the new row afterwards. A rule that refuses is correct but less useful; a rule that guesses is an incident.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>One generic expression walker.</strong> <code>map_ast(&amp;Ast, &amp;mut dyn FnMut(&amp;Ast) -&gt; Option&lt;Ast&gt;) -&gt; Ast</code> rebuilds a tree, letting the callback replace any node it recognizes. Binding <code>current_user</code>, qualifying columns with an alias and collecting the columns a policy reads are each a ten-line closure over it; none of them repeats the match over the node kinds.</li> <li><strong><code>Option::or</code> for optional conditions</strong>: <code>guard(policy, rest)</code> is <code>match (policy, rest) { (Some(p), Some(r)) =&gt; Some(p AND r), (p, r) =&gt; p.or(r) }</code>.</li> <li><strong>Statements as data</strong>: <code>authorize</code> takes the parsed <code>Vec&lt;Stmt&gt;</code> and returns another one. The executor needs no change, the rewritten statement can be run, explained or printed, and a test can compare it with what was meant.</li> <li><strong><code>Result&lt;_, String&gt;</code> for permission errors</strong> at the boundary, converted to a SQLSTATE-bearing error by the wire server (<a href="/cookbook/p/the-postgresql-wire-protocol">M19</a>).</li> <li><strong>A trait object boundary</strong>: <code>SecureHandler</code> implements the wire server's <code>Handler</code>, so the server knows about neither roles nor policies; the same server runs an open database, a password-protected one or this one.</li> <li><strong>Case-insensitive names</strong> are normalized once, at the catalog boundary (<code>to_lowercase</code> on role and table names), not at each comparison.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>The oracle (2 400 queries)</strong>: for each of four roles, 600 random queries from 14 shapes with random conjunctions of conditions of 12 kinds (comparisons, <code>IS NULL</code>, <code>IN</code>, <code>%</code>, constants, and the divisions that fail on particular levels); answers and errors compared with the copy that holds only the visible rows. The test insists on more than 1 500 answers, 60 errors and 5 000 rows compared.</li> <li><strong>The leak</strong>: ann runs <code>WHERE 100 / (level - 1) &gt; 1</code> while bob owns a level-1 document; ann gets an answer, bob gets the error. The same in a join's <code>ON</code>, in an <code>UPDATE</code>'s and a <code>DELETE</code>'s <code>WHERE</code>; bob's document is untouched afterwards.</li> <li><strong>Changes</strong>: 120 random statements per role (updates of a non-policy column, deletes, updates of policy columns, inserts of rows that do and do not satisfy the check). After each: the rows the role cannot see are identical to before; the rows it can see equal the copy; refused statements say why.</li> <li><strong>Privileges</strong>: a matrix of 14 statements by four roles with different grants (select only, insert and update, select and delete, delete only), with the expectation written out by hand: the right-hand table of a join, <code>INSERT … SELECT</code>, an <code>UPDATE</code> that reads columns, a <code>DELETE</code> with and without a <code>WHERE</code>, DDL, <code>EXPLAIN</code>, <code>ANALYZE</code>; administration statements refused to non-administrators; grants and revokes effective at once; unknown roles refused; nine malformed administration statements rejected.</li> <li><strong>Names and clauses</strong>: one table under two aliases, an alias equal to another table's name, upper-case names, <code>current_user</code> in every clause of a <code>SELECT</code> (select list, <code>WHERE</code>, <code>GROUP BY</code>, <code>HAVING</code>, <code>ORDER BY</code>, a join condition) giving the same answer as the name written out, in <code>UPDATE … SET</code>, in <code>INSERT</code> values and in <code>DELETE</code>; a policy with an unknown column or a type error is refused and leaves the old policy in force; replacing, dropping and a <code>WITH CHECK</code> different from <code>USING</code>; a column read only by <code>WITH CHECK</code> is protected from <code>UPDATE</code>.</li> <li><strong>The engine</strong>: <code>AND</code> and <code>OR</code> stop at the deciding side; <code>NULL AND x</code> and <code>NULL OR x</code> still evaluate <code>x</code>; all eight three-valued combinations unchanged.</li> <li><strong>The real <code>psql</code></strong>: roles and a policy created over the wire; ann sees two of four notes, bob one; bob's <code>DELETE</code> is refused with <em>permission denied for table notes</em>; ann's forged insert is refused; a condition that would divide by zero on bob's hidden row does not fail for ann; unknown users and roles without a password cannot log in.</li> <li><strong>Mutants run against these tests</strong>: the user's condition placed before the policy; a NULL policy not turned into FALSE, or into TRUE; the policy of a joined table or of the first table dropped; the alias ignored; <code>current_user</code> not bound in <code>UPDATE</code>'s policy, in select items, <code>HAVING</code>, <code>ORDER BY</code>, <code>GROUP BY</code>, <code>WHERE</code> or <code>INSERT</code> values; the policy not applied to <code>DELETE</code> or <code>UPDATE</code>; an administrator restricted; DDL allowed; no <code>INSERT</code> privilege needed; <code>UPDATE</code> needing <code>DELETE</code>; no <code>SELECT</code> needed for an <code>UPDATE</code> that reads or a <code>DELETE</code> with a condition; the privilege of a joined table unchecked; inserts not checked, or a NULL check passing; <code>INSERT … SELECT</code> allowed; a policy column updatable, or only the columns of <code>USING</code> protected; an unknown role allowed to connect; a role created twice; <code>REVOKE</code> doing nothing; <code>GRANT ALL</code> granting one privilege; an unchecked policy stored; administration allowed to anyone; and in the engine <code>AND</code>/<code>OR</code> evaluating both sides or <code>AND</code> stopping on NULL. <strong>All 36 were killed</strong>; one (the <code>SELECT</code> privilege for a <code>DELETE</code> with a condition) survived until a role with <code>DELETE</code> only was added to the matrix.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>PostgreSQL</strong>: <code>ALTER TABLE … ENABLE ROW LEVEL SECURITY</code> and <code>CREATE POLICY name ON t FOR SELECT|INSERT|UPDATE|DELETE|ALL TO role USING (…) WITH CHECK (…)</code>. Several policies on a table are combined with OR (permissive) or AND (restrictive). Policy expressions may contain subqueries and functions such as <code>current_setting('app.tenant')</code>. The planner treats the policy quals as a <strong>security barrier</strong>: they run before any user qual unless the user's function is marked <code>LEAKPROOF</code>. Table owners and superusers bypass policies unless <code>FORCE ROW LEVEL SECURITY</code> is set, and <code>BYPASSRLS</code> is a role attribute. Views run with their owner's rights unless declared <code>security_invoker</code> (PostgreSQL 15), which is a classic way to bypass a policy by accident.</li> <li><strong>Supabase and similar services</strong> expose PostgreSQL to browsers and put the user's identity into the session (<code>auth.uid()</code> from a JWT claim), with policies as the only access control for the tables.</li> <li><strong>SQL Server</strong>: security policies with filter predicates (hide rows) and block predicates (refuse writes). <strong>Oracle</strong>: Virtual Private Database (<code>DBMS_RLS</code>) adds a predicate returned by a function. <strong>Snowflake</strong> row access policies and <strong>BigQuery</strong> row-level access policies attach to tables or views; <strong>ClickHouse</strong> has row policies. <strong>MySQL</strong> has no native row-level security; views and stored procedures play that role.</li> <li><strong>Multi-tenant SaaS</strong> usually means a <code>tenant_id</code> column on every table, a policy <code>tenant_id = current_setting('app.tenant')::int</code> and a pool that sets the setting per transaction; the failure mode is a pooled connection that carries the previous tenant's setting.</li> <li><strong>Column-level and masking policies</strong> (hide or mask a column per role), <strong>attribute-based access control</strong> and <strong>auditing</strong> sit beside row-level security; they are different mechanisms with the same rewrite-or-wrap structure.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Evaluation order is a security property.</strong> If any predicate of the user's can run before the policy, or on a row that fails it, errors, timing and side effects reveal hidden rows. Test with conditions that fail for a particular hidden value, as this section's oracle does; PostgreSQL's <code>LEAKPROOF</code> exists for the same reason.</li> <li><strong>A NULL policy is not a FALSE one</strong> where evaluation continues. Normalize policy results to a definite boolean.</li> <li><strong>Absence of a policy means no restriction here.</strong> Dropping a policy opens the table to every role with the privilege (one of the tests does it). PostgreSQL's <code>ENABLE ROW LEVEL SECURITY</code> with no policy denies everything, which is the safer default; <code>USING (FALSE)</code> gives it here.</li> <li><strong>Unique keys and foreign keys leak.</strong> A second row with an existing key is rejected by the uniqueness check, which sees all rows; the error tells the inserting role that a hidden row exists. This engine has no constraints, but production policies must be designed around them.</li> <li><strong>Statistics, plans, <code>EXPLAIN</code> and error messages show data.</strong> They are administrator-only here; in production, check what each diagnostic output contains for a user who may not see everything.</li> <li><strong>Policies are code that runs on every row.</strong> A policy with a subquery or a function call is evaluated per row; measure the plan under the role, not as an administrator.</li> <li><strong>Identity must be right all the way down.</strong> <code>current_user</code> is only as trustworthy as the login (<a href="/cookbook/p/passwords-and-scram">M21</a>); with connection pools the identity must be set for each transaction and reset at its end.</li> <li><strong>Admin bypass is a feature and a risk</strong>: the account used for migrations and reports sees everything. Keep it out of the application's connection string.</li> <li><strong>Privilege and policy are separate checks</strong>, and both must pass. A role with a policy and no <code>SELECT</code> grant cannot read anything.</li> </ul></aside>
+"""

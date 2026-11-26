@@ -1,0 +1,483 @@
+title = "The graph store"
+module = "Databases"
+module_order = 8
+chapter = "Building complete engines"
+chapter_order = 9
+order = 449
+kind = "guide"
+lede = "Edges as keys in both directions · CSR snapshots for analytics · direction-optimizing BFS, bidirectional shortest paths, components · triangles and pattern matching by adjacency intersection, against a relational join plan · on a 1.9-million-edge skewed graph"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>A graph model on a key-value substrate is two key families.</strong> Each edge <code>(src, label, dst)</code> is written twice in one transaction: under <code>src</code> (out-adjacency) and under <code>dst</code> (in-adjacency) (<a href="/cookbook/p/one-key-space">M1</a>). A vertex's neighbours in either direction are then one prefix scan, in label order, and a traversal is a sequence of such scans. The transaction layer (<a href="/cookbook/p/transactions-on-the-key-space">M2</a>) keeps the two copies consistent and gives traversals a snapshot.</li> <li><strong>Traversals want arrays, not scans.</strong> Following a million edges through a transactional key space costs microseconds per vertex; the same walk over a <strong>CSR</strong> (compressed sparse row: one <code>offsets</code> array and one array of sorted neighbour ids) costs nanoseconds. Graph engines therefore build a compact immutable snapshot of the relevant part of the graph for analytics and keep the key space for transactional reads and writes: the same split as the column main and the row delta of <a href="/cookbook/p/htap-one-table-two-engines">M6</a>.</li> <li><strong>Breadth-first search is the basic traversal, and its cost depends on the direction.</strong> Top-down expansion examines every out-edge of the frontier; when the frontier covers a large part of a skewed graph most of those edges point at vertices already reached. <em>Bottom-up</em> expansion instead asks each unreached vertex whether any in-neighbour is in the frontier and stops at the first yes. Beamer's <strong>direction-optimizing</strong> search starts top-down, switches to bottom-up when the frontier's edges outnumber the unvisited edges by a threshold, and switches back as it shrinks.</li> <li><strong>Shortest paths: search from both ends.</strong> A bidirectional search grows the smaller of two frontiers from the source (along out-edges) and the target (along in-edges) and stops when they meet. In a graph where the neighbourhood grows by a large factor per hop, two searches of half the depth touch a tiny fraction of what one search of full depth touches.</li> <li><strong>Pattern matching is a join, and pairwise joins explode.</strong> <code>MATCH (a)-[]-&gt;(b)-[]-&gt;(c), (a)-[]-&gt;(c)</code> as a plan of binary joins first builds all two-edge paths, which on a graph with hubs is far more rows than there are triangles. A <strong>worst-case-optimal</strong> plan binds one variable at a time and finds its candidates by <em>intersecting</em> the adjacency lists of the variables already bound, so no intermediate relation larger than the answer's bound is built (<a href="/cookbook/p/multi-way-and-worst-case-optimal-joins">Part II: multi-way joins</a>). SQL/PGQ and Cypher-style <code>MATCH</code> clauses compile to such plans.</li> <li><strong>Orient edges to tame hubs.</strong> Counting triangles by intersecting the two endpoint lists of every edge makes hubs expensive. Ranking vertices by degree and keeping each edge only from the lower to the higher rank means a hub's long list is intersected only with short lists, giving the <code>O(m&#94;1.5)</code> bound.</li> </ul>
+"""
+
+[[sections]]
+heading = "What is built"
+body = """
+<ul> <li><strong><code>GraphStore</code></strong> over the transaction layer: <code>add_edge</code>, <code>remove_edge</code> (both keys), <code>out(v, label)</code>, <code>inn(v, label)</code> as prefix scans, and <code>snapshot</code> which scans every out-edge key visible to a transaction into a <code>Csr</code> with dense vertex numbers.</li> <li><strong><code>Csr</code></strong>: <code>from_edges</code> (sorted, distinct), <code>adj</code>, <code>reverse</code>, <code>symmetrize</code> (two-way, unlabelled, no self loops).</li> <li><strong>Algorithms</strong>: <code>bfs</code> in three modes, <code>shortest_path</code> (bidirectional), <code>components</code> (union-find), <code>intersect</code> (merge, switching to galloping when one list is more than 16 times longer), <code>triangles</code>, <code>triangles_oriented</code>, <code>triangles_by_binary_joins</code>, and <code>count_matches</code> for a conjunctive pattern with optional edge labels.</li> </ul>
+
+:::deeper Reference: edge storage in the key space, CSR snapshots, three BFS modes, bidirectional paths, components, intersection, triangle counting three ways and variable-at-a-time pattern matching
+```rust title="src/multimodel/graph.rs"
+//! A property-graph model on the shared key space. Edges are stored twice (out- and in-adjacency) as keys, so a vertex's neighbours are a
+//! prefix scan and both directions stay consistent in one transaction. For analytics a snapshot is compacted into CSR arrays (offsets and
+//! sorted targets) on which breadth-first search (top-down, bottom-up and direction-optimizing), bidirectional shortest paths,
+//! connected components, triangle counting and multi-way pattern matching by adjacency intersection are implemented.
+use crate::mmkey::{decode_tuple, in_edge, ns, out_edge, prefix_end, key, Val};
+use crate::mmtxn::{Db, Txn};
+use std::collections::HashMap;
+
+// ---- transactional storage -----------------------------------------------------------------------------------------------------------
+
+pub struct GraphStore {
+    pub graph: u32,
+    /// Edge labels are interned to small integers in this map (and stored as text in the keys).
+    pub labels: Vec<String>,
+}
+fn head(tag: u8, graph: u32, v: u64) -> Vec<u8> {
+    let mut p = vec![tag];
+    p.extend(graph.to_be_bytes());
+    p.extend(key(&[Val::Int(v as i64)]));
+    p
+}
+impl GraphStore {
+    pub fn new(graph: u32) -> GraphStore {
+        GraphStore { graph, labels: vec![] }
+    }
+    pub fn add_edge(&self, db: &Db, t: &mut Txn, src: u64, label: &str, dst: u64) {
+        db.put(t, &out_edge(self.graph, src, label, dst), &[]);
+        db.put(t, &in_edge(self.graph, dst, label, src), &[]);
+    }
+    pub fn remove_edge(&self, db: &Db, t: &mut Txn, src: u64, label: &str, dst: u64) {
+        db.delete(t, &out_edge(self.graph, src, label, dst));
+        db.delete(t, &in_edge(self.graph, dst, label, src));
+    }
+    fn neighbours(&self, db: &Db, t: &mut Txn, tag: u8, v: u64, label: Option<&str>) -> Vec<(String, u64)> {
+        let p = head(tag, self.graph, v);
+        db.scan(t, &p, &prefix_end(&p).unwrap())
+            .into_iter()
+            .map(|(k, _)| {
+                let tup = decode_tuple(&k[5..], &[]).unwrap();
+                match (&tup[1], &tup[2]) {
+                    (Val::Text(l), Val::Int(x)) => (l.clone(), *x as u64),
+                    o => panic!("{o:?}"),
+                }
+            })
+            .filter(|(l, _)| label.is_none_or(|w| w == l))
+            .collect()
+    }
+    pub fn out(&self, db: &Db, t: &mut Txn, v: u64, label: Option<&str>) -> Vec<(String, u64)> {
+        self.neighbours(db, t, ns::EDGE_OUT, v, label)
+    }
+    pub fn inn(&self, db: &Db, t: &mut Txn, v: u64, label: Option<&str>) -> Vec<(String, u64)> {
+        self.neighbours(db, t, ns::EDGE_IN, v, label)
+    }
+    /// Compact the edges visible to `t` into CSR form over dense vertex numbers (sorted by original id).
+    pub fn snapshot(&self, db: &Db, t: &mut Txn) -> (Csr, Vec<u64>) {
+        let mut p = vec![ns::EDGE_OUT];
+        p.extend(self.graph.to_be_bytes());
+        let mut edges: Vec<(u64, u64, String)> = vec![];
+        for (k, _) in db.scan(t, &p, &prefix_end(&p).unwrap()) {
+            let tup = decode_tuple(&k[5..], &[]).unwrap();
+            if let (Val::Int(s), Val::Text(l), Val::Int(d)) = (&tup[0], &tup[1], &tup[2]) {
+                edges.push((*s as u64, *d as u64, l.clone()));
+            }
+        }
+        let mut ids: Vec<u64> = edges.iter().flat_map(|e| [e.0, e.1]).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        let dense: HashMap<u64, u32> = ids.iter().enumerate().map(|(i, &v)| (v, i as u32)).collect();
+        let mut labs: Vec<String> = edges.iter().map(|e| e.2.clone()).collect();
+        labs.sort();
+        labs.dedup();
+        let es: Vec<(u32, u32, u8)> = edges.iter().map(|e| (dense[&e.0], dense[&e.1], labs.iter().position(|l| *l == e.2).unwrap() as u8)).collect();
+        (Csr::from_edges(ids.len(), &es), ids)
+    }
+}
+
+// ---- CSR ------------------------------------------------------------------------------------------------------------------------------
+
+/// Compressed sparse row adjacency: `targets[offsets[v]..offsets[v + 1]]` are the sorted out-neighbours of `v`.
+#[derive(Clone, Debug)]
+pub struct Csr {
+    pub n: usize,
+    pub offsets: Vec<u32>,
+    pub targets: Vec<u32>,
+    pub labels: Vec<u8>,
+}
+impl Csr {
+    /// Duplicate `(src, dst, label)` triples are kept once; the same pair with two labels stays as two edges.
+    pub fn from_edges(n: usize, edges: &[(u32, u32, u8)]) -> Csr {
+        let mut es = edges.to_vec();
+        es.sort_unstable();
+        es.dedup();
+        let mut offsets = vec![0u32; n + 1];
+        for &(s, _, _) in &es {
+            offsets[s as usize + 1] += 1;
+        }
+        for i in 0..n {
+            offsets[i + 1] += offsets[i];
+        }
+        Csr { n, offsets, targets: es.iter().map(|e| e.1).collect(), labels: es.iter().map(|e| e.2).collect() }
+    }
+    pub fn edges(&self) -> usize {
+        self.targets.len()
+    }
+    #[inline]
+    pub fn adj(&self, v: u32) -> &[u32] {
+        &self.targets[self.offsets[v as usize] as usize..self.offsets[v as usize + 1] as usize]
+    }
+    pub fn adj_labelled(&self, v: u32) -> impl Iterator<Item = (u32, u8)> + '_ {
+        let r = self.offsets[v as usize] as usize..self.offsets[v as usize + 1] as usize;
+        self.targets[r.clone()].iter().copied().zip(self.labels[r].iter().copied())
+    }
+    pub fn reverse(&self) -> Csr {
+        let mut es = vec![];
+        for v in 0..self.n as u32 {
+            for (w, l) in self.adj_labelled(v) {
+                es.push((w, v, l));
+            }
+        }
+        Csr::from_edges(self.n, &es)
+    }
+    /// Make every edge two-way and forget labels, so that each neighbour appears once (what the undirected algorithms assume).
+    pub fn symmetrize(&self) -> Csr {
+        let mut es = vec![];
+        for v in 0..self.n as u32 {
+            for &w in self.adj(v) {
+                if v != w {
+                    es.push((v, w, 0));
+                    es.push((w, v, 0));
+                }
+            }
+        }
+        Csr::from_edges(self.n, &es)
+    }
+    pub fn has_edge(&self, a: u32, b: u32) -> bool {
+        self.adj(a).binary_search(&b).is_ok()
+    }
+}
+
+// ---- breadth-first search ---------------------------------------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Bfs {
+    TopDown,
+    BottomUp,
+    /// Beamer's direction-optimizing search: start top-down, go bottom-up while the frontier is large, return when it shrinks.
+    Hybrid,
+}
+pub const UNREACHED: u32 = u32::MAX;
+
+/// Distances from `src` along out-edges (`rev` is the reversed graph, needed by the bottom-up steps). Also returns the number of edges examined.
+pub fn bfs(g: &Csr, rev: &Csr, src: u32, mode: Bfs) -> (Vec<u32>, u64) {
+    let n = g.n;
+    let mut dist = vec![UNREACHED; n];
+    dist[src as usize] = 0;
+    let mut frontier = vec![src];
+    let mut examined = 0u64;
+    let mut level = 0;
+    let mut bottom_up = mode == Bfs::BottomUp;
+    let mut unvisited_edges = g.edges() as u64;
+    while !frontier.is_empty() {
+        level += 1;
+        let frontier_edges: u64 = frontier.iter().map(|&v| g.adj(v).len() as u64).sum();
+        if mode == Bfs::Hybrid {
+            bottom_up = if bottom_up { frontier.len() * 24 > n } else { frontier_edges * 14 > unvisited_edges };
+        }
+        let mut next = vec![];
+        if bottom_up {
+            let in_frontier: Vec<bool> = { let mut f = vec![false; n]; for &v in &frontier { f[v as usize] = true; } f };
+            for v in 0..n as u32 {
+                if dist[v as usize] != UNREACHED {
+                    continue;
+                }
+                for &u in rev.adj(v) {
+                    examined += 1;
+                    if in_frontier[u as usize] {
+                        dist[v as usize] = level;
+                        next.push(v);
+                        break;
+                    }
+                }
+            }
+        } else {
+            for &u in &frontier {
+                for &w in g.adj(u) {
+                    examined += 1;
+                    if dist[w as usize] == UNREACHED {
+                        dist[w as usize] = level;
+                        next.push(w);
+                    }
+                }
+            }
+        }
+        unvisited_edges = unvisited_edges.saturating_sub(frontier_edges);
+        frontier = next;
+    }
+    (dist, examined)
+}
+
+/// Length of a shortest path from `a` to `b`, growing the smaller frontier of a forward and a backward search; `None` if unreachable.
+pub fn shortest_path(g: &Csr, rev: &Csr, a: u32, b: u32) -> (Option<u32>, u64) {
+    if a == b {
+        return (Some(0), 0);
+    }
+    let n = g.n;
+    let (mut df, mut db) = (vec![UNREACHED; n], vec![UNREACHED; n]);
+    df[a as usize] = 0;
+    db[b as usize] = 0;
+    let (mut ff, mut fb) = (vec![a], vec![b]);
+    let mut examined = 0;
+    while !ff.is_empty() && !fb.is_empty() {
+        let forward = ff.len() <= fb.len();
+        let (front, dist_this, dist_other, graph) = if forward { (&mut ff, &mut df, &db, g) } else { (&mut fb, &mut db, &df, rev) };
+        let mut next = vec![];
+        let mut best = u32::MAX;
+        for &u in front.iter() {
+            for &w in graph.adj(u) {
+                examined += 1;
+                if dist_this[w as usize] == UNREACHED {
+                    dist_this[w as usize] = dist_this[u as usize] + 1;
+                    next.push(w);
+                }
+                if dist_other[w as usize] != UNREACHED {
+                    best = best.min(dist_this[u as usize] + 1 + dist_other[w as usize]);
+                }
+            }
+        }
+        if best != u32::MAX {
+            return (Some(best), examined);
+        }
+        *front = next;
+    }
+    (None, examined)
+}
+
+/// Weakly connected components by union-find; returns a representative per vertex.
+pub fn components(g: &Csr) -> Vec<u32> {
+    let mut parent: Vec<u32> = (0..g.n as u32).collect();
+    fn find(p: &mut Vec<u32>, mut x: u32) -> u32 {
+        while p[x as usize] != x {
+            p[x as usize] = p[p[x as usize] as usize];
+            x = p[x as usize];
+        }
+        x
+    }
+    for v in 0..g.n as u32 {
+        for &w in g.adj(v) {
+            let (a, b) = (find(&mut parent, v), find(&mut parent, w));
+            if a != b {
+                parent[a.max(b) as usize] = a.min(b);
+            }
+        }
+    }
+    (0..g.n as u32).map(|v| find(&mut parent, v)).collect()
+}
+
+// ---- intersection, triangles and pattern matching -----------------------------------------------------------------------------
+
+/// Elements common to two sorted slices; the shorter one drives and gallops through the longer when they differ a lot in size.
+pub fn intersect(a: &[u32], b: &[u32], out: &mut Vec<u32>) {
+    let (s, l) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    if s.is_empty() {
+        return;
+    }
+    if l.len() / s.len() > 16 {
+        let mut lo = 0;
+        for &x in s {
+            // exponential search from the last position, then binary search inside the bracket
+            let mut step = 1;
+            while lo + step < l.len() && l[lo + step] < x {
+                step *= 2;
+            }
+            let hi = (lo + step + 1).min(l.len());
+            match l[lo..hi].binary_search(&x) {
+                Ok(i) => {
+                    out.push(x);
+                    lo += i + 1;
+                }
+                Err(i) => lo += i,
+            }
+            if lo >= l.len() {
+                break;
+            }
+        }
+    } else {
+        let (mut i, mut j) = (0, 0);
+        while i < s.len() && j < l.len() {
+            match s[i].cmp(&l[j]) {
+                std::cmp::Ordering::Less => i += 1,
+                std::cmp::Ordering::Greater => j += 1,
+                std::cmp::Ordering::Equal => {
+                    out.push(s[i]);
+                    i += 1;
+                    j += 1;
+                }
+            }
+        }
+    }
+}
+
+/// Triangles `u < v < w` in an undirected (symmetrized) graph, by intersecting the neighbour lists of every edge's endpoints.
+pub fn triangles(und: &Csr) -> u64 {
+    let mut count = 0;
+    let mut tmp = vec![];
+    for u in 0..und.n as u32 {
+        for &v in und.adj(u) {
+            if v <= u {
+                continue;
+            }
+            tmp.clear();
+            intersect(und.adj(u), und.adj(v), &mut tmp);
+            count += tmp.iter().filter(|&&w| w > v).count() as u64;
+        }
+    }
+    count
+}
+
+/// The standard fix for skewed graphs: rank vertices by degree and keep each edge only from the lower to the higher rank, so that a hub's
+/// long list is intersected only with the short lists of its lower-ranked neighbours. Each triangle is found once, at its lowest-ranked edge.
+pub fn triangles_oriented(und: &Csr) -> u64 {
+    let n = und.n;
+    let mut order: Vec<u32> = (0..n as u32).collect();
+    order.sort_by_key(|&v| (und.adj(v).len(), v));
+    let mut rank = vec![0u32; n];
+    for (i, &v) in order.iter().enumerate() {
+        rank[v as usize] = i as u32;
+    }
+    let mut es = vec![];
+    for u in 0..n as u32 {
+        for &v in und.adj(u) {
+            if rank[u as usize] < rank[v as usize] {
+                es.push((rank[u as usize], rank[v as usize], 0u8));
+            }
+        }
+    }
+    let dag = Csr::from_edges(n, &es);
+    let mut count = 0;
+    let mut tmp = vec![];
+    for u in 0..n as u32 {
+        for &v in dag.adj(u) {
+            tmp.clear();
+            intersect(dag.adj(u), dag.adj(v), &mut tmp);
+            count += tmp.len() as u64;
+        }
+    }
+    count
+}
+
+/// Triangles through the relational plan: join edges to edges to get 2-paths, then probe for the closing edge. Returns the count and the
+/// number of intermediate 2-path rows the plan had to produce.
+pub fn triangles_by_binary_joins(und: &Csr) -> (u64, u64) {
+    let (mut count, mut paths) = (0, 0);
+    for u in 0..und.n as u32 {
+        for &v in und.adj(u) {
+            if v <= u {
+                continue;
+            }
+            for &w in und.adj(v) {
+                paths += 1;
+                if w > v && und.has_edge(u, w) {
+                    count += 1;
+                }
+            }
+        }
+    }
+    (count, paths)
+}
+
+/// A conjunctive pattern over vertex variables `0..vars`: edges `(from, to, label)` that must all exist. `None` label matches any.
+pub struct Pattern {
+    pub vars: usize,
+    pub edges: Vec<(usize, usize, Option<u8>)>,
+}
+
+/// Count the bindings of the pattern's variables to distinct-or-not vertices (homomorphisms), extending one variable at a time with the
+/// intersection of the adjacency lists of its already bound neighbours.
+pub fn count_matches(g: &Csr, rev: &Csr, p: &Pattern, probes: &mut u64) -> u64 {
+    fn go(g: &Csr, rev: &Csr, p: &Pattern, bound: &mut Vec<Option<u32>>, depth: usize, probes: &mut u64) -> u64 {
+        if depth == p.vars {
+            return 1;
+        }
+        // candidates for variable `depth`: intersect neighbour lists given by every pattern edge to a bound variable
+        let mut cand: Option<Vec<u32>> = None;
+        for &(a, b, lab) in &p.edges {
+            let (known, list): (u32, Vec<u32>) = if b == depth && bound[a].is_some() {
+                let v = bound[a].unwrap();
+                (v, g.adj_labelled(v).filter(|&(_, l)| lab.is_none_or(|x| x == l)).map(|x| x.0).collect())
+            } else if a == depth && bound[b].is_some() {
+                let v = bound[b].unwrap();
+                (v, rev.adj_labelled(v).filter(|&(_, l)| lab.is_none_or(|x| x == l)).map(|x| x.0).collect())
+            } else {
+                continue;
+            };
+            let _ = known;
+            let mut list = list;
+            list.sort_unstable();
+            list.dedup();
+            *probes += list.len() as u64;
+            cand = Some(match cand {
+                None => list,
+                Some(c) => {
+                    let mut out = vec![];
+                    intersect(&c, &list, &mut out);
+                    out
+                }
+            });
+        }
+        let cands: Vec<u32> = cand.unwrap_or_else(|| (0..g.n as u32).collect());
+        let mut total = 0;
+        for v in cands {
+            bound[depth] = Some(v);
+            // self edges within the pattern (a, a) must exist
+            if p.edges.iter().all(|&(a, b, lab)| !(a == depth && b == depth) || g.adj_labelled(v).any(|(w, l)| w == v && lab.is_none_or(|x| x == l))) {
+                total += go(g, rev, p, bound, depth + 1, probes);
+            }
+        }
+        bound[depth] = None;
+        total
+    }
+    go(g, rev, p, &mut vec![None; p.vars], 0, probes)
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>The graph is an R-MAT graph: each edge picks a quadrant of the adjacency matrix recursively, which gives the skewed degrees of a social network. 2 000 000 random edges over 131 072 vertices leave 1 858 058 distinct ones; the largest vertex has 9 574 out-edges while the median vertex has one.</p>
+
+```text title="BFS in three modes, shortest paths, triangles three ways, pattern matching, and key space against CSR"
+R-MAT graph: 131072 vertices, 1858058 distinct edges, built in 0.32 s; maximum out-degree 9574, median 1
+BFS from the hub       edges examined           ms    reached
+TopDown                       1838809          2.2      76609
+BottomUp                       727797          2.4      76609
+Hybrid                          90516          1.0      76609
+shortest path between random connected pairs (90 of 200): one-directional search examines 1924950 edges on average, bidirectional 4472
+triangles in a graph of 16384 vertices and 167467 edges: 1700025; adjacency intersection 128 ms; intersection on the degree-ordered DAG 30 ms; edge-join-edge then probe 44 ms with 29273867 intermediate 2-paths (175x the 167467 edges)
+transitive triangles by variable-at-a-time extension in a graph with 23784 edges: 305283 matches, 4151602 adjacency entries read, 20 ms
+160000 edges in the key space (both directions stored): load 1439 ns per edge; out-neighbours by prefix scan 9537 ns; CSR snapshot built in 187 ms; out-neighbours from CSR 2 ns (6150x faster) [1760000]
+```
+
+<ul> <li><strong>Direction-optimizing BFS examines 20× fewer edges</strong>: from the hub, top-down looks at 1 838 809 edges to reach 76 609 vertices, pure bottom-up at 727 797, the hybrid at <strong>90 516</strong>, and takes 1.0 ms against 2.2. Almost every edge a top-down search examines in the middle levels points back at an already reached vertex.</li> <li><strong>Bidirectional search examines 430× fewer edges</strong>: between random connected pairs, a one-directional search examines 1.9 million edges on average (essentially the whole component), the bidirectional one 4 472.</li> <li><strong>The relational plan builds 175 times more rows than there are edges</strong>: pairing every edge with every edge that continues it creates 29.3 million two-edge paths in a graph of 167 467 edges, to find 1.7 million triangles. A naive intersection of the two neighbour lists of each edge is <em>slower</em> here (128 ms) than that join plan with a binary-search probe (44 ms), because the hubs' lists are long; with degree-ordered orientation it is the fastest (<strong>30 ms</strong>, no intermediate rows), as the theory says.</li> <li><strong>Variable-at-a-time matching</strong> of the transitive-triangle pattern in a smaller graph reads 4.2 million adjacency entries for 305 283 matches in 20 ms without a pairwise intermediate relation.</li> <li><strong>Key space against CSR</strong>: out-neighbours of a vertex cost 9.5 µs through the transaction layer (a prefix scan, a key decode per edge, versions and the write overlay) and 2 ns from the CSR snapshot, which takes 187 ms to build for 160 000 edges. The key space is for transactional access and small traversals; analytics run on a snapshot.</li> </ul>
+
+<aside data-call="note"><b>A bug of duplicates, and a bound that was only true in theory</b><p>The first triangle count disagreed with brute force on the very first seed (27 against 21). The CSR kept one edge per <code>(source, target, label)</code>, so a pair that exists under two labels appeared twice in a vertex's neighbour list and every intersection counted it twice. The undirected algorithms now run on a symmetrized graph that forgets labels and keeps each neighbour once, and a test asserts that such lists are strictly sorted. The second surprise is in the table above: the <em>textbook-optimal</em> intersection plan lost to the join plan until edges were oriented by degree. Worst-case optimality is a statement about the best ordering; a plan that ignores skew does not get it.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>CSR as two <code>Vec&lt;u32&gt;</code>s</strong> and an <code>adj(v) -&gt; &amp;[u32]</code> returning a slice: every algorithm is a loop over slices, which the compiler optimizes well and which the borrow checker keeps free of aliasing questions. Labels live in a parallel array and are zipped when needed.</li> <li><strong>Direction-optimizing BFS needs the reverse graph</strong>: <code>bfs(g, rev, src, mode)</code> takes both; <code>Csr::reverse</code> builds one by re-sorting the edge list.</li> <li><strong><code>intersect</code> chooses its algorithm by the size ratio</strong>: a merge for similar lengths and an exponential-then-binary search from the last position for very different ones; the result is pushed into a caller-provided buffer, so the triangle loops allocate nothing per edge.</li> <li><strong>Pattern matching recursion</strong>: <code>count_matches</code> recurses over variables; at each depth it builds the sorted, distinct neighbour list for every pattern edge to a bound variable, intersects them, and loops over the survivors. Labels are optional (<code>Option&lt;u8&gt;</code>), and a self-loop pattern edge is checked once its variable is bound.</li> <li><strong>The store keeps edges as <code>()</code>-valued keys</strong>: all information is in the key, so an edge costs one small key per direction and nothing in the value.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Search algorithms (200 random graphs of 2 to 31 vertices)</strong>: all three BFS modes from every source equal Floyd–Warshall distances; the bidirectional distance equals the matrix for every pair, including unreachable ones; components agree with reachability in the symmetrized graph; reversing a graph twice restores it; symmetrized lists are sorted, distinct and without self loops.</li> <li><strong>Intersection</strong>: 3 000 pairs of sorted lists with size ratios from 1 to over 50 equal the naive intersection, covering both the merge and the galloping branch.</li> <li><strong>Triangles and patterns (100 random graphs)</strong>: the three triangle counters equal a triple loop; six patterns (a transitive triangle, a labelled two-path, an out-star, a four-cycle, a mutual edge, a self loop with an out-edge) equal full enumeration of all vertex assignments over the directed, labelled graph.</li> <li><strong>The key-space store (60 seeds × 120 steps)</strong>: three concurrent snapshot transactions add and remove edges and read out- and in-neighbours (with and without a label); every read equals the model's view of the transaction including its own writes; the committed CSR snapshot equals the model's edge set.</li> <li><strong>Direction optimization</strong>: on a skewed graph the hybrid search returns the same distances as top-down while examining under a third of the edges.</li> <li><strong>Mutants run against these tests</strong>: bottom-up search over out-edges; a bidirectional path one hop short; components never merging; a pattern ignoring labels, not intersecting its candidates or not checking a self loop; the ordered triangle count intersecting the wrong lists; an edge stored without its in-edge, or removed without it; duplicates kept in the CSR; the symmetrized graph keeping self loops; the hybrid search never switching direction. <strong>All 12 were killed</strong>; two further mutants (the galloping step re-examining a matched element, and counting <code>w ≥ v</code> in a graph that has no self loops) change nothing observable and are equivalent.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Neo4j</strong> stores records with direct pointers (index-free adjacency) and compiles Cypher to expand-style operators; <strong>Kùzu</strong> (embedded, columnar) uses CSR-like storage with worst-case-optimal multiway joins; <strong>TigerGraph</strong>, <strong>JanusGraph</strong> (over Cassandra/HBase), <strong>Dgraph</strong> (over a key-value store, posting lists of sorted ids) and <strong>ArangoDB</strong> (documents plus edge collections) show the range of designs. <strong>Apache AGE</strong> and <strong>SQL/PGQ</strong> (SQL:2023) add graph patterns to relational engines; <strong>DuckPGQ</strong> compiles them to joins and CSR.</li> <li><strong>Graph analytics frameworks</strong>: <strong>GraphBLAS</strong> (linear-algebra BFS, direction optimization built in), <strong>Ligra</strong>, <strong>GAP Benchmark Suite</strong>, <strong>Pregel/Giraph</strong> and <strong>GraphX</strong> for distributed vertex-centric computation.</li> <li><strong>Worst-case-optimal joins</strong> (Leapfrog Triejoin, Generic Join) are in <strong>LogicBlox/RelationalAI</strong>, <strong>Umbra</strong> and <strong>Kùzu</strong>, and are the subject of the Part II section on multi-way joins; the degree-ordering trick is the standard preprocessing for triangle counting everywhere.</li> <li><strong>Property graphs on key-value stores</strong> use the layout of <a href="/cookbook/p/one-key-space">M1</a>: both adjacency directions as ordered keys, as <strong>SurrealDB</strong> does for its <code>RELATE</code> edges.</li> <li><strong>Path queries</strong> (shortest, k-shortest, reachability under regular expressions) are bidirectional or index-assisted in production; reachability indexes (2-hop labels, interval labels) answer the question without traversal.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Hubs are the norm.</strong> A vertex with millions of edges makes a naive expansion a denial of service; cap fan-out in traversals, use degree-aware algorithms, and store hub adjacency in several chunks.</li> <li><strong>Edge direction and double storage</strong> double the write cost and the space; a consistent pair of keys depends on the transaction layer, so bulk loads that bypass it must write both.</li> <li><strong>Counting versus enumerating</strong>: homomorphism counts (what <code>count_matches</code> returns) differ from subgraph isomorphism counts (distinct vertices); <code>MATCH</code> semantics require declaring which one you mean (Cypher forbids repeating an edge; SQL/PGQ has path modes).</li> <li><strong>Cycles and path explosion</strong>: unbounded variable-length paths over a cyclic graph never end; require a bound, a visited set, or a path mode that forbids repeated vertices.</li> <li><strong>Snapshots are stale the moment they are built.</strong> An analytics snapshot at timestamp <em>t</em> must be labelled with <em>t</em>, and incremental maintenance of derived results is a different problem (<a href="/cookbook/p/streams-and-windows">M17</a>).</li> <li><strong>Degree skew defeats partitioning</strong>: hash-partitioned graphs put a hub's edges on one machine or cut almost every edge; vertex-cut partitioning and replication of hubs are the usual answers (<a href="/cookbook/p/sharding">M9</a>).</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Direction-Optimizing Breadth-First Search"
+url = "https://people.eecs.berkeley.edu/~sbeamer/papers/sc12-bfs.pdf"

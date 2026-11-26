@@ -1,0 +1,106 @@
+title = "Vec<T> and VecDeque<T> look-up page"
+module = "Standard library and core"
+module_order = 2
+chapter = "Vectors, slices and collections"
+chapter_order = 4
+order = 79
+kind = "recipe"
+lede = "Editing, bulk moves, capacity, ring-buffer queues."
+level = "simple"
+code = ["examples/std_tour/std_vec_vecdeque_methods.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>buffers</li><li>work queues</li><li>batching</li><li>undo stacks</li><li>sliding windows</li><li>in-place filtering</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>row buffers from a DB</li><li>batch flushers</li><li>connection pools</li><li>job queues (VecDeque)</li><li>BFS frontiers</li><li>"keep the last N" logs</li><li>request pipelining</li><li>reusing one allocation across loop iterations</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>Vec::new</code></li><li><code>Vec::with_capacity</code></li><li><code>Vec::push</code></li><li><code>Vec::pop</code></li><li><code>Vec::len</code></li><li><code>Vec::is_empty</code></li><li><code>Vec::insert</code></li><li><code>Vec::remove</code></li><li><code>Vec::swap_remove</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Vec::retain</code></li><li><code>Vec::extend_from_slice</code></li><li><code>Vec::extend</code></li><li><code>Vec::drain</code></li><li><code>Vec::clear</code></li><li><code>Vec::truncate</code></li><li><code>Vec::dedup</code></li><li><code>Vec::as_slice</code></li><li><code>Vec::as_mut_slice</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Vec::retain_mut</code></li><li><code>Vec::dedup_by_key</code></li><li><code>Vec::dedup_by</code></li><li><code>Vec::extract_if</code></li><li><code>Vec::splice</code></li><li><code>Vec::split_off</code></li><li><code>Vec::append</code></li><li><code>Vec::extend_from_within</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Vec::resize</code></li><li><code>Vec::resize_with</code></li><li><code>Vec::pop_if</code></li><li><code>Vec::push_mut</code></li><li><code>Vec::insert_mut</code></li><li><code>Vec::reserve</code></li><li><code>Vec::reserve_exact</code></li><li><code>Vec::try_reserve</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Vec::try_reserve_exact</code></li><li><code>Vec::shrink_to_fit</code></li><li><code>Vec::shrink_to</code></li><li><code>Vec::capacity</code></li><li><code>Vec::leak</code></li><li><code>Vec::into_boxed_slice</code></li><li><code>Vec::spare_capacity_mut</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Vec::into_flattened</code></li><li><code>Vec::as_ptr</code></li><li><code>Vec::as_mut_ptr</code></li><li><code>std::vec</code></li><li><code>std::mem::take</code></li></ul>
+
+<ul class="cb-g-names"><li><code>VecDeque::new</code></li><li><code>VecDeque::with_capacity</code></li><li><code>VecDeque::push_back</code></li><li><code>VecDeque::push_front</code></li><li><code>VecDeque::pop_back</code></li><li><code>VecDeque::pop_front</code></li></ul>
+
+<ul class="cb-g-names"><li><code>VecDeque::front</code></li><li><code>VecDeque::back</code></li><li><code>VecDeque::front_mut</code></li><li><code>VecDeque::back_mut</code></li><li><code>VecDeque::get</code></li><li><code>VecDeque::get_mut</code></li><li><code>VecDeque::len</code></li><li><code>VecDeque::is_empty</code></li></ul>
+
+<ul class="cb-g-names"><li><code>VecDeque::iter</code></li><li><code>VecDeque::iter_mut</code></li><li><code>VecDeque::drain</code></li><li><code>VecDeque::pop_front_if</code></li><li><code>VecDeque::pop_back_if</code></li><li><code>VecDeque::make_contiguous</code></li></ul>
+
+<ul class="cb-g-names"><li><code>VecDeque::as_slices</code></li><li><code>VecDeque::as_mut_slices</code></li><li><code>VecDeque::rotate_left</code></li><li><code>VecDeque::rotate_right</code></li><li><code>VecDeque::range</code></li><li><code>VecDeque::range_mut</code></li></ul>
+
+<ul class="cb-g-names"><li><code>VecDeque::binary_search</code></li><li><code>VecDeque::binary_search_by</code></li><li><code>VecDeque::binary_search_by_key</code></li><li><code>VecDeque::partition_point</code></li><li><code>VecDeque::contains</code></li></ul>
+
+<ul class="cb-g-names"><li><code>VecDeque::insert</code></li><li><code>VecDeque::remove</code></li><li><code>VecDeque::swap</code></li><li><code>VecDeque::swap_remove_back</code></li><li><code>VecDeque::swap_remove_front</code></li><li><code>VecDeque::split_off</code></li></ul>
+
+<ul class="cb-g-names"><li><code>VecDeque::append</code></li><li><code>VecDeque::retain</code></li><li><code>VecDeque::retain_mut</code></li><li><code>VecDeque::truncate</code></li><li><code>VecDeque::clear</code></li><li><code>VecDeque::resize</code></li><li><code>VecDeque::resize_with</code></li></ul>
+
+<ul class="cb-g-names"><li><code>VecDeque::push_back_mut</code></li><li><code>VecDeque::push_front_mut</code></li><li><code>VecDeque::insert_mut</code></li><li><code>VecDeque::reserve</code></li><li><code>VecDeque::reserve_exact</code></li><li><code>VecDeque::try_reserve</code></li></ul>
+
+<ul class="cb-g-names"><li><code>VecDeque::try_reserve_exact</code></li><li><code>VecDeque::shrink_to_fit</code></li><li><code>VecDeque::shrink_to</code></li><li><code>VecDeque::capacity</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/vec/struct.Vec.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/vec/struct.Vec.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+alloc (`alloc::vec::Vec`, `alloc::collections::VecDeque`, `vec!`), re-exported by std. Methods reached through Deref to slice (sort, binary_search, chunks, windows...) are core/alloc slice methods: see std_slice_search_sort_binary.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+from_raw_parts / into_raw_parts (1.93) / set_len (unsafe or raw-pointer ownership: note in section 6), peek_mut, push_within_capacity, try_with_capacity, from_fn, into_chunks, recycle, try_remove, split_at_spare_mut and every `_in` allocator method (unstable in 1.98.1); VecDeque::extract_if, splice, extend_from_within, prepend, truncate_front (unstable).
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Build when the size is known</td><td><code>Vec::with_capacity(n)</code></td></tr><tr><td>Remove at i, keep order (O(n))</td><td><code>remove(i)</code></td></tr><tr><td>Remove at i, order irrelevant (O(1))</td><td><code>swap_remove(i)</code></td></tr><tr><td>Delete all items matching a predicate</td><td><code>retain / retain_mut (one O(n) pass)</code></td></tr><tr><td>Same, but KEEP the deleted items</td><td><code>extract_if(.., pred)</code></td></tr><tr><td>Move a range out</td><td><code>drain(range)</code></td></tr><tr><td>Move the tail out as a new Vec</td><td><code>split_off(at)</code></td></tr><tr><td>Move everything from another Vec</td><td><code>append(&amp;mut other)   (other is left empty, keeps its capacity)</code></td></tr><tr><td>Replace a range with other items</td><td><code>splice(range, items)</code></td></tr><tr><td>Copy a slice onto the end</td><td><code>extend_from_slice</code></td></tr><tr><td>Remove consecutive duplicates</td><td><code>dedup (sort first for global uniqueness)</code></td></tr><tr><td>Pop only if the last item qualifies</td><td><code>pop_if</code></td></tr><tr><td>Take the whole Vec out of &amp;mut</td><td><code>std::mem::take</code></td></tr><tr><td>FIFO queue / pop from the front</td><td><code>VecDeque::push_back + pop_front (never Vec::remove(0) in a loop)</code></td></tr><tr><td>Need one &amp;[T] from a VecDeque</td><td><code>make_contiguous (or handle both halves of as_slices)</code></td></tr><tr><td>Allocation that may fail</td><td><code>try_reserve DESIGN NOTES: Vec is (pointer, capacity, length). push is amortised O(1); the growth factor is explicitly NOT guaranteed. capacity() &gt;= len() always holds. Operations that shorten a Vec never shrink the allocation by themselves. VecDeque is a ring buffer over one allocation, so its contents may be split into two slices.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/vec/struct.Vec.html#guarantees> , <https://doc.rust-lang.org/std/collections/struct.VecDeque.html> ,
+
+```text
+https://doc.rust-lang.org/nomicon/vec/vec.html
+```
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/vec/struct.Vec.html"
+url = "https://doc.rust-lang.org/std/vec/struct.Vec.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/vec/struct.Vec.html#guarantees"
+url = "https://doc.rust-lang.org/std/vec/struct.Vec.html#guarantees"
+
+[[sources]]
+title = "doc.rust-lang.org/std/collections/struct.VecDeque.html"
+url = "https://doc.rust-lang.org/std/collections/struct.VecDeque.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/vec/vec.html"
+url = "https://doc.rust-lang.org/nomicon/vec/vec.html"

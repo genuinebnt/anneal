@@ -1,0 +1,103 @@
+title = "Explicit SIMD with `std::arch`"
+module = "Performance and systems"
+module_order = 7
+chapter = "Measuring and CPU performance"
+chapter_order = 1
+order = 276
+kind = "recipe"
+lede = "NEON and SSE2/AVX2 kernels, runtime dispatch, and tail handling."
+level = "advanced"
+code = ["examples/perf/simd_intrinsics.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>byte scanning (memchr-like)</li><li>checksums</li><li>validation fast paths</li><li>image/pixel math</li><li>bitmaps</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+ten kernels (sum of u8/u32/f32, f32 dot product, u8 max, find-first-byte, count-byte, ASCII prefix length -> UTF-8 validation, popcount of a bitmap, saturating add of two u8 "images") each written **four** ways: `scalar` (the obviously-correct reference), `portable` (plain Rust shaped so LLVM auto-vectorises it), `neon` (AArch64, always present there) and `sse2` / `avx2` (x86_64; AVX2 chosen at run time).
+
+Every variant is tested against `scalar`.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+auto-vectorisation fails on early exits (find), on horizontal tricks (movemask, **sad**, popcount tables) and on float reductions (not associative). Intrinsics give you the exact instruction. The price is one copy of the code per ISA.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+1. `as_chunks::<N>()` splits the slice into `&[[T; N]]` blocks plus a `< N` remainder. The remainder is handled by a scalar loop (simple and obviously right; the production trick is one overlapping final load instead).
+2. Loads are **unaligned** (`vld1q_u8`, `_mm_loadu_si128`, `_mm256_loadu_si256`). On every CPU of the last decade an unaligned load of data that does not straddle a cache line costs the same as an aligned one, so there is no "peel the unaligned head" loop: the head is just block 0. The test below slides the start 0..64 bytes.
+3. Accumulate in narrow lanes and widen **before** they overflow (u8 counters flush every 255 blocks, u16 every 64..1024).
+4. Horizontal reduction once at the end (`vaddvq_*`, `vmaxvq_*`, **sad** against zero, shuffle+add).
+5. movemask: x86 has `pmovmskb` (1 bit per byte). **Neon** has none; the idiom is `vshrn_n_u16::<4>` (shift right and narrow) which packs the 16 compare bytes into a 64-bit value with 4 bits per byte, so the first match is `trailing_zeros() / 4`.
+6. Dispatch: `variants()` lists what this CPU supports (`is_x86_feature_detected!` is a cached atomic read); `best()` picks once into a `OnceLock<Kernels>`, a struct of plain `fn` pointers. The indirect call costs &#126;1 ns, so give each call enough work (hundreds of bytes).
+
+   A `#[target_feature(enable = "avx2")]` fn is only sound to call after detection, so the x86 table entries are wrapped in one `unsafe` closure per kernel after the check.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+`std::simd` (portable SIMD): **observed** on this machine (rustc 1.98.1 stable): `use std::simd::f32x4;` fails with `E0658 use of unstable library feature portable_simd` (tracking issue 86656).
+
+So on stable you either use `std::arch` per ISA (this file), write auto-vectorisable code (the `portable` variant), or use crates: `wide` (stable portable vector types), `pulp` (safe runtime-dispatched SIMD closures) and `memchr` (production byte search with exactly these NEON/SSE2/AVX2 kernels plus Teddy multi-pattern search).
+
+**Honest result** (Apple M4 Pro): LLVM already auto-vectorises the plain `scalar` sum_u8, max_u8, popcount and sat_add (they are memory-bound, &#126;1.0-1.6x for **neon**), so intrinsics buy nothing there; they win big (7-30x) where the loop has an early exit (find_byte, ascii_prefix), a compare+count pattern (count_byte) or a float reduction (sum_f32, dot_f32).
+
+Measure first.
+
+**Footguns**: (1) calling an `avx2` function on a CPU without it is undefined behaviour, never skip the detection. (2) `-C target-cpu=native` makes the `portable` variant use AVX2/AVX-512 too but the binary then only runs on that CPU. (3) Float sums change with association order: compare with a tolerance (or with integer-valued floats as here).
+
+(4) 256-bit AVX on some older Intel/AMD cores lowers clocks; benchmark on the target hardware.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>the <code>memchr</code> crate (used by ripgrep, <code>regex</code>, <code>bstr</code>)</li><li>simdjson-style parsers and Lemire's SIMD UTF-8 validation (arXiv 2010.03090)</li><li>base64/hex codecs</li><li>image blending and alpha compositing</li><li>bitmap indexes (popcount over bitsets, Roaring-style)</li><li>database column scans (sum/min/max/count with predicate)</li><li>checksum loops</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>"Algorithms for Modern Hardware" SIMD chapter <a href="https://en.algorithmica.org/hpc/simd/" target="_blank" rel="noreferrer">https://en.algorithmica.org/hpc/simd/</a></li><li><a href="https://doc.rust-lang.org/core/arch/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/core/arch/index.html</a></li><li><a href="https://github.com/BurntSushi/memchr" target="_blank" rel="noreferrer">https://github.com/BurntSushi/memchr</a></li><li><a href="https://docs.rs/wide" target="_blank" rel="noreferrer">https://docs.rs/wide</a></li><li><a href="https://docs.rs/pulp" target="_blank" rel="noreferrer">https://docs.rs/pulp</a></li><li><a href="https://arxiv.org/abs/2010.03090" target="_blank" rel="noreferrer">https://arxiv.org/abs/2010.03090</a></li><li><a href="https://branchfree.org/2019/04/01/fitting-my-head-through-the-arm-holes-or-two-sequences-to-substitute-for-the-missing-pmovmskb-instruction-on-arm-neon/" target="_blank" rel="noreferrer">https://branchfree.org/2019/04/01/fitting-my-head-through-the-arm-holes-or-two-sequences-to-substitute-for-the-missing-pmovmskb-instruction-on-arm-neon/</a></li><li><a href="https://github.com/rust-lang/rust/issues/86656" target="_blank" rel="noreferrer">https://github.com/rust-lang/rust/issues/86656</a></li></ul>
+"""
+
+[[sources]]
+title = "en.algorithmica.org/hpc/simd"
+url = "https://en.algorithmica.org/hpc/simd/"
+
+[[sources]]
+title = "doc.rust-lang.org/core/arch/index.html"
+url = "https://doc.rust-lang.org/core/arch/index.html"
+
+[[sources]]
+title = "github.com/BurntSushi/memchr"
+url = "https://github.com/BurntSushi/memchr"
+
+[[sources]]
+title = "docs.rs/wide"
+url = "https://docs.rs/wide"
+
+[[sources]]
+title = "docs.rs/pulp"
+url = "https://docs.rs/pulp"
+
+[[sources]]
+title = "arxiv.org/abs/2010.03090"
+url = "https://arxiv.org/abs/2010.03090"
+
+[[sources]]
+title = "branchfree.org/2019/04/01/fitting-my-head-through-the-arm-holes-or-two-sequen…"
+url = "https://branchfree.org/2019/04/01/fitting-my-head-through-the-arm-holes-or-two-sequences-to-substitute-for-the-missing-pmovmskb-instruction-on-arm-neon/"
+
+[[sources]]
+title = "github.com/rust-lang/rust/issues/86656"
+url = "https://github.com/rust-lang/rust/issues/86656"

@@ -1,0 +1,52 @@
+title = "Classic image processing"
+module = "Complete projects"
+module_order = 13
+chapter = "Graphics"
+chapter_order = 2
+order = 664
+kind = "recipe"
+lede = "Convolution, edges, histograms, dithering, resampling, colour spaces, alpha."
+level = "intermediate"
+code = ["examples/graphics/image_processing.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>photo/video tools</li><li>computer vision pre-processing</li><li>thumbnails</li><li>e-ink and print</li><li>texture pipelines</li><li>medical imaging</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Convolution**: each output pixel is a weighted sum of its neighbourhood. A GAUSSIAN kernel is the outer product of two 1D Gaussians, so a k x k blur can be done as a horizontal pass then a vertical pass: 2k multiplies per pixel instead of k&#42;k, identical result (we assert both).
+
+SOBEL: two 3x3 kernels estimate the x and y derivative, the gradient magnitude is the edge strength. **Unsharp mask**: out = img + amount &#42; (img - blur(img)), boosting the detail the blur removed (and overshooting at edges, which is why it looks "sharp"). **Histogram EQUALISATION**: map each level through the normalised cumulative histogram so levels spread evenly.
+
+**Dithering** to 1 bit: Floyd-Steinberg pushes each pixel's quantisation error onto 4 unvisited neighbours (7/16, 3/16, 5/16, 1/16), so local average brightness is preserved; ordered (Bayer) dithering compares to a tiled threshold matrix.
+
+**Resampling** uses a separable reconstruction kernel: nearest (box), bilinear (triangle), bicubic Catmull-Rom (cubic that passes through samples), Lanczos3 (windowed sinc: sharpest, but its negative lobes cause **ringing**: values overshoot past the original range next to hard edges). Downscaling widens the kernel to avoid aliasing.
+
+**Colour**: sRGB values are gamma-encoded (roughly value&#94;(1/2.2)); light adds up in **linear** space, so blurring, resizing and blending must be done there: averaging black and white in sRGB gives 0.5 encoded = only 21% of the light. RGB&lt;->HSV and RGB&lt;->YCbCr (BT.601) are invertible re-parameterisations.
+
+**Alpha**: store colour PREMULTIPLIED by alpha; then "over" is just s + d&#42;(1-a_s), associative, and interpolation does not leak colour from transparent pixels.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>photo editors and camera pipelines</li><li>video scalers and codecs (YCbCr)</li><li>GPU texture filtering and mipmaps</li><li>game UI compositing</li><li>e-ink/printer halftoning</li><li>edge detection ahead of computer-vision steps</li><li>medical-imaging windowing</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://www.redblobgames.com/> and <https://github.com/ssloy/tinyrenderer/wiki>
+"""
+
+[[sources]]
+title = "redblobgames.com"
+url = "https://www.redblobgames.com/"
+
+[[sources]]
+title = "github.com/ssloy/tinyrenderer/wiki"
+url = "https://github.com/ssloy/tinyrenderer/wiki"

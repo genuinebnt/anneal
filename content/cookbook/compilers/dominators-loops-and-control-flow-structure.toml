@@ -1,0 +1,95 @@
+title = "Dominators, loops and control flow structure"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Middle end and analysis"
+chapter_order = 5
+order = 621
+kind = "guide"
+lede = "Needed by SSA construction, GVN, LICM, code placement and structured-output backends like Wasm"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>Block <code>d</code> <b>dominates</b> <code>n</code> if every path from the entry to <code>n</code> goes through <code>d</code>. The <b>immediate dominator</b> <code>idom(n)</code> is the closest strict dominator. These edges form the <b>dominator tree</b>. The <b>dominance frontier</b> DF(<code>d</code>) is the set of blocks where <code>d</code>'s dominance ends: <code>d</code> dominates a predecessor but doesn't strictly dominate the block itself. That is exactly where φ-nodes are needed for definitions in <code>d</code>. <b>Post-dominators</b> are the same thing on the reversed CFG. They give control dependence, which aggressive dead code elimination and program slicing need.</p>
+
+<p>The Cooper–Harvey–Kennedy algorithm is iterative. It processes blocks in reverse postorder, sets each block's idom to the intersection of its processed predecessors' idoms, and repeats until stable. In theory it's O(N²). In practice it beats Lengauer–Tarjan (O(E α(E, N))) on typical CFGs because it's simple and cache-friendly. rustc implements a semi-NCA variant of Lengauer–Tarjan.</p>
+
+```rust title="Cooper–Harvey–Kennedy dominators and dominance frontiers"
+/// `rpo` = reachable blocks in reverse postorder, entry first. Returns idom per block
+/// (idom[entry] = entry; unreachable blocks = None).
+pub fn dominators(rpo: &[Block], preds: impl Fn(Block) -> Vec<Block>, n: usize) -> Vec<Option<Block>> {
+    let mut rpo_num = vec![usize::MAX; n];
+    for (i, &b) in rpo.iter().enumerate() { rpo_num[b.index()] = i; }
+    let mut idom: Vec<Option<Block>> = vec![None; n];
+    idom[rpo[0].index()] = Some(rpo[0]);
+
+    // Walk both fingers up the (partial) dominator tree until they meet.
+    let intersect = |idom: &[Option<Block>], mut a: Block, mut b: Block| {
+        while a != b {
+            while rpo_num[a.index()] > rpo_num[b.index()] { a = idom[a.index()].unwrap(); }
+            while rpo_num[b.index()] > rpo_num[a.index()] { b = idom[b.index()].unwrap(); }
+        }
+        a
+    };
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &b in &rpo[1..] {
+            let mut new_idom = None;
+            for p in preds(b) {
+                if idom[p.index()].is_none() { continue; }      // unprocessed or unreachable
+                new_idom = Some(match new_idom { None => p, Some(cur) => intersect(&idom, p, cur) });
+            }
+            if idom[b.index()] != new_idom { idom[b.index()] = new_idom; changed = true; }
+        }
+    }
+    idom
+}
+
+pub fn dominance_frontiers(blocks: &[Block], preds: impl Fn(Block) -> Vec<Block>,
+                           idom: &[Option<Block>], n: usize) -> Vec<Vec<Block>> {
+    let mut df = vec![Vec::new(); n];
+    for &b in blocks {
+        let ps = preds(b);
+        if ps.len() < 2 { continue; }                          // only join points have frontiers
+        let Some(stop) = idom[b.index()] else { continue };
+        for p in ps {
+            if idom[p.index()].is_none() { continue; }
+            let mut runner = p;
+            while runner != stop {
+                if !df[runner.index()].contains(&b) { df[runner.index()].push(b); }
+                runner = idom[runner.index()].unwrap();
+            }
+        }
+    }
+    df
+}
+```
+"""
+
+[[sections]]
+heading = "Loops"
+body = """
+<p>A <b>back edge</b> is an edge <code>t → h</code> where <code>h</code> dominates <code>t</code>. The <b>natural loop</b> of that edge is <code>h</code> plus every block that can reach <code>t</code> without going through <code>h</code>. Loops with the same header merge; nested loops form a <b>loop nesting forest</b>. A CFG is <b>reducible</b> if every cycle has a single entry. Structured code always produces one; <code>goto</code> and some optimizations can produce irreducible loops. Handle those with Havlak's or Ramalingam's algorithms, or by node splitting.</p>
+
+```rust title="Natural loop body from a back edge"
+pub fn natural_loop(header: Block, latch: Block, preds: impl Fn(Block) -> Vec<Block>) -> HashSet<Block> {
+    let mut body = HashSet::from([header]);   // the header stops the backward walk
+    let mut stack = vec![latch];
+    while let Some(b) = stack.pop() {
+        if body.insert(b) { stack.extend(preds(b)); }
+    }
+    body
+}
+```
+
+<div class="cb-g-tip"><h3>Loop-shaped transformations need canonical form</h3> <p>LLVM's <code>LoopSimplify</code> guarantees every loop has three things:</p> <ul> <li>A <b>preheader</b>, a single block that enters the header from outside, where hoisted code goes.</li> <li>A single <b>latch</b>.</li> <li><b>Dedicated exits</b>, whose predecessors are all inside the loop.</li> </ul> <p>Establish these before running LICM, unrolling or vectorization, and your passes get much simpler.</p></div>
+
+<div class="cb-g-tip"><h3>Structured control flow for Wasm</h3> <p>WebAssembly only has structured <code>block</code>, <code>loop</code> and <code>if</code> with labeled breaks, so an arbitrary CFG must be turned back into structure. Emscripten's Relooper did this with heuristics. LLVM's WebAssembly backend uses a dominator-tree-based “stackifier”. Ramsey's “Beyond Relooper” gives a clean algorithm for reducible CFGs based on the dominator tree and reverse postorder. Irreducible CFGs need a dispatch loop.</p></div>
+"""
+
+[[sources]]
+title = "Cooper, Harvey and Kennedy 2001, “A Simple, Fast Dominance Algorithm”"
+url = "https://www.cs.rice.edu/~keith/EMBED/dom.pdf"

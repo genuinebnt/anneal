@@ -1,0 +1,528 @@
+title = "Vector databases"
+module = "Search and vectors"
+module_order = 9
+chapter = "Vector search"
+chapter_order = 2
+order = 463
+kind = "guide"
+lede = "ML⇄DB Seminar #1, #4, #9, #11, #12 (Qdrant, Weaviate, Milvus, pgvector, Chroma) and #7 (Lance), PostgreSQL vs the World #3, #5 (TopK, turbopuffer) · exact, IVF, PQ, IVF-PQ and HNSW indexes · recall, QPS and memory measured · filtered search"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<p><em>(No notes exist for these talks and I have not transcribed them. The points below are the design space the systems share, from their papers and documentation, not a summary of what any speaker said.)</em></p>
+
+<ul> <li><strong>The workload</strong>: store millions to billions of <strong>embeddings</strong> (arrays of 128 to 3 072 floats produced by a model) and answer <em>k-nearest-neighbour</em> queries: "the 10 stored vectors closest to this one", usually combined with <strong>filters</strong> ("…among documents of this tenant, newer than last month") and often with <strong>keyword search</strong> (hybrid retrieval). Distances are Euclidean, cosine (normalize, then it is Euclidean) or inner product.</li> <li><strong>Exact search is <code>O(n·d)</code> per query.</strong> At 200 000 vectors of 64 floats a scan takes 0.9 ms; at 100 million vectors of 768 floats it is a 300 GB read per query. Everything in a vector database exists to avoid that, by <strong>approximate nearest-neighbour (ANN)</strong> search that trades a little <strong>recall</strong> (the fraction of the true top-k found) for orders of magnitude in speed.</li> <li><strong>Four families of index</strong>: <em>partitioning</em> (IVF: cluster the vectors with k-means, scan only the lists nearest to the query), <em>graph</em> (HNSW, DiskANN/Vamana: walk a neighbourhood graph greedily toward the query), <em>quantization</em> (scalar, product and binary quantization: shrink each vector to bytes or bits and compare approximately), and <em>hashing/trees</em> (LSH, random-projection forests; mostly displaced). Production systems combine them: IVF with PQ codes, HNSW over quantized vectors, graph on disk with PQ in memory and full vectors on SSD.</li> <li><strong>The three-way trade-off is recall, speed and memory</strong> (and a fourth axis: build time and update cost). There is no best index; there is a Pareto front per dataset, and the measurements below draw one.</li> <li><strong>Quantization is mostly about memory, and re-ranking buys back accuracy.</strong> Product quantization splits a vector into <code>m</code> sub-vectors and replaces each by the id of its nearest of 256 centroids: <code>m</code> bytes per vector, distances from a lookup table. At 16 bytes per vector the codes alone have mediocre recall; fetching the best few hundred candidates' full vectors and re-scoring exactly restores it. That makes the design asymmetric: <strong>codes in RAM, full vectors on slower storage</strong>.</li> <li><strong>HNSW</strong> (Malkov and Yashunin): a hierarchy of proximity graphs; upper layers are sparse long-range shortcuts, layer 0 holds every vector. A query descends greedily to layer 0, then runs a best-first search with a beam of width <code>ef</code>. <code>M</code> (links per node) and <code>ef</code> are the recall/speed knobs; inserting needs no training and is incremental, deleting is hard (tombstones, repair, or rebuild).</li> <li><strong>Filters are the hard part in practice.</strong> A filter changes the problem: results must satisfy a predicate that the index knows nothing about. Strategies: <strong>post-filter</strong> (search, then discard; fails when the filter is selective), <strong>pre-filter</strong> (scan the matching rows exactly; fine when few match), <strong>in-graph filtering</strong> (walk the whole graph but return only matching nodes; slows down as selectivity drops and can fail to reach matching nodes in a far region), and <strong>filter-aware indexes</strong> (extra links per payload value). A <strong>query planner</strong> picks among them from an estimate of the filter's selectivity: the same cardinality-estimation problem as <a href="/cookbook/p/cardinality-estimation">Q8</a>.</li> <li><strong>Storage shapes the index.</strong> On local disk and object storage, <em>random reads cost milliseconds</em>: a graph walk of a thousand dependent hops is slow, while an IVF probe reads a few large contiguous lists. This is why object-storage-native designs favour clustered layouts and why on-disk graph indexes (DiskANN) keep compressed vectors in memory and read full vectors for the final candidates only.</li> </ul>
+"""
+
+[[sections]]
+heading = "Exact, and what it costs"
+body = """
+<p>A scan with a bounded max-heap of size <code>k</code>: for 200 000 vectors of 64 <code>f32</code> the lab measures <strong>1 136 queries per second</strong> on one core (0.9 ms per query), reading 51 MB per query. A vectorizable distance loop is the baseline every index must beat; the loop below keeps eight independent accumulators so the compiler can use SIMD lanes.</p>
+"""
+
+[[sections]]
+heading = "IVF"
+body = """
+<p>Train k-means on a sample to get <code>nlist</code> centroids, assign every vector to its nearest centroid (an <em>inverted file</em>: centroid → list of vectors). A query computes its distance to every centroid (<code>nlist</code> of them), picks the <code>nprobe</code> nearest lists and scans only those. Recall rises with <code>nprobe</code>; the cost is <code>nlist</code> centroid distances plus the vectors in the probed lists. IVF needs training (a few seconds here), is incremental only until the data distribution drifts from the centroids, and has contiguous lists, which is why it is friendly to disk and object storage.</p>
+"""
+
+[[sections]]
+heading = "Product quantization"
+body = """
+<p>Split a <code>d</code>-dimensional vector into <code>m</code> sub-vectors of <code>d/m</code> dimensions; learn 256 centroids per sub-space (k-means on each); store the vector as <code>m</code> bytes. For a query build a <strong>distance table</strong> <code>T[j][c]</code> = squared distance from the query's j-th sub-vector to centroid <code>c</code>; the approximate distance to a stored code is <code>Σ_j T[j][code[j]]</code>: <code>m</code> lookups and additions per vector (<em>asymmetric distance computation</em>, ADC: the query stays exact, only the data is quantized). <strong>IVF-PQ</strong> quantizes the <em>residual</em> (vector minus its list centroid) so the codes spend their bits on what distinguishes vectors within a list; the table is then built per probed list from the query's residual against that centroid. Candidates are re-scored with full vectors.</p>
+"""
+
+[[sections]]
+heading = "HNSW"
+body = """
+<p>Insert a vector at a random top layer <code>l = ⌊−ln(U)·m_L⌋</code> (so layer sizes shrink geometrically); descend greedily from the entry point through layers above <code>l</code>; at each layer from <code>l</code> down to 0 run a beam search of width <code>efConstruction</code>, pick up to <code>M</code> neighbours with a <strong>heuristic</strong> (keep a candidate only if it is closer to the new node than to every neighbour already kept, so links point in different directions and bridge clusters), link both ways, and if a neighbour exceeds its degree bound (<code>2M</code> on layer 0, <code>M</code> above) re-run the heuristic on its links. A query descends greedily to layer 0 and runs the beam search with width <code>ef</code>, using a <strong>visited set</strong> (a stamp per node, bumped per query so clearing is free).</p>
+
+:::deeper Reference: distances, mixture data, k-means, IVF, product quantization, IVF-PQ with residuals and re-ranking, HNSW with filtered search
+```rust title="src/vector/index.rs"
+//! Vector search indexes over `f32` vectors with squared L2 distance: exact scan, IVF (k-means partitions), product
+//! quantization (PQ) with asymmetric distance tables, IVF-PQ with residuals and exact re-ranking, and HNSW (a hierarchy of
+//! navigable small-world graphs), plus filtered search strategies.
+use std::cmp::{Ordering, Reverse};
+use std::collections::BinaryHeap;
+use crate::card::gauss;
+use crate::joinorder::Rng;
+
+// ----------------------------------------------------------------------------------------------- basics
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Cand(pub f32, pub u32);
+impl Eq for Cand {}
+impl Ord for Cand { fn cmp(&self, o: &Self) -> Ordering { self.0.total_cmp(&o.0).then(self.1.cmp(&o.1)) } }
+impl PartialOrd for Cand { fn partial_cmp(&self, o: &Self) -> Option<Ordering> { Some(self.cmp(o)) } }
+
+/// Squared Euclidean distance, eight independent accumulators so the compiler can vectorize the loop.
+#[inline]
+pub fn l2(a: &[f32], b: &[f32]) -> f32 {
+    let mut acc = [0f32; 8];
+    let (ca, cb) = (a.chunks_exact(8), b.chunks_exact(8));
+    let (ra, rb) = (ca.remainder(), cb.remainder());
+    for (x, y) in ca.zip(cb) { for i in 0..8 { let d = x[i] - y[i]; acc[i] += d * d; } }
+    let mut s: f32 = acc.iter().sum();
+    for (x, y) in ra.iter().zip(rb) { let d = x - y; s += d * d; }
+    s
+}
+
+pub struct Data { pub dim: usize, pub n: usize, pub v: Vec<f32> }
+impl Data {
+    #[inline] pub fn row(&self, i: u32) -> &[f32] { &self.v[i as usize * self.dim..(i as usize + 1) * self.dim] }
+}
+
+/// A Gaussian mixture: `clusters` centers drawn from N(0, center_scale²) per coordinate, points scattered around them with standard deviation `spread`. Returns the data and each point's cluster.
+pub struct Mixture { pub dim: usize, pub centers: Vec<f32>, pub spread: f32 }
+impl Mixture {
+    pub fn new(rng: &mut Rng, dim: usize, clusters: usize, center_scale: f32, spread: f32) -> Self {
+        Mixture { dim, centers: (0..clusters * dim).map(|_| center_scale * gauss(rng) as f32).collect(), spread }
+    }
+    pub fn sample(&self, rng: &mut Rng, n: usize) -> (Data, Vec<u32>) {
+        let k = self.centers.len() / self.dim;
+        let mut v = Vec::with_capacity(n * self.dim);
+        let mut cl = Vec::with_capacity(n);
+        for _ in 0..n {
+            let c = rng.next(k as u64) as usize;
+            cl.push(c as u32);
+            for d in 0..self.dim { v.push(self.centers[c * self.dim + d] + self.spread * gauss(rng) as f32); }
+        }
+        (Data { dim: self.dim, n, v }, cl)
+    }
+}
+
+/// Exact `k` nearest neighbours (ascending), over all rows or over a given subset of ids.
+pub fn brute_topk(data: &Data, q: &[f32], k: usize, ids: Option<&[u32]>) -> Vec<Cand> {
+    let mut heap: BinaryHeap<Cand> = BinaryHeap::with_capacity(k + 1);
+    let mut visit = |i: u32| {
+        let d = l2(q, data.row(i));
+        if heap.len() < k { heap.push(Cand(d, i)); } else if d < heap.peek().unwrap().0 { heap.pop(); heap.push(Cand(d, i)); }
+    };
+    match ids { Some(s) => s.iter().for_each(|&i| visit(i)), None => (0..data.n as u32).for_each(&mut visit) }
+    heap.into_sorted_vec()
+}
+
+pub fn recall(truth: &[Cand], got: &[Cand]) -> f64 {
+    if truth.is_empty() { return 1.0; }
+    let t: std::collections::HashSet<u32> = truth.iter().map(|c| c.1).collect();
+    got.iter().filter(|c| t.contains(&c.1)).count() as f64 / truth.len() as f64
+}
+
+/// Run `f` for every item on `threads` threads (used for ground truth only).
+pub fn par_map<T: Sync, R: Send>(items: &[T], threads: usize, f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let chunk = items.len().div_ceil(threads).max(1);
+    let f = &f;
+    std::thread::scope(|s| {
+        let hs: Vec<_> = items.chunks(chunk).map(|part| s.spawn(move || part.iter().map(f).collect::<Vec<R>>())).collect();
+        hs.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    })
+}
+
+// ----------------------------------------------------------------------------------------------- k-means
+
+pub fn nearest(cents: &[f32], dim: usize, x: &[f32]) -> (usize, f32) {
+    let mut best = (0usize, f32::INFINITY);
+    for (i, c) in cents.chunks_exact(dim).enumerate() { let d = l2(x, c); if d < best.1 { best = (i, d); } }
+    best
+}
+
+/// Lloyd's algorithm from `k` random distinct points; an emptied cluster is re-seeded with a random point.
+pub fn kmeans(points: &[f32], dim: usize, k: usize, iters: usize, rng: &mut Rng) -> Vec<f32> {
+    let n = points.len() / dim;
+    assert!(n >= k);
+    let mut picked = std::collections::HashSet::new();
+    let mut cents = Vec::with_capacity(k * dim);
+    while picked.len() < k { let i = rng.next(n as u64) as usize; if picked.insert(i) { cents.extend_from_slice(&points[i * dim..(i + 1) * dim]); } }
+    for _ in 0..iters {
+        let mut sum = vec![0f32; k * dim];
+        let mut cnt = vec![0u32; k];
+        for p in points.chunks_exact(dim) {
+            let (c, _) = nearest(&cents, dim, p);
+            cnt[c] += 1;
+            for d in 0..dim { sum[c * dim + d] += p[d]; }
+        }
+        for c in 0..k {
+            if cnt[c] == 0 { let i = rng.next(n as u64) as usize; cents[c * dim..(c + 1) * dim].copy_from_slice(&points[i * dim..(i + 1) * dim]); }
+            else { for d in 0..dim { cents[c * dim + d] = sum[c * dim + d] / cnt[c] as f32; } }
+        }
+    }
+    cents
+}
+pub fn inertia(points: &[f32], dim: usize, cents: &[f32]) -> f64 { points.chunks_exact(dim).map(|p| nearest(cents, dim, p).1 as f64).sum() }
+
+// ----------------------------------------------------------------------------------------------- IVF
+
+/// Inverted file: vectors grouped by nearest centroid; a query scans only the `nprobe` closest lists.
+pub struct Ivf { pub dim: usize, pub cents: Vec<f32>, pub ids: Vec<Vec<u32>>, pub vecs: Vec<Vec<f32>> }
+impl Ivf {
+    pub fn build(data: &Data, nlist: usize, train: usize, iters: usize, rng: &mut Rng) -> Ivf {
+        let dim = data.dim;
+        let sample: Vec<f32> = (0..train.min(data.n)).flat_map(|_| data.row(rng.next(data.n as u64) as u32).to_vec()).collect();
+        let cents = kmeans(&sample, dim, nlist, iters, rng);
+        let assign = par_map(&(0..data.n as u32).collect::<Vec<_>>(), 8, |&i| nearest(&cents, dim, data.row(i)).0);
+        let (mut ids, mut vecs) = (vec![vec![]; nlist], vec![vec![]; nlist]);
+        for (i, &c) in assign.iter().enumerate() { ids[c].push(i as u32); vecs[c].extend_from_slice(data.row(i as u32)); }
+        Ivf { dim, cents, ids, vecs }
+    }
+    pub fn nlist(&self) -> usize { self.ids.len() }
+    /// The `nprobe` closest list ids to `q`.
+    pub fn probe(&self, q: &[f32], nprobe: usize) -> Vec<usize> {
+        let mut d: Vec<(f32, usize)> = self.cents.chunks_exact(self.dim).enumerate().map(|(i, c)| (l2(q, c), i)).collect();
+        d.sort_by(|a, b| a.0.total_cmp(&b.0));
+        d.into_iter().take(nprobe).map(|x| x.1).collect()
+    }
+    /// Returns the top-k and the number of vectors whose distance was computed (the I/O proxy).
+    pub fn search(&self, q: &[f32], k: usize, nprobe: usize) -> (Vec<Cand>, usize) {
+        let mut heap: BinaryHeap<Cand> = BinaryHeap::new();
+        let mut scanned = 0;
+        for l in self.probe(q, nprobe) {
+            for (j, v) in self.vecs[l].chunks_exact(self.dim).enumerate() {
+                scanned += 1;
+                let d = l2(q, v);
+                if heap.len() < k { heap.push(Cand(d, self.ids[l][j])); } else if d < heap.peek().unwrap().0 { heap.pop(); heap.push(Cand(d, self.ids[l][j])); }
+            }
+        }
+        (heap.into_sorted_vec(), scanned)
+    }
+    pub fn memory_bytes(&self) -> usize { (self.cents.len() + self.vecs.iter().map(|v| v.len()).sum::<usize>()) * 4 + self.ids.iter().map(|v| v.len()).sum::<usize>() * 4 }
+}
+
+// ----------------------------------------------------------------------------------------------- product quantization
+
+/// `m` sub-quantizers of 256 centroids each over consecutive `dim/m` coordinates: a vector becomes `m` bytes.
+pub struct Pq { pub dim: usize, pub m: usize, pub dsub: usize, pub books: Vec<f32> }
+impl Pq {
+    pub fn train(sample: &[f32], dim: usize, m: usize, iters: usize, rng: &mut Rng) -> Pq {
+        assert!(dim % m == 0);
+        let dsub = dim / m;
+        let n = sample.len() / dim;
+        let mut books = Vec::with_capacity(m * 256 * dsub);
+        for j in 0..m {
+            let sub: Vec<f32> = (0..n).flat_map(|i| sample[i * dim + j * dsub..i * dim + (j + 1) * dsub].to_vec()).collect();
+            books.extend(kmeans(&sub, dsub, 256, iters, rng));
+        }
+        Pq { dim, m, dsub, books }
+    }
+    fn book(&self, j: usize) -> &[f32] { &self.books[j * 256 * self.dsub..(j + 1) * 256 * self.dsub] }
+    pub fn encode(&self, x: &[f32]) -> Vec<u8> { (0..self.m).map(|j| nearest(self.book(j), self.dsub, &x[j * self.dsub..(j + 1) * self.dsub]).0 as u8).collect() }
+    pub fn decode(&self, code: &[u8]) -> Vec<f32> {
+        let mut out = Vec::with_capacity(self.dim);
+        for (j, &c) in code.iter().enumerate() { out.extend_from_slice(&self.book(j)[c as usize * self.dsub..(c as usize + 1) * self.dsub]); }
+        out
+    }
+    /// Asymmetric distance table: `table[j * 256 + c]` = squared distance from the query's j-th sub-vector to centroid `c`.
+    pub fn table(&self, q: &[f32]) -> Vec<f32> {
+        let mut t = Vec::with_capacity(self.m * 256);
+        for j in 0..self.m { for c in self.book(j).chunks_exact(self.dsub) { t.push(l2(&q[j * self.dsub..(j + 1) * self.dsub], c)); } }
+        t
+    }
+    #[inline] pub fn adc(table: &[f32], code: &[u8]) -> f32 { code.iter().enumerate().map(|(j, &c)| table[j * 256 + c as usize]).sum() }
+}
+
+/// PQ over the whole collection (no partitioning): scan all codes with table lookups, keep `rerank` candidates, re-score exactly.
+pub struct PqFlat { pub pq: Pq, pub codes: Vec<u8> }
+impl PqFlat {
+    pub fn build(data: &Data, m: usize, train: usize, iters: usize, rng: &mut Rng) -> PqFlat {
+        let sample: Vec<f32> = (0..train.min(data.n)).flat_map(|_| data.row(rng.next(data.n as u64) as u32).to_vec()).collect();
+        let pq = Pq::train(&sample, data.dim, m, iters, rng);
+        let codes = par_map(&(0..data.n as u32).collect::<Vec<_>>(), 8, |&i| pq.encode(data.row(i))).concat();
+        PqFlat { pq, codes }
+    }
+    pub fn search(&self, data: &Data, q: &[f32], k: usize, rerank: usize) -> Vec<Cand> {
+        let table = self.pq.table(q);
+        let mut heap: BinaryHeap<Cand> = BinaryHeap::new();
+        let r = rerank.max(k);
+        for (i, code) in self.codes.chunks_exact(self.pq.m).enumerate() {
+            let d = Pq::adc(&table, code);
+            if heap.len() < r { heap.push(Cand(d, i as u32)); } else if d < heap.peek().unwrap().0 { heap.pop(); heap.push(Cand(d, i as u32)); }
+        }
+        rescore(data, q, heap.into_vec(), k, rerank > 0)
+    }
+    pub fn memory_bytes(&self) -> usize { self.codes.len() + self.pq.books.len() * 4 }
+}
+
+fn rescore(data: &Data, q: &[f32], cands: Vec<Cand>, k: usize, exact: bool) -> Vec<Cand> {
+    let mut v: Vec<Cand> = if exact { cands.into_iter().map(|c| Cand(l2(q, data.row(c.1)), c.1)).collect() } else { cands };
+    v.sort();
+    v.truncate(k);
+    v
+}
+
+/// IVF with product-quantized *residuals* (vector minus its list centroid): the standard FAISS "IVF-PQ" layout.
+pub struct IvfPq { pub ivf_cents: Vec<f32>, pub dim: usize, pub pq: Pq, pub ids: Vec<Vec<u32>>, pub codes: Vec<Vec<u8>> }
+impl IvfPq {
+    pub fn build(data: &Data, nlist: usize, m: usize, train: usize, iters: usize, rng: &mut Rng) -> IvfPq {
+        let dim = data.dim;
+        let sample: Vec<f32> = (0..train.min(data.n)).flat_map(|_| data.row(rng.next(data.n as u64) as u32).to_vec()).collect();
+        let cents = kmeans(&sample, dim, nlist, iters, rng);
+        let resid: Vec<f32> = sample.chunks_exact(dim).flat_map(|p| { let (c, _) = nearest(&cents, dim, p); p.iter().zip(&cents[c * dim..(c + 1) * dim]).map(|(a, b)| a - b).collect::<Vec<_>>() }).collect();
+        let pq = Pq::train(&resid, dim, m, iters, rng);
+        let enc = par_map(&(0..data.n as u32).collect::<Vec<_>>(), 8, |&i| {
+            let x = data.row(i);
+            let (c, _) = nearest(&cents, dim, x);
+            let r: Vec<f32> = x.iter().zip(&cents[c * dim..(c + 1) * dim]).map(|(a, b)| a - b).collect();
+            (c, pq.encode(&r))
+        });
+        let (mut ids, mut codes) = (vec![vec![]; nlist], vec![vec![]; nlist]);
+        for (i, (c, code)) in enc.into_iter().enumerate() { ids[c].push(i as u32); codes[c].extend(code); }
+        IvfPq { ivf_cents: cents, dim, pq, ids, codes }
+    }
+    /// The distance table for list `l`: the query's residual against that list's centroid, so that `adc(table, code)` is the squared
+    /// distance from `q` to `centroid + decode(code)`.
+    pub fn list_table(&self, q: &[f32], l: usize) -> Vec<f32> {
+        let res: Vec<f32> = q.iter().zip(&self.ivf_cents[l * self.dim..(l + 1) * self.dim]).map(|(a, b)| a - b).collect();
+        self.pq.table(&res)
+    }
+    /// Returns (results, codes scanned).
+    pub fn search(&self, data: &Data, q: &[f32], k: usize, nprobe: usize, rerank: usize) -> (Vec<Cand>, usize) {
+        let mut d: Vec<(f32, usize)> = self.ivf_cents.chunks_exact(self.dim).enumerate().map(|(i, c)| (l2(q, c), i)).collect();
+        d.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let r = rerank.max(k);
+        let mut heap: BinaryHeap<Cand> = BinaryHeap::new();
+        let mut scanned = 0;
+        for &(_, l) in d.iter().take(nprobe) {
+            let table = self.list_table(q, l);
+            for (j, code) in self.codes[l].chunks_exact(self.pq.m).enumerate() {
+                scanned += 1;
+                let dist = Pq::adc(&table, code);
+                if heap.len() < r { heap.push(Cand(dist, self.ids[l][j])); } else if dist < heap.peek().unwrap().0 { heap.pop(); heap.push(Cand(dist, self.ids[l][j])); }
+            }
+        }
+        (rescore(data, q, heap.into_vec(), k, rerank > 0), scanned)
+    }
+    pub fn memory_bytes(&self) -> usize { self.codes.iter().map(|c| c.len()).sum::<usize>() + self.ids.iter().map(|v| v.len()).sum::<usize>() * 4 + (self.pq.books.len() + self.ivf_cents.len()) * 4 }
+}
+
+// ----------------------------------------------------------------------------------------------- HNSW
+
+/// Reusable visited set: a stamp per node, bumped per search so clearing is free.
+pub struct Scratch { stamp: Vec<u32>, epoch: u32, pub visits: u64 }
+impl Scratch {
+    pub fn new(n: usize) -> Self { Scratch { stamp: vec![0; n], epoch: 0, visits: 0 } }
+    fn begin(&mut self, n: usize) { if self.stamp.len() < n { self.stamp.resize(n, 0); } self.epoch += 1; }
+    #[inline] fn seen(&mut self, i: u32) -> bool { let s = &mut self.stamp[i as usize]; if *s == self.epoch { true } else { *s = self.epoch; false } }
+}
+
+pub struct Hnsw {
+    pub dim: usize, pub m: usize, pub m0: usize, pub ef_c: usize, ml: f64,
+    pub vecs: Vec<f32>, pub level: Vec<u8>,
+    /// links[node][layer] = neighbour ids
+    pub links: Vec<Vec<Vec<u32>>>,
+    pub entry: Option<u32>, pub max_level: usize,
+}
+
+impl Hnsw {
+    pub fn new(dim: usize, m: usize, ef_c: usize) -> Self {
+        Hnsw { dim, m, m0: 2 * m, ef_c, ml: 1.0 / (m as f64).ln(), vecs: vec![], level: vec![], links: vec![], entry: None, max_level: 0 }
+    }
+    pub fn len(&self) -> usize { self.level.len() }
+    #[inline] fn vec(&self, i: u32) -> &[f32] { &self.vecs[i as usize * self.dim..(i as usize + 1) * self.dim] }
+
+    /// Best-first search of one layer. Candidates are expanded in order of distance; the result keeps the `ef` closest nodes that
+    /// pass `filter` (every node is still traversed, so a filter cannot disconnect the walk, it only makes it longer).
+    fn search_layer(&self, q: &[f32], entries: &[Cand], ef: usize, layer: usize, sc: &mut Scratch, filter: Option<&dyn Fn(u32) -> bool>, max_visits: u64) -> Vec<Cand> {
+        sc.begin(self.len());
+        let pass = |i: u32| filter.is_none_or(|f| f(i));
+        let mut cand: BinaryHeap<Reverse<Cand>> = BinaryHeap::new();
+        let mut res: BinaryHeap<Cand> = BinaryHeap::new();
+        for &e in entries { if !sc.seen(e.1) { cand.push(Reverse(e)); if pass(e.1) { res.push(e); } } }
+        let start = sc.visits;
+        while let Some(Reverse(c)) = cand.pop() {
+            if res.len() >= ef && c.0 > res.peek().unwrap().0 { break; }
+            if sc.visits - start > max_visits { break; }
+            for &nb in &self.links[c.1 as usize][layer] {
+                if sc.seen(nb) { continue; }
+                sc.visits += 1;
+                let d = l2(q, self.vec(nb));
+                if res.len() < ef || d < res.peek().unwrap().0 {
+                    cand.push(Reverse(Cand(d, nb)));
+                    if pass(nb) { res.push(Cand(d, nb)); if res.len() > ef { res.pop(); } }
+                }
+            }
+        }
+        res.into_sorted_vec()
+    }
+
+    /// The neighbour-selection heuristic (Malkov and Yashunin, Algorithm 4): walk candidates nearest first and keep one only if it
+    /// is closer to the base node than to every neighbour already kept, so the links point in different directions.
+    fn select(&self, cands: &[Cand], m: usize) -> Vec<u32> {
+        let mut out: Vec<u32> = Vec::with_capacity(m);
+        for c in cands {
+            if out.len() >= m { break; }
+            if out.iter().all(|&r| l2(self.vec(c.1), self.vec(r)) > c.0) { out.push(c.1); }
+        }
+        out
+    }
+
+    pub fn insert(&mut self, x: &[f32], rng: &mut Rng, sc: &mut Scratch) -> u32 {
+        let id = self.len() as u32;
+        let level = (-(rng.unit().max(1e-12)).ln() * self.ml).floor() as usize;
+        self.vecs.extend_from_slice(x);
+        self.level.push(level as u8);
+        self.links.push(vec![vec![]; level + 1]);
+        let Some(ep) = self.entry else { self.entry = Some(id); self.max_level = level; return id; };
+        let mut cur = Cand(l2(x, self.vec(ep)), ep);
+        for lc in (level + 1..=self.max_level).rev() {                   // greedy descent through the layers above the node's own
+            loop {
+                let mut moved = false;
+                for &nb in &self.links[cur.1 as usize][lc] { let d = l2(x, self.vec(nb)); if d < cur.0 { cur = Cand(d, nb); moved = true; } }
+                if !moved { break; }
+            }
+        }
+        let mut eps = vec![cur];
+        for lc in (0..=level.min(self.max_level)).rev() {
+            let w = self.search_layer(x, &eps, self.ef_c, lc, sc, None, u64::MAX);
+            let neigh = self.select(&w, self.m);
+            let maxc = if lc == 0 { self.m0 } else { self.m };
+            self.links[id as usize][lc] = neigh.clone();
+            for nb in neigh {
+                self.links[nb as usize][lc].push(id);
+                if self.links[nb as usize][lc].len() > maxc {            // over-full: re-select among its links by the same heuristic
+                    let base = self.vec(nb).to_vec();
+                    let mut cs: Vec<Cand> = self.links[nb as usize][lc].iter().map(|&o| Cand(l2(&base, self.vec(o)), o)).collect();
+                    cs.sort();
+                    self.links[nb as usize][lc] = self.select_for(&base, &cs, maxc);
+                }
+            }
+            eps = w;
+        }
+        if level > self.max_level { self.entry = Some(id); self.max_level = level; }
+        id
+    }
+    fn select_for(&self, _base: &[f32], cands: &[Cand], m: usize) -> Vec<u32> { self.select(cands, m) }
+
+    pub fn build(data: &Data, m: usize, ef_c: usize, rng: &mut Rng) -> Hnsw {
+        let mut h = Hnsw::new(data.dim, m, ef_c);
+        let mut sc = Scratch::new(data.n);
+        for i in 0..data.n as u32 { h.insert(data.row(i), rng, &mut sc); }
+        h
+    }
+
+    /// Top-k with beam width `ef` (>= k). With a filter, only passing nodes are returned; `max_visits` bounds the layer-0 walk.
+    pub fn search(&self, q: &[f32], k: usize, ef: usize, sc: &mut Scratch, filter: Option<&dyn Fn(u32) -> bool>, max_visits: u64) -> Vec<Cand> {
+        let Some(ep) = self.entry else { return vec![] };
+        let mut cur = Cand(l2(q, self.vec(ep)), ep);
+        sc.visits += 1;
+        for lc in (1..=self.max_level).rev() {
+            loop {
+                let mut moved = false;
+                for &nb in &self.links[cur.1 as usize][lc] { sc.visits += 1; let d = l2(q, self.vec(nb)); if d < cur.0 { cur = Cand(d, nb); moved = true; } }
+                if !moved { break; }
+            }
+        }
+        let mut r = self.search_layer(q, &[cur], ef.max(k), 0, sc, filter, max_visits);
+        r.truncate(k);
+        r
+    }
+    pub fn memory_bytes(&self) -> usize { self.vecs.len() * 4 + self.links.iter().flat_map(|n| n.iter()).map(|l| l.len() * 4 + 24).sum::<usize>() }
+    /// Nodes reachable from the entry point on layer 0.
+    pub fn reachable(&self) -> usize {
+        let Some(ep) = self.entry else { return 0 };
+        let mut seen = vec![false; self.len()];
+        let mut stack = vec![ep];
+        seen[ep as usize] = true;
+        let mut c = 1;
+        while let Some(x) = stack.pop() { for &nb in &self.links[x as usize][0] { if !seen[nb as usize] { seen[nb as usize] = true; c += 1; stack.push(nb); } } }
+        c
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>200 000 vectors, 64 dimensions, drawn from 200 overlapping Gaussian clusters (centers <code>N(0,1)</code>, standard deviation 1: neighbours often belong to several clusters, a harder case than well-separated blobs; an earlier run with separated clusters let IVF reach recall 0.998 by scanning 1.8% of the data and was discarded as too easy). 500 queries from the same mixture, <code>k = 10</code>, single thread, release build; ground truth by exact scan.</p>
+
+```text title="recall, throughput and memory of every index and setting"
+200000 vectors of 64 dimensions (200 overlapping Gaussian clusters: centers N(0,1), spread 1.0), 500 queries, k = 10; exact ground truth took 0.1 s on 8 threads
+build times: IVF-Flat 0.8 s, PQ 1.4 s, IVF-PQ 2.4 s
+  M=8  efConstruction=100: build    9.1 s (45 us/vector), memory 66.1 MB (14.9 MB of links), reachable 99.53%, max level 6
+  M=16 efConstruction=200: build   16.7 s (83 us/vector), memory 72.3 MB (21.1 MB of links), reachable 99.96%, max level 5
+  M=32 efConstruction=200: build   19.5 s (98 us/vector), memory 77.8 MB (26.6 MB of links), reachable 100.00%, max level 4
+index and setting                       recall@10       QPS memory MB  work per query
+flat (exact scan)                          1.000      1136      51.2  scans 200000
+IVF-Flat nlist=512 nprobe=1                0.669     78115      52.1  scans 600 (0.3%)
+IVF-Flat nlist=512 nprobe=2                0.912     71912      52.1  scans 975 (0.5%)
+IVF-Flat nlist=512 nprobe=4                0.993     57515      52.1  scans 1712 (0.9%)
+IVF-Flat nlist=512 nprobe=8                0.998     38693      52.1  scans 3458 (1.7%)
+IVF-Flat nlist=512 nprobe=16               0.999     23419      52.1  scans 7025 (3.5%)
+IVF-Flat nlist=512 nprobe=32               1.000     13068      52.1  scans 14087 (7.0%)
+IVF-Flat nlist=512 nprobe=64               1.000      6685      52.1  scans 27895 (13.9%)
+PQ m=16 (16 B/vec), rerank=0               0.463      1033       3.3  codes only
+PQ m=16 (16 B/vec), rerank=20              0.663      1048      54.5  + full vectors for re-ranking
+PQ m=16 (16 B/vec), rerank=100             0.970      1012      54.5  + full vectors for re-ranking
+PQ m=16 (16 B/vec), rerank=400             1.000       869      54.5  + full vectors for re-ranking
+IVF-PQ nprobe=8 rerank=0                   0.595     15874       4.2  scans 3463 codes
+IVF-PQ nprobe=8 rerank=100                 0.996     13156      55.4  scans 3463 codes
+IVF-PQ nprobe=32 rerank=100                0.998      4345      55.4  scans 13797 codes
+IVF-PQ nprobe=64 rerank=100                0.998      2275      55.4  scans 27570 codes
+IVF-PQ nprobe=64 rerank=400                1.000      2179      55.4  scans 27570 codes
+HNSW M=8 efC=100 ef=10                     0.348    112911      66.1  visits 239
+HNSW M=8 efC=100 ef=20                     0.534     68004      66.1  visits 359
+HNSW M=8 efC=100 ef=40                     0.747     34426      66.1  visits 557
+HNSW M=8 efC=100 ef=80                     0.891     20033      66.1  visits 812
+HNSW M=8 efC=100 ef=160                    0.955     12490      66.1  visits 1082
+HNSW M=8 efC=100 ef=320                    0.990      7582      66.1  visits 1326
+HNSW M=16 efC=200 ef=10                    0.706     70265      72.3  visits 390
+HNSW M=16 efC=200 ef=20                    0.868     50969      72.3  visits 533
+HNSW M=16 efC=200 ef=40                    0.969     29149      72.3  visits 748
+HNSW M=16 efC=200 ef=80                    0.994     18003      72.3  visits 1016
+HNSW M=16 efC=200 ef=160                   0.998     11642      72.3  visits 1312
+HNSW M=16 efC=200 ef=320                   0.999      7423      72.3  visits 1685
+HNSW M=32 efC=200 ef=10                    0.811     57614      77.8  visits 525
+HNSW M=32 efC=200 ef=20                    0.935     42080      77.8  visits 711
+HNSW M=32 efC=200 ef=40                    0.989     25469      77.8  visits 981
+HNSW M=32 efC=200 ef=80                    0.998     16328      77.8  visits 1317
+HNSW M=32 efC=200 ef=160                   0.999      9966      77.8  visits 1730
+HNSW M=32 efC=200 ef=320                   0.999      6254      77.8  visits 2377
+```
+
+<ul> <li><strong>Partitioning is very strong on clustered data</strong>: IVF-Flat with <code>nprobe = 4</code> reaches recall <strong>0.993</strong> while scanning 0.9% of the vectors, at <strong>57 515 QPS</strong>, 50× faster than the exact scan; <code>nprobe = 2</code> already gives 0.912. The cost is training (0.8 s) and the probe list of 512 centroid distances per query.</li> <li><strong>PQ alone saves memory, not time.</strong> With 16 bytes per vector the index is <strong>3.3 MB against 51 MB</strong> (15× smaller), but recall from the codes alone is only <strong>0.463</strong>, and the table-lookup scan runs at the same ~1 000 QPS as the exact SIMD scan: 16 lookups and additions per vector cost about as much as 64 fused subtract-multiply-adds. Re-ranking the best 100 by exact distance gives <strong>0.970</strong> (and 400 gives 1.000) at the price of keeping full vectors available. Real systems speed the scan with SIMD shuffles over 4-bit codes (FAISS "fast scan") or by partitioning, which is IVF-PQ.</li> <li><strong>IVF-PQ combines the two</strong>: <code>nprobe = 8</code> with 100 re-ranked candidates reaches <strong>0.996 recall at 13 156 QPS</strong> with 4.2 MB of codes in memory (the full vectors, 51 MB, are touched only for 100 candidates per query). Without re-ranking the same setting has recall 0.595: at 16 bytes per vector the quantization error is too large to rank the true neighbours.</li> <li><strong>HNSW needs no training and gives smooth control</strong>: <code>M = 16</code> reaches <strong>0.969 at 29 149 QPS (<code>ef = 40</code>)</strong> and <strong>0.994 at 18 003 QPS (<code>ef = 80</code>)</strong>. <code>M = 8</code> needs <code>ef = 320</code> for 0.990 (7 582 QPS); <code>M = 32</code> reaches 0.989 at <code>ef = 40</code> (25 469 QPS) but costs more per hop and more memory. At the same recall the number of distance computations per query is ~750 to 1 000 for <code>M = 16</code> against 1 700 to 3 500 vectors scanned by IVF-Flat and 200 000 by the exact scan.</li> <li><strong>On this data IVF-Flat beats HNSW at equal recall</strong> (57 515 against 18 003 QPS at ≥ 0.99) because the overlapping-cluster structure partitions well and a probe is a few contiguous scans, which a CPU does at memory bandwidth; HNSW's ~1 000 distance computations are dependent random accesses. That ranking is a property of this synthetic mixture: ANN-Benchmarks (Aumüller et al.) report graph indexes leading on many real embedding sets at high recall. <strong>Measure on your own vectors.</strong></li> <li><strong>Build time is the price of a graph</strong>: HNSW takes 9.1 s (<code>M = 8</code>), 16.7 s (<code>M = 16</code>) and 19.5 s (<code>M = 32</code>), 45 to 98 µs per vector, against 0.8 s for IVF-Flat; and <strong>memory grows</strong>: links add 15 to 27 MB on top of the 51 MB of vectors (<code>M = 16</code>: 72 MB in total, +41%). In exchange, inserts are incremental.</li> </ul>
+
+```text title="best throughput that reaches a recall target"
+best throughput that reaches a recall target (single thread)
+method              recall >= 0.95        recall >= 0.99
+flat              1136 QPS (51 MB)      1136 QPS (51 MB)
+IVF-Flat         57515 QPS (52 MB)     57515 QPS (52 MB)
+PQ                1012 QPS (54 MB)       869 QPS (54 MB)
+IVF-PQ           13156 QPS (55 MB)     13156 QPS (55 MB)
+HNSW M=8         12490 QPS (66 MB)      7582 QPS (66 MB)
+HNSW M=16        29149 QPS (72 MB)     18003 QPS (72 MB)
+HNSW M=32        25469 QPS (78 MB)     16328 QPS (78 MB)
+```
+
+<ul> <li><strong>The Pareto table</strong>: for recall ≥ 0.95, IVF-Flat (57.5 k QPS) &gt; HNSW M=16 (29.1 k) &gt; IVF-PQ with re-ranking (13.2 k) &gt; exact (1.1 k). If memory is the constraint, IVF-PQ's <em>resident</em> footprint is 4.2 MB for 200 000 vectors (21 bytes per vector with ids and codebooks), the only entry here that scales to billions on one machine, provided the full vectors sit on SSD or object storage and the re-ranking reads are cheap.</li> </ul>
+
+```text title="filtered search"
+filtered search (k = 10, HNSW M=16): recall and QPS of the strategies by how selective the filter is
+filter                              matches|  pre-filter scan |        in-graph, ef=64 |      post-filter |          planner
+random 50%                           100006|   1.000    1465/s |   0.998   13634/s  1213v |   0.988   20856/s |  0.998  13634/s graph
+random 10%                            19977|   1.000    7767/s |   0.999    4929/s  2536v |   0.994    9664/s |  0.999   4929/s graph
+random 1%                              1985|   1.000   71818/s |   0.994     554/s 30103v |   0.980     933/s |  1.000  71818/s scan
+random 0.1%                             198|   1.000  429446/s |   0.749     476/s 30103v |   0.990      90/s |  1.000 429446/s scan
+query's own cluster (0.5%)             1009|   1.000   37805/s |   0.993   18808/s   927v |   1.000     431/s |  1.000  37805/s scan
+a far cluster (0.5%)                    965|   1.000   38127/s |   0.457     489/s 29632v |   0.337     415/s |  1.000  38127/s scan
+```
+
+<ul> <li><strong>Selective filters break the graph.</strong> For a random 1% filter (1 985 matching vectors) the in-graph search needs 30 103 distance computations (the visit cap) and runs at <strong>554 QPS</strong> against <strong>71 818/s</strong> for the plain scan of the matching ids, and at 0.1% (198 matches) the capped walk finds only 0.749 of the true neighbours. A pre-filter scan is exact and fast whenever few vectors match.</li> <li><strong>Post-filtering needs a wider net as the filter narrows</strong>: it is the fastest strategy for a 50% filter (20 856/s, recall 0.988) and degrades to 90/s at 0.1% (it searched 20 000 candidates to find 10 matches).</li> <li><strong>Correlation between the filter and the query decides everything.</strong> If the filter selects the query's own cluster (0.5% of the data), in-graph search is excellent (0.993 recall, 927 distance computations, 18 808/s) and post-filtering still returns 1.000 but at 431/s. If the filter selects a <em>far</em> cluster of the same size, the graph walk reaches only <strong>0.457</strong> of the true neighbours before the visit cap and post-filtering <strong>0.337</strong> (the matching vectors are nowhere near the top 4 150 candidates), while the pre-filter scan stays exact at 38 127/s. A selectivity estimate alone cannot detect this; the planner also needs to know where the matches are.</li> <li><strong>The planner rule that works here</strong>: scan the matching ids when at most ~4 000 match, else walk the graph with the filter. It returns recall ≥ 0.998 in all six cases, at 4 929/s (10% filter) to 429 446/s (0.1% filter). This is the shape of the planners in production vector databases (a full-scan threshold chosen from a cardinality estimate over payload indexes).</li> </ul>
+
+<aside data-call="note"><b>Disk and object storage</b><p>Count what each index reads from storage, not CPU time. IVF: <code>nprobe</code> contiguous lists, a handful of large range reads (the layout object-storage-native systems favour). HNSW on disk: ~1 000 dependent small reads, each a round trip. DiskANN-style designs cut the round trips by keeping PQ codes and the upper graph in memory and fetching full vectors only for the last candidates; SPANN-style designs keep centroids in memory and posting lists on disk. The lab's "work per query" column is the proxy: scans and visits correspond to reads when the data is not in cache.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong><code>Cand(f32, u32)</code> with a total order</strong> (<code>total_cmp</code> then id) makes <code>BinaryHeap</code> usable for both result sets (max-heap, worst on top) and candidate queues (<code>Reverse</code> for a min-heap); <code>into_sorted_vec()</code> returns ascending order. Ties are broken by id, so results are deterministic.</li> <li><strong>Vectorizable distance</strong>: <code>chunks_exact(8)</code> with an <code>[f32; 8]</code> accumulator array compiles to SIMD adds without <code>unsafe</code> or intrinsics; the remainder loop handles dimensions that are not multiples of eight.</li> <li><strong>Visited set by epoch stamps</strong> (<code>Vec&lt;u32&gt;</code> plus a counter) beats clearing a bitset per query and a <code>HashSet</code> by a wide margin; wrapping the <code>u32</code> epoch needs a reset every 4 billion queries, which is worth a <code>debug_assert!</code> in production code.</li> <li><strong>Flat vectors, nested links</strong>: vectors live in one <code>Vec&lt;f32&gt;</code> (<code>row(i) = &amp;v[i*d..(i+1)*d]</code>), but links are <code>Vec&lt;Vec&lt;Vec&lt;u32&gt;&gt;&gt;</code>, easy to write and slow to chase. Production HNSW stores layer 0 as a fixed-width block per node (<code>[count, neighbours…]</code>) next to the vector to make a hop touch one or two cache lines (exercise 3).</li> <li><strong><code>std::thread::scope</code> + <code>par_map</code></strong> parallelizes ground truth and index construction without a thread-pool dependency; the search path stays single-threaded so QPS numbers are per core.</li> <li><strong>Determinism</strong>: the only randomness is the seeded <code>Rng</code> (level draws, k-means seeds, samples), so two builds with the same seed produce identical graphs (a test asserts it); non-determinism in concurrent HNSW builds is a real production concern.</li> <li><strong><code>Option::is_none_or</code></strong> expresses "no filter, or it passes": <code>filter.is_none_or(|f| f(i))</code>.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Distance</strong> equals the definition for every dimension from 1 to 69 (the SIMD loop and its remainder).</li> <li><strong>Brute force</strong> equals the sorted prefix of all distances, with and without an id subset.</li> <li><strong>k-means</strong> reduces inertia by more than 20% from its initialization.</li> <li><strong>PQ</strong>: the ADC distance of any stored code equals the exact distance to its decoded vector (to 1e-3 relative); quantization error is below 35% of the data's spread.</li> <li><strong>Exhaustive settings are exact</strong>: IVF with every list probed returns the brute-force result and scans every vector; flat PQ and IVF-PQ with re-ranking over all candidates do too.</li> <li><strong>Probing</strong>: <code>probe(q, 1)</code> is the nearest centroid and the lists come nearest first; <code>nprobe = 1</code> scans exactly that list, for IVF and IVF-PQ alike; the IVF-PQ residual table scores a code as the distance to <code>centroid + decoded residual</code>.</li> <li><strong>HNSW structure</strong>: degree bounds per layer, no self links, no duplicates, every layer-<code>l</code> link points to a node present on layer <code>l</code>, the entry point is on the top layer, at least 99% of nodes are reachable on layer 0, and two builds with the same seed are identical.</li> <li><strong>HNSW search</strong>: recall at <code>ef = 200</code> is at least 0.95; an exhaustive beam on a connected graph is exact; a beam of 60 on overlapping clusters evaluates well over 120 nodes and has recall above 0.9 (a search that stops at the first full result set fails this).</li> <li><strong>Filters</strong>: results always satisfy the filter; a filter passing everything changes nothing; filtered recall against the exact filtered answer is above 0.9 (50%) and 0.5 (2%); a visit cap bounds the work.</li> <li><strong>Mutants run against these tests</strong> (all killed): the neighbour heuristic keeping the wrong side; no reverse links; degree bound not enforced; entry point never moving up; filter ignored for neighbours; ADC reading the wrong table row; brute force keeping the farthest; PQ re-ranking skipped; layer links beyond a node's level; the visited set forgetting (killed by non-termination). Four mutants <strong>survived the first tests and each was killed by a test written for it</strong>: the beam stopping too early (exhaustive and easy-data tests hide it; killed by the harder-data visit count), IVF-PQ forgetting the residual (exact re-ranking hid it; killed by the table identity), and IVF and IVF-PQ probing the farthest lists (probing every list hid it; killed by the probe-order and nprobe-1 tests).</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Qdrant</strong> (Rust): HNSW with a <em>filterable</em> variant that adds links per indexed payload value so that filtered traversal stays connected, payload indexes feeding a <strong>query planner</strong> that chooses between a full scan of the matching points and graph search by estimated cardinality, scalar, product and binary quantization with oversampling and re-scoring, and memory-mapped or on-disk storage of vectors.</li> <li><strong>Weaviate</strong> (Go): HNSW (and a flat index, and a dynamic index that starts flat and converts) with product and binary quantization, LSM-style storage of objects, and hybrid search that fuses BM25 and vector scores.</li> <li><strong>Milvus</strong> (distributed, Go/C++): data in <em>segments</em> (growing in memory, sealed on object storage) indexed independently, many index types (IVF-Flat, IVF-PQ, HNSW, DiskANN, GPU graph indexes), storage and compute separated, and filtered search with scalar indexes.</li> <li><strong>pgvector</strong> (Postgres extension): <code>vector</code> type with IVFFlat and HNSW index access methods inside Postgres, so filters, joins, transactions and backups come with the database; the planner chooses between index scan and sequential scan from ordinary statistics; recent versions add iterative index scans to keep walking when a filter discards too many results.</li> <li><strong>Chroma</strong>: an embedded HNSW (hnswlib) per collection, evolving to a distributed design with object storage.</li> <li><strong>Lance</strong>: a columnar file format with random access and versioning whose vector indexes (IVF-PQ, HNSW variants) live next to the data, so the same files serve scans and nearest-neighbour search.</li> <li><strong>turbopuffer, TopK</strong>: object-storage-native search engines: data and indexes on object storage with a memory and SSD cache in front, designs where the cost of an index is its number of storage round trips; clustered layouts follow naturally.</li> <li><strong>Common architecture</strong>: an LSM-like split into a mutable in-memory part searched by brute force or a small graph and immutable sealed segments with real indexes, merged in the background; deletes as tombstones filtered at query time; recall measured continuously on a held-out query set.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Benchmarking on easy data.</strong> Well-separated synthetic blobs let almost any index look excellent (the first run here reached recall 0.998 at 1.8% scanned and was thrown away). Use real embeddings, with the real dimensionality, and report recall at fixed targets with the full speed–recall curve.</li> <li><strong>Recall is per query, not an average you can hide behind</strong>: look at the lowest percentile of recall; a mean of 0.97 can hide queries that return nothing useful (for example the filtered ones above).</li> <li><strong>Distance and normalization</strong>: cosine similarity needs normalized vectors (then L2 ordering equals cosine ordering); inner product is not a metric and breaks graph and triangle-inequality assumptions without a transformation. Check what your model was trained for.</li> <li><strong>Filters change the problem.</strong> Post-filtering silently returns fewer than <code>k</code> results; in-graph filtering without a visit cap scans the graph; any strategy needs a cardinality estimate and a fallback to exact scan. Test with filters correlated and anti-correlated with the query.</li> <li><strong>Updates and deletes</strong>: IVF centroids go stale as data drifts (retrain and re-assign periodically); HNSW deletions leave holes and degrade connectivity (tombstone and rebuild, or use a repair algorithm); sealed immutable segments make this tractable.</li> <li><strong>Quantization needs re-ranking and a held-out check.</strong> PQ codes alone at 16 bytes per 64 dimensions gave recall 0.46; any lossy format must be validated against exact search on your data, per dimension count and metric.</li> <li><strong>Memory is more than the vectors</strong>: HNSW links added 41% here, IVF-PQ adds ids and codebooks, and the visited set, heap and caches add per-query and per-thread state.</li> <li><strong>Build time and recovery</strong>: a graph that takes hours to build must be persisted and loaded, not rebuilt on restart; parallel builds change the graph (non-deterministic), so tests should compare recall, not links.</li> <li><strong>Hybrid search is a ranking problem</strong>: fusing a vector ranking with a keyword ranking (reciprocal rank fusion, weighted scores) needs its own evaluation; neither score is calibrated.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Efficient and Robust Approximate Nearest Neighbor Search Using Hierarchical Navigable Small World Graphs"
+url = "https://arxiv.org/abs/1603.09320"

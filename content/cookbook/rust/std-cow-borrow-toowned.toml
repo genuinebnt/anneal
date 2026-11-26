@@ -1,0 +1,74 @@
+title = "Cow borrow ToOwned (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "Option, Result, conversions, ownership types"
+chapter_order = 1
+order = 70
+kind = "recipe"
+lede = "Cow<'a, B>, Borrow, ToOwned: allocate only when you must; Borrow vs AsRef vs Deref."
+level = "intermediate"
+code = ["examples/std_tour/std_cow_borrow_toowned.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>escaping/normalising text</li><li>parsers returning slices</li><li>config structs that borrow or own</li><li>zero-copy APIs</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>HTML/URL/shell escaping that usually returns the input unchanged</li><li><code>String::from_utf8_lossy</code></li><li>path normalisation</li><li>error messages that are mostly static</li><li>deserialisers borrowing from the input buffer (serde <code>Cow&lt;'de, str&gt;</code>)</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>Cow::Borrowed</code></li><li><code>Cow::Owned</code></li><li><code>Cow::into_owned</code></li><li><code>Cow::to_mut</code></li><li><code>Cow::from</code></li><li><code>Cow::as_ref</code></li><li><code>matches!(Cow::Borrowed(_))</code></li></ul>
+
+<ul class="cb-g-names"><li><code>ToOwned::to_owned</code></li><li><code>ToOwned::clone_into</code></li><li><code>Borrow::borrow</code></li><li><code>BorrowMut::borrow_mut</code></li><li><code>AsRef::as_ref</code></li><li><code>String::from_utf8_lossy</code></li></ul>
+
+<ul class="cb-g-names"><li><code>str::replace</code></li><li><code>str::contains</code></li><li><code>Cow::clone</code></li><li><code>Cow::add_assign</code></li><li><code>Cow::eq</code></li><li><code>Cow::into</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/borrow/enum.Cow.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/borrow/enum.Cow.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+Cow/ToOwned alloc (`alloc::borrow`); Borrow/BorrowMut core (`core::borrow`).
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+Cow::is_borrowed/is_owned are unstable, so section 1 uses `matches!`; Cow&lt;CStr>/Cow&lt;OsStr>/Cow&lt;Path> behave the same (see std_env_args_vars).
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Return input unchanged when no work is needed</td><td><code>Cow&lt;'a, str&gt; (Borrowed) else Owned</code></td></tr><tr><td>Mutate lazily (clone on first write)</td><td><code>to_mut()</code></td></tr><tr><td>Get an owned value out</td><td><code>into_owned()</code></td></tr><tr><td>Function accepts either borrowed or owned</td><td><code>impl Into&lt;Cow&lt;'a, str&gt;&gt;</code></td></tr><tr><td>Struct that sometimes borrows from input</td><td><code>struct S&lt;'a&gt; { name: Cow&lt;'a, str&gt; }</code></td></tr><tr><td>Bytes of unknown encoding to text</td><td><code>String::from_utf8_lossy (Cow)</code></td></tr><tr><td>Static strings + occasional dynamic ones</td><td><code>Cow&lt;'static, str&gt;</code></td></tr><tr><td>Generic lookup with borrowed key</td><td><code>K: Borrow&lt;Q&gt;</code></td></tr><tr><td>Generic read-only view</td><td><code>AsRef&lt;T&gt;</code></td></tr><tr><td>Unsized type's owned form</td><td><code>ToOwned (str-&gt;String, [T]-&gt;Vec&lt;T&gt;)</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/borrow/enum.Cow.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/borrow/enum.Cow.html</a></li><li><a href="https://doc.rust-lang.org/std/borrow/trait.Borrow.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/borrow/trait.Borrow.html</a></li><li><a href="https://rust-lang.github.io/api-guidelines/flexibility.html" target="_blank" rel="noreferrer">https://rust-lang.github.io/api-guidelines/flexibility.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/borrow/enum.Cow.html"
+url = "https://doc.rust-lang.org/std/borrow/enum.Cow.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/borrow/trait.Borrow.html"
+url = "https://doc.rust-lang.org/std/borrow/trait.Borrow.html"
+
+[[sources]]
+title = "rust-lang.github.io/api-guidelines/flexibility.html"
+url = "https://rust-lang.github.io/api-guidelines/flexibility.html"

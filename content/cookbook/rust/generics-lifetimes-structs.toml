@@ -1,0 +1,52 @@
+title = "Generics lifetimes structs"
+module = "Rust language"
+module_order = 1
+chapter = "Types, traits and generics"
+chapter_order = 2
+order = 10
+kind = "recipe"
+lede = "generics + lifetimes together in structs, impls, iterators, closures, and higher-ranked bounds."
+level = "advanced"
+code = ["examples/language/generics_lifetimes_structs.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>zero-copy views over input</li><li>iterator types</li><li>caches/handlers generic over closures</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>zero-copy views</li><li>memoizing caches</li><li>borrowed iterators</li><li>handler tables holding closures</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Reading a signature: `impl<'a, T: Bound> Struct<'a, T>` introduces lifetime `'a` and type `T` for the whole impl. **Key insight**: a method that returns data borrowed from the **original** source should name the struct's lifetime (`&'a T`), not the shorter `&self` lifetime, so callers can keep the result after the view itself is gone.
+
+`+ '_`                  "this impl Trait borrows from &amp;self" `for<'x> Fn(&'x str)`   higher-ranked: works for **any** lifetime (needed for closures taking references)
+
+```text
+`'a: 'b`                'a outlives 'b
+```
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Rust Book ch. 10.3, 19.2 <a href="https://doc.rust-lang.org/book/ch19-02-advanced-traits.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/book/ch19-02-advanced-traits.html</a> and the Nomicon <a href="https://doc.rust-lang.org/nomicon/hrtb.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/nomicon/hrtb.html</a></li><li>Study real zero-copy code: <a href="https://github.com/BurntSushi/aho-corasick" target="_blank" rel="noreferrer">https://github.com/BurntSushi/aho-corasick</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch19-02-advanced-traits.html"
+url = "https://doc.rust-lang.org/book/ch19-02-advanced-traits.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/hrtb.html"
+url = "https://doc.rust-lang.org/nomicon/hrtb.html"
+
+[[sources]]
+title = "github.com/BurntSushi/aho-corasick"
+url = "https://github.com/BurntSushi/aho-corasick"

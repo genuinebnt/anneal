@@ -1,0 +1,10 @@
+error[E0401]: non-exhaustive patterns: `(false, _)` not covered
+ --> e0401_nested_tuple.peb:2:19
+  |
+2 |     let r = match (true, 3) {
+  |                   ^^^^^^^^^ pattern `(false, _)` not covered
+  |
+  = note: the matched value has type `(bool, int)`
+  = help: add the missing arms or a wildcard arm `_ => ...`
+
+error: aborting due to 1 previous error

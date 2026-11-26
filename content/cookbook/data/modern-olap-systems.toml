@@ -1,0 +1,193 @@
+title = "Modern OLAP systems"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 420
+kind = "guide"
+lede = "15-721 S2024 lectures #1, #5, #17–22 · lakehouse and shared-disk architecture · object stores · Dremel, Photon, Snowflake, DuckDB, Yellowbrick, Redshift, Velox · German strings · file-to-worker mapping"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Four generations of analytics systems</strong>: <strong>1990s data cubes</strong> (pre-aggregated multidimensional arrays, specified up front, refreshed periodically, bolted onto OLTP systems); <strong>2000s data warehouses</strong> (monolithic, shared-nothing, columnar, often Postgres forks with proprietary formats, fed by ETL); <strong>2010s shared-disk engines</strong> (compute separated from third-party distributed or object storage); <strong>2020s lakehouses</strong> (middleware on data lakes adding schema, versioning and transactional CRUD to open files; changes land in row-oriented log-structured files and are periodically compacted into read-only columnar files). The lakehouse bets on three observations: people want more than SQL (procedural and ML code), decoupling the store from the DBMS removes ingest/egress barriers, and most data is semi- or unstructured.</li> <li><strong>Components are becoming reusable services and libraries</strong> (parsers, catalogs, IRs, optimizers like Calcite, file formats, access libraries, execution engines like Velox/DataFusion): <em>The Composable Data Management System Manifesto</em>. The engineering challenge is making them interoperate <em>and</em> perform.</li> <li><strong>Anatomy of an OLAP DBMS</strong>: front-end (parser → IR), planner (binder, rewriter, optimizer, cost model), scheduler (breaks the plan into fragments), execution engine, <strong>I/O service</strong> (block requests to the object store), catalog (data locations and metadata). A plan is a DAG of physical operators; data is either <strong>persistent</strong> (immutable files, updated by rewriting) or <strong>intermediate</strong> (short-lived, unrelated in size to input or runtime).</li> <li><strong>Push query to data</strong> (shared-nothing; filter where it lives) vs <strong>pull data to query</strong> (shared-disk; needed when storage has no compute). <strong>Object stores</strong> (S3, Azure Blob, GCS) hold large immutable <strong>PAX</strong> files (all columns of a row group together, columnar inside) with a header/footer carrying column offsets, compression, indexes and zone maps; the engine fetches the footer first, then only the <strong>byte ranges</strong> it needs, through a cloud-specific <code>GET/PUT/DELETE</code> API.</li> <li><strong>Case-study lessons</strong> (details below): disaggregate compute, storage, even memory (Dremel's shuffle service, Snowflake's cache); get statistics from the <em>storage layer</em> because files written elsewhere have none; make planning <strong>adaptive</strong> at stage boundaries (broadcast vs shuffle, partition coalescing, skew handling); prefer <strong>precompiled vectorized primitives</strong> over JIT for maintainability (Photon, Velox, DuckDB) except where compile latency can be hidden by caching (Redshift, Yellowbrick); invest in the <strong>boring systems layers</strong> (allocators, caches, network paths) since they decide real-world speed.</li> </ul>
+"""
+
+[[sections]]
+heading = "System analyses at a glance"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th></th> <th><strong>BigQuery / Dremel</strong></th> <th><strong>Databricks Photon</strong></th> <th><strong>Snowflake</strong></th> <th><strong>DuckDB</strong></th> <th><strong>Yellowbrick</strong></th> <th><strong>Redshift</strong></th> <th><strong>Velox</strong></th> </tr> </thead> <tbody> <tr> <td>lineage</td> <td>Google (2010; "a decade of SQL analysis" 2020)</td> <td>Spark → Spark SQL → Photon (2022)</td> <td>cloud-native from scratch (2012–)</td> <td>CWI research system (2019)</td> <td>hard fork of PostgreSQL 9.5, FPGA appliance → Kubernetes DBaaS (2021)</td> <td>ParAccel (acquired 2011)</td> <td>Meta's reusable engine library</td> </tr> <tr> <td>architecture</td> <td>disaggregated compute, storage and <strong>shuffle memory</strong></td> <td>shared-disk lakehouse</td> <td>shared-disk; virtual warehouses + cache</td> <td>embedded, shared-everything</td> <td>shared-disk, compute-side caches</td> <td>shared-nothing → S3-backed RMS (2017), serverless (2022)</td> <td>library (no parser, catalog, optimizer)</td> </tr> <tr> <td>execution</td> <td>vectorized, columnar, shuffle-based stages</td> <td><strong>pull-based vectorized</strong>, precompiled primitives, expression fusion</td> <td><strong>push-based vectorized</strong>, precompiled kernels, LLVM serializers</td> <td><strong>push-based vectorized</strong>, morsel-driven</td> <td>push-based vectorized + <strong>C++ transpilation</strong></td> <td>push-based vectorized, C++ transpilation, hand-written AVX2</td> <td>vectorized, adaptive, Arrow-compatible</td> </tr> <tr> <td>optimizer</td> <td>stratified (rules + cost on available stats), <strong>dynamic per stage</strong></td> <td>Catalyst (Cascades-style) + adaptive query execution</td> <td>unified Cascades-style top-down + runtime-activated aggregation pushdown</td> <td>stratified; unnests arbitrary subqueries</td> <td>modified PostgreSQL optimizer + Bloom filter sideways passing</td> <td>stratified (rewrite then cost-based); QRF rule framework</td> <td>none</td> </tr> <tr> <td>storage</td> <td>Capacitor columnar on Colossus; self-describing</td> <td>Delta Lake / Parquet</td> <td>proprietary micro-partitions on object store</td> <td>single-file PAX, 120k-row groups</td> <td>proprietary ~100 MB files in ~2 MB chunks</td> <td>RMS proprietary columnar + SSD cache; Spectrum reads S3</td> <td>connectors (S3/HDFS), Parquet, ORC/DWRF</td> </tr> <tr> <td>distinctive</td> <td>in-memory <strong>shuffle service</strong>, straggler backup tasks</td> <td>JVM → C++ via JNI, batch-level adaptivity</td> <td><strong>consistent-hash file→worker mapping</strong>, work stealing, spot-like compute</td> <td>zero-copy Arrow results, vector types, MotherDuck hybrid execution</td> <td><strong>custom allocator, user-space NVMe/NIC drivers, DPDK</strong>, cooperative scheduler</td> <td><strong>compilation service with fleet-wide cache</strong></td> <td>German strings, expression compilation</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Dremel / BigQuery"
+body = """
+<p><strong>Disaggregated everything</strong>: compute, storage (a distributed file system) and in-memory <strong>shuffle</strong> are separate services, so each scales alone and compute is serverless and on demand; files are <strong>self-describing</strong>. <strong>Columnar storage for nested data</strong> with repetition and definition levels (<a href="/cookbook/p/modern-encodings-btrblocks-fastlanes-bitweaving">A13</a>). <strong>Shuffle-based execution</strong>: a <em>coordinator</em> retrieves metadata (so workers don't stampede the file system), builds the stage DAG, and dispatches ready-to-run fragments to a flexible pool; workers write intermediate output into <strong>shuffle nodes</strong> that keep hash partitions in RAM (spilling only when necessary), and the next stage reads from there. Tasks must be <strong>deterministic and idempotent</strong> so any task can be re-run; <strong>stragglers</strong> are handled by launching a backup copy after a timeout; the worker count of a stage can change dynamically. <strong>Stratified, dynamic optimization</strong>: rules plus costs where statistics exist, then <strong>re-plan between stages</strong> from observed sizes (number of workers, broadcast vs hash join, operator choice, repartitioning of skewed partitions). Descendants: Drill, Presto, Impala, Dremio.</p>
+"""
+
+[[sections]]
+heading = "Databricks: Spark SQL to Photon"
+body = """
+<p><em>Background</em>: Spark (JVM, in-memory, iterative) → <strong>Shark</strong> (Hive-based SQL on Spark; stuck with Hive's MapReduce-minded optimizer) → <strong>Spark SQL</strong> (native row engine with Catalyst, Scala code generation, columnar in-memory caching with dictionary/RLE/bit-packing) → <strong>JVM limits</strong>: workloads became CPU-bound (NVMe caching, better skipping), GC pauses on heaps over ~64 GB, JIT limits on large generated methods. <strong>Photon</strong> is a <strong>C++ vectorized engine embedded through JNI</strong> into the Databricks Runtime and chosen <em>per operator</em> when a Photon implementation exists (Catalyst's physical-to-physical pass minimises switches between engines). Design: pull-based vectors processed by <strong>precompiled primitives</strong>, <strong>expression fusion</strong> (fusing consecutive primitives <em>within an operator</em>, not HyPer-style fusion across operators, so per-operator metrics stay possible), <strong>position lists</strong> instead of bitmaps for active rows, simple memory-pool arbitration (release from the operator holding the least that still satisfies the request). <strong>Adaptivity at two levels</strong>: <em>macro</em> (re-plan at shuffle boundaries: shuffle ↔ broadcast, <strong>partition coalescing</strong>: over-allocate shuffle partitions and merge small ones, skew join handling) and <em>micro</em> (per-batch specializations: ASCII-only strings, no-NULL vectors, no-inactive-rows vectors, compact sparse vectors before probing). <strong>Why precompiled over JIT</strong>: far easier to build, debug and observe; engineers spend time on specialized code paths instead of codegen tooling. Open-source accelerators: Gluten, RAPIDS, Blaze, DataFusion Comet.</p>
+"""
+
+[[sections]]
+heading = "Snowflake"
+body = """
+<p><strong>Storage</strong>: cloud object store plus a heavy caching layer; tables are <strong>micro-partitions</strong> (columnar files) reorganized in the background, semi-structured data is columnarized on ingest. <strong>Virtual warehouses</strong> are clusters of VMs with local-disk caches; <strong>cloud services</strong> (metadata, optimizer, transactions) are shared multi-tenant services over a transactional key-value store (FoundationDB). <strong>Execution</strong>: <em>push-based</em> vectorized engine with precompiled kernels and LLVM-generated serializers; workers push to each other so there is no separate shuffle stage; failure re-runs the whole query. <strong>File-to-worker mapping by consistent hashing</strong> so repeated queries hit warm caches, and new nodes join without remapping most files (measured below). <strong>Work stealing</strong>: an early finisher takes a straggler's files and always downloads from the object store to avoid loading the straggler's network. <strong>Flexible compute</strong>: temporarily borrow extra nodes for big fragments (ephemeral workers write intermediates back to object storage so they don't pollute caches). <strong>Optimizer</strong>: unified top-down (Cascades-like), with <strong>zone-map pruning at compile time</strong> (complex expressions allowed) and aggregation pushdown <em>planned</em> at compile time but <em>activated</em> at runtime from observed statistics. <strong>Hybrid Tables (Unistore, 2022)</strong>: row-store writes with transactions, merged into micro-partitions in the background.</p>
+"""
+
+[[sections]]
+heading = "DuckDB (and MotherDuck)"
+body = """
+<p>An <strong>embedded</strong>, multithreaded "SQLite for analytics": in-process, almost no dependencies, Postgres-like dialect, <strong>zero-copy Arrow results</strong>, DataFrame front-ends (dplyr, Ibis) that hand it logical plans, and <strong>extensions</strong> for Parquet, Arrow, JSON, SQLite, HTTP/S3. Design: shared-everything, <strong>push-based vectorized</strong> execution (adopted in 2021 because adding operators to a pull model was awkward; it enables <strong>scan sharing</strong>, central state, back-pressure and async I/O), <strong>morsel-driven</strong> parallelism, HyPer-inspired <strong>MVCC</strong>, <strong>PAX storage</strong> in a single file with <strong>120k-row row groups</strong>, hash and sort-merge joins, a stratified optimizer that unnests arbitrary subqueries. <strong>Unified vector format</strong>: <em>flat</em>, <em>constant</em>, <em>dictionary</em> (selection vector + dictionary) and <em>sequence</em> vectors are processed through one interface without decompressing first, so a primitive is written once. <strong>MotherDuck</strong> runs the same engine in a "duckling" container next to object storage and <strong>bridges local and remote execution</strong>: part of a plan runs on your laptop, part in the cloud, with a bridge operator streaming tuples between instances (possible because push-based operators can pause).</p>
+"""
+
+[[sections]]
+heading = "Yellowbrick"
+body = """
+<p>A C++ OLAP system from a <strong>hard fork of PostgreSQL 9.5</strong>, first an FPGA-accelerated appliance, now a Kubernetes <strong>microservices</strong> DBaaS: a warehouse instance (connections, parsing, plan cache, <strong>row store</strong>, metadata, concurrency control), worker pods (one per node, owning the hardware, with caches), and background compile/bulk-load services. <strong>Execution</strong>: push-based vectorized over row and PAX formats with <strong>early materialization</strong> and transpose operators that keep data in L3; <strong>holistic query transpilation to C++</strong> compiled with LLVM by a separate service, split into <strong>independent fragments</strong> that are cached and reused across queries and linked dynamically. <strong>Optimizer</strong>: modified PostgreSQL with zone maps, cost-based join order from detailed statistics (histograms, HyperLogLog), and <strong>Bloom-filter sideways information passing</strong> into hash joins. <strong>Storage</strong>: ~100 MB files in ~2 MB chunks, per-table sharding or sorting, row data moved to columnar object-store files by background tasks; <strong>rendezvous hashing</strong> assigns files to workers. <strong>Systems engineering</strong>: a NUMA-aware <strong>latch-free allocator</strong> that grabs memory at start (<code>mmap</code> + <code>mlock</code>, huge pages; "100× faster than malloc"), an approximate LRU-K buffer pool, a <strong>cooperative coroutine scheduler</strong> synchronizing every 100 ms with a cluster scheduler so one query at a time runs across all cores (data stays in L3), <strong>user-space NVMe and NIC drivers</strong> and a reliable UDP protocol over <strong>DPDK</strong> (about a 17–19% speedup on TPC-DS at 1 TB across 2–4 nodes). The takeaway: all of it only pays off if the planner produces good plans.</p>
+"""
+
+[[sections]]
+heading = "Amazon Redshift"
+body = """
+<p><strong>History</strong>: ParAccel (a shared-nothing Postgres-derived OLAP system) licensed by Amazon around a $20 M investment; Redshift launched 2011; <strong>S3-backed managed storage (RMS)</strong> in 2017; serverless in 2022; goal of removing admin knobs. <strong>Flavours</strong>: original Redshift, <strong>Spectrum</strong> (reads S3 files directly), Athena (Presto). <strong>Execution</strong>: push-based vectorized with <strong>HIQUE-style C++ transpilation</strong>, late materialization, <strong>hand-written AVX2 SIMD</strong> (no auto-vectorization) and <strong>software prefetching</strong> inserted at tuned intervals in generated code (too little work between prefetch and use and data isn't ready; too much and it's evicted); light adaptivity (ASCII string paths, growing a Bloom filter when a hash table would spill). <strong>Compilation service</strong>: dedicated nodes with GCC, a <strong>per-customer cache of compiled templated fragments backed by a fleet-wide cache</strong>, and background recompilation after software upgrades. <strong>Hardware</strong>: AQUA (FPGA nodes) later replaced by Nitro cards. <strong>Optimizer</strong>: stratified (rewrites, then cost-based), zone maps from Parquet/ORC for Spectrum, a Query Rewriting Framework for runtime plan rules. <strong>Encodings</strong> chosen per column: dictionary, delta, RLE, AZ64.</p>
+"""
+
+[[sections]]
+heading = "Velox (and Arrow)"
+body = """
+<p>A single-node C++ <strong>execution library</strong> (no parser, catalog or optimizer) used by Presto/Prestissimo, Spark Gluten and others: a physical-plan DAG, a type system, function API, storage connectors (S3, HDFS; Parquet, ORC/DWRF), a resource manager, an <strong>expression engine</strong> and an operator engine. <strong>Intermediate data</strong>: should move between tasks <strong>without serialization</strong> and allow zero-copy sharing; <strong>Apache Arrow</strong> (language-agnostic columnar, RLE and dictionary encodings, strings as offsets into a buffer) is the common format; Velox extends it with <strong>German-style strings</strong> (4-byte size, 4-byte prefix, 8-byte pointer/inline payload). <strong>Expression evaluation</strong> avoids walking trees per row: constant folding, <strong>common-subexpression elimination</strong>, batch evaluation, an experimental C++ codegen. <strong>Adaptive execution</strong>: <strong>predicate reordering</strong> by selectivity and cost, column prefetching, not-NULL fast paths, ASCII-only string paths, buffer reuse. <strong>Operator output</strong>: <em>early</em> materialization (row-friendly) vs <em>late</em> (column-friendly; usually better for OLAP).</p>
+"""
+
+[[sections]]
+heading = "Two mechanisms, measured"
+body = """
+<h4>File-to-worker mapping and cache warmth</h4>
+
+<p>Snowflake maps micro-partitions to workers by <strong>consistent hashing</strong>, Yellowbrick (and Druid, Ignite) by <strong>rendezvous hashing</strong>, so a file always goes to the worker that already caches it, <em>and adding a worker doesn't reshuffle the fleet</em>. The simulation: 100 000 files with Zipf-0.9 access, 8 workers each caching 5 000 files (LRU); after 1.2 M accesses a <strong>ninth worker joins</strong> (cold cache). The placement schemes are the ones from <a href="/cookbook/p/distributed-databases-i">L23</a>.</p>
+
+```text title="cache hit rate around a cluster resize"
+100000 files (Zipf 0.9), 8 workers each caching 5 000 files (LRU); a 9th worker joins after 1.2M accesses
+file → worker mapping      hit rate before first 100k after    files re-mapped last 100k after
+hash mod N                          83.5%            69.8%              89.1%          85.6%
+consistent hash (128 vnodes)          83.4%            82.1%              11.7%          85.5%
+rendezvous                          83.5%            82.2%              11.1%          85.6%
+```
+
+<ul> <li><strong>Hash mod N re-maps 89% of the files</strong>, so almost every worker's cache is cold for the new mapping: the hit rate falls <strong>13.7 points (83.5 → 69.8%)</strong> and recovers slowly. Consistent and rendezvous hashing move <strong>11–12%</strong> (≈ 1/9), and the hit rate dips by <strong>1.3 points</strong> only.</li> <li>All three converge to the same steady state afterwards (85.5–85.6%): the placement scheme only matters for <strong>elasticity</strong>, which is why it is the right design for a pay-as-you-go cloud warehouse where clusters resize every few minutes.</li> </ul>
+
+<h4>German strings</h4>
+
+<p>Umbra's and Velox's string handle is <strong>16 bytes</strong>: a 4-byte length, a 4-byte <strong>prefix</strong>, and 8 bytes that hold either the rest of a <strong>≤ 12-byte string inline</strong>, or an offset to the remaining bytes of a longer one. Equality checks the first 8 bytes (length + prefix) and rejects most mismatches without touching memory; ordering compares the prefix as a big-endian integer first; strings of up to 12 bytes never touch the heap at all.</p>
+
+:::deeper Reference: 16-byte string handle with inline prefix, and its comparison functions
+```rust title="src/exec/germanstr.rs"
+//! "German strings" (Umbra, Velox): a 16-byte string handle with the length and a 4-byte prefix inline.
+//! Strings up to 12 bytes live entirely in the handle; longer ones keep their first 4 bytes inline and the rest in an arena.
+use std::cmp::Ordering;
+
+#[derive(Clone, Copy, Debug)]
+pub struct GStr { len: u32, prefix: [u8; 4], tail: u64 }   // tail: bytes 4..12 (big-endian, zero padded) if len ≤ 12, else arena offset
+
+pub struct Arena { buf: Vec<u8> }
+
+impl Arena {
+    pub fn new() -> Self { Arena { buf: Vec::new() } }
+
+    pub fn make(&mut self, s: &[u8]) -> GStr {
+        let mut prefix = [0u8; 4];
+        let n = s.len().min(4);
+        prefix[..n].copy_from_slice(&s[..n]);
+        if s.len() <= 12 {
+            let mut t = [0u8; 8];
+            if s.len() > 4 { t[..s.len() - 4].copy_from_slice(&s[4..]); }
+            GStr { len: s.len() as u32, prefix, tail: u64::from_be_bytes(t) }
+        } else {
+            let off = self.buf.len() as u64;
+            self.buf.extend_from_slice(&s[4..]);
+            GStr { len: s.len() as u32, prefix, tail: off }
+        }
+    }
+
+    /// Bytes 4.. of a string (inline tail or arena slice).
+    fn rest<'a>(&'a self, g: &'a GStr, scratch: &'a mut [u8; 8]) -> &'a [u8] {
+        let n = (g.len as usize).saturating_sub(4);
+        if g.len <= 12 { *scratch = g.tail.to_be_bytes(); &scratch[..n] } else { &self.buf[g.tail as usize..g.tail as usize + n] }
+    }
+
+    pub fn to_vec(&self, g: &GStr) -> Vec<u8> {
+        let mut v = g.prefix[..(g.len as usize).min(4)].to_vec();
+        let mut s = [0u8; 8];
+        v.extend_from_slice(self.rest(g, &mut s));
+        v
+    }
+
+    /// Equality: compare the 8-byte (len, prefix) header first; only long strings with equal headers touch the arena.
+    #[inline]
+    pub fn eq(&self, a: &GStr, b: &GStr) -> bool {
+        if a.len != b.len || a.prefix != b.prefix { return false; }
+        if a.len <= 12 { return a.tail == b.tail; }
+        let n = a.len as usize - 4;
+        self.buf[a.tail as usize..a.tail as usize + n] == self.buf[b.tail as usize..b.tail as usize + n]
+    }
+
+    /// Lexicographic order, deciding on the inline bytes whenever possible.
+    #[inline]
+    pub fn cmp(&self, a: &GStr, b: &GStr) -> Ordering {
+        let c = u32::from_be_bytes(a.prefix).cmp(&u32::from_be_bytes(b.prefix));
+        if c != Ordering::Equal { return c; }
+        if a.len <= 4 || b.len <= 4 { return a.len.cmp(&b.len); }              // one string ended inside the prefix
+        if a.len <= 12 && b.len <= 12 { return a.tail.cmp(&b.tail).then(a.len.cmp(&b.len)); }
+        let (mut s1, mut s2) = ([0u8; 8], [0u8; 8]);
+        self.rest(a, &mut s1).cmp(self.rest(b, &mut s2))
+    }
+}
+```
+:::
+
+```text title="1M strings: sort and equality scan against a Vec<u8> baseline (Apple M-series)"
+data                               sort GStr ms  sort Vec ms   eq GStr ns    eq Vec ns
+short ids (≤12 B, inline)                    18           79         0.78         0.99
+random words 8–30 B                          38           78         0.50         1.36
+URLs with common 25-byte prefix             106           72         1.89         1.45
+```
+
+<ul> <li><strong>Short strings: sort 4.4× faster</strong> (everything compares inside the 16-byte handles, no pointer chasing). <strong>Random words: 2× faster to sort and 2.7× faster to filter by equality</strong> (the prefix settles most comparisons).</li> <li><strong>Common-prefix strings (URLs, paths, log lines with a shared header): <em>slower</em> than plain slices (106 vs 72 ms)</strong>: the 4-byte prefix never discriminates, so every comparison falls through to the arena, one extra indirection compared with a <code>Vec</code>'s direct pointer. This is the known weakness; systems answer with longer inline prefixes, or by <strong>sorting on a normalized key</strong> (a prefix of 8–16 bytes) first.</li> <li><strong>Correctness</strong>: 4 000 random strings over a two-letter alphabet with lengths straddling the 4 and 12 byte boundaries, plus embedded NULs (<code>"a" &lt; "a&#92;0" &lt; "a&#92;0b"</code>), compared against slice ordering and equality for ~120 000 pairs.</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A 16-byte <code>Copy</code> handle</strong> (<code>#[derive(Clone, Copy)]</code>) makes columns of strings plain <code>Vec&lt;GStr&gt;</code> that sort, hash and gather without ownership issues; the arena owns the bytes. Offsets (<code>u64</code>) instead of pointers keep the handle valid across arena reallocation and make a column trivially serializable.</li> <li><strong>Return borrowed slices from the arena</strong> in <code>rest()</code>; use a small scratch buffer for the inline case so both paths yield <code>&amp;[u8]</code> without allocating.</li> <li><strong>Big-endian integer compare as a memcmp</strong>: <code>u32::from_be_bytes(prefix).cmp(...)</code> compares four bytes in one instruction and is the reason the prefix is stored as bytes, not as a native integer.</li> <li>Arrow-compatible alternatives exist: arrow-rs' <strong><code>StringViewArray</code></strong> is exactly this layout (inline ≤ 12 bytes, 4-byte prefix + buffer index + offset otherwise).</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls when copying these architectures</b><ul> <li><strong>Shared-disk caches need a placement policy</strong>: round-robin file assignment destroys cache locality; random assignment lets two workers cache the same file.</li> <li><strong>Adaptive plans need statistics from the previous stage</strong>, so engines that pipeline across stages (Snowflake's push model) can't re-plan the same way; know which you are building.</li> <li><strong>Precompiled vs JIT is an organizational decision as much as a technical one</strong>: JIT needs tooling, caches, and a plan for compile latency; precompiled primitives need a <em>combinatorial</em> set of kernels (types × encodings × null-ness) and specialization logic.</li> <li><strong>Object-store behaviour</strong>: request latency (tens of ms), per-request cost, rate limits per prefix, eventual listing semantics (now strong on S3), and no atomic rename. Design the table format around <em>put-if-absent</em> and immutability.</li> <li><strong>Re-running a whole query on failure</strong> (Snowflake) is fine for short interactive queries; hour-long ETL needs stage-level retry and idempotent, deterministic tasks (Dremel).</li> <li><strong>Embedded vs service</strong>: DuckDB's in-process model makes zero-copy results possible <em>and</em> means a bug in your query can crash the application; isolate or process-separate when that matters.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Dremel: A Decade of Interactive SQL Analysis at Web Scale"
+url = "https://www.vldb.org/pvldb/vol13/p3461-melnik.pdf"
+
+[[sources]]
+title = "Photon: A Fast Query Engine for Lakehouse Systems"
+url = "https://dl.acm.org/doi/10.1145/3514221.3526054"
+
+[[sources]]
+title = "The Snowflake Elastic Data Warehouse"
+url = "https://dl.acm.org/doi/10.1145/2882903.2903741"
+
+[[sources]]
+title = "DuckDB: an Embeddable Analytical Database"
+url = "https://dl.acm.org/doi/10.1145/3299869.3320212"
+
+[[sources]]
+title = "Amazon Redshift Re-invented"
+url = "https://www.amazon.science/publications/amazon-redshift-re-invented"
+
+[[sources]]
+title = "Velox: Meta's Unified Execution Engine"
+url = "https://www.vldb.org/pvldb/vol15/p3372-pedreira.pdf"
+
+[[sources]]
+title = "Lakehouse"
+url = "https://www.cidrdb.org/cidr2021/papers/cidr2021_paper17.pdf"

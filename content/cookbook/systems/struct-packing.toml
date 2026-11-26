@@ -1,0 +1,40 @@
+title = "Struct layout"
+module = "Performance and systems"
+module_order = 7
+chapter = "Memory layout and allocation"
+chapter_order = 2
+order = 281
+kind = "recipe"
+lede = "Padding, field order, repr(C/packed/align), niches, bit-packing, and compile-time size checks."
+level = "intermediate"
+code = ["examples/perf/struct_packing.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>millions of small records (events, graph nodes, index entries)</li><li>wire formats</li><li>cache-friendly design</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>millions of small records: events</li><li>graph nodes</li><li>index entries</li><li>wire/file layouts</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Each field must sit at an address that is a multiple of its **alignment**, so the compiler inserts padding. Default `repr(Rust)` is free to **reorder** fields to minimise it; `repr(C)` keeps your order (needed for FFI/file layouts). `repr(packed)` removes padding but makes fields unaligned: you cannot take references to them (UB), only copy values out.
+
+`repr(align(N))` raises alignment. Smaller types mean more records per cache line. Check sizes at **compile** time with `const _: () = assert!(...)` so a refactor cannot silently double your memory.
+
+Read: <https://doc.rust-lang.org/reference/type-layout.html> and <https://nnethercote.github.io/perf-book/type-sizes.html>  (clippy lint: large_enum_variant)
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/reference/type-layout.html"
+url = "https://doc.rust-lang.org/reference/type-layout.html"
+
+[[sources]]
+title = "nnethercote.github.io/perf-book/type-sizes.html"
+url = "https://nnethercote.github.io/perf-book/type-sizes.html"

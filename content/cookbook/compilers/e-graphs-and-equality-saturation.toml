@@ -1,0 +1,74 @@
+title = "E-graphs and equality saturation"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Middle end and analysis"
+chapter_order = 5
+order = 624
+kind = "guide"
+lede = "egg, egglog, Cranelift's aegraph mid-end, Herbie · An answer to phase ordering"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>A rewrite like <code>x*2 → x&lt;&lt;1</code> destroys the original, so the order you apply rewrites in determines what you can find. An <b>e-graph</b> stores many equivalent programs at once. An <em>e-node</em> is an operator whose children are <em>e-classes</em>, and an e-class is a set of equivalent e-nodes. Applying a rewrite only <em>adds</em> an equality, by merging e-classes. <b>Equality saturation</b> applies all rules until nothing changes or a limit is reached. Then it <em>extracts</em> the cheapest program from the root e-class under a cost function.</p>
+
+<p>The machinery is a union-find over e-class IDs plus a hashcons from canonical e-nodes to e-classes. Merging two classes can make other e-nodes equal: if <code>a ≡ b</code>, then <code>f(a) ≡ f(b)</code>. <em>Congruence closure</em> restores this invariant. egg's key contribution is deferring that repair to a batch <em>rebuild</em> after each round of rewrites, which made the approach fast. <em>E-class analyses</em> attach lattice data to classes, such as a known constant value, so constant folding happens inside the e-graph.</p>
+
+```rust title="egg: rules and a custom cost model (egg 0.9)"
+use egg::{rewrite as rw, *};
+
+define_language! {
+    enum Math {
+        "+"  = Add([Id; 2]),
+        "*"  = Mul([Id; 2]),
+        "<<" = Shl([Id; 2]),
+        Num(i64),
+        Symbol(Symbol),
+    }
+}
+
+fn rules() -> Vec<Rewrite<Math, ()>> {
+    vec![
+        rw!("comm-add"; "(+ ?a ?b)" => "(+ ?b ?a)"),
+        rw!("comm-mul"; "(* ?a ?b)" => "(* ?b ?a)"),
+        rw!("add-0";    "(+ ?a 0)"  => "?a"),
+        rw!("mul-1";    "(* ?a 1)"  => "?a"),
+        rw!("mul-2";    "(* ?a 2)"  => "(<< ?a 1)"),
+    ]
+}
+
+/// Multiplication is expensive; shifts and adds are cheap.
+struct MachineCost;
+impl CostFunction<Math> for MachineCost {
+    type Cost = usize;
+    fn cost<C: FnMut(Id) -> usize>(&mut self, enode: &Math, mut costs: C) -> usize {
+        let op = match enode { Math::Mul(_) => 4, Math::Add(_) | Math::Shl(_) => 1, _ => 0 };
+        enode.fold(op, |sum, id| sum + costs(id))
+    }
+}
+
+fn main() {
+    let expr: RecExpr<Math> = "(* (+ x 0) 2)".parse().unwrap();
+    let runner = Runner::default().with_expr(&expr).run(&rules());
+    let (cost, best) = Extractor::new(&runner.egraph, MachineCost).find_best(runner.roots[0]);
+    println!("{best} (cost {cost})");     // (<< x 1) (cost 1)
+}
+```
+
+<div class="cb-g-tip"><h3>What can go wrong</h3> <ul> <li><b>Blowup.</b> Associativity and commutativity together generate an exponential number of equivalent terms. Always set node and iteration limits, and prefer rules that don't grow terms.</li> <li><b>Extraction.</b> Greedy bottom-up extraction is optimal for tree cost, but not when subterms are shared (DAG cost). Optimal DAG extraction is NP-hard, and ILP is the usual fallback.</li> <li><b>Side effects and control flow.</b> E-graphs model pure expressions. Cranelift's <em>aegraph</em> keeps side-effecting instructions in a normal CFG “skeleton” and only puts pure ops in an acyclic e-graph. It doesn't run to saturation; it applies rules eagerly as nodes are created. It then <em>elaborates</em> back into the CFG with scoped GVN, deciding where each pure value is computed.</li> </ul></div>
+
+<div class="cb-g-tip"><h3>Where it is used</h3> <p>Herbie improves floating-point accuracy. Tensat optimizes tensor graphs. Ruler synthesizes rewrite rules automatically. egglog combines e-graphs with Datalog so analyses and rewrites share one engine. Cranelift uses aegraphs in production for GVN, LICM-like placement and algebraic simplification.</p></div>
+"""
+
+[[sources]]
+title = "Willsey et al. 2021, “egg: Fast and Extensible Equality Saturation”"
+url = "https://arxiv.org/abs/2004.03082"
+
+[[sources]]
+title = "egraphs-good.github.io"
+url = "https://egraphs-good.github.io"
+
+[[sources]]
+title = "Chris Fallin's blog"
+url = "https://cfallin.org/blog/"

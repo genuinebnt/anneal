@@ -1,0 +1,70 @@
+title = "Structured concurrency on tokio"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Async Rust"
+chapter_order = 4
+order = 268
+kind = "recipe"
+lede = "CancellationToken tree, TaskTracker, fail-fast Scope, shutdown ordering."
+level = "advanced"
+code = ["examples/concurrency/structured_concurrency_cancellation.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>servers with graceful shutdown</li><li>fan-out/fan-in request handlers</li><li>anything that spawns tasks that must not leak</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+three small building blocks written from scratch (the production versions are `tokio_util::sync::CancellationToken`, `tokio_util::task::TaskTracker` and `tokio::task::JoinSet`), then composed:
+
+1. `CancellationToken`: a **tree**. `cancel()` marks the token and every descendant; `cancelled().await` completes once cancelled (immediately if already); `child()` makes a token cancelled by its parent but not vice versa; `drop_guard()` cancels when dropped (so an early `return`/`?`/panic still signals the others).
+2. `TaskTracker`: counts spawned tasks through a guard owned by the task future, so the count drops even when a task panics or is aborted before its first poll. `close()` then `wait()` returns when closed **and** count == 0.
+3. `Scope`: tasks spawned in a scope cannot outlive it. `join()` waits for all of them; the **first** error or panic cancels the scope's token (fail-fast) so siblings stop at their next cancellation point; after cancellation there is a **grace** period, then stragglers are aborted (counted as `forced`).
+
+   Dropping a scope without `join` aborts everything (JoinSet semantics). Real borrowing scopes (like `std::thread::scope`) are impossible for async without unsafe, hence `'static` futures plus a runtime guarantee of joining.
+
+   **Shutdown order** (servers): (1) stop accepting new work, (2) cancel in-flight work cooperatively, (3) drain with a **deadline**, (4) abort whatever is still running. Skipping (1) lets new work arrive during the drain; skipping (4) lets one stuck task hang the process forever.
+
+   Abort only takes effect at an `.await`: a task spinning in a synchronous loop, or blocked in a sync call, cannot be aborted: put cancellation points in long loops (`token.is_cancelled()` + `yield_now().await`) and use `spawn_blocking` plus a flag for blocking work. **Cleanup**: `Drop` cannot be async.
+
+   Do async cleanup in the cancelled branch (before returning) and keep a plain drop guard as the backstop for abort/panic. Both are demonstrated and counted.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Cancel safety** of every await used here (cancel-safe = dropping the future loses nothing):
+
+- `Notify::notified()`: safe, it only waits. Created **before** re-checking the flag so a `notify_waiters` between the check and the await is not missed (the future is registered at creation, not first poll).
+- `JoinSet::join_next*`: safe, a completed task is returned by the next call. `mpsc::Receiver::recv`: safe.
+- `tokio::time::sleep` / `timeout_at`: safe (timeout_at drops the inner future on expiry; that is our intent).
+- `JoinHandle` await: dropping a `JoinHandle` **detaches** the task, it does not cancel it.
+- A hand written `async fn` with two awaits holding locals is **not** cancel-safe (see async_cancel_safety).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>HTTP servers (stop the listener, let in-flight requests finish, then force close)</li><li>Kubernetes style SIGTERM handling</li><li>request fan-out with deadlines (first failure cancels the rest)</li><li>test harnesses that must not leak tasks between tests</li><li>supervisors in actor systems</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>tokio-util CancellationToken <a href="https://docs.rs/tokio-util/latest/tokio_util/sync/struct.CancellationToken.html" target="_blank" rel="noreferrer">https://docs.rs/tokio-util/latest/tokio_util/sync/struct.CancellationToken.html</a> and <a href="https://docs.rs/tokio-util" target="_blank" rel="noreferrer">https://docs.rs/tokio-util</a> and Tokio tutorial "Graceful Shutdown" <a href="https://tokio.rs/tokio/topics/shutdown" target="_blank" rel="noreferrer">https://tokio.rs/tokio/topics/shutdown</a> and Nathaniel J</li><li>Smith, "Notes on structured concurrency, or: Go statement considered harmful" (vorpus.org, 2018)</li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/tokio-util/latest/tokio_util/sync/struct.CancellationToken.html"
+url = "https://docs.rs/tokio-util/latest/tokio_util/sync/struct.CancellationToken.html"
+
+[[sources]]
+title = "docs.rs/tokio-util"
+url = "https://docs.rs/tokio-util"
+
+[[sources]]
+title = "tokio.rs/tokio/topics/shutdown"
+url = "https://tokio.rs/tokio/topics/shutdown"

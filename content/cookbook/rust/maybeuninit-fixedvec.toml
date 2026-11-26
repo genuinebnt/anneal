@@ -1,0 +1,46 @@
+title = "MaybeUninit and ManuallyDrop"
+module = "Rust language"
+module_order = 1
+chapter = "Unsafe and FFI"
+chapter_order = 7
+order = 62
+kind = "recipe"
+lede = "An inline, heap-free `FixedVec<T, N>`."
+level = "advanced"
+code = ["examples/unsafe_ffi/maybeuninit_fixedvec.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>no-alloc / embedded code</li><li>small-vector optimisation</li><li>understanding how Vec and arrays are built</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+`[T; N]` must be fully initialised, so a growable inline buffer needs `[MaybeUninit<T>; N]`: memory that may hold garbage and that the compiler will never drop or read for you. The container's **invariant** is the whole proof: slots `0..len` are initialised, slots `len..N` are not. Every unsafe block below just cites that invariant.
+
+`Drop` must drop exactly the `0..len` prefix. `ManuallyDrop<T>` suppresses the automatic drop of a field, which lets a `Drop` impl (or a consuming method) move a field out exactly once without a double drop. `mem::forget` is safe (leaking is not UB) and skips Drop.
+
+`std::array::from_fn` is the **safe** way to build `[T; N]` from an index closure; MaybeUninit is the manual version. Panic safety: if one element's `drop` panics, `drop_in_place` on a slice still drops the remaining elements.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>small-vector crates (smallvec/arrayvec style)</li><li>ring buffers on embedded targets</li><li>arena slots</li><li>the guts of <code>Vec</code></li><li><code>Option</code>-free object pools</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/mem/union.MaybeUninit.html> and <https://doc.rust-lang.org/nomicon/>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/mem/union.MaybeUninit.html"
+url = "https://doc.rust-lang.org/std/mem/union.MaybeUninit.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon"
+url = "https://doc.rust-lang.org/nomicon/"

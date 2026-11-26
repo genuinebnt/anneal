@@ -1,0 +1,217 @@
+title = "Distributed databases I"
+module = "Distributed systems"
+module_order = 10
+chapter = "Time, partitioning and replication"
+chapter_order = 1
+order = 478
+kind = "guide"
+lede = "parallel vs distributed · shared-nothing / disk / memory · partitioning · consistent and rendezvous hashing · coordinators · federation"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>A distributed DBMS</strong> splits one logical database across physical resources, mostly invisibly to the application, using single-node techniques for transactions and queries. Goals: <strong>fault tolerance</strong> (no single node takes the system down) and <strong>scalability</strong> (data and load beyond one machine).</li> <li><strong>Parallel vs distributed</strong>: parallel = nodes close together on a fast reliable fabric, communication cost small, so protocols may ignore crashes and drops. Distributed = nodes may be far apart on slow, unreliable networks, so <strong>crashes, delays and lost packets are part of every protocol</strong>.</li> <li><strong>Architectures</strong> (what CPUs share): <strong>shared everything</strong> (one node; most common), <strong>shared nothing</strong> (own CPU, memory, disk; commodity servers; best efficiency, but adding capacity means physically moving data and transactions need cross-node coordination; <em>common, decreasing</em>), <strong>shared disk</strong> (compute nodes over a common storage service, small local caches; compute and storage scale independently, cloud and lakehouse style; nodes must message each other about modified cached data; <em>common, increasing</em>), <strong>shared memory</strong> (common address space over a fast interconnect; rare in practice).</li> <li><strong>Design questions</strong>: how does an application find data and where does it send queries? Push the query to the data or pull the data to the query? How is data divided? How is correctness ensured? Goal: <strong>data transparency</strong>, so a query that works on one node works unchanged on many.</li> <li><strong>Partitioning</strong> (sharding) aims to maximise <strong>single-node transactions</strong>; a <strong>distributed transaction</strong> needs expensive coordination. Schemes: <em>naive</em> (one table per node; skews and can't join), <em>vertical</em> (split columns, keep a key for reconstruction), <strong>horizontal</strong> (split rows by a <strong>partitioning key</strong> using hash, range or predicate). <strong>Logical</strong> partitioning = a node <em>is responsible for</em> keys but doesn't store them (shared disk); <strong>physical</strong> = it stores them (shared nothing).</li> <li><strong>Changing the cluster size</strong>: <code>hash(key) % N</code> reshuffles almost everything. <strong>Consistent hashing</strong>: nodes and keys on a ring, a key belongs to the next node clockwise; adding or removing a node moves only ≈ 1/N of the keys, and a replication factor <em>k</em> puts each key on the <em>k</em> nearest nodes. <strong>Rendezvous (highest-random-weight) hashing</strong>: score every (key, node) pair, pick the highest; no ring; consistent hashing is a specialization.</li> <li><strong>Distributed concurrency control</strong>: a <strong>centralized coordinator</strong> (a "traffic cop" or middleware that grants locks and decides commit) vs a <strong>decentralized</strong> protocol (client talks to any node; that node leads the transaction and drives commit).</li> <li><strong>Federated databases</strong> glue <em>different</em> DBMSs into one logical system through connectors and middleware: differing data models and query languages, hard-to-optimize queries, lots of copying; common in large enterprises.</li> </ul>
+"""
+
+[[sections]]
+heading = "Where does a key live? Placement schemes, measured"
+body = """
+<p>A placement function maps <code>key → node</code>. The questions are how <strong>evenly</strong> it spreads keys, how much <strong>moves</strong> when nodes join or leave, how much a <strong>lookup</strong> costs, and whether it handles <strong>hot ranges</strong>. The reference implements five: hash-mod-N, a consistent-hash <strong>ring with virtual nodes</strong>, <strong>rendezvous</strong>, <strong>jump consistent hash</strong>, and <strong>range</strong> maps.</p>
+
+:::deeper Reference: placement schemes (mod-N, ring with vnodes, rendezvous, jump hash, range map)
+```rust title="src/dist/partition.rs"
+//! Data placement: which node owns a key, and how much moves when the cluster changes.
+use std::collections::HashSet;
+
+/// splitmix64 finalizer: a fast, well-mixed 64-bit hash for integer keys.
+pub fn hash64(x: u64, seed: u64) -> u64 {
+    let mut z = x.wrapping_add(seed).wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+pub trait Placement {
+    fn node(&self, key: u64) -> usize;
+    /// `k` distinct nodes responsible for `key`, primary first.
+    fn replicas(&self, key: u64, k: usize) -> Vec<usize>;
+}
+
+/// `hash(key) % n`: perfectly balanced, and reshuffles almost everything when `n` changes.
+pub struct ModN { pub n: usize }
+impl Placement for ModN {
+    fn node(&self, key: u64) -> usize { (hash64(key, 0) % self.n as u64) as usize }
+    fn replicas(&self, key: u64, k: usize) -> Vec<usize> { (0..k.min(self.n)).map(|i| (self.node(key) + i) % self.n).collect() }
+}
+
+/// Consistent hashing: nodes (as many *virtual nodes* each) sit on a 2⁶⁴ ring; a key belongs to the next point clockwise.
+pub struct Ring { points: Vec<(u64, usize)> }
+impl Ring {
+    pub fn new(nodes: &[usize], vnodes: usize) -> Self {
+        let mut r = Ring { points: vec![] };
+        for &n in nodes { r.add(n, vnodes); }
+        r
+    }
+    pub fn add(&mut self, node: usize, vnodes: usize) {
+        for v in 0..vnodes { self.points.push((hash64(((node as u64) << 32) | v as u64, 7), node)); }
+        self.points.sort_unstable();
+    }
+    pub fn remove(&mut self, node: usize) { self.points.retain(|p| p.1 != node); }
+    fn start(&self, key: u64) -> usize {
+        let h = hash64(key, 0);
+        let i = self.points.partition_point(|p| p.0 < h);
+        if i == self.points.len() { 0 } else { i }                 // wrap around the ring
+    }
+}
+impl Placement for Ring {
+    fn node(&self, key: u64) -> usize { self.points[self.start(key)].1 }
+    fn replicas(&self, key: u64, k: usize) -> Vec<usize> {
+        let (mut out, mut i) = (Vec::new(), self.start(key));
+        for _ in 0..self.points.len() {
+            let n = self.points[i].1;
+            if !out.contains(&n) { out.push(n); if out.len() == k { break; } }
+            i = (i + 1) % self.points.len();                         // walk clockwise, skipping repeats of the same node
+        }
+        out
+    }
+}
+
+/// Rendezvous (highest-random-weight) hashing: score every node, pick the best. No ring, no state, O(n) per lookup.
+pub struct Rendezvous { pub nodes: Vec<usize> }
+impl Placement for Rendezvous {
+    fn node(&self, key: u64) -> usize { self.replicas(key, 1)[0] }
+    fn replicas(&self, key: u64, k: usize) -> Vec<usize> {
+        let mut s: Vec<(u64, usize)> = self.nodes.iter().map(|&n| (hash64(key, n as u64 + 1), n)).collect();
+        s.sort_unstable_by(|a, b| b.cmp(a));
+        s.into_iter().take(k).map(|x| x.1).collect()
+    }
+}
+
+/// Lamping & Veach's jump consistent hash: O(log n), no memory, buckets can only be added/removed at the end.
+pub fn jump_hash(mut key: u64, buckets: u32) -> u32 {
+    let (mut b, mut j) = (-1i64, 0i64);
+    while j < buckets as i64 {
+        b = j;
+        key = key.wrapping_mul(2862933555777941757).wrapping_add(1);
+        j = ((b + 1) as f64 * (1u64 << 31) as f64 / ((key >> 33) + 1) as f64) as i64;
+    }
+    b as u32
+}
+
+/// Range partitioning: `splits[i]` is the first key of range `i + 1`. Good for scans, bad for sequential inserts.
+pub struct RangeMap { pub splits: Vec<u64> }
+impl Placement for RangeMap {
+    fn node(&self, key: u64) -> usize { self.splits.partition_point(|&s| s <= key) }
+    fn replicas(&self, key: u64, k: usize) -> Vec<usize> { let n = self.splits.len() + 1; (0..k.min(n)).map(|i| (self.node(key) + i) % n).collect() }
+}
+
+/// Fraction of `keys` whose owner differs between two placements.
+pub fn moved(a: &dyn Placement, b: &dyn Placement, keys: u64) -> f64 {
+    (0..keys).filter(|&k| a.node(k) != b.node(k)).count() as f64 / keys as f64
+}
+
+/// max load / mean load across `n` nodes.
+pub fn imbalance(p: &dyn Placement, n: usize, keys: u64) -> f64 {
+    let mut c = vec![0u64; n];
+    for k in 0..keys { c[p.node(k)] += 1; }
+    *c.iter().max().unwrap() as f64 / (keys as f64 / n as f64)
+}
+
+pub fn distinct(v: &[usize]) -> bool { v.iter().collect::<HashSet<_>>().len() == v.len() }
+```
+:::
+
+```text title="fraction of 400 000 keys that change owner"
+scheme                      10 → 11       10 → 9   (ideal: 1/11 = 9.1% and 1/10 = 10%)
+hash mod N                    90.8%        89.9%
+consistent (128 vnodes)         7.6%         8.9%
+rendezvous                     9.1%        10.0%
+jump hash                      9.1%        10.0%
+```
+
+<ul> <li><strong>Mod-N moves 9 of every 10 keys</strong> when a node is added: a rebalance is a full reshuffle. The other three move only what must move: the new node's fair share (and only <em>to</em> the new node: the test asserts every moved key lands on it).</li> <li>Ring, rendezvous and jump hashing are exact in expectation; the ring's 7.6% is the variance of where 128 virtual points happened to fall.</li> </ul>
+
+```text title="balance: max node load ÷ mean load (10 nodes)"
+  vnodes  max load / mean
+       1            2.352
+       4            1.395
+      16            1.351
+      64            1.171
+     256            1.089
+    1024            1.039
+   mod N            1.005
+     HRW            1.003
+```
+
+<p>A ring with one point per node is badly unbalanced (<strong>2.35× the average on the busiest node</strong>). <strong>Virtual nodes</strong> fix it (1.04× at 1 024), at the cost of ring size and slower membership changes; they also let a bigger machine own more points. Rendezvous is balanced for free but pays at lookup:</p>
+
+```text title="lookup cost, 2M lookups"
+hash mod N                   0.7 ns/lookup
+jump hash                    8.6 ns/lookup
+ring, 1280 points            8.0 ns/lookup
+rendezvous, 10 nodes        84.9 ns/lookup
+```
+
+<p>Rendezvous costs O(nodes) hashes (85 ns at 10 nodes; use it for small node counts or for <em>choosing among a few candidates</em>); the ring costs a binary search; jump hash is O(log N) with no memory but only supports growing and shrinking <strong>at the end</strong> (bucket numbers, not named nodes).</p>
+
+```text title="sequential inserts: range vs hash placement"
+200k sequential inserts: busiest range-partition 100%, busiest hash-partition 16%
+```
+
+<p><strong>Range partitioning keeps neighbours together</strong> (good for range scans and for splitting hot ranges), but time-ordered or auto-increment keys send every insert to the last range: a <strong>hot spot</strong> that no amount of hardware fixes. Hashing spreads writes but turns range scans into scatter-gather. Real systems combine both: hash a prefix (tenant id), range the rest; or range-partition and <strong>split hot ranges automatically</strong> (Spanner, CockroachDB, TiKV, HBase).</p>
+
+<aside data-call="testing"><b>Properties to test for any placement</b><ul> <li><strong>Determinism</strong>: same key, same map ⇒ same node on every client.</li> <li><strong>Minimal movement</strong>: after adding node <em>x</em>, every moved key moved <em>to x</em> (and removing <em>x</em> moves only <em>x</em>'s keys).</li> <li><strong>Balance</strong>: max/mean load within a bound for uniform <em>and</em> sequential keys.</li> <li><strong>Replica sets</strong>: <em>k</em> distinct nodes, primary first, and after removing any one node every key still has <em>k − 1</em> live replicas.</li> <li><strong>Agreement</strong>: two clients with the same membership list built in a different <em>order</em> compute identical maps (sort or use stable ids).</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "The system around the function"
+body = """
+<p>A placement function is a small part of a distributed DBMS's <em>routing</em>:</p>
+
+<ul> <li><strong>Metadata/directory</strong>: for range and dynamic placement, a replicated map <code>range → (nodes, leader)</code> lives in a metadata service (Spanner's placement driver, TiDB PD, CockroachDB meta ranges, Vitess topology, Citus metadata). Clients cache it and are <em>redirected</em> when stale.</li> <li><strong>Where do queries go?</strong> (a) <strong>client-side routing</strong> with a cached map, (b) a <strong>stateless proxy/router</strong> (Vitess <code>vtgate</code>, Citus coordinator, ProxySQL), (c) <strong>any node</strong> accepts and forwards (Cassandra, CockroachDB gateway nodes).</li> <li><strong>Resharding</strong>: split, merge and move ranges <em>online</em>: copy a snapshot, stream the delta from the log, flip ownership atomically, drain old readers. Rate-limit it; rebalancing competes with foreground traffic.</li> <li><strong>Secondary indexes</strong>: <strong>local</strong> (each shard indexes its own rows: writes stay single-shard, lookups scatter to all shards) vs <strong>global</strong> (index partitioned by the indexed column: lookups hit one shard, writes become distributed transactions).</li> <li><strong>Co-location</strong>: put rows that are <em>joined or updated together</em> on the same shard (TPC-C partitions everything by warehouse id, so most transactions are single-node). <strong>Choosing the partition key is the most consequential design decision in a sharded system.</strong></li> <li><strong>Skew</strong> ("celebrity" keys): replicate hot rows, split them (salting <code>key#0..key#k</code>), cache, or throttle; a hash function can't fix a single hot key.</li> </ul>
+
+<aside data-call="production"><b>Placement and routing in real systems</b><ul> <li><strong>Dynamo / Cassandra / Riak</strong>: consistent-hash ring with virtual nodes and <em>k</em> replicas on the clockwise successors; gossip membership.</li> <li><strong>Vitess, Citus</strong>: hash or range by a <em>sharding key</em> plus a routing layer; cross-shard queries are scatter-gather.</li> <li><strong>Spanner, CockroachDB, TiKV, YugabyteDB</strong>: ordered key space split into <strong>ranges</strong> of ~64–512 MB, each a Raft/Paxos group; splits and merges are automatic and the metadata is itself a range.</li> <li><strong>Redis Cluster</strong>: 16 384 fixed hash slots assigned to nodes (a fixed-bucket variant of consistent hashing); <code>CRC16(key) mod 16384</code>.</li> <li><strong>Rendezvous hashing</strong> was invented for cache/CDN request routing and is used for picking replicas or cache nodes among a small candidate set; load balancers such as Google's Maglev use a related lookup-table design.</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "Distributed concurrency control: who coordinates?"
+body = """
+```text
+centralized                                       decentralized
+ client ─► coordinator ─► partitions               client ─► any node (becomes the leader of this txn)
+           (lock grants, commit decision)                      └─► other partitions; leader drives commit
+ + simple global view / ordering                    + no single bottleneck or failure point
+ − bottleneck and single point of failure           − harder: every node must run the commit protocol ([L24](#l24))
+```
+
+<p>The centralized coordinator is a <strong>TP monitor</strong> or router middleware in old systems (CICS, Tuxedo), the <strong>timestamp oracle</strong> in Percolator-style systems (TiDB), and the transaction manager in Calvin-style deterministic systems. Decentralized designs (Spanner, CockroachDB, Cassandra's lightweight transactions) pick a coordinator per transaction, often the node that owns the first key.</p>
+"""
+
+[[sections]]
+heading = "Federation"
+body = """
+<p>A <strong>federated</strong> system presents several heterogeneous systems as one: PostgreSQL's foreign data wrappers (<code>postgres_fdw</code>), Trino/Presto connectors, Dremio, Apache Drill, Teiid. The planner must <em>push down</em> filters and aggregates to sources that support them, learn little about remote statistics, and cannot use remote indexes freely. Expect to pay in data movement and unpredictable plans, and use federation for <strong>integration</strong>, not for performance-critical OLTP.</p>
+"""
+
+[[sources]]
+title = "Dynamo: Amazon's Highly Available Key-value Store"
+url = "https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf"
+
+[[sources]]
+title = "Consistent Hashing and Random Trees"
+url = "https://dl.acm.org/doi/10.1145/258533.258660"
+
+[[sources]]
+title = "A Fast, Minimal Memory, Consistent Hash Algorithm"
+url = "https://arxiv.org/abs/1406.2294"
+
+[[sources]]
+title = "Consistent Hashing with Bounded Loads"
+url = "https://arxiv.org/abs/1608.01350"
+
+[[sources]]
+title = "Spanner"
+url = "https://research.google/pubs/pub39966/"

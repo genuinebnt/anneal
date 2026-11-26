@@ -1,0 +1,32 @@
+title = "Joinset semaphore"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Threads, locks and channels"
+chapter_order = 1
+order = 245
+kind = "recipe"
+lede = "bounded concurrency with JoinSet + Semaphore, and PROVING the bound."
+level = "intermediate"
+code = ["examples/concurrency/joinset_semaphore.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+concurrent executor stage (later).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+bounded concurrency in crawlers, batch processors and API clients: Semaphore + JoinSet with a provable limit.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: spawn everything into a `JoinSet`, but each task must hold a semaphore permit to run. The test is an invariant: track in-flight count with atomics and assert max_seen &lt;= limit. Real code: tokio's sync primitives -> <https://github.com/tokio-rs/tokio/tree/master/tokio/src/sync>
+"""
+
+[[sources]]
+title = "github.com/tokio-rs/tokio/tree/master/tokio/src/sync"
+url = "https://github.com/tokio-rs/tokio/tree/master/tokio/src/sync"

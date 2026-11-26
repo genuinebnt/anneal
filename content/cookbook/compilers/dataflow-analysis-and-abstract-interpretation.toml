@@ -1,0 +1,155 @@
+title = "Dataflow analysis and abstract interpretation"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Middle end and analysis"
+chapter_order = 5
+order = 620
+kind = "guide"
+lede = "Liveness, reaching definitions, constant propagation, borrow checking, static analyzers · rustc rustc_mir_dataflow"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>A dataflow analysis computes a fact at every program point. The ingredients:</p>
+
+<ul> <li>A <b>lattice</b> of facts, with a partial order ⊑, a join ⊔ and a bottom ⊥.</li> <li>A <b>transfer function</b> per block or instruction, which must be <em>monotone</em>: more input information never produces less output.</li> <li>A <b>direction</b>, forward or backward.</li> </ul>
+
+<p>Starting from ⊥ everywhere and applying transfer functions until nothing changes reaches the least fixed point. This terminates if the lattice has finite height. The result is the <em>maximal fixed point</em> (MFP) solution. The ideal answer is the <em>meet over all paths</em> (MOP). MFP equals MOP when the transfer functions are distributive (Kam–Ullman), as bit-vector problems are. Constant propagation isn't distributive, so MFP is a safe approximation of MOP.</p>
+
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Analysis</th><th>Direction</th><th>Fact</th><th>Join</th><th>Used for</th></tr></thead> <tbody> <tr><td>Liveness</td><td>backward</td><td>set of values live</td><td>∪</td><td>register allocation, dead store elimination</td></tr> <tr><td>Reaching definitions</td><td>forward</td><td>set of defs</td><td>∪</td><td>use-def chains without SSA</td></tr> <tr><td>Available expressions</td><td>forward</td><td>set of exprs</td><td>∩</td><td>CSE, PRE</td></tr> <tr><td>Very busy expressions</td><td>backward</td><td>set of exprs</td><td>∩</td><td>code hoisting</td></tr> <tr><td>Constant propagation</td><td>forward</td><td>var → ⊤ | const | ⊥</td><td>pointwise</td><td>folding, branch elimination</td></tr> <tr><td>Definite initialization</td><td>forward</td><td>set of initialized vars</td><td>∩</td><td>“use of possibly uninitialized” errors</td></tr> <tr><td>Borrows in scope (rustc)</td><td>forward</td><td>set of loans</td><td>∪</td><td>borrow checking</td></tr> </tbody> </table></div>
+
+```rust title="A generic worklist solver"
+use std::collections::VecDeque;
+
+pub trait JoinSemiLattice: Clone + PartialEq {
+    fn join(&self, other: &Self) -> Self;
+}
+
+pub trait Analysis {
+    type Fact: JoinSemiLattice;
+    const FORWARD: bool;
+    fn bottom(&self) -> Self::Fact;
+    /// Fact at the entry block's start (forward) or at exit blocks' end (backward).
+    fn boundary(&self) -> Self::Fact;
+    fn transfer(&self, b: Block, input: &Self::Fact) -> Self::Fact;
+}
+
+/// Returns the fact flowing *into* each block (at its start for forward
+/// analyses, at its end for backward ones).
+pub fn solve<A: Analysis>(cfg: &Cfg, a: &A) -> Vec<A::Fact> {
+    let n = cfg.num_blocks();
+    let mut input = vec![a.bottom(); n];
+    let mut output = vec![a.bottom(); n];
+    // RPO for forward problems (predecessors first), postorder for backward ones.
+    let order = if A::FORWARD { cfg.reverse_postorder() } else { cfg.postorder() };
+    let mut work: VecDeque<Block> = order.into_iter().collect();
+    let mut queued = vec![true; n];
+
+    while let Some(b) = work.pop_front() {
+        queued[b.index()] = false;
+        let (ins, outs) = if A::FORWARD { (cfg.preds(b), cfg.succs(b)) } else { (cfg.succs(b), cfg.preds(b)) };
+        let at_boundary = if A::FORWARD { b == cfg.entry() } else { cfg.succs(b).is_empty() };
+        let mut inp = if at_boundary { a.boundary() } else { a.bottom() };
+        for p in ins { inp = inp.join(&output[p.index()]); }
+        let out = a.transfer(b, &inp);
+        input[b.index()] = inp;
+        if out != output[b.index()] {
+            output[b.index()] = out;
+            for s in outs {
+                if !queued[s.index()] { queued[s.index()] = true; work.push_back(s); }
+            }
+        }
+    }
+    input
+}
+```
+
+```rust title="Liveness as an instance (bitsets from the fixedbitset crate)"
+use fixedbitset::FixedBitSet;
+
+impl JoinSemiLattice for FixedBitSet {
+    fn join(&self, o: &Self) -> Self { let mut r = self.clone(); r.union_with(o); r }
+}
+
+pub struct Liveness<'f> { pub f: &'f Function }
+
+impl Analysis for Liveness<'_> {
+    type Fact = FixedBitSet;
+    const FORWARD: bool = false;
+    fn bottom(&self) -> FixedBitSet { FixedBitSet::with_capacity(self.f.values.len()) }
+    fn boundary(&self) -> FixedBitSet { self.bottom() }            // nothing live after return
+    fn transfer(&self, b: Block, live_out: &FixedBitSet) -> FixedBitSet {
+        let mut live = live_out.clone();
+        for &i in self.f.blocks[b].insts.iter().rev() {
+            let d = &self.f.insts[i];
+            if let Some(r) = d.result { live.set(r.index(), false); }          // kill the def
+            for v in d.args.iter().chain(d.targets.iter().flat_map(|t| &t.args)) {
+                live.insert(v.index());                                       // gen each use
+            }
+        }
+        for p in &self.f.blocks[b].params { live.set(p.index(), false); }    // params are defs
+        live
+    }
+}
+```
+"""
+
+[[sections]]
+heading = "Abstract interpretation"
+body = """
+<p>Abstract interpretation (Cousot and Cousot) generalizes dataflow analysis. Run the program on an <em>abstract domain</em> that over-approximates sets of concrete states. A Galois connection between concrete and abstract states makes soundness a theorem. Domains trade precision for cost:</p>
+
+<ul> <li>Signs and constants: cheap, finite height.</li> <li>Intervals: infinite height, so they need widening.</li> <li>Octagons (<code>±x ± y ≤ c</code>): cubic.</li> <li>Polyhedra: exponential in the worst case.</li> </ul>
+
+<p>For infinite-height domains, <b>widening</b> (∇) forces convergence by jumping to a bound, usually infinity. <b>Narrowing</b> (Δ) then recovers some precision. For <code>i = 0; while (i &lt; 100) i = i + 1;</code>, the loop head's interval grows [0,0], [0,1], [0,2], and so on. Widening jumps it to [0,+∞]. Narrowing with the guard <code>i &lt; 100</code> gives [0,100] at the exit.</p>
+
+```rust title="Interval domain with widening"
+/// Bounds use i64::MIN / i64::MAX as −∞ / +∞. (Production code uses an explicit
+/// infinity type so that arithmetic on infinities stays exact.)
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Itv { Bot, Range(i64, i64) }
+
+impl Itv {
+    pub fn join(self, o: Itv) -> Itv {
+        match (self, o) {
+            (Itv::Bot, x) | (x, Itv::Bot) => x,
+            (Itv::Range(a, b), Itv::Range(c, d)) => Itv::Range(a.min(c), b.max(d)),
+        }
+    }
+    /// Any bound that grew goes straight to infinity, so ascending chains stop.
+    pub fn widen(self, next: Itv) -> Itv {
+        match (self, next) {
+            (Itv::Bot, x) | (x, Itv::Bot) => x,
+            (Itv::Range(a, b), Itv::Range(c, d)) => Itv::Range(
+                if c < a { i64::MIN } else { a },
+                if d > b { i64::MAX } else { b },
+            ),
+        }
+    }
+    /// Refine with a branch condition `x < k` on the true edge.
+    pub fn assume_lt(self, k: i64) -> Itv {
+        match self {
+            Itv::Range(a, b) if a < k => Itv::Range(a, b.min(k - 1)),
+            _ => Itv::Bot,                                  // branch is unreachable
+        }
+    }
+    pub fn add(self, o: Itv) -> Itv {
+        match (self, o) {
+            (Itv::Range(a, b), Itv::Range(c, d)) => Itv::Range(a.saturating_add(c), b.saturating_add(d)),
+            _ => Itv::Bot,
+        }
+    }
+}
+```
+
+<div class="cb-g-tip"><h3>Interprocedural analysis</h3> <p>There are three main approaches. <em>Inline</em> callees: exact, but it blows up. <em>Summaries</em>: analyze each function once into a transfer function over its parameters, bottom-up over the call graph's SCCs. <em>Context sensitivity</em>: analyze a function separately per call string (k-CFA) or per receiver object (object sensitivity). IFDS (Reps, Horwitz, Sagiv) solves distributive interprocedural problems exactly as graph reachability over an “exploded supergraph”, in O(ED³). Taint analyzers use it.</p></div>
+
+<div class="cb-g-tip"><h3>Pointer and alias analysis</h3> <p>Andersen's analysis is inclusion-based: <code>p = &amp;x</code> gives <code>{x} ⊆ pts(p)</code>, and <code>p = q</code> gives <code>pts(q) ⊆ pts(p)</code>. It's cubic, and it scales with online cycle elimination (Hardekopf–Lin). Steensgaard's analysis is unification-based. It is almost linear, using union-find, and less precise. Rust's reference types give the compiler aliasing facts for free: <code>&amp;mut T</code> becomes LLVM <code>noalias</code>.</p></div>
+
+<div class="cb-g-tip"><h3>Datalog as an analysis language</h3> <p>Many analyses are a few Datalog rules. <code>pts(P, O) :- alloc(P, O).</code> and <code>pts(P, O) :- assign(P, Q), pts(Q, O).</code> A Datalog engine does the fixpoint with semi-naive evaluation and indexes. Doop (Java points-to in Soufflé), CodeQL and Polonius (Rust's next borrow checker, using <code>datafrog</code>) work this way. In Rust, <code>ascent</code> and <code>crepe</code> embed Datalog as macros.</p></div>
+"""
+
+[[sources]]
+title = "Møller and Schwartzbach, Static Program Analysis"
+url = "https://cs.au.dk/~amoeller/spa/"

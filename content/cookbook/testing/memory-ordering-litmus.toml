@@ -1,0 +1,71 @@
+title = "Memory-ordering litmus tests with real threads"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Methods: memory-ordering bugs"
+chapter_order = 5
+order = 145
+kind = "recipe"
+lede = "Message passing, store buffering, spinlock, fences."
+level = "advanced"
+code = ["examples/concurrency/memory_ordering_litmus.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+lock-free code, understanding what `Ordering` buys you, reviewing `unsafe` synchronization. (unsafe part: also try `cargo +nightly miri run --example memory_ordering_litmus`, reduce iterations first)
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+A litmus test is a tiny multi-threaded program whose possible outcomes reveal the memory model. (a) **message passing**: writer `data=42; flag.store(Release)`; reader `while !flag.load(Acquire){}; read data`. The Release store "publishes" everything before it; the Acquire load that sees it "imports" it.
+
+Stale data is forbidden. (b) **store buffering**: T1 `x=1; r1=y`, T2 `y=1; r2=x`. Outcome r1==0&amp;&amp;r2==0 means each thread's store was still in its store
+
+```text
+buffer when the other loaded. Release/Acquire does NOT forbid it (it orders only against the SAME location's pairing);
+only SeqCst (single total order) does. The Relaxed count is hardware-dependent: printed, never asserted.
+```
+
+(c) **spinlock**: `compare_exchange(Acquire)` to lock, `store(Release)` to unlock: the critical sections form a happens-before chain, so a **non**-atomic counter in an `UnsafeCell` is race free. (d) **fence**: `fence(SeqCst)` between the store and the load gives the same SB guarantee as SeqCst accesses.
+
+```text
+Ordering   | guarantees                                           | x86-64 (TSO)            | ARMv8
+```
+
+&#45;----------&#124;------------------------------------------------------&#124;-------------------------&#124;---------------------------
+
+```text
+Relaxed    | atomicity only, no ordering vs other locations       | plain mov               | plain ldr/str
+Acquire    | later ops cannot move before this load               | plain mov (free)        | ldar
+Release    | earlier ops cannot move after this store             | plain mov (free)        | stlr
+AcqRel     | both, for read-modify-write (e.g. swap, CAS)         | lock-prefixed op        | ldaxr/stlxr or LSE casal
+SeqCst     | Acq/Rel + one global total order of all SeqCst ops   | xchg/mfence on stores   | ldar/stlr (+ dmb in places)
+```
+
+x86 already orders everything except store->load, which is why SB shows up there with Relaxed and why bugs in Release/Acquire code often hide on x86 and appear on ARM.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>mutexes/spinlocks</li><li>reference counts (Arc uses Release on decrement + Acquire fence)</li><li><code>Once</code></li><li>SPSC queues (spsc_ring_buffer)</li><li>seqlocks. Loom (<a href="https://github.com/tokio-rs/loom" target="_blank" rel="noreferrer">https://github.com/tokio-rs/loom</a>) model-checks all legal interleavings and reorderings of such code</li><li>use it in CI for lock-free structures</li><li>since running threads in a loop can never prove absence of a bug</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://marabos.nl/atomics/memory-ordering.html" target="_blank" rel="noreferrer">https://marabos.nl/atomics/memory-ordering.html</a></li><li><a href="https://doc.rust-lang.org/nomicon/atomics.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/nomicon/atomics.html</a></li></ul>
+"""
+
+[[sources]]
+title = "github.com/tokio-rs/loom"
+url = "https://github.com/tokio-rs/loom"
+
+[[sources]]
+title = "marabos.nl/atomics/memory-ordering.html"
+url = "https://marabos.nl/atomics/memory-ordering.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/atomics.html"
+url = "https://doc.rust-lang.org/nomicon/atomics.html"

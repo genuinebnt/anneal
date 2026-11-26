@@ -1,0 +1,48 @@
+title = "Measuring properly"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Methods: benchmarking and profiling"
+chapter_order = 6
+order = 148
+kind = "recipe"
+lede = "Warm-up, many samples, median, `black_box`, release mode."
+level = "intermediate"
+code = ["examples/perf/bench_harness.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+stage 8 and every "is this faster?" question.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>every performance question: warm-up</li><li>median</li><li>black_box</li><li>release mode</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Rules: (1) **always** benchmark with --release; (2) run the code several times and report the **median** (not one run); (3) wrap inputs/outputs in `black_box` so the optimiser cannot delete the work; (4) change one thing at a time; (5) measure before optimising.
+
+For statistical rigour use criterion <https://github.com/bheisler/criterion.rs> and divan <https://github.com/nvzqz/divan> ; to see **where** time goes use flamegraphs (cargo flamegraph).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://nnethercote.github.io/perf-book/benchmarking.html>
+"""
+
+[[sources]]
+title = "github.com/bheisler/criterion.rs"
+url = "https://github.com/bheisler/criterion.rs"
+
+[[sources]]
+title = "github.com/nvzqz/divan"
+url = "https://github.com/nvzqz/divan"
+
+[[sources]]
+title = "nnethercote.github.io/perf-book/benchmarking.html"
+url = "https://nnethercote.github.io/perf-book/benchmarking.html"

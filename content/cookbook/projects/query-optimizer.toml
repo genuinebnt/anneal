@@ -1,0 +1,62 @@
+title = "A cost-based query optimizer in miniature"
+module = "Complete projects"
+module_order = 13
+chapter = "Capstones"
+chapter_order = 1
+order = 654
+kind = "capstone"
+lede = "Statistics -> cardinality estimates -> rewrite rules -> physical costing -> join ordering -> Volcano execution."
+level = "capstone"
+code = ["examples/capstones/query_optimizer.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>understanding <strong>explain</strong> output</li><li>why a planner picks a bad plan</li><li>building a planner for an embedded engine or a DSL</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+the pipeline every cost-based optimizer shares, in one standalone file (std only, seeded xorshift, deterministic): 1 **catalog** + **statistics**   row counts, NDV, min/max, null fraction, equi-height histograms, most-common-values (MCV) from generated data. 2 **cardinality estimation** selectivity for = &lt; range IN AND(independence) OR(inclusion-exclusion), join sel 1/max(ndv);
+
+Compared with **true** counts (q-error). 3 **logical plan** + **rules**   a rule engine run to a FIXPOINT: constant folding, conjunction splitting, predicate pushdown, join extraction, projection pruning. 4 **physical** + **cost model**  SeqScan / IndexScan / NestedLoop / HashJoin / SortMergeJoin(+Sort), cost = io pages + cpu per tuple, interesting orders. 5 **join ordering**          Selinger DP over bitmask subsets (left-deep and bushy, no cross products unless forced) + greedy **goo** heuristic.
+
+```text
+6 EXPLAIN                plan tree with estimated rows and cost per node.   7 EXECUTION   Volcano iterators (`next()`), so plans really run.
+```
+
+**Cost model** (all in "page fetch" units): 100 rows/page; sequential page 1.0; random page 4.0; per-tuple CPU 0.01; per-predicate/compare CPU 0.0025; hash build 0.02/row, probe 0.01/row; sort n&#42;log2(n)&#42;0.005. NestedLoop materialises the inner side once (so inner cost is paid once, compares are l&#42;r).
+
+**Why estimates break**: independence (correlated columns multiply selectivities that should not be multiplied), skew (1/ndv assumes uniformity), and stale or coarse statistics. The demo prints those q-errors on purpose.
+
+**Interesting orders**: a sorted input (IndexScan key order, or a MergeJoin output) lets a later SortMergeJoin skip its Sort, so the DP keeps the cheapest plan **per output order** for each subset, not just the cheapest overall (Selinger's key insight).
+
+**Not implemented**: a Cascades memo (groups of equivalent expressions + transformation/implementation rules + top-down search with pruning). The DP here is the bottom-up ancestor; Cascades generalises it so new rules plug in without rewriting the search.
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+(a) DP == brute force over all join trees (n&lt;=5); (b) optimised == naive results over 200 random queries; (c) rewrites never raise estimated cost; (d) greedy >= DP; (e) q-error bounded on uniform data, large on correlated data; (f) IndexScan vs SeqScan choice; (g) hash build is smaller side.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>PostgreSQL's planner (Selinger-style DP, histograms + MCV lists, <code>EXPLAIN</code>)</li><li>Apache Spark Catalyst and Apache DataFusion (rule batches run to fixpoint, predicate pushdown, projection pruning, cost-based join reorder)</li><li>CockroachDB and the Volcano/Cascades papers (memo + rules)</li><li>also index advisors</li><li>"why is my query slow" tooling and what-if planners</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://15445.courses.cs.cmu.edu/> and <https://github.com/apache/datafusion> and the paper "Access Path Selection in a Relational Database Management System" (Selinger et al., 1979)
+"""
+
+[[sources]]
+title = "15445.courses.cs.cmu.edu"
+url = "https://15445.courses.cs.cmu.edu/"
+
+[[sources]]
+title = "github.com/apache/datafusion"
+url = "https://github.com/apache/datafusion"

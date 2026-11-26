@@ -1,0 +1,4 @@
+1
+--- runtime error: panic: too big: 5
+  at check
+  at main

@@ -1,0 +1,58 @@
+title = "A model of Kafka's core"
+module = "Distributed systems"
+module_order = 10
+chapter = "Streams, messaging and reliability"
+chapter_order = 4
+order = 501
+kind = "recipe"
+lede = "Partitioned segmented logs, retention, compaction, idempotent producer, consumer groups, replication."
+level = "advanced"
+code = ["examples/distributed/kafka_log_model.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>designing/understanding event streaming</li><li>queues over logs</li><li>CDC pipelines</li><li>delivery-semantics reasoning</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a deterministic, single-threaded, in-memory model of the ideas that make Kafka work (not its protocol or IO). **A topic** has **P partitions**; each partition is an append-only **log** of records with increasing offsets.
+
+Ordering is only guaranteed **within** a partition: the producer's partitioner maps a key to a partition by hash (same key -> same partition -> per-key order) and spreads null-key records round-robin; across partitions there is no order, which is what buys parallelism.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Storage**: a partition is split into **segments**. Only the last (active) segment is written; old segments are immutable, so **retention** is "delete whole old files" (cheap) and **compaction** rewrites closed segments keeping only the latest value per key (a None value is a **tombstone** = delete).
+
+**A sparse offset index** (one entry per few records) is binary searched, then a short scan finishes the lookup: small memory, near-O(log n) reads.
+
+**Delivery**: an idempotent producer tags batches with (producer id, sequence); the broker drops retried duplicates. Consumers in a **group** split partitions (each owned by exactly one member); progress is a **committed offset** per (group, topic, partition).
+
+Commit **after** processing = at-least-once (a crash replays); commit **before** = at-most-once (a crash skips); at-least-once plus an idempotent sink (dedupe by partition+offset, ideally atomically with the effect) = effectively-once. **Replication**: followers copy the leader; the **high watermark** is the smallest log end among in-sync replicas (ISR).
+
+Consumers only see data below it, so anything a consumer saw survives a leader failover.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>event sourcing and CDC pipelines</li><li>durable work queues</li><li>metrics/log aggregation</li><li>stream processing state changelogs (compacted topics hold the latest state per key)</li><li>cross-service integration where consumers replay history</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://kafka.apache.org/documentation/#design" target="_blank" rel="noreferrer">https://kafka.apache.org/documentation/#design</a></li><li><a href="https://engineering.linkedin.com/distributed-systems/log-what-every-software-engineer-should-know-about-real-time-datas-unifying" target="_blank" rel="noreferrer">https://engineering.linkedin.com/distributed-systems/log-what-every-software-engineer-should-know-about-real-time-datas-unifying</a></li></ul>
+"""
+
+[[sources]]
+title = "kafka.apache.org/documentation/#design"
+url = "https://kafka.apache.org/documentation/#design"
+
+[[sources]]
+title = "engineering.linkedin.com/distributed-systems/log-what-every-software-engineer…"
+url = "https://engineering.linkedin.com/distributed-systems/log-what-every-software-engineer-should-know-about-real-time-datas-unifying"

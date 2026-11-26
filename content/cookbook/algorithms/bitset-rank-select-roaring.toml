@@ -1,0 +1,56 @@
+title = "Bitset rank select roaring"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Caches, queues, heaps and bit sets"
+chapter_order = 3
+order = 187
+kind = "recipe"
+lede = "bitsets, rank/select, and Roaring-style compressed bitmaps."
+level = "advanced"
+code = ["examples/data_structures/bitset_rank_select_roaring.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>bitmap indexes</li><li>search posting lists</li><li>Bloom-like filters</li><li>succinct data structures</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+three layers. (1) `BitSet`: one bit per possible element in a Vec&lt;u64>; set algebra runs a whole 64-bit word at a time (so 64 elements per instruction) and iteration skips zeros with `trailing_zeros`. (2) `RankSelect`: rank(i) = how many set bits below i; select(k) = position of the k-th set bit.
+
+A sampled array of cumulative counts (one u32 per 8 words) makes rank O(1) (at most 8 popcounts) and select a binary search over samples plus a short scan. (3) `Roaring`: a dense bitset over a 32-bit universe wastes memory when sparse, and a sorted Vec&lt;u32> wastes memory when dense.
+
+Roaring splits values by their **high** 16 bits into chunks, and each chunk picks its own container: a sorted array of low 16 bits (sparse, &lt;= 4096 items, 2 bytes each) or a fixed 8 KiB bitmap (dense). 4096 &#42; 2 B = 8 KiB is exactly the break-even point.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Why** word-at-a-time: AND/OR/ANDNOT of two bitsets is a linear scan of u64s that the CPU/compiler vectorizes; it beats merging sorted lists unless one side is tiny, which is why arrays stay arrays.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>database bitmap indexes (one bitmap per column value, <strong>and/or</strong> to combine predicates)</li><li>search engine posting lists (docs containing a term; <strong>and</strong> = phrase/boolean query)</li><li>set-membership of ids in analytics engines</li><li>visited-sets in graph traversals</li><li>succinct tries/wavelet trees (rank/select is their core). Real code: the <code>roaring</code> crate <a href="https://docs.rs/roaring" target="_blank" rel="noreferrer">https://docs.rs/roaring</a></li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://roaringbitmap.org>   <https://arxiv.org/abs/1402.6407> (Better bitmap performance with Roaring)
+"""
+
+[[sources]]
+title = "docs.rs/roaring"
+url = "https://docs.rs/roaring"
+
+[[sources]]
+title = "roaringbitmap.org"
+url = "https://roaringbitmap.org"
+
+[[sources]]
+title = "arxiv.org/abs/1402.6407"
+url = "https://arxiv.org/abs/1402.6407"

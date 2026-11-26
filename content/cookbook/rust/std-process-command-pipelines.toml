@@ -1,0 +1,78 @@
+title = "`std::process` by use case"
+module = "Standard library and core"
+module_order = 2
+chapter = "Processes, signals and networking"
+chapter_order = 8
+order = 103
+kind = "recipe"
+lede = "Command, pipes, pipelines, exit statuses, timeouts, signals."
+level = "intermediate"
+code = ["examples/std_tour/std_process_command_pipelines.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>running git/ffmpeg/compilers</li><li>worker subprocesses</li><li>CI runners</li><li>supervisors</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>capture a tool's output (<code>output()</code>)</li><li>stream data through a filter</li><li>build <code>a | b</code> without a shell</li><li>enforce a timeout</li><li>report exit codes</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>Command::new</code></li><li><code>Command::arg</code></li><li><code>Command::args</code></li><li><code>Command::env</code></li><li><code>Command::envs</code></li><li><code>Command::env_remove</code></li><li><code>Command::env_clear</code></li><li><code>Command::current_dir</code></li><li><code>Command::stdin</code></li><li><code>Command::stdout</code></li><li><code>Command::stderr</code></li><li><code>Command::spawn</code></li><li><code>Command::output</code></li><li><code>Command::status</code></li><li><code>Command::get_program</code></li><li><code>Command::get_args</code></li><li><code>Command::get_envs</code></li><li><code>Command::get_current_dir</code></li><li><code>Stdio::piped</code></li><li><code>Stdio::null</code></li><li><code>Stdio::inherit</code></li><li><code>Stdio::from</code></li><li><code>Child::id</code></li><li><code>Child::wait</code></li><li><code>Child::try_wait</code></li><li><code>Child::kill</code></li><li><code>Child::wait_with_output</code></li><li><code>Child::stdin</code></li><li><code>Child::stdout</code></li><li><code>Child::stderr</code></li><li><code>ExitStatus::success</code></li><li><code>ExitStatus::code</code></li><li><code>Output::status</code></li><li><code>std::process::id</code></li><li><code>std::process::exit</code></li><li><code>std::process::ExitCode</code></li><li><code>std::io::pipe</code></li><li><code>std::env::current_exe</code></li><li><code>unix: ExitStatusExt::signal</code></li><li><code>CommandExt::exec</code></li><li><code>CommandExt::process_group</code></li><li><code>CommandExt::arg0</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/process/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/process/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+std only: `std::process`, `std::os::unix::process`, `std::io::pipe`, `std::env`. Processes need an OS; core and alloc have nothing here.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+`CommandExt::pre_exec` (unsafe: only async-signal-safe calls are allowed between fork and exec), `uid`/`gid`/`groups`, Windows `CommandExt` (`creation_flags`, `raw_arg`), `ExitStatus::exit_ok` (unstable), `std::process::abort` (kills this process), async `tokio::process`.
+
+Portability: every child is a re-exec of **this** binary (`current_exe` + `--child <mode>`), so no external tool is needed. The shell and signal demonstrations are `cfg(unix)`. Only the macOS build was run when this was written.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Run and capture</td><td><code>cmd.output()? then CHECK out.status.success() (non-zero exit is NOT an Err)</code></td></tr><tr><td>Run with the terminal attached</td><td><code>cmd.status()?</code></td></tr><tr><td>Pass user input safely</td><td><code>.arg(input): one argument, no shell, no word splitting. Never sh -c format!(..)</code></td></tr><tr><td>Input that starts with <code>-</code></td><td><code>put -- before it (if the tool supports it): arg does not stop option parsing</code></td></tr><tr><td>Stream into stdin</td><td><code>Stdio::piped(), write from ANOTHER THREAD, drop the handle to send EOF</code></td></tr><tr><td><code>a | b</code></td><td><code>b.stdin(Stdio::from(a_child.stdout.take().unwrap()))</code></td></tr><tr><td>Merge stdout and stderr in order</td><td><code>one std::io::pipe(), writer cloned into both; then drop the Command</code></td></tr><tr><td>Timeout</td><td><code>poll try_wait until a deadline, then kill() AND wait()</code></td></tr><tr><td>Never leak a child</td><td><code>a guard whose Drop kills and waits (Child itself does neither)</code></td></tr><tr><td>Clean environment</td><td><code>env_clear() then add what is needed</code></td></tr><tr><td>Exit with a status from <code>main</code></td><td><code>return ExitCode (destructors run); process::exit skips them</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Pitfalls"
+body = """
+writing all of stdin before reading stdout deadlocks once both pipe buffers fill; relative program paths combined with `current_dir` are platform specific; on Windows, arguments are re-joined into one command line, and `.bat` files have special rules (see the module docs); unix keeps only the low 8 bits of an exit code; Rust binaries ignore SIGPIPE, but `Command` resets it to the default in children.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/process/struct.Command.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/process/struct.Command.html</a></li><li><a href="https://doc.rust-lang.org/std/process/struct.Child.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/process/struct.Child.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/process/index.html"
+url = "https://doc.rust-lang.org/std/process/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/process/struct.Command.html"
+url = "https://doc.rust-lang.org/std/process/struct.Command.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/process/struct.Child.html"
+url = "https://doc.rust-lang.org/std/process/struct.Child.html"

@@ -1,0 +1,32 @@
+title = "Bounded channels and backpressure"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Async Rust"
+chapter_order = 4
+order = 270
+kind = "recipe"
+lede = "bounded channels and backpressure."
+level = "intermediate"
+code = ["examples/async/bounded_channel.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+worker pool / queue stages.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+producer/consumer queues where memory must stay bounded: backpressure is the whole point.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: a bounded `mpsc` makes producers wait (`send().await`) or fail fast (`try_send`) when the consumer is slow, so memory stays bounded. An unbounded channel just grows until the process dies. Docs: <https://docs.rs/tokio/latest/tokio/sync/mpsc/>
+"""
+
+[[sources]]
+title = "docs.rs/tokio/latest/tokio/sync/mpsc"
+url = "https://docs.rs/tokio/latest/tokio/sync/mpsc/"

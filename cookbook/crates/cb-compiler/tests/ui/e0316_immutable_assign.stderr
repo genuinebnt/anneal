@@ -1,0 +1,11 @@
+error[E0316]: cannot assign to `x`, as it is not declared as mutable
+ --> e0316_immutable_assign.peb:3:5
+  |
+2 |     let x = 1;
+  |         - this binding is not mutable
+3 |     x = 2;
+  |     ^ cannot assign
+  |
+  = help: consider declaring `x` as mutable: `mut x`
+
+error: aborting due to 1 previous error

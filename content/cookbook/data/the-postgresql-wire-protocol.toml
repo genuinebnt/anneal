@@ -1,0 +1,730 @@
+title = "The PostgreSQL wire protocol"
+module = "Databases"
+module_order = 8
+chapter = "Building complete engines"
+chapter_order = 9
+order = 455
+kind = "guide"
+lede = "Messages and framing · the simple and extended protocols · errors that do not end the session · parameters as values · password authentication · tested with a hand-written client and with the real psql · 17 mutants"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>A wire protocol is a state machine over a byte stream.</strong> TCP delivers bytes, not messages. PostgreSQL frames every message as a one-byte tag, a four-byte big-endian length that counts itself, and a body. The only startup message has no tag. A decoder must therefore answer three ways: <em>here is a message and how many bytes it used</em>, <em>I need more bytes</em>, or <em>this is malformed</em>.</li> <li><strong>Speaking the protocol buys every client.</strong> <code>psql</code>, <code>libpq</code>, JDBC, <code>tokio-postgres</code> and every driver built on them connect to a server that answers <code>StartupMessage</code>, <code>Query</code> and the extended-protocol messages. The SQL dialect, catalog queries and type OIDs still decide what works on top; this section covers the transport, plus the handful of types the engine has (boolean, 64-bit integer, double, text).</li> <li><strong>Two ways to run SQL.</strong> The <strong>simple protocol</strong> sends one <code>Query</code> string, possibly several statements, and gets rows and a completion tag back for each. The <strong>extended protocol</strong> splits the work: <code>Parse</code> stores a statement under a name, <code>Bind</code> supplies parameter values and names a portal, <code>Execute</code> runs it, and <code>Sync</code> ends the batch and returns <code>ReadyForQuery</code>. Parameters travel as values, never as text pasted into SQL by the client.</li> <li><strong>Errors end the statement, not the session.</strong> An <code>ErrorResponse</code> is followed by <code>ReadyForQuery</code>. In the extended protocol, after an error the server skips every message until the next <code>Sync</code>, so a pipelined batch cannot half-run.</li> <li><strong>The server must not trust its input.</strong> A length of <code>i32::MAX</code> must be refused before any allocation; a string without its zero byte, a body with trailing bytes and an unknown tag are protocol violations, answered with an error and a closed connection.</li> <li><strong>The engine is a shared resource.</strong> One thread owns the engine; connection threads send it requests and wait. Statements from all connections are serialized, which is simple and correct, and it caps throughput at what one thread can execute.</li> </ul>
+"""
+
+[[sections]]
+heading = "Messages"
+body = """
+<p>Every message after startup is <code>tag (1 byte) · length (4 bytes, includes itself) · body</code>. Strings are zero-terminated; integers are big-endian.</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Direction</th> <th>Tag</th> <th>Message</th> <th>Body</th> </tr> </thead> <tbody> <tr> <td>client</td> <td>none</td> <td><code>StartupMessage</code></td> <td>length, protocol 3.0 (196608), <code>key&#92;0value&#92;0</code> pairs, final <code>&#92;0</code></td> </tr> <tr> <td>client</td> <td>none</td> <td><code>SSLRequest</code></td> <td>length 8, code 80877103</td> </tr> <tr> <td>client</td> <td><code>p</code></td> <td><code>PasswordMessage</code>, <code>SASLInitialResponse</code>, <code>SASLResponse</code></td> <td>the password; mechanism name and first SCRAM message; the next SCRAM message (which one it is depends on where the login is)</td> </tr> <tr> <td>client</td> <td><code>Q</code></td> <td><code>Query</code></td> <td>SQL text</td> </tr> <tr> <td>client</td> <td><code>P</code> <code>B</code> <code>D</code> <code>E</code> <code>C</code></td> <td><code>Parse</code> <code>Bind</code> <code>Describe</code> <code>Execute</code> <code>Close</code></td> <td>statement/portal names, parameter values (length −1 is NULL), format codes</td> </tr> <tr> <td>client</td> <td><code>S</code> <code>H</code> <code>X</code></td> <td><code>Sync</code> <code>Flush</code> <code>Terminate</code></td> <td>empty</td> </tr> <tr> <td>server</td> <td><code>R</code></td> <td><code>AuthenticationOk</code> (0), <code>…CleartextPassword</code> (3), <code>AuthenticationSASL</code> (10), <code>SASLContinue</code> (11), <code>SASLFinal</code> (12)</td> <td>code, then mechanism names or SCRAM data</td> </tr> <tr> <td>server</td> <td><code>S</code> <code>K</code> <code>Z</code></td> <td><code>ParameterStatus</code> <code>BackendKeyData</code> <code>ReadyForQuery</code></td> <td>name/value; pid and secret; <code>I</code> idle</td> </tr> <tr> <td>server</td> <td><code>T</code> <code>D</code> <code>C</code></td> <td><code>RowDescription</code> <code>DataRow</code> <code>CommandComplete</code></td> <td>column names and type OIDs; one value per column; tag such as <code>SELECT 3</code></td> </tr> <tr> <td>server</td> <td><code>E</code> <code>I</code></td> <td><code>ErrorResponse</code> <code>EmptyQueryResponse</code></td> <td>severity, SQLSTATE, message fields</td> </tr> <tr> <td>server</td> <td><code>1</code> <code>2</code> <code>3</code> <code>n</code> <code>t</code></td> <td><code>ParseComplete</code> <code>BindComplete</code> <code>CloseComplete</code> <code>NoData</code> <code>ParameterDescription</code></td> <td>empty or OIDs</td> </tr> </tbody> </table></div>
+
+<p>The server answers an <code>SSLRequest</code> with a single byte <code>N</code> (no TLS here) and the client continues in plain text.</p>
+
+:::deeper Reference: the codec (every message both ways), parameter substitution, the server (engine thread, connection threads, simple and extended protocols, authentication)
+```rust title="src/server/pgwire.rs"
+//! The PostgreSQL wire protocol (version 3): a codec for the messages a client and a server exchange, and a threaded TCP server that
+//! speaks it in front of the SQL engine of Part I, so that `psql` and drivers can connect. Supported: SSL refusal, startup with no password, a cleartext password or
+//! SCRAM-SHA-256, the simple query protocol (several statements per message), the extended protocol with text-format parameters and
+//! results, errors that leave the session usable, and termination. Binary formats, COPY and cancellation are not.
+use crate::auth::{ct_eq, random_bytes, random_nonce, ScramServer, Verifier};
+use crate::engine::sql::{self, Stmt};
+use crate::engine::Engine;
+use crate::facade::Database;
+use crate::value::Value;
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{channel, Sender};
+use std::sync::Arc;
+use std::thread::JoinHandle;
+
+pub const MAX_MESSAGE: usize = 16 << 20;
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum ProtoError {
+    TooLarge(usize),
+    BadLength,
+    Truncated,
+    BadString,
+    UnknownTag(u8),
+}
+
+// ---- messages ---------------------------------------------------------------------------------------------------------------------------
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum Frontend {
+    SslRequest,
+    Startup { version: u32, params: Vec<(String, String)> },
+    Query(String),
+    Parse { name: String, sql: String, param_types: Vec<u32> },
+    Bind { portal: String, stmt: String, param_formats: Vec<i16>, params: Vec<Option<Vec<u8>>>, result_formats: Vec<i16> },
+    Describe { kind: u8, name: String },
+    Execute { portal: String, max_rows: i32 },
+    Close { kind: u8, name: String },
+    Sync,
+    Flush,
+    Terminate,
+    /// A `p` message: a password (zero-terminated), a SASL initial response or a SASL response, depending on where the exchange is.
+    Auth(Vec<u8>),
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct Field {
+    pub name: String,
+    pub type_oid: u32,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum Backend {
+    AuthOk,
+    AuthCleartext,
+    /// `AuthenticationSASL`: the mechanisms the server offers.
+    AuthSasl(Vec<String>),
+    AuthSaslContinue(Vec<u8>),
+    AuthSaslFinal(Vec<u8>),
+    ParameterStatus(String, String),
+    BackendKeyData(u32, u32),
+    ReadyForQuery(u8),
+    RowDescription(Vec<Field>),
+    DataRow(Vec<Option<Vec<u8>>>),
+    CommandComplete(String),
+    EmptyQuery,
+    Error { code: String, message: String },
+    ParseComplete,
+    BindComplete,
+    CloseComplete,
+    NoData,
+    ParameterDescription(Vec<u32>),
+}
+
+struct Reader<'a> {
+    b: &'a [u8],
+    p: usize,
+}
+impl<'a> Reader<'a> {
+    fn u8(&mut self) -> Result<u8, ProtoError> { let v = *self.b.get(self.p).ok_or(ProtoError::Truncated)?; self.p += 1; Ok(v) }
+    fn i16(&mut self) -> Result<i16, ProtoError> { let s = self.take(2)?; Ok(i16::from_be_bytes(s.try_into().unwrap())) }
+    fn i32(&mut self) -> Result<i32, ProtoError> { let s = self.take(4)?; Ok(i32::from_be_bytes(s.try_into().unwrap())) }
+    fn u32(&mut self) -> Result<u32, ProtoError> { let s = self.take(4)?; Ok(u32::from_be_bytes(s.try_into().unwrap())) }
+    fn take(&mut self, n: usize) -> Result<&'a [u8], ProtoError> {
+        if self.p + n > self.b.len() { return Err(ProtoError::Truncated); }
+        let s = &self.b[self.p..self.p + n];
+        self.p += n;
+        Ok(s)
+    }
+    fn cstr(&mut self) -> Result<String, ProtoError> {
+        let rest = &self.b[self.p..];
+        let n = rest.iter().position(|&c| c == 0).ok_or(ProtoError::BadString)?;
+        let s = std::str::from_utf8(&rest[..n]).map_err(|_| ProtoError::BadString)?.to_string();
+        self.p += n + 1;
+        Ok(s)
+    }
+    fn rest(&mut self) -> Vec<u8> { let v = self.b[self.p..].to_vec(); self.p = self.b.len(); v }
+    fn done(&self) -> Result<(), ProtoError> { if self.p == self.b.len() { Ok(()) } else { Err(ProtoError::BadLength) } }
+}
+
+/// Decode one client message from the start of `buf`. `Ok(None)` means more bytes are needed. `startup` is true until the startup packet
+/// has been read: that packet has no type byte.
+pub fn decode_frontend(buf: &[u8], startup: bool) -> Result<Option<(Frontend, usize)>, ProtoError> {
+    let (tag, hdr) = if startup { (0u8, 0usize) } else { if buf.is_empty() { return Ok(None); } (buf[0], 1) };
+    if buf.len() < hdr + 4 { return Ok(None); }
+    let len = i32::from_be_bytes(buf[hdr..hdr + 4].try_into().unwrap());
+    if len < 4 { return Err(ProtoError::BadLength); }
+    let len = len as usize;
+    if len > MAX_MESSAGE { return Err(ProtoError::TooLarge(len)); }
+    if buf.len() < hdr + len { return Ok(None); }
+    let mut r = Reader { b: &buf[hdr + 4..hdr + len], p: 0 };
+    let msg = if startup {
+        let version = r.u32()?;
+        if version == 80877103 { r.done()?; Frontend::SslRequest } else {
+            let mut params = vec![];
+            loop {
+                let k = r.cstr()?;
+                if k.is_empty() { break; }
+                params.push((k, r.cstr()?));
+            }
+            r.done()?;
+            Frontend::Startup { version, params }
+        }
+    } else {
+        match tag {
+            b'Q' => { let s = r.cstr()?; r.done()?; Frontend::Query(s) }
+            b'P' => {
+                let (name, sql) = (r.cstr()?, r.cstr()?);
+                let n = r.i16()?;
+                if n < 0 { return Err(ProtoError::BadLength); }
+                let param_types = (0..n).map(|_| r.u32()).collect::<Result<Vec<_>, _>>()?;
+                r.done()?;
+                Frontend::Parse { name, sql, param_types }
+            }
+            b'B' => {
+                let (portal, stmt) = (r.cstr()?, r.cstr()?);
+                let nf = r.i16()?;
+                if nf < 0 { return Err(ProtoError::BadLength); }
+                let param_formats = (0..nf).map(|_| r.i16()).collect::<Result<Vec<_>, _>>()?;
+                let np = r.i16()?;
+                if np < 0 { return Err(ProtoError::BadLength); }
+                let mut params = vec![];
+                for _ in 0..np {
+                    let l = r.i32()?;
+                    params.push(if l < 0 { None } else { Some(r.take(l as usize)?.to_vec()) });
+                }
+                let nr = r.i16()?;
+                if nr < 0 { return Err(ProtoError::BadLength); }
+                let result_formats = (0..nr).map(|_| r.i16()).collect::<Result<Vec<_>, _>>()?;
+                r.done()?;
+                Frontend::Bind { portal, stmt, param_formats, params, result_formats }
+            }
+            b'D' => { let kind = r.u8()?; let name = r.cstr()?; r.done()?; Frontend::Describe { kind, name } }
+            b'E' => { let portal = r.cstr()?; let max_rows = r.i32()?; r.done()?; Frontend::Execute { portal, max_rows } }
+            b'C' => { let kind = r.u8()?; let name = r.cstr()?; r.done()?; Frontend::Close { kind, name } }
+            b'S' => { r.done()?; Frontend::Sync }
+            b'H' => { r.done()?; Frontend::Flush }
+            b'X' => { r.done()?; Frontend::Terminate }
+            b'p' => Frontend::Auth(r.rest()),
+            t => return Err(ProtoError::UnknownTag(t)),
+        }
+    };
+    Ok(Some((msg, hdr + len)))
+}
+
+fn put_cstr(out: &mut Vec<u8>, s: &str) { out.extend(s.as_bytes()); out.push(0); }
+fn framed(tag: u8, body: Vec<u8>) -> Vec<u8> {
+    let mut out = vec![tag];
+    out.extend(((body.len() + 4) as i32).to_be_bytes());
+    out.extend(body);
+    out
+}
+
+pub fn encode_frontend(m: &Frontend) -> Vec<u8> {
+    let mut b = vec![];
+    match m {
+        Frontend::SslRequest => { let mut o = 8i32.to_be_bytes().to_vec(); o.extend(80877103u32.to_be_bytes()); return o; }
+        Frontend::Startup { version, params } => {
+            b.extend(version.to_be_bytes());
+            for (k, v) in params { put_cstr(&mut b, k); put_cstr(&mut b, v); }
+            b.push(0);
+            let mut o = ((b.len() + 4) as i32).to_be_bytes().to_vec();
+            o.extend(b);
+            return o;
+        }
+        Frontend::Query(s) => { put_cstr(&mut b, s); framed(b'Q', b) }
+        Frontend::Parse { name, sql, param_types } => { put_cstr(&mut b, name); put_cstr(&mut b, sql); b.extend((param_types.len() as i16).to_be_bytes()); for t in param_types { b.extend(t.to_be_bytes()); } framed(b'P', b) }
+        Frontend::Bind { portal, stmt, param_formats, params, result_formats } => {
+            put_cstr(&mut b, portal); put_cstr(&mut b, stmt);
+            b.extend((param_formats.len() as i16).to_be_bytes()); for f in param_formats { b.extend(f.to_be_bytes()); }
+            b.extend((params.len() as i16).to_be_bytes());
+            for p in params { match p { None => b.extend((-1i32).to_be_bytes()), Some(v) => { b.extend((v.len() as i32).to_be_bytes()); b.extend(v); } } }
+            b.extend((result_formats.len() as i16).to_be_bytes()); for f in result_formats { b.extend(f.to_be_bytes()); }
+            framed(b'B', b)
+        }
+        Frontend::Describe { kind, name } => { b.push(*kind); put_cstr(&mut b, name); framed(b'D', b) }
+        Frontend::Execute { portal, max_rows } => { put_cstr(&mut b, portal); b.extend(max_rows.to_be_bytes()); framed(b'E', b) }
+        Frontend::Close { kind, name } => { b.push(*kind); put_cstr(&mut b, name); framed(b'C', b) }
+        Frontend::Sync => framed(b'S', b),
+        Frontend::Flush => framed(b'H', b),
+        Frontend::Terminate => framed(b'X', b),
+        Frontend::Auth(body) => framed(b'p', body.clone()),
+    }
+}
+
+pub fn encode_backend(m: &Backend) -> Vec<u8> {
+    let mut b = vec![];
+    match m {
+        Backend::AuthOk => { b.extend(0i32.to_be_bytes()); framed(b'R', b) }
+        Backend::AuthCleartext => { b.extend(3i32.to_be_bytes()); framed(b'R', b) }
+        Backend::AuthSasl(mechs) => { b.extend(10i32.to_be_bytes()); for m in mechs { put_cstr(&mut b, m); } b.push(0); framed(b'R', b) }
+        Backend::AuthSaslContinue(d) => { b.extend(11i32.to_be_bytes()); b.extend(d); framed(b'R', b) }
+        Backend::AuthSaslFinal(d) => { b.extend(12i32.to_be_bytes()); b.extend(d); framed(b'R', b) }
+        Backend::ParameterStatus(k, v) => { put_cstr(&mut b, k); put_cstr(&mut b, v); framed(b'S', b) }
+        Backend::BackendKeyData(pid, key) => { b.extend(pid.to_be_bytes()); b.extend(key.to_be_bytes()); framed(b'K', b) }
+        Backend::ReadyForQuery(s) => { b.push(*s); framed(b'Z', b) }
+        Backend::RowDescription(fs) => {
+            b.extend((fs.len() as i16).to_be_bytes());
+            for f in fs { put_cstr(&mut b, &f.name); b.extend(0u32.to_be_bytes()); b.extend(0i16.to_be_bytes()); b.extend(f.type_oid.to_be_bytes()); b.extend((-1i16).to_be_bytes()); b.extend((-1i32).to_be_bytes()); b.extend(0i16.to_be_bytes()); }
+            framed(b'T', b)
+        }
+        Backend::DataRow(vs) => {
+            b.extend((vs.len() as i16).to_be_bytes());
+            for v in vs { match v { None => b.extend((-1i32).to_be_bytes()), Some(x) => { b.extend((x.len() as i32).to_be_bytes()); b.extend(x); } } }
+            framed(b'D', b)
+        }
+        Backend::CommandComplete(t) => { put_cstr(&mut b, t); framed(b'C', b) }
+        Backend::EmptyQuery => framed(b'I', b),
+        Backend::Error { code, message } => {
+            for (k, v) in [(b'S', "ERROR"), (b'V', "ERROR"), (b'C', code.as_str()), (b'M', message.as_str())] { b.push(k); put_cstr(&mut b, v); }
+            b.push(0);
+            framed(b'E', b)
+        }
+        Backend::ParseComplete => framed(b'1', b),
+        Backend::BindComplete => framed(b'2', b),
+        Backend::CloseComplete => framed(b'3', b),
+        Backend::NoData => framed(b'n', b),
+        Backend::ParameterDescription(ts) => { b.extend((ts.len() as i16).to_be_bytes()); for t in ts { b.extend(t.to_be_bytes()); } framed(b't', b) }
+    }
+}
+
+/// The client side of the codec (for tests and for a driver).
+pub fn decode_backend(buf: &[u8]) -> Result<Option<(Backend, usize)>, ProtoError> {
+    if buf.len() < 5 { return Ok(None); }
+    let len = i32::from_be_bytes(buf[1..5].try_into().unwrap());
+    if len < 4 { return Err(ProtoError::BadLength); }
+    let len = len as usize;
+    if len > MAX_MESSAGE { return Err(ProtoError::TooLarge(len)); }
+    if buf.len() < 1 + len { return Ok(None); }
+    let mut r = Reader { b: &buf[5..1 + len], p: 0 };
+    let m = match buf[0] {
+        b'R' => match r.i32()? {
+            0 => Backend::AuthOk,
+            3 => Backend::AuthCleartext,
+            10 => {
+                let mut mechs = vec![];
+                while r.b.get(r.p) != Some(&0) { mechs.push(r.cstr()?); }
+                r.p += 1;
+                r.done()?;
+                Backend::AuthSasl(mechs)
+            }
+            11 => Backend::AuthSaslContinue(r.rest()),
+            12 => Backend::AuthSaslFinal(r.rest()),
+            _ => return Err(ProtoError::BadLength),
+        },
+        b'S' => Backend::ParameterStatus(r.cstr()?, r.cstr()?),
+        b'K' => Backend::BackendKeyData(r.u32()?, r.u32()?),
+        b'Z' => Backend::ReadyForQuery(r.u8()?),
+        b'T' => {
+            let n = r.i16()?;
+            let mut fs = vec![];
+            for _ in 0..n.max(0) { let name = r.cstr()?; r.take(6)?; let type_oid = r.u32()?; r.take(8)?; fs.push(Field { name, type_oid }); }
+            Backend::RowDescription(fs)
+        }
+        b'D' => {
+            let n = r.i16()?;
+            let mut vs = vec![];
+            for _ in 0..n.max(0) { let l = r.i32()?; vs.push(if l < 0 { None } else { Some(r.take(l as usize)?.to_vec()) }); }
+            Backend::DataRow(vs)
+        }
+        b'C' => Backend::CommandComplete(r.cstr()?),
+        b'I' => Backend::EmptyQuery,
+        b'E' => {
+            let (mut code, mut message) = (String::new(), String::new());
+            loop {
+                let f = r.u8()?;
+                if f == 0 { break; }
+                let v = r.cstr()?;
+                match f { b'C' => code = v, b'M' => message = v, _ => {} }
+            }
+            Backend::Error { code, message }
+        }
+        b'1' => Backend::ParseComplete,
+        b'2' => Backend::BindComplete,
+        b'3' => Backend::CloseComplete,
+        b'n' => Backend::NoData,
+        b't' => { let n = r.i16()?; Backend::ParameterDescription((0..n.max(0)).map(|_| r.u32()).collect::<Result<_, _>>()?) }
+        t => return Err(ProtoError::UnknownTag(t)),
+    };
+    Ok(Some((m, 1 + len)))
+}
+
+// ---- values as text ----------------------------------------------------------------------------------------------------------------
+
+fn oid(v: &Value) -> u32 {
+    match v { Value::Bool(_) => 16, Value::Int(_) => 20, Value::Float(_) => 701, _ => 25 }
+}
+fn text(v: &Value) -> Option<Vec<u8>> {
+    match v {
+        Value::Null => None,
+        Value::Bool(b) => Some(if *b { b"t".to_vec() } else { b"f".to_vec() }),
+        Value::Int(i) => Some(i.to_string().into_bytes()),
+        Value::Float(f) => Some(f.to_string().into_bytes()),
+        Value::Text(s) => Some(s.as_bytes().to_vec()),
+    }
+}
+fn literal(p: &Option<Vec<u8>>) -> String {
+    match p {
+        None => "NULL".into(),
+        Some(b) => {
+            let s = String::from_utf8_lossy(b);
+            if s.parse::<i64>().is_ok() || (s.parse::<f64>().is_ok() && s.chars().all(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | 'e' | 'E' | '+'))) { s.into_owned() } else { format!("'{}'", s.replace('\\'', "''")) }
+        }
+    }
+}
+/// Replace `$1`, `$2`, … by SQL literals (longest index first so `$10` is not read as `$1` followed by `0`).
+pub fn substitute(sql: &str, params: &[Option<Vec<u8>>]) -> String {
+    let mut out = String::new();
+    let b = sql.as_bytes();
+    let (mut i, mut in_str) = (0, false);
+    while i < b.len() {
+        let c = b[i] as char;
+        if c == '\\'' { in_str = !in_str; }
+        if c == '$' && !in_str && i + 1 < b.len() && b[i + 1].is_ascii_digit() {
+            let mut j = i + 1;
+            while j < b.len() && b[j].is_ascii_digit() { j += 1; }
+            let n: usize = sql[i + 1..j].parse().unwrap();
+            out.push_str(&params.get(n.wrapping_sub(1)).map_or("NULL".to_string(), literal));
+            i = j;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+// ---- the server ----------------------------------------------------------------------------------------------------------------------
+
+pub type Reply = Result<Vec<(Vec<String>, Vec<Vec<Value>>, String)>, String>;
+
+/// What the server needs to log a user in.
+pub enum Credential {
+    /// Anyone may connect.
+    Trust,
+    /// The password, sent by the client in the clear (for tests; it crosses the wire as typed).
+    Cleartext(String),
+    /// SCRAM-SHA-256 against this verifier: the password never crosses the wire.
+    Scram(Verifier),
+}
+
+/// The server's back end: who may log in and how, and what a statement from a logged-in user does. One handler lives on the engine
+/// thread, so statements from all connections are serialized and the handler needs no locks.
+pub trait Handler {
+    fn credential(&mut self, user: &str) -> Credential;
+    fn execute(&mut self, user: &str, sql: &str) -> Reply;
+}
+
+enum Request {
+    Credential { user: String, reply: Sender<Credential> },
+    Sql { user: String, sql: String, reply: Sender<Reply> },
+}
+
+/// Run parsed statements and describe each result with its command tag.
+pub fn run_stmts(engine: &mut Engine, stmts: Vec<Stmt>) -> Reply {
+    let tags: Vec<String> = stmts.iter().map(tag_of).collect();
+    let results = engine.execute_stmts(stmts).map_err(|e| e.0)?;
+    Ok(results.into_iter().zip(tags).map(|(r, t)| (r.columns, r.rows, t)).collect())
+}
+pub fn run_sql(engine: &mut Engine, sql: &str) -> Reply {
+    run_stmts(engine, sql::parse(sql).map_err(|e| e.0)?)
+}
+
+/// One database, optionally behind a single shared cleartext password.
+pub struct PlainHandler {
+    db: Database,
+    password: Option<String>,
+}
+impl PlainHandler {
+    pub fn new(password: Option<String>) -> PlainHandler {
+        PlainHandler { db: Database::with_pool(1024, 2), password }
+    }
+}
+impl Handler for PlainHandler {
+    fn credential(&mut self, _user: &str) -> Credential {
+        match &self.password { Some(p) => Credential::Cleartext(p.clone()), None => Credential::Trust }
+    }
+    fn execute(&mut self, _user: &str, sql: &str) -> Reply {
+        run_sql(self.db.engine(), sql)
+    }
+}
+
+/// One database and a list of users, each logging in with SCRAM-SHA-256. A name that is not in the list gets a made-up verifier, so the
+/// exchange does not reveal which names exist.
+pub struct ScramHandler {
+    db: Database,
+    users: HashMap<String, Verifier>,
+    secret: Vec<u8>,
+}
+impl ScramHandler {
+    pub fn new(users: &[(String, String)]) -> ScramHandler {
+        let users = users.iter().map(|(u, pw)| (u.clone(), Verifier::new(pw, &random_bytes(16), 4096))).collect();
+        ScramHandler { db: Database::with_pool(1024, 2), users, secret: random_bytes(32) }
+    }
+}
+impl Handler for ScramHandler {
+    fn credential(&mut self, user: &str) -> Credential {
+        Credential::Scram(self.users.get(user).cloned().unwrap_or_else(|| Verifier::mock(user, &self.secret, 4096)))
+    }
+    fn execute(&mut self, _user: &str, sql: &str) -> Reply {
+        run_sql(self.db.engine(), sql)
+    }
+}
+
+fn run_handler<H: Handler>(rx: std::sync::mpsc::Receiver<Request>, mut h: H) {
+    for req in rx {
+        match req {
+            Request::Credential { user, reply } => { let _ = reply.send(h.credential(&user)); }
+            Request::Sql { user, sql, reply } => { let _ = reply.send(h.execute(&user, &sql)); }
+        }
+    }
+}
+pub fn tag_of(s: &Stmt) -> String {
+    match s {
+        Stmt::Select(_) => "SELECT".into(),
+        Stmt::Insert { rows: Some(r), .. } => format!("INSERT 0 {}", r.len()),
+        Stmt::Insert { .. } => "INSERT 0 0".into(),
+        Stmt::CreateTable { .. } => "CREATE TABLE".into(),
+        Stmt::CreateIndex { .. } => "CREATE INDEX".into(),
+        Stmt::Analyze { .. } => "ANALYZE".into(),
+        Stmt::Explain(_) => "EXPLAIN".into(),
+        #[allow(unreachable_patterns)]
+        _ => "OK".into(),
+    }
+}
+
+pub struct Server {
+    pub addr: SocketAddr,
+    stop: Arc<AtomicBool>,
+    open: Arc<std::sync::Mutex<Vec<TcpStream>>>,
+    accept: Option<JoinHandle<()>>,
+    engine: Option<JoinHandle<()>>,
+}
+impl Server {
+    /// One database; `password` makes every user log in with that cleartext password.
+    pub fn start(password: Option<String>) -> Server {
+        Server::start_with(move || PlainHandler::new(password))
+    }
+
+    /// One database; each `(user, password)` logs in with SCRAM-SHA-256.
+    pub fn start_scram(users: Vec<(String, String)>) -> Server {
+        Server::start_with(move || ScramHandler::new(&users))
+    }
+
+    /// Serve with a handler built on the engine thread (the engine and its buffer pool are not shared between threads).
+    pub fn start_with<H: Handler, F: FnOnce() -> H + Send + 'static>(make: F) -> Server {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = channel::<Request>();
+        let engine = std::thread::spawn(move || run_handler(rx, make()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let st = stop.clone();
+        let open: Arc<std::sync::Mutex<Vec<TcpStream>>> = Arc::default();
+        let reg = open.clone();
+        let accept = std::thread::spawn(move || {
+            let mut conns = vec![];
+            for stream in listener.incoming() {
+                if st.load(Ordering::SeqCst) { break; }
+                let Ok(stream) = stream else { continue };
+                if let Ok(clone) = stream.try_clone() { reg.lock().unwrap().push(clone); }
+                let tx = tx.clone();
+                let closer = stream.try_clone();
+                conns.push(std::thread::spawn(move || {
+                    let _ = serve(stream, tx);
+                    // the server keeps a handle to every connection (to close them all on stop), so closing must be explicit
+                    if let Ok(c) = closer { let _ = c.shutdown(std::net::Shutdown::Both); }
+                }));
+            }
+            drop(tx);
+            for c in conns { let _ = c.join(); }
+        });
+        Server { addr, stop, open, accept: Some(accept), engine: Some(engine) }
+    }
+    pub fn stop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        // close every open connection so that the threads serving them end, then wake the accept loop
+        for s in self.open.lock().unwrap().drain(..) { let _ = s.shutdown(std::net::Shutdown::Both); }
+        let _ = TcpStream::connect(self.addr);
+        if let Some(h) = self.accept.take() { let _ = h.join(); }
+        if let Some(h) = self.engine.take() { let _ = h.join(); }
+    }
+}
+impl Drop for Server {
+    fn drop(&mut self) { if self.accept.is_some() { self.stop(); } }
+}
+
+struct Conn {
+    stream: TcpStream,
+    buf: Vec<u8>,
+}
+impl Conn {
+    fn send(&mut self, ms: &[Backend]) -> std::io::Result<()> {
+        let mut out = vec![];
+        for m in ms { out.extend(encode_backend(m)); }
+        self.stream.write_all(&out)
+    }
+    /// The next client message, reading from the socket as needed; `None` on a clean close.
+    fn next(&mut self, startup: bool) -> Result<Option<Frontend>, ProtoError> {
+        loop {
+            match decode_frontend(&self.buf, startup)? {
+                Some((m, used)) => { self.buf.drain(..used); return Ok(Some(m)); }
+                None => {
+                    let mut chunk = [0u8; 8192];
+                    match self.stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => return if self.buf.is_empty() { Ok(None) } else { Err(ProtoError::Truncated) },
+                        Ok(n) => self.buf.extend_from_slice(&chunk[..n]),
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn error(code: &str, msg: impl Into<String>) -> Backend { Backend::Error { code: code.into(), message: msg.into() } }
+
+/// The SASL initial response: mechanism name, then the length and bytes of the client's first message (-1 when there is none).
+pub fn sasl_initial_response(mechanism: &str, data: &[u8]) -> Vec<u8> {
+    let mut b = vec![];
+    put_cstr(&mut b, mechanism);
+    b.extend((data.len() as i32).to_be_bytes());
+    b.extend(data);
+    b
+}
+pub fn parse_sasl_initial(body: &[u8]) -> Result<(String, Option<Vec<u8>>), ProtoError> {
+    let mut r = Reader { b: body, p: 0 };
+    let mechanism = r.cstr()?;
+    let n = r.i32()?;
+    let data = if n < 0 { None } else { Some(r.take(n as usize)?.to_vec()) };
+    r.done()?;
+    Ok((mechanism, data))
+}
+
+/// SCRAM-SHA-256 as the server sees it: offer the mechanism, read the initial response, send the challenge, check the proof, send the
+/// server's own proof. `Ok(false)` for any failure, whatever its cause.
+fn scram_login(c: &mut Conn, verifier: Verifier) -> std::io::Result<bool> {
+    c.send(&[Backend::AuthSasl(vec!["SCRAM-SHA-256".into()])])?;
+    let Ok(Some(Frontend::Auth(body))) = c.next(false) else { return Ok(false) };
+    let Ok((mechanism, Some(first))) = parse_sasl_initial(&body) else { return Ok(false) };
+    if mechanism != "SCRAM-SHA-256" { return Ok(false); }
+    let mut scram = ScramServer::new(verifier, &random_nonce());
+    let Ok(challenge) = scram.first(&first) else { return Ok(false) };
+    c.send(&[Backend::AuthSaslContinue(challenge)])?;
+    let Ok(Some(Frontend::Auth(response))) = c.next(false) else { return Ok(false) };
+    let Ok(proof) = scram.finish(&response) else { return Ok(false) };
+    c.send(&[Backend::AuthSaslFinal(proof)])?;
+    Ok(true)
+}
+
+fn serve(stream: TcpStream, engine: Sender<Request>) -> std::io::Result<()> {
+    stream.set_nodelay(true)?;
+    let mut c = Conn { stream, buf: vec![] };
+    // startup
+    let mut startup;
+    loop {
+        startup = match c.next(true) { Ok(Some(m)) => m, Ok(None) => return Ok(()), Err(_) => return Ok(()) };
+        if startup == Frontend::SslRequest { c.stream.write_all(b"N")?; continue; }
+        break;
+    }
+    let Frontend::Startup { version, params } = startup else { return Ok(()) };
+    if version >> 16 != 3 { return c.send(&[error("0A000", "unsupported protocol version")]); }
+    let Some(user) = params.iter().find(|(k, _)| k == "user").map(|(_, v)| v.clone()) else { return c.send(&[error("28000", "no user name in the startup packet")]) };
+    let credential = { let (tx, rx) = channel(); if engine.send(Request::Credential { user: user.clone(), reply: tx }).is_err() { return Ok(()); } match rx.recv() { Ok(c) => c, Err(_) => return Ok(()) } };
+    let authenticated = match credential {
+        Credential::Trust => true,
+        Credential::Cleartext(pw) => {
+            c.send(&[Backend::AuthCleartext])?;
+            let mut want = pw.into_bytes();
+            want.push(0);
+            matches!(c.next(false), Ok(Some(Frontend::Auth(body))) if ct_eq(&body, &want))
+        }
+        Credential::Scram(v) => scram_login(&mut c, v)?,
+    };
+    // every failure looks the same to the client: a wrong password, an unknown user and a malformed exchange
+    if !authenticated { return c.send(&[error("28P01", format!("password authentication failed for user \\"{user}\\""))]); }
+    c.send(&[Backend::AuthOk, Backend::ParameterStatus("server_version".into(), "14.0 (cairn)".into()), Backend::ParameterStatus("client_encoding".into(), "UTF8".into()),
+             Backend::ParameterStatus("DateStyle".into(), "ISO, MDY".into()), Backend::ParameterStatus("integer_datetimes".into(), "on".into()),
+             Backend::ParameterStatus("standard_conforming_strings".into(), "on".into()), Backend::BackendKeyData(1, 1), Backend::ReadyForQuery(b'I')])?;
+    let run = |sql: &str| -> Reply { let (tx, rx) = channel(); engine.send(Request::Sql { user: user.clone(), sql: sql.to_string(), reply: tx }).map_err(|e| e.to_string())?; rx.recv().map_err(|e| e.to_string())? };
+    let results_to_messages = |r: Reply| -> Vec<Backend> {
+        match r {
+            Err(e) => vec![error("42601", e)],
+            Ok(rs) => rs.into_iter().flat_map(|(cols, rows, tag)| {
+                let mut v = vec![];
+                if tag == "SELECT" || tag == "EXPLAIN" {
+                    let oids: Vec<u32> = (0..cols.len()).map(|i| rows.iter().map(|r| &r[i]).find(|x| **x != Value::Null).map_or(25, oid)).collect();
+                    v.push(Backend::RowDescription(cols.iter().zip(&oids).map(|(n, o)| Field { name: n.clone(), type_oid: *o }).collect()));
+                    for r in &rows { v.push(Backend::DataRow(r.iter().map(text).collect())); }
+                    v.push(Backend::CommandComplete(format!("{tag} {}", rows.len()).replace("EXPLAIN ", "EXPLAIN")));
+                } else { v.push(Backend::CommandComplete(tag)); }
+                v
+            }).collect(),
+        }
+    };
+    let mut prepared: HashMap<String, String> = HashMap::new();
+    let mut portals: HashMap<String, (String, Option<Vec<Backend>>)> = HashMap::new();
+    let mut failed = false;   // inside the extended protocol, after an error everything is skipped until Sync
+    loop {
+        let m = match c.next(false) {
+            Ok(Some(m)) => m,
+            Ok(None) => return Ok(()),
+            Err(e) => { let _ = c.send(&[error("08P01", format!("protocol violation: {e:?}"))]); return Ok(()); }
+        };
+        match m {
+            Frontend::Terminate => return Ok(()),
+            Frontend::Query(sql) => {
+                if sql.trim().trim_matches(';').trim().is_empty() { c.send(&[Backend::EmptyQuery, Backend::ReadyForQuery(b'I')])?; continue; }
+                let mut out = results_to_messages(run(&sql));
+                out.push(Backend::ReadyForQuery(b'I'));
+                c.send(&out)?;
+            }
+            Frontend::Sync => { failed = false; c.send(&[Backend::ReadyForQuery(b'I')])?; }
+            _ if failed => {}
+            Frontend::Flush => {}
+            Frontend::Parse { name, sql, .. } => { prepared.insert(name, sql); c.send(&[Backend::ParseComplete])?; }
+            Frontend::Bind { portal, stmt, params, param_formats, result_formats } => {
+                if param_formats.iter().chain(result_formats.iter()).any(|f| *f != 0) { failed = true; c.send(&[error("0A000", "binary formats are not supported")])?; continue; }
+                match prepared.get(&stmt) {
+                    Some(sql) => { portals.insert(portal, (substitute(sql, &params), None)); c.send(&[Backend::BindComplete])?; }
+                    None => { failed = true; c.send(&[error("26000", format!("prepared statement \\"{stmt}\\" does not exist"))])?; }
+                }
+            }
+            Frontend::Describe { kind, name } => {
+                if kind == b'S' {
+                    let Some(sql) = prepared.get(&name).cloned() else { failed = true; c.send(&[error("26000", "no such prepared statement")])?; continue };
+                    let nparams = (1..).take_while(|i| sql.contains(&format!("${i}"))).count();
+                    // describe a query by running it with NULLs; anything else is not run at all (describing an INSERT must not insert)
+                    let is_query = sql.trim_start().get(..6).is_some_and(|w| w.eq_ignore_ascii_case("select"));
+                    let probe = if is_query { results_to_messages(run(&substitute(&sql, &vec![None; nparams]))) } else { vec![] };
+                    let desc = probe.into_iter().find(|m| matches!(m, Backend::RowDescription(_))).unwrap_or(Backend::NoData);
+                    c.send(&[Backend::ParameterDescription(vec![0; nparams]), desc])?;
+                } else if let Some((sql, cache)) = portals.get_mut(&name) {
+                    let msgs = cache.get_or_insert_with(|| results_to_messages(run(sql))).clone();
+                    let desc = msgs.iter().find(|m| matches!(m, Backend::RowDescription(_))).cloned().unwrap_or(Backend::NoData);
+                    c.send(&[desc])?;
+                } else { failed = true; c.send(&[error("34000", "no such portal")])?; }
+            }
+            Frontend::Execute { portal, .. } => {
+                let Some((sql, cache)) = portals.get_mut(&portal) else { failed = true; c.send(&[error("34000", "no such portal")])?; continue };
+                let msgs = cache.take().unwrap_or_else(|| results_to_messages(run(sql)));
+                let is_err = msgs.iter().any(|m| matches!(m, Backend::Error { .. }));
+                // the description was already sent by Describe: send only data rows and the completion
+                c.send(&msgs.into_iter().filter(|m| !matches!(m, Backend::RowDescription(_))).collect::<Vec<_>>())?;
+                failed = is_err;
+            }
+            Frontend::Close { kind, name } => { if kind == b'S' { prepared.remove(&name); } else { portals.remove(&name); } c.send(&[Backend::CloseComplete])?; }
+            Frontend::Auth(_) | Frontend::Startup { .. } | Frontend::SslRequest => { c.send(&[error("08P01", "unexpected message")])?; return Ok(()); }
+        }
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>Tests drive the server three ways: a codec test that feeds random messages in and out, a hand-written client that speaks the protocol over a real socket, and the real <code>psql</code> 14 binary as a subprocess (password supplied through <code>PGPASSWORD</code>). Measurements are in release mode on the machine that built this guide.</p>
+
+```text title="the codec, a round trip over a socket, streaming a result, and eight connections at once"
+codec: 200000 DataRow messages (8.2 MB): encode 243 MB/s (168 ns per row), decode 505 MB/s (81 ns per row)
+server: simple query round trip 34 us; streaming 100000 rows of a table scan in 68 ms (1471 thousand rows/s)
+point lookup in a 100 000-row table (scan): extended protocol 10.1 ms, simple query 10.5 ms per statement
+8 connections x 500 trivial queries: 81 thousand queries/s in total (statements are serialized by the engine thread)
+```
+
+<ul> <li><strong>The codec is not the bottleneck.</strong> A <code>DataRow</code> of four columns costs 168 ns to encode and 81 ns to decode; a table scan streams at 1.47 million rows per second including the engine, the codec and the socket.</li> <li><strong>A round trip costs 34 µs</strong> for <code>SELECT 1</code> on a loopback socket, which is mostly two system calls and two thread wake-ups.</li> <li><strong>The extended protocol bought nothing here, and the reason is the engine, not the protocol.</strong> A point lookup in 100 000 rows takes 10.1 ms prepared and 10.5 ms as text, because the engine scans the table in both cases. Preparing saves parsing, a few microseconds, and only an index or a cached plan would change the picture. A prepared statement is not faster by itself.</li> <li><strong>Eight connections reach 81 thousand trivial queries per second in total</strong>, against 1 / 34 µs ≈ 29 thousand for one connection. The engine thread is shared, so the gain is overlap of the socket work of different clients with the engine work, not parallel execution.</li> </ul>
+
+<aside data-call="note"><b>What the real client found</b><p>The hand-written client in the tests and the server were written together, so they can share a misreading of the specification. <code>psql</code> cannot. Running it was a check on the <em>protocol</em>, not on the code: the startup handshake, the <code>ParameterStatus</code> messages it expects, the format of <code>RowDescription</code> and <code>CommandComplete</code>, and the way it reports a wrong password (<code>password authentication failed</code>) and an error (<code>ERROR:</code>) all had to come out right for the test to pass. One detail the test records: for a multi-statement <code>-c</code> string <code>psql</code> prints only the tag of the last statement, although the server sent one <code>CommandComplete</code> per statement. The first versions of the server also hung on shutdown: connection threads were blocked reading from clients that were still connected, and later a registry of open sockets kept them open after a connection ended. <code>stop()</code> now closes every registered socket, and each connection thread shuts its own socket down when it exits.</p></aside>
+
+<aside data-call="note"><b>Two defects found by reading the code against the tests</b><p><code>Describe</code> of a prepared statement needs the result columns, and the first implementation obtained them by running the statement with NULL parameters. Describing <code>INSERT INTO t VALUES ($1, $2)</code> would insert a row. It now runs the statement only if it is a <code>SELECT</code>, and a test asserts that describing an <code>INSERT</code> leaves the table unchanged. Second, <code>Bind</code> accepted binary parameter format codes and read the bytes as text; it now refuses binary parameter and result formats with SQLSTATE <code>0A000</code>.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Decoding returns <code>Result&lt;Option&lt;(Message, usize)&gt;, ProtoError&gt;</code></strong>: <code>Ok(None)</code> means "wait for more bytes", <code>Ok(Some((m, used)))</code> consumes <code>used</code> bytes from the front of the buffer, <code>Err</code> is a violation. The caller owns the buffer and drains it; the decoder is a pure function, which makes the prefix test (every proper prefix of a message returns <code>Ok(None)</code>) one loop.</li> <li><strong>A small <code>Reader</code> over <code>&amp;[u8]</code></strong> with <code>u8</code>, <code>i16</code>, <code>i32</code>, <code>u32</code>, <code>take</code>, <code>cstr</code> and <code>done</code> (no trailing bytes) keeps every body parser three lines long, and every short read returns <code>Err</code> instead of panicking on an index.</li> <li><strong>Enums for both directions</strong> (<code>Frontend</code>, <code>Backend</code>) make every message a value that can be compared, printed and generated at random in tests. The same types serve the server and the test client; the encoder and decoder of each direction exist on both sides so each can check the other.</li> <li><strong>Threads and channels instead of async</strong>: the engine thread owns the buffer pool and engine (neither is <code>Sync</code>); <code>std::sync::mpsc</code> carries <code>Request { sql, reply }</code> to it, and each connection thread waits on its own reply channel. The model is small enough to read in one page, and async would be a change of runtime, not of design.</li> <li><strong>A <code>Handler</code> trait for the back end</strong>: <code>credential(user)</code> says how a user may log in (<code>Trust</code>, <code>Cleartext</code>, or <code>Scram(verifier)</code>, <a href="/cookbook/p/passwords-and-scram">M21</a>) and <code>execute(user, sql)</code> runs a statement for a logged-in user. The handler is built on the engine thread (the engine is not <code>Send</code>), so the same server runs an unrestricted database, a password-protected one, or one with roles and row-level security (<a href="/cookbook/p/roles-privileges-and-row-level-security">M22</a>).</li> <li><strong><code>TcpStream::shutdown</code> and a registry of cloned sockets</strong> make <code>stop()</code> deterministic: closing the sockets wakes every blocked read with an error.</li> <li><strong><code>std::net::TcpListener::bind("127.0.0.1:0")</code></strong> asks the operating system for a free port; tests run in parallel without port clashes.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Codec round trip</strong>: 3 000 random frontend and 3 000 random backend messages (empty strings, non-ASCII, quotes, NULL values, binary bodies) encode and decode to themselves; every proper prefix of every message returns "need more"; two messages back to back are read one at a time; the startup message and <code>SSLRequest</code> are decoded in startup mode.</li> <li><strong>Malformed input</strong>: 30 000 random byte strings, biased towards <code>Q</code>, decode without panicking in every mode; a claimed length of <code>i32::MAX</code> is refused as too large before allocation; a length below 4, a string without its zero byte, a <code>Sync</code> with a body and bytes after the query string are each rejected with the right error; an unknown tag is reported.</li> <li><strong>Parameters</strong>: <code>$1</code>, <code>$2</code> become literals; quotes are doubled so <code>1'; DROP TABLE t; --</code> stays a string; <code>$1</code> inside a string literal is left alone; <code>$10</code> is not read as <code>$1</code> followed by <code>0</code>; a missing parameter is NULL; numbers are not quoted and <code>1e</code> is.</li> <li><strong>End to end over a socket</strong>: <code>SSLRequest</code> is answered <code>N</code>; DDL, DML and queries return the right messages and tags (<code>CREATE TABLE</code>, <code>INSERT 0 3</code>, <code>SELECT 3</code>); NULL arrives as length −1; an error is followed by <code>ReadyForQuery</code> and the session continues; an empty query returns <code>EmptyQueryResponse</code>; prepare once and bind twice; a parameter containing a quote and a <code>DROP TABLE</code> is stored as data; a failed <code>Bind</code> skips the rest of the batch until <code>Sync</code>, and the extended protocol works again afterwards; <code>Describe</code> does not run an <code>INSERT</code>; binary formats are refused; <code>Terminate</code> closes the connection; garbage from one client does not disturb another.</li> <li><strong>Authentication and concurrency</strong>: a wrong password is refused with <code>password authentication failed for user "u"</code>; eight clients, each inserting 25 rows into one table, see their own 25 rows and the total of 200.</li> <li><strong>The real <code>psql</code></strong>: wrong password; <code>SELECT 1 + 1</code>; <code>CREATE TABLE</code>; two inserts; <code>-At -F ,</code> output; aligned output with <code>(2 rows)</code>; an error exits non-zero with <code>ERROR:</code>; an aggregate query.</li> <li><strong>Mutants run against these tests</strong>: a length below the header size accepted; the size limit removed; a string without its zero byte accepted; trailing bytes after a query ignored; NULL sent as an empty string (encoder and row conversion); a one-digit parameter number; parameters replaced inside string literals; quotes not doubled; the failed state not cleared by <code>Sync</code>; any password accepted; <code>SSLRequest</code> answered <code>S</code>; a wrong <code>INSERT</code> count; no <code>ReadyForQuery</code> after an error; <code>Describe</code> running every statement; binary parameter formats accepted; binary result formats accepted. <strong>All 17 were killed</strong>; one of them (no <code>ReadyForQuery</code> after an error) by timeout, because the client waits forever for it.</li> <li><strong>Two mutants survived at first, and both were weak tests.</strong> A test of <code>$10</code> used the values 1 to 10, so <code>$1</code> followed by <code>0</code> also gave <code>10</code>; the values are now chosen so that the two readings differ. No test ran an extended-protocol statement after a failed batch, so a <code>Sync</code> that left the session in the failed state went unnoticed; one now does.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>PostgreSQL's protocol is the lingua franca.</strong> Besides PostgreSQL itself: CockroachDB, YugabyteDB, Materialize, RisingWave, QuestDB, CedarDB, Neon's proxy, PgBouncer and Amazon Aurora PostgreSQL speak it. Compatibility is graded by the clients, not by the message layout: drivers issue catalog queries (<code>pg_type</code>, <code>pg_catalog.pg_class</code>, <code>SHOW</code>) at connect time, and a server that lacks them fails in the driver, not in the protocol.</li> <li><strong>Authentication in production is SCRAM-SHA-256 over TLS</strong>, not cleartext (see <a href="/cookbook/p/passwords-and-scram">M21</a>). TLS starts with the <code>SSLRequest</code> handshake used here; the server answers <code>S</code> and upgrades the socket.</li> <li><strong>Binary formats</strong> (format code 1) exchange values in their internal representation. Drivers use them for integers, timestamps and arrays when they can, and <code>COPY</code> uses its own sub-protocol for bulk loads. A server that supports the extended protocol but not binary formats works with most clients that default to text.</li> <li><strong>Portals and cursors</strong>: <code>Execute</code> takes a maximum row count and a portal can be resumed (<code>PortalSuspended</code>). This implementation returns all rows at once; a real server streams rows from the executor and keeps the portal open.</li> <li><strong>Cancellation</strong>: <code>BackendKeyData</code> carries a process id and a secret; a client cancels a running query by opening a second connection that sends a <code>CancelRequest</code> with those values. It is delivered out of band, so the engine must check a flag between batches.</li> <li><strong>Connection pooling</strong> (PgBouncer, pgcat, Odyssey) works at the protocol level, which is why session state such as prepared statements and <code>SET</code> is the thing poolers must track.</li> <li><strong>Thread per connection versus async</strong>: PostgreSQL uses a process per connection; most newer servers use an async runtime (Tokio) and a fixed pool of worker threads. At tens of thousands of connections the cost of threads shows; the codec in this section is the same either way.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Substituting parameters into SQL text is the weak point of this design.</strong> It is safe here because the substitution knows about string literals and quotes every non-numeric value, and a test tries an injection. A production engine binds parameter values into the plan, so no SQL text is ever built from client data. Do not copy this design where the engine can bind.</li> <li><strong>Trust no length.</strong> Check the claimed length against a limit before allocating, and reject lengths smaller than the header. Closing the connection on a protocol violation is correct; resynchronizing after one is not possible.</li> <li><strong>After an error in the extended protocol, skip to <code>Sync</code>.</strong> If the server keeps processing, a pipelined <code>Bind</code>/<code>Execute</code> after a failed <code>Parse</code> can run against the wrong statement.</li> <li><strong><code>Describe</code> must have no side effects.</strong> A way to find the result columns by running the statement is wrong for anything but a query.</li> <li><strong>Cleartext passwords are for tests.</strong> They cross the wire as sent. Use SCRAM over TLS.</li> <li><strong>A blocking read ends only when the peer sends or the socket closes.</strong> A shutdown path must close sockets, not wait for clients.</li> <li><strong>One engine thread serializes everything</strong>, including long queries; one slow <code>SELECT</code> stalls every client. Real servers run statements on a pool and use the transaction layer (<a href="/cookbook/p/transactions-on-the-key-space">M2</a>) for isolation.</li> <li><strong>Tags are part of the contract</strong>: <code>INSERT 0 n</code> (the zero is a legacy object id field) and <code>SELECT n</code> are parsed by drivers to report row counts.</li> </ul></aside>
+"""

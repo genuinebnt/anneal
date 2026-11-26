@@ -1,0 +1,52 @@
+title = "HTTP/1.1 message parser and serializer"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Networking and protocols"
+chapter_order = 3
+order = 532
+kind = "recipe"
+lede = "Framing, request smuggling defence, pipelining, fuzzing."
+level = "advanced"
+code = ["examples/networking/http1_parser.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>HTTP servers/proxies</li><li>reverse proxies and gateways</li><li>test doubles</li><li>any text-headers-plus-body protocol</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+an HTTP/1.1 message is `request-line CRLF *(header CRLF) CRLF body`. The body length is **not** guessed: it comes from exactly one of `Content-Length: n` (n raw bytes), `Transfer-Encoding: chunked` (hex-size lines, data, a zero chunk, then optional trailer headers), or "no body" for requests with neither. See RFC 9112 section 6 (message body) and 7.1 (chunked).
+
+**Why incremental**: TCP is a byte stream. `parse_request(&[u8])` returns `Ok(None)` ("need more bytes"), `Ok(Some((request, consumed)))` or `Err` (the connection is poisoned: answer 400 and close). Re-parsing from the start is simple and obviously correct, and the tests prove feeding one byte at a time equals parsing everything at once.
+
+(Production code keeps resumable state or, like `httparse`, parses the head in one zero-copy pass.) **pipelining** / **keep-alive**: several requests may sit back to back in one buffer. Parse, drain `consumed`, repeat. HTTP/1.1 defaults to keep-alive unless `Connection: close`; HTTP/1.0 is the reverse.
+
+**Request smuggling**: a front-end proxy and a back-end server that disagree about where a request ends can be tricked into treating the tail of one request as the start of the next (cache poisoning, auth bypass).
+
+The classic triggers are both `Content-Length` and `Transfer-Encoding` present (CL.TE / TE.CL), two different `Content-Length` values, obsolete line folding, and whitespace before the colon. RFC 9112 says to reject or normalize; we **reject** every one of them with a typed error. **Hostile input**: every size is untrusted.
+
+`Limits` bounds line length, head bytes, header count, body bytes and the chunk size field, and nothing is allocated from a declared length before the bytes have actually arrived.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>HTTP servers (hyper uses httparse)</li><li>reverse proxies and load balancers</li><li>API gateways</li><li>WAF-style request validation</li><li>CDN edge parsers</li><li>test servers. Production Rust code should use <code>httparse</code> for the head and a hardened framework for the rest</li><li>this recipe shows what they do</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://datatracker.ietf.org/doc/html/rfc9112> and <https://github.com/seanmonstar/httparse> (zero-copy production parser)
+"""
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc9112"
+url = "https://datatracker.ietf.org/doc/html/rfc9112"
+
+[[sources]]
+title = "github.com/seanmonstar/httparse"
+url = "https://github.com/seanmonstar/httparse"

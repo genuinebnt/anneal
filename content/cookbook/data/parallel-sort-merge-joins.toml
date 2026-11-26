@@ -1,0 +1,199 @@
+title = "Parallel sort-merge joins"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 362
+kind = "guide"
+lede = "15-721 S2020/S2019 lecture #18 · parallel sorting · pairwise vs multiway merge · range-partitioned merge join · when sorting beats hashing · measured against the radix hash join"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Two phases</strong>: <strong>sort</strong> R and S on the join key, then <strong>merge</strong> with one cursor per side (on duplicates, one side backs up to the start of its equal-key group). The merge is a single sequential pass; <strong>all the cost is in the sort</strong>.</li> <li><strong>Why it still matters</strong> even though hash joins usually win: the output is <strong>sorted</strong> (feeds <code>ORDER BY</code>, merge-based <code>GROUP BY</code>, the next join: <em>interesting orders</em>), inputs may <strong>already be sorted</strong> (index scans, clustered or sorted-by-key files), its cost is <strong>insensitive to skew and to hash quality</strong>, and it handles <strong>range / inequality joins</strong> that hashing can't.</li> <li><strong>Parallel sort in three steps</strong>: (1) <strong>local sort</strong> of cache-sized runs, one per thread, with no sharing (the sort kernels are where SIMD sorting networks and in-register merges earn their keep); (2) <strong>partition</strong> the key space so each thread owns one key range (splitters from samples); (3) <strong>merge</strong>: either log₂T rounds of pairwise merges (every round streams <em>all</em> the data) or <strong>one multiway merge</strong> per thread over its range of all runs (one pass, but a heap/tournament tree per output element).</li> <li><strong>Bandwidth is the enemy</strong>: each extra pass over the data costs memory bandwidth, so the lecture's variants are all about <strong>fewer passes</strong> (m-way merge instead of binary merge trees) and <strong>NUMA-friendly access</strong> (sequential reads from remote memory, writes local).</li> <li><strong>MPSM</strong> (Albutiu et al.): <em>massively parallel sort-merge</em> <strong>never fully sorts S</strong>: each worker sorts only its local run of the big side, range-partitions the small side, and merges its sorted R partition with <strong>every</strong> S run. Less data movement; the price is more merge work per thread.</li> <li><strong>Result of the comparisons</strong> (Balkesen et al., Schuh et al.): with the hardware of the time the <strong>radix hash join was faster than parallel sort-merge</strong> (by a small factor); sort-merge's gap is expected to shrink with wider SIMD and as inputs grow, and <strong>it wins when sorted output or sorted input is free</strong>. Practical engines keep a merge join as an operator the optimizer can choose (Part III covers interesting orders).</li> </ul>
+"""
+
+[[sections]]
+heading = "From sorting to joining"
+body = """
+<p>Tuples are packed into a <code>u64</code> (key in the high 32 bits, payload in the low 32), so the machine's integer compare sorts by key, then by payload, and a sort kernel needs no comparator. R has unique keys; S is a probe column. The same inputs and result <code>(match count, sum of payloads)</code> as <a href="/cookbook/p/parallel-hash-joins">A16</a>.</p>
+
+<ol> <li><strong>Local sorts</strong>: split into T chunks; each thread runs <code>sort_unstable</code> on its chunk.</li> <li><strong>Merge, two ways</strong>: (A) pairwise merge tree with a ping-pong buffer; (B) sample splitters, binary-search every run for each splitter, and let thread <em>t</em> <strong>k-way merge</strong> its slice of every run into its slice of the output.</li> <li><strong>Merge join</strong>: split the sorted R into T equal pieces; for each piece <code>binary-search</code> the matching key range in sorted S; every thread merges one pair, and the pieces are disjoint so counts and sums just add.</li> </ol>
+
+:::deeper Reference: parallel local sorts, pairwise merge tree, splitter-based multiway merge, range-partitioned merge join
+```rust title="src/exec/sortjoin.rs"
+//! Parallel sorting and sort-merge join on packed `u64` tuples (key in the high 32 bits, payload in the low 32).
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+
+pub fn pack(key: u32, payload: u32) -> u64 { ((key as u64) << 32) | payload as u64 }
+#[inline] fn key(x: u64) -> u32 { (x >> 32) as u32 }
+
+/// Phase 1: every thread sorts its own contiguous chunk (cache-sized sorts, no sharing).
+pub fn sort_runs(v: &mut [u64], threads: usize) -> Vec<std::ops::Range<usize>> {
+    let chunk = v.len().div_ceil(threads).max(1);
+    let mut ranges = vec![];
+    std::thread::scope(|s| {
+        for (i, c) in v.chunks_mut(chunk).enumerate() {
+            ranges.push(i * chunk..i * chunk + c.len());
+            s.spawn(move || c.sort_unstable());
+        }
+    });
+    ranges
+}
+
+fn merge2(a: &[u64], b: &[u64], out: &mut [u64]) {
+    let (mut i, mut j, mut k) = (0, 0, 0);
+    while i < a.len() && j < b.len() { if a[i] <= b[j] { out[k] = a[i]; i += 1 } else { out[k] = b[j]; j += 1 } k += 1; }
+    out[k..k + a.len() - i].copy_from_slice(&a[i..]);
+    let k = k + a.len() - i;
+    out[k..k + b.len() - j].copy_from_slice(&b[j..]);
+}
+
+/// Strategy A: log₂(T) rounds of pairwise parallel merges, ping-ponging between two buffers (every round touches all data).
+pub fn merge_pairwise(v: Vec<u64>, runs: &[std::ops::Range<usize>]) -> Vec<u64> {
+    if v.is_empty() { return v; }
+    let mut src = v;
+    let mut dst = vec![0u64; src.len()];
+    let mut runs: Vec<std::ops::Range<usize>> = runs.to_vec();
+    while runs.len() > 1 {
+        let mut next = vec![];
+        {
+            let mut rest: &mut [u64] = &mut dst[runs[0].start..];
+            let src_ref = &src;
+            std::thread::scope(|s| {
+                let mut i = 0;
+                while i < runs.len() {
+                    let (a, b) = (runs[i].clone(), runs.get(i + 1).cloned().unwrap_or(runs[i].end..runs[i].end));
+                    let len = a.len() + b.len();
+                    let (out, tail) = std::mem::take(&mut rest).split_at_mut(len);
+                    rest = tail;
+                    next.push(a.start..a.start + len);
+                    s.spawn(move || merge2(&src_ref[a], &src_ref[b], out));
+                    i += 2;
+                }
+            });
+        }
+        std::mem::swap(&mut src, &mut dst);
+        runs = next;
+    }
+    src
+}
+
+/// Strategy B: one pass. Sample splitters, give each thread a key range, and let it k-way merge *its* range from all runs.
+pub fn merge_multiway(v: &[u64], runs: &[std::ops::Range<usize>], threads: usize) -> Vec<u64> {
+    if v.is_empty() { return vec![]; }
+    let mut samples: Vec<u64> = vec![];
+    for r in runs { let step = (r.len() / 64).max(1); samples.extend(v[r.clone()].iter().step_by(step)); }
+    samples.sort_unstable();
+    let splitters: Vec<u64> = (1..threads).map(|i| samples[i * samples.len() / threads]).collect();
+    // bounds[t][r]: first index in run r that belongs to thread t's range
+    let bound = |s: Option<u64>, r: &std::ops::Range<usize>| s.map_or(r.len(), |s| v[r.clone()].partition_point(|&x| x < s));
+    let starts: Vec<Vec<usize>> = (0..threads).map(|t| runs.iter().map(|r| if t == 0 { 0 } else { bound(Some(splitters[t - 1]), r) }).collect()).collect();
+    let ends: Vec<Vec<usize>> = (0..threads).map(|t| runs.iter().map(|r| if t + 1 == threads { r.len() } else { bound(Some(splitters[t]), r) }).collect()).collect();
+    let mut out = vec![0u64; v.len()];
+    let mut rest: &mut [u64] = &mut out;
+    std::thread::scope(|s| {
+        for t in 0..threads {
+            let n: usize = (0..runs.len()).map(|r| ends[t][r] - starts[t][r]).sum();
+            let (mine, tail) = std::mem::take(&mut rest).split_at_mut(n);
+            rest = tail;
+            let (st, en) = (starts[t].clone(), ends[t].clone());
+            s.spawn(move || {
+                let mut heap: BinaryHeap<Reverse<(u64, usize)>> = BinaryHeap::new();
+                let mut pos = st.clone();
+                for (r, run) in runs.iter().enumerate() { if pos[r] < en[r] { heap.push(Reverse((v[run.start + pos[r]], r))); } }
+                let mut k = 0;
+                while let Some(Reverse((x, r))) = heap.pop() {
+                    mine[k] = x; k += 1;
+                    pos[r] += 1;
+                    if pos[r] < en[r] { heap.push(Reverse((v[runs[r].start + pos[r]], r))); }
+                }
+            });
+        }
+    });
+    out
+}
+
+/// Merge join of sorted R (unique keys) and sorted S.
+pub fn merge_join(r: &[u64], s: &[u64]) -> (u64, u64) {
+    let (mut i, mut n, mut sum) = (0usize, 0u64, 0u64);
+    for &x in s {
+        let k = key(x);
+        while i < r.len() && key(r[i]) < k { i += 1; }
+        if i == r.len() { break; }
+        if key(r[i]) == k { n += 1; sum = sum.wrapping_add(r[i] & 0xFFFF_FFFF); }
+    }
+    (n, sum)
+}
+
+/// Range-partition by R's keys: thread t joins R[a..b] with the S rows whose keys fall in the same key range.
+pub fn parallel_merge_join(r: &[u64], s: &[u64], threads: usize) -> (u64, u64) {
+    let cuts: Vec<usize> = (0..=threads).map(|t| t * r.len() / threads).collect();
+    std::thread::scope(|sc| {
+        let hs: Vec<_> = (0..threads).map(|t| {
+            let rr = &r[cuts[t]..cuts[t + 1]];
+            if rr.is_empty() { return sc.spawn(|| (0u64, 0u64)); }
+            let (lo, hi) = (key(rr[0]), if t + 1 == threads { u32::MAX } else { key(r[cuts[t + 1]]) });
+            let a = s.partition_point(|&x| key(x) < lo);
+            let b = if t + 1 == threads { s.len() } else { s.partition_point(|&x| key(x) < hi) };
+            let ss = &s[if t == 0 { 0 } else { a }..b];
+            sc.spawn(move || merge_join(rr, ss))
+        }).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).fold((0u64, 0u64), |x, y| (x.0 + y.0, x.1.wrapping_add(y.1)))
+    })
+}
+```
+:::
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><code>sorting_strategies_are_correct</code>: both merge strategies equal <code>sort_unstable</code> for n ∈ {0, 1, 7, 100, 10 007, 100 000} × T ∈ {1, 2, 3, 5, 8}, with a key range small enough for <strong>many duplicates</strong> (splitters then land inside runs of equal values).</li> <li><code>sort_merge_join_matches_the_reference</code>: the join equals the <code>HashMap</code> reference of <a href="/cookbook/p/parallel-hash-joins">A16</a> for |R| ∈ {0, 1, 1 000, 70 000}, T ∈ {1, 4, 8}.</li> <li>The first run <strong>failed</strong> on exactly the cases this plan lists: empty input (no samples to take splitters from) and an off-by-one in the splitter table (a bound computed for thread <em>T</em> that doesn't exist). Both are boundary bugs that random mid-sized inputs would never hit.</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "Measured (8 threads)"
+body = """
+<p>Sorting 32 M random <code>u64</code>:</p>
+
+```text title="sort 32M u64"
+std sort_unstable, 1 thread               375 ms
+8 local sorts + pairwise merge tree       217 ms  (local sorts  50 + merges 167)
+8 local sorts + range multiway merge      111 ms  (local sorts  45 + merges  66)
+```
+
+<p>Join, |S| = 16 M, every S row matching:</p>
+
+```text title="sort-merge vs radix hash, ms"
+       |R|   sort R   sort S   merge join   sort-merge   radix hash
+   1000000        4       46            2           52           16
+  16000000       61       57           11          129           21
+```
+
+<ul> <li><strong>Parallel sorting works, and merge strategy is the difference</strong>: eight local sorts take ~1/8 of the single-thread time (smaller runs also mean fewer comparisons), but a binary merge tree makes <strong>three more passes over 256 MB</strong> and eats most of the gain (1.7× total); the one-pass multiway merge reaches <strong>3.4×</strong>.</li> <li><strong>The merge join itself is nearly free</strong> (2–11 ms): once sorted, joining is a streaming pass. The join is the sort, and sorting S (16 M rows) dominates everything.</li> <li><strong>Radix hash join was 3.3× (|R| = 1 M) and 6.1× (|R| = 16 M) faster</strong> here, matching the lecture's conclusion that sorting is the wrong default for a join whose output order nobody needs. Two honest caveats: this kernel is the standard library's comparison sort, not SIMD sorting networks or a radix sort (exercise 2 is the experiment that should narrow the gap), and the merge uses a binary heap, not a tournament tree or bitonic network.</li> <li>If the <strong>next operator needs the order</strong> (a <code>GROUP BY</code> or <code>ORDER BY</code> on the join key), sort-merge pays the sort once for both; compare against hash join <strong>plus</strong> a separate sort of the output.</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Disjoint mutable output</strong> is expressed with <code>split_at_mut</code> in a loop and <code>std::mem::take(&amp;mut rest)</code> to move the remaining slice forward; each scoped thread owns its slice, and the borrow checker proves no two threads write the same element: no <code>unsafe</code>, unlike the scatter phase of the radix join.</li> <li><code>chunks_mut</code> + <code>thread::scope</code> for local runs; <code>partition_point</code> for the binary searches (it requires the predicate to be monotonic, which is exactly what sorted data guarantees).</li> <li><code>BinaryHeap&lt;Reverse&lt;(u64, usize)&gt;&gt;</code> is the quick k-way merge; pairing the value with the run index makes ties deterministic. Replace it with a <strong>loser tree</strong> for a measurable improvement at k ≥ 8.</li> <li>Packing <code>(key, payload)</code> into one <code>u64</code> makes <code>sort_unstable</code> a one-instruction-compare sort; for wider tuples sort <strong>(key, row-id)</strong> pairs and gather payloads afterwards.</li> <li><code>sort_unstable</code> is fine for a join (equal rows are indistinguishable); use the stable <code>sort</code> only where the SQL semantics or a later operator depend on the order of ties.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Duplicates in the merge</strong>: with duplicate keys on both sides, the merge must emit the cross product of the equal groups; a cursor that only advances one side drops matches. The test uses unique R, so add duplicate-on-both-sides tests before using this operator.</li> <li><strong>Splitter quality = load balance</strong>: splitters from a sample of the <em>runs</em> are good for uniform data; a hot key makes one range huge (the slowest thread sets the latency). Take splitters from the quantiles of a larger sample and <strong>split hot keys across threads</strong> using the row id as a tiebreak.</li> <li><strong>Range partitions must respect equal keys</strong>: put all equal keys on one side of a splitter (the code uses <code>x &lt; splitter</code>), or a group is divided between two threads and its matches are lost.</li> <li><strong>NULLs and collation</strong>: for strings, sort order must follow the collation, and NULLs must be excluded from the join or placed consistently; mixing <code>memcmp</code> order and collation order is a classic wrong-result bug.</li> <li><strong>Memory</strong>: the pairwise tree needs a second full buffer; the multiway merge too (output). A sort-merge join over inputs larger than memory becomes an <strong>external</strong> sort (<a href="/cookbook/p/sorting-and-aggregation">L11</a>): runs on disk, a bounded-fan-in merge, and an I/O budget.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Multi-Core, Main-Memory Joins: Sort vs. Hash Revisited"
+url = "https://www.vldb.org/pvldb/vol7/p85-balkesen.pdf"
+
+[[sources]]
+title = "Massively Parallel Sort-Merge Joins in Main Memory Multi-Core Database Systems"
+url = "https://www.vldb.org/pvldb/vol5/p1064_martina-cezaraalbutiu_vldb2012.pdf"
+
+[[sources]]
+title = "An Experimental Comparison of Thirteen Relational Equi-Joins in Main Memory"
+url = "https://dl.acm.org/doi/10.1145/2882903.2882917"
+
+[[sources]]
+title = "rayon::slice::ParallelSliceMut::par_sort_unstable"
+url = "https://docs.rs/rayon"
+
+[[sources]]
+title = "voracious_radix_sort"
+url = "https://docs.rs/voracious_radix_sort"

@@ -1,0 +1,44 @@
+title = "Transaction theory"
+module = "Databases"
+module_order = 8
+chapter = "Transactions and concurrency control"
+chapter_order = 6
+order = 408
+kind = "recipe"
+lede = "Schedules, conflict/view serializability, recoverability classes, ACID, and Adya's isolation phenomena."
+level = "advanced"
+code = ["examples/database/transaction_theory_serializability.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+anything that interleaves transactions (SQL engines, STMs, key-value stores); the vocabulary for reasoning about isolation bugs.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**A schedule** (history) is an interleaving of the read / write / commit / abort operations of several transactions that keeps each transaction's own order. Part 1 treats schedules in the textbook way, Part 2 in Adya's way.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Conflict serializability</div><div class="cb-g-says"><p>Two operations conflict if they touch the same object, belong to different transactions and at least one is a write. Draw an edge Ti -&gt; Tj for every conflicting pair where Ti's operation comes first (the <strong>precedence graph</strong>).</p><p>The schedule is conflict-serializable iff the graph (over committed transactions) is acyclic, and any topological order is an equivalent serial order. This is what lock-based protocols (2PL) and timestamp ordering guarantee.</p></div></div><div class="cb-g-term"><div class="cb-g-name">View serializability</div><div class="cb-g-says"><p>View serializability is weaker: the schedule only has to give every read the same source (reads-from) and every object the same final writer as <strong>some</strong> serial schedule. Deciding it is NP-complete, so we brute-force all permutations (fine for 4 transactions).</p><p>Every conflict-serializable schedule is view-serializable but not conversely: the gap needs <strong>blind writes</strong> (a write that no read of that transaction preceded), e.g. <code>r1(x) w2(x) w1(x) w3(x)</code>.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Recoverability</div><div class="cb-g-says"><p>Recoverability is about aborts, not about order. <strong>Recoverable</strong> (RC): a transaction commits only after every transaction it read from has committed. <strong>Avoids cascading aborts</strong> (ACA): reads only see committed data, so an abort never drags readers along.</p><p><strong>Strict</strong>: nobody reads OR overwrites an object while its last writer is uncommitted, so abort = restore the before-image. The classes nest: strict &lt; ACA &lt; recoverable, asserted on 5000 random schedules, together with CSR &lt; VSR.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>ACID is shown as scripted scenarios on a toy log-based store (atomicity via undo, consistency via a constraint, isolation via the lost-update interleaving, durability via log replay after a crash).</p></div></div><div class="cb-g-term"><div class="cb-g-name">ADYA'S formalism</div><div class="cb-g-says"><p>Defines isolation without locks: build the <strong>direct serialization graph</strong> (DSG) of the committed transactions with edges ww (Tj overwrites Ti's version), wr (Tj reads Ti's version), rw (Ti read a version that Tj overwrote: <strong>anti-dependency</strong>).</p><p>Phenomena: G0 = ww cycle (dirty write); G1a = read of an aborted write; G1b = read of an intermediate (non-final) write; G1c = cycle of ww/wr edges; G-single = cycle with exactly one rw edge (what snapshot isolation forbids); G2-item = cycle with item rw edges; G2 = any cycle (needs predicate rw edges to differ from G2-item).</p><p>Levels: <strong>read uncommitted</strong> forbids G0; <strong>read committed</strong> adds G1; <strong>repeatable read</strong> (Adya's PL-2.99) adds G2-item; <strong>snapshot</strong> adds G-single instead of G2-item (so write skew passes); <strong>serializable</strong> forbids G2. The table at the end runs scripted histories.</p><p><strong>Caveat.</strong> SI's start-ordering condition (G-SIa) needs timestamps and is not modelled; scripted SI histories obey it. A cross-check proves the DSG and the precedence graph agree on 3000 random all-commit schedules.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>reasoning about 2PL / T/O / OCC / MVCC correctness</li><li>Jepsen-style history checkers (Elle builds the same ww/wr/rw graph)</li><li>explaining PostgreSQL's isolation levels</li><li>test oracles for transaction engines. Course: CMU 15-445 Lecture 17 (concurrency control theory) and CMU 15-721 isolation levels lecture</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>"A Critique of ANSI SQL Isolation Levels" (Berenson et al., 1995) <a href="https://arxiv.org/pdf/cs/0701157" target="_blank" rel="noreferrer">https://arxiv.org/pdf/cs/0701157</a></li><li>"Weak Consistency: A Generalized Theory and Optimistic Implementations" (Adya, thesis 1999)</li><li>PostgreSQL isolation docs <a href="https://www.postgresql.org/docs/current/transaction-iso.html" target="_blank" rel="noreferrer">https://www.postgresql.org/docs/current/transaction-iso.html</a></li></ul>
+"""
+
+[[sources]]
+title = "arxiv.org/pdf/cs/0701157"
+url = "https://arxiv.org/pdf/cs/0701157"
+
+[[sources]]
+title = "postgresql.org/docs/current/transaction-iso.html"
+url = "https://www.postgresql.org/docs/current/transaction-iso.html"

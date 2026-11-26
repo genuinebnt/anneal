@@ -1,0 +1,76 @@
+title = "`str` end to end"
+module = "Standard library and core"
+module_order = 2
+chapter = "Text"
+chapter_order = 2
+order = 73
+kind = "recipe"
+lede = "Search, split, trim, case, parse, UTF-8 boundaries, and the scenarios they are used for."
+level = "simple"
+code = ["examples/std_tour/std_str_search_split_parse.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>config/log/CSV-ish parsing</li><li>slugs</li><li>identifier case conversion</li><li>safe truncation</li><li>ASCII fast paths</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>parsing <code>key=value</code> config files</li><li>tokenising log lines</li><li>URL slugs</li><li>camelCase/snake_case converters in code generators</li><li>truncating user text for display without cutting a UTF-8 sequence</li><li>validating untrusted input before it reaches a parser</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>str::split_once</code></li><li><code>str::trim</code></li><li><code>str::lines</code></li><li><code>str::split_whitespace</code></li><li><code>str::contains</code></li><li><code>str::starts_with</code></li><li><code>str::strip_prefix</code></li><li><code>str::find</code></li><li><code>str::parse</code></li><li><code>str::replace</code></li><li><code>str::to_lowercase</code></li><li><code>str::get</code></li><li><code>str::len</code></li><li><code>str::is_empty</code></li><li><code>str::chars</code></li><li><code>str::is_empty</code></li><li><code>str::chars</code></li><li><code>str::char_indices</code></li><li><code>str::bytes</code></li><li><code>str::lines</code></li><li><code>str::split</code></li><li><code>str::split_terminator</code></li><li><code>str::split_inclusive</code></li><li><code>str::splitn</code></li><li><code>str::rsplitn</code></li><li><code>str::rsplit</code></li><li><code>str::split_once</code></li><li><code>str::rsplit_once</code></li><li><code>str::split_whitespace</code></li><li><code>str::split_ascii_whitespace</code></li><li><code>str::split_at</code></li><li><code>str::split_at_checked</code></li><li><code>str::split_at_mut</code></li><li><code>str::trim</code></li><li><code>str::trim_start</code></li><li><code>str::trim_end</code></li><li><code>str::trim_matches</code></li><li><code>str::trim_start_matches</code></li><li><code>str::trim_end_matches</code></li><li><code>str::strip_prefix</code></li><li><code>str::strip_suffix</code></li><li><code>str::find</code></li><li><code>str::rfind</code></li><li><code>str::matches</code></li><li><code>str::rmatches</code></li><li><code>str::match_indices</code></li><li><code>str::rmatch_indices</code></li><li><code>str::contains</code></li><li><code>str::starts_with</code></li><li><code>str::ends_with</code></li><li><code>str::replace</code></li><li><code>str::replacen</code></li><li><code>str::to_lowercase</code></li><li><code>str::to_uppercase</code></li><li><code>str::to_ascii_lowercase</code></li><li><code>str::to_ascii_uppercase</code></li><li><code>str::make_ascii_lowercase</code></li><li><code>str::make_ascii_uppercase</code></li><li><code>str::eq_ignore_ascii_case</code></li><li><code>str::repeat</code></li><li><code>str::parse</code></li><li><code>str::get</code></li><li><code>str::get_mut</code></li><li><code>str::is_char_boundary</code></li><li><code>str::floor_char_boundary</code></li><li><code>str::ceil_char_boundary</code></li><li><code>str::as_bytes</code></li><li><code>str::from_utf8</code></li><li><code>String::from_utf8_lossy</code></li><li><code>str::escape_debug</code></li><li><code>str::escape_default</code></li><li><code>str::escape_unicode</code></li><li><code>char::from_u32</code></li><li><code>str::is_ascii</code></li><li><code>str::char_indices</code></li><li><code>str::as_ptr</code></li><li><code>str::to_owned</code></li><li><code>str::into_boxed_str</code></li><li><code>str::trim_ascii</code></li><li><code>str::as_str</code></li><li><code>str::encode_utf16</code></li><li><code>str::chars</code></li><li><code>str::rsplit_terminator</code></li><li><code>str::split_inclusive</code></li><li><code>str::trim_left_matches</code></li></ul>
+
+str::substr_range, str::strip_circumfix
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/primitive.str.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/primitive.str.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+most `str` methods core (`core::str`); `replace`, `replacen`, `repeat`, `to_lowercase`, `to_uppercase`, `to_ascii_uppercase`/`lowercase` alloc (`alloc::str`; the in-place make_ascii&#95;&#42; are core).
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+as_bytes_mut / as_mut_ptr / get_unchecked&#42; / from_utf8_unchecked&#42; (unsafe), split_at_unchecked (unsafe), trim_left/trim_right/ trim_left_matches/trim_right_matches (deprecated aliases), is_empty-like trivia, into_string/into_boxed_bytes (Box&lt;str> only, shown in 1021), to_string (ToString), as_ascii/as_ascii_unchecked (nightly), str_from_raw_parts helpers and char_count helpers (unstable or unsafe), split_at_mut_checked / from_utf8_mut (mutable twins of covered calls).
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Split "k=v" once</td><td><code>split_once('=') (not split('=').collect::&lt;Vec&lt;_&gt;&gt;()[..])</code></td></tr><tr><td>File extension / last segment</td><td><code>rsplit_once('.')</code></td></tr><tr><td>Remove a known prefix and test it</td><td><code>strip_prefix (clippy::manual_strip)</code></td></tr><tr><td>Split on any whitespace run</td><td><code>split_whitespace (ASCII-only protocol text: split_ascii_whitespace)</code></td></tr><tr><td>Iterate lines of text</td><td><code>lines() (handles &#92;r&#92;n; split('&#92;n') does not)</code></td></tr><tr><td>Trim user input</td><td><code>trim(); trim a char set -&gt; trim_matches(['a','b'])</code></td></tr><tr><td>Does it contain X</td><td><code>contains(pat); where -&gt; find; last -&gt; rfind; all -&gt; match_indices</code></td></tr><tr><td>Case-insensitive ASCII compare</td><td><code>eq_ignore_ascii_case (no allocation)</code></td></tr><tr><td>Unicode case change</td><td><code>to_lowercase / to_uppercase (may change length)</code></td></tr><tr><td>Parse a number/bool</td><td><code>s.trim().parse::&lt;T&gt;() and match the error</code></td></tr><tr><td>Slice without panicking</td><td><code>s.get(a..b) / split_at_checked</code></td></tr><tr><td>Cut at N bytes safely</td><td><code>floor_char_boundary(n)</code></td></tr><tr><td>Count chars not bytes</td><td><code>chars().count() (graphemes need a crate)</code></td></tr><tr><td>Bytes to str</td><td><code>str::from_utf8 (strict) / String::from_utf8_lossy (logs)</code></td></tr><tr><td>Repeat / pad</td><td><code>"-".repeat(n), format!("{:&gt;8}", s)</code></td></tr><tr><td>Keep separators when splitting</td><td><code>split_inclusive</code></td></tr><tr><td>At most N pieces</td><td><code>splitn(n, sep) THE MODEL: a &amp;str is a (pointer, byte length) pair whose bytes are ALWAYS valid UTF-8. Every method that takes or returns a position works in BYTES, not chars. A position that lands inside a multi-byte character is not an Err for slicing, it is a PANIC (&amp;s[a..b]), so the non-panicking family (get, split_at_checked, is_char_boundary, floor_char_boundary) matters. A Pattern (the thing you pass to find/split/trim/...) is one of: char, &amp;str, &amp;String, [char; N], &amp;[char], or a closure</code></td></tr><tr><td>'FnMut(char)</td><td><code>bool'. Searching for a '&amp;str' is substring search; the others are per-char tests.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/str/pattern/index.html>, <https://doc.rust-lang.org/book/ch08-02-strings.html>, <https://www.unicode.org/reports/tr29/> (why `chars()` is not "what the user sees")
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/primitive.str.html"
+url = "https://doc.rust-lang.org/std/primitive.str.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/str/pattern/index.html"
+url = "https://doc.rust-lang.org/std/str/pattern/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch08-02-strings.html"
+url = "https://doc.rust-lang.org/book/ch08-02-strings.html"
+
+[[sources]]
+title = "unicode.org/reports/tr29"
+url = "https://www.unicode.org/reports/tr29/"

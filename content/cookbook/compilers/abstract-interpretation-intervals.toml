@@ -1,0 +1,70 @@
+title = "Abstract interpretation"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Middle end and analysis"
+chapter_order = 5
+order = 627
+kind = "recipe"
+lede = "Interval, sign, parity and reduced-product domains, widening/narrowing, difference bounds."
+level = "advanced"
+code = ["examples/compilers_runtimes/abstract_interpretation_intervals.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+static analysers that must prove "this array access / division / addition can never go wrong" for **all** inputs without running the program.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Astree (flight-control software proofs of absence of run-time errors)</li><li>Frama-C's Eva plugin</li><li>the Clang Static Analyzer's range constraints</li><li>LLVM's ConstantRange / CorrelatedValuePropagation (drops bounds checks and overflow flags)</li><li>rustc's MIR const-prop and range lints</li><li>the JIT range analyses in V8 and HotSpot that remove bounds checks</li><li>NASA's IKOS and the Crab library (open-source abstract-interpretation frameworks). Course: Cousot and Cousot</li><li>"Abstract interpretation: a unified lattice model for static analysis of programs" (POPL 1977; cited by title only)</li><li>Moller and Schwartzbach "Static Program Analysis"</li><li>the material on widening and narrowing</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The idea**. A program's concrete behaviours are sets of states (undecidable to compute).
+
+Pick an **abstract domain** of finitely describable sets (here: intervals [lo,hi], sign sets, parity) related to concrete sets by a **GALOIS connection**: alpha (best abstraction of a set) and gamma (the set an abstract value stands for) with  S subset gamma(alpha(S))  and  alpha(gamma(a)) &lt;= a.
+
+Each abstract operation must over-approximate the concrete one: op(x,y) in gamma(op#(a,b)) whenever x in gamma(a), y in gamma(b). Then every fact the analysis derives is **true** of all executions ("sound"), but it may also say "maybe" about things that are fine ("incomplete"): that is the precision/cost trade-off.
+
+We test local soundness (random finite sets, every concrete pair) and global soundness (2000 random programs, concrete runs, every observed value).
+
+**Loops need widening**. The loop invariant is a least fixpoint over an infinite-height lattice (the interval chain [0,0] &lt; [0,1] &lt; [0,2] ... never stabilises). **Widening** (nabla) jumps an unstable bound to the next **threshold** (a constant from the program) or to infinity (here: the i32 limits), which forces convergence in a few steps.
+
+**Narrowing** then re-applies the loop body a fixed number of times (we intersect with F(inv)) to win back precision lost by the jump, e.g. `i < 100` turns [0, MAX] into [0, 100].
+
+**The machine model**. 32-bit signed integers; `+ - *` that leave the range **wrap** (the concrete interpreter does so and records an overflow event); division by zero records an event and yields 0; out-of-bounds table/out accesses record an event and the program continues (so that one run exercises many sites).
+
+The analysis raises an **alarm** for a check it cannot prove safe; the soundness test asserts that every concrete event happens only at a site that raised an alarm, i.e. "no alarm" really means "proved safe".
+
+**Domains**. Interval (with thresholds), Sign ({neg,zero,pos} powerset), Parity ({even,odd}), and their **reduced product** Interval x Parity (each component tightens the other: an even-parity interval [1,6] becomes [2,6]; a singleton interval fixes the parity).
+
+Parity alone can prove `100 / (2*k+1)` safe where intervals cannot (k in [-5,5] gives [-9,11] which contains 0). Intervals prove indices where parity cannot. **Relational domains**: intervals lose x - y facts (`z = y - x` where y = x gives [-10,10]).
+
+A difference-bound matrix (the "zones" domain, the simplest octagon-style relational domain) stores x_i - x_j &lt;= c, closed by Floyd-Warshall; we verify the closure against brute force.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Cousot and Cousot (POPL 1977, title only)</li><li>Moller and Schwartzbach, Static Program Analysis <a href="https://cs.au.dk/~amoeller/spa/" target="_blank" rel="noreferrer">https://cs.au.dk/~amoeller/spa/</a></li><li>Mine, "The Octagon Abstract Domain" (title only</li><li>zones/DBM are the subset used here)</li><li>Cornell CS 6120 lessons <a href="https://www.cs.cornell.edu/courses/cs6120/2020fa/" target="_blank" rel="noreferrer">https://www.cs.cornell.edu/courses/cs6120/2020fa/</a></li><li><a href="https://en.wikipedia.org/wiki/Abstract_interpretation" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Abstract_interpretation</a> and <a href="https://en.wikipedia.org/wiki/Widening_(computer_science" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Widening_(computer_science</a>)</li></ul>
+"""
+
+[[sources]]
+title = "cs.au.dk/~amoeller/spa"
+url = "https://cs.au.dk/~amoeller/spa/"
+
+[[sources]]
+title = "cs.cornell.edu/courses/cs6120/2020fa"
+url = "https://www.cs.cornell.edu/courses/cs6120/2020fa/"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Abstract_interpretation"
+url = "https://en.wikipedia.org/wiki/Abstract_interpretation"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Widening_(computer_science"
+url = "https://en.wikipedia.org/wiki/Widening_(computer_science"

@@ -1,0 +1,60 @@
+title = "HyperLogLog cardinality estimation from scratch"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Hashing and probabilistic structures"
+chapter_order = 1
+order = 165
+kind = "recipe"
+lede = "HyperLogLog cardinality estimation from scratch."
+level = "advanced"
+code = ["examples/data_structures/hyperloglog.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>COUNT(<strong>distinct</strong>) at scale</li><li>unique visitors</li><li>distinct-key stats</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+estimate the number of **distinct** items in a few KB, with relative error &#126; 1.04/sqrt(m), m = 2&#94;p.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+hash each item to 64 bits. The top p bits pick a register; in the remaining bits count the leading zeros and store rank = lz + 1 (keep the max per register). Seeing a rank-r hash suggests about 2&#94;r distinct items were tried, but one register is noisy, so we average over m registers with a **harmonic** mean (it damps outliers from lucky registers):
+
+```text
+E = alpha_m * m^2 / sum_j 2^(-M[j])
+```
+
+alpha_m is a bias constant (0.7213/(1+1.079/m) for m >= 128, small tabulated values below). **Small range**: when many registers are still 0, E is biased high, so switch to linear counting `m * ln(m / zeros)` (treat registers as a Bloom-like bitmap) if E &lt;= 2.5 m.
+
+**Large range**: the original paper corrects near 2&#94;32 because of 32-bit hashes; with a good 64-bit hash this is not needed at any practical cardinality. **Merge**: register-wise MAX. The merged sketch equals the sketch of the union, exactly, so sketches can be computed per shard / per day and combined.
+
+(Intersection is **not** directly supported.) **sparse VS dense**: dense = all m registers (here m bytes). Production implementations start **sparse** (a small sorted list of (index, rank) pairs) while few items were seen, then convert to dense once the list would outgrow the dense array; same estimator, much less memory for tiny sets.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+approximate distinct counts in analytics databases and caches (unique users per page, distinct IPs per window), per-dimension distinct counters pre-aggregated per hour/day and merged at query time, and cardinality statistics for query planners. Redis (PFADD/PFCOUNT/PFMERGE) and many SQL engines expose HyperLogLog-based approximate distinct counts.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/HyperLogLog>
+
+<https://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/HyperLogLog"
+url = "https://en.wikipedia.org/wiki/HyperLogLog"
+
+[[sources]]
+title = "algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf"
+url = "https://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf"

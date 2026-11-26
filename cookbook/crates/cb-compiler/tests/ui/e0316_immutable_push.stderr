@@ -1,0 +1,11 @@
+error[E0316]: cannot assign to `xs`, as it is not declared as mutable
+ --> e0316_immutable_push.peb:2:10
+  |
+1 | fn fill(xs: [int]) {
+  |         -- this parameter is not mutable
+2 |     push(xs, 1);
+  |          ^^ cannot assign
+  |
+  = help: consider declaring `xs` as mutable: `mut xs`
+
+error: aborting due to 1 previous error

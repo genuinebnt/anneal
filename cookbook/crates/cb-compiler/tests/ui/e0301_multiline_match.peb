@@ -1,0 +1,8 @@
+fn main() {
+    let n = 3;
+    let s: str = match n {
+        1 => 10,
+        _ => 20,
+    };
+    println(s);
+}

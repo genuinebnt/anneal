@@ -1,0 +1,60 @@
+title = "Your own `Arc<T>` and `Weak<T>` from scratch"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Atomics and memory ordering"
+chapter_order = 2
+order = 248
+kind = "recipe"
+lede = "Atomic refcounts, Release/Acquire on drop, CAS upgrade."
+level = "advanced"
+code = ["examples/concurrency/own_arc_refcount.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+understanding std::sync::Arc, intrusive/shared ownership, any code that frees memory when "the last owner leaves". (unsafe part: also try `cargo +nightly miri run --example own_arc_refcount`; Miri is not installed here, lower the loop counts first)
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Design**. One heap block `Inner<T> { strong, weak, data }`. `MyArc` and `MyWeak` are both a `NonNull<Inner<T>>`.
+
+- `strong` counts `MyArc`s. When it reaches 0 the **value** `T` is dropped (in place, `data` is `ManuallyDrop`).
+- `weak` counts `MyWeak`s **plus one** implicit weak that all the strongs share together. So the allocation is freed when `weak` reaches 0, which can only happen after the last strong has gone and released the implicit weak. This is the std design; it makes "last strong drops value, then drops one weak" a single uniform code path.
+
+**Orderings** (Rust Atomics and Locks, ch. 6 <https://marabos.nl/atomics/building-arc.html>):
+
+- `clone`: `fetch_add(Relaxed)`. Creating a new owner from an existing owner needs no ordering: we already hold a reference, so the count cannot hit zero under us, and we are not publishing any data. Guard against overflow (`mem::forget` in a loop could wrap to 0 and cause use-after-free): abort past `isize::MAX`.
+- `drop`: `fetch_sub(Release)`. Every thread that used the data (reads, or writes via get_mut) must have those accesses ordered **before** its decrement is visible. Release gives that.
+- The thread that sees the old value 1 (the last owner) then runs `fence(Acquire)` before dropping/freeing. The fence synchronises with the Release decrements of **all** other threads, so every earlier access by them happens-before our destructor. Without it, another thread's last read of `T` could be reordered after our free (a data race / UAF).
+
+   The fence is used instead of making every decrement AcqRel because only the final decrementer needs Acquire.
+- `upgrade` (Weak to Arc): a CAS loop `n -> n+1` that refuses when `n == 0`. A plain `fetch_add` would resurrect an object whose value is already being dropped. Relaxed is enough: success means a strong exists, so data is alive.
+- `get_mut` needs uniqueness: strong == 1 **and** weak == 1 (no other Weak could upgrade). Acquire loads pair with the Release decrements of owners that went away. `try_unwrap` is `strong: CAS 1 -> 0` then an Acquire fence.
+- `Send`/`Sync` need `T: Send + Sync`: sharing an Arc lets any thread get `&T` (needs Sync) and the last owner on any thread drops `T` (needs Send). An Arc&lt;Cell&lt;&#95;>> must not be Send, otherwise it is a data race.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>this is how std::sync::Arc</li><li>the <code>triomphe</code> crate (no weak count) and tokio's task refcounts work</li><li>Weak breaks parent/child cycles (trees with parent pointers, observer lists, caches)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://marabos.nl/atomics/building-arc.html" target="_blank" rel="noreferrer">https://marabos.nl/atomics/building-arc.html</a></li><li><a href="https://doc.rust-lang.org/nomicon/atomics.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/nomicon/atomics.html</a></li><li><a href="https://doc.rust-lang.org/std/sync/struct.Arc.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/sync/struct.Arc.html</a></li></ul>
+"""
+
+[[sources]]
+title = "marabos.nl/atomics/building-arc.html"
+url = "https://marabos.nl/atomics/building-arc.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/atomics.html"
+url = "https://doc.rust-lang.org/nomicon/atomics.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/sync/struct.Arc.html"
+url = "https://doc.rust-lang.org/std/sync/struct.Arc.html"

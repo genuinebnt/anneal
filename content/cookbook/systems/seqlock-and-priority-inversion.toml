@@ -1,0 +1,68 @@
+title = "Seqlock and priority inversion"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Atomics and memory ordering"
+chapter_order = 2
+order = 249
+kind = "recipe"
+lede = "seqlock for tear-free multi-word reads, and priority inversion vs inheritance vs ceiling."
+level = "advanced"
+code = ["examples/concurrency/seqlock_and_priority_inversion.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+read-mostly shared records (clocks, stats, config snapshots), real-time scheduling and lock design.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Part a**, SEQLOCK. **What**: a lock for small `Copy` data where readers never block writers and never write shared memory (no cache-line ping-pong between readers). A sequence counter `seq` is **even** when the data is stable and **odd** while a writer is inside.
+
+Writer: `seq += 1` (odd), write data, `seq += 1` (even). Reader: read `seq` (retry if odd), copy the data, re-read `seq`, retry if it changed. A reader may see garbage in the middle of its copy, but then `seq` differs and the copy is thrown away, so garbage is never **returned**.
+
+**Why the naive version is unsound in rust**: copying a plain struct (`*ptr` / `ptr::read`) while a writer writes it is a **data race**, which is undefined behaviour in the Rust and C++ memory models even if the result is discarded afterwards: the compiler may assume no concurrent write and, for example, reload or tear the copy in ways the retry logic cannot undo.
+
+**Sound options**: (1) store every word as an `AtomicU64` and access it with Relaxed loads/stores (this file: racing atomics are not UB, only possibly stale/torn **across** words, which the sequence check detects);
+
+(2) `MaybeUninit<T>` plus `ptr::read_volatile` copies, which is what several crates do, though strictly the language reference still calls a racing non-atomic read UB (the C++ proposal for `atomic_load_per_byte_memcpy` exists to bless it); option 1 needs no `unsafe` at all, so we use it.
+
+**Orderings** (Hans Boehm, "Can Seqlocks Get Along with Programming Language Memory Models?"): writer: `seq.store(s+1, Relaxed); fence(Release); data stores (Relaxed); seq.store(s+2, Release)`.
+
+The release **fence** keeps the odd store from sinking below the data stores; the final release store publishes them. reader: `s1 = seq.load(Acquire); data loads (Relaxed); fence(Acquire); s2 = seq.load(Relaxed)`. The acquire **fence** keeps the data loads from sinking below the re-check of `seq`. Writers are serialised by a Mutex (a seqlock has one writer at a time).
+
+Readers can starve if writers never pause; that is the price of wait-free writers. **Part B**, **priority inversion**. A deterministic discrete-event simulation of a fixed-priority preemptive single CPU (one tick per step, no threads, no timing).
+
+Mars Pathfinder (1997): a low-priority task L holds the bus mutex; the high-priority task H needs it and blocks; medium tasks M (which need no lock) preempt L, so L cannot release the lock and H waits for **all** the medium work: unbounded inversion (the watchdog reset the lander; the fix was enabling priority inheritance remotely).
+
+**Priority inheritance**: while H waits for a lock L holds, L runs at H's priority (transitively through chains), so M cannot preempt it. H's blocking is at most one critical section per lock. Does **not** prevent deadlock.
+
+**Priority ceiling** (immediate / ICPP, POSIX PRIO_PROTECT): every lock has a ceiling = highest priority of any task that ever uses it; a task that takes the lock immediately runs at the ceiling. Blocking is at most one critical section, a lock is never found held by a blocked task, so it also prevents deadlock from nested locks.
+
+**Cost.** You must know all lockers in advance, and tasks are boosted even without contention. We measure **inversion ticks**: ticks where H is released and unfinished, yet a lower-priority task is running.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>seqlocks: the Linux kernel (<code>seqlock_t</code>, used for jiffies/xtime and VDSO time reads)</li><li>game and trading engines publishing the latest quote or state snapshot to many readers</li><li>metrics counters read by a scraper</li><li>priority inheritance/ceiling: POSIX <code>PTHREAD_PRIO_INHERIT</code>/<code>PTHREAD_PRIO_PROTECT</code></li><li>RTOS mutexes (VxWorks, which ran Pathfinder; FreeRTOS mutexes inherit)</li><li>Linux <code>rt_mutex</code> / PI futexes</li><li>the Ada protected-object ceiling rule</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Boehm, "Can Seqlocks Get Along with Programming Language Memory Models?" (MSPC 2012)</li><li>Sha, Rajkumar, Lehoczky, "Priority Inheritance Protocols: An Approach to Real-Time Synchronization" (1990)</li><li><a href="https://en.wikipedia.org/wiki/Seqlock" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Seqlock</a> and <a href="https://en.wikipedia.org/wiki/Priority_inheritance" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Priority_inheritance</a> and <a href="https://en.wikipedia.org/wiki/Priority_ceiling_protocol" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Priority_ceiling_protocol</a></li></ul>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Seqlock"
+url = "https://en.wikipedia.org/wiki/Seqlock"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Priority_inheritance"
+url = "https://en.wikipedia.org/wiki/Priority_inheritance"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Priority_ceiling_protocol"
+url = "https://en.wikipedia.org/wiki/Priority_ceiling_protocol"

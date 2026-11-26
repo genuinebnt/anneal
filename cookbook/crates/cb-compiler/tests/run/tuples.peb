@@ -1,0 +1,10 @@
+fn divmod(a: int, b: int) -> (int, int) { (a / b, a % b) }
+fn swap<A, B>(p: (A, B)) -> (B, A) { (p.1, p.0) }
+fn main() {
+    let (q, r) = divmod(17, 5);
+    println(to_str(q) + " r " + to_str(r));
+    let s = swap((1, "one"));
+    println(s.0 + "=" + to_str(s.1));
+    let nested = ((1, 2), (3, 4));
+    println(to_str(nested.1.0 + nested.0.1));
+}

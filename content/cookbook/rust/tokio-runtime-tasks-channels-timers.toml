@@ -1,0 +1,80 @@
+title = "Tokio essentials on a paused clock"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Application crates"
+chapter_order = 2
+order = 130
+kind = "recipe"
+lede = "Tasks, select, timers, channels, sync primitives, cancellation, shutdown"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/tokio_runtime_tasks_channels_timers.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>network services</li><li>workers</li><li>anything with many concurrent waits</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>connection handlers</li><li>bounded work queues</li><li>periodic jobs</li><li>graceful shutdown</li><li>calling blocking libraries from async code</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>tokio::runtime::Builder</code></li><li><code>Runtime::block_on</code></li><li><code>start_paused</code></li><li><code>tokio::spawn</code></li><li><code>JoinHandle::abort</code></li><li><code>JoinSet::spawn</code></li><li><code>JoinSet::join_next</code></li><li><code>JoinSet::shutdown</code></li><li><code>JoinError::is_panic</code></li><li><code>JoinError::is_cancelled</code></li><li><code>tokio::join!</code></li><li><code>tokio::try_join!</code></li><li><code>tokio::select!</code></li><li><code>tokio::pin!</code></li><li><code>tokio::time::{sleep, timeout, interval, Instant}</code></li><li><code>MissedTickBehavior</code></li><li><code>tokio::time::advance</code></li><li><code>tokio::sync::{mpsc, oneshot, broadcast, watch, Semaphore, Mutex, RwLock, Notify, Barrier}</code></li><li><code>mpsc::Sender::try_send</code></li><li><code>mpsc::Sender::reserve</code></li><li><code>tokio::task::spawn_blocking</code></li><li><code>tokio::task::yield_now</code></li><li><code>tokio::task::LocalSet</code></li><li><code>tokio::task::spawn_local</code></li><li><code>tokio_util::sync::CancellationToken</code></li><li><code>CancellationToken::child_token</code></li><li><code>CancellationToken::cancelled</code></li><li><code>std::sync::Mutex::try_lock</code></li><li><code>std::sync::TryLockError::WouldBlock</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/tokio/1/tokio/" target="_blank" rel="noreferrer">https://docs.rs/tokio/1/tokio/</a></li><li><a href="https://docs.rs/tokio-util/0.7/tokio_util/sync/struct.CancellationToken.html" target="_blank" rel="noreferrer">https://docs.rs/tokio-util/0.7/tokio_util/sync/struct.CancellationToken.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Crates"
+body = """
+tokio = "1" (full, test-util), tokio-util = "0.7"
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Deterministic time**. `start_paused(true)` (feature test-util, current-thread runtime) freezes the clock. When every task is idle, tokio jumps to the next timer.
+
+Hours of simulated sleeping finish instantly and elapsed times are **exact**.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Many tasks, collect as they finish</td><td><code>JoinSet          fixed few, same task -&gt; join! / try_join!</code></td></tr><tr><td>First of several</td><td><code>select!           give up after d      -&gt; timeout(d, fut)</code></td></tr><tr><td>Work queue</td><td><code>bounded mpsc      one reply            -&gt; oneshot</code></td></tr><tr><td>Every subscriber sees every item</td><td><code>broadcast         latest value only    -&gt; watch</code></td></tr><tr><td>Limit concurrency</td><td><code>Semaphore         stop everything      -&gt; CancellationToken + await the tasks</code></td></tr><tr><td>Blocking or CPU-heavy call</td><td><code>spawn_blocking block_in_place (described): multi-thread runtime only; it runs blocking code on the current worker after moving other tasks away. It panics on a current-thread runtime, and other futures in the SAME task (join!/select!) still stall. STD MUTEX ACROSS .await. Section std_mutex_across_await builds the broken program and proves it is stuck WITHOUT running into the hang: the second future uses try_lock where the real bug calls lock(). clippy: await_holding_lock. CANCELLATION SAFETY. select! DROPS the losing futures. That is fine if a dropped future has lost nothing (mpsc::Receiver::recv) and a bug if it holds partial progress. Section cancellation_safety shows both.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://tokio.rs/tokio/tutorial" target="_blank" rel="noreferrer">https://tokio.rs/tokio/tutorial</a></li><li><a href="https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety" target="_blank" rel="noreferrer">https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety</a></li><li><a href="https://ryhl.io/blog/async-what-is-blocking/" target="_blank" rel="noreferrer">https://ryhl.io/blog/async-what-is-blocking/</a></li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/tokio/1/tokio"
+url = "https://docs.rs/tokio/1/tokio/"
+
+[[sources]]
+title = "docs.rs/tokio-util/0.7/tokio_util/sync/struct.CancellationToken.html"
+url = "https://docs.rs/tokio-util/0.7/tokio_util/sync/struct.CancellationToken.html"
+
+[[sources]]
+title = "tokio.rs/tokio/tutorial"
+url = "https://tokio.rs/tokio/tutorial"
+
+[[sources]]
+title = "docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety"
+url = "https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety"
+
+[[sources]]
+title = "ryhl.io/blog/async-what-is-blocking"
+url = "https://ryhl.io/blog/async-what-is-blocking/"

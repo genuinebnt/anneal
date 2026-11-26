@@ -1,0 +1,75 @@
+title = "High-level design patterns in idiomatic Rust"
+module = "Rust language"
+module_order = 1
+chapter = "Design patterns"
+chapter_order = 5
+order = 40
+kind = "recipe"
+lede = "Builder, strategy, observer, visitor, command, DI and more."
+level = "advanced"
+code = ["examples/patterns/design_patterns_high.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>application architecture</li><li>library APIs</li><li>editors</li><li>interpreters</li><li>plugin hosts</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+The GoF catalogue was written for languages with inheritance. Rust has enums, traits, closures, ownership and RAII, so most patterns shrink to a few lines. Each numbered section below is small, tested, and ends with the trade-off that matters.
+
+```text
+| pattern              | Rust idiom                                  | enum when...                        | trait object when...                  |
+```
+
+&#124;----------------------&#124;---------------------------------------------&#124;-------------------------------------&#124;---------------------------------------&#124;
+
+```text
+| builder              | consuming `self` or `&mut self` + `build()` | n/a (validate in `build`)           | n/a                                   |
+| strategy             | generic `S: Fn`/trait, or `Box<dyn Fn>`      | fixed, known set of algorithms      | set chosen at runtime / plugin        |
+| observer             | `Vec<Weak<dyn Observer>>`                    | closed set of listener kinds        | open set (the usual case)             |
+| visitor              | `match` on enum (default) / `Visitor` trait  | MANY operations, FEW node types     | many node types, third-party nodes    |
+| command + undo       | enum of commands returning their inverse     | closed command set (serialisable)   | user-defined commands                 |
+| interpreter          | AST enum + recursive `eval`                  | always (the AST is closed data)     | rarely                                |
+| chain of resp.       | `Vec<Box<dyn Middleware>>` + `Next`          | fixed pipeline                      | composable, user-supplied stages      |
+| dependency injection | generic param (static) / `Arc<dyn T>`        | n/a                                 | runtime-swappable, heterogeneous      |
+| plugin registry      | `HashMap<&str, fn() -> Box<dyn Plugin>>`     | built-in plugins only               | third-party plugins                   |
+| newtype              | tuple struct; `Deref` ONLY for read-only     | n/a                                 | n/a                                   |
+| RAII guard           | struct with `Drop`                            | n/a                                 | n/a                                   |
+| illegal states       | enum variants carry the data they need       | ALWAYS prefer                       | n/a                                   |
+```
+
+Rule of thumb: an enum is a **closed** world (you own every case; the compiler checks exhaustiveness; no allocation; adding an **operation** is easy). A trait object is an **open** world (others add cases; one vtable call per use; adding a **variant** is easy). The "expression problem" is exactly this choice.
+
+Rust has no inheritance, so patterns built on it become composition.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>HTTP middleware stacks</li><li>text editors/undo (e.g. in <strong>ide</strong> buffers)</li><li>compilers (AST walkers, rustc's <code>Visitor</code>)</li><li>typed configuration builders (<code>std::process::Command</code>, <code>reqwest::ClientBuilder</code>)</li><li>mockable services in tests</li><li>plugin hosts</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://rust-unofficial.github.io/patterns/" target="_blank" rel="noreferrer">https://rust-unofficial.github.io/patterns/</a></li><li><a href="https://rust-lang.github.io/api-guidelines/" target="_blank" rel="noreferrer">https://rust-lang.github.io/api-guidelines/</a></li><li><a href="https://docs.rs/inventory" target="_blank" rel="noreferrer">https://docs.rs/inventory</a></li><li><a href="https://docs.rs/linkme" target="_blank" rel="noreferrer">https://docs.rs/linkme</a></li></ul>
+"""
+
+[[sources]]
+title = "rust-unofficial.github.io/patterns"
+url = "https://rust-unofficial.github.io/patterns/"
+
+[[sources]]
+title = "rust-lang.github.io/api-guidelines"
+url = "https://rust-lang.github.io/api-guidelines/"
+
+[[sources]]
+title = "docs.rs/inventory"
+url = "https://docs.rs/inventory"
+
+[[sources]]
+title = "docs.rs/linkme"
+url = "https://docs.rs/linkme"

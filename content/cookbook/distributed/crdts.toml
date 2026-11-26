@@ -1,0 +1,402 @@
+title = "CRDTs"
+module = "Distributed systems"
+module_order = 10
+chapter = "Collaboration and CRDTs"
+chapter_order = 3
+order = 495
+kind = "guide"
+lede = "Replicated data types that converge without coordination · counters, registers, an observed-remove set, a map, and a text list · merge laws tested on random states · convergence under reordering and duplication · what metadata costs"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Coordination is the expensive part of replication.</strong> <a href="/cookbook/p/raft">Raft</a> and <a href="/cookbook/p/distributed-transactions">distributed transactions</a> make every write wait for a majority. Some data does not need that: a like counter, a shopping cart, a collaboratively edited document, a replicated profile on a phone that is offline. For these, let every replica accept writes locally and make the <em>merge</em> of two replicas' states well defined, so that they converge when they exchange information, in any order.</li> <li><strong>A CRDT is a state with a join.</strong> A state-based CRDT is a set of states with a merge function that is <strong>commutative, associative and idempotent</strong>: the states form a semilattice and merging only moves up. Then it does not matter in which order, how many times, or through which path updates arrive; replicas that have seen the same updates hold the same state (<em>strong eventual consistency</em>). The laws are testable properties.</li> <li><strong>The art is making conflicts mean something.</strong> Counters: keep a vector of per-replica counts and add them up (G-counter), two of them for decrements (PN-counter). Registers: <em>last writer wins</em> (needs timestamps, and loses concurrent writes silently) or <em>multi-value</em> (keeps every concurrent write and lets the application or a later write resolve). Sets: an <strong>observed-remove set</strong> where an add creates a unique <em>dot</em>, a remove deletes only the dots it observed, and an add concurrent with a remove survives (<em>add wins</em>).</li> <li><strong>Causal context replaces tombstones.</strong> The set keeps one version vector saying which dots it has seen. A dot that is absent from a replica but covered by its context was seen and removed; one that is absent and not covered has simply not arrived. So a remove needs no tombstone and the metadata stays proportional to the live elements plus the number of replicas.</li> <li><strong>Sequences are the hard case.</strong> For text or lists, each element gets a unique identifier ordered consistently; an insert names the element it goes after and is placed among concurrent siblings by identifier order (RGA). Deletes leave tombstones, because a later insert may refer to a deleted element. Operation-based types like this need <em>causal delivery</em>: an operation arrives only after everything it depends on.</li> <li><strong>What CRDTs cannot do.</strong> They cannot enforce a constraint that needs agreement: a unique username, a balance that must stay non-negative, a limit of one winner. Those need coordination, at least for the operations that could violate them. A system with a CRDT mode lets a schema choose per column: coordinated (strong) or merged (convergent).</li> <li><strong>Garbage collection needs coordination too.</strong> Tombstones, and the version vector entries of departed replicas, can be dropped only when every replica has seen them; that is an agreement problem.</li> </ul>
+"""
+
+[[sections]]
+heading = "The types"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Type</th> <th>State</th> <th>Merge</th> <th>A conflict means</th> </tr> </thead> <tbody> <tr> <td>G-counter</td> <td>per-replica counts</td> <td>pointwise max</td> <td>all increments add up</td> </tr> <tr> <td>PN-counter</td> <td>two G-counters</td> <td>merge both</td> <td>increments and decrements add up</td> </tr> <tr> <td>LWW register</td> <td>value and <code>(timestamp, replica)</code></td> <td>keep the greater stamp</td> <td>the latest write wins; others vanish</td> </tr> <tr> <td>MV register</td> <td>values with dots, causal context</td> <td>keep a value unless the other side saw it and dropped it</td> <td>concurrent writes are all kept</td> </tr> <tr> <td>OR-set (add wins)</td> <td>element → dots, causal context</td> <td>per element: common dots plus dots the other side has not seen</td> <td>concurrent add beats remove</td> </tr> <tr> <td>LWW map</td> <td>key → LWW register</td> <td>per key</td> <td>a row with independently merged columns</td> </tr> <tr> <td>RGA list</td> <td>sequence of elements with ids, tombstones</td> <td>operation-based, causal delivery</td> <td>concurrent inserts at one place are ordered by id; runs stay together</td> </tr> </tbody> </table></div>
+
+:::deeper Reference: version vectors, counters, registers, observed-remove set, two-phase set, LWW map, the RGA list and the causal delivery buffer
+```rust title="src/multimodel/crdt.rs"
+//! Conflict-free replicated data types. State-based types (G-counter, PN-counter, last-writer-wins register, multi-value register,
+//! add-wins observed-remove set, a map of registers) have a `merge` that is commutative, associative and idempotent, so replicas that
+//! exchange state in any order, any number of times, converge. The list type (RGA) is operation-based and needs causal delivery,
+//! which `CausalBuffer` provides.
+use std::collections::{BTreeMap, BTreeSet};
+
+pub type Replica = usize;
+/// A unique event identifier: the replica that generated it and that replica's running count.
+pub type Dot = (Replica, u64);
+
+/// A version vector: for every replica, the highest dot of it that has been seen (events of one replica are seen in order).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct VClock(pub BTreeMap<Replica, u64>);
+impl VClock {
+    pub fn get(&self, r: Replica) -> u64 {
+        self.0.get(&r).copied().unwrap_or(0)
+    }
+    pub fn covers(&self, d: Dot) -> bool {
+        self.get(d.0) >= d.1
+    }
+    pub fn next(&mut self, r: Replica) -> Dot {
+        let c = self.0.entry(r).or_insert(0);
+        *c += 1;
+        (r, *c)
+    }
+    pub fn merge(&mut self, o: &VClock) {
+        for (&r, &c) in &o.0 {
+            let e = self.0.entry(r).or_insert(0);
+            *e = (*e).max(c);
+        }
+    }
+    pub fn leq(&self, o: &VClock) -> bool {
+        self.0.iter().all(|(&r, &c)| o.get(r) >= c)
+    }
+}
+
+// ---- counters ------------------------------------------------------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GCounter(pub BTreeMap<Replica, u64>);
+impl GCounter {
+    pub fn inc(&mut self, r: Replica, by: u64) {
+        *self.0.entry(r).or_insert(0) += by;
+    }
+    pub fn value(&self) -> u64 {
+        self.0.values().sum()
+    }
+    pub fn merge(&mut self, o: &GCounter) {
+        for (&r, &c) in &o.0 {
+            let e = self.0.entry(r).or_insert(0);
+            *e = (*e).max(c);
+        }
+    }
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PnCounter {
+    pub p: GCounter,
+    pub n: GCounter,
+}
+impl PnCounter {
+    pub fn add(&mut self, r: Replica, by: i64) {
+        if by >= 0 { self.p.inc(r, by as u64) } else { self.n.inc(r, by.unsigned_abs()) }
+    }
+    pub fn value(&self) -> i64 {
+        self.p.value() as i64 - self.n.value() as i64
+    }
+    pub fn merge(&mut self, o: &PnCounter) {
+        self.p.merge(&o.p);
+        self.n.merge(&o.n);
+    }
+}
+
+// ---- registers -----------------------------------------------------------------------------------------------------------------------
+
+/// Last writer wins: the write with the greater `(timestamp, replica)` survives. Timestamps should come from a hybrid logical clock.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LwwReg<T> {
+    pub val: Option<T>,
+    pub ts: (u64, Replica),
+}
+impl<T: Clone> Default for LwwReg<T> {
+    fn default() -> Self {
+        LwwReg { val: None, ts: (0, 0) }
+    }
+}
+impl<T: Clone> LwwReg<T> {
+    pub fn set(&mut self, r: Replica, ts: u64, v: T) {
+        if (ts, r) > self.ts {
+            self.val = Some(v);
+            self.ts = (ts, r);
+        }
+    }
+    pub fn merge(&mut self, o: &LwwReg<T>) {
+        if o.ts > self.ts {
+            *self = o.clone();
+        }
+    }
+}
+
+/// Keeps every concurrent write: a write replaces exactly the values it had seen.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MvReg<T> {
+    pub vals: BTreeMap<Dot, T>,
+    pub ctx: VClock,
+}
+impl<T: Clone + PartialEq> MvReg<T> {
+    pub fn set(&mut self, r: Replica, v: T) {
+        let d = self.ctx.next(r);
+        self.vals.clear();
+        self.vals.insert(d, v);
+    }
+    pub fn values(&self) -> Vec<&T> {
+        self.vals.values().collect()
+    }
+    pub fn merge(&mut self, o: &MvReg<T>) {
+        // a value survives if the other side has it too or has not yet seen it
+        let mine: Vec<Dot> = self.vals.keys().copied().collect();
+        for d in mine {
+            if !o.vals.contains_key(&d) && o.ctx.covers(d) {
+                self.vals.remove(&d);
+            }
+        }
+        for (d, v) in &o.vals {
+            if !self.vals.contains_key(d) && !self.ctx.covers(*d) {
+                self.vals.insert(*d, v.clone());
+            }
+        }
+        self.ctx.merge(&o.ctx);
+    }
+}
+
+// ---- add-wins observed-remove set ---------------------------------------------------------------------------------------------
+
+/// Each add creates a fresh dot; a remove deletes the dots it has observed; a concurrent add survives because its dot is unseen.
+/// The causal context records what each replica has seen, so removals need no tombstones.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OrSet<T: Ord> {
+    pub entries: BTreeMap<T, BTreeSet<Dot>>,
+    pub ctx: VClock,
+}
+impl<T: Ord + Clone> OrSet<T> {
+    pub fn add(&mut self, r: Replica, x: T) {
+        let d = self.ctx.next(r);
+        let e = self.entries.entry(x).or_default();
+        e.clear();           // the new dot supersedes the ones this replica has observed
+        e.insert(d);
+    }
+    pub fn remove(&mut self, x: &T) {
+        self.entries.remove(x);
+    }
+    pub fn contains(&self, x: &T) -> bool {
+        self.entries.contains_key(x)
+    }
+    pub fn items(&self) -> Vec<&T> {
+        self.entries.keys().collect()
+    }
+    pub fn merge(&mut self, o: &OrSet<T>) {
+        let keys: BTreeSet<T> = self.entries.keys().chain(o.entries.keys()).cloned().collect();
+        let mut out: BTreeMap<T, BTreeSet<Dot>> = BTreeMap::new();
+        let empty = BTreeSet::new();
+        for k in keys {
+            let (a, b) = (self.entries.get(&k).unwrap_or(&empty), o.entries.get(&k).unwrap_or(&empty));
+            let mut dots: BTreeSet<Dot> = a.intersection(b).copied().collect();
+            dots.extend(a.iter().filter(|d| !o.ctx.covers(**d)));
+            dots.extend(b.iter().filter(|d| !self.ctx.covers(**d)));
+            if !dots.is_empty() {
+                out.insert(k, dots);
+            }
+        }
+        self.entries = out;
+        self.ctx.merge(&o.ctx);
+    }
+    pub fn metadata_dots(&self) -> usize {
+        self.entries.values().map(|d| d.len()).sum::<usize>() + self.ctx.0.len()
+    }
+}
+
+/// A two-phase set for comparison: removals are permanent tombstones that grow without bound.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TwoPhaseSet<T: Ord> {
+    pub added: BTreeSet<T>,
+    pub removed: BTreeSet<T>,
+}
+impl<T: Ord + Clone> TwoPhaseSet<T> {
+    pub fn add(&mut self, x: T) {
+        self.added.insert(x);
+    }
+    pub fn remove(&mut self, x: &T) {
+        if self.added.contains(x) {
+            self.removed.insert(x.clone());
+        }
+    }
+    pub fn contains(&self, x: &T) -> bool {
+        self.added.contains(x) && !self.removed.contains(x)
+    }
+    pub fn merge(&mut self, o: &TwoPhaseSet<T>) {
+        self.added.extend(o.added.iter().cloned());
+        self.removed.extend(o.removed.iter().cloned());
+    }
+    pub fn metadata(&self) -> usize {
+        self.added.len() + self.removed.len()
+    }
+}
+
+/// A map from keys to last-writer-wins registers: the shape of a row whose columns merge independently.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LwwMap<K: Ord, V>(pub BTreeMap<K, LwwReg<V>>);
+impl<K: Ord + Clone, V: Clone> LwwMap<K, V> {
+    pub fn set(&mut self, r: Replica, ts: u64, k: K, v: V) {
+        self.0.entry(k).or_default().set(r, ts, v);
+    }
+    pub fn delete(&mut self, r: Replica, ts: u64, k: K) {
+        let e = self.0.entry(k).or_default();
+        if (ts, r) > e.ts {
+            e.val = None;
+            e.ts = (ts, r);
+        }
+    }
+    pub fn get(&self, k: &K) -> Option<&V> {
+        self.0.get(k).and_then(|r| r.val.as_ref())
+    }
+    pub fn merge(&mut self, o: &LwwMap<K, V>) {
+        for (k, r) in &o.0 {
+            self.0.entry(k.clone()).or_default().merge(r);
+        }
+    }
+}
+
+// ---- a replicated list (RGA) --------------------------------------------------------------------------------------------------------
+
+pub type ElemId = (u64, Replica); // (Lamport counter, replica): a total order
+#[derive(Clone, Debug, PartialEq)]
+pub enum ListOp {
+    Insert { id: ElemId, after: Option<ElemId>, ch: char },
+    Delete { id: ElemId },
+}
+#[derive(Clone, Debug, PartialEq)]
+struct Elem {
+    id: ElemId,
+    ch: char,
+    dead: bool,
+}
+/// Replicated Growable Array: elements are linked in a sequence; an insert goes right after the element it was typed after,
+/// skipping elements with a greater id (those were typed concurrently or later at the same position). Deletes leave tombstones.
+#[derive(Clone, Debug, Default)]
+pub struct Rga {
+    elems: Vec<Elem>,
+    clock: u64,
+    pub replica: Replica,
+}
+impl Rga {
+    pub fn new(replica: Replica) -> Rga {
+        Rga { elems: vec![], clock: 0, replica }
+    }
+    pub fn text(&self) -> String {
+        self.elems.iter().filter(|e| !e.dead).map(|e| e.ch).collect()
+    }
+    pub fn len_with_tombstones(&self) -> usize {
+        self.elems.len()
+    }
+    fn visible(&self) -> Vec<usize> {
+        (0..self.elems.len()).filter(|&i| !self.elems[i].dead).collect()
+    }
+    /// Type a character so that it appears at visible position `pos`. Returns the operation to broadcast.
+    pub fn insert_at(&mut self, pos: usize, ch: char) -> ListOp {
+        let vis = self.visible();
+        let after = if pos == 0 { None } else { Some(self.elems[vis[pos - 1]].id) };
+        self.clock += 1;
+        let op = ListOp::Insert { id: (self.clock, self.replica), after, ch };
+        self.apply(&op);
+        op
+    }
+    pub fn delete_at(&mut self, pos: usize) -> ListOp {
+        let vis = self.visible();
+        let op = ListOp::Delete { id: self.elems[vis[pos]].id };
+        self.apply(&op);
+        op
+    }
+    /// Integrate an operation (own or remote). Remote operations must arrive after the operations they depend on.
+    pub fn apply(&mut self, op: &ListOp) {
+        match op {
+            ListOp::Insert { id, after, ch } => {
+                if self.elems.iter().any(|e| e.id == *id) {
+                    return; // duplicate delivery
+                }
+                self.clock = self.clock.max(id.0);
+                let mut i = match after {
+                    None => 0,
+                    Some(a) => self.elems.iter().position(|e| e.id == *a).expect("causal delivery: the reference element exists") + 1,
+                };
+                while i < self.elems.len() && self.elems[i].id > *id {
+                    i += 1;
+                }
+                self.elems.insert(i, Elem { id: *id, ch: *ch, dead: false });
+            }
+            ListOp::Delete { id } => {
+                if let Some(e) = self.elems.iter_mut().find(|e| e.id == *id) {
+                    e.dead = true;
+                }
+            }
+        }
+    }
+}
+
+/// Delivers messages only after everything they causally depend on has been delivered.
+pub struct CausalBuffer<M> {
+    pub seen: VClock,
+    pending: Vec<(Dot, VClock, M)>,
+}
+impl<M> Default for CausalBuffer<M> {
+    fn default() -> Self {
+        CausalBuffer { seen: VClock::default(), pending: vec![] }
+    }
+}
+impl<M> CausalBuffer<M> {
+    /// Accept a message sent by `dot.0` as its `dot.1`-th broadcast with dependencies `deps`; returns what became deliverable, in order.
+    pub fn receive(&mut self, dot: Dot, deps: VClock, m: M) -> Vec<M> {
+        if self.seen.covers(dot) {
+            return vec![]; // duplicate
+        }
+        if !self.pending.iter().any(|p| p.0 == dot) {
+            self.pending.push((dot, deps, m));
+        }
+        let mut out = vec![];
+        loop {
+            let pos = self.pending.iter().position(|(d, deps, _)| self.seen.get(d.0) + 1 == d.1 && deps.leq(&self.seen));
+            let Some(i) = pos else { break };
+            let (d, _, m) = self.pending.remove(i);
+            self.seen.0.insert(d.0, d.1);
+            out.push(m);
+        }
+        out
+    }
+    pub fn waiting(&self) -> usize {
+        self.pending.len()
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+```text title="metadata under churn, a text document, and gossip"
+set churn: 4 replicas, 200 000 random adds and removes over a universe of 50 000 values, merging every 100 operations
+  observed-remove set: 24647 live elements, 24842 dots + version-vector entries of metadata
+  two-phase set:       13673 live elements, 72719 entries kept (added + tombstones), and removed values can never be re-added
+text document: 3 replicas, 30000 edits in 0.6 s; 2011 characters visible, 15982 elements stored (7.9x: tombstones are never removed without coordination)
+gossip: every round each replica merges with one random peer (push-pull); rounds until all replicas hold an update made on one of them
+  replicas     rounds      log2(n)
+         8          4          3.0
+        32          4          5.0
+       128          5          7.0
+       512          7          9.0
+```
+
+<ul> <li><strong>The merge laws hold on reachable states.</strong> For each of six state-based types, 300 random states (four replicas making random updates and merging at random) satisfy: <code>a ⊔ b = b ⊔ a</code>, <code>(a ⊔ b) ⊔ c = a ⊔ (b ⊔ c)</code>, <code>a ⊔ a = a</code>, and re-merging an input changes nothing.</li> <li><strong>Convergence is checked against oracles that share no code with the types.</strong> Counters equal the sum of all operations. The observed-remove set is compared with an oracle built from the adds and from the dots each remove observed (300 runs, four values, four replicas). The multi-value register keeps exactly the writes that no other write had seen. The list: 200 runs of three replicas editing concurrently with reordered, delayed and duplicated delivery all end with the same text, a single replica behaves exactly like a <code>Vec</code>, and two replicas typing "abc" and "xyz" at the same spot get "abcxyz" or "xyzabc", never an interleaving.</li> <li><strong>Observed-remove metadata stays proportional to the live data.</strong> After 200 000 random adds and removes, the observed-remove set holds 24 647 live elements and 24 842 units of metadata (one dot each plus four version-vector entries). A two-phase set, which keeps removals as permanent tombstones, holds 72 719 entries for 13 673 live elements and cannot re-add a removed value.</li> <li><strong>A text document pays for its tombstones</strong>: 30 000 edits by three replicas leave 2 011 visible characters stored as 15 982 elements, <strong>7.9 times</strong> the live text. Deleted characters stay, because a concurrent insert may still refer to them. Real editors compact tombstones when every replica has acknowledged them, or use structures that merge adjacent runs.</li> <li><strong>Gossip converges in about log₂ n rounds</strong>: one update reaches 512 replicas in 7 rounds of random pairwise exchange, 128 in 5, 8 in 4.</li> </ul>
+
+<aside data-call="note"><b>Why the oracle for the set changed once</b><p>The first oracle for the observed-remove set counted every add dot as alive unless a <em>remove</em> had observed it, and the check failed on the second seed. The set was right and the oracle was wrong: an <code>add</code> of an element a replica already holds supersedes the dots it observed, exactly as a remove does. Both are observations. The oracle now records the dots seen at each add and each remove. It is a useful reminder that in these types "removed" means "observed by a later operation", never "absent".</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Types, not traits, per CRDT</strong>: each type has <code>merge(&amp;mut self, other: &amp;Self)</code> and its own mutators; a generic test harness (<code>laws</code>) takes the constructor, a random mutator and the merge as closures, so one function checks all six types.</li> <li><strong><code>BTreeMap</code> and <code>BTreeSet</code> everywhere</strong> make state comparison and iteration deterministic, which is what lets the tests compare two replicas with <code>==</code>.</li> <li><strong><code>Dot = (Replica, u64)</code></strong> is <code>Ord + Copy</code>, usable as a map key; <code>VClock::covers(dot)</code> is the whole causal-context test used by the set and the register merges.</li> <li><strong>Operation-based types separate the protocol from the data</strong>: <code>Rga::apply</code> assumes causal delivery and <code>CausalBuffer&lt;M&gt;</code> provides it for any message type <code>M</code> with a manual <code>Default</code> (a derive would demand <code>M: Default</code>).</li> <li><strong>Lamport counters</strong>: the list's clock follows every id it sees (<code>clock = max(clock, id.0)</code>) so that an element typed after seeing others sorts after them; a mutant that drops this line changes where characters land, and a directed test catches it.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Laws</strong>: for G-counter, PN-counter, LWW register, MV register, OR-set and LWW map, 300 random reachable states each; commutativity, associativity, idempotence and absorption.</li> <li><strong>Convergence against oracles</strong>: counter totals; the set's oracle from observed dots (300 runs); the register's surviving writes (300 runs).</li> <li><strong>Semantics</strong>: concurrent add and remove (add wins); a remove of everything observed removes; remove then re-add works while a two-phase set refuses; concurrent register writes both survive and a later write that saw both replaces them; a last-writer-wins tie is broken by replica id.</li> <li><strong>List</strong>: one replica equals a <code>Vec</code> under 500 random inserts and deletes; three replicas with reordering and duplication converge in 200 runs and the causal buffer ends empty; concurrent runs of typing do not interleave; a delete and a concurrent insert after the deleted character both take effect; a character typed after seeing another sorts after it; a duplicated operation changes nothing.</li> <li><strong>Mutants run against these tests</strong>: a counter that adds instead of taking the maximum; decrements added; a register keeping the older write; the multi-value register dropping values the other side had not seen; the set forgetting common dots, keeping a removed element's dot, or keeping the dots an add supersedes; concurrent list inserts ordered the other way; operations applied twice; the list clock not following what it receives; causal delivery ignoring dependencies. <strong>All 11 were killed.</strong> A twelfth, letting causal delivery accept gaps from one sender, survives and is equivalent: the dependency vector already contains the sender's earlier messages.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Redis Enterprise (CRDB)</strong>, <strong>Riak</strong> (data types: counters, sets, maps, registers, flags), <strong>Azure Cosmos DB</strong> (multi-region writes with LWW or custom merge), <strong>AntidoteDB</strong> and <strong>Akka Distributed Data</strong> provide CRDTs as database types. <strong>DynamoDB global tables</strong> use last-writer-wins per item; <strong>Cassandra</strong> uses cell-level last-write-wins timestamps and counters.</li> <li><strong>Collaborative editing</strong>: <strong>Automerge</strong> and <strong>Yjs</strong> are the widely used libraries for text and JSON documents (Yjs uses a YATA sequence CRDT, Automerge an RGA-like one with a compact binary format); <strong>Figma</strong> uses a CRDT-inspired approach with a central server ordering operations.</li> <li><strong>Local-first software</strong> keeps the authoritative copy on the device and syncs with CRDTs: the topic of the "Local-first software" essay (Kleppmann et al., Ink &amp; Switch), with Automerge as its engine.</li> <li><strong>Anna</strong> (the KVS in the <a href="/cookbook/p/tech-talks">tech talks list</a>) keeps lattices as values and gets coordination-free scaling from their merge; <strong>Dynamo-style</strong> stores keep sibling versions, the multi-value register of this section.</li> <li><strong>Where it ends</strong>: financial ledgers, inventory with limits and unique constraints use coordinated transactions (<a href="/cookbook/p/distributed-transactions">M10</a>), sometimes mixed with CRDT counters plus escrow (bounded counters) to make local decisions within a quota.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Last writer wins loses data silently and depends on clocks.</strong> Use hybrid logical clocks, expect lost concurrent writes, and choose it only where that is acceptable (a profile field, a last-seen time).</li> <li><strong>Wall clocks that jump</strong> (a phone with a wrong date) can make one replica's writes win forever; clamp timestamps relative to a trusted source.</li> <li><strong>Metadata grows</strong>: version vectors have an entry per replica that ever wrote; tombstones accumulate in sequences. Plan garbage collection with a stability point every replica acknowledged.</li> <li><strong>Not every invariant survives merging.</strong> A set of unique usernames, a non-negative balance, "at most one" need a coordinated path; mixing a CRDT column with a constraint is a bug waiting for a partition.</li> <li><strong>Operation-based CRDTs need exactly-once, causal delivery</strong>; state-based ones need only eventual delivery of states but ship more data. Delta-state sync (shipping just the part the peer lacks) is the production compromise and has its own subtleties (a delta must carry enough context to express removals).</li> <li><strong>Merging is not application-level merging.</strong> A multi-value register hands the application a set of conflicting values; someone has to define what to do with it.</li> <li><strong>Intention preservation in text is only approximate.</strong> Concurrent edits to the same sentence merge by position, not by meaning.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Conflict-free Replicated Data Types"
+url = "https://inria.hal.science/inria-00609399"
+
+[[sources]]
+title = "Local-first software"
+url = "https://www.inkandswitch.com/local-first/"

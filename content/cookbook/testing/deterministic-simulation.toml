@@ -1,0 +1,717 @@
+title = "Deterministic simulation"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Systems: distributed systems"
+chapter_order = 7
+order = 150
+kind = "guide"
+lede = "A distributed system in one thread, in virtual time, driven by one seed · faults from a tape of choices · replay, then shrink · seven planted bugs found, replayed and reduced to three to six operations · what makes a run stop being a function of its seed"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>The hard part of testing a distributed system is not finding a failing schedule; it is getting the same one again.</strong> A failure that needs a particular interleaving of messages, a crash at one moment and a partition at another happens once in a million runs on real machines, and then cannot be reproduced. Deterministic simulation turns the whole cluster into a function of a number: the same seed gives the same messages in the same order, byte for byte.</li> <li><strong>How it works.</strong> The system runs in one thread. Every source of nondeterminism is replaced by the simulator: the <em>clock</em> is a counter that advances to the time of the next event; the <em>network</em> is a queue of messages with delays, drops, duplicates and partitions drawn from the generator; the <em>disk</em> is a store whose writes finish later and are lost if the node crashes first; <em>crashes</em> and <em>restarts</em> are events. Nothing reads the real clock, spawns a thread, or iterates a hash table whose order varies from run to run.</li> <li><strong>Time is free.</strong> Virtual time passes only when the simulator says so, so a minute of cluster life costs the time to process its events. Millions of seeds explore millions of schedules, each different, overnight, and a failure arrives with its seed.</li> <li><strong>Every random decision is an entry on a tape.</strong> A fresh run draws from a generator and records the draws; a replay reads the tape. Editing the tape edits the scenario: deleting a stretch removes some decisions, setting a stretch to zero makes them benign (no drop, shortest delay, the first operation, fewer operations). A <strong>shrinker</strong> that deletes, zeroes and lowers entries while the run still fails reduces a failing scenario of hundreds of operations and faults to the few that matter.</li> <li><strong>A checker, not an expected output.</strong> The simulator does not know what the right answer is for a random schedule. The clients record what they saw and the linearizability checker of <a href="/cookbook/p/testing-a-database">Testing</a> decides whether a sequential register could have produced it.</li> <li><strong>The simulation is only as good as its fault model and as the fidelity of the code under test.</strong> The best practice (FoundationDB, TigerBeetle) writes the real system against abstract interfaces for network, disk, clock and randomness, so that the code that runs in simulation is the code that ships. This section simulates a model of a protocol, which shows the machinery and its limits.</li> </ul>
+"""
+
+[[sections]]
+heading = "The system under test: an atomic register"
+body = """
+<p>The ABD register (Attiya, Bar-Noy and Dolev, 1995) keeps one value on <code>N</code> replicas, each with a timestamp <code>(counter, writer id)</code>. A <strong>write</strong> asks a majority for their timestamps, picks a timestamp larger than all of them, and stores the value with it on a majority. A <strong>read</strong> asks a majority, takes the value with the largest timestamp, and <strong>writes it back</strong> to a majority before returning (without the write-back, a later read could return an older value). Replicas keep the pair on disk and apply a store only if its timestamp is newer. Because any two majorities intersect, the protocol is linearizable under message loss, duplication and reordering, partitions, and crashes with durable state. Clients retry every 30 ms and give up after 12 tries, leaving an operation that never returned.</p>
+
+<p>Seven bugs can be switched on, each a mistake real implementations have made:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Bug</th> <th>What is wrong</th> </tr> </thead> <tbody> <tr> <td><code>no_write_back</code></td> <td>a read returns after its first phase without writing the value back</td> </tr> <tr> <td><code>no_tiebreak</code></td> <td>timestamps are bare counters: two writers can pick the same one for different values</td> </tr> <tr> <td><code>ack_before_persist</code></td> <td>a replica acknowledges a store before the write reached the disk</td> </tr> <tr> <td><code>small_quorum</code></td> <td>a majority is <code>n / 2</code></td> </tr> <tr> <td><code>stale_overwrite</code></td> <td>a replica applies a store even when it carries an older timestamp</td> </tr> <tr> <td><code>first_reply</code></td> <td>a read returns the first reply's value, not the newest</td> </tr> <tr> <td><code>early_write_ack</code></td> <td>a write returns after its first phase, before anything is stored</td> </tr> </tbody> </table></div>
+
+<p>Each seed also draws a <em>world</em>: a drop rate (0 to 30%), a duplication rate (0 to 20%), a delay range (0 to 20 ms), a disk delay, up to 6 replica crashes, up to 3 partitions, short or long.</p>
+
+:::deeper Reference: the tape of choices, the event loop and simulated network and disks, the ABD replicas and clients, the seven bugs, shrinking
+```rust title="src/test/dst.rs"
+//! Deterministic simulation testing. A distributed system is run inside one thread, in virtual time, over a simulated network, simulated
+//! disks and simulated crashes, all driven by one pseudo-random generator seeded with a number. A run is therefore a function of its seed:
+//! the same seed gives the same messages in the same order, byte for byte, so a failure found at 3 a.m. on a build server is reproduced
+//! by typing the seed, stopped at, stepped through and fixed. Because virtual time passes only when the simulator says so, a run covers
+//! minutes of cluster life in milliseconds, and millions of seeds explore millions of different fault schedules.
+//!
+//! The system under test is the ABD atomic register (Attiya, Bar-Noy and Dolev 1995): `N` replicas each hold a value with a timestamp; a
+//! client reads or writes through majorities in two phases. Correctly implemented it is linearizable under message loss, duplication and
+//! reordering, partitions, and replica crashes with durable state. Seven deliberate bugs can be switched on; the checker of
+//! `crate::lin` decides, from what the clients saw, whether a run was linearizable.
+use crate::lin::{Op, RegIn, RegOut};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap};
+
+// ---- randomness: a recorded tape of choices ---------------------------------------------------------------------------------------------
+
+/// Every random decision of a run is one entry of a tape. A fresh run draws from a generator and records the draws; a replay reads a
+/// (possibly edited) tape and draws fresh values only after its end. Editing the tape is how a failing run is shrunk.
+#[derive(Clone)]
+pub struct Tape {
+    pub choices: Vec<u64>,
+    pos: usize,
+    state: u64,
+    /// In a replay, a choice beyond the end of the tape is 0, the benign choice, instead of a fresh random value.
+    zero_after_end: bool,
+}
+impl Tape {
+    pub fn from_seed(seed: u64) -> Tape {
+        Tape { choices: vec![], pos: 0, state: seed.wrapping_mul(0x9E3779B97F4A7C15) ^ 0xD1B54A32D192ED03, zero_after_end: false }
+    }
+    pub fn replay(choices: Vec<u64>, seed: u64) -> Tape {
+        Tape { choices, zero_after_end: true, ..Tape::from_seed(seed) }
+    }
+    fn fresh(&mut self) -> u64 {
+        // splitmix64
+        self.state = self.state.wrapping_add(0x9E3779B97F4A7C15);
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+        z ^ (z >> 31)
+    }
+    /// A choice in `0..m`. Small values are the benign ones (no drop, shortest delay, first operation), so shrinking a tape towards zero
+    /// shrinks a failing scenario towards the plainest one that still fails.
+    pub fn next(&mut self, m: u64) -> u64 {
+        let c = if self.pos < self.choices.len() {
+            self.choices[self.pos]
+        } else if self.zero_after_end {
+            0
+        } else {
+            let c = self.fresh();
+            self.choices.push(c);
+            c
+        };
+        self.pos += 1;
+        c % m.max(1)
+    }
+}
+
+// ---- configuration -----------------------------------------------------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Bugs {
+    /// A read returns after the first phase, without writing the value it found back to a majority.
+    pub no_write_back: bool,
+    /// Timestamps are bare counters: two clients can pick the same timestamp for different values.
+    pub no_tiebreak: bool,
+    /// A replica acknowledges a store before it has reached the disk.
+    pub ack_before_persist: bool,
+    /// A majority is `n / 2`, not `n / 2 + 1`.
+    pub small_quorum: bool,
+    /// A replica applies a store even when its timestamp is older than the one it holds.
+    pub stale_overwrite: bool,
+    /// A read returns the first reply's value instead of the one with the highest timestamp.
+    pub first_reply: bool,
+    /// A write returns after the first phase, before the value is stored anywhere.
+    pub early_write_ack: bool,
+}
+
+impl Bugs {
+    pub const NAMES: [&'static str; 7] = ["no_write_back", "no_tiebreak", "ack_before_persist", "small_quorum", "stale_overwrite", "first_reply", "early_write_ack"];
+    pub fn only(i: usize) -> Bugs {
+        let mut b = Bugs::default();
+        match i {
+            0 => b.no_write_back = true,
+            1 => b.no_tiebreak = true,
+            2 => b.ack_before_persist = true,
+            3 => b.small_quorum = true,
+            4 => b.stale_overwrite = true,
+            5 => b.first_reply = true,
+            _ => b.early_write_ack = true,
+        }
+        b
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Config {
+    pub replicas: usize,
+    pub clients: usize,
+    pub ops_per_client: usize,
+    pub bugs: Bugs,
+    /// Iterate a `HashMap` where the order matters. Only for showing why a simulator must not: the run stops being a function of its seed.
+    pub hazard_hash_order: bool,
+}
+impl Default for Config {
+    fn default() -> Self {
+        Config { replicas: 3, clients: 3, ops_per_client: 12, bugs: Bugs::default(), hazard_hash_order: false }
+    }
+}
+
+/// The environment of one run, drawn from the tape: every seed is a different world.
+#[derive(Clone, Debug)]
+struct World {
+    drop_permille: u64,
+    dup_permille: u64,
+    min_delay: u64,
+    max_delay: u64,
+    disk_delay: u64,
+    crashes: u64,
+    partitions: u64,
+    /// Partitions that outlast a client's patience (360 ms of retries), so that some operations are given up on.
+    long_partitions: bool,
+}
+
+// ---- the simulation ----------------------------------------------------------------------------------------------------------------------
+
+type Ts = (u64, u64); // (counter, writer id)
+
+#[derive(Clone, Debug)]
+enum Msg {
+    Query { op: u64, phase: u8 },
+    QueryReply { op: u64, phase: u8, ts: Ts, val: i64 },
+    Store { op: u64, phase: u8, ts: Ts, val: i64 },
+    StoreAck { op: u64, phase: u8 },
+}
+
+#[derive(Clone, Debug)]
+enum Event {
+    Deliver { to: usize, from: usize, msg: Msg },
+    /// A replica's disk write finished: `epoch` identifies the incarnation that issued it; a crash in between loses it.
+    Persisted { replica: usize, epoch: u64, ts: Ts, val: i64, ack_to: Option<(usize, u64, u8)> },
+    ClientStep { client: usize },
+    ClientTimeout { client: usize, op: u64, phase: u8, attempt: u32 },
+    Crash { replica: usize },
+    Restart { replica: usize },
+    Partition { side: u64, heal_after: u64 },
+    Heal,
+}
+
+struct Replica {
+    up: bool,
+    epoch: u64,
+    // durable
+    ts: Ts,
+    val: i64,
+}
+
+enum Phase {
+    Idle,
+    Query { replies: Vec<(usize, Ts, i64)> },
+    Store { acks: Vec<usize>, ts: Ts, val: i64, then_return: Option<i64> },
+}
+
+struct Client {
+    next_op: usize,
+    op_id: u64,
+    phase_no: u8,
+    phase: Phase,
+    kind: RegIn,
+    call: u64,
+    history_index: usize,
+}
+
+pub struct Run {
+    pub history: Vec<Op<RegIn, RegOut>>,
+    pub trace_hash: u64,
+    pub events: u64,
+    pub virtual_time: u64,
+    pub drops: u64,
+    pub dups: u64,
+    /// Disk writes that were lost because the replica crashed, and of those, the ones that would have finished after it restarted.
+    pub lost_writes: u64,
+    pub lost_after_restart: u64,
+    pub crashes: u64,
+    pub partitions: u64,
+    pub tape_len: usize,
+    pub tape: Vec<u64>,
+}
+
+struct Sim<'a> {
+    cfg: &'a Config,
+    /// How many operations each client performs: drawn from the tape, so that shrinking can remove operations.
+    ops_for_client: Vec<usize>,
+    tape: Tape,
+    world: World,
+    now: u64,
+    seq: u64,
+    queue: BinaryHeap<Reverse<(u64, u64, usize)>>,
+    events: Vec<Event>,
+    replicas: Vec<Replica>,
+    clients: Vec<Client>,
+    history: Vec<Op<RegIn, RegOut>>,
+    blocked: u64, // bitmask of nodes cut off from the rest; nodes 0..replicas are replicas, the rest clients
+    hash: u64,
+    count: u64,
+    drops: u64,
+    dups: u64,
+    lost_writes: u64,
+    lost_after_restart: u64,
+    crashes: u64,
+    partitions: u64,
+    replica_set: HashMap<usize, ()>,
+}
+
+impl<'a> Sim<'a> {
+    fn schedule(&mut self, delay: u64, ev: Event) {
+        self.seq += 1;
+        self.events.push(ev);
+        self.queue.push(Reverse((self.now + delay, self.seq, self.events.len() - 1)));
+    }
+
+    fn majority(&self) -> usize {
+        let n = self.cfg.replicas;
+        if self.cfg.bugs.small_quorum { n / 2 } else { n / 2 + 1 }
+    }
+
+    fn node_of_client(&self, c: usize) -> usize {
+        self.cfg.replicas + c
+    }
+
+    /// The operation id that travels in messages: the client and its operation counter.
+    fn wire(c: usize, op: u64) -> u64 {
+        (c as u64) << 32 | op
+    }
+
+    /// Send a message through the faulty network.
+    fn send(&mut self, from: usize, to: usize, msg: Msg) {
+        let cut = (self.blocked >> from & 1) != (self.blocked >> to & 1);
+        if cut || self.tape.next(1000) < self.world.drop_permille {
+            self.drops += 1;
+            return;
+        }
+        let spread = self.world.max_delay - self.world.min_delay + 1;
+        let delay = self.world.min_delay + self.tape.next(spread);
+        let dup = self.tape.next(1000) < self.world.dup_permille;
+        if dup {
+            self.dups += 1;
+            let d2 = self.world.min_delay + self.tape.next(spread);
+            self.schedule(d2, Event::Deliver { to, from, msg: msg.clone() });
+        }
+        self.schedule(delay, Event::Deliver { to, from, msg });
+    }
+
+    fn mix(&mut self, x: u64) {
+        self.hash = (self.hash ^ x).wrapping_mul(0x100000001b3);
+    }
+
+    fn start_op(&mut self, c: usize) {
+        let cl = &mut self.clients[c];
+        if cl.next_op >= self.ops_for_client[c] {
+            return;
+        }
+        let i = cl.next_op;
+        cl.next_op += 1;
+        cl.op_id += 1;
+        cl.phase_no = 1;
+        let kind = if self.tape.next(2) == 0 { RegIn::Write((c * 1000 + i + 1) as i64) } else { RegIn::Read };
+        let cl = &mut self.clients[c];
+        cl.kind = kind.clone();
+        cl.call = self.now;
+        cl.phase = Phase::Query { replies: vec![] };
+        self.history.push(Op { client: c, input: kind, output: None, call: self.count, ret: u64::MAX });
+        cl.history_index = self.history.len() - 1;
+        let (op, node) = (cl.op_id, self.node_of_client(c));
+        self.broadcast_query(c, node, op, 1);
+    }
+
+    fn broadcast_query(&mut self, c: usize, node: usize, op: u64, phase: u8) {
+        for r in 0..self.cfg.replicas {
+            self.send(node, r, Msg::Query { op: Self::wire(c, op), phase });
+        }
+        self.schedule(30_000, Event::ClientTimeout { client: c, op, phase, attempt: 1 });
+    }
+
+    fn broadcast_store(&mut self, c: usize, ts: Ts, val: i64) {
+        let (op, phase, node) = (self.clients[c].op_id, self.clients[c].phase_no, self.node_of_client(c));
+        for r in 0..self.cfg.replicas {
+            self.send(node, r, Msg::Store { op: Self::wire(c, op), phase, ts, val });
+        }
+        self.schedule(30_000, Event::ClientTimeout { client: c, op, phase, attempt: 1 });
+    }
+
+    fn finish_op(&mut self, c: usize, out: RegOut) {
+        let i = self.clients[c].history_index;
+        self.history[i].output = Some(out);
+        self.history[i].ret = self.count;
+        self.clients[c].phase = Phase::Idle;
+        let think = self.tape.next(3000);
+        self.schedule(think, Event::ClientStep { client: c });
+    }
+
+    fn handle(&mut self, ev: Event) {
+        match ev {
+            Event::ClientStep { client } => self.start_op(client),
+            Event::Deliver { to, from, msg } => {
+                self.mix(to as u64 * 31 + from as u64);
+                if to < self.cfg.replicas {
+                    self.replica_receive(to, from, msg);
+                } else {
+                    self.client_receive(to - self.cfg.replicas, from, msg);
+                }
+            }
+            Event::Persisted { replica, epoch, ts, val, ack_to } => {
+                let r = &mut self.replicas[replica];
+                if !r.up || r.epoch != epoch {
+                    // the replica crashed before the write reached the disk
+                    self.lost_writes += 1;
+                    self.lost_after_restart += (r.up && r.epoch != epoch) as u64;
+                    return;
+                }
+                if ts > r.ts || self.cfg.bugs.stale_overwrite {
+                    r.ts = ts;
+                    r.val = val;
+                }
+                if let Some((client_node, op, phase)) = ack_to {
+                    self.send(replica, client_node, Msg::StoreAck { op, phase });
+                }
+            }
+            Event::ClientTimeout { client, op, phase, attempt } => {
+                let cl = &self.clients[client];
+                if cl.op_id != op || cl.phase_no != phase || matches!(cl.phase, Phase::Idle) {
+                    return;
+                }
+                if attempt >= 12 {
+                    // give up: the operation never returns (its history entry stays pending)
+                    self.clients[client].phase = Phase::Idle;
+                    let think = self.tape.next(3000);
+                    self.schedule(think, Event::ClientStep { client });
+                    return;
+                }
+                let node = self.node_of_client(client);
+                let wire_op = Self::wire(client, op);
+                // resend to every replica. The order of the sends decides which random choices each message gets, so it must not depend on
+                // anything but the seed: the hazard variant takes it from a HashMap, whose iteration order differs from one map to the next
+                let order: Vec<usize> = if self.cfg.hazard_hash_order { self.replica_set.keys().copied().collect() } else { (0..self.cfg.replicas).collect() };
+                match &self.clients[client].phase {
+                    Phase::Query { .. } => {
+                        for &r in &order {
+                            self.send(node, r, Msg::Query { op: wire_op, phase });
+                        }
+                    }
+                    Phase::Store { ts, val, .. } => {
+                        let (ts, val) = (*ts, *val);
+                        for &r in &order {
+                            self.send(node, r, Msg::Store { op: wire_op, phase, ts, val });
+                        }
+                    }
+                    Phase::Idle => {}
+                }
+                self.schedule(30_000, Event::ClientTimeout { client, op, phase, attempt: attempt + 1 });
+            }
+            Event::Crash { replica } => {
+                self.mix(1000 + replica as u64);
+                let r = &mut self.replicas[replica];
+                if r.up {
+                    r.up = false;
+                    r.epoch += 1;
+                    self.crashes += 1;
+                    let down = 500 + self.tape.next(40_000);
+                    self.schedule(down, Event::Restart { replica });
+                }
+            }
+            Event::Restart { replica } => {
+                self.mix(2000 + replica as u64);
+                self.replicas[replica].up = true;
+            }
+            Event::Partition { side, heal_after } => {
+                self.mix(3000 + side);
+                self.blocked = side;
+                self.partitions += 1;
+                self.schedule(heal_after, Event::Heal);
+            }
+            Event::Heal => {
+                self.mix(4000);
+                self.blocked = 0;
+            }
+        }
+    }
+
+    fn replica_receive(&mut self, r: usize, from: usize, msg: Msg) {
+        if !self.replicas[r].up {
+            return;
+        }
+        match msg {
+            Msg::Query { op, phase } => {
+                let (ts, val) = (self.replicas[r].ts, self.replicas[r].val);
+                self.send(r, from, Msg::QueryReply { op, phase, ts, val });
+            }
+            Msg::Store { op, phase, ts, val } => {
+                let epoch = self.replicas[r].epoch;
+                let delay = 1 + self.tape.next(self.world.disk_delay);
+                if self.cfg.bugs.ack_before_persist {
+                    self.send(r, from, Msg::StoreAck { op, phase });
+                    self.schedule(delay, Event::Persisted { replica: r, epoch, ts, val, ack_to: None });
+                } else {
+                    self.schedule(delay, Event::Persisted { replica: r, epoch, ts, val, ack_to: Some((from, op, phase)) });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn client_receive(&mut self, c: usize, from: usize, msg: Msg) {
+        let (wire_op, phase) = match &msg {
+            Msg::QueryReply { op, phase, .. } | Msg::StoreAck { op, phase } => (*op, *phase),
+            _ => return,
+        };
+        let cl = &self.clients[c];
+        if wire_op != Self::wire(c, cl.op_id) || phase != cl.phase_no {
+            return; // a late reply to an earlier operation or phase
+        }
+        let need = self.majority();
+        match (&mut self.clients[c].phase, msg) {
+            (Phase::Query { replies }, Msg::QueryReply { ts, val, .. }) => {
+                if replies.iter().any(|(r, _, _)| *r == from) {
+                    return;
+                }
+                replies.push((from, ts, val));
+                if replies.len() < need {
+                    return;
+                }
+                let replies = replies.clone();
+                let best = if self.cfg.bugs.first_reply { replies[0] } else { *replies.iter().max_by_key(|(_, t, _)| *t).unwrap() };
+                let kind = self.clients[c].kind.clone();
+                match kind {
+                    RegIn::Write(v) => {
+                        if self.cfg.bugs.early_write_ack {
+                            self.finish_op(c, RegOut::Ack);
+                            return;
+                        }
+                        let counter = replies.iter().map(|(_, t, _)| t.0).max().unwrap() + 1;
+                        let ts = if self.cfg.bugs.no_tiebreak { (counter, 0) } else { (counter, c as u64 + 1) };
+                        self.clients[c].phase_no = 2;
+                        self.clients[c].phase = Phase::Store { acks: vec![], ts, val: v, then_return: None };
+                        self.broadcast_store(c, ts, v);
+                    }
+                    RegIn::Read => {
+                        if self.cfg.bugs.no_write_back {
+                            self.finish_op(c, RegOut::Value(best.2));
+                            return;
+                        }
+                        self.clients[c].phase_no = 2;
+                        self.clients[c].phase = Phase::Store { acks: vec![], ts: best.1, val: best.2, then_return: Some(best.2) };
+                        self.broadcast_store(c, best.1, best.2);
+                    }
+                }
+            }
+            (Phase::Store { acks, then_return, .. }, Msg::StoreAck { .. }) => {
+                if acks.contains(&from) {
+                    return;
+                }
+                acks.push(from);
+                if acks.len() < need {
+                    return;
+                }
+                let out = match then_return {
+                    Some(v) => RegOut::Value(*v),
+                    None => RegOut::Ack,
+                };
+                self.finish_op(c, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Run one simulation from a tape. The result is a pure function of the tape's content and the configuration.
+pub fn run(cfg: &Config, mut tape: Tape) -> Run {
+    let world = World {
+        drop_permille: [0, 0, 20, 100, 300][tape.next(5) as usize],
+        dup_permille: [0, 0, 50, 200][tape.next(4) as usize],
+        min_delay: 100,
+        max_delay: 100 + [0, 500, 5_000, 20_000][tape.next(4) as usize],
+        disk_delay: [1, 500, 5_000][tape.next(3) as usize],
+        crashes: [0, 0, 2, 6][tape.next(4) as usize],
+        partitions: [0, 0, 1, 3][tape.next(4) as usize],
+        long_partitions: tape.next(4) == 3,
+    };
+    let ops_for_client: Vec<usize> = (0..cfg.clients).map(|_| 1 + tape.next(cfg.ops_per_client as u64) as usize).collect();
+    let mut sim = Sim {
+        cfg,
+        ops_for_client,
+        tape,
+        world: world.clone(),
+        now: 0,
+        seq: 0,
+        queue: BinaryHeap::new(),
+        events: vec![],
+        replicas: (0..cfg.replicas).map(|_| Replica { up: true, epoch: 0, ts: (0, 0), val: 0 }).collect(),
+        clients: (0..cfg.clients).map(|_| Client { next_op: 0, op_id: 0, phase_no: 0, phase: Phase::Idle, kind: RegIn::Read, call: 0, history_index: 0 }).collect(),
+        history: vec![],
+        blocked: 0,
+        hash: 0xcbf29ce484222325,
+        count: 0,
+        drops: 0,
+        dups: 0,
+        lost_writes: 0,
+        lost_after_restart: 0,
+        crashes: 0,
+        partitions: 0,
+        replica_set: (0..cfg.replicas).map(|r| (r, ())).collect(),
+    };
+    for c in 0..cfg.clients {
+        let start = sim.tape.next(2000);
+        sim.schedule(start, Event::ClientStep { client: c });
+    }
+    for _ in 0..world.crashes {
+        let (at, r) = (sim.tape.next(300_000), sim.tape.next(cfg.replicas as u64) as usize);
+        sim.schedule(at, Event::Crash { replica: r });
+    }
+    for _ in 0..world.partitions {
+        let at = sim.tape.next(300_000);
+        // a partition cuts a random non-empty proper subset of all nodes off from the rest
+        let total = cfg.replicas + cfg.clients;
+        let side = 1 + sim.tape.next((1u64 << total) - 2);
+        let heal = 5_000 + sim.tape.next(if world.long_partitions { 900_000 } else { 60_000 });
+        sim.schedule(at, Event::Partition { side, heal_after: heal });
+    }
+    let limit = 60_000_000u64; // one virtual minute
+    while let Some(Reverse((t, _, idx))) = sim.queue.pop() {
+        if t > limit {
+            break;
+        }
+        sim.now = t;
+        sim.count += 1;
+        sim.mix(t);
+        let ev = sim.events[idx].clone();
+        sim.handle(ev);
+    }
+    let tape_len = sim.tape.pos;
+    let mut history = sim.history;
+    // an operation that never returned is pending: its return time is "never"
+    for op in history.iter_mut() {
+        if op.output.is_none() {
+            op.ret = u64::MAX;
+        }
+    }
+    Run { history, trace_hash: sim.hash, events: sim.count, virtual_time: sim.now, drops: sim.drops, dups: sim.dups, lost_writes: sim.lost_writes, lost_after_restart: sim.lost_after_restart, crashes: sim.crashes, partitions: sim.partitions, tape_len, tape: sim.tape.choices }
+}
+
+pub fn run_seed(cfg: &Config, seed: u64) -> Run {
+    run(cfg, Tape::from_seed(seed))
+}
+
+/// Is the history of a run linearizable?
+pub fn linearizable(run: &Run) -> bool {
+    crate::lin::check(&crate::lin::Register, &run.history, 20_000_000) != crate::lin::Verdict::NotLinearizable
+}
+
+/// Shrink the tape of a failing run: try deleting stretches of choices and zeroing them (zero is the benign choice everywhere), keeping any
+/// change after which the run still fails. Returns the smallest failing tape found, its run, and the number of replays tried.
+pub fn shrink(cfg: &Config, seed: u64, failing: &Run, max_replays: usize) -> (Run, usize) {
+    let tried_cell = std::cell::Cell::new(0usize);
+    let fails = |choices: &Vec<u64>| -> Option<Run> {
+        tried_cell.set(tried_cell.get() + 1);
+        if tried_cell.get() > max_replays {
+            return None;
+        }
+        let r = run(cfg, Tape::replay(choices.clone(), seed));
+        (!linearizable(&r)).then_some(r)
+    };
+    let mut best = failing.tape.clone();
+    let mut best_run = run(cfg, Tape::replay(best.clone(), seed));
+    let mut progress = true;
+    while progress {
+        progress = false;
+        // delete stretches, longest first
+        let mut chunk = best.len().max(1) / 2;
+        while chunk >= 1 {
+            let mut i = 0;
+            while i + chunk <= best.len() {
+                let mut cand = best.clone();
+                cand.drain(i..i + chunk);
+                if let Some(r) = fails(&cand) {
+                    best = cand;
+                    best_run = r;
+                    progress = true;
+                } else {
+                    i += chunk;
+                }
+            }
+            chunk /= 2;
+        }
+        // zero stretches
+        let mut chunk = best.len().max(1) / 2;
+        while chunk >= 1 {
+            let mut i = 0;
+            while i + chunk <= best.len() {
+                if best[i..i + chunk].iter().any(|&c| c != 0) {
+                    let mut cand = best.clone();
+                    cand[i..i + chunk].iter_mut().for_each(|c| *c = 0);
+                        if let Some(r) = fails(&cand) {
+                        best = cand;
+                        best_run = r;
+                        progress = true;
+                    }
+                }
+                i += chunk;
+            }
+            chunk /= 2;
+        }
+        // lower single choices: to zero, then by halves and by one
+        for i in 0..best.len() {
+            for lower in [0, best[i] / 2, best[i].saturating_sub(1)] {
+                if lower < best[i] {
+                    let mut cand = best.clone();
+                    cand[i] = lower;
+                        if let Some(r) = fails(&cand) {
+                        best = cand;
+                        best_run = r;
+                        progress = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    best_run.tape = best;
+    (best_run, tried_cell.get().min(max_replays))
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+```text title="6 000 seeds of the correct register, every one linearizable, with the faults injected"
+6000 seeds: all linearizable. 116686 operations (305 never returned), 2397044 events, 2471 virtual seconds in 0.1 s of wall time
+disk writes lost to crashes: 619, of which 13 would have completed after the replica restarted
+faults injected: 205014 dropped messages in 4109 runs, duplicated messages in 2992 runs, 10678 replica crashes in 2936 runs, 6072 partitions in 2992 runs
+```
+
+```text title="the seven planted bugs: found by the seeds, then shrunk (the tape and the history before and after)"
+bug                   first seed  failing/2000  operations before->after choices before->after   replays
+no_write_back                  5            23                   27 -> 4            1013 -> 71     39981
+no_tiebreak                    4           177                   22 -> 6            885 -> 167     60000
+ack_before_persist             6           296                   21 -> 3             987 -> 55     60000
+small_quorum                   0           881                   18 -> 3             525 -> 80     48415
+stale_overwrite                0           799                   18 -> 4            842 -> 133     60000
+first_reply                    2           358                   19 -> 3             865 -> 85     27883
+early_write_ack                0          1988                   18 -> 3             703 -> 34     14611
+```
+
+```text title="one failure, shrunk: the smallest history that still fails, for reads without write-back"
+no_write_back, seed 5: 27 operations, 1013 choices, 101 drops, 5 crashes, 0 partitions  ->  4 operations, 71 choices, 75 drops, 0 crashes, 0 partitions after 39981 replays
+   client 2 Write(2001) -> None   [1, never]
+   client 1 Write(1001) -> None   [2, never]
+   client 0 Read -> Some(Value(2001))   [8, 15]
+   client 0 Read -> Some(Value(0))   [16, 20]
+```
+
+```text title="a run is a function of its seed, unless a hash map decides the order"
+40 runs of one seed: 1 distinct trace with ordered iteration, 6 distinct traces when a HashMap decides the order
+```
+
+<ul> <li><strong>The correct register passes 6 000 seeds in all weathers.</strong> 116 686 operations, 2.4 million events, 2 471 virtual seconds (41 minutes of cluster time) in 0.1 s of wall time on this machine, with 205 014 messages dropped (in 4 109 runs), duplicated messages in 2 992 runs, 10 678 replica crashes (2 936 runs), 6 072 partitions (2 992 runs), 305 operations given up on and 619 disk writes lost to a crash, 13 of which would have finished after the replica came back. The test insists that these happen in many runs: a simulator that stops injecting faults still passes.</li> <li><strong>Every planted bug is found within the first seeds.</strong> The first failing seed is between 0 and 6, and the fraction of failing seeds among the first 2 000 ranges from 1% (<code>no_write_back</code>, which needs a read to overlap a write that reached only some replicas) to 99% (<code>early_write_ack</code>). Rarer bugs need more seeds; the rate is the number to watch when you change the fault model.</li> <li><strong>A failing seed replays exactly</strong>, with the same trace hash, and the bug-free system passes the same seed.</li> <li><strong>Shrinking reduces 18 to 27 operations to 3 to 6.</strong> The shrinker (deleting stretches, zeroing stretches, lowering single choices, within a budget of 60 000 replays) reduced, for example, <code>ack_before_persist</code> from 21 operations and 987 choices to 3 operations and 55 choices; <code>no_write_back</code> from 27 operations, 101 drops and 5 crashes to 4 operations.</li> <li><strong>The smallest failure is readable.</strong> For reads without write-back it is the classic new/old inversion: two writes that never completed (their messages reached some replicas), a read that returned the newer value, and a later read of the same client that returned the initial value <code>0</code>. No sequential register explains it, since a write takes effect once.</li> <li><strong>Iterating a hash map breaks determinism.</strong> Forty runs of one seed gave 1 distinct trace when the retransmission order came from a sorted range and 6 when it came from a <code>HashMap</code>, whose iteration order is randomized per map. One such line and "reproduce from the seed" is gone. The same applies to reading the clock, spawning threads, and any use of addresses or thread ids as data.</li> </ul>
+
+<aside data-call="note"><b>What the mutants of the simulator found</b><p>The simulator has its own bugs, and the way to find them is to plant some. 16 mutants of the code (a majority of half the replicas; applying every store; reads taking the first reply; no <code>+ 1</code> on write timestamps; no writer id; the network never dropping, duplicating or cutting; crashed replicas never restarting; clients giving up at once; duplicate replies counted twice; an operation returning at the time it was called; …) were killed by the tests, 15 of 16. Two of them mattered because they were first <em>not</em> killed. A crash that did not lose writes already in flight to the disk survived at first, because with a downtime of at least 5 ms and a disk delay of at most 5 ms a write could never finish after the restart, so the epoch check was never exercised. The downtime now starts at 0.5 ms, the run counts writes lost to crashes and, among them, those that would have finished after a restart (13 of 619), and the test requires both. The surviving mutant, ignoring the phase number of a reply, is equivalent: a late reply of the wrong kind is already ignored by its message type.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>One tape for every random decision.</strong> <code>Tape::next(m)</code> returns a value in <code>0..m</code> from the recorded or replayed choices. The simulator never calls any other source of randomness, which is what makes "the tape is the scenario" true.</li> <li><strong>An event queue ordered by <code>(time, sequence)</code>.</strong> <code>BinaryHeap&lt;Reverse&lt;(u64, u64, usize)&gt;&gt;</code> with the event bodies in a <code>Vec</code>: two events at the same virtual time run in the order they were scheduled, so ties never depend on memory addresses.</li> <li><strong>History times from the event counter.</strong> The call and return times in the history are the number of events processed so far, not the virtual time: events at the same virtual time are still ordered, which the linearizability check needs.</li> <li><strong><code>Config</code> and <code>Bugs</code> as plain data</strong>, with <code>Bugs::only(i)</code>: a test iterates over the bugs by index, and a table in a report is a loop.</li> <li><strong>No <code>HashMap</code> iteration, no <code>Instant::now</code>, no threads</strong> anywhere in the simulation path. The one deliberate exception is behind <code>hazard_hash_order</code>, to show what happens.</li> <li><strong>Replays are pure.</strong> <code>run(&amp;Config, Tape)</code> returns a <code>Run</code> and shares nothing, so shrinking runs it tens of thousands of times and a test can run the same seed on four threads and compare.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Determinism</strong>: 200 seeds run twice give equal trace hashes, event counts, virtual times, histories and tapes; 200 seeds give at least 195 different traces; one seed on four threads at once, and again after other seeds, gives one trace.</li> <li><strong>The hazard</strong>: with <code>hazard_hash_order</code> off, 40 runs of a seed give one trace; on, more than one.</li> <li><strong>The correct register</strong>: 6 000 seeds, all linearizable; the run must also inject drops in more than a third of the runs, duplicates in more than a quarter, crashes in more than a quarter, partitions in more than a sixth, lose more than 100 disk writes to crashes (more than 10 that would have completed after the restart), give up on some operations but fewer than 2%.</li> <li><strong>The bugs</strong>: each is found in the first 3 000 seeds, fails the same way on replay, and the bug-free system passes the same seed.</li> <li><strong>Shrinking</strong>: the shrunk run still fails, is no larger, and for reads without write-back has at most 8 operations.</li> <li><strong>Mutants run against these tests</strong> (16): the correct register with a majority of half, every store applied, first reply read, write timestamps not incremented, no writer id, a crash that does not lose in-flight writes, the network that never drops, never duplicates or never cuts, a replica that never restarts, clients that give up at once, duplicate replies and acks counted twice, an operation that returns when it was called, late replies of an earlier phase accepted, and an acknowledgement sent before the write even when the bug is off. <strong>Killed: 15 of 16</strong> (the other is equivalent, see the note).</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>FoundationDB</strong> was built on a deterministic simulator from the first day: the database is written in a language extension (Flow) whose actors can run on a simulated network and disk, with a "buggify" mechanism that makes rare paths common in simulation. Simulation is the main way the database is tested before release. The paper (<em>FoundationDB: A Distributed Unbundled Transactional Key Value Store</em>, SIGMOD 2021) describes it.</li> <li><strong>TigerBeetle</strong> runs the real server code in a simulator (the VOPR) with a simulated network and storage that inject faults.</li> <li><strong>Antithesis</strong> sells a deterministic hypervisor that runs unmodified software in a reproducible environment and explores faults and schedules, extending the idea to systems that were not written for it.</li> <li><strong>In Rust</strong>: <code>madsim</code>, <code>turmoil</code> (for Tokio programs) and <code>shuttle</code> (randomized scheduling of threads) bring the approach to async and concurrent code; <code>loom</code> explores all interleavings of a small concurrent program under the C++ memory model.</li> <li><strong>Jepsen</strong> tests real clusters with real nemeses and checks histories (<a href="/cookbook/p/testing-a-database">Testing</a>); it finds bugs in the shipped binary that a simulator of a model cannot, and cannot replay them.</li> <li><strong>Shrinking</strong> comes from property-based testing (QuickCheck, Hypothesis, <code>proptest</code>); Hypothesis's design, where the data are generated from a byte stream that is then shrunk, is the same idea as the tape here.</li> <li><strong><code>rr</code></strong> records and replays a real execution, deterministically, for debugging a failure that has happened.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Every escape from the simulator is a lost seed.</strong> Real time, real threads, hash-table iteration order, addresses, <code>thread_local</code> state shared between runs, system randomness, a library that spawns a thread: each makes the next failure irreproducible. Test for it (run a seed twice and compare traces), as the first test here does.</li> <li><strong>A fault model is a claim.</strong> If the simulator never reorders messages of a connection, never corrupts a disk page, never skews a clock, the system is untested against them. List what is not injected next to what is.</li> <li><strong>Faults must be common enough to matter and rare enough to let the system make progress.</strong> Tune the world by measuring: the fraction of operations that complete, the fraction of runs with each kind of fault.</li> <li><strong>The checker is part of the test.</strong> A checker that accepts too much (concurrent when it should be ordered) hides bugs; one that rejects correct histories wastes time. Check it against known-good and known-bad histories (<a href="/cookbook/p/testing-a-database">Testing</a>).</li> <li><strong>Shrinking changes the story.</strong> The shrunk scenario is the <em>smallest</em>, not the <em>original</em>: the original might have failed for a different reason too. Fix the shrunk bug and run the seed again.</li> <li><strong>Simulating a model is not simulating the code.</strong> A protocol that is right in the model can be wrong in the implementation (a missing <code>fsync</code>, an integer overflow). Run the real code under the simulator where you can.</li> <li><strong>Deterministic does not mean complete.</strong> A million seeds explore a million schedules out of astronomically many; the point is to find the common bugs fast and to make the rare ones reproducible when they appear.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "FoundationDB simulation testing"
+url = "https://www.youtube.com/watch?v=OJb8A6h9jQQ"
+
+[[sources]]
+title = "TigerBeetle"
+url = "https://www.youtube.com/watch?v=FyGukn77gqA"

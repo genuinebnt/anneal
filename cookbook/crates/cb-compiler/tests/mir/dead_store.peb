@@ -1,0 +1,9 @@
+// passes: copy-prop,dce
+// Unused copies and pure temporaries vanish; the trapping `a + 1` stays.
+fn f(a: int) -> int {
+    let unused = [a, a];
+    let t = a;
+    let trap = a + 1;
+    t * 2
+}
+fn main() { println(to_str(f(5))); }

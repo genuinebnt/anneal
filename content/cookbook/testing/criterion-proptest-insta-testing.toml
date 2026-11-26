@@ -1,0 +1,88 @@
+title = "Testing tools"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Methods: property-based testing"
+chapter_order = 2
+order = 142
+kind = "recipe"
+lede = "Proptest (strategies, shrinking, stateful), insta inline snapshots, assert_cmd + predicates, hand-written fakes, criterion"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/criterion_proptest_insta_testing.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any crate whose behaviour is hard to cover with a handful of examples.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>round-trip and oracle properties for parsers and data structures</li><li>snapshots of formatted output</li><li>black-box CLI tests</li><li>benchmarks that guard hot paths</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>proptest::proptest!</code></li><li><code>proptest::prop_compose!</code></li><li><code>proptest::prop_oneof!</code></li><li><code>Strategy::{prop_map, prop_recursive}</code></li><li><code>proptest::collection::{vec, btree_map}</code></li><li><code>proptest::option::of</code></li><li><code>any</code></li><li><code>Just</code></li><li><code>TestRunner::new_with_rng</code></li><li><code>TestRng::deterministic_rng</code></li><li><code>TestRunner::run</code></li><li><code>TestError::Fail</code></li><li><code>prop_assert!</code></li><li><code>prop_assert_eq!</code></li><li><code>prop_assume!</code></li><li><code>insta::assert_snapshot!</code></li><li><code>insta::assert_debug_snapshot!</code></li><li><code>assert_cmd::Command</code></li><li><code>Assert::{success, failure, code, stdout, stderr}</code></li><li><code>predicates::prelude::predicate</code></li><li><code>predicate::str::{contains, starts_with, is_match}</code></li><li><code>PredicateBooleanExt::{and, not}</code></li><li><code>Strategy::{prop_flat_map, prop_filter, new_tree}</code></li><li><code>ValueTree::{simplify, complicate, current}</code></li><li><code>proptest::sample::{select, Index}</code></li><li><code>TestError::Abort</code></li><li><code>FileFailurePersistence::Direct</code></li><li><code>insta::Settings::{new, add_filter, set_description, bind}</code></li><li><code>assert_cmd::Command::{write_stdin, env, env_clear, current_dir, output}</code></li><li><code>predicate::{eq, lt, ge, in_iter, function}</code></li><li><code>predicate::float::is_close</code></li><li><code>predicate::path::{exists, is_file, is_dir, missing, eq_file}</code></li><li><code>Predicate::{eval, find_case}</code></li><li><code>and</code></li><li><code>in benches/crate_tour_bench.rs</code></li><li><code>criterion::{criterion_group!, criterion_main!, Criterion::benchmark_group, BenchmarkId, Throughput, Bencher::{iter, iter_batched}}</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/proptest/1/proptest/" target="_blank" rel="noreferrer">https://docs.rs/proptest/1/proptest/</a></li><li><a href="https://docs.rs/insta/1/insta/" target="_blank" rel="noreferrer">https://docs.rs/insta/1/insta/</a></li><li><a href="https://docs.rs/assert_cmd/2/" target="_blank" rel="noreferrer">https://docs.rs/assert_cmd/2/</a></li><li><a href="https://docs.rs/predicates/3/" target="_blank" rel="noreferrer">https://docs.rs/predicates/3/</a></li><li><a href="https://docs.rs/criterion/0.5/criterion/" target="_blank" rel="noreferrer">https://docs.rs/criterion/0.5/criterion/</a></li></ul>
+"""
+
+[[sections]]
+heading = "Crates"
+body = """
+proptest = "1", insta = "1" (feature filters), assert_cmd = "2", predicates = "3", criterion = "0.5" (not the newest line)
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Where tests live** unit tests         -> `#[cfg(test)] mod tests` next to the code; may test private items integration tests  -> tests/&#42;.rs; public API only; each file is its own crate (share helpers via tests/support/mod.rs) doctests           -> examples in /// comments that compile and run benchmarks         -> benches/&#42;.rs with `harness = false`; see benches/crate_tour_bench.rs, which includes **this** file Run: cargo bench -p cb-crate-tour --bench crate_tour_bench -- --quick
+
+**Property cheat sheet**: round trip (decode(encode(x)) == x) ; oracle (fast == obviously correct) ; invariant (output is sorted **and** a permutation) ; idempotence (f(f(x)) == f(x)) ; metamorphic (relation between two runs) ; never panics. **Regression files**: inside `proptest!` tests, a failing seed is saved under proptest-regressions/; **commit** those files.
+
+The sections here disable persistence (except `regression_files`, which writes to a temporary directory) and fix the RNG so that every run is identical. **Snapshots**: review changes with `cargo insta review` (cargo-insta tool). A snapshot proves "unchanged", not "correct".
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://proptest-rs.github.io/proptest/" target="_blank" rel="noreferrer">https://proptest-rs.github.io/proptest/</a></li><li><a href="https://insta.rs/docs/" target="_blank" rel="noreferrer">https://insta.rs/docs/</a></li><li><a href="https://bheisler.github.io/criterion.rs/book/" target="_blank" rel="noreferrer">https://bheisler.github.io/criterion.rs/book/</a></li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/proptest/1/proptest"
+url = "https://docs.rs/proptest/1/proptest/"
+
+[[sources]]
+title = "docs.rs/insta/1/insta"
+url = "https://docs.rs/insta/1/insta/"
+
+[[sources]]
+title = "docs.rs/assert_cmd/2"
+url = "https://docs.rs/assert_cmd/2/"
+
+[[sources]]
+title = "docs.rs/predicates/3"
+url = "https://docs.rs/predicates/3/"
+
+[[sources]]
+title = "docs.rs/criterion/0.5/criterion"
+url = "https://docs.rs/criterion/0.5/criterion/"
+
+[[sources]]
+title = "proptest-rs.github.io/proptest"
+url = "https://proptest-rs.github.io/proptest/"
+
+[[sources]]
+title = "insta.rs/docs"
+url = "https://insta.rs/docs/"
+
+[[sources]]
+title = "bheisler.github.io/criterion.rs/book"
+url = "https://bheisler.github.io/criterion.rs/book/"

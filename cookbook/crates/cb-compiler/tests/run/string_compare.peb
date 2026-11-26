@@ -1,0 +1,6 @@
+fn main() {
+    println(to_str("apple" < "banana"));
+    println(to_str("b" <= "a"));
+    println(to_str("same" == "sa" + "me"));
+    println(to_str("x" != "y"));
+}

@@ -1,0 +1,9 @@
+error[E0218]: built-in function `len` cannot be used as a value
+ --> e0218_builtin_as_value.peb:2:13
+  |
+2 |     let f = len;
+  |             ^^^ only calls are allowed
+  |
+  = help: wrap it in your own function to pass it around
+
+error: aborting due to 1 previous error

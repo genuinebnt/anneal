@@ -1,0 +1,81 @@
+title = "Distance kernels for vector search"
+module = "Search and vectors"
+module_order = 9
+chapter = "Vector search"
+chapter_order = 2
+order = 471
+kind = "recipe"
+lede = "Scalar, multi-accumulator, autovectorised, AVX2/FMA and NEON, f16/bf16/i8 storage."
+level = "intermediate"
+code = ["examples/search_vectors/vector_distance_kernels_simd.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+the inner loop of every vector index (brute force, IVF, HNSW, PQ re-ranking); all of them spend 60-90% of their time here.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+the five kernels a vector database needs (squared L2, dot / inner product, cosine, Hamming over bit codes, and the "negative inner product" distance) each written several ways, all checked against an f64 scalar **oracle**:
+
+1. `scalar`    one accumulator. The loop-carried dependency on `acc` caps it at one add per FP latency (&#126;4 cycles).
+2. `unroll4`   four independent accumulators written by hand. Breaks the dependency chain, so the CPU overlaps adds.
+3. `chunked`   `chunks_exact(8)` with an `[f32; 8]` accumulator. LLVM turns the array into one SIMD register (no `unsafe`, no intrinsics). Floats are not associative so LLVM will **not** reorder a plain `sum()`; writing the lanes yourself is the permission slip.
+4. `avx2_fma`  x86_64 intrinsics (two 8-lane FMA accumulators), chosen at run time with `is_x86_feature_detected!`.
+5. `neon`      aarch64 intrinsics (four 4-lane FMA accumulators). **Neon** is baseline on aarch64 so no detection is needed. Only variants that exist on the machine are built (cfg-gated); the scalar fallback always exists.
+
+   On this machine you see whichever of avx2/neon applies; the other branch is compiled out, so it is written to be obviously correct, not benchmarked here.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Storage formats** (memory bandwidth, not FLOPs, is the real limit once vectors leave the cache):
+
+- f16 (IEEE half) and bf16 (top 16 bits of f32): hand-written converters, verified **exhaustively** over all 65536 f16 bit patterns and against a nearest-value oracle. Kernels widen to f32 per element and accumulate in f32.
+- i8 with a per-vector scale: integer dot with i32 accumulators is **exact** (no rounding at all), then multiply by the scales.
+
+**The norm trick**: &#124;a-b&#124;&#94;2 = &#124;a&#124;&#94;2 + &#124;b&#124;&#94;2 - 2 a.b. If norms are precomputed (stored next to each vector), one dot product gives L2 and a matrix-matrix product (GEMM) gives all pairwise distances. The price is **cancellation** when a is close to b (the answer is tiny, the terms are big).
+
+We measure that error and clamp at 0. **Batching**: one query against N contiguous vectors. Row-major means one horizontal sum per row; the **blocked** (8 rows per block, dimension-major inside a block) layout puts row j in lane j, so a block of 8 distances needs NO horizontal reduction.
+
+**Early abandon**: when you only want results below a threshold, stop summing once the partial sum already exceeds it (partial sums of squares only grow). Checked every 16 dims so the branch is cheap. **Accuracy**: f32 sums depend on order.
+
+A sequential sum has worst-case error &#126; n&#42;eps&#42;sum&#124;x&#124;; lanes/pairwise &#126; log n; Kahan compensation &#126; eps independent of n. Tolerances below are the proven bounds, not magic numbers.
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+2000 random vector pairs with dimensions that are **not** multiples of the lane width (1,2,3,7,9,...,1000), zero vectors, one-hot, antipodal (cancellation), huge (1e15) and tiny (1e-15) magnitudes, mixed huge x tiny. Timings are printed, never asserted.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>faiss <code>fvec_L2sqr</code>/<code>fvec_inner_product</code> (AVX2/AVX-512/NEON paths)</li><li>hnswlib <code>L2SqrSIMD16ExtAVX</code></li><li>ScaNN and USearch (f16/i8 storage)</li><li>pgvector (<code>vector_l2_squared_distance</code> plus AVX/FMA multiversioning)</li><li>Lucene <code>VectorUtil</code> (Panama Vector API)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://en.algorithmica.org/hpc/simd/" target="_blank" rel="noreferrer">https://en.algorithmica.org/hpc/simd/</a></li><li><a href="https://doc.rust-lang.org/core/arch/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/core/arch/index.html</a></li><li><a href="https://github.com/facebookresearch/faiss/wiki/Fast-accumulation-of-PQ-and-AQ-codes-(FastScan" target="_blank" rel="noreferrer">https://github.com/facebookresearch/faiss/wiki/Fast-accumulation-of-PQ-and-AQ-codes-(FastScan</a>)</li><li>Higham, "The accuracy of floating point summation" (SIAM J</li><li>Sci</li><li>Comput. 1993</li><li>cited by title, URL not checked)</li><li><a href="https://arxiv.org/abs/1603.09320" target="_blank" rel="noreferrer">https://arxiv.org/abs/1603.09320</a> (HNSW: distance computations dominate search cost)</li></ul>
+"""
+
+[[sources]]
+title = "en.algorithmica.org/hpc/simd"
+url = "https://en.algorithmica.org/hpc/simd/"
+
+[[sources]]
+title = "doc.rust-lang.org/core/arch/index.html"
+url = "https://doc.rust-lang.org/core/arch/index.html"
+
+[[sources]]
+title = "github.com/facebookresearch/faiss/wiki/Fast-accumulation-of-PQ-and-AQ-codes-(…"
+url = "https://github.com/facebookresearch/faiss/wiki/Fast-accumulation-of-PQ-and-AQ-codes-(FastScan"
+
+[[sources]]
+title = "arxiv.org/abs/1603.09320"
+url = "https://arxiv.org/abs/1603.09320"

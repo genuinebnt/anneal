@@ -1,0 +1,261 @@
+title = "One key space"
+module = "Databases"
+module_order = 8
+chapter = "Building complete engines"
+chapter_order = 9
+order = 442
+kind = "guide"
+lede = "Architecture of a multi-model database · three ways to build one · an order-preserving typed tuple codec · key layouts for rows, indexes, edges, documents, series and vectors · a prefix-scan bug the property test found"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>A multi-model database has three possible shapes.</strong> <em>Polyglot</em>: one engine per model (a relational database, a graph database, a vector store) and application code to keep them consistent. <em>Extensions</em>: one mature engine with the other models bolted on through its extension API (pgvector, Apache AGE, TimescaleDB). <em>One substrate</em>: a single ordered key-value store with a transaction layer, and each model a thin layer that maps its operations to key ranges (FoundationDB's Record Layer, CockroachDB and TiDB over their KV layers, SurrealDB, ArangoDB over RocksDB). Cairn takes the third shape, because it is the only one where one transaction can touch a row, an edge, a document and a vector and commit or fail as a whole.</li> <li><strong>The substrate's contract is small.</strong> An ordered map from byte strings to byte strings; point reads and writes; range scans in key order; atomic multi-key transactions with snapshot reads. Everything else is a layer above. Replication, sharding and the storage engine change under that contract without any model noticing.</li> <li><strong>The key layout <em>is</em> the data model.</strong> In a B-tree or an LSM tree, what is stored next to what is decided by the key bytes. If a row's index entries, a vertex's edges, a document's fields and a series' samples sit next to each other in key order, each access pattern becomes one range scan: sequential I/O, one seek, one Raft range, one shard.</li> <li><strong>That requires an encoding whose byte order is the value order</strong> (a <em>memcomparable</em> encoding). Comparing keys is then <code>memcmp</code>; no schema is needed to order them; the same bytes serve as the B-tree key, the LSM key and the shard boundary; composite keys are concatenations. The costs: integers take a fixed width, strings need an escape, and decoding is needed to read a key.</li> <li><strong>Order and prefix are two separate properties and both matter.</strong> Order makes range scans work. Prefix-freedom (one encoded value is never a byte prefix of a different one) makes <em>prefix scans</em> work: "all keys that start with this tuple" must return exactly the keys whose tuple starts with it. The first design in this section had the first property and not the second.</li> <li><strong>Every model needs the same machinery from below</strong>: MVCC timestamps in the key suffix (<a href="/cookbook/p/transactions-on-the-key-space">M2</a>), a replicated log per key range, range splits at key boundaries. Putting the models in one key space means building these once.</li> </ul>
+"""
+
+[[sections]]
+heading = "One map, many shapes"
+body = """
+```text
+key =  [ model tag ][ id ][ the model's own tuple ]                        value
+row         10 | table | pk columns                                        the other columns
+index       11 | table | index | indexed columns | pk columns              (empty)
+edge out    20 | graph | src | label | dst                                  properties
+edge in     21 | graph | dst | label | src                                  (empty)
+document    30 | collection | doc id | path components                      a scalar leaf
+series      40 | series id | timestamp                                      sample
+vector      50 | index | cell | vector id                                   the vector
+```
+
+<p>Reading it as access patterns:</p>
+
+<ul> <li>A <strong>table scan</strong> is the prefix <code>10 | table</code>. A primary-key lookup is a point read. An <strong>index range scan</strong> is a range inside <code>11 | table | index</code>, and the primary key comes out of the <em>key</em>, so a covering index never touches the row.</li> <li>A vertex's <strong>out-neighbours</strong> are the prefix <code>20 | graph | src</code>; its <strong>in-neighbours</strong> are the prefix <code>21 | graph | dst</code>. The reverse index is a second copy written in the same transaction; the substrate has no foreign keys to maintain it.</li> <li>A <strong>document</strong> is stored flattened, one key per scalar leaf, path components in order, array indexes as integers. Reading the document is one prefix scan; reading <code>tags[2]</code> is one point read; an index over a path is another key family in the index namespace.</li> <li>A <strong>time range of a series</strong> is a range scan; a <strong>vector cell</strong> (an IVF list) is a prefix scan. Both are the same shape as the others.</li> </ul>
+"""
+
+[[sections]]
+heading = "The codec"
+body = """
+<p>Each value is a type tag, then its bytes:</p>
+
+<ul> <li><strong>Integers</strong>: the 64-bit two's complement with the sign bit flipped, big-endian. Negatives then sort before positives, and 9 bytes per integer is the price.</li> <li><strong>Floats</strong>: the IEEE bits, with the sign bit set for non-negatives and all bits inverted for negatives. <code>-0.0</code> and every NaN are canonicalized (SQL treats <code>-0 = 0</code>; NaN sorts after <code>+inf</code>).</li> <li><strong>Text and bytes</strong>: the bytes with each <code>0x00</code> written as <code>0x00 0xFF</code>, ended by <code>0x00 0x01</code>. The ending is smaller than any escape continuation, so <code>"ab" &lt; "ab&#92;0" &lt; "abc"</code>, and it is not a prefix of the escape, so one encoded string is never a prefix of another.</li> <li><strong>Descending columns</strong>: the bytewise complement of the whole component.</li> <li><strong>Type order</strong>: NULL, false, true, integers, floats, text, bytes. The tag byte decides.</li> </ul>
+
+:::deeper Reference: typed tuple codec, key layouts for every model, prefix_end and the shared substrate
+```rust title="src/multimodel/mmkey.rs"
+//! The key space of a multi-model database: one ordered byte-string store, and a typed tuple encoding whose byte order equals the
+//! value order. Every model (rows, secondary indexes, graph edges, document paths, time series, vector cells) is a *prefix* of that
+//! key space, so each access pattern is one range scan and one transaction layer serves them all.
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
+
+#[derive(Clone, Debug)]
+pub enum Val { Null, Bool(bool), Int(i64), Float(f64), Text(String), Bytes(Vec<u8>) }
+
+const T_NULL: u8 = 0x01;
+const T_FALSE: u8 = 0x02;
+const T_TRUE: u8 = 0x03;
+const T_INT: u8 = 0x04;
+const T_FLOAT: u8 = 0x05;
+const T_TEXT: u8 = 0x06;
+const T_BYTES: u8 = 0x07;
+
+fn canon(f: f64) -> u64 { if f.is_nan() { 0x7ff8_0000_0000_0000 } else if f == 0.0 { 0 } else { f.to_bits() } }
+fn rank(v: &Val) -> u8 { match v { Val::Null => T_NULL, Val::Bool(false) => T_FALSE, Val::Bool(true) => T_TRUE, Val::Int(_) => T_INT, Val::Float(_) => T_FLOAT, Val::Text(_) => T_TEXT, Val::Bytes(_) => T_BYTES } }
+
+impl Val {
+    /// The order the encoding must reproduce: NULL < false < true < integers < floats (NaN last, -0 = +0) < text < bytes.
+    pub fn cmp_typed(&self, o: &Val) -> Ordering {
+        match (self, o) {
+            (Val::Int(a), Val::Int(b)) => a.cmp(b),
+            (Val::Float(a), Val::Float(b)) => { let (a, b) = (f64::from_bits(canon(*a)), f64::from_bits(canon(*b))); a.total_cmp(&b) }
+            (Val::Text(a), Val::Text(b)) => a.as_bytes().cmp(b.as_bytes()),
+            (Val::Bytes(a), Val::Bytes(b)) => a.cmp(b),
+            (a, b) => rank(a).cmp(&rank(b)),
+        }
+    }
+}
+impl PartialEq for Val { fn eq(&self, o: &Val) -> bool { self.cmp_typed(o) == Ordering::Equal } }
+
+/// Typed order of whole tuples: lexicographic by component, a proper prefix first.
+pub fn cmp_tuple(a: &[Val], b: &[Val], desc: &[bool]) -> Ordering {
+    for (i, (x, y)) in a.iter().zip(b).enumerate() {
+        let c = x.cmp_typed(y);
+        let c = if desc.get(i).copied().unwrap_or(false) { c.reverse() } else { c };
+        if c != Ordering::Equal { return c; }
+    }
+    a.len().cmp(&b.len())
+}
+
+/// 0x00 is escaped as 0x00 0xFF and the string ends with 0x00 0x01. The ending is not a prefix of any escape, so one encoded
+/// string is a byte prefix of another only when they are equal, and a shorter string still sorts before its extensions
+/// (0x01 < 0xFF). Descending order is the bytewise complement of all of it.
+fn put_escaped(b: &[u8], out: &mut Vec<u8>) {
+    for &x in b { out.push(x); if x == 0 { out.push(0xFF); } }
+    out.extend([0, 1]);
+}
+
+/// Append one value. A component is self-delimiting, so concatenations of components sort component by component.
+pub fn encode_val(v: &Val, desc: bool, out: &mut Vec<u8>) {
+    let start = out.len();
+    out.push(rank(v));
+    match v {
+        Val::Null | Val::Bool(_) => {}
+        Val::Int(i) => out.extend(((*i as u64) ^ (1 << 63)).to_be_bytes()),
+        Val::Float(f) => { let b = canon(*f); out.extend((if b >> 63 == 1 { !b } else { b | (1 << 63) }).to_be_bytes()) }
+        Val::Text(s) => put_escaped(s.as_bytes(), out),
+        Val::Bytes(b) => put_escaped(b, out),
+    }
+    if desc { for x in &mut out[start..] { *x = !*x; } }
+}
+
+pub fn encode_tuple(vs: &[Val], desc: &[bool], out: &mut Vec<u8>) {
+    for (i, v) in vs.iter().enumerate() { encode_val(v, desc.get(i).copied().unwrap_or(false), out); }
+}
+pub fn key(vs: &[Val]) -> Vec<u8> { let mut o = vec![]; encode_tuple(vs, &[], &mut o); o }
+
+#[derive(Debug, PartialEq)]
+pub enum DecodeError { Truncated, BadTag(u8), BadEscape, BadUtf8 }
+
+fn take_escaped(buf: &[u8], pos: &mut usize, desc: bool) -> Result<Vec<u8>, DecodeError> {
+    let g = |p: usize| buf.get(p).map(|&b| if desc { !b } else { b });
+    let mut out = vec![];
+    loop {
+        match g(*pos) {
+            None => return Err(DecodeError::Truncated),
+            Some(0) => match g(*pos + 1) {
+                Some(0xFF) => { out.push(0); *pos += 2; }
+                Some(1) => { *pos += 2; return Ok(out); }
+                Some(_) => return Err(DecodeError::BadEscape),
+                None => return Err(DecodeError::Truncated),
+            },
+            Some(b) => { out.push(b); *pos += 1; }
+        }
+    }
+}
+
+pub fn decode_val(buf: &[u8], pos: &mut usize, desc: bool) -> Result<Val, DecodeError> {
+    let g = |p: usize| buf.get(p).map(|&b| if desc { !b } else { b }).ok_or(DecodeError::Truncated);
+    let tag = g(*pos)?; *pos += 1;
+    let eight = |pos: &mut usize| -> Result<u64, DecodeError> {
+        let mut a = [0u8; 8];
+        for i in 0..8 { a[i] = g(*pos + i)?; }
+        *pos += 8; Ok(u64::from_be_bytes(a))
+    };
+    Ok(match tag {
+        T_NULL => Val::Null, T_FALSE => Val::Bool(false), T_TRUE => Val::Bool(true),
+        T_INT => Val::Int((eight(pos)? ^ (1 << 63)) as i64),
+        T_FLOAT => { let e = eight(pos)?; Val::Float(f64::from_bits(if e >> 63 == 1 { e & !(1 << 63) } else { !e })) }
+        T_TEXT => Val::Text(String::from_utf8(take_escaped(buf, pos, desc)?).map_err(|_| DecodeError::BadUtf8)?),
+        T_BYTES => Val::Bytes(take_escaped(buf, pos, desc)?),
+        t => return Err(DecodeError::BadTag(t)),
+    })
+}
+
+pub fn decode_tuple(buf: &[u8], desc: &[bool]) -> Result<Vec<Val>, DecodeError> {
+    let (mut pos, mut out) = (0, vec![]);
+    while pos < buf.len() { let d = desc.get(out.len()).copied().unwrap_or(false); out.push(decode_val(buf, &mut pos, d)?); }
+    Ok(out)
+}
+
+// ---- the layout: a one-byte model tag, then ids, then the model's own tuple -----------------------------------------------------
+
+pub mod ns {
+    pub const ROW: u8 = 0x10;
+    pub const INDEX: u8 = 0x11;
+    pub const EDGE_OUT: u8 = 0x20;
+    pub const EDGE_IN: u8 = 0x21;
+    pub const DOC: u8 = 0x30;
+    pub const SERIES: u8 = 0x40;
+    pub const VECTOR: u8 = 0x50;
+}
+
+fn head(tag: u8, id: u32) -> Vec<u8> { let mut k = vec![tag]; k.extend(id.to_be_bytes()); k }
+fn with(mut k: Vec<u8>, vs: &[Val]) -> Vec<u8> { encode_tuple(vs, &[], &mut k); k }
+
+pub fn row_key(table: u32, pk: &[Val]) -> Vec<u8> { with(head(ns::ROW, table), pk) }
+pub fn index_key(table: u32, index: u16, cols: &[Val], pk: &[Val]) -> Vec<u8> {
+    let mut k = head(ns::INDEX, table); k.extend(index.to_be_bytes()); with(with(k, cols), pk)
+}
+pub fn index_prefix(table: u32, index: u16, cols: &[Val]) -> Vec<u8> { let mut k = head(ns::INDEX, table); k.extend(index.to_be_bytes()); with(k, cols) }
+pub fn out_edge(graph: u32, src: u64, label: &str, dst: u64) -> Vec<u8> { with(head(ns::EDGE_OUT, graph), &[Val::Int(src as i64), Val::Text(label.into()), Val::Int(dst as i64)]) }
+pub fn in_edge(graph: u32, dst: u64, label: &str, src: u64) -> Vec<u8> { with(head(ns::EDGE_IN, graph), &[Val::Int(dst as i64), Val::Text(label.into()), Val::Int(src as i64)]) }
+pub fn doc_key(coll: u32, id: u64, path: &[Val]) -> Vec<u8> { let mut p = vec![Val::Int(id as i64)]; p.extend_from_slice(path); with(head(ns::DOC, coll), &p) }
+pub fn series_key(series: u64, ts: i64) -> Vec<u8> { let mut k = vec![ns::SERIES]; k.extend(series.to_be_bytes()); with(k, &[Val::Int(ts)]) }
+pub fn vector_key(index: u32, cell: u32, id: u64) -> Vec<u8> { with(head(ns::VECTOR, index), &[Val::Int(cell as i64), Val::Int(id as i64)]) }
+
+/// The smallest key greater than every key with this prefix (the end of a prefix range scan).
+pub fn prefix_end(p: &[u8]) -> Option<Vec<u8>> {
+    let mut e = p.to_vec();
+    while let Some(last) = e.pop() { if last < 0xFF { e.push(last + 1); return Some(e); } }
+    None
+}
+
+/// The ordered store every model shares. A real engine puts the LSM or B-tree and the transaction layer here.
+#[derive(Default)]
+pub struct Substrate { pub kv: BTreeMap<Vec<u8>, Vec<u8>>, pub scans: u64, pub keys_read: u64 }
+impl Substrate {
+    pub fn put(&mut self, k: Vec<u8>, v: Vec<u8>) { self.kv.insert(k, v); }
+    pub fn del(&mut self, k: &[u8]) { self.kv.remove(k); }
+    pub fn get(&mut self, k: &[u8]) -> Option<&Vec<u8>> { self.keys_read += 1; self.kv.get(k) }
+    pub fn scan_prefix(&mut self, p: &[u8]) -> Vec<(Vec<u8>, Vec<u8>)> {
+        self.scans += 1;
+        let r: Vec<_> = match prefix_end(p) {
+            Some(e) => self.kv.range(p.to_vec()..e).map(|(k, v)| (k.clone(), v.clone())).collect(),
+            None => self.kv.range(p.to_vec()..).map(|(k, v)| (k.clone(), v.clone())).collect(),
+        };
+        self.keys_read += r.len() as u64; r
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>The seven rows below are keys built by the layout functions; the integers are visibly <code>04</code> followed by eight bytes with the top bit flipped (<code>80 00 … 07</code> is 7), the strings <code>06 … 00 01</code>.</p>
+
+```text title="the key layouts, and 1 000 000 composite keys encoded, decoded and sorted"
+model        key (hex)                                                      meaning
+row          10 00 00 00 01 04 80 00 00 00 00 00 00 07                      users(id=7)
+index        11 00 00 00 01 00 01 04 80 00 00 00 00 00 00 1f 04 80 00 00 00 00 00 00 07 users by age=31, id=7
+edge out     20 00 00 00 01 04 80 00 00 00 00 00 00 07 06 66 6f 6c 6c 6f 77 73 00 01 04 80 00 00 00 00 00 00 0c 7 -follows-> 12
+edge in      21 00 00 00 01 04 80 00 00 00 00 00 00 0c 06 66 6f 6c 6c 6f 77 73 00 01 04 80 00 00 00 00 00 00 07 12 <-follows- 7
+document     30 00 00 00 01 04 80 00 00 00 00 00 00 07 06 74 61 67 73 00 01 04 80 00 00 00 00 00 00 02 doc 7, path tags[2]
+series       40 00 00 00 00 00 00 00 03 04 80 00 00 00 00 00 03 e8          series 3 at t=1000
+vector       50 00 00 00 01 04 80 00 00 00 00 00 00 04 04 80 00 00 00 00 00 00 09 cell 4, vector 9
+tuples of (int, text, float): 1000000 keys of 32.0 bytes on average
+encode 69 ns per key, decode 74 ns per key (checksum 3000000)
+sort of 1000000 keys: typed comparator 0.34 s, memcmp on encoded bytes 0.13 s (2.7x faster)
+```
+
+<ul> <li><strong>Comparison is where the encoding pays</strong>: sorting a million three-column keys takes 0.34 s with a typed comparator and 0.13 s with <code>memcmp</code> on the encoded bytes, <strong>2.7× faster</strong>, and both orders agree for all one million keys. The comparator is also the same function everywhere (B-tree page search, LSM merge, shard routing) and needs no schema.</li> <li><strong>Encoding is cheap, decoding is a cost</strong>: about 70 ns per three-column key each way. A scan that only needs the key's order never decodes; one that returns column values decodes them from the key or the value, and the layouts above keep the decoded part small.</li> <li><strong>Integers are wide</strong>: the 9-byte integer is 4 to 8 bytes more than a varint, and every key in an index repeats the primary key. Engines that care use variable-length integer encodings that keep the order (FoundationDB's tuple layer does); the exercises build one.</li> </ul>
+
+<aside data-call="note"><b>A bug the property test found</b><p>The first terminator for strings was a single <code>0x00</code>, as in the Part II key encodings. Order came out right in 200 000 random pairs. A separate property, "the bytes of A are a prefix of the bytes of B exactly when the tuple A is a prefix of the tuple B", failed on <code>[""]</code> against <code>["&#92;0é…"]</code>: the empty string's <code>00</code> is also the first byte of the escape <code>00 ff</code>, so a prefix scan for <code>""</code> would have returned documents whose first field starts with a NUL. Changing the ending to <code>00 01</code> fixed it. Order tests alone would not have found this; the model layouts depend on prefix scans.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A closed <code>enum Val</code></strong> with a hand-written <code>cmp_typed</code> is the specification; the encoder is checked against it, not the other way round. <code>PartialEq</code> is defined through the same comparison so <code>-0.0 == 0.0</code> and <code>NaN == NaN</code> hold for keys, unlike <code>f64</code>'s own <code>==</code>.</li> <li><strong><code>f64::total_cmp</code></strong> gives the IEEE total order on bits; the codec canonicalizes <code>-0.0</code> and NaN <em>before</em> comparing, so the oracle and the encoding agree on the two values where total order and SQL disagree.</li> <li><strong>Escapes in a <code>Vec&lt;u8&gt;</code> out-parameter</strong>: encoding appends to a caller-provided buffer, so building a row key, an index key and an edge key in one transaction reuses one allocation. <code>decode_tuple</code> returns <code>Result&lt;_, DecodeError&gt;</code> and never indexes unchecked; the garbage test runs 50 000 random byte strings through both directions.</li> <li><strong><code>BTreeMap::range</code> with an exclusive upper bound from <code>prefix_end</code></strong>: the smallest key above every key with the prefix. An all-<code>0xFF</code> prefix has no upper bound, so the function returns <code>Option</code> and the scan falls back to an open range.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Order</strong>: 200 000 random pairs of tuples (0 to 3 components over an adversarial alphabet: NUL, <code>0x01</code>, <code>0xC3 0xBF</code>, <code>-0.0</code>, NaN, infinities, <code>i64::MIN</code>, bytes with <code>0xFF</code>) with random ascending/descending flags; the encoded bytes compare as the typed values do.</li> <li><strong>Round trip</strong>: 100 000 tuples decode to equal tuples in both directions.</li> <li><strong>Prefix property</strong>: 200 000 pairs; <code>bytes(A)</code> is a prefix of <code>bytes(B)</code> exactly when <code>A</code> is a prefix of <code>B</code>.</li> <li><strong>Robustness</strong>: random byte strings never panic the decoder; every truncation of a valid key is an error; an unknown tag is <code>BadTag</code>.</li> <li><strong>Cross-type ladder</strong>: NULL &lt; false &lt; true &lt; ints &lt; floats &lt; text &lt; bytes, with neighbours like <code>"a" &lt; "a&#92;0"</code> and <code>[] &lt; [0]</code>.</li> <li><strong>Layouts</strong>: a table of 200 users with an age index, a 400-edge graph with both directions, 50 documents, 4 series and 8 vector cells in one map; each access pattern (table scan, index range, neighbours both ways, one document, a time range, a cell) returns exactly what a plain filter over the source data returns, and every model's tag range holds only its own keys.</li> <li><strong>Mutants run against these tests</strong>: sign bit not flipped; negative floats not inverted; NaN or <code>-0.0</code> not canonical; NUL not escaped; ending a prefix of the escape; descending flipping nothing; a prefix not sorting first; <code>prefix_end</code> not incrementing; float decode mixing up its cases; the in-edge tag equal to the out-edge tag; NULL or <code>true</code> retagged; index keys without the primary key or the index id; a prefix scan without its upper bound. <strong>All 16 were killed.</strong> One mutant (retagging NULL) survived the first suite, because the oracle used the same tag table; the cross-type ladder test fixes the order independently.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>FoundationDB's tuple layer</strong> is this codec (type codes, escaped <code>0x00</code>, order-preserving integers, variable-length for small ones) and its Record Layer builds indexes and queries on it. <strong>CockroachDB</strong>'s key encoding writes table id, index id and column values into one ordered key space and splits ranges at key boundaries; <strong>TiDB</strong> does the same over TiKV, with <code>t{table}_r{rowid}</code> and <code>t{table}_i{index}</code> prefixes.</li> <li><strong>SurrealDB</strong> and <strong>ArangoDB</strong> map documents, graph edges and records onto an embedded key-value engine (RocksDB, TiKV, FoundationDB); edge documents carry source and target ids with an index in each direction, as above.</li> <li><strong>PostgreSQL</strong> is the extension route: <code>pgvector</code> stores vectors as a column type with its own index access methods, <strong>Apache AGE</strong> adds graphs on top of tables, <strong>TimescaleDB</strong> partitions tables by time. The transaction is Postgres's; the layout is Postgres's.</li> <li><strong>DuckDB</strong> and <strong>ClickHouse</strong> order by <em>sort keys</em> with their own comparators on columnar data; the memcomparable trick matters most where one byte-ordered store serves many schemas.</li> <li><strong>Cloud multi-model services</strong> (Azure Cosmos DB) expose several APIs over one replicated, partitioned store with one resource model.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Prefix-freedom is a separate requirement from ordering.</strong> Test both, with strings that end in the terminator's bytes.</li> <li><strong>Never change an encoding after data exists.</strong> Keys are the storage format and the shard boundary; version the tag or the namespace if a layout must change.</li> <li><strong>Floats in keys</strong>: decide on <code>-0.0</code> and NaN once; SQL equality and bit equality differ, and an index lookup for <code>0.0</code> must find <code>-0.0</code>.</li> <li><strong>Collations</strong>: a memcomparable text key orders by bytes (code point order). A locale-aware order needs a collation key (a sort key from ICU) in place of the raw bytes, and then you cannot decode the original string from the key.</li> <li><strong>Large keys</strong>: a vertex with a million edges is a million adjacent keys, fine for a scan and bad for a "count" without a stored degree; a document with a 10 MB string is one huge value, not a key problem.</li> <li><strong>Namespace growth</strong>: the one-byte model tag has 256 values; reserve ranges for system tables and future models.</li> <li><strong>Reverse indexes cost writes</strong>: every edge insert writes two keys; every row writes one per index. Count them when you estimate write amplification.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Tuple layer specification"
+url = "https://github.com/apple/foundationdb/blob/main/design/tuple.md"
+
+[[sources]]
+title = "SQL in CockroachDB: Mapping Table Data into Key-Value Storage"
+url = "https://www.cockroachlabs.com/blog/sql-in-cockroachdb-mapping-table-data-into-key-value-storage/"
+
+[[sources]]
+title = "Computing / Storage mapping"
+url = "https://docs.pingcap.com/tidb/stable/tidb-computing"
+
+[[sources]]
+title = "The Case for Polystores"
+url = "https://people.csail.mit.edu/kraska/pub/polystore.pdf"

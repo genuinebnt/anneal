@@ -1,0 +1,62 @@
+title = "A PRNG zoo"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Mathematics and numerics"
+chapter_order = 7
+order = 233
+kind = "recipe"
+lede = "LCG, xorshift64*, SplitMix64, PCG32, ChaCha8, and how to test them."
+level = "intermediate"
+code = ["examples/math_science/prng_zoo.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>simulations</li><li>tests/fuzzing</li><li>sampling</li><li>shuffling</li><li>load generators (<strong>not</strong> secrets)</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a pseudo-random generator is a deterministic state machine whose output looks random to the tests you care about. Which tests matter is the whole game: an LCG is fine for a toy dice roll and awful when you look at its low bits (bit k of a power-of-two-modulus LCG has period 2&#94;(k+1): bit 0 just alternates).
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+each generator implements `Rng32`. On top of that we build the parts people get wrong: unbiased bounded integers (Lemire's multiply-shift instead of `% n`, which over-weights small residues), floats in [0,1) from 53 random bits, Gaussians by Box-Muller, and Fisher-Yates shuffling.
+
+Then four cheap statistical sanity tests (monobit, byte chi-square, lag-1 serial correlation, runs) with generous thresholds: they cannot certify quality (use PractRand/TestU01 for that) but they catch gross defects, and the LCG fails one.
+
+**Security**: none of these except the ChaCha-based one is designed against an attacker; xorshift/PCG/LCG state is recoverable from a few outputs. Secrets, tokens and keys need an OS CSPRNG (`getrandom`, or `rand::rngs::OsRng` / `StdRng`); even ChaCha8 here is a teaching version (reduced rounds, naive seeding).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>reproducible simulation and property tests (seed it, log the seed)</li><li>Monte Carlo</li><li>game logic</li><li>randomized algorithms (hashing, skip lists, treaps)</li><li>load/chaos generators</li><li>deterministic fuzzing corpora. In real code use the <code>rand</code> crate <a href="https://docs.rs/rand" target="_blank" rel="noreferrer">https://docs.rs/rand</a> (with <code>rand_pcg</code>/<code>rand_chacha</code> for these algorithms)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+```text
+https://www.pcg-random.org   https://www.rfc-editor.org/rfc/rfc7539   https://arxiv.org/abs/1805.10941 (Lemire)
+```
+"""
+
+[[sources]]
+title = "docs.rs/rand"
+url = "https://docs.rs/rand"
+
+[[sources]]
+title = "pcg-random.org"
+url = "https://www.pcg-random.org"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc7539"
+url = "https://www.rfc-editor.org/rfc/rfc7539"
+
+[[sources]]
+title = "arxiv.org/abs/1805.10941"
+url = "https://arxiv.org/abs/1805.10941"

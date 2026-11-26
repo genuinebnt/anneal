@@ -1,0 +1,82 @@
+title = "ABIs, object files, linking and unwinding"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Back ends"
+chapter_order = 6
+order = 636
+kind = "guide"
+lede = "Where your compiler meets the operating system · object, gimli, lld, mold"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Calling conventions"
+body = """
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>ABI</th><th>Integer args</th><th>Return</th><th>Callee-saved</th><th>Notes</th></tr></thead> <tbody> <tr><td>System V x86-64 (Linux, macOS)</td><td>rdi, rsi, rdx, rcx, r8, r9; floats in xmm0–7</td><td>rax (rdx), xmm0</td><td>rbx, rbp, r12–r15</td><td>16-byte stack alignment at call; 128-byte red zone below rsp; structs classified INTEGER, SSE or MEMORY per eightbyte</td></tr> <tr><td>Windows x64</td><td>rcx, rdx, r8, r9</td><td>rax</td><td>rbx, rbp, rdi, rsi, r12–r15, xmm6–15</td><td>32-byte shadow space reserved by the caller; no red zone</td></tr> <tr><td>AArch64 AAPCS64</td><td>x0–x7; v0–v7</td><td>x0 (x1), v0</td><td>x19–x28, x29 (FP); d8–d15 low halves</td><td>x30 = link register; sp 16-byte aligned; Apple's variant differs for variadic arguments</td></tr> <tr><td>RISC-V LP64D</td><td>a0–a7; fa0–fa7</td><td>a0 (a1)</td><td>s0–s11, fs0–fs11</td><td>ra holds the return address</td></tr> </tbody> </table></div>
+
+<p>A function's <b>frame</b> holds saved callee-saved registers, spill slots, locals, and an outgoing-argument area. The prologue sets it up; the epilogue tears it down. Large frames need <em>stack probes</em>, touching each page in order so guard pages trigger. rustc emits inline probes. Rust's own ABI is deliberately unstable, and only <code>extern "C"</code> is a promise. Decide early whether your language has a stable ABI; Swift built “library evolution” around making one possible.</p>
+"""
+
+[[sections]]
+heading = "Object files and linking"
+body = """
+<p>An object file (ELF on Linux, Mach-O on Apple, COFF on Windows) contains:</p>
+
+<ul> <li><b>Sections</b>: <code>.text</code>, <code>.rodata</code>, <code>.data</code> and <code>.bss</code>.</li> <li>A <b>symbol table</b>, with local, global and weak symbols and their sizes.</li> <li><b>Relocations</b>: “patch this spot with the address of symbol S plus addend A”, such as <code>R_X86_64_PC32</code>, <code>R_X86_64_PLT32</code>, or <code>ARM64_RELOC_PAGE21</code> on Mach-O.</li> </ul>
+
+<p>The linker resolves symbols across objects and archives, merges sections, assigns addresses and applies relocations. Dynamic linking adds the GOT (addresses of external data, patched at load time) and the PLT (stubs for external calls, optionally bound lazily). Position-independent code reaches everything through PC-relative addressing and the GOT. Duplicate generic instantiations go in COMDAT or <code>linkonce</code> sections so the linker keeps one copy. Rust monomorphization depends on this.</p>
+
+```rust title="Write a real object file with the object crate, then link it from C"
+use object::write::{Object, StandardSection, Symbol, SymbolSection};
+use object::{Architecture, BinaryFormat, Endianness, SymbolFlags, SymbolKind, SymbolScope};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Apple silicon: Mach-O, AArch64.  (Linux x86-64: BinaryFormat::Elf, Architecture::X86_64,
+    // code = [0xb8, 0x2a, 0, 0, 0, 0xc3]  // mov eax, 42 ; ret)
+    let mut obj = Object::new(BinaryFormat::MachO, Architecture::Aarch64, Endianness::Little);
+    let code: [u8; 8] = [
+        0x40, 0x05, 0x80, 0x52,   // movz w0, #42
+        0xc0, 0x03, 0x5f, 0xd6,   // ret
+    ];
+    let text = obj.section_id(StandardSection::Text);
+    let offset = obj.append_section_data(text, &code, 4);
+    obj.add_symbol(Symbol {
+        name: b"answer".to_vec(),               // object adds Mach-O's leading underscore
+        value: offset,
+        size: code.len() as u64,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: SymbolSection::Section(text),
+        flags: SymbolFlags::None,
+    });
+    std::fs::write("answer.o", obj.write()?)?;
+    Ok(())
+}
+```
+
+```text title="main.c, and the commands to inspect and link"
+# main.c:  #include <stdio.h>
+#          int answer(void);
+#          int main(void) { printf("%d\\n", answer()); }
+cargo run && cc main.c answer.o -o demo && ./demo      # prints 42
+nm answer.o                     # symbol table: T _answer
+objdump -d answer.o             # or: otool -tv answer.o (macOS), llvm-objdump -d
+readelf -a answer.o             # ELF headers, sections, relocations (Linux)
+```
+"""
+
+[[sections]]
+heading = "Unwinding and exceptions"
+body = """
+<p>“Zero-cost” exceptions cost nothing on the non-throwing path because all the information lives in side tables. <code>.eh_frame</code> holds DWARF call frame information (CFI): for each code address, how to find the caller's frame and saved registers. The language-specific data area (LSDA, in <code>.gcc_except_table</code>) maps call sites to <em>landing pads</em>. When something throws, the unwinder runs in two phases. Phase 1 searches up the stack, asking each frame's <em>personality routine</em> whether it handles the exception. Phase 2 unwinds, running cleanup landing pads (destructors, Rust <code>Drop</code>) until the handler is reached. Rust panics use exactly this machinery with <code>panic=unwind</code>; <code>panic=abort</code> drops the tables. Windows uses SEH instead, and Wasm has its own exception-handling proposal.</p>
+
+<p><b>Debug info</b> is DWARF in more sections: <code>.debug_info</code> (a tree of entries for types, functions and variables), <code>.debug_line</code> (address to line table) and location lists for variables. Windows uses CodeView and PDB. Emitting correct variable locations through optimizations is one of the hardest parts of a production backend.</p>
+"""
+
+[[sources]]
+title = "Fangrui Song (MaskRay)"
+url = "https://maskray.me"
+
+[[sources]]
+title = "DWARF 5 standard"
+url = "https://dwarfstd.org"

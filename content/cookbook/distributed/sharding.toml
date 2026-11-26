@@ -1,0 +1,527 @@
+title = "Sharding"
+module = "Distributed systems"
+module_order = 10
+chapter = "Time, partitioning and replication"
+chapter_order = 1
+order = 479
+kind = "guide"
+lede = "Range partitioning of the key space · splits, merges and replica moves while writes continue · epochs and stale client caches · load-based splitting and leader transfers · hot spots by key design · what adding a node costs"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>One consensus group cannot hold a big database.</strong> A <a href="/cookbook/p/raft">Raft group</a> serializes every write through one leader and stores every byte on each of its replicas. To scale, cut the key space into <em>ranges</em>, give each range its own group, and spread the groups over the machines. A node then hosts hundreds of range replicas, leading some of them.</li> <li><strong>Range partitioning keeps neighbours together.</strong> Because every model is a prefix of one ordered key space (<a href="/cookbook/p/one-key-space">M1</a>), a range holds consecutive keys: a table's rows, a vertex's edges, a time series' recent samples. A scan touches few ranges. Hash partitioning spreads load evenly but a scan of a hundred neighbours touches a hundred ranges.</li> <li><strong>Ranges are the unit of everything.</strong> They <em>split</em> when they hold too many keys or draw too much load (at the median key, a metadata change plus a local split of each replica's data, no copying), <em>merge</em> when small, and <em>move</em>: add a new replica as a <em>learner</em> that receives every new write and is filled from a snapshot in chunks, promote it, remove the old one. Moving a replica never stops writes.</li> <li><strong>The range map is metadata, and clients cache it.</strong> A request names the range and the epoch the client believes in. The server rejects it when the range changed (bounds or replicas or leader), and the client refreshes from the map and retries: the cache is an optimization that is always checked, never trusted.</li> <li><strong>Load, not just size, drives placement.</strong> A range that is small but hot is split so its halves can live on different nodes; leadership (which serves reads and orders writes) is moved between the replicas that already hold the data, which costs nothing; only when that is not enough is a replica copied.</li> <li><strong>Key design decides whether sharding can help.</strong> If every new key is greater than all earlier ones (a timestamp, an auto-increment id), every write lands in the last range, on one leader, however many ranges exist. The cure is in the key: a prefix that spreads writes (a tenant or a hash bucket) followed by the ordering you want inside it.</li> <li><strong>Elastic placement moves only what it has to.</strong> Adding a node copies replicas until the node has its share, about 1/N of the data; placement by <code>hash(key) mod N</code> would reshuffle almost everything.</li> </ul>
+"""
+
+[[sections]]
+heading = "The model"
+body = """
+<ul> <li><strong><code>Store</code></strong>: a map from range start to <code>RangeDesc { id, start, end, replicas, leader, epoch }</code>, and for every <code>(range, node)</code> pair the keys that replica holds. Writes go to every replica (the model abstracts the Raft group as synchronous replication; the cost of a write is counted in requests per leader). Reads are served by the leader.</li> <li><strong>Epochs</strong>: bumped by splits (on the left half), merges, replica additions and removals, and leader transfers.</li> <li><strong>Reconfiguration</strong>: <code>split(at)</code>, <code>merge(left)</code>, <code>start_add_replica</code> / <code>copy_chunk</code> / <code>finish_add_replica</code> / <code>remove_replica</code>, <code>transfer_leader</code>, and <code>move_replica</code> (all four steps).</li> <li><strong>Policies</strong>: <code>auto_split(max_keys, max_load)</code> splits at the median until nothing qualifies; <code>rebalance</code> moves the leadership of the hottest range of the busiest node to a quieter replica holder, and copies a replica only if no leadership move is enough.</li> <li><strong><code>Client</code></strong> caches <code>(start → end, id, epoch)</code>; a stale answer drops overlapping cache entries and retries (at most 16 times, then it fails loudly instead of looping).</li> </ul>
+
+:::deeper Reference: ranges, splits and merges, learner-based replica moves, epoch-checked requests, caching client, split and rebalance policies
+```rust title="src/multimodel/shard.rs"
+//! Range sharding: the key space is cut into contiguous ranges, each replicated on `rf` nodes. Ranges split when they grow or get hot,
+//! merge when they shrink, and replicas move between nodes while writes continue (copy a snapshot in chunks, apply new writes to the
+//! learner, then promote it). Clients cache the range map and are corrected by epoch checks when it goes stale.
+use std::collections::{BTreeMap, HashMap};
+
+pub type Key = u64;
+pub type NodeId = usize;
+pub const KEY_END: Key = u64::MAX;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RangeDesc {
+    pub id: u64,
+    pub start: Key,
+    /// Exclusive.
+    pub end: Key,
+    pub replicas: Vec<NodeId>,
+    pub leader: NodeId,
+    /// Bumped whenever the range's bounds or replica set change.
+    pub epoch: u64,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum RangeError {
+    /// The request was addressed to a range that has since changed; the caller must refresh its map.
+    Stale,
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct Stats {
+    pub splits: u64,
+    pub merges: u64,
+    pub replica_moves: u64,
+    pub leader_transfers: u64,
+    pub keys_copied: u64,
+    pub meta_lookups: u64,
+    pub redirects: u64,
+}
+
+struct Learner {
+    node: NodeId,
+    /// Everything below this key has been copied; writes below it are applied to the learner immediately.
+    cursor: Key,
+}
+
+pub struct Store {
+    pub nodes: usize,
+    pub rf: usize,
+    pub ranges: BTreeMap<Key, RangeDesc>,
+    data: HashMap<(u64, NodeId), BTreeMap<Key, u64>>,
+    learners: HashMap<u64, Vec<Learner>>,
+    next_id: u64,
+    /// Requests served per range since the last `decay`.
+    pub load: HashMap<u64, f64>,
+    pub stats: Stats,
+}
+
+impl Store {
+    pub fn new(nodes: usize, rf: usize) -> Store {
+        assert!(rf <= nodes && rf >= 1);
+        let replicas: Vec<NodeId> = (0..rf).collect();
+        let r = RangeDesc { id: 1, start: 0, end: KEY_END, replicas: replicas.clone(), leader: 0, epoch: 1 };
+        let mut s = Store { nodes, rf, ranges: BTreeMap::new(), data: HashMap::new(), learners: HashMap::new(), next_id: 2, load: HashMap::new(), stats: Stats::default() };
+        for &n in &replicas {
+            s.data.insert((1, n), BTreeMap::new());
+        }
+        s.ranges.insert(0, r);
+        s
+    }
+
+    pub fn locate(&self, key: Key) -> &RangeDesc {
+        self.ranges.range(..=key).next_back().expect("ranges cover the key space").1
+    }
+    fn charge(&mut self, id: u64, w: f64) {
+        *self.load.entry(id).or_insert(0.0) += w;
+    }
+
+    // ---- requests, addressed to a range at an epoch --------------------------------------------------------------------------------
+
+    fn validate(&self, id: u64, epoch: u64, key: Key) -> Result<RangeDesc, RangeError> {
+        let r = self.locate(key);
+        if r.id != id || r.epoch != epoch { Err(RangeError::Stale) } else { Ok(r.clone()) }
+    }
+    pub fn put_at(&mut self, id: u64, epoch: u64, key: Key, val: u64) -> Result<(), RangeError> {
+        let r = self.validate(id, epoch, key)?;
+        for &n in &r.replicas {
+            self.data.get_mut(&(id, n)).unwrap().insert(key, val);
+        }
+        for l in self.learners.get(&id).into_iter().flatten() {
+            if key < l.cursor {
+                self.data.get_mut(&(id, l.node)).unwrap().insert(key, val);
+            }
+        }
+        self.charge(id, 1.0);
+        Ok(())
+    }
+    pub fn delete_at(&mut self, id: u64, epoch: u64, key: Key) -> Result<(), RangeError> {
+        let r = self.validate(id, epoch, key)?;
+        for &n in &r.replicas {
+            self.data.get_mut(&(id, n)).unwrap().remove(&key);
+        }
+        for l in self.learners.get(&id).into_iter().flatten() {
+            if key < l.cursor {
+                self.data.get_mut(&(id, l.node)).unwrap().remove(&key);
+            }
+        }
+        self.charge(id, 1.0);
+        Ok(())
+    }
+    pub fn get_at(&mut self, id: u64, epoch: u64, key: Key) -> Result<Option<u64>, RangeError> {
+        let r = self.validate(id, epoch, key)?;
+        self.charge(id, 1.0);
+        Ok(self.data[&(id, r.leader)].get(&key).copied())
+    }
+    /// Scan one range's part of `[lo, hi)`.
+    pub fn scan_at(&mut self, id: u64, epoch: u64, lo: Key, hi: Key) -> Result<Vec<(Key, u64)>, RangeError> {
+        let r = self.validate(id, epoch, lo)?;
+        self.charge(id, 1.0);
+        Ok(self.data[&(id, r.leader)].range(lo..hi.min(r.end)).map(|(k, v)| (*k, *v)).collect())
+    }
+
+    // ---- reconfiguration ---------------------------------------------------------------------------------------------------------
+
+    pub fn keys_in(&self, id: u64) -> usize {
+        let r = self.ranges.values().find(|r| r.id == id).unwrap();
+        self.data[&(id, r.leader)].len()
+    }
+
+    /// Cut the range containing `at` into `[start, at)` and `[at, end)`; both keep the same replicas.
+    pub fn split(&mut self, at: Key) -> bool {
+        let r = self.locate(at).clone();
+        if at <= r.start || at >= r.end || self.learners.contains_key(&r.id) {
+            return false;
+        }
+        let new_id = self.next_id;
+        self.next_id += 1;
+        for &n in &r.replicas {
+            let d = self.data.get_mut(&(r.id, n)).unwrap();
+            let upper = d.split_off(&at);
+            self.data.insert((new_id, n), upper);
+        }
+        let left = RangeDesc { end: at, epoch: r.epoch + 1, ..r.clone() };
+        let right = RangeDesc { id: new_id, start: at, epoch: 1, ..r.clone() };
+        self.ranges.insert(left.start, left);
+        self.ranges.insert(right.start, right);
+        let l = self.load.get(&r.id).copied().unwrap_or(0.0) / 2.0;
+        self.load.insert(r.id, l);
+        self.load.insert(new_id, l);
+        self.stats.splits += 1;
+        true
+    }
+
+    /// Merge the range starting at `left_start` with its right neighbour; only if they have the same replicas and leader.
+    pub fn merge(&mut self, left_start: Key) -> bool {
+        let Some(l) = self.ranges.get(&left_start).cloned() else { return false };
+        let Some(r) = self.ranges.get(&l.end).cloned() else { return false };
+        if l.replicas.iter().collect::<std::collections::BTreeSet<_>>() != r.replicas.iter().collect() || l.leader != r.leader || self.learners.contains_key(&l.id) || self.learners.contains_key(&r.id) {
+            return false;
+        }
+        for &n in &l.replicas {
+            let upper = self.data.remove(&(r.id, n)).unwrap();
+            self.data.get_mut(&(l.id, n)).unwrap().extend(upper);
+        }
+        self.ranges.remove(&r.start);
+        let merged = RangeDesc { end: r.end, epoch: l.epoch.max(r.epoch) + 1, ..l.clone() };
+        self.ranges.insert(merged.start, merged);
+        let total = self.load.remove(&r.id).unwrap_or(0.0) + self.load.get(&l.id).copied().unwrap_or(0.0);
+        self.load.insert(l.id, total);
+        self.stats.merges += 1;
+        true
+    }
+
+    /// Begin adding a replica on `node`: it will receive every write below its copy cursor and be filled up to the cursor in chunks.
+    pub fn start_add_replica(&mut self, id: u64, node: NodeId) -> bool {
+        let Some(r) = self.ranges.values().find(|r| r.id == id) else { return false };
+        if r.replicas.contains(&node) || self.learners.get(&id).is_some_and(|l| !l.is_empty()) {
+            return false;
+        }
+        self.data.insert((id, node), BTreeMap::new());
+        self.learners.entry(id).or_default().push(Learner { node, cursor: r.start });
+        true
+    }
+    /// Copy up to `n` more keys to the learner. Returns true when the copy is complete.
+    pub fn copy_chunk(&mut self, id: u64, n: usize) -> bool {
+        let r = self.ranges.values().find(|r| r.id == id).unwrap().clone();
+        let l = self.learners.get_mut(&id).unwrap().first_mut().unwrap();
+        let src = &self.data[&(id, r.leader)];
+        let chunk: Vec<(Key, u64)> = src.range(l.cursor..r.end).take(n).map(|(k, v)| (*k, *v)).collect();
+        let done = chunk.len() < n;
+        let new_cursor = if done { r.end } else { chunk.last().unwrap().0 + 1 };
+        l.cursor = new_cursor;
+        let dst = self.data.get_mut(&(id, l.node)).unwrap();
+        self.stats.keys_copied += chunk.len() as u64;
+        dst.extend(chunk);
+        done
+    }
+    /// Promote a fully copied learner to a voting replica.
+    pub fn finish_add_replica(&mut self, id: u64) -> bool {
+        let Some(ls) = self.learners.get(&id) else { return false };
+        let Some(l) = ls.first() else { return false };
+        let r = self.ranges.values().find(|r| r.id == id).unwrap().clone();
+        if l.cursor != r.end {
+            return false;
+        }
+        let node = l.node;
+        self.learners.remove(&id);
+        let e = self.ranges.get_mut(&r.start).unwrap();
+        e.replicas.push(node);
+        e.epoch += 1;
+        true
+    }
+    pub fn remove_replica(&mut self, id: u64, node: NodeId) -> bool {
+        let r = self.ranges.values().find(|r| r.id == id).unwrap().clone();
+        if !r.replicas.contains(&node) || r.replicas.len() <= 1 {
+            return false;
+        }
+        let e = self.ranges.get_mut(&r.start).unwrap();
+        e.replicas.retain(|&n| n != node);
+        if e.leader == node {
+            e.leader = e.replicas[0];
+        }
+        e.epoch += 1;
+        self.data.remove(&(id, node));
+        true
+    }
+    pub fn transfer_leader(&mut self, id: u64, to: NodeId) -> bool {
+        let start = self.ranges.values().find(|r| r.id == id).unwrap().start;
+        let e = self.ranges.get_mut(&start).unwrap();
+        if !e.replicas.contains(&to) || e.leader == to {
+            return false;
+        }
+        e.leader = to;
+        e.epoch += 1;
+        self.stats.leader_transfers += 1;
+        true
+    }
+    /// Move a replica from one node to another (add, copy, promote, remove).
+    pub fn move_replica(&mut self, id: u64, from: NodeId, to: NodeId) -> bool {
+        if !self.start_add_replica(id, to) {
+            return false;
+        }
+        for _ in 0..1_000_000 {
+            if self.copy_chunk(id, 256) {
+                break;
+            }
+        }
+        self.finish_add_replica(id);
+        self.remove_replica(id, from);
+        self.stats.replica_moves += 1;
+        true
+    }
+
+    // ---- observation -----------------------------------------------------------------------------------------------------------------
+
+    /// Requests per node: reads and writes are served by the leader.
+    pub fn node_load(&self) -> Vec<f64> {
+        let mut l = vec![0.0; self.nodes];
+        for r in self.ranges.values() {
+            l[r.leader] += self.load.get(&r.id).copied().unwrap_or(0.0);
+        }
+        l
+    }
+    pub fn node_keys(&self) -> Vec<usize> {
+        let mut k = vec![0; self.nodes];
+        for r in self.ranges.values() {
+            for &n in &r.replicas {
+                k[n] += self.data[&(r.id, n)].len();
+            }
+        }
+        k
+    }
+    pub fn node_replicas(&self) -> Vec<usize> {
+        let mut c = vec![0; self.nodes];
+        for r in self.ranges.values() {
+            for &n in &r.replicas {
+                c[n] += 1;
+            }
+        }
+        c
+    }
+    pub fn decay(&mut self, f: f64) {
+        for v in self.load.values_mut() {
+            *v *= f;
+        }
+    }
+
+    /// Structural invariants: the ranges tile `[0, KEY_END)`; every range has `rf` replicas on distinct nodes including its leader; all
+    /// replicas hold identical data inside the range; no node holds data for ranges it is not a replica of or learning.
+    pub fn check(&self) -> Result<(), String> {
+        let mut expect = 0;
+        for (start, r) in &self.ranges {
+            if *start != r.start || r.start != expect || r.end <= r.start {
+                return Err(format!("range {} [{}, {}) does not follow the previous end {expect}", r.id, r.start, r.end));
+            }
+            expect = r.end;
+            let mut seen = std::collections::BTreeSet::new();
+            if !r.replicas.iter().all(|n| seen.insert(*n)) || !r.replicas.contains(&r.leader) {
+                return Err(format!("range {} has bad replicas {:?} leader {}", r.id, r.replicas, r.leader));
+            }
+            if r.replicas.len() < self.rf.min(self.nodes) && !self.learners.contains_key(&r.id) {
+                return Err(format!("range {} has {} replicas", r.id, r.replicas.len()));
+            }
+            let lead = &self.data[&(r.id, r.leader)];
+            if lead.keys().any(|k| *k < r.start || *k >= r.end) {
+                return Err(format!("range {} holds keys outside its bounds", r.id));
+            }
+            for &n in &r.replicas {
+                if self.data[&(r.id, n)] != *lead {
+                    return Err(format!("replica of range {} on node {n} differs from the leader's", r.id));
+                }
+            }
+        }
+        if expect != KEY_END {
+            return Err("ranges do not reach the end of the key space".into());
+        }
+        let owned: usize = self.ranges.values().map(|r| r.replicas.len()).sum::<usize>() + self.learners.values().map(|l| l.len()).sum::<usize>();
+        if self.data.len() != owned {
+            return Err(format!("{} replica stores for {} replicas", self.data.len(), owned));
+        }
+        Ok(())
+    }
+
+    // ---- policies --------------------------------------------------------------------------------------------------------------------
+
+    /// Split ranges that hold too many keys or draw too much load, at the median key, until none qualifies. Returns the number of splits.
+    pub fn auto_split(&mut self, max_keys: usize, max_load: f64) -> usize {
+        let mut total = 0;
+        loop {
+            let candidates: Vec<Key> = self
+                .ranges
+                .values()
+                .filter(|r| !self.learners.contains_key(&r.id))
+                .filter_map(|r| {
+                    let d = &self.data[&(r.id, r.leader)];
+                    let hot = self.load.get(&r.id).copied().unwrap_or(0.0) > max_load;
+                    if d.len() > max_keys || (hot && d.len() >= 2) { d.keys().nth(d.len() / 2).copied() } else { None }
+                })
+                .collect();
+            let n = candidates.into_iter().filter(|&at| self.split(at)).count();
+            total += n;
+            if n == 0 || total > 100_000 {
+                return total;
+            }
+        }
+    }
+    /// Move leadership, then replicas, from the busiest node to the idlest until the spread is small. Returns the number of actions.
+    pub fn rebalance(&mut self, max_actions: usize) -> usize {
+        let mut done = 0;
+        while done < max_actions {
+            let load = self.node_load();
+            let (hi, lo) = (argmax(&load), argmin(&load));
+            if load[hi] <= load[lo] * 1.2 + 1.0 {
+                break;
+            }
+            // the hottest range led by the busiest node that has a replica on a quieter node: move only the leadership (no data)
+            let mut mine: Vec<RangeDesc> = self.ranges.values().filter(|r| r.leader == hi).cloned().collect();
+            mine.sort_by(|a, b| self.load.get(&b.id).partial_cmp(&self.load.get(&a.id)).unwrap());
+            let gap = load[hi] - load[lo];
+            let mut acted = false;
+            for r in mine.iter() {
+                let w = self.load.get(&r.id).copied().unwrap_or(0.0);
+                if w <= 0.0 || w > gap {
+                    continue;
+                }
+                let target = r.replicas.iter().copied().filter(|&n| n != hi).min_by(|a, b| load[*a].partial_cmp(&load[*b]).unwrap());
+                if let Some(t) = target {
+                    if load[t] + w < load[hi] {
+                        let id = r.id;
+                        self.transfer_leader(id, t);
+                        acted = true;
+                        break;
+                    }
+                }
+            }
+            if !acted {
+                // no cheap move: copy a replica of a range led by `hi` to the idlest node that lacks one
+                let candidate = mine.iter().find(|r| !r.replicas.contains(&lo) && self.load.get(&r.id).copied().unwrap_or(0.0) <= gap).map(|r| r.id);
+                match candidate {
+                    Some(id) => {
+                        self.move_replica(id, hi, lo);
+                        self.transfer_leader(id, lo);
+                    }
+                    None => break,
+                }
+            }
+            done += 1;
+        }
+        done
+    }
+}
+
+fn argmax(v: &[f64]) -> usize {
+    (0..v.len()).max_by(|&a, &b| v[a].partial_cmp(&v[b]).unwrap()).unwrap()
+}
+fn argmin(v: &[f64]) -> usize {
+    (0..v.len()).min_by(|&a, &b| v[a].partial_cmp(&v[b]).unwrap()).unwrap()
+}
+
+/// A client with a cached copy of the range map. Stale entries are discovered by the epoch check and refreshed.
+#[derive(Default)]
+pub struct Client {
+    cache: BTreeMap<Key, (Key, u64, u64)>, // start → (end, id, epoch)
+}
+impl Client {
+    fn route(&mut self, s: &Store, key: Key) -> (u64, u64) {
+        if let Some((_, &(end, id, epoch))) = self.cache.range(..=key).next_back() {
+            if key < end {
+                return (id, epoch);
+            }
+        }
+        self.refresh(s, key)
+    }
+    fn refresh(&mut self, s: &Store, key: Key) -> (u64, u64) {
+        let r = s.locate(key);
+        // drop any cached entry overlapping the fresh one
+        let stale: Vec<Key> = self.cache.range(r.start..r.end).map(|(k, _)| *k).collect();
+        for k in stale {
+            self.cache.remove(&k);
+        }
+        if let Some((&k, &(end, _, _))) = self.cache.range(..r.start).next_back() {
+            if end > r.start {
+                self.cache.remove(&k);
+            }
+        }
+        self.cache.insert(r.start, (r.end, r.id, r.epoch));
+        (r.id, r.epoch)
+    }
+    /// Run a request, refreshing the cache and retrying when the range has changed.
+    fn with<T>(&mut self, s: &mut Store, key: Key, mut f: impl FnMut(&mut Store, u64, u64) -> Result<T, RangeError>) -> T {
+        // one refresh always yields a fresh route; more than a few means the map and the cache disagree for good
+        for _ in 0..16 {
+            let (id, epoch) = self.route(s, key);
+            match f(s, id, epoch) {
+                Ok(v) => return v,
+                Err(RangeError::Stale) => {
+                    s.stats.redirects += 1;
+                    s.stats.meta_lookups += 1;
+                    self.refresh(s, key);
+                }
+            }
+        }
+        panic!("routing for key {key} did not converge after 16 refreshes");
+    }
+    pub fn put(&mut self, s: &mut Store, key: Key, val: u64) {
+        self.with(s, key, |s, id, e| s.put_at(id, e, key, val))
+    }
+    pub fn delete(&mut self, s: &mut Store, key: Key) {
+        self.with(s, key, |s, id, e| s.delete_at(id, e, key))
+    }
+    pub fn get(&mut self, s: &mut Store, key: Key) -> Option<u64> {
+        self.with(s, key, |s, id, e| s.get_at(id, e, key))
+    }
+    /// Scan `[lo, hi)` range by range.
+    pub fn scan(&mut self, s: &mut Store, lo: Key, hi: Key) -> Vec<(Key, u64)> {
+        let mut out = vec![];
+        let mut at = lo;
+        while at < hi {
+            let (part, end) = self.with(s, at, |s, id, e| {
+                let end = s.ranges.values().find(|r| r.id == id).map(|r| r.end).unwrap_or(hi);
+                s.scan_at(id, e, at, hi).map(|v| (v, end))
+            });
+            out.extend(part);
+            at = end;
+        }
+        out
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>First, correctness. 60 runs of 600 operations on 4 to 7 nodes mix client puts, deletes, gets and scans (through three clients with their own caches) with random splits, merges, leader transfers, automatic splits and replica moves that advance a few keys at a time <em>between</em> the client requests. After every operation the invariants hold (ranges tile the key space; replicas are distinct, include the leader, and are identical; no node holds data for a range it is not part of), and every read equals a plain map.</p>
+
+```text title="60 randomized runs, and load balance by key design"
+60 runs: 1601 splits, 870 merges, 459 replica moves with concurrent writes, 1785 leader transfers, 7808 stale-cache redirects
+200 000 writes, 9 nodes, rf 3: load of the busiest node relative to the average (1.0 is perfect)
+key design                                   ranges  imbalance   splits  transfers ranges for 200 neighbours
+sequential keys (timestamp, auto-increment)      19       9.00       18       1116                  1
+hashed keys                                      16       1.20       15       3038                 16
+tenant prefix + sequence inside the tenant       16       1.12       15       4001                  1
+skewed reads (Zipf-like, 100 000 keys): imbalance 9.00 with 32 ranges (hottest range 139842 requests); after load-based splits and leader transfers: 1.12 with 113 ranges (112 splits, 240 leader transfers, 47 replica moves)
+adding node 10 to 9 nodes (900000 stored copies in 32 ranges): range rebalancing copied 84375 keys (9.4% of copies); hash-mod placement would move 90%, ideal 1/10 = 10%
+```
+
+<ul> <li><strong>Sequential keys defeat sharding.</strong> After 18 splits and over a thousand leader transfers, the busiest node still serves <strong>9.00×</strong> the average, which is all nine nodes' worth of writes on one: every insert goes to the last range. The splitting works (19 ranges), but the new keys keep arriving at the right edge.</li> <li><strong>Hashing fixes the load and breaks the scan</strong>: imbalance 1.20, but 200 logically adjacent records sit in all 16 ranges. A <strong>tenant prefix with a per-tenant sequence</strong> gets both: imbalance 1.12 and the 200 neighbours in a single range. This is the design rule behind composite primary keys in range-sharded databases.</li> <li><strong>Skewed reads are fixed by splitting and moving leadership</strong>: a Zipf-like read workload started with all load on one node (9.00, the hottest range taking 139 842 of 200 000 requests); 112 load-based splits, 240 leader transfers and 47 replica moves bring it to <strong>1.12</strong>. A single hot <em>key</em> can never be split further; the floor is the key's own share.</li> <li><strong>Adding a tenth node copies 9.4% of the stored data</strong>, near the ideal 10%; placing keys by hash modulo the node count would move 90%.</li> <li><strong>Stale caches are cheap</strong>: the 60 runs, with ranges changing under three caching clients, cost 7 808 redirects for the whole workload, each one a metadata lookup; every redirected request still returned the right answer.</li> </ul>
+
+<aside data-call="note"><b>Out of memory, and what it taught about the test harness</b><p>A mutation run of this section's tests ran the development machine out of memory (the editor reported 120 GB): a mutant that skipped one key when a scan crossed a range boundary made the scan loop run away, collecting results without bound, and the mutation script killed only <code>cargo</code>, not the test binary that <code>cargo</code> had started, so the runaway process kept growing. The script now starts each run in its own process group, kills the whole group on timeout, polls its memory use and kills it above a cap (3 GB by default), and restores the mutated source file even when interrupted. The library got the matching defence: a client request that has not converged after 16 refreshes panics instead of looping.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Ranges in a <code>BTreeMap&lt;Key, RangeDesc&gt;</code> keyed by start</strong>: <code>range(..=key).next_back()</code> is the lookup, <code>split_off</code> cuts a replica's data at the split key in place, and the invariant "the starts tile the key space" is one loop in <code>check()</code>.</li> <li><strong>Replica data in a <code>HashMap&lt;(range id, node), BTreeMap&gt;</code></strong>: removing a replica is removing a map entry; a mutant that forgets to is found by counting stores against replicas.</li> <li><strong>Learner cursor</strong>: a learner receives a write only if the key is below the copy cursor, because keys above it will be copied later from the (already updated) leader. Both halves of the rule are needed, and the model test interleaves writes with every chunk to exercise them.</li> <li><strong>Errors for control flow</strong>: <code>RangeError::Stale</code> is the only error; the client's <code>with</code> takes a closure <code>FnMut(&amp;mut Store, id, epoch) -&gt; Result&lt;T, RangeError&gt;</code>, so one retry loop serves puts, deletes, gets and scans.</li> <li><strong>Policies are plain functions on the store</strong>, so a test can run them at any moment and check the invariants; a production system runs them as a background scheduler with rate limits.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Randomized model (60 seeds × 600 steps)</strong>: clients with separate caches, splits at random keys, merges, leader transfers, automatic splits, and replica moves advanced in small steps between requests; <code>check()</code> after every step; every get and scan equals a <code>BTreeMap</code>; final contents equal the model.</li> <li><strong>Directed</strong>: a fresh cache needs no redirect, a stale one is corrected once and then fresh; a leader transfer makes a cached route stale; a replica added while writes land both below and above its copy cursor ends identical to the leader and can serve alone; a learner cannot be promoted after copying 10 of 100 keys; ranges with different replica sets or different leaders do not merge.</li> <li><strong>Mutants run against these tests</strong>: a learner missing puts or deletes below its cursor; the copy cursor not advancing; the copy finishing early; a learner promoted before its copy is complete; a split leaving the boundary key on the wrong side; a merge ignoring differing leaders; a range lookup excluding its start key; a removed replica keeping its data; writes reaching only the leader; a scan skipping the first key of the next range; a leader transfer not changing the epoch; a client keeping overlapping stale entries; a merge forgetting the right range's keys. <strong>All 14 were killed</strong>: twelve by failing assertions or panics, one by non-termination and one by the memory cap. The first run left one alive (merge of ranges with different leaders), now covered.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>CockroachDB</strong> splits ranges at 512 MB (or by load, "load-based splitting"), keeps one Raft group per range, rebalances replicas and leaseholders by store capacity and QPS, and caches range descriptors in clients and gateways with epoch-checked retries. <strong>TiKV</strong> calls them regions (96 MB), with the Placement Driver as the scheduler. <strong>YugabyteDB</strong> uses tablets, with hash or range sharding per table. <strong>Spanner</strong> has splits, moved by load and size. <strong>Bigtable/HBase</strong> tablets and regions work the same way.</li> <li><strong>Vitess</strong> and <strong>Citus</strong> shard MySQL and PostgreSQL by a sharding key chosen per table (hash or range), with a routing layer. <strong>MongoDB</strong> has hashed or ranged shard keys with chunk migration and a balancer. <strong>Cassandra/DynamoDB</strong> hash the partition key and keep the sort key ordered inside the partition, the "prefix plus ordering" design above.</li> <li><strong>Hot-spot defences</strong>: hash-prefixing monotonic keys (and giving up scans), salting a hot key across buckets and merging reads, sequences with randomized high bits (UUIDv7-like keys keep time order but not insert order across a prefix), and adaptive splitting of single hot ranges.</li> <li><strong>Consistent hashing and rendezvous hashing</strong> (Dynamo, Cassandra) place keys without a map; they move 1/N on a change like range rebalancing, but cannot scan (<a href="/cookbook/p/distributed-databases-i">distributed databases</a> covers the algorithms).</li> <li><strong>Multi-Raft</strong>: thousands of groups per node need coalesced heartbeats, shared logs or one fsync for many groups, and per-group snapshots (<a href="/cookbook/p/raft">Raft</a>).</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Monotonic keys.</strong> Auto-increment ids and timestamps as the leading key column give one hot range forever. Choose a leading prefix that spreads writes.</li> <li><strong>Cross-range operations are distributed transactions</strong> (<a href="/cookbook/p/distributed-transactions">next section</a>): a transaction touching two ranges needs a commit protocol, and so does a split in flight. Design schemas so that the common transaction touches one range.</li> <li><strong>Stale reads from stale leaders</strong>: the epoch check protects against a client's stale <em>map</em>, not against an old leader that has been deposed; leader leases or a read through the group are still needed.</li> <li><strong>Moves compete with traffic.</strong> Copying a 512 MB range consumes disk and network; rate-limit it, and move at most a few ranges at a time. Never let two overlapping reconfigurations of one range run together.</li> <li><strong>Split points inside a row's keys.</strong> Splitting between a row and its index entries or between a vertex and its edges breaks locality; split on prefix boundaries.</li> <li><strong>Too many small ranges</strong> cost heartbeats, metadata and memory; too few cannot spread load. Merge small ranges; split on size and on load.</li> <li><strong>The metadata is itself a hot spot</strong>: cache it, replicate it, and keep lookups off the critical path (a two-level map like Bigtable's <code>META</code> tablets).</li> </ul></aside>
+"""
+
+[[sources]]
+title = "architecture docs"
+url = "https://www.cockroachlabs.com/docs/stable/architecture/overview.html"

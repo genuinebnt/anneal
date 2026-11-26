@@ -1,0 +1,57 @@
+title = "A reverse proxy / load balancer in front of three backends"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 523
+kind = "recipe"
+lede = "a reverse proxy / load balancer in front of three backends (axum + reqwest)"
+level = "advanced"
+code = ["examples/web/reverse_proxy_load_balancer.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+gateway stage (edge proxy, API gateway, sidecar).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+What: a real proxy (`proxy.test`) forwarding to three real backends (`b1.test`, `b2.test`, `b3.test`), with transcripts of **both** legs.
+
+- Forwarding: method, path, query, headers and body (large bodies are **streamed**, small ones are buffered so they can be retried).
+- **Hop-by-hop** headers (Connection and every header it names, Keep-Alive, TE, Trailer, Transfer-Encoding, Upgrade, Proxy-&#42;) are meaningful for one TCP hop only and are stripped in both directions.
+- `X-Forwarded-For/Proto/Host` and `Forwarded` (RFC 7239). A client can **send** these headers, so an edge proxy must overwrite them (or only extend them when the peer is a trusted proxy) and a backend must read the chain from the **right**, skipping trusted hops: taking the leftmost value lets anyone spoof their IP (rate limits, allow-lists, audit logs).
+- Balancing strategies behind a `Strategy` trait: round robin, least connections, smooth weighted round robin (nginx style), and consistent hashing with virtual nodes (sticky sessions; when a backend dies only **its** keys move). Exact distributions are asserted.
+- Health: active checks (probe `/healthz`, thresholds in both directions), passive ejection (consecutive failures, injectable clock, timed recovery), retries on another backend for idempotent requests (and for connect errors, where nothing was sent), timeouts mapped to 504, unreachable upstream to 502, no healthy upstream to 503 + Retry-After.
+- `X-Request-Id`: accepted if well-formed, otherwise generated; propagated to the backend and echoed to the client.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>nginx/HAProxy/Envoy-style edge proxies</li><li>API gateways</li><li>canary routing</li><li>per-tenant sticky routing</li><li>service-mesh sidecars</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://datatracker.ietf.org/doc/html/rfc7239" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc7239</a></li><li><a href="https://datatracker.ietf.org/doc/html/rfc9110" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc9110</a></li><li><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Forwarded" target="_blank" rel="noreferrer">https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Forwarded</a></li><li><a href="https://datatracker.ietf.org/doc/html/rfc7230" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc7230</a></li></ul>
+"""
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc7239"
+url = "https://datatracker.ietf.org/doc/html/rfc7239"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc9110"
+url = "https://datatracker.ietf.org/doc/html/rfc9110"
+
+[[sources]]
+title = "developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Forwarded"
+url = "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Forwarded"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc7230"
+url = "https://datatracker.ietf.org/doc/html/rfc7230"

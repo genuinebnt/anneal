@@ -1,0 +1,68 @@
+title = "Problem modeling by reduction"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Dynamic programming, greedy and search"
+chapter_order = 5
+order = 210
+kind = "recipe"
+lede = "problem modeling by reduction (Skiena): puzzles as shortest paths, 2-SAT, assignment, bipartite, scheduling, Steiner, Kadane, sorting."
+level = "advanced"
+code = ["examples/algorithms/problem_modeling_reductions.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+turning a real problem you have never seen into a classic one you already own; interview and contest modeling.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+Skiena's central advice (The Algorithm Design Manual, ch. 10 "modeling" and the catalog): you rarely invent an algorithm; you **recognise** the problem as a known one in disguise and reduce to it. Each section below states the reduction, solves it with a small re-implemented classic, and checks against an independent oracle or known answer.
+
+(a) **puzzles as shortest paths**: states are nodes, legal moves are edges. Water jugs and the 8-puzzle by BFS (the whole 8-puzzle graph: 181440 states, diameter 31); the 15-puzzle by IDA&#42; with the Manhattan-distance heuristic on instances scrambled by 25 random moves (solutions replayed and validated; BFS and IDA&#42; agree on 8-puzzle).
+
+(b) 2-SAT -> implication graph -> strongly connected components (iterative Tarjan; satisfiable iff no x shares a component with not-x). Verified against brute force on 1000 random formulas. (c) **assignment** -> min-cost bipartite matching: the Hungarian algorithm (O(n&#94;3), potentials) **and** min-cost flow by
+
+```text
+successive shortest paths; both equal brute force over all permutations for n <= 8.
+```
+
+(d) BIPARTITENESS by BFS 2-colouring, with an **odd cycle** as the certificate when it fails (a no-answer you can prove). (e) **scheduling**: weighted interval scheduling (sort by end, DP + binary search) and room allocation (sweep + heap = minimum rooms = maximum overlap = interval-graph colouring).
+
+(f) **steiner tree**: the metric-closure MST heuristic (2-approximation, bound 2(1 - 1/t)) against exact Dreyfus-Wagner DP. (g) **maximum subarray** (Kadane) and its 2-D version by **reduction**: fix a pair of rows, collapse columns, run Kadane. (h) **reduce to sorting**: element uniqueness, closest pair on a line, anagram groups.
+
+Finally a mini catalog: "if you see X, think Y".
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>sliding-puzzle and planning solvers (A*/IDA* over state graphs)</li><li>2-SAT in constraint solving</li><li>layout and configuration problems</li><li>as the polynomial base case inside SAT solvers</li><li>the assignment problem for matching workers to jobs</li><li>tracking (matching detections between video frames) and resource allocation</li><li>bipartite tests in graph colouring and scheduling conflicts</li><li>interval scheduling and room allocation in calendars and register allocation on straight-line code</li><li>Steiner trees in network and VLSI routing</li><li>Kadane in signal and time-series analysis and the 2-D form in image processing</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>The Algorithm Design Manual (Skiena)</li><li>chapter 10 "How to Design Algorithms" / "Modeling", the war stories, and the catalog of algorithmic problems (Part II)</li></ul>
+
+<ul class="cb-g-reading"><li>The Art of Computer Programming Vol 3 (Sorting and Searching)</li><li>5 "Sorting" (everything that sorts as a subroutine) and Vol 4A for puzzles and backtracking</li></ul>
+
+<https://en.wikipedia.org/wiki/2-satisfiability>
+
+<https://en.wikipedia.org/wiki/Hungarian_algorithm>
+
+<https://en.wikipedia.org/wiki/Steiner_tree_problem>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/2-satisfiability"
+url = "https://en.wikipedia.org/wiki/2-satisfiability"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Hungarian_algorithm"
+url = "https://en.wikipedia.org/wiki/Hungarian_algorithm"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Steiner_tree_problem"
+url = "https://en.wikipedia.org/wiki/Steiner_tree_problem"

@@ -1,0 +1,4 @@
+fn main() {
+	let _x: int = "tab";
+		let _y: bool = 1;
+}

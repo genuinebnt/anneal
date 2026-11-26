@@ -1,0 +1,44 @@
+title = "Memory layout"
+module = "Performance and systems"
+module_order = 7
+chapter = "Memory layout and allocation"
+chapter_order = 2
+order = 280
+kind = "recipe"
+lede = "Struct size/padding, niches, and array-of-structs vs struct-of-arrays."
+level = "intermediate"
+code = ["examples/perf/data_layout.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+hot loops over many records (tasks, events, vectors), reducing cache misses.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>columnar engines</li><li>ECS game engines</li><li>analytics: scan one field without dragging cold data through the cache</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+The CPU reads memory in 64-byte cache lines. If a loop only needs one small field but each record is large, every cache line mostly carries data you do not use. Struct-of-arrays (SoA) stores each field in its own contiguous Vec so a scan over one field touches only that data.
+
+`#[repr(C)]` keeps declared field order (padding follows); default `repr(Rust)` is free to reorder fields to shrink the struct.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://nnethercote.github.io/perf-book/type-sizes.html> and <https://en.algorithmica.org/hpc/cpu-cache/>
+"""
+
+[[sources]]
+title = "nnethercote.github.io/perf-book/type-sizes.html"
+url = "https://nnethercote.github.io/perf-book/type-sizes.html"
+
+[[sources]]
+title = "en.algorithmica.org/hpc/cpu-cache"
+url = "https://en.algorithmica.org/hpc/cpu-cache/"

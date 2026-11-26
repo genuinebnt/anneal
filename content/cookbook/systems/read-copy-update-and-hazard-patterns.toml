@@ -1,0 +1,72 @@
+title = "Read-mostly sharing patterns"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Concurrent data structures"
+chapter_order = 3
+order = 259
+kind = "recipe"
+lede = "RCU with grace periods, left-right, and cached ArcSwap-style pointers."
+level = "advanced"
+code = ["examples/concurrency/read_copy_update_and_hazard_patterns.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>config/routing tables read on every request and updated rarely</li><li>in-memory indexes</li><li>feature-flag snapshots</li><li>DNS/route caches</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>the Linux kernel's RCU (routing tables, dentry cache)</li><li>Gjengset's <code>left-right</code>/<code>evmap</code> crates</li><li>the <code>arc-swap</code> crate for hot config</li><li>Envoy/Nginx-style config reload. Course: Paul McKenney</li><li>"Is Parallel Programming Hard, And, If So, What Can You Do About It?" (RCU chapter)</li><li>Jon Gjengset</li><li>"Left-Right" talks and the <code>left-right</code> crate docs</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The problem**: many readers want a consistent multi-word snapshot with NO locks and no cache-line ping-pong; a few writers can be slow. All three designs below give readers a wait-free-ish fast path; they differ in what the **writer** has to do to know it is safe to reuse memory. A.
+
+`Rcu`       : two slots + a `cur` index. A writer fills the idle slot, publishes by flipping `cur`, then waits out a **grace period**: every reader keeps a private counter that is odd while inside a read-side critical section; the writer snapshots the counters after publishing and waits until each odd one has changed.
+
+Readers that enter later necessarily see the new `cur`. Only after the grace period may the old slot be overwritten. Skip the wait and a slow reader sees a **torn** snapshot: shown deterministically below with a reader paused mid-read.
+
+**Ordering**: reader "enter" (RMW on its counter) then load of `cur` need a store-load barrier => SeqCst on both, matching the writer's SeqCst store of `cur` then SeqCst loads of the counters. Acquire/Release alone would let both sides miss each other (the store-buffering litmus test, see `memory_ordering_litmus`). B.
+
+`LeftRight` : two **full** copies of the data. Writes are an operation (`bump(d)`): apply to the inactive copy, flip `read`, wait for readers of the old copy to drain, apply the **same** op to the old copy. Both copies are identical between writes, so writes can be incremental instead of whole-value replacement (Gjengset's `left-right`/`evmap`).
+
+Writers pay 2x work and one grace wait; readers pay one counter bump. C. `Cached Arc`: `Mutex<Arc<T>>` is the baseline (every read locks and clones the Arc: two atomic RMWs on a shared line).
+
+The optimisation used by `arc-swap::Cache`: readers keep their own `Arc` clone and one `AtomicU64` version; the fast path is a single load and compare, the lock is taken only when the version moved. The real `ArcSwap` goes further (debt slots + `AtomicPtr`, unsafe) to avoid even that. D.
+
+`PtrRcu`     : the textbook form: `AtomicPtr::swap` a new boxed object in, wait a grace period, `Box::from_raw` the old one. The only unsafe code in the file; drop counting shows every object is freed exactly once. Passing tests are not a memory-safety proof; a scaled-down copy (25 bumps per writer) ran clean under Miri, seeds 0-3.
+
+ThreadSanitizer was not run. **Writer progress**: `synchronize` waits only for readers that were inside when it looked, so overlapping readers cannot starve the writer. **What about hazard pointers** / **epochs**?
+
+Same job (when may I free?) with different bookkeeping: RCU/epoch = "wait for everyone who started before the swap"; hazard pointers = "check whether anybody announced this exact pointer" (see `epoch_hazard_pointer_reclamation`).
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+6 readers + 2 writers on each design. The data is 8 words that must all be equal (`bump(d)` adds d to every word), so a torn read is a mismatch; each reader also checks that values never go backwards; writers do exactly 3000 + 3000 bumps of 1 and 2, so the final value is exactly 9000 on every design.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>McKenney, "Is Parallel Programming Hard" (title only, not re-read)</li><li><a href="https://docs.rs/left-right/latest/left_right/" target="_blank" rel="noreferrer">https://docs.rs/left-right/latest/left_right/</a> and <a href="https://docs.rs/arc-swap/latest/arc_swap/" target="_blank" rel="noreferrer">https://docs.rs/arc-swap/latest/arc_swap/</a></li></ul>
+
+<https://marabos.nl/atomics/> (Mara Bos, "Rust Atomics and Locks")
+"""
+
+[[sources]]
+title = "docs.rs/left-right/latest/left_right"
+url = "https://docs.rs/left-right/latest/left_right/"
+
+[[sources]]
+title = "docs.rs/arc-swap/latest/arc_swap"
+url = "https://docs.rs/arc-swap/latest/arc_swap/"
+
+[[sources]]
+title = "marabos.nl/atomics"
+url = "https://marabos.nl/atomics/"

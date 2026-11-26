@@ -1,0 +1,373 @@
+title = "Cost models and join ordering"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 378
+kind = "guide"
+lede = "statistics (histograms, sketches, samples) · selectivity and its three assumptions · cardinality and join size · bottom-up DP (System R) vs top-down (Volcano) · Cascades memo"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Search space</strong>: joins are commutative and associative, so an n-way join has about 4ⁿ orderings. Bottom-up optimizers (System R, DB2, MySQL, PostgreSQL) build <strong>left-deep</strong> trees with dynamic programming; top-down optimizers (Volcano/Cascades: SQL Server, Greenplum, CockroachDB) start from the goal and recurse through transformation and implementation rules with <strong>memoization</strong>, tracking the best plan and treating physical properties (sort order) as first-class, with <strong>enforcers</strong> (e.g. a sort) that establish required properties.</li> <li><strong>Statistics</strong> the cost model needs: per relation N_R (tuples) and per attribute V(A,R) (distinct values); from these the <strong>selection cardinality</strong> SC(A,R) = N_R / V(A,R) (the average number of tuples per value; assumes uniformity).</li> <li><strong>Histograms</strong> summarize skewed data: <strong>equi-width</strong> (fixed-width buckets), <strong>equi-depth</strong> (equal counts per bucket, varying width), <strong>end-biased</strong> (exact counts for the N−1 most frequent values, the average for the rest). <strong>Sketches</strong> (count-min, HyperLogLog) give approximate counts and NDV cheaply. <strong>Sampling</strong> evaluates predicates on a (maintained or refreshed) subset; refresh after, say, 10% of the table changes.</li> <li><strong>Cost components</strong>: CPU (small, hard to estimate), disk I/O (block transfers), memory, network. Statistics live in catalog tables updated in the background, not computed on the fly.</li> <li><strong>Selectivity</strong> of a predicate = the fraction of tuples that qualify = its probability. Negation: sel(¬P) = 1 − sel(P). <strong>Conjunction of independent predicates</strong>: the product. Equality on a unique key is trivial; ranges and conjunctions are not.</li> <li><strong>Three assumptions</strong> behind most estimates, and the ways they fail: <strong>uniformity</strong> (except heavy hitters), <strong>independence</strong> of predicates (correlated attributes break it), <strong>containment</strong> of join key domains (each inner key exists in the outer).</li> <li><strong>Join size</strong>: |R ⋈ S| ≈ N_R · N_S / max(V(A,R), V(A,S)). Errors <strong>propagate and amplify</strong> up the plan, so a small misestimate low in the tree can become a catastrophic one at the root.</li> </ul>
+"""
+
+[[sections]]
+heading = "Statistics, built and measured"
+body = """
+<p><code>ANALYZE</code> scans a table once and records, per column: row count, <strong>NDV</strong> (distinct values; here an exact hash set, in production a <a href="/cookbook/p/more-primers">HyperLogLog</a>), the NULL count, min and max, the <strong>most-common values</strong> (kept only if clearly above the average frequency), and a 20-bucket <strong>equi-depth histogram</strong> over integers. Estimation then follows the lecture's rules:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Predicate</th> <th>Estimate</th> </tr> </thead> <tbody> <tr> <td><code>col = v</code>, <code>v</code> an MCV</td> <td>its exact frequency / N (heavy hitters are handled exactly, not by uniformity)</td> </tr> <tr> <td><code>col = v</code>, other</td> <td>(rows − nulls − MCV rows) / (NDV − #MCVs) / N: the remaining values share the remainder</td> </tr> <tr> <td><code>col = v</code> outside [min, max]</td> <td>0</td> </tr> <tr> <td><code>col &lt; k</code>, <code>col ≤ k</code>, <code>col &gt; k</code>, …</td> <td>non-NULL fraction × histogram CDF, interpolating linearly inside a bucket</td> </tr> <tr> <td><code>a AND b</code> / <code>a OR b</code> / <code>NOT a</code></td> <td>s_a · s_b / s_a + s_b − s_a·s_b / 1 − s_a</td> </tr> <tr> <td><code>col IS NULL</code></td> <td>NULL count / N</td> </tr> <tr> <td><code>colA = colB</code></td> <td>1 / max(NDV_A, NDV_B)</td> </tr> <tr> <td>anything else</td> <td>System R's constants: <code>=</code> 0.5%, ranges 33%</td> </tr> </tbody> </table></div>
+
+```text title="20,000 rows: z skewed (50% are 0), a uniform 0..99, b = a (perfectly correlated) · estimates from ANALYZE · q-error = max(est/actual, actual/est)"
+predicate                           estimate    actual  q-error
+z = 0 (heavy hitter, 50%)              10015     10015      1.0      ← MCV: exact
+z = 500 (light value)                     10         6      1.7      ← uniform share of the rest
+a < 25                                  4800      4891      1.0      ← histogram
+a BETWEEN 10 AND 19                     3458      1945      1.8
+a = 5 AND z = 0   (independent)          100       106      1.1      ← the product rule works when it's true
+a = 5 AND b = 5   (CORRELATED)             2       201    100.5      ← independence fails: 100× underestimate
+```
+
+<p>The last row is the field's best-known failure. Because <code>b</code> is a function of <code>a</code>, <code>a = 5 AND b = 5</code> is exactly as selective as <code>a = 5</code> (about 1%), but the independence assumption multiplies two 1% estimates into 0.01%. An optimizer that believes 2 rows will pick a nested loop for a join that actually sees 201. Real systems answer with <strong>multi-column statistics</strong> (PostgreSQL's <code>CREATE STATISTICS … (dependencies)</code>, SQL Server's multi-column histograms), <strong>sampling</strong>, and <strong>runtime feedback</strong> (Part III).</p>
+
+:::deeper Statistics: ANALYZE, MCVs, equi-depth histograms, selectivity, join size, and the DP join orderer
+```rust title="src/optimizer/stats.rs"
+//! Statistics and cardinality estimation (L16): per-column NDV, null count, most-common values,
+//! equi-depth histograms; selectivity of predicates; join size = N_R·N_S / max(V(A,R), V(A,S)).
+use std::collections::HashMap;
+use crate::types::value::Value;
+use super::expr::{BinOp, Expr};
+
+const BUCKETS: usize = 20;
+const MCV: usize = 10;
+
+#[derive(Clone, Debug, Default)]
+pub struct ColStats {
+    pub ndv: usize, pub nulls: usize, pub min: Option<i64>, pub max: Option<i64>,
+    pub mcv: Vec<(Value, usize)>,
+    /// Equi-depth histogram over the non-NULL integer values: BUCKETS+1 boundaries, equal counts per bucket.
+    pub bounds: Vec<i64>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TableStats { pub rows: usize, pub cols: Vec<ColStats> }
+
+pub fn analyze(rows: &[Vec<Value>], ncols: usize) -> TableStats {
+    let cols = (0..ncols).map(|c| {
+        let mut freq: HashMap<&Value, usize> = HashMap::new();
+        let mut ints: Vec<i64> = vec![];
+        let mut nulls = 0;
+        for r in rows {
+            match &r[c] { Value::Null => nulls += 1, v => { *freq.entry(v).or_default() += 1; if let Value::Int(i) = v { ints.push(*i); } } }
+        }
+        let mut top: Vec<(Value, usize)> = freq.iter().map(|(v, n)| ((*v).clone(), *n)).collect();
+        top.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        // Keep only values clearly more common than average; the rest are well modelled by uniformity.
+        let avg = (rows.len() - nulls) as f64 / freq.len().max(1) as f64;
+        top.retain(|(_, n)| *n as f64 > 1.5 * avg);
+        top.truncate(MCV);
+        ints.sort_unstable();
+        let bounds = if ints.len() > 1 { (0..=BUCKETS).map(|b| ints[(b * (ints.len() - 1)) / BUCKETS]).collect() } else { vec![] };
+        ColStats { ndv: freq.len(), nulls, min: ints.first().copied(), max: ints.last().copied(), mcv: top, bounds }
+    }).collect();
+    TableStats { rows: rows.len(), cols }
+}
+
+impl ColStats {
+    /// Fraction of non-NULL integer values ≤ k, interpolating linearly inside a bucket.
+    fn cdf(&self, k: i64) -> f64 {
+        let (Some(mn), Some(mx)) = (self.min, self.max) else { return 0.5 };
+        if k < mn { return 0.0; }
+        if k >= mx { return 1.0; }
+        if self.bounds.is_empty() { return (k - mn + 1) as f64 / (mx - mn + 1) as f64; }
+        let b = &self.bounds;
+        let i = b.partition_point(|&x| x <= k).saturating_sub(1).min(BUCKETS - 1);
+        let (lo, hi) = (b[i], b[i + 1]);
+        let within = if hi > lo { (k - lo) as f64 / (hi - lo) as f64 } else { 1.0 };
+        (i as f64 + within) / BUCKETS as f64
+    }
+}
+
+/// Estimated fraction of rows of the table that satisfy `e` (a predicate over that table's columns).
+pub fn selectivity(e: &Expr, st: &TableStats) -> f64 {
+    let n = st.rows.max(1) as f64;
+    let s = match e {
+        Expr::Lit(Value::Bool(true)) => 1.0,
+        Expr::Lit(Value::Bool(false) | Value::Null) => 0.0,
+        Expr::Bin(BinOp::And, a, b) => selectivity(a, st) * selectivity(b, st),                                       // independence assumption
+        Expr::Bin(BinOp::Or, a, b) => { let (x, y) = (selectivity(a, st), selectivity(b, st)); x + y - x * y }
+        Expr::Not(a) => 1.0 - selectivity(a, st),
+        Expr::IsNull(a, not) => match &**a { Expr::Col(c) => { let f = st.cols[*c].nulls as f64 / n; if *not { 1.0 - f } else { f } } _ => 0.1 },
+        Expr::Bin(op, a, b) => match (&**a, &**b) {
+            (Expr::Col(c), Expr::Lit(v)) => col_vs_lit(*op, &st.cols[*c], v, n),
+            (Expr::Lit(v), Expr::Col(c)) => col_vs_lit(flip(*op), &st.cols[*c], v, n),
+            (Expr::Col(x), Expr::Col(y)) if *op == BinOp::Eq => 1.0 / st.cols[*x].ndv.max(st.cols[*y].ndv).max(1) as f64,
+            _ => match op { BinOp::Eq => 0.005, BinOp::Ne => 0.995, _ => 0.33 },                                        // System R's magic numbers
+        },
+        _ => 0.1,
+    };
+    s.clamp(0.0, 1.0)
+}
+
+fn flip(op: BinOp) -> BinOp { match op { BinOp::Lt => BinOp::Gt, BinOp::Le => BinOp::Ge, BinOp::Gt => BinOp::Lt, BinOp::Ge => BinOp::Le, o => o } }
+
+fn col_vs_lit(op: BinOp, c: &ColStats, v: &Value, n: f64) -> f64 {
+    let nonnull = 1.0 - c.nulls as f64 / n;
+    let eq = || -> f64 {
+        if let Some((_, k)) = c.mcv.iter().find(|(m, _)| m == v) { return *k as f64 / n; }          // heavy hitter: exact
+        if let Value::Int(i) = v { if c.min.is_some_and(|m| *i < m) || c.max.is_some_and(|m| *i > m) { return 0.0; } }
+        let mcv_rows: usize = c.mcv.iter().map(|m| m.1).sum();
+        let rest_vals = c.ndv.saturating_sub(c.mcv.len()).max(1) as f64;
+        ((n - c.nulls as f64 - mcv_rows as f64) / rest_vals / n).max(0.0)                         // the remaining values share what's left
+    };
+    let Value::Int(k) = v else { return match op { BinOp::Eq => eq(), BinOp::Ne => nonnull - eq(), _ => 0.33 } };
+    match op {
+        BinOp::Eq => eq(),
+        BinOp::Ne => (nonnull - eq()).max(0.0),
+        BinOp::Le => nonnull * c.cdf(*k),
+        BinOp::Lt => nonnull * c.cdf(k.saturating_sub(1)),
+        BinOp::Gt => nonnull * (1.0 - c.cdf(*k)),
+        BinOp::Ge => nonnull * (1.0 - c.cdf(k.saturating_sub(1))),
+        _ => 0.33,
+    }
+}
+
+/// |R ⋈ S| ≈ N_R · N_S / max(V(A,R), V(A,S))   (containment + uniformity)
+pub fn join_card(nr: f64, ns: f64, vr: f64, vs: f64) -> f64 { nr * ns / vr.max(vs).max(1.0) }
+
+// ---------------- join ordering: System R dynamic programming over left-deep trees ---------------
+#[derive(Clone, Debug)]
+pub struct JoinGraph { pub card: Vec<f64>, pub edges: Vec<(usize, usize, f64)> }   // (leaf a, leaf b, selectivity)
+
+impl JoinGraph {
+    /// Estimated rows of the join of the leaves in `mask`: product of cards × selectivities of internal edges.
+    pub fn subset_card(&self, mask: u32) -> f64 {
+        let mut c = 1.0;
+        for (i, &x) in self.card.iter().enumerate() { if mask >> i & 1 == 1 { c *= x; } }
+        for &(a, b, s) in &self.edges { if mask >> a & 1 == 1 && mask >> b & 1 == 1 { c *= s; } }
+        c.max(1.0)
+    }
+    /// Cost of a left-deep order = Σ intermediate result sizes (C_out), excluding the base scans.
+    pub fn order_cost(&self, order: &[usize]) -> f64 {
+        let (mut mask, mut cost) = (1u32 << order[0], 0.0);
+        for &j in &order[1..] { mask |= 1 << j; cost += self.subset_card(mask); }
+        cost
+    }
+    /// Optimal left-deep order by DP over subsets: best[S] = min over j∈S of best[S∖j] + card(S).
+    /// O(2^n · n). Cross products are allowed but only win when they are genuinely cheaper.
+    pub fn best_order(&self) -> (Vec<usize>, f64) {
+        let n = self.card.len();
+        let full = (1u32 << n) - 1;
+        let mut best: Vec<Option<(f64, Vec<usize>)>> = vec![None; 1 << n];
+        for i in 0..n { best[1 << i] = Some((0.0, vec![i])); }
+        for mask in 1..=full {
+            if mask.count_ones() < 2 { continue; }
+            let here = self.subset_card(mask);
+            let mut cand: Option<(f64, Vec<usize>)> = None;
+            for j in 0..n {
+                if mask >> j & 1 == 0 { continue; }
+                if let Some((c, ord)) = &best[(mask & !(1 << j)) as usize] {
+                    let cost = c + here;
+                    if cand.as_ref().is_none_or(|(bc, _)| cost < *bc - 1e-9) { let mut o = ord.clone(); o.push(j); cand = Some((cost, o)); }
+                }
+            }
+            best[mask as usize] = cand;
+        }
+        let (c, o) = best[full as usize].clone().unwrap();
+        (o, c)
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Join ordering by dynamic programming"
+body = """
+<p><strong>Problem.</strong> Given leaves with estimated cardinalities and a join graph (edges annotated with selectivities), choose the order that minimizes the total size of the intermediate results (the cost model <strong>C_out</strong>: Σ |intermediate join results|).</p>
+
+<p><strong>System R's insight.</strong> The best plan for a set <em>S</em> of relations is the best plan for some <em>S∖{j}</em> extended by <em>j</em>, and the <strong>size of a join result depends only on which relations it contains, not on the order they were joined in</strong>. So the optimal substructure holds:</p>
+
+```text title="left-deep dynamic programming"
+best[{i}]  = (cost 0, plan: scan i)
+best[S]    = min over j ∈ S of  best[S ∖ {j}].cost + |⋈ S|        (|⋈ S| = Π cards × Π selectivities of edges inside S)
+answer     = best[all relations]
+```
+
+<p>2ⁿ states with n transitions each: O(n·2ⁿ), practical to about 12–15 relations. Beyond that, systems switch to greedy or randomized search (PostgreSQL's GEQO above <code>geqo_threshold</code> = 12; Neumann &amp; Radke's adaptive optimization of very large join queries, SIGMOD 2018). <strong>Bushy</strong> trees (both inputs are joins) need subset-pair enumeration (DPsub/DPccp, O(3ⁿ)) but can beat the best left-deep plan; System R restricted itself to left-deep because the right input is then always a base table, which can use an index.</p>
+
+<aside data-call="testing"><b>The DP is checked against brute force</b><p>The property test generates random join graphs (2–6 relations, random cardinalities, random edge selectivities), runs <code>best_order</code>, then evaluates the cost of <strong>every one of the n! permutations</strong> and requires the DP's cost to equal the minimum. A DP that is "obviously correct" is exactly the kind that has an off-by-one in its subset iteration.</p></aside>
+"""
+
+[[sections]]
+heading = "Wired into the optimizer"
+body = """
+<p><code>reorder</code> flattens each tree of inner joins into <strong>leaves</strong> and <strong>conjuncts</strong>, pushes single-leaf conjuncts into their leaf, estimates each leaf from statistics (selectivity of its pushed filters), derives each join condition's selectivity (<code>1 / max(NDV, NDV)</code> for equalities, 0.33 otherwise), runs the DP, rebuilds a left-deep tree in the chosen order (each conjunct attached at the first join whose inputs contain all its columns), and adds a <strong>projection to restore the original column order</strong>, so the rest of the plan is unaffected. Outer joins are opaque: reordering across them changes results (<a href="/cookbook/p/relational-model-algebra">L01</a>).</p>
+
+:::deeper Join reordering in the optimizer (flatten → estimate → DP → rebuild)
+```rust title="src/optimizer/join_order.rs"
+// ---------------- cost-based join ordering (System R: dynamic programming over left-deep trees) -------------
+const MAX_DP_RELS: usize = 12;
+
+/// Estimated rows and per-column NDV of a join input, from ANALYZE statistics (defaults without them).
+fn leaf_estimate(p: &Plan, cat: &Catalog) -> (f64, Vec<f64>) {
+    let (table, filter) = match p {
+        Plan::SeqScan { table, filter, .. } => (Some(table), filter.clone()),
+        Plan::Filter { pred, child } => match &**child { Plan::SeqScan { table, filter, .. } => (Some(table), Some(and(filter.clone(), pred.clone()))), _ => (None, None) },
+        _ => (None, None),
+    };
+    let width = p.schema().len();
+    let Some(st) = table.and_then(|t| cat.stats.get(&t.to_lowercase())) else { return (1000.0, vec![10.0; width]) };
+    let card = (st.rows as f64 * filter.map_or(1.0, |f| selectivity(&f, st))).max(1.0);
+    (card, st.cols.iter().map(|c| (c.ndv as f64).min(card).max(1.0)).collect())
+}
+
+/// Collect the leaves of a tree of INNER joins and every conjunct, with columns renumbered globally
+/// (leaf 0's columns first, then leaf 1's, ...). Outer joins and everything else are opaque leaves.
+fn flatten(p: Plan, base: usize, leaves: &mut Vec<Plan>, conj: &mut Vec<Expr>) {
+    match p {
+        Plan::NestedLoopJoin { left, right, pred, kind: JoinKind::Inner } => {
+            let lw = left.schema().len();
+            if let Some(pr) = pred { conj.extend(pr.shift(base as isize).conjuncts()); }
+            flatten(*left, base, leaves, conj);
+            flatten(*right, base + lw, leaves, conj);
+        }
+        leaf => leaves.push(leaf),
+    }
+}
+
+fn add_filter(p: Plan, f: Expr) -> Plan {
+    match p {
+        Plan::Filter { pred, child } => Plan::Filter { pred: and(Some(pred), f), child },
+        Plan::SeqScan { table, schema, filter } => Plan::SeqScan { table, schema, filter: Some(and(filter, f)) },
+        other => Plan::Filter { pred: f, child: Box::new(other) },
+    }
+}
+
+fn reorder(p: Plan, cat: &Catalog) -> Plan {
+    if !matches!(&p, Plan::NestedLoopJoin { kind: JoinKind::Inner, .. }) { return map_children(p, &mut |c| reorder(c, cat)); }
+    let schema = p.schema();
+    let (mut leaves, mut conj) = (vec![], vec![]);
+    flatten(p, 0, &mut leaves, &mut conj);
+    let leaves: Vec<Plan> = leaves.into_iter().map(|l| reorder(l, cat)).collect();      // optimize inside opaque leaves too
+    let n = leaves.len();
+    let widths: Vec<usize> = leaves.iter().map(|l| l.schema().len()).collect();
+    let offs: Vec<usize> = widths.iter().scan(0, |a, w| { let o = *a; *a += w; Some(o) }).collect();
+    let total: usize = widths.iter().sum();
+    let leaf_of = |g: usize| offs.iter().rposition(|&o| o <= g).unwrap();
+    let leaves_of = |e: &Expr| { let mut c = vec![]; e.cols(&mut c); let mut ls: Vec<usize> = c.into_iter().map(leaf_of).collect(); ls.sort_unstable(); ls.dedup(); ls };
+
+    // Classify conjuncts: constants, single-leaf (pushed into the leaf), multi-leaf (join conditions).
+    let (mut single, mut multi, mut consts): (Vec<Vec<Expr>>, Vec<(Expr, Vec<usize>)>, Vec<Expr>) = (vec![vec![]; n], vec![], vec![]);
+    for c in conj {
+        let ls = leaves_of(&c);
+        match ls.len() { 0 => consts.push(c), 1 => single[ls[0]].push(c.shift(-(offs[ls[0]] as isize))), _ => multi.push((c, ls)) }
+    }
+    let leaves: Vec<Plan> = leaves.into_iter().zip(single).map(|(l, fs)| match Expr::and_all(fs) { Some(f) => add_filter(l, f), None => l }).collect();
+
+    // Cost model inputs: leaf cardinalities and a selectivity for every join condition.
+    let est: Vec<(f64, Vec<f64>)> = leaves.iter().map(|l| leaf_estimate(l, cat)).collect();
+    let one_leaf = |e: &Expr| { let ls = leaves_of(e); (ls.len() == 1).then(|| ls[0]) };
+    let ndv = |e: &Expr, l: usize| match e { Expr::Col(g) => est[l].1[g - offs[l]], _ => est[l].0 };
+    let edges: Vec<(usize, usize, f64)> = multi.iter().map(|(c, ls)| {
+        let sel = match c {
+            Expr::Bin(BinOp::Eq, a, b) => match (one_leaf(a), one_leaf(b)) {
+                (Some(la), Some(lb)) if la != lb => 1.0 / ndv(a, la).max(ndv(b, lb)).max(1.0),    // 1 / max(V(A,R), V(A,S))
+                _ => 0.33,
+            },
+            _ => 0.33,
+        };
+        (ls[0], ls[1], sel)
+    }).collect();
+    let graph = JoinGraph { card: est.iter().map(|e| e.0).collect(), edges };
+    let order: Vec<usize> = if (3..=MAX_DP_RELS).contains(&n) { graph.best_order().0 } else { (0..n).collect() };
+
+    // Rebuild a left-deep tree in the chosen order; renumber columns to the new concatenation order.
+    let new_off: Vec<usize> = { let mut o = vec![0; n]; let mut a = 0; for &l in &order { o[l] = a; a += widths[l]; } o };
+    let new_of_old: Vec<usize> = (0..total).map(|g| { let l = leaf_of(g); new_off[l] + (g - offs[l]) }).collect();
+    let mut slots: Vec<Option<Plan>> = leaves.into_iter().map(Some).collect();
+    let (mut acc, mut mask, mut used) = (None::<Plan>, 0u32, vec![false; multi.len()]);
+    for &j in &order {
+        let leaf = slots[j].take().unwrap();
+        mask |= 1 << j;
+        acc = Some(match acc {
+            None => leaf,
+            Some(a) => {
+                let mut ps: Vec<Expr> = consts.drain(..).collect();
+                for (k, (c, ls)) in multi.iter().enumerate() {
+                    if !used[k] && ls.iter().all(|l| mask >> l & 1 == 1) { used[k] = true; ps.push(c.map_cols(&|g| new_of_old[g])); }
+                }
+                Plan::NestedLoopJoin { left: Box::new(a), right: Box::new(leaf), pred: Expr::and_all(ps), kind: JoinKind::Inner }
+            }
+        });
+    }
+    let tree = acc.unwrap();
+    if order.iter().enumerate().all(|(i, &l)| i == l) { return tree; }
+    // The new tree emits columns in the new order; restore the order the rest of the plan expects.
+    Plan::Projection { exprs: (0..total).map(|g| Expr::Col(new_of_old[g])).collect(), schema: Schema::new(schema.cols.iter().map(|c| Column { ..c.clone() }).collect()), child: Box::new(tree) }
+}
+```
+:::
+
+```text title="SELECT COUNT(*), SUM(big.v + mid.w) FROM big, mid, tiny WHERE big.k = mid.k AND mid.k = tiny.k AND tiny.flag = 1"
+        big: 40,000 rows · mid: 40,000 rows · tiny: 2,000 rows, 3 with flag = 1
+
+FROM-clause order (no statistics):                                57.3 ms
+  HashJoin tiny.k = …
+    HashJoin big.k = mid.k           ← 40k ⋈ 40k on k with 2,000 distinct values: 800,000 intermediate rows
+      SeqScan big
+      SeqScan mid
+    SeqScan tiny filter=(flag = 1)
+
+DP order (after ANALYZE):                                         13.1 ms     (4.4×, identical result)
+  Projection [...restore original column order...]
+    HashJoin big.k = tiny.k
+      HashJoin tiny.k = mid.k        ← the 3 flagged tiny rows first: 60 intermediate rows
+        SeqScan tiny filter=(flag = 1)
+        SeqScan mid
+      SeqScan big
+```
+
+<p>The plan's <em>shape</em> is the whole difference: the same three scans and two hash joins, in a different order. And it only happens with statistics: without <code>ANALYZE</code> the estimator sees three tables of 1,000 rows and has no reason to move anything.</p>
+"""
+
+[[sections]]
+heading = "Where it breaks"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Failure</th> <th>Cause</th> <th>What production systems do</th> </tr> </thead> <tbody> <tr> <td>Correlated predicates</td> <td>independence assumption</td> <td>multi-column stats, column groups, sampling</td> </tr> <tr> <td>Skewed join keys</td> <td>uniformity and containment</td> <td>MCV-aware join estimates (join the two MCV lists first), histogram-histogram joins</td> </tr> <tr> <td>Errors compounding up a deep plan</td> <td>each estimate multiplies the previous error</td> <td>re-optimize mid-query when actual cardinalities diverge (adaptive execution: Spark AQE, SQL Server adaptive joins), robust plan choice</td> </tr> <tr> <td>Stale statistics</td> <td>data changed since <code>ANALYZE</code></td> <td>auto-analyze triggered by modification counters (PostgreSQL's autovacuum analyze at 10% + 50 rows), sampling at plan time</td> </tr> <tr> <td>Expensive-to-estimate functions (<code>UDF(x) &gt; 3</code>)</td> <td>no statistics exist</td> <td>default constants, user hints, learned models</td> </tr> </tbody> </table></div>
+
+<p>Leis et al.'s <a href="https://www.vldb.org/pvldb/vol9/p204-leis.pdf" target="_blank" rel="noreferrer"><em>How Good Are Query Optimizers, Really?</em></a> (VLDB 2015) ran the Join Order Benchmark on five systems: cardinality estimates were off by <strong>orders of magnitude</strong> after a few joins in all of them, yet plan quality was acceptable when indexes were scarce, and catastrophic otherwise. Their conclusion: the cost model matters far less than the cardinality estimates, and a perfect cardinality oracle improves PostgreSQL's plans dramatically. Part III is built around that observation.</p>
+"""
+
+[[sources]]
+title = "Access Path Selection in a Relational Database Management System"
+url = "https://www.cs.cmu.edu/~15721-f24/papers/System_R.pdf"
+
+[[sources]]
+title = "How Good Are Query Optimizers, Really?"
+url = "https://www.vldb.org/pvldb/vol9/p204-leis.pdf"
+
+[[sources]]
+title = "Query Optimization Through the Looking Glass"
+url = "https://www.vldb.org/pvldb/vol11/p1-leis.pdf"
+
+[[sources]]
+title = "Analysis of Two Existing and One New Dynamic Programming Algorithm for the Generation of Optimal Bushy Join Trees without Cross Products"
+url = "https://www.vldb.org/conf/2006/p930-moerkotte.pdf"
+
+[[sources]]
+title = "Adaptive Optimization of Very Large Join Queries"
+url = "https://db.in.tum.de/~radke/papers/hugejoins.pdf"
+
+[[sources]]
+title = "The History of Histograms (abridged)"
+url = "https://www.vldb.org/conf/2003/papers/S02P01.pdf"
+
+[[sources]]
+title = "cost-model lectures"
+url = "https://www.youtube.com/watch?v=gpmKJazbOiU"

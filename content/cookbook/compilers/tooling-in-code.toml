@@ -1,0 +1,231 @@
+title = "Tooling in code"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Language tooling and production"
+chapter_order = 7
+order = 642
+kind = "guide"
+lede = "Formatter, LSP server, tree-sitter grammar, race detector · Implementations for the tooling section"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "A width-aware pretty printer"
+body = """
+```rust title="Document IR with groups that print flat if they fit (a simplified Wadler/Oppen printer)"
+pub enum Doc { Text(String), Line, Nest(i32, Box<Doc>), Group(Box<Doc>), Concat(Vec<Doc>) }
+
+pub fn pretty(doc: &Doc, width: i32) -> String {
+    let mut out = String::new();
+    let mut col = 0;
+    let mut stack: Vec<(i32, bool, &Doc)> = vec![(0, false, doc)];   // (indent, flat?, doc)
+    while let Some((ind, flat, d)) = stack.pop() {
+        match d {
+            Doc::Text(s) => { out.push_str(s); col += s.len() as i32; }
+            Doc::Line if flat => { out.push(' '); col += 1; }
+            Doc::Line => { out.push('\\n'); out.push_str(&" ".repeat(ind as usize)); col = ind; }
+            Doc::Nest(n, inner) => stack.push((ind + n, flat, &**inner)),
+            Doc::Concat(ds) => for d in ds.iter().rev() { stack.push((ind, flat, d)); },
+            Doc::Group(inner) => {
+                let fits = flat || fits_flat(width - col, inner);
+                stack.push((ind, fits, &**inner));
+            }
+        }
+    }
+    out
+}
+
+/// Would this group fit in `remaining` columns printed on one line?
+/// (Wadler's full algorithm also accounts for text that follows the group.)
+fn fits_flat(mut remaining: i32, d: &Doc) -> bool {
+    let mut stack = vec![d];
+    while let Some(d) = stack.pop() {
+        if remaining < 0 { return false; }
+        match d {
+            Doc::Text(s) => remaining -= s.len() as i32,
+            Doc::Line => remaining -= 1,
+            Doc::Nest(_, inner) | Doc::Group(inner) => stack.push(&**inner),
+            Doc::Concat(ds) => stack.extend(ds.iter().rev()),
+        }
+    }
+    remaining >= 0
+}
+// call("f", [a, b]) = Group(Concat[Text("f("), Nest(4, Concat[Line?, a, Text(","), Line, b]), Text(")")])
+// prints "f(a, b)" when it fits and breaks one argument per line when it doesn't.
+```
+"""
+
+[[sections]]
+heading = "An LSP server that publishes diagnostics"
+body = """
+```rust title="lsp-server + lsp-types (rust-analyzer's crates). Newer lsp-types versions rename Url to Uri"
+use lsp_server::{Connection, Message, Notification};
+use lsp_types::notification::{DidChangeTextDocument, DidOpenTextDocument, Notification as _, PublishDiagnostics};
+use lsp_types::{DidChangeTextDocumentParams, DidOpenTextDocumentParams, PublishDiagnosticsParams,
+                ServerCapabilities, TextDocumentSyncKind, Url};
+
+fn main() -> anyhow::Result<()> {
+    let (conn, io_threads) = Connection::stdio();
+    let caps = ServerCapabilities {
+        text_document_sync: Some(TextDocumentSyncKind::FULL.into()),   // client sends whole files
+        ..Default::default()
+    };
+    conn.initialize(serde_json::to_value(caps)?)?;
+
+    for msg in &conn.receiver {
+        match msg {
+            Message::Request(req) => {
+                if conn.handle_shutdown(&req)? { break; }
+            }
+            Message::Notification(n) if n.method == DidOpenTextDocument::METHOD => {
+                let p: DidOpenTextDocumentParams = serde_json::from_value(n.params)?;
+                publish(&conn, p.text_document.uri, &p.text_document.text)?;
+            }
+            Message::Notification(n) if n.method == DidChangeTextDocument::METHOD => {
+                let p: DidChangeTextDocumentParams = serde_json::from_value(n.params)?;
+                if let Some(change) = p.content_changes.last() {
+                    publish(&conn, p.text_document.uri, &change.text)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    drop(conn);                  // let the writer thread finish before joining
+    io_threads.join()?;
+    Ok(())
+}
+
+fn publish(conn: &Connection, uri: Url, text: &str) -> anyhow::Result<()> {
+    // Run the rlox parser and resolver; convert byte spans to LSP line/UTF-16 positions.
+    let diagnostics = rlox_check(text);
+    let params = PublishDiagnosticsParams { uri, diagnostics, version: None };
+    conn.sender.send(Message::Notification(Notification::new(PublishDiagnostics::METHOD.to_string(), params)))?;
+    Ok(())
+}
+```
+"""
+
+[[sections]]
+heading = "A tree-sitter grammar for Lox"
+body = """
+```text title="grammar.js (subset), highlights.scm, and a corpus test"
+module.exports = grammar({
+  name: 'lox',
+  extras: $ => [/\\s/, $.comment],
+  word: $ => $.identifier,
+  rules: {
+    program: $ => repeat($._declaration),
+    _declaration: $ => choice($.var_declaration, $.function_declaration, $._statement),
+    var_declaration: $ => seq('var', field('name', $.identifier),
+                              optional(seq('=', field('value', $._expression))), ';'),
+    function_declaration: $ => seq('fun', field('name', $.identifier), $.parameters, $.block),
+    parameters: $ => seq('(', optional(seq($.identifier, repeat(seq(',', $.identifier)))), ')'),
+    _statement: $ => choice($.print_statement, $.return_statement, $.expression_statement, $.block),
+    print_statement: $ => seq('print', $._expression, ';'),
+    return_statement: $ => seq('return', optional($._expression), ';'),
+    expression_statement: $ => seq($._expression, ';'),
+    block: $ => seq('{', repeat($._declaration), '}'),
+    _expression: $ => choice($.binary, $.call, $.identifier, $.number, $.string,
+                             'true', 'false', 'nil', seq('(', $._expression, ')')),
+    binary: $ => choice(
+      prec.left(1, seq($._expression, choice('==', '!='), $._expression)),
+      prec.left(2, seq($._expression, choice('<', '<=', '>', '>='), $._expression)),
+      prec.left(3, seq($._expression, choice('+', '-'), $._expression)),
+      prec.left(4, seq($._expression, choice('*', '/'), $._expression)),
+    ),
+    call: $ => prec(5, seq(field('function', $._expression), '(',
+                           optional(seq($._expression, repeat(seq(',', $._expression)))), ')')),
+    identifier: $ => /[A-Za-z_][A-Za-z0-9_]*/,
+    number: $ => /\\d+(\\.\\d+)?/,
+    string: $ => /"[^"]*"/,
+    comment: $ => token(seq('//', /.*/)),
+  },
+});
+```
+
+```text title="queries/highlights.scm and test/corpus/expressions.txt"
+["var" "fun" "return" "print"] @keyword
+["true" "false" "nil"] @constant.builtin
+(function_declaration name: (identifier) @function)
+(call function: (identifier) @function.call)
+(number) @number
+(string) @string
+(comment) @comment
+
+==================
+Binary precedence
+==================
+
+print 1 + 2 * 3;
+
+---
+
+(program
+  (print_statement
+    (binary (number) (binary (number) (number)))))
+```
+"""
+
+[[sections]]
+heading = "A vector-clock race detector"
+body = """
+```rust title="Happens-before race detection, as in TSan and FastTrack before their optimizations"
+type Clock = Vec<u32>;                       // one component per thread
+
+fn join_into(a: &mut Clock, b: &Clock) { for (x, y) in a.iter_mut().zip(b) { *x = (*x).max(*y); } }
+fn happens_before(a: &Clock, b: &Clock) -> bool { a.iter().zip(b).all(|(x, y)| x <= y) }
+
+#[derive(Default)]
+struct VarState { last_write: Option<(usize, Clock)>, reads: Vec<(usize, Clock)> }
+
+pub struct Detector { threads: Vec<Clock>, locks: HashMap<LockId, Clock>, vars: HashMap<VarId, VarState> }
+
+impl Detector {
+    fn tick(&mut self, t: usize) { self.threads[t][t] += 1; }
+
+    pub fn acquire(&mut self, t: usize, l: LockId) {
+        if let Some(lc) = self.locks.get(&l) { join_into(&mut self.threads[t], lc); }
+    }
+    pub fn release(&mut self, t: usize, l: LockId) {
+        self.locks.insert(l, self.threads[t].clone());
+        self.tick(t);
+    }
+    pub fn write(&mut self, t: usize, x: VarId) -> Result<(), String> {
+        let now = self.threads[t].clone();
+        let v = self.vars.entry(x).or_default();
+        if let Some((u, w)) = &v.last_write {
+            if *u != t && !happens_before(w, &now) { return Err(format!("write/write race on {x:?}")); }
+        }
+        for (u, r) in &v.reads {
+            if *u != t && !happens_before(r, &now) { return Err(format!("read/write race on {x:?}")); }
+        }
+        v.last_write = Some((t, now));
+        v.reads.clear();
+        self.tick(t);
+        Ok(())
+    }
+    pub fn read(&mut self, t: usize, x: VarId) -> Result<(), String> {
+        let now = self.threads[t].clone();
+        let v = self.vars.entry(x).or_default();
+        if let Some((u, w)) = &v.last_write {
+            if *u != t && !happens_before(w, &now) { return Err(format!("write/read race on {x:?}")); }
+        }
+        v.reads.push((t, now));
+        self.tick(t);
+        Ok(())
+    }
+    // fork: child clock = parent clock; join: join_into(parent, child). Both then tick.
+}
+```
+"""
+
+[[sources]]
+title = "“A Prettier Printer”"
+url = "https://homepages.inf.ed.ac.uk/wadler/papers/prettier/prettier.pdf"
+
+[[sources]]
+title = "LSP specification"
+url = "https://microsoft.github.io/language-server-protocol/"
+
+[[sources]]
+title = "Tree-sitter docs"
+url = "https://tree-sitter.github.io/tree-sitter/"

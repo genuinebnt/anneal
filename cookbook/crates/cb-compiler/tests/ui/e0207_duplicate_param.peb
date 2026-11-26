@@ -1,0 +1,3 @@
+fn f(a: int, a: int) -> int { a }
+fn g<T, T>(x: T) {}
+fn main() { f(1, 2); }

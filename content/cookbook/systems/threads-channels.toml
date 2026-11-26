@@ -1,0 +1,44 @@
+title = "OS threads"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Threads, locks and channels"
+chapter_order = 1
+order = 236
+kind = "recipe"
+lede = "Spawn/join, scoped threads, channels, and what `Send`/`Sync` mean."
+level = "intermediate"
+code = ["examples/concurrency/threads_channels.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>CPU-bound work</li><li>background workers</li><li>understanding what tokio builds on</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>CPU-bound parallel work</li><li>background workers</li><li>understanding what async runtimes build on</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Send = a value can be **moved** to another thread. Sync = `&T` can be **shared** between threads. `Rc` is neither (non-atomic counter); `Arc<Mutex<T>>` is both; raw `RefCell` is Send but not Sync.
+
+The compiler checks this for you: sharing the wrong thing across `thread::spawn` is a compile error.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/book/ch16-00-concurrency.html> and Rust Atomics and Locks <https://marabos.nl/atomics/>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch16-00-concurrency.html"
+url = "https://doc.rust-lang.org/book/ch16-00-concurrency.html"
+
+[[sources]]
+title = "marabos.nl/atomics"
+url = "https://marabos.nl/atomics/"

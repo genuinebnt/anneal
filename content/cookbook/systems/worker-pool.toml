@@ -1,0 +1,38 @@
+title = "A generic async worker pool"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Async Rust"
+chapter_order = 4
+order = 271
+kind = "recipe"
+lede = "Bounded queue, bounded concurrency, panic isolation, graceful drain."
+level = "advanced"
+code = ["examples/async/worker_pool.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>any "submit jobs, run at most N at once, collect results" component. Combines joinset_semaphore</li><li>bounded_channel</li><li>graceful_shutdown</li><li>async_patterns</li><li>closures_hof</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>image/video processing farms</li><li>scraping pools</li><li>job runners: bounded queue + bounded workers + panic isolation</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Design (domain: image resizing, **not** the DAG executor): submit() --bounded mpsc--> dispatcher task --Semaphore(N permits)--> spawned job --> results channel
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Backpressure</div><div class="cb-g-says"><p><code>submit().await</code> waits when the queue is full (producers cannot outrun workers: bounded memory)</p></div></div><div class="cb-g-term"><div class="cb-g-name">Concurrency limit</div><div class="cb-g-says"><p>The dispatcher takes a permit <strong>before</strong> spawning, so at most N jobs run</p></div></div><div class="cb-g-term"><div class="cb-g-name">Panic isolation</div><div class="cb-g-says"><p>Each job runs in its own <code>tokio::spawn</code>; a panic becomes <code>Outcome::Panicked</code>, the pool lives on</p></div></div><div class="cb-g-term"><div class="cb-g-name">Graceful shutdown</div><div class="cb-g-says"><p><code>finish()</code> closes the queue, waits for queued and running jobs, then returns every outcome The generics: <code>F: Fn(J) -&gt; Fut</code>, <code>Fut: Future&lt;Output = R&gt; + Send + 'static</code>. Study how real pools are built: <a href="https://github.com/tokio-rs/tokio/tree/master/tokio/src/runtime" target="_blank" rel="noreferrer">https://github.com/tokio-rs/tokio/tree/master/tokio/src/runtime</a> and <a href="https://docs.rs/deadpool" target="_blank" rel="noreferrer">https://docs.rs/deadpool</a></p></div></div></div>
+"""
+
+[[sources]]
+title = "github.com/tokio-rs/tokio/tree/master/tokio/src/runtime"
+url = "https://github.com/tokio-rs/tokio/tree/master/tokio/src/runtime"
+
+[[sources]]
+title = "docs.rs/deadpool"
+url = "https://docs.rs/deadpool"

@@ -1,0 +1,70 @@
+title = "Ray tracer"
+module = "Complete projects"
+module_order = 13
+chapter = "Capstones"
+chapter_order = 1
+order = 656
+kind = "capstone"
+lede = "a Whitted + path-tracing ray tracer with BVH, glass, soft shadows, depth of field and PNG output"
+level = "capstone"
+code = ["examples/capstones/ray_tracer.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>learning how offline renderers work</li><li>synthetic image generation</li><li>a base for experiments with sampling and acceleration structures</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a self-contained CPU ray tracer. Scene = spheres, an infinite checkerboard plane and triangle meshes (a generated icosphere, boxes, quads). Materials: Lambert, checker, Blinn-Phong, perfect mirror, dielectric glass (Fresnel by Schlick, total internal reflection, optional Beer-Lambert absorption) and emissive.
+
+Lights: point (hard shadows) and rectangular area lights (soft shadows by Monte-Carlo sampling). Camera: pinhole with vertical field of view plus an optional thin lens (depth of field).
+
+Two integrators: a Whitted ray tracer (recursive mirror/glass + shadow rays) and a unidirectional **path tracer** (cosine-weighted hemisphere sampling, Russian roulette) used for a Cornell-box scene.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+every piece is small, but they interact; the assertions at the end (BVH == brute force, thread count does not change the image, white-furnace energy conservation, RMSE shrinking like 1/sqrt(N)) are the standard ways to know a renderer is correct rather than merely pretty.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+camera ray: dir = normalize(forward + (2s-1) tan(fov/2) aspect right + (1-2t) tan(fov/2) up); thin lens: pick a point on the lens disk, aim at the point where the pinhole ray crosses the focus plane, so only that plane stays sharp. sphere: &#124;o + t d - c&#124;&#94;2 = r&#94;2 -> quadratic. triangle: Moller-Trumbore. plane: t = (k - n.o) / (n.d).
+
+BVH: binary tree of axis-aligned boxes over triangles/spheres, median split on the longest centroid axis, stored in a flat Vec (depth-first: left child = index + 1, right child index stored), traversal with an explicit stack that skips boxes beyond the closest hit found so far.
+
+Planes are unbounded, so they are tested separately. determinism: the RNG for pixel (x, y) is seeded from (seed, x, y) only, and a hit tie is broken by primitive index, so the result does not depend on thread count, band order, or whether the BVH is used.
+
+Whitted shading at a diffuse hit: albedo &#42; (ambient + sum over lights of light &#42; max(0, n.l) / d&#94;2 &#42; visibility) + Blinn term ks &#42; max(0, n.h)&#94;shininess, with h = normalize(l + v). path tracing (Lambert): next dir &#126; cos(theta)/pi so pdf cancels the cosine and throughput &#42;= albedo; after 3 bounces Russian roulette keeps the path with probability p = clamp(max(throughput), .05, .95) and divides by p (unbiased).
+
+Glass picks reflection with probability R (Fresnel), refraction otherwise, so throughput needs no extra weight. white furnace: any closed lossless material inside uniform radiance 1 must look exactly 1; a deviation means the BRDF/refraction code creates or destroys energy. Convergence: RMSE of an N-sample image against a very
+
+```text
+high-sample reference falls like 1/sqrt(N).
+```
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>film and product-visualisation offline renderers (the same ideas as PBRT/Cycles)</li><li>game-engine lightmap baking and reference images</li><li>synthetic data generation for computer vision</li><li>teaching sampling/variance</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://raytracing.github.io/> and <https://www.pbr-book.org/>
+"""
+
+[[sources]]
+title = "raytracing.github.io"
+url = "https://raytracing.github.io/"
+
+[[sources]]
+title = "pbr-book.org"
+url = "https://www.pbr-book.org/"

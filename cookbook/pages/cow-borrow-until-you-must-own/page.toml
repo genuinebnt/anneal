@@ -1,0 +1,448 @@
+title = "Cow: borrow until you must own"
+module = "1. Rust language"
+chapter = "Ownership and borrowing"
+order = 3
+kind = "pattern"
+level = "intermediate"
+status = "draft"
+illustrative = ["serde-borrow.rs"]
+lede = "`Cow<'a, B>` is an enum that holds either a borrowed `&'a B` or an owned value, so a function can return its input untouched in the common case and allocate only when it has to change something."
+summary = [
+  "Return `Cow<'a, str>` when most inputs come out unchanged and the rest need a new `String`.",
+  "Callers use it like a `&str`, because `Cow` implements `Deref`.",
+  "`to_mut` clones a borrowed value as soon as you call it, so check whether you need to write first.",
+  "`into_owned` gives you the owned value: it moves if already owned and copies if borrowed.",
+  "A borrowed `Cow` keeps its source borrowed; `Cow<'static, str>` holds literals and built strings with no such tie.",
+  "If you nearly always change the data, return `String`; if you never do, take and return `&str`.",
+]
+
+[[glance]]
+label = "Defined in"
+value = "`alloc::borrow` (also `std::borrow`); not in `core`. Its trait bound is `ToOwned`, also in `alloc`."
+
+[[glance]]
+label = "Stable since"
+value = "Rust 1.0.0: `Cow`, `to_mut`, `into_owned`"
+
+[[glance]]
+label = "Allocates"
+value = "Not to borrow, or to move an owned value in or out. Yes when it has to copy borrowed data into a `String` or `Vec`."
+
+[[glance]]
+label = "Common forms"
+value = "`Cow<str>`, `Cow<[T]>`, `Cow<Path>`"
+
+[[sections]]
+heading = "The pattern"
+body = '''
+Look for the first thing that needs changing. If there is none, hand the input back. Otherwise build a new value.
+
+```rust title=src/lib.rs hl=2-4,8
+pub fn escape_html(input: &str) -> Cow<'_, str> {
+    let Some(first) = input.find(is_special) else {
+        return Cow::Borrowed(input);
+    };
+    let mut out = String::with_capacity(input.len() + 8);
+    out.push_str(&input[..first]); // already checked: copy in one go
+    push_escaped(&input[first..], &mut out);
+    Cow::Owned(out)
+}
+```
+
+- **The signature** says "this is your input, or a new string". The `'_` ties the result to `input`.
+- **Clean input** comes back as the same bytes, with no allocation. Both are tested here.
+- **No wasted work on the clean prefix:** the search stops at the first special character, and the part before it is copied in one go.
+- **The caller** usually does not care which variant it got: `out.len()`, `out.starts_with("a")` and `out == "x"` all work.
+
+`Cow` is short for "clone on write". The type is this:
+
+```text
+enum Cow<'a, B: ?Sized + ToOwned + 'a> {
+    Borrowed(&'a B),
+    Owned(<B as ToOwned>::Owned),     // str -> String, [T] -> Vec<T>, Path -> PathBuf
+}
+```
+'''
+
+[[sections]]
+heading = "Should you use it?"
+body = '''
+| Use `Cow` when | Do something else when |
+|---|---|
+| most calls need no change, some do (escaping, normalising, lossy decoding) | nearly every call changes the data: return `String` |
+| a value is usually a string literal and sometimes formatted | it is always a literal: use `&'static str` |
+| a struct is usually filled from a buffer that outlives it, and sometimes from computed text | the struct must be stored or sent around freely: use `String` |
+| a function sometimes has to change a value it was lent | it only reads: take `&str` |
+| | it always needs to own the value: take `String`, and let the caller decide whether to clone |
+| | it runs in a loop and the caller can reuse a buffer: write into `&mut String` |
+
+The last two are alternatives that are easy to miss. The Rust API Guidelines (C-CALLER-CONTROL) say a function that needs ownership should take ownership, not borrow and clone. And a caller-owned buffer can avoid allocating even for input that changes:
+
+```rust title=src/lib.rs
+/// The alternative without `Cow`: the caller owns the buffer and can reuse it.
+pub fn push_escaped(input: &str, out: &mut String) {
+```
+
+In the lab, escaping dirty input three times into one buffer with enough room makes no allocation. The `Cow` version allocates for each dirty input.
+
+> [!TIP]
+> Before choosing `Cow`, estimate how often the borrowed path will be taken on real input. That share is the whole benefit. This is advice; it was not measured here.
+'''
+
+[[sections]]
+heading = "Compared with &str and String"
+body = '''
+| | `&'a str` | `String` | `Cow<'a, str>` |
+|---|---|---|---|
+| owns its text | no | yes | sometimes |
+| has a lifetime | yes | no | yes (`'static` is allowed) |
+| can hold newly built text | no, someone else must own it | yes | yes |
+| holding existing text without a copy | yes | only by moving a `String` in | yes |
+| can be changed | no | yes | through `to_mut` |
+| size on this toolchain | 16 bytes | 24 bytes | 24 bytes |
+
+The sizes were printed by the lab on 64-bit `aarch64-apple-darwin` with rustc 1.98.1. Rust does not guarantee the layout of these types. Here, storing `Cow` instead of `String` saved no space inline.
+'''
+
+[[sections]]
+heading = "Working with a Cow"
+body = '''
+| Operation | On `Borrowed` | On `Owned` |
+|---|---|---|
+| call a `&str` method (through `Deref`) | no copy | no copy |
+| `to_mut()` gives `&mut String` | **copies**, and becomes `Owned` | no copy |
+| `into_owned()` gives `String` | **copies** | moves |
+| `clone()` | copies the reference | **copies** the data |
+| `to_string()` | copies | copies |
+| `==`, ordering, hashing | by content | by content |
+
+The lab counts allocations for `into_owned` on both variants, `clone` on both, and `to_string` on an owned value. The other cells follow from the source.
+
+**Making one.** `Cow::Borrowed(s)` and `Cow::Owned(string)` name the variant. `From` does the obvious thing: `&str` and `&String` become `Borrowed`, and a `String` is moved into `Owned` without a copy.
+
+**Asking which one you have.** On stable, use `matches!(c, Cow::Borrowed(_))`.
+
+### Changing it only when needed {#to-mut}
+
+`to_mut` is lazy only in the sense that it does nothing to a value that is already owned. It cannot know whether you are about to change anything.
+
+```rust title=src/lib.rs hl=3,8-9
+/// Wrong: clones even when there is nothing to lowercase.
+pub fn lowercase_eager(name: &mut Cow<'_, str>) {
+    name.to_mut().make_ascii_lowercase();
+}
+
+/// Right: check first, then call `to_mut`.
+pub fn lowercase_lazy(name: &mut Cow<'_, str>) {
+    if name.bytes().any(|b| b.is_ascii_uppercase()) {
+        name.to_mut().make_ascii_lowercase();
+    }
+}
+```
+
+Writing through `to_mut` never touches the borrowed source. It changes the new copy.
+'''
+
+[[sections]]
+heading = "In structs and signatures"
+body = '''
+### A field that borrows when it can {#field}
+
+```rust title=src/lib.rs
+impl<'a> Label<'a> {
+    /// `&str` and `&String` stay borrowed; a `String` is moved in without a copy.
+    pub fn new(text: impl Into<Cow<'a, str>>) -> Self {
+        Label { text: text.into() }
+    }
+
+    /// Cuts the tie to the input. `std` has no method that does this for you.
+    pub fn into_static(self) -> Label<'static> {
+        Label {
+            text: Cow::Owned(self.text.into_owned()),
+        }
+    }
+}
+```
+
+- `Label<'a>` cannot outlive whatever it borrows. The lifetime spreads to every type that contains a `Label<'a>`. That is the main design cost.
+- `into_static` is the way out at a boundary, such as before caching the value or moving it to a spawned thread. `Cow` has `into_owned`, which returns a `String`; it has no method that returns `Cow<'static, str>`, so you wrap the result in `Cow::Owned`.
+- `impl Into<Cow<'a, str>>` suits a constructor that stores the value. A function that only reads should just take `&str`.
+
+### Literals and built strings: `Cow<'static, str>` {#static}
+
+```rust title=src/lib.rs
+pub fn status_text(code: u16) -> Cow<'static, str> {
+    match code {
+        200 => Cow::Borrowed("ok"),
+        404 => Cow::Borrowed("not found"),
+        other => Cow::Owned(format!("status {other}")),
+    }
+}
+```
+
+A string literal has type `&'static str`, so borrowing it ties the result to nothing. The caller can keep the value as long as it likes, and the known cases do not allocate.
+
+### Slices work the same way {#slices}
+
+```rust title=src/lib.rs
+pub fn sorted(xs: &[u32]) -> Cow<'_, [u32]> {
+    if xs.is_sorted() {
+        Cow::Borrowed(xs)
+    } else {
+        let mut v = xs.to_vec();
+        v.sort_unstable();
+        Cow::Owned(v)
+    }
+}
+```
+
+### As a map key {#map-key}
+
+A `HashMap<Cow<'static, str>, V>` can hold literals and built strings together, and `map.get("name")` works, because `Cow<str>` implements `Borrow<str>`. A borrowed key and an owned key with the same text are the same key. Tested here.
+'''
+
+[[sections]]
+heading = "What it costs"
+body = '''
+| Cost | Detail |
+|---|---|
+| a lifetime | a `Cow<'a, _>` that may borrow keeps its source alive and unchanged while you hold it |
+| two cases | `Deref` matches on the variant each time it runs (see the source). Its run-time cost was not measured |
+| a check before building | you must find out whether a change is needed; arrange it so that work is not repeated, as `escape_html` does |
+| API surface | `Cow` in a public signature is something every caller has to read and understand |
+
+What you get is fewer allocations on the borrowed path. The lab counts them: zero for clean input to `escape_html`, a known code in `status_text`, sorted input to `sorted`, and valid UTF-8 in `from_utf8_lossy`; one for `escape_html("a<b")`.
+
+> [!NOTE]
+> No timing was measured for this page. Fewer allocations is not the same as a faster program: profile before you add a lifetime to your types for speed.
+'''
+
+[[sections]]
+heading = "Pitfalls"
+body = '''
+### Getting the owned value out {#get-owned}
+
+> [!WARNING]
+> **`cow.to_owned()` does not give you a `String`.** `Cow` is `Clone`, and every `Clone` type implements `ToOwned` with `Owned = Self`. So this clones the `Cow`, and a borrowed one stays borrowed. Use `into_owned()`. Clippy 1.98 warns about it (`clippy::suspicious_to_owned`, seen on the lab's test).
+
+```rust title=tests/cow.rs
+let original: Cow<'_, str> = Cow::Borrowed("x");
+let copy: Cow<'_, str> = original.to_owned(); // not a String
+assert!(is_borrowed(&copy));
+```
+
+> [!WARNING]
+> **`to_string()` always makes a new `String`**, even when the `Cow` already owns one. `into_owned()` moves it out. The lab checks this by comparing buffer addresses.
+
+### `from_utf8_lossy` on bytes you already own {#lossy-vec}
+
+`String::from_utf8_lossy` takes `&[u8]`. For valid input it borrows from your `Vec`, so calling `into_owned()` on the result copies bytes you already had. Try `String::from_utf8` first; it takes the `Vec` and reuses its buffer.
+
+```rust title=src/lib.rs
+match String::from_utf8(bytes) {
+    Ok(text) => text,
+    Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+}
+```
+
+(`String::from_utf8_lossy_owned` does this job but is unstable in 1.98.1.)
+
+### `Owned` does not mean "changed" {#owned-not-changed}
+
+The variant says who owns the data, not whether it differs from the input. `Cow::Owned` can hold text equal to the original, and `==` compares text only. If callers need a "was it changed?" answer, design for it, and document what your function promises about the variant.
+
+### The result keeps the input borrowed {#keeps-borrow}
+
+Neither of these compiles. The first returns a borrow of a local (E0515). Return `Cow::Owned(upper)` instead.
+
+```rust compile_fail=E0515 title=borrow-of-local.rs
+use std::borrow::Cow;
+pub fn shout(s: &str) -> Cow<'_, str> {
+    let upper = s.to_uppercase();
+    Cow::Borrowed(&upper)
+}
+```
+
+The second changes the source while a borrowed `Cow` is still in use (E0502).
+
+```rust compile_fail=E0502 title=mutate-while-borrowed.rs
+use std::borrow::Cow;
+pub fn f() -> usize {
+    let mut line = String::from("abc");
+    let c: Cow<str> = Cow::Borrowed(&line);
+    line.push('d');
+    c.len()
+}
+```
+
+This bites when one buffer is reused to read line after line: call `into_owned()` on anything you keep past the next read.
+
+### serde does not borrow a `Cow` unless you ask {#serde}
+
+With serde's derive, a `Cow<'a, str>` field is deserialized as `Owned` unless it is marked `#[serde(borrow)]`.
+
+```rust title=serde-borrow.rs
+#[derive(Deserialize)]
+struct Message<'a> {
+    #[serde(borrow)]
+    name: Cow<'a, str>,
+}
+```
+
+Checked in a scratch project with serde 1.0.229 and serde_json 1.0.154, using `from_str`: without the attribute the field was `Owned`; with it, `{"name":"abc"}` gave `Borrowed`; with it, a string containing the escape `\n` gave `Owned`, because the decoded text is not in the input. Not every input can lend data: serde's docs give reading from an IO stream as an example. The fence above is not compiled by the page checker, because it needs the serde dependency, which the lab does not have.
+'''
+
+[[sections]]
+heading = "Where std and crates use it"
+body = '''
+| Function | Returns `Borrowed` when | Returns `Owned` when |
+|---|---|---|
+| `String::from_utf8_lossy(&[u8])` | the bytes are valid UTF-8 | invalid sequences are replaced with U+FFFD |
+| `CStr::to_string_lossy` | the same (it calls `from_utf8_lossy`) | the same |
+| `OsStr::to_string_lossy` | the name is valid Unicode | it is not |
+| `Path::to_string_lossy` | the path is valid Unicode | it is not |
+| `Regex::replace_all` (`regex` crate) | there is no match | there is at least one match |
+
+The `std` rows are tested here for valid input, and for invalid input except through `Path`, with the `OsStr` invalid case on Unix only. Windows was not run. The `regex` row comes from reading the 1.13.2 source (`replacen`, which `replace_all` is built on) and was not run.
+
+:::deeper How from_utf8_lossy decides | alloc/src/string.rs
+It checks the first chunk of the input. If that chunk has no invalid bytes, it is the whole input, and the function returns it as `Borrowed` without allocating. Only past that point does it create a `String`.
+:::
+'''
+
+[[sections]]
+heading = "How it is built"
+body = '''
+:::deeper ToOwned, and why Owned must borrow as Self | alloc/src/borrow.rs
+`Cow` has to name two types: the borrowed one (`str`) and the owned one (`String`). `Clone` cannot express that, since it goes from `&T` to `T`, and `str` is unsized. The `ToOwned` trait links the two:
+
+```text
+pub trait ToOwned {
+    type Owned: Borrow<Self>;                 // String: Borrow<str>
+    fn to_owned(&self) -> Self::Owned;
+    fn clone_into(&self, target: &mut Self::Owned) { *target = self.to_owned(); }
+}
+```
+
+The bound `Owned: Borrow<Self>` is what makes `Deref` possible: from either variant, `Cow` can produce a `&B`. In the `Owned` case it calls `borrow()`.
+
+> [!RUST]
+> **An associated type plus a bound back to `Self`** lets a generic type work with pairs such as `str`/`String`, `[T]`/`Vec<T>` and `Path`/`PathBuf` without knowing any of them. `to_mut` is also worth reading in the source: when borrowed, it assigns a new `Owned` value to `*self` and then matches again to return a reference into it.
+:::
+
+> [!ASIDE]
+> For clone-on-write between several owners, the `Cow` docs point to `Rc::make_mut` and `Arc::make_mut`. They solve a different problem: shared ownership, with no borrowed variant and no lifetime tying the value to someone else's data.
+'''
+
+[[methods]]
+type = "Cow"
+name = "into_owned"
+signature = "pub fn into_owned(self) -> <B as ToOwned>::Owned"
+since = "1.0.0"
+use_when = "you need the owned value: moves it if already owned, copies if borrowed"
+common = true
+anchor = "get-owned"
+
+[[methods]]
+type = "Cow"
+name = "to_mut"
+signature = "pub fn to_mut(&mut self) -> &mut <B as ToOwned>::Owned"
+since = "1.0.0"
+use_when = "you are about to change the data: copies a borrowed value as soon as you call it"
+common = true
+anchor = "to-mut"
+
+[[methods]]
+type = "Cow"
+name = "is_borrowed"
+signature = "pub const fn is_borrowed(c: &Self) -> bool"
+since = "unstable (cow_is_borrowed)"
+use_when = "ask for the variant, written `Cow::is_borrowed(&c)`; on stable, use `matches!`"
+unstable = true
+anchor = "Working with a Cow"
+
+[[methods]]
+type = "Cow"
+name = "is_owned"
+signature = "pub const fn is_owned(c: &Self) -> bool"
+since = "unstable (cow_is_borrowed)"
+use_when = "the opposite check; on stable, use `matches!`"
+unstable = true
+anchor = "Working with a Cow"
+
+[[terms]]
+term = "clone on write"
+means = "Share or borrow data until a change is needed, then copy it and change the copy."
+section = "The pattern"
+
+[[terms]]
+term = "ToOwned"
+means = "A trait that links a borrowed type such as `str` to its owned type such as `String`."
+section = "How it is built"
+
+[[sources]]
+title = "std docs: borrow::Cow"
+url = "https://doc.rust-lang.org/1.98.1/std/borrow/enum.Cow.html"
+kind = "docs"
+note = "Methods and examples. Read as the doc comments in the local 1.98.1 source."
+read = true
+
+[[sources]]
+title = "alloc source: borrow.rs"
+url = "https://github.com/rust-lang/rust/blob/1.98.1/library/alloc/src/borrow.rs"
+kind = "code"
+note = "`ToOwned`, the enum, the four inherent methods and the trait impls. A short file, worth reading whole."
+scope = "the whole file, in the local sysroot copy"
+read = true
+
+[[sources]]
+title = "alloc source: string.rs"
+url = "https://github.com/rust-lang/rust/blob/1.98.1/library/alloc/src/string.rs"
+kind = "code"
+note = "How lossy decoding avoids allocating, and the conversions into `Cow<str>`."
+scope = "`from_utf8_lossy`, `from_utf8_lossy_owned` and the `From` impls for `Cow<str>`"
+read = true
+
+[[sources]]
+title = "regex 1.13.2: string.rs"
+url = "https://github.com/rust-lang/regex/blob/1.13.2/src/regex/string.rs"
+kind = "code"
+note = "A crate that returns `Cow::Borrowed` before allocating when nothing matches."
+scope = "the body of `replacen`"
+read = true
+
+[[sources]]
+title = "serde: Deserializer lifetimes"
+url = "https://serde.rs/lifetimes.html"
+kind = "guide"
+note = "When data can be borrowed from the input, and `#[serde(borrow)]`."
+read = true
+
+[[sources]]
+title = "serde 1.0.229: de/impls.rs"
+url = "https://github.com/serde-rs/serde/blob/v1.0.229/serde_core/src/de/impls.rs"
+kind = "code"
+note = "The plain `Deserialize` impl for `Cow` always builds `Owned`."
+scope = "that impl"
+read = true
+
+[[sources]]
+title = "Rust API Guidelines: C-CALLER-CONTROL"
+url = "https://rust-lang.github.io/api-guidelines/flexibility.html"
+kind = "guide"
+note = "Let the caller decide where data is copied."
+scope = "that section, as quoted by a fetch tool"
+read = true
+
+[[labs]]
+title = "Cow behaviour and allocation counts"
+after = "What it costs"
+files = ["src/lib.rs", "tests/cow.rs", "tests/allocations.rs", "src/main.rs"]
+run = true
+test = true
+
+[verified]
+toolchain = "rustc 1.98.1 (48a229cea 2026-09-01)"
+date = "2026-11-26"
+platform = "aarch64-apple-darwin"
+not_checked = "No timing. Windows and 32-bit targets were not run, and sizes are for this target only. Invalid input to Path::to_string_lossy and the regex behaviour were not run. The serde fence was checked in a scratch project, not by the page checker. Method signatures were compared with the source by a script, leaving out stability attributes. Stable-since 1.0.0 was read from attributes. Allocation counts hold for this toolchain's release build. Mutation checks in a scratch copy (each made a test fail): escape_html always owning, dropping the clean prefix, leaving the apostrophe out of the detector, calling to_mut before checking in ensure_trailing_slash and in lowercase_lazy, an owned literal in status_text, sorted always copying, lossy_from_vec copying, and Label::new always owning."

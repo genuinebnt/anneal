@@ -1,0 +1,67 @@
+title = "Bounded lock-free MPMC queue"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Concurrent data structures"
+chapter_order = 3
+order = 252
+kind = "recipe"
+lede = "bounded lock-free MPMC queue (Vyukov style): a ring of sequence-numbered cells."
+level = "advanced"
+code = ["examples/concurrency/mpmc_bounded_queue.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>work queues between thread pools</li><li>log/metric pipelines</li><li>any hot producer/consumer hand-off</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a fixed-capacity queue many threads can push to and pop from at once, with no locks.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+the buffer is a ring of cells; each cell has an `AtomicUsize` sequence number `seq` and a slot `UnsafeCell<MaybeUninit<T>>`. Two shared counters `enq` and `deq` only ever grow (they wrap via `& mask`).
+
+```text
+cell.seq == pos          -> the slot is EMPTY and is the producer's turn for position `pos`
+cell.seq == pos + 1      -> the slot is FULL and is the consumer's turn for position `pos`
+```
+
+after a pop, seq = pos + capacity -> empty again, for the next lap of the ring. A producer claims position `pos` by `compare_exchange(enq: pos -> pos+1)`; only the winner touches the slot, so the slot write itself needs no atomics. The sequence number is the hand-off signal.
+
+**Orderings**: `enq`/`deq` loads and CASes are `Relaxed` (they only pick a ticket; no data is published through them).
+
+`cell.seq.load(Acquire)` pairs with the other side's `cell.seq.store(.., Release)`: a consumer that sees seq==pos+1 also sees the slot write that preceded that store; a producer that sees the lapped seq also sees that the consumer's read of the slot finished (so overwriting is not a race).
+
+**Safety** of Send/Sync: the queue owns `T` values and moves them between threads, so `T: Send` is required and enough; each slot is accessed by exactly one thread at a time (the CAS winner), ordered by the seq Acquire/Release pair. Drop drops the items still queued (positions deq..enq), and nothing else.
+
+Not strictly lock-free: a producer that stalls between its CAS and its seq store delays the consumer of that slot. Check with `cargo +nightly miri run --example mpmc_bounded_queue` (shrink the stress sizes first).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>bounded channels (back-pressure instead of unbounded memory growth)</li><li>thread-pool task queues</li><li>audio/network pipelines</li><li>crossbeam's <code>ArrayQueue</code> is this design</li><li><code>std::sync::mpsc</code> bounded channels solve the same problem</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://www.1024cores.net/home/lock-free-algorithms/queues/bounded-mpmc-queue> and <https://marabos.nl/atomics/> and <https://docs.rs/crossbeam-queue/latest/crossbeam_queue/struct.ArrayQueue.html>
+"""
+
+[[sources]]
+title = "1024cores.net/home/lock-free-algorithms/queues/bounded-mpmc-queue"
+url = "https://www.1024cores.net/home/lock-free-algorithms/queues/bounded-mpmc-queue"
+
+[[sources]]
+title = "marabos.nl/atomics"
+url = "https://marabos.nl/atomics/"
+
+[[sources]]
+title = "docs.rs/crossbeam-queue/latest/crossbeam_queue/struct.ArrayQueue.html"
+url = "https://docs.rs/crossbeam-queue/latest/crossbeam_queue/struct.ArrayQueue.html"

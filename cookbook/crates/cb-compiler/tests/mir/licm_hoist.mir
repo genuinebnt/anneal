@@ -1,0 +1,103 @@
+=== before ===
+// monomorphisation: 2 function instances
+// fn#0 (main)
+fn main() -> () {
+    let _0: int;
+    let _1: int;
+    let _2: int;
+    let _3: str;
+    let _4: ();
+  bb0:
+    _0 = len("abcd")
+    _1 = len("ab")
+    _2 = call fn#1(_0, _1) -> bb1
+  bb1:
+    _3 = to_str(_2)
+    _4 = println(_3)
+    return ()
+}
+// fn#1
+fn f(_0: int, _1: int) -> int {
+    let _2: int;  // i
+    let _3: int;  // s
+    let _4: int;
+    let _5: bool;
+    let _6: bool;
+    let _7: bool;  // big
+    let _8: int;
+    let _9: int;  // m
+  bb0:
+    _2 = 0
+    _3 = 0
+    goto bb1
+  bb1:
+    _4 = _0 * 3
+    _5 = _2 < _4
+    branch _5 -> bb2, bb3
+  bb2:
+    _7 = _1 > 100
+    _9 = _1 % 7
+    branch _7 -> bb4, bb5
+  bb3:
+    return _3
+  bb4:
+    _3 = _3 + _9
+    goto bb6
+  bb5:
+    _3 = _3 + _2
+    goto bb6
+  bb6:
+    _2 = _2 + 1
+    goto bb1
+}
+
+=== after: ssa, licm, out-of-ssa ===
+// monomorphisation: 2 function instances
+// fn#0 (main)
+fn main() -> () {
+    let _0: int;
+    let _1: int;
+    let _2: int;
+    let _3: str;
+    let _4: ();
+  bb0:
+    _0 = len("abcd")
+    _1 = len("ab")
+    _2 = call fn#1(_0, _1) -> bb1
+  bb1:
+    _3 = to_str(_2)
+    _4 = println(_3)
+    return ()
+}
+// fn#1
+fn f(_0: int, _1: int) -> int {
+    let _2: int;
+    let _3: bool;
+    let _4: bool;  // big
+    let _5: int;  // m
+    let _6: int;  // i
+    let _7: int;  // s
+  bb0:
+    _6 = 0
+    _7 = 0
+    _2 = _0 * 3
+    _4 = _1 > 100
+    _5 = _1 % 7
+    goto bb1
+  bb1:
+    _3 = _6 < _2
+    branch _3 -> bb2, bb3
+  bb2:
+    branch _4 -> bb4, bb5
+  bb3:
+    return _7
+  bb4:
+    _7 = _7 + _5
+    goto bb6
+  bb5:
+    _7 = _7 + _6
+    goto bb6
+  bb6:
+    _6 = _6 + 1
+    goto bb1
+}

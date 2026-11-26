@@ -1,0 +1,74 @@
+title = "Filtered ANN"
+module = "Search and vectors"
+module_order = 9
+chapter = "Running a vector database"
+chapter_order = 3
+order = 474
+kind = "recipe"
+lede = "filtered ANN (pre / post / in-algorithm filtering with a selectivity planner) and hybrid BM25 + vector search with RRF."
+level = "advanced"
+code = ["examples/search_vectors/filtered_ann_hybrid_search.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>"nearest products under $50 in category X"</li><li>multi-tenant search</li><li><strong>Rag</strong> with metadata</li><li>any query that mixes keywords and embeddings</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Part** 1, **filtered ANN**. Real queries carry a predicate: `cat = 7 AND price BETWEEN 20 AND 80`. Three ways to combine it with an index: **pre**-filter   resolve the predicate to an id list with attribute indexes (posting lists, sorted array for ranges), then brute-force the survivors.
+
+Exact, cost = #matches. Wins when the filter is very selective (few matches). **Post**-filter  run the ANN search for k/selectivity results and drop non-matches.
+
+Cheap when most rows match; collapses when the filter is selective (you must over-fetch &#126;k/s candidates, and may still return fewer than k). **In-filter**    search the graph but keep only **matching** nodes in the result list, while still **expanding** through non-matching nodes (they are the bridges; refusing to cross them disconnects the graph).
+
+Works in the middle;
+
+At very low selectivity it wanders the whole graph and a correlated filter (matches all in one cluster) strands the search far away unless it **starts** near the matches: we keep a per-label medoid as extra entry point, the "start nodes" idea of Filtered-DiskANN (that paper also adds label-aware edges at build time so the graph restricted to a label stays connected; Qdrant adds payload-aware extra links, Weaviate/Lucene/Elasticsearch fall back to exact search under a selectivity cutoff).
+
+**Planner**: gets the selectivity from the attribute indexes (exact counts; `AttrIndex::estimate` shows the cheap independence estimate for **and** and why it is risky near the crossover), looks up a cost table **calibrated** on training queries (average distance computations and feasibility per log2-selectivity bucket for each plan), and picks the cheapest plan that is feasible (recall >= 0.8 on at least 90% of calibration queries); pre-filter is always feasible.
+
+If a graph plan returns fewer than min(k, matches) rows the engine falls back to pre-filter and pays for both (cost is counted).
+
+**Part** 2, **hybrid search**.
+
+A small BM25 inverted index (term-at-a-time, tf saturation k1=1.2, length norm b=0.75) and an exact dense retriever run on the same synthetic corpus; each query has a lexical part that misses 40% of the time (the entity word is dropped) and a vector part that is always moderately noisy (relevant docs land at mid ranks), so each retriever alone fails on different queries and RRF profits from **agreement**: a relevant doc is in both lists, a distractor usually in one.
+
+Fusion by **reciprocal rank fusion** score(d) = sum over lists 1/(c + rank_list(d)), c=60 (ranks only; no score calibration needed) and by **weighted** min-max normalised scores (needs calibration; a document missing from a list counts as 0). nDCG@10 and recall@50 are computed against the synthetic relevance set (all docs mentioning the query entity).
+
+**What is not guaranteed**: against a **hindsight** oracle (any plan that happened to work for that one query, reliable or not) the worst ratio is far above 3x (the run prints it).
+
+The planner deliberately skips a graph plan that is cheap on average but fails recall on more than 10% of the calibration queries in its bucket, because nobody knows in advance which queries will be the failures.
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+every plan returns only rows satisfying the filter (300 queries x 3 plans); in-filter at ef = 800 matches filtered brute force with recall >= 0.97;
+
+On 300 held-out random queries the planner's effective cost is within 3x of the cheapest feasible plan **among those it was allowed to pick** (pre-filter, plus graph plans that calibration found reliable in that bucket); BM25 equals a naive per-document oracle;
+
+RRF properties (missing docs, ties by id, symmetry, idempotence, single list keeps order); fusion beats both single retrievers on nDCG@10.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Qdrant filterable HNSW and payload indexes</li><li>Weaviate <strong>acorn</strong>/filtered search</li><li>Elasticsearch/Lucene kNN with filter and the "approximate then exact fallback" cutoff</li><li>pgvector (post-filter surprise: HNSW + <strong>where</strong> returns fewer than k rows)</li><li>Vespa and OpenSearch hybrid queries (RRF)</li><li>Pinecone/Milvus metadata filtering</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Filtered-DiskANN: Graph Algorithms for Approximate Nearest Neighbor Search with Filters, Gollapudi et al., WWW 2023 (cited by title</li><li>the ACM URL returned 403)</li><li>Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods, Cormack, Clarke, Buettcher, SIGIR 2009 <a href="https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf" target="_blank" rel="noreferrer">https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf</a></li><li><a href="https://arxiv.org/abs/1603.09320" target="_blank" rel="noreferrer">https://arxiv.org/abs/1603.09320</a> (HNSW)</li><li>Robertson and Zaragoza, "The Probabilistic Relevance Framework: BM25 and Beyond" (cited by title</li><li>URL not checked)</li></ul>
+"""
+
+[[sources]]
+title = "plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf"
+url = "https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf"
+
+[[sources]]
+title = "arxiv.org/abs/1603.09320"
+url = "https://arxiv.org/abs/1603.09320"

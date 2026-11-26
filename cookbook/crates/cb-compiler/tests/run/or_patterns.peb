@@ -1,0 +1,12 @@
+enum Color { Red, Green, Blue, Black }
+fn warm(c: Color) -> bool {
+    match c { Color::Red | Color::Green => true, Color::Blue | Color::Black => false }
+}
+fn small(n: int) -> str {
+    match n { 1 | 2 | 3 => "small", 4 | 5 => "medium", _ => "large" }
+}
+fn main() {
+    println(to_str(warm(Color::Green)));
+    println(to_str(warm(Color::Black)));
+    println(small(2) + " " + small(5) + " " + small(99));
+}

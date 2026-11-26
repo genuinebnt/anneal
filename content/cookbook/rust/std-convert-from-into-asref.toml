@@ -1,0 +1,76 @@
+title = "Conversion traits"
+module = "Standard library and core"
+module_order = 2
+chapter = "Option, Result, conversions, ownership types"
+chapter_order = 1
+order = 69
+kind = "recipe"
+lede = "From/Into/TryFrom/AsRef/Borrow/FromStr/Display/Default/FromIterator/IntoIterator/Extend/Deref."
+level = "intermediate"
+code = ["examples/std_tour/std_convert_from_into_asref.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>designing ergonomic APIs</li><li>newtypes</li><li>validated types</li><li>parsing</li><li>generic function bounds</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li><code>fn open(p: impl AsRef&lt;Path&gt;)</code></li><li><code>fn new(name: impl Into&lt;String&gt;)</code></li><li>newtype IDs with TryFrom validation</li><li><code>FromStr</code> for config enums</li><li><code>FromIterator</code> for custom collections</li><li><code>Borrow&lt;str&gt;</code> so HashMap&lt;String</li><li>_&gt;::get(&amp;str) works</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>From::from</code></li><li><code>Into::into</code></li><li><code>TryFrom::try_from</code></li><li><code>TryInto::try_into</code></li><li><code>AsRef::as_ref</code></li><li><code>FromStr::from_str</code></li><li><code>str::parse</code></li><li><code>ToString::to_string</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Default::default</code></li><li><code>IntoIterator::into_iter</code></li><li><code>FromIterator::from_iter</code></li><li><code>Extend::extend</code></li><li><code>AsMut::as_mut</code></li><li><code>Borrow::borrow</code></li><li><code>BorrowMut::borrow_mut</code></li></ul>
+
+<ul class="cb-g-names"><li><code>ToOwned::to_owned</code></li><li><code>Deref::deref</code></li><li><code>DerefMut::deref_mut</code></li><li><code>std::fmt::Display</code></li><li><code>i32::try_from</code></li><li><code>u8::try_from</code></li><li><code>char::from_u32</code></li><li><code>char::try_from</code></li></ul>
+
+<ul class="cb-g-names"><li><code>i64::from</code></li><li><code>f64::from</code></li><li><code>usize::try_from</code></li><li><code>std::path::Path::new</code></li><li><code>String::from</code></li><li><code>Vec::from</code></li><li><code>Box::from</code></li><li><code>Rc::from</code></li><li><code>Arc::from</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/convert/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/convert/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+From/Into/TryFrom/TryInto/AsRef/AsMut/Borrow/Deref/Default/FromStr/FromIterator core; ToOwned/ToString alloc; AsRef&lt;Path> and Path std.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+Infallible beyond mention, AsRef for OsStr/CStr (see std_env_args_vars), unsafe conversions (transmute: see unsafe chapter).
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Accept &amp;str or String in a ctor</td><td><code>impl Into&lt;String&gt;</code></td></tr><tr><td>Accept &amp;str/String/PathBuf/&amp;Path</td><td><code>impl AsRef&lt;Path&gt;</code></td></tr><tr><td>Accept any list of strings</td><td><code>impl IntoIterator&lt;Item = impl AsRef&lt;str&gt;&gt;</code></td></tr><tr><td>Infallible widening (u8</td><td><code>u32)      -&gt; From / Into</code></td></tr><tr><td>Fallible narrowing</td><td><code>TryFrom / try_into</code></td></tr><tr><td>Truncating cast on purpose</td><td><code>as (document it)</code></td></tr><tr><td>Validated newtype</td><td><code>private field + TryFrom</code></td></tr><tr><td>Parse text to my type</td><td><code>impl FromStr (then .parse::&lt;T&gt;())</code></td></tr><tr><td>Print my type</td><td><code>impl Display (gives to_string for free)</code></td></tr><tr><td>HashMap&lt;String,_&gt; lookup by &amp;str</td><td><code>Borrow&lt;str&gt; (already implemented by String)</code></td></tr><tr><td>Build my collection from iterator</td><td><code>impl FromIterator (+ Extend)</code></td></tr><tr><td>Make a wrapper behave like inner</td><td><code>Deref (only for smart-pointer-like types!)</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/convert/trait.From.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/convert/trait.From.html</a></li><li><a href="https://rust-lang.github.io/api-guidelines/interoperability.html" target="_blank" rel="noreferrer">https://rust-lang.github.io/api-guidelines/interoperability.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/convert/index.html"
+url = "https://doc.rust-lang.org/std/convert/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/convert/trait.From.html"
+url = "https://doc.rust-lang.org/std/convert/trait.From.html"
+
+[[sources]]
+title = "rust-lang.github.io/api-guidelines/interoperability.html"
+url = "https://rust-lang.github.io/api-guidelines/interoperability.html"

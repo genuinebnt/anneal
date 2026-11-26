@@ -1,0 +1,42 @@
+title = "What a Future really is"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Async Rust"
+chapter_order = 4
+order = 265
+kind = "recipe"
+lede = "Poll it by hand with a 10-line executor."
+level = "advanced"
+code = ["examples/async/futures_by_hand.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>understanding tokio</li><li>writing cancel-safe code</li><li>debugging "why is my task stuck?"</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>debugging stuck async tasks</li><li>writing executors/combinators</li><li>understanding cancellation</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+A `Future` is just a state machine with one method: `poll(self: Pin<&mut Self>, cx) -> Poll<Output>`. Ready(v)  : finished. Pending : not yet; the future **must** arrange to be woken (via `cx.waker()`).
+
+`async fn` and `async {}` compile into such state machines. Nothing runs until something polls them, and `.await` is "poll the inner future; if Pending, return Pending myself". An executor (tokio) calls `poll` whenever a waker says a task may be ready.
+
+Dropping a future cancels it at its last `.await`.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://rust-lang.github.io/async-book/> and Jon Gjengset's "Crust of Rust: async/await" (YouTube).
+"""
+
+[[sources]]
+title = "rust-lang.github.io/async-book"
+url = "https://rust-lang.github.io/async-book/"

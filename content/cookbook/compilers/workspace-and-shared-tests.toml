@@ -1,0 +1,66 @@
+title = "Workspace and shared tests"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Bytecode and virtual machines"
+chapter_order = 3
+order = 585
+kind = "guide"
+lede = "Split the repo into a Cargo workspace before C1. Both interpreters use the same lexer and the same test runner."
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+```text title="rlox/ as a workspace"
+Cargo.toml          [workspace] members = ["crates/*"]
+crates/
+  syntax/           span.rs, token.rs, lexer.rs, LineIndex   (moved from Part I)
+  jlox/             the tree-walker, binary "jlox"
+  clox/
+    src/
+      main.rs
+      chunk.rs      Op, Chunk { code, lines, constants }
+      debug.rs      disassembler (full and compact)
+      compiler.rs   Pratt compiler, FnState stack
+      value.rs      Value (Copy)
+      heap.rs       ObjRef, Obj, Heap, GC
+      vm.rs         stack, CallFrame, dispatch loop
+    tests/lang.rs
+  loxtest/          the golden runner as a library
+tests/lox/          one set of .lox files for both binaries
+bench/
+```
+
+<p>Move the runner from Part I into a <code>loxtest</code> library crate. Each interpreter lists it as a dev-dependency and calls it with its own binary. <code>env!("CARGO_BIN_EXE_…")</code> only works for binaries in the same package, so each crate needs a small <code>tests/lang.rs</code> of its own.</p>
+
+<p>The official tests have two dialects. <code>[java line N]</code> errors apply only to jlox and <code>[c line N]</code> only to clox. clox also prints a stack trace after a runtime error, so only check the line number of the first frame.</p>
+
+```rust title="crates/loxtest/src/lib.rs, the changes from Part I"
+#[derive(Clone, Copy)]
+pub enum Dialect { Java, C }
+
+// Expect::parse(src, dialect), in the "// [" branch:
+let tag = match dialect { Dialect::Java => "java ", Dialect::C => "c " };
+let rest = rest.strip_prefix(tag).unwrap_or(rest);
+if rest.starts_with("line ") { /* same as before */ }
+
+// Runtime errors: store (message, line) and compare the first two stderr lines loosely.
+//   jlox: "Operand must be a number.\\n[line 3]"
+//   clox: "Operand must be a number.\\n[line 3] in script"
+fn runtime_matches(want: &(String, usize), err: &[&str]) -> bool {
+    err.first() == Some(&want.0.as_str())
+        && err.get(1).is_some_and(|l| l.starts_with(&format!("[line {}]", want.1)))
+}
+
+pub fn run_suite(bin: &str, dialect: Dialect, skip: &[&str]) { /* collect, check, assert */ }
+```
+
+```rust title="crates/clox/tests/lang.rs"
+#[test]
+fn lox_files() {
+    loxtest::run_suite(env!("CARGO_BIN_EXE_clox"), loxtest::Dialect::C, &["benchmark/"]);
+}
+```
+
+<p>Keep a skip list for each crate. clox should run every official file, including <code>limit/</code>. jlox skips <code>limit/</code>. Use the same checkpoint tags as Part I, named <code>c1</code> through <code>c10</code>.</p>
+"""

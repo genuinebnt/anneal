@@ -1,0 +1,32 @@
+title = "The std traits you will implement or derive constantly"
+module = "Rust language"
+module_order = 1
+chapter = "Types, traits and generics"
+chapter_order = 2
+order = 13
+kind = "recipe"
+lede = "the std traits you will implement or derive constantly."
+level = "simple"
+code = ["examples/language/common_traits.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>domain types (ids, states, errors)</li><li>maps/sets</li><li>sorting</li><li>printing</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>domain types used as map keys</li><li>sorted collections</li><li>log output</li><li>CLI parsing</li><li>defaults for config structs</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Debug/Display (formatting) &#124; Clone/Copy &#124; PartialEq/Eq/Hash (map keys) &#124; PartialOrd/Ord (sorting, BinaryHeap) &#124; Default &#124; FromStr &#124; Deref &#124; Iterator. Derive when the obvious behaviour is right; implement by hand when it is not. Guideline: implement the common traits eagerly <https://rust-lang.github.io/api-guidelines/interoperability.html>
+"""
+
+[[sources]]
+title = "rust-lang.github.io/api-guidelines/interoperability.html"
+url = "https://rust-lang.github.io/api-guidelines/interoperability.html"

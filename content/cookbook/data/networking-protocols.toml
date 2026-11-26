@@ -1,0 +1,284 @@
+title = "Networking protocols"
+module = "Databases"
+module_order = 8
+chapter = "Building complete engines"
+chapter_order = 9
+order = 460
+kind = "guide"
+lede = "15-721 S2024 lecture #12 · ODBC, JDBC and wire protocols · row vs column results · text vs binary · compression · kernel bypass · measured result-set formats"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Applications reach a DBMS through an API</strong> (ODBC for C/C++, JDBC for Java, or a DBMS-specific <em>direct</em> library such as <code>libpq</code>); the API is implemented by a <strong>driver</strong> that speaks the system's <strong>wire protocol</strong> over TCP. ODBC and JDBC hide the wire protocol and handle endianness, features the server lacks (cursors emulated client-side) and type mapping. JDBC drivers range from bridges to pure-Java protocol drivers (the common case).</li> <li><strong>After the query runs, the DBMS must serialize the result and send it.</strong> That serialization is often the <strong>bottleneck</strong> (<em>Don't Hold My Data Hostage</em>, Raasveldt &amp; Mühleisen, VLDB 2017): result sets of millions of rows spend more time in encoding, decoding and the socket than in the query itself.</li> <li><strong>Reuse an existing protocol</strong> (PostgreSQL, MySQL, Redis) to get drivers and tools for free; but speaking the wire format is <em>not</em> compatibility: the catalog (<code>pg_catalog</code> queries the tools issue), SQL dialect, type OIDs and error codes must match too.</li> <li><strong>Design space of a result protocol</strong>: <strong>row vs column layout</strong> (ODBC/JDBC are row-oriented; analytics clients (pandas, Arrow, Spark) want columns, so column batches ("PAX": rows grouped, columns contiguous) avoid per-row conversion; ADBC and Arrow Flight do this); <strong>binary vs text encoding</strong> (text is endian-neutral and human-readable but larger and needs parsing; binary is compact and close to memory format but needs endianness handling); <strong>compression</strong> (general-purpose lz4/gzip/zstd is format-agnostic but costs CPU on both sides and can become the bottleneck on fast networks; <strong>columnar-specific</strong> encodings (delta, dictionary, RLE, frame-of-reference) trade ratio for decode speed); <strong>string handling</strong> (null-terminated: must scan; length-prefixed: skippable; fixed width: wasteful but simplest).</li> <li><strong>Kernel bypass</strong>: the OS TCP/IP stack costs interrupts, context switches and copies. <strong>DPDK</strong> gives the DBMS the NIC directly (ScyllaDB), <strong>RDMA</strong> lets a client read remote memory without involving the remote CPU (Oracle RAC, Microsoft FaRM), <strong>io_uring</strong> provides batched asynchronous I/O on Linux. <strong>User bypass</strong> moves DBMS logic into the kernel, via modules or safely via <strong>eBPF</strong> (Tigger, a connection-pooling proxy that forwards bytes inside the kernel).</li> <li><strong>No protocol choice stands out everywhere</strong>; the right answer depends on result size, client type and network speed. The measurements below show the main effects on one dataset.</li> </ul>
+"""
+
+[[sections]]
+heading = "Result-set formats, measured"
+body = """
+<p>The experiment serializes the same <strong>500 000-row result</strong> (<code>id i64</code>, <code>qty i32?</code>, <code>price f64?</code>, <code>name varchar</code> with 5 000 distinct values, <code>status varchar</code> with 4 values; 10% NULLs in two columns) four ways and decodes it back into typed vectors; all four decode to a value equal to the input. The two <strong>row</strong> formats follow the PostgreSQL <code>DataRow</code> message (<code>'D'</code>, length, field count, then per field a 4-byte length or −1 for NULL): <strong>text</strong> fields are ASCII decimals, <strong>binary</strong> fields are big-endian values. The two <strong>columnar</strong> formats put each column in its own buffer: <strong>plain</strong> Arrow-like buffers (validity bitmap, fixed-width values, <code>offsets + bytes</code> for strings) and <strong>encoded</strong> with the lightweight encodings of <a href="/cookbook/p/columnar-formats-and-nested-data">A12</a> (frame-of-reference/delta/RLE for integers, 2-decimal doubles as integer cents, dictionary for strings).</p>
+
+:::deeper Reference: PG text rows, PG binary rows, plain columnar, and encoded columnar result sets
+```rust title="src/net/wire.rs"
+//! Result-set serialization formats: PostgreSQL-style row messages (text and binary) versus columnar batches
+//! (plain, Arrow-like, and with lightweight encodings).
+use crate::fmtlib::*;
+use std::io::Write;
+
+#[derive(Debug, PartialEq, Clone, Default)]
+pub struct Batch {
+    pub id: Vec<i64>,
+    pub qty: Vec<Option<i32>>,
+    pub price: Vec<Option<f64>>,
+    pub name: Vec<String>,
+    pub status: Vec<String>,
+}
+
+impl Batch { pub fn len(&self) -> usize { self.id.len() } }
+
+fn put_len(out: &mut Vec<u8>, at: usize) { let l = (out.len() - at) as u32; out[at..at + 4].copy_from_slice(&l.to_be_bytes()); }
+
+// ---------------- PostgreSQL DataRow, text format ----------------
+
+pub fn pg_text_encode(b: &Batch) -> Vec<u8> {
+    let mut out = Vec::with_capacity(b.len() * 48);
+    let mut tmp = Vec::with_capacity(32);
+    for i in 0..b.len() {
+        out.push(b'D');
+        let at = out.len();
+        out.extend([0u8; 4]);
+        out.extend(5u16.to_be_bytes());
+        let mut field = |out: &mut Vec<u8>, f: &mut dyn FnMut(&mut Vec<u8>)| { tmp.clear(); f(&mut tmp); out.extend((tmp.len() as i32).to_be_bytes()); out.extend(&tmp); };
+        field(&mut out, &mut |t| { write!(t, "{}", b.id[i]).unwrap(); });
+        match b.qty[i] { Some(q) => field(&mut out, &mut |t| { write!(t, "{q}").unwrap(); }), None => out.extend((-1i32).to_be_bytes()) }
+        match b.price[i] { Some(p) => field(&mut out, &mut |t| { write!(t, "{p}").unwrap(); }), None => out.extend((-1i32).to_be_bytes()) }
+        field(&mut out, &mut |t| t.extend(b.name[i].as_bytes()));
+        field(&mut out, &mut |t| t.extend(b.status[i].as_bytes()));
+        put_len(&mut out, at);
+    }
+    out
+}
+
+struct Cur<'a>(&'a [u8], usize);
+impl Cur<'_> {
+    fn be32(&mut self) -> i32 { let v = i32::from_be_bytes(self.0[self.1..self.1 + 4].try_into().unwrap()); self.1 += 4; v }
+    fn field(&mut self) -> Option<&[u8]> { let l = self.be32(); if l < 0 { return None; } let s = &self.0[self.1..self.1 + l as usize]; self.1 += l as usize; Some(s) }
+}
+
+pub fn pg_text_decode(buf: &[u8]) -> Batch {
+    let mut b = Batch::default();
+    let mut c = Cur(buf, 0);
+    while c.1 < buf.len() {
+        c.1 += 1; c.be32(); c.1 += 2;
+        b.id.push(std::str::from_utf8(c.field().unwrap()).unwrap().parse().unwrap());
+        b.qty.push(c.field().map(|s| std::str::from_utf8(s).unwrap().parse().unwrap()));
+        b.price.push(c.field().map(|s| std::str::from_utf8(s).unwrap().parse().unwrap()));
+        b.name.push(String::from_utf8(c.field().unwrap().to_vec()).unwrap());
+        b.status.push(String::from_utf8(c.field().unwrap().to_vec()).unwrap());
+    }
+    b
+}
+
+// ---------------- PostgreSQL DataRow, binary format ----------------
+
+pub fn pg_binary_encode(b: &Batch) -> Vec<u8> {
+    let mut out = Vec::with_capacity(b.len() * 48);
+    for i in 0..b.len() {
+        out.push(b'D');
+        let at = out.len();
+        out.extend([0u8; 4]);
+        out.extend(5u16.to_be_bytes());
+        out.extend(8i32.to_be_bytes()); out.extend(b.id[i].to_be_bytes());
+        match b.qty[i] { Some(q) => { out.extend(4i32.to_be_bytes()); out.extend(q.to_be_bytes()); } None => out.extend((-1i32).to_be_bytes()) }
+        match b.price[i] { Some(p) => { out.extend(8i32.to_be_bytes()); out.extend(p.to_bits().to_be_bytes()); } None => out.extend((-1i32).to_be_bytes()) }
+        for s in [&b.name[i], &b.status[i]] { out.extend((s.len() as i32).to_be_bytes()); out.extend(s.as_bytes()); }
+        put_len(&mut out, at);
+    }
+    out
+}
+
+pub fn pg_binary_decode(buf: &[u8]) -> Batch {
+    let mut b = Batch::default();
+    let mut c = Cur(buf, 0);
+    while c.1 < buf.len() {
+        c.1 += 1; c.be32(); c.1 += 2;
+        b.id.push(i64::from_be_bytes(c.field().unwrap().try_into().unwrap()));
+        b.qty.push(c.field().map(|s| i32::from_be_bytes(s.try_into().unwrap())));
+        b.price.push(c.field().map(|s| f64::from_bits(u64::from_be_bytes(s.try_into().unwrap()))));
+        b.name.push(String::from_utf8(c.field().unwrap().to_vec()).unwrap());
+        b.status.push(String::from_utf8(c.field().unwrap().to_vec()).unwrap());
+    }
+    b
+}
+
+// ---------------- columnar, plain (Arrow-like buffers) ----------------
+
+fn put_bitmap(valid: impl Iterator<Item = bool>, n: usize, out: &mut Vec<u8>) {
+    let start = out.len();
+    out.resize(start + n.div_ceil(8), 0);
+    for (i, v) in valid.enumerate() { if v { out[start + i / 8] |= 1 << (i % 8); } }
+}
+fn get_bitmap(b: &[u8], i: usize) -> bool { b[i / 8] >> (i % 8) & 1 == 1 }
+
+pub fn columnar_plain_encode(b: &Batch) -> Vec<u8> {
+    let n = b.len();
+    let mut out = vec![];
+    out.extend((n as u32).to_le_bytes());
+    for v in &b.id { out.extend(v.to_le_bytes()); }
+    put_bitmap(b.qty.iter().map(|x| x.is_some()), n, &mut out);
+    for v in &b.qty { out.extend(v.unwrap_or(0).to_le_bytes()); }
+    put_bitmap(b.price.iter().map(|x| x.is_some()), n, &mut out);
+    for v in &b.price { out.extend(v.unwrap_or(0.0).to_le_bytes()); }
+    for col in [&b.name, &b.status] {
+        let mut off = 0u32;
+        out.extend(off.to_le_bytes());
+        for s in col { off += s.len() as u32; out.extend(off.to_le_bytes()); }
+        for s in col { out.extend(s.as_bytes()); }
+    }
+    out
+}
+
+pub fn columnar_plain_decode(buf: &[u8]) -> Batch {
+    let n = u32::from_le_bytes(buf[..4].try_into().unwrap()) as usize;
+    let mut p = 4;
+    let id: Vec<i64> = buf[p..p + n * 8].chunks_exact(8).map(|c| i64::from_le_bytes(c.try_into().unwrap())).collect(); p += n * 8;
+    let bm = &buf[p..p + n.div_ceil(8)]; p += n.div_ceil(8);
+    let qty: Vec<Option<i32>> = buf[p..p + n * 4].chunks_exact(4).enumerate().map(|(i, c)| get_bitmap(bm, i).then(|| i32::from_le_bytes(c.try_into().unwrap()))).collect(); p += n * 4;
+    let bm = &buf[p..p + n.div_ceil(8)]; p += n.div_ceil(8);
+    let price: Vec<Option<f64>> = buf[p..p + n * 8].chunks_exact(8).enumerate().map(|(i, c)| get_bitmap(bm, i).then(|| f64::from_le_bytes(c.try_into().unwrap()))).collect(); p += n * 8;
+    let mut cols = vec![];
+    for _ in 0..2 {
+        let offs: Vec<u32> = buf[p..p + (n + 1) * 4].chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect(); p += (n + 1) * 4;
+        let data = &buf[p..p + offs[n] as usize]; p += offs[n] as usize;
+        cols.push((0..n).map(|i| String::from_utf8(data[offs[i] as usize..offs[i + 1] as usize].to_vec()).unwrap()).collect::<Vec<_>>());
+    }
+    let status = cols.pop().unwrap();
+    Batch { id, qty, price, name: cols.pop().unwrap(), status }
+}
+
+// ---------------- columnar with lightweight encodings ----------------
+
+fn put_block(out: &mut Vec<u8>, f: impl FnOnce(&mut Vec<u8>)) { let at = out.len(); out.extend([0u8; 4]); f(out); let l = (out.len() - at - 4) as u32; out[at..at + 4].copy_from_slice(&l.to_le_bytes()); }
+fn get_block<'a>(b: &'a [u8], p: &mut usize) -> &'a [u8] { let l = u32::from_le_bytes(b[*p..*p + 4].try_into().unwrap()) as usize; let s = &b[*p + 4..*p + 4 + l]; *p += 4 + l; s }
+
+pub fn columnar_encoded_encode(b: &Batch) -> Vec<u8> {
+    let n = b.len();
+    let mut out = vec![];
+    out.extend((n as u32).to_le_bytes());
+    put_block(&mut out, |o| { encode_ints(&b.id, o); });
+    put_block(&mut out, |o| {
+        put_bitmap(b.qty.iter().map(|x| x.is_some()), n, o);
+        encode_ints(&b.qty.iter().map(|x| x.unwrap_or(0) as i64).collect::<Vec<_>>(), o);
+    });
+    put_block(&mut out, |o| {
+        put_bitmap(b.price.iter().map(|x| x.is_some()), n, o);
+        let cents: Option<Vec<i64>> = b.price.iter().map(|p| { let c = (p.unwrap_or(0.0) * 100.0).round(); (c / 100.0 == p.unwrap_or(0.0)).then_some(c as i64) }).collect();
+        match cents {
+            Some(c) => { o.push(1); encode_ints(&c, o); }                          // decimals with ≤ 2 digits become small integers
+            None => { o.push(0); for p in &b.price { o.extend(p.unwrap_or(0.0).to_le_bytes()); } }
+        }
+    });
+    for col in [&b.name, &b.status] {
+        put_block(&mut out, |o| encode_dict(&col.iter().map(|s| s.as_str()).collect::<Vec<_>>(), o));
+    }
+    out
+}
+
+pub fn columnar_encoded_decode(buf: &[u8]) -> Batch {
+    let n = u32::from_le_bytes(buf[..4].try_into().unwrap()) as usize;
+    let mut p = 4;
+    let id = decode_ints(get_block(buf, &mut p), n);
+    let blk = get_block(buf, &mut p);
+    let (bm, rest) = blk.split_at(n.div_ceil(8));
+    let qty = decode_ints(rest, n).into_iter().enumerate().map(|(i, v)| get_bitmap(bm, i).then_some(v as i32)).collect();
+    let blk = get_block(buf, &mut p);
+    let (bm, rest) = blk.split_at(n.div_ceil(8));
+    let price: Vec<Option<f64>> = if rest[0] == 1 {
+        decode_ints(&rest[1..], n).into_iter().enumerate().map(|(i, c)| get_bitmap(bm, i).then(|| c as f64 / 100.0)).collect()
+    } else {
+        rest[1..].chunks_exact(8).enumerate().map(|(i, c)| get_bitmap(bm, i).then(|| f64::from_le_bytes(c.try_into().unwrap()))).collect()
+    };
+    let name = decode_dict(get_block(buf, &mut p), n);
+    let status = decode_dict(get_block(buf, &mut p), n);
+    Batch { id, qty, price, name, status }
+}
+```
+:::
+
+```text title="size and CPU per row (Apple M-series, release build)"
+format                    B/row  gzip -1 B  encode ns/r  decode ns/r   MB/s dec      gzip ms
+PG text rows               62.6       16.3           77           62       1007          112
+PG binary rows             67.6       16.9           16           43       1565          122
+columnar plain             50.0       13.2           17           38       1312          109
+columnar encoded            5.7        5.0          205           35        163           41
+```
+
+<p>Reading it:</p>
+
+<ul> <li><strong>Text vs binary rows: bytes about equal, CPU very different.</strong> The binary row message is <em>larger</em> (67.6 vs 62.6 B/row) because short numbers like <code>qty = 7</code> take 4 bytes instead of 1, yet it <strong>encodes 5× faster (16 vs 77 ns/row)</strong> (no float formatting) and <strong>decodes 1.4× faster</strong> (no parsing). Text's advantage is portability, not size or speed.</li> <li><strong>Columnar plain beats row binary</strong> on both size (50 vs 68 B/row: no per-field length words, NULLs as bits) and decode (38 vs 43 ns/row), and the gap widens when the <em>client</em> wants columns anyway (no row→column transposition afterwards, not counted here).</li> <li><strong>Lightweight encodings are the big win: 5.7 B/row, 11× smaller than text and 9× smaller than plain columnar</strong>, and <em>decode is the fastest of all</em> (35 ns/row) because most values are bit-unpacked from tiny integers and a dictionary. The cost is on the <strong>encode side (205 ns/row)</strong>: the encoder <em>tries</em> several schemes per column and keeps the smallest. A server would sample a block, choose once, and reuse the choice (see BtrBlocks, <a href="/cookbook/p/modern-encodings-btrblocks-fastlanes-bitweaving">A13</a>).</li> <li><strong>Generic compression</strong> (gzip -1 on the already-serialized bytes) shrinks the row/plain formats <strong>3.8×</strong> to 13–17 B/row, but costs 110–122 ms per 500 000 rows, <strong>4–6× the entire decode time</strong>, and it can't beat the encodings above (5.7 B/row raw; gzip on top gives 5.0 for 41 ms more). On a fast LAN, compression CPU is the new bottleneck; on a WAN it pays.</li> <li><strong>Where the remaining time goes</strong>: all four decoders allocate a <code>String</code> per string value; a zero-copy client would keep dictionary codes and borrowed slices (what Arrow does).</li> </ul>
+"""
+
+[[sections]]
+heading = "What the PostgreSQL protocol looks like (and what to implement)"
+body = """
+```text
+startup:      client → StartupMessage(version 196608, user, database, …)         server → AuthenticationOk, ParameterStatus*, BackendKeyData, ReadyForQuery('I')
+simple query: Q "select …\\0"                    → RowDescription('T')  DataRow('D')*  CommandComplete('C')  ReadyForQuery('Z')
+extended:     Parse(stmt, sql, param OIDs) · Bind(portal, stmt, params, result formats 0=text|1=binary) · Describe · Execute(portal, max rows) · Sync
+copy:         CopyOut ('H') → CopyData ('d')*  CopyDone ('c')        bulk results without per-row messages
+errors:       ErrorResponse('E') with severity, SQLSTATE code, message; the connection stays usable after ReadyForQuery
+```
+
+<p>Every message is <code>type byte + int32 length (including itself) + payload</code>; integers are big-endian. A server that implements <code>Q</code>, <code>P/B/D/E/S</code> and <code>RowDescription</code> for the handful of types it supports works with <code>psql</code>, <code>libpq</code>, JDBC and <code>tokio-postgres</code>; the type OIDs in <code>RowDescription</code> and the binary/text format codes decide how clients decode. (A complete Rust pgwire server is built in Part V.)</p>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Frame with <code>put_len</code></strong>: write a placeholder length, append the payload, then patch the length. One pass, no second buffer.</li> <li><strong>A tiny cursor type (<code>Cur</code>)</strong> over <code>&amp;[u8]</code> with <code>be32()</code>/<code>field()</code> keeps decoders panic-free of manual index arithmetic; for hostile input return <code>Result</code> instead of slicing, since a lying length field must not crash the server.</li> <li><strong><code>write!</code> into a reused <code>Vec&lt;u8&gt;</code></strong> formats numbers without allocating per field; <code>std::fmt</code> float printing is the slow part of text encoding (77 ns/row), which is why <code>ryu</code>/<code>itoa</code> crates exist.</li> <li><strong>Bulk-convert with <code>chunks_exact</code></strong>: decoding a fixed-width column from bytes is <code>chunks_exact(8).map(from_le_bytes)</code>, which the compiler turns into a copy or a vectorized loop.</li> <li>Prefer <strong><code>bytes::Bytes</code>/<code>BytesMut</code></strong> and <strong>vectored writes</strong> (<code>writev</code>) to avoid concatenating buffers before the socket write; <code>tokio_util::codec</code> gives you framing for free.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Never trust the length field.</strong> Cap message sizes (a 2 GB length in a startup packet is an easy DoS), validate counts, and reject malformed UTF-8 at the boundary.</li> <li><strong>Text encoding of floats must round-trip.</strong> Use the shortest representation that parses back to the same bits (<code>{}</code> in Rust, <code>ryu</code> in C++); <code>{:.2}</code> silently loses data.</li> <li><strong>NULL vs empty string</strong>: text protocols need an explicit NULL marker (PG: length −1). Don't use the empty string.</li> <li><strong>Large results need back-pressure</strong>: stream in batches and respect the client's read speed (or the server buffers everything and runs out of memory); support <code>max rows</code> in <code>Execute</code> and cursors.</li> <li><strong>Time zones, decimals and arrays</strong> are where "compatible with PostgreSQL" claims break: test against real client libraries, not just <code>psql</code>.</li> <li><strong>Compression negotiation</strong> must be explicit (a capability flag), since every driver in every language has to implement it.</li> <li><strong>Connection costs</strong>: TLS handshakes, authentication (SCRAM), and per-connection memory (PostgreSQL forks a process per connection) make <strong>poolers</strong> (PgBouncer, Odyssey, Tigger-style proxies) a necessity at scale.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Don't Hold My Data Hostage: A Case for Client Protocol Redesign"
+url = "https://www.vldb.org/pvldb/vol10/p1022-muehleisen.pdf"
+
+[[sources]]
+title = "ConnectorX: Accelerating Data Loading From Databases to Dataframes"
+url = "https://www.vldb.org/pvldb/vol15/p2994-wang.pdf"
+
+[[sources]]
+title = "Tigger: A Database Proxy That Bounces With User-Bypass"
+url = "https://www.vldb.org/pvldb/vol16/p3335-butrovich.pdf"
+
+[[sources]]
+title = "The End of Slow Networks: It's Time for a Redesign"
+url = "https://www.vldb.org/pvldb/vol9/p528-binnig.pdf"
+
+[[sources]]
+title = "Frontend/Backend Protocol"
+url = "https://www.postgresql.org/docs/current/protocol.html"
+
+[[sources]]
+title = "Arrow Flight SQL"
+url = "https://arrow.apache.org/docs/format/FlightSql.html"
+
+[[sources]]
+title = "ADBC"
+url = "https://arrow.apache.org/adbc/"
+
+[[sources]]
+title = "pgwire"
+url = "https://crates.io/crates/pgwire"
+
+[[sources]]
+title = "tokio-postgres"
+url = "https://crates.io/crates/tokio-postgres"
+
+[[sources]]
+title = "tokio-util codecs"
+url = "https://docs.rs/tokio-util/latest/tokio_util/codec/"
+
+[[sources]]
+title = "bytes"
+url = "https://docs.rs/bytes"

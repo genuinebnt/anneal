@@ -1,0 +1,21 @@
+title = "Doing PL research"
+module = "Appendices"
+module_order = 15
+chapter = "Courses, reading and glossary"
+chapter_order = 1
+order = 700
+kind = "guide"
+lede = "Areas, venues, methodology, evaluation, and where to follow the field"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Area</th><th>Active questions</th><th>Starting papers</th></tr></thead> <tbody> <tr><td>Type systems</td><td>Gradual, refinement and dependent types in practice; ownership beyond Rust; effect systems</td><td>Siek and Taha 2006; Rondon et al. 2008; Brady 2021; Leijen 2017</td></tr> <tr><td>Semantics and verification</td><td>Relaxed memory, unsafe code, verified toolchains, proof automation</td><td>Kang et al. 2017; Jung et al. 2018; Leroy 2009</td></tr> <tr><td>Program analysis</td><td>Scalable precise pointer analysis, incremental analysis, analyses learned or guided by ML</td><td>Smaragdakis and Balatsouras 2015; Reps et al. 1995</td></tr> <tr><td>Compilers and optimization</td><td>E-graphs, superoptimization, ML-guided heuristics, MLIR, fast compilation</td><td>Willsey et al. 2021; Lattner et al. 2021; Sasnauskas et al. 2017 (Souper)</td></tr> <tr><td>Domain-specific compilers</td><td>Separating algorithm from schedule; tensor compilers; hardware generation</td><td>Ragan-Kelley et al. 2013 (Halide); Chen et al. 2018 (TVM); Bondhugula et al. 2008 (PLUTO)</td></tr> <tr><td>Program synthesis</td><td>Sketching, programming by example, type-directed synthesis, neural and LLM synthesis</td><td>Solar-Lezama 2008 (thesis); Gulwani 2011 (FlashFill); Polikarpova et al. 2016 (Synquid)</td></tr> <tr><td>Probabilistic and differentiable programming</td><td>Inference compilation; AD as a compiler pass</td><td>Carpenter et al. 2017 (Stan); Cusumano-Towner et al. 2019 (Gen); Moses and Churavy 2020 (Enzyme)</td></tr> <tr><td>Incremental and reactive computation</td><td>Self-adjusting computation, differential dataflow</td><td>Acar 2005 (thesis); McSherry et al. 2013 (differential dataflow, in Rust)</td></tr> <tr><td>Runtimes and memory</td><td>Low-pause GC, memory safety for C (CHERI), WebAssembly</td><td>Blackburn and McKinley 2008; Haas et al. 2017 (Wasm, PLDI)</td></tr> </tbody> </table></div>
+
+<div class="cb-g-tip"><h3>Venues</h3> <ul> <li><b>Theory-leaning:</b> POPL, ICFP, ESOP, LICS.</li> <li><b>Implementation-leaning:</b> PLDI, OOPSLA (at SPLASH), ECOOP, CC, CGO.</li> <li><b>Systems:</b> ASPLOS.</li> <li><b>Verification:</b> CAV.</li> <li><b>Memory management:</b> ISMM. <b>Parallel programming:</b> PPoPP.</li> <li><b>Software language engineering and DSLs:</b> SLE, GPCE. <b>Dynamic languages and VMs:</b> DLS, VMIL.</li> </ul> <p>Most POPL, PLDI, ICFP and OOPSLA talks are on the ACM SIGPLAN YouTube channel. Papers are open access through PACMPL.</p></div>
+
+<div class="cb-g-tip"><h3>Method</h3> <p>Read papers in three passes (Keshav): structure, then content, then a full reconstruction. When you write, state the contribution in the first page and give a running example early (Peyton Jones, “How to write a great research paper”). Evaluate honestly:</p> <ul> <li>Follow the SIGPLAN Empirical Evaluation Checklist.</li> <li>Report variance and use enough runs (Georges et al.; Kalibera and Jones).</li> <li>Beware measurement bias from environment size and link order (Mytkowicz et al.).</li> <li>Submit artifacts for artifact evaluation.</li> </ul> <p>Mechanize proofs when you can, since reviewers increasingly expect it for semantics papers.</p></div>
+
+<div class="cb-g-tip"><h3>Following the field</h3> <p><a href="https://blog.sigplan.org" target="_blank" rel="noreferrer">SIGPLAN's PL Perspectives blog</a>, arXiv cs.PL, the Oregon Programming Languages Summer School (OPLSS) lecture videos, PLMW mentoring workshops at POPL and PLDI, and r/ProgrammingLanguages for implementation discussions. The Lambda the Ultimate archive covers the history of many ideas.</p></div>
+"""

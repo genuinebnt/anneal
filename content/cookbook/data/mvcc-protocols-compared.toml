@@ -1,0 +1,233 @@
+title = "MVCC protocols compared"
+module = "Databases"
+module_order = 8
+chapter = "Transactions and concurrency control"
+chapter_order = 6
+order = 406
+kind = "guide"
+lede = "15-721 lectures #3–4 · four design axes · MVTO, MVOCC, MV2PL, snapshot isolation and SSI · HyPer and Hekaton · who aborts whom"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>MVCC is four decisions, not one</strong> (Wu et al., VLDB 2017): ① the <strong>concurrency-control protocol</strong>, ② <strong>version storage</strong> (append-only, time-travel, delta; chain order O2N/N2O), ③ <strong>garbage collection</strong> (<a href="/cookbook/p/mvcc-garbage-collection">A4</a>), ④ <strong>index management</strong> (logical vs physical pointers, the duplicate-key problem). The first-order lesson of that study: on many cores the <strong>version storage and GC choices matter as much as the protocol</strong>. L20 (<a href="/cookbook/p/multi-version-concurrency-control">L20</a>) introduced all four; this section compares the <em>protocols</em>.</li> <li><strong>MVTO (multi-version timestamp ordering)</strong>: a transaction's <strong>begin timestamp is its serial position</strong>. Every version carries <code>wts</code> (who wrote it) and <code>rts</code> (largest timestamp that read it). Read: take the version with the largest <code>wts ≤ ts</code> and <strong>raise its <code>rts</code></strong>. Write: legal only if the version being superseded has <code>rts ≤ ts</code> (no younger transaction has read what you'd overwrite) and no newer version exists. Serializable by construction; <strong>reads write metadata</strong>.</li> <li><strong>MVOCC (multi-version optimistic)</strong>: read from a snapshot, buffer writes, <strong>validate at commit</strong> that nothing read has been replaced (and, for phantom protection, that scans would return the same rows), then install under a commit timestamp. Hekaton validates in a pre-commit phase; Silo-style systems validate per tuple.</li> <li><strong>MV2PL</strong>: readers take shared locks on versions and writers exclusive locks, so reads <em>write</em> the lock word too; deadlock handling as in <a href="/cookbook/p/two-phase-locking">L18</a>. In exchange conflicts wait instead of abort.</li> <li><strong>Snapshot isolation (SI)</strong>: reads from a snapshot, <strong>first-committer-wins</strong> on write–write conflicts, <strong>not serializable</strong> (write skew). <strong>SSI</strong> (Cahill, PostgreSQL) makes it serializable by tracking read–write antidependencies between concurrent transactions and aborting a <em>pivot</em> in a dangerous structure (two consecutive rw edges), so it aborts far less than read-set validation.</li> <li><strong>HyPer's MVCC</strong> keeps the newest version in place with <strong>undo buffers</strong> behind it (delta, N2O), validates serializability with <strong>precision locking</strong> (re-check each committed transaction's write set against the <em>predicates</em> of concurrent readers), and gives read-only transactions snapshot speed. <strong>Hekaton</strong>: append-only versions with begin/end timestamps, latch-free hash and Bw-tree indexes, optimistic validation. <strong>Cicada</strong>: per-thread loosely synchronized clocks (no shared counter), best-effort inlining of the newest version, contention-aware backoff.</li> <li><strong>Costs to watch</strong>: timestamp allocation (a shared atomic counter is a bottleneck at scale), <strong>read-induced writes</strong> (MVTO <code>rts</code>, MV2PL lock words), version-chain traversal for old snapshots, validation cost proportional to read set, and what happens to <strong>long read-only transactions</strong> (starve under OCC, pin garbage everywhere).</li> </ul>
+"""
+
+[[sections]]
+heading = "Protocols side by side"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th></th> <th><strong>SI</strong> (first-committer-wins)</th> <th><strong>MVOCC</strong> (read validation)</th> <th><strong>MVTO</strong></th> <th><strong>MV2PL</strong></th> <th><strong>SSI</strong></th> </tr> </thead> <tbody> <tr> <td>serializable?</td> <td>no (write skew)</td> <td>yes</td> <td>yes</td> <td>yes (strict)</td> <td>yes</td> </tr> <tr> <td>serial order</td> <td>commit order of writers</td> <td>commit timestamp</td> <td><strong>begin timestamp</strong></td> <td>lock order / commit</td> <td>commit order</td> </tr> <tr> <td>read marks shared state?</td> <td>no</td> <td>no (read set is private)</td> <td><strong>yes (<code>rts</code> on the version)</strong></td> <td><strong>yes (lock word)</strong></td> <td>rw-dependency flags / SIREAD locks</td> </tr> <tr> <td>conflict handling</td> <td>abort the later writer</td> <td>abort at validation</td> <td>abort at the offending read/write</td> <td>wait (deadlocks)</td> <td>abort a pivot</td> </tr> <tr> <td>read-only txns abort?</td> <td>never</td> <td><strong>can</strong> (validation)</td> <td>rarely</td> <td>no</td> <td>no (with read-only optimization)</td> </tr> <tr> <td>garbage-collection horizon</td> <td>oldest snapshot</td> <td>oldest snapshot</td> <td>oldest <em>begin timestamp</em></td> <td>oldest snapshot</td> <td>oldest snapshot + SIREAD cleanup</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "MVTO in 60 lines"
+body = """
+:::deeper Reference: MVTO store (begin-timestamp order, rts on reads, no-wait on uncommitted data)
+```rust title="src/concurrency/mvto.rs"
+//! Multi-version timestamp ordering (MVTO): the transaction's begin order *is* the serial order.
+use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicU64, Ordering::*};
+use std::sync::Mutex;
+
+#[derive(Clone, Copy, Debug)]
+struct Ver { wts: u64, rts: u64, owner: u64, val: i64 }      // owner != 0: written by that (uncommitted) transaction
+
+pub struct Db { chains: Vec<Mutex<Vec<Ver>>>, next_ts: AtomicU64 }
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Abort { ReadUncommitted, WriteTooLate, ReadByYounger, Conflict }
+
+pub struct Txn<'d> { db: &'d Db, pub ts: u64, writes: BTreeSet<usize>, done: bool }
+
+impl Db {
+    pub fn new(keys: usize, init: i64) -> Self {
+        Self { chains: (0..keys).map(|_| Mutex::new(vec![Ver { wts: 0, rts: 0, owner: 0, val: init }])).collect(), next_ts: AtomicU64::new(1) }
+    }
+    pub fn begin(&self) -> Txn<'_> { Txn { db: self, ts: self.next_ts.fetch_add(1, Relaxed), writes: BTreeSet::new(), done: false } }
+    pub fn versions(&self) -> usize { self.chains.iter().map(|c| c.lock().unwrap().len()).sum() }
+}
+
+impl Txn<'_> {
+    /// Read the version with the largest write timestamp ≤ ts and **record the read on the version** (`rts`).
+    pub fn read(&mut self, k: usize) -> Result<i64, Abort> {
+        let mut c = self.db.chains[k].lock().unwrap();
+        let v = c.iter_mut().rev().find(|v| v.wts <= self.ts).expect("initial version");
+        if v.owner == self.ts { return Ok(v.val); }
+        if v.owner != 0 { return Err(Abort::ReadUncommitted); }          // NO_WAIT: don't build commit dependencies
+        v.rts = v.rts.max(self.ts);
+        Ok(v.val)
+    }
+
+    /// A write is legal only if no younger transaction has read or written the version it would replace.
+    pub fn write(&mut self, k: usize, val: i64) -> Result<(), Abort> {
+        let mut c = self.db.chains[k].lock().unwrap();
+        let head = *c.last().unwrap();
+        if head.owner == self.ts { c.last_mut().unwrap().val = val; return Ok(()); }
+        if head.owner != 0 { return Err(Abort::Conflict); }
+        if head.wts > self.ts { return Err(Abort::WriteTooLate); }       // a younger version already exists
+        if head.rts > self.ts { return Err(Abort::ReadByYounger); }      // a younger transaction read what we'd overwrite
+        c.push(Ver { wts: self.ts, rts: self.ts, owner: self.ts, val });
+        self.writes.insert(k);
+        Ok(())
+    }
+
+    pub fn commit(mut self) {
+        for &k in &self.writes {
+            let mut c = self.db.chains[k].lock().unwrap();
+            if let Some(v) = c.iter_mut().rev().find(|v| v.owner == self.ts) { v.owner = 0; }
+        }
+        self.done = true;
+    }
+
+    fn rollback(&mut self) {
+        for &k in &self.writes {
+            let mut c = self.db.chains[k].lock().unwrap();
+            if c.last().is_some_and(|v| v.owner == self.ts) { c.pop(); }
+        }
+        self.done = true;
+    }
+}
+
+impl Drop for Txn<'_> { fn drop(&mut self) { if !self.done { self.rollback(); } } }
+```
+:::
+
+<p>Design points: a transaction that reads another transaction's <strong>uncommitted</strong> version aborts (NO_WAIT) instead of recording a commit dependency, which keeps recoverability trivial; <code>Drop</code> rolls back; there is <strong>no global commit latch</strong>, because order comes from timestamps. Real implementations add commit dependencies or buffering to reduce read-uncommitted aborts, and a garbage collector.</p>
+
+<p>The unit tests pin the defining rules: a write that overwrites a version a <em>younger</em> transaction has read is refused (<code>ReadByYounger</code>); an older reader still sees the older version after a younger writer; and <strong>write skew is impossible</strong> (of two transactions that each read both rows and write a different one, at least one aborts).</p>
+"""
+
+[[sections]]
+heading = "Who aborts whom? A deterministic experiment"
+body = """
+<p>Throughput comparisons between two homemade stores mostly measure each store's lock hold times. Abort behaviour is a property of the <em>protocol</em>, so it is measured on a <strong>deterministic scheduler</strong>: <code>conc</code> logical transactions are in flight, each step advances a random one by one operation (read, read, write, write for transfers; four reads for read-only), and the <strong>same operation stream</strong> is fed to all three engines through one trait. Aborted work is retried. Every run also asserts that <strong>total money is conserved</strong>.</p>
+
+:::deeper Reference: engine trait and scheduler that runs identical interleavings through each protocol
+```rust title="tests/mvcc_protocols.rs"
+/// A tiny scheduler: `conc` logical transactions are in flight; each step advances a random one by one operation.
+/// The same op streams drive all three engines, so differences are purely the protocol's decisions.
+struct Sim { n: usize, conc: usize, committed_target: usize, read_pct: usize, seed: u64 }
+
+#[derive(Clone)]
+enum Op { R(usize), W(usize) }
+
+trait Engine {
+    type T<'a>: 'a where Self: 'a;
+    fn begin(&self) -> Self::T<'_>;
+    fn read(&self, t: &mut Self::T<'_>, k: usize) -> Result<i64, ()>;
+    fn write(&self, t: &mut Self::T<'_>, k: usize, v: i64) -> Result<(), ()>;
+    fn commit<'a>(&'a self, t: Self::T<'a>) -> Result<(), ()>;
+    fn total(&self, n: usize) -> i64;
+}
+
+struct Si(mvcc::Db, mvcc::Isolation);
+impl Engine for Si {
+    type T<'a> = mvcc::Txn<'a>;
+    fn begin(&self) -> Self::T<'_> { self.0.begin(self.1) }
+    fn read(&self, t: &mut Self::T<'_>, k: usize) -> Result<i64, ()> { Ok(t.read(k).unwrap()) }
+    fn write(&self, t: &mut Self::T<'_>, k: usize, v: i64) -> Result<(), ()> { t.write(k, Some(v)).map_err(|_| ()) }
+    fn commit<'a>(&'a self, t: Self::T<'a>) -> Result<(), ()> { t.commit().map_err(|_| ()) }
+    fn total(&self, n: usize) -> i64 { let mut t = self.0.begin(mvcc::Isolation::Snapshot); (0..n).map(|k| t.read(k).unwrap()).sum() }
+}
+
+struct To(mvto::Db);
+impl Engine for To {
+    type T<'a> = mvto::Txn<'a>;
+    fn begin(&self) -> Self::T<'_> { self.0.begin() }
+    fn read(&self, t: &mut Self::T<'_>, k: usize) -> Result<i64, ()> { t.read(k).map_err(|_| ()) }
+    fn write(&self, t: &mut Self::T<'_>, k: usize, v: i64) -> Result<(), ()> { t.write(k, v).map_err(|_| ()) }
+    fn commit<'a>(&'a self, t: Self::T<'a>) -> Result<(), ()> { t.commit(); Ok(()) }
+    fn total(&self, n: usize) -> i64 { let mut t = self.0.begin(); (0..n).map(|k| t.read(k).unwrap()).sum() }
+}
+
+/// Returns (aborts per commit, read-only aborts per read-only commit, writer aborts per writer commit, final total).
+fn simulate<E: Engine>(e: &E, sim: &Sim) -> (f64, f64, f64, i64) {
+    let mut rng = xs(sim.seed);
+    struct Slot<'a, E: Engine + 'a> { t: E::T<'a>, ops: Vec<Op>, pc: usize, ro: bool, tmp: [i64; 2] }
+    let new_ops = |rng: &mut dyn FnMut(usize) -> usize| -> (Vec<Op>, bool) {
+        if rng(100) < sim.read_pct { ((0..4).map(|_| Op::R(rng(sim.n))).collect(), true) }
+        else { let (a, mut b) = (rng(sim.n), rng(sim.n)); if a == b { b = (b + 1) % sim.n; } (vec![Op::R(a), Op::R(b), Op::W(a), Op::W(b)], false) }
+    };
+    let mut slots: Vec<Option<Slot<E>>> = (0..sim.conc).map(|_| None).collect();
+    let (mut commits, mut ro_commits, mut aborts, mut ro_aborts) = (0usize, 0usize, 0usize, 0usize);
+    let mut pending: Vec<(Vec<Op>, bool)> = vec![];
+    while commits < sim.committed_target {
+        let i = rng(sim.conc);
+        if slots[i].is_none() {
+            let (ops, ro) = pending.pop().unwrap_or_else(|| new_ops(&mut rng));
+            slots[i] = Some(Slot { t: e.begin(), ops, pc: 0, ro, tmp: [0; 2] });
+            continue;
+        }
+        let mut s = slots[i].take().unwrap();
+        let a = match s.ops.first() { Some(Op::R(a)) if !s.ro => *a, _ => 0 };
+        let step = if s.pc < s.ops.len() {
+            let op = s.ops[s.pc].clone();
+            s.pc += 1;
+            match op {
+                Op::R(k) => e.read(&mut s.t, k).map(|v| { if !s.ro { if k == a && s.pc == 1 { s.tmp[0] = v } else { s.tmp[1] = v } } }),
+                Op::W(k) => { let v = if k == a { s.tmp[0] - 1 } else { s.tmp[1] + 1 }; e.write(&mut s.t, k, v) }
+            }
+        } else { Ok(()) };
+        match step {
+            Err(()) => { aborts += 1; if s.ro { ro_aborts += 1; } pending.push((s.ops.clone(), s.ro)); }   // retry the same work
+            Ok(()) if s.pc >= s.ops.len() => {
+                let ro = s.ro;
+                match e.commit(s.t) { Ok(()) => { commits += 1; if ro { ro_commits += 1; } } Err(()) => { aborts += 1; if ro { ro_aborts += 1; } pending.push((s.ops, ro)); } }
+            }
+            Ok(()) => slots[i] = Some(s),
+        }
+    }
+    drop(slots);
+    let w_commits = commits - ro_commits;
+    (aborts as f64 / commits as f64, ro_aborts as f64 / ro_commits.max(1) as f64, (aborts - ro_aborts) as f64 / w_commits.max(1) as f64, e.total(sim.n))
+}
+```
+:::
+
+```text title="aborts per commit (20 000 commits per run)"
+workload                       protocol               aborts/commit  reader aborts/c  writer aborts/c
+write-only, 1000 keys, 8 live  Snapshot isolation             0.025            0.000            0.025
+write-only, 1000 keys, 8 live  MVOCC (serializable)           0.025            0.000            0.025
+write-only, 1000 keys, 8 live  MVTO (serializable)            0.023            0.000            0.023
+write-only, 16 keys, 8 live    Snapshot isolation             1.290            0.000            1.290
+write-only, 16 keys, 8 live    MVOCC (serializable)           1.290            0.000            1.290
+write-only, 16 keys, 8 live    MVTO (serializable)            1.759            0.000            1.759
+90% read-only, 16 keys, 8 live Snapshot isolation             0.015            0.000            0.161
+90% read-only, 16 keys, 8 live MVOCC (serializable)           0.205            0.214            0.122
+90% read-only, 16 keys, 8 live MVTO (serializable)            0.184            0.040            1.468
+90% read-only, 16 keys, 32 live Snapshot isolation             0.098            0.000            0.991
+90% read-only, 16 keys, 32 live MVOCC (serializable)           0.807            0.841            0.514
+90% read-only, 16 keys, 32 live MVTO (serializable)            1.161            0.190            9.621
+```
+
+<p>What the table shows:</p>
+
+<ul> <li><strong>Low contention: no difference</strong> (2.3–2.5% aborts everywhere). All three protocols are essentially free when transactions don't collide; choose by implementation cost.</li> <li><strong>Write-only hot rows</strong>: SI and MVOCC are <em>identical</em> (a transfer reads exactly what it writes, so read validation adds nothing beyond first-committer-wins). <strong>MVTO aborts 36% more</strong> (1.76 vs 1.29 per commit), because it also rejects writes that merely <em>arrive too late</em> in timestamp order, even when no real conflict is lost.</li> <li><strong>Read-mostly, hot rows: the read-marking penalty.</strong> Under SI readers never abort and writers abort 0.16 per commit. Under MVTO <strong>writers abort 1.47 per commit (9×)</strong>, because every read pushes <code>rts</code> forward and kills later writes of older transactions; at 32 live transactions it is <strong>9.6 aborts per writer commit</strong> versus 1.0 for SI. This is the reason systems that want serializability with many readers choose OCC/SSI over timestamp ordering.</li> <li><strong>MVOCC moves the cost onto readers</strong>: readers now abort (0.21 per commit; 0.84 at higher concurrency) when a writer changed something they read, while writers abort <em>less</em> than under SI at the same load (0.12 vs 0.16 at 8 live) because validation of their reads is cheap relative to conflicts.</li> <li><strong>SI is the cheapest, and the only one that is wrong</strong> for invariants spanning rows. Its abort count is a <em>lower bound</em> for the serializable options on this workload; the gap is the price of correctness.</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A trait with a generic associated type</strong> (<code>type T&lt;'a&gt; where Self: 'a</code>) lets one scheduler drive stores whose transaction handles borrow the database; without GATs you'd box the handles or duplicate the loop.</li> <li><strong><code>Drop</code> for rollback</strong> makes the abort-on-early-return paths in the scheduler free: a retry is just dropping the handle.</li> <li><strong>Same stream, different engines</strong>: build the <em>workload</em> (op list) once and replay it; nondeterministic threads can't separate protocol effects from timing.</li> <li>Deterministic seeds make the table above reproducible byte for byte.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>MVTO read-only transactions are not free</strong>: they mutate version headers (cache-line ping-pong at scale) and abort writers. HyPer and Cicada avoid or defer these writes.</li> <li><strong>A shared timestamp counter is a bottleneck</strong> past ~dozens of cores: batch allocation, per-thread ranges, or loosely synchronized clocks with a tie-break (Cicada, hybrid logical clocks).</li> <li><strong>Dependencies on uncommitted data</strong> must be handled one of three ways: abort (NO_WAIT, here), wait, or record a commit dependency and cascade; each has different livelock and cascading-abort behaviour.</li> <li><strong>Validation must cover predicates</strong> to prevent phantoms: re-checking only the <em>rows read</em> misses rows that were never returned.</li> <li><strong>Timestamps ≠ real time</strong>: a serial order consistent with begin timestamps may contradict an external order clients observed (strict serializability needs more; see Spanner's commit wait).</li> <li><strong>Starving long transactions</strong>: all optimistic variants favour short ones; combine with priority escalation after k aborts.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "An Empirical Evaluation of In-Memory Multi-Version Concurrency Control"
+url = "https://www.vldb.org/pvldb/vol10/p781-Wu.pdf"
+
+[[sources]]
+title = "Fast Serializable Multi-Version Concurrency Control for Main-Memory Database Systems"
+url = "https://db.in.tum.de/~muehlbau/papers/mvcc.pdf"
+
+[[sources]]
+title = "High-Performance Concurrency Control Mechanisms for Main-Memory Databases"
+url = "https://www.vldb.org/pvldb/vol5/p298_per-akelarson_vldb2012.pdf"
+
+[[sources]]
+title = "Cicada: Dependably Fast Multi-Core In-Memory Transactions"
+url = "https://dl.acm.org/doi/10.1145/3035918.3064015"
+
+[[sources]]
+title = "Serializable Snapshot Isolation in PostgreSQL"
+url = "https://arxiv.org/abs/1208.4179"

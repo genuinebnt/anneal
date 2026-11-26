@@ -1,0 +1,70 @@
+title = "Rust unsafe memory layout questions and answers"
+module = "Worked questions"
+module_order = 14
+chapter = "Rust concept answers"
+chapter_order = 1
+order = 674
+kind = "recipe"
+lede = "Unsafe Rust, memory layout, numeric edge cases, Drop/leaks, statics and FFI."
+level = "advanced"
+code = ["examples/interview/rust_unsafe_memory_layout_qa.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>interview preparation</li><li>auditing <code>unsafe</code> blocks</li><li>reasoning about struct sizes</li><li>overflow and <code>as</code> casts</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>FFI bindings</li><li>performance-critical containers</li><li>memory-mapped data</li><li>embedded/no_std work</li><li>safe abstractions over raw pointers</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://www.techinterview.org/post/3233474457/rust-interview-questions-2025-ownership-borrowing-lifetimes-traits-async-await-error-handling-smart-pointers-concurrency/>
+
+<https://fasterthanli.me/articles/pin-and-suffering> and <https://www.techinterview.org/post/3233460429/rust-interview-questions/>
+
+<https://github.com/devinterview-io/rust-interview-questions> and <https://interviewing.io/rust-interview-questions>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Question bank Q1**. What does `unsafe` actually permit, and what does it **not** change? [Medium] [asked: very common] Q2. Safety contract vs soundness: what makes an unsafe abstraction sound? [Hard] [asked: common] Q3.
+
+How do raw pointers and `MaybeUninit` work? [Hard] [asked: common] Q4. What are the sizes and alignments of common types? What is a niche? [Medium] [asked: very common] Q5.
+
+Does Rust reorder struct fields? `repr(C)`, `repr(transparent)`, `repr(packed)`, `repr(u8)`. [Hard] [asked: common] Q6. Stack vs heap: where does each value live? [Easy] [asked: very common] Q7.
+
+How does `Vec` grow, and why is `push` amortised O(1)? [Medium] [asked: very common] Q8. Why is `String` UTF-8, and what are bytes vs chars vs graphemes? [Medium] [asked: very common] Q9. What happens on integer overflow (debug vs release)? [Easy] [asked: very common] Q10.
+
+What are the pitfalls of `as` casts? [Medium] [asked: common] Q11. Why is `transmute` dangerous and what replaces it? [Hard] [asked: common] Q12. What problem does `Pin` solve for self-referential structs? [Hard] [asked: common] Q13.
+
+Are abstractions really zero-cost? Monomorphisation bloat and `#[inline]`. [Medium] [asked: common] Q14. `Drop`, `mem::forget`, `ManuallyDrop` and `Box::leak`: is leaking safe? [Medium] [asked: common] Q15.
+
+`static` vs `const`; `static mut`; thread-local storage. [Medium] [asked: common] Q16. How does FFI work (`extern "C"`, `CString`, callbacks)? [Medium] [asked: common] Q17. Data race vs race condition: what does Rust actually prevent? [Hard] [asked: very common]
+"""
+
+[[sources]]
+title = "techinterview.org/post/3233474457/rust-interview-questions-2025-ownership-bor…"
+url = "https://www.techinterview.org/post/3233474457/rust-interview-questions-2025-ownership-borrowing-lifetimes-traits-async-await-error-handling-smart-pointers-concurrency/"
+
+[[sources]]
+title = "fasterthanli.me/articles/pin-and-suffering"
+url = "https://fasterthanli.me/articles/pin-and-suffering"
+
+[[sources]]
+title = "techinterview.org/post/3233460429/rust-interview-questions"
+url = "https://www.techinterview.org/post/3233460429/rust-interview-questions/"
+
+[[sources]]
+title = "github.com/devinterview-io/rust-interview-questions"
+url = "https://github.com/devinterview-io/rust-interview-questions"
+
+[[sources]]
+title = "interviewing.io/rust-interview-questions"
+url = "https://interviewing.io/rust-interview-questions"

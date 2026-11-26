@@ -1,0 +1,9 @@
+error[E0214]: `break` outside of a loop
+ --> e0214_break_outside_loop.peb:2:5
+  |
+2 |     break;
+  |     ^^^^^ cannot `break` here
+  |
+  = note: `break` and `continue` only work inside `while` and `loop`
+
+error: aborting due to 1 previous error

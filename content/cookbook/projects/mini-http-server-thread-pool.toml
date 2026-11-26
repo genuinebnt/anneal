@@ -1,0 +1,80 @@
+title = "A mini multithreaded HTTP/1.1 server from scratch on std::net"
+module = "Complete projects"
+module_order = 13
+chapter = "Capstones"
+chapter_order = 1
+order = 651
+kind = "capstone"
+lede = "a mini multithreaded HTTP/1.1 server from scratch on std::net (thread pool, keep-alive, pipelining, router, static files)"
+level = "capstone"
+code = ["examples/capstones/mini_http_server_thread_pool.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>understanding what hyper/nginx/tomcat do under the hood</li><li>small embedded admin servers</li><li>load-shedding designs</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a complete little HTTP/1.1 server with no HTTP crate: an acceptor thread, a **fixed** pool of worker threads fed through a **bounded** queue, an incremental request parser, keep-alive and pipelining, a router with path parameters and middleware, static files (ETag, Last-Modified, Range, traversal protection), a streaming chunked response, `Expect: 100-continue`, **head**, graceful shutdown and Prometheus-style /metrics.
+
+A load-test client with its own latency histogram compares thread-per-connection, the pool and a tokio server that reuses the same parser and routes.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+clients --TCP-> [acceptor] --try_send-> [ bounded queue (cap N) ] --recv-> [worker 0..W]
+
+```text
+                     |                          full?                              | serve_connection():
+                     +-- 503 + Retry-After <----+                                   |  read -> parse -> route
+                                                                                    |  -> middleware -> write
+request_id -> logging -> timing -> catch_panic -> router -> handler                 +- loop (keep-alive)
+```
+
+**Why** a bounded queue: an unbounded queue turns overload into unbounded latency and memory; refusing early with `503 Retry-After` keeps latency for admitted work flat (load shedding) and tells clients to back off. **Why** a fixed pool: the number of threads (and so memory and context switches) no longer depends on the number of clients.
+
+The classic price: a worker is pinned to a connection while it is open, so idle keep-alive clients can starve queued ones. Real servers bound that with idle timeouts and max-requests-per-connection (both here), or use an event loop (the tokio comparison below) so an idle connection costs a few hundred bytes instead of a thread.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+- a TCP read can contain half a request, one request, or five; the parser is a pure function over the buffer that answers Incomplete / Done(request, bytes_used) / Bad(error), so pipelining is just "parse again on the rest".
+- limits everywhere: request line 2 KiB (414), header block 8 KiB or 64 headers (431), body 64 KiB (413), syntax and ambiguity (both Content-Length and chunked: a request-smuggling vector) are 400. Errors close the connection.
+- the read side uses 50 ms timeout slices so idle keep-alive connections notice shutdown, the idle timeout and a slow-loris request timeout (408) without a separate timer thread.
+- a handler panic is caught by middleware (500) and, as a second line, around the whole connection, so one bad request never costs the pool a thread.
+- closing a socket that still holds unread input sends RST, which can destroy the error response in flight; so error paths do a lingering close: shutdown(Write), drain briefly, then drop.
+- graceful shutdown: set `stopping`, wake the blocked `accept`, drop the queue sender (workers drain what is queued then exit), in-flight requests finish and answer `Connection: close`, idle connections are closed, all joined.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>the shape of Apache's worker MPM</li><li>Tomcat's connector (acceptor + executor + bounded accept queue)</li><li>the Rust Book's final project</li><li>nginx upstream queues</li><li>any admin/metrics endpoint inside a service</li><li>patterns: bounded queues and load shedding (503 + Retry-After)</li><li>backpressure</li><li>incremental parsers over byte streams</li><li>middleware chains</li><li>conditional <strong>get</strong> (ETag)</li><li>range requests for resumable downloads</li><li>lingering close</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://datatracker.ietf.org/doc/html/rfc9112> <https://datatracker.ietf.org/doc/html/rfc9110> <https://doc.rust-lang.org/book/ch21-02-multithreaded.html> <https://prometheus.io/docs/instrumenting/exposition_formats/>
+"""
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc9112"
+url = "https://datatracker.ietf.org/doc/html/rfc9112"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc9110"
+url = "https://datatracker.ietf.org/doc/html/rfc9110"
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch21-02-multithreaded.html"
+url = "https://doc.rust-lang.org/book/ch21-02-multithreaded.html"
+
+[[sources]]
+title = "prometheus.io/docs/instrumenting/exposition_formats"
+url = "https://prometheus.io/docs/instrumenting/exposition_formats/"

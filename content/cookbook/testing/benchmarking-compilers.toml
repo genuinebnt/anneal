@@ -1,0 +1,103 @@
+title = "Benchmarking compilers"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Systems: compilers and languages"
+chapter_order = 9
+order = 156
+kind = "guide"
+lede = "Compile-time and run-time benchmarks, suites, noise control, statistics, profilers and CI tracking"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>A compiler has two performance stories. One is <b>how fast it compiles</b>: throughput, latency for incremental edits, peak memory, parallel scaling. The other is <b>how fast the code it produces runs</b>, plus binary size and, for JITs, warmup time. A change can improve one and hurt the other, so track both, on a fixed corpus, for every commit. Benchmarks that aren't run in CI regress quietly.</p>
+
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Suite</th><th>Measures</th><th>Notes</th></tr></thead> <tbody> <tr><td>rustc-perf (perf.rust-lang.org)</td><td>rustc compile time: check, debug and opt builds; full, incremental and patched</td><td>Real crates plus stress tests; instruction counts as the primary metric; run on every merged PR</td></tr> <tr><td>LLVM compile-time tracker, CTMark</td><td>Clang/LLVM compile time per commit</td><td>Instruction counts on the LLVM test-suite subset</td></tr> <tr><td>SPEC CPU 2017</td><td>Generated-code speed on C, C++ and Fortran</td><td>The industry reference; licensed</td></tr> <tr><td>LLVM test-suite, PolyBench, Embench</td><td>Generated-code speed: general, loop-heavy, embedded</td><td>Free; PolyBench targets the loop and polyhedral work in the loops chapter</td></tr> <tr><td>Are We Fast Yet</td><td>Language implementations, especially VMs</td><td>Same 14 benchmarks written idiomatically in many languages, for fair cross-VM comparison</td></tr> <tr><td>DaCapo, Renaissance, pyperformance, JetStream</td><td>JVM, Python and JavaScript runtimes</td><td>Realistic workloads with JIT warmup</td></tr> <tr><td>Crafting Interpreters <code>test/benchmark</code></td><td>Your jlox and clox</td><td>fib, binary_trees, method_call, zoo, and others; use them from Part I on</td></tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Tools"
+body = """
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Question</th><th>Tools</th></tr></thead> <tbody> <tr><td>How long does it take?</td><td><code>hyperfine</code> (whole commands, with warmup, repetitions and parameter sweeps), <code>criterion</code> and <code>divan</code> (Rust microbenchmarks)</td></tr> <tr><td>A noise-free number for CI</td><td>Instruction counts: <code>perf stat -e instructions</code>, Valgrind's cachegrind or callgrind, <code>iai-callgrind</code>. Services such as CodSpeed and bencher.dev track them per PR</td></tr> <tr><td>Where does the time go?</td><td><code>perf record</code> with flame graphs (<code>inferno</code>, <code>cargo flamegraph</code>), <code>samply</code> (Firefox Profiler UI, works on macOS), Instruments, VTune, AMD uProf, Tracy (instrumented spans)</td></tr> <tr><td>Why is this loop slow on this CPU?</td><td><code>perf stat</code> top-down analysis (<code>--topdown</code>, <code>toplev</code>), <code>llvm-mca</code> and uiCA (static throughput of a block), uops.info</td></tr> <tr><td>Memory</td><td><code>/usr/bin/time -v</code> (max RSS), heaptrack, DHAT (<code>valgrind --tool=dhat</code> or the <code>dhat</code> crate), bytehound, massif</td></tr> <tr><td>Inside rustc</td><td><code>cargo build --timings</code> (per-crate), <code>-Z self-profile</code> with measureme's <code>summarize</code> and <code>crox</code>, <code>-Z time-passes</code>, <code>cargo llvm-lines</code> (which generic functions produce the most LLVM IR), <code>cargo bloat</code> (binary size)</td></tr> <tr><td>Inside Clang/LLVM</td><td><code>-ftime-trace</code> (Chrome trace of front end and passes), <code>-mllvm -time-passes</code></td></tr> </tbody> </table></div>
+
+```text title="The commands you'll actually run"
+# Compare two binaries, 30 runs each, with warmup; export raw data for your own statistics
+hyperfine --warmup 3 --runs 30 --export-json fib.json \\
+  -L bin jlox,clox 'target/release/{bin} bench/fib.lox'
+
+# Counters: instructions are stable run to run, cycles are what users feel
+perf stat -e instructions,cycles,branch-misses,cache-misses target/release/clox bench/fib.lox
+valgrind --tool=cachegrind target/release/clox bench/fib.lox
+
+# Profiles
+samply record target/release/clox bench/zoo.lox
+cargo flamegraph --bin clox -- bench/zoo.lox
+
+# Your compiler's compile time, per crate and per query/pass
+cargo build --release --timings
+RUSTFLAGS="-Z self-profile" cargo +nightly build && summarize summarize *.mm_profdata
+cargo llvm-lines --release | head -20
+cargo bloat --release -n 20
+```
+
+```rust title="criterion microbenchmarks for each stage of rlox"
+// benches/stages.rs      (Cargo.toml: [[bench]] name = "stages", harness = false)
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
+
+fn stages(c: &mut Criterion) {
+    let src = std::fs::read_to_string("bench/zoo.lox").unwrap();
+    c.bench_function("lex", |b| b.iter(|| rlox::lex(black_box(&src)).len()));
+    c.bench_function("parse", |b| b.iter(|| rlox::parse(black_box(&src))));
+    c.bench_function("run", |b| b.iter(|| rlox::run(black_box(&src), &mut std::io::sink())));
+}
+
+criterion_group!(benches, stages);
+criterion_main!(benches);
+```
+"""
+
+[[sections]]
+heading = "Methodology"
+body = """
+<ul> <li><b>Control noise.</b> Pin the CPU frequency (<code>cpupower frequency-set -g performance</code>) and disable turbo if you can. Pin to cores (<code>taskset</code>), close other programs, and use the same machine for both sides of a comparison. On laptops, and on macOS where you can't control frequency, prefer instruction counts.</li> <li><b>Separate invocations from iterations.</b> Variance between process runs (address layout, page cache) is usually larger than within a run. Rerun the process, not just the loop (Kalibera and Jones).</li> <li><b>Warm up, and check you reach a steady state.</b> Barrett et al. found that many VMs never settle at all: performance keeps shifting, or oscillates. Report warmup separately rather than hiding it.</li> <li><b>Beware measurement bias.</b> Environment size and link order alone can swing results by several percent (Mytkowicz et al.). Randomize layout (Stabilizer), or measure across several builds.</li> <li><b>Don't let the optimizer delete the benchmark.</b> Use <code>std::hint::black_box</code> on inputs and outputs, and make inputs unknown at compile time.</li> <li><b>Summarize correctly.</b> Report confidence intervals, not single numbers. Combine ratios across a suite with the <em>geometric</em> mean, never the arithmetic mean of ratios (Fleming and Wallace). Always publish raw data, hardware, OS, versions and flags.</li> </ul>
+
+```rust title="Geometric mean of speedups, and a bootstrap confidence interval for a change (rand 0.8)"
+use rand::{rngs::StdRng, Rng};
+
+pub fn geomean(ratios: &[f64]) -> f64 {
+    (ratios.iter().map(|r| r.ln()).sum::<f64>() / ratios.len() as f64).exp()
+}
+
+fn resample_mean(xs: &[f64], rng: &mut StdRng) -> f64 {
+    (0..xs.len()).map(|_| xs[rng.gen_range(0..xs.len())]).sum::<f64>() / xs.len() as f64
+}
+
+/// 95% bootstrap interval for mean(new) / mean(old). If it contains 1.0, you can't claim a change.
+pub fn ratio_ci(old: &[f64], new: &[f64], rng: &mut StdRng) -> (f64, f64) {
+    let mut r: Vec<f64> = (0..10_000).map(|_| resample_mean(new, rng) / resample_mean(old, rng)).collect();
+    r.sort_by(f64::total_cmp);
+    (r[250], r[9_750])
+}
+```
+
+```rust title="Per-phase timing inside your own compiler (a tiny self-profile)"
+pub struct Phase { name: &'static str, start: std::time::Instant }
+
+impl Drop for Phase {
+    fn drop(&mut self) {
+        if std::env::var_os("RLOX_TIME").is_some() {
+            eprintln!("{:>9.3} ms  {}", self.start.elapsed().as_secs_f64() * 1e3, self.name);
+        }
+    }
+}
+pub fn phase(name: &'static str) -> Phase { Phase { name, start: std::time::Instant::now() } }
+
+// let _p = phase("parse");   // printed when the scope ends, only if RLOX_TIME is set
+```
+"""
+
+[[sources]]
+title = "rustc-perf"
+url = "https://github.com/rust-lang/rustc-perf"

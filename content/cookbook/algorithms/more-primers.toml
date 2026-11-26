@@ -1,0 +1,370 @@
+title = "More primers"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Hashing and probabilistic structures"
+chapter_order = 1
+order = 159
+kind = "guide"
+lede = "HyperLogLog · skip list · copy-on-write trie · OR-Set CRDT · past BusTub primers, each a Rust lesson the engine needs later"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>BusTub rotates its primer every semester, and <code>src/include/primer/</code> still has the stubs for all of them. Each one is small, and each one previews a technique the engine needs later:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Primer</th> <th>Semester</th> <th>Rust lesson</th> <th>Engine reuse</th> </tr> </thead> <tbody> <tr> <td>HyperLogLog</td> <td>Fall 2024</td> <td>bit manipulation, <code>leading_zeros</code>, fixed-size register arrays</td> <td>NDV statistics for the optimizer, <code>COUNT(DISTINCT)</code> approximation</td> </tr> <tr> <td>Skip list</td> <td>Spring 2025</td> <td>arena + index links instead of <code>Rc&lt;RefCell&lt;&gt;&gt;</code></td> <td>LSM memtable (RocksDB's default), ordered in-memory indexes</td> </tr> <tr> <td>Copy-on-write trie</td> <td>Fall/Spring 2023</td> <td><code>Arc</code> structural sharing, snapshot reads</td> <td>MVCC snapshots, persistent catalogs, ART (Part II)</td> </tr> <tr> <td>Observed-remove set (CRDT)</td> <td>Spring 2024</td> <td>merge as a join-semilattice, idempotence as a property test</td> <td>Track X: CRDT replication mode for System 2</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "HyperLogLog"
+body = """
+<p>The question: how many <strong>distinct</strong> values does a column have? Counting them exactly takes memory proportional to the distinct count. HLL (Flajolet et al., 2007) answers within about 1.04/√m relative error using m small registers. With m = 2¹⁴ = 16,384 registers of 6 bits each (12 KiB), that's ±0.8%, for any cardinality up to 2⁶⁴.</p>
+
+<p><strong>Intuition.</strong> Hash every value to uniform bits. The chance that a hash starts with <em>k</em> zeros is 2<sup>−k</sup>, so if the longest run of leading zeros you've seen is <em>k</em>, you've probably seen about 2<sup>k</sup> distinct values. One such estimate has huge variance. HLL splits the stream into m buckets (using the first <em>p</em> hash bits), keeps the maximum run per bucket, and combines them with a <strong>harmonic mean</strong>. The harmonic mean is what makes it robust to one unlucky bucket.</p>
+
+```text title="HyperLogLog, precisely"
+m = 2^p registers M[0..m), all 0
+add(x):   h = hash64(x);  j = h >> (64 - p);  w = h << p
+          ρ = leading_zeros(w) + 1          (capped at 64 - p + 1)
+          M[j] = max(M[j], ρ)
+estimate: E = α_m · m² / Σ_j 2^(-M[j])       α_m = 0.7213 / (1 + 1.079/m)   (m ≥ 128)
+          if E ≤ 2.5m and V = #{j : M[j] = 0} > 0:  E = m · ln(m / V)       (linear counting)
+merge(A,B): M[j] = max(A[j], B[j])           exact: equals the sketch of the union
+```
+
+```rust title="src/primer/hyperloglog.rs"
+pub struct HyperLogLog {
+    p: u8,
+    registers: Box<[u8]>,                 // one byte per register; see "dense 6-bit" below
+}
+
+impl HyperLogLog {
+    pub fn new(p: u8) -> Self {
+        assert!((4..=18).contains(&p), "precision p must be in 4..=18");
+        HyperLogLog { p, registers: vec![0u8; 1usize << p].into_boxed_slice() }
+    }
+
+    #[inline]
+    pub fn add_hash(&mut self, h: u64) {
+        let p = u32::from(self.p);
+        let j = (h >> (64 - p)) as usize;
+        let w = h << p;
+        // leading_zeros of the remaining 64-p bits, +1; if w == 0 all bits were zero.
+        let rho = if w == 0 { (64 - p + 1) as u8 } else { (w.leading_zeros() + 1) as u8 };
+        let r = &mut self.registers[j];
+        if rho > *r { *r = rho; }
+    }
+
+    pub fn estimate(&self) -> f64 {
+        let m = self.registers.len() as f64;
+        let alpha = match self.registers.len() {
+            16 => 0.673,
+            32 => 0.697,
+            64 => 0.709,
+            _ => 0.7213 / (1.0 + 1.079 / m),
+        };
+        let (mut sum, mut zeros) = (0.0f64, 0usize);
+        for &r in self.registers.iter() {
+            sum += f64::from(r).exp2().recip();     // 2^-r
+            zeros += usize::from(r == 0);
+        }
+        let e = alpha * m * m / sum;
+        if e <= 2.5 * m && zeros > 0 {
+            m * (m / zeros as f64).ln()             // small-range correction: linear counting
+        } else {
+            e                                        // 64-bit hashes: no large-range correction needed
+        }
+    }
+
+    pub fn merge(&mut self, other: &HyperLogLog) {
+        assert_eq!(self.p, other.p, "merge requires equal precision");
+        for (a, &b) in self.registers.iter_mut().zip(other.registers.iter()) { *a = (*a).max(b); }
+    }
+}
+```
+
+<aside data-call="performance"><b>Dense packing, and what Presto did</b><p>Six bits per register suffice, since ρ ≤ 64 − p + 1 &lt; 64. Packing four registers into three bytes saves 25% memory, but costs shifts and masks on every update. BusTub's Fall 2024 <code>hyperloglog_presto.h</code> models Presto/Trino's layout: <strong>4-bit dense buckets plus an overflow map</strong> for the rare register above 15. That halves memory again for the common case. HLL++ (Heule et al., Google 2013) adds a <strong>sparse</strong> representation for small cardinalities and an empirical bias-correction table. That is what BigQuery, Redis (<code>PFADD</code>) and DuckDB-style <code>approx_count_distinct</code> use in practice.</p></aside>
+
+<aside data-call="testing"><b>Test HLL statistically, not exactly</b><p>Assert that the relative error stays within <strong>3σ = 3·1.04/√m</strong> over many random seeds, and that <code>merge(sketch(A), sketch(B))</code> equals <code>sketch(A ∪ B)</code> <strong>exactly</strong>. The second is a register-for-register equality, so it's deterministic. Also cover the edge cases: the empty sketch estimates 0, and one repeated value estimates about 1.</p></aside>
+"""
+
+[[sections]]
+heading = "Skip list"
+body = """
+<p>A skip list is a sorted linked list with express lanes. Each node gets a random height, geometric with p = 1/2 or 1/4. Search starts in the top lane and drops down a level whenever the next key would overshoot. The expected cost is O(log n), with no rebalancing at all. That is why LevelDB and RocksDB use one for the <strong>memtable</strong>: inserting only splices pointers, so it is easy to make lock-free, and in-order iteration is just walking level 0.</p>
+
+<p>The Rust difficulty is immediate. A node is pointed to by up to <code>MaxHeight</code> predecessors, so it has shared ownership with mutation, and the obvious <code>Rc&lt;RefCell&lt;Node&gt;&gt;</code> is slow, verbose and leaks if you get cycles wrong. The idiomatic answer is an <strong>arena</strong>: store the nodes in a <code>Vec</code> and link them with <code>u32</code> indices.</p>
+
+```rust title="src/primer/skiplist.rs — arena-backed, single-writer"
+const MAX_H: usize = 12;
+const NIL: u32 = u32::MAX;
+
+struct Node<K> { key: Option<K>, next: [u32; MAX_H], height: u8 }   // key None only for the head
+
+pub struct SkipList<K> {
+    nodes: Vec<Node<K>>,          // nodes[0] is the head sentinel
+    free: Vec<u32>,               // recycled slots after erase
+    height: usize,
+    len: usize,
+    rng: u64,                     // xorshift state: deterministic, seedable (BusTub uses Seed = 15445)
+}
+
+impl<K: Ord> SkipList<K> {
+    pub fn new(seed: u64) -> Self {
+        let head = Node { key: None, next: [NIL; MAX_H], height: MAX_H as u8 };
+        SkipList { nodes: vec![head], free: vec![], height: 1, len: 0, rng: seed.max(1) }
+    }
+
+    fn random_height(&mut self) -> usize {
+        let mut h = 1;
+        // p = 1/4 per level, like LevelDB: fewer pointers, slightly longer searches
+        while h < MAX_H {
+            self.rng ^= self.rng << 13; self.rng ^= self.rng >> 7; self.rng ^= self.rng << 17;
+            if self.rng & 3 != 0 { break; }
+            h += 1;
+        }
+        h
+    }
+
+    /// For each level, the last node whose key is < `key`. This is the heart of every operation.
+    fn find_preds(&self, key: &K) -> [u32; MAX_H] {
+        let mut preds = [0u32; MAX_H];
+        let mut x = 0u32;
+        for lvl in (0..self.height).rev() {
+            loop {
+                let nx = self.nodes[x as usize].next[lvl];
+                match self.nodes.get(nx as usize).and_then(|n| n.key.as_ref()) {
+                    Some(k) if k < key => x = nx,
+                    _ => break,
+                }
+            }
+            preds[lvl] = x;
+        }
+        preds
+    }
+
+    pub fn contains(&self, key: &K) -> bool {
+        let p = self.find_preds(key);
+        let nx = self.nodes[p[0] as usize].next[0];
+        self.nodes.get(nx as usize).and_then(|n| n.key.as_ref()) == Some(key)
+    }
+
+    pub fn insert(&mut self, key: K) -> bool {
+        let preds = self.find_preds(&key);
+        let nx = self.nodes[preds[0] as usize].next[0];
+        if self.nodes.get(nx as usize).and_then(|n| n.key.as_ref()) == Some(&key) { return false; }
+        let h = self.random_height();
+        if h > self.height {
+            // new levels: head is the predecessor (preds already holds 0 there)
+            self.height = h;
+        }
+        let mut node = Node { key: Some(key), next: [NIL; MAX_H], height: h as u8 };
+        for lvl in 0..h { node.next[lvl] = self.nodes[preds[lvl] as usize].next[lvl]; }
+        let id = match self.free.pop() {
+            Some(id) => { self.nodes[id as usize] = node; id }
+            None => { self.nodes.push(node); (self.nodes.len() - 1) as u32 }
+        };
+        for lvl in 0..h { self.nodes[preds[lvl] as usize].next[lvl] = id; }
+        self.len += 1;
+        true
+    }
+
+    pub fn erase(&mut self, key: &K) -> bool {
+        let preds = self.find_preds(key);
+        let id = self.nodes[preds[0] as usize].next[0];
+        if self.nodes.get(id as usize).and_then(|n| n.key.as_ref()) != Some(key) { return false; }
+        let h = self.nodes[id as usize].height as usize;
+        for lvl in 0..h { self.nodes[preds[lvl] as usize].next[lvl] = self.nodes[id as usize].next[lvl]; }
+        self.nodes[id as usize].key = None;       // drop the key now
+        self.free.push(id);
+        while self.height > 1 && self.nodes[0].next[self.height - 1] == NIL { self.height -= 1; }
+        self.len -= 1;
+        true
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &K> + '_ {
+        let mut x = self.nodes[0].next[0];
+        std::iter::from_fn(move || {
+            let n = self.nodes.get(x as usize)?;
+            x = n.next[0];
+            n.key.as_ref()
+        })
+    }
+
+    pub fn len(&self) -> usize { self.len }
+    pub fn is_empty(&self) -> bool { self.len == 0 }
+}
+```
+
+<aside data-call="rust"><b>Arenas and indices: the pattern you'll use everywhere</b><p>Index-linked arenas show up in the B+Tree (page ids are indices into the buffer pool), the replacer's lists, the Cascades memo (group ids), the Raft log (entry indices) and the HNSW graph (node ids). They make <strong>aliasing explicit</strong> without <code>unsafe</code>. The borrow checker sees one <code>&amp;mut Vec</code>, and you see indices. The trade-offs: a stale index after a free is a <em>logic</em> bug, not UB, and generational indices (the <code>slotmap</code> crate, or a <code>(idx, generation)</code> pair) turn it into a detectable one. Reference: Catherine West's RustConf 2018 keynote, <a href="https://kyren.github.io/2018/09/14/rustconf-talk.html" target="_blank" rel="noreferrer"><em>Using Rust for Game Development</em></a>, the canonical explanation of generational arenas.</p></aside>
+
+<aside data-call="production"><b>Concurrent skip lists</b><p>RocksDB's <code>InlineSkipList</code> allows lock-free concurrent inserts. Nodes are never removed from a memtable, which avoids the whole memory-reclamation problem: the memtable is freed as a unit after it's flushed. In Rust, <code>crossbeam-skiplist</code> does lock-free insert <em>and</em> remove using epoch-based reclamation. Read it after Part II's latch-free lecture. BusTub's Spring 2025 version used <code>shared_ptr</code> nodes and one reader-writer latch.</p></aside>
+"""
+
+[[sections]]
+heading = "Copy-on-write trie"
+body = """
+<p>The 2023 primer: a trie whose <code>put</code> and <code>remove</code> return a <strong>new</strong> trie, which shares every untouched node with the old one. Readers holding the old root keep a consistent snapshot forever. That's MVCC in miniature, and the same idea as persistent B-trees in LMDB, Btrfs, and Datomic.</p>
+
+```rust title="src/primer/cow_trie.rs — structural sharing with Arc"
+use std::any::Any;
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+#[derive(Clone, Default)]
+struct Node {
+    children: BTreeMap<u8, Arc<Node>>,
+    value: Option<Arc<dyn Any + Send + Sync>>,
+}
+
+#[derive(Clone, Default)]
+pub struct Trie { root: Option<Arc<Node>> }
+
+impl Trie {
+    pub fn get<T: 'static>(&self, key: &[u8]) -> Option<&T> {
+        let mut n = self.root.as_deref()?;
+        for b in key { n = n.children.get(b)?; }
+        n.value.as_deref()?.downcast_ref::<T>()
+    }
+
+    /// Returns a new trie; `self` is untouched and still readable by anyone holding it.
+    pub fn put<T: Send + Sync + 'static>(&self, key: &[u8], v: T) -> Trie {
+        fn go(n: Option<&Arc<Node>>, key: &[u8], v: Arc<dyn Any + Send + Sync>) -> Arc<Node> {
+            // Clone only this node (a shallow copy: children are Arcs, so O(fanout) refcount bumps).
+            let mut copy = n.map(|n| (**n).clone()).unwrap_or_default();
+            match key.split_first() {
+                None => copy.value = Some(v),
+                Some((b, rest)) => {
+                    let child = go(copy.children.get(b), rest, v);
+                    copy.children.insert(*b, child);
+                }
+            }
+            Arc::new(copy)
+        }
+        Trie { root: Some(go(self.root.as_ref(), key, Arc::new(v))) }
+    }
+
+    pub fn remove(&self, key: &[u8]) -> Trie {
+        fn go(n: &Arc<Node>, key: &[u8]) -> Option<Option<Arc<Node>>> {
+            // Some(None): this node became empty and should be pruned; None: key not found.
+            let mut copy = (**n).clone();
+            match key.split_first() {
+                None => { copy.value.take()?; }
+                Some((b, rest)) => match go(copy.children.get(b)?, rest)? {
+                    None => { copy.children.remove(b); }
+                    Some(c) => { copy.children.insert(*b, c); }
+                },
+            }
+            Some(if copy.value.is_none() && copy.children.is_empty() { None } else { Some(Arc::new(copy)) })
+        }
+        match self.root.as_ref().map(|r| go(r, key)) {
+            Some(Some(root)) => Trie { root },
+            _ => self.clone(),                      // not found: share everything
+        }
+    }
+}
+```
+
+<aside data-call="rust"><b>Why <code>Arc&lt;dyn Any + Send + Sync&gt;</code> and <code>downcast_ref</code></b><p>The 2023 spec stored values of any type (<code>std::unique_ptr&lt;T&gt;</code>, even move-only ones) behind a <code>TrieNodeWithValue&lt;T&gt;</code> template. Rust's type-erased equivalent is <code>dyn Any</code>. <code>get::&lt;T&gt;</code> returns <code>None</code> if the stored type differs, which is exactly BusTub's "type mismatch returns nullptr" rule. Values are stored behind their own <code>Arc</code>, so copying a node on the write path never copies a value, even a non-<code>Clone</code> one. Reference: <a href="https://doc.rust-lang.org/std/any/trait.Any.html" target="_blank" rel="noreferrer"><code>std::any::Any</code></a>.</p></aside>
+
+<p><strong>TrieStore</strong>: the concurrent wrapper from the same project. Readers take a snapshot, <code>root.lock().clone()</code>, which costs one refcount bump, then read without any lock. Writers serialize on a separate <code>write_lock</code>, build the new version off to the side, and swap the root pointer in. That's single-writer multi-reader MVCC in about 30 lines. In production, <code>arc-swap</code> makes the snapshot a lock-free atomic load.</p>
+
+```rust title="TrieStore — snapshot reads, serialized writers"
+use std::sync::{Mutex, MutexGuard};
+
+pub struct TrieStore { root: Mutex<Trie>, write_lock: Mutex<()> }
+
+/// Keeps the snapshot alive as long as the caller holds the value reference.
+pub struct ValueGuard<T: 'static> { _snap: Trie, value: *const T }
+// SAFETY: `value` points into an Arc owned by `_snap`; T: Sync makes shared refs Send.
+unsafe impl<T: Sync> Send for ValueGuard<T> {}
+impl<T> std::ops::Deref for ValueGuard<T> {
+    type Target = T;
+    // SAFETY: `_snap` owns the node chain (via Arcs) that owns the value; nodes are immutable.
+    fn deref(&self) -> &T { unsafe { &*self.value } }
+}
+
+impl TrieStore {
+    pub fn get<T: Send + Sync + 'static>(&self, key: &[u8]) -> Option<ValueGuard<T>> {
+        let snap = self.root.lock().unwrap().clone();       // O(1): one Arc clone, lock held briefly
+        let value: *const T = snap.get::<T>(key)?;
+        Some(ValueGuard { _snap: snap, value })
+    }
+    pub fn put<T: Send + Sync + 'static>(&self, key: &[u8], v: T) {
+        let _w: MutexGuard<'_, ()> = self.write_lock.lock().unwrap();   // one writer at a time
+        let old = self.root.lock().unwrap().clone();
+        let new = old.put(key, v);                                     // built without blocking readers
+        *self.root.lock().unwrap() = new;
+    }
+}
+```
+
+<aside data-call="warning"><b>That <code>unsafe</code> is avoidable, and you should try</b><p><code>ValueGuard</code> needs to return a <code>&amp;T</code> that outlives the <code>Trie</code> borrow, so the version above stores a raw pointer and uses a <code>SAFETY</code> comment. A safe alternative is to make the stored value an <code>Arc&lt;T&gt;</code> and have <code>get</code> return <code>Option&lt;Arc&lt;T&gt;&gt;</code>, cloning the <code>Arc</code> out, which costs one refcount increment. Measure before choosing the <code>unsafe</code> version. This is the "<code>unsafe</code> used exactly where earned" rule from <code>LEARNING.md</code>.</p></aside>
+"""
+
+[[sections]]
+heading = "OR-Set (CRDT)"
+body = """
+<p>A CRDT (conflict-free replicated data type) is a data type whose replicas accept writes independently and still converge when they merge, with no coordination. The OR-Set solves the add/remove conflict. Each <code>add(e)</code> is tagged with a globally unique id. <code>remove(e)</code> removes only the tags <em>it has observed</em>. A concurrent add with a fresh tag survives, so <strong>add wins</strong>.</p>
+
+```rust title="src/primer/orset.rs — state-based OR-Set"
+use std::collections::{BTreeMap, BTreeSet};
+
+pub type Uid = i64;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OrSet<T: Ord + Clone> {
+    adds: BTreeMap<T, BTreeSet<Uid>>,      // live (element, tag) pairs
+    tombstones: BTreeSet<(T, Uid)>,        // removed tags; grows forever without GC (see below)
+}
+
+impl<T: Ord + Clone> OrSet<T> {
+    pub fn contains(&self, e: &T) -> bool { self.adds.get(e).is_some_and(|s| !s.is_empty()) }
+
+    pub fn add(&mut self, e: T, uid: Uid) {
+        if !self.tombstones.contains(&(e.clone(), uid)) { self.adds.entry(e).or_default().insert(uid); }
+    }
+
+    pub fn remove(&mut self, e: &T) {
+        if let Some(tags) = self.adds.remove(e) {
+            self.tombstones.extend(tags.into_iter().map(|u| (e.clone(), u)));
+        }
+    }
+
+    /// Join of two states: union of adds minus union of tombstones. Commutative, associative, idempotent.
+    pub fn merge(&mut self, other: &Self) {
+        self.tombstones.extend(other.tombstones.iter().cloned());
+        for (e, tags) in &other.adds { self.adds.entry(e.clone()).or_default().extend(tags); }
+        let dead = &self.tombstones;
+        self.adds.retain(|e, tags| { tags.retain(|u| !dead.contains(&(e.clone(), *u))); !tags.is_empty() });
+    }
+
+    pub fn elements(&self) -> Vec<T> { self.adds.keys().cloned().collect() }
+}
+```
+
+<aside data-call="testing"><b>The three CRDT laws are the whole test suite</b><p>Property-test <code>merge</code> for <strong>commutativity</strong> (<code>a⊔b = b⊔a</code>), <strong>associativity</strong> (<code>(a⊔b)⊔c = a⊔(b⊔c)</code>) and <strong>idempotence</strong> (<code>a⊔a = a</code>) over random operation histories on three replicas. Then test convergence directly: apply random ops to replicas a, b and c, merge them in two different random orders, and assert the states are equal. The same test applies to any CRDT, including a CRDT replication mode for a KV store (Part V).</p></aside>
+
+<aside data-call="note"><b>Tombstone GC is the real problem</b><p>Tombstones grow without bound. Production CRDT systems (Riak's <code>riak_dt</code>, Automerge, Yjs) either use <strong>causal contexts</strong> (version vectors) to drop tombstones every replica has seen, or use the <em>optimized OR-Set</em> (Bieniusa et al., 2012), which needs no tombstones at all because it stores a version vector plus per-element dots. That is the design to build for a CRDT replication mode. It is the same "garbage-collect below a watermark" problem MVCC solves in P4, which is the parallel worth noticing.</p></aside>
+"""
+
+[[sources]]
+title = "HyperLogLog: the analysis of a near-optimal cardinality estimation algorithm"
+url = "https://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf"
+
+[[sources]]
+title = "HyperLogLog in Practice"
+url = "https://research.google/pubs/hyperloglog-in-practice-algorithmic-engineering-of-a-state-of-the-art-cardinality-estimation-algorithm/"
+
+[[sources]]
+title = "Skip Lists: A Probabilistic Alternative to Balanced Trees"
+url = "https://15721.courses.cs.cmu.edu/spring2018/papers/08-oltpindexes1/pugh-skiplists-cacm1990.pdf"
+
+[[sources]]
+title = "A comprehensive study of Convergent and Commutative Replicated Data Types"
+url = "https://inria.hal.science/inria-00555588/document"
+
+[[sources]]
+title = "An Optimized Conflict-free Replicated Set"
+url = "https://arxiv.org/abs/1210.3368"

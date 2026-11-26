@@ -1,0 +1,118 @@
+title = "Runtime systems and GC implementation"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Bytecode and virtual machines"
+chapter_order = 3
+order = 599
+kind = "guide"
+lede = "Object layout, allocation, copying and generational collection, barriers, stack maps · Builds on clox C8"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p><b>Value representation</b> determines speed everywhere else.</p>
+
+<ul> <li><b>Tagged pointers</b> use low bits that are known to be zero because of alignment. OCaml marks integers with a low bit of 1, and V8 marks small integers (Smis) with a low bit of 0.</li> <li><b>NaN boxing</b> (clox C10) hides pointers inside NaN payloads.</li> <li><b>Pointer compression</b> stores 32-bit offsets from a heap base. V8 does this to halve memory.</li> </ul>
+
+<p><b>Object headers</b> hold a type or class pointer, GC bits (mark, forwarding, age), and often a hash or lock word. <b>Closures</b> are either <em>flat</em> (copy each captured variable into the closure; fast access, costly to create) or <em>linked</em> (point to the enclosing environment; cheap to create, and keeps too much alive). Appel and Shao analyze the space trade-offs.</p>
+
+<p><b>Allocation</b> should be a pointer bump into a thread-local buffer (TLAB) with a limit check, inlined into compiled code. Free-list allocators use size classes. mimalloc's sharded free lists are a good design to read.</p>
+
+<p><b>Roots</b> are found in one of three ways:</p>
+
+<ul> <li><em>Precisely</em>, with stack maps that the compiler emits at each safepoint: which stack slots and registers hold pointers.</li> <li><em>Conservatively</em>, by treating any word that looks like a heap pointer as a root.</li> <li>With a <em>shadow stack</em> that the program maintains itself. clox's value stack is one.</li> </ul>
+
+<p><b>Safepoints</b> are where threads can stop for GC: polls at loop back edges and function entries, often implemented as a load from a page that the runtime protects.</p>
+
+```rust title="A Cheney copying collector over a word-addressed heap"
+/// Heap layout: object = [len][field_1]…[field_len], len ≥ 1.
+/// Words are tagged: low bit 1 = small integer (n << 1 | 1); low bit 0 = pointer (index << 1).
+pub struct Heap { from: Vec<u64>, to: Vec<u64>, alloc: usize }
+
+const FORWARDED: u64 = u64::MAX;
+
+impl Heap {
+    pub fn new(words: usize) -> Self { Heap { from: vec![0; words], to: vec![0; words], alloc: 0 } }
+
+    /// May collect: callers keep every live pointer in `roots` and re-read it afterwards.
+    pub fn alloc(&mut self, len: usize, roots: &mut [u64]) -> Option<u64> {
+        assert!(len >= 1, "objects need room for a forwarding pointer");
+        if self.alloc + len + 1 > self.from.len() { self.collect(roots); }
+        if self.alloc + len + 1 > self.from.len() { return None; }   // real VM: grow the heap
+        let p = self.alloc;
+        self.from[p] = len as u64;
+        self.from[p + 1..=p + len].fill(1);                          // small int 0
+        self.alloc += len + 1;
+        Some((p as u64) << 1)
+    }
+
+    pub fn collect(&mut self, roots: &mut [u64]) {
+        let mut free = 0;
+        for r in roots.iter_mut() { *r = self.copy(*r, &mut free); }
+        // Breadth-first: the region between `scan` and `free` is the gray queue.
+        let mut scan = 0;
+        while scan < free {
+            let len = self.to[scan] as usize;
+            for i in 1..=len {
+                let w = self.to[scan + i];
+                self.to[scan + i] = self.copy(w, &mut free);
+            }
+            scan += len + 1;
+        }
+        std::mem::swap(&mut self.from, &mut self.to);
+        self.alloc = free;
+    }
+
+    fn copy(&mut self, word: u64, free: &mut usize) -> u64 {
+        if word & 1 == 1 { return word; }                            // immediate: nothing to copy
+        let old = (word >> 1) as usize;
+        if self.from[old] == FORWARDED { return self.from[old + 1]; } // already moved
+        let len = self.from[old] as usize;
+        let new = *free;
+        self.to[new..=new + len].copy_from_slice(&self.from[old..=old + len]);
+        *free += len + 1;
+        let moved = (new as u64) << 1;
+        self.from[old] = FORWARDED;                                  // leave a forwarding pointer
+        self.from[old + 1] = moved;
+        moved
+    }
+}
+```
+
+<p>Cost is proportional to <em>live</em> data, not heap size, and allocation is a bump. That's why copying is ideal for a young generation, where most objects die. The price is half the memory and moving objects, so every pointer must be findable and updatable. Conservative roots can't be updated, which is why conservative collectors pin the objects those roots point to.</p>
+"""
+
+[[sections]]
+heading = "Barriers"
+body = """
+<p>Any collector that doesn't stop the world for the whole collection needs the mutator's cooperation, through <em>barriers</em>: code the compiler inserts around pointer stores (and sometimes loads).</p>
+
+<ul> <li><b>Generational</b> write barrier: when an old object gets a pointer to a young one, record it, either in a remembered set or by marking a <em>card</em> (a 512-byte region of the old space). A minor GC then scans roots plus dirty cards instead of the whole old space.</li> <li><b>Incremental and concurrent marking</b> must preserve the <em>tri-color invariant</em>: a black (fully scanned) object must never point to a white (unvisited) one. <em>Dijkstra</em> (insertion) barriers shade the <em>new</em> target gray on each store. <em>Yuasa</em> (deletion, snapshot-at-the-beginning) barriers shade the <em>old</em> target before it is overwritten. Go uses a hybrid of the two.</li> <li><b>Concurrent compaction</b> (ZGC, Shenandoah) adds <em>load</em> barriers that check whether an object moved and fix the reference. ZGC uses colored pointer bits for this.</li> </ul>
+
+```rust title="Card-marking write barrier (what the compiler inlines at every pointer store)"
+const CARD_BITS: u32 = 9;                         // 512-byte cards
+
+#[inline(always)]
+pub fn write_ref(heap: &mut GenHeap, obj: Addr, field: usize, value: Addr) {
+    heap.store(obj, field, value);
+    // Filter: only old → young stores need remembering.
+    if heap.is_old(obj) && heap.is_young(value) {
+        let card = (obj.0 - heap.old_start.0) >> CARD_BITS;
+        heap.cards[card] = 1;                      // minor GC scans objects on dirty cards
+    }
+}
+```
+
+<div class="cb-g-tip"><h3>The rest of a runtime</h3> <ul> <li><b>Weak references and ephemerons</b> (weak-key tables whose values stay alive only while their key does) need special GC phases.</li> <li><b>Finalizers</b> resurrect objects and should be avoided or run in a separate queue.</li> <li><b>GC pacing</b> decides when to collect and how fast to grow the heap. Go's pacer and V8's heuristics are both documented.</li> <li><b>A heap verifier</b> walks all reachable objects after every GC in debug builds and asserts that every reference is valid. It's the most valuable GC debugging tool.</li> <li><b>Threads</b>: each thread needs a TLAB, a way to reach a safepoint, and a registered stack for root scanning.</li> </ul></div>
+
+<div class="cb-g-tip"><h3>In Rust</h3> <p>Hosting a GC'd language in Rust means the collector's pointers are either indices (safe, as in clox C8) or raw pointers inside <code>unsafe</code>. With raw pointers, run Miri and keep the unsafe surface small. MMTk is a Rust framework of production-quality collectors (Immix, generational, concurrent) that runtimes can plug into. It's a good codebase to learn from.</p></div>
+"""
+
+[[sources]]
+title = "MMTk"
+url = "https://www.mmtk.io"
+
+[[sources]]
+title = "Andy Wingo's Whippet posts"
+url = "https://wingolog.org"

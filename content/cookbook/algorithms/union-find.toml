@@ -1,0 +1,40 @@
+title = "Union-find"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Graph algorithms"
+chapter_order = 4
+order = 196
+kind = "recipe"
+lede = "union-find (disjoint sets): \"are these two connected?\" in near-constant time."
+level = "intermediate"
+code = ["examples/algorithms/union_find.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>connected components of <strong>undirected</strong> relations</li><li>Kruskal's MST</li><li>grouping duplicates</li><li>incremental connectivity</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>network connectivity</li><li>Kruskal MST</li><li>image segmentation</li><li>deduplicating equivalent records</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Each set is a tree; `find` returns the root. Two optimisations make it effectively O(1) amortised (inverse Ackermann): **path compression** (flatten trees while finding) and **union by size** (attach the small tree under the big).
+
+**Note.** This answers connectivity for **undirected** edges and can only **add** edges; it cannot detect directed cycles.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://cp-algorithms.com/data_structures/disjoint_set_union.html>
+"""
+
+[[sources]]
+title = "cp-algorithms.com/data_structures/disjoint_set_union.html"
+url = "https://cp-algorithms.com/data_structures/disjoint_set_union.html"

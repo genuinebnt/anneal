@@ -1,0 +1,42 @@
+title = "Error enum"
+module = "Rust language"
+module_order = 1
+chapter = "Errors and diagnostics"
+chapter_order = 4
+order = 38
+kind = "recipe"
+lede = "EXPECT-EXIT: 1   (this demo intentionally ends in an error; checker reads this marker) RECIPE 02 (errors): one error enum, `?` everywhere, and a thin `main`."
+level = "simple"
+code = ["examples/errors/error_enum.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+stages 2 and 4.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>every CLI/service: one error enum per crate</li><li><code>?</code> everywhere</li><li>only <code>main</code> maps errors to exit codes or HTTP statuses</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: all logic lives in `run() -> Result<_, Error>`. Only `main` turns an error into an exit code. `#[from]` lets `?` convert io/serde errors automatically.
+
+Variants can carry data for good messages. Real code: ripgrep's main.rs -> <https://github.com/BurntSushi/ripgrep/blob/master/crates/core/main.rs>
+
+```text
+thiserror        -> https://github.com/dtolnay/thiserror
+```
+"""
+
+[[sources]]
+title = "github.com/BurntSushi/ripgrep/blob/master/crates/core/main.rs"
+url = "https://github.com/BurntSushi/ripgrep/blob/master/crates/core/main.rs"
+
+[[sources]]
+title = "github.com/dtolnay/thiserror"
+url = "https://github.com/dtolnay/thiserror"

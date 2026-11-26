@@ -1,0 +1,78 @@
+title = "A tiny in-memory SQL engine"
+module = "Complete projects"
+module_order = 13
+chapter = "Capstones"
+chapter_order = 1
+order = 659
+kind = "capstone"
+lede = "Lex -> Pratt parse -> AST -> bind/plan -> volcano executor."
+level = "capstone"
+code = ["examples/capstones/tiny_sql_engine.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>embedded query layers</li><li>admin consoles</li><li>test doubles for a database</li><li>learning how SQL engines are shaped</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+**Create table** / **insert** / **select** (**where**, **group by** with COUNT/SUM/MIN/MAX, **order by**, **limit**) over typed INT/TEXT/BOOL columns.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+every database is this pipeline at a different scale; seeing it in &#126;450 lines makes DataFusion or SQLite readable.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+```text
+lex      bytes -> tokens carrying byte spans         parse   tokens -> AST (recursive descent + Pratt for expressions)
+```
+
+bind     AST expr -> `Bound` expr (column names become indices, static type check, so type errors surface **before** any row is read)
+
+```text
+plan     Select -> a tree of operators:  Scan -> Filter -> Sort -> Limit -> Project   (or ... Filter -> Aggregate -> Sort -> Limit)
+```
+
+execute  volcano model: every operator implements `next() -> Result<Option<Row>>` and pulls from its child, so **limit** stops the scan early.
+
+**Null semantics** (three-valued logic): any comparison or arithmetic with **null** is **null**; `NULL AND false` = false, `NULL AND true` = **null**, `NULL OR true` = true, `NULL OR false` = **null**, `NOT NULL` = **null**; **where** keeps a row only when the predicate is exactly **true**.
+
+NULLs sort first in ASC order (last in DESC); aggregates ignore NULLs; SUM/MIN/MAX of nothing is **null**, **count** of nothing is 0. **Errors** are values: parse errors carry a span and render compiler-style with a caret line; type, catalog and runtime (division by zero, overflow) errors are `SqlError` variants. Nothing in the engine panics on user input.
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+hand-checked results on a small table, then seeded random tables/predicates compared with an independent brute-force Rust oracle (sortedness, **limit** = min(n, rows), **where** = closure filter, **group by** = BTreeMap fold).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>query layers over in-memory data (DataFusion, DuckDB-style engines)</li><li>SQLite-like embedded stores</li><li>log/CSV query tools</li><li>admin-console filters</li><li>rule engines</li><li>test doubles for databases</li><li>patterns: Pratt parsing</li><li>volcano iterators</li><li>bind-then-execute</li><li>differential testing</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://github.com/apache/datafusion> and <https://15445.courses.cs.cmu.edu/> and <https://craftinginterpreters.com/>
+"""
+
+[[sources]]
+title = "github.com/apache/datafusion"
+url = "https://github.com/apache/datafusion"
+
+[[sources]]
+title = "15445.courses.cs.cmu.edu"
+url = "https://15445.courses.cs.cmu.edu/"
+
+[[sources]]
+title = "craftinginterpreters.com"
+url = "https://craftinginterpreters.com/"

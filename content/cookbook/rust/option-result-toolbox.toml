@@ -1,0 +1,32 @@
+title = "The Option/Result combinator toolbox"
+module = "Rust language"
+module_order = 1
+chapter = "Errors and diagnostics"
+chapter_order = 4
+order = 39
+kind = "recipe"
+lede = "the Option/Result combinator toolbox (and when to just use `match` or `?`)."
+level = "simple"
+code = ["examples/errors/option_result_toolbox.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+every function that can fail or return nothing.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+all fallible code: the right combinator or `?` instead of unwrap.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Prefer `?` for propagation, `match`/`if let`/`let else` for branching, and combinators for small transformations. `unwrap()`/`expect()` are for bugs (impossible states, tests), **never** for user input; `expect("why this cannot fail")` documents the invariant. Cheat sheet: <https://doc.rust-lang.org/std/option/enum.Option.html> and .../result/enum.Result.html
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/option/enum.Option.html"
+url = "https://doc.rust-lang.org/std/option/enum.Option.html"

@@ -1,0 +1,6 @@
+fn f() -> int {
+    return 1;
+    println("never");
+    2
+}
+fn main() { println(to_str(f())); }

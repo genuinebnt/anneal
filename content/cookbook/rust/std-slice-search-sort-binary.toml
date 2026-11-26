@@ -1,0 +1,86 @@
+title = "Slice look-up page"
+module = "Standard library and core"
+module_order = 2
+chapter = "Vectors, slices and collections"
+chapter_order = 4
+order = 80
+kind = "recipe"
+lede = "Access, search, binary search, sorting, selection, rearranging, copying."
+level = "intermediate"
+code = ["examples/std_tour/std_slice_search_sort_binary.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>leaderboards</li><li>time-range queries over sorted data</li><li>percentiles</li><li>ring rotation</li><li>buffer copies</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>"events between t1 and t2" on a sorted Vec</li><li>top-k results</li><li>p50/p99 latency</li><li>shard lookup in a sorted boundary table</li><li>in-place buffer shuffles. Everything here also works on Vec&lt;T&gt; and [T; N] through deref/coercion</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>slice::len</code></li><li><code>slice::is_empty</code></li><li><code>slice::first</code></li><li><code>slice::last</code></li><li><code>slice::get</code></li><li><code>slice::get_mut</code></li><li><code>slice::iter</code></li><li><code>slice::iter_mut</code></li></ul>
+
+<ul class="cb-g-names"><li><code>slice::contains</code></li><li><code>slice::starts_with</code></li><li><code>slice::ends_with</code></li><li><code>slice::to_vec</code></li><li><code>slice::concat</code></li><li><code>slice::join</code></li><li><code>slice::sort</code></li><li><code>slice::sort_unstable</code></li></ul>
+
+<ul class="cb-g-names"><li><code>slice::sort_by_key</code></li><li><code>slice::reverse</code></li><li><code>slice::binary_search</code></li><li><code>slice::binary_search_by</code></li><li><code>slice::binary_search_by_key</code></li><li><code>slice::partition_point</code></li></ul>
+
+<ul class="cb-g-names"><li><code>slice::select_nth_unstable</code></li><li><code>slice::select_nth_unstable_by</code></li><li><code>slice::select_nth_unstable_by_key</code></li><li><code>slice::is_sorted</code></li><li><code>slice::is_sorted_by</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Iterator::position</code></li><li><code>Iterator::rposition</code></li><li><code>Iterator::rev</code></li><li><code>Iterator::find</code></li><li><code>Iterator::max_by_key</code></li></ul>
+
+<ul class="cb-g-names"><li><code>slice::split_first</code></li><li><code>slice::split_last</code></li><li><code>slice::first_mut</code></li><li><code>slice::last_mut</code></li><li><code>slice::strip_prefix</code></li><li><code>slice::strip_suffix</code></li></ul>
+
+<ul class="cb-g-names"><li><code>slice::swap</code></li><li><code>slice::swap_with_slice</code></li><li><code>slice::rotate_left</code></li><li><code>slice::rotate_right</code></li><li><code>slice::fill</code></li><li><code>slice::fill_with</code></li><li><code>slice::copy_from_slice</code></li></ul>
+
+<ul class="cb-g-names"><li><code>slice::clone_from_slice</code></li><li><code>slice::copy_within</code></li><li><code>slice::into_vec</code></li><li><code>slice::repeat</code></li><li><code>slice::first_chunk</code></li><li><code>slice::last_chunk</code></li></ul>
+
+<ul class="cb-g-names"><li><code>slice::split_first_chunk</code></li><li><code>slice::split_last_chunk</code></li><li><code>slice::first_chunk_mut</code></li><li><code>slice::get_disjoint_mut</code></li><li><code>slice::strip_circumfix</code></li></ul>
+
+<ul class="cb-g-names"><li><code>slice::subslice_range</code></li><li><code>slice::element_offset</code></li><li><code>slice::as_flattened</code></li><li><code>slice::as_array</code></li></ul>
+
+Iterator::max_by, Iterator::min_by, Vec::dedup
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/primitive.slice.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/primitive.slice.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+core (`core::slice`: access, search, copy, sort_unstable&#42;, select_nth_unstable&#42;, binary search), usable in no_std. alloc (`alloc::slice`): sort, sort_by, sort_by_key, sort_by_cached_key, to_vec, into_vec, concat, join, repeat.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+sort_unstable_by, sort_unstable_by_key, is_sorted_by_key (see std_cmp_hash_default_traits), get_unchecked&#42;/swap_unchecked/split_at_unchecked (unsafe), chunking, windows and split&#42; (see std_slice_chunks_windows_split), sort_by_cached_key and float sorting (see std_cmp_hash_default_traits), the other &#42;&#95;mut twins (same shape), split_off_first/split_off_last family (shrinks a `&mut &[T]`, niche), as_ptr/as_mut_ptr.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Read index i without panicking</td><td><code>get(i)          sub-range: get(a..b)</code></td></tr><tr><td>Head + rest</td><td><code>split_first / if let [head, rest &#64; ..] = s</code></td></tr><tr><td>Fixed-size header from the front</td><td><code>first_chunk::&lt;N&gt;() / split_first_chunk::&lt;N&gt;()</code></td></tr><tr><td>Is x in a SORTED slice, and where</td><td><code>binary_search  (Err(i) = insertion point)</code></td></tr><tr><td>First index of the sorted range &gt;= x</td><td><code>partition_point(|v| v &lt; x)</code></td></tr><tr><td>First index of the sorted range &gt; x</td><td><code>partition_point(|v| v &lt;= x)</code></td></tr><tr><td>First / last match, unsorted</td><td><code>iter().position(..) / iter().rposition(..)</code></td></tr><tr><td>K-th smallest, median, top-k</td><td><code>select_nth_unstable* (average and worst case O(n))</code></td></tr><tr><td>Sort, keeping equal items in order</td><td><code>sort / sort_by / sort_by_key</code></td></tr><tr><td>Sort, order of equal items irrelevant</td><td><code>sort_unstable* (does not allocate)</code></td></tr><tr><td>Move the first k items to the back</td><td><code>rotate_left(k)</code></td></tr><tr><td>Copy bytes between buffers</td><td><code>copy_from_slice (lengths must match)</code></td></tr><tr><td>Overlapping move inside one buffer</td><td><code>copy_within</code></td></tr><tr><td>Two &amp;mut elements at once</td><td><code>get_disjoint_mut([i, j])  or split_at_mut</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/primitive.slice.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/primitive.slice.html</a></li><li><a href="https://doc.rust-lang.org/reference/patterns.html#slice-patterns" target="_blank" rel="noreferrer">https://doc.rust-lang.org/reference/patterns.html#slice-patterns</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/primitive.slice.html"
+url = "https://doc.rust-lang.org/std/primitive.slice.html"
+
+[[sources]]
+title = "doc.rust-lang.org/reference/patterns.html#slice-patterns"
+url = "https://doc.rust-lang.org/reference/patterns.html#slice-patterns"

@@ -1,0 +1,388 @@
+title = "Distributed transactions"
+module = "Distributed systems"
+module_order = 10
+chapter = "Consensus and distributed transactions"
+chapter_order = 2
+order = 489
+kind = "guide"
+lede = "Snapshot isolation across shards without a coordinator log · Percolator's primary-lock commit · crash recovery by readers · hybrid logical clocks · compared with two-phase commit, Spanner and Calvin · 60 runs with crashing coordinators"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>A transaction that touches two ranges needs agreement between them.</strong> <a href="/cookbook/p/sharding">Sharding</a> puts keys on different Raft groups; each group can commit its own writes atomically, but nothing yet makes "debit here, credit there" all-or-nothing. That is the atomic commit problem, and the classic answer is two-phase commit (<a href="/cookbook/p/distributed-databases-ii">distributed databases</a>): a coordinator asks every participant to <em>prepare</em>, records the decision durably, then tells everyone. Its weakness is the coordinator: if it dies between the phases, participants hold locks they cannot release.</li> <li><strong>Percolator makes the decision a single write on one key.</strong> Pick one of the transaction's keys as the <em>primary</em>. Phase one, <em>prewrite</em>: for every key, check that nobody committed it since the snapshot and nobody has it locked, then stage the value and write a lock that points to the primary. Phase two: commit the primary (replace its lock by a <em>write record</em> naming the commit timestamp) in one atomic single-key step. <strong>That step is the commit point.</strong> Then commit the other keys at leisure.</li> <li><strong>Anyone can finish a dead transaction.</strong> A reader that meets a lock looks at the lock's primary. If the primary has a write record for that transaction, the transaction committed: the reader commits this key too (<em>rolls forward</em>). If the primary still holds the lock and the lock is old, the coordinator is presumed dead: the reader removes the primary lock and leaves a rollback record (<em>rolls back</em>). Because the decision is one key's state, the readers can never disagree.</li> <li><strong>A rollback record keeps a zombie dead.</strong> A coordinator that was only slow can wake up after its locks were rolled back. Its commit of the primary fails because the lock is gone; a delayed, duplicated prewrite fails because of the rollback record. Without the record, a duplicate prewrite of the primary could revive the transaction after its secondaries were rolled back.</li> <li><strong>Snapshots come from timestamps.</strong> A transaction takes a <em>start timestamp</em> from a global source, reads the newest version committed at or before it, and takes a <em>commit timestamp</em> later. A lock with a start at or before the read timestamp <em>might</em> commit before it, so the reader must wait or resolve it. This is the multi-version scheme of <a href="/cookbook/p/transactions-on-the-key-space">M2</a> with the validation moved to the shards.</li> <li><strong>Where timestamps come from decides the architecture.</strong> A single oracle (Percolator, TiDB's placement driver) is simple and a bottleneck and a latency hop. <strong>Hybrid logical clocks</strong> give each node timestamps that respect causality and stay near physical time without a central source, at the price of clock-uncertainty handling for reads (CockroachDB). <strong>TrueTime</strong> (Spanner) bounds the uncertainty with hardware and waits it out at commit. <strong>Calvin</strong> avoids two-phase commit altogether by agreeing on the order of transactions first and executing them deterministically.</li> <li><strong>The timeout trades stalls against aborts, never safety.</strong> Whether a lock is expired changes how long readers wait and how many slow transactions are killed; the commit point guarantees the outcome is consistent either way.</li> </ul>
+"""
+
+[[sections]]
+heading = "The protocol"
+body = """
+```text
+begin:      start_ts = oracle()
+read k:     newest write record with commit_ts ≤ start_ts → its data;  a lock with start ≤ ts: wait, or resolve if expired
+commit:     1. prewrite each key (primary first): fail if a write ≥ start_ts or any lock exists; stage data@start_ts; lock → primary
+            2. commit_ts = oracle(); if the primary's lock is gone: abort.  Else: write record(commit_ts → start_ts), drop lock   ← commit point
+            3. for each secondary: write record, drop lock                      (asynchronous; may never run)
+resolve(lock):  primary has write record for lock.start?  → commit this key at that commit_ts   (roll forward)
+                else                                      → remove the lock, leave a rollback record  (roll back)
+```
+
+<ul> <li><strong>Hybrid logical clock</strong> <code>(wall, logical)</code>: a local event takes the physical time if it is greater than the clock, else increments the counter; on receiving a message the clock becomes greater than both its own value and the message's. Timestamps compare lexicographically.</li> <li><strong>The model</strong>: shards hold the three columns per key; <code>Txn::step</code> runs one RPC of the protocol so a test can stop a coordinator between any two steps; <code>Cluster::get</code> is the snapshot read with resolution.</li> </ul>
+
+:::deeper Reference: hybrid logical clock, Percolator columns, prewrite, commit, snapshot reads and lock resolution
+```rust title="src/multimodel/dtxn.rs"
+//! Distributed transactions over sharded storage in the style of Percolator: snapshot isolation with no central coordinator state.
+//! Each key has a data column (values by start timestamp), a lock column and a write column (commit timestamp → start timestamp).
+//! A transaction pre-writes every key (locking, one of them the *primary*), commits the primary by one atomic step, then commits the
+//! rest. A crash anywhere leaves locks that any reader can resolve by looking at the primary. Also a hybrid logical clock.
+use std::collections::{BTreeMap, BTreeSet};
+
+pub type Key = u64;
+pub type Ts = u64;
+
+// ---- hybrid logical clock ------------------------------------------------------------------------------------------------------------
+
+/// A timestamp that follows physical time when it can and a counter when it must, and always respects causality.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct Hlc {
+    pub wall: u64,
+    pub logical: u32,
+}
+impl Hlc {
+    /// A local event or a send, given this node's physical clock.
+    pub fn tick(&mut self, physical: u64) -> Hlc {
+        if physical > self.wall {
+            self.wall = physical;
+            self.logical = 0;
+        } else {
+            self.logical += 1;
+        }
+        *self
+    }
+    /// A receive: the result is greater than both our clock and the message's timestamp.
+    pub fn observe(&mut self, physical: u64, msg: Hlc) -> Hlc {
+        let wall = physical.max(self.wall).max(msg.wall);
+        self.logical = if wall == self.wall && wall == msg.wall {
+            self.logical.max(msg.logical) + 1
+        } else if wall == self.wall {
+            self.logical + 1
+        } else if wall == msg.wall {
+            msg.logical + 1
+        } else {
+            0
+        };
+        self.wall = wall;
+        *self
+    }
+}
+
+// ---- the sharded multi-version store ------------------------------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Lock {
+    pub start: Ts,
+    pub primary: Key,
+    /// Cluster time when the lock was written, for expiry.
+    pub at: u64,
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct Shard {
+    data: BTreeMap<(Key, Ts), Option<u64>>,
+    lock: BTreeMap<Key, Lock>,
+    write: BTreeMap<Key, Vec<(Ts, Ts)>>, // key → (commit ts, start ts), ascending
+    rolled_back: BTreeSet<(Key, Ts)>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Conflict {
+    /// Another transaction committed this key after our snapshot, or holds a lock on it.
+    WriteConflict,
+    /// Our transaction was rolled back by someone who found it expired.
+    RolledBack,
+}
+#[derive(Debug, PartialEq)]
+pub enum ReadError {
+    /// A live lock covers the key; try again later.
+    Blocked,
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct Stats {
+    pub rpcs: u64,
+    pub resolved_forward: u64,
+    pub resolved_back: u64,
+    pub blocked_reads: u64,
+}
+
+pub struct Cluster {
+    pub shards: Vec<Shard>,
+    /// The timestamp oracle.
+    pub oracle: Ts,
+    /// Wall-clock time in arbitrary ticks, advanced by the caller; locks older than `lock_ttl` may be resolved by readers.
+    pub now: u64,
+    pub lock_ttl: u64,
+    pub stats: Stats,
+}
+
+impl Cluster {
+    pub fn new(shards: usize, lock_ttl: u64) -> Cluster {
+        Cluster { shards: vec![Shard::default(); shards], oracle: 0, now: 0, lock_ttl, stats: Stats::default() }
+    }
+    pub fn ts(&mut self) -> Ts {
+        self.oracle += 1;
+        self.oracle
+    }
+    fn shard(&mut self, k: Key) -> &mut Shard {
+        self.stats.rpcs += 1;
+        let n = self.shards.len();
+        &mut self.shards[k as usize % n]
+    }
+    fn shard_ro(&self, k: Key) -> &Shard {
+        &self.shards[k as usize % self.shards.len()]
+    }
+
+    /// The value of `key` in the snapshot at `ts`. A lock that could still commit at or below `ts` blocks the read, unless it has
+    /// expired, in which case the reader resolves it first (roll forward if its primary committed, roll back otherwise).
+    pub fn get(&mut self, key: Key, ts: Ts) -> Result<Option<u64>, ReadError> {
+        loop {
+            let lock = self.shard_ro(key).lock.get(&key).cloned();
+            if let Some(l) = lock {
+                if l.start <= ts {
+                    if self.now.saturating_sub(l.at) < self.lock_ttl {
+                        self.stats.blocked_reads += 1;
+                        return Err(ReadError::Blocked);
+                    }
+                    self.resolve(key, &l);
+                    continue;
+                }
+            }
+            self.stats.rpcs += 1;
+            let sh = self.shard_ro(key);
+            let latest = sh.write.get(&key).and_then(|w| w.iter().rev().find(|(c, _)| *c <= ts)).copied();
+            return Ok(match latest {
+                None => None,
+                Some((_, start)) => *sh.data.get(&(key, start)).expect("a write record always has its data"),
+            });
+        }
+    }
+
+    /// Settle an expired lock using the state of its primary.
+    fn resolve(&mut self, key: Key, l: &Lock) {
+        let primary = l.primary;
+        let committed = self.shard_ro(primary).write.get(&primary).and_then(|w| w.iter().find(|(_, s)| *s == l.start)).map(|(c, _)| *c);
+        match committed {
+            Some(commit) => {
+                self.commit_key(key, l.start, commit);
+                self.stats.resolved_forward += 1;
+            }
+            None => {
+                // the primary is not committed: make sure it never will be, then drop our lock
+                self.rollback_key(primary, l.start);
+                self.rollback_key(key, l.start);
+                self.stats.resolved_back += 1;
+            }
+        }
+    }
+    fn commit_key(&mut self, key: Key, start: Ts, commit: Ts) {
+        let sh = self.shard(key);
+        if sh.lock.get(&key).is_some_and(|l| l.start == start) {
+            sh.lock.remove(&key);
+        }
+        let w = sh.write.entry(key).or_default();
+        if !w.iter().any(|(c, _)| *c == commit) {
+            w.push((commit, start));
+            w.sort();
+        }
+    }
+    fn rollback_key(&mut self, key: Key, start: Ts) {
+        let sh = self.shard(key);
+        if sh.lock.get(&key).is_some_and(|l| l.start == start) {
+            sh.lock.remove(&key);
+        }
+        sh.data.remove(&(key, start));
+        sh.rolled_back.insert((key, start));
+    }
+}
+
+/// A transaction run one RPC at a time, so that a test can crash its coordinator between any two steps.
+pub struct Txn {
+    pub start: Ts,
+    pub writes: BTreeMap<Key, Option<u64>>,
+    order: Vec<Key>,
+    primary: Key,
+    next: usize,
+    pub commit: Option<Ts>,
+    pub phase: Phase,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Phase {
+    Prewriting,
+    CommittingPrimary,
+    CommittingSecondaries,
+    Done,
+    Aborted,
+}
+
+impl Txn {
+    pub fn begin(c: &mut Cluster) -> Txn {
+        Txn { start: c.ts(), writes: BTreeMap::new(), order: vec![], primary: 0, next: 0, commit: None, phase: Phase::Prewriting }
+    }
+    pub fn read(&self, c: &mut Cluster, key: Key) -> Result<Option<u64>, ReadError> {
+        if let Some(w) = self.writes.get(&key) {
+            return Ok(*w);
+        }
+        c.get(key, self.start)
+    }
+    pub fn write(&mut self, key: Key, val: u64) {
+        self.writes.insert(key, Some(val));
+    }
+    pub fn delete(&mut self, key: Key) {
+        self.writes.insert(key, None);
+    }
+
+    /// Run one RPC of the commit protocol. Returns the phase afterwards.
+    pub fn step(&mut self, c: &mut Cluster) -> Phase {
+        if self.phase == Phase::Prewriting && self.order.is_empty() {
+            if self.writes.is_empty() {
+                self.phase = Phase::Done;
+                return self.phase;
+            }
+            self.order = self.writes.keys().copied().collect();
+            self.primary = self.order[0];
+        }
+        match self.phase {
+            Phase::Prewriting => {
+                let key = self.order[self.next];
+                if let Err(why) = c.prewrite(key, self.start, self.primary, self.writes[&key]) {
+                    return self.abort(c, why);
+                }
+                self.next += 1;
+                if self.next == self.order.len() {
+                    self.phase = Phase::CommittingPrimary;
+                }
+            }
+            Phase::CommittingPrimary => {
+                let commit = c.ts();
+                let (start, primary) = (self.start, self.primary);
+                // the lock must still be ours: if a reader rolled us back, the transaction is dead
+                let alive = c.shard(primary).lock.get(&primary).is_some_and(|l| l.start == start);
+                if !alive {
+                    return self.abort(c, Conflict::RolledBack);
+                }
+                c.commit_key(primary, start, commit);
+                self.commit = Some(commit);
+                self.next = 1;
+                self.phase = if self.order.len() == 1 { Phase::Done } else { Phase::CommittingSecondaries };
+            }
+            Phase::CommittingSecondaries => {
+                let key = self.order[self.next];
+                c.commit_key(key, self.start, self.commit.unwrap());
+                self.next += 1;
+                if self.next == self.order.len() {
+                    self.phase = Phase::Done;
+                }
+            }
+            Phase::Done | Phase::Aborted => {}
+        }
+        self.phase
+    }
+    fn abort(&mut self, c: &mut Cluster, _why: Conflict) -> Phase {
+        for i in 0..self.next.max(1).min(self.order.len()) {
+            let k = self.order[i];
+            c.rollback_key(k, self.start);
+        }
+        self.phase = Phase::Aborted;
+        self.phase
+    }
+    /// Run to the end.
+    pub fn finish(&mut self, c: &mut Cluster) -> Phase {
+        while !matches!(self.step(c), Phase::Done | Phase::Aborted) {}
+        self.phase
+    }
+    pub fn primary(&self) -> Key {
+        self.primary
+    }
+    pub fn keys(&self) -> &[Key] {
+        &self.order
+    }
+}
+
+impl Cluster {
+    /// Lock `key` for the transaction that started at `start` and stage its value; refuse if the key changed since the snapshot, is locked,
+    /// or the transaction was already rolled back (a duplicated or delayed prewrite must not revive it).
+    pub fn prewrite(&mut self, key: Key, start: Ts, primary: Key, val: Option<u64>) -> Result<(), Conflict> {
+        let now = self.now;
+        let sh = self.shard(key);
+        let newer = sh.write.get(&key).is_some_and(|w| w.iter().any(|(commit, _)| *commit >= start));
+        if sh.rolled_back.contains(&(key, start)) {
+            return Err(Conflict::RolledBack);
+        }
+        if newer || sh.lock.contains_key(&key) {
+            return Err(Conflict::WriteConflict);
+        }
+        sh.data.insert((key, start), val);
+        sh.lock.insert(key, Lock { start, primary, at: now });
+        Ok(())
+    }
+    pub fn locks(&self) -> usize {
+        self.shards.iter().map(|s| s.lock.len()).sum()
+    }
+    /// Every committed value of a key in commit order: `(commit ts, start ts, value)`.
+    pub fn history(&self, key: Key) -> Vec<(Ts, Ts, Option<u64>)> {
+        let sh = self.shard_ro(key);
+        sh.write.get(&key).map(|w| w.iter().map(|&(c, s)| (c, s, sh.data[&(key, s)])).collect()).unwrap_or_default()
+    }
+    /// Is there a commit record for this transaction on this key?
+    pub fn committed_at(&self, key: Key, start: Ts) -> Option<Ts> {
+        self.shard_ro(key).write.get(&key).and_then(|w| w.iter().find(|(_, s)| *s == start)).map(|(c, _)| *c)
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>The workload is a bank: ten accounts of 100 on four shards, eight concurrent coordinators moving money, each one RPC at a time with random delays; 1.5% of coordinators crash between their steps in the commit phase, 3% of steps are slow, locks expire after 30 ticks, and every 25 ticks a read-only snapshot totals all accounts. After the run, time passes, every account is read, and the tests check three things: the total is still 1000, no lock remains, and every transaction is committed on <em>all</em> its keys with <em>one</em> commit timestamp or on none.</p>
+
+```text title="60 runs with crashing coordinators, and the cost of commit"
+60 runs: 66318 transfers committed, 122849 aborted on conflict, 6560 coordinators crashed; 765 consistent snapshots (13635 blocked by locks); readers rolled 2133 dead transactions forward and 7057 back
+RPCs to commit a transaction writing k keys on k shards (Percolator): prewrite k, commit the primary 1, commit the other k-1 afterwards
+   k     rpcs rounds before the client ack classic 2PC with a coordinator log
+   1        3      1 (single-key commit)                                  1
+   2        5      2 (prewrite, primary)   3 (prepare, log, commit); 4 rpcs
+   4        9      2 (prewrite, primary)   3 (prepare, log, commit); 8 rpcs
+   8       17      2 (prewrite, primary)  3 (prepare, log, commit); 16 rpcs
+the lock timeout trades stalls against spurious aborts: 8 workers, 6 000 ticks, 1.5% of coordinators crash before committing, 3% of steps are slow (up to 60 ticks)
+  lock ttl  committed    aborted    crashed  blocked reads dead txns resolved  snapshots blocked
+         5      12675      25949       1363          24821             4482           2119/2400
+        20      11839      22718       1198          41781             1853           2244/2400
+        80       8888      15112        813          80084              567           2307/2400
+       320       4459       6919        391         128162              281           2357/2400
+```
+
+<ul> <li><strong>No anomaly in any run.</strong> Across 60 runs with 6 560 crashed coordinators, the total never changed, every snapshot that could be taken read exactly 1000, no transaction was half-committed, and no lock survived the final reads. Readers rolled 2 133 dead transactions forward (the primary had committed) and 7 057 back (it had not): both outcomes happen and both are consistent.</li> <li><strong>Contention is brutal on ten accounts</strong>: 66 318 transfers committed and 122 849 aborted on write conflicts, because eight workers fight over ten keys. Snapshots mostly find a live lock (13 635 blocked, 765 taken). The workload is chosen to stress the protocol, not to show throughput.</li> <li><strong>The commit cost</strong>: a k-key transaction takes <code>2k + 1</code> RPCs here (k prewrites, one check and one commit of the primary, k − 1 commits of the rest); the client can be told the outcome after two sequential rounds, because the secondaries are committed afterwards. A classic coordinator-log two-phase commit needs three sequential rounds, including a durable log write, and <code>2k</code> RPCs. Percolator shifts the commit point onto the primary key's own replication, avoiding a coordinator state machine.</li> <li><strong>A short timeout wins here, a long one stalls</strong>: with locks expiring after 5 ticks the system committed 12 675 transfers; with 320 ticks only 4 459, with 128 162 blocked reads. A crashed coordinator holds its keys until the timeout, so a long timeout makes every crash an outage. The price of a short timeout, killing slow but healthy transactions, shows as more aborts per commit (2.05 against 1.55); in this workload the stall cost dominates. With rarer crashes and slower steps the balance flips; the timeout must exceed the 99.9th percentile of a healthy commit.</li> </ul>
+
+<aside data-call="note"><b>The subtle step: the rollback record</b><p>The rollback record looks removable: deleting the lock would seem to be enough. The mutation test that removed it passed the whole randomized suite, and the reason is instructive: the dangerous case is a <em>duplicated or delayed prewrite of the primary</em> arriving after readers rolled the transaction back. It re-creates the primary lock, the zombie's commit of the primary then succeeds, and the transaction commits although its secondaries were already rolled back. The random simulator never delivers a stale duplicate; a directed test does it explicitly (<code>prewrite</code> after a rollback must return <code>RolledBack</code>). Network retries and duplicates are normal; the rollback record turns them into harmless rejections.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A coordinator as a state machine</strong>: <code>Txn::step</code> performs exactly one RPC and returns the new <code>Phase</code>. Tests drive many coordinators in one thread, choose which steps run, and drop a <code>Txn</code> to model a crash; a real coordinator runs the same logic with async calls. The protocol code never sleeps or spawns anything.</li> <li><strong>Columns as maps</strong>: <code>data: BTreeMap&lt;(Key, Ts), Option&lt;u64&gt;&gt;</code>, <code>lock: BTreeMap&lt;Key, Lock&gt;</code>, <code>write: BTreeMap&lt;Key, Vec&lt;(commit, start)&gt;&gt;</code>, <code>rolled_back: BTreeSet&lt;(Key, Ts)&gt;</code>. A tombstone is <code>None</code> in the data column.</li> <li><strong><code>Result</code> types that carry the reason</strong>: <code>Conflict::{WriteConflict, RolledBack}</code> and <code>ReadError::Blocked</code> distinguish "retry with a new snapshot" from "wait".</li> <li><strong><code>Hlc</code> derives <code>Ord</code></strong> with fields in the order <code>(wall, logical)</code>, so timestamp comparison is the derived lexicographic one; <code>tick</code> and <code>observe</code> are the whole clock.</li> <li><strong>Borrow shapes</strong>: shard access goes through <code>fn shard(&amp;mut self, k)</code>, which also counts the RPC; snapshot reads use a read-only accessor so the resolve loop can re-read after each repair.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Clocks (100 seeds)</strong>: five nodes with physical clocks off by up to ±20 ticks exchange messages at random; per-node timestamps strictly increase; a received timestamp exceeds the one sent; no hybrid clock runs ahead of the fastest physical clock; the logical counter stays small. A scripted case has physical time going backwards.</li> <li><strong>Bank (60 seeds × 6 000 ticks)</strong>: as above; asserts at every snapshot that the sum is 1000, at the end that locks, money and per-transaction atomicity hold.</li> <li><strong>Directed protocol cases</strong>: a lost update is prevented (second incrementer aborts, value 11); a crash after the primary commit is rolled forward by the next reader after the timeout and blocks it before; a crash before the primary commit is rolled back and the zombie coordinator aborts when it wakes; a delayed prewrite after the rollback is rejected; a snapshot does not see later commits and history is in commit order.</li> <li><strong>Mutants run against these tests</strong>: prewrite ignoring newer commits or existing locks; the primary commit not checking its lock; readers ignoring locks; an expired lock rolled back although its primary committed; no rollback record; secondaries committed at another timestamp; a snapshot seeing later commits; the clock's receive rule not exceeding the sent timestamp; a repeated timestamp at equal physical time; every lock naming itself as primary; commit leaving locks behind. <strong>All 12 were killed</strong>; the rollback record survived the first suite and needed the directed duplicate-prewrite test.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Percolator</strong> (Google, 2010) built the web index with this protocol on Bigtable; <strong>TiKV/TiDB</strong> implement it nearly verbatim (with async commit and one-phase commit optimizations that skip the secondaries' wait, and pessimistic locking as the default for SQL); <strong>Yugabyte</strong> and <strong>FoundationDB</strong> differ in detail (FoundationDB uses optimistic conflict ranges checked by resolvers).</li> <li><strong>CockroachDB</strong> commits with <em>write intents</em> and a transaction record on one range (the primary), with a parallel-commit optimization that lets the client be acknowledged after one round trip, and uses hybrid logical clocks with a maximum clock offset: a read that finds a value in its uncertainty window restarts at a later timestamp.</li> <li><strong>Spanner</strong> takes locks with two-phase locking inside each Paxos group, runs two-phase commit across groups (the coordinator is itself a replicated group, so it does not die), and assigns commit timestamps from <strong>TrueTime</strong>, waiting out the clock uncertainty (a few milliseconds) before releasing locks; read-only transactions read at a timestamp without locks.</li> <li><strong>Calvin/FaunaDB</strong> sequences transactions in a replicated log and executes them deterministically on every replica; no distributed commit protocol is needed, at the cost of declaring read and write sets up front. <strong>SLOG</strong> and <strong>VoltDB</strong> build on determinism too.</li> <li><strong>Yugabyte, Aurora DSQL, OceanBase</strong> and others combine hybrid or synchronized clocks with Raft groups per shard.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Clock skew breaks snapshot isolation silently</strong> if timestamps come from local clocks and nothing bounds the offset. Use an oracle, hybrid clocks with uncertainty restarts, or synchronized clocks with commit wait.</li> <li><strong>Timeouts that are too short kill healthy transactions; too long freeze keys.</strong> Resolution must be safe at <em>any</em> timeout (it is, by the primary-key rule); tune the value to your commit latency tail.</li> <li><strong>The primary is a hot spot for recovery</strong>: every resolution reads it. Keep it on a range that is not itself overloaded, and prefer a key that is cheap to read.</li> <li><strong>Read-heavy workloads suffer from locks</strong>: a reader waits for a lock whose owner is only slow. Production systems add lock-wait queues, push-timestamp mechanisms, and cache the primary's status.</li> <li><strong>Write skew remains</strong> (this is snapshot isolation): enforce invariants over several rows with explicit locks or by writing a shared key (<a href="/cookbook/p/transactions-on-the-key-space">M2</a>).</li> <li><strong>Cross-shard transactions cost</strong>: keep the commonly co-accessed data in one range (key design, <a href="/cookbook/p/sharding">M9</a>) and measure the fraction of single-range transactions.</li> <li><strong>Async commit and one-phase commit change who can observe what when</strong>; reasoning about recovery must include the fast paths.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Large-scale Incremental Processing Using Distributed Transactions and Notifications"
+url = "https://research.google/pubs/large-scale-incremental-processing-using-distributed-transactions-and-notifications/"
+
+[[sources]]
+title = "Distributed transactions: Percolator"
+url = "https://tikv.org/deep-dive/distributed-transaction/percolator/"

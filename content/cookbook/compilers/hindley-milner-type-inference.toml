@@ -1,0 +1,161 @@
+title = "Hindley–Milner type inference"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Types and semantics"
+chapter_order = 4
+order = 603
+kind = "guide"
+lede = "Used by ML, OCaml, Haskell (extended), F#, Elm, Gleam, and the inference core of Rust · Builds on chapter 1"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>HM infers the most general type of every expression without annotations, and supports <em>let-polymorphism</em>: <code>let id = λx.x</code> can be used at two types in one body. The key ideas:</p>
+
+<ul> <li><b>Type variables and unification.</b> Unknown types become variables. Each language construct generates equality constraints, and unification solves them by building a substitution. Unifying <code>α</code> with <code>τ</code> fails if <code>α</code> occurs in <code>τ</code> (the <em>occurs check</em>), which rules out infinite types such as the type of <code>λx. x x</code>.</li> <li><b>Type schemes.</b> <code>∀α. α → α</code>. At a <code>let</code>, type variables that aren't mentioned in the environment are <em>generalized</em>. At each use of a variable, its scheme is <em>instantiated</em> with fresh variables.</li> <li><b>Algorithm W vs J.</b> W returns substitutions and composes them, which is clean but slow. J mutates a global union-find of type variables and is what real implementations use.</li> <li><b>Levels.</b> Checking “not free in the environment” naively is linear in the environment size at every <code>let</code>. Rémy's levels give each type variable the <code>let</code>-depth at which it was created. A variable is generalizable if its level is deeper than the current one. Unification lowers levels when variables escape. OCaml uses this.</li> </ul>
+
+<p>Complexity: HM inference is DEXPTIME-complete in the worst case (Mairson; Kfoury, Tiuryn and Urzyczyn), because nested <code>let</code>s can create exponentially large types. On real programs it runs in near-linear time.</p>
+
+```rust title="Algorithm J with union-find and levels (about 150 lines)"
+use std::collections::HashMap;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Ty { Int, Bool, Var(u32), Fun(Box<Ty>, Box<Ty>), Gen(u32) } // Gen: ∀-bound in a scheme
+
+pub enum Expr {
+    Int(i64), Bool(bool), Var(String),
+    Lam(String, Box<Expr>), App(Box<Expr>, Box<Expr>),
+    Let(String, Box<Expr>, Box<Expr>), If(Box<Expr>, Box<Expr>, Box<Expr>),
+}
+
+#[derive(Clone)]
+enum Binding { Unbound { level: u32 }, Link(Ty) }
+
+pub struct Infer { vars: Vec<Binding>, level: u32 }
+
+impl Infer {
+    pub fn new() -> Self { Infer { vars: Vec::new(), level: 0 } }
+
+    fn fresh(&mut self) -> Ty {
+        self.vars.push(Binding::Unbound { level: self.level });
+        Ty::Var(self.vars.len() as u32 - 1)
+    }
+
+    /// Follow links to the representative, compressing paths.
+    fn resolve(&mut self, t: &Ty) -> Ty {
+        if let Ty::Var(v) = t {
+            if let Binding::Link(next) = self.vars[*v as usize].clone() {
+                let r = self.resolve(&next);
+                self.vars[*v as usize] = Binding::Link(r.clone());
+                return r;
+            }
+        }
+        t.clone()
+    }
+
+    /// Occurs check, and lower the level of every variable in t to at most `level`.
+    fn occurs_adjust(&mut self, v: u32, level: u32, t: &Ty) -> Result<(), String> {
+        match self.resolve(t) {
+            Ty::Var(w) if w == v => Err("infinite type".into()),
+            Ty::Var(w) => {
+                if let Binding::Unbound { level: l } = &mut self.vars[w as usize] { *l = (*l).min(level); }
+                Ok(())
+            }
+            Ty::Fun(a, b) => { self.occurs_adjust(v, level, &a)?; self.occurs_adjust(v, level, &b) }
+            _ => Ok(()),
+        }
+    }
+
+    pub fn unify(&mut self, a: &Ty, b: &Ty) -> Result<(), String> {
+        match (self.resolve(a), self.resolve(b)) {
+            (Ty::Int, Ty::Int) | (Ty::Bool, Ty::Bool) => Ok(()),
+            (Ty::Var(x), Ty::Var(y)) if x == y => Ok(()),
+            (Ty::Var(x), t) | (t, Ty::Var(x)) => {
+                let Binding::Unbound { level } = self.vars[x as usize] else { unreachable!() };
+                self.occurs_adjust(x, level, &t)?;
+                self.vars[x as usize] = Binding::Link(t);
+                Ok(())
+            }
+            (Ty::Fun(a1, r1), Ty::Fun(a2, r2)) => { self.unify(&a1, &a2)?; self.unify(&r1, &r2) }
+            (a, b) => Err(format!("cannot unify {a:?} with {b:?}")),
+        }
+    }
+
+    /// Quantify variables created at a deeper level than the current one.
+    fn generalize(&mut self, t: &Ty) -> Ty {
+        match self.resolve(t) {
+            Ty::Var(v) => match self.vars[v as usize] {
+                Binding::Unbound { level } if level > self.level => Ty::Gen(v),
+                _ => Ty::Var(v),
+            },
+            Ty::Fun(a, b) => Ty::Fun(Box::new(self.generalize(&a)), Box::new(self.generalize(&b))),
+            t => t,
+        }
+    }
+
+    fn instantiate(&mut self, t: &Ty, map: &mut HashMap<u32, Ty>) -> Ty {
+        match t {
+            Ty::Gen(g) => map.entry(*g).or_insert_with(|| self.fresh()).clone(),
+            Ty::Fun(a, b) => Ty::Fun(Box::new(self.instantiate(a, map)), Box::new(self.instantiate(b, map))),
+            t => t.clone(),
+        }
+    }
+
+    pub fn infer(&mut self, env: &mut Vec<(String, Ty)>, e: &Expr) -> Result<Ty, String> {
+        match e {
+            Expr::Int(_) => Ok(Ty::Int),
+            Expr::Bool(_) => Ok(Ty::Bool),
+            Expr::Var(x) => {
+                let scheme = env.iter().rev().find(|(n, _)| n == x).map(|(_, t)| t.clone())
+                    .ok_or_else(|| format!("unbound variable {x}"))?;
+                Ok(self.instantiate(&scheme, &mut HashMap::new()))
+            }
+            Expr::Lam(x, body) => {
+                let a = self.fresh();
+                env.push((x.clone(), a.clone()));          // λ-bound: monomorphic
+                let r = self.infer(env, body);
+                env.pop();
+                Ok(Ty::Fun(Box::new(a), Box::new(r?)))
+            }
+            Expr::App(f, arg) => {
+                let tf = self.infer(env, f)?;
+                let ta = self.infer(env, arg)?;
+                let r = self.fresh();
+                self.unify(&tf, &Ty::Fun(Box::new(ta), Box::new(r.clone())))?;
+                Ok(r)
+            }
+            Expr::Let(x, rhs, body) => {
+                self.level += 1;
+                let t = self.infer(env, rhs);
+                self.level -= 1;
+                let scheme = self.generalize(&t?);       // let-bound: polymorphic
+                env.push((x.clone(), scheme));
+                let r = self.infer(env, body);
+                env.pop();
+                r
+            }
+            Expr::If(c, t, f) => {
+                let tc = self.infer(env, c)?;
+                self.unify(&tc, &Ty::Bool)?;
+                let (tt, tf) = (self.infer(env, t)?, self.infer(env, f)?);
+                self.unify(&tt, &tf)?;
+                Ok(tt)
+            }
+        }
+    }
+}
+```
+
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Program</th><th>Inferred</th><th>Why</th></tr></thead> <tbody> <tr><td><code>let id = λx.x in (id id) 1</code></td><td><code>Int</code></td><td><code>id</code> is instantiated twice, once at <code>(Int→Int)→(Int→Int)</code></td></tr> <tr><td><code>λf. let g = f in g</code></td><td><code>α → α</code></td><td><code>f</code>'s variable was created at level 0, so it doesn't generalize at the inner <code>let</code></td></tr> <tr><td><code>λx. x x</code></td><td>error: infinite type</td><td>unifying <code>α</code> with <code>α → β</code> fails the occurs check</td></tr> <tr><td><code>λx. if x then 1 else x</code></td><td>error: <code>Int</code> vs <code>Bool</code></td><td>both branches must agree</td></tr> </tbody> </table></div>
+
+<div class="cb-g-tip"><h3>Extensions you'll want</h3> <ul> <li><b>Value restriction</b> (Wright 1995): only generalize syntactic values. Otherwise <code>let r = ref []</code> becomes polymorphic and unsound. OCaml relaxes this further.</li> <li><b>Type classes and traits</b> (Wadler–Blott): constraints like <code>Eq α ⇒ α → α → Bool</code>, elaborated into dictionary passing or monomorphized. Rust's trait solver is a Prolog-like search over impls.</li> <li><b>Records and variants</b>: row polymorphism (Rémy; Leijen's scoped labels) types <code>λr. r.x</code> as <code>{x: α | ρ} → α</code>.</li> <li><b>Subtyping</b>: plain HM doesn't have it. Algebraic subtyping (Dolan's MLsub, Parreaux's SimpleSub) restores principal types with subtyping.</li> <li><b>Constraint-based inference</b>: generate constraints first, then solve (HM(X), OutsideIn(X) in GHC). This gives better error messages and extends to GADTs and type families.</li> <li><b>Higher-rank</b> types need annotations; bidirectional checking (<a href="/cookbook/p/bidirectional-typing-and-dependent-types">chapter 3</a>) is the standard way.</li> </ul></div>
+
+<div class="cb-g-tip"><h3>Type error messages</h3> <p>Unification reports the <em>last</em> constraint that failed, which is often far from the actual mistake. Better approaches: record the source span that created each constraint, and on failure report both sides; search for a minimal set of unsatisfiable constraints (type error slicing); or rank likely culprits (SHErrLoc; Helium's heuristics). Elm and Rust both invest heavily here.</p></div>
+
+<div class="cb-g-tip"><h3>In production</h3> <p>rustc's inference uses unification tables from the <code>ena</code> crate, with inference variables resolved lazily. It adds snapshots so it can roll back speculative unification during trait selection. OCaml's typer uses levels exactly as above. GHC's constraint solver is OutsideIn(X).</p></div>
+"""
+
+[[sources]]
+title = "Kiselyov, “How OCaml type checker works”"
+url = "https://okmij.org/ftp/ML/generalization.html"

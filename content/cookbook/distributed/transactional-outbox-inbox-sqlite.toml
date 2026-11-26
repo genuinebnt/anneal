@@ -1,0 +1,54 @@
+title = "Transactional OUTBOX + INBOX on SQLite"
+module = "Distributed systems"
+module_order = 10
+chapter = "Microservice patterns"
+chapter_order = 5
+order = 509
+kind = "recipe"
+lede = "Atomic state+event, leased relays, idempotent consumers, crash injection"
+level = "intermediate"
+code = ["examples/microservices/transactional_outbox_inbox_sqlite.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any service that must change its own database **and** tell other services about it (orders, payments, inventory); event-driven microservices.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The dual-write problem**: "**update** my table, then publish to the broker" is two writes to two systems. Crash between them and either the state changed but nobody heard (lost event), or (publish first) others heard about something that never happened. There is no transaction spanning a database and a broker, and 2PC across them is rarely available.
+
+**The outbox**: write the business change **and** a row describing the event into an **outbox** table in **one** local ACID transaction. Either both exist or neither does. A separate **relay** reads the outbox and publishes to the broker, so publishing becomes a retryable background job instead of part of the request.
+
+Delivery is therefore **at-least-once**: a crash after publishing but before marking the row sent publishes it again. **The INBOX**: the consumer turns at-least-once into effectively-once. It records every processed message id in an INBOX table (primary key = message identity) in the **same** transaction as its business effect.
+
+A duplicate hits the key and is skipped. **What is simulated** (one thread, one seeded scheduler, two real in-memory SQLite databases: producer DB and consumer DB):
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>The relay <strong>claims</strong> a row with one <code>UPDATE ... WHERE id=(SELECT ...) RETURNING ...</code>: the SQLite stand-in for <code>SELECT ... FOR UPDATE SKIP LOCKED</code>.</p><p>The claim writes <code>claimed_by</code> and <code>lease_until</code>. A relay that dies leaves a lease that simply <strong>expires</strong>, then another relay takes the row. The final <code>sent=1</code> update is <strong>fenced</strong> by <code>claimed_by=me</code>.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Per-key order</div><div class="cb-g-says"><p>Each event carries a per-aggregate sequence number assigned inside the producer transaction. The claim only offers the lowest unsent seq of a key, so a key is never published out of order by relays; the consumer additionally defers <code>seq != expected</code> (the broker reorders), and the inbox drops <code>seq &lt; expected</code> (duplicates).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Retry with backoff</div><div class="cb-g-says"><p>A failed publish bumps <code>attempts</code> and sets <code>next_at = now + min(2&#94;attempts, 16)</code>. After MAX_ATTEMPTS the row is <strong>parked</strong> (a copy goes to <code>dead_letter</code>) and, importantly, still <strong>blocks</strong> its key, because skipping it would let seq+1 overtake. An operator fixes the cause and requeues; a demo shows this.</p></div></div><div class="cb-g-term"><div class="cb-g-name">The broker</div><div class="cb-g-says"><p>Duplicates on publish, lost acks (message enqueued but the publisher sees an error), outage windows, random delivery order, redelivery until acked.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Crash points</div><div class="cb-g-says"><p>(every step boundary, each hit counted and asserted to have fired): producer before/after commit; relay claim before/after commit; after publish before mark; mark before/after commit; consumer before commit; after commit before ack.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Oracle</div><div class="cb-g-says"><p>After 3000 random schedules with 3 relays and 2 consumers: every <strong>committed</strong> command is in the consumer's state exactly once, per-key apply order is 1,2,3..., consumer state == producer state, dead letters empty, and the outbox drains to empty.</p><p><strong>Polling</strong> vs <strong>tail</strong>: a second relay mode keeps a persisted <strong>cursor</strong> and reads <code>id &gt; cursor</code> (what a CDC reader does with a log position): no per-row claim/mark writes, one cursor write per batch, but a single reader and an ordering trap noted below.</p><p><strong>Other variants</strong> (described, not built): (1) "<strong>listen to yourself</strong>": the service publishes the event first and applies its own state change only when it consumes its own message; no outbox table, but read-your-writes is lost and the broker becomes the commit point.</p><p>(2) CDC (Debezium outbox event router): the relay is the database's replication log, so the app only INSERTs the outbox row and a connector tails the WAL: no polling load, commit order is exactly log order; costs an extra system to run.</p><p><strong>Tail trap</strong>: with concurrent writers on Postgres, a sequence-assigned <code>id</code> order is <strong>not</strong> commit order (a slow txn with a small id commits later), so an <code>id &gt; cursor</code> reader can skip it forever. SQLite has one writer so this simulation cannot show it.</p><p><strong>INBOX retention</strong>: the per-key high-water mark (<code>next_seq</code>) already rejects old duplicates, so inbox rows are only needed while a duplicate could be in flight; prune by age &gt; the broker's maximum redelivery window.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Debezium outbox event router</li><li>Axon/MassTransit/NServiceBus/Wolverine outboxes</li><li>Spring Modulith event publication registry</li><li>Kafka consumers that dedupe by id</li><li>payments (Stripe-style idempotency keys are the same inbox idea)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://microservices.io/patterns/data/transactional-outbox.html" target="_blank" rel="noreferrer">https://microservices.io/patterns/data/transactional-outbox.html</a></li><li><a href="https://debezium.io/documentation/reference/stable/connectors/postgresql.html" target="_blank" rel="noreferrer">https://debezium.io/documentation/reference/stable/connectors/postgresql.html</a></li><li><a href="https://www.sqlite.org/lang_returning.html" target="_blank" rel="noreferrer">https://www.sqlite.org/lang_returning.html</a></li></ul>
+"""
+
+[[sources]]
+title = "microservices.io/patterns/data/transactional-outbox.html"
+url = "https://microservices.io/patterns/data/transactional-outbox.html"
+
+[[sources]]
+title = "debezium.io/documentation/reference/stable/connectors/postgresql.html"
+url = "https://debezium.io/documentation/reference/stable/connectors/postgresql.html"
+
+[[sources]]
+title = "sqlite.org/lang_returning.html"
+url = "https://www.sqlite.org/lang_returning.html"

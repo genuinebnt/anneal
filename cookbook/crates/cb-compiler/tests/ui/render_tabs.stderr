@@ -1,0 +1,19 @@
+error[E0301]: mismatched types
+ --> render_tabs.peb:2:16
+  |
+2 |     let _x: int = "tab";
+  |             ---   ^^^^^ expected `int`, found `str`
+  |             |
+  |             expected due to this type
+
+error[E0301]: mismatched types
+ --> render_tabs.peb:3:18
+  |
+3 |         let _y: bool = 1;
+  |                 ----   ^ expected `bool`, found `int`
+  |                 |
+  |                 expected due to this type
+  |
+  = help: compare with `!= 0` to get a `bool`
+
+error: aborting due to 2 previous errors

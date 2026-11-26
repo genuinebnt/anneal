@@ -73,6 +73,11 @@ cargo run -p anneal-cli -- list d9                   # problems in a track
 cargo run -p anneal-cli -- run d9-network-delay-time --solution --submit --docker
 ```
 
+## Cookbook
+
+A reference section at `/cookbook`, loaded from `content/cookbook`; it stores nothing about the reader. How it works, how
+to regenerate its guide pages and how to add a page: [docs/COOKBOOK.md](docs/COOKBOOK.md).
+
 ## Tests
 
 ```sh

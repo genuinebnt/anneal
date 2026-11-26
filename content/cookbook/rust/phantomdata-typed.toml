@@ -1,0 +1,59 @@
+title = "PhantomData"
+module = "Rust language"
+module_order = 1
+chapter = "Types, traits and generics"
+chapter_order = 2
+order = 17
+kind = "recipe"
+lede = "Typed ids, units, permissions, variance, auto-traits, drop check."
+level = "intermediate"
+code = ["examples/language/phantomdata_typed.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>typed indices</li><li>units of measure</li><li>type-state APIs</li><li>FFI handle wrappers</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+`PhantomData<T>` is a zero-sized field that tells the compiler "this type behaves as if it holds a T".
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+a struct may not have an unused type parameter (error E0392), and you often want a parameter that exists only at compile time (a tag) or that really describes ownership of something held behind a raw pointer.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+the choice of `PhantomData<..>` form controls three things: variance, auto-traits (Send/Sync) and drop check.
+
+- `PhantomData<T>`          covariant in T, Send/Sync as T, drop check: "I own and may drop a T".
+- `PhantomData<fn() -> T>`  covariant, **always** Send+Sync, owns nothing (best for pure tags like ids).
+- `PhantomData<*const T>`   covariant, neither Send nor Sync (opts out of auto-traits).
+- `PhantomData<fn(T)>`      contravariant; `PhantomData<Cell<T>>` / `*mut T` invariant. **Gotcha**: `#[derive(Clone)]` on `Id<T>` adds `T: Clone`, so `Id<NotClone>` would not be Clone. Write impls by hand.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>typed arena/graph indices</li><li>units-of-measure wrappers</li><li>read-only vs read-write handles</li><li>raw-pointer containers (<code>Vec</code>-like types use PhantomData&lt;T&gt; for drop check)</li><li>FFI handles tagged by the C type</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/marker/struct.PhantomData.html> and <https://doc.rust-lang.org/nomicon/phantom-data.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/marker/struct.PhantomData.html"
+url = "https://doc.rust-lang.org/std/marker/struct.PhantomData.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/phantom-data.html"
+url = "https://doc.rust-lang.org/nomicon/phantom-data.html"

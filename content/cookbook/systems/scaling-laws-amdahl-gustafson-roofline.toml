@@ -1,0 +1,64 @@
+title = "Scaling laws"
+module = "Performance and systems"
+module_order = 7
+chapter = "High-performance computing"
+chapter_order = 4
+order = 307
+kind = "recipe"
+lede = "Amdahl, Gustafson, Karp-Flatt, USL fit, STREAM bandwidth and the roofline model"
+level = "intermediate"
+code = ["examples/hpc/scaling_laws_amdahl_gustafson_roofline.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>deciding whether adding cores/nodes will help</li><li>capacity planning</li><li>explaining why a kernel stops scaling</li><li>picking what to optimise</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+capacity planning for services (USL), HPC strong/weak scaling reports, "is this loop memory- or compute-bound" triage (roofline), **stream** as the standard memory-bandwidth sanity check on a new machine. Course: Berkeley CS267 (Applying Parallel Computing) lectures on performance models; Williams/Waterman/Patterson "Roofline" (CACM 2009).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Four models, one file, and one rule: every **assert** uses a synthetic, deterministic work model (operation counts and planted parameters), never wall-clock time, so the asserts are identical on a laptop and on a CI box. Real timings are measured and **printed** so you can compare your machine with the models.
+
+1. Amdahl (strong scaling): fixed problem, serial fraction f. S(p) = 1 / (f + (1-f)/p), limit 1/f.
+2. Gustafson (weak scaling): problem grows with p, so scaled speedup S(p) = p - f (p-1); no hard limit.
+3. Karp-Flatt: given a **measured** speedup S on p workers, the experimentally determined serial fraction is e = (1/S - 1/p) / (1 - 1/p). If e is constant in p, the loss is a true serial part; if e grows with p, the loss is overhead (communication, contention) that Amdahl does not model.
+4. Universal Scalability Law (Gunther): C(N) = N / (1 + sigma (N-1) + kappa N (N-1)). sigma = contention (queueing for a shared resource, Amdahl-like), kappa = coherency (crosstalk, pairwise cost, makes throughput **retrograde** after N&#42; = sqrt((1-sigma)/kappa)).
+
+   Fit trick: N/C - 1 = sigma (N-1) + kappa N (N-1) is **linear** in (sigma, kappa), so ordinary least squares (2x2 normal equations) recovers them.
+5. **Stream** kernels (copy, scale, add, triad) and the roofline: attainable GFLOP/s = min(peak, AI &#42; bandwidth), where AI (arithmetic intensity) = flops / bytes moved. Kernels left of the ridge point (peak/bandwidth) are memory-bound.
+
+Why the synthetic model: a "measured" speedup is computed from an abstract time T(p) = f W + (1-f) W / p with small seeded multiplicative noise. Fitting recovers the planted f within a bound we can prove from the noise level, so the assert tests **our** estimator code, not the machine.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Amdahl%27s_law> ; <http://www.perfdynamics.com/Manifesto/USLscalability.html> ; <https://www.cs.virginia.edu/stream/ref.html> ; <https://en.wikipedia.org/wiki/Roofline_model> ; <https://en.algorithmica.org/hpc/>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Amdahl%27s_law"
+url = "https://en.wikipedia.org/wiki/Amdahl%27s_law"
+
+[[sources]]
+title = "perfdynamics.com/Manifesto/USLscalability.html"
+url = "http://www.perfdynamics.com/Manifesto/USLscalability.html"
+
+[[sources]]
+title = "cs.virginia.edu/stream/ref.html"
+url = "https://www.cs.virginia.edu/stream/ref.html"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Roofline_model"
+url = "https://en.wikipedia.org/wiki/Roofline_model"
+
+[[sources]]
+title = "en.algorithmica.org/hpc"
+url = "https://en.algorithmica.org/hpc/"

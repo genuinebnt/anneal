@@ -1,0 +1,48 @@
+title = "Cuckoo hashing"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Hashing and probabilistic structures"
+chapter_order = 1
+order = 163
+kind = "recipe"
+lede = "A two-table cuckoo hash map AND a cuckoo filter (approximate membership with delete)."
+level = "advanced"
+code = ["examples/data_structures/cuckoo_hashing.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+worst-case O(1) lookups (two probes), and space-efficient set membership that supports deletion.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**What/why**: a cuckoo **table** gives every key exactly two possible homes (one per table), so a lookup is at most two probes, a hard bound that chaining and linear probing cannot offer. Insert kicks the current occupant to **its** other home, possibly cascading; if the chain exceeds a bound (a cycle, or too full) we rebuild with new hash seeds and a larger table.
+
+With two hash functions the table must stay under about 50% load (we keep 40%), so it trades memory for predictable reads. A cuckoo **filter** (Fan et al.) stores only a small **fingerprint** per item in 4-slot buckets.
+
+Partial-key cuckoo hashing makes the second bucket computable from the first bucket and the fingerprint alone: `i2 = i1 XOR hash(fp)`; XOR is an involution, so from either bucket we can find the other without the original key. That lets us relocate fingerprints and, unlike Bloom filters, **delete** items (only items that were inserted!).
+
+False positive rate is about 2&#42;4/2&#94;f (8 slots examined, each matching with probability 2&#94;-f); a Bloom filter needs &#126;1.44&#42;log2(1/p) bits/item. Verified by a differential test of the table against std `HashMap`, and by property tests of the filter (no false negatives, FPR under a derived bound).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+set-membership pre-checks that must support removal (cache admission, "have I seen this?" dedupe, avoiding disk lookups for absent keys), and lookup-heavy tables where bounded worst-case probes matter (packet forwarding tables, in-memory indexes).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://www.cs.cmu.edu/~dga/papers/cuckoo-conext2014.pdf> (Cuckoo Filter) and <https://en.wikipedia.org/wiki/Cuckoo_hashing>
+"""
+
+[[sources]]
+title = "cs.cmu.edu/~dga/papers/cuckoo-conext2014.pdf"
+url = "https://www.cs.cmu.edu/~dga/papers/cuckoo-conext2014.pdf"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Cuckoo_hashing"
+url = "https://en.wikipedia.org/wiki/Cuckoo_hashing"

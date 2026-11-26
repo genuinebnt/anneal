@@ -1,0 +1,30 @@
+title = "One error type -> consistent HTTP error responses"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 510
+kind = "recipe"
+lede = "one error type -> consistent HTTP error responses."
+level = "intermediate"
+code = ["examples/web/axum_errors.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+REST API stage ("consistent error format and meaningful status codes").
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+public APIs that need one stable error shape and no leaked internals.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: handlers return `Result<T, AppError>`. `AppError` implements `IntoResponse`, mapping each variant to a status code and **one JSON** shape `{"error":{"code":..,"message":..}}`. Internal errors are logged but their details are never leaked to the client.
+
+Same idea as your CLI's error enum: errors are values.
+"""

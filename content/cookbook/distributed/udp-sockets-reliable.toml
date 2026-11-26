@@ -1,0 +1,60 @@
+title = "UDP sockets reliable"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Networking and protocols"
+chapter_order = 3
+order = 541
+kind = "recipe"
+lede = "real UDP on loopback, socket options, then RELIABLE delivery built on a lossy datagram channel (stop-and-wait, Go-Back-N, Selective Repeat)"
+level = "advanced"
+code = ["examples/networking/udp_sockets_reliable.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+DNS/QUIC/game netcode/VoIP/discovery protocols, anything that needs TCP-like reliability without TCP's ordering or head-of-line blocking.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+Part 1 uses **real** sockets on 127.0.0.1 to show what UDP does and does not promise: each `send` is **one** datagram and each `recv` returns exactly one (message boundaries are preserved, unlike TCP's byte stream); a receive buffer smaller than the datagram silently **truncates** it (the tail is lost, not queued); `connect()` on a UDP socket only sets a default peer and a source filter (no handshake); a full receive queue **drops** datagrams (SO_RCVBUF is the only back-pressure there is).
+
+It also tours the socket options that matter: SO_REUSEADDR / SO_REUSEPORT, SO_RCVBUF / SO_SNDBUF, TCP_NODELAY, SO_KEEPALIVE and the TCP listen backlog. Multicast needs an interface and routing that macOS loopback may not provide, so the demo tries it with TTL 0 (never leaves the host) and prints what happened instead of asserting.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Part 2 adds what UDP lacks. Real loss is hard to reproduce on loopback, so we **simulate** a datagram channel (seeded xorshift: loss, duplication, reordering through extra random delay) in virtual 1 ms ticks, and build three classic ARQ protocols on top.
+
+All three use sequence numbers and a retransmission timer whose timeout comes from RFC 6298: SRTT/RTTVAR (Jacobson/Karels), RTO = SRTT + 4&#42;RTTVAR, exponential backoff on timeout, and **KARN'S rule** (never take an RTT sample from a retransmitted packet: the ack is ambiguous).
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Stop-and-wait</div><div class="cb-g-says"><p>One packet in flight; throughput = 1 packet per RTT, however fat the pipe.</p></div></div><div class="cb-g-term"><div class="cb-g-name">GO-BACK-N</div><div class="cb-g-says"><p>Window of N, receiver accepts only in-order and sends <strong>cumulative</strong> acks ("next expected"); on timeout the sender resends the whole window: simple receiver, wasteful retransmissions.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Selective repeat</div><div class="cb-g-says"><p>Receiver buffers out-of-order packets in its window and acks each (<strong>selective</strong> ack plus a cumulative field); the sender keeps a timer per packet and resends only what is missing. Each must deliver exactly 5000 messages in order with no loss, no duplicates, under 30% loss in <strong>both</strong> directions (acks are lost too), 5% duplication and a little reordering.</p><p>The table compares efficiency.</p></div></div></div>
+
+TCP does this in the kernel; QUIC and many game/VoIP stacks redo it in user space over UDP, usually with the improvements here: selective acks, per-packet numbers that never repeat (no retransmission ambiguity) and a window controlled by congestion control (see tcp_congestion_control_sim).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>QUIC (RFC 9000)</li><li>DNS</li><li>DHCP</li><li>NTP</li><li>SNMP</li><li>WireGuard</li><li>game state sync</li><li>RTP/VoIP</li><li>service discovery (mDNS/SSDP use multicast)</li><li>TFTP (literally stop-and-wait over UDP)</li><li>reliable-UDP libraries such as ENet</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>RFC 768 (UDP) <a href="https://www.rfc-editor.org/rfc/rfc768" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc768</a></li><li>RFC 6298 (RTO computation) <a href="https://www.rfc-editor.org/rfc/rfc6298" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc6298</a></li><li>RFC 793 (TCP) <a href="https://www.rfc-editor.org/rfc/rfc793" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc793</a></li><li>Kurose &amp; Ross, "Computer Networking: A Top-Down Approach", ch. 3 (rdt, GBN, SR)</li></ul>
+"""
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc768"
+url = "https://www.rfc-editor.org/rfc/rfc768"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc6298"
+url = "https://www.rfc-editor.org/rfc/rfc6298"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc793"
+url = "https://www.rfc-editor.org/rfc/rfc793"

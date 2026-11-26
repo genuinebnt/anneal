@@ -1,0 +1,58 @@
+title = "Storage models"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 329
+kind = "recipe"
+lede = "Row store (NSM), column store (DSM) and PAX, with an IO and cache-line cost meter."
+level = "advanced"
+code = ["examples/database/storage_models_nsm_dsm_pax.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+choosing a physical layout for OLTP vs OLAP tables; understanding why column stores scan fast.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+NSM is the layout of PostgreSQL, MySQL/InnoDB and SQLite tables (OLTP); DSM is the layout of column stores such as ClickHouse, DuckDB's storage, Vertica and Parquet/**orc** files; PAX (minipages per column inside each page) is what Parquet row groups and several hybrid engines (and the original PAX paper's research systems) do to keep one page per row group while getting columnar cache behaviour.
+
+Course: CMU 15-445 Intro to Database Systems, Lecture 06 (Storage Models and Compression: NSM, DSM, PAX).
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+one table (`id u64, qty u32, price i64, cat` short low-cardinality string, `name` variable string), three physical layouts, all built from real 4 KiB byte pages and accessed only through a `Meter` that records every byte range read: distinct **pages** touched (the IO cost), distinct 64-byte **cache lines** touched (the memory-bandwidth/CPU cost) and bytes read.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">NSM (row store)</div><div class="cb-g-says"><p>A slotted page of whole rows. Reading one full tuple touches one page and about one cache line; scanning one column still drags every row's other columns through the cache.</p></div></div><div class="cb-g-term"><div class="cb-g-name">DSM (column store)</div><div class="cb-g-says"><p>One file of pages per column, fixed-width values packed densely, strings in slotted column pages. Row i is value i of every column (<strong>record ID alignment</strong>), so rebuilding a tuple touches one page per column (5 here) and a column aggregate touches only that column's pages.</p></div></div><div class="cb-g-term"><div class="cb-g-name">PAX</div><div class="cb-g-says"><p>Pages hold the same rows as NSM would, but inside the page each column has its own MINIPAGE. IO is as cheap as NSM (one page per tuple), the cache behaviour of a column scan is as good as DSM, but a scan still reads every page of the table.</p><p>Optionally the low-cardinality <code>cat</code> minipage is <strong>dictionary encoded</strong> (per-page dictionary + 1-byte codes): more rows per page and an equality filter can first look the constant up in the dictionary (absent: skip the page's codes) and then compare one-byte codes.</p><p>Late vs early <strong>materialisation</strong>: filter on one column, collect matching row ids, and only then fetch the other columns for the survivors (late) versus rebuilding every tuple first and filtering afterwards (early).</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+all four layouts (NSM, DSM, PAX, PAX+dictionary) answer 500 random queries (point reads, column projections of random rows, column sums, filter-then-aggregate, wide scans, string equality) identically to a plain `Vec<Row>` oracle.
+
+The meter then asserts the textbook winners: NSM wins full-tuple point reads (1 page vs 5 for DSM), DSM and PAX win single-column scans in cache lines (and DSM wins in pages), PAX does not win in pages, dictionary PAX shrinks the file, and late materialisation touches less than early.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://15445.courses.cs.cmu.edu/fall2024/slides/05-storage3.pdf" target="_blank" rel="noreferrer">https://15445.courses.cs.cmu.edu/fall2024/slides/05-storage3.pdf</a> (CMU 15-445 storage models lecture)</li><li><a href="https://www.pdl.cmu.edu/PDL-FTP/Database/pax.pdf" target="_blank" rel="noreferrer">https://www.pdl.cmu.edu/PDL-FTP/Database/pax.pdf</a> (Ailamaki et al., "Weaving Relations for Cache Performance", VLDB 2001) and <a href="https://db.cs.cmu.edu/papers/2022/cidr2022-p13-crotty.pdf" target="_blank" rel="noreferrer">https://db.cs.cmu.edu/papers/2022/cidr2022-p13-crotty.pdf</a> (Crotty et al., "Are You Sure You Want to Use MMAP in Your DBMS", background on page IO)</li></ul>
+"""
+
+[[sources]]
+title = "15445.courses.cs.cmu.edu/fall2024/slides/05-storage3.pdf"
+url = "https://15445.courses.cs.cmu.edu/fall2024/slides/05-storage3.pdf"
+
+[[sources]]
+title = "pdl.cmu.edu/PDL-FTP/Database/pax.pdf"
+url = "https://www.pdl.cmu.edu/PDL-FTP/Database/pax.pdf"
+
+[[sources]]
+title = "db.cs.cmu.edu/papers/2022/cidr2022-p13-crotty.pdf"
+url = "https://db.cs.cmu.edu/papers/2022/cidr2022-p13-crotty.pdf"

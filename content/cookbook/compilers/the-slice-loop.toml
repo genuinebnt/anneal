@@ -1,0 +1,15 @@
+title = "The slice loop"
+module = "Compilers and languages"
+module_order = 12
+chapter = "A tree-walking interpreter"
+chapter_order = 2
+order = 572
+kind = "guide"
+lede = "Repeat these steps for every slice. Write the golden test first so you know when the slice is finished."
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<ol class="cb-g-steps"> <li><b>Write the .lox file</b><p>Add <code>tests/lox/slice3/vars.lox</code> with <code>// expect:</code> lines. Run it and watch it fail.</p></li> <li><b>Lex</b><p>Add only the token kinds this slice needs. Give each one a lexer test.</p></li> <li><b>Parse</b><p>Add AST variants and grammar rules. Snapshot the S-expression for precedence and associativity.</p></li> <li><b>Evaluate</b><p>Handle the new variants in <code>match</code>. The compiler points to every arm you still have to write.</p></li> <li><b>Go green</b><p>Run <code>cargo test</code>, then turn on the official test folders this slice covers.</p></li> <li><b>Tag</b><p>Commit and <code>git tag slice-3</code>. <code>git diff slice-2 slice-3 --stat</code> shows what the feature cost.</p></li> </ol>
+"""

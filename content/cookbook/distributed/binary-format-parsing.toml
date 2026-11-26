@@ -1,0 +1,52 @@
+title = "Safe binary format parsing"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Encodings and compression"
+chapter_order = 5
+order = 554
+kind = "recipe"
+lede = "A bounds-checked Reader, TLV, a PNG-like chunk container, bit reading, zero-copy."
+level = "advanced"
+code = ["examples/text_and_parsing/binary_format_parsing.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>file formats</li><li>network protocols</li><li>parsing untrusted input (uploads, packets, plugins) without panics or unsafe</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The rule**: input is hostile and may be truncated anywhere. Never index (`buf[i]`) or slice (`buf[a..b]`) raw input; go through a `Reader` whose every primitive checks `n <= remaining()` and returns a typed error carrying the byte **offset**, so a bug report says "truncated at 0x2c, wanted 4 have 1" instead of a panic.
+
+Lengths read from the file are never used to allocate: we return `&[u8]` slices borrowed from the input (zero-copy, lifetime `'a`), so memory is bounded by the input.
+
+**Pieces**: `Reader` (ints LE/BE via a macro, LEB128 varint, length-prefixed bytes, `sub_reader` for nested length-delimited sections so a child can never read past its parent, alignment with zero-padding check); a TLV record decoder that **skips**
+
+```text
+unknown tags (forward compatibility, as in protobuf); a PNG-like container `magic | chunk*` with chunk = `len | type |
+```
+
+data &#124; crc32(type+data)', where the type's first-letter case says critical vs ancillary (unknown critical => reject, unknown ancillary => skip); and a MSB-first 'BitReader'/'BitWriter' with Exp-Golomb codes (H.264 style variable-width fields). Varints accept overlong encodings (like many decoders); a canonical-only format would also reject those.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>image/audio/video container parsers</li><li>protobuf-like wire formats</li><li>network packet dissectors</li><li>database page and WAL formats</li><li>archive readers</li><li>sandboxed parsing of user uploads</li><li>fuzzing harnesses call exactly these entry points</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://www.w3.org/TR/png/" target="_blank" rel="noreferrer">https://www.w3.org/TR/png/</a> (chunk layout and critical/ancillary bit)</li><li><a href="https://protobuf.dev/programming-guides/encoding/" target="_blank" rel="noreferrer">https://protobuf.dev/programming-guides/encoding/</a></li></ul>
+"""
+
+[[sources]]
+title = "w3.org/TR/png"
+url = "https://www.w3.org/TR/png/"
+
+[[sources]]
+title = "protobuf.dev/programming-guides/encoding"
+url = "https://protobuf.dev/programming-guides/encoding/"

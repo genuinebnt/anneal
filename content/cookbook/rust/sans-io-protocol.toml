@@ -1,0 +1,60 @@
+title = "Sans-IO protocol design"
+module = "Rust language"
+module_order = 1
+chapter = "Design patterns"
+chapter_order = 5
+order = 49
+kind = "recipe"
+lede = "A pure state machine driven by a simulator, a blocking socket and tokio."
+level = "advanced"
+code = ["examples/patterns/sans_io_protocol.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+protocol implementations (HTTP/2, QUIC, TLS, WebRTC), anything with timers and retransmission that must be unit-testable.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+SANS-IO means the protocol logic never touches a socket, a thread, an async runtime or the system clock.
+
+It is a plain struct: handle_input(now, bytes)   feed bytes that arrived from the peer poll_transmit()            take bytes that must be sent (queue drained by the caller) poll_event()               take application-level events (connected, response, closed) handle_timeout(now)        tell the machine that time has advanced (it fires whatever is due) poll_timeout()             ask when it next needs `handle_timeout` (the caller sleeps until then) Time is an **input** (`Instant` values the caller passes in), so tests use a virtual clock and a seeded lossy network and finish in microseconds, deterministically, with no sockets and no `sleep`.
+
+The **same** code then runs under a blocking `TcpStream` loop and a tokio loop: only the &#126;25-line driver differs. This is how `h2`, `quinn-proto`, `rustls` (its `ConnectionCommon`/buffers API) and `str0m` are structured, and why they can be used from sync, tokio, async-std or io_uring code alike.
+
+Why this beats embedding IO in the protocol: (1) tests need no network and no flaky timing; (2) fuzzing/property tests can inject loss, duplication, reordering and clock jumps; (3) one implementation serves every runtime; (4) the machine owns no tasks or locks, so there are no hidden suspension points, cancellation hazards or runtime coupling; (5) the caller controls buffering and syscalls (batching, `sendmmsg`, zero-copy).
+
+The cost: the caller must write the (small) driver loop, and APIs are a bit more verbose.
+
+Protocol here (line based, `\\n` terminated): client `HELLO <id>` -> server `WELCOME`; then `REQ <seq> <text>` -> `RES <seq> <TEXT>`; `PING` -> `PONG` keeps idle links alive; no input for `idle` => close. The client **retransmits HELLO/REQ** every `rto` until answered (max `max_retries`), the server is idempotent so duplicates and reordering are harmless.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>QUIC/HTTP3 stacks</li><li>TLS libraries</li><li>WebRTC/SIP/DNS clients</li><li>embedded or <code>no_std</code> protocol cores</li><li>deterministic simulation testing of distributed systems (the idea behind FoundationDB-style simulation)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://www.firezone.dev/blog/sans-io" target="_blank" rel="noreferrer">https://www.firezone.dev/blog/sans-io</a></li><li><a href="https://sans-io.readthedocs.io/" target="_blank" rel="noreferrer">https://sans-io.readthedocs.io/</a></li><li><a href="https://docs.rs/quinn-proto" target="_blank" rel="noreferrer">https://docs.rs/quinn-proto</a></li><li><a href="https://docs.rs/str0m" target="_blank" rel="noreferrer">https://docs.rs/str0m</a></li></ul>
+"""
+
+[[sources]]
+title = "firezone.dev/blog/sans-io"
+url = "https://www.firezone.dev/blog/sans-io"
+
+[[sources]]
+title = "sans-io.readthedocs.io"
+url = "https://sans-io.readthedocs.io/"
+
+[[sources]]
+title = "docs.rs/quinn-proto"
+url = "https://docs.rs/quinn-proto"
+
+[[sources]]
+title = "docs.rs/str0m"
+url = "https://docs.rs/str0m"

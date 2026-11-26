@@ -1,0 +1,9 @@
+error[E0301]: mismatched types
+ --> render_unicode_columns.peb:2:45
+  |
+2 |     let s = "héllo wörld 日本"; let _n: int = s;
+  |                                         ---   ^ expected `int`, found `str`
+  |                                         |
+  |                                         expected due to this type
+
+error: aborting due to 1 previous error

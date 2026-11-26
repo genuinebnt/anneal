@@ -1,0 +1,56 @@
+title = "The Adaptive Radix Tree"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Trees and ordered structures"
+chapter_order = 2
+order = 174
+kind = "recipe"
+lede = "the Adaptive Radix Tree (ART): Node4/16/48/256, path compression, lazy leaf expansion, ordered scans."
+level = "advanced"
+code = ["examples/data_structures/adaptive_radix_tree.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>in-memory database indexes (primary keys, string dictionaries)</li><li>routing tables</li><li>ordered maps with prefix queries</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a radix tree over **bytes** whose inner nodes adapt their layout to how many children they really have, so a sparse node costs 52 bytes instead of the 2 KiB a plain 256-way trie node always costs, while a dense node keeps O(1) child lookup.
+
+Node4   : up to 4 sorted key bytes + 4 child ids (linear search) Node16  : up to 16 sorted key bytes + 16 child ids (the paper uses SIMD compare; a short scan here) Node48  : 256-entry byte->slot index + 48 child ids (one indirection) Node256 : 256 child ids indexed directly Nodes **grow** (4->16->48->256) when full and **shrink** (256->48 at 37, 48->16 at 12, 16->4 at 3 children) on delete.
+
+**Path compression**: a chain of single-child nodes is replaced by a `prefix` stored in the next node; deleting down to one child merges the node into its child (prefix = parent prefix + branch byte + child prefix).
+
+**Lazy expansion**: a leaf is attached as high as possible and stores its **full** key, so a unique suffix costs no inner nodes; it is split only when a second key arrives.
+
+**Keys** must be binary-comparable and prefix-free: u64 -> 8 big-endian bytes; i64 -> flip the sign bit first; f64 -> flip all bits if negative else the sign bit; strings -> UTF-8 bytes plus a 0 terminator (so "ab" sorts before "abc").
+
+Byte order then equals key order, hence ordered iteration, range scans and **prefix** scans fall out of an in-order walk with subtree pruning. **Memory accounting** uses the paper's layout sizes (16-byte header, 8-byte pointers) so numbers compare with the paper; the arena here uses u32 ids and `Vec`s, which is a simplification, not the model.
+
+Verified by a 20k-op differential test each for u64 and string keys against `BTreeMap`, a structural invariant checker (kind capacity thresholds, >= 2 children, key/path consistency), a deterministic grow/shrink ladder, and order-preservation tests.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+HyPer and DuckDB use ART for indexes; the Linux kernel's XArray/IDR and many routing-table implementations use radix trees with the same compressed-path idea; Redis rax is a compressed radix tree for stream and cluster keys. Course: CMU 15-445 Lecture 08-09 (Tree Indexes): radix trees / tries as alternatives to the B+tree; ART for in-memory indexes.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Leis, Kemper, Neumann, "The Adaptive Radix Tree: ARTful Indexing for Main-Memory Databases": <https://db.in.tum.de/~leis/papers/ART.pdf>
+
+Leis et al., "The ART of Practical Synchronization": <https://db.in.tum.de/~leis/papers/artsync.pdf>
+"""
+
+[[sources]]
+title = "db.in.tum.de/~leis/papers/ART.pdf"
+url = "https://db.in.tum.de/~leis/papers/ART.pdf"
+
+[[sources]]
+title = "db.in.tum.de/~leis/papers/artsync.pdf"
+url = "https://db.in.tum.de/~leis/papers/artsync.pdf"

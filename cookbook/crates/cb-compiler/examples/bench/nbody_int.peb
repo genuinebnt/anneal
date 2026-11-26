@@ -1,0 +1,49 @@
+// An integer-only n-body step: struct arrays, field updates, pairwise loops.
+struct Body { x: int, y: int, vx: int, vy: int, m: int }
+
+fn step(mut bodies: [Body]) {
+    let n = len(bodies);
+    let mut i = 0;
+    while i < n {
+        let mut j = 0;
+        while j < n {
+            if i != j {
+                let dx = bodies[j].x - bodies[i].x;
+                let dy = bodies[j].y - bodies[i].y;
+                let d2 = dx * dx + dy * dy + 1000;
+                bodies[i].vx += dx * bodies[j].m / d2;
+                bodies[i].vy += dy * bodies[j].m / d2;
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    let mut k = 0;
+    while k < n {
+        bodies[k].x += bodies[k].vx;
+        bodies[k].y += bodies[k].vy;
+        k += 1;
+    }
+}
+
+fn main() {
+    let bodies = [
+        Body { x: 0, y: 0, vx: 0, vy: 0, m: 5000 },
+        Body { x: 1000, y: 0, vx: 0, vy: 30, m: 40 },
+        Body { x: -2000, y: 100, vx: 0, vy: -20, m: 60 },
+        Body { x: 300, y: 3000, vx: 25, vy: 0, m: 30 },
+        Body { x: -500, y: -4000, vx: -15, vy: 5, m: 20 },
+    ];
+    let mut t = 0;
+    while t < 4000 {
+        step(bodies);
+        t += 1;
+    }
+    let mut sum = 0;
+    let mut i = 0;
+    while i < len(bodies) {
+        sum += bodies[i].x + bodies[i].y;
+        i += 1;
+    }
+    println(to_str(sum));
+}

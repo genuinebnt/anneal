@@ -1,0 +1,14 @@
+[package]
+name = "cb-compiler"
+version = "0.1.0"
+edition = "2024"
+description = "PEBBLE: a small statically typed language with a recoverable parser, Hindley-Milner-style inference, exhaustiveness checking, rustc-style diagnostics and a tree-walking interpreter (std only)."
+publish = false
+
+[lib]
+name = "pebble"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pebblec"
+path = "src/main.rs"

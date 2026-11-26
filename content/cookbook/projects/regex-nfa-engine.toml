@@ -1,0 +1,62 @@
+title = "A regex engine"
+module = "Complete projects"
+module_order = 13
+chapter = "Capstones"
+chapter_order = 1
+order = 657
+kind = "capstone"
+lede = "Recursive-descent parser -> Thompson NFA -> linear-time simulation, checked against a backtracker."
+level = "capstone"
+code = ["examples/capstones/regex_nfa_engine.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>log/route/input matching without ReDoS</li><li>lexers</li><li>search tools</li><li>learning how grep/RE2/rust-regex work</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a small regex dialect: literals, `.`, `*`, `+`, `?`, `|`, `( )`, classes `[a-z_]` / `[^...]`, anchors `^` `$`, escapes (`\\d \\w \\s \\n \\t \\.`).
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+the classic backtracking matcher (Perl, PCRE, Python `re`, JS) is exponential on patterns like `(a*)*b`; that is the ReDoS bug class. A Thompson NFA keeps **all** possible positions at once, so matching costs O(text &#42; states) and can never blow up.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+```text
+parse    text -> `Ast`  recursive descent, one function per precedence level (alt < concat < repeat < atom); errors carry a char position
+```
+
+compile  `Ast` -> `Nfa` states in a `Vec`, ids are indices; built back-to-front so every fragment is told its `next` state (no patch lists) run      simulate the **set** of live states; epsilon-closure follows `Split`, and `^`/`$` only when the position allows it `find` is **leftmost-longest** (POSIX style): the earliest start that can match, then the longest end from it.
+
+Perl/rust-regex use leftmost-**first** (alternation priority); that needs thread priorities and is deliberately left out. Positions are char indexes.
+
+**Verify**: an obviously-correct backtracking matcher over the AST (with a step budget) is the oracle; thousands of random regexes and strings must agree, state count must stay linear in regex length, and `(a*)*b` on a run of `a`s must exhaust the oracle but not the NFA.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>grep/ripgrep-style search</li><li>input validation</li><li>URL routers</li><li>log scrapers</li><li>WAF rules</li><li>syntax highlighters and lexers (<code>[a-z_]&#92;w*</code>)</li><li>untrusted-pattern matching where ReDoS matters (RE2, rust <code>regex</code>, Go <code>regexp</code>)</li><li>tokenizers feeding the Pratt parser of pratt_parser</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://swtch.com/~rsc/regexp/regexp1.html> and <https://github.com/rust-lang/regex>
+"""
+
+[[sources]]
+title = "swtch.com/~rsc/regexp/regexp1.html"
+url = "https://swtch.com/~rsc/regexp/regexp1.html"
+
+[[sources]]
+title = "github.com/rust-lang/regex"
+url = "https://github.com/rust-lang/regex"

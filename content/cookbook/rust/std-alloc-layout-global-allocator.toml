@@ -1,0 +1,82 @@
+title = "Alloc layout global allocator (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "Memory and low level"
+chapter_order = 6
+order = 91
+kind = "recipe"
+lede = "the core / alloc / std layers, Layout arithmetic, the raw allocation API and a counting #[global_allocator]."
+level = "advanced"
+code = ["examples/std_tour/std_alloc_layout_global_allocator.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>no_std libraries</li><li>allocation budgets in tests</li><li>memory metrics</li><li>arenas and custom containers</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>firmware and WASM crates that avoid std</li><li>"this hot path must not allocate" tests</li><li>per-process allocation metrics</li><li>hand-rolled buffers with special alignment (SIMD, direct I/O)</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>std::mem::size_of</code></li><li><code>std::mem::align_of</code></li><li><code>std::mem::offset_of</code></li><li><code>std::alloc::Layout::new</code></li><li><code>Layout::size</code></li><li><code>Layout::align</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Layout::from_size_align</code></li><li><code>Layout::array</code></li><li><code>Layout::for_value</code></li><li><code>Layout::extend</code></li><li><code>Layout::pad_to_align</code></li><li><code>Layout::align_to</code></li><li><code>Layout::repeat</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Layout::repeat_packed</code></li><li><code>Layout::extend_packed</code></li><li><code>std::alloc::alloc</code></li><li><code>std::alloc::alloc_zeroed</code></li><li><code>std::alloc::realloc</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::alloc::dealloc</code></li><li><code>std::alloc::handle_alloc_error</code></li><li><code>std::alloc::GlobalAlloc</code></li><li><code>std::alloc::System</code></li><li><code>std::alloc::LayoutError</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::ptr::NonNull::new</code></li><li><code>std::ptr::NonNull::dangling</code></li><li><code>std::hint::black_box</code></li><li><code>std::mem::size_of_val</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/alloc/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/alloc/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+core (`core::alloc`: Layout, LayoutError, GlobalAlloc; `core::mem`; `core::ptr`). alloc (`alloc::alloc`: the free functions alloc/alloc_zeroed/realloc/dealloc/handle_alloc_error and every owning heap type). std: `System`. `#[global_allocator]` is a language attribute.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+the Allocator trait, Global as a value, Box::new_in / Vec::new_in (allocator_api, unstable in 1.98.1: with it a collection takes its allocator as a type parameter; today crates such as allocator-api2 or bumpalo fill the gap), alloc_error_hook (unstable), unchecked Layout constructors, Layout::dangling_ptr.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Size / alignment of a type</td><td><code>size_of::&lt;T&gt;() / align_of::&lt;T&gt;()</code></td></tr><tr><td>Where a field starts</td><td><code>offset_of!(Type, field)</code></td></tr><tr><td>Layout of T / [T; n]</td><td><code>Layout::new::&lt;T&gt;() / Layout::array::&lt;T&gt;(n)</code></td></tr><tr><td>Header followed by data</td><td><code>let (l, off) = header.extend(data)?; l.pad_to_align()</code></td></tr><tr><td>Raw heap memory</td><td><code>alloc(layout), check null, dealloc(ptr, SAME layout)</code></td></tr><tr><td>Zeroed memory</td><td><code>alloc_zeroed</code></td></tr><tr><td>Grow or shrink</td><td><code>realloc(ptr, old_layout, new_size)</code></td></tr><tr><td>Allocation failed</td><td><code>handle_alloc_error(layout)</code></td></tr><tr><td>Count or limit allocations</td><td><code>impl GlobalAlloc wrapping System + #[global_allocator]</code></td></tr><tr><td>A dangling pointer for zero capacity</td><td><code>NonNull::&lt;T&gt;::dangling() LAYERS. core: no heap, no OS (Option, Result, slices, str, fmt, atomics, Layout). alloc: adds a heap (Box, Vec, String, Rc, Arc, BTreeMap, format!). std: re-exports both and adds the OS (files, sockets, threads, Mutex, HashMap, process). A #![no_std] crate uses core, plus extern crate alloc; when an allocator exists. ALLOCATOR CONTRACT (core GlobalAlloc docs): alloc with a zero-sized layout is undefined behaviour; an allocator must not unwind; and you must NOT rely on a source-level allocation actually happening, because the optimiser may remove it. The counts below therefore pass values through black_box, are asserted as lower bounds or "none at all", and describe this build rather than a language guarantee.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/alloc/index.html> , <https://doc.rust-lang.org/std/alloc/struct.Layout.html> ,
+
+```text
+https://doc.rust-lang.org/reference/type-layout.html
+```
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/alloc/index.html"
+url = "https://doc.rust-lang.org/std/alloc/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/alloc/struct.Layout.html"
+url = "https://doc.rust-lang.org/std/alloc/struct.Layout.html"
+
+[[sources]]
+title = "doc.rust-lang.org/reference/type-layout.html"
+url = "https://doc.rust-lang.org/reference/type-layout.html"

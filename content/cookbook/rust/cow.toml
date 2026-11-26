@@ -1,0 +1,34 @@
+title = "`Cow`"
+module = "Rust language"
+module_order = 1
+chapter = "Ownership and borrowing"
+chapter_order = 1
+order = 3
+kind = "recipe"
+lede = "Borrow when you can, allocate only when you must."
+level = "simple"
+code = ["examples/language/cow.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>id normalisation</li><li>escaping</li><li>anywhere most inputs need no change</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+normalising ids/paths/HTML escaping: return borrowed data when no change is needed, allocate only on change.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: return `Cow<'_, str>`. Clean inputs come back as a borrow (zero allocation); only dirty inputs allocate a new `String`. Callers treat both as `&str`.
+
+Docs: <https://doc.rust-lang.org/std/borrow/enum.Cow.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/borrow/enum.Cow.html"
+url = "https://doc.rust-lang.org/std/borrow/enum.Cow.html"

@@ -1,0 +1,73 @@
+title = "A mini Redis"
+module = "Complete projects"
+module_order = 13
+chapter = "Capstones"
+chapter_order = 1
+order = 653
+kind = "capstone"
+lede = "RESP2 over TCP, five data types, expiry, pub/sub, transactions, AOF + snapshots"
+level = "capstone"
+code = ["examples/capstones/mini_redis.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>any in-memory data server</li><li>cache/queue/leaderboard backends</li><li>protocol servers with persistence</li><li>combines tokio sockets</li><li>skip lists</li><li>WAL-style logs</li><li>model tests</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Architecture** '''text TCP clients (tokio, one task per connection)                 ONE executor thread (std::thread, owns ALL data)
+
+```text
++----------------------------+  Msg::Req{cmds, oneshot}   +-----------------------------------------------------+
+| read -> incremental RESP   |--------------------------->| crossbeam channel -> drain queued msgs (group commit)|
+| parse ALL buffered cmds    |                            |   dispatch: subscriber gate / MULTI queue / execute  |
+| (pipelining, inline, limits|<---- BatchReply (frames) --|   Engine { BTreeMap<key,Value>, Expires, watchers,   |
+|  protocol error => -ERR +  |      sent AFTER the AOF     |            pub/sub tables, blocked-client FIFOs }    |
+|  close) -> ONE write       |      flush + fsync          |   then: append AOF records (fsync policy), reply     |
+|  select! { socket read,    |<--- bounded mpsc push ------|   PUBLISH -> try_send into each subscriber's queue   |
+|   push queue, kill, stop } |     (full queue => kill)    |   tick every 10 ms: BLPOP timeouts, active expiry,   |
++----------------------------+                            |   everysec fsync;  BGSAVE/BGREWRITE on helper threads|
+                                                          +-----------------------------------------------------+
+```
+
+Value::{Str, List(VecDeque), Hash(BTreeMap), Set(BTreeSet), ZSet{HashMap member->score + SkipList with spans}} Persistence: appendonly.aof (**resp** commands, replayed on start) and dump.mrdb (binary + CRC32); both atomic-rename. '''
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a Redis-compatible server (&#126;85 commands, `redis-cli` would talk to it) and a small async client in one file, tested only through real loopback sockets. **Why**: Redis is the best small study of how a database trades generality for speed: one thread, one in-memory structure per type, a text protocol, and a log for durability. **How**:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Concurrency model</div><div class="cb-g-says"><p>(chosen: single-threaded executor, like real Redis). Connection tasks only do I/O and parsing; every command runs on one thread, so each command, MULTI/EXEC block and BLPOP wake-up is trivially atomic and the AOF order is the execution order. No per-key locks, no lock ordering, no torn multi-key commands (<strong>sinter</strong>, <strong>rename</strong>, EXEC).</p><p>The alternative, a sharded store with one lock per shard, scales single-key commands across cores (see the measured table) but makes every multi-key command and transaction a lock-ordering problem.</p><p>The measurement shows both effects: a channel round trip per op costs ~20x an uncontended lock, but batching (pipelining) amortizes it, which is why Redis clients pipeline. Replies are released only after the AOF write, and queued requests share one fsync (group commit).</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>RESP2 parsing is incremental (<code>Ok(None)</code> = need more bytes), every length is untrusted and checked <strong>before</strong> waiting for or allocating the bytes, and a protocol error replies <code>-ERR Protocol error: ...</code> then closes.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Expiry</div><div class="cb-g-says"><p>Lazy (every access checks the key's deadline) plus <strong>active</strong>: each cycle samples 20 random keys that have a TTL (a Vec + position map gives O(1) random choice), deletes the expired, and repeats while more than 25% were expired. The clock is a trait, so tests drive time with <code>ManualClock</code>. Expiry is logged as an explicit DEL so AOF replay never needs a clock.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Blocking pops</div><div class="cb-g-says"><p>A paused batch is parked with its remaining commands; waiters per key are a FIFO queue; a push wakes the oldest waiter first and the batch resumes, so pipelined replies stay in order.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Pub/sub</div><div class="cb-g-says"><p>Subscriber mode is per-connection state; messages are pushed through a <strong>bounded</strong> queue so one stuck reader can never grow server memory: overflow disconnects it. <strong>Transactions</strong>: <strong>watch</strong> registers the client on keys; any write marks it dirty; EXEC then answers nil.</p><p><strong>Persistence</strong>: AOF with always/everysec/no, background rewrite (snapshot + buffered tail), torn-tail truncation on replay, and an RDB-style snapshot with a checksum. Simplifications vs real Redis: single database, RESP2 only, no replication/eviction/Lua/ACL, BGSAVE clones instead of fork(), hash/set replies are sorted (Redis: unspecified order).</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Redis is used as a cache (<strong>get/set</strong> with TTL)</li><li>a session store</li><li>a job/message queue (lists, BLPOP)</li><li>a rate limiter (INCR + <strong>expire</strong>)</li><li>a leaderboard (sorted sets)</li><li>a lightweight pub/sub bus</li><li><strong>Multi/watch</strong> give optimistic transactions</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://redis.io/docs/latest/develop/reference/protocol-spec/> <https://redis.io/docs/latest/commands/> <https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/> <https://redis.io/docs/latest/develop/interact/pubsub/>
+"""
+
+[[sources]]
+title = "redis.io/docs/latest/develop/reference/protocol-spec"
+url = "https://redis.io/docs/latest/develop/reference/protocol-spec/"
+
+[[sources]]
+title = "redis.io/docs/latest/commands"
+url = "https://redis.io/docs/latest/commands/"
+
+[[sources]]
+title = "redis.io/docs/latest/operate/oss_and_stack/management/persistence"
+url = "https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/"
+
+[[sources]]
+title = "redis.io/docs/latest/develop/interact/pubsub"
+url = "https://redis.io/docs/latest/develop/interact/pubsub/"

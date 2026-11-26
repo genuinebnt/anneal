@@ -1,0 +1,52 @@
+title = "Form posts and file uploads"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 518
+kind = "recipe"
+lede = "Urlencoded + multipart/form-data parsed from scratch"
+level = "intermediate"
+code = ["examples/web/multipart_forms_uploads.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+web stage (HTML forms, file upload endpoints, signed/untrusted input handling).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+What: a real axum server with hand-written parsers, driven by a reqwest client that builds the multipart bytes itself (reqwest's own `multipart` feature is not enabled in this crate, and neither is axum's `Multipart`, which needs the `multer` crate: with `axum = { features = ["multipart"] }` the equivalent is `while let Some(field) = multipart.next_field().await? { field.name(); field.file_name(); field.chunk().await? }`).
+
+- `application/x-www-form-urlencoded`: split on `&`/`=`, `+` => space, percent-decoding with strict validation (bad `%zz`, truncated `%`, invalid UTF-8 => 400), repeated keys kept in order; cross-checked against axum's own `Form` extractor.
+- `multipart/form-data` (RFC 7578 / RFC 2046): boundary from the Content-Type (quoted or not, &lt;= 70 chars), a **streaming** state machine (preamble -> part headers -> data -> delimiter) that never holds more than one network chunk plus `len(delimiter)` bytes, even when a delimiter is split across chunks (asserted by feeding 1 byte at a time).
+- Per-part headers: Content-Disposition (`name`, `filename`, escaped quotes), Content-Type.
+- Uploads stream into a temp file with a **size limit** (413, partial file deleted); a 6 MB upload is accepted with a buffer of a few tens of KB (`max_buffered` is asserted and printed).
+- Security: filenames are untrusted (`../../etc/passwd` => 400, we store under a server-generated name); the Content-Type the client claims is **not** trusted: we sniff magic bytes and refuse mismatches (e.g. HTML sent as `image/png`).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>avatar/document/video uploads</li><li>CSV import</li><li>HTML form handling</li><li>API gateways that must bound memory</li><li>antivirus/scan queues</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://datatracker.ietf.org/doc/html/rfc7578" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc7578</a></li><li><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP" target="_blank" rel="noreferrer">https://developer.mozilla.org/en-US/docs/Web/HTTP</a></li><li><a href="https://datatracker.ietf.org/doc/html/rfc9110" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc9110</a></li></ul>
+"""
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc7578"
+url = "https://datatracker.ietf.org/doc/html/rfc7578"
+
+[[sources]]
+title = "developer.mozilla.org/en-US/docs/Web/HTTP"
+url = "https://developer.mozilla.org/en-US/docs/Web/HTTP"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc9110"
+url = "https://datatracker.ietf.org/doc/html/rfc9110"

@@ -1,0 +1,48 @@
+title = "Async traits dyn"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Async Rust"
+chapter_order = 4
+order = 264
+kind = "recipe"
+lede = "`async fn` in traits, why `dyn` needs boxing, and an adapter that makes any impl object-safe."
+level = "advanced"
+code = ["examples/async/async_traits_dyn.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+swappable async backends (storage, queue, clock) you want to fake in tests or choose at runtime.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+swappable async backends: storage/queue/clock traits with fakes in tests and dyn dispatch at runtime.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+`async fn` in traits is stable, and returns an opaque `impl Future`. That is great for **generic** use (`S: Store`, static dispatch, zero cost) but it makes the trait **not** dyn-compatible: a vtable needs one concrete return type. For `dyn` you return `Pin<Box<dyn Future + Send + 'a>>` (one allocation per call).
+
+A blanket impl can derive the boxed `DynStore` from any `Store`, so you write the nice async version once. Spelling the future as `impl Future + Send` in the trait lets generic code (and `tokio::spawn`) require that the future is Send. Crates automating this: <https://docs.rs/async-trait> (boxes everything) and <https://docs.rs/trait-variant>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://blog.rust-lang.org/2023/12/21/async-fn-rpit-in-traits.html>
+"""
+
+[[sources]]
+title = "docs.rs/async-trait"
+url = "https://docs.rs/async-trait"
+
+[[sources]]
+title = "docs.rs/trait-variant"
+url = "https://docs.rs/trait-variant"
+
+[[sources]]
+title = "blog.rust-lang.org/2023/12/21/async-fn-rpit-in-traits.html"
+url = "https://blog.rust-lang.org/2023/12/21/async-fn-rpit-in-traits.html"

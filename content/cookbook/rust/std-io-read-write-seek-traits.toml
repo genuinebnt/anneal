@@ -1,0 +1,70 @@
+title = "I/O read write seek traits (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "I/O, files and paths"
+chapter_order = 9
+order = 109
+kind = "recipe"
+lede = "`Read`, `Write`, `BufRead`, `Seek`, `Cursor` and `io::Error` by realistic example."
+level = "intermediate"
+code = ["examples/std_tour/std_io_read_write_seek_traits.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>protocol parsers</li><li>file formats</li><li>tests of I/O code without files</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>generic 'fn f&lt;R: Read</li><li>W: Write&gt;' functions tested on 'Cursor'/'Vec&lt;u8&gt;'</li><li>length-limited reads on untrusted input</li><li>tee/counting adapters (metrics, checksums)</li><li>retry on <code>Interrupted</code></li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>Read::read</code></li><li><code>Read::read_exact</code></li><li><code>Read::read_to_end</code></li><li><code>Read::read_to_string</code></li><li><code>Write::write_all</code></li><li><code>Write::flush</code></li><li><code>BufRead::read_line</code></li><li><code>BufRead::lines</code></li><li><code>Read::take</code></li><li><code>Write::write</code></li><li><code>Write::write_fmt</code></li><li><code>BufRead::read_until</code></li><li><code>BufRead::split</code></li><li><code>BufRead::fill_buf</code></li><li><code>BufRead::consume</code></li><li><code>BufRead::skip_until</code></li><li><code>Read::bytes</code></li><li><code>Read::chain</code></li><li><code>Read::by_ref</code></li><li><code>Write::by_ref</code></li><li><code>Write::write_vectored</code></li><li><code>std::io::IoSlice</code></li><li><code>Seek::seek</code></li><li><code>Seek::stream_position</code></li><li><code>Seek::rewind</code></li><li><code>Seek::seek_relative</code></li><li><code>std::io::SeekFrom</code></li><li><code>std::io::Cursor</code></li><li><code>Cursor::new</code></li><li><code>Cursor::position</code></li><li><code>Cursor::set_position</code></li><li><code>Cursor::get_ref</code></li><li><code>Cursor::into_inner</code></li><li><code>std::io::copy</code></li><li><code>std::io::sink</code></li><li><code>std::io::empty</code></li><li><code>std::io::repeat</code></li><li><code>std::io::read_to_string</code></li><li><code>std::io::Take::limit</code></li><li><code>std::io::Take::set_limit</code></li><li><code>std::io::Error::kind</code></li><li><code>std::io::Error::from_raw_os_error</code></li><li><code>std::io::Error::raw_os_error</code></li><li><code>std::io::Error::other</code></li><li><code>std::io::Error::new</code></li><li><code>std::io::Error::get_ref</code></li><li><code>std::io::Error::into_inner</code></li><li><code>std::error::Error::source</code></li><li><code>std::io::ErrorKind</code></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+std for use. In the 1.98.1 source the traits `Read`, `Write`, `Seek`, `BufRead` and `SeekFrom` are in `std::io`; `Error`, `ErrorKind`, `Cursor`, `Take`, `Chain`, `Empty`, `Sink`, `Repeat`, `IoSlice` have their source in `core::io`, which is still unstable (`core_io`), so import from `std::io`.
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/io/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/io/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+Read::read_buf / read_buf_exact / Seek::stream_len / BufRead::has_data_left / Write::write_all_vectored (nightly); Read::read_vectored (same shape as write_vectored); Read::read_to_end on huge files (see buffered_io_internals). Course: none.
+
+Pairs with `io_files_paths` (basic Read/Write) and `buffered_io_internals`; this file goes beyond them into every provided method.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Read whatever is available, once</td><td><code>Read::read (may return fewer bytes than asked!)</code></td></tr><tr><td>Fill a fixed header exactly</td><td><code>Read::read_exact (EOF mid-way =&gt; UnexpectedEof)</code></td></tr><tr><td>Slurp a small file / stream</td><td><code>read_to_end, read_to_string, io::read_to_string(r)</code></td></tr><tr><td>Write everything</td><td><code>Write::write_all (never bare write), then flush</code></td></tr><tr><td>Formatted output</td><td><code>write! / writeln! (=&gt; write_fmt)</code></td></tr><tr><td>Process line by line</td><td><code>BufRead::lines or reuse a String with read_line</code></td></tr><tr><td>Split by a delimiter byte</td><td><code>read_until, split, skip_until</code></td></tr><tr><td>Peek without consuming</td><td><code>fill_buf + consume</code></td></tr><tr><td>Cap what untrusted input can cost</td><td><code>Read::take(max)</code></td></tr><tr><td>Read a header then pass the rest on</td><td><code>by_ref() (keeps ownership of the reader)</code></td></tr><tr><td>Concatenate two readers</td><td><code>chain</code></td></tr><tr><td>Test I/O code without files</td><td><code>Cursor&lt;Vec&lt;u8&gt;&gt;, &amp;[u8] as Read, Vec&lt;u8&gt; as Write</code></td></tr><tr><td>Go back to the start / jump to the end</td><td><code>rewind, seek(SeekFrom::End(-n))</code></td></tr><tr><td>Discard / count output</td><td><code>io::sink(), io::copy(&amp;mut r, &amp;mut sink())</code></td></tr><tr><td>Branch on the failure kind</td><td><code>err.kind() and ErrorKind::{NotFound, UnexpectedEof, Interrupted, WouldBlock}</code></td></tr><tr><td>Wrap a custom error</td><td><code>io::Error::other(e), recover with get_ref().downcast_ref() Design: every section is a small scenario with asserts. Nothing here sleeps or depends on the clock.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/io/index.html>  (the module page lists the traits and `Cursor`)
+
+<https://doc.rust-lang.org/std/io/trait.Read.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/io/index.html"
+url = "https://doc.rust-lang.org/std/io/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/io/trait.Read.html"
+url = "https://doc.rust-lang.org/std/io/trait.Read.html"

@@ -1,0 +1,6 @@
+const BASE: int = 10;
+const LIMIT: int = BASE * BASE + 1;
+const NAME: str = "pebble";
+fn main() {
+    println(NAME + " " + to_str(LIMIT));
+}

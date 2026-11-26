@@ -1,0 +1,90 @@
+title = "Ptr nonnull slices raw (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "Memory and low level"
+chapter_order = 6
+order = 93
+kind = "recipe"
+lede = "raw pointers, `NonNull`, slices from raw parts, pointer arithmetic, alignment and provenance, each unsafe step justified."
+level = "advanced"
+code = ["examples/std_tour/std_ptr_nonnull_slices_raw.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>FFI</li><li>custom containers</li><li>intrusive structures</li><li>parsing over raw buffers</li><li>reading code like <code>Vec</code> or <code>VecDeque</code></li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>wrapping a C <code>(ptr, len)</code> pair</li><li>building a container over raw allocation</li><li>O(1) unlink in linked structures</li><li>splitting a buffer into disjoint mutable parts</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>ptr::read</code></li><li><code>ptr::write</code></li><li><code>ptr::read_unaligned</code></li><li><code>ptr::write_unaligned</code></li><li><code>ptr::replace</code></li><li><code>ptr::swap</code></li><li><code>ptr::copy</code></li><li><code>ptr::copy_nonoverlapping</code></li><li><code>ptr::drop_in_place</code></li><li><code>ptr::null</code></li><li><code>ptr::null_mut</code></li><li><code>ptr::dangling</code></li><li><code>ptr::from_ref</code></li><li><code>ptr::from_mut</code></li><li><code>ptr::eq</code></li><li><code>ptr::addr_eq</code></li><li><code>ptr::slice_from_raw_parts</code></li><li><code>ptr::slice_from_raw_parts_mut</code></li><li><code>slice::from_raw_parts</code></li><li><code>slice::from_raw_parts_mut</code></li><li><code>NonNull::new</code></li><li><code>NonNull::new_unchecked</code></li><li><code>NonNull::from</code></li><li><code>NonNull::dangling</code></li><li><code>NonNull::as_ptr</code></li><li><code>NonNull::as_ref</code></li><li><code>NonNull::as_mut</code></li><li><code>NonNull::cast</code></li><li><code>pointer::{is_null, as_ref, add, sub, offset, wrapping_add, offset_from, byte_add, cast, cast_const, cast_mut, is_aligned, align_offset, addr, with_addr, map_addr, expose_provenance}</code></li><li><code>ptr::with_exposed_provenance</code></li><li><code>&amp;raw const</code></li><li><code>&amp;raw mut</code></li><li><code>std::alloc::{alloc, realloc, dealloc, handle_alloc_error, Layout}</code></li><li><code>Box::into_raw</code></li><li><code>Box::from_raw</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/ptr/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/ptr/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+core: `core::ptr` (including `NonNull`), the pointer primitive methods, `core::slice::from_raw_parts`, `&raw`, `core::alloc::Layout`. alloc: the allocation functions (`alloc::alloc`, re-exported as `std::alloc`) and `Box`.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+`NonNull<[T]>` helpers beyond use, `ptr::copy_from` method spellings, `swap_nonoverlapping`, `write_bytes`, volatile reads/writes (memory-mapped I/O), `ptr::metadata` and custom DST construction (unstable), `Unique` (internal), `UnsafeCell` and aliasing models in depth.
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+assertions and differential tests against safe code check **behaviour**. They cannot prove soundness. Miri checks the executed paths for undefined behaviour.
+
+Run on 2026-11-26 with rustc 1.100.0-nightly (5a2be9f5f 2026-09-06): no errors under the default (Stacked Borrows) and under `-Zmiri-tree-borrows -Zmiri-strict-provenance`. Loop counts shrink under `cfg(miri)`, and the exposed-provenance demo is skipped there.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The checklist** for every dereference: non-null; aligned for T; points into **one** live allocation with enough room; the bytes are an initialised, valid T (for reads); no `&mut` aliases it while you read, and nothing else aliases it while you write; you do not create a second owner of the same value.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>A pointer from a reference</td><td><code>ptr::from_ref(&amp;x) / &amp;raw const x; for fields of packed or uninit structs ONLY &amp;raw</code></td></tr><tr><td>Move a value out / in without dropping</td><td><code>ptr::read (now YOU must ensure one owner) / ptr::write (old value is NOT dropped)</code></td></tr><tr><td>Exchange through pointers</td><td><code>ptr::replace, ptr::swap (swap allows overlap)</code></td></tr><tr><td>Memcpy / memmove</td><td><code>copy_nonoverlapping (ranges disjoint) / copy (may overlap)</code></td></tr><tr><td>An unaligned field in a byte buffer</td><td><code>read_unaligned, or better: u32::from_le_bytes</code></td></tr><tr><td>(ptr, len) to a slice</td><td><code>slice::from_raw_parts (non-null and aligned EVEN IF len == 0)</code></td></tr><tr><td>Non-null + covariant, in a struct</td><td><code>NonNull&lt;T&gt;; empty containers use NonNull::dangling()</code></td></tr><tr><td>Step through an array</td><td><code>add / sub (must stay in bounds, one past the end allowed); else wrapping_add</code></td></tr><tr><td>Distance in elements</td><td><code>end.offset_from(start) (same allocation only)</code></td></tr><tr><td>Tag bits in a pointer</td><td><code>map_addr / addr (keeps provenance)</code></td></tr><tr><td>Address as an integer and back</td><td><code>expose_provenance + with_exposed_provenance (last resort)</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Pitfalls"
+body = """
+`add` out of bounds is UB even without dereferencing; `ptr::read` of a `String` creates two owners (double free); assigning through a raw pointer (`*p = v`) **drops** the old value, which is UB on uninitialised memory; comparing `dyn Trait` pointers is unreliable.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>The Rustonomicon, implementing Vec <a href="https://doc.rust-lang.org/nomicon/vec/vec.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/nomicon/vec/vec.html</a></li><li>std::ptr safety and provenance <a href="https://doc.rust-lang.org/std/ptr/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/ptr/index.html</a></li><li>Too Many Linked Lists <a href="https://rust-unofficial.github.io/too-many-lists/" target="_blank" rel="noreferrer">https://rust-unofficial.github.io/too-many-lists/</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/ptr/index.html"
+url = "https://doc.rust-lang.org/std/ptr/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/vec/vec.html"
+url = "https://doc.rust-lang.org/nomicon/vec/vec.html"
+
+[[sources]]
+title = "rust-unofficial.github.io/too-many-lists"
+url = "https://rust-unofficial.github.io/too-many-lists/"

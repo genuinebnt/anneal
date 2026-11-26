@@ -1,0 +1,268 @@
+title = "Join algorithms"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 350
+kind = "guide"
+lede = "early vs late materialization · nested loop (naive, block, index) · sort-merge · hash, Grace, hybrid · cost formulas · NULLs, outer, semi and anti joins"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Joins exist because of normalization.</strong> Tables are decomposed to avoid redundancy, and joins reconstruct them. The focus is <strong>inner equijoins</strong> on two tables; everything else is a variation. Put the <strong>smaller</strong> table on the outer (left) side.</li> <li><strong>Output</strong>: <strong>early materialization</strong> (copy values into new tuples; later operators never go back to the base tables; good for row stores) vs <strong>late materialization</strong> (copy only keys and record ids; good for column stores). Real systems mix both.</li> <li><strong>Cost model</strong>: disk I/Os, ignoring output cost (the same for every algorithm). R has M pages and m tuples; S has N pages and n tuples.</li> <li><strong>Naive NLJ</strong>: M + m·N. <strong>Block NLJ</strong>: M + M·N, and with B buffers (B−2 for the outer, 1 for the inner, 1 for output) <strong>M + ⌈M/(B−2)⌉·N</strong>. <strong>Index NLJ</strong>: M + m·C (C = cost per index probe; use an existing index or build a temporary one).</li> <li><strong>Sort-merge join</strong>: sort both inputs (external sort costs), then merge with two cursors: <strong>M + N</strong>, degrading to M·N if every tuple has the same key. Best when inputs are already sorted (clustered index) or the output must be sorted.</li> <li><strong>Hash join</strong>: equijoins on the <em>full</em> key only. <strong>Build</strong> a table on the outer side with h₁, then <strong>probe</strong> it with the inner side, re-checking the keys to handle collisions. Only the build side must fit in memory. A <strong>Bloom filter</strong> built alongside lets the probe side skip non-matches early (<strong>sideways information passing</strong>).</li> <li><strong>Grace hash join</strong>: partition <em>both</em> inputs with h₁ to disk, then join partition pairs in memory. Re-partition with h₂ if a partition is too big, and use block NLJ for a single hot key that can't be split. Cost <strong>3(M + N)</strong>. <strong>Hybrid hash join</strong> keeps the hot partition in memory; it's rarely done in practice.</li> <li><strong>Rule of thumb</strong>: hash is almost always best; sort-merge wins for skewed data, pre-sorted inputs, or sorted output. Good systems implement both.</li> </ul>
+"""
+
+[[sections]]
+heading = "Costs, reproduced"
+body = """
+```text title="M = 1000, m = 100k, N = 500, n = 40k, B = 100, 0.1 ms per I/O (the lecture's example) · computed by joins::costs"
+simple nested loop               50001000 I/Os =    5000.10 s     (≈ 1.4 hours)
+block nested loop (B buffers)        6500 I/Os =       0.65 s     ← the notes' table prints 6.5 s; the formula gives 0.65 s
+sort-merge                           7500 I/Os =       0.75 s
+grace hash                           4500 I/Os =       0.45 s
+```
+
+<p>In memory, with no I/O at all, the picture changes:</p>
+
+```text title="100k ⋈ 40k random keys, Apple M4 Pro (release)"
+hash 3.77 ms · sort-merge 3.28 ms · grace (8k-row memory budget) 3.73 ms · block NLJ on only 10k ⋈ 40k: 148.8 ms
+```
+
+<p>Sort-merge is competitive with hash join in memory at this size because <code>sort_unstable</code> on 140k integers is extremely fast. Hash join wins as the build side outgrows cache or when the probe side is much larger (the build is O(m), and each probe is O(1)). NLJ loses by 40× even at a quarter of the input. The asymptotics are the lesson.</p>
+
+:::deeper Reference: every join from the lecture, plus outer, semi and anti joins
+```rust title="src/execution/join_algorithms.rs"
+//! L12 join algorithms over in-memory row vectors. Keys are Option<i64>: NULL never matches.
+use std::collections::{BTreeMap, HashMap};
+
+pub type Row = (Option<i64>, u32);                  // (join key, payload/row id)
+pub type Pair = (u32, u32);                         // (left payload, right payload)
+
+pub fn nested_loop(r: &[Row], s: &[Row]) -> Vec<Pair> {
+    let mut out = Vec::new();
+    for a in r { for b in s { if a.0.is_some() && a.0 == b.0 { out.push((a.1, b.1)); } } }
+    out
+}
+
+/// Block NLJ: load `block` outer rows at a time, scan the inner once per block.
+pub fn block_nested_loop(r: &[Row], s: &[Row], block: usize) -> Vec<Pair> {
+    let mut out = Vec::new();
+    for chunk in r.chunks(block.max(1)) {
+        for b in s { for a in chunk { if a.0.is_some() && a.0 == b.0 { out.push((a.1, b.1)); } } }
+    }
+    out
+}
+
+/// Index NLJ: probe an ordered index on the inner's key (BTreeMap<key, Vec<payload>>).
+pub fn index_nested_loop(r: &[Row], s_index: &BTreeMap<i64, Vec<u32>>) -> Vec<Pair> {
+    let mut out = Vec::new();
+    for &(k, p) in r {
+        if let Some(k) = k { for &q in s_index.get(&k).into_iter().flatten() { out.push((p, q)); } }
+    }
+    out
+}
+
+/// Sort-merge join: sort both inputs, advance cursors, emit the cross product of equal-key groups.
+pub fn sort_merge(r: &[Row], s: &[Row]) -> Vec<Pair> {
+    let mut a: Vec<(i64, u32)> = r.iter().filter_map(|&(k, p)| k.map(|k| (k, p))).collect();
+    let mut b: Vec<(i64, u32)> = s.iter().filter_map(|&(k, p)| k.map(|k| (k, p))).collect();
+    a.sort_unstable();
+    b.sort_unstable();
+    let (mut i, mut j, mut out) = (0, 0, Vec::new());
+    while i < a.len() && j < b.len() {
+        match a[i].0.cmp(&b[j].0) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                let k = a[i].0;
+                let (ie, je) = (i + a[i..].partition_point(|x| x.0 == k), j + b[j..].partition_point(|x| x.0 == k));
+                for x in &a[i..ie] { for y in &b[j..je] { out.push((x.1, y.1)); } }   // duplicate group: M×N worst case
+                (i, j) = (ie, je);
+            }
+        }
+    }
+    out
+}
+
+/// In-memory hash join: build on `r`, probe with `s`.
+pub fn hash_join(r: &[Row], s: &[Row]) -> Vec<Pair> {
+    let mut ht: HashMap<i64, Vec<u32>> = HashMap::with_capacity(r.len());
+    for &(k, p) in r { if let Some(k) = k { ht.entry(k).or_default().push(p); } }
+    let mut out = Vec::new();
+    for &(k, q) in s {
+        if let Some(ps) = k.and_then(|k| ht.get(&k)) { for &p in ps { out.push((p, q)); } }
+    }
+    out
+}
+
+fn h(k: i64, seed: u64) -> u64 {
+    let mut z = (k as u64) ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 31)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z ^ (z >> 29)
+}
+
+/// Grace hash join: partition both inputs by h1 into `fanout` partitions ("spilled"), then join
+/// each partition pair in memory. A partition whose build side exceeds `mem` rows is re-partitioned
+/// with a new seed; if it is a single hot key that can't be split, fall back to block NLJ.
+pub fn grace_hash_join(r: &[Row], s: &[Row], mem: usize, fanout: usize) -> (Vec<Pair>, GraceStats) {
+    let mut stats = GraceStats::default();
+    let mut out = Vec::new();
+    grace(r, s, mem, fanout, 1, &mut out, &mut stats);
+    (out, stats)
+}
+
+#[derive(Default, Debug)]
+pub struct GraceStats { pub max_depth: u32, pub partitions_joined: u32, pub bnl_fallbacks: u32 }
+
+fn grace(r: &[Row], s: &[Row], mem: usize, fanout: usize, depth: u32, out: &mut Vec<Pair>, st: &mut GraceStats) {
+    st.max_depth = st.max_depth.max(depth);
+    if r.len() <= mem { out.extend(hash_join(r, s)); st.partitions_joined += 1; return; }
+    let first = r.iter().find_map(|x| x.0);
+    if depth > 8 || r.iter().all(|x| x.0 == first || x.0.is_none()) {
+        // Can't split further (one hot key): stream it with block NLJ instead of recursing forever.
+        out.extend(block_nested_loop(r, s, mem));
+        st.bnl_fallbacks += 1;
+        return;
+    }
+    let mut rp: Vec<Vec<Row>> = vec![Vec::new(); fanout];
+    let mut sp: Vec<Vec<Row>> = vec![Vec::new(); fanout];
+    for &x in r { if let Some(k) = x.0 { rp[(h(k, depth as u64) % fanout as u64) as usize].push(x); } }   // NULLs dropped: can't match
+    for &x in s { if let Some(k) = x.0 { sp[(h(k, depth as u64) % fanout as u64) as usize].push(x); } }
+    for (a, b) in rp.iter().zip(&sp) {
+        if a.is_empty() || b.is_empty() { continue; }       // an empty side joins to nothing: skip reading the other
+        grace(a, b, mem, fanout, depth + 1, out, st);
+    }
+}
+
+/// LEFT OUTER hash join: every r row appears; unmatched rows pair with None.
+pub fn left_outer_hash_join(r: &[Row], s: &[Row]) -> Vec<(u32, Option<u32>)> {
+    // Build on the INNER side (s) so the outer side can be streamed and emit its misses.
+    let mut ht: HashMap<i64, Vec<u32>> = HashMap::new();
+    for &(k, q) in s { if let Some(k) = k { ht.entry(k).or_default().push(q); } }
+    let mut out = Vec::new();
+    for &(k, p) in r {
+        match k.and_then(|k| ht.get(&k)) {
+            Some(qs) => out.extend(qs.iter().map(|&q| (p, Some(q)))),
+            None => out.push((p, None)),                    // includes NULL keys
+        }
+    }
+    out
+}
+
+/// EXISTS / IN (semi-join) and NOT EXISTS (anti-join): each r row at most once.
+pub fn semi_join(r: &[Row], s: &[Row]) -> Vec<u32> {
+    let keys: std::collections::HashSet<i64> = s.iter().filter_map(|x| x.0).collect();
+    r.iter().filter(|x| x.0.is_some_and(|k| keys.contains(&k))).map(|x| x.1).collect()
+}
+pub fn anti_join(r: &[Row], s: &[Row]) -> Vec<u32> {
+    // NOT EXISTS semantics: NULL keys never match, so NULL outer rows survive.
+    // (NOT IN differs: if s contains any NULL, NOT IN returns no rows at all.)
+    let keys: std::collections::HashSet<i64> = s.iter().filter_map(|x| x.0).collect();
+    r.iter().filter(|x| !x.0.is_some_and(|k| keys.contains(&k))).map(|x| x.1).collect()
+}
+
+/// The lecture's I/O cost formulas.
+pub fn costs(m_pages: u64, m_tuples: u64, n_pages: u64, n_tuples: u64, b: u64) -> Vec<(&'static str, u64)> {
+    let sort = |p: u64| { let mut runs = p.div_ceil(b); let mut passes = 1; while runs > 1 { runs = runs.div_ceil(b - 1); passes += 1; } 2 * p * passes };
+    let _ = n_tuples;
+    vec![
+        ("simple nested loop", m_pages + m_tuples * n_pages),
+        ("block nested loop (B buffers)", m_pages + m_pages.div_ceil(b - 2) * n_pages),
+        ("sort-merge", sort(m_pages) + sort(n_pages) + m_pages + n_pages),
+        ("grace hash", 3 * (m_pages + n_pages)),
+    ]
+}
+```
+:::
+
+```rust title="tests: every algorithm must equal naive nested loop, with NULLs and duplicates"
+use proptest::prelude::*;
+use std::collections::BTreeMap;
+use scratch::joins::*;
+
+fn norm(mut v: Vec<Pair>) -> Vec<Pair> { v.sort_unstable(); v }
+fn key() -> impl Strategy<Value = Option<i64>> { prop_oneof![1 => Just(None), 8 => (0i64..12).prop_map(Some)] }
+
+proptest! {
+    #[test]
+    fn all_joins_agree(r in prop::collection::vec(key(), 0..80), s in prop::collection::vec(key(), 0..80), mem in 1usize..20) {
+        let r: Vec<Row> = r.into_iter().enumerate().map(|(i, k)| (k, i as u32)).collect();
+        let s: Vec<Row> = s.into_iter().enumerate().map(|(i, k)| (k, 1000 + i as u32)).collect();
+        let want = norm(nested_loop(&r, &s));
+        prop_assert_eq!(norm(block_nested_loop(&r, &s, 7)), want.clone());
+        let mut idx: BTreeMap<i64, Vec<u32>> = BTreeMap::new();
+        for &(k, p) in &s { if let Some(k) = k { idx.entry(k).or_default().push(p); } }
+        prop_assert_eq!(norm(index_nested_loop(&r, &idx)), want.clone());
+        prop_assert_eq!(norm(sort_merge(&r, &s)), want.clone());
+        prop_assert_eq!(norm(hash_join(&r, &s)), want.clone());
+        prop_assert_eq!(norm(grace_hash_join(&r, &s, mem, 4).0), want.clone());
+        // outer join = inner join + unmatched outer rows
+        let lo = left_outer_hash_join(&r, &s);
+        let matched: Vec<Pair> = lo.iter().filter_map(|&(p, q)| q.map(|q| (p, q))).collect();
+        prop_assert_eq!(norm(matched), want.clone());
+        let unmatched: Vec<u32> = lo.iter().filter(|x| x.1.is_none()).map(|x| x.0).collect();
+        let mut anti = anti_join(&r, &s); anti.sort();
+        let mut un = unmatched.clone(); un.sort();
+        prop_assert_eq!(un, anti.clone());
+        let mut semi = semi_join(&r, &s); semi.sort();
+        let mut from_want: Vec<u32> = want.iter().map(|x| x.0).collect(); from_want.sort(); from_want.dedup();
+        prop_assert_eq!(semi, from_want);
+    }
+}
+
+#[test]
+fn skew_falls_back() {
+    let r: Vec<Row> = (0..5000u32).map(|i| (Some(if i < 4000 { 7 } else { i as i64 }), i)).collect();
+    let s: Vec<Row> = (0..300u32).map(|i| (Some(if i < 3 { 7 } else { i as i64 }), 10_000 + i)).collect();
+    let (out, st) = grace_hash_join(&r, &s, 256, 8);
+    assert_eq!(norm(out), norm(hash_join(&r, &s)));
+    eprintln!("skewed grace join: {st:?}");
+    assert!(st.bnl_fallbacks >= 1);
+}
+
+#[test]
+fn lecture_cost_table_and_timing() {
+    for (name, io) in costs(1000, 100_000, 500, 40_000, 100) {
+        eprintln!("{name:<32} {io:>12} I/Os = {:>10.2} s at 0.1 ms/I/O", io as f64 * 1e-4);
+    }
+    let (m, n) = (100_000u32, 40_000u32);
+    let mut x = 5u64; let mut rnd = || { x ^= x << 13; x ^= x >> 7; x ^= x << 17; (x % 50_000) as i64 };
+    let r: Vec<Row> = (0..m).map(|i| (Some(rnd()), i)).collect();
+    let s: Vec<Row> = (0..n).map(|i| (Some(rnd()), i)).collect();
+    let t = std::time::Instant::now(); let a = hash_join(&r, &s).len(); let th = t.elapsed();
+    let t = std::time::Instant::now(); let b = sort_merge(&r, &s).len(); let ts = t.elapsed();
+    let t = std::time::Instant::now(); let c = grace_hash_join(&r, &s, 8_192, 16).0.len(); let tg = t.elapsed();
+    let t = std::time::Instant::now(); let d = block_nested_loop(&r[..10_000], &s, 1024).len(); let tb = t.elapsed();
+    assert!(a == b && b == c);
+    eprintln!("in memory, 100k ⋈ 40k: hash {th:?}, sort-merge {ts:?}, grace(mem 8k) {tg:?}; block NLJ on 10k ⋈ 40k: {tb:?} ({d} rows)");
+}
+```
+
+<aside data-call="warning"><b>NULL semantics in joins</b><p><code>NULL = NULL</code> is UNKNOWN, so NULL keys never match in an inner join. Every algorithm above filters them out <em>before</em> building or partitioning, because a hash table that treats <code>None == None</code> as equal produces spurious matches. For outer joins, NULL-keyed outer rows appear unmatched. For anti joins, <strong><code>NOT EXISTS</code> and <code>NOT IN</code> differ</strong>: <code>NOT EXISTS</code> keeps NULL-keyed outer rows, while <code>NOT IN (subquery)</code> returns <em>nothing</em> if the subquery yields any NULL (<a href="/cookbook/p/modern-sql">L02</a>). The planner must implement <code>NOT IN</code> as a <em>null-aware</em> anti join.</p></aside>
+
+<aside data-call="rust"><b>Returning pairs, not tuples</b><p>The reference joins return <code>(left_id, right_id)</code> pairs. That's late materialization: the caller fetches only the columns it needs. In the executor (<a href="/cookbook/p/grace-hash-join-and-spilling">P3</a>), the same algorithms work on <code>Tuple</code>s, and the output schema is left columns ++ right columns, so an early-materialized join copies both sides into a new <code>Tuple</code>. With Arrow-style batches (Part II), the join emits two index vectors, and a <code>take</code> kernel gathers the columns.</p></aside>
+"""
+
+[[sections]]
+heading = "Choosing a join"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Situation</th> <th>Best algorithm</th> </tr> </thead> <tbody> <tr> <td>Equijoin, build side fits in memory</td> <td>in-memory hash join (build on the smaller side)</td> </tr> <tr> <td>Equijoin, both sides large</td> <td>Grace / partitioned hash join; radix-partitioned in memory (Part II)</td> </tr> <tr> <td>Inputs already sorted on the key (clustered index, previous merge join)</td> <td>sort-merge, with no sort needed</td> </tr> <tr> <td>Outer side tiny, inner side has an index on the key</td> <td>index nested loop</td> </tr> <tr> <td>Non-equality predicate (<code>a.x &lt; b.y</code>, band joins, <code>LIKE</code>)</td> <td>block NLJ (or sort-based band join)</td> </tr> <tr> <td>Severe skew on one key</td> <td>hash join with a skew-aware partition, or sort-merge</td> </tr> <tr> <td>Cyclic multi-way joins (graph patterns, triangles)</td> <td>worst-case optimal joins (Part II)</td> </tr> </tbody> </table></div>
+
+<aside data-call="production"><b>In production</b><ul> <li><strong>PostgreSQL</strong>: nested loop, merge join, and hash join (hybrid-style batching; parallel hash join since v11, with a shared hash table).</li> <li><strong>DuckDB, Velox, Umbra</strong>: radix-partitioned parallel hash joins, spilling per partition, with runtime join filters (min/max, and Bloom where it pays).</li> <li><strong>MySQL</strong>: nested loops only until 8.0.18 added hash join, a good illustration of how long a system can live without one.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Implementation Techniques for Main Memory Database Systems"
+url = "https://dl.acm.org/doi/10.1145/602259.602261"
+
+[[sources]]
+title = "Sort-Merge-Join: An Idea Whose Time Has(h) Passed?"
+url = "https://ieeexplore.ieee.org/document/283021"
+
+[[sources]]
+title = "An Experimental Comparison of Thirteen Relational Equi-Joins in Main Memory"
+url = "https://bigdata.uni-saarland.de/publications/p1961-schuh.pdf"

@@ -1,0 +1,9 @@
+warning[W0501]: unused variable: `unused`
+ --> w0501_unused_variable.peb:2:9
+  |
+2 |     let unused = 5;
+  |         ^^^^^^ this variable is never read
+  |
+  = help: if this is intentional, prefix it with an underscore: `_unused`
+
+warning: 1 warning emitted

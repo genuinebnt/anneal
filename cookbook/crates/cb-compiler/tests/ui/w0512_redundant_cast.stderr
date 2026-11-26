@@ -1,0 +1,9 @@
+warning[W0512]: casting `int` as `int` is redundant
+ --> w0512_redundant_cast.peb:2:13
+  |
+2 |     let x = 5 as int;
+  |             ^^^^^^^^ this cast does nothing
+  |
+  = help: remove the cast
+
+warning: 1 warning emitted

@@ -1,0 +1,74 @@
+title = "Hash-based signatures"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Cryptography"
+chapter_order = 4
+order = 546
+kind = "recipe"
+lede = "Lamport, Winternitz (WOTS, w=16), and a Merkle signature scheme (XMSS-like)."
+level = "advanced"
+code = ["examples/cryptography/hash_based_signatures.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>post-quantum signature design</li><li>firmware signing</li><li>understanding stateful signatures</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+!!! **Educational implementation**. **Not** constant-time-audited, **not** for production.
+
+Simplified (no per-hash addressing/bitmasks, !!! deterministic demo seeds). Use audited libraries (RustCrypto <https://github.com/RustCrypto> , !!! ring <https://github.com/briansmith/ring>) and never roll your own crypto for real systems.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+signatures whose security rests only on a hash function (SHA-256 here, implemented from scratch and checked against the **fips** 180-4 vectors). No number theory, so no Shor's-algorithm break: this is why they matter for post-quantum.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>LAMPORT one-time signature: secret = 256 pairs of random 32-byte values; public = their hashes. To sign a digest, reveal, for each bit, the secret of that bit's value. Signature 8 KiB.</p><p><strong>One-time</strong>: each signature reveals half the secrets, so a second signature reveals more and an attacker can assemble signatures on messages you never signed.</p><p>We show that: (a) with a reduced 24-bit digest, <strong>two</strong> signatures plus a little grinding forge a chosen message; (b) with the full 256-bit digest, a handful of signatures (about 10-20) with the same key let us forge an arbitrary chosen message.</p></div></div><div class="cb-g-term"><div class="cb-g-name">WINTERNITZ OTS (w=16)</div><div class="cb-g-says"><p>Sign a base-16 digit d by revealing the chain value H&#94;d(sk) (hash applied d times); the verifier applies it 15-d more times and compares to the public end of chain. 64 message digits + 3 <strong>checksum</strong> digits (sum of 15-d_i).</p><p>Without the checksum anyone could advance chains to forge a "larger digit" message; with it, increasing a message digit forces decreasing a checksum digit, which would need un-hashing. Signature 67*32 = 2144 B (vs 8192 B).</p></div></div><div class="cb-g-term"><div class="cb-g-name">MERKLE signature scheme</div><div class="cb-g-says"><p>2&#94;h <strong>wots</strong> key pairs; the public key is the Merkle root of their public-key hashes. Signature = (leaf index, <strong>wots</strong> signature, h sibling hashes = authentication path). Verifier recomputes the <strong>wots</strong> public key from the signature, folds it up the path by the index bits and compares with the root.</p><p>The signer is <strong>stateful</strong>: it must never sign twice with the same index (state rollback after backup restore or VM snapshot is catastrophic). Hence NIST SP 800-208 limits stateful schemes (LMS/XMSS) to cases where state can be managed, while stateless SPHINCS+ (SLH-DSA, <strong>fips</strong> 205) trades larger signatures (~8-50 KB) for no state.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>XMSS (RFC 8391) and LMS/HSS (RFC 8554) for firmware and boot-image signing where the signer is a controlled HSM</li><li>SPHINCS+ / SLH-DSA as the conservative stateless post-quantum signature</li><li>Lamport-style schemes as teaching material and in some blockchain research proposals</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://datatracker.ietf.org/doc/html/rfc8391> (XMSS)
+
+<https://datatracker.ietf.org/doc/html/rfc8554> (LMS)
+
+<https://sphincs.org/>
+
+<https://csrc.nist.gov/pubs/sp/800/208/final> (NIST SP 800-208, stateful hash-based signatures)
+"""
+
+[[sources]]
+title = "github.com/RustCrypto"
+url = "https://github.com/RustCrypto"
+
+[[sources]]
+title = "github.com/briansmith/ring"
+url = "https://github.com/briansmith/ring"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc8391"
+url = "https://datatracker.ietf.org/doc/html/rfc8391"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc8554"
+url = "https://datatracker.ietf.org/doc/html/rfc8554"
+
+[[sources]]
+title = "sphincs.org"
+url = "https://sphincs.org/"
+
+[[sources]]
+title = "csrc.nist.gov/pubs/sp/800/208/final"
+url = "https://csrc.nist.gov/pubs/sp/800/208/final"

@@ -1,0 +1,562 @@
+title = "Search and insert"
+module = "Databases"
+module_order = 8
+chapter = "Indexes"
+chapter_order = 3
+order = 337
+kind = "guide"
+lede = "BusTub P2 Task 2 · descent, binary search in nodes, leaf split with copy-up, inner split with push-up, root growth, unique keys · bulk loading"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Search"
+body = """
+<p>Start at the header page, read the root id, and descend. At each inner node, binary-search for <strong>the last separator ≤ key</strong> (key[0] counts as −∞) and follow that child. At the leaf, binary-search for the key. Latching is <strong>crabbing</strong>: acquire the child's read latch, then release the parent's. In Rust that is one line, because assigning a new guard drops the old one <em>after</em> the new one is acquired:</p>
+
+```rust title="crabbing by assignment"
+let mut g = self.bpm.read_page(root)?;
+drop(header_guard);
+while !is_leaf(g.data()) {
+    let c = ichild(g.data(), child_idx(g.data(), k));
+    g = self.bpm.read_page(c)?;     // right side runs first (child latched), then the old g drops
+}
+```
+
+<aside data-call="warning"><b>Binary search is required, not optional</b><p>BusTub's spec states it outright: linear scans inside 500-entry nodes time out on Gradescope. Beyond speed, write the search once as a small, separately tested function (<code>child_idx</code>, <code>leaf_lower_bound</code>). Most split and merge bugs turn out to be off-by-one errors in these two lines.</p></aside>
+"""
+
+[[sections]]
+heading = "Insert"
+body = """
+<ol> <li>Descend to the leaf, keeping every <strong>unsafe</strong> ancestor's write latch. A node is safe for insert if it isn't full.</li> <li>If the key exists: return <code>false</code> (unique index). If it exists but is <strong>tombstoned</strong>, revive it (drop the tombstone and set the value).</li> <li>Insert in sorted position. If the leaf is now over <code>leaf_max</code>, <strong>split</strong>: the upper half moves to a new right leaf (its tombstones move with it, preserving order), the right leaf's first key is <strong>copied up</strong>, and the sibling chain is updated to <code>left → right → old next</code>.</li> <li>Insert <code>(separator, right)</code> into the parent right after <code>left</code>. If the parent overflows, split it: the middle key is <strong>pushed up</strong> and removed from both halves.</li> <li>If the root split, create a new root with two children, and update the header page (which is why the header's write latch was kept).</li> </ol>
+
+<h4>Two latching modes</h4>
+
+<p>The listing below keeps <strong>both</strong> ways of getting to the leaf and lets the tree choose with <code>with_latching</code>:</p>
+
+<ul> <li><code>Latching::Pessimistic</code>: the descent above. Write latches from the header down, releasing every ancestor as soon as a node is safe. One code path, correct on the first try. <strong>Write this one first</strong>; it is also the oracle the other mode is tested against.</li> <li><code>Latching::Optimistic</code> (the default): bet that the leaf has room. Read latches down to the leaf's parent, a write latch on the leaf only. If the insert fits, the whole operation took <strong>one write latch</strong>. If the leaf would split, drop everything and run the pessimistic descent.</li> </ul>
+
+<p>BusTub's <code>OptimisticInsertTest</code> asserts exactly that bet: it finds a leaf with room, inserts into it, and checks that the buffer pool handed out one write guard. So <strong>for the course, optimistic is the mode to submit</strong>; you still need the pessimistic path inside it, as the restart fallback. The pessimistic-only mode is worth keeping in a real code base for one reason: when a concurrency test fails, switching modes tells you which protocol has the bug. To count latches, the buffer pool exposes <code>get_reads()</code> / <code>get_writes()</code>, the number of read and write guards it has handed out.</p>
+
+<figure class="cb-g-fig"><svg viewBox="0 0 820 150" role="img" aria-label="Leaf split"> <g font-size="12"> <text x="10" y="16" class="cb-g-mut">insert 6 into a full leaf (max 4)</text> <rect x="10" y="26" width="200" height="30" rx="4" class="cb-g-boxa"></rect><text x="20" y="46">3 · 4 · 5 · 7   + 6</text> <text x="230" y="46" class="cb-g-acc">→</text> <rect x="270" y="26" width="120" height="30" rx="4" class="cb-g-box"></rect><text x="280" y="46">3 · 4</text> <rect x="400" y="26" width="140" height="30" rx="4" class="cb-g-box"></rect><text x="410" y="46">5 · 6 · 7</text> <text x="560" y="46" class="cb-g-mut">left.next = right, right.next = old next</text> <rect x="400" y="86" width="140" height="30" rx="4" class="cb-g-boxa"></rect><text x="410" y="106">parent: … 5 …</text> <line x1="470" y1="56" x2="470" y2="86" class="cb-g-lna"></line> <text x="10" y="140" class="cb-g-mut">leaf split: 5 is COPIED up (it stays in the leaf) · inner split: the middle key is PUSHED up (it leaves both halves)</text> </g></svg></figure>
+
+:::deeper Tree struct, lookup, optimistic + pessimistic insert, split propagation
+```rust title="src/storage/index/b_plus_tree.rs (part 2: search and insert)"
+// ---------------- the tree ---------------------------------------------------------------
+/// How writers latch on the way down.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Latching {
+    /// Shared latches down to the leaf's parent, exclusive only on the leaf. If the leaf can absorb the
+    /// change (no split, no underflow) that is the whole operation: one write latch. Otherwise the
+    /// operation restarts pessimistically. Best when most operations touch only a leaf.
+    #[default]
+    Optimistic,
+    /// Exclusive latches from the root, released as soon as a node is "safe". Always correct on the
+    /// first descent; the baseline the optimistic mode must agree with, and what a first implementation
+    /// should do (it is much simpler). BusTub's tests expect `Optimistic`.
+    Pessimistic,
+}
+
+pub struct BPlusTree<'a, R: Replacer> {
+    bpm: &'a BufferPoolManager<R>,
+    header: PageId,
+    leaf_max: usize,
+    int_max: usize,
+    k_tombs: usize,
+    latching: Latching,
+}
+
+impl<'a, R: Replacer> BPlusTree<'a, R> {
+    pub fn new(
+        bpm: &'a BufferPoolManager<R>,
+        leaf_max: usize,
+        int_max: usize,
+        k_tombs: usize,
+    ) -> Res<Self> {
+        assert!(
+            (2..=LEAF_CAP - 1).contains(&leaf_max)
+                && (3..=INTERNAL_CAP - 1).contains(&int_max)
+                && k_tombs <= MAX_TOMBS
+        );
+        let header = bpm.new_page();
+        set_root(bpm.write_page(header)?.data_mut(), PageId::INVALID);
+        Ok(BPlusTree {
+            bpm,
+            header,
+            leaf_max,
+            int_max,
+            k_tombs,
+            latching: Latching::default(),
+        })
+    }
+
+    /// Choose the writers' latching mode (default: `Latching::Optimistic`).
+    pub fn with_latching(mut self, l: Latching) -> Self {
+        self.latching = l;
+        self
+    }
+    fn leaf_min(&self) -> usize {
+        self.leaf_max.div_ceil(2)
+    }
+    fn int_min(&self) -> usize {
+        self.int_max.div_ceil(2)
+    }
+
+    pub fn is_empty(&self) -> Res<bool> {
+        let h = self.bpm.read_page(self.header)?;
+        let r = root_of(h.data());
+        if !r.is_valid() {
+            return Ok(true);
+        }
+        let g = self.bpm.read_page(r)?;
+        Ok(is_leaf(g.data()) && size(g.data()) == tombs(g.data()).len())
+    }
+
+    // ---- point lookup: shared-latch crabbing -------------------------------------------------
+    pub fn get(&self, k: u64) -> Res<Option<u64>> {
+        let h = self.bpm.read_page(self.header)?;
+        let root = root_of(h.data());
+        if !root.is_valid() {
+            return Ok(None);
+        }
+        let mut g = self.bpm.read_page(root)?;
+        drop(h); // child latched: release parent
+        while !is_leaf(g.data()) {
+            let c = ichild(g.data(), child_idx(g.data(), k));
+            g = self.bpm.read_page(c)?; // assignment drops the parent after
+        }
+        let b = g.data();
+        Ok(leaf_find(b, k)
+            .filter(|&i| !is_tomb(b, i))
+            .map(|i| lval(b, i)))
+    }
+
+    // ---- insert ----------------------------------------------------------------------------------
+    pub fn insert(&self, k: u64, v: u64) -> Res<bool> {
+        if self.latching == Latching::Optimistic {
+            if let Some(done) = self.insert_optimistic(k, v)? {
+                return Ok(done);
+            }
+        }
+        self.insert_pessimistic(k, v)
+    }
+
+    /// Shared latches down to the leaf's parent, exclusive latch on the leaf. Succeeds only if
+    /// the leaf can absorb the insert without splitting; otherwise returns None (restart).
+    fn insert_optimistic(&self, k: u64, v: u64) -> Res<Option<bool>> {
+        let h = self.bpm.read_page(self.header)?;
+        let root = root_of(h.data());
+        if !root.is_valid() {
+            return Ok(None);
+        }
+        // Root is a leaf: we must write-latch it, so do it while holding the header latch.
+        let mut leaf = {
+            let r = self.bpm.read_page(root)?;
+            if is_leaf(r.data()) {
+                drop(r);
+                self.bpm.write_page(root)?
+            } else {
+                drop(h);
+                let mut g = r;
+                loop {
+                    let c = ichild(g.data(), child_idx(g.data(), k));
+                    if level(g.data()) == 1 {
+                        break self.bpm.write_page(c)?;
+                    } // next is a leaf
+                    g = self.bpm.read_page(c)?;
+                }
+            }
+        };
+        let b = leaf.data_mut();
+        if !is_leaf(b) {
+            return Ok(None);
+        } // root changed under us: retry pessimistically
+        match leaf_find(b, k) {
+            Some(i) if is_tomb(b, i) => {
+                let t: Vec<usize> = tombs(b).into_iter().filter(|&x| x != i).collect();
+                set_tombs(b, &t);
+                wr64(b, L_VALS + 8 * i, v);
+                Ok(Some(true))
+            }
+            Some(_) => Ok(Some(false)),
+            None if size(b) < self.leaf_max => {
+                let p = leaf_lower_bound(b, k);
+                leaf_insert_at(b, p, k, v);
+                Ok(Some(true))
+            }
+            None => Ok(None), // would split
+        }
+    }
+
+    fn insert_pessimistic(&self, k: u64, v: u64) -> Res<bool> {
+        let mut hg = self.bpm.write_page(self.header)?;
+        let root = root_of(hg.data());
+        if !root.is_valid() {
+            let pid = self.bpm.new_page();
+            let mut g = self.bpm.write_page(pid)?;
+            leaf_write(g.data_mut(), &[(k, v)], &[], PageId::INVALID);
+            set_root(hg.data_mut(), pid);
+            return Ok(true);
+        }
+        let mut header = Some(hg);
+        let mut path: Vec<WritePageGuard<'a, R>> = Vec::new();
+        let mut pid = root;
+        loop {
+            let g = self.bpm.write_page(pid)?;
+            let b = g.data();
+            let safe = if is_leaf(b) {
+                size(b) < self.leaf_max
+            } else {
+                size(b) < self.int_max
+            };
+            if safe {
+                path.clear();
+                header = None;
+            } // no split can reach the ancestors
+            let next = (!is_leaf(b)).then(|| ichild(b, child_idx(b, k)));
+            path.push(g);
+            match next {
+                Some(c) => pid = c,
+                None => break,
+            }
+        }
+        let mut leaf = path.pop().unwrap();
+        let b = leaf.data_mut();
+        match leaf_find(b, k) {
+            Some(i) if is_tomb(b, i) => {
+                let t: Vec<usize> = tombs(b).into_iter().filter(|&x| x != i).collect();
+                set_tombs(b, &t);
+                wr64(b, L_VALS + 8 * i, v);
+                return Ok(true);
+            }
+            Some(_) => return Ok(false),
+            None => {}
+        }
+        let p = leaf_lower_bound(b, k);
+        leaf_insert_at(b, p, k, v);
+        if size(b) <= self.leaf_max {
+            return Ok(true);
+        }
+        // Split the leaf: upper half moves right, with its tombstones.
+        let (entries, t) = leaf_read(b);
+        let mid = entries.len() / 2;
+        let right_pid = self.bpm.new_page();
+        let mut right = self.bpm.write_page(right_pid)?;
+        let lt: Vec<usize> = t.iter().copied().filter(|&x| x < mid).collect();
+        let rt: Vec<usize> = t
+            .iter()
+            .copied()
+            .filter(|&x| x >= mid)
+            .map(|x| x - mid)
+            .collect();
+        leaf_write(right.data_mut(), &entries[mid..], &rt, next_leaf(b));
+        leaf_write(b, &entries[..mid], &lt, right_pid);
+        let sep = entries[mid].0;
+        let left_pid = leaf.page_id();
+        drop(right);
+        drop(leaf);
+        self.insert_into_parent(path, header, left_pid, sep, right_pid, 1)?;
+        Ok(true)
+    }
+
+    fn insert_into_parent(
+        &self,
+        mut path: Vec<WritePageGuard<'a, R>>,
+        header: Option<WritePageGuard<'a, R>>,
+        mut left: PageId,
+        mut sep: u64,
+        mut right: PageId,
+        mut lvl: u8,
+    ) -> Res<()> {
+        loop {
+            let Some(mut parent) = path.pop() else {
+                // `left` was the root: grow the tree by one level.
+                let mut hg = header.expect("root split without the header latch");
+                let pid = self.bpm.new_page();
+                let mut g = self.bpm.write_page(pid)?;
+                int_write(g.data_mut(), lvl, &[0, sep], &[left, right]);
+                set_root(hg.data_mut(), pid);
+                return Ok(());
+            };
+            let b = parent.data_mut();
+            let (mut keys, mut kids) = int_read(b);
+            let at = kids
+                .iter()
+                .position(|&c| c == left)
+                .expect("left child in parent")
+                + 1;
+            keys.insert(at, sep);
+            kids.insert(at, right);
+            let plvl = level(b);
+            if kids.len() <= self.int_max {
+                int_write(b, plvl, &keys, &kids);
+                return Ok(());
+            }
+            // Split the internal node; keys[mid] moves up (it is not kept in either half).
+            let mid = kids.len() / 2;
+            let new_pid = self.bpm.new_page();
+            let mut ng = self.bpm.write_page(new_pid)?;
+            let mut rkeys = keys[mid..].to_vec();
+            rkeys[0] = 0;
+            int_write(ng.data_mut(), plvl, &rkeys, &kids[mid..]);
+            int_write(b, plvl, &keys[..mid], &kids[..mid]);
+            sep = keys[mid];
+            left = parent.page_id();
+            right = new_pid;
+            lvl = plvl + 1;
+        }
+    }
+```
+:::
+
+<aside data-call="rust"><b><code>Vec&lt;WritePageGuard&lt;'a, R&gt;&gt;</code> is the latch-crabbing context</b><p>BusTub's <code>Context</code> holds <code>std::deque&lt;WritePageGuard&gt; write_set_</code> plus an optional header guard. In Rust, a <code>Vec</code> of guards serves as the context. <code>path.clear()</code> releases every ancestor at once, dropping them in order, and each drop unlatches and unpins. The borrow checker guarantees no guard outlives the buffer pool, and the guards are <code>!Send</code>, so a context can't leak to another thread. One subtlety: the guards borrow the pool for <code>'a</code>, the tree's lifetime parameter, so helper functions that take the path need <code>Vec&lt;WritePageGuard&lt;'a, R&gt;&gt;</code>, not <code>'_</code>.</p></aside>
+
+<aside data-call="rust"><b>Returning early out of a loop that holds guards</b><p><code>let Some(mut parent) = path.pop() else { … return Ok(()); };</code> (let-else, stable since 1.65) handles "no parent means we split the root" without nesting. Guards held by locals drop on every return path automatically, so early returns can't leak a latch. That is the property that makes RAII latching tractable at all.</p></aside>
+"""
+
+[[sections]]
+heading = "Bulk loading"
+body = """
+<p>Sorted input builds the tree bottom-up in O(n), with every page written exactly once. Choose leaf and inner fill targets (a fill factor), split the input into chunks within [min, max], chain the leaves, then build each inner level from the first keys of the level below. The chunking rule keeps every node within bounds, including the last one, which is the edge case people get wrong.</p>
+
+:::deeper Bulk loader + chunk sizing
+```rust title="src/storage/index/b_plus_tree.rs (bulk load)"
+/// Split n items into chunks of ~`target`, each within [min, max] (a lone chunk may be
+/// smaller: it becomes the root, which is exempt).
+fn chunk_sizes(n: usize, target: usize, min: usize, max: usize) -> Vec<usize> {
+    let target = target.clamp(min.max(1), max);
+    let count = (n / target).max(n.div_ceil(max)).max(1);
+    (0..count).map(|i| n / count + usize::from(i < n % count)).collect()
+}
+
+    /// Build a tree bottom-up from sorted, unique entries: leaves filled to `fill_pct`,
+    /// chained, then each inner level built from the first keys of the level below.
+    pub fn bulk_load(bpm: &'a BufferPoolManager<R>, leaf_max: usize, int_max: usize, k_tombs: usize,
+                     entries: &[(u64, u64)], fill_pct: usize) -> Res<Self> {
+        debug_assert!(entries.windows(2).all(|w| w[0].0 < w[1].0), "bulk_load needs sorted unique keys");
+        let t = Self::new(bpm, leaf_max, int_max, k_tombs)?;
+        if entries.is_empty() { return Ok(t); }
+        let sizes = chunk_sizes(entries.len(), leaf_max * fill_pct / 100, t.leaf_min(), leaf_max);
+        let pids: Vec<PageId> = sizes.iter().map(|_| bpm.new_page()).collect();
+        let mut first_keys = Vec::with_capacity(pids.len());
+        let mut at = 0;
+        for (i, (&n, &pid)) in sizes.iter().zip(&pids).enumerate() {
+            let next = pids.get(i + 1).copied().unwrap_or(PageId::INVALID);
+            leaf_write(bpm.write_page(pid)?.data_mut(), &entries[at..at + n], &[], next);
+            first_keys.push(entries[at].0);
+            at += n;
+        }
+        let (mut kids, mut lvl) = (pids, 1u8);
+        while kids.len() > 1 {
+            let sizes = chunk_sizes(kids.len(), int_max * fill_pct / 100, t.int_min(), int_max);
+            let (mut up_kids, mut up_keys, mut at) = (Vec::new(), Vec::new(), 0);
+            for n in sizes {
+                let pid = bpm.new_page();
+                let mut keys = first_keys[at..at + n].to_vec();
+                up_keys.push(keys[0]);
+                keys[0] = 0;                                         // key[0] unused
+                int_write(bpm.write_page(pid)?.data_mut(), lvl, &keys, &kids[at..at + n]);
+                up_kids.push(pid);
+                at += n;
+            }
+            kids = up_kids;
+            first_keys = up_keys;
+            lvl += 1;
+        }
+        set_root(bpm.write_page(t.header)?.data_mut(), kids[0]);
+        Ok(t)
+    }
+```
+:::
+"""
+
+[[sections]]
+heading = "Tests"
+body = """
+<p>The model test from <a href="/cookbook/p/toolchain">Toolchain</a> is the spec: random inserts, deletes, lookups and range scans against a <code>BTreeMap</code>, with <code>check_invariants()</code> after <strong>every</strong> operation, run with tiny nodes (leaf max 2–5, inner max 3–5) and a 24-frame pool so pages are evicted mid-operation.</p>
+
+```rust title="tests/b_plus_tree.rs"
+use proptest::prelude::*;
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use relational::buffer::{arc_replacer::ArcReplacer, buffer_pool_manager::BufferPoolManager};
+use relational::storage::{disk::disk_manager::{DiskManager, MemDiskManager}, index::b_plus_tree::{BPlusTree, Latching}};
+
+fn bpm(frames: usize) -> BufferPoolManager<ArcReplacer> {
+    let disk: Arc<dyn DiskManager> = Arc::new(MemDiskManager::default());
+    BufferPoolManager::new(frames, disk, ArcReplacer::new(frames), 2)
+}
+
+#[derive(Debug, Clone)]
+enum Op { Ins(u64, u64), Del(u64), Get(u64), Scan(u64) }
+
+fn ops() -> impl Strategy<Value = Vec<Op>> {
+    prop::collection::vec(prop_oneof![
+        5 => (0u64..300, any::<u64>()).prop_map(|(k, v)| Op::Ins(k, v)),
+        4 => (0u64..300).prop_map(Op::Del),
+        1 => (0u64..300).prop_map(Op::Get),
+        1 => (0u64..300).prop_map(Op::Scan),
+    ], 0..1500)
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 400, ..ProptestConfig::default() })]
+    #[test]
+    fn btree_matches_model(leaf_max in 2usize..6, int_max in 3usize..6, k in prop_oneof![Just(0usize), Just(1), Just(3)], mode in prop_oneof![Just(Latching::Optimistic), Just(Latching::Pessimistic)], ops in ops()) {
+        let bpm = bpm(24);                                   // small pool: evictions mid-operation
+        let t = BPlusTree::new(&bpm, leaf_max, int_max, k).unwrap().with_latching(mode);
+        let mut m = BTreeMap::new();
+        for op in ops {
+            match op {
+                Op::Ins(key, v) => { let fresh = !m.contains_key(&key); prop_assert_eq!(t.insert(key, v).unwrap(), fresh); m.entry(key).or_insert(v); }
+                Op::Del(key) => { t.remove(key).unwrap(); m.remove(&key); }
+                Op::Get(key) => prop_assert_eq!(t.get(key).unwrap(), m.get(&key).copied()),
+                Op::Scan(from) => {
+                    let got: Vec<(u64, u64)> = t.iter_from(Some(from)).unwrap().map(|r| r.unwrap()).collect();
+                    let want: Vec<(u64, u64)> = m.range(from..).map(|(a, b)| (*a, *b)).collect();
+                    prop_assert_eq!(got, want);
+                }
+            }
+            t.check_invariants().unwrap();
+        }
+        let all: Vec<(u64, u64)> = t.iter_from(None).unwrap().map(|r| r.unwrap()).collect();
+        prop_assert_eq!(all, m.iter().map(|(a, b)| (*a, *b)).collect::<Vec<_>>());
+        prop_assert_eq!(t.is_empty().unwrap(), m.is_empty());
+    }
+}
+
+#[test]
+fn sequential_and_reverse_scale() {
+    let bpm = bpm(64);
+    let t = BPlusTree::new(&bpm, 8, 8, 0).unwrap();
+    for k in 0..20_000u64 { assert!(t.insert(k, k * 10).unwrap()); }
+    let depth = t.check_invariants().unwrap();
+    for k in (0..20_000u64).rev().step_by(2) { t.remove(k).unwrap(); }
+    t.check_invariants().unwrap();
+    assert_eq!(t.iter_from(None).unwrap().count(), 10_000);
+    for k in 0..20_000u64 { assert_eq!(t.get(k).unwrap(), (k % 2 == 0).then_some(k * 10)); }
+    eprintln!("20k sequential keys, max 8/8: depth {depth}");
+}
+
+#[test]
+fn bulk_load_shapes() {
+    for n in [0usize, 1, 2, 3, 5, 17, 100, 1000, 12345] {
+        for (lm, im) in [(2usize, 3usize), (3, 3), (4, 5), (8, 8), (255, 255)] {
+            for fill in [50usize, 70, 100] {
+                let bpm = bpm(32);
+                let entries: Vec<(u64, u64)> = (0..n as u64).map(|k| (k * 3, k)).collect();
+                let t = BPlusTree::bulk_load(&bpm, lm, im, 0, &entries, fill).unwrap();
+                t.check_invariants().unwrap();
+                let got: Vec<(u64, u64)> = t.iter_from(None).unwrap().map(|r| r.unwrap()).collect();
+                assert_eq!(got, entries, "n={n} lm={lm} im={im} fill={fill}");
+                if n > 0 { assert_eq!(t.get(3 * (n as u64 / 2)).unwrap(), Some(n as u64 / 2)); }
+                for k in 0..50u64 { t.insert(k * 3 + 1, k).unwrap(); t.remove(k * 3).unwrap(); }
+                t.check_invariants().unwrap();
+            }
+        }
+    }
+    let bpm = bpm(32);
+    let t = BPlusTree::new(&bpm, 3, 3, 1).unwrap();
+    for k in [5u64, 1, 9, 3, 7, 2, 8] { t.insert(k, k).unwrap(); }
+    t.remove(9).unwrap();
+    println!("{}", t.to_dot().unwrap());
+}
+
+/// Why both modes exist, measured: a change that stays inside one leaf takes exactly one write latch
+/// optimistically, and several (header + path, released as nodes prove safe) pessimistically; the final
+/// contents are identical. Mirrors BusTub's OptimisticInsertTest / OptimisticDeleteTest.
+#[test]
+fn optimistic_takes_one_write_latch_pessimistic_more() {
+    let mut seen = Vec::new();
+    for mode in [Latching::Optimistic, Latching::Pessimistic] {
+        let bpm = bpm(50);
+        let t = BPlusTree::new(&bpm, 4, 3, 0).unwrap().with_latching(mode);
+        for i in 0..25u64 {
+            assert!(t.insert(2 * i, i).unwrap());
+        }
+        // Pick keys that provably stay inside one leaf: a leaf with room to insert, one above its minimum to delete.
+        let leaves = t.leaves().unwrap();
+        let ins_key = leaves.iter().find(|l| l.keys.len() + 1 < l.max_size).unwrap().keys[0] + 1;
+        let del_key = leaves.iter().find(|l| l.keys.len() > l.min_size).unwrap().keys[0];
+        let (r0, w0) = (bpm.get_reads(), bpm.get_writes());
+        assert!(t.insert(ins_key, 0).unwrap());
+        let (r1, w1) = (bpm.get_reads(), bpm.get_writes());
+        t.remove(del_key).unwrap();
+        let (r2, w2) = (bpm.get_reads(), bpm.get_writes());
+        let all: Vec<u64> = t.iter_from(None).unwrap().map(|r| r.unwrap().0).collect();
+        seen.push(((r1 - r0, w1 - w0), (r2 - r1, w2 - w1), all));
+        t.check_invariants().unwrap();
+    }
+    let (opt, pes) = (&seen[0], &seen[1]);
+    assert_eq!(opt.2, pes.2, "the modes must agree on the contents");
+    assert_eq!((opt.0.1, opt.1.1), (1, 1), "optimistic: one write latch each");
+    assert!(opt.0.0 > 0 && opt.1.0 > 0, "optimistic descends with read latches");
+    assert!(pes.0.1 > 1 && pes.1.1 > 1, "pessimistic: write latches on the way down, got {:?}", (pes.0, pes.1));
+}
+```
+
+:::deeper The invariant checker used after every operation
+```rust title="src/storage/index/b_plus_tree.rs (invariants)"
+    // ---- structural checks (tests) -------------------------------------------------------------
+    pub fn check_invariants(&self) -> Res<usize> {
+        let h = self.bpm.read_page(self.header)?;
+        let root = root_of(h.data());
+        drop(h);
+        if !root.is_valid() { return Ok(0); }
+        let mut leaves = Vec::new();
+        let depth = self.check_node(root, None, None, true, &mut leaves)?;
+        // Sibling chain visits exactly the leaves, in order.
+        for w in leaves.windows(2) {
+            let g = self.bpm.read_page(w[0])?;
+            assert_eq!(next_leaf(g.data()), w[1], "broken sibling chain");
+        }
+        let g = self.bpm.read_page(*leaves.last().unwrap())?;
+        assert!(!next_leaf(g.data()).is_valid(), "last leaf has a successor");
+        Ok(depth)
+    }
+
+    fn check_node(&self, pid: PageId, lo: Option<u64>, hi: Option<u64>, is_root: bool, leaves: &mut Vec<PageId>) -> Res<usize> {
+        let (b, kids) = { let g = self.bpm.read_page(pid)?; let b = *g.data(); let kids = if is_leaf(&b) { vec![] } else { int_read(&b).1 }; (b, kids) };
+        let n = size(&b);
+        if is_leaf(&b) {
+            assert!(n <= self.leaf_max, "leaf overflow");
+            if !is_root { assert!(n >= self.leaf_min(), "leaf underflow: {n} < {}", self.leaf_min()); }
+            let t = tombs(&b);
+            assert!(t.len() <= self.k_tombs, "too many tombstones");
+            let mut s = t.clone(); s.sort(); s.dedup(); assert_eq!(s.len(), t.len(), "duplicate tombstone");
+            assert!(t.iter().all(|&x| x < n), "tombstone out of range");
+            for i in 0..n {
+                let k = lkey(&b, i);
+                if i > 0 { assert!(lkey(&b, i - 1) < k, "leaf keys not sorted"); }
+                if let Some(lo) = lo { assert!(k >= lo, "key below separator"); }
+                if let Some(hi) = hi { assert!(k < hi, "key above separator"); }
+            }
+            leaves.push(pid);
+            return Ok(1);
+        }
+        assert!(n <= self.int_max, "internal overflow");
+        if is_root { assert!(n >= 2, "root internal with < 2 children"); } else { assert!(n >= self.int_min(), "internal underflow"); }
+        let mut depth = None;
+        for i in 0..n {
+            if i > 1 { assert!(ikey(&b, i - 1) < ikey(&b, i), "internal keys not sorted"); }
+            let clo = if i == 0 { lo } else { Some(ikey(&b, i)) };
+            let chi = if i + 1 < n { Some(ikey(&b, i + 1)) } else { hi };
+            let d = self.check_node(kids[i], clo, chi, false, leaves)?;
+            assert_eq!(*depth.get_or_insert(d), d, "leaves at different depths");
+            let cg = self.bpm.read_page(kids[i])?;
+            let expect_lvl = if is_leaf(cg.data()) { 1 } else { level(cg.data()) + 1 };
+            assert_eq!(level(&b), expect_lvl, "level byte wrong");
+        }
+        Ok(depth.unwrap() + 1)
+    }
+}
+```
+:::
+
+```text title="cargo test --release --test b_plus_tree"
+20k sequential keys, max 8/8: depth 7
+test result: ok. 3 passed   (400 random histories × up to 1,500 ops, invariants after each)
+```
+
+<aside data-call="testing"><b>What each invariant catches</b><ul> <li><strong>Keys sorted within a node</strong>: a bad insert position (off-by-one in <code>leaf_lower_bound</code>).</li> <li><strong>Keys within the parent's separators</strong>: a split that copied up the wrong key, or a redistribution that forgot to update the parent.</li> <li><strong>Sizes within [min, max]</strong>: missing split or merge; the wrong <code>min</code> formula.</li> <li><strong>All leaves at the same depth</strong>: a merge that dropped a level incorrectly, or a root collapse that went wrong.</li> <li><strong>Sibling chain = in-order leaves</strong>: a split or merge that didn't fix <code>next</code>. Range scans break silently without this check.</li> <li><strong>The level byte matches the height</strong>: needed by optimistic descents (<a href="/cookbook/p/b-tree-concurrency">P2.5</a>).</li> <li><strong>Tombstones valid</strong> (≤ K, unique, in range): index shifting bugs in insert and remove.</li> </ul></aside>
+"""

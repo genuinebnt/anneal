@@ -1,0 +1,46 @@
+title = "DP memoization"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Dynamic programming, greedy and search"
+chapter_order = 5
+order = 205
+kind = "recipe"
+lede = "memoization vs tabulation on coin change, and why greedy is not enough."
+level = "simple"
+code = ["examples/algorithms/dp_memoization.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+the first DP you write; choosing between recursion+cache and a table.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>the first DP everyone writes: change-making</li><li>resource planning</li><li>memo vs table trade-offs</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Problem: fewest coins summing to `amount`.  min_coins(a) = 1 + min over coins c &lt;= a of min_coins(a - c).
+
+Overlapping subproblems (the same a-c recur) + optimal substructure = dynamic programming. top-down: natural recursion, cache results in a map (`HashMap` or `Vec<Option<_>>`); recursion depth = amount! bottom-up: fill a Vec from 0 upwards; no recursion, usually faster, easy to reason about.
+
+Greedy (always take the biggest coin) works for some coin systems but fails for others, so you need the DP.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://www.geeksforgeeks.org/coin-change-dp-7/> (any intro) and <https://cp-algorithms.com/dynamic_programming/intro-to-dp.html>
+"""
+
+[[sources]]
+title = "geeksforgeeks.org/coin-change-dp-7"
+url = "https://www.geeksforgeeks.org/coin-change-dp-7/"
+
+[[sources]]
+title = "cp-algorithms.com/dynamic_programming/intro-to-dp.html"
+url = "https://cp-algorithms.com/dynamic_programming/intro-to-dp.html"

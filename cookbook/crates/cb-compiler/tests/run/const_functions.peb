@@ -1,0 +1,4 @@
+const N: int = 5;
+fn sq(x: int) -> int { x * x }
+const SQ: int = sq(N) + 1;
+fn main() { println(to_str(SQ)); }

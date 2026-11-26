@@ -1,0 +1,66 @@
+title = "Garbage collection"
+module = "Rust language"
+module_order = 1
+chapter = "Memory and allocators"
+chapter_order = 6
+order = 52
+kind = "guide"
+lede = "Book ch. 26 · Official tests: the whole suite so far, run again with --features stress-gc"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>This is the slice where Rust matters most. The book uses raw pointers and an intrusive linked list of objects. There are two ways to do it in Rust:</p>
+
+<ul> <li><b>Handles into a slot vector (recommended).</b> Use <code>ObjRef(u32)</code> indexes into <code>Vec&lt;Option&lt;Obj&gt;&gt;</code>, with a free list and a mark bit per slot. It's all safe Rust. A GC bug shows up as a panic like “use after free” when the handle is used, not as silent memory corruption. It also makes NaN boxing easy, because a <code>u32</code> fits in the payload.</li> <li><b>Raw pointers like the book.</b> <code>NonNull&lt;Obj&gt;</code> with <code>unsafe</code> derefs. This is closer to the text and avoids one indirection. Run the whole suite under Miri if you choose it.</li> </ul>
+
+```rust title="crates/clox/src/heap.rs"
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ObjRef(u32);
+
+pub struct Heap {
+    slots: Vec<Option<Obj>>,
+    marks: Vec<bool>,
+    free: Vec<u32>,
+    gray: Vec<ObjRef>,
+    strings: HashMap<Box<str>, ObjRef>,   // weak: cleared before sweep
+    pub bytes: usize,
+    pub next_gc: usize,
+}
+
+impl Heap {
+    pub fn get(&self, r: ObjRef) -> &Obj {
+        self.slots[r.0 as usize].as_ref().expect("use after free: GC missed a root")
+    }
+
+    pub fn collect(&mut self, roots: impl IntoIterator<Item = Value>) {
+        for v in roots { self.mark_value(v); }
+        while let Some(r) = self.gray.pop() { self.blacken(r); }
+        let marks = &self.marks;
+        self.strings.retain(|_, r| marks[r.0 as usize]);   // tableRemoveWhite
+        self.sweep();                                      // free unmarked, clear marks
+        self.next_gc = (self.bytes * 2).max(1 << 20);
+    }
+}
+```
+
+<p><b>Roots.</b> The value stack, every frame's closure, open upvalues, globals, and the cached <code>"init"</code> string (C9). The book also marks the compiler's in-progress functions, because it can collect during compilation. A simpler rule: only collect from VM instructions that allocate, never during compilation. The compiler only allocates, and the finished script function goes on the stack before <code>run()</code>. That removes a whole class of the book's GC bugs.</p>
+
+<p><b>Pin temporaries.</b> <code>"a" + "b"</code> allocates the result while both operands are still in use. Leave the operands on the stack until after the allocation, then pop, exactly as the book does. The handle design doesn't exempt you from this. It just makes the mistake panic instead of corrupting memory.</p>
+
+<div class="cb-g-tt"><table><thead><tr><th>Kind</th><th>Input</th><th>Expected</th></tr></thead><tbody><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>fun mk() { fun g() {} return g; } for (var i = 0; i &lt; 100000; i = i + 1) { var c = mk(); } print "done";</code></td><td><code>done</code>. Each <code>mk()</code> allocates a closure that becomes garbage at once</td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>whole golden suite, &lt;code&gt;--features stress-gc&lt;/code&gt;</code></td><td>identical output. A missed root panics with “use after free”</td></tr></tbody></table></div>
+
+```rust title="crates/clox/src/vm.rs, test"
+#[test]
+fn loop_garbage_is_collected() {
+    let mut vm = Vm::new();
+    let src = "fun mk() { fun g() {} return g; }
+               for (var i = 0; i < 100000; i = i + 1) { var c = mk(); }";
+    vm.interpret(src, &mut Vec::new())
+        .unwrap();
+    vm.collect_garbage();
+    assert!(vm.heap.live() < 64, "live objects: {}", vm.heap.live());
+}
+```
+"""

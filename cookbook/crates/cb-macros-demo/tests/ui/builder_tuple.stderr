@@ -1,0 +1,5 @@
+error: Builder requires a struct with named fields
+ --> tests/ui/builder_tuple.rs:3:9
+  |
+3 | struct T(u8, u16);
+  |         ^^^^^^^^^

@@ -1,0 +1,40 @@
+title = "Concurrency interview questions"
+module = "Worked questions"
+module_order = 14
+chapter = "Coding and design questions"
+chapter_order = 2
+order = 676
+kind = "recipe"
+lede = "Blocking queue, rate limiter, LRU, RW lock, philosophers, barriers, pools, orderings, Send/Sync."
+level = "advanced"
+code = ["examples/interview/concurrency_interview_questions.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>interview preparation for systems/backend roles</li><li>reviewing hand-rolled synchronisation</li><li>teaching Mutex+Condvar patterns</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>every primitive here is something production code re-implements or wraps: bounded channels</li><li>token buckets in API gateways</li><li>sharded caches</li><li>thread pools</li><li>singleflight in caches (Go's <code>singleflight</code>, Rust's <code>moka</code>)</li><li>lock-order checkers (Linux lockdep). <strong>Spoiler</strong>: Q11 (lock-order graph) contains graph cycle detection</li><li>skip Q11 if you have not yet solved FlowForge's cycle-detection stage yourself</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://marabos.nl/atomics/" target="_blank" rel="noreferrer">https://marabos.nl/atomics/</a> (Rust Atomics and Locks) and <a href="https://doc.rust-lang.org/nomicon/send-and-sync.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/nomicon/send-and-sync.html</a> and <a href="https://doc.rust-lang.org/std/sync/struct.Condvar.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/sync/struct.Condvar.html</a> Practice: the LeetCode "Concurrency" problem list (FooBar, ZeroEvenOdd, print in order)</li><li>named only, the site refuses automated link checks</li></ul>
+"""
+
+[[sources]]
+title = "marabos.nl/atomics"
+url = "https://marabos.nl/atomics/"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/send-and-sync.html"
+url = "https://doc.rust-lang.org/nomicon/send-and-sync.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/sync/struct.Condvar.html"
+url = "https://doc.rust-lang.org/std/sync/struct.Condvar.html"

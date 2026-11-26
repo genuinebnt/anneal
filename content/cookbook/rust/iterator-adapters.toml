@@ -1,0 +1,46 @@
+title = "Iterator adapters"
+module = "Rust language"
+module_order = 1
+chapter = "Everyday language"
+chapter_order = 3
+order = 24
+kind = "recipe"
+lede = "a tour of adapters and consumers, plus writing your own `Iterator`."
+level = "intermediate"
+code = ["examples/language/iterator_adapters.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>replacing index loops</li><li>streaming over large inputs lazily</li><li>readable data pipelines</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>readable data pipelines</li><li>streaming lazily over large inputs</li><li>writing your own iterator types</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Iterators are **lazy**: adapters (`map`, `filter`...) do nothing until a consumer (`collect`, `sum`, `for`, `next`) pulls items. The compiler usually optimises chains to the same machine code as a hand-written loop.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/iter/trait.Iterator.html> and <https://doc.rust-lang.org/book/ch13-02-iterators.html> Crate for more adapters: <https://docs.rs/itertools>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/iter/trait.Iterator.html"
+url = "https://doc.rust-lang.org/std/iter/trait.Iterator.html"
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch13-02-iterators.html"
+url = "https://doc.rust-lang.org/book/ch13-02-iterators.html"
+
+[[sources]]
+title = "docs.rs/itertools"
+url = "https://docs.rs/itertools"

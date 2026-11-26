@@ -1,0 +1,8 @@
+fn main() {
+    let mut x = 100;
+    x += 5; x -= 3; x *= 2; x /= 4; x %= 20;
+    println(to_str(x));
+    let mut s = "a";
+    s += "b";
+    println(s);
+}

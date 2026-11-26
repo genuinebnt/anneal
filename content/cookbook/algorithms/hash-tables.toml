@@ -1,0 +1,339 @@
+title = "Hash tables"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Hashing and probabilistic structures"
+chapter_order = 1
+order = 160
+kind = "guide"
+lede = "hash functions · linear probing, tombstones, SwissTable control bytes · cuckoo · chained, extendible, linear hashing · the disk-based extendible hash index"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Where DBMSs use data structures</strong>: internal metadata (page tables, directories), core storage (index-organized tables), temporary structures (join and aggregation hash tables), and table indexes. Two design axes every time: <strong>data organization</strong> (layout, memory vs disk) and <strong>concurrency</strong>.</li> <li><strong>Hash table</strong> = hash function + collision scheme. O(1) average, O(n) worst case, and no ordering, so no range scans.</li> <li><strong>Hash functions</strong>: fast, with a low collision rate. No cryptographic strength needed. State of the art: <strong>xxHash3</strong> (and friends: wyhash, CityHash, FarmHash, rapidhash).</li> <li><strong>Static schemes</strong> need the size up front; growing means rebuilding (usually at 2×). Size at about 2× the expected number of elements.</li> <li><strong>Linear probing</strong>: one circular array, probe forward on collisions. It's the fastest and most cache-friendly scheme, but it clusters at high load. Delete with <strong>tombstones</strong> (lookups continue past them, inserts reuse them), or by shifting entries back (rarely done). Store the key (or its hash) in the slot to verify matches.</li> <li><strong>Variable-length keys</strong> live out of line (hash + pointer or RID in the slot). <strong>Non-unique keys</strong>: store redundant copies of the key (common), or a value list per key.</li> <li><strong>Optimizations</strong>: specialize the table per key type or size; keep slot metadata (empty/tombstone/hash bits) in a separate compact array (<strong>SwissTable / <code>absl::flat_hash_map</code></strong>); version counters for O(1) clear-and-reuse.</li> <li><strong>Cuckoo hashing</strong>: several hash functions (often one table), and a key is always in one of k slots, so lookups are O(1). Inserts evict ("kick") occupants to their alternate slot; on a cycle, rehash or grow.</li> <li><strong>Dynamic schemes</strong> grow incrementally. <strong>Chained</strong>: a list of buckets per slot. <strong>Extendible</strong>: a directory of 2&#94;global-depth pointers to buckets with local depths; split only the full bucket, and double the directory only when local depth = global depth. <strong>Linear</strong>: a split pointer splits buckets round-robin whenever <em>any</em> bucket overflows; two hash functions coexist during a round; it can shrink too.</li> </ul>
+"""
+
+[[sections]]
+heading = "Where hash tables appear in a DBMS"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Use</th> <th>Keys</th> <th>Requirements</th> </tr> </thead> <tbody> <tr> <td>Buffer pool page table</td> <td>page ids</td> <td>concurrent, fixed capacity, extremely hot</td> </tr> <tr> <td>Hash join build side (<a href="/cookbook/p/join-algorithms">L12</a>)</td> <td>join keys</td> <td>build once, probe many times; may spill to disk (Grace)</td> </tr> <tr> <td>Hash aggregation (<a href="/cookbook/p/sorting-and-aggregation">L11</a>)</td> <td>group-by keys</td> <td>upsert-heavy; may spill</td> </tr> <tr> <td>Hash index</td> <td>index keys</td> <td>persistent, page-based, dynamic growth (extendible/linear)</td> </tr> <tr> <td>Lock manager, transaction table</td> <td>lock ids, txn ids</td> <td>concurrent</td> </tr> <tr> <td>Catalog caches, plan caches</td> <td>names, query text</td> <td>read-mostly</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Schemes, measured"
+body = """
+```text title="2M random u64 keys, insert then lookup all · Apple M4 Pro, release · verify/tests/hashing.rs"
+linear probe (ctrl)    insert   46.6 ns/op   lookup   11.2 ns/op
+cuckoo                 insert  111.6 ns/op   lookup   15.4 ns/op
+extendible (cap 64)    insert  241.7 ns/op   lookup   47.1 ns/op   ← directory hop + bucket scan
+linear hashing         insert   73.3 ns/op   lookup   31.0 ns/op
+std HashMap (SipHash)  insert   25.0 ns/op   lookup   19.7 ns/op   ← hashbrown: SIMD SwissTable, slower hash
+```
+
+<p>Two things to notice. Open addressing with a cheap hash beats everything on lookups, which is why join and aggregation tables use it. And the dynamic schemes pay for incremental growth with an extra indirection. That's the right trade <em>on disk</em>, where a full rebuild means rewriting every page, and the wrong one in memory.</p>
+
+:::deeper Reference: linear probing with control bytes, cuckoo, extendible, linear hashing
+```rust title="src/container/hash/schemes.rs"
+//! Hash tables from L07: open addressing (linear probing with control bytes),
+//! cuckoo, extendible and linear hashing. u64 keys/values keep the focus on the schemes.
+
+#[inline]
+pub fn hash64(x: u64, seed: u64) -> u64 {
+    // splitmix64 finalizer: fast, well-mixed; a stand-in for xxh3 on 8-byte keys
+    let mut z = x.wrapping_add(seed).wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+// ------------------------------------------------------------------------------------
+// Linear probing with a separate control-byte array (SwissTable idea, scalar version).
+// ctrl: EMPTY | TOMBSTONE | 0x00..0x7F = low 7 bits of the hash ("h2"). Probing compares
+// one byte per slot and only touches keys whose h2 matches: ~1/128 false matches.
+const EMPTY: u8 = 0x80;
+const TOMB: u8 = 0xFE;
+
+pub struct LinearProbe { ctrl: Vec<u8>, keys: Vec<u64>, vals: Vec<u64>, len: usize, tombs: usize }
+
+impl LinearProbe {
+    pub fn with_capacity(n: usize) -> Self {
+        let cap = (n * 2).next_power_of_two().max(8);          // load factor ≤ 0.5 at the requested size
+        LinearProbe { ctrl: vec![EMPTY; cap], keys: vec![0; cap], vals: vec![0; cap], len: 0, tombs: 0 }
+    }
+    fn mask(&self) -> usize { self.ctrl.len() - 1 }
+    fn split(h: u64) -> (usize, u8) { ((h >> 7) as usize, (h & 0x7F) as u8) }
+
+    pub fn get(&self, k: u64) -> Option<u64> {
+        let (mut i, h2) = Self::split(hash64(k, 0));
+        loop {
+            i &= self.mask();
+            match self.ctrl[i] {
+                EMPTY => return None,                           // an empty slot ends every probe chain
+                c if c == h2 && self.keys[i] == k => return Some(self.vals[i]),
+                _ => i += 1,                                    // tombstone or other key: keep going
+            }
+        }
+    }
+
+    pub fn insert(&mut self, k: u64, v: u64) -> Option<u64> {
+        if (self.len + self.tombs + 1) * 8 > self.ctrl.len() * 7 { self.resize(); }   // max load 7/8
+        let (mut i, h2) = Self::split(hash64(k, 0));
+        let mut first_tomb = None;
+        loop {
+            i &= self.mask();
+            match self.ctrl[i] {
+                EMPTY => {
+                    // Key absent. Reuse the first tombstone we passed, if any.
+                    let at = first_tomb.unwrap_or(i);
+                    if self.ctrl[at] == TOMB { self.tombs -= 1; }
+                    self.ctrl[at] = h2; self.keys[at] = k; self.vals[at] = v;
+                    self.len += 1;
+                    return None;
+                }
+                TOMB => { first_tomb.get_or_insert(i); i += 1; }
+                c if c == h2 && self.keys[i] == k => return Some(std::mem::replace(&mut self.vals[i], v)),
+                _ => i += 1,
+            }
+        }
+    }
+
+    pub fn remove(&mut self, k: u64) -> Option<u64> {
+        let (mut i, h2) = Self::split(hash64(k, 0));
+        loop {
+            i &= self.mask();
+            match self.ctrl[i] {
+                EMPTY => return None,
+                c if c == h2 && self.keys[i] == k => {
+                    // If the next slot is EMPTY no chain passes through here: mark EMPTY, not TOMB.
+                    if self.ctrl[(i + 1) & self.mask()] == EMPTY { self.ctrl[i] = EMPTY; } else { self.ctrl[i] = TOMB; self.tombs += 1; }
+                    self.len -= 1;
+                    return Some(self.vals[i]);
+                }
+                _ => i += 1,
+            }
+        }
+    }
+
+    fn resize(&mut self) {
+        // Grow only if genuinely full of live entries; otherwise rebuild in place to purge tombstones.
+        let cap = if self.len * 2 >= self.ctrl.len() { self.ctrl.len() * 2 } else { self.ctrl.len() };
+        let old = std::mem::replace(self, LinearProbe { ctrl: vec![EMPTY; cap], keys: vec![0; cap], vals: vec![0; cap], len: 0, tombs: 0 });
+        for i in 0..old.ctrl.len() { if old.ctrl[i] < 0x80 { self.insert(old.keys[i], old.vals[i]); } }
+    }
+    pub fn len(&self) -> usize { self.len }
+    pub fn is_empty(&self) -> bool { self.len == 0 }
+}
+
+// ------------------------------------------------------------------------------------
+// Cuckoo hashing: every key lives in one of two slots, h1(k) or h2(k). Lookups probe
+// at most two slots. Inserts evict ("kick") the occupant to its other slot.
+pub struct Cuckoo { slots: Vec<Option<(u64, u64)>>, seed: u64, len: usize }
+
+impl Cuckoo {
+    pub fn new(cap: usize) -> Self { Cuckoo { slots: vec![None; cap.next_power_of_two().max(8)], seed: 1, len: 0 } }
+    fn pos(&self, k: u64, which: u64) -> usize { (hash64(k, self.seed.wrapping_mul(which + 1)) as usize) & (self.slots.len() - 1) }
+
+    pub fn get(&self, k: u64) -> Option<u64> {
+        [self.pos(k, 0), self.pos(k, 1)].into_iter().find_map(|i| match self.slots[i] { Some((kk, v)) if kk == k => Some(v), _ => None })
+    }
+
+    pub fn insert(&mut self, k: u64, v: u64) {
+        for i in [self.pos(k, 0), self.pos(k, 1)] {
+            if let Some((kk, vv)) = &mut self.slots[i] { if *kk == k { *vv = v; return; } }
+        }
+        let mut cur = (k, v);
+        let mut i = self.pos(k, 0);
+        for _ in 0..64 {                                          // bounded kick chain
+            match self.slots[i].replace(cur) {
+                None => { self.len += 1; return; }
+                Some(evicted) => {
+                    cur = evicted;
+                    let (a, b) = (self.pos(cur.0, 0), self.pos(cur.0, 1));
+                    i = if i == a { b } else { a };               // move the evicted key to its other home
+                }
+            }
+        }
+        // Cycle or table too full: grow, re-seed, and re-insert everything.
+        self.rebuild(self.slots.len() * 2);
+        self.insert(cur.0, cur.1);
+    }
+
+    fn rebuild(&mut self, cap: usize) {
+        let old = std::mem::replace(&mut self.slots, vec![None; cap]);
+        self.seed = self.seed.wrapping_add(0x9E37);
+        self.len = 0;
+        for (k, v) in old.into_iter().flatten() { self.insert(k, v); }
+    }
+
+    pub fn remove(&mut self, k: u64) -> Option<u64> {
+        for i in [self.pos(k, 0), self.pos(k, 1)] {
+            if matches!(self.slots[i], Some((kk, _)) if kk == k) { self.len -= 1; return self.slots[i].take().map(|(_, v)| v); }
+        }
+        None
+    }
+}
+
+// ------------------------------------------------------------------------------------
+// Extendible hashing: a directory of 2^global_depth pointers into buckets; each bucket
+// has a local depth ≤ global depth. A full bucket splits; the directory doubles only
+// when the splitting bucket's local depth equals the global depth.
+// Uses the LOW bits of the hash, as BusTub's disk implementation does.
+pub struct Extendible { dir: Vec<usize>, buckets: Vec<Bucket>, global: u32, bucket_cap: usize }
+struct Bucket { depth: u32, items: Vec<(u64, u64)> }
+
+impl Extendible {
+    pub fn new(bucket_cap: usize) -> Self {
+        Extendible { dir: vec![0], buckets: vec![Bucket { depth: 0, items: vec![] }], global: 0, bucket_cap }
+    }
+    fn slot(&self, h: u64) -> usize { (h & ((1u64 << self.global) - 1)) as usize }
+
+    pub fn get(&self, k: u64) -> Option<u64> {
+        let b = &self.buckets[self.dir[self.slot(hash64(k, 7))]];
+        b.items.iter().find(|(kk, _)| *kk == k).map(|(_, v)| *v)
+    }
+
+    pub fn insert(&mut self, k: u64, v: u64) {
+        let h = hash64(k, 7);
+        loop {
+            let bi = self.dir[self.slot(h)];
+            let b = &mut self.buckets[bi];
+            if let Some(e) = b.items.iter_mut().find(|(kk, _)| *kk == k) { e.1 = v; return; }
+            if b.items.len() < self.bucket_cap { b.items.push((k, v)); return; }
+            if b.depth == 40 { b.items.push((k, v)); return; }      // pathological: all hashes equal; overflow
+            self.split(bi);                                          // then retry: may split again
+        }
+    }
+
+    fn split(&mut self, bi: usize) {
+        if self.buckets[bi].depth == self.global {
+            self.dir.extend_from_within(..);                       // double: new half mirrors old half
+            self.global += 1;
+        }
+        let d = self.buckets[bi].depth;
+        let high_bit = 1u64 << d;                                    // the bit that now tells siblings apart
+        let items = std::mem::take(&mut self.buckets[bi].items);
+        self.buckets[bi].depth = d + 1;
+        let nb = self.buckets.len();
+        self.buckets.push(Bucket { depth: d + 1, items: vec![] });
+        // Every directory slot that pointed to bi and has the new bit set now points to nb.
+        for (i, p) in self.dir.iter_mut().enumerate() {
+            if *p == bi && (i as u64) & high_bit != 0 { *p = nb; }
+        }
+        for (k, v) in items {
+            let target = if hash64(k, 7) & high_bit != 0 { nb } else { bi };
+            self.buckets[target].items.push((k, v));
+        }
+    }
+
+    pub fn remove(&mut self, k: u64) -> Option<u64> {
+        let bi = self.dir[self.slot(hash64(k, 7))];
+        let b = &mut self.buckets[bi];
+        let pos = b.items.iter().position(|(kk, _)| *kk == k)?;
+        Some(b.items.swap_remove(pos).1)                              // no merging: see exercises
+    }
+
+    pub fn global_depth(&self) -> u32 { self.global }
+    pub fn check_invariants(&self) {
+        assert_eq!(self.dir.len(), 1 << self.global);
+        for (i, &bi) in self.dir.iter().enumerate() {
+            let b = &self.buckets[bi];
+            assert!(b.depth <= self.global);
+            // All slots sharing the bucket agree on the low `depth` bits.
+            let mask = (1u64 << b.depth) - 1;
+            for (k, _) in &b.items { assert_eq!(hash64(*k, 7) & mask, i as u64 & mask); }
+            // A bucket of depth d is referenced by exactly 2^(global - d) slots.
+            assert_eq!(self.dir.iter().filter(|&&x| x == bi).count(), 1 << (self.global - b.depth));
+        }
+    }
+}
+
+// ------------------------------------------------------------------------------------
+// Linear hashing: buckets split one at a time in round-robin order (split pointer),
+// whenever the load factor exceeds a threshold, not necessarily the overflowing bucket.
+pub struct LinearHash { buckets: Vec<Vec<(u64, u64)>>, level: u32, next: usize, n0: usize, len: usize }
+
+impl LinearHash {
+    pub fn new(n0: usize) -> Self { LinearHash { buckets: vec![vec![]; n0], level: 0, next: 0, n0, len: 0 } }
+    fn addr(&self, k: u64) -> usize {
+        let h = hash64(k, 3) as usize;
+        let m = self.n0 << self.level;
+        let b = h % m;
+        if b < self.next { h % (m * 2) } else { b }   // already split this round: use the next-level function
+    }
+    pub fn get(&self, k: u64) -> Option<u64> { self.buckets[self.addr(k)].iter().find(|e| e.0 == k).map(|e| e.1) }
+    pub fn insert(&mut self, k: u64, v: u64) {
+        let a = self.addr(k);
+        if let Some(e) = self.buckets[a].iter_mut().find(|e| e.0 == k) { e.1 = v; return; }
+        self.buckets[a].push((k, v));
+        self.len += 1;
+        if self.len > self.buckets.len() * 4 { self.split_next(); }    // load factor > 4 per bucket
+    }
+    fn split_next(&mut self) {
+        let m = self.n0 << self.level;
+        self.buckets.push(vec![]);                                   // new bucket at index next + m
+        let old = std::mem::take(&mut self.buckets[self.next]);
+        for (k, v) in old {
+            let b = (hash64(k, 3) as usize) % (m * 2);
+            self.buckets[b].push((k, v));                             // lands in `next` or `next + m`
+        }
+        self.next += 1;
+        if self.next == m { self.level += 1; self.next = 0; }       // round complete: double the base
+    }
+    pub fn remove(&mut self, k: u64) -> Option<u64> {
+        let a = self.addr(k);
+        let pos = self.buckets[a].iter().position(|e| e.0 == k)?;
+        self.len -= 1;
+        Some(self.buckets[a].swap_remove(pos).1)
+    }
+    pub fn num_buckets(&self) -> usize { self.buckets.len() }
+}
+```
+:::
+
+<aside data-call="rust"><b>The <code>EMPTY</code>-neighbour trick for deletes</b><p>Tombstones make lookups walk further as deletes accumulate. hashbrown's rule, used above: if the slot <em>after</em> the deleted one is <code>EMPTY</code>, no probe chain can pass through this slot, so mark it <code>EMPTY</code> instead of <code>TOMBSTONE</code>. When tombstones do pile up, the load check counts them (<code>len + tombs</code>), and the table rebuilds <em>at the same size</em> to purge them, rather than growing. That bug of growing forever under insert/delete churn has hit real systems.</p></aside>
+
+<aside data-call="rust"><b><code>Vec::extend_from_within(..)</code> doubles a directory in one call</b><p>Extendible hashing's directory doubling means "append a copy of myself". <code>dir.extend_from_within(..)</code> does it without a temporary clone and without fighting the borrow checker (you can't <code>dir.extend(dir.iter())</code>, because that's a shared and a mutable borrow at once). Reference: <a href="https://doc.rust-lang.org/std/vec/struct.Vec.html#method.extend_from_within" target="_blank" rel="noreferrer"><code>Vec::extend_from_within</code></a>.</p></aside>
+"""
+
+[[sections]]
+heading = "Extendible hashing, step by step"
+body = """
+<figure class="cb-g-fig"><svg viewBox="0 0 820 170" role="img" aria-label="Extendible hashing split"> <g font-size="12"> <text x="10" y="16" class="cb-g-mut">global depth 2 · bucket B (local depth 1) is full · insert key with hash …10</text> <rect x="10" y="26" width="90" height="120" rx="4" class="cb-g-box"></rect><text x="20" y="46">00 → A</text><text x="20" y="72">01 → B</text><text x="20" y="98">10 → A</text><text x="20" y="124">11 → B</text> <rect x="130" y="30" width="120" height="40" rx="4" class="cb-g-box"></rect><text x="140" y="55">A (d=1): …0</text> <rect x="130" y="90" width="120" height="40" rx="4" class="cb-g-boxa"></rect><text x="140" y="115">B (d=1): full</text> <text x="280" y="70" class="cb-g-acc">→ split B (d=1 &lt; global 2: no doubling)</text> <rect x="560" y="26" width="90" height="120" rx="4" class="cb-g-box"></rect><text x="570" y="46">00 → A</text><text x="570" y="72">01 → B</text><text x="570" y="98">10 → A</text><text x="570" y="124">11 → B'</text> <rect x="680" y="60" width="130" height="36" rx="4" class="cb-g-box"></rect><text x="688" y="83">B (d=2): …01</text> <rect x="680" y="104" width="130" height="36" rx="4" class="cb-g-boxa"></rect><text x="688" y="127">B' (d=2): …11</text> <text x="10" y="165" class="cb-g-mut">only B's entries move; had B's depth equalled the global depth, the directory would double first (8 slots, global 3)</text> </g></svg></figure>
+
+<p>The invariant to test (the reference's <code>check_invariants</code>): <strong>a bucket of local depth d is pointed to by exactly 2&#94;(global−d) directory slots, and every key in it agrees with those slots on the low d bits of its hash.</strong></p>
+"""
+
+[[sections]]
+heading = "The disk-based version (BusTub P2, Fall 2023 / Spring 2024)"
+body = """
+<p>BusTub's extendible hash <em>index</em> spreads the structure over buffer-pool pages: a <strong>header page</strong> (routes the top bits of the hash to directory pages), <strong>directory pages</strong> (global depth, local depths, bucket page ids) and <strong>bucket pages</strong> (a sorted or unsorted array of (key, RID)). Each operation walks header → directory → bucket through page guards, crabbing write latches when it splits. Turning the in-memory reference into that three-level page format is an excellent exercise before the B+Tree: it has the same guard discipline with a much simpler structure.</p>
+
+<aside data-call="performance"><b>What makes production hash tables fast</b><ul> <li><strong>Control bytes + SIMD</strong>: SwissTable (Abseil, and hashbrown behind Rust's <code>HashMap</code>) compares 16 control bytes in one SSE2/NEON instruction. Most probes touch a single cache line.</li> <li><strong>Store the hash</strong> (or part of it) to skip expensive key comparisons, especially for strings.</li> <li><strong>Choose the hash per workload</strong>: SipHash (<code>std</code>'s default) resists hash flooding and costs about 20 ns; FxHash or ahash costs about 1–2 ns. Join tables inside a DBMS don't face adversarial keys: use a fast hash.</li> <li><strong>Partition for cache fit</strong>: radix-partition both join inputs so each partition's table fits in L2 (Part II, parallel hash join).</li> <li><strong>Prefetch</strong>: when probing a batch of keys, compute all hashes first and issue prefetches, then probe. This hides DRAM latency (Part II).</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Extendible Hashing — A Fast Access Method for Dynamic Files"
+url = "https://dl.acm.org/doi/10.1145/320083.320092"
+
+[[sources]]
+title = "Linear Hashing: A New Tool for File and Table Addressing"
+url = "https://www.vldb.org/conf/1980/P212.PDF"
+
+[[sources]]
+title = "Cuckoo Hashing"
+url = "https://www.itu.dk/people/pagh/papers/cuckoo-jour.pdf"
+
+[[sources]]
+title = "Designing a Fast, Efficient, Cache-friendly Hash Table, Step by Step"
+url = "https://www.youtube.com/watch?v=ncHmEUmJZf4"
+
+[[sources]]
+title = "A Seven-Dimensional Analysis of Hashing Methods"
+url = "https://www.vldb.org/pvldb/vol9/p96-richter.pdf"
+
+[[sources]]
+title = "Redpanda Oxla, Why Your Hashmaps are Secretly Wrecking Your Performance"
+url = "https://www.youtube.com/watch?v=aIGyEQhTG78"

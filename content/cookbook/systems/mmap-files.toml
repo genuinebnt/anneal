@@ -1,0 +1,66 @@
+title = "Memory-mapped files with `memmap2`"
+module = "Performance and systems"
+module_order = 7
+chapter = "Files, processes and the OS"
+chapter_order = 3
+order = 291
+kind = "recipe"
+lede = "Zero-copy reads, durable writes, growth, and an mmap-backed record store"
+level = "intermediate"
+code = ["examples/os_and_storage/mmap_files.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>databases and indexes</li><li>log/segment stores</li><li>big read-mostly data files</li><li>shared-memory IPC</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+`mmap(2)` maps a file into the address space. Loads and stores on the returned slice become page faults served from the OS page cache: no `read` syscalls, no copy into a user buffer, and the kernel decides what stays resident. `Mmap` is a read-only `&[u8]`; `MmapMut` is a writable `&mut [u8]`.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Durability**: stores into an `MmapMut` only dirty page-cache pages. `flush()` is `msync(MS_SYNC)`: it blocks until the dirty pages are written to the device (like fsync). `flush_async()` is `MS_ASYNC`: it just schedules the writeback.
+
+A crash of **your** process loses nothing already stored (the kernel owns the pages); a power loss / kernel crash can lose anything not msync'd. Order matters: write the record, flush, **then** publish it by bumping the count in the header, flush again.
+
+**Growth**: a mapping has a fixed length. To grow: flush, `File::set_len(bigger)` (sparse zeros), drop the old map, map again. Slices from the old map must not outlive it (the borrow checker enforces that).
+
+**Alignment**: a map starts on a page boundary, so offset `k * align_of::<T>()` is aligned for `T`. A `#[repr(C)]` struct of plain integers can be viewed in place with `align_to`, but byte order and padding make that non-portable; reading fields with `from_le_bytes` is always safe and costs nothing measurable.
+
+**Why** `Mmap::map` IS `unsafe`: Rust requires that memory behind a `&[u8]` is not mutated while borrowed.
+
+The OS gives no such promise for files: another process (or thread via a second map) can write to the file under you (data race, torn values), and if it **truncates** the file, touching a page beyond the new end delivers SIGBUS and kills your process: no `Result`, no unwinding.
+
+Only map files you own exclusively (e.g. protect with an advisory lock, see file_locking_atomic_replace), never untrusted or shared-writable ones. Also: IO errors (disk failure, a network filesystem hiccup) surface as SIGBUS, not `Err`.
+
+Compared to `read`: mmap wins for random access, repeated scans (page cache stays warm, no copies) and shared maps; plain sequential `read` into a reusable buffer is as fast for one-pass streaming and has sane error handling. Measure; the timing below is only illustrative.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>LMDB-style embedded key-value stores</li><li>search-engine index segments</li><li>columnar data files</li><li>loading large read-only models/assets</li><li>ring buffers shared between processes</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://docs.rs/memmap2> and <https://man7.org/linux/man-pages/man2/mmap.2.html> and <https://man7.org/linux/man-pages/man2/msync.2.html>
+"""
+
+[[sources]]
+title = "docs.rs/memmap2"
+url = "https://docs.rs/memmap2"
+
+[[sources]]
+title = "man7.org/linux/man-pages/man2/mmap.2.html"
+url = "https://man7.org/linux/man-pages/man2/mmap.2.html"
+
+[[sources]]
+title = "man7.org/linux/man-pages/man2/msync.2.html"
+url = "https://man7.org/linux/man-pages/man2/msync.2.html"

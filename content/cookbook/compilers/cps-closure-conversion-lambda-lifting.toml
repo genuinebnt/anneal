@@ -1,0 +1,52 @@
+title = "ANF, CPS"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Middle end and analysis"
+chapter_order = 5
+order = 632
+kind = "recipe"
+lede = "ANF, CPS (Plotkin and one-pass), defunctionalisation, closure conversion, lambda lifting and trampolines."
+level = "advanced"
+code = ["examples/compilers_runtimes/cps_closure_conversion_lambda_lifting.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+the middle end of any compiler for a language with first-class functions, and any place you must turn recursion or callbacks into data.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>CPS and ANF as compiler intermediate forms (SML/NJ is built around CPS; GHC's Core-to-STG pipeline works on an ANF-like form)</li><li>closure conversion in every native compiler with lambdas (rustc turns a closure into an anonymous struct holding its captures)</li><li>lambda lifting in lazy-language compilers</li><li>defunctionalisation to make continuations serialisable (workflow engines, explicit-stack interpreters). Course: Reynolds</li><li>"Definitional interpreters for higher-order programming languages"</li><li>Danvy and Filinski</li><li>"Representing control"</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The pipeline**. One small strict language (ints, n-ary lambdas, `let`, `letrec`, `if`: non-zero is true) and one transformation per section, each with its own machine, so that the meaning can be re-checked after every step.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">UNIQUIFY</div><div class="cb-g-says"><p>Give every binder a different name. Later passes <strong>move</strong> code under other binders; without this step they capture variables (demonstrated below: the one-pass CPS transform returns a wrong number on a shadowing program).</p></div></div><div class="cb-g-term"><div class="cb-g-name">A-normal form</div><div class="cb-g-says"><p>Every argument of a call, operator and <code>if</code> is atomic; every intermediate result has a name. Evaluation order is now written in the program.</p></div></div><div class="cb-g-term"><div class="cb-g-name">CPS</div><div class="cb-g-says"><p>No function returns. Each takes an extra argument <code>k</code>, "what to do with the result", and every call is a <strong>tail call</strong>. So the machine for CPS is a loop without a stack: the stack has become the chain of continuation closures.</p><p>PLOTKIN's transform is three lines per case but litters the output with "administrative" redexes <code>(fn (k) ...) k2</code>. DANVY-FILINSKI's one-pass transform represents the continuation at <strong>compile</strong> time as a Rust closure, which is applied during the translation instead of being emitted. Result: exactly the redexes of the source program, none added (asserted).</p><p>(A source redex may be hidden behind a <code>let</code> in function position; see <code>source_redexes</code>.)</p></div></div><div class="cb-g-term"><div class="cb-g-name">Closure conversion</div><div class="cb-g-says"><p>Every lambda becomes closed top-level code plus a <strong>flat</strong> closure record of the free variables it captures.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Lambda lifting (Johnsson)</div><div class="cb-g-says"><p>The other way to remove free variables: add them as extra <strong>parameters</strong>. A <code>letrec</code> function that is only called needs no allocation at all (<code>Direct</code> call); used as a value it becomes a partial application. If f calls g, f must also receive g's extra parameters (transitively), which closure conversion avoids by passing g's record.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Defunctionalisation (Reynolds)</div><div class="cb-g-says"><p>Replace "a function value" by a constructor of a data type, one per lambda, and "call it" by one <code>apply</code> that dispatches on the constructor. Applied <strong>after CPS</strong>, the continuation constructors are exactly the stack frames of an abstract machine. Because they are plain data, a running computation can be written to text, read back and resumed (done below).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Tail calls</div><div class="cb-g-says"><p>A call in tail position needs no stack frame. The <strong>trampoline</strong> returns such a call as a value to a driver loop. <strong>Limits</strong>.</p><p>Machines use <code>Rc</code> environments; freeing a very long continuation chain recurses inside <code>Drop</code>, so <code>main</code> runs on a large stack. The "depth" numbers count the evaluator's own recursion, which is what a native stack would hold.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Reynolds (1972, title only)</li><li>Plotkin, "Call-by-name, call-by-value and the lambda-calculus" (1975, title only)</li><li>Danvy and Filinski (1992, title only)</li><li>Flanagan et al., "The essence of compiling with continuations" (1993, title only)</li><li>Johnsson, "Lambda lifting" (1985, title only)</li><li>Appel, "Compiling with Continuations" (book, title only)</li><li><a href="https://en.wikipedia.org/wiki/Continuation-passing_style" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Continuation-passing_style</a></li><li><a href="https://en.wikipedia.org/wiki/A-normal_form" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/A-normal_form</a></li><li><a href="https://en.wikipedia.org/wiki/Defunctionalization" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Defunctionalization</a></li><li><a href="https://en.wikipedia.org/wiki/Lambda_lifting" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Lambda_lifting</a></li></ul>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Continuation-passing_style"
+url = "https://en.wikipedia.org/wiki/Continuation-passing_style"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/A-normal_form"
+url = "https://en.wikipedia.org/wiki/A-normal_form"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Defunctionalization"
+url = "https://en.wikipedia.org/wiki/Defunctionalization"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Lambda_lifting"
+url = "https://en.wikipedia.org/wiki/Lambda_lifting"

@@ -1,0 +1,7 @@
+fn main() {
+    let r = match (1, 2) {
+        (x, 0) | (0, 1) => x,
+        _ => 0,
+    };
+    println(to_str(r));
+}

@@ -1,0 +1,151 @@
+title = "Rust-quality error messages"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Language tooling and production"
+chapter_order = 7
+order = 640
+kind = "guide"
+lede = "Content, layout and rendering of diagnostics like rustc's · A working renderer, suggestion design, and UI tests"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+```text title="The target: rustc's layout"
+error[E0382]: borrow of moved value: `v`
+ --> src/main.rs:4:15
+  |
+2 |     let v = vec![1, 2, 3];
+  |         - move occurs because `v` has type `Vec<i32>`, which does not implement the `Copy` trait
+3 |     let w = v;
+  |             - value moved here
+4 |     println!("{:?}", v);
+  |                      ^ value borrowed here after move
+  |
+help: consider cloning the value if the performance cost is acceptable
+  |
+3 |     let w = v.clone();
+  |              ++++++++
+```
+"""
+
+[[sections]]
+heading = "Content: what makes a message good"
+body = """
+<ul> <li><b>One message per root cause.</b> Mark erroneous expressions with an error type, so one typo doesn't produce twenty errors.</li> <li><b>The headline says what went wrong</b>, in the user's terms: “borrow of moved value: <code>v</code>”, not “lifetime constraint failure”. rustc's convention is lowercase with no trailing period.</li> <li><b>The primary label marks where the error shows up. Secondary labels explain why</b>: where the value moved, where a type was inferred, where a bound came from. This causal chain is what makes Rust's errors feel helpful.</li> <li><b>Say where expectations came from.</b> “expected <code>u32</code> because of this return type” points at the annotation that set the expectation.</li> <li><b>Suggestions are structured edits</b> with an applicability level, so editors and <code>cargo fix</code> can apply them. Only mark a suggestion machine-applicable if it is always correct.</li> <li><b>Stable error codes</b> (<code>E0382</code>) link to longer explanations (<code>rustc --explain E0382</code>) with a minimal example and the fix.</li> <li><b>Print types the way users wrote them</b>: trim paths (<code>Vec</code> rather than <code>alloc::vec::Vec</code>), keep type aliases where possible, and elide irrelevant lifetimes.</li> </ul>
+"""
+
+[[sections]]
+heading = "Rendering: a working implementation"
+body = """
+<p>The layout rules: a <code>--&gt;</code> location line; a gutter wide enough for the largest line number; source lines grouped by line, with <code>...</code> for gaps; <code>&#94;&#94;&#94;</code> under primary spans and <code>---</code> under secondary ones; the rightmost label's text on the underline row, and labels to its left hanging below with <code>|</code> connectors; then <code>= note:</code> and <code>= help:</code> lines.</p>
+
+```rust title="A rustc-style renderer (single-line spans, several labels per line)"
+use std::collections::BTreeMap;
+use std::fmt::Write;
+use std::ops::Range;
+
+pub struct Label { pub span: Range<usize>, pub text: String, pub primary: bool }
+pub struct Diag {
+    pub code: Option<&'static str>,
+    pub message: String,
+    pub labels: Vec<Label>,
+    pub notes: Vec<String>,
+    pub help: Vec<String>,
+}
+
+pub struct Lines { starts: Vec<usize> }
+impl Lines {
+    pub fn new(src: &str) -> Self {
+        Lines { starts: std::iter::once(0).chain(src.match_indices('\\n').map(|(i, _)| i + 1)).collect() }
+    }
+    pub fn line(&self, off: usize) -> usize { self.starts.partition_point(|&s| s <= off) } // 1-based
+    pub fn start(&self, line: usize) -> usize { self.starts[line - 1] }
+    pub fn text<'s>(&self, src: &'s str, line: usize) -> &'s str {
+        src[self.start(line)..].split('\\n').next().unwrap().trim_end_matches('\\r')
+    }
+}
+
+pub fn render(d: &Diag, file: &str, src: &str) -> String {
+    let lines = Lines::new(src);
+    let mut out = String::new();
+    let head = match d.code { Some(c) => format!("error[{c}]"), None => "error".to_string() };
+    writeln!(out, "{head}: {}", d.message).unwrap();
+
+    let primary = d.labels.iter().find(|l| l.primary).expect("a primary label");
+    let pl = lines.line(primary.span.start);
+    let pc = primary.span.start - lines.start(pl) + 1;
+
+    let mut by_line: BTreeMap<usize, Vec<&Label>> = BTreeMap::new();
+    for l in &d.labels { by_line.entry(lines.line(l.span.start)).or_default().push(l); }
+    let width = by_line.keys().last().unwrap().to_string().len();
+    let pad = " ".repeat(width);
+
+    writeln!(out, "{pad}--> {file}:{pl}:{pc}").unwrap();
+    writeln!(out, "{pad} |").unwrap();
+    let mut prev = None;
+    for (&line, labels) in &by_line {
+        if prev.is_some_and(|p: usize| line > p + 1) { writeln!(out, "...").unwrap(); }
+        prev = Some(line);
+        writeln!(out, "{line:>width$} | {}", lines.text(src, line)).unwrap();
+
+        let base = lines.start(line);
+        let mut labels = labels.clone();
+        labels.sort_by_key(|l| l.span.start);
+        let col = |l: &Label| l.span.start - base;
+
+        // Underline row: ^ for primary, - for secondary.
+        let mut row = String::new();
+        for l in &labels {
+            while row.len() < col(l) { row.push(' '); }
+            let n = (l.span.end - l.span.start).max(1);
+            row.extend(std::iter::repeat(if l.primary { '^' } else { '-' }).take(n));
+        }
+        let (last, rest) = labels.split_last().unwrap();
+        writeln!(out, "{pad} | {row} {}", last.text).unwrap();
+
+        // Labels to the left hang below, right to left, with | connectors.
+        let bars = |upto: usize| {
+            let mut s = String::new();
+            for l in &rest[..upto] { while s.len() < col(l) { s.push(' '); } s.push('|'); }
+            s
+        };
+        for i in (0..rest.len()).rev() {
+            writeln!(out, "{pad} | {}", bars(i + 1)).unwrap();
+            let mut s = bars(i);
+            while s.len() < col(rest[i]) { s.push(' '); }
+            writeln!(out, "{pad} | {s}{}", rest[i].text).unwrap();
+        }
+    }
+    if !d.notes.is_empty() || !d.help.is_empty() { writeln!(out, "{pad} |").unwrap(); }
+    for n in &d.notes { writeln!(out, "{pad} = note: {n}").unwrap(); }
+    for h in &d.help { writeln!(out, "{pad} = help: {h}").unwrap(); }
+    out
+}
+```
+
+```text title="Its output for an rlox resolver error"
+error[E0425]: cannot find value `cout` in this scope
+ --> main.lox:3:7
+  |
+1 | var count = 0;
+  |     ----- a variable with a similar name is defined here
+...
+3 | print cout + limit;
+  |       ^^^^   ----- this one is fine
+  |       |
+  |       not found in this scope
+  |
+  = help: a variable with a similar name exists: `count`
+```
+
+<div class="cb-g-tip"><h3>What production renderers add</h3> <ul> <li><b>Display width, not bytes</b>: use <code>unicode-width</code> so CJK text and emoji align, and replace tabs with four spaces.</li> <li><b>Multi-line spans</b> drawn with <code>/</code> and <code>|_</code> connectors from the start line to the end line.</li> <li><b>Long lines</b> trimmed with <code>...</code> around the span.</li> <li><b>Colors</b>: bold red <code>error</code>, yellow <code>warning</code>, blue gutter. Only when writing to a terminal, and respect <code>NO_COLOR</code>.</li> <li><b>Suggestion diffs</b> showing the edited line with <code>+</code> for insertions and <code>~</code> for replacements.</li> <li><b>Machine-readable output</b>: <code>--error-format=json</code>, in which each diagnostic carries spans with byte offsets and line/column pairs, plus the rendered text. SARIF for security tools.</li> </ul> <p>Crates: <code>annotate-snippets</code> (the format rustc and cargo use), <code>ariadne</code> (colorful, multi-file), <code>codespan-reporting</code>, <code>miette</code> (derive-based, used by oxc).</p></div>
+
+<div class="cb-g-tip"><h3>Error kinds worth investing in</h3> <ul> <li><b>Parse errors</b>: “expected one of …”, and unclosed delimiters with an indentation-based guess (<a href="/cookbook/p/fully-recoverable-parsers">resilient parsing</a>).</li> <li><b>Names</b>: “did you mean”, plus “this exists in module X; consider importing it”.</li> <li><b>Types</b>: expected versus found, where the expectation came from, and a note when the types differ only in a type argument or reference level. Suggest <code>&amp;</code>, <code>*</code>, <code>.into()</code> or <code>as</code> only when the result would type-check.</li> <li><b>Traits</b>: “the trait bound <code>T: X</code> is not satisfied … required by this bound in <code>f</code>”, following the obligation chain back to the user's code.</li> <li><b>Ownership</b>: the whole move, borrow and use story, with each event labeled.</li> <li><b>Arity and fields</b>: list the missing or extra ones, and suggest the closest names.</li> </ul></div>
+
+<div class="cb-g-tip"><h3>Test it like rustc</h3> <p>Each UI test is a source file plus its expected rendered <code>.stderr</code>, regenerated with <code>--bless</code> and reviewed in the diff. rustc also marks tests with <code>//&#64; run-rustfix</code>: the harness applies every machine-applicable suggestion and checks the result compiles. That guarantees suggestions actually fix the code. Use insta for the snapshots in your own compiler.</p></div>
+"""
+
+[[sources]]
+title = "rustc dev guide: errors and lints"
+url = "https://rustc-dev-guide.rust-lang.org/diagnostics.html"

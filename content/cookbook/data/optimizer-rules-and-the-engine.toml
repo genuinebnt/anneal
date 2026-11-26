@@ -1,0 +1,579 @@
+title = "Optimizer rules and the engine"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 379
+kind = "guide"
+lede = "BusTub P3 optimizer rules and leaderboard · rule-based rewrites and their ordering · EXPLAIN · differential testing against SQLite · measured speedups · putting the pieces together"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>BusTub's P3 asks for two optimizer rules (<code>NLJ → HashJoin</code>, <code>SeqScan → IndexScan</code>) and three leaderboard queries that reward more. The reference optimizer has five rules in two passes, each a small local rewrite on the plan tree. Two more stages sit in front of them and are built in the next two lectures: <strong>expression simplification</strong> (<a href="/cookbook/p/query-planning-and-rewriting">L15</a>) and <strong>cost-based join ordering</strong> (<a href="/cookbook/p/cost-models-and-join-ordering">L16</a>). The full pipeline is <code>simplify → pushdown → reorder joins → bottom-up rewrites</code>. Heavier machinery (Cascades, parallel search) is Part III.</p>
+"""
+
+[[sections]]
+heading = "The rules"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>#</th> <th>Rule</th> <th>Pattern → result</th> <th>Why it's safe</th> </tr> </thead> <tbody> <tr> <td>1</td> <td><strong>Predicate pushdown</strong></td> <td><code>Filter(NestedLoopJoin(L, R))</code> → conjuncts that touch only <code>L</code> go below on the left, only <code>R</code> below on the right; conjuncts spanning both fold into the join predicate</td> <td>filtering earlier never changes an inner join's result</td> </tr> <tr> <td>1b</td> <td>…for <code>LEFT</code> joins</td> <td>only <strong>left-side</strong> conjuncts move; right-side <code>WHERE</code> conjuncts stay above</td> <td>a right-side filter <em>above</em> the join also removes the NULL-padded rows; below it would let them through</td> </tr> <tr> <td>2</td> <td><strong>Scan filter merge</strong></td> <td><code>Filter(SeqScan)</code> → <code>SeqScan{filter}</code></td> <td>one fewer operator and no tuple copy</td> </tr> <tr> <td>3</td> <td><strong>Index scan</strong></td> <td><code>SeqScan{ col = k  [OR col = k2 …] }</code> with an index on <code>col</code> → <code>IndexScan(Points)</code> + residual filter. A range <code>col &gt;= lo AND col &lt;= hi</code> over fewer than 16 integers is the same thing: the simplifier turns <code>col = 3 OR col = 4</code> into exactly that range, and probing beats scanning</td> <td>an equality on a unique index returns ≤ 1 row per key</td> </tr> <tr> <td>4</td> <td><strong>Join algorithm</strong></td> <td><code>NLJ</code> with <code>a = b</code> conjuncts (each side referencing one input) → <code>NestedIndexJoin</code> if the right side is a bare indexed scan, else <code>HashJoin</code>; non-equality conjuncts become the <strong>residual</strong></td> <td>equality is exactly what hashing and indexes answer</td> </tr> <tr> <td>5</td> <td><strong>Top-N</strong></td> <td><code>Limit(Sort(x))</code> → <code>Limit(TopN(x))</code></td> <td>the limit needs only the first n of the sorted order</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Pass ordering is part of the design"
+body = """
+<p>The first version applied everything in one bottom-up pass. <code>EXPLAIN</code> showed the failure:</p>
+
+```text title="SELECT … FROM emp e LEFT JOIN dept d ON e.dept = d.id WHERE d.city = 'Pune' AND e.salary > 50 (single bottom-up pass)"
+Projection [Col(1)]
+  Filter (d.city = 'Pune') AND (e.salary > 50)        ← both stuck above the join
+    NestedIndexJoin Left dept via dept_id key=Col(2)
+      SeqScan emp                                      ← no filter: scans every employee
+```
+
+<p>Bottom-up processing had already turned the join into a <code>NestedIndexJoin</code> before the <code>Filter</code> above it was examined, and nothing knows how to push a filter through <em>that</em> node. The fix is two passes: <strong>top-down pushdown first</strong> (filters sink while joins are still plain <code>NestedLoopJoin</code>s), then <strong>bottom-up rewrites</strong> (merge, index, join algorithm, top-N). The rule applies to every rule engine: if rule B enables rule A's pattern, A must run before B, or the engine needs a fixpoint loop. Cascades-style optimizers (Part III) solve this in general by exploring all rewrites together.</p>
+
+```text title="the same query after the fix"
+Projection [Col(1)]
+  Filter (d.city = 'Pune')                             ← stays above: right-side predicate over a LEFT join
+    NestedIndexJoin Left dept via dept_id key=Col(2)
+      SeqScan emp  filter=(salary > 50)                ← pushed into the scan
+```
+
+:::deeper The optimizer: pushdown pass, bottom-up rewrite pass, join selection, index selection
+```rust title="src/optimizer/optimizer.rs"
+//! Rule-based optimizer: each rule is a local rewrite; the driver applies them bottom-up.
+//!   1. predicate pushdown (Filter through joins; ON conjuncts into join inputs)
+//!   2. scan filter merge
+//!   3. SeqScan + `col = const` / OR of them  ->  IndexScan (point lookups)
+//!   4. NestedLoopJoin + equality  ->  NestedIndexJoin (inner side has an index) or HashJoin
+//!   5. Limit over Sort  ->  TopN
+use super::catalog::Catalog;
+use super::expr::{BinOp, Expr};
+use super::plan::{IndexLookup, Plan};
+use super::simplify::simplify_filter;
+use super::stats::{selectivity, JoinGraph};
+use super::catalog::{Column, Schema};
+use super::sql::JoinKind;
+use crate::types::value::Value;
+
+/// Two passes. Pass 1 (top-down) moves filters toward the leaves; it must run first, because pass 2
+/// (bottom-up) turns joins into hash/index joins, and a Filter sitting above one of those can no longer
+/// be pushed through it.
+pub fn optimize(p: Plan, cat: &Catalog) -> Plan {
+    let p = pushdown(simplify_plan(p));
+    let p = if cat.reorder_joins { reorder(p, cat) } else { p };
+    bottom_up(p, cat)
+}
+
+/// Expression rewriting: simplify every filter predicate; an impossible one replaces its subtree with an empty relation.
+fn simplify_plan(p: Plan) -> Plan {
+    let p = map_children(p, &mut simplify_plan);
+    match p {
+        Plan::Filter { pred, child } => {
+            let pred = simplify_filter(pred);
+            match &pred {
+                Expr::Lit(Value::Bool(true)) => *child,
+                Expr::Lit(Value::Bool(false) | Value::Null) => Plan::Values { rows: vec![], schema: child.schema() },
+                _ => Plan::Filter { pred, child },
+            }
+        }
+        Plan::NestedLoopJoin { left, right, pred: Some(pr), kind } => Plan::NestedLoopJoin { left, right, pred: Some(simplify_filter(pr)), kind },
+        other => other,
+    }
+}
+
+fn bottom_up(p: Plan, cat: &Catalog) -> Plan {
+    let p = map_children(p, &mut |c| bottom_up(c, cat));
+    rewrite(p, cat)
+}
+
+fn pushdown(p: Plan) -> Plan {
+    match p {
+        Plan::Filter { pred, child } => match *child {
+            Plan::Filter { pred: inner, child } => pushdown(Plan::Filter { pred: and(Some(inner), pred), child }),
+            Plan::NestedLoopJoin { left, right, pred: jp, kind } => {
+                let l = left.schema().len();
+                let (mut lf, mut rf, mut stay, mut both) = (vec![], vec![], vec![], vec![]);
+                for c in pred.conjuncts() {
+                    match (side(&c, l), kind) {
+                        (Side::Left | Side::None, _) => lf.push(c),
+                        (Side::Right, JoinKind::Inner) => rf.push(c.shift(-(l as isize))),
+                        (Side::Both, JoinKind::Inner) => both.push(c),
+                        _ => stay.push(c),                   // right-side filters above a LEFT join must stay above it
+                    }
+                }
+                let wrap = |p: Plan, fs: Vec<Expr>| pushdown(match Expr::and_all(fs) { Some(f) => Plan::Filter { pred: f, child: Box::new(p) }, None => p });
+                let (left, right) = (wrap(*left, lf), wrap(*right, rf));
+                let jp = Expr::and_all(jp.into_iter().flat_map(|e| e.conjuncts()).chain(both).collect());
+                let join = Plan::NestedLoopJoin { left: Box::new(left), right: Box::new(right), pred: jp, kind };
+                match Expr::and_all(stay) { Some(f) => Plan::Filter { pred: f, child: Box::new(join) }, None => join }
+            }
+            other => Plan::Filter { pred, child: Box::new(pushdown(other)) },
+        },
+        other => map_children(other, &mut pushdown),
+    }
+}
+
+fn map_children(p: Plan, f: &mut dyn FnMut(Plan) -> Plan) -> Plan {
+    let mut b = |c: Box<Plan>| Box::new(f(*c));
+    match p {
+        Plan::Filter { pred, child } => Plan::Filter { pred, child: b(child) },
+        Plan::Projection { exprs, schema, child } => Plan::Projection { exprs, schema, child: b(child) },
+        Plan::NestedLoopJoin { left, right, pred, kind } => { let l = b(left); Plan::NestedLoopJoin { left: l, right: b(right), pred, kind } }
+        Plan::HashJoin { left, right, left_keys, right_keys, residual, kind } => { let l = b(left); Plan::HashJoin { left: l, right: b(right), left_keys, right_keys, residual, kind } }
+        Plan::NestedIndexJoin { left, table, index, key, inner_schema, residual, kind } => Plan::NestedIndexJoin { left: b(left), table, index, key, inner_schema, residual, kind },
+        Plan::Aggregation { group_by, aggs, schema, child } => Plan::Aggregation { group_by, aggs, schema, child: b(child) },
+        Plan::Window { calls, schema, child } => Plan::Window { calls, schema, child: b(child) },
+        Plan::Sort { order_by, child } => Plan::Sort { order_by, child: b(child) },
+        Plan::TopN { order_by, n, child } => Plan::TopN { order_by, n, child: b(child) },
+        Plan::Limit { limit, offset, child } => Plan::Limit { limit, offset, child: b(child) },
+        Plan::Insert { table, child } => Plan::Insert { table, child: b(child) },
+        Plan::Update { table, sets, child } => Plan::Update { table, sets, child: b(child) },
+        Plan::Delete { table, child } => Plan::Delete { table, child: b(child) },
+        leaf => leaf,
+    }
+}
+
+fn max_col(e: &Expr) -> Option<usize> { let mut v = vec![]; e.cols(&mut v); v.into_iter().max() }
+fn min_col(e: &Expr) -> Option<usize> { let mut v = vec![]; e.cols(&mut v); v.into_iter().min() }
+/// Which side(s) of a join with `l` left columns does this expression reference?
+fn side(e: &Expr, l: usize) -> Side {
+    match (min_col(e), max_col(e)) {
+        (None, _) => Side::None,
+        (Some(_), Some(mx)) if mx < l => Side::Left,
+        (Some(mn), _) if mn >= l => Side::Right,
+        _ => Side::Both,
+    }
+}
+#[derive(PartialEq, Clone, Copy)]
+enum Side { None, Left, Right, Both }
+
+fn and(a: Option<Expr>, b: Expr) -> Expr { match a { Some(a) => Expr::Bin(BinOp::And, Box::new(a), Box::new(b)), None => b } }
+
+fn rewrite(p: Plan, cat: &Catalog) -> Plan {
+    match p {
+        Plan::Filter { pred, child } => match *child {
+            Plan::SeqScan { table, schema, filter } => try_index(Plan::SeqScan { table, schema, filter: Some(and(filter, pred)) }, cat),
+            Plan::IndexScan { table, index, schema, lookup, filter } => Plan::IndexScan { table, index, schema, lookup, filter: Some(and(filter, pred)) },
+            Plan::Filter { pred: inner, child } => rewrite(Plan::Filter { pred: and(Some(inner), pred), child }, cat),
+            other => Plan::Filter { pred, child: Box::new(other) },
+        },
+        Plan::SeqScan { .. } => try_index(p, cat),
+        Plan::NestedLoopJoin { left, right, pred, kind } => rewrite_join(*left, *right, pred, kind, cat),
+        Plan::Limit { limit: Some(n), offset, child } => match *child {
+            Plan::Sort { order_by, child } => Plan::Limit { limit: Some(n), offset, child: Box::new(Plan::TopN { order_by, n: n + offset, child }) },
+            other => Plan::Limit { limit: Some(n), offset, child: Box::new(other) },
+        },
+        other => other,
+    }
+}
+
+fn rewrite_join(left: Plan, right: Plan, pred: Option<Expr>, kind: JoinKind, cat: &Catalog) -> Plan {
+    let l = left.schema().len();
+    let conj: Vec<Expr> = pred.map(|p| p.conjuncts()).unwrap_or_default();
+    let (mut lpush, mut rpush, mut keep) = (vec![], vec![], vec![]);
+    for c in conj {
+        match (side(&c, l), kind) {
+            (Side::Left, JoinKind::Inner) => lpush.push(c),               // ON-clause filters on one side can move below an inner join
+            (Side::Right, _) => rpush.push(c.shift(-(l as isize))),       // and right-only ones are safe below a LEFT join too
+            _ => keep.push(c),
+        }
+    }
+    let wrap = |p: Plan, fs: Vec<Expr>| match Expr::and_all(fs) { Some(f) => rewrite(Plan::Filter { pred: f, child: Box::new(p) }, cat), None => p };
+    let (left, right) = (wrap(left, lpush), wrap(right, rpush));
+    // Equi-keys: conjuncts `a = b` where a references only the left and b only the right (either order).
+    let (mut lk, mut rk, mut rest) = (vec![], vec![], vec![]);
+    for c in keep {
+        if let Expr::Bin(BinOp::Eq, a, b) = &c {
+            match (side(a, l), side(b, l)) {
+                (Side::Left, Side::Right) => { lk.push((**a).clone()); rk.push(b.shift(-(l as isize))); continue; }
+                (Side::Right, Side::Left) => { lk.push((**b).clone()); rk.push(a.shift(-(l as isize))); continue; }
+                _ => {}
+            }
+        }
+        rest.push(c);
+    }
+    if lk.is_empty() {
+        return Plan::NestedLoopJoin { left: Box::new(left), right: Box::new(right), pred: Expr::and_all(rest), kind };
+    }
+    // Index nested-loop join: one key, inner side is a bare scan of a table indexed on that key column.
+    if lk.len() == 1 {
+        if let (Plan::SeqScan { table, schema, filter: None }, Expr::Col(j)) = (&right, &rk[0]) {
+            if let Some(ix) = cat.indexes_on(table).find(|i| i.col == *j) {
+                return Plan::NestedIndexJoin { left: Box::new(left), table: table.clone(), index: ix.name.clone(), key: lk.remove(0),
+                    inner_schema: schema.clone(), residual: Expr::and_all(rest), kind };
+            }
+        }
+    }
+    Plan::HashJoin { left: Box::new(left), right: Box::new(right), left_keys: lk, right_keys: rk, residual: Expr::and_all(rest), kind }
+}
+
+fn points(e: &Expr) -> Option<(usize, Vec<i64>)> {
+    match e {
+        Expr::Bin(BinOp::Eq, a, b) => match (&**a, &**b) {
+            (Expr::Col(i), Expr::Lit(Value::Int(k))) | (Expr::Lit(Value::Int(k)), Expr::Col(i)) => Some((*i, vec![*k])),
+            _ => None,
+        },
+        Expr::Bin(BinOp::Or, a, b) => {
+            let ((c1, mut k1), (c2, k2)) = (points(a)?, points(b)?);
+            (c1 == c2).then(|| { k1.extend(k2); k1.sort_unstable(); k1.dedup(); (c1, k1) })
+        }
+        _ => None,
+    }
+}
+
+fn try_index(p: Plan, cat: &Catalog) -> Plan {
+    let Plan::SeqScan { table, schema, filter: Some(f) } = &p else { return p };
+    let mut conj = f.clone().conjuncts();
+    for pos in 0..conj.len() {
+        let Some((col, keys)) = points(&conj[pos]) else { continue };
+        let Some(ix) = cat.indexes_on(table).find(|i| i.col == col) else { continue };
+        conj.remove(pos);
+        return Plan::IndexScan { table: table.clone(), index: ix.name.clone(), schema: schema.clone(), lookup: IndexLookup::Points(keys), filter: Expr::and_all(conj) };
+    }
+    p
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "BusTub's optimizer switch: the starter rules"
+body = """
+<p>BusTub's tests are run in two optimizer configurations, and a solution that only implements the second fails the first.</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th></th> <th><code>set force_optimizer_starter_rule=yes</code></th> <th>default</th> </tr> </thead> <tbody> <tr> <td>merge projection / filter into scans and joins</td> <td>yes</td> <td>yes</td> </tr> <tr> <td><code>NestedLoopJoin</code> with an equality → <code>NestedIndexJoin</code></td> <td><strong>yes</strong></td> <td>your rules</td> </tr> <tr> <td><code>NestedLoopJoin</code> → <code>HashJoin</code></td> <td><strong>no</strong></td> <td>yes (task 3)</td> </tr> <tr> <td><code>Sort</code> over an indexed column → ordered <code>IndexScan</code></td> <td><strong>yes</strong></td> <td>in BusTub's custom list too; the reference engine runs it only in starter mode (NULL caveat below)</td> </tr> <tr> <td><code>SeqScan</code> → <code>IndexScan</code></td> <td><strong>strict</strong>: the <em>whole</em> predicate is <code>col = k</code> or an OR of those, on an indexed column</td> <td>your rule</td> </tr> <tr> <td><code>Sort</code> + <code>Limit</code> → <code>TopN</code></td> <td>no</td> <td>yes</td> </tr> <tr> <td>predicate simplification, join reordering</td> <td>no</td> <td>yours</td> </tr> </tbody> </table></div>
+
+<p>The tests that check the plain nested-loop and index-join executors (<code>nlj_init_check</code>, <code>index_join</code>) turn the switch on so that those executors are what runs; with the hash join rule active they would never be exercised. The reference engine has the switch as <code>Catalog::starter_rules</code>, set by <code>SET force_optimizer_starter_rule = yes</code>.</p>
+
+<p><strong>The strict index rule is a test requirement, not good optimization.</strong> <code>index-scan-hash.slt</code> has <code>+ensure:seq_scan</code> on <code>WHERE v2 = 50 AND v3 = 645</code> even though <code>v2</code> is indexed: the starter rule does not fire on a predicate with an extra conjunct, and the test fails if you use the index anyway. The default-mode rule here is smarter (probe the index, keep <code>v3 = 645</code> as a residual filter), so the strictness lives behind the switch.</p>
+
+<p><code>+ensure:&lt;what&gt;</code> works by running <code>EXPLAIN (O) &lt;query&gt;</code> and looking for operator names in the text: <code>IndexScan</code>, <code>NestedIndexJoin</code>, <code>HashJoin</code> (exactly one, or two, or three, unless a <code>Filter</code> node remains), <code>TopN</code>, <code>NestedLoopJoin</code>; <code>seq_scan</code> fails if there is an <code>IndexScan</code> or a <code>Filter</code> left. <strong>Name your plan nodes exactly that way.</strong> (<code>nlj_init_check</code> and <code>topn</code> also enable counters in BusTub's executors that fail the test if <code>Init()</code> is called too often; that half has no equivalent in this engine.)</p>
+
+<p><code>ORDER BY</code> over an indexed column becomes a full ordered scan of the index and the sort disappears:</p>
+
+```rust title="optimizer: OrderByAsIndexScan (src/optimizer/order_by_index_scan.rs)"
+/// BusTub's OrderByAsIndexScan: a `Sort` by one ascending plain column over a bare scan of a table that has an
+/// index on that column becomes an ordered scan of the index, and the sort disappears. Only starter mode runs it:
+/// an index holds no entry for a NULL key, so on a nullable column the rewrite would silently drop those rows
+/// (BusTub's tests never have NULLs there; we do not assume that of everyone's data). For the same reason the
+/// `expr IS NULL` guard keys that NULLS FIRST/LAST adds are dropped here: no NULL can reach them.
+fn order_by_as_index_scan(p: Plan, cat: &Catalog) -> Plan {
+    let p = map_children(p, &mut |c| order_by_as_index_scan(c, cat));
+    let Plan::Sort { order_by, child } = p else { return p };
+    let unchanged = |order_by, child| Plan::Sort { order_by, child };
+    // Look through one projection (it may add hidden sort-key columns) to the scan.
+    let (exprs, scan): (Option<&Vec<Expr>>, &Plan) = match &*child {
+        Plan::Projection { exprs, child: c, .. } => (Some(exprs), &**c),
+        other => (None, other),
+    };
+    let resolve = |e: &Expr| -> Option<Expr> {
+        match (e, exprs) {
+            (Expr::Col(j), Some(ex)) => ex.get(*j).cloned(),
+            (Expr::Col(_), None) => Some(e.clone()),
+            _ => None,
+        }
+    };
+    let mut keys = vec![];
+    for (e, asc) in &order_by {
+        match resolve(e) {
+            Some(Expr::IsNull(inner, false)) if matches!(*inner, Expr::Col(_)) => {}
+            Some(Expr::Col(c)) if *asc => keys.push(c),
+            _ => return unchanged(order_by, child),
+        }
+    }
+    let [src_col] = keys[..] else { return unchanged(order_by, child) };
+    let Plan::SeqScan { table, schema, filter: None } = scan else { return unchanged(order_by, child) };
+    let Some(ix) = cat.indexes_on(table).find(|i| i.col == src_col) else {
+        return unchanged(order_by, child);
+    };
+    let ordered = Plan::IndexScan {
+        table: table.clone(),
+        index: ix.name.clone(),
+        schema: schema.clone(),
+        lookup: IndexLookup::Ordered,
+        filter: None,
+    };
+    match *child {
+        Plan::Projection { exprs, schema, .. } => Plan::Projection { exprs, schema, child: Box::new(ordered) },
+        _ => ordered,
+    }
+}
+```
+
+<aside data-call="warning"><b>An ordered index scan silently drops NULL-keyed rows</b><p>An index has no entry for a NULL key, so scanning it in order returns only the rows whose key is not NULL. BusTub's tests never put NULLs in an indexed column, which is why the rewrite is safe there and is what the course asks for. In an engine that you also want to be correct on other data, either refuse the rewrite for nullable columns, add the NULL-keyed rows from a heap scan, or (as here) restrict it to the mode that exists to reproduce BusTub's plans. The <code>expr IS NULL</code> guard keys that <code>NULLS FIRST/LAST</code> adds to a sort (<a href="/cookbook/p/sql-front-end">P3.2</a>) are dropped by this rule for the same reason.</p></aside>
+
+<p><code>tests/engine_dialect.rs::starter_rules_change_the_plan_not_the_answer</code> checks the contract: ten queries, the plan node that must (or must not) appear in each mode, and identical answers in both.</p>
+"""
+
+[[sections]]
+heading = "EXPLAIN, before and after"
+body = """
+```text title="EXPLAIN SELECT e.name FROM emp e, dept d WHERE e.dept = d.id AND d.city = 'Pune' AND e.salary > 50 (optimizer off)"
+Projection [Col(1)]
+  Filter (e.dept = d.id AND d.city = 'Pune') AND e.salary > 50
+    NestedLoopJoin Inner None             ← a cross product, filtered afterwards
+      SeqScan emp
+      SeqScan dept
+```
+
+```text title="the same, optimizer on"
+Projection [Col(1)]
+  HashJoin Inner [Col(2)] = [Col(0)]      ← the equality became the join key
+    SeqScan emp   filter=(salary > 50)    ← single-table predicates sank into their scans
+    SeqScan dept  filter=(city = 'Pune')
+```
+
+```text title="point lookups and top-N"
+EXPLAIN SELECT dname FROM dept WHERE id = 3 OR id = 5     →  IndexScan dept via dept_id Points([3, 5])
+EXPLAIN SELECT name FROM emp ORDER BY salary DESC LIMIT 5 →  Limit 5 ← TopN n=5 [salary DESC] ← Projection ← SeqScan emp
+```
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+```text title="Apple M4 Pro · release · verify/tests/engine_bench.rs"
+point lookup, 20k rows:        SeqScan 1.74 ms      IndexScan 2.2 µs      (782×)
+3k ⋈ 3k equijoin:              NestedLoop 281.9 ms  HashJoin 0.98 ms      NestedIndexJoin 0.93 ms
+ORDER BY … LIMIT 10 over 20k:  Sort+Limit 3.83 ms   TopN 2.80 ms
+GROUP BY 100 groups over 20k:  4.1 ms                RANK() OVER over 20k: 5.1 ms
+```
+"""
+
+[[sections]]
+heading = "The engine entry point"
+body = """
+:::deeper Engine: parse → plan (per statement kind) → optimize → execute
+```rust title="src/lib.rs (engine facade)"
+//! A small relational engine over the buffer pool, table heap and B+Tree built earlier.
+pub mod catalog;
+pub mod exec;
+pub mod exec_spill;
+pub mod spill;
+pub mod expr;
+pub mod optimizer;
+pub mod plan;
+pub mod sql;
+
+use crate::buffer::buffer_pool_manager::BpmError;
+use crate::types::value::Value;
+use catalog::{coerce, Catalog, Column, Schema};
+use expr::Expr;
+use plan::{Binder, Plan};
+use sql::{Ast, Stmt};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Error(pub String);
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+pub fn err<T>(s: String) -> Result<T> { Err(Error(s)) }
+impl From<BpmError> for Error { fn from(e: BpmError) -> Self { Error(format!("storage: {e:?}")) } }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueryResult { pub columns: Vec<String>, pub rows: Vec<Vec<Value>> }
+
+pub struct Engine<'a> { pub cat: Catalog<'a>, pub optimize: bool }
+
+impl<'a> Engine<'a> {
+    pub fn new(bpm: &'a catalog::Bpm) -> Self { Engine { cat: Catalog::new(bpm), optimize: true } }
+
+    pub fn execute(&mut self, sql: &str) -> Result<Vec<QueryResult>> {
+        sql::parse(sql)?.into_iter().map(|s| self.stmt(s)).collect()
+    }
+
+    pub fn query(&mut self, sql: &str) -> Result<Vec<Vec<Value>>> {
+        Ok(self.execute(sql)?.pop().map(|r| r.rows).unwrap_or_default())
+    }
+
+    fn plan_for(&self, s: &Stmt) -> Result<Plan> {
+        let b = Binder { cat: &self.cat };
+        let plan = match s {
+            Stmt::Select(sel) => b.plan_select(sel)?,
+            Stmt::Insert { table, cols, rows, select } => {
+                let ti = self.cat.table(table)?;
+                let width = ti.schema.len();
+                let targets: Vec<usize> = match cols {
+                    Some(cs) => cs.iter().map(|c| ti.schema.resolve(None, c)).collect::<Result<_>>()?,
+                    None => (0..width).collect(),
+                };
+                let child = if let Some(rows) = rows {
+                    let empty = Schema::default();
+                    let rows: Vec<Vec<Expr>> = rows.iter().map(|r| r.iter().map(|e| b.bind(e, &empty)).collect::<Result<_>>()).collect::<Result<_>>()?;
+                    if rows.iter().any(|r| r.len() != targets.len()) { return err(format!("INSERT has {} target columns but a row with a different number of values", targets.len())); }
+                    let schema = Schema::new(targets.iter().map(|&i| Column { name: ti.schema.cols[i].name.clone(), ty: ti.schema.cols[i].ty, table: None }).collect());
+                    Plan::Values { rows, schema }
+                } else {
+                    let p = b.plan_select(select.as_ref().unwrap())?;
+                    if p.schema().len() != targets.len() { return err("INSERT ... SELECT column count mismatch".into()); }
+                    p
+                };
+                // Reorder into table layout; unlisted columns become NULL.
+                let exprs: Vec<Expr> = (0..width).map(|i| targets.iter().position(|&t| t == i).map_or(Expr::Lit(Value::Null), Expr::Col)).collect();
+                let proj = Plan::Projection { exprs, schema: ti.schema.clone(), child: Box::new(child) };
+                Plan::Insert { table: ti.name.clone(), child: Box::new(proj) }
+            }
+            Stmt::Update { table, sets, filter } => {
+                let ti = self.cat.table(table)?;
+                let schema = ti.schema.with_qualifier(&ti.name);
+                let mut child = Plan::SeqScan { table: ti.name.clone(), schema: schema.clone(), filter: None };
+                if let Some(f) = filter { child = Plan::Filter { pred: b.bind(f, &schema)?, child: Box::new(child) }; }
+                let sets = sets.iter().map(|(c, e)| Ok((schema.resolve(None, c)?, b.bind(e, &schema)?))).collect::<Result<_>>()?;
+                Plan::Update { table: ti.name.clone(), sets, child: Box::new(child) }
+            }
+            Stmt::Delete { table, filter } => {
+                let ti = self.cat.table(table)?;
+                let schema = ti.schema.with_qualifier(&ti.name);
+                let mut child = Plan::SeqScan { table: ti.name.clone(), schema: schema.clone(), filter: None };
+                if let Some(f) = filter { child = Plan::Filter { pred: b.bind(f, &schema)?, child: Box::new(child) }; }
+                Plan::Delete { table: ti.name.clone(), child: Box::new(child) }
+            }
+            _ => return err("not a plannable statement".into()),
+        };
+        Ok(if self.optimize { optimizer::optimize(plan, &self.cat) } else { plan })
+    }
+
+    fn stmt(&mut self, s: Stmt) -> Result<QueryResult> {
+        match s {
+            Stmt::CreateTable { name, cols } => { self.cat.create_table(&name, cols)?; Ok(QueryResult { columns: vec![], rows: vec![] }) }
+            Stmt::CreateIndex { name, table, col } => { self.cat.create_index(&name, &table, &col)?; Ok(QueryResult { columns: vec![], rows: vec![] }) }
+            Stmt::Explain(inner) => {
+                let text = self.plan_for(&inner)?.explain();
+                Ok(QueryResult { columns: vec!["plan".into()], rows: text.lines().map(|l| vec![Value::Text(l.into())]).collect() })
+            }
+            s => {
+                let plan = self.plan_for(&s)?;
+                let columns = plan.schema().cols.iter().map(|c| c.name.clone()).collect();
+                Ok(QueryResult { columns, rows: exec::run(&plan, &self.cat)? })
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn _unused(_: Ast) { let _ = coerce; }
+```
+:::
+"""
+
+[[sections]]
+heading = "Testing an optimizer"
+body = """
+<p>Three layers, from cheapest to strongest:</p>
+
+<ol> <li><strong>Plan-shape tests</strong>: assert on <code>EXPLAIN</code> text. They pin down <em>which</em> rule fired (<code>IndexScan</code>, <code>NestedIndexJoin</code>, no <code>NestedLoopJoin</code>, a filter <em>below</em> the join). BusTub's <code>.slt</code> files do this with <code>query +ensure:index_scan</code>; the Rust test above uses substring checks. Brittle if overused, essential for the few rules that must fire.</li> <li><strong>Optimizer on vs off</strong>: every query must return the same multiset of rows with the optimizer enabled and disabled. It needs no reference database, and it catches every rewrite that changes semantics.</li> <li><strong>Differential fuzzing against SQLite</strong>: generate random queries over random tables with NULLs, run them through both engines, and compare as multisets.</li> </ol>
+
+:::deeper The fuzzer: 480 random queries × optimizer on/off against SQLite
+```rust title="tests/engine_fuzz.rs"
+//! Random queries, run through Cairn-style engine (optimizer on and off) and the system SQLite.
+use std::io::Write;
+use std::process::{Command, Stdio};
+use std::sync::Arc;
+use relational::{buffer::{arc_replacer::ArcReplacer, buffer_pool_manager::BufferPoolManager}, storage::disk::disk_manager::{DiskManager, MemDiskManager}, engine::{expr::display, Engine}};
+
+struct Rng(u64);
+impl Rng {
+    fn n(&mut self, m: u64) -> u64 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; self.0 % m }
+    fn pick<'a>(&mut self, xs: &[&'a str]) -> &'a str { xs[self.n(xs.len() as u64) as usize] }
+}
+
+fn lit(r: &mut Rng) -> String { if r.n(12) == 0 { "NULL".into() } else { r.n(8).to_string() } }
+
+fn pred(r: &mut Rng, cols: &[&str]) -> String {
+    let c = r.pick(cols);
+    match r.n(9) {
+        0 => format!("{c} = {}", lit(r)),
+        1 => format!("{c} < {}", r.n(8)),
+        2 => format!("{c} >= {}", r.n(8)),
+        3 => format!("{c} IS NULL"),
+        4 => format!("{c} IS NOT NULL"),
+        5 => format!("{c} BETWEEN {} AND {}", r.n(4), 4 + r.n(4)),
+        6 => format!("{c} IN ({}, {}, {})", lit(r), r.n(8), r.n(8)),
+        7 => format!("NOT ({c} <> {})", r.n(8)),
+        _ => format!("{c} + {} > {}", r.n(3), r.n(8)),
+    }
+}
+fn where_clause(r: &mut Rng, cols: &[&str]) -> String {
+    if r.n(4) == 0 { return String::new(); }
+    let mut s = pred(r, cols);
+    for _ in 0..r.n(3) { s = format!("{s} {} {}", r.pick(&["AND", "OR"]), pred(r, cols)); }
+    format!(" WHERE {s}")
+}
+
+fn gen_query(r: &mut Rng) -> String {
+    let a = ["a.x", "a.y", "a.k"];
+    let all = ["a.x", "a.y", "a.k", "b.x", "b.y", "b.k"];
+    match r.n(7) {
+        0 => format!("SELECT x, y, k FROM a{}", where_clause(r, &["x", "y", "k"])),
+        1 => format!("SELECT y, COUNT(*), COUNT(x), SUM(x), MIN(x), MAX(x), AVG(x) FROM a{} GROUP BY y", where_clause(r, &["x", "y", "k"])),
+        2 => format!("SELECT a.k, b.k FROM a JOIN b ON a.x = b.x{}", where_clause(r, &all)),
+        3 => format!("SELECT a.k, b.k FROM a LEFT JOIN b ON a.x = b.x{}", where_clause(r, &a)),
+        4 => format!("SELECT a.k, b.k FROM a LEFT JOIN b ON a.x = b.x AND {}", pred(r, &["b.y", "b.k"])),
+        5 => format!("SELECT a.k, b.k FROM a, b WHERE a.y = b.y AND {}", pred(r, &all)),
+        _ => format!("SELECT a.y, COUNT(b.k), SUM(b.x) FROM a LEFT JOIN b ON a.k = b.k{} GROUP BY a.y HAVING COUNT(*) > {}", where_clause(r, &a), r.n(3)),
+    }
+}
+
+fn setup(r: &mut Rng) -> String {
+    let mut s = String::from("CREATE TABLE a(x INTEGER, y INTEGER, k INTEGER); CREATE TABLE b(x INTEGER, y INTEGER, k INTEGER);\\n");
+    for t in ["a", "b"] {
+        let rows: Vec<String> = (0..30).map(|i| format!("({}, {}, {})", lit(r), lit(r), if t == "a" { i } else { 100 + i })).collect();
+        s += &format!("INSERT INTO {t} VALUES {};\\n", rows.join(","));
+    }
+    s
+}
+
+fn sqlite(sql: &str) -> Vec<String> {
+    let mut c = Command::new("sqlite3").args(["-separator", "|", "-nullvalue", "NULL"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    c.stdin.take().unwrap().write_all(sql.as_bytes()).unwrap();
+    let o = c.wait_with_output().unwrap();
+    assert!(o.stderr.is_empty(), "sqlite: {}\\n{sql}", String::from_utf8_lossy(&o.stderr));
+    String::from_utf8(o.stdout).unwrap().lines().map(|l| l.split('|').map(|f| match f.parse::<f64>() { Ok(x) if f.contains('.') => format!("{x:.6}"), _ => f.to_string() }).collect::<Vec<_>>().join("|")).collect()
+}
+
+#[test]
+fn fuzz_against_sqlite() {
+    let mut r = Rng(0x2545F4914F6CDD1D);
+    let mut compared = 0;
+    for round in 0..12 {
+        let setup = setup(&mut r);
+        let disk: Arc<dyn DiskManager> = Arc::new(MemDiskManager::default());
+        let bpm = BufferPoolManager::new(128, disk, ArcReplacer::new(128), 2);
+        let mut e = Engine::new(&bpm);
+        e.execute(&setup).unwrap();
+        if round % 2 == 1 { e.execute("CREATE INDEX a_k ON a(k); CREATE INDEX b_k ON b(k)").unwrap(); }   // exercises IndexScan / NestedIndexJoin
+        for _ in 0..40 {
+            let q = gen_query(&mut r);
+            let mut want = sqlite(&format!("{setup}{q};"));
+            want.sort();
+            for opt in [true, false] {
+                e.optimize = opt;
+                let mut got: Vec<String> = e.query(&q).unwrap_or_else(|er| panic!("`{q}` (optimize={opt}): {er:?}")).iter()
+                    .map(|row| row.iter().map(display).collect::<Vec<_>>().join("|"))
+                    .map(|l| l.split('|').map(|f| match f.parse::<f64>() { Ok(x) if f.contains('.') => format!("{x:.6}"), _ => f.to_string() }).collect::<Vec<_>>().join("|")).collect();
+                got.sort();
+                assert_eq!(got, want, "round {round}, optimize={opt}\\nquery: {q}");
+            }
+            compared += 1;
+        }
+    }
+    eprintln!("{compared} random queries × 2 optimizer settings match SQLite");
+}
+```
+:::
+
+```text title="Output"
+480 random queries × 2 optimizer settings match SQLite
+```
+
+<aside data-call="testing"><b>What the fuzzer found while this was written</b><p>Nothing, on the first run: the earlier hand-written differential suite had already pinned the semantics (NULL grouping, <code>NOT IN</code>, left-join filter placement). The <em>plan-shape</em> test found the pushdown ordering bug. The lesson is that result-based tests can't see a <strong>missed optimization</strong>: a plan that returns the right rows slowly is a pass. Performance regressions need plan assertions or benchmarks, and any serious optimizer keeps both.</p></aside>
+"""
+
+[[sections]]
+heading = "The BusTub leaderboard queries"
+body = """
+<p>Three queries over million-row tables, scored on speed. The rules that win them are all small extensions of the ones above:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Query</th> <th>Shape</th> <th>Winning ideas</th> </tr> </thead> <tbody> <tr> <td><strong>1</strong></td> <td>3-way join with range predicates on one table</td> <td>decompose <code>a ≥ x AND a &lt; y</code> and push each conjunct to its scan; reorder the joins so the filtered table goes first (Part III); hash join with the filtered table as the build side</td> </tr> <tr> <td><strong>2</strong></td> <td>many aggregates (<code>COUNT</code>, <code>MAX</code> × 6 columns) over a join</td> <td><strong>column pruning</strong> (project only needed columns below the join), common-subexpression sharing in the aggregation</td> </tr> <tr> <td><strong>3</strong></td> <td>very selective join</td> <td><strong>Bloom filter</strong> on the build keys, applied during the probe scan (<a href="/cookbook/p/filters-tries-inverted-and-vector-indexes">L09</a>, <a href="/cookbook/p/grace-hash-join-and-spilling">P3.4</a>)</td> </tr> </tbody> </table></div>
+"""

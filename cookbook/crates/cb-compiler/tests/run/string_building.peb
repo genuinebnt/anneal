@@ -1,0 +1,14 @@
+fn repeat(s: str, n: int) -> str {
+    let mut out = "";
+    let mut i = 0;
+    while i < n { out += s; i += 1; }
+    out
+}
+fn main() {
+    println(repeat("ab", 3));
+    let greeting = "Hello, " + "world" + "!";
+    println(greeting);
+    println("len=" + to_str(len(greeting)));
+    println("quote: \"q\" tab:[\t] nl-escaped");
+    println("unicode: \u{e9} \u{65e5}");
+}

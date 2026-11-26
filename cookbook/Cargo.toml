@@ -1,0 +1,1430 @@
+[package]
+name = "flowforge-cookbook"
+version = "0.0.0"
+edition = "2024"
+publish = false
+autoexamples = false  # examples live in chapter folders; see gen_manifest.py
+
+[workspace]
+members = ["crates/*"]
+
+# Standalone crate: not part of the flowforge build. Run an example with
+#   cd cookbook && cargo run --example r01_serde_defaults
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net", "fs", "process", "signal"] }
+anyhow = "1"
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+futures-util = "0.3"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "gzip"] }
+tower-http = { version = "0.6", features = ["cors", "compression-gzip", "trace", "timeout", "limit", "set-header", "request-id", "fs"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+libc = "0.2"
+memmap2 = "0.9"
+mio = { version = "1", features = ["os-poll", "net"] }
+rayon = "1"
+crossbeam-channel = "0.5"
+crossbeam-deque = "0.8"
+crossbeam-utils = "0.8"
+bytes = "1"
+parking_lot = "0.12"
+smallvec = "1"
+
+# BEGIN GENERATED EXAMPLES (python3 gen_manifest.py)
+[[example]]
+name = "aho_corasick"
+path = "examples/algorithms/aho_corasick.rs"
+[[example]]
+name = "algorithmic_optimization_toolbox"
+path = "examples/algorithms/algorithmic_optimization_toolbox.rs"
+[[example]]
+name = "amortized_analysis_online_algorithms"
+path = "examples/algorithms/amortized_analysis_online_algorithms.rs"
+[[example]]
+name = "approximation_randomized_algorithms"
+path = "examples/algorithms/approximation_randomized_algorithms.rs"
+[[example]]
+name = "backtracking_branch_bound"
+path = "examples/algorithms/backtracking_branch_bound.rs"
+[[example]]
+name = "bipartite_matching"
+path = "examples/algorithms/bipartite_matching.rs"
+[[example]]
+name = "bit_manipulation_real_world"
+path = "examples/algorithms/bit_manipulation_real_world.rs"
+[[example]]
+name = "bit_tricks"
+path = "examples/algorithms/bit_tricks.rs"
+[[example]]
+name = "combinatorial_generation"
+path = "examples/algorithms/combinatorial_generation.rs"
+[[example]]
+name = "combo_algorithms"
+path = "examples/algorithms/combo_algorithms.rs"
+[[example]]
+name = "csr_graph"
+path = "examples/algorithms/csr_graph.rs"
+[[example]]
+name = "dijkstra"
+path = "examples/algorithms/dijkstra.rs"
+[[example]]
+name = "dp_count_paths"
+path = "examples/algorithms/dp_count_paths.rs"
+[[example]]
+name = "dp_edit_distance"
+path = "examples/algorithms/dp_edit_distance.rs"
+[[example]]
+name = "dp_knapsack"
+path = "examples/algorithms/dp_knapsack.rs"
+[[example]]
+name = "dp_lcs_diff"
+path = "examples/algorithms/dp_lcs_diff.rs"
+[[example]]
+name = "dp_memoization"
+path = "examples/algorithms/dp_memoization.rs"
+[[example]]
+name = "dp_zoo"
+path = "examples/algorithms/dp_zoo.rs"
+[[example]]
+name = "greedy_and_interval_algorithms"
+path = "examples/algorithms/greedy_and_interval_algorithms.rs"
+[[example]]
+name = "heuristics_zoo"
+path = "examples/algorithms/heuristics_zoo.rs"
+[[example]]
+name = "index_graph"
+path = "examples/algorithms/index_graph.rs"
+[[example]]
+name = "kway_merge_family"
+path = "examples/algorithms/kway_merge_family.rs"
+[[example]]
+name = "linear_programming_simplex"
+path = "examples/algorithms/linear_programming_simplex.rs"
+[[example]]
+name = "max_flow_dinic"
+path = "examples/algorithms/max_flow_dinic.rs"
+[[example]]
+name = "mst_bridges"
+path = "examples/algorithms/mst_bridges.rs"
+[[example]]
+name = "problem_modeling_reductions"
+path = "examples/algorithms/problem_modeling_reductions.rs"
+[[example]]
+name = "procedural_puzzles"
+path = "examples/algorithms/procedural_puzzles.rs"
+[[example]]
+name = "sat_solver_cdcl"
+path = "examples/algorithms/sat_solver_cdcl.rs"
+[[example]]
+name = "shortest_path_zoo"
+path = "examples/algorithms/shortest_path_zoo.rs"
+[[example]]
+name = "sorting_networks_external_sort"
+path = "examples/algorithms/sorting_networks_external_sort.rs"
+[[example]]
+name = "sorting_searching"
+path = "examples/algorithms/sorting_searching.rs"
+[[example]]
+name = "string_algos"
+path = "examples/algorithms/string_algos.rs"
+[[example]]
+name = "tarjan_scc"
+path = "examples/algorithms/tarjan_scc.rs"
+[[example]]
+name = "union_find"
+path = "examples/algorithms/union_find.rs"
+[[example]]
+name = "async_cancel_safety"
+path = "examples/async/async_cancel_safety.rs"
+[[example]]
+name = "async_patterns"
+path = "examples/async/async_patterns.rs"
+[[example]]
+name = "async_streams_concurrency"
+path = "examples/async/async_streams_concurrency.rs"
+[[example]]
+name = "async_traits_dyn"
+path = "examples/async/async_traits_dyn.rs"
+[[example]]
+name = "bounded_channel"
+path = "examples/async/bounded_channel.rs"
+[[example]]
+name = "futures_by_hand"
+path = "examples/async/futures_by_hand.rs"
+[[example]]
+name = "graceful_shutdown"
+path = "examples/async/graceful_shutdown.rs"
+[[example]]
+name = "select_cancel"
+path = "examples/async/select_cancel.rs"
+[[example]]
+name = "waker_executor"
+path = "examples/async/waker_executor.rs"
+[[example]]
+name = "worker_pool"
+path = "examples/async/worker_pool.rs"
+[[example]]
+name = "event_sourced_ledger"
+path = "examples/capstones/event_sourced_ledger.rs"
+[[example]]
+name = "job_service_axum"
+path = "examples/capstones/job_service_axum.rs"
+[[example]]
+name = "lease_fencing_sim"
+path = "examples/capstones/lease_fencing_sim.rs"
+[[example]]
+name = "mini_async_runtime"
+path = "examples/capstones/mini_async_runtime.rs"
+[[example]]
+name = "mini_http_server_thread_pool"
+path = "examples/capstones/mini_http_server_thread_pool.rs"
+[[example]]
+name = "mini_kv_store"
+path = "examples/capstones/mini_kv_store.rs"
+[[example]]
+name = "mini_redis"
+path = "examples/capstones/mini_redis.rs"
+[[example]]
+name = "query_optimizer"
+path = "examples/capstones/query_optimizer.rs"
+[[example]]
+name = "rate_limiter_lab"
+path = "examples/capstones/rate_limiter_lab.rs"
+[[example]]
+name = "ray_tracer"
+path = "examples/capstones/ray_tracer.rs"
+[[example]]
+name = "regex_nfa_engine"
+path = "examples/capstones/regex_nfa_engine.rs"
+[[example]]
+name = "search_engine"
+path = "examples/capstones/search_engine.rs"
+[[example]]
+name = "tiny_sql_engine"
+path = "examples/capstones/tiny_sql_engine.rs"
+[[example]]
+name = "toy_filesystem"
+path = "examples/capstones/toy_filesystem.rs"
+[[example]]
+name = "toy_language_interpreter"
+path = "examples/capstones/toy_language_interpreter.rs"
+[[example]]
+name = "typeahead_service"
+path = "examples/capstones/typeahead_service.rs"
+[[example]]
+name = "abstract_interpretation_intervals"
+path = "examples/compilers_runtimes/abstract_interpretation_intervals.rs"
+[[example]]
+name = "algebraic_effects_handlers"
+path = "examples/compilers_runtimes/algebraic_effects_handlers.rs"
+[[example]]
+name = "alias_analysis_points_to"
+path = "examples/compilers_runtimes/alias_analysis_points_to.rs"
+[[example]]
+name = "cps_closure_conversion_lambda_lifting"
+path = "examples/compilers_runtimes/cps_closure_conversion_lambda_lifting.rs"
+[[example]]
+name = "dataflow_analysis_framework"
+path = "examples/compilers_runtimes/dataflow_analysis_framework.rs"
+[[example]]
+name = "dependent_types_nbe"
+path = "examples/compilers_runtimes/dependent_types_nbe.rs"
+[[example]]
+name = "egraph_equality_saturation"
+path = "examples/compilers_runtimes/egraph_equality_saturation.rs"
+[[example]]
+name = "hindley_milner_inference"
+path = "examples/compilers_runtimes/hindley_milner_inference.rs"
+[[example]]
+name = "lambda_calculus_toolkit"
+path = "examples/compilers_runtimes/lambda_calculus_toolkit.rs"
+[[example]]
+name = "loop_optimizations"
+path = "examples/compilers_runtimes/loop_optimizations.rs"
+[[example]]
+name = "parser_generators_lr_peg_earley"
+path = "examples/compilers_runtimes/parser_generators_lr_peg_earley.rs"
+[[example]]
+name = "pattern_match_compilation_decision_trees"
+path = "examples/compilers_runtimes/pattern_match_compilation_decision_trees.rs"
+[[example]]
+name = "ssa_register_allocation"
+path = "examples/compilers_runtimes/ssa_register_allocation.rs"
+[[example]]
+name = "symbolic_execution_smt_lite"
+path = "examples/compilers_runtimes/symbolic_execution_smt_lite.rs"
+[[example]]
+name = "system_f_bidirectional_typing"
+path = "examples/compilers_runtimes/system_f_bidirectional_typing.rs"
+[[example]]
+name = "term_rewriting_unification_logic_programming"
+path = "examples/compilers_runtimes/term_rewriting_unification_logic_programming.rs"
+[[example]]
+name = "wasm_binary_interpreter"
+path = "examples/compilers_runtimes/wasm_binary_interpreter.rs"
+[[example]]
+name = "actor_model"
+path = "examples/concurrency/actor_model.rs"
+[[example]]
+name = "atomics_ordering"
+path = "examples/concurrency/atomics_ordering.rs"
+[[example]]
+name = "concurrent_counters_and_statistics"
+path = "examples/concurrency/concurrent_counters_and_statistics.rs"
+[[example]]
+name = "concurrent_hashmap_designs"
+path = "examples/concurrency/concurrent_hashmap_designs.rs"
+[[example]]
+name = "concurrent_skiplist_btree_ordered_map"
+path = "examples/concurrency/concurrent_skiplist_btree_ordered_map.rs"
+[[example]]
+name = "crossbeam_select_channels"
+path = "examples/concurrency/crossbeam_select_channels.rs"
+[[example]]
+name = "epoch_hazard_pointer_reclamation"
+path = "examples/concurrency/epoch_hazard_pointer_reclamation.rs"
+[[example]]
+name = "joinset_semaphore"
+path = "examples/concurrency/joinset_semaphore.rs"
+[[example]]
+name = "lockfree_stack_aba"
+path = "examples/concurrency/lockfree_stack_aba.rs"
+[[example]]
+name = "locks_deadlocks"
+path = "examples/concurrency/locks_deadlocks.rs"
+[[example]]
+name = "memory_ordering_litmus"
+path = "examples/concurrency/memory_ordering_litmus.rs"
+[[example]]
+name = "model_checker_for_concurrent_code"
+path = "examples/concurrency/model_checker_for_concurrent_code.rs"
+[[example]]
+name = "mpmc_bounded_queue"
+path = "examples/concurrency/mpmc_bounded_queue.rs"
+[[example]]
+name = "mpmc_queues_michael_scott_and_combining"
+path = "examples/concurrency/mpmc_queues_michael_scott_and_combining.rs"
+[[example]]
+name = "mutex_condvar_channel"
+path = "examples/concurrency/mutex_condvar_channel.rs"
+[[example]]
+name = "own_arc_refcount"
+path = "examples/concurrency/own_arc_refcount.rs"
+[[example]]
+name = "rayon_data_parallelism"
+path = "examples/concurrency/rayon_data_parallelism.rs"
+[[example]]
+name = "read_copy_update_and_hazard_patterns"
+path = "examples/concurrency/read_copy_update_and_hazard_patterns.rs"
+[[example]]
+name = "seqlock_and_priority_inversion"
+path = "examples/concurrency/seqlock_and_priority_inversion.rs"
+[[example]]
+name = "sharded_map"
+path = "examples/concurrency/sharded_map.rs"
+[[example]]
+name = "shared_state"
+path = "examples/concurrency/shared_state.rs"
+[[example]]
+name = "snapshot_cow_rcu"
+path = "examples/concurrency/snapshot_cow_rcu.rs"
+[[example]]
+name = "spsc_ring_buffer"
+path = "examples/concurrency/spsc_ring_buffer.rs"
+[[example]]
+name = "structured_concurrency_cancellation"
+path = "examples/concurrency/structured_concurrency_cancellation.rs"
+[[example]]
+name = "thread_pool_work_stealing"
+path = "examples/concurrency/thread_pool_work_stealing.rs"
+[[example]]
+name = "threads_channels"
+path = "examples/concurrency/threads_channels.rs"
+[[example]]
+name = "aes_modes"
+path = "examples/cryptography/aes_modes.rs"
+[[example]]
+name = "chacha20_poly1305"
+path = "examples/cryptography/chacha20_poly1305.rs"
+[[example]]
+name = "constant_time_side_channels"
+path = "examples/cryptography/constant_time_side_channels.rs"
+[[example]]
+name = "hash_based_signatures"
+path = "examples/cryptography/hash_based_signatures.rs"
+[[example]]
+name = "hmac_hkdf_pbkdf2"
+path = "examples/cryptography/hmac_hkdf_pbkdf2.rs"
+[[example]]
+name = "merkle_tree"
+path = "examples/cryptography/merkle_tree.rs"
+[[example]]
+name = "modular_arithmetic_dh_rsa"
+path = "examples/cryptography/modular_arithmetic_dh_rsa.rs"
+[[example]]
+name = "secure_random_and_passwords"
+path = "examples/cryptography/secure_random_and_passwords.rs"
+[[example]]
+name = "adaptive_radix_tree"
+path = "examples/data_structures/adaptive_radix_tree.rs"
+[[example]]
+name = "b_epsilon_tree"
+path = "examples/data_structures/b_epsilon_tree.rs"
+[[example]]
+name = "bdd_zdd"
+path = "examples/data_structures/bdd_zdd.rs"
+[[example]]
+name = "bitset_rank_select_roaring"
+path = "examples/data_structures/bitset_rank_select_roaring.rs"
+[[example]]
+name = "bplus_tree"
+path = "examples/data_structures/bplus_tree.rs"
+[[example]]
+name = "btree_bulk_load_prefix_compression"
+path = "examples/data_structures/btree_bulk_load_prefix_compression.rs"
+[[example]]
+name = "bw_tree_latch_free"
+path = "examples/data_structures/bw_tree_latch_free.rs"
+[[example]]
+name = "cache_policy_zoo"
+path = "examples/data_structures/cache_policy_zoo.rs"
+[[example]]
+name = "count_min_sketch"
+path = "examples/data_structures/count_min_sketch.rs"
+[[example]]
+name = "cuckoo_hashing"
+path = "examples/data_structures/cuckoo_hashing.rs"
+[[example]]
+name = "gist_generalized_search_tree"
+path = "examples/data_structures/gist_generalized_search_tree.rs"
+[[example]]
+name = "hash_functions"
+path = "examples/data_structures/hash_functions.rs"
+[[example]]
+name = "heap_patterns"
+path = "examples/data_structures/heap_patterns.rs"
+[[example]]
+name = "heap_tiebreak"
+path = "examples/data_structures/heap_tiebreak.rs"
+[[example]]
+name = "hyperloglog"
+path = "examples/data_structures/hyperloglog.rs"
+[[example]]
+name = "learned_index_rmi"
+path = "examples/data_structures/learned_index_rmi.rs"
+[[example]]
+name = "lru_cache"
+path = "examples/data_structures/lru_cache.rs"
+[[example]]
+name = "minhash_simhash_lsh"
+path = "examples/data_structures/minhash_simhash_lsh.rs"
+[[example]]
+name = "open_addressing_map"
+path = "examples/data_structures/open_addressing_map.rs"
+[[example]]
+name = "optimistic_lock_coupling_btree"
+path = "examples/data_structures/optimistic_lock_coupling_btree.rs"
+[[example]]
+name = "priority_queue_zoo"
+path = "examples/data_structures/priority_queue_zoo.rs"
+[[example]]
+name = "ring_buffer_zoo"
+path = "examples/data_structures/ring_buffer_zoo.rs"
+[[example]]
+name = "sampling"
+path = "examples/data_structures/sampling.rs"
+[[example]]
+name = "segment_fenwick"
+path = "examples/data_structures/segment_fenwick.rs"
+[[example]]
+name = "skiplist"
+path = "examples/data_structures/skiplist.rs"
+[[example]]
+name = "treap_interval"
+path = "examples/data_structures/treap_interval.rs"
+[[example]]
+name = "trie_radix"
+path = "examples/data_structures/trie_radix.rs"
+[[example]]
+name = "adaptive_feedback_reoptimization"
+path = "examples/database/adaptive_feedback_reoptimization.rs"
+[[example]]
+name = "adaptive_query_processing_eddies_sip"
+path = "examples/database/adaptive_query_processing_eddies_sip.rs"
+[[example]]
+name = "aries_recovery"
+path = "examples/database/aries_recovery.rs"
+[[example]]
+name = "asof_joins_gap_filling"
+path = "examples/database/asof_joins_gap_filling.rs"
+[[example]]
+name = "bitweaving_bit_sliced_scans"
+path = "examples/database/bitweaving_bit_sliced_scans.rs"
+[[example]]
+name = "buffer_management_vmcache_swizzling"
+path = "examples/database/buffer_management_vmcache_swizzling.rs"
+[[example]]
+name = "buffer_pool_clock"
+path = "examples/database/buffer_pool_clock.rs"
+[[example]]
+name = "cardinality_estimation_lab"
+path = "examples/database/cardinality_estimation_lab.rs"
+[[example]]
+name = "cascades_memo_optimizer"
+path = "examples/database/cascades_memo_optimizer.rs"
+[[example]]
+name = "cdc_logical_replication_log"
+path = "examples/database/cdc_logical_replication_log.rs"
+[[example]]
+name = "cloud_warehouse_micro_partitions"
+path = "examples/database/cloud_warehouse_micro_partitions.rs"
+[[example]]
+name = "columnar_encodings"
+path = "examples/database/columnar_encodings.rs"
+[[example]]
+name = "consistent_snapshots_sql_logic_tests"
+path = "examples/database/consistent_snapshots_sql_logic_tests.rs"
+[[example]]
+name = "database_cracking_zone_maps_imprints"
+path = "examples/database/database_cracking_zone_maps_imprints.rs"
+[[example]]
+name = "datalog_engine_semi_naive"
+path = "examples/database/datalog_engine_semi_naive.rs"
+[[example]]
+name = "delta_lake_transaction_log"
+path = "examples/database/delta_lake_transaction_log.rs"
+[[example]]
+name = "distributed_query_shuffle_broadcast_join"
+path = "examples/database/distributed_query_shuffle_broadcast_join.rs"
+[[example]]
+name = "dremel_nested_columnar_shredding"
+path = "examples/database/dremel_nested_columnar_shredding.rs"
+[[example]]
+name = "external_sort_hash_aggregation"
+path = "examples/database/external_sort_hash_aggregation.rs"
+[[example]]
+name = "hash_and_bitmap_indexes"
+path = "examples/database/hash_and_bitmap_indexes.rs"
+[[example]]
+name = "hybrid_logical_clock_snapshots_percolator"
+path = "examples/database/hybrid_logical_clock_snapshots_percolator.rs"
+[[example]]
+name = "hypertables_continuous_aggregates"
+path = "examples/database/hypertables_continuous_aggregates.rs"
+[[example]]
+name = "incremental_view_maintenance_dbsp"
+path = "examples/database/incremental_view_maintenance_dbsp.rs"
+[[example]]
+name = "join_algorithms"
+path = "examples/database/join_algorithms.rs"
+[[example]]
+name = "join_enumeration_dpccp_dphyp"
+path = "examples/database/join_enumeration_dpccp_dphyp.rs"
+[[example]]
+name = "leapfrog_triejoin_worst_case_optimal"
+path = "examples/database/leapfrog_triejoin_worst_case_optimal.rs"
+[[example]]
+name = "lock_manager_deadlock"
+path = "examples/database/lock_manager_deadlock.rs"
+[[example]]
+name = "logging_schemes_group_commit"
+path = "examples/database/logging_schemes_group_commit.rs"
+[[example]]
+name = "lru_k_replacer_disk_scheduler"
+path = "examples/database/lru_k_replacer_disk_scheduler.rs"
+[[example]]
+name = "lsm_compaction_strategies"
+path = "examples/database/lsm_compaction_strategies.rs"
+[[example]]
+name = "mvcc_snapshot_isolation"
+path = "examples/database/mvcc_snapshot_isolation.rs"
+[[example]]
+name = "mvcc_version_storage_gc"
+path = "examples/database/mvcc_version_storage_gc.rs"
+[[example]]
+name = "online_schema_change"
+path = "examples/database/online_schema_change.rs"
+[[example]]
+name = "parallel_query_morsel_exchange"
+path = "examples/database/parallel_query_morsel_exchange.rs"
+[[example]]
+name = "parametric_query_optimization"
+path = "examples/database/parametric_query_optimization.rs"
+[[example]]
+name = "plan_cache_multiplan_trial"
+path = "examples/database/plan_cache_multiplan_trial.rs"
+[[example]]
+name = "query_compilation_data_centric_codegen"
+path = "examples/database/query_compilation_data_centric_codegen.rs"
+[[example]]
+name = "query_rewrite_rules_magic_sets"
+path = "examples/database/query_rewrite_rules_magic_sets.rs"
+[[example]]
+name = "radix_partitioned_hash_join"
+path = "examples/database/radix_partitioned_hash_join.rs"
+[[example]]
+name = "relational_algebra_engine"
+path = "examples/database/relational_algebra_engine.rs"
+[[example]]
+name = "slotted_pages_heap_file"
+path = "examples/database/slotted_pages_heap_file.rs"
+[[example]]
+name = "sql_window_functions_ctes"
+path = "examples/database/sql_window_functions_ctes.rs"
+[[example]]
+name = "statistics_histograms_sketches"
+path = "examples/database/statistics_histograms_sketches.rs"
+[[example]]
+name = "storage_models_nsm_dsm_pax"
+path = "examples/database/storage_models_nsm_dsm_pax.rs"
+[[example]]
+name = "subquery_unnesting_decorrelation"
+path = "examples/database/subquery_unnesting_decorrelation.rs"
+[[example]]
+name = "succinct_wavelet_fm_index"
+path = "examples/database/succinct_wavelet_fm_index.rs"
+[[example]]
+name = "timeseries_sketches_downsampling_anomaly"
+path = "examples/database/timeseries_sketches_downsampling_anomaly.rs"
+[[example]]
+name = "timestamp_ordering_occ"
+path = "examples/database/timestamp_ordering_occ.rs"
+[[example]]
+name = "transaction_theory_serializability"
+path = "examples/database/transaction_theory_serializability.rs"
+[[example]]
+name = "tsm_time_series_engine"
+path = "examples/database/tsm_time_series_engine.rs"
+[[example]]
+name = "volcano_vectorized_push"
+path = "examples/database/volcano_vectorized_push.rs"
+[[example]]
+name = "clap_cli"
+path = "examples/dev_tools/clap_cli.rs"
+[[example]]
+name = "metrics_prometheus_histograms_load_testing"
+path = "examples/dev_tools/metrics_prometheus_histograms_load_testing.rs"
+[[example]]
+name = "shrinking"
+path = "examples/dev_tools/shrinking.rs"
+[[example]]
+name = "testing_patterns"
+path = "examples/dev_tools/testing_patterns.rs"
+[[example]]
+name = "tracing_logs"
+path = "examples/dev_tools/tracing_logs.rs"
+[[example]]
+name = "chandy_lamport_snapshot"
+path = "examples/distributed/chandy_lamport_snapshot.rs"
+[[example]]
+name = "clock_sync_and_trace_context"
+path = "examples/distributed/clock_sync_and_trace_context.rs"
+[[example]]
+name = "consistent_hashing"
+path = "examples/distributed/consistent_hashing.rs"
+[[example]]
+name = "crdt_block_editor_notion_like"
+path = "examples/distributed/crdt_block_editor_notion_like.rs"
+[[example]]
+name = "crdt_fugue_text_editor"
+path = "examples/distributed/crdt_fugue_text_editor.rs"
+[[example]]
+name = "crdt_todo_app_no_db"
+path = "examples/distributed/crdt_todo_app_no_db.rs"
+[[example]]
+name = "crdts"
+path = "examples/distributed/crdts.rs"
+[[example]]
+name = "deterministic_simulation_testing"
+path = "examples/distributed/deterministic_simulation_testing.rs"
+[[example]]
+name = "hash_partitioning"
+path = "examples/distributed/hash_partitioning.rs"
+[[example]]
+name = "kafka_log_model"
+path = "examples/distributed/kafka_log_model.rs"
+[[example]]
+name = "linearizability_checker"
+path = "examples/distributed/linearizability_checker.rs"
+[[example]]
+name = "operational_transform"
+path = "examples/distributed/operational_transform.rs"
+[[example]]
+name = "paxos_basic_and_multi"
+path = "examples/distributed/paxos_basic_and_multi.rs"
+[[example]]
+name = "quorum_replication_dynamo"
+path = "examples/distributed/quorum_replication_dynamo.rs"
+[[example]]
+name = "raft_consensus"
+path = "examples/distributed/raft_consensus.rs"
+[[example]]
+name = "record_batch_codec"
+path = "examples/distributed/record_batch_codec.rs"
+[[example]]
+name = "retry_backoff_jitter"
+path = "examples/distributed/retry_backoff_jitter.rs"
+[[example]]
+name = "saga_orchestrator"
+path = "examples/distributed/saga_orchestrator.rs"
+[[example]]
+name = "spanner_truetime_commit_wait"
+path = "examples/distributed/spanner_truetime_commit_wait.rs"
+[[example]]
+name = "stream_processing_windows"
+path = "examples/distributed/stream_processing_windows.rs"
+[[example]]
+name = "swim_gossip"
+path = "examples/distributed/swim_gossip.rs"
+[[example]]
+name = "token_bucket"
+path = "examples/distributed/token_bucket.rs"
+[[example]]
+name = "two_phase_commit"
+path = "examples/distributed/two_phase_commit.rs"
+[[example]]
+name = "vector_clocks_hlc"
+path = "examples/distributed/vector_clocks_hlc.rs"
+[[example]]
+name = "compression_lz77_huffman"
+path = "examples/encoding_compression/compression_lz77_huffman.rs"
+[[example]]
+name = "encodings_codecs"
+path = "examples/encoding_compression/encodings_codecs.rs"
+[[example]]
+name = "serde_custom"
+path = "examples/encoding_compression/serde_custom.rs"
+[[example]]
+name = "serde_defaults"
+path = "examples/encoding_compression/serde_defaults.rs"
+[[example]]
+name = "timeseries_gorilla"
+path = "examples/encoding_compression/timeseries_gorilla.rs"
+[[example]]
+name = "anyhow_context"
+path = "examples/errors/anyhow_context.rs"
+[[example]]
+name = "diagnostics_spans"
+path = "examples/errors/diagnostics_spans.rs"
+[[example]]
+name = "error_chain_retryable"
+path = "examples/errors/error_chain_retryable.rs"
+[[example]]
+name = "error_enum"
+path = "examples/errors/error_enum.rs"
+[[example]]
+name = "option_result_toolbox"
+path = "examples/errors/option_result_toolbox.rs"
+[[example]]
+name = "fractals_noise_automata"
+path = "examples/graphics/fractals_noise_automata.rs"
+[[example]]
+name = "image_processing"
+path = "examples/graphics/image_processing.rs"
+[[example]]
+name = "lines_curves_fills"
+path = "examples/graphics/lines_curves_fills.rs"
+[[example]]
+name = "png_ppm_writer"
+path = "examples/graphics/png_ppm_writer.rs"
+[[example]]
+name = "software_rasterizer"
+path = "examples/graphics/software_rasterizer.rs"
+[[example]]
+name = "vec3_matrix_quaternion"
+path = "examples/graphics/vec3_matrix_quaternion.rs"
+[[example]]
+name = "jacobi_stencil_tiling"
+path = "examples/hpc/jacobi_stencil_tiling.rs"
+[[example]]
+name = "loop_optimization_ladder"
+path = "examples/hpc/loop_optimization_ladder.rs"
+[[example]]
+name = "mpi_collectives_simulation"
+path = "examples/hpc/mpi_collectives_simulation.rs"
+[[example]]
+name = "parallel_prefix_scan_reduction"
+path = "examples/hpc/parallel_prefix_scan_reduction.rs"
+[[example]]
+name = "parallel_sample_sort_radix"
+path = "examples/hpc/parallel_sample_sort_radix.rs"
+[[example]]
+name = "scaling_laws_amdahl_gustafson_roofline"
+path = "examples/hpc/scaling_laws_amdahl_gustafson_roofline.rs"
+[[example]]
+name = "sparse_kernels_spmv_csr"
+path = "examples/hpc/sparse_kernels_spmv_csr.rs"
+[[example]]
+name = "arrays_strings_hashmap_questions"
+path = "examples/interview/arrays_strings_hashmap_questions.rs"
+[[example]]
+name = "binary_trees_in_rust"
+path = "examples/interview/binary_trees_in_rust.rs"
+[[example]]
+name = "concurrency_interview_questions"
+path = "examples/interview/concurrency_interview_questions.rs"
+[[example]]
+name = "dp_and_backtracking_questions"
+path = "examples/interview/dp_and_backtracking_questions.rs"
+[[example]]
+name = "graphs_and_union_find_questions"
+path = "examples/interview/graphs_and_union_find_questions.rs"
+[[example]]
+name = "implement_std_from_scratch"
+path = "examples/interview/implement_std_from_scratch.rs"
+[[example]]
+name = "intervals_greedy_bit_questions"
+path = "examples/interview/intervals_greedy_bit_questions.rs"
+[[example]]
+name = "linked_lists_in_rust"
+path = "examples/interview/linked_lists_in_rust.rs"
+[[example]]
+name = "rust_async_qa"
+path = "examples/interview/rust_async_qa.rs"
+[[example]]
+name = "rust_errors_iterators_closures_qa"
+path = "examples/interview/rust_errors_iterators_closures_qa.rs"
+[[example]]
+name = "rust_ownership_borrowing_qa"
+path = "examples/interview/rust_ownership_borrowing_qa.rs"
+[[example]]
+name = "rust_smart_pointers_send_sync_qa"
+path = "examples/interview/rust_smart_pointers_send_sync_qa.rs"
+[[example]]
+name = "rust_traits_generics_dispatch_qa"
+path = "examples/interview/rust_traits_generics_dispatch_qa.rs"
+[[example]]
+name = "rust_unsafe_memory_layout_qa"
+path = "examples/interview/rust_unsafe_memory_layout_qa.rs"
+[[example]]
+name = "stacks_queues_heaps_questions"
+path = "examples/interview/stacks_queues_heaps_questions.rs"
+[[example]]
+name = "systems_design_in_code"
+path = "examples/interview/systems_design_in_code.rs"
+[[example]]
+name = "tries_advanced_questions"
+path = "examples/interview/tries_advanced_questions.rs"
+[[example]]
+name = "tries_core_questions"
+path = "examples/interview/tries_core_questions.rs"
+[[example]]
+name = "borrowck_patterns"
+path = "examples/language/borrowck_patterns.rs"
+[[example]]
+name = "bytes"
+path = "examples/language/bytes.rs"
+[[example]]
+name = "closures_hof"
+path = "examples/language/closures_hof.rs"
+[[example]]
+name = "collections_tour"
+path = "examples/language/collections_tour.rs"
+[[example]]
+name = "common_traits"
+path = "examples/language/common_traits.rs"
+[[example]]
+name = "const_and_generics_advanced"
+path = "examples/language/const_and_generics_advanced.rs"
+[[example]]
+name = "conversions"
+path = "examples/language/conversions.rs"
+[[example]]
+name = "cow"
+path = "examples/language/cow.rs"
+[[example]]
+name = "drop_raii"
+path = "examples/language/drop_raii.rs"
+[[example]]
+name = "dyn_vs_generic"
+path = "examples/language/dyn_vs_generic.rs"
+[[example]]
+name = "edition_2024_changes"
+path = "examples/language/edition_2024_changes.rs"
+[[example]]
+name = "extension_traits_ops"
+path = "examples/language/extension_traits_ops.rs"
+[[example]]
+name = "generics_bounds"
+path = "examples/language/generics_bounds.rs"
+[[example]]
+name = "generics_lifetimes_structs"
+path = "examples/language/generics_lifetimes_structs.rs"
+[[example]]
+name = "hrtb_gats"
+path = "examples/language/hrtb_gats.rs"
+[[example]]
+name = "implementing_std_traits"
+path = "examples/language/implementing_std_traits.rs"
+[[example]]
+name = "io_files_paths"
+path = "examples/language/io_files_paths.rs"
+[[example]]
+name = "iterator_adapters"
+path = "examples/language/iterator_adapters.rs"
+[[example]]
+name = "iterators"
+path = "examples/language/iterators.rs"
+[[example]]
+name = "library_api_polish"
+path = "examples/language/library_api_polish.rs"
+[[example]]
+name = "lifetimes"
+path = "examples/language/lifetimes.rs"
+[[example]]
+name = "macro_rules"
+path = "examples/language/macro_rules.rs"
+[[example]]
+name = "mem_functions"
+path = "examples/language/mem_functions.rs"
+[[example]]
+name = "modules_visibility"
+path = "examples/language/modules_visibility.rs"
+[[example]]
+name = "newtype_ids"
+path = "examples/language/newtype_ids.rs"
+[[example]]
+name = "pattern_matching"
+path = "examples/language/pattern_matching.rs"
+[[example]]
+name = "phantomdata_typed"
+path = "examples/language/phantomdata_typed.rs"
+[[example]]
+name = "recent_stable_language_features"
+path = "examples/language/recent_stable_language_features.rs"
+[[example]]
+name = "recent_std_apis"
+path = "examples/language/recent_std_apis.rs"
+[[example]]
+name = "ref_patterns"
+path = "examples/language/ref_patterns.rs"
+[[example]]
+name = "smart_pointers"
+path = "examples/language/smart_pointers.rs"
+[[example]]
+name = "static_const_lazy"
+path = "examples/language/static_const_lazy.rs"
+[[example]]
+name = "strings"
+path = "examples/language/strings.rs"
+[[example]]
+name = "bigint_arithmetic"
+path = "examples/math_science/bigint_arithmetic.rs"
+[[example]]
+name = "computational_geometry"
+path = "examples/math_science/computational_geometry.rs"
+[[example]]
+name = "decimal_fixed_point_money"
+path = "examples/math_science/decimal_fixed_point_money.rs"
+[[example]]
+name = "floating_point_ieee754"
+path = "examples/math_science/floating_point_ieee754.rs"
+[[example]]
+name = "number_theory_primes"
+path = "examples/math_science/number_theory_primes.rs"
+[[example]]
+name = "numerics_and_math"
+path = "examples/math_science/numerics_and_math.rs"
+[[example]]
+name = "physics_simulation"
+path = "examples/math_science/physics_simulation.rs"
+[[example]]
+name = "prng_zoo"
+path = "examples/math_science/prng_zoo.rs"
+[[example]]
+name = "space_filling_curves_zorder_hilbert"
+path = "examples/math_science/space_filling_curves_zorder_hilbert.rs"
+[[example]]
+name = "spatial_search_structures"
+path = "examples/math_science/spatial_search_structures.rs"
+[[example]]
+name = "arena_ids"
+path = "examples/memory/arena_ids.rs"
+[[example]]
+name = "bump_arena_allocator"
+path = "examples/memory/bump_arena_allocator.rs"
+[[example]]
+name = "garbage_collectors"
+path = "examples/memory/garbage_collectors.rs"
+[[example]]
+name = "size_class_allocator"
+path = "examples/memory/size_class_allocator.rs"
+[[example]]
+name = "slab_generational"
+path = "examples/memory/slab_generational.rs"
+[[example]]
+name = "api_gateway_service_discovery"
+path = "examples/microservices/api_gateway_service_discovery.rs"
+[[example]]
+name = "idempotency_dedup_leader_fencing_store"
+path = "examples/microservices/idempotency_dedup_leader_fencing_store.rs"
+[[example]]
+name = "strangler_fig_shadow_traffic"
+path = "examples/microservices/strangler_fig_shadow_traffic.rs"
+[[example]]
+name = "transactional_outbox_inbox_sqlite"
+path = "examples/microservices/transactional_outbox_inbox_sqlite.rs"
+[[example]]
+name = "dns_message_codec"
+path = "examples/networking/dns_message_codec.rs"
+[[example]]
+name = "http1_parser"
+path = "examples/networking/http1_parser.rs"
+[[example]]
+name = "kqueue_epoll_raw"
+path = "examples/networking/kqueue_epoll_raw.rs"
+[[example]]
+name = "mio_event_loop"
+path = "examples/networking/mio_event_loop.rs"
+[[example]]
+name = "packet_parsing_checksums"
+path = "examples/networking/packet_parsing_checksums.rs"
+[[example]]
+name = "protobuf_grpc_wire_format"
+path = "examples/networking/protobuf_grpc_wire_format.rs"
+[[example]]
+name = "resp_protocol"
+path = "examples/networking/resp_protocol.rs"
+[[example]]
+name = "tcp_congestion_control_sim"
+path = "examples/networking/tcp_congestion_control_sim.rs"
+[[example]]
+name = "tcp_framed_server"
+path = "examples/networking/tcp_framed_server.rs"
+[[example]]
+name = "tls_handshake_x509_der"
+path = "examples/networking/tls_handshake_x509_der.rs"
+[[example]]
+name = "udp_sockets_reliable"
+path = "examples/networking/udp_sockets_reliable.rs"
+[[example]]
+name = "websocket_frames"
+path = "examples/networking/websocket_frames.rs"
+[[example]]
+name = "buffered_io_internals"
+path = "examples/os_and_storage/buffered_io_internals.rs"
+[[example]]
+name = "civil_dates_time"
+path = "examples/os_and_storage/civil_dates_time.rs"
+[[example]]
+name = "disk_scheduling_raid"
+path = "examples/os_and_storage/disk_scheduling_raid.rs"
+[[example]]
+name = "file_disk_io_patterns"
+path = "examples/os_and_storage/file_disk_io_patterns.rs"
+[[example]]
+name = "file_locking_atomic_replace"
+path = "examples/os_and_storage/file_locking_atomic_replace.rs"
+[[example]]
+name = "io_uring_model"
+path = "examples/os_and_storage/io_uring_model.rs"
+[[example]]
+name = "mmap_files"
+path = "examples/os_and_storage/mmap_files.rs"
+[[example]]
+name = "process_pipes_signals"
+path = "examples/os_and_storage/process_pipes_signals.rs"
+[[example]]
+name = "scheduler_policies"
+path = "examples/os_and_storage/scheduler_policies.rs"
+[[example]]
+name = "syscalls_portable"
+path = "examples/os_and_storage/syscalls_portable.rs"
+[[example]]
+name = "timing_wheel"
+path = "examples/os_and_storage/timing_wheel.rs"
+[[example]]
+name = "virtual_memory_sim"
+path = "examples/os_and_storage/virtual_memory_sim.rs"
+[[example]]
+name = "wal_append_log"
+path = "examples/os_and_storage/wal_append_log.rs"
+[[example]]
+name = "zero_copy_sendfile_splice"
+path = "examples/os_and_storage/zero_copy_sendfile_splice.rs"
+[[example]]
+name = "any_event_bus"
+path = "examples/patterns/any_event_bus.rs"
+[[example]]
+name = "design_patterns_high"
+path = "examples/patterns/design_patterns_high.rs"
+[[example]]
+name = "design_patterns_low"
+path = "examples/patterns/design_patterns_low.rs"
+[[example]]
+name = "generic_state_machine"
+path = "examples/patterns/generic_state_machine.rs"
+[[example]]
+name = "sans_io_protocol"
+path = "examples/patterns/sans_io_protocol.rs"
+[[example]]
+name = "state_machine"
+path = "examples/patterns/state_machine.rs"
+[[example]]
+name = "tower_service_layer"
+path = "examples/patterns/tower_service_layer.rs"
+[[example]]
+name = "type_erasure_vtable"
+path = "examples/patterns/type_erasure_vtable.rs"
+[[example]]
+name = "typestate_builder"
+path = "examples/patterns/typestate_builder.rs"
+[[example]]
+name = "typestate_protocol"
+path = "examples/patterns/typestate_protocol.rs"
+[[example]]
+name = "undo_redo_editors"
+path = "examples/patterns/undo_redo_editors.rs"
+[[example]]
+name = "bench_harness"
+path = "examples/perf/bench_harness.rs"
+[[example]]
+name = "branches_vectorization"
+path = "examples/perf/branches_vectorization.rs"
+[[example]]
+name = "bufwriter"
+path = "examples/perf/bufwriter.rs"
+[[example]]
+name = "byte_order_keys"
+path = "examples/perf/byte_order_keys.rs"
+[[example]]
+name = "cache_locality"
+path = "examples/perf/cache_locality.rs"
+[[example]]
+name = "counting_allocator"
+path = "examples/perf/counting_allocator.rs"
+[[example]]
+name = "data_layout"
+path = "examples/perf/data_layout.rs"
+[[example]]
+name = "false_sharing"
+path = "examples/perf/false_sharing.rs"
+[[example]]
+name = "fast_hashing"
+path = "examples/perf/fast_hashing.rs"
+[[example]]
+name = "inlining_codegen"
+path = "examples/perf/inlining_codegen.rs"
+[[example]]
+name = "matmul_optimization"
+path = "examples/perf/matmul_optimization.rs"
+[[example]]
+name = "perf_checklist"
+path = "examples/perf/perf_checklist.rs"
+[[example]]
+name = "simd_intrinsics"
+path = "examples/perf/simd_intrinsics.rs"
+[[example]]
+name = "small_string_inline"
+path = "examples/perf/small_string_inline.rs"
+[[example]]
+name = "struct_packing"
+path = "examples/perf/struct_packing.rs"
+[[example]]
+name = "ann_evaluation_harness"
+path = "examples/search_vectors/ann_evaluation_harness.rs"
+[[example]]
+name = "autocomplete_engine"
+path = "examples/search_vectors/autocomplete_engine.rs"
+[[example]]
+name = "bloom_filter"
+path = "examples/search_vectors/bloom_filter.rs"
+[[example]]
+name = "dimensionality_reduction_jl_pca"
+path = "examples/search_vectors/dimensionality_reduction_jl_pca.rs"
+[[example]]
+name = "filtered_ann_hybrid_search"
+path = "examples/search_vectors/filtered_ann_hybrid_search.rs"
+[[example]]
+name = "hnsw_lite"
+path = "examples/search_vectors/hnsw_lite.rs"
+[[example]]
+name = "ivf_flat"
+path = "examples/search_vectors/ivf_flat.rs"
+[[example]]
+name = "knn_bruteforce"
+path = "examples/search_vectors/knn_bruteforce.rs"
+[[example]]
+name = "mini_vector_database"
+path = "examples/search_vectors/mini_vector_database.rs"
+[[example]]
+name = "product_quantization"
+path = "examples/search_vectors/product_quantization.rs"
+[[example]]
+name = "scalar_binary_quantization_rescoring"
+path = "examples/search_vectors/scalar_binary_quantization_rescoring.rs"
+[[example]]
+name = "spann_disk_ivf_lite"
+path = "examples/search_vectors/spann_disk_ivf_lite.rs"
+[[example]]
+name = "trigram_index"
+path = "examples/search_vectors/trigram_index.rs"
+[[example]]
+name = "vamana_diskann_lite"
+path = "examples/search_vectors/vamana_diskann_lite.rs"
+[[example]]
+name = "vector_distance_kernels_simd"
+path = "examples/search_vectors/vector_distance_kernels_simd.rs"
+[[example]]
+name = "vector_index_updates_persistence"
+path = "examples/search_vectors/vector_index_updates_persistence.rs"
+[[example]]
+name = "std_alloc_layout_global_allocator"
+path = "examples/std_tour/std_alloc_layout_global_allocator.rs"
+[[example]]
+name = "std_any_error_marker_traits"
+path = "examples/std_tour/std_any_error_marker_traits.rs"
+[[example]]
+name = "std_array_tuple_unit_never"
+path = "examples/std_tour/std_array_tuple_unit_never.rs"
+[[example]]
+name = "std_atomics_ordering_use_cases"
+path = "examples/std_tour/std_atomics_ordering_use_cases.rs"
+[[example]]
+name = "std_btree_binaryheap_ordered"
+path = "examples/std_tour/std_btree_binaryheap_ordered.rs"
+[[example]]
+name = "std_bufreader_bufwriter_patterns"
+path = "examples/std_tour/std_bufreader_bufwriter_patterns.rs"
+[[example]]
+name = "std_char_ascii_unicode"
+path = "examples/std_tour/std_char_ascii_unicode.rs"
+[[example]]
+name = "std_cmp_hash_default_traits"
+path = "examples/std_tour/std_cmp_hash_default_traits.rs"
+[[example]]
+name = "std_collections_choice_guide"
+path = "examples/std_tour/std_collections_choice_guide.rs"
+[[example]]
+name = "std_convert_from_into_asref"
+path = "examples/std_tour/std_convert_from_into_asref.rs"
+[[example]]
+name = "std_cow_borrow_toowned"
+path = "examples/std_tour/std_cow_borrow_toowned.rs"
+[[example]]
+name = "std_env_args_vars"
+path = "examples/std_tour/std_env_args_vars.rs"
+[[example]]
+name = "std_float_methods_total_order"
+path = "examples/std_tour/std_float_methods_total_order.rs"
+[[example]]
+name = "std_fmt_display_debug_deep"
+path = "examples/std_tour/std_fmt_display_debug_deep.rs"
+[[example]]
+name = "std_fs_file_operations_usecases"
+path = "examples/std_tour/std_fs_file_operations_usecases.rs"
+[[example]]
+name = "std_fs_watch_polling_tempdir_testing"
+path = "examples/std_tour/std_fs_watch_polling_tempdir_testing.rs"
+[[example]]
+name = "std_hash_collections_io_serialization_formats"
+path = "examples/std_tour/std_hash_collections_io_serialization_formats.rs"
+[[example]]
+name = "std_hashmap_entry_api_patterns"
+path = "examples/std_tour/std_hashmap_entry_api_patterns.rs"
+[[example]]
+name = "std_integer_methods_overflow"
+path = "examples/std_tour/std_integer_methods_overflow.rs"
+[[example]]
+name = "std_io_read_write_seek_traits"
+path = "examples/std_tour/std_io_read_write_seek_traits.rs"
+[[example]]
+name = "std_io_stdio_terminal_text_processing"
+path = "examples/std_tour/std_io_stdio_terminal_text_processing.rs"
+[[example]]
+name = "std_iterator_adapters_lazy"
+path = "examples/std_tour/std_iterator_adapters_lazy.rs"
+[[example]]
+name = "std_iterator_consumers"
+path = "examples/std_tour/std_iterator_consumers.rs"
+[[example]]
+name = "std_iterator_sources_custom"
+path = "examples/std_tour/std_iterator_sources_custom.rs"
+[[example]]
+name = "std_mem_replace_take_swap_forget"
+path = "examples/std_tour/std_mem_replace_take_swap_forget.rs"
+[[example]]
+name = "std_net_tcp_udp_ip_addr"
+path = "examples/std_tour/std_net_tcp_udp_ip_addr.rs"
+[[example]]
+name = "std_num_parsing_formatting"
+path = "examples/std_tour/std_num_parsing_formatting.rs"
+[[example]]
+name = "std_ops_traits_overloading"
+path = "examples/std_tour/std_ops_traits_overloading.rs"
+[[example]]
+name = "std_option_methods"
+path = "examples/std_tour/std_option_methods.rs"
+[[example]]
+name = "std_panic_process_exit_catch"
+path = "examples/std_tour/std_panic_process_exit_catch.rs"
+[[example]]
+name = "std_path_pathbuf_ffi_strings"
+path = "examples/std_tour/std_path_pathbuf_ffi_strings.rs"
+[[example]]
+name = "std_process_command_pipelines"
+path = "examples/std_tour/std_process_command_pipelines.rs"
+[[example]]
+name = "std_ptr_nonnull_slices_raw"
+path = "examples/std_tour/std_ptr_nonnull_slices_raw.rs"
+[[example]]
+name = "std_result_methods"
+path = "examples/std_tour/std_result_methods.rs"
+[[example]]
+name = "std_signals_env_exit_hooks_ctrlc"
+path = "examples/std_tour/std_signals_env_exit_hooks_ctrlc.rs"
+[[example]]
+name = "std_slice_chunks_windows_split"
+path = "examples/std_tour/std_slice_chunks_windows_split.rs"
+[[example]]
+name = "std_slice_search_sort_binary"
+path = "examples/std_tour/std_slice_search_sort_binary.rs"
+[[example]]
+name = "std_smart_pointers_use_cases"
+path = "examples/std_tour/std_smart_pointers_use_cases.rs"
+[[example]]
+name = "std_str_search_split_parse"
+path = "examples/std_tour/std_str_search_split_parse.rs"
+[[example]]
+name = "std_string_building_utf8"
+path = "examples/std_tour/std_string_building_utf8.rs"
+[[example]]
+name = "std_sync_primitives_use_cases"
+path = "examples/std_tour/std_sync_primitives_use_cases.rs"
+[[example]]
+name = "std_thread_scope_local_park"
+path = "examples/std_tour/std_thread_scope_local_park.rs"
+[[example]]
+name = "std_time_instant_duration_systemtime"
+path = "examples/std_tour/std_time_instant_duration_systemtime.rs"
+[[example]]
+name = "std_vec_vecdeque_methods"
+path = "examples/std_tour/std_vec_vecdeque_methods.rs"
+[[example]]
+name = "std_vecdeque_linkedlist_ring_buffers"
+path = "examples/std_tour/std_vecdeque_linkedlist_ring_buffers.rs"
+[[example]]
+name = "binary_format_parsing"
+path = "examples/text_and_parsing/binary_format_parsing.rs"
+[[example]]
+name = "bytecode_vm"
+path = "examples/text_and_parsing/bytecode_vm.rs"
+[[example]]
+name = "csv_state_machine"
+path = "examples/text_and_parsing/csv_state_machine.rs"
+[[example]]
+name = "edge_dsl_parser"
+path = "examples/text_and_parsing/edge_dsl_parser.rs"
+[[example]]
+name = "expression_parsing_three_ways"
+path = "examples/text_and_parsing/expression_parsing_three_ways.rs"
+[[example]]
+name = "json_parser"
+path = "examples/text_and_parsing/json_parser.rs"
+[[example]]
+name = "markdown_block_parser"
+path = "examples/text_and_parsing/markdown_block_parser.rs"
+[[example]]
+name = "ndjson_serde"
+path = "examples/text_and_parsing/ndjson_serde.rs"
+[[example]]
+name = "parser_combinators"
+path = "examples/text_and_parsing/parser_combinators.rs"
+[[example]]
+name = "pratt_parser"
+path = "examples/text_and_parsing/pratt_parser.rs"
+[[example]]
+name = "zero_copy_lexer"
+path = "examples/text_and_parsing/zero_copy_lexer.rs"
+[[example]]
+name = "ffi_c_interop"
+path = "examples/unsafe_ffi/ffi_c_interop.rs"
+[[example]]
+name = "maybeuninit_fixedvec"
+path = "examples/unsafe_ffi/maybeuninit_fixedvec.rs"
+[[example]]
+name = "nonnull_linked_list"
+path = "examples/unsafe_ffi/nonnull_linked_list.rs"
+[[example]]
+name = "pin_projection"
+path = "examples/unsafe_ffi/pin_projection.rs"
+[[example]]
+name = "repr_layout_ffi"
+path = "examples/unsafe_ffi/repr_layout_ffi.rs"
+[[example]]
+name = "unsafe_basics"
+path = "examples/unsafe_ffi/unsafe_basics.rs"
+[[example]]
+name = "unsafecell_cells"
+path = "examples/unsafe_ffi/unsafecell_cells.rs"
+[[example]]
+name = "auth_basic_bearer_jwt"
+path = "examples/web/auth_basic_bearer_jwt.rs"
+[[example]]
+name = "axum_errors"
+path = "examples/web/axum_errors.rs"
+[[example]]
+name = "axum_idempotency"
+path = "examples/web/axum_idempotency.rs"
+[[example]]
+name = "axum_middleware"
+path = "examples/web/axum_middleware.rs"
+[[example]]
+name = "axum_router_state"
+path = "examples/web/axum_router_state.rs"
+[[example]]
+name = "axum_sse_replay"
+path = "examples/web/axum_sse_replay.rs"
+[[example]]
+name = "backend_authz_rbac_abac_policies"
+path = "examples/web/backend_authz_rbac_abac_policies.rs"
+[[example]]
+name = "backend_password_accounts_totp_mfa"
+path = "examples/web/backend_password_accounts_totp_mfa.rs"
+[[example]]
+name = "backend_request_validation_extractors"
+path = "examples/web/backend_request_validation_extractors.rs"
+[[example]]
+name = "cookies_sessions_csrf"
+path = "examples/web/cookies_sessions_csrf.rs"
+[[example]]
+name = "cors_security_headers"
+path = "examples/web/cors_security_headers.rs"
+[[example]]
+name = "http_caching_conditional"
+path = "examples/web/http_caching_conditional.rs"
+[[example]]
+name = "http_client_resilience"
+path = "examples/web/http_client_resilience.rs"
+[[example]]
+name = "http_client_server_loopback"
+path = "examples/web/http_client_server_loopback.rs"
+[[example]]
+name = "jsonrpc_graphql_dataloader"
+path = "examples/web/jsonrpc_graphql_dataloader.rs"
+[[example]]
+name = "multipart_forms_uploads"
+path = "examples/web/multipart_forms_uploads.rs"
+[[example]]
+name = "oauth2_pkce_flow"
+path = "examples/web/oauth2_pkce_flow.rs"
+[[example]]
+name = "rest_api_patterns"
+path = "examples/web/rest_api_patterns.rs"
+[[example]]
+name = "reverse_proxy_load_balancer"
+path = "examples/web/reverse_proxy_load_balancer.rs"
+[[example]]
+name = "security_pitfalls_secure_coding"
+path = "examples/web/security_pitfalls_secure_coding.rs"
+[[example]]
+name = "webhooks_signatures"
+path = "examples/web/webhooks_signatures.rs"
+# END GENERATED EXAMPLES

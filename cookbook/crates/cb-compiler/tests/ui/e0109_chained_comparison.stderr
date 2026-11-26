@@ -1,0 +1,20 @@
+error[E0304]: cannot apply `<` to `bool` and `int`
+ --> e0109_chained_comparison.peb:2:13
+  |
+2 |     let b = 1 < 2 < 3;
+  |             ^^^^^^^^^ no `<` for `bool` and `int`
+  |
+  = help: ordering works on two `int`s or two `str`s
+
+error[E0109]: comparison operators cannot be chained
+ --> e0109_chained_comparison.peb:2:19
+  |
+2 |     let b = 1 < 2 < 3;
+  |               -   ^ chained comparison
+  |               |
+  |               first comparison
+  |
+  = help: use `&&` to combine comparisons, or parenthesise explicitly
+  = help: parenthesise the first comparison
+
+error: aborting due to 2 previous errors

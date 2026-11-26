@@ -1,0 +1,86 @@
+title = "A miniature tokio"
+module = "Complete projects"
+module_order = 13
+chapter = "Capstones"
+chapter_order = 1
+order = 650
+kind = "capstone"
+lede = "Tasks, work-stealing scheduler, timer driver, sync primitives, mio reactor"
+level = "capstone"
+code = ["examples/capstones/mini_async_runtime.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>understanding what tokio/smol do under <code>#[tokio::main]</code></li><li>debugging lost wakeups</li><li>starvation</li><li>cancellation bugs</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Architecture** '''text
+
+```text
+user futures ──spawn──▶ Arc<Task>{state, Mutex<Option<BoxFuture>>} ──▶ JoinHandle<T> (slot + waker)
+                                │ wake() = CAS state machine, schedules at most once
+                                ▼
+┌──────────── Scheduler trait ───────────────┐      ┌───── Timer (BinaryHeap<deadline,seq>) ─────┐
+│ LocalQueue (VecDeque, block_on drives it)  │      │ Clock: Real(Instant) | Manual(AtomicU64)   │
+│ MtShared: Injector + N x (Worker, Stealer) │◀wake─│ driver thread sleeps until next deadline   │
+│   idle workers park on Condvar             │      └────────────────────────────────────────────┘
+└────────────────────────────────────────────┘      ┌───── Reactor (mio::Poll thread) ───────────┐
+      worker i: local.pop → injector → steal ◀──wake─│ token → IoState{epoch, waker} (read/write) │
+                                                     └────────────────────────────────────────────┘
+```
+
+'''
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+&#126;1000 lines that reproduce the moving parts of an async runtime using only `Future`/`Waker`/`Wake`, crossbeam deques, parking_lot and mio. No `unsafe` is needed at all: `Wake` for `Arc<Task>` replaces the raw-vtable waker and `Pin<Box<..>>` replaces pin projections.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+every `.await` bottoms out in "store my waker somewhere, return Pending, someone calls wake()". Building the somewhere (timer heap, reactor, channel slot, join slot) shows why wakeups get lost and why cancellation is "drop".
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+- Task state machine **idle** -> **scheduled** -> **running** -> (**notified**) -> **idle** &#124; **complete**. **Lost wakeup**: if `wake` ignored a **running** task and the poll then returned Pending, the event that woke us would be forgotten forever; instead a wake during **running** sets **notified** and the poller re-schedules after Pending.
+
+   **Double schedule**: two threads waking an **idle** task must not both enqueue it (two workers would poll the same future concurrently: UB in real runtimes, a data race here); only the CAS winner of **idle**->**scheduled** enqueues. A `polling` flag asserts exclusivity at run time.
+- Wakers are stored **before** re-checking the condition (timer fired? epoch changed? queue empty?), the standard register-then-recheck pattern that closes the race between "check" and "park".
+- Edge-triggered IO: mio reports readiness once per transition, so the reactor bumps an epoch counter and wakes; the consumer always **tries** the syscall first and only on WouldBlock registers a waker and re-checks the epoch.
+- Cancellation = dropping the future (destructors run); `abort()` just marks the task so its next run drops it.
+- Cancellation safety: `select2`/`timeout` drop the loser. That is only safe for futures that lose no data when dropped mid-await: `mpsc::recv`, `Notify::notified`, `Sleep` are safe; a half-finished `write_all` is **not** (a prefix was already written), and `send` hands the value back inside the error only if it was never enqueued.
+- Known simplification: tasks parked forever at shutdown form an Arc cycle (task -> future -> waker -> task); tokio avoids it with an owned-task list. All tests here finish their tasks, and a live-task counter proves nothing leaks.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>tokio (multi-thread work-stealing scheduler, mio-backed IO driver, hierarchical timer wheel, <code>JoinHandle</code>, oneshot/mpsc/Notify/Semaphore)</li><li>async-std and smol (global executor + <code>async-io</code> reactor, <code>smol::block_on</code>)</li><li>embassy (no_std executor with static tasks and an interrupt-driven timer queue instead of threads)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://tokio.rs/blog/2019-10-scheduler" target="_blank" rel="noreferrer">https://tokio.rs/blog/2019-10-scheduler</a></li><li><a href="https://github.com/smol-rs/smol" target="_blank" rel="noreferrer">https://github.com/smol-rs/smol</a></li><li><a href="https://rust-lang.github.io/async-book/" target="_blank" rel="noreferrer">https://rust-lang.github.io/async-book/</a></li></ul>
+"""
+
+[[sources]]
+title = "tokio.rs/blog/2019-10-scheduler"
+url = "https://tokio.rs/blog/2019-10-scheduler"
+
+[[sources]]
+title = "github.com/smol-rs/smol"
+url = "https://github.com/smol-rs/smol"
+
+[[sources]]
+title = "rust-lang.github.io/async-book"
+url = "https://rust-lang.github.io/async-book/"

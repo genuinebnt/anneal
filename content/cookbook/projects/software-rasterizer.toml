@@ -1,0 +1,52 @@
+title = "A complete software rasterizer"
+module = "Complete projects"
+module_order = 13
+chapter = "Graphics"
+chapter_order = 2
+order = 667
+kind = "recipe"
+lede = "Transforms, near-plane clipping, edge functions, z-buffer, shading, textures."
+level = "advanced"
+code = ["examples/graphics/software_rasterizer.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>understanding what a GPU does</li><li>software fallbacks</li><li>CPU previews</li><li>tools that need deterministic pixels</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Pipeline**: model -> world -> view -> projection gives **clip** space (x,y,z,w). Anything with z &lt; -w is behind the near plane, so each triangle is clipped against that plane with **SUTHERLAND-HODGMAN in clip space** (before dividing by w, because w can be zero or negative there).
+
+Then the **perspective divide** (x/w, y/w, z/w) gives NDC, and the VIEWPORT transform maps NDC to pixels (y flipped). Vertices are snapped to 1/256 pixel integers so everything below is exact.
+
+RASTERISATION: the **edge function** E(a,b,p) = (b-a) x (p-a) is positive on one side of edge a->b. A pixel centre is inside when all three edge functions are >= 0, and E_i / area are the **barycentric** weights (they sum to exactly 1). **Top-left fill rule**: a pixel centre exactly ON an edge is drawn only if that edge is a top or left edge.
+
+For two triangles sharing an edge, the edge is top/left for exactly one of them (directions are opposite), so every pixel is covered exactly once: no gaps, no double blending. The test below proves it on 5000 random quads.
+
+**Depth**: z/w is affine in screen space, so it is interpolated linearly and compared against the Z-BUFFER (smaller wins). **Perspective-correct** attributes: u/w and 1/w are affine in screen space, u itself is not. So interpolate u/w and 1/w and divide: u = (sum l_i u_i/w_i) / (sum l_i / w_i).
+
+Plain affine interpolation makes textures swim and bend. **Shading**: flat (one colour per triangle), Gouraud (light at vertices, interpolate colour), Phong (interpolate the normal, light every pixel, so highlights appear inside triangles). Textures: nearest or bilinear, repeat or clamp.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>games and engines (the same stages run on GPUs)</li><li>CAD/CAE viewers</li><li>film previs</li><li>GIS terrain viewers</li><li>medical-imaging mesh viewers</li><li>procedural-generation previews</li><li>software renderers such as the tinyrenderer tutorial</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://github.com/ssloy/tinyrenderer/wiki> and <https://www.redblobgames.com/>
+"""
+
+[[sources]]
+title = "github.com/ssloy/tinyrenderer/wiki"
+url = "https://github.com/ssloy/tinyrenderer/wiki"
+
+[[sources]]
+title = "redblobgames.com"
+url = "https://www.redblobgames.com/"

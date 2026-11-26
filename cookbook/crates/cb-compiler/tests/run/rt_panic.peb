@@ -1,0 +1,2 @@
+fn check(n: int) -> int { if n > 2 { panic("too big: " + to_str(n)) } else { n } }
+fn main() { println(to_str(check(1))); println(to_str(check(5))); }

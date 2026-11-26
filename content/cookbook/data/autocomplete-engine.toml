@@ -1,0 +1,59 @@
+title = "Type-ahead autocomplete"
+module = "Search and vectors"
+module_order = 9
+chapter = "Text search and autocomplete"
+chapter_order = 1
+order = 462
+kind = "recipe"
+lede = "Trie with cached top-k, decayed scores, bounded fuzzy search."
+level = "advanced"
+code = ["examples/search_vectors/autocomplete_engine.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>search boxes</li><li><strong>Ide</strong> completion</li><li>command palettes</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+given a typed prefix, return the k best completions, ranked by "how popular lately". **Why** a cached top-k per trie node: a plain trie must walk the whole subtree under the prefix and sort it (cost grows with the number of matching words, bad for the 1-letter prefix "a").
+
+If every node stores its own best-k word ids, a query is O(prefix length + k): walk down, clone the list.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+- Trie nodes live in a `Vec` arena and refer to children by index (no Box / Rc / lifetimes).
+- Score = sum over uses of 2&#94;(t / half_life). A word's score at time `now` is that sum times 2&#94;(-now/half_life); the second factor is **identical** for all words, so the **order** never changes as time passes. We store the growing sum and never rescan to "apply decay": the cached top-k stays valid.
+
+   (Floats overflow near t/half_life &#126; 1000; a real system rebases periodically.)
+- `record(word)` only ever **increases** one word's weight, so each node on its path needs just one fix: insert/re-sort that word into its small list and truncate to k. Everyone else is unchanged.
+- Ordering is total and deterministic: higher weight first, ties broken by the word itself.
+- Fuzzy: walk the trie carrying one Levenshtein DP row (dp_edit_distance) per node. A node whose row's last cell is &lt;= budget means "the typed text is within budget of this path", so its whole subtree matches and we take that node's cached top-k instead of descending.
+
+   A node whose row minimum exceeds the budget can never recover (row minima never decrease along a path), so the whole subtree is pruned.
+- A brute-force scan over all words is the oracle for both modes.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>search-box suggestions</li><li><strong>Ide</strong>/code completion</li><li>shell and command-palette ranking (frecency)</li><li>"did you mean" prefix matching</li><li>phone keyboards</li><li>address entry. Per-node top-k caches are the standard trick for fast prefix suggestion</li><li>frequency with exponential decay is the usual "frecency" idea</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Trie> and <https://en.wikipedia.org/wiki/Levenshtein_distance>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Trie"
+url = "https://en.wikipedia.org/wiki/Trie"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Levenshtein_distance"
+url = "https://en.wikipedia.org/wiki/Levenshtein_distance"

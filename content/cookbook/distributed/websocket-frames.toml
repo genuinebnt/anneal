@@ -1,0 +1,46 @@
+title = "WebSocket framing"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Networking and protocols"
+chapter_order = 3
+order = 542
+kind = "recipe"
+lede = "WebSocket framing (RFC 6455): handshake accept key (SHA-1 + base64), frames, masking, fragmentation."
+level = "intermediate"
+code = ["examples/networking/websocket_frames.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>chat/live-update servers</li><li>game and trading feeds</li><li>proxies</li><li>any full-duplex message protocol over TCP</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+after an HTTP/1.1 `Upgrade: websocket` handshake the TCP stream carries **frames**. A frame is `FIN|RSV(3)|opcode(4)`, `MASK|len7`, an optional 16-bit (len7 = 126) or 64-bit (127) big-endian length, an optional 4-byte masking key, then the payload. Opcodes: 0 continuation, 1 text, 2 binary, 8 close, 9 ping, 10 pong.
+
+**Handshake**: the server proves it understood the upgrade by returning `base64(SHA-1(client_key + GUID))` in `Sec-WebSocket-Accept` (RFC 6455 section 1.3). It is not security; it stops a non-WebSocket server (or a confused cache) from being tricked into "agreeing". SHA-1 and base64 are written from scratch below and checked against the RFC example.
+
+**Masking**: every client-to-server frame **must** be masked with a fresh random 4-byte key: `payload[i] ^= key[i % 4]`. XOR is its own inverse, so mask and unmask are the same function. The purpose is to stop a malicious page from choosing bytes that look like HTTP to a buggy transparent proxy (cache poisoning).
+
+Server frames are **not** masked; a server must close on an unmasked client frame and vice versa. **Fragmentation**: a message may be split across frames (first frame has the data opcode, later ones are continuations, the last has FIN). Control frames (ping/pong/close) may be interleaved **between** fragments, must have FIN and at most 125 payload bytes.
+
+Text messages must be valid UTF-8 (we check incrementally and fail fast on a definitely-bad prefix). **Hostile input**: the declared length is attacker-controlled, so it is compared to `max_payload` **before** anything is allocated; non-minimal lengths, RSV bits, unknown opcodes and bad close codes are protocol errors that map to a close code.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>browser-to-server live channels (chat, notifications, collaborative editing, dashboards)</li><li>market-data and game-state streams</li><li>GraphQL subscriptions</li><li>reverse proxies that forward Upgrade connections</li><li>test clients. Rust production crates: tungstenite / tokio-tungstenite</li><li>fastwebsockets</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://datatracker.ietf.org/doc/html/rfc6455>
+"""
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc6455"
+url = "https://datatracker.ietf.org/doc/html/rfc6455"

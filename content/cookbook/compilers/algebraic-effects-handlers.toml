@@ -1,0 +1,66 @@
+title = "Algebraic effects and handlers, three ways"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Types and semantics"
+chapter_order = 4
+order = 617
+kind = "recipe"
+lede = "CPS with delimited continuations, a free monad, and a stack machine."
+level = "advanced"
+code = ["examples/compilers_runtimes/algebraic_effects_handlers.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>language runtimes and libraries that need user-defined control flow: exceptions</li><li>generators</li><li>async</li><li>backtracking</li><li>dependency injection</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>OCaml 5 effect handlers (the base of its schedulers; its continuations are one-shot)</li><li>the Eff and Koka research languages</li><li>and</li><li>as a restricted relative</li><li>Rust's <code>async</code>/<code>.await</code> (a function that can suspend and be resumed once by an executor). Course: Plotkin and Pretnar</li><li>"Handlers of algebraic effects"</li><li>Dybvig</li><li>Peyton Jones and Sabry</li><li>"A monadic framework for delimited continuations"</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The idea**. `(perform op v)` says **what** is wanted and nothing about how. `(handle body (return x e) (op p k e') ...)` gives the meaning: when `body` performs `op`, the clause runs with the argument `p` and the continuation `k`: the rest of `body` UP TO this handler (a **delimited** continuation).
+
+The clause may ignore `k` (exceptions), call it once (state, generators, async) or many times (nondeterminism). Handlers here are **deep**: calling `k` puts the same handler back around the resumed code. An op the handler does not mention passes through to the next one out.
+
+**Three implementations** of that one definition, compared on 500 random programs (result, printed output and errors): (a) CPS + METACONTINUATION. The continuation `k` is a Rust closure that runs "to the end of the current handler"; a separate linked list holds one frame per handler with the continuation outside it.
+
+`perform` cuts that list at the handling frame; resuming pushes the cut piece onto the caller's list. Everything is trampolined. (b) **free monad**, in direct Rust.
+
+Evaluation returns a **data** description: `Pure(v)` or `Op(name, arg, rest)`. `bind` appends to `rest`; a handler is a fold over this tree. Shortest to write.
+
+It recurses on the host stack, and each `perform` is re-wrapped by every enclosing `bind`, so deeply left-nested code is quadratic. (c) **stack machine**. The continuation is an explicit `Vec<Frame>`.
+
+A handler is a marker frame; `perform` splits the vector at the marker and the cut-off segment IS the continuation. Multi-shot: copy the segment on each resume. **One-shot** mode moves it instead and rejects a second resume.
+
+The machine also reports an op nobody handles to the **host** as a suspension that Rust code can keep, copy and resume. **What rust can and cannot do** (last section). An `async fn` is compiled to a state machine, and `.await` is a suspension point; the executor is a handler that resumes it.
+
+A future is one-shot: it is polled through `Pin<&mut Self>`, resumes by mutating itself, and in general is not `Clone`, so you cannot run "the rest of the function" twice. Nondeterminism by resuming twice is therefore not expressible with `.await`. The yield point is also fixed in the type: only the executor that polls the future "handles" it.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Plotkin and Pretnar (2009, title only)</li><li>Dybvig, Peyton Jones and Sabry (2007, title only)</li><li>Pretnar, "An introduction to algebraic effects and handlers" (title only)</li><li>OCaml manual <a href="https://ocaml.org/manual/effects.html" target="_blank" rel="noreferrer">https://ocaml.org/manual/effects.html</a></li><li>Eff <a href="https://www.eff-lang.org/" target="_blank" rel="noreferrer">https://www.eff-lang.org/</a></li><li>Koka <a href="https://koka-lang.github.io/koka/doc/index.html" target="_blank" rel="noreferrer">https://koka-lang.github.io/koka/doc/index.html</a></li><li><a href="https://en.wikipedia.org/wiki/Delimited_continuation" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Delimited_continuation</a></li></ul>
+"""
+
+[[sources]]
+title = "ocaml.org/manual/effects.html"
+url = "https://ocaml.org/manual/effects.html"
+
+[[sources]]
+title = "eff-lang.org"
+url = "https://www.eff-lang.org/"
+
+[[sources]]
+title = "koka-lang.github.io/koka/doc/index.html"
+url = "https://koka-lang.github.io/koka/doc/index.html"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Delimited_continuation"
+url = "https://en.wikipedia.org/wiki/Delimited_continuation"

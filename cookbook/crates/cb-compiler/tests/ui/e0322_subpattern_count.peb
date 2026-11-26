@@ -1,0 +1,10 @@
+enum E { Pair(int, int) }
+fn main() {
+    let e = E::Pair(1, 2);
+    match e {
+        E::Pair(a) => println(to_str(a)),
+    }
+    match (1, 2, 3) {
+        (a, b) => println(to_str(a + b)),
+    }
+}

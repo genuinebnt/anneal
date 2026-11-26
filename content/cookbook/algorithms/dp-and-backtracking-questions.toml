@@ -1,0 +1,76 @@
+title = "Dynamic programming and backtracking"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Dynamic programming, greedy and search"
+chapter_order = 5
+order = 200
+kind = "recipe"
+lede = "The most-asked coding questions, answered in Rust."
+level = "advanced"
+code = ["examples/interview/dp_and_backtracking_questions.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+preparing for coding interviews; recognising the DP state or the choose/explore/unchoose shape behind a question.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>phone screens and on-sites (NeetCode / Blind 75 / Grind 75 style)</li><li>scheduling and packing</li><li>text diffing</li><li>constraint solving</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://www.techinterviewhandbook.org/grind75" target="_blank" rel="noreferrer">https://www.techinterviewhandbook.org/grind75</a></li><li><a href="https://neetcode.io/practice" target="_blank" rel="noreferrer">https://neetcode.io/practice</a></li><li><a href="https://interviewing.io/rust-interview-questions" target="_blank" rel="noreferrer">https://interviewing.io/rust-interview-questions</a></li><li><a href="https://cp-algorithms.com/" target="_blank" rel="noreferrer">https://cp-algorithms.com/</a></li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Question bank** (numbering restarts in each interview file; a generator reads these lines) Q1. Climbing Stairs and Min Cost Climbing Stairs (tabulation vs memoisation vs rolling variables). [Easy] [asked: very common] Q2. House Robber I and II (linear and circular). [Medium] [asked: very common] Q3.
+
+Coin Change (fewest coins) and Coin Change II (number of ways: combinations vs permutations). [Medium] [asked: very common] Q4. Longest Increasing Subsequence in O(n&#94;2) and O(n log n). [Medium] [asked: very common] Q5. Longest Common Subsequence (2-D table, rolling rows, memoisation, reconstruction). [Medium] [asked: very common] Q6.
+
+Edit Distance (Levenshtein). [Medium] [asked: very common] Q7. Word Break. [Medium] [asked: very common] Q8. Decode Ways. [Medium] [asked: very common] Q9.
+
+Unique Paths I and II and Minimum Path Sum (grid DP). [Medium] [asked: very common] Q10. Maximal Square. [Medium] [asked: common] Q11. 0/1 Knapsack, Partition Equal Subset Sum and Target Sum. [Medium] [asked: very common] Q12. Longest Palindromic Subsequence. [Medium] [asked: common] Q13.
+
+Best Time to Buy and Sell Stock with Cooldown (state machine). [Medium] [asked: common] Q14. Jump Game I and II. [Medium] [asked: very common] Q15. Maximum Product Subarray as a DP table. [Medium] [asked: common] Q16.
+
+Regular Expression Matching and Wildcard Matching (2-D DP). [Hard] [asked: common] Q17. Interleaving String and Distinct Subsequences. [Hard] [asked: occasional] Q18. Burst Balloons (interval DP). [Hard] [asked: common] Q19.
+
+Egg Dropping (O(k n&#94;2) table and the O(k log n) idea). [Hard] [asked: common] Q20. Triangle and Perfect Squares. [Medium] [asked: common] Q21. Subsets I and II (with duplicates). [Medium] [asked: very common] Q22.
+
+Permutations I and II (with duplicates). [Medium] [asked: very common] Q23. Combination Sum I and II. [Medium] [asked: very common] Q24. Generate Parentheses and Letter Combinations of a Phone Number. [Medium] [asked: very common] Q25.
+
+Palindrome Partitioning and Restore IP Addresses. [Medium] [asked: common] Q26. N-Queens (count with bitmasks, and boards). [Hard] [asked: common] Q27. Word Search (grid backtracking with in-place marking). [Medium] [asked: very common] Q28.
+
+Sudoku Solver (bitmasks + minimum remaining values). [Hard] [asked: common] Q29. Partition to K Equal Sum Subsets. [Medium] [asked: common]
+
+Every question: statement, approach (brute force then optimal, complexity, pattern), Rust wrinkle, the solution(s), a brute-force oracle with 2000 seeded xorshift cases plus edge cases (fewer for the heavyweight sudoku), and what the interviewer is really testing.
+
+Questions 1, 3, 5, 6, 9 and 11 each implement tabulation, memoisation with a `HashMap`, memoisation with a `Vec<Option<_>>` and a space-optimised rolling array, and assert they all agree.
+
+**DP recipe** (say it out loud in the interview): (1) define the **state** in words ("best[i] = ... using the first i items"), (2) write the **transition**, (3) base cases, (4) iteration **order** (which neighbours must be ready), (5) the answer cell, (6) optimise space only after it is correct (a row depends only on the previous row -> keep one or two rows).
+
+**Backtracking recipe**: **choose** (push), **explore** (recurse), UNCHOOSE (pop); prune early; dedupe duplicates by sorting and skipping equal siblings (`j > start && v[j] == v[j - 1]`), never by hashing results.
+"""
+
+[[sources]]
+title = "techinterviewhandbook.org/grind75"
+url = "https://www.techinterviewhandbook.org/grind75"
+
+[[sources]]
+title = "neetcode.io/practice"
+url = "https://neetcode.io/practice"
+
+[[sources]]
+title = "interviewing.io/rust-interview-questions"
+url = "https://interviewing.io/rust-interview-questions"
+
+[[sources]]
+title = "cp-algorithms.com"
+url = "https://cp-algorithms.com/"

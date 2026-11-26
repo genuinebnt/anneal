@@ -1,0 +1,76 @@
+title = "I/O stdio terminal text processing (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "Processes, signals and networking"
+chapter_order = 8
+order = 106
+kind = "recipe"
+lede = "stdin, stdout, stderr and terminal behaviour: writing command-line filters that are correct in a pipe and testable without one."
+level = "intermediate"
+code = ["examples/std_tour/std_io_stdio_terminal_text_processing.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>CLIs</li><li>log processors</li><li><code>cmd | filter</code> tools</li><li>anything printing progress</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>read all of stdin or stream it by line</li><li>lock and buffer stdout for speed</li><li>diagnostics on stderr</li><li>colour only on a terminal</li><li>exit quietly when <code>| head</code> closes the pipe</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>std::io::stdin</code></li><li><code>Stdin::lock</code></li><li><code>Stdin::read_line</code></li><li><code>Stdin::lines</code></li><li><code>std::io::read_to_string</code></li><li><code>std::io::stdout</code></li><li><code>Stdout::lock</code></li><li><code>std::io::stderr</code></li><li><code>Write::flush</code></li><li><code>Write::write_all</code></li><li><code>writeln!</code></li><li><code>print!</code></li><li><code>println!</code></li><li><code>eprintln!</code></li><li><code>IsTerminal::is_terminal</code></li><li><code>BufRead::read_until</code></li><li><code>BufRead::lines</code></li><li><code>BufWriter::new</code></li><li><code>std::io::Error::kind</code></li><li><code>ErrorKind::BrokenPipe</code></li><li><code>ErrorKind::InvalidData</code></li><li><code>std::process::ExitCode</code></li><li><code>std::env::args_os</code></li><li><code>std::env::var_os</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/io/fn.stdin.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/io/fn.stdin.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+std: `stdin`, `stdout`, `stderr`, their locks, `IsTerminal`, `BufWriter`, `BufRead`, the print macros, `ExitCode`. core: `write!`/`writeln!` and `core::fmt::Write` (formatting into Strings; no I/O).
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+terminal size, raw mode, key events and cursor control beyond raw escape codes (not in std: see `crossterm`); display width of Unicode text (not in std: see `unicode-width`); argument parsing (see clap examples); BufWriter internals (see `std_bufreader_bufwriter_patterns`).
+
+**Not exercised**: the `is_terminal() == true` path needs a real terminal; Windows console behaviour was not run.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Read all input</td><td><code>io::read_to_string(io::stdin())?</code></td></tr><tr><td>Stream lines</td><td><code>for line in io::stdin().lock().lines()</code></td></tr><tr><td>One interactive answer</td><td><code>print prompt, flush(), read_line(&amp;mut s); return value 0 means EOF; s keeps the &#92;n</code></td></tr><tr><td>Non-UTF-8 input</td><td><code>read_until(b'&#92;n', &amp;mut vec) (lines() fails with InvalidData)</code></td></tr><tr><td>Many lines out, fast</td><td><code>let mut out = BufWriter::new(io::stdout().lock()); then writeln!(out, ..)? and out.flush()?</code></td></tr><tr><td>Errors, logs, progress</td><td><code>stderr (eprintln!): it is unbuffered and does not pollute the pipe</code></td></tr><tr><td>Colour / progress bars</td><td><code>only if stream.is_terminal() (and NO_COLOR unset)</code></td></tr><tr><td>Survive <code>| head</code></td><td><code>use writeln! (not println!) and treat BrokenPipe as a normal end</code></td></tr><tr><td>Exit code</td><td><code>fn main() -&gt; ExitCode</code></td></tr><tr><td>Make a filter testable</td><td><code>fn run(input: impl BufRead, out: &amp;mut impl Write) -&gt; io::Result&lt;..&gt; FACTS: println! PANICS if the write fails; Rust ignores SIGPIPE at startup, so a closed pipe shows up as an Err, not a silent signal death. stdout is line buffered even when redirected. The stdin lock is NOT re-entrant (calling stdin().read_line while holding stdin().lock() on the same thread deadlocks); the stdout and stderr locks are re-entrant.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/io/index.html#standard-input-and-output" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/io/index.html#standard-input-and-output</a></li><li>Command Line Applications in Rust <a href="https://rust-cli.github.io/book/" target="_blank" rel="noreferrer">https://rust-cli.github.io/book/</a></li><li><a href="https://no-color.org/" target="_blank" rel="noreferrer">https://no-color.org/</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/io/fn.stdin.html"
+url = "https://doc.rust-lang.org/std/io/fn.stdin.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/io/index.html#standard-input-and-output"
+url = "https://doc.rust-lang.org/std/io/index.html#standard-input-and-output"
+
+[[sources]]
+title = "rust-cli.github.io/book"
+url = "https://rust-cli.github.io/book/"
+
+[[sources]]
+title = "no-color.org"
+url = "https://no-color.org/"

@@ -1,0 +1,60 @@
+title = "Open addressing map"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Hashing and probabilistic structures"
+chapter_order = 1
+order = 162
+kind = "recipe"
+lede = "an open-addressing hash map with linear probing, Robin Hood displacement and backward-shift deletion."
+level = "advanced"
+code = ["examples/data_structures/open_addressing_map.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+understanding how fast flat hash tables work; building specialised maps (interners, symbol tables).
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+`OpenMap<K, V, S>`: one flat `Vec<Option<Slot>>`, no per-bucket allocation, no tombstones, generic over `K: Hash + Eq` and any `BuildHasher`.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+chaining chases pointers; open addressing keeps probes in adjacent cache lines. Plain linear probing suffers from long unlucky probe runs.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+- capacity is a power of two, so `hash & mask` replaces `%`. We resize (double) when load would exceed 7/8.
+- Robin Hood: each slot remembers its hash, hence its "distance from home". While inserting, if the resident is closer to home than the newcomer ("richer"), they swap and we keep inserting the evicted one.
+
+   This equalises probe lengths (low variance), and lets lookups stop early: once we meet a resident whose distance is smaller than ours, the key cannot be further on.
+- Backward-shift deletion: after removing, pull following entries one slot back until an empty slot or an entry already at home. This keeps the Robin Hood invariant without tombstones, so lookups never degrade after many deletes. Verified by a differential test against std's `HashMap` (20k seeded random operations) and by probe-length statistics.
+
+   A weak hash shows why the hasher matters far more for open addressing than for chaining.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Robin Hood hashing was used by older versions of Rust std HashMap (hashbrown, its replacement, instead uses SIMD group probing)</li><li>symbol tables</li><li>interners</li><li>in-memory indexes</li><li>game/engine entity maps where cache behaviour matters</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Hash_table> and <https://github.com/rust-lang/hashbrown>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Hash_table"
+url = "https://en.wikipedia.org/wiki/Hash_table"
+
+[[sources]]
+title = "github.com/rust-lang/hashbrown"
+url = "https://github.com/rust-lang/hashbrown"

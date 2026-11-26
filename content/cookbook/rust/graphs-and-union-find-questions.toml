@@ -1,0 +1,74 @@
+title = "Graphs and union find questions"
+module = "Worked questions"
+module_order = 14
+chapter = "Coding and design questions"
+chapter_order = 2
+order = 677
+kind = "recipe"
+lede = "graphs, grids, BFS/DFS, union-find, shortest paths and MST: the most-asked coding questions in Rust."
+level = "advanced"
+code = ["examples/interview/graphs_and_union_find_questions.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+preparing for coding interviews; recognising the graph model (grid as graph, implicit state graph, union-find, Dijkstra) behind a question.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>phone screens and on-sites (NeetCode / Blind 75 / Grind 75 style)</li><li>routing</li><li>connectivity</li><li>clustering</li><li>puzzle solvers</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://www.techinterviewhandbook.org/grind75" target="_blank" rel="noreferrer">https://www.techinterviewhandbook.org/grind75</a></li><li><a href="https://neetcode.io/practice" target="_blank" rel="noreferrer">https://neetcode.io/practice</a></li><li><a href="https://interviewing.io/rust-interview-questions" target="_blank" rel="noreferrer">https://interviewing.io/rust-interview-questions</a></li><li><a href="https://cp-algorithms.com/" target="_blank" rel="noreferrer">https://cp-algorithms.com/</a></li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**OMITTED on purpose** (these are the learner's own exercises elsewhere): topological sort / Kahn's algorithm, Course Schedule I/II, Alien Dictionary, cycle detection in dependency graphs, critical path and longest path in a task DAG. (Cycle detection in **undirected** graphs appears only as union-find: Redundant Connection and Graph Valid Tree.)
+
+**Question bank** (numbering restarts in each interview file; a generator reads these lines) Q1. Number of Islands (DFS with an explicit stack, BFS, union-find) and Max Area of Island. [Medium] [asked: very common] Q2. Flood Fill. [Easy] [asked: common] Q3.
+
+Clone Graph (arena indices and the `Rc<RefCell<..>>` version). [Medium] [asked: very common] Q4. Rotting Oranges (multi-source BFS by levels). [Medium] [asked: very common] Q5. 01 Matrix (BFS from all zeros) and Walls and Gates. [Medium] [asked: common] Q6. Pacific Atlantic Water Flow (reverse search from the borders). [Medium] [asked: common] Q7.
+
+Surrounded Regions. [Medium] [asked: common] Q8. Word Ladder (BFS and bidirectional BFS). [Hard] [asked: very common] Q9. Shortest Path in a Binary Matrix (8 directions). [Medium] [asked: common] Q10.
+
+Open the Lock (BFS over an implicit state graph). [Medium] [asked: common] Q11. Snakes and Ladders (BFS with board numbering). [Medium] [asked: common] Q12. Shortest Bridge (DFS to find an island, then BFS outward). [Medium] [asked: occasional] Q13.
+
+Is Graph Bipartite and Possible Bipartition (2-colouring). [Medium] [asked: common] Q14. Number of Connected Components and Graph Valid Tree. [Medium] [asked: very common] Q15. Redundant Connection (union-find). [Medium] [asked: very common] Q16.
+
+Accounts Merge (union-find over strings). [Medium] [asked: common] Q17. Evaluate Division (weighted union-find). [Medium] [asked: common] Q18. Network Delay Time (Dijkstra). [Medium] [asked: very common] Q19.
+
+Cheapest Flights Within K Stops (Bellman-Ford rounds). [Medium] [asked: very common] Q20. Path With Minimum Effort and Swim in Rising Water (minimax Dijkstra). [Medium] [asked: common] Q21. Min Cost to Connect All Points (Prim's MST). [Medium] [asked: common] Q22.
+
+Critical Connections in a Network (bridges via low-link, iterative). [Hard] [asked: common] Q23. Find the Town Judge and Find Center of Star Graph (degree tricks). [Easy] [asked: common] Q24. Reconstruct Itinerary (Eulerian path, Hierholzer). [Hard] [asked: common] Q25.
+
+Graph representations: adjacency list vs matrix vs edge list vs CSR, and the grid-as-graph neighbour helper with `checked_add_signed`. [Easy] [asked: very common]
+
+Every question: statement, approach (brute force then optimal, complexity, pattern), Rust wrinkle, solution(s), a brute-force oracle with 2000 seeded xorshift cases plus edge cases, and what the interviewer is really testing.
+
+**Graph checklist** (say it first in the interview): is it directed? weighted (non-negative? negative?) ? connected? how big are V and E?
+
+"shortest" with unit edges -> BFS; non-negative weights -> Dijkstra; at most k edges -> Bellman-Ford rounds; "are these connected" with merges -> union-find; implicit states (locks, words, boards) -> BFS over generated neighbours.
+"""
+
+[[sources]]
+title = "techinterviewhandbook.org/grind75"
+url = "https://www.techinterviewhandbook.org/grind75"
+
+[[sources]]
+title = "neetcode.io/practice"
+url = "https://neetcode.io/practice"
+
+[[sources]]
+title = "interviewing.io/rust-interview-questions"
+url = "https://interviewing.io/rust-interview-questions"
+
+[[sources]]
+title = "cp-algorithms.com"
+url = "https://cp-algorithms.com/"

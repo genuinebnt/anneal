@@ -1,0 +1,76 @@
+title = "`std::sync` and thread coordination by use case"
+module = "Standard library and core"
+module_order = 2
+chapter = "Threads, synchronisation and time"
+chapter_order = 7
+order = 98
+kind = "recipe"
+lede = "Mutex, RwLock, Condvar, Once, OnceLock, LazyLock, Barrier, mpsc, Arc."
+level = "intermediate"
+code = ["examples/std_tour/std_sync_primitives_use_cases.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>shared server state</li><li>connection pools</li><li>lazy config</li><li>worker queues</li><li>graceful shutdown</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li><code>Arc&lt;Mutex&lt;T&gt;&gt;</code> shared state</li><li><code>RwLock</code> config snapshots</li><li><code>OnceLock</code>/<code>LazyLock</code> globals</li><li>bounded <code>sync_channel</code> for backpressure</li><li><code>Condvar</code> blocking queues and pools</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>Mutex::new</code></li><li><code>Mutex::lock</code></li><li><code>Mutex::try_lock</code></li><li><code>Mutex::is_poisoned</code></li><li><code>Mutex::clear_poison</code></li><li><code>Mutex::get_mut</code></li><li><code>Mutex::into_inner</code></li><li><code>PoisonError::into_inner</code></li><li><code>RwLock::read</code></li><li><code>RwLock::write</code></li><li><code>RwLock::try_read</code></li><li><code>RwLock::try_write</code></li><li><code>RwLock::is_poisoned</code></li><li><code>RwLockWriteGuard::downgrade</code></li><li><code>Condvar::wait</code></li><li><code>Condvar::wait_while</code></li><li><code>Condvar::wait_timeout_while</code></li><li><code>Condvar::notify_one</code></li><li><code>Condvar::notify_all</code></li><li><code>WaitTimeoutResult::timed_out</code></li><li><code>Once::call_once</code></li><li><code>Once::call_once_force</code></li><li><code>Once::is_completed</code></li><li><code>OnceState::is_poisoned</code></li><li><code>OnceLock::get</code></li><li><code>OnceLock::set</code></li><li><code>OnceLock::get_or_init</code></li><li><code>OnceLock::wait</code></li><li><code>OnceLock::into_inner</code></li><li><code>LazyLock::new</code></li><li><code>LazyLock::force</code></li><li><code>LazyLock::get</code></li><li><code>Barrier::new</code></li><li><code>Barrier::wait</code></li><li><code>BarrierWaitResult::is_leader</code></li><li><code>mpsc::channel</code></li><li><code>mpsc::sync_channel</code></li><li><code>Sender::send</code></li><li><code>SyncSender::send</code></li><li><code>SyncSender::try_send</code></li><li><code>Receiver::recv</code></li><li><code>Receiver::try_recv</code></li><li><code>Receiver::recv_timeout</code></li><li><code>Receiver::iter</code></li><li><code>Receiver::try_iter</code></li><li><code>Arc::new</code></li><li><code>Arc::clone</code></li><li><code>Arc::strong_count</code></li><li><code>Arc::downgrade</code></li><li><code>Weak::upgrade</code></li><li><code>Arc::make_mut</code></li><li><code>Arc::ptr_eq</code></li><li><code>Arc::try_unwrap</code></li><li><code>Arc::into_inner</code></li><li><code>thread::scope</code></li><li><code>thread::Builder::name</code></li><li><code>thread::Builder::stack_size</code></li><li><code>thread::Builder::spawn</code></li><li><code>thread::Builder::spawn_scoped</code></li><li><code>thread::current</code></li><li><code>thread::park</code></li><li><code>Thread::unpark</code></li><li><code>JoinHandle::join</code></li><li><code>thread::available_parallelism</code></li><li><code>thread_local!</code></li><li><code>LocalKey::with</code></li><li><code>LocalKey::try_with</code></li><li><code>LocalKey::set</code></li><li><code>LocalKey::take</code></li><li><code>LocalKey::replace</code></li><li><code>LocalKey::get</code></li><li><code>LocalKey::with_borrow</code></li><li><code>LocalKey::with_borrow_mut</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/sync/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/sync/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+std for `Mutex`, `RwLock`, `Condvar`, `Once`, `OnceLock`, `LazyLock`, `Barrier`, `mpsc`, `std::thread`, `thread_local!` (they need the OS). alloc: `Arc` and `Weak` (`alloc::sync`). core: atomics (`core::sync::atomic`), `OnceCell`/`LazyCell` (`core::cell`, single-threaded).
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+`std::sync::nonpoison`, `ReentrantLock`, `mpmc`, `oneshot`, mapped guards, `Mutex::{get_cloned,set,replace}`, `Receiver::recv_deadline`, `LocalKey::update`, `OnceLock::get_mut_or_init`, `SyncView` (formerly `Exclusive`) (all unstable in 1.98.1); async locks (see tokio examples); atomics (see std_atomics_ordering_use_cases).
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Mutate shared state</td><td><code>Arc&lt;Mutex&lt;T&gt;&gt;; borrowed from the stack: thread::scope + &amp;Mutex&lt;T&gt;</code></td></tr><tr><td>Many readers, rare writer</td><td><code>RwLock&lt;T&gt; (measure first; or swap an Arc&lt;T&gt; under a short lock)</code></td></tr><tr><td>Survive a panic in another thread</td><td><code>lock().unwrap_or_else(PoisonError::into_inner); after repairing: clear_poison()</code></td></tr><tr><td>Do not block</td><td><code>try_lock / try_read / try_write (WouldBlock or Poisoned)</code></td></tr><tr><td>Sleep until state changes</td><td><code>condvar.wait_while(guard, |s| !ready(s))</code></td></tr><tr><td>Same, with a deadline</td><td><code>wait_timeout_while then check timed_out()</code></td></tr><tr><td>Run an initialiser once, no value</td><td><code>Once::call_once</code></td></tr><tr><td>Global set from runtime input</td><td><code>static X: OnceLock&lt;T&gt; + get_or_init / set</code></td></tr><tr><td>Global with a fixed initialiser</td><td><code>static X: LazyLock&lt;T&gt; = LazyLock::new(..)</code></td></tr><tr><td>All workers reach a phase boundary</td><td><code>Barrier</code></td></tr><tr><td>Hand work to other threads</td><td><code>mpsc::sync_channel(n) (bounded, backpressure); channel() is unbounded; 0 is a rendezvous</code></td></tr><tr><td>Know when all producers are done</td><td><code>drop every Sender; for x in rx then ends</code></td></tr><tr><td>Copy-on-write shared snapshot</td><td><code>Arc::make_mut</code></td></tr><tr><td>Cache without keeping alive</td><td><code>Weak + upgrade</code></td></tr><tr><td>Borrow locals in threads</td><td><code>thread::scope</code></td></tr><tr><td>Name threads (visible in panics)</td><td><code>thread::Builder::new().name(..)</code></td></tr><tr><td>Per-thread buffer / request id</td><td><code>thread_local! + with_borrow_mut / set</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Pitfalls"
+body = """
+re-locking a Mutex you already hold deadlocks or panics (unspecified which); two reads of one RwLock on one thread can deadlock if a writer queues between them; RwLock fairness is OS-dependent (writer or reader starvation are both permitted); `Condvar::wait` may wake spuriously.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/sync/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/sync/index.html</a></li><li><a href="https://doc.rust-lang.org/std/sync/struct.Condvar.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/sync/struct.Condvar.html</a></li><li>Mara Bos, Rust Atomics and Locks <a href="https://marabos.nl/atomics/" target="_blank" rel="noreferrer">https://marabos.nl/atomics/</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/sync/index.html"
+url = "https://doc.rust-lang.org/std/sync/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/sync/struct.Condvar.html"
+url = "https://doc.rust-lang.org/std/sync/struct.Condvar.html"
+
+[[sources]]
+title = "marabos.nl/atomics"
+url = "https://marabos.nl/atomics/"

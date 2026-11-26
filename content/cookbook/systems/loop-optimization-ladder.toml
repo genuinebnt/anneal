@@ -1,0 +1,68 @@
+title = "The loop optimisation ladder"
+module = "Performance and systems"
+module_order = 7
+chapter = "High-performance computing"
+chapter_order = 4
+order = 303
+kind = "recipe"
+lede = "Measured steps on dot product, prefix sum, convolution, histogram and friends"
+level = "advanced"
+code = ["examples/hpc/loop_optimization_ladder.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>any hot inner loop: codecs</li><li>image filters</li><li>database scans</li><li>numeric kernels</li><li>parsers</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>squeezing the last 2-10x out of scan/aggregate kernels (columnar databases)</li><li>image/video filters</li><li>checksum and hash loops</li><li>histogram-based sorting and compression. Course: CMU 15-418 (single-core optimisation)</li><li>Algorithmica "Algorithms for Modern Hardware"</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Every optimisation here is a **rewrite** that must not change the answer, so every rung of every ladder is asserted to produce a bit-identical result (the data are u32/u8 with wrapping arithmetic, which is an exact ring: reassociating, factoring and reordering are all legal, unlike for floats). Timings are printed (best of several runs) and never asserted.
+
+Rungs, in the order a performance engineer tries them:
+
+1. remove bounds checks the right way: iterators, zip, `chunks_exact`, slicing once up front (**not** `get_unchecked`)
+2. break dependency chains: several independent accumulators (also the only way for floats, see `float_demo`)
+3. fuse loops that read the same memory; fission loops to enable a cheaper formulation (separable convolution)
+4. strength reduction: `%` -> mask or wrapping counter, 9 multiplies -> 6
+5. branch removal: data-dependent `if` -> mask/select (cmov / csel); sorted vs random input shows the predictor
+6. memory layout: SoA vs AoS, 4 sub-histograms against store-forwarding stalls, alignment, software prefetch (x86_64 only; no-op elsewhere)
+7. inlining control: `#[inline(always)]` vs `#[inline(never)]`, `#[cold]` for error paths Method: write the baseline, look at what limits it (latency chain? bandwidth? mispredicts? bounds checks?), change **one** thing, re-measure, keep it only if it wins. Use `cargo asm`/Godbolt to confirm the vectoriser did what you think; timing alone lies.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.algorithmica.org/hpc/> (esp. pipelining, SIMD reduction) and <https://en.algorithmica.org/hpc/simd/reduction/>
+
+<https://en.algorithmica.org/hpc/pipelining/tables/> (instruction latency/throughput) and <https://doc.rust-lang.org/std/hint/fn.black_box.html>
+
+<https://doc.rust-lang.org/std/primitive.slice.html#method.chunks_exact> (the idiom that gives LLVM a known trip count)
+"""
+
+[[sources]]
+title = "en.algorithmica.org/hpc"
+url = "https://en.algorithmica.org/hpc/"
+
+[[sources]]
+title = "en.algorithmica.org/hpc/simd/reduction"
+url = "https://en.algorithmica.org/hpc/simd/reduction/"
+
+[[sources]]
+title = "en.algorithmica.org/hpc/pipelining/tables"
+url = "https://en.algorithmica.org/hpc/pipelining/tables/"
+
+[[sources]]
+title = "doc.rust-lang.org/std/hint/fn.black_box.html"
+url = "https://doc.rust-lang.org/std/hint/fn.black_box.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/primitive.slice.html#method.chunks_exact"
+url = "https://doc.rust-lang.org/std/primitive.slice.html#method.chunks_exact"

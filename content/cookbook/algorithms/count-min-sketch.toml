@@ -1,0 +1,374 @@
+title = "Count-min sketch"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Hashing and probabilistic structures"
+chapter_order = 1
+order = 158
+kind = "guide"
+lede = "BusTub P0 · lock-free counters, seeded hashing, merge, top-k · sketches reappear in optimizer statistics, heavy hitters, streaming"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>A <strong>count-min sketch</strong> (Cormode &amp; Muthukrishnan, 2005) estimates how often each item appears in a stream, using memory that doesn't depend on the number of distinct items. It <strong>never underestimates</strong>. It overestimates by at most ε·N with probability 1−δ, where N is the total count. Databases use it for heavy-hitter detection in optimizer statistics (the "most common values" problem), for skew detection before a hash join, and for approximate <code>GROUP BY … ORDER BY count DESC LIMIT k</code> in streaming and observability engines.</p>
+"""
+
+[[sections]]
+heading = "Structure"
+body = """
+<p>A matrix of <code>depth × width</code> counters, with one independent hash function per row.</p>
+
+<ul> <li><strong>Insert(x):</strong> for each row <em>i</em>, increment <code>M[i][hᵢ(x) mod w]</code>.</li> <li><strong>Count(x):</strong> <code>min</code> over rows of <code>M[i][hᵢ(x) mod w]</code>. Each row's cell holds x's true count <em>plus</em> collisions from other items, so every row overestimates. The minimum is the least-polluted row.</li> </ul>
+
+<aside data-call="why"><b>The bound, in four lines</b><p>Fix one row. The expected collision mass in x's cell is at most N/w (pairwise-independent hashing spreads the other items evenly). By Markov's inequality, P[excess &gt; e·N/w] ≤ 1/e. The rows are independent, so P[every row exceeds it] ≤ e<sup>−d</sup>. Choose <strong>w = ⌈e/ε⌉</strong> and <strong>d = ⌈ln(1/δ)⌉</strong>. For ε = 0.1% and δ = 1%, that gives w = 2719 and d = 5: 13,595 u32 counters (53 KiB) regardless of how many distinct items the stream has.</p></aside>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Parameter</th> <th>Controls</th> <th>Doubling it</th> </tr> </thead> <tbody> <tr> <td>width <em>w</em></td> <td>size of the error (additive ε·N)</td> <td>halves the error bound</td> </tr> <tr> <td>depth <em>d</em></td> <td>probability the bound fails (δ)</td> <td>squares δ (e.g. 1% → 0.01%)</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "API"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>BusTub</th> <th>Cairn</th> <th>Contract</th> </tr> </thead> <tbody> <tr> <td><code>CountMinSketch(width, depth)</code></td> <td><code>CountMinSketch::new(w, d)</code></td> <td>panic or <code>Err</code> on zero dimensions</td> </tr> <tr> <td>move ctor/assign; copy deleted</td> <td>Rust moves by default; don't derive <code>Clone</code></td> <td>—</td> </tr> <tr> <td><code>Insert(item)</code></td> <td><code>insert(&amp;self, item: &amp;K)</code></td> <td><strong>thread-safe, and must scale</strong>: the contention test requires more than 1.2× over a mutex</td> </tr> <tr> <td><code>Count(item)</code></td> <td><code>count(&amp;self, item: &amp;K) -&gt; u32</code></td> <td>min over rows</td> </tr> <tr> <td><code>Clear()</code></td> <td><code>clear(&amp;self)</code></td> <td>zero all counters</td> </tr> <tr> <td><code>Merge(other)</code></td> <td><code>merge(&amp;self, other: &amp;Self) -&gt; Result&lt;()&gt;</code></td> <td>cell-wise add; dimensions <strong>and hash seeds</strong> must match</td> </tr> <tr> <td><code>TopK(k, candidates)</code></td> <td><code>top_k(&amp;self, k, candidates: &amp;[K]) -&gt; Vec&lt;(K, u32)&gt;</code></td> <td>descending by estimated count</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Design decisions"
+body = """
+<ol> <li><strong><code>insert(&amp;self)</code>, not <code>&amp;mut self</code>.</strong> A shared sketch lives in an <code>Arc&lt;CountMinSketch&gt;</code> updated by many threads. Taking <code>&amp;self</code> means interior mutability through atomics. That signature is the whole point of the concurrency requirement.</li> <li><strong><code>AtomicU32::fetch_add(1, Relaxed)</code>.</strong> Each cell is an independent counter. No other memory has to become visible "with" an increment, so there's no happens-before edge to establish, and <code>Relaxed</code> is enough. Every <code>fetch_add</code> is still atomic, so no increment is lost. <code>count()</code> running concurrently may see some rows updated and others not. That's inherent to a sketch and harmless, since it only makes a concurrent estimate slightly lower. Write that down in the doc comment.</li> <li><strong>Flat <code>Box&lt;[AtomicU32]&gt;</code> matrices</strong>, indexed <code>row * width + col</code>, rather than <code>Vec&lt;Vec&lt;_&gt;&gt;</code>: one allocation per matrix instead of d+1, no pointer chase per row, rows contiguous for <code>clear</code> and <code>merge</code>. There are <strong>eight copies</strong> of the matrix ("stripes"), one per group of threads, and a counter is the sum of its copies. A single shared matrix looks like the obvious design and <strong>fails BusTub's <code>ContentionRatioTest</code></strong>: see the Contention section below, with measurements.</li> <li><strong>Hash once, derive d indices.</strong> Computing d independent full hashes per insert costs more than the atomics do. Kirsch–Mitzenmacher double hashing gives hᵢ(x) = h₁(x) + i·h₂(x), which provably keeps the same asymptotic error for sketches and Bloom filters. BusTub specifies its own seeded combiner (<code>CombineHashes(h, CombineHashes(seed, 15445))</code>). Match it if you want bit-identical counts to BusTub's tests. Otherwise use double hashing.</li> <li><strong>Stable hash function.</strong> <code>std::collections::hash_map::DefaultHasher</code>'s algorithm is explicitly <em>unspecified</em> and may change between Rust releases. That's fine for an in-memory sketch, but it's wrong the moment a sketch is <strong>persisted</strong> as optimizer statistics or <strong>merged</strong> across nodes built with different toolchains. Use a fixed algorithm (FxHash, xxh3, wyhash, or BusTub's shift-xor) for anything that outlives the process.</li> </ol>
+
+:::deeper Reference: striped atomics, double hashing, merge, top-k
+```rust title="src/primer/count_min_sketch.rs"
+use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering::Relaxed};
+
+/// Counter copies, one per "stripe". A thread always increments the same stripe, so two threads
+/// hammering one hot key touch different cache lines; a count is the sum over the stripes.
+const STRIPES: usize = 8;
+
+/// This thread's stripe: threads are dealt stripes round-robin the first time they insert.
+fn my_stripe() -> usize {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    thread_local! {
+        static STRIPE: usize = NEXT.fetch_add(1, Relaxed) % STRIPES;
+    }
+    STRIPE.with(|s| *s)
+}
+
+/// Count-min sketch with lock-free inserts.
+///
+/// Concurrency: `insert` may run on any number of threads. `count` observes each
+/// counter atomically, but not all `depth` counters at one instant, so a count
+/// concurrent with inserts of the same key may lag by the in-flight inserts.
+/// Never overestimates *less* than the true count of completed inserts.
+///
+/// The matrix is kept `STRIPES` times and a counter is the sum of its copies. Why: with one
+/// shared matrix, threads that insert the same hot key do atomic read-modify-writes on the same
+/// cache lines, which bounce between cores. Measured on an Apple M-series laptop, BusTub's
+/// ContentionRatioTest (two threads, ten hot keys, mutex time / lock-free time) gave 0.15 for
+/// the single-matrix sketch (the mutex was ~7x *faster*) and 2.2-2.6 (15 runs) for the striped one. The cost: `STRIPES`x memory, and `count`/`merge` read `STRIPES`x more cells.
+#[derive(Debug)]
+pub struct CountMinSketch<K: ?Sized> {
+    width: u32,
+    depth: u32,
+    seed: u64,
+    stripes: Vec<Box<[AtomicU32]>>, // STRIPES copies of a depth * width row-major matrix
+    _k: PhantomData<fn(&K)>, // contravariant-free, Send + Sync regardless of K
+}
+
+impl<K: Hash + ?Sized> CountMinSketch<K> {
+    pub fn new(width: u32, depth: u32) -> Self {
+        Self::with_seed(width, depth, 15445)
+    }
+
+    pub fn with_seed(width: u32, depth: u32, seed: u64) -> Self {
+        assert!(
+            width > 0 && depth > 0,
+            "count-min sketch dimensions must be non-zero"
+        );
+        let n = width as usize * depth as usize;
+        Self {
+            width,
+            depth,
+            seed,
+            stripes: (0..STRIPES)
+                .map(|_| (0..n).map(|_| AtomicU32::new(0)).collect())
+                .collect(),
+            _k: PhantomData,
+        }
+    }
+
+    /// Size the sketch from error targets: overestimate ≤ eps·N with probability ≥ 1 − delta.
+    pub fn with_error(eps: f64, delta: f64) -> Self {
+        let w = (std::f64::consts::E / eps).ceil() as u32;
+        let d = (1.0 / delta).ln().ceil() as u32;
+        Self::new(w.max(1), d.max(1))
+    }
+
+    #[inline]
+    fn hashes(&self, item: &K) -> (u64, u64) {
+        let mut h = Fx64::new(self.seed);
+        item.hash(&mut h);
+        let h1 = h.finish();
+        let h2 = h1.rotate_left(32) ^ 0x9E37_79B9_7F4A_7C15; // cheap second hash; |h2| odd below
+        (h1, h2 | 1)
+    }
+
+    #[inline]
+    fn index(&self, row: u32, h1: u64, h2: u64) -> usize {
+        let col = h1.wrapping_add(u64::from(row).wrapping_mul(h2)) % u64::from(self.width);
+        row as usize * self.width as usize + col as usize
+    }
+
+    pub fn insert(&self, item: &K) {
+        let (h1, h2) = self.hashes(item);
+        let mine = &self.stripes[my_stripe()];
+        for r in 0..self.depth {
+            mine[self.index(r, h1, h2)].fetch_add(1, Relaxed);
+        }
+    }
+
+    /// The value of cell `i`: the sum over stripes.
+    #[inline]
+    fn total(&self, i: usize) -> u32 {
+        self.stripes.iter().map(|s| s[i].load(Relaxed)).fold(0u32, u32::wrapping_add)
+    }
+
+    /// Conservative update (Estan & Varghese): only raise cells that are below the new
+    /// minimum. Strictly better accuracy, but the estimate is no longer a plain sum, so merging
+    /// sketches stops being exact: a real trade-off, so it's a separate method. Two threads raising
+    /// the same cell at once can both add the difference, so under concurrency it can overshoot
+    /// (never undershoot); single-threaded it is exact.
+    pub fn insert_conservative(&self, item: &K) {
+        let (h1, h2) = self.hashes(item);
+        let idx: Vec<usize> = (0..self.depth).map(|r| self.index(r, h1, h2)).collect();
+        let target = idx.iter().map(|&i| self.total(i)).min().unwrap() + 1;
+        let mine = &self.stripes[my_stripe()];
+        for &i in &idx {
+            let cur = self.total(i);
+            if cur < target {
+                mine[i].fetch_add(target - cur, Relaxed);
+            }
+        }
+    }
+
+    pub fn count(&self, item: &K) -> u32 {
+        let (h1, h2) = self.hashes(item);
+        (0..self.depth)
+            .map(|r| self.total(self.index(r, h1, h2)))
+            .min()
+            .unwrap_or(0)
+    }
+
+    pub fn clear(&self) {
+        for c in self.stripes.iter().flat_map(|s| s.iter()) {
+            c.store(0, Relaxed);
+        }
+    }
+
+    /// Cell-wise add. Exact: the merged sketch equals the sketch of the concatenated streams.
+    pub fn merge(&self, other: &Self) -> Result<(), MergeError> {
+        if (self.width, self.depth, self.seed) != (other.width, other.depth, other.seed) {
+            return Err(MergeError);
+        }
+        let mine = &self.stripes[my_stripe()];
+        for (i, a) in mine.iter().enumerate() {
+            a.fetch_add(other.total(i), Relaxed);
+        }
+        Ok(())
+    }
+
+    /// Top-k of `candidates` by estimated count, descending; ties keep candidate order.
+    pub fn top_k<'a>(&self, k: usize, candidates: &'a [K]) -> Vec<(&'a K, u32)>
+    where
+        K: Sized,
+    {
+        let mut v: Vec<(&K, u32)> = candidates.iter().map(|c| (c, self.count(c))).collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1)); // stable sort: deterministic ties
+        v.truncate(k);
+        v
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct MergeError;
+
+/// A tiny, stable FxHash-style hasher: fixed algorithm, seedable, fast on short keys.
+pub struct Fx64 {
+    h: u64,
+}
+impl Fx64 {
+    pub fn new(seed: u64) -> Self {
+        Fx64 {
+            h: seed.wrapping_mul(0x51_7c_c1_b7_27_22_0a_95),
+        }
+    }
+}
+impl Hasher for Fx64 {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut buf = [0u8; 8];
+            buf[..chunk.len()].copy_from_slice(chunk);
+            self.write_u64(u64::from_le_bytes(buf));
+        }
+    }
+    #[inline]
+    fn write_u64(&mut self, x: u64) {
+        self.h = (self.h.rotate_left(5) ^ x).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+    #[inline]
+    fn finish(&self) -> u64 {
+        // final avalanche (splitmix64) so low bits are usable for `% width`
+        let mut z = self.h;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+}
+```
+:::
+
+<aside data-call="rust"><b><code>PhantomData&lt;fn(&amp;K)&gt;</code>, and why not <code>PhantomData&lt;K&gt;</code></b><p>The sketch never stores a <code>K</code>, but the type has to mention <code>K</code> somewhere. <code>PhantomData&lt;K&gt;</code> would make the sketch <code>Send</code>/<code>Sync</code> only when <code>K</code> is, and would tell the drop checker that we own a <code>K</code>. Neither is true. <code>PhantomData&lt;fn(&amp;K)&gt;</code> says we <em>consume</em> <code>K</code>s by reference: the struct is always <code>Send + Sync</code>, which it genuinely is since it only holds atomics, and there's no drop-check obligation. This is the same trick <code>HashMap</code>'s <code>BuildHasher</code> plumbing uses. Reference: <a href="https://doc.rust-lang.org/nomicon/phantom-data.html" target="_blank" rel="noreferrer">Nomicon, PhantomData</a> (the table of variance and auto-trait effects).</p></aside>
+
+<aside data-call="rust"><b><code>K: ?Sized</code> lets you sketch <code>str</code> directly</b><p>With <code>K: ?Sized</code>, <code>CountMinSketch&lt;str&gt;</code> works, and <code>insert("frequent")</code> takes a <code>&amp;str</code> with no allocation. <code>top_k</code> needs <code>K: Sized</code> because it returns references into a slice of <code>K</code>, so it adds that bound locally with a <code>where</code> clause. Put bounds on the methods that need them, not on the struct. Reference: <a href="https://rust-lang.github.io/api-guidelines/future-proofing.html#c-struct-bounds" target="_blank" rel="noreferrer">Rust API Guidelines C-STRUCT-BOUNDS</a>.</p></aside>
+"""
+
+[[sections]]
+heading = "Contention"
+body = """
+<p>BusTub's <code>ContentionRatioTest</code> runs two threads that insert <code>j % 10</code> 10,000 times each, ten rounds alternating between <strong>a global mutex around each insert</strong> and <strong>no lock</strong>. It requires <code>mutex_time / lock_free_time &gt; 1.2</code>. It uses only ten distinct keys, so both threads hammer the same 15 × 10 = 150 cells.</p>
+
+<p>The natural implementation (one shared matrix of <code>AtomicU32</code>, <code>fetch_add(1, Relaxed)</code>) loses to the mutex. Measured on an Apple M4 Pro, five runs of the whole test:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Design</th> <th>mutex time / lock-free time</th> <th>Passes (&gt; 1.2)?</th> </tr> </thead> <tbody> <tr> <td>one shared matrix</td> <td>0.18, 0.14, 0.14, 0.15, 0.15</td> <td><strong>no</strong>: the mutex is about 7× faster</td> </tr> <tr> <td>8 stripes, thread → stripe round-robin</td> <td>2.50, 2.51, 2.49, 2.47, 2.61 (two more batches of five: 2.16–2.51)</td> <td>yes</td> </tr> </tbody> </table></div>
+
+<p>Why (the likely cause; we measured the outcome, not the cache traffic). An atomic read-modify-write needs the cache line in exclusive state. Two threads incrementing the same hot cells pass those lines back and forth, up to one transfer per row per insert. The mutex serializes the threads, but an unfair mutex tends to be re-acquired by the thread that just released it, so one thread runs a long stretch of inserts with all 150 hot cells in its own L1 while the other waits. "Lock-free" removes the lock, not the sharing, and the sharing was the cost. Do not trust this section's <em>numbers</em> on other hardware: run the test. The <em>reasoning</em> is what carries over.</p>
+
+<p>The fix is what the aside below names: <strong>per-thread shards merged on read</strong>. The reference keeps <code>STRIPES = 8</code> copies of the matrix; a thread is dealt a stripe the first time it inserts (a <code>thread_local</code> index from a global counter), so two threads inserting the same hot key increment different cells on different cache lines. <code>count</code> and <code>merge</code> sum across stripes. Three consequences to carry into your own version:</p>
+
+<ul> <li><strong>Memory and read cost go up by the stripe count</strong>: 8× the cells, and <code>count</code> reads 8 cells per row. For a sketch with 500 × 15 cells that is 240 KB, still L2-resident. For a sketch sized to an error target of 10⁻⁶, it is not, and you would choose fewer stripes.</li> <li><strong>Exactness survives.</strong> The sum over stripes of a cell is exactly what a single matrix would hold, so <code>merge</code> stays exact and <code>count</code> never undercounts. <code>insert_conservative</code> has to compute the minimum over summed cells and add only the shortfall to its own stripe; two threads raising one cell at once can both add the shortfall, so under concurrency it can overshoot (never undershoot). The test that checks it is single-threaded for that reason.</li> <li><strong>Do not "fix" it by padding every cell to a cache line.</strong> That makes the matrix 16× larger and the hot cells still bounce between the two threads; the stripes already remove the sharing.</li> </ul>
+
+<aside data-call="performance"><b>When padding pays instead</b><p>Padding each counter to its own cache line (<code>#[repr(align(64))]</code>) helps when <em>different</em> threads write <em>different</em> counters that happen to share a line (false sharing), for example per-thread statistics in one array. It does not help when threads write the <em>same</em> counter, which is this test. Same-counter contention is solved by sharding, as above (<code>LongAdder</code> in Java, per-CPU counters in the Linux kernel).</p></aside>
+"""
+
+[[sections]]
+heading = "Tests"
+body = """
+```rust title="tests for the sketch — property + concurrency"
+use proptest::prelude::*;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+proptest! {
+    /// Never underestimates, whatever the stream.
+    #[test]
+    fn never_underestimates(stream in prop::collection::vec(0u32..200, 0..5000)) {
+        let cms = CountMinSketch::<u32>::new(64, 4);
+        let mut truth: HashMap<u32, u32> = HashMap::new();
+        for x in &stream { cms.insert(x); *truth.entry(*x).or_default() += 1; }
+        for (x, &n) in &truth { prop_assert!(cms.count(x) >= n); }
+    }
+
+    /// Merge is exact: sketch(a ++ b) == merge(sketch(a), sketch(b)) cell for cell.
+    #[test]
+    fn merge_is_exact(a in prop::collection::vec(0u32..50, 0..500), b in prop::collection::vec(0u32..50, 0..500)) {
+        let (sa, sb, sab) = (CountMinSketch::<u32>::new(16, 3), CountMinSketch::<u32>::new(16, 3), CountMinSketch::<u32>::new(16, 3));
+        a.iter().for_each(|x| { sa.insert(x); sab.insert(x) });
+        b.iter().for_each(|x| { sb.insert(x); sab.insert(x) });
+        sa.merge(&sb).unwrap();
+        for x in 0..50 { prop_assert_eq!(sa.count(&x), sab.count(&x)); }
+    }
+}
+
+#[test]
+fn concurrent_inserts_lose_nothing() {
+    let cms = Arc::new(CountMinSketch::<u64>::new(500, 15));
+    std::thread::scope(|s| {
+        for _ in 0..8 { let cms = &cms; s.spawn(move || for j in 0..100_000u64 { cms.insert(&(j % 10)) }); }
+    });
+    for k in 0..10 { assert_eq!(cms.count(&k), 80_000); }   // exact: 10 keys can't collide in 500 cols... usually
+}
+
+/// BusTub's ContentionRatioTest: two threads, 10,000 inserts each of `j % 10`, with and without a global mutex.
+fn ratio_once() -> (f64, f64, f64) {
+    use std::sync::Mutex;
+    use std::time::Instant;
+    let c = CountMinSketch::<i64>::new(500, 15);
+    let (mut with_mutex, mut without) = (0.0, 0.0);
+    for iter in 0..10 {
+        let use_mutex = iter % 2 == 0;
+        let g = Mutex::new(());
+        let start = Instant::now();
+        std::thread::scope(|s| {
+            for _ in 0..2 {
+                s.spawn(|| {
+                    for j in 0..10_000i64 {
+                        if use_mutex {
+                            let _l = g.lock().unwrap();
+                            c.insert(&(j % 10));
+                        } else {
+                            c.insert(&(j % 10));
+                        }
+                    }
+                });
+            }
+        });
+        let us = start.elapsed().as_micros() as f64;
+        if use_mutex { with_mutex += us } else { without += us }
+    }
+    for i in 0..10i64 {
+        assert_eq!(c.count(&i), 20_000);
+    }
+    (with_mutex, without, with_mutex / without)
+}
+
+/// The exact test BusTub runs, as a hard assertion: lock-free must beat the mutex by more than 1.2x.
+/// (Timing tests are noisy: take the best of five runs, which is also what a single noisy
+/// run can only hurt.)
+#[test]
+fn lock_free_beats_a_mutex_under_contention() {
+    let runs: Vec<f64> = (0..5).map(|_| ratio_once().2).collect();
+    let best = runs.iter().cloned().fold(0.0, f64::max);
+    eprintln!("mutex time / lock-free time, 5 runs: {runs:.2?}");
+    assert!(best > 1.2, "ratio {best:.2}");
+}
+
+#[test]
+fn conservative_update_is_between_the_truth_and_the_plain_estimate() {
+    let (plain, cons) = (CountMinSketch::<u32>::new(32, 3), CountMinSketch::<u32>::new(32, 3));
+    let mut truth: HashMap<u32, u32> = HashMap::new();
+    let mut x = 88172645463325252u64;
+    for _ in 0..5000 {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        let k = (x % 200) as u32;
+        plain.insert(&k);
+        cons.insert_conservative(&k);
+        *truth.entry(k).or_default() += 1;
+    }
+    for (k, &n) in &truth {
+        assert!(cons.count(k) >= n, "conservative update must not undercount");
+        assert!(cons.count(k) <= plain.count(k), "and must not be worse than the plain estimate");
+    }
+}
+```
+
+<aside data-call="warning"><b>That last assertion is probabilistic</b><p>With 10 keys, 500 columns and 15 rows, the chance that <em>every</em> row has a collision for some key is negligible, but it isn't zero. It depends on the hash. BusTub's own test asserts exactness under the same conditions. Pin the seed so that the test is deterministic, and put a comment on it. A flaky sketch test is worse than none.</p></aside>
+"""
+
+[[sections]]
+heading = "Where sketches return"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Later section</th> <th>Sketch</th> <th>Use</th> </tr> </thead> <tbody> <tr> <td><a href="/cookbook/p/statistics">Query optimization: statistics</a></td> <td>HyperLogLog</td> <td>distinct-value counts (NDV) per column, mergeable across partitions</td> </tr> <tr> <td><a href="/cookbook/p/cost-models-and-join-ordering">Optimization II</a></td> <td>count-min / Misra–Gries / SpaceSaving</td> <td>most-common values for skewed-equality selectivity</td> </tr> <tr> <td><a href="/cookbook/p/join-algorithms">Joins</a>, P3 leaderboard</td> <td>Bloom filter</td> <td>build-side filter pushed into the probe-side scan</td> </tr> <tr> <td><a href="/cookbook/p/log-structured-storage">LSM storage</a></td> <td>Bloom / ribbon filter per SSTable</td> <td>skip SSTables on point lookups</td> </tr> <tr> <td><a href="/cookbook/p/time-series-databases">Time series</a></td> <td>t-digest / DDSketch / KLL</td> <td>approximate quantiles (p99 latency) over streams</td> </tr> <tr> <td><a href="/cookbook/p/distributed-databases-i">Distributed</a></td> <td>all of the above</td> <td>partial aggregates merged at the coordinator (mergeability is the key property)</td> </tr> </tbody> </table></div>
+"""
+
+[[sources]]
+title = "Less Hashing, Same Performance: Building a Better Bloom Filter"
+url = "https://www.eecs.harvard.edu/~michaelm/postscripts/rsa2008.pdf"
+
+[[sources]]
+title = "Rust Atomics and Locks"
+url = "https://marabos.nl/atomics/"

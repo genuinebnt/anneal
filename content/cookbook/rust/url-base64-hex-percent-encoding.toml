@@ -1,0 +1,90 @@
+title = "Url base64 hex percent encoding"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Data, text and encoding crates"
+chapter_order = 1
+order = 118
+kind = "recipe"
+lede = "url, percent-encoding, base64, hex and data-encoding"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/url_base64_hex_percent_encoding.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>building and validating URLs</li><li>signing requests</li><li>tokens in headers and links</li><li>binary data in text formats</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>HTTP clients (reqwest uses the url crate)</li><li>OAuth redirect handling</li><li>JWT segments (base64url without padding)</li><li>Basic auth</li><li>content digests (hex)</li><li>TOTP secrets (base32)</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>Url::parse</code></li><li><code>Url::parse_with_params</code></li><li><code>Url::join</code></li><li><code>Url::scheme</code></li><li><code>Url::host</code></li><li><code>Url::host_str</code></li><li><code>Url::port</code></li><li><code>Url::port_or_known_default</code></li><li><code>Url::path</code></li><li><code>Url::path_segments</code></li><li><code>Url::path_segments_mut</code></li><li><code>Url::query</code></li><li><code>Url::query_pairs</code></li><li><code>Url::query_pairs_mut</code></li><li><code>Url::set_query</code></li><li><code>Url::set_fragment</code></li><li><code>Url::set_path</code></li><li><code>Url::username</code></li><li><code>Url::password</code></li><li><code>Url::origin</code></li><li><code>Url::make_relative</code></li><li><code>url::Host</code></li><li><code>url::form_urlencoded::Serializer</code></li><li><code>percent_encoding::utf8_percent_encode</code></li><li><code>percent_encoding::percent_decode_str</code></li><li><code>percent_encoding::AsciiSet</code></li><li><code>percent_encoding::NON_ALPHANUMERIC</code></li><li><code>percent_encoding::CONTROLS</code></li><li><code>base64::Engine::encode</code></li><li><code>base64::Engine::decode</code></li><li><code>base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD}</code></li><li><code>base64::DecodeError</code></li><li><code>hex::encode</code></li><li><code>hex::encode_upper</code></li><li><code>hex::decode</code></li><li><code>hex::decode_to_slice</code></li><li><code>hex::FromHexError</code></li><li><code>data_encoding::BASE32</code></li><li><code>data_encoding::BASE32_NOPAD</code></li><li><code>data_encoding::HEXLOWER_PERMISSIVE</code></li><li><code>Url::{set_scheme, set_host, set_port, set_username, set_password, domain, from_file_path, to_file_path, from_directory_path, options}</code></li><li><code>url::Position</code></li><li><code>url::Host::parse</code></li><li><code>ParseOptions::syntax_violation_callback</code></li><li><code>form_urlencoded::parse</code></li><li><code>base64::engine::{GeneralPurpose, GeneralPurposeConfig, DecodePaddingMode}</code></li><li><code>base64::alphabet</code></li><li><code>Engine::{encode_slice, decode_slice, decode_vec}</code></li><li><code>base64::encoded_len</code></li><li><code>base64::write::EncoderStringWriter</code></li><li><code>base64::read::DecoderReader</code></li><li><code>data_encoding::{BASE64_MIME, Specification, Encoding::{encode_len, encode_display}}</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/url/2/url/" target="_blank" rel="noreferrer">https://docs.rs/url/2/url/</a></li><li><a href="https://docs.rs/percent-encoding/2/" target="_blank" rel="noreferrer">https://docs.rs/percent-encoding/2/</a></li><li><a href="https://docs.rs/base64/0.22/" target="_blank" rel="noreferrer">https://docs.rs/base64/0.22/</a></li><li><a href="https://docs.rs/hex/0.4/" target="_blank" rel="noreferrer">https://docs.rs/hex/0.4/</a></li><li><a href="https://docs.rs/data-encoding/2/" target="_blank" rel="noreferrer">https://docs.rs/data-encoding/2/</a></li></ul>
+"""
+
+[[sections]]
+heading = "Crates"
+body = """
+url = "2", percent-encoding = "2", base64 = "0.22", hex = "0.4", data-encoding = "2"
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Resolve a link found on a page</td><td><code>base.join(href)   (mind the trailing slash!)</code></td></tr><tr><td>Add query parameters</td><td><code>query_pairs_mut().append_pair      (never format!)</code></td></tr><tr><td>Add a user value as ONE path segment</td><td><code>path_segments_mut().push           (never join(format!(..)))</code></td></tr><tr><td>Check where a URL really points</td><td><code>url.host(), compare exactly         (never starts_with/contains on the string)</code></td></tr><tr><td>Bytes in a URL or file name</td><td><code>URL_SAFE_NO_PAD</code></td></tr><tr><td>Bytes in MIME/JSON/Basic auth</td><td><code>STANDARD</code></td></tr><tr><td>Log a URL</td><td><code>strip userinfo (set_password(None)) and often the query</code></td></tr><tr><td>Cache key without query/fragment</td><td><code>&amp;url[..Position::AfterPath]</code></td></tr><tr><td>Local path &lt;</td><td><code>file URL               -&gt; from_file_path / to_file_path   (never format!("file://{path}"))</code></td></tr><tr><td>Accept padded AND unpadded base64</td><td><code>a GeneralPurpose engine with DecodePaddingMode::Indifferent</code></td></tr><tr><td>Large or incremental base64</td><td><code>base64::write / base64::read adapters</code></td></tr><tr><td>Line-wrapped MIME, custom alphabets</td><td><code>data_encoding (BASE64_MIME, Specification)</code></td></tr><tr><td>Digests for humans</td><td><code>hex</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Pitfalls"
+body = """
+base64 and hex are **encodings**, not encryption. Query strings use form encoding (space &lt;-> '+'), paths do not. **International domains**: the parser converts them to punycode ("xn--..."); look-alike characters then stand out in the ASCII form, but IDNA is not a defence against homograph phishing by itself.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://url.spec.whatwg.org/" target="_blank" rel="noreferrer">https://url.spec.whatwg.org/</a></li><li><a href="https://www.rfc-editor.org/rfc/rfc3986.html" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc3986.html</a></li><li><a href="https://www.rfc-editor.org/rfc/rfc4648.html" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc4648.html</a></li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/url/2/url"
+url = "https://docs.rs/url/2/url/"
+
+[[sources]]
+title = "docs.rs/percent-encoding/2"
+url = "https://docs.rs/percent-encoding/2/"
+
+[[sources]]
+title = "docs.rs/base64/0.22"
+url = "https://docs.rs/base64/0.22/"
+
+[[sources]]
+title = "docs.rs/hex/0.4"
+url = "https://docs.rs/hex/0.4/"
+
+[[sources]]
+title = "docs.rs/data-encoding/2"
+url = "https://docs.rs/data-encoding/2/"
+
+[[sources]]
+title = "url.spec.whatwg.org"
+url = "https://url.spec.whatwg.org/"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc3986.html"
+url = "https://www.rfc-editor.org/rfc/rfc3986.html"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc4648.html"
+url = "https://www.rfc-editor.org/rfc/rfc4648.html"

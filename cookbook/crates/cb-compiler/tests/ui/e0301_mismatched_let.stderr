@@ -1,0 +1,11 @@
+error[E0301]: mismatched types
+ --> e0301_mismatched_let.peb:2:18
+  |
+2 |     let x: int = true;
+  |            ---   ^^^^ expected `int`, found `bool`
+  |            |
+  |            expected due to this type
+  |
+  = help: convert with `x as int`
+
+error: aborting due to 1 previous error

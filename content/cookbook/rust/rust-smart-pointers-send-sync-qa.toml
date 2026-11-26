@@ -1,0 +1,70 @@
+title = "Rust smart pointers send sync questions and answers"
+module = "Worked questions"
+module_order = 14
+chapter = "Rust concept answers"
+chapter_order = 1
+order = 672
+kind = "recipe"
+lede = "Smart pointers, interior mutability, reference cycles, Send/Sync and shared-state concurrency."
+level = "advanced"
+code = ["examples/interview/rust_smart_pointers_send_sync_qa.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>interview preparation</li><li>reviewing Rc/Arc/Mutex designs</li><li>explaining E0277 "cannot be sent between threads"</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>tree/graph structures</li><li>shared caches and config</li><li>worker pools</li><li>plugin registries (<code>Arc&lt;dyn Trait&gt;</code>)</li><li>copy-on-write state</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://www.techinterview.org/post/3233474457/rust-interview-questions-2025-ownership-borrowing-lifetimes-traits-async-await-error-handling-smart-pointers-concurrency/>
+
+<https://www.techinterview.org/post/3233460429/rust-interview-questions/> and <https://codeforgeek.com/rust-interview-questions/>
+
+<https://github.com/devinterview-io/rust-interview-questions> and <https://interviewing.io/rust-interview-questions>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Question bank Q1**. What is `Box<T>` for? Recursive types, trait objects, size. [Easy] [asked: very common] Q2.
+
+Rc vs Arc: what is the difference and the cost? [Easy] [asked: very common] Q3. Cell vs RefCell vs Mutex: interior mutability compared. [Medium] [asked: very common] Q4. Can Rust leak memory?
+
+Show an Rc reference cycle and the Weak fix. [Medium] [asked: very common] Q5. How do you build a tree with parent pointers using `Rc<RefCell<T>>` and `Weak`? [Medium] [asked: common] Q6. Why is `Rc<T>` not `Send`?
+
+Why does `Arc<T>` work across threads? [Medium] [asked: very common] Q7. Define Send and Sync. What is the relation `&T: Send` iff `T: Sync`?
+
+How do you opt out? [Hard] [asked: very common] Q8. What is mutex poisoning and how do you recover? [Medium] [asked: common] Q9. Mutex vs Condvar vs channels: when do you use each? [Medium] [asked: common] Q10.
+
+Why is "wrap everything in `Arc<Mutex<T>>`" a design smell? [Medium] [asked: very common] Q11. RwLock vs Mutex and the writer-starvation caveat. [Hard] [asked: occasional] Q12. What do `Arc::make_mut` and `Arc::try_unwrap` do? [Hard] [asked: occasional] Q13.
+
+What is `Cow` and when do you use it? [Medium] [asked: common] Q14. `Box<dyn Trait>` vs `Rc<dyn Trait>` vs `Arc<dyn Trait + Send + Sync>`: which when? [Medium] [asked: common] Q15. Why does `thread::spawn` need `'static + Send`, and what are scoped threads? [Medium] [asked: very common]
+"""
+
+[[sources]]
+title = "techinterview.org/post/3233474457/rust-interview-questions-2025-ownership-bor…"
+url = "https://www.techinterview.org/post/3233474457/rust-interview-questions-2025-ownership-borrowing-lifetimes-traits-async-await-error-handling-smart-pointers-concurrency/"
+
+[[sources]]
+title = "techinterview.org/post/3233460429/rust-interview-questions"
+url = "https://www.techinterview.org/post/3233460429/rust-interview-questions/"
+
+[[sources]]
+title = "codeforgeek.com/rust-interview-questions"
+url = "https://codeforgeek.com/rust-interview-questions/"
+
+[[sources]]
+title = "github.com/devinterview-io/rust-interview-questions"
+url = "https://github.com/devinterview-io/rust-interview-questions"
+
+[[sources]]
+title = "interviewing.io/rust-interview-questions"
+url = "https://interviewing.io/rust-interview-questions"

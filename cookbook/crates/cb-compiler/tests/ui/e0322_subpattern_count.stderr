@@ -1,0 +1,31 @@
+error[E0322]: `E::Pair` has 2 fields but the pattern has 1 field
+ --> e0322_subpattern_count.peb:5:9
+  |
+5 |         E::Pair(a) => println(to_str(a)),
+  |         ^^^^^^^^^^ expected 2 fields
+
+error[E0322]: this pattern has 2 elements, but the tuple has 3
+ --> e0322_subpattern_count.peb:8:9
+  |
+8 |         (a, b) => println(to_str(a + b)),
+  |         ^^^^^^ expected 3 elements
+  |
+  = note: the matched type is `(int, int, int)`
+
+error[E0201]: cannot find value `a` in this scope
+ --> e0322_subpattern_count.peb:8:34
+  |
+8 |         (a, b) => println(to_str(a + b)),
+  |                                  ^ not found in this scope
+  |
+  = help: a local variable or function with a similar name exists: `e`
+
+error[E0201]: cannot find value `b` in this scope
+ --> e0322_subpattern_count.peb:8:38
+  |
+8 |         (a, b) => println(to_str(a + b)),
+  |                                      ^ not found in this scope
+  |
+  = help: a local variable or function with a similar name exists: `e`
+
+error: aborting due to 4 previous errors

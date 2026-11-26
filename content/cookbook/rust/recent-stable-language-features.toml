@@ -1,0 +1,52 @@
+title = "Recent stable language features"
+module = "Rust language"
+module_order = 1
+chapter = "Everyday language"
+chapter_order = 3
+order = 33
+kind = "recipe"
+lede = "recent stable LANGUAGE features, each with a realistic use case and the workaround it replaces."
+level = "intermediate"
+code = ["examples/language/recent_stable_language_features.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>modernising older code</li><li>code review of "new" syntax</li><li>choosing which features to adopt</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Every feature below was compiled on rustc 1.98.1 (edition 2024) without `#![feature]`. Version numbers in comments come from the release notes (<https://doc.rust-lang.org/stable/releases.html>); "recent" means the notes were not checked for that item. Each feature lives in its own small function with an assert, so you can lift one out and read it alone.
+
+How: `main` calls every demo function and prints one line each. A failing assert means the feature misbehaves.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>config/request validation chains (let chains)</li><li>callbacks that await (async closures)</li><li>plugin registries (trait upcasting)</li><li>lint hygiene in large workspaces (#[expect])</li><li>array initialisation of non-Copy types (const blocks)</li><li>FFI and syscalls (unsafe extern, c"" literals)</li><li>lookup of "optional but must satisfy" fields (is_none_or)</li><li>parsers (range patterns, let-else)</li><li>early-exit computations (labeled blocks)</li><li>API design that avoids over-capturing (use&lt;&gt;)</li><li>binary layouts (offset_of!)</li><li>compile-time tables (const fn)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/edition-guide/rust-2024/index.html>
+
+<https://doc.rust-lang.org/stable/releases.html>
+
+<https://doc.rust-lang.org/std/>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/stable/releases.html"
+url = "https://doc.rust-lang.org/stable/releases.html"
+
+[[sources]]
+title = "doc.rust-lang.org/edition-guide/rust-2024/index.html"
+url = "https://doc.rust-lang.org/edition-guide/rust-2024/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std"
+url = "https://doc.rust-lang.org/std/"

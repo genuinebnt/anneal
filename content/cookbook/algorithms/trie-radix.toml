@@ -1,0 +1,54 @@
+title = "A trie and a compressed radix tree"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Trees and ordered structures"
+chapter_order = 2
+order = 175
+kind = "recipe"
+lede = "a trie and a compressed radix tree (Patricia) over byte strings, arena-based"
+level = "intermediate"
+code = ["examples/data_structures/trie_radix.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>autocomplete</li><li>routers (HTTP paths, IP prefixes)</li><li>symbol tables</li><li>dictionaries</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+two ordered maps keyed by byte strings. `Trie` has one node per byte; `Radix` stores whole labels on edges and only keeps a node where the key set branches or a key ends, so a chain like "apple" -> "applesauce" costs 2 nodes instead of 10.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+both give O(key length) lookups independent of how many keys are stored, ordered prefix scans (sorted DFS since children are kept sorted by first byte), and longest-prefix match, which a hash map cannot do at all.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+nodes live in a `Vec` and children are `usize` ids (arena_ids); freed slots go on a free list so ids stay stable. Radix insert **splits** an edge when a new key diverges mid-label; remove **merges** a node left with one child and no value back into its edge. Verified by a differential test against `BTreeMap` (prefix query == range scan) on 5k seeded random strings.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>autocomplete and typeahead</li><li>HTTP route tables (<code>/api/v1/*</code>) and IP longest-prefix routing (the classic radix/Patricia use)</li><li>spell-check dictionaries</li><li>Linux kernel and many routers use radix-style trees for routing/page lookups</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Radix_tree> and <https://en.wikipedia.org/wiki/Trie>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Radix_tree"
+url = "https://en.wikipedia.org/wiki/Radix_tree"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Trie"
+url = "https://en.wikipedia.org/wiki/Trie"

@@ -1,0 +1,205 @@
+title = "Parsing in depth"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 558
+kind = "guide"
+lede = "Grammar classes, LR, Earley, lossless trees, recovery, Unicode, layout · Extends Parts I–III"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Grammar classes"
+body = """
+<p>For deterministic parsers, <code>LL(k) ⊂ LR(k)</code>, and <code>LR(0) ⊂ SLR(1) ⊂ LALR(1) ⊂ LR(1)</code>. Every LR(k) language has an LR(1) grammar, but not every LR(1) grammar is LL(k). Left recursion is fine for LR and impossible for LL, which is why recursive descent uses loops or Pratt parsing for binary operators. General algorithms (Earley, GLR, GLL) handle any context-free grammar, including ambiguous ones, in O(n³) worst case. PEGs are a different formalism. Ordered choice makes them unambiguous by construction, which also hides ambiguities you would want to know about.</p>
+
+<p><b>FIRST and FOLLOW</b> sets drive both LL table construction and error recovery. FIRST(α) is the set of terminals that can begin a string derived from α, plus ε if α can derive the empty string. They are computed by iterating to a fixed point:</p>
+
+```rust title="FIRST sets by fixpoint iteration"
+use std::collections::{HashMap, HashSet};
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Sym { T(&'static str), N(&'static str) }
+pub type Grammar = HashMap<&'static str, Vec<Vec<Sym>>>;
+
+/// `None` in a set stands for ε.
+pub fn first_sets(g: &Grammar) -> HashMap<&'static str, HashSet<Option<&'static str>>> {
+    let mut first: HashMap<_, HashSet<_>> = g.keys().map(|&n| (n, HashSet::new())).collect();
+    loop {
+        let mut changed = false;
+        for (&n, alts) in g {
+            for alt in alts {
+                let mut add = HashSet::new();
+                let mut nullable = true;                // does the prefix so far derive ε?
+                for sym in alt {
+                    match *sym {
+                        Sym::T(t) => { add.insert(Some(t)); nullable = false; }
+                        Sym::N(m) => {
+                            add.extend(first[m].iter().filter(|x| x.is_some()));
+                            if !first[m].contains(&None) { nullable = false; }
+                        }
+                    }
+                    if !nullable { break; }
+                }
+                if nullable { add.insert(None); }
+                let set = first.get_mut(n).unwrap();
+                let before = set.len();
+                set.extend(add);
+                changed |= set.len() != before;
+            }
+        }
+        if !changed { return first; }
+    }
+}
+```
+"""
+
+[[sections]]
+heading = "LR parsing"
+body = """
+<p>An LR(0) item is a rule with a dot, <code>E → E • + T</code>, marking how much has been seen. The parser's states are sets of items. <code>closure</code> adds <code>B → •γ</code> for every <code>B</code> right after a dot, and <code>goto(I, X)</code> advances the dot over <code>X</code>. The automaton recognizes viable prefixes, and a stack of states drives shift and reduce actions.</p>
+
+<ul> <li><b>SLR</b> reduces on FOLLOW sets.</li> <li><b>Canonical LR(1)</b> puts a lookahead token in every item. It is precise, but it has many states.</li> <li><b>LALR(1)</b> merges LR(1) states with the same core. It is compact, and it occasionally introduces “mysterious” reduce/reduce conflicts.</li> <li><b>IELR(1)</b> and Pager's method keep full LR(1) power with LALR-sized tables.</li> </ul>
+
+<p>Conflicts are a design tool: they point at real ambiguities, such as the dangling else. Resolve them with precedence declarations rather than grammar contortions.</p>
+"""
+
+[[sections]]
+heading = "Earley parsing"
+body = """
+<p>Earley's algorithm parses any context-free grammar. It keeps a chart: for each input position, a set of items <code>(rule, dot, origin)</code>. <em>Predict</em> adds rules for a nonterminal after a dot, <em>scan</em> advances over a matching terminal, and <em>complete</em> advances items that were waiting on a finished nonterminal. It takes O(n³) in general, O(n²) for unambiguous grammars, and O(n) for most LR(k) grammars with Leo's optimization. Nullable rules need the Aycock–Horspool fix.</p>
+
+```rust title="Earley recognizer"
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Item { rule: usize, dot: usize, origin: usize }
+
+/// rules[i] = (lhs, rhs). Returns whether `input` is derivable from `start`.
+pub fn earley(rules: &[(&str, Vec<Sym>)], start: &str, input: &[&str]) -> bool {
+    let mut chart: Vec<Vec<Item>> = vec![Vec::new(); input.len() + 1];
+    let add = |set: &mut Vec<Item>, it: Item| if !set.contains(&it) { set.push(it) };
+    for (i, (lhs, _)) in rules.iter().enumerate() {
+        if *lhs == start { add(&mut chart[0], Item { rule: i, dot: 0, origin: 0 }); }
+    }
+    for k in 0..=input.len() {
+        let mut j = 0;
+        while j < chart[k].len() {                            // chart[k] grows as we process it
+            let it = chart[k][j];
+            let (lhs, rhs) = &rules[it.rule];
+            match rhs.get(it.dot) {
+                Some(Sym::N(nt)) => {                            // predict
+                    for (r, (l, _)) in rules.iter().enumerate() {
+                        if l == nt { add(&mut chart[k], Item { rule: r, dot: 0, origin: k }); }
+                    }
+                    // Aycock–Horspool: if `nt` is nullable, also advance `it` over it here.
+                }
+                Some(Sym::T(t)) => {                             // scan
+                    if input.get(k) == Some(t) { add(&mut chart[k + 1], Item { dot: it.dot + 1, ..it }); }
+                }
+                None => {                                        // complete
+                    for p in chart[it.origin].clone() {
+                        if let Some(Sym::N(nt)) = rules[p.rule].1.get(p.dot) {
+                            if nt == lhs { add(&mut chart[k], Item { dot: p.dot + 1, ..p }); }
+                        }
+                    }
+                }
+            }
+            j += 1;
+        }
+    }
+    chart[input.len()].iter().any(|it| {
+        let (lhs, rhs) = &rules[it.rule];
+        *lhs == start && it.dot == rhs.len() && it.origin == 0
+    })
+}
+```
+"""
+
+[[sections]]
+heading = "Lossless syntax trees and event-based parsers"
+body = """
+<p>rust-analyzer's parser doesn't build a tree directly. It emits a flat list of <em>events</em>: start a node, consume a token, finish a node, report an error. A separate builder turns these into a rowan green tree, attaching whitespace and comments as trivia. This keeps the grammar code free of tree plumbing. It also allows <code>precede</code>: after parsing <code>a</code> in <code>a + b</code>, you can retroactively wrap it in a <code>BinExpr</code> node. That is how left-associative operators work without left recursion.</p>
+
+```rust title="Event-based parsing with markers (the rust-analyzer pattern)"
+pub enum Event {
+    Start { kind: SyntaxKind, forward_parent: Option<u32> },
+    Token { kind: SyntaxKind, len: u32 },
+    Finish,
+    Error(String),
+}
+
+pub struct Marker(u32);
+pub struct CompletedMarker(u32);
+
+impl Parser<'_> {
+    pub fn start(&mut self) -> Marker {
+        self.events.push(Event::Start { kind: SyntaxKind::TOMBSTONE, forward_parent: None });
+        Marker(self.events.len() as u32 - 1)
+    }
+    pub fn complete(&mut self, m: Marker, kind: SyntaxKind) -> CompletedMarker {
+        if let Event::Start { kind: k, .. } = &mut self.events[m.0 as usize] { *k = kind; }
+        self.events.push(Event::Finish);
+        CompletedMarker(m.0)
+    }
+    /// Wrap an already-completed node in a new parent: `a` → `BinExpr(a …)`.
+    pub fn precede(&mut self, done: CompletedMarker) -> Marker {
+        let parent = self.start();
+        if let Event::Start { forward_parent, .. } = &mut self.events[done.0 as usize] {
+            *forward_parent = Some(parent.0 - done.0);
+        }
+        parent
+    }
+}
+
+// Binary expressions with Pratt parsing and `precede`:
+fn expr_bp(p: &mut Parser, min_bp: u8) -> Option<CompletedMarker> {
+    let mut lhs = atom(p)?;
+    while let Some((l_bp, r_bp)) = infix_bp(p.current()) {
+        if l_bp < min_bp { break; }
+        let m = p.precede(lhs);
+        p.bump();
+        expr_bp(p, r_bp);                                   // missing rhs → error node, keep going
+        lhs = p.complete(m, SyntaxKind::BIN_EXPR);
+    }
+    Some(lhs)
+}
+```
+
+<div class="cb-g-tip"><h3>Error recovery with recovery sets</h3> <p>Pass a set of tokens that some enclosing rule can resume at. On an error inside an expression, wrap the unexpected tokens in an <code>ERROR</code> node until you reach a token in the recovery set, such as <code>;</code>, <code>}</code> or a statement keyword, then return. The tree stays well-formed, every token stays in the tree, and later passes see an <code>ERROR</code> node instead of nothing. matklad's resilient LL tutorial develops this fully.</p></div>
+
+<div class="cb-g-tip"><h3>Incremental reparsing</h3> <p>After an edit, the cheapest strategy is rust-analyzer's: if the edit is inside a single token, or inside a <code>{…}</code> block whose braces still balance, reparse only that token or block and splice it into the green tree. Tree-sitter generalizes this. It reuses every subtree whose byte range and lookahead don't touch the edit (Wagner–Graham).</p></div>
+
+<div class="cb-g-tip"><h3>Lexing details production compilers get right</h3> <ul> <li>Identifiers follow Unicode UAX #31 (<code>XID_Start</code>, <code>XID_Continue</code>; the <code>unicode-ident</code> crate) and are NFC-normalized.</li> <li>Lint mixed-script and confusable identifiers (<code>раураl</code> in Cyrillic).</li> <li>Reject or warn on bidirectional control characters in comments and strings. The Trojan Source attack (CVE-2021-42574) used them to make code render differently from how it compiles.</li> <li>Nested block comments need a depth counter.</li> <li>String interpolation and template literals need lexer modes driven by a stack.</li> <li>JavaScript's <code>/</code> is ambiguous between division and a regex, so the lexer needs feedback from the parser.</li> </ul></div>
+
+<div class="cb-g-tip"><h3>Indentation-sensitive syntax</h3> <p>Python-style layout is a lexer pass. Keep a stack of indentation columns. A deeper line pushes and emits <code>INDENT</code>. A shallower line pops and emits <code>DEDENT</code> until it matches, and it's an error if it matches no level. Inside brackets, newlines and indentation are ignored. Haskell's layout rule is more complex: it can insert a closing brace when a parse error occurs.</p></div>
+
+```rust title="INDENT/DEDENT generation"
+pub fn layout(src: &str, out: &mut Vec<Tok>) -> Result<(), String> {
+    let mut stack = vec![0usize];
+    for (n, line) in src.lines().enumerate() {
+        if line.trim().is_empty() || line.trim_start().starts_with('#') { continue; }
+        let col = line.len() - line.trim_start().len();
+        if col > *stack.last().unwrap() {
+            stack.push(col);
+            out.push(Tok::Indent);
+        }
+        while col < *stack.last().unwrap() {
+            stack.pop();
+            out.push(Tok::Dedent);
+        }
+        if col != *stack.last().unwrap() { return Err(format!("line {}: inconsistent dedent", n + 1)); }
+        lex_line(line.trim_start(), out);
+        out.push(Tok::Newline);
+    }
+    out.extend(std::iter::repeat(Tok::Dedent).take(stack.len() - 1));
+    Ok(())
+}
+```
+"""
+
+[[sources]]
+title = "matklad, Resilient LL Parsing"
+url = "https://matklad.github.io/2023/05/21/resilient-ll-parsing-tutorial.html"
+
+[[sources]]
+title = "Unicode UAX #31"
+url = "https://unicode.org/reports/tr31/"

@@ -1,0 +1,66 @@
+title = "E-graphs and equality saturation"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Middle end and analysis"
+chapter_order = 5
+order = 629
+kind = "recipe"
+lede = "e-graphs and equality saturation (egg): hash-consed e-nodes, congruence closure with deferred rebuilding, e-matching, rewrite rules, a backoff scheduler, constant folding as an analysis, and cost-based extraction."
+level = "advanced"
+code = ["examples/compilers_runtimes/egraph_equality_saturation.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+optimisers that must choose between many equivalent forms without committing to a rewrite order (compilers, numeric-accuracy tools, tensor-graph optimisers, SMT solvers).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The problem**: a classic optimiser applies rewrites destructively, so the **order** matters (the phase-ordering problem): `(a*2)/2` -> `a` needs a different order than `a*2` -> `a<<1` first. An e-graph keeps **all** equivalent versions at once.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">E-NODE</div><div class="cb-g-says"><p>An operator whose children are e-<strong>classes</strong> (not terms). <code>Add(c1, c2)</code>.</p></div></div><div class="cb-g-term"><div class="cb-g-name">E-CLASS</div><div class="cb-g-says"><p>A set of e-nodes known to be equal. A whole exponential set of terms is represented in linear space.</p></div></div><div class="cb-g-term"><div class="cb-g-name">HASH-CONSING (<code>memo</code>)</div><div class="cb-g-says"><p>Canonical e-node -&gt; class, so an identical node is never created twice.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Union-find</div><div class="cb-g-says"><p>Over class ids; <code>merge(a, b)</code> unions two classes (that is how a rewrite "fires").</p></div></div><div class="cb-g-term"><div class="cb-g-name">Congruence</div><div class="cb-g-says"><p>If a = b then f(a) = f(b). After merges the hash-cons table is stale (two nodes became identical after canonicalising their children). egg's insight is to <strong>defer</strong> the repair: merge freely during a rewrite phase, then call <code>rebuild</code> once, which processes a worklist of changed classes and re-canonicalises only their <strong>parent</strong> nodes.</p></div></div><div class="cb-g-term"><div class="cb-g-name">E-MATCHING</div><div class="cb-g-says"><p>Find every (class, substitution) where a pattern with variables matches some e-node in the class (a backtracking search through classes, not terms).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Analysis</div><div class="cb-g-says"><p>Per-class data kept up to date through merges. Here: the constant value of a class, so <code>(+ 1 2)</code> becomes class-equal to <code>3</code> (constant folding is not a rewrite rule, it is a lattice-valued fact).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Saturation loop</div><div class="cb-g-says"><p>(1) search all rules, collecting matches, (2) apply all matches, (3) rebuild; repeat until no change (<strong>saturated</strong>) or a budget (iterations, nodes) runs out.</p><p>Associativity+commutativity+distributivity never saturate on non-trivial terms, so a <strong>backoff scheduler</strong> bans a rule that produces too many matches, for a growing number of iterations (the same idea as egg's <code>BackoffScheduler</code>).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Extraction</div><div class="cb-g-says"><p>Choose the cheapest term in a class. With a monotone cost function (cost of a node &gt;= sum of children), a bottom-up fixpoint (Bellman-Ford over classes: cost[c] = min over nodes) is the exact dynamic program for <strong>tree</strong> cost, with no ILP.</p><p>When shared sub-terms are paid for once (DAG cost) optimal extraction is NP-hard, so there is a second, <strong>greedy DAG</strong> extractor: each class remembers its whole chosen sub-DAG, a candidate node unions its children's choices and is charged once per distinct class. It is a heuristic: compared with an exhaustive branch-and-bound on small e-graphs.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+1. every rewrite rule is sound: lhs and rhs evaluate equally on random variable values (wrapping i64 semantics);
+2. congruence invariants after `rebuild`: random adds and merges are compared with an independent brute-force congruence closure (naive union-find, repeat to fixpoint), and the hash-cons table is canonical;
+3. the tree extractor matches an independent layered dynamic program (cheapest term of depth &lt;= d, for d = 1, 2, ...); the greedy DAG extractor is never below the exhaustive DAG optimum, and a hand-built e-graph separates the two costs;
+4. the best cost reached on a finite (terminating) rule set does not depend on rule order;
+5. 2000 random expressions are saturated, extracted, and evaluated on random inputs against the original term.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>the <code>egg</code> library and <code>egglog</code></li><li>Herbie (rewrites floating point expressions for accuracy, built on egg)</li><li>Cranelift's mid-end (acyclic e-graphs, see the RFC below) for GVN</li><li>LICM and algebraic rewrites</li><li>tensor graph superoptimisers (TASO/TENSAT-style)</li><li>the Simplify prover (Detlefs, Nelson, Saxe) and SMT solvers use the same congruence closure to decide equality with uninterpreted functions</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Willsey et al</li><li>"egg: Fast and Extensible Equality Saturation" (POPL 2021) <a href="https://arxiv.org/abs/2004.03082" target="_blank" rel="noreferrer">https://arxiv.org/abs/2004.03082</a></li><li><a href="https://egraphs-good.github.io/" target="_blank" rel="noreferrer">https://egraphs-good.github.io/</a></li><li><a href="https://docs.rs/egg/latest/egg/" target="_blank" rel="noreferrer">https://docs.rs/egg/latest/egg/</a></li><li><a href="https://herbie.uwplse.org/" target="_blank" rel="noreferrer">https://herbie.uwplse.org/</a></li><li>Cranelift e-graph RFC <a href="https://github.com/bytecodealliance/rfcs/blob/main/accepted/cranelift-egraph.md" target="_blank" rel="noreferrer">https://github.com/bytecodealliance/rfcs/blob/main/accepted/cranelift-egraph.md</a></li><li>Tate et al</li><li>"Equality Saturation: A New Approach to Optimization" (title only, not re-read here)</li></ul>
+"""
+
+[[sources]]
+title = "arxiv.org/abs/2004.03082"
+url = "https://arxiv.org/abs/2004.03082"
+
+[[sources]]
+title = "egraphs-good.github.io"
+url = "https://egraphs-good.github.io/"
+
+[[sources]]
+title = "docs.rs/egg/latest/egg"
+url = "https://docs.rs/egg/latest/egg/"
+
+[[sources]]
+title = "herbie.uwplse.org"
+url = "https://herbie.uwplse.org/"
+
+[[sources]]
+title = "github.com/bytecodealliance/rfcs/blob/main/accepted/cranelift-egraph.md"
+url = "https://github.com/bytecodealliance/rfcs/blob/main/accepted/cranelift-egraph.md"

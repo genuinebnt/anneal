@@ -1,0 +1,361 @@
+title = "Delete and tombstones"
+module = "Databases"
+module_order = 8
+chapter = "Indexes"
+chapter_order = 3
+order = 338
+kind = "guide"
+lede = "BusTub P2 Task 2 (delete) · borrow and merge for leaves and inner nodes · root collapse · the Fall 2025 tombstone buffer (a Bε-tree in miniature)"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>Deletion is where most B+Tree implementations break. Insert has one structural fix-up (split). Delete has four (borrow from the left, borrow from the right, merge, and root collapse), each different for leaves and inner nodes, and each able to cascade upward.</p>
+"""
+
+[[sections]]
+heading = "The algorithm"
+body = """
+<p>(This is the pessimistic descent. Remove has an optimistic one too; see the end of this section.)</p>
+
+<ol> <li>Descend with write latches, keeping every <strong>unsafe</strong> ancestor. A node is safe for delete if one removal can't make it underflow: size &gt; min (a root inner node needs more than 2 children).</li> <li>Remove the key from the leaf. With tombstones enabled, record the deletion instead (below).</li> <li>While the node underflows and isn't the root:<ul> <li>pick a sibling under the same parent (prefer the left one);</li> <li>if the sibling has more than min entries, <strong>borrow</strong> one, and fix the parent's separator;</li> <li>otherwise <strong>merge</strong> right into left, remove the separator and the right child from the parent, and free the right page. The parent lost a child, so repeat at the parent.</li> </ul> </li> <li>At the root: an inner root with one child is replaced by that child (the tree shrinks by one level); an empty leaf root makes the tree empty.</li> </ol>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th></th> <th>Leaf</th> <th>Inner node</th> </tr> </thead> <tbody> <tr> <td>Borrow from left</td> <td>move left's last entry to the node's front; separator := node's new first key</td> <td>the separator comes <strong>down</strong> into the node as its first real key; left's last key goes <strong>up</strong>; left's last child moves over</td> </tr> <tr> <td>Borrow from right</td> <td>move right's first entry to the node's end; separator := right's new first key</td> <td>the separator comes down to the node's end; right's first real key goes up; right's first child moves over</td> </tr> <tr> <td>Merge</td> <td>append right's entries; <code>left.next = right.next</code></td> <td>append the separator (pulled down) plus right's keys and children</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Optimistic remove"
+body = """
+<p>Most deletes touch one leaf and leave it at or above its minimum. For those, the root-to-leaf write latches of the algorithm above are wasted. <code>remove_optimistic</code> descends with read latches, write-latches the leaf, and answers one of three ways:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Leaf after the latch</th> <th>Action</th> <th>Result</th> </tr> </thead> <tbody> <tr> <td>key absent, or already tombstoned</td> <td>nothing to do</td> <td>done</td> </tr> <tr> <td>non-root leaf with size &gt; min, or a root leaf with size &gt; 1</td> <td>remove (or tombstone) in place</td> <td>done, <strong>one write latch</strong></td> </tr> <tr> <td>anything else (the leaf would underflow, or the root leaf would become empty)</td> <td>give up</td> <td>restart with <code>remove_pessimistic</code></td> </tr> </tbody> </table></div>
+
+<p>With tombstones on, "remove in place" can mean "record a tombstone and physically delete the oldest one", which still removes at most one entry, so the same size test is enough. The root leaf is special because emptying it must also clear the root id in the header page, so its optimistic case keeps the <strong>header</strong> read latch while the root leaf is write-latched (the root can't change underneath).</p>
+
+<p>BusTub's <code>OptimisticDeleteTest</code> checks this: it finds a leaf above <code>min_size</code>, deletes from it, and expects one write guard. <code>Latching::Pessimistic</code> (see <a href="/cookbook/p/search-and-insert">P2.2</a>) skips the attempt and is what the optimistic mode must agree with on every history.</p>
+"""
+
+[[sections]]
+heading = "Tombstones (Fall 2025)"
+body = """
+<p>BusTub's leaves carry a buffer of up to <em>K</em> pending deletions. <code>Remove(k)</code> doesn't delete; it appends k's slot index to the leaf's <strong>tombstone buffer</strong>. Only when the buffer overflows is the <strong>oldest</strong> pending deletion applied physically. Lookups and iterators skip tombstoned entries. Re-inserting a tombstoned key revives it.</p>
+
+<p>Why bother? Physical deletes cause merges, and merges touch parents and siblings under write latches. Batching deletions in the leaf makes most removes leaf-only operations, with fewer structural changes and shorter latch hold times. That's the core idea of the <strong>Bε-tree</strong> (buffer updates, apply them lazily) in its smallest form.</p>
+
+<p>The rules that make it subtle:</p>
+
+<ul> <li>Tombstones store <strong>indices</strong>, so every insert or physical removal in the leaf must <strong>shift</strong> the indices after it.</li> <li>A split moves tombstones with their entries, <strong>preserving their relative order</strong>.</li> <li>When a leaf is merged or redistributed into another, the donor's pending deletions are treated as <strong>newer</strong> than the recipient's (they're appended after them). If the recipient then holds more than <em>K</em>, the oldest are applied. That can shrink the recipient <em>again</em>, so the underflow repair has to loop at the same level.</li> </ul>
+
+<aside data-call="warning"><b>The bug this guide's own reference had</b><p>The first version of <code>fix_underflow</code> repaired one node and returned. With tombstones, a merge can leave the merged node underfull (applying excess deletions shrinks it), and a later redistribution at the leaf level then "fixes" the leaf and returns, <strong>leaving the parent's underflow unrepaired</strong>. The model test found it within seconds. The fix: repair each level in a loop until the node holds, track whether the parent lost a child, and only then move up.</p></aside>
+
+:::deeper Remove, underflow repair, redistribute, merge (with tombstone rules)
+```rust title="src/storage/index/b_plus_tree.rs (part 3: delete)"
+    // ---- remove: pessimistic crabbing ----------------------------------------------------------
+    pub fn remove(&self, k: u64) -> Res<()> {
+        if self.latching == Latching::Optimistic && self.remove_optimistic(k)? {
+            return Ok(());
+        }
+        self.remove_pessimistic(k)
+    }
+
+    /// Shared latches down to the leaf's parent, exclusive latch on the leaf. Succeeds (true) when
+    /// the removal can't underflow the leaf or empty the root, or when there is nothing to remove;
+    /// otherwise returns false and the caller restarts pessimistically.
+    fn remove_optimistic(&self, k: u64) -> Res<bool> {
+        let h = self.bpm.read_page(self.header)?;
+        let root = root_of(h.data());
+        if !root.is_valid() {
+            return Ok(true);
+        }
+        let (mut leaf, is_root) = {
+            let r = self.bpm.read_page(root)?;
+            if is_leaf(r.data()) {
+                drop(r);
+                (self.bpm.write_page(root)?, true) // header stays latched: the root can't change
+            } else {
+                drop(h);
+                let mut g = r;
+                loop {
+                    let c = ichild(g.data(), child_idx(g.data(), k));
+                    if level(g.data()) == 1 {
+                        break (self.bpm.write_page(c)?, false);
+                    }
+                    g = self.bpm.read_page(c)?;
+                }
+            }
+        };
+        let b = leaf.data_mut();
+        if !is_leaf(b) {
+            return Ok(false); // root changed under us
+        }
+        let Some(i) = leaf_find(b, k) else {
+            return Ok(true);
+        };
+        if is_tomb(b, i) {
+            return Ok(true);
+        }
+        let safe = if is_root {
+            size(b) > 1
+        } else {
+            size(b) > self.leaf_min()
+        };
+        if !safe {
+            return Ok(false);
+        }
+        if self.k_tombs > 0 {
+            let mut t = tombs(b);
+            t.push(i);
+            set_tombs(b, &t);
+            apply_excess_tombs(b, self.k_tombs);
+        } else {
+            leaf_remove_at(b, i);
+        }
+        Ok(true)
+    }
+
+    fn remove_pessimistic(&self, k: u64) -> Res<()> {
+        let hg = self.bpm.write_page(self.header)?;
+        let root = root_of(hg.data());
+        if !root.is_valid() {
+            return Ok(());
+        }
+        let mut header = Some(hg);
+        let mut path: Vec<WritePageGuard<'a, R>> = Vec::new();
+        let mut pid = root;
+        loop {
+            let g = self.bpm.write_page(pid)?;
+            let b = g.data();
+            let is_root = pid == root;
+            // Safe: one physical removal can't make this node underflow (or collapse the root).
+            let safe = match (is_leaf(b), is_root) {
+                (true, true) => false, // root leaf may empty: keep header
+                (false, true) => size(b) > 2,
+                (true, false) => size(b) > self.leaf_min(),
+                (false, false) => size(b) > self.int_min(),
+            };
+            if safe {
+                path.clear();
+                header = None;
+            }
+            let next = (!is_leaf(b)).then(|| ichild(b, child_idx(b, k)));
+            path.push(g);
+            match next {
+                Some(c) => pid = c,
+                None => break,
+            }
+        }
+        let leaf = path.last_mut().unwrap();
+        let b = leaf.data_mut();
+        let Some(i) = leaf_find(b, k) else {
+            return Ok(());
+        };
+        if is_tomb(b, i) {
+            return Ok(());
+        }
+        if self.k_tombs > 0 {
+            let mut t = tombs(b);
+            t.push(i);
+            set_tombs(b, &t);
+            apply_excess_tombs(b, self.k_tombs);
+        } else {
+            leaf_remove_at(b, i);
+        }
+        self.fix_underflow(path, header)
+    }
+
+    fn underflows(&self, b: &Buf) -> bool {
+        if is_leaf(b) {
+            size(b) < self.leaf_min()
+        } else {
+            size(b) < self.int_min()
+        }
+    }
+
+    /// Walk up the retained path repairing underflows by redistribution or merge.
+    fn fix_underflow(
+        &self,
+        mut path: Vec<WritePageGuard<'a, R>>,
+        mut header: Option<WritePageGuard<'a, R>>,
+    ) -> Res<()> {
+        let mut node = path.pop().unwrap();
+        loop {
+            if path.is_empty() {
+                // Either this node is the root (header held), or it was safe (no underflow possible).
+                let Some(hg) = header.as_mut() else {
+                    return Ok(());
+                };
+                let b = node.data();
+                if is_leaf(b) && size(b) == 0 {
+                    set_root(hg.data_mut(), PageId::INVALID);
+                    let p = node.page_id();
+                    drop(node);
+                    self.bpm.delete_page(p);
+                } else if !is_leaf(b) && size(b) == 1 {
+                    set_root(hg.data_mut(), ichild(b, 0)); // collapse one level
+                    let p = node.page_id();
+                    drop(node);
+                    self.bpm.delete_page(p);
+                }
+                return Ok(());
+            }
+            let mut parent_shrank = false;
+            // Repair this level. With tombstones, one repair can leave the node short again
+            // (applying excess deletions), so loop until it holds.
+            while self.underflows(node.data()) {
+                let parent = path.last_mut().unwrap();
+                let idx = int_read(parent.data())
+                    .1
+                    .iter()
+                    .position(|&c| c == node.page_id())
+                    .unwrap();
+                let from_left = idx > 0; // prefer the left sibling
+                let sib_idx = if from_left { idx - 1 } else { idx + 1 };
+                let mut sib = self.bpm.write_page(ichild(parent.data(), sib_idx))?;
+                let ri = idx.max(sib_idx);
+                let sib_min = if is_leaf(node.data()) {
+                    self.leaf_min()
+                } else {
+                    self.int_min()
+                };
+                if size(sib.data()) > sib_min {
+                    let (l, r) = if from_left {
+                        (&mut sib, &mut node)
+                    } else {
+                        (&mut node, &mut sib)
+                    };
+                    self.redistribute(parent.data_mut(), ri, l.data_mut(), r.data_mut(), from_left);
+                    continue;
+                }
+                // Merge right into left; the left guard survives, the right page is freed.
+                let (l, r) = if from_left {
+                    (&mut sib, &mut node)
+                } else {
+                    (&mut node, &mut sib)
+                };
+                let right_pid = r.page_id();
+                self.merge(parent.data_mut(), ri, l.data_mut(), r.data());
+                node = if from_left {
+                    drop(node);
+                    sib
+                } else {
+                    drop(sib);
+                    node
+                };
+                self.bpm.delete_page(right_pid); // false if a scan still pins it: leaks, harmless
+                parent_shrank = true;
+            }
+            if !parent_shrank {
+                return Ok(());
+            }
+            node = path.pop().unwrap(); // the parent lost a child: check it
+        }
+    }
+
+    /// Move one entry from the richer sibling into the underflowing node. `from_left` = the
+    /// donor is the left node. `ri` = index of the right node in the parent.
+    fn redistribute(
+        &self,
+        parent: &mut Buf,
+        ri: usize,
+        left: &mut Buf,
+        right: &mut Buf,
+        from_left: bool,
+    ) {
+        let (mut pk, pc) = int_read(parent);
+        if is_leaf(left) {
+            let (mut le, lt) = leaf_read(left);
+            let (mut re, rt) = leaf_read(right);
+            let (mut lt, mut rt) = (lt, rt);
+            if from_left {
+                let moved = le.len() - 1;
+                let was_tomb = lt.contains(&moved);
+                lt.retain(|&x| x != moved);
+                re.insert(0, le.pop().unwrap());
+                rt = rt.into_iter().map(|x| x + 1).collect();
+                if was_tomb {
+                    rt.push(0);
+                } // arriving tombstone is newest
+            } else {
+                let was_tomb = rt.contains(&0);
+                rt = rt.into_iter().filter(|&x| x != 0).map(|x| x - 1).collect();
+                le.push(re.remove(0));
+                if was_tomb {
+                    lt.push(le.len() - 1);
+                }
+            }
+            pk[ri] = re[0].0;
+            let (ln, rn) = (next_leaf(left), next_leaf(right));
+            leaf_write(left, &le, &lt, ln);
+            leaf_write(right, &re, &rt, rn);
+            let tl = self.k_tombs;
+            apply_excess_tombs(left, tl);
+            apply_excess_tombs(right, tl);
+        } else {
+            let (mut lk, mut lc) = int_read(left);
+            let (mut rk, mut rc) = int_read(right);
+            if from_left {
+                // Rotate right: parent separator comes down, left's last key goes up.
+                rk[0] = pk[ri];
+                rk.insert(0, 0);
+                rc.insert(0, lc.pop().unwrap());
+                pk[ri] = lk.pop().unwrap();
+            } else {
+                lk.push(pk[ri]);
+                lc.push(rc.remove(0));
+                rk.remove(0);
+                pk[ri] = rk[0];
+                rk[0] = 0;
+            }
+            let lvl = level(left);
+            int_write(left, lvl, &lk, &lc);
+            int_write(right, lvl, &rk, &rc);
+        }
+        let lvl = level(parent);
+        int_write(parent, lvl, &pk, &pc);
+    }
+
+    /// Append `right` onto `left` and remove the separator at `ri` from the parent.
+    fn merge(&self, parent: &mut Buf, ri: usize, left: &mut Buf, right: &Buf) {
+        let (mut pk, mut pc) = int_read(parent);
+        if is_leaf(left) {
+            let (mut le, mut lt) = leaf_read(left);
+            let (re, rt) = leaf_read(right);
+            let base = le.len();
+            le.extend(re);
+            lt.extend(rt.into_iter().map(|x| x + base)); // donor's deletions are newer
+            let tl = self.k_tombs;
+            let over = lt.len().saturating_sub(tl);
+            // Apply the oldest `over` deletions before writing (the buffer can't hold them all).
+            let mut drop_idx: Vec<usize> = lt.drain(..over).collect();
+            drop_idx.sort_unstable();
+            for &d in drop_idx.iter().rev() {
+                le.remove(d);
+                lt = lt
+                    .into_iter()
+                    .map(|x| if x > d { x - 1 } else { x })
+                    .collect();
+            }
+            let n = next_leaf(right);
+            leaf_write(left, &le, &lt, n);
+        } else {
+            let (mut lk, mut lc) = int_read(left);
+            let (rk, rc) = int_read(right);
+            lk.push(pk[ri]); // separator comes down
+            lk.extend_from_slice(&rk[1..]);
+            lc.extend_from_slice(&rc);
+            let lvl = level(left);
+            int_write(left, lvl, &lk, &lc);
+        }
+        pk.remove(ri);
+        pc.remove(ri);
+        let lvl = level(parent);
+        int_write(parent, lvl, &pk, &pc);
+    }
+```
+:::
+
+<aside data-call="rust"><b>Two <code>&amp;mut</code> guards into sibling pages at once</b><p>Redistribution needs the parent, the node and the sibling all mutable at once. They're three <em>different</em> guards, so three <code>&amp;mut</code> borrows are fine. The awkward part is choosing which one is "left": <code>let (l, r) = if from_left { (&amp;mut sib, &amp;mut node) } else { (&amp;mut node, &amp;mut sib) };</code> binds two mutable references to two distinct locals. After the merge, <code>node = if from_left { drop(node); sib } else { drop(sib); node };</code> keeps the surviving (left) guard. Moving guards around like values is exactly what RAII latching is good at.</p></aside>
+
+<aside data-call="performance"><b>Merge thresholds in production</b><p>Eager merging at half-full causes thrashing: alternating inserts and deletes at the boundary split and merge the same pair of pages repeatedly. Production trees merge lazily. PostgreSQL only removes pages that become completely empty, and relies on VACUUM and <code>REINDEX</code>. SQL Server and InnoDB merge below a lower threshold (InnoDB's <code>MERGE_THRESHOLD</code> defaults to 50% but is tunable per index). The tombstone buffer is another form of the same laziness.</p></aside>
+"""

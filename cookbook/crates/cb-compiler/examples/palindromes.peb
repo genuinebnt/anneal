@@ -1,0 +1,13 @@
+fn reverse(s: str) -> str {
+    let cs = chars(s);
+    let mut out = "";
+    let mut i = len(cs);
+    while i > 0 { i -= 1; out += cs[i]; }
+    out
+}
+fn is_palindrome(s: str) -> bool { s == reverse(s) }
+fn main() {
+    println(reverse("stressed"));
+    println(to_str(is_palindrome("racecar")));
+    println(to_str(is_palindrome("pebble")));
+}

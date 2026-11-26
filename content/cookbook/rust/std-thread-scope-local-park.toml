@@ -1,0 +1,82 @@
+title = "`std::thread` in practice"
+module = "Standard library and core"
+module_order = 2
+chapter = "Threads, synchronisation and time"
+chapter_order = 7
+order = 99
+kind = "recipe"
+lede = "Ownership across threads, scoped parallelism, panic handling, worker pools, thread locals, parking."
+level = "intermediate"
+code = ["examples/std_tour/std_thread_scope_local_park.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>parallelising CPU work without extra crates</li><li>background workers</li><li>per-thread caches</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>split a slice across cores</li><li>a fixed worker pool for blocking jobs</li><li>per-thread scratch buffers and counters</li><li>supervising a thread that may panic</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>thread::spawn</code></li><li><code>thread::scope</code></li><li><code>Scope::spawn</code></li><li><code>thread::Builder::new</code></li><li><code>Builder::name</code></li><li><code>Builder::spawn</code></li><li><code>thread::sleep</code></li><li><code>thread::yield_now</code></li><li><code>thread::park</code></li><li><code>thread::park_timeout</code></li><li><code>Thread::unpark</code></li><li><code>thread::current</code></li><li><code>Thread::id</code></li><li><code>Thread::name</code></li><li><code>thread::available_parallelism</code></li><li><code>thread::panicking</code></li><li><code>JoinHandle::join</code></li><li><code>JoinHandle::thread</code></li><li><code>JoinHandle::is_finished</code></li><li><code>ScopedJoinHandle::join</code></li><li><code>ScopedJoinHandle::is_finished</code></li><li><code>thread_local!</code></li><li><code>LocalKey::with</code></li><li><code>LocalKey::with_borrow</code></li><li><code>LocalKey::with_borrow_mut</code></li><li><code>LocalKey::get</code></li><li><code>LocalKey::set</code></li><li><code>std::panic::catch_unwind</code></li><li><code>std::panic::resume_unwind</code></li><li><code>std::panic::panic_any</code></li><li><code>slice::chunks</code></li><li><code>slice::chunks_mut</code></li><li><code>slice::split_at_mut</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/thread/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/thread/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+std: all of `std::thread`, `thread_local!`, `LocalKey`, `catch_unwind`, `resume_unwind`. alloc: `Arc`. core: `chunks_mut`, atomics.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+`Thread::into_raw`/`from_raw`, `ThreadId::as_u64`, `thread::sleep_until`, `add_spawn_hook`, `LocalKey::update` (unstable in 1.98.1); thread priorities and CPU affinity (not in std); rayon (see `rayon_data_parallelism`). Mutex/channel/Condvar details are in `std_sync_primitives_use_cases`. Course: none.
+
+Goes beyond `threads_channels` (first steps) and `structured_concurrency_cancellation`.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Run something in the background and get its result</td><td><code>let h = thread::spawn(move || ..); h.join()</code></td></tr><tr><td>Borrow local data from threads</td><td><code>thread::scope (no Arc, no 'static)</code></td></tr><tr><td>Split <code>&amp;mut [T]</code> between threads</td><td><code>chunks_mut / split_at_mut: the borrow checker proves they are disjoint</code></td></tr><tr><td>Uneven work items</td><td><code>threads claim the next index from an AtomicUsize</code></td></tr><tr><td>Choose a thread count</td><td><code>available_parallelism().map_or(1, NonZero::get), capped by the work</code></td></tr><tr><td>Combine results</td><td><code>return a value from each thread and merge after join (no shared lock)</code></td></tr><tr><td>Keep a worker alive after a bad job</td><td><code>catch_unwind around the job</code></td></tr><tr><td>Pass a child panic on to the caller</td><td><code>h.join().unwrap_or_else(|p| resume_unwind(p))</code></td></tr><tr><td>Skip cleanup that is unsafe during unwinding</td><td><code>thread::panicking() inside Drop</code></td></tr><tr><td>Per-thread cache / counter</td><td><code>thread_local!; publish totals explicitly, before the thread ends</code></td></tr><tr><td>Wait for one condition</td><td><code>park in a loop + unpark; for anything richer use Condvar or a channel</code></td></tr><tr><td>Channels or shared state?</td><td><code>moving work or ownership: channel. Many readers/writers of one structure: lock. Independent partial results: neither.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Pitfalls"
+body = """
+dropping a `JoinHandle` **detaches** the thread (it keeps running; when `main` returns the process ends and kills it); `scope` waits for each thread's main function but TLS destructors may still be running when it returns (an explicit `join` waits for them); `thread::sleep` as synchronisation is a race; `available_parallelism` can over- or under-count (cgroups, affinity, VMs).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/thread/fn.scope.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/thread/fn.scope.html</a></li><li><a href="https://doc.rust-lang.org/std/thread/struct.LocalKey.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/thread/struct.LocalKey.html</a></li><li><a href="https://marabos.nl/atomics/basics.html" target="_blank" rel="noreferrer">https://marabos.nl/atomics/basics.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/thread/index.html"
+url = "https://doc.rust-lang.org/std/thread/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/thread/fn.scope.html"
+url = "https://doc.rust-lang.org/std/thread/fn.scope.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/thread/struct.LocalKey.html"
+url = "https://doc.rust-lang.org/std/thread/struct.LocalKey.html"
+
+[[sources]]
+title = "marabos.nl/atomics/basics.html"
+url = "https://marabos.nl/atomics/basics.html"

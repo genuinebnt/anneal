@@ -1,0 +1,4 @@
+before
+--- runtime error: division by zero
+  at div
+  at main

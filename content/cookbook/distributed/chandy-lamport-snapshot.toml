@@ -1,0 +1,67 @@
+title = "Chandy-Lamport distributed snapshot"
+module = "Distributed systems"
+module_order = 10
+chapter = "Time, partitioning and replication"
+chapter_order = 1
+order = 486
+kind = "recipe"
+lede = "Chandy-Lamport distributed snapshot (consistent cuts) on FIFO channels"
+level = "advanced"
+code = ["examples/distributed/chandy_lamport_snapshot.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>checkpointing stream processors</li><li>debugging distributed state</li><li>detecting stable properties</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+P processes pass "money" tokens over reliable FIFO channels (one per ordered pair). Nobody has a global clock and nobody can freeze the system, yet we want a snapshot: each process's local state plus the messages in flight on every channel, such that the snapshot is a state the system **could** have been in.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+- An initiator records its own state, then sends a **marker** on every outgoing channel and starts recording every incoming channel.
+- On the first marker a process receives (from channel c): record own state, record channel c as **empty**, send markers on all outgoing channels, start recording all other incoming channels.
+- On a later marker from channel c: stop recording c; what was recorded since is c's in-flight state.
+- A process is done when every incoming channel has delivered its marker.
+
+   Cost: exactly one marker per channel, i.e. P&#42;(P-1) messages per snapshot; the application never stops. Because channels are FIFO, a marker separates "sent before the sender recorded" from "sent after", so every message is counted exactly once: either inside a recorded balance or in a recorded channel.
+
+   That is why the recorded balances plus recorded in-flight money add up to the constant total.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Consistent cut**: a cut (one local prefix per process) is consistent iff it is closed under happened-before (Lamport): if a receive is inside the cut, its send is too. We check that literally with vector clocks: for every pair, vc_i[j] &lt;= vc_j[j] at the recorded points (nobody has "seen" an event of j that j's recorded state does not include).
+
+A naive "each process reports its balance at some moment" violates both the money invariant and cut consistency, as the experiment shows.
+
+**Multiple initiators**: markers carry a snapshot id and every process keeps independent recording state per id, so concurrent snapshots simply run side by side (each is verified separately below). The alternative used by simple textbook versions is to ignore markers for a snapshot once one is in progress.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+Apache Flink's checkpoints are Chandy-Lamport with barriers (aligned barriers = markers on FIFO channels; unaligned checkpoints record the in-flight records exactly like channel state here); distributed deadlock detection and termination detection (a stable property true in a consistent cut stays true afterwards); distributed garbage collection; global debugging/replay; cluster-wide consistent backups.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Distributed Snapshots: Determining Global States of Distributed Systems (Chandy, Lamport, 1985) <https://lamport.azurewebsites.net/pubs/chandy.pdf>
+
+Time, Clocks, and the Ordering of Events in a Distributed System (Lamport, 1978) <https://lamport.azurewebsites.net/pubs/time-clocks.pdf>
+"""
+
+[[sources]]
+title = "lamport.azurewebsites.net/pubs/chandy.pdf"
+url = "https://lamport.azurewebsites.net/pubs/chandy.pdf"
+
+[[sources]]
+title = "lamport.azurewebsites.net/pubs/time-clocks.pdf"
+url = "https://lamport.azurewebsites.net/pubs/time-clocks.pdf"

@@ -1,0 +1,68 @@
+title = "The io_uring DESIGN modelled in portable Rust"
+module = "Performance and systems"
+module_order = 7
+chapter = "Files, processes and the OS"
+chapter_order = 3
+order = 292
+kind = "recipe"
+lede = "Shared SQ/CQ rings, batching, linked SQEs, fixed buffers, async integration."
+level = "advanced"
+code = ["examples/os_and_storage/io_uring_model.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>understanding completion-based I/O</li><li>tokio-uring/glommio-style runtimes</li><li>designing batched submission APIs</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+epoll tells you "this fd is **ready**, now go do the syscall yourself" (readiness, 1+ syscalls per operation). io_uring is **completion** based: you describe the operation (a Submission Queue Entry), the kernel performs it and posts the result (a Completion Queue Entry).
+
+The two queues are ring buffers in memory shared between app and kernel, so many operations cost **one** `io_uring_enter` (or zero with SQ polling). The real syscalls exist only on Linux, so here a fake "kernel" thread plays the other side of the same design.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Rings** (same protocol as spsc_ring_buffer): each ring has a `head` (consumer) and `tail` (producer), monotonically increasing, slot = index &amp; mask. SQ: app produces, kernel consumes. CQ: kernel produces, app consumes.
+
+Producer: write slots, then `tail.store(.., Release)`: publishes **all** slots written before it, so a whole batch becomes visible atomically with one store. It reads `head` with Acquire to know slots were vacated. Consumer: `tail.load(Acquire)` makes the slot contents visible, read the slot, then `head.store(.., Release)` to hand it back.
+
+`Producer`/`Consumer` are distinct non-Clone handles taking `&mut self`, so single-producer/single-consumer is enforced by the borrow checker.
+
+**Features MODELLED**: `Sqe { opcode, fd, off, buf, len, user_data, flags }` / `Cqe { user_data, res }` (res &lt; 0 is -errno); **batching** (n SQEs, one enter); **links** (`IOSQE_IO_LINK`: next SQE runs only if this one succeeds, else it completes with -ECANCELED); **out-of-order** completion (the kernel finishes independent ops in any order; `user_data` is how you match them up); **fixed/registered buffers** (register once, refer by index; saves per-op pinning/mapping, counted as `buffer_maps`).
+
+**ASYNC integration**: a tiny single-threaded executor (as in waker_executor). `read_at(..)` is an `async fn`: it pushes an SQE with a fresh `user_data`, stores a `Waker` in a `user_data -> Slot` table and returns Pending. The executor submits the batch, reaps the CQ, and for each CQE fills the slot and wakes the task.
+
+This is how tokio-uring and glommio map completions to futures.
+
+**Caveat.** Completion I/O makes cancellation hard (drop a future while the kernel still owns its buffer) and buffers must be owned by the ring, which is why these runtimes pass buffers by value.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+tokio-uring, glommio, monoio, high-throughput storage engines, and servers on Linux 5.10+ that want fewer syscalls **caveat**: the io_uring side of the syscall comparison is **simulated** by the fake kernel thread, and the epoll-style side is a **formula** (one read per operation plus one epoll_wait per 128 ready operations), not a measured run.
+
+The Linux-only real probe and the epoll Poller in kqueue_epoll_raw were type-checked (cargo check --target x86_64-unknown-linux-gnu) but never executed on this macOS host. (also constrained by seccomp: many container runtimes disable io_uring by default).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://kernel.dk/io_uring.pdf" target="_blank" rel="noreferrer">https://kernel.dk/io_uring.pdf</a></li><li><a href="https://github.com/tokio-rs/io-uring" target="_blank" rel="noreferrer">https://github.com/tokio-rs/io-uring</a></li><li><a href="https://github.com/axboe/liburing" target="_blank" rel="noreferrer">https://github.com/axboe/liburing</a></li></ul>
+"""
+
+[[sources]]
+title = "kernel.dk/io_uring.pdf"
+url = "https://kernel.dk/io_uring.pdf"
+
+[[sources]]
+title = "github.com/tokio-rs/io-uring"
+url = "https://github.com/tokio-rs/io-uring"
+
+[[sources]]
+title = "github.com/axboe/liburing"
+url = "https://github.com/axboe/liburing"

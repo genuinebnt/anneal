@@ -1,0 +1,74 @@
+title = "Paxos"
+module = "Distributed systems"
+module_order = 10
+chapter = "Consensus and distributed transactions"
+chapter_order = 2
+order = 491
+kind = "recipe"
+lede = "Single-decree safety under chaos, dueling-proposer livelock, and Multi-Paxos replicated log"
+level = "advanced"
+code = ["examples/distributed/paxos_basic_and_multi.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>understanding the consensus core behind Chubby</li><li>Spanner</li><li>Cassandra lightweight transactions</li><li>Raft and most replicated logs</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+**Part** 1, single-decree Paxos: proposers, acceptors (persistent `promised` and `accepted`) and learners exchanging Prepare/Promise/Accept/Accepted over a simulated network that drops, duplicates, delays and reorders messages.
+
+**Part** 2, Multi-Paxos: one stable leader runs phase 1 **once** for every future log slot, then each client command costs a single round trip (phase 2). A new leader recovers whatever may have been chosen, fills holes with NO-OPs, and replicas end with identical logs. Both parts run inside one deterministic event queue with a seeded xorshift RNG.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+Paxos is the proof that agreement is possible with crash faults, lost messages and no timing assumptions for **safety**.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+a ballot is (round, proposer id), totally ordered and unique per proposer. Phase 1: the proposer asks a majority to **promise** not to accept lower ballots and to report what they already accepted.
+
+If any acceptor reports an accepted value, the proposer **must** propose the value with the highest accepted ballot (its own value is only used if nobody reports one): this single rule is the heart of Paxos. Phase 2: it asks the acceptors to accept; a value is **chosen** when a majority accepted the same (ballot, value).
+
+Why safe: two majorities intersect, so a later ballot's phase 1 always sees the chosen value and re-proposes it. The acceptor's state must be on stable storage before replying: an acceptor with amnesia can promise twice or forget an accepted value, and then two values can be chosen (demonstrated below).
+
+A proposer's round counter is persisted too, so a ballot is never reused. **Liveness**: safety never depends on timing, progress does. Two proposers can duel forever: A prepares at b1, B prepares at b2 > b1 (A's accept is rejected), A prepares at b3 (B's accept is rejected), and so on.
+
+Fixes: randomised exponential back-off, or a distinguished proposer (leader) so duels are rare.
+
+FLP: Fischer, Lynch and Paterson proved (1985) that no deterministic protocol can guarantee consensus in an asynchronous system if even one process may crash, because a slow process cannot be told apart from a dead one, so an adversarial schedule can keep the system undecided forever.
+
+Paxos does not contradict this: it sacrifices guaranteed termination, never agreement. Dueling proposers are the schedule FLP says must exist; timeouts and randomness buy **liveness** only. PAXOS vs RAFT: Raft is Multi-Paxos with extra constraints that make it easier to reason about.
+
+Raft logs have no holes (an entry is accepted only after its predecessor matches) and the leader must have the most up-to-date log, so data flows only leader to follower and there is no gap filling. Paxos accepts slots independently and out of order and any replica can win phase 1, then must **recover** values from the promises and plug holes with no-ops.
+
+Paxos leaders may commit older-ballot values by re-proposing them with their own ballot; Raft instead commits older entries indirectly.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+Google Chubby and Spanner (Multi-Paxos per tablet), Apache Cassandra lightweight transactions (single-decree Paxos per key), Microsoft Azure Storage and Autopilot, Amazon DynamoDB leader election, Apache ZooKeeper's ZAB (a close cousin), Raft (etcd, Consul) as the simplified descendant, and Mencius/EPaxos as variants.
+
+See also examples/distributed/raft_consensus.rs (Multi-Paxos without holes) and saga_orchestrator.rs (availability over agreement).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Lamport, "Paxos Made Simple" <a href="https://lamport.azurewebsites.net/pubs/paxos-simple.pdf" target="_blank" rel="noreferrer">https://lamport.azurewebsites.net/pubs/paxos-simple.pdf</a></li><li>Fischer, Lynch and Paterson, "Impossibility of Distributed Consensus with One Faulty Process" <a href="https://groups.csail.mit.edu/tds/papers/Lynch/jacm85.pdf" target="_blank" rel="noreferrer">https://groups.csail.mit.edu/tds/papers/Lynch/jacm85.pdf</a></li><li>Van Renesse and Altinbuken, "Paxos Made Moderately Complex" (ACM Computing Surveys 2015)</li></ul>
+"""
+
+[[sources]]
+title = "lamport.azurewebsites.net/pubs/paxos-simple.pdf"
+url = "https://lamport.azurewebsites.net/pubs/paxos-simple.pdf"
+
+[[sources]]
+title = "groups.csail.mit.edu/tds/papers/Lynch/jacm85.pdf"
+url = "https://groups.csail.mit.edu/tds/papers/Lynch/jacm85.pdf"

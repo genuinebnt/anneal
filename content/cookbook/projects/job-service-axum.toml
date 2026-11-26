@@ -1,0 +1,62 @@
+title = "An in-process image-resize job service"
+module = "Complete projects"
+module_order = 13
+chapter = "Capstones"
+chapter_order = 1
+order = 648
+kind = "capstone"
+lede = "an in-process image-resize job service (idempotent API, workers, SSE, graceful shutdown)"
+level = "capstone"
+code = ["examples/capstones/job_service_axum.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any "submit work over HTTP, run it in the background, watch it" service.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a small job service for image-resize jobs. Clients **post** a job, poll it, list jobs page by page, cancel it, and stream its event log over Server-Sent Events. Everything runs in-process and is driven through `tower::ServiceExt::oneshot`, so there are no sockets and the example is fast and deterministic.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+it combines recipes axum_router_state (router state), axum_errors (error type), axum_sse_replay (SSE replay), axum_middleware (middleware), axum_idempotency (idempotency) and worker_pool (worker pool) into the shape real services have.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+- `App` is cheap-to-clone shared state (`Arc<Inner>`): job store behind a mutex, a logical clock (a counter, so timestamps are deterministic), a `Semaphore` that bounds concurrency, and a `JoinSet` of worker tasks.
+- Each job gets one tokio task. It waits for a permit (or for cancellation), runs the resize in a **child** task so a panic surfaces as a `JoinError` and becomes `failed`, and `select!`s on a `watch` channel for cancellation.
+- Every state change appends to a per-job event log (ids 1, 2, 3, ...), which SSE replays from `Last-Event-ID`.
+- `ApiError` maps every failure to one JSON shape with a stable machine-readable `code`.
+- Shutdown flips `accepting` (new POSTs get 503), then drains the `JoinSet` and reports counts.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>thumbnail/transcode pipelines</li><li>report generation</li><li>webhook delivery</li><li>import/export jobs</li><li>CI-style runners</li><li>patterns: idempotency keys for safe retries</li><li>cursor pagination</li><li>outbox/event-log replay</li><li>bulkheads (semaphore)</li><li>panic isolation</li><li>cooperative cancellation</li><li>drain-on-SIGTERM</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://docs.rs/axum/latest/axum/> <https://tokio.rs/tokio/tutorial> <https://stripe.com/blog/idempotency>
+"""
+
+[[sources]]
+title = "docs.rs/axum/latest/axum"
+url = "https://docs.rs/axum/latest/axum/"
+
+[[sources]]
+title = "tokio.rs/tokio/tutorial"
+url = "https://tokio.rs/tokio/tutorial"
+
+[[sources]]
+title = "stripe.com/blog/idempotency"
+url = "https://stripe.com/blog/idempotency"

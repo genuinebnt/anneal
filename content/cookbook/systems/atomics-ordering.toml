@@ -1,0 +1,34 @@
+title = "Atomics, and what `Ordering` actually buys you"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Atomics and memory ordering"
+chapter_order = 2
+order = 247
+kind = "recipe"
+lede = "atomics, and what `Ordering` actually buys you."
+level = "advanced"
+code = ["examples/concurrency/atomics_ordering.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>counters</li><li>flags</li><li>lock-free structures</li><li>concurrency invariants</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>counters</li><li>flags</li><li>lock-free structures</li><li>publishing config to other threads without a mutex</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern 1: a shared counter needs atomicity, not ordering: `Relaxed` is enough. Pattern 2: to **publish** data, write it, then set a flag with `Release`; the reader loads the flag with `Acquire`. That pairing guarantees the reader sees the data written before the flag.
+
+Book (free): <https://marabos.nl/atomics/>
+"""
+
+[[sources]]
+title = "marabos.nl/atomics"
+url = "https://marabos.nl/atomics/"

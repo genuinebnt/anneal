@@ -1,0 +1,68 @@
+title = "Greedy and interval algorithms"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Dynamic programming, greedy and search"
+chapter_order = 5
+order = 207
+kind = "recipe"
+lede = "greedy algorithms and interval problems, each with its proof technique AND a counterexample where the tempting greedy fails."
+level = "intermediate"
+code = ["examples/algorithms/greedy_and_interval_algorithms.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>schedulers</li><li>calendars and booking systems</li><li>compression</li><li>network design</li><li>resource allocation</li><li>interview "intervals" and "greedy" tags</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>meeting-room and CPU/job scheduling</li><li>calendar double-booking checks (booking systems)</li><li>merging time ranges and log windows</li><li>Huffman/prefix codes (<strong>deflate</strong>, JPEG)</li><li>minimum spanning trees in network layout and clustering</li><li>shortest paths (routing)</li><li>set-cover style test-suite minimisation</li><li>rendering skylines and union-of-rectangles (GIS, UI damage regions)</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a greedy algorithm makes the locally best choice and never revisits it. That is only correct when you can **prove** it.
+
+Two proof templates cover almost everything: **stays ahead**: show by induction that after each step the greedy partial solution is at least as good as any other partial solution (interval scheduling by earliest finish: after k picks greedy's k-th finish time is &lt;= **opt**'s k-th finish time, so greedy can fit at least as many).
+
+**Exchange**:    take any optimal solution and swap its first differing choice for greedy's without making it worse; repeat until it IS greedy's (Huffman, EDF scheduling, Kruskal, fractional knapsack).
+
+Every algorithm below is checked against a brute-force or DP optimum on hundreds to thousands of seeded random instances, and for each classic trap the plausible-but-wrong greedy is run on the same random instances so the program **finds** a counterexample (and asserts that the correct greedy never loses).
+
+Seeing the failure is the point: "greedy works here" is a theorem, not a feeling. Matroid view: when feasible sets form a matroid (forests of a graph, schedulable unit-time jobs), the plain "sort by weight, add if still feasible" greedy is optimal; that is why Kruskal and job sequencing work while 0/1 knapsack (not a matroid) needs DP.
+
+Conventions: intervals are **half-open** [s, e) unless a section says closed; [1,2) and [2,3) do not overlap. Mixing the two conventions is the commonest interval bug, section 3 tests both.
+
+Related files: examples/algorithms/bit_tricks.rs is unrelated; see examples/interview/intervals_greedy_bit_questions.rs for the interview-phrased versions of these problems, examples/algorithms/heuristics_zoo.rs for approximation ratios (set cover appears there too; here it is checked against the exact optimum with the H(d) bound asserted), examples/interview/stacks_queues_heaps_questions.rs (Q19 meeting rooms II, Q18 task scheduler) for the heap-centred writeups.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Kleinberg and Tardos, Algorithm Design, chapter 4 (greedy): <https://www.cs.princeton.edu/~wayne/kleinberg-tardos/pearson/04GreedyAlgorithms-2x2.pdf>
+
+```text
+Jeff Erickson, Algorithms, chapter 4 (greedy): https://jeffe.cs.illinois.edu/teaching/algorithms/book/04-greedy.pdf   https://en.wikipedia.org/wiki/Matroid   https://en.wikipedia.org/wiki/Greedy_algorithm
+```
+
+(Kozen and Zaks on canonical coin systems, and Chvatal's greedy set-cover bound, are cited by title only: not opened here.)
+"""
+
+[[sources]]
+title = "cs.princeton.edu/~wayne/kleinberg-tardos/pearson/04GreedyAlgorithms-2x2.pdf"
+url = "https://www.cs.princeton.edu/~wayne/kleinberg-tardos/pearson/04GreedyAlgorithms-2x2.pdf"
+
+[[sources]]
+title = "jeffe.cs.illinois.edu/teaching/algorithms/book/04-greedy.pdf"
+url = "https://jeffe.cs.illinois.edu/teaching/algorithms/book/04-greedy.pdf"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Matroid"
+url = "https://en.wikipedia.org/wiki/Matroid"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Greedy_algorithm"
+url = "https://en.wikipedia.org/wiki/Greedy_algorithm"

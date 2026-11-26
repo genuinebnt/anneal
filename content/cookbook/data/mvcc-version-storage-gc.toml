@@ -1,0 +1,53 @@
+title = "MVCC implementation choices"
+module = "Databases"
+module_order = 8
+chapter = "Transactions and concurrency control"
+chapter_order = 6
+order = 412
+kind = "recipe"
+lede = "Version storage (append-only O2N/N2O, time-travel, delta), garbage collection, index pointers."
+level = "advanced"
+code = ["examples/database/mvcc_version_storage_gc.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+choosing or building the storage layer of an MVCC engine (PostgreSQL vs Oracle/MySQL vs Hekaton vs HyPer styles).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Wu et al. ("An Empirical Evaluation of In-Memory Multi-Version Concurrency Control") split an MVCC engine into four independent design decisions. This recipe implements each decision as a swappable part and runs the **same** random histories through every combination, comparing every read with a trivial oracle.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Concurrency control (2 variants)</div><div class="cb-g-says"><p>MVTO, multi-version timestamp ordering. A transaction's timestamp is its version stamp; writes create uncommitted versions in place (<code>begin = Tx(id)</code>), a write aborts if a younger transaction already read the newest version (<code>rts</code>) or a newer version exists; a reader that meets another transaction's uncommitted version in its past aborts (no-wait).</p><p>MVOCC-lite: snapshot reads at the last commit timestamp, writes buffered privately, first-committer- wins validation at commit, then install with a fresh commit timestamp.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Commit-timestamp lookup</div><div class="cb-g-says"><p>Version <code>begin</code>/<code>end</code> fields hold either a timestamp or <code>Tx(id)</code>. A reader resolves <code>Tx(id)</code> through the <strong>transaction table</strong> (id -&gt; timestamp + Active/Committed/Aborted), so commit is O(1) and needs no pass over the written versions (Hekaton does this and post-processes lazily; here garbage collection rewrites the stamps).</p><p><strong>Visibility</strong>: a version is visible to timestamp t if begin &lt;= t &lt; end after resolution; own uncommitted versions are always visible to their writer (<strong>read-your-writes</strong>).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Version storage</div><div class="cb-g-says"><p>(4 variants, rows have 8 columns, updates change one): <strong>append-only O2N</strong>  all versions in one chain, oldest first: new versions are cheap to add, current reads walk the chain; <strong>append-only N2O</strong>  newest first (PostgreSQL-like order for current reads), old snapshots walk far;</p></div></div></div>
+
+```text
+TIME-TRAVEL      main table keeps the newest full version, older ones are copied to a separate version table;
+DELTA            main table keeps the newest full row, older versions are UNDO RECORDS (changed columns only) that a
+                 reader applies backwards to reconstruct an old row (Oracle undo, MySQL rollback segment). Smallest space,
+                 costly old reads.
+```
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Garbage collection</div><div class="cb-g-says"><p>A version is dead when its <code>end</code> committed at or before the <strong>watermark</strong> = oldest active snapshot (nobody can ever see it). <strong>Cooperative</strong> tuple-level: a reader unlinks dead versions it walks past (HANA, Hekaton). <strong>Background vacuum</strong>: periodically scan every key (PostgreSQL autovacuum; cost proportional to the whole table).</p><p><strong>Epoch</strong> / transaction-level: a committing transaction queues the keys it superseded and they are cleaned once the watermark passes its timestamp, visiting only touched keys. One long-lived snapshot pins the watermark and every strategy bloats equally: the real fix is shorter transactions.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Indexes</div><div class="cb-g-says"><p><strong>Physical</strong> pointers (secondary index entry = address of a version) force every update that moves the newest version (append-only) to touch <strong>all</strong> secondary indexes; <strong>logical</strong> pointers (entry = primary key) leave them alone when no indexed column changed, at the price of an extra primary-index probe per lookup.</p><p>The recipe verifies a logical secondary index (a superset of entries, filtered by visibility) against a scan and counts maintenance writes for both.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>Checks: 1000 random histories x 2 CC x 4 storages x 4 GC modes (32000 runs) all return exactly the oracle's reads and all storages produce identical outcome traces; before and after every GC pass every active transaction's reads are unchanged (GC never removes a visible version); with no active transaction a full vacuum leaves exactly one version per key.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+PostgreSQL (append-only, vacuum), Oracle / MySQL InnoDB (delta undo), MS SQL Server tempdb version store (time-travel style), Hekaton / HyPer / Peloton (in-memory), **sap HANA**; any store that keeps old versions for readers. Course: CMU 15-445 Lecture 20 (multi-version concurrency control) and CMU 15-721 (MVCC / Hekaton lectures).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>"An Empirical Evaluation of In-Memory Multi-Version Concurrency Control" (Wu et al., VLDB 2017) <a href="https://www.vldb.org/pvldb/vol10/p781-Wu.pdf" target="_blank" rel="noreferrer">https://www.vldb.org/pvldb/vol10/p781-Wu.pdf</a></li><li>"High-Performance Concurrency Control Mechanisms for Main-Memory Databases" (Larson et al., Hekaton) <a href="https://www.vldb.org/pvldb/vol5/p298_per-akelarson_vldb2012.pdf" target="_blank" rel="noreferrer">https://www.vldb.org/pvldb/vol5/p298_per-akelarson_vldb2012.pdf</a></li></ul>
+"""
+
+[[sources]]
+title = "vldb.org/pvldb/vol10/p781-Wu.pdf"
+url = "https://www.vldb.org/pvldb/vol10/p781-Wu.pdf"
+
+[[sources]]
+title = "vldb.org/pvldb/vol5/p298_per-akelarson_vldb2012.pdf"
+url = "https://www.vldb.org/pvldb/vol5/p298_per-akelarson_vldb2012.pdf"

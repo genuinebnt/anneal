@@ -1,0 +1,441 @@
+title = "Unnesting subqueries"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 385
+kind = "guide"
+lede = "Optimize! #11, 15-721 S2024 #14 · correlated subqueries · heuristic flattening vs dependent join · domain decorrelation · the COUNT bug · verified against nested iteration on random subqueries · measured speedups"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Subqueries are everywhere</strong>: SQL allows a nested <code>SELECT</code> in <code>SELECT</code>, <code>FROM</code>, <code>WHERE</code>, <code>HAVING</code> and <code>LIMIT</code>. An <strong>uncorrelated</strong> subquery references nothing from the outer query: execute it once and reuse the result. A <strong>correlated</strong> one references outer columns, so logically it runs <strong>once per outer row</strong>: O(|outer| × |inner|), the difference between a query that finishes and one that doesn't.</li> <li><strong>Heuristic rewriting</strong> (Kim's flattening and its descendants): pattern-match specific shapes (<code>= (SELECT agg … WHERE inner.k = outer.k)</code>, <code>EXISTS</code>, <code>IN</code>) and rewrite them into joins and group-bys. It is cheap and the decision to decorrelate can be cost-based, but <strong>you can never cover all correlation patterns</strong>, a small change to a query can disable a rule, and a large rule set becomes hard to keep consistent.</li> <li><strong>The classic trap, the COUNT bug</strong>: flattening <code>T.b &gt; (SELECT COUNT(*) FROM S WHERE S.c = T.a)</code> into <code>T JOIN (SELECT c, COUNT(*) … GROUP BY c)</code> <strong>loses</strong> every T row with <em>no</em> match in S: the group-by produces no group for it, while the original produced <code>COUNT = 0</code>. The same family: <code>SUM</code> over nothing is <code>NULL</code> but <code>COUNT</code> is 0.</li> <li><strong>General unnesting with a dependent join</strong> (Neumann &amp; Kemper, "Unnesting Arbitrary Queries"; HyPer, Umbra and DuckDB implement it; per the lecture notes they are the systems that unnest <em>all</em> correlated subqueries): introduce the <strong>dependent join</strong> <code>L ⋈dep R</code>, an operator that evaluates <code>R</code> once per row of <code>L</code> and may reference <code>L</code>'s columns. Then <strong>eliminate it algebraically</strong>, with seven steps: (1) push the dependent join down into the right side; (2) introduce a <strong>duplicate-eliminating domain scan</strong>, since <code>R</code> need only run once per <em>distinct</em> combination of the correlated values; (3) push the join as far down as possible, through each operator in turn; (4) turn it into a cross product when <code>R</code> no longer depends on <code>L</code>; (5) turn the cross product with its filter into an inner join; (6) drop the domain scan if it is redundant; (7) drop the filter above.</li> <li><strong>Per-operator push rules</strong>: through a <em>selection</em> (just push), a <em>join</em> (push into the side(s) that depend on the domain and tie copies together with null-safe equality), a <em>group-by</em> (add the domain columns to the grouping), a <em>distinct</em> (add them to the key), a <em>scalar aggregate</em> (the special case: left-join the domain to the grouped result and <code>COALESCE</code> counts to 0).</li> <li><strong>Cost still decides</strong>: a correlated subquery with an index on the inner correlation key and a tiny outer side is best left as a nested loop (an "apply" operator); decorrelation pays when the outer side is large and the domain is small or the inner key is hashable.</li> </ul>
+"""
+
+[[sections]]
+heading = "Dependent joins, executable"
+body = """
+<p>The module defines a small algebra (scan, select, inner/left join, cross product, grouped and <strong>scalar</strong> aggregation, distinct, projection with renaming, <code>COALESCE</code>, and the <strong>dependent join</strong>), and two things over it:</p>
+
+<ol> <li><strong>An executor whose nested iteration defines the meaning of a dependent join</strong>: for each left row, bind the left row's columns in an environment and evaluate the right side (an unbound column lookup finds the innermost binding). It is also a real executor: equi-joins run as <strong>hash joins</strong> (with SQL equality or null-safe equality per key), aggregation as a hash aggregate.</li> <li><strong>The decorrelation rewrite</strong>: compute the <em>free</em> (correlated) columns of the right side, build the <strong>domain</strong> <code>D = DISTINCT π_F(L)</code> with renamed columns, <strong>push <code>D</code> down</strong> through each operator of <code>R</code> (per-operator rules above), then join <code>L</code> to the result on <code>F ≡ F'</code> using <strong>null-safe equality</strong>, and project away the helper columns. Inner dependent joins are removed first, so a subquery that references its parent <em>and</em> its grandparent works.</li> <li><strong>A normalization pass</strong> (<code>Select</code> over <code>Cross</code> becomes a join; conjuncts that mention one input are pushed to it): the routine cleanup the optimizer runs on the unnested plan.</li> </ol>
+
+:::deeper Reference: dependent-join algebra, nested-iteration executor with hash joins, domain-based decorrelation, normalization
+```rust title="src/opt/unnest.rs"
+//! Subquery unnesting: a relational algebra with a *dependent join* (the right side may reference columns of the left),
+//! a nested-iteration executor that defines its meaning, and a decorrelation rewrite (Neumann & Kemper) that removes it.
+use std::collections::{BTreeSet, HashMap};
+
+pub type Val = Option<i64>;
+pub type Row = Vec<Val>;
+pub type Db = Vec<Vec<Row>>;
+
+/// (relation instance, position). Instance ids >= 100 are generated by the rewrite and by aggregates.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct Col(pub u8, pub u8);
+#[derive(Clone, Debug)] pub enum Ex { C(Col), K(i64) }
+#[derive(Clone, Copy, Debug, PartialEq)] pub enum Op { Eq, Ne, Lt, Le, Gt }
+#[derive(Clone, Debug)]
+pub enum Pred { True, Cmp(Op, Ex, Ex), NullSafeEq(Col, Col), And(Box<Pred>, Box<Pred>) }
+#[derive(Clone, Copy, Debug)] pub enum AggFn { Sum(Col), Count }
+
+#[derive(Clone, Debug)]
+pub enum Rel {
+    Scan(u8),
+    Select(Pred, Box<Rel>),
+    Join(Pred, Box<Rel>, Box<Rel>),
+    LeftJoin(Pred, Box<Rel>, Box<Rel>),
+    Cross(Box<Rel>, Box<Rel>),
+    /// GROUP BY `group`; with an empty group list it is a *scalar* aggregate and returns one row even on empty input.
+    Agg { group: Vec<Col>, aggs: Vec<(Col, AggFn)>, input: Box<Rel> },
+    Distinct(Box<Rel>),
+    /// Keep and rename columns: (source, destination).
+    Project(Vec<(Col, Col)>, Box<Rel>),
+    /// COALESCE(col, k)
+    FillNull(Col, i64, Box<Rel>),
+    DepJoin(Box<Rel>, Box<Rel>),
+}
+use Rel::*;
+fn bx(r: Rel) -> Box<Rel> { Box::new(r) }
+pub fn and(a: Pred, b: Pred) -> Pred { match (a, b) { (Pred::True, x) | (x, Pred::True) => x, (a, b) => Pred::And(Box::new(a), Box::new(b)) } }
+pub fn and_all(v: Vec<Pred>) -> Pred { v.into_iter().fold(Pred::True, and) }
+
+pub fn schema(r: &Rel) -> Vec<Col> {
+    match r {
+        Scan(t) => vec![Col(*t, 0), Col(*t, 1)],
+        Select(_, x) | Distinct(x) | FillNull(_, _, x) => schema(x),
+        Join(_, a, b) | LeftJoin(_, a, b) | Cross(a, b) | DepJoin(a, b) => { let mut s = schema(a); s.extend(schema(b)); s }
+        Agg { group, aggs, .. } => { let mut s = group.clone(); s.extend(aggs.iter().map(|a| a.0)); s }
+        Project(m, _) => m.iter().map(|x| x.1).collect(),
+    }
+}
+fn pred_cols(p: &Pred, out: &mut Vec<Col>) {
+    match p {
+        Pred::True => {}
+        Pred::Cmp(_, a, b) => for e in [a, b] { if let Ex::C(c) = e { out.push(*c) } },
+        Pred::NullSafeEq(a, b) => { out.push(*a); out.push(*b) }
+        Pred::And(a, b) => { pred_cols(a, out); pred_cols(b, out) }
+    }
+}
+/// Columns a subtree references but does not define: its correlation with the enclosing query.
+pub fn free(r: &Rel) -> BTreeSet<Col> {
+    let minus = |used: Vec<Col>, defined: Vec<Col>| -> BTreeSet<Col> { used.into_iter().filter(|c| !defined.contains(c)).collect() };
+    match r {
+        Scan(_) => BTreeSet::new(),
+        Select(p, x) => { let mut u = vec![]; pred_cols(p, &mut u); let mut f = minus(u, schema(x)); f.extend(free(x)); f }
+        Join(p, a, b) | LeftJoin(p, a, b) => { let mut u = vec![]; pred_cols(p, &mut u); let mut d = schema(a); d.extend(schema(b)); let mut f = minus(u, d); f.extend(free(a)); f.extend(free(b)); f }
+        Cross(a, b) => { let mut f = free(a); f.extend(free(b)); f }
+        Agg { group, aggs, input } => {
+            let mut u = group.clone();
+            for (_, a) in aggs { if let AggFn::Sum(c) = a { u.push(*c) } }
+            let mut f = minus(u, schema(input)); f.extend(free(input)); f
+        }
+        Distinct(x) => free(x),
+        Project(m, x) => { let mut f = minus(m.iter().map(|p| p.0).collect(), schema(x)); f.extend(free(x)); f }
+        FillNull(c, _, x) => { let mut f = minus(vec![*c], schema(x)); f.extend(free(x)); f }
+        DepJoin(l, rr) => { let ls = schema(l); let mut f = free(l); f.extend(free(rr).into_iter().filter(|c| !ls.contains(c))); f }
+    }
+}
+
+// ------------------------------------------------------------------ executor (nested iteration defines DepJoin)
+type Env = Vec<(Col, Val)>;
+fn lookup(c: Col, sch: &[Col], row: &Row, env: &Env) -> Val {
+    if let Some(i) = sch.iter().position(|x| *x == c) { return row[i]; }
+    env.iter().rev().find(|(k, _)| *k == c).map(|(_, v)| *v).unwrap_or_else(|| panic!("unbound column {c:?}"))
+}
+fn ex(e: &Ex, sch: &[Col], row: &Row, env: &Env) -> Val { match e { Ex::K(k) => Some(*k), Ex::C(c) => lookup(*c, sch, row, env) } }
+pub fn eval_pred(p: &Pred, sch: &[Col], row: &Row, env: &Env) -> Option<bool> {
+    match p {
+        Pred::True => Some(true),
+        Pred::Cmp(op, a, b) => { let (x, y) = (ex(a, sch, row, env)?, ex(b, sch, row, env)?); Some(match op { Op::Eq => x == y, Op::Ne => x != y, Op::Lt => x < y, Op::Le => x <= y, Op::Gt => x > y }) }
+        Pred::NullSafeEq(a, b) => Some(lookup(*a, sch, row, env) == lookup(*b, sch, row, env)),
+        Pred::And(a, b) => match (eval_pred(a, sch, row, env), eval_pred(b, sch, row, env)) { (Some(false), _) | (_, Some(false)) => Some(false), (Some(true), Some(true)) => Some(true), _ => None },
+    }
+}
+fn conjuncts(p: &Pred, out: &mut Vec<Pred>) { match p { Pred::And(a, b) => { conjuncts(a, out); conjuncts(b, out) } Pred::True => {} _ => out.push(p.clone()) } }
+
+/// Equality conjuncts that connect the two sides: (left key column, right key column, null-safe), and the rest.
+fn equi_keys(p: &Pred, ls: &[Col], rs: &[Col]) -> (Vec<(usize, usize, bool)>, Pred) {
+    let mut cs = vec![]; conjuncts(p, &mut cs);
+    let (mut keys, mut rest) = (vec![], vec![]);
+    for c in cs {
+        let pair = match &c { Pred::Cmp(Op::Eq, Ex::C(a), Ex::C(b)) => Some((*a, *b, false)), Pred::NullSafeEq(a, b) => Some((*a, *b, true)), _ => None };
+        match pair {
+            Some((a, b, ns)) => match (ls.iter().position(|x| *x == a), rs.iter().position(|x| *x == b), ls.iter().position(|x| *x == b), rs.iter().position(|x| *x == a)) {
+                (Some(i), Some(j), _, _) => keys.push((i, j, ns)),
+                (_, _, Some(i), Some(j)) => keys.push((i, j, ns)),
+                _ => rest.push(c),
+            },
+            None => rest.push(c),
+        }
+    }
+    (keys, and_all(rest))
+}
+
+pub fn run(r: &Rel, db: &Db) -> Vec<Row> { eval(r, db, &vec![], &mut 0) }
+/// `work` counts rows produced by all operators (machine-independent cost).
+pub fn run_counting(r: &Rel, db: &Db, work: &mut u64) -> Vec<Row> { eval(r, db, &vec![], work) }
+
+fn eval(r: &Rel, db: &Db, env: &Env, work: &mut u64) -> Vec<Row> {
+    let out: Vec<Row> = match r {
+        Scan(t) => db[*t as usize].clone(),
+        Select(p, x) => { let s = schema(x); eval(x, db, env, work).into_iter().filter(|row| eval_pred(p, &s, row, env) == Some(true)).collect() }
+        Cross(a, b) => { let (ra, rb) = (eval(a, db, env, work), eval(b, db, env, work)); ra.iter().flat_map(|x| rb.iter().map(move |y| { let mut z = x.clone(); z.extend(y.iter().cloned()); z })).collect() }
+        Join(p, a, b) | LeftJoin(p, a, b) => {
+            let left = matches!(r, LeftJoin(..));
+            let (ls, rs) = (schema(a), schema(b));
+            let mut both = ls.clone(); both.extend(rs.iter().copied());
+            let (ra, rb) = (eval(a, db, env, work), eval(b, db, env, work));
+            let (keys, rest) = equi_keys(p, &ls, &rs);
+            let mut out = vec![];
+            let push = |x: &Row, ys: &mut dyn Iterator<Item = &Row>, out: &mut Vec<Row>| {
+                let mut matched = false;
+                for y in ys { let mut z = x.clone(); z.extend(y.iter().cloned()); if eval_pred(&rest, &both, &z, env) == Some(true) { matched = true; out.push(z); } }
+                if !matched && left { let mut z = x.clone(); z.extend(std::iter::repeat(None).take(rs.len())); out.push(z); }
+            };
+            if keys.is_empty() { for x in &ra { push(x, &mut rb.iter(), &mut out); } }
+            else {
+                let key = |row: &Row, side: usize| -> Vec<Val> { keys.iter().map(|k| row[if side == 0 { k.0 } else { k.1 }]).collect() };
+                let mut ht: HashMap<Vec<Val>, Vec<usize>> = HashMap::new();
+                for (i, y) in rb.iter().enumerate() { let k = key(y, 1); if keys.iter().zip(&k).all(|(kk, v)| kk.2 || v.is_some()) { ht.entry(k).or_default().push(i); } }
+                for x in &ra {
+                    let k = key(x, 0);
+                    let ok = keys.iter().zip(&k).all(|(kk, v)| kk.2 || v.is_some());
+                    let cands: Vec<&Row> = if ok { ht.get(&k).map(|v| v.iter().map(|&i| &rb[i]).collect()).unwrap_or_default() } else { vec![] };
+                    push(x, &mut cands.into_iter(), &mut out);
+                }
+            }
+            out
+        }
+        Agg { group, aggs, input } => {
+            let s = schema(input);
+            let rows = eval(input, db, env, work);
+            let mut groups: HashMap<Vec<Val>, Vec<(Val, i64)>> = HashMap::new();
+            for row in &rows {
+                let key: Vec<Val> = group.iter().map(|c| lookup(*c, &s, row, env)).collect();
+                let acc = groups.entry(key).or_insert_with(|| vec![(None, 0); aggs.len()]);
+                for (a, (_, f)) in acc.iter_mut().zip(aggs) {
+                    match f { AggFn::Count => a.1 += 1, AggFn::Sum(c) => if let Some(v) = lookup(*c, &s, row, env) { a.0 = Some(a.0.unwrap_or(0) + v) } }
+                }
+            }
+            if group.is_empty() && groups.is_empty() { groups.insert(vec![], vec![(None, 0); aggs.len()]); }       // scalar aggregate over no rows
+            groups.into_iter().map(|(mut k, acc)| { k.extend(acc.iter().zip(aggs).map(|(a, (_, f))| match f { AggFn::Count => Some(a.1), AggFn::Sum(_) => a.0 })); k }).collect()
+        }
+        Distinct(x) => { let mut rows = eval(x, db, env, work); rows.sort(); rows.dedup(); rows }
+        Project(m, x) => { let s = schema(x); eval(x, db, env, work).into_iter().map(|row| m.iter().map(|(src, _)| lookup(*src, &s, &row, env)).collect()).collect() }
+        FillNull(c, k, x) => { let s = schema(x); let i = s.iter().position(|y| y == c).unwrap(); eval(x, db, env, work).into_iter().map(|mut row| { if row[i].is_none() { row[i] = Some(*k); } row }).collect() }
+        DepJoin(l, rr) => {
+            let ls = schema(l);
+            let mut out = vec![];
+            for lrow in eval(l, db, env, work) {
+                let mut env2 = env.clone();
+                env2.extend(ls.iter().copied().zip(lrow.iter().copied()));
+                for rrow in eval(rr, db, &env2, work) { let mut z = lrow.clone(); z.extend(rrow); out.push(z); }
+            }
+            out
+        }
+    };
+    *work += out.len() as u64;
+    out
+}
+pub fn bag(r: &Rel, db: &Db) -> Vec<Row> {
+    let s = schema(r);
+    let mut perm: Vec<usize> = (0..s.len()).collect(); perm.sort_by_key(|&i| s[i]);
+    let mut rows: Vec<Row> = run(r, db).into_iter().map(|row| perm.iter().map(|&i| row[i]).collect()).collect();
+    rows.sort();
+    rows
+}
+
+// ------------------------------------------------------------------ decorrelation
+#[derive(Clone, Copy)]
+pub struct Opts { pub fix_count_bug: bool, pub null_safe_join: bool }
+impl Opts { pub fn correct() -> Opts { Opts { fix_count_bug: true, null_safe_join: true } } }
+
+struct Ctx { next: u8, opts: Opts }
+impl Ctx { fn fresh(&mut self) -> u8 { self.next += 1; self.next } }
+
+fn rename_ex(e: &Ex, m: &HashMap<Col, Col>) -> Ex { match e { Ex::C(c) => Ex::C(*m.get(c).unwrap_or(c)), k => k.clone() } }
+fn rename_pred(p: &Pred, m: &HashMap<Col, Col>) -> Pred {
+    match p {
+        Pred::True => Pred::True,
+        Pred::Cmp(o, a, b) => Pred::Cmp(*o, rename_ex(a, m), rename_ex(b, m)),
+        Pred::NullSafeEq(a, b) => Pred::NullSafeEq(*m.get(a).unwrap_or(a), *m.get(b).unwrap_or(b)),
+        Pred::And(a, b) => Pred::And(Box::new(rename_pred(a, m)), Box::new(rename_pred(b, m))),
+    }
+}
+/// Rename *references* to the correlated columns inside a subtree (they are never defined there, so this is safe).
+fn rename_refs(r: &Rel, m: &HashMap<Col, Col>) -> Rel {
+    let g = |c: &Col| *m.get(c).unwrap_or(c);
+    match r {
+        Scan(t) => Scan(*t),
+        Select(p, x) => Select(rename_pred(p, m), bx(rename_refs(x, m))),
+        Join(p, a, b) => Join(rename_pred(p, m), bx(rename_refs(a, m)), bx(rename_refs(b, m))),
+        LeftJoin(p, a, b) => LeftJoin(rename_pred(p, m), bx(rename_refs(a, m)), bx(rename_refs(b, m))),
+        Cross(a, b) => Cross(bx(rename_refs(a, m)), bx(rename_refs(b, m))),
+        Agg { group, aggs, input } => Agg { group: group.iter().map(g).collect(), aggs: aggs.iter().map(|(n, f)| (*n, match f { AggFn::Sum(c) => AggFn::Sum(g(c)), AggFn::Count => AggFn::Count })).collect(), input: bx(rename_refs(input, m)) },
+        Distinct(x) => Distinct(bx(rename_refs(x, m))),
+        Project(p, x) => Project(p.iter().map(|(s, d)| (g(s), *d)).collect(), bx(rename_refs(x, m))),
+        FillNull(c, k, x) => FillNull(g(c), *k, bx(rename_refs(x, m))),
+        DepJoin(l, rr) => DepJoin(bx(rename_refs(l, m)), bx(rename_refs(rr, m))),
+    }
+}
+
+/// Remove every dependent join (innermost first).
+pub fn unnest(r: &Rel, opts: Opts) -> Rel { un(r, &mut Ctx { next: 100, opts }) }
+fn un(r: &Rel, cx: &mut Ctx) -> Rel {
+    match r {
+        Scan(t) => Scan(*t),
+        Select(p, x) => Select(p.clone(), bx(un(x, cx))),
+        Join(p, a, b) => Join(p.clone(), bx(un(a, cx)), bx(un(b, cx))),
+        LeftJoin(p, a, b) => LeftJoin(p.clone(), bx(un(a, cx)), bx(un(b, cx))),
+        Cross(a, b) => Cross(bx(un(a, cx)), bx(un(b, cx))),
+        Agg { group, aggs, input } => Agg { group: group.clone(), aggs: aggs.clone(), input: bx(un(input, cx)) },
+        Distinct(x) => Distinct(bx(un(x, cx))),
+        Project(m, x) => Project(m.clone(), bx(un(x, cx))),
+        FillNull(c, k, x) => FillNull(*c, *k, bx(un(x, cx))),
+        DepJoin(l, rr) => { let (l2, r2) = (un(l, cx), un(rr, cx)); decorrelate(l2, r2, cx) }
+    }
+}
+
+fn ident(cols: &[Col]) -> Vec<(Col, Col)> { cols.iter().map(|c| (*c, *c)).collect() }
+fn nse(a: &[Col], b: &[Col], cx: &Ctx) -> Pred {
+    and_all(a.iter().zip(b).map(|(x, y)| if cx.opts.null_safe_join { Pred::NullSafeEq(*x, *y) } else { Pred::Cmp(Op::Eq, Ex::C(*x), Ex::C(*y)) }).collect())
+}
+
+/// L ⋈dep R, with R free of any dependent join: the Neumann-Kemper construction through a domain D = DISTINCT(F(L)).
+fn decorrelate(l: Rel, r: Rel, cx: &mut Ctx) -> Rel {
+    let ls = schema(&l);
+    let f: Vec<Col> = free(&r).into_iter().filter(|c| ls.contains(c)).collect();
+    if f.is_empty() { return Cross(bx(l), bx(r)); }
+    let id = cx.fresh();
+    let fp: Vec<Col> = (0..f.len()).map(|i| Col(id, i as u8)).collect();                       // renamed domain columns f'
+    let m: HashMap<Col, Col> = f.iter().copied().zip(fp.iter().copied()).collect();
+    let d = Distinct(bx(Project(f.iter().copied().zip(fp.iter().copied()).collect(), bx(l.clone()))));
+    let r2 = rename_refs(&r, &m);
+    let pushed = push(&d, &fp, &r2, cx);
+    let mut keep = ls.clone(); keep.extend(schema(&r));
+    Project(ident(&keep), bx(Join(nse(&f, &fp, cx), bx(l), bx(pushed))))
+}
+
+/// A relation containing, for every row of the domain `d`, the rows of `r` evaluated with that binding.
+/// Its schema is `fp` followed by the columns of `r` (as a set).
+fn push(d: &Rel, fp: &[Col], r: &Rel, cx: &mut Ctx) -> Rel {
+    let dep = |x: &Rel| free(x).iter().any(|c| fp.contains(c));
+    if !dep(r) { return Cross(bx(d.clone()), bx(r.clone())); }
+    // a second renamed copy of the domain, for operators that push it into two inputs
+    let second = |cx: &mut Ctx| -> (Rel, Vec<Col>, HashMap<Col, Col>) {
+        let id = cx.fresh();
+        let fq: Vec<Col> = (0..fp.len()).map(|i| Col(id, i as u8)).collect();
+        let dq = Project(fp.iter().copied().zip(fq.iter().copied()).collect(), bx(d.clone()));
+        let m = fp.iter().copied().zip(fq.iter().copied()).collect();
+        (dq, fq, m)
+    };
+    match r {
+        Select(p, x) => Select(p.clone(), bx(push(d, fp, x, cx))),
+        Distinct(x) => Distinct(bx(push(d, fp, x, cx))),
+        FillNull(c, k, x) => FillNull(*c, *k, bx(push(d, fp, x, cx))),
+        Project(m, x) => { let mut m2 = m.clone(); m2.extend(ident(fp)); Project(m2, bx(push(d, fp, x, cx))) }
+        Cross(a, b) | Join(_, a, b) | LeftJoin(_, a, b) => {
+            let p = match r { Join(p, ..) | LeftJoin(p, ..) => p.clone(), _ => Pred::True };
+            let (da, db_) = (dep(a), dep(b));
+            let is_left = matches!(r, LeftJoin(..));
+            let mk = |p: Pred, x: Rel, y: Rel| match r { Join(..) => Join(p, bx(x), bx(y)), LeftJoin(..) => LeftJoin(p, bx(x), bx(y)), _ => Cross(bx(x), bx(y)) };
+            let mk = |p: Pred, x: Rel, y: Rel| if matches!(r, Cross(..)) { if matches!(p, Pred::True) { mk(p, x, y) } else { Select(p, bx(Cross(bx(x), bx(y)))) } } else { mk(p, x, y) };
+            if da && !db_ { return mk(p, push(d, fp, a, cx), (**b).clone()); }
+            if db_ && !da && !is_left { return mk(p, (**a).clone(), push(d, fp, b, cx)); }
+            if !da && !db_ { return mk(p, Cross(bx(d.clone()), a.clone()), (**b).clone()); }   // only the predicate is correlated
+            // both inputs depend on the domain (or a left join depends on its right side): push into both and tie the copies together
+            let (dq, fq, m) = second(cx);
+            let b2 = rename_refs(b, &m);
+            let (pa, pb) = (push(d, fp, a, cx), push(&dq, &fq, &b2, cx));
+            let link = nse(fp, &fq, cx);
+            mk(and(p, link), pa, pb)
+        }
+        Agg { group, aggs, input } => {
+            let inner = push(d, fp, input, cx);
+            let mut g2 = group.clone(); g2.extend(fp.iter().copied());
+            let agg = Agg { group: g2, aggs: aggs.clone(), input: bx(inner) };
+            if !group.is_empty() || !cx.opts.fix_count_bug { return agg; }
+            // scalar aggregate: a domain value with no input rows must still yield one row (COUNT = 0, SUM = NULL):
+            // left-join the domain to the grouped result and COALESCE the counts
+            let id = cx.fresh();
+            let fq: Vec<Col> = (0..fp.len()).map(|i| Col(id, i as u8)).collect();
+            let mut renamed: Vec<(Col, Col)> = fp.iter().copied().zip(fq.iter().copied()).collect();
+            renamed.extend(aggs.iter().map(|(n, _)| (*n, *n)));
+            let lj = LeftJoin(nse(fp, &fq, cx), bx(d.clone()), bx(Project(renamed, bx(agg))));
+            let mut out = lj;
+            for (n, f) in aggs { if matches!(f, AggFn::Count) { out = FillNull(*n, 0, bx(out)); } }
+            let mut keep = fp.to_vec(); keep.extend(aggs.iter().map(|a| a.0));
+            Project(ident(&keep), bx(out))
+        }
+        Scan(_) => unreachable!("a scan has no free variables"),
+        DepJoin(..) => unreachable!("inner dependent joins were removed first"),
+    }
+}
+
+pub fn has_depjoin(r: &Rel) -> bool {
+    match r {
+        DepJoin(..) => true,
+        Scan(_) => false,
+        Select(_, x) | Distinct(x) | Project(_, x) | FillNull(_, _, x) | Agg { input: x, .. } => has_depjoin(x),
+        Join(_, a, b) | LeftJoin(_, a, b) | Cross(a, b) => has_depjoin(a) || has_depjoin(b),
+    }
+}
+pub fn size(r: &Rel) -> usize {
+    1 + match r {
+        Scan(_) => 0,
+        Select(_, x) | Distinct(x) | Project(_, x) | FillNull(_, _, x) | Agg { input: x, .. } => size(x),
+        Join(_, a, b) | LeftJoin(_, a, b) | Cross(a, b) | DepJoin(a, b) => size(a) + size(b),
+    }
+}
+
+// ------------------------------------------------------------------ normalization after unnesting
+fn within(p: &Pred, sch: &[Col]) -> bool { let mut u = vec![]; pred_cols(p, &mut u); u.iter().all(|c| sch.contains(c)) }
+fn wrap(ps: Vec<Pred>, x: Rel) -> Rel { if ps.is_empty() { x } else { Select(and_all(ps), bx(x)) } }
+
+/// The cleanups every optimizer runs after unnesting: merge stacked selections, split a selection over a cross product
+/// or inner join into per-input filters and a join predicate. (Without this, `Select(Cross(D, S))` stays a nested loop.)
+pub fn normalize(r: &Rel) -> Rel {
+    let r = match r {
+        Scan(t) => Scan(*t),
+        Select(p, x) => Select(p.clone(), bx(normalize(x))),
+        Join(p, a, b) => Join(p.clone(), bx(normalize(a)), bx(normalize(b))),
+        LeftJoin(p, a, b) => LeftJoin(p.clone(), bx(normalize(a)), bx(normalize(b))),
+        Cross(a, b) => Cross(bx(normalize(a)), bx(normalize(b))),
+        Agg { group, aggs, input } => Agg { group: group.clone(), aggs: aggs.clone(), input: bx(normalize(input)) },
+        Distinct(x) => Distinct(bx(normalize(x))),
+        Project(m, x) => Project(m.clone(), bx(normalize(x))),
+        FillNull(c, k, x) => FillNull(*c, *k, bx(normalize(x))),
+        DepJoin(l, rr) => DepJoin(bx(normalize(l)), bx(normalize(rr))),
+    };
+    let Select(p, x) = r else { return r };
+    match *x {
+        Select(q, y) => normalize(&Select(and(p, q), y)),
+        Cross(a, b) => split_over_join(p, Pred::True, *a, *b, false),
+        Join(q, a, b) => split_over_join(p, q, *a, *b, true),
+        other => Select(p, bx(other)),
+    }
+}
+
+/// Select(p, a X b) or Select(p, a JOIN_q b): single-input conjuncts go down, two-input conjuncts become join predicates.
+fn split_over_join(p: Pred, q: Pred, a: Rel, b: Rel, was_join: bool) -> Rel {
+    let (sa, sb) = (schema(&a), schema(&b));
+    let mut cs = vec![]; conjuncts(&p, &mut cs);
+    let (mut ca, mut cb, mut both, mut rest) = (vec![], vec![], vec![], vec![]);
+    for c in cs {
+        if within(&c, &sa) { ca.push(c) } else if within(&c, &sb) { cb.push(c) }
+        else { let mut u = vec![]; pred_cols(&c, &mut u); if u.iter().all(|x| sa.contains(x) || sb.contains(x)) { both.push(c) } else { rest.push(c) } }
+    }
+    let pushed = !ca.is_empty() || !cb.is_empty() || !both.is_empty();
+    if !pushed { return if was_join { Select(p, bx(Join(q, bx(a), bx(b)))) } else { Select(p, bx(Cross(bx(a), bx(b)))) }; }
+    let (a2, b2) = (normalize(&wrap(ca, a)), normalize(&wrap(cb, b)));
+    let jp = and(q, and_all(both));
+    let j = if matches!(jp, Pred::True) { Cross(bx(a2), bx(b2)) } else { Join(jp, bx(a2), bx(b2)) };
+    wrap(rest, j)
+}
+
+/// Unnest, then normalize.
+pub fn optimize(r: &Rel, opts: Opts) -> Rel { normalize(&unnest(r, opts)) }
+```
+:::
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><code>unnesting_matches_nested_iteration_on_random_subqueries</code>: 1 500 random correlated subqueries compared on 3 random databases each (tables of 0–6 rows over {0, 1, 2, NULL}). The generator draws a correlation predicate (<code>=</code>, <code>&lt;&gt;</code>, <code>&lt;</code>, <code>≤</code>, <code>&gt;</code>) against either outer column and an optional local filter, then one of: nothing, an inner join, a <strong>left join</strong>, <code>DISTINCT</code>, or a <strong>second correlated level that references both its parent and the outermost table</strong>; the result is a <strong>scalar SUM</strong>, a <strong>scalar COUNT</strong>, or a <strong>grouped</strong> aggregate. Coverage is asserted (504 COUNT, 576 SUM, 420 grouped, 253 two-level, 275 join, 240 left join, 236 distinct). Every rewritten plan must contain <strong>no dependent join</strong> and expose the same columns.</li> <li><code>the_count_bug_and_the_null_safe_join_are_caught</code>: two mutants must produce wrong answers: <em>skip the COUNT-bug fix</em> (inner-join the grouped result): <strong>383 of 1 500</strong> queries wrong; <em>use plain <code>=</code> instead of null-safe equality on the domain join</em>: <strong>154 of 1 500</strong> wrong (an outer row with a NULL correlation value loses its "empty" result).</li> <li><code>the_classic_count_bug_by_hand</code>: <code>T.b &gt; (SELECT COUNT(*) FROM S WHERE S.c = T.a)</code> over a T row with no match and a T row whose key is NULL; the correct rewrite keeps both rows, each mutant loses them.</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>Nested iteration vs the unnested, normalized plan (same executor; tables of N rows with about 10 rows per key; <code>T</code> is the outer table; "rows" counts rows produced by all operators):</p>
+
+```text title="correlated subquery: nested iteration vs unnested plan"
+query                                             N    nested ms  unnested ms   speedup      nested rows    unnested rows
+SUM(d) WHERE c = T.a  (equality)                500         15.3         0.59       26x           256449             4800
+SUM(d) WHERE c = T.a  (equality)               1000         30.3         0.56       54x          1013148             9600
+SUM(d) WHERE c = T.a  (equality)               2000         80.4         1.82       44x          4025971            19200
+SUM(d) WHERE c = T.a  (equality)               4000        311.5         1.78      175x         16052211            38400
+COUNT(*) WHERE c = T.a AND d <= T.b             500          6.6         0.73        9x           254432             9792
+COUNT(*) WHERE c = T.a AND d <= T.b            1000         25.2         1.41       18x          1008993            19770
+COUNT(*) WHERE c = T.a AND d <= T.b            2000        101.7         2.91       35x          4018034            39664
+COUNT(*) WHERE c = T.a AND d <= T.b            4000        401.4         5.87       68x         16036392            78853
+COUNT(*) WHERE d < T.b (inequality only)        500          7.2         1.75        4x           377895            16555
+COUNT(*) WHERE d < T.b (inequality only)       1000         28.5         3.39        8x          1470876            32237
+COUNT(*) WHERE d < T.b (inequality only)       2000        114.6         6.91       17x          5955621            65741
+COUNT(*) WHERE d < T.b (inequality only)       4000        462.8        13.81       34x         23811916           129506
+2 levels: COUNT over (S with COUNT over U)      100         28.9         2.05       14x          1072810            31389
+2 levels: COUNT over (S with COUNT over U)      200        212.4         8.18       26x          8343659           121971
+2 levels: COUNT over (S with COUNT over U)      400       1636.7        32.22       51x         65287694           468753
+```
+
+<ul> <li><strong>Nested iteration is quadratic, the unnested plan is linear</strong>: doubling N multiplies the nested row count by 4 (256 K → 1 M → 4 M → 16 M) and the unnested one by 2 (4 800 → 38 400): the speedup grows with N, from 26× to <strong>175×</strong> for the equality-correlated sum, and the two-level query (cubic when nested: 1 M → 65 M rows) reaches <strong>51×</strong> at N = 400.</li> <li><strong>An inequality correlation still wins, for a different reason</strong>: with <code>d &lt; T.b</code> there is no equi-join to hash, but the <strong>domain</strong> has only as many rows as there are distinct <code>T.b</code> values (≈50), so the right side is evaluated 50 times instead of N times: 4× at N = 500, <strong>34×</strong> at N = 4000, and growing, since the work stays proportional to |S| × (distinct correlation values).</li> <li><strong>Unnesting alone was not enough</strong>: the first version of this module stopped after the dependent join was removed, leaving <code>Select(Cross(D, S))</code>, which executes as a nested loop. There the equality-correlated sum gained only 4–5×, and <code>COUNT … WHERE c = T.a AND d &lt;= T.b</code> was <strong>2.2× slower</strong> than nested iteration (892 ms vs 405 ms at N = 4000: the domain <code>(a, b)</code> had almost as many rows as <code>T</code>, so nothing was saved and the cross product was materialised). The normalization pass (turn <code>Select</code> over <code>Cross</code> into a hash join) is <em>part of unnesting</em>, and the same query is then <strong>68×</strong> faster.</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Dynamic scope as a <code>Vec</code></strong>: the environment is <code>Vec&lt;(Col, Val)&gt;</code>, extended per outer row and searched <strong>from the end</strong>, so the innermost binding wins; a column that is neither in the current schema nor bound panics with its name (an unbound reference is a rewrite bug and should never be silent).</li> <li><strong>Hygiene by fresh ids</strong>: decorrelation renames the correlated columns it introduces with a counter (<code>Ctx::fresh</code>), so nested rewrites and the two copies of a domain pushed into both sides of a join never capture each other's names. <code>rename_refs</code> renames only <em>references</em>, which is safe because the outer columns are never defined inside the subquery.</li> <li><strong>Hash keys are <code>Vec&lt;Option&lt;i64&gt;&gt;</code></strong>: <code>Option</code> is <code>Hash + Eq</code> with <code>None == None</code>, which is exactly SQL's rule for <code>GROUP BY</code> and <code>DISTINCT</code> (NULLs group together) but <strong>not</strong> for <code>=</code> joins; <code>equi_keys</code> carries a per-key null-safe flag and skips probe/build rows whose non-null-safe keys are NULL.</li> <li><strong>One probe routine for both join algorithms</strong>: the closure <code>push(x, ys, out)</code> takes the candidate rows as <code>&amp;mut dyn Iterator&lt;Item = &amp;Row&gt;</code>, so the nested-loop and hash paths share the residual-predicate and left-join padding logic.</li> <li><strong><code>let … else</code> and <code>matches!</code> as guards</strong>: <code>normalize</code> starts with <code>let Select(p, x) = r else { return r };</code>: the pattern of each rule in one line.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>The COUNT bug and its relatives</strong>: every aggregate with a non-NULL value on empty input (<code>COUNT</code>) needs the left-join-and-<code>COALESCE</code> treatment; every consumer that distinguishes "no row" from "row with NULL" (<code>IS NULL</code>, <code>NOT EXISTS</code>, outer joins) needs care. The mutant that skipped the fix was wrong on a quarter of random queries.</li> <li><strong>NULL correlation keys</strong>: grouping the domain merges NULLs, so the join back to the outer query must be <strong>null-safe</strong> (<code>IS NOT DISTINCT FROM</code>), while the <em>original</em> predicate <code>S.c = T.a</code> is not: the fix is entirely about keeping those two equalities apart (the second mutant failed on 154 of 1 500 queries).</li> <li><strong>Domain size decides profitability</strong>: the domain only helps when it is smaller than the outer input (few distinct correlation values) or when the pushed plan turns into hash joins; with a unique correlation key and a non-hashable predicate, decorrelation can approach nested cost and the optimizer should keep the dependent join (an <em>apply</em> operator, ideally an index nested-loop).</li> <li><strong>Operators missing from this algebra</strong> each need a push rule: windows, set operations, <code>LIMIT</code>/top-1 per group (needs a ranking rewrite), recursive CTEs, <code>LATERAL</code> in <code>FROM</code>; <code>NOT IN</code> needs a <strong>null-aware anti-join</strong> because <code>x NOT IN (… NULL …)</code> is never true.</li> <li><strong>Duplicates and bag semantics</strong>: the domain is <code>DISTINCT</code> because evaluating <code>R</code> per <em>distinct</em> binding is enough; forgetting the <code>DISTINCT</code> is still correct but silently multiplies work, forgetting to join back on <em>all</em> correlated columns is wrong.</li> <li><strong>Test with a nested-iteration oracle</strong>: the oracle here is ten lines and found nothing wrong only because the mutants showed it can; every production unnesting implementation needs the same differential test (fuzz SQL against a mode that never decorrelates).</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Unnesting Arbitrary Queries"
+url = "https://www.btw-2015.de/res/proceedings/Hauptband/Wiss/Neumann-Unnesting_Arbitrary_Querie.pdf"

@@ -1,0 +1,23 @@
+warning[W0501]: unused variable: `s`
+ --> e0002_unterminated_string.peb:2:9
+  |
+2 |     let s = "hello;
+  |         ^ this variable is never read
+  |
+  = help: if this is intentional, prefix it with an underscore: `_s`
+
+error[E0002]: unterminated string literal
+ --> e0002_unterminated_string.peb:2:13
+  |
+2 |     let s = "hello;
+  |             ^ string starts here
+  |
+  = help: add a closing `"`; strings cannot span lines (use `\n`)
+
+error[E0201]: cannot find value `s` in this scope
+ --> e0002_unterminated_string.peb:3:13
+  |
+3 |     println(s);
+  |             ^ not found in this scope
+
+error: aborting due to 2 previous errors; 1 warning emitted

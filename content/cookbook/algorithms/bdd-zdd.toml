@@ -1,0 +1,52 @@
+title = "Reduced ordered BDDs"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Caches, queues, heaps and bit sets"
+chapter_order = 3
+order = 188
+kind = "recipe"
+lede = "reduced ordered BDDs (Bryant) and ZDDs (Minato): canonical boolean functions and families of sets."
+level = "advanced"
+code = ["examples/data_structures/bdd_zdd.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>equivalence checking</li><li>model counting</li><li>representing huge set families compactly</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+A BDD is a decision DAG: node (var, lo, hi) means "if var then hi else lo". Two rules make it **canonical** for a fixed variable order: (1) never create a node with lo == hi, (2) never create two identical nodes.
+
+Rule 2 is enforced by a **unique table** (hash-consing: `mk` looks up (var, lo, hi) before allocating), so two formulas are equivalent exactly when they compile to the **same** node index: equivalence checking is `==` on a u32. All boolean operators come from one memoised `ite(f, g, h)` (if-then-else); the cache makes `apply` polynomial in the sizes of its arguments.
+
+The variable **order** decides everything: x1y1 + x2y2 + ... + xnyn is 2n+2 nodes with x_i next to y_i and about 2&#94;(n+1) with all x before all y; the carry-out of an n-bit adder behaves the same way. Finding the best order is NP-hard.
+
+A ZDD (Minato, TAOCP 7.1.4) keeps the same machinery but swaps rule 1 for **zero-suppression**: drop a node whose hi child is the empty family. That makes ZDDs ideal for families of **sets** over a big universe where most items are absent from most sets: union / intersection / difference / join (product) and counting all work directly on the compressed form.
+
+Examples verified below: independent sets of paths and cycles (Fibonacci, Lucas) and N-queens.
+
+Verification: 2000 random formulas over &lt;= 8 variables are compiled to BDDs and compared with truth tables for evaluation, model count, restriction and existential quantification, and De Morgan-rewritten twins must hash to the identical node.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>symbolic model checking and hardware equivalence checking (the original motivation for BDDs)</li><li>static analysis with BDD-based Datalog/points-to engines</li><li>configuration/feature-model counting (product lines)</li><li>logic synthesis</li><li>fault-tree analysis</li><li>combinatorial counting via ZDDs (frontier-based path/matching enumeration)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Knuth, The Art of Computer Programming Vol 4A, section 7.1.4 (Binary Decision Diagrams, including ZDDs)</li><li>Bryant, "Graph-Based Algorithms for Boolean Function Manipulation" (IEEE Trans</li><li>Computers, 1986)</li><li><a href="https://en.wikipedia.org/wiki/Binary_decision_diagram" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Binary_decision_diagram</a>  <a href="https://www-cs-faculty.stanford.edu/~knuth/taocp.html" target="_blank" rel="noreferrer">https://www-cs-faculty.stanford.edu/~knuth/taocp.html</a></li></ul>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Binary_decision_diagram"
+url = "https://en.wikipedia.org/wiki/Binary_decision_diagram"
+
+[[sources]]
+title = "www-cs-faculty.stanford.edu/~knuth/taocp.html"
+url = "https://www-cs-faculty.stanford.edu/~knuth/taocp.html"

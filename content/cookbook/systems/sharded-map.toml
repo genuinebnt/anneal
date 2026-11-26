@@ -1,0 +1,52 @@
+title = "A concurrent HashMap by lock striping"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Threads, locks and channels"
+chapter_order = 1
+order = 239
+kind = "recipe"
+lede = "N shards, each `RwLock<HashMap>`."
+level = "intermediate"
+code = ["examples/concurrency/sharded_map.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>caches</li><li>session tables</li><li>in-memory indexes</li><li>per-key counters shared by many threads</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+`ShardedMap<K, V>` splits one big map into N independent maps. A key's hash picks its shard, and only that shard's lock is taken, so operations on different shards never contend. One `Mutex<HashMap>` serialises everything.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+`get` takes a shard read lock (many readers in parallel), `insert/remove/update` take the write lock. `update_or_insert` does "entry API" style read-modify-write atomically under **one** write lock, which a separate `get` then `insert` could not (two threads would both see "absent" and one increment would be lost).
+
+**Trade-offs**: `len` locks shards one by one, so it is only a point-in-time estimate under concurrent writes; there is no iteration with a stable view; more shards = less contention but more memory. A hot single key still serialises. **False sharing**: neighbouring `RwLock`s in a `Vec` can share a cache line, so a lock write on shard i invalidates shard i+1's line.
+
+Each shard is wrapped in `#[repr(align(64))]` (see recipe 85) to give every lock its own line. Numbers printed below are machine-dependent and are **not** asserted; correctness is.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>in-process caches</li><li>connection/session registries</li><li>metrics registries keyed by name</li><li>deduplication sets. The dashmap crate (<a href="https://github.com/xacrimon/dashmap" target="_blank" rel="noreferrer">https://github.com/xacrimon/dashmap</a>) is this idea</li><li>production-grade</li><li>for read-mostly data see recipe 147 (snapshots) which avoids per-read locking</li><li>for very hot maps consider lock-free/concurrent tries</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/sync/struct.RwLock.html> and <https://github.com/xacrimon/dashmap>
+"""
+
+[[sources]]
+title = "github.com/xacrimon/dashmap"
+url = "https://github.com/xacrimon/dashmap"
+
+[[sources]]
+title = "doc.rust-lang.org/std/sync/struct.RwLock.html"
+url = "https://doc.rust-lang.org/std/sync/struct.RwLock.html"

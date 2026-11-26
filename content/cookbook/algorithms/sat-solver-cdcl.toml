@@ -1,0 +1,54 @@
+title = "A SAT solver, from DPLL to CDCL"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Dynamic programming, greedy and search"
+chapter_order = 5
+order = 213
+kind = "recipe"
+lede = "a SAT solver, from DPLL to CDCL (watched literals, 1UIP learning, VSIDS, restarts), plus problem encodings."
+level = "advanced"
+code = ["examples/algorithms/sat_solver_cdcl.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>solving constraint problems by encoding them as boolean CNF</li><li>dependency resolution</li><li>verification</li><li>planning</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pipeline (the lineage in TAOCP 7.2.2.2, Satisfiability):
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">DIMACS CNF</div><div class="cb-g-says"><p>Parser. Literals are non-zero ints (-3 = <strong>not</strong> x3); a clause ends with 0.</p></div></div><div class="cb-g-term"><div class="cb-g-name">DPLL</div><div class="cb-g-says"><p>Choose a variable, try both values, after every choice run <strong>unit propagation</strong> (a clause with one unassigned literal and the rest false forces that literal). Chronological backtracking only.</p></div></div><div class="cb-g-term"><div class="cb-g-name">CDCL (conflict-driven clause learning)</div><div class="cb-g-says"><p>On a conflict, walk the implication trail backwards resolving antecedent clauses until exactly <strong>one</strong> literal of the current decision level remains (the first UIP).</p><p>That clause is <strong>learnt</strong> (it is implied by the formula, so it prunes the future), and the solver BACKJUMPS to the second highest level in it (non-chronological), where the learnt clause is unit and flips the search direction.</p><p>Supporting machinery: two <strong>watched literals</strong> per clause (a clause is only visited when a watched literal becomes false, and no work is undone on backtrack), VSIDS-style activity (variables in recent conflicts get bumped, all scores decay by growing the increment), <strong>phase saving</strong> (re-try the last value), and Luby <strong>restarts</strong>.</p><p>Omitted for brevity: clause deletion, learnt-clause minimisation, a heap for variable selection (linear scan).</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>Models are verified clause by clause; CDCL is cross-checked against brute force on 500 random 3-SAT instances, and a clause/variable ratio sweep shows the phase transition near 4.26 (where instances are hardest).</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>Encodings: N-queens, sudoku, graph colouring, pigeonhole (UNSAT, exponentially hard for resolution), XOR cycle.</p></div></div></div>
+
+2-SAT detail: if every clause has at most 2 literals, SAT is in linear time. Each clause (a OR b) gives implications (**not** a -> b) and (**not** b -> a).
+
+Build the implication graph on 2n literal nodes; the formula is UNSAT exactly when some x and **not** x lie in the same strongly connected component (see tarjan_scc Tarjan SCC), and a model is read off by taking x true when comp(x) comes later in topological order than comp(**not** x). General 3-SAT is NP-complete, hence CDCL.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+hardware and software verification (bounded model checking, equivalence checking), AI planning, package dependency solving (libsolv in zypper; PubGrub-style resolvers in Dart's pub and uv add conflict learning on version constraints, the same idea as CDCL), test generation, cryptanalysis experiments, scheduling and configuration.
+
+Industrial solvers of this family include MiniSat, CaDiCaL, Kissat; SMT solvers such as Z3 use a CDCL core.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Knuth, The Art of Computer Programming Vol 4B, section 7.2.2.2 (Satisfiability)</li><li>Skiena, The Algorithm Design Manual (Satisfiability in the problem catalog)</li><li>Een and Sorensson, "An Extensible SAT-solver" (MiniSat)</li><li><a href="https://en.wikipedia.org/wiki/Conflict-driven_clause_learning" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Conflict-driven_clause_learning</a>  <a href="https://www-cs-faculty.stanford.edu/~knuth/taocp.html" target="_blank" rel="noreferrer">https://www-cs-faculty.stanford.edu/~knuth/taocp.html</a> <a href="https://www.algorist.com/" target="_blank" rel="noreferrer">https://www.algorist.com/</a></li></ul>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Conflict-driven_clause_learning"
+url = "https://en.wikipedia.org/wiki/Conflict-driven_clause_learning"
+
+[[sources]]
+title = "www-cs-faculty.stanford.edu/~knuth/taocp.html"
+url = "https://www-cs-faculty.stanford.edu/~knuth/taocp.html"
+
+[[sources]]
+title = "algorist.com"
+url = "https://www.algorist.com/"

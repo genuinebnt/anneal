@@ -1,0 +1,4 @@
+fn pair<T>(a: T, b: T) -> [T] { [a, b] }
+fn main() {
+    let p = pair(1, "two");
+}

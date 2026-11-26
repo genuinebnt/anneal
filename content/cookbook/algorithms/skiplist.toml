@@ -1,0 +1,50 @@
+title = "Skip list"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Trees and ordered structures"
+chapter_order = 2
+order = 176
+kind = "recipe"
+lede = "A probabilistically balanced ordered map (arena, no unsafe)."
+level = "advanced"
+code = ["examples/data_structures/skiplist.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>ordered in-memory indexes</li><li>LSM memtables</li><li>sorted sets</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a sorted linked list with express lanes. Every node has a random "tower" height: level 1 with prob 3/4, level 2 with prob 3/16, ... (promotion probability p = 1/4).
+
+Level-0 links form the full sorted list; higher links skip ahead. Search starts at the top lane, moves right while the next key is smaller, drops down a level otherwise: expected O(log n) steps, no rebalancing.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+nodes live in a `Vec<Option<Node>>` arena, links are `usize` indices (**nil** = usize::MAX), freed slots are recycled via a free list. This sidesteps the ownership problems of a graph of pointers without `unsafe`/`Rc<RefCell>`. `head` holds the forward links of a virtual head node.
+
+**Insert/remove**: first collect, per level, the last node before the key ("predecessors"), then splice the node in or out at exactly the levels it occupies.
+
+**Why skip lists are popular**: balancing a tree means rotations that touch many nodes; a skip list insert only rewires a few local pointers, which makes lock-free and fine-grained concurrent versions far simpler (Java's ConcurrentSkipListMap is one). They also give ordered iteration and cheap range scans by walking level 0.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+the default memtable in LevelDB and RocksDB is a skip list (writes land in a sorted in-memory structure that is later flushed as a sorted file; LevelDB's design lets readers proceed without locks while a single writer inserts); Redis sorted sets (ZSET) combine a skip list with a hash table; in-memory ordered maps and priority/time-ordered indexes.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Skip_list>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Skip_list"
+url = "https://en.wikipedia.org/wiki/Skip_list"

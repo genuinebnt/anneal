@@ -1,0 +1,40 @@
+title = "Async patterns"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Async Rust"
+chapter_order = 4
+order = 262
+kind = "recipe"
+lede = "join!, spawn, JoinSet, spawn_blocking, timeouts, and panic isolation in tokio."
+level = "intermediate"
+code = ["examples/async/async_patterns.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>concurrent executor stages</li><li>API handlers that fan out</li><li>mixing CPU and IO work</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>fan-out API calls</li><li>mixing CPU and IO work</li><li>per-task timeouts and panic isolation in services</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+join!(a, b)        run futures **concurrently** on the same task; wait for all.
+
+(try_join! stops on first Err) tokio::spawn(f)    run on the runtime as an independent task; JoinHandle gives the result (or panic as Err) JoinSet            a dynamic bag of spawned tasks; `join_next()` yields results as they finish spawn_blocking(f)  run blocking or CPU-heavy code on a separate thread pool so it cannot stall async tasks Never `std::thread::sleep` or heavy loops inside async code: they block the executor thread.
+
+Docs: <https://tokio.rs/tokio/tutorial/spawning> and <https://docs.rs/tokio/latest/tokio/task/index.html>
+"""
+
+[[sources]]
+title = "tokio.rs/tokio/tutorial/spawning"
+url = "https://tokio.rs/tokio/tutorial/spawning"
+
+[[sources]]
+title = "docs.rs/tokio/latest/tokio/task/index.html"
+url = "https://docs.rs/tokio/latest/tokio/task/index.html"

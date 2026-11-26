@@ -1,0 +1,38 @@
+title = "Token-bucket rate limiter with an injectable clock"
+module = "Distributed systems"
+module_order = 10
+chapter = "Streams, messaging and reliability"
+chapter_order = 4
+order = 505
+kind = "recipe"
+lede = "token-bucket rate limiter with an injectable clock."
+level = "intermediate"
+code = ["examples/distributed/token_bucket.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+rate-limiting track, API stage.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>API gateways</li><li>per-tenant quotas</li><li>login throttling</li><li>outbound call budgets</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: tokens refill continuously up to `capacity`; each request spends one. Bursts up to `capacity` are allowed, the long-run rate is `refill_per_sec`. Take time from a `Clock` trait so tests control it (no sleeping, no flakiness).
+
+Compare: <https://github.com/boinkor-net/governor> and <https://docs.rs/tower/latest/tower/limit/index.html>
+"""
+
+[[sources]]
+title = "github.com/boinkor-net/governor"
+url = "https://github.com/boinkor-net/governor"
+
+[[sources]]
+title = "docs.rs/tower/latest/tower/limit/index.html"
+url = "https://docs.rs/tower/latest/tower/limit/index.html"

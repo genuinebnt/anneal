@@ -1,0 +1,19 @@
+error[E0301]: mismatched types
+ --> e0301_two_labels_one_line.peb:3:19
+  |
+3 |     let _r: str = add(1, true);
+  |             ---   ^^^^^^^^^^^^ expected `str`, found `int`
+  |             |
+  |             expected due to this type
+  |
+  = help: convert with `to_str(..)`
+
+error[E0301]: mismatched types
+ --> e0301_two_labels_one_line.peb:3:26
+  |
+3 |     let _r: str = add(1, true);
+  |                          ^^^^ expected `int`, found `bool`
+  |
+  = help: convert with `x as int`
+
+error: aborting due to 2 previous errors

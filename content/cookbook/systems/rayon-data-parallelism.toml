@@ -1,0 +1,64 @@
+title = "Data parallelism with rayon"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Threads, locks and channels"
+chapter_order = 1
+order = 243
+kind = "recipe"
+lede = "Parallel iterators, fold/reduce, join, scope, thread pools."
+level = "intermediate"
+code = ["examples/concurrency/rayon_data_parallelism.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>CPU-bound loops over big collections: sums</li><li>sorts</li><li>word counts</li><li>image/matrix work</li><li>batch transforms</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+rayon turns `iter()` into `par_iter()` and runs the work on a global pool of OS threads (one per core by default).
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+each worker has its own deque of tasks. `join(a, b)` pushes `b` on the local deque and runs `a`; an idle worker steals the **oldest** task (usually a big, not-yet-split chunk) from a busy worker. Splitting is adaptive, so no manual chunking is needed, and the sequential fallback is cheap when nobody steals.
+
+**Why associativity**: `reduce(identity, op)` and `fold` combine partial results in whatever tree the splitter happens to produce, so `op` **must** be associative (and `identity` a true identity), else the answer depends on scheduling.
+
+Sums of integers are fine; subtraction is not; floating point addition is not exactly associative either (tiny nondeterministic differences). **What is deterministic**: `collect()` into Vec keeps the input order; `sum/min/max/count` on integers are exact; an `op` that is associative gives the same answer as the sequential fold.
+
+We assert equality with sequential results below. **Rayon** vs TOKIO: rayon is for CPU-bound work (it keeps cores busy and blocks threads); tokio is for IO-bound concurrency (many tasks waiting on sockets). Do not do blocking IO inside `par_iter`, and do not run long CPU loops on tokio worker threads (use `spawn_blocking` or hand the work to rayon).
+"""
+
+[[sections]]
+heading = "Pitfalls"
+body = """
+tiny work (see the speedup table: below &#126;10k cheap items parallel is **slower**), false sharing (per-thread counters on one cache line), global locks inside the closure, and nested `par_iter` over tiny inner loops.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>parallel builds/linters over many files</li><li>ripgrep-style file scanning pipelines</li><li>image processing</li><li>Monte Carlo</li><li>batch feature extraction</li><li>parallel sort and aggregation in data tools</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://github.com/rayon-rs/rayon" target="_blank" rel="noreferrer">https://github.com/rayon-rs/rayon</a></li><li><a href="https://docs.rs/rayon/latest/rayon/" target="_blank" rel="noreferrer">https://docs.rs/rayon/latest/rayon/</a></li><li><a href="https://docs.rs/rayon/latest/rayon/iter/trait.ParallelIterator.html" target="_blank" rel="noreferrer">https://docs.rs/rayon/latest/rayon/iter/trait.ParallelIterator.html</a></li></ul>
+"""
+
+[[sources]]
+title = "github.com/rayon-rs/rayon"
+url = "https://github.com/rayon-rs/rayon"
+
+[[sources]]
+title = "docs.rs/rayon/latest/rayon"
+url = "https://docs.rs/rayon/latest/rayon/"
+
+[[sources]]
+title = "docs.rs/rayon/latest/rayon/iter/trait.ParallelIterator.html"
+url = "https://docs.rs/rayon/latest/rayon/iter/trait.ParallelIterator.html"

@@ -1,0 +1,52 @@
+title = "IVF-Flat"
+module = "Search and vectors"
+module_order = 9
+chapter = "Vector search"
+chapter_order = 2
+order = 465
+kind = "recipe"
+lede = "K-means partitions the vectors into inverted lists; search probes only the nearest few lists."
+level = "advanced"
+code = ["examples/search_vectors/ivf_flat.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+approximate nearest-neighbour search over millions of embeddings when a full scan is too slow.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+train `nlist` centroids with k-means (k-means++ seeding + a fixed number of Lloyd iterations). Every vector goes into the inverted list of its nearest centroid ("flat" = vectors are stored uncompressed). A query finds its `nprobe` nearest centroids and scans only those lists, exactly.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+neighbours of a query almost always live in the same or adjacent Voronoi cells, so scanning &#126;nprobe/nlist of the data finds most true neighbours. Cost per query = nlist centroid distances + (nprobe/nlist)&#42;N vector distances. **Parameters**: `nlist` &#126; sqrt(N) balances the centroid scan against the list scan.
+
+`nprobe` is the recall/speed dial: 1 is fastest but misses neighbours sitting just across a cell border; nprobe = nlist degenerates to exact brute force. k-means++: the first centre is random, each next one is drawn with probability proportional to squared distance to the nearest chosen centre, which spreads the seeds and avoids the bad local optima of uniform seeding.
+
+Empty clusters (possible with any Lloyd variant) are repaired by stealing the point farthest from its centroid, so no list is wasted.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>FAISS IVF indexes (IndexIVFFlat, usually combined with product quantization as IVFPQ, see product_quantization)</li><li>coarse quantisers that shard a corpus so each shard or disk page holds one cell</li><li>pre-filtering step before exact re-ranking</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://github.com/facebookresearch/faiss> and <https://github.com/facebookresearch/faiss/wiki/Faster-search>
+"""
+
+[[sources]]
+title = "github.com/facebookresearch/faiss"
+url = "https://github.com/facebookresearch/faiss"
+
+[[sources]]
+title = "github.com/facebookresearch/faiss/wiki/Faster-search"
+url = "https://github.com/facebookresearch/faiss/wiki/Faster-search"

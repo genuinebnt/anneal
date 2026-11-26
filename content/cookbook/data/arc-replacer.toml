@@ -1,0 +1,507 @@
+title = "ARC replacer"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 316
+kind = "guide"
+lede = "BusTub P1 Task 1 · ghost lists and an adaptive target · O(1) intrusive lists in Rust · tests: arc_replacer_test, arc_replacer_performance_test"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>The buffer pool asks the replacer one question: <em>which frame should I give up?</em> L04 showed that LRU answers it badly under scans, and that LRU-K needs a tuning parameter plus history for pages that are no longer cached. <strong>ARC</strong>, the Adaptive Replacement Cache (Megiddo &amp; Modha, IBM, FAST 2003), keeps two lists, one for recency and one for frequency, and <em>learns</em> how to split the cache between them from its own mistakes. It does this with <strong>ghost lists</strong>: the page ids of recently evicted pages, with no data. A hit on a ghost means "I shouldn't have evicted that", and the ghost list it's found in says which side to grow.</p>
+
+<figure class="cb-g-fig"><svg viewBox="0 0 820 170" role="img" aria-label="ARC lists"> <g font-size="12"> <rect x="10" y="40" width="190" height="44" rx="4" class="cb-g-box"></rect><text x="20" y="66">B1 · MRU ghost (ids only)</text> <rect x="210" y="40" width="190" height="44" rx="4" class="cb-g-boxa"></rect><text x="220" y="66">T1 · MRU (seen once)</text> <rect x="420" y="40" width="190" height="44" rx="4" class="cb-g-boxa"></rect><text x="430" y="66">T2 · MFU (seen ≥ twice)</text> <rect x="620" y="40" width="190" height="44" rx="4" class="cb-g-box"></rect><text x="630" y="66">B2 · MFU ghost (ids only)</text> <line x1="410" y1="26" x2="410" y2="100" class="cb-g-lna" stroke-dasharray="4 3"></line><text x="398" y="20" class="cb-g-acc">!</text> <text x="210" y="112" class="cb-g-mut">← older      fresher →</text><text x="420" y="112" class="cb-g-mut">← fresher      older →</text> <text x="10" y="136">cache = T1 ∪ T2 (≤ c frames) · directory = T1 ∪ T2 ∪ B1 ∪ B2 (≤ 2c entries) · p = target size of T1, 0 ≤ p ≤ c</text> <text x="10" y="158" class="cb-g-mut">hit in B1 ⇒ recency was undervalued ⇒ p↑ · hit in B2 ⇒ frequency was undervalued ⇒ p↓</text> </g></svg><figcaption class="cb-g-figcap">BusTub's test comments draw exactly this picture: <code>[&lt;-mru_ghost-][&lt;-mru-]![-mfu-&gt;][-&gt;mfu_ghost-&gt;] p=x</code>, with the freshest entries next to the <code>!</code>.</figcaption></figure>
+"""
+
+[[sections]]
+heading = "Spec"
+body = """
+<p>BusTub's ARC differs from the paper in one important way. In the paper, <code>REPLACE</code> runs <em>inside</em> the access, because the cache owns its own contents. In a buffer pool, the <strong>BPM</strong> decides when a frame is needed and calls <code>Evict()</code>, and frames can be <strong>pinned</strong>. So BusTub splits the algorithm: <code>Evict()</code> picks a victim and moves it to a ghost list, and <code>RecordAccess()</code> classifies the access and trims ghost lists.</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Call</th> <th>Rule (verbatim semantics from the P1 writeup)</th> </tr> </thead> <tbody> <tr> <td><code>RecordAccess(f, p)</code>, <strong>case 1</strong>: frame alive in MRU or MFU</td> <td>move it to the front of MFU</td> </tr> <tr> <td><strong>case 2</strong>: page <code>p</code> in MRU ghost</td> <td>if |B1| ≥ |B2|: p += 1, else p += ⌊|B2| / |B1|⌋; cap at c. Remove the ghost, insert (f, p) at the front of MFU</td> </tr> <tr> <td><strong>case 3</strong>: page <code>p</code> in MFU ghost</td> <td>if |B2| ≥ |B1|: p −= 1, else p −= ⌊|B1| / |B2|⌋; floor at 0. Remove the ghost, insert at the front of MFU</td> </tr> <tr> <td><strong>case 4</strong>: page never seen</td> <td><strong>(a)</strong> if |T1| + |B1| = c: drop B1's last element; <strong>(b)</strong> else if |T1|+|T2|+|B1|+|B2| = 2c: drop B2's last element; <strong>(c)</strong> else nothing. Then insert at the front of MRU</td> </tr> <tr> <td><code>Evict()</code></td> <td>if |T1| &lt; p: try MFU first, else MRU first. In the chosen list, take the <em>last</em> (oldest) <strong>evictable</strong> entry; if none, try the other list. Move the victim's page id to the front of the matching ghost list. Return its frame, or <code>None</code></td> </tr> <tr> <td><code>SetEvictable(f, b)</code></td> <td>toggle; <code>Size()</code> counts alive evictable frames only</td> </tr> <tr> <td><code>Remove(f)</code></td> <td>drop a frame entirely, with <strong>no ghost</strong> (the page was deleted); only for evictable frames</td> </tr> <tr> <td><code>Size()</code></td> <td>number of alive, evictable frames</td> </tr> </tbody> </table></div>
+
+<p>Five sizes are easy to confuse, and the writeup lists them explicitly. <strong>Capacity</strong> <em>c</em> (the number of frames). <strong>Total list size</strong> (up to 2c, because of ghosts). <strong>Current evictable size</strong> (<code>Size()</code>). <strong>MRU target size</strong> <em>p</em>. <strong>MRU actual size</strong> |T1|, which counts pinned entries too. The eviction test compares |T1| (actual, pinned included) with <em>p</em>.</p>
+
+<aside data-call="why"><b>Why ghost hits are the right signal</b><p>A B1 hit means a page seen <em>once</em> came back soon after being evicted from T1. A bigger T1 would have kept it, so grow <em>p</em>. A B2 hit means a <em>frequent</em> page was evicted from T2 and came back, so a bigger T2 would have kept it, and <em>p</em> shrinks. The step size ⌊|B2|/|B1|⌋ makes the adjustment larger when the <em>other</em> ghost list is bigger. The rarer kind of mistake carries more information per occurrence. In a pure scan, every page enters T1 once and is never re-referenced, so no ghost hits happen, <em>p</em> stays put, and T2 (the hot set) is never disturbed. That's scan resistance with no tuning knob.</p></aside>
+"""
+
+[[sections]]
+heading = "Worked trace"
+body = """
+<p>Capacity 7. Notation from the test: <code>(page, frame)</code>; <code>p(…)</code> is pinned; <code>(n,_)</code> is a ghost.</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Step</th> <th>Operation</th> <th>State after <code>[B1][T1]![T2][B2]</code></th> <th>p</th> <th>Size</th> </tr> </thead> <tbody> <tr> <td>1</td> <td>access pages 1–6 on frames 1–6; 1–5 evictable, 6 pinned</td> <td><code>[][1,2,3,4,5,p6]![][]</code></td> <td>0</td> <td>5</td> </tr> <tr> <td>2</td> <td>access page 1 again (case 1)</td> <td><code>[][2,3,4,5,p6]![1][]</code></td> <td>0</td> <td>5</td> </tr> <tr> <td>3</td> <td>evict ×3: |T1|=5 ≥ p=0 ⇒ MRU side, oldest first</td> <td><code>[2,3,4][5,p6]![1][]</code> → returns 2, 3, 4</td> <td>0</td> <td>2</td> </tr> <tr> <td>4</td> <td>page 7 on frame 2 (new, case 4c)</td> <td><code>[2,3,4][5,p6,7]![1][]</code></td> <td>0</td> <td>3</td> </tr> <tr> <td>5</td> <td>page 2 on frame 3: <strong>B1 hit</strong>; |B1|=3 ≥ |B2|=0 ⇒ p+1</td> <td><code>[3,4][5,p6,7]![2,1][]</code></td> <td>1</td> <td>4</td> </tr> <tr> <td>6</td> <td>page 3 on frame 4, page 4 on frame 7: two more B1 hits</td> <td><code>[][5,p6,7]![4,3,2,1][]</code></td> <td>3</td> <td>6</td> </tr> <tr> <td>7</td> <td>evict: |T1|=3 ≥ p=3 ⇒ MRU side ⇒ page 5</td> <td><code>[5][p6,7]![4,3,2,1][]</code></td> <td>3</td> <td>5</td> </tr> <tr> <td>8</td> <td>evict: |T1|=2 &lt; p=3 ⇒ <strong>MFU side</strong> ⇒ oldest is page 1 (frame 1)</td> <td><code>[5][p6,7]![4,3,2][1]</code></td> <td>3</td> <td>4</td> </tr> <tr> <td>9</td> <td>page 1 on frame 5: <strong>B2 hit</strong>; |B2|=1 ≥ |B1|=1 ⇒ p−1</td> <td><code>[5][p6,7]![1,4,3,2][]</code></td> <td>2</td> <td>5</td> </tr> <tr> <td>10</td> <td>evict: |T1|=2 ≥ p=2 ⇒ MRU; page 6 is pinned, so skip it ⇒ page 7 (frame 2)</td> <td><code>[5,7][p6]![1,4,3,2][]</code></td> <td>2</td> <td>4</td> </tr> </tbody> </table></div>
+
+<p>Note step 10: T1's <em>length</em> still counts pinned page 6 when comparing against <em>p</em>, but the victim search skips it.</p>
+"""
+
+[[sections]]
+heading = "Invariants"
+body = """
+<p>Write <code>check_invariants()</code> before <code>record_access</code>, and call it after every operation in tests:</p>
+
+<ol> <li>0 ≤ <em>p</em> ≤ <em>c</em>.</li> <li>|T1| + |T2| ≤ <em>c</em>: never more alive entries than frames.</li> <li>|T1| + |T2| + |B1| + |B2| ≤ 2<em>c</em>.</li> <li>A page id appears in at most one list, alive or ghost, and a frame id in at most one alive list.</li> <li><code>Size()</code> equals the number of alive entries with <code>evictable = true</code>.</li> <li>Every list's forward and backward links agree, and its stored length matches a walk.</li> </ol>
+
+<p>(The paper also maintains |T1| + |B1| ≤ <em>c</em>. BusTub's version only restores that lazily, through case 4(a), so don't assert it.)</p>
+"""
+
+[[sections]]
+heading = "Data structure"
+body = """
+<p>Every operation needs O(1) <strong>move-to-front</strong> and <strong>remove-from-middle</strong> on four lists, plus lookup by <strong>frame id</strong> (alive entries) and by <strong>page id</strong> (ghosts). BusTub's performance test fills 262,144 frames and then calls <code>RecordAccess</code> 2.6 million times on entries in the <em>middle</em> of MFU, with a 3-second limit. Any O(n) list removal fails it.</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Option</th> <th>Remove from middle</th> <th>Rust ergonomics</th> <th>Verdict</th> </tr> </thead> <tbody> <tr> <td><code>VecDeque</code> + <code>position()</code></td> <td>O(n)</td> <td>trivial</td> <td>fails the perf test; good as the <em>model</em> in a differential test</td> </tr> <tr> <td><code>std::collections::LinkedList</code></td> <td>needs cursors (unstable)</td> <td>no handle to a node</td> <td>unusable</td> </tr> <tr> <td><code>Rc&lt;RefCell&lt;Node&gt;&gt;</code> doubly-linked list</td> <td>O(1)</td> <td>verbose, runtime borrow checks, <code>Weak</code> back-links, cycles to break</td> <td>works; slow and painful</td> </tr> <tr> <td><code>HashMap&lt;Id, (prev, next)&gt;</code> "linked hash map"</td> <td>O(1) amortised, with hashing on every link update</td> <td>simple</td> <td>fine; what most student solutions do</td> </tr> <tr> <td><strong>arena <code>Vec&lt;Node&gt;</code> + <code>u32</code> links</strong> (intrusive list)</td> <td>O(1), no hashing on the hot path</td> <td>a little index bookkeeping</td> <td>best: cache-friendly, <code>Copy</code> nodes, no <code>unsafe</code></td> </tr> </tbody> </table></div>
+
+<p>The reference below uses <strong>two arenas behind one list abstraction</strong>. Alive nodes are indexed directly by frame id: BusTub's frames are small dense integers, so a frame never needs a hash lookup. Ghost nodes are allocated from a second arena with a free list, found by page id through a <code>HashMap</code>, and <strong>tagged with the high bit of their id</strong>, so the list code treats both kinds of node uniformly.</p>
+
+:::deeper Reference ArcReplacer
+```rust title="src/buffer/arc_replacer.rs"
+//! ARC replacer with BusTub's Fall 2025 semantics.
+//!
+//! Four intrusive lists over two arenas. Alive nodes are indexed directly by
+//! frame id (no hash lookup on the hot path); ghost nodes live in a second
+//! arena, tagged with the high bit, and are found by page id through
+//! `ghost_of`. Links are u32 ids; head = most recent, tail = eviction end.
+use std::collections::HashMap;
+
+use crate::common::config::{FrameId, PageId};
+use crate::buffer::replacer::Replacer;
+
+const NIL: u32 = u32::MAX;
+const GHOST: u32 = 1 << 31;          // id tag: set = index into `ghosts`
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Which { Mru = 0, Mfu = 1, MruGhost = 2, MfuGhost = 3 }
+
+#[derive(Clone, Copy, Debug)]
+struct Node { prev: u32, next: u32, page: PageId, list: Option<Which>, evictable: bool }
+
+#[derive(Clone, Copy, Debug)]
+struct List { head: u32, tail: u32, len: usize }
+
+impl List { const EMPTY: List = List { head: NIL, tail: NIL, len: 0 }; }
+
+#[derive(Debug)]
+pub struct ArcReplacer {
+    cap: usize,
+    target: usize,                 // p: MRU target size, 0..=cap
+    evictable: usize,              // Size()
+    alive: Vec<Node>,              // indexed by frame id; grows on demand
+    ghosts: Vec<Node>,             // ghost slots; at most 2·cap ever live
+    lists: [List; 4],
+    ghost_of: HashMap<PageId, u32>,
+    free_ghost: Vec<u32>,
+}
+
+impl ArcReplacer {
+    pub fn new(capacity: usize) -> Self {
+        let blank = Node { prev: NIL, next: NIL, page: PageId::INVALID, list: None, evictable: false };
+        ArcReplacer {
+            cap: capacity,
+            target: 0,
+            evictable: 0,
+            alive: vec![blank; capacity],
+            ghosts: Vec::with_capacity(2 * capacity),
+            lists: [List::EMPTY; 4],
+            ghost_of: HashMap::with_capacity(2 * capacity),
+            free_ghost: Vec::new(),
+        }
+    }
+
+    #[inline]
+    fn n(&mut self, id: u32) -> &mut Node {
+        if id & GHOST != 0 { &mut self.ghosts[(id & !GHOST) as usize] } else { &mut self.alive[id as usize] }
+    }
+    #[inline]
+    fn r(&self, id: u32) -> &Node {
+        if id & GHOST != 0 { &self.ghosts[(id & !GHOST) as usize] } else { &self.alive[id as usize] }
+    }
+
+    fn new_ghost(&mut self, page: PageId) -> u32 {
+        let node = Node { prev: NIL, next: NIL, page, list: None, evictable: false };
+        match self.free_ghost.pop() {
+            Some(g) => { *self.n(g) = node; g }
+            None => { self.ghosts.push(node); (self.ghosts.len() as u32 - 1) | GHOST }
+        }
+    }
+
+    // ---- intrusive list primitives --------------------------------------
+    fn push_front(&mut self, w: Which, id: u32) {
+        let head = self.lists[w as usize].head;
+        { let n = self.n(id); n.prev = NIL; n.next = head; n.list = Some(w); }
+        if head != NIL { self.n(head).prev = id; } else { self.lists[w as usize].tail = id; }
+        let l = &mut self.lists[w as usize];
+        l.head = id;
+        l.len += 1;
+    }
+
+    fn unlink(&mut self, id: u32) {
+        let Node { prev, next, list, .. } = *self.r(id);
+        let w = list.expect("unlink of a node that is in no list") as usize;
+        if prev != NIL { self.n(prev).next = next; } else { self.lists[w].head = next; }
+        if next != NIL { self.n(next).prev = prev; } else { self.lists[w].tail = prev; }
+        self.lists[w].len -= 1;
+        let n = self.n(id);
+        n.prev = NIL;
+        n.next = NIL;
+        n.list = None;
+    }
+
+    fn len(&self, w: Which) -> usize { self.lists[w as usize].len }
+
+    fn drop_ghost_tail(&mut self, w: Which) {
+        let t = self.lists[w as usize].tail;
+        if t == NIL { return; }
+        self.unlink(t);
+        let page = self.r(t).page;
+        self.ghost_of.remove(&page);
+        self.free_ghost.push(t);
+    }
+
+    /// LRU-most evictable node of an alive list, scanning past pinned frames.
+    fn victim_in(&self, w: Which) -> Option<u32> {
+        let mut id = self.lists[w as usize].tail;
+        while id != NIL {
+            if self.r(id).evictable { return Some(id); }
+            id = self.r(id).prev;
+        }
+        None
+    }
+
+    /// Frame ids index `alive` directly. BusTub's tests use 1-based ids, so grow on demand.
+    fn frame_idx(&mut self, f: FrameId) -> u32 {
+        assert!(f.0 & GHOST == 0, "frame id {f:?} too large");
+        let i = f.0 as usize;
+        if i >= self.alive.len() {
+            self.alive.resize(i + 1, Node { prev: NIL, next: NIL, page: PageId::INVALID, list: None, evictable: false });
+        }
+        f.0
+    }
+
+    pub fn target(&self) -> usize { self.target }
+
+    /// O(n) structural check, for tests.
+    pub fn check_invariants(&self) {
+        let (t1, t2, b1, b2) = (self.len(Which::Mru), self.len(Which::Mfu), self.len(Which::MruGhost), self.len(Which::MfuGhost));
+        assert!(self.target <= self.cap);
+        assert!(t1 + t2 <= self.cap, "alive entries exceed capacity");
+        assert!(t1 + t2 + b1 + b2 <= 2 * self.cap, "total exceeds 2c");
+        assert_eq!(self.ghost_of.len(), b1 + b2);
+        let ev = self.alive.iter().filter(|n| n.list.is_some() && n.evictable).count();
+        assert_eq!(ev, self.evictable);
+        for w in [Which::Mru, Which::Mfu, Which::MruGhost, Which::MfuGhost] {
+            let (mut id, mut n, mut prev) = (self.lists[w as usize].head, 0, NIL);
+            while id != NIL {
+                assert_eq!(self.r(id).list, Some(w));
+                assert_eq!(self.r(id).prev, prev);
+                prev = id; id = self.r(id).next; n += 1;
+            }
+            assert_eq!(n, self.lists[w as usize].len);
+            assert_eq!(prev, self.lists[w as usize].tail);
+        }
+    }
+}
+
+impl Replacer for ArcReplacer {
+    fn size(&self) -> usize { self.evictable }
+
+    fn record_access(&mut self, frame: FrameId, page: PageId) {
+        let fi = self.frame_idx(frame);
+        // Case 1: the frame is alive (MRU or MFU): move to the front of MFU.
+        if self.r(fi).list.is_some() {
+            debug_assert_eq!(self.r(fi).page, page, "frame {frame:?} re-accessed with a different page");
+            self.unlink(fi);
+            self.push_front(Which::Mfu, fi);
+            return;
+        }
+        // Cases 2 and 3: ghost hit. Adapt p, drop the ghost, page returns to MFU.
+        if let Some(&g) = self.ghost_of.get(&page) {
+            let (b1, b2) = (self.len(Which::MruGhost), self.len(Which::MfuGhost));
+            match self.r(g).list {
+                Some(Which::MruGhost) => {
+                    let delta = if b1 >= b2 { 1 } else { b2 / b1 };
+                    self.target = (self.target + delta).min(self.cap);
+                }
+                Some(Which::MfuGhost) => {
+                    let delta = if b2 >= b1 { 1 } else { b1 / b2 };
+                    self.target = self.target.saturating_sub(delta);
+                }
+                other => unreachable!("ghost map points at {other:?}"),
+            }
+            self.unlink(g);
+            self.ghost_of.remove(&page);
+            self.free_ghost.push(g);
+            *self.n(fi) = Node { prev: NIL, next: NIL, page, list: None, evictable: false };
+            self.push_front(Which::Mfu, fi);
+            return;
+        }
+        // Case 4: brand new page. Trim a ghost list if the directory is full.
+        let (t1, b1) = (self.len(Which::Mru), self.len(Which::MruGhost));
+        let total = t1 + b1 + self.len(Which::Mfu) + self.len(Which::MfuGhost);
+        if t1 + b1 == self.cap {
+            self.drop_ghost_tail(Which::MruGhost);            // 4(a)
+        } else if total == 2 * self.cap {
+            self.drop_ghost_tail(Which::MfuGhost);            // 4(b)
+        }                                                      // 4(c): nothing to trim
+        *self.n(fi) = Node { prev: NIL, next: NIL, page, list: None, evictable: false };
+        self.push_front(Which::Mru, fi);
+    }
+
+    fn set_evictable(&mut self, frame: FrameId, evictable: bool) {
+        let fi = self.frame_idx(frame);
+        let n = self.n(fi);
+        if n.list.is_none() || n.evictable == evictable { return; }
+        n.evictable = evictable;
+        if evictable { self.evictable += 1 } else { self.evictable -= 1 }
+    }
+
+    fn evict(&mut self) -> Option<FrameId> {
+        let order = if self.len(Which::Mru) < self.target { [Which::Mfu, Which::Mru] } else { [Which::Mru, Which::Mfu] };
+        let (w, f) = order.into_iter().find_map(|w| self.victim_in(w).map(|f| (w, f)))?;
+        let page = self.r(f).page;
+        self.unlink(f);
+        self.n(f).evictable = false;
+        self.evictable -= 1;
+        // The evicted page's history survives as a ghost at the front of the matching ghost list.
+        let g = self.new_ghost(page);
+        self.push_front(if w == Which::Mru { Which::MruGhost } else { Which::MfuGhost }, g);
+        self.ghost_of.insert(page, g);
+        Some(FrameId(f))
+    }
+
+    fn remove(&mut self, frame: FrameId) {
+        let fi = self.frame_idx(frame);
+        let n = *self.r(fi);
+        if n.list.is_none() { return; }
+        assert!(n.evictable, "remove() on a pinned frame {frame:?}");
+        self.unlink(fi);
+        self.n(fi).evictable = false;
+        self.evictable -= 1;                       // removed pages leave no ghost: they were deleted
+    }
+}
+```
+:::
+
+<aside data-call="rust"><b>Borrowing two nodes at once</b><p>In <code>push_front</code>, you need to write the new node <em>and</em> the old head, and both live in the same <code>Vec</code>. <code>let a = &amp;mut v[i]; let b = &amp;mut v[j];</code> doesn't compile, because two <code>&amp;mut</code> borrows of <code>v</code> overlap. The reference sidesteps this by <strong>copying the few fields it needs first</strong> (<code>let head = self.lists[w].head;</code>), then doing one short-lived <code>self.n(id)</code> borrow at a time. <code>Node</code> is <code>Copy</code>, so <code>let Node { prev, next, list, .. } = *self.r(id);</code> reads everything in one move. When you genuinely need two <code>&amp;mut</code> into one slice at once, use <a href="https://doc.rust-lang.org/std/primitive.slice.html#method.get_disjoint_mut" target="_blank" rel="noreferrer"><code>slice::get_disjoint_mut</code></a> (stable since 1.86), <code>split_at_mut</code>, or restructure the code so you don't need both.</p></aside>
+
+<aside data-call="rust"><b>Tagging ids with a high bit</b><p><code>GHOST = 1 &lt;&lt; 31</code> gives one <code>u32</code> id namespace for two arenas. <code>id &amp; GHOST != 0</code> picks the arena, and <code>id &amp; !GHOST</code> gives the index. It's the same trick as NaN-boxing and pointer tagging, but without <code>unsafe</code>: the ids are plain integers. Put the tag logic in exactly two functions (<code>n</code>, <code>r</code>), assert that frame ids never collide with the tag, and nothing else in the file needs to know. The alternative is a <code>enum NodeId { Alive(u32), Ghost(u32) }</code>: clearer, 8 bytes instead of 4, and a <code>match</code> on every link hop. Both are fine, so measure if you care.</p></aside>
+"""
+
+[[sections]]
+heading = "Tests"
+body = """
+<p><strong>The two BusTub sample tests, ported.</strong> These are the spec, so they're shown in the open. <code>check_invariants()</code> runs after every call.</p>
+
+```rust title="tests/arc_replacer.rs (BusTub's arc_replacer_test.cpp, line for line)"
+//! BusTub's test/buffer/arc_replacer_test.cpp, ported line for line.
+use relational::buffer::{arc_replacer::ArcReplacer, replacer::Replacer};
+use relational::common::config::{FrameId, PageId};
+
+fn acc(r: &mut ArcReplacer, f: u32, p: u32) { r.record_access(FrameId(f), PageId(p)); r.check_invariants(); }
+fn ev(r: &mut ArcReplacer, f: u32, e: bool) { r.set_evictable(FrameId(f), e); r.check_invariants(); }
+fn evict(r: &mut ArcReplacer) -> Option<u32> { let v = r.evict().map(|f| f.0); r.check_invariants(); v }
+
+#[test]
+fn sample_test() {
+    let mut r = ArcReplacer::new(7);
+    for i in 1..=6 { acc(&mut r, i, i); }
+    for i in 1..=5 { ev(&mut r, i, true); }
+    ev(&mut r, 6, false);
+    assert_eq!(r.size(), 5);
+    acc(&mut r, 1, 1);
+    assert_eq!(evict(&mut r), Some(2));
+    assert_eq!(evict(&mut r), Some(3));
+    assert_eq!(evict(&mut r), Some(4));
+    assert_eq!(r.size(), 2);
+    acc(&mut r, 2, 7); ev(&mut r, 2, true);
+    acc(&mut r, 3, 2); ev(&mut r, 3, true);
+    assert_eq!(r.target(), 1);
+    assert_eq!(r.size(), 4);
+    acc(&mut r, 4, 3); ev(&mut r, 4, true);
+    acc(&mut r, 7, 4); ev(&mut r, 7, true);
+    assert_eq!(r.target(), 3);
+    assert_eq!(r.size(), 6);
+    assert_eq!(evict(&mut r), Some(5));
+    assert_eq!(evict(&mut r), Some(1));
+    acc(&mut r, 5, 1); ev(&mut r, 5, true);
+    assert_eq!(r.target(), 2);
+    assert_eq!(r.size(), 5);
+    assert_eq!(evict(&mut r), Some(2));
+}
+
+#[test]
+fn sample_test_2() {
+    let mut r = ArcReplacer::new(3);
+    for i in 1..=3 { acc(&mut r, i, i); ev(&mut r, i, true); }
+    assert_eq!(r.size(), 3);
+    assert_eq!(evict(&mut r), Some(1));
+    assert_eq!(evict(&mut r), Some(2));
+    assert_eq!(evict(&mut r), Some(3));
+    assert_eq!(r.size(), 0);
+    acc(&mut r, 3, 4); ev(&mut r, 3, true);
+    acc(&mut r, 2, 1); ev(&mut r, 2, true);
+    assert_eq!(r.size(), 2);
+    acc(&mut r, 1, 3); ev(&mut r, 1, true);
+    assert_eq!(r.target(), 1);
+    assert_eq!(evict(&mut r), Some(3));
+    assert_eq!(evict(&mut r), Some(2));
+    assert_eq!(evict(&mut r), Some(1));
+    acc(&mut r, 1, 1); ev(&mut r, 1, true);
+    acc(&mut r, 2, 4); ev(&mut r, 2, true);
+    assert_eq!(r.target(), 3);
+    acc(&mut r, 3, 5); ev(&mut r, 3, true);
+    assert_eq!(evict(&mut r), Some(1));
+    acc(&mut r, 1, 6); ev(&mut r, 1, true);
+    assert_eq!(evict(&mut r), Some(2));
+    acc(&mut r, 2, 7); ev(&mut r, 2, true);
+    assert_eq!(evict(&mut r), Some(3));
+    acc(&mut r, 3, 5); ev(&mut r, 3, true);
+    assert_eq!(evict(&mut r), Some(3));
+    acc(&mut r, 3, 2); ev(&mut r, 3, true);
+    // Now [][(6,f1),(7,f2),(2,f3)]![][(5,_),(4,_),(1,_)] p=3
+}
+
+#[test]
+fn record_access_performance() {
+    let n = 256 << 10;
+    let mut r = ArcReplacer::new(n);
+    for i in 0..n as u32 { r.record_access(FrameId(i), PageId(i)); r.set_evictable(FrameId(i), true); }
+    let t = std::time::Instant::now();
+    let mut f = (n / 2) as u32;
+    for _ in 0..10 { for _ in 0..n { r.record_access(FrameId(f), PageId(f)); f = (f + 1) % n as u32; } }
+    eprintln!("10 rounds of {n} record_access: {:?}", t.elapsed());
+    assert!(t.elapsed().as_secs_f64() < 3.0);
+}
+```
+
+<p><strong>A differential test against the spec itself.</strong> The naive model is a direct transcription of the table above using <code>VecDeque</code>s and linear searches. It's too slow to ship and too simple to get wrong. A simulated buffer pool drives both implementations with random page requests, pins, unpins and deletes, so every sequence of calls is one a real BPM could make.</p>
+
+:::deeper Naive model + BPM-driven differential proptest (2,000 histories per run)
+```rust title="tests/arc_model.rs"
+//! Differential test: the arena ARC vs a naive VecDeque transcription of the spec,
+//! driven by a simulated buffer pool so every call sequence is one a BPM could make.
+use proptest::prelude::*;
+use std::collections::{HashMap, VecDeque};
+use relational::buffer::{arc_replacer::ArcReplacer, replacer::Replacer};
+use relational::common::config::{FrameId, PageId};
+
+#[derive(Default)]
+struct Naive { cap: usize, p: usize, mru: VecDeque<(u32, u32, bool)>, mfu: VecDeque<(u32, u32, bool)>, bg1: VecDeque<u32>, bg2: VecDeque<u32> }
+impl Naive {
+    fn find(l: &VecDeque<(u32, u32, bool)>, f: u32) -> Option<usize> { l.iter().position(|e| e.0 == f) }
+    fn access(&mut self, f: u32, pg: u32) {
+        if let Some(i) = Self::find(&self.mru, f) { let e = self.mru.remove(i).unwrap(); self.mfu.push_front(e); return; }
+        if let Some(i) = Self::find(&self.mfu, f) { let e = self.mfu.remove(i).unwrap(); self.mfu.push_front(e); return; }
+        let (b1, b2) = (self.bg1.len(), self.bg2.len());
+        if let Some(i) = self.bg1.iter().position(|&x| x == pg) {
+            self.p = (self.p + if b1 >= b2 { 1 } else { b2 / b1 }).min(self.cap);
+            self.bg1.remove(i); self.mfu.push_front((f, pg, false)); return;
+        }
+        if let Some(i) = self.bg2.iter().position(|&x| x == pg) {
+            self.p = self.p.saturating_sub(if b2 >= b1 { 1 } else { b1 / b2 });
+            self.bg2.remove(i); self.mfu.push_front((f, pg, false)); return;
+        }
+        let total = self.mru.len() + self.mfu.len() + b1 + b2;
+        if self.mru.len() + b1 == self.cap { self.bg1.pop_back(); } else if total == 2 * self.cap { self.bg2.pop_back(); }
+        self.mru.push_front((f, pg, false));
+    }
+    fn set_ev(&mut self, f: u32, e: bool) {
+        for l in [&mut self.mru, &mut self.mfu] { if let Some(x) = l.iter_mut().find(|x| x.0 == f) { x.2 = e; } }
+    }
+    fn size(&self) -> usize { self.mru.iter().chain(&self.mfu).filter(|e| e.2).count() }
+    fn evict(&mut self) -> Option<u32> {
+        let mru_first = self.mru.len() >= self.p;
+        for pass in 0..2 {
+            let use_mru = mru_first == (pass == 0);
+            let (l, g) = if use_mru { (&mut self.mru, &mut self.bg1) } else { (&mut self.mfu, &mut self.bg2) };
+            if let Some(i) = l.iter().rposition(|e| e.2) { let e = l.remove(i).unwrap(); g.push_front(e.1); return Some(e.0); }
+        }
+        None
+    }
+    fn remove(&mut self, f: u32) {
+        for l in [&mut self.mru, &mut self.mfu] { if let Some(i) = l.iter().position(|x| x.0 == f) { l.remove(i); } }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Op { Get(u32), Unpin(u32), Pin(u32), Delete(u32) }
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 2000, ..ProptestConfig::default() })]
+    #[test]
+    fn arc_matches_naive(cap in 1usize..6, ops in prop::collection::vec(prop_oneof![
+        6 => (0u32..16).prop_map(Op::Get), 3 => (0u32..16).prop_map(Op::Unpin),
+        1 => (0u32..16).prop_map(Op::Pin), 1 => (0u32..16).prop_map(Op::Delete)], 0..300)) {
+        let (mut fast, mut slow) = (ArcReplacer::new(cap), Naive { cap, ..Default::default() });
+        let mut table: HashMap<u32, u32> = HashMap::new();         // page -> frame
+        let mut owner: Vec<Option<u32>> = vec![None; cap];
+        let mut free: Vec<u32> = (0..cap as u32).rev().collect();
+        for op in ops {
+            match op {
+                Op::Get(pg) => {
+                    let f = if let Some(&f) = table.get(&pg) { f } else {
+                        let f = match free.pop() { Some(f) => f, None => {
+                            let (a, b) = (fast.evict().map(|f| f.0), slow.evict());
+                            prop_assert_eq!(a, b);
+                            let Some(f) = a else { continue };             // everything pinned: BPM returns error
+                            if let Some(old) = owner[f as usize].take() { table.remove(&old); }
+                            f
+                        }};
+                        table.insert(pg, f); owner[f as usize] = Some(pg); f
+                    };
+                    fast.record_access(FrameId(f), PageId(pg)); slow.access(f, pg);
+                }
+                Op::Unpin(pg) | Op::Pin(pg) => if let Some(&f) = table.get(&pg) {
+                    let e = matches!(op, Op::Unpin(_));
+                    fast.set_evictable(FrameId(f), e); slow.set_ev(f, e);
+                },
+                Op::Delete(pg) => if let Some(&f) = table.get(&pg) {
+                    fast.set_evictable(FrameId(f), true); slow.set_ev(f, true);
+                    fast.remove(FrameId(f)); slow.remove(f);
+                    table.remove(&pg); owner[f as usize] = None; free.push(f);
+                },
+            }
+            fast.check_invariants();
+            prop_assert_eq!(fast.size(), slow.size());
+            prop_assert_eq!(fast.target(), slow.p);
+        }
+    }
+}
+```
+:::
+
+<aside data-call="testing"><b>What the differential test caught while this guide was written</b><p>The first version of the reference indexed alive nodes as <code>frame_id &lt; capacity</code>. BusTub's sample tests use <strong>1-based</strong> frame ids (capacity 7, frames 1–7), so frame 7 was out of range. The real BPM uses 0-based frames, so the assumption held in production and broke the spec tests. The fix was to let the alive arena grow on demand. The lesson: <em>port the upstream tests verbatim before you "clean them up"</em>, because they encode assumptions you won't think to test.</p></aside>
+"""
+
+[[sections]]
+heading = "Performance"
+body = """
+```text title="cargo test --release --test arc -- --nocapture (Apple M-series; BusTub's limit is 3 s)"
+10 rounds of 262144 record_access: 20.24ms        ← ~8 ns per call, 150× under the limit
+```
+
+<p>On hit rate, see the table in <a href="/cookbook/p/buffer-pools">L04</a>. The same reference replacers were run on a Zipf workload with and without cold scans. ARC and LRU-2 keep their hit rate under scans, while LRU and CLOCK lose about 30%. ARC edges LRU-2 once scans are frequent because ghost hits move <em>p</em>, and it needs no <em>K</em> parameter.</p>
+
+<aside data-call="performance"><b>Beyond the tests: the P1 leaderboard</b><p>The leaderboard runs 8 scan threads plus 8 Zipfian point-lookup threads, then repeats with injected disk latency. Replacer ideas that help there:</p> <ul> <li><strong>Use the <code>AccessType</code> hint.</strong> BusTub passes <code>AccessType::Scan</code> for sequential scans. A scan access should <em>not</em> promote a page from T1 to T2, since a scan revisiting a page isn't evidence of frequency. Option: record scan pages at the <em>tail</em> of T1, so they're the next victims. DB2 and SQL Server both do versions of this.</li> <li><strong>Keep the replacer out of the hit path.</strong> Most accesses are hits on pages already in T2. With CLOCK-style reference bits, a hit is an atomic store, and the list surgery can be batched, applied when the latch is next taken. That's how Caffeine's buffered reads work.</li> <li><strong>Shard.</strong> 16 replacers, each covering <code>frame % 16</code> with its own latch, cut contention by about 16×. The price is that each shard adapts its own <em>p</em>.</li> </ul></aside>
+
+<aside data-call="production"><b>ARC in the wild</b><ul> <li><strong>PostgreSQL 8.0</strong> (2005) shipped ARC. It was ripped out in 8.0.2, replaced with 2Q in the same release series and then with clock-sweep in 8.1, because of <strong>IBM's ARC patent</strong> (US 6,996,676). That patent has since expired. Clock-sweep stayed, because it's cheaper on hits under concurrency.</li> <li><strong>ZFS</strong> uses ARC (with a pinning-aware variant) as its main memory cache, and "L2ARC" for SSD caching.</li> <li><strong>IBM DS6000/DS8000</strong> storage controllers were ARC's original deployment.</li> <li><strong>CAR</strong> (Clock with Adaptive Replacement, Bansal &amp; Modha, FAST 2004) keeps ARC's adaptivity with CLOCK's cheap hits. It's worth reading once this version works.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "ARC: A Self-Tuning, Low Overhead Replacement Cache"
+url = "https://www.usenix.org/legacy/events/fast03/tech/full_papers/megiddo/megiddo.pdf"
+
+[[sources]]
+title = "Outperforming LRU with an Adaptive Replacement Cache Algorithm"
+url = "https://theory.stanford.edu/~megiddo/pdf/IEEE_COMPUTER_0404.pdf"
+
+[[sources]]
+title = "CAR: Clock with Adaptive Replacement"
+url = "https://www.usenix.org/legacy/publications/library/proceedings/fast04/tech/full_papers/bansal/bansal.pdf"
+
+[[sources]]
+title = "The ARC patent and PostgreSQL"
+url = "https://www.postgresql.org/message-id/flat/20050115.163446.08323463.t-ishii%40sra.co.jp"

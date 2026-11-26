@@ -1,0 +1,62 @@
+title = "Time-series joins and alignment"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 434
+kind = "recipe"
+lede = "ASOF/window/interval joins, resampling and gap filling, ordering and duplicate policies, DST-safe integer time math."
+level = "intermediate"
+code = ["examples/database/asof_joins_gap_filling.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>joining trades to the latest quote</li><li>sensor streams to reference data</li><li>aligning irregular series to a regular grid</li><li>daily rollups in a local time zone</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li><strong>ASOF join</strong> in kdb+/q (<code>aj</code>)</li><li>DuckDB</li><li>ClickHouse</li><li>QuestDB and Snowflake</li><li>pandas <code>merge_asof</code> and <code>resample().ffill()</code></li><li>TimescaleDB <code>time_bucket_gapfill</code> + <code>locf</code>/<code>interpolate</code></li><li>Flink/Beam interval joins</li><li>finance (trade/quote alignment)</li><li>IoT (sensor fusion)</li><li>observability (aligning metrics). Course: CMU 15-445/721 (join algorithms: sort-merge, index/binary-search joins)</li><li>kdb+ <code>aj</code> documentation for the trade/quote use case</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+ordinary equi-joins need equal keys; time series almost never have equal timestamps. The ASOF join matches each **left** row to the right row "as of" its time. Everything hinges on precise semantics for ties, tolerance and direction, so this file pins them and tests each against a brute-force O(n&#42;m) oracle.
+
+**Semantics** (per join key `by`): **backward** = latest right row with ts &lt;= t (ts &lt; t when `allow_exact` is off); **forward** = earliest with ts >= t; **nearest** = smaller &#124;dt&#124;, ties go **backward**. **Tolerance** bounds &#124;dt&#124;; a match farther away is "no match" (None), not the next best.
+
+Several right rows with the **same** timestamp: `DupPolicy::First`/`DupPolicy::Last` picks the earliest/latest in input order. `skip_nan` treats right rows whose value is NaN as absent (so the join returns the last **valid** observation).
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+right rows are grouped per key into runs of equal timestamps. **Merge** join: per-key pointers only move forward while the (sorted) left advances, O(n+m) overall. **Binary-search** join: `partition_point` per left row, O(n log m), and the left side need not be sorted.
+
+Both feed the same `choose`. **Window join**: all right rows within [t-a, t+b] (sliding pointers). **Interval join**: pairs of half-open intervals that overlap, by a sweep over interval starts with an active set per side.
+
+**Resample**: bucket mean (NaN ignored) then a fill rule: null, zero, forward-fill buckets, last raw observation (an asof join of the grid onto the data), or linear interpolation between in-window neighbours. **Order policies**: `Reject` out-of-order input or stable-`Sort` it; duplicates (same ts and key) are kept, first/last wins, averaged or an error.
+
+**Time zones**: a calendar-free integer implementation of civil dates (days &lt;-> y/m/d), a US-style DST rule, and local-to-UTC conversion that reports **gaps** (nonexistent local times) and **folds** (ambiguous ones). Local days are 23/24/25 hours long; bucketing by `ts - ts % 86400` is wrong for local days.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>pandas <code>merge_asof</code> and ClickHouse/DuckDB ASOF JOIN docs (semantics of direction, tolerance, allow_exact_matches</li><li>cited by title)</li></ul>
+
+Howard Hinnant, "chrono-Compatible Low-Level Date Algorithms"  <https://howardhinnant.github.io/date_algorithms.html>
+
+TimescaleDB docs, time_bucket_gapfill, locf, interpolate  <https://docs.timescale.com/use-timescale/latest/hyperfunctions/>
+"""
+
+[[sources]]
+title = "howardhinnant.github.io/date_algorithms.html"
+url = "https://howardhinnant.github.io/date_algorithms.html"
+
+[[sources]]
+title = "docs.timescale.com/use-timescale/latest/hyperfunctions"
+url = "https://docs.timescale.com/use-timescale/latest/hyperfunctions/"

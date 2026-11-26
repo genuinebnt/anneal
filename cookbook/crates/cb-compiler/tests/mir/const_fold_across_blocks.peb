@@ -1,0 +1,8 @@
+// passes: const-prop,dce,simplify-cfg
+// A constant defined in one block is folded into the blocks that use it.
+fn f() -> int {
+    let x = 2 + 3;
+    let y = if x > 4 { x * 2 } else { 0 };
+    y + x
+}
+fn main() { println(to_str(f())); }

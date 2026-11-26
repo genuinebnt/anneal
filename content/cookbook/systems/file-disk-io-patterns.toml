@@ -1,0 +1,67 @@
+title = "File and disk IO patterns"
+module = "Performance and systems"
+module_order = 7
+chapter = "Files, processes and the OS"
+chapter_order = 3
+order = 288
+kind = "recipe"
+lede = "Pread/pwrite, vectored IO, page cache, durability, sparse files, links."
+level = "advanced"
+code = ["examples/os_and_storage/file_disk_io_patterns.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>databases</li><li>log-structured stores</li><li>caches</li><li>anything that reads/writes files at scale</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a tour of file IO behaviours that decide performance and crash safety, each with a small measurement. Machine-dependent numbers are printed, never asserted; behaviours (data correctness, sparse allocation, link semantics) are asserted. Temp files only, removed at the end (also on panic, via a guard).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Key ideas**:
+
+- `FileExt::read_at/write_at` are `pread/pwrite`: the offset is an argument, the shared file cursor is untouched, so many threads can use one `&File` without a lock. `seek` + `read` is two syscalls and a race.
+- Vectored IO (`writev`/`readv`) sends several buffers in one syscall: header + payload without a copy.
+- The page cache serves repeated reads from RAM; sequential access triggers kernel readahead; random 4 KiB reads on a cold file are bounded by device IOPS. We cannot drop caches without root: Linux has `posix_fadvise(DONTNEED)` (per file, after fsync), macOS has `fcntl(F_NOCACHE)` (stop caching this fd's IO).
+- Durability: `write` only reaches the page cache. `fsync` asks the OS to push data+metadata to the device; `fdatasync` skips metadata that is not needed to read the data back (e.g. mtime). On macOS plain `fsync` hands the data to the drive but does **not** flush the drive's volatile cache; `fcntl(F_FULLFSYNC)` does (slower).
+
+   Rust's `File::sync_all` uses `F_FULLFSYNC` on Apple platforms, which is why it is slow there.
+- `O_DIRECT` (Linux) bypasses the page cache: buffer address, length and file offset must be aligned to the logical block size (512 B or 4 KiB). Databases use it when they manage their own buffer pool.
+- Sparse files: `set_len` makes a hole; logical length != allocated blocks (`MetadataExt::blocks()` counts 512 B units).
+- Atomic creation: write a temp file in the same directory, fsync, `rename` over the target (atomic on POSIX), fsync the directory; `create_new` (O_EXCL) gives atomic "create if absent" for lock files.
+- `read_dir` order is unspecified: sort when you need determinism.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>write-ahead logs (append + fdatasync)</li><li>SSTable/B-tree page reads with pread</li><li>atomic config updates</li><li><code>cp --reflink</code>-style copies</li><li>sparse VM disk images</li><li>mail/queue spools (rename into place)</li><li>backup tools using hard links</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://man7.org/linux/man-pages/man2/fsync.2.html> <https://man7.org/linux/man-pages/man2/open.2.html> <https://man7.org/linux/man-pages/man2/posix_fadvise.2.html> <https://doc.rust-lang.org/std/os/unix/fs/trait.FileExt.html>
+"""
+
+[[sources]]
+title = "man7.org/linux/man-pages/man2/fsync.2.html"
+url = "https://man7.org/linux/man-pages/man2/fsync.2.html"
+
+[[sources]]
+title = "man7.org/linux/man-pages/man2/open.2.html"
+url = "https://man7.org/linux/man-pages/man2/open.2.html"
+
+[[sources]]
+title = "man7.org/linux/man-pages/man2/posix_fadvise.2.html"
+url = "https://man7.org/linux/man-pages/man2/posix_fadvise.2.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/os/unix/fs/trait.FileExt.html"
+url = "https://doc.rust-lang.org/std/os/unix/fs/trait.FileExt.html"

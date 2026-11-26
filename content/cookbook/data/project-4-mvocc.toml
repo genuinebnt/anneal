@@ -1,0 +1,761 @@
+title = "Project 4 · MVOCC"
+module = "Databases"
+module_order = 8
+chapter = "Transactions and concurrency control"
+chapter_order = 6
+order = 405
+kind = "guide"
+lede = "BusTub Project 4 · timestamps and watermark · delta undo logs · tuple reconstruction · write-write conflicts · abort · GC · primary-key index · serializable validation"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>Project 4 turns the table heap into an <strong>optimistic multi-version</strong> store. Everything in <a href="/cookbook/p/timestamp-ordering-and-occ">L19</a> and <a href="/cookbook/p/multi-version-concurrency-control">L20</a> shows up: temporary timestamps, <strong>delta storage</strong> with N2O undo chains, watermark GC, first-writer-wins, and OCC backward validation for SERIALIZABLE. The code you write sits in the transaction manager, the scan/insert/update/delete executors and the index path.</p>
+
+### Key ideas
+
+<ul> <li><strong>Two timestamps per transaction</strong>: <code>read_ts</code> = last committed timestamp when it began; <code>commit_ts</code> = next monotonic value, assigned at commit under a single commit latch. <strong>Transaction ids ≠ timestamps</strong>.</li> <li><strong>Temporary timestamps</strong>: an uncommitted write stamps the tuple with <code>TXN_START + txn_id</code> (<code>1 &lt;&lt; 62</code> sets the second-highest bit), so "committed" = below <code>TXN_START</code>, "mine" = equals my temporary timestamp, "someone else's uncommitted write" = at or above <code>TXN_START</code> and not mine.</li> <li><strong>Heap holds the newest version; undo logs hold deltas.</strong> <code>UndoLog = {is_deleted, modified_fields, partial tuple, ts, prev_version}</code>; <code>ts</code> is the commit timestamp <strong>of the version the log restores</strong>. The chain is singly linked and N2O. Each transaction owns its undo logs; a link is <code>(txn_id, index)</code>.</li> <li><strong>Watermark</strong> = lowest <code>read_ts</code> of any transaction still running (or the last commit when none run). Keep read timestamps in a <code>BTreeMap&lt;ts, count&gt;</code> for O(log n) add/remove/min.</li> <li><strong>Reconstruct = apply logs backward, no timestamp checks</strong>; <strong>collect = decide which logs</strong>: ① base committed at or before <code>read_ts</code> → none; ② base is newer or another transaction's uncommitted write → follow the chain collecting logs until one has <code>ts ≤ read_ts</code> (chain ends first ⇒ the tuple didn't exist); ③ base is my own write → none.</li> <li><strong>Writes</strong>: abort (<strong>taint</strong> the transaction) if the head is another transaction's temporary timestamp or a commit timestamp after my <code>read_ts</code>; first modification creates an undo log; later modifications <strong>consolidate into the same log</strong>; inserts create no log; deletes store the whole tuple.</li> <li><strong>Abort</strong> puts back the pre-transaction version (from the log) or turns a fresh insert into an old deletion marker (<code>ts = 0</code>); <strong>commit</strong> stamps the write set with the commit timestamp under the latch.</li> <li><strong>GC (stop the world)</strong>: free finished transactions whose undo logs are <strong>below the watermark</strong>; leave dangling links, since no snapshot can reach them.</li> <li><strong>Primary-key index</strong>: entries are <em>never removed</em>; a key keeps its RID forever, so <em>insert after delete reuses the slot</em>, turning the deletion marker back into a tuple. A key change is delete + insert. Unique-key races are decided at the index.</li> <li><strong>SERIALIZABLE</strong> = remember every scan <strong>predicate</strong>; at commit (single validator at a time) look at all transactions committed after <code>read_ts</code>, rebuild each modified tuple's <strong>before and after images</strong>, and abort if any image satisfies a predicate. Insert-then-delete by the other transaction is a no-op and doesn't conflict.</li> </ul>
+"""
+
+[[sections]]
+heading = "Layout"
+body = """
+```text
+table heap slot (one latch)                undo logs, owned by the writing transaction
+┌──────────────────────────────┐
+│ ts = T3 (commit) or TXN_START+id         txn 7: [ log0 ]   log0 = {ts: T2, modified: [0,1,0], tuple: [10], prev: (txn 4, 0)}
+│ deleted?, tuple (newest)     │           txn 4: [ log0 ]   log0 = {ts: T1, …,                      prev: none}
+│ undo link → (txn 7, 0) ──────┼──────────────────▲
+└──────────────────────────────┘
+read at snapshot R:  base.ts ≤ R ? base : apply log0 if log0.ts ≤ R else continue to prev …
+```
+
+<p>Rust note: the tuple, its timestamp and the chain head live in <strong>one <code>Mutex&lt;Slot&gt;</code></strong>. BusTub needs special <code>UpdateTupleAndUndoLink</code> helpers with check callbacks, because the tuple (in a page) and the link (in a side table) are separate objects; holding one latch around both makes "check, then update tuple and link atomically" the obvious thing to write. The price is that readers also take the slot latch for the few nanoseconds needed to copy the tuple and walk its chain.</p>
+"""
+
+[[sections]]
+heading = "Task 1: timestamps and watermark"
+body = """
+<p><code>begin</code> registers <code>read_ts</code> in the watermark map under the same latch that reads <code>last_commit</code>, so GC can't compute a watermark newer than a transaction that is starting. <code>commit</code> and <code>abort</code> deregister. The only subtle rule: use <code>last_commit + 1</code> for the commit timestamp, then <code>store</code> it <em>after</em> stamping the write set; nobody can start with a read timestamp that sees a half-stamped commit.</p>
+"""
+
+[[sections]]
+heading = "Task 2: undo logs, reconstruction, sequential scan"
+body = """
+:::deeper Reference: generating logs, applying them, collecting the logs a snapshot needs
+```rust title="src/concurrency/mvocc.rs (excerpt)"
+fn make_log(before: Option<&Row>, after: Option<&Row>, ts: u64, prev: Option<UndoLink>) -> UndoLog {
+    match (before, after) {
+        (None, _) => UndoLog { is_deleted: true, modified: vec![], tuple: vec![], ts, prev },
+        (Some(b), None) => UndoLog { is_deleted: false, modified: vec![true; b.len()], tuple: b.clone(), ts, prev },
+        (Some(b), Some(a)) => {
+            let modified: Vec<bool> = b.iter().zip(a).map(|(x, y)| x != y).collect();
+            let tuple = b.iter().zip(&modified).filter(|(_, m)| **m).map(|(x, _)| *x).collect();
+            UndoLog { is_deleted: false, modified, tuple, ts, prev }
+        }
+    }
+}
+
+fn apply_logs(mut cur: Option<Row>, arity: usize, logs: &[UndoLog]) -> Option<Row> {
+    for l in logs {
+        if l.is_deleted { cur = None; continue; }
+        let r = cur.get_or_insert_with(|| vec![0; arity]);       // a deletion's log carries the whole tuple
+        let mut k = 0;
+        for i in 0..arity { if l.modified[i] { r[i] = l.tuple[k]; k += 1; } }
+    }
+    cur
+}
+
+    fn collect_undo_logs(&self, s: &Slot, ts: u64, me: Option<&Txn>) -> Option<Vec<UndoLog>> {
+        if me.is_some_and(|m| s.ts == m.temp_ts()) { return Some(vec![]); }        // our own write
+        if s.ts < TXN_START && s.ts <= ts { return Some(vec![]); }                  // base is old enough
+        let (mut out, mut link) = (vec![], s.undo.clone());
+        while let Some(l) = link {
+            let log = self.get_log(&l)?;                  // dangling ⇒ below the watermark ⇒ never reached
+            let done = log.ts <= ts;
+            link = log.prev.clone();
+            out.push(log);
+            if done { return Some(out); }
+        }
+        None
+    }
+
+    fn view(&self, s: &Slot, ts: u64, me: Option<&Txn>) -> Option<Row> {
+        let logs = self.collect_undo_logs(s, ts, me)?;
+        apply_logs(if s.deleted { None } else { Some(s.row.clone()) }, self.arity, &logs)
+    }
+```
+:::
+
+<p>Things that bite:</p>
+
+<ul> <li>A <strong>delete</strong> log must carry the <em>whole</em> tuple (all <code>modified = true</code>), otherwise a snapshot before the delete has nothing to rebuild from; <code>apply_logs</code> starts from a zeroed row when the current version is a deletion marker.</li> <li>A log whose <em>previous</em> version was a deletion marker has <code>is_deleted = true</code> and no columns. That happens when an insert reuses a deleted slot.</li> <li>Keep the <strong>scan order and the log order identical</strong>: logs are collected newest first and applied in that order.</li> <li>If the chain runs out before any <code>ts ≤ read_ts</code>, the tuple <strong>did not exist</strong> for this snapshot: skip it. This is the case for rows inserted after the snapshot.</li> </ul>
+"""
+
+[[sections]]
+heading = "Task 3: executors, commit, abort, GC"
+body = """
+:::deeper Reference: write path (conflict check and modify), commit, abort, stop-the-world GC
+```rust title="src/concurrency/mvocc.rs (excerpt)"
+    fn check_write(&self, s: &Slot, t: &Txn) -> Result<(), Error> {
+        let conflict = s.ts != t.temp_ts() && (s.ts >= TXN_START || s.ts > t.read_ts);
+        if conflict { t.set(State::Tainted); Err(Error::WriteConflict) } else { Ok(()) }
+    }
+
+    fn modify(&self, t: &Txn, rid: Rid, s: &mut Slot, target: Option<Row>) {
+        let mut lg = t.logs.lock().unwrap();
+        let mine = s.ts == t.temp_ts();
+        if mine {
+            // regenerate our one log from the pre-transaction image, so repeated writes consolidate
+            if let Some(&i) = lg.by_rid.get(&rid) {
+                let old = lg.logs[i].clone();
+                let pre = apply_logs(if s.deleted { None } else { Some(s.row.clone()) }, self.arity, std::slice::from_ref(&old));
+                lg.logs[i] = make_log(pre.as_ref(), target.as_ref(), old.ts, old.prev);
+            }                                             // else: we inserted it ourselves, no previous version exists
+        } else {
+            let pre = if s.deleted { None } else { Some(s.row.clone()) };
+            let log = make_log(pre.as_ref(), target.as_ref(), s.ts, s.undo.take());
+            lg.logs.push(log);
+            let idx = lg.logs.len() - 1;
+            lg.by_rid.insert(rid, idx);
+            s.undo = Some(UndoLink { txn: t.id, idx });
+        }
+        s.ts = t.temp_ts();
+        match target { Some(r) => { s.row = r; s.deleted = false; } None => s.deleted = true }
+        t.write_set.lock().unwrap().insert(rid);
+    }
+
+    pub fn commit(&self, t: &Txn) -> Result<(), Error> {
+        let _w = self.world.read().unwrap();
+        if t.state() != State::Running { return Err(Error::Tainted); }
+        let _c = self.commit_latch.lock().unwrap();       // one committer at a time
+        if t.iso == Isolation::Serializable && !self.validate(t) {
+            self.rollback(t);
+            return Err(Error::Validation);
+        }
+        let ts = self.last_commit.load(Acquire) + 1;      // load + 1, not fetch_add: nobody sees ts until it's published
+        let rids: Vec<Rid> = t.write_set.lock().unwrap().iter().copied().collect();
+        for rid in rids { self.slot(rid).lock().unwrap().ts = ts; }
+        t.commit_ts.store(ts, Release);
+        t.set(State::Committed);
+        self.last_commit.store(ts, Release);
+        self.end(t);
+        Ok(())
+    }
+
+    fn rollback(&self, t: &Txn) {
+        let rids: Vec<Rid> = t.write_set.lock().unwrap().iter().copied().collect();
+        for rid in rids {
+            let slot = self.slot(rid);
+            let mut s = slot.lock().unwrap();                 // lock order everywhere: slot → txn.logs
+            let lg = t.logs.lock().unwrap();
+            match lg.by_rid.get(&rid) {
+                Some(&i) => {
+                    let log = &lg.logs[i];
+                    let pre = apply_logs(if s.deleted { None } else { Some(s.row.clone()) }, self.arity, std::slice::from_ref(log));
+                    s.ts = log.ts;
+                    s.undo = log.prev.clone();
+                    match pre { Some(r) => { s.row = r; s.deleted = false; } None => s.deleted = true }
+                }
+                None => { s.deleted = true; s.ts = 0; s.undo = None; }   // a fresh insert becomes an old deletion marker
+            }
+        }
+        t.set(State::Aborted);
+        self.end(t);
+    }
+
+    pub fn gc(&self) -> usize {
+        let _w = self.world.write().unwrap();
+        let wm = self.watermark();
+        let mut needed: HashSet<(u64, usize)> = HashSet::new();
+        for slot in self.table.read().unwrap().iter() {
+            let s = slot.lock().unwrap();
+            if s.ts < TXN_START && s.ts <= wm { continue; }                 // everyone sees the base tuple
+            let mut link = s.undo.clone();
+            while let Some(l) = link {
+                needed.insert((l.txn, l.idx));
+                let Some(log) = self.get_log(&l) else { break };
+                if log.ts <= wm { break; }                                  // first version visible at the watermark
+                link = log.prev;
+            }
+        }
+        let mut txns = self.txns.write().unwrap();
+        let before = txns.len();
+        txns.retain(|id, c| match c.state() {
+            State::Running | State::Tainted => true,
+            State::Committed => c.commit_ts() > wm || needed.iter().any(|(t, _)| t == id),
+            State::Aborted => needed.iter().any(|(t, _)| t == id),
+        });
+        before - txns.len()
+    }
+```
+:::
+
+<p>The <strong>consolidation trick</strong>: when a transaction touches a tuple it already modified, don't patch the existing log; recompute the <strong>pre-transaction image</strong> (<code>base</code> with that one log applied) and regenerate the log as <code>make_log(pre, target)</code>. One code path serves update after update, delete after update, and re-insert after delete. A column changed and changed back simply drops out of <code>modified</code>.</p>
+
+<p>Other decisions:</p>
+
+<ul> <li><strong>Update is a pipeline breaker</strong> in BusTub: buffer the child's rows, then modify. Otherwise the scan can see its own writes (the Halloween problem from <a href="/cookbook/p/table-heap">the table heap</a>).</li> <li><strong>Conflicts taint</strong> the transaction (<code>State::Tainted</code>) and return an error; every later call fails fast with <code>Tainted</code>, and the caller aborts. Aborting from deep inside an executor is hard to unwind; flagging is easy.</li> <li><strong>Abort needs no global lock</strong>: each tuple is restored under its own slot latch, so aborts run in parallel.</li> <li><strong>GC rule</strong>: for each tuple, walk the chain from the head until the first log with <code>ts ≤ watermark</code>; that log (and everything newer) is <em>needed</em>. A finished transaction is freed when it owns no needed log. A committed one must also stay while a running SERIALIZABLE transaction that began before its commit could still validate against it. (An earlier version of this guide said "and <code>commit_ts ≤ watermark</code>"; BusTub's <code>GarbageCollection</code> test fails that rule: see "Garbage collection, as the tests define it" below.)</li> </ul>
+"""
+
+[[sections]]
+heading = "Task 4: primary-key index and serializable verification"
+body = """
+:::deeper Reference: insert (index decides uniqueness, deleted slots are reused), update/delete by key, commit-time validation
+```rust title="src/concurrency/mvocc.rs (excerpt)"
+    pub fn insert(&self, t: &Txn, row: Row) -> Result<(), Error> {
+        let _w = self.world.read().unwrap();
+        self.live(t)?;
+        assert_eq!(row.len(), self.arity);
+        let key = row[0];
+        let mut idx = self.index.write().unwrap();       // serializes concurrent inserts of the same key
+        match idx.get(&key).copied() {
+            None => {
+                let mut tab = self.table.write().unwrap();
+                tab.push(Arc::new(Mutex::new(Slot { ts: t.temp_ts(), deleted: false, row, undo: None })));
+                let rid = tab.len() - 1;
+                idx.insert(key, rid);
+                t.write_set.lock().unwrap().insert(rid);
+                Ok(())
+            }
+            Some(rid) => {
+                drop(idx);
+                let slot = self.slot(rid);
+                let mut s = slot.lock().unwrap();
+                self.check_write(&s, t)?;
+                if !s.deleted { t.set(State::Tainted); return Err(Error::DuplicateKey); }
+                self.modify(t, rid, &mut s, Some(row));   // reuse the RID: the index entry still points here
+                Ok(())
+            }
+        }
+    }
+
+    fn write_existing(&self, t: &Txn, key: i64, target: Option<Row>) -> Result<bool, Error> {
+        let _w = self.world.read().unwrap();
+        self.live(t)?;
+        if t.iso == Isolation::Serializable { t.preds.lock().unwrap().push(Arc::new(move |r: &Row| r[0] == key)); }
+        let Some(rid) = self.index.read().unwrap().get(&key).copied() else { return Ok(false) };
+        let slot = self.slot(rid);
+        let mut s = slot.lock().unwrap();
+        if self.view(&s, t.read_ts, Some(t)).is_none() { return Ok(false); }
+        self.check_write(&s, t)?;
+        self.modify(t, rid, &mut s, target);
+        Ok(true)
+    }
+
+    fn validate(&self, t: &Txn) -> bool {
+        let others: Vec<Arc<Txn>> = self.txns.read().unwrap().values()
+            .filter(|c| c.state() == State::Committed && c.commit_ts() > t.read_ts).cloned().collect();
+        let preds = t.preds.lock().unwrap().clone();
+        for c in others {
+            let rids: Vec<Rid> = c.write_set.lock().unwrap().iter().copied().collect();
+            for rid in rids {
+                let slot = self.slot(rid);
+                let s = slot.lock().unwrap();
+                let after = self.view(&s, c.commit_ts(), None);
+                let clog = { let g = c.logs.lock().unwrap(); g.by_rid.get(&rid).map(|&i| g.logs[i].clone()) };
+                let before = match clog {
+                    Some(l) => apply_logs(after.clone(), self.arity, &[l]),
+                    None => None,                         // C inserted it
+                };
+                if preds.iter().any(|p| after.as_ref().is_some_and(|r| p(r)) || before.as_ref().is_some_and(|r| p(r))) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+```
+:::
+
+<ul> <li><strong>Insert</strong> holds the index write latch while it either finds the key or allocates the slot and publishes the index entry, so two concurrent inserts of one key can't both succeed. If the key exists, it's a duplicate unless the slot is a deletion marker and the write-write check passes.</li> <li><strong>Index entries are never deleted.</strong> An index scan returns the RID; the visibility check on the slot decides whether the row exists at your snapshot. That's the <em>duplicate-key problem</em> of <a href="/cookbook/p/multi-version-concurrency-control">L20</a> solved by keeping one entry per key for life.</li> <li><strong>Validation images</strong>: after-image = the tuple as of the other transaction's commit timestamp (collect logs with that timestamp as the "read time"); before-image = after-image with that transaction's own log applied. An insert has no log, so before = nothing; a delete has after = nothing.</li> <li><strong>Failing validation</strong> is a normal abort (<code>State::Aborted</code>), not a taint: the transaction is already in its commit phase.</li> <li>Validation cost is proportional to the number of transactions committed since your snapshot, so GC matters for SERIALIZABLE too (see the numbers below).</li> </ul>
+"""
+
+[[sections]]
+heading = "Passing BusTub's 28 P4 tests"
+body = """
+<p>The reference above is the <em>model</em>; BusTub's tests drive a specific set of classes (<code>TransactionManager</code>, <code>Transaction</code>, <code>UndoLog</code>, <code>TableHeap::UpdateTupleInPlace</code>, <code>GetWatermark</code>, <code>GarbageCollection</code>) through SQL, and fail in places a model never visits. This section is the code of a version that passes all of them (<code>verify/src/txn/</code> plus the transactional executors in <code>verify/src/engine/txn_exec.rs</code>; the tests are <code>verify/tests/p4_*.rs</code>, 28 of 28), and the traps each test sets. The C++ test sources are <code>test/txn/*.cpp</code> in the Fall 2025 repository; the Rust ports were generated from them by a script, so the SQL, the order of statements and the expected rows are the originals.</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>C++ test(s)</th> <th>What it checks</th> <th>Where an implementation usually fails</th> </tr> </thead> <tbody> <tr> <td><code>TxnTsTest</code> ×2</td> <td><code>Begin</code>/<code>Commit</code>/<code>Abort</code> timestamps and <code>GetWatermark()</code> through a 1M-transaction stress; abort of a transaction removes its <code>read_ts</code> from the watermark</td> <td>an O(n) minimum search per removal; <strong>committing a read-only transaction still consumes a commit timestamp</strong> (the test expects <code>commit_ts == 1</code> for an empty commit)</td> </tr> <tr> <td><code>TxnScanTest</code> ×3 (<code>TupleReconstruct</code>, <code>CollectUndoLog</code>, <code>Scan</code>)</td> <td><code>ReconstructTuple</code>, <code>CollectUndoLogs</code> on hand-built version chains, a SQL scan over them</td> <td>a log that is a deletion marker followed by a log that restores the tuple; a chain that ends before any log with <code>ts &lt;= read_ts</code> (the tuple did not exist: skip it); the reader's own temporary timestamp</td> </tr> <tr> <td><code>TxnExecutorTest.GenerateUndoLog</code></td> <td><code>GenerateNewUndoLog</code> / <code>GenerateUpdatedUndoLog</code> in eight situations (update, delete, insert-on-tombstone, each combined with an earlier change by the same transaction)</td> <td>the "update twice" merge; "delete then insert" must keep the <em>whole</em> old tuple</td> </tr> <tr> <td><code>Insert*</code>, <code>Update*</code>, <code>UpdateConflict</code></td> <td>visibility of uncommitted inserts, <code>CheckUndoLogNum</code> and <code>CheckUndoLogColumn</code> (<strong>one log per tuple per transaction</strong>, only the changed columns, the tuple inserted by the same transaction has <strong>no</strong> log), <code>TableHeapEntryNoMoreThan</code> (an update is <strong>in place</strong>, never delete + insert), write-write conflicts taint</td> <td>the tuple width check: a partial tuple stored with the full schema fails <code>CheckUndoLogColumn</code>; counting a "not a real update" (<code>SET a = 1</code> when <code>a</code> is already 1) as a modified column</td> </tr> <tr> <td><code>GarbageCollection</code>, <code>GarbageCollectionWithTainted</code></td> <td>which transactions are still in <code>txn_map_</code> after each stop-the-world pass, with long-running readers pinning the watermark</td> <td>see "Garbage collection" below: the <em>test's</em> rule differs from the textbook one</td> </tr> <tr> <td><code>TxnIndexTest</code> ×5</td> <td>primary key: duplicate insert taints, delete + re-insert of a key reuses the tuple, <code>UPDATE SET pk = pk + 1</code></td> <td>the key-shift collision (see below); index entries must survive deletes</td> </tr> <tr> <td><code>TxnIndexTest</code> concurrent ×2, <code>TxnAbortTest.IndexConcurrentUpdateAbort</code></td> <td>8 threads inserting the same keys (exactly one winner per key), 8 threads updating the same rows (delete + re-insert in half the trials), two-row transactions that abort on conflict</td> <td>losing the index race after the tuple is already in the heap; abort that restores the wrong version</td> </tr> <tr> <td><code>TxnAbortTest</code> ×2</td> <td>rollback of insert, update, delete, and of a primary-key insert</td> <td>an aborted insert must leave a tombstone every reader sees as deleted</td> </tr> <tr> <td><code>TxnSerializableTest</code> ×2</td> <td>write skew is detected; <strong>a read-only serializable transaction still commits</strong>; two committers racing, exactly one succeeds</td> <td>validating read-only transactions; validating <em>before</em> taking the commit latch</td> </tr> </tbody> </table></div>
+
+<h4>Tuple reconstruction and the logs a snapshot needs</h4>
+
+```rust title="undo logs: reconstruct, collect (src/concurrency/ or execution_common.rs)"
+/// Rebuild a tuple version: start from the base tuple, apply `undo_logs` front to back.
+/// A deletion log makes the tuple not exist until a later log restores it; a tuple that does not exist at the end is None.
+pub fn reconstruct_tuple(base: &Tuple, base_meta: &TupleMeta, undo_logs: &[UndoLog]) -> Option<Tuple> {
+    let mut deleted = base_meta.deleted;
+    let mut values = base.0.clone();
+    for log in undo_logs {
+        if log.is_deleted {
+            deleted = true;
+            continue;
+        }
+        deleted = false;
+        let mut next = log.tuple.0.iter();
+        for (i, modified) in log.modified_fields.iter().enumerate() {
+            if *modified {
+                values[i] = next.next().expect("undo log tuple has one value per modified field").clone();
+            }
+        }
+    }
+    (!deleted).then_some(Tuple(values))
+}
+
+/// The undo logs that, applied to the base tuple in order, give the version `txn` should see.
+/// `Some(vec![])`: the base tuple is what `txn` sees (committed at or before its read timestamp, or written by `txn`).
+/// `None`: the tuple did not exist for `txn` (every version is newer than its read timestamp).
+pub fn collect_undo_logs(
+    base_meta: &TupleMeta,
+    undo_link: Option<UndoLink>,
+    txn: &Transaction,
+    mgr: &TransactionManager,
+) -> Option<Vec<UndoLog>> {
+    if base_meta.ts <= txn.read_ts() || base_meta.ts == txn.temp_ts() {
+        return Some(vec![]);
+    }
+    let mut logs = vec![];
+    let mut link = undo_link.filter(|l| l.is_valid());
+    while let Some(l) = link {
+        let log = mgr.get_undo_log_optional(l)?;
+        let ts = log.ts;
+        link = Some(log.prev_version).filter(|p| p.is_valid());
+        logs.push(log);
+        if ts <= txn.read_ts() {
+            return Some(logs);
+        }
+    }
+    None
+}
+```
+
+<p><code>ReconstructTuple</code> applies the logs front to back, and a deletion log marks the tuple absent <em>until a later log restores it</em> (D2 and D3 in <code>TupleReconstructTest</code> are exactly that). <code>CollectUndoLogs</code> has three exits: the base tuple is visible as it is (empty list), a log with <code>ts &lt;= read_ts</code> is found (stop there, inclusive), or the chain ends first (<code>nullopt</code>: the tuple did not exist for this snapshot).</p>
+
+<h4>Generating and merging undo logs</h4>
+
+```rust title="undo logs: first log, and folding a later change into it"
+/// The first undo log a transaction writes for a tuple: it must turn `target` (what the transaction leaves in the
+/// heap) back into `base` (what the tuple was). `base` is None if the tuple did not exist (a deleted tuple being
+/// re-inserted), `target` None for a deletion.
+pub fn generate_new_undo_log(
+    base: Option<&Tuple>,
+    target: Option<&Tuple>,
+    ts: u64,
+    prev_version: UndoLink,
+    arity: usize,
+) -> UndoLog {
+    let Some(base) = base else {
+        return UndoLog { is_deleted: true, modified_fields: vec![false; arity], tuple: Tuple::empty(), ts, prev_version };
+    };
+    let modified: Vec<bool> = match target {
+        None => vec![true; arity], // a delete keeps the whole old tuple
+        Some(t) => base.0.iter().zip(&t.0).map(|(a, b)| !same_value(a, b)).collect(),
+    };
+    let tuple = Tuple(base.0.iter().zip(&modified).filter(|(_, m)| **m).map(|(v, _)| v.clone()).collect());
+    UndoLog { is_deleted: false, modified_fields: modified, tuple, ts, prev_version }
+}
+
+/// The transaction already holds an undo log for this tuple; fold one more change into it so that it still
+/// reconstructs the version from *before the transaction*. `base` is the tuple as it is now (None if the
+/// transaction deleted it), `target` what the change makes it (None for a deletion).
+pub fn generate_updated_undo_log(base: Option<&Tuple>, target: Option<&Tuple>, log: &UndoLog) -> UndoLog {
+    if log.is_deleted {
+        return log.clone(); // the tuple did not exist before this transaction: nothing later changes that
+    }
+    let Some(base) = base else {
+        return log.clone(); // currently deleted: the log already holds the whole old tuple
+    };
+    let arity = log.modified_fields.len();
+    let mut modified = log.modified_fields.clone();
+    match target {
+        None => modified = vec![true; arity],
+        Some(t) => {
+            for i in 0..arity {
+                if !same_value(&base.0[i], &t.0[i]) {
+                    modified[i] = true;
+                }
+            }
+        }
+    }
+    // Values for the fields now in the log: the log's own where it had them, else the current tuple's (a field the
+    // transaction had not touched yet still holds its pre-transaction value in `base`).
+    let mut old = log.tuple.0.iter();
+    let mut values = vec![];
+    for i in 0..arity {
+        let had = log.modified_fields[i];
+        let v = if had { old.next().cloned() } else { None };
+        if modified[i] {
+            values.push(v.unwrap_or_else(|| base.0[i].clone()));
+        }
+    }
+    UndoLog { is_deleted: false, modified_fields: modified, tuple: Tuple(values), ts: log.ts, prev_version: log.prev_version }
+}
+```
+
+<p>Two rules the tests pin down. A <strong>delete</strong> log stores the whole old tuple: after a delete the heap tuple's bytes no longer describe the old version. And a transaction that <em>already</em> holds a log for a tuple <strong>rewrites that log</strong> instead of adding one, so that it still reconstructs the version from before the transaction; the starting point of an inserted-then-changed tuple is "did not exist", which stays "did not exist" (<code>is_deleted</code>, no columns).</p>
+
+<h4>The write path: one latch around check and write</h4>
+
+```rust title="write path: conflict check, undo log, in-place update (src/execution/txn_write.rs)"
+/// Write one tuple in place, leaving an undo log. `target` None deletes.
+///
+/// A tuple is writable if its timestamp is this transaction's own temporary one (a second write by the same
+/// transaction) or a commit timestamp not newer than the read timestamp. Anything else is a write-write conflict:
+/// the transaction is tainted and the statement fails.
+fn write_one(ctx: &TxnCtx, ti: &TableInfo<'_>, rid: Rid, target: Option<Tuple>, mode: Mode<'_>) -> Result<()> {
+    let txn = &ctx.txn;
+    let arity = ti.schema.len();
+    let r = modify_tuple_and_undo_link(&ctx.mgr, ti, rid, |meta, base, link| {
+        let mine = meta.ts == txn.temp_ts();
+        if !mine && (meta.ts >= TXN_START_ID || meta.ts > txn.read_ts()) {
+            return Err(conflict());
+        }
+        if let Mode::InsertOnTombstone(ix) = mode {
+            if !meta.deleted {
+                return Err(duplicate(ix));
+            }
+        }
+        let base_opt = (!meta.deleted).then_some(base);
+        let new_meta = TupleMeta { ts: txn.temp_ts(), deleted: target.is_none() };
+        let new_tuple = target.clone().unwrap_or_else(|| base.clone());
+        let own_link = link.filter(|l| l.is_valid() && l.prev_txn == txn.id());
+        let new_link = if mine {
+            if let Some(l) = own_link {
+                // the tuple was already changed by this transaction: fold this change into its undo log
+                let old = txn.get_undo_log(l.prev_log_idx);
+                txn.modify_undo_log(l.prev_log_idx, generate_updated_undo_log(base_opt, target.as_ref(), &old));
+            }
+            link // inserted by this transaction: there is no earlier version to log
+        } else {
+            let prev = link.filter(|l| l.is_valid()).unwrap_or(UndoLink { prev_txn: INVALID_TXN_ID, prev_log_idx: 0 });
+            let log = generate_new_undo_log(base_opt, target.as_ref(), meta.ts, prev, arity);
+            Some(txn.append_undo_log(log))
+        };
+        Ok((new_meta, new_tuple, new_link))
+    });
+    match r {
+        Ok(()) => {
+            txn.append_write_set(ti.oid, rid);
+            Ok(())
+        }
+        Err(e) => {
+            txn.set_tainted();
+            Err(e)
+        }
+    }
+}
+```
+
+```rust title="the page-latched read-modify-write the write path is built on (src/storage/table/tuple_and_link.rs)"
+/// Change a tuple, its metadata and its version link in one step under the page's write latch. `f` sees the current
+/// state and returns the new one (or an error, which leaves everything untouched). Because the decision and the write
+/// happen under one latch, a conflict check inside `f` cannot be invalidated before the write lands; `f` may also
+/// append to the transaction's undo logs, since nothing else can interleave.
+pub fn modify_tuple_and_undo_link<E>(
+    mgr: &TransactionManager,
+    t: &TableInfo<'_>,
+    rid: Rid,
+    f: impl FnOnce(&TupleMeta, &Tuple, Option<UndoLink>) -> Result<(TupleMeta, Tuple, Option<UndoLink>), E>,
+) -> Result<(), E> {
+    t.heap
+        .write_slot(rid, |page| {
+            let (cur_meta, cur_bytes) = page.get(rid.slot).expect("no tuple at that rid");
+            let cur = Tuple(t.layout.decode(cur_bytes));
+            let (meta, tuple, link) = f(&cur_meta, &cur, mgr.get_undo_link(rid))?;
+            let mut bytes = vec![];
+            t.layout.encode(&tuple.0, &mut bytes);
+            if !page.update_in_place(rid.slot, meta, &bytes) {
+                panic!("in-place update needs an image no larger than the old one (variable-length column grew?)");
+            }
+            mgr.update_undo_link(rid, link, None);
+            Ok(())
+        })
+        .expect("buffer pool")
+}
+```
+
+<p>BusTub's <code>UpdateTupleAndUndoLink(txn_mgr, rid, undo_link, table_heap, txn, meta, tuple, check)</code> exists for the same reason: the tuple lives in a page and its version link in a side table, so the <em>check</em> ("is this tuple still writable by me?") and the <em>write</em> must happen under the page's write latch. The version above does the whole decision inside one closure, which also lets it append to the transaction's undo logs while nothing else can interleave; a check-then-write with separate calls loses to the concurrent tests.</p>
+
+<h4>The primary-key index</h4>
+
+```rust title="insert through the index (src/execution/txn_write.rs)"
+/// INSERT of one row. New tuples carry the writer's temporary timestamp, so nobody else sees them until the writer
+/// commits and the timestamp is replaced by the commit timestamp. With a primary key, the key's index entry decides:
+/// no entry means a fresh tuple (plus an entry); an entry means the key has had a tuple before, which can be reused
+/// only if it is deleted.
+fn insert_one(ctx: &TxnCtx, cat: &Catalog, ti: &TableInfo<'_>, row: Vec<Value>) -> Result<()> {
+    let row: Vec<Value> =
+        row.into_iter().zip(&ti.schema.cols).map(|(v, c)| coerce(v, c.ty)).collect::<Result<_>>()?;
+    let txn = &ctx.txn;
+    let fresh = |row: Vec<Value>| -> Result<Rid> {
+        let rid = ti
+            .insert_tuple(TupleMeta { ts: txn.temp_ts(), deleted: false }, &Tuple(row))
+            .ok_or_else(|| Error("tuple too large for a page".into()))?;
+        txn.append_write_set(ti.oid, rid);
+        Ok(rid)
+    };
+    let Some(ix) = pk_index(cat, ti)? else {
+        fresh(row)?;
+        return Ok(());
+    };
+    let key = index_key(&row[ix.col]).ok_or_else(|| Error("a primary key cannot be NULL".into()))?;
+    match ix.tree.get(key)? {
+        Some(packed) => write_one(ctx, ti, unpack(packed), Some(Tuple(row)), Mode::InsertOnTombstone(&ix.name)),
+        None => {
+            let rid = fresh(row)?;
+            if !ix.tree.insert(key, crate::btree::pack_rid(rid.page.0, rid.slot))? {
+                // Another transaction put the same key in first. Neutralize the tuple we already placed.
+                ti.update_tuple_meta(TupleMeta { ts: txn.temp_ts(), deleted: true }, rid);
+                txn.set_tainted();
+                return Err(duplicate(&ix.name));
+            }
+            Ok(())
+        }
+    }
+}
+```
+
+<p>Three behaviours the index tests need. <strong>Entries are never removed</strong>: a delete leaves the tuple as a tombstone and the index entry in place, so a later insert of the same key finds the old RID and its version chain ("insert on tombstone": legal only if the tuple is deleted, under the same conflict rules as an update; a live tuple, even one nobody can see yet, is a duplicate and taints). <strong>Losing the index race</strong>: the tuple is placed in the heap <em>before</em> the index entry, so a concurrent insert of the same key can win in between; the loser marks its own tuple deleted, taints, and fails. <strong>Changing the key is delete + insert</strong>, in two phases, because <code>UPDATE t SET k = k + 1</code> over keys 1..4 collides with itself if each row is moved in turn:</p>
+
+```rust title="update and delete (src/execution/txn_write.rs)"
+/// UPDATE (`sets` is Some) or DELETE (None) of tuples this transaction found by scanning.
+///
+/// An update that changes the primary key is a delete of the old tuple plus an insert of the new one, done in two
+/// phases (all deletes, then all inserts) so that `UPDATE t SET k = k + 1` over keys 1..4 does not collide with itself.
+pub fn write_rows(
+    ctx: &TxnCtx,
+    cat: &Catalog,
+    ti: &TableInfo<'_>,
+    targets: Vec<(Rid, Vec<Value>)>,
+    sets: Option<&[(usize, Expr)]>,
+) -> Result<i64> {
+    let pk_col = pk_index(cat, ti)?.map(|ix| ix.col);
+    let mut moved = vec![]; // new versions of tuples whose key changed
+    let mut n = 0;
+    for (rid, seen) in targets {
+        let new_vals: Option<Vec<Value>> = match sets {
+            None => None,
+            Some(sets) => {
+                let mut v = seen.clone();
+                for (i, e) in sets {
+                    v[*i] = coerce(e.eval(&seen)?, ti.schema.cols[*i].ty)?;
+                }
+                Some(v)
+            }
+        };
+        match new_vals {
+            Some(v) if pk_col.is_some_and(|c| v[c] != seen[c]) => {
+                write_one(ctx, ti, rid, None, Mode::Update)?;
+                moved.push(v);
+            }
+            other => write_one(ctx, ti, rid, other.map(Tuple), Mode::Update)?,
+        }
+        n += 1;
+    }
+    for v in moved {
+        insert_one(ctx, cat, ti, v)?;
+    }
+    Ok(n)
+}
+```
+
+<h4>Abort</h4>
+
+```rust title="abort: restore each written tuple from the head of its chain"
+    /// Abort a running or tainted transaction: undo its writes, then stop counting it as a reader.
+    pub fn abort(&self, txn: &Arc<Transaction>) {
+        let tables = self.tables.read().unwrap().clone();
+        let _c = self.commit_mutex.lock().unwrap();
+        self.abort_locked(txn, tables.as_deref());
+    }
+
+    fn abort_locked(&self, txn: &Arc<Transaction>, tables: Option<&dyn Tables>) {
+        let st = txn.state();
+        assert!(
+            st == TxnState::Running || st == TxnState::Tainted,
+            "only a running or tainted transaction can be aborted"
+        );
+        if let Some(t) = tables {
+            for (table, rids) in txn.write_sets() {
+                for rid in rids {
+                    t.rollback(self, txn, table, rid);
+                }
+            }
+        }
+        txn.set_state(TxnState::Aborted);
+        self.running.lock().unwrap().remove_txn(txn.read_ts());
+    }
+/// Undo this transaction's write to one tuple (abort). If the transaction holds an undo log at the head of the
+/// tuple's chain, the log is applied and the previous version, its timestamp and its link are restored. If it holds
+/// none, the transaction inserted the tuple, so it becomes a tombstone that every reader sees as deleted (timestamp 0).
+pub fn rollback_tuple(mgr: &TransactionManager, t: &TableInfo<'_>, rid: Rid, txn: &Transaction) {
+    let _ = modify_tuple_and_undo_link::<()>(mgr, t, rid, |meta, tuple, link| {
+        if meta.ts != txn.temp_ts() {
+            return Ok((*meta, tuple.clone(), link)); // not ours (already rolled back)
+        }
+        match link.filter(|l| l.is_valid() && l.prev_txn == txn.id()) {
+            Some(l) => {
+                let log = txn.get_undo_log(l.prev_log_idx);
+                let prev = reconstruct_tuple(tuple, meta, std::slice::from_ref(&log));
+                let next = Some(log.prev_version).filter(|p| p.is_valid());
+                Ok((TupleMeta { ts: log.ts, deleted: prev.is_none() }, prev.unwrap_or_else(|| tuple.clone()), next))
+            }
+            None => Ok((TupleMeta { ts: 0, deleted: true }, tuple.clone(), link)),
+        }
+    });
+}
+```
+
+<p>A tuple the transaction inserted has no log of its own and becomes a tombstone stamped <code>0</code>, so every reader, whatever its read timestamp, sees it as deleted; a tuple it changed is restored from its log: previous version, previous timestamp, previous link. <code>Abort</code> is legal for <code>RUNNING</code> and <code>TAINTED</code> transactions; <code>Commit</code> of a tainted transaction returns false and <strong>leaves it tainted</strong> (<code>CommitTaintedTxn</code> checks both).</p>
+
+<h4>Garbage collection, as the tests define it</h4>
+
+```rust title="stop-the-world GC (src/concurrency/transaction_manager.rs)"
+    /// Stop-the-world garbage collection: drop every finished (committed or aborted) transaction whose undo logs
+    /// no running transaction can still need.
+    ///
+    /// A tuple whose newest version is stamped at or below the watermark needs no undo logs: every reader sees it as
+    /// is. Otherwise a reader walks the chain until the first log whose version is at or below its own read timestamp,
+    /// and the lowest read timestamp anyone has is the watermark; so logs up to and including the first one with
+    /// `ts <= watermark` can still be read and everything after it cannot. A transaction is collectable when none of
+    /// the logs that can still be read is one of its own. Running and tainted transactions are never collected.
+    pub fn garbage_collection(&self) {
+        let Some(tables) = self.tables.read().unwrap().clone() else { return };
+        let _c = self.commit_mutex.lock().unwrap(); // no commit or begin moves the watermark under us
+        let w = self.watermark();
+        let mut needed: std::collections::HashSet<TxnId> = std::collections::HashSet::new();
+        tables.for_each_tuple(&mut |_, rid, meta| {
+            if meta.ts <= w {
+                return;
+            }
+            let mut link = self.get_undo_link(rid);
+            while let Some(l) = link {
+                needed.insert(l.prev_txn);
+                let Some(log) = self.get_undo_log_optional(l) else { break };
+                if log.ts <= w {
+                    break;
+                }
+                link = Some(log.prev_version).filter(|p| p.is_valid());
+            }
+        });
+        let mut map = self.txn_map.write().unwrap();
+        // A serializable transaction validates against everything committed after it began, so a committed
+        // transaction stays until no running serializable transaction started before its commit.
+        let oldest_serializable = map
+            .values()
+            .filter(|t| t.isolation_level() == Iso::Serializable && matches!(t.state(), TxnState::Running | TxnState::Tainted))
+            .map(|t| t.read_ts())
+            .min();
+        map.retain(|id, txn| {
+            let finished = matches!(txn.state(), TxnState::Committed | TxnState::Aborted);
+            let validating = txn.state() == TxnState::Committed && oldest_serializable.is_some_and(|r| txn.commit_ts() > r);
+            !finished || needed.contains(id) || validating
+        });
+    }
+```
+
+<p><code>GarbageCollection</code> expects <code>txn_a</code> and <code>txn_b</code> to disappear while <code>txn_watermark_at_0</code> is still running, although both committed <em>after</em> the watermark. They only inserted, so they hold no undo log that anyone can reach, and nothing else keeps a transaction alive. The textbook rule in the previous task ("<code>commit_ts &lt;= watermark</code>") would fail that test. What <em>does</em> keep a committed transaction around is a running SERIALIZABLE transaction that began before it committed, because that transaction will validate against its write set; the code above checks for exactly that.</p>
+
+<h4>Serializable validation</h4>
+
+```rust title="commit-time validation (src/concurrency/transaction_manager.rs)"
+    /// Backward validation (optimistic concurrency control): `txn` may commit only if no transaction that committed
+    /// after it started wrote a tuple that one of its scans would have returned differently. For each such tuple the
+    /// versions to test are the ones committed after `txn`'s read timestamp and the one `txn` itself saw (a tuple
+    /// that was deleted or changed *away from* the predicate matters as much as one that changed into it).
+    fn validate(&self, txn: &Arc<Transaction>, tables: &dyn Tables) -> bool {
+        let preds = txn.scan_predicates();
+        if preds.is_empty() {
+            return true;
+        }
+        let others: Vec<Arc<Transaction>> = self
+            .txn_map
+            .read()
+            .unwrap()
+            .values()
+            .filter(|o| o.id() != txn.id() && o.state() == TxnState::Committed && o.commit_ts() > txn.read_ts())
+            .cloned()
+            .collect();
+        for o in others {
+            for (table, rids) in o.write_sets() {
+                let Some(preds) = preds.get(&table) else { continue };
+                for rid in rids {
+                    let (meta, tuple, link) = tables.read(self, table, rid);
+                    let matches = |t: &Tuple| {
+                        preds.iter().any(|p| p.eval(&t.0).map(|v| crate::engine::expr::truthy(&v)).unwrap_or(true))
+                    };
+                    // walk the versions newest to oldest
+                    let (mut cur, mut ts, mut deleted, mut link) = (tuple, meta.ts, meta.deleted, link);
+                    loop {
+                        let committed = ts < TXN_START_ID;
+                        if committed && ts > txn.read_ts() && !deleted && matches(&cur) {
+                            return false; // a version this transaction never saw would have matched
+                        }
+                        if committed && ts <= txn.read_ts() {
+                            if !deleted && matches(&cur) {
+                                return false; // the version it saw matched, and has since been replaced
+                            }
+                            break;
+                        }
+                        let Some(l) = link else { break };
+                        let Some(log) = self.get_undo_log_optional(l) else { break };
+                        let prev = reconstruct_tuple(&cur, &TupleMeta { ts, deleted }, std::slice::from_ref(&log));
+                        deleted = prev.is_none();
+                        if let Some(p) = prev {
+                            cur = p;
+                        }
+                        ts = log.ts;
+                        link = Some(log.prev_version).filter(|p| p.is_valid());
+                    }
+                }
+            }
+        }
+        true
+    }
+```
+
+<p>Only transactions that <strong>wrote</strong> are validated: <code>SerializableTest</code> commits a read-only serializable <code>txn_read</code> successfully after two writers committed, while the writer that conflicts (<code>txn3</code>) must fail with state <code>ABORTED</code>. The scan predicates are recorded by the scans themselves (a table scan records its filter, an index scan records the key condition and the filter), and validation tests the version each other committed transaction left <em>and</em> the version this transaction saw: a row that matched the predicate and was updated away matters as much as one that became a match. Take the commit latch before validating, or two transactions that invalidate each other both pass.</p>
+"""
+
+[[sections]]
+heading = "Does it work? Verification"
+body = """
+<aside data-call="testing"><b>How the implementation was checked</b><ul> <li><strong>Unit scenarios</strong>: watermark pinned and released by readers; delta contains only changed columns; three updates by one transaction yield exactly one log; five old snapshots each see their own version; delete visible to older snapshots; write-write conflicts against uncommitted <em>and</em> newly committed writers; abort restores the exact chain; duplicate keys; PK change; GC with and without a long reader.</li> <li><strong>Reference model (the most valuable test)</strong>: random operations from 4 interleaved transactions on 6 keys (read, update, insert, delete, commit, abort, GC), compared at every step with a trivial model: a per-key list of <code>(commit_ts, row)</code> plus per-transaction write buffers. Every read, every conflict decision and every full scan must agree. 30 seeds × 600 steps pass.</li> <li><strong>Invariant workloads</strong>: bank totals with concurrent snapshot audits; "doctors on call" pairs for write skew.</li> <li><strong>Hang detection</strong>: the first concurrent run <em>hung</em> instead of failing: <code>rollback</code> held the transaction's log latch while taking tuple latches, while a reader held a tuple latch and wanted that same log latch (<code>slot → logs</code> vs <code>logs → slot</code>). Fix: one global <strong>lock order</strong> (<code>slot → txn.logs</code>) written in a comment next to every acquisition, and copying <code>write_set</code> before touching slots. Run concurrent tests under a watchdog (<code>perl -e 'alarm 60; exec &#64;ARGV'</code>, or <code>cargo nextest</code> timeouts) so a deadlock becomes a failure.</li> </ul></aside>
+
+```text title="invariants under concurrency (4 writers, 20 000 transactions each; Snapshot vs Serializable)"
+bank: 20422 transfers committed while 3000 snapshot audits all saw 16000; undo logs retained after final GC: 0
+Snapshot: transactions that observed a pair with nobody on call: 1331
+Serializable: transactions that observed a pair with nobody on call: 0
+30 seeds × 600 random steps (4 interleaved transactions, GC, aborts) agree with the model
+```
+
+```text title="leaderboard-style workload: 4 threads, 32 000 transfers over 1 000 rows"
+isolation      GC            txn/s    peak undo logs held
+Snapshot       every 2ms     763813                     36
+Snapshot       never        796023                  62932
+Serializable   every 2ms     178762                     22
+```
+
+<p>Reading the numbers (the real leaderboard ranks <strong>throughput and space</strong>):</p>
+
+<ul> <li><strong>GC is nearly free in time and decisive in space</strong>: peak retained undo logs fall from <strong>62 932 to 36</strong> with a background stop-the-world pass every 2 ms, at ~4% throughput cost. A stop-the-world collector scales badly with data size; production systems collect incrementally (per-transaction lists, vacuum by page).</li> <li><strong>Serializable costs 4.3×</strong> here: every commit takes the single validator slot and replays other transactions' images against predicates. Cheaper validation = fewer predicates (index point reads record one equality predicate), batching validators, or SSI-style tracking of only rw-antidependencies (<a href="/cookbook/p/multi-version-concurrency-control">L20</a>).</li> <li>Readers: 3 000 snapshot audits over 16 hot rows never aborted and always saw the exact total.</li> </ul>
+
+<aside data-call="warning"><b>P4 pitfalls</b><ul> <li><strong>Reading the base tuple without the slot latch</strong> gives a torn tuple/chain pair. Copy both under one latch.</li> <li><strong>Forgetting the own-write case</strong> in <code>collect_undo_logs</code>: a transaction must see its own uncommitted writes (base timestamp equals its temporary timestamp) with no logs applied.</li> <li><strong>Creating a second undo log for the same transaction/tuple</strong>: the chain then has two logs with the same timestamp and any code that assumes one per transaction breaks.</li> <li><strong>Committing before stamping everything</strong>: set <code>last_commit</code> only after every write-set tuple carries the new timestamp.</li> <li><strong>GC deleting what validation needs</strong>: a committed transaction must stay while a running serializable transaction began before it committed. Keeping <em>every</em> committed transaction above the watermark, though, fails BusTub's <code>GarbageCollection</code> test.</li> <li><strong>Returning a deleted marker as a row</strong>: scans and index lookups must treat <code>is_deleted</code> as absent after reconstruction, not just on the base tuple.</li> <li><strong>Tainted transactions</strong>: don't let them continue silently; make every operation return an error until the caller aborts. <code>Commit</code> of a tainted transaction returns false and leaves it tainted; <code>Abort</code> accepts it.</li> <li><strong>Validating a read-only transaction</strong>: BusTub's <code>SerializableTest</code> commits a read-only serializable transaction after conflicting writers; only transactions with a write set are validated.</li> <li><strong>Key-changing updates done row by row</strong>: <code>UPDATE t SET k = k + 1</code> collides with itself; delete every target first, then insert.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "BusTub Project 4 spec"
+url = "https://15445.courses.cs.cmu.edu/fall2025/project4/"
+
+[[sources]]
+title = "An Empirical Evaluation of In-Memory MVCC"
+url = "https://www.vldb.org/pvldb/vol10/p781-Wu.pdf"
+
+[[sources]]
+title = "Fast Serializable MVCC for Main-Memory Database Systems"
+url = "https://db.in.tum.de/~muehlbau/papers/mvcc.pdf"
+
+[[sources]]
+title = "Hermitage"
+url = "https://github.com/ept/hermitage"

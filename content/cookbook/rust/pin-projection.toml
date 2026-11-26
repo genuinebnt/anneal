@@ -1,0 +1,54 @@
+title = "Pin projection"
+module = "Rust language"
+module_order = 1
+chapter = "Unsafe and FFI"
+chapter_order = 7
+order = 64
+kind = "recipe"
+lede = "Pin, Unpin, PhantomPinned and structural pin projection (a hand-made `Future::map`)."
+level = "advanced"
+code = ["examples/unsafe_ffi/pin_projection.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>writing future combinators</li><li>self-referential state machines</li><li>understanding what <code>async</code> blocks compile to</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Moving a value is a bitwise copy. If a value holds a pointer into **itself**, a move leaves the pointer aiming at the old location: dangling (UB on use). `Pin<P>` is a wrapper whose API never gives out `&mut T` to the pointee unless `T: Unpin`, so a pinned `!Unpin` value cannot be moved (`mem::swap`, `mem::replace`, `Option::take` all need `&mut T`).
+
+`Unpin` is an auto trait meaning "moving is harmless" (almost every type); `PhantomPinned` opts a struct out. `async` blocks are `!Unpin` because their locals may borrow each other across `.await`. Rules: once `Pin<&mut T>` of a `!Unpin` T exists, you may not move or invalidate that memory until T is dropped.
+
+`get_unchecked_mut` is the escape hatch (safe only if you modify fields **without** moving the value). **Structural pinning** (projection): `Pin<&mut Wrapper>` -> `Pin<&mut Field>` is sound only if (1) the wrapper never moves that field out, (2) the wrapper's Drop does not move it, (3) the wrapper is `Unpin` only if the field is, (4) the layout is not `repr(packed)`.
+
+The `pin-project` crate generates this code and checks the rules for you. Compile errors avoided here (shown as comments): let mut a = SelfRef::new("a"); let mut b = SelfRef::new("b"); std::mem::swap(&amp;mut &#42;a, &amp;mut &#42;b);
+
+```text
+  -> error[E0277]: `PhantomPinned` cannot be unpinned (DerefMut needs Target: Unpin)
+let s: Pin<&mut Timer> = ...; let r: &mut Timer = s.get_mut();   -> same E0277; `Pin::new(&mut timer)` too.
+fut.poll(cx) on an unpinned `&mut F`                             -> error[E0599]: poll needs `Pin<&mut Self>`
+```
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>tokio/futures combinators (<code>Map</code>, <code>Then</code>, <code>Select</code>)</li><li>intrusive linked lists whose nodes are pinned (e.g. tokio's timer/notify waiter lists)</li><li>generators/async state machines</li><li>FFI objects registered by address</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/pin/index.html> and <https://doc.rust-lang.org/std/marker/struct.PhantomPinned.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/pin/index.html"
+url = "https://doc.rust-lang.org/std/pin/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/marker/struct.PhantomPinned.html"
+url = "https://doc.rust-lang.org/std/marker/struct.PhantomPinned.html"

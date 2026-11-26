@@ -1,0 +1,31 @@
+error[E0206]: field `x` is declared twice in struct `P`
+ --> e0206_duplicate_field_variant.peb:1:20
+  |
+1 | struct P { x: int, x: bool }
+  |            -       ^ duplicate field
+  |            |
+  |            first declared here
+
+warning[W0508]: enum `E` is never used
+ --> e0206_duplicate_field_variant.peb:2:6
+  |
+2 | enum E { A, A }
+  |      ^ never mentioned
+
+error[E0206]: variant `A` is declared twice in enum `E`
+ --> e0206_duplicate_field_variant.peb:2:13
+  |
+2 | enum E { A, A }
+  |          -  ^ duplicate variant
+  |          |
+  |          first declared here
+
+error[E0107]: `let` binding has no initialiser
+ --> e0206_duplicate_field_variant.peb:3:22
+  |
+3 | fn main() { let _p: P; }
+  |                      ^ expected `= value` here
+  |
+  = help: every binding must be initialised, e.g. `let x = 0;`
+
+error: aborting due to 3 previous errors; 1 warning emitted

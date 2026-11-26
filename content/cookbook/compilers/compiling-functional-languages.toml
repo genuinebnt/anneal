@@ -1,0 +1,144 @@
+title = "Compiling functional languages"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Types and semantics"
+chapter_order = 4
+order = 609
+kind = "guide"
+lede = "OCaml, GHC, SML/NJ, Chez Scheme, Koka, Lean · ANF, CPS, closure conversion, tail calls, laziness"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>A typical pipeline:</p>
+
+<ol> <li>Parse, then type-check (chapters <a href="/cookbook/p/hindley-milner-type-inference">2</a>–<a href="/cookbook/p/bidirectional-typing-and-dependent-types">3</a>).</li> <li>Compile pattern matches (<a href="/cookbook/p/pattern-matching-compilation-and-exhaustiveness">chapter 4</a>).</li> <li>Lower to a small <b>core language</b>: lambda calculus plus <code>let</code>, <code>case</code> and constructors.</li> <li>Convert to <b>ANF</b> or <b>CPS</b> so every intermediate value has a name and evaluation order is explicit.</li> <li><b>Closure conversion</b>: make captured environments explicit data.</li> <li><b>Hoisting</b> (lambda lifting): every function becomes top-level.</li> <li>You now have a first-order IR that the backend from chapters <a href="/cookbook/p/designing-an-ir-in-rust">9</a>–<a href="/cookbook/p/abis-object-files-linking-and-unwinding">19</a> can handle.</li> </ol>
+
+<p><b>ANF</b> (A-normal form) requires every argument of every operation to be an atom, meaning a variable or a constant. <code>f(g(x), y + 1)</code> becomes <code>let a = g(x) in let b = y + 1 in f(a, b)</code>. It's close to SSA and keeps direct-style returns. <b>CPS</b> makes every return a call to an explicit continuation. That makes control effects like exceptions, generators and <code>call/cc</code> easy, and every call a tail call. GHC's “join points” give most of CPS's benefits inside a direct-style IR.</p>
+
+```rust title="ANF conversion with boxed continuations and join points for if"
+pub enum Expr {
+    Int(i64), Var(String), Prim(Op, Box<Expr>, Box<Expr>),
+    App(Box<Expr>, Vec<Expr>), Lam(Vec<String>, Box<Expr>),
+    Let(String, Box<Expr>, Box<Expr>), If(Box<Expr>, Box<Expr>, Box<Expr>),
+}
+
+#[derive(Clone)] pub enum Atom { Int(i64), Var(String) }
+pub enum Rhs { Atom(Atom), Prim(Op, Atom, Atom), App(Atom, Vec<Atom>), Lam(Vec<String>, Box<Anf>) }
+pub enum Anf { Ret(Atom), Let(String, Rhs, Box<Anf>), If(Atom, Box<Anf>, Box<Anf>) }
+
+type K<'a> = Box<dyn FnOnce(&mut Ctx, Atom) -> Anf + 'a>;
+type KList<'a> = Box<dyn FnOnce(&mut Ctx, Vec<Atom>) -> Anf + 'a>;
+
+pub struct Ctx { next: u32 }
+
+impl Ctx {
+    fn fresh(&mut self) -> String { self.next += 1; format!("%{}", self.next) }
+
+    /// Normalize `e`, then continue with an atom naming its value.
+    fn norm(&mut self, e: Expr, k: K<'_>) -> Anf {
+        match e {
+            Expr::Int(n) => k(self, Atom::Int(n)),
+            Expr::Var(x) => k(self, Atom::Var(x)),
+            Expr::Prim(op, a, b) => self.norm(*a, Box::new(move |c, a| {
+                c.norm(*b, Box::new(move |c, b| {
+                    let t = c.fresh();
+                    let rest = k(c, Atom::Var(t.clone()));
+                    Anf::Let(t, Rhs::Prim(op, a, b), Box::new(rest))
+                }))
+            })),
+            Expr::App(f, args) => {
+                let mut all = vec![*f];
+                all.extend(args);
+                self.norm_all(all, Vec::new(), Box::new(move |c, mut atoms| {
+                    let func = atoms.remove(0);
+                    let t = c.fresh();
+                    let rest = k(c, Atom::Var(t.clone()));
+                    Anf::Let(t, Rhs::App(func, atoms), Box::new(rest))
+                }))
+            }
+            Expr::Lam(params, body) => {
+                let body = self.norm(*body, Box::new(|_, a| Anf::Ret(a)));
+                let t = self.fresh();
+                let rest = k(self, Atom::Var(t.clone()));
+                Anf::Let(t, Rhs::Lam(params, Box::new(body)), Box::new(rest))
+            }
+            Expr::Let(x, rhs, body) => self.norm(*rhs, Box::new(move |c, v| {
+                let rest = c.norm(*body, k);
+                Anf::Let(x, Rhs::Atom(v), Box::new(rest))
+            })),
+            Expr::If(cond, then, els) => self.norm(*cond, Box::new(move |c, v| {
+                // Bind the continuation once as a join point instead of copying it into both arms.
+                let (j, x) = (c.fresh(), c.fresh());
+                let join_body = k(c, Atom::Var(x.clone()));
+                let jump = |j: String| -> K<'static> {
+                    Box::new(move |c, a| {
+                        let r = c.fresh();
+                        Anf::Let(r.clone(), Rhs::App(Atom::Var(j), vec![a]), Box::new(Anf::Ret(Atom::Var(r))))
+                    })
+                };
+                let t = c.norm(*then, jump(j.clone()));
+                let f = c.norm(*els, jump(j.clone()));
+                Anf::Let(j, Rhs::Lam(vec![x], Box::new(join_body)), Box::new(Anf::If(v, Box::new(t), Box::new(f))))
+            })),
+        }
+    }
+
+    fn norm_all(&mut self, mut es: Vec<Expr>, mut done: Vec<Atom>, k: KList<'_>) -> Anf {
+        if es.is_empty() { return k(self, done); }
+        let e = es.remove(0);
+        self.norm(e, Box::new(move |c, a| { done.push(a); c.norm_all(es, done, k) }))
+    }
+}
+
+pub fn to_anf(e: Expr) -> Anf { Ctx { next: 0 }.norm(e, Box::new(|_, a| Anf::Ret(a))) }
+```
+"""
+
+[[sections]]
+heading = "Closure conversion"
+body = """
+<p>Compute each lambda's free variables. Replace <code>λ(x). body</code> with a pair of a top-level code pointer and an environment record of the free variables. Inside, rewrite each free variable <code>y</code> as <code>env.i</code>. A call <code>f(a)</code> becomes <code>f.code(f.env, a)</code>. Optimizations: skip the environment for closed functions, and call known functions directly. Lambda lifting instead passes free variables as extra parameters. That works when all call sites are known, and avoids allocating a closure.</p>
+
+```rust title="Free variables of an ANF term"
+use std::collections::BTreeSet;
+
+fn free_atom(a: &Atom, bound: &[String], out: &mut BTreeSet<String>) {
+    if let Atom::Var(x) = a { if !bound.contains(x) { out.insert(x.clone()); } }
+}
+
+pub fn free_vars(t: &Anf, bound: &mut Vec<String>, out: &mut BTreeSet<String>) {
+    match t {
+        Anf::Ret(a) => free_atom(a, bound, out),
+        Anf::If(c, a, b) => { free_atom(c, bound, out); free_vars(a, bound, out); free_vars(b, bound, out); }
+        Anf::Let(x, rhs, body) => {
+            match rhs {
+                Rhs::Atom(a) => free_atom(a, bound, out),
+                Rhs::Prim(_, a, b) => { free_atom(a, bound, out); free_atom(b, bound, out); }
+                Rhs::App(f, args) => { free_atom(f, bound, out); for a in args { free_atom(a, bound, out); } }
+                Rhs::Lam(ps, b) => {
+                    let n = bound.len();
+                    bound.extend(ps.iter().cloned());
+                    free_vars(b, bound, out);
+                    bound.truncate(n);
+                }
+            }
+            bound.push(x.clone());
+            free_vars(body, bound, out);
+            bound.pop();
+        }
+    }
+}
+```
+
+<div class="cb-g-tip"><h3>Tail calls</h3> <p>Functional languages need <em>proper</em> tail calls, meaning unbounded tail recursion in constant stack. Options:</p> <ul> <li>Native tail calls in your backend (LLVM's <code>musttail</code>, Cranelift's <code>return_call</code>, Wasm's <code>return_call</code>).</li> <li>Trampolines: return a “call this next” value to a driver loop.</li> <li>Cheney on the MTA: CPS plus a C stack that is periodically collected.</li> </ul> <p>In a Rust interpreter, a trampoline is a loop over <code>enum Bounce { Done(Value), Call(FnId, Vec&lt;Value&gt;) }</code>.</p></div>
+
+<div class="cb-g-tip"><h3>Laziness</h3> <p>Call-by-need is implemented with <em>thunks</em>: a closure that overwrites itself with its value when forced. The STG machine is GHC's abstract machine for this. <em>Strictness analysis</em> finds arguments that will always be evaluated, so they can be passed evaluated and unboxed. The worker/wrapper transformation then exposes an unboxed worker function.</p></div>
+
+<div class="cb-g-tip"><h3>Other transformations</h3> <ul> <li><b>Defunctionalization</b> (Reynolds) replaces higher-order functions with a data type of closures plus an <code>apply</code> function. It's how you get first-order code, and it's a good way to understand interpreters.</li> <li><b>Uncurrying and arity analysis</b> turn <code>f a b</code> into one call instead of two.</li> <li><b>Fusion and deforestation</b> remove intermediate lists: shortcut fusion (<code>foldr/build</code>) and stream fusion.</li> <li><b>Data representation</b>: uniform boxed values (OCaml) versus monomorphization (MLton, Rust). Unboxed types (GHC's levity polymorphism) sit between them.</li> <li><b>Reference counting with reuse</b> (Perceus in Koka, Lean 4's “functional but in-place” updates) turns purely functional updates into in-place mutation when the reference count is one.</li> </ul></div>
+"""
+
+[[sources]]
+title = "Siek, Essentials of Compilation"
+url = "https://github.com/IUCompilerCourse/Essentials-of-Compilation"

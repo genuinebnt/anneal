@@ -1,0 +1,5 @@
+fn get(xs: [int], i: int) -> int { xs[i] }
+fn main() {
+    println(to_str(get([1, 2, 3], 2)));
+    println(to_str(get([1, 2, 3], 3)));
+}

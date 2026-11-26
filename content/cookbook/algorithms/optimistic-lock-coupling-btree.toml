@@ -1,0 +1,62 @@
+title = "B+tree concurrency control"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Trees and ordered structures"
+chapter_order = 2
+order = 173
+kind = "recipe"
+lede = "Latch crabbing, optimistic crabbing, and optimistic lock coupling (OLC)."
+level = "advanced"
+code = ["examples/data_structures/optimistic_lock_coupling_btree.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any shared ordered index; main-memory databases where reader-side latch writes (cache-line bouncing) hurt scaling.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+the same B+tree map (u64 -> u64) behind four concurrency schemes, so the cost of each can be measured: (0) **global**: one `RwLock<BTreeMap>` (baseline: readers share, any writer excludes everyone). (1) **latch crabbing** (lock coupling), pessimistic: every node has its own `RwLock`.
+
+Descend taking the **child** latch before releasing the parent; for writers, once the child is **safe** (not full, so it cannot split and the split can never reach the parent) release all ancestors. The root pointer has its own latch, held until a safe node is found.
+
+(2) **optimistic crabbing** (Bayer-Schkolnick): assume the leaf will not split: take **read** latches down, a **write** latch only on the leaf; if the leaf is full, release and **restart** pessimistically. Writers rarely touch inner-node latches.
+
+(3) **optimistic lock coupling** (Leis et al., "The ART of Practical Synchronization"): each node carries a **version** word (bit 0 = locked, upper bits = counter). A reader records the version, reads the node **without** writing any shared memory, then re-reads the version; if it changed the read may be torn, so **restart** from the root.
+
+Writers take the lock by CAS on the version (try-lock only, never blocks, so deadlock is impossible: on failure restart), mutate, then bump the version on unlock. Splits happen **eagerly** on the way down (a full inner node is split before descending into it) so a leaf split only ever needs the parent, which is known not to be full.
+
+The root keeps node id 0 forever: a root split copies the two halves into **new** nodes and turns node 0 into a 1-separator inner node.
+
+Node fields in the OLC tree are atomics (Relaxed loads/stores plus an Acquire fence before validation, Release on unlock), which makes the optimistic read data-race-free in safe Rust: a torn read yields garbage numbers that validation rejects; the code clamps counts and never trusts a child id before validating the parent's version.
+
+No `unsafe` anywhere in this file. Deletes are lazy (no merge), as in the OLC paper's insert/lookup focus.
+
+**Tests**: disjoint-key workloads equal a sequential model (all schemes); per-key counters with no lost updates under contention; 20 stress rounds with a watchdog that aborts on deadlock; stable keys are always found while splits run concurrently; and for OLC, readers validate every leaf snapshot (sorted, increasing across the sibling chain) while writers split.
+
+**Throughput** is printed (machine dependent, never asserted).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>OLC is used by main-memory index research systems (ART/B+tree in HyPer and Umbra)</li><li>latch crabbing is the classic scheme in disk-based B+tree implementations</li><li>PostgreSQL btree uses a related right-link (Lehman-Yao) protocol. Course: CMU 15-445 Lecture 10 (Index Concurrency Control): latch crabbing</li><li>optimistic crabbing</li><li>leaf scans and deadlock avoidance</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Leis, Haubenschild, Neumann, "Optimistic Lock Coupling": <https://db.in.tum.de/~leis/papers/artsync.pdf>
+
+Wikipedia, B+ tree: <https://en.wikipedia.org/wiki/B%2B_tree>
+"""
+
+[[sources]]
+title = "db.in.tum.de/~leis/papers/artsync.pdf"
+url = "https://db.in.tum.de/~leis/papers/artsync.pdf"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/B%2B_tree"
+url = "https://en.wikipedia.org/wiki/B%2B_tree"

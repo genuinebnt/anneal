@@ -1,0 +1,40 @@
+title = "Values and comparison"
+module = "Compilers and languages"
+module_order = 12
+chapter = "A tree-walking interpreter"
+chapter_order = 2
+order = 577
+kind = "guide"
+lede = "Book ch. 4 (rest), 6, 7 · Official tests: none yet"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>This slice adds strings, <code>true</code>, <code>false</code>, <code>nil</code>, <code>!</code>, and the comparison and equality operators. It is also the first slice with runtime errors, so <code>eval</code> now returns a <code>Result</code>. Lex comments here too, so golden files can use them.</p>
+
+```text
+expression → equality ;
+equality   → comparison ( ( "!=" | "==" ) comparison )* ;
+comparison → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
+unary      → ( "!" | "-" ) unary | primary ;
+primary    → NUMBER | STRING | "true" | "false" | "nil" | "(" expression ")" ;
+```
+
+<div class="cb-g-tt"><table><thead><tr><th>Kind</th><th>Input</th><th>Expected</th></tr></thead><tbody><tr><td><span class="cb-g-pill cb-g-tok">tokens</span></td><td><code>"hi"</code></td><td><code>String("hi") Eof</code></td></tr><tr><td><span class="cb-g-pill cb-g-tok">tokens</span></td><td><code>&gt;= != == !</code></td><td><code>GreaterEqual BangEqual EqualEqual Bang Eof</code></td></tr><tr><td><span class="cb-g-pill cb-g-tok">tokens</span></td><td><code>1 // note</code></td><td><code>Number(1) Eof</code></td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>"abc</code></td><td><code>[line 1] Error: Unterminated string.</code></td></tr><tr><td><span class="cb-g-pill cb-g-ast">ast</span></td><td><code>1 &lt; 2 == true</code></td><td><code>(== (&lt; 1 2) true)</code></td></tr><tr><td><span class="cb-g-pill cb-g-val">value</span></td><td><code>"a" + "b"</code></td><td><code>"ab"</code> (Display prints <code>ab</code>)</td></tr><tr><td><span class="cb-g-pill cb-g-val">value</span></td><td><code>!nil</code></td><td><code>true</code></td></tr><tr><td><span class="cb-g-pill cb-g-val">value</span></td><td><code>!0</code></td><td><code>false</code>: 0 is truthy in Lox</td></tr><tr><td><span class="cb-g-pill cb-g-val">value</span></td><td><code>1 == "1"</code></td><td><code>false</code></td></tr><tr><td><span class="cb-g-pill cb-g-val">value</span></td><td><code>nil == nil</code></td><td><code>true</code></td></tr><tr><td><span class="cb-g-pill cb-g-rerr">runtime error</span></td><td><code>-"x"</code></td><td><code>Operand must be a number.</code></td></tr><tr><td><span class="cb-g-pill cb-g-rerr">runtime error</span></td><td><code>1 + "a"</code></td><td><code>Operands must be two numbers or two strings.</code></td></tr><tr><td><span class="cb-g-pill cb-g-rerr">runtime error</span></td><td><code>1 &lt; "a"</code></td><td><code>Operands must be numbers.</code></td></tr></tbody></table></div>
+
+```rust title="src/interp.rs, binary operators"
+match (op, l, r) {
+    (BinOp::Add, Value::Number(a), Value::Number(b)) => Ok(Value::Number(a + b)),
+    (BinOp::Add, Value::Str(a), Value::Str(b)) => Ok(Value::Str(format!("{a}{b}").into())),
+    (BinOp::Add, _, _) => Err(rt(span, "Operands must be two numbers or two strings.")),
+    (BinOp::Lt, Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a < b)),
+    (BinOp::Eq, a, b) => Ok(Value::Bool(a == b)),
+    // …
+}
+```
+
+<p>Store strings in <code>Value::Str(Rc&lt;str&gt;)</code>. Cloning a value is then just a reference-count bump, and none of your types need a lifetime parameter.</p>
+
+<p>Rust's <code>Display</code> for <code>f64</code> already prints <code>3</code> for <code>3.0</code>, which matches Lox. It prints <code>inf</code> where Java prints <code>Infinity</code>, so special-case that if your tests divide by zero.</p>
+"""

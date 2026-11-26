@@ -1,0 +1,315 @@
+title = "Learned tuning and in-database ML"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 426
+kind = "guide"
+lede = "ML⇄DB Seminar #2, #3, #5, #6, #8, #10 (OtterTune, PostgresML, FeatureForm, FeatureBase, Akamas, Alibaba) · configuration tuning as constrained black-box optimization · exhaustive tables of real IVF and HNSW configurations on three datasets · random search, hill climbing and Gaussian-process Bayesian optimization compared · transfer · point-in-time feature joins"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<p><em>(No notes exist for these talks and I have not transcribed them. The points below are the design space the systems share, from the tuning and feature-store literature, not a summary of any speaker.)</em></p>
+
+<ul> <li><strong>Configuration is a hidden part of performance.</strong> A database exposes hundreds of <strong>knobs</strong> (PostgreSQL and MySQL each have several hundred): buffer sizes, parallelism, cost constants, checkpoint intervals, index parameters. A few dominate; they interact; the best setting depends on the <strong>workload</strong>, the <strong>data</strong> and the <strong>hardware</strong>; and defaults are chosen to be safe everywhere, hence rarely good anywhere. Human tuning is rules of thumb plus trial and error.</li> <li><strong>Tuning is constrained black-box optimization.</strong> Minimize a cost (latency, resource use) or maximize throughput <strong>subject to constraints</strong> (recall at least 0.95, memory under a budget, p99 under an SLA), where each evaluation means <em>running the workload</em>, which takes seconds to hours and is noisy. So the metric that matters is <strong>evaluations to reach a good configuration</strong>, not compute per evaluation.</li> <li><strong>The standard ML recipe (OtterTune, SIGMOD 2017)</strong>: <em>characterize the workload</em> by the system's own internal metrics, <em>prune</em> redundant metrics and <em>rank knobs</em> by importance (feature selection such as Lasso), <em>map</em> a new workload to the most similar previously seen one to reuse its observations, and <em>recommend</em> the next configuration with a <strong>Gaussian process</strong> (a model of the cost surface that also says how unsure it is) and an <strong>acquisition function</strong> such as expected improvement. Other families: search heuristics, reinforcement learning over knob settings (CDBTune, QTune), and <strong>domain-knowledge</strong> methods that restrict the space with rules and bounds before learning.</li> <li><strong>Why a GP?</strong> Evaluations are scarce, so the model must be sample-efficient and calibrated. A GP predicts a mean and an uncertainty at every untried configuration; expected improvement picks the configuration with the best trade-off between <em>exploiting</em> a promising region and <em>exploring</em> an unknown one; with a second GP for each constraint, <strong>constrained EI</strong> multiplies by the probability of being feasible.</li> <li><strong>Practical obstacles</strong> decide whether tuning works in production: <strong>noise</strong> (benchmark variance can exceed the effect being measured), <strong>safety</strong> (never try an untested configuration on the production database; tune on a clone or replica), <strong>restart-required knobs</strong>, <strong>dependent knobs</strong> (memory per connection times connections must fit), <strong>dynamic workloads</strong> (the optimum moves; tune online or re-tune), <strong>transfer</strong> (observations from another workload help only if it is similar), and <strong>what to optimize</strong> (throughput versus tail latency versus cost).</li> <li><strong>In-database ML</strong> moves the model to the data: PostgresML trains and serves models with SQL inside PostgreSQL; <strong>feature stores</strong> (FeatureForm, FeatureBase and others) compute features once and serve them consistently for training (offline) and prediction (online). Their hardest problem is <strong>correctness over time</strong>: the training set must contain, for each example, the feature values <em>known at that example's timestamp</em>. A "latest value" join leaks the future, and the model looks excellent offline and fails in production (<strong>training/serving skew</strong>).</li> <li><strong>Learned components in the rest of the book</strong>: learned cardinality estimators (<a href="/cookbook/p/cardinality-estimation">Q8</a>), learned cost models and optimizers with execution feedback (<a href="/cookbook/p/cost-models">Q9</a>, <a href="/cookbook/p/adaptive-and-robust">Q10</a>), and learned index structures; the lab here is the part with the clearest payoff: tuning.</li> </ul>
+"""
+
+[[sections]]
+heading = "The tuning problem, made measurable"
+body = """
+<p>To compare tuners fairly, the lab measures the <strong>entire configuration space once</strong>, so an "evaluation" in an experiment is a counted table lookup and the true optimum is known (this is how hyperparameter-optimization research builds <em>tabular benchmarks</em>). The spaces are real knobs of the indexes of <a href="/cookbook/p/vector-databases">S2</a>, on three datasets of 30 000 vectors × 32 dimensions that differ in cluster structure:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>space</th> <th>knobs</th> <th>configurations</th> <th>cost</th> <th>constraint</th> </tr> </thead> <tbody> <tr> <td>IVF</td> <td><code>nlist</code> ∈ {16 … 1 024}, <code>nprobe</code> ∈ {1 … 128}</td> <td>91</td> <td>centroid distances + vectors scanned per query</td> <td>recall&#64;10 ≥ 0.95</td> </tr> <tr> <td>HNSW</td> <td><code>M</code> ∈ {4, 8, 16, 32}, <code>efConstruction</code> ∈ {20 … 200}, <code>ef</code> ∈ {10 … 200}</td> <td>112</td> <td>distance computations per query</td> <td>recall&#64;10 ≥ 0.95</td> </tr> </tbody> </table></div>
+
+<p>Cost is the deterministic count of distance computations (proportional to query time), so the tables are reproducible. Each configuration was built and measured on 300 queries; the whole set of six tables took 44 seconds to compute here.</p>
+
+<p><strong>Tuners compared</strong> (all pick distinct configurations, never repeat one):</p>
+
+<ul> <li><strong>Random search</strong>: <code>b</code> configurations uniformly at random.</li> <li><strong>Hill climbing</strong> on the knob lattice with random restarts: move to the best neighbour (one knob one step up or down) until none improves; infeasible configurations score worse than any feasible one.</li> <li><strong>Constrained Bayesian optimization</strong>: three random configurations, then repeatedly fit a GP (RBF kernel on log-scaled knob values; the length scale chosen from a grid by marginal likelihood) to the observed <strong>log cost</strong> and another to the observed <strong>recall</strong>, and evaluate the untried configuration with the highest <code>EI(log cost over the best feasible so far) × P(recall ≥ 0.95)</code>; while nothing feasible is known, maximize the probability of feasibility.</li> </ul>
+
+:::deeper Reference: the tuning table, random search, hill climbing, Cholesky and a Gaussian process, expected improvement, constrained Bayesian optimization, knob importance
+```rust title="src/tune/mod.rs"
+//! Configuration tuning as black-box optimization. A `Table` holds the exhaustively measured cost and recall of every configuration of
+//! a small knob space, so strategies can be compared fairly (an "evaluation" is a lookup that is counted); strategies: random search,
+//! hill climbing with restarts, and Gaussian-process Bayesian optimization with expected improvement.
+use crate::joinorder::Rng;
+
+pub struct Space { pub names: Vec<String>, pub values: Vec<Vec<f64>> }
+
+pub struct Table { pub space: Space, pub cost: Vec<f64>, pub recall: Vec<f64>, pub target: f64 }
+impl Table {
+    pub fn n(&self) -> usize { self.cost.len() }
+    pub fn dims(&self) -> usize { self.space.values.len() }
+    /// Mixed-radix decode of a configuration index into one position per knob.
+    pub fn decode(&self, mut idx: usize) -> Vec<usize> {
+        let mut pos = vec![0; self.dims()];
+        for d in (0..self.dims()).rev() { let l = self.space.values[d].len(); pos[d] = idx % l; idx /= l; }
+        pos
+    }
+    pub fn encode(&self, pos: &[usize]) -> usize { pos.iter().enumerate().fold(0, |a, (d, &p)| a * self.space.values[d].len() + p) }
+    pub fn values_of(&self, idx: usize) -> Vec<f64> { self.decode(idx).iter().enumerate().map(|(d, &p)| self.space.values[d][p]).collect() }
+    /// Knob values mapped to [0, 1] on a log scale (knobs span orders of magnitude).
+    pub fn unit(&self, idx: usize) -> Vec<f64> {
+        self.values_of(idx).iter().enumerate().map(|(d, v)| {
+            let (lo, hi) = (self.space.values[d].first().unwrap().ln(), self.space.values[d].last().unwrap().ln());
+            if hi > lo { (v.ln() - lo) / (hi - lo) } else { 0.0 }
+        }).collect()
+    }
+    pub fn feasible(&self, idx: usize) -> bool { self.recall[idx] >= self.target }
+    /// Objective to minimize: log cost for configurations that meet the recall target; anything infeasible is worse than every feasible one.
+    pub fn score(&self, idx: usize) -> f64 {
+        let worst = self.cost.iter().cloned().fold(0.0, f64::max).ln();
+        if self.feasible(idx) { self.cost[idx].ln() } else { worst + 1.0 + 20.0 * (self.target - self.recall[idx]) }
+    }
+    pub fn optimum(&self) -> usize { (0..self.n()).filter(|&i| self.feasible(i)).min_by(|&a, &b| self.cost[a].total_cmp(&self.cost[b])).expect("some configuration is feasible") }
+    /// Best feasible cost among the evaluated configurations (infinity if none is feasible).
+    pub fn best_feasible(&self, evaluated: &[usize]) -> f64 { evaluated.iter().filter(|&&i| self.feasible(i)).map(|&i| self.cost[i]).fold(f64::INFINITY, f64::min) }
+    pub fn neighbours(&self, idx: usize) -> Vec<usize> {
+        let pos = self.decode(idx);
+        let mut out = vec![];
+        for d in 0..self.dims() {
+            if pos[d] > 0 { let mut q = pos.clone(); q[d] -= 1; out.push(self.encode(&q)); }
+            if pos[d] + 1 < self.space.values[d].len() { let mut q = pos.clone(); q[d] += 1; out.push(self.encode(&q)); }
+        }
+        out
+    }
+}
+
+// ----------------------------------------------------------------------------------------------- strategies
+
+/// `budget` distinct configurations chosen uniformly at random.
+pub fn random_search(t: &Table, budget: usize, rng: &mut Rng) -> Vec<usize> {
+    let mut all: Vec<usize> = (0..t.n()).collect();
+    for i in (1..all.len()).rev() { all.swap(i, rng.next(i as u64 + 1) as usize); }
+    all.truncate(budget);
+    all
+}
+
+/// Steepest-descent hill climbing on the knob lattice with random restarts. Never evaluates a configuration twice.
+pub fn hill_climb(t: &Table, budget: usize, rng: &mut Rng) -> Vec<usize> {
+    let mut seen: Vec<usize> = vec![];
+    let mut has = vec![false; t.n()];
+    let mut eval = |i: usize, seen: &mut Vec<usize>| { if !has[i] { has[i] = true; seen.push(i); } };
+    while seen.len() < budget && seen.len() < t.n() {
+        let mut cur = rng.next(t.n() as u64) as usize;
+        eval(cur, &mut seen);
+        loop {
+            if seen.len() >= budget { break; }
+            let mut best = (t.score(cur), cur);
+            for nb in t.neighbours(cur) {
+                if seen.len() >= budget && !seen.contains(&nb) { break; }
+                eval(nb, &mut seen);
+                if t.score(nb) < best.0 { best = (t.score(nb), nb); }
+            }
+            if best.1 == cur { break; }
+            cur = best.1;
+        }
+    }
+    seen.truncate(budget);
+    seen
+}
+
+// ----------------------------------------------------------------------------------------------- Gaussian process
+
+/// Lower-triangular Cholesky factor of a symmetric positive-definite matrix (row-major `Vec<Vec<f64>>`).
+pub fn cholesky(a: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
+    let n = a.len();
+    let mut l = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..=i {
+            let s: f64 = (0..j).map(|k| l[i][k] * l[j][k]).sum();
+            if i == j { let d = a[i][i] - s; if d <= 1e-12 { return None; } l[i][j] = d.sqrt(); } else { l[i][j] = (a[i][j] - s) / l[j][j]; }
+        }
+    }
+    Some(l)
+}
+/// Solve `L Lᵀ x = b`.
+pub fn chol_solve(l: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
+    let n = l.len();
+    let mut y = vec![0.0; n];
+    for i in 0..n { y[i] = (b[i] - (0..i).map(|k| l[i][k] * y[k]).sum::<f64>()) / l[i][i]; }
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() { x[i] = (y[i] - (i + 1..n).map(|k| l[k][i] * x[k]).sum::<f64>()) / l[i][i]; }
+    x
+}
+fn forward(l: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
+    let mut y = vec![0.0; l.len()];
+    for i in 0..l.len() { y[i] = (b[i] - (0..i).map(|k| l[i][k] * y[k]).sum::<f64>()) / l[i][i]; }
+    y
+}
+
+pub fn norm_pdf(z: f64) -> f64 { (-0.5 * z * z).exp() / (2.0 * std::f64::consts::PI).sqrt() }
+/// Standard normal CDF (Abramowitz and Stegun 7.1.26 for the error function; absolute error below 1.5e-7).
+pub fn norm_cdf(z: f64) -> f64 {
+    let x = z.abs() / std::f64::consts::SQRT_2;
+    let t = 1.0 / (1.0 + 0.3275911 * x);
+    let poly = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
+    let erf = 1.0 - poly * (-x * x).exp();
+    if z >= 0.0 { 0.5 * (1.0 + erf) } else { 0.5 * (1.0 - erf) }
+}
+/// Expected improvement for minimization over the incumbent `best`, given a Gaussian posterior (mean `mu`, standard deviation `sd`).
+pub fn expected_improvement(mu: f64, sd: f64, best: f64) -> f64 {
+    if sd <= 1e-12 { return (best - mu).max(0.0); }
+    let z = (best - mu) / sd;
+    (best - mu) * norm_cdf(z) + sd * norm_pdf(z)
+}
+
+/// A GP with an RBF kernel on standardized targets.
+pub struct Gp { x: Vec<Vec<f64>>, l: Vec<Vec<f64>>, alpha: Vec<f64>, mean: f64, scale: f64, ls: f64, /// log marginal likelihood of the standardized targets
+    pub lml: f64 }
+fn rbf(a: &[f64], b: &[f64], ls: f64) -> f64 { (-a.iter().zip(b).map(|(p, q)| (p - q) * (p - q)).sum::<f64>() / (2.0 * ls * ls)).exp() }
+impl Gp {
+    pub fn fit(x: &[Vec<f64>], y: &[f64], ls: f64, noise: f64) -> Option<Gp> {
+        let n = y.len();
+        let mean = y.iter().sum::<f64>() / n as f64;
+        let var = y.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / n as f64;
+        let scale = var.sqrt().max(1e-9);
+        let ys: Vec<f64> = y.iter().map(|v| (v - mean) / scale).collect();
+        let k: Vec<Vec<f64>> = (0..n).map(|i| (0..n).map(|j| rbf(&x[i], &x[j], ls) + if i == j { noise } else { 0.0 }).collect()).collect();
+        let l = cholesky(&k)?;
+        let alpha = chol_solve(&l, &ys);
+        let lml = -0.5 * ys.iter().zip(&alpha).map(|(a, b)| a * b).sum::<f64>() - (0..n).map(|i| l[i][i].ln()).sum::<f64>() - 0.5 * n as f64 * (2.0 * std::f64::consts::PI).ln();
+        Some(Gp { x: x.to_vec(), l, alpha, mean, scale, ls, lml })
+    }
+    /// Fit with the length scale (from a small grid) that maximizes the marginal likelihood of the data.
+    pub fn fit_best(x: &[Vec<f64>], y: &[f64], noise: f64) -> Option<Gp> {
+        [0.1, 0.2, 0.35, 0.6, 1.0].iter().filter_map(|&ls| Gp::fit(x, y, ls, noise)).max_by(|a, b| a.lml.total_cmp(&b.lml))
+    }
+    pub fn length_scale(&self) -> f64 { self.ls }
+    /// Posterior mean and standard deviation (in the original units of `y`).
+    pub fn predict(&self, q: &[f64]) -> (f64, f64) {
+        let ks: Vec<f64> = self.x.iter().map(|xi| rbf(xi, q, self.ls)).collect();
+        let mu = ks.iter().zip(&self.alpha).map(|(a, b)| a * b).sum::<f64>();
+        let v = forward(&self.l, &ks);
+        let var = (1.0 - v.iter().map(|a| a * a).sum::<f64>()).max(0.0);
+        (self.mean + mu * self.scale, var.sqrt() * self.scale)
+    }
+}
+
+/// Constrained Bayesian optimization over the discrete table. One GP models log cost, another models recall (both observed for every
+/// evaluated configuration, feasible or not). The next configuration maximizes `EI(log cost over the best feasible) × P(recall >= target)`;
+/// while nothing feasible is known it maximizes the probability of feasibility. `warm` configurations (else random ones) come first.
+pub fn bayes_opt(t: &Table, budget: usize, warm: &[usize], rng: &mut Rng) -> Vec<usize> {
+    let mut seen: Vec<usize> = vec![];
+    let mut has = vec![false; t.n()];
+    for &w in warm.iter().take(budget) { if !has[w] { has[w] = true; seen.push(w); } }
+    while seen.len() < 3.min(budget).min(t.n()) {
+        let i = rng.next(t.n() as u64) as usize;
+        if !has[i] { has[i] = true; seen.push(i); }
+    }
+    while seen.len() < budget.min(t.n()) {
+        let xs: Vec<Vec<f64>> = seen.iter().map(|&i| t.unit(i)).collect();
+        let cost_y: Vec<f64> = seen.iter().map(|&i| t.cost[i].ln()).collect();
+        let rec_y: Vec<f64> = seen.iter().map(|&i| t.recall[i]).collect();
+        let best = seen.iter().filter(|&&i| t.feasible(i)).map(|&i| t.cost[i].ln()).fold(f64::INFINITY, f64::min);
+        let (gc, gr) = (Gp::fit_best(&xs, &cost_y, 1e-4), Gp::fit_best(&xs, &rec_y, 1e-4));
+        let pick = match (gc, gr) {
+            (Some(gc), Some(gr)) => (0..t.n()).filter(|&i| !has[i]).map(|i| {
+                let u = t.unit(i);
+                let (mc, sc) = gc.predict(&u);
+                let (mr, sr) = gr.predict(&u);
+                let pf = if sr <= 1e-9 { (mr >= t.target) as u8 as f64 } else { norm_cdf((mr - t.target) / sr) };
+                let acq = if best.is_finite() { expected_improvement(mc, sc, best) * pf } else { pf };
+                (i, acq, mc)
+            }).max_by(|a, b| a.1.total_cmp(&b.1).then(b.2.total_cmp(&a.2)).then(b.0.cmp(&a.0))).unwrap().0,
+            _ => (0..t.n()).find(|&i| !has[i]).unwrap(),
+        };
+        has[pick] = true;
+        seen.push(pick);
+    }
+    seen
+}
+
+/// Share of the variance of the score that each knob's main effect explains (a one-way ANOVA per knob over the whole table).
+pub fn knob_importance(t: &Table) -> Vec<f64> {
+    let scores: Vec<f64> = (0..t.n()).map(|i| t.score(i)).collect();
+    let mean = scores.iter().sum::<f64>() / scores.len() as f64;
+    let total: f64 = scores.iter().map(|s| (s - mean) * (s - mean)).sum();
+    (0..t.dims()).map(|d| {
+        let levels = t.space.values[d].len();
+        let mut sum = vec![0.0; levels]; let mut cnt = vec![0usize; levels];
+        for i in 0..t.n() { let p = t.decode(i)[d]; sum[p] += scores[i]; cnt[p] += 1; }
+        (0..levels).map(|p| cnt[p] as f64 * (sum[p] / cnt[p] as f64 - mean).powi(2)).sum::<f64>() / total
+    }).collect()
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+```text title="the spaces, rules of thumb, strategies, and transfer"
+exhaustively measured configuration spaces on 3 datasets of 30 000 vectors x 32 dimensions (build + 300 queries per configuration took 44 s in total)
+cost = distance computations per query (deterministic; proportional to query time), constraint: recall@10 >= 0.95
+A: 100 clusters, spread 1.0           IVF  (nlist x nprobe)   91 configs,  54 feasible; optimum nlist=256 nprobe=8 costs 1280 (recall 0.958); median feasible 9055 (7.1x worse); worst feasible 30128; knob importance nlist 7%, nprobe 75%
+A: 100 clusters, spread 1.0           HNSW (M x efC x ef)    112 configs,  57 feasible; optimum M=8 efConstruction=50 ef=50 costs 429 (recall 0.954); median feasible 816 (1.9x worse); worst feasible 3256; knob importance M 39%, efConstruction 2%, ef 43%
+B: 40 tight clusters, spread 0.7      IVF  (nlist x nprobe)   91 configs,  70 feasible; optimum nlist=128 nprobe=3 costs 971 (recall 0.950); median feasible 6105 (6.3x worse); worst feasible 30128; knob importance nlist 14%, nprobe 36%
+B: 40 tight clusters, spread 0.7      HNSW (M x efC x ef)    112 configs,  51 feasible; optimum M=16 efConstruction=100 ef=20 costs 364 (recall 0.952); median feasible 663 (1.8x worse); worst feasible 1142; knob importance M 49%, efConstruction 9%, ef 28%
+C: 200 heavily overlapping clusters   IVF  (nlist x nprobe)   91 configs,  20 feasible; optimum nlist=512 nprobe=128 costs 9661 (recall 0.951); median feasible 30016 (3.1x worse); worst feasible 30128; knob importance nlist 20%, nprobe 75%
+C: 200 heavily overlapping clusters   HNSW (M x efC x ef)    112 configs,  19 feasible; optimum M=16 efConstruction=200 ef=80 costs 1803 (recall 0.951); median feasible 3256 (1.8x worse); worst feasible 5692; knob importance M 51%, efConstruction 3%, ef 43%
+rules of thumb against the optimum
+A: 100 clusters, spread 1.0           IVF: nlist 128, nprobe 8: nlist=128 nprobe=8 cost 2209 recall 0.971 (1.7x the optimum); nlist 256, nprobe 16: nlist=256 nprobe=16 cost 2310 recall 0.979 (1.8x the optimum)
+                                      HNSW: M 16, efC 200, ef 50: cost 776 recall 0.988 (1.8x the optimum); M 16, efC 100, ef 120: cost 1330 recall 0.998 (3.1x the optimum)
+B: 40 tight clusters, spread 0.7      IVF: nlist 128, nprobe 8: nlist=128 nprobe=8 cost 2134 recall 1.000 (2.2x the optimum); nlist 256, nprobe 16: nlist=256 nprobe=16 cost 2243 recall 1.000 (2.3x the optimum)
+                                      HNSW: M 16, efC 200, ef 50: cost 595 recall 0.997 (1.6x the optimum); M 16, efC 100, ef 120: cost 768 recall 1.000 (2.1x the optimum)
+C: 200 heavily overlapping clusters   IVF: nlist 128, nprobe 8: nlist=128 nprobe=8 cost 2049 recall 0.516 (misses the recall target); nlist 256, nprobe 16: nlist=256 nprobe=16 cost 2293 recall 0.575 (misses the recall target)
+                                      HNSW: M 16, efC 200, ef 50: cost 1240 recall 0.879 (misses the recall target); M 16, efC 100, ef 120: cost 2464 recall 0.976 (1.4x the optimum)
+search strategies: mean over 200 random seeds of (best feasible cost found / optimum), and the share of seeds within 5% of the optimum
+dataset                               space                   budget  random search             hill climbing             Bayesian optimization     
+A: 100 clusters, spread 1.0           IVF  (91 configs)            5    4.57x    11% within 5%   11.05x    10% within 5%    4.33x    16% within 5%  
+                                                                  10    2.06x    23% within 5%    6.87x    22% within 5%    1.36x    70% within 5%  
+                                                                  20    1.34x    42% within 5%    1.31x    57% within 5%    1.00x   100% within 5%  
+                                                                  40    1.08x    75% within 5%    1.03x    89% within 5%    1.00x   100% within 5%  
+A: 100 clusters, spread 1.0           HNSW (112 configs)           5    1.96x    12% within 5%    3.30x     8% within 5%    1.59x    10% within 5%  
+                                                                  10    1.38x    22% within 5%    1.99x    20% within 5%    1.18x    16% within 5%  
+                                                                  20    1.16x    43% within 5%    1.08x    48% within 5%    1.03x    74% within 5%  
+                                                                  40    1.06x    65% within 5%    1.02x    83% within 5%    1.00x   100% within 5%  
+B: 40 tight clusters, spread 0.7      IVF  (91 configs)            5    2.73x     4% within 5%    8.57x     6% within 5%    1.94x     7% within 5%  
+                                                                  10    1.64x    11% within 5%    2.08x    20% within 5%    1.14x    34% within 5%  
+                                                                  20    1.25x    20% within 5%    1.17x    33% within 5%    1.00x    99% within 5%  
+                                                                  40    1.08x    42% within 5%    1.04x    64% within 5%    1.00x   100% within 5%  
+B: 40 tight clusters, spread 0.7      HNSW (112 configs)           5    1.69x     2% within 5%    2.00x     6% within 5%    1.54x     6% within 5%  
+                                                                  10    1.38x     7% within 5%    1.53x    16% within 5%    1.17x    30% within 5%  
+                                                                  20    1.22x    14% within 5%    1.14x    44% within 5%    1.00x   100% within 5%  
+                                                                  40    1.13x    30% within 5%    1.04x    76% within 5%    1.00x   100% within 5%  
+C: 200 heavily overlapping clusters   IVF  (91 configs)            5    2.68x     4% within 5%    2.69x     8% within 5%    2.34x     8% within 5%  
+                                                                  10    2.35x     8% within 5%    2.55x     9% within 5%    1.18x    78% within 5%  
+                                                                  20    1.87x    18% within 5%    2.10x    12% within 5%    1.00x   100% within 5%  
+                                                                  40    1.43x    42% within 5%    1.62x    24% within 5%    1.00x   100% within 5%  
+C: 200 heavily overlapping clusters   HNSW (112 configs)           5    2.22x    10% within 5%    2.66x     8% within 5%    1.86x    14% within 5%  
+                                                                  10    1.74x    18% within 5%    2.24x    20% within 5%    1.15x    52% within 5%  
+                                                                  20    1.34x    34% within 5%    1.36x    64% within 5%    1.00x   100% within 5%  
+                                                                  40    1.13x    58% within 5%    1.03x    97% within 5%    1.00x   100% within 5%  
+transfer between workloads: the optimum of dataset A applied to the others, and Bayesian optimization warm-started with A's three best configurations
+dataset                               space                       A's optimum here       BO cold, budget 5       BO warm, budget 5
+B: 40 tight clusters, spread 0.7      IVF                        1.30x the optimum     1.94x, 7% within 5%     1.30x, 0% within 5%
+B: 40 tight clusters, spread 0.7      HNSW                   misses recall (0.940)     1.54x, 6% within 5%     1.22x, 0% within 5%
+C: 200 heavily overlapping clusters   IVF                    misses recall (0.405)     2.34x, 8% within 5%     3.12x, 0% within 5%
+C: 200 heavily overlapping clusters   HNSW                   misses recall (0.645)    1.86x, 14% within 5%     3.16x, 0% within 5%
+feature leakage: 10000 labelled examples (the label is decided by the feature's next value); a threshold classifier on one feature
+trained and evaluated offline with the point-in-time (as-of) join: accuracy 0.585
+trained and evaluated offline with the future-leaking join:       accuracy 0.813   (looks 'better')
+the leaky model served online (only past features exist):         accuracy 0.582   (what production sees)
+```
+
+<ul> <li><strong>The knobs that matter are few and data-dependent.</strong> By main-effect variance: for IVF <code>nprobe</code> explains 36–75% of the variation in (penalized) cost and <code>nlist</code> 7–20%; for HNSW <code>M</code> explains 39–51%, <code>ef</code> 28–43% and <code>efConstruction</code> only 2–9% (it governs build time and quality, not query cost, so a cost-only tuner would wrongly ignore it; tune build cost as a second objective). This is OtterTune's knob-ranking step, computed here by exact ANOVA instead of Lasso.</li> <li><strong>The optimum moves with the data</strong>: IVF is best at <code>nlist=256, nprobe=8</code> on dataset A (1 280 distance computations per query), at <code>nlist=128, nprobe=3</code> on B (971), and needs <code>nlist=512, nprobe=128</code> on C (9 661, a third of the collection scanned). HNSW: <code>M=8, efC=50, ef=50</code> (429) on A, <code>M=16, efC=100, ef=20</code> (364) on B, <code>M=16, efC=200, ef=80</code> (1 803) on C.</li> <li><strong>A random feasible configuration is 6–7× worse than the best for IVF on A and B, 1.8–1.9× for HNSW</strong>: IVF is unforgiving, HNSW is flat near its optimum.</li> <li><strong>Rules of thumb are fine on easy data and fail on hard data.</strong> <code>nlist 128, nprobe 8</code> is 1.7× the optimum on A, 2.2× on B, and <strong>misses the recall target on C (recall 0.516)</strong>; the HNSW setting <code>M 16, efC 200, ef 50</code> is 1.8× and 1.6× the optimum on A and B and misses on C (0.879). A default that meets its target on the data it was developed on silently fails on a harder collection.</li> <li><strong>Bayesian optimization needs a fraction of the evaluations.</strong> With 20 evaluations out of 91 to 112 configurations, BO is within 5% of the optimum in <strong>99–100%</strong> of 200 seeds on five of the six spaces (74% on HNSW dataset A, 100% at 40), against <strong>14–43%</strong> for random search and 12–64% for hill climbing. At 10 evaluations BO is still within 1.2× of the optimum on average on most spaces (1.14×–1.36×), where random search averages 1.4×–2.4×.</li> <li><strong>Hill climbing is fragile under a hard constraint</strong>: at small budgets it averages 6.9×–11× the optimum on IVF dataset A (restarts land in infeasible regions and the penalty gradient is flat), is competitive at 40 evaluations on A and B (1.03×–1.04×), and is the <em>worst</em> strategy on dataset C's IVF space (1.62× at 40), where the feasible region is small (20 of 91) and plateaus trap it.</li> <li><strong>Transfer helps only between similar workloads.</strong> Dataset A's optimum applied to B costs 1.30× the optimum for IVF and <strong>misses the recall target</strong> for HNSW (0.940); on C it misses badly (IVF 0.405, HNSW 0.645). Warm-starting BO with A's three best configurations improves the five-evaluation result on B (1.30× against 1.94× cold for IVF, 1.22× against 1.54× for HNSW) but makes it <strong>worse on C</strong> (3.12× against 2.34×, 3.16× against 1.86×): the prior points sit in the wrong region. This is why OtterTune first <em>maps</em> the new workload to the most similar known one by its metrics and only then reuses data.</li> <li><strong>Feature leakage inflates the offline score by 23 points</strong>: a classifier trained and evaluated with the future-leaking join reaches accuracy 0.813; with the point-in-time (as-of) join the same task gives 0.585; served online, where only past features exist, the leaky model scores 0.582, no better than the honest one. The as-of join of <a href="/cookbook/p/time-series-databases">S1</a> is the fix, and the test checks that it never returns a value from after the label time or from another user.</li> </ul>
+
+<aside data-call="note"><b>The tabular-benchmark trick</b><p>Measuring every configuration is only possible because the spaces are small. The point is methodological: it makes strategies comparable across hundreds of random seeds at zero cost, with a known optimum, and it separates <em>tuner quality</em> from <em>evaluation noise</em>. In production the opposite holds (large space, few noisy evaluations), so use the tabular result to choose and configure the tuner, then validate it on the real system with repeated measurements.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A GP in ~60 lines of safe Rust</strong>: <code>Vec&lt;Vec&lt;f64&gt;&gt;</code> kernel matrix, a hand-written Cholesky (<code>Option</code> return, <code>None</code> when not positive definite) and two triangular solves; the posterior variance is <code>1 − vᵀv</code> with <code>v = L⁻¹ k*</code>. A small noise term (<code>1e-4</code> on standardized targets) keeps the factorization stable. Production code would use <code>nalgebra</code> or <code>faer</code>, but the algebra fits in a page and is easy to test.</li> <li><strong>Float discipline</strong>: <code>f64::total_cmp</code> for every comparison and sort (NaNs get a place instead of a panic), explicit tie-breaks (<code>then(b.cmp(&amp;a))</code>) so tuners are deterministic for a seed, and <code>max_by</code>/<code>min_by</code> on iterators instead of manual loops.</li> <li><strong>Mixed-radix indexing</strong> (<code>encode</code>/<code>decode</code>) turns a multi-knob configuration into one <code>usize</code>, so visited-sets are <code>Vec&lt;bool&gt;</code> and results are plain index vectors; neighbours are computed by changing one digit.</li> <li><strong>Lazy, shared tables with <code>OnceLock</code></strong>: building six real tables takes 44 s, so the tests compute them once (<code>static T: OnceLock&lt;…&gt;</code>) and every test reads them; <code>par_map</code> from <a href="/cookbook/p/vector-databases">S2</a> parallelizes ground truth.</li> <li><strong>Closures as surfaces</strong>: <code>synth(|knobs| (cost, recall), values, target)</code> builds a table from a function, which is how the tuners are tested against surfaces with known optima (a smooth bowl, a trap where the cheapest configurations are infeasible) without touching the expensive real tables.</li> <li><strong>No global state in tuners</strong>: every strategy takes <code>&amp;Table</code>, a budget and an <code>&amp;mut Rng</code> and returns the visited configurations in order; comparing them is a loop over seeds.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Numerics</strong>: Cholesky factors reproduce the matrix and solve <code>A x = b</code> for random SPD matrices of sizes 1–12, and refuse an indefinite matrix; the normal CDF matches reference values (to 2e-6), the density matches; expected improvement is never negative, grows with uncertainty and with a better mean, equals the certain gain when the deviation is zero, and agrees with a 200 000-sample Monte Carlo estimate.</li> <li><strong>The GP</strong>: it interpolates six training points to within 0.01 with near-zero deviation there, is moderately confident between them, and is far less confident at a distant point; the length scale chosen by marginal likelihood is larger for smooth data than for rapidly oscillating data.</li> <li><strong>Tables</strong>: encode/decode round trip; scaled knob values lie in [0, 1] and geometric knob values are evenly spaced on the log scale; the optimum is feasible and minimal among feasible configurations; every infeasible configuration scores worse than every feasible one; neighbour counts at corners and interior; knob importance gives a dominant additive knob more than 95% and an irrelevant one under 2%.</li> <li><strong>Strategies</strong>: lengths equal <code>min(budget, n)</code> for budgets 1–500, no configuration is evaluated twice, every strategy finds the optimum when the budget covers the table, warm-start configurations are used first and in order.</li> <li><strong>Performance properties</strong>: on a smooth 144-configuration surface BO lands within 25% of the optimum in 12 evaluations in at least 60 of 100 seeds and beats random search by at least 20; on a table where the cheapest configurations are infeasible, constrained BO finds the boundary optimum with 6 evaluations in at least 70% of 200 seeds, 40 more than random search.</li> <li><strong>Real tables</strong>: an IVF probing every list scans every vector and has recall 1.0.</li> <li><strong>Leakage</strong>: the as-of join never returns a feature after the label time or for another user, and the leaky join inflates offline accuracy by more than 0.15 while the online score of the leaky model stays within 0.03 of the honest one.</li> <li><strong>Mutants run against these tests</strong>: EI with the wrong sign; the normal CDF flipped for negative arguments; Cholesky without the division; posterior variance with the wrong sign; the length scale of lowest marginal likelihood chosen; BO choosing the lowest acquisition value; BO ignoring the probability of feasibility (<strong>survived the unconstrained smooth-surface test; killed by the trap table</strong>); linear instead of logarithmic knob scaling; importance not normalized; random search repeating configurations; the optimum ignoring the constraint; neighbours missing (all killed). One mutant (hill climbing with a loop bound of <code>budget + 1</code>) is equivalent because the result is truncated to the budget.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>OtterTune</strong> (CMU spin-off; Van Aken et al., SIGMOD 2017) collects the DBMS's internal metrics, prunes them (factor analysis and clustering), ranks knobs (Lasso), maps the target workload to a similar past one, and recommends configurations with a GP, with a repository of past tuning sessions as the transferable asset; later work added deep-learning variants and safety.</li> <li><strong>CDBTune, QTune</strong> (deep reinforcement learning on cloud databases) and <strong>BestConfig, iTuned</strong> (search and sampling) are the other published families; evaluations of them (Zhang et al., VLDB 2022, "An Experimental Evaluation of Database Knob Tuning") find that surrogate-model-based methods with good knob selection are the most sample-efficient and that most of the gain comes from a few knobs.</li> <li><strong>Akamas</strong> applies the same loop across the stack (database, JVM, containers, OS) with explicit goals and constraints and a staging environment; <strong>Alibaba</strong> describes domain-knowledge-augmented tuning, combining DBA rules (bounds, dependencies, known good regions) with learning to cut the search space and guard safety.</li> <li><strong>Cloud databases</strong> increasingly tune automatically (Aurora and Azure SQL auto-tuning of indexes and some parameters, Oracle autonomous databases), usually conservatively: bounded knob ranges, shadow testing, and rollback on regression.</li> <li><strong>PostgresML</strong> exposes <code>pgml.train</code>, <code>pgml.predict</code> and embedding functions inside PostgreSQL, with models loaded in the database process or a companion service, trading data movement for operational coupling; <strong>feature stores</strong> (Feast, Tecton, FeatureForm, Databricks Feature Store) define features once, materialize them offline (warehouse) and online (key-value store) and join them <strong>point-in-time</strong>; <strong>FeatureBase</strong> pursues fast feature analytics with bitmap indexes.</li> <li><strong>Index advisors</strong> (PostgreSQL's <code>hypopg</code>, SQL Server's Database Engine Tuning Advisor, Db2's Design Advisor, research systems such as AutoAdmin and Dexter) are the older, rule-and-cost-based form of automated physical design; they evaluate candidate indexes with <em>what-if</em> optimizer calls instead of real runs.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Never tune on production.</strong> An unproven configuration can crash or stall the system. Tune on a clone with a replayed workload, then roll out gradually with automatic rollback.</li> <li><strong>Noise masks the signal.</strong> Repeat measurements, report the median and an interval, and warm up caches; a tuner that chases noise will "find" configurations that are not better. The lab's deterministic cost metric avoids this; real latency does not.</li> <li><strong>Optimizing one metric moves another</strong>: lowering latency by raising <code>ef</code> or <code>nprobe</code> raises CPU; a bigger buffer pool lowers I/O and raises restart time. State constraints explicitly (as the recall target here) and track the secondary metrics.</li> <li><strong>A tuned configuration can be fragile</strong>: the best point sits at the edge of the feasible region (recall 0.951 against a target of 0.95 for several optima above). Leave a safety margin or tune against a held-out query set, because tomorrow's queries will differ.</li> <li><strong>Transfer can hurt.</strong> Reusing data from a dissimilar workload (negative transfer: 3.1× against 2.3× above) is worse than starting cold. Measure workload similarity before reuse, and fall back to cold start when it is low.</li> <li><strong>Knob dependencies and hard limits</strong>: some settings multiply (memory per connection × connections), some need restarts, some are bounded by hardware. Encode them as constraints or as a feasibility oracle, not as penalties the optimizer discovers by crashing.</li> <li><strong>Don't tune a moving target once</strong>: workloads drift; schedule re-tuning, detect drift (query mix, data distribution) and keep the previous configuration as a rollback.</li> <li><strong>Rules of thumb are defaults, not guarantees</strong>: verify every default against the recall (or latency) target on your own data (the <code>nlist 128, nprobe 8</code> default missed the target on the hardest dataset).</li> <li><strong>Feature joins must be point-in-time.</strong> Any join of labels with "the latest" features, aggregates computed after the label time, or training windows that overlap the evaluation window leaks the future. Test pipelines with a time-shifted holdout and check that every feature timestamp precedes its label timestamp.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Automatic Database Management System Tuning Through Large-scale Machine Learning"
+url = "https://db.cs.cmu.edu/papers/2017/p1009-van-aken.pdf"

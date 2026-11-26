@@ -1,0 +1,13 @@
+// passes: ssa,sccp,out-of-ssa
+// `x` stays 1 around the loop. Plain constant propagation meets 1 with the back edge's
+// value and gives up; SCCP never marks the `x != 1` arm executable, so `x` stays constant.
+fn main() {
+    let n = len("abc");
+    let mut x = 1;
+    let mut i = 0;
+    while i < n {
+        if x != 1 { x = 2; }
+        i += 1;
+    }
+    println(to_str(x));
+}

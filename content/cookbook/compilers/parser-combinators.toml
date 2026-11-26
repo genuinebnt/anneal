@@ -1,0 +1,38 @@
+title = "Hand-written parser combinators"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 566
+kind = "recipe"
+lede = "Small functions that compose into a parser."
+level = "intermediate"
+code = ["examples/text_and_parsing/parser_combinators.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>config/DSL fragments</li><li>durations ("1h30m")</li><li>ids</li><li>anywhere regex is too weak and a full grammar is too heavy</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>durations/sizes/versions in configs</li><li>small DSL fragments</li><li>anything regex handles badly</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Idea: a parser is `fn(&str) -> Option<(value, rest_of_input)>`. Tiny parsers (digits, a unit) combine with sequencing (`?` chains) and repetition (`many1`) into bigger ones. Errors: `None` = "does not match here".
+
+This is exactly the model of the `nom` crate <https://github.com/rust-bakery/nom> and `winnow` <https://github.com/winnow-rs/winnow>  (read their docs after writing your own once).
+"""
+
+[[sources]]
+title = "github.com/rust-bakery/nom"
+url = "https://github.com/rust-bakery/nom"
+
+[[sources]]
+title = "github.com/winnow-rs/winnow"
+url = "https://github.com/winnow-rs/winnow"

@@ -1,0 +1,33 @@
+title = "Performance: data layout, SIMD, threads and lock-free structures"
+module = "Performance and systems"
+module_order = 7
+chapter = "Measuring and CPU performance"
+chapter_order = 1
+order = 272
+kind = "guide"
+lede = "Measure first, then change data layout, then algorithms. Parallelism comes last, and lock-free code only when the profiler shows you need it."
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p class="cb-g-deep"><b>Deep dives</b> <a href="/cookbook/p/jit-compilation">24 · JIT compilation</a> <a href="/cookbook/p/algorithms-and-concurrency-in-code">36 · Algorithms in code</a> <a href="/cookbook/p/loop-optimization-and-vectorization">16 · Loops and vectorization</a> <a href="/cookbook/p/gpu-and-accelerator-compilation">21 · GPUs and accelerators</a> <a href="/cookbook/p/benchmarking-compilers">28 · Benchmarking compilers</a></p>
+
+<div class="cb-g-tip"><h3>Measure</h3> <p>Use <code>hyperfine</code> for whole programs and <code>criterion</code> or <code>divan</code> for microbenchmarks. Callgrind-based benchmarks (<code>iai-callgrind</code>) count instructions and are stable enough for CI; rustc's perf.rust-lang.org tracks instruction counts the same way. Use <code>samply</code> or <code>perf</code> for profiles, <code>perf stat</code> for IPC, cache and branch misses, and <code>cargo-show-asm</code> or Compiler Explorer to check the generated code.</p></div>
+
+<div class="cb-g-tip"><h3>Data-oriented design <span class="cb-g-src"><span>oxc</span><span>rustc</span><span>Zig compiler</span></span></h3> <p>Use <code>u32</code> indices instead of pointers, and struct-of-arrays for hot fields. Keep enums small by boxing large variants and asserting sizes. Use arenas instead of many <code>Box</code>es, <code>SmallVec</code> or <code>ThinVec</code> for short lists, and interning instead of repeated strings. Andrew Kelley's talk on data-oriented design in the Zig compiler shows the gains.</p></div>
+
+<div class="cb-g-tip"><h3>Build settings</h3> <p>Set <code>lto = "fat"</code> and <code>codegen-units = 1</code>. Try <code>panic = "abort"</code>, <code>-C target-cpu=native</code>, and a faster allocator such as <code>mimalloc</code>. Profile-guided optimization works through <code>cargo-pgo</code>, and BOLT goes further; rustc itself ships with both.</p></div>
+
+<div class="cb-g-tip"><h3>Interpreter and VM speed</h3> <p>Techniques, roughly in order of payoff:</p> <ul> <li>Superinstructions and quickening, as in CPython 3.11's specializing adaptive interpreter.</li> <li>Inline caches and hidden classes (shapes) for property access.</li> <li>A register-based bytecode instead of a stack VM, as Lua 5 uses.</li> <li>NaN boxing.</li> <li>Tail-call dispatch with <code>become</code> (nightly <code>explicit_tail_calls</code>).</li> <li>JITs: copy-and-patch as in CPython 3.13, tracing as in LuaJIT and PyPy, or a Cranelift method JIT.</li> </ul></div>
+
+<div class="cb-g-tip"><h3>SIMD and SWAR</h3> <p>Check whether LLVM already vectorized your loop before writing intrinsics. <code>std::arch</code> gives platform intrinsics, and <code>std::simd</code> (nightly) gives portable vectors. SWAR (SIMD within a register) packs bytes into a <code>u64</code> and uses bit tricks from <em>Hacker's Delight</em> to find a byte, count newlines or classify characters without SIMD registers. simdjson's techniques for classifying characters and tracking quotes apply to lexers too.</p></div>
+
+<div class="cb-g-tip"><h3>Multithreading</h3> <p>Use <code>rayon</code> for data parallelism (rustc's parallel front end is <code>-Z threads</code>), <code>std::thread::scope</code> for borrowing threads, and <code>crossbeam-channel</code> for message passing (std's <code>mpsc</code> is based on it). Use <code>parking_lot</code> locks, and <code>CachePadded</code> to avoid false sharing. Work-stealing schedulers use Chase–Lev deques (<code>crossbeam-deque</code>). The mold linker is a good example of a tool rebuilt around parallelism.</p></div>
+
+<div class="cb-g-tip"><h3>Lock-free data structures</h3> <p>Start with atomics and memory ordering (Relaxed, Acquire/Release, SeqCst), the ABA problem, and the difference between lock-free and wait-free. Classic structures: the Treiber stack, the Michael–Scott queue, SPSC ring buffers (<code>rtrb</code>), seqlocks, and concurrent hash maps (<code>papaya</code> is lock-free; <code>dashmap</code> uses sharded locks). Freed memory needs a reclamation scheme: epochs, hazard pointers or RCU, covered in the <a href="/cookbook/p/graph-algorithms-gc-and-life-without-gc">memory</a> section.</p></div>
+
+<div class="cb-g-tip"><h3>Testing concurrent code</h3> <p><code>loom</code> exhaustively explores thread interleavings and weak-memory behavior for small tests. <code>shuttle</code> explores them randomly for larger ones. Miri detects data races and undefined behavior. ThreadSanitizer (<code>-Zsanitizer=thread</code>) catches races in full runs.</p></div>
+
+<p><b>Build it.</b> Parallelize the golden runner with rayon. Add a SWAR fast path to the lexer for skipping whitespace and comments, and measure it against the scalar version with <code>criterion</code>. Then move clox's GC marking onto a second thread with a lock-free work queue, and test it with <code>loom</code>.</p>
+"""

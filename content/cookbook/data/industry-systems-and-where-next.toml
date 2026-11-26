@@ -1,0 +1,87 @@
+title = "Industry systems and where next"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 430
+kind = "guide"
+lede = "guest-talk lecture · lakehouse and Photon · ClickHouse's MergeTree · warehouse engines on modern hardware · relational knowledge graphs · how the course maps to the rest of this guide"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>The last lecture of the course is a showcase: practitioners from several vendors describe how a real system differs from the textbook one. There is no reading from the course for it, so this section records the <strong>public design ideas of each system</strong> (with papers and docs to confirm details) and then turns the whole of Part I into a map of what to study next.</p>
+
+### Key ideas
+
+<ul> <li><strong>Real systems are the textbook components, specialised.</strong> Every system below is a different answer to <em>the same five questions</em>: how is data laid out, how is it indexed, how is a query executed, how are updates made safe, how does it scale out.</li> <li><strong>Lakehouse</strong>: keep data in <strong>open columnar files</strong> (Parquet) on cheap <strong>object storage</strong>, and add a <strong>transaction log / table format</strong> (Delta Lake, Apache Iceberg, Apache Hudi) so it behaves like a database table: ACID commits by atomically appending a log entry, snapshot reads, time travel, schema evolution, and data skipping via per-file min/max statistics.</li> <li><strong>Photon-style engines</strong>: a <strong>vectorized, native (C++) execution engine</strong> under a Spark-compatible planner: batch-at-a-time operators, SIMD-friendly kernels, adaptive runtime decisions: the course's "vectorization vs compilation" trade-off, settled for vectorization on operational grounds (easier to build, profile and debug).</li> <li><strong>ClickHouse</strong>: <strong>MergeTree</strong> tables are sets of immutable, <strong>sorted parts</strong> merged in the background (an LSM-style write path), each column stored and compressed separately with a <strong>sparse primary index</strong> (one entry per granule of ~8 192 rows), vectorized execution, and aggressive pre-aggregation (materialized views, projections).</li> <li><strong>Warehouse engines built for flash and large memories</strong>: tune the buffer/cache hierarchy to NVMe bandwidth, scan columnar data with SIMD, and keep the PostgreSQL wire protocol and dialect for compatibility.</li> <li><strong>Relational knowledge graphs / relational AI</strong>: use the relational model as the single abstraction for graph, logic and analytics, with <strong>worst-case optimal joins</strong>, incremental view maintenance and a declarative language over relations.</li> <li><strong>Takeaway</strong>: the winning designs <strong>separate storage from compute</strong>, keep <strong>open formats</strong>, make <strong>the execution engine vectorized and the optimizer adaptive</strong>, and treat <strong>the log</strong> as the source of truth.</li> </ul>
+"""
+
+[[sections]]
+heading = "What these systems add to the course's building blocks"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Course topic</th> <th>Lakehouse (Delta / Iceberg)</th> <th>ClickHouse</th> <th>Photon-like engine</th> </tr> </thead> <tbody> <tr> <td>Storage (<a href="/cookbook/p/pages-and-tuples">L03</a>, <a href="/cookbook/p/storage-models-and-compression">L06</a>)</td> <td>Parquet files + manifest/log on object storage</td> <td>MergeTree parts, per-column files with codecs (LZ4/ZSTD, delta, double-delta, Gorilla)</td> <td>reads Parquet/Delta, caches hot columns</td> </tr> <tr> <td>Indexing (<a href="/cookbook/p/b-trees">L08</a>–<a href="/cookbook/p/filters-tries-inverted-and-vector-indexes">L09</a>)</td> <td>file- and row-group min/max + Bloom filters; Z-order / clustering</td> <td><strong>sparse primary index</strong> (marks per granule), skip indexes</td> <td>data skipping from table statistics</td> </tr> <tr> <td>Logging, recovery (<a href="/cookbook/p/logging">L21</a>–<a href="/cookbook/p/crash-recovery-aries">L22</a>)</td> <td><strong>the transaction log is the table</strong>; commit = atomic put-if-absent of the next log file</td> <td>immutable parts + atomic part swap; replicas coordinate via a log (Keeper)</td> <td>n/a: storage layer owns it</td> </tr> <tr> <td>Concurrency (<a href="/cookbook/p/concurrency-control-theory">L17</a>–<a href="/cookbook/p/multi-version-concurrency-control">L20</a>)</td> <td><strong>optimistic</strong> concurrency on the log with conflict checks; snapshot isolation by reading a log version</td> <td>eventual per-part visibility; mutations rewrite parts</td> <td>snapshot at the table version</td> </tr> <tr> <td>Execution (<a href="/cookbook/p/query-execution">L13</a>–<a href="/cookbook/p/parallel-execution">L14</a>)</td> <td>engine-agnostic</td> <td>vectorized, parallel over parts and granules</td> <td>vectorized native engine with adaptive decisions</td> </tr> <tr> <td>Distribution (<a href="/cookbook/p/distributed-databases-i">L23</a>–<a href="/cookbook/p/distributed-databases-ii">L24</a>)</td> <td>shared <strong>storage</strong>, stateless compute</td> <td>shards × replicas, distributed tables</td> <td>cluster scheduler, shuffle and broadcast</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "A table format in one picture"
+body = """
+```text
+object store:   table/
+                  _log/00000.json   add file a.parquet(min,max,rows) add file b.parquet(...)
+                  _log/00001.json   remove a.parquet, add c.parquet            ← a "commit"
+                  _log/00002.json   ...
+                  a.parquet  b.parquet  c.parquet                              ← immutable data files
+
+commit protocol:  write data files (anywhere), then atomically create _log/N+1 if it doesn't exist
+                  (put-if-absent / rename). If it exists, another writer won: re-read the new log entries,
+                  check conflicts (did they touch files I read or rewrote?), retry or abort.
+snapshot read:    pick a log version V, replay actions ≤ V ⇒ the exact file list; prune files by min/max.
+time travel:      read version V−k. Vacuum deletes files no retained version references (garbage collection, [L20](#l20)).
+```
+
+<p>Every box is a concept from Part I: <strong>MVCC</strong> (versions of the file list), <strong>OCC</strong> (validate at commit), <strong>WAL</strong> (the log <em>is</em> the database), <strong>zone maps/data skipping</strong> (min/max per file), <strong>garbage collection</strong> with a retention horizon.</p>
+"""
+
+[[sections]]
+heading = "Where the course leaves off, and where this guide goes"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>What Part I covered</th> <th>What it left out</th> <th>Where it is</th> </tr> </thead> <tbody> <tr> <td>Single-node row store, B+Tree, hash, buffer pool</td> <td>Latch-free structures, tries, larger-than-memory</td> <td>Part II (OLTP half)</td> </tr> <tr> <td>Volcano and vectorized execution, hash/sort joins</td> <td>SIMD, JIT compilation, WCOJ, scheduling, modern formats</td> <td>Part II (OLAP half)</td> </tr> <tr> <td>Rule-based and cost-based optimization</td> <td>Cascades, unnesting, statistics at scale, learned components</td> <td>Part III</td> </tr> <tr> <td>MVCC, 2PL, OCC, ARIES</td> <td>Recovery protocols for in-memory DBMSs, deterministic CC</td> <td>Part II</td> </tr> <tr> <td>2PC, Paxos, partitioning, distributed joins</td> <td>Raft in full, geo-replication, CRDTs, distributed MVCC</td> <td>Part V</td> </tr> <tr> <td>SQL and relational model</td> <td>Graph, vector, document, time-series, streaming</td> <td>Part IV, Part V</td> </tr> </tbody> </table></div>
+"""
+
+[[sources]]
+title = "Delta Lake: High-Performance ACID Table Storage over Cloud Object Stores"
+url = "https://www.vldb.org/pvldb/vol13/p3411-armbrust.pdf"
+
+[[sources]]
+title = "Lakehouse: A New Generation of Open Platforms that Unify Data Warehousing and Advanced Analytics"
+url = "https://www.cidrdb.org/cidr2021/papers/cidr2021_paper17.pdf"
+
+[[sources]]
+title = "Photon: A Fast Query Engine for Lakehouse Systems"
+url = "https://dl.acm.org/doi/10.1145/3514221.3526054"
+
+[[sources]]
+title = "Apache Iceberg spec"
+url = "https://iceberg.apache.org/spec/"
+
+[[sources]]
+title = "Delta transaction log protocol"
+url = "https://github.com/delta-io/delta/blob/master/PROTOCOL.md"
+
+[[sources]]
+title = "ClickHouse: Lightning Fast Analytics for Everyone"
+url = "https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf"
+
+[[sources]]
+title = "MergeTree"
+url = "https://clickhouse.com/docs/en/engines/table-engines/mergetree-family/mergetree"
+
+[[sources]]
+title = "Leapfrog Triejoin"
+url = "https://arxiv.org/abs/1210.0481"
+
+[[sources]]
+title = "Database Building Blocks / Quarantine / ¡Databases! talk series"
+url = "https://db.cs.cmu.edu/seminar/"

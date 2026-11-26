@@ -1,0 +1,50 @@
+title = "Generative graphics"
+module = "Complete projects"
+module_order = 13
+chapter = "Graphics"
+chapter_order = 2
+order = 663
+kind = "recipe"
+lede = "Fractals, noise, L-systems, cellular automata, reaction-diffusion, contours."
+level = "intermediate"
+code = ["examples/graphics/fractals_noise_automata.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>procedural textures and terrain</li><li>game worlds</li><li>generative art</li><li>simulation toys</li><li>map contouring</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+MANDELBROT: iterate z -> z&#94;2 + c from z=0; c is in the set if &#124;z&#124; stays bounded. **Smooth colouring** removes the visible bands of integer escape counts: mu = n + 1 - log2(ln&#124;z_n&#124;) is continuous. Points in the main **cardioid** or the period-2 **bulb** never escape, so a closed-form test skips their (max-iteration) work; we assert identical results.
+
+PERLIN (gradient) noise: random unit gradients on lattice points, dot with the offset vector, blend with the quintic fade 6t&#94;5-15t&#94;4+10t&#94;3 (zero first **and** second derivative at lattice points). It is 0 at the lattice, bounded by sqrt(2)/2 in 2D, deterministic from a seed, and **continuous**.
+
+**Value** noise interpolates random lattice values instead. fBm sums octaves: frequency x2, amplitude x0.5 each. WORLEY noise: one random feature point per cell; F1/F2 are the distances to the nearest/second nearest point, so only the 3x3 neighbouring cells need checking.
+
+L-SYSTEMS: parallel string rewriting then a **turtle** (F forward, +/- turn, [ ] push/pop state); fit to the canvas using the bounding box. **Life**: a cell lives with 3 neighbours, or survives with 2. **Elementary ca**: the next cell is bit (4l+2c+r) of the rule number; Rule 90 = left XOR right = Pascal's triangle mod 2 = Sierpinski triangle.
+
+GRAY-SCOTT: du = Du lap(u) - u v&#94;2 + F(1-u), dv = Dv lap(v) + u v&#94;2 - (F+k) v. **Marching squares**: classify each grid cell's 4 corners as above/below the level (16 cases), interpolate the crossing on each edge; every crossing edge is shared by exactly two cells, so contours close (we pad the field below the level to guarantee no open ends).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>games (terrain, caves, clouds, textures from noise)</li><li>film VFX (procedural materials)</li><li>GIS (contour lines, isobars)</li><li>medical imaging (iso-surfaces use marching cubes, the 3D cousin)</li><li>generative art</li><li>biology/chemistry toy models</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://www.redblobgames.com/> and <https://github.com/ssloy/tinyrenderer/wiki>
+"""
+
+[[sources]]
+title = "redblobgames.com"
+url = "https://www.redblobgames.com/"
+
+[[sources]]
+title = "github.com/ssloy/tinyrenderer/wiki"
+url = "https://github.com/ssloy/tinyrenderer/wiki"

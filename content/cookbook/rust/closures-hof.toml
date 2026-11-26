@@ -1,0 +1,45 @@
+title = "Closures and higher-order functions"
+module = "Rust language"
+module_order = 1
+chapter = "Everyday language"
+chapter_order = 3
+order = 22
+kind = "recipe"
+lede = "Fn / FnMut / FnOnce, returning closures, callbacks."
+level = "simple"
+code = ["examples/language/closures_hof.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>task handlers</li><li>retry wrappers</li><li>middleware</li><li>event callbacks</li><li>sort keys</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>callbacks</li><li>middleware</li><li>retry wrappers</li><li>sort keys</li><li>event handlers</li><li>lazy defaults</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+A closure captures variables from its environment. The compiler picks the weakest trait that fits:
+
+```text
+Fn      only reads captured data     -> can be called many times, even concurrently
+FnMut   mutates captured data        -> needs `mut`, many times, not concurrently
+```
+
+FnOnce  consumes captured data       -> can be called once `move` forces capture by value (needed when a closure outlives its scope, e.g. `thread::spawn`).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/book/ch13-01-closures.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch13-01-closures.html"
+url = "https://doc.rust-lang.org/book/ch13-01-closures.html"

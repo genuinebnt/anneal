@@ -1,0 +1,64 @@
+title = "Concurrent hash map designs"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Concurrent data structures"
+chapter_order = 3
+order = 256
+kind = "recipe"
+lede = "Lock striping, per-bucket RwLock, seqlock readers, incremental resize."
+level = "advanced"
+code = ["examples/concurrency/concurrent_hashmap_designs.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>choosing a shared cache/registry/session-table design</li><li>explaining why <code>Mutex&lt;HashMap&gt;</code> stops scaling</li><li>interviews on dashmap/ConcurrentHashMap</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+in-process caches, connection/session registries, memoisation tables, metrics registries; Java's `ConcurrentHashMap`, Rust's `dashmap` (striped RwLocks), Linux `rhashtable` (incremental resize) and Go's `sync.Map` solve the same problem with different trade-offs.
+
+Course: CMU 15-445 (hash tables lecture) for the single-threaded part; Herlihy &amp; Shavit, "The Art of Multiprocessor Programming" ch. 13 (concurrent hashing) for the rest.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+five designs behind one `ConcMap` trait, verified the same way:
+
+1. `Global`   : `Mutex<HashMap>`. One lock = the baseline. Correct, but every operation serialises.
+2. `Striped`  : N independent `Mutex<HashMap>` shards chosen by hash. Contention drops &#126;N-fold when keys spread.
+3. `RwBuckets`: fixed bucket array, each bucket its own `RwLock<Vec<(k,v)>>`. Readers of one bucket do not block each other.
+4. `SeqMap`   : writers take a per-stripe mutex and bump a version counter (odd = write in progress); readers take NO lock: read version, read slots, re-read version, retry if it changed (a seqlock). Slots are atomics so a racing read is defined behaviour (a torn &#42;snapshot&#42; is possible, a torn &#42;word&#42; is not) and the version check discards torn snapshots.
+5. `GrowMap`  : chained table that doubles **without** a stop-the-world rehash: the old table is drained a few buckets per operation (the idea behind Redis's dict rehash and Linux rhashtable). We measure the worst per-operation pause. **Not** built (described): split-ordered lists (Shalev &amp; Shavit).
+
+   Keep **one** lock-free sorted linked list of all items, ordered by the bit-**reversed** hash; buckets are just shortcut pointers (dummy nodes) into that list. Doubling the table then only adds new shortcuts; no item ever moves, which is what makes lock-free resizing possible.
+
+   **Why** hash then mask: `h & (n-1)` needs n a power of two; we mix keys with splitmix64 first because sequential ints would otherwise map to neighbouring buckets (and, with striping, to the same stripe pattern).
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+(a) 8-thread stress with exact totals (disjoint inserts, contended `add`, removes); (b) a Wing-Gong style **linearizability** checker: record (invoke, return, op, result) with a global ticket counter for random 3-thread histories on a tiny key space, then search for a sequential order that respects real-time order and the map's sequential spec; (c) the checker itself is tested on a hand-made non-linearizable history so we know it can say "no".
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Herlihy &amp; Shavit, The Art of Multiprocessor Programming (ch. 13)</li><li>Shalev &amp; Shavit, "Split-Ordered Lists: Lock-Free Extensible Hash Tables" (JACM 2006, title only, not re-read)</li></ul>
+
+<ul class="cb-g-reading"><li>Wing &amp; Gong, "Testing and Verifying Concurrent Objects" (1993, title only)</li><li>Boehm, "Can Seqlocks Get Along with Programming Language Memory Models?" (title only)</li></ul>
+
+<https://docs.rs/dashmap/latest/dashmap/> and <https://www.1024cores.net/>
+"""
+
+[[sources]]
+title = "docs.rs/dashmap/latest/dashmap"
+url = "https://docs.rs/dashmap/latest/dashmap/"
+
+[[sources]]
+title = "1024cores.net"
+url = "https://www.1024cores.net/"

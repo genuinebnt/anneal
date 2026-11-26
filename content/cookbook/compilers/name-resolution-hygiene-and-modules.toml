@@ -1,0 +1,106 @@
+title = "Name resolution, hygiene and modules"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Types and semantics"
+chapter_order = 4
+order = 606
+kind = "guide"
+lede = "rustc rustc_resolve, Racket's expander, ML modules · Builds on the jlox resolver"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>Name resolution maps every use of a name to a definition. Real languages add complications the jlox resolver didn't have:</p>
+
+<ul> <li><b>Several namespaces.</b> Rust has separate type, value and macro namespaces, so <code>struct S;</code> defines both a type and a value.</li> <li><b>Order-independent items.</b> Functions and types are visible throughout their scope, but locals only after they're declared. That needs two phases: collect item definitions, then resolve bodies.</li> <li><b>Imports and globs,</b> which can depend on each other and must be resolved to a fixed point, with ambiguity errors.</li> <li><b>Type-dependent names.</b> <code>x.len()</code> can't be resolved until <code>x</code>'s type is known. rustc resolves paths early and leaves method calls to type checking, where it probes autoderef steps.</li> <li><b>Hygiene,</b> so that names introduced by macros don't capture or get captured by user names.</li> </ul>
+
+<p>rustc's resolver walks scopes as a stack of <em>ribs</em>. Each rib is a map for one scope kind: a block, a function's parameters, a generic parameter list, or a boundary that stops locals from being visible inside nested items.</p>
+
+```rust title="Two-phase resolver with ribs and suggestions"
+pub struct Resolver<'a> {
+    ribs: Vec<Rib<'a>>,
+    pub res: HashMap<NodeId, DefId>,         // output: each use site → its definition
+    pub errors: Vec<Diagnostic>,
+}
+
+struct Rib<'a> { names: HashMap<&'a str, DefId>, kind: RibKind }
+#[derive(PartialEq)]
+enum RibKind { Block, Fn, Item /* locals of outer functions are not visible past this */ }
+
+impl<'a> Resolver<'a> {
+    fn block(&mut self, stmts: &'a [Stmt]) {
+        self.ribs.push(Rib { names: HashMap::new(), kind: RibKind::Block });
+        // Phase 1: items are visible everywhere in the block, before their definition.
+        for s in stmts {
+            if let Stmt::Fun(f) = s { self.define(&f.name, f.def_id); }
+        }
+        // Phase 2: walk statements in order; `var` defines after its initializer.
+        for s in stmts { self.stmt(s); }
+        self.ribs.pop();
+    }
+
+    fn lookup(&mut self, name: &'a str, use_id: NodeId, span: Span) {
+        let mut crossed_item = false;
+        for rib in self.ribs.iter().rev() {
+            if let Some(&def) = rib.names.get(name) {
+                if crossed_item && def.is_local() {
+                    self.errors.push(Diagnostic::error(span, format!("can't capture dynamic environment in a fn item")));
+                }
+                self.res.insert(use_id, def);
+                return;
+            }
+            crossed_item |= rib.kind == RibKind::Item;
+        }
+        let candidates = self.ribs.iter().flat_map(|r| r.names.keys().copied());
+        let help = did_you_mean(name, candidates).map(|s| format!("a local with a similar name exists: `{s}`"));
+        self.errors.push(Diagnostic::error(span, format!("cannot find value `{name}` in this scope")).with_help(help));
+    }
+}
+```
+"""
+
+[[sections]]
+heading = "Hygiene: binding as sets of scopes"
+body = """
+<p>Macro hygiene has a long history: Kohlbecker's renaming, then syntax-case marks and renames. Flatt's <b>sets of scopes</b> model is the current standard. Every identifier carries a set of scope IDs. Each binding form adds a fresh scope to everything inside it. Each macro expansion adds a fresh “use-site” or “introduction” scope to the tokens the macro creates. A reference resolves to the binding with the same name whose scope set is the <em>largest subset</em> of the reference's set. If there's no unique largest, the reference is ambiguous.</p>
+
+```rust title="Sets-of-scopes resolution"
+use std::collections::BTreeSet;
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)] pub struct ScopeId(u32);
+#[derive(Clone, Copy, PartialEq, Eq, Debug)] pub struct DefId(u32);
+
+pub struct Ident { pub name: Symbol, pub scopes: BTreeSet<ScopeId> }
+
+pub fn resolve(r: &Ident, bindings: &[(Ident, DefId)]) -> Result<DefId, &'static str> {
+    let candidates: Vec<&(Ident, DefId)> = bindings.iter()
+        .filter(|(b, _)| b.name == r.name && b.scopes.is_subset(&r.scopes))
+        .collect();
+    let best = candidates.iter().max_by_key(|(b, _)| b.scopes.len()).ok_or("unbound")?;
+    // Unique only if every candidate's scopes are contained in the best one's.
+    if candidates.iter().any(|(b, _)| !b.scopes.is_subset(&best.0.scopes)) {
+        return Err("ambiguous");
+    }
+    Ok(best.1)
+}
+```
+
+<p>Rust's <code>macro_rules!</code> uses <em>mixed-site</em> hygiene. Local variables and labels resolve at the macro definition site; items and everything else resolve at the call site. Proc macros choose per token with <code>Span::call_site()</code>, <code>Span::mixed_site()</code>, or <code>Span::def_site()</code> (unstable).</p>
+"""
+
+[[sections]]
+heading = "Module systems"
+body = """
+<p>ML's module system is the most expressive design in common use. Structures are bundles of types and values. Signatures are their interfaces, and can hide a type's definition (abstract types). Functors are functions from structures to structures. Generative vs applicative functors, and sharing constraints (<code>with type t = …</code>), are where the theory gets deep. “F-ing modules” shows that all of it translates into System Fω. Rust's modules are simpler: namespaces plus visibility, with traits doing the abstraction work. Coherence and orphan rules guarantee there's at most one impl of a trait for a type across all crates. That keeps separate compilation sound.</p>
+
+<p>Separate compilation needs an interface artifact per unit: OCaml's <code>.cmi</code>, Rust's crate metadata (<code>.rmeta</code>), Swift's <code>.swiftmodule</code>. Decide early what goes in it, such as inline bodies or generic definitions for monomorphization. That decision determines your incremental rebuild behavior.</p>
+"""
+
+[[sources]]
+title = "rustc dev guide: name resolution"
+url = "https://rustc-dev-guide.rust-lang.org/name-resolution.html"
+
+[[sources]]
+title = "macro expansion and hygiene"
+url = "https://rustc-dev-guide.rust-lang.org/macro-expansion.html"

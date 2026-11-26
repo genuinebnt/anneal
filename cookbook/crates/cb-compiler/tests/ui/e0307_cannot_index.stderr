@@ -1,0 +1,9 @@
+error[E0307]: cannot index into a value of type `str`
+ --> e0307_cannot_index.peb:3:13
+  |
+3 |     println(s[0]);
+  |             ^ not an array
+  |
+  = help: use `chars(s)` to get an array of characters
+
+error: aborting due to 1 previous error

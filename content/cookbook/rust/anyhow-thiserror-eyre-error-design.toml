@@ -1,0 +1,102 @@
+title = "Anyhow thiserror eyre error design"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Application crates"
+chapter_order = 2
+order = 125
+kind = "recipe"
+lede = "error design with thiserror, anyhow, eyre and miette: sources, context, downcasting, codes, reports and testing"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/anyhow_thiserror_eyre_error_design.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any crate with a public API (typed errors) and any binary that reports failures to people (anyhow).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>library error enums</li><li>adding "what was I doing" context in applications</li><li>mapping errors to HTTP statuses</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>thiserror::Error</code></li><li><code>#[error("..")]</code></li><li><code>#[error(transparent)]</code></li><li><code>#[from]</code></li><li><code>#[source]</code></li><li><code>anyhow::Error</code></li><li><code>anyhow::Result</code></li><li><code>anyhow::Context::context</code></li><li><code>anyhow::Context::with_context</code></li><li><code>anyhow::anyhow!</code></li><li><code>anyhow::bail!</code></li><li><code>anyhow::ensure!</code></li><li><code>Error::new</code></li><li><code>Error::msg</code></li><li><code>Error::context</code></li><li><code>Error::chain</code></li><li><code>Error::root_cause</code></li><li><code>Error::downcast_ref</code></li><li><code>Error::downcast</code></li><li><code>Error::is</code></li><li><code>std::error::Error::source</code></li><li><code>anyhow::Ok</code></li><li><code>Error::from_boxed</code></li><li><code>Error::downcast_mut</code></li><li><code>Error::into_boxed_dyn_error</code></li><li><code>Error::reallocate_into_boxed_dyn_error_without_backtrace</code></li><li><code>eyre::Report</code></li><li><code>eyre::eyre!</code></li><li><code>eyre::bail!</code></li><li><code>eyre::ensure!</code></li><li><code>eyre::WrapErr::{wrap_err, wrap_err_with}</code></li><li><code>eyre::OptionExt::ok_or_eyre</code></li><li><code>eyre::EyreHandler</code></li><li><code>eyre::set_hook</code></li><li><code>Report::{handler, handler_mut, chain, downcast_ref}</code></li><li><code>miette::Diagnostic</code></li><li><code>#[diagnostic(code, help, severity, url)]</code></li><li><code>#[label]</code></li><li><code>#[source_code]</code></li><li><code>#[related]</code></li><li><code>miette::SourceSpan</code></li><li><code>miette::NamedSource</code></li><li><code>miette::Report::with_source_code</code></li><li><code>miette::NarratableReportHandler::render_report</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/thiserror/2/thiserror/" target="_blank" rel="noreferrer">https://docs.rs/thiserror/2/thiserror/</a></li><li><a href="https://docs.rs/anyhow/1/anyhow/" target="_blank" rel="noreferrer">https://docs.rs/anyhow/1/anyhow/</a></li><li><a href="https://docs.rs/eyre/0.6/eyre/" target="_blank" rel="noreferrer">https://docs.rs/eyre/0.6/eyre/</a></li><li><a href="https://docs.rs/miette/7/miette/" target="_blank" rel="noreferrer">https://docs.rs/miette/7/miette/</a></li></ul>
+"""
+
+[[sections]]
+heading = "Crates"
+body = """
+thiserror = "2", anyhow = "1", eyre = "0.6", miette = "7" (default features: derive, no "fancy")
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+color-eyre. It is a ready-made `EyreHandler` plus a panic hook with coloured, environment-dependent output; section `eyre_layer` shows the handler mechanism it plugs into. miette's graphical renderer needs the "fancy" feature, which is not enabled here: reports are rendered with the plain-text NarratableReportHandler so they can be asserted.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The decision**
+
+```text
+Will a CALLER branch on the failure?  yes -> a concrete enum (thiserror)    no, it is only reported -> anyhow::Error
+```
+
+Libraries usually expose the first; the top of an application uses the second.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Wrap a cause and keep it</td><td><code>#[source] field (or a field named source)</code></td></tr><tr><td>Let <code>?</code> convert automatically</td><td><code>#[from] (one variant per source TYPE)</code></td></tr><tr><td>The variant IS the inner error</td><td><code>#[error(transparent)]</code></td></tr><tr><td>Add "while doing X"</td><td><code>.with_context(|| format!(..))?   (lazy: only runs on error)</code></td></tr><tr><td>Print the whole chain on one line</td><td><code>format!("{err:#}")</code></td></tr><tr><td>Print chain + backtrace</td><td><code>format!("{err:?}")  (what fn main() -&gt; anyhow::Result&lt;()&gt; prints)</code></td></tr><tr><td>Recover a typed error from anyhow</td><td><code>err.downcast_ref::&lt;MyError&gt;()</code></td></tr><tr><td>Need your OWN report format/extra data</td><td><code>eyre (pluggable EyreHandler); the API is otherwise close to anyhow</code></td></tr><tr><td>Point at a span of the user's INPUT</td><td><code>miette: Diagnostic + #[source_code] + #[label]  (parsers, config, DSLs) RULE: an error EITHER displays its cause's text OR returns it from source(). Doing both prints it twice in any chain-aware reporter. ANYHOW vs EYRE: the same idea (one boxed dynamic error with context). eyre adds a global hook that builds a handler for every Report; the hook can be installed ONCE per process, before the first Report exists. That makes it an application decision: a library should not call set_hook. BACKTRACES: anyhow captures one when RUST_BACKTRACE or RUST_LIB_BACKTRACE is set. This example does not assert on it because that depends on the environment.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/error/trait.Error.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/error/trait.Error.html</a></li><li><a href="https://github.com/dtolnay/thiserror" target="_blank" rel="noreferrer">https://github.com/dtolnay/thiserror</a></li><li><a href="https://github.com/dtolnay/anyhow" target="_blank" rel="noreferrer">https://github.com/dtolnay/anyhow</a></li><li><a href="https://rust-lang.github.io/api-guidelines/interoperability.html#c-good-err" target="_blank" rel="noreferrer">https://rust-lang.github.io/api-guidelines/interoperability.html#c-good-err</a></li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/thiserror/2/thiserror"
+url = "https://docs.rs/thiserror/2/thiserror/"
+
+[[sources]]
+title = "docs.rs/anyhow/1/anyhow"
+url = "https://docs.rs/anyhow/1/anyhow/"
+
+[[sources]]
+title = "docs.rs/eyre/0.6/eyre"
+url = "https://docs.rs/eyre/0.6/eyre/"
+
+[[sources]]
+title = "docs.rs/miette/7/miette"
+url = "https://docs.rs/miette/7/miette/"
+
+[[sources]]
+title = "doc.rust-lang.org/std/error/trait.Error.html"
+url = "https://doc.rust-lang.org/std/error/trait.Error.html"
+
+[[sources]]
+title = "github.com/dtolnay/thiserror"
+url = "https://github.com/dtolnay/thiserror"
+
+[[sources]]
+title = "github.com/dtolnay/anyhow"
+url = "https://github.com/dtolnay/anyhow"
+
+[[sources]]
+title = "rust-lang.github.io/api-guidelines/interoperability.html#c-good-err"
+url = "https://rust-lang.github.io/api-guidelines/interoperability.html#c-good-err"

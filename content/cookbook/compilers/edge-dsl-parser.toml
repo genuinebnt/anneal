@@ -1,0 +1,42 @@
+title = "A tiny language"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 568
+kind = "recipe"
+lede = "Tokenizer + recursive-descent parser + errors with spans."
+level = "advanced"
+code = ["examples/text_and_parsing/edge_dsl_parser.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+the future workflow DSL; any text format you design.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>workflow/config DSLs</li><li>graph description languages (<strong>dot</strong>-like)</li><li>query languages</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+```text
+Grammar (domain: a metro map, not tasks):   program := stmt*    stmt := name ("->" name)* (";" | newline | EOF)
+```
+
+Pipeline: text --lex--> Vec&lt;Token{kind, span}> --parse--> edges. Keeping the **span** on every token lets errors point at the exact bytes (see diagnostics_spans). Recursive descent = one function per grammar rule, a cursor over tokens.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://craftinginterpreters.com/parsing-expressions.html> and pratt_parser for expression precedence.
+"""
+
+[[sources]]
+title = "craftinginterpreters.com/parsing-expressions.html"
+url = "https://craftinginterpreters.com/parsing-expressions.html"

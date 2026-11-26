@@ -1,0 +1,10 @@
+fn main() {
+    let x = 1;
+    let x = x + 1;
+    {
+        let x = x * 10;
+        println(to_str(x));
+    }
+    let x = "now a string " + to_str(x);
+    println(x);
+}

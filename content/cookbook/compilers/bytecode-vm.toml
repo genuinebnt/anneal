@@ -1,0 +1,49 @@
+title = "A mini compiler pipeline"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Bytecode and virtual machines"
+chapter_order = 3
+order = 600
+kind = "recipe"
+lede = "Lex -> Pratt parse -> AST -> optimise -> bytecode -> stack VM."
+level = "advanced"
+code = ["examples/text_and_parsing/bytecode_vm.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+the DSL + bytecode-VM roadmap item; learning how every interpreter/compiler is shaped.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>scripting/DSL engines</li><li>query evaluators</li><li>config languages</li><li>WASM-like VMs</li><li>differential testing against an oracle</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Stages (each is a plain function you can test alone):
+
+```text
+lex      text -> tokens                       parse     tokens -> `Expr` tree (Pratt precedence, see pratt_parser)
+fold     `Expr` -> `Expr` (constant folding)  compile   `Expr` -> `Vec<Op>` by POST-ORDER traversal (operands first, then op)
+```
+
+run      a loop over `Op`s with a value stack; errors (stack underflow, divide by zero, unknown variable) are values, not panics Verification by **differential testing**: an obviously-correct tree-walking interpreter and the VM must agree on thousands of random programs, with and without the optimiser.
+
+Study: <https://craftinginterpreters.com/a-virtual-machine.html> and <https://github.com/oxc-project/oxc/tree/main/crates/oxc_parser> and <https://github.com/bytecodealliance/wasmtime> (Cranelift IR)
+"""
+
+[[sources]]
+title = "craftinginterpreters.com/a-virtual-machine.html"
+url = "https://craftinginterpreters.com/a-virtual-machine.html"
+
+[[sources]]
+title = "github.com/oxc-project/oxc/tree/main/crates/oxc_parser"
+url = "https://github.com/oxc-project/oxc/tree/main/crates/oxc_parser"
+
+[[sources]]
+title = "github.com/bytecodealliance/wasmtime"
+url = "https://github.com/bytecodealliance/wasmtime"

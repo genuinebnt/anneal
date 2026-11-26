@@ -1,0 +1,187 @@
+title = "Databases on new hardware"
+module = "Performance and systems"
+module_order = 7
+chapter = "Files, processes and the OS"
+chapter_order = 3
+order = 287
+kind = "guide"
+lede = "15-721 S2020 lecture #25 · persistent memory & write-behind logging · GPUs · FPGAs · RDMA · CXL · design by ratios · measured latency ladder, memory-level parallelism, bandwidth and access granularity"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Hardware changes the cost ratios, not the algorithms' correctness</strong>: the right design depends on five ratios, <strong>latency, bandwidth, access granularity, concurrency needed to saturate it, and persistence</strong>. A new device is a new point in that table; design for the table, not for a product name.</li> <li><strong>Persistent (non-volatile) memory</strong>: byte-addressable like DRAM (loads and stores, no block I/O), <strong>durable like an SSD</strong>, with latency between the two and a media granularity larger than a cache line (Intel Optane: 256 B). Durability is not automatic: data sits in volatile CPU caches until <strong>flushed</strong> (cache-line write-back + fence), and failure atomicity is only <strong>8 bytes</strong>, so a structure must be crash-consistent by <em>ordering</em> its flushes (or by logging). Optane DC persistent memory was discontinued in 2022; the <em>ideas</em> (and the byte-addressable-durability programming model) survive in CXL-attached and battery-backed memory.</li> <li><strong>What persistent memory changes in a DBMS</strong>: no copy between a buffer pool and storage; the <strong>log can shrink</strong> (<em>write-behind logging</em>: update the durable database in place and log only commit-timestamp metadata, so recovery is nearly instant: skip versions whose timestamps fall in uncommitted ranges, no redo/undo). Storage-engine choices (in-place, copy-on-write, log-structured) each have a different best fit and recovery cost on NVM (Arulraj et al.).</li> <li><strong>GPUs</strong>: thousands of simple cores and very high device-memory bandwidth, so scans, filters, aggregations and hash joins run far faster <strong>if the data is already in device memory</strong>. The catch is the <strong>link</strong>: PCIe/NVLink transfer from host memory is the bottleneck, and device memory is small; GPU DBMSs (Kinetica, MapD/HeavyDB, SQream, BlazingDB, Brytlyt) cache hot columns on the device, compress heavily, and pipeline transfers with compute.</li> <li><strong>FPGAs and smart storage</strong>: reconfigurable logic placed <strong>on the data path</strong> (between SSD/network and CPU) filters, decompresses or aggregates data <em>before</em> it crosses the bus; the win is moving less data, not faster arithmetic. Same idea as computational SSDs and SmartNIC/DPU offload (compression, encryption, protocol work).</li> <li><strong>RDMA</strong>: the NIC reads or writes <strong>remote memory without involving the remote CPU</strong> (<em>one-sided</em> verbs: READ, WRITE, atomic CAS/FAA), with single-digit-microsecond latency. This undoes the old assumption that "the network is slow": designs can treat the cluster's memory as one address space (FaRM, NAM-DB, "The End of Slow Networks"), at the price of connection scaling, careful memory registration and failure handling.</li> <li><strong>CXL</strong>: a cache-coherent interconnect over PCIe; <strong>memory expanders</strong> add capacity at a latency roughly like a remote NUMA node (more than local DRAM), and pooling/sharing is on the roadmap. A DBMS sees a <strong>new memory tier</strong>: buffer pool and large structures must be tier-aware (hot data in local DRAM, warm in CXL), with prefetching to hide the extra latency.</li> <li><strong>Other</strong>: kernel-bypass I/O (SPDK, <code>io_uring</code>) to feed NVMe at millions of IOPS (Part VI); zoned and key-value SSDs; <strong>disaggregation</strong> (compute/storage separation, now memory too).</li> </ul>
+"""
+
+[[sections]]
+heading = "The ratios, measured on one machine"
+body = """
+<p>You cannot test persistent memory, RDMA or CXL on a laptop, but you can <strong>measure the ratios that decide how every one of them is used</strong>. All numbers below are from the same machine (Apple M4 Pro: 8 performance + 4 efficiency cores, 128-byte cache lines, 16 KiB pages), one run each; DRAM-sized points repeated within ~10% across runs, small-cache points and the many-chain points move by more.</p>
+
+<ol> <li><strong>Latency ladder</strong>: follow a random cycle through a working set (every load depends on the previous one, so nothing can overlap): ns per load by size.</li> <li><strong>Memory-level parallelism</strong>: run <em>k</em> independent chains at once over 1 GiB; if the memory system can overlap misses, ns per load fall as 1/k until the machine runs out of outstanding-miss slots.</li> <li><strong>Bandwidth</strong>: sum a 1 GiB array with 1…12 threads.</li> <li><strong>Granularity</strong>: read random aligned blocks of 8 B…64 KiB; useful GB/s per block size.</li> </ol>
+
+:::deeper Reference: Sattolo random cycle, dependent-chain latency probe with k independent chains, streaming bandwidth, random-block reads
+```rust title="src/bench/memladder.rs"
+//! Memory-hierarchy probes: dependent-load latency, memory-level parallelism, streaming bandwidth, access granularity.
+use std::hint::black_box;
+use std::time::Instant;
+
+/// One node per 128 bytes (the cache-line size of Apple M-series; also two x86 lines, which the adjacent-line prefetcher fetches together).
+pub const NODE: usize = 16; // u64 words
+
+pub struct Rng(pub u64);
+impl Rng { pub fn next(&mut self, m: u64) -> u64 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; self.0 % m } }
+
+/// A single random cycle over `nodes` nodes (Sattolo's algorithm): `buf[i * NODE]` holds the index of the next node.
+pub fn cycle(nodes: usize, seed: u64) -> Vec<u64> {
+    let mut perm: Vec<u64> = (0..nodes as u64).collect();
+    let mut r = Rng(seed);
+    for i in (1..nodes).rev() { perm.swap(i, r.next(i as u64) as usize); }   // j in [0, i): guarantees one cycle
+    let mut buf = vec![0u64; nodes * NODE];
+    for i in 0..nodes { buf[i * NODE] = perm[i]; }
+    buf
+}
+
+/// Follow `chains` independent pointer chains in lock step: with chains = 1 every load depends on the previous one
+/// (pure latency); with k chains up to k misses are outstanding at once (memory-level parallelism).
+/// Returns nanoseconds per load.
+pub fn chase_ns(buf: &[u64], chains: usize, steps: usize) -> f64 {
+    let nodes = buf.len() / NODE;
+    let pass = |steps: usize| -> f64 {
+        let t = Instant::now();
+        if chains == 1 {
+            let mut a = 0usize;                                   // one dependent chain, state kept in a register
+            for _ in 0..steps { a = unsafe { *buf.get_unchecked(a * NODE) } as usize; }
+            black_box(a);
+        } else {
+            let mut at: Vec<usize> = (0..chains).map(|c| c * nodes / chains).collect();
+            for _ in 0..steps { for a in at.iter_mut() { *a = unsafe { *buf.get_unchecked(*a * NODE) } as usize; } }
+            black_box(&at);
+        }
+        t.elapsed().as_nanos() as f64 / (steps * chains) as f64
+    };
+    pass(steps / 4 + 1);                                          // warm up caches, TLB and the CPU clock
+    pass(steps)
+}
+
+/// Sum a large array with `threads` threads: GB/s of sequential read bandwidth.
+pub fn stream_gbps(data: &[u64], threads: usize) -> f64 {
+    let chunk = data.len().div_ceil(threads);
+    let t = Instant::now();
+    let total: u64 = std::thread::scope(|s| {
+        let hs: Vec<_> = data.chunks(chunk).map(|c| s.spawn(move || {
+            let mut acc = [0u64; 8];
+            for w in c.chunks_exact(8) { for i in 0..8 { acc[i] = acc[i].wrapping_add(w[i]); } }
+            acc.iter().fold(0u64, |a, &b| a.wrapping_add(b))
+        })).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).fold(0u64, |a, b| a.wrapping_add(b))
+    });
+    black_box(total);
+    (data.len() * 8) as f64 / t.elapsed().as_secs_f64() / 1e9
+}
+
+/// Read `block`-byte blocks at random aligned offsets (one thread, independent addresses so misses overlap).
+/// Returns (ns per block, useful GB/s).
+pub fn random_block(data: &[u64], block: usize, reads: usize, seed: u64) -> (f64, f64) {
+    let words = block / 8;
+    let nblocks = data.len() / words;
+    let mut r = Rng(seed);
+    let offs: Vec<usize> = (0..reads).map(|_| r.next(nblocks as u64) as usize * words).collect();
+    let t = Instant::now();
+    let mut acc = 0u64;
+    for &o in &offs {
+        let b = &data[o..o + words];
+        let mut s = 0u64;
+        for w in b.chunks_exact(8.min(words)) { for &x in w { s = s.wrapping_add(x); } }
+        acc = acc.wrapping_add(s);
+    }
+    black_box(acc);
+    let secs = t.elapsed().as_secs_f64();
+    (secs * 1e9 / reads as f64, (reads * block) as f64 / secs / 1e9)
+}
+```
+:::
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><code>cycle_is_a_single_cycle</code>: following the permutation from node 0 visits <strong>every</strong> node exactly once and returns (for sizes 1, 2, 3, 100, 4096); a probe built on a permutation with short cycles would measure cache hits and report a flattering latency.</li> <li>Harness hygiene baked into <code>chase_ns</code>: one dependent chain keeps its state in a <strong>register</strong> (a first version that stored it in a <code>Vec</code> added store-forwarding latency and inflated the L1 row), a <strong>warm-up pass</strong> runs before the timed one (the first row of the first run was slow while the CPU clock ramped up), <code>black_box</code> keeps the loop alive, and the working set is <code>NODE</code> = one cache line per node so each load is one miss.</li> </ul></aside>
+
+```text title="dependent-load latency by working set (1 chain)"
+ working set    ns/load
+      16 KiB        3.3
+      64 KiB        2.6
+     128 KiB        3.5
+     512 KiB       11.4
+       2 MiB        8.2
+       8 MiB        8.4
+      16 MiB       42.1
+      32 MiB      102.2
+     128 MiB      118.4
+     512 MiB      123.9
+    1024 MiB      122.9
+    4096 MiB      134.9
+```
+
+```text title="k independent chains over 1 GiB"
+  chains    ns/load    loads/s (M)
+       1      127.1            7.9
+       2       61.7           16.2
+       4       30.4           32.9
+       8       17.2           58.3
+      16        9.6          104.0
+      32        9.1          110.3
+      64        3.9          256.7
+```
+
+```text title="sequential read bandwidth, 1 GiB"
+ threads       GB/s
+       1       91.4
+       2      144.1
+       4      176.8
+       8      231.8
+      12      222.9
+```
+
+```text title="random block reads from 1 GiB, 1 thread"
+     block     ns/block       GB/s
+        8B          7.4       1.08
+       64B         11.1       5.74
+      128B         20.3       6.30
+      256B         39.0       6.56
+     1024B        142.8       7.17
+     4096B        363.8      11.26
+    16384B       1401.5      11.69
+    65536B       5244.3      12.50
+```
+
+<ul> <li><strong>Latency steps by ~40× between cache and DRAM</strong>: ~3 ns in the L1, ~8 ns in the L2, <strong>~120 ns</strong> once the working set is far beyond the caches; the 4 GiB point is a little higher because it also exceeds the <strong>TLB reach</strong> (16 KiB pages). Every storage tier you add (CXL, persistent memory, a remote node over RDMA, an SSD) is another step on this staircase; the design question for every structure is <em>which step does it live on, and how many dependent steps does one operation take?</em></li> <li><strong>Concurrency buys latency back</strong>: one chain costs 127 ns per load, eight chains 17 ns (<strong>7.4× the throughput</strong>), and 64 chains 3.9 ns (<strong>33×</strong>, noisy above 16 chains because the loop itself becomes visible). Little's law explains it: sustaining a load rate needs about <em>latency × rate</em> requests in flight, and this core can keep dozens outstanding. This is <strong>why prefetching, batched probes (<a href="/cookbook/p/vectorized-execution-with-simd">A14</a>) and interleaving lookups pay off</strong>, and why a <strong>farther</strong> tier (CXL ~2× DRAM latency, RDMA ~µs, NVMe ~10 µs) needs proportionally <strong>deeper</strong> concurrency (dozens to thousands of operations in flight, i.e. asynchronous I/O, coroutines or batched lookups) to hide it.</li> <li><strong>Bandwidth is the other wall</strong>: one core streams <strong>91 GB/s</strong>; eight performance cores reach <strong>232 GB/s</strong> and the efficiency cores add nothing (12 threads: 223 GB/s). A scan operator is therefore bandwidth-bound, which is the arithmetic behind column stores, compression (<a href="/cookbook/p/columnar-formats-and-nested-data">A12</a> and <a href="/cookbook/p/modern-encodings-btrblocks-fastlanes-bitweaving">A13</a>), and the offload question below.</li> <li><strong>Granularity: you pay for the unit the medium moves, not the unit you asked for</strong>: reading 8 bytes at random yields <strong>1.1 GB/s</strong> of useful data, reading 4 KiB blocks <strong>11.3 GB/s (10×)</strong>, reading 64 KiB 12.5 GB/s. The cost per access is almost flat up to a cache line (7–20 ns for 8–128 B), then grows with size. Persistent memory moves 256 B internally, SSDs 4–16 KiB pages, RDMA is happiest with large messages: <strong>structure your data to use all the bytes of every unit moved</strong> (a B+tree node is a page; a hash bucket is a line; a log record batch is a block).</li> <li><strong>Offload break-even (formula, with this machine's scan rate)</strong>: a GPU or FPGA pays when <code>transfer + device time &lt; host time</code>. The host here scans at 91–232 GB/s; a PCIe 4.0 x16 link carries at most about 32 GB/s (spec value, one direction), so for a scan-bound query over data that is <em>not</em> already on the device the host is 3-7× <em>faster than the transfer alone</em>; offload wins when the data lives on the device (cached columns), when the computation per byte is high (joins with large hash tables, complex expressions, sorting), or when the link is as fast as memory (unified-memory designs, NVLink-class links).</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Know your line size</strong>: <code>crossbeam_utils::CachePadded</code> (and <code>#[repr(align(N))]</code>) pads to <strong>128 bytes</strong> on x86-64 and aarch64 because of adjacent-line prefetchers and 128-byte lines; padding to 64 can still false-share on these machines.</li> <li><strong>Software prefetch</strong>: <code>core::arch::x86_64::_mm_prefetch</code> is stable; on aarch64 stable Rust has no prefetch intrinsic, so write <strong>batched lookups</strong> (compute all hashes first, then probe all buckets) and let out-of-order hardware overlap the misses: that is the pattern measured in <a href="/cookbook/p/vectorized-execution-with-simd">A14</a>.</li> <li><strong>Feature detection</strong>: <code>is_x86_feature_detected!("avx512f")</code> / <code>std::arch::is_aarch64_feature_detected!</code> and <code>#[target_feature(enable = ...)]</code> let a single binary pick kernels at start-up; keep a portable fallback and test both.</li> <li><strong>Persistent memory</strong> from Rust: map a DAX file with <code>memmap2</code>, flush with cache-line write-back + fence intrinsics or PMDK's <code>libpmem</code> via FFI; model it as <code>unsafe</code> code behind a small type that exposes <code>persist(range)</code>, and make every crash-consistent structure a state machine whose steps you can enumerate in a <strong>crash-injection test</strong> (see <a href="/cookbook/p/recovery-for-main-memory-systems">A7</a> and <a href="/cookbook/p/deterministic-simulation">Part VI</a>).</li> <li><strong>Accelerators</strong>: <code>cudarc</code> (CUDA driver API), <code>wgpu</code> (portable compute shaders: Metal, Vulkan, DX12) and <code>rust-gpu</code>; <strong>RDMA</strong> via the <code>ibverbs</code> crate; <strong>kernel-bypass I/O</strong> via <code>io_uring</code> crates and SPDK bindings. In each case wrap the device handle in a type whose <code>Drop</code> releases it, and keep the host-side logic safe.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Designing for a product, not a ratio</strong>: persistent memory's flagship product was discontinued after systems had been built around it; code whose structure assumed "memory-speed durable writes" had to be reworked. Keep the device behind an interface (<code>persist</code>, <code>read</code>, <code>prefetch</code>) and <strong>re-measure</strong> the ratios on the real target.</li> <li><strong>Durability is not free on byte-addressable media</strong>: stores sit in CPU caches until written back; forgetting a flush or a fence gives a structure that is correct until the first power failure. Test with crash injection that drops un-flushed lines.</li> <li><strong>Benchmarking ghosts</strong>: cloud VMs share caches and memory channels, frequency scales with load, NUMA placement changes latency by a factor, and the first run of every experiment above was slower. Warm up, pin threads when you can, repeat, and report the spread, as the test plan did.</li> <li><strong>Offload overheads</strong>: kernel launch, transfers, format conversion (columnar to the device layout), result return, and a second memory allocator. Include them in the break-even; measure end-to-end on a real query, not on a kernel in isolation.</li> <li><strong>Disaggregated and far memory fail differently</strong>: a remote node, a CXL device or a NIC can disappear independently of the host; "memory" operations then need timeouts and error paths that local loads never had.</li> <li><strong>One-sided RDMA is not free</strong>: remote reads can observe half-written cache lines (use checksums/versions, a <em>seqlock</em> in the object), and NIC connection state limits the number of peers.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Let's Talk About Storage & Recovery Methods for Non-Volatile Memory Database Systems"
+url = "https://dl.acm.org/doi/10.1145/2723372.2749441"
+
+[[sources]]
+title = "Write-Behind Logging"
+url = "https://www.vldb.org/pvldb/vol10/p337-arulraj.pdf"
+
+[[sources]]
+title = "The End of Slow Networks: It's Time for a Redesign"
+url = "https://www.vldb.org/pvldb/vol9/p528-binnig.pdf"
+
+[[sources]]
+title = "A Study of the Fundamental Performance Characteristics of GPUs and CPUs for Database Analytics"
+url = "https://dl.acm.org/doi/10.1145/3318464.3380595"
+
+[[sources]]
+title = "pmem.io"
+url = "https://pmem.io"
+
+[[sources]]
+title = "What Every Programmer Should Know About Memory"
+url = "https://people.freebsd.org/~lstewart/articles/cpumemory.pdf"

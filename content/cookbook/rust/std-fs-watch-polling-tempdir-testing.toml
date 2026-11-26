@@ -1,0 +1,78 @@
+title = "Fs watch polling tempdir testing (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "Processes, signals and networking"
+chapter_order = 8
+order = 107
+kind = "recipe"
+lede = "testing code that touches the filesystem, a polling directory watcher, and single-instance guards, using only std."
+level = "intermediate"
+code = ["examples/std_tour/std_fs_watch_polling_tempdir_testing.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>tests of anything that reads or writes files</li><li>config hot reload</li><li>cron-like daemons that must not run twice</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>a throwaway directory per test</li><li>fixture trees</li><li>golden-file tests</li><li>asserting error paths</li><li>"reload when the config changes"</li><li>one daemon per data directory</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>std::env::temp_dir</code></li><li><code>std::process::id</code></li><li><code>fs::create_dir</code></li><li><code>fs::create_dir_all</code></li><li><code>fs::remove_dir_all</code></li><li><code>fs::write</code></li><li><code>fs::read</code></li><li><code>fs::read_to_string</code></li><li><code>fs::read_dir</code></li><li><code>DirEntry::path</code></li><li><code>fs::symlink_metadata</code></li><li><code>Metadata::modified</code></li><li><code>Metadata::len</code></li><li><code>fs::rename</code></li><li><code>fs::remove_file</code></li><li><code>fs::set_permissions</code></li><li><code>PermissionsExt::from_mode</code></li><li><code>File::create_new</code></li><li><code>File::options</code></li><li><code>File::set_modified</code></li><li><code>File::try_lock</code></li><li><code>File::lock</code></li><li><code>File::unlock</code></li><li><code>File::sync_all</code></li><li><code>File::metadata</code></li><li><code>std::fs::TryLockError</code></li><li><code>ErrorKind::{NotFound, AlreadyExists, PermissionDenied, StorageFull, DirectoryNotEmpty}</code></li><li><code>Path::strip_prefix</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/fs/struct.File.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/fs/struct.File.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+std: all of it (`std::fs`, `std::env`, `std::process`, `std::os::unix::fs`). `ErrorKind` is imported from `std::io` (its source is in `core::io` in 1.98.1, which is not a stable path). Nothing here is usable without std.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+native change notification (inotify, FSEvents, ReadDirectoryChangesW) is not in std: use the `notify` crate, and keep a polling fallback for network filesystems. The `tempfile` crate (secure creation, `persist`) is what production code should usually use: see the crate tour. File basics, atomic replace and walking are in `std_fs_file_operations_usecases`.
+
+Windows lock semantics were not run.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Isolate a test</td><td><code>a RAII temp directory; never write to fixed paths or change the process cwd</code></td></tr><tr><td>Keep the directory to debug a failure</td><td><code>skip removal when thread::panicking() (print the path)</code></td></tr><tr><td>Compare large expected output</td><td><code>golden file + explicit "update" switch + first-difference message</code></td></tr><tr><td>Test "disk full"</td><td><code>write through impl Write; inject a writer that fails with ErrorKind::StorageFull</code></td></tr><tr><td>Test "permission denied"</td><td><code>chmod in the test (unix), and tolerate running as root</code></td></tr><tr><td>Branch on the failure</td><td><code>err.kind(); avoid path.exists() followed by an operation (a race)</code></td></tr><tr><td>Detect changes by polling</td><td><code>snapshot (len, mtime) per path and diff; add a content hash if false negatives matter</code></td></tr><tr><td>Test time-based logic on files</td><td><code>File::set_modified instead of sleeping until the mtime changes</code></td></tr><tr><td>One instance per directory</td><td><code>File::try_lock and KEEP the File alive; the OS releases it if the process dies</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Pitfalls"
+body = """
+mtime resolution is filesystem dependent, so two quick writes can share a timestamp; a polling watcher misses changes that revert between polls and sees a rename as remove + create; a lock may be only advisory; "pid file exists" lockfiles go stale after a crash.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock</a></li><li>The Rust Book, test organisation <a href="https://doc.rust-lang.org/book/ch11-03-test-organization.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/book/ch11-03-test-organization.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/fs/struct.File.html"
+url = "https://doc.rust-lang.org/std/fs/struct.File.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/fs/struct.File.html#method.try_lock"
+url = "https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock"
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch11-03-test-organization.html"
+url = "https://doc.rust-lang.org/book/ch11-03-test-organization.html"

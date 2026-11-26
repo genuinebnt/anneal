@@ -1,0 +1,5 @@
+fn main() {
+    let b = 1 as bool;
+    let i = true as int;
+    println(to_str(i));
+}

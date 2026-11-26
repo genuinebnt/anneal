@@ -1,0 +1,400 @@
+title = "A column store"
+module = "Databases"
+module_order = 8
+chapter = "Building complete engines"
+chapter_order = 9
+order = 444
+kind = "guide"
+lede = "Updatable columnar tables for the analytic side · row tail sealed into encoded segments · predicates evaluated on the encoded form · zone maps · delete bitmaps · compared with row scans on 1 000 000 rows"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Analytics reads few columns of many rows.</strong> A row store reads every column of every row it touches. A column store keeps each column contiguous, so <code>SUM(amount) WHERE status = 'shipped'</code> reads two columns, and values of one type and similar magnitude compress well (the earlier parts cover file formats and encodings: <a href="/cookbook/p/columnar-formats-and-nested-data">Parquet-like formats</a>, <a href="/cookbook/p/modern-encodings-btrblocks-fastlanes-bitweaving">modern encodings</a>, <a href="/cookbook/p/modern-encodings-btrblocks-fastlanes-bitweaving">BtrBlocks</a>).</li> <li><strong>Updates are the hard part.</strong> Encoded columns are expensive to modify, so the table is a stack: a small <strong>row-format tail</strong> that takes inserts, and immutable <strong>segments</strong> (here 65 536 rows) built from a full tail, with each column encoded on its own. Deletes set a bit in a per-segment <strong>delete bitmap</strong>; an update is a delete plus an insert. Compaction (not built here) merges segments with many deletes.</li> <li><strong>Choose the encoding per column and segment.</strong> Frame of reference for numbers in a narrow range, run-length for sorted or repetitive columns, dictionary for low-cardinality text, plain otherwise. The choice is the smallest estimated size, made at seal time, so sorted ids, bursty regions and random amounts each get the encoding that suits them.</li> <li><strong>Evaluate predicates on the encoded form.</strong> For a dictionary column, translate <code>status = 'shipped'</code> once into a code range and compare codes; for frame of reference, translate the bounds into the offset domain; for run-length, test one value per run and set a whole range of bits. The result is a bitmap with no values decoded. Bitmaps from several predicates are ANDed, deleted rows are masked off, and only the surviving rows are decoded.</li> <li><strong>Zone maps skip whole segments.</strong> Each column segment records its minimum and maximum; a predicate outside that range rules the segment out without touching the data. On a column that is roughly sorted (a timestamp) this is the main saving.</li> <li><strong>Byte-aligned lanes versus bit-packing.</strong> Bit-packing to the exact width is smaller and fine for storage. For scanning, lanes of 1, 2 or 4 bytes compared in a plain loop vectorize and need no shifts. This section stores lanes; a disk format would pack bits (as in <a href="/cookbook/p/modern-encodings-btrblocks-fastlanes-bitweaving">FastLanes</a>).</li> <li><strong>NULLs are a bitmap, not a value.</strong> A NULL slot is marked in a bitmap and the data lane holds a filler. The filler matters for encodings: it must stay inside the frame and should continue the current run.</li> </ul>
+"""
+
+[[sections]]
+heading = "The structure"
+body = """
+```text
+table
+ ├─ segment 0   (65 536 rows, immutable)         ├─ segment 1 …                     ├─ tail (row format, ≤ 65 535 rows)
+ │   ├─ column id      : frame of reference, 2-byte lanes   zone map [0, 65535]
+ │   ├─ column ts      : frame of reference, 4-byte lanes   zone map [t0, t1]
+ │   ├─ column status  : dictionary (5 strings) + 1-byte codes
+ │   └─ delete bitmap  : one bit per row
+ scan(preds) = for each segment: zone-map check → one bitmap per predicate → AND → minus deleted → decode survivors
+```
+
+<ul> <li><strong><code>ColSeg::build</code></strong> computes the zone map and NULL bitmap, then picks an encoding. Integers: smallest of plain (8 bytes), frame of reference (1, 2 or 4 bytes per row if the range fits in 32 bits) and run-length (12 bytes per run). Text: dictionary if at most half as many distinct values as rows, else plain.</li> <li><strong><code>ColSeg::eval(pred)</code></strong> returns a bitmap. <code>Eq</code> and <code>Between</code> never match NULL; <code>IsNull</code> and <code>IsNotNull</code> come from the NULL bitmap.</li> <li><strong><code>ColTable::scan</code>/<code>sum</code></strong>: select per segment, then decode only the projected columns of the surviving rows; <code>sum</code> reads integer lanes directly.</li> </ul>
+
+:::deeper Reference: encoded column segments, predicates on the encoded form, zone maps, the updatable table
+```rust title="src/multimodel/colstore.rs"
+//! An updatable column store: rows are appended to a small row-format tail; full tails are sealed into immutable *segments* whose
+//! columns are encoded separately (plain, frame of reference, run-length, dictionary) and carry a zone map. Predicates are evaluated
+//! on the encoded form, producing a bitmap per column; bitmaps are ANDed, minus deleted rows, and only then are values decoded.
+use crate::mmkey::Val;
+use std::cmp::Ordering;
+
+pub type Bits = Vec<u64>;
+fn bits_zero(n: usize) -> Bits { vec![0; n.div_ceil(64)] }
+fn bit(b: &Bits, i: usize) -> bool { b[i / 64] >> (i % 64) & 1 == 1 }
+fn set(b: &mut Bits, i: usize) { b[i / 64] |= 1 << (i % 64); }
+fn set_range(b: &mut Bits, a: usize, z: usize) { for i in a..z { set(b, i); } }
+pub fn ones(b: &Bits) -> usize { b.iter().map(|w| w.count_ones() as usize).sum() }
+fn iter_ones(b: &Bits) -> impl Iterator<Item = usize> + '_ {
+    b.iter().enumerate().flat_map(|(w, &x)| { let mut x = x; std::iter::from_fn(move || { if x == 0 { None } else { let t = x.trailing_zeros() as usize; x &= x - 1; Some(w * 64 + t) } }) })
+}
+
+/// Fixed-width lanes of 1, 2 or 4 bytes: narrower than the type, still addressable by index and comparable in a tight, vectorizable loop.
+/// (Bit-packing to the exact width is smaller and the right choice on disk; see the fastlanes section. A scan that evaluates predicates
+/// on the encoded data wants lanes it can compare without shifting.)
+#[derive(Clone, Debug)]
+pub enum Lanes { U8(Vec<u8>), U16(Vec<u16>), U32(Vec<u32>) }
+impl Lanes {
+    fn from_u32(v: &[u32], max: u32) -> Lanes {
+        if max <= u8::MAX as u32 { Lanes::U8(v.iter().map(|&x| x as u8).collect()) }
+        else if max <= u16::MAX as u32 { Lanes::U16(v.iter().map(|&x| x as u16).collect()) }
+        else { Lanes::U32(v.to_vec()) }
+    }
+    fn get(&self, i: usize) -> u32 { match self { Lanes::U8(v) => v[i] as u32, Lanes::U16(v) => v[i] as u32, Lanes::U32(v) => v[i] }
+    }
+    pub fn width(&self) -> usize { match self { Lanes::U8(_) => 1, Lanes::U16(_) => 2, Lanes::U32(_) => 4 } }
+    fn len(&self) -> usize { match self { Lanes::U8(v) => v.len(), Lanes::U16(v) => v.len(), Lanes::U32(v) => v.len() } }
+    /// Set the bit of every lane whose value is in `[lo, hi]`.
+    fn in_range(&self, lo: u32, hi: u32, out: &mut Bits) {
+        fn go<T: Copy + Into<u32>>(v: &[T], lo: u32, hi: u32, out: &mut Bits) {
+            for (w, chunk) in v.chunks(64).enumerate() {
+                let mut word = 0u64;
+                for (j, &x) in chunk.iter().enumerate() { let x: u32 = x.into(); word |= ((x >= lo && x <= hi) as u64) << j; }
+                out[w] |= word;
+            }
+        }
+        match self { Lanes::U8(v) => go(v, lo, hi, out), Lanes::U16(v) => go(v, lo, hi, out), Lanes::U32(v) => go(v, lo, hi, out) }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Ty { Int, Text }
+
+/// Predicates over one column. A NULL never satisfies `Eq` or `Between`.
+#[derive(Clone, Debug)]
+pub enum Pred { Eq(Val), Between(Val, Val), IsNull, IsNotNull }
+
+impl Pred {
+    pub fn matches(&self, v: &Val) -> bool {
+        match self {
+            Pred::IsNull => matches!(v, Val::Null),
+            Pred::IsNotNull => !matches!(v, Val::Null),
+            _ if matches!(v, Val::Null) => false,
+            Pred::Eq(x) => v.cmp_typed(x) == Ordering::Equal,
+            Pred::Between(a, b) => v.cmp_typed(a) != Ordering::Less && v.cmp_typed(b) != Ordering::Greater,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Force { Auto, Plain, For, Rle, Dict }
+
+#[derive(Debug, Clone)]
+pub enum Data {
+    Plain(Vec<i64>),
+    For { min: i64, lanes: Lanes },
+    Rle { runs: Vec<(i64, u32)>, ends: Vec<u32> },
+    Dict { dict: Vec<String>, lanes: Lanes },
+    Strs(Vec<String>),
+}
+
+#[derive(Debug, Clone)]
+pub struct ColSeg { pub n: usize, pub data: Data, pub nulls: Option<Bits>, pub min: Option<Val>, pub max: Option<Val> }
+
+impl ColSeg {
+    pub fn kind(&self) -> &'static str { match self.data { Data::Plain(_) => "plain", Data::For { .. } => "for", Data::Rle { .. } => "rle", Data::Dict { .. } => "dict", Data::Strs(_) => "strs" } }
+    pub fn bytes(&self) -> usize {
+        self.nulls.as_ref().map_or(0, |b| b.len() * 8) + match &self.data {
+            Data::Plain(v) => v.len() * 8, Data::For { lanes, .. } => lanes.len() * lanes.width() + 8, Data::Rle { runs, .. } => runs.len() * 12,
+            Data::Dict { dict, lanes } => dict.iter().map(|s| s.len() + 4).sum::<usize>() + lanes.len() * lanes.width(),
+            Data::Strs(v) => v.iter().map(|s| s.len() + 4).sum(),
+        }
+    }
+    pub fn is_null(&self, i: usize) -> bool { self.nulls.as_ref().is_some_and(|b| bit(b, i)) }
+
+    pub fn build(ty: Ty, vals: &[Val], force: Force) -> ColSeg {
+        let n = vals.len();
+        let mut nulls = bits_zero(n);
+        let mut any_null = false;
+        let (mut min, mut max): (Option<Val>, Option<Val>) = (None, None);
+        for (i, v) in vals.iter().enumerate() {
+            if matches!(v, Val::Null) { set(&mut nulls, i); any_null = true; continue; }
+            if min.as_ref().is_none_or(|m| v.cmp_typed(m) == Ordering::Less) { min = Some(v.clone()); }
+            if max.as_ref().is_none_or(|m| v.cmp_typed(m) == Ordering::Greater) { max = Some(v.clone()); }
+        }
+        let data = match ty {
+            Ty::Int => {
+                // a NULL slot repeats the previous value (the first takes the minimum): it stays inside the frame of reference and extends runs
+                let first = match &min { Some(Val::Int(m)) => *m, _ => 0 };
+                let mut prev = first;
+                let xs: Vec<i64> = vals.iter().map(|v| match v { Val::Int(i) => { prev = *i; *i } Val::Null => prev, o => panic!("not an int: {o:?}") }).collect();
+                Self::encode_ints(xs, force, min.as_ref(), max.as_ref())
+            }
+            Ty::Text => {
+                let xs: Vec<String> = vals.iter().map(|v| match v { Val::Text(s) => s.clone(), Val::Null => String::new(), o => panic!("not text: {o:?}") }).collect();
+                let mut dict: Vec<String> = xs.iter().zip(vals).filter(|(_, v)| !matches!(v, Val::Null)).map(|(s, _)| s.clone()).collect();
+                dict.sort(); dict.dedup();
+                let use_dict = match force { Force::Dict => true, Force::Auto => dict.len() * 2 <= n.max(1) || n == 0, _ => false };
+                if use_dict {
+                    let codes: Vec<u32> = xs.iter().map(|s| dict.binary_search(s).unwrap_or(0) as u32).collect();
+                    let lanes = Lanes::from_u32(&codes, dict.len().saturating_sub(1) as u32);
+                    Data::Dict { dict, lanes }
+                } else { Data::Strs(xs) }
+            }
+        };
+        ColSeg { n, data, nulls: any_null.then_some(nulls), min, max }
+    }
+
+    fn encode_ints(xs: Vec<i64>, force: Force, min: Option<&Val>, max: Option<&Val>) -> Data {
+        let n = xs.len();
+        let (lo, hi) = match (min, max) { (Some(Val::Int(a)), Some(Val::Int(b))) => (*a, *b), _ => (0, 0) };
+        let range = (hi as i128 - lo as i128) as u128;
+        let can_for = range < (1u128 << 32);
+        let runs: Vec<(i64, u32)> = { let mut r: Vec<(i64, u32)> = vec![]; for &x in &xs { match r.last_mut() { Some((v, c)) if *v == x => *c += 1, _ => r.push((x, 1)) } } r };
+        let width = if range <= u8::MAX as u128 { 1 } else if range <= u16::MAX as u128 { 2 } else { 4 };
+        let sizes = [(Force::Plain, n * 8), (Force::For, if can_for { n * width } else { usize::MAX }), (Force::Rle, runs.len() * 12)];
+        let pick = if force == Force::Auto { sizes.iter().min_by_key(|s| s.1).unwrap().0 } else { force };
+        match pick {
+            Force::For if can_for => {
+                let d: Vec<u32> = xs.iter().map(|&x| (x as i128 - lo as i128) as u32).collect();
+                Data::For { min: lo, lanes: Lanes::from_u32(&d, range as u32) }
+            }
+            Force::Rle => { let mut e = 0u32; let ends = runs.iter().map(|r| { e += r.1; e }).collect(); Data::Rle { runs, ends } }
+            _ => Data::Plain(xs),
+        }
+    }
+
+    fn int_at(&self, i: usize) -> i64 {
+        match &self.data {
+            Data::Plain(v) => v[i],
+            Data::For { min, lanes } => *min + lanes.get(i) as i64,
+            Data::Rle { runs, ends } => runs[ends.partition_point(|&e| e as usize <= i)].0,
+            _ => panic!("not an integer column"),
+        }
+    }
+    pub fn get(&self, i: usize) -> Val {
+        if self.is_null(i) { return Val::Null; }
+        match &self.data {
+            Data::Dict { dict, lanes } => Val::Text(dict[lanes.get(i) as usize].clone()),
+            Data::Strs(v) => Val::Text(v[i].clone()),
+            _ => Val::Int(self.int_at(i)),
+        }
+    }
+
+    /// Can any row of this segment satisfy the predicate? (the zone map)
+    pub fn may_match(&self, p: &Pred) -> bool {
+        match p {
+            Pred::IsNull => self.nulls.is_some(),
+            Pred::IsNotNull => self.min.is_some(),
+            Pred::Eq(v) => self.min.as_ref().is_some_and(|m| v.cmp_typed(m) != Ordering::Less) && self.max.as_ref().is_some_and(|m| v.cmp_typed(m) != Ordering::Greater),
+            Pred::Between(a, b) => self.min.as_ref().is_some_and(|m| b.cmp_typed(m) != Ordering::Less) && self.max.as_ref().is_some_and(|m| a.cmp_typed(m) != Ordering::Greater),
+        }
+    }
+
+    /// Rows that satisfy `p`, computed on the encoded data without materializing values.
+    pub fn eval(&self, p: &Pred) -> Bits {
+        let n = self.n;
+        let mut out = bits_zero(n);
+        match p {
+            Pred::IsNull => { if let Some(b) = &self.nulls { out.clone_from(b); } return out; }
+            Pred::IsNotNull => { for (w, o) in out.iter_mut().enumerate() { *o = !self.nulls.as_ref().map_or(0, |b| b[w]); } mask_tail(&mut out, n); return out; }
+            _ => {}
+        }
+        let (lo, hi) = match p { Pred::Eq(v) => (v, v), Pred::Between(a, b) => (a, b), _ => unreachable!() };
+        match &self.data {
+            Data::Plain(_) | Data::For { .. } | Data::Rle { .. } => {
+                let (Val::Int(lo), Val::Int(hi)) = (lo, hi) else { return out };    // a text bound against an integer column matches nothing
+                if lo > hi { return out; }
+                match &self.data {
+                    Data::Plain(v) => for (i, &x) in v.iter().enumerate() { if x >= *lo && x <= *hi { set(&mut out, i); } },
+                    Data::For { min, lanes } => {
+                        // translate the bounds into the lane domain once; compare the lane values themselves
+                        let (l, h) = ((*lo as i128 - *min as i128).max(0), (*hi as i128 - *min as i128).min(u32::MAX as i128));
+                        if l <= h { lanes.in_range(l as u32, h as u32, &mut out); }
+                    }
+                    Data::Rle { runs, .. } => { let mut at = 0usize; for &(x, c) in runs { if x >= *lo && x <= *hi { set_range(&mut out, at, at + c as usize); } at += c as usize; } }
+                    _ => unreachable!(),
+                }
+            }
+            Data::Dict { dict, lanes } => {
+                let (Val::Text(lo), Val::Text(hi)) = (lo, hi) else { return out };
+                let a = dict.partition_point(|s| s < lo) as u32;          // first code with value >= lo
+                let z = dict.partition_point(|s| s <= hi) as u32;         // first code with value > hi
+                if a < z { lanes.in_range(a, z - 1, &mut out); }
+            }
+            Data::Strs(v) => {
+                let (Val::Text(lo), Val::Text(hi)) = (lo, hi) else { return out };
+                for (i, s) in v.iter().enumerate() { if s >= lo && s <= hi { set(&mut out, i); } }
+            }
+        }
+        if let Some(nb) = &self.nulls { for (o, x) in out.iter_mut().zip(nb) { *o &= !x; } }
+        out
+    }
+}
+fn mask_tail(b: &mut Bits, n: usize) { if n % 64 != 0 { if let Some(last) = b.last_mut() { *last &= (1u64 << (n % 64)) - 1; } } }
+
+#[derive(Debug, Clone)]
+pub struct Segment { pub n: usize, pub cols: Vec<ColSeg>, pub deleted: Bits, pub ndeleted: usize }
+
+pub struct ColTable {
+    pub tys: Vec<Ty>,
+    pub seg_rows: usize,
+    pub segs: Vec<Segment>,
+    starts: Vec<usize>,                 // starts[i] = row id of the first row of segments[i]
+    tail: Vec<Vec<Val>>,
+    tail_deleted: Vec<bool>,
+    pub force: Force,
+    pub stats: ScanStats,
+}
+#[derive(Default, Clone, Debug)]
+pub struct ScanStats { pub segments: usize, pub skipped_by_zone_map: usize, pub values_decoded: u64 }
+
+impl ColTable {
+    pub fn new(tys: Vec<Ty>, seg_rows: usize) -> ColTable { ColTable { tys, seg_rows, segs: vec![], starts: vec![], tail: vec![], tail_deleted: vec![], force: Force::Auto, stats: ScanStats::default() } }
+    pub fn len(&self) -> usize { self.segs.iter().map(|s| s.n).sum::<usize>() + self.tail.len() }
+    pub fn live(&self) -> usize { self.segs.iter().map(|s| s.n - s.ndeleted).sum::<usize>() + self.tail_deleted.iter().filter(|d| !**d).count() }
+    pub fn insert(&mut self, row: Vec<Val>) -> usize {
+        assert_eq!(row.len(), self.tys.len());
+        let id = self.len();
+        self.tail.push(row); self.tail_deleted.push(false);
+        if self.tail.len() == self.seg_rows { self.seal(); }
+        id
+    }
+    /// Turn the row tail into an encoded segment.
+    pub fn seal(&mut self) {
+        if self.tail.is_empty() { return; }
+        let n = self.tail.len();
+        let cols = (0..self.tys.len()).map(|c| ColSeg::build(self.tys[c], &self.tail.iter().map(|r| r[c].clone()).collect::<Vec<_>>(), self.force)).collect();
+        let mut deleted = bits_zero(n);
+        for (i, d) in self.tail_deleted.iter().enumerate() { if *d { set(&mut deleted, i); } }
+        let nd = self.tail_deleted.iter().filter(|d| **d).count();
+        self.starts.push(self.segs.iter().map(|s| s.n).sum());
+        self.segs.push(Segment { n, cols, deleted, ndeleted: nd });
+        self.tail.clear(); self.tail_deleted.clear();
+    }
+    /// Which segment and which row inside it hold this row id (`None` for the unsealed tail or an id out of range).
+    fn locate(&self, id: usize) -> Option<(usize, usize)> {
+        let si = self.starts.partition_point(|&s| s <= id).checked_sub(1)?;
+        let i = id - self.starts[si];
+        (i < self.segs[si].n).then_some((si, i))
+    }
+    pub fn delete(&mut self, id: usize) -> bool {
+        if let Some((si, i)) = self.locate(id) {
+            let s = &mut self.segs[si];
+            if bit(&s.deleted, i) { return false; }
+            set(&mut s.deleted, i); s.ndeleted += 1; return true;
+        }
+        let i = id - self.segs.iter().map(|s| s.n).sum::<usize>();
+        if i >= self.tail.len() || self.tail_deleted[i] { return false; }
+        self.tail_deleted[i] = true; true
+    }
+    pub fn get(&self, id: usize) -> Option<Vec<Val>> { (0..self.tys.len()).map(|c| self.value(id, c)).collect() }
+    /// One column of one row; `None` if the row is deleted or does not exist.
+    pub fn value(&self, id: usize, col: usize) -> Option<Val> {
+        if let Some((si, i)) = self.locate(id) {
+            let s = &self.segs[si];
+            return if bit(&s.deleted, i) { None } else { Some(s.cols[col].get(i)) };
+        }
+        let i = id - self.segs.iter().map(|s| s.n).sum::<usize>();
+        if i < self.tail.len() && !self.tail_deleted[i] { Some(self.tail[i][col].clone()) } else { None }
+    }
+    /// Live rows satisfying every predicate (an AND), projected, in row-id order.
+    pub fn scan(&mut self, preds: &[(usize, Pred)], proj: &[usize]) -> Vec<Vec<Val>> {
+        let sels = self.select(preds);
+        let mut out = vec![];
+        for (si, sel) in &sels { for i in iter_ones(sel) { out.push(proj.iter().map(|&c| self.segs[*si].cols[c].get(i)).collect()); } }
+        // sealed segments come first in row-id order; the unsealed tail follows
+        self.stats.values_decoded += out.len() as u64;
+        for (i, r) in self.tail.iter().enumerate() {
+            if !self.tail_deleted[i] && preds.iter().all(|(c, p)| p.matches(&r[*c])) { out.push(proj.iter().map(|&c| r[c].clone()).collect()); }
+        }
+        out
+    }
+    /// `(sum, count)` of an integer column over the matching rows.
+    pub fn sum(&mut self, col: usize, preds: &[(usize, Pred)]) -> (i128, usize) {
+        let sels = self.select(preds);
+        let (mut s, mut n) = (0i128, 0usize);
+        for (si, sel) in &sels {
+            let c = &self.segs[*si].cols[col];
+            match &c.data {
+                Data::Plain(v) => for i in iter_ones(sel) { if !c.is_null(i) { s += v[i] as i128; n += 1; } },
+                Data::For { min, lanes } => for i in iter_ones(sel) { if !c.is_null(i) { s += *min as i128 + lanes.get(i) as i128; n += 1; } },
+                _ => for i in iter_ones(sel) { if let Val::Int(x) = c.get(i) { s += x as i128; n += 1; } },
+            }
+        }
+        self.stats.values_decoded += n as u64;
+        for (i, r) in self.tail.iter().enumerate() {
+            if !self.tail_deleted[i] && preds.iter().all(|(c, p)| p.matches(&r[*c])) { if let Val::Int(x) = r[col] { s += x as i128; n += 1; } }
+        }
+        (s, n)
+    }
+    /// The matching, live rows of every sealed segment as a bitmap each; segments the zone maps rule out are not touched.
+    fn select(&mut self, preds: &[(usize, Pred)]) -> Vec<(usize, Bits)> {
+        let mut out = vec![];
+        for (si, s) in self.segs.iter().enumerate() {
+            self.stats.segments += 1;
+            if preds.iter().any(|(c, p)| !s.cols[*c].may_match(p)) { self.stats.skipped_by_zone_map += 1; continue; }
+            let mut sel: Bits = vec![u64::MAX; s.n.div_ceil(64)];
+            mask_tail(&mut sel, s.n);
+            for (c, p) in preds { let m = s.cols[*c].eval(p); for (a, b) in sel.iter_mut().zip(&m) { *a &= b; } }
+            for (a, d) in sel.iter_mut().zip(&s.deleted) { *a &= !d; }
+            out.push((si, sel));
+        }
+        out
+    }
+    pub fn encoded_bytes(&self) -> usize { self.segs.iter().map(|s| s.cols.iter().map(|c| c.bytes()).sum::<usize>()).sum() }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>A table of 1 000 000 orders with a sequential <code>id</code>, a roughly sorted <code>ts</code>, five distinct <code>status</code> strings, <code>region</code> strings in long runs, and a random <code>amount</code>. The queries run four ways. <em>Columnar</em> is this section's scan. <em>Struct</em> is an idealized row store: a fixed 32-byte struct with the strings already replaced by one-byte codes, scanned by a hand-written loop. <em>Val rows</em> is the generic row representation (a <code>Vec&lt;Val&gt;</code> per row, as the Part I engine uses). <em>Decode first</em> decodes each predicate column into values before filtering. All four return the same sum.</p>
+
+```text title="1 000 000 rows: sizes by column, and four ways to run three queries"
+1000000 rows, 5 columns, segments of 65 536 rows
+raw 49.0 MB, encoded 10.0 MB (4.9x smaller)
+  id        2.00 bytes/row  {"for"}
+  ts        4.00 bytes/row  {"for"}
+  status    1.00 bytes/row  {"dict"}
+  region    1.00 bytes/row  {"dict"}
+  amount    2.00 bytes/row  {"for"}
+query (1 000 000 rows, best of 5)                                columnar     struct   Val rows decode 1st
+SUM(amount) WHERE status = 'shipped'            (20%)              0.57ms     1.27ms     6.29ms    26.50ms
+SUM(amount) WHERE ts BETWEEN .. (1%, sorted col)                   0.04ms     0.33ms    12.10ms     4.92ms
+SUM(amount) WHERE region = 'region-07' AND amount < 200            0.47ms     0.30ms     9.52ms    23.77ms
+zone maps: 75 of 240 segment visits skipped
+```
+
+<ul> <li><strong>Size</strong>: 49.0 MB of raw values become <strong>10.0 MB (4.9×)</strong> with byte-aligned lanes. Every column picked the encoding you would pick by eye: frame of reference for the numbers, dictionary for the strings. Exact bit-packing would reach about 7 MB; the lanes are the price of a branch-free compare.</li> <li><strong>Selective filter on an encoded column</strong>: <code>status = 'shipped'</code> is <strong>2.2× faster than the idealized row struct</strong> and <strong>11× faster than generic rows</strong> (0.57 ms against 1.27 and 6.29), because it reads one byte per row of one column.</li> <li><strong>Zone maps</strong>: the range query on the sorted timestamp touches 1 segment of 16 and takes 0.04 ms, <strong>8× faster than the struct scan</strong> and 300× faster than generic rows. Over the run, 75 of 240 segment visits were skipped, all by this query.</li> <li><strong>A conjunction is where this kernel loses</strong>: <code>region = … AND amount &lt; 200</code> takes 0.47 ms against 0.30 ms for the struct. Each predicate is evaluated over <em>all</em> rows and the bitmaps are ANDed, while the row loop evaluates the second condition only for rows that passed the first. This is the reason vectorized engines pass <strong>selection vectors</strong> between predicates (<a href="/cookbook/p/a-vectorized-engine">M4</a>): the second predicate then looks at only the survivors.</li> <li><strong>Decode-first is the anti-pattern</strong>: materializing values before filtering is about 45 to 120 times slower than evaluating on the encoding, which is why every columnar engine pushes predicates into the scan.</li> </ul>
+
+<aside data-call="note"><b>A bug in the first version</b><p>The first encoder wrote 0 into the slot of a NULL. In a column whose values are 1 000 000, 1 000 003, …, the frame of reference is the minimum, so the delta of that 0 wrapped around and, in the bit-packed layout of the time, overflowed into the neighbouring values: reads of rows <em>next to</em> a NULL returned wrong numbers. The property test (every encoding against the row semantics, 400 columns with NULLs) found it in the first run. The fix is to fill a NULL slot with the previous value (the first with the minimum): it stays in the frame and it extends a run. With lanes the stray bits can no longer hit a neighbour, and the run-length test keeps the other half of the reason alive: with the old filler a run column with a NULL in every tenth row had about 2 000 runs instead of 10.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A <code>Data</code> enum per column segment</strong> (<code>Plain</code>, <code>For</code>, <code>Rle</code>, <code>Dict</code>, <code>Strs</code>) keeps each encoding's predicate kernel a plain function over a slice. <code>Lanes</code> is a second enum over <code>Vec&lt;u8&gt;</code>, <code>Vec&lt;u16&gt;</code> and <code>Vec&lt;u32&gt;</code> with one generic helper, <code>in_range&lt;T: Copy + Into&lt;u32&gt;&gt;</code>, that builds 64 result bits per chunk in a loop the compiler can vectorize.</li> <li><strong>Bitmaps as <code>Vec&lt;u64&gt;</code></strong> with <code>iter_ones</code> (a <code>from_fn</code> over <code>trailing_zeros</code>) give selection as an iterator of row numbers without allocating; <code>mask_tail</code> clears bits past the segment end, and a test counts ones to prove it.</li> <li><strong>Translate the predicate, not the data</strong>: <code>Eq(Text)</code> becomes a code range through <code>partition_point</code> on the sorted dictionary; <code>Between</code> on a frame of reference clamps its bounds to the lane domain with <code>i128</code> arithmetic so no bound can overflow. A text bound against an integer column matches nothing (the type error belongs to the planner).</li> <li><strong><code>Option&lt;Bits&gt;</code> for NULLs</strong>: a segment with no NULLs stores nothing and <code>eval</code> skips the masking step.</li> <li><strong><code>is_none_or</code></strong> (stable since Rust 1.82) is the clearest way to write "no minimum yet, or smaller than it".</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Every encoding against the row semantics</strong>: 400 random columns (integers: low cardinality, runs, sorted, too wide for frame of reference, negative; text: few and many distinct values; lengths 0, 1, 2, 63, 64, 65, 200, 1000; about one value in nine NULL), each built with every applicable forced encoding; every value reads back, and for 12 random predicates (<code>Eq</code>, <code>Between</code>, <code>IsNull</code>, <code>IsNotNull</code>, bounds taken from the data and from outside it) the bitmap equals the set of rows for which the predicate holds, has no bits past the end, and the zone map never rules out a segment that has a match.</li> <li><strong>The choice is the smallest</strong>: sorted ids pick frame of reference, runs pick run-length (also with a NULL in every tenth row), 64-bit random values stay plain, few strings pick the dictionary, unique strings stay plain; the automatic size is never above a forced alternative.</li> <li><strong>Updatable table against a row model</strong>: 60 seeds × 500 steps of inserts, deletes, seals and scans over segment sizes 1, 7, 64 and 100, with random predicate conjunctions; <code>scan</code>, <code>sum</code>, <code>live</code>, <code>get</code> and delete results equal the model after every step, including rows still in the tail.</li> <li><strong>Zone maps</strong>: a range of 1 000 rows in a sorted column of 100 000 skips at least 98 of 100 segments and decodes exactly 1 000 values.</li> <li><strong>Mutants run against these tests</strong>: the NULL filler stored as 0 (survives as a result-neutral change that only costs run-length space, so a dedicated test now pins the space), frame bounds allowed to go negative, dictionary range bounds off by one on either end, a run setting only its first row, NULLs matching, bits past the end set, zone-map comparisons wrong at the maximum or the minimum, the minimum tracked as a maximum, deleted rows returned, deletes before sealing lost, the largest encoding chosen, run lookup off by one, a sum missing the frame minimum or counting NULLs, the tail ignored by a scan, deleted tail rows matching, an unsorted dictionary, a wrong lane width. <strong>All 20 were killed</strong>, and four more for the row-id lookup added later for the HTAP section (a segment found one early, deleted rows readable by id, double deletes accepted, segment starts not recorded) are killed too.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>ClickHouse</strong> (MergeTree) writes immutable <em>parts</em> sorted by the table's sort key, one file per column with a sparse primary index and per-granule marks, and merges parts in the background; deletes and updates are asynchronous mutations.</li> <li><strong>DuckDB</strong> stores row groups of about 120 000 rows with per-segment compression (constant, RLE, dictionary, FOR, bit-packing, FSST for strings, ALP for floats) chosen by analysis, zone maps per segment, and a vectorized engine that scans compressed data into vectors.</li> <li><strong>Vertica and C-Store</strong> introduced the write-store/read-store split (a row-ish WOS and a sorted columnar ROS, merged by a tuple mover); <strong>SQL Server columnstore</strong> keeps a delta store of rows and compressed row groups with a delete bitmap, as here; <strong>Parquet</strong> and <strong>Arrow</strong> are the interchange formats on disk and in memory (see <a href="/cookbook/p/columnar-formats-and-nested-data">columnar formats</a>).</li> <li><strong>Snowflake</strong>, <strong>Redshift</strong> and <strong>BigQuery</strong> store immutable micro-partitions or blocks with per-column min/max metadata used for pruning.</li> <li><strong>Compressed execution</strong> appears in SQL Server's batch mode, DuckDB's dictionary vectors, and the research on operating directly on encoded data (<a href="/cookbook/p/modern-encodings-btrblocks-fastlanes-bitweaving">BtrBlocks, FastLanes</a>).</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Small segments waste the format</strong>: a segment needs thousands of rows to amortize its dictionary, zone map and headers. Seal on size or age, and merge undersized segments.</li> <li><strong>Updates in place are not possible.</strong> A workload that updates a hot row thousands of times piles up deletes; compaction has to rewrite segments, and an HTAP design needs a delta store (<a href="/cookbook/p/htap-one-table-two-engines">M6</a>).</li> <li><strong>Zone maps only help sorted-ish data.</strong> On a random column every segment spans the whole range and nothing is skipped; sorting or clustering by the filter column is a physical design choice.</li> <li><strong>Order of predicates</strong>: evaluating the cheapest and most selective first, on the survivors, beats evaluating all of them on everything (the conjunction row above).</li> <li><strong>Dictionaries per segment</strong> make cross-segment joins and group-bys decode or re-map codes; a global or shared dictionary has its own costs.</li> <li><strong>High-cardinality text</strong> gains nothing from a dictionary and wastes build time; the one-half rule is a heuristic, measure on real data.</li> <li><strong>Do not forget NULL semantics</strong>: <code>NOT (a = 1)</code> is also false for NULL <code>a</code>; the bitmap result of <code>NOT</code> must be masked by validity, which is why the NULL bitmap is part of every kernel.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "MergeTree documentation"
+url = "https://clickhouse.com/docs/en/engines/table-engines/mergetree-family/mergetree"
+
+[[sources]]
+title = "Lightweight compression in DuckDB"
+url = "https://duckdb.org/2022/10/28/lightweight-compression.html"

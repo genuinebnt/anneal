@@ -1,0 +1,96 @@
+title = "HashMap entry API patterns (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "Iterators and collections"
+chapter_order = 3
+order = 78
+kind = "recipe"
+lede = "HashMap and HashSet in depth, with the Entry API as the centrepiece."
+level = "intermediate"
+code = ["examples/std_tour/std_hashmap_entry_api_patterns.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>counting</li><li>grouping</li><li>caching</li><li>dedup</li><li>indexes</li><li>look-up page for <code>HashMap::entry</code></li><li><code>retain</code></li><li><code>HashSet::union</code></li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>word counts</li><li>group-by</li><li>inverted indexes</li><li>memo tables</li><li>dedup of event streams</li><li>set algebra on permissions/tags</li><li>adjacency lists</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>HashMap::new</code></li><li><code>HashMap::insert</code></li><li><code>HashMap::get</code></li><li><code>HashMap::get_mut</code></li><li><code>HashMap::entry</code></li><li><code>HashMap::remove</code></li><li><code>HashMap::contains_key</code></li><li><code>HashMap::len</code></li><li><code>HashMap::is_empty</code></li><li><code>HashMap::iter</code></li><li><code>HashMap::keys</code></li><li><code>HashMap::values</code></li><li><code>HashMap::values_mut</code></li><li><code>HashMap::iter_mut</code></li><li><code>Entry::or_insert</code></li><li><code>Entry::or_insert_with</code></li><li><code>Entry::or_insert_with_key</code></li><li><code>Entry::or_default</code></li><li><code>Entry::and_modify</code></li><li><code>Entry::key</code></li><li><code>Entry::insert_entry</code></li><li><code>OccupiedEntry::get</code></li><li><code>OccupiedEntry::get_mut</code></li><li><code>OccupiedEntry::into_mut</code></li><li><code>OccupiedEntry::insert</code></li><li><code>OccupiedEntry::remove</code></li><li><code>OccupiedEntry::remove_entry</code></li><li><code>VacantEntry::insert</code></li><li><code>VacantEntry::into_key</code></li><li><code>HashMap::remove_entry</code></li><li><code>HashMap::get_key_value</code></li><li><code>HashMap::retain</code></li><li><code>HashMap::drain</code></li><li><code>HashMap::extract_if</code></li><li><code>HashMap::extend</code></li><li><code>HashMap::from</code></li><li><code>HashMap::into_keys</code></li><li><code>HashMap::into_values</code></li><li><code>HashMap::with_capacity</code></li><li><code>HashMap::capacity</code></li><li><code>HashMap::reserve</code></li><li><code>HashMap::try_reserve</code></li><li><code>HashMap::shrink_to_fit</code></li><li><code>HashMap::shrink_to</code></li><li><code>HashMap::clear</code></li><li><code>HashMap::get_disjoint_mut</code></li><li><code>HashMap::with_hasher</code></li><li><code>HashMap::hasher</code></li><li><code>HashMap::with_capacity_and_hasher</code></li><li><code>HashSet::new</code></li><li><code>HashSet::insert</code></li><li><code>HashSet::contains</code></li><li><code>HashSet::remove</code></li><li><code>HashSet::take</code></li><li><code>HashSet::replace</code></li><li><code>HashSet::get</code></li><li><code>HashSet::union</code></li><li><code>HashSet::intersection</code></li><li><code>HashSet::difference</code></li><li><code>HashSet::symmetric_difference</code></li><li><code>HashSet::is_subset</code></li><li><code>HashSet::is_superset</code></li><li><code>HashSet::is_disjoint</code></li><li><code>HashSet::retain</code></li><li><code>HashSet::drain</code></li><li><code>HashSet::extend</code></li><li><code>HashSet::from</code></li><li><code>std::hash::Hash</code></li><li><code>std::hash::Hasher</code></li><li><code>std::hash::BuildHasher</code></li><li><code>std::hash::BuildHasherDefault</code></li><li><code>std::hash::DefaultHasher</code></li><li><code>std::collections::hash_map::RandomState</code></li><li><code>std::borrow::Borrow</code></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+std: `HashMap`, `HashSet`, `hash_map::{Entry, RandomState, DefaultHasher}` (not in core or alloc; they wrap the hashbrown crate). core: the traits `Hash`, `Hasher`, `BuildHasher`, the struct `BuildHasherDefault` (`core::hash`) and `Borrow` (`core::borrow`).
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/collections/struct.HashMap.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/collections/struct.HashMap.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+HashMap::try_insert (unstable in 1.98.1), HashMap::raw_entry (not in the stable API), HashSet::get_or_insert_with (nightly), HashSet::entry (nightly), deprecated `hash_map::SipHasher`.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Cheat sheet (I want to ... -> use ...): add or overwrite                       -> `insert` (returns the **old** value) read                                   -> `get(&k)` / `map[&k]` (panics when missing) / `get_key_value`
+
+```text
+count things                           -> `*m.entry(k).or_insert(0) += 1`  (or `or_default()`)
+```
+
+group into Vec per key                 -> `m.entry(k).or_default().push(v)` insert only if absent (lazy value)     -> `entry(k).or_insert_with(|| expensive())`
+
+```text
+value depends on key                   -> `or_insert_with_key(|k| ..)`
+```
+
+update if present else insert          -> `entry(k).and_modify(|v| ..).or_insert(init)`
+
+```text
+decide differently per case            -> `match m.entry(k) { Occupied(e) => .., Vacant(e) => .. }`
+```
+
+remove and get                         -> `remove(&k)` / `remove_entry`; conditionally: `Entry::Occupied(e).remove()` remove many by predicate               -> `retain(|k, v| ..)` (or `extract_if` when you want the removed ones) empty it but keep the allocation       -> `drain()` / `clear()`
+
+```text
+look up with &str for String keys      -> `m.get("abc")` (Borrow<str>)
+```
+
+mutate two values at once              -> `get_disjoint_mut([&a, &b])` (1.86) set algebra                            -> `a.union(&b)`, `intersection`, `difference`, `symmetric_difference`, `&a & &b` deterministic output                   -> sort keys / collect into BTreeMap; never print iteration order faster hashing for trusted keys        -> `BuildHasherDefault<MyHasher>` (e.g.
+
+FxHash-like) via `with_hasher`
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>HashMap docs <a href="https://doc.rust-lang.org/std/collections/struct.HashMap.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/collections/struct.HashMap.html</a></li><li>Entry docs <a href="https://doc.rust-lang.org/std/collections/hash_map/enum.Entry.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/collections/hash_map/enum.Entry.html</a></li><li>The Rust Performance Book (hashing) <a href="https://nnethercote.github.io/perf-book/hashing.html" target="_blank" rel="noreferrer">https://nnethercote.github.io/perf-book/hashing.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/collections/struct.HashMap.html"
+url = "https://doc.rust-lang.org/std/collections/struct.HashMap.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/collections/hash_map/enum.Entry.html"
+url = "https://doc.rust-lang.org/std/collections/hash_map/enum.Entry.html"
+
+[[sources]]
+title = "nnethercote.github.io/perf-book/hashing.html"
+url = "https://nnethercote.github.io/perf-book/hashing.html"

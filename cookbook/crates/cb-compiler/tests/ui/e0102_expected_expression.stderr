@@ -1,0 +1,7 @@
+error[E0102]: expected an expression, found `;`
+ --> e0102_expected_expression.peb:2:13
+  |
+2 |     let x = ;
+  |             ^ expected an expression
+
+error: aborting due to 1 previous error

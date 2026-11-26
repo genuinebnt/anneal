@@ -1,0 +1,46 @@
+# cb-features-workspace: Cargo features
+
+One crate modelling features (nested packages would fight the root workspace).
+`tests/driver.rs` shells out to `cargo test --features ...` through
+`std::process::Command` for `--no-default-features`, default and
+`--all-features`, so every combination is compiled and tested.
+
+## Concepts (all in `src/lib.rs` and `Cargo.toml`)
+- **default features**: `default = ["json"]`; opt out with `--no-default-features`.
+- **additive**: enabling a feature must only add API, never remove or change it.
+- **optional deps + `dep:`**: `json = ["dep:serde_json"]` hides the implicit
+  feature so the dependency name is not public API.
+- **gating**: `#[cfg(feature = "x")]` removes code before type checking;
+  `cfg!(feature = "x")` is just a `bool` and both branches must compile.
+- **`cfg_attr`**: `#[cfg_attr(feature = "stats", derive(PartialEq))]`.
+- **Mutually exclusive features: avoid.** A `compile_error!` when both are on
+  breaks `--all-features` and any dependency graph where two crates ask for
+  different ones. Prefer precedence (as `backend()`), or an enum/runtime choice.
+- **Unification pitfall**: cargo builds each crate ONCE with the union of
+  features requested by everyone. If `app` depends on `lib` with
+  `default-features = false` but `plugin` (also in the graph) depends on `lib`
+  with defaults, `lib` is built with defaults for `app` too; code that is only
+  correct without them (or tests that assume "off") silently breaks. The
+  resolver (`resolver = "2"`, default in edition 2021+) at least separates
+  build-deps, proc-macros and dev-deps from normal deps; test features of every
+  crate in isolation (`cargo hack --each-feature`) as the driver does.
+- **docs**: `#[cfg_attr(docsrs, doc(cfg(feature = "json")))]` shows a "Available
+  on crate feature json only" badge. `docsrs` is set by docs.rs through
+  `[package.metadata.docs.rs] rustdoc-args`, needs nightly `#![feature(doc_cfg)]`,
+  and is announced to the `unexpected_cfgs` lint in `[lints.rust]`.
+- **Workspace inheritance** (described, not used here because this crate is a
+  member of the cookbook root):
+  ```toml
+  # root Cargo.toml
+  [workspace.dependencies]
+  serde_json = { version = "1", default-features = false }
+  # member Cargo.toml
+  [dependencies]
+  serde_json = { workspace = true, features = ["std"] }   # members may ADD features
+  ```
+  Also `[workspace.package]` + `version.workspace = true`, `[workspace.lints]`.
+
+Reference: <https://doc.rust-lang.org/cargo/reference/features.html>
+
+## Run
+`CARGO_TARGET_DIR=/tmp/cb_target_shared cargo test -q --release -p cb-features-workspace`

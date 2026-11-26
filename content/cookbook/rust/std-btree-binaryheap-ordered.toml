@@ -1,0 +1,78 @@
+title = "Ordered collections"
+module = "Standard library and core"
+module_order = 2
+chapter = "Memory and low level"
+chapter_order = 6
+order = 94
+kind = "recipe"
+lede = "`BTreeMap`, `BTreeSet` and `BinaryHeap` by use case."
+level = "intermediate"
+code = ["examples/std_tour/std_btree_binaryheap_ordered.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>time-series and range queries</li><li>leaderboards</li><li>timers</li><li>priority queues</li><li>top-k</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>"latest value at or before t" (<code>range(..=t).next_back()</code>)</li><li>expiring entries in time order</li><li>interval lookup</li><li>timer queues</li><li>Dijkstra</li><li>top-k</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>BTreeMap::new</code></li><li><code>BTreeMap::from</code></li><li><code>BTreeMap::insert</code></li><li><code>BTreeMap::get</code></li><li><code>BTreeMap::get_mut</code></li><li><code>BTreeMap::remove</code></li><li><code>BTreeMap::contains_key</code></li><li><code>BTreeMap::entry</code></li><li><code>BTreeMap::range</code></li><li><code>BTreeMap::range_mut</code></li><li><code>BTreeMap::first_key_value</code></li><li><code>BTreeMap::last_key_value</code></li><li><code>BTreeMap::pop_first</code></li><li><code>BTreeMap::pop_last</code></li><li><code>BTreeMap::first_entry</code></li><li><code>BTreeMap::split_off</code></li><li><code>BTreeMap::append</code></li><li><code>BTreeMap::extend</code></li><li><code>BTreeMap::retain</code></li><li><code>BTreeMap::extract_if</code></li><li><code>BTreeMap::keys</code></li><li><code>BTreeMap::values</code></li><li><code>BTreeMap::into_values</code></li><li><code>BTreeSet::insert</code></li><li><code>BTreeSet::contains</code></li><li><code>BTreeSet::take</code></li><li><code>BTreeSet::replace</code></li><li><code>BTreeSet::range</code></li><li><code>BTreeSet::first</code></li><li><code>BTreeSet::last</code></li><li><code>BTreeSet::pop_first</code></li><li><code>BTreeSet::union</code></li><li><code>BTreeSet::intersection</code></li><li><code>BTreeSet::difference</code></li><li><code>BTreeSet::symmetric_difference</code></li><li><code>BTreeSet::is_subset</code></li><li><code>BTreeSet::split_off</code></li><li><code>BinaryHeap::new</code></li><li><code>BinaryHeap::with_capacity</code></li><li><code>BinaryHeap::from</code></li><li><code>BinaryHeap::push</code></li><li><code>BinaryHeap::pop</code></li><li><code>BinaryHeap::peek</code></li><li><code>BinaryHeap::peek_mut</code></li><li><code>PeekMut::pop</code></li><li><code>BinaryHeap::len</code></li><li><code>BinaryHeap::into_sorted_vec</code></li><li><code>BinaryHeap::into_vec</code></li><li><code>BinaryHeap::iter</code></li><li><code>BinaryHeap::as_slice</code></li><li><code>BinaryHeap::append</code></li><li><code>BinaryHeap::extend</code></li><li><code>BinaryHeap::drain</code></li><li><code>BinaryHeap::retain</code></li><li><code>std::cmp::Reverse</code></li><li><code>std::cmp::Ordering::then_with</code></li><li><code>Ord</code></li><li><code>f64::total_cmp</code></li><li><code>std::ops::Bound</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/collections/struct.BTreeMap.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/collections/struct.BTreeMap.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+alloc: `BTreeMap`, `BTreeSet`, `BinaryHeap` (`alloc::collections`; std re-exports them, so they work in no_std + alloc). core: `Ord`, `Ordering`, `Reverse` (`core::cmp`), `Bound` (`core::ops`), `f64::total_cmp`.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+BTreeMap cursors (`lower_bound`, `upper_bound`, `CursorMut`), `try_insert`, BTreeSet `entry`/`get_or_insert_with`, `BinaryHeap::{pop_if, drain_sorted, into_iter_sorted}`, `PeekMut::refresh` (all unstable in 1.98.1; `range` with `Bound` replaces most cursor uses).
+
+Third-party structures (indexmap, priority-queue with decrease-key, interval trees) are out of scope for a std tour.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Iterate keys in sorted order</td><td><code>BTreeMap (no extra sort)</code></td></tr><tr><td>Last entry at or before k (floor)</td><td><code>m.range(..=k).next_back()</code></td></tr><tr><td>First entry at or after k (ceiling)</td><td><code>m.range(k..).next()</code></td></tr><tr><td>Strictly after k</td><td><code>m.range((Bound::Excluded(k), Bound::Unbounded))</code></td></tr><tr><td>Smallest / largest</td><td><code>first_key_value / last_key_value; remove: pop_first / pop_last</code></td></tr><tr><td>Expire everything older than t</td><td><code>let keep = m.split_off(&amp;t); (old stays in m)  or extract_if(..t, |_,_| true)</code></td></tr><tr><td>Merge two maps (right wins)</td><td><code>a.append(&amp;mut b)</code></td></tr><tr><td>Max-priority queue</td><td><code>BinaryHeap</code></td></tr><tr><td>Min-priority queue</td><td><code>BinaryHeap&lt;Reverse&lt;T&gt;&gt;</code></td></tr><tr><td>Fix up / replace the top in one sift</td><td><code>peek_mut() (mutate through it, or PeekMut::pop)</code></td></tr><tr><td>Top-k of a stream in O(n log k)</td><td><code>min-heap of size k: BinaryHeap&lt;Reverse&lt;T&gt;&gt;</code></td></tr><tr><td>Order floats</td><td><code>a newtype whose Ord calls total_cmp</code></td></tr><tr><td>Need remove-arbitrary or update-priority</td><td><code>BTreeSet&lt;(priority, id)&gt;; or heap + lazy deletion</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Pitfalls"
+body = """
+`range` **panics** if start > end (or start == end with both excluded); heap order among **equal** elements is unspecified (add a sequence number); `BinaryHeap::iter` is **not** sorted; changing a key's order while it is inside a collection (via Cell/atomics) is a logic error (wrong results, not UB).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/collections/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/collections/index.html</a> (when to use which, with complexity table)</li><li><a href="https://doc.rust-lang.org/std/collections/struct.BinaryHeap.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/collections/struct.BinaryHeap.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/collections/struct.BTreeMap.html"
+url = "https://doc.rust-lang.org/std/collections/struct.BTreeMap.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/collections/index.html"
+url = "https://doc.rust-lang.org/std/collections/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/collections/struct.BinaryHeap.html"
+url = "https://doc.rust-lang.org/std/collections/struct.BinaryHeap.html"

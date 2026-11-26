@@ -1,0 +1,38 @@
+title = "Strings"
+module = "Rust language"
+module_order = 1
+chapter = "Everyday language"
+chapter_order = 3
+order = 26
+kind = "recipe"
+lede = "String vs &str, UTF-8 facts, and the methods you will use daily."
+level = "simple"
+code = ["examples/language/strings.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>parsing ids/paths/log lines</li><li>building messages</li><li>validating input</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>parsing ids</li><li>paths and log lines</li><li>building messages</li><li>UTF-8-safe truncation</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+`String` owns a growable UTF-8 buffer. `&str` is a borrowed view (pointer + length) into UTF-8 bytes anywhere. Take `&str` in parameters; return `String` when you build something new.
+
+Indexing by position (`s[0]`) is not allowed because a character may span 1-4 bytes; use `chars()`, `char_indices()` or byte ranges on boundaries. Docs: <https://doc.rust-lang.org/std/primitive.str.html> and <https://doc.rust-lang.org/std/string/struct.String.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/primitive.str.html"
+url = "https://doc.rust-lang.org/std/primitive.str.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/string/struct.String.html"
+url = "https://doc.rust-lang.org/std/string/struct.String.html"

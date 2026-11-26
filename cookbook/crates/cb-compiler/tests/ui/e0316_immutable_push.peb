@@ -1,0 +1,4 @@
+fn fill(xs: [int]) {
+    push(xs, 1);
+}
+fn main() { fill([]); }

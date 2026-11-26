@@ -1,0 +1,76 @@
+title = "Compiling pattern matching"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Types and semantics"
+chapter_order = 4
+order = 616
+kind = "recipe"
+lede = "Decision trees, backtracking automata, sharing, exhaustiveness and redundancy."
+level = "intermediate"
+code = ["examples/compilers_runtimes/pattern_match_compilation_decision_trees.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any compiler or interpreter with `match` on algebraic data, and rule/dispatch tables that must be complete and free of dead rules.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>match compilation in ML-family compilers</li><li>OCaml's compiler (backtracking automata) and its exhaustiveness/unused-case warnings</li><li>rustc</li><li>which checks exhaustiveness and usefulness on patterns (crate rustc_pattern_analysis) and lowers <code>match</code> to MIR branches. Course: Maranget</li><li>"Compiling Pattern Matching to Good Decision Trees" and "Warnings for pattern matching" (the algorithms used here)</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The problem**. `match v { p1 if g1 => e1, p2 => e2, ... }` means "the **first** arm whose pattern matches and whose guard is true". Running that definition literally (`naive_match` below, our oracle) re-inspects the same parts of `v` once per arm.
+
+A compiler wants to inspect each part as few times as possible.
+
+**The matrix**. Rows are arms, columns are the places still to inspect (**occurrences**, i.e. paths into the scrutinee).
+
+Two operations drive everything: specialise S(c, M): "the first column is known to be constructor c": keep rows that start with c (replace the cell by c's argument patterns) or with a wildcard (replace by arity(c) wildcards); drop the rest. default D(M): "it is none of the constructors in the column": keep only wildcard rows and drop the column.
+
+**Decision tree**: pick a column in which the first row needs a test, switch on it, specialise per constructor, default for the others, recurse. No place is tested twice on any path (asserted below), but rows can be copied into several branches: size can grow exponentially.
+
+**Which column** matters: heuristics below are first-column, necessity (the column that most rows actually need) and small branching factor. **Backtracking automaton**: take the longest prefix of rows that all need a test in the chosen column, switch on it, and if that fails fall through to the compiled remaining rows.
+
+Rows are never copied between groups (size stays small), but a place may be tested again. **Sharing**: hash-consing identical subtrees turns the tree into a DAG, which removes much of the duplication (the DAG is what you would emit as basic blocks with jumps). **Usefulness**.
+
+U(P, q) asks: is there a value matched by q and by no row of P? It uses the same two operations. It gives **both** checks: the match is exhaustive iff U(all rows, &#95;) is false (otherwise it returns a counterexample pattern), and arm i is redundant iff U(rows above i, p_i) is false.
+
+A guarded arm covers nothing (the guard may be false), which is exactly what rustc does. **Ranges**. Integer columns have a huge "constructor set".
+
+Split the domain at every range endpoint into disjoint segments; inside one segment every range pattern in the column behaves the same, so one representative case per segment suffices. **Or-patterns** are expanded into several rows with the same arm, leftmost alternative most significant.
+
+That order matters: with a guard, a failing guard must try the **next** alternative (Rust does this). Pre-expansion is simple but can be exponential (`(a|b, a|b, ...)`).
+
+**How** rustc **relates**: rustc checks usefulness on its own pattern representation, then builds MIR in which `match` becomes `SwitchInt` terminators on discriminants and integers plus comparisons for ranges; see the dev guide chapters linked below. We do not claim rustc uses the exact tree construction in this file.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Maranget, decision trees <a href="http://moscova.inria.fr/~maranget/papers/ml05e-maranget.pdf" target="_blank" rel="noreferrer">http://moscova.inria.fr/~maranget/papers/ml05e-maranget.pdf</a> and warnings <a href="http://moscova.inria.fr/~maranget/papers/warn/index.html" target="_blank" rel="noreferrer">http://moscova.inria.fr/~maranget/papers/warn/index.html</a></li><li>rustc dev guide <a href="https://rustc-dev-guide.rust-lang.org/pat-exhaustive-checking.html" target="_blank" rel="noreferrer">https://rustc-dev-guide.rust-lang.org/pat-exhaustive-checking.html</a> and <a href="https://rustc-dev-guide.rust-lang.org/mir/construction.html" target="_blank" rel="noreferrer">https://rustc-dev-guide.rust-lang.org/mir/construction.html</a></li><li><a href="https://doc.rust-lang.org/nightly/nightly-rustc/rustc_pattern_analysis/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/nightly/nightly-rustc/rustc_pattern_analysis/index.html</a></li></ul>
+"""
+
+[[sources]]
+title = "moscova.inria.fr/~maranget/papers/ml05e-maranget.pdf"
+url = "http://moscova.inria.fr/~maranget/papers/ml05e-maranget.pdf"
+
+[[sources]]
+title = "moscova.inria.fr/~maranget/papers/warn/index.html"
+url = "http://moscova.inria.fr/~maranget/papers/warn/index.html"
+
+[[sources]]
+title = "rustc-dev-guide.rust-lang.org/pat-exhaustive-checking.html"
+url = "https://rustc-dev-guide.rust-lang.org/pat-exhaustive-checking.html"
+
+[[sources]]
+title = "rustc-dev-guide.rust-lang.org/mir/construction.html"
+url = "https://rustc-dev-guide.rust-lang.org/mir/construction.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nightly/nightly-rustc/rustc_pattern_analysis/index.html"
+url = "https://doc.rust-lang.org/nightly/nightly-rustc/rustc_pattern_analysis/index.html"

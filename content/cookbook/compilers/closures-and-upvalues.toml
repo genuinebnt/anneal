@@ -1,0 +1,41 @@
+title = "Closures and upvalues"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Bytecode and virtual machines"
+chapter_order = 3
+order = 592
+kind = "guide"
+lede = "Book ch. 25 · Official tests: closure/, the limit/ file for upvalues"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<div class="cb-g-tt"><table><thead><tr><th>Kind</th><th>Input</th><th>Expected</th></tr></thead><tbody><tr><td><span class="cb-g-pill cb-g-dis">bytecode</span></td><td><code>fun o() { var x = 1; fun i() { return x; } return i; }</code></td><td>o: <code>Constant 1 · Closure &lt;fn i&gt; (local 1) · GetLocal 2 · Return · Nil · Return</code>; i: <code>GetUpvalue 0 · Return · Nil · Return</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>fun mk() { var n = 0; fun c() { n = n + 1; print n; } return c; } var c = mk(); c(); c();</code></td><td><code>1</code> then <code>2</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>var f; var g; { var a = "a"; fun ff() { print a; } fun gg() { a = "b"; } f = ff; g = gg; } g(); f();</code></td><td><code>b</code>: both closures share one closed upvalue</td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>256+ captured variables</code></td><td><code>Too many closure variables in function.</code></td></tr></tbody></table></div>
+
+<p>The book puts the upvalue descriptors inline in the bytecode after <code>OP_CLOSURE</code>. With an <code>Op</code> enum, store them in the function object as <code>upvalues: Vec&lt;UpvalueDesc&gt;</code>. <code>Closure(u8)</code> then only points at the function constant.</p>
+
+<p>The book links nested compilers with an <code>enclosing</code> pointer. In Rust, use a stack <code>Vec&lt;FnState&gt;</code> inside a single compiler. That avoids self-referential structs, and resolving an upvalue becomes recursion over indices:</p>
+
+```rust title="crates/clox/src/compiler.rs"
+struct FnState<'src> {
+    function: Function,
+    locals: Vec<Local<'src>>,
+    upvalues: Vec<UpvalueDesc>,   // { index: u8, is_local: bool }
+    scope_depth: u32,
+    kind: FnKind,
+}
+
+fn resolve_upvalue(&mut self, level: usize, name: &str) -> Option<u8> {
+    if level == 0 { return None; }                   // script has no enclosing function
+    if let Some(slot) = self.resolve_local(level - 1, name) {
+        self.states[level - 1].locals[slot as usize].captured = true;
+        return Some(self.add_upvalue(level, slot, true));
+    }
+    let up = self.resolve_upvalue(level - 1, name)?;
+    Some(self.add_upvalue(level, up, false))
+}
+```
+
+<p>At runtime, an open upvalue holds a stack index, and a closed one holds a <code>Value</code>. Model that directly with <code>enum Upvalue { Open(usize), Closed(Value) }</code>. Keep <code>open_upvalues</code> sorted by stack index so <code>close_upvalues(base)</code> can pop from the end.</p>
+"""

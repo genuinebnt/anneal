@@ -1,0 +1,56 @@
+title = "Physics simulation"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Mathematics and numerics"
+chapter_order = 7
+order = 232
+kind = "recipe"
+lede = "Integrators, fixed timestep, cloth, collisions, N-body."
+level = "advanced"
+code = ["examples/math_science/physics_simulation.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>game physics</li><li>particle systems</li><li>orbital mechanics demos</li><li>scientific simulation</li><li>anything that steps a system forward in time</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>game engines (fixed timestep + accumulator, broad-phase grids, position-based cloth)</li><li>molecular dynamics (velocity Verlet)</li><li>astrophysics (tree codes such as Barnes-Hut)</li><li>robotics/animation (constraint relaxation)</li><li>deterministic replays and lockstep netcode</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+The integrator decides whether a simulation stays believable. Explicit Euler **adds** energy every step (it explodes), semi-implicit (symplectic) Euler and velocity Verlet keep a nearby "shadow" energy bounded forever, and RK4 is the most accurate per step but slowly drifts.
+
+We measure all four on a harmonic oscillator (closed form known) and on a Kepler orbit (energy must be constant).
+
+Then the engineering around the integrator: a fixed timestep with an accumulator (bit-identical results regardless of frame rate) vs a variable timestep (frame-rate dependent); a position-based cloth (Verlet + distance-constraint relaxation); impulse-based elastic circle collisions (momentum and kinetic energy conserved); a uniform-grid broad phase checked against O(n&#94;2); and a Barnes-Hut quadtree (O(n log n) gravity, error controlled by the opening angle theta).
+
+Pictures are ASCII; PPM files are only written when COOKBOOK_GALLERY names a directory.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Verlet_integration>
+
+<https://en.wikipedia.org/wiki/Barnes%E2%80%93Hut_simulation>
+
+<https://floating-point-gui.de/>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Verlet_integration"
+url = "https://en.wikipedia.org/wiki/Verlet_integration"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Barnes%E2%80%93Hut_simulation"
+url = "https://en.wikipedia.org/wiki/Barnes%E2%80%93Hut_simulation"
+
+[[sources]]
+title = "floating-point-gui.de"
+url = "https://floating-point-gui.de/"

@@ -1,0 +1,109 @@
+title = "Subquery unnesting and decorrelation with dependent joins"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 395
+kind = "recipe"
+lede = "subquery unnesting and decorrelation with dependent joins (correlated scalar/EXISTS/IN/ANY/ALL/LATERAL -> joins)."
+level = "advanced"
+code = ["examples/database/subquery_unnesting_decorrelation.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>SQL planners and query rewriters</li><li>understanding why <code>NOT IN</code> and <code>COUNT(*)</code> subqueries are special</li><li><strong>Explain</strong> reading</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+HyPer/Umbra (the Neumann-Kemper dependent-join algorithm this file follows), PostgreSQL (pulls up **exists/in** into semi/anti joins, keeps other correlated subqueries as re-executed SubPlans), SQL Server (apply operators + "orthogonal optimization of subqueries"), Apache Calcite (SubQueryRemoveRule + decorrelator), Spark Catalyst (RewriteCorrelatedScalarSubquery, RewritePredicateSubquery), DuckDB (dependent joins flattened like in the paper);
+
+Also any DSL compiler that lowers "for each row run a nested query" to set-at-a-time operators.
+
+Course: CMU 15-799 Query Optimization (Spring 2025), lecture 11 (Unnesting Queries)
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a mini algebra (Scan, Select, Project, Join{inner,left,semi,anti}, Aggregate, Union, Distinct) with three-valued logic (**null** = `None`) and a **dependent join** operator `DepJoin{kind, L, X}`: for every row l of L, evaluate X with the columns of l visible as `$j` (outer references) and combine.
+
+SQL subqueries are translated mechanically to dependent joins: scalar subquery (**where** or **select** list)  -> DepJoin(inner) of L with a scalar aggregate       **exists** / **not exists** -> DepJoin(semi / anti)
+
+```text
+x IN / NOT IN / op ANY / op ALL         -> DepJoin(inner) with a scalar BOOL_OR / BOOL_AND over the tri-valued comparison `x op d`
+LATERAL / LEFT JOIN LATERAL             -> DepJoin(inner / left)
+```
+
+Two evaluators exist: **naive** (the executor re-runs X once per outer row: the nested-loop semantics that **defines** the meaning of the query) and **unnested** (the dependent joins are removed by the rewrite below, then ordinary hash/nested-loop joins run).
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+let `cols` be the outer columns X actually references. Build the **domain** `D = DISTINCT pi_cols(L)`: duplicate-eliminated bindings, so a correlated predicate is evaluated once per **distinct** binding, not once per row.
+
+Then `pd(D, X)` pushes the dependent join down through X until the correlation disappears; its output is `[D cols | X cols]`, i.e. every result row remembers which binding produced it. The result joins back to L with **null-safe** equality (`IS NOT DISTINCT FROM`) on the binding, because an outer value may itself be **null** and must still find its own sub-result.
+
+Push-down rules (k = &#124;cols&#124;): X not correlated              pd = D x X (cross product, becomes an equi-join once the parent Select is merged)
+
+```text
+Select(p, Y)                  Select(p', pd(Y))       (outer refs in p become D columns; local columns shift by k)
+```
+
+Project(es, Y)                Project(D cols ++ es', pd(Y)) Join(Y, Z)                    pd(Y) **join** pd(Z) on p' **and D**-equality, then drop the duplicated D (both sides carry the binding)
+
+```text
+Aggregate(g, f, Y)            Aggregate(D cols ++ g, f', pd(Y))   -- grouping by the binding keeps bindings apart
+```
+
+Union(Y, Z) / Distinct(Y)     Union(pd(Y), pd(Z)) / Distinct(pd(Y)) **the count bug** (Kim 1982, Ganski &amp; Wong 1987): a **scalar** aggregate over an empty set still returns a row (**count** = 0, BOOL_AND = true, **sum** = **null**), but after pushing the aggregate below the join **group by** the binding simply has NO group when no inner row matched, so an inner join with L loses the outer row (e.g.
+
+`WHERE 0 = (SELECT COUNT(*) ...)` returns nothing).
+
+The fix implemented here: **left outer** join D with the grouped result and replace a missing group by the aggregate's value over the empty set (`CASE WHEN marker IS NULL THEN agg(empty) ELSE agg END`; the marker is an extra COUNT(&#42;) column, so a genuine **null** aggregate (**sum** of NULLs) is not confused with a missing group).
+
+'Decorrelator::count_fix = false' turns the fix off, and the checks below prove that this variant really returns wrong answers. **Not in pitfall**: 'x NOT IN (S)' is **true** only if x differs from **every** element; one **null** in S makes it **unknown** (row dropped) and 'NOT IN (empty)' is **true**. The tempting rewrite 'NOT EXISTS (...
+
+**Where** d = x)' treats UNKNOWN as TRUE and is WRONG whenever S contains NULL; here NOT IN is evaluated as BOOL_AND over 'x &lt;> d' with full three-valued logic, so it is correct, and a check shows the naive anti-join rewrite differs.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Why** unnest: nested-loop re-execution costs &#124;L&#124; x cost(X); the unnested plan evaluates X once for all distinct bindings with hash joins, and lets the join orderer treat the former subquery like any other relation. Not every subquery is worth unnesting (a tiny L with an indexed X is best left correlated), which is why real systems keep both strategies.
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+600 random (database, query) pairs over all 10 query shapes (NULLs, duplicates, empty tables, correlated equality/inequality, **union** and self-join bodies): unnested result multiset == naive result multiset and no DepJoin survives; classic **count**-bug and **not-in**-with-**null** cases;
+
+The count-bug-disabled variant and the **not-exists** rewrite of **not in** are shown to be wrong; on a scaled database the unnested plans process fewer rows than naive re-execution (counts printed; timings are never asserted).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+CMU 15-799 Spring 2025 lecture 11 papers: "Unnesting Arbitrary Queries" (Neumann, Kemper, BTW 2015)
+
+```text
+https://15799.courses.cs.cmu.edu/spring2025/papers/11-unnesting/neumann-btw2015.pdf
+and "Improving Unnesting of Complex Queries" (Neumann, BTW 2025) https://15799.courses.cs.cmu.edu/spring2025/papers/11-unnesting/neumann-btw2025.pdf
+Schedule https://15799.courses.cs.cmu.edu/spring2025/schedule.html
+```
+"""
+
+[[sources]]
+title = "15799.courses.cs.cmu.edu/spring2025/papers/11-unnesting/neumann-btw2015.pdf"
+url = "https://15799.courses.cs.cmu.edu/spring2025/papers/11-unnesting/neumann-btw2015.pdf"
+
+[[sources]]
+title = "15799.courses.cs.cmu.edu/spring2025/papers/11-unnesting/neumann-btw2025.pdf"
+url = "https://15799.courses.cs.cmu.edu/spring2025/papers/11-unnesting/neumann-btw2025.pdf"
+
+[[sources]]
+title = "15799.courses.cs.cmu.edu/spring2025/schedule.html"
+url = "https://15799.courses.cs.cmu.edu/spring2025/schedule.html"

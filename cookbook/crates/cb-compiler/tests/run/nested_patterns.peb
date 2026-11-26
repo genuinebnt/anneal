@@ -1,0 +1,15 @@
+enum Option<T> { None, Some(T) }
+fn describe(p: (Option<int>, bool)) -> str {
+    match p {
+        (Option::Some(0), _) => "zero",
+        (Option::Some(n), true) => "some " + to_str(n) + " yes",
+        (Option::Some(_), false) => "some no",
+        (Option::None, b) => "none " + to_str(b),
+    }
+}
+fn main() {
+    println(describe((Option::Some(0), true)));
+    println(describe((Option::Some(4), true)));
+    println(describe((Option::Some(4), false)));
+    println(describe((Option::None, false)));
+}

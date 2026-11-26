@@ -1,0 +1,9 @@
+error[E0113]: this code is nested too deeply
+ --> e0113_nesting_too_deep.peb:2:112
+  |
+2 |     let x = (((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((1)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))));
+  |                                                                                                                ^ gave up here
+  |
+  = note: the rest of the file is ignored
+
+error: aborting due to 1 previous error

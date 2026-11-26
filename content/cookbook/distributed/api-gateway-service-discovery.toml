@@ -1,0 +1,61 @@
+title = "API gateway and service discovery"
+module = "Distributed systems"
+module_order = 10
+chapter = "Microservice patterns"
+chapter_order = 5
+order = 506
+kind = "recipe"
+lede = "Routing, TTL registry, load balancing, circuit breaker, bulkhead, retry budget, deadlines, hedging"
+level = "advanced"
+code = ["examples/microservices/api_gateway_service_discovery.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+the policy layer of a gateway, sidecar or RPC client: deciding **where** a request goes and **when** to stop sending it.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Envoy (outlier detection, circuit breaking, retry budgets)</li><li>Linkerd (P2C + latency, retry budgets)</li><li>Consul/Eureka/etcd leases for registration</li><li>gRPC deadlines</li><li>hedged reads in large storage and search tiers</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**What this is**: only the **decisions**, on a **virtual clock** (integer ms) with seeded latency and failure injection, so every threshold is asserted exactly and every run is identical. For real sockets see `reverse_proxy_load_balancer` and `http_client_resilience`. **The layers**, in the order a request meets them:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Route</div><div class="cb-g-says"><p>Longest matching path prefix on <strong>segment</strong> boundaries (<code>/api/users</code> must not capture <code>/api/users-admin</code>).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Deadline</div><div class="cb-g-says"><p>The client sends a remaining <strong>budget</strong> in a header (<code>x-deadline-ms</code>); every hop subtracts the time it spent and forwards the rest. A budget, not a wall-clock instant, so clocks need not agree. Nothing starts with an empty budget.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Discover</div><div class="cb-g-says"><p>Instances register with a TTL lease and keep it alive by <strong>heartbeat</strong>; active health checks eject and restore with consecutive-result thresholds. A re-registration gets a new <strong>generation</strong>, so a late message from the old process is ignored. Both are needed: a heartbeat proves the process is alive, a probe proves it can serve.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Balance</div><div class="cb-g-says"><p>Round robin, least in-flight, <strong>power of two choices</strong> (pick 2 at random, take the less loaded), consistent hashing.</p></div></div></div>
+
+```text
+5. PROTECT    : circuit BREAKER per instance (closed -> open -> half-open), BULKHEAD (cap in-flight per instance), RETRY BUDGET
+                (retries may add at most a fraction of the original traffic), HEDGING (for idempotent reads only).
+```
+
+**Breaker subtlety**: a call admitted while **closed** may finish after the breaker opened and half-opened again. Every permit carries the breaker's **epoch**; results from an older epoch are ignored, so a stale success cannot close a breaker. **Retry arithmetic**: with 3 attempts at each of 3 layers a dead leaf receives 27x traffic.
+
+A budget bounds the multiplier at (1 + ratio) per layer. P2C's point: random placement has maximum load &#126; ln n / ln ln n above the mean; one extra sample makes it &#126; ln ln n.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://sre.google/sre-book/handling-overload/" target="_blank" rel="noreferrer">https://sre.google/sre-book/handling-overload/</a></li><li><a href="https://sre.google/sre-book/addressing-cascading-failures/" target="_blank" rel="noreferrer">https://sre.google/sre-book/addressing-cascading-failures/</a></li></ul>
+
+<https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/circuit_breaking>
+
+<ul class="cb-g-reading"><li>Dean &amp; Barroso, "The Tail at Scale" (CACM 2013, title only)</li><li>Mitzenmacher, "The Power of Two Choices" (title only)</li></ul>
+"""
+
+[[sources]]
+title = "sre.google/sre-book/handling-overload"
+url = "https://sre.google/sre-book/handling-overload/"
+
+[[sources]]
+title = "sre.google/sre-book/addressing-cascading-failures"
+url = "https://sre.google/sre-book/addressing-cascading-failures/"
+
+[[sources]]
+title = "envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/circuit_breaking"
+url = "https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/circuit_breaking"

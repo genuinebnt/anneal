@@ -1,0 +1,62 @@
+title = "Lockfree stack aba"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Concurrent data structures"
+chapter_order = 3
+order = 254
+kind = "recipe"
+lede = "lock-free Treiber stack, the ABA problem, and tagged heads that defeat it."
+level = "advanced"
+code = ["examples/concurrency/lockfree_stack_aba.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>free lists</li><li>object pools</li><li>lock-free allocators</li><li>work-stealing building blocks</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a Treiber stack: `head` points at the top node; push links a node to the old head and CASes head; pop reads `head` and `head.next`, then CASes head from `old` to `next`. **The aba hazard**: pop reads (head = A, next = B), is descheduled; meanwhile other threads pop A, pop B, and push A back (now A.next = C).
+
+The first thread resumes: head is "still A", so its CAS succeeds and installs the **stale** `next = B`: B is a node somebody else owns/freed, and C or the re-pushed item is lost. The CAS compared only the value, not the history. Part 1 replays exactly this interleaving by hand, single-threaded, so it is reproducible.
+
+**The fix**: pack a generation tag next to the index in **one** `AtomicU64`: `(tag << 32) | index`. Every successful push/pop bumps the tag, so "A again" has a different tag and the stale CAS fails.
+
+(The tag can wrap after 2&#94;32 updates between one thread's read and its CAS; that is accepted in practice. 128-bit CAS or pointer tagging are alternatives.) **why indices in an arena**: nodes live in one pre-allocated `Vec` and are never freed while the stack lives, so a stale `nodes[i].next` read is a harmless atomic read, not a use-after-free.
+
+This whole recipe needs no `unsafe`. A second stack (`free`) of the same type recycles nodes, which also makes **aba** very likely; the stress test hammers that. **Memory reclamation**: with real pointers, a popped node cannot be freed immediately: another thread may be about to read `old.next`.
+
+Solutions: hazard pointers (readers publish "I am using X"; the freer scans them before freeing), epoch-based reclamation (readers pin an epoch; garbage is freed once all pinned threads moved on; crossbeam-epoch <https://github.com/crossbeam-rs/crossbeam>), reference counting, or never freeing (an arena, as here).
+
+**Orderings**: successful push CAS is `Release` (publishes value + next), pop CAS is `Acquire` (sees them); a node returned to the free list is Released after its value was read, so the next owner's writes cannot race that read. Check with `cargo +nightly miri run --example lockfree_stack_aba` (reduce the stress size first).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>lock-free allocator free lists and object pools</li><li>task freelists in runtimes</li><li>crossbeam-epoch's docs include a Treiber stack as the canonical example</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://marabos.nl/atomics/> and <https://docs.rs/crossbeam-epoch/latest/crossbeam_epoch/> and <https://en.wikipedia.org/wiki/ABA_problem>
+"""
+
+[[sources]]
+title = "github.com/crossbeam-rs/crossbeam"
+url = "https://github.com/crossbeam-rs/crossbeam"
+
+[[sources]]
+title = "marabos.nl/atomics"
+url = "https://marabos.nl/atomics/"
+
+[[sources]]
+title = "docs.rs/crossbeam-epoch/latest/crossbeam_epoch"
+url = "https://docs.rs/crossbeam-epoch/latest/crossbeam_epoch/"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/ABA_problem"
+url = "https://en.wikipedia.org/wiki/ABA_problem"

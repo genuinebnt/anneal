@@ -1,0 +1,3 @@
+struct P { x: int, x: bool }
+enum E { A, A }
+fn main() { let _p: P; }

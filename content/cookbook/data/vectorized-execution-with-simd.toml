@@ -1,0 +1,267 @@
+title = "Vectorized execution with SIMD"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 359
+kind = "guide"
+lede = "15-721 S2024 lecture #6 · SIMD, AVX-512 and NEON · auto vs explicit vectorization · selection scans · filter representation · relaxed operator fusion · vector refill · hash probing · measured kernels"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Vectorization (data parallelism)</strong> turns a scalar loop that processes one pair of operands into one that processes many at once with <strong>SIMD</strong> (single instruction, multiple data) registers. Ideal speedup is large (32 cores × 4-wide = 128×), real end-to-end gains are far smaller: only part of a query is vectorizable and materialization costs remain. Still essential for OLAP.</li> <li><strong>SIMD basics</strong>: keep data <strong>in registers as long as possible</strong>, use data-movement (load/store, even cache-bypassing), arithmetic/logic/comparison ops, and flush only when necessary. <strong>Vertical</strong> vectorization (the same operation on different elements per lane) is the common and widely useful form; <strong>horizontal</strong> (reducing across lanes, e.g. SUM) is rarer.</li> <li><strong>Three implementation routes</strong>: <strong>auto-vectorization</strong> (the compiler recognizes simple loops; conservative: possible pointer overlap or data-dependent control flow stops it); <strong>compiler hints</strong> (<code>restrict</code>, ignore-dependency pragmas: <em>you</em> guarantee safety); <strong>explicit intrinsics</strong> (portable only through a layer such as Google Highway; usually fastest but not the fewest lines). Kersten et al. (VLDB 2018): <strong>hand-written SIMD beats scalar by 10–130% for individual operators, but end to end it is barely 10% faster</strong> because only a small part of a query vectorizes. The pragmatic middle: let the compiler auto-vectorize with hints, hand-tune what is left.</li> <li><strong>AVX-512 added the primitives that make database kernels natural</strong>: <strong>masking</strong> (almost every op can be predicated per lane), <strong>permute</strong>, <strong>selective load/store</strong> (move only the mask-selected lanes), <strong>compress</strong> (pack selected lanes contiguously: a selection vector in one instruction), <strong>expand</strong>, <strong>selective gather/scatter</strong> (index-vector loads and stores). Caveats: the extension is <strong>split into groups</strong> that CPUs implement partially (check exactly what exists), and some CPUs <strong>downclock</strong> under heavy AVX-512, so some systems stay on AVX2.</li> <li><strong>Vectorized DBMS algorithms</strong> (Polychroniou et al., SIGMOD 2015): favour <strong>vertical</strong> vectorization; <strong>maximize lane utilization</strong>: process unique data items per lane and avoid computing on tuples already known invalid. <strong>Selection scans</strong>: compare, get a mask, update the selection, stop early if the whole vector is dead.</li> <li><strong>Relaxed Operator Fusion (ROF)</strong> (Menon, Mowry, Pavlo, VLDB 2017): inside a compiled pipeline some lanes carry tuples disqualified earlier, so SIMD is under-used. ROF <strong>splits the pipeline into stages with artificial pipeline breakers</strong> and cache-resident buffers: a stage runs until its buffer is full of <em>valid</em> tuples before the next stage starts. Also makes <strong>software prefetching</strong> simple (operators that prefetch start a new stage; group prefetching fits naturally).</li> <li><strong>Vector refill</strong> (AVX-512): <em>buffered</em> (stage results in extra registers within the operator and keep looping until lanes are full) vs <em>partial</em> (buffer under-utilized vectors and return to the previous operator for the next vector; needs careful bookkeeping). Few systems do either: complexity and overhead.</li> <li><strong>Hash tables</strong>: linear probing needs arbitrary memory accesses. <strong>Horizontal</strong>: several keys per bucket, compare one probe key against all with one SIMD compare (empty slots waste lanes). <strong>Vertical</strong>: one probe key <em>per lane</em>, <strong>gather</strong> the table slots, replace lanes that matched, advance the others by one (nearly full utilization). Vertical wins mostly, but <strong>both degrade to scalar speed when the table exceeds the cache</strong>.</li> <li><strong>Histogram/partitioning</strong>: scatter-increment conflicts when two lanes hit the same bucket, so <strong>replicate the histogram per lane</strong> and add the replicas afterwards.</li> </ul>
+"""
+
+[[sections]]
+heading = "Kernels, measured (Apple M-series, NEON, release build)"
+body = """
+<p>Eight million random <code>u32</code> values; every kernel is checked against the scalar reference on lengths 0–4 099 (including the non-multiple-of-lane tails and constants below, above and at the domain), and the NEON kernels are compiled only on <code>aarch64</code> with a scalar fallback elsewhere.</p>
+
+:::deeper Reference: selection-vector, bitmap, branch-free and NEON kernels; batched hash probing
+```rust title="src/exec/simd.rs"
+//! Selection and aggregation kernels: branching vs branch-free vs explicit NEON, selection vectors vs bitmaps,
+//! and batched hash probing. Every kernel is checked against the scalar reference in the tests.
+
+/// Branching filter into a selection vector: one unpredictable branch per tuple around 50% selectivity.
+pub fn select_branch(v: &[u32], c: u32, out: &mut Vec<u32>) {
+    out.clear();
+    for (i, &x) in v.iter().enumerate() { if x < c { out.push(i as u32); } }
+}
+
+/// Branch-free: always write the index, advance the output cursor by the comparison result.
+pub fn select_branchless(v: &[u32], c: u32, out: &mut Vec<u32>) {
+    out.clear();
+    out.resize(v.len() + 1, 0);
+    let mut k = 0usize;
+    for (i, &x) in v.iter().enumerate() { out[k] = i as u32; k += (x < c) as usize; }
+    out.truncate(k);
+}
+
+/// Bitmap output: 64 comparison results per word. Auto-vectorizes; popcount gives the count for free.
+pub fn bitmap_lt(v: &[u32], c: u32) -> Vec<u64> {
+    let mut out = Vec::with_capacity(v.len().div_ceil(64));
+    for chunk in v.chunks(64) {
+        let mut w = 0u64;
+        for (i, &x) in chunk.iter().enumerate() { w |= ((x < c) as u64) << i; }
+        out.push(w);
+    }
+    out
+}
+
+pub fn bitmap_and(a: &[u64], b: &[u64]) -> Vec<u64> { a.iter().zip(b).map(|(x, y)| x & y).collect() }
+
+/// Bitmap → selection vector by iterating set bits (`trailing_zeros` + clear lowest bit).
+pub fn bitmap_to_selection(bm: &[u64], out: &mut Vec<u32>) {
+    out.clear();
+    for (wi, &w0) in bm.iter().enumerate() {
+        let mut w = w0;
+        while w != 0 { out.push((wi * 64) as u32 + w.trailing_zeros()); w &= w - 1; }
+    }
+}
+
+pub fn count_scalar(v: &[u32], c: u32) -> usize { v.iter().filter(|&&x| x < c).count() }
+
+/// `SELECT sum(x) WHERE y < c`, branchy.
+pub fn sum_where_branch(x: &[u32], y: &[u32], c: u32) -> u64 {
+    let mut s = 0u64;
+    for i in 0..x.len() { if y[i] < c { s += x[i] as u64; } }
+    s
+}
+
+/// Same, branch-free: multiply by the 0/1 predicate. No data-dependent control flow: vectorizes.
+pub fn sum_where_mask(x: &[u32], y: &[u32], c: u32) -> u64 {
+    let mut s = 0u64;
+    for i in 0..x.len() { s += (x[i] as u64) & (0u64.wrapping_sub((y[i] < c) as u64)); }
+    s
+}
+
+#[cfg(target_arch = "aarch64")]
+pub mod neon {
+    use std::arch::aarch64::*;
+
+    /// Count of `v[i] < c`, four u32 lanes per instruction; per-lane counters accumulate −1 per match.
+    pub fn count_lt(v: &[u32], c: u32) -> usize {
+        let mut chunks = v.chunks_exact(16);
+        let mut acc = unsafe { vdupq_n_u32(0) };
+        unsafe {
+            let cv = vdupq_n_u32(c);
+            for ch in &mut chunks {
+                let p = ch.as_ptr();
+                let m0 = vcltq_u32(vld1q_u32(p), cv);
+                let m1 = vcltq_u32(vld1q_u32(p.add(4)), cv);
+                let m2 = vcltq_u32(vld1q_u32(p.add(8)), cv);
+                let m3 = vcltq_u32(vld1q_u32(p.add(12)), cv);
+                // masks are all-ones (−1) on match: subtracting them adds 1 per match
+                acc = vsubq_u32(acc, vaddq_u32(vaddq_u32(m0, m1), vaddq_u32(m2, m3)).into());
+            }
+        }
+        let mut total = unsafe { vaddvq_u32(acc) } as usize;
+        total += chunks.remainder().iter().filter(|&&x| x < c).count();
+        total
+    }
+
+    /// `sum(x) where y < c` with 64-bit accumulators: widen the masked u32 lanes with `vpadalq`.
+    pub fn sum_where(x: &[u32], y: &[u32], c: u32) -> u64 {
+        let n = x.len();
+        let mut i = 0;
+        let mut acc = unsafe { vdupq_n_u64(0) };
+        unsafe {
+            let cv = vdupq_n_u32(c);
+            while i + 4 <= n {
+                let m = vcltq_u32(vld1q_u32(y.as_ptr().add(i)), cv);
+                let sel = vandq_u32(vld1q_u32(x.as_ptr().add(i)), m);
+                acc = vpadalq_u32(acc, sel);                      // pairwise add-accumulate into u64 lanes
+                i += 4;
+            }
+        }
+        let mut s = unsafe { vaddvq_u64(acc) };
+        while i < n { if y[i] < c { s += x[i] as u64; } i += 1; }
+        s
+    }
+}
+
+// ---------------- hash probing ----------------
+
+/// Open-addressing table of u32 keys (0 = empty) for probing experiments.
+pub struct Table { keys: Vec<u32>, mask: usize }
+
+impl Table {
+    pub fn build(keys: &[u32], log2: u32) -> Table {
+        let mut t = Table { keys: vec![0; 1 << log2], mask: (1 << log2) - 1 };
+        for &k in keys { let mut i = hash(k) & t.mask; while t.keys[i] != 0 { i = (i + 1) & t.mask; } t.keys[i] = k; }
+        t
+    }
+    #[inline] fn contains(&self, k: u32) -> bool {
+        let mut i = hash(k) & self.mask;
+        loop { let s = self.keys[i]; if s == k { return true; } if s == 0 { return false; } i = (i + 1) & self.mask; }
+    }
+    /// One probe at a time: each memory miss stalls the next probe's start.
+    pub fn probe_sequential(&self, probes: &[u32]) -> usize { probes.iter().filter(|&&k| self.contains(k)).count() }
+
+    /// Two phases per batch: first touch the home slot of every key (independent loads the CPU overlaps), then resolve.
+    pub fn probe_batched(&self, probes: &[u32]) -> usize {
+        let mut hits = 0;
+        let mut slots = [0u32; 32];
+        for batch in probes.chunks(32) {
+            let mut warm = 0u32;
+            for (j, &k) in batch.iter().enumerate() { let i = hash(k) & self.mask; slots[j] = self.keys[i]; warm ^= slots[j]; }
+            std::hint::black_box(warm);                            // keep the independent loads alive
+            hits += batch.iter().filter(|&&k| self.contains(k)).count();
+        }
+        hits
+    }
+}
+
+#[inline] pub fn hash(k: u32) -> usize { (k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(29) as usize ^ (k as usize >> 3) }
+```
+:::
+
+<h4>1. Produce a selection vector: control flow is the cost</h4>
+
+```text title="ns per tuple for x < c"
+selectivity  branching  branch-free  bitmap+to-sel   count scalar   count NEON  bitmap only
+1%       0.31         0.29           0.24           0.10         0.11         0.20
+10%       0.74         0.26           0.31           0.10         0.11         0.20
+50%       2.57         0.29           0.55           0.10         0.11         0.20
+90%       0.80         0.27           0.76           0.10         0.11         0.20
+99%       0.46         0.28           0.70           0.10         0.11         0.20
+```
+
+- **A branch on the predicate costs 2.6 ns/tuple at 50% selectivity, 9× the branch-free version (0.29)**: the branch is unpredictable and each misprediction flushes the pipeline; at 1% or 99% the predictor wins and the two are even. The branch-free loop (`out[k] = i; k += (x < c) as usize`) costs the same at every selectivity, which is the property you want from a scan operator.
+- **Counting is 0.10 ns/tuple (10 G tuples/s)** when the compiler vectorizes it: **the autovectorized scalar `filter().count()` matches the hand-written NEON kernel (0.11)**. For simple loops the compiler is as good as intrinsics; hand-writing pays off only where it can't see the pattern.
+- **Bitmaps are cheap to produce** (0.20 ns/tuple, 64 results per word, all vector compare + move) but converting to a selection vector costs 0.04–0.55 ns more depending on selectivity (one loop iteration per set bit).
+
+#### 2. Aggregate under a predicate
+
+```text title="ns per tuple, SELECT sum(x) WHERE y < c"
+ selectivity  branching  mask multiply         NEON
+          1%       0.39           0.09         0.17
+         10%       0.78           0.06         0.17
+         50%       2.56           0.06         0.17
+         90%       0.75           0.06         0.18
+```
+
+<ul> <li><strong>Masking instead of branching: 43× faster at 50% selectivity</strong> (0.06 vs 2.56 ns): add <code>x &amp; mask</code> where <code>mask = 0 - (y &lt; c)</code> always, rather than skipping the add. Doing "wasted" work on rejected tuples is cheaper than predicting them.</li> <li><strong>My hand-written NEON kernel (0.17) loses to the autovectorized mask loop (0.06)</strong>: it widens and accumulates with <code>vpadalq</code> per four lanes and keeps one dependency chain, while LLVM unrolls with several independent accumulators. <em>Measure before reaching for intrinsics</em>, and when you do write them, unroll with independent accumulators.</li> </ul>
+
+<h4>3. Chained predicates: selection vector or bitmap?</h4>
+
+<p><code>WHERE a &lt; c AND b &lt; c AND d &lt; c</code> (each at the same selectivity): a <strong>selection vector</strong> filters the next predicate only over survivors (random access into <code>b[i]</code>), a <strong>bitmap</strong> evaluates every predicate over all rows and ANDs words.</p>
+
+```text title="ns per tuple, three chained predicates"
+    selectivity each selection vector       bitmap AND
+                  1%             0.31             0.61
+                 10%             0.38             0.60
+                 30%             1.07             0.61
+                 60%             2.69             0.60
+                 90%             1.84             0.60
+```
+
+<ul> <li><strong>Selection vectors win at low selectivity</strong> (0.31–0.38 vs 0.60 ns at ≤ 10%): after the first predicate almost nothing is left to look at.</li> <li><strong>Bitmaps win above ~15–20%</strong> (flat 0.60 ns independent of selectivity; the selection vector degrades to 2.7 ns at 60% as survivors force gathers and <code>retain</code> loops with unpredictable control flow). This is the result of <em>Filter Representation in Vectorized Query Execution</em> (Ngom et al., DaMoN 2021): the best representation depends on selectivity, so <strong>adaptive engines pick per vector</strong> (Velox, DuckDB's selection vectors, Photon's position lists).</li> </ul>
+
+<h4>4. Hash probing: memory-level parallelism, not lanes</h4>
+
+<p>Probing a table of <code>u32</code> keys with 2 M probes (half hits). <em>Sequential</em> resolves one key at a time; <em>batched</em> first reads the home slot of 32 keys back-to-back (independent loads the out-of-order core overlaps), then resolves them.</p>
+
+```text title="ns per probe"
+         table       sequential          batched   speedup   (ns per probe)
+         16 KB             6.32             5.89     1.07x
+        256 KB             5.89             6.09     0.97x
+       4096 KB             6.17             6.27     0.98x
+      65536 KB            11.00             9.64     1.14x
+     262144 KB            14.81            10.37     1.43x
+```
+
+<ul> <li><strong>A cache-resident table (≤ 4 MB) shows no benefit</strong> (6 ns either way: hashing and compare dominate); batching helps only once probes <strong>miss to DRAM</strong>: <strong>1.43× at 256 MB</strong>. The lecture's remark that vectorized probing "drops to scalar speed when the table outgrows the cache" is the same fact seen from the other side: lanes don't help a memory-latency-bound loop; <strong>overlapping misses</strong> does (group prefetching, software pipelining, AMAC, coroutines).</li> <li><strong>NEON has no gather</strong>, so the vertical-vectorized probe of the lecture isn't expressible here; on x86 AVX2/AVX-512 the gather instruction exists but its throughput is often similar to scalar loads. Treat SIMD hash probing as <em>one tool among batching, prefetching and Bloom-filter pre-filtering</em>, not the first one.</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>What compiles to SIMD</strong>: counting and masked sums over slices (<code>iter().filter().count()</code>, <code>iter().zip().map().sum()</code>), branch-free per-element arithmetic, <code>chunks_exact(N)</code> loops with <code>[T; N]</code> bodies, and <code>iter().copied().max()</code>. <strong>What doesn't</strong>: loops with data-dependent <code>break</code>/<code>push</code>, indirect indexing (<code>b[i]</code> with <code>i</code> read from memory), early exits, and floating-point reductions (not associative: use integer or write the unrolled sum explicitly).</li> <li><strong>Help the optimizer</strong>: iterate with iterators or slices of known length instead of indexed loops that may bounds-check; use <code>assert!(a.len() == b.len())</code> once before the loop so checks are elided; enable <code>-C target-cpu=native</code> (or runtime-detected features) so it may use AVX2/AVX-512/NEON features beyond the baseline.</li> <li><strong>Explicit SIMD in stable Rust</strong>: <code>std::arch::{x86_64, aarch64}</code> intrinsics (all <code>unsafe</code>), guarded with <code>#[cfg(target_arch = ...)]</code> and, on x86, <strong>runtime detection</strong> <code>is_x86_feature_detected!("avx2")</code> plus <code>#[target_feature(enable = "avx2")]</code> functions. Crates for portability: <strong><code>wide</code></strong> (fixed-width types on stable), <strong><code>pulp</code></strong>, <strong><code>std::simd</code></strong> (portable SIMD, nightly) and <strong><code>multiversion</code>/<code>target-features</code></strong> for function multi-versioning.</li> <li><strong><code>unsafe</code> discipline</strong>: each intrinsic block states its precondition (alignment is <em>not</em> needed for <code>vld1q</code>/<code>loadu</code>; the pointer + length <em>is</em>); tests compare against the scalar kernel on every tail length. Keep the unsafe kernel behind a safe function with the scalar fallback.</li> <li><strong>Look at the machine code</strong> (<code>cargo asm</code>, Compiler Explorer) to confirm vector instructions (<code>fcmp</code>/<code>cmhi</code>, <code>ld1</code>, <code>addv</code> on NEON; <code>vpcmpgtd</code>, <code>vpaddq</code> on AVX2) before and after a change.</li> <li><strong>Alignment and prefetch</strong>: <code>Vec&lt;u32&gt;</code> is 4-byte aligned; for cache-line-friendly kernels use <code>#[repr(align(64))]</code> buffers. Stable software prefetch exists on x86 (<code>_mm_prefetch</code>) but not yet on aarch64: batching (above) is the portable substitute.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Benchmark the baseline you will really have</strong>: the BitWeaving lecture quotes 20× over "SIMD-scan"; against the compiler-vectorized <code>u32</code> scan above, the same technique wins 2–6× (<a href="/cookbook/p/modern-encodings-btrblocks-fastlanes-bitweaving">A13</a>). Always include the autovectorized scalar loop.</li> <li><strong>Tails and alignment</strong>: every kernel must handle <code>len % lanes != 0</code> and empty input; test lengths 0, 1, lanes−1, lanes, lanes+1.</li> <li><strong>Portable ≠ same speed</strong>: AVX2 gathers, AVX-512 compress/expand, and NEON's missing movemask all change which algorithm wins. Keep scalar, SIMD-friendly scalar, and explicit variants, selected at startup.</li> <li><strong>Frequency throttling and port pressure</strong>: heavy 512-bit use can lower the clock for the <em>whole</em> core, hurting unrelated code (this is why many engines stay on 256-bit).</li> <li><strong>Selection vectors vs bitmaps is data-dependent</strong>: choosing statically loses at one end; adaptive per-batch choice costs little (a popcount).</li> <li><strong>NULL handling doubles the kernels</strong>: a validity mask must be combined with every predicate and aggregate; generating the <em>no-NULL</em> fast path is a classic micro-adaptivity trick (<a href="/cookbook/p/modern-olap-systems">A11</a>).</li> <li><strong>Gains vanish end to end</strong> if the operator feeds a slow consumer: measure whole pipelines (and remember Amdahl).</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Rethinking SIMD Vectorization for In-Memory Databases"
+url = "https://dl.acm.org/doi/10.1145/2723372.2747645"
+
+[[sources]]
+title = "Everything You Always Wanted to Know About Compiled and Vectorized Queries But Were Afraid to Ask"
+url = "https://www.vldb.org/pvldb/vol11/p2209-kersten.pdf"
+
+[[sources]]
+title = "Relaxed Operator Fusion for In-Memory Databases"
+url = "https://www.vldb.org/pvldb/vol11/p1-menon.pdf"
+
+[[sources]]
+title = "MonetDB/X100: Hyper-Pipelining Query Execution"
+url = "https://www.cidrdb.org/cidr2005/papers/P19.pdf"
+
+[[sources]]
+title = "Highway"
+url = "https://github.com/google/highway"
+
+[[sources]]
+title = "Intrinsics Guide"
+url = "https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html"
+
+[[sources]]
+title = "NEON Intrinsics reference"
+url = "https://developer.arm.com/architectures/instruction-sets/intrinsics/"
+
+[[sources]]
+title = "std::arch"
+url = "https://doc.rust-lang.org/std/arch/"
+
+[[sources]]
+title = "std::simd"
+url = "https://doc.rust-lang.org/std/simd/"
+
+[[sources]]
+title = "Fast"
+url = "https://lemire.me/blog/"
+
+[[sources]]
+title = "simdjson"
+url = "https://github.com/simdjson/simdjson"

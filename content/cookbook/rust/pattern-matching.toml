@@ -1,0 +1,38 @@
+title = "Pattern matching"
+module = "Rust language"
+module_order = 1
+chapter = "Everyday language"
+chapter_order = 3
+order = 25
+kind = "recipe"
+lede = "Destructuring, guards, bindings, slice patterns, let-else."
+level = "simple"
+code = ["examples/language/pattern_matching.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>parsing tokens</li><li>state transitions</li><li>handling Option/Result</li><li>walking ASTs</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>parsers</li><li>state machines</li><li>error handling</li><li>walking ASTs: exhaustive matching finds every place to update</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+`match` must be **exhaustive**: add a variant to an enum and every `match` that lacks a wildcard stops compiling. That is a feature: it finds every place you must update. Avoid a lazy `_ =>` arm on enums you own.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/book/ch18-00-patterns.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch18-00-patterns.html"
+url = "https://doc.rust-lang.org/book/ch18-00-patterns.html"

@@ -1,0 +1,59 @@
+title = "Chunks and the disassembler"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Bytecode and virtual machines"
+chapter_order = 3
+order = 586
+kind = "guide"
+lede = "Book ch. 14 · Official tests: none"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>There's no language to run yet. Build the bytecode container and the tool you'll use to test every later slice. The book stores raw bytes. In Rust, a typed <code>Op</code> enum is safer, just as fast in practice, and makes jump patching simple. Operands live inside each variant.</p>
+
+<p>Every table in Part II uses this <code>Op</code> enum. Jump targets are op indices, not the byte offsets shown in the book's listings.</p>
+
+```rust title="crates/clox/src/chunk.rs"
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Op {
+    Constant(u8),
+    Nil, True, False, Pop,
+    GetLocal(u8), SetLocal(u8),
+    GetGlobal(u8), DefineGlobal(u8), SetGlobal(u8),
+    GetUpvalue(u8), SetUpvalue(u8), CloseUpvalue,
+    Equal, Greater, Less,
+    Add, Subtract, Multiply, Divide, Not, Negate,
+    Print,
+    Jump(u16), JumpIfFalse(u16), Loop(u16),
+    Call(u8), Closure(u8), Return,
+    Class(u8), GetProperty(u8), SetProperty(u8), Method(u8),
+    Invoke(u8, u8), Inherit, GetSuper(u8), SuperInvoke(u8, u8),
+}
+const _: () = assert!(std::mem::size_of::<Op>() == 4);
+
+pub struct Chunk {
+    pub code: Vec<Op>,
+    pub lines: Vec<u32>,        // parallel to code
+    pub constants: Vec<Value>,
+}
+```
+
+<p>Write two disassemblers. The first prints the book's full listing, for snapshots and for <code>--features print-code</code>. The second, <code>ops()</code>, prints one line per chunk and drops the implicit script epilogue, which is what the test tables below use. The snapshot below shows the listing from C6 on, when every script ends with <code>Nil</code>, <code>Return</code>.</p>
+
+```rust title="crates/clox/src/debug.rs, tests"
+#[test]
+fn listing() {
+    insta::assert_snapshot!(disassemble(&compile("print 1 + 2;")), @r"
+    == script ==
+    0000    1 Constant       0 '1'
+    0001    | Constant       1 '2'
+    0002    | Add
+    0003    | Print
+    0004    | Nil
+    0005    | Return
+    ");
+}
+```
+"""

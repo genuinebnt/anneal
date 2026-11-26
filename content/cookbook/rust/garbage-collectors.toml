@@ -1,0 +1,68 @@
+title = "Garbage collectors"
+module = "Rust language"
+module_order = 1
+chapter = "Memory and allocators"
+chapter_order = 6
+order = 56
+kind = "recipe"
+lede = "garbage collection algorithms on a simulated managed heap, checked by a reachability oracle."
+level = "advanced"
+code = ["examples/memory/garbage_collectors.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>language runtimes (JVM/Go/V8/CPython-style)</li><li>scripting engines</li><li>game engines</li><li>any system with a managed heap</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+five classic collectors over one simulated heap model: objects have a header (live flag, colour/mark, age, remembered bit, refcount, forwarding slot), a type tag, a payload word and NF reference fields; they live in a `Vec` arena and are addressed by `u32` handles (`Ref`), with a root-slot array playing the role of the stack.
+
+(a) **mark-sweep** with an explicit mark stack (no recursion, so a 100k-long list cannot overflow the call stack), an intrusive **free list** threaded through dead objects, and a sweep pass.
+
+(b) **tri-colour incremental** marking (white = unvisited, grey = queued, black = scanned) interleaved with the mutator, protected by Dijkstra's **insertion write barrier** (shade the target of every pointer store). We show the lost-object bug when the barrier is switched off.
+
+Roots are re-scanned at termination because stack writes carry no barrier (the original Dijkstra design; Go used this before its hybrid barrier). (c) **CHENEY SEMISPACE copying**: evacuate roots into to-space, then a scan pointer chases the copy frontier (a BFS queue that lives inside the to-space itself); **forwarding** pointers keep sharing and cycles intact.
+
+Output is compacted: allocation becomes a bump, and dead objects cost nothing (work is proportional to **live** data). (d) **generational**: nursery + old generation. Survivors age; reaching PROMOTE_AGE copies them to the old space.
+
+Old objects are not traced in a minor collection, so an old->young pointer would be invisible: the **write barrier** records the old object in a **remembered set**, which a minor GC treats as extra roots. (e) **reference counting**: immediate reclamation (no pauses beyond cascades), but cycles leak by design.
+
+A backup cycle collector using **trial deletion** (subtract internal references; what remains is externally referenced, trace from it; the rest is cyclic garbage, as in CPython's gc module) reclaims them.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Why** the oracle: a GC bug is silent corruption, so every collector is driven by the same seeded **random MUTATOR** (allocate, link, unlink, make cycles, drop/copy roots, mutate payloads) that also updates a plain model graph which never frees anything.
+
+After each collection we assert (1) every reachable object survives with the same tag/payload and an **isomorphic** graph (sharing and cycles preserved, even when objects moved), (2) for exact collections the live count equals the reachable count (RC: reachable + exactly the cyclic garbage), and (3) heap invariants (free list sane, no dangling pointers, tri-colour invariant, remembered-set coverage, RC equals real in-degree).
+
+Payloads are unique per allocation so a pointer to a recycled slot is caught.
+
+**Rust VS these schemes**: Rust does memory management at **compile** time. Ownership gives every value one owner, `Drop` runs exactly where the owner dies, and the borrow checker proves no reference outlives its referent, so there is no collector, no pause and no header on the object.
+
+The price is that graphs with sharing and cycles need indices (like this file's arena), `Rc<RefCell<..>>` (this file's scheme (e), including its cycle leak, fixed by `Weak`), or a GC library. A tracing runtime pays at **run** time (barriers, pauses, 2x space for copying) to let programs build any graph freely.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>the JVM's generational collectors (nursery copying, old-gen mark/compact, card-marking barriers)</li><li>Go's concurrent tri-colour mark-sweep with write barriers</li><li>CPython's refcounting plus a cyclic collector</li><li>Lua/JavaScript engines (incremental/generational marking)</li><li>Lisp/ML runtimes (Cheney-style copying nursery)</li><li>Swift/ObjC ARC (RC, cycles broken by weak refs)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+"The Garbage Collection Handbook" (Jones, Hosking, Moss) <https://gchandbook.org/>   "The Rust Programming Language", ch. 4 <https://doc.rust-lang.org/book/ch04-00-understanding-ownership.html>
+"""
+
+[[sources]]
+title = "gchandbook.org"
+url = "https://gchandbook.org/"
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch04-00-understanding-ownership.html"
+url = "https://doc.rust-lang.org/book/ch04-00-understanding-ownership.html"

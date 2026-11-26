@@ -1,0 +1,9 @@
+warning[W0502]: function `never_called` is never used
+ --> w0502_unused_function.peb:1:4
+  |
+1 | fn never_called() {}
+  |    ^^^^^^^^^^^^ not reachable from `main`
+  |
+  = help: if this is intentional, prefix it with an underscore
+
+warning: 1 warning emitted

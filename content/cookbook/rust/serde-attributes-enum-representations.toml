@@ -1,0 +1,78 @@
+title = "Serde derive attributes in depth"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Data, text and encoding crates"
+chapter_order = 1
+order = 112
+kind = "recipe"
+lede = "Enum representations, defaults, flatten, with, borrow, Value, RawValue, streaming"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/serde_attributes_enum_representations.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>API payloads</li><li>config files</li><li>event logs</li><li>anything that must evolve its schema without breaking readers</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>REST/JSON APIs</li><li>Kubernetes-style tagged objects</li><li>event sourcing envelopes</li><li>config with defaults</li><li>forwarding unparsed JSON (RawValue)</li><li>NDJSON log pipelines</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>serde::Serialize</code></li><li><code>serde::Deserialize</code></li><li><code>#[serde(rename)]</code></li><li><code>#[serde(rename_all)]</code></li><li><code>#[serde(alias)]</code></li><li><code>#[serde(default)]</code></li><li><code>#[serde(skip)]</code></li><li><code>#[serde(skip_serializing_if)]</code></li><li><code>#[serde(flatten)]</code></li><li><code>#[serde(with)]</code></li><li><code>#[serde(serialize_with)]</code></li><li><code>#[serde(deserialize_with)]</code></li><li><code>#[serde(borrow)]</code></li><li><code>#[serde(bound)]</code></li><li><code>#[serde(transparent)]</code></li><li><code>#[serde(from)]</code></li><li><code>#[serde(into)]</code></li><li><code>#[serde(try_from)]</code></li><li><code>#[serde(deny_unknown_fields)]</code></li><li><code>#[serde(tag)]</code></li><li><code>#[serde(content)]</code></li><li><code>#[serde(untagged)]</code></li><li><code>serde_json::to_string</code></li><li><code>serde_json::from_str</code></li><li><code>serde_json::to_value</code></li><li><code>serde_json::from_value</code></li><li><code>serde_json::json</code></li><li><code>serde_json::Value::pointer</code></li><li><code>serde_json::Value::get</code></li><li><code>serde_json::Value::as_str</code></li><li><code>serde_json::value::RawValue</code></li><li><code>serde_json::Deserializer::from_str</code></li><li><code>serde_json::StreamDeserializer</code></li><li><code>serde::de::Visitor</code></li><li><code>serde_json::Error::line</code></li><li><code>serde_json::Error::column</code></li><li><code>serde_json::Error::classify</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://serde.rs/" target="_blank" rel="noreferrer">https://serde.rs/</a></li><li><a href="https://docs.rs/serde_json/1/serde_json/" target="_blank" rel="noreferrer">https://docs.rs/serde_json/1/serde_json/</a></li></ul>
+"""
+
+[[sections]]
+heading = "Crates"
+body = """
+serde = "1" (1.0.229 current), serde_json = "1" (1.0.154 current, feature raw_value)
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+hand-written Serializer/Deserializer formats (see examples/encoding_compression/serde_custom.rs), `serde_with` (external crate), `#[serde(getter)]`/remote derive (rare).
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Snake_case JSON keys from camelCase</td><td><code>#[serde(rename_all = "camelCase")]  (container) ; #[serde(rename = "x")] (field)</code></td></tr><tr><td>Accept old names too</td><td><code>#[serde(alias = "old")]</code></td></tr><tr><td>Missing field gets a value</td><td><code>#[serde(default)] / #[serde(default = "path::fn")]</code></td></tr><tr><td>Omit None / empty on output</td><td><code>#[serde(skip_serializing_if = "Option::is_none")]</code></td></tr><tr><td>Reject typos in config</td><td><code>#[serde(deny_unknown_fields)]  (NOT with flatten!)</code></td></tr><tr><td>Merge a nested struct's keys</td><td><code>#[serde(flatten)]  ; capture extras -&gt; flatten a HashMap&lt;String, Value&gt;</code></td></tr><tr><td>Newtype ID serialised as inner</td><td><code>#[serde(transparent)]</code></td></tr><tr><td>Validate while deserialising</td><td><code>#[serde(try_from = "Raw")]</code></td></tr><tr><td>Tagged union, readable</td><td><code>#[serde(tag = "type")] (internal) ; adjacent = tag + content ; untagged = try each in order</code></td></tr><tr><td>Custom string&lt;-&gt;type</td><td><code>#[serde(with = "module")] or serialize_with/deserialize_with</code></td></tr><tr><td>Avoid allocating</td><td><code>&amp;str fields, or #[serde(borrow)] on Cow&lt;str&gt;, + from_str/from_slice (from_reader requires an owned type)</code></td></tr><tr><td>Pass through unparsed JSON</td><td><code>Box&lt;RawValue&gt;</code></td></tr><tr><td>Process a stream of JSON docs</td><td><code>Deserializer::from_str(s).into_iter::&lt;T&gt;()</code></td></tr><tr><td>Explore unknown JSON</td><td><code>serde_json::Value + .pointer("/a/0/b")</code></td></tr><tr><td>Error position</td><td><code>err.line(), err.column(), err.classify()</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://serde.rs/attributes.html" target="_blank" rel="noreferrer">https://serde.rs/attributes.html</a></li><li><a href="https://serde.rs/enum-representations.html" target="_blank" rel="noreferrer">https://serde.rs/enum-representations.html</a></li><li><a href="https://docs.rs/serde_json/latest/serde_json/value/struct.RawValue.html" target="_blank" rel="noreferrer">https://docs.rs/serde_json/latest/serde_json/value/struct.RawValue.html</a></li><li>Rust API Guidelines C-SERDE</li></ul>
+"""
+
+[[sources]]
+title = "serde.rs"
+url = "https://serde.rs/"
+
+[[sources]]
+title = "docs.rs/serde_json/1/serde_json"
+url = "https://docs.rs/serde_json/1/serde_json/"
+
+[[sources]]
+title = "serde.rs/attributes.html"
+url = "https://serde.rs/attributes.html"
+
+[[sources]]
+title = "serde.rs/enum-representations.html"
+url = "https://serde.rs/enum-representations.html"
+
+[[sources]]
+title = "docs.rs/serde_json/latest/serde_json/value/struct.RawValue.html"
+url = "https://docs.rs/serde_json/latest/serde_json/value/struct.RawValue.html"

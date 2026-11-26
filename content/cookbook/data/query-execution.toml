@@ -1,0 +1,253 @@
+title = "Query execution"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 351
+kind = "guide"
+lede = "plans, pipelines, pipeline breakers · iterator, materialization, vectorized models · pull vs push · access methods, zone maps, multi-index scans · modification queries · expression evaluation"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>A plan is a DAG (usually a tree) of operators</strong>; data flows from leaves to root. A <strong>pipeline</strong> is a chain of operators that tuples flow through without intermediate storage. A <strong>pipeline breaker</strong> must consume all of its input first: a hash join's build side, sorts, subqueries, aggregations.</li> <li><strong>A processing model</strong> defines <strong>control flow</strong> (who calls whom) and <strong>data flow</strong> (what is passed: whole tuples (NSM) or column subsets (DSM)).</li> <li><strong>Iterator (Volcano / pipeline)</strong>: every operator implements <code>Next()</code>, returning one tuple or end-of-stream. Composable and easy to reason about, it allows pipelining, and <code>LIMIT</code> is trivial (stop calling <code>Next</code>). It's used by almost every row-based system.</li> <li><strong>Materialization</strong>: each operator produces <em>all</em> its output at once (<code>Output()</code>). Fewer calls, good for OLTP touching few tuples; bad for OLAP with large intermediates. Pushing hints like <code>LIMIT</code> down helps.</li> <li><strong>Vectorized / batch</strong>: <code>Next()</code> returns a <strong>batch</strong> of tuples or columns. Far fewer calls, tight loops over arrays, SIMD-friendly with no per-tuple dependencies. Ideal for OLAP.</li> <li><strong>Direction</strong>: <strong>pull</strong> (top-down; easy <code>LIMIT</code>; per-tuple virtual calls and branches) vs <strong>push</strong> (bottom-up; tighter cache and register use within a pipeline; harder to control output size; some operators are awkward).</li> <li><strong>Access methods</strong>: <strong>sequential scan</strong> (almost always the slowest; optimized by compression, prefetching, buffer-pool bypass, parallelism, late materialization, heap clustering, result caching and materialized views, code specialization, approximate queries over samples, and <strong>zone maps</strong>: per-page min/max/avg/sum/count that let whole pages be skipped, especially valuable in the cloud). <strong>Index scan</strong>: pick the index that eliminates the most tuples, based on its attributes, value domains, predicate shape and uniqueness. <strong>Multi-index scan</strong>: compute RID sets per index, then intersect or union them (bitmaps, hash tables, Bloom filters), and apply the remaining predicates.</li> <li><strong>Modification queries</strong> check constraints and maintain indexes. <code>UPDATE</code>/<code>DELETE</code> consume RIDs and must track what they've already touched. <code>INSERT</code> either materializes tuples itself or inserts whatever its child produces. The <strong>Halloween problem</strong> (System R, Halloween 1976): an update moves a tuple ahead of the scan, which then sees it again. The fix: track modified RIDs for the statement.</li> <li><strong>Expression evaluation</strong>: <code>WHERE</code> clauses are expression trees (comparisons, AND/OR, arithmetic, constants, parameters, attribute references) evaluated against a context (current tuple, parameters, schema). Tree-walking is slow per row. Better options: <strong>JIT/compile</strong> the expression, or <strong>vectorize</strong> it. Also <strong>constant folding</strong> (compute <code>UPPER('x')</code> once) and <strong>common sub-expression elimination</strong>.</li> </ul>
+"""
+
+[[sections]]
+heading = "One query, four models, measured"
+body = """
+<p><code>SELECT r.a + s.b FROM r JOIN s ON r.k = s.k WHERE r.c &gt; 10</code>, with 1M rows on each side and 8.9M output rows. Every model produces exactly the same result multiset.</p>
+
+```text title="Apple M4 Pro, release · verify/tests/exec_models.rs"
+volcano (pull, Box<dyn Operator>, one Vec per row)   795 ms
+materialized (each operator returns everything)      470 ms
+vectorized (1024-row column batches + selection)     211 ms
+push-based (scan drives closures)                    223 ms
+```
+
+<p>Where the Volcano time goes: <strong>one heap allocation per row per operator</strong> (<code>Vec&lt;i64&gt;</code> rows) and <strong>a virtual call per row per operator</strong> (<code>Box&lt;dyn Operator&gt;</code>). The vectorized and push versions do neither. Production iterators avoid the allocation by passing <em>references into pages</em>, or by reusing one output tuple buffer per operator. That's why a well-written Volcano engine is within 2–3× of a vectorized one for OLTP, while losing badly on scans.</p>
+
+:::deeper Reference: the four models and three expression evaluators
+```rust title="src/execution/models.rs"
+//! L13: one query, four processing models, three ways to evaluate expressions.
+//!   SELECT r.a + s.b FROM r JOIN s ON r.k = s.k WHERE r.c > 10
+//! Rows are fixed-width i64 vectors so the models, not the types, are what differ.
+use std::collections::HashMap;
+
+pub type Row = Vec<i64>;
+
+// ---------------- expressions ----------------------------------------------------------
+#[derive(Clone, Debug, PartialEq)]
+pub enum Expr { Col(usize), Const(i64), Add(Box<Expr>, Box<Expr>), Mul(Box<Expr>, Box<Expr>), Gt(Box<Expr>, Box<Expr>), And(Box<Expr>, Box<Expr>) }
+use Expr::*;
+
+impl Expr {
+    /// Tree-walking interpreter: a `match` per node per row.
+    pub fn eval(&self, row: &[i64]) -> i64 {
+        match self {
+            Col(i) => row[*i],
+            Const(c) => *c,
+            Add(a, b) => a.eval(row) + b.eval(row),
+            Mul(a, b) => a.eval(row) * b.eval(row),
+            Gt(a, b) => (a.eval(row) > b.eval(row)) as i64,
+            And(a, b) => (a.eval(row) != 0 && b.eval(row) != 0) as i64,
+        }
+    }
+
+    /// Constant folding: evaluate every constant-only subtree once, at plan time.
+    pub fn fold(self) -> Expr {
+        let bin = |a: Expr, b: Expr, mk: fn(Box<Expr>, Box<Expr>) -> Expr| {
+            let (a, b) = (a.fold(), b.fold());
+            match (&a, &b) {
+                (Const(_), Const(_)) => Const(mk(Box::new(a.clone()), Box::new(b.clone())).eval(&[])),
+                _ => mk(Box::new(a), Box::new(b)),
+            }
+        };
+        match self {
+            Add(a, b) => bin(*a, *b, Add),
+            Mul(a, b) => bin(*a, *b, Mul),
+            Gt(a, b) => bin(*a, *b, Gt),
+            And(a, b) => bin(*a, *b, And),
+            e => e,
+        }
+    }
+
+    /// "Compile" to nested closures: the dispatch happens once, at build time.
+    pub fn compile(&self) -> Box<dyn Fn(&[i64]) -> i64 + Send + Sync> {
+        match self {
+            Col(i) => { let i = *i; Box::new(move |r| r[i]) }
+            Const(c) => { let c = *c; Box::new(move |_| c) }
+            Add(a, b) => { let (a, b) = (a.compile(), b.compile()); Box::new(move |r| a(r) + b(r)) }
+            Mul(a, b) => { let (a, b) = (a.compile(), b.compile()); Box::new(move |r| a(r) * b(r)) }
+            // Specialize the common shape `col > const`: no inner calls at all.
+            Gt(a, b) => match (&**a, &**b) {
+                (Col(i), Const(c)) => { let (i, c) = (*i, *c); Box::new(move |r| (r[i] > c) as i64) }
+                _ => { let (a, b) = (a.compile(), b.compile()); Box::new(move |r| (a(r) > b(r)) as i64) }
+            },
+            And(a, b) => { let (a, b) = (a.compile(), b.compile()); Box::new(move |r| (a(r) != 0 && b(r) != 0) as i64) }
+        }
+    }
+
+    /// Vectorized: evaluate over whole columns. One `match` per node per *batch*.
+    pub fn eval_batch(&self, cols: &[Vec<i64>], n: usize) -> Vec<i64> {
+        match self {
+            Col(i) => cols[*i][..n].to_vec(),
+            Const(c) => vec![*c; n],
+            Add(a, b) => { let (x, y) = (a.eval_batch(cols, n), b.eval_batch(cols, n)); x.iter().zip(&y).map(|(p, q)| p + q).collect() }
+            Mul(a, b) => { let (x, y) = (a.eval_batch(cols, n), b.eval_batch(cols, n)); x.iter().zip(&y).map(|(p, q)| p * q).collect() }
+            Gt(a, b) => { let (x, y) = (a.eval_batch(cols, n), b.eval_batch(cols, n)); x.iter().zip(&y).map(|(p, q)| (p > q) as i64).collect() }
+            And(a, b) => { let (x, y) = (a.eval_batch(cols, n), b.eval_batch(cols, n)); x.iter().zip(&y).map(|(p, q)| (*p != 0 && *q != 0) as i64).collect() }
+        }
+    }
+}
+
+// ---------------- 1. iterator (Volcano): pull one row per next() --------------------------
+pub trait Operator { fn next(&mut self) -> Option<Row>; }
+
+pub struct Scan<'a> { rows: &'a [Row], i: usize }
+impl Operator for Scan<'_> {
+    fn next(&mut self) -> Option<Row> { let r = self.rows.get(self.i)?.clone(); self.i += 1; Some(r) }
+}
+pub struct Filter<'a> { child: Box<dyn Operator + 'a>, pred: Expr }
+impl Operator for Filter<'_> {
+    fn next(&mut self) -> Option<Row> {
+        loop { let r = self.child.next()?; if self.pred.eval(&r) != 0 { return Some(r); } }
+    }
+}
+pub struct Project<'a> { child: Box<dyn Operator + 'a>, exprs: Vec<Expr> }
+impl Operator for Project<'_> {
+    fn next(&mut self) -> Option<Row> { let r = self.child.next()?; Some(self.exprs.iter().map(|e| e.eval(&r)).collect()) }
+}
+/// Hash join: the build side is a pipeline breaker, drained on the first next().
+pub struct HashJoin<'a> {
+    build: Box<dyn Operator + 'a>, probe: Box<dyn Operator + 'a>, bk: usize, pk: usize,
+    table: Option<HashMap<i64, Vec<Row>>>, pending: Vec<Row>,
+}
+impl Operator for HashJoin<'_> {
+    fn next(&mut self) -> Option<Row> {
+        if self.table.is_none() {
+            let mut t: HashMap<i64, Vec<Row>> = HashMap::new();
+            while let Some(r) = self.build.next() { t.entry(r[self.bk]).or_default().push(r); }
+            self.table = Some(t);
+        }
+        loop {
+            if let Some(r) = self.pending.pop() { return Some(r); }
+            let p = self.probe.next()?;
+            if let Some(ms) = self.table.as_ref().unwrap().get(&p[self.pk]) {
+                self.pending.extend(ms.iter().map(|b| b.iter().chain(&p).copied().collect()));
+            }
+        }
+    }
+}
+
+pub fn volcano(r: &[Row], s: &[Row]) -> Vec<Row> {
+    // r: [k, a, c]  s: [k, b]  → joined row = r ++ s = [k, a, c, k, b]
+    let filtered = Filter { child: Box::new(Scan { rows: r, i: 0 }), pred: Gt(Box::new(Col(2)), Box::new(Const(10))) };
+    let join = HashJoin { build: Box::new(filtered), probe: Box::new(Scan { rows: s, i: 0 }), bk: 0, pk: 0, table: None, pending: vec![] };
+    let mut root = Project { child: Box::new(join), exprs: vec![Add(Box::new(Col(1)), Box::new(Col(4)))] };
+    std::iter::from_fn(|| root.next()).collect()
+}
+
+// ---------------- 2. materialization: each operator returns its whole output -----------------
+pub fn materialized(r: &[Row], s: &[Row]) -> Vec<Row> {
+    let filtered: Vec<&Row> = r.iter().filter(|x| x[2] > 10).collect();          // σ: full output
+    let mut t: HashMap<i64, Vec<&Row>> = HashMap::new();
+    for x in &filtered { t.entry(x[0]).or_default().push(x); }
+    let joined: Vec<(&Row, &Row)> = s.iter().flat_map(|y| t.get(&y[0]).into_iter().flatten().map(move |x| (*x, y))).collect();
+    joined.into_iter().map(|(x, y)| vec![x[1] + y[1]]).collect()                 // π
+}
+
+// ---------------- 3. vectorized: batches of columns + selection vectors -----------------------
+pub const BATCH: usize = 1024;
+
+pub fn vectorized(r_cols: &[Vec<i64>], s_cols: &[Vec<i64>]) -> Vec<Row> {
+    // Build: scan r in batches, filter with a selection vector, insert survivors.
+    let mut t: HashMap<i64, Vec<i64>> = HashMap::new();       // k -> list of r.a
+    let n = r_cols[0].len();
+    let mut sel: Vec<u32> = Vec::with_capacity(BATCH);
+    for start in (0..n).step_by(BATCH) {
+        let end = (start + BATCH).min(n);
+        sel.clear();
+        // Tight, branch-light loop the compiler can vectorize: compute matches, compact indices.
+        for (i, &c) in r_cols[2][start..end].iter().enumerate() {
+            sel.push(i as u32);
+            sel.truncate(sel.len() - (c <= 10) as usize);     // branchless compaction
+        }
+        for &i in &sel { let i = start + i as usize; t.entry(r_cols[0][i]).or_default().push(r_cols[1][i]); }
+    }
+    // Probe: batch-at-a-time, emit the projection directly.
+    let mut out = Vec::new();
+    let m = s_cols[0].len();
+    for start in (0..m).step_by(BATCH) {
+        let end = (start + BATCH).min(m);
+        for i in start..end {
+            if let Some(as_) = t.get(&s_cols[0][i]) { for &a in as_ { out.push(vec![a + s_cols[1][i]]); } }
+        }
+    }
+    out
+}
+
+// ---------------- 4. push-based: producers drive consumers through closures -----------------
+pub fn push_based(r: &[Row], s: &[Row]) -> Vec<Row> {
+    let mut out = Vec::new();
+    // Pipeline 1 (r → filter → build). The sink is the hash table insert.
+    let mut t: HashMap<i64, Vec<i64>> = HashMap::new();
+    {
+        let mut build = |x: &Row| { t.entry(x[0]).or_default().push(x[1]); };
+        let mut filter = |x: &Row| if x[2] > 10 { build(x) };
+        for x in r { filter(x); }                               // the scan pushes into the pipeline
+    }
+    // Pipeline 2 (s → probe → project → output).
+    let mut emit = |v: i64| out.push(vec![v]);
+    for y in s { if let Some(as_) = t.get(&y[0]) { for &a in as_ { emit(a + y[1]); } } }
+    out
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Expression evaluation, measured"
+body = """
+<p><code>c &gt; 10 AND a * (2 + 3) &gt; 100</code> over 5M rows:</p>
+
+```text title="Output"
+tree-walk                 63.3 ms     a `match` per node per row
+tree-walk, folded         57.6 ms     (2 + 3) computed once at plan time
+closures ("compiled")     20.9 ms     dispatch once at build time; `col > const` specialized
+vectorized (1024/batch)   12.2 ms     a `match` per node per batch; tight loops over slices
+```
+
+<aside data-call="rust"><b>Closures as a poor man's JIT</b><p><code>Expr::compile</code> turns the tree into nested <code>Box&lt;dyn Fn(&amp;[i64]) -&gt; i64&gt;</code>. Each node's dispatch happens once, when the closure is built, and evaluation is a chain of indirect calls with no <code>match</code>. Specializing common shapes (<code>Col &gt; Const</code> becomes a closure capturing just <code>i</code> and <code>c</code>) is where most of the win comes from. This technique was described for Lisp interpreters in the 1980s, and it's what many engines do before or instead of real code generation (DataFusion's <code>PhysicalExpr</code> is in this family, but vectorized over Arrow arrays). Real JIT compilation through LLVM or Cranelift is in Part II.</p></aside>
+
+<aside data-call="rust"><b>Selection vectors and branchless compaction</b><p><code>sel.push(i); sel.truncate(sel.len() - (c &lt;= 10) as usize);</code> appends every index, then "un-appends" it when the predicate fails, so the loop has no data-dependent branch. Branch mispredictions on a 50%-selective filter cost more than the comparisons themselves. The selection vector (the indices of qualifying rows) is how vectorized engines (MonetDB/X100, DuckDB, Velox) filter <em>without copying</em> columns: downstream operators read only the selected positions.</p></aside>
+"""
+
+[[sections]]
+heading = "Pull vs push"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th></th> <th>Pull (Volcano)</th> <th>Push (HyPer, Umbra, DuckDB's pipelines)</th> </tr> </thead> <tbody> <tr> <td>Who drives</td> <td>the root calls <code>next()</code> down the tree</td> <td>the scan calls <code>consume()</code> up the pipeline</td> </tr> <tr> <td><code>LIMIT</code> / early exit</td> <td>trivial</td> <td>needs a signal back down</td> </tr> <tr> <td>Per-tuple overhead</td> <td>a virtual call per operator per tuple</td> <td>the pipeline compiles or fuses into one loop</td> </tr> <tr> <td>Pipeline breakers</td> <td><code>init()</code> drains children</td> <td>each pipeline ends at a sink (hash table build, sort buffer)</td> </tr> <tr> <td>Parallelism</td> <td>exchange operators (<a href="/cookbook/p/parallel-execution">L14</a>)</td> <td>morsels: split the source of each pipeline (Part II)</td> </tr> </tbody> </table></div>
+
+<p>Modern analytical engines are <strong>push-based and vectorized</strong>: pipelines run per morsel, operators process batches, and the pipeline breakers are explicit sinks. BusTub (and P3) use pull-based Volcano, which is right for learning and fine for OLTP.</p>
+
+<div class="cb-g-tip"><h3>Zone maps in one paragraph</h3><p>Store min and max (and optionally count, sum and null count) for each column in each page or row group. A scan checks <code>WHERE val &gt; 600</code> against <code>max</code>: if max ≤ 600, it skips the page without reading it. This is free to maintain on insert, approximate after deletes (the bounds become loose but remain safe), and decisive for sorted or clustered columns like timestamps. Parquet stores them per row group and page. Snowflake prunes micro-partitions with them. PostgreSQL's BRIN index is a zone map stored as an index.</p> </div>
+"""
+
+[[sources]]
+title = "Volcano — An Extensible and Parallel Query Evaluation System"
+url = "https://paperhub.s3.amazonaws.com/dace52a42c07f7f8348b08dc2b186061.pdf"
+
+[[sources]]
+title = "MonetDB/X100: Hyper-Pipelining Query Execution"
+url = "https://www.cidrdb.org/cidr2005/papers/P19.pdf"
+
+[[sources]]
+title = "Efficiently Compiling Efficient Query Plans for Modern Hardware"
+url = "https://www.vldb.org/pvldb/vol4/p539-neumann.pdf"
+
+[[sources]]
+title = "Everything You Always Wanted to Know About Compiled and Vectorized Queries But Were Afraid to Ask"
+url = "https://www.vldb.org/pvldb/vol11/p2209-kersten.pdf"

@@ -1,0 +1,131 @@
+title = "Production compiler architecture"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Language tooling and production"
+chapter_order = 7
+order = 643
+kind = "guide"
+lede = "Diagnostics, queries and incrementality, interning, parallelism, stability, bootstrapping"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Diagnostics as a product"
+body = """
+<p>A good diagnostic has:</p>
+
+<ul> <li>A level and a stable code, such as <code>E0382</code> with <code>--explain</code>.</li> <li>One primary span with a label saying what is wrong <em>here</em>.</li> <li>Secondary spans with labels saying why, for example “value moved here”.</li> <li>Notes and help.</li> <li>Structured <em>suggestions</em>: text edits with an <em>applicability</em> level (machine-applicable, maybe incorrect, has placeholders), so IDEs and <code>cargo fix</code> can apply them.</li> </ul>
+
+<p>Also emit JSON for tools. Avoid cascades: after a type error, give the expression an <code>{error}</code> type that unifies with everything, so one mistake produces one message. Deduplicate, cap the count, and put the most likely cause first. Elm's “compiler errors for humans” set the modern standard.</p>
+
+```rust title="The shape of a diagnostic"
+pub struct Diagnostic {
+    pub level: Level,                      // Error, Warning, Note, Help
+    pub code: Option<&'static str>,        // "E0382"
+    pub message: String,
+    pub primary: Label,
+    pub secondary: Vec<Label>,
+    pub notes: Vec<String>,
+    pub suggestions: Vec<Suggestion>,
+}
+pub struct Label { pub span: Span, pub text: String }
+pub struct Suggestion { pub message: String, pub edits: Vec<(Span, String)>, pub applicability: Applicability }
+pub enum Applicability { MachineApplicable, MaybeIncorrect, HasPlaceholders, Unspecified }
+```
+"""
+
+[[sections]]
+heading = "Query-based, incremental compilation"
+body = """
+<p>Instead of a pipeline of passes over the whole program, a modern compiler is a set of memoized <b>queries</b>: <code>parse(file)</code>, <code>type_of(def)</code>, <code>mir_built(def)</code>, <code>codegen_unit(cgu)</code>. While a query runs, the system records which other queries it read. After an input changes, a memoized result is reused if none of its dependencies changed. This is checked recursively, the <em>red-green</em> algorithm. <b>Early cutoff</b> stops propagation when a recomputed result equals the old one. Editing a function body then doesn't re-typecheck callers, because <code>type_of(f)</code> didn't change. rustc, rust-analyzer (via salsa), Roslyn and Swift all work this way.</p>
+
+```rust title="A minimal query engine with dependency tracking and early cutoff"
+use std::{cell::RefCell, collections::HashMap};
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Key { Source(u32), Parse(u32), Check(u32) }
+
+struct Memo { value: Value, deps: Vec<Key>, verified_at: u64, changed_at: u64 }
+
+pub struct Db {
+    revision: u64,
+    inputs: HashMap<Key, (Value, u64)>,           // value, revision it last changed
+    memo: RefCell<HashMap<Key, Memo>>,
+    active: RefCell<Vec<Vec<Key>>>,               // dependency recording, one frame per running query
+}
+
+impl Db {
+    pub fn set_input(&mut self, k: Key, v: Value) {
+        self.revision += 1;
+        self.inputs.insert(k, (v, self.revision));
+    }
+
+    /// Called by query code: records `k` as a dependency of the running query.
+    pub fn get(&self, k: Key) -> Value {
+        if let Some(frame) = self.active.borrow_mut().last_mut() { frame.push(k); }
+        self.fetch(k)
+    }
+
+    fn fetch(&self, k: Key) -> Value {
+        if let Some((v, _)) = self.inputs.get(&k) { return v.clone(); }
+        if self.still_valid(k) { return self.memo.borrow()[&k].value.clone(); }
+        self.execute(k)
+    }
+
+    fn changed_at(&self, k: Key) -> u64 {
+        match self.inputs.get(&k) {
+            Some(&(_, rev)) => rev,
+            None => { self.fetch(k); self.memo.borrow()[&k].changed_at }
+        }
+    }
+
+    /// Red-green: valid if no dependency changed since we last verified this memo.
+    fn still_valid(&self, k: Key) -> bool {
+        let (deps, verified_at) = match self.memo.borrow().get(&k) {
+            Some(m) if m.verified_at == self.revision => return true,
+            Some(m) => (m.deps.clone(), m.verified_at),
+            None => return false,
+        };
+        let ok = deps.iter().all(|&d| self.changed_at(d) <= verified_at);
+        if ok { self.memo.borrow_mut().get_mut(&k).unwrap().verified_at = self.revision; }
+        ok
+    }
+
+    fn execute(&self, k: Key) -> Value {
+        self.active.borrow_mut().push(Vec::new());
+        let value = compute(self, k);                 // your query functions; they call db.get(..)
+        let deps = self.active.borrow_mut().pop().unwrap();
+        let mut memo = self.memo.borrow_mut();
+        let changed_at = match memo.get(&k) {
+            Some(old) if old.value == value => old.changed_at,   // early cutoff
+            _ => self.revision,
+        };
+        memo.insert(k, Memo { value: value.clone(), deps, verified_at: self.revision, changed_at });
+        value
+    }
+}
+// Missing from this sketch: cycle detection, cancellation, durability levels, LRU eviction,
+// and parallel execution. salsa provides all of them.
+```
+
+<div class="cb-g-tip"><h3>Engineering checklist</h3> <ul> <li><b>Interning and arenas.</b> Intern types so equality is a pointer compare; rustc's <code>Ty&lt;'tcx&gt;</code> is an interned arena pointer. Intern symbols. Allocate IR in arenas freed per compilation session.</li> <li><b>Parallelism.</b> Codegen units compile in parallel. rustc's front end can use <code>-Z threads</code>. Query systems parallelize naturally if results are immutable.</li> <li><b>Performance tracking.</b> Benchmark compile time on a fixed corpus per commit, and track instruction counts, wall time and max RSS (perf.rust-lang.org). Profile the compiler itself; rustc has <code>-Z self-profile</code> with the <code>measureme</code> tools.</li> <li><b>Stability.</b> Unstable features go behind feature gates. Breaking changes ship in editions and never break old code. Deprecate with lints. Run crater before changes. Keep a written specification with a conformance suite; Rust adopted the Ferrocene Language Specification.</li> <li><b>Bootstrapping.</b> A self-hosted compiler builds in stages: stage0 is a downloaded binary, which builds stage1, which builds stage2. Reproducible builds need path remapping (<code>--remap-path-prefix</code>) and deterministic output. Thompson's “trusting trust” attack is countered by diverse double-compiling (Wheeler). mrustc, a Rust compiler written in C++, exists partly for that reason.</li> <li><b>Cross-compilation.</b> Use target triples, a target specification (rustc's are JSON), a sysroot per target, and keep host and target configuration separate everywhere.</li> <li><b>ICE handling.</b> Catch panics at the driver, print the query stack and a bug-report link, and dump a reproducer.</li> </ul></div>
+"""
+
+[[sources]]
+title = "rustc dev guide: overview"
+url = "https://rustc-dev-guide.rust-lang.org/overview.html"
+
+[[sources]]
+title = "queries"
+url = "https://rustc-dev-guide.rust-lang.org/query.html"
+
+[[sources]]
+title = "incremental compilation"
+url = "https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation.html"
+
+[[sources]]
+title = "diagnostics"
+url = "https://rustc-dev-guide.rust-lang.org/diagnostics.html"
+
+[[sources]]
+title = "The salsa book"
+url = "https://salsa-rs.github.io/salsa/"

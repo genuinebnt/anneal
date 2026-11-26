@@ -1,0 +1,43 @@
+title = "Optimization"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Bytecode and virtual machines"
+chapter_order = 3
+order = 594
+kind = "guide"
+lede = "Book ch. 30 · Tests: benchmark/ timed with hyperfine. The full suite must pass with every feature combination"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>Profile before you change anything. Run <code>samply record target/release/clox bench/zoo.lox</code> and look at where the time goes. On macOS, Instruments works as well.</p>
+
+<p><b>NaN boxing.</b> Because objects are <code>u32</code> handles, a NaN-boxed <code>Value</code> needs no <code>unsafe</code>. Put it behind a <code>nan-boxing</code> feature so both representations stay tested.</p>
+
+```rust title="crates/clox/src/value.rs, feature 'nan-boxing'"
+#[derive(Clone, Copy, PartialEq)]
+pub struct Value(u64);
+
+const QNAN: u64 = 0x7ffc_0000_0000_0000;
+const SIGN: u64 = 0x8000_0000_0000_0000;
+
+impl Value {
+    pub const NIL: Value = Value(QNAN | 1);
+    pub const FALSE: Value = Value(QNAN | 2);
+    pub const TRUE: Value = Value(QNAN | 3);
+
+    pub fn number(n: f64) -> Self { Value(n.to_bits()) }
+    pub fn is_number(self) -> bool { self.0 & QNAN != QNAN }
+    pub fn obj(r: ObjRef) -> Self { Value(SIGN | QNAN | r.0 as u64) }
+    pub fn is_obj(self) -> bool { self.0 & (QNAN | SIGN) == (QNAN | SIGN) }
+    pub fn as_obj(self) -> ObjRef { ObjRef(self.0 as u32) }
+}
+
+const _: () = assert!(std::mem::size_of::<Value>() == 8);
+```
+
+<p>Deriving <code>PartialEq</code> on the bits makes <code>NaN == NaN</code> true. Compare numbers as <code>f64</code> in <code>values_equal</code>, as the book does.</p>
+
+<p>Other candidates, measured one at a time: bounds checks in the dispatch loop (<code>get_unchecked</code> behind a feature, then Miri), a faster hasher for globals (<code>rustc-hash</code>'s <code>FxHashMap</code>, which rustc itself uses), and a fixed-size stack array instead of a <code>Vec</code>.</p>
+"""

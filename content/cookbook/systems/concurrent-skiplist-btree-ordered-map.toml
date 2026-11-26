@@ -1,0 +1,67 @@
+title = "Concurrent ordered map"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Concurrent data structures"
+chapter_order = 3
+order = 257
+kind = "recipe"
+lede = "The lazy skip list (Herlihy, Lev, Luchangco, Shavit) with range scans."
+level = "advanced"
+code = ["examples/concurrency/concurrent_skiplist_btree_ordered_map.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>sorted in-memory indexes (LSM memtables)</li><li>time-ordered event buffers</li><li>leaderboards</li><li>anything needing <code>range()</code> under concurrency</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>LevelDB/RocksDB memtables are skip lists</li><li>Java's <code>ConcurrentSkipListMap</code></li><li>Redis sorted sets use a skip list for rank/range</li><li>crossbeam-skiplist is the lock-free Rust version. Course: CMU 15-445 (index concurrency lectures)</li><li>Herlihy &amp; Shavit</li><li>"The Art of Multiprocessor Programming" ch. 14</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Why not a concurrent B-TREE here**: a B+tree needs latch crabbing across variable-size nodes and splits; a skip list's pointer updates are local (a node is linked into `h` lists one pointer at a time), which makes a &#42;lock-light&#42; design small enough to verify.
+
+This is the **lazy** skip list: `find` takes NO locks; `insert`/`remove` lock only the few predecessor nodes, validate, and apply. **The algorithm** (per node: `key`, `top` level, `next[level]`, `marked`, `fully_linked`, a tiny lock): find(key)   : walk from the head, top level to bottom, remembering `preds[l]` and `succs[l]`. Lock-free, may see stale pointers.
+
+```text
+insert      : find; if present and not marked, update its value under its lock. Else lock preds[0..=top] bottom-up, VALIDATE that every
+              pred and succ is unmarked and `pred.next[l] == succ`, retry from scratch if not; link bottom-up; set `fully_linked`.
+```
+
+remove      : find victim; lock it; if it is not already `marked`, set `marked` (this is the **linearization point**: the key is now logically
+
+```text
+gone); lock preds, validate `pred.next[l] == victim` and pred unmarked; unlink; unlock.
+```
+
+get         : find; present iff `fully_linked && !marked` (also lock-free). Contains is linearized at the read of `marked`. The `marked` flag is why validation can be so cheap: a node is never repaired once marked, so seeing `!marked` under the lock is a proof.
+
+**Memory**: nodes live in a pre-allocated arena (`Vec<Node>`), links are `AtomicUsize` **indices**, and a removed node is never reused. That removes use-after-free, **aba** and the need for hazard pointers/epochs (see `epoch_hazard_pointer_reclamation`) at the cost of a bounded lifetime insert budget.
+
+Real implementations (crossbeam-skiplist) pay for epoch-based reclamation instead. **Range scans** walk the bottom level skipping marked/not-yet-linked nodes. They are **weakly consistent**, not a snapshot: every key that was present for the whole scan appears, nothing that was never inserted appears, order is strict.
+
+Snapshot scans need versions (MVCC).
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+(1) 8 threads on **disjoint** key classes each compared op-by-op against its own `BTreeMap` model, then the union and sub-ranges compared with the merged model, plus a structural check (levels sorted, upper levels subsets of the bottom); (2) overlapping keys: random 3-thread x 4-op histories on 2 keys checked for linearizability with a Wing-Gong search; (3) scans during churn: stable keys always present and output strictly sorted.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Herlihy, Lev, Luchangco, Shavit, "A Simple Optimistic Skiplist Algorithm" (**sirocco** 2007, title only, not re-read here).
+
+<ul class="cb-g-reading"><li>Pugh, "Skip Lists: A Probabilistic Alternative to Balanced Trees" (CACM 1990, title only)</li><li><a href="https://docs.rs/crossbeam-skiplist/latest/crossbeam_skiplist/" target="_blank" rel="noreferrer">https://docs.rs/crossbeam-skiplist/latest/crossbeam_skiplist/</a></li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/crossbeam-skiplist/latest/crossbeam_skiplist"
+url = "https://docs.rs/crossbeam-skiplist/latest/crossbeam_skiplist/"

@@ -1,0 +1,72 @@
+title = "Effects, async and memory models"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Atomics and memory ordering"
+chapter_order = 2
+order = 246
+kind = "guide"
+lede = "Exceptions, generators, async/await, algebraic effects, and what compilers may do with concurrent memory"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Control effects"
+body = """
+<p>Exceptions, generators, coroutines, async/await and backtracking are all ways of capturing and resuming part of the stack. The general construct is the <b>delimited continuation</b> (<code>shift/reset</code>, <code>control/prompt</code>). <b>Algebraic effects and handlers</b> make it structured and typed. A function <em>performs</em> an operation such as <code>yield(x)</code>, <code>get()</code> or <code>await(fut)</code>. The nearest enclosing handler receives the operation together with a continuation, which it may resume zero times (exceptions), once (generators, async), or many times (nondeterminism). Koka, OCaml 5, Effekt and Unison implement them.</p>
+
+<p>There are four main implementation strategies:</p>
+
+<ul> <li><b>CPS transform</b> of effectful code: general, and it slows all code down.</li> <li><b>Separate stacks (fibers)</b> for each handler: OCaml 5 uses growable segmented stacks, and resuming switches stacks.</li> <li><b>Stack copying</b>: capture copies the stack segment and resume copies it back.</li> <li><b>State-machine transform</b> for one-shot continuations with known suspension points. This is what Rust, C#, JavaScript and Kotlin do for async.</li> </ul>
+
+```rust title="What async fn add_later(a) { a + fetch().await } becomes: a state machine"
+use std::{future::Future, pin::Pin, task::{Context, Poll}};
+
+/// The compiler generates one enum variant per suspension point, holding the locals that
+/// are live across it. (`Unpin` here keeps the example safe; generated futures can hold
+/// references into themselves, which is why `poll` takes `Pin<&mut Self>`.)
+pub enum AddLater<F> {
+    Waiting { a: u32, fut: F },
+    Done,
+}
+
+impl<F: Future<Output = u32> + Unpin> Future for AddLater<F> {
+    type Output = u32;
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<u32> {
+        match &mut *self {
+            AddLater::Waiting { a, fut } => match Pin::new(fut).poll(cx) {
+                Poll::Pending => Poll::Pending,                 // suspend; `a` stays in the state
+                Poll::Ready(b) => {
+                    let out = *a + b;
+                    *self = AddLater::Done;
+                    Poll::Ready(out)
+                }
+            },
+            AddLater::Done => panic!("polled after completion"),
+        }
+    }
+}
+```
+
+<p>rustc performs this transform on MIR (the coroutine transform). It computes which locals are live across each <code>await</code>, lays them out in overlapping variant fields to save space, and generates a <code>resume</code> function that switches on the state. Generators in your own language can use the same approach. clox's call frames also make stackful coroutines easy: a coroutine is just a separate frame stack.</p>
+"""
+
+[[sections]]
+heading = "Memory models"
+body = """
+<p>A memory model says which values a load may return when threads race. Hardware differs: x86 is TSO (only store→load reordering is visible), while ARM and POWER allow much more. Language models (C++11, adopted by C and Rust; Java's JMM) promise <b>DRF-SC</b>. Programs without data races behave sequentially consistently, and atomics with orderings (<code>Relaxed</code>, <code>Acquire</code>, <code>Release</code>, <code>AcqRel</code>, <code>SeqCst</code>) give controlled exceptions.</p>
+
+<p>For compiler writers, the model decides which transformations are legal:</p>
+
+<ul> <li>Reordering or merging <em>non-atomic</em> accesses is fine, since races are UB.</li> <li>Inventing a store that wasn't in the program is not, because it creates a race. So you can't speculatively store in a branch that might not have stored.</li> <li>Atomics are optimized very conservatively.</li> </ul>
+
+<p>The open research problem is “out-of-thin-air” values in relaxed atomics. The <em>promising semantics</em> of Kang et al. is one of the leading answers.</p>
+
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Operation</th><th>x86-64</th><th>AArch64</th></tr></thead> <tbody> <tr><td>load Relaxed / Acquire</td><td><code>mov</code> / <code>mov</code></td><td><code>ldr</code> / <code>ldar</code> (or <code>ldapr</code>)</td></tr> <tr><td>load SeqCst</td><td><code>mov</code></td><td><code>ldar</code></td></tr> <tr><td>store Relaxed / Release</td><td><code>mov</code> / <code>mov</code></td><td><code>str</code> / <code>stlr</code></td></tr> <tr><td>store SeqCst</td><td><code>xchg</code> (or <code>mov; mfence</code>)</td><td><code>stlr</code></td></tr> <tr><td>fetch_add</td><td><code>lock xadd</code></td><td><code>ldadd</code> (LSE) or an <code>ldxr/stxr</code> loop</td></tr> <tr><td>fence SeqCst</td><td><code>mfence</code></td><td><code>dmb ish</code></td></tr> </tbody> </table></div>
+"""
+
+[[sources]]
+title = "Sewell et al., C/C++11 mappings to processors"
+url = "https://www.cl.cam.ac.uk/~pes20/cpp/cpp0xmappings.html"
+
+[[sources]]
+title = "Bos, Rust Atomics and Locks"
+url = "https://marabos.nl/atomics/"

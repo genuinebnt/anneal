@@ -1,0 +1,34 @@
+title = "Idempotency keys for POST"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 511
+kind = "recipe"
+lede = "idempotency keys for POST."
+level = "intermediate"
+code = ["examples/web/axum_idempotency.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+REST API stage ("idempotency keys for execution creation").
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>payments</li><li>order creation</li><li>job submission: safe client retries without duplicates (Stripe-style idempotency)</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: the client sends `Idempotency-Key: <uuid>`. First time: do the work, remember key -> result, return 201. Retry with the same key: return the **same** result (200), do **not** create a second execution.
+
+This is what makes client retries and at-least-once delivery safe. (Real systems also persist the key in the DB in the same transaction as the work, and compare the request body hash.) Background: <https://stripe.com/blog/idempotency>
+"""
+
+[[sources]]
+title = "stripe.com/blog/idempotency"
+url = "https://stripe.com/blog/idempotency"

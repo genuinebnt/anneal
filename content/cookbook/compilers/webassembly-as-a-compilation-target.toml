@@ -1,0 +1,100 @@
+title = "WebAssembly as a compilation target"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Bytecode and virtual machines"
+chapter_order = 3
+order = 597
+kind = "guide"
+lede = "The easiest real target for a new language · wasm-encoder, wasmparser, wasmtime, Wasm GC"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>Wasm is a portable, sandboxed, typed stack machine with a formal specification. Engines (V8, SpiderMonkey, JavaScriptCore, wasmtime) do instruction selection and register allocation for you, so emitting Wasm is much closer to emitting clox bytecode than to emitting x86. The model:</p>
+
+<ul> <li><b>Modules</b> contain types, functions, tables, memories, globals, imports and exports. Each section has a fixed order in the binary.</li> <li><b>Functions</b> have typed parameters and locals. Instructions push and pop an operand stack whose shape is checked by <em>validation</em> before anything runs.</li> <li><b>Structured control flow only</b>: <code>block</code>, <code>loop</code>, <code>if</code>, and <code>br N</code> to the Nth enclosing label. There is no <code>goto</code>. A CFG from your SSA optimizer must be structured again (<a href="/cookbook/p/dominators-loops-and-control-flow-structure">chapter 11</a>: Relooper, stackifier, Ramsey's algorithm).</li> <li><b>Linear memory</b> is a bounds-checked byte array. Your data structures, and any GC heap you manage yourself, live there.</li> <li><b>Tables</b> hold function references for indirect calls. <code>call_indirect</code> checks the signature at runtime, which is built-in control-flow integrity.</li> <li>The engine's call stack is <b>not addressable</b>. Address-taken locals go on a “shadow stack” in linear memory, and a GC you write yourself can't scan the Wasm stack.</li> </ul>
+
+<p>Standard proposals, now in Wasm 3.0, change what a compiler has to do:</p>
+
+<ul> <li><b>GC</b>: struct and array types managed by the host's collector, plus typed function references (<code>call_ref</code>). Kotlin, Dart, OCaml and Java use it to avoid shipping their own GC.</li> <li><b>Tail calls</b> (<code>return_call</code>).</li> <li><b>Exception handling</b> (<code>try_table</code>, <code>throw</code>).</li> <li><b>memory64</b>.</li> <li>Fixed-width <b>SIMD</b> and <b>threads</b> (shared memory and atomics) were standardized earlier.</li> </ul>
+
+<p>Outside the browser, WASI and the component model define system interfaces and cross-language linking.</p>
+
+```rust title="Emit a Wasm module for fib with wasm-encoder (on 0.220+, types.function(..) is spelled types.ty().function(..))"
+use wasm_encoder::{
+    BlockType, CodeSection, ExportKind, ExportSection, Function, FunctionSection,
+    Instruction as I, Module, TypeSection, ValType,
+};
+
+pub fn fib_module() -> Vec<u8> {
+    let mut types = TypeSection::new();
+    types.function([ValType::I64], [ValType::I64]);         // type 0: (i64) -> i64
+
+    let mut funcs = FunctionSection::new();
+    funcs.function(0);                                     // func 0 has type 0
+
+    let mut exports = ExportSection::new();
+    exports.export("fib", ExportKind::Func, 0);
+
+    // fib(n) = if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+    let mut f = Function::new([]);                          // no locals beyond the parameter
+    for ins in [
+        I::LocalGet(0), I::I64Const(2), I::I64LtS,
+        I::If(BlockType::Result(ValType::I64)),
+            I::LocalGet(0),
+        I::Else,
+            I::LocalGet(0), I::I64Const(1), I::I64Sub, I::Call(0),
+            I::LocalGet(0), I::I64Const(2), I::I64Sub, I::Call(0),
+            I::I64Add,
+        I::End,                                            // end if
+        I::End,                                            // end function
+    ] {
+        f.instruction(&ins);
+    }
+    let mut code = CodeSection::new();
+    code.function(&f);
+
+    let mut module = Module::new();
+    module.section(&types).section(&funcs).section(&exports).section(&code);   // order matters
+    module.finish()
+}
+```
+
+```rust title="Validate and run it with wasmparser and wasmtime"
+use wasmtime::{Engine, Instance, Module, Store};
+
+#[test]
+fn fib_runs() -> anyhow::Result<()> {
+    let bytes = fib_module();
+    wasmparser::validate(&bytes)?;                    // catch malformed output in every test
+
+    let engine = Engine::default();
+    let module = Module::new(&engine, &bytes)?;
+    let mut store = Store::new(&engine, ());
+    let instance = Instance::new(&mut store, &module, &[])?;
+    let fib = instance.get_typed_func::<i64, i64>(&mut store, "fib")?;
+    assert_eq!(fib.call(&mut store, 20)?, 6765);
+    Ok(())
+}
+// Inspect: `wasm-tools print fib.wasm` shows the text format; `wasm-tools validate` checks it.
+```
+"""
+
+[[sections]]
+heading = "Compiling Lox to Wasm"
+body = """
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Concern</th><th>Linear-memory approach</th><th>Wasm GC approach</th></tr></thead> <tbody> <tr><td>Values</td><td>NaN-boxed <code>i64</code> or <code>f64</code>, with pointers as offsets into memory</td><td><code>(ref eq)</code> with <code>i31ref</code> for small ints, and structs for boxed numbers and objects</td></tr> <tr><td>Objects and strings</td><td>Your allocator and layout in linear memory</td><td><code>struct</code> and <code>array</code> types; strings as <code>(array i8)</code> or imported JS strings</td></tr> <tr><td>Closures</td><td>Table index plus an environment pointer; <code>call_indirect</code></td><td>A struct holding a typed <code>funcref</code> and captured fields; <code>call_ref</code></td></tr> <tr><td>GC roots</td><td>A shadow stack in linear memory that the generated code keeps up to date</td><td>None: the host collector sees everything</td></tr> <tr><td>Classes and methods</td><td>Hash maps you implement</td><td>Structs with subtyping for fixed layouts; maps for dynamic fields</td></tr> <tr><td>Exceptions and returns</td><td>Error codes checked after each call, or the EH proposal</td><td><code>try_table</code> and <code>throw</code></td></tr> </tbody> </table></div>
+
+<div class="cb-g-tip"><h3>Pipeline</h3> <ol> <li>Lower typed Lox, or clox's bytecode, into your SSA IR (<a href="/cookbook/p/designing-an-ir-in-rust">chapter 9</a>).</li> <li>Optimize it.</li> <li>Restructure the control flow into blocks and loops.</li> <li>Emit locals for SSA values. A simple register allocator over Wasm locals reduces their number, and engines prefer fewer locals.</li> </ol> <p>Point the golden runner from Part I at a small host program that loads the module and supplies a <code>print</code> import. The same <code>.lox</code> files then test a third implementation.</p></div>
+
+<div class="cb-g-tip"><h3>Formal semantics</h3> <p>Wasm is one of the few industrial languages with a complete formal semantics and a mechanized soundness proof (Watt, in Isabelle). The spec's validation rules are a clear, real example of a type system (<a href="/cookbook/p/semantics-and-the-lambda-calculus">chapter 1</a>).</p></div>
+"""
+
+[[sources]]
+title = "WebAssembly specification"
+url = "https://webassembly.github.io/spec/"
+
+[[sources]]
+title = "wasmtime documentation"
+url = "https://docs.wasmtime.dev"

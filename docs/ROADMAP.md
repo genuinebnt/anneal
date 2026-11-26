@@ -315,6 +315,8 @@ challenge sets built on real scenarios, and several reuse F's runner support for
 | `no_std` | `core` vs `alloc`, `#![no_std]` libraries, panic handlers, fixed-capacity collections (heapless), embedded-style drivers (was Y6 in §10.2) |
 | Testing & benchmarking | unit/integration/doc tests, proptest, fuzzing, snapshot tests, mocking, Miri and loom (grows out of Y5); criterion / divan / iai-callgrind benchmarks, statistics of benchmark noise, CI regression gates |
 
+**Cookbook** (owner, 2026-11-26): a reference library. First release built (guide pages and samples); meaning search, related pages and more subjects are not built. Full plan: [COOKBOOK.md](COOKBOOK.md).
+
 ---
 
 ## 8. Open questions

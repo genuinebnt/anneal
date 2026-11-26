@@ -1,0 +1,6 @@
+// passes: const-prop,simplify-cfg,dce
+// `if` on a constant condition: the dead arm and its block disappear.
+fn pick(n: int) -> int {
+    if 1 < 2 { n + 1 } else { n * 100 }
+}
+fn main() { println(to_str(pick(4))); }

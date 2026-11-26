@@ -1,0 +1,34 @@
+title = "Axum router state"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 513
+kind = "recipe"
+lede = "routes, shared state, JSON in/out, path params, and testing a router WITHOUT a socket."
+level = "intermediate"
+code = ["examples/web/axum_router_state.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+REST API stage.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>every REST service in Rust: routes</li><li>shared state</li><li>JSON extractors</li><li>handlers tested without sockets</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: `Router::new().route(path, method(handler)).with_state(state)`. Handlers are plain async fns whose arguments are &#42;extractors&#42; (`State`, `Path`, `Json`). Because a Router is a tower `Service`, tests call `router.oneshot(request)` in-process: fast, no ports, deterministic.
+
+Docs: <https://docs.rs/axum/latest/axum/>  (path params use `{id}` syntax in axum 0.8)
+"""
+
+[[sources]]
+title = "docs.rs/axum/latest/axum"
+url = "https://docs.rs/axum/latest/axum/"

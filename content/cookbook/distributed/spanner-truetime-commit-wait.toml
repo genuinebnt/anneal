@@ -1,0 +1,79 @@
+title = "Spanner external consistency"
+module = "Distributed systems"
+module_order = 10
+chapter = "Consensus and distributed transactions"
+chapter_order = 2
+order = 494
+kind = "recipe"
+lede = "TrueTime intervals, commit wait, 2PL + 2PC over replicated groups, snapshot reads, safe time."
+level = "advanced"
+code = ["examples/distributed/spanner_truetime_commit_wait.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+globally distributed SQL databases, any system that wants real-time-ordered transactions without a central timestamp oracle.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Google Spanner (TrueTime from GPS and atomic clocks)</li><li>CockroachDB (hybrid logical clocks with an uncertainty interval, optional commit wait)</li><li>YugabyteDB</li><li>FaunaDB/Calvin-style comparisons</li><li>Amazon Time Sync / clock-bound libraries</li><li>the "wait out the uncertainty" trick in any clock-based ordering. Course: CMU 15-721 Advanced Database Systems (Spring)</li><li>lecture on distributed OLTP / Spanner (global clocks, commit wait)</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a simulation of Spanner's transaction layer. Each shard is a PAXOS-GROUP-LIKE replicated state machine: a log of entries (Write, Prepare, Commit, Heartbeat) applied by 3 replicas into an MVCC store (key -> versions sorted by timestamp).
+
+Read-write transactions take exclusive locks (2PL, wait-die to avoid deadlock), and commit with **two-phase commit** across the groups touched, the coordinator group being just another group. Read-only transactions take no locks: they pick a timestamp and read versions.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+TRUETIME: `TT.now()` returns an **interval** [earliest, latest] guaranteed to contain absolute time, `TT.after(t)` = earliest > t. The simulated clock of every node drifts (a triangle wave bounded by the true error E) and the advertised epsilon must be >= E.
+
+**Commit timestamp** rules: a coordinator picks s >= TT.now().latest at commit request, s >= every participant's prepare timestamp, and s > every timestamp the leader assigned before (monotonic). **Commit wait**: do not acknowledge the client or release locks until TT.after(s).
+
+Then s is in the past for every clock in the world, so any transaction that starts after the acknowledgement picks a timestamp > s. Latency cost is about 2&#42;epsilon, which is why Google pushed epsilon down to a few milliseconds.
+
+**Safe time**: a replica may serve a read at timestamp t only if t &lt;= t_safe = min(t_paxos_safe, min prepared timestamp - 1): it has applied every write with ts &lt;= t (Paxos part), and no prepared-but-undecided transaction could still commit at or below t (transaction-manager part). Idle groups advance t_safe with heartbeat entries.
+
+That makes lock-free reads at **any** replica correct.
+
+**Linearizability** vs **strict serializability**: linearizability is a single-object real-time guarantee (each operation takes effect between invocation and response). Serializability orders whole multi-object transactions as if serial but allows any order, even one contradicting real time.
+
+**Strict serializability** (Spanner calls it **external consistency**) is both: the serial order is consistent with real time, i.e. if T1 commits before T2 starts then ts(T1) &lt; ts(T2). Snapshot isolation or plain serializability can show stale reads to a client that heard about a commit out of band; strict serializability cannot.
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+over 2000 random schedules (random clock phases, 1 or 2 groups per transaction, chains of transactions each starting right after the previous acknowledgement) external consistency holds with epsilon >= E and commit wait, and is **violated** (counted) with no commit wait or with epsilon below the true error;
+
+Concurrent 2PL+2PC transfers equal a serial replay in commit-timestamp order and conserve money; follower reads that are not blocked equal the leader's MVCC answer (2000 random reads against lagging replicas); t_safe never decreases; commit-wait latency grows with epsilon.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Spanner: Google's Globally-Distributed Database (OSDI 2012) <https://www.usenix.org/system/files/conference/osdi12/osdi12-final-16.pdf>
+
+```text
+Spanner paper page https://research.google/pubs/spanner-googles-globally-distributed-database-2/
+CMU 15-721 course schedule https://15721.courses.cs.cmu.edu/spring2024/
+```
+"""
+
+[[sources]]
+title = "usenix.org/system/files/conference/osdi12/osdi12-final-16.pdf"
+url = "https://www.usenix.org/system/files/conference/osdi12/osdi12-final-16.pdf"
+
+[[sources]]
+title = "research.google/pubs/spanner-googles-globally-distributed-database-2"
+url = "https://research.google/pubs/spanner-googles-globally-distributed-database-2/"
+
+[[sources]]
+title = "15721.courses.cs.cmu.edu/spring2024"
+url = "https://15721.courses.cs.cmu.edu/spring2024/"

@@ -1,0 +1,62 @@
+title = "Security pitfalls as testable vulnerable/fixed pairs"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Authentication and web security"
+chapter_order = 2
+order = 530
+kind = "recipe"
+lede = "Injection, traversal, SSRF, XSS, ReDoS, timing, randomness, limits, CSRF"
+level = "intermediate"
+code = ["examples/web/security_pitfalls_secure_coding.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>reviewing request handlers</li><li>writing security regression tests</li><li>learning why the obvious fix is not enough</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>any service that takes input from outside: web handlers</li><li>file servers</li><li>webhooks that fetch URLs</li><li>protocol parsers</li><li>admin tools</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Defensive test fixtures**. Every attack string here exists so a test can show that the **fixed** function resists it. Everything runs in-process or in a private temporary directory: no network, and the only "payload" any command runs is `echo`.
+
+The `vuln_*` functions are deliberately broken: never copy them. **The shape of each pair**: (1) the attack **succeeds** against `vuln_*` (so the test really exercises the bug), (2) the same attack **fails** against the fixed version, (3) ordinary input still works (a fix that rejects everything proves nothing).
+
+**The common root**: data crossing into a place where it is interpreted as **code** or **structure** (SQL, shell, path, HTML, URL, log line, object fields). The fix is to keep data and structure separate (parameters, argument vectors, typed DTOs), or where that is impossible, to **parse** strictly, then check the parsed value, then use **that** value (not the original string).
+
+**What rust does and does not do**: safe Rust prevents out-of-bounds reads, use-after-free and data races. It does **not** prevent injection, traversal, logic errors, secrets left in a reused buffer, arithmetic wrapping in release builds (unless `overflow-checks` is on), unbounded recursion (a stack overflow aborts the process) or unbounded allocation.
+
+**Limits**: these are focused demonstrations, not a security library. In production use maintained crates (`url`, `ammonia` or a templating engine with auto-escaping, `regex`, `subtle`, `getrandom`) and get a review.
+
+The timing demo counts comparisons instead of measuring time; constant-time guarantees against an optimising compiler need `subtle` or assembly-level checks. Unix only for the symlink, TOCTOU, shell and /dev/urandom parts.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://cheatsheetseries.owasp.org/> and <https://owasp.org/www-community/attacks/Path_Traversal>
+
+<https://doc.rust-lang.org/std/process/struct.Command.html> and <https://swtch.com/~rsc/regexp/regexp1.html>
+"""
+
+[[sources]]
+title = "cheatsheetseries.owasp.org"
+url = "https://cheatsheetseries.owasp.org/"
+
+[[sources]]
+title = "owasp.org/www-community/attacks/Path_Traversal"
+url = "https://owasp.org/www-community/attacks/Path_Traversal"
+
+[[sources]]
+title = "doc.rust-lang.org/std/process/struct.Command.html"
+url = "https://doc.rust-lang.org/std/process/struct.Command.html"
+
+[[sources]]
+title = "swtch.com/~rsc/regexp/regexp1.html"
+url = "https://swtch.com/~rsc/regexp/regexp1.html"

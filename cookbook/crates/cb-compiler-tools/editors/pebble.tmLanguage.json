@@ -1,0 +1,148 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "fileTypes": [
+    "peb"
+  ],
+  "name": "PEBBLE",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#builtin-types"
+    },
+    {
+      "include": "#builtins"
+    },
+    {
+      "include": "#functions"
+    },
+    {
+      "include": "#variants"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#operators"
+    }
+  ],
+  "repository": {
+    "block-comment-nested": {
+      "begin": "/\\*",
+      "end": "\\*/",
+      "name": "comment.block.pebble",
+      "patterns": [
+        {
+          "include": "#block-comment-nested"
+        }
+      ]
+    },
+    "builtin-types": {
+      "match": "\\b(int|bool|str)\\b",
+      "name": "support.type.primitive.pebble"
+    },
+    "builtins": {
+      "match": "\\b(print|println|assert|panic|to_str|len|push|pop|chars)\\b",
+      "name": "support.function.builtin.pebble"
+    },
+    "comments": {
+      "patterns": [
+        {
+          "match": "///.*$",
+          "name": "comment.line.documentation.pebble"
+        },
+        {
+          "match": "//.*$",
+          "name": "comment.line.double-slash.pebble"
+        },
+        {
+          "begin": "/\\*",
+          "end": "\\*/",
+          "name": "comment.block.pebble",
+          "patterns": [
+            {
+              "include": "#block-comment-nested"
+            }
+          ]
+        }
+      ]
+    },
+    "functions": {
+      "captures": {
+        "1": {
+          "name": "entity.name.function.pebble"
+        }
+      },
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()"
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "match": "\\b(if|else|match|while|loop|break|continue|return)\\b",
+          "name": "keyword.control.pebble"
+        },
+        {
+          "match": "\\b(fn|struct|enum|const|let|mut)\\b",
+          "name": "storage.type.pebble"
+        },
+        {
+          "match": "\\b(as)\\b",
+          "name": "keyword.other.pebble"
+        },
+        {
+          "match": "\\b(true|false)\\b",
+          "name": "constant.language.pebble"
+        }
+      ]
+    },
+    "numbers": {
+      "match": "\\b[0-9][0-9_]*\\b",
+      "name": "constant.numeric.integer.pebble"
+    },
+    "operators": {
+      "match": "->|=>|==|!=|<=|>=|&&|\\|\\||[-+*/%]=?|=|<|>|!|\\||\\.\\.|::",
+      "name": "keyword.operator.pebble"
+    },
+    "strings": {
+      "begin": "\"",
+      "end": "\"|$",
+      "name": "string.quoted.double.pebble",
+      "patterns": [
+        {
+          "match": "\\\\(?:[ntr0\\\\\"]|u\\{[0-9a-fA-F]+\\})",
+          "name": "constant.character.escape.pebble"
+        },
+        {
+          "match": "\\\\.",
+          "name": "invalid.illegal.escape.pebble"
+        }
+      ]
+    },
+    "types": {
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b",
+      "name": "entity.name.type.pebble"
+    },
+    "variants": {
+      "captures": {
+        "1": {
+          "name": "entity.name.type.enum.pebble"
+        },
+        "2": {
+          "name": "constant.other.enum-member.pebble"
+        }
+      },
+      "match": "\\b([A-Z][A-Za-z0-9_]*)::([A-Za-z_][A-Za-z0-9_]*)"
+    }
+  },
+  "scopeName": "source.pebble"
+}

@@ -1,0 +1,41 @@
+warning[W0501]: unused parameter: `a`
+ --> e0207_duplicate_param.peb:1:6
+  |
+1 | fn f(a: int, a: int) -> int { a }
+  |      ^ this parameter is never read
+  |
+  = help: if this is intentional, prefix it with an underscore: `_a`
+
+error[E0207]: parameter `a` is declared twice
+ --> e0207_duplicate_param.peb:1:14
+  |
+1 | fn f(a: int, a: int) -> int { a }
+  |      -       ^ duplicate parameter
+  |      |
+  |      first declared here
+
+warning[W0502]: function `g` is never used
+ --> e0207_duplicate_param.peb:2:4
+  |
+2 | fn g<T, T>(x: T) {}
+  |    ^ not reachable from `main`
+  |
+  = help: if this is intentional, prefix it with an underscore
+
+error[E0207]: the type parameter `T` is declared twice
+ --> e0207_duplicate_param.peb:2:9
+  |
+2 | fn g<T, T>(x: T) {}
+  |      -  ^ duplicate type parameter
+  |      |
+  |      first declared here
+
+warning[W0501]: unused parameter: `x`
+ --> e0207_duplicate_param.peb:2:12
+  |
+2 | fn g<T, T>(x: T) {}
+  |            ^ this parameter is never read
+  |
+  = help: if this is intentional, prefix it with an underscore: `_x`
+
+error: aborting due to 2 previous errors; 3 warnings emitted

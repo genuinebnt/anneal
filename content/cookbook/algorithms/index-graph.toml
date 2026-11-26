@@ -1,0 +1,32 @@
+title = "Index graph"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Graph algorithms"
+chapter_order = 4
+order = 190
+kind = "recipe"
+lede = "index-based graph, interning names once, iterative BFS."
+level = "intermediate"
+code = ["examples/algorithms/index_graph.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>stages 5</li><li>7</li><li>8 (representation, no recursion, no String hashing in hot loops)</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>road networks</li><li>dependency graphs</li><li>social graphs: intern names once</li><li>then run algorithms on dense integer ids. Run: cargo run --example index_graph</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Domain is a transit map and the algorithm is BFS shortest-hops, **not** topological sort: study the &#42;shape&#42; (intern -> dense ids -> Vec&lt;Vec&lt;id>> -> queue + visited vector) and apply it yourself. Real code: petgraph -> <https://github.com/petgraph/petgraph>
+"""
+
+[[sources]]
+title = "github.com/petgraph/petgraph"
+url = "https://github.com/petgraph/petgraph"

@@ -1,0 +1,23 @@
+---
+source: crates/cb-testing-tools/tests/snapshots.rs
+expression: "parse_expr(\"-a * (b + 2)\")"
+---
+Ok(
+    Bin(
+        Mul,
+        Neg(
+            Var(
+                "a",
+            ),
+        ),
+        Bin(
+            Add,
+            Var(
+                "b",
+            ),
+            Num(
+                2,
+            ),
+        ),
+    ),
+)

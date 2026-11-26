@@ -1,0 +1,18 @@
+[package]
+name = "cb-compiler-tools"
+version = "0.1.0"
+edition = "2024"
+description = "Tooling for the PEBBLE language: a comment-preserving formatter, syntax highlighter (lexical and semantic), TextMate grammar generator and a Language Server over stdio (std + serde_json)."
+publish = false
+
+[lib]
+name = "pebble_tools"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pebble-tools"
+path = "src/main.rs"
+
+[dependencies]
+cb-compiler = { path = "../cb-compiler" }
+serde_json = "1"

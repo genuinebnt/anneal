@@ -1,0 +1,41 @@
+title = "clox tooling"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Bytecode and virtual machines"
+chapter_order = 3
+order = 596
+kind = "guide"
+lede = "Feature flags, the commands that use them, and when to turn on each official folder."
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+```text title="crates/clox/Cargo.toml"
+[features]
+trace = []        # print the stack and each op as it runs
+print-code = []   # disassemble every chunk after compiling
+stress-gc = []    # collect before every allocation
+log-gc = []       # print mark / sweep / free events
+nan-boxing = []
+
+[dev-dependencies]
+insta = "1"
+loxtest = { path = "../loxtest" }
+```
+
+```rust title="shell"
+cargo test -p clox                                  # unit, disassembly, golden
+cargo test -p clox --features stress-gc             # same files, GC on every alloc
+cargo test -p clox --features nan-boxing,stress-gc
+cargo run -p clox --features trace -- tests/lox/official/closure/nested_closure.lox
+cargo +nightly miri test -p clox                    # only if you use unsafe
+
+cargo build --release
+hyperfine -L bin jlox,clox --warmup 3 'target/release/{bin} bench/fib.lox'
+```
+
+<div class="cb-g-tt"><table class="cb-g-map"> <thead><tr><th>Slice</th><th>Enable on clox</th></tr></thead> <tbody> <tr><td>C1–C3</td><td>None. Use disassembly and VM unit tests</td></tr> <tr><td>C4</td><td>Everything jlox enabled at slices 3 and 4, plus the constants and locals files in <code>limit/</code></td></tr> <tr><td>C5</td><td><code>if/ while/ for/ logical_operator/</code>, the loop-size file in <code>limit/</code></td></tr> <tr><td>C6</td><td><code>function/ call/ return/</code>, <code>limit/stack_overflow.lox</code></td></tr> <tr><td>C7</td><td><code>closure/</code>, the upvalue file in <code>limit/</code></td></tr> <tr><td>C8</td><td>All of the above again with <code>stress-gc</code></td></tr> <tr><td>C9</td><td><code>class/ field/ method/ constructor/ this/ inheritance/ super/ regression/</code></td></tr> <tr><td>C10</td><td><code>benchmark/</code> with hyperfine, compared against the jlox baseline</td></tr> </tbody> </table></div>
+
+<p>Differential check: every golden file runs on both binaries, so a difference in behavior shows up as a test failure without extra work. To go further, fuzz-generate small programs that are guaranteed to terminate, run both binaries on them, and compare their output.</p>
+"""

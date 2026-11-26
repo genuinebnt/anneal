@@ -1,0 +1,76 @@
+title = "Crossbeam-channel patterns"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Threads, locks and channels"
+chapter_order = 1
+order = 242
+kind = "recipe"
+lede = "Rendezvous, select!, timers, pipelines, request/reply, broadcast."
+level = "intermediate"
+code = ["examples/concurrency/crossbeam_select_channels.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>thread pipelines</li><li>worker pools</li><li>timeouts and tickers</li><li>request/reply between threads</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a tour of crossbeam-channel, an MPMC channel (both `Sender` and `Receiver` are `Clone`), and the idioms built on it. Every section asserts its claims, so the demo doubles as a test.
+
+**Capacities**: `unbounded()` never blocks the sender (memory is the limit); `bounded(n)` blocks the sender when n items are queued, which is **backpressure**: a fast producer is slowed to the speed of the slowest consumer; `bounded(0)` is a **rendezvous** channel: `send` completes only when a receiver takes the value, so a successful send means "the other side has it" (a synchronisation point, not just a queue).
+
+**Disconnect semantics**: when **all** senders are dropped, `recv` first drains queued items, then returns `Err`; `for x in rx` ends. When all receivers are dropped, `send` returns the value back in `Err`. So shutdown is just "drop the senders": no sentinel values.
+
+The classic bug is keeping one spare `Sender` clone alive in main, which makes the consumers wait forever. **Select**: `select!` waits on several operations and runs the branch of the first ready one (fair random choice among ready ones); `default` makes it non-blocking, `default(timeout)` bounds the wait.
+
+`Select` is the dynamic form for a runtime-sized list of channels. `after(d)` is a channel that delivers **one** `Instant` after d, `tick(d)` one every d: timers without extra threads. `never()` is a channel that never fires (disable a branch).
+
+**Cloning a receiver is not broadcast**: clones share one queue, each message goes to exactly **one** of them (work sharing). Broadcast needs one channel per subscriber and a loop that sends a clone to each (shown below). **Request/reply**: put a `Sender<Reply>` inside the request; the server answers on it.
+
+A `bounded(1)` channel used once is a one-shot: the reply `send` never blocks and a dropped server surfaces as `RecvError`. **Ordering**: messages from **one** sender arrive in send order (FIFO queue). Across senders there is no global order.
+
+After multi-worker stages, only the order along one FIFO path (same worker at every stage) survives; the pipeline checks exactly that.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Semantics table** (verify against the docs before relying on corner cases)
+
+```text
+| feature            | std::sync::mpsc          | crossbeam-channel         | tokio::sync::mpsc / oneshot / broadcast / watch |
+| consumers          | single receiver          | MPMC, Receiver: Clone     | mpsc single; broadcast = every receiver sees all|
+| bounded            | sync_channel(n)          | bounded(n), bounded(0)    | mpsc::channel(n) (n>=1, no rendezvous)          |
+| select             | none                     | select!, Select           | tokio::select! over futures                     |
+| blocking           | blocking recv            | blocking recv             | async `.await`; blocking_recv for threads       |
+| timers             | recv_timeout             | after, tick, recv_timeout | tokio::time::{sleep, interval}                  |
+| disconnect         | Err when senders gone    | same, both directions     | recv -> None when senders gone                  |
+```
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>thread-based pipelines (parse -&gt; transform -&gt; write)</li><li>worker pools with graceful stop by dropping senders</li><li>rendezvous hand-off between a producer and a consumer thread</li><li>a <code>tick</code> driven housekeeping loop next to a work channel (metrics flush, heartbeat)</li><li><code>select!</code> on data + shutdown channel</li><li>rayon/crossbeam style scoped workers</li><li>request/reply actors (see the actor_model recipe)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+"Crossbeam: Channels" <https://docs.rs/crossbeam-channel/latest/crossbeam_channel/> and <https://github.com/crossbeam-rs/crossbeam> and the Rust Book chapter "Message Passing" <https://doc.rust-lang.org/book/ch16-02-message-passing.html>
+"""
+
+[[sources]]
+title = "docs.rs/crossbeam-channel/latest/crossbeam_channel"
+url = "https://docs.rs/crossbeam-channel/latest/crossbeam_channel/"
+
+[[sources]]
+title = "github.com/crossbeam-rs/crossbeam"
+url = "https://github.com/crossbeam-rs/crossbeam"
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch16-02-message-passing.html"
+url = "https://doc.rust-lang.org/book/ch16-02-message-passing.html"

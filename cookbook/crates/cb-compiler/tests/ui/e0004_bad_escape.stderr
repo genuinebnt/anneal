@@ -1,0 +1,9 @@
+error[E0004]: unknown escape sequence `\q`
+ --> e0004_bad_escape.peb:2:15
+  |
+2 |     println("a\qb");
+  |               ^^ invalid escape
+  |
+  = help: valid escapes: \n \t \r \0 \\ \" and \u{hex}
+
+error: aborting due to 1 previous error

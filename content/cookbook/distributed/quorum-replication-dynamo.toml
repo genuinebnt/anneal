@@ -1,0 +1,56 @@
+title = "Quorum replication dynamo"
+module = "Distributed systems"
+module_order = 10
+chapter = "Time, partitioning and replication"
+chapter_order = 1
+order = 484
+kind = "recipe"
+lede = "Dynamo-style quorum replication, hinted handoff, read repair, version vectors"
+level = "advanced"
+code = ["examples/distributed/quorum_replication_dynamo.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>replicated key-value stores</li><li>shopping-cart style "always writable" services</li><li>tuning R/W/N</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a deterministic discrete-event simulation of Dynamo's replication layer (the paper behind Riak, Cassandra, Voldemort). Keys sit on a consistent-hash ring; the first N distinct nodes clockwise are the **preference list**. A write goes to all N and succeeds after W acks; a read asks all N and succeeds after R.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+R + W > N makes every read quorum intersect every write quorum, so a read starting after a write completed must reach a replica that has it. If R + W &lt;= N the quorums can be disjoint and reads go stale: a deliberate latency/availability trade (R=W=1 is fastest).
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>Version vectors (node -&gt; counter) order versions; <strong>concurrent</strong> ones are kept as <strong>siblings</strong> and returned to the client, whose merge function (set union of a cart) resolves them; the next put carries the merged context and supersedes both.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Sloppy quorum</div><div class="cb-g-says"><p>An unreachable home replica is replaced by the next healthy ring node, which stores the write with a <strong>hint</strong> naming the owner and hands it off when the owner returns.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Read repair</div><div class="cb-g-says"><p>Pushes the merged answer to replicas that answered older data; <strong>anti-entropy</strong> compares a digest (real systems: Merkle trees) and syncs only on mismatch.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>Failure injection: node down, slow (latency x10), partition. Time is virtual with seeded random message latencies, so every schedule is reproducible by seed.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>tunable consistency in Cassandra (<strong>quorum</strong> / <strong>one</strong> / <strong>all</strong> consistency levels)</li><li>Riak (n_val/r/w, siblings, hinted handoff)</li><li>Voldemort</li><li>the same intersection argument underlies Paxos/Raft majority quorums (there W = R = majority is fixed and writes are ordered by a leader)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Dynamo: Amazon's Highly Available Key-value Store (DeCandia et al., SOSP 2007) <https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf>
+
+Time, Clocks, and the Ordering of Events in a Distributed System (Lamport, 1978) <https://lamport.azurewebsites.net/pubs/time-clocks.pdf>
+"""
+
+[[sources]]
+title = "allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf"
+url = "https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf"
+
+[[sources]]
+title = "lamport.azurewebsites.net/pubs/time-clocks.pdf"
+url = "https://lamport.azurewebsites.net/pubs/time-clocks.pdf"

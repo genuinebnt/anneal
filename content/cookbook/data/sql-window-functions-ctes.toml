@@ -1,0 +1,86 @@
+title = "Modern SQL over in-memory tables"
+module = "Databases"
+module_order = 8
+chapter = "Foundations and SQL"
+chapter_order = 1
+order = 314
+kind = "recipe"
+lede = "Window functions, CTEs, recursive CTEs, LATERAL, GROUPING SETS."
+level = "advanced"
+code = ["examples/database/sql_window_functions_ctes.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>SQL engines and analytics layers</li><li>anywhere "top-N per group"</li><li>running totals</li><li>graph traversal or subtotals are needed</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+window operators in PostgreSQL, DuckDB, SQL Server and Snowflake (sort + frame evaluation, segment trees for non-invertible aggregates); **with** [**recursive**] for org charts, bill-of-materials and graph reachability (PostgreSQL, SQLite, MySQL 8); **lateral** joins for top-N-per-group; **rollup** / **cube** / **grouping sets** for report subtotals in BI tools.
+
+Course: CMU 15-445 Lecture 02 (modern SQL: window functions, CTEs, nested queries, lateral joins).
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+executors for the constructs, over tables of nullable integers (`Vec<Option<i64>>`, `None` = **null**):
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Window functions</div><div class="cb-g-says"><p>ROW_NUMBER, <strong>rank</strong>, DENSE_RANK, NTILE, <strong>lag</strong>, <strong>lead</strong>, FIRST_VALUE, LAST_VALUE and the aggregates <strong>sum</strong>, AVG, <strong>min</strong>, MAX, <strong>count</strong> over a <strong>frame</strong>, with <strong>partition by</strong>, <strong>order by</strong> (ASC/DESC, <strong>nulls first/last</strong>) and frames <code>ROWS|RANGE BETWEEN &lt;start&gt; AND &lt;end&gt;</code> where a bound is <strong>unbounded preceding</strong>, n <strong>preceding</strong>, <strong>current row</strong>, n <strong>following</strong> or <strong>unbounded following</strong>.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>CTEs: non-recursive <code>WITH</code> (evaluated once and materialised vs inlined per reference) and <strong>with recursive</strong> via <strong>semi-naive</strong> fixpoint (number series, org chart, transitive closure).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Lateral</div><div class="cb-g-says"><p>/ correlated subqueries as a nested-loop with the outer row as parameter, and their decorrelation.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Grouping sets</div><div class="cb-g-says"><p>, <strong>rollup</strong> and <strong>cube</strong> with the GROUPING() bitmask.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Window algorithm** (the standard one): 1. **Sort** the row ids by (partition keys, order keys); ties keep input order (stable), so ROW_NUMBER is deterministic. 2. Walk the sorted array in runs of equal partition key. 3.
+
+Per partition, every row gets a frame [lo, hi) of sorted positions. **Rows** frames are position arithmetic.
+
+**Range** frames work on **order by values**: a row's **peers** are the rows with an equal order key (**rank** needs them; **current row** in **range** mode means the whole peer group) and `RANGE n PRECEDING` selects rows whose key is within n of the current key: found by binary search on the sorted keys.
+
+NULLs form their own peer group at the chosen end; a **null** current row treats offset bounds as **current row** (PostgreSQL does the same). 4.
+
+Evaluate the function over the frame: SUM/COUNT/AVG use **prefix sums** (O(1) per row, valid because they are invertible), MIN/MAX use a **segment tree** (O(log n) per row, since max cannot be "un-added" when a row leaves the frame), **first**/LAST_VALUE are index lookups, ranking functions need only positions and peer boundaries.
+
+The naive reference re-derives each frame from the definition by scanning every row of the partition: O(n &#42; frame) or worse. **Gotcha** shown in the demo: the **default** frame with **order by** is **range unbounded preceding**..CURRENT **row**, so LAST_VALUE returns the last **peer**, not the last row of the partition, unless the frame is widened to **unbounded following**.
+
+**Recursive CTE**: `WITH RECURSIVE t AS (base UNION step(t))` is the least fixpoint of t = base U step(t). **Naive** evaluation re-runs `step` on the whole t each round (cost grows with iterations x &#124;t&#124;).
+
+**Semi-naive** feeds `step` only the **delta**, the rows that were new in the previous round: for linear recursion (one reference to t, as here) the result is identical and each derived row is expanded exactly once.
+
+**Union** dedups (so cyclic graphs terminate), **union all** keeps duplicates and needs a terminating condition in `step` (a cycle with **union all** never ends; the iteration cap reports it).
+
+**Grouping sets**: `ROLLUP(a,b)` = sets (a,b), (a), (); `CUBE(a,b)` = all four subsets. Because **sum** and **count** are distributive the sets are derived from **one** pass that groups by all dimensions (the finest set), not by rescanning the table per set. GROUPING(col) bits tell a rolled-up **null** apart from a real **null** value in the data.
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+500 random tables (NULLs in partition/order/value columns, ties, empty tables, one-row partitions) x random specs (partition/order/direction/**nulls first**&#124;**last**, **rows** and **range** frames incl. offsets) x all 14 window functions: efficient implementation == naive reference.
+
+Recursive CTEs are checked against Warshall's closure, a parent-chain depth oracle and naive fixpoint evaluation; **lateral** top-2 == the ROW_NUMBER formulation; decorrelated == correlated; grouping sets == per-set rescans on 200 random tables (incl. **Null** dimension values). Timings are printed, never asserted.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+PostgreSQL window functions <https://www.postgresql.org/docs/current/tutorial-window.html>   **With** queries <https://www.postgresql.org/docs/current/queries-with.html> Efficient Processing of Window Functions in Analytical SQL Queries <https://www.vldb.org/pvldb/vol8/p1058-leis.pdf>   CMU 15-445 <https://15445.courses.cs.cmu.edu/fall2024/>
+"""
+
+[[sources]]
+title = "postgresql.org/docs/current/tutorial-window.html"
+url = "https://www.postgresql.org/docs/current/tutorial-window.html"
+
+[[sources]]
+title = "postgresql.org/docs/current/queries-with.html"
+url = "https://www.postgresql.org/docs/current/queries-with.html"
+
+[[sources]]
+title = "vldb.org/pvldb/vol8/p1058-leis.pdf"
+url = "https://www.vldb.org/pvldb/vol8/p1058-leis.pdf"
+
+[[sources]]
+title = "15445.courses.cs.cmu.edu/fall2024"
+url = "https://15445.courses.cs.cmu.edu/fall2024/"

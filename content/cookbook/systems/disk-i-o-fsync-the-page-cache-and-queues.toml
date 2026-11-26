@@ -1,0 +1,455 @@
+title = "Disk I/O: fsync, the page cache and queues"
+module = "Performance and systems"
+module_order = 7
+chapter = "Files, processes and the OS"
+chapter_order = 3
+order = 286
+kind = "guide"
+lede = "What a durability call really promises · the page cache and how to bypass it · why a device wants many requests at once · group commit · a model of the io_uring interface · measured on a macOS SSD (nothing here was run on Linux)"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Durability is a chain, and every call moves the data one link.</strong> Application buffer → the operating system's page cache → the drive's own write cache → the flash. <code>write</code> stops at the page cache. <code>fsync</code> pushes through to the drive; whether it also forces the drive to empty its volatile cache depends on the system. A commit is durable only when the last link has been passed, and the call that does it is the slowest I/O call a database makes.</li> <li><strong>On macOS <code>fsync(2)</code> does not flush the drive's cache.</strong> <code>fcntl(fd, F_FULLFSYNC)</code> does, and Rust's <code>File::sync_all</code> calls it on Apple platforms. On Linux <code>fsync</code> and <code>fdatasync</code> do flush the cache (the kernel sends a flush to the device), which is why the same code has different costs on the two systems, and why a database that uses <code>fsync</code> on a Mac can lose a committed transaction in a power failure.</li> <li><strong>A failed <code>fsync</code> cannot be retried into success.</strong> After a failed write-back some systems mark the dirty pages clean, so a second <code>fsync</code> returns success for data that is not on disk. PostgreSQL learned this in 2018 and now treats an <code>fsync</code> failure as fatal. The group-commit log below poisons itself on the first failure and refuses every later append.</li> <li><strong>The page cache hides latency, and a database often wants it out of the way.</strong> A read that hits the cache costs under a microsecond; one that goes to the device costs tens. The engine's buffer pool already caches what it wants cached, so a second cache below it wastes memory, double-copies data and makes latencies unpredictable. Direct I/O (<code>O_DIRECT</code> on Linux, <code>F_NOCACHE</code> on macOS) bypasses it; note that it does not evict pages that are already cached.</li> <li><strong>A flash device is parallel inside, and one request at a time leaves almost all of it idle.</strong> Latency per request barely changes as the number of outstanding requests grows, until the device saturates; throughput scales with the queue depth. A synchronous thread has depth 1. The ways to a deeper queue are many threads, asynchronous submission (<code>libaio</code>, <code>io_uring</code>), or both.</li> <li><strong>Group commit shares one expensive call among many writers.</strong> Appenders add their records to a buffer; one of them (the leader) writes and syncs the whole batch while the others wait; when it returns, all the records in the batch are durable. Throughput grows with the number of writers, and the latency of any one commit is one sync plus the wait for the previous one.</li> </ul>
+"""
+
+[[sections]]
+heading = "Measured on this machine"
+body = """
+<p>An Apple M4 Pro with its built-in SSD (<code>Solid State: Yes</code>), 16 KiB virtual-memory pages, 24 GB of memory, macOS. Every number below is from this machine. <strong>I did not run anything on Linux</strong>: a container runtime is installed but was not running, and I did not start it. What is said about Linux is from documentation and is marked as such.</p>
+
+```text title="the price of a durable 4 KiB write"
+4 KiB overwrite, then …                  p50       p99       max     ops/s
+nothing (page cache only)              1.5us     2.6us      77us    581532
+fsync(2)                              17.8us    48.0us     165us     50925
+fcntl(F_FULLFSYNC)                  4010.9us  5021.2us   78839us       235
+File::sync_all (the standard library)  3999.4us  4951.3us    5026us       248
+```
+
+```text title="group commit: commits per second by number of writer threads (1.5 s per cell)"
+writers     own F_FULLFSYNC each          group commit      records per sync
+1                          244/s                 249/s                   1.0
+2                          260/s                 372/s                   1.5
+4                          270/s                 607/s                   2.5
+8                          294/s                1093/s                   4.4
+16                         380/s                2087/s                   8.4
+32                         503/s                4013/s                  16.3
+```
+
+```text title="reads from a 1 GiB file: the device, the page cache, a memory map"
+cold: F_NOCACHE random 4 KiB reads from a 1 GiB file written with the cache off, one thread, 20 000 reads:
+  pread, F_NOCACHE                                90.10 us per read     11099 reads/s   (p50 86.1 us, p99 125.2 us)
+cold: F_NOCACHE random 4 KiB reads, by number of threads (a queue depth the device sees):
+  threads          reads/s    us per read (each)
+  1                  11096                  90.1
+  2                  21789                  91.8
+  4                  42232                  94.7
+  8                  78747                 101.6
+  16                125801                 127.2
+  32                127521                 250.9
+  64                216053                 296.2
+cold: sequential F_NOCACHE reads, by request size (one thread, first 512 MiB):
+       4 KiB         232 MB/s
+      16 KiB         545 MB/s
+      64 KiB         480 MB/s
+     256 KiB        1410 MB/s
+    1024 KiB        3185 MB/s
+    4096 KiB        5151 MB/s
+warm: random 4 KiB reads after a sequential pass has filled the page cache, one thread, 200 000 reads:
+  pread, through the page cache                    0.67 us per read   1502153 reads/s
+  mmap, through the page cache                     0.44 us per read   2270509 reads/s
+  pread, F_NOCACHE on a warm file                  0.91 us per read   1101146 reads/s
+```
+
+```text title="a model of the io_uring interface: reads per second by ring depth, one submitting thread"
+depth          reads/s    submit calls    entries per submit
+1                13380           20000                   1.0
+2                20801           19999                   1.0
+4                49254            9999                   2.0
+8                84098            4999                   4.0
+16              121782            2499                   8.0
+32              158585            1249                  16.0
+64              173068             624                  32.1
+128             186784             312                  64.1
+```
+
+<ul> <li><strong><code>fsync(2)</code> costs 18 µs; <code>F_FULLFSYNC</code> costs 4.0 ms, 225 times more.</strong> The standard library's <code>File::sync_all</code> has the same median (4.0 ms), confirming that it takes the full path on this platform. A write with no durability call costs 1.5 µs. A database that commits one transaction per flush is limited to about 235 commits a second on this disk if it wants durability that survives power loss; with <code>fsync</code> it would appear to manage 50 000 and lose that guarantee.</li> <li><strong>Group commit turns that into 4 013 commits per second with 32 writers</strong> (16 records per sync), against 503 when each writer syncs on its own. With one writer the two are equal (249 against 244 a second), as they must be; the gain is exactly the sharing. Each doubling of writers roughly doubles the group-commit rate, until the batch is big enough that the write itself matters.</li> <li><strong>A cold 4 KiB read takes 90 µs; the same read from the page cache takes 0.67 µs (135 times less); through a memory map 0.44 µs.</strong> The cold reads were of a file written with the cache off and never read through the cache, so nothing was cached. <code>F_NOCACHE</code> on a <em>warm</em> file still reads at 0.91 µs: the flag stops new pages from being cached, it does not throw out the ones that are there. My first measurement made exactly this mistake, warming the file first, and reported device reads at 1 µs.</li> <li><strong>The device wants a queue.</strong> One thread issuing one cold read at a time gets 11 000 reads a second; 16 threads get 126 000; 64 get 216 000, 19 times the single-thread rate, while the latency of each read grows from 90 to 296 µs once the device is saturated.</li> <li><strong>Request size matters as much for throughput.</strong> Sequential cold reads run at 232 MB/s with 4 KiB requests, 1.4 GB/s with 256 KiB and 5.2 GB/s with 4 MiB. A storage engine that reads a page at a time is paying a per-request cost that larger requests amortize.</li> <li><strong>The ring model shows the shape.</strong> One submitting thread, a ring of depth 1 gives 13 400 reads a second, depth 32 gives 159 000 and depth 128 gives 187 000 (14 times), while the number of submit calls falls from 20 000 to 312 (64 entries per call). That is what <code>io_uring</code>'s interface gives an application: the depth of many threads from one thread, and one system call for a batch. The model's own cost is different from the kernel's (it uses worker threads), so only the shape transfers.</li> </ul>
+
+:::deeper Reference: durability calls, cache bypass and memory maps over fcntl, a group-commit log with a replaceable sink and poisoning on failure, and a user-space model of the io_uring interface
+```rust title="src/test/iolab.rs"
+//! Experiments with the operating system's I/O interface, as it is on macOS: what `fsync` promises and what it does not, how to bypass the
+//! page cache, how deep a queue of requests the device wants, and a group-commit log that shares one durability call among many writers.
+//! Linux has different calls for the same ideas (`fdatasync`, `O_DIRECT`, `io_uring`); this module is macOS-only because the calls
+//! are (`F_FULLFSYNC`, `F_NOCACHE`), and nothing here was run on Linux.
+use std::fs::File;
+use std::io;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::FileExt;
+use std::sync::{Arc, Condvar, Mutex};
+
+unsafe extern "C" {
+    fn fcntl(fd: i32, cmd: i32, ...) -> i32;
+    fn fsync(fd: i32) -> i32;
+    fn mmap(addr: *mut u8, len: usize, prot: i32, flags: i32, fd: i32, offset: i64) -> *mut u8;
+    fn munmap(addr: *mut u8, len: usize) -> i32;
+}
+const F_NOCACHE: i32 = 48;
+const F_FULLFSYNC: i32 = 51;
+const PROT_READ: i32 = 1;
+const MAP_SHARED: i32 = 1;
+
+/// How to make a write durable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Durability {
+    /// Hand the data to the operating system and return (it may be lost in a crash or power failure).
+    None,
+    /// `fsync(2)`: on macOS the data reaches the drive, which may still hold it in a volatile cache.
+    Fsync,
+    /// `fcntl(F_FULLFSYNC)`: the drive is told to flush its cache to stable storage. Rust's `File::sync_all` does this on macOS.
+    Full,
+}
+
+pub fn make_durable(f: &File, how: Durability) -> io::Result<()> {
+    let r = match how {
+        Durability::None => 0,
+        // SAFETY: `fd` is an open descriptor owned by `f` for the duration of the call.
+        Durability::Fsync => unsafe { fsync(f.as_raw_fd()) },
+        Durability::Full => unsafe { fcntl(f.as_raw_fd(), F_FULLFSYNC) },
+    };
+    if r == -1 { Err(io::Error::last_os_error()) } else { Ok(()) }
+}
+
+/// Turn the page cache off for this descriptor (`F_NOCACHE`): reads and writes go to the device, as with `O_DIRECT` on Linux. The buffers
+/// need no special alignment on macOS, but the offsets and lengths should be multiples of the device block size to be efficient.
+pub fn set_nocache(f: &File, on: bool) -> io::Result<()> {
+    // SAFETY: valid descriptor, a documented command with an integer argument.
+    if unsafe { fcntl(f.as_raw_fd(), F_NOCACHE, on as i32) } == -1 { Err(io::Error::last_os_error()) } else { Ok(()) }
+}
+
+/// A read-only memory map of a whole file.
+pub struct Mapped {
+    ptr: *mut u8,
+    len: usize,
+}
+unsafe impl Send for Mapped {}
+unsafe impl Sync for Mapped {}
+impl Mapped {
+    pub fn new(f: &File) -> io::Result<Mapped> {
+        let len = f.metadata()?.len() as usize;
+        // SAFETY: a private read-only mapping of an open file; the result is checked.
+        let p = unsafe { mmap(std::ptr::null_mut(), len, PROT_READ, MAP_SHARED, f.as_raw_fd(), 0) };
+        if p as isize == -1 { Err(io::Error::last_os_error()) } else { Ok(Mapped { ptr: p, len }) }
+    }
+    pub fn bytes(&self) -> &[u8] {
+        // SAFETY: the mapping is `len` readable bytes for as long as `self` lives; the file must not be truncated while mapped.
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+impl Drop for Mapped {
+    fn drop(&mut self) {
+        // SAFETY: unmapping exactly what `mmap` returned.
+        unsafe { munmap(self.ptr, self.len) };
+    }
+}
+
+/// Read `buf.len()` bytes at `offset`; a short read at the end of the file is an error.
+pub fn read_exact_at(f: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
+    f.read_exact_at(buf, offset)
+}
+
+// ---- group commit ----------------------------------------------------------------------------------------------------------------------
+
+/// What a log needs from storage: write a batch at the end, then make it durable. Replaceable, so that a test can make it fail.
+pub trait Sink: Send {
+    fn write_batch(&mut self, bytes: &[u8]) -> io::Result<()>;
+    fn sync(&mut self) -> io::Result<()>;
+}
+
+pub struct FileSink {
+    pub file: File,
+    pub at: u64,
+    pub how: Durability,
+}
+impl Sink for FileSink {
+    fn write_batch(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.file.write_all_at(bytes, self.at)?;
+        self.at += bytes.len() as u64;
+        Ok(())
+    }
+    fn sync(&mut self) -> io::Result<()> {
+        make_durable(&self.file, self.how)
+    }
+}
+
+struct State {
+    buf: Vec<u8>,
+    /// Records appended so far (the next record's number), and how many are known durable.
+    appended: u64,
+    durable: u64,
+    flushing: bool,
+    /// Once a write or sync has failed the log refuses everything: after a failed `fsync` the state of the file is unknown, and retrying
+    /// until it "succeeds" would acknowledge data that may be gone.
+    failed: Option<String>,
+    syncs: u64,
+    sink: Box<dyn Sink>,
+}
+
+/// A log that makes many appenders share one durability call. An appender adds its record to a buffer and, if nobody is flushing,
+/// becomes the *leader*: it takes the whole buffer, writes it and syncs it while the others add more; then it wakes everyone whose record
+/// was in the batch. The cost of a sync is paid once per batch instead of once per record.
+pub struct GroupLog {
+    st: Mutex<State>,
+    flushed: Condvar,
+}
+
+impl GroupLog {
+    pub fn new(sink: Box<dyn Sink>) -> Arc<GroupLog> {
+        Arc::new(GroupLog { st: Mutex::new(State { buf: vec![], appended: 0, durable: 0, flushing: false, failed: None, syncs: 0, sink }), flushed: Condvar::new() })
+    }
+
+    /// Append a record; returns when it is durable, or an error if the log has failed.
+    pub fn append(&self, record: &[u8]) -> io::Result<()> {
+        let mut st = self.st.lock().unwrap();
+        if let Some(e) = &st.failed {
+            return Err(io::Error::other(e.clone()));
+        }
+        st.buf.extend_from_slice(record);
+        st.appended += 1;
+        let mine = st.appended;
+        loop {
+            if let Some(e) = &st.failed {
+                return Err(io::Error::other(e.clone()));
+            }
+            if st.durable >= mine {
+                return Ok(());
+            }
+            if !st.flushing {
+                // become the leader for everything appended so far
+                st.flushing = true;
+                let batch = std::mem::take(&mut st.buf);
+                let upto = st.appended;
+                // the sink is used outside the lock so that other appenders can fill the next batch meanwhile
+                let mut sink = std::mem::replace(&mut st.sink, Box::new(Dead));
+                drop(st);
+                let result = sink.write_batch(&batch).and_then(|_| sink.sync());
+                st = self.st.lock().unwrap();
+                st.sink = sink;
+                st.flushing = false;
+                st.syncs += 1;
+                match result {
+                    Ok(()) => st.durable = upto,
+                    Err(e) => st.failed = Some(format!("log write or sync failed: {e}")),
+                }
+                self.flushed.notify_all();
+            } else {
+                st = self.flushed.wait(st).unwrap();
+            }
+        }
+    }
+
+    pub fn syncs(&self) -> u64 {
+        self.st.lock().unwrap().syncs
+    }
+    pub fn appended(&self) -> u64 {
+        self.st.lock().unwrap().appended
+    }
+    pub fn is_failed(&self) -> bool {
+        self.st.lock().unwrap().failed.is_some()
+    }
+}
+
+struct Dead;
+impl Sink for Dead {
+    fn write_batch(&mut self, _: &[u8]) -> io::Result<()> {
+        unreachable!("the sink is only taken out by the leader, and there is one leader at a time")
+    }
+    fn sync(&mut self) -> io::Result<()> {
+        unreachable!()
+    }
+}
+
+// ---- a model of the io_uring interface -----------------------------------------------------------------------------------------------
+
+/// A user-space model of the *interface* of Linux's `io_uring`: the application fills submission entries (`Sqe`), submits a whole batch
+/// with one call, and collects completion entries (`Cqe`) later, in any order, each carrying the `user_data` it was submitted with. An
+/// entry may be *linked* to the next so that they run in order and a failure cancels the rest. This model executes entries on a pool of
+/// threads over ordinary `pread`, `pwrite` and `fsync`; the kernel's `io_uring` shares ring buffers with user space and needs no thread
+/// per request, so costs differ. The model is for the semantics: depth, batching, ordering, cancellation.
+pub mod ring {
+    use super::*;
+    use std::sync::mpsc::{channel, Receiver, Sender};
+
+    pub enum Op {
+        Read { file: Arc<File>, offset: u64, len: usize },
+        Write { file: Arc<File>, offset: u64, data: Vec<u8> },
+        Fsync { file: Arc<File>, how: Durability },
+    }
+    pub struct Sqe {
+        pub op: Op,
+        pub user_data: u64,
+        /// Run the next entry only after this one has succeeded; if it fails, the rest of the chain completes with `Canceled`.
+        pub link: bool,
+    }
+    #[derive(Debug)]
+    pub enum Outcome {
+        /// Bytes read or written (a read's bytes are in `Cqe::data`), or 0 for an fsync.
+        Done(usize),
+        Failed(String),
+        /// An earlier entry of the chain failed.
+        Canceled,
+    }
+    pub struct Cqe {
+        pub user_data: u64,
+        pub outcome: Outcome,
+        pub data: Vec<u8>,
+    }
+
+    enum Job {
+        Chain(Vec<Sqe>),
+        Stop,
+    }
+
+    pub struct IoRing {
+        depth: usize,
+        queued: Vec<Sqe>,
+        inflight: usize,
+        jobs: Sender<Job>,
+        done: Receiver<Cqe>,
+        workers: Vec<std::thread::JoinHandle<()>>,
+        pub submit_calls: u64,
+        pub submitted: u64,
+    }
+
+    fn execute(op: &Op) -> (Outcome, Vec<u8>) {
+        match op {
+            Op::Read { file, offset, len } => {
+                let mut b = vec![0u8; *len];
+                match file.read_exact_at(&mut b, *offset) {
+                    Ok(()) => (Outcome::Done(*len), b),
+                    Err(e) => (Outcome::Failed(e.to_string()), vec![]),
+                }
+            }
+            Op::Write { file, offset, data } => match file.write_all_at(data, *offset) {
+                Ok(()) => (Outcome::Done(data.len()), vec![]),
+                Err(e) => (Outcome::Failed(e.to_string()), vec![]),
+            },
+            Op::Fsync { file, how } => match make_durable(file, *how) {
+                Ok(()) => (Outcome::Done(0), vec![]),
+                Err(e) => (Outcome::Failed(e.to_string()), vec![]),
+            },
+        }
+    }
+
+    impl IoRing {
+        /// A ring that holds at most `depth` entries (queued plus in flight), served by `workers` threads.
+        pub fn new(depth: usize, workers: usize) -> IoRing {
+            let (jobs, job_rx) = channel::<Job>();
+            let job_rx = Arc::new(Mutex::new(job_rx));
+            let (done_tx, done) = channel::<Cqe>();
+            let workers = (0..workers.max(1))
+                .map(|_| {
+                    let (rx, tx) = (job_rx.clone(), done_tx.clone());
+                    std::thread::spawn(move || loop {
+                        let job = rx.lock().unwrap().recv();
+                        match job {
+                            Ok(Job::Chain(entries)) => {
+                                let mut failed = false;
+                                for e in entries {
+                                    let (outcome, data) = if failed { (Outcome::Canceled, vec![]) } else { execute(&e.op) };
+                                    failed |= !matches!(outcome, Outcome::Done(_));
+                                    let _ = tx.send(Cqe { user_data: e.user_data, outcome, data });
+                                }
+                            }
+                            Ok(Job::Stop) | Err(_) => return,
+                        }
+                    })
+                })
+                .collect();
+            IoRing { depth, queued: vec![], inflight: 0, jobs, done, workers, submit_calls: 0, submitted: 0 }
+        }
+
+        /// Queue an entry without submitting it; gives it back when the ring is full.
+        pub fn push(&mut self, e: Sqe) -> Result<(), Sqe> {
+            if self.queued.len() + self.inflight >= self.depth {
+                return Err(e);
+            }
+            self.queued.push(e);
+            Ok(())
+        }
+
+        /// Hand every queued entry to the workers with one call; returns how many were submitted.
+        pub fn submit(&mut self) -> usize {
+            let n = self.queued.len();
+            if n == 0 {
+                return 0;
+            }
+            self.submit_calls += 1;
+            self.submitted += n as u64;
+            self.inflight += n;
+            let mut chain: Vec<Sqe> = vec![];
+            for e in self.queued.drain(..) {
+                let link = e.link;
+                chain.push(e);
+                if !link {
+                    self.jobs.send(Job::Chain(std::mem::take(&mut chain))).unwrap();
+                }
+            }
+            if !chain.is_empty() {
+                // a dangling link at the end of a batch ends the chain there
+                self.jobs.send(Job::Chain(chain)).unwrap();
+            }
+            n
+        }
+
+        /// Wait for one completion; `None` when nothing is in flight.
+        pub fn wait(&mut self) -> Option<Cqe> {
+            if self.inflight == 0 {
+                return None;
+            }
+            let c = self.done.recv().ok()?;
+            self.inflight -= 1;
+            Some(c)
+        }
+
+        pub fn inflight(&self) -> usize {
+            self.inflight
+        }
+    }
+
+    impl Drop for IoRing {
+        fn drop(&mut self) {
+            for _ in 0..self.workers.len() {
+                let _ = self.jobs.send(Job::Stop);
+            }
+            for w in self.workers.drain(..) {
+                let _ = w.join();
+            }
+        }
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "What this machine does not tell you"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Topic</th> <th>On Linux (documented, not measured here)</th> </tr> </thead> <tbody> <tr> <td><code>fsync</code> and <code>fdatasync</code></td> <td>Both ask the device to flush its cache; <code>fdatasync</code> skips file metadata that is not needed to read the data back (the modification time) but still writes the file size, so it saves a journal write for an overwrite and little for an append</td> </tr> <tr> <td>Direct I/O</td> <td><code>O_DIRECT</code> requires the buffer address, the file offset and the length to be multiples of the logical block size (commonly 512 bytes or 4 KiB); misaligned requests fail with <code>EINVAL</code>; the page cache is bypassed for data but metadata still goes through it</td> </tr> <tr> <td>After creating or renaming a file</td> <td><code>fsync</code> the <strong>directory</strong> as well as the file, or the new name may not survive a crash</td> </tr> <tr> <td><code>io_uring</code></td> <td>Two ring buffers shared between the application and the kernel (submission and completion queues); entries are batched and submitted with <code>io_uring_enter</code> (or by a kernel polling thread, <code>SQPOLL</code>, with no system call at all); buffers and files can be registered once to skip per-request setup; entries can be linked so a write is followed by its <code>fsync</code>, or drained in order</td> </tr> <tr> <td>Asynchronous I/O in engines</td> <td>RocksDB uses multi-reads and optional <code>io_uring</code>; Seastar/ScyllaDB and TigerBeetle are built around asynchronous direct I/O; PostgreSQL 18 added an asynchronous I/O subsystem with a choice of backends including <code>io_uring</code></td> </tr> <tr> <td>Failure</td> <td>After a failed write-back the kernel may drop the dirty pages and report the error once; a later <code>fsync</code> can succeed; engines treat the first error as fatal (the "fsyncgate" discussion of 2018 in PostgreSQL)</td> </tr> <tr> <td>Torn writes</td> <td>A write larger than the device's atomic unit can be partly applied after a crash; engines protect pages with checksums plus a double-write buffer (InnoDB) or full-page images in the log (PostgreSQL)</td> </tr> </tbody> </table></div>
+
+<aside data-call="note"><b>A measurement that was wrong for a good reason</b><p>The first version of the read experiment created the 1 GiB file through an ordinary descriptor, read it once sequentially to "warm" it, and then measured <code>F_NOCACHE</code> reads. They took 1 µs, which is not a flash latency. The pages of the file were in the page cache, <code>F_NOCACHE</code> did not evict them, and the "device" numbers were cache hits. The fixed experiment writes the file with the cache off, never reads it through the cache before the cold measurements, and only then warms it for the warm ones. The check that caught it was the number itself: a random 4 KiB read from an SSD does not take 1 µs.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Foreign functions without a crate.</strong> <code>unsafe extern "C" { fn fcntl(fd: i32, cmd: i32, ...) -&gt; i32; fn fsync(fd: i32) -&gt; i32; fn mmap(...) ... }</code> declares the C functions (a variadic one for <code>fcntl</code>); the constants (<code>F_FULLFSYNC = 51</code>, <code>F_NOCACHE = 48</code>) come from the system header. Each call is wrapped in a function that returns <code>io::Result</code> from <code>errno</code>.</li> <li><strong><code>std::os::unix::fs::FileExt</code></strong> gives <code>read_at</code>, <code>read_exact_at</code>, <code>write_all_at</code>: positioned I/O (<code>pread</code>/<code>pwrite</code>) that does not move a shared cursor, so many threads can use one <code>File</code>.</li> <li><strong><code>AsRawFd</code></strong> gives the descriptor for the foreign calls; the <code>File</code> keeps it open for the duration.</li> <li><strong>A leader–follower group commit with <code>Mutex</code> + <code>Condvar</code>.</strong> Followers wait on the condition variable; the leader takes the batch out of the shared state, <em>moves the sink out of the mutex</em> (<code>mem::replace</code> with a placeholder) so that it can write and sync without holding the lock, and puts it back before waking everyone.</li> <li><strong>A trait for the sink</strong> (<code>trait Sink { fn write_batch; fn sync }</code>) makes failure testable: the test sink fails its n-th write or sync.</li> <li><strong><code>Mapped</code> wraps <code>mmap</code>/<code>munmap</code></strong> with <code>Drop</code>, and exposes a <code>&amp;[u8]</code>; the safety condition (the file must not be truncated while mapped) is stated on the type, since a shrunk file makes a read a signal rather than an error.</li> <li><strong>Channels and worker threads for the ring model</strong>: a shared receiver behind a <code>Mutex</code>, <code>Chain</code> jobs for linked entries, a <code>Stop</code> message per worker joined in <code>Drop</code>.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Durability calls</strong> return <code>Ok</code> and the data reads back for each kind.</li> <li><strong>Cache bypass and maps</strong>: 500 random reads of random lengths (1 to 70 000 bytes) at random offsets of a 3 MiB file through the cache, through <code>F_NOCACHE</code> and through a memory map return identical bytes equal to the file's; a read past the end is an error.</li> <li><strong>Group commit</strong>: 8 threads append 300 records each; after every append returns, the record is in the file; at the end each record appears once, each thread's records are in order and intact (a check value in each 16-byte record), concurrent appenders shared syncs (fewer syncs than records), and a lone appender needs one sync per record.</li> <li><strong>Failure</strong>: a sink that fails its 4th sync, and one that fails its 4th write: the first three appends succeed, the fourth fails, every later append fails, the file does not grow after the failure, acknowledged records are in the file; with 8 appenders and a failure at the 5th sync, everyone in the failed batch gets the error and no record that returned <code>Ok</code> is missing.</li> <li><strong>The ring model</strong>: 3 000 random reads at depth 32 with 8 workers complete once each with the right bytes and fewer submit calls than entries; a full ring gives the entry back, and entries in flight count against the depth; linked writes to the same bytes run in order in 200 rounds with 8 workers; a failed read cancels the rest of its chain and not another chain.</li> <li><strong>Mutants run against these tests</strong> (9): records acknowledged before they are written; a failed sync retried as if nothing happened; the leader not waking the followers; the file position not advancing; a full ring accepting one more entry; every entry ending its chain; a failure not cancelling its chain; submitted entries not counted as in flight; a short read reported as success. <strong>All 9 were killed</strong>, five by a hang or crash. The first survived until the check "this record is in the file" was made after every append instead of every 50th.</li> <li><strong>Not testable by outcome</strong>: that <code>Full</code> really passes through <code>F_FULLFSYNC</code> and that <code>set_nocache</code> really turns the cache off. Both are visible only in latency (4.0 ms against 18 µs; 90 µs against 0.67 µs), and a test on timing would fail on a machine with a different drive. The measurements are the evidence.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>PostgreSQL</strong>: <code>wal_sync_method</code> chooses <code>fdatasync</code>, <code>fsync</code>, <code>open_datasync</code> or, on macOS, <code>fsync_writethrough</code> (which calls <code>F_FULLFSYNC</code>); <code>fsync = off</code> is documented as unsafe; a failure of <code>fsync</code> raises a <code>PANIC</code> since the 2018 discussion; group commit is built into the WAL writer (<code>commit_delay</code>, <code>commit_siblings</code>).</li> <li><strong>SQLite</strong>: <code>PRAGMA fullfsync</code> and <code>checkpoint_fullfsync</code> ask for <code>F_FULLFSYNC</code> on macOS; by default it is off, which is the trade-off measured above.</li> <li><strong>MySQL InnoDB</strong>: <code>innodb_flush_method</code> (<code>O_DIRECT</code>, <code>fsync</code>), <code>innodb_flush_log_at_trx_commit</code> (flush at each commit or once a second), a double-write buffer against torn pages.</li> <li><strong>RocksDB</strong>: <code>use_direct_reads</code>, <code>use_direct_io_for_flush_and_compaction</code>, <code>bytes_per_sync</code>, <code>wal_bytes_per_sync</code>, <code>io_uring</code> for parallel multi-gets; group commit across writers to the WAL.</li> <li><strong>LMDB</strong> and other memory-mapped engines use the page cache as the buffer pool and <code>msync</code>; they give up control of eviction and of when pages reach the disk, and the cost shows up as unpredictable latency under memory pressure.</li> <li><strong>Shared-nothing, thread-per-core engines</strong> (ScyllaDB's Seastar, TigerBeetle, Redpanda) use asynchronous direct I/O so that no thread ever blocks on a disk.</li> <li><strong>Cloud block storage</strong> adds network latency and durability of its own (the write is replicated before it is acknowledged); the same calls have different costs, and the right batch size and queue depth differ.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Know which call you are making.</strong> <code>sync_all</code> on Apple platforms is <code>F_FULLFSYNC</code>; on Linux it is <code>fsync</code>. Two programs with the same source differ by 200 times in speed and also in what they promise.</li> <li><strong>Benchmarks that never reach the device measure the cache.</strong> Check the number against what the device can do; write test files with the cache off; do not warm a file you want to read cold.</li> <li><strong><code>F_NOCACHE</code>/<code>O_DIRECT</code> is not a fix for double caching alone.</strong> It moves the burden of read-ahead and of caching to the engine; without a buffer pool a direct-I/O engine reads the same page again and again.</li> <li><strong>Do not retry an <code>fsync</code> that failed.</strong> Treat the first error as fatal for the file (or the process).</li> <li><strong>A durable file is not a durable name.</strong> After a create or rename, sync the directory.</li> <li><strong>Group commit adds latency to the first writer</strong> in a batch, which waits for the previous sync; tune the batch with a delay only when the sync is slow relative to the arrival rate.</li> <li><strong>Deeper queues raise latency.</strong> Throughput grows to the device's limit, then each request waits longer (90 µs to 296 µs above); set the depth to the knee, not the maximum.</li> <li><strong>A memory map hides I/O errors as signals</strong> and lets the kernel decide when to write; it is convenient and hard to make safe for a transactional store.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "ScyllaDB: no-compromise performance"
+url = "https://www.youtube.com/watch?v=0S6i9BmuF8U"

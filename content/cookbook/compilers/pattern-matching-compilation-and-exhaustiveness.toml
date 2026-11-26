@@ -1,0 +1,101 @@
+title = "Pattern matching: compilation and exhaustiveness"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Types and semantics"
+chapter_order = 4
+order = 605
+kind = "guide"
+lede = "rustc rustc_pattern_analysis, OCaml, Haskell, Scala, Swift · Builds on algebraic data types"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>A <code>match</code> is a <em>clause matrix</em>: rows are arms, columns are the parts of the scrutinee being tested, and each row has an action. Two questions need answering. <b>Exhaustiveness and redundancy</b>: does some value match no row, and can some row never match? <b>Compilation</b>: which tests do we emit, and in what order?</p>
+
+<p>Both use two matrix operations. <b>Specialization</b> <code>S(c, P)</code> keeps the rows whose first column can match constructor <code>c</code>, and replaces that column with <code>c</code>'s fields. A wildcard expands to <code>arity(c)</code> wildcards. <b>Default</b> <code>D(P)</code> keeps rows whose first column is a wildcard, and drops that column.</p>
+
+<p>Maranget's <b>usefulness</b> algorithm answers both questions. A pattern vector <code>q</code> is useful with respect to the matrix <code>P</code> if some value matches <code>q</code> but no row of <code>P</code>. A match is exhaustive if and only if <code>_</code> is not useful after all rows. Row <code>i</code> is redundant if and only if it isn't useful with respect to rows <code>0..i</code>. The problem is NP-complete in general, but fast in practice.</p>
+
+```rust title="Usefulness (Maranget 2007, algorithm U) for constructor patterns"
+use std::collections::HashSet;
+
+/// An algebraic data type: its constructors and their field types.
+/// (Expanded eagerly for brevity; use type IDs for recursive types.)
+#[derive(Clone)]
+pub struct Ty { pub ctors: Vec<(&'static str, Vec<Ty>)> }
+
+#[derive(Clone, Debug)]
+pub enum Pat { Wild, Ctor(&'static str, Vec<Pat>) }
+
+fn specialize(row: &[Pat], name: &str, arity: usize) -> Option<Vec<Pat>> {
+    match &row[0] {
+        Pat::Ctor(n, args) if *n == name => Some(args.iter().chain(&row[1..]).cloned().collect()),
+        Pat::Ctor(..) => None,
+        Pat::Wild => Some(std::iter::repeat(Pat::Wild).take(arity).chain(row[1..].iter().cloned()).collect()),
+    }
+}
+
+fn default_row(row: &[Pat]) -> Option<Vec<Pat>> {
+    match row[0] { Pat::Wild => Some(row[1..].to_vec()), Pat::Ctor(..) => None }
+}
+
+pub fn useful(p: &[Vec<Pat>], q: &[Pat], tys: &[Ty]) -> bool {
+    if q.is_empty() { return p.is_empty(); }            // useful iff nothing matched before
+    let ty = &tys[0];
+    let spec_tys = |fields: &[Ty]| -> Vec<Ty> { fields.iter().chain(&tys[1..]).cloned().collect() };
+    let try_ctor = |name: &str, fields: &[Ty]| {
+        let p2: Vec<_> = p.iter().filter_map(|r| specialize(r, name, fields.len())).collect();
+        let q2 = specialize(q, name, fields.len()).unwrap();
+        useful(&p2, &q2, &spec_tys(fields))
+    };
+    match &q[0] {
+        Pat::Ctor(name, _) => {
+            let (_, fields) = ty.ctors.iter().find(|(n, _)| n == name).expect("constructor of this type");
+            try_ctor(name, fields)
+        }
+        Pat::Wild => {
+            let seen: HashSet<&str> = p.iter()
+                .filter_map(|r| match &r[0] { Pat::Ctor(n, _) => Some(*n), Pat::Wild => None })
+                .collect();
+            if ty.ctors.iter().all(|(n, _)| seen.contains(n)) {
+                // every constructor appears: q is useful iff it is useful for one of them
+                ty.ctors.iter().any(|(name, fields)| try_ctor(name, fields))
+            } else {
+                // some constructor is missing from the column: only wildcard rows matter
+                let p2: Vec<_> = p.iter().filter_map(|r| default_row(r)).collect();
+                useful(&p2, &q[1..], &tys[1..])
+            }
+        }
+    }
+}
+
+pub fn exhaustive(rows: &[Vec<Pat>], tys: &[Ty]) -> bool {
+    !useful(rows, &vec![Pat::Wild; tys.len()], tys)
+}
+
+pub fn redundant_rows(rows: &[Vec<Pat>], tys: &[Ty]) -> Vec<usize> {
+    (0..rows.len()).filter(|&i| !useful(&rows[..i], &rows[i], tys)).collect()
+}
+```
+
+<p>For good error messages, make <code>useful</code> return <em>witnesses</em> (the values that aren't matched) instead of a boolean. Then you can print “pattern <code>Some(None)</code> not covered”. rustc does this. It also handles integer ranges by splitting them into disjoint intervals, slices by length classes, or-patterns by expanding rows, and non-exhaustive enums from other crates. Guards never help exhaustiveness, because the checker can't evaluate them.</p>
+
+<p><b>Compiling to decision trees</b> uses the same operations. <code>CC(P → A)</code>:</p>
+
+<ul> <li>If there are no rows, emit <code>Fail</code> (unreachable if the match is exhaustive).</li> <li>If the first row is all wildcards, emit <code>Leaf(action)</code>.</li> <li>Otherwise, pick a column. For each constructor <code>c</code> present in it, emit a <code>Switch</code> branch <code>c → CC(S(c, P))</code>. Add a default branch <code>CC(D(P))</code> if the set of constructors present isn't complete.</li> </ul>
+
+<p>Decision trees never test a value twice, but can duplicate actions; share them with join points. Backtracking automata (Le Fessant–Maranget) avoid duplication but may retest. The column heuristic matters. Maranget's “necessity” heuristic picks the column that every row depends on.</p>
+
+```text title="Decision tree for match (xs, ys) { (Nil, _) => 1, (_, Nil) => 2, (Cons(..), Cons(..)) => 3 }"
+switch xs
+  Nil  → leaf 1
+  Cons → switch ys
+           Nil  → leaf 2
+           Cons → leaf 3
+```
+"""
+
+[[sources]]
+title = "rustc dev guide: pattern and exhaustiveness checking"
+url = "https://rustc-dev-guide.rust-lang.org/pat-exhaustive-checking.html"

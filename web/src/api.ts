@@ -1005,7 +1005,24 @@ export interface CourseStagePage {
   runs: CourseRun[];
 }
 
+// ---- the cookbook: reference pages (content/cookbook) ----
+export interface CbRow { id: string; title: string; kind: string; module: string; chapter: string; lede: string; status: string | null; level: string | null; lines: number }
+export interface CbSubject { id: string; title: string; about: string; pages: CbRow[] }
+export interface CbIndex { subjects: CbSubject[]; samples: CbRow[] }
+export interface CbSource { title: string; url: string; note: string | null; kind: string | null; scope: string | null; read: boolean | null }
+export interface CbMethod { type: string; name: string; signature: string; since: string; use_when: string; common: boolean; unstable: boolean; anchor: string | null }
+export interface CbLab { title: string; after: string | null; run: boolean; test: boolean; files: string[]; contents: { path: string; text: string }[]; recorded: { run: string; tests: string; passed: number; stamp: string; problems: string } | null }
+export interface CbPage {
+    id: string; subject: string; title: string; module: string; chapter: string; kind: string; lede: string; status: string | null; level: string | null; origin: string | null;
+    summary: string[]; glance: { label: string; value: string }[]; sections: { heading: string; body: string }[];
+    terms: { term: string; means: string; section: string }[]; sources: CbSource[]; methods: CbMethod[]; labs: CbLab[]; illustrative: string[]; verified: Record<string, unknown>;
+}
+export interface CbNear { id: string; title: string; chapter: string }
+export interface CbPageView { page: CbPage; previous: CbNear | null; next: CbNear | null; linked_from: CbRow[] }
+
 export const api = {
+    cookbook: () => request<CbIndex>("GET", "/cookbook"),
+    cookbookPage: (id: string) => request<CbPageView>("GET", `/cookbook/pages/${encodeURIComponent(id)}`),
   tracks: () => request<TrackSummary[]>("GET", "/tracks"),
   activity: (sections: readonly Section[]) => request<Activity>("GET", `/activity?sections=${sections.join(",")}`),
   track: (slug: string) => request<TrackDetail>("GET", `/tracks/${slug}`),

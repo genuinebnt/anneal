@@ -1,0 +1,32 @@
+title = "Collections tour"
+module = "Rust language"
+module_order = 1
+chapter = "Everyday language"
+chapter_order = 3
+order = 28
+kind = "recipe"
+lede = "Vec, HashMap, HashSet, BTreeMap, VecDeque: the methods that save you loops."
+level = "simple"
+code = ["examples/language/collections_tour.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+every stage; choosing the right container is half of performance.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>choosing the right container: counting</li><li>grouping</li><li>deduping</li><li>sorted ranges</li><li>queues</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Choosing: Vec (default) &#124; VecDeque (queue/both ends) &#124; HashMap/HashSet (lookup, unordered) &#124; BTreeMap/BTreeSet (sorted, range queries, deterministic iteration) &#124; BinaryHeap (priority) &#124; never LinkedList. Docs: <https://doc.rust-lang.org/std/collections/index.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/collections/index.html"
+url = "https://doc.rust-lang.org/std/collections/index.html"

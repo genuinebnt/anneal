@@ -1,0 +1,72 @@
+title = "Collections choice guide (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "Vectors, slices and collections"
+chapter_order = 4
+order = 82
+kind = "recipe"
+lede = "which collection? Ten workloads, each solved with the right structure, with COUNTED comparisons and hashes (asserted) and timings (printed, never asserted)."
+level = "intermediate"
+code = ["examples/std_tour/std_collections_choice_guide.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>choosing data structures in services</li><li>code review</li><li>interview prep</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>caches and indexes</li><li>job queues</li><li>schedulers</li><li>sorted time indexes</li><li>dedupe sets</li><li>top-k</li><li>tiny inline lists</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>std::vec::Vec</code></li><li><code>std::collections::HashMap</code></li><li><code>std::collections::HashSet</code></li><li><code>std::collections::VecDeque</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::collections::BTreeMap</code></li><li><code>std::collections::BTreeSet</code></li><li><code>std::collections::BinaryHeap</code></li><li><code>std::collections::LinkedList</code></li></ul>
+
+<ul class="cb-g-names"><li><code>HashMap::get</code></li><li><code>HashMap::entry</code></li><li><code>HashSet::insert</code></li><li><code>HashSet::intersection</code></li><li><code>HashSet::difference</code></li><li><code>BTreeMap::range</code></li><li><code>BTreeMap::pop_first</code></li></ul>
+
+<ul class="cb-g-names"><li><code>BTreeMap::first_key_value</code></li><li><code>BTreeMap::last_key_value</code></li><li><code>BTreeSet::union</code></li><li><code>BTreeSet::intersection</code></li><li><code>VecDeque::pop_front</code></li><li><code>BinaryHeap::push</code></li></ul>
+
+<ul class="cb-g-names"><li><code>BinaryHeap::pop</code></li><li><code>BinaryHeap::peek</code></li><li><code>BinaryHeap::peek_mut</code></li><li><code>BinaryHeap::from</code></li><li><code>BinaryHeap::into_sorted_vec</code></li><li><code>LinkedList::append</code></li></ul>
+
+LinkedList::split_off, slice::binary_search, slice::contains
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/collections/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/collections/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+alloc: Vec, VecDeque, LinkedList, BTreeMap, BTreeSet, BinaryHeap. std only: HashMap and HashSet (their default hasher needs OS randomness). Arrays are core.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+the full API of each type (this page is for **choosing**: see std_vec_vecdeque_methods and the hash map / collections look-up pages), cursor APIs (unstable), concurrent maps (not in std), memory footprint measurement (see std_alloc_layout_global_allocator), external crates such as indexmap or smallvec.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Index by position, iterate, append at the end</td><td><code>Vec          (the default; contiguous)</code></td></tr><tr><td>FIFO, or push/pop at both ends</td><td><code>VecDeque</code></td></tr><tr><td>Look up by exact key, order irrelevant</td><td><code>HashMap / HashSet</code></td></tr><tr><td>Keys in order, ranges, floor/ceiling, min and max</td><td><code>BTreeMap / BTreeSet</code></td></tr><tr><td>Repeatedly take the largest (smallest: Reverse)</td><td><code>BinaryHeap</code></td></tr><tr><td>Build once, then search many times</td><td><code>sorted Vec + binary_search</code></td></tr><tr><td>A handful of small items</td><td><code>Vec or inline array, linear search</code></td></tr><tr><td>Move whole lists in O(1)</td><td><code>LinkedList (rarely; try VecDeque or Vec first) COSTS (std::collections module docs; n = size). get(i)/insert(i)/remove(i) Vec         O(1) / O(n-i) / O(n-i)            VecDeque    O(1) / O(min(i, n-i)) both LinkedList  O(min(i, n-i)) all three, but append is O(1) HashMap     O(1) expected get/insert/remove   BTreeMap    O(log n) get/insert/remove, plus range BinaryHeap  push O(1) expected, pop O(log n), peek O(1) (BinaryHeap docs) BTreeMap detail (its docs): nodes hold B-1..2B-1 items and are searched LINEARLY, so a lookup makes more comparisons than binary search while touching few cache lines.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/collections/index.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/collections/index.html"
+url = "https://doc.rust-lang.org/std/collections/index.html"

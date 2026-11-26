@@ -1,0 +1,339 @@
+title = "Grace hash join and spilling"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 356
+kind = "guide"
+lede = "BusTub P3 Task 3 · in-memory hash join · intermediate pages in the buffer pool · Grace partitioning with recursive re-partitioning · the hot-key fallback · no leaked pages"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>The optimizer turns <code>NestedLoopJoin</code> into <code>HashJoin</code> when the predicate has equality conjuncts. Two implementations then share one plan node:</p>
+
+<ol> <li><strong>In-memory hash join</strong> (the build side fits): build a <code>HashMap</code> from the right side, stream the left side through it. NULL keys are never inserted or probed. For a left join, an unmatched left row is emitted with NULLs. Residual (non-equality) conjuncts are evaluated on the joined row.</li> <li><strong>Grace hash join</strong> (it doesn't fit): partition both inputs to disk by hash, then join partition pairs one at a time. This is what BusTub's P3 Task 3 requires, and it's what this section builds.</li> </ol>
+"""
+
+[[sections]]
+heading = "Intermediate pages"
+body = """
+<p>A spill file is a list of buffer-pool pages holding serialized rows. Pages are allocated through the <strong>same buffer pool</strong> as table data, so a spill competes for frames with everything else (and may itself be evicted to disk), and a finished spill must <strong>return its pages</strong> to the disk manager, or the file grows forever.</p>
+
+```text title="spill page layout (8 KiB)"
+[ used: u32 ][ len u32 | row bytes ][ len u32 | row bytes ] ... free
+row bytes: [ ncols u16 ] then per value: tag u8 (0 NULL · 1 bool · 2 int · 3 float · 4 text) + payload
+```
+
+:::deeper Spill writer, spill file, page-at-a-time reader, row codec
+```rust title="src/execution/spill.rs"
+//! Spill files: rows serialized into buffer-pool pages. Page layout: [used u32][records...],
+//! record = [len u32][encoded row]. BusTub's P3 asks for exactly this (an "intermediate result page").
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use crate::common::config::{PageId, PAGE_SIZE};
+use crate::types::value::Value;
+use super::catalog::Bpm;
+use super::{err, Result};
+
+pub type Row = Vec<Value>;
+pub static PAGES_WRITTEN: AtomicU64 = AtomicU64::new(0);
+pub static PAGES_READ: AtomicU64 = AtomicU64::new(0);
+
+pub fn encode_row(row: &[Value], out: &mut Vec<u8>) {
+    out.extend_from_slice(&(row.len() as u16).to_le_bytes());
+    for v in row {
+        match v {
+            Value::Null => out.push(0),
+            Value::Bool(b) => { out.push(1); out.push(*b as u8); }
+            Value::Int(i) => { out.push(2); out.extend_from_slice(&i.to_le_bytes()); }
+            Value::Float(f) => { out.push(3); out.extend_from_slice(&f.to_bits().to_le_bytes()); }
+            Value::Text(s) => { out.push(4); out.extend_from_slice(&(s.len() as u32).to_le_bytes()); out.extend_from_slice(s.as_bytes()); }
+        }
+    }
+}
+
+pub fn decode_row(b: &[u8]) -> Row {
+    let n = u16::from_le_bytes([b[0], b[1]]) as usize;
+    let (mut i, mut row) = (2, Vec::with_capacity(n));
+    for _ in 0..n {
+        let tag = b[i]; i += 1;
+        row.push(match tag {
+            0 => Value::Null,
+            1 => { i += 1; Value::Bool(b[i - 1] != 0) }
+            2 => { i += 8; Value::Int(i64::from_le_bytes(b[i - 8..i].try_into().unwrap())) }
+            3 => { i += 8; Value::Float(f64::from_bits(u64::from_le_bytes(b[i - 8..i].try_into().unwrap()))) }
+            _ => {
+                let l = u32::from_le_bytes(b[i..i + 4].try_into().unwrap()) as usize; i += 4 + l;
+                Value::Text(String::from_utf8_lossy(&b[i - l..i]).into_owned().into())
+            }
+        });
+    }
+    row
+}
+
+pub struct SpillWriter<'a> { bpm: &'a Bpm, pages: Vec<PageId>, buf: Vec<u8>, rows: usize }
+pub struct SpillFile { pub pages: Vec<PageId>, pub rows: usize }
+
+impl<'a> SpillWriter<'a> {
+    pub fn new(bpm: &'a Bpm) -> Self { SpillWriter { bpm, pages: vec![], buf: Vec::with_capacity(PAGE_SIZE), rows: 0 } }
+    pub fn push(&mut self, row: &[Value]) -> Result<()> {
+        let mut enc = vec![];
+        encode_row(row, &mut enc);
+        if enc.len() + 8 > PAGE_SIZE { return err("row too large to spill (must fit in one page)".into()); }
+        if self.buf.len() + 4 + enc.len() > PAGE_SIZE - 4 { self.flush()?; }
+        self.buf.extend_from_slice(&(enc.len() as u32).to_le_bytes());
+        self.buf.extend_from_slice(&enc);
+        self.rows += 1;
+        Ok(())
+    }
+    fn flush(&mut self) -> Result<()> {
+        if self.buf.is_empty() { return Ok(()); }
+        let pid = self.bpm.new_page();
+        let mut g = self.bpm.write_page(pid)?;
+        let d = g.data_mut();
+        d[0..4].copy_from_slice(&(self.buf.len() as u32).to_le_bytes());
+        d[4..4 + self.buf.len()].copy_from_slice(&self.buf);
+        self.pages.push(pid);
+        self.buf.clear();
+        PAGES_WRITTEN.fetch_add(1, Relaxed);
+        Ok(())
+    }
+    pub fn finish(mut self) -> Result<SpillFile> { self.flush()?; Ok(SpillFile { pages: self.pages, rows: self.rows }) }
+}
+
+impl SpillFile {
+    pub fn iter<'a>(&'a self, bpm: &'a Bpm) -> SpillIter<'a> { SpillIter { bpm, pages: &self.pages, pi: 0, cur: VecDeque::new() } }
+    /// Release every page back to the disk manager. Forgetting this leaks pages until restart.
+    pub fn free(self, bpm: &Bpm) { for p in self.pages { bpm.delete_page(p); } }
+}
+
+pub struct SpillIter<'a> { bpm: &'a Bpm, pages: &'a [PageId], pi: usize, cur: VecDeque<Row> }
+impl Iterator for SpillIter<'_> {
+    type Item = Result<Row>;
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.cur.is_empty() && self.pi < self.pages.len() {
+            let g = match self.bpm.read_page(self.pages[self.pi]) { Ok(g) => g, Err(e) => { self.pi = usize::MAX - 1; return Some(Err(e.into())) } };
+            let d = g.data();
+            let used = u32::from_le_bytes(d[0..4].try_into().unwrap()) as usize;
+            let mut at = 4;
+            while at < 4 + used {
+                let l = u32::from_le_bytes(d[at..at + 4].try_into().unwrap()) as usize;
+                self.cur.push_back(decode_row(&d[at + 4..at + 4 + l]));
+                at += 4 + l;
+            }
+            self.pi += 1;
+            PAGES_READ.fetch_add(1, Relaxed);
+        }
+        self.cur.pop_front().map(Ok)
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "The algorithm"
+body = """
+```text
+start:
+  read the right (build) side; if it has ≤ budget rows → in-memory hash join and stop
+  PHASE 1: stream both sides into `fanout` spill files each, by hash h₁ of the join key
+           (NULL-keyed rows can never match: drop them; for LEFT joins emit left ones with NULLs now)
+join_partition(L_i, R_i, depth):
+  R_i empty         → inner: nothing; left: emit every L_i row with NULLs
+  |R_i| ≤ budget    → build hash table from R_i, stream L_i against it, free both files
+  else, depth < 6   → re-partition both with hash h_{depth+1}; if some sub-partition still holds ALL of R_i,
+                      it's one hot key: no hash function can split it
+  else              → block nested loop: load R_i in budget-sized chunks, scan L_i once per chunk,
+                      track matched flags for LEFT joins
+```
+
+<p>Cost for the in-memory-after-one-partitioning case: <strong>3(M + N)</strong> page I/Os: write both sides (M + N), read them back (M + N) and the initial scans (counted by the children). The measurement below follows the shape: shrink <code>work_mem</code> and the pages written grow, because partitions have to be split again.</p>
+
+:::deeper Grace join executor: in-memory fast path, partitioning, recursion, hot-key fallback
+```rust title="src/execution/grace_hash_join.rs"
+//! Memory-bounded operators: Grace hash join and external merge sort, both spilling through the buffer pool.
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap, VecDeque};
+use std::hash::{Hash, Hasher};
+use crate::types::value::Value;
+use super::catalog::Bpm;
+use super::exec::{Exec, Tuple};
+use super::expr::{truthy, Expr};
+use super::spill::{Row, SpillFile, SpillWriter};
+use super::sql::JoinKind;
+use super::Result;
+
+type Boxed<'e> = Box<dyn Exec + 'e>;
+const MAX_DEPTH: u32 = 6;
+
+fn nulls(n: usize) -> Row { vec![Value::Null; n] }
+fn keys(es: &[Expr], row: &[Value]) -> Result<Vec<Value>> { es.iter().map(|e| e.eval(row)).collect() }
+fn part_of(key: &[Value], seed: u32, fanout: usize) -> usize {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    seed.hash(&mut h);                       // a different seed per recursion level = a different hash function (h1, h2, ...)
+    key.hash(&mut h);
+    (h.finish() % fanout as u64) as usize
+}
+// ---------------- Grace hash join ---------------------------------------------------------------------
+pub struct GraceJoin<'e> {
+    bpm: &'e Bpm, left: Boxed<'e>, right: Option<Boxed<'e>>, lk: Vec<Expr>, rk: Vec<Expr>, residual: Option<Expr>,
+    kind: JoinKind, rw: usize, budget: usize, fanout: usize,
+    out: VecDeque<Row>, parts: VecDeque<(SpillFile, SpillFile)>, started: bool,
+    /// in-memory fast path: right side fit in `budget`, so stream the left side against a hash table
+    inmem: Option<HashMap<Vec<Value>, Vec<Row>>>,
+}
+
+impl<'e> GraceJoin<'e> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(bpm: &'e Bpm, left: Boxed<'e>, right: Boxed<'e>, lk: Vec<Expr>, rk: Vec<Expr>, residual: Option<Expr>, kind: JoinKind, rw: usize, budget: usize) -> Self {
+        GraceJoin { bpm, left, right: Some(right), lk, rk, residual, kind, rw, budget: budget.max(2), fanout: 8, out: VecDeque::new(), parts: VecDeque::new(), started: false, inmem: None }
+    }
+
+    fn probe(&self, l: &[Value], table: &HashMap<Vec<Value>, Vec<Row>>, out: &mut VecDeque<Row>) -> Result<()> {
+        let key = keys(&self.lk, l)?;
+        let mut any = false;
+        if !key.iter().any(Value::is_null) {
+            for m in table.get(&key).into_iter().flatten() {
+                let joined: Row = l.iter().chain(m).cloned().collect();
+                if self.residual.as_ref().map_or(Ok(true), |p| p.eval(&joined).map(|v| truthy(&v)))? { any = true; out.push_back(joined); }
+            }
+        }
+        if !any && self.kind == JoinKind::Left { out.push_back(l.iter().cloned().chain(nulls(self.rw)).collect()); }
+        Ok(())
+    }
+
+    fn build(&self, rows: impl Iterator<Item = Result<Row>>) -> Result<HashMap<Vec<Value>, Vec<Row>>> {
+        let mut t: HashMap<Vec<Value>, Vec<Row>> = HashMap::new();
+        for r in rows { let r = r?; let k = keys(&self.rk, &r)?; if !k.iter().any(Value::is_null) { t.entry(k).or_default().push(r); } }
+        Ok(t)
+    }
+
+    fn start(&mut self) -> Result<()> {
+        self.started = true;
+        let mut right = self.right.take().unwrap();
+        let mut mem: Vec<Row> = vec![];
+        let mut spilled = false;
+        while let Some(t) = right.next()? { mem.push(t.vals); if mem.len() > self.budget { spilled = true; break; } }
+        if !spilled { self.inmem = Some(self.build(mem.into_iter().map(Ok))?); return Ok(()); }
+        // Phase 1: partition both inputs with h1 into `fanout` spill files each.
+        let mut rw: Vec<SpillWriter> = (0..self.fanout).map(|_| SpillWriter::new(self.bpm)).collect();
+        let mut lw: Vec<SpillWriter> = (0..self.fanout).map(|_| SpillWriter::new(self.bpm)).collect();
+        let part = |w: &mut Vec<SpillWriter>, row: &Row, es: &[Expr]| -> Result<bool> {
+            let k = keys(es, row)?;
+            if k.iter().any(Value::is_null) { return Ok(false); }       // can never match
+            w[part_of(&k, 1, self.fanout)].push(row)?;
+            Ok(true)
+        };
+        for r in mem.drain(..) { part(&mut rw, &r, &self.rk)?; }
+        while let Some(t) = right.next()? { part(&mut rw, &t.vals, &self.rk)?; }
+        while let Some(t) = self.left.next()? {
+            if !part(&mut lw, &t.vals, &self.lk)? && self.kind == JoinKind::Left {
+                self.out.push_back(t.vals.into_iter().chain(nulls(self.rw)).collect());   // NULL-keyed left rows: unmatched by definition
+            }
+        }
+        for (l, r) in lw.into_iter().zip(rw) { self.parts.push_back((l.finish()?, r.finish()?)); }
+        Ok(())
+    }
+
+    /// Phase 2: join one partition pair (recursing if the build side is still too big).
+    fn join_partition(&mut self, l: SpillFile, r: SpillFile, depth: u32) -> Result<()> {
+        if l.rows == 0 { l.free(self.bpm); r.free(self.bpm); return Ok(()); }
+        if r.rows == 0 {
+            if self.kind == JoinKind::Left { for row in l.iter(self.bpm) { self.out.push_back(row?.into_iter().chain(nulls(self.rw)).collect()); } }
+            l.free(self.bpm); r.free(self.bpm); return Ok(());
+        }
+        if r.rows <= self.budget {
+            let table = self.build(r.iter(self.bpm))?;
+            let mut out = VecDeque::new();
+            for row in l.iter(self.bpm) { self.probe(&row?, &table, &mut out)?; }
+            self.out.extend(out);
+            l.free(self.bpm); r.free(self.bpm);
+            return Ok(());
+        }
+        if depth < MAX_DEPTH {
+            // Re-partition both sides with a new hash function. If one sub-partition still holds the whole
+            // build side, the data is one hot key: no hash function can split it.
+            let mut rw: Vec<SpillWriter> = (0..self.fanout).map(|_| SpillWriter::new(self.bpm)).collect();
+            let mut lw: Vec<SpillWriter> = (0..self.fanout).map(|_| SpillWriter::new(self.bpm)).collect();
+            for row in r.iter(self.bpm) { let row = row?; let k = keys(&self.rk, &row)?; rw[part_of(&k, depth + 1, self.fanout)].push(&row)?; }
+            for row in l.iter(self.bpm) { let row = row?; let k = keys(&self.lk, &row)?; lw[part_of(&k, depth + 1, self.fanout)].push(&row)?; }
+            let rfiles: Vec<SpillFile> = rw.into_iter().map(|w| w.finish()).collect::<Result<_>>()?;
+            let lfiles: Vec<SpillFile> = lw.into_iter().map(|w| w.finish()).collect::<Result<_>>()?;
+            if rfiles.iter().all(|f| f.rows < r.rows) {
+                l.free(self.bpm); r.free(self.bpm);
+                for (lf, rf) in lfiles.into_iter().zip(rfiles) { self.join_partition(lf, rf, depth + 1)?; }
+                return Ok(());
+            }
+            for f in lfiles.into_iter().chain(rfiles) { f.free(self.bpm); }
+        }
+        self.block_nested_loop(l, r)
+    }
+
+    /// Fallback for a partition that cannot be split: load the build side in `budget`-row chunks and
+    /// scan the probe side once per chunk. Sequential I/O in exchange for repeated passes.
+    fn block_nested_loop(&mut self, l: SpillFile, r: SpillFile) -> Result<()> {
+        let mut matched = vec![false; l.rows];
+        let mut chunk: Vec<Row> = vec![];
+        let mut rows = r.iter(self.bpm);
+        loop {
+            chunk.clear();
+            while chunk.len() < self.budget { match rows.next() { Some(x) => chunk.push(x?), None => break } }
+            if chunk.is_empty() { break; }
+            let table = self.build(chunk.iter().cloned().map(Ok))?;
+            for (i, row) in l.iter(self.bpm).enumerate() {
+                let row = row?;
+                let key = keys(&self.lk, &row)?;
+                for m in table.get(&key).into_iter().flatten() {
+                    let joined: Row = row.iter().chain(m).cloned().collect();
+                    if self.residual.as_ref().map_or(Ok(true), |p| p.eval(&joined).map(|v| truthy(&v)))? { matched[i] = true; self.out.push_back(joined); }
+                }
+            }
+        }
+        if self.kind == JoinKind::Left {
+            for (i, row) in l.iter(self.bpm).enumerate() { if !matched[i] { self.out.push_back(row?.into_iter().chain(nulls(self.rw)).collect()); } }
+        }
+        drop(rows);
+        l.free(self.bpm); r.free(self.bpm);
+        Ok(())
+    }
+}
+
+impl Exec for GraceJoin<'_> {
+    fn next(&mut self) -> Result<Option<Tuple>> {
+        if !self.started { self.start()?; }
+        loop {
+            if let Some(r) = self.out.pop_front() { return Ok(Some(Tuple { vals: r, rid: None })); }
+            if let Some(table) = self.inmem.take() {
+                let r = match self.left.next()? { Some(l) => { let mut o = VecDeque::new(); self.probe(&l.vals, &table, &mut o)?; self.out = o; true } None => false };
+                self.inmem = Some(table);
+                if r { continue } else { return Ok(None) }
+            }
+            let Some((l, r)) = self.parts.pop_front() else { return Ok(None) };
+            self.join_partition(l, r, 1)?;
+        }
+    }
+}
+```
+:::
+
+```text title="the same query at shrinking work_mem (rows) · 4000-row probe side, 200-row build side · includes pages through the BPM"
+hash join 4000 ⋈ 200   work_mem          ∞:    0 pages written,    0 read    (in-memory)
+hash join 4000 ⋈ 200   work_mem       2000:    0 pages written,    0 read    (build side fits: no spill)
+hash join 4000 ⋈ 200   work_mem        400:   99 pages written,  105 read
+hash join 4000 ⋈ 200   work_mem        100:  211 pages written,  235 read    (build > 100: partition both sides)
+hash join 4000 ⋈ 200   work_mem         20:  600 pages written,  719 read    (partitions still too big: re-partition)
+```
+"""
+
+[[sections]]
+heading = "Tests"
+body = """
+<p><code>spilled_equals_in_memory</code> runs four join shapes (inner, left, inner with a residual predicate, left with an ON-clause filter) and two sorts under budgets of 3, 50, 400 and 1500 rows, on tables with <strong>~20% of keys equal to one hot value</strong> and <strong>5% NULL keys</strong>, behind a <strong>64-frame</strong> buffer pool, so spill files are larger than the pool. Each result must equal the in-memory result, and a second run must not grow the database file: if <code>free</code> is forgotten, <code>disk.num_pages()</code> increases on every query.</p>
+
+<aside data-call="warning"><b>What the hot-key case teaches</b><p>With a budget of 3 and 20% of 200 build rows on one key, no amount of re-partitioning helps: all those rows hash to the same bucket at every depth. A naive Grace join recurses until stack overflow. The detection (<code>rfiles.iter().all(|f| f.rows &lt; r.rows)</code> fails ⇒ one sub-partition holds everything) turns that into a bounded number of sequential passes via block nested loop. BusTub's spec calls out the same edge case.</p></aside>
+
+<aside data-call="performance"><b>Hybrid and adaptive improvements</b><ul> <li><strong>Hybrid hash join</strong>: while partitioning, keep partition 0 as an in-memory hash table and join it immediately instead of spilling. It saves a write and a read of 1/fanout of the data.</li> <li><strong>Bloom filter</strong>: build one over the build keys during the build scan; probe rows that fail it are dropped <em>before</em> being written to a partition (<a href="/cookbook/p/filters-tries-inverted-and-vector-indexes">L09</a>). BusTub's leaderboard Query 3 is exactly this.</li> <li><strong>Skew-aware partitioning</strong>: sample the probe side's heavy hitters (<a href="/cookbook/p/count-min-sketch">count-min</a>) and broadcast those keys instead of hashing them.</li> <li><strong>Output streaming</strong>: the reference collects one partition's output into a queue. A streaming version emits as it probes, bounding memory by the build table, not by the join's fan-out.</li> </ul></aside>
+"""

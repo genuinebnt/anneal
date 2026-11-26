@@ -1,0 +1,72 @@
+title = "Uuid and rand"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Data, text and encoding crates"
+chapter_order = 1
+order = 119
+kind = "recipe"
+lede = "Random, time-ordered and name-based ids; seeded simulation; distributions; secret tokens"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/uuid_rand_ids_tokens.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>database keys</li><li>request ids</li><li>idempotency keys</li><li>simulations and tests</li><li>session tokens</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>v7 primary keys (index-friendly)</li><li>v5 for deterministic ids from natural keys</li><li>seeded RNG for reproducible tests and load generators</li><li>OS randomness for anything an attacker must not guess</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>Uuid::new_v4</code></li><li><code>Uuid::now_v7</code></li><li><code>Uuid::new_v7</code></li><li><code>Uuid::new_v5</code></li><li><code>uuid::Timestamp::from_unix</code></li><li><code>uuid::NoContext</code></li><li><code>uuid::ContextV7</code></li><li><code>uuid::Builder::from_random_bytes</code></li><li><code>Uuid::parse_str</code></li><li><code>Uuid::get_version_num</code></li><li><code>Uuid::get_variant</code></li><li><code>Uuid::get_timestamp</code></li><li><code>Uuid::as_bytes</code></li><li><code>Uuid::as_u128</code></li><li><code>Uuid::from_u128</code></li><li><code>Uuid::nil</code></li><li><code>Uuid::max</code></li><li><code>Uuid::is_nil</code></li><li><code>Uuid::hyphenated</code></li><li><code>Uuid::simple</code></li><li><code>Uuid::urn</code></li><li><code>rand::rngs::StdRng</code></li><li><code>rand::SeedableRng::seed_from_u64</code></li><li><code>rand::Rng::random</code></li><li><code>rand::Rng::random_range</code></li><li><code>rand::Rng::random_bool</code></li><li><code>rand::seq::SliceRandom::shuffle</code></li><li><code>rand::seq::IndexedRandom::choose</code></li><li><code>rand::seq::IndexedRandom::choose_multiple</code></li><li><code>rand::seq::IndexedRandom::choose_weighted</code></li><li><code>rand::seq::index::sample</code></li><li><code>rand::seq::IteratorRandom::choose</code></li><li><code>rand::distr::Uniform</code></li><li><code>rand::distr::weighted::WeightedIndex</code></li><li><code>rand::distr::Alphanumeric</code></li><li><code>rand::distr::Distribution::{sample, sample_iter}</code></li><li><code>rand_distr::Normal</code></li><li><code>rand_distr::Exp</code></li><li><code>rand::rngs::OsRng</code></li><li><code>rand::TryRngCore::try_fill_bytes</code></li><li><code>Uuid::{from_slice, try_parse, as_fields, from_fields, as_u64_pair, from_u64_pair, to_bytes_le, from_bytes_le, get_version, is_max}</code></li><li><code>Hyphenated::{encode_lower, encode_upper}</code></li><li><code>uuid::Builder::from_unix_timestamp_millis</code></li><li><code>uuid::serde::{compact, simple}</code></li><li><code>rand::rng</code></li><li><code>rand::RngCore</code></li><li><code>rand::Rng::{fill, random_ratio, random_iter}</code></li><li><code>SeedableRng::from_rng</code></li><li><code>SliceRandom::partial_shuffle</code></li><li><code>IndexedMutRandom::choose_mut</code></li><li><code>IndexedRandom::{choose_multiple_array, choose_multiple_weighted}</code></li><li><code>IteratorRandom::{choose_multiple, choose_stable}</code></li><li><code>rand::distr::{Bernoulli, StandardUniform}</code></li><li><code>custom Distribution impl</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/uuid/1/uuid/" target="_blank" rel="noreferrer">https://docs.rs/uuid/1/uuid/</a></li><li><a href="https://docs.rs/rand/0.9/rand/" target="_blank" rel="noreferrer">https://docs.rs/rand/0.9/rand/</a></li><li><a href="https://docs.rs/rand_distr/0.5/rand_distr/" target="_blank" rel="noreferrer">https://docs.rs/rand_distr/0.5/rand_distr/</a></li></ul>
+"""
+
+[[sections]]
+heading = "Crates"
+body = """
+uuid = "1" (features v4, v5, v7, serde), rand = "0.9" (not the newest major line; method names differ from 0.8), rand_distr = "0.5"
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Opaque random id</td><td><code>Uuid::new_v4</code></td></tr><tr><td>Primary key that sorts by creation time</td><td><code>Uuid::now_v7</code></td></tr><tr><td>Same input =&gt; same id</td><td><code>Uuid::new_v5(&amp;namespace, name)</code></td></tr><tr><td>Reproducible test data</td><td><code>a seeded generator, with the seed printed on failure</code></td></tr><tr><td>Integer in a range</td><td><code>rng.random_range(a..b)   (never x % n)</code></td></tr><tr><td>Weighted choice, many draws</td><td><code>WeightedIndex</code></td></tr><tr><td>Weighted sample WITHOUT replacement</td><td><code>choose_multiple_weighted</code></td></tr><tr><td>K random items to the front, in place</td><td><code>partial_shuffle</code></td></tr><tr><td>"rows created between t1 and t2" on v7</td><td><code>id range from the smallest id of t1 to the largest id of t2</code></td></tr><tr><td>Windows / .NET / SQL Server GUID bytes</td><td><code>from_bytes_le / to_bytes_le (first three fields are byte-swapped)</code></td></tr><tr><td>Session token / API key / reset link</td><td><code>&gt;= 128 bits from the OS (OsRng), then encode REPRODUCIBILITY WARNING. rand documents StdRng as NOT value-stable: its algorithm may change between versions. If a seed must give the same stream forever (golden files, replayable simulations), pick a named algorithm crate (rand_chacha, rand_pcg, rand_xoshiro) and pin it. This file only compares two StdRng streams within one build. SECURITY WARNING. Never derive secrets from seed_from_u64, a timestamp, or any small seed: the whole stream follows from the seed. A UUIDv7 is NOT a secret (it leaks its creation time). v4 uuids come from the OS-backed getrandom, but when you need a secret, say so in code: take raw bytes from OsRng and size them yourself.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://www.rfc-editor.org/rfc/rfc9562.html" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc9562.html</a></li><li><a href="https://rust-random.github.io/book/" target="_blank" rel="noreferrer">https://rust-random.github.io/book/</a></li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/uuid/1/uuid"
+url = "https://docs.rs/uuid/1/uuid/"
+
+[[sources]]
+title = "docs.rs/rand/0.9/rand"
+url = "https://docs.rs/rand/0.9/rand/"
+
+[[sources]]
+title = "docs.rs/rand_distr/0.5/rand_distr"
+url = "https://docs.rs/rand_distr/0.5/rand_distr/"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc9562.html"
+url = "https://www.rfc-editor.org/rfc/rfc9562.html"
+
+[[sources]]
+title = "rust-random.github.io/book"
+url = "https://rust-random.github.io/book/"

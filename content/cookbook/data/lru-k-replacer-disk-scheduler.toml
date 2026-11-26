@@ -1,0 +1,66 @@
+title = "LRU k replacer disk scheduler"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 332
+kind = "recipe"
+lede = "LRU-K replacer, a background disk scheduler with futures, and a concurrent buffer pool with page guards."
+level = "advanced"
+code = ["examples/database/lru_k_replacer_disk_scheduler.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>database buffer managers</li><li>page caches</li><li>any cache that must survive one-off sequential scans</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+the LRU-K policy of the CMU 15-445 / BusTub buffer pool project, the scan-resistant midpoint LRU lists of InnoDB's buffer pool, 2Q/ARC-style caches in file systems, and the "submit IO, get a future, a worker thread does the disk work" pattern used by storage engines to batch and order requests.
+
+Course: CMU 15-445 Intro to Database Systems, Lecture 04 (Database Storage II / buffer pool) and the buffer-pool project.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+three cooperating pieces.
+
+1. `LruKReplacer`: remembers the last K access timestamps of every frame. **Backward K-DISTANCE** = now - (timestamp of the K-th most recent access). Evict the evictable frame with the **largest** distance; a frame with fewer than K accesses has distance +infinity and loses first, ties broken by the **earliest first access** (classic LRU among the one-hit wonders).
+
+   A page that a sequential scan touched once is +inf, so it is evicted before any page that was reused: scan resistance. K=1 is plain LRU.
+2. `DiskScheduler`: a worker thread owns the disk and consumes a channel of read/write requests. Each request carries a oneshot (an `mpsc` channel used once) that is the caller's **future**: `schedule_read(p).recv()` blocks until done.
+
+   The worker drains everything queued into a **batch**, stable-sorts it by page id (disk-order, and per-page request order is kept so a read never overtakes an earlier write), and **coalesces** back-to-back writes to one page into a single disk write.
+
+   Dropping the scheduler sends a Shutdown request behind everything else, so queued work finishes before the thread is joined.
+3. `BufferPool`: frames with a `RwLock` each (the page **latch**), one mutex over the metadata (page table, pin counts, dirty bits, free list, replacer). `fetch_read/fetch_write/new_page` return **RAII guards**: the page stays pinned (never evictable) while a guard lives, and dropping releases the latch **before** unpinning so a frame can never be recycled under a latch.
+
+   A dirty victim is written back through the scheduler before its frame is reused; `flush_all` persists the rest. Writers mark the frame dirty (and bump a generation) when they acquire the latch, so a concurrent flush can only clear a dirty bit if nobody wrote after its snapshot.
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+the replacer against a brute-force oracle (20k random ops, K = 1, 2, 3); the scheduler's ordering, coalescing and shutdown; pool semantics (pin exhaustion, delete of pinned pages, write-back on eviction);
+
+A concurrency test with 8 threads doing random fetches on a 12-frame pool over 64 pages (page contents are `[page_id, v, v, v, ...]`, so a torn read or a recycled-while-pinned frame is visible; after `flush_all` the disk must hold exactly the number of writes each page took);
+
+And the hit ratios of LRU, **clock** and LRU-2 on a scan-polluted trace (asserts LRU-2 >= LRU; the real pool must match the standalone simulation exactly).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://15445.courses.cs.cmu.edu/fall2024/project1/" target="_blank" rel="noreferrer">https://15445.courses.cs.cmu.edu/fall2024/project1/</a> (the buffer pool project: LRU-K, disk scheduler, page guards)</li><li><a href="https://15445.courses.cs.cmu.edu/fall2024/slides/06-bufferpool.pdf" target="_blank" rel="noreferrer">https://15445.courses.cs.cmu.edu/fall2024/slides/06-bufferpool.pdf</a> (buffer pool lecture)</li><li>the LRU-K paper itself is O'Neil, O'Neil and Weikum, "The LRU-K page replacement algorithm for database disk buffering", SIGMOD 1993</li></ul>
+"""
+
+[[sources]]
+title = "15445.courses.cs.cmu.edu/fall2024/project1"
+url = "https://15445.courses.cs.cmu.edu/fall2024/project1/"
+
+[[sources]]
+title = "15445.courses.cs.cmu.edu/fall2024/slides/06-bufferpool.pdf"
+url = "https://15445.courses.cs.cmu.edu/fall2024/slides/06-bufferpool.pdf"

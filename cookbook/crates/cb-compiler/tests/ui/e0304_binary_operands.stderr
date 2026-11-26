@@ -1,0 +1,18 @@
+error[E0304]: cannot apply `+` to `str` and `int`
+ --> e0304_binary_operands.peb:2:13
+  |
+2 |     let s = "n = " + 1;
+  |             ^^^^^^^^^^ no `+` for `str` and `int`
+  |
+  = help: `+` works on two `int`s or two `str`s
+  = help: convert the right side with `to_str(..)` before concatenating
+
+error[E0304]: cannot apply `-` to `bool` and `int`
+ --> e0304_binary_operands.peb:3:13
+  |
+3 |     let t = true - 1;
+  |             ^^^^^^^^ no `-` for `bool` and `int`
+  |
+  = help: arithmetic works on `int`s
+
+error: aborting due to 2 previous errors

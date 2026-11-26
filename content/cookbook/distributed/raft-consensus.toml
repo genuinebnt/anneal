@@ -1,0 +1,63 @@
+title = "Raft consensus in a deterministic simulation"
+module = "Distributed systems"
+module_order = 10
+chapter = "Consensus and distributed transactions"
+chapter_order = 2
+order = 490
+kind = "recipe"
+lede = "Elections, log replication, repair, crashes and partitions"
+level = "advanced"
+code = ["examples/distributed/raft_consensus.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+building or reviewing a replicated state machine (config store, metadata service, lock service) or testing any consensus code.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+five Raft nodes (follower / candidate / leader) with terms, RequestVote, AppendEntries with the prev-index/prev-term **consistency check** and log repair, a commit index that advances only when a majority has replicated an entry of the **current** term, randomised election timeouts, heartbeats, **persistent** state (currentTerm, votedFor, log) that survives a crash while everything else (role, commit index, applied state, leader bookkeeping) is lost and rebuilt, and a replicated KV state machine.
+
+The whole cluster runs inside one thread: a simulated network (drop, delay, duplication, reordering by random delay, partitions) and all timers are events in a time-ordered queue, and **all** randomness comes from a seeded xorshift, so any failing schedule is reproduced exactly from its seed.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+consensus bugs hide in rare interleavings (a vote lost here, a stale leader there). Real tests cannot reach them reliably, a simulator can: it plays thousands of schedules in seconds and checks the paper's safety properties **after every single event**, not just at the end. This is deterministic simulation testing (FoundationDB, TigerBeetle, Jepsen).
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+- Election safety: a node votes once per term (votedFor persisted **before** replying) and a leader needs a majority.
+- Log matching: AppendEntries carries (prevIndex, prevTerm); a follower refuses unless it has that entry, so "same index and term => same prefix" holds by induction. A refusal makes the leader back nextIndex up (with a hint of the follower's length) until logs agree; the follower then overwrites only **conflicting** entries.
+
+   Truncating on a match would let a delayed duplicate delete good entries.
+- Leader completeness: a candidate's log must be at least as up to date as the voter's (last term, then index).
+- State machine safety: entries are applied in order from the commit index. A leader counts replicas only for entries of its **own** term (Figure 8): an old-term entry on a majority can still be overwritten by a later leader, so old entries commit indirectly; hence each new leader appends a no-op at once.
+
+   Liveness needs randomised timeouts so one candidate usually wins before the others time out. **Teeth**: the checker is only credible if it can fail, so a deliberately broken node (it grants votes without the up-to-date check) is run through the same schedules and the invariant checker must catch it.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>etcd and the Kubernetes control plane</li><li>Consul</li><li>CockroachDB and TiKV (a Raft group per range)</li><li>RethinkDB</li><li>Kafka KRaft metadata quorum</li><li>HashiCorp Vault integrated storage</li><li><strong>Nats</strong> JetStream</li><li>the hashicorp/raft and etcd-io/raft libraries</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Ongaro and Ousterhout, "In Search of an Understandable Consensus Algorithm" (USENIX ATC 2014) <a href="https://raft.github.io/raft.pdf" target="_blank" rel="noreferrer">https://raft.github.io/raft.pdf</a></li><li><a href="https://raft.github.io/" target="_blank" rel="noreferrer">https://raft.github.io/</a> (visualisation, the full spec and the thesis)</li></ul>
+"""
+
+[[sources]]
+title = "raft.github.io/raft.pdf"
+url = "https://raft.github.io/raft.pdf"
+
+[[sources]]
+title = "raft.github.io"
+url = "https://raft.github.io/"

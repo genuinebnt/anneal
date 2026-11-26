@@ -1,0 +1,60 @@
+title = "Deterministic simulation testing"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Systems: distributed systems"
+chapter_order = 7
+order = 151
+kind = "recipe"
+lede = "deterministic simulation testing (FoundationDB / TigerBeetle style): a Raft KV store in one thread with simulated time, network and disk"
+level = "advanced"
+code = ["examples/distributed/deterministic_simulation_testing.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+testing any distributed or concurrent system (databases, consensus, queues, schedulers) by replaying whole clusters from one seed; debugging "it failed once in CI".
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The idea**: real distributed bugs need rare interleavings (a crash between an ack and an fsync, a partition that heals at the wrong moment). Testing on real machines finds them rarely and cannot reproduce them. Instead run the **whole** cluster inside **one** thread: no real clock, no real network, no real disk.
+
+Time is a counter, the network is an event queue, the disk is a struct. Every source of nondeterminism comes from **one** seeded RNG, so `seed -> exactly the same execution`, bit for bit. A failure is then a number you can replay under a debugger, and you can run millions of seeds overnight (compressed time: a simulated hour costs milliseconds).
+
+FoundationDB and TigerBeetle (the VOPR) test this way; Antithesis sells it as a hypervisor.
+
+**The system under test**: a compact Raft (3 nodes): terms, randomized election timeouts, RequestVote with the log up-to-date rule, AppendEntries with consistency check and conflict truncation, commit only for current-term entries, a leader no-op, client sessions deduplicated by op id, and a linearizable KV where every read goes **through** the log.
+
+**The simulated world**: network messages are delayed 1-4 ticks (so reordered), dropped, duplicated, and cut by **partitions**; the disk accepts a write that completes later (fsync takes time and can **fail**, which the node treats as fatal: crash and restart from what is durable), a crash loses unsynced writes and may leave a **torn** write: a valid prefix of an in-flight append.
+
+Nodes only answer after their own state is durable ("persist, then reply" via a deferred outbox keyed by fsync ticket). BUGGIFY: code sprinkled with `if buggify(p)` hooks that, only in simulation, widen race windows (slow fsync, delay spikes, crash right after sending an ack). Real systems do this too (FoundationDB's BUGGIFY macro).
+
+**Fault plan** = **external events** (crashes, partitions, heals, client operations) generated from the seed as an explicit list, so a failing plan can be **shrunk** by delta debugging (drop chunks of events while it still fails) to a handful of events.
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+election safety (one leader per term), state-machine safety (no two different entries committed at an index), **leader completeness** (a new leader holds every entry ever committed: "no committed entry lost"), **log matching** (same term at an index implies identical prefixes), a WGL-style **linearizability checker** over the recorded client history (ops that timed out are 'maybe happened'), and liveness after healing (a final probe write completes and all replicas converge).
+
+**A liveness check needs a fault-free phase and no client policy inside it**: after T_END every injected fault (drops, fsync failures, buggify) is off, and the probe retries until T_STOP. An earlier version broke both rules and reported healthy clusters as stuck (seeds 589 and 82213, pinned in `main`).
+
+A bounded-retry probe measures the client's patience, not the cluster; the only deadline is T_STOP, and `main` prints how much of it the slowest probe used.
+
+**Injected bugs**: `AckBeforeFsync` (a follower acknowledges AppendEntries before its disk write is durable: a majority "commits" an entry that evaporates when the follower crashes) and `StaleLeaderRead` (a leader answers GETs from local state without going through the log, so a partitioned old leader serves stale values).
+
+The simulator must find each within a seed budget, name the smallest failing seed, replay it identically, and shrink its schedule. The correct system must pass 2000 seeds.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>FoundationDB (the original, Will Wilson's talk)</li><li>TigerBeetle VOPR</li><li>Antithesis</li><li>Dropbox Nucleus (CanopyCheck)</li><li>Rust: <code>turmoil</code></li><li><code>madsim</code></li><li><code>shuttle</code> (thread schedules)</li><li>loom (memory model)</li><li>Jepsen for the black-box counterpart</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>"Testing Distributed Systems w/ Deterministic Simulation" (Will Wilson, Strange Loop 2014) and the FoundationDB paper "FoundationDB: A Distributed Unbundled Transactional Key Value Store" (SIGMOD 2021) both cited by title only (URLs not checked)</li><li>the Raft paper "In Search of an Understandable Consensus Algorithm" (Ongaro, Ousterhout)</li><li>"Testing Linearizability" (Wing &amp; Gong)</li></ul>
+"""

@@ -1,0 +1,54 @@
+title = "A lock-free single-producer single-consumer"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Concurrent data structures"
+chapter_order = 3
+order = 251
+kind = "recipe"
+lede = "a lock-free single-producer single-consumer (SPSC) bounded ring buffer."
+level = "advanced"
+code = ["examples/concurrency/spsc_ring_buffer.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+audio/real-time pipelines, logging hand-off, stage-to-stage pipelines, anything with exactly one writer and one reader. (unsafe part: also try `cargo +nightly miri run --example spsc_ring_buffer`, it is slow, so lower the item count first)
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Design: a power-of-two slot array, so `index & mask` replaces `%`. `head` (next slot to read) and `tail` (next slot to write) are monotonically increasing counters (wrapping), never reduced; `tail - head` = length, which makes full vs empty unambiguous without wasting a slot.
+
+Each counter has **one** writer, so no CAS is needed, only load/store. push (producer): load own `tail` (Relaxed), load `head` (Acquire: pairs with consumer's Release, proves the slot was vacated), write the slot, then store `tail+1` (Release: publishes the slot contents to the consumer). pop  (consumer): load own `head` (Relaxed), load `tail` (Acquire: pairs with producer's Release, makes the slot contents visible), read the slot, then store `head+1` (Release: tells the producer the slot may be reused).
+
+`Producer` and `Consumer` are separate handle types that are **not** `Clone`, so "single producer / single consumer" is enforced by ownership: you cannot accidentally have two writers. Head and tail live on separate 64-byte cache lines (`#[repr(align(64))]`) to avoid false sharing, where two cores fight over one line although they touch different variables.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+the `rtrb` and `ringbuf` crates, Linux kernel `kfifo`, audio callback queues, LMAX-Disruptor-style pipelines. Verify such code with loom (<https://github.com/tokio-rs/loom>) and see memory_ordering_litmus for the ordering rules.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://marabos.nl/atomics/" target="_blank" rel="noreferrer">https://marabos.nl/atomics/</a></li><li><a href="https://doc.rust-lang.org/nomicon/atomics.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/nomicon/atomics.html</a></li><li><a href="https://doc.rust-lang.org/std/cell/struct.UnsafeCell.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/cell/struct.UnsafeCell.html</a></li></ul>
+"""
+
+[[sources]]
+title = "github.com/tokio-rs/loom"
+url = "https://github.com/tokio-rs/loom"
+
+[[sources]]
+title = "marabos.nl/atomics"
+url = "https://marabos.nl/atomics/"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/atomics.html"
+url = "https://doc.rust-lang.org/nomicon/atomics.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/cell/struct.UnsafeCell.html"
+url = "https://doc.rust-lang.org/std/cell/struct.UnsafeCell.html"

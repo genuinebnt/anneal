@@ -1,0 +1,10 @@
+error[E0204]: no variant named `Gren` found for enum `Color`
+ --> e0204_unknown_variant.peb:3:20
+  |
+3 |     let c = Color::Gren;
+  |                    ^^^^ unknown variant
+  |
+  = note: `Color` has the variants: Red, Green
+  = help: a variant with a similar name exists: `Green`
+
+error: aborting due to 1 previous error

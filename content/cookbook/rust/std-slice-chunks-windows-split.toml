@@ -1,0 +1,74 @@
+title = "Slicing a slice"
+module = "Standard library and core"
+module_order = 2
+chapter = "Vectors, slices and collections"
+chapter_order = 4
+order = 81
+kind = "recipe"
+lede = "Chunks, chunks_exact, rchunks, windows, as_chunks, chunk_by, split*, split_at_mut."
+level = "intermediate"
+code = ["examples/std_tour/std_slice_chunks_windows_split.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>packet framing</li><li>batching</li><li>moving averages</li><li>run-length encoding</li><li>image/matrix rows</li><li>parallel processing</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>batch inserts of N rows</li><li>fixed-size block checksums</li><li>sliding-window metrics</li><li>grouping sorted records</li><li>giving each worker thread its own <code>&amp;mut</code> region</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>slice::chunks</code></li><li><code>slice::chunks_exact</code></li><li><code>ChunksExact::remainder</code></li><li><code>slice::windows</code></li><li><code>slice::split_at</code></li><li><code>slice::split_at_mut</code></li></ul>
+
+<ul class="cb-g-names"><li><code>slice::split</code></li><li><code>slice::splitn</code></li><li><code>slice::chunks_mut</code></li><li><code>slice::chunks_exact_mut</code></li><li><code>ChunksExactMut::into_remainder</code></li><li><code>slice::rchunks</code></li></ul>
+
+<ul class="cb-g-names"><li><code>slice::rchunks_mut</code></li><li><code>slice::rchunks_exact</code></li><li><code>slice::rchunks_exact_mut</code></li><li><code>slice::as_chunks</code></li><li><code>slice::as_chunks_mut</code></li><li><code>slice::as_rchunks</code></li></ul>
+
+<ul class="cb-g-names"><li><code>slice::as_rchunks_mut</code></li><li><code>slice::array_windows</code></li><li><code>slice::chunk_by</code></li><li><code>slice::chunk_by_mut</code></li><li><code>slice::split_mut</code></li><li><code>slice::splitn_mut</code></li></ul>
+
+<ul class="cb-g-names"><li><code>slice::rsplit</code></li><li><code>slice::rsplit_mut</code></li><li><code>slice::rsplitn</code></li><li><code>slice::rsplitn_mut</code></li><li><code>slice::split_inclusive</code></li><li><code>slice::split_inclusive_mut</code></li></ul>
+
+<ul class="cb-g-names"><li><code>slice::split_at_checked</code></li><li><code>slice::split_at_mut_checked</code></li><li><code>slice::split_first_mut</code></li><li><code>slice::split_last_mut</code></li><li><code>slice::as_ptr_range</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Iterator::step_by</code></li><li><code>Iterator::zip</code></li><li><code>std::array::from_fn</code></li><li><code>std::thread::scope</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/primitive.slice.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/primitive.slice.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+every slice method and array::from_fn here is core (`core::slice`, `core::array`), usable in no_std. `thread::scope` is std. `Iterator::step_by`/`zip` are core.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+split_at_unchecked / as_chunks_unchecked (unsafe), split_off_first/last family, itertools-style `group_by` (chunk_by is the std equivalent for adjacent runs); string splitting is std_str_search_split_parse.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Batches of n, last one may be short</td><td><code>chunks(n)</code></td></tr><tr><td>Fixed records, handle the tail yourself</td><td><code>chunks_exact(n) + remainder()</code></td></tr><tr><td>Fixed records as real arrays (&amp;[T; N])</td><td><code>as_chunks::&lt;N&gt;()          -&gt; (&amp;[[T; N]], tail)</code></td></tr><tr><td>Batches counted from the END</td><td><code>rchunks(n)</code></td></tr><tr><td>Overlapping windows</td><td><code>windows(n)  /  array_windows::&lt;N&gt;()</code></td></tr><tr><td>Non-overlapping with a stride</td><td><code>iter().step_by(k)</code></td></tr><tr><td>Runs of ADJACENT items that belong together</td><td><code>chunk_by(|a, b| ..)</code></td></tr><tr><td>Break on a delimiter element</td><td><code>split(pred)      keep delimiter: split_inclusive(pred)</code></td></tr><tr><td>Header, then the rest (at most n pieces)</td><td><code>splitn(n, pred)</code></td></tr><tr><td>Two disjoint &amp;mut halves</td><td><code>split_at_mut(mid)</code></td></tr><tr><td>One &amp;mut element plus the others</td><td><code>split_first_mut / split_at_mut twice</code></td></tr><tr><td>Parallel work on disjoint regions</td><td><code>chunks_mut inside thread::scope PANICS (slice docs): chunks, chunks_exact, rchunks (and _mut forms) and windows panic when the size is 0; as_chunks/array_windows reject N = 0 at compile time; split_at(mid) panics if mid &gt; len; step_by(0) panics.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/primitive.slice.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/primitive.slice.html"
+url = "https://doc.rust-lang.org/std/primitive.slice.html"

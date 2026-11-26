@@ -1,0 +1,42 @@
+title = "Lifetimes"
+module = "Rust language"
+module_order = 1
+chapter = "Ownership and borrowing"
+chapter_order = 1
+order = 1
+kind = "recipe"
+lede = "What they are and the 5 situations you will actually hit."
+level = "simple"
+code = ["examples/language/lifetimes.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any struct/function that returns or stores a reference (parsers, views over input).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>zero-copy parsers</li><li>views over buffers</li><li>iterators that borrow: the lifetime patterns behind most Rust libraries</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+A lifetime is the compiler's name for "how long this borrow is valid". It never changes runtime behaviour; it only lets the compiler **prove** a reference never outlives the data it points to.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Rust Book ch. 10.3 <https://doc.rust-lang.org/book/ch10-03-lifetime-syntax.html> and the Nomicon on lifetimes <https://doc.rust-lang.org/nomicon/lifetimes.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch10-03-lifetime-syntax.html"
+url = "https://doc.rust-lang.org/book/ch10-03-lifetime-syntax.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/lifetimes.html"
+url = "https://doc.rust-lang.org/nomicon/lifetimes.html"

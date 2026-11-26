@@ -1,0 +1,66 @@
+title = "Adaptive query processing at runtime"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 399
+kind = "recipe"
+lede = "Eddies, runtime filters (sideways information passing), join switching, skew re-partitioning, look-ahead information passing."
+level = "advanced"
+code = ["examples/database/adaptive_query_processing_eddies_sip.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>query executors that cannot trust optimizer estimates</li><li>stream processors</li><li>parallel engines suffering skew</li><li>star-schema join pipelines</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+eddies (Telegraph/CACQ research systems, continuous-query routing), runtime Bloom / min-max filters pushed to scans (Spark dynamic partition pruning and Bloom filter joins, Impala and Trino runtime filters, DuckDB / Snowflake / SQL Server batch-mode Bloom bitmaps), adaptive join switching (SQL Server adaptive joins, Oracle adaptive plans, Spark AQE broadcast switching), skew handling by splitting heavy keys (Spark AQE skew join, parallel aggregation with partial pre-aggregation), look-ahead information passing in star-schema engines (Zhu et al.; Quickstep).
+
+Course: CMU 15-799 Query Optimization (Spring 2025), lectures 17-18 (Adaptivity: Runtime Processing), plus CMU 15-721 adaptive query processing
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+five mechanisms that let an executor adapt **while** the query runs; each is checked against a static reference and measured in work units.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Eddy</div><div class="cb-g-says"><p>A router sits between operators and chooses, <strong>per tuple</strong>, which filter to visit next. Operators have a cost and a pass rate; an operator that drops many tuples cheaply should run first (rank = (1 - pass) / cost, the optimal order for independent filters).</p><p>The eddy learns pass rates online (exponentially weighted) and draws the next operator by <strong>lottery</strong> with weight rank&#94;4 plus a small exploration probability, so it keeps sampling every operator and notices drift. A static plan fixed from initial statistics keeps the old order after the data changes; the eddy re-converges.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Sideways information passing / runtime filters</div><div class="cb-g-says"><p>After the build side of a hash join is read, derive a min/max range and a Bloom filter of its keys and push them to the probe-side scan. Rows that cannot match are dropped before joining. Bloom filters have no false negatives, so results are identical; false positives only cost a wasted probe.</p><p>Min/max helps for clustered keys, Bloom for scattered ones.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Adaptive join switch</div><div class="cb-g-says"><p>Start with index nested loop (cheap for few outer rows), and switch to a hash join once the nested-loop work so far equals the cost of building the hash table. This is the ski-rental rule: total work is at most 2x the best choice in hindsight, whatever the (unknown) outer cardinality turns out to be.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Skew re-partitioning</div><div class="cb-g-says"><p>Sample the first 10% of a stream, find heavy keys (share &gt; 1/(8P)), and spread those across all workers (partial aggregates merge afterwards) while other keys stay hash-partitioned; the makespan (max worker load) drops.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Look-ahead information passing (Zhu et al.)</div><div class="cb-g-says"><p>In a star join, test every fact row against the Bloom filters of <strong>all</strong> dimensions before any join, ordering the filters adaptively by observed pass rate. Surviving rows are few, so the join order stops mattering: the plan becomes <strong>robust</strong> to a bad order. A semi-join reduction prepass is the exact (no false positive) version of the same idea.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+optimizer estimates are wrong often enough (see the cardinality lab) that executors need self-correcting operators whose worst case is bounded.
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+eddy and static output are identical to the reference; on drifting data the eddy beats the stale static order and ends within 15% of the per-phase optimum, and on stable data it costs at most 25% more than the optimal static order;
+
+Runtime filters never change join results, Bloom never has false negatives and its false-positive rate stays under 3%; the adaptive join switch is within 2x of the hindsight best on 800 random workloads and returns identical results; skew re-partitioning keeps results equal and cuts the makespan;
+
+**Lip** shrinks the best-to-worst join-order gap from >= 1.8x to &lt;= 1.15x.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Adaptivity: Runtime Processing, CMU 15-799 lecture 18 <https://15799.courses.cs.cmu.edu/spring2025/schedule.html> Adaptive Query Processing in the Looking Glass (Babu et al., CIDR 2015) Looking Ahead Makes Query Plans Robust (Zhu et al., VLDB 2017)
+
+```text
+Bloom filter https://en.wikipedia.org/wiki/Bloom_filter
+```
+"""
+
+[[sources]]
+title = "15799.courses.cs.cmu.edu/spring2025/schedule.html"
+url = "https://15799.courses.cs.cmu.edu/spring2025/schedule.html"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Bloom_filter"
+url = "https://en.wikipedia.org/wiki/Bloom_filter"

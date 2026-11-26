@@ -1,0 +1,46 @@
+title = "Production B+tree features"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Trees and ordered structures"
+chapter_order = 2
+order = 171
+kind = "recipe"
+lede = "Bulk loading, prefix compression, suffix truncation, duplicates, split policy."
+level = "advanced"
+code = ["examples/data_structures/btree_bulk_load_prefix_compression.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>database index builders (<strong>create index</strong>)</li><li>ordered KV stores with long string keys</li><li>non-unique secondary indexes</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+an arena-based B+tree (nodes in a `Vec`, addressed by `usize`) over variable-length string keys, built to show the features that separate a textbook B+tree from the one inside a database:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Bulk loading</div><div class="cb-g-says"><p>Given sorted input, pack leaves left to right to a target <strong>fill factor</strong>, then build each internal level from the one below. No descent, no splits, every page written once, and the tree is denser than one built by repeated insertion (random inserts settle near ln 2 = 69 percent full, ascending inserts with 50/50 splits at 50).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Prefix compression</div><div class="cb-g-says"><p>In leaves: neighbouring keys share a long prefix (<code>warehouse/03/sku-...</code>). Each leaf stores the common prefix <strong>once</strong> plus per-entry suffixes. Because keys inside a leaf are sorted, the LCP of all keys equals the LCP of the first and last key, so recomputing it is O(prefix).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Suffix truncation</div><div class="cb-g-says"><p>Of separators: an internal key only has to route, so store the <strong>shortest</strong> string s with max(left) &lt; s &lt;= min(right) (a prefix of min(right)) instead of the whole key. Shorter separators mean higher fan-out.</p><p>Routing stays exact because the invariant <code>keys(kid i) &lt; sep i &lt;= keys(kid i+1)</code> is still true; <code>check()</code> verifies it for every key and every node, and the differential test would fail on any mis-route.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Non-unique keys</div><div class="cb-g-says"><p>The tree orders <code>(key, rid)</code>, i.e. the record id is appended to the key (PostgreSQL 13+ and InnoDB do the equivalent). Every entry is unique, duplicates of a key are adjacent, and lookup of all rids is a range scan from <code>(key, 0)</code>. Alternative: posting lists (one entry per key holding a rid list), cheaper for hot keys, costlier to update.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Range scans</div><div class="cb-g-says"><p>Follow <code>next</code> sibling pointers across leaves (no re-descent).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Split policy</div><div class="cb-g-says"><p><code>Half</code> splits 50/50; <code>RightHeavy</code> notices an append at the rightmost position and leaves the old leaf full, so ascending inserts (timestamps, auto-increment ids) give ~100 percent full leaves instead of 50. <strong>Delete</strong> is <strong>lazy</strong> (entries removed, pages never merged), as in most production B-trees until <strong>vacuum</strong> or REINDEX.</p><p>Keys are ASCII so byte-level prefix cuts are always char boundaries. Verified by <code>check()</code> (ordering, routing bounds, uniform depth, prefix validity, leaf chain) and a 20k-op differential test against <code>BTreeSet&lt;(String, u32)&gt;</code> for both split policies, started empty and from a bulk-loaded tree.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>PostgreSQL btree (deduplication and suffix truncation since v12/13)</li><li>InnoDB and SQLite index builds from a sorted sort run</li><li>RocksDB/LevelDB data-block prefix (restart-point) compression</li><li><code>COPY</code>-then-index bulk loads. Course: CMU 15-445 Lecture 08 (Tree Indexes I) and 09 (Tree Indexes II): B+tree design choices</li><li>duplicate keys</li><li>clustered indexes</li><li>bulk loading</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Wikipedia, B+ tree: <https://en.wikipedia.org/wiki/B%2B_tree>
+
+PostgreSQL docs, B-Tree implementation (deduplication, suffix truncation): <https://www.postgresql.org/docs/current/btree.html>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/B%2B_tree"
+url = "https://en.wikipedia.org/wiki/B%2B_tree"
+
+[[sources]]
+title = "postgresql.org/docs/current/btree.html"
+url = "https://www.postgresql.org/docs/current/btree.html"

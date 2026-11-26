@@ -1,0 +1,40 @@
+title = "Pratt parser"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 564
+kind = "recipe"
+lede = "Precedence and associativity with \"binding power\"."
+level = "advanced"
+code = ["examples/text_and_parsing/pratt_parser.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+the DSL / expression language (conditions, control flow).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>expression languages: calculators</li><li>filter expressions in query languages</li><li>spreadsheet formulas</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: each infix operator has a (left, right) binding power. Parse a prefix item, then loop: if the next operator binds tighter than the current minimum, consume it and parse its right side with **its** right power. Left-associative: right > left.
+
+Right-associative (`^`): right &lt; left.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html>
+"""
+
+[[sources]]
+title = "matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html"
+url = "https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html"

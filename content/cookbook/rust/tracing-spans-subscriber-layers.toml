@@ -1,0 +1,95 @@
+title = "Tracing"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Application crates"
+chapter_order = 2
+order = 128
+kind = "recipe"
+lede = "Events, spans, #[instrument], filtering, fmt/JSON output, custom layers and async context"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/tracing_spans_subscriber_layers.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+structured logs and request correlation in services, especially async ones where thread ids mean little.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>per-request spans in web servers</li><li>JSON logs for aggregators</li><li>test assertions on emitted events</li><li>metrics from events</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>tracing::{trace!, debug!, info!, warn!, error!, event!}</code></li><li><code>tracing::info_span!</code></li><li><code>#[tracing::instrument] (skip, fields, ret, err, level, name)</code></li><li><code>Span::enter</code></li><li><code>Span::in_scope</code></li><li><code>Span::entered</code></li><li><code>Span::record</code></li><li><code>Span::current</code></li><li><code>tracing::field::Empty</code></li><li><code>tracing::Instrument::instrument</code></li><li><code>tracing::enabled!</code></li><li><code>tracing::subscriber::with_default</code></li><li><code>tracing_subscriber::fmt</code></li><li><code>fmt::Layer::with_writer</code></li><li><code>with_target</code></li><li><code>without_time</code></li><li><code>with_ansi</code></li><li><code>json</code></li><li><code>flatten_event</code></li><li><code>FmtSpan</code></li><li><code>tracing_subscriber::EnvFilter::try_new</code></li><li><code>tracing_subscriber::filter::Targets</code></li><li><code>filter_fn</code></li><li><code>Layer::with_filter</code></li><li><code>tracing_subscriber::registry</code></li><li><code>SubscriberExt::with</code></li><li><code>Layer::{on_event, on_new_span, on_enter, on_exit, on_close}</code></li><li><code>tracing::field::Visit</code></li><li><code>tracing_subscriber::registry::LookupSpan</code></li><li><code>Instrument::in_current_span</code></li><li><code>info_span!(parent: ..)</code></li><li><code>Span::{follows_from, none, is_disabled}</code></li><li><code>Layer::on_follows_from</code></li><li><code>tracing_subscriber::reload::{Layer::new, Handle::{reload, modify}}</code></li><li><code>EnvFilter span/field directives</code></li><li><code>Option&lt;Layer&gt;</code></li><li><code>tracing::subscriber::set_default</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/tracing/0.1/tracing/" target="_blank" rel="noreferrer">https://docs.rs/tracing/0.1/tracing/</a></li><li><a href="https://docs.rs/tracing-subscriber/0.3/tracing_subscriber/" target="_blank" rel="noreferrer">https://docs.rs/tracing-subscriber/0.3/tracing_subscriber/</a></li></ul>
+"""
+
+[[sections]]
+heading = "Crates"
+body = """
+tracing = "0.1", tracing-subscriber = "0.3" (env-filter, json), tokio = "1", serde_json = "1"
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Model**. An **event** is a point in time with fields. **A span** is a period with fields; events inside it inherit its context.
+
+The **subscriber** decides what happens to both. Libraries only emit; only the **binary** installs a subscriber (`.init()` / set_global_default, once). This file uses `with_default`, which is scoped to the current thread, so sections do not interfere with each other or with a test harness.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+```text
+field with value            info!(user_id = 7, "msg")       Display: %value      Debug: ?value
+span around a function      #[instrument(skip(password), fields(request_id = %id), err)]
+```
+
+fill a field later          declare tracing::field::Empty, then span.record("name", value)
+
+```text
+async                       future.instrument(span).await   (NEVER hold span.enter() across .await)
+spawned task                tokio::spawn(fut.in_current_span())   (a new task does NOT inherit the span)
+caused by, but outlives     background_span.follows_from(request_span.id())   (not parent/child)
+```
+
+change filters at runtime   wrap the filter in reload::Layer and keep the Handle
+
+```text
+choose what is recorded     EnvFilter "warn,my_crate=debug,my_crate::db=trace"
+```
+
+**Metrics**: counting events in a Layer (below) is fine for counters. For real metrics use a metrics library or an OpenTelemetry layer (not covered here). **Span timing**: FmtSpan::CLOSE prints busy and idle time.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://tokio.rs/tokio/topics/tracing" target="_blank" rel="noreferrer">https://tokio.rs/tokio/topics/tracing</a></li><li><a href="https://docs.rs/tracing/latest/tracing/span/struct.Span.html#in-asynchronous-code" target="_blank" rel="noreferrer">https://docs.rs/tracing/latest/tracing/span/struct.Span.html#in-asynchronous-code</a></li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/tracing/0.1/tracing"
+url = "https://docs.rs/tracing/0.1/tracing/"
+
+[[sources]]
+title = "docs.rs/tracing-subscriber/0.3/tracing_subscriber"
+url = "https://docs.rs/tracing-subscriber/0.3/tracing_subscriber/"
+
+[[sources]]
+title = "tokio.rs/tokio/topics/tracing"
+url = "https://tokio.rs/tokio/topics/tracing"
+
+[[sources]]
+title = "docs.rs/tracing/latest/tracing/span/struct.Span.html#in-asynchronous-code"
+url = "https://docs.rs/tracing/latest/tracing/span/struct.Span.html#in-asynchronous-code"

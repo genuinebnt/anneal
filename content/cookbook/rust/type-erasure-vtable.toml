@@ -1,0 +1,60 @@
+title = "Type erasure side by side"
+module = "Rust language"
+module_order = 1
+chapter = "Design patterns"
+chapter_order = 5
+order = 46
+kind = "recipe"
+lede = "`dyn Trait`, `dyn Any`, `Box<dyn Fn>`, `clone_box`, and a hand-written vtable."
+level = "advanced"
+code = ["examples/patterns/type_erasure_vtable.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>heterogeneous collections</li><li>task queues</li><li>plugin systems</li><li>FFI callbacks. (unsafe part: also try <code>cargo +nightly miri run --example type_erasure_vtable</code>)</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Type erasure = forget the concrete type `T`, keep only what you need to DO with it. Rust offers several levels:
+
+1. `Box<dyn Trait>`: compiler-made vtable (drop, size, align, trait methods). The default choice.
+2. `Box<dyn Any>`: erase everything, recover by `downcast` using `TypeId` (see any_event_bus).
+3. `Box<dyn Fn..>`: a trait object for one callable method; the closure's captures are the erased data.
+4. `clone_box`: `dyn Trait` cannot require `Clone` (it returns `Self`, so it is not object safe), so add a method `fn clone_box(&self) -> Box<dyn Trait>` and `impl Clone for Box<dyn Trait>`. The crate <https://github.com/dtolnay/dyn-clone> automates this.
+5. **A manual** vtable: `ErasedTask { data: *mut (), run, drop }`: two plain function pointers monomorphized per closure type. This is exactly what `RawWakerVTable` does for `Waker` (<https://doc.rust-lang.org/std/task/struct.RawWakerVTable.html>): a data pointer plus a table of functions that know the real type.
+
+   Use it when you need a layout you control (FFI, no fat pointer, custom allocation), otherwise prefer `Box<dyn FnOnce()>`. **Object safety**: a trait is `dyn`-compatible if methods have a receiver, do not return `Self`, and have no generic type parameters.
+
+   Escape hatch: add `where Self: Sized` to a method (generic or returning Self) and it is simply not callable on `dyn`.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>thread-pool job queues (<code>Box&lt;dyn FnOnce() + Send&gt;</code>)</li><li>executors' <code>RawWaker</code>s</li><li>plugin registries</li><li><code>Box&lt;dyn Error&gt;</code></li><li>GUI callback lists</li><li>cloneable strategy objects in configs</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/reference/items/traits.html#dyn-compatibility" target="_blank" rel="noreferrer">https://doc.rust-lang.org/reference/items/traits.html#dyn-compatibility</a></li><li><a href="https://doc.rust-lang.org/std/any/trait.Any.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/any/trait.Any.html</a></li></ul>
+"""
+
+[[sources]]
+title = "github.com/dtolnay/dyn-clone"
+url = "https://github.com/dtolnay/dyn-clone"
+
+[[sources]]
+title = "doc.rust-lang.org/std/task/struct.RawWakerVTable.html"
+url = "https://doc.rust-lang.org/std/task/struct.RawWakerVTable.html"
+
+[[sources]]
+title = "doc.rust-lang.org/reference/items/traits.html#dyn-compatibility"
+url = "https://doc.rust-lang.org/reference/items/traits.html#dyn-compatibility"
+
+[[sources]]
+title = "doc.rust-lang.org/std/any/trait.Any.html"
+url = "https://doc.rust-lang.org/std/any/trait.Any.html"

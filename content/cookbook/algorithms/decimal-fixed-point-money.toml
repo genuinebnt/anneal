@@ -1,0 +1,65 @@
+title = "Money done right"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Mathematics and numerics"
+chapter_order = 7
+order = 228
+kind = "recipe"
+lede = "Integer minor units, decimal fixed point, rounding modes, allocation, ledgers."
+level = "intermediate"
+code = ["examples/math_science/decimal_fixed_point_money.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>billing</li><li>invoicing</li><li>payments</li><li>accounting ledgers</li><li>tax and interest calculation</li><li>anything where "the cents must add up"</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>payment processors (amounts as integer minor units)</li><li>invoice/tax engines (per-line vs per-invoice rounding rules)</li><li>double-entry ledgers and bank cores</li><li>splitting a bill or a fee between parties</li><li>currency conversion with differing exponents (JPY 0, <strong>usd</strong> 2, KWD 3). Course: Fowler</li><li>"Patterns of Enterprise Application Architecture" (Money pattern, allocation)</li><li>double-entry bookkeeping as an invariant (sum of postings is zero)</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a small money library plus the property tests that justify each design choice.
+
+- `Currency` carries its exponent (minor-unit digits); `Money` is an `i64` of minor units. No floats anywhere.
+- `Decimal { coef: i128, scale }` is decimal fixed point (value = coef / 10&#94;scale) with checked add/sub/mul/div and a typed `MoneyError` instead of silent wrap or panics. Division takes an explicit target scale **and** rounding mode: there is no "default" rounding, because the legally correct mode depends on the jurisdiction and contract.
+- `div_round` implements HalfUp (ties away from zero), HalfEven (banker's), Floor, Ceil and TowardZero once, and is verified **exhaustively** for n in -60..=60 and every divisor +-1..=12 against a floating-point floor and an exact tie test.
+- `allocate` splits an amount by weights with the **largest remainder** method so the shares sum **exactly** to the total (3000 random cases: sum equals total, every share is floor or ceil of the exact share, sign symmetric).
+- Order pitfalls: rounding each invoice line vs rounding the invoice total; (a&#42;b)&#42;c vs a&#42;(b&#42;c) after rounding; compound interest rounded each period; HalfUp vs HalfEven bias on 1000 ties.
+- Formatting/parsing with locales-lite (US `1,234.56`, DE `1.234,56 EUR`, JPY with no decimals); parse refuses input with more fraction digits than the currency allows rather than silently rounding.
+- A double-entry `Ledger`: every entry must have postings that sum to zero; posting is atomic (a failed entry changes nothing, including on overflow), so the sum of all balances is always zero, checked over 3000 random entries.
+- f64 comparison: 0.01 added a million times drifts, `format!("{:.2}", 1.005)` gives 1.00, and counted disagreements with decimal.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+a double cannot represent 0.10 (see `floating_point_ieee754`), and the errors are small enough to pass casual testing and large enough to fail an audit. Integers are exact, fast and hashable; the only decisions left are rounding mode and **where** to round, which must be written down and tested.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://martinfowler.com/eaaCatalog/money.html> and <https://en.wikipedia.org/wiki/Rounding> and <https://en.wikipedia.org/wiki/Quota_method> (largest remainder) and <https://en.wikipedia.org/wiki/Double-entry_bookkeeping>
+"""
+
+[[sources]]
+title = "martinfowler.com/eaaCatalog/money.html"
+url = "https://martinfowler.com/eaaCatalog/money.html"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Rounding"
+url = "https://en.wikipedia.org/wiki/Rounding"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Quota_method"
+url = "https://en.wikipedia.org/wiki/Quota_method"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Double-entry_bookkeeping"
+url = "https://en.wikipedia.org/wiki/Double-entry_bookkeeping"

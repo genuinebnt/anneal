@@ -1,0 +1,42 @@
+title = "Small-value optimisation"
+module = "Performance and systems"
+module_order = 7
+chapter = "Memory layout and allocation"
+chapter_order = 2
+order = 282
+kind = "recipe"
+lede = "Store short strings INLINE and avoid the heap entirely."
+level = "advanced"
+code = ["examples/perf/small_string_inline.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+millions of short ids/names/keys (task ids, labels, tags) where `String` allocation dominates.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>interners</li><li>symbol tables</li><li>DB keys</li><li>tags/labels: strings that are almost always short</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+A `String` is 24 bytes (ptr,len,cap) **plus** a heap allocation for the text. If most values are short, store up to 22 bytes directly inside the 24-byte value and only allocate for long ones (an enum with an inline variant and a heap variant). Allocation count and cache misses both fall.
+
+Production crates: compact_str <https://docs.rs/compact_str> , smol_str <https://docs.rs/smol_str> , and for Vecs smallvec <https://docs.rs/smallvec> ; for dedup also consider interning (index_graph). We reuse the counting allocator from counting_allocator so the claim is **measured**, not assumed.
+"""
+
+[[sources]]
+title = "docs.rs/compact_str"
+url = "https://docs.rs/compact_str"
+
+[[sources]]
+title = "docs.rs/smol_str"
+url = "https://docs.rs/smol_str"
+
+[[sources]]
+title = "docs.rs/smallvec"
+url = "https://docs.rs/smallvec"

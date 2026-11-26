@@ -1,0 +1,60 @@
+title = "Sparse kernels"
+module = "Performance and systems"
+module_order = 7
+chapter = "High-performance computing"
+chapter_order = 4
+order = 308
+kind = "recipe"
+lede = "CSR/CSC/COO/ELL/SELL-C-sigma SpMV, merge-path SpMV, SpGEMM, SpTRSV, RCM reordering"
+level = "advanced"
+code = ["examples/hpc/sparse_kernels_spmv_csr.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>graph analytics (PageRank = repeated SpMV)</li><li>finite elements</li><li>iterative solvers (CG/GMRES)</li><li>GNN message passing</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>PageRank and BFS-as-linear-algebra</li><li>sparse linear solvers</li><li>recommender factorisation</li><li>circuit simulation</li><li>sparse tensors in ML. Course: CMU 15-418/618 (parallel computer architecture) for the load-balancing view</li><li>Kreutzer et al. for SELL-C-sigma</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+A sparse matrix stores only its non-zeros, so SpMV (y = A x) does 2 flops per stored value but reads at least 12-16 bytes per value (value + column index + an x gather): it is memory-bound, and the whole game is (a) a layout that streams, (b) keeping the gather on x cache-friendly, (c) balancing work across threads.
+
+Formats implemented here, all over i64 so that every comparison against the dense oracle is **exact**:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Coo</div><div class="cb-g-says"><p>(row, col, val) triples; duplicates allowed and summed. Easy to build, scatter-style SpMV.</p></div></div><div class="cb-g-term"><div class="cb-g-name">CSR</div><div class="cb-g-says"><p>Row pointers + column indices + values. The default; row-parallel SpMV has no write conflicts.</p></div></div><div class="cb-g-term"><div class="cb-g-name">CSC</div><div class="cb-g-says"><p>CSR of the transpose; SpMV scatters into y (column-oriented).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Ell</div><div class="cb-g-says"><p>Pad every row to the longest row; regular, SIMD-friendly, wasteful when row lengths vary.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>SELL-C-sigma : sort rows by length inside windows of sigma, cut into chunks of C rows, pad each chunk only to <strong>its</strong> longest row, store column-major inside the chunk so C rows advance in lock-step (one SIMD lane per row).</p><p>Kernels: serial, row-parallel (thread::scope over disjoint slices of y), merge-path (Merrill &amp; Garland): split the combined sequence (row ends, non-zeros) into equal diagonals so a single dense row cannot starve one thread.</p><p>Also Gustavson SpGEMM (row-by-row with a dense accumulator and a marker array), SpTRSV with level scheduling (rows in one level are independent), and reverse Cuthill-McKee to shrink matrix bandwidth (locality of x gathers). Everything is checked against a dense oracle on 1000 random matrices, including empty rows/cols and <strong>coo</strong> duplicates.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Kreutzer et al., "A unified sparse matrix data format for efficient general sparse matrix-vector multiplication on modern processors with wide SIMD units" <https://arxiv.org/abs/1307.6209>
+
+<ul class="cb-g-reading"><li>Merrill &amp; Garland, "Merge-based parallel sparse matrix-vector multiplication" (SC16</li><li>cited by title, not re-read here)</li></ul>
+
+Templates for the Solution of Linear Systems (storage formats) <https://www.netlib.org/linalg/html_templates/node91.html>
+
+Cuthill-McKee <https://en.wikipedia.org/wiki/Cuthill%E2%80%93McKee_algorithm> and SuiteSparse collection <https://sparse.tamu.edu/>
+"""
+
+[[sources]]
+title = "arxiv.org/abs/1307.6209"
+url = "https://arxiv.org/abs/1307.6209"
+
+[[sources]]
+title = "netlib.org/linalg/html_templates/node91.html"
+url = "https://www.netlib.org/linalg/html_templates/node91.html"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Cuthill%E2%80%93McKee_algorithm"
+url = "https://en.wikipedia.org/wiki/Cuthill%E2%80%93McKee_algorithm"
+
+[[sources]]
+title = "sparse.tamu.edu"
+url = "https://sparse.tamu.edu/"

@@ -1,0 +1,18 @@
+// Three nested counted loops with arithmetic in the body.
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 150 {
+        let mut j = 0;
+        while j < 150 {
+            let mut k = 0;
+            while k < 60 {
+                total = (total + i * j + k) % 1000003;
+                k += 1;
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    println(to_str(total));
+}

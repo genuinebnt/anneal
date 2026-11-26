@@ -1,0 +1,37 @@
+# Algorithms
+
+Graphs, dynamic programming, string algorithms, combinatorics, SAT, sorting and searching, modelling by reduction.
+
+Run any recipe from the `cookbook/` directory: `cargo run --release --example <name>` (the name is the file name without `.rs`). Each file starts with a header: what it shows, `LEVEL`, `COMMON USES` and `Read:` links.
+
+27 examples.
+
+| Example | What it shows | Level | Common uses | Crates |
+|---|---|---|---|---|
+| [`index_graph`](index_graph.rs) | index-based graph, interning names once, iterative BFS | intermediate | road networks, dependency graphs, social graphs: intern names once, then run algorithms on dense integer ids. | std only |
+| [`tarjan_scc`](tarjan_scc.rs) | strongly connected components (iterative Tarjan): find circular groups in a directed graph | advanced | finding circular dependencies (build systems, module imports, Cargo features), condensing graphs to DAGs. | std only |
+| [`union_find`](union_find.rs) | union-find (disjoint sets): "are these two connected?" in near-constant time | intermediate | network connectivity, Kruskal MST, image segmentation, deduplicating equivalent records. | std only |
+| [`dijkstra`](dijkstra.rs) | Dijkstra's shortest paths with a binary heap (lazy deletion) and path reconstruction | intermediate | routing, cheapest paths, cost-aware planning, latency-aware load balancing. | std only |
+| [`bipartite_matching`](bipartite_matching.rs) | bipartite matching (Kuhn's augmenting paths): assign each worker to at most one job | intermediate | assigning workers to jobs, ride matching, staff rosters; flow generalises it. | std only |
+| [`dp_knapsack`](dp_knapsack.rs) | 0/1 knapsack: pick items under a capacity to maximise value, and recover WHICH items | intermediate | resource-constrained selection: ad budgets, cargo loading, feature selection under a time budget. | std only |
+| [`dp_edit_distance`](dp_edit_distance.rs) | edit distance (Levenshtein) and "did you mean ...?" suggestions | intermediate | "did you mean ...?" suggestions in CLIs/compilers, fuzzy matching, spell checking, DNA alignment. | std only |
+| [`dp_count_paths`](dp_count_paths.rs) | counting routes through a DAG: top-down memoization vs bottom-up, on the same recurrence | intermediate | counting/aggregating over DAGs: build graphs, probabilistic inference, combinatorics. | std only |
+| [`dp_lcs_diff`](dp_lcs_diff.rs) | longest common subsequence, and turning it into a diff between two versions | intermediate | diff tools, version control, config drift detection, collaborative editing history. | std only |
+| [`dp_memoization`](dp_memoization.rs) | memoization vs tabulation on coin change, and why greedy is not enough | simple | the first DP everyone writes: change-making, resource planning; memo vs table trade-offs. | std only |
+| [`csr_graph`](csr_graph.rs) | CSR (compressed sparse row) graph: counting-sort build, reverse graph, BFS and PageRank vs Vec<Vec<u32>> | intermediate | graph databases and analytics engines keep an immutable CSR/CSC adjacency for scans and joins; | std only |
+| [`shortest_path_zoo`](shortest_path_zoo.rs) | shortest-path zoo: Bellman-Ford, Floyd-Warshall, A*, bidirectional BFS, 0-1 BFS (and which to choose) | intermediate | Bellman-Ford underlies distance-vector routing (RIP) and arbitrage detection (log-rates, negative | std only |
+| [`mst_bridges`](mst_bridges.rs) | minimum spanning tree (Prim, Kruskal) and bridges / articulation points via iterative low-link DFS | advanced | network reliability (which links/routers are single points of failure), cable / pipe / circuit | std only |
+| [`max_flow_dinic`](max_flow_dinic.rs) | max-flow with Dinic's algorithm, min-cut extraction, bipartite matching and project selection | advanced | job/worker/task assignment and roster scheduling, bin-packing / transport relaxations (LP bounds), | std only |
+| [`dp_zoo`](dp_zoo.rs) | a zoo of DP shapes, each with a brute-force oracle and seeded differential tests | advanced | LIS powers patience-diff style line matching; interval DP orders joins in classic System-R style | std only |
+| [`string_algos`](string_algos.rs) | KMP, Z-algorithm, Rabin-Karp and the suffix array + Kasai LCP, with differential tests | advanced | text search and grep-like tools (Z/KMP style scanners, SIMD two-way variants inside std/memchr); | std only |
+| [`aho_corasick`](aho_corasick.rs) | Aho-Corasick multi-pattern matching: trie + failure links + dictionary links | advanced | network intrusion detection and antivirus signature scanning (many byte patterns, one pass), profanity | std only |
+| [`sorting_searching`](sorting_searching.rs) | sorting and searching toolkit, differential-tested against std | advanced | database index scans and sort-merge joins, rank/percentile queries, capacity planning | std only |
+| [`combo_algorithms`](combo_algorithms.rs) | problems that need several data structures working together | advanced | LFU/LRU caches in CDNs and databases; flight/transit planners with a transfer limit; delivery | std only |
+| [`heuristics_zoo`](heuristics_zoo.rs) | heuristics and approximation zoo, each checked against an exact solver on small instances | advanced | query join ordering, VM/container placement, cutting stock, vehicle routing, test-suite minimisation (set cover), | std only |
+| [`procedural_puzzles`](procedural_puzzles.rs) | procedural puzzles with ASCII pictures: mazes, Sudoku, queens, WFC, tours, Hanoi, Gray codes | advanced | roguelike/maze level generators, puzzle apps and solvers (exact cover), constraint propagation in procedural content (wave function collapse), enum... | std only |
+| [`combinatorial_generation`](combinatorial_generation.rs) | generating combinatorial objects as iterators (Gray codes, combinations, permutations, partitions, Catalan, necklaces, de Bruijn) | advanced | exhaustive and combinatorial test generation, Gray codes in rotary encoders and error-minimising | std only |
+| [`backtracking_branch_bound`](backtracking_branch_bound.rs) | backtracking, branch and bound, and constraint propagation on NP-hard problems | advanced | exact optimisation inside larger systems (MIP solvers are branch-and-bound/cut engines), SAT and | std only |
+| [`sat_solver_cdcl`](sat_solver_cdcl.rs) | a SAT solver, from DPLL to CDCL (watched literals, 1UIP learning, VSIDS, restarts), plus problem encodings | advanced | hardware and software verification (bounded model checking, equivalence checking), AI planning, | std only |
+| [`bit_tricks`](bit_tricks.rs) | bit-twiddling toolbox (Hacker's Delight / TAOCP 7.1.3), every trick checked against std or a naive loop | intermediate | bitset/bitmap indexes and roaring-style containers, hash functions and PRNGs, chess engines (bitboards), | std only |
+| [`sorting_networks_external_sort`](sorting_networks_external_sort.rs) | TAOCP Vol 3 sorting: sorting networks (0-1 principle), merge insertion, replacement selection, external k-way merge, optimal BST (Knuth) | advanced | sorting networks in SIMD/GPU sort kernels and small fixed-size sorts (e.g. sorting 3-16 keys inside | std only |
+| [`problem_modeling_reductions`](problem_modeling_reductions.rs) | problem modeling by reduction (Skiena): puzzles as shortest paths, 2-SAT, assignment, bipartite, scheduling, Steiner, Kadane, sorting | advanced | sliding-puzzle and planning solvers (A*/IDA* over state graphs); 2-SAT in constraint solving, layout | std only |

@@ -14,3 +14,5 @@ scripts
 **/.DS_Store
 **/__pycache__
 courses/*/reference
+cookbook/target
+cookbook/**/target

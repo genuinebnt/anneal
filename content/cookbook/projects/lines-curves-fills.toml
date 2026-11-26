@@ -1,0 +1,54 @@
+title = "2D drawing primitives"
+module = "Complete projects"
+module_order = 13
+chapter = "Graphics"
+chapter_order = 2
+order = 665
+kind = "recipe"
+lede = "Lines, circles, fills, Bezier and Catmull-Rom curves, SDFs, bitmap text."
+level = "intermediate"
+code = ["examples/graphics/lines_curves_fills.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>drawing libraries</li><li>plotting</li><li>UI/vector renderers</li><li>game sprites</li><li>map rendering</li><li>image tooling</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+BRESENHAM: step along the major axis; keep an integer error term of how far the pixel is from the true line; bump the minor coordinate when the error crosses half a pixel. No floats, 8-connected, hits both endpoints.
+
+XIAOLIN WU: same walk but plots **two** pixels per column with coverage (1-f, f) where f is the fractional line height, so the two always sum to 1 and the edge looks anti-aliased.
+
+MIDPOINT circle/ellipse: walk one octant (quadrant for the ellipse, in two regions where the slope passes 1) deciding between two candidate pixels by the sign of the implicit function at their midpoint, then mirror. **Thick** lines: distance from pixel centre to the **segment** (a capsule SDF) &lt;= r gives round caps for free.
+
+**Flood fill** uses an explicit stack, so a 400x300 canvas cannot overflow the call stack (recursion would). 4-connected fill cannot cross a diagonal 1-pixel wall; 8-connected can, so the choice matters.
+
+**SCANLINE polygon** fill: for each scanline find edge crossings at y+0.5 (half-open rule so vertices count once), sort by x, then fill spans by **even-odd** (toggle) or **non-zero** winding (sum of +-1 directions).
+
+BEZIER via de Casteljau: repeated lerp; the same step splits the curve in two, which gives **adaptive** flattening: subdivide until the control points are within `tol` of the chord. CATMULL-ROM spline passes through its points: each segment is the Bezier with controls p1+(p2-p0)/6 and p2-(p3-p1)/6.
+
+SDFs return signed distance (negative inside); smooth-min blends shapes into blobs.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>vector graphics and font rasterisers</li><li>plotting libraries</li><li>GIS map rendering</li><li><strong>Cad</strong> sketchers</li><li>game UI and sprite tools</li><li>procedural textures (SDF text and shapes)</li><li>image annotation in medical-imaging viewers</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://www.redblobgames.com/> and <https://github.com/ssloy/tinyrenderer/wiki>
+"""
+
+[[sources]]
+title = "redblobgames.com"
+url = "https://www.redblobgames.com/"
+
+[[sources]]
+title = "github.com/ssloy/tinyrenderer/wiki"
+url = "https://github.com/ssloy/tinyrenderer/wiki"

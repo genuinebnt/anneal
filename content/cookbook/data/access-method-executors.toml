@@ -1,0 +1,275 @@
+title = "Access-method executors"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 354
+kind = "guide"
+lede = "BusTub P3 Task 1 · SeqScan, Insert, Update, Delete, IndexScan · the Volcano interface · DML as pipeline breakers · index maintenance · Halloween safety"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>These five executors touch storage. Everything above them (filters, joins, aggregation) only moves values around. BusTub's spec for this task in one list:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Executor</th> <th>Contract</th> </tr> </thead> <tbody> <tr> <td><strong>SeqScan</strong></td> <td>iterate the heap; <strong>skip tuples whose meta says deleted</strong>; apply the pushed-down filter; emit tuple and RID</td> </tr> <tr> <td><strong>Insert</strong></td> <td>take tuples from the child, write them to the heap, <strong>update every index</strong>, return one row: the count</td> </tr> <tr> <td><strong>Update</strong></td> <td>for each target: delete the old version, insert the new one, fix the indexes; return the count</td> </tr> <tr> <td><strong>Delete</strong></td> <td>mark tuples deleted (never physically remove); remove index entries; return the count. It's always the root of the plan</td> </tr> <tr> <td><strong>IndexScan</strong></td> <td>point lookups (<code>WHERE k = 5</code>, or <code>OR</code> of them) and ordered scans (<code>ORDER BY k</code>) through the B+Tree; fetch each tuple by RID</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "The interface"
+body = """
+```rust title="the whole executor abstraction"
+pub struct Tuple { pub vals: Vec<Value>, pub rid: Option<Rid> }
+pub trait Exec { fn next(&mut self) -> Result<Option<Tuple>>; }   // Ok(None) = end of stream
+```
+
+<p><code>Result&lt;Option&lt;Tuple&gt;&gt;</code> instead of BusTub's <code>bool Next(Tuple*, RID*)</code> means errors propagate with <code>?</code> all the way up, and the end of stream is not a magic value. The <code>rid</code> travels with scanned tuples so <code>Update</code>/<code>Delete</code> know <em>which</em> tuple to modify. Operators that change the row shape (projection, joins, aggregation) drop it, because it no longer names a tuple.</p>
+"""
+
+[[sections]]
+heading = "Rules that these executors enforce"
+body = """
+<ol> <li><strong>Pipeline breakers for DML.</strong> <code>Update</code>/<code>Delete</code>/<code>Insert</code> <strong>drain their child completely before writing anything.</strong> This makes the <a href="/cookbook/p/table-heap">Halloween problem</a> impossible by construction: an <code>UPDATE</code> that moves a tuple later in the heap, or into a different index position, can't be scanned a second time, because the scan is already finished. It also makes <code>INSERT INTO t SELECT … FROM t</code> terminate.</li> <li><strong>Deleted means invisible, not gone.</strong> Scans check <code>meta.deleted</code>. Physical removal waits for vacuum (<a href="/cookbook/p/multi-version-concurrency-control">L20</a>).</li> <li><strong>Index maintenance on every write path.</strong> Insert adds a key per index; delete removes it; update removes the old key and adds the new one <em>with the new RID</em> (an update is delete + insert, so the RID changes).</li> <li><strong>Constraints are checked before the first write</strong> of each row: a unique-index violation must not leave a half-inserted row (heap written, index not).</li> <li><strong>NULLs aren't indexed.</strong> <code>NULL = NULL</code> is never true, so no lookup can ever ask for them.</li> <li><strong>Coerce on write.</strong> Values are cast to the column's type at the storage boundary (an <code>INTEGER</code> column rejects 3 000 000 000).</li> </ol>
+
+<aside data-call="warning"><b>BusTub gotchas that carry over</b><ul> <li><em>"Make sure you understand the difference between pre-increment and post-increment operators"</em> for <code>TableIterator</code>. In Rust the equivalent trap is calling <code>next()</code> twice per row (once to peek, once to consume). The reference iterator advances exactly once per call.</li> <li>The <code>DeleteExecutor</code> returns a <strong>single row</strong> with the count, and the plan root is the delete.</li> <li>The output schema must match the plan's schema <strong>exactly</strong>, or upstream operators read the wrong columns.</li> <li>Index key encoding: B+Tree keys are unsigned. Map <code>i64 → u64</code> by flipping the sign bit (<code>(x as u64) &#94; (1 &lt;&lt; 63)</code>), which makes unsigned order equal signed order, so range scans over negative keys work.</li> </ul></aside>
+
+:::deeper Executors: the build function (plan → executor tree), scans, filter, projection, limit, and the three DML operators
+```rust title="src/execution/executors.rs (part 1: access methods and DML)"
+//! Volcano executors. DML operators are pipeline breakers (they drain their child before
+//! writing), which makes every UPDATE/DELETE/INSERT..SELECT Halloween-safe by construction.
+use std::collections::{HashMap, HashSet, VecDeque};
+use crate::storage::table::tuple_codec::Layout;
+use crate::storage::table::table_heap::{Rid, TableIter};
+use crate::storage::page::slotted_page::TupleMeta;
+use crate::types::value::Value;
+use crate::buffer::arc_replacer::ArcReplacer;
+use crate::common::config::PageId;
+use super::catalog::{coerce, index_key, Catalog};
+use super::expr::{truthy, BinOp, Expr};
+use super::plan::{Agg, AggFn, IndexLookup, Plan, WinCall, WinFn};
+use super::sql::JoinKind;
+use super::{err, Result};
+
+pub type Row = Vec<Value>;
+pub struct Tuple { pub vals: Row, pub rid: Option<Rid> }
+pub trait Exec { fn next(&mut self) -> Result<Option<Tuple>>; }
+type Boxed<'e> = Box<dyn Exec + 'e>;
+
+pub fn run(plan: &Plan, cat: &Catalog) -> Result<Vec<Row>> {
+    let mut e = build(plan, cat)?;
+    let mut out = vec![];
+    while let Some(t) = e.next()? { out.push(t.vals); }
+    Ok(out)
+}
+
+fn t(vals: Row) -> Tuple { Tuple { vals, rid: None } }
+fn nulls(n: usize) -> Row { vec![Value::Null; n] }
+fn unpack(v: u64) -> Rid { Rid { page: PageId((v >> 16) as u32), slot: (v & 0xFFFF) as u16 } }
+fn ok_pred(p: &Option<Expr>, row: &[Value]) -> Result<bool> { Ok(match p { Some(p) => truthy(&p.eval(row)?), None => true }) }
+
+pub fn build<'e, 'a: 'e>(plan: &Plan, cat: &'e Catalog<'a>) -> Result<Boxed<'e>> {
+    Ok(match plan {
+        Plan::Values { rows, .. } => {
+            let rows: Vec<Row> = rows.iter().map(|r| r.iter().map(|e| e.eval(&[])).collect::<Result<_>>()).collect::<Result<_>>()?;
+            Box::new(Buffered(rows.into_iter().map(t).collect()))
+        }
+        Plan::SeqScan { table, filter, .. } => {
+            let ti = cat.table(table)?;
+            Box::new(SeqScan { iter: ti.heap.iter()?, layout: &ti.layout, filter: filter.clone() })
+        }
+        Plan::IndexScan { table, index, lookup, filter, .. } => {
+            let ti = cat.table(table)?;
+            let ix = cat.indexes.iter().find(|i| &i.name == index).unwrap();
+            let rids: Vec<u64> = match lookup {
+                IndexLookup::Points(ks) => ks.iter().filter_map(|k| ix.tree.get(index_key(&Value::Int(*k)).unwrap()).transpose()).collect::<std::result::Result<_, _>>()?,
+                IndexLookup::Ordered => ix.tree.iter_from(None)?.map(|r| r.map(|kv| kv.1)).collect::<std::result::Result<_, _>>()?,
+            };
+            Box::new(IndexScan { ti_heap: &ti.heap, layout: &ti.layout, rids: rids.into_iter().collect(), filter: filter.clone() })
+        }
+        Plan::Filter { pred, child } => Box::new(FilterExec { child: build(child, cat)?, pred: pred.clone() }),
+        Plan::Projection { exprs, child, .. } => Box::new(ProjectExec { child: build(child, cat)?, exprs: exprs.clone() }),
+        Plan::Limit { limit, offset, child } => Box::new(LimitExec { child: build(child, cat)?, skip: *offset, left: limit.unwrap_or(u64::MAX) }),
+        Plan::NestedLoopJoin { left, right, pred, kind } => Box::new(Nlj {
+            left: build(left, cat)?, right_exec: Some(build(right, cat)?), right: vec![], pred: pred.clone(), kind: *kind,
+            rw: right.schema().len(), cur: None, pos: 0, matched: false }),
+        Plan::HashJoin { left, right, left_keys, right_keys, residual, kind } => Box::new(HashJoinExec {
+            left: build(left, cat)?, right_exec: Some(build(right, cat)?), table: HashMap::new(), lk: left_keys.clone(), rk: right_keys.clone(),
+            residual: residual.clone(), kind: *kind, rw: right.schema().len(), pending: VecDeque::new() }),
+        Plan::NestedIndexJoin { left, table, index, key, inner_schema, residual, kind } => {
+            let ti = cat.table(table)?;
+            let ix = cat.indexes.iter().find(|i| &i.name == index).unwrap();
+            Box::new(NijExec { left: build(left, cat)?, heap: &ti.heap, layout: &ti.layout, tree: &ix.tree, key: key.clone(), residual: residual.clone(), kind: *kind, rw: inner_schema.len() })
+        }
+        Plan::Aggregation { group_by, aggs, child, .. } => {
+            let (g, a) = (group_by.clone(), aggs.clone());
+            blocking(build(child, cat)?, move |rows| aggregate(&g, &a, rows))
+        }
+        Plan::Window { calls, child, .. } => { let c = calls.clone(); blocking(build(child, cat)?, move |rows| window(&c, rows)) }
+        Plan::Sort { order_by, child } => { let o = order_by.clone(); blocking(build(child, cat)?, move |rows| sort_rows(&o, rows, None)) }
+        Plan::TopN { order_by, n, child } => { let (o, n) = (order_by.clone(), *n as usize); blocking(build(child, cat)?, move |rows| sort_rows(&o, rows, Some(n))) }
+        Plan::Insert { table, child } => {
+            let ti = cat.table(table)?;
+            let mut child = build(child, cat)?;
+            let mut rows = vec![];
+            while let Some(r) = child.next()? { rows.push(r.vals); }                 // drain first: INSERT INTO t SELECT .. FROM t terminates
+            let mut n = 0i64;
+            for row in rows {
+                let row: Row = row.into_iter().zip(&ti.schema.cols).map(|(v, c)| coerce(v, c.ty)).collect::<Result<_>>()?;
+                for ix in cat.indexes_on(table) {
+                    if let Some(k) = index_key(&row[ix.col]) { if ix.tree.get(k)?.is_some() { return err(format!("duplicate key value violates unique index {}", ix.name)); } }
+                }
+                let mut bytes = vec![];
+                ti.layout.encode(&row, &mut bytes);
+                let rid = ti.heap.insert(TupleMeta { ts: 0, deleted: false }, &bytes)?.ok_or_else(|| super::Error("tuple too large for a page".into()))?;
+                for ix in cat.indexes_on(table) { if let Some(k) = index_key(&row[ix.col]) { ix.tree.insert(k, crate::storage::index::b_plus_tree::pack_rid(rid.page.0, rid.slot))?; } }
+                n += 1;
+            }
+            Box::new(Buffered(VecDeque::from([t(vec![Value::Int(n)])])))
+        }
+        Plan::Update { table, sets, child } => {
+            let ti = cat.table(table)?;
+            let mut child = build(child, cat)?;
+            let mut targets = vec![];
+            while let Some(r) = child.next()? { targets.push(r); }                    // Halloween protection: materialize targets first
+            let mut n = 0i64;
+            for tup in targets {
+                let rid = tup.rid.ok_or_else(|| super::Error("update child produced no rid".into()))?;
+                let mut new = tup.vals.clone();
+                for (i, e) in sets { new[*i] = coerce(e.eval(&tup.vals)?, ti.schema.cols[*i].ty)?; }
+                for ix in cat.indexes_on(table) {
+                    let (ok, nk) = (index_key(&tup.vals[ix.col]), index_key(&new[ix.col]));
+                    if nk != ok { if let Some(nk) = nk { if ix.tree.get(nk)?.is_some() { return err(format!("duplicate key value violates unique index {}", ix.name)); } } }
+                }
+                ti.heap.update_meta(rid, TupleMeta { ts: 0, deleted: true })?;
+                let mut bytes = vec![];
+                ti.layout.encode(&new, &mut bytes);
+                let nrid = ti.heap.insert(TupleMeta { ts: 0, deleted: false }, &bytes)?.ok_or_else(|| super::Error("tuple too large for a page".into()))?;
+                for ix in cat.indexes_on(table) {
+                    if let Some(k) = index_key(&tup.vals[ix.col]) { ix.tree.remove(k)?; }
+                    if let Some(k) = index_key(&new[ix.col]) { ix.tree.insert(k, crate::storage::index::b_plus_tree::pack_rid(nrid.page.0, nrid.slot))?; }
+                }
+                n += 1;
+            }
+            Box::new(Buffered(VecDeque::from([t(vec![Value::Int(n)])])))
+        }
+        Plan::Delete { table, child } => {
+            let ti = cat.table(table)?;
+            let mut child = build(child, cat)?;
+            let mut targets = vec![];
+            while let Some(r) = child.next()? { targets.push(r); }
+            let mut n = 0i64;
+            for tup in targets {
+                let rid = tup.rid.ok_or_else(|| super::Error("delete child produced no rid".into()))?;
+                ti.heap.update_meta(rid, TupleMeta { ts: 0, deleted: true })?;
+                for ix in cat.indexes_on(table) { if let Some(k) = index_key(&tup.vals[ix.col]) { ix.tree.remove(k)?; } }
+                n += 1;
+            }
+            Box::new(Buffered(VecDeque::from([t(vec![Value::Int(n)])])))
+        }
+    })
+}
+
+// ---------------- simple operators --------------------------------------------------------------
+struct Buffered(VecDeque<Tuple>);
+impl Exec for Buffered { fn next(&mut self) -> Result<Option<Tuple>> { Ok(self.0.pop_front()) } }
+
+struct SeqScan<'e, 'a> { iter: TableIter<'e, 'a, ArcReplacer>, layout: &'e Layout, filter: Option<Expr> }
+impl Exec for SeqScan<'_, '_> {
+    fn next(&mut self) -> Result<Option<Tuple>> {
+        for r in self.iter.by_ref() {
+            let (rid, meta, bytes) = r?;
+            if meta.deleted { continue; }
+            let vals = self.layout.decode(&bytes);
+            if ok_pred(&self.filter, &vals)? { return Ok(Some(Tuple { vals, rid: Some(rid) })); }
+        }
+        Ok(None)
+    }
+}
+
+struct IndexScan<'e, 'a> { ti_heap: &'e crate::storage::table::table_heap::TableHeap<'a, ArcReplacer>, layout: &'e Layout, rids: VecDeque<u64>, filter: Option<Expr> }
+impl Exec for IndexScan<'_, '_> {
+    fn next(&mut self) -> Result<Option<Tuple>> {
+        while let Some(v) = self.rids.pop_front() {
+            let rid = unpack(v);
+            let Some((meta, bytes)) = self.ti_heap.get(rid)? else { continue };
+            if meta.deleted { continue; }
+            let vals = self.layout.decode(&bytes);
+            if ok_pred(&self.filter, &vals)? { return Ok(Some(Tuple { vals, rid: Some(rid) })); }
+        }
+        Ok(None)
+    }
+}
+
+struct FilterExec<'e> { child: Boxed<'e>, pred: Expr }
+impl Exec for FilterExec<'_> {
+    fn next(&mut self) -> Result<Option<Tuple>> {
+        while let Some(tp) = self.child.next()? { if truthy(&self.pred.eval(&tp.vals)?) { return Ok(Some(tp)); } }
+        Ok(None)
+    }
+}
+
+struct ProjectExec<'e> { child: Boxed<'e>, exprs: Vec<Expr> }
+impl Exec for ProjectExec<'_> {
+    fn next(&mut self) -> Result<Option<Tuple>> {
+        let Some(tp) = self.child.next()? else { return Ok(None) };
+        Ok(Some(t(self.exprs.iter().map(|e| e.eval(&tp.vals)).collect::<Result<_>>()?)))
+    }
+}
+
+struct LimitExec<'e> { child: Boxed<'e>, skip: u64, left: u64 }
+impl Exec for LimitExec<'_> {
+    fn next(&mut self) -> Result<Option<Tuple>> {
+        while self.skip > 0 { if self.child.next()?.is_none() { return Ok(None); } self.skip -= 1; }
+        if self.left == 0 { return Ok(None); }                 // stop pulling: LIMIT ends the pipeline early
+        self.left -= 1;
+        self.child.next()
+    }
+}
+```
+:::
+
+<aside data-call="rust"><b>Lifetimes in an executor tree</b><p><code>build&lt;'e, 'a: 'e&gt;(plan, cat: &amp;'e Catalog&lt;'a&gt;) -&gt; Box&lt;dyn Exec + 'e&gt;</code>: every executor borrows from the catalog (heaps, layouts, trees), so the boxed trait objects need the explicit <code>+ 'e</code> bound, because <code>Box&lt;dyn Trait&gt;</code> defaults to <code>'static</code>. Two lifetimes appear because the catalog itself borrows the buffer pool for <code>'a</code>. When the compiler says "lifetime may not live long enough" on a boxed executor, the fix is almost always this bound, not <code>'static</code>. Reference: <a href="https://doc.rust-lang.org/reference/lifetime-elision.html#default-trait-object-lifetimes" target="_blank" rel="noreferrer">Rust Reference: trait object lifetime bounds</a>.</p></aside>
+
+<aside data-call="rust"><b><code>for r in self.iter.by_ref()</code> resumes the scan</b><p>A <code>for</code> loop over <code>self.iter</code> would <em>move</em> the iterator. <code>by_ref()</code> borrows it, so when the loop <code>return</code>s a tuple, the next call to <code>next()</code> continues exactly where the scan left off. That's how a pull-based scan stays lazy: one page latched per <code>next()</code>, never held between calls (<a href="/cookbook/p/table-heap">the heap iterator</a>).</p></aside>
+"""
+
+[[sections]]
+heading = "Tests"
+body = """
+<p>The ported-from-BusTub spirit: every statement is compared with SQLite, including DML followed by a full-table read.</p>
+
+```rust title="tests/engine.rs (DML + indexes)"
+use relational::engine::Engine;   // helpers `bpm()`, `mine()`, `sqlite()`, SETUP as in the differential harness
+
+#[test]
+fn dml_and_indexes() {
+    let b = bpm();
+    let mut e = Engine::new(&b);
+    e.execute(SETUP).unwrap();
+    e.execute("CREATE INDEX emp_id ON emp(id); CREATE INDEX dept_id ON dept(id)").unwrap();
+    let plan = e.query("EXPLAIN SELECT name FROM emp WHERE id = 3").unwrap();
+    assert!(plan.iter().any(|r| format!("{:?}", r[0]).contains("IndexScan")), "{plan:?}");
+    let plan = e.query("EXPLAIN SELECT e.name FROM emp e JOIN dept d ON e.dept = d.id").unwrap();
+    assert!(plan.iter().any(|r| format!("{:?}", r[0]).contains("NestedIndexJoin")), "{plan:?}");
+    e.execute("UPDATE emp SET salary = salary + 5 WHERE dept = 1").unwrap();
+    e.execute("DELETE FROM emp WHERE id = 8").unwrap();
+    e.execute("UPDATE emp SET id = id + 100 WHERE id = 7").unwrap();           // moves an indexed key
+    e.execute("INSERT INTO emp SELECT id + 1000, name, dept, salary, boss FROM emp WHERE id < 3").unwrap();   // reads and writes the same table
+    assert!(e.execute("INSERT INTO emp VALUES (1,'dup',1,1,1)").is_err());
+    let mut want = sqlite(&format!("{SETUP}UPDATE emp SET salary = salary + 5 WHERE dept = 1; DELETE FROM emp WHERE id = 8; UPDATE emp SET id = id + 100 WHERE id = 7; INSERT INTO emp SELECT id + 1000, name, dept, salary, boss FROM emp WHERE id < 3; SELECT * FROM emp;"));
+    let mut got = mine(&mut e, "SELECT * FROM emp");
+    want.sort(); got.sort();
+    assert_eq!(got, want);
+    // the same rows through the index, with and without the optimizer
+    for id in [1i64, 3, 107, 1001, 1002, 8, 7] {
+        let q = format!("SELECT name, salary FROM emp WHERE id = {id}");
+        e.optimize = true;  let a = mine(&mut e, &q);
+        e.optimize = false; let c = mine(&mut e, &q);
+        assert_eq!(a, c, "id {id}");
+    }
+}
+```
+
+<aside data-call="testing"><b>The test that caught nothing, and why it still matters</b><p><code>UPDATE emp SET id = id + 100 WHERE id = 7</code> moves a row to a new indexed key. A reader of the old key must not find it, and a reader of the new key must. The test then reads <strong>through the index and through a sequential scan</strong> (<code>optimize</code> on and off) for every touched id and requires identical answers. That differential (same query, two physical plans) is the cheapest correctness oracle an optimizer can have, and it needs no reference database.</p></aside>
+"""

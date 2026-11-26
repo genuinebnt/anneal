@@ -1,0 +1,32 @@
+title = "Iterator pipelines and `collect` into Result / maps"
+module = "Rust language"
+module_order = 1
+chapter = "Everyday language"
+chapter_order = 3
+order = 23
+kind = "recipe"
+lede = "iterator pipelines and `collect` into Result / maps."
+level = "simple"
+code = ["examples/language/iterators.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+everywhere; replaces index loops.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>data pipelines: parse-validate-transform lines</li><li>group/count</li><li>windowed diffs without index loops</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: describe the transformation (map/filter/zip/windows/fold) and let `collect` build the result. `collect::<Result<Vec<_>, _>>()` stops at the **first** error, which is great for validation. Book: <https://doc.rust-lang.org/book/ch13-02-iterators.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch13-02-iterators.html"
+url = "https://doc.rust-lang.org/book/ch13-02-iterators.html"

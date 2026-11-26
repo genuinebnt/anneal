@@ -1,0 +1,1253 @@
+title = "A durable LSM tree"
+module = "Databases"
+module_order = 8
+chapter = "Building complete engines"
+chapter_order = 9
+order = 448
+kind = "guide"
+lede = "The storage engine under the key space · write-ahead log, memtable, sorted tables with checksums and Bloom filters, manifest, leveled compaction, snapshots · 1 000 crash scenarios with torn writes · write, read and space amplification measured on 1 000 000 keys"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>An LSM tree turns random writes into sequential ones.</strong> A write is appended to a log and inserted into an in-memory sorted map (the <em>memtable</em>). When the memtable is full it is written out as an immutable sorted file (a <em>table</em>). Reads look in the memtable, then in tables from newest to oldest. Background <em>compaction</em> merges tables so that the number a read must visit stays small. (<a href="/cookbook/p/log-structured-storage">Part I</a> built the idea; this section makes it survive crashes.)</li> <li><strong>Durability comes from the log; atomicity from one record per batch.</strong> A batch of writes is one checksummed log record, appended and <code>fsync</code>ed before the write is acknowledged. After a crash, replay stops at the first record that is torn or fails its checksum, so the recovered state is always a <em>prefix</em> of the batches, and every acknowledged batch is in it.</li> <li><strong>The manifest is the commit point for the file set.</strong> A table is written and synced first; only then does a record in the manifest add it (and name the new log). A file the manifest does not mention is debris from an interrupted flush or compaction, and recovery deletes it. Compaction swaps its inputs for its outputs in one manifest record, so a crash leaves either the old tables or the new ones, never a mix.</li> <li><strong>Leveled compaction trades write amplification for read and space amplification.</strong> Level 0 holds tables flushed straight from the memtable (their key ranges overlap). Levels 1 and up each hold non-overlapping tables and are <code>T</code> times bigger than the one above. A read visits every level-0 table that covers the key but at most one table in each deeper level; the price is that each byte is rewritten by about one compaction per level.</li> <li><strong>Bloom filters make a miss cheap.</strong> A table stores a filter over its keys; a read that the filter rules out skips the table without reading a data block. At 10 bits per key the false-positive rate is about 1%, so a lookup of an absent key reads almost no blocks.</li> <li><strong>Snapshots are sequence numbers.</strong> Every write gets a sequence number; a snapshot is the number at the time it was taken; a read at a snapshot returns the newest version at or below it. Compaction must keep the versions a live snapshot can see and may drop the rest, and may drop a deletion marker only when no deeper level holds an older version of the key.</li> <li><strong>Recovery has to be tested by breaking things.</strong> A simulated disk that loses power after any chosen write and keeps a random prefix of the unsynced bytes finds the bugs that argument misses. The first run of the crash test found one in the manifest.</li> </ul>
+"""
+
+[[sections]]
+heading = "The pieces"
+body = """
+```text
+write(batch, sync) ─► WAL record [len|crc|first seq, ops…] ─fsync─► memtable (sorted by (key, newest first))
+                                                                        │ full
+                                                                        ▼ flush: table file, fsync; then MANIFEST edit (+ new WAL); delete old WAL
+  L0   t7 t6 t5 t4            (overlapping ranges, newest first)
+  L1   [a..f] [g..m] [n..z]   (≤ 4 MB, disjoint)           get(k): memtable → every covering L0 table → one table per level,
+  L2   [a..c] [d..h] …        (× T)                          each guarded by its Bloom filter, then one 4 KB block read
+```
+
+<ul> <li><strong>Table format</strong>: data blocks of about 4 KB (entries <code>key | seq | kind | value</code>, versions of one key never split across blocks), each followed by a CRC-32; then an index of <code>(last key, offset, length)</code>, the Bloom filter and a footer with its own checksum and magic number.</li> <li><strong>Manifest</strong>: a log of edits (<code>add</code> files, <code>delete</code> files, current log number, last sequence number, next file number), each a checksummed record. On open it is replayed and then <strong>rewritten as a single record</strong>, so the next incarnation never appends behind a torn tail.</li> <li><strong>Compaction</strong>: level 0 into level 1 when it holds four tables; level <code>i</code> into <code>i+1</code> when it exceeds <code>level1 × T&#94;(i−1)</code>, one file at a time with the next level's overlapping files. Output files are cut at user-key boundaries.</li> <li><strong>Garbage collection rule</strong> (<code>keep_versions</code>): keep the newest version of each key and any older version that some live snapshot can see; drop a trailing deletion marker only if nothing deeper can hold older data.</li> </ul>
+
+:::deeper Reference: simulated file system with power failures, checksummed log, Bloom filter, tables, manifest, leveled compaction, snapshots and recovery
+```rust title="src/multimodel/kv.rs"
+//! A durable log-structured merge tree over a simulated file system that can lose power at any write: a write-ahead log with checksums,
+//! a memtable, sorted tables with block checksums and Bloom filters, a manifest of versions, leveled compaction, snapshot reads by
+//! sequence number, and crash recovery. Every operation returns `Err(Crashed)` once the simulated power has failed.
+use crate::fmtlib::{get_varint, put_varint};
+use std::collections::{BTreeMap, HashMap};
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum KvError {
+    Crashed,
+    Corrupt(String),
+}
+pub type R<T> = Result<T, KvError>;
+
+pub fn crc32(data: &[u8]) -> u32 {
+    const T: [u32; 256] = {
+        let mut t = [0u32; 256];
+        let mut i = 0;
+        while i < 256 {
+            let mut c = i as u32;
+            let mut k = 0;
+            while k < 8 {
+                c = if c & 1 == 1 {
+                    0xEDB88320 ^ (c >> 1)
+                } else {
+                    c >> 1
+                };
+                k += 1;
+            }
+            t[i] = c;
+            i += 1;
+        }
+        t
+    };
+    !data.iter().fold(!0u32, |c, &b| {
+        T[((c ^ b as u32) & 0xFF) as usize] ^ (c >> 8)
+    })
+}
+fn hash64(data: &[u8], seed: u64) -> u64 {
+    let mut h = 0xcbf29ce484222325u64 ^ seed.wrapping_mul(0x9e3779b97f4a7c15);
+    for &b in data {
+        h = (h ^ b as u64).wrapping_mul(0x100000001b3);
+    }
+    h ^ (h >> 29)
+}
+
+// ---- the simulated file system -----------------------------------------------------------------------------------------------------
+
+#[derive(Default, Clone)]
+struct F {
+    data: Vec<u8>,
+    synced: usize,
+}
+/// Files are append-only byte vectors. Bytes become durable at `sync`; at a power failure every file keeps its synced bytes plus a
+/// random prefix of the rest (so a record can be torn anywhere). Creating, renaming and removing files are durable at once.
+pub struct SimFs {
+    files: BTreeMap<String, F>,
+    budget: Option<usize>,
+    pub crashed: bool,
+    seed: u64,
+    pub bytes_written: u64,
+    pub bytes_read: u64,
+    pub reads: u64,
+}
+impl SimFs {
+    pub fn new() -> SimFs {
+        SimFs {
+            files: BTreeMap::new(),
+            budget: None,
+            crashed: false,
+            seed: 1,
+            bytes_written: 0,
+            bytes_read: 0,
+            reads: 0,
+        }
+    }
+    /// Fail the power after `events` more file-system operations.
+    pub fn crash_after(&mut self, events: usize, seed: u64) {
+        self.budget = Some(events);
+        self.seed = seed.max(1);
+    }
+    pub fn restart(&mut self) {
+        self.crashed = false;
+        self.budget = None;
+    }
+    fn rnd(&mut self) -> u64 {
+        self.seed ^= self.seed << 13;
+        self.seed ^= self.seed >> 7;
+        self.seed ^= self.seed << 17;
+        self.seed
+    }
+    fn tick(&mut self) -> R<()> {
+        if self.crashed {
+            return Err(KvError::Crashed);
+        }
+        if let Some(b) = self.budget.as_mut() {
+            if *b == 0 {
+                self.crashed = true;
+                let names: Vec<String> = self.files.keys().cloned().collect();
+                for n in names {
+                    let pending = self.files[&n].data.len() - self.files[&n].synced;
+                    let keep = if pending == 0 {
+                        0
+                    } else {
+                        (self.rnd() % (pending as u64 + 1)) as usize
+                    };
+                    let f = self.files.get_mut(&n).unwrap();
+                    f.data.truncate(f.synced + keep);
+                    f.synced = f.data.len();
+                }
+                return Err(KvError::Crashed);
+            }
+            *b -= 1;
+        }
+        Ok(())
+    }
+    pub fn append(&mut self, name: &str, b: &[u8]) -> R<()> {
+        self.tick()?;
+        self.files
+            .entry(name.to_string())
+            .or_default()
+            .data
+            .extend_from_slice(b);
+        self.bytes_written += b.len() as u64;
+        Ok(())
+    }
+    pub fn sync(&mut self, name: &str) -> R<()> {
+        self.tick()?;
+        if let Some(f) = self.files.get_mut(name) {
+            f.synced = f.data.len();
+        }
+        Ok(())
+    }
+    /// Atomically replace `to` by `from` (durable at once, like a rename after an fsync).
+    pub fn rename(&mut self, from: &str, to: &str) -> R<()> {
+        self.tick()?;
+        if let Some(f) = self.files.remove(from) {
+            self.files.insert(to.to_string(), f);
+        }
+        Ok(())
+    }
+    pub fn remove(&mut self, name: &str) -> R<()> {
+        self.tick()?;
+        self.files.remove(name);
+        Ok(())
+    }
+    pub fn read(&mut self, name: &str, off: usize, len: usize) -> R<Vec<u8>> {
+        if self.crashed {
+            return Err(KvError::Crashed);
+        }
+        let f = self
+            .files
+            .get(name)
+            .ok_or_else(|| KvError::Corrupt(format!("missing file {name}")))?;
+        if off + len > f.data.len() {
+            return Err(KvError::Corrupt(format!("{name}: read past the end")));
+        }
+        self.bytes_read += len as u64;
+        self.reads += 1;
+        Ok(f.data[off..off + len].to_vec())
+    }
+    pub fn size(&self, name: &str) -> usize {
+        self.files.get(name).map_or(0, |f| f.data.len())
+    }
+    pub fn list(&self) -> Vec<String> {
+        self.files.keys().cloned().collect()
+    }
+    pub fn total_bytes(&self) -> usize {
+        self.files.values().map(|f| f.data.len()).sum()
+    }
+    /// Cut a file to `len` bytes (for torn-write tests).
+    pub fn truncate(&mut self, name: &str, len: usize) { if let Some(f) = self.files.get_mut(name) { f.data.truncate(len); f.synced = f.synced.min(len); } }
+    /// Flip one byte of a file (for corruption tests).
+    pub fn corrupt(&mut self, name: &str, at: usize) {
+        if let Some(f) = self.files.get_mut(name) {
+            f.data[at] ^= 0x55;
+        }
+    }
+}
+
+// ---- Bloom filter -------------------------------------------------------------------------------------------------------------------
+
+#[derive(Clone, Debug)]
+pub struct Bloom {
+    bits: Vec<u8>,
+    k: u32,
+}
+impl Bloom {
+    pub fn build(keys: &[&[u8]], bits_per_key: usize) -> Bloom {
+        let m = (keys.len() * bits_per_key).max(64).div_ceil(8) * 8;
+        let k = ((bits_per_key as f64 * 0.69) as u32).clamp(1, 30);
+        let mut b = Bloom {
+            bits: vec![0; m / 8],
+            k,
+        };
+        for key in keys {
+            b.add(key);
+        }
+        b
+    }
+    fn probes(&self, key: &[u8]) -> impl Iterator<Item = usize> {
+        let (h1, h2) = (hash64(key, 1), hash64(key, 2) | 1);
+        let m = self.bits.len() * 8;
+        (0..self.k as u64).map(move |i| (h1.wrapping_add(i.wrapping_mul(h2)) % m as u64) as usize)
+    }
+    fn add(&mut self, key: &[u8]) {
+        let ps: Vec<usize> = self.probes(key).collect();
+        for p in ps {
+            self.bits[p / 8] |= 1 << (p % 8);
+        }
+    }
+    pub fn may_contain(&self, key: &[u8]) -> bool {
+        self.probes(key)
+            .all(|p| self.bits[p / 8] >> (p % 8) & 1 == 1)
+    }
+}
+
+// ---- tables ---------------------------------------------------------------------------------------------------------------------------
+
+/// One version of a user key: `(key, sequence number, value)`; `None` is a deletion marker.
+pub type Entry = (Vec<u8>, u64, Option<Vec<u8>>);
+const MAGIC: u32 = 0x4b565431;
+
+fn enc_entry(e: &Entry, out: &mut Vec<u8>) {
+    put_varint(e.0.len() as u64, out);
+    out.extend_from_slice(&e.0);
+    out.extend_from_slice(&e.1.to_le_bytes());
+    match &e.2 {
+        Some(v) => {
+            out.push(1);
+            put_varint(v.len() as u64, out);
+            out.extend_from_slice(v);
+        }
+        None => out.push(0),
+    }
+}
+fn dec_entries(b: &[u8]) -> Vec<Entry> {
+    let (mut pos, mut out) = (0, vec![]);
+    while pos < b.len() {
+        let kl = get_varint(b, &mut pos) as usize;
+        let key = b[pos..pos + kl].to_vec();
+        pos += kl;
+        let seq = u64::from_le_bytes(b[pos..pos + 8].try_into().unwrap());
+        pos += 8;
+        let kind = b[pos];
+        pos += 1;
+        let val = if kind == 1 {
+            let vl = get_varint(b, &mut pos) as usize;
+            let v = b[pos..pos + vl].to_vec();
+            pos += vl;
+            Some(v)
+        } else {
+            None
+        };
+        out.push((key, seq, val));
+    }
+    out
+}
+
+#[derive(Clone, Debug)]
+pub struct TableInfo {
+    pub index: Vec<(Vec<u8>, u64, u32)>,
+    pub bloom: Option<Bloom>,
+    pub entries: u64,
+}
+
+/// Serialize entries (sorted by key, newest version first; the versions of a key stay in one block) into a table file.
+pub fn build_table(
+    entries: &[Entry],
+    block_bytes: usize,
+    bloom_bits: usize,
+) -> (Vec<u8>, TableInfo) {
+    let mut file = vec![];
+    let mut index = vec![];
+    let mut block = vec![];
+    let mut last_key: Option<&Vec<u8>> = None;
+    let flush = |file: &mut Vec<u8>,
+                 block: &mut Vec<u8>,
+                 index: &mut Vec<(Vec<u8>, u64, u32)>,
+                 last: &Vec<u8>| {
+        let crc = crc32(block);
+        block.extend_from_slice(&crc.to_le_bytes());
+        index.push((last.clone(), file.len() as u64, block.len() as u32));
+        file.extend_from_slice(block);
+        block.clear();
+    };
+    for (i, e) in entries.iter().enumerate() {
+        if !block.is_empty() && block.len() >= block_bytes && last_key.is_some_and(|k| *k != e.0) {
+            flush(&mut file, &mut block, &mut index, last_key.unwrap());
+        }
+        enc_entry(e, &mut block);
+        last_key = Some(&entries[i].0);
+    }
+    if !block.is_empty() {
+        flush(&mut file, &mut block, &mut index, last_key.unwrap());
+    }
+    let index_off = file.len() as u64;
+    for (k, off, len) in &index {
+        put_varint(k.len() as u64, &mut file);
+        file.extend_from_slice(k);
+        file.extend_from_slice(&off.to_le_bytes());
+        file.extend_from_slice(&len.to_le_bytes());
+    }
+    let index_len = file.len() as u64 - index_off;
+    let bloom_off = file.len() as u64;
+    let bloom = (bloom_bits > 0).then(|| {
+        let mut keys: Vec<&[u8]> = entries.iter().map(|e| e.0.as_slice()).collect();
+        keys.dedup();
+        Bloom::build(&keys, bloom_bits)
+    });
+    if let Some(b) = &bloom {
+        file.extend_from_slice(&b.k.to_le_bytes());
+        file.extend_from_slice(&b.bits);
+    }
+    let bloom_len = file.len() as u64 - bloom_off;
+    let mut footer = vec![];
+    for x in [
+        index_off,
+        index_len,
+        bloom_off,
+        bloom_len,
+        entries.len() as u64,
+    ] {
+        footer.extend_from_slice(&x.to_le_bytes());
+    }
+    let crc = crc32(&footer);
+    footer.extend_from_slice(&crc.to_le_bytes());
+    footer.extend_from_slice(&MAGIC.to_le_bytes());
+    file.extend_from_slice(&footer);
+    (
+        file,
+        TableInfo {
+            index,
+            bloom,
+            entries: entries.len() as u64,
+        },
+    )
+}
+const FOOTER: usize = 5 * 8 + 8;
+
+pub fn open_table(fs: &mut SimFs, name: &str) -> R<TableInfo> {
+    let size = fs.size(name);
+    if size < FOOTER {
+        return Err(KvError::Corrupt(format!("{name}: too short")));
+    }
+    let f = fs.read(name, size - FOOTER, FOOTER)?;
+    if u32::from_le_bytes(f[44..48].try_into().unwrap()) != MAGIC
+        || crc32(&f[..40]) != u32::from_le_bytes(f[40..44].try_into().unwrap())
+    {
+        return Err(KvError::Corrupt(format!("{name}: bad footer")));
+    }
+    let x = |i: usize| u64::from_le_bytes(f[i * 8..i * 8 + 8].try_into().unwrap());
+    let (io, il, bo, bl, n) = (
+        x(0) as usize,
+        x(1) as usize,
+        x(2) as usize,
+        x(3) as usize,
+        x(4),
+    );
+    let ib = fs.read(name, io, il)?;
+    let (mut pos, mut index) = (0, vec![]);
+    while pos < ib.len() {
+        let kl = get_varint(&ib, &mut pos) as usize;
+        let k = ib[pos..pos + kl].to_vec();
+        pos += kl;
+        let off = u64::from_le_bytes(ib[pos..pos + 8].try_into().unwrap());
+        let len = u32::from_le_bytes(ib[pos + 8..pos + 12].try_into().unwrap());
+        pos += 12;
+        index.push((k, off, len));
+    }
+    let bloom = if bl > 0 {
+        let b = fs.read(name, bo, bl)?;
+        Some(Bloom {
+            k: u32::from_le_bytes(b[..4].try_into().unwrap()),
+            bits: b[4..].to_vec(),
+        })
+    } else {
+        None
+    };
+    Ok(TableInfo {
+        index,
+        bloom,
+        entries: n,
+    })
+}
+/// Read a block and verify its checksum; returns the entries' bytes.
+fn read_block_bytes(fs: &mut SimFs, name: &str, off: u64, len: u32) -> R<Vec<u8>> {
+    let mut b = fs.read(name, off as usize, len as usize)?;
+    let crc = u32::from_le_bytes(b[b.len() - 4..].try_into().unwrap());
+    b.truncate(b.len() - 4);
+    if crc32(&b) != crc {
+        return Err(KvError::Corrupt(format!("{name}: block checksum mismatch at {off}")));
+    }
+    Ok(b)
+}
+fn read_block(fs: &mut SimFs, name: &str, off: u64, len: u32) -> R<Vec<Entry>> {
+    Ok(dec_entries(&read_block_bytes(fs, name, off, len)?))
+}
+/// Find the newest version of `key` with sequence number <= `seq` without decoding the whole block.
+fn lookup_in_block(b: &[u8], key: &[u8], seq: u64) -> Option<Option<Vec<u8>>> {
+    let mut pos = 0;
+    while pos < b.len() {
+        let kl = get_varint(b, &mut pos) as usize;
+        let k = &b[pos..pos + kl];
+        pos += kl;
+        let s = u64::from_le_bytes(b[pos..pos + 8].try_into().unwrap());
+        pos += 8;
+        let kind = b[pos];
+        pos += 1;
+        let (val, next) = if kind == 1 {
+            let vl = get_varint(b, &mut pos) as usize;
+            (Some(&b[pos..pos + vl]), pos + vl)
+        } else {
+            (None, pos)
+        };
+        if k == key && s <= seq {
+            return Some(val.map(|v| v.to_vec()));
+        }
+        if k > key {
+            return None;
+        }
+        pos = next;
+    }
+    None
+}
+
+// ---- the database -----------------------------------------------------------------------------------------------------------------------
+
+#[derive(Clone, Debug)]
+pub struct Options {
+    pub memtable_bytes: usize,
+    pub file_bytes: usize,
+    pub block_bytes: usize,
+    pub l0_trigger: usize,
+    pub level1_bytes: usize,
+    pub size_ratio: usize,
+    pub bloom_bits: usize,
+}
+impl Default for Options {
+    fn default() -> Self {
+        Options {
+            memtable_bytes: 4 << 20,
+            file_bytes: 2 << 20,
+            block_bytes: 4096,
+            l0_trigger: 4,
+            level1_bytes: 10 << 20,
+            size_ratio: 10,
+            bloom_bits: 10,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FileMeta {
+    pub id: u64,
+    pub level: u32,
+    pub smallest: Vec<u8>,
+    pub largest: Vec<u8>,
+    pub size: u64,
+}
+#[derive(Default, Clone, Debug)]
+struct Edit {
+    add: Vec<FileMeta>,
+    del: Vec<(u32, u64)>,
+    log_number: Option<u64>,
+    last_seq: u64,
+    next_file: u64,
+}
+
+fn enc_edit(e: &Edit) -> Vec<u8> {
+    let mut o = vec![];
+    for x in [
+        e.last_seq,
+        e.next_file,
+        e.log_number.map_or(0, |n| n + 1),
+        e.add.len() as u64,
+        e.del.len() as u64,
+    ] {
+        put_varint(x, &mut o);
+    }
+    for f in &e.add {
+        put_varint(f.id, &mut o);
+        put_varint(f.level as u64, &mut o);
+        put_varint(f.size, &mut o);
+        put_varint(f.smallest.len() as u64, &mut o);
+        o.extend_from_slice(&f.smallest);
+        put_varint(f.largest.len() as u64, &mut o);
+        o.extend_from_slice(&f.largest);
+    }
+    for (l, id) in &e.del {
+        put_varint(*l as u64, &mut o);
+        put_varint(*id, &mut o);
+    }
+    o
+}
+fn dec_edit(b: &[u8]) -> Edit {
+    let mut p = 0;
+    let g = |p: &mut usize| get_varint(b, p);
+    let (last_seq, next_file, ln, na, nd) = (g(&mut p), g(&mut p), g(&mut p), g(&mut p), g(&mut p));
+    let mut e = Edit {
+        last_seq,
+        next_file,
+        log_number: ln.checked_sub(1),
+        ..Default::default()
+    };
+    for _ in 0..na {
+        let (id, level, size) = (g(&mut p), g(&mut p) as u32, g(&mut p));
+        let sl = g(&mut p) as usize;
+        let smallest = b[p..p + sl].to_vec();
+        p += sl;
+        let ll = g(&mut p) as usize;
+        let largest = b[p..p + ll].to_vec();
+        p += ll;
+        e.add.push(FileMeta {
+            id,
+            level,
+            smallest,
+            largest,
+            size,
+        });
+    }
+    for _ in 0..nd {
+        let l = g(&mut p) as u32;
+        let id = g(&mut p);
+        e.del.push((l, id));
+    }
+    e
+}
+fn frame(payload: &[u8]) -> Vec<u8> {
+    let mut r = vec![];
+    r.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    r.extend_from_slice(&crc32(payload).to_le_bytes());
+    r.extend_from_slice(payload);
+    r
+}
+/// Records until the first torn or corrupt one.
+fn unframe(b: &[u8]) -> Vec<&[u8]> {
+    let (mut pos, mut out) = (0, vec![]);
+    while pos + 8 <= b.len() {
+        let len = u32::from_le_bytes(b[pos..pos + 4].try_into().unwrap()) as usize;
+        let crc = u32::from_le_bytes(b[pos + 4..pos + 8].try_into().unwrap());
+        if pos + 8 + len > b.len() || crc32(&b[pos + 8..pos + 8 + len]) != crc {
+            break;
+        }
+        out.push(&b[pos + 8..pos + 8 + len]);
+        pos += 8 + len;
+    }
+    out
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct Stats {
+    pub user_bytes: u64,
+    pub wal_bytes: u64,
+    pub flush_bytes: u64,
+    pub compaction_read: u64,
+    pub compaction_written: u64,
+    pub manifest_bytes: u64,
+    pub flushes: u64,
+    pub compactions: u64,
+    pub tables_probed: u64,
+    pub bloom_skips: u64,
+    pub blocks_read: u64,
+}
+
+type MemKey = (Vec<u8>, u64); // (user key, u64::MAX - seq): newest first within a key
+const MANIFEST: &str = "MANIFEST";
+fn wal_name(n: u64) -> String {
+    format!("wal-{n:06}")
+}
+fn sst_name(n: u64) -> String {
+    format!("sst-{n:06}")
+}
+
+pub struct Db {
+    pub fs: SimFs,
+    pub opts: Options,
+    mem: BTreeMap<MemKey, Option<Vec<u8>>>,
+    mem_bytes: usize,
+    seq: u64,
+    wal: u64,
+    next_file: u64,
+    pub levels: Vec<Vec<FileMeta>>,
+    tables: HashMap<u64, TableInfo>,
+    snapshots: Vec<u64>,
+    ptr: Vec<usize>,
+    pub stats: Stats,
+}
+
+const LEVELS: usize = 7;
+
+impl Db {
+    /// Open (or create) the database stored in `fs`, recovering from whatever a crash left behind.
+    pub fn open(mut fs: SimFs, opts: Options) -> R<Db> {
+        fs.restart();
+        let mut db = Db {
+            fs,
+            opts,
+            mem: BTreeMap::new(),
+            mem_bytes: 0,
+            seq: 0,
+            wal: 0,
+            next_file: 1,
+            levels: vec![vec![]; LEVELS],
+            tables: HashMap::new(),
+            snapshots: vec![],
+            ptr: vec![0; LEVELS],
+            stats: Stats::default(),
+        };
+        let mut log_number = 0;
+        if db.fs.size(MANIFEST) > 0 {
+            let all = db.fs.read(MANIFEST, 0, db.fs.size(MANIFEST))?;
+            for rec in unframe(&all) {
+                let e = dec_edit(rec);
+                for (l, id) in &e.del {
+                    db.levels[*l as usize].retain(|f| f.id != *id);
+                }
+                for f in &e.add {
+                    db.levels[f.level as usize].push(f.clone());
+                }
+                db.seq = db.seq.max(e.last_seq);
+                db.next_file = db.next_file.max(e.next_file);
+                if let Some(n) = e.log_number {
+                    log_number = n;
+                }
+            }
+            for l in 1..LEVELS {
+                db.levels[l].sort_by(|a, b| a.smallest.cmp(&b.smallest));
+            }
+        }
+        // Start a clean manifest holding the whole state in one record. Appending to the old one would put new records behind a torn tail
+        // that the next recovery stops at, and lose them.
+        db.fs.remove("MANIFEST.new")?;
+        if db.fs.size(MANIFEST) > 0 {
+            let all: Vec<FileMeta> = db.levels.iter().flatten().cloned().collect();
+            let snap = Edit { add: all, del: vec![], log_number: Some(log_number), last_seq: db.seq, next_file: db.next_file };
+            let rec = frame(&enc_edit(&snap));
+            db.fs.append("MANIFEST.new", &rec)?;
+            db.fs.sync("MANIFEST.new")?;
+            db.fs.rename("MANIFEST.new", MANIFEST)?;
+        }
+        // anything on disk that the manifest does not reference is the debris of an interrupted flush or compaction
+        let live: std::collections::HashSet<String> =
+            db.levels.iter().flatten().map(|f| sst_name(f.id)).collect();
+        let mut wals = vec![];
+        for name in db.fs.list() {
+            if name.starts_with("sst-") && !live.contains(&name) {
+                db.fs.remove(&name)?;
+            } else if let Some(n) = name.strip_prefix("wal-") {
+                let n: u64 = n.parse().unwrap();
+                if n < log_number {
+                    db.fs.remove(&name)?;
+                } else {
+                    wals.push(n);
+                }
+            }
+        }
+        let files: Vec<FileMeta> = db.levels.iter().flatten().cloned().collect();
+        for f in files {
+            let info = open_table(&mut db.fs, &sst_name(f.id))?;
+            db.tables.insert(f.id, info);
+        }
+        wals.sort();
+        let manifest_seq = db.seq;
+        for n in &wals {
+            let name = wal_name(*n);
+            let all = db.fs.read(&name, 0, db.fs.size(&name))?;
+            for rec in unframe(&all) {
+                let first = u64::from_le_bytes(rec[..8].try_into().unwrap());
+                let count = u32::from_le_bytes(rec[8..12].try_into().unwrap()) as u64;
+                if first + count - 1 <= manifest_seq {
+                    continue;
+                }
+                let batch = dec_batch(&rec[12..]);
+                for (i, (k, v)) in batch.into_iter().enumerate() {
+                    db.mem_put(k, first + i as u64, v);
+                }
+                db.seq = db.seq.max(first + count - 1);
+            }
+            db.next_file = db.next_file.max(n + 1);
+        }
+        db.wal = db.next_file;
+        db.next_file += 1;
+        db.rotate_wal()?;
+        Ok(db)
+    }
+
+    /// Start a fresh WAL, flush whatever the old ones replayed into the memtable, and record the new log number.
+    fn rotate_wal(&mut self) -> R<()> {
+        let new = self.wal;
+        self.fs.append(&wal_name(new), &[])?;
+        if self.mem.is_empty() {
+            let e = Edit {
+                log_number: Some(new),
+                last_seq: self.seq,
+                next_file: self.next_file,
+                ..Default::default()
+            };
+            self.log_edit(&e)?;
+            for n in self.fs.list() {
+                if let Some(x) = n.strip_prefix("wal-") {
+                    if x.parse::<u64>().unwrap() < new {
+                        self.fs.remove(&n)?;
+                    }
+                }
+            }
+            Ok(())
+        } else {
+            self.flush_to(new)
+        }
+    }
+
+    fn log_edit(&mut self, e: &Edit) -> R<()> {
+        let rec = frame(&enc_edit(e));
+        self.stats.manifest_bytes += rec.len() as u64;
+        self.fs.append(MANIFEST, &rec)?;
+        self.fs.sync(MANIFEST)
+    }
+
+    fn mem_put(&mut self, k: Vec<u8>, seq: u64, v: Option<Vec<u8>>) {
+        self.mem_bytes += k.len() + 16 + v.as_ref().map_or(0, |v| v.len());
+        self.mem.insert((k, u64::MAX - seq), v);
+    }
+
+    pub fn seq(&self) -> u64 {
+        self.seq
+    }
+    /// Shut down without flushing: what is left is exactly what is on the (simulated) disk.
+    pub fn into_fs(self) -> SimFs {
+        self.fs
+    }
+    /// Pin the current state for reads and for garbage collection.
+    pub fn snapshot(&mut self) -> u64 {
+        self.snapshots.push(self.seq);
+        self.seq
+    }
+    pub fn release(&mut self, s: u64) {
+        if let Some(i) = self.snapshots.iter().position(|&x| x == s) {
+            self.snapshots.swap_remove(i);
+        }
+    }
+
+    /// Apply a batch atomically. With `sync` the batch is durable when this returns.
+    pub fn write(&mut self, batch: &[(Vec<u8>, Option<Vec<u8>>)], sync: bool) -> R<()> {
+        if batch.is_empty() {
+            return Ok(());
+        }
+        let first = self.seq + 1;
+        let mut payload = vec![];
+        payload.extend_from_slice(&first.to_le_bytes());
+        payload.extend_from_slice(&(batch.len() as u32).to_le_bytes());
+        enc_batch(batch, &mut payload);
+        let rec = frame(&payload);
+        self.stats.wal_bytes += rec.len() as u64;
+        self.stats.user_bytes += batch
+            .iter()
+            .map(|(k, v)| (k.len() + v.as_ref().map_or(0, |v| v.len())) as u64)
+            .sum::<u64>();
+        self.fs.append(&wal_name(self.wal), &rec)?;
+        if sync {
+            self.fs.sync(&wal_name(self.wal))?;
+        }
+        for (i, (k, v)) in batch.iter().enumerate() {
+            self.mem_put(k.clone(), first + i as u64, v.clone());
+        }
+        self.seq += batch.len() as u64;
+        if self.mem_bytes >= self.opts.memtable_bytes {
+            self.flush()?;
+            self.compact()?;
+        }
+        Ok(())
+    }
+    pub fn put(&mut self, k: &[u8], v: &[u8]) -> R<()> {
+        self.write(&[(k.to_vec(), Some(v.to_vec()))], true)
+    }
+    pub fn delete(&mut self, k: &[u8]) -> R<()> {
+        self.write(&[(k.to_vec(), None)], true)
+    }
+
+    pub fn get(&mut self, key: &[u8]) -> R<Option<Vec<u8>>> {
+        let s = self.seq;
+        self.get_at(key, s)
+    }
+    pub fn get_at(&mut self, key: &[u8], seq: u64) -> R<Option<Vec<u8>>> {
+        if let Some((_, v)) = self
+            .mem
+            .range((key.to_vec(), u64::MAX - seq)..=(key.to_vec(), u64::MAX))
+            .next()
+        {
+            return Ok(v.clone());
+        }
+        let mut l0: Vec<FileMeta> = self.levels[0]
+            .iter()
+            .filter(|f| f.smallest.as_slice() <= key && key <= f.largest.as_slice())
+            .cloned()
+            .collect();
+        l0.sort_by(|a, b| b.id.cmp(&a.id));
+        for f in l0 {
+            if let Some(v) = self.table_get(&f, key, seq)? {
+                return Ok(v);
+            }
+        }
+        for l in 1..LEVELS {
+            let i = self.levels[l].partition_point(|f| f.largest.as_slice() < key);
+            if let Some(f) = self.levels[l].get(i).cloned() {
+                if f.smallest.as_slice() <= key {
+                    if let Some(v) = self.table_get(&f, key, seq)? {
+                        return Ok(v);
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+    fn table_get(&mut self, f: &FileMeta, key: &[u8], seq: u64) -> R<Option<Option<Vec<u8>>>> {
+        self.stats.tables_probed += 1;
+        let info = &self.tables[&f.id];
+        if let Some(b) = &info.bloom {
+            if !b.may_contain(key) {
+                self.stats.bloom_skips += 1;
+                return Ok(None);
+            }
+        }
+        let i = info
+            .index
+            .partition_point(|(last, _, _)| last.as_slice() < key);
+        let Some((_, off, len)) = info.index.get(i).cloned() else {
+            return Ok(None);
+        };
+        self.stats.blocks_read += 1;
+        let body = read_block_bytes(&mut self.fs, &sst_name(f.id), off, len)?;
+        Ok(lookup_in_block(&body, key, seq))
+    }
+
+    /// Live keys in `[lo, hi)` as of `seq`, in key order.
+    pub fn scan_at(&mut self, lo: &[u8], hi: &[u8], seq: u64) -> R<Vec<(Vec<u8>, Vec<u8>)>> {
+        let mut all: Vec<Entry> = self
+            .mem
+            .range((lo.to_vec(), 0)..(hi.to_vec(), 0))
+            .map(|((k, s), v)| (k.clone(), u64::MAX - s, v.clone()))
+            .collect();
+        let files: Vec<FileMeta> = self
+            .levels
+            .iter()
+            .flatten()
+            .filter(|f| f.smallest.as_slice() < hi && f.largest.as_slice() >= lo)
+            .cloned()
+            .collect();
+        for f in files {
+            let blocks: Vec<(u64, u32)> = {
+                let info = &self.tables[&f.id];
+                let start = info
+                    .index
+                    .partition_point(|(last, _, _)| last.as_slice() < lo);
+                info.index[start..]
+                    .iter()
+                    .map(|(_, o, l)| (*o, *l))
+                    .collect()
+            };
+            for (off, len) in blocks {
+                self.stats.blocks_read += 1;
+                let es = read_block(&mut self.fs, &sst_name(f.id), off, len)?;
+                let past = es.first().is_some_and(|e| e.0.as_slice() >= hi);
+                all.extend(
+                    es.into_iter()
+                        .filter(|e| e.0.as_slice() >= lo && e.0.as_slice() < hi),
+                );
+                if past {
+                    break;
+                }
+            }
+        }
+        all.retain(|e| e.1 <= seq);
+        all.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+        all.dedup_by(|b, a| a.0 == b.0);
+        Ok(all
+            .into_iter()
+            .filter_map(|(k, _, v)| v.map(|v| (k, v)))
+            .collect())
+    }
+    pub fn scan(&mut self, lo: &[u8], hi: &[u8]) -> R<Vec<(Vec<u8>, Vec<u8>)>> {
+        let s = self.seq;
+        self.scan_at(lo, hi, s)
+    }
+
+    /// Which versions of one key (newest first) must survive: those a snapshot, or the present, can see.
+    fn keep_versions(&self, versions: &[Entry], bottom: bool) -> Vec<Entry> {
+        let mut snaps = self.snapshots.clone();
+        snaps.sort_unstable();
+        let mut out: Vec<Entry> = vec![];
+        for e in versions {
+            let keep = match out.last() {
+                None => true,
+                // visible to a reader at `s` iff e.seq <= s < newer.seq
+                Some(newer) => snaps.iter().any(|&s| e.1 <= s && s < newer.1),
+            };
+            if keep {
+                out.push(e.clone());
+            }
+        }
+        // at the bottom nothing older exists, so a trailing deletion marker hides nothing: a reader finds the key absent either way
+        if bottom {
+            while out.last().is_some_and(|e| e.2.is_none()) {
+                out.pop();
+            }
+        }
+        out
+    }
+    fn gc(&self, sorted: Vec<Entry>, bottom: bool) -> Vec<Entry> {
+        let mut out = vec![];
+        let mut i = 0;
+        while i < sorted.len() {
+            let mut j = i;
+            while j < sorted.len() && sorted[j].0 == sorted[i].0 {
+                j += 1;
+            }
+            out.extend(self.keep_versions(&sorted[i..j], bottom));
+            i = j;
+        }
+        out
+    }
+
+    fn write_tables(&mut self, entries: Vec<Entry>, level: u32) -> R<Vec<FileMeta>> {
+        let mut metas = vec![];
+        let mut i = 0;
+        while i < entries.len() {
+            let mut j = i;
+            let mut bytes = 0;
+            while j < entries.len() {
+                bytes += entries[j].0.len() + 17 + entries[j].2.as_ref().map_or(0, |v| v.len());
+                j += 1;
+                if bytes >= self.opts.file_bytes {
+                    while j < entries.len() && entries[j].0 == entries[j - 1].0 {
+                        j += 1;
+                    }
+                    break;
+                }
+            }
+            let (file, info) =
+                build_table(&entries[i..j], self.opts.block_bytes, self.opts.bloom_bits);
+            let id = self.next_file;
+            self.next_file += 1;
+            let name = sst_name(id);
+            self.fs.append(&name, &file)?;
+            self.fs.sync(&name)?;
+            metas.push(FileMeta {
+                id,
+                level,
+                smallest: entries[i].0.clone(),
+                largest: entries[j - 1].0.clone(),
+                size: file.len() as u64,
+            });
+            self.tables.insert(id, info);
+            i = j;
+        }
+        Ok(metas)
+    }
+
+    pub fn flush(&mut self) -> R<()> {
+        let new = self.next_file;
+        self.next_file += 1;
+        self.fs.append(&wal_name(new), &[])?;
+        self.flush_to(new)
+    }
+    fn flush_to(&mut self, new_wal: u64) -> R<()> {
+        let entries: Vec<Entry> = self
+            .mem
+            .iter()
+            .map(|((k, s), v)| (k.clone(), u64::MAX - s, v.clone()))
+            .collect();
+        let entries = self.gc(entries, false);
+        let metas = if entries.is_empty() {
+            vec![]
+        } else {
+            self.write_tables(entries, 0)?
+        };
+        let e = Edit {
+            add: metas.clone(),
+            log_number: Some(new_wal),
+            last_seq: self.seq,
+            next_file: self.next_file,
+            ..Default::default()
+        };
+        self.stats.flush_bytes += metas.iter().map(|m| m.size).sum::<u64>();
+        self.log_edit(&e)?;
+        self.levels[0].extend(metas);
+        self.mem.clear();
+        self.mem_bytes = 0;
+        self.wal = new_wal;
+        self.stats.flushes += 1;
+        for n in self.fs.list() {
+            if let Some(x) = n.strip_prefix("wal-") {
+                if x.parse::<u64>().unwrap() < new_wal {
+                    self.fs.remove(&n)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn level_limit(&self, l: usize) -> u64 {
+        (self.opts.level1_bytes as u64) * (self.opts.size_ratio as u64).pow(l as u32 - 1)
+    }
+    fn level_size(&self, l: usize) -> u64 {
+        self.levels[l].iter().map(|f| f.size).sum()
+    }
+
+    /// Compact until no level is over its limit.
+    pub fn compact(&mut self) -> R<()> {
+        loop {
+            let inputs: Option<(usize, Vec<FileMeta>)> =
+                if self.levels[0].len() >= self.opts.l0_trigger {
+                    Some((0, self.levels[0].clone()))
+                } else {
+                    (1..LEVELS - 1)
+                        .find(|&l| self.level_size(l) > self.level_limit(l))
+                        .map(|l| {
+                            let i = self.ptr[l] % self.levels[l].len();
+                            self.ptr[l] = i + 1;
+                            (l, vec![self.levels[l][i].clone()])
+                        })
+                };
+            let Some((level, from)) = inputs else {
+                return Ok(());
+            };
+            self.compact_files(level, from, level + 1)?;
+        }
+    }
+    /// Merge `from` (files of `level`) with the overlapping files of `out` (the next level, or `level` itself for an in-place rewrite).
+    fn compact_files(&mut self, level: usize, from: Vec<FileMeta>, out: usize) -> R<()> {
+        let lo = from.iter().map(|f| f.smallest.clone()).min().unwrap();
+        let hi = from.iter().map(|f| f.largest.clone()).max().unwrap();
+        let next: Vec<FileMeta> = if out == level {
+            vec![]
+        } else {
+            self.levels[out].iter().filter(|f| f.smallest <= hi && f.largest >= lo).cloned().collect()
+        };
+        let mut entries: Vec<Entry> = vec![];
+        for f in from.iter().chain(&next) {
+            let blocks = self.tables[&f.id].index.clone();
+            for (_, off, len) in blocks {
+                let es = read_block(&mut self.fs, &sst_name(f.id), off, len)?;
+                self.stats.compaction_read += len as u64;
+                entries.extend(es);
+            }
+        }
+        entries.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+        // a deletion marker may be dropped only if no deeper level could hold an older version of the key
+        let rlo = std::iter::once(lo.clone())
+            .chain(next.iter().map(|f| f.smallest.clone()))
+            .min()
+            .unwrap();
+        let rhi = std::iter::once(hi.clone())
+            .chain(next.iter().map(|f| f.largest.clone()))
+            .max()
+            .unwrap();
+        let bottom = (out + 1..LEVELS).all(|l| {
+            self.levels[l]
+                .iter()
+                .all(|f| f.largest < rlo || f.smallest > rhi)
+        });
+        let entries = self.gc(entries, bottom);
+        let outs = self.write_tables(entries, out as u32)?;
+        self.stats.compaction_written += outs.iter().map(|m| m.size).sum::<u64>();
+        let e = Edit {
+            add: outs.clone(),
+            del: from.iter().chain(&next).map(|f| (f.level, f.id)).collect(),
+            log_number: None,
+            last_seq: self.seq,
+            next_file: self.next_file,
+        };
+        self.log_edit(&e)?;
+        for (l, id) in &e.del {
+            self.levels[*l as usize].retain(|f| f.id != *id);
+            self.tables.remove(id);
+        }
+        self.levels[out].extend(outs);
+        self.levels[out].sort_by(|a, b| a.smallest.cmp(&b.smallest));
+        for (_, id) in &e.del {
+            self.fs.remove(&sst_name(*id))?;
+        }
+        self.stats.compactions += 1;
+        Ok(())
+    }
+
+    /// Number of stored versions (entries) across all tables, including shadowed ones and deletion markers.
+    pub fn version_count(&self) -> u64 {
+        self.levels.iter().flatten().map(|f| self.tables[&f.id].entries).sum()
+    }
+    /// Manual full compaction: push every level into the next until all data is in one level, then rewrite that level so that shadowed
+    /// versions and deletion markers are dropped.
+    pub fn compact_all(&mut self) -> R<()> {
+        self.flush()?;
+        let deepest = self.levels.iter().rposition(|l| !l.is_empty());
+        let Some(d) = deepest else { return Ok(()) };
+        for l in 0..d {
+            if !self.levels[l].is_empty() {
+                let all = self.levels[l].clone();
+                self.compact_files(l, all, l + 1)?;
+            }
+        }
+        let last = self.levels.iter().rposition(|l| !l.is_empty()).unwrap();
+        let all = self.levels[last].clone();
+        self.compact_files(last, all, last)
+    }
+    /// Structural invariants: levels 1.. hold sorted, disjoint files; every referenced file exists with a loaded index.
+    pub fn check(&self) -> Result<(), String> {
+        for (l, files) in self.levels.iter().enumerate() {
+            for f in files {
+                if f.smallest > f.largest {
+                    return Err(format!("file {} has an inverted range", f.id));
+                }
+                if !self.tables.contains_key(&f.id) {
+                    return Err(format!("file {} has no loaded index", f.id));
+                }
+                if self.fs.size(&sst_name(f.id)) as u64 != f.size {
+                    return Err(format!("file {} size mismatch", f.id));
+                }
+            }
+            if l >= 1 {
+                for w in files.windows(2) {
+                    if w[0].largest >= w[1].smallest {
+                        return Err(format!(
+                            "level {l}: files {} and {} overlap",
+                            w[0].id, w[1].id
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    pub fn files(&self) -> usize {
+        self.levels.iter().map(|l| l.len()).sum()
+    }
+    pub fn disk_bytes(&self) -> u64 {
+        self.levels.iter().flatten().map(|f| f.size).sum()
+    }
+}
+
+fn enc_batch(b: &[(Vec<u8>, Option<Vec<u8>>)], o: &mut Vec<u8>) {
+    for (k, v) in b {
+        put_varint(k.len() as u64, o);
+        o.extend_from_slice(k);
+        match v {
+            Some(v) => {
+                o.push(1);
+                put_varint(v.len() as u64, o);
+                o.extend_from_slice(v);
+            }
+            None => o.push(0),
+        }
+    }
+}
+fn dec_batch(b: &[u8]) -> Vec<(Vec<u8>, Option<Vec<u8>>)> {
+    let (mut p, mut out) = (0, vec![]);
+    while p < b.len() {
+        let kl = get_varint(b, &mut p) as usize;
+        let k = b[p..p + kl].to_vec();
+        p += kl;
+        let kind = b[p];
+        p += 1;
+        let v = if kind == 1 {
+            let vl = get_varint(b, &mut p) as usize;
+            let v = b[p..p + vl].to_vec();
+            p += vl;
+            Some(v)
+        } else {
+            None
+        };
+        out.push((k, v));
+    }
+    out
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>Three things were measured. First, 500 crash scenarios, two power failures each, with small files so that flushes and compactions happen often. The state after recovery must equal the state after the first <em>k</em> submitted batches for some <em>k</em> at least as large as the number of batches acknowledged by a synced write; batches the crash lost must be a suffix.</p>
+
+```text title="crash recovery, Bloom filters, snapshots and garbage collection"
+.500 scenarios x 2 crashes: 993 power failures during writes, 959 after at least one flush or compaction had completed (10155 flushes and 9228 compactions in all), 0 recoveries found an empty database, 412 lost unacknowledged batches
+bloom 10 bits per key: false positive rate 0.82%
+bloom 5 bits per key: false positive rate 9.16%
+bloom 2 bits per key: false positive rate 39.41%
+versions stored with the snapshot held: 60; after releasing it and compacting everything: 20 (20 live keys)
+```
+
+<ul> <li><strong>All 1 000 recoveries were a committed prefix containing every acknowledged batch.</strong> 993 of the 1 000 incarnations ended in a power failure during a write (the other seven ran out of work first); 959 of those had already completed a flush or compaction, and in 412 recoveries one or more unacknowledged batches were lost, as allowed.</li> <li><strong>The Bloom filters hit their theory</strong>: 0.82% false positives at 10 bits per key (theory 0.84%), 9.2% at 5 (9.2%), 39% at 2 (39%); there are no false negatives.</li> <li><strong>Snapshots hold garbage</strong>: with a snapshot taken before 4 overwrites of 30 keys and 10 deletions, 60 versions remain (30 old, 20 live, 10 deletion markers); once the snapshot is released, one full compaction leaves exactly the 20 live versions.</li> </ul>
+
+<p>The second measurement loads 1 000 000 keys (16 bytes, 100-byte values) in random order, overwrites 1 000 000 random keys, and probes 50 000 present and 50 000 absent keys, with a 4 MB memtable, 2 MB files and a 4 MB first level:</p>
+
+```text title="write, read and space amplification on 1 000 000 keys"
+1000000 keys of 16 bytes with 100-byte values, loaded in random order, then 1000000 random overwrites; memtable 4 MB, files 2 MB, level 1 = 4 MB
+ ratio    bloom   load s    WA load   WA +over  levels  space amp        get hit       get miss
+    10  10 bits      4.8       10.1       10.7       4      1.49x  8327ns 3.49t 1.02b   760ns 3.92t 0.03b
+     4  10 bits      5.0       10.6       10.8       5      1.60x  8430ns 3.83t 1.02b   924ns 4.47t 0.04b
+    10      off      4.5       10.0       10.6       4      1.48x 27725ns 3.52t 3.52b 30713ns 3.94t 3.94b
+(t = tables probed per get, b = data blocks read per get)
+```
+
+<ul> <li><strong>Write amplification is about 10</strong>: every byte the user writes is written about ten times in all (log, flush, and compaction through four or five levels). It did not move with the size ratio (10.1 against 10.6 for the load) in this range; the depth did (4 against 5 levels).</li> <li><strong>Space amplification is 1.5×</strong> after a million overwrites: stale versions wait for compaction.</li> <li><strong>Bloom filters cut a miss from 3.94 block reads to 0.03</strong>: <strong>760 ns against 30.7 µs, 40× faster</strong>. A hit reads one block (1.02 per get) with the filters and 3.5 without, because it also has to look into tables that do not hold the key.</li> <li><strong>A hit probes 3.5 tables</strong> (level-0 tables that cover the key plus one per level); only the filter keeps that to one block. Times are CPU time on an in-memory simulated disk, about 8 µs per block read (copy, checksum, scan); the counts are what a real disk would charge for.</li> </ul>
+
+<aside data-call="note"><b>The bug that the crash test found</b><p>The first run failed at seed 6, round 1: <code>recovery failed: Corrupt("sst-000080: too short")</code>. After a crash the manifest ended in a torn record. Recovery ignored it, correctly, but then <strong>appended new edits after the torn bytes</strong>. The next recovery stopped reading at the torn record and never saw the later edits, so it referenced a file that a later (unseen) edit had replaced, and the file had been deleted. The fix is the rewrite at open: after reading the valid prefix, write the whole state as one record to a new file, sync it, and rename it over the manifest. The mutant that removes the rewrite is killed by the same test. A log that can end torn must never be appended to without first cutting off the tail.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Errors as a type</strong>: every file-system call returns <code>R&lt;T&gt; = Result&lt;T, KvError&gt;</code>; <code>Crashed</code> propagates with <code>?</code> from the deepest write to the caller, which is how a power failure unwinds a flush in the middle of a compaction. A test drops the <code>Db</code> and reopens from the <code>SimFs</code>, exactly what a restart would see.</li> <li><strong><code>SimFs</code> is the oracle for durability</strong>: files are <code>Vec&lt;u8&gt;</code> with a <code>synced</code> mark; at the crash each file keeps <code>synced + rand(0..=pending)</code> bytes. The same trick as the meta-page test of <a href="/cookbook/p/embedded-engines">S10</a>, now with a log, a manifest and many files.</li> <li><strong>Ordered keys with a reversed sequence</strong>: the memtable is a <code>BTreeMap&lt;(Vec&lt;u8&gt;, u64), Option&lt;Vec&lt;u8&gt;&gt;&gt;</code> keyed by <code>(user key, u64::MAX − seq)</code>, so the newest version of a key sorts first and a snapshot read is one <code>range</code> seek, as in <a href="/cookbook/p/transactions-on-the-key-space">M2</a>.</li> <li><strong><code>Option&lt;Vec&lt;u8&gt;&gt;</code> for tombstones</strong>, <code>Entry = (key, seq, Option&lt;value&gt;)</code> for tables; <code>lookup_in_block</code> scans a block's bytes for a point read without allocating its entries.</li> <li><strong>A <code>const fn</code>-built CRC table</strong> (<code>const T: [u32; 256] = { … }</code>) needs no crate and no lazy initialization; a known-answer test (<code>crc32(b"123456789") == 0xCBF43926</code>) pins it.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Against a map</strong>: 40 seeds × 400 steps of batched writes (with and without sync), gets, scans, snapshots, clean restarts and forced flush-and-compact on tiny files (memtable 600 bytes, 128-byte blocks, ratio 3) that reach level 2 and beyond; after every step the structural check passes (levels 1 and up are sorted and disjoint, files exist with their recorded sizes), every live snapshot's full scan and a point read equal the map as it was when the snapshot was taken, and after a restart the contents equal the map.</li> <li><strong>Crashes</strong>: 500 scenarios × 2 incarnations. Each opens the database (recovering whatever the last crash left), arms a power failure after a random number of file-system operations, and writes batches until it fires; the unsynced tail of every file is torn at a random byte. The recovered contents must equal the first <em>k</em> batches for some <em>k</em> ≥ the number acknowledged by synced writes; the next incarnation continues from that state.</li> <li><strong>Directed</strong>: a torn log tail loses exactly the last record; a flipped byte inside the fourth of six log records ends replay after the third; a flipped byte in a data block is reported as a checksum failure on read, and in the footer on open; files the manifest does not mention are deleted on open; <code>crc32("123456789")</code> has its standard value; Bloom filters have no false negatives and their false-positive rates fall in the expected bands; snapshots keep exactly the old versions they can see and a full compaction after the release leaves one version per live key.</li> <li><strong>Mutants run against these tests</strong>: a wrong checksum polynomial; a Bloom filter accepting on any probe; blocks splitting a key's versions; log records without checksums; the manifest rewrite removed; the current log deleted on recovery; writes acknowledged without <code>fsync</code>; snapshot reads of the memtable ignoring the sequence; level 0 searched oldest first; the per-level file search off by one; scans ignoring the snapshot; garbage collection forgetting snapshots; deletion markers dropped above older data; compaction missing an overlapping file; a key's versions split across output files; the newest version dropped. <strong>All 16 were killed</strong>; the first run left one alive (snapshot point reads served from the memtable), which a point-read check at each snapshot now kills.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>LevelDB</strong> (Google, C++) introduced this structure: log, memtable, immutable tables, manifest, leveled compaction, sequence numbers for snapshots. <strong>RocksDB</strong> (Meta) adds column families, universal and FIFO compaction, rate limiting, a block cache, prefix Bloom filters, and parallel compaction; it is the engine under TiKV, CockroachDB's earlier storage layer, MyRocks and many streaming systems.</li> <li><strong>Pebble</strong> (Go, CockroachDB) is a RocksDB-compatible design with a stricter test strategy: metamorphic tests and fault-injecting file systems like the one here. <strong>WiredTiger</strong> has an LSM option next to its B-tree. <strong>Cassandra</strong>, <strong>ScyllaDB</strong>, <strong>HBase</strong> and <strong>Bigtable</strong> use tiered or leveled variants with a commit log and SSTables.</li> <li><strong>Fjall</strong> (an LSM tree) and <strong>redb</strong> (a copy-on-write B-tree, see <a href="/cookbook/p/embedded-engines">S10</a>) are embedded engines written in Rust.</li> <li><strong>Beyond leveled</strong>: size-tiered compaction (fewer rewrites, more space and more tables per read), Monkey/Dostoevsky tuning of filter bits per level, key-value separation (WiscKey, Titan, BlobDB) to avoid rewriting large values, and learned indexes inside tables.</li> <li><strong>Fsync and the file system</strong>: production engines call <code>fdatasync</code>, sync the directory after creating or renaming a file, use <code>O_DIRECT</code> for table reads and the <code>io_uring</code> interface for parallel I/O (<a href="/cookbook/p/disk-i-o-fsync-the-page-cache-and-queues">I/O</a>).</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Never append behind a possibly torn tail.</strong> Cut the log to its valid prefix, or start a new file, before writing again. This section's bug.</li> <li><strong><code>fsync</code> the file, then the directory.</strong> Creating a file, renaming it or deleting it is only durable once the directory is synced; the simulated file system makes those operations durable at once, which a real one does not.</li> <li><strong>Write stalls</strong>: if flushes or compactions fall behind, the memtable fills and writes must slow or stop. Real engines throttle writers when level 0 grows; this one compacts synchronously.</li> <li><strong>Tombstones live a long time</strong>: a deletion marker has to travel to the bottom level before it can be dropped, and range deletes make that worse. A queue-like workload can fill a level with markers.</li> <li><strong>Compaction fights the foreground for I/O</strong>: rate-limit it, schedule it away from peaks, and watch the backlog.</li> <li><strong>Bloom filters are per table, per key</strong>: they do not help range scans; prefix filters or fences do.</li> <li><strong>Space amplification can double briefly</strong> during a compaction (inputs and outputs coexist) and larger when a long snapshot pins old versions; size the disk for the peak, not the average.</li> <li><strong>Opening a database is recovery</strong>: the time to replay the log and load every index is a start-up cost that grows with the log size; flush on shutdown, and cap the log.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "implementation notes"
+url = "https://github.com/google/leveldb/blob/main/doc/impl.md"

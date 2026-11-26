@@ -1,0 +1,68 @@
+title = "Regex"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Data, text and encoding crates"
+chapter_order = 1
+order = 117
+kind = "recipe"
+lede = "Captures, replacement, sets, builders, bytes, and the linear-time guarantee"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/regex_text_processing.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>log parsing</li><li>templating</li><li>tokenisers</li><li>input filters over untrusted text</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>ripgrep's engine is built on this crate's internals</li><li>log pipelines</li><li>routing rules</li><li>secret scanners (RegexSet)</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>Regex::new</code></li><li><code>Regex::is_match</code></li><li><code>Regex::find</code></li><li><code>Regex::find_iter</code></li><li><code>Regex::find_at</code></li><li><code>Regex::captures</code></li><li><code>Regex::captures_iter</code></li><li><code>Regex::capture_names</code></li><li><code>Regex::captures_len</code></li><li><code>Captures::get</code></li><li><code>Captures::name</code></li><li><code>Captures::extract</code></li><li><code>Captures::expand</code></li><li><code>Match::start</code></li><li><code>Match::end</code></li><li><code>Match::range</code></li><li><code>Match::as_str</code></li><li><code>Regex::replace</code></li><li><code>Regex::replace_all</code></li><li><code>Regex::replacen</code></li><li><code>regex::NoExpand</code></li><li><code>Regex::split</code></li><li><code>Regex::splitn</code></li><li><code>regex::escape</code></li><li><code>regex::RegexBuilder</code></li><li><code>RegexBuilder::case_insensitive</code></li><li><code>RegexBuilder::multi_line</code></li><li><code>RegexBuilder::size_limit</code></li><li><code>regex::RegexSet::new</code></li><li><code>RegexSet::matches</code></li><li><code>SetMatches::matched</code></li><li><code>regex::bytes::Regex</code></li><li><code>regex::Error</code></li><li><code>Regex::{is_match_at, shortest_match, capture_locations, captures_read, static_captures_len}</code></li><li><code>CaptureLocations::get</code></li><li><code>regex::Replacer</code></li><li><code>Replacer::{replace_append, no_expansion}</code></li><li><code>RegexBuilder::{crlf, swap_greed, ignore_whitespace, unicode, line_terminator, nest_limit, dot_matches_new_line}</code></li><li><code>regex::RegexSetBuilder</code></li><li><code>RegexSet::{patterns, len}</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/regex/1/regex/" target="_blank" rel="noreferrer">https://docs.rs/regex/1/regex/</a></li></ul>
+"""
+
+[[sections]]
+heading = "Crates"
+body = """
+regex = "1"
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Yes/no</td><td><code>is_match (cheapest)</code></td></tr><tr><td>Where</td><td><code>find / find_iter ; pieces -&gt; captures / captures_iter</code></td></tr><tr><td>Fixed number of groups</td><td><code>captures_iter(..).map(|c| c.extract())</code></td></tr><tr><td>Rewrite</td><td><code>replace_all with "${name}" or a closure ; literal replacement -&gt; NoExpand</code></td></tr><tr><td>User-supplied literal inside regex</td><td><code>regex::escape</code></td></tr><tr><td>Which of N patterns match</td><td><code>RegexSet (one pass; no positions)</code></td></tr><tr><td>Non-UTF-8 input</td><td><code>regex::bytes::Regex</code></td></tr><tr><td>Untrusted PATTERN</td><td><code>RegexBuilder::size_limit</code></td></tr><tr><td>Compile once</td><td><code>static RE: LazyLock&lt;Regex&gt;</code></td></tr><tr><td>Resume a search at an offset</td><td><code>find_at / is_match_at (keeps context) ; &amp;text[i..] changes what &#94; and &#92;b see</code></td></tr><tr><td>Captures in a hot loop</td><td><code>capture_locations + captures_read (reuses the slots)</code></td></tr><tr><td>Many fixed words</td><td><code>one alternation of escaped words, LONGEST FIRST GUARANTEE AND ITS PRICE. Search time is O(pattern size * text length) for any single search: no catastrophic backtracking. The price: no look-around and no backreferences. (Iterating over ALL matches is a repeated search and has a weaker bound; the docs spell this out under "Untrusted input".)</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/regex/latest/regex/#syntax" target="_blank" rel="noreferrer">https://docs.rs/regex/latest/regex/#syntax</a></li><li><a href="https://docs.rs/regex/latest/regex/#untrusted-input" target="_blank" rel="noreferrer">https://docs.rs/regex/latest/regex/#untrusted-input</a></li><li><a href="https://swtch.com/~rsc/regexp/regexp1.html" target="_blank" rel="noreferrer">https://swtch.com/~rsc/regexp/regexp1.html</a></li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/regex/1/regex"
+url = "https://docs.rs/regex/1/regex/"
+
+[[sources]]
+title = "docs.rs/regex/latest/regex/#syntax"
+url = "https://docs.rs/regex/latest/regex/#syntax"
+
+[[sources]]
+title = "docs.rs/regex/latest/regex/#untrusted-input"
+url = "https://docs.rs/regex/latest/regex/#untrusted-input"
+
+[[sources]]
+title = "swtch.com/~rsc/regexp/regexp1.html"
+url = "https://swtch.com/~rsc/regexp/regexp1.html"

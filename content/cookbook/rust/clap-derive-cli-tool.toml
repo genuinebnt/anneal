@@ -1,0 +1,72 @@
+title = "Clap derive"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Application crates"
+chapter_order = 2
+order = 126
+kind = "recipe"
+lede = "Subcommands, value enums, constraints, env fallback, custom parsers, completions, testing"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/clap_derive_cli_tool.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any command-line tool that needs help text, validation and shell completion.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+cargo-style subcommand tools, ops utilities that read flags with environment fallbacks.
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>clap::Parser::try_parse_from</code></li><li><code>clap::Parser::parse</code></li><li><code>clap::Subcommand</code></li><li><code>clap::Args</code></li><li><code>clap::ValueEnum</code></li><li><code>clap::ArgAction::{Count, Append}</code></li><li><code>#[arg(short, long)]</code></li><li><code>#[arg(env)]</code></li><li><code>#[arg(default_value_t)]</code></li><li><code>#[arg(value_enum)]</code></li><li><code>#[arg(value_parser)]</code></li><li><code>clap::value_parser!</code></li><li><code>#[arg(value_delimiter)]</code></li><li><code>#[arg(num_args)]</code></li><li><code>#[arg(conflicts_with)]</code></li><li><code>#[arg(requires)]</code></li><li><code>#[arg(global)]</code></li><li><code>#[arg(last)]</code></li><li><code>#[command(flatten)]</code></li><li><code>#[command(subcommand)]</code></li><li><code>#[group(required, multiple)]</code></li><li><code>clap::CommandFactory::command</code></li><li><code>Command::render_help</code></li><li><code>Command::render_long_help</code></li><li><code>Command::debug_assert</code></li><li><code>clap::Error::kind</code></li><li><code>clap::Error::exit_code</code></li><li><code>clap::error::ErrorKind</code></li><li><code>ArgMatches::value_source</code></li><li><code>clap::FromArgMatches::from_arg_matches</code></li><li><code>clap_complete::generate</code></li><li><code>clap_complete::Shell</code></li><li><code>#[arg(hide_env_values)]</code></li><li><code>#[arg(required_unless_present)]</code></li><li><code>#[arg(default_value_if)]</code></li><li><code>#[arg(overrides_with)]</code></li><li><code>#[arg(allow_negative_numbers)]</code></li><li><code>#[arg(allow_hyphen_values, trailing_var_arg)]</code></li><li><code>#[command(external_subcommand)]</code></li><li><code>clap::builder::PossibleValuesParser</code></li><li><code>clap::builder::FalseyValueParser</code></li><li><code>clap::Parser::{parse_from, try_update_from}</code></li><li><code>clap::parser::ValueSource</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/clap/4/clap/" target="_blank" rel="noreferrer">https://docs.rs/clap/4/clap/</a></li><li><a href="https://docs.rs/clap/4/clap/_derive/index.html" target="_blank" rel="noreferrer">https://docs.rs/clap/4/clap/_derive/index.html</a></li><li><a href="https://docs.rs/clap_complete/4/" target="_blank" rel="noreferrer">https://docs.rs/clap_complete/4/</a></li></ul>
+"""
+
+[[sections]]
+heading = "Crates"
+body = """
+clap = "4" (features derive, env), clap_complete = "4"
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Flag</td><td><code>bool field              repeatable -vvv   -&gt; u8 with action = ArgAction::Count</code></td></tr><tr><td>Required value</td><td><code>T                       optional          -&gt; Option&lt;T&gt;       list -&gt; Vec&lt;T&gt;</code></td></tr><tr><td>Closed set of words</td><td><code>#[derive(ValueEnum)]    number in a range -&gt; value_parser!(u16).range(1..)</code></td></tr><tr><td>Own syntax (10s, 5m)</td><td><code>value_parser = my_fn  (fn(&amp;str) -&gt; Result&lt;T, String&gt;)</code></td></tr><tr><td>Exactly one of A or B</td><td><code>an ArgGroup with required = true</code></td></tr><tr><td>Test the CLI</td><td><code>Cli::try_parse_from (never parse(): it EXITS the process on error) EXIT CODES: clap uses 2 for usage errors and 0 for --help and --version. Your own failures should use other codes. ENVIRONMENT: env = "NAME" gives the precedence flag &gt; environment &gt; default. Setting a variable in a running process is unsafe in edition 2024 (other threads may be reading the environment), so section environment_fallback instead runs THIS executable again with Command::env: the child gets its own environment before it starts. The same trick shows the real process exit codes of Cli::parse. The in-process asserts assume CB_FERRY_RECIPE_CONFIG is unset in the parent (the name is unique to this recipe).</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/clap/4/clap/_derive/_tutorial/index.html" target="_blank" rel="noreferrer">https://docs.rs/clap/4/clap/_derive/_tutorial/index.html</a></li><li><a href="https://clig.dev/" target="_blank" rel="noreferrer">https://clig.dev/</a></li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/clap/4/clap"
+url = "https://docs.rs/clap/4/clap/"
+
+[[sources]]
+title = "docs.rs/clap/4/clap/_derive/index.html"
+url = "https://docs.rs/clap/4/clap/_derive/index.html"
+
+[[sources]]
+title = "docs.rs/clap_complete/4"
+url = "https://docs.rs/clap_complete/4/"
+
+[[sources]]
+title = "docs.rs/clap/4/clap/_derive/_tutorial/index.html"
+url = "https://docs.rs/clap/4/clap/_derive/_tutorial/index.html"
+
+[[sources]]
+title = "clig.dev"
+url = "https://clig.dev/"

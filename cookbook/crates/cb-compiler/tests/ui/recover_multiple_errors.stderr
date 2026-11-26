@@ -1,0 +1,55 @@
+warning[W0502]: function `a` is never used
+ --> recover_multiple_errors.peb:1:4
+  |
+1 | fn a( {
+  |    ^ not reachable from `main`
+  |
+  = help: if this is intentional, prefix it with an underscore
+
+error[E0106]: unclosed delimiter `(`
+ --> recover_multiple_errors.peb:1:5
+  |
+1 | fn a( {
+  |     ^ - expected `)` before this
+  |     |
+  |     unclosed delimiter
+
+warning[W0508]: struct `S` is never used
+ --> recover_multiple_errors.peb:3:8
+  |
+3 | struct S { x: int, y }
+  |        ^ never mentioned
+
+error[E0101]: expected `:`, found `}`
+ --> recover_multiple_errors.peb:3:22
+  |
+3 | struct S { x: int, y }
+  |                      ^ expected `:`
+
+error[E0102]: expected an expression, found `;`
+ --> recover_multiple_errors.peb:5:13
+  |
+5 |     let x = ;
+  |             ^ expected an expression
+
+error[E0102]: expected an expression, found `;`
+ --> recover_multiple_errors.peb:6:16
+  |
+6 |     let y = 1 +;
+  |                ^ expected an expression
+
+error[E0101]: expected identifier, found `{`
+ --> recover_multiple_errors.peb:9:6
+  |
+9 | enum {
+  |      ^ expected identifier
+
+error[E0106]: unclosed delimiter `{`
+  --> recover_multiple_errors.peb:9:6
+   |
+ 9 | enum {
+   |      ^ unclosed delimiter
+10 | 
+   | - expected `}` before this
+
+error: aborting due to 6 previous errors; 2 warnings emitted

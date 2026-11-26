@@ -1,0 +1,536 @@
+title = "Buffer pool manager"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 319
+kind = "guide"
+lede = "BusTub P1 Task 3 · page table, pins, dirty bits, RAII page guards, the latch protocol, and the races it prevents"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>Everything above the buffer pool asks for pages by id and holds them through <strong>page guards</strong>. A guard is an RAII object that pins the page, holds its latch, and releases both when dropped. Getting this layer right is mostly about one thing: <strong>which latch is held while waiting for what</strong>.</p>
+"""
+
+[[sections]]
+heading = "API"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>BusTub</th> <th>Rust</th> <th>Contract</th> </tr> </thead> <tbody> <tr> <td><code>NewPage() -&gt; page_id_t</code></td> <td><code>new_page(&amp;self) -&gt; PageId</code></td> <td>allocate an id; the page isn't loaded until first access, and reads back as zeros</td> </tr> <tr> <td><code>ReadPage(pid)</code> / <code>CheckedReadPage(pid)</code></td> <td><code>read_page(&amp;self, pid) -&gt; Result&lt;ReadPageGuard&lt;'_&gt;&gt;</code></td> <td>pin + shared latch; <code>Err(NoFreeFrame)</code> if every frame is pinned</td> </tr> <tr> <td><code>WritePage(pid)</code> / <code>CheckedWritePage(pid)</code></td> <td><code>write_page(&amp;self, pid) -&gt; Result&lt;WritePageGuard&lt;'_&gt;&gt;</code></td> <td>pin + exclusive latch; <code>data_mut()</code> marks the page dirty</td> </tr> <tr> <td><code>guard.Drop()</code> / destructor</td> <td><code>drop(guard)</code></td> <td>release the latch, then unpin; at pin 0 the frame becomes evictable</td> </tr> <tr> <td><code>FlushPage(pid)</code></td> <td><code>flush_page(&amp;self, pid) -&gt; Result&lt;bool&gt;</code></td> <td>write if dirty; <code>false</code> if the page isn't resident</td> </tr> <tr> <td><code>FlushAllPages()</code></td> <td><code>flush_all_pages(&amp;self)</code></td> <td>every resident dirty page</td> </tr> <tr> <td><code>DeletePage(pid) -&gt; bool</code></td> <td><code>delete_page(&amp;self, pid) -&gt; bool</code></td> <td><code>false</code> if pinned; otherwise drop the frame (no write-back) and deallocate on disk</td> </tr> <tr> <td><code>GetPinCount(pid)</code></td> <td><code>get_pin_count(&amp;self, pid) -&gt; Option&lt;u32&gt;</code></td> <td><code>None</code> if not resident</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Guards are where Rust helps most"
+body = """
+<p>In C++, BusTub's guard carries five <code>shared_ptr</code>s, has a default-constructed "invalid" state, and needs hand-written move constructors, all so that a moved-from guard doesn't unpin twice. In Rust:</p>
+
+```rust title="the whole guard"
+pub struct ReadPageGuard<'a, R: Replacer> {
+    bpm: &'a BufferPoolManager<R>,
+    fid: FrameId,
+    page: PageId,
+    data: Option<RwLockReadGuard<'a, PageBuf>>,   // Option only to control drop order
+}
+
+impl<R: Replacer> Drop for ReadPageGuard<'_, R> {
+    fn drop(&mut self) {
+        self.data.take();          // 1. release the page latch
+        self.bpm.unpin(self.fid);  // 2. then unpin
+    }
+}
+```
+
+<ul> <li><strong>Moves are free and safe.</strong> A moved-from guard no longer exists, so <code>Drop</code> runs exactly once.</li> <li><strong>The <code>'a</code> lifetime ties every guard to the pool.</strong> Dropping the pool while a guard is alive doesn't compile. A B+Tree's latch-crabbing context is a plain <code>Vec&lt;WritePageGuard&lt;'a&gt;&gt;</code>.</li> <li><strong><code>RwLockReadGuard</code> is <code>!Send</code>.</strong> A guard can't migrate to another thread and be released there, which some OS lock implementations forbid anyway.</li> <li><strong>There's no invalid state.</strong> No default constructor exists, so no "use of uninitialized guard is UB" comment is needed.</li> </ul>
+"""
+
+[[sections]]
+heading = "The latch protocol"
+body = """
+<p>These rules are the design. Each one prevents a specific deadlock or race:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>#</th> <th>Rule</th> <th>Prevents</th> </tr> </thead> <tbody> <tr> <td>1</td> <td>One <strong>pool latch</strong> guards the page table, the free list, the replacer, and pin 0 ↔ 1 transitions</td> <td>torn metadata; evicting a page that's being pinned</td> </tr> <tr> <td>2</td> <td><strong>Never wait on a page latch while holding the pool latch</strong></td> <td>deadlock: thread A holds page P's latch and wants the pool latch to fetch Q, while thread B holds the pool latch and waits for P (BusTub's <code>DeadlockTest</code>)</td> </tr> <tr> <td>3</td> <td>Anyone holding a page latch holds a pin; so <strong>a frame with pin 0 is unlatched</strong></td> <td>eviction blocking on a latch; <code>try_write</code> on a victim can't fail</td> </tr> <tr> <td>4</td> <td>Guards release the <strong>latch before the pin</strong></td> <td>together with rule 3: a latched frame is never an eviction candidate</td> </tr> <tr> <td>5</td> <td>After acquiring a page latch, <strong>re-check the frame still holds the requested page</strong></td> <td>using a frame that was repurposed after a failed load</td> </tr> <tr> <td>6</td> <td>A dirty victim's <strong>write-back is enqueued before the pool latch is released</strong></td> <td>lost updates: another thread re-reads the evicted page from disk <em>before</em> its write-back lands</td> </tr> </tbody> </table></div>
+
+<figure class="cb-g-fig"><svg viewBox="0 0 820 250" role="img" aria-label="Fetch on miss"> <g font-size="12"> <text x="10" y="18" class="cb-g-mut">read_page(P) on a miss — what happens under which latch</text> <rect x="10" y="30" width="390" height="148" rx="4" class="cb-g-boxa"></rect><text x="22" y="50">holding the POOL latch</text> <text x="22" y="74">1. P not in page table → take free frame, else replacer.evict()</text> <text x="22" y="94">2. unmap victim page V; try_write(frame) — can't block (rule 3)</text> <text x="22" y="114">3. map P → frame, pin = 1, replacer: not evictable</text> <text x="22" y="134">4. if V dirty: ENQUEUE write(V)   (rule 6)</text> <text x="22" y="154">5. ENQUEUE read(P)</text> <rect x="420" y="30" width="390" height="148" rx="4" class="cb-g-box"></rect><text x="432" y="50">holding only the FRAME latch (write)</text> <text x="432" y="74">6. wait for write(V), then read(P)</text> <text x="432" y="94">7. copy bytes into the frame</text> <text x="432" y="114">8. on I/O error: unmap P, unpin, return Err</text> <text x="432" y="134">9. downgrade: drop write latch, take read latch</text> <text x="432" y="154">10. re-check frame.page == P (rule 5)</text> <text x="10" y="206">A second thread asking for P meanwhile: finds P mapped → pins it → blocks on the frame latch until step 9.</text> <text x="10" y="226">A thread asking for V meanwhile: misses → loads V into another frame → its read(V) queues behind write(V) on V's scheduler shard.</text> </g></svg></figure>
+"""
+
+[[sections]]
+heading = "The unpin race"
+body = """
+<p>Unpinning at pin 0 has to tell the replacer the frame is evictable. Doing that with an atomic decrement alone is a <strong>check-then-act</strong> race: between your <code>fetch_sub</code> reaching 0 and your <code>set_evictable(true)</code>, another thread can pin the frame. You would then mark a pinned frame evictable, and the next eviction steals it. The fix is to re-check under the pool latch:</p>
+
+```rust title="unpin: fast path lock-free, slow path re-checks"
+fn unpin(&self, fid: FrameId) {
+    let frame = self.frame(fid);
+    if frame.pin.fetch_sub(1, AcqRel) == 1 {
+        let mut inner = self.inner.lock().unwrap();
+        // Someone may have re-pinned (or even evicted and reloaded) since our decrement.
+        if frame.pin.load(Acquire) == 0
+            && inner.table.get(&PageId(frame.page.load(Acquire))) == Some(&fid)
+        {
+            inner.replacer.set_evictable(fid, true);
+        }
+    }
+}
+```
+
+:::deeper Reference BufferPoolManager: page guards, the six rules, error unwinding
+```rust title="src/buffer/buffer_pool_manager.rs"
+//! Buffer pool manager with RAII page guards.
+//!
+//! Latch protocol (the whole design in five lines):
+//!  1. `inner` (the pool latch) guards page table, free list, replacer, and pin 0<->1 transitions.
+//!  2. Never wait on a page latch while holding `inner`.
+//!  3. A thread holding a page latch always holds a pin, so frames with pin == 0 are unlatched
+//!     and eviction can take their latch without waiting.
+//!  4. Guards release the page latch *before* unpinning.
+//!  5. After acquiring a page latch, re-check that the frame still holds the requested page.
+//!  6. A dirty victim's write-back is *enqueued* before the pool latch is released, so a
+//!     concurrent re-read of that page (same scheduler shard) is ordered after it.
+use std::collections::HashMap;
+use std::io;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::{AcqRel, Acquire, Relaxed, Release}};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+use crate::common::config::{FrameId, PageId, PAGE_SIZE};
+use crate::storage::disk::disk_manager::{DiskManager, PageBuf};
+use crate::buffer::replacer::Replacer;
+use crate::storage::disk::disk_scheduler::DiskScheduler;
+
+#[derive(Debug)]
+pub enum BpmError { NoFreeFrame, Io(io::Error) }
+impl From<io::Error> for BpmError { fn from(e: io::Error) -> Self { BpmError::Io(e) } }
+pub type Result<T> = std::result::Result<T, BpmError>;
+
+struct Frame {
+    data: RwLock<PageBuf>,
+    page: AtomicU32,          // PageId currently held (INVALID when free); written under `inner`
+    pin: AtomicU32,
+    dirty: AtomicBool,
+}
+
+struct Inner<R> { table: HashMap<PageId, FrameId>, free: Vec<FrameId>, replacer: R }
+
+pub struct BufferPoolManager<R: Replacer> {
+    frames: Box<[Frame]>,
+    inner: Mutex<Inner<R>>,
+    sched: DiskScheduler,
+}
+
+pub struct ReadPageGuard<'a, R: Replacer> { bpm: &'a BufferPoolManager<R>, fid: FrameId, page: PageId, data: Option<RwLockReadGuard<'a, PageBuf>> }
+pub struct WritePageGuard<'a, R: Replacer> { bpm: &'a BufferPoolManager<R>, fid: FrameId, page: PageId, data: Option<RwLockWriteGuard<'a, PageBuf>> }
+
+impl<R: Replacer> BufferPoolManager<R> {
+    pub fn new(num_frames: usize, disk: Arc<dyn DiskManager>, replacer: R, io_workers: usize) -> Self {
+        let frames = (0..num_frames).map(|_| Frame {
+            data: RwLock::new([0u8; PAGE_SIZE]),
+            page: AtomicU32::new(PageId::INVALID.0),
+            pin: AtomicU32::new(0),
+            dirty: AtomicBool::new(false),
+        }).collect();
+        BufferPoolManager {
+            frames,
+            inner: Mutex::new(Inner { table: HashMap::with_capacity(num_frames), free: (0..num_frames as u32).rev().map(FrameId).collect(), replacer }),
+            sched: DiskScheduler::new(disk, io_workers),
+        }
+    }
+
+    pub fn size(&self) -> usize { self.frames.len() }
+    fn frame(&self, f: FrameId) -> &Frame { &self.frames[f.0 as usize] }
+
+    /// Allocate a page id on disk. The page is not brought into memory until first access
+    /// (it reads back as zeros).
+    pub fn new_page(&self) -> PageId { self.sched.allocate() }
+
+    pub fn get_pin_count(&self, page: PageId) -> Option<u32> {
+        let inner = self.inner.lock().unwrap();
+        inner.table.get(&page).map(|&f| self.frame(f).pin.load(Acquire))
+    }
+
+    pub fn read_page(&self, page: PageId) -> Result<ReadPageGuard<'_, R>> {
+        loop {
+            let (fid, loaded_by_us) = self.pin(page)?;
+            if let Some(w) = loaded_by_us {
+                drop(w);                                   // std RwLock can't downgrade; re-acquire shared
+            }
+            let data = self.frame(fid).data.read().unwrap();
+            if self.frame(fid).page.load(Acquire) == page.0 {
+                return Ok(ReadPageGuard { bpm: self, fid, page, data: Some(data) });
+            }
+            drop(data);                                    // frame was repurposed after a failed load: retry
+            self.unpin(fid);
+        }
+    }
+
+    pub fn write_page(&self, page: PageId) -> Result<WritePageGuard<'_, R>> {
+        loop {
+            let (fid, loaded_by_us) = self.pin(page)?;
+            let data = match loaded_by_us { Some(w) => w, None => self.frame(fid).data.write().unwrap() };
+            if self.frame(fid).page.load(Acquire) == page.0 {
+                return Ok(WritePageGuard { bpm: self, fid, page, data: Some(data) });
+            }
+            drop(data);
+            self.unpin(fid);
+        }
+    }
+
+    /// Pin `page` into some frame. If this call had to load it, returns the frame's
+    /// write latch (already holding the loaded bytes) so the caller can use it.
+    fn pin(&self, page: PageId) -> Result<(FrameId, Option<RwLockWriteGuard<'_, PageBuf>>)> {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(&fid) = inner.table.get(&page) {
+            Self::pin_resident(&mut inner, self.frame(fid), fid, page);
+            return Ok((fid, None));
+        }
+        // Miss: take a free frame or evict one.
+        let fid = match inner.free.pop() { Some(f) => f, None => inner.replacer.evict().ok_or(BpmError::NoFreeFrame)? };
+        let frame = self.frame(fid);
+        let old = PageId(frame.page.load(Acquire));
+        if old.is_valid() { inner.table.remove(&old); }
+        // pin == 0 here, so by rule 3 nobody holds this latch: try_write cannot fail.
+        let mut w = frame.data.try_write().expect("unpinned frame is latched: protocol violated");
+        frame.page.store(page.0, Release);
+        frame.pin.store(1, Release);
+        inner.table.insert(page, fid);
+        inner.replacer.record_access(fid, page);
+        inner.replacer.set_evictable(fid, false);
+        let was_dirty = frame.dirty.swap(false, AcqRel);
+        // Rule 6: enqueue the victim's write-back while still holding the pool latch.
+        let write_back = (was_dirty && old.is_valid()).then(|| self.sched.write(old, Box::new(*w)));
+        let read = self.sched.read(page);
+        drop(inner);                                       // rule 2: wait for I/O without the pool latch
+
+        let io = (|| -> io::Result<()> {
+            if let Some(wb) = write_back { wb.wait()?; }
+            let buf = read.wait()?;
+            w.copy_from_slice(&buf[..]);
+            Ok(())
+        })();
+        if let Err(e) = io {
+            // Undo: unmap the page so waiters see a mismatch and retry, then release the frame.
+            let mut inner = self.inner.lock().unwrap();
+            if inner.table.get(&page) == Some(&fid) { inner.table.remove(&page); }
+            frame.page.store(PageId::INVALID.0, Release);
+            drop(w);
+            if frame.pin.fetch_sub(1, AcqRel) == 1 { inner.replacer.set_evictable(fid, true); }
+            return Err(BpmError::Io(e));
+        }
+        Ok((fid, Some(w)))
+    }
+
+    /// Pin a frame that already holds `page`. Caller holds the pool latch.
+    fn pin_resident(inner: &mut Inner<R>, frame: &Frame, fid: FrameId, page: PageId) {
+        frame.pin.fetch_add(1, AcqRel);
+        inner.replacer.record_access(fid, page);
+        inner.replacer.set_evictable(fid, false);
+    }
+
+    fn unpin(&self, fid: FrameId) {
+        let frame = self.frame(fid);
+        if frame.pin.fetch_sub(1, AcqRel) == 1 {
+            // Went to zero. Re-check under the pool latch: someone may have re-pinned in between.
+            let mut inner = self.inner.lock().unwrap();
+            if frame.pin.load(Acquire) == 0 && inner.table.get(&PageId(frame.page.load(Acquire))) == Some(&fid) {
+                inner.replacer.set_evictable(fid, true);
+            }
+        }
+    }
+
+    /// Write a resident page to disk if dirty. Takes the page's read latch.
+    pub fn flush_page(&self, page: PageId) -> Result<bool> {
+        let fid = {
+            let mut inner = self.inner.lock().unwrap();
+            let Some(&f) = inner.table.get(&page) else { return Ok(false) };
+            Self::pin_resident(&mut inner, self.frame(f), f, page);   // pinned: can't be evicted mid-flush
+            f
+        };
+        let res = (|| {
+            let data = self.frame(fid).data.read().unwrap();
+            if self.frame(fid).page.load(Acquire) == page.0 && self.frame(fid).dirty.swap(false, AcqRel) {
+                let buf = Box::new(*data);
+                drop(data);
+                self.sched.write(page, buf).wait()?;
+            }
+            Ok(true)
+        })();
+        self.unpin(fid);
+        res
+    }
+
+    pub fn flush_all_pages(&self) -> Result<()> {
+        let pages: Vec<PageId> = self.inner.lock().unwrap().table.keys().copied().collect();
+        for p in pages { self.flush_page(p)?; }
+        Ok(())
+    }
+
+    /// Remove a page from the pool and deallocate it on disk. Fails (false) if pinned.
+    pub fn delete_page(&self, page: PageId) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(&fid) = inner.table.get(&page) {
+            let frame = self.frame(fid);
+            if frame.pin.load(Acquire) > 0 { return false; }
+            inner.table.remove(&page);
+            inner.replacer.remove(fid);
+            frame.page.store(PageId::INVALID.0, Release);
+            frame.dirty.store(false, Relaxed);
+            inner.free.push(fid);
+        }
+        drop(inner);
+        self.sched.deallocate(page);
+        true
+    }
+}
+
+impl<'a, R: Replacer> ReadPageGuard<'a, R> {
+    pub fn page_id(&self) -> PageId { self.page }
+    pub fn data(&self) -> &PageBuf { self.data.as_ref().unwrap() }
+}
+impl<'a, R: Replacer> WritePageGuard<'a, R> {
+    pub fn page_id(&self) -> PageId { self.page }
+    pub fn data(&self) -> &PageBuf { self.data.as_ref().unwrap() }
+    /// Mutable access marks the page dirty.
+    pub fn data_mut(&mut self) -> &mut PageBuf {
+        self.bpm.frame(self.fid).dirty.store(true, Release);
+        self.data.as_mut().unwrap()
+    }
+}
+impl<'a, R: Replacer> std::ops::Deref for ReadPageGuard<'a, R> { type Target = PageBuf; fn deref(&self) -> &PageBuf { self.data() } }
+
+impl<'a, R: Replacer> Drop for ReadPageGuard<'a, R> {
+    fn drop(&mut self) { self.data.take(); self.bpm.unpin(self.fid); }   // rule 4: latch, then pin
+}
+impl<'a, R: Replacer> Drop for WritePageGuard<'a, R> {
+    fn drop(&mut self) { self.data.take(); self.bpm.unpin(self.fid); }
+}
+
+impl<R: Replacer> Drop for BufferPoolManager<R> {
+    fn drop(&mut self) { let _ = self.flush_all_pages(); }
+}
+```
+:::
+
+<aside data-call="rust"><b><code>Option&lt;Guard&gt;</code> to control drop order</b><p>Struct fields drop in declaration order, but only <em>after</em> your <code>Drop::drop</code> body has run. To release the latch <em>before</em> calling <code>unpin</code> inside <code>drop</code>, the latch guard must be moved out earlier, and <code>Option::take()</code> does exactly that. The alternative, <code>ManuallyDrop&lt;RwLockReadGuard&gt;</code> with <code>ManuallyDrop::drop</code> in the body, avoids the <code>Option</code> check but needs <code>unsafe</code>. Reference: <a href="https://doc.rust-lang.org/reference/destructors.html" target="_blank" rel="noreferrer">Rust Reference: destructors</a>.</p></aside>
+
+<aside data-call="rust"><b>No downgrade in <code>std</code></b><p>After loading a page under the write latch, a reader wants to keep a <em>shared</em> latch without letting a writer slip in. <code>std::sync::RwLock</code> has no downgrade, so the reference drops the write latch and re-acquires in read mode. That's correct because the page is still valid, just not atomic. <code>parking_lot::RwLock</code> offers <code>RwLockWriteGuard::downgrade</code>, plus <code>arc_lock</code> guards (<code>ArcRwLockReadGuard</code>) that own an <code>Arc</code> instead of borrowing, which is useful when guards must be stored in long-lived structs. <code>parking_lot</code> locks are also smaller (1 word) and faster when uncontended. Reference: <a href="https://docs.rs/parking_lot" target="_blank" rel="noreferrer">parking_lot docs</a>.</p></aside>
+
+<aside data-call="rust"><b>Choosing atomic orderings for pin counts</b><p><code>pin</code> is modified by <code>fetch_add</code> under the pool latch and by <code>fetch_sub</code> without it. <code>AcqRel</code> on both makes the unpinning thread's writes to the page (made under its latch) happen-before whatever the next pinner does. Strictly, the page latch already provides that edge, so <code>Relaxed</code> would work for the count alone. Use <code>AcqRel</code> until a profile says otherwise: the difference is invisible on x86 and small on ARM. Reference: <a href="https://marabos.nl/atomics/memory-ordering.html" target="_blank" rel="noreferrer">Rust Atomics and Locks, ch. 3</a>.</p></aside>
+"""
+
+[[sections]]
+heading = "Counting guards (BusTub's GetReads() / GetWrites())"
+body = """
+<p>BusTub's B+Tree tests assert <strong>how many page guards an operation took</strong>: an insert into a non-full leaf must take exactly one write guard (<code>OptimisticInsertTest</code>), and a delete from a leaf above its minimum the same (<a href="/cookbook/p/b-tree-concurrency">P2.5</a>). That needs two counters in the buffer pool, bumped when a guard is handed out and never when it is dropped or when a pin is merely taken:</p>
+
+```rust title="buffer pool: guard counters (src/buffer/buffer_pool_manager.rs, excerpt)"
+pub struct BufferPoolManager<R: Replacer> {
+    frames: Box<[Frame]>,
+    inner: Mutex<Inner<R>>,
+    sched: DiskScheduler,
+    reads: AtomicU64,
+    writes: AtomicU64,
+}
+
+    /// Page-guard acquisitions so far (BusTub's `GetReads()` / `GetWrites()`): a read guard counts as a
+    /// read, a write guard as a write. Lets tests assert how many exclusive latches an operation took.
+    pub fn get_reads(&self) -> u64 {
+        self.reads.load(Relaxed)
+    }
+    pub fn get_writes(&self) -> u64 {
+        self.writes.load(Relaxed)
+    }
+```
+
+<p>The increments sit at the one place each guard is constructed, after the frame check succeeds (<code>self.reads.fetch_add(1, Relaxed)</code> before <code>return Ok(ReadPageGuard { … })</code>, and the same for writes). Count at the point of success, not on entry: <code>read_page</code> and <code>write_page</code> retry in a loop when a frame was repurposed under them, and a retry must not count twice. <code>Relaxed</code> is enough, since the tests read the counters from the thread that did the work.</p>
+"""
+
+[[sections]]
+heading = "Tests"
+body = """
+<p>BusTub's tests, ported. They are the spec, so they're in the open, plus a stress test that caught a real bug.</p>
+
+```rust title="tests/buffer_pool_manager.rs"
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use relational::buffer::{arc_replacer::ArcReplacer, buffer_pool_manager::{BpmError, BufferPoolManager}};
+use relational::common::config::PageId;
+use relational::storage::disk::disk_manager::{DiskManager, MemDiskManager};
+
+fn bpm(frames: usize) -> BufferPoolManager<ArcReplacer> {
+    let disk: Arc<dyn DiskManager> = Arc::new(MemDiskManager::default());
+    BufferPoolManager::new(frames, disk, ArcReplacer::new(frames), 4)
+}
+fn put(buf: &mut [u8], s: &str) { buf[..s.len()].copy_from_slice(s.as_bytes()); buf[s.len()] = 0; }
+fn get(buf: &[u8]) -> &str { let n = buf.iter().position(|&b| b == 0).unwrap(); std::str::from_utf8(&buf[..n]).unwrap() }
+
+#[test]
+fn page_pin_easy() {
+    let bpm = bpm(2);
+    let (p0, p1) = (bpm.new_page(), bpm.new_page());
+    {
+        let mut g0 = bpm.write_page(p0).unwrap();
+        put(g0.data_mut(), "page0");
+        let mut g1 = bpm.write_page(p1).unwrap();
+        put(g1.data_mut(), "page1");
+        assert_eq!(bpm.get_pin_count(p0), Some(1));
+        assert_eq!(bpm.get_pin_count(p1), Some(1));
+        let t1 = bpm.new_page();
+        assert!(matches!(bpm.read_page(t1), Err(BpmError::NoFreeFrame)));
+        let t2 = bpm.new_page();
+        assert!(matches!(bpm.write_page(t2), Err(BpmError::NoFreeFrame)));
+        drop(g0);
+        assert_eq!(bpm.get_pin_count(p0), Some(0));
+        drop(g1);
+        assert_eq!(bpm.get_pin_count(p1), Some(0));
+    }
+    {
+        let t1 = bpm.new_page();
+        let _r = bpm.read_page(t1).unwrap();
+        let t2 = bpm.new_page();
+        let _w = bpm.write_page(t2).unwrap();
+        assert_eq!(bpm.get_pin_count(p0), None);          // both evicted
+        assert_eq!(bpm.get_pin_count(p1), None);
+    }
+    {
+        let mut g0 = bpm.write_page(p0).unwrap();
+        assert_eq!(get(g0.data()), "page0");               // came back from disk
+        put(g0.data_mut(), "page0updated");
+        let mut g1 = bpm.write_page(p1).unwrap();
+        assert_eq!(get(g1.data()), "page1");
+        put(g1.data_mut(), "page1updated");
+    }
+    let r0 = bpm.read_page(p0).unwrap();
+    assert_eq!(get(r0.data()), "page0updated");
+    let r1 = bpm.read_page(p1).unwrap();
+    assert_eq!(get(r1.data()), "page1updated");
+}
+
+/// Holding one page's write latch must not block fetching another page.
+#[test]
+fn deadlock_test() {
+    let bpm = bpm(10);
+    let (p0, p1) = (bpm.new_page(), bpm.new_page());
+    let g0 = bpm.write_page(p0).unwrap();
+    let start = AtomicBool::new(false);
+    std::thread::scope(|s| {
+        let child = s.spawn(|| { start.store(true, Ordering::SeqCst); let _g = bpm.write_page(p0).unwrap(); });
+        while !start.load(Ordering::SeqCst) {}
+        std::thread::sleep(std::time::Duration::from_millis(200));   // child is now blocked on p0's latch
+        let _g1 = bpm.write_page(p1).unwrap();                        // deadlocks if the child holds the pool latch
+        drop(g0);
+        child.join().unwrap();
+    });
+}
+
+/// One frame, pinned by readers: nobody may evict it.
+#[test]
+fn evictable_test() {
+    let bpm = bpm(1);
+    for round in 0..200 {
+        let (winner, loser) = (bpm.new_page(), bpm.new_page());
+        let gate = (Mutex::new(false), Condvar::new());
+        std::thread::scope(|s| {
+            for _ in 0..8 {
+                s.spawn(|| {
+                    let _l = gate.1.wait_while(gate.0.lock().unwrap(), |go| !*go).unwrap();
+                    drop(_l);
+                    let _r = bpm.read_page(winner).unwrap();
+                    assert!(matches!(bpm.read_page(loser), Err(BpmError::NoFreeFrame)));
+                });
+            }
+            if round % 2 == 0 {
+                let r = bpm.read_page(winner).unwrap();
+                *gate.0.lock().unwrap() = true; gate.1.notify_all();
+                drop(r);
+            } else {
+                let w = bpm.write_page(winner).unwrap();
+                *gate.0.lock().unwrap() = true; gate.1.notify_all();
+                drop(w);
+            }
+        });
+    }
+}
+
+/// Many threads, tiny pool, constant eviction: every page read back must carry its own stamp.
+#[test]
+fn stress_checksums() {
+    let bpm = bpm(8);
+    let pages: Vec<PageId> = (0..64).map(|_| bpm.new_page()).collect();
+    let writes = std::sync::atomic::AtomicU64::new(0);
+    std::thread::scope(|s| {
+        for t in 0..8u64 {
+            let (bpm, pages, writes) = (&bpm, &pages, &writes);
+            s.spawn(move || {
+                let mut x = t + 1;
+                for _ in 0..2_000 {
+                    x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+                    let p = pages[(x % pages.len() as u64) as usize];
+                    if x % 3 == 0 {
+                        let mut g = loop { match bpm.write_page(p) { Ok(g) => break g, Err(BpmError::NoFreeFrame) => std::thread::yield_now(), Err(e) => panic!("{e:?}") } };
+                        let d = g.data_mut();
+                        let n = u64::from_le_bytes(d[8..16].try_into().unwrap()) + 1;
+                        d[0..4].copy_from_slice(&p.0.to_le_bytes());       // stamp: which page this is
+                        d[8..16].copy_from_slice(&n.to_le_bytes());        // version counter
+                        d[8184..8192].copy_from_slice(&n.to_le_bytes());   // same value at the far end: torn = mismatch
+                        writes.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        let g = loop { match bpm.read_page(p) { Ok(g) => break g, Err(BpmError::NoFreeFrame) => std::thread::yield_now(), Err(e) => panic!("{e:?}") } };
+                        let d = g.data();
+                        let stamp = u32::from_le_bytes(d[0..4].try_into().unwrap());
+                        assert!(stamp == 0 || stamp == p.0, "page {p:?} holds page {stamp}'s bytes");
+                        assert_eq!(d[8..16], d[8184..8192], "torn page {p:?}");
+                    }
+                }
+            });
+        }
+    });
+    let total: u64 = pages.iter().map(|&p| { let g = bpm.read_page(p).unwrap(); u64::from_le_bytes(g.data()[8..16].try_into().unwrap()) }).sum();
+    // Every increment must survive eviction and reload: a stale re-read loses updates.
+    assert_eq!(total, writes.load(Ordering::Relaxed), "lost updates");
+}
+```
+
+<aside data-call="testing"><b>The stress test earns its keep</b><p>Rule 6 exists because this test failed. Without it, the first version released the pool latch and <em>then</em> enqueued the victim's write-back. With the write-back moved after the unlock (plus a <code>yield_now()</code> to widen the window), <code>stress_checksums</code> fails <strong>5 runs out of 5</strong> with <code>lost updates</code>: a thread re-reads a page that was evicted dirty, gets the stale on-disk version, increments it, and the earlier increment vanishes. Tests built around <em>invariants that must hold at the end</em> (here, "total increments = total writes") catch races that assertions on individual reads miss.</p></aside>
+
+<aside data-call="testing"><b>Model the protocol with loom</b><p>Stress tests sample interleavings; loom enumerates them. A useful model has <strong>one frame and two threads</strong>: thread A reads page P while thread B reads page Q, forcing eviction. Assert that A's guard always sees P's bytes. Loom needs the in-memory disk and an inline scheduler (no worker threads), so make the scheduler a trait with a synchronous test implementation. See <a href="/cookbook/p/toolchain">Toolchain → loom</a>.</p></aside>
+"""
+
+[[sections]]
+heading = "Performance"
+body = """
+```text title="hot_read_throughput — 128 resident pages, read_page + drop, Apple M4 Pro (12 cores)"
+1 threads:  21.65 M fetch+unpin/s
+2 threads:  12.64 M fetch+unpin/s
+4 threads:   6.02 M fetch+unpin/s
+8 threads:   3.78 M fetch+unpin/s     ← slower with more threads
+```
+
+<p>Every fetch takes the global pool latch <em>and</em> updates the replacer's lists, even on a hit. Beyond one thread, the cache line holding that mutex bounces between cores and throughput collapses. This is the most common scalability wall in student and early production engines. The fixes, roughly in order of effort:</p>
+
+<ol> <li><strong>Partition the page table</strong>: N shards, each with its own mutex, keyed by <code>page_id % N</code>. PostgreSQL uses 128 buffer-mapping partitions.</li> <li><strong>Take the replacer out of the hit path</strong>: CLOCK needs only an atomic reference-bit store on a hit. ARC and LRU can buffer accesses and apply them in batches.</li> <li><strong>Pack the pin count and state into one atomic word</strong>: PostgreSQL's <code>BufferDesc.state</code> holds refcount, usage count and flags in a single <code>u32</code>, updated with CAS, so pinning a resident page takes no lock at all.</li> <li><strong>Remove the hash table</strong>: LeanStore's pointer swizzling stores frame pointers directly in parent pages. See <a href="/cookbook/p/larger-than-memory-databases">Larger-than-memory</a> in Part II.</li> </ol>
+
+<aside data-call="production"><b>How real buffer managers look</b><ul> <li><strong>PostgreSQL</strong>: a shared array of buffer descriptors, a partitioned hash table (<code>BufMappingLock</code>, 128 partitions), a per-buffer content lock (an LWLock, the page latch) plus an I/O-in-progress flag, and clock-sweep. <code>src/backend/storage/buffer/README</code> explains pins vs content locks in two pages.</li> <li><strong>InnoDB</strong>: multiple buffer pool instances, each with its own mutex, LRU and flush list. A page hash with read-write latches. Dedicated page-cleaner threads.</li> <li><strong>SQLite</strong>: a pager with a per-connection cache. There's one writer at a time, so latching is simple.</li> <li><strong>LeanStore / Umbra</strong>: no global hash table on the hot path, optimistic latches (version counters instead of reader counts), and variable-size pages in Umbra.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Principles of Database Buffer Management"
+url = "https://dl.acm.org/doi/10.1145/1994.2022"
+
+[[sources]]
+title = "src/backend/storage/buffer/README"
+url = "https://github.com/postgres/postgres/blob/master/src/backend/storage/buffer/README"
+
+[[sources]]
+title = "LeanStore: In-Memory Data Management Beyond Main Memory"
+url = "https://db.in.tum.de/~leis/papers/leanstore.pdf"
+
+[[sources]]
+title = "talk"
+url = "https://www.youtube.com/watch?v=o467OKy7Q0g"
+
+[[sources]]
+title = "Umbra: A Disk-Based System with In-Memory Performance"
+url = "https://db.in.tum.de/~freitag/papers/p29-neumann-cidr20.pdf"
+
+[[sources]]
+title = "talk"
+url = "https://www.youtube.com/watch?v=pS2_AJNIxzU"

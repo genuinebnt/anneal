@@ -1,0 +1,14 @@
+--- runtime error: recursion depth limit (10000) exceeded
+  at forever
+  at forever
+  at forever
+  at forever
+  at forever
+  at forever
+  ... 9988 more frames ...
+  at forever
+  at forever
+  at forever
+  at forever
+  at forever
+  at main

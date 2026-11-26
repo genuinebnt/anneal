@@ -1,0 +1,44 @@
+title = "ARIES crash recovery"
+module = "Databases"
+module_order = 8
+chapter = "Logging and recovery"
+chapter_order = 7
+order = 418
+kind = "recipe"
+lede = "WAL with LSNs and CLRs, steal/no-force buffer pool, fuzzy checkpoints, analysis/redo/undo."
+level = "advanced"
+code = ["examples/database/aries_recovery.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>database storage engines</li><li>durable key-value stores</li><li>filesystems with journals</li><li>anything that must survive a crash mid-write</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+A simulated page store: pages live on "disk" (they survive a crash), the buffer pool and the log tail are RAM (lost).
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Write-ahead log</div><div class="cb-g-says"><p>Every change appends a record with a monotonically increasing <strong>LSN before</strong> the page is modified. A record carries the before <strong>and</strong> after image of the slot (physiological logging), and the transaction's previous LSN (<code>prev</code>), so a transaction's records form a backward chain. Each page stores the LSN of the last record applied to it: its <strong>page LSN</strong>.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Steal / no-force</div><div class="cb-g-says"><p>The pool may write a dirty page to disk at <strong>any</strong> time, even holding uncommitted data (<strong>steal</strong>, so the pool can be small), and a commit only forces the <strong>log</strong> up to the commit record, never the data pages (<strong>no-force</strong>, so commit is one sequential write).</p><p><strong>Consequences.</strong> After a crash disk may hold uncommitted updates (needs <strong>undo</strong>) and miss committed ones (needs <strong>redo</strong>). <strong>The WAL rule</strong> makes this safe: a page may be written only after the log is durable up to its page LSN; <code>write_page_checked</code> refuses otherwise, and every simulated crash image is asserted to obey it.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Fuzzy checkpoint</div><div class="cb-g-says"><p>BeginCheckpoint, then an EndCheckpoint record carrying the transaction table (ATT) and dirty page table (DPT, with each page's recLSN = LSN of the first update since it was last clean). Nothing is flushed and the system keeps running during it. The master record (durable pointer) names the BeginCheckpoint, set only once EndCheckpoint is durable.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Recovery</div><div class="cb-g-says"><p>, three passes. (1) <strong>analysis</strong> scans forward from the checkpoint rebuilding the ATT and DPT: who was active, who committed, which pages may be dirty. (2) <strong>redo</strong> repeats history from min(recLSN): re-applies every update <strong>and</strong> every compensation record unless the page's LSN says it is already there (loser transactions are redone too: simple and exact).</p><p>(3) <strong>undo</strong> rolls the losers back newest-first, writing a <strong>compensation log record</strong> (CLR) per undone update; a CLR is redo-only and carries <code>undo_next</code>, the next record to undo, so if the system crashes <strong>during</strong> undo (or recovery runs twice) the CLRs are redone and the undo resumes where it stopped instead of undoing an undo: recovery is idempotent.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>The test crashes at <strong>every</strong> event of 300 seeded random workloads (each log append, log flush, page write, checkpoint step), in two flavours (only flushed log survives / all appended log survives), and recovers. It also crashes during redo and undo (twice in a row), recovers again, and compares with an <strong>oracle</strong>: apply exactly the committed transactions' updates.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>PostgreSQL / MySQL InnoDB / SQL Server / DB2 recovery</li><li>SQLite WAL mode</li><li>journaling filesystems (ext4, NTFS)</li><li>LSM and B-tree key-value engines</li><li>any system with a write-ahead log and a page cache</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>"ARIES: A Transaction Recovery Method Supporting Fine-Granularity Locking" (Mohan et al., 1992)</li><li>"Database Management Systems" (Ramakrishnan, Gehrke) recovery chapter. <a href="https://web.stanford.edu/class/cs345d-01/rl/aries.pdf" target="_blank" rel="noreferrer">https://web.stanford.edu/class/cs345d-01/rl/aries.pdf</a></li><li><a href="https://www.postgresql.org/docs/current/wal-internals.html" target="_blank" rel="noreferrer">https://www.postgresql.org/docs/current/wal-internals.html</a></li></ul>
+"""
+
+[[sources]]
+title = "web.stanford.edu/class/cs345d-01/rl/aries.pdf"
+url = "https://web.stanford.edu/class/cs345d-01/rl/aries.pdf"
+
+[[sources]]
+title = "postgresql.org/docs/current/wal-internals.html"
+url = "https://www.postgresql.org/docs/current/wal-internals.html"

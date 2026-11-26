@@ -1,0 +1,10 @@
+// passes: const-prop,dce,simplify-cfg
+// Folding must not hide traps: `1 / 0` and `MAX + 1` stay in the program.
+fn main() {
+    let m = 9223372036854775807;
+    let z = 0;
+    if len("") > 0 {
+        println(to_str(1 / z));
+        println(to_str(m + 1));
+    }
+}

@@ -1,0 +1,84 @@
+{
+  "autoClosingPairs": [
+    {
+      "close": "}",
+      "open": "{"
+    },
+    {
+      "close": "]",
+      "open": "["
+    },
+    {
+      "close": ")",
+      "open": "("
+    },
+    {
+      "close": "\"",
+      "notIn": [
+        "string",
+        "comment"
+      ],
+      "open": "\""
+    },
+    {
+      "close": " */",
+      "notIn": [
+        "string"
+      ],
+      "open": "/*"
+    }
+  ],
+  "brackets": [
+    [
+      "{",
+      "}"
+    ],
+    [
+      "[",
+      "]"
+    ],
+    [
+      "(",
+      ")"
+    ]
+  ],
+  "comments": {
+    "blockComment": [
+      "/*",
+      "*/"
+    ],
+    "lineComment": "//"
+  },
+  "indentationRules": {
+    "decreaseIndentPattern": "^\\s*[}\\])]",
+    "increaseIndentPattern": "^.*\\{[^}\"']*$|^.*\\([^)\"']*$|^.*\\[[^\\]\"']*$"
+  },
+  "onEnterRules": [
+    {
+      "action": {
+        "appendText": "/// ",
+        "indent": "none"
+      },
+      "beforeText": "^\\s*///.*$"
+    }
+  ],
+  "surroundingPairs": [
+    [
+      "{",
+      "}"
+    ],
+    [
+      "[",
+      "]"
+    ],
+    [
+      "(",
+      ")"
+    ],
+    [
+      "\"",
+      "\""
+    ]
+  ],
+  "wordPattern": "[A-Za-z_][A-Za-z0-9_]*"
+}

@@ -1,0 +1,76 @@
+title = "Markdown block parser"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 571
+kind = "recipe"
+lede = "a CommonMark-subset parser that produces the BLOCK model of a block editor: two-phase parsing, delimiter-run emphasis, printer, HTML and flat blocks."
+level = "intermediate"
+code = ["examples/text_and_parsing/markdown_block_parser.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>importing and exporting Markdown in a block editor</li><li>previews</li><li>static site generators</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>paste/import in Notion-like editors</li><li>docs tooling</li><li>chat message formatting</li><li>linters and formatters</li></ul>
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+one line at a time. (a) walk down the chain of **open** blocks and let each consume its continuation prefix (`>` for a quote, indentation for a list item, ...); (b) try to open new blocks on what is left; (c) hand the rest of the line to the innermost block. A line that matches nothing but follows an open paragraph is a **lazy continuation**.
+
+A paragraph that closes gives up leading link reference definitions. Whether a list is loose is decided at the end from line numbers: is there a gap between two items, or between two children of one item?
+
+runs only after phase 1, because `[a]` may refer to a definition further down. One left-to-right scan builds a linked list of nodes; `*`/`_` runs go on a **delimiter stack** and `[`/`![` on a bracket stack. `process_emphasis` pairs delimiters (left/right flanking rules, the "rule of 3") and wraps the nodes between them in O(1) by splicing the list.
+
+`openers_bottom` remembers where a search for an opener already failed; backtick runs are indexed up front; "all earlier `[` are now inactive" is one watermark instead of a loop; link destinations allow 32 nested parentheses (labels are also limited to 999 chars, as the spec says, but their scans stop at the next bracket and would be linear without it); block containers and inline formatting have a depth cap, so the recursive renderer cannot overflow the stack.
+
+A global **step counter** counts the work of the scanning loops and `pathological_inputs` checks that doubling the input about doubles it.
+
+(It counts the loops that could be super-linear, not every instruction.) **outputs**: typed AST with byte spans, HTML renderer, normalising Markdown **printer** (indented code becomes fenced, setext becomes ATX when it fits, reference links become inline links), and a **flat block list** (`id, type, depth, text with marks`) as editors store it, with the way back.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Printer limit**: `parse(print(parse(x))) == parse(x)` holds on the 2000 seeded documents checked here, but those seeds are also the ones the printer was debugged against.
+
+On 100,000 **other** seeds of the same generator (measured once, not part of this run) 32 documents did not round-trip: mostly dense mixes of literal and live `*` `_`, which the bounded escape search cannot reproduce, and quotes or lists that only a (dropped) reference definition kept apart inside a tight list item.
+
+The generator does not produce every construct, so arbitrary input can fail more often.
+
+**Subset**. Not supported, or only partly: raw inline HTML (printed as text); HTML blocks of start conditions 3, 4, 5 and 7; named entities beyond a small table; full Unicode punctuation and case folding for flanking rules and labels (ASCII plus a few common marks); GFM extensions other than task-list items (no tables, strikethrough or bare autolinks).
+
+Nesting deeper than the caps is flattened, which the spec does not do. **Measured** (once, over all 652 examples of spec 0.31.2): 614 render exactly. All 38 others are in the "Raw HTML" and "HTML blocks" sections or need raw inline HTML.
+
+The embedded examples are taken from the spec's machine-readable test file (<https://spec.commonmark.org/0.31.2/spec.json>, spec text by John MacFarlane, CC BY-SA 4.0), numbered as there. They are a **selection** of the ones this parser passes, so passing them is a regression check, not a conformance claim.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://spec.commonmark.org/0.31.2/" target="_blank" rel="noreferrer">https://spec.commonmark.org/0.31.2/</a> (the appendix "A parsing strategy" describes both phases)</li><li>reference implementations <a href="https://github.com/commonmark/commonmark.js" target="_blank" rel="noreferrer">https://github.com/commonmark/commonmark.js</a> and <a href="https://github.com/raphlinus/pulldown-cmark" target="_blank" rel="noreferrer">https://github.com/raphlinus/pulldown-cmark</a></li></ul>
+"""
+
+[[sources]]
+title = "spec.commonmark.org/0.31.2/spec.json"
+url = "https://spec.commonmark.org/0.31.2/spec.json"
+
+[[sources]]
+title = "spec.commonmark.org/0.31.2"
+url = "https://spec.commonmark.org/0.31.2/"
+
+[[sources]]
+title = "github.com/commonmark/commonmark.js"
+url = "https://github.com/commonmark/commonmark.js"
+
+[[sources]]
+title = "github.com/raphlinus/pulldown-cmark"
+url = "https://github.com/raphlinus/pulldown-cmark"

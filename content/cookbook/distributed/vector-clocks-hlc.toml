@@ -1,0 +1,50 @@
+title = "Vector clocks hlc"
+module = "Distributed systems"
+module_order = 10
+chapter = "Time, partitioning and replication"
+chapter_order = 1
+order = 482
+kind = "recipe"
+lede = "Lamport clocks, vector clocks / version vectors, hybrid logical clocks and causal delivery."
+level = "intermediate"
+code = ["examples/distributed/vector_clocks_hlc.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>ordering events without a global clock</li><li>detecting concurrent writes</li><li>causal broadcast</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+"happened-before" (a -> b) is the only order a distributed system can observe without a shared clock.
+
+- Lamport clock: one counter; a -> b implies L(a) &lt; L(b), but **not** the converse, so it cannot detect concurrency.
+- Vector clock: one counter per process; compare gives Before / After / Equal / Concurrent exactly. **A version vector** has the same shape but counts updates to a replicated object (per replica) instead of events of a process.
+- Dotted version vectors (idea only): a plain version vector assigned by a coordinator can make two concurrent writes through the **same** coordinator look ordered (shown below: a lost sibling).
+
+   A dotted VV keeps the new write's single event id (the "dot" = replica + counter) apart from the causal-context vector, so a write is never considered to dominate a sibling it did not read.
+- Hybrid logical clock (HLC): (physical ms, logical counter). Stays close to wall time (useful for humans and TTLs) while keeping Lamport's guarantee even if the physical clock stalls or jumps backwards; the physical clock is injected so tests control it.
+- Causal broadcast: tag each message with the sender's vector; the receiver holds a message back until every message it depends on has been delivered (sender's next-in-line, and nothing from others that we have not seen).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Dynamo-style stores keep siblings for concurrent writes and let the application merge them (Riak documents this)</li><li>CRDT / replication layers need causal delivery</li><li>databases such as CockroachDB use hybrid logical clocks for timestamps</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Vector_clock> and <https://en.wikipedia.org/wiki/Lamport_timestamp>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Vector_clock"
+url = "https://en.wikipedia.org/wiki/Vector_clock"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Lamport_timestamp"
+url = "https://en.wikipedia.org/wiki/Lamport_timestamp"

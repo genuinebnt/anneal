@@ -1,0 +1,46 @@
+title = "\"design it, then code the core\""
+module = "Worked questions"
+module_order = 14
+chapter = "Coding and design questions"
+chapter_order = 2
+order = 685
+kind = "recipe"
+lede = "16 systems-design questions, each with requirements, numbers, a tested core and failure modes."
+level = "advanced"
+code = ["examples/interview/systems_design_in_code.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+system-design and "design + code" interview rounds; sketching the core data structure before writing a design doc.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>URL shorteners</li><li>API gateways (rate limits)</li><li>Memcached/Redis clusters</li><li>WAL-backed stores</li><li>SQS-style queues</li><li>notification pipelines</li><li>autocomplete</li><li>crawlers</li><li>Kafka-style logs</li><li>job queues</li><li>leases</li><li>Snowflake IDs</li><li>trending lists</li><li>log shippers</li><li>feature flags</li><li>search</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**How to use a question**: read only the question and **requirements**, say your **numbers** and API aloud, design the core, then read the code. Every core runs on a **virtual clock** (`now: u64`) and a seeded RNG, so each run is identical. The capacity numbers are assumed workloads chosen for practice, not measurements of any real service.
+
+"Disk", "network" and "node" are in-memory stand-ins.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://sre.google/sre-book/table-of-contents/> (overload, leases, queues) and <https://aws.amazon.com/builders-library/>
+
+Kleppmann, "Designing Data-Intensive Applications" (title only, not re-read here).
+"""
+
+[[sources]]
+title = "sre.google/sre-book/table-of-contents"
+url = "https://sre.google/sre-book/table-of-contents/"
+
+[[sources]]
+title = "aws.amazon.com/builders-library"
+url = "https://aws.amazon.com/builders-library/"

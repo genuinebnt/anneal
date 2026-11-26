@@ -1,0 +1,58 @@
+title = "DP zoo"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Dynamic programming, greedy and search"
+chapter_order = 5
+order = 206
+kind = "recipe"
+lede = "a zoo of DP shapes, each with a brute-force oracle and seeded differential tests."
+level = "advanced"
+code = ["examples/algorithms/dp_zoo.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+recognising which DP "shape" a problem has before writing code.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Most DP problems are one of a handful of shapes. Name the shape and the state/recurrence follows:
+
+```text
+shape     | state                          | example here              | seen in the wild
+----------+--------------------------------+---------------------------+----------------------------------------
+1D        | best[i] over a prefix          | LIS, weighted intervals   | resource/slot scheduling, patience diffs
+2D        | table over two sequences       | (see dp_edit_distance edit distance)   | diff tools, spell checkers, alignment
+interval  | best[i][j] over a sub-range    | matrix-chain order        | query optimisers ordering joins, parsing
+bitmask   | best[subset][last]             | Held-Karp TSP (n <= 12)   | route planning, small-set orderings
+tree      | (take, skip) per subtree       | max independent set       | org charts, dependency pruning, UI layout
+digit     | (position, remainder, tight)   | digit-sum counting <= N   | counting IDs/serials with a property
+bitset    | reachable sums as a bit row    | subset sum / partition    | load balancing, change-making feasibility
+```
+
+Every function below has a slow, obviously-correct oracle (brute force or O(n&#94;2)) and main() compares the two on hundreds of seeded random inputs. The oracle is the specification; the DP is the optimisation.
+
+The ideas to keep: (1) pick a state that makes the future independent of the past, (2) fix an evaluation order (prefix, interval length, mask popcount, post-order), (3) keep a back-pointer if you need the witness, not just the value.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+**Lis** powers patience-diff style line matching; interval DP orders joins in classic System-R style optimisers (restricted to small relation counts because it is exponential for bushy plans); Held-Karp is the exact fallback for small routing problems; tree DP is how independent-set / vertex-cover style questions become linear on hierarchies; bitset subset-sum gives a 64x constant-factor win over a bool table.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://cp-algorithms.com/dynamic_programming/intro-to-dp.html> and <https://en.wikipedia.org/wiki/Held%E2%80%93Karp_algorithm>
+"""
+
+[[sources]]
+title = "cp-algorithms.com/dynamic_programming/intro-to-dp.html"
+url = "https://cp-algorithms.com/dynamic_programming/intro-to-dp.html"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Held%E2%80%93Karp_algorithm"
+url = "https://en.wikipedia.org/wiki/Held%E2%80%93Karp_algorithm"

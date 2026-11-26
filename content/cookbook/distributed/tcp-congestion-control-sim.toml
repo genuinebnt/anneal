@@ -1,0 +1,68 @@
+title = "Discrete-event simulation of TCP congestion control"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Networking and protocols"
+chapter_order = 3
+order = 538
+kind = "recipe"
+lede = "discrete-event simulation of TCP congestion control (Reno, NewReno, CUBIC, simplified BBR) over a drop-tail bottleneck"
+level = "advanced"
+code = ["examples/networking/tcp_congestion_control_sim.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>understanding why transfers are slow</li><li>bufferbloat</li><li>tuning sysctls</li><li>building congestion control for QUIC/UDP protocols</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a packet-level simulator in virtual microseconds. Topology: N senders -> one bottleneck link (1000 packets/s = 10 Mbit/s at 1250 B/packet, a **FIFO drop-tail** queue of B packets, optional random loss) -> 20 ms propagation -> receivers -> 20 ms back (acks are never lost).
+
+Base RTT = 41 ms, so the bandwidth-delay product (BDP) is about 41 packets; a buffer of one BDP is the classic rule of thumb.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Flow control** vs **congestion control**: flow control protects the **receiver**: it advertises a window (rwnd, how much buffer it has left) and the sender never has more than rwnd unacked. Congestion control protects the **network**: the sender keeps its own window (cwnd) and learns the safe rate from loss/delay signals.
+
+The sender may have min(cwnd, rwnd) packets in flight. Section 1 shows the receiver window capping a flow at rwnd/RTT no matter how large cwnd grows.
+
+**The algorithms** (all window-based, in packets):
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Slow start</div><div class="cb-g-says"><p>Cwnd += 1 per ack, i.e. doubles every RTT, until loss or ssthresh.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Congestion avoidance (AIMD)</div><div class="cb-g-says"><p>Cwnd += 1/cwnd per ack = +1 per RTT; on loss halve. Additive increase and multiplicative decrease converge to a fair share (Chiu &amp; Jain): equal flows end up equal.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Fast retransmit / fast recovery</div><div class="cb-g-says"><p>3 duplicate acks mean one packet was lost but later ones got through, so resend it at once and set ssthresh = flight/2 instead of waiting for the RTO and restarting at 1.</p><p>RENO leaves recovery on the first new ack, so several losses in one window usually cost a timeout; NEWRENO stays in recovery until everything outstanding at loss time is acked, resending one hole per partial ack (RFC 6582).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Cubic</div><div class="cb-g-says"><p>After a loss (beta = 0.7) the window follows W(t) = C (t-K)&#94;3 + Wmax: fast climb back, a plateau near the old maximum Wmax (K seconds later), then probing beyond it. Growth depends on elapsed time, not RTT, so long-RTT flows are not starved. Default in Linux.</p></div></div><div class="cb-g-term"><div class="cb-g-name">BBR (simplified)</div><div class="cb-g-says"><p>Model-based, not loss-based. Estimates bottleneck bandwidth (windowed max of delivery rate) and min RTT, paces at gain*btlbw and caps inflight at 2*BDP. <strong>Startup</strong> (gain 2.885) -&gt; <strong>drain</strong> -&gt; PROBE_BW (gain cycle 1.25, 0.75, 1 x6).</p><p>Omitted: ProbeRTT, app-limited handling, ack aggregation.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Loss recovery detail</div><div class="cb-g-says"><p>Reno runs without <strong>sack</strong> (RFC 5681 baseline: one hole per RTT, timeouts on multi-loss); NewReno, <strong>cubic</strong> and BBR run with a <strong>sack</strong> scoreboard (3 sack blocks per ack, a hole is lost when 3 packets above it are sacked, a retransmission outstanding for 2 RTTs is presumed lost), like every modern stack.</p></div></div><div class="cb-g-term"><div class="cb-g-name">RTO</div><div class="cb-g-says"><p>RFC 6298 estimator with exponential backoff and Karn's rule (see udp_sockets_reliable).</p></div></div></div>
+
+**Metrics**: utilisation (delivered/capacity), mean queue length seen by arriving packets (BUFFERBLOAT: a deep queue keeps the link full but adds latency), RTT inflation (mean RTT / base RTT), loss rate, Jain's fairness index J = (sum x)&#94;2 / (n sum x&#94;2) (1 = perfectly equal).
+
+Asserted: slow start doubles per RTT, Reno's sawtooth halves the window on loss, equal-RTT Reno flows share fairly, throughput follows Mathis' 1/sqrt(p) law. The simulator is deterministic (seeded), so the numbers printed are reproducible.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Linux CUBIC/BBR tuning</li><li>QUIC congestion controllers (quinn, Google's QUIC)</li><li>datacenter variants (DCTCP)</li><li>debugging bufferbloat (fq_codel/<strong>cake</strong> exist because of it)</li><li>choosing buffer sizes for routers</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>RFC 5681 (TCP congestion control) <a href="https://www.rfc-editor.org/rfc/rfc5681" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc5681</a></li><li>RFC 6582 (NewReno) <a href="https://www.rfc-editor.org/rfc/rfc6582" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc6582</a></li><li>RFC 9438 (CUBIC) <a href="https://www.rfc-editor.org/rfc/rfc9438" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc9438</a></li><li>RFC 6298 (RTO) <a href="https://www.rfc-editor.org/rfc/rfc6298" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc6298</a></li><li>Mathis et al. 1997, "The Macroscopic Behavior of the TCP Congestion Avoidance Algorithm"</li><li>Cardwell et al., "BBR: Congestion-Based Congestion Control" (ACM Queue 2016)</li></ul>
+"""
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc5681"
+url = "https://www.rfc-editor.org/rfc/rfc5681"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc6582"
+url = "https://www.rfc-editor.org/rfc/rfc6582"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc9438"
+url = "https://www.rfc-editor.org/rfc/rfc9438"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc6298"
+url = "https://www.rfc-editor.org/rfc/rfc6298"

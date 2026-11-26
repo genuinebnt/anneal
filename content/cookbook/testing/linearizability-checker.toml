@@ -1,0 +1,72 @@
+title = "Linearizability checker"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Systems: distributed systems"
+chapter_order = 7
+order = 152
+kind = "recipe"
+lede = "linearizability checker (Wing-Gong search with memoisation) vs sequential models"
+level = "advanced"
+code = ["examples/distributed/linearizability_checker.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>testing replicated stores</li><li>caches</li><li>queues and counters under concurrency</li><li>Jepsen-style checks</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+given a **history** of concurrent operations (each with an invoke time, a return time and an observed result) decide whether some total order of the operations (a) respects real time (if A returned before B was invoked, A is before B) and (b) is a legal run of a **sequential** specification (register, queue, counter).
+
+If yes the object is linearizable for that history: every operation appears to take effect atomically at one instant between its invoke and its return.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+Wing &amp; Gong's search: repeatedly pick any **minimal** remaining operation (nothing unlinearised must come before it), apply it to the model, and keep the order if the model's output equals the observed output; backtrack otherwise.
+
+Gavin Lowe's refinement, used by Knossos and porcupine, memoises the pair (set of linearised ops, model state): reaching the same pair again can never succeed if it failed before, which collapses the exponential tree to at most (prefix-sets x states). Here "set" is a u128 bitmask and the minimal-op test is a precomputed predecessor mask per op.
+
+Linearizability is **local** (Herlihy &amp; Wing): a history over many independent objects is linearizable iff each per-object sub-history is, so a KV store is checked key by key (P-compositionality), which the demo measures against the monolithic check.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+The same search with a weaker precedence relation (only same-client program order) checks **sequential consistency**; the demo shows a history that is sequentially consistent but not linearizable (a stale read after an acknowledged write is allowed to "reorder" across clients, but real time forbids it).
+
+**Testing**: histories come from a simulated primary/follower store with random delays. Each op picks a random instant inside its [invoke, return] window at which the primary applies it, so the correct store is linearizable by construction.
+
+Injected bugs: reads served from a lagging follower (stale reads), an acknowledged write that is silently lost, and an enqueue applied twice (retry duplicate). A failing history is shrunk greedily to a 1-minimal counterexample window by deleting operations.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+Jepsen's Knossos checker (Clojure) and the Go library porcupine run exactly this search over recorded client histories to find consistency bugs in databases, queues and lock services; etcd, TiKV and CockroachDB-style systems are tested this way. Checkers are NP-complete in general, so histories are kept short and many are run.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Linearizability: A Correctness Condition for Concurrent Objects (Herlihy, Wing, 1990) <https://cs.brown.edu/~mph/HerlihyW90/p463-herlihy.pdf>
+
+porcupine, a fast linearizability checker in Go   <https://github.com/anishathalye/porcupine>
+
+Jepsen consistency models: linearizable   <https://jepsen.io/consistency/models/linearizable>
+"""
+
+[[sources]]
+title = "cs.brown.edu/~mph/HerlihyW90/p463-herlihy.pdf"
+url = "https://cs.brown.edu/~mph/HerlihyW90/p463-herlihy.pdf"
+
+[[sources]]
+title = "github.com/anishathalye/porcupine"
+url = "https://github.com/anishathalye/porcupine"
+
+[[sources]]
+title = "jepsen.io/consistency/models/linearizable"
+url = "https://jepsen.io/consistency/models/linearizable"

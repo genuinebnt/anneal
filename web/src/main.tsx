@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Navigate, Outlet, RouterProvider, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import { Navigate, Outlet, RouterProvider, createRootRoute, createRoute, createRouter, useParams } from "@tanstack/react-router";
 import { DsaPage } from "./pages/DsaPage";
 import { PatternIdea } from "./pages/PatternIdea";
 import { PatternProblems } from "./pages/PatternProblems";
@@ -36,6 +36,9 @@ import { GraphPage } from "./pages/GraphPage";
 import { LogPage } from "./pages/LogPage";
 import { CompanyPage } from "./pages/CompanyPage";
 import { SdHome } from "./pages/sd/SdHome";
+import { CookbookHome } from "./pages/cookbook/CookbookHome";
+import { CookbookRead } from "./pages/cookbook/CookbookRead";
+import { CookbookSubject } from "./pages/cookbook/CookbookSubject";
 import { ReadPage } from "./pages/ReadPage";
 import { SdConceptPage, SdLearn } from "./pages/sd/SdLearn";
 import { SdPlans } from "./pages/sd/SdPlans";
@@ -210,6 +213,23 @@ const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: "/sd/review", component: SdReview }),
   createRoute({ getParentRoute: () => rootRoute, path: "/dsa/read", component: ReadPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/sd/plans", component: SdPlans }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/cookbook", component: CookbookHome }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/cookbook/$subject",
+    component: function CookbookSubjectRoute() {
+      const { subject } = useParams({ strict: false }) as { subject: string };
+      return <CookbookSubject key={subject} id={subject} />;
+    },
+  }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/cookbook/p/$id",
+    component: function CookbookPageRoute() {
+      const { id } = useParams({ strict: false }) as { id: string };
+      return <CookbookRead id={id} />;
+    },
+  }),
 ] as const;
 const patternsRoute = routes[7];
 const practiceRoute = routes[8];

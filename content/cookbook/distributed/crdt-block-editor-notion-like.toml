@@ -1,0 +1,74 @@
+title = "A Notion/Outline-like block editor as a CRDT"
+module = "Distributed systems"
+module_order = 10
+chapter = "Collaboration and CRDTs"
+chapter_order = 3
+order = 499
+kind = "recipe"
+lede = "A movable block TREE, Fugue text per block, Peritext-style marks, split/merge, undo and Markdown/HTML rendering."
+level = "advanced"
+code = ["examples/distributed/crdt_block_editor_notion_like.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+the data model behind block editors (pages made of nested paragraphs, headings, lists, todos, code) that sync without a central lock.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Notion/Outline/AppFlowy-style documents</li><li>collaborative outliners</li><li>local-first note apps</li><li>design tools with layer trees. Course: Kleppmann et al</li><li>"A highly-available move operation for replicated trees"</li><li>Litt et al</li><li>"Peritext"</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a document is a **tree** of blocks. Each block has a kind (paragraph, heading, bullet, numbered, todo, quote, code, divider), LWW attributes, and a text that is a Fugue sequence of characters plus inline **marks** (bold, italic, code, link).
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+creating, moving and deleting a block are all one op: `Move{child, parent, key}` (delete = move into `Parent::Trash`). Two users can move blocks concurrently so that applying both naively would create a cycle (A moves X under Y while B moves Y under X).
+
+The Kleppmann algorithm: every move has a Lamport timestamp and every replica applies moves in **timestamp** order. When an op arrives that is older than ops already applied, the newer ones are **undone** (the log remembers each move's old parent), the old op is applied, and the newer ones are **redone**.
+
+A move that would create a cycle is skipped at apply time (same decision on every replica because they all replay the same total order). Sibling order is a fractional key (`between`) plus a per-op suffix, so two replicas inserting at the same spot never mint equal keys (equal keys leave no room for a later insert).
+
+`Text` is Fugue (see crdt_fugue_text_editor) with tombstones. Marks use the Peritext idea: a mark is `(start gap, end gap, kind, value)` where a gap is "just after char c" or "just before char c".
+
+Where the gap anchors decide whether text typed at the boundary joins the mark: marks **start** with a "before first char" anchor (no growth at the front; except that bold/italic from the first char of a paragraph start at the paragraph start) and bold/italic **end** with a "before the **next** char" anchor (grows at the end), links/code end "after the last char" (no growth).
+
+Per char and mark kind the op with the newest stamp wins, so bold-vs-unbold conflicts resolve identically everywhere. Anchors point at char ids, so deleting boundary characters (tombstones) never loses a mark.
+
+Enter in the middle of a block is a composite of ordinary ops: create a sibling after it, copy the tail text and its marks into it, delete the tail from the original. Backspace at the start of a block appends its text and marks to the previous sibling and trashes the block.
+
+Documented conflict behaviour: text typed concurrently **inside** a tail that another user moved stays in the old block; two users pressing Enter at the same spot get two new blocks (each with a copy of the tail); two users merging the same block duplicate its text. Backspace moves the block's nested children under the surviving block.
+
+All of that converges; none of it loses data (the trashed block keeps its text). Not covered: a child that someone else nests under a block while it is being merged away goes to the Trash with it (the data stays in the replica, but is not rendered).
+
+**Undo**: block-level undo/redo records the inverse structural op (old parent/key, old kind) and applies it as a **new** op, so it merges like any other edit. Split and merge are an undo barrier (they clear both stacks). Op delivery is causal (version vector + dot per op).
+
+No database: the document is its op log plus derived state.
+
+Honest limits: marks are checked on the scenarios below (not proved), undo covers structure and kind (not text, attributes, split or merge), key growth for repeated inserts at one spot is not rebalanced, sibling runs inserted concurrently at one position may interleave (block keys are not Fugue), text position lookup is O(n) per char, Markdown output does not escape Markdown syntax, and link URLs are escaped but not checked (a real editor must reject `javascript:`).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://martin.kleppmann.com/papers/move-op.pdf" target="_blank" rel="noreferrer">https://martin.kleppmann.com/papers/move-op.pdf</a></li><li><a href="https://www.inkandswitch.com/peritext/" target="_blank" rel="noreferrer">https://www.inkandswitch.com/peritext/</a> (the "bold grows at the end, links do not" rule is stated there)</li><li>Fugue <a href="https://arxiv.org/abs/2305.00583" target="_blank" rel="noreferrer">https://arxiv.org/abs/2305.00583</a></li></ul>
+"""
+
+[[sources]]
+title = "martin.kleppmann.com/papers/move-op.pdf"
+url = "https://martin.kleppmann.com/papers/move-op.pdf"
+
+[[sources]]
+title = "inkandswitch.com/peritext"
+url = "https://www.inkandswitch.com/peritext/"
+
+[[sources]]
+title = "arxiv.org/abs/2305.00583"
+url = "https://arxiv.org/abs/2305.00583"

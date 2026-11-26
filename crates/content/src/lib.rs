@@ -5,6 +5,7 @@
 
 pub mod bundle;
 mod catalog;
+pub mod cookbook;
 pub mod course;
 mod dsa;
 pub mod sd;

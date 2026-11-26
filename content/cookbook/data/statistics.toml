@@ -1,0 +1,461 @@
+title = "Statistics"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 386
+kind = "guide"
+lede = "Optimize! #12, Intro #15–16, Advanced S2020 #22 · histograms, MCV lists, sampling, distinct-count estimators, q-error · built and measured on Zipf data · staleness and block-sampling failures reproduced"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Every plan choice is a bet on row counts.</strong> The cost of a join order, an access path or a join algorithm is a function of how many rows each operator will see, and nothing is known about intermediate results except what <strong>statistics</strong> say about the base tables. Wrong statistics do not make a plan a little slower, they make it the wrong shape (a nested loop where a hash join belongs), and errors <strong>multiply</strong> through joins.</li> <li><strong>A statistic is a tiny summary of a column</strong> that is cheap to keep and answers "what fraction of rows satisfies this predicate?" Three layers, in the order a planner uses them: <strong>table level</strong> (row count, pages), <strong>column level</strong> (null fraction, number of distinct values <strong>NDV</strong>, min, max, average width), and <strong>distribution level</strong> (a histogram, a most-common-values list, a sketch or a sample).</li> <li><strong>Skew is what makes statistics hard.</strong> With a uniform column, <code>rows / NDV</code> answers every equality predicate. Real columns are Zipf-like: a few values hold most rows and a long tail holds a handful each, so one number for "rows per value" is wrong by orders of magnitude for both ends.</li> <li><strong>Histograms trade space for resolution.</strong> <em>Equi-width</em> buckets are trivial to build and useless on skew (one bucket swallows the hot values). <em>Equi-depth</em> (equal rows per bucket) bounds the error per bucket but cannot isolate a heavy hitter. <em>Compressed</em> layouts keep the <strong>most common values exactly</strong> and bucket the rest, which is what PostgreSQL does and what wins the measurements below. <em>V-optimal / MaxDiff</em> histograms minimize the within-bucket variance, at a much higher build cost.</li> <li><strong>Inside a bucket, assume uniformity.</strong> Range predicates interpolate linearly across the partial bucket at the boundary; equality predicates divide the bucket count by the bucket's distinct values. These two assumptions are the whole model.</li> <li><strong>Sampling replaces a full scan, with limits.</strong> A uniform sample of a few tens of thousands of rows predicts frequent values and wide ranges well at any table size, because error depends on the sample, not the table. It cannot see rare values, and <strong>estimating NDV from a sample is fundamentally hard</strong> (a guarantee of error better than about √(N/m) is impossible in the worst case).</li> <li><strong>Sketches summarize a full scan in one pass</strong>: HyperLogLog for NDV (±1% in 16 KB), Count-Min for frequencies, quantile sketches for histograms. They are mergeable, so per-partition statistics combine without rescanning, and they update incrementally as data arrives.</li> <li><strong>Statistics go stale.</strong> A table that grew by a few percent is fine; one that grew a new key range is not, because the old histogram says "no rows there". Collection is triggered by the volume of changes (PostgreSQL's autovacuum analyzes after 50 rows plus 10% of the table changed), and a good estimator <strong>degrades gracefully</strong> (never returns 0 rows, clamps at one).</li> <li><strong>Measure with q-error, not absolute error.</strong> Planner decisions are sensitive to <em>ratios</em> of cardinalities, so the right metric is <code>max(est/true, true/est)</code> (clamped to ≥ 1 row). Report its median <strong>and</strong> its tail: the p99 is where bad plans come from.</li> </ul>
+"""
+
+[[sections]]
+heading = "What to store"
+body = """
+<p>The catalog entry a planner needs for one column, with the PostgreSQL <code>pg_stats</code> name where it exists and the size you should expect:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>statistic</th> <th>what it answers</th> <th>PostgreSQL</th> <th>typical size</th> </tr> </thead> <tbody> <tr> <td>row count, page count</td> <td>cost of a scan, scale of everything</td> <td><code>reltuples</code>, <code>relpages</code></td> <td>16 B per table</td> </tr> <tr> <td>null fraction</td> <td><code>IS NULL</code>, outer-join padding</td> <td><code>null_frac</code></td> <td>8 B</td> </tr> <tr> <td>distinct count (NDV)</td> <td><code>col = ?</code>, <code>GROUP BY</code> output, join selectivity</td> <td><code>n_distinct</code> (negative = fraction of rows)</td> <td>8 B</td> </tr> <tr> <td>min / max</td> <td>range-edge checks, "value out of range"</td> <td>first / last histogram bound</td> <td>2 values</td> </tr> <tr> <td>most common values + frequencies</td> <td>skewed equality, hot keys</td> <td><code>most_common_vals</code>, <code>most_common_freqs</code></td> <td>up to 100 × (value, 8 B)</td> </tr> <tr> <td>equi-depth histogram</td> <td>ranges, inequality, <code>&lt;</code>/<code>&gt;</code>, <code>LIKE 'abc%'</code></td> <td><code>histogram_bounds</code></td> <td>up to 101 bounds</td> </tr> <tr> <td>physical correlation</td> <td>index scan I/O (sequential or random)</td> <td><code>correlation</code></td> <td>8 B</td> </tr> <tr> <td>average width</td> <td>memory for sorts, hash tables, network</td> <td><code>avg_width</code></td> <td>8 B</td> </tr> <tr> <td>multi-column NDV, dependencies, joint MCV</td> <td>correlated predicates (<a href="/cookbook/p/cardinality-estimation">Q8</a>)</td> <td><code>CREATE STATISTICS</code></td> <td>per statistics object</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Summaries, executable"
+body = """
+<p>The module builds the same summaries a real system keeps, behind one <code>Estimator</code> trait (<code>eq</code>, <code>range</code>, <code>bytes</code>) so they can be compared on one workload:</p>
+
+<ol> <li><strong><code>Uniform</code></strong>: min, max and NDV (the System R model), the baseline.</li> <li><strong><code>Histogram</code></strong>: <em>equi-width</em> and <em>equi-depth</em> builders over the column's <code>(value, count)</code> runs. The equi-depth builder never splits a value across buckets, so a heavy hitter makes its bucket bigger instead of corrupting two neighbours; the result is that you may get fewer buckets than you asked for on skewed data.</li> <li><strong><code>Compressed</code></strong>: the top-<code>k</code> values above 1.25× the average frequency are stored exactly, the rest go into an equi-depth histogram. Predicates add the exact part and the histogram part.</li> <li><strong><code>SampleEst</code></strong>: keep a uniform sample and scale predicate counts up.</li> <li><strong>Samplers</strong>: Bernoulli (each row with probability <code>p</code>), <strong>reservoir</strong> (Algorithm R, exact size, one pass, unknown table length) and <strong>block</strong> sampling (whole pages).</li> <li><strong>NDV estimators over a sample's frequency profile</strong>: naive scale-up, GEE, Chao, Haas–Stokes Duj1, plus a HyperLogLog full-scan estimate.</li> <li><strong><code>q_error</code></strong> and a small percentile summarizer.</li> </ol>
+
+<p>All builders accept a <code>scale</code> factor so the same code builds a histogram from a full scan (<code>scale = 1</code>) or from a sample (<code>scale = N / m</code>).</p>
+
+:::deeper Reference: Zipf generator, exact oracle, uniform / equi-width / equi-depth / MCV estimators, samplers, NDV estimators, q-error
+```rust title="src/opt/stats.rs"
+//! Column statistics for cardinality estimation: equi-width and equi-depth histograms, most-common-values (MCV)
+//! lists, row/block/reservoir sampling, distinct-count estimators from a sample, and the q-error metric.
+use std::collections::HashMap;
+use crate::hll::HyperLogLog;
+use crate::joinorder::Rng;
+
+// ---------- data generation and ground truth ----------
+
+/// `n` values from a Zipf(theta) distribution over `domain` distinct values (theta = 0 is uniform).
+/// Rank r is mapped to `r * 7919 mod domain`, a bijection when `domain` is not a multiple of 7919 (use a prime),
+/// so the hot values are scattered over the domain instead of sitting at its low end.
+pub fn zipf(r: &mut Rng, n: usize, domain: u64, theta: f64) -> Vec<i64> {
+    let mut cdf = Vec::with_capacity(domain as usize);
+    let mut s = 0.0;
+    for k in 1..=domain { s += 1.0 / (k as f64).powf(theta); cdf.push(s); }
+    (0..n).map(|_| {
+        let u = r.unit() * s;
+        let rank = cdf.partition_point(|&c| c < u).min(domain as usize - 1) as u64;
+        ((rank * 7919) % domain) as i64
+    }).collect()
+}
+
+/// Exact answers, the oracle every estimator is judged against.
+pub struct Exact { pub sorted: Vec<i64>, pub freq: HashMap<i64, u64> }
+impl Exact {
+    pub fn new(v: &[i64]) -> Self {
+        let mut sorted = v.to_vec();
+        sorted.sort_unstable();
+        let mut freq = HashMap::new();
+        for &x in v { *freq.entry(x).or_insert(0) += 1; }
+        Exact { sorted, freq }
+    }
+    pub fn eq(&self, v: i64) -> f64 { *self.freq.get(&v).unwrap_or(&0) as f64 }
+    pub fn range(&self, lo: i64, hi: i64) -> f64 {
+        if lo > hi { return 0.0; }
+        (self.sorted.partition_point(|&x| x <= hi) - self.sorted.partition_point(|&x| x < lo)) as f64
+    }
+    pub fn ndv(&self) -> usize { self.freq.len() }
+}
+
+/// (value, multiplicity) pairs of a sorted slice.
+pub fn runs(sorted: &[i64]) -> Vec<(i64, u64)> {
+    let mut out: Vec<(i64, u64)> = Vec::new();
+    for &x in sorted {
+        match out.last_mut() { Some(l) if l.0 == x => l.1 += 1, _ => out.push((x, 1)) }
+    }
+    out
+}
+
+// ---------- the estimator interface ----------
+
+pub trait Estimator {
+    fn name(&self) -> String;
+    /// Estimated rows with `col = v`.
+    fn eq(&self, v: i64) -> f64;
+    /// Estimated rows with `lo <= col <= hi`.
+    fn range(&self, lo: i64, hi: i64) -> f64;
+    /// Size of the statistic if stored on disk (8 bytes per number).
+    fn bytes(&self) -> usize;
+}
+
+/// The System R baseline: min, max, number of distinct values, and a uniformity assumption.
+pub struct Uniform { pub n: f64, pub min: i64, pub max: i64, pub ndv: f64 }
+impl Uniform {
+    pub fn new(sorted: &[i64]) -> Self {
+        let ndv = runs(sorted).len() as f64;
+        Uniform { n: sorted.len() as f64, min: sorted[0], max: *sorted.last().unwrap(), ndv }
+    }
+}
+impl Estimator for Uniform {
+    fn name(&self) -> String { "uniform (min/max/ndv)".into() }
+    fn eq(&self, v: i64) -> f64 { if v < self.min || v > self.max { 0.0 } else { self.n / self.ndv } }
+    fn range(&self, lo: i64, hi: i64) -> f64 {
+        let (a, b) = (lo.max(self.min), hi.min(self.max));
+        if a > b { return 0.0; }
+        self.n * (b - a + 1) as f64 / (self.max - self.min + 1) as f64
+    }
+    fn bytes(&self) -> usize { 32 }
+}
+
+// ---------- histograms ----------
+
+/// `[lo, hi]` holds `count` rows with `distinct` distinct values, assumed uniform inside the bucket.
+#[derive(Clone, Debug)]
+pub struct Bucket { pub lo: i64, pub hi: i64, pub count: f64, pub distinct: f64 }
+
+/// Buckets sorted by value and pairwise disjoint (gaps between them hold no rows).
+pub struct Histogram { pub kind: &'static str, pub buckets: Vec<Bucket> }
+
+impl Histogram {
+    /// Equal value ranges, unequal row counts. `scale` multiplies counts when built from a sample.
+    pub fn equi_width(runs: &[(i64, u64)], nb: usize, scale: f64) -> Self {
+        let (lo, hi) = (runs[0].0, runs.last().unwrap().0);
+        let w = ((hi - lo + 1) as f64 / nb as f64).ceil() as i64;
+        let mut buckets: Vec<Bucket> = (0..nb as i64)
+            .map(|i| Bucket { lo: lo + i * w, hi: (lo + (i + 1) * w - 1).min(hi), count: 0.0, distinct: 0.0 }).collect();
+        for &(v, c) in runs {
+            let b = &mut buckets[((v - lo) / w) as usize];
+            b.count += c as f64 * scale;
+            b.distinct += 1.0;
+        }
+        buckets.retain(|b| b.count > 0.0);
+        Histogram { kind: "equi-width", buckets }
+    }
+
+    /// Equal row counts, unequal value ranges. A value never straddles two buckets, so a heavy hitter
+    /// simply makes its bucket larger (and `distinct` small): equality estimates stay honest.
+    pub fn equi_depth(runs: &[(i64, u64)], nb: usize, scale: f64) -> Self {
+        let total: u64 = runs.iter().map(|r| r.1).sum();
+        let target = total as f64 / nb as f64;
+        let mut buckets: Vec<Bucket> = Vec::new();
+        let mut cur: Option<Bucket> = None;
+        for &(v, c) in runs {
+            let b = cur.get_or_insert(Bucket { lo: v, hi: v, count: 0.0, distinct: 0.0 });
+            b.hi = v;
+            b.count += c as f64;
+            b.distinct += 1.0;
+            if b.count >= target && buckets.len() + 1 < nb {
+                let mut done = cur.take().unwrap();
+                done.count *= scale;
+                buckets.push(done);
+            }
+        }
+        if let Some(mut b) = cur { b.count *= scale; buckets.push(b); }
+        Histogram { kind: "equi-depth", buckets }
+    }
+
+    fn find(&self, v: i64) -> Option<&Bucket> {
+        let i = self.buckets.partition_point(|b| b.hi < v);
+        self.buckets.get(i).filter(|b| b.lo <= v)
+    }
+    pub fn eq(&self, v: i64) -> f64 { self.find(v).map_or(0.0, |b| b.count / b.distinct) }
+    pub fn range(&self, lo: i64, hi: i64) -> f64 {
+        let mut sum = 0.0;
+        for b in &self.buckets {
+            let (a, z) = (lo.max(b.lo), hi.min(b.hi));
+            if a <= z { sum += b.count * (z - a + 1) as f64 / (b.hi - b.lo + 1) as f64; }
+        }
+        sum
+    }
+    pub fn total(&self) -> f64 { self.buckets.iter().map(|b| b.count).sum() }
+}
+
+impl Estimator for Histogram {
+    fn name(&self) -> String { format!("{} x{}", self.kind, self.buckets.len()) }
+    fn eq(&self, v: i64) -> f64 { Histogram::eq(self, v) }
+    fn range(&self, lo: i64, hi: i64) -> f64 { Histogram::range(self, lo, hi) }
+    fn bytes(&self) -> usize { self.buckets.len() * 32 }
+}
+
+/// The PostgreSQL / "compressed histogram" layout: exact counts for the `k` most common values,
+/// an equi-depth histogram for everything else.
+pub struct Compressed { pub mcv: HashMap<i64, f64>, pub rest: Histogram }
+impl Compressed {
+    pub fn build(runs: &[(i64, u64)], k: usize, nb: usize, scale: f64) -> Self {
+        let total: u64 = runs.iter().map(|r| r.1).sum();
+        let avg = total as f64 / runs.len() as f64;
+        let mut by_count: Vec<(i64, u64)> = runs.to_vec();
+        by_count.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        // only values clearly above average frequency earn a slot (PostgreSQL uses 1.25x)
+        let mcv: HashMap<i64, f64> = by_count.iter().take(k)
+            .filter(|r| r.1 as f64 > 1.25 * avg).map(|r| (r.0, r.1 as f64 * scale)).collect();
+        let rest_runs: Vec<(i64, u64)> = runs.iter().filter(|r| !mcv.contains_key(&r.0)).copied().collect();
+        let rest = if rest_runs.is_empty() { Histogram { kind: "equi-depth", buckets: vec![] } }
+                   else { Histogram::equi_depth(&rest_runs, nb, scale) };
+        Compressed { mcv, rest }
+    }
+}
+impl Estimator for Compressed {
+    fn name(&self) -> String { format!("MCV {} + equi-depth x{}", self.mcv.len(), self.rest.buckets.len()) }
+    fn eq(&self, v: i64) -> f64 { self.mcv.get(&v).copied().unwrap_or_else(|| self.rest.eq(v)) }
+    fn range(&self, lo: i64, hi: i64) -> f64 {
+        let hot: f64 = self.mcv.iter().filter(|(v, _)| **v >= lo && **v <= hi).map(|(_, c)| c).sum();
+        hot + self.rest.range(lo, hi)
+    }
+    fn bytes(&self) -> usize { self.mcv.len() * 16 + self.rest.buckets.len() * 32 }
+}
+
+/// Keep the sample itself as the statistic: answer predicates by counting inside it and scaling up.
+pub struct SampleEst { pub sorted: Vec<i64>, pub scale: f64 }
+impl SampleEst {
+    pub fn new(mut sample: Vec<i64>, population: usize) -> Self {
+        sample.sort_unstable();
+        let scale = population as f64 / sample.len() as f64;
+        SampleEst { sorted: sample, scale }
+    }
+}
+impl Estimator for SampleEst {
+    fn name(&self) -> String { format!("sample of {}", self.sorted.len()) }
+    fn eq(&self, v: i64) -> f64 {
+        (self.sorted.partition_point(|&x| x <= v) - self.sorted.partition_point(|&x| x < v)) as f64 * self.scale
+    }
+    fn range(&self, lo: i64, hi: i64) -> f64 {
+        if lo > hi { return 0.0; }
+        (self.sorted.partition_point(|&x| x <= hi) - self.sorted.partition_point(|&x| x < lo)) as f64 * self.scale
+    }
+    fn bytes(&self) -> usize { self.sorted.len() * 8 }
+}
+
+// ---------- sampling ----------
+
+/// Each row independently with probability `p`: one pass, no need to know the table size, variable sample size.
+pub fn bernoulli(r: &mut Rng, v: &[i64], p: f64) -> Vec<i64> { v.iter().copied().filter(|_| r.unit() < p).collect() }
+
+/// Algorithm R: a uniform sample of exactly `k` items from a stream of unknown length, one pass, O(k) memory.
+/// After item `i` (0-based) is seen, every item so far is in the reservoir with probability `k / (i + 1)`.
+pub fn reservoir(r: &mut Rng, items: impl Iterator<Item = i64>, k: usize) -> Vec<i64> {
+    let mut res = Vec::with_capacity(k);
+    for (i, x) in items.enumerate() {
+        if i < k { res.push(x); } else {
+            let j = r.next(i as u64 + 1) as usize;
+            if j < k { res[j] = x; }
+        }
+    }
+    res
+}
+
+/// Whole pages with probability `p` (what a disk-based ANALYZE can afford): cheap, but biased when values
+/// are clustered by page, because rows on a page are not independent draws.
+pub fn block_sample(r: &mut Rng, v: &[i64], rows_per_page: usize, p: f64) -> Vec<i64> {
+    v.chunks(rows_per_page).filter(|_| r.unit() < p).flatten().copied().collect()
+}
+
+// ---------- distinct-value estimators ----------
+
+/// The sample's frequency profile: `f[j]` = number of values that appear exactly `j` times (`f[0]` unused).
+pub struct Profile { pub m: f64, pub d: f64, pub f: Vec<f64> }
+pub fn profile(sample: &[i64]) -> Profile {
+    let mut cnt: HashMap<i64, usize> = HashMap::new();
+    for &x in sample { *cnt.entry(x).or_insert(0) += 1; }
+    let maxf = cnt.values().copied().max().unwrap_or(0);
+    let mut f = vec![0.0; maxf + 1];
+    for &c in cnt.values() { f[c] += 1.0; }
+    Profile { m: sample.len() as f64, d: cnt.len() as f64, f }
+}
+impl Profile {
+    fn f(&self, j: usize) -> f64 { self.f.get(j).copied().unwrap_or(0.0) }
+    fn clamp(&self, e: f64, population: f64) -> f64 { e.clamp(self.d, population) }
+    /// "Multiply by N/m": right for unique columns, absurd for anything with repeated values.
+    pub fn scale_up(&self, n: f64) -> f64 { self.clamp(self.d * n / self.m, n) }
+    /// Guaranteed-Error Estimator (Charikar et al.): singletons stand for many unseen values, the rest are seen.
+    pub fn gee(&self, n: f64) -> f64 {
+        let rest: f64 = self.d - self.f(1);
+        self.clamp((n / self.m).sqrt() * self.f(1) + rest, n)
+    }
+    /// Chao's lower bound from the singletons and doubletons.
+    pub fn chao(&self, n: f64) -> f64 {
+        let (f1, f2) = (self.f(1), self.f(2));
+        let extra = if f2 > 0.0 { f1 * f1 / (2.0 * f2) } else { f1 * (f1 - 1.0) / 2.0 };
+        self.clamp(self.d + extra, n)
+    }
+    /// Haas & Stokes' smoothed jackknife (the first-order form, "Duj1"), used by PostgreSQL's ANALYZE.
+    pub fn duj1(&self, n: f64) -> f64 {
+        let q = self.m / n;
+        self.clamp(self.d / (1.0 - (1.0 - q) * self.f(1) / self.m), n)
+    }
+}
+
+/// Full-scan sketch: ±1% with 16 KB, mergeable, the estimator to use when you can see every row.
+pub fn ndv_hll(v: &[i64]) -> f64 {
+    let mut h = HyperLogLog::new(14);
+    for &x in v { h.add_hash(mix(x as u64)); }
+    h.estimate()
+}
+fn mix(mut z: u64) -> u64 {
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+    z ^ (z >> 31)
+}
+
+// ---------- error metric ----------
+
+/// q-error = max(est/true, true/est), with both clamped to at least one row (an estimate of 0 rows is never
+/// safe for a planner, and a true count of 0 means "any estimate close to 1 is right").
+pub fn q_error(est: f64, truth: f64) -> f64 {
+    let (e, t) = (est.max(1.0), truth.max(1.0));
+    (e / t).max(t / e)
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct QDist { pub median: f64, pub p90: f64, pub p99: f64, pub max: f64 }
+pub fn summarize(mut q: Vec<f64>) -> QDist {
+    q.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let at = |p: f64| q[(((q.len() - 1) as f64) * p).round() as usize];
+    QDist { median: at(0.5), p90: at(0.9), p99: at(0.99), max: *q.last().unwrap() }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Selectivity formulas"
+body = """
+<p>How a planner turns the summaries into a row estimate, per predicate shape (<code>n</code> = rows, <code>d</code> = NDV, <code>nf</code> = null fraction):</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>predicate</th> <th>estimate</th> </tr> </thead> <tbody> <tr> <td><code>col = v</code></td> <td>MCV hit: its frequency. Otherwise <code>(1 - Σ mcv freq - nf) / (d - #mcv)</code> (PostgreSQL), or <code>bucket count / bucket distinct</code> with a histogram</td> </tr> <tr> <td><code>col &lt; v</code>, <code>col BETWEEN a AND b</code></td> <td>whole buckets below the bound plus the linear fraction of the boundary bucket, plus MCVs inside the range</td> </tr> <tr> <td><code>col IN (v1, …, vk)</code></td> <td>sum of the equality estimates, capped at 1 (duplicates removed first)</td> </tr> <tr> <td><code>col IS NULL</code></td> <td><code>nf</code></td> </tr> <tr> <td><code>col LIKE 'abc%'</code></td> <td>the range <code>['abc', 'abd')</code> on the histogram, times a fudge factor for the remaining pattern</td> </tr> <tr> <td><code>p AND q</code></td> <td><code>sel(p) × sel(q)</code> <strong>under independence</strong> (wrong when columns correlate: <a href="/cookbook/p/cardinality-estimation">Q8</a>)</td> </tr> <tr> <td><code>p OR q</code></td> <td><code>sel(p) + sel(q) - sel(p) × sel(q)</code></td> </tr> <tr> <td><code>NOT p</code></td> <td><code>1 - sel(p) - nf</code> for comparisons (NULL rows satisfy neither side)</td> </tr> <tr> <td><code>f(col) = v</code>, unknown function</td> <td>a <strong>default</strong> selectivity; PostgreSQL uses 0.005 for equality and 1/3 for an open inequality</td> </tr> <tr> <td>join <code>R.a = S.b</code></td> <td><code>1 / max(d_R, d_S)</code> per output pair, refined by histogram/MCV overlap (<a href="/cookbook/p/cardinality-estimation">Q8</a>)</td> </tr> </tbody> </table></div>
+
+<aside data-call="note"><b>Defaults are the failure mode</b><p>Every row of that table has a fallback for "no statistics available", and the fallback is a constant. Wrapping a column in an expression, comparing it to a parameter whose value is unknown at plan time, or reading a table that was never analyzed all land on the constant. When a plan is mysteriously bad, the first question is: did the estimate come from a statistic or from a default?</p></aside>
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p><strong>Workload.</strong> 1 M rows, 10 007 distinct values, Zipf with θ ∈ {0, 0.5, 1, 1.5} (θ = 0 uniform; at θ = 1 the hottest value holds 10% of the table; at θ = 1.5, 38%). Hot values are scattered across the domain, not clustered at the low end. 4 000 equality predicates drawn <strong>from rows</strong> (so frequent values dominate), 4 000 drawn <strong>from the distinct values</strong> (so rare values dominate), and 4 000 ranges of random width. Each estimator gets about 2–3 KB; the sample gets 80 KB (10 000 values).</p>
+
+```text title="q-error (median / p99 / max) per estimator and skew"
+Zipf theta = 0: 10007 distinct values, hottest value has 138 rows (0.0%)
+estimator                       bytes | = (row-weighted) med/p99/max | = (value-weighted) med/p99/max |          range med/p99/max
+uniform (min/max/ndv)              32 |     1.07     1.30     1.45 |     1.07     1.31     1.59 |     1.00     1.01     1.08
+equi-width x100                  3200 |     1.07     1.30     1.45 |     1.07     1.30     1.57 |     1.00     1.01     1.07
+equi-depth x100                  3200 |     1.07     1.30     1.44 |     1.07     1.31     1.57 |     1.00     1.01     1.07
+MCV 50 + equi-depth x50          2400 |     1.07     1.28     1.45 |     1.07     1.30     1.59 |     1.00     1.01     1.09
+sample of 10000                 80000 |     2.11      119      138 |     2.15      117      135 |     1.01     1.14     3.19
+Zipf theta = 0.5: 10007 distinct values, hottest value has 5102 rows (0.5%)
+estimator                       bytes | = (row-weighted) med/p99/max | = (value-weighted) med/p99/max |          range med/p99/max
+uniform (min/max/ndv)              32 |     1.58    25.00    51.06 |     1.55     5.93    34.84 |     1.00     1.09     3.73
+equi-width x100                  3200 |     1.58    21.68    35.78 |     1.54     5.97    26.56 |     1.00     1.06     3.70
+equi-depth x99                   3168 |     1.58    20.40    27.01 |     1.54     6.11    24.25 |     1.00     1.06     3.73
+MCV 50 + equi-depth x50          2400 |     1.46     6.62     7.38 |     1.48     4.47     7.38 |     1.00     1.05     1.59
+sample of 10000                 80000 |     1.94      191      432 |     2.94      150      264 |     1.02     1.15      199
+Zipf theta = 1: 10007 distinct values, hottest value has 102082 rows (10.2%)
+estimator                       bytes | = (row-weighted) med/p99/max | = (value-weighted) med/p99/max |          range med/p99/max
+uniform (min/max/ndv)              32 |    13.77     1022     1022 |     4.83    19.99      512 |     1.13     2.01    15.20
+equi-width x100                  3200 |    19.80    96.15    96.15 |     3.66    56.17      212 |     1.00     1.49    15.76
+equi-depth x70                   2240 |     8.10    78.11    78.11 |     3.57    40.04    78.11 |     1.01     1.55    20.13
+MCV 50 + equi-depth x49          2368 |     1.22    32.35    34.11 |     2.87    14.99    34.11 |     1.00     1.13     3.68
+sample of 10000                 80000 |     1.18      135      377 |    13.00      124      377 |     1.01     1.18    71.00
+Zipf theta = 1.5: 6820 distinct values, hottest value has 385337 rows (38.5%)
+estimator                       bytes | = (row-weighted) med/p99/max | = (value-weighted) med/p99/max |          range med/p99/max
+uniform (min/max/ndv)              32 |      931     2628     2628 |    73.31      147     2628 |     1.74    10.11      300
+equi-width x100                  3200 |    65.86    71.48     1102 |    13.12     1910     5851 |     1.00     3.55      261
+equi-depth x25                    800 |    27.57      281      281 |    25.28      486      486 |     1.05     5.88      111
+MCV 50 + equi-depth x47          2304 |     1.00    42.93    62.15 |     6.77    32.39    58.12 |     1.00     1.33    40.81
+sample of 10000                 80000 |     1.02    47.00      267 |     2.00    78.00      195 |     1.01     1.38      225
+```
+
+<ul> <li><strong>On uniform data nothing matters</strong>: every summary is within 1.3× at p99, and the sample is <em>worse</em> (p99 119×: it simply has not seen most values). That is why the System R model survived for a decade.</li> <li><strong>Skew breaks the uniform model quickly</strong>: at θ = 1 the p99 equality error of <code>uniform</code> is <strong>1 022×</strong> (it says every value has 100 rows, the hottest has 102 082) and at θ = 1.5 even the <em>median</em> is 931×.</li> <li><strong>Equi-width and equi-depth are not enough on heavy skew</strong>: at θ = 1 they still have p99 errors of 96× and 78×, and at θ = 1.5 an equi-depth histogram asked for 100 buckets produced only <strong>25</strong>, because the hot values each fill a bucket on their own. They do fix <em>ranges</em> (median 1.0 and p99 ≈ 1.5 at θ = 1).</li> <li><strong>MCV + histogram wins on every skewed column at the same space</strong>: row-weighted equality has median <strong>1.22</strong> at θ = 1 (from 8.1 for equi-depth) and 1.00 at θ = 1.5, and ranges drop to p99 1.13 and 1.33. The remaining tail is the first values <em>past</em> the MCV list: rank 51 in a Zipf(1) column still has 2 000 rows, and the histogram spreads the rest evenly (p99 32).</li> <li><strong>A raw sample is a good estimator of frequent values and a poor one of rare values</strong> (median row-weighted error 1.18, value-weighted 13, p99 above 100): sampling noise on counts of a few rows is huge in relative terms, and a value that did not make it into the sample is estimated at zero.</li> </ul>
+
+```text title="bucket budget: how many buckets does it take? (Zipf 1.0, p99 q-error)"
+bucket budget, Zipf 1.0 (p99 q-error)
+ buckets |       depth: =   depth: range |   MCV+depth: = MCV+depth: range
+      10 |            287           1.88 |            208           1.59
+      25 |            278           2.02 |          99.87           1.39
+      50 |            138           1.82 |          57.78           1.21
+     100 |          84.67           1.63 |          31.04           1.14
+     250 |          71.74           1.52 |          14.63           1.07
+    1000 |          15.40           1.06 |           5.04           1.02
+```
+
+<p>Giving the MCV layout half its space as exact counts and half as buckets dominates a pure histogram at <strong>every</strong> budget; with 100 slots (50 MCVs + 50 buckets) the equality p99 is 31 against 85 for 100 equi-depth buckets, and range errors are below 1.15. Past roughly 250 slots returns diminish for ranges (they are already within 7%) while the equality tail keeps shrinking, because each extra MCV removes one more value from the "assume uniform" region.</p>
+
+```text title="statistics built from a sample (MCV 50 + equi-depth x50, Zipf 1.0, 1M rows)"
+histograms built from a sample (equi-depth x100 / MCV 50 + x50), Zipf 1.0, 1M rows
+   sample  build ms |     = row-w. med/p99 |   = value-w. med/p99 |        range med/p99
+     1000       2.0 |      1.80        299 |     47.83        200 |      1.06       1.53
+    10000       2.4 |      1.29      19.53 |      9.02      35.00 |      1.01       1.22
+    30000       3.1 |      1.25      17.73 |      4.99      18.62 |      1.01       1.19
+   100000       4.4 |      1.20      26.12 |      3.23      14.50 |      1.00       1.14
+  1000000       6.5 |      1.22      29.49 |      2.88      15.74 |      1.00       1.16
+```
+
+<ul> <li><strong>A 30 000-row sample builds statistics as good as a full scan</strong> for ranges (p99 1.19 against 1.16) and for equality on frequent values (p99 17.7 against 29.5: the difference is noise). In this in-memory release-build benchmark the sample costs 3.1 ms to sort and summarize against 6.5 ms for all 1 M rows (the full-scan row includes copying the column; sorting is cheap here because the column has only 10 007 distinct values). The real saving is not the sort but <strong>not reading the table</strong>: a sample touches 30 000 rows (or the pages that hold them) where a full scan reads every page. That is why PostgreSQL's default is 300 × <code>default_statistics_target</code> = 30 000 rows regardless of table size.</li> <li><strong>Sampling hurts where counts are small</strong>: value-weighted equality medians fall from 48 (1 000 rows) to 9 (10 000) to 3 (100 000). Rare values are the part of the distribution a sample resolves worst, which is also where NDV estimates come from.</li> </ul>
+
+```text title="distinct-count estimates from a sample"
+distinct-count estimates from a 1% sample (ratio estimate/true; 1.00 is perfect), N = 1M
+column                                 true |  scale-up      GEE     Chao     Duj1 |  HLL scan
+near-unique (domain 10M, uniform)    951537 |      1.05     0.10     1.05     0.89 |     0.985
+uniform, 100k values                  99998 |      9.52     0.91     1.00     0.92 |     0.998
+uniform, 1k values                     1009 |    100.00     1.00     1.00     1.00 |     1.010
+Zipf 1.0, 100k values                 80791 |      5.37     0.45     0.25     0.08 |     1.004
+Zipf 1.5, 100k values                 11814 |      5.54     0.38     0.15     0.06 |     0.987
+same, uniform 100k values, as the sample grows
+  sample |  scale-up      GEE     Chao     Duj1
+    1000 |      9.95     0.31     0.99     0.91
+   10000 |      9.52     0.91     1.00     0.91
+  100000 |      6.33     1.43     1.01     0.95
+  500000 |      1.99     1.01     1.00     1.00
+```
+
+<ul> <li><strong>Scaling the sample's NDV up by <code>N/m</code> is wrong by up to 100×</strong>: it is correct only for a nearly unique column (1.05) and says 9.5× too many for a 100 k-value column. Never use it.</li> <li><strong>No estimator is good everywhere.</strong> On uniform columns Chao and Duj1 land within 11% at a 1% sample. On a skewed long tail all three (GEE, Chao, Duj1) are 2× to 17× <strong>too low</strong> (Duj1 0.08 and 0.06 on Zipf), and on a near-unique column GEE sits at 0.10, exactly its guaranteed √(N/m) = 10× worst case. Charikar et al. prove that no estimator based on a sample alone can be accurate on all distributions.</li> <li><strong>HyperLogLog over the full data is within 1.5% on every column</strong> (p = 14, 16 KB). If you can afford to read every row (a column store scan, a bulk load, a compaction), use a sketch; keep sampled estimators for the case where you cannot.</li> <li><strong>Larger samples help very non-linearly</strong>: scale-up goes 9.95 → 9.52 → 6.33 → 1.99 as the sample grows from 1 k to 500 k rows, while Duj1 improves from 0.91 to 1.00.</li> </ul>
+
+```text title="block sampling vs row sampling on a clustered table"
+block vs row sampling, 1M rows, 20k values, 100 rows/page, ~1% of rows
+layout                 true ndv |  row Duj1 page Duj1 | page range p99
+random order              20011 |      0.71      0.74 |         1.13
+clustered by value        20011 |      0.72      0.01 |        11020
+```
+
+<p><strong>Block sampling is biased on clustered data.</strong> If the table is stored in value order, a sampled page holds 100 copies of one or two values; a 1% page sample sees only 1% of the <em>values</em>, so its NDV is <strong>100× too low</strong> (0.01) and range estimates are wrong by <strong>11 020×</strong> at p99. On randomly ordered data page sampling is as good as row sampling (range p99 1.13). Production systems either sample pages and then rows from each page (PostgreSQL's two-stage <code>ANALYZE</code>) and correct for page-level correlation, or ignore physical layout by sampling rows directly when the storage allows it.</p>
+
+```text title="stale statistics: new rows arrive after ANALYZE"
+stale statistics: built once on 1M rows, then new rows are appended (the new rows' values are shifted up by 2000, i.e. a growing key)
+  new rows |       = row-w. med/p99 |          range med/p99 | range above old max: est vs true
+        0% |       1.17       32.06 |       1.00        1.13 |            0 vs         0
+        1% |       1.25       31.15 |       1.00         745 |            0 vs      1704
+       10% |       1.53         167 |       1.01        7954 |            0 vs     16222
+       50% |       2.26        3228 |       1.03       38419 |            0 vs     81644
+      100% |       3.42        9271 |       1.05       80735 |            0 vs    162819
+```
+
+<ul> <li><strong>Statistics tolerate growth but not drift.</strong> With 1% new rows the median error stays at 1.00 for ranges; the damage is in the <strong>tail</strong>: ranges that touch the new key range have p99 errors of 745 at 1%, 7 954 at 10%, and 80 735 when the table has doubled.</li> <li><strong>The "above the old maximum" row is the common production bug</strong>: an <code>ORDER BY ts DESC LIMIT 10</code>, a "rows since the last hour" filter, or a join with the newest orders asks for the part of the domain the statistics have never seen, so the estimate is <strong>0 rows</strong> (clamped to 1) while the truth is 162 819. The planner then picks a nested loop. PostgreSQL's selectivity code (<code>get_actual_variable_range</code>) probes the index for the current minimum or maximum when a constant falls outside the histogram; most systems need an equivalent patch for exactly this reason.</li> </ul>
+"""
+
+[[sections]]
+heading = "Collecting statistics"
+body = """
+<ol> <li><strong>Trigger</strong>: count row modifications per table; when the number exceeds a threshold (<code>50 + 10% × rows</code> in PostgreSQL autovacuum; roughly <code>√(1000 × rows)</code> for large tables in newer SQL Server), schedule a background analyze. Also analyze after a bulk load and after a <code>CREATE INDEX</code>.</li> <li><strong>Sample</strong>: draw a row sample of fixed size (~30 000) with block-then-row sampling (above), or, in an LSM or column store, use a <strong>full scan folded into compaction</strong> and keep a sketch per file.</li> <li><strong>Summarize</strong>: sort the sample once; build runs; take the MCV list, then the equi-depth histogram of the remainder, then NDV (sampled estimator, or a sketch if available), null fraction, correlation.</li> <li><strong>Publish atomically</strong>: write the new statistics in a transaction, version them, and let running plans keep the old ones.</li> <li><strong>Merge, don't rebuild, in partitioned or distributed tables</strong>: HLL sketches merge exactly (register-wise max), counts and null fractions add; histograms need a common bucket boundary or re-bucketing from samples.</li> <li><strong>Feedback closes the loop</strong>: after execution, compare estimated and actual rows per operator; large q-errors mark the columns whose statistics are worth refreshing or extending (<a href="/cookbook/p/adaptive-and-robust">Q10</a>).</li> </ol>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A trait object per estimator</strong>: <code>Vec&lt;Box&lt;dyn Estimator&gt;&gt;</code> makes the comparison table a loop, and the property test applies the same invariants to every implementation. The trait is object-safe because it has no generic methods and no <code>Self</code> in return position.</li> <li><strong><code>partition_point</code> is the whole search layer</strong>: bucket lookup, sample counts and exact ranges are all <code>slice::partition_point</code> on sorted data (<code>O(log n)</code>, no manual binary-search off-by-ones). <code>Exact::range</code> is two calls and a subtraction.</li> <li><strong>One builder, two inputs</strong>: every builder takes <code>&amp;[(i64, u64)]</code> runs and a <code>scale: f64</code>, not the raw column. The same code builds from a full scan, a sample (scale <code>N/m</code>), or a merged set of per-partition runs, and the MCV step can <em>remove</em> runs before the histogram sees them with a plain <code>filter</code>.</li> <li><strong><code>f64</code> for counts</strong>: a scaled-up count is a real number, a bucket's <code>distinct</code> is an estimate, and the arithmetic mixes them; storing everything as <code>f64</code> and converting at the edges avoids overflow and truncation bugs in <code>count * (z - a + 1) / (hi - lo + 1)</code>.</li> <li><strong><code>iter().enumerate()</code> for reservoir sampling</strong>: Algorithm R needs only the running index, so the sampler takes <code>impl Iterator&lt;Item = i64&gt;</code> and works on a table scan, a file reader or a network stream without knowing the length.</li> <li><strong>Deterministic generators in tests</strong>: the <code>Rng</code> is a seeded xorshift, so every number in this chapter reproduces; a statistical test that can fail 1 run in 1 000 is a flaky test, so tolerances are set from the seeded run, not from theory.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Invariants (proptest on random small columns, all three histogram types)</strong>: total mass equals <code>n</code>; the sum of equality estimates over all distinct values equals <code>n</code>; range estimates are non-negative and monotone in the upper bound; the full-domain range returns <code>n</code>.</li> <li><strong>Exactness</strong>: when every value is at least as heavy as a bucket's target share, each value gets its own bucket and equality estimates are exact.</li> <li><strong>Bucket structure</strong>: buckets are sorted and disjoint, and no equi-depth bucket exceeds its target by more than the heaviest single value.</li> <li><strong>Sampler uniformity</strong>: 40 000 runs of Algorithm R over 20 items with <code>k = 5</code> must put every item in the reservoir within 5% of <code>k/n</code> of the runs.</li> <li><strong>Estimator bounds</strong>: every NDV estimate lies in <code>[distinct in sample, N]</code>; HLL is within 3% on a 5 003-value column.</li> <li><strong>Interpolation</strong>: one bucket over 100 values × 10 rows must give 250 rows for <code>[0, 24]</code> and 10 for a single value. The mass properties alone do not catch a range estimator that ignores the partial bucket, because they only ask for the full range.</li> <li><strong>Mutants run against these tests</strong>: drop the <code>scale</code> on the last equi-depth bucket (caught by the mass property: it generates scales from 1 to 40); divide equality by the value range instead of the distinct count (caught); leave the MCVs in the histogram input (double counting; caught); return the whole bucket for a partial range (<strong>survived the mass properties</strong>, killed by the interpolation test).</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>PostgreSQL</strong>: <code>ANALYZE</code> samples 300 × <code>default_statistics_target</code> rows (30 000 at the default 100), stores per column an MCV list and an equi-depth histogram of the remaining values (up to <code>default_statistics_target</code> entries each), <code>n_distinct</code> (Haas–Stokes Duj1 from the sample), null fraction and physical <code>correlation</code>. Autovacuum runs analyze after <code>autovacuum_analyze_threshold</code> (50) plus <code>autovacuum_analyze_scale_factor</code> (0.1) × rows have changed. <code>CREATE STATISTICS</code> adds multi-column <code>ndistinct</code>, functional <code>dependencies</code> and joint MCV lists (<a href="/cookbook/p/cardinality-estimation">Q8</a>).</li> <li><strong>SQL Server</strong>: one histogram per statistics object of up to <strong>200 steps</strong> (each with <code>EQ_ROWS</code>, <code>RANGE_ROWS</code>, <code>DISTINCT_RANGE_ROWS</code>, <code>AVG_RANGE_ROWS</code>: a bucket plus the exact count of its upper bound, which is MCV-ish by construction), plus a density vector for multi-column prefixes; auto-update thresholds that tighten with table size; incremental statistics for partitions.</li> <li><strong>Oracle</strong>: frequency, top-frequency, hybrid and (older) height-balanced histograms chosen by the number of distinct values; extended statistics for column groups and expressions.</li> <li><strong>MySQL 8</strong>: histograms are opt-in (<code>ANALYZE TABLE … UPDATE HISTOGRAM ON col WITH N BUCKETS</code>), singleton or equi-height, and matter mainly for columns without an index; for indexed columns the optimizer can use index dives (probing the B-tree) instead.</li> <li><strong>Column stores and lakehouses</strong> (Parquet, Iceberg, Delta): min/max, null count and sometimes an NDV sketch <strong>per row group or file</strong>, written at load time and merged for the table: statistics come free with the data, and zone maps double as an execution-time filter (<a href="/cookbook/p/storage-models-and-compression">L06</a>, <a href="/cookbook/p/columnar-formats-and-nested-data">A12</a>).</li> <li><strong>DuckDB, ClickHouse</strong>: lean on per-block min/max and, in DuckDB, on sampling at plan time rather than classical histograms; check the current source, this area moves quickly.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>A wrong NDV poisons everything downstream</strong>: join selectivity, <code>GROUP BY</code> output size and <code>rows / NDV</code> equality all divide by it. If you must choose, spend your budget on a good NDV (HLL on a scan) before more histogram buckets.</li> <li><strong>Statistics describe the data at analyze time, not at plan time</strong>: when plans flip after a deploy or a bulk load, check <code>last_analyze</code> before checking the optimizer.</li> <li><strong>Parameterized queries and prepared statements</strong> plan without seeing the parameter, so the estimate for <code>col = $1</code> is <code>1/NDV</code>, wrong by orders of magnitude for a hot value; systems either re-plan per execution for skewed columns or build custom and generic plans and pick the cheaper after a few runs.</li> <li><strong>Never return 0 rows</strong> from an estimator. Zero multiplies through every join above it and makes a nested loop look free; clamp to at least 1.</li> <li><strong>Equality outside every bucket</strong> (<code>col = 5</code> where all histogram buckets lie above 100): the estimate is 0 and the planner's clamp makes it one row; that is right for a value that does not exist and wrong for a value inserted after the analyze.</li> <li><strong>Do not trust a tail you did not measure</strong>: report p99, not the mean, in every estimator test. On uniform data every estimator has the same median and p99; under skew the medians of <code>uniform</code> and the plain histograms already diverge (13.8 and 8.1 for row-weighted equality at θ = 1), but the largest differences between layouts are in the p99.</li> <li><strong>A bigger sample is not the first lever</strong>: going from 30 000 to 1 M rows changes no accuracy metric above by more than noise but multiplies the I/O by 30 or more; raise the MCV count first (the budget table), the sample size second.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "The History of Histograms (abridged)"
+url = "https://www.vldb.org/conf/2003/papers/S02P01.pdf"
+
+[[sources]]
+title = "Synopses for Massive Data"
+url = "https://www.nowpublishers.com/article/Details/DBS-004"

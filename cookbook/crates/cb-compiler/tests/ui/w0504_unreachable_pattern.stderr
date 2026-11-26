@@ -1,0 +1,17 @@
+warning[W0504]: unreachable pattern
+ --> w0504_unreachable_pattern.peb:5:9
+  |
+5 |         0 => println("zero"),
+  |         ^ no value can reach this pattern
+  |
+  = note: earlier arms already match every value this pattern matches
+
+warning[W0504]: unreachable pattern
+  --> w0504_unreachable_pattern.peb:10:9
+   |
+10 |         true => {}
+   |         ^^^^ no value can reach this pattern
+   |
+   = note: earlier arms already match every value this pattern matches
+
+warning: 2 warnings emitted

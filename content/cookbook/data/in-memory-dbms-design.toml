@@ -1,0 +1,171 @@
+title = "In-memory DBMS design"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 324
+kind = "guide"
+lede = "15-721 lecture #2 · what a disk-oriented design pays for · memory-resident data organization · concurrency control at a thousand cores · measured cost of page-id translation"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>A disk-oriented DBMS assumes the data is on disk and the memory is a cache.</strong> Every access goes through a <strong>buffer pool</strong>: translate a page id to a frame, <strong>pin</strong> it, <strong>latch</strong> it, find the tuple, unlatch, unpin. Early profiling of OLTP engines (<em>OLTP Through the Looking Glass</em>, Harizopoulos et al. 2008) found only a small fraction of instructions doing useful work, with buffer management, locking, latching and logging taking most of the rest. When the whole database fits in RAM, <strong>those costs are pure overhead.</strong></li> <li><strong>Memory-resident design</strong> removes the indirection: tuples and index nodes are reached by <strong>direct pointers</strong>; no pin counts, no page table, no eviction; data lives in <strong>fixed-length blocks</strong> (the tuple's columns) plus a <strong>variable-length pool</strong> for strings; indexes store pointers and are tuned for <strong>cache lines</strong> rather than disk pages (small nodes, prefetching, no need to be sorted-for-disk-seek).</li> <li><strong>What stays</strong>: durability (log + checkpoints, see <a href="/cookbook/p/recovery-for-main-memory-systems">A7</a>), concurrency control (but see below), a query processor, a catalog. <strong>What changes</strong>: nothing is I/O-bound any more, so <strong>CPU, cache and synchronization costs</strong> dominate; execution should be compiled or vectorized (<a href="/cookbook/p/vectorized-execution-with-simd">A14</a>, <a href="/cookbook/p/query-compilation-and-code-generation">A15</a>).</li> <li><strong>Concurrency control gets harder, not easier.</strong> Latch and lock acquisition used to hide behind disk waits. In memory each acquisition is a cache-coherence transaction. <em>Staring into the Abyss</em> (Yu et al., VLDB 2014) simulated seven schemes up to <strong>1 000 cores</strong>: 2PL with deadlock detection or wait-die <strong>thrashes on locks</strong> under contention; timestamp ordering and MVCC hit the <strong>timestamp allocator</strong> (a single atomic counter); OCC and MVCC pay for <strong>copying</strong>; only partitioned, single-threaded execution (H-Store style) scales on partitionable workloads and then collapses with multi-partition transactions. No scheme survives high contention at that scale; the paper's conclusion is that <strong>many-core transaction processing needs both new hardware support and new software designs</strong>.</li> <li><strong>Design choices of memory-first systems</strong>: <strong>H-Store/VoltDB</strong> (one thread per partition, no latches, stored procedures, command logging), <strong>HyPer</strong> (fork-based snapshots, later MVCC), <strong>Hekaton</strong> (latch-free indexes and optimistic MVCC inside SQL Server), <strong>MemSQL/SingleStore</strong> (lock-free skip lists), <strong>Silo</strong> (OCC with epochs), <strong>Redis/Memcached</strong> (data structures server). Most later add a <em>larger-than-memory</em> mechanism (<a href="/cookbook/p/larger-than-memory-databases">A8</a>).</li> <li><strong>Rule of thumb</strong>: if the working set fits in RAM, remove the buffer pool and the page abstraction. If it might not, keep a way to find and evict cold data, but make the hot path pointer-direct.</li> </ul>
+"""
+
+[[sections]]
+heading = "What a page-id costs: measured"
+body = """
+<p>The experiment: the same static B+Tree (fan-out 64, nodes of ~1 KB) searched two ways. <strong>Direct</strong>: a child is an index into the node array, as in a memory-resident index. <strong>Paged</strong>: a child is a <em>page id</em>; every node visit does what a buffer-pool access does: look the id up in a <strong>page table</strong> (a hash map with a cheap hash), <strong>pin</strong> the frame (atomic increment), take the page's <strong>read latch</strong>, search, and undo both. Results are checked identical on thousands of probes.</p>
+
+:::deeper Reference: the same tree reached by direct indices and through a page table with pin + latch
+```rust title="src/storage/inmem.rs"
+//! What a disk-oriented design pays on every node visit, measured against direct pointers.
+use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
+use std::sync::atomic::{AtomicU32, Ordering::*};
+use std::sync::RwLock;
+
+const FANOUT: usize = 64;
+
+#[derive(Clone)]
+pub struct Node {
+    n: usize,
+    keys: [u64; FANOUT],
+    child: [u32; FANOUT],     // inner: child node id; leaf: the stored value
+    leaf: bool,
+}
+
+/// A static B+Tree built bottom-up from sorted keys: only the *access path* matters here.
+pub struct Tree { pub nodes: Vec<Node>, pub root: u32 }
+
+impl Tree {
+    pub fn build(keys: &[u64]) -> Tree {
+        let mut nodes: Vec<Node> = vec![];
+        let mut level: Vec<(u64, u32)> = vec![];                       // (smallest key below, node id)
+        for chunk in keys.chunks(FANOUT) {
+            let mut n = Node { n: chunk.len(), keys: [0; FANOUT], child: [0; FANOUT], leaf: true };
+            for (i, &k) in chunk.iter().enumerate() { n.keys[i] = k; n.child[i] = (k as u32).wrapping_mul(3); }
+            nodes.push(n);
+            level.push((chunk[0], nodes.len() as u32 - 1));
+        }
+        while level.len() > 1 {
+            let mut next = vec![];
+            for chunk in level.chunks(FANOUT) {
+                let mut n = Node { n: chunk.len(), keys: [0; FANOUT], child: [0; FANOUT], leaf: false };
+                for (i, &(k, id)) in chunk.iter().enumerate() { n.keys[i] = k; n.child[i] = id; }
+                nodes.push(n);
+                next.push((chunk[0].0, nodes.len() as u32 - 1));
+            }
+            level = next;
+        }
+        Tree { root: level[0].1, nodes }
+    }
+}
+
+#[inline]
+fn search(n: &Node, key: u64) -> usize {
+    // last slot whose key <= `key` (slot 0 if none)
+    n.keys[..n.n].partition_point(|&k| k <= key).saturating_sub(1)
+}
+
+/// In-memory design: a child is an index (or a raw pointer); visiting it is one load.
+pub fn lookup_direct(t: &Tree, key: u64) -> Option<u32> {
+    let mut id = t.root as usize;
+    loop {
+        let n = &t.nodes[id];
+        let i = search(n, key);
+        if n.leaf { return (n.keys[i] == key).then_some(n.child[i]); }
+        id = n.child[i] as usize;
+    }
+}
+
+#[derive(Default)]
+pub struct IdHasher(u64);
+impl Hasher for IdHasher {
+    fn write(&mut self, _: &[u8]) { unreachable!() }
+    fn write_u32(&mut self, v: u32) { self.0 = (v as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15); }
+    fn finish(&self) -> u64 { self.0 }
+}
+
+struct Frame { pin: AtomicU32, latch: RwLock<()>, node: Node }
+
+/// Disk-oriented design: a child is a *page id*. Each visit translates it through the page table,
+/// pins the frame so it can't be evicted, takes the page's read latch, searches, and undoes all of that.
+pub struct PagedTree { table: HashMap<u32, usize, BuildHasherDefault<IdHasher>>, frames: Vec<Frame>, root: u32 }
+
+impl PagedTree {
+    pub fn from(t: &Tree) -> PagedTree {
+        let mut table = HashMap::default();
+        let mut frames = vec![];
+        for (id, n) in t.nodes.iter().enumerate() {
+            table.insert(id as u32, frames.len());
+            frames.push(Frame { pin: AtomicU32::new(0), latch: RwLock::new(()), node: n.clone() });
+        }
+        PagedTree { table, frames, root: t.root }
+    }
+
+    pub fn lookup(&self, key: u64) -> Option<u32> {
+        let mut pid = self.root;
+        loop {
+            let f = &self.frames[*self.table.get(&pid).unwrap()];      // page table lookup
+            f.pin.fetch_add(1, AcqRel);                                  // pin
+            let _g = f.latch.read().unwrap();                            // latch
+            let n = &f.node;
+            let i = search(n, key);
+            let r = if n.leaf { Some((n.keys[i] == key).then_some(n.child[i])) } else { pid = n.child[i]; None };
+            drop(_g);
+            f.pin.fetch_sub(1, AcqRel);                                  // unpin
+            if let Some(v) = r { return v; }
+        }
+    }
+}
+```
+:::
+
+```text title="single thread, 2M random probes (half miss), Apple M-series"
+        keys   levels      direct ns       paged ns   overhead
+      100000        3           51.5           66.1      1.28x
+     1000000        4           59.8          105.3      1.76x
+    16000000        4          138.8          236.9      1.71x
+```
+
+<p>On one thread the translation costs <strong>28–76% more per lookup</strong>, and the overhead is larger when the tree fits in cache (the extra work isn't hidden behind misses). The real damage is under concurrency:</p>
+
+```text title="lookups per second (millions, whole machine), 1M keys"
+ threads           direct paged (pin+latch)
+       1             15.9              9.0
+       2             29.0              8.9
+       4             58.4              5.2
+       8            109.3              2.5
+```
+
+<ul> <li><strong>Direct access scales linearly</strong> (6.9× at 8 threads): the nodes are read-only, so cores share the cache lines without invalidating them.</li> <li><strong>The paged design gets <em>slower</em> as threads are added</strong>: 9.0 → 2.5 M/s. Every lookup pins and latches the <strong>root frame</strong> (and the top levels), and those atomic increments make the cache line ping-pong between cores. At 8 threads it is <strong>44× slower</strong> than direct access, even though not one thread ever waits on a lock.</li> <li>Latch-free <strong>read</strong> paths are the fix, whether through immutable nodes, optimistic version checks (<a href="/cookbook/p/index-concurrency-control">OLC, L10</a>), or epoch-based protection instead of pin counts (<a href="/cookbook/p/latch-free-indexes-and-the-bw-tree">A5</a>).</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Index arenas, not <code>Box</code> per node</strong>: nodes live in a <code>Vec&lt;Node&gt;</code> and refer to each other by <code>u32</code>; this halves pointer size, keeps neighbours together, and makes snapshots a <code>memcpy</code>. <code>Box</code>/<code>Rc</code> per node costs an allocation each and defeats prefetching.</li> <li><strong><code>#[repr(align(64))]</code> on shared counters</strong> avoids false sharing; the <code>pin: AtomicU32</code> next to the latch in the same frame is itself a false-sharing hazard (here the sharing is <em>true</em> sharing, on the root).</li> <li><strong>Why <code>RwLock&lt;()&gt;</code> plus data outside</strong> is a smell: the lock doesn't guard the data it protects, so the compiler can't help you. A production design wraps the node in the lock (<code>RwLock&lt;Node&gt;</code>) or uses version-validated reads.</li> <li><strong>Make the hasher cheap</strong>: SipHash (std default) is ~5× slower than a multiplicative hash for integer keys. Use <code>BuildHasherDefault</code> with your own <code>Hasher</code>, or a perfect/direct-mapped table when ids are dense.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls of memory-first design</b><ul> <li><strong>"It fits in RAM" is a moving claim</strong>: data grows, replicas and indexes multiply it by 3–10×, and fragmentation wastes more. Plan for eviction or cold-data tiers (<a href="/cookbook/p/larger-than-memory-databases">A8</a>).</li> <li><strong>Pointers don't survive restarts</strong> or snapshots: persist with relocatable offsets or rebuild indexes on recovery (most H-Store-style systems rebuild).</li> <li><strong>No buffer pool ≠ no caches</strong>: CPU caches and TLBs are the new buffer pool. Use huge pages for large tables; prefetch in index probes; keep hot fields together.</li> <li><strong>Memory allocation is the new I/O</strong>: a general-purpose <code>malloc</code> becomes a bottleneck at high thread counts; use per-thread arenas or slab allocators for tuples and versions.</li> <li><strong>Durability costs don't vanish</strong>: you still need a log and <code>fsync</code> (<a href="/cookbook/p/logging">L21</a>); the log becomes the new bottleneck, which is why such systems log <em>commands</em> or batch commits.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Staring into the Abyss: An Evaluation of Concurrency Control with One Thousand Cores"
+url = "https://www.vldb.org/pvldb/vol8/p209-yu.pdf"
+
+[[sources]]
+title = "OLTP Through the Looking Glass, and What We Found There"
+url = "https://dl.acm.org/doi/10.1145/1376616.1376713"
+
+[[sources]]
+title = "The End of an Architectural Era (It's Time for a Complete Rewrite)"
+url = "https://www.vldb.org/conf/2007/papers/industrial/p1150-stonebraker.pdf"
+
+[[sources]]
+title = "Hekaton: SQL Server's Memory-Optimized OLTP Engine"
+url = "https://www.microsoft.com/en-us/research/publication/hekaton-sql-servers-memory-optimized-oltp-engine/"
+
+[[sources]]
+title = "HyPer: A Hybrid OLTP&OLAP Main Memory Database System Based on Virtual Memory Snapshots"
+url = "https://db.in.tum.de/~kemper/papers/hyper-icde11.pdf"

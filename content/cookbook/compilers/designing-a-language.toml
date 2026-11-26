@@ -1,0 +1,15 @@
+title = "Designing a language"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Types and semantics"
+chapter_order = 4
+order = 611
+kind = "guide"
+lede = "The decisions that are expensive to change later, with how existing languages made them"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Decision</th><th>Options and precedents</th><th>Consequences</th></tr></thead> <tbody> <tr><td>Syntax class</td><td>LL(1)-friendly (Go, Rust mostly), needs full LR or GLR (C++), indentation-based (Python, Haskell)</td><td>Tooling quality; C's <code>a * b;</code> and C++'s “most vexing parse” are permanent costs. Rust's <code>::&lt;&gt;</code> turbofish and Go's <code>[T]</code> generics exist to avoid <code>&lt;</code> ambiguity</td></tr> <tr><td>Evaluation order</td><td>Defined left-to-right (Java, Rust, Lox), unspecified (C, C++ before 17)</td><td>Unspecified order gives compilers freedom and gives users bugs</td></tr> <tr><td>Integer overflow</td><td>Wrap (Java, Go), trap (Swift), UB (C signed), trap in debug and wrap in release (Rust), arbitrary precision (Python)</td><td>Performance vs safety vs portability</td></tr> <tr><td>Absence of a value</td><td>null (Java, C), Option types (Rust, Swift, ML)</td><td>Hoare called null his “billion-dollar mistake”</td></tr> <tr><td>Errors</td><td>Exceptions (Java, Python), result values (Rust, Go), effects (Koka)</td><td>Control-flow visibility, performance of the error path, interaction with generics</td></tr> <tr><td>Memory management</td><td>Tracing GC, reference counting, ownership, regions, manual</td><td>Runtime size, latency, FFI, what users must think about</td></tr> <tr><td>Generics</td><td>Erasure (Java), monomorphization (Rust, C++), dictionary passing (Haskell, Swift), a mix (Go, C#)</td><td>Code size, compile time, runtime speed, separate compilation</td></tr> <tr><td>Concurrency</td><td>Threads and locks, async/await, green threads (Go, Erlang), actors, data-race freedom by types (Rust, Pony)</td><td>Hard to retrofit; determines the runtime</td></tr> <tr><td>Metaprogramming</td><td>None (Go originally), macros (Rust, Lisp), comptime (Zig)</td><td>Expressiveness vs tooling vs compile time</td></tr> <tr><td>Undefined behavior</td><td>None (safe languages), explicit <code>unsafe</code> boundary (Rust), pervasive (C)</td><td>What the optimizer may assume, and what users must never do</td></tr> <tr><td>Evolution</td><td>Editions (Rust), versioned stdlib (Go modules), breaking major versions (Python 3)</td><td>Whether old code keeps compiling</td></tr> <tr><td>Specification</td><td>Formal (Standard ML), prose standard (C, C++), reference implementation (Python, Ruby)</td><td>Multiple implementations and tool vendors need a spec</td></tr> </tbody> </table></div>
+"""

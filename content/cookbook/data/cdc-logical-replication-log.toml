@@ -1,0 +1,70 @@
+title = "Change data capture and logical replication"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 440
+kind = "recipe"
+lede = "WAL decoding in commit order, replication slots, snapshot+stream bootstrap, idempotent sink"
+level = "advanced"
+code = ["examples/database/cdc_logical_replication_log.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>streaming a database's changes to search indexes</li><li>caches</li><li>warehouses</li><li>other services</li><li>zero-downtime migrations</li><li>read replicas of a different shape</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Physical** vs **logical**: physical replication ships page-level WAL bytes (replica must be the same engine and version). **Logical** replication **decodes** the WAL back into row-level changes (insert / update / delete with **before** and **after** images), which any consumer can apply. That is change data capture (CDC).
+
+**The primary** (below): a keyed table; each statement appends `Change{xid, key, op, before, after}` to the WAL at write time (so records of concurrent transactions **interleave**), and a transaction ends with a `Commit` or `Abort` record. Row locks keep two open transactions off the same key. Committed state is only updated at commit.
+
+A `Ddl` record carries the new column list (**add column** with default 0), allowed only with no transaction open, as if under an exclusive lock.
+
+**Logical decoding** (`Primary::decode`): scan the WAL from the slot's RESTART_LSN, buffer changes per xid in a **reorder buffer**, emit a whole transaction only when its Commit record is seen (so output is in **commit** order, not change order), drop it on Abort. Messages at or below the consumer's confirmed position are not re-sent.
+
+**Replication slot**: the primary's durable bookmark for one consumer. `confirmed_flush` = how far the consumer has durably applied; `restart_lsn` = oldest WAL needed to re-decode everything after it: the first record of any transaction that was still in flight at that position (its changes began earlier than its commit).
+
+The primary may only delete WAL older than the minimum restart_lsn over all slots (and open transactions). A stalled slot therefore makes WAL grow without bound: the classic production incident, shown below (Postgres caps it with `max_slot_wal_keep_size`).
+
+**The event envelope**: Debezium-style JSON `{before, after, source{db,table,lsn,txId,snapshot}, op, ts_ms}` with op `c`reate, `u`pdate, `d`elete, `r`ead (snapshot row); a `schema` message announces columns. The sink parses these strings; nothing else crosses the boundary, like a real topic.
+
+**Idempotent sink**: delivery is **at-least-once** (consumer crashes between apply and confirm, or mid-transaction). Every change is applied only if its LSN is greater than the per-key **fence** (the last applied LSN, also kept for deleted keys as a tombstone; otherwise replaying `insert` then `delete` after a crash would resurrect the row).
+
+Updates and deletes also check the **before** image against the sink's row: a cheap divergence detector.
+
+**Bootstrap** (new replica while writes continue): (1) create the slot **first**: from now on the primary retains every change (these are the "buffered changes"); (2) take a consistent snapshot of committed state at position SNAP_LSN, each row stamped with the commit LSN that last wrote it; (3) load it as `r` events; (4) stream from the slot, **skipping** messages with position &lt;= SNAP_LSN (already inside the snapshot; this is the dedupe by LSN), applying the rest.
+
+Gap-free because the slot was created before the snapshot, duplicate-free because of the LSN cut. Doing it in the other order (snapshot, then create slot) loses the commits in between.
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+2000 random workloads (concurrent interleaved transactions, aborts, DDL, a replica from the start and a second replica bootstrapped at a random moment mid-workload), consumer crashes at random points (before applying, in the middle of a transaction, after applying but before confirming), restarts from the slot's confirmed position.
+
+At the end both sinks equal the primary, per-key applied LSNs strictly increase, replayed changes were fenced, and WAL below the slots' restart_lsn is reclaimed.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>PostgreSQL logical decoding / pgoutput</li><li>Debezium (outbox pattern, cache invalidation, search indexing)</li><li>MySQL binlog readers (Maxwell, Canal)</li><li>MongoDB change streams</li><li>DynamoDB streams</li><li>AWS DMS</li><li>zero-downtime database migrations</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://www.postgresql.org/docs/current/logicaldecoding-explanation.html" target="_blank" rel="noreferrer">https://www.postgresql.org/docs/current/logicaldecoding-explanation.html</a></li><li><a href="https://debezium.io/documentation/reference/stable/connectors/postgresql.html" target="_blank" rel="noreferrer">https://debezium.io/documentation/reference/stable/connectors/postgresql.html</a> ("DBLog: A Watermark Based Change-Data-Capture Framework" (Netflix) is the incremental-snapshot alternative</li><li>cited by title only, not checked)</li></ul>
+"""
+
+[[sources]]
+title = "postgresql.org/docs/current/logicaldecoding-explanation.html"
+url = "https://www.postgresql.org/docs/current/logicaldecoding-explanation.html"
+
+[[sources]]
+title = "debezium.io/documentation/reference/stable/connectors/postgresql.html"
+url = "https://debezium.io/documentation/reference/stable/connectors/postgresql.html"

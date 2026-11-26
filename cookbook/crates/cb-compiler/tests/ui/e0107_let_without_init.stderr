@@ -1,0 +1,17 @@
+warning[W0501]: unused variable: `x`
+ --> e0107_let_without_init.peb:2:9
+  |
+2 |     let x: int;
+  |         ^ this variable is never read
+  |
+  = help: if this is intentional, prefix it with an underscore: `_x`
+
+error[E0107]: `let` binding has no initialiser
+ --> e0107_let_without_init.peb:2:15
+  |
+2 |     let x: int;
+  |               ^ expected `= value` here
+  |
+  = help: every binding must be initialised, e.g. `let x = 0;`
+
+error: aborting due to 1 previous error; 1 warning emitted

@@ -1,0 +1,70 @@
+{
+  "activationEvents": [
+    "onLanguage:pebble"
+  ],
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "configuration": {
+      "properties": {
+        "pebble.server.path": {
+          "default": "pebble-tools",
+          "description": "Path to the pebble-tools executable (started as `pebble-tools lsp`).",
+          "type": "string"
+        },
+        "pebble.trace.server": {
+          "default": "off",
+          "description": "Trace LSP traffic.",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "type": "string"
+        }
+      },
+      "title": "PEBBLE"
+    },
+    "configurationDefaults": {
+      "[pebble]": {
+        "editor.formatOnType": true,
+        "editor.insertSpaces": true,
+        "editor.semanticHighlighting.enabled": true,
+        "editor.tabSize": 4
+      }
+    },
+    "grammars": [
+      {
+        "language": "pebble",
+        "path": "./syntaxes/pebble.tmLanguage.json",
+        "scopeName": "source.pebble"
+      }
+    ],
+    "languages": [
+      {
+        "aliases": [
+          "PEBBLE",
+          "pebble"
+        ],
+        "configuration": "./language-configuration.json",
+        "extensions": [
+          ".peb"
+        ],
+        "id": "pebble"
+      }
+    ]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "description": "Syntax highlighting and language server client for the PEBBLE language",
+  "displayName": "PEBBLE",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "main": "./extension.js",
+  "name": "pebble-language",
+  "publisher": "cookbook",
+  "version": "0.1.0"
+}

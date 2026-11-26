@@ -1,0 +1,7 @@
+warning[W0509]: unused value that is never used
+ --> w0509_unused_value.peb:3:5
+  |
+3 |     x + 1;
+  |     ^^^^^ this value is computed and then discarded
+
+warning: 1 warning emitted

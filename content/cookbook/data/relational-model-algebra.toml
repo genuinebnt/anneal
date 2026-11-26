@@ -1,0 +1,314 @@
+title = "Relational Model & Algebra"
+module = "Databases"
+module_order = 8
+chapter = "Foundations and SQL"
+chapter_order = 1
+order = 309
+kind = "guide"
+lede = "Codd 1970 · the algebra every optimizer rewrites"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Why a DBMS.</strong> Application-managed files fail on integrity (validation, relationships, deletes), implementation (finding records, sharing across apps and machines, concurrent writers) and durability (crashes mid-update, replication).</li> <li><strong>Data model vs schema.</strong> A data model is the vocabulary for describing data: relational, key/value, graph, document, wide-column, array/vector. A schema describes one dataset in that vocabulary.</li> <li><strong>Codd's insight: data independence.</strong> Early systems (IMS, CODASYL) hard-coded access paths, so any change to the physical layout broke queries. The relational model separates <strong>structure</strong> (relations, independent of storage), <strong>integrity</strong> (constraints) and <strong>manipulation</strong> (declarative queries). The DBMS picks the plan, and can re-pick it as data changes.</li> <li><strong>Relations are unordered.</strong> That freedom is what lets the system choose storage layout, indexes and access order.</li> <li><strong>Keys and constraints.</strong> A primary key identifies a tuple, and systems synthesize one if you don't declare it. Foreign keys reference other relations. Constraints must hold for every database instance.</li> <li><strong>Algebra = the plan language.</strong> σ, π, ∪, ∩, −, ×, ⋈ each take relations and return a relation, so they compose. An algebra expression <em>fixes an order of steps</em>.</li> <li><strong>Equivalent orders, very different costs.</strong> σ(R ⋈ S) and R ⋈ σ(S) return the same rows, but can differ by orders of magnitude. Declarative SQL lets the optimizer choose; procedural APIs (Pandas) make you choose.</li> <li><strong>Other models</strong> (document/JSON, vector) keep being absorbed back into relational systems: JSON columns, <code>pgvector</code>.</li> </ul>
+"""
+
+[[sections]]
+heading = "Why a model"
+body = """
+<p>Before Codd, applications navigated storage directly: IMS walked hierarchical segments, and CODASYL followed record pointers. Changing the physical layout, say by adding an index or reordering records, broke programs. Codd's 1970 paper, <a href="https://dl.acm.org/doi/10.1145/362384.362685" target="_blank" rel="noreferrer"><em>A Relational Model of Data for Large Shared Data Banks</em></a>, separated three things:</p>
+
+<ol> <li><strong>Store data in simple structures.</strong> Relations: unordered sets of tuples over named, typed attributes.</li> <li><strong>Access data through a high-level language.</strong> The application says <em>what</em> it wants; the DBMS decides <em>how</em>.</li> <li><strong>Leave physical storage to the implementation.</strong> Heap vs. sorted file, row vs. column, which indexes exist: none of it is visible in the query.</li> </ol>
+
+<p>Point 3 is <strong>physical data independence</strong>, and it is the reason this guide exists. Everything from Lecture 3 on is physical storage that the model promises to hide. Every optimizer decision is the DBMS choosing a <em>how</em> on your behalf.</p>
+
+<dl class="cb-g-gloss"><dt>Relation</dt><dd>An unordered <em>set</em> of tuples sharing a schema. SQL tables are <strong>bags</strong> (duplicates allowed) unless a key forbids it; that difference matters for every rewrite rule.</dd><dt>Tuple</dt><dd>A sequence of attribute values, each atomic (1NF) or a special <code>NULL</code>. Modern systems relax atomicity: arrays, JSON, vectors.</dd><dt>Domain</dt><dd>The set of allowed values for an attribute — a type plus constraints.</dd><dt>Primary key</dt><dd>A minimal set of attributes that uniquely identifies a tuple. Systems synthesise one if you don't (<code>SERIAL</code>, <code>rowid</code>, InnoDB's hidden 6-byte row id).</dd><dt>Foreign key</dt><dd>Attributes whose values must appear as a key in another relation. The DBMS checks it on insert/update/delete — a join-shaped constraint.</dd><dt>Candidate / super key</dt><dd>Any unique attribute set (super); minimal ones (candidate). The optimizer uses uniqueness to remove <code>DISTINCT</code>, eliminate joins, and bound cardinalities.</dd><dt>DML / DDL</dt><dd>Data manipulation (query, insert…) vs. data definition (create table…).</dd></dl>
+"""
+
+[[sections]]
+heading = "Relational algebra"
+body = """
+<p>Algebra is <strong>procedural</strong>: an expression spells out an evaluation order. SQL is <strong>declarative</strong>. A planner turns SQL into algebra, and an optimizer rewrites that algebra into cheaper algebra that gives the same result. Every rewrite rule in Part III is an algebraic identity from this lecture.</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Operator</th> <th>Symbol</th> <th>Meaning</th> <th>Physical implementations (later lectures)</th> </tr> </thead> <tbody> <tr> <td>Select</td> <td>σ<sub>p</sub>(R)</td> <td>tuples satisfying predicate <em>p</em></td> <td>filter, index scan, zone-map skip, SIMD predicate</td> </tr> <tr> <td>Project</td> <td>π<sub>A</sub>(R)</td> <td>keep attributes <em>A</em> (set semantics: dedupe)</td> <td>projection, column pruning</td> </tr> <tr> <td>Union</td> <td>R ∪ S</td> <td>tuples in either (same schema)</td> <td>concat + dedupe (hash/sort)</td> </tr> <tr> <td>Intersection</td> <td>R ∩ S</td> <td>tuples in both</td> <td>hash/sort-based set ops, semi-join</td> </tr> <tr> <td>Difference</td> <td>R − S</td> <td>in R not in S</td> <td>anti-join</td> </tr> <tr> <td>Product</td> <td>R × S</td> <td>all pairs</td> <td>nested loop (only sane with tiny inputs)</td> </tr> <tr> <td>Join</td> <td>R ⋈<sub>θ</sub> S</td> <td>σ<sub>θ</sub>(R × S)</td> <td>NLJ, index NLJ, hash join, sort-merge, WCOJ</td> </tr> <tr> <td>Rename</td> <td>ρ</td> <td>rename relation/attributes</td> <td>binder alias handling</td> </tr> <tr> <td>Aggregate</td> <td>γ<sub>G; f(A)</sub>(R)</td> <td>group by G, compute f</td> <td>hash aggregate, sort aggregate, streaming</td> </tr> <tr> <td>Sort</td> <td>τ<sub>A</sub>(R)</td> <td>order (outside pure set algebra)</td> <td>in-memory sort, external merge sort, top-N heap</td> </tr> <tr> <td>Duplicate elim.</td> <td>δ(R)</td> <td>bag → set</td> <td>hash/sort distinct</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Equivalences"
+body = """
+<p>These hold under <strong>set</strong> semantics. Under bag semantics most still hold, but distribution over union and distinct elimination need care, noted where relevant.</p>
+
+```text title="Algebraic equivalences (used by rule-based rewrites)"
+σ_{p∧q}(R)            ≡  σ_p(σ_q(R))                       -- split conjunctions (cascade)
+σ_p(σ_q(R))           ≡  σ_q(σ_p(R))                       -- commute selections
+σ_p(R ⋈ S)            ≡  σ_p(R) ⋈ S        if attrs(p) ⊆ R  -- predicate pushdown
+σ_p(R × S)            ≡  R ⋈_p S           if p spans R,S  -- product + filter = join
+π_A(σ_p(R))           ≡  π_A(σ_p(π_{A∪attrs(p)}(R)))       -- projection pushdown / column pruning
+R ⋈ S                 ≡  S ⋈ R                             -- join commutativity
+(R ⋈ S) ⋈ T           ≡  R ⋈ (S ⋈ T)                       -- join associativity (inner only!)
+σ_p(R ∪ S)            ≡  σ_p(R) ∪ σ_p(S)                   -- selection distributes over union
+γ_{G;f}(R ⋈ S)        ≡  γ_{G;f'}(γ_{G∪J;f''}(R) ⋈ S)       -- eager aggregation (conditions apply)
+R ⟕ S (then σ on S)   →  R ⋈ S   if σ rejects NULLs          -- outer-join simplification
+```
+
+<aside data-call="warning"><b>Outer joins don't associate freely</b><p><code>(R ⟕ S) ⋈ T</code> is not in general equal to <code>R ⟕ (S ⋈ T)</code>. Join reordering over outer joins needs specific rules (Moerkotte and Neumann's <em>conflict detection</em>, Part III), or the optimizer produces wrong answers. Early in Cairn, reorder only runs of inner joins and treat every outer join as a fixed barrier. That restriction is correct, simple, and costs little in practice.</p></aside>
+"""
+
+[[sections]]
+heading = "An algebra evaluator"
+body = """
+<p>This is a warm-up that pays off twice. It's the first executor you write, and later it becomes the <strong>reference oracle</strong> for differential tests of the real engine: same query, same data, compare the rows. It works on <code>Vec&lt;Row&gt;</code> with no storage underneath.</p>
+
+```rust title="crates/scratch/src/algebra.rs — a relational algebra interpreter (REF tier: warm-up)"
+use std::collections::{HashMap, HashSet};
+use std::fmt;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Value { Null, Int(i64), Text(String) }
+
+pub type Row = Vec<Value>;
+
+#[derive(Clone, Debug)]
+pub struct Relation { pub cols: Vec<String>, pub rows: Vec<Row> }
+
+#[derive(Clone, Debug)]
+pub enum Pred {
+    Eq(Scalar, Scalar),
+    Lt(Scalar, Scalar),
+    And(Box<Pred>, Box<Pred>),
+    Or(Box<Pred>, Box<Pred>),
+    Not(Box<Pred>),
+}
+
+#[derive(Clone, Debug)]
+pub enum Scalar { Col(String), Lit(Value) }
+
+#[derive(Clone, Debug)]
+pub enum Rel {
+    Scan(String),
+    Select(Pred, Box<Rel>),
+    Project(Vec<String>, Box<Rel>),       // bag projection; wrap in Distinct for set semantics
+    Product(Box<Rel>, Box<Rel>),
+    Join(Pred, Box<Rel>, Box<Rel>),
+    Union(Box<Rel>, Box<Rel>),
+    Difference(Box<Rel>, Box<Rel>),
+    Distinct(Box<Rel>),
+    Rename(String, Box<Rel>),             // prefix every column: "r.a"
+    Aggregate { group: Vec<String>, aggs: Vec<(AggFn, String)>, input: Box<Rel> },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum AggFn { CountStar, Sum, Min, Max }
+
+pub struct Db { pub tables: HashMap<String, Relation> }
+
+impl Db {
+    pub fn eval(&self, e: &Rel) -> Relation {
+        match e {
+            Rel::Scan(t) => self.tables[t].clone(),
+            Rel::Select(p, r) => {
+                let r = self.eval(r);
+                let rows = r.rows.iter().filter(|row| truthy(eval_pred(p, &r.cols, row))).cloned().collect();
+                Relation { cols: r.cols, rows }
+            }
+            Rel::Project(cols, r) => {
+                let r = self.eval(r);
+                let idx: Vec<usize> = cols.iter().map(|c| col_idx(&r.cols, c)).collect();
+                let rows = r.rows.iter().map(|row| idx.iter().map(|&i| row[i].clone()).collect()).collect();
+                Relation { cols: cols.clone(), rows }
+            }
+            Rel::Product(a, b) => {
+                let (a, b) = (self.eval(a), self.eval(b));
+                let cols = a.cols.iter().chain(&b.cols).cloned().collect();
+                let rows = a.rows.iter()
+                    .flat_map(|x| b.rows.iter().map(move |y| x.iter().chain(y).cloned().collect()))
+                    .collect();
+                Relation { cols, rows }
+            }
+            Rel::Join(p, a, b) => self.eval(&Rel::Select(p.clone(), Box::new(Rel::Product(a.clone(), b.clone())))),
+            Rel::Union(a, b) => {
+                let (mut a, b) = (self.eval(a), self.eval(b));
+                assert_eq!(a.cols.len(), b.cols.len(), "union-incompatible");
+                a.rows.extend(b.rows);                                   // UNION ALL; Distinct on top for UNION
+                a
+            }
+            Rel::Difference(a, b) => {
+                let (a, b) = (self.eval(a), self.eval(b));
+                let drop: HashSet<&Row> = b.rows.iter().collect();
+                let rows = a.rows.iter().filter(|r| !drop.contains(r)).cloned().collect();
+                Relation { cols: a.cols, rows }
+            }
+            Rel::Distinct(r) => {
+                let r = self.eval(r);
+                let mut seen = HashSet::new();
+                let rows = r.rows.into_iter().filter(|row| seen.insert(row.clone())).collect();
+                Relation { cols: r.cols, rows }
+            }
+            Rel::Rename(prefix, r) => {
+                let mut r = self.eval(r);
+                r.cols = r.cols.iter().map(|c| format!("{prefix}.{}", c.rsplit('.').next().unwrap())).collect();
+                r
+            }
+            Rel::Aggregate { group, aggs, input } => {
+                let r = self.eval(input);
+                let g: Vec<usize> = group.iter().map(|c| col_idx(&r.cols, c)).collect();
+                let mut groups: HashMap<Row, Vec<Value>> = HashMap::new();
+                let mut order: Vec<Row> = Vec::new();                    // first-seen order: deterministic output
+                for row in &r.rows {
+                    let key: Row = g.iter().map(|&i| row[i].clone()).collect();
+                    let acc = groups.entry(key.clone()).or_insert_with(|| {
+                        order.push(key);
+                        aggs.iter().map(|(f, _)| init(*f)).collect()
+                    });
+                    for (slot, (f, col)) in acc.iter_mut().zip(aggs) {
+                        let v = if matches!(f, AggFn::CountStar) { Value::Null } else { row[col_idx(&r.cols, col)].clone() };
+                        *slot = step(*f, std::mem::replace(slot, Value::Null), v);
+                    }
+                }
+                // Empty input with no GROUP BY still yields one row: COUNT(*) = 0, others NULL.
+                if group.is_empty() && order.is_empty() {
+                    order.push(vec![]);
+                    groups.insert(vec![], aggs.iter().map(|(f, _)| init(*f)).collect());
+                }
+                let cols = group.iter().cloned().chain(aggs.iter().map(|(f, c)| format!("{f:?}({c})"))).collect();
+                let rows = order.into_iter().map(|k| { let a = groups.remove(&k).unwrap(); k.into_iter().chain(a).collect() }).collect();
+                Relation { cols, rows }
+            }
+        }
+    }
+}
+
+fn init(f: AggFn) -> Value { if matches!(f, AggFn::CountStar) { Value::Int(0) } else { Value::Null } }
+
+fn step(f: AggFn, acc: Value, v: Value) -> Value {
+    use Value::*;
+    match (f, acc, v) {
+        (AggFn::CountStar, Int(n), _) => Int(n + 1),
+        (_, acc, Null) => acc,                                            // aggregates skip NULL inputs
+        (_, Null, v) => v,
+        (AggFn::Sum, Int(a), Int(b)) => Int(a + b),
+        (AggFn::Min, a, b) => if b < a { b } else { a },
+        (AggFn::Max, a, b) => if b > a { b } else { a },
+        (f, a, b) => panic!("type error in {f:?}: {a:?}, {b:?}"),
+    }
+}
+
+fn col_idx(cols: &[String], name: &str) -> usize {
+    cols.iter().position(|c| c == name || c.rsplit('.').next() == Some(name))
+        .unwrap_or_else(|| panic!("unknown column {name} in {cols:?}"))
+}
+
+/// Three-valued logic: Some(true), Some(false), None = UNKNOWN.
+fn eval_pred(p: &Pred, cols: &[String], row: &Row) -> Option<bool> {
+    let s = |x: &Scalar| match x { Scalar::Col(c) => row[col_idx(cols, c)].clone(), Scalar::Lit(v) => v.clone() };
+    match p {
+        Pred::Eq(a, b) => cmp(s(a), s(b)).map(|o| o.is_eq()),
+        Pred::Lt(a, b) => cmp(s(a), s(b)).map(|o| o.is_lt()),
+        Pred::And(a, b) => match (eval_pred(a, cols, row), eval_pred(b, cols, row)) {
+            (Some(false), _) | (_, Some(false)) => Some(false),
+            (Some(true), Some(true)) => Some(true),
+            _ => None,
+        },
+        Pred::Or(a, b) => match (eval_pred(a, cols, row), eval_pred(b, cols, row)) {
+            (Some(true), _) | (_, Some(true)) => Some(true),
+            (Some(false), Some(false)) => Some(false),
+            _ => None,
+        },
+        Pred::Not(a) => eval_pred(a, cols, row).map(|b| !b),
+    }
+}
+
+fn cmp(a: Value, b: Value) -> Option<std::cmp::Ordering> {
+    match (&a, &b) { (Value::Null, _) | (_, Value::Null) => None, _ => Some(a.cmp(&b)) }
+}
+
+fn truthy(b: Option<bool>) -> bool { b == Some(true) }                   // WHERE keeps only TRUE
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self { Value::Null => write!(f, "NULL"), Value::Int(i) => write!(f, "{i}"), Value::Text(s) => write!(f, "{s}") }
+    }
+}
+```
+
+<aside data-call="rust"><b>What to notice</b><ul> <li><code>Box&lt;Rel&gt;</code> makes a recursive enum sized. For plan trees you'll later want <code>Arc&lt;PlanNode&gt;</code>, so optimizer rules can share subtrees without cloning them.</li> <li><code>Option&lt;bool&gt;</code> <em>is</em> three-valued logic, and <code>truthy</code> is the WHERE-clause collapse: UNKNOWN is filtered out. Using <code>bool</code> for predicates is the most common NULL bug in student databases.</li> <li>Deriving <code>Ord</code> on <code>Value</code> gives a total order where <code>Null &lt; Int &lt; Text</code>. That's convenient for sorting, grouping and <code>HashMap</code> keys, but <strong>wrong for SQL comparison</strong>, which is why <code>cmp</code> special-cases NULL. Keep the two orderings as separate functions from day one: <em>storage/sort order</em> (total) and <em>SQL comparison</em> (partial).</li> <li><code>flat_map(move |x| ...)</code> needs <code>move</code> because the inner closure borrows <code>x</code>, which comes from the outer iterator. Without <code>move</code> you get a lifetime error that's worth reading once.</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "Equivalences as properties"
+body = """
+<p>The algebraic identities are executable. Generate random relations and predicates, then check that both sides give the same <strong>multiset</strong> of rows. This is the same harness you'll later point at the optimizer.</p>
+
+```rust title="crates/scratch/tests/algebra_props.rs"
+use proptest::prelude::*;
+use scratch::algebra::*;
+
+// --- helpers --------------------------------------------------------------
+fn bx<T>(t: T) -> Box<T> { Box::new(t) }
+fn scan(t: &str) -> Rel { Rel::Rename(t.into(), bx(Rel::Scan(t.into()))) }
+fn eq_lit(c: &str, v: Value) -> Pred { Pred::Eq(Scalar::Col(c.into()), Scalar::Lit(v)) }
+
+/// A relation named `name` with `arity` int columns a, b, c… ; small domain + some NULLs.
+fn rel(name: &'static str, arity: usize, n: std::ops::Range<usize>) -> impl Strategy<Value = Relation> {
+    let cell = prop_oneof![1 => Just(Value::Null), 6 => (0i64..5).prop_map(Value::Int)];
+    prop::collection::vec(prop::collection::vec(cell, arity), n).prop_map(move |rows| Relation {
+        cols: (0..arity).map(|i| format!("{name}.{}", (b'a' + i as u8) as char)).collect(),
+        rows,
+    })
+}
+
+trait With { fn with(rels: &[Relation]) -> Db; }
+impl With for Db {
+    fn with(rels: &[Relation]) -> Db {
+        Db { tables: rels.iter().map(|r| (r.cols[0].split('.').next().unwrap().to_string(), r.clone())).collect() }
+    }
+}
+
+fn sorted(mut r: Relation) -> Vec<Row> { r.rows.sort(); r.rows }
+
+proptest! {
+    #[test]
+    fn predicate_pushdown_is_sound(r in rel("r", 2, 0..30), s in rel("s", 2, 0..30), k in 0i64..5) {
+        let db = Db::with(&[r, s]);
+        let p = eq_lit("r.a", Value::Int(k));                                   // touches only r
+        let j = Pred::Eq(Scalar::Col("r.b".into()), Scalar::Col("s.a".into()));
+        let before = Rel::Select(p.clone(), bx(Rel::Join(j.clone(), bx(scan("r")), bx(scan("s")))));
+        let after  = Rel::Join(j, bx(Rel::Select(p, bx(scan("r")))), bx(scan("s")));
+        prop_assert_eq!(sorted(db.eval(&before)), sorted(db.eval(&after)));
+    }
+
+    #[test]
+    fn join_commutes_as_multisets(r in rel("r", 2, 0..20), s in rel("s", 2, 0..20)) {
+        let db = Db::with(&[r, s]);
+        let j = Pred::Eq(Scalar::Col("r.b".into()), Scalar::Col("s.a".into()));
+        let rs = db.eval(&Rel::Project(vec!["r.a".into(), "s.b".into()], bx(Rel::Join(j.clone(), bx(scan("r")), bx(scan("s"))))));
+        let sr = db.eval(&Rel::Project(vec!["r.a".into(), "s.b".into()], bx(Rel::Join(j, bx(scan("s")), bx(scan("r"))))));
+        prop_assert_eq!(sorted(rs), sorted(sr));
+    }
+
+    #[test]
+    fn not_in_with_null_is_empty(r in rel("r", 1, 1..10)) {
+        let db = Db::with(&[r]);
+        let p = Pred::Not(bx(Pred::Or(bx(eq_lit("r.a", Value::Int(1))), bx(eq_lit("r.a", Value::Null)))));
+        prop_assert!(db.eval(&Rel::Select(p, bx(scan("r")))).rows.is_empty());
+    }
+}
+```
+
+<aside data-call="idea"><b>Beyond relations</b><p>Read the other data models through the relational lens. A <strong>document</strong> is a relation with nested, schema-optional tuples. A <strong>graph</strong> is a pair of relations, <code>nodes(id, label, props)</code> and <code>edges(src, dst, label, props)</code>, where traversals are recursive joins. A <strong>vector</strong> store is a relation with a column type that supports a new kind of predicate: similarity instead of equality. A <strong>key-value</strong> store is a relation with exactly one key and an opaque value. The algebra above is the common layer a multi-model planner federates over (Part V). Stonebraker and Pavlo's 2024 essay <a href="https://db.cs.cmu.edu/papers/2024/whatgoesaround-sigmodrec2024.pdf" target="_blank" rel="noreferrer"><em>What Goes Around Comes Around… And Around…</em></a> argues that every data model since 1970 has either converged back to relational or stayed a niche. Read it as the counter-argument to building a multi-model system, and have an answer for it.</p></aside>
+"""
+
+[[sources]]
+title = "A Relational Model of Data for Large Shared Data Banks"
+url = "https://dl.acm.org/doi/10.1145/362384.362685"
+
+[[sources]]
+title = "What Goes Around Comes Around"
+url = "https://people.cs.umass.edu/~yanlei/courses/CS691LL-f06/papers/SH05.pdf"
+
+[[sources]]
+title = "…And Around…"
+url = "https://db.cs.cmu.edu/papers/2024/whatgoesaround-sigmodrec2024.pdf"

@@ -1,0 +1,17 @@
+title = "How rustc, swc and oxc handle the same problems"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 562
+kind = "guide"
+lede = "Where the big front ends differ, and what makes sense at rlox's size."
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Concern</th><th>rustc</th><th>swc</th><th>oxc</th><th>rlox</th></tr></thead> <tbody> <tr><td>Lexer</td><td><code>rustc_lexer</code> crate: pure, no errors, tokens are kind + length. A second pass adds spans and symbols</td><td><code>Lexer</code> implements <code>Iterator</code> of token-and-span over an <code>Input</code> with <code>cur</code>, <code>peek</code> and <code>bump</code></td><td>Byte-oriented lexer with small fixed-size tokens. Values are read back by span</td><td><code>Chars</code> cursor, <code>Copy</code> token of kind + span</td></tr> <tr><td>Spans</td><td>Compact 8-byte <code>Span</code> over <code>BytePos(u32)</code></td><td><code>Span { lo, hi }</code> of <code>BytePos(u32)</code></td><td><code>Span { start: u32, end: u32 }</code></td><td><code>u32</code> start and end, lines computed on demand</td></tr> <tr><td>Names</td><td>Interned <code>Symbol(u32)</code></td><td><code>Atom</code> (interned or inline)</td><td><code>Atom&lt;'a&gt;</code> pointing into the arena</td><td><code>Rc&lt;str&gt;</code>, interner optional</td></tr> <tr><td>AST memory</td><td><code>P&lt;T&gt;</code> (Box) for the AST, arenas for later IRs</td><td><code>Box&lt;T&gt;</code></td><td>Bump arena for the whole tree</td><td><code>Box&lt;Expr&gt;</code></td></tr> <tr><td>Traversal</td><td><code>Visitor</code> trait with <code>walk_*</code> functions</td><td>Generated <code>Visit</code>, <code>VisitMut</code>, <code>Fold</code></td><td>Generated <code>Visit</code>, <code>VisitMut</code>, <code>Traverse</code></td><td><code>match</code> in each pass</td></tr> <tr><td>Diagnostics</td><td><code>Diag</code> builder, error codes, heavy recovery</td><td><code>Handler</code> with diagnostic builders</td><td><code>OxcDiagnostic</code>, rendered with miette</td><td>Plain jlox format, <code>--pretty</code> optional</td></tr> <tr><td>Tests</td><td><code>tests/ui</code>: annotated source files plus <code>.stderr</code> snapshots, updated with <code>--bless</code></td><td>Fixture folders of input and expected output, regenerated with <code>UPDATE=1</code></td><td>Conformance runs against test262, Babel and TypeScript. Pass counts are committed as snapshots</td><td><code>// expect:</code> golden files, <code>insta</code>, official suite</td></tr> </tbody> </table></div>
+
+<p>Borrow oxc's conformance idea. Have the runner write the pass count for each official folder to a committed file, such as <code>tests/official-status.txt</code>. Then every commit's diff shows which tests started or stopped passing.</p>
+"""

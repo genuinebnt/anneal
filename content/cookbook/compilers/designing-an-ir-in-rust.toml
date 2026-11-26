@@ -1,0 +1,115 @@
+title = "Designing an IR in Rust"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Middle end and analysis"
+chapter_order = 5
+order = 619
+kind = "guide"
+lede = "The data structure every later chapter operates on · Modeled on Cranelift's CLIF and rustc's IndexVec"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>Choosing an IR means choosing which analyses are easy. The main families:</p>
+
+<ul> <li><b>Trees</b> (ASTs, HIR) keep source structure, which is good for type checking and desugaring.</li> <li><b>Linear three-address code</b> in a control-flow graph (CFG) of basic blocks is where dataflow analysis lives. rustc's MIR is this, with explicit drops and borrows.</li> <li><b>SSA</b> adds the rule that each variable is assigned exactly once. Use-def chains become pointers, and most optimizations get simpler and faster. <ul> <li>LLVM merges values at join points with φ-nodes.</li> <li>Cranelift and MLIR use <em>block parameters</em> instead: branches pass arguments to blocks. It's equivalent, and it removes φ special cases.</li> </ul></li> <li><b>Sea of nodes</b> (HotSpot C2, historically V8 TurboFan) drops the fixed instruction order and keeps only data and control dependencies. It's powerful for global code motion, and hard to debug. V8 has since moved back to a CFG-based IR.</li> <li><b>CPS and ANF</b> are the functional-language equivalents of SSA (<a href="/cookbook/p/compiling-functional-languages">chapter 23</a>). SSA is essentially functional programming (Appel; Kelsey).</li> <li><b>Multi-level IRs</b> such as MLIR host many “dialects” in one framework and lower between them progressively.</li> </ul>
+
+<p>Production compilers use several: rustc goes AST → HIR → THIR → MIR → LLVM IR, and each stage exists because some analysis was painful in the previous one.</p>
+
+```rust title="An SSA IR with block parameters, typed indices and no pointers"
+use smallvec::SmallVec;
+use std::marker::PhantomData;
+
+macro_rules! entity {
+    ($($name:ident),*) => {$(
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+        pub struct $name(u32);
+        impl $name { pub fn index(self) -> usize { self.0 as usize } }
+        impl From<usize> for $name { fn from(i: usize) -> Self { $name(i as u32) } }
+    )*};
+}
+entity!(Value, Inst, Block, FuncRef);
+
+/// A Vec indexed by a typed ID, so an Inst can never index the block table.
+pub struct IndexVec<I, T> { raw: Vec<T>, _m: PhantomData<fn(I)> }
+impl<I: From<usize> + Copy, T> IndexVec<I, T> {
+    pub fn new() -> Self { Self { raw: Vec::new(), _m: PhantomData } }
+    pub fn push(&mut self, t: T) -> I { self.raw.push(t); I::from(self.raw.len() - 1) }
+    pub fn len(&self) -> usize { self.raw.len() }
+}
+impl<I: Into<usize>, T> std::ops::Index<I> for IndexVec<I, T> {
+    type Output = T;
+    fn index(&self, i: I) -> &T { &self.raw[i.into()] }
+}
+// (IndexMut, iter_enumerated, and Into<usize> for each entity omitted.)
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Type { I8, I32, I64, F64, Ptr }
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Cond { Eq, Ne, Slt, Sle, Sgt, Sge, Ult }
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Opcode {
+    Iconst(i64), Iadd, Isub, Imul, Sdiv, Icmp(Cond), Select,
+    Load, Store, Call(FuncRef),
+    Jump, Brif, Return,                            // terminators
+}
+
+pub struct BlockCall { pub block: Block, pub args: SmallVec<[Value; 2]> }
+
+pub struct InstData {
+    pub op: Opcode,
+    pub args: SmallVec<[Value; 3]>,
+    pub result: Option<Value>,
+    pub targets: SmallVec<[BlockCall; 2]>,       // successors, with block arguments
+}
+
+pub enum ValueDef { Inst(Inst), Param(Block, u32) }
+
+pub struct BlockData { pub params: Vec<Value>, pub insts: Vec<Inst> }
+
+pub struct Function {
+    pub name: String,
+    pub blocks: IndexVec<Block, BlockData>,
+    pub insts: IndexVec<Inst, InstData>,
+    pub values: IndexVec<Value, (Type, ValueDef)>,
+    pub entry: Block,
+}
+```
+
+<div class="cb-g-tip"><h3>Rust-specific design rules</h3> <ul> <li><b>Use IDs, not references.</b> Instructions refer to each other by <code>Value</code> and <code>Block</code> indices, so the whole function is one owned value you can mutate freely. Cranelift (<code>cranelift-entity</code>'s <code>PrimaryMap</code> and <code>SecondaryMap</code>), rustc (<code>rustc_index::IndexVec</code>) and rust-analyzer (<code>la-arena</code>) all do this.</li> <li><b>Side tables instead of fields.</b> Analysis results such as liveness or dominator depth go in a <code>SecondaryMap&lt;Value, T&gt;</code> owned by the pass, not in the IR.</li> <li><b>Don't delete in place.</b> Mark instructions dead and compact later, or keep block membership in a linked-list “layout” as Cranelift does, so inserting and removing is O(1).</li> <li><b>Keep use lists optional.</b> Many passes only need def→use once; build it on demand rather than maintaining it through every mutation.</li> </ul></div>
+
+<div class="cb-g-tip"><h3>Textual format and a verifier</h3> <p>Give the IR a printer <em>and</em> a parser from day one. Then every pass can be tested with a file: IR in, expected IR out, as with LLVM's <code>lit</code> and FileCheck or Cranelift's filetests. Write a verifier and run it after every pass in debug builds. It should check that each block ends in exactly one terminator, that branch argument counts and types match block parameters, and that every use is dominated by its definition. Most optimizer bugs are caught by the verifier one pass after they happen, instead of as a miscompile far away.</p></div>
+
+```text title="The textual form (CLIF-like) that tests are written in"
+function %abs(i64) -> i64 {
+block0(v0: i64):
+    v1 = iconst 0
+    v2 = icmp slt v0, v1
+    brif v2, block1, block2(v0)
+block1:
+    v3 = isub v1, v0
+    jump block2(v3)
+block2(v4: i64):
+    return v4
+}
+```
+"""
+
+[[sources]]
+title = "Cranelift IR reference"
+url = "https://github.com/bytecodealliance/wasmtime/blob/main/cranelift/docs/ir.md"
+
+[[sources]]
+title = "LLVM Language Reference"
+url = "https://llvm.org/docs/LangRef.html"
+
+[[sources]]
+title = "rustc dev guide: MIR"
+url = "https://rustc-dev-guide.rust-lang.org/mir/index.html"
+
+[[sources]]
+title = "V8 blog, “Land ahoy: leaving the Sea of Nodes”"
+url = "https://v8.dev/blog/leaving-the-sea-of-nodes"

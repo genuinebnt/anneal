@@ -1,0 +1,62 @@
+title = "A toy general-purpose allocator"
+module = "Rust language"
+module_order = 1
+chapter = "Memory and allocators"
+chapter_order = 6
+order = 57
+kind = "recipe"
+lede = "Boundary tags, size-class free lists, splitting, coalescing, realloc."
+level = "advanced"
+code = ["examples/memory/size_class_allocator.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>understanding malloc/free</li><li>custom allocators</li><li>embedded heaps</li><li>fragmentation debugging</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+The "heap" is a fixed `Vec<u8>` arena and pointers are byte **offsets** into it, so the whole allocator is safe Rust (the real thing hands out raw addresses; bump_arena_allocator shows the unsafe side). Every block looks like:
+
+'''text
+
+```text
+| header 8B: size|alloc | payload ... (free block: next, prev links live here) ... | footer 8B: size|alloc |
+```
+
+'''
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>Sizes are multiples of 16 and <strong>include</strong> the 16 bytes of tags; the first header sits at offset 8 so payloads are 16-aligned. Minimum block = 32 bytes (room for the two free-list links). <code>alloc(0)</code> still returns a unique 16-byte-aligned block.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Boundary tags</div><div class="cb-g-says"><p>The footer copy of the header lets <code>free</code> look at the <strong>previous</strong> block (read the 8 bytes before my header) in O(1), so adjacent free blocks are merged immediately (<strong>coalescing</strong>). The invariant "no two adjacent free blocks" is what keeps external fragmentation from growing without bound, and it is checked below.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Segregated free lists</div><div class="cb-g-says"><p>Free blocks live in doubly linked lists (intrusive: the links are stored in the free payload) binned by <strong>size class</strong>: exact 16-byte steps from 32 to 496, then powers of two. <code>alloc</code> starts at the request's class and takes the first block that fits (first-fit within a class), <strong>splitting</strong> off the remainder when it is at least 32 bytes.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p><code>realloc</code> shrinks in place (splitting), grows in place if the next block is free and large enough, else allocate-copy-free.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Fragmentation</div><div class="cb-g-says"><p><strong>Internal</strong> = bytes inside allocated blocks not requested (rounding + tags); <strong>external</strong> = free memory that is scattered ("1 - largest free block / total free"): enough total space, yet a big request fails.</p></div></div></div>
+
+**How real allocators improve on this** (general ideas, not a spec of any one implementation): they use many more size classes with bounded waste so most requests need no splitting/coalescing; keep per-thread caches (tcmalloc's name says it; jemalloc has thread caches too) so the common path takes no lock;
+
+Use several arenas to reduce contention between threads; carve small objects out of pages/runs dedicated to one size class so the header can be dropped and locality improves; and return memory to the OS. mimalloc keeps small free lists per page ("free list sharding").
+
+This toy has one lock-free-by-being- single-threaded list set, a linear first-fit walk inside power-of-two bins, and a 16-byte tag overhead per block.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>the concepts behind malloc in libc</li><li>embedded/no_std heaps (linked-list or TLSF allocators)</li><li>game-engine sub-allocators</li><li>GPU memory suballocation</li><li>diagnosing "out of memory with plenty free" (external fragmentation)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://github.com/jemalloc/jemalloc> and <https://github.com/microsoft/mimalloc> and <https://github.com/google/tcmalloc>
+"""
+
+[[sources]]
+title = "github.com/jemalloc/jemalloc"
+url = "https://github.com/jemalloc/jemalloc"
+
+[[sources]]
+title = "github.com/microsoft/mimalloc"
+url = "https://github.com/microsoft/mimalloc"
+
+[[sources]]
+title = "github.com/google/tcmalloc"
+url = "https://github.com/google/tcmalloc"

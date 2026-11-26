@@ -1,0 +1,6 @@
+// passes: tco,simplify-cfg
+// A self tail call becomes parameter assignment plus a jump to the top.
+fn sum_to(n: int, acc: int) -> int {
+    if n == 0 { acc } else { sum_to(n - 1, acc + n) }
+}
+fn main() { println(to_str(sum_to(1000, 0))); }

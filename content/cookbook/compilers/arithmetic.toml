@@ -1,0 +1,67 @@
+title = "Arithmetic"
+module = "Compilers and languages"
+module_order = 12
+chapter = "A tree-walking interpreter"
+chapter_order = 2
+order = 576
+kind = "guide"
+lede = "Book ch. 4–7, numbers only · Official tests: none yet, because nearly all of them use print"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>This is the walking skeleton. Take <code>2 * (3 + 4)</code> through the REPL and print <code>14</code>. Leave strings, booleans and statements for later slices. You do need to set up error types and spans now, because retrofitting them into every stage later is painful.</p>
+
+```text
+expression → term ;
+term       → factor ( ( "-" | "+" ) factor )* ;
+factor     → unary ( ( "/" | "*" ) unary )* ;
+unary      → "-" unary | primary ;
+primary    → NUMBER | "(" expression ")" ;
+```
+
+<div class="cb-g-tt"><table><thead><tr><th>Kind</th><th>Input</th><th>Expected</th></tr></thead><tbody><tr><td><span class="cb-g-pill cb-g-tok">tokens</span></td><td><code>1 + 2.5</code></td><td><code>Number(1) Plus Number(2.5) Eof</code></td></tr><tr><td><span class="cb-g-pill cb-g-tok">tokens</span></td><td><code>12.</code></td><td><code>Number(12) Dot Eof</code></td></tr><tr><td><span class="cb-g-pill cb-g-tok">tokens</span></td><td><code>.5</code></td><td><code>Dot Number(5) Eof</code></td></tr><tr><td><span class="cb-g-pill cb-g-ast">ast</span></td><td><code>1 + 2 * 3</code></td><td><code>(+ 1 (* 2 3))</code></td></tr><tr><td><span class="cb-g-pill cb-g-ast">ast</span></td><td><code>1 - 2 - 3</code></td><td><code>(- (- 1 2) 3)</code></td></tr><tr><td><span class="cb-g-pill cb-g-ast">ast</span></td><td><code>-(1 + 2)</code></td><td><code>(- (group (+ 1 2)))</code></td></tr><tr><td><span class="cb-g-pill cb-g-ast">ast</span></td><td><code>--1</code></td><td><code>(- (- 1))</code></td></tr><tr><td><span class="cb-g-pill cb-g-val">value</span></td><td><code>2 * (3 + 4)</code></td><td><code>14</code></td></tr><tr><td><span class="cb-g-pill cb-g-val">value</span></td><td><code>10 / 4</code></td><td><code>2.5</code></td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>1 +</code></td><td><code>[line 1] Error at end: Expect expression.</code></td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>(1 + 2</code></td><td><code>[line 1] Error at end: Expect ')' after expression.</code></td></tr></tbody></table></div>
+
+```rust title="src/ast.rs, slice 1"
+pub enum Expr {
+    Number(f64),
+    Group(Box<Expr>),
+    Unary { op: UnOp, rhs: Box<Expr>, span: Span },
+    Binary { lhs: Box<Expr>, op: BinOp, rhs: Box<Expr>, span: Span },
+}
+
+impl fmt::Display for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Expr::Number(n) => write!(f, "{n}"),
+            Expr::Group(e) => write!(f, "(group {e})"),
+            Expr::Unary { op, rhs, .. } => write!(f, "({op} {rhs})"),
+            Expr::Binary { lhs, op, rhs, .. } => write!(f, "({op} {lhs} {rhs})"),
+        }
+    }
+}
+```
+
+<p>Let <code>eval</code> return plain <code>f64</code> for now. Slice 2 changes it to <code>Result&lt;Value, RuntimeError&gt;</code>, and the compiler will point to every line that has to change.</p>
+
+<p>Write parser tests as a macro so each case becomes its own named test:</p>
+
+```rust title="src/parser.rs, tests"
+fn sexpr(src: &str) -> String {
+    Parser::new(src).expression().expect("parse error").to_string()
+}
+
+macro_rules! parses {
+    ($($name:ident: $src:literal => $want:literal,)*) => {
+        $( #[test] fn $name() { assert_eq!(sexpr($src), $want); } )*
+    };
+}
+
+parses! {
+    mul_binds_tighter: "1 + 2 * 3" => "(+ 1 (* 2 3))",
+    sub_left_assoc:    "1 - 2 - 3" => "(- (- 1 2) 3)",
+    unary_nests:       "--1"       => "(- (- 1))",
+}
+```
+"""

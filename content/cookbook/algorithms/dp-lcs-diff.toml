@@ -1,0 +1,49 @@
+title = "DP lcs diff"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Dynamic programming, greedy and search"
+chapter_order = 5
+order = 204
+kind = "recipe"
+lede = "longest common subsequence, and turning it into a diff between two versions."
+level = "intermediate"
+code = ["examples/algorithms/dp_lcs_diff.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+showing what changed between two ordered lists (workflow versions, config files, task lists).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>diff tools</li><li>version control</li><li>config drift detection</li><li>collaborative editing history</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+L[i][j] = length of the LCS of the first i items of A and first j items of B
+
+```text
+L[i][j] = L[i-1][j-1] + 1            if A[i] == B[j]
+        = max(L[i-1][j], L[i][j-1])   otherwise
+```
+
+Backtrack from (n, m): equal items are kept; otherwise step in the direction of the larger neighbour, which means "delete from A" (up) or "insert from B" (left). Items in the LCS are unchanged, everything else is a change. Real-world diffs use Myers' O(ND) algorithm: <https://github.com/mitsuhiko/similar> and git's diff.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Longest_common_subsequence>
+"""
+
+[[sources]]
+title = "github.com/mitsuhiko/similar"
+url = "https://github.com/mitsuhiko/similar"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Longest_common_subsequence"
+url = "https://en.wikipedia.org/wiki/Longest_common_subsequence"

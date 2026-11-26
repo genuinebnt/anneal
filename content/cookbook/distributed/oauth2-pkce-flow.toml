@@ -1,0 +1,61 @@
+title = "Oauth2 pkce flow"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Authentication and web security"
+chapter_order = 2
+order = 525
+kind = "recipe"
+lede = "OAuth 2.0 authorization code flow with PKCE, three servers, full redirect chain"
+level = "advanced"
+code = ["examples/web/oauth2_pkce_flow.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+auth stage (login with an identity provider, API access tokens).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+What: three real axum servers on loopback, named in the transcripts `app.test` (client app / BFF), `as.test` (authorization server) and `rs.test` (resource server), plus a hand-driven "browser" that follows redirects one hop at a time and prints each hop.
+
+- Authorization request: `response_type=code&client_id&redirect_uri&scope&state&code_challenge&code_challenge_method=S256`. The AS validates `client_id` and the **exact** `redirect_uri` **before** it ever redirects (never redirect to an unregistered URI).
+- Login + consent, then a 302 back to the app with `code` and `state`. The app checks `state` against its cookie-bound session (CSRF / login-CSRF defence).
+- Token endpoint: code is single use and short lived (60s virtual clock), `redirect_uri` must equal the one used at /authorize, and `code_verifier` must hash (SHA-256, base64url) to the stored `code_challenge`: so a stolen code alone is useless. Replaying a code revokes the tokens it produced.
+- Access token (10 min) + refresh token with **rotation**: every refresh returns a new refresh token; presenting an old one is treated as theft and revokes the whole token **family**.
+- Resource server validates tokens by introspection (RFC 7662; a JWT would be validated locally with a signature instead), enforces scopes: 401 + `WWW-Authenticate: Bearer`, 403 `insufficient_scope`.
+- Attacks asserted to fail: code interception without the verifier, state mismatch, code replay, redirect_uri tampering, expired code, PKCE downgrade. Tokens are opaque and the PRNG is a fixed-seed xorshift only so that output is reproducible: use an OS CSPRNG in real code.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>"Sign in with ..." buttons</li><li>mobile/<strong>spa</strong> apps (public clients: PKCE replaces the client secret)</li><li>API access delegation (GitHub/Google/Slack apps)</li><li>BFF pattern where tokens never reach the browser</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://datatracker.ietf.org/doc/html/rfc6749" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc6749</a></li><li><a href="https://datatracker.ietf.org/doc/html/rfc7636" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc7636</a></li><li><a href="https://datatracker.ietf.org/doc/html/rfc6750" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc6750</a></li><li><a href="https://datatracker.ietf.org/doc/html/rfc7662" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc7662</a></li><li><a href="https://datatracker.ietf.org/doc/html/rfc9700" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc9700</a></li></ul>
+"""
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc6749"
+url = "https://datatracker.ietf.org/doc/html/rfc6749"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc7636"
+url = "https://datatracker.ietf.org/doc/html/rfc7636"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc6750"
+url = "https://datatracker.ietf.org/doc/html/rfc6750"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc7662"
+url = "https://datatracker.ietf.org/doc/html/rfc7662"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc9700"
+url = "https://datatracker.ietf.org/doc/html/rfc9700"

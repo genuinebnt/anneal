@@ -1,0 +1,19 @@
+{"->":{"id":2,"jsonrpc":"2.0","method":"textDocument/hover","params":{"position":{"character":0,"line":0},"textDocument":{"uri":"file:///demo.peb"}}}}
+{"<-":{"error":{"code":-32002,"message":"server not initialized"},"id":null,"jsonrpc":"2.0"}}
+{"->":{"id":3,"jsonrpc":"2.0","method":"initialize","params":{"capabilities":{}}}}
+{"<-":{"id":null,"jsonrpc":"2.0","result":{"capabilities":{"callHierarchyProvider":true,"codeActionProvider":{"codeActionKinds":["quickfix"]},"completionProvider":{"resolveProvider":true,"triggerCharacters":[".",":"]},"definitionProvider":true,"documentFormattingProvider":true,"documentHighlightProvider":true,"documentOnTypeFormattingProvider":{"firstTriggerCharacter":"}","moreTriggerCharacter":[";"]},"documentRangeFormattingProvider":true,"documentSymbolProvider":true,"foldingRangeProvider":true,"hoverProvider":true,"inlayHintProvider":true,"positionEncoding":"utf-16","referencesProvider":true,"renameProvider":{"prepareProvider":true},"selectionRangeProvider":true,"semanticTokensProvider":{"full":{"delta":true},"legend":{"tokenModifiers":["declaration","readonly","mutable","defaultLibrary","deprecated","unused"],"tokenTypes":["function","variable","parameter","type","enumMember","property","keyword","string","number","operator","comment"]},"range":true},"signatureHelpProvider":{"triggerCharacters":["(",","]},"textDocumentSync":{"change":2,"openClose":true,"save":{"includeText":false}},"typeDefinitionProvider":true,"workspace":{"workspaceFolders":{"changeNotifications":true,"supported":true}},"workspaceSymbolProvider":true},"serverInfo":{"name":"pebble-tools","version":"0.1.0"}}}}
+{"->":{"jsonrpc":"2.0","method":"initialized","params":{}}}
+{"->":{"jsonrpc":"2.0","method":"workspace/didChangeConfiguration","params":{"settings":{"anything":[1,2,{"x":null}]}}}}
+{"->":{"id":4,"jsonrpc":"2.0","method":"textDocument/nope","params":{}}}
+{"<-":{"error":{"code":-32601,"message":"method not found: textDocument/nope"},"id":null,"jsonrpc":"2.0"}}
+{"->":{"id":5,"jsonrpc":"2.0","method":"workspace/symbol","params":{"query":"x"}}}
+{"<-":{"id":null,"jsonrpc":"2.0","result":[]}}
+{"->":{"id":9,"jsonrpc":"2.0","method":"workspace/executeCommand","params":{"command":"x"}}}
+{"<-":{"error":{"code":-32601,"message":"method not found: workspace/executeCommand"},"id":null,"jsonrpc":"2.0"}}
+{"->":{"id":6,"jsonrpc":"2.0","method":"textDocument/hover","params":{}}}
+{"<-":{"error":{"code":-32602,"message":"missing textDocument.uri"},"id":null,"jsonrpc":"2.0"}}
+{"->":{"id":7,"jsonrpc":"2.0","method":"shutdown","params":null}}
+{"<-":{"id":null,"jsonrpc":"2.0","result":null}}
+{"->":{"id":8,"jsonrpc":"2.0","method":"textDocument/hover","params":{"position":{"character":0,"line":0},"textDocument":{"uri":"file:///demo.peb"}}}}
+{"<-":{"error":{"code":-32600,"message":"server is shut down"},"id":null,"jsonrpc":"2.0"}}
+{"->":{"jsonrpc":"2.0","method":"exit","params":null}}

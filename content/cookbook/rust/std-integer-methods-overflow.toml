@@ -1,0 +1,96 @@
+title = "Integer methods look-up page"
+module = "Standard library and core"
+module_order = 2
+chapter = "Numbers, traits and formatting"
+chapter_order = 5
+order = 84
+kind = "recipe"
+lede = "Overflow families, division, bits, bytes, `as` casts, NonZero."
+level = "intermediate"
+code = ["examples/std_tour/std_integer_methods_overflow.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>money and quota arithmetic</li><li>pagination</li><li>timeouts and backoff</li><li>ID packing</li><li>binary formats</li><li>config parsing</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>offset = page * size from user input</li><li>exponential backoff</li><li>packing (shard, sequence) into a u64 ID</li><li>big-endian wire headers</li><li>ring-buffer index maths</li><li>"how many batches do I need"</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>i32::checked_add</code></li><li><code>u32::checked_sub</code></li><li><code>u64::checked_mul</code></li><li><code>u32::checked_div</code></li><li><code>u32::saturating_sub</code></li><li><code>u32::saturating_add</code></li><li><code>u64::saturating_mul</code></li></ul>
+
+<ul class="cb-g-names"><li><code>u32::wrapping_add</code></li><li><code>u32::wrapping_mul</code></li><li><code>u32::overflowing_add</code></li><li><code>u32::pow</code></li><li><code>u32::checked_pow</code></li><li><code>u32::abs_diff</code></li><li><code>i32::abs</code></li><li><code>i32::checked_abs</code></li><li><code>i32::unsigned_abs</code></li></ul>
+
+<ul class="cb-g-names"><li><code>i32::signum</code></li><li><code>i32::rem_euclid</code></li><li><code>i32::div_euclid</code></li><li><code>u32::div_ceil</code></li><li><code>u32::next_multiple_of</code></li><li><code>u32::is_multiple_of</code></li><li><code>u32::isqrt</code></li><li><code>i32::checked_isqrt</code></li></ul>
+
+<ul class="cb-g-names"><li><code>u32::ilog</code></li><li><code>u32::ilog2</code></li><li><code>u32::ilog10</code></li><li><code>u32::checked_ilog10</code></li><li><code>u32::midpoint</code></li><li><code>i32::midpoint</code></li><li><code>u32::leading_zeros</code></li><li><code>u32::trailing_zeros</code></li><li><code>u32::count_ones</code></li></ul>
+
+<ul class="cb-g-names"><li><code>u32::count_zeros</code></li><li><code>u32::rotate_left</code></li><li><code>u32::rotate_right</code></li><li><code>u32::swap_bytes</code></li><li><code>u32::reverse_bits</code></li><li><code>u32::to_be_bytes</code></li><li><code>u32::to_le_bytes</code></li><li><code>u32::from_be_bytes</code></li></ul>
+
+<ul class="cb-g-names"><li><code>u32::from_le_bytes</code></li><li><code>u32::from_str_radix</code></li><li><code>u32::MIN</code></li><li><code>u32::MAX</code></li><li><code>u32::BITS</code></li><li><code>u32::is_power_of_two</code></li><li><code>u32::next_power_of_two</code></li></ul>
+
+<ul class="cb-g-names"><li><code>u32::checked_next_power_of_two</code></li><li><code>u32::cast_signed</code></li><li><code>i32::cast_unsigned</code></li><li><code>u32::checked_add_signed</code></li><li><code>u32::checked_signed_diff</code></li></ul>
+
+<ul class="cb-g-names"><li><code>u32::strict_add</code></li><li><code>u32::strict_sub</code></li><li><code>u32::strict_mul</code></li><li><code>u32::checked_shl</code></li><li><code>u32::wrapping_shl</code></li><li><code>u32::unbounded_shl</code></li><li><code>u32::overflowing_shl</code></li></ul>
+
+<ul class="cb-g-names"><li><code>u32::checked_rem</code></li><li><code>i32::wrapping_neg</code></li><li><code>i32::checked_neg</code></li><li><code>i32::overflowing_neg</code></li><li><code>i32::saturating_neg</code></li><li><code>i32::saturating_abs</code></li><li><code>i32::is_negative</code></li></ul>
+
+<ul class="cb-g-names"><li><code>u32::try_from</code></li><li><code>u64::from</code></li><li><code>std::num::NonZero</code></li><li><code>std::num::NonZeroU32</code></li><li><code>std::num::Wrapping</code></li><li><code>std::num::Saturating</code></li><li><code>std::num::IntErrorKind</code></li></ul>
+
+std::num::ParseIntError, std::num::TryFromIntError
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/primitive.i32.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/primitive.i32.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+core (`core::num`; the primitive methods, NonZero, Wrapping, Saturating, IntErrorKind), re-exported by std.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+not every family x operation pair is written out (for example checked_shr, wrapping_div, saturating_pow): they follow the shapes shown. unchecked&#95;&#42; (unsafe), carrying&#95;&#42;/borrowing&#95;&#42;/carryless_mul (multi-word arithmetic), the to_ne/from_ne/to_be/from_le variants (same shape as shown), leading_ones/trailing_ones, highest_one/lowest_one/isolate&#95;&#42; (bit tricks), bit_width, &#42;&#95;exact_div, the &#42;&#95;signed/&#95;unsigned mixed-sign twins other than checked_add_signed;
+
+Signed div_ceil, widening_mul and checked_cast_signed (**unstable** on signed types / u64 in 1.98.1: widening is shown through u128).
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Detect overflow and fail</td><td><code>checked_*  (returns Option)</code></td></tr><tr><td>Clamp at the type's limits</td><td><code>saturating_*</code></td></tr><tr><td>Modular arithmetic (hashes, sequences)</td><td><code>wrapping_*</code></td></tr><tr><td>Result AND a "did it overflow" flag</td><td><code>overflowing_*</code></td></tr><tr><td>Overflow is a bug: panic in every build</td><td><code>strict_*  (since 1.91)</code></td></tr><tr><td>Distance between two unsigned values</td><td><code>abs_diff</code></td></tr><tr><td>Non-negative modulo with negative input</td><td><code>rem_euclid</code></td></tr><tr><td>Pages needed for n items</td><td><code>n.div_ceil(per_page)</code></td></tr><tr><td>Round up to alignment</td><td><code>next_multiple_of</code></td></tr><tr><td>Average without overflow</td><td><code>midpoint</code></td></tr><tr><td>Number of decimal digits - 1</td><td><code>ilog10</code></td></tr><tr><td>Narrow a type safely</td><td><code>u32::try_from(x)</code></td></tr><tr><td>Reinterpret bits as signed/unsigned</td><td><code>cast_signed / cast_unsigned</code></td></tr><tr><td>Wire format</td><td><code>to_be_bytes / from_be_bytes</code></td></tr><tr><td>"never zero" in the type</td><td><code>NonZeroU32 (Option&lt;NonZeroU32&gt; is 4 bytes) OVERFLOW RULES. Plain + - * that overflows is a bug: with overflow-checks on (default in dev/test) it panics; with it off (default in release) it wraps in two's complement. Never rely on either; pick a method family. Division and remainder are different: / 0, % 0 and MIN / -1 panic in EVERY build. This page asserts nothing that depends on the build profile.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/primitive.i32.html> , <https://doc.rust-lang.org/reference/expressions/operator-expr.html> (Overflow; Numeric cast),
+
+```text
+https://doc.rust-lang.org/std/num/index.html
+```
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/primitive.i32.html"
+url = "https://doc.rust-lang.org/std/primitive.i32.html"
+
+[[sources]]
+title = "doc.rust-lang.org/reference/expressions/operator-expr.html"
+url = "https://doc.rust-lang.org/reference/expressions/operator-expr.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/num/index.html"
+url = "https://doc.rust-lang.org/std/num/index.html"

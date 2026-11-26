@@ -1,0 +1,356 @@
+title = "Server-side logic and UDFs"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 364
+kind = "guide"
+lede = "15-721 S2024 lecture #11 · UDFs, procedures, triggers, UDAs · why UDFs are slow · Froid inlining · UDFs-to-CTEs · batching · measured on a UDF mini-language run five ways"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Why put logic in the database</strong>: an application that fetches rows, computes and queries again pays <strong>network round trips and result-set serialization</strong> (see <a href="/cookbook/p/networking-protocols">A9</a>), and computes on a stale snapshot. Moving the logic next to the data gives <strong>fewer round trips, the latest data, reuse across queries and applications</strong>. Forms: <strong>UDFs</strong> (scalar or table-valued), <strong>stored procedures</strong> (callable outside a query; some systems can't let them write), <strong>triggers</strong>, <strong>user-defined types</strong> and <strong>user-defined aggregates</strong>.</li> <li><strong>Languages</strong>: SQL/PSM (the standard), PL/SQL (Oracle, DB2), PL/pgSQL (PostgreSQL), SQL PL (DB2), Transact-SQL (SQL Server, Sybase); modern systems add general-purpose languages in a sandbox.</li> <li><strong>Why UDFs are slow</strong>: the optimizer treats them as <strong>black boxes</strong> (no cost, no cardinality, so a bad plan); they are <strong>hard to parallelize</strong> (queries inside them are correlated; some systems run the whole query on one thread); they execute <strong>row by agonizing row</strong> (RBAR), and every nested query is an invisible join the optimizer can't see; and statements run <strong>one by one</strong>, so there is no cross-statement optimization.</li> <li><strong>Four ways to make them fast</strong>: <strong>compile</strong> the interpreted body to native code; <strong>parallelize</strong> using annotations that say what is safe; <strong>inline</strong> the UDF into the calling query; <strong>batch</strong>: turn the body into queries over many rows at once.</li> <li><strong>Froid (inlining)</strong>: convert imperative statements into <strong>relational expressions</strong> during the <em>rewrite</em> phase, so the cost-based optimizer is untouched and sub-query unnesting does the rest. Five steps: <strong>(1) transform statements</strong> to SQL; <strong>(2) break the body into regions</strong> and <strong>(3) merge expressions</strong>, linking regions with <strong>lateral joins</strong>; <strong>(4) inline</strong> the result into the query; <strong>(5) run the optimizer</strong> on the combined query. Bonus: dynamic slicing, constant propagation/folding, dead-code elimination fall out of the transformation.</li> <li><strong>Subqueries are functions too</strong>: a nested query in <code>WHERE</code> is a function of the outer row; the options are <strong>de-correlate / flatten</strong>, or decompose and <strong>join with a temporary table</strong>. A <strong>lateral</strong> subquery in <code>FROM</code> may reference columns of earlier tables and is evaluated per row.</li> <li><strong>APFEL (UDFs to CTEs)</strong>: rewrite a UDF as plain SQL with <strong>recursive CTEs</strong> so loops and other control flow Froid can't express are covered; it is a DBMS-agnostic middleware. Steps: static single assignment, administrative normal form, mutual → direct recursion, tail recursion → <code>WITH RECURSIVE</code>, then the ordinary optimizer.</li> <li><strong>Batching</strong> (Franz et al., CIDR 2024): translate UDF statements into <strong><code>UPDATE</code>s over a temporary table holding the variables of many invocations at once</strong>; the paper reports that <strong>batching works better than inlining</strong>.</li> </ul>
+"""
+
+[[sections]]
+heading = "One UDF, five executions"
+body = """
+<p>A tiny imperative language (assignment, <code>if</code>, <code>while</code>, <code>return</code>, integer expressions) and the execution strategies a DBMS can apply to it:</p>
+
+<ol> <li><strong>Interpreter</strong>: walk the AST once per input row with a stack frame (the RBAR baseline; real engines add a boundary cost per call that this does not model).</li> <li><strong>Inlining</strong> (Froid): symbolically execute a <em>loop-free</em> body: each variable becomes an expression over the arguments, each <code>if</code> becomes a <code>CASE</code>, each <code>return</code> sets a <em>done</em> flag; the result is <strong>one expression</strong> the engine can evaluate row by row or <strong>column by column</strong> with vector kernels. Loops make <code>inline</code> return <code>None</code>.</li> <li><strong>Batching</strong>: run the <em>statements</em> over a chunk of rows: variables are columns, an <code>if</code> splits the active <strong>lane mask</strong>, a <code>while</code> runs until every lane has left it, <code>return</code> removes lanes from the mask. This is the only strategy besides the interpreter that handles loops.</li> <li><strong>Native</strong>: the same logic as a Rust function, the target of compilation (<a href="/cookbook/p/query-compilation-and-code-generation">A15</a>).</li> <li>A second UDF contains a <strong>query</strong>: <code>total_spent(c)</code> = <code>SELECT COALESCE(SUM(amount),0) FROM orders WHERE cust = c</code>, run per row by scan, per row by index, and <strong>decorrelated</strong> into a hash aggregate + join.</li> </ol>
+
+:::deeper Reference: UDF AST and interpreter, Froid-style inliner, vectorized expression kernels, masked batching, correlated subquery three ways
+```rust title="src/exec/udf.rs"
+//! Server-side logic: a tiny imperative UDF language run five ways, plus a correlated-subquery UDF run three ways.
+//!  1. `call`          row-at-a-time interpreter (the "RBAR" baseline)
+//!  2. `inline`        Froid-style: loop-free UDF -> one expression with CASE, evaluated per row or per column
+//!  3. `call_batched`  UDF batching: statements run on whole columns under a lane mask (handles loops too)
+use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
+use std::rc::Rc;
+use crate::wcoj::Fx;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Op { Add, Sub, Mul, Div, Rem, Lt, Gt, Eq, Ne, And, Or }
+
+/// Total semantics: division by zero is 0, so evaluating both arms of a CASE can never fault.
+#[inline] pub fn apply(op: Op, a: i64, b: i64) -> i64 {
+    match op {
+        Op::Add => a.wrapping_add(b), Op::Sub => a.wrapping_sub(b), Op::Mul => a.wrapping_mul(b),
+        Op::Div => if b == 0 { 0 } else { a.wrapping_div(b) },
+        Op::Rem => if b == 0 { 0 } else { a.wrapping_rem(b) },
+        Op::Lt => (a < b) as i64, Op::Gt => (a > b) as i64, Op::Eq => (a == b) as i64, Op::Ne => (a != b) as i64,
+        Op::And => (a != 0 && b != 0) as i64, Op::Or => (a != 0 || b != 0) as i64,
+    }
+}
+
+pub type E = Rc<Expr>;
+#[derive(Debug)]
+pub enum Expr { Const(i64), Var(usize), Bin(Op, E, E), Case(E, E, E) }
+pub fn k(x: i64) -> E { Rc::new(Expr::Const(x)) }
+pub fn v(i: usize) -> E { Rc::new(Expr::Var(i)) }
+pub fn bin(op: Op, a: E, b: E) -> E { Rc::new(Expr::Bin(op, a, b)) }
+
+#[derive(Debug)]
+pub enum Stmt { Assign(usize, E), If(E, Vec<Stmt>, Vec<Stmt>), While(E, Vec<Stmt>), Return(E) }
+/// Variables 0..nargs are the parameters; the rest start at 0.
+pub struct Udf { pub nargs: usize, pub nvars: usize, pub body: Vec<Stmt> }
+
+// ------------------------------------------------------------------ 1. interpreter
+pub fn eval(e: &Expr, vars: &[i64]) -> i64 {
+    match e {
+        Expr::Const(c) => *c,
+        Expr::Var(i) => vars[*i],
+        Expr::Bin(op, a, b) => apply(*op, eval(a, vars), eval(b, vars)),
+        Expr::Case(c, a, b) => if eval(c, vars) != 0 { eval(a, vars) } else { eval(b, vars) },
+    }
+}
+
+fn exec(body: &[Stmt], vars: &mut [i64]) -> Option<i64> {
+    for s in body {
+        match s {
+            Stmt::Assign(x, e) => vars[*x] = eval(e, vars),
+            Stmt::If(c, t, f) => { let br = if eval(c, vars) != 0 { t } else { f }; if let Some(r) = exec(br, vars) { return Some(r); } }
+            Stmt::While(c, b) => while eval(c, vars) != 0 { if let Some(r) = exec(b, vars) { return Some(r); } },
+            Stmt::Return(e) => return Some(eval(e, vars)),
+        }
+    }
+    None
+}
+
+pub fn call(udf: &Udf, args: &[i64]) -> i64 {
+    let mut vars = [0i64; 8];
+    assert!(udf.nvars <= 8);
+    vars[..args.len()].copy_from_slice(args);
+    exec(&udf.body, &mut vars).unwrap_or(0)
+}
+
+// ------------------------------------------------------------------ 2. Froid-style inlining
+#[derive(Clone)]
+struct Sym { vars: Vec<E>, done: E, ret: E }
+
+fn subst(e: &E, vars: &[E]) -> E {
+    match &**e {
+        Expr::Const(_) => e.clone(),
+        Expr::Var(i) => vars[*i].clone(),
+        Expr::Bin(op, a, b) => Rc::new(Expr::Bin(*op, subst(a, vars), subst(b, vars))),
+        Expr::Case(c, a, b) => Rc::new(Expr::Case(subst(c, vars), subst(a, vars), subst(b, vars))),
+    }
+}
+fn select(c: &E, a: &E, b: &E) -> E { if Rc::ptr_eq(a, b) { a.clone() } else { Rc::new(Expr::Case(c.clone(), a.clone(), b.clone())) } }
+fn is_zero(e: &E) -> bool { matches!(&**e, Expr::Const(0)) }
+
+fn run(body: &[Stmt], s: &mut Sym) -> bool {
+    for st in body {
+        match st {
+            Stmt::Assign(x, e) => { let e = subst(e, &s.vars); s.vars[*x] = e; }
+            Stmt::Return(e) => {
+                let e = subst(e, &s.vars);
+                s.ret = if is_zero(&s.done) { e } else { Rc::new(Expr::Case(s.done.clone(), s.ret.clone(), e)) };
+                s.done = k(1);
+            }
+            Stmt::If(c, t, f) => {
+                let c = subst(c, &s.vars);
+                let (mut a, mut b) = (s.clone(), s.clone());
+                if !run(t, &mut a) || !run(f, &mut b) { return false; }
+                for i in 0..s.vars.len() { s.vars[i] = select(&c, &a.vars[i], &b.vars[i]); }
+                s.done = select(&c, &a.done, &b.done);
+                s.ret = select(&c, &a.ret, &b.ret);
+            }
+            Stmt::While(..) => return false,     // Froid cannot inline loops
+        }
+    }
+    true
+}
+
+/// Turn a loop-free UDF into one expression over its arguments: every `if` becomes a CASE, every `return` a
+/// "done" flag. Returns None if the UDF contains a loop.
+pub fn inline(udf: &Udf) -> Option<E> {
+    let vars = (0..udf.nvars).map(|i| if i < udf.nargs { v(i) } else { k(0) }).collect();
+    let mut s = Sym { vars, done: k(0), ret: k(0) };
+    run(&udf.body, &mut s).then_some(s.ret)
+}
+
+fn kernel(op: Op, x: &mut [i64], y: &[i64]) {
+    match op {
+        Op::Add => for i in 0..x.len() { x[i] = x[i].wrapping_add(y[i]) },
+        Op::Sub => for i in 0..x.len() { x[i] = x[i].wrapping_sub(y[i]) },
+        Op::Mul => for i in 0..x.len() { x[i] = x[i].wrapping_mul(y[i]) },
+        Op::Lt => for i in 0..x.len() { x[i] = (x[i] < y[i]) as i64 },
+        Op::Gt => for i in 0..x.len() { x[i] = (x[i] > y[i]) as i64 },
+        Op::Eq => for i in 0..x.len() { x[i] = (x[i] == y[i]) as i64 },
+        Op::Ne => for i in 0..x.len() { x[i] = (x[i] != y[i]) as i64 },
+        Op::And => for i in 0..x.len() { x[i] = ((x[i] != 0) & (y[i] != 0)) as i64 },
+        Op::Or => for i in 0..x.len() { x[i] = ((x[i] != 0) | (y[i] != 0)) as i64 },
+        Op::Div | Op::Rem => for i in 0..x.len() { x[i] = apply(op, x[i], y[i]) },
+    }
+}
+
+/// Column-at-a-time evaluation: one pass per operator over `n` rows (CASE evaluates both arms and selects).
+pub fn eval_vec(e: &Expr, cols: &[&[i64]], n: usize) -> Vec<i64> {
+    match e {
+        Expr::Const(c) => vec![*c; n],
+        Expr::Var(i) => cols[*i][..n].to_vec(),
+        Expr::Bin(op, a, b) => { let mut x = eval_vec(a, cols, n); let y = eval_vec(b, cols, n); kernel(*op, &mut x, &y); x }
+        Expr::Case(c, a, b) => {
+            let mut x = eval_vec(c, cols, n);
+            let (y, z) = (eval_vec(a, cols, n), eval_vec(b, cols, n));
+            for i in 0..n { x[i] = if x[i] != 0 { y[i] } else { z[i] }; }
+            x
+        }
+    }
+}
+
+pub const BATCH: usize = 1024;
+
+/// Evaluate an inlined expression over whole columns, in cache-sized chunks.
+pub fn eval_columns(e: &Expr, cols: &[&[i64]]) -> Vec<i64> {
+    let rows = cols[0].len();
+    let mut out = Vec::with_capacity(rows);
+    for start in (0..rows).step_by(BATCH) {
+        let n = BATCH.min(rows - start);
+        let chunk: Vec<&[i64]> = cols.iter().map(|c| &c[start..start + n]).collect();
+        out.extend(eval_vec(e, &chunk, n));
+    }
+    out
+}
+
+// ------------------------------------------------------------------ 3. batching
+fn exec_masked(body: &[Stmt], vars: &mut Vec<Vec<i64>>, mask: &mut Vec<bool>, ret: &mut [i64], n: usize) {
+    let val = |e: &Expr, vars: &Vec<Vec<i64>>| { let cols: Vec<&[i64]> = vars.iter().map(|x| &x[..]).collect(); eval_vec(e, &cols, n) };
+    for s in body {
+        if !mask.iter().any(|&m| m) { return; }
+        match s {
+            Stmt::Assign(x, e) => { let r = val(e, vars); for i in 0..n { if mask[i] { vars[*x][i] = r[i]; } } }
+            Stmt::Return(e) => { let r = val(e, vars); for i in 0..n { if mask[i] { ret[i] = r[i]; mask[i] = false; } } }
+            Stmt::If(c, t, f) => {
+                let cv = val(c, vars);
+                let mut mt: Vec<bool> = (0..n).map(|i| mask[i] && cv[i] != 0).collect();
+                let mut mf: Vec<bool> = (0..n).map(|i| mask[i] && cv[i] == 0).collect();
+                exec_masked(t, vars, &mut mt, ret, n);
+                exec_masked(f, vars, &mut mf, ret, n);
+                for i in 0..n { mask[i] = mt[i] || mf[i]; }          // lanes that returned in a branch are gone
+            }
+            Stmt::While(c, b) => {
+                let mut active = mask.clone();
+                let mut out = vec![false; n];
+                loop {
+                    let cv = val(c, vars);
+                    for i in 0..n { if active[i] && cv[i] == 0 { out[i] = true; active[i] = false; } }
+                    if !active.iter().any(|&a| a) { break; }
+                    exec_masked(b, vars, &mut active, ret, n);     // lanes that returned inside the body drop out
+                }
+                *mask = out;
+            }
+        }
+    }
+}
+
+/// Run the UDF over whole columns, `BATCH` rows at a time: variables become columns, branches become lane masks,
+/// a loop runs until *every* lane in the batch has left it.
+pub fn call_batched(udf: &Udf, cols: &[&[i64]]) -> Vec<i64> {
+    let rows = cols[0].len();
+    let mut out = Vec::with_capacity(rows);
+    for start in (0..rows).step_by(BATCH) {
+        let n = BATCH.min(rows - start);
+        let mut vars: Vec<Vec<i64>> = (0..udf.nvars).map(|i| if i < udf.nargs { cols[i][start..start + n].to_vec() } else { vec![0; n] }).collect();
+        let (mut ret, mut mask) = (vec![0i64; n], vec![true; n]);
+        exec_masked(&udf.body, &mut vars, &mut mask, &mut ret, n);
+        out.extend(ret);
+    }
+    out
+}
+
+// ------------------------------------------------------------------ UDFs used by the tests and the benchmark
+/// shipping(weight, dist): early return, two ifs.
+pub fn shipping_udf() -> Udf {
+    use Op::*;
+    Udf { nargs: 2, nvars: 4, body: vec![
+        Stmt::If(bin(Lt, v(0), k(0)), vec![Stmt::Return(k(0))], vec![]),
+        Stmt::Assign(2, bin(Add, bin(Mul, v(0), k(3)), v(1))),
+        Stmt::If(bin(Gt, v(0), k(50)), vec![Stmt::Assign(2, bin(Add, v(2), k(40)))], vec![]),
+        Stmt::If(bin(Gt, v(1), k(100)), vec![Stmt::Assign(3, k(2))], vec![Stmt::Assign(3, k(1))]),
+        Stmt::Return(bin(Mul, v(2), v(3))),
+    ] }
+}
+pub fn shipping_native(w: i64, d: i64) -> i64 {
+    if w < 0 { return 0; }
+    let mut base = w * 3 + d;
+    if w > 50 { base += 40; }
+    base * if d > 100 { 2 } else { 1 }
+}
+/// collatz(n): number of steps to reach 1 (a data-dependent loop; n >= 1).
+pub fn collatz_udf() -> Udf {
+    use Op::*;
+    Udf { nargs: 1, nvars: 2, body: vec![
+        Stmt::While(bin(Ne, v(0), k(1)), vec![
+            Stmt::If(bin(Eq, bin(Rem, v(0), k(2)), k(0)),
+                vec![Stmt::Assign(0, bin(Div, v(0), k(2)))],
+                vec![Stmt::Assign(0, bin(Add, bin(Mul, v(0), k(3)), k(1)))]),
+            Stmt::Assign(1, bin(Add, v(1), k(1))),
+        ]),
+        Stmt::Return(v(1)),
+    ] }
+}
+pub fn collatz_native(mut n: i64) -> i64 { let mut s = 0; while n != 1 { n = if n % 2 == 0 { n / 2 } else { 3 * n + 1 }; s += 1; } s }
+
+// ------------------------------------------------------------------ a UDF that runs a query per row
+//   CREATE FUNCTION total_spent(c) RETURNS bigint AS $$ SELECT COALESCE(SUM(amount), 0) FROM orders WHERE cust = c $$
+pub struct Orders { pub cust: Vec<u32>, pub amount: Vec<i64> }
+
+/// Per row: scan the whole table (no index): O(N · M).
+pub fn spent_scan(customers: &[u32], o: &Orders) -> Vec<i64> {
+    customers.iter().map(|&c| o.cust.iter().zip(&o.amount).filter(|&(&oc, _)| oc == c).map(|(_, &a)| a).sum()).collect()
+}
+
+pub struct OrderIndex { cust: Vec<u32>, amount: Vec<i64> }
+pub fn build_index(o: &Orders) -> OrderIndex {
+    let mut ix: Vec<u32> = (0..o.cust.len() as u32).collect();
+    ix.sort_unstable_by_key(|&i| o.cust[i as usize]);
+    OrderIndex { cust: ix.iter().map(|&i| o.cust[i as usize]).collect(), amount: ix.iter().map(|&i| o.amount[i as usize]).collect() }
+}
+/// Per row: binary-search the index, sum the matching range: O(N · (log M + matches)).
+pub fn spent_index(customers: &[u32], ix: &OrderIndex) -> Vec<i64> {
+    customers.iter().map(|&c| {
+        let lo = ix.cust.partition_point(|&x| x < c);
+        let hi = lo + ix.cust[lo..].partition_point(|&x| x == c);
+        ix.amount[lo..hi].iter().sum()
+    }).collect()
+}
+/// Decorrelated: `SELECT c, COALESCE(s, 0) FROM customers LEFT JOIN (SELECT cust, SUM(amount) s FROM orders GROUP BY cust)`.
+pub fn spent_decorrelated(customers: &[u32], o: &Orders) -> Vec<i64> {
+    let mut groups: HashMap<u32, i64, BuildHasherDefault<Fx>> = HashMap::default();
+    for (&c, &a) in o.cust.iter().zip(&o.amount) { *groups.entry(c).or_insert(0) += a; }
+    customers.iter().map(|c| groups.get(c).copied().unwrap_or(0)).collect()
+}
+```
+:::
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><code>all_strategies_agree_on_random_loop_free_programs</code>: 400 <strong>randomly generated programs</strong> (nested ifs, early returns, assignments, all eleven operators, including division by zero) × 300 random rows: interpreter vs batched vs inlined-per-row vs inlined-vectorized, all equal.</li> <li><code>batching_agrees_on_random_programs_with_loops_and_early_returns</code>: 300 random programs that include bounded <code>while</code> loops and <code>return</code> inside loops and branches (over 30 had loops); batching equals the interpreter; <code>inline</code> refuses exactly the programs that contain a loop.</li> <li><code>the_real_udfs_match_native_code</code> and <code>subquery_strategies_agree</code> (including customers with no orders, empty tables, and one customer only).</li> <li><strong>Mutation checks</strong> (run once, reverted): making <code>return</code> ignore the <em>done</em> flag makes the first test fail on inlined rows; making a <code>while</code> loop leave lanes in the wrong mask makes the second fail. The harness can see both bug classes.</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+```text title="shipping(weight, dist) — 8M rows, ns per row"
+  interpreter, row at a time           34.6
+  inlined expression, row at a time    33.7
+  inlined expression, vectorized       10.5
+  batched statements with masks        25.0
+  native Rust function                 0.55
+```
+
+```text title="collatz(n): a data-dependent loop — 500k rows, 108 loop iterations on average, ns per row"
+  interpreter, row at a time           2553
+  batched statements with masks        3007   lane-iterations executed / needed = 2.76
+  same, input sorted by step count     1159   lane-iterations executed / needed = 1.00
+  native Rust function                   77
+```
+
+```text title="total_spent(c): a UDF containing a query, ms"
+customers    orders   scan per row  index per row     decorrelated
+     500     50000            2.5           0.43             0.06
+    1000    100000           10.7           0.99             0.11
+    2000    200000           42.3           2.21             0.22
+    4000    400000          171.9           4.83             0.57
+ 1000000  10000000              -             94               72   (index build 367 ms not included)
+```
+
+<ul> <li><strong>Inlining by itself is not a speedup</strong>: the inlined expression evaluated row by row costs the same as the interpreter (33.7 vs 34.6 ns). What inlining buys is <strong>visibility</strong>: once the logic is an expression, the engine can evaluate it column-at-a-time (<strong>3.3×</strong>: 10.5 ns), estimate its cost, push predicates into it, parallelize it, and compile it.</li> <li><strong>Compilation is the end of the road for scalar logic</strong>: the native function is <strong>63×</strong> faster than the interpreter and <strong>19×</strong> faster than even the vectorized expression, whose kernels allocate a vector per node. The lecture lists compilation as the first remedy for a reason.</li> <li><strong>Batching with masks is 1.4× here</strong>, held back by naive allocation (a mask and a result vector per statement) and by evaluating <em>both</em> sides of every branch for all lanes. It is the only fast path for a UDF with a loop, but <strong>divergence kills it</strong>: with a data-dependent loop, a batch runs until its <em>slowest</em> lane finishes, so 2.76× more lane-iterations are executed than needed and the result is slower than the interpreter (3007 vs 2553 ns). Sorting the input by iteration count (or grouping similar rows) brings the waste to 1.00 and the time to 1159 ns (2.2× faster than the interpreter), yet still 15× behind native code.</li> <li><strong>The query inside a UDF is the real killer</strong>: the per-row scan is <strong>quadratic</strong>, 4× per step when customers and orders both double, and at 4000 customers × 400 K orders it takes 172 ms vs <strong>0.57 ms decorrelated (300×)</strong>. An index makes each call cheap (4.8 ms, 36× better than scanning) but it stays per row; at 1 M customers × 10 M orders the decorrelated plan (72 ms, <em>including</em> building its hash table) matches the index plan (94 ms) without needing an index (building one took 367 ms).</li> <li><strong>What these numbers don't contain</strong>: a real engine adds a <em>per-call boundary</em> (switching into the language runtime, setting up a frame, planning or locating the nested statement). Row-at-a-time gaps in a real DBMS are therefore larger than the 34 ns here, which is why inlining and batching pay off even more in practice.</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Control flow as a value</strong>: <code>exec</code> returns <code>Option&lt;i64&gt;</code>; <code>Some</code> means a <code>return</code> fired, and every loop and <code>if</code> propagates it with <code>if let Some(r) = ... { return Some(r) }</code>, the same shape as <code>?</code>. No exceptions, no flags in the interpreter.</li> <li><strong>A symbolic state that clones for free</strong>: the inliner's <code>Sym</code> holds <code>Vec&lt;Rc&lt;Expr&gt;&gt;</code>; cloning it at an <code>if</code> copies pointers, not trees, and <code>Rc::ptr_eq</code> skips emitting a <code>CASE</code> when both branches left a variable unchanged. The expression is a <strong>DAG</strong>, which is also why naive printing or evaluation without common-subexpression elimination can blow up.</li> <li><strong>Total operators</strong> (<code>x / 0 = 0</code>, wrapping arithmetic) make it safe to evaluate both arms of a <code>CASE</code> eagerly in vector code; a SQL engine must keep <code>CASE</code>'s lazy guarantee (errors in the unchosen arm must not fire), usually by evaluating arms under a selection vector or mask.</li> <li><strong><code>bool</code> as a lane mask</strong> is simple but allocates; the production form is a bitmap or a <strong>selection vector</strong> (<a href="/cookbook/p/vectorized-execution-with-simd">A14</a>); and the <code>eval_vec</code> allocation per node becomes a pool of reusable vectors or a fused, generated kernel.</li> <li><strong><code>[i64; 8]</code> frame on the stack</strong> for the interpreter: no heap, <code>copy_from_slice</code> for arguments; sizing it at compile time is a typical trade between generality and speed.</li> <li><strong>Writing real UDFs in Rust</strong>: <a href="https://github.com/pgcentralfoundation/pgrx" target="_blank" rel="noreferrer"><code>pgrx</code></a> for PostgreSQL extensions and <a href="https://docs.rs/datafusion" target="_blank" rel="noreferrer">DataFusion</a>'s <code>ScalarUDF</code>/<code>AggregateUDF</code> for engines in Rust show the vectorized UDF interface (<code>&amp;[ArrayRef] -&gt; ArrayRef</code>), which gets batching for free.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Inlining must preserve semantics</strong>: only <strong>pure/deterministic</strong> bodies can be inlined; a UDF with side effects (writes, <code>random()</code>, <code>now()</code>, sequence calls) or exceptions changes meaning when duplicated, reordered, or evaluated for rows a filter would have removed. Engines require volatility labels (<code>IMMUTABLE</code>, <code>STABLE</code>, <code>VOLATILE</code>) and parallel-safety labels (<code>PARALLEL SAFE</code>/<code>UNSAFE</code>) for exactly this reason; the optimizer trusts them.</li> <li><strong>Lazy <code>CASE</code></strong>: eager evaluation of both arms (as the vector kernels here do) is valid only with total operators; with SQL's partial operators (division, casts, array access) evaluate arms under masks.</li> <li><strong>Expression blowup</strong>: nested ifs with merged variables multiply expression sizes; Froid breaks the body into <strong>regions</strong> joined by lateral joins and derived tables so the optimizer sees a bounded tree.</li> <li><strong>Loops don't inline</strong>: Froid does not handle them; the options are the recursive-CTE route (APFEL), batching with masks (watch divergence), or compilation.</li> <li><strong>Triggers and procedures change transactions</strong>: a UDF runs inside the caller's snapshot; a procedure that commits mid-way, or a trigger that writes, interacts with locking, MVCC visibility and logging (<a href="/cookbook/p/concurrency-control-theory">L17-L25</a>); document and test those paths.</li> <li><strong>Sandboxing</strong>: user code can loop forever, allocate without bound, crash the process or read what it shouldn't; run foreign code in a sandbox (process or WebAssembly isolation, Part V) with <strong>fuel/time limits, memory limits</strong> and a capability-restricted API.</li> <li><strong>Plan caching and statistics</strong>: a UDF the optimizer can't see gets a default cardinality; after inlining, estimates change and so do plans, so re-test plan stability across versions.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Froid: Optimization of Imperative Programs in a Relational Database"
+url = "https://www.vldb.org/pvldb/vol11/p432-ramachandra.pdf"
+
+[[sources]]
+title = "Dear User-Defined Functions, Inlining Isn't Working Out So Great for Us. Let's Try Batching to Make Our Relationship Work. Sincerely, SQL"
+url = "https://www.cidrdb.org/cidr2024/papers/p13-franz.pdf"
+
+[[sources]]
+title = "arXiv:1909.03291"
+url = "https://arxiv.org/abs/1909.03291"
+
+[[sources]]
+title = "Don't Hold My Data Hostage: A Case for Client Protocol Redesign"
+url = "https://doi.org/10.14778/3115404.3115408"
+
+[[sources]]
+title = "pgrx"
+url = "https://github.com/pgcentralfoundation/pgrx"
+
+[[sources]]
+title = "datafusion"
+url = "https://docs.rs/datafusion"
+
+[[sources]]
+title = "wasmtime"
+url = "https://docs.rs/wasmtime"

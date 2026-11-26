@@ -1,0 +1,48 @@
+title = "Higher-ranked trait bounds"
+module = "Rust language"
+module_order = 1
+chapter = "Types, traits and generics"
+chapter_order = 2
+order = 11
+kind = "recipe"
+lede = "higher-ranked trait bounds (`for<'a>`) and generic associated types (lending iterators)."
+level = "advanced"
+code = ["examples/language/hrtb_gats.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>parser combinators</li><li>callbacks that borrow their argument</li><li>streaming/lending iterators</li><li>zero-copy APIs</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+HRTB: `F: for<'a> Fn(&'a str) -> &'a str` means "F works for **every** lifetime the caller picks, and the output borrows from the input". Plain `Fn(&str) -> &str` is sugar for exactly that (elision), but you must write `for<'a>` when the lifetime appears inside a trait bound on a type, in `dyn for<'a> Fn(..)`, or when a closure's inferred signature is too weak.
+
+A closure like `|s| s.trim()` is inferred with **one** fixed lifetime unless something (a helper `fn bind<F: for<'a> Fn(&'a str)->&'a str>`) pins the higher-ranked signature. GATs: `type Item<'a> where Self: 'a;` lets an associated type depend on a lifetime chosen at each `next(&'a mut self)` call, so the item may **borrow from the iterator itself**.
+
+`Iterator::next(&mut self) -> Option<Self::Item>` cannot do that: `Item` is fixed before the `&mut self` borrow exists, so it cannot mention its lifetime. That is why `slice.windows_mut()` does not exist in std: two overlapping `&mut [T]` windows alive at once (as `collect()` would require) would alias.
+
+A lending iterator forbids calling `next` again while the previous item is alive, which makes overlapping mutable windows sound.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>nom-style parser combinators over <code>&amp;str</code>/<code>&amp;[u8]</code></li><li><code>tower</code>/<code>axum</code> handlers generic over borrowed requests</li><li>database row cursors that reuse a buffer</li><li>streaming decoders</li><li>"lending" <code>read_line</code> loops that reuse one <code>String</code></li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://blog.rust-lang.org/2022/10/28/gats-stabilization.html" target="_blank" rel="noreferrer">https://blog.rust-lang.org/2022/10/28/gats-stabilization.html</a></li><li><a href="https://doc.rust-lang.org/nomicon/hrtb.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/nomicon/hrtb.html</a> Note: bounds like <code>for&lt;'a&gt; I::Item&lt;'a&gt;: Trait</code> on GATs currently force <code>I: 'static</code></li><li>this recipe avoids them</li></ul>
+"""
+
+[[sources]]
+title = "blog.rust-lang.org/2022/10/28/gats-stabilization.html"
+url = "https://blog.rust-lang.org/2022/10/28/gats-stabilization.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/hrtb.html"
+url = "https://doc.rust-lang.org/nomicon/hrtb.html"

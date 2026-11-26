@@ -1,0 +1,46 @@
+title = "Problems that need several data structures working together"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Dynamic programming, greedy and search"
+chapter_order = 5
+order = 212
+kind = "recipe"
+lede = "problems that need several data structures working together."
+level = "advanced"
+code = ["examples/algorithms/combo_algorithms.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>caches</li><li>route planning</li><li>tree/hierarchy queries</li><li>offline network analysis</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+six classic "one structure is not enough" problems, each solved efficiently **and** by an obviously correct brute force, compared on seeded random inputs (xorshift, fully deterministic).
+
+(a) O(1) LFU cache          = HashMap + frequency buckets of doubly linked lists in arenas (b) cheapest route, &lt;= K stops = Bellman-Ford rounds (a "layered graph" without building the layers) (c) route through all checkpoints = Dijkstra (heap) + bitmask DP over subsets (travelling salesman style) (d) subtree / path sums with updates = Euler tour (DFS order) + Fenwick tree (e) LCA + tree distance      = binary lifting (jump pointers) (f) offline "connected using edges &lt;= w?" = sort edges and queries + union-find **why** combine: each structure answers one question fast (hash: "where?", list: "who is oldest?", heap: "who is next?", Fenwick: "what is the prefix sum under updates?");
+
+The trick is flattening the problem (tree -> array ranges, queries -> sorted order, graph -> layers) so the right tool applies.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>LFU/LRU caches in CDNs and databases</li><li>flight/transit planners with a transfer limit</li><li>delivery and tour planning for few stops</li><li>org-chart or file-tree rollups with live updates</li><li>nearest common manager</li><li>class-hierarchy or network-distance queries</li><li>"which sites are linked at latency &lt;= x" reports</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://cp-algorithms.com/graph/lca_binary_lifting.html> and <https://cp-algorithms.com/data_structures/fenwick.html>
+"""
+
+[[sources]]
+title = "cp-algorithms.com/graph/lca_binary_lifting.html"
+url = "https://cp-algorithms.com/graph/lca_binary_lifting.html"
+
+[[sources]]
+title = "cp-algorithms.com/data_structures/fenwick.html"
+url = "https://cp-algorithms.com/data_structures/fenwick.html"

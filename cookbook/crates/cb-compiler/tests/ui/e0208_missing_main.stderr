@@ -1,0 +1,9 @@
+error[E0208]: `main` function not found in this program
+ --> e0208_missing_main.peb:2:1
+  |
+2 | 
+  | ^ consider adding `fn main() { ... }` to this file
+  |
+  = help: every PEBBLE program starts running at `fn main()`
+
+error: aborting due to 1 previous error

@@ -1,0 +1,60 @@
+title = "WebAssembly"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Bytecode and virtual machines"
+chapter_order = 3
+order = 601
+kind = "recipe"
+lede = "WebAssembly (MVP subset) binary decoder + validator + interpreter, with an assembler."
+level = "advanced"
+code = ["examples/compilers_runtimes/wasm_binary_interpreter.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>plugin sandboxes</li><li>edge/serverless runtimes</li><li>smart contracts</li><li>browsers</li><li>portable bytecode targets</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+the full pipeline a WebAssembly engine runs on untrusted bytes: **decode** (magic/version, sections type, function, table, memory, global, export, start, element, code, data; LEB128 integers), **validate** (a type check of the operand stack per instruction and of structured control flow), **instantiate** (globals, memory, table, data and element segments, start function) and **execute**.
+
+Value types are i32 and i64 (floats are left out; the structure would not change). A small **assembler** (`Asm` + `ModuleBuilder`) builds binaries so tests can create modules, and two modules are also written out **by hand** as byte arrays and compared with the builder.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+(1) LEB128: 7 bits per byte, high bit = continue. We cap the byte count by the integer width and reject non-canonical final bytes, so decoding is total: every failure is an `Error { offset, msg }`, never a panic. Vector lengths are checked against remaining bytes before anything is allocated (no allocation bombs).
+
+(2) Function bodies are decoded once into `Vec<Instr>`; block/loop/if/else/end are matched with a stack and each `Block`/`If` stores the index of its `End` (and `Else`), so a branch is an index jump, not a scan.
+
+(3) Validation follows the spec's algorithm: an operand stack of `Option<ValType>` (None = "unknown", produced after `unreachable`/`br`, which makes the stack polymorphic) plus a control-frame stack that records the height at entry; `end` must leave exactly the block result above that height.
+
+(4) The interpreter keeps **one** u64 value stack: callee locals are the top of the caller's stack (arguments become locals, zero-filled extra locals follow), and a label stack records, per block, the continuation pc, stack height and branch arity. `br n` copies the label's arity values down to its height, pops labels and jumps.
+
+Traps are a `Result` error: div by zero, `i32::MIN / -1`, out-of-bounds memory (computed in u64 so `addr + offset` cannot wrap), bad `call_indirect`, call-depth limit, and a **fuel** counter that stops infinite loops. Shift counts are taken modulo the width, rotates likewise; `rem_s(MIN, -1)` is 0, not a trap.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+running untrusted plugins in a sandbox (Envoy/proxy filters, database UDFs, editors), edge and serverless runtimes, blockchain VMs that meter execution with fuel/gas, language targets (Rust, C, Go) in browsers, and teaching VM design: validation up front is what lets the interpreter skip per-op type checks.
+
+Real engines: wasmtime (Cranelift JIT) and wasmi/wasm3 (interpreters).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+WebAssembly Core Specification <https://webassembly.github.io/spec/core/>   wasmtime <https://github.com/bytecodealliance/wasmtime>
+"""
+
+[[sources]]
+title = "webassembly.github.io/spec/core"
+url = "https://webassembly.github.io/spec/core/"
+
+[[sources]]
+title = "github.com/bytecodealliance/wasmtime"
+url = "https://github.com/bytecodealliance/wasmtime"

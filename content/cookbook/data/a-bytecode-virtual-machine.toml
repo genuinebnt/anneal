@@ -1,0 +1,392 @@
+title = "A bytecode virtual machine"
+module = "Databases"
+module_order = 8
+chapter = "Building complete engines"
+chapter_order = 9
+order = 446
+kind = "guide"
+lede = "Expressions and scan loops compiled to register bytecode · three-valued logic with short-circuit jumps · constant folding and superinstructions · compared with tree walking, closures and a hand-written loop · what a VM is for when it is not the fastest"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>A query can be compiled to a program.</strong> SQLite compiles every statement to bytecode for its VDBE (<code>EXPLAIN</code> prints the program); PostgreSQL compiles expressions to a flat array of steps; Wasm is a bytecode that databases now run. The idea: turn the plan into a linear list of simple instructions over registers, with the scan loop and the row filter as instructions too, and run it with one <code>match</code> loop.</li> <li><strong>Registers beat a stack for this job.</strong> An expression <code>a * 2 + b &gt; 100</code> becomes <code>Col r0 ← a; BinK Mul r0, r0, 2; Col r1 ← b; Bin Add r0, r0, r1; CmpK Gt r0, r0, 100</code>: the result goes in the destination register the parent chose, temporaries are allocated above it and released when the subtree is done. A left-deep chain of any length uses two registers.</li> <li><strong>Three-valued logic needs care in the instruction set.</strong> NULL is "unknown": <code>NULL AND false</code> is false, <code>NULL AND true</code> is NULL; a <code>WHERE</code> keeps a row only if the condition is <em>true</em>, so the filter jump is "if not true" (false or NULL). Short-circuit jumps are valid for <code>AND</code> (a false left side decides) and <code>OR</code> (a true left side decides) but a NULL left side decides nothing.</li> <li><strong>Normalize booleans at the boundary.</strong> In SQL a <code>WHERE</code> accepts any non-zero value as true, but <code>OR</code> must <em>return</em> 1, not the left operand. One <code>Norm</code> instruction after the left side of <code>OR</code> does it; without it the machine returns the raw left operand (7, say) where SQL gives 1, and the tests kill the mutant that removes it.</li> <li><strong>Folding and superinstructions shorten the program.</strong> Subtrees without columns are evaluated at compile time with the same operators the machine uses. A comparison or arithmetic operation with a constant right operand gets its own instruction (<code>CmpK</code>, <code>BinK</code>), saving a load per row.</li> <li><strong>A VM is not automatically faster than the alternatives.</strong> The measurements below put the VM between tree walking and closure compilation, 6× behind a hand-written loop. Its value is elsewhere: a program is <em>data</em>. It can be printed, cached, serialized and sent to another node, interrupted and resumed, run with a step budget in a sandbox, checked by a verifier, and later translated to machine code by a JIT that starts from the same instruction list.</li> </ul>
+"""
+
+[[sections]]
+heading = "The machine"
+body = """
+```sql
+SELECT SUM(a*b + c) FROM t WHERE (a*2 + b > 100 AND c < 50) OR d = 7
+
+ Rewind end                    ; empty table → halt
+loop:
+   filter code → r0            ; with jumps that skip the right side of AND / OR
+   JumpIfNotTrue r0, next      ; false or NULL → skip the row
+   aggregate input → r0 ; AggStep slot, Sum, r0
+next:
+   Next loop                   ; row += 1; jump back while there are rows
+ Halt
+```
+
+<ul> <li><strong>Instructions</strong>: loads (<code>Col</code>, <code>Lit</code>, <code>Null</code>), arithmetic and comparison with a register or an immediate right operand, <code>And</code>, <code>Or</code>, <code>Not</code>, <code>IsNull</code>, <code>Norm</code>, conditional and unconditional jumps, <code>Rewind</code>/<code>Next</code> for the scan, <code>AggStep</code>, <code>Result</code> for projections, <code>Halt</code>.</li> <li><strong>The compiler</strong> (<code>compile</code>) folds constants, generates code for the filter then for the outputs or aggregates, and patches jump targets once their destination is known.</li> <li><strong>Three engines for comparison</strong>: <code>eval_tree</code> walks the expression tree for each row; <code>compile_closure</code> turns each node into a boxed closure once; <code>run</code> executes the bytecode. All three call the same <code>and3</code>/<code>or3</code>/<code>cmp3</code>/<code>bin3</code> helpers, which a separate exhaustive test checks against the truth tables.</li> </ul>
+
+:::deeper Reference: expression trees, three-valued logic, folding, register code generation, the interpreter, closures and a disassembler
+```rust title="src/multimodel/vm.rs"
+//! A register bytecode virtual machine for scalar expressions and single-table queries, in the style of SQLite's VDBE: an expression
+//! tree is compiled to a flat program of three-address instructions over a small register file (with constant folding and short-circuit
+//! jumps), the scan loop is part of the program, and one `match` loop runs it. Also a tree-walking interpreter (the reference) and a
+//! closure compiler (the other common way to avoid re-dispatching on the tree for every row).
+use crate::vexec::{AggFn, Cmp, Table, Val};
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum B { Add, Sub, Mul, Div }
+
+/// Expressions over integer columns with NULL. Booleans are 0 and 1; any non-zero value is true; NULL is "unknown".
+#[derive(Clone, Debug)]
+pub enum Ex {
+    Col(usize), Lit(Val),
+    Bin(B, Box<Ex>, Box<Ex>), Cmp(Cmp, Box<Ex>, Box<Ex>),
+    And(Box<Ex>, Box<Ex>), Or(Box<Ex>, Box<Ex>), Not(Box<Ex>), IsNull(Box<Ex>),
+    /// `CASE WHEN cond THEN a ELSE b END`; an unknown condition takes the ELSE branch.
+    Case(Box<Ex>, Box<Ex>, Box<Ex>),
+}
+
+// ---- three-valued logic, in one place -----------------------------------------------------------------------------------------------
+
+pub fn and3(a: Val, b: Val) -> Val {
+    if a == Some(0) || b == Some(0) { return Some(0); }
+    if a.is_none() || b.is_none() { None } else { Some(1) }
+}
+pub fn or3(a: Val, b: Val) -> Val {
+    if a.is_some_and(|x| x != 0) || b.is_some_and(|x| x != 0) { return Some(1); }
+    if a.is_none() || b.is_none() { None } else { Some(0) }
+}
+pub fn not3(a: Val) -> Val { a.map(|x| (x == 0) as i64) }
+pub fn cmp3(op: Cmp, a: Val, b: Val) -> Val {
+    let (a, b) = (a?, b?);
+    Some(match op { Cmp::Lt => a < b, Cmp::Le => a <= b, Cmp::Eq => a == b, Cmp::Ne => a != b, Cmp::Ge => a >= b, Cmp::Gt => a > b } as i64)
+}
+pub fn bin3(op: B, a: Val, b: Val) -> Val {
+    let (a, b) = (a?, b?);
+    match op { B::Add => Some(a.wrapping_add(b)), B::Sub => Some(a.wrapping_sub(b)), B::Mul => Some(a.wrapping_mul(b)), B::Div => a.checked_div(b) }
+}
+fn truthy(v: Val) -> bool { v.is_some_and(|x| x != 0) }
+
+// ---- the tree-walking reference ------------------------------------------------------------------------------------------------------
+
+pub fn eval_tree(e: &Ex, t: &Table, row: usize) -> Val {
+    match e {
+        Ex::Col(c) => t.cols[*c].at(row), Ex::Lit(v) => *v,
+        Ex::Bin(op, a, b) => bin3(*op, eval_tree(a, t, row), eval_tree(b, t, row)),
+        Ex::Cmp(op, a, b) => cmp3(*op, eval_tree(a, t, row), eval_tree(b, t, row)),
+        Ex::And(a, b) => and3(eval_tree(a, t, row), eval_tree(b, t, row)),
+        Ex::Or(a, b) => or3(eval_tree(a, t, row), eval_tree(b, t, row)),
+        Ex::Not(a) => not3(eval_tree(a, t, row)),
+        Ex::IsNull(a) => Some(eval_tree(a, t, row).is_none() as i64),
+        Ex::Case(c, a, b) => if truthy(eval_tree(c, t, row)) { eval_tree(a, t, row) } else { eval_tree(b, t, row) },
+    }
+}
+
+// ---- closure compilation -----------------------------------------------------------------------------------------------------------
+
+pub type Compiled = Box<dyn Fn(&Table, usize) -> Val>;
+pub fn compile_closure(e: &Ex) -> Compiled {
+    match e {
+        Ex::Col(c) => { let c = *c; Box::new(move |t, r| t.cols[c].at(r)) }
+        Ex::Lit(v) => { let v = *v; Box::new(move |_, _| v) }
+        Ex::Bin(op, a, b) => { let (op, a, b) = (*op, compile_closure(a), compile_closure(b)); Box::new(move |t, r| bin3(op, a(t, r), b(t, r))) }
+        Ex::Cmp(op, a, b) => { let (op, a, b) = (*op, compile_closure(a), compile_closure(b)); Box::new(move |t, r| cmp3(op, a(t, r), b(t, r))) }
+        Ex::And(a, b) => { let (a, b) = (compile_closure(a), compile_closure(b)); Box::new(move |t, r| { let x = a(t, r); if x == Some(0) { x } else { and3(x, b(t, r)) } }) }
+        Ex::Or(a, b) => { let (a, b) = (compile_closure(a), compile_closure(b)); Box::new(move |t, r| { let x = a(t, r); if truthy(x) { Some(1) } else { or3(x, b(t, r)) } }) }
+        Ex::Not(a) => { let a = compile_closure(a); Box::new(move |t, r| not3(a(t, r))) }
+        Ex::IsNull(a) => { let a = compile_closure(a); Box::new(move |t, r| Some(a(t, r).is_none() as i64)) }
+        Ex::Case(c, a, b) => { let (c, a, b) = (compile_closure(c), compile_closure(a), compile_closure(b)); Box::new(move |t, r| if truthy(c(t, r)) { a(t, r) } else { b(t, r) }) }
+    }
+}
+
+// ---- bytecode ----------------------------------------------------------------------------------------------------------------------
+
+pub type Reg = u16;
+#[derive(Clone, Copy, Debug)]
+pub enum Op {
+    Col(Reg, u16), Lit(Reg, i64), Null(Reg), Move(Reg, Reg),
+    Bin(B, Reg, Reg, Reg), Cmp(Cmp, Reg, Reg, Reg), And(Reg, Reg, Reg), Or(Reg, Reg, Reg), Not(Reg, Reg), IsNull(Reg, Reg),
+    /// Superinstructions: the right operand is an integer constant, so no register is loaded for it.
+    BinK(B, Reg, Reg, i64), CmpK(Cmp, Reg, Reg, i64),
+    /// Normalize a truth value to 0, 1 or NULL.
+    Norm(Reg),
+    /// Jump if the register holds a definite false / a definite true / anything but true (false or NULL).
+    JumpIfFalse(Reg, u32), JumpIfTrue(Reg, u32), JumpIfNotTrue(Reg, u32), Jump(u32),
+    /// Start the scan: jump to the first operand if the table is empty.
+    Rewind(u32),
+    /// Advance to the next row and jump back to the loop body if there is one.
+    Next(u32),
+    AggStep(u16, AggFn, Reg),
+    /// Emit a result row from `n` consecutive registers starting at the first.
+    Result(Reg, u16),
+    Halt,
+}
+
+#[derive(Debug, Clone)]
+pub struct Program { pub ops: Vec<Op>, pub nregs: usize, pub aggs: Vec<AggFn> }
+
+/// `SELECT outputs FROM t WHERE filter`, or `SELECT aggregates FROM t WHERE filter` (outputs and aggregates are not mixed).
+#[derive(Clone, Debug)]
+pub struct Query { pub filter: Option<Ex>, pub outputs: Vec<Ex>, pub aggs: Vec<(AggFn, Ex)> }
+
+/// Fold subtrees without columns into literals (using the same three-valued operators the machine uses).
+pub fn fold(e: &Ex) -> Ex {
+    let is_const = |x: &Ex| matches!(x, Ex::Lit(_));
+    let e2 = match e {
+        Ex::Col(_) | Ex::Lit(_) => return e.clone(),
+        Ex::Bin(o, a, b) => Ex::Bin(*o, Box::new(fold(a)), Box::new(fold(b))),
+        Ex::Cmp(o, a, b) => Ex::Cmp(*o, Box::new(fold(a)), Box::new(fold(b))),
+        Ex::And(a, b) => Ex::And(Box::new(fold(a)), Box::new(fold(b))),
+        Ex::Or(a, b) => Ex::Or(Box::new(fold(a)), Box::new(fold(b))),
+        Ex::Not(a) => Ex::Not(Box::new(fold(a))),
+        Ex::IsNull(a) => Ex::IsNull(Box::new(fold(a))),
+        Ex::Case(c, a, b) => Ex::Case(Box::new(fold(c)), Box::new(fold(a)), Box::new(fold(b))),
+    };
+    let all_const = match &e2 {
+        Ex::Bin(_, a, b) | Ex::Cmp(_, a, b) | Ex::And(a, b) | Ex::Or(a, b) => is_const(a) && is_const(b),
+        Ex::Not(a) | Ex::IsNull(a) => is_const(a),
+        Ex::Case(c, a, b) => is_const(c) && is_const(a) && is_const(b),
+        _ => false,
+    };
+    if all_const { Ex::Lit(eval_tree(&e2, &Table { cols: vec![], n: 0 }, 0)) } else { e2 }
+}
+
+struct Gen { ops: Vec<Op>, next_reg: u16, max_reg: u16 }
+impl Gen {
+    fn alloc(&mut self) -> Reg { let r = self.next_reg; self.next_reg += 1; self.max_reg = self.max_reg.max(self.next_reg); r }
+    fn emit(&mut self, op: Op) -> usize { self.ops.push(op); self.ops.len() - 1 }
+    fn here(&self) -> u32 { self.ops.len() as u32 }
+    fn patch(&mut self, at: usize, target: u32) {
+        match &mut self.ops[at] { Op::JumpIfFalse(_, t) | Op::JumpIfTrue(_, t) | Op::JumpIfNotTrue(_, t) | Op::Jump(t) | Op::Rewind(t) | Op::Next(t) => *t = target, o => panic!("not a jump: {o:?}") }
+    }
+    /// Emit code that leaves the value of `e` in `dst`. Temporaries are released when the subtree is done.
+    fn expr(&mut self, e: &Ex, dst: Reg) {
+        let mark = self.next_reg;
+        match e {
+            Ex::Col(c) => { self.emit(Op::Col(dst, *c as u16)); }
+            Ex::Lit(Some(v)) => { self.emit(Op::Lit(dst, *v)); }
+            Ex::Lit(None) => { self.emit(Op::Null(dst)); }
+            Ex::Bin(op, a, b) => match **b {
+                Ex::Lit(Some(k)) => { let ra = self.operand(a, dst); self.emit(Op::BinK(*op, dst, ra, k)); }
+                _ => { let (ra, rb) = (self.operand(a, dst), self.operand_tmp(b)); self.emit(Op::Bin(*op, dst, ra, rb)); }
+            },
+            Ex::Cmp(op, a, b) => match **b {
+                Ex::Lit(Some(k)) => { let ra = self.operand(a, dst); self.emit(Op::CmpK(*op, dst, ra, k)); }
+                _ => { let (ra, rb) = (self.operand(a, dst), self.operand_tmp(b)); self.emit(Op::Cmp(*op, dst, ra, rb)); }
+            },
+            Ex::Not(a) => { let ra = self.operand(a, dst); self.emit(Op::Not(dst, ra)); }
+            Ex::IsNull(a) => { let ra = self.operand(a, dst); self.emit(Op::IsNull(dst, ra)); }
+            Ex::And(a, b) => {
+                // a false left side decides the result: skip the right side
+                self.expr(a, dst);
+                let j = self.emit(Op::JumpIfFalse(dst, 0));
+                let rb = self.operand_tmp(b);
+                self.emit(Op::And(dst, dst, rb));
+                let end = self.here(); self.patch(j, end);
+            }
+            Ex::Or(a, b) => {
+                self.expr(a, dst);
+                self.emit(Op::Norm(dst));
+                let j = self.emit(Op::JumpIfTrue(dst, 0));
+                let rb = self.operand_tmp(b);
+                self.emit(Op::Or(dst, dst, rb));
+                let end = self.here(); self.patch(j, end);
+            }
+            Ex::Case(c, a, b) => {
+                let rc = self.operand_tmp(c);
+                let jelse = self.emit(Op::JumpIfNotTrue(rc, 0));
+                self.expr(a, dst);
+                let jend = self.emit(Op::Jump(0));
+                let else_at = self.here(); self.patch(jelse, else_at);
+                self.expr(b, dst);
+                let end = self.here(); self.patch(jend, end);
+            }
+        }
+        self.next_reg = mark;
+    }
+    /// The left operand is computed in the destination itself.
+    fn operand(&mut self, e: &Ex, dst: Reg) -> Reg { self.expr(e, dst); dst }
+    fn operand_tmp(&mut self, e: &Ex) -> Reg { let r = self.alloc(); self.expr(e, r); r }
+}
+
+pub fn compile(q: &Query) -> Program {
+    let mut g = Gen { ops: vec![], next_reg: 0, max_reg: 0 };
+    let rewind = g.emit(Op::Rewind(0));
+    let body = g.here();
+    let mut skip = None;
+    if let Some(f) = &q.filter {
+        let r = g.alloc();
+        g.expr(&fold(f), r);
+        skip = Some(g.emit(Op::JumpIfNotTrue(r, 0)));
+        g.next_reg = 0;
+    }
+    if q.aggs.is_empty() {
+        let base = g.next_reg;
+        let regs: Vec<Reg> = (0..q.outputs.len()).map(|_| g.alloc()).collect();
+        for (e, r) in q.outputs.iter().zip(&regs) { g.expr(&fold(e), *r); }
+        g.emit(Op::Result(base, q.outputs.len() as u16));
+    } else {
+        for (i, (f, e)) in q.aggs.iter().enumerate() {
+            let r = g.alloc();
+            g.expr(&fold(e), r);
+            g.emit(Op::AggStep(i as u16, *f, r));
+            g.next_reg = 0;
+        }
+    }
+    let next = g.here();
+    if let Some(s) = skip { g.patch(s, next); }
+    g.emit(Op::Next(body));
+    let end = g.here();
+    g.patch(rewind, end);
+    g.emit(Op::Halt);
+    Program { nregs: g.max_reg as usize + 1, aggs: q.aggs.iter().map(|a| a.0).collect(), ops: g.ops }
+}
+
+#[derive(Clone, Copy, Default)]
+struct Acc { sum: i64, cnt: u64, min: i64, max: i64, seen: bool }
+
+/// Run a program over a table. Returns the result rows (for a projection) or one row of aggregates.
+pub fn run(p: &Program, t: &Table) -> Vec<Vec<Val>> {
+    let mut regs: Vec<Val> = vec![None; p.nregs];
+    let mut accs = vec![Acc::default(); p.aggs.len()];
+    let mut out = vec![];
+    let (mut pc, mut row) = (0usize, 0usize);
+    loop {
+        match p.ops[pc] {
+            Op::Col(d, c) => regs[d as usize] = t.cols[c as usize].at(row),
+            Op::Lit(d, v) => regs[d as usize] = Some(v),
+            Op::Null(d) => regs[d as usize] = None,
+            Op::Move(d, s) => regs[d as usize] = regs[s as usize],
+            Op::Bin(o, d, a, b) => regs[d as usize] = bin3(o, regs[a as usize], regs[b as usize]),
+            Op::Cmp(o, d, a, b) => regs[d as usize] = cmp3(o, regs[a as usize], regs[b as usize]),
+            Op::BinK(o, d, a, k) => regs[d as usize] = bin3(o, regs[a as usize], Some(k)),
+            Op::CmpK(o, d, a, k) => regs[d as usize] = cmp3(o, regs[a as usize], Some(k)),
+            Op::And(d, a, b) => regs[d as usize] = and3(regs[a as usize], regs[b as usize]),
+            Op::Or(d, a, b) => regs[d as usize] = or3(regs[a as usize], regs[b as usize]),
+            Op::Not(d, a) => regs[d as usize] = not3(regs[a as usize]),
+            Op::IsNull(d, a) => regs[d as usize] = Some(regs[a as usize].is_none() as i64),
+            Op::Norm(d) => regs[d as usize] = regs[d as usize].map(|x| (x != 0) as i64),
+            Op::JumpIfFalse(r, to) => if regs[r as usize] == Some(0) { pc = to as usize; continue; },
+            Op::JumpIfTrue(r, to) => if truthy(regs[r as usize]) { pc = to as usize; continue; },
+            Op::JumpIfNotTrue(r, to) => if !truthy(regs[r as usize]) { pc = to as usize; continue; },
+            Op::Jump(to) => { pc = to as usize; continue; }
+            Op::Rewind(end) => if t.n == 0 { pc = end as usize; continue; },
+            Op::Next(body) => { row += 1; if row < t.n { pc = body as usize; continue; } }
+            Op::AggStep(slot, f, r) => {
+                let a = &mut accs[slot as usize];
+                match f {
+                    AggFn::CountStar => a.cnt += 1,
+                    _ => if let Some(x) = regs[r as usize] { a.sum = a.sum.wrapping_add(x); a.cnt += 1; if !a.seen || x < a.min { a.min = x; } if !a.seen || x > a.max { a.max = x; } a.seen = true; },
+                }
+            }
+            Op::Result(base, n) => out.push(regs[base as usize..(base + n) as usize].to_vec()),
+            Op::Halt => break,
+        }
+        pc += 1;
+    }
+    if !p.aggs.is_empty() {
+        out.push(accs.iter().zip(&p.aggs).map(|(a, f)| match f {
+            AggFn::CountStar | AggFn::Count => Some(a.cnt as i64),
+            AggFn::Sum => a.seen.then_some(a.sum), AggFn::Min => a.seen.then_some(a.min), AggFn::Max => a.seen.then_some(a.max),
+        }).collect());
+    }
+    out
+}
+
+/// The reference: the same query run row by row on the expression trees.
+pub fn run_tree(q: &Query, t: &Table) -> Vec<Vec<Val>> {
+    let mut accs = vec![Acc::default(); q.aggs.len()];
+    let mut out = vec![];
+    for row in 0..t.n {
+        if let Some(f) = &q.filter { if !truthy(eval_tree(f, t, row)) { continue; } }
+        if q.aggs.is_empty() { out.push(q.outputs.iter().map(|e| eval_tree(e, t, row)).collect()); }
+        for (a, (f, e)) in accs.iter_mut().zip(&q.aggs) {
+            match f {
+                AggFn::CountStar => a.cnt += 1,
+                _ => if let Some(x) = eval_tree(e, t, row) { a.sum = a.sum.wrapping_add(x); a.cnt += 1; if !a.seen || x < a.min { a.min = x; } if !a.seen || x > a.max { a.max = x; } a.seen = true; },
+            }
+        }
+    }
+    if !q.aggs.is_empty() {
+        out.push(accs.iter().zip(&q.aggs).map(|(a, (f, _))| match f {
+            AggFn::CountStar | AggFn::Count => Some(a.cnt as i64),
+            AggFn::Sum => a.seen.then_some(a.sum), AggFn::Min => a.seen.then_some(a.min), AggFn::Max => a.seen.then_some(a.max),
+        }).collect());
+    }
+    out
+}
+
+/// A readable listing, like SQLite's `EXPLAIN`.
+pub fn disassemble(p: &Program) -> String {
+    p.ops.iter().enumerate().map(|(i, o)| format!("{i:>3}  {o:?}")).collect::<Vec<_>>().join("\\n")
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+```text title="the compiled program for one query, and four ways to run it on 4 000 000 rows"
+  0  Rewind(23)
+  1  Col(0, 0)
+  2  BinK(Mul, 0, 0, 2)
+  3  Col(1, 1)
+  4  Bin(Add, 0, 0, 1)
+  5  CmpK(Gt, 0, 0, 100)
+  6  JumpIfFalse(0, 10)
+  7  Col(1, 2)
+  8  CmpK(Lt, 1, 1, 50)
+  9  And(0, 0, 1)
+ 10  Norm(0)
+ 11  JumpIfTrue(0, 15)
+ 12  Col(1, 3)
+ 13  CmpK(Eq, 1, 1, 7)
+ 14  Or(0, 0, 1)
+ 15  JumpIfNotTrue(0, 22)
+ 16  Col(0, 0)
+ 17  Col(1, 1)
+ 18  Bin(Mul, 0, 0, 1)
+ 19  Col(1, 2)
+ 20  Bin(Add, 0, 0, 1)
+ 21  AggStep(0, Sum, 0)
+ 22  Next(1)
+ 23  Halt
+24 instructions, 3 registers, compile time 1.6 us (closures: 0.8 us)
+SUM(a*b + c) WHERE (a*2 + b > 100 AND c < 50) OR d = 7, 4000000 rows, ns per row (best of 3)
+engine                               no NULLs   5% NULLs
+tree walking                             28.9       31.2
+closure compilation                      19.0       21.5
+bytecode virtual machine                 24.0       25.2
+hand-written loop (no NULL support)        4.2        4.3
+```
+
+<ul> <li><strong>24 instructions, 3 registers, 1.6 µs to compile.</strong> The <code>JumpIfFalse(0, 10)</code> at 6 is the short circuit of the <code>AND</code>: when <code>a*2 + b &gt; 100</code> is false the <code>c &lt; 50</code> test is skipped. The <code>Norm</code> at 10 turns the left side of the <code>OR</code> into 0, 1 or NULL before the <code>JumpIfTrue</code>.</li> <li><strong>The ranking</strong>: tree walking 28.9 ns per row, bytecode 24.0, closures 19.0, hand-written 4.2. The VM is <strong>17% faster than walking the tree</strong> and <strong>26% slower than closures</strong>. NULLs add 5% to 13% to the interpretive engines and nothing to the loop that ignores them.</li> <li><strong>Why the hand-written loop is 6× faster</strong>: it works on <code>i64</code>s the compiler keeps in registers, with no NULL check, no dispatch and a compiled-in constant. The three general engines carry a validity flag with every value (<code>Option&lt;i64&gt;</code> is 16 bytes), re-dispatch on node or opcode kind, and read register memory between operations. The vectorized engine of <a href="/cookbook/p/a-vectorized-engine">M4</a> removes the dispatch by amortizing it over a batch; compilation to machine code removes it by not interpreting at all (<a href="/cookbook/p/query-compilation-and-code-generation">code generation</a>).</li> <li><strong>The superinstructions helped a little</strong>: replacing a <code>Lit</code> and a binary operation by <code>BinK</code>/<code>CmpK</code> removed four instructions from the program (28 to 24) and 3% from the run time (25.2 to 24.4 ns before the final run). Dispatch is not the only cost, so shortening the program gains less than its length suggests.</li> <li><strong>Compilation is cheap</strong>: 1.6 µs for the bytecode and 0.8 µs for the closures, against milliseconds for an LLVM-based JIT. That is why PostgreSQL and SQLite compile every statement and only JIT the long-running ones.</li> </ul>
+
+<aside data-call="note"><b>A subtle point the tests pin</b><p><code>a OR b</code> must return 0, 1 or NULL, not <code>a</code>. With the short-circuit jump <code>JumpIfTrue</code>, a true left side such as 7 would stay in the destination register and the machine would return 7 where the tree interpreter returns 1. The compiler emits <code>Norm</code> after the left side to prevent this; it was added when the jump was designed, and nothing in the random queries would have missed its absence: the mutant without it is killed by the directed test (<code>7 OR 0</code> must give 1) and by the differential test.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong><code>#[derive(Clone, Copy)] enum Op</code></strong> with at most one <code>i64</code> payload keeps an instruction at 16 bytes; the program is a <code>Vec&lt;Op&gt;</code> the interpreter indexes with a <code>usize</code> program counter. Jump targets are <code>u32</code> indexes patched by <code>Gen::patch</code>, never pointers.</li> <li><strong>One <code>match</code> in a <code>loop</code></strong> is the whole interpreter; the compiler turns it into a jump table. <code>continue</code> after a taken jump skips the <code>pc += 1</code> at the bottom.</li> <li><strong>Register allocation as a stack discipline</strong>: <code>Gen::expr(e, dst)</code> records <code>mark = next_reg</code>, allocates temporaries above it and restores <code>next_reg = mark</code> at the end, so register numbers are an invariant of tree shape and the test can assert how many a chain needs.</li> <li><strong>Boxed closures</strong> (<code>Box&lt;dyn Fn(&amp;Table, usize) -&gt; Val&gt;</code>) capture their children by move; the closure tree has one allocation per node and a virtual call per node per row. It is the cheapest way to avoid re-matching on the tree and is how many embedded query engines are written.</li> <li><strong>Sharing semantic helpers</strong>: <code>and3</code>, <code>or3</code>, <code>cmp3</code> and <code>bin3</code> are used by all three engines, so the differential test cannot check them; the truth-table test does (exhaustively over <code>{NULL, 0, 1, 5}</code>), as the aggregate lesson of <a href="/cookbook/p/a-vectorized-engine">M4</a> requires.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Truth tables</strong>: <code>AND</code>, <code>OR</code>, <code>NOT</code>, comparisons and arithmetic over every combination of NULL, 0, 1 and 5, against an independent table written as a three-valued enum; results are normalized; division by zero and <code>i64::MIN / -1</code> are NULL.</li> <li><strong>Differential</strong>: 6 000 random queries (0 to 30 rows with 20% NULLs; random filters and projections or aggregates; expression trees up to depth 4 with every operator, <code>CASE</code> and <code>IS NULL</code>) run by the tree interpreter, the bytecode and, for projections, the closures; results are identical, with 16 322 result rows, 23 322 conditional and 7 036 unconditional jumps compiled in the process.</li> <li><strong>Compiler properties</strong>: a constant subtree folds into a literal and becomes an immediate operand; NULL stays NULL through folding; a left-deep chain of 20 additions needs at most 3 registers, a right-deep chain between 20 and 23.</li> <li><strong>Short circuits and edge cases</strong>: <code>x = 0 OR 100 / x &gt; 5</code> over <code>{0, 10, 50, NULL}</code> gives <code>{1, 1, 0, NULL}</code>; <code>7 OR 0</code> is 1; aggregates over an empty table give <code>COUNT = 0</code> and NULL; a NULL filter selects nothing.</li> <li><strong>Mutants run against these tests</strong>: <code>AND</code> as <code>OR</code>; unknown <code>AND</code> true as true; <code>NOT NULL</code> as false; division by zero without NULL; a wrong short-circuit jump in <code>AND</code>; no <code>Norm</code> in <code>OR</code>; <code>CASE</code> taking the <code>THEN</code> branch on unknown; a filter letting NULL through; constants not folded; a swapped <code>BinK</code> operand; an empty table running the body; the loop stopping one row early; temporaries never released; <code>COUNT(*)</code> not counting; <code>MAX</code> keeping the smallest; a <code>Result</code> reading the wrong registers. <strong>All 16 were killed.</strong></li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>SQLite's VDBE</strong> is a register bytecode with cursors for tables and indexes; the whole statement (loops, index seeks, aggregation) is one program, visible with <code>EXPLAIN</code>. It is the closest model to the one here.</li> <li><strong>PostgreSQL</strong> compiles each expression to an <code>ExprState</code> array of steps run by a threaded interpreter (<code>ExecInterpExpr</code>), with specialized steps for common shapes (the superinstruction idea); with <code>jit = on</code> it translates the same steps to LLVM IR for expensive queries.</li> <li><strong>MySQL</strong> historically walked item trees; <strong>MariaDB</strong>, <strong>Oracle</strong> and <strong>SQL Server</strong> run compiled or interpreted expression programs. <strong>Spark</strong> compiles stages to Java bytecode (whole-stage code generation); <strong>DuckDB</strong> and <strong>ClickHouse</strong> evaluate expressions vector-at-a-time rather than row-at-a-time.</li> <li><strong>Wasm</strong> is used as a portable, sandboxed program format for user-defined functions and for pushing compute to the data (see <a href="/cookbook/p/the-engine-in-webassembly">Wasm in Cairn</a>).</li> <li><strong>Lua</strong>, <strong>eBPF</strong> and <strong>JVM</strong> bytecodes show the same pattern: a verifiable, bounded program format.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>A VM that needs a JIT to be fast is a design smell only if you needed fast.</strong> Measure before adding machine-code generation; this section's 6× gap to the hand loop is mostly NULL handling and dispatch, which vectorization attacks more cheaply.</li> <li><strong>Jump patching bugs are silent</strong>: a wrong target produces wrong results, not a crash. Compare against a reference interpreter on random programs (as here) and add a verifier that every target is in range and every register is initialized before use.</li> <li><strong>Short-circuit evaluation changes which errors happen.</strong> A language with run-time errors (division by zero, overflow) must define whether <code>x = 0 OR 100 / x &gt; 5</code> may evaluate the right side. Here division returns NULL, and the test still checks that the jump skips the operand.</li> <li><strong>Stack versus register VMs</strong>: stack machines are smaller to generate for; register machines execute fewer instructions. Wasm is a stack machine with structured control flow; the JVM too; Lua and SQLite use registers.</li> <li><strong>Don't let bytecode leak into the planner.</strong> The plan decides <em>what</em> to compute; the VM executes. If planning decisions depend on how the VM behaves, cost estimates will be wrong (<a href="/cookbook/p/cost-models">cost models</a>).</li> <li><strong>Unbounded programs</strong>: a user-supplied program needs a step budget and a memory limit; the exercises add fuel.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "The SQLite Bytecode Engine"
+url = "https://www.sqlite.org/opcode.html"
+
+[[sources]]
+title = "Virtual Database Engine"
+url = "https://www.sqlite.org/vdbe.html"

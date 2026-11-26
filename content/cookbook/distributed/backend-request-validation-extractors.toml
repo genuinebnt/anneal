@@ -1,0 +1,54 @@
+title = "Request parsing + validation"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 516
+kind = "recipe"
+lede = "Custom extractors, composable rules, problem+json `errors` map."
+level = "intermediate"
+code = ["examples/web/backend_request_validation_extractors.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+every JSON/HTTP backend (the first line of defence)
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>signup/checkout forms</li><li>public REST APIs</li><li>internal admin APIs</li><li>same shape as Stripe/GitHub style field errors</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Extends (does not repeat): axum_errors (one error enum -> one JSON shape), rest_api_patterns, multipart_forms_uploads.
+
+Pipeline used here: bytes -> `Raw` DTO (serde, `deny_unknown_fields`) -> normalise (trim/case-fold) -> validate (composable rules, **all** field errors collected) -> `TryFrom`-style conversion into a domain type that cannot be invalid ("parse, don't validate").
+
+Failures become RFC 9457 `application/problem+json` with an `errors` map keyed by field; each error carries a stable machine `code` + `params` (i18n-ready); the human `message` is rendered from a catalog by `Accept-Language`, so clients localise by code and servers never hard-code prose into logic.
+
+Cheat sheet (I want to ... -> use ...): limit body size              -> `DefaultBodyLimit::max(n)` (413 from the Bytes extractor) / tower-http RequestBodyLimitLayer require JSON content type    -> check Content-Type in the extractor, 415 otherwise custom extractor on body     -> `impl FromRequest<S>` (consumes body, must be **last** arg) custom extractor on headers  -> `impl FromRequestParts<S>` (any order, many allowed) repeated query keys `?a=1&a=2` -> hand-parse `uri.query()` (serde_urlencoded cannot do Vec) comma lists `?status=a,b`    -> split(',') after decoding, then parse each into an enum report every bad field       -> `Collector` gathers `BTreeMap<field, Vec<FieldError>>` stop at first rule per field -> `Collector::field` uses `find_map`
+
+```text
+default a missing field      -> `#[serde(default = "fn")]`
+```
+
+reject unknown fields        -> `#[serde(deny_unknown_fields)]` (strict) or omit (lenient, forward compatible) case-insensitive identity    -> trim + `to_lowercase()` **before** uniqueness checks (production: NFKC via `unicode-normalization`) pick response format         -> parse `Accept` with q-values, `negotiate()` -> 406 if none localise errors              -> stable `code` + `params`, catalog keyed by (lang, code) production crates            -> `validator`/`garde` derive rules, `serde_path_to_error` for JSON paths, `axum-extra`
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>RFC 9457 Problem Details (<a href="https://www.rfc-editor.org/rfc/rfc9457" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc9457</a>)</li><li>axum extractors docs (<a href="https://docs.rs/axum/latest/axum/extract/" target="_blank" rel="noreferrer">https://docs.rs/axum/latest/axum/extract/</a>)</li><li>"Parse, don't validate" by Alexis King (title only</li><li>not re-fetched)</li></ul>
+"""
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc9457"
+url = "https://www.rfc-editor.org/rfc/rfc9457"
+
+[[sources]]
+title = "docs.rs/axum/latest/axum/extract"
+url = "https://docs.rs/axum/latest/axum/extract/"

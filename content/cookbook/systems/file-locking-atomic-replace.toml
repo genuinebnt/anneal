@@ -1,0 +1,67 @@
+title = "Crash-safe file replacement"
+module = "Performance and systems"
+module_order = 7
+chapter = "Files, processes and the OS"
+chapter_order = 3
+order = 289
+kind = "recipe"
+lede = "crash-safe file replacement (temp + fsync + rename + dir fsync) and file locking (flock, PID lock, O_EXCL)"
+level = "intermediate"
+code = ["examples/os_and_storage/file_locking_atomic_replace.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>config/state files</li><li>databases' metadata</li><li>package managers</li><li>single-instance daemons</li><li>cross-process mutual exclusion</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Atomic replace**: to update `state.json` so a crash leaves either the **old** or the **new** file, never a mix:
+
+1. write the new bytes to a temp file **in the same directory** (rename is atomic only within a filesystem);
+2. `fsync` the temp file (data durable **before** it becomes visible);
+3. `rename(tmp, target)` (atomic replace on POSIX);
+4. `fsync` the **directory** (the rename is a directory-entry change; without this it may be lost on power failure even though the file data was synced). **What FSYNC guarantees**: when it returns Ok, the kernel has asked the device to persist that file's data (and the metadata needed to find it) and the device reported done.
+
+   **What it does not**: it does not make a multi-file change atomic; it does not protect other files or the directory entry (hence step 4); on macOS plain `fsync` only reaches the drive's cache and `fcntl(F_FULLFSYNC)` is needed for a real flush (Rust's `sync_all` already does this on macOS, noted below);
+
+   Drives or VMs that lie about flushes defeat it; and a failed fsync may have dropped dirty pages, so never "retry fsync and carry on" (PostgreSQL's 2018 "fsyncgate"): treat it as fatal.
+
+   Without any fsync, `rename` still gives atomicity against process crashes, just not durability on power loss.
+
+**Locks** (all **advisory**: they only work if every party cooperates; nothing stops a rogue `write`):
+
+- `flock(2)`: whole-file lock attached to the open file description; auto-released when the descriptor is closed or the process dies (no stale locks!). Two separate `open`s conflict, even within one process (so it works between threads here). Shared (LOCK_SH, many readers) vs exclusive (LOCK_EX); `LOCK_NB` returns EWOULDBLOCK instead of waiting.
+
+   Lock a dedicated `.lock` file, **not** the data file you replace by rename (the lock would stay on the old inode). Not reliable on some network filesystems (NFS).
+- PID lock file: create-exclusive, write your pid, delete on exit. Crashes leave the file behind, so a new starter checks `kill(pid, 0)` (signal 0 = existence check only): ESRCH means dead, so the lock is stale.
+
+   Caveats: PID reuse, and two starters may both decide a lock is stale (the check-then-remove is racy; flock avoids that).
+- `O_EXCL|O_CREAT` (`create_new`): the kernel guarantees exactly one creator wins. A primitive for lock files and unique names.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>editors and package managers saving files atomically (<code>git</code> and <code>apt</code> use lock files + rename)</li><li>SQLite and other embedded DBs using file locks</li><li>daemons refusing to start twice (pid files)</li><li>cron-style jobs that must not overlap</li><li><code>.lock</code> files in build tools such as cargo's package-cache lock</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://man7.org/linux/man-pages/man2/flock.2.html> and <https://man7.org/linux/man-pages/man2/fsync.2.html> and <https://www.postgresql.org/docs/current/wal-reliability.html>
+"""
+
+[[sources]]
+title = "man7.org/linux/man-pages/man2/flock.2.html"
+url = "https://man7.org/linux/man-pages/man2/flock.2.html"
+
+[[sources]]
+title = "man7.org/linux/man-pages/man2/fsync.2.html"
+url = "https://man7.org/linux/man-pages/man2/fsync.2.html"
+
+[[sources]]
+title = "postgresql.org/docs/current/wal-reliability.html"
+url = "https://www.postgresql.org/docs/current/wal-reliability.html"

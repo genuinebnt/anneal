@@ -1,0 +1,10 @@
+[package]
+name = "cb-cdylib-c-abi"
+version = "0.1.0"
+edition = "2024"
+description = "A Rust cdylib and staticlib with a stable C ABI: opaque handles, error codes, callbacks and a hand-written header, tested from C."
+publish = false
+
+[lib]
+# rlib: so Rust unit tests work. cdylib: .so/.dylib/.dll. staticlib: .a/.lib.
+crate-type = ["rlib", "cdylib", "staticlib"]

@@ -1,0 +1,555 @@
+title = "Acquire and release ordering"
+module = "6. Concurrency and async"
+chapter = "Atomics and memory ordering"
+order = 1
+kind = "concept"
+level = "advanced"
+status = "draft"
+lede = "A `Release` store and an `Acquire` load that reads it create a promise between two threads: everything the writer did before the store is visible to the reader after the load. This is how ordinary data is handed from one thread to another through one atomic."
+summary = [
+    "Use `Release` on the write that says \"my data is ready\" and `Acquire` on the read that checks it.",
+    "The promise exists only if the `Acquire` side reads the value that the `Release` side wrote (or a later one that continues it).",
+    "`Relaxed` keeps each atomic operation whole, but orders nothing around it, so it cannot hand over other data.",
+    "Neither acquire nor release stops two threads from each storing a flag and then both missing the other's: that needs `SeqCst`.",
+    "A test on real threads that passes thousands of times does not show that an ordering is strong enough.",
+    "Tested here: four ordering bugs on ordinary data passed all 20 native test runs, while Miri (all 32 seeds tried) and loom caught each one.",
+]
+layers = ["Hardware", "Compiler", "Rust memory model", "Atomic types", "Mutex, channel, Arc"]
+layers_on = ["Rust memory model", "Atomic types"]
+
+[[glance]]
+label = "Defined in"
+value = "`core::sync::atomic` (std re-exports it)"
+
+[[glance]]
+label = "Model"
+value = "The C++20 atomics model, without `consume`"
+
+[[glance]]
+label = "Allocates"
+value = "No"
+
+[[glance]]
+label = "Checking tools"
+value = "Miri (nightly), loom (crate)"
+
+[[sections]]
+heading = "When you need it"
+body = '''
+You need acquire and release when **one thread must see other memory that another thread wrote**, and an atomic is how it finds out that the memory is ready.
+
+| What the atomic is for | Ordering |
+|---|---|
+| A counter or id generator that carries no other data | `Relaxed` |
+| "The data is ready": writer side | `store(.., Release)` |
+| "Is the data ready?": reader side | `load(Acquire)` |
+| A lock | `Acquire` to take it, `Release` to unlock |
+| Read-modify-write that does both jobs | `AcqRel` |
+| Each thread writes its own flag, then reads the other's | `SeqCst` |
+| You are not sure | A `Mutex` or a channel (advice) |
+
+**The main cost** is not speed. It is that a wrong choice usually compiles, passes its tests and fails rarely. Prefer `Mutex`, a channel or `OnceLock` unless you have a reason to build on atomics (advice).
+
+**You do not need it** when something else already orders the two threads. For example, [`join`](https://doc.rust-lang.org/std/thread/struct.JoinHandle.html#method.join) promises that everything the thread did happens before `join` returns. So a counter that you read only after joining its writers can be `Relaxed`.
+'''
+
+[[sections]]
+heading = "Happens-before in plain words"
+body = '''
+Threads do not share one agreed timeline. The compiler may reorder your memory operations when one thread could not tell the difference, and a processor may make writes visible to other cores in a different order.
+
+**Happens-before** is the order the language does promise. If a write happens before a read, the read sees that write (or a later one). Inside one thread, program order gives you this. Between two threads you get it only from specific synchronizing operations.
+
+This matters beyond stale values. The [standard library's memory model](https://doc.rust-lang.org/std/sync/atomic/index.html#memory-model-for-atomic-accesses) says that two accesses to the same memory are a **data race** if at least one writes, at least one is non-atomic, and neither happens before the other. A data race is **undefined behaviour**. It is not "you might read the old value".
+
+Release and acquire add one edge between threads:
+
+1. Thread A writes some data.
+2. Thread A stores to an atomic `x` with `Release`.
+3. Thread B loads `x` with `Acquire` and **reads the value A stored**.
+4. Now everything A did before step 2 happens before everything B does after step 3.
+
+> [!WARNING]
+> Step 3 is a condition, not a formality. If B's load returns the old value, there is no edge at all, and B must not touch the data. An `Acquire` load does not wait for anything.
+
+The one-way fences are a useful picture, with limits. Earlier accesses cannot move after a release. Later accesses cannot move before an acquire. The [`fence` documentation](https://doc.rust-lang.org/std/sync/atomic/fn.fence.html) warns that "preventing reordering" is a simplified model. When you argue that code is correct, argue with happens-before edges.
+'''
+
+[[sections]]
+heading = "Publishing data"
+body = '''
+The classic use is **publication**, also called message passing: write ordinary data once, then let one flag hand it over. The data here is a plain `UnsafeCell<u64>`, not an atomic. Only the flag's ordering makes the read legal.
+
+```rust title=src/publish.rs
+impl Publisher {
+    pub fn publish(self, value: u64) {
+        // SAFETY: this is the only write, and no reader touches `value` until it
+        // has seen the store below.
+        self.0.value.with_mut(|p| unsafe { *p = value });
+        self.0.ready.store(true, Ordering::Release);
+    }
+}
+
+impl Reader {
+    /// `None` until the value has been published. Never blocks.
+    pub fn try_read(&self) -> Option<u64> {
+        if !self.0.ready.load(Ordering::Acquire) {
+            return None;
+        }
+        // SAFETY: the Acquire load saw the Release store, so the write to `value`
+        // happened before this read, and nothing writes it again.
+        Some(self.0.value.with(|p| unsafe { *p }))
+    }
+}
+```
+
+:::steps One publication, in order
+- writer | write `value = 42` | An ordinary write. No other thread may access `value` yet.
+- writer | `ready.store(true, Release)` | The write above is attached to this store.
+- reader | `ready.load(Acquire)` returns `false` | Too early. No edge exists, so the reader returns `None` and leaves `value` alone.
+- reader | `ready.load(Acquire)` returns `true` | It read the released value. The writer's earlier work now happens before the reader's later work.
+- reader | read `value` | Guaranteed to be 42, with no data race.
+:::
+
+Two parts of the design make the `unsafe` sound, and the ordering is only one of them. `publish` takes `self` and there is one `Publisher`, so safe code cannot write twice. A reader never reads before it has seen the flag.
+
+> [!RUST]
+> `UnsafeCell` is not `Sync`, so the type needs `unsafe impl Sync`. That line is where you take over the compiler's job. Write the happens-before argument next to it, as `publish.rs` does. The `with` and `with_mut` closures copy the shape of loom's `UnsafeCell`, so one source file builds for both.
+
+Without that `unsafe impl`, sharing the cell between threads does not compile. The checker compiles this snippet to confirm the error:
+
+```rust compile_fail=E0277 title=cell_is_not_sync.rs
+use std::cell::UnsafeCell;
+
+struct Slot {
+    value: UnsafeCell<u64>,
+}
+
+fn main() {
+    let slot = Slot {
+        value: UnsafeCell::new(0),
+    };
+    std::thread::scope(|s| {
+        s.spawn(|| slot.value.get() as usize);
+    });
+}
+```
+'''
+
+[[sections]]
+heading = "Why Relaxed is not enough"
+body = '''
+`Relaxed` operations are still atomic: no torn values, and a read-modify-write such as `fetch_add` loses no updates. They create **no happens-before edge**, so they cannot make other memory visible.
+
+To try this without undefined behaviour, the lab has a mailbox whose message is also an atomic. A weak flag can then give a wrong **value**, but never a data race.
+
+```rust title=src/litmus.rs
+/// `value` must not be 0, which means "nothing written yet".
+pub fn send(&self, value: u64, flag_store: Ordering) {
+    self.data.0.store(value, Ordering::Relaxed);
+    self.ready.0.store(true, flag_store);
+}
+
+/// `None` if the flag is not set. `Some(0)` is a stale read: the flag was
+/// visible and the data was not.
+pub fn try_receive(&self, flag_load: Ordering) -> Option<u64> {
+    if !self.ready.0.load(flag_load) {
+        return None;
+    }
+    Some(self.data.0.load(Ordering::Relaxed))
+}
+```
+
+With `Release` and `Acquire` on the flag, a stale read is impossible. With `Relaxed` on **either** side it is allowed. One matching side is not enough.
+
+**Measured here.** `cargo run --release` sends 100,000 mailboxes between two threads. Over 20 runs, the `Relaxed`/`Relaxed` version saw between **124 and 295 stale reads** per run, and the `Release`/`Acquire` version saw none. (Apple M4 Pro, macOS 27.0, rustc 1.98.1, 2026-11-26.) The run does not show whether the compiler or the processor caused the reordering. The counts depend on this loop and this machine. Under Miri, one run saw 49 stale reads in 100 rounds.
+
+### Why x86 hides this
+
+These are single operations compiled on their own with `rustc -O` 1.98.1 (tested here, from the emitted assembly):
+
+| Operation | aarch64 (Apple target) | x86-64 |
+|---|---|---|
+| `load(Relaxed)` | `ldr` | `mov` |
+| `load(Acquire)` | `ldapr` | `mov` |
+| `load(SeqCst)` | `ldar` | `mov` |
+| `store(Relaxed)` | `str` | `mov` |
+| `store(Release)` | `stlr` | `mov` |
+| `store(SeqCst)` | `stlr` | `xchg` |
+
+On x86-64, `Relaxed` and `Release`/`Acquire` produced the **same instructions** here. The x86 hardware model (total store order) already forbids the message-passing reordering between two plain stores and two plain loads, while ARM and POWER allow it ([Russ Cox, Hardware Memory Models](https://research.swtch.com/hwmm)).
+
+So a missing `Release` can look correct on every x86 machine you try. It is still wrong, for two reasons. The **compiler** works from the Rust model, not from x86, and may reorder around a `Relaxed` operation even when the target processor would not. And the same source may later run on ARM. The [Rustonomicon](https://doc.rust-lang.org/nomicon/atomics.html) advises testing concurrent algorithms on weakly ordered hardware.
+
+> [!NOTE]
+> The table shows isolated operations. It says nothing about how the compiler moves the code around them, and it was not run on x86 hardware.
+'''
+
+[[sections]]
+heading = "Last one out: reference counting"
+body = '''
+Publication has one writer and a flag. The second common pattern has **several threads that finish with some shared data, and the last one to finish uses all of it**, often to destroy it. A reference count is this pattern.
+
+The lab strips it down: two owners each write a result, then count down. The one that reaches zero reads both.
+
+```rust title=src/countdown.rs
+// Release: my write above stays before my decrement.
+if self.shared.remaining.fetch_sub(1, Ordering::Release) != 1 {
+    return None;
+}
+// Acquire: pairs with the other thread's Release decrement, which this
+// thread's own decrement read from.
+fence(Ordering::Acquire);
+```
+
+- **Every** thread decrements with `Release`, because any of them may not be last, and its work must be visible to whoever is.
+- Only the **last** thread needs the `Acquire`. A separate [`fence`](https://doc.rust-lang.org/std/sync/atomic/fn.fence.html) lets the others skip it. The fence docs describe this "atomic to fence" pairing: a release operation, then, on the other thread, any read of that atomic followed by an acquire fence.
+- Using `fetch_sub(1, AcqRel)` instead would also be correct. It asks for acquire on every decrement.
+
+### What `Arc` does {#what-arc-does}
+
+`Arc` uses this pattern: `clone` increments with `Relaxed`, and `drop` decrements with `Release`, then the last owner runs an `Acquire` fence before destroying the value.
+
+:::deeper The orderings in Arc, and the source's reasons | rustc 1.98.1
+Read in the standard library source, [`alloc/src/sync.rs`](https://doc.rust-lang.org/src/alloc/sync.rs.html):
+
+| Operation | Ordering | The source's reason |
+|---|---|---|
+| `Arc::clone` | `strong.fetch_add(1, Relaxed)` | You already hold a reference, so the object cannot be destroyed meanwhile. Handing the new reference to another thread must already synchronize. |
+| `Drop for Arc` | `strong.fetch_sub(1, Release)`; if it was the last, an `Acquire` fence, then destroy | All use of the data through any reference must happen before the deletion. |
+| `Drop for Weak` | The same shape on the `weak` count | Same reason, for freeing the allocation. |
+
+The comment in `drop` gives a case that shows why this matters: the value may be something like a `Mutex<T>`. Destroying it does not lock the mutex, so the lock cannot be what makes another thread's writes visible to the destructor.
+
+The same file has a detail worth knowing: under ThreadSanitizer, which does not support fences, the fence is replaced by an `Acquire` load of the counter.
+:::
+
+> [!PRODUCTION]
+> `clone` also aborts the process if the count passes `isize::MAX`. Ordering is one part of a correct reference count. Overflow, weak references and uniqueness checks are others. Use `Arc` (advice).
+'''
+
+[[sections]]
+heading = "When SeqCst matters"
+body = '''
+Here two threads each **store their own flag, then load the other's**. Old mutual-exclusion algorithms such as Dekker's depend on at least one of them seeing the other.
+
+| Thread 1 | Thread 2 |
+|---|---|
+| `left = 1` | `right = 1` |
+| `a = right` | `b = left` |
+
+Can both `a` and `b` be 0?
+
+| Orderings | Both zero allowed? |
+|---|---|
+| `Release` stores, `Acquire` loads | **Yes** |
+| All four accesses `SeqCst` | No |
+| `Relaxed` accesses with `fence(SeqCst)` between each store and load | No |
+
+Release and acquire do not help, because neither load needs to read the other thread's store. If a load returns 0, it read the initial value, so no edge was created. Nothing orders one thread's **store** before its later **load** of a different location.
+
+`SeqCst` adds the guarantee that all threads agree on one order of all `SeqCst` operations ([`Ordering`](https://doc.rust-lang.org/std/sync/atomic/enum.Ordering.html)). In that order, one of the two stores comes first, so the other thread's later load must see it. This happens on x86 too: its stores wait in a per-core queue, so both loads can run before either store is visible ([Russ Cox](https://research.swtch.com/hwmm)). That is why the table above shows `xchg` for the x86 `SeqCst` store.
+
+```rust title=src/litmus.rs
+Dekker::SeqCstAccesses => {
+    mine.store(1, Ordering::SeqCst);
+    theirs.load(Ordering::SeqCst)
+}
+Dekker::SeqCstFence => {
+    mine.store(1, Ordering::Relaxed);
+    fence(Ordering::SeqCst);
+    theirs.load(Ordering::Relaxed)
+}
+```
+
+> [!WARNING]
+> Making **one** operation `SeqCst` does not make the others safe. The single order covers `SeqCst` operations and fences only. In this test, both threads need it on both sides: keeping the stores `SeqCst` and weakening only the loads to `Acquire` let both threads read 0 under Miri, on all 32 seeds tried (tested here).
+
+The Rustonomicon says `SeqCst` is rarely needed for correctness, but is the right choice if you are unsure about the weaker orderings. Treat that as a starting point, not a repair: `SeqCst` on a wrong algorithm is still wrong.
+'''
+
+[[sections]]
+heading = "What testing can find"
+body = '''
+Each row below is a deliberate bug put into a scratch copy of the lab, one at a time. This is the most useful table on the page.
+
+- **Real threads**: `cargo test --release --test threads`, run 20 times. The number is how many runs failed.
+- **Miri**: the one relevant test, with 32 seeds (`-Zmiri-seed=0` to `31`). The number is how many seeds failed.
+- **loom**: `tests/model.rs`, one run.
+
+| Bug | Real threads | Miri | loom |
+|---|---|---|---|
+| Publication: store `Release` to `Relaxed` | 0 of 20 | 32 of 32 (data race) | caught |
+| Publication: load `Acquire` to `Relaxed` | 0 of 20 | 32 of 32 (data race) | caught |
+| Countdown: decrement `Release` to `Relaxed` | 0 of 20 | 32 of 32 (data race) | caught |
+| Countdown: `Acquire` fence removed | 0 of 20 | 32 of 32 (data race) | caught |
+| Mailbox test made `Relaxed`/`Relaxed` (atomics only) | 13 of 20 | 32 of 32 | caught (separate tests, one side weak each) |
+| Store buffering: `fence(SeqCst)` removed | 2 of 20 | 32 of 32 | caught |
+| Store buffering: `SeqCst` accesses to `Release`/`Acquire` | **0 of 20** | 32 of 32 | **cannot tell them apart** |
+
+**What this shows.**
+
+- All four bugs on ordinary data, each of which is undefined behaviour, **passed every native run**, on ARM hardware that allows the reordering. The tests that did this are in the lab and they pass. They check behaviour; they do not check the orderings.
+- Two bugs were caught natively only sometimes. A flaky failure like that is easy to retry and forget.
+- The counts describe these tiny programs, these tests and this machine. "32 of 32" is not a detection rate you can expect elsewhere.
+
+### Why passing many times proves little
+
+A stress test samples whatever your processor, compiler and scheduler happen to do. A bug needs a particular interleaving **and** a particular reordering in a narrow window. A loop that starts two new threads each round gives them little chance to overlap (a likely reason for the zeros, not investigated). The mailbox loop, where the reader chases the writer, exposed far more. Changing the target, the compiler version or an unrelated line can change what you see. On x86, one whole class of reordering does not happen in hardware at all.
+
+> [!TIP]
+> To test a concurrency test, weaken an ordering in a scratch copy and see what fails. If nothing does, your test is not what protects that ordering. A review with a written happens-before argument, Miri or loom has to. Never commit the weakened ordinary-data version, and give each mutated copy its own `--target-dir`.
+'''
+
+[[sections]]
+heading = "Miri"
+body = '''
+[Miri](https://github.com/rust-lang/miri) interprets your program and reports undefined behaviour, including data races. It also **emulates some weak memory effects**: an atomic load can return an outdated value even where your processor would not show it.
+
+```sh
+cargo +nightly miri test
+MIRIFLAGS="-Zmiri-many-seeds=0..32" cargo +nightly miri test --test threads
+```
+
+This is the real output (shortened) for the first bug in the table, a `Relaxed` publication store:
+
+```text
+test a_reader_on_another_thread_sees_the_published_value ... error: Undefined Behavior: Data race detected between (1) non-atomic write on thread `unnamed-4` and (2) non-atomic read on thread `unnamed-5` at alloc48644+0x10
+  --> src/publish.rs:46:45
+   |
+46 |         Some(self.0.value.with(|p| unsafe { *p }))
+   |                                             ^^ (2) just happened here
+   |
+help: and (1) occurred earlier here
+  --> src/publish.rs:33:44
+   |
+33 |         self.0.value.with_mut(|p| unsafe { *p = value });
+   |                                            ^^^^^^^^^^
+```
+
+Miri reports the **missing happens-before edge**. The read did not have to return a wrong value.
+
+On the unchanged lab, `cargo miri test` passes, and so do 32 seeds of the thread tests.
+
+**What it cannot do**, from its [README](https://github.com/rust-lang/miri/blob/master/README.md):
+
+- It runs **one** execution per seed. It misses bugs that appear only in another one. More seeds help but do not explore them all.
+- Its weak memory emulation is **incomplete**: some legal behaviours never appear.
+- It only checks the code your tests run. A clean run is not a proof of soundness.
+- It does not support most platform APIs and FFI, and it is much slower than native code. The lab uses smaller loop counts under `cfg(miri)`.
+'''
+
+[[sections]]
+heading = "loom"
+body = '''
+[loom](https://docs.rs/loom/latest/loom/) is a library. You write a small test inside `loom::model`, and it runs the closure again and again, exploring the thread interleavings and values that its model of the C11 memory model allows. Its `UnsafeCell` reports unsynchronized access.
+
+It sees **only its own types**. Your code must use loom's atomics, cells and threads under a `--cfg loom` build:
+
+```rust title=src/sync.rs
+#[cfg(loom)]
+pub use loom::{
+    cell::UnsafeCell,
+    sync::Arc,
+    sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, fence},
+};
+
+#[cfg(not(loom))]
+pub use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, fence},
+};
+```
+
+```rust title=tests/model.rs
+#[test]
+fn publication_has_no_race() {
+    loom::model(|| {
+        let (publisher, reader) = publish::slot();
+        let writer = thread::spawn(move || publisher.publish(42));
+        // One attempt is enough: loom runs the schedules where it succeeds and
+        // the ones where it comes too early. A spin loop is not needed.
+        if let Some(value) = reader.try_read() {
+            assert_eq!(value, 42);
+        }
+        writer.join().unwrap();
+    });
+}
+```
+
+```sh
+RUSTFLAGS="--cfg loom" cargo test --release --test model
+```
+
+The lab's Run and Test buttons do **not** run these: without the flag, the file compiles to no tests. With a weakened publication ordering, loom 0.7.3 failed with `Causality violation: Concurrent read and write accesses.`
+
+**Where loom is wrong or blind**, from its README and crate docs (0.7.3):
+
+| Limit | Effect |
+|---|---|
+| `SeqCst` loads and stores are treated as `AcqRel` | **False alarms**: it reports "both zero" for correct code. `fence(SeqCst)` is supported. The lab has a test that shows this. |
+| It does not explore load buffering | It can **miss** a real bug. |
+| It cannot model every reordering that `Relaxed` allows, nor some across different atomics | It can **miss** a real bug. |
+| Only loom types are visible | Synchronization inside other libraries is not modelled. |
+| State grows quickly with threads and operations | Keep models tiny. `LOOM_MAX_PREEMPTIONS` bounds the search, which then is no longer exhaustive. |
+| Its scheduler is not fair | A spin loop must call `loom::thread::yield_now`. |
+
+So neither tool proves your code correct. They fail in different places: in the table above, Miri separated `SeqCst` from `AcqRel` and loom could not, while loom explores schedules systematically where Miri samples them by seed.
+'''
+
+[[sections]]
+heading = "Pitfalls and tips"
+body = '''
+| Mistake | Why it is wrong | Instead |
+|---|---|---|
+| `Release` store, `Relaxed` load (or the reverse) | The edge needs both sides | Pair them |
+| Releasing on one atomic and acquiring on another | The pairing goes through the value read from **one** atomic (or through fences around such accesses) | Use the same flag |
+| Touching the data when the `Acquire` load saw the old value | No edge was created | Branch on the loaded value |
+| Writing the data again after publishing it | A reader may be reading it: a data race | Publish once, or use a lock |
+| `swap(.., Release)` expecting the read half to acquire | The load half of a `Release` read-modify-write is `Relaxed` | `AcqRel` |
+| `swap(.., Acquire)` expecting the write half to release | The store half of an `Acquire` read-modify-write is `Relaxed` | `AcqRel` |
+| "I need `SeqCst` so other threads see it sooner" | Ordering says nothing about how soon a value arrives; it orders accesses | Choose by what must be ordered |
+| `load(Release)` or `store(.., Acquire)` | These panic | Match the ordering to the operation |
+
+> [!TIP]
+> Write the pairing in a comment on **both** sides: "pairs with the `Release` store in `publish`". If you cannot name the partner of an `Acquire` or `Release`, you have not finished the argument.
+
+:::deeper Do the orderings make a thread wait? | No
+None of these orderings blocks. `try_read` returns at once with `None` if the flag is not set. Waiting is a separate job: a loop with [`spin_loop`](https://doc.rust-lang.org/std/hint/fn.spin_loop.html) for very short waits, `thread::park`, or better a `Mutex` with a `Condvar` or a channel (advice). The lab's native loops call `yield_now` so that they finish when there are more threads than cores.
+:::
+'''
+
+[[terms]]
+term = "happens-before"
+means = "The order between operations that the language guarantees, within and between threads."
+section = "Happens-before in plain words"
+
+[[terms]]
+term = "data race"
+means = "Conflicting accesses, at least one non-atomic, with no happens-before between them; undefined behaviour."
+section = "Happens-before in plain words"
+
+[[terms]]
+term = "publication"
+means = "Writing data once and handing it to other threads through a release store."
+section = "Publishing data"
+
+[[terms]]
+term = "litmus test"
+means = "A tiny concurrent program whose possible results show what a memory model allows."
+section = "Why Relaxed is not enough"
+
+[[terms]]
+term = "total store order"
+means = "The x86 model: each core queues its stores, and all cores agree on the order they reach memory."
+section = "Why Relaxed is not enough"
+
+[[terms]]
+term = "fence"
+means = "An ordering operation that is not attached to one memory location."
+section = "Last one out: reference counting"
+
+[[terms]]
+term = "store buffering"
+means = "Both threads store, then load the other location, and both read the old value."
+section = "When SeqCst matters"
+
+[[sources]]
+title = "std: memory model for atomic accesses"
+url = "https://doc.rust-lang.org/std/sync/atomic/index.html"
+kind = "docs"
+note = "Rust follows C++20 atomics; the definition of a data race. Read in the 1.98.1 source."
+read = true
+scope = "The module documentation of core/src/sync/atomic.rs."
+
+[[sources]]
+title = "std: Ordering"
+url = "https://doc.rust-lang.org/std/sync/atomic/enum.Ordering.html"
+kind = "docs"
+note = "What each ordering guarantees. Read in the 1.98.1 source."
+read = true
+scope = "The documentation of the enum and every variant."
+
+[[sources]]
+title = "std: fence"
+url = "https://doc.rust-lang.org/std/sync/atomic/fn.fence.html"
+kind = "docs"
+note = "The three ways a fence synchronizes, with diagrams. Read in the 1.98.1 source."
+read = true
+scope = "The documentation of the function."
+
+[[sources]]
+title = "std: JoinHandle::join"
+url = "https://doc.rust-lang.org/std/thread/struct.JoinHandle.html"
+kind = "docs"
+note = "Joining a thread is a synchronizing operation."
+read = true
+scope = "The memory-ordering paragraph of join."
+
+[[sources]]
+title = "Arc source: alloc/src/sync.rs"
+url = "https://doc.rust-lang.org/src/alloc/sync.rs.html"
+kind = "code"
+note = "clone, Drop for Arc and Drop for Weak, with comments that explain each ordering. Read in the 1.98.1 source."
+read = true
+scope = "The acquire! macro, try_unwrap, clone, is_unique, Drop for Arc and Drop for Weak."
+
+[[sources]]
+title = "The Rustonomicon: Atomics"
+url = "https://doc.rust-lang.org/nomicon/atomics.html"
+kind = "book"
+note = "Plain account of reordering, acquire-release, and strong against weak hardware."
+read = true
+scope = "Compiler and hardware reordering, SeqCst, Acquire-Release and Relaxed."
+
+[[sources]]
+title = "Russ Cox: Hardware Memory Models"
+url = "https://research.swtch.com/hwmm"
+kind = "blog"
+note = "Litmus tests on x86-TSO and ARM/POWER. The message-passing and store-buffering parts were read."
+read = true
+scope = "Message passing and store buffering on x86-TSO; the ARM/POWER summary was searched, not read in full."
+
+[[sources]]
+title = "Miri README"
+url = "https://github.com/rust-lang/miri/blob/master/README.md"
+kind = "docs"
+note = "What Miri detects, its caveats and its flags. Read from the master branch on 2026-11-26."
+read = true
+scope = "The introduction and caveats, many-seeds testing, and the flag list entries used."
+
+[[sources]]
+title = "loom crate documentation"
+url = "https://docs.rs/loom/latest/loom/"
+kind = "docs"
+note = "How to write models, and the limits. Read in the 0.7.3 source."
+read = true
+scope = "The crate-level documentation in lib.rs."
+
+[[sources]]
+title = "loom README: unsupported features"
+url = "https://github.com/tokio-rs/loom/blob/master/README.md"
+kind = "code"
+note = "SeqCst accesses are treated as AcqRel; load buffering is not explored. Read in the published 0.7.3 crate."
+read = true
+scope = "The Unsupported features section."
+
+[[sources]]
+title = "Mara Bos: Rust Atomics and Locks, memory ordering"
+url = "https://marabos.nl/atomics/memory-ordering.html"
+kind = "book"
+note = "A free, longer treatment. Suggested further reading; the page does not rely on it."
+read = false
+
+[[labs]]
+title = "Publication, countdown and litmus tests"
+after = "Publishing data"
+files = ["src/publish.rs", "src/countdown.rs", "src/litmus.rs", "src/sync.rs", "src/main.rs", "tests/threads.rs", "tests/model.rs"]
+run = true
+test = true
+
+[verified]
+toolchain = "rustc 1.98.1 (stable); Miri 0.1.0 (5a2be9f5f0 2026-09-06) on nightly; loom 0.7.3"
+date = "2026-11-26"
+platform = "aarch64-apple-darwin, Apple M4 Pro, macOS 27.0"
+not_checked = "Run here: build, tests, cargo run (20 times for the stale-read counts), loom tests on the unchanged lab, cargo miri test and cargo miri run on the unchanged lab, 32 Miri seeds of tests/threads.rs, the compile_fail snippet (by check.py), clippy with and without --cfg loom, an eighth mutation (SeqCst loads weakened to Acquire: 0 of 20 native runs failed, 32 of 32 Miri seeds did; loom was not informative), and the seven mutations in the table, each in a scratch copy with its own target directory (20 native release runs of tests/threads.rs, 32 Miri seeds of the one relevant test, one loom run). Assembly was emitted for aarch64-apple-darwin and x86_64-unknown-linux-gnu; nothing was executed on x86 hardware. Not checked: other ARM cores, other compiler versions, debug-profile native runs of the mutations, ThreadSanitizer, shuttle, Tree Borrows. The reason Miri and the native counts differ was not investigated per mutation. The C++ standard text was not read: release sequences are mentioned only briefly. The pitfall about ordering and delivery speed is the writer's reading of the Ordering docs, which promise no timing."

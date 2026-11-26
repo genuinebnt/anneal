@@ -1,0 +1,68 @@
+title = "System F, higher-rank bidirectional typing"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Types and semantics"
+chapter_order = 4
+order = 614
+kind = "recipe"
+lede = "System F, higher-rank bidirectional typing (Dunfield-Krishnaswami), record subtyping and variance."
+level = "advanced"
+code = ["examples/compilers_runtimes/system_f_bidirectional_typing.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>type checkers for languages with generics</li><li>higher-rank types</li><li>structural records or row-like subtyping</li><li>understanding rustc's <code>for&lt;'a&gt;</code> bounds</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>the core of GHC's RankNTypes/QuickLook-style checking (annotations only where needed)</li><li>TypeScript/Flow structural subtyping of object types and function parameter variance</li><li>Scala/Kotlin generics checking</li><li>language-server "what is the type of this expression" engines</li><li>soundness testing of any checker via progress + preservation. Course: Dunfield and Krishnaswami</li><li>"Complete and Easy Bidirectional Typechecking for Higher-Rank Polymorphism" (ICFP 2013)</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The idea**: three layers in one file, each checked against a simpler oracle. A. **Core**: fully annotated System F with records and **subtyping**.
+
+`\\x:A. e`, `/\\a. e` (type abstraction), `e [A]` (type application). Checking is pure **synthesis** (bottom-up), because every binder says its type. Small-step call-by-value semantics.
+
+This part is simple enough to trust, so it is the oracle: **progress** (a closed well-typed term is a value or steps) and **preservation** (a step yields a term whose type is a subtype of the old type) are tested on thousands of terms produced by **type-directed generation** (build a term for a requested type, never guess-and-filter). B.
+
+**Bidirectional checker** (the paper's algorithmic system with an **ordered context**): `\\x. e` needs no annotation. Two modes: **check** `e <= A` (the type flows in: lambdas read their parameter type off `A -> B`, `forall` is introduced by a fresh rigid variable) and **synthesise** `e => A` (the type flows out: variables, applications, annotations).
+
+Where the type of a lambda parameter is unknown the checker makes an **existential** variable `^a` ("some monotype, to be decided"), and **subtyping** (`forall a. a -> a  <:  Int -> Int` by instantiating `a := ^a` and then solving `^a := Int`) solves them.
+
+The context is an **ordered** list; a solution '&#94;a := t' is legal only if everything 't' mentions is declared **before** '&#94;a'. That one rule is what prevents a rigid variable from escaping its scope. Inference is predicative: '&#94;a' is only ever solved with a MONOtype, so '&#92;f.
+
+(f 1, f true)' stays rejected, while '(&#92;f. f 1) : (forall a. a -> a) -> Int' works because the annotation supplies the polymorphic parameter type: "annotations only where needed" means exactly at higher-rank lambda parameters.
+
+Extensions beyond the paper: Int/Bool/`if`, explicit type application (arbitrary types allowed as arguments), **records** with width + depth subtyping, and `Top`. Record instantiation of an existential is only supported for monotypes. C.
+
+**Differential test**: every random core term is **erased** to a surface term (lambda annotations dropped, annotations added only at synthesis positions: application heads, projections, record literals) and the bidirectional checker must accept it at the core type. Fully annotated terms must also synthesise a type equivalent to the oracle's.
+
+**Subtyping**: width (`{a,b} <: {a}`), depth (`{a: Int} <: {a: Top}`), and functions are **contravariant** in the argument and **covariant** in the result: `(S -> T) <: (S' -> T')` iff `S' <: S` and `T <: T'`.
+
+The LISKOV test generates a value of a subtype, uses it through the supertype (project every field, call every function) and asserts nothing gets stuck and the result still has the promised type.
+
+**Free theorems**: by parametricity every closed term of type `forall a. a -> a` must be the identity; we sample random inhabitants produced by the generator and check them on several instantiations. The same is done for `forall a b. a -> b -> a` (const), `forall a. a -> a -> a` (one of the two arguments) and the Church-numeral type.
+
+**How rust differs**: rustc only has subtyping for **lifetimes** (`&'long T <: &'short T`), with the same variance rules (`fn(T)` is contravariant, `&mut T` and `Cell<T>` are invariant, which is exactly the soundness condition for mutable fields).
+
+Higher-rank types appear as `for<'a> Fn(&'a T) -> &'a U` (HRTB): rank-2 over lifetimes, and the checker needs no annotation because closure parameter types are read from the expected `Fn` bound, the same "type flows inward" idea as **check** mode.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Dunfield and Krishnaswami, <a href="https://arxiv.org/abs/1306.6032" target="_blank" rel="noreferrer">https://arxiv.org/abs/1306.6032</a></li><li>Pierce, "Types and Programming Languages", ch. 23 (System F) and 15 (subtyping) <a href="https://www.cis.upenn.edu/~bcpierce/tapl/" target="_blank" rel="noreferrer">https://www.cis.upenn.edu/~bcpierce/tapl/</a></li><li>Wadler, "Theorems for free!" (FPCA 1989, cited by title, not fetched)</li><li>Pierce and Turner, "Local Type Inference" (TOPLAS 2000, by title)</li></ul>
+"""
+
+[[sources]]
+title = "arxiv.org/abs/1306.6032"
+url = "https://arxiv.org/abs/1306.6032"
+
+[[sources]]
+title = "cis.upenn.edu/~bcpierce/tapl"
+url = "https://www.cis.upenn.edu/~bcpierce/tapl/"

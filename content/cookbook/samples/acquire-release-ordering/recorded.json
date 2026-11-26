@@ -1,0 +1,9 @@
+[
+ {
+  "stamp": "Recorded run · 26 Nov 2026 · rustc 1.98.1",
+  "problems": "No errors and no warnings in the recorded build.",
+  "run": "publication: reader saw 42\nlast one out: sum = Some(5)\nrelease/acquire: 0 stale reads in 100000 rounds (the language says 0)\nrelaxed/relaxed: 211 stale reads in 100000 rounds (any number is allowed)",
+  "tests": "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 5 tests\ntest nothing_is_readable_before_publish ... ok\ntest release_acquire_message_passing_has_no_stale_reads ... ok\ntest a_reader_on_another_thread_sees_the_published_value ... ok\ntest exactly_one_part_gets_the_sum ... ok\ntest seqcst_never_lets_both_sides_read_zero ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+  "passed": 5
+ }
+]

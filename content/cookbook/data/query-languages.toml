@@ -1,0 +1,374 @@
+title = "Query languages"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 428
+kind = "guide"
+lede = "SQL or Death #1–#10 (TypeScript stored procedures, Towards Sanity in Query Languages, Pinot and StarRocks and MariaDB optimizers, Google's pipe syntax, Malloy, PRQL, OxQL, Gel) · a pipe-syntax compiler with a flat and a nested SQL back end · 600 random pipelines checked against an interpreter, the Part I engine and SQLite · what a front end must get right"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<p><em>(No notes exist for these talks and I have not transcribed them. The points below are the design space the languages share, from their documentation and papers, not a summary of any speaker.)</em></p>
+
+<ul> <li><strong>SQL is a declarative language with an awkward surface.</strong> Its semantics are relational algebra, but its <em>syntax</em> does not follow the order of evaluation: the clauses are written <code>SELECT … FROM … WHERE … GROUP BY … HAVING … ORDER BY</code>, and evaluated <code>FROM, WHERE, GROUP BY, HAVING, SELECT, ORDER BY</code>. Consequences everyone meets: a column alias defined in <code>SELECT</code> cannot be used in <code>WHERE</code>; a filter on an aggregate is <code>HAVING</code>, a different keyword; grouping keys are written twice (select list and <code>GROUP BY</code>); every step beyond one block needs a subquery or CTE that reads inside-out; adding a step in the middle means rewriting the query.</li> <li><strong>Pipe syntax</strong> (Google's <code>|&gt;</code> extension to GoogleSQL, "SQL Has Problems. We Can Fix Them", VLDB 2024; PRQL; KQL; Malloy's pipelines; OxQL) restores the order: <code>FROM t |&gt; WHERE … |&gt; EXTEND … |&gt; AGGREGATE … GROUP BY … |&gt; ORDER BY … |&gt; LIMIT …</code>. Every operator is a function from relation to relation, so the pipeline <strong>composes</strong> (any prefix is a valid query, steps can be inserted, removed or reordered, and a tool can autocomplete columns from the previous step). It adds no new relational capability; it removes accidental complexity.</li> <li><strong>Where the pipeline lives matters.</strong> <em>Extend the SQL parser</em> of an existing engine (BigQuery/ZetaSQL; Spark and Databricks have added a SQL pipe operator): the new syntax reuses the engine's binder, optimizer and error handling and coexists with SQL in one query. <em>Transpile to SQL</em> (PRQL, Malloy, OxQL to ClickHouse SQL, the lab here): any SQL database becomes a target, at the price of generated SQL, error messages that mention the SQL, and dialect differences. <em>Replace the language</em> (Gel, KQL): full freedom, a new optimizer and ecosystem to build.</li> <li><strong>Semantic layers and richer models</strong> go further than syntax. <strong>Malloy</strong> (from Looker's creator) separates <em>what the data means</em> (sources with reusable dimensions and measures, joins declared once) from <em>what you ask</em> (queries nested to return hierarchical results), compiling to SQL. <strong>Gel</strong> (formerly EdgeDB) is a graph-relational layer on PostgreSQL: typed objects with links, queries that return nested "shapes" instead of flat joins. <strong>OxQL</strong> is a time-series language for a specific system's telemetry (compiled to ClickHouse SQL).</li> <li><strong>Procedures are the other side of the interface.</strong> The talk on TypeScript stored procedures (Convex) argues that application logic belongs <em>inside</em> the database as functions that run as transactions, with deterministic, replayable execution and reactive queries, instead of SQL strings sent over a network; the same trade as classical stored procedures, with a mainstream language and optimistic concurrency.</li> <li><strong>"Towards Sanity in Query Languages"</strong> (Leis and Neumann) is a catalogue of SQL's flaws and a proposal for fixing the language while keeping the relational model and the engines, the stance of the whole series: SQL's <em>semantics</em> are worth keeping, its <em>syntax and corner cases</em> are negotiable.</li> <li><strong>Compilers for these languages are correctness problems.</strong> A front end must keep names in scope exactly as the language defines, desugar every construct into a form the backend evaluates identically, reject what the target cannot express, and defend against the backend's quirks (the lab found two: constants in <code>ORDER BY</code> become column positions, and NULL ordering differs between databases).</li> <li><strong>Optimizers still decide performance.</strong> Whatever the surface language, the plan comes from the optimizer: Pinot's, StarRocks's and MariaDB's talks are about optimizer features (join reordering, statistics, subquery rewriting; compare <a href="/cookbook/p/production-optimizers">Q11</a>). A good front end generates SQL the optimizer flattens and does not hide cost behind abstractions.</li> </ul>
+"""
+
+[[sections]]
+heading = "The same query in three forms"
+body = """
+```text
+pipe:  FROM t |> JOIN u ON a = k |> WHERE b > 0 |> EXTEND a * v AS av
+          |> AGGREGATE SUM(av) AS total, COUNT(*) AS n GROUP BY c
+          |> WHERE total > 20 |> ORDER BY total DESC, c |> LIMIT 3
+```
+
+<p>Read it top to bottom and each line is a step. The SQL has to say it all at once: the <code>WHERE total &gt; 20</code> becomes <code>HAVING SUM(a * v) &gt; 20</code> (the alias is not visible in <code>HAVING</code> in every dialect), the grouping key is repeated, <code>av</code> is substituted because <code>SELECT</code> aliases cannot be used in the same block, and the ordering refers to the aggregate again. The measured output below shows the exact generated SQL (flat: one block; nested: seven subqueries).</p>
+"""
+
+[[sections]]
+heading = "A pipe compiler"
+body = """
+<ul> <li><strong>Parse</strong> the text into stages: <code>FROM</code>, <code>JOIN … ON</code>, <code>WHERE</code>, <code>EXTEND e AS n</code>, <code>SELECT e [AS n]</code>, <code>AGGREGATE aggs [GROUP BY keys]</code>, <code>ORDER BY</code>, <code>LIMIT</code>. Splitting is string- and parenthesis-aware (a <code>|&gt;</code> inside a literal is data).</li> <li><strong>Scope</strong>: the compiler tracks the visible columns after every stage; <code>SELECT</code> narrows the scope, <code>EXTEND</code> widens it, <code>AGGREGATE</code> replaces it with the keys and aggregates. A reference to a column that is no longer visible is a compile error with the list of columns that are.</li> <li><strong>Flat back end</strong> (single <code>SELECT</code> block): keep an environment from visible names to their definitions in terms of base columns. <code>EXTEND</code>/<code>SELECT</code> substitute definitions (parenthesized, so precedence is preserved); <code>WHERE</code> becomes <code>WHERE</code> before the aggregation and <code>HAVING</code> after it; <code>AGGREGATE</code> records the grouping keys; <code>ORDER BY</code>/<code>LIMIT</code> are appended. Pipelines that cannot be one block (a <code>WHERE</code>, <code>JOIN</code>, <code>AGGREGATE</code> or <code>ORDER BY</code> after <code>LIMIT</code>, or a second <code>AGGREGATE</code>) are rejected with the reason.</li> <li><strong>Nested back end</strong>: one subquery per stage, always possible. An <code>ORDER BY</code> directly followed by its <code>LIMIT</code> stays in one block (an <code>ORDER BY</code> in a subquery guarantees nothing once the <code>LIMIT</code> that needs it has been separated).</li> <li><strong>Two defences</strong> the tests forced: an expression that reduces to an integer constant must not appear bare in <code>ORDER BY</code>/<code>GROUP BY</code> (SQL reads it as a <em>column position</em>), and the differential oracle has to model each database's NULL ordering.</li> </ul>
+
+:::deeper Reference: tokenizer, name substitution, stage parser, flat compiler, nested compiler, positional-constant guard
+```rust title="src/lang/pipe.rs"
+//! A pipe-syntax query language (in the style of Google's `|>` SQL extension and PRQL) compiled to SQL two ways: to a *flat* single-block
+//! `SELECT` by substituting definitions (a `WHERE` after an aggregation becomes `HAVING`), and to *nested* subqueries, one per pipe stage.
+//! Pipelines the flat form cannot express (a filter after `LIMIT`, a second aggregation) are rejected with an explanation.
+//!
+//!   FROM t |> JOIN u ON a = k |> WHERE a > 1 |> EXTEND a + b AS ab |> AGGREGATE SUM(ab) AS s, COUNT(*) AS n GROUP BY c
+//!          |> WHERE s > 10 |> ORDER BY s DESC |> LIMIT 5 |> SELECT c, s
+use std::collections::HashMap;
+
+pub type Schema = HashMap<String, Vec<String>>;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Stage {
+    From(String),
+    Join { table: String, on: String },
+    Where(String),
+    Extend(Vec<(String, String)>),
+    Select(Vec<(String, String)>),
+    Aggregate { aggs: Vec<(String, String)>, group: Vec<(String, String)> },
+    OrderBy(Vec<(String, bool)>),
+    Limit(u64),
+}
+
+// ----------------------------------------------------------------------------------------------- lexing helpers
+
+#[derive(Clone, Debug, PartialEq)]
+enum Tok { Ident(String), Other(String) }
+
+fn tokenize(s: &str) -> Vec<Tok> {
+    let b: Vec<char> = s.chars().collect();
+    let (mut i, mut out) = (0, vec![]);
+    while i < b.len() {
+        let c = b[i];
+        if c.is_whitespace() { i += 1; }
+        else if c.is_alphabetic() || c == '_' {
+            let st = i; while i < b.len() && (b[i].is_alphanumeric() || b[i] == '_') { i += 1; }
+            out.push(Tok::Ident(b[st..i].iter().collect()));
+        } else if c.is_ascii_digit() {
+            let st = i; while i < b.len() && (b[i].is_ascii_digit() || b[i] == '.') { i += 1; }
+            out.push(Tok::Other(b[st..i].iter().collect()));
+        } else if c == '\\'' {
+            let st = i; i += 1; while i < b.len() && b[i] != '\\'' { i += 1; } i += 1;
+            out.push(Tok::Other(b[st..i.min(b.len())].iter().collect()));
+        } else if i + 1 < b.len() && matches!((c, b[i + 1]), ('<', '=') | ('>', '=') | ('<', '>') | ('!', '=')) {
+            out.push(Tok::Other(format!("{c}{}", b[i + 1]))); i += 2;
+        } else { out.push(Tok::Other(c.to_string())); i += 1; }
+    }
+    out
+}
+
+const KEYWORDS: [&str; 18] = ["AND", "OR", "NOT", "IS", "NULL", "LIKE", "IN", "BETWEEN", "CASE", "WHEN", "THEN", "ELSE", "END", "TRUE", "FALSE", "ASC", "DESC", "AS"];
+
+fn is_keyword(s: &str) -> bool { KEYWORDS.contains(&s.to_ascii_uppercase().as_str()) }
+
+/// Replace every column reference in `expr` by `(definition)` from `env`; an unknown identifier that is not a keyword or a function
+/// call is an error ("column not in scope").
+pub fn substitute(expr: &str, env: &HashMap<String, String>) -> Result<String, String> {
+    let toks = tokenize(expr);
+    let mut out = String::new();
+    let mut prev: Option<&Tok> = None;
+    for (i, t) in toks.iter().enumerate() {
+        let text: String = match t {
+            Tok::Ident(id) => {
+                let call = matches!(toks.get(i + 1), Some(Tok::Other(p)) if p == "(");
+                if call || is_keyword(id) { id.clone() }
+                else if let Some(def) = env.get(id) { format!("({def})") }
+                else { return Err(format!("column `{id}` is not in scope here (columns: {})", { let mut k: Vec<&String> = env.keys().collect(); k.sort(); k.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ") })); }
+            }
+            Tok::Other(o) => o.clone(),
+        };
+        // spacing: none after `(` or `.`, none before `)`, `,` or `.`, none between a function name and its `(`
+        let tight = match (prev, t) {
+            (None, _) => true,
+            (Some(Tok::Other(p)), _) if p == "(" || p == "." => true,
+            (_, Tok::Other(c)) if c == ")" || c == "," || c == "." => true,
+            (Some(Tok::Ident(f)), Tok::Other(c)) if c == "(" && !is_keyword(f) => true,
+            _ => false,
+        };
+        if !tight { out.push(' '); }
+        out += &text;
+        prev = Some(t);
+    }
+    Ok(out)
+}
+
+/// Split at a separator that is outside parentheses and string literals.
+pub fn split_top(s: &str, sep: char) -> Vec<String> {
+    let (mut depth, mut in_str, mut cur, mut out) = (0i32, false, String::new(), vec![]);
+    for c in s.chars() {
+        match c {
+            '\\'' => { in_str = !in_str; cur.push(c); }
+            '(' if !in_str => { depth += 1; cur.push(c); }
+            ')' if !in_str => { depth -= 1; cur.push(c); }
+            c if c == sep && depth == 0 && !in_str => { out.push(cur.trim().to_string()); cur.clear(); }
+            c => cur.push(c),
+        }
+    }
+    if !cur.trim().is_empty() || !out.is_empty() { out.push(cur.trim().to_string()); }
+    out
+}
+
+/// Split at the keyword `kw` (case-insensitive, whole word) outside parentheses.
+fn split_keyword(s: &str, kw: &str) -> Option<(String, String)> {
+    let up = s.to_ascii_uppercase();
+    let (mut depth, mut in_str) = (0i32, false);
+    let bytes = up.as_bytes();
+    for i in 0..bytes.len() {
+        match bytes[i] as char { '\\'' => in_str = !in_str, '(' if !in_str => depth += 1, ')' if !in_str => depth -= 1, _ => {} }
+        if depth == 0 && !in_str && up[i..].starts_with(kw) {
+            let before_ok = i == 0 || !(bytes[i - 1] as char).is_alphanumeric();
+            let after_ok = i + kw.len() >= bytes.len() || !(bytes[i + kw.len()] as char).is_alphanumeric();
+            if before_ok && after_ok { return Some((s[..i].trim().to_string(), s[i + kw.len()..].trim().to_string())); }
+        }
+    }
+    None
+}
+
+/// `expr [AS name]`; a bare identifier names itself, any other expression needs a name.
+fn named(item: &str, auto: usize) -> (String, String) {
+    match split_keyword(item, "AS") {
+        Some((e, n)) if !e.is_empty() => (n, e),
+        _ => {
+            let t = tokenize(item);
+            if t.len() == 1 { if let Tok::Ident(id) = &t[0] { return (id.clone(), item.to_string()); } }
+            (format!("_c{auto}"), item.to_string())
+        }
+    }
+}
+
+pub fn parse(text: &str) -> Result<Vec<Stage>, String> {
+    let mut stages = vec![];
+    // split on `|>` outside strings
+    let mut parts = vec![]; let mut cur = String::new(); let chars: Vec<char> = text.chars().collect(); let (mut i, mut in_str) = (0, false);
+    while i < chars.len() {
+        if chars[i] == '\\'' { in_str = !in_str; }
+        if !in_str && chars[i] == '|' && i + 1 < chars.len() && chars[i + 1] == '>' { parts.push(cur.trim().to_string()); cur.clear(); i += 2; continue; }
+        cur.push(chars[i]); i += 1;
+    }
+    parts.push(cur.trim().to_string());
+    for (n, p) in parts.iter().enumerate() {
+        let up = p.to_ascii_uppercase();
+        let rest = |kw: &str| p[kw.len()..].trim().to_string();
+        let stage = if up.starts_with("FROM ") { if n != 0 { return Err("FROM must start the pipeline".into()); } Stage::From(rest("FROM")) }
+        else if n == 0 { return Err("a pipeline starts with FROM".into()) }
+        else if up.starts_with("JOIN ") {
+            let r = rest("JOIN");
+            let (t, on) = split_keyword(&r, "ON").ok_or("JOIN needs ON")?;
+            Stage::Join { table: t, on }
+        }
+        else if up.starts_with("WHERE ") { Stage::Where(rest("WHERE")) }
+        else if up.starts_with("EXTEND ") { Stage::Extend(split_top(&rest("EXTEND"), ',').iter().enumerate().map(|(i, x)| named(x, i)).collect()) }
+        else if up.starts_with("SELECT ") { Stage::Select(split_top(&rest("SELECT"), ',').iter().enumerate().map(|(i, x)| named(x, i)).collect()) }
+        else if up.starts_with("AGGREGATE ") {
+            let r = rest("AGGREGATE");
+            let (a, g) = match split_keyword(&r, "GROUP BY") { Some((a, g)) => (a, g), None => (r.clone(), String::new()) };
+            Stage::Aggregate {
+                aggs: split_top(&a, ',').iter().enumerate().map(|(i, x)| named(x, i)).collect(),
+                group: if g.is_empty() { vec![] } else { split_top(&g, ',').iter().enumerate().map(|(i, x)| named(x, 100 + i)).collect() },
+            }
+        }
+        else if up.starts_with("ORDER BY ") {
+            Stage::OrderBy(split_top(&rest("ORDER BY"), ',').iter().map(|x| {
+                let u = x.to_ascii_uppercase();
+                if u.ends_with(" DESC") { (x[..x.len() - 5].trim().to_string(), true) } else if u.ends_with(" ASC") { (x[..x.len() - 4].trim().to_string(), false) } else { (x.clone(), false) }
+            }).collect())
+        }
+        else if up.starts_with("LIMIT ") { Stage::Limit(rest("LIMIT").parse().map_err(|_| "LIMIT needs a number".to_string())?) }
+        else { return Err(format!("unknown pipeline stage `{p}`")); };
+        stages.push(stage);
+    }
+    Ok(stages)
+}
+
+/// SQL reads an integer literal in `ORDER BY` or `GROUP BY` as a *column position*, not a value: `ORDER BY 5` sorts by the fifth output
+/// column. An expression that substitution reduced to a bare integer must therefore stay an expression.
+pub fn non_positional(expr: String) -> String {
+    let t: String = expr.chars().filter(|c| !c.is_whitespace() && *c != '(' && *c != ')').collect();
+    if !t.is_empty() && t.chars().enumerate().all(|(i, c)| c.is_ascii_digit() || (i == 0 && c == '-')) { format!("({} + 0)", expr.trim()) } else { expr }
+}
+
+// ----------------------------------------------------------------------------------------------- flat compilation
+
+/// One `SELECT … FROM … JOIN … WHERE … GROUP BY … HAVING … ORDER BY … LIMIT` block, or an error naming the stage that needs a subquery.
+pub fn compile_flat(stages: &[Stage], schema: &Schema) -> Result<String, String> {
+    let (mut from, mut joins, mut wheres, mut havings): (String, Vec<String>, Vec<String>, Vec<String>) = (String::new(), vec![], vec![], vec![]);
+    let mut cols: Vec<(String, String)> = vec![];                     // visible column name -> definition in terms of base columns
+    let (mut group, mut order): (Vec<String>, Vec<(String, bool)>) = (vec![], vec![]);
+    let (mut aggregated, mut limit) = (false, None::<u64>);
+    let env = |cols: &[(String, String)]| -> HashMap<String, String> { cols.iter().cloned().collect() };
+    for st in stages {
+        match st {
+            Stage::From(t) => { from = t.clone(); cols = schema.get(t).ok_or(format!("unknown table {t}"))?.iter().map(|c| (c.clone(), c.clone())).collect(); }
+            Stage::Join { table, on } => {
+                if aggregated || limit.is_some() { return Err("JOIN after AGGREGATE or LIMIT needs a subquery".into()); }
+                let new: Vec<(String, String)> = schema.get(table).ok_or(format!("unknown table {table}"))?.iter().map(|c| (c.clone(), c.clone())).collect();
+                let mut e = env(&cols); e.extend(new.iter().cloned());
+                joins.push(format!("JOIN {table} ON {}", substitute(on, &e)?));
+                cols.extend(new);
+            }
+            Stage::Where(e) => {
+                if limit.is_some() { return Err("WHERE after LIMIT needs a subquery".into()); }
+                let s = substitute(e, &env(&cols))?;
+                if aggregated { havings.push(s) } else { wheres.push(s) }
+            }
+            Stage::Extend(items) => for (n, e) in items {
+                let s = substitute(e, &env(&cols))?;
+                match cols.iter_mut().find(|c| &c.0 == n) { Some(c) => c.1 = s, None => cols.push((n.clone(), s)) }
+            },
+            Stage::Select(items) => {
+                let e = env(&cols);
+                cols = items.iter().map(|(n, x)| Ok((n.clone(), substitute(x, &e)?))).collect::<Result<_, String>>()?;
+            }
+            Stage::Aggregate { aggs, group: g } => {
+                if aggregated { return Err("a second AGGREGATE needs a subquery".into()); }
+                if limit.is_some() { return Err("AGGREGATE after LIMIT needs a subquery".into()); }
+                let e = env(&cols);
+                let keys: Vec<(String, String)> = g.iter().map(|(n, x)| Ok((n.clone(), substitute(x, &e)?))).collect::<Result<_, String>>()?;
+                let ag: Vec<(String, String)> = aggs.iter().map(|(n, x)| Ok((n.clone(), substitute(x, &e)?))).collect::<Result<_, String>>()?;
+                group = keys.iter().map(|k| non_positional(k.1.clone())).collect();
+                cols = keys.into_iter().chain(ag).collect();
+                aggregated = true;
+            }
+            Stage::OrderBy(items) => {
+                if limit.is_some() { return Err("ORDER BY after LIMIT needs a subquery".into()); }
+                let e = env(&cols);
+                order = items.iter().map(|(x, d)| Ok((non_positional(substitute(x, &e)?), *d))).collect::<Result<_, String>>()?;
+            }
+            Stage::Limit(n) => limit = Some(limit.map_or(*n, |l| l.min(*n))),
+        }
+    }
+    let mut sql = format!("SELECT {} FROM {from}", cols.iter().map(|(n, e)| format!("{e} AS {n}")).collect::<Vec<_>>().join(", "));
+    for j in &joins { sql += &format!(" {j}"); }
+    if !wheres.is_empty() { sql += &format!(" WHERE {}", wheres.iter().map(|w| format!("({w})")).collect::<Vec<_>>().join(" AND ")); }
+    if aggregated && !group.is_empty() { sql += &format!(" GROUP BY {}", group.join(", ")); }
+    if !havings.is_empty() { sql += &format!(" HAVING {}", havings.iter().map(|w| format!("({w})")).collect::<Vec<_>>().join(" AND ")); }
+    if !order.is_empty() { sql += &format!(" ORDER BY {}", order.iter().map(|(e, d)| format!("{e}{}", if *d { " DESC" } else { "" })).collect::<Vec<_>>().join(", ")); }
+    if let Some(n) = limit { sql += &format!(" LIMIT {n}"); }
+    Ok(sql)
+}
+
+// ----------------------------------------------------------------------------------------------- nested compilation
+
+/// One subquery per stage; always possible. Column names are checked at every stage.
+pub fn compile_nested(stages: &[Stage], schema: &Schema) -> Result<String, String> {
+    let mut sql = String::new();
+    let mut names: Vec<String> = vec![];
+    let ident_env = |names: &[String]| -> HashMap<String, String> { names.iter().map(|n| (n.clone(), n.clone())).collect() };
+    let mut k = 0;
+    let mut pending_order: Option<String> = None;
+    for st in stages {
+        k += 1;
+        let prev = format!("({sql}) AS s{k}");
+        match st {
+            Stage::From(t) => { names = schema.get(t).ok_or(format!("unknown table {t}"))?.clone(); sql = format!("SELECT {} FROM {t}", names.join(", ")); }
+            Stage::Join { table, on } => {
+                let mut e = ident_env(&names);
+                let new = schema.get(table).ok_or(format!("unknown table {table}"))?;
+                for c in new { e.insert(c.clone(), c.clone()); }
+                names.extend(new.iter().cloned());
+                sql = format!("SELECT {} FROM {prev} JOIN {table} ON {}", names.join(", "), substitute(on, &e)?);
+            }
+            Stage::Where(e) => { sql = format!("SELECT {} FROM {prev} WHERE {}", names.join(", "), substitute(e, &ident_env(&names))?); }
+            Stage::Extend(items) => {
+                let e = ident_env(&names);
+                let mut sel = names.clone();
+                let mut newnames = names.clone();
+                for (n, x) in items { sel.push(format!("{} AS {n}", substitute(x, &e)?)); newnames.push(n.clone()); }
+                sql = format!("SELECT {} FROM {prev}", sel.join(", "));
+                names = newnames;
+            }
+            Stage::Select(items) => {
+                let e = ident_env(&names);
+                let sel: Vec<String> = items.iter().map(|(n, x)| Ok(format!("{} AS {n}", substitute(x, &e)?))).collect::<Result<_, String>>()?;
+                sql = format!("SELECT {} FROM {prev}", sel.join(", "));
+                names = items.iter().map(|i| i.0.clone()).collect();
+            }
+            Stage::Aggregate { aggs, group } => {
+                let e = ident_env(&names);
+                let mut sel: Vec<String> = vec![]; let mut keys = vec![]; let mut nn = vec![];
+                for (n, x) in group { let s = substitute(x, &e)?; sel.push(format!("{s} AS {n}")); keys.push(non_positional(s)); nn.push(n.clone()); }
+                for (n, x) in aggs { sel.push(format!("{} AS {n}", substitute(x, &e)?)); nn.push(n.clone()); }
+                sql = format!("SELECT {} FROM {prev}{}", sel.join(", "), if keys.is_empty() { String::new() } else { format!(" GROUP BY {}", keys.join(", ")) });
+                names = nn;
+            }
+            Stage::OrderBy(items) => {
+                let e = ident_env(&names);
+                let o: Vec<String> = items.iter().map(|(x, d)| Ok(format!("{}{}", non_positional(substitute(x, &e)?), if *d { " DESC" } else { "" }))).collect::<Result<_, String>>()?;
+                pending_order = Some(o.join(", "));
+                sql = format!("SELECT {} FROM {prev} ORDER BY {}", names.join(", "), pending_order.as_ref().unwrap());
+            }
+            Stage::Limit(n) => {
+                // a LIMIT directly after ORDER BY belongs to the same block (an ORDER BY in a subquery guarantees nothing without it)
+                if let Some(o) = &pending_order { let inner = sql.rsplit_once(" ORDER BY ").map(|x| x.0.to_string()).unwrap_or(sql.clone()); sql = format!("{inner} ORDER BY {o} LIMIT {n}"); }
+                else { sql = format!("SELECT {} FROM {prev} LIMIT {n}", names.join(", ")); }
+            }
+        }
+        if !matches!(st, Stage::OrderBy(_)) && !matches!(st, Stage::Limit(_)) { pending_order = None; }
+    }
+    Ok(sql)
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>The oracle is independent of the compiler: a small interpreter evaluates the same random pipeline directly on in-memory rows with SQL's three-valued logic (NULL comparisons, <code>AND</code>/<code>OR</code>, aggregates over NULLs, a group for the empty input of a keyless aggregate). Each random pipeline (a join of <code>t(a,b,c)</code> with <code>u(k,v)</code>, <code>WHERE</code>/<code>EXTEND</code> steps, an optional aggregation with <code>GROUP BY</code> and later filters, an optional projection, a total <code>ORDER BY</code>, sometimes a <code>LIMIT</code>) is compiled and executed three ways: the flat SQL on the Part I engine, and the flat and the nested SQL on SQLite; all three must equal the oracle.</p>
+
+```text title="one query three ways, 600 random pipelines, compile speed, and a dialect difference"
+the same query, three ways
+pipe:   FROM t |> JOIN u ON a = k |> WHERE b > 0 |> EXTEND a * v AS av |> AGGREGATE SUM(av) AS total, COUNT(*) AS n GROUP BY c |> WHERE total > 20 |> ORDER BY total DESC, c |> LIMIT 3
+flat:   SELECT (c) AS c, SUM(((a) * (v))) AS total, COUNT(*) AS n FROM t JOIN u ON (a) = (k) WHERE ((b) > 0) GROUP BY (c) HAVING ((SUM(((a) * (v)))) > 20) ORDER BY (SUM(((a) * (v)))) DESC, ((c)) LIMIT 3
+nested: SELECT c, total, n FROM (SELECT c, total, n FROM (SELECT (c) AS c, SUM((av)) AS total, COUNT(*) AS n FROM (SELECT a, b, c, k, v, (a) * (v) AS av FROM (SELECT a, b, c, k, v FROM (SELECT a, b, c, k, v FROM (SELECT a, b, c FROM t) AS s2 JOIN u ON (a) = (k)) AS s3 WHERE (b) > 0) AS s4) AS s5 GROUP BY (c)) AS s6 WHERE (total) > 20) AS s7 ORDER BY (total) DESC, (c) LIMIT 3
+engine returned 2 row(s) for it; sqlite returned 2 row(s)
+2000 of 2000 generated pipelines (mean 5.5 stages) parse and compile both ways in 15.2 us each; the flat SQL averages 204 characters, the nested form 314 characters with 4.1 subquery levels
+ORDER BY a over (1, NULL, 0): engine [Some(0), Some(1), None], sqlite [None, Some(0), Some(1)]
+600 random pipelines agreed on all three executions (129 used HAVING, 207 LIMIT, 185 JOIN)
+```
+
+<ul> <li><strong>600 random pipelines agreed on all three executions</strong> (129 used <code>HAVING</code>, 207 <code>LIMIT</code>, 185 <code>JOIN</code>), run on fresh random data in 150 data sets. The checks cover the engine's SQL support, SQLite's, the substitution logic and the three-valued-logic corner cases at once; an error in any of them would fail a specific pipeline, which the test prints.</li> <li><strong>The flat form is shorter and the nested form deeper</strong>: over 2 000 generated pipelines of 5.5 stages on average, the flat SQL averages <strong>204 characters</strong>, the nested form <strong>314</strong> with <strong>4.1 subquery levels</strong>. The Part I engine cannot run the nested form at all (it has no derived tables), which is why the flat back end exists; production engines flatten nested forms with subquery-merging rewrites (<a href="/cookbook/p/plan-transformations-and-rule-soundness">Q3</a>), and the flat form is what they would produce.</li> <li><strong>Compilation is cheap</strong>: 15 µs per pipeline for both forms (parse, scope check, substitution); a front end is not a performance concern, the plan's quality is.</li> <li><strong>A dialect difference surfaced</strong>: <code>ORDER BY a</code> over <code>(1, NULL, 0)</code> returns <code>[0, 1, NULL]</code> on the Part I engine and <code>[NULL, 0, 1]</code> on SQLite (PostgreSQL also places NULLs last for ascending order, SQLite and MySQL first). The oracle takes the NULL placement as a parameter; a transpiler has to emit <code>NULLS FIRST</code>/<code>NULLS LAST</code> (or avoid depending on the order) to be portable.</li> <li><strong>Refusals are part of the design</strong>: <code>… |&gt; ORDER BY a |&gt; LIMIT 3 |&gt; WHERE b &gt; 0</code>, a second <code>AGGREGATE</code>, and a <code>JOIN</code> after <code>AGGREGATE</code> have no single-block form; the compiler says why (a subquery is needed) instead of generating wrong SQL, and the nested back end expresses them.</li> </ul>
+
+<aside data-call="note"><b>Why the constant guard exists</b><p><code>EXTEND 7 AS seven |&gt; ORDER BY seven</code> substitutes to <code>ORDER BY (7)</code>. In standard SQL an integer literal in <code>ORDER BY</code> or <code>GROUP BY</code> is a <em>position in the select list</em>, so the generated query sorted by column 7 (and SQLite reported "2nd ORDER BY term out of range"). The compiler now emits <code>((7) + 0)</code>, an expression that is not a bare literal. It is the kind of bug a transpiler has and a hand-written query never has, found only because the random pipelines included constant definitions.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A tiny tokenizer instead of a regex</strong>: <code>Tok::Ident</code> and <code>Tok::Other</code> are enough to substitute names without touching string literals, function names or keywords; the compiler never needs a full expression parser because it only rewrites <em>identifiers</em>.</li> <li><strong><code>Result&lt;String, String&gt;</code> for compiler errors with context</strong>: each error names the stage or the identifier and lists what is in scope; tests assert on substrings (<code>"not in scope"</code>, <code>"subquery"</code>), which keeps messages free to improve.</li> <li><strong>Environments as <code>HashMap&lt;String, String&gt;</code></strong> (name → definition text) rebuilt per stage by <code>env(&amp;cols)</code>; the <code>cols: Vec&lt;(String, String)&gt;</code> keeps the visible columns in order, which <code>SELECT *</code>-style output relies on. <code>iter_mut().find</code> updates a redefined column in place.</li> <li><strong>Scoped helper closures</strong> (<code>let env = |cols: &amp;[(String, String)]| …</code>) avoid borrowing <code>self</code> and keep the compiler a free function over a <code>Vec&lt;Stage&gt;</code>; stages are a plain enum, so the two back ends are two <code>match</code>es over it.</li> <li><strong>Differential testing as a Rust test</strong>: random pipelines are an enum (<code>Op</code>) that prints to pipe text <em>and</em> evaluates directly, so the oracle and the system under test share nothing but the generator; <code>std::process::Command</code> pipes a script to <code>sqlite3</code> and the harness parses its output.</li> <li><strong>Batching external processes</strong>: one <code>sqlite3</code> invocation runs four queries separated by <code>SELECT '--'</code> marker lines, an order of magnitude faster than a process per query.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Parser and compiler (unit)</strong>: the typical pipeline parses to nine stages and the flat SQL contains <code>JOIN</code>, <code>WHERE</code>, <code>GROUP BY</code>, <code>HAVING</code>, <code>ORDER BY … DESC</code>, <code>LIMIT</code> and no subquery, the nested form at least seven; out-of-scope columns, unknown tables, a pipeline not starting with <code>FROM</code> and unknown stages are errors; stages the flat form cannot express return the reason while the nested form compiles them.</li> <li><strong>Substitution</strong>: definitions are parenthesized, function names and keywords and string literals are untouched, qualified names are rejected, splitting at commas ignores commas inside parentheses and strings.</li> <li><strong>Constants</strong>: bare integers in <code>ORDER BY</code>/<code>GROUP BY</code> are rewritten to expressions; expressions are not.</li> <li><strong>Limits, strings, blocks</strong>: two limits give the smaller; <code>|&gt;</code> inside a literal does not split; <code>ORDER BY</code> and its <code>LIMIT</code> stay in one nested block while <code>LIMIT</code> followed by <code>ORDER BY</code> becomes two.</li> <li><strong>Random differential test</strong>: 150 data sets × 4 pipelines = 600 pipelines, each compared with the oracle on the engine (flat), SQLite (flat) and SQLite (nested), with coverage floors on <code>HAVING</code>, <code>LIMIT</code> and <code>JOIN</code>.</li> <li><strong>Mutants run against these tests</strong>: <code>WHERE</code> after <code>AGGREGATE</code> staying a <code>WHERE</code>; substituted definitions losing their parentheses; the constant guard removed; <code>ORDER BY</code> direction inverted; the <code>GROUP BY</code> clause dropped; <code>JOIN</code> columns not entering scope; <code>SELECT</code> not narrowing the scope; a second <code>AGGREGATE</code> or a <code>WHERE</code> after <code>LIMIT</code> silently allowed; the nested <code>EXTEND</code> dropping its column (all killed). Three mutants <strong>survived the random pipelines</strong> and were killed by dedicated tests: <code>LIMIT</code> taking the larger of two limits and <code>|&gt;</code> splitting inside a string (the generator emits neither), and the nested form separating <code>ORDER BY</code> from its <code>LIMIT</code> (SQLite happens to keep the order, so only a structural assertion can see it).</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Google (BigQuery/GoogleSQL, ZetaSQL)</strong> introduced the <code>|&gt;</code> pipe operator inside SQL (VLDB 2024): any query can continue with <code>|&gt; WHERE</code>, <code>|&gt; EXTEND</code>, <code>|&gt; AGGREGATE … GROUP BY</code>, <code>|&gt; JOIN</code> and so on, interoperating with ordinary SQL; implemented in the parser and analyzer so it shares the optimizer. Other engines (Apache Spark / Databricks SQL) have since added a pipe operator.</li> <li><strong>PRQL</strong> (Rust compiler, <code>prqlc</code>) compiles a pipelined language to many SQL dialects; <strong>KQL</strong> (Kusto / Azure Data Explorer, Sentinel) is a pipe-based language with its own engine; <strong>Malloy</strong> compiles semantic models and nested queries to SQL for several databases; <strong>OxQL</strong> is Oxide's time-series query language, translated to ClickHouse SQL.</li> <li><strong>Gel</strong> (formerly EdgeDB, Python and Rust) provides a graph-relational data model and EdgeQL over PostgreSQL, compiling queries with nested result shapes to SQL; <strong>Convex</strong> runs TypeScript query and mutation functions as deterministic transactions inside the database with reactive subscriptions.</li> <li><strong>Optimizers behind the languages</strong>: Apache Pinot's multi-stage query engine (a Calcite-based planner on top of its single-stage engine), StarRocks's cost-based Cascades-style optimizer, and MariaDB's optimizer (its own long-standing engineering: histograms, subquery strategies) are the planners that receive the generated SQL; see <a href="/cookbook/p/production-optimizers">Q11</a>.</li> <li><strong>Standards</strong>: SQL/PGQ (property graph queries) and SQL:2023 additions bring some of these ideas (graph patterns, JSON) into the standard.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Generated SQL must be portable or targeted.</strong> NULL ordering, integer division, string concatenation, quoting and <code>LIMIT</code> syntax differ per dialect; pick a target dialect explicitly and test on it.</li> <li><strong>Identifier capture and scope</strong>: substitution must respect parentheses and precedence, and a name that disappeared after <code>SELECT</code> must stay an error; test with expressions that mix operators of different precedence.</li> <li><strong>Positional constants</strong> in <code>ORDER BY</code>/<code>GROUP BY</code>, aliases that shadow base columns, and ambiguous names after joins are classic transpiler bugs.</li> <li><strong>Do not promise what the backend cannot do</strong>: reject unsupported combinations at compile time with an explanation, or generate subqueries; never silently change semantics.</li> <li><strong>Ordering is not preserved by subqueries</strong> in SQL: a pipeline <code>ORDER BY … |&gt; WHERE …</code> has no standard meaning when compiled to nested SQL unless the compiler restates the ordering at the end.</li> <li><strong>Error messages</strong> should be in the user's language (pipeline stage, column), not the generated SQL's; map positions back to the source.</li> <li><strong>Debugging needs the SQL</strong>: always offer <code>EXPLAIN</code>/"show generated SQL"; users diagnose performance in the plan, not in the front end.</li> <li><strong>Semantic layers add a second source of truth</strong>: measures defined once are great until the definition is wrong; version and test them like code.</li> <li><strong>New syntax is a migration cost</strong>: adoption needs tooling (formatters, editors, linters) and coexistence with existing SQL; the pipe operator succeeded partly because it can be mixed into ordinary queries.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "SQL Has Problems. We Can Fix Them: Pipe Syntax In SQL"
+url = "https://research.google/pubs/sql-has-problems-we-can-fix-them-pipe-syntax-in-sql/"

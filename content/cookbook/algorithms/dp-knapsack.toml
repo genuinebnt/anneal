@@ -1,0 +1,49 @@
+title = "0/1 knapsack"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Dynamic programming, greedy and search"
+chapter_order = 5
+order = 203
+kind = "recipe"
+lede = "Pick items under a capacity to maximise value, and recover WHICH items."
+level = "intermediate"
+code = ["examples/algorithms/dp_knapsack.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+choosing a best subset under a budget (memory, slots, time): the core of resource-constrained packing.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>resource-constrained selection: ad budgets</li><li>cargo loading</li><li>feature selection under a time budget</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+DP recipe: (1) define the state, (2) write the recurrence, (3) fix the fill order, (4) read the answer, (5) backtrack. best[i][c] = best value using only the first i items with capacity c
+
+```text
+best[i][c] = max( best[i-1][c]                       // skip item i
+                , best[i-1][c - w_i] + v_i  if w_i <= c )   // take item i
+```
+
+O(items &#42; capacity) time. The 2-D table lets us backtrack; if you only need the **value**, one row suffices (iterate capacity downwards). Greedy-by-ratio is **not** optimal here (see the assert).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Knapsack_problem> and <https://cp-algorithms.com/dynamic_programming/knapsack.html>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Knapsack_problem"
+url = "https://en.wikipedia.org/wiki/Knapsack_problem"
+
+[[sources]]
+title = "cp-algorithms.com/dynamic_programming/knapsack.html"
+url = "https://cp-algorithms.com/dynamic_programming/knapsack.html"

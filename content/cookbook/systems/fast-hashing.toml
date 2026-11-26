@@ -1,0 +1,44 @@
+title = "The default HashMap hasher"
+module = "Performance and systems"
+module_order = 7
+chapter = "Measuring and CPU performance"
+chapter_order = 1
+order = 278
+kind = "recipe"
+lede = "the default HashMap hasher (SipHash) vs a fast non-cryptographic one, and when NOT to swap it."
+level = "intermediate"
+code = ["examples/perf/fast_hashing.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+maps keyed by small ints/ids in hot loops (graph algorithms, interning).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>graph algorithms</li><li>interning tables</li><li>compilers (rustc uses Fx hashing)</li><li>not for attacker-controlled keys</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+std's default hasher (SipHash 1-3, randomly keyed per map) is deliberately DoS-resistant but not the fastest. For trusted keys, a simple multiply-rotate hasher (the "Fx" family used inside rustc) is much faster. **Never** use it for attacker-controlled keys (hash flooding).
+
+Production crates: rustc-hash, ahash, fxhash. Often the best fix is no hashing at all: dense `usize` ids into a Vec (see index_graph).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://nnethercote.github.io/perf-book/hashing.html> and <https://github.com/rust-lang/rustc-hash>
+"""
+
+[[sources]]
+title = "nnethercote.github.io/perf-book/hashing.html"
+url = "https://nnethercote.github.io/perf-book/hashing.html"
+
+[[sources]]
+title = "github.com/rust-lang/rustc-hash"
+url = "https://github.com/rust-lang/rustc-hash"

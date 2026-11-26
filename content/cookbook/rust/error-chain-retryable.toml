@@ -1,0 +1,42 @@
+title = "Error chain retryable"
+module = "Rust language"
+module_order = 1
+chapter = "Errors and diagnostics"
+chapter_order = 4
+order = 37
+kind = "recipe"
+lede = "library errors with `#[source]`, error chains, and classifying errors (retryable vs fatal)."
+level = "intermediate"
+code = ["examples/errors/error_chain_retryable.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+workers/executors that must decide "retry or give up?" based on **what** failed.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+retry/dead-letter decisions in workers; error chains in logs.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: keep a typed error enum, wrap the lower-level error with `#[source]` (so the chain is preserved), and add a method like `is_retryable()` so callers never string-match messages. `Error::source()` walks the chain; `Box<dyn Error + Send + Sync>` is the "any error" type that can cross threads.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/error/trait.Error.html> and <https://blog.burntsushi.net/rust-error-handling/>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/error/trait.Error.html"
+url = "https://doc.rust-lang.org/std/error/trait.Error.html"
+
+[[sources]]
+title = "blog.burntsushi.net/rust-error-handling"
+url = "https://blog.burntsushi.net/rust-error-handling/"

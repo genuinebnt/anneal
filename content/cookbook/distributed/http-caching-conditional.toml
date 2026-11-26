@@ -1,0 +1,68 @@
+title = "HTTP caching and conditional requests"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 520
+kind = "recipe"
+lede = "ETag, Last-Modified, Cache-Control, Vary, Range, If-Match"
+level = "advanced"
+code = ["examples/web/http_caching_conditional.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>REST/CDN-facing APIs</li><li>download clients</li><li>optimistic concurrency</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+an axum server that implements the validators and preconditions of RFC 9110/9111 and a client that exploits them. Strong `ETag` = quoted hash of the body; `If-None-Match` hit => `304 Not Modified` with no body; `Last-Modified`/`If-Modified-Since` as the weaker date validator.
+
+A tiny client-side cache (injectable clock) implements **freshness** (`max-age`) and **revalidation** (`no-cache`, `must-revalidate`) and we assert the exact number of network hits per scenario.
+
+`Vary` + `Accept`/`Accept-Encoding` negotiation (gzip via tower-http), `Range` requests (206, 416, multi-range described), a resumable download that reconnects with `Range: bytes=N-` + `If-Range` after the server kills the connection, and `If-Match` (412 on lost update).
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+the cheapest request is the one never sent, the second cheapest is a 304. Preconditions also give optimistic concurrency without locks.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+`no-cache` means "store it but ask before reuse"; `no-store` means "never keep it"; `immutable` says revalidation is pointless; `private` forbids shared caches (CDNs); `public` allows them. A response that varies by a request header **must** say so in `Vary`, otherwise a shared cache serves the wrong variant.
+
+Multi-range (`bytes=0-9,20-29`) would be answered as `multipart/byteranges`; servers may ignore it and send 200 (we do), which is always legal. Dates are compared as parsed epoch seconds, never as strings.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>CDN/browser caching of APIs and assets (fingerprinted files with <code>immutable</code>)</li><li>conditional polling of feeds/config endpoints to save bandwidth</li><li>resumable large downloads (package managers, model weights, video seeking)</li><li>optimistic locking on <strong>put</strong> (<code>If-Match</code>)</li><li>create-only <strong>put</strong> (<code>If-None-Match: *</code>)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Caching" target="_blank" rel="noreferrer">https://developer.mozilla.org/en-US/docs/Web/HTTP/Caching</a></li><li><a href="https://datatracker.ietf.org/doc/html/rfc9111" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc9111</a></li><li><a href="https://datatracker.ietf.org/doc/html/rfc9110" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc9110</a></li><li><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP" target="_blank" rel="noreferrer">https://developer.mozilla.org/en-US/docs/Web/HTTP</a></li></ul>
+"""
+
+[[sources]]
+title = "developer.mozilla.org/en-US/docs/Web/HTTP/Caching"
+url = "https://developer.mozilla.org/en-US/docs/Web/HTTP/Caching"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc9111"
+url = "https://datatracker.ietf.org/doc/html/rfc9111"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc9110"
+url = "https://datatracker.ietf.org/doc/html/rfc9110"
+
+[[sources]]
+title = "developer.mozilla.org/en-US/docs/Web/HTTP"
+url = "https://developer.mozilla.org/en-US/docs/Web/HTTP"

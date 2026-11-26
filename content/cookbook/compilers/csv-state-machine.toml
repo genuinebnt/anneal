@@ -1,0 +1,34 @@
+title = "CSV state machine"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 570
+kind = "recipe"
+lede = "a CSV parser as an explicit character state machine, plus a round-trip property test."
+level = "intermediate"
+code = ["examples/text_and_parsing/csv_state_machine.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any format where context changes the meaning of a character (quotes, escapes, comments, heredocs).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+CSV/TSV ingestion, any format where quoting/escaping changes the meaning of characters.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+When "what does this character mean?" depends on what came before, model the parser as states + transitions (state_machine, generic_state_machine). Here: inside/outside quotes changes what a comma, a newline, and a quote mean. One pass, O(n), no backtracking, and every (state, char) pair is handled in **one** exhaustive `match`, so no case is forgotten.
+
+The streaming-friendly structure also lets you feed chunks of input. Production-grade: <https://github.com/BurntSushi/rust-csv> (read how it uses a DFA for speed).
+"""
+
+[[sources]]
+title = "github.com/BurntSushi/rust-csv"
+url = "https://github.com/BurntSushi/rust-csv"

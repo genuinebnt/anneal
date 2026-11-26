@@ -1,0 +1,70 @@
+title = "MPI-style collectives over a simulated message-passing network"
+module = "Performance and systems"
+module_order = 7
+chapter = "High-performance computing"
+chapter_order = 4
+order = 304
+kind = "recipe"
+lede = "MPI-style collectives over a simulated message-passing network (threads + channels) with alpha-beta cost models"
+level = "advanced"
+code = ["examples/hpc/mpi_collectives_simulation.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>understanding what MPI_Allreduce/Bcast/Alltoall really do</li><li>gradient all-reduce in distributed training</li><li>choosing algorithms by message size</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>data-parallel deep learning gradient sync (ring and tree allreduce in NCCL-style libraries)</li><li>MPI implementations (MPICH/Open MPI pick algorithms by message size and rank count)</li><li>distributed sort/shuffle (alltoall)</li><li>parallel linear algebra (broadcast/reduce on process grids). Course: Thakur</li><li>Rabenseifner</li><li>Gropp</li><li>"Optimization of Collective Communication Operations in MPICH" (IJHPCA 2005)</li><li>CS267 lectures on communication cost models</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+N "ranks" are threads. Each owns a mailbox (an mpsc channel receiver) and a sender to every other rank, exactly the point-to-point layer MPI gives you (`send(dst, tag, data)`, `recv(src, tag)`).
+
+On top we build the collectives from point-to-point calls only: broadcast and reduce (binomial tree), allreduce (ring, recursive doubling, binomial reduce+bcast, Rabenseifner reduce-scatter + allgather), allgather (ring), alltoall (pairwise), scatter/gather (linear), barrier (dissemination).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Why** a simulation: sends are buffered (unbounded channels) like MPI's eager protocol, so simultaneous "exchange with partner" steps cannot deadlock, and we can **count** every message and byte exactly.
+
+The cost model of each algorithm is a closed formula; this recipe asserts the measured totals **equal** the formulas for every rank count 1..16, including non-powers of two.
+
+The alpha-beta model: sending m bytes costs alpha + beta&#42;m (alpha = latency, beta = per-byte time). On the critical path: binomial bcast/reduce  lg p &#42; (alpha + n beta)
+
+```text
+ring allreduce         2 (p-1) alpha + 2 (p-1)/p * n beta
+```
+
+recursive doubling     lg p &#42; (alpha + n beta) Rabenseifner           2 lg p alpha + 2 (p-1)/p &#42; n beta (gamma, the per-byte reduction compute cost, is dropped.) Small n: latency dominates, so recursive doubling (few rounds) wins.
+
+Large n: bandwidth dominates, so the 2 (p-1)/p &#42; n beta algorithms (ring, Rabenseifner) win; Rabenseifner has the ring's bandwidth with only 2 lg p rounds. We compute the crossover and check it against the analytic value.
+
+Non-power-of-two ranks: recursive doubling and Rabenseifner first **fold**: with pof2 = largest power of two &lt;= p and rem = p-pof2, the first 2&#42;rem ranks pair up (even sends its vector to the odd neighbour and sits out), the remaining pof2 ranks run the power-of-two algorithm, then the odd ones send the result back. This is the MPICH approach.
+
+Elements are `i64` with wrapping add so reduction is exact and order-independent: results must equal the sequential oracle bit for bit. (Floating-point sum order would change results: see parallel_prefix_scan_reduction.)
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://www.mcs.anl.gov/~thakur/papers/ijhpca-coll.pdf" target="_blank" rel="noreferrer">https://www.mcs.anl.gov/~thakur/papers/ijhpca-coll.pdf</a></li><li><a href="https://www.mpich.org/static/docs/latest/" target="_blank" rel="noreferrer">https://www.mpich.org/static/docs/latest/</a></li><li><a href="https://www.mpi-forum.org/docs/" target="_blank" rel="noreferrer">https://www.mpi-forum.org/docs/</a></li></ul>
+"""
+
+[[sources]]
+title = "mcs.anl.gov/~thakur/papers/ijhpca-coll.pdf"
+url = "https://www.mcs.anl.gov/~thakur/papers/ijhpca-coll.pdf"
+
+[[sources]]
+title = "mpich.org/static/docs/latest"
+url = "https://www.mpich.org/static/docs/latest/"
+
+[[sources]]
+title = "mpi-forum.org/docs"
+url = "https://www.mpi-forum.org/docs/"

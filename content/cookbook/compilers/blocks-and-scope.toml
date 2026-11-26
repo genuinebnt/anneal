@@ -1,0 +1,35 @@
+title = "Blocks and scope"
+module = "Compilers and languages"
+module_order = 12
+chapter = "A tree-walking interpreter"
+chapter_order = 2
+order = 579
+kind = "guide"
+lede = "Book ch. 8, second half · Official tests: block/, the rest of variable/ and assignment/"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<div class="cb-g-tt"><table><thead><tr><th>Kind</th><th>Input</th><th>Expected</th></tr></thead><tbody><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>var a = "outer"; { var a = "inner"; print a; } print a;</code></td><td><code>inner</code> then <code>outer</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>{ var a = 1; { a = 2; } print a; }</code></td><td><code>2</code></td></tr><tr><td><span class="cb-g-pill cb-g-out">stdout</span></td><td><code>var a = 1; { var a = a + 1; print a; }</code></td><td><code>2</code> for now. Slice 7 turns this into a compile error</td></tr><tr><td><span class="cb-g-pill cb-g-cerr">compile error</span></td><td><code>{ var a = 1;</code></td><td><code>[line 1] Error at end: Expect '}' after block.</code></td></tr></tbody></table></div>
+
+```rust title="src/env.rs, src/interp.rs"
+pub type EnvRef = Rc<RefCell<Env>>;
+
+pub struct Env {
+    values: HashMap<Rc<str>, Value>,
+    parent: Option<EnvRef>,
+}
+
+fn exec_block(&mut self, stmts: &[Stmt], env: EnvRef) -> Exec {
+    let prev = std::mem::replace(&mut self.env, env);
+    let result = stmts.iter().try_for_each(|s| self.exec(s));
+    self.env = prev;                 // restored on error and on return
+    result
+}
+```
+
+<p>Use <code>Rc&lt;RefCell&lt;Env&gt;&gt;</code> now, even though blocks alone could get by with a <code>Vec</code> of scopes. Closures in slice 6 have to keep an environment alive after its block exits.</p>
+
+<p>Don't return with <code>?</code> between the swap and the restore. If you do, an error leaves the interpreter in the inner scope, and the next REPL line runs there.</p>
+"""

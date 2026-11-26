@@ -1,0 +1,46 @@
+title = "Typestate protocol"
+module = "Rust language"
+module_order = 1
+chapter = "Design patterns"
+chapter_order = 5
+order = 43
+kind = "recipe"
+lede = "A session whose legal operations depend on its state, enforced by the compiler."
+level = "advanced"
+code = ["examples/patterns/typestate_protocol.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>connections</li><li>builders with required steps</li><li>lifecycles where misuse must be impossible (not just an <code>Err</code>)</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>protocol clients</li><li>builders with mandatory steps</li><li>hardware drivers</li><li>invalid sequences fail to compile</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: `Session<S>` is generic over a state type. Each state is its own (often zero-sized) type, and methods live in `impl Session<ThatState>` blocks, so `send()` simply **does not exist** on a logged-out session. Transitions take `self` **by value** and return the next state type, so the old state cannot be reused.
+
+**A sealed** trait stops outside code from inventing new states. Failed transitions can hand the old session **back** in the `Err` so callers can retry. Compare with the enum state machine (state_machine): enums decide at **runtime** and can be stored in one variable; typestate decides at **compile time** but each state is a different type (awkward in collections).
+
+Pick by where mistakes must be caught.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://cliffle.com/blog/rust-typestate/> and <https://rust-unofficial.github.io/patterns/>
+"""
+
+[[sources]]
+title = "cliffle.com/blog/rust-typestate"
+url = "https://cliffle.com/blog/rust-typestate/"
+
+[[sources]]
+title = "rust-unofficial.github.io/patterns"
+url = "https://rust-unofficial.github.io/patterns/"

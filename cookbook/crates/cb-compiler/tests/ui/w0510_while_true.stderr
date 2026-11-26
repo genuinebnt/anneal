@@ -1,0 +1,9 @@
+warning[W0510]: denote infinite loops with `loop`
+ --> w0510_while_true.peb:2:5
+  |
+2 |     while true {
+  |     ^^^^^^^^^^ `while true`
+  |
+  = help: use `loop` instead
+
+warning: 1 warning emitted

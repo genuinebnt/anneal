@@ -1,0 +1,74 @@
+title = "Slotted pages and a heap file"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 328
+kind = "recipe"
+lede = "Variable-length tuples, stable record ids, compaction, forwarding, overflow pages."
+level = "advanced"
+code = ["examples/database/slotted_pages_heap_file.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+row-store storage engines, anything that keeps variable-length records in fixed-size disk blocks.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+the heap files of PostgreSQL (line pointers + tuples in 8 KiB pages, **toast** for big values), the page format of SQLite and InnoDB (a cell/record pointer array in a page), SQL Server (forwarded records), and the "record id = (page, slot)" convention every secondary index in a row store stores as its payload.
+
+Course: CMU 15-445 Intro to Database Systems, Lecture 03 (Database Storage I: pages, slotted pages, heap files, tuple layout).
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a DBMS stores tuples in fixed-size **pages** (here 512 bytes, so tests hit every corner; real engines use 4-16 KiB). **A slotted page** has a small header, a **slot array** growing from the front and tuple bytes growing from the back; the free space is the gap in the middle.
+
+A slot is `(offset, len)`; the record id `Rid = (page_id, slot_id)` names a tuple forever, so an index may keep it. The page may move tuple bytes around (**compaction**) as long as the slot keeps pointing at them.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+header `[checksum u32 | page_id u32 | kind u8 | pad | nslots u16 | free_end u16 | live_bytes u16]`. `live_bytes` makes **free-space accounting** exact and O(1): `free = PAGE - HEADER - 4*nslots - live_bytes`.
+
+Deleting a tuple zeroes its slot (a **tombstone** that insert reuses, so rids of other tuples never shift) and leaves a hole; when an insert fits in total free space but not in the contiguous gap, the page compacts itself (slides tuples to the back, slot ids and therefore rids unchanged). A checksum over the page catches torn or rotted pages on read.
+
+a record is `[tag | ...]` padded to 9 bytes minimum so it can always be overwritten by a pointer. Inline(0): the data. Forward(1): `(page, slot)` of the real data, a Moved(3) record in some other page; Overflow(2): the length and first page of a chain of **overflow** pages for values over 120 bytes (PostgreSQL's **toast** idea).
+
+An update first tries in place (shrink, or grow after compaction); failing that, it relocates the data and leaves a **forward** pointer in the original slot, so the rid never changes; the next update collapses or re-points the pointer (never a chain of two).
+
+the pages of a table plus a **page directory** with the free bytes of each page (a free-space map) so insert finds a page with room without any IO. The alternatives are measured too: a **linked list** of pages (walk and read pages until one fits: O(pages) IO per insert) and **append-only** (only ever look at the last page: never reuses freed space).
+
+Storage is a `PageStore` trait with a counted in-memory disk and a real temp file using positional IO (`read_at`).
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+30k seeded random insert/delete/update/read operations against a `HashMap<Rid, Vec<u8>>` model; after every op the touched page is checked (tuples never overlap and stay inside the data area, `free` and `live_bytes` equal a recomputation, the directory entry equals the page) and periodically the whole file (every forward pointer targets a Moved record, every overflow page is reachable exactly once, a full scan equals the model).
+
+The same workload on the file-backed store must give byte-identical results to the in-memory store, and a flipped byte must fail the checksum.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://15445.courses.cs.cmu.edu/fall2024/slides/03-storage1.pdf" target="_blank" rel="noreferrer">https://15445.courses.cs.cmu.edu/fall2024/slides/03-storage1.pdf</a> (CMU 15-445 storage lecture)</li><li><a href="https://www.postgresql.org/docs/current/storage-page-layout.html" target="_blank" rel="noreferrer">https://www.postgresql.org/docs/current/storage-page-layout.html</a> (PostgreSQL page layout) and <a href="https://www.postgresql.org/docs/current/storage-toast.html" target="_blank" rel="noreferrer">https://www.postgresql.org/docs/current/storage-toast.html</a> (TOAST: oversized values out of line)</li></ul>
+"""
+
+[[sources]]
+title = "15445.courses.cs.cmu.edu/fall2024/slides/03-storage1.pdf"
+url = "https://15445.courses.cs.cmu.edu/fall2024/slides/03-storage1.pdf"
+
+[[sources]]
+title = "postgresql.org/docs/current/storage-page-layout.html"
+url = "https://www.postgresql.org/docs/current/storage-page-layout.html"
+
+[[sources]]
+title = "postgresql.org/docs/current/storage-toast.html"
+url = "https://www.postgresql.org/docs/current/storage-toast.html"

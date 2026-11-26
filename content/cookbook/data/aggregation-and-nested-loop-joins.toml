@@ -1,0 +1,152 @@
+title = "Aggregation and nested-loop joins"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 355
+kind = "guide"
+lede = "BusTub P3 Task 2 · hash aggregation and its edge cases · nested loop join (inner and left outer) · nested index join"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Aggregation executor"
+body = """
+<p>BusTub's contract: an <strong>in-memory hash table</strong> keyed by the <code>GROUP BY</code> values, with a running state per aggregate; built in <code>Init()</code> (it is a pipeline breaker), then iterated. The Rust version builds on the first <code>next()</code> call, through the same <code>Blocking</code> helper that sorts and windows use.</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Aggregate</th> <th>State</th> <th>Empty input, no <code>GROUP BY</code></th> <th>NULL inputs</th> </tr> </thead> <tbody> <tr> <td><code>COUNT(*)</code></td> <td>counter</td> <td><strong>0</strong></td> <td>counted</td> </tr> <tr> <td><code>COUNT(x)</code></td> <td>counter</td> <td><strong>0</strong></td> <td>skipped</td> </tr> <tr> <td><code>SUM(x)</code>, <code>MIN</code>, <code>MAX</code></td> <td>running value</td> <td><strong>NULL</strong></td> <td>skipped</td> </tr> <tr> <td><code>AVG(x)</code></td> <td>sum and count</td> <td><strong>NULL</strong></td> <td>skipped</td> </tr> <tr> <td><code>… (DISTINCT x)</code></td> <td>a <code>HashSet</code> of seen values in front of the state</td> <td>as above</td> <td>skipped</td> </tr> </tbody> </table></div>
+
+<p>Edge cases the tests pin down (each one is a real bug in somebody's engine):</p>
+
+<ul> <li><strong>No <code>GROUP BY</code>, empty input → exactly one row.</strong> <code>SELECT COUNT(*), SUM(x) FROM t WHERE false</code> returns <code>(0, NULL)</code>.</li> <li><strong>With <code>GROUP BY</code>, empty input → zero rows.</strong> The two cases look alike and are opposites.</li> <li><strong>NULL group keys form one group.</strong> Grouping uses <code>Value</code>'s <code>Eq</code> (NULL equals NULL), not SQL equality (<a href="/cookbook/p/modern-sql">L02</a>). <code>DISTINCT</code> uses the same rule.</li> <li><strong>First-seen group order</strong> is preserved here for determinism, but SQL promises none; never let a test depend on it.</li> <li><code>AVG</code> of integers is a <strong>float</strong> (PostgreSQL returns numeric; SQLite a float), and <code>SUM</code> of integers stays an integer with overflow checking.</li> </ul>
+
+:::deeper Hash aggregation with per-aggregate state, DISTINCT, empty-input rules
+```rust title="src/execution/aggregation.rs"
+// ---------------- aggregation ------------------------------------------------------------------------
+struct AggState { count: i64, sum: Option<Value>, ext: Option<Value>, seen: Option<HashSet<Value>> }
+impl AggState {
+    fn new(a: &Agg) -> Self { AggState { count: 0, sum: None, ext: None, seen: a.distinct.then(HashSet::new) } }
+    fn update(&mut self, a: &Agg, row: &[Value]) -> Result<()> {
+        if a.f == AggFn::CountStar { self.count += 1; return Ok(()); }
+        let v = a.arg.as_ref().unwrap().eval(row)?;
+        if v.is_null() { return Ok(()); }
+        if let Some(s) = &mut self.seen { if !s.insert(v.clone()) { return Ok(()); } }
+        self.count += 1;
+        match a.f {
+            AggFn::Sum | AggFn::Avg => self.sum = Some(match self.sum.take() { None => v, Some(s) => super::expr::binary(BinOp::Add, s, v)? }),   // add directly: two boxed literals per row was the largest cost of SUM ([E7](#e-prof))
+            AggFn::Min => if self.ext.as_ref().is_none_or(|e| v.sql_cmp(e).is_some_and(|o| o.is_lt())) { self.ext = Some(v) },
+            AggFn::Max => if self.ext.as_ref().is_none_or(|e| v.sql_cmp(e).is_some_and(|o| o.is_gt())) { self.ext = Some(v) },
+            _ => {}
+        }
+        Ok(())
+    }
+    fn finish(&self, a: &Agg) -> Value {
+        match a.f {
+            AggFn::CountStar | AggFn::Count => Value::Int(self.count),
+            AggFn::Sum => self.sum.clone().unwrap_or(Value::Null),
+            AggFn::Avg => match &self.sum { Some(Value::Int(i)) => Value::Float(*i as f64 / self.count as f64), Some(Value::Float(f)) => Value::Float(f / self.count as f64), _ => Value::Null },
+            AggFn::Min | AggFn::Max => self.ext.clone().unwrap_or(Value::Null),
+        }
+    }
+}
+
+pub fn aggregate(group_by: &[Expr], aggs: &[Agg], rows: Vec<Row>) -> Result<Vec<Row>> {
+    let mut idx: HashMap<Vec<Value>, usize> = HashMap::new();
+    let mut groups: Vec<(Vec<Value>, Vec<AggState>)> = vec![];
+    for row in &rows {
+        let key: Vec<Value> = group_by.iter().map(|g| g.eval(row)).collect::<Result<_>>()?;   // NULLs group together (Value: Eq)
+        // look the group up first: `entry(key.clone())` allocated a copy of the key for every row, though almost every row joins a known group
+        let gi = match idx.get(&key) {
+            Some(&gi) => gi,
+            None => { idx.insert(key.clone(), groups.len()); groups.push((key, aggs.iter().map(AggState::new).collect())); groups.len() - 1 }
+        };
+        for (st, a) in groups[gi].1.iter_mut().zip(aggs) { st.update(a, row)?; }
+    }
+    // No GROUP BY over empty input still yields one row (COUNT = 0, others NULL); with GROUP BY it yields none.
+    if groups.is_empty() && group_by.is_empty() { groups.push((vec![], aggs.iter().map(AggState::new).collect())); }
+    Ok(groups.into_iter().map(|(k, st)| k.into_iter().chain(st.iter().zip(aggs).map(|(s, a)| s.finish(a))).collect()).collect())
+}
+```
+:::
+
+<aside data-call="rust"><b><code>Entry</code> API gotcha: inserting while holding the map</b><p>The first version used <code>*idx.entry(key.clone()).or_insert_with(|| { groups.push(...); groups.len() - 1 })</code>, which clones the key for every row (a profile showed it, <a href="/cookbook/p/profiling-and-observability">Profiling</a>); the listing now calls <code>get</code> first and inserts only for a new group. Either way the map keeps group <em>storage</em> in a <code>Vec</code> (for stable first-seen order) and the map as <code>key → position</code>. Storing <code>Vec&lt;AggState&gt;</code> directly in the <code>HashMap</code> value would also work, but then iteration order is the hash order, and borrowing two groups at once isn't possible. The <code>or_insert_with</code> closure borrows <code>groups</code> mutably while the map is borrowed, which is legal because they are different variables. Writing it with <code>groups</code> <em>inside</em> the map would not compile.</p></aside>
+"""
+
+[[sections]]
+heading = "Nested loop join"
+body = """
+<p>For every left row, scan every right row and emit the pairs that satisfy the predicate. It is the only join that handles <em>any</em> predicate (inequalities, functions), and it's the correct baseline: every other join algorithm is tested against it. For a <strong>left outer</strong> join, remember whether the current left row matched anything, and emit it with NULLs for the right side if not.</p>
+
+<p>The right side is <strong>materialized once</strong> into a <code>Vec</code> on the first call (it's re-scanned for every left row, and a scan executor can't rewind). BusTub does the same by re-<code>Init()</code>-ing the right child per left tuple, which re-reads pages instead of memory.</p>
+
+:::deeper Nested loop join (inner and left outer)
+```rust title="src/execution/nested_loop_join.rs"
+struct Nlj<'e> { left: Boxed<'e>, right_exec: Option<Boxed<'e>>, right: Vec<Row>, pred: Option<Expr>, kind: JoinKind, rw: usize, cur: Option<Row>, pos: usize, matched: bool }
+impl Exec for Nlj<'_> {
+    fn next(&mut self) -> Result<Option<Tuple>> {
+        if let Some(mut r) = self.right_exec.take() { while let Some(x) = r.next()? { self.right.push(x.vals); } }
+        loop {
+            if self.cur.is_none() {
+                let Some(l) = self.left.next()? else { return Ok(None) };
+                self.cur = Some(l.vals); self.pos = 0; self.matched = false;
+            }
+            let l = self.cur.as_ref().unwrap();
+            while self.pos < self.right.len() {
+                let r = &self.right[self.pos];
+                self.pos += 1;
+                let joined: Row = l.iter().chain(r).cloned().collect();
+                if ok_pred(&self.pred, &joined)? { self.matched = true; return Ok(Some(t(joined))); }
+            }
+            let l = self.cur.take().unwrap();
+            if self.kind == JoinKind::Left && !self.matched { return Ok(Some(t(l.into_iter().chain(nulls(self.rw)).collect()))); }
+        }
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Nested index join"
+body = """
+<p>If the right side is a base table with an <strong>index on the join column</strong>, skip the scan: for each left row, evaluate the key expression and probe the index, then fetch the matching heap tuple by RID. Cost: <code>M + m × C</code> with C ≈ one tree descent (<a href="/cookbook/p/join-algorithms">L12</a>). Because the index is <strong>unique</strong>, a probe returns at most one row, so one left row produces at most one output row. A non-unique index would loop over a posting list.</p>
+
+<p>The optimizer produces this plan only when the pattern fits (one equality key, a bare scan of an indexed column on the right); otherwise a hash join takes over. NULL keys must not probe: <code>index_key(NULL)</code> is <code>None</code> and falls straight to the unmatched path.</p>
+
+:::deeper Nested index join
+```rust title="src/execution/nested_index_join.rs"
+struct NijExec<'e, 'a> { left: Boxed<'e>, heap: &'e crate::storage::table::table_heap::TableHeap<'a, ArcReplacer>, layout: &'e Layout, tree: &'e crate::storage::index::b_plus_tree::BPlusTree<'a, ArcReplacer>,
+    key: Expr, residual: Option<Expr>, kind: JoinKind, rw: usize }
+impl Exec for NijExec<'_, '_> {
+    fn next(&mut self) -> Result<Option<Tuple>> {
+        // One output row per call is enough because the inner side is a UNIQUE index: ≤ 1 match per probe.
+        loop {
+            let Some(l) = self.left.next()? else { return Ok(None) };
+            let kv = self.key.eval(&l.vals)?;
+            let mut hit: Option<Row> = None;
+            if let Some(k) = index_key(&kv) {
+                if let Some(v) = self.tree.get(k)? {
+                    if let Some((meta, bytes)) = self.heap.get(unpack(v))? {
+                        if !meta.deleted {
+                            let joined: Row = l.vals.iter().cloned().chain(self.layout.decode(&bytes)).collect();
+                            if ok_pred(&self.residual, &joined)? { hit = Some(joined); }
+                        }
+                    }
+                }
+            }
+            match hit {
+                Some(j) => return Ok(Some(t(j))),
+                None if self.kind == JoinKind::Left => return Ok(Some(t(l.vals.into_iter().chain(nulls(self.rw)).collect()))),
+                None => continue,
+            }
+        }
+    }
+}
+```
+:::
+
+```text title="join strategies on the same query · 3k ⋈ 3k equijoin · Apple M4 Pro"
+NestedLoopJoin      281.9 ms
+HashJoin              0.98 ms     ← ~290×: O(m·n) became O(m + n)
+NestedIndexJoin       0.93 ms     ← same as hash here: both tables are tiny and in memory
+```
+"""

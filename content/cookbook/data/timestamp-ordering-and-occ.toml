@@ -1,0 +1,264 @@
+title = "Timestamp ordering and OCC"
+module = "Databases"
+module_order = 8
+chapter = "Transactions and concurrency control"
+chapter_order = 6
+order = 403
+kind = "guide"
+lede = "basic T/O · Thomas write rule · optimistic validation · phantoms and index locking · isolation levels"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Timestamp ordering (T/O)</strong> is <em>optimistic</em>: no locks, the serial order is fixed up front by a unique, monotonically increasing <strong>timestamp</strong> per transaction (TS(Tᵢ) &lt; TS(Tⱼ) ⇒ the schedule must be equivalent to Tᵢ before Tⱼ). Timestamps come from a clock (UTC; GPS/atomic clocks in some systems), a <strong>logical counter</strong> (overflow, and a distributed bottleneck), or a hybrid (HLC).</li> <li><strong>Basic T/O</strong>: every object keeps <code>R-TS</code> and <code>W-TS</code>. A read by T aborts if TS(T) &lt; W-TS (it would read the future); a write aborts if TS(T) &lt; R-TS or TS(T) &lt; W-TS. Otherwise do the operation and update the stamps. Needs a <strong>private copy</strong> for repeatable reads. <strong>Thomas write rule</strong>: a write that is <em>older than</em> W-TS but not older than R-TS can be <strong>skipped</strong>, since nobody will ever read it; this admits view-serializable schedules that aren't conflict-serializable. Weaknesses: long transactions starve (younger ones keep pushing stamps past them), stamps are metadata <em>writes on every read</em>, and writes to shared objects aren't recoverable without extra care.</li> <li><strong>OCC</strong> (Kung &amp; Robinson, 1981): three phases. <strong>Read</strong> (copy what you touch into a private workspace; track read-set and write-set), <strong>Validate</strong> (at commit, get a timestamp and check for conflicts), <strong>Write</strong> (install the workspace atomically, stamp the objects). Aborts are <em>cheap to implement but wasteful</em>, since they happen after all the work is done.</li> <li><strong>Validation</strong> guarantees every conflict points one way. For TS(Tᵢ) &lt; TS(Tⱼ), one of: ① Tᵢ finishes its write phase before Tⱼ starts (serial); ② Tᵢ's write phase ends before Tⱼ's begins <strong>and</strong> WS(Tᵢ) ∩ RS(Tⱼ) = ∅; ③ Tᵢ finishes reading before Tⱼ does <strong>and</strong> WS(Tᵢ) ∩ (RS(Tⱼ) ∪ WS(Tⱼ)) = ∅. <strong>Forward validation</strong> checks the committing transaction against <em>running</em> ones; <strong>backward validation</strong> (more common) checks against <em>already committed</em> ones since it started.</li> <li><strong>OCC shines</strong> when conflicts are rare: read-mostly or disjoint data, large non-skewed databases. <strong>Costs</strong>: copying into workspaces, validation/write phase as a serialization point, wasted work on abort, timestamp allocation bottleneck.</li> <li><strong>Phantoms</strong>: protocols that lock/stamp <em>existing</em> tuples can't protect tuples that don't exist yet. Conflict serializability on items is only enough if the set of items is fixed. Four fixes: ① <strong>lock everything</strong> (table/all pages), ② <strong>re-execute scans at commit</strong> and compare, ③ <strong>predicate locking</strong> (System R; complex; HyPer's <em>precision locking</em> is a practical cousin), ④ <strong>index locking</strong>: key-value locks (including virtual keys for absent values), <strong>gap locks</strong>, <strong>key-range / next-key locks</strong>, hierarchical range locks. Without a usable index you fall back to ①. Index locking is the common answer.</li> <li><strong>Isolation levels (strongest → weakest)</strong> and a lock-based recipe: <strong>SERIALIZABLE</strong> = strict 2PL + phantom protection; <strong>REPEATABLE READ</strong> = strict 2PL on items (phantoms possible); <strong>READ COMMITTED</strong> = X locks until commit, S locks dropped right after the read (unrepeatable reads, lost updates, phantoms possible); <strong>READ UNCOMMITTED</strong> = X locks, no S locks (dirty reads). SQL-92's definitions only talk about 2PL anomalies; set the level <em>before</em> the transaction begins.</li> </ul>
+"""
+
+[[sections]]
+heading = "Basic T/O on the bank schedules"
+body = """
+<p>Which of the 70 interleavings from <a href="/cookbook/p/concurrency-control-theory">L17</a> survive each protocol <em>without waiting or aborting</em>? (Transaction number = timestamp; locks held until the transaction's last operation.)</p>
+
+```text title="70 interleavings of the two-transfer example"
+70 interleavings | conflict-serializable 12 | basic T/O admits 6 | rigorous 2PL admits 2 | both 1
+```
+
+<ul> <li><strong>Both are strict subsets of the 12</strong> conflict-serializable schedules, and <em>neither contains the other</em>. 2PL admits <code>T2 T1</code> (the serial order against the timestamps); T/O refuses it, since T1's read of A comes after T2 wrote A (<code>R1(A)</code> at position 4 with <code>W-TS = 2</code> ⇒ T1 aborts).</li> <li>2PL's "2" counts only interleavings that need <strong>no waiting</strong>: in reality a 2PL system <em>delays</em> operations to steer into an admissible schedule. T/O can't delay; it aborts.</li> <li>Basic T/O admits dirty reads: <code>W1(A) R2(A) C2 C1</code> passes but is <strong>not recoverable</strong>. Real T/O systems buffer writes until commit or track <em>commit dependencies</em>.</li> </ul>
+
+<p>The Thomas write rule on the lecture's blind-write schedule:</p>
+
+```text
+R1(A) W2(A) W1(A) W3(A)        ts: T1 < T2 < T3
+  basic T/O:   W1(A) arrives with W-TS(A) = 2 > 1  ⇒ T1 aborts
+  Thomas rule: R-TS(A) = 1 ≤ 1, so no one read A in between ⇒ skip W1(A), T1 continues
+  result is view-equivalent to T1 T2 T3 (verified by the test), although the schedule is not conflict-serializable.
+```
+
+:::deeper Reference: T/O and 2PL admission checks on schedules
+```rust title="src/concurrency/tsorder.rs"
+//! Admission tests on schedules: which interleavings does each protocol let through unchanged?
+use crate::schedule::Op;
+use std::collections::HashMap;
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// every operation ran; `skipped` writes were dropped by the Thomas write rule
+    Admitted { skipped: usize },
+    /// the operation at `at` would violate timestamp order, so `txn` aborts
+    Abort { at: usize, txn: u8 },
+}
+
+/// Basic timestamp ordering; the transaction number is its timestamp.
+pub fn basic_to(s: &[Op], thomas: bool) -> Verdict {
+    let (mut rts, mut wts): (HashMap<char, u8>, HashMap<char, u8>) = Default::default();
+    let mut skipped = 0;
+    for (i, op) in s.iter().enumerate() {
+        match *op {
+            Op::R(t, x) => {
+                if t < *wts.get(&x).unwrap_or(&0) { return Verdict::Abort { at: i, txn: t }; }
+                let r = rts.entry(x).or_insert(0);
+                *r = (*r).max(t);
+            }
+            Op::W(t, x) => {
+                if t < *rts.get(&x).unwrap_or(&0) { return Verdict::Abort { at: i, txn: t }; }
+                if t < *wts.get(&x).unwrap_or(&0) {
+                    if thomas { skipped += 1; continue; }   // nobody can ever read this write: ignore it
+                    return Verdict::Abort { at: i, txn: t };
+                }
+                wts.insert(x, t);
+            }
+            _ => {}
+        }
+    }
+    Verdict::Admitted { skipped }
+}
+
+/// Rigorous 2PL: every access takes S/X until the transaction's last operation.
+/// `false` means some request would have had to *wait*, so this exact interleaving can't occur.
+pub fn rigorous_2pl_admits(s: &[Op]) -> bool {
+    let end = |t: u8| s.iter().rposition(|o| o.txn() == t).unwrap();
+    let mut held: HashMap<char, Vec<(u8, bool)>> = HashMap::new();   // object → (txn, exclusive)
+    for (i, op) in s.iter().enumerate() {
+        let (t, x, excl) = match *op { Op::R(t, x) => (t, x, false), Op::W(t, x) => (t, x, true), _ => continue };
+        let h = held.entry(x).or_default();
+        if h.iter().any(|&(o, e)| o != t && (e || excl) && end(o) >= i) { return false; }
+        match h.iter_mut().find(|(o, _)| *o == t) { Some(e) => e.1 |= excl, None => h.push((t, excl)) }
+    }
+    true
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "OCC with per-tuple version words"
+body = """
+<p>Production OCC (Silo, Hekaton, Cicada; FoundationDB validates read ranges the same way) avoids a global log by putting a <strong>version word on each tuple</strong>: bit 0 is a write lock, the rest is a version counter bumped by every committed write.</p>
+
+<ul> <li><strong>Read phase</strong>: take a <strong>seqlock read</strong> (load word; if locked, spin; load value; load word again; retry if it changed). This reads a consistent <code>(version, value)</code> pair <strong>without writing any shared memory</strong> and without blocking writers. Remember the version in the read set.</li> <li><strong>Write</strong>: buffer in the workspace; read-your-own-writes comes from checking the write buffer first.</li> <li><strong>Commit, step 1 (lock)</strong>: take the write locks of the write set <strong>in sorted key order</strong>, so committers can't deadlock with each other.</li> <li><strong>Commit, step 2 (validate)</strong>: for each read-set key, the tuple's current word must equal the version seen (for keys we locked, the word we <em>replaced</em>; for keys we didn't, the live word, which is odd, so unequal, if another committer holds it). Any mismatch ⇒ unlock everything, abort.</li> <li><strong>Commit, step 3 (install)</strong>: store the value, then publish <code>old + 2</code> with <code>Release</code>, which unlocks and bumps the version in one store.</li> </ul>
+
+<p>Why this is serializable: after step 1 the write set is frozen, and after step 2 every value we read was still current <em>while we held those locks</em>, so the transaction behaves as if it executed atomically at that instant. This is backward validation made incremental.</p>
+
+<aside data-call="rust"><b>Rust and memory-ordering notes</b><ul> <li><code>#[repr(align(64))]</code> on the tuple prevents <strong>false sharing</strong> between neighbouring accounts; at 100k accounts it is the difference between scaling and cache-line ping-pong.</li> <li>The seqlock needs exactly: <code>Acquire</code> on the first word load, data loads <code>Relaxed</code>, an <code>Acquire</code> <strong>fence</strong>, then a <code>Relaxed</code> re-read of the word. The writer takes the lock with <code>compare_exchange(Acquire)</code> and publishes with <code>store(Release)</code>. Using plain <code>Relaxed</code> everywhere compiles and <em>usually works</em> on x86 but is wrong on ARM.</li> <li>Values live in <code>AtomicI64</code> (not <code>UnsafeCell</code>) so the racy seqlock read is <em>not</em> undefined behaviour; with arbitrary-size values you need a <code>MaybeUninit</code> copy plus the same version dance (see the <code>seqlock</code> crate), or lock-free versioned chains (<a href="/cookbook/p/multi-version-concurrency-control">L20</a>).</li> <li><code>BTreeMap</code> for the read/write sets gives <strong>sorted iteration for free</strong> (lock order) but allocates; real engines use small sorted <code>Vec</code>s or arenas.</li> <li>The <code>release</code> closure captures the lock list by reference and is called on every early return. If a commit path has many exits, wrap the lock list in a guard struct with <code>Drop</code> instead.</li> </ul></aside>
+
+:::deeper Reference: OCC store, seqlock reads, three-step commit
+```rust title="src/concurrency/occ.rs"
+//! Optimistic concurrency control with per-tuple version words (Silo-style commit protocol).
+use std::collections::BTreeMap;
+use std::sync::atomic::{fence, AtomicI64, AtomicU64, Ordering::*};
+
+/// Low bit = write lock, upper bits = version. 64-byte aligned so neighbours don't false-share.
+#[repr(align(64))]
+pub struct Tuple { word: AtomicU64, val: AtomicI64 }
+
+impl Tuple {
+    fn new(v: i64) -> Self { Self { word: AtomicU64::new(0), val: AtomicI64::new(v) } }
+
+    /// Seqlock read: a consistent (version, value) pair without ever blocking a writer.
+    fn read_stable(&self) -> (u64, i64) {
+        loop {
+            let w1 = self.word.load(Acquire);
+            if w1 & 1 == 1 { std::hint::spin_loop(); continue; }       // a committer is installing
+            let v = self.val.load(Relaxed);
+            fence(Acquire);
+            if self.word.load(Relaxed) == w1 { return (w1, v); }
+        }
+    }
+
+    /// Spin to take the write lock; returns the (even) version word it replaced.
+    fn lock(&self) -> u64 {
+        loop {
+            let w = self.word.load(Relaxed);
+            if w & 1 == 0 && self.word.compare_exchange_weak(w, w | 1, Acquire, Relaxed).is_ok() { return w; }
+            std::hint::spin_loop();
+        }
+    }
+
+    fn unlock_unchanged(&self, old: u64) { self.word.store(old, Release); }
+    fn install(&self, old: u64, v: i64) { self.val.store(v, Relaxed); self.word.store(old + 2, Release); }
+}
+
+pub struct Store { tuples: Vec<Tuple> }
+
+impl Store {
+    pub fn new(n: usize, init: i64) -> Self { Self { tuples: (0..n).map(|_| Tuple::new(init)).collect() } }
+    pub fn begin(&self) -> Txn<'_> { Txn { store: self, reads: BTreeMap::new(), writes: BTreeMap::new() } }
+    pub fn peek(&self, k: usize) -> i64 { self.tuples[k].read_stable().1 }
+    pub fn version(&self, k: usize) -> u64 { self.tuples[k].read_stable().0 >> 1 }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Conflict;
+
+/// Private workspace: reads remember the version they saw, writes are buffered.
+pub struct Txn<'s> {
+    store: &'s Store,
+    reads: BTreeMap<usize, (u64, i64)>,
+    writes: BTreeMap<usize, i64>,
+}
+
+impl Txn<'_> {
+    pub fn read(&mut self, k: usize) -> i64 {
+        if let Some(&v) = self.writes.get(&k) { return v; }             // read your own writes
+        if let Some(&(_, v)) = self.reads.get(&k) { return v; }          // repeatable read
+        let (w, v) = self.store.tuples[k].read_stable();
+        self.reads.insert(k, (w, v));
+        v
+    }
+
+    pub fn write(&mut self, k: usize, v: i64) { self.writes.insert(k, v); }
+
+    /// Validation + write phase. Sorted write-lock order makes the spinning deadlock-free.
+    pub fn commit(self) -> Result<(), Conflict> {
+        let t = &self.store.tuples;
+        let locked: Vec<(usize, u64)> = self.writes.keys().map(|&k| (k, t[k].lock())).collect();
+        let release = |locked: &[(usize, u64)]| for &(k, old) in locked { t[k].unlock_unchanged(old) };
+        for (&k, &(seen, _)) in &self.reads {
+            let ok = match locked.binary_search_by_key(&k, |l| l.0) {
+                Ok(i) => locked[i].1 == seen,                           // we hold it: compare the word we replaced
+                Err(_) => t[k].word.load(Acquire) == seen,              // locked by someone else ⇒ odd ⇒ mismatch
+            };
+            if !ok { release(&locked); return Err(Conflict); }
+        }
+        for &(k, old) in &locked { t[k].install(old, self.writes[&k]); }
+        Ok(())
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p><strong>Correctness checks</strong>: validation catches <em>write skew</em> (two doctors both going off call: the second committer aborts, so OCC with read validation is <strong>serializable</strong>, unlike snapshot isolation, <a href="/cookbook/p/multi-version-concurrency-control">L20</a>), and an auditor summing 16 accounts while 4 threads move money between them:</p>
+
+```text title="audit while transferring"
+audits: 214 committed (all consistent), 19786 rejected by validation (would have been torn reads)
+```
+
+<p>Every audit that <em>committed</em> saw the exact total; the other 99% were rejected. Read-only transactions that touch many hot tuples <strong>starve under OCC</strong>: the lesson that motivates multi-versioning (<a href="/cookbook/p/multi-version-concurrency-control">L20</a>), where readers never abort.</p>
+
+<p><strong>OCC vs 2PL, 8 threads, 20 000 transactions each</strong> (the 2PL side is the lock manager from <a href="/cookbook/p/two-phase-locking">L18</a> with sorted lock order and detection, so it has no deadlock aborts, but a single global lock-table mutex, which is a large share of the gap):</p>
+
+```text title="transactions per second"
+workload (8 threads)                  OCC txn/s OCC aborts    2PL txn/s 2PL aborts
+write-only, 4 accounts (hot)             854427     284406        85101          0
+write-only, 64 accounts                15490118      26165       263231          0
+write-only, 100k accounts              15954132         17       829056          0
+95% read / 5% write, 100k              74304866          1       617512          0
+95% read / 5% write, 16 hot            42523504       9430       300215          0
+```
+
+<ul> <li><strong>Low contention</strong>: OCC is 19–140× faster; reads write nothing shared, so they scale linearly with cores, while each lock acquisition touches a central, contended structure.</li> <li><strong>High contention</strong>: OCC still finishes more transactions per second here (854k vs 85k), but at <strong>284 406 aborts for 160 000 commits</strong>: 64% of the work is thrown away and restarts keep colliding. With long transactions this flips; it's the classic regime where pessimistic locking wins, because waiting is cheaper than redoing.</li> <li>Mitigations used in practice: <strong>backoff</strong> on abort; <strong>abort-then-pessimistic fallback</strong> (lock the hot keys on retry); <strong>prioritized restarts</strong> (keep the original timestamp); batch/epoch commits (Silo) to amortize timestamp allocation.</li> </ul>
+"""
+
+[[sections]]
+heading = "Phantoms and index locking"
+body = """
+<p>An item-level protocol sees <code>SELECT COUNT(*) WHERE age &gt; 30</code> read tuples A, B, C and locks/validates only those. A concurrent <code>INSERT</code> of age 40 creates D that <em>should</em> have been in the result; no lock or stamp existed for it.</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Approach</th> <th>Idea</th> <th>Used by</th> </tr> </thead> <tbody> <tr> <td>Lock everything</td> <td>table (or all pages) lock</td> <td>fallback when there's no usable index</td> </tr> <tr> <td>Re-execute scans</td> <td>log predicates; re-run at commit and compare</td> <td>Hekaton (validation of scans)</td> </tr> <tr> <td>Predicate / precision locks</td> <td>lock the <em>condition</em>; inserts check against active predicates</td> <td>HyPer (precision locking), System R</td> </tr> <tr> <td><strong>Index locking</strong></td> <td>lock index keys <em>and the gaps between them</em></td> <td>InnoDB next-key locks, SQL Server key-range locks, ARIES/KVL</td> </tr> </tbody> </table></div>
+
+```text
+index keys:        10        20        30        40
+gap lock:     (-∞,10) (10,20)   (20,30)   (30,40)   (40,+∞)
+next-key lock on 30 = record lock on 30 + gap (20,30):  blocks inserting 21..29 and updating/deleting 30
+WHERE age BETWEEN 25 AND 35 locks gaps (20,30) and (30,40) plus records 30 (and its successor 40)
+no index on age ⇒ the scan walks the table ⇒ must lock the table (or all rows and gaps)
+```
+
+<p>Two details worth knowing: a <strong>missing key</strong> also needs a lock (<code>WHERE id = 25</code> returning nothing must stop another transaction from inserting 25: that's the gap lock); and locking the <em>successor</em> key is how range scans stop at the edge of their range.</p>
+"""
+
+[[sections]]
+heading = "Isolation levels as lock recipes"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Level</th> <th>Writes</th> <th>Reads</th> <th>Allows</th> </tr> </thead> <tbody> <tr> <td>READ UNCOMMITTED</td> <td>X locks to commit</td> <td>no locks</td> <td>dirty reads, unrepeatable reads, lost updates, phantoms</td> </tr> <tr> <td>READ COMMITTED</td> <td>X locks to commit</td> <td>S lock released right after the read</td> <td>unrepeatable reads, lost updates, phantoms</td> </tr> <tr> <td>REPEATABLE READ</td> <td>X locks to commit</td> <td>S locks to commit</td> <td>phantoms</td> </tr> <tr> <td>SERIALIZABLE</td> <td>X locks to commit + index/range locks</td> <td>S locks to commit + index/range locks</td> <td>none</td> </tr> </tbody> </table></div>
+
+<p>In an OCC or MVCC engine the same levels mean <em>when the read set is validated</em> (never, per statement, or at commit) or <em>which snapshot</em> a statement reads from; see <a href="/cookbook/p/multi-version-concurrency-control">L20</a>.</p>
+
+<aside data-call="warning"><b>T/O and OCC pitfalls</b><ul> <li><strong>Timestamp allocation</strong>: a global <code>AtomicU64::fetch_add</code> costs a cache-line transfer per transaction. Allocate in per-thread batches or use epochs, accepting "close enough" order.</li> <li><strong>Validation under a global latch</strong> is the classic bottleneck: validate <em>per tuple</em> as above or partition by key ranges.</li> <li><strong>Aborts after side effects</strong>: OCC aborts happen <em>late</em>. Anything with external effects (sending mail) must wait until after commit.</li> <li><strong>Starving long transactions</strong>: retry with backoff plus a pessimistic fallback or priority; otherwise a big scan never commits (see the audit result).</li> <li><strong>Writes you didn't read</strong>: a <em>blind</em> write needs no read validation, but if you later derive output from the value (<code>UPDATE … SET x = x + 1</code>), you <em>did</em> read it. Put it in the read set.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "On Optimistic Methods for Concurrency Control"
+url = "https://www.eecs.harvard.edu/~htk/publication/1981-tods-kung-robinson.pdf"
+
+[[sources]]
+title = "Speedy Transactions in Multicore In-Memory Databases (Silo)"
+url = "https://www.eecs.harvard.edu/~mickens/pubs/silo-sosp13.pdf"
+
+[[sources]]
+title = "High-Performance Concurrency Control Mechanisms for Main-Memory Databases (Hekaton)"
+url = "https://www.vldb.org/pvldb/vol5/p298_per-akelarson_vldb2012.pdf"
+
+[[sources]]
+title = "Staring into the Abyss"
+url = "https://www.vldb.org/pvldb/vol8/p209-yu.pdf"
+
+[[sources]]
+title = "Fast Serializable MVCC for Main-Memory Databases (HyPer)"
+url = "https://db.in.tum.de/~muehlbau/papers/mvcc.pdf"

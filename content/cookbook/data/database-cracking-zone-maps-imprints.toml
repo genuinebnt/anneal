@@ -1,0 +1,56 @@
+title = "Lightweight adaptive indexing"
+module = "Databases"
+module_order = 8
+chapter = "Indexes"
+chapter_order = 3
+order = 347
+kind = "recipe"
+lede = "Zone maps, column imprints and database cracking."
+level = "intermediate"
+code = ["examples/database/database_cracking_zone_maps_imprints.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>column stores</li><li>data-lake scanners</li><li>any scan-heavy engine that cannot afford (or does not know which) full indexes to build</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>zone maps (min/max per block) are Netezza "zone maps"</li><li>Parquet/<strong>orc</strong> row-group statistics</li><li>Delta/Iceberg file statistics</li><li>Snowflake micro-partition pruning</li><li>ClickHouse sparse primary index and skip indexes</li><li>PostgreSQL <strong>brin</strong></li><li>Oracle storage indexes</li><li>column imprints came out of MonetDB</li><li>database cracking was prototyped in MonetDB and its adaptive-indexing descendants. Course: CMU 15-721 (storage/scans)</li><li>the CIDR 2007 cracking paper below</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**What**. Three ways to avoid reading data a range predicate `lo <= v < hi` cannot match, ordered by how much they know up front:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Zone map</div><div class="cb-g-says"><p>Store (min,max) per block of 1024 values. A block with max&lt;lo or min&gt;=hi is skipped; a block entirely inside [lo,hi) is counted from metadata without touching a value.</p><p><strong>Cost.</strong> 16 bytes per block, built in one pass. Effectiveness is a property of the <strong>data layout</strong>, not of the structure: on sorted or clustered data nearly everything is pruned, on random data nothing is (every block spans the whole domain). That is why warehouses sort/cluster on load (see the Z-order recipe).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Column imprint</div><div class="cb-g-says"><p>Per cache-line block of 64 values keep a 64-bit vector with one bit per value <strong>bin</strong> (bins are equi-depth, taken from a sample). A query becomes a bit mask over bins; a block whose imprint has no bit in common with the mask is skipped, and a block whose bits are all inside fully-covered bins is counted wholesale.</p><p>Unlike min/max an imprint notices <strong>holes</strong>: a block holding values from two narrow, distant windows is pruned for a query between them where min/max cannot.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Database cracking</div><div class="cb-g-says"><p>No upfront work at all.</p><p>The column starts as an unsorted <strong>copy</strong>; every range query <strong>partitions</strong> the pieces it touches around its bounds (crack-in-two: one pass splitting a piece by a pivot; crack-in-three: one pass when both bounds fall into the same piece), remembers the pivot -&gt; position in a sorted map (the <strong>cracker index</strong>, a BTreeMap here; AVL tree in the paper), and answers the query as the contiguous slice between the two pivots.</p><p>Each query leaves the column a bit more sorted for the next one: the first query costs about one scan, later ones touch ever smaller pieces. Invariant: for every (pivot, pos) in the index, everything before <code>pos</code> is &lt; pivot and everything from <code>pos</code> on is &gt;= pivot.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>Described, not implemented: <strong>adaptive merging</strong> (sort small runs first, then merge only the key ranges queries ask for: more upfront work, converges in far fewer queries), <strong>sideways cracking</strong> (for multi-column queries keep a cracker <strong>map</strong> of (A,B) pairs so B follows A's swaps and tuple reconstruction stays cheap), <strong>stochastic cracking</strong> (add a random crack to each query so sequential workloads, shown below, do not degrade).</p></div></div></div>
+
+**Checks**. 2000 random range queries over 200k values: scan, zone map, imprint, sorted-array binary search and cracking return identical counts and sums; the cracker invariant holds after every one of the first 64 queries and at the end, and the cracked column is a permutation of the input.
+
+Work is counted in values touched (plus a model of n&#42;ceil(log2 n) comparisons for the sort).
+
+Asserted: cracking's first query costs about one scan, its cumulative work crosses below the scan's within 3 queries, its average per-query work falls monotonically across query windows, it is still cheaper than sorting after 2000 queries but does overtake the sort's total if the random queries keep coming, and a sequential workload costs several times more than a random one.
+
+Zone map pruning is asserted high on sorted data and &#126;zero on random data; imprints beat zone maps on holey blocks.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Idreos, Kersten, Manegold, "Database Cracking" CIDR 2007 <http://cidrdb.org/cidr2007/papers/cidr07p07.pdf> Sidirourgos, Kersten, "Column Imprints: A Secondary Index Structure" SIGMOD 2013 (cited by title; URL not checked) Idreos et al., "Merging What's Cracked, Cracking What's Merged: Adaptive Indexing in Main-Memory Column-Stores" (cited by title)
+
+```text
+PostgreSQL BRIN https://www.postgresql.org/docs/current/brin.html
+```
+"""
+
+[[sources]]
+title = "cidrdb.org/cidr2007/papers/cidr07p07.pdf"
+url = "http://cidrdb.org/cidr2007/papers/cidr07p07.pdf"
+
+[[sources]]
+title = "postgresql.org/docs/current/brin.html"
+url = "https://www.postgresql.org/docs/current/brin.html"

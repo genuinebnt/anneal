@@ -1,0 +1,966 @@
+title = "Testing a database"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Systems: databases"
+chapter_order = 8
+order = 153
+kind = "guide"
+lede = "Wrong results without a reference system · four oracles and a reference · a linearizability checker for concurrent histories · fuzzing and the shapes random input does not reach · the oracles tested by planting 21 bugs in the engine"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>A database can return a wrong answer without crashing.</strong> A wrong row count, a lost NULL, a join that keeps a row it should drop: nothing fails, the application just believes the result. Testing for this is the <em>oracle problem</em>: to know that a result is wrong you need an independent way to know what it should be. For SQL there is rarely a second implementation of the same dialect, so the practice is to find <strong>properties that must hold for any query on any data</strong>.</li> <li><strong>Ternary logic partitioning (TLP).</strong> For any predicate <code>p</code>, a row makes <code>p</code> true, false or NULL, and no row is two of those. So <code>SELECT … FROM t</code> must equal the union of <code>… WHERE p</code>, <code>… WHERE NOT p</code> and <code>… WHERE p IS NULL</code>. The identity extends to aggregates (counts and sums add, minimums and maximums combine), <code>GROUP BY</code>, <code>DISTINCT</code>, <code>HAVING</code> and joins. A bug that evaluates <code>p</code> or <code>NOT p</code> or <code>p IS NULL</code> inconsistently breaks the identity.</li> <li><strong>Non-optimizing reference engine construction (NoREC).</strong> <code>SELECT COUNT(*) FROM t WHERE p</code> goes through filter pushdown, index selection and simplification. <code>SELECT p FROM t</code> evaluates <code>p</code> as a projection and can be optimized almost not at all. The count of rows kept must equal the number of true values.</li> <li><strong>Differential execution.</strong> The same query with the optimizer on and off, with and without indexes, and (best of all) on a different system. SQLite is a free second opinion for the common subset of SQL.</li> <li><strong>Oracles based on consistency find inconsistent bugs.</strong> If the engine is wrong in the same way everywhere, TLP and NoREC and plan comparisons all agree with each other. Such bugs need a reference or a model. The detection matrix below measures how much that matters.</li> <li><strong>Concurrent systems are tested from the outside by their histories.</strong> Record what each client called and what it got back, with times, then ask whether <em>some</em> sequential order of the operations, consistent with real time, explains every result: this is <strong>linearizability</strong>. The checker needs no access to the system, which is why it can test a database across a network. Operations that never returned may or may not have happened, and the checker must allow both.</li> <li><strong>Fuzzing finds what authors do not think of, but only the shapes it can generate.</strong> Random bytes find parser panics quickly; they cannot build an expression nested ten thousand levels, a list of a hundred thousand values, or a string of a billion characters. Those are chosen on purpose.</li> </ul>
+"""
+
+[[sections]]
+heading = "The oracles"
+body = """
+```text
+TLP, for a predicate p and a FROM clause F
+   bag( SELECT *  FROM F )  =  bag( SELECT * FROM F WHERE p )  ⊎  bag( … WHERE NOT p )  ⊎  bag( … WHERE p IS NULL )
+   COUNT(*), COUNT(e)       add over the three partitions          SUM(e) adds the non-NULL sums (NULL if all are)
+   MIN(e), MAX(e)           the extreme of the extremes             GROUP BY k: counts of equal keys add
+   DISTINCT e               the union of the three DISTINCTs        HAVING h: the groups kept by h, NOT h, h IS NULL
+NoREC       COUNT(*) … WHERE p                 =  number of true values in  SELECT p …
+differential   optimizer on  =  optimizer off      indexes  =  no indexes      engine  =  SQLite
+row-wise    SELECT e FROM t (row by row)  =  SELECT e with that row's values written in as constants
+```
+
+:::deeper Reference: the oracles (a typed random generator of schemas, data and expressions; TLP, NoREC, the differential checks, SQLite as a reference)
+```rust title="src/test/qa.rs"
+//! Finding wrong query results without a reference system. A *test oracle* is a property that must hold for any query on any data; the
+//! tests generate random schemas, data and predicates, evaluate the property, and report a counterexample when it fails. Four oracles:
+//!
+//! * **TLP, ternary logic partitioning** (Rigger and Su 2020): for any predicate `p`, every row satisfies exactly one of `p`, `NOT p`,
+//!   `p IS NULL`, so a query without a `WHERE` equals the union of the three queries with those conditions. It applies to plain scans,
+//!   aggregates (`COUNT`, `SUM`, `MIN`, `MAX` combine across partitions), `GROUP BY`, `DISTINCT`, `HAVING` and joins.
+//! * **NoREC, non-optimizing reference engine construction** (Rigger and Su 2020): `SELECT COUNT(*) FROM t WHERE p` goes through filter
+//!   pushdown, index selection and simplification; `SELECT p FROM t` evaluates `p` as an ordinary projection. The number of true values
+//!   must equal the count.
+//! * **Differential execution**: the same query with the optimizer on and off, and with and without indexes, must agree.
+//! * **Row-by-row evaluation**: an expression evaluated over a table must equal the expression with the row's values written in as
+//!   constants (which the simplifier folds).
+use crate::engine::Engine;
+use crate::facade::Database;
+use crate::value::Value;
+use std::collections::BTreeMap;
+
+pub struct Rng(pub u64);
+impl Rng {
+    pub fn n(&mut self, m: u64) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0 % m
+    }
+    pub fn chance(&mut self, num: u64, den: u64) -> bool {
+        self.n(den) < num
+    }
+    pub fn pick<'a, T>(&mut self, xs: &'a [T]) -> &'a T {
+        &xs[self.n(xs.len() as u64) as usize]
+    }
+}
+
+// ---- schemas, data, expressions --------------------------------------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Ty {
+    Int,
+    Float,
+    Text,
+    Bool,
+}
+
+/// The columns every generated table has: a unique integer `id`, two more integers, a float, a text and a boolean.
+pub const COLUMNS: [(&str, Ty, &str); 6] = [("id", Ty::Int, "INTEGER"), ("i1", Ty::Int, "INTEGER"), ("i2", Ty::Int, "INTEGER"), ("f", Ty::Float, "FLOAT"), ("s", Ty::Text, "TEXT"), ("b", Ty::Bool, "BOOLEAN")];
+
+#[derive(Clone, Debug)]
+pub enum E {
+    Col(String, Ty),
+    Lit(String, Ty),
+    Not(Box<E>),
+    Neg(Box<E>),
+    Bin(&'static str, Box<E>, Box<E>),
+    Call(&'static str, Vec<E>),
+    IsNull(Box<E>, bool),
+    Between(Box<E>, Box<E>, Box<E>, bool),
+    In(Box<E>, Vec<E>, bool),
+}
+
+impl E {
+    /// SQL text. With `row`, every column reference is replaced by the literal for its value in that row (keyed by the column's text).
+    pub fn sql(&self, row: Option<&BTreeMap<String, String>>) -> String {
+        match self {
+            E::Col(c, _) => row.map_or(c.clone(), |r| r[c].clone()),
+            E::Lit(l, _) => l.clone(),
+            E::Not(e) => format!("(NOT {})", e.sql(row)),
+            E::Neg(e) => format!("(- {})", e.sql(row)),
+            E::Bin(op, a, b) => format!("({} {op} {})", a.sql(row), b.sql(row)),
+            E::Call(f, args) => format!("{f}({})", args.iter().map(|a| a.sql(row)).collect::<Vec<_>>().join(", ")),
+            E::IsNull(e, not) => format!("({} IS {}NULL)", e.sql(row), if *not { "NOT " } else { "" }),
+            E::Between(e, lo, hi, not) => format!("({} {}BETWEEN {} AND {})", e.sql(row), if *not { "NOT " } else { "" }, lo.sql(row), hi.sql(row)),
+            E::In(e, list, not) => format!("({} {}IN ({}))", e.sql(row), if *not { "NOT " } else { "" }, list.iter().map(|x| x.sql(row)).collect::<Vec<_>>().join(", ")),
+        }
+    }
+    pub fn ty(&self) -> Ty {
+        match self {
+            E::Col(_, t) | E::Lit(_, t) => *t,
+            E::Not(_) | E::IsNull(..) | E::Between(..) | E::In(..) => Ty::Bool,
+            E::Neg(e) => e.ty(),
+            E::Bin(op, a, b) => match *op {
+                "AND" | "OR" | "=" | "<>" | "<" | "<=" | ">" | ">=" => Ty::Bool,
+                "||" => Ty::Text,
+                _ if a.ty() == Ty::Float || b.ty() == Ty::Float => Ty::Float,
+                _ => Ty::Int,
+            },
+            E::Call(f, args) => match *f {
+                "length" => Ty::Int,
+                "upper" | "lower" => Ty::Text,
+                _ => args[0].ty(),
+            },
+        }
+    }
+}
+
+pub struct Gen<'a> {
+    pub rng: &'a mut Rng,
+    /// Column names as they appear in queries (`t1.i1`), with their types.
+    pub cols: Vec<(String, Ty)>,
+    /// Allow division and remainder by an expression, which can raise an error.
+    pub risky: bool,
+    /// Leave out `upper` and `lower`: SQLite changes the case of ASCII letters only, so the two systems differ on purpose.
+    pub sqlite_safe: bool,
+}
+
+impl Gen<'_> {
+    fn col(&mut self, ty: Ty) -> Option<E> {
+        let c: Vec<_> = self.cols.iter().filter(|(_, t)| *t == ty).collect();
+        (!c.is_empty()).then(|| {
+            let (n, t) = self.rng.pick(&c);
+            E::Col(n.clone(), *t)
+        })
+    }
+
+    pub fn expr(&mut self, ty: Ty, depth: usize) -> E {
+        let leaf = depth == 0 || self.rng.chance(1, 4);
+        match ty {
+            Ty::Int => {
+                if leaf {
+                    return if self.rng.chance(2, 3) { self.col(Ty::Int).unwrap_or(E::Lit("1".into(), Ty::Int)) } else { E::Lit(self.rng.pick(&["0", "1", "2", "3", "-1", "7", "100"]).to_string(), Ty::Int) };
+                }
+                match self.rng.n(8) {
+                    0 | 1 => E::Bin(self.rng.pick(&["+", "-", "*"]), Box::new(self.expr(Ty::Int, depth - 1)), Box::new(self.expr(Ty::Int, depth - 1))),
+                    2 => {
+                        let divisor = if self.risky { self.expr(Ty::Int, depth - 1) } else { E::Lit(self.rng.pick(&["2", "3", "-4", "7"]).to_string(), Ty::Int) };
+                        E::Bin(self.rng.pick(&["/", "%"]), Box::new(self.expr(Ty::Int, depth - 1)), Box::new(divisor))
+                    }
+                    3 => E::Call("abs", vec![self.expr(Ty::Int, depth - 1)]),
+                    4 => E::Call("coalesce", vec![self.expr(Ty::Int, depth - 1), self.expr(Ty::Int, depth - 1)]),
+                    5 => E::Neg(Box::new(self.expr(Ty::Int, depth - 1))),
+                    6 => E::Call("length", vec![self.expr(Ty::Text, depth - 1)]),
+                    _ => self.col(Ty::Int).unwrap_or(E::Lit("5".into(), Ty::Int)),
+                }
+            }
+            Ty::Float => {
+                if leaf {
+                    return if self.rng.chance(2, 3) { self.col(Ty::Float).unwrap_or(E::Lit("1.5".into(), Ty::Float)) } else { E::Lit(self.rng.pick(&["0.0", "1.5", "-2.25", "3.0", "0.1"]).to_string(), Ty::Float) };
+                }
+                match self.rng.n(4) {
+                    0 => {
+                        let right = if self.rng.chance(1, 2) { Ty::Int } else { Ty::Float };
+                        E::Bin(self.rng.pick(&["+", "-", "*"]), Box::new(self.expr(Ty::Float, depth - 1)), Box::new(self.expr(right, depth - 1)))
+                    }
+                    1 => E::Call("abs", vec![self.expr(Ty::Float, depth - 1)]),
+                    2 => E::Call("coalesce", vec![self.expr(Ty::Float, depth - 1), self.expr(Ty::Float, depth - 1)]),
+                    _ => E::Neg(Box::new(self.expr(Ty::Float, depth - 1))),
+                }
+            }
+            Ty::Text => {
+                if leaf {
+                    return if self.rng.chance(2, 3) { self.col(Ty::Text).unwrap_or(E::Lit("'a'".into(), Ty::Text)) } else { E::Lit(self.rng.pick(&["''", "'a'", "'B'", "'ab'", "'it''s'", "'\\u{e9}'"]).to_string(), Ty::Text) };
+                }
+                match self.rng.n(4) {
+                    0 if !self.sqlite_safe => E::Call(self.rng.pick(&["upper", "lower"]), vec![self.expr(Ty::Text, depth - 1)]),
+                    1 => E::Bin("||", Box::new(self.expr(Ty::Text, depth - 1)), Box::new(self.expr(Ty::Text, depth - 1))),
+                    2 => E::Call("coalesce", vec![self.expr(Ty::Text, depth - 1), self.expr(Ty::Text, depth - 1)]),
+                    _ => self.col(Ty::Text).unwrap_or(E::Lit("'x'".into(), Ty::Text)),
+                }
+            }
+            Ty::Bool => {
+                if leaf {
+                    return match self.rng.n(4) {
+                        0 => self.col(Ty::Bool).unwrap_or(E::Lit("TRUE".into(), Ty::Bool)),
+                        1 => E::Lit(self.rng.pick(&["TRUE", "FALSE", "NULL"]).to_string(), Ty::Bool),
+                        _ => self.compare(depth),
+                    };
+                }
+                match self.rng.n(9) {
+                    0 | 1 => E::Bin(self.rng.pick(&["AND", "OR"]), Box::new(self.expr(Ty::Bool, depth - 1)), Box::new(self.expr(Ty::Bool, depth - 1))),
+                    2 => E::Not(Box::new(self.expr(Ty::Bool, depth - 1))),
+                    3 => {
+                        let t = *self.rng.pick(&[Ty::Int, Ty::Float, Ty::Text, Ty::Bool]);
+                        E::IsNull(Box::new(self.expr(t, depth - 1)), self.rng.chance(1, 2))
+                    }
+                    4 => E::Between(Box::new(self.expr(Ty::Int, depth - 1)), Box::new(self.expr(Ty::Int, depth - 1)), Box::new(self.expr(Ty::Int, depth - 1)), self.rng.chance(1, 3)),
+                    5 => {
+                        let n = 1 + self.rng.n(3) as usize;
+                        let mut list: Vec<E> = (0..n).map(|_| E::Lit(self.rng.n(6).to_string(), Ty::Int)).collect();
+                        if self.rng.chance(1, 3) {
+                            list.push(E::Lit("NULL".into(), Ty::Int));
+                        }
+                        E::In(Box::new(self.expr(Ty::Int, depth - 1)), list, self.rng.chance(1, 2))
+                    }
+                    6 => E::Call("coalesce", vec![self.expr(Ty::Bool, depth - 1), self.expr(Ty::Bool, depth - 1)]),
+                    _ => self.compare(depth),
+                }
+            }
+        }
+    }
+
+    fn compare(&mut self, depth: usize) -> E {
+        let op = *self.rng.pick(&["=", "<>", "<", "<=", ">", ">="]);
+        let d = depth.saturating_sub(1);
+        let (a, b) = match self.rng.n(4) {
+            0 | 1 => (self.expr(Ty::Int, d), self.expr(Ty::Int, d)),
+            2 => {
+                let right = if self.rng.chance(1, 2) { Ty::Int } else { Ty::Float };
+                (self.expr(Ty::Float, d), self.expr(right, d))
+            }
+            _ => (self.expr(Ty::Text, d), self.expr(Ty::Text, d)),
+        };
+        E::Bin(op, Box::new(a), Box::new(b))
+    }
+}
+
+pub fn literal(v: &Value) -> String {
+    match v {
+        Value::Null => "NULL".into(),
+        Value::Int(i) => i.to_string(),
+        Value::Float(f) => format!("{f:?}"),
+        Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.into(),
+        Value::Text(s) => format!("'{}'", s.replace('\\'', "''")),
+    }
+}
+
+fn random_value(rng: &mut Rng, ty: Ty) -> Value {
+    if rng.chance(1, 6) {
+        return Value::Null;
+    }
+    match ty {
+        Ty::Int => Value::Int(*rng.pick(&[0, 1, 2, 3, 4, 5, -1, -2, 7, 100])),
+        Ty::Float => Value::Float(*rng.pick(&[0.0, 1.5, -2.25, 3.0, 0.1, 2.0])),
+        Ty::Text => Value::Text(rng.pick(&["", "a", "B", "ab", "it's", "\\u{e9}", "a b"]).to_string().into()),
+        Ty::Bool => Value::Bool(rng.chance(1, 2)),
+    }
+}
+
+/// A database with tables `t1`, `t2` (and `t3`) of the standard columns and 10 to 30 random rows each. The same seed gives the same data;
+/// `indexes` adds an index on `id` of each table (the engine's indexes are unique).
+pub struct World {
+    pub db: Database,
+    pub rows: Vec<Vec<Vec<Value>>>,
+}
+impl World {
+    pub fn new(seed: u64, indexes: bool) -> World {
+        let mut rng = Rng(seed * 7919 + 13);
+        let mut db = Database::with_pool(256, 0);
+        let mut all = vec![];
+        for t in ["t1", "t2", "t3"] {
+            let cols: Vec<String> = COLUMNS.iter().map(|(n, _, ty)| format!("{n} {ty}")).collect();
+            db.engine().execute(&format!("CREATE TABLE {t}({})", cols.join(", "))).unwrap();
+            let n = 10 + rng.n(21) as usize;
+            let rows: Vec<Vec<Value>> = (0..n).map(|i| COLUMNS.iter().map(|(name, ty, _)| if *name == "id" { Value::Int(i as i64) } else { random_value(&mut rng, *ty) }).collect()).collect();
+            let vals: Vec<String> = rows.iter().map(|r| format!("({})", r.iter().map(literal).collect::<Vec<_>>().join(", "))).collect();
+            db.engine().execute(&format!("INSERT INTO {t} VALUES {}", vals.join(", "))).unwrap();
+            if indexes {
+                db.engine().execute(&format!("CREATE INDEX {t}_id ON {t}(id)")).unwrap();
+            }
+            all.push(rows);
+        }
+        World { db, rows: all }
+    }
+    pub fn engine(&mut self) -> &mut Engine<'static> {
+        self.db.engine()
+    }
+}
+
+// ---- running queries -------------------------------------------------------------------------------------------------------------------
+
+pub type Bag = Vec<Vec<Value>>;
+
+/// A sort and grouping key for a row in which -0.0 and 0.0 are the same value, as they are for SQL equality.
+pub fn row_key(row: &[Value]) -> String {
+    let norm: Vec<Value> = row.iter().map(|v| if let Value::Float(f) = v { Value::Float(f + 0.0) } else { v.clone() }).collect();
+    format!("{norm:?}")
+}
+
+/// Rows of the last statement of `sql`, in a canonical order, or the engine's error.
+pub fn run(engine: &mut Engine, sql: &str) -> Result<Bag, String> {
+    let mut r = engine.execute(sql).map_err(|e| e.0)?;
+    let mut rows = r.pop().map(|t| t.rows).unwrap_or_default();
+    rows.sort_by_key(|r| row_key(r));
+    Ok(rows)
+}
+
+pub fn same(a: &Bag, b: &Bag) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.len() == y.len() && x.iter().zip(y).all(|(p, q)| value_eq(p, q)))
+}
+
+/// Equality that treats NULL as equal to NULL and floats as equal within rounding (sums are added in different orders).
+pub fn value_eq(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Float(x), Value::Float(y)) => x == y || (x - y).abs() <= 1e-9 * x.abs().max(y.abs()).max(1.0),
+        (Value::Int(x), Value::Float(y)) | (Value::Float(y), Value::Int(x)) => (*x as f64 - y).abs() <= 1e-9,
+        _ => a == b,
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Outcome {
+    Checked,
+    /// The query failed in a way unrelated to the property (division by zero, a type error): nothing is learned.
+    Skipped,
+    /// One plan raised a runtime error where the other returned rows. SQL leaves the order of evaluation unspecified, so a plan that
+    /// evaluates a condition on a row that the other plan has already excluded can fail; this is reported, but it is not a wrong result.
+    OrderDependentError,
+}
+
+/// A counterexample: the property that failed and the queries involved.
+#[derive(Debug)]
+pub struct Violation(pub String);
+
+fn concat(parts: &[Bag]) -> Bag {
+    let mut all: Bag = parts.iter().flatten().cloned().collect();
+    all.sort_by_key(|r| row_key(r));
+    all
+}
+
+fn fail<T>(what: &str, queries: &[String], detail: String) -> Result<T, Violation> {
+    Err(Violation(format!("{what}\\n{}\\n{detail}", queries.join("\\n"))))
+}
+
+/// The three queries that partition `from` by predicate `p`, given a select list and optional extra clauses after the condition.
+fn partitions(select: &str, from: &str, p: &str, tail: &str) -> [String; 3] {
+    [format!("SELECT {select} FROM {from} WHERE {p}{tail}"), format!("SELECT {select} FROM {from} WHERE NOT {p}{tail}"), format!("SELECT {select} FROM {from} WHERE {p} IS NULL{tail}")]
+}
+
+/// TLP on a scan, a join, or any `FROM` clause: the rows of `from` equal the union of its three partitions by `p`.
+pub fn tlp_where(engine: &mut Engine, from: &str, p: &E) -> Result<Outcome, Violation> {
+    let ps = p.sql(None);
+    let base = format!("SELECT * FROM {from}");
+    let Ok(whole) = run(engine, &base) else { return Ok(Outcome::Skipped) };
+    let qs = partitions("*", from, &ps, "");
+    let mut parts = vec![];
+    for q in &qs {
+        match run(engine, q) {
+            Ok(r) => parts.push(r),
+            Err(_) => return Ok(Outcome::Skipped),
+        }
+    }
+    let union = concat(&parts);
+    if !same(&whole, &union) {
+        return fail("TLP: the rows of the table differ from the union of the three partitions", &[base, qs[0].clone(), qs[1].clone(), qs[2].clone()], format!("whole {} rows, union {} rows", whole.len(), union.len()));
+    }
+    Ok(Outcome::Checked)
+}
+
+/// TLP on aggregates: COUNT, SUM, MIN and MAX of an integer expression combine across the partitions.
+pub fn tlp_aggregate(engine: &mut Engine, from: &str, p: &E, e: &E) -> Result<Outcome, Violation> {
+    let es = e.sql(None);
+    let select = format!("COUNT(*), COUNT({es}), SUM({es}), MIN({es}), MAX({es})");
+    let base = format!("SELECT {select} FROM {from}");
+    let Ok(whole) = run(engine, &base) else { return Ok(Outcome::Skipped) };
+    let qs = partitions(&select, from, &p.sql(None), "");
+    let mut rows = vec![];
+    for q in &qs {
+        match run(engine, q) {
+            Ok(r) => rows.push(r.into_iter().next().unwrap()),
+            Err(_) => return Ok(Outcome::Skipped),
+        }
+    }
+    let count = |i: usize| -> i64 { rows.iter().map(|r| if let Value::Int(n) = r[i] { n } else { 0 }).sum() };
+    let present = |i: usize| -> Vec<&Value> { rows.iter().map(|r| &r[i]).filter(|v| !v.is_null()).collect() };
+    let num = |v: &Value| -> f64 { match v { Value::Int(i) => *i as f64, Value::Float(f) => *f, _ => 0.0 } };
+    let sum = { let p = present(2); if p.is_empty() { Value::Null } else { Value::Float(p.iter().map(|v| num(v)).sum()) } };
+    let extreme = |i: usize, max: bool| -> Value {
+        present(i).into_iter().cloned().reduce(|a, b| if (num(&a) < num(&b)) == max { b } else { a }).unwrap_or(Value::Null)
+    };
+    let combined = vec![Value::Int(count(0)), Value::Int(count(1)), sum, extreme(3, false), extreme(4, true)];
+    if !whole[0].iter().zip(&combined).all(|(a, b)| value_eq(a, b)) {
+        return fail("TLP: aggregates over the table differ from the aggregates combined over the partitions", &[base, qs[0].clone(), qs[1].clone(), qs[2].clone()], format!("whole {:?}, combined {combined:?}", whole[0]));
+    }
+    Ok(Outcome::Checked)
+}
+
+/// TLP on `GROUP BY`: the groups of the table equal the groups of the partitions after adding up the counts of equal keys.
+pub fn tlp_group_by(engine: &mut Engine, from: &str, p: &E, key: &E) -> Result<Outcome, Violation> {
+    let ks = key.sql(None);
+    let select = format!("{ks}, COUNT(*)");
+    let base = format!("SELECT {select} FROM {from} GROUP BY {ks}");
+    let Ok(whole) = run(engine, &base) else { return Ok(Outcome::Skipped) };
+    let qs = partitions(&select, from, &p.sql(None), &format!(" GROUP BY {ks}"));
+    let mut merged: BTreeMap<String, (Value, i64)> = BTreeMap::new();
+    for q in &qs {
+        let Ok(r) = run(engine, q) else { return Ok(Outcome::Skipped) };
+        for row in r {
+            let n = if let Value::Int(n) = row[1] { n } else { 0 };
+            merged.entry(row_key(&row[..1])).or_insert((row[0].clone(), 0)).1 += n;
+        }
+    }
+    let combined: Bag = merged.into_values().map(|(k, n)| vec![k, Value::Int(n)]).collect();
+    let mut combined = combined;
+    combined.sort_by_key(|r| row_key(r));
+    if !same(&whole, &combined) {
+        return fail("TLP: GROUP BY over the table differs from GROUP BY over the partitions", &[base, qs[0].clone(), qs[1].clone(), qs[2].clone()], format!("whole {whole:?}\\ncombined {combined:?}"));
+    }
+    Ok(Outcome::Checked)
+}
+
+/// TLP on `DISTINCT`: the distinct values of the table equal the distinct values of the union of the partitions.
+pub fn tlp_distinct(engine: &mut Engine, from: &str, p: &E, e: &E) -> Result<Outcome, Violation> {
+    let es = e.sql(None);
+    let base = format!("SELECT DISTINCT {es} FROM {from}");
+    let Ok(whole) = run(engine, &base) else { return Ok(Outcome::Skipped) };
+    let qs = partitions(&format!("DISTINCT {es}"), from, &p.sql(None), "");
+    let mut seen: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for q in &qs {
+        let Ok(r) = run(engine, q) else { return Ok(Outcome::Skipped) };
+        for row in r {
+            seen.insert(row_key(&row), row);
+        }
+    }
+    let mut combined: Bag = seen.into_values().collect();
+    combined.sort_by_key(|r| row_key(r));
+    if !same(&whole, &combined) {
+        return fail("TLP: DISTINCT over the table differs from DISTINCT over the partitions", &[base, qs[0].clone(), qs[1].clone(), qs[2].clone()], format!("whole {whole:?}\\ncombined {combined:?}"));
+    }
+    Ok(Outcome::Checked)
+}
+
+/// TLP on `HAVING`: the groups of a query equal the union of the groups kept by `HAVING p`, `HAVING NOT p` and `HAVING p IS NULL`.
+pub fn tlp_having(engine: &mut Engine, from: &str, key: &str, p: &str) -> Result<Outcome, Violation> {
+    let base = format!("SELECT {key}, COUNT(*) FROM {from} GROUP BY {key}");
+    let Ok(whole) = run(engine, &base) else { return Ok(Outcome::Skipped) };
+    let qs = [format!("{base} HAVING {p}"), format!("{base} HAVING NOT {p}"), format!("{base} HAVING {p} IS NULL")];
+    let mut parts = vec![];
+    for q in &qs {
+        match run(engine, q) {
+            Ok(r) => parts.push(r),
+            Err(_) => return Ok(Outcome::Skipped),
+        }
+    }
+    let union = concat(&parts);
+    if !same(&whole, &union) {
+        return fail("TLP: groups differ from the union of the HAVING partitions", &[base, qs[0].clone(), qs[1].clone(), qs[2].clone()], format!("whole {whole:?}\\nunion {union:?}"));
+    }
+    Ok(Outcome::Checked)
+}
+
+/// NoREC: the number of rows that `WHERE p` keeps equals the number of true values of `SELECT p`.
+pub fn norec(engine: &mut Engine, from: &str, p: &E) -> Result<Outcome, Violation> {
+    let ps = p.sql(None);
+    let optimized = format!("SELECT COUNT(*) FROM {from} WHERE {ps}");
+    let unoptimized = format!("SELECT {ps} FROM {from}");
+    let (Ok(a), Ok(b)) = (run(engine, &optimized), run(engine, &unoptimized)) else { return Ok(Outcome::Skipped) };
+    let count = if let Value::Int(n) = a[0][0] { n } else { -1 };
+    let trues = b.iter().filter(|r| r[0] == Value::Bool(true)).count() as i64;
+    if count != trues {
+        return fail("NoREC: WHERE p keeps a different number of rows than SELECT p reports as true", &[optimized, unoptimized], format!("count {count}, true values {trues}"));
+    }
+    Ok(Outcome::Checked)
+}
+
+/// The same query with the optimizer on and off must return the same rows.
+pub fn optimizer_differential(engine: &mut Engine, sql: &str) -> Result<Outcome, Violation> {
+    engine.optimize = true;
+    let a = run(engine, sql);
+    engine.optimize = false;
+    let b = run(engine, sql);
+    engine.optimize = true;
+    match (a, b) {
+        (Ok(a), Ok(b)) if same(&a, &b) => Ok(Outcome::Checked),
+        (Ok(a), Ok(b)) => fail("optimizer differential: the optimized and unoptimized plans return different rows", &[sql.to_string()], format!("optimized {} rows, unoptimized {} rows", a.len(), b.len())),
+        (Err(_), Err(_)) => Ok(Outcome::Skipped),
+        (a, b) => {
+            let runtime = |r: &Result<Bag, String>| matches!(r, Err(m) if m.contains("division by zero") || m.contains("type error") || m.contains("out of range") || m.contains("cannot compare"));
+            if runtime(&a) || runtime(&b) { Ok(Outcome::OrderDependentError) } else { fail("optimizer differential: only one of the plans failed", &[sql.to_string()], format!("optimized {:?}, unoptimized {:?}", a.map(|r| r.len()), b.map(|r| r.len()))) }
+        }
+    }
+}
+
+/// The same query on a database with indexes and on one without must return the same rows.
+pub fn index_differential(with: &mut Engine, without: &mut Engine, sql: &str) -> Result<Outcome, Violation> {
+    match (run(with, sql), run(without, sql)) {
+        (Ok(a), Ok(b)) if same(&a, &b) => Ok(Outcome::Checked),
+        (Ok(a), Ok(b)) => fail("index differential: the database with indexes returns different rows", &[sql.to_string()], format!("with indexes {} rows, without {} rows", a.len(), b.len())),
+        (Err(_), Err(_)) => Ok(Outcome::Skipped),
+        (a, b) => {
+            let runtime = |r: &Result<Bag, String>| matches!(r, Err(m) if m.contains("division by zero") || m.contains("type error") || m.contains("out of range") || m.contains("cannot compare"));
+            if runtime(&a) || runtime(&b) { Ok(Outcome::OrderDependentError) } else { fail("index differential: only one of the databases failed", &[sql.to_string()], format!("with {:?}, without {:?}", a.map(|r| r.len()), b.map(|r| r.len()))) }
+        }
+    }
+}
+
+/// The value of `e` for each row of `table`, computed by the engine over the table and by the engine over the row written as constants.
+pub fn rowwise(engine: &mut Engine, table: &str, rows: &[Vec<Value>], e: &E) -> Result<Outcome, Violation> {
+    let es = e.sql(None);
+    let over_table = format!("SELECT id, i1, i2, f, s, b, {es} FROM {table}");
+    let Ok(mut table_rows) = engine.execute(&over_table).map(|mut r| r.pop().unwrap().rows).map_err(|e| e.0) else { return Ok(Outcome::Skipped) };
+    table_rows.sort_by_key(|r| row_key(r));
+    let mut by_row = vec![];
+    for r in rows {
+        let subst: BTreeMap<String, String> = COLUMNS.iter().zip(r).map(|((n, _, _), v)| (format!("{table}.{n}"), literal(v))).collect();
+        let constant = e.sql(Some(&subst));
+        let q = format!("SELECT {constant}");
+        let v = match engine.execute(&q) {
+            Ok(mut t) => t.pop().unwrap().rows.pop().unwrap().pop().unwrap(),
+            Err(_) => return Ok(Outcome::Skipped),
+        };
+        let mut full = r.clone();
+        full.push(v);
+        by_row.push(full);
+    }
+    by_row.sort_by_key(|r| row_key(r));
+    if !same(&table_rows, &by_row) {
+        let at = table_rows.iter().zip(&by_row).position(|(a, b)| !same(&vec![a.clone()], &vec![b.clone()])).unwrap_or(0);
+        return fail("row-wise: the expression over the table differs from the expression over the row as constants", &[over_table, format!("SELECT {}", e.sql(None))], format!("first difference: table {:?}, constants {:?}", table_rows.get(at), by_row.get(at)));
+    }
+    Ok(Outcome::Checked)
+}
+
+// ---- a reference system: SQLite ------------------------------------------------------------------------------------------------------
+
+/// Is the `sqlite3` command-line shell installed?
+pub fn sqlite_available() -> bool {
+    std::process::Command::new("sqlite3").arg("--version").output().is_ok()
+}
+
+/// The statements that create `world`'s tables in SQLite (booleans become 0 and 1).
+pub fn sqlite_setup(world: &World) -> String {
+    let mut out = String::new();
+    for (t, rows) in ["t1", "t2", "t3"].iter().zip(&world.rows) {
+        let cols: Vec<String> = COLUMNS.iter().map(|(n, ty, _)| format!("{n} {}", match ty { Ty::Int | Ty::Bool => "INTEGER", Ty::Float => "REAL", Ty::Text => "TEXT" })).collect();
+        out += &format!("CREATE TABLE {t}({});\\n", cols.join(", "));
+        for r in rows {
+            let vals: Vec<String> = r.iter().map(|v| match v { Value::Bool(b) => (*b as i32).to_string(), v => literal(v) }).collect();
+            out += &format!("INSERT INTO {t} VALUES ({});\\n", vals.join(", "));
+        }
+    }
+    out
+}
+
+/// One cell, normalized so that the two systems' renderings compare: NULL, a number, or text.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Cell {
+    Null,
+    Num(f64),
+    Text(String),
+}
+fn cell_eq(a: &Cell, b: &Cell) -> bool {
+    match (a, b) {
+        (Cell::Num(x), Cell::Num(y)) => x == y || (x - y).abs() <= 1e-9 * x.abs().max(y.abs()).max(1.0),
+        _ => a == b,
+    }
+}
+fn engine_cell(v: &Value) -> Cell {
+    match v {
+        Value::Null => Cell::Null,
+        Value::Int(i) => Cell::Num(*i as f64),
+        Value::Float(f) => Cell::Num(*f),
+        Value::Bool(b) => Cell::Num(*b as i32 as f64),
+        Value::Text(s) => Cell::Text(s.to_string()),
+    }
+}
+fn sqlite_cell(s: &str) -> Cell {
+    if s == "NULL" { Cell::Null } else if let Ok(f) = s.parse::<f64>() { Cell::Num(f) } else { Cell::Text(s.to_string()) }
+}
+fn cell_key(c: &Cell) -> String {
+    match c { Cell::Num(f) => format!("n{:.6e}", f + 0.0), o => format!("{o:?}") }
+}
+
+/// Run the queries in one `sqlite3` process over `setup`; one result (rows of cells, or the error text) per query.
+pub fn sqlite_batch(setup: &str, queries: &[String]) -> Vec<Result<Vec<Vec<Cell>>, String>> {
+    use std::io::Write;
+    let mut script = String::from(".mode list\\n.separator \\"\\\\t\\"\\n.nullvalue NULL\\n.bail off\\n");
+    script += setup;
+    for (i, q) in queries.iter().enumerate() {
+        script += &format!("SELECT '@@{i}';\\n{q};\\n");
+    }
+    if let Ok(path) = std::env::var("QA_DUMP") {
+        let _ = std::fs::write(path, &script);
+    }
+    let mut child = std::process::Command::new("sqlite3").stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().expect("sqlite3 starts");
+    let mut stdin = child.stdin.take().unwrap();
+    let writer = std::thread::spawn(move || stdin.write_all(script.as_bytes()).unwrap());
+    let out = child.wait_with_output().unwrap();
+    writer.join().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let errs = String::from_utf8_lossy(&out.stderr).into_owned();
+    let mut results: Vec<Result<Vec<Vec<Cell>>, String>> = (0..queries.len()).map(|_| Ok(vec![])).collect();
+    let mut current = None;
+    for line in text.lines() {
+        if let Some(n) = line.strip_prefix("@@") {
+            current = n.parse::<usize>().ok();
+        } else if let (Some(i), Ok(rows)) = (current, &mut results[current.unwrap_or(0)]) {
+            let _ = i;
+            rows.push(line.split('\\t').map(sqlite_cell).collect());
+        }
+    }
+    // errors are reported on stderr as "Error: near line N: ..."; attribute each to the query whose line it names
+    for line in errs.lines() {
+        if let Some(rest) = line.strip_prefix("Error: near line ") {
+            if let Some(n) = rest.split(':').next().and_then(|n| n.trim().parse::<usize>().ok()) {
+                let setup_lines = 4 + setup.lines().count();
+                if n > setup_lines {
+                    let q = (n - setup_lines - 1) / 2;
+                    if q < results.len() {
+                        results[q] = Err(line.to_string());
+                    }
+                }
+            }
+        }
+    }
+    results
+}
+
+/// Compare the engine with SQLite on each query: the same multiset of rows. A query the engine rejects is skipped; a query SQLite rejects
+/// and the engine accepts is a violation.
+pub fn sqlite_compare(engine: &mut Engine, setup: &str, queries: &[String]) -> Result<(usize, usize), Violation> {
+    let reference = sqlite_batch(setup, queries);
+    let (mut checked, mut skipped) = (0, 0);
+    for (q, theirs) in queries.iter().zip(reference) {
+        let Ok(rows) = engine.execute(q).map(|mut r| r.pop().map(|t| t.rows).unwrap_or_default()) else { skipped += 1; continue };
+        let mut ours: Vec<Vec<Cell>> = rows.iter().map(|r| r.iter().map(engine_cell).collect()).collect();
+        let Ok(mut theirs) = theirs else { return fail("SQLite rejects a query the engine accepts", &[q.clone()], "".into()) };
+        let key = |r: &Vec<Cell>| r.iter().map(cell_key).collect::<Vec<_>>().join("|");
+        ours.sort_by_key(key);
+        theirs.sort_by_key(key);
+        // SQLite prints an empty result as no lines; a query with one column of text '' prints an empty line, which is one row with one cell
+        let same_rows = ours.len() == theirs.len() && ours.iter().zip(&theirs).all(|(a, b)| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| cell_eq(x, y)));
+        if !same_rows {
+            return fail("the engine and SQLite return different rows", &[q.clone()], format!("engine {} rows: {:?}\\nSQLite {} rows: {:?}", ours.len(), ours.iter().take(4).collect::<Vec<_>>(), theirs.len(), theirs.iter().take(4).collect::<Vec<_>>()));
+        }
+        checked += 1;
+    }
+    Ok((checked, skipped))
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Linearizability from the outside"
+body = """
+<p>A history is a list of operations, each with the client, the input, the output (or none if it never returned), and the times of the call and the return. The checker searches for an order. At each step it may linearize any operation that no unplaced, completed operation precedes in real time; it applies it to the sequential model; it recurses; it remembers the (placed-set, state) pairs that failed so that the search does not repeat itself (Lowe's refinement of Wing and Gong). A history is linearizable when all completed operations can be placed. Two models are included, a register and a key-value map with compare-and-swap; the map is checked key by key, because linearizability is <em>local</em>: a history is linearizable exactly when the history of each object is.</p>
+
+:::deeper Reference: the linearizability checker, a register and a key-value model
+```rust title="src/test/lin.rs"
+//! A linearizability checker (Wing and Gong 1993, with Lowe's memoization of visited states). Given what clients observed of a concurrent
+//! object, a history of operations with the times they were called and returned, it decides whether some total order of the operations
+//! exists that respects real time (an operation that returned before another was called comes first) and in which every operation
+//! returns what a sequential object would. It needs only the history, never the implementation, which is why it can check a database
+//! from outside. Operations that never returned (a timeout, a crash) may or may not have taken effect, and may take effect at any time
+//! after their call.
+use std::collections::{BTreeMap, HashSet};
+use std::hash::Hash;
+
+/// A sequential specification: how the object behaves when operations are applied one at a time.
+pub trait Model {
+    type State: Clone + Eq + Hash;
+    type Input: Clone;
+    type Output: Clone + PartialEq;
+    fn init(&self) -> Self::State;
+    /// Apply `input`. `output` is what the client saw, or `None` when the operation never returned. Returns the next state, or `None`
+    /// if the object could not have produced that output in this state.
+    fn step(&self, state: &Self::State, input: &Self::Input, output: Option<&Self::Output>) -> Option<Self::State>;
+}
+
+#[derive(Clone, Debug)]
+pub struct Op<I, O> {
+    pub client: usize,
+    pub input: I,
+    /// `None` when the operation never returned.
+    pub output: Option<O>,
+    /// Logical or physical times; only their order matters. `call < ret`.
+    pub call: u64,
+    pub ret: u64,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Verdict {
+    Linearizable,
+    NotLinearizable,
+    /// The search was stopped after `limit` steps without an answer.
+    Unknown,
+}
+
+/// Check one history. `limit` bounds the number of search steps (the problem is NP-complete).
+pub fn check<M: Model>(model: &M, history: &[Op<M::Input, M::Output>], limit: u64) -> Verdict {
+    let n = history.len();
+    let words = n.div_ceil(64).max(1);
+    let completed: Vec<usize> = (0..n).filter(|&i| history[i].output.is_some()).collect();
+    let mut cache: HashSet<(Vec<u64>, M::State)> = HashSet::new();
+    let mut steps = 0u64;
+    let mut done = vec![0u64; words];
+    let initial = model.init();
+    match search(model, history, &completed, &mut done, &initial, &mut cache, &mut steps, limit) {
+        Some(true) => Verdict::Linearizable,
+        Some(false) => Verdict::NotLinearizable,
+        None => Verdict::Unknown,
+    }
+}
+
+fn bit(v: &[u64], i: usize) -> bool {
+    v[i / 64] >> (i % 64) & 1 == 1
+}
+
+#[allow(clippy::too_many_arguments)]
+fn search<M: Model>(model: &M, h: &[Op<M::Input, M::Output>], completed: &[usize], done: &mut Vec<u64>, state: &M::State, cache: &mut HashSet<(Vec<u64>, M::State)>, steps: &mut u64, limit: u64) -> Option<bool> {
+    // success: every operation that returned has been placed in the order (pending ones may be left out)
+    if completed.iter().all(|&i| bit(done, i)) {
+        return Some(true);
+    }
+    if *steps >= limit {
+        return None;
+    }
+    *steps += 1;
+    if cache.contains(&(done.clone(), state.clone())) {
+        return Some(false);
+    }
+    // an operation can go next if no unplaced operation had already returned before it was called
+    let first_return = (0..h.len()).filter(|&i| !bit(done, i) && h[i].output.is_some()).map(|i| h[i].ret).min().unwrap();
+    for i in 0..h.len() {
+        if bit(done, i) || h[i].call > first_return {
+            continue;
+        }
+        if let Some(next) = model.step(state, &h[i].input, h[i].output.as_ref()) {
+            done[i / 64] |= 1 << (i % 64);
+            let r = search(model, h, completed, done, &next, cache, steps, limit);
+            done[i / 64] &= !(1 << (i % 64));
+            match r {
+                Some(true) => return Some(true),
+                None => return None,
+                Some(false) => {}
+            }
+        }
+    }
+    cache.insert((done.clone(), state.clone()));
+    Some(false)
+}
+
+// ---- two models ------------------------------------------------------------------------------------------------------------------------
+
+/// A single read/write register, initially 0.
+pub struct Register;
+#[derive(Clone, Debug, PartialEq)]
+pub enum RegIn {
+    Write(i64),
+    Read,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub enum RegOut {
+    Ack,
+    Value(i64),
+}
+impl Model for Register {
+    type State = i64;
+    type Input = RegIn;
+    type Output = RegOut;
+    fn init(&self) -> i64 {
+        0
+    }
+    fn step(&self, s: &i64, input: &RegIn, output: Option<&RegOut>) -> Option<i64> {
+        match (input, output) {
+            (RegIn::Write(v), None | Some(RegOut::Ack)) => Some(*v),
+            (RegIn::Read, None) => Some(*s),
+            (RegIn::Read, Some(RegOut::Value(v))) if v == s => Some(*s),
+            _ => None,
+        }
+    }
+}
+
+/// A map from keys to values with `put`, `get` and compare-and-swap; absent keys read as `None`.
+pub struct KvModel;
+#[derive(Clone, Debug, PartialEq)]
+pub enum KvIn {
+    Put(u32, i64),
+    Get(u32),
+    Cas(u32, Option<i64>, i64),
+}
+#[derive(Clone, Debug, PartialEq)]
+pub enum KvOut {
+    Ack,
+    Value(Option<i64>),
+    Swapped(bool),
+}
+impl Model for KvModel {
+    type State = BTreeMap<u32, i64>;
+    type Input = KvIn;
+    type Output = KvOut;
+    fn init(&self) -> Self::State {
+        BTreeMap::new()
+    }
+    fn step(&self, s: &Self::State, input: &KvIn, output: Option<&KvOut>) -> Option<Self::State> {
+        let mut next = s.clone();
+        match input {
+            KvIn::Put(k, v) => {
+                if !matches!(output, None | Some(KvOut::Ack)) {
+                    return None;
+                }
+                next.insert(*k, *v);
+            }
+            KvIn::Get(k) => match output {
+                None => {}
+                Some(KvOut::Value(v)) if *v == s.get(k).copied() => {}
+                _ => return None,
+            },
+            KvIn::Cas(k, expect, new) => {
+                let ok = s.get(k).copied() == *expect;
+                match output {
+                    None => {}
+                    Some(KvOut::Swapped(b)) if *b == ok => {}
+                    _ => return None,
+                }
+                // a CAS whose result is unknown may or may not have applied; the search tries it as applied here and as dropped by leaving it out
+                if ok {
+                    next.insert(*k, *new);
+                }
+            }
+        }
+        Some(next)
+    }
+}
+
+/// Check a key-value history one key at a time. Linearizability is local: a history is linearizable if and only if the history of each
+/// object (here each key) is, so the search is over many small problems instead of one large one.
+pub fn check_kv(history: &[Op<KvIn, KvOut>], limit: u64) -> Verdict {
+    let key = |op: &Op<KvIn, KvOut>| match op.input {
+        KvIn::Put(k, _) | KvIn::Get(k) | KvIn::Cas(k, _, _) => k,
+    };
+    let mut by_key: BTreeMap<u32, Vec<Op<KvIn, KvOut>>> = BTreeMap::new();
+    for op in history {
+        by_key.entry(key(op)).or_default().push(op.clone());
+    }
+    let mut unknown = false;
+    for ops in by_key.values() {
+        match check(&KvModel, ops, limit) {
+            Verdict::NotLinearizable => return Verdict::NotLinearizable,
+            Verdict::Unknown => unknown = true,
+            Verdict::Linearizable => {}
+        }
+    }
+    if unknown { Verdict::Unknown } else { Verdict::Linearizable }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Outside suites: other people's tests"
+body = """
+<p>Everything above is a test the same author wrote, and shares the author's blind spots. Three suites written by other people size what is missing. They are in <code>verify/</code> and re-run with one command each.</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Suite</th> <th>What it checks</th> <th>Run</th> <th>Result</th> </tr> </thead> <tbody> <tr> <td>SQLite's <strong>sqllogictest</strong> corpus (<code>select1-3.test</code>, eight <code>evidence/</code> files; 5,679 records, vendored unmodified)</td> <td>the SQL surface and its answers, row for row or by MD5 of the result</td> <td><code>cargo test --release --test slt_ext -- --nocapture</code></td> <td><strong>2,701 / 5,679 pass</strong>; the output ends with the failures grouped by error</td> </tr> <tr> <td><strong>Hermitage</strong>'s scenarios (Kleppmann), re-implemented against the MVCC layer</td> <td>the isolation anomalies G0, G1a/b/c, OTV, PMP (read and write predicates), P4, G-single (three forms), G2-item, G2 and Fekete's two-edge example, at snapshot isolation and serializable</td> <td><code>cargo test --release --test hermitage</code></td> <td>8 tests pass; the expected outcomes are PostgreSQL's "repeatable read" and "serializable" columns</td> </tr> <tr> <td><strong>Maelstrom</strong> (Jepsen), the linearizable key-value workload with network partitions</td> <td>the Raft implementation, as a real process exchanging JSON over a simulated network</td> <td><code>tools/maelstrom_raft.sh</code></td> <td>5 nodes, 60 s, partitions every 10 s: 4,586 operations (2,270 ok, 2,208 definitely failed, 108 indeterminate), <strong>linearizable</strong></td> </tr> </tbody> </table></div>
+
+<p>What the SQLite corpus found. The first run passed 1,764 of 5,679 records. Two features were missing that no author-written test had asked for: <code>CASE</code> expressions and <code>ORDER BY 2</code> (an ordinal, which the engine had read as the constant 2 and therefore silently did not sort). Both were small; they brought the count to 2,701. <strong>What was left was almost one thing</strong>: 2,923 of the 2,978 failures were <code>unexpected SELECT in expression</code>, i.e. scalar subqueries, <code>IN (SELECT …)</code> and <code>EXISTS</code>, correlated and not. Implementing them (<a href="/cookbook/p/sql-front-end">P3.2</a>, "Subqueries in expressions") took the corpus to <strong>5,642 / 5,679</strong>: <code>select1.test</code>, <code>select2.test</code> and <code>select3.test</code> pass <strong>every</strong> record (5,413 records, many compared by MD5), including three-level correlated subqueries and <code>NOT IN</code> over NULLs. Adding <code>UNIQUE</code> column constraints lifted <code>in1.test</code> from 58 to 128 of 132. The 37 that remain are SQLite-specific (<code>DROP VIEW</code>, <code>INSERT OR REPLACE</code>, blob literals <code>x'…'</code>, triggers). The ratchet (<code>SQLITE_BASELINE.txt</code>) holds the per-file counts.</p>
+
+<p>What Hermitage checks that the earlier tests did not. The model test compares the MVCC layer with a model written from the same understanding of the rules; Hermitage is somebody else's list of the situations that go wrong. The scenarios passed on the first run, and the serializable ones are not vacuous: the write-skew, predicate-cycle and Fekete tests <em>fail</em> when the commit-time validation is removed. Two differences from PostgreSQL are deliberate and written next to the tests: a blocked write is a first-writer-wins conflict here (the second writer's statement fails and taints its transaction instead of waiting), and serializable conflicts are found when the transaction commits, not at the statement that completes the cycle.</p>
+
+<p>What Maelstrom checks, and its negative control. <code>src/bin/maelstrom_raft.rs</code> wraps the guide's <code>raft::Node</code> in Maelstrom's protocol (JSON on stdin and stdout; a follower forwards a client request to the leader it knows, and the leader answers the client directly once the entry is applied; <strong>reads go through the log</strong>). The checker (Knossos-style linearizability over the whole history, per key) said the run is valid. A passing run proves little unless the checker can fail, so the node has a switch, <code>MAELSTROM_UNSAFE_LOCAL_READS</code>, that answers reads from whatever the node has applied: the same workload then ends with <code>Analysis invalid!</code> (<code>tools/maelstrom_raft.sh --unsafe</code>). Raft needed one addition for the workload: a compare-and-set command in the replicated state machine (<code>Cmd::Cas</code>, with "no such key" and "mismatch" outcomes), which exactly-once suppression covers like the other commands.</p>
+
+<p>Not done: DuckDB's sqllogictest files (they test DuckDB's extensions as much as SQL), Jepsen's own database tests, sharding under Maelstrom, process crashes (Maelstrom does not kill processes; the simulator's crash tests remain the evidence there), and a pgwire-level run, which would size the driver gap rather than the SQL gap.</p>
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p><strong>The oracles on the engine of Parts I and III</strong>, 40 to 80 seeds each of random tables (10 to 30 rows with NULLs, duplicates and boundary values), random <code>FROM</code> clauses (one table, inner and left joins of two and three tables, cross joins), random predicates of depth 3:</p>
+
+```text title="how many checks each oracle made on the unmodified engine"
+TLP (scans, joins, aggregates, GROUP BY, DISTINCT, HAVING): 8775 checks passed, 225 skipped because a query raised an error; 4.5 s
+NoREC: 3135 checks passed, 65 skipped; 0.4 s
+differential (optimizer on/off, with/without indexes): 6302 checks passed, 94 skipped, 4 where one plan raised an error the other avoided; 1.6 s
+row-wise expression evaluation: 3159 checks passed, 41 skipped; 0.5 s
+SQLite as the reference: 2400 queries returned the same rows, 0 skipped because the engine raised an error; 1.1 s
+360000 inputs in 0.8 s: 4402 parsed, 295598 rejected with an error, 622 damaged queries still ran; 0 panics
+```
+
+<p>No oracle found a wrong result. That is a result, not a failure of the method: the engine had been compared with SQLite and mutation-tested already. What the oracles are worth is measured the other way, by planting bugs.</p>
+
+<p><strong>The detection matrix.</strong> 21 plausible bugs were planted one at a time in the engine (in the evaluator, the simplifier, the optimizer's predicate pushdown, the lowering of <code>BETWEEN</code> and <code>IN</code>, the aggregates and the joins). Each row below says which test suites fail. <em>TLP</em>, <em>NoREC</em>, <em>diff</em> (optimizer and index differential), <em>row</em> (row-wise evaluation) and <em>SQLite</em> are the five oracles of this section; <em>fuzz</em> is the older random-query comparison with SQLite from Part III; <em>unit</em> the engine's own tests; <em>simp</em> the property test of the simplifier against the evaluator.</p>
+
+```text title="which test suites catch each seeded engine bug (X = the suite fails)"
+seeded engine bug                                                     TLP  NoREC   diff    row SQLite   fuzz   unit   simp
+a comparison with one NULL operand is not NULL                          X      X      X      .      X      X      X      X
+IS NULL and IS NOT NULL are swapped                                     X      .      .      .      X      X      X      X
+NOT NULL is true                                                        X      X      X      .      X      X      X      X
+FALSE OR NULL is FALSE                                                  .      .      .      .      X      .      .      .
+<= behaves as <                                                         X      X      X      .      X      X      .      X
+the remainder of a negative number takes the divisor's sign             .      .      .      .      X      .      .      .
+NOT (a < b) becomes a > b                                               X      X      X      .      X      .      .      X
+a range covering every integer is TRUE, forgetting NULL                 .      .      .      .      .      .      .      X
+x < k becomes x <= k when ranges are merged                             .      X      X      .      X      X      .      X
+merging two upper bounds takes the larger                               X      X      X      .      X      X      X      X
+ranges two apart are merged as adjacent                                 X      X      X      .      X      X      .      .
+a filter on the right of a LEFT JOIN is pushed into the right input      X      X      X      .      X      .      X      .
+a filter on both sides of a LEFT JOIN becomes part of its condition      X      X      X      .      X      .      .      .
+BETWEEN excludes its upper bound                                        .      .      .      .      X      X      .      .
+NOT IN ignores the NOT                                                  .      .      .      .      X      .      X      .
+COUNT(x) counts NULLs                                                   .      .      .      .      X      X      X      .
+SUM of no rows is 0                                                     .      .      .      .      X      X      X      .
+MIN keeps the largest                                                   X      .      .      .      X      X      X      .
+COUNT(DISTINCT x) counts repeats                                        .      .      .      .      X      .      X      .
+a hash LEFT JOIN drops unmatched rows                                   .      .      X      .      X      X      X      .
+a nested-loop LEFT JOIN null-extends matched rows                       .      .      X      .      X      X      .      .
+caught (of 21)                                                         10      9     11      0     20     13     11      8
+```
+
+<ul> <li><strong>Every bug was caught by something; SQLite caught 20 of 21.</strong> The one it missed (a range that covers every integer simplified to <code>TRUE</code>, forgetting that NULL is in no range) is caught only by the simplifier's property test, which compares simplified and unsimplified predicates on random rows including NULLs. A reference system is not enough on its own.</li> <li><strong>The consistency oracles caught 9 to 11 of 21 each</strong>, together 13. They catch exactly the bugs that make the engine <em>disagree with itself</em>: pushing a filter through a left join, merging ranges wrongly, evaluating <code>NOT</code> incorrectly in one place. They cannot catch a bug that is wrong in the same way everywhere: <code>FALSE OR NULL</code> giving FALSE, <code>%</code> taking the wrong sign, <code>BETWEEN</code> excluding its upper bound, <code>COUNT(x)</code> counting NULLs, <code>SUM</code> of nothing being 0, <code>NOT IN</code> ignoring the NOT. Seven of the 21 were found by the SQLite oracle and by no consistency oracle.</li> <li><strong>The row-wise oracle caught nothing.</strong> The idea (compare the evaluator with the constant folder) is sound, but the folder calls the evaluator, so they cannot disagree; the bugs that matter live elsewhere. It stays in the table as a measured negative result.</li> <li><strong>Old tests missed bugs the new ones found, and the other way round</strong>: the Part III fuzz against SQLite did not notice <code>COUNT(DISTINCT x)</code> counting repeats, nor <code>NOT IN</code> ignoring the NOT; the new SQLite oracle (which draws <code>COUNT(DISTINCT …)</code> and <code>GROUP BY</code> queries) did. The fuzz test caught <code>BETWEEN</code> and the aggregate bugs that the consistency oracles could not. Different generators reach different shapes.</li> <li><strong>One category is not a bug:</strong> in 4 of the 6 302 differential queries one plan raised <em>division by zero</em> where the other returned rows, because a plan that evaluated a condition on a row the other plan had already excluded failed. SQL leaves the order of evaluation unspecified, so these are counted separately and not as wrong results; the same effect is what <a href="/cookbook/p/roles-privileges-and-row-level-security">row-level security</a> must defend against.</li> </ul>
+
+<p><strong>Fuzzing the front end.</strong> 360 000 inputs (150 000 random strings biased towards SQL characters, 150 000 sequences of real tokens, and 60 000 valid queries damaged in one to three places and then executed) produced 4 402 statements that parsed, 295 598 rejected with an error, 622 damaged queries that still ran, and <strong>no panic</strong>. The inputs were then widened to the shapes that random generation cannot build:</p>
+
+<ul> <li><strong>10 000 nested parentheses overflowed the stack</strong> and aborted the process. The parser is recursive and so are binding, simplification, evaluation and the drop of the expression tree. The same happens for <code>NOT NOT NOT …</code>, <code>- - - …</code>, and a chain of <code>a + b + c + …</code>, since a left-associative chain is a left-deep tree.</li> <li><strong>An <code>IN (…)</code> list of 10 000 values overflowed the stack</strong>, although the parser is iterative over the list: the binder turned it into <code>x = 1 OR x = 2 OR …</code>, a left-deep tree of 10 000 levels. Lists of 1 000 and 2 000 worked; 100 000 values is an ordinary generated query.</li> </ul>
+
+<p>Both are denial-of-service bugs if a network client can send the query: connection threads of the wire server (<a href="/cookbook/p/the-postgresql-wire-protocol">M19</a>) are ordinary threads with the default stack size of 2 MiB, so such a statement would end the server process. I did not test that over a socket; the stack overflow in a 2 MiB thread was reproduced in-process. The fixes: the parser bounds the depth of the tree it builds (1 000 levels, counting nesting, unary chains and the length of operator chains) and answers with an error; the binder and the simplifier build the OR of an <code>IN</code> list as a balanced tree, whose depth is the logarithm of the list. A regression test now runs each shape at 900 levels (it must run), at 1 500, 100 000 and 1 000 000 levels (it must fail with an error, not abort), and <code>IN</code>/<code>NOT IN</code> lists of 10, 1 000, 10 000 and 100 000 values on a 2 MiB stack. Random fuzzing alone would not have found either; the lesson is the one in the notes.</p>
+
+<p><strong>The linearizability checker.</strong></p>
+
+```text title="the checker on recorded histories and on the worst case for the search"
+history                                          ops        time           verdict
+2 clients on a mutex-protected store            1000      0.7 ms      Linearizable
+4 clients on a mutex-protected store            2000      3.4 ms      Linearizable
+8 clients on a mutex-protected store            4000     14.6 ms      Linearizable
+16 clients on a mutex-protected store           8000     71.3 ms      Linearizable
+4 overlapping writes, impossible read              5      0.0 ms   NotLinearizable
+8 overlapping writes, impossible read              9      0.2 ms   NotLinearizable
+12 overlapping writes, impossible read            13      7.3 ms   NotLinearizable
+14 overlapping writes, impossible read            15     42.9 ms   NotLinearizable
+16 overlapping writes, impossible read            17    272.0 ms   NotLinearizable
+mutex-protected store: 40 of 40 histories (24000 operations) linearizable; store with a racy compare-and-swap: 40 of 40 histories rejected
+2723 linearizable and 1277 not linearizable histories agree with the brute force; 1222 have pending operations
+```
+
+<ul> <li><strong>It agrees with trying every order.</strong> On 4 000 random histories of up to 7 operations (2 723 linearizable, 1 277 not, 1 222 with operations that never returned) the verdict equals that of a brute-force search over all orders.</li> <li><strong>It accepts correct code and catches a racy compare-and-swap.</strong> Four threads of 150 operations each on a mutex-protected map gave 40 histories (24 000 operations), all linearizable; the same workload on a map whose compare-and-swap reads, pauses for 40 µs and writes without holding the lock gave 40 of 40 histories rejected.</li> <li><strong>Checking many keys is cheap, one wide moment is not.</strong> 16 clients and 8 000 operations take 70 ms because each key is checked alone. But 16 writes that all overlap and a read of an impossible value take 272 ms, and each 2 more writes multiply the time by about 6: the number of states is exponential in the concurrency width, and the checker's step limit exists for that.</li> </ul>
+
+<aside data-call="note"><b>What the matrix says about how to test</b><p>The cheapest oracle is not the best one. TLP and NoREC need no reference and found real inconsistencies; SQLite found more bugs (20 of 21) with the same generator because it knows what the answer is. Use both: consistency oracles when there is no second system (a new dialect, a new type), a reference when there is one, and a property test of every rewrite against the evaluator. Then measure your tests the way this table does: plant the bugs your engine could have, and count.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>A trait for the sequential specification.</strong> <code>Model { type State; type Input; type Output; fn init; fn step }</code> is the whole interface to the checker: a register, a map, a queue are 20 lines each. <code>step</code> takes <code>Option&lt;&amp;Output&gt;</code>, with <code>None</code> for an operation that never returned, so one function handles both.</li> <li><strong>Memoization keyed by a bit set and the state.</strong> <code>(Vec&lt;u64&gt;, State)</code> in a <code>HashSet</code> makes the search polynomial in the number of distinct (placed, state) pairs; <code>State: Clone + Eq + Hash</code> is all it needs.</li> <li><strong>A recursive search with an explicit step budget</strong> returns <code>Option&lt;bool&gt;</code>: <code>None</code> means "gave up", and the caller turns it into <code>Verdict::Unknown</code> rather than guessing.</li> <li><strong>Expressions as a small enum with a renderer.</strong> <code>E</code> has <code>sql(Option&lt;&amp;row&gt;)</code>, which renders the same tree either with column names or with a row's values as literals; the row-wise oracle needs both and the generator needs neither to know SQL.</li> <li><strong><code>catch_unwind</code> with <code>AssertUnwindSafe</code></strong> turns a panic in the system under test into data for the fuzz loop, and a silent panic hook keeps the output readable. A stack overflow is not a panic: it aborts, which is why the depth test runs on a thread with a fixed stack and lets the abort fail the test.</li> <li><strong>Hash-free comparison keys.</strong> Rows are compared as multisets by sorting on a key built with <code>-0.0</code> normalized to <code>0.0</code>, because SQL treats them as equal and a debug string does not.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Linearizability checker</strong>: textbook histories (stale read, new/old inversion, concurrent write and read, a value nobody wrote); operations that never returned (took effect, did not, took effect late, cannot take effect and vanish and take effect again, cannot take effect before its call); key-value histories with compare-and-swap of unknown outcome; keys independent; the step limit gives <code>Unknown</code>; 4 000 random histories against brute force; real threads on a correct and a racy store.</li> <li><strong>Oracles on the engine</strong>: 60 seeds of TLP (scans, joins, aggregates, <code>GROUP BY</code>, <code>DISTINCT</code>, <code>HAVING</code>), 80 of NoREC, 40 of differential, 80 of row-wise, 40 of SQLite (60 queries each); each asserts a minimum number of checks so that a generator that stops producing valid queries fails.</li> <li><strong>Fuzzing</strong>: 360 000 inputs, no panic; the depth and length shapes described above.</li> <li><strong>Mutants of the checker</strong> (12): real-time order ignored; operations that never returned must be placed; the memo ignoring the state; the next-operation bound taken from calls instead of returns; a register read returning anything; a never-returned write having no effect; a never-returned compare-and-swap never applying; an undecided key counted as linearizable; the search stopping when any operation is placed; failed states not remembered; a <code>Get</code> returning anything; a <code>Put</code> returning a value. <strong>All 12 were killed</strong> (one by the memory cap, the search without real-time order running away); one survived until a history with a <code>Put</code> that returns a value was added.</li> <li><strong>Mutants of the engine</strong> (21, the matrix above): every one is caught by at least one suite.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>SQLancer</strong> (Rigger) implements TLP, NoREC and pivoted query synthesis for SQLite, PostgreSQL, MySQL, MariaDB, CockroachDB, TiDB, DuckDB and others, and has reported hundreds of confirmed bugs; it is the model for the oracles here. Companies run it in CI against their own engines.</li> <li><strong>Jepsen</strong> (Kingsbury) tests databases from the outside under network partitions and clock skew, with checkers for linearizability (Knossos), and with <strong>Elle</strong> for transactional isolation levels, which infers anomalies from the structure of a history without searching all orders.</li> <li><strong>Differential and metamorphic testing</strong>: engines compare against PostgreSQL or SQLite using their <code>sqllogictest</code> suites (millions of statements); DuckDB's tests are sqllogictest files; DataFusion runs the same files against its engine.</li> <li><strong>Fuzzers</strong> are coverage-guided in production (libFuzzer, AFL, <code>cargo-fuzz</code>, OSS-Fuzz) and grammar-aware for SQL (SQLsmith, Squirrel); they report crashes and sanitizer findings. Memory-safe languages remove one class of finding (corruption) and keep the others (panics, aborts on overflow, hangs).</li> <li><strong>Crash and fault testing</strong>: failpoints inserted in the engine (TiKV's <code>fail-rs</code>, FoundationDB's simulation), disk-fault injection, and kill-9 loops; see <a href="/cookbook/p/deterministic-simulation">Simulation</a> and <a href="/cookbook/p/a-durable-lsm-tree">M7</a>.</li> <li><strong>Plan regression testing</strong>: the optimizer's plans for a corpus of queries are stored and any change is reviewed, and tools such as APOLLO look for performance regressions between versions automatically.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>A passing oracle proves little by itself.</strong> Count the checks, count the skips, and plant bugs. A generator that mostly produces queries the engine rejects has tested nothing.</li> <li><strong>Errors depend on evaluation order.</strong> Treat "one plan failed, the other did not" as a separate category, and decide deliberately whether it is a bug for your engine.</li> <li><strong>Floating point makes equality fuzzy.</strong> Sums added in a different order differ in the last bits; compare with a tolerance, and normalize <code>-0.0</code>.</li> <li><strong>Text is not portable between systems.</strong> SQLite changes the case of ASCII letters only; Unicode <code>upper</code> differs. The SQLite oracle leaves such functions out on purpose.</li> <li><strong>A linearizability check is only as good as the timestamps.</strong> Take the call time before sending and the return time after receiving, from a clock that does not go backwards; ties must be broken in favor of the permissive reading (concurrent), not the strict one.</li> <li><strong>Checking is exponential in the worst case.</strong> Partition the history by key, bound the steps, and shorten histories (many short runs find more than one long one).</li> <li><strong>A fuzzer needs the dangerous shapes.</strong> Add generators for depth, width and size, and for boundaries (empty, one, the largest integer, a string with a NUL).</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Finding logic bugs in database management systems"
+url = "https://www.youtube.com/watch?v=Np46NQ6lqP8"
+
+[[sources]]
+title = "Black-box isolation checking with Elle"
+url = "https://www.youtube.com/watch?v=OPJ_IcdSqig"

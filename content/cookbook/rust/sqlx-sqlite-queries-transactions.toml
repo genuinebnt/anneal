@@ -1,0 +1,86 @@
+title = "Sqlx with SQLite"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Application crates"
+chapter_order = 2
+order = 132
+kind = "recipe"
+lede = "Pools, migrations, typed queries, transactions, savepoints, upserts, pagination, bulk insert"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/sqlx_sqlite_queries_transactions.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+async Rust services that want to write SQL themselves (no ORM) against Postgres, MySQL or SQLite.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>web service persistence</li><li>job queues</li><li>local-first apps</li><li>integration tests against a throwaway database</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>sqlx::sqlite::SqlitePoolOptions</code></li><li><code>sqlx::sqlite::SqliteConnectOptions</code></li><li><code>sqlx::query</code></li><li><code>sqlx::query_as</code></li><li><code>sqlx::query_scalar</code></li><li><code>sqlx::FromRow</code></li><li><code>sqlx::Row::try_get</code></li><li><code>Query::bind</code></li><li><code>Query::execute</code></li><li><code>Query::fetch_one</code></li><li><code>Query::fetch_optional</code></li><li><code>Query::fetch_all</code></li><li><code>Query::fetch</code></li><li><code>sqlx::Pool::begin</code></li><li><code>sqlx::Transaction::commit</code></li><li><code>sqlx::Transaction::rollback</code></li><li><code>sqlx::Acquire::begin</code></li><li><code>sqlx::QueryBuilder::push_values</code></li><li><code>sqlx::QueryBuilder::push_bind</code></li><li><code>sqlx::raw_sql</code></li><li><code>sqlx::error::DatabaseError::kind</code></li><li><code>sqlx::error::DatabaseError::code</code></li><li><code>sqlx::types::Json</code></li><li><code>QueryBuilder::{separated, push_tuples}</code></li><li><code>#[derive(sqlx::Type)] (enum, transparent)</code></li><li><code>#[sqlx(default, try_from, flatten, skip)]</code></li><li><code>Pool::begin_with</code></li><li><code>SqlitePoolOptions::after_connect</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/sqlx/0.8/sqlx/" target="_blank" rel="noreferrer">https://docs.rs/sqlx/0.8/sqlx/</a></li></ul>
+"""
+
+[[sections]]
+heading = "Crates"
+body = """
+sqlx = "0.8" (features runtime-tokio, sqlite, chrono, uuid, json, migrate, macros: used here only for the derives), tokio = "1", futures-util = "0.3", chrono = "0.4", uuid = "1"
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Compile-time checked queries** (described, not used here). `sqlx::query!("SELECT id FROM users WHERE name = ?", name)` connects to the database named by DATABASE_URL while **compiling**, checks the SQL and infers an anonymous record type. For builds without a database run `cargo sqlx prepare` (sqlx-cli), commit the `.sqlx/` directory and set SQLX_OFFLINE=true.
+
+This file uses the **runtime** functions, so a typo in SQL is a test failure here, not a compile error. That is the trade-off. **Migrations**.
+
+`sqlx::migrate!("./migrations")` embeds a directory into the binary. This file hand-writes a 20-line runner instead so that the whole example is one file and you can see what a migration tool does: a version table, ordered scripts, each applied once inside a transaction.
+
+(The real one also stores checksums to detect edited migrations.) **POSTGRES differences** (comments only, nothing here runs against Postgres): placeholders are '$1, $2' instead of '?'; richer types (arrays, enums via '#[derive(sqlx::Type)]', NUMERIC through the bigdecimal/rust_decimal features, TIMESTAMPTZ); 'PgListener' for **listen/notify**; 'PgConnection::copy_in_raw' for **copy**; 'SELECT ...
+
+**For update skip locked**' for job queues; a failed statement poisons the whole transaction until ROLLBACK (SQLite lets it continue), so use savepoints there.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Exactly one row</td><td><code>fetch_one (RowNotFound if none) ; maybe one -&gt; fetch_optional ; all -&gt; fetch_all ; huge -&gt; fetch (stream)</code></td></tr><tr><td>One column</td><td><code>query_scalar ; a struct -&gt; query_as + #[derive(FromRow)]</code></td></tr><tr><td>Writes</td><td><code>execute -&gt; rows_affected / last_insert_rowid ; or RETURNING + fetch_one</code></td></tr><tr><td>Atomicity</td><td><code>let mut tx = pool.begin(); ... .execute(&amp;mut *tx); tx.commit()   (drop without commit = rollback)</code></td></tr><tr><td>Partial undo</td><td><code>tx.begin() creates a SAVEPOINT</code></td></tr><tr><td>Bulk insert</td><td><code>QueryBuilder::push_values in chunks below the bind-parameter limit</code></td></tr><tr><td>User input</td><td><code>always bind; identifiers (column names) cannot be bound, so allow-list them</code></td></tr><tr><td>Id IN (...)</td><td><code>QueryBuilder::separated, one placeholder per value; handle the empty list yourself</code></td></tr><tr><td>LIKE user text</td><td><code>escape % and _ and add ESCAPE</code></td></tr><tr><td>SQLite read-then-write transaction</td><td><code>pool.begin_with("BEGIN IMMEDIATE")</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://github.com/launchbadge/sqlx" target="_blank" rel="noreferrer">https://github.com/launchbadge/sqlx</a></li><li><a href="https://www.sqlite.org/lang_upsert.html" target="_blank" rel="noreferrer">https://www.sqlite.org/lang_upsert.html</a></li><li><a href="https://www.sqlite.org/lang_returning.html" target="_blank" rel="noreferrer">https://www.sqlite.org/lang_returning.html</a></li><li><a href="https://use-the-index-luke.com/no-offset" target="_blank" rel="noreferrer">https://use-the-index-luke.com/no-offset</a></li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/sqlx/0.8/sqlx"
+url = "https://docs.rs/sqlx/0.8/sqlx/"
+
+[[sources]]
+title = "github.com/launchbadge/sqlx"
+url = "https://github.com/launchbadge/sqlx"
+
+[[sources]]
+title = "sqlite.org/lang_upsert.html"
+url = "https://www.sqlite.org/lang_upsert.html"
+
+[[sources]]
+title = "sqlite.org/lang_returning.html"
+url = "https://www.sqlite.org/lang_returning.html"
+
+[[sources]]
+title = "use-the-index-luke.com/no-offset"
+url = "https://use-the-index-luke.com/no-offset"

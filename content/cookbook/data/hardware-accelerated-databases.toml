@@ -1,0 +1,214 @@
+title = "Hardware-accelerated databases"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 427
+kind = "guide"
+lede = "Hardware Accelerated Database Lectures #1–#6 (Kinetica, MapD, SQream DB, BlazingDB, Brytlyt, Swarm64) · the data-parallel primitives of GPU engines (scan, compaction, radix partition, group-by) built and verified on CPU threads · the memory-bandwidth ceiling measured · an explicit offload model with assumed GPU numbers"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<p><em>(No notes exist for these talks and I have not transcribed them. The points below are the design space the systems share, from GPU database research and the systems' documentation, not a summary of any speaker. This machine has no discrete GPU, and nothing below pretends it does: the primitives run on CPU threads, and every GPU figure is labelled as an assumption.)</em></p>
+
+<ul> <li><strong>A GPU is a bandwidth machine.</strong> Thousands of lanes execute the same instruction on different data (SIMT: groups of 32 lanes, <em>warps</em>, in lockstep), attached to very high-bandwidth memory (HBM at 1–3+ TB/s, 5–15× a CPU socket) with high latency, hidden by running many warps at once. A column scan, a filter or an aggregation over data <em>already in GPU memory</em> runs at memory speed. Everything else is a penalty: <strong>divergent branches</strong> serialize a warp, <strong>uncoalesced access</strong> wastes bandwidth, <strong>small kernels</strong> do not cover the launch overhead (~10 µs), and <strong>data not in GPU memory</strong> must cross a link.</li> <li><strong>The link is the bottleneck.</strong> The GPU sits behind PCIe (about 25 GB/s usable on PCIe 4 ×16, ~50 on PCIe 5) or a faster coherent link (NVLink, NVLink-C2C on Grace Hopper-class systems: hundreds of GB/s). A modern CPU reads its own memory at 100–300+ GB/s. So for a bandwidth-bound scan of data that is <strong>not already resident</strong>, the CPU wins by the ratio of those two numbers; the GPU wins only if the working set lives in GPU memory (the "all resident" speedup is roughly <code>B_gpu / B_cpu</code>). Capacity is the second wall: 16–80 GB of HBM against terabytes of host memory.</li> <li><strong>So GPU databases are caching and streaming designs.</strong> <em>Cache</em> the hot columns in HBM (MapD/OmniSci's interactive dashboards and geospatial maps on a few hundred GB of hot data; Kinetica's in-GPU-memory analytics), or <em>stream</em> cold data through the device in chunks with compression and overlap of transfer and compute so the device sees the data once at link speed (SQream DB's large-data design), or avoid the host entirely with <strong>GPUDirect Storage</strong> (NVMe straight to device memory). Compressed columns reduce both the link and the HBM footprint; decompression runs on the device.</li> <li><strong>The operator toolbox is data-parallel primitives.</strong> <em>Filter</em> = flags, an <strong>exclusive prefix sum</strong>, and a scatter (<strong>stream compaction</strong>) that writes survivors contiguously and in order. <em>Partitioning</em> (for joins and group-bys) = per-block histograms, a scan over (partition, block), scatter (<strong>radix partition</strong>). <em>Sort</em> = LSD radix sort, where GPUs are strong. <em>Aggregation</em> = atomics into a table when there are many groups, <strong>shared-memory local aggregation</strong> when there are few, sort plus segmented reduction when there are very many. <em>Hash join</em> = build with atomic compare-and-swap, probe with coalesced reads, partitioned first when the table exceeds the cache or device memory. BlazingDB and RAPIDS-based engines assemble queries from library kernels (cuDF); MapD compiled each query to GPU code with LLVM.</li> <li><strong>Strings, variable-length data, branchy code and OLTP are poor fits.</strong> Point lookups and tiny scans do not amortize launch and transfer; skewed joins and groups cause load imbalance and atomic contention; correctness details (collation, NULLs, exceptions) cost more on a device with no exceptions.</li> <li><strong>FPGAs and offload engines are a different point in the design space.</strong> Swarm64 accelerated PostgreSQL by offloading scans, filters and aggregation to an FPGA and by adding parallel query machinery. A reconfigurable pipeline processes data as it streams from storage or the network with deterministic latency and low power, but is harder to program and to evolve; the same idea appears as smart NICs, DPUs and computational storage.</li> <li><strong>Brytlyt, Kinetica and others took the GPU into a familiar interface</strong>: a PostgreSQL extension, an SQL engine with a distributed layer. The adoption lesson: speed on resident analytics is easy to demonstrate; operations (loading, updates, failure, multi-tenancy, cost per GB of HBM) decide whether it survives.</li> </ul>
+"""
+
+[[sections]]
+heading = "What is built"
+body = """
+<p><code>dpar.rs</code> implements the primitives from the list above, written the way a GPU kernel decomposes the work (blocks do local work, a small global step combines them) and run on <code>std::thread::scope</code> threads, each checked against the sequential definition:</p>
+
+<ul> <li><strong><code>exclusive_scan</code></strong>: pass 1 sums each block, a short sequential scan turns block sums into offsets, pass 2 scans each block locally and adds its offset.</li> <li><strong><code>compact</code></strong>: write a 0/1 flag per element, scan the flags (the scan result at element <code>i</code> is its output position), and let every block copy its survivors into its own slice of the output. Order is preserved.</li> <li><strong><code>radix_partition</code></strong>: each block builds a histogram of the low <code>bits</code> of its keys; offsets are assigned partition-major, block-minor, so the result is <strong>stable</strong>; blocks scatter independently.</li> <li><strong><code>group_sum_atomic</code></strong> (one shared array of atomic counters, every thread adds into it) and <strong><code>group_sum_local</code></strong> (a private table per thread, merged at the end): the two ways GPU engines aggregate.</li> <li><strong><code>scan_sum</code></strong>: a column scan, used as the memory-bandwidth benchmark.</li> </ul>
+
+<p>Then a model turns the measured CPU bandwidth and <strong>assumed</strong> GPU and link numbers into the speedup of a bandwidth-bound scan as a function of how much of the data is already in GPU memory.</p>
+
+:::deeper Reference: exclusive scan, stream compaction, stable radix partition, atomic and private group-by, bandwidth benchmark
+```rust title="src/gpu/primitives.rs"
+//! The data-parallel building blocks of GPU-style query engines, written for CPU threads: exclusive prefix sum, order-preserving stream
+//! compaction (flags + scan + scatter), stable radix partitioning (per-block histograms, a scan over (partition, block), scatter), and
+//! two group-by strategies (atomic updates to one shared table versus private tables merged at the end). On a GPU the "blocks" are
+//! thread blocks and the "threads" are lanes; the structure of the algorithms is the same.
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+
+fn blocks(n: usize, threads: usize) -> Vec<std::ops::Range<usize>> {
+    let t = threads.max(1);
+    let size = n.div_ceil(t).max(1);
+    (0..t).map(|i| (i * size).min(n)..((i + 1) * size).min(n)).collect()
+}
+
+/// Exclusive prefix sum in two passes: per-block sums, a scan over the block sums, then per-block local scans offset by the result.
+/// Returns the scanned vector and the total.
+pub fn exclusive_scan(v: &[u64], threads: usize) -> (Vec<u64>, u64) {
+    let bs = blocks(v.len(), threads);
+    let sums: Vec<u64> = std::thread::scope(|s| {
+        let hs: Vec<_> = bs.iter().map(|r| { let part = &v[r.clone()]; s.spawn(move || part.iter().sum::<u64>()) }).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let mut offs = vec![0u64; bs.len()];
+    let mut acc = 0;
+    for (i, &x) in sums.iter().enumerate() { offs[i] = acc; acc += x; }
+    let mut out = vec![0u64; v.len()];
+    std::thread::scope(|s| {
+        let mut rest = out.as_mut_slice();
+        for (r, &off) in bs.iter().zip(&offs) {
+            let (mine, tail) = rest.split_at_mut(r.len());
+            rest = tail;
+            let part = &v[r.clone()];
+            s.spawn(move || { let mut a = off; for (o, &x) in mine.iter_mut().zip(part) { *o = a; a += x; } });
+        }
+    });
+    (out, acc)
+}
+
+/// Keep the elements satisfying `pred`, in order: write 0/1 flags, scan them to get each survivor's output position, scatter.
+pub fn compact(v: &[u64], pred: &(dyn Fn(u64) -> bool + Sync), threads: usize) -> Vec<u64> {
+    let flags: Vec<u64> = par_map_chunks(v, threads, |x| pred(x) as u64);
+    let (pos, total) = exclusive_scan(&flags, threads);
+    let mut out = vec![0u64; total as usize];
+    // every survivor owns a distinct output slot, so blocks can scatter independently; safe code needs disjoint slices per block
+    let bs = blocks(v.len(), threads);
+    let mut cuts: Vec<usize> = bs.iter().map(|r| if r.start < v.len() { pos[r.start] as usize } else { total as usize }).collect();
+    cuts.push(total as usize);
+    std::thread::scope(|s| {
+        let mut rest = out.as_mut_slice();
+        for (i, r) in bs.iter().enumerate() {
+            let (mine, tail) = rest.split_at_mut(cuts[i + 1] - cuts[i]);
+            rest = tail;
+            let (part, fl) = (&v[r.clone()], &flags[r.clone()]);
+            s.spawn(move || { let mut k = 0; for (x, &f) in part.iter().zip(fl) { if f == 1 { mine[k] = *x; k += 1; } } });
+        }
+    });
+    out
+}
+
+fn par_map_chunks(v: &[u64], threads: usize, f: impl Fn(u64) -> u64 + Sync) -> Vec<u64> {
+    let mut out = vec![0u64; v.len()];
+    let f = &f;
+    std::thread::scope(|s| {
+        let mut rest = out.as_mut_slice();
+        for r in blocks(v.len(), threads) {
+            let (mine, tail) = rest.split_at_mut(r.len());
+            rest = tail;
+            let part = &v[r];
+            s.spawn(move || for (o, &x) in mine.iter_mut().zip(part) { *o = f(x); });
+        }
+    });
+    out
+}
+
+/// Stable partition of `keys` by their low `bits` bits: every block builds a histogram, a scan over (partition-major, block-minor)
+/// gives each block its write offsets, blocks scatter. Returns the permuted keys and the start offset of each partition.
+pub fn radix_partition(keys: &[u32], bits: u32, threads: usize) -> (Vec<u32>, Vec<usize>) {
+    let parts = 1usize << bits;
+    let mask = (parts - 1) as u32;
+    let bs = blocks(keys.len(), threads);
+    let hist: Vec<Vec<usize>> = std::thread::scope(|s| {
+        let hs: Vec<_> = bs.iter().map(|r| { let part = &keys[r.clone()]; s.spawn(move || { let mut h = vec![0usize; parts]; for &k in part { h[(k & mask) as usize] += 1; } h }) }).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    // offsets[block][partition] = where this block writes its first key of this partition
+    let mut offsets = vec![vec![0usize; parts]; bs.len()];
+    let mut starts = vec![0usize; parts + 1];
+    let mut acc = 0;
+    for p in 0..parts { starts[p] = acc; for b in 0..bs.len() { offsets[b][p] = acc; acc += hist[b][p]; } }
+    starts[parts] = acc;
+    // every key has its own output slot, computed from the offsets, so blocks scatter independently (atomic stores keep this safe Rust)
+    let out: Vec<std::sync::atomic::AtomicU32> = (0..keys.len()).map(|_| std::sync::atomic::AtomicU32::new(0)).collect();
+    std::thread::scope(|s| {
+        for (r, mut off) in bs.iter().zip(offsets) {
+            let (part, out) = (&keys[r.clone()], &out);
+            s.spawn(move || for &k in part { let p = (k & mask) as usize; out[off[p]].store(k, Relaxed); off[p] += 1; });
+        }
+    });
+    let out: Vec<u32> = out.into_iter().map(|a| a.into_inner()).collect();
+    (out, starts)
+}
+
+/// GROUP BY key (keys in `0..groups`) SUM(value) with one shared table of atomic counters: every thread adds directly into it.
+/// With few groups all threads hit the same cache lines (contention); with many groups it scales.
+pub fn group_sum_atomic(keys: &[u32], vals: &[u64], groups: usize, threads: usize) -> Vec<u64> {
+    let table: Vec<AtomicU64> = (0..groups).map(|_| AtomicU64::new(0)).collect();
+    std::thread::scope(|s| {
+        for r in blocks(keys.len(), threads) {
+            let (k, v, t) = (&keys[r.clone()], &vals[r], &table);
+            s.spawn(move || for (&k, &x) in k.iter().zip(v) { t[k as usize].fetch_add(x, Relaxed); });
+        }
+    });
+    table.into_iter().map(|a| a.into_inner()).collect()
+}
+
+/// The same aggregation with a private table per thread (the GPU's shared-memory local aggregation), merged at the end.
+pub fn group_sum_local(keys: &[u32], vals: &[u64], groups: usize, threads: usize) -> Vec<u64> {
+    let locals: Vec<Vec<u64>> = std::thread::scope(|s| {
+        let hs: Vec<_> = blocks(keys.len(), threads).into_iter().map(|r| { let (k, v) = (&keys[r.clone()], &vals[r]); s.spawn(move || { let mut t = vec![0u64; groups]; for (&k, &x) in k.iter().zip(v) { t[k as usize] += x; } t }) }).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let mut out = vec![0u64; groups];
+    for l in locals { for (o, x) in out.iter_mut().zip(l) { *o += x; } }
+    out
+}
+
+/// Sum of a column read once with all threads: the bandwidth benchmark (bytes per second a scan can possibly achieve).
+pub fn scan_sum(v: &[u64], threads: usize) -> u64 {
+    std::thread::scope(|s| {
+        let hs: Vec<_> = blocks(v.len(), threads).into_iter().map(|r| { let part = &v[r]; s.spawn(move || part.iter().fold(0u64, |a, &x| a.wrapping_add(x))) }).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).fold(0u64, |a, x| a.wrapping_add(x))
+    })
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>32 M elements (268 MB of <code>u64</code>, 134 MB of <code>u32</code> keys), best of three runs. "Threads" play the role of thread blocks. The last table is a <strong>model</strong>: only the CPU bandwidth in it is measured here; the GPU and link figures are assumptions taken from vendor specifications (A100- and H100-class HBM, PCIe 4/5, NVLink-C2C), and real systems vary.</p>
+
+```text title="primitives, group-by strategies, and the offload model"
+33554432 elements (268 MB of u64, 134 MB of u32 keys); best of 3 runs; CPU threads stand in for GPU thread blocks
+primitive (GB/s of input processed)              1 thr     2 thr     4 thr     8 thr    12 thr
+column scan + sum (memory bandwidth)              91.9     149.9     152.0     232.3     232.4
+exclusive prefix sum                              20.6      36.4      44.5      58.6      56.7
+compaction, 1% selected (1 thr = plain filter)      23.5       7.5      12.9      20.8      19.9
+  (the 3-pass algorithm on 1 thread)               4.0
+compaction, 50% selected (1 thr = plain filter)       2.9       4.0       7.3      12.3      13.0
+  (the 3-pass algorithm on 1 thread)               2.1
+compaction, 99% selected (1 thr = plain filter)       9.1       8.6      12.5      18.0      17.0
+  (the 3-pass algorithm on 1 thread)               4.7
+radix partition, 8 bits (256 partitions)           2.5       4.7       9.0      15.4      16.2
+radix partition, 4 bits (16 partitions)            3.2       6.2      11.5      20.9      20.8
+for comparison, sort_unstable of the same keys: 0.35 GB/s (388 ms)
+GROUP BY key SUM(value), 8 threads, by number of groups (million rows per second)
+groups          shared atomics  private tables     ratio
+1                           62            3817     61.9x
+8                           71            5892     82.4x
+64                          47           18887    401.4x
+1024                       104           15675    150.2x
+65536                      169            8920     52.6x
+1048576                    148            1959     13.2x
+offload model: scanning D GB of columns, CPU at the bandwidth measured above (232 GB/s); GPU numbers are ASSUMED, from vendor specifications
+GPU / link (assumed)                all resident    90% resident    50% resident    10% resident  nothing resident
+HBM 1500 GB/s, PCIe4 25                     6.5x            0.9x            0.2x            0.1x             0.11x
+HBM 3300 GB/s, PCIe5 50                    14.2x            1.9x            0.4x            0.2x             0.22x
+HBM 1500 GB/s, NVLink-C2C 400               6.5x            5.1x            2.7x            1.9x             1.72x
+GDDR 600 GB/s, PCIe4 25                     2.6x            0.8x            0.2x            0.1x             0.11x
+speedup = CPU time / GPU time for a bandwidth-bound scan; the GPU time is the data it reads from its memory plus the data it must fetch over the link
+```
+
+<ul> <li><strong>A scan is a bandwidth test, and it saturates early.</strong> One thread reads <strong>92 GB/s</strong> (this machine has unusually high unified-memory bandwidth), 8 threads <strong>232 GB/s</strong>, and 12 threads add nothing (the extra threads run on efficiency cores). The ceiling, not the thread count, sets the speed: a GPU scan kernel is the same program with 20 000 lanes and a 1.5 TB/s ceiling.</li> <li><strong>Scan, compaction and partition cost multiples of a scan.</strong> The prefix sum reaches 58.6 GB/s (two passes plus a write per element). Order-preserving compaction needs three passes (flags, scan, scatter): on one thread it is 1.4–6× slower than a plain loop, yet the plain loop is <em>not</em> constant: it runs at <strong>24 GB/s when 1% of rows survive</strong> and collapses to <strong>2.9 GB/s at 50%</strong> because the branch becomes unpredictable. The parallel version is flat in selectivity (12–20 GB/s at 8–12 threads) and wins by 4× at 50%, loses at 1% (20.8 against 23.5 GB/s) where the branch predictor does the compaction's work for free. On a GPU there is no branch predictor and divergence is expensive, so the branch-free three-pass form is the one used.</li> <li><strong>Partitioning beats sorting by a wide margin</strong>: radix partition on 8 bits runs at <strong>15.4 GB/s</strong> at 8 threads (2.5 on one) and on 4 bits at <strong>20.9 GB/s</strong>, against 0.35 GB/s for <code>sort_unstable</code> of the same keys (388 ms): partitioning a join input on a few bits first is far cheaper than sorting it, and fewer partitions are faster because the scatter has fewer write streams (cache lines and TLB entries).</li> <li><strong>Contention decides the aggregation strategy.</strong> With 8 threads, a shared atomic table does <strong>62 M rows/s with 1 group and 47 M/s with 64 groups</strong> (every thread hits the same few cache lines), while private tables do <strong>3 817 M and 18 887 M rows/s</strong>: 62× and 400× faster. As the number of groups grows the atomic table recovers (169 M rows/s at 65 536 groups) while private tables degrade (1 959 M rows/s at 1 M groups: each thread's table no longer fits in cache and the merge grows), narrowing the gap to 13×. GPU engines therefore aggregate few groups in per-block shared memory, many groups with global atomics, and huge group counts by sorting.</li> <li><strong>The offload model says residency is everything.</strong> With this machine's 232 GB/s as the CPU: a GPU with 1.5 TB/s of HBM is <strong>6.5× faster if all data is resident</strong> (the ratio of bandwidths), <strong>0.9× at 90% resident</strong> (already slower than the CPU), and <strong>0.11× (9× slower) when nothing is resident</strong> and every byte crosses PCIe 4 at 25 GB/s. PCIe 5 with 3.3 TB/s HBM: 14.2× resident, 1.9× at 90%, 0.22× cold. A coherent link such as NVLink-C2C (400 GB/s) changes the picture completely: 5.1× at 90% resident and still 1.7× with nothing resident. The break-even residency for the PCIe 4 case is <code>f* = (1/25 − 1/232) / (1/25 − 1/1500) ≈ 0.91</code>: the GPU pays off only if more than about nine tenths of the bytes a query reads are already in HBM.</li> </ul>
+
+<aside data-call="note"><b>Reading the model</b><p>The model prices only the scan bandwidth, which is where GPU databases are strongest. It ignores kernel launch and synchronization (microseconds each), the cost of loading data into HBM in the first place, compression (which multiplies effective bandwidth on both the link and the HBM), overlap of transfer and compute (which hides the smaller of the two), and the price per GB of HBM against DRAM. Put your own numbers into <code>speedup = 1 / (B_cpu × (f / B_gpu + (1 − f) / B_link))</code> before believing any vendor chart, and measure <code>B_cpu</code> on the server you would actually use.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Disjoint writes in safe Rust</strong> need either disjoint slices or atomics. <code>exclusive_scan</code> and <code>compact</code> hand each block its own <code>&amp;mut [u64]</code> with <code>split_at_mut</code> (the output is cut where the scan says each block's results start), so every thread writes only its own memory. <code>radix_partition</code> scatters to interleaved positions that no slice split can express, so it stores into <code>Vec&lt;AtomicU32&gt;</code> with <code>Relaxed</code> ordering: each slot is written exactly once, which the type system cannot prove but the algorithm guarantees. This is the same obligation a CUDA kernel's scatter carries.</li> <li><strong><code>std::thread::scope</code></strong> lets workers borrow the input slices and the output chunks without <code>Arc</code>, and joins them before returning; a kernel launch is a <code>scope</code> and the barrier between kernels is its end.</li> <li><strong>Real GPU code from Rust</strong> uses <code>wgpu</code> (portable compute shaders over Metal, Vulkan, DX12), <code>cudarc</code> (CUDA driver API) or <code>rust-gpu</code>/<code>cuda-std</code> (kernels written in Rust); the host side is ordinary Rust with explicit buffer allocation, upload, dispatch and readback, which are exactly the link costs the model prices.</li> <li><strong>Contention as a measurable property</strong>: <code>group_sum_atomic</code> uses <code>fetch_add(…, Relaxed)</code>; its poor scaling with few groups is cache-line ping-pong, visible with no GPU. Padding each counter to its own cache line fixes the false sharing but not the true sharing of one counter.</li> <li><strong>Two-level structure everywhere</strong>: per-block work plus a tiny global combine step (scan of block sums, merge of private tables) is how work scales on any parallel machine; it is also the shape of tests: compare against the sequential definition for sizes 0, 1, fewer than the thread count, and random.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Property tests against sequential definitions</strong> (random inputs, 1–8 threads): the exclusive scan equals a running sum and its total; compaction equals <code>filter</code> (order and content); radix partition is a <em>stable</em> permutation: partition <code>p</code> holds, in input order, exactly the keys with low bits <code>p</code>, with correct start offsets; both group-by strategies equal a plain sum per group.</li> <li><strong>Edge sizes</strong>: 0, 1, 2, 3 and 7 elements with 1, 4 and 16 threads (more threads than elements); an empty scan sum.</li> <li><strong>Measurement cross-check</strong>: the harness asserts that the atomic and private group-by agree on 100 000 rows for every group count in the experiment.</li> <li><strong>Mutants run against these tests</strong> (all killed): block offsets not accumulated; an inclusive instead of exclusive scan; compaction keeping rejected elements; block-major offsets in the radix partition (breaking stability); a mask one bit too wide; the atomic group-by overwriting instead of adding; the private-table merge dropping a table; overlapping blocks.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>MapD → OmniSci → HEAVY.AI (HeavyDB)</strong>: a columnar SQL engine that compiles queries with LLVM to GPU (and CPU) code, keeps hot columns cached in GPU memory, and renders results on the GPU for interactive visual analytics.</li> <li><strong>Kinetica</strong>: a distributed, GPU-accelerated analytics database for time-series, geospatial and streaming workloads, with vectorized execution over in-memory columns.</li> <li><strong>SQream DB</strong>: a GPU database aimed at very large (petabyte-scale) analytics: columnar compressed storage streamed from disk through the GPU in chunks, so memory capacity is not the limit and the GPU is used as a throughput engine.</li> <li><strong>BlazingDB / BlazingSQL</strong>: SQL on the RAPIDS stack (cuDF, cuIO) reading Parquet and CSV straight into GPU memory, built on library kernels; its approach was absorbed into the RAPIDS ecosystem.</li> <li><strong>Brytlyt</strong>: a GPU-accelerated PostgreSQL (extension and storage), joins and aggregations offloaded.</li> <li><strong>Swarm64</strong>: PostgreSQL acceleration with an FPGA for scans, filters and aggregation plus parallel-query improvements.</li> <li><strong>Current practice</strong>: GPU acceleration of established engines (Spark with RAPIDS, plugins for DuckDB/Velox-style engines, research systems for out-of-core GPU joins) and hardware with coherent CPU–GPU memory (Grace Hopper) that moves the break-even point in the model above.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Benchmarking with resident data.</strong> A speedup measured with the table already in HBM says nothing about a query on cold data; always report the cold run, the load time, and the working-set size against device memory.</li> <li><strong>Counting only the kernel.</strong> End-to-end time includes the host-to-device copy, the launch, the result copy back, and the wait for the slowest stage; use a profiler that shows the whole timeline.</li> <li><strong>Atomics on few keys.</strong> The same contention that costs 60× on CPU threads costs far more on thousands of lanes; aggregate few groups in local memory.</li> <li><strong>Divergence and skew</strong>: branchy predicates and skewed join keys leave most lanes idle; prefer predication, sort or partition by key, and balance work per block.</li> <li><strong>Precision and semantics</strong>: floating-point sums depend on summation order (parallel results differ from sequential ones in the last bits); decimal, NULL and string semantics must match the host engine exactly.</li> <li><strong>Memory capacity</strong>: a join build side that does not fit in HBM forces partitioning and out-of-core processing; plan for it from the start instead of discovering it at scale.</li> <li><strong>Operational cost</strong>: GPUs mean drivers, firmware, special instances, and per-GB prices well above DRAM; the speedup must pay for the dollar-per-query, not only the seconds-per-query.</li> <li><strong>Don't trust assumed numbers</strong>: the table above uses spec-sheet bandwidths; sustained throughput on real kernels is lower (50–80% of peak is typical), and links are shared.</li> </ul></aside>
+"""

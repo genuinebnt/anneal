@@ -1,0 +1,72 @@
+title = "Parametric query optimization"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 397
+kind = "recipe"
+lede = "Plan diagrams, anorexic reduction, robust plans, bouquets, generic vs custom plans."
+level = "advanced"
+code = ["examples/database/parametric_query_optimization.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>prepared-statement plan caches</li><li>optimizers for parameterised workloads</li><li>robust-query-processing research</li><li>plan-regression tooling</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+PostgreSQL prepared statements (`plan_cache_mode`: five custom plans, then compare against the generic plan), SQL Server parameter sniffing and Query Store plan forcing, Oracle adaptive cursor sharing (several plans per cursor keyed by bind selectivity), plan-diagram visualisation tools (Picasso) and the "anorexic" reduction used to decide how many plans to cache per template.
+
+Course: CMU 15-799 Query Optimization (Spring 2025), lecture 16 (Parametric Query Optimization)
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a query **template** `SELECT count(*) FROM R JOIN S ON R.fk = S.id WHERE R.a < :p1 AND S.b < :p2` has an optimal plan that depends on the parameter values through two selectivities s1 = sel(R.a &lt; p1) and s2 = sel(S.b &lt; p2).
+
+Seven physical plans compete: A hash join (seq scan R, build hash on filtered S); B the same with an index range scan on R.a; C index scan R then index nested loop into the S primary key; D scan S, probe the R.fk index per qualifying S row (join order flipped); E sort-merge; F and G hash joins that build on the filtered R side (index scan / seq scan) and probe with S.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Plan diagram</div><div class="cb-g-says"><p>Which plan is cheapest at every point of the selectivity space (printed as ASCII), with the exact switch points of the one-dimensional slice found by bisection on the cost difference of the two neighbouring plans.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Cost model</div><div class="cb-g-says"><p>Closed formulas in the row counts R' = s1*|R| and S' = s2*|S|. They are <strong>validated</strong> against an instrumented executor: each plan is run on seeded data, counting work units (sequential tuple 1, random fetch 4, index probe 2, hash build 1.5, ...); the executed counter must equal the formula and all plans must return the same count as a naive loop.</p></div></div><div class="cb-g-term"><div class="cb-g-name">ANOREXIC reduction (Harish et al., VLDB 2007)</div><div class="cb-g-says"><p>Plan P may <strong>swallow</strong> point x when recost(P, x) &lt;= (1+lambda) * opt(x); greedy set cover keeps the few plans that cover the whole space. The guarantee: every point is served within (1+lambda) of optimal. Recosting a plan at a foreign point is the primitive of Dutt et al.</p><p>(SIGMOD 2017).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Robust choice</div><div class="cb-g-says"><p>The single plan that minimises the worst-case regret (max over the space of cost / optimal) versus the average-optimal one.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Plan bouquet</div><div class="cb-g-says"><p>With no usable estimate, run plans on iso-cost contours with doubling budgets; sub-optimality is bounded by 4 in 1-D.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Generic vs custom (PostgreSQL)</div><div class="cb-g-says"><p>The first five executions of a prepared statement are planned with the actual values (custom plans); then the average custom cost is compared to the generic plan optimised at default selectivities (1/3), and the cheaper policy sticks.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+re-optimising on every execution costs planning time; reusing one plan costs execution time when the parameter moves to a region where another plan is far better. Parametric optimisation quantifies that trade-off and bounds it with a handful of cached plans.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Note**: plans E, F, G are dominated in this cost model (never optimal), which the cost-curve table makes visible; they still matter as recosting candidates and as the reason the diagram has to be computed, not guessed.
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+executed cost == model cost and equal results for all 7 plans at 40 random points; the diagram has >= 4 distinct plans; the reduced diagram's worst-case penalty over the grid is &lt;= lambda for lambda in {0, 0.1, 0.2, 0.5} and plan counts never increase; the minimax plan's worst regret &lt;= that of any other single plan;
+
+The bouquet is within 4x on 2000 params; the PostgreSQL-style rule switches at execution 6 for a stable workload and stays custom for a workload whose custom plans are cheap.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Parametric Query Optimization, CMU 15-799 lecture 16 <https://15799.courses.cs.cmu.edu/spring2025/schedule.html> Leveraging Re-costing for Online Optimization of Parameterized Queries with Guarantees (Dutt et al., SIGMOD 2017) Progressive Parametric Query Optimization (Bizarro et al., TKDE 2009) Design and Analysis of Parametric Query Optimization Algorithms (Ganguly, VLDB 1998)
+
+```text
+PostgreSQL PREPARE https://www.postgresql.org/docs/current/sql-prepare.html
+```
+"""
+
+[[sources]]
+title = "15799.courses.cs.cmu.edu/spring2025/schedule.html"
+url = "https://15799.courses.cs.cmu.edu/spring2025/schedule.html"
+
+[[sources]]
+title = "postgresql.org/docs/current/sql-prepare.html"
+url = "https://www.postgresql.org/docs/current/sql-prepare.html"

@@ -1,0 +1,74 @@
+title = "Number parsing and formatting end to end"
+module = "Standard library and core"
+module_order = 2
+chapter = "Numbers, traits and formatting"
+chapter_order = 5
+order = 86
+kind = "recipe"
+lede = "FromStr with every error, radix, grouping, hex dumps, human-readable sizes and durations, rounding for display, round-trip properties, a money type."
+level = "intermediate"
+code = ["examples/std_tour/std_num_parsing_formatting.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>config and query-parameter parsing</li><li>CSV import</li><li>CLI output</li><li>logs</li><li>invoices</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li><code>?limit=50</code> validation</li><li>"1,234,567" display</li><li><code>hexdump -C</code> style debugging</li><li>"1.5 MiB"</li><li>"2h 03m"</li><li>"30s"/"5m" config durations</li><li>printing cents without floating point</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>str::parse</code></li><li><code>std::str::FromStr</code></li><li><code>std::num::ParseIntError</code></li><li><code>ParseIntError::kind</code></li><li><code>std::num::IntErrorKind</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::num::ParseFloatError</code></li><li><code>std::str::ParseBoolError</code></li><li><code>std::char::ParseCharError</code></li><li><code>u32::from_str_radix</code></li><li><code>char::to_digit</code></li><li><code>std::format</code></li></ul>
+
+<ul class="cb-g-names"><li><code>f64::to_string</code></li><li><code>f64::to_bits</code></li><li><code>f64::from_bits</code></li><li><code>f64::is_finite</code></li><li><code>f64::round</code></li><li><code>u64::ilog10</code></li><li><code>u64::div_ceil</code></li><li><code>u64::unsigned_abs</code></li></ul>
+
+<ul class="cb-g-names"><li><code>i64::checked_mul</code></li><li><code>i64::checked_add</code></li><li><code>i64::checked_sub</code></li><li><code>std::time::Duration</code></li><li><code>Duration::from_secs</code></li><li><code>Duration::as_secs</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Duration::subsec_millis</code></li><li><code>Duration::from_millis</code></li><li><code>Duration::checked_add</code></li><li><code>slice::chunks</code></li><li><code>str::split_at_checked</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/str/trait.FromStr.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/str/trait.FromStr.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+core (`core::str::FromStr`, `core::num` errors and from_str_radix, float parsing, `core::time::Duration`); `format!`/to_string are alloc.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+int from_ascii / from_ascii_radix (unstable in 1.98.1), locale-aware formatting (std has none), arbitrary-precision decimals (needs a crate). Format spec details: std_fmt_display_debug_deep. Casts: std_integer_methods_overflow.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Parse a number</td><td><code>s.trim().parse::&lt;u32&gt;()        (parse itself does NOT trim)</code></td></tr><tr><td>Know WHY an int failed</td><td><code>err.kind() -&gt; IntErrorKind</code></td></tr><tr><td>Why a float failed</td><td><code>only Display ("cannot parse float from empty string" / "invalid float literal")</code></td></tr><tr><td>Reject inf and NaN</td><td><code>parse then is_finite()</code></td></tr><tr><td>Hex / binary input</td><td><code>from_str_radix(stripped, 16)    (strip "0x" yourself)</code></td></tr><tr><td>Thousands separators</td><td><code>by hand (no format flag)</code></td></tr><tr><td>Fixed decimals for display</td><td><code>format!("{x:.2}")</code></td></tr><tr><td>Exact round trip</td><td><code>format!("{x}") then parse (shortest digits that read back equal)</code></td></tr><tr><td>Money</td><td><code>integer minor units; split with / and % for display</code></td></tr><tr><td>"30s" style config</td><td><code>split the suffix, checked_mul the unit</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/str/trait.FromStr.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/str/trait.FromStr.html</a></li><li><a href="https://doc.rust-lang.org/std/primitive.f64.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/primitive.f64.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/str/trait.FromStr.html"
+url = "https://doc.rust-lang.org/std/str/trait.FromStr.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/primitive.f64.html"
+url = "https://doc.rust-lang.org/std/primitive.f64.html"

@@ -1,0 +1,13 @@
+error[E0201]: cannot find value `missing` in this scope
+ --> recover_no_cascade.peb:2:13
+  |
+2 |     let a = missing + 1;
+  |             ^^^^^^^ not found in this scope
+
+error[E0201]: cannot find value `undefined_thing` in this scope
+ --> recover_no_cascade.peb:3:21
+  |
+3 |     let b = a * 2 + undefined_thing;
+  |                     ^^^^^^^^^^^^^^^ not found in this scope
+
+error: aborting due to 2 previous errors

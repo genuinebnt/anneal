@@ -1,0 +1,91 @@
+title = "A type-ahead service"
+module = "Complete projects"
+module_order = 13
+chapter = "Capstones"
+chapter_order = 1
+order = 662
+kind = "capstone"
+lede = "a type-ahead service (axum): prefix trie + trigram typo index, merged ranking, LRU cache, live updates"
+level = "capstone"
+code = ["examples/capstones/typeahead_service.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>search boxes</li><li>command palettes</li><li>address/product/user pickers: any "suggest as I type" backend</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+an HTTP service on loopback: `GET /suggest?q=&limit=`, `POST /events` (a suggestion was chosen), `POST /index` (add terms), `GET /metrics`. Behind it, one `Engine` combines two indexes and a cache:
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Get** /suggest?q=rsut --> normalize --> LRU cache (key = normalized q + limit, valid only for the current generation)
+
+```text
+                                    | miss
+               +--------------------+---------------------+
+               v                                          v
+prefix TRIE (per-node cached top-K,            TRIGRAM inverted index (padded char trigrams)
+decayed popularity)  -> O(|q|+K)               infix: intersect postings, verify `contains`
+               |                               typo : count shared trigrams >= need, verify edit distance
+               +--------------> final ranker <------------+   prefix first, then (distance, popularity,
+                          dedupe by term id, cut to limit      recency, text, id): a TOTAL order
+```
+
+**Post** /events, /index --> writer mutex --> mutate index in place (RwLock) or copy-and-swap (Arc snapshot) --> bump generation --> invalidate only the cache entries the change can affect
+
+**Why** each piece:
+
+- trie with cached top-K: a query for "a" must not scan every word starting with "a"; each node already holds its K best term ids, so a lookup is a walk of &#124;q&#124; nodes plus a clone of &lt;= 20 ids. Writes pay: an event re-sorts one small list per node on the term's path.
+
+   Scores only ever grow (popularity += 2&#94;(t/half_life)), so promoting one term never invalidates the order of the others (see autocomplete_engine for the decay trick).
+- trigrams: a trie cannot find "script" inside "javascript" or repair "rsut". Every term is indexed by its padded character trigrams. Candidates are found by counting shared trigrams (cheap, set arithmetic on posting lists), then **verified** with the real predicate (substring / Damerau-Levenshtein): filter-then-verify, no false positives.
+
+   Matching policy (like pg_trgm's similarity threshold): a typo match needs >= max(2, grams(q) - 4&#42;d) shared trigrams **and** distance &lt;= d, d = 1 for 3-5 chars, 2 beyond; queries under 3 chars match by prefix only.
+- one ranker, one total order, so results are deterministic and testable against a brute-force oracle.
+- cache invalidation: a change to term t can only alter cached queries that t matches (prefix, infix or typo), so only those entries are dropped; hot unrelated prefixes keep their hits. Each entry is stamped with the index generation, so a reader that raced with a writer can never install a stale answer.
+- RwLock vs copy-on-write snapshots: the engine can run on either; main() **measures** both under reader/writer load and picks the better one. In-place RwLock updates cost O(path); a snapshot swap costs a full index clone per write but readers never wait.
+
+   The clone grows with index size (hundreds of writes/s on 5000 terms is fine, millions of terms is not), so big indexes use in-place updates or persistent/segmented structures; snapshots win for rare bulk rebuilds.
+- request coalescing / debouncing (design note, not coded): clients should debounce keystrokes (&#126;100-150 ms) and cancel in-flight requests when a newer one is sent (the response to "ru" is useless once "rus" is typed).
+
+   The server can additionally coalesce identical concurrent misses ("single flight"): the first request computes, followers wait on the same future. The LRU already gives the same effect for the second request onwards.
+- Unicode: queries and terms are folded (lowercase, accents stripped via a small table, combining marks dropped, whitespace collapsed), so "CAFE", "Café" and "cafe&#92;u{301}" are one key. Display text is kept as entered.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>search-as-you-type in e-commerce</li><li><strong>Ide</strong>/command palettes</li><li>address and contact pickers</li><li>"frecency" ranking in shells and browsers (decayed popularity)</li><li>spell-tolerant lookup (pg_trgm, Elasticsearch completion/fuzzy suggesters are the same ideas)</li><li>patterns: per-node top-K caching</li><li>filter-then-verify</li><li>LRU with targeted invalidation</li><li>generation stamps against races</li><li>copy-on-write snapshots vs RwLock</li><li>latency histograms with percentiles</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Trie> <https://swtch.com/~rsc/regexp/regexp4.html> <https://en.wikipedia.org/wiki/Levenshtein_distance> <https://docs.rs/axum/latest/axum/> <https://en.wikipedia.org/wiki/Cache_replacement_policies>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Trie"
+url = "https://en.wikipedia.org/wiki/Trie"
+
+[[sources]]
+title = "swtch.com/~rsc/regexp/regexp4.html"
+url = "https://swtch.com/~rsc/regexp/regexp4.html"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Levenshtein_distance"
+url = "https://en.wikipedia.org/wiki/Levenshtein_distance"
+
+[[sources]]
+title = "docs.rs/axum/latest/axum"
+url = "https://docs.rs/axum/latest/axum/"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Cache_replacement_policies"
+url = "https://en.wikipedia.org/wiki/Cache_replacement_policies"

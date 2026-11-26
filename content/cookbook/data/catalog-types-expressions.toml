@@ -1,0 +1,323 @@
+title = "Catalog, types, expressions"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 352
+kind = "guide"
+lede = "BusTub P3 groundwork · schemas and name resolution · tables and indexes as catalog objects · bound expressions · three-valued evaluation · type coercion"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>Executors need three things that are not storage: a <strong>catalog</strong> that says what tables, columns and indexes exist; <strong>expressions</strong> that compute over rows; and <strong>types</strong> that decide what <code>1 + 2.5</code> means. BusTub gives you these. Writing a minimal version first makes every later executor much shorter, because the rest of the engine is built on exactly these three pieces.</p>
+"""
+
+[[sections]]
+heading = "Catalog"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Object</th> <th>Holds</th> <th>Used by</th> </tr> </thead> <tbody> <tr> <td><code>Schema</code> / <code>Column</code></td> <td>name, type, and the <strong>table qualifier</strong> (<code>e.name</code> vs <code>d.name</code>)</td> <td>the binder (name resolution), every executor (output shape)</td> </tr> <tr> <td><code>TableInfo</code></td> <td>oid, name, schema, tuple layout, the table heap</td> <td>scans, DML</td> </tr> <tr> <td><code>IndexInfo</code></td> <td>name, table, key column, the B+Tree</td> <td>index scans, index joins, DML maintenance</td> </tr> </tbody> </table></div>
+
+<p>Name resolution is the first place SQL semantics bite: <code>resolve(qualifier, name)</code> returns the index of the one matching column and fails for <strong>zero matches</strong> (unknown column) and for <strong>two matches</strong> (<code>SELECT id FROM emp JOIN dept …</code> where both have <code>id</code>: ambiguous). A self-join works only because each side's schema is re-qualified with its alias (<code>e</code>, <code>b</code>).</p>
+
+:::deeper Catalog, schema resolution, index creation with backfill, type coercion
+```rust title="src/catalog/catalog.rs"
+//! Catalog: schemas, tables (heap + codec layout), indexes (B+Tree on one integer column).
+use crate::buffer::arc_replacer::ArcReplacer;
+use crate::buffer::buffer_pool_manager::BufferPoolManager;
+use crate::storage::index::b_plus_tree::BPlusTree;
+use crate::storage::table::tuple_codec::{ColType, Layout};
+use crate::storage::table::table_heap::TableHeap;
+use crate::types::value::Value;
+use super::{err, Result};
+
+pub type Bpm = BufferPoolManager<ArcReplacer>;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Column { pub name: String, pub ty: ColType, pub table: Option<String> }
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Schema { pub cols: Vec<Column> }
+
+impl Schema {
+    pub fn new(cols: Vec<Column>) -> Self { Schema { cols } }
+    pub fn len(&self) -> usize { self.cols.len() }
+    pub fn is_empty(&self) -> bool { self.cols.is_empty() }
+    /// Resolve `[qual.]name`, rejecting ambiguity (two tables with the same column name).
+    pub fn resolve(&self, qual: Option<&str>, name: &str) -> Result<usize> {
+        let hits: Vec<usize> = self.cols.iter().enumerate()
+            .filter(|(_, c)| c.name.eq_ignore_ascii_case(name)
+                && qual.is_none_or(|q| c.table.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(q))))
+            .map(|(i, _)| i).collect();
+        match hits.as_slice() {
+            [i] => Ok(*i),
+            [] => err(format!("column {}{name} not found", qual.map(|q| format!("{q}.")).unwrap_or_default())),
+            _ => err(format!("column reference {name} is ambiguous")),
+        }
+    }
+    pub fn join(&self, other: &Schema) -> Schema { Schema { cols: self.cols.iter().chain(&other.cols).cloned().collect() } }
+    pub fn with_qualifier(&self, q: &str) -> Schema {
+        Schema { cols: self.cols.iter().map(|c| Column { table: Some(q.to_string()), ..c.clone() }).collect() }
+    }
+}
+
+pub struct TableInfo<'a> { pub oid: u32, pub name: String, pub schema: Schema, pub layout: Layout, pub heap: TableHeap<'a, ArcReplacer> }
+pub struct IndexInfo<'a> { pub oid: u32, pub name: String, pub table: String, pub col: usize, pub tree: BPlusTree<'a, ArcReplacer> }
+
+pub struct Catalog<'a> { pub bpm: &'a Bpm, pub tables: Vec<TableInfo<'a>>, pub indexes: Vec<IndexInfo<'a>> }
+
+/// Order-preserving i64 -> u64 for B+Tree keys: flip the sign bit.
+pub fn index_key(v: &Value) -> Option<u64> { match v { Value::Int(i) => Some((*i as u64) ^ (1 << 63)), _ => None } }
+
+impl<'a> Catalog<'a> {
+    pub fn new(bpm: &'a Bpm) -> Self { Catalog { bpm, tables: vec![], indexes: vec![] } }
+
+    pub fn table(&self, name: &str) -> Result<&TableInfo<'a>> {
+        self.tables.iter().find(|t| t.name.eq_ignore_ascii_case(name)).map_or_else(|| err(format!("table {name} does not exist")), Ok)
+    }
+
+    pub fn create_table(&mut self, name: &str, cols: Vec<(String, ColType)>) -> Result<()> {
+        if self.table(name).is_ok() { return err(format!("table {name} already exists")); }
+        let types: Vec<ColType> = cols.iter().map(|c| c.1).collect();
+        let schema = Schema::new(cols.into_iter().map(|(n, ty)| Column { name: n, ty, table: Some(name.to_string()) }).collect());
+        let heap = TableHeap::create(self.bpm).map_err(|e| super::Error(format!("{e:?}")))?;
+        self.tables.push(TableInfo { oid: self.tables.len() as u32, name: name.to_string(), schema, layout: Layout::new(&types), heap });
+        Ok(())
+    }
+
+    pub fn indexes_on(&self, table: &str) -> impl Iterator<Item = &IndexInfo<'a>> {
+        let t = table.to_string();
+        self.indexes.iter().filter(move |i| i.table.eq_ignore_ascii_case(&t))
+    }
+
+    /// Unique B+Tree index on one INTEGER/BIGINT column; existing rows are bulk-inserted.
+    pub fn create_index(&mut self, name: &str, table: &str, col: &str) -> Result<()> {
+        let t = self.table(table)?;
+        let ci = t.schema.resolve(None, col)?;
+        if !matches!(t.schema.cols[ci].ty, ColType::Int | ColType::BigInt) { return err("only integer columns can be indexed".into()); }
+        let tree = BPlusTree::new(self.bpm, 255, 255, 0).map_err(|e| super::Error(format!("{e:?}")))?;
+        for r in t.heap.iter().map_err(|e| super::Error(format!("{e:?}")))? {
+            let (rid, meta, bytes) = r.map_err(|e| super::Error(format!("{e:?}")))?;
+            if meta.deleted { continue; }
+            let v = t.layout.decode_col(&bytes, ci);
+            let Some(k) = index_key(&v) else { continue };             // NULLs aren't indexed
+            if !tree.insert(k, crate::storage::index::b_plus_tree::pack_rid(rid.page.0, rid.slot)).map_err(|e| super::Error(format!("{e:?}")))? {
+                return err(format!("could not create unique index {name}: duplicate key {v:?}"));
+            }
+        }
+        self.indexes.push(IndexInfo { oid: self.indexes.len() as u32, name: name.to_string(), table: t.name.clone(), col: ci, tree });
+        Ok(())
+    }
+}
+
+/// Cast a value into a column's type (the binder's job in a full system).
+pub fn coerce(v: Value, ty: ColType) -> Result<Value> {
+    use Value::*;
+    Ok(match (v, ty) {
+        (Null, _) => Null,
+        (Int(i), ColType::Int) => { if i32::try_from(i).is_err() { return err(format!("integer out of range: {i}")); } Int(i) }
+        (Int(i), ColType::BigInt) => Int(i),
+        (Int(i), ColType::Float) => Float(i as f64),
+        (Float(f), ColType::Float) => Float(f),
+        (Float(f), ColType::Int | ColType::BigInt) => Int(f.round() as i64),
+        (Bool(b), ColType::Bool) => Bool(b),
+        (Text(s), ColType::Varchar) => Text(s),
+        (Int(i), ColType::Varchar) => Text(i.to_string().into()),
+        (v, ty) => return err(format!("cannot store {v:?} in a {ty:?} column")),
+    })
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Expressions"
+body = """
+<p>A bound expression refers to <strong>column positions</strong>, not names: <code>Col(3)</code> is the fourth column of the input row. Binding happens once, at plan time; evaluation happens per row and has no string lookups. The evaluator is a plain recursive <code>match</code>. The things worth getting exactly right:</p>
+
+<ul> <li><strong>Three-valued logic.</strong> <code>AND</code> and <code>OR</code> don't short-circuit on UNKNOWN: <code>NULL AND false</code> is <code>false</code>, <code>NULL OR true</code> is <code>true</code>, and <code>NULL AND true</code> is <code>NULL</code>. <code>WHERE</code> keeps only <code>true</code> (<code>truthy</code>).</li> <li><strong>NULL propagation.</strong> Any arithmetic or comparison with NULL is NULL; <code>IS NULL</code> is the only operator that observes it. <code>COALESCE</code> is the exception among functions.</li> <li><strong>Integer division truncates toward zero</strong> (<code>7 / 2 = 3</code>, <code>-7 / 2 = -3</code>), <code>%</code> takes the dividend's sign, and division by zero is an <strong>error</strong>, not NULL or infinity (PostgreSQL's behaviour).</li> <li><strong>Overflow is an error.</strong> <code>checked_add</code> and friends: a database that silently wraps <code>i64::MAX + 1</code> corrupts data.</li> <li><strong>Type of a result</strong> (<code>Expr::ty</code>): integer op integer is integer; anything with a float is float; comparisons are boolean. The planner needs result types to build output schemas before any row exists.</li> </ul>
+
+:::deeper Expression tree, evaluator with 3VL, typing, helpers used by the optimizer (shift, conjuncts)
+```rust title="src/execution/expr.rs"
+//! Bound expressions: column references are indices into the input row.
+use std::cmp::Ordering;
+use crate::storage::table::tuple_codec::ColType;
+use crate::types::value::Value;
+use super::{err, Result};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BinOp { Add, Sub, Mul, Div, Mod, Eq, Ne, Lt, Le, Gt, Ge, And, Or, Concat }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScalarFn { Upper, Lower, Length, Abs, Coalesce }
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Expr {
+    Col(usize),
+    Lit(Value),
+    Bin(BinOp, Box<Expr>, Box<Expr>),
+    Not(Box<Expr>),
+    Neg(Box<Expr>),
+    IsNull(Box<Expr>, bool),                       // bool = IS NOT NULL
+    Func(ScalarFn, Vec<Expr>),
+}
+
+pub fn truthy(v: &Value) -> bool { matches!(v, Value::Bool(true)) }   // WHERE keeps only TRUE
+
+impl Expr {
+    /// `a OR b OR …` as a balanced tree: the depth is log n, so a list of a hundred thousand alternatives (a long `IN (…)`) can be
+    /// evaluated, simplified and dropped recursively without exhausting the stack. `es` must not be empty.
+    pub fn or_balanced(mut es: Vec<Expr>) -> Expr {
+        if es.len() == 1 { return es.pop().unwrap(); }
+        let right = es.split_off(es.len() / 2);
+        Expr::Bin(BinOp::Or, Box::new(Expr::or_balanced(es)), Box::new(Expr::or_balanced(right)))
+    }
+
+    pub fn eval(&self, row: &[Value]) -> Result<Value> {
+        use Value::*;
+        Ok(match self {
+            Expr::Col(i) => row[*i].clone(),
+            Expr::Lit(v) => v.clone(),
+            Expr::Not(e) => match e.eval(row)? { Bool(b) => Bool(!b), Null => Null, v => return err(format!("NOT of {v:?}")) },
+            Expr::Neg(e) => match e.eval(row)? { Int(i) => Int(i.checked_neg().ok_or_else(|| super::Error("integer out of range".into()))?), Float(f) => Float(-f), Null => Null, v => return err(format!("-{v:?}")) },
+            Expr::IsNull(e, not) => Bool(e.eval(row)?.is_null() != *not),
+            // Short-circuit: the right side is not evaluated when the left decides the answer. Row-level security relies on it: a
+            // policy conjunct placed first keeps the user's conjuncts (and the errors they can raise) away from rows that are not visible.
+            Expr::Bin(BinOp::And, a, b) => match a.eval(row)? {
+                Bool(false) => Bool(false),
+                l => match (l, b.eval(row)?) {
+                    (_, Bool(false)) => Bool(false),
+                    (Bool(true), Bool(true)) => Bool(true),
+                    _ => Null,
+                },
+            },
+            Expr::Bin(BinOp::Or, a, b) => match a.eval(row)? {
+                Bool(true) => Bool(true),
+                l => match (l, b.eval(row)?) {
+                    (_, Bool(true)) => Bool(true),
+                    (Bool(false), Bool(false)) => Bool(false),
+                    _ => Null,
+                },
+            },
+            Expr::Bin(op, a, b) => binary(*op, a.eval(row)?, b.eval(row)?)?,
+            Expr::Func(f, args) => {
+                let vs: Vec<Value> = args.iter().map(|a| a.eval(row)).collect::<Result<_>>()?;
+                match (f, vs.as_slice()) {
+                    (ScalarFn::Coalesce, vs) => vs.iter().find(|v| !v.is_null()).cloned().unwrap_or(Null),
+                    (_, [Null]) => Null,
+                    (ScalarFn::Upper, [Text(s)]) => Text(s.to_uppercase().into()),
+                    (ScalarFn::Lower, [Text(s)]) => Text(s.to_lowercase().into()),
+                    (ScalarFn::Length, [Text(s)]) => Int(s.chars().count() as i64),
+                    (ScalarFn::Abs, [Int(i)]) => Int(i.abs()),
+                    (ScalarFn::Abs, [Float(x)]) => Float(x.abs()),
+                    (f, a) => return err(format!("bad arguments to {f:?}: {a:?}")),
+                }
+            }
+        })
+    }
+
+    /// Result type, given the input row's column types.
+    pub fn ty(&self, input: &[ColType]) -> ColType {
+        match self {
+            Expr::Col(i) => input[*i],
+            Expr::Lit(v) => lit_type(v),
+            Expr::Bin(op, a, b) => match op {
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
+                    if a.ty(input) == ColType::Float || b.ty(input) == ColType::Float { ColType::Float } else { ColType::BigInt }
+                }
+                BinOp::Concat => ColType::Varchar,
+                _ => ColType::Bool,
+            },
+            Expr::Not(_) | Expr::IsNull(..) => ColType::Bool,
+            Expr::Neg(e) => e.ty(input),
+            Expr::Func(ScalarFn::Upper | ScalarFn::Lower, _) => ColType::Varchar,
+            Expr::Func(ScalarFn::Length, _) => ColType::BigInt,
+            Expr::Func(_, args) => args.first().map_or(ColType::BigInt, |a| a.ty(input)),
+        }
+    }
+
+    /// Shift column references (used when moving predicates across a join).
+    pub fn shift(&self, by: isize) -> Expr { self.map_cols(&|i| (i as isize + by) as usize) }
+    pub fn map_cols(&self, f: &dyn Fn(usize) -> usize) -> Expr {
+        match self {
+            Expr::Col(i) => Expr::Col(f(*i)),
+            Expr::Lit(v) => Expr::Lit(v.clone()),
+            Expr::Bin(op, a, b) => Expr::Bin(*op, Box::new(a.map_cols(f)), Box::new(b.map_cols(f))),
+            Expr::Not(e) => Expr::Not(Box::new(e.map_cols(f))),
+            Expr::Neg(e) => Expr::Neg(Box::new(e.map_cols(f))),
+            Expr::IsNull(e, n) => Expr::IsNull(Box::new(e.map_cols(f)), *n),
+            Expr::Func(g, a) => Expr::Func(*g, a.iter().map(|x| x.map_cols(f)).collect()),
+        }
+    }
+    pub fn cols(&self, out: &mut Vec<usize>) {
+        match self {
+            Expr::Col(i) => out.push(*i),
+            Expr::Lit(_) => {}
+            Expr::Bin(_, a, b) => { a.cols(out); b.cols(out) }
+            Expr::Not(e) | Expr::Neg(e) | Expr::IsNull(e, _) => e.cols(out),
+            Expr::Func(_, a) => a.iter().for_each(|x| x.cols(out)),
+        }
+    }
+    /// Split a predicate into its AND-ed conjuncts.
+    pub fn conjuncts(self) -> Vec<Expr> {
+        match self { Expr::Bin(BinOp::And, a, b) => { let mut v = a.conjuncts(); v.extend(b.conjuncts()); v } e => vec![e] }
+    }
+    pub fn and_all(mut es: Vec<Expr>) -> Option<Expr> {
+        let first = if es.is_empty() { return None } else { es.remove(0) };
+        Some(es.into_iter().fold(first, |a, b| Expr::Bin(BinOp::And, Box::new(a), Box::new(b))))
+    }
+}
+
+pub fn lit_type(v: &Value) -> ColType {
+    match v { Value::Bool(_) => ColType::Bool, Value::Int(_) | Value::Null => ColType::BigInt, Value::Float(_) => ColType::Float, Value::Text(_) => ColType::Varchar }
+}
+
+/// Apply a binary operator to two values (NULL in, NULL out). Public so that aggregation can add values without building an expression.
+pub fn binary(op: BinOp, a: Value, b: Value) -> Result<Value> {
+    use Value::*;
+    if a.is_null() || b.is_null() { return Ok(Null); }
+    let cmp = |o: Option<Ordering>| -> Result<Value> {
+        let o = o.ok_or_else(|| super::Error(format!("cannot compare {a:?} and {b:?}")))?;
+        Ok(Bool(match op { BinOp::Eq => o.is_eq(), BinOp::Ne => o.is_ne(), BinOp::Lt => o.is_lt(), BinOp::Le => o.is_le(), BinOp::Gt => o.is_gt(), _ => o.is_ge() }))
+    };
+    let ovf = || super::Error("integer out of range".into());
+    Ok(match (op, &a, &b) {
+        (BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge, _, _) => return cmp(a.sql_cmp(&b)),
+        (BinOp::Concat, x, y) => Text(format!("{}{}", display(x), display(y)).into()),
+        (BinOp::Add, Int(x), Int(y)) => Int(x.checked_add(*y).ok_or_else(ovf)?),
+        (BinOp::Sub, Int(x), Int(y)) => Int(x.checked_sub(*y).ok_or_else(ovf)?),
+        (BinOp::Mul, Int(x), Int(y)) => Int(x.checked_mul(*y).ok_or_else(ovf)?),
+        (BinOp::Div | BinOp::Mod, Int(_), Int(0)) => return err("division by zero".into()),
+        (BinOp::Div, Int(x), Int(y)) => Int(x.wrapping_div(*y)),           // truncates toward zero, like SQL
+        (BinOp::Mod, Int(x), Int(y)) => Int(x.wrapping_rem(*y)),
+        (op, x, y) => {
+            let (Some(x), Some(y)) = (num(x), num(y)) else { return err(format!("type error: {a:?} {op:?} {b:?}")) };
+            match op {
+                BinOp::Add => Float(x + y), BinOp::Sub => Float(x - y), BinOp::Mul => Float(x * y),
+                BinOp::Div if y == 0.0 => return err("division by zero".into()),
+                BinOp::Div => Float(x / y), BinOp::Mod => Float(x % y),
+                _ => unreachable!(),
+            }
+        }
+    })
+}
+
+fn num(v: &Value) -> Option<f64> { match v { Value::Int(i) => Some(*i as f64), Value::Float(f) => Some(*f), _ => None } }
+
+pub fn display(v: &Value) -> String {
+    match v {
+        Value::Null => "NULL".into(),
+        Value::Bool(b) => if *b { "true".into() } else { "false".into() },
+        Value::Int(i) => i.to_string(),
+        Value::Float(f) => if f.fract() == 0.0 && f.abs() < 1e15 { format!("{f:.1}") } else { f.to_string() },
+        Value::Text(s) => s.to_string(),
+    }
+}
+```
+:::
+
+<aside data-call="rust"><b><code>Option&lt;bool&gt;</code> vs a <code>Value::Null</code> result</b><p>The evaluator returns <code>Value</code> (with <code>Null</code>), and <code>truthy</code> collapses it at the filter. An alternative is a dedicated <code>Option&lt;bool&gt;</code> for predicates (the <a href="/cookbook/p/relational-model-algebra">L01 evaluator</a>'s choice). That is more type-safe but doubles the code paths. Production engines keep predicates as nullable boolean <em>columns</em> (a value vector plus a validity bitmap), which is why the whole stack handles NULL uniformly. The bug to avoid either way: letting <code>NULL</code> fall through <code>if let Value::Bool(true)</code>... into the <code>else</code> branch of an <code>IF</code>/<code>CASE</code>, which is <em>correct</em> for <code>WHERE</code> but wrong for <code>NOT</code>.</p></aside>
+
+<aside data-call="rust"><b><code>checked_*</code>, <code>wrapping_*</code> and <code>try_from</code></b><p><code>i64::checked_add</code> returns <code>None</code> on overflow, which you map to an SQL error. <code>wrapping_div</code> exists because <code>i64::MIN / -1</code> overflows (Rust panics in debug for <code>/</code>), and it's the only integer division that can fail besides zero. Use <code>i32::try_from(x)</code> for range checks on <code>INTEGER</code> columns instead of <code>as i32</code>, which silently truncates. These three idioms cover nearly all numeric-edge-case handling in an engine.</p></aside>
+"""

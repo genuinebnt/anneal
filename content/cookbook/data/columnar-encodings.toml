@@ -1,0 +1,69 @@
+title = "Columnar encodings"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 330
+kind = "recipe"
+lede = "column-store encodings, zone maps and vectorised scans over encoded data."
+level = "advanced"
+code = ["examples/database/columnar_encodings.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>analytical (OLAP) engines</li><li>columnar file formats</li><li>time-series stores</li><li>anything scanning few columns of many rows</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a tiny column store. A column is cut into **blocks** of 1024 values; every block is encoded independently with the cheapest of six encodings and carries a **zone map** (min, max, null presence). Encodings (all exact, lossless for the full i64 range thanks to wrapping arithmetic and zigzag):
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Plain</div><div class="cb-g-says"><p>8 bytes/value, the fallback when nothing else wins.</p></div></div><div class="cb-g-term"><div class="cb-g-name">RLE (value, run length)</div><div class="cb-g-says"><p>Pairs: wins on sorted or clustered low-cardinality data.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>DICT       sorted (order-preserving) dictionary + bit-packed codes. Because code order == value order, <code>lo &lt;= v &lt;= hi</code> becomes <code>clo &lt;= code &lt; chi</code>: the predicate is rewritten <strong>once</strong> per block (two binary searches) and then evaluated on the packed codes without ever materialising a value. A first-appearance dictionary only supports equality.</p></div></div><div class="cb-g-term"><div class="cb-g-name">For</div><div class="cb-g-says"><p>Frame of reference: store <code>v - min</code> bit-packed; a predicate is shifted into offset space.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Delta</div><div class="cb-g-says"><p>First value + zigzag-encoded differences, bit-packed: sorted ids, counters.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>DELTA2     delta of delta: timestamps with a steady tick have all-zero second differences, i.e. a width of 0 bits. Bit packing uses a <code>BitWriter</code> that lets a value straddle two u64 words, so any width 0..=64 works.</p><p><strong>Nulls</strong> live in a separate validity bitmap; null slots hold the previous value so they do not break runs or deltas, and the scan ANDs the selection with the bitmap afterwards (SQL: <strong>null</strong> never satisfies a comparison).</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+analytics touches few columns of many rows. Column layout reads only the bytes it needs, same-typed neighbours compress far better than mixed rows, and queries can run on the compressed form: less memory traffic is the whole speedup. **A zone map** lets a whole block be skipped (no match possible) or accepted wholesale (every row matches) from 16 bytes.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**How** the scan works: `Segment::scan(lo, hi)` returns a **selection vector** (sorted row ids), the currency of vectorised engines: the next operator (project, aggregate, join probe) consumes row ids instead of re-evaluating predicates. Per block: skip / accept-all / scan-encoded-form.
+
+RLE filters per **run** (one comparison covers thousands of rows), DICT and **for** compare packed integers, **delta** streams a running sum without allocating.
+
+A heuristic chooser computes one-pass statistics (runs, distinct count, min/max, delta widths) and evaluates the exact size formula of each encoding; it never encodes all six, and the test asserts its estimate equals the real encoded size.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Parquet/<strong>orc</strong>-style files (dictionary, RLE/bit-packed hybrid, delta encodings, min/max statistics per page and row group)</li><li>ClickHouse and DuckDB column segments (zone maps / min-max indexes)</li><li>Gorilla/Prometheus-style timestamp compression (delta-of-delta)</li><li>Vertica and C-Store projections sorted for RLE</li><li>late materialisation via selection vectors</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+C-Store (Stonebraker et al.) <https://people.csail.mit.edu/tdanford/6830papers/stonebraker-cstore.pdf>
+
+```text
+Parquet file format https://parquet.apache.org/docs/file-format/
+Roaring bitmaps (compressed selection sets) https://arxiv.org/abs/1402.6407
+```
+"""
+
+[[sources]]
+title = "people.csail.mit.edu/tdanford/6830papers/stonebraker-cstore.pdf"
+url = "https://people.csail.mit.edu/tdanford/6830papers/stonebraker-cstore.pdf"
+
+[[sources]]
+title = "parquet.apache.org/docs/file-format"
+url = "https://parquet.apache.org/docs/file-format/"
+
+[[sources]]
+title = "arxiv.org/abs/1402.6407"
+url = "https://arxiv.org/abs/1402.6407"

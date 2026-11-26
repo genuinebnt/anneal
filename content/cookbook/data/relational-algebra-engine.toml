@@ -1,0 +1,105 @@
+title = "Relational model and algebra"
+module = "Databases"
+module_order = 8
+chapter = "Foundations and SQL"
+chapter_order = 1
+order = 313
+kind = "recipe"
+lede = "Bags vs sets, operators, a typed expression evaluator, equivalence rewrites."
+level = "intermediate"
+code = ["examples/database/relational_algebra_engine.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>SQL planners and optimizers</li><li>dataframe query layers</li><li>rule-based rewrite engines</li><li>teaching how a query becomes a plan</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+the logical-plan layer of every SQL engine (PostgreSQL's parse tree -> Query -> Plan, Apache Calcite's RelNode with rewrite rules, Spark Catalyst's logical optimizer, DataFusion's LogicalPlan): predicate pushdown, projection pushdown, join reordering and "cross product + filter -> join" are exactly the rules implemented below.
+
+Course: CMU 15-445 Lecture 01 (relational model and relational algebra); the rewrites also prepare 15-445's query optimization lectures.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a relation is a **schema** (named, typed columns) plus a multiset of rows. SQL works on **bags** (duplicates are kept); the textbook algebra works on **sets**; `Distinct` (delta) converts. Operators (SQL in brackets):
+
+- select sigma_p(R)        [**where** p]            &#42; project pi_A(R)       [**select a**: bag projection keeps duplicates]
+- rename rho               [AS]                 &#42; **union all** / **intersect** / **except** with bag counts (sum, min, monus)
+- cross product R x S      [**from R**, S]          &#42; theta join R &#124;x&#124;&#95;p S  [**join** ... ON p]
+- natural join R &#124;x&#124; S     [**natural join**]       &#42; semi join (**exists**) and anti join (**not exists**)
+- division R / S           [relational "for all": a such that (a,b) in R for **every** b in S]
+- grouping/aggregation gamma&#95;{G; f(x)}(R) [**group by G**]. A global aggregate over an **empty** input returns no row here (SQL returns one row of **count** = 0); everything else follows SQL. Expressions are a small typed language (Int, Bool, Str) with a type **checker** (`a + 'x'` and `a = 'x'` are rejected before execution, as a planner's binder would) and an evaluator.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+SQL to algebra, by hand: **select** a, d **from R**, U, **T where** b = x **and** y = c **and** a &lt; 2 **and** d >= 3
+
+```text
+  = pi_{a,d}( sigma_{b=x AND y=c AND a<2 AND d>=3}( (R x U) x T ) )          <- the naive plan, huge intermediate result
+  = pi_{a,d}( (R' |x|_{b=x} U) |x|_{y=c} T' )  with R' = sigma_{a<2}(R), T' = sigma_{d>=3}(T)   <- after the rewrites below
+SELECT DISTINCT b FROM R           = delta(pi_b(R))          SELECT b FROM R   = pi_b(R)           (bag: differs when b repeats)
+```
+
+**Select** a **from R where not exists** (**select** 1 **from S where S**.b = R.b)  = R anti-join&#95;{R.b = S.b} S
+
+```text
+SELECT a, COUNT(*) FROM R GROUP BY a                 = gamma_{a; count(*)}(R)
+```
+
+**Equivalence rules** (each is a function Plan -> Option&lt;Plan> that fires at the **root** of the plan it is given):
+
+```text
+cascade   sigma_{p AND q}(R)  =  sigma_p(sigma_q(R))        merge  is the reverse
+commute   sigma_p(sigma_q(R)) =  sigma_q(sigma_p(R))
+```
+
+pushdown  sigma_p(R x S) = sigma&#95;{p_R}(R) x sigma&#95;{p_S}(S) when each conjunct only mentions one side (also for theta/natural join) cross2join  sigma_p(R x S) = R &#124;x&#124;&#95;p S
+
+```text
+join commutativity  R |x| S = S |x| R      associativity  (R |x| S) |x| T = R |x| (S |x| T)   (columns reorder; compared by name)
+projection pushdown  pi_A(R |x| S) = pi_A( pi_{A_R + join cols}(R) |x| pi_{A_S + join cols}(S) )   (join columns must survive)
+```
+
+sigma through gamma  sigma_p(gamma_G(R)) = gamma_G(sigma_p(R))  when p only mentions grouping columns **why** the optimizer wants them: selection and projection shrink inputs **before** the expensive operator; join order and cross2join turn a quadratic cross product into a keyed join.
+
+The demo prints the plan tree before/after and the total number of rows every operator produced (a proxy for work).
+
+**Bag** vs **set**: rewrites are verified under **bag** semantics (multiset equality), the strict one. Some laws hold only for sets: the demo shows **R intersect S** == R natural-join S when both have the same schema holds for **sets** but not for bags (a natural join multiplies duplicate counts, intersection takes the minimum) and that projection/union change counts.
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+500 random database instances (empty relations, duplicates, tiny value domains so joins match often): every rewrite fires on shaped plans and preserves the result (canonical form: columns sorted by name, rows sorted);
+
+Operators are checked against independent naive implementations (nested-loop join, BTreeMap grouping, remove-first-match bag ops); division equals its textbook derivation pi_A(R) - pi_A((pi_A(R) x S) - R); type errors are rejected; the optimizer's output equals the naive plan.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Relational algebra <https://en.wikipedia.org/wiki/Relational_algebra>   Codd, A Relational Model of Data for Large Shared Data Banks <https://www.seas.upenn.edu/~zives/03f/cis550/codd.pdf>
+
+```text
+CMU 15-445 https://15445.courses.cs.cmu.edu/fall2024/
+```
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Relational_algebra"
+url = "https://en.wikipedia.org/wiki/Relational_algebra"
+
+[[sources]]
+title = "seas.upenn.edu/~zives/03f/cis550/codd.pdf"
+url = "https://www.seas.upenn.edu/~zives/03f/cis550/codd.pdf"
+
+[[sources]]
+title = "15445.courses.cs.cmu.edu/fall2024"
+url = "https://15445.courses.cs.cmu.edu/fall2024/"

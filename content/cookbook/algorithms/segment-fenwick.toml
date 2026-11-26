@@ -1,0 +1,59 @@
+title = "Segment fenwick"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Trees and ordered structures"
+chapter_order = 2
+order = 178
+kind = "recipe"
+lede = "Fenwick tree, monoid segment tree, lazy range-add segment tree, sparse table"
+level = "intermediate"
+code = ["examples/data_structures/segment_fenwick.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>leaderboards and ranking</li><li>order statistics</li><li>time-series window queries</li><li>competitive-programming style range problems</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+four structures answering "aggregate over a range of an array" with different trade-offs:
+
+- `Fenwick` (**bit**): point update + prefix/range **sum** in O(log n), plus k-th element by binary lifting. Tiny and fast; needs an invertible op.
+- `SegTree<M>`: generic over a `Monoid` (identity + associative op), so one implementation gives sum, min and max; no inverse needed.
+- `LazySeg`: range **add** + range **sum**; updates are deferred in `add` tags and pushed down only when a query must look inside a node.
+- `SparseTable`: **static** range-min in O(1) after O(n log n) build, by overlapping two power-of-two windows (min is idempotent).
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+scanning a range is O(n) per query; these trade a little memory for O(log n) (or O(1)) queries under updates.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+Fenwick node i covers the last `lowbit(i)` elements ending at i; the segment tree is the bottom-up array layout (leaves at n..2n). Each structure is checked against a naive scan on seeded random arrays.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>game leaderboards (rank = count of higher scores)</li><li>percentile/median over a stream (k-th via bucket counts)</li><li>rolling max/min over time-series windows</li><li>counting inversions</li><li>range-update dashboards</li><li>LCA via RMQ on an Euler tour</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Fenwick_tree> and <https://en.wikipedia.org/wiki/Segment_tree>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Fenwick_tree"
+url = "https://en.wikipedia.org/wiki/Fenwick_tree"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Segment_tree"
+url = "https://en.wikipedia.org/wiki/Segment_tree"

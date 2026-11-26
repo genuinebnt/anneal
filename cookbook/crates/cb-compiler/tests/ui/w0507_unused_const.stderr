@@ -1,0 +1,7 @@
+warning[W0507]: constant `LIMIT` is never used
+ --> w0507_unused_const.peb:1:7
+  |
+1 | const LIMIT: int = 10;
+  |       ^^^^^ never used
+
+warning: 1 warning emitted

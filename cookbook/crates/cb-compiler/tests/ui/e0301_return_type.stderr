@@ -1,0 +1,9 @@
+error[E0301]: mismatched types
+ --> e0301_return_type.peb:2:5
+  |
+1 | fn f() -> int {
+  |           --- expected `int` because of this return type
+2 |     "no"
+  |     ^^^^ expected `int`, found `str`
+
+error: aborting due to 1 previous error

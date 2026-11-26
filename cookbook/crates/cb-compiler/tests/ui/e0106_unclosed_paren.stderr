@@ -1,0 +1,15 @@
+error[E0302]: the built-in `println` takes 0 or 1 arguments but 2 were supplied
+ --> e0106_unclosed_paren.peb:2:5
+  |
+2 |     println(1, 2;
+  |     ^^^^^^^^^^^^ expected 0 or 1 arguments
+
+error[E0106]: unclosed delimiter `(`
+ --> e0106_unclosed_paren.peb:2:12
+  |
+2 |     println(1, 2;
+  |            ^    - expected `)` before this
+  |            |
+  |            unclosed delimiter
+
+error: aborting due to 2 previous errors

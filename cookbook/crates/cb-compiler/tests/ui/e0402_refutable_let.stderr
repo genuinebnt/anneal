@@ -1,0 +1,10 @@
+error[E0402]: refutable pattern in `let` binding
+ --> e0402_refutable_let.peb:4:9
+  |
+4 |     let Option::Some(x) = o;
+  |         ^^^^^^^^^^^^^^^ pattern `Option::None` not covered
+  |
+  = note: the bound value has type `Option<int>`
+  = help: use `match` to handle the other cases
+
+error: aborting due to 1 previous error

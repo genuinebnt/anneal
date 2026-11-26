@@ -1,0 +1,54 @@
+title = "Branches vectorization"
+module = "Performance and systems"
+module_order = 7
+chapter = "Measuring and CPU performance"
+chapter_order = 1
+order = 274
+kind = "recipe"
+lede = "branch prediction, branchless code, bounds checks, and auto-vectorisation (SIMD) friendliness."
+level = "intermediate"
+code = ["examples/perf/branches_vectorization.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>hot filter/sum loops</li><li>scoring</li><li>scanning arrays of numbers</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>filters/scoring loops</li><li>vectorisable numeric kernels</li><li>avoiding bounds checks</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+(1) The **CPU guesses** which way an `if` goes. Random data = &#126;50% wrong guesses = &#126;15-20 cycles lost each. **Sorted** (or otherwise predictable) data makes the same code fast.
+
+Compilers often turn simple `if`s into branch-free `cmov`/masks. (2) Indexing `v[i]` has a bounds check; iterators (`iter()`, `zip`, `chunks_exact`) let the compiler prove safety and drop it. (3) Floating-point addition is **not** associative, so the compiler will not reorder `sum::<f32>()` into SIMD lanes for you.
+
+Integers can be reordered; for floats use several independent accumulators (what SIMD would do) yourself. Explicit SIMD: `std::simd` (nightly), <https://docs.rs/wide> , <https://docs.rs/pulp> ; architecture intrinsics in `std::arch`.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.algorithmica.org/hpc/pipelining/branching/> and <https://nnethercote.github.io/perf-book/bounds-checks.html>
+"""
+
+[[sources]]
+title = "docs.rs/wide"
+url = "https://docs.rs/wide"
+
+[[sources]]
+title = "docs.rs/pulp"
+url = "https://docs.rs/pulp"
+
+[[sources]]
+title = "en.algorithmica.org/hpc/pipelining/branching"
+url = "https://en.algorithmica.org/hpc/pipelining/branching/"
+
+[[sources]]
+title = "nnethercote.github.io/perf-book/bounds-checks.html"
+url = "https://nnethercote.github.io/perf-book/bounds-checks.html"

@@ -1,0 +1,60 @@
+title = "\"implement it yourself\" Rust questions"
+module = "Worked questions"
+module_order = 14
+chapter = "Coding and design questions"
+chapter_order = 2
+order = 684
+kind = "recipe"
+lede = "Vec, Box, Rc/Weak, HashMap, String, iterator adapters, Mutex, scope, Cow, errors, operators."
+level = "advanced"
+code = ["examples/interview/implement_std_from_scratch.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+Rust interviews that ask you to rebuild a std type, and as a tour of where `unsafe` is justified (every unsafe block here has a **safety** comment).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>understanding std containers</li><li>writing custom collections and smart pointers</li><li>lock primitives</li><li>library-style iterator and operator APIs</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://rust-unofficial.github.io/too-many-lists/" target="_blank" rel="noreferrer">https://rust-unofficial.github.io/too-many-lists/</a></li><li><a href="https://doc.rust-lang.org/nomicon/vec/vec.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/nomicon/vec/vec.html</a></li><li><a href="https://doc.rust-lang.org/nomicon/arc-mutex/arc.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/nomicon/arc-mutex/arc.html</a> See also: examples/interview/rust_unsafe_memory_layout_qa.rs, examples/interview/linked_lists_in_rust.rs, examples/language/implementing_std_traits.rs</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Question bank Q1**. Implement `MyVec<T>`: growth, push/pop/insert/remove, drain, Deref to a slice, and a Drop that drops each element exactly once. [Hard] [asked: very common] Q2. Implement `MyBox<T>`: heap allocation, Deref/DerefMut, Drop, and why `*b` can move out of a real Box. [Medium] [asked: very common] Q3.
+
+Implement a single-threaded `MyRc<T>` and `MyWeak<T>` with strong/weak counts and upgrade. [Hard] [asked: very common] Q4. Implement a generic Stack and a Queue from two stacks with amortized O(1) operations. [Easy] [asked: very common] Q5.
+
+Implement a singly linked stack with iter, iter_mut, into_iter, and a Drop that survives a million nodes. [Medium] [asked: very common] Q6. Implement `MyHashMap<K, V>` with separate chaining and resizing, looking up `String` keys by `&str`. [Hard] [asked: very common] Q7.
+
+Implement `MyString`: UTF-8 invariant, push/pop of chars, and a safe `Deref<Target = str>`. [Medium] [asked: common] Q8. Implement the iterator adapters Map, Filter, Zip, Take, Chain and Peekable as generic structs. [Medium] [asked: very common] Q9.
+
+Re-implement Option's `map`, `and_then`, `filter`, `ok_or`, `zip` and `take` on your own enum. [Easy] [asked: very common] Q10. Implement a spinlock `MyMutex<T>` with an RAII guard and the right memory orderings. [Hard] [asked: common] Q11. Implement a `thread::scope`-like helper that lets threads borrow from the stack. [Hard] [asked: occasional] Q12.
+
+Implement a `Cow`-like enum that allocates only when it must. [Medium] [asked: common] Q13. Design an error enum with `From`, `Display`, `Error::source`, and use it with `?` (including into `Box<dyn Error>`). [Medium] [asked: very common] Q14.
+
+Build a registry of named functions with `Box<dyn Fn>` / `Box<dyn FnMut>` and capturing closures. [Medium] [asked: common] Q15. Implement `Display` for a matrix that respects precision and aligns columns, plus multiplication and indexing. [Medium] [asked: common] Q16.
+
+Operator overloading for a Complex number: Add, Sub, Mul, Neg, AddAssign, scalar Mul both ways, and `Sum`. [Easy] [asked: very common]
+"""
+
+[[sources]]
+title = "rust-unofficial.github.io/too-many-lists"
+url = "https://rust-unofficial.github.io/too-many-lists/"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/vec/vec.html"
+url = "https://doc.rust-lang.org/nomicon/vec/vec.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/arc-mutex/arc.html"
+url = "https://doc.rust-lang.org/nomicon/arc-mutex/arc.html"

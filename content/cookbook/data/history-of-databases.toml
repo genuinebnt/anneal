@@ -1,0 +1,45 @@
+title = "History of databases"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 431
+kind = "guide"
+lede = "15-721 lecture #1 · what goes around comes around · hierarchical, network, relational, document, graph · NewSQL · why the same ideas keep returning"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Every decade re-invents earlier ideas</strong> with new hardware or workloads. Michael Stonebraker and Joseph Hellerstein's survey <em>What Goes Around Comes Around</em> tracks 35 years: hierarchical (IMS) → network (CODASYL) → relational → entity-relationship, object-oriented, object-relational → semi-structured (XML, later JSON) → document stores and key-value NoSQL → column stores and NewSQL. Almost every "new" data model eventually <strong>grows a SQL dialect</strong> and the relational model absorbs it.</li> <li><strong>Data independence</strong> is the central idea of the relational model (Codd, 1970): a <em>logical</em> schema and declarative query language decouple applications from <em>physical</em> storage. Everything else in this guide (indexes, optimizers, MVCC) exists to make that decoupling cheap.</li> <li><strong>Navigational models</strong> (IMS, CODASYL) make the programmer follow pointers: fast when the access path is known and brittle when it changes. Modern graph databases and document stores with references re-introduce navigation.</li> <li><strong>Why SQL won</strong>: declarative, optimizable, standardized, and good enough. Each rival (QUEL, Datalog, OQL, XQuery, MapReduce, GraphQL as a DB language) either died or was subsumed.</li> <li><strong>NoSQL (2000s)</strong> traded schema, joins and ACID for horizontal scale on commodity hardware; <strong>NewSQL (2010s)</strong> re-added SQL and transactions on scale-out architectures (Spanner, CockroachDB, VoltDB, TiDB), partly by using new designs (main-memory, deterministic, MVCC); <strong>today</strong> lakehouses and "composable" engines (Arrow, DataFusion, Velox) split the monolith into reusable parts.</li> <li><strong>What changes the design</strong>: storage cost (disk → SSD → RAM → NVM), core counts (one → thousands), the network (LAN → cloud), and workloads (OLTP → OLAP → HTAP, ML, vectors). Re-ask <em>which assumption just broke</em> before copying a design from 1995.</li> </ul>
+"""
+
+[[sections]]
+heading = "A timeline worth remembering"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Era</th> <th>Systems and ideas</th> <th>The lesson</th> </tr> </thead> <tbody> <tr> <td>1960s</td> <td>IMS (hierarchical), CODASYL (network)</td> <td>pointers are fast and brittle</td> </tr> <tr> <td>1970s</td> <td>System R, INGRES, relational algebra, SQL, B+Tree, 2PL, ARIES precursors</td> <td>declarative + optimizer + transactions</td> </tr> <tr> <td>1980s</td> <td>commercial RDBMS (Oracle, DB2, Sybase), ER modeling, OO databases</td> <td>object databases lose to relational + ORMs</td> </tr> <tr> <td>1990s</td> <td>data warehouses, column stores (Sybase IQ), parallel DBMS (Gamma, Teradata)</td> <td>analytics needs its own physical design</td> </tr> <tr> <td>2000s</td> <td>Google MapReduce/Bigtable, Dynamo, Hadoop; C-Store → Vertica; in-memory H-Store → VoltDB</td> <td>scale-out first, consistency later</td> </tr> <tr> <td>2010s</td> <td>Spanner, NewSQL, RocksDB/LSM, Redshift, Snowflake, Parquet/Arrow, DuckDB, cloud object storage</td> <td>SQL returns; storage and compute separate</td> </tr> <tr> <td>2020s</td> <td>lakehouse, vector databases, serverless, learned components, composable systems</td> <td>one engine rarely fits all; interfaces (Arrow, SQL, pgwire) win</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Reading the history as an engineer"
+body = """
+<ul> <li><strong>Concepts are older than their products.</strong> MVCC (Reed, 1978), column stores (1970s), vectorization (MonetDB, 1990s–2005), lock-free indexes (2000s), consensus (1989) all precede their current popularity; the enabling change was hardware.</li> <li><strong>A new model survives when it adds a capability without removing declarativity.</strong> Document stores survive as JSON columns; graph databases survive as SQL/PGQ and WCOJ (<a href="/cookbook/p/multi-way-and-worst-case-optimal-joins">A18</a>); vector search survives as an index type (Part V).</li> <li><strong>When in doubt, build the relational version first</strong>; it is a baseline that new designs must beat on a benchmark, not an opinion.</li> </ul>
+"""
+
+[[sources]]
+title = "What Goes Around Comes Around"
+url = "https://people.csail.mit.edu/tdanford/6830papers/stonebraker-hellerstein-datamodels.pdf"
+
+[[sources]]
+title = "A Relational Model of Data for Large Shared Data Banks"
+url = "https://www.seas.upenn.edu/~zives/03f/cis550/codd.pdf"
+
+[[sources]]
+title = "What's Really New with NewSQL?"
+url = "https://dl.acm.org/doi/10.1145/3003665.3003674"
+
+[[sources]]
+title = "What Goes Around Comes Around… And Around…"
+url = "https://db.cs.cmu.edu/papers/2024/whatgoesaround-sigmodrec2024.pdf"

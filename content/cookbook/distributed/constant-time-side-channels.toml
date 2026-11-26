@@ -1,0 +1,73 @@
+title = "Constant-time code and side channels"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Cryptography"
+chapter_order = 4
+order = 545
+kind = "recipe"
+lede = "Timing leaks in `==`, a timing attack, ct_select/ct_eq, cache leaks, zeroization."
+level = "intermediate"
+code = ["examples/cryptography/constant_time_side_channels.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>MAC/token/password-hash comparison</li><li>crypto code review</li><li>handling key material in memory</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+!!! **Educational implementation**. **Not** constant-time-audited, **not** for production.
+
+Compilers and CPUs can reintroduce !!! secret-dependent branches or timing behind your back. Use audited libraries: the `subtle` crate !!! (<https://docs.rs/subtle>) for constant-time ops, the `zeroize` crate (<https://docs.rs/zeroize>) for wiping memory, and !!!
+
+RustCrypto (<https://github.com/RustCrypto>) / ring (<https://github.com/briansmith/ring>) for the primitives. Never roll your own.
+
+**What** / **why**: a side channel leaks secrets through **how** a computation runs (time, cache state, power) rather than **what** it outputs.
+
+1. `a == b` on byte slices stops at the first difference, so response time reveals the length of the matching prefix. Checking a MAC or token with `==` lets an attacker guess it one byte at a time: 256&#42;len guesses instead of 256&#94;len.
+
+   We (a) measure the naive vs constant-time comparison on this machine (printed; the assertion is generous and retried, and degrades to a printed note on a noisy machine), and (b) run the attack **deterministically** against a simulated oracle whose "time" is the number of comparison steps (plus injectable jitter), recovering a full secret.
+2. Constant-time building blocks: bit masks instead of `if` (`ct_select`, `ct_eq` on u32/u64), OR-accumulating XOR differences, and `std::hint::black_box` to discourage the optimiser from re-introducing an early exit (it is a hint, not a guarantee; real code is verified at the assembly level or with tools such as dudect).
+3. Branches and table lookups indexed by secrets leak: a branch predictor and a cache are shared hardware state. **Aes T**-table implementations were broken by cache-timing attacks (Bernstein 2005; Osvik-Shamir-Tromer 2006); modern **aes** uses AES-NI or bitsliced code. We model a 64-byte-line cache and show the touched line reveals the high bits of key&#94;plaintext.
+4. Zeroization: secrets should not linger in memory (swap, core dumps, later bugs). A plain `buf.fill(0)` / `x = 0` right before a value dies is a "dead store" the optimiser may delete. A volatile write plus a compiler fence cannot be removed.
+
+   This protects against the optimiser only, not against copies the compiler/stack/registers already made.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>constant-time HMAC/tag comparison (TLS, JWT and webhook-signature verification)</li><li>password-hash verification</li><li>constant-time scalar multiplication in elliptic-curve libraries</li><li>bitsliced or hardware <strong>aes</strong> instead of T-tables</li><li>zeroizing keys on drop in key-management code</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://docs.rs/subtle>
+
+<https://docs.rs/zeroize>
+
+<https://cr.yp.to/antiforgery/cachetiming-20050414.pdf> (Bernstein, cache-timing attacks on **aes**)
+"""
+
+[[sources]]
+title = "docs.rs/subtle"
+url = "https://docs.rs/subtle"
+
+[[sources]]
+title = "docs.rs/zeroize"
+url = "https://docs.rs/zeroize"
+
+[[sources]]
+title = "github.com/RustCrypto"
+url = "https://github.com/RustCrypto"
+
+[[sources]]
+title = "github.com/briansmith/ring"
+url = "https://github.com/briansmith/ring"
+
+[[sources]]
+title = "cr.yp.to/antiforgery/cachetiming-20050414.pdf"
+url = "https://cr.yp.to/antiforgery/cachetiming-20050414.pdf"

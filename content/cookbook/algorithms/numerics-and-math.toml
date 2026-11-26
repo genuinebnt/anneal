@@ -1,0 +1,54 @@
+title = "Numerics and math"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Mathematics and numerics"
+chapter_order = 7
+order = 231
+kind = "recipe"
+lede = "numerical methods and floating-point wisdom, each checked against a closed form."
+level = "advanced"
+code = ["examples/math_science/numerics_and_math.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>scientific code</li><li>signal processing</li><li>graphics</li><li>finance</li><li>anywhere results come from f64 arithmetic</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>FFT for audio/image filtering and fast big-number multiplication</li><li>Newton/secant for solving equations</li><li>quadrature and <strong>ode</strong> solvers in simulation</li><li>LU/CG for linear systems in engineering</li><li>Kahan/pairwise summation in statistics and ledgers</li><li>modular exponentiation and extended GCD in cryptography and competitive programming</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Numerical code is wrong in quiet ways, so each method here is paired with a check that does not trust it: FFT vs the O(n&#94;2) DFT and a round trip; convolution vs schoolbook multiplication; root finders vs sqrt(2) with their convergence **order** measured (1 for bisection, &#126;1.62 secant, 2 Newton);
+
+Quadrature and **ode** solvers whose observed order (halve the step, take log2 of the error ratio) must match theory (2, 4, 1, 4); linear solvers judged by residual, with a 2x2 system where skipping pivoting destroys the answer; Kahan and pairwise summation vs naive on 10 million terms, scored against an **exact** reference computed in integers.
+
+Rules of thumb: never compare floats with ==, subtract nearly equal numbers last (or not at all), prefer total_cmp for sorting floats, and know that f64 has &#126;15.95 decimal digits, no more.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://floating-point-gui.de/>
+
+<https://en.wikipedia.org/wiki/Fast_Fourier_transform>
+
+<https://en.wikipedia.org/wiki/Kahan_summation_algorithm>
+"""
+
+[[sources]]
+title = "floating-point-gui.de"
+url = "https://floating-point-gui.de/"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Fast_Fourier_transform"
+url = "https://en.wikipedia.org/wiki/Fast_Fourier_transform"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Kahan_summation_algorithm"
+url = "https://en.wikipedia.org/wiki/Kahan_summation_algorithm"

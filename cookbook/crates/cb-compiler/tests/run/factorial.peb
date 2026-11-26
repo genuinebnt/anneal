@@ -1,0 +1,5 @@
+fn fact(n: int) -> int { if n <= 1 { 1 } else { n * fact(n - 1) } }
+fn main() {
+    println(to_str(fact(5)));
+    println(to_str(fact(20)));
+}

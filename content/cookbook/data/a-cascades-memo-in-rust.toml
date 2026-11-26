@@ -1,0 +1,325 @@
+title = "A Cascades memo in Rust"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 381
+kind = "guide"
+lede = "Optimize! #4–#5, 15-721 S2024 #13–14 · Volcano and Cascades · groups, rules, properties, enforcers · branch-and-bound · verified against a bottom-up DP and against DPccp's pair counts"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Optimizer generators</strong>: the search algorithm is decoupled from the <strong>rules</strong>, which are written declaratively, so new operators and rewrites plug in without touching the engine. <strong>EXODUS</strong> introduced the idea, <strong>Volcano</strong> made it efficient and top-down, <strong>Cascades</strong> (Graefe 1995) reorganized it as an object-oriented framework. SQL Server, Orca, CockroachDB and Snowflake are Cascades-style.</li> <li><strong>Unified search</strong>: one search covers logical-to-logical <em>and</em> logical-to-physical transformations (no separate heuristic phase). Stratified optimizers (Starburst, CockroachDB's phases) run rule subsets in stages; Cascades folds everything into one memoized search.</li> <li><strong>Expressions and groups</strong>: a <em>logical</em> expression says <em>what</em> (<code>(A ⋈ B) ⋈ C</code>), a <em>physical</em> one says <em>how</em> (<code>(A SeqScan ⋈HJ B SeqScan) ⋈NL C IndexScan</code>). A <strong>group</strong> holds all logically equivalent expressions (same output) and their physical implementations. To avoid materializing every tree, expressions reference <strong>child groups</strong>, not child expressions: a <strong>multi-expression</strong>.</li> <li><strong>Rules</strong> have a <strong>pattern</strong> (what to match) and a <strong>substitute</strong> (what to produce). <strong>Transformation rules</strong> map logical → logical (commutativity, associativity, predicate pushdown); <strong>implementation rules</strong> map logical → physical (join → hash join / merge join; get → scan / index scan).</li> <li><strong>The memo</strong> is the compact graph of groups: it memoizes work, detects duplicate expressions and equivalent groups, and caches the <strong>best plan per (group, required properties)</strong>. Correctness rests on the <strong>principle of optimality</strong>: every sub-plan of an optimal plan is optimal for its own properties.</li> <li><strong>Physical properties and enforcers</strong>: required properties (sort order, partitioning) flow <strong>down</strong> from the parent; a sub-plan satisfies them either natively (merge join delivers its key's order, an index scan its clustering) or via an <strong>enforcer</strong> operator (<code>Sort</code>, <code>Exchange</code>) that the search inserts on demand. Bottom-up optimizers had to carry "interesting orders" in the DP table; top-down search asks only for what a parent needs.</li> <li><strong>Top-down search with branch-and-bound</strong>: start at the root with an unbounded cost limit; cost a candidate operator, <strong>pass the remaining budget to its children</strong>, and abandon a branch the moment it can't beat the best plan found. Memoized lower/upper bounds make failure results reusable.</li> <li><strong>Task structure</strong>: optimization is a stack of tasks (optimize group → explore group → apply rule → optimize inputs) so rules can be <strong>prioritized by promise</strong> and the search can stop on a time, transformation-count or cost-threshold limit.</li> <li><strong>In practice</strong> (S2024 #14): SQL Server uses a staged search (simplification, trivial-plan check, exploration phases of increasing breadth, post-optimization), implements most scalar transformations procedurally rather than as rules, and bounds optimization by <em>transformation count</em> so plans don't depend on machine load; <strong>Orca</strong> is a standalone C++ Cascades service with multi-threaded search, <strong>remote debugging</strong> (a dump of optimizer state and inputs that replays the bug) and a <strong>cost-model verifier</strong> (execute two plans, check that the cheaper estimate really ran faster); <strong>CockroachDB</strong> writes rules in a DSL (OptGen) compiled to Go and optimizes scalar and relational operators together.</li> </ul>
+"""
+
+[[sections]]
+heading = "The memo, built from scratch"
+body = """
+<p>The implementation optimizes <strong>inner-join queries</strong> with real physical choices, so every Cascades idea has something to do:</p>
+
+<ol> <li><strong>Logical space</strong>: one <strong>group per relation set</strong>; a logical expression is a pair of child groups <code>(L, R)</code>. The rules are <strong>commutativity</strong> and <strong>left/right associativity</strong> (<code>(A⋈B)⋈C → A⋈(B⋈C)</code>), applied to a fixpoint with duplicate detection in a <code>HashSet</code>; associativity only fires when the new inner group is connected (no cross products).</li> <li><strong>Physical operators and prices</strong>: <code>Scan</code> (cost = rows), <code>IndexScan</code> (1.2×, delivers the relation's clustered order), <code>HashJoin</code> (builds on the left), <code>MergeJoin</code> (on a predicate's attribute, needs both inputs sorted on it, delivers that order), and a <code>Sort</code> <strong>enforcer</strong> (¼·n·log₂ n).</li> <li><strong>Properties</strong>: <code>Any</code> or <code>Order(predicate)</code>; the search asks each child group for the order the join needs and each group caches its best plan <strong>per required property</strong>.</li> <li><strong>Branch-and-bound</strong>: each operator is costed, the remaining budget is passed to the child searches, and a <strong>failed search is cached together with the bound it failed under</strong> (valid only for budgets no larger than that bound).</li> <li><strong>A reference optimizer</strong> that shares <em>only</em> the price list: bottom-up DP over (relation set, order) with no memo, rules or pruning.</li> </ol>
+
+:::deeper Reference: memo groups and multi-expressions, transformation rules to a fixpoint, implementation rules, properties and enforcers, branch-and-bound top-down search, reference DP oracle
+```rust title="src/opt/cascades.rs"
+//! A small Cascades-style optimizer for inner-join queries: a memo of groups (one per relation set), transformation
+//! rules (commutativity, left/right associativity), implementation rules (scan, index scan, hash join, merge join),
+//! physical properties (sort order) with a Sort enforcer, and top-down search with branch-and-bound pruning.
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+use crate::joinorder::{Graph, Rng};
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Prop { Any, Order(usize) }          // Order(e): sorted on the join attribute of predicate (edge) e
+
+/// Query + physical design: the join graph, an id per predicate, and which relations are clustered on which attribute.
+pub struct Catalog { pub g: Graph, pub edges: Vec<(usize, usize)>, pub eid: Vec<usize>, pub clustered: Vec<Option<usize>> }
+
+impl Catalog {
+    pub fn new(g: Graph, rng: &mut Rng) -> Catalog {
+        let n = g.n;
+        let (mut edges, mut eid) = (vec![], vec![usize::MAX; n * n]);
+        for u in 0..n { for v in u + 1..n { if g.adj[u] >> v & 1 == 1 { eid[u * n + v] = edges.len(); eid[v * n + u] = edges.len(); edges.push((u, v)); } } }
+        let clustered = (0..n).map(|r| {
+            let inc: Vec<usize> = (0..n).filter(|&o| g.adj[r] >> o & 1 == 1).map(|o| eid[r * n + o]).collect();
+            if !inc.is_empty() && rng.next(2) == 0 { Some(inc[rng.next(inc.len() as u64) as usize]) } else { None }
+        }).collect();
+        Catalog { g, edges, eid, clustered }
+    }
+    /// Does relation set `set` contain an endpoint of predicate `e` (so a result over `set` can be sorted on it)?
+    pub fn has_attr(&self, set: u64, e: usize) -> bool { let (u, v) = self.edges[e]; set >> u & 1 == 1 || set >> v & 1 == 1 }
+    /// Predicates connecting two disjoint relation sets.
+    pub fn connecting(&self, a: u64, b: u64) -> Vec<usize> {
+        (0..self.edges.len()).filter(|&e| { let (u, v) = self.edges[e]; (a >> u & 1 == 1 && b >> v & 1 == 1) || (a >> v & 1 == 1 && b >> u & 1 == 1) }).collect()
+    }
+}
+
+// cost formulas shared by the optimizer and the reference DP (they must agree on prices to be comparable)
+pub fn scan_cost(c: f64) -> f64 { c }
+pub fn index_scan_cost(c: f64) -> f64 { 1.2 * c }
+pub fn sort_cost(c: f64) -> f64 { 0.25 * c * (c + 1.0).log2() }
+pub fn hash_cost(build: f64, probe: f64, out: f64) -> f64 { 2.0 * build + probe + out }
+pub fn merge_cost(l: f64, r: f64, out: f64) -> f64 { l + r + out }
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Op { Scan(usize), IndexScan(usize), Sort(usize), HashJoin, MergeJoin(usize) }
+#[derive(Debug)]
+pub struct Plan { pub op: Op, pub cost: f64, pub order: Prop, pub kids: Vec<Rc<Plan>> }
+impl Plan {
+    pub fn show(&self) -> String {
+        let k: Vec<String> = self.kids.iter().map(|c| c.show()).collect();
+        match &self.op { Op::Scan(r) => format!("Scan(R{r})"), Op::IndexScan(r) => format!("IndexScan(R{r})"), Op::Sort(a) => format!("Sort[e{a}]({})", k[0]),
+            Op::HashJoin => format!("HashJoin({}, {})", k[0], k[1]), Op::MergeJoin(e) => format!("MergeJoin[e{e}]({}, {})", k[0], k[1]) }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Config { pub commute: bool, pub assoc_left: bool, pub assoc_right: bool, pub prune: bool, pub enforcers: bool }
+impl Config { pub fn full() -> Config { Config { commute: true, assoc_left: true, assoc_right: true, prune: true, enforcers: true } } }
+
+#[derive(Clone, Copy)] struct MExpr { l: usize, r: usize, l_seen: usize, r_seen: usize }
+enum Win { Found(Rc<Plan>), Failed(f64) }       // Failed(x): no plan of cost <= x exists for this (group, property)
+struct Group { set: u64, card: f64, exprs: Vec<MExpr>, explored_at: u64, win: HashMap<Prop, Win>, lb: f64 }
+
+#[derive(Default, Clone, Debug)]
+pub struct Stats { pub groups: usize, pub logical_exprs: usize, pub alts_costed: u64, pub opt_calls: u64 }
+
+pub struct Memo<'a> { cat: &'a Catalog, cfg: Config, groups: Vec<Group>, by_set: HashMap<u64, usize>, seen: HashSet<(usize, usize, usize)>, epoch: u64, pub stats: Stats }
+
+impl<'a> Memo<'a> {
+    pub fn new(cat: &'a Catalog, cfg: Config) -> Self {
+        let mut m = Memo { cat, cfg, groups: vec![], by_set: HashMap::new(), seen: HashSet::new(), epoch: 1, stats: Stats::default() };
+        // seed with one left-deep join order (breadth-first from relation 0): the "initial plan" the rules start from
+        let g = &cat.g;
+        let (mut order, mut set) = (vec![0usize], 1u64);
+        while order.len() < g.n { let next = (g.neighbors(set)).trailing_zeros() as usize; order.push(next); set |= 1 << next; }
+        let mut cur = m.group(1 << order[0]);
+        let mut acc = 1u64 << order[0];
+        for &r in &order[1..] { let rg = m.group(1 << r); acc |= 1 << r; let ng = m.group(acc); m.add_expr(ng, cur, rg); cur = ng; }
+        m
+    }
+    fn group(&mut self, set: u64) -> usize {
+        if let Some(&i) = self.by_set.get(&set) { return i; }
+        let lb: f64 = (0..self.cat.g.n).filter(|&r| set >> r & 1 == 1).map(|r| self.cat.g.card[r]).sum();   // every plan scans each relation
+        self.groups.push(Group { set, card: self.cat.g.card_of(set), exprs: vec![], explored_at: 0, win: HashMap::new(), lb });
+        self.by_set.insert(set, self.groups.len() - 1);
+        self.stats.groups += 1;
+        self.groups.len() - 1
+    }
+    fn add_expr(&mut self, g: usize, l: usize, r: usize) -> bool {
+        if !self.seen.insert((g, l, r)) { return false; }                 // duplicate detection: the memo's whole point
+        self.groups[g].exprs.push(MExpr { l, r, l_seen: 0, r_seen: 0 });
+        self.stats.logical_exprs += 1;
+        self.epoch += 1;
+        true
+    }
+
+    /// Apply transformation rules to a fixpoint for `g` and everything below it.
+    fn explore(&mut self, g: usize) {
+        if self.groups[g].explored_at == self.epoch { return; }
+        loop {
+            let before = self.epoch;
+            let mut i = 0;
+            while i < self.groups[g].exprs.len() {
+                let e = self.groups[g].exprs[i];
+                self.explore(e.l);
+                self.explore(e.r);
+                let (gl, gr) = (self.groups[e.l].set, self.groups[e.r].set);
+                if self.cfg.commute { self.add_expr(g, e.r, e.l); }
+                if self.cfg.assoc_left {            // (A ⋈ B) ⋈ C  →  A ⋈ (B ⋈ C)
+                    let upto = self.groups[e.l].exprs.len();
+                    for k in e.l_seen..upto {
+                        let inner = self.groups[e.l].exprs[k];
+                        let (sa, sb) = (self.groups[inner.l].set, self.groups[inner.r].set);
+                        let bc = sb | gr;
+                        if self.cat.g.connected(bc) && self.cat.g.neighbors(sa) & bc != 0 { let n = self.group(bc); let r2 = e.r; self.add_expr(n, inner.r, r2); self.add_expr(g, inner.l, n); }
+                    }
+                    self.groups[g].exprs[i].l_seen = upto;
+                }
+                if self.cfg.assoc_right {           // A ⋈ (B ⋈ C)  →  (A ⋈ B) ⋈ C
+                    let upto = self.groups[e.r].exprs.len();
+                    for k in e.r_seen..upto {
+                        let inner = self.groups[e.r].exprs[k];
+                        let (sb, sc) = (self.groups[inner.l].set, self.groups[inner.r].set);
+                        let ab = gl | sb;
+                        if self.cat.g.connected(ab) && self.cat.g.neighbors(ab) & sc != 0 { let n = self.group(ab); let l2 = e.l; self.add_expr(n, l2, inner.l); self.add_expr(g, n, inner.r); }
+                    }
+                    self.groups[g].exprs[i].r_seen = upto;
+                }
+                i += 1;
+            }
+            if self.epoch == before { break; }
+        }
+        self.groups[g].explored_at = self.epoch;
+    }
+
+    fn mk(&mut self, op: Op, cost: f64, order: Prop, kids: Vec<Rc<Plan>>) -> Rc<Plan> { self.stats.alts_costed += 1; Rc::new(Plan { op, cost, order, kids }) }
+
+    /// Cheapest plan for group `g` that delivers `req` and costs at most `limit` (None if there is none).
+    #[allow(unused_assignments)]
+    pub fn optimize(&mut self, g: usize, req: Prop, limit: f64) -> Option<Rc<Plan>> {
+        self.stats.opt_calls += 1;
+        let limit = if self.cfg.prune { limit } else { f64::INFINITY };
+        match self.groups[g].win.get(&req) {
+            Some(Win::Found(p)) => return (p.cost <= limit).then(|| p.clone()),
+            Some(Win::Failed(l)) if limit <= *l => return None,
+            _ => {}
+        }
+        self.explore(g);
+        let (set, card) = (self.groups[g].set, self.groups[g].card);
+        let mut best: Option<Rc<Plan>> = None;
+        let mut bound = limit;
+        // `bound` only drives pruning (it stays infinite when pruning is off); `best` is always the cheapest plan seen
+        let prune = self.cfg.prune;
+        macro_rules! offer { ($p:expr) => {{
+            let p: Rc<Plan> = $p;
+            if (p.order == req || req == Prop::Any) && best.as_ref().map_or(p.cost <= limit, |b| p.cost < b.cost) { if prune { bound = p.cost; } best = Some(p); }
+        }}; }
+        if set.count_ones() == 1 {
+            let r = set.trailing_zeros() as usize;
+            let p = self.mk(Op::Scan(r), scan_cost(card), Prop::Any, vec![]); offer!(p);
+            if let Some(a) = self.cat.clustered[r] { let p = self.mk(Op::IndexScan(r), index_scan_cost(card), Prop::Order(a), vec![]); offer!(p); }
+        } else {
+            for i in 0..self.groups[g].exprs.len() {
+                let e = self.groups[g].exprs[i];
+                let (lc, rc) = (self.groups[e.l].card, self.groups[e.r].card);
+                let (llb, rlb) = (self.groups[e.l].lb, self.groups[e.r].lb);
+                if req == Prop::Any {
+                    let op = hash_cost(lc, rc, card);
+                    if op + llb + rlb <= bound {
+                        if let Some(pl) = self.optimize(e.l, Prop::Any, bound - op - rlb) {
+                            if let Some(pr) = self.optimize(e.r, Prop::Any, bound - op - pl.cost) { let p = self.mk(Op::HashJoin, op + pl.cost + pr.cost, Prop::Any, vec![pl, pr]); offer!(p); }
+                        }
+                    }
+                }
+                for k in self.cat.connecting(self.groups[e.l].set, self.groups[e.r].set) {
+                    if req != Prop::Any && req != Prop::Order(k) { continue; }       // a merge join delivers exactly its key's order
+                    let op = merge_cost(lc, rc, card);
+                    if op + llb + rlb <= bound {
+                        if let Some(pl) = self.optimize(e.l, Prop::Order(k), bound - op - rlb) {
+                            if let Some(pr) = self.optimize(e.r, Prop::Order(k), bound - op - pl.cost) { let p = self.mk(Op::MergeJoin(k), op + pl.cost + pr.cost, Prop::Order(k), vec![pl, pr]); offer!(p); }
+                        }
+                    }
+                }
+            }
+        }
+        // enforcer: sort the cheapest unordered plan
+        if let (Prop::Order(a), true) = (req, self.cfg.enforcers) {
+            if self.cat.has_attr(set, a) {
+                let sc = sort_cost(card);
+                if sc <= bound {
+                    if let Some(inner) = self.optimize(g, Prop::Any, bound - sc) { let p = self.mk(Op::Sort(a), inner.cost + sc, Prop::Order(a), vec![inner]); offer!(p); }
+                }
+            }
+        }
+        let w = match &best { Some(p) => Win::Found(p.clone()), None => Win::Failed(limit) };
+        // a bounded failure is only valid for that bound; an unbounded search that found a plan is exact
+        self.groups[g].win.insert(req, w);
+        best
+    }
+
+    pub fn root(&mut self) -> usize { let all = (1u64 << self.cat.g.n) - 1; self.group(all) }
+}
+
+/// Optimize the whole query for a required output order.
+pub fn plan(cat: &Catalog, req: Prop, cfg: Config) -> (Option<Rc<Plan>>, Stats) {
+    let mut m = Memo::new(cat, cfg);
+    let root = m.root();
+    let p = m.optimize(root, req, f64::INFINITY);
+    (p, m.stats.clone())
+}
+
+/// Reference optimizer: bottom-up dynamic programming over (relation set, order) with the same prices and no memo,
+/// no rules and no pruning. The oracle the Cascades implementation is checked against.
+pub fn reference(cat: &Catalog, req: Prop) -> f64 {
+    let n = cat.g.n;
+    let g = &cat.g;
+    let ne = cat.edges.len();
+    let size = 1usize << n;
+    let (mut any, mut ord) = (vec![f64::INFINITY; size], vec![f64::INFINITY; size * ne.max(1)]);
+    for set in 1u64..size as u64 {
+        if !g.connected(set) { continue; }
+        let s = set as usize;
+        let card = g.card_of(set);
+        let mut merge_best = vec![f64::INFINITY; ne];
+        if set.count_ones() == 1 {
+            let r = set.trailing_zeros() as usize;
+            any[s] = scan_cost(card);
+            if let Some(a) = cat.clustered[r] { any[s] = any[s].min(index_scan_cost(card)); merge_best[a] = index_scan_cost(card); }
+        } else {
+            let mut sub = (set - 1) & set;
+            while sub != 0 {
+                let other = set ^ sub;
+                if g.connected(sub) && g.connected(other) && g.neighbors(sub) & other != 0 {
+                    let (cs, co) = (g.card_of(sub), g.card_of(other));
+                    any[s] = any[s].min(any[sub as usize] + any[other as usize] + hash_cost(cs, co, card));       // `sub` builds, `other` probes
+                    for e in cat.connecting(sub, other) {
+                        let c = ord[sub as usize * ne + e] + ord[other as usize * ne + e] + merge_cost(cs, co, card);
+                        merge_best[e] = merge_best[e].min(c);
+                        any[s] = any[s].min(c);
+                    }
+                }
+                sub = (sub - 1) & set;
+            }
+        }
+        for e in 0..ne { if cat.has_attr(set, e) { ord[s * ne + e] = merge_best[e].min(any[s] + sort_cost(card)); } }
+    }
+    let all = size - 1;
+    match req { Prop::Any => any[all], Prop::Order(e) => ord[all * ne + e] }
+}
+```
+:::
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><code>the_memo_holds_exactly_the_connected_pairs_of_dpccp</code>: for 120 random queries (n = 2…9, all shapes) the number of logical expressions in the fully explored memo equals <strong>2 × the number of connected-subgraph/complement pairs that DPccp (<a href="/cookbook/p/join-ordering">Q4</a>) enumerates</strong>. This says the rule set is <strong>complete</strong> (reaches every cross-product-free tree) and <strong>duplicate-free</strong> (never stores one twice), checked against an algorithm that shares no code with the memo.</li> <li><code>cascades_equals_the_reference_dp_for_every_required_order</code>: 300 random queries (n = 1…9) and, for each, <code>Any</code> and a random <code>ORDER BY</code> predicate: the Cascades plan's cost equals the bottom-up DP's, with pruning on <strong>and</strong> off, and the returned plan really delivers the requested order.</li> <li><code>pruning_never_changes_the_answer_and_saves_work</code>: identical optimal costs with and without pruning on 60 queries; pruning never costs more alternatives and costs strictly fewer on most.</li> <li><code>broken_rule_sets_and_missing_enforcers_are_detected</code>: <strong>mutations</strong>: removing associativity, removing commutativity and removing the sort enforcer are each caught on all 200 queries (wrong cost, no plan, or a memo with the wrong number of expressions). Removing <em>right</em> associativity is caught on <strong>0 of 200</strong>: with commutativity present it is <strong>derivable</strong> (commute, left-associate, commute), a redundant rule: the harness is able to tell a missing rule from a redundant one.</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>An optimal plan found for a five-relation tree query with <code>ORDER BY</code> on predicate 0's attribute (it uses an index scan for order, a merge join, a hash-join pipeline and a <code>Sort</code> enforcer; its cost equals the reference DP's):</p>
+
+```text title="example plan"
+MergeJoin[e0](IndexScan(R1), Sort[e0](HashJoin(HashJoin(Scan(R4), HashJoin(Scan(R2), Scan(R0))), Scan(R3))))
+cost 1608288, reference 1608288
+```
+
+```text title="memo size and search effort, n = 9, no required order"
+shape      groups logical exprs alts (no prune)  alts (pruned)   pruned away    memo ms   DPccp ms
+Chain          45           240            589            131        77.8%        0.2       0.01
+Star          264          2048           5161            234        95.5%        2.3       0.02
+Cycle          73           576           1416            236        83.3%        0.5       0.01
+Clique        511         18660         185466            421        99.8%       33.7       0.12
+```
+
+```text title="effect of ORDER BY, pruned, n = 9, median of 20 random queries"
+shape      alts: no order   alts: ORDER BY plan cost: ORDER BY / none
+Chain                 117              112                  1.310
+Star                  160              165                  1.065
+Clique                521              460                  1.005
+```
+
+<ul> <li><strong>The memo's size is the number of connected subgraphs, and its expressions are the join pairs</strong>: 45 groups for a 9-chain (n(n+1)/2), 264 for a star (2⁸ + 8), 73 for a cycle (n(n−1)+1), 511 for a clique (2⁹ − 1); and 240, 2 048, 576, 18 660 logical expressions: exactly <strong>2 × (n³−n)/6, 2 × (n−1)2ⁿ⁻², 2 × (n³−2n²+n)/2, 2 × (3ⁿ−2ⁿ⁺¹+1)/2</strong>, the formulas of <a href="/cookbook/p/join-ordering">Q4</a>. The memo <em>is</em> the DP table plus both orientations of every split.</li> <li><strong>Branch-and-bound is where Cascades earns its keep</strong>: without pruning the search costs <strong>185 466 physical alternatives</strong> on the 9-clique; with it, <strong>421</strong> (99.8% fewer), and 78–96% fewer on the other shapes, always returning the same plan cost. The first good plan (a hash-join pipeline) sets a bound that cuts nearly everything else, and failed searches are cached.</li> <li><strong>Generality has a price</strong>: the memo takes 34 ms on the 9-clique where DPccp's specialised enumeration takes 0.12 ms (≈280×), and 20× on the chain. The memo does exploration to a fixpoint (re-scanning child expression lists when they grow), hashing and <code>Rc</code> bookkeeping that a join-specific DP doesn't need. What the memo buys is <em>extensibility</em>: new operators, properties and rules don't change the search; DPccp can't add a <code>Sort</code> enforcer.</li> <li><strong>Required order costs search nothing and the plan something</strong>: asking for <code>ORDER BY</code> leaves the number of alternatives costed unchanged (112–165 vs 117–160) because the order is just another key in the winner table; the <em>plan</em> is 31% costlier on chains (the cheap plan wasn't naturally ordered) and 0.5% on cliques (many plans end in a merge join anyway).</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Arena + indices, no <code>Rc</code> cycles</strong>: <code>groups: Vec&lt;Group&gt;</code> and <code>by_set: HashMap&lt;u64, usize&gt;</code>; groups and expressions refer to each other by <code>usize</code>. A DAG of <code>Rc&lt;RefCell&lt;..&gt;&gt;</code> groups would fight the borrow checker and the allocator; indices make the memo <code>Clone</code>-able, serializable (for Orca-style dumps) and cache-friendly.</li> <li><strong>Copy the small thing out, then mutate</strong>: <code>MExpr</code> is <code>Copy</code> (four <code>usize</code>s), so the rule loop does <code>let e = self.groups[g].exprs[i];</code> and is free to call <code>self.group(..)</code>/<code>self.add_expr(..)</code> (which push to the same vectors) without a live borrow. The loop is <code>while i &lt; len</code> because the vector <strong>grows while it is being iterated</strong>: the fixpoint is simply "no new expression was added".</li> <li><strong>A counter instead of a dirty flag</strong>: <code>epoch</code> increments on every new expression; a group remembers the epoch it was last explored at, so <code>explore</code> returns instantly when nothing changed anywhere. Per-expression <code>l_seen</code>/<code>r_seen</code> cursors make each (expression, child expression) pair get processed once.</li> <li><strong>Plans are <code>Rc&lt;Plan&gt;</code></strong>: the winners table and the parent plans share subtrees; cloning a winner is a pointer copy.</li> <li><strong>A macro for the "offer a candidate" step</strong>: <code>offer!</code> updates <code>best</code> and <code>bound</code> in place; a closure would need to borrow them mutably while <code>self</code> is also borrowed. (The <code>prune</code> flag decides whether <code>bound</code> tightens: with pruning off, <code>bound</code> stays infinite while <code>best</code> still tracks the cheapest plan, which is what makes the "no prune" row an honest baseline; an earlier version pruned locally anyway and understated the unpruned work 26×.)</li> <li><strong>The failure cache stores its bound</strong>: <code>Win::Failed(limit)</code> is reused only if the new limit is ≤ the stored one: "no plan costs ≤ 10" says nothing about a budget of 20.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Exploration explodes even when costing is pruned</strong>: the logical space is the DP table (2⁹ groups, 18 660 expressions for a 9-clique; the clique of 14 would be millions). Production optimizers bound it: rule <em>promise</em>, staged rule sets, transformation-count and time budgets, and heuristic seeding of the memo with a good initial join order (SQL Server).</li> <li><strong>Cached failures and cached winners depend on the bound and on the properties</strong>: a bug here yields suboptimal plans that no single test notices; compare against a bottom-up oracle on thousands of random queries (as this section does).</li> <li><strong>Cardinality is a group property, not an expression property</strong>: all expressions of a group must see the same row count or the cost of equivalent plans diverges. Derive statistics once per group (the first expression that arrives) and keep them fixed.</li> <li><strong>Group merging</strong>: here a group is <em>identified</em> by its relation set, so equivalent groups never need merging. General logical equivalences (predicate pushdown, aggregation rewrites, subquery unnesting) can discover that two existing groups are equal; the memo then needs a <strong>union-find</strong> merge of groups and re-canonicalization of every expression that references them.</li> <li><strong>Cost lower bounds must be admissible</strong>: the pruning bound here is "every plan scans every relation once"; an over-eager bound silently discards the optimum. Test bounds against the unpruned search, as <code>pruning_never_changes_the_answer</code> does.</li> <li><strong>Enforcers must be rule-driven and costed</strong>: a <code>Sort</code> inserted without a cost, or an enforcer that can loop (sort of a sort), breaks the search; here the enforcer asks for the same group under <code>Any</code>, which strictly weakens the requirement and so terminates.</li> <li><strong>Debuggability</strong>: a bug in a memo search appears only for one query shape in a production workload. Orca's two lessons apply directly: <strong>dump the optimizer's input and state</strong> on any assertion so the failure replays offline, and <strong>verify the cost model</strong> by running both plans occasionally and checking the order.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "The Cascades Framework for Query Optimization"
+url = "https://api.semanticscholar.org/CorpusID:260706023"
+
+[[sources]]
+title = "Orca: A Modular Query Optimizer Architecture for Big Data"
+url = "https://dl.acm.org/doi/10.1145/2588555.2595637"
+
+[[sources]]
+title = "egg: Fast and Extensible Equality Saturation"
+url = "https://dl.acm.org/doi/10.1145/3434304"
+
+[[sources]]
+title = "optd"
+url = "https://github.com/cmu-db/optd"

@@ -1,0 +1,15 @@
+error[E0310]: type annotations needed
+ --> e0311_infinite_type.peb:2:17
+  |
+2 |     let mut a = [];
+  |                 ^^ cannot infer the type (found `[_]`)
+  |
+  = help: add a type annotation, e.g. `let x: [int] = [];`
+
+error[E0311]: cannot construct an infinite type
+ --> e0311_infinite_type.peb:3:13
+  |
+3 |     push(a, a);
+  |             ^ this would make a type that contains itself (`[_]`)
+
+error: aborting due to 2 previous errors

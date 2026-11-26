@@ -1,0 +1,70 @@
+title = "The `time` crate"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Data, text and encoding crates"
+chapter_order = 1
+order = 123
+kind = "recipe"
+lede = "Date/Time/OffsetDateTime, format descriptions, well-known formats, chrono comparison"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/time_crate_dates_formatting.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>services that want a small</li><li>panic-free</li><li>no-implicit-local-time date library</li><li>embedded/<code>no_std</code> friendly code</li><li>strict RFC 3339 handling</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>log/trace timestamps (tracing-subscriber uses <code>time</code>)</li><li>JWT expiry</li><li>certificate validity windows</li><li>API payloads in RFC 3339</li><li>compile-time-checked literals (<code>datetime!</code>) in tests and config defaults</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>time::Date::from_calendar_date</code></li><li><code>time::Date::weekday</code></li><li><code>time::Date::iso_week</code></li><li><code>time::Date::ordinal</code></li><li><code>time::Date::checked_add</code></li><li><code>time::Date::replace_day</code></li><li><code>time::Date::to_julian_day</code></li><li><code>time::Time::from_hms</code></li><li><code>time::Time::hour</code></li><li><code>time::PrimitiveDateTime::new</code></li><li><code>time::PrimitiveDateTime::assume_utc</code></li><li><code>time::PrimitiveDateTime::assume_offset</code></li><li><code>time::OffsetDateTime::now_utc</code></li><li><code>time::OffsetDateTime::from_unix_timestamp</code></li><li><code>time::OffsetDateTime::unix_timestamp</code></li><li><code>time::OffsetDateTime::to_offset</code></li><li><code>time::OffsetDateTime::parse</code></li><li><code>time::OffsetDateTime::format</code></li><li><code>time::OffsetDateTime::date</code></li><li><code>time::OffsetDateTime::replace_time</code></li><li><code>time::Duration::hours</code></li><li><code>time::Duration::whole_minutes</code></li><li><code>time::Duration::checked_add</code></li><li><code>time::Duration::saturating_add</code></li><li><code>time::UtcOffset::from_hms</code></li><li><code>time::Month::next</code></li><li><code>time::Month::try_from</code></li><li><code>time::Weekday::next</code></li><li><code>time::format_description::parse_borrowed</code></li><li><code>time::format_description::well_known::Rfc3339</code></li><li><code>time::format_description::well_known::Rfc2822</code></li><li><code>time::macros::date</code></li><li><code>time::macros::datetime</code></li><li><code>time::macros::format_description</code></li><li><code>time::format_description::parse_owned</code></li><li><code>time::format_description::well_known::Iso8601</code></li><li><code>time::serde::rfc3339 (and ::option)</code></li><li><code>time::serde::timestamp</code></li><li><code>time::serde::timestamp::milliseconds</code></li><li><code>time::serde::format_description!</code></li><li><code>OffsetDateTime::{from_unix_timestamp_nanos, unix_timestamp_nanos, checked_to_offset}</code></li><li><code>Date::{next_occurrence, nth_next_occurrence, prev_occurrence, to_iso_week_date, monday_based_week, sunday_based_week}</code></li><li><code>Time::duration_until</code></li><li><code>UtcDateTime</code></li><li><code>OffsetDateTime::{parse_with_defaults, truncate_to_hour, truncate_to_day}</code></li><li><code>time::parsing::Parsed</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/time/0.3/time/" target="_blank" rel="noreferrer">https://docs.rs/time/0.3/time/</a></li></ul>
+"""
+
+[[sections]]
+heading = "Crates"
+body = """
+time = "0.3" (0.3.55 current; features formatting, parsing, macros, serde, serde-well-known, local-offset)
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+`UtcOffset::current_local_offset` (unsound-adjacent on multithreaded Unix: shown only as a note), `quickcheck`/`rand` integrations, `Instant` (deprecated in favour of std).
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>A compile-time checked literal</td><td><code>date!(2024-03-05), time!(14:30), datetime!(2024-03-05 14:30 UTC)</code></td></tr><tr><td>Current instant</td><td><code>OffsetDateTime::now_utc()</code></td></tr><tr><td>Parse RFC 3339</td><td><code>OffsetDateTime::parse(s, &amp;Rfc3339)</code></td></tr><tr><td>Format RFC 3339</td><td><code>dt.format(&amp;Rfc3339)?</code></td></tr><tr><td>Custom format (compile time)</td><td><code>format_description!("[year]-[month]-[day] [hour]:[minute]:[second]")</code></td></tr><tr><td>Custom format (from config/runtime)</td><td><code>format_description::parse_borrowed::&lt;2&gt;(&amp;str)?  (returns Vec&lt;FormatItem&gt;)</code></td></tr><tr><td>Epoch seconds &lt;</td><td><code>instant             -&gt; from_unix_timestamp(i64)? / unix_timestamp()</code></td></tr><tr><td>Change zone</td><td><code>to_offset(UtcOffset) (same instant) vs replace_offset (reinterpret!)</code></td></tr><tr><td>Add days/hours</td><td><code>dt + Duration::days(1) ; checked_add for untrusted; saturating_add for clamping</code></td></tr><tr><td>Month arithmetic</td><td><code>NO built-in add months: use Month::next + replace_day, shown below</code></td></tr><tr><td>Weekday / ISO week</td><td><code>date.weekday(), date.iso_week()</code></td></tr><tr><td>Continuous day number (Julian day)</td><td><code>date.to_julian_day()</code></td></tr><tr><td>JSON field as RFC 3339 / epoch</td><td><code>#[serde(with = "time::serde::rfc3339")] / "time::serde::timestamp::milliseconds"</code></td></tr><tr><td>Epoch MILLISECONDS (JavaScript, Java)</td><td><code>from_unix_timestamp_nanos(ms as i128 * 1_000_000)</code></td></tr><tr><td>Next Friday</td><td><code>date.next_occurrence(Weekday::Friday)  (strictly after date) WHEN TO CHOOSE WHICH: chrono has Months, chrono-tz (real IANA zones), a bigger ecosystem and lax-ish ergonomics; time has no built-in IANA database (offsets only; zones need an add-on such as time-tz), compile-time literals, fully checked constructors, and no_std. jiff (BurntSushi) is the newer all-in-one with zones. For services that store UTC and display fixed offsets, both work. MSRV/SOUNDNESS: time raises its MSRV quickly (track the Cargo.lock); UtcOffset::current_local_offset returns Err when other threads exist on Unix (because localtime_r reads TZ unsafely), which is why local-offset is opt-in: determine the offset once at startup.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/time" target="_blank" rel="noreferrer">https://docs.rs/time</a></li><li><a href="https://time-rs.github.io/book/" target="_blank" rel="noreferrer">https://time-rs.github.io/book/</a> (the time book)</li><li>RUSTSEC-2020-0071 (the chrono/time localtime advisory, title only)</li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/time/0.3/time"
+url = "https://docs.rs/time/0.3/time/"
+
+[[sources]]
+title = "docs.rs/time"
+url = "https://docs.rs/time"
+
+[[sources]]
+title = "time-rs.github.io/book"
+url = "https://time-rs.github.io/book/"

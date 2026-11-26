@@ -1,0 +1,56 @@
+title = "SWIM failure detection and gossip membership, simulated"
+module = "Distributed systems"
+module_order = 10
+chapter = "Time, partitioning and replication"
+chapter_order = 1
+order = 485
+kind = "recipe"
+lede = "SWIM failure detection and gossip membership, simulated."
+level = "advanced"
+code = ["examples/distributed/swim_gossip.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>cluster membership</li><li>failure detection</li><li>service discovery</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+SWIM (Das, Gupta, Motivala 2002) detects failures with O(1) messages per node per period, no matter how big the cluster is, and spreads membership changes without any broadcast.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+1. Every protocol period a node pings **one** member, picked by shuffled round-robin (so every member is probed within a bounded number of periods, the paper's time-bounded completeness).
+2. No ack within the RTT timeout: ask k other members to ping the target for us (ping-req). This routes around a lossy or congested direct link, a major source of false positives.
+3. Still no ack by the end of the period: mark the target **suspect** (not dead). After a suspicion timeout (&#126; mult &#42; log n periods) it becomes **dead**, which is final.
+4. Updates (Alive/Suspect/Dead + incarnation) ride on pings/acks: **piggybacking**. Each update is sent &#126; lambda&#42;log2(n) times (enough for epidemic spread w.h.p.), least-sent first, in a bounded buffer.
+5. Incarnation numbers order updates: Alive(i) beats Suspect(j) iff i > j; Suspect(i) beats Alive(j) iff i >= j; Dead beats everything. A node that hears it is suspected bumps its **own** incarnation and gossips Alive(i+1): the refutation. A slow-but-alive node thus survives.
+
+   The network drops messages with a seeded probability and delays them randomly, so runs are reproducible.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>cluster membership and failure detection in HashiCorp memberlist (used by Serf and Consul's gossip layer, with Lifeguard refinements)</li><li>gossip-based membership in distributed databases</li><li>any system that wants decentralised liveness without an O(n) heartbeat fan-in</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf>
+
+<https://github.com/hashicorp/memberlist>
+"""
+
+[[sources]]
+title = "cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf"
+url = "https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf"
+
+[[sources]]
+title = "github.com/hashicorp/memberlist"
+url = "https://github.com/hashicorp/memberlist"

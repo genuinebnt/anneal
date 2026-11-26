@@ -1,0 +1,42 @@
+title = "`Drop` and RAII"
+module = "Rust language"
+module_order = 1
+chapter = "Ownership and borrowing"
+chapter_order = 1
+order = 5
+kind = "recipe"
+lede = "Cleanup that cannot be forgotten."
+level = "simple"
+code = ["examples/language/drop_raii.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>releasing leases/locks/permits</li><li>temp files</li><li>"task finished" markers</li><li>metrics timers</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>locks</li><li>file handles</li><li>temp files</li><li>metrics timers</li><li>transaction guards: cleanup that cannot be forgotten</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+RAII: acquiring a resource creates a guard value; when the guard goes out of scope (return, `?`, even panic), `Drop::drop` runs and releases it. `MutexGuard`, `File`, tokio `OwnedSemaphorePermit` all work this way. Drop order: locals drop in **reverse** declaration order; struct fields drop in declaration order.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/book/ch15-03-drop.html> and <https://doc.rust-lang.org/std/ops/trait.Drop.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch15-03-drop.html"
+url = "https://doc.rust-lang.org/book/ch15-03-drop.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/ops/trait.Drop.html"
+url = "https://doc.rust-lang.org/std/ops/trait.Drop.html"

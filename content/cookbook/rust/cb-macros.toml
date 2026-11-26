@@ -1,0 +1,24 @@
+title = "Macros project"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Multi-file projects"
+chapter_order = 3
+order = 133
+kind = "project"
+lede = "Procedural macros. Every entry point is a thin wrapper: parse the input TokenStream with syn, build output with quote!, and turn any syn::Error into compile_error! tokens so users get spanned errors"
+code = ["crates/cb-macros/src/lib.rs", "crates/cb-macros/Cargo.toml"]
+
+[[sections]]
+heading = "Design notes"
+body = """
+Procedural macros. Every entry point is a thin wrapper: parse the input `TokenStream` with syn, build output with `quote!`, and turn any `syn::Error` into `compile_error!` tokens so users get spanned errors instead of a panic inside the compiler.
+"""
+
+[[sections]]
+heading = "What is in it"
+body = """
+```text title="cb-macros"
+src/lib.rs
+Cargo.toml
+```
+"""

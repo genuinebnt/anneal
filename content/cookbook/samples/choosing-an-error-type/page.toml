@@ -1,0 +1,525 @@
+title = "Choosing an error type"
+module = "1. Rust language"
+chapter = "Errors and diagnostics"
+order = 1
+kind = "comparison"
+level = "intermediate"
+status = "draft"
+lede = "Four ways to fill the `E` in `Result<T, E>`: a hand-written enum, the same enum derived with `thiserror`, `anyhow::Error`, and `Box<dyn Error + Send + Sync>`. The choice depends mostly on whether callers need to act differently on different failures."
+summary = [
+    "If callers must react differently to different failures, return your own type, usually an enum.",
+    "`thiserror` writes the same `Display` and `Error` code you would write by hand, and does not appear in your public API.",
+    "If an application only reports the failure, `anyhow::Error` gives you context and a printable cause chain with little code.",
+    "`Box<dyn Error + Send + Sync>` needs no dependency, but adding context means writing your own wrapper type.",
+    "Put each cause either in the message or in `source()`, never both.",
+    "With a type-erased error, finding a cause by type can silently return nothing after some conversions and wrappers.",
+]
+
+[[glance]]
+label = "In std"
+value = "`std::error::Error`, `Box<dyn Error>`, `?` through `From`"
+
+[[glance]]
+label = "Crates tested"
+value = "anyhow 1.0.105, thiserror 2.0.21"
+
+[[glance]]
+label = "Minimum Rust (from their Cargo.toml)"
+value = "anyhow 1.68, thiserror 1.77"
+
+[[glance]]
+label = "Extra dependencies"
+value = "anyhow: none required. thiserror: a proc macro that builds with proc-macro2, quote and syn."
+
+[[sections]]
+heading = "Which one to use"
+body = '''
+Ask these questions in order. The recommendations are advice; the properties behind them are shown further down.
+
+| Your situation | Use | Main cost |
+|---|---|---|
+| A library, or any boundary where a caller **branches** on the failure; dependencies are fine | An enum with `thiserror` | You design and maintain the variants |
+| The same, but you want **no dependencies** (or no proc macro) | A hand-written enum | `Display`, `source()` and any `From` impls by hand |
+| An application, or its top layers, where failures are **reported** to a person or a log | `anyhow::Error` | The signature no longer says what can fail |
+| The same, but **no dependencies**, or a small tool, example or test helper | `Box<dyn Error + Send + Sync>` | No context method, no ready-made chain report |
+
+**Library or application** is a shortcut for the real question: **will code that you do not control, or code far away, need to tell the failures apart?** A library usually cannot know, so give it a concrete type. An internal module of an application may know that nobody will ever match, and then erasing the type is fine.
+
+The authors draw the same line. The [thiserror README](https://github.com/dtolnay/thiserror) recommends it when the caller should get exactly the information you choose, which is most often library code. It recommends [anyhow](https://github.com/dtolnay/anyhow) when you do not care which error type your functions return, which is common in application code.
+
+**Mixing them is normal.** A common shape: library crates return enums, and the binary collects them into `anyhow::Error` with context.
+
+> [!TIP]
+> Do not return `anyhow::Error` from a public library function "for now". Changing it to an enum later breaks every caller.
+'''
+
+[[sections]]
+heading = "Side by side"
+body = '''
+| Property | Hand-written enum | `thiserror` enum | `anyhow::Error` | `Box<dyn Error + Send + Sync>` |
+|---|---|---|---|---|
+| Signature says what can fail | Yes | Yes | No | No |
+| Caller tells failures apart with | `match` | `match` | downcast at run time | downcast at run time |
+| Compiler checks the arms | Yes | Yes | No | No |
+| `?` accepts another error type | When you write `From` | With `#[from]` | Any `Error + Send + Sync + 'static` | Any `Error + Send + Sync`, `String`, `&str` |
+| Add context | New variant or field | New variant or field | `.context(..)`, `.with_context(..)` | Write a wrapper type |
+| Attach data a caller can read | Fields | Fields | Only by downcasting to a type that has it | Same |
+| Print the cause chain | Walk `source()` | Walk `source()` | `{:#}` or `{:?}` | Walk `source()` |
+| Backtrace | What you add | A `Backtrace` field (needs nightly) | Captured when enabled by `RUST_BACKTRACE` or `RUST_LIB_BACKTRACE` | None added |
+| Implements `std::error::Error` | Yes | Yes | **No** | **No** (see [Moving between them](#moving-between)) |
+| Dependency | None | `thiserror` | `anyhow` | None |
+
+When you do not match on variants, the two enum columns and the two erased columns behave much alike. The large step is between a **concrete** type and an **erased** one.
+
+**API stability.** Switching between a hand-written impl and `thiserror` is not a breaking change, because the macro does not appear in your public API ([thiserror docs](https://docs.rs/thiserror/2/thiserror/)). Adding a variant to a public enum **is** breaking unless it was marked `#[non_exhaustive]`, which makes other crates keep a wildcard arm. A source field whose type comes from a dependency also makes that dependency part of your API (advice: if that matters, wrap the enum in an opaque public struct; the thiserror docs show how with `#[error(transparent)]`).
+'''
+
+[[sections]]
+heading = "The same task, four ways"
+body = '''
+Read a file, find its `port=` line, return the port. Four things can go wrong: the file cannot be read, the line is missing, the value is not a `u16`, or it is 0. The lab's tests check that all four versions give the same messages.
+
+### Hand-written enum {#hand-written}
+
+You write the type, its `Display` and its `source()`.
+
+```rust title=src/hand.rs group=four
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum PortError {
+    Read { path: PathBuf, source: io::Error },
+    Missing,
+    NotANumber { text: String, source: ParseIntError },
+    Zero,
+}
+
+impl fmt::Display for PortError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Say what this layer knows. The cause is left to `source()`.
+        match self {
+            Self::Read { path, .. } => write!(f, "cannot read {}", path.display()),
+            Self::Missing => f.write_str("no `port=` line"),
+            Self::NotANumber { text, .. } => write!(f, "invalid port {text:?}"),
+            Self::Zero => f.write_str("port must not be 0"),
+        }
+    }
+}
+
+impl Error for PortError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Read { source, .. } => Some(source),
+            Self::NotANumber { source, .. } => Some(source),
+            Self::Missing | Self::Zero => None,
+        }
+    }
+}
+```
+
+### The same enum with thiserror {#with-thiserror}
+
+A field **named** `source`, or marked `#[source]` or `#[from]`, becomes the cause.
+
+```rust title=src/derived.rs group=four
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum PortError {
+    #[error("cannot read {}", path.display())]
+    Read { path: PathBuf, source: io::Error },
+    #[error("no `port=` line")]
+    Missing,
+    #[error("invalid port {text:?}")]
+    NotANumber { text: String, source: ParseIntError },
+    #[error("port must not be 0")]
+    Zero,
+}
+```
+
+The functions that return either enum are identical. Each failure is converted with `map_err`, because the variant needs data (`path`, `text`) that `?` alone cannot supply:
+
+```rust title=src/derived.rs
+pub fn load_port(path: &Path) -> Result<u16, PortError> {
+    let text = std::fs::read_to_string(path).map_err(|source| PortError::Read {
+        path: path.to_owned(),
+        source,
+    })?;
+    parse_port(&text)
+}
+```
+
+> [!RUST]
+> `#[from]` lets `?` convert on its own, but a `#[from]` variant can hold nothing except the source (and a backtrace). So it **cannot keep the path**. It also allows only one such variant per source type: a second one is a conflicting `From` impl (E0119). Use `#[from]` when the source type alone says what happened.
+
+### anyhow {#with-anyhow}
+
+No type to declare. `context` adds a layer, `with_context` builds its message only on failure, and both also work on `Option`.
+
+```rust title=src/app.rs group=four
+pub fn parse_port(text: &str) -> Result<u16> {
+    let value = text
+        .lines()
+        .find_map(|line| line.strip_prefix("port="))
+        .context("no `port=` line")?;
+    let port: u16 = value
+        .parse()
+        .with_context(|| format!("invalid port {value:?}"))?;
+    ensure!(port != 0, "port must not be 0");
+    Ok(port)
+}
+```
+
+### Box of dyn Error {#boxed}
+
+`?` boxes any error, and `&str` or `String` convert into an error that is only a message. std has no method that adds context, so the file defines one wrapper. Writing `map_err(|e| format!("cannot read ..: {e}"))` instead is shorter, but it **throws the cause away** as a value.
+
+```rust title=src/boxed.rs group=four
+pub fn parse_port(text: &str) -> Result<u16, BoxError> {
+    let value = text
+        .lines()
+        .find_map(|line| line.strip_prefix("port="))
+        .ok_or("no `port=` line")?;
+    let port: u16 = value
+        .parse()
+        .map_err(|e| WithContext::new(format!("invalid port {value:?}"), e))?;
+    if port == 0 {
+        return Err("port must not be 0".into());
+    }
+    Ok(port)
+}
+```
+
+Include `Send + Sync + 'static`. Without `Send` the error cannot cross threads, and `anyhow` requires all three. The [API Guidelines](https://rust-lang.github.io/api-guidelines/interoperability.html#c-good-err) also ask for error types to be `Error + Send + Sync`, with messages in lowercase without trailing punctuation.
+'''
+
+[[sections]]
+heading = "Context and sources"
+body = '''
+`Error::source()` returns the cause below an error. Following it gives a **chain**, from "what I was doing" down to the root cause.
+
+> [!WARNING]
+> An error should **either** return its cause from `source()` **or** include it in its `Display` text, not both ([std `Error` docs](https://doc.rust-lang.org/std/error/trait.Error.html)). A type that does both prints the cause twice in any report that walks the chain. The lab shows `storage failed: disk gone: disk gone`.
+
+So `Display` on one error shows **one layer**. `println!("{e}")` on any of the four loses the reason. Print the chain at the place where you report:
+
+```rust title=src/report.rs
+/// The error, then its source, then that error's source, and so on.
+pub fn sources<'a>(
+    error: &'a (dyn Error + 'static),
+) -> impl Iterator<Item = &'a (dyn Error + 'static)> {
+    successors(Some(error), |&e| e.source())
+}
+
+/// `outer: middle: root`
+pub fn one_line(error: &(dyn Error + 'static)) -> String {
+    sources(error)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(": ")
+}
+```
+
+For the missing file, all four versions then print the same line (from `cargo run` on macOS; the last part comes from the operating system):
+
+```text
+cannot read /definitely/missing.conf: No such file or directory (os error 2)
+```
+
+`anyhow` has the reports built in. This is the lab's output for `port=eighty`, without a backtrace:
+
+| Format | Output |
+|---|---|
+| `{}` | `invalid port "eighty"` |
+| `{:#}` | `invalid port "eighty": invalid digit found in string` |
+| `{:?}` | The message, then a `Caused by:` list on later lines, then a backtrace if one was captured |
+| `{:#?}` | A struct-like debug dump |
+
+### What `fn main` prints {#main-prints-debug}
+
+When `main` returns `Err`, std prints `Error: ` followed by the **`Debug`** form and exits with failure (read in `std/src/process.rs`). What you get depends on the type:
+
+| Error type | `Debug` form |
+|---|---|
+| A derived-`Debug` enum | `Error: Zero` |
+| A boxed `&str` | `Error: "port must not be 0"` |
+| `anyhow::Error` | The readable multi-line report |
+
+So `fn main() -> anyhow::Result<()>` gives good output for free. With the other types, call your own `run()` from `main` and format the chain yourself.
+
+**Context wording** (advice): say what this layer was trying to do and with which input (`cannot read /etc/app.conf`). Do not repeat the cause, and do not add a layer that says only "error occurred".
+'''
+
+[[sections]]
+heading = "Matching and downcasting"
+body = '''
+With an enum, matching is ordinary Rust, and the variant's fields come with it:
+
+```rust title=tests/same_task.rs
+assert!(matches!(
+    derived::parse_port("port=x"),
+    Err(derived::PortError::NotANumber { ref text, .. }) if text == "x"
+));
+```
+
+With an erased type you **downcast**: you ask "is there a value of type `T` in here?" The answer is an `Option`, and a wrong guess about the type compiles. The three calls look alike and search different things:
+
+| Call | Looks at |
+|---|---|
+| `anyhow_error.downcast_ref::<T>()` | The original error **and** every context value added with `anyhow`'s `context` |
+| `dyn_error.downcast_ref::<T>()` (std) | Only the **outermost** value's concrete type |
+| Walking `source()` and downcasting each | Every error that appears **in the chain**, by its concrete type |
+
+```rust title=src/report.rs
+/// The first error of type `T` anywhere in the chain.
+pub fn find<'a, T: Error + 'static>(error: &'a (dyn Error + 'static)) -> Option<&'a T> {
+    sources(error).find_map(|e| e.downcast_ref::<T>())
+}
+```
+
+`anyhow` documents that a downcast that worked before you added context still works afterwards ([`Context`, effect on downcasting](https://docs.rs/anyhow/1/anyhow/trait.Context.html#effect-on-downcasting)). That promise is about **`anyhow::Error`'s own methods**. Several things below fall outside it.
+
+:::deeper Why anyhow's downcast can see more than std's | internals, anyhow 1.0.105
+`context` stores the context value and the earlier error together in a private wrapper type. `anyhow::Error` keeps its own table of functions for each stored value. The downcast function for a context wrapper checks the context's type, then the wrapped error's type, and for stacked context it recurses downward (`context_downcast` and `context_chain_downcast` in `src/error.rs`).
+
+A `&dyn std::error::Error` view has none of that. Its concrete type is the private wrapper, so a std downcast to your type fails. Walking `source()` reaches your original error one step down. It never reaches a **context value**, because a context value is not an error in the chain: it only supplies the wrapper's message.
+:::
+'''
+
+[[sections]]
+heading = "Exit codes and HTTP statuses"
+body = '''
+Decide exit codes and statuses **in one place, at the edge** of the program, not inside the library that failed (advice). The same error can mean different things to different programs.
+
+```rust title=src/status.rs
+/// For a service where the client names the file.
+pub fn http_status(error: &PortError) -> u16 {
+    match error {
+        PortError::Read { source, .. } if source.kind() == ErrorKind::NotFound => 404,
+        PortError::Read { .. } => 500,
+        PortError::Missing | PortError::NotANumber { .. } | PortError::Zero => 422,
+    }
+}
+
+/// What a client may read. Details of a 500 belong in the log.
+pub fn public_message(error: &PortError) -> String {
+    match http_status(error) {
+        500 => "internal error".to_owned(),
+        _ => error.to_string(),
+    }
+}
+```
+
+The numbers are this example's policy, not a standard. What matters:
+
+- Inside the crate that defines the enum, this `match` has **no wildcard**, so a new variant does not compile until someone gives it a status. (`#[non_exhaustive]` only forces the wildcard on other crates.)
+- A message that is safe for a log may leak paths or queries to a client. Send a fixed text for server errors.
+- A read failure is not one thing: `io::Error::kind()` separates "not found" from the rest.
+
+With `anyhow`, the mapping depends on a downcast, so it needs a **fallback**, and a broken downcast lands there without any warning:
+
+```rust title=src/status.rs
+/// With a type-erased error, the status depends on a downcast that can miss.
+/// Anything unrecognised must fall back to 500.
+pub fn http_status_of(error: &anyhow::Error) -> u16 {
+    error.downcast_ref::<PortError>().map_or(500, http_status)
+}
+```
+
+> [!TESTING]
+> Test the mapping through the **real call path**, with the context and conversions production uses. A test that builds the error directly would not notice that a later conversion turned every 422 into a 500.
+
+For a command-line program, return [`ExitCode`](https://doc.rust-lang.org/std/process/struct.ExitCode.html) from `main` so that destructors run. [`process::exit`](https://doc.rust-lang.org/std/process/fn.exit.html) ends the process without running them.
+'''
+
+[[sections]]
+heading = "Moving between them"
+body = '''
+### What `?` can convert {#moving-between}
+
+| From | Into | Does `?` work? | Can you still downcast to your type? |
+|---|---|---|---|
+| Your enum | `anyhow::Error` | Yes | Yes |
+| Your enum | `Box<dyn Error + Send + Sync>` | Yes | Yes |
+| `anyhow::Error` | `Box<dyn Error + Send + Sync>` | Yes | **No** |
+| `Box<dyn Error + Send + Sync>` | `anyhow::Error` | **No**, compile error E0277 | After `from_boxed`: not directly |
+| `anyhow::Error` | Your enum | With a variant `Other(#[from] anyhow::Error)` | Match the variant first |
+
+The surprising row is the fourth. A box of `dyn Error` does **not** implement `Error`: std implements `Error` for `Box<E>` only when `E` has a known size, and `dyn Error` does not. `anyhow`'s `From` impl needs `Error`. The cause fits in a few lines of plain std, which the checker compiles to confirm the error:
+
+```rust compile_fail=E0277 title=a_box_is_not_an_error.rs
+use std::error::Error;
+
+fn needs_an_error<E: Error>() {}
+
+fn main() {
+    needs_an_error::<Box<dyn Error + Send + Sync>>();
+}
+```
+
+With `anyhow`, `lib()?;` on such a result gives `` `?` couldn't convert the error: `dyn std::error::Error + Send + Sync: Sized` is not satisfied `` (rustc 1.98.1, tried in a scratch crate). Convert with `.map_err(anyhow::Error::from_boxed)`, and read the first two pitfalls below. If the library is yours, return a concrete type and the problem goes away.
+'''
+
+[[sections]]
+heading = "Pitfalls"
+body = '''
+Each of these is a passing test in `tests/pitfalls.rs`, with anyhow 1.0.105 and thiserror 2.0.21.
+
+### Boxing an anyhow error {#boxing-anyhow}
+
+Turning `anyhow::Error` into a boxed std error, with `?` or `.into()`, keeps the message and **loses the downcast**, even with no context at all.
+
+```rust title=tests/pitfalls.rs
+let boxed = through_question_mark().unwrap_err();
+assert_eq!(boxed.to_string(), "port must not be 0"); // looks unchanged
+assert!(boxed.downcast_ref::<PortError>().is_none()); // but is not a PortError
+
+// This conversion keeps the concrete type, and gives up the backtrace.
+let kept = failed()
+    .unwrap_err()
+    .reallocate_into_boxed_dyn_error_without_backtrace();
+assert!(kept.downcast_ref::<PortError>().is_some());
+```
+
+In the source, the ordinary conversion boxes anyhow's whole internal record, so the concrete type is that record. `reallocate_into_boxed_dyn_error_without_backtrace` moves your value into a new box. It keeps the type of **what anyhow holds**, so if you added context, that is still the context wrapper and you must walk the chain.
+
+### from_boxed hides the type {#from-boxed}
+
+`anyhow::Error::from_boxed` stores the **box**. Downcasting to your type fails, on the error and along `chain()`. The same happens with `anyhow!(boxed)` (checked in a scratch crate). You can only ask for the box, then look inside it:
+
+```rust title=tests/pitfalls.rs
+// What anyhow holds is the box, so ask for the box and then look inside.
+let inner = error.downcast_ref::<BoxError>().expect("the box");
+assert!(inner.downcast_ref::<PortError>().is_some());
+```
+
+### Viewing anyhow as a std error {#std-view}
+
+After `.context(..)`, passing the error to code that takes `&dyn Error` (through `as_ref()`) and calling `downcast_ref` there finds nothing. Walk the chain instead.
+
+### Searching the chain for a context type {#context-type}
+
+If you attach a **type** as context in order to match on it later, only `anyhow::Error::downcast_ref` finds it. A generic reporter or middleware that walks `chain()` does not.
+
+### Formatting the cause into a message {#flattening}
+
+`anyhow!(error)` keeps the error. `anyhow!("startup failed: {}", error)` builds a **new message-only error**: the type and the chain are gone. The same is true of `map_err(|e| format!(..))`. Use `.context("startup failed")`.
+
+### transparent removes a link {#transparent}
+
+`#[error(transparent)]` forwards both `Display` and `source()` to the inner error. The wrapper therefore **replaces** the inner error in the chain: `source()` returns the inner error's source, not the inner error. A chain walk for the inner type finds nothing. Matching the variant still works.
+
+```rust title=tests/pitfalls.rs
+let transparent = Wrapper::from(io::Error::other("disk gone"));
+assert_eq!(transparent.to_string(), "disk gone");
+assert!(report::find::<io::Error>(&transparent).is_none());
+assert!(matches!(transparent, Wrapper::Transparent(_))); // matching still works
+```
+
+### Two versions of one crate {#two-versions}
+
+A downcast compares exact types. If your dependency tree holds two incompatible versions of the crate that defines the error, their types are different and the downcast misses (this follows from how Cargo builds each version separately; not tested here). `cargo tree -d` lists duplicates.
+'''
+
+[[terms]]
+term = "error chain"
+means = "An error followed by each successive value returned by `source()`."
+section = "Context and sources"
+
+[[terms]]
+term = "type erasure"
+means = "Storing values of different types behind one type, so the signature no longer names them."
+section = "Which one to use"
+
+[[terms]]
+term = "downcast"
+means = "A run-time check that an erased value has a given concrete type."
+section = "Matching and downcasting"
+
+[[terms]]
+term = "context"
+means = "A description added on the way up, saying what was being attempted."
+section = "Context and sources"
+
+[[sources]]
+title = "std: trait Error"
+url = "https://doc.rust-lang.org/std/error/trait.Error.html"
+kind = "docs"
+note = "source() against Display, and message style."
+read = true
+scope = "The trait introduction, source(), and downcast_ref on dyn Error, in core/src/error.rs of 1.98.1."
+
+[[sources]]
+title = "std source: From and Error impls for Box"
+url = "https://doc.rust-lang.org/src/alloc/boxed.rs.html"
+kind = "code"
+note = "Why a boxed dyn Error is not itself an Error."
+read = true
+scope = "impl<E: Error> Error for Box<E>; the From impls are in boxed/convert.rs."
+
+[[sources]]
+title = "std source: Termination for Result"
+url = "https://doc.rust-lang.org/src/std/process.rs.html"
+kind = "code"
+note = "main returning Err prints the Debug form."
+read = true
+scope = "impl Termination for Result."
+
+[[sources]]
+title = "anyhow documentation"
+url = "https://docs.rs/anyhow/1/anyhow/"
+kind = "docs"
+note = "Context, backtraces and downcasting."
+read = true
+scope = "Crate docs and the Context trait docs, in the 1.0.105 source."
+
+[[sources]]
+title = "anyhow source: src/error.rs"
+url = "https://github.com/dtolnay/anyhow/blob/master/src/error.rs"
+kind = "code"
+note = "Constructors, boxing conversions and the downcast functions behind the pitfalls."
+read = true
+scope = "Read in the published 1.0.105 crate (with fmt.rs, context.rs, wrapper.rs), not on the master branch."
+
+[[sources]]
+title = "thiserror documentation"
+url = "https://docs.rs/thiserror/2/thiserror/"
+kind = "docs"
+note = "Attributes: error, from, source, transparent, and the opaque-type pattern."
+read = true
+scope = "Crate docs in the 2.0.21 source, and the source() expansion for transparent in thiserror-impl."
+
+[[sources]]
+title = "thiserror README"
+url = "https://github.com/dtolnay/thiserror"
+kind = "code"
+note = "The authors' comparison with anyhow."
+read = true
+scope = "The comparison paragraph, in the published 2.0.21 crate."
+
+[[sources]]
+title = "anyhow README"
+url = "https://github.com/dtolnay/anyhow"
+kind = "code"
+note = "The authors' comparison with thiserror."
+read = true
+scope = "The comparison paragraph, in the published 1.0.105 crate."
+
+[[sources]]
+title = "Rust API Guidelines: C-GOOD-ERR"
+url = "https://rust-lang.github.io/api-guidelines/interoperability.html#c-good-err"
+kind = "guide"
+note = "What a well-behaved error type implements."
+read = true
+scope = "The C-GOOD-ERR section, through a fetch tool that summarised it."
+
+[[labs]]
+title = "One task, four error types"
+after = "The same task, four ways"
+files = ["src/hand.rs", "src/derived.rs", "src/app.rs", "src/boxed.rs", "src/report.rs", "src/status.rs", "src/main.rs", "tests/same_task.rs", "tests/pitfalls.rs"]
+run = true
+test = true
+
+[verified]
+toolchain = "rustc 1.98.1; anyhow 1.0.105; thiserror 2.0.21"
+date = "2026-11-26"
+platform = "aarch64-apple-darwin, macOS 27.0"
+not_checked = "Run here: build, tests, clippy, rustfmt and cargo run. Six deliberate bugs in a scratch copy (zero check changed, hand-written source() dropped, 404 changed to 500, anyhow cause formatted into the message, private message leaked for 500, wrapper source() dropped) each made a test fail. The pitfall tests assert library behaviour of these exact versions; other versions were not tried. The `?` error message and the E0119 conflict were reproduced in a scratch crate. Not checked: the two-versions pitfall, backtrace output (no test sets RUST_BACKTRACE), the nightly Backtrace field in thiserror, Windows or Linux error text, no_std use, size or speed of any of the four types, and eyre, snafu or miette."

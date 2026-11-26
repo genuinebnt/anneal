@@ -1,0 +1,70 @@
+title = "VecDeque linkedlist ring buffers (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "Memory and low level"
+chapter_order = 6
+order = 96
+kind = "recipe"
+lede = "`VecDeque` as the standard ring buffer, when `LinkedList` is justified, and how to choose a priority structure by counting work."
+level = "intermediate"
+code = ["examples/std_tour/std_vecdeque_linkedlist_ring_buffers.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>FIFO queues</li><li>bounded history</li><li>sliding windows</li><li>round-robin dispatch</li><li>LRU caches</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>BFS and work queues</li><li>"keep the last N log lines"</li><li>undo/redo</li><li>sliding-window max</li><li>rotating through backends</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>VecDeque::new</code></li><li><code>VecDeque::with_capacity</code></li><li><code>VecDeque::from</code></li><li><code>VecDeque::push_back</code></li><li><code>VecDeque::push_front</code></li><li><code>VecDeque::pop_back</code></li><li><code>VecDeque::pop_front</code></li><li><code>VecDeque::pop_front_if</code></li><li><code>VecDeque::pop_back_if</code></li><li><code>VecDeque::front</code></li><li><code>VecDeque::back</code></li><li><code>VecDeque::front_mut</code></li><li><code>VecDeque::get</code></li><li><code>VecDeque::len</code></li><li><code>VecDeque::capacity</code></li><li><code>VecDeque::as_slices</code></li><li><code>VecDeque::make_contiguous</code></li><li><code>VecDeque::rotate_left</code></li><li><code>VecDeque::rotate_right</code></li><li><code>VecDeque::range</code></li><li><code>VecDeque::iter</code></li><li><code>VecDeque::drain</code></li><li><code>VecDeque::truncate</code></li><li><code>VecDeque::split_off</code></li><li><code>VecDeque::append</code></li><li><code>VecDeque::extend</code></li><li><code>VecDeque::retain</code></li><li><code>VecDeque::retain_mut</code></li><li><code>VecDeque::remove</code></li><li><code>VecDeque::insert</code></li><li><code>VecDeque::swap_remove_back</code></li><li><code>VecDeque::swap_remove_front</code></li><li><code>VecDeque::binary_search</code></li><li><code>VecDeque::partition_point</code></li><li><code>VecDeque::contains</code></li><li><code>Vec::from(VecDeque)</code></li><li><code>LinkedList::from</code></li><li><code>LinkedList::push_back</code></li><li><code>LinkedList::push_front</code></li><li><code>LinkedList::pop_front</code></li><li><code>LinkedList::pop_back</code></li><li><code>LinkedList::append</code></li><li><code>LinkedList::split_off</code></li><li><code>LinkedList::extract_if</code></li><li><code>LinkedList::contains</code></li><li><code>LinkedList::iter_mut</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/collections/struct.VecDeque.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/collections/struct.VecDeque.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+alloc: `VecDeque`, `LinkedList`, `BinaryHeap`, `BTreeSet` (`alloc::collections`, re-exported by std). std: `HashMap`.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+LinkedList cursors (`cursor_front_mut`, splicing in the middle), `LinkedList::{remove, retain}` (unstable in 1.98.1); `VecDeque::truncate_front` (unstable); `VecDeque::resize_with`, `shrink_to_fit`, `try_reserve` (same meaning as on Vec); intrusive and lock-free queues.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>FIFO queue</td><td><code>VecDeque: push_back + pop_front (never Vec::remove(0), which is O(n))</code></td></tr><tr><td>Keep the last N</td><td><code>if q.len() == n { q.pop_front(); } q.push_back(x)</code></td></tr><tr><td>Remove the head only if it is expired</td><td><code>pop_front_if(|x| ..) (1.93)</code></td></tr><tr><td>One contiguous slice (sort, write)</td><td><code>make_contiguous(); without mutation: handle BOTH halves of as_slices()</code></td></tr><tr><td>Round-robin</td><td><code>rotate_left(1), or pop front and push back</code></td></tr><tr><td>Search a sorted deque</td><td><code>binary_search / partition_point</code></td></tr><tr><td>Convert to / from Vec</td><td><code>VecDeque::from(vec) is O(1), no reallocation; back to Vec may shift data (O(n))</code></td></tr><tr><td>Join two long lists without moving items</td><td><code>LinkedList::append is O(1). split_off(at) is NOT: it walks min(at, len-at) nodes</code></td></tr><tr><td>Repeatedly take the min/max</td><td><code>BinaryHeap; also need remove/update by key: BTreeSet; build once, then drain: sort a Vec LinkedList, honestly: std's docs say a Vec or VecDeque is almost always better. Without stable cursors you cannot even splice in the middle. The remaining cases: O(1) concatenation, or elements that must never move. (Vec&lt;Box&lt;T&gt;&gt; also keeps the T in place.)</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/collections/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/collections/index.html</a></li><li>Too Many Linked Lists <a href="https://rust-unofficial.github.io/too-many-lists/" target="_blank" rel="noreferrer">https://rust-unofficial.github.io/too-many-lists/</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/collections/struct.VecDeque.html"
+url = "https://doc.rust-lang.org/std/collections/struct.VecDeque.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/collections/index.html"
+url = "https://doc.rust-lang.org/std/collections/index.html"
+
+[[sources]]
+title = "rust-unofficial.github.io/too-many-lists"
+url = "https://rust-unofficial.github.io/too-many-lists/"

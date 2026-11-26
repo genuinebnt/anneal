@@ -1,0 +1,14 @@
+error[E0301]: mismatched types
+ --> e0301_multiline_match.peb:3:18
+  |
+3 |       let s: str = match n {
+  |              --- expected due to this type
+  |  __________________^
+4 | |         1 => 10,
+5 | |         _ => 20,
+6 | |     };
+  | |_____^ expected `str`, found `int`
+  |
+  = help: convert with `to_str(..)`
+
+error: aborting due to 1 previous error

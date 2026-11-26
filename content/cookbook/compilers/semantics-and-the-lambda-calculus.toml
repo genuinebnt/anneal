@@ -1,0 +1,123 @@
+title = "Semantics and the lambda calculus"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Types and semantics"
+chapter_order = 4
+order = 602
+kind = "guide"
+lede = "Prerequisite for every type-system and verification chapter · You already wrote one: jlox is a definitional interpreter"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>A semantics says what programs mean independently of any implementation. You need one to state what “correct” means for an optimization, to prove a type system sound, and to write a specification. There are three classic styles:</p>
+
+<ul> <li><b>Operational</b> semantics describe execution as rules. <em>Big-step</em> (natural) semantics relate a term to its final value, <code>e ⇓ v</code>; jlox's <code>evaluate</code> is a big-step semantics written in Rust. <em>Small-step</em> (structural) semantics describe one reduction at a time, <code>e → e′</code>. That makes non-termination, concurrency and type soundness easier to state. <em>Evaluation contexts</em> (Felleisen–Hieb) write small-step rules compactly: <code>E ::= [] | E e | v E</code>, then <code>E[(λx.e) v] → E[e[v/x]]</code>.</li> <li><b>Denotational</b> semantics map each program to a mathematical object, such as a function between domains. Recursion is interpreted as a least fixed point. This is the basis of equational reasoning and of “compositional” meaning.</li> <li><b>Axiomatic</b> semantics describe programs by what can be proven about them. Hoare triples <code>{P} c {Q}</code> say that if <code>P</code> holds before <code>c</code> and <code>c</code> terminates, then <code>Q</code> holds after. Weakest preconditions compute the <code>P</code> mechanically. Separation logic adds <code>P ∗ Q</code> (“P and Q hold of disjoint heap parts”), which is what makes pointer programs, and Rust's ownership, provable.</li> </ul>
+
+<p><b>Type soundness</b> in the Wright–Felleisen style is two lemmas. <em>Progress</em>: a well-typed term is a value or can take a step. <em>Preservation</em>: if <code>⊢ e : τ</code> and <code>e → e′</code> then <code>⊢ e′ : τ</code>. Together: well-typed programs don't get stuck. Every type-system paper states some version of this.</p>
+
+<p><b>The lambda calculus</b> is the core of every functional language and of every type theory. Terms are variables, abstractions <code>λx.e</code> and applications <code>e₁ e₂</code>. Two issues matter immediately in an implementation:</p>
+
+<ul> <li><b>Capture-avoiding substitution.</b> Substituting <code>y</code> for <code>x</code> in <code>λy.x</code> must rename the bound <code>y</code> first. <em>De Bruijn indices</em> sidestep names: a variable is the number of binders between it and its binder, so <code>λx.λy.x</code> becomes <code>λ.λ.1</code>. Alpha-equivalent terms become syntactically equal.</li> <li><b>Evaluation strategy.</b> Call-by-value evaluates arguments first (ML, Rust, Lox). Call-by-name substitutes unevaluated arguments. Call-by-need adds memoization, which is Haskell's laziness.</li> </ul>
+
+<p>The simply typed lambda calculus (STLC) adds types <code>τ ::= Bool | τ → τ</code>. It is strongly normalizing: every well-typed term terminates. Under the Curry–Howard correspondence, types are propositions and well-typed terms are proofs. <code>τ₁ → τ₂</code> is implication, product types are conjunction, sum types are disjunction. Proof assistants are built on this.</p>
+
+```rust title="STLC with de Bruijn indices: small-step evaluator and type checker (TAPL ch. 6–10)"
+#[derive(Clone, Debug, PartialEq)]
+pub enum Type { Bool, Arrow(Box<Type>, Box<Type>) }
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Term {
+    Var(usize),                          // de Bruijn index
+    Lam(Box<Type>, Box<Term>),           // λ:τ. body
+    App(Box<Term>, Box<Term>),
+    Bool(bool),
+    If(Box<Term>, Box<Term>, Box<Term>),
+}
+use Term::*;
+
+/// ↑ᵈ_c: add d to every free variable at or above cutoff c.
+fn shift(t: &Term, d: isize, c: usize) -> Term {
+    match t {
+        Var(k) if *k >= c => Var((*k as isize + d) as usize),
+        Var(k) => Var(*k),
+        Lam(ty, b) => Lam(ty.clone(), Box::new(shift(b, d, c + 1))),
+        App(f, a) => App(Box::new(shift(f, d, c)), Box::new(shift(a, d, c))),
+        Bool(b) => Bool(*b),
+        If(x, y, z) => If(Box::new(shift(x, d, c)), Box::new(shift(y, d, c)), Box::new(shift(z, d, c))),
+    }
+}
+
+/// [j ↦ s] t
+fn subst(t: &Term, j: usize, s: &Term) -> Term {
+    match t {
+        Var(k) if *k == j => s.clone(),
+        Var(k) => Var(*k),
+        Lam(ty, b) => Lam(ty.clone(), Box::new(subst(b, j + 1, &shift(s, 1, 0)))),
+        App(f, a) => App(Box::new(subst(f, j, s)), Box::new(subst(a, j, s))),
+        Bool(b) => Bool(*b),
+        If(x, y, z) => If(Box::new(subst(x, j, s)), Box::new(subst(y, j, s)), Box::new(subst(z, j, s))),
+    }
+}
+
+fn is_value(t: &Term) -> bool { matches!(t, Lam(..) | Bool(_)) }
+
+/// One call-by-value step, or None if t is a value or stuck.
+pub fn step(t: &Term) -> Option<Term> {
+    match t {
+        App(f, a) => match (&**f, is_value(f), is_value(a)) {
+            // β-reduction: (λ. body) v  →  ↑⁻¹([0 ↦ ↑¹v] body)
+            (Lam(_, body), true, true) => Some(shift(&subst(body, 0, &shift(a, 1, 0)), -1, 0)),
+            (_, true, false) => Some(App(f.clone(), Box::new(step(a)?))),
+            (_, false, _) => Some(App(Box::new(step(f)?), a.clone())),
+            _ => None,                    // e.g. (true v): stuck, ruled out by typing
+        },
+        If(c, a, b) => match &**c {
+            Bool(true) => Some((**a).clone()),
+            Bool(false) => Some((**b).clone()),
+            _ => Some(If(Box::new(step(c)?), a.clone(), b.clone())),
+        },
+        _ => None,
+    }
+}
+
+/// Γ ⊢ t : τ, with Γ as a stack (index 0 = innermost binder).
+pub fn type_of(ctx: &mut Vec<Type>, t: &Term) -> Result<Type, String> {
+    match t {
+        Var(k) => ctx.iter().rev().nth(*k).cloned().ok_or_else(|| format!("unbound index {k}")),
+        Lam(ty, b) => {
+            ctx.push((**ty).clone());
+            let body = type_of(ctx, b);
+            ctx.pop();
+            Ok(Type::Arrow(ty.clone(), Box::new(body?)))
+        }
+        App(f, a) => {
+            let ta = type_of(ctx, a)?;
+            match type_of(ctx, f)? {
+                Type::Arrow(p, r) if *p == ta => Ok(*r),
+                other => Err(format!("cannot apply {other:?} to {ta:?}")),
+            }
+        }
+        Bool(_) => Ok(Type::Bool),
+        If(c, a, b) => {
+            if type_of(ctx, c)? != Type::Bool { return Err("condition must be Bool".into()); }
+            let (ta, tb) = (type_of(ctx, a)?, type_of(ctx, b)?);
+            if ta == tb { Ok(ta) } else { Err(format!("branches differ: {ta:?} vs {tb:?}")) }
+        }
+    }
+}
+```
+
+<div class="cb-g-tip"><h3>Test it: soundness as a property test</h3> <p>Write a generator for well-typed closed terms: pick a type, then build a term of that type by recursion. Then check progress and preservation with proptest. For every generated term, repeatedly <code>step</code>. Each intermediate term must type-check at the same type, and a term that doesn't step must be a value. This is how PL researchers catch unsound rules before attempting a proof. PLT Redex automates it for semantics written as rules.</p></div>
+
+<div class="cb-g-tip"><h3>Pitfalls</h3> <p>Off-by-one errors in <code>shift</code> are the classic de Bruijn bug; the cutoff increments under every binder. The negative shift after β-reduction is needed because the binder disappears. Locally nameless representation (bound variables as indices, free variables as names) avoids most shifting and is standard in mechanized proofs.</p></div>
+"""
+
+[[sources]]
+title = "Software Foundations"
+url = "https://softwarefoundations.cis.upenn.edu"
+
+[[sources]]
+title = "PLFA"
+url = "https://plfa.github.io"

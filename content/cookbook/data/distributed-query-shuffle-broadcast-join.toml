@@ -1,0 +1,61 @@
+title = "Distributed query processing"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 376
+kind = "recipe"
+lede = "Partitioning, pruning, two-phase aggregation, co-located/broadcast/shuffle/Bloom joins, skew, sample sort."
+level = "advanced"
+code = ["examples/database/distributed_query_shuffle_broadcast_join.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+shared-nothing MPP engines and query planners deciding what to ship over the network.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Spark SQL (broadcast hash join, shuffle hash/sort-merge, AQE skew-join splitting)</li><li>Presto/Trino (partitioned vs broadcast distribution)</li><li>Snowflake and Redshift (distribution keys, co-located joins)</li><li>Greenplum/Citus (hash distribution, reference tables)</li><li>Impala</li><li>Vitess scatter queries</li><li>TeraSort-style distributed sorting</li><li>Bloom-filter runtime filters in Impala/Spark/Doris. Course: CMU 15-445 Database Systems (Fall)</li><li>lectures 23-24 on distributed OLAP databases and parallel query execution</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a simulated **shared-nothing** cluster of N nodes. Every table is split across nodes by a **partitioning scheme** (hash of a column, hash of another column, round robin, or key ranges). The only real cost in the model is **bytes shipped between nodes**; local work is free.
+
+Operators:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Partition pruning</div><div class="cb-g-says"><p>With a hash scheme a point lookup touches 1 node; with range partitioning a range predicate touches the nodes whose key interval overlaps; round robin always touches all.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Aggregation</div><div class="cb-g-says"><p><strong>Central</strong> (ship every row to the coordinator) versus <strong>two-phase</strong> (each node pre-aggregates, shuffles the small partial states by group key, final aggregation per owner; partial states must be <strong>mergeable</strong>: count, sum, min, max).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Joins</div><div class="cb-g-says"><p>, Fact <strong>join</strong> Dim on key: <strong>co-located</strong> (both already hash-partitioned on the key: zero network), <strong>broadcast</strong> the small side to all nodes, <strong>shuffle</strong> (repartition) one or both sides by hash of the key, and a <strong>bloom semi-join reduction</strong> (nodes exchange a Bloom filter of the build keys, drop probe rows that cannot match <strong>before</strong> shuffling them; false positives cost bytes, never correctness).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Cost model</div><div class="cb-g-says"><p>For each applicable strategy the planner computes the exact bytes from statistics (an N x N matrix of "rows at node i whose key belongs to node j", and the Bloom survivor counts) and picks the cheapest.</p><p>The model is checked against the executor's measured traffic; real optimizers have only estimates, here perfect statistics isolate the <strong>planning logic</strong> from estimation error.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Skew</div><div class="cb-g-says"><p>A hash shuffle sends all rows of a hot key to one node, which becomes the straggler. Detect heavy hitters from a sample, then <strong>salt</strong>: spread the hot key's probe rows over all nodes randomly and <strong>replicate</strong> the matching build rows to every node.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Sort / TOP-N</div><div class="cb-g-says"><p><strong>Distributed sample sort</strong> (sample, choose N-1 splitters, range-shuffle, local sort; concatenating nodes in order is a globally sorted result) versus top-N where each node sends only its local best N rows.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+300 random queries over random cluster sizes, table sizes, skew and partitionings: every applicable join strategy, central and two-phase aggregation return exactly the single-node answer; the model's predicted bytes equal measured bytes and the chosen plan ships the fewest bytes among all candidates; pruning never skips a node holding a match; salting reduces the maximum node load while keeping the result; sample sort equals a single-node sort; top-N equals the sorted prefix.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Spark SQL join strategy hints (broadcast / shuffle) <https://spark.apache.org/docs/latest/sql-performance-tuning.html>
+
+```text
+Bloom filter https://en.wikipedia.org/wiki/Bloom_filter
+CMU 15-445 Database Systems schedule (distributed OLAP lectures) https://15445.courses.cs.cmu.edu/fall2024/schedule.html
+```
+"""
+
+[[sources]]
+title = "spark.apache.org/docs/latest/sql-performance-tuning.html"
+url = "https://spark.apache.org/docs/latest/sql-performance-tuning.html"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Bloom_filter"
+url = "https://en.wikipedia.org/wiki/Bloom_filter"
+
+[[sources]]
+title = "15445.courses.cs.cmu.edu/fall2024/schedule.html"
+url = "https://15445.courses.cs.cmu.edu/fall2024/schedule.html"

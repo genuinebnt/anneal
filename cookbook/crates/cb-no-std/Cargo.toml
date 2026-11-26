@@ -1,0 +1,12 @@
+[package]
+name = "cb-no-std"
+version = "0.1.0"
+edition = "2024"
+description = "A #![no_std] library: const-generic ring buffer and stack, fmt::Write stack buffer, bump arena and integer parsing."
+publish = false
+
+[features]
+default = ["std"]
+# Library works without std; `std` adds conveniences (Error impls, Vec conversions).
+std = ["alloc"]
+alloc = []

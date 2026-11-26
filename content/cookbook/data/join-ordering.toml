@@ -1,0 +1,465 @@
+title = "Join ordering"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 383
+kind = "guide"
+lede = "Optimize! #7–#8, 15-721 S2024 #14 · DPsize, DPsub, DPccp · left-deep vs bushy · IKKBZ, GOO, annealing, linearized DP · pair counts checked against closed forms"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>The problem</strong>: given a query graph (relations as nodes, join predicates as edges) pick the join <strong>tree</strong> (and later the algorithms) with the lowest estimated cost. The space is huge: for <em>n</em> relations there are <em>n!</em> left-deep orders and (2n−2)!/(n−1)! bushy trees with cross products (<strong>17.6 billion for n = 10</strong>).</li> <li><strong>Dynamic programming works because the cost is additive</strong>: the best plan for a <em>set</em> of relations is built from the best plans of two disjoint subsets, so each set is solved once (the principle of optimality; true for <code>C_out</code>, the sum of join output sizes). Restricting to <strong>cross-product-free</strong> plans removes most of the space and is what real optimizers do (a query with no predicate between two parts is the exception).</li> <li><strong>Three bottom-up enumerators</strong>, same answers, different work: <strong>DPsize</strong> (combine plans by increasing size; most pairs it tries are overlapping or unconnected), <strong>DPsub</strong> (for each subset try every split; always examines ~3ⁿ/2 pairs even for a chain), <strong>DPccp</strong> (Moerkotte &amp; Neumann) enumerates <strong>exactly the connected-subgraph/connected-complement pairs</strong> and nothing else: its work equals the number of <em>valid</em> pairs: (n³−n)/6 for a chain, (n−1)·2ⁿ⁻² for a star, (n³−2n²+n)/2 for a cycle, (3ⁿ−2ⁿ⁺¹+1)/2 for a clique.</li> <li><strong>Left-deep vs bushy</strong>: left-deep (System R) keeps the right input a base relation: a smaller space, plans that pipeline well and suit index nested-loop joins, but it can be arbitrarily worse than the best bushy plan on chains and cycles. Hash-join engines also use right-deep shapes.</li> <li><strong>Beyond inner joins</strong>: outer, semi and anti joins are not freely commutative or associative, and predicates over three or more relations are <strong>hyperedges</strong>; <strong>DPhyp</strong> extends DPccp to hypergraphs, and <em>conflict detection</em> (CD-A/B/C) decides which reorderings are legal for non-inner joins.</li> <li><strong>Top-down enumeration</strong> (Cascades, <a href="/cookbook/p/a-cascades-memo-in-rust">Q2</a>): a memo of groups plus a <strong>partitioning algorithm</strong> that, given a set, produces each valid split once (MinCutLazy, MinCutBranch), with branch-and-bound pruning from a cost bound. A <strong>transformational</strong> approach (apply commutativity/associativity rules) generates the same plans many times unless the rule set is designed to avoid duplicates.</li> <li><strong>Large queries</strong> (dozens to hundreds of relations) break exact DP (a clique of 20 has 1.7 billion pairs): use <strong>polynomial heuristics</strong>: <strong>IKKBZ</strong> (the <em>optimal</em> left-deep order for tree queries under an ASI cost, polynomial), <strong>GOO</strong> (greedy: join the pair with the smallest result), <strong>randomized search</strong> (iterative improvement, simulated annealing, PostgreSQL's genetic GEQO), or <strong>adaptive</strong> schemes (Neumann &amp; Radke): use DP while it fits a budget, otherwise <strong>linearize</strong> the query with a good order and run <strong>DP restricted to intervals of that order</strong>, which stays polynomial (O(n³)) and finds bushy plans.</li> <li><strong>Properties multiply states</strong>: interesting orders (<a href="/cookbook/p/optimizer-architectures">Q1</a>) and distribution make the DP table <code>|sets| × |properties|</code>.</li> </ul>
+"""
+
+[[sections]]
+heading = "A join-order lab"
+body = """
+<p>The experiment bench is a <strong>query graph</strong> (≤ 64 relations; chains, stars, cycles, cliques, random trees, random cyclic graphs) with base cardinalities between 10² and 10⁶ and selectivities chosen so the full result has ~10⁵ rows, and the <strong><code>C_out</code></strong> cost (sum of the cardinalities of all join outputs, assuming independence). The module implements:</p>
+
+<ol> <li><strong>DPsize, DPsub, DPccp</strong>: bushy, cross-product-free, with counters for <em>pairs tested</em> and <em>pairs valid</em>.</li> <li><strong>Left-deep DP</strong> (System R's restriction) and an <strong>exhaustive oracle</strong> that enumerates every tree without any DP (for n ≤ 8).</li> <li><strong>GOO</strong>, <strong>simulated annealing</strong> over left-deep orders (swap moves, geometric cooling; cross products allowed but expensive), <strong>IKKBZ</strong> (spanning tree for cyclic graphs; rank = (T−1)/C, module merging), and <strong>interval DP</strong> over any linear order.</li> </ol>
+
+:::deeper Reference: query graph generator, DPsize / DPsub / DPccp, left-deep DP, GOO, annealing, IKKBZ, linearized DP, exhaustive oracle
+```rust title="src/opt/joinorder.rs"
+//! Join enumeration over query graphs: DPsize, DPsub, DPccp (bushy, no cross products), left-deep DP,
+//! greedy operator ordering, simulated annealing over left-deep orders, and linearized (interval) DP.
+//! Cost model: C_out = sum of the cardinalities of all join results (base scans are free).
+use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
+use crate::wcoj::Fx;
+
+pub struct Rng(pub u64);
+impl Rng {
+    pub fn next(&mut self, m: u64) -> u64 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; self.0 % m }
+    pub fn unit(&mut self) -> f64 { self.next(1 << 53) as f64 / (1u64 << 53) as f64 }
+}
+
+/// Relations 0..n (n <= 64), base cardinalities, and a selectivity matrix (1.0 where there is no join predicate).
+pub struct Graph { pub n: usize, pub card: Vec<f64>, pub sel: Vec<f64>, pub adj: Vec<u64> }
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Shape { Chain, Star, Cycle, Clique, Tree, Random }
+
+impl Graph {
+    pub fn from_edges(n: usize, edges: &[(usize, usize)], rng: &mut Rng) -> Graph {
+        assert!(n >= 1 && n <= 64);
+        let card: Vec<f64> = (0..n).map(|_| (10.0f64).powf(2.0 + 4.0 * rng.unit())).collect();      // 1e2 .. 1e6
+        // pick selectivities so the full join is about 1e5 rows, then jitter each by a factor in [0.4, 2.5]
+        let total_ln: f64 = card.iter().map(|c| c.ln()).sum();
+        let per_edge = if edges.is_empty() { 0.0 } else { (1e5f64.ln() - total_ln) / edges.len() as f64 };
+        let mut sel = vec![1.0; n * n];
+        let mut adj = vec![0u64; n];
+        for &(u, v) in edges {
+            let s = (per_edge + (rng.unit() * 2.0 - 1.0) * 0.9).exp().min(1.0);
+            sel[u * n + v] = s; sel[v * n + u] = s;
+            adj[u] |= 1 << v; adj[v] |= 1 << u;
+        }
+        Graph { n, card, sel, adj }
+    }
+    pub fn new(shape: Shape, n: usize, rng: &mut Rng) -> Graph {
+        let mut e: Vec<(usize, usize)> = vec![];
+        match shape {
+            Shape::Chain => for i in 1..n { e.push((i - 1, i)) },
+            Shape::Star => for i in 1..n { e.push((0, i)) },
+            Shape::Cycle => { for i in 1..n { e.push((i - 1, i)) } if n > 2 { e.push((n - 1, 0)) } }
+            Shape::Clique => for i in 0..n { for j in i + 1..n { e.push((i, j)) } },
+            Shape::Tree => for i in 1..n { e.push((rng.next(i as u64) as usize, i)) },
+            Shape::Random => {
+                for i in 1..n { e.push((rng.next(i as u64) as usize, i)) }                       // a random tree...
+                for _ in 0..n { let (a, b) = (rng.next(n as u64) as usize, rng.next(n as u64) as usize); // ...plus extra edges
+                    if a != b && !e.contains(&(a.min(b), a.max(b))) && !e.contains(&(a.max(b), a.min(b))) { e.push((a.min(b), a.max(b))) } }
+            }
+        }
+        Graph::from_edges(n, &e, rng)
+    }
+    #[inline] pub fn neighbors(&self, set: u64) -> u64 { let mut m = 0; let mut s = set; while s != 0 { m |= self.adj[s.trailing_zeros() as usize]; s &= s - 1; } m & !set }
+    pub fn connected(&self, set: u64) -> bool {
+        if set == 0 { return false; }
+        let mut seen = set & set.wrapping_neg();
+        loop { let next = (seen | self.neighbors(seen)) & set; if next == seen { break; } seen = next; }
+        seen == set
+    }
+    /// Product of the selectivities of all predicates between two disjoint sets.
+    pub fn cross_sel(&self, a: u64, b: u64) -> f64 {
+        let mut s = 1.0; let mut x = a;
+        while x != 0 { let u = x.trailing_zeros() as usize; x &= x - 1;
+            let mut y = b & self.adj[u];
+            while y != 0 { let v = y.trailing_zeros() as usize; y &= y - 1; s *= self.sel[u * self.n + v]; } }
+        s
+    }
+    /// Cardinality of joining the relations in `set` (independence assumption; depends only on the set).
+    pub fn card_of(&self, set: u64) -> f64 {
+        let mut c = 1.0; let mut s = set; let mut done = 0u64;
+        while s != 0 { let u = s.trailing_zeros() as usize; s &= s - 1; c *= self.card[u] * self.cross_sel(1 << u, done); done |= 1 << u; }
+        c
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum Tree { Leaf(usize), Join(Box<Tree>, Box<Tree>) }
+
+impl Tree {
+    pub fn set(&self) -> u64 { match self { Tree::Leaf(i) => 1 << i, Tree::Join(a, b) => a.set() | b.set() } }
+    /// Recompute the C_out of a tree from scratch; None if some join is a cross product or the sides overlap.
+    pub fn cost(&self, g: &Graph) -> Option<f64> {
+        match self {
+            Tree::Leaf(_) => Some(0.0),
+            Tree::Join(a, b) => {
+                let (sa, sb) = (a.set(), b.set());
+                if sa & sb != 0 || g.neighbors(sa) & sb == 0 { return None; }
+                Some(a.cost(g)? + b.cost(g)? + g.card_of(sa | sb))
+            }
+        }
+    }
+    pub fn show(&self) -> String { match self { Tree::Leaf(i) => format!("R{i}"), Tree::Join(a, b) => format!("({} ⋈ {})", a.show(), b.show()) } }
+}
+
+#[derive(Clone, Copy)]
+struct Entry { cost: f64, card: f64, left: u64 }
+type Table = HashMap<u64, Entry, BuildHasherDefault<Fx>>;
+
+pub struct Solution { pub cost: f64, pub tree: Tree, pub pairs_tested: u64, pub pairs_valid: u64 }
+
+fn init(g: &Graph) -> Table {
+    let mut t = Table::default();
+    for i in 0..g.n { t.insert(1 << i, Entry { cost: 0.0, card: g.card[i], left: 0 }); }
+    t
+}
+fn build(t: &Table, set: u64) -> Tree {
+    let e = t[&set];
+    if e.left == 0 { Tree::Leaf(set.trailing_zeros() as usize) } else { Tree::Join(Box::new(build(t, e.left)), Box::new(build(t, set ^ e.left))) }
+}
+fn relax(g: &Graph, t: &mut Table, a: u64, b: u64) {
+    let (ea, eb) = (t[&a], t[&b]);
+    let card = ea.card * eb.card * g.cross_sel(a, b);
+    let cost = ea.cost + eb.cost + card;
+    let e = t.entry(a | b).or_insert(Entry { cost: f64::INFINITY, card, left: 0 });
+    if cost < e.cost { *e = Entry { cost, card, left: a }; }
+}
+fn finish(g: &Graph, t: Table, tested: u64, valid: u64) -> Solution {
+    let all = if g.n == 64 { u64::MAX } else { (1u64 << g.n) - 1 };
+    Solution { cost: t[&all].cost, tree: build(&t, all), pairs_tested: tested, pairs_valid: valid }
+}
+
+/// DPsize: combine plans by increasing size; most (a, b) combinations are rejected (overlap or not connected).
+pub fn dp_size(g: &Graph) -> Solution {
+    let mut t = init(g);
+    let mut by_size: Vec<Vec<u64>> = vec![vec![]; g.n + 1];
+    for i in 0..g.n { by_size[1].push(1 << i); }
+    let (mut tested, mut valid) = (0u64, 0u64);
+    for s in 2..=g.n {
+        for s1 in 1..=s / 2 {
+            let s2 = s - s1;
+            for (ia, &a) in by_size[s1].clone().iter().enumerate() {
+                for (ib, &b) in by_size[s2].clone().iter().enumerate() {
+                    if s1 == s2 && ib <= ia { continue; }           // unordered pairs once
+                    tested += 1;
+                    if a & b != 0 || g.neighbors(a) & b == 0 { continue; }
+                    valid += 1;
+                    let known = t.contains_key(&(a | b));
+                    relax(g, &mut t, a, b);
+                    if !known { by_size[s].push(a | b); }
+                }
+            }
+        }
+    }
+    finish(g, t, tested, valid)
+}
+
+/// DPsub: for every subset in numeric order, try all splits into two parts.
+pub fn dp_sub(g: &Graph) -> Solution {
+    assert!(g.n <= 24);
+    let mut t = init(g);
+    let (mut tested, mut valid) = (0u64, 0u64);
+    for set in 1u64..(1 << g.n) {
+        if set.count_ones() < 2 { continue; }
+        let low = set & set.wrapping_neg();
+        let mut sub = (set - 1) & set;                               // enumerate proper non-empty subsets
+        while sub != 0 {
+            if sub & low != 0 {                                      // each unordered split once
+                tested += 1;
+                let other = set ^ sub;
+                if t.contains_key(&sub) && t.contains_key(&other) && g.neighbors(sub) & other != 0 { valid += 1; relax(g, &mut t, sub, other); }
+            }
+            sub = (sub - 1) & set;
+        }
+    }
+    finish(g, t, tested, valid)
+}
+
+/// DPccp (Moerkotte & Neumann 2006): enumerates exactly the connected-subgraph / connected-complement pairs.
+pub fn dp_ccp(g: &Graph) -> Solution {
+    struct St<'a> { g: &'a Graph, t: Table, pairs: u64 }
+    fn subsets(n: u64, mut f: impl FnMut(u64)) { if n == 0 { return; } let mut s = n & n.wrapping_neg(); loop { f(s); if s == n { break; } s = (s.wrapping_sub(n)) & n; } }
+    fn emit(st: &mut St, a: u64, b: u64) { st.pairs += 1; relax(st.g, &mut st.t, a, b); }
+    fn enum_csg_rec(st: &mut St, s: u64, x: u64) {
+        let n = st.g.neighbors(s) & !x;
+        subsets(n, |sub| emit_csg(st, s | sub));
+        subsets(n, |sub| enum_csg_rec(st, s | sub, x | n));
+    }
+    fn emit_csg(st: &mut St, s1: u64) {
+        let min = s1.trailing_zeros();
+        let x = s1 | ((1u64 << (min + 1)) - 1);                      // S1 and all relations with index <= min(S1)
+        let n = st.g.neighbors(s1) & !x;
+        let mut rest = n;
+        while rest != 0 {                                            // neighbours in descending order
+            let v = 63 - rest.leading_zeros();
+            rest &= !(1u64 << v);
+            let s2 = 1u64 << v;
+            emit(st, s1, s2);
+            let below = n & ((1u64 << (v + 1)) - 1);
+            enum_cmp_rec(st, s1, s2, x | below);
+        }
+    }
+    fn enum_cmp_rec(st: &mut St, s1: u64, s2: u64, x: u64) {
+        let n = st.g.neighbors(s2) & !x;
+        subsets(n, |sub| { if st.g.neighbors(s1) & (s2 | sub) != 0 { emit(st, s1, s2 | sub); } });
+        subsets(n, |sub| enum_cmp_rec(st, s1, s2 | sub, x | n));
+    }
+    let mut st = St { g, t: init(g), pairs: 0 };
+    for i in (0..g.n).rev() {
+        emit_csg(&mut st, 1 << i);
+        enum_csg_rec(&mut st, 1 << i, (1u64 << (i + 1)) - 1);
+    }
+    let pairs = st.pairs;
+    finish(g, st.t, pairs, pairs)
+}
+
+/// System R style: left-deep trees only (the right input of every join is a base relation), no cross products.
+pub fn left_deep(g: &Graph) -> Solution {
+    assert!(g.n <= 24);
+    let mut t = init(g);
+    let (mut tested, mut valid) = (0u64, 0u64);
+    for set in 1u64..(1 << g.n) {
+        if set.count_ones() < 2 { continue; }
+        let mut s = set;
+        while s != 0 {
+            let r = 1u64 << s.trailing_zeros(); s &= s - 1;
+            tested += 1;
+            let rest = set ^ r;
+            if t.contains_key(&rest) && g.neighbors(rest) & r != 0 { valid += 1; relax(g, &mut t, rest, r); }
+        }
+    }
+    finish(g, t, tested, valid)
+}
+
+/// Greedy Operator Ordering: repeatedly join the two connected components with the smallest result.
+pub fn goo(g: &Graph) -> (f64, Tree) {
+    let mut comps: Vec<(u64, f64, Tree)> = (0..g.n).map(|i| (1u64 << i, g.card[i], Tree::Leaf(i))).collect();
+    let mut cost = 0.0;
+    while comps.len() > 1 {
+        let mut best: Option<(usize, usize, f64)> = None;
+        for i in 0..comps.len() { for j in i + 1..comps.len() {
+            if g.neighbors(comps[i].0) & comps[j].0 == 0 { continue; }
+            let c = comps[i].1 * comps[j].1 * g.cross_sel(comps[i].0, comps[j].0);
+            if best.map_or(true, |b| c < b.2) { best = Some((i, j, c)); }
+        } }
+        let (i, j, c) = best.expect("connected graph");
+        let (sj, _, tj) = comps.remove(j);
+        let (si, _, ti) = comps.remove(i);
+        cost += c;
+        comps.push((si | sj, c, Tree::Join(Box::new(ti), Box::new(tj))));
+    }
+    (cost, comps.pop().unwrap().2)
+}
+
+fn order_cost(g: &Graph, order: &[usize]) -> f64 {
+    let (mut set, mut card, mut cost) = (1u64 << order[0], g.card[order[0]], 0.0);
+    for &r in &order[1..] { card *= g.card[r] * g.cross_sel(1 << r, set); set |= 1 << r; cost += card; }
+    cost
+}
+
+/// Simulated annealing over left-deep join orders (cross products allowed but expensive). Returns the best cost seen.
+pub fn anneal(g: &Graph, iters: usize, seed: u64) -> f64 {
+    let mut rng = Rng(seed | 1);
+    let mut cur: Vec<usize> = (0..g.n).collect();
+    for i in (1..g.n).rev() { cur.swap(i, rng.next(i as u64 + 1) as usize); }
+    let mut cur_cost = order_cost(g, &cur);
+    let mut best = cur_cost;
+    let t0 = cur_cost.ln().max(1.0) * 0.25;
+    for it in 0..iters {
+        let temp = t0 * (1.0 - it as f64 / iters as f64) + 1e-9;
+        let (i, j) = (rng.next(g.n as u64) as usize, rng.next(g.n as u64) as usize);
+        if i == j { continue; }
+        cur.swap(i, j);
+        let c = order_cost(g, &cur);
+        let accept = c <= cur_cost || rng.unit() < (-((c.ln() - cur_cost.ln()) / temp)).exp();
+        if accept { cur_cost = c; best = best.min(c); } else { cur.swap(i, j); }
+    }
+    best
+}
+
+/// Greedy order: start from the smallest relation, always append the connected relation that keeps the prefix smallest.
+pub fn linearize_greedy(g: &Graph) -> Vec<usize> {
+    let start = (0..g.n).min_by(|&a, &b| g.card[a].partial_cmp(&g.card[b]).unwrap()).unwrap();
+    let (mut order, mut set, mut card) = (vec![start], 1u64 << start, g.card[start]);
+    while order.len() < g.n {
+        let cand = g.neighbors(set);
+        let mut best = (usize::MAX, f64::INFINITY);
+        let mut c = cand;
+        while c != 0 { let r = c.trailing_zeros() as usize; c &= c - 1;
+            let next = card * g.card[r] * g.cross_sel(1 << r, set);
+            if next < best.1 { best = (r, next); } }
+        order.push(best.0); set |= 1 << best.0; card = best.1;
+    }
+    order
+}
+
+/// IKKBZ (Ibaraki-Kameda, Krishnamurthy-Boral-Zaniolo): the optimal left-deep order for tree queries under an ASI cost
+/// such as C_out. For a cyclic graph it runs on the spanning tree of the most selective predicates.
+pub fn ikkbz(g: &Graph) -> Vec<usize> {
+    // spanning tree: Kruskal over predicates, most selective (smallest selectivity) first
+    let mut edges: Vec<(f64, usize, usize)> = vec![];
+    for u in 0..g.n { for v in u + 1..g.n { if g.adj[u] >> v & 1 == 1 { edges.push((g.sel[u * g.n + v], u, v)); } } }
+    edges.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    let mut comp: Vec<usize> = (0..g.n).collect();
+    fn find(c: &mut Vec<usize>, x: usize) -> usize { let mut r = x; while c[r] != r { r = c[r]; } let mut y = x; while c[y] != r { let n = c[y]; c[y] = r; y = n; } r }
+    let mut tree: Vec<Vec<usize>> = vec![vec![]; g.n];
+    for (_, u, v) in edges { let (a, b) = (find(&mut comp, u), find(&mut comp, v)); if a != b { comp[a] = b; tree[u].push(v); tree[v].push(u); } }
+
+    #[derive(Clone)] struct Module { seq: Vec<usize>, t: f64, c: f64 }
+    impl Module { fn rank(&self) -> f64 { (self.t - 1.0) / self.c } }
+    fn solve(g: &Graph, tree: &[Vec<usize>], v: usize, parent: Option<usize>) -> Vec<Module> {
+        // merge the children's (rank-ascending) chains, then normalise v against the head of the merged chain
+        let mut merged: Vec<Module> = vec![];
+        for &c in &tree[v] { if Some(c) == parent { continue; } merged.extend(solve(g, tree, c, Some(v))); }
+        merged.sort_by(|a, b| a.rank().partial_cmp(&b.rank()).unwrap());
+        let Some(p) = parent else { return merged };
+        let t = g.sel[p * g.n + v] * g.card[v];
+        let mut me = Module { seq: vec![v], t, c: t };
+        while !merged.is_empty() && merged[0].rank() < me.rank() {
+            let next = merged.remove(0);
+            me = Module { seq: [me.seq, next.seq].concat(), t: me.t * next.t, c: me.c + me.t * next.c };
+        }
+        merged.insert(0, me);
+        merged
+    }
+    let mut best: Option<(f64, Vec<usize>)> = None;
+    for root in 0..g.n {
+        let mut order = vec![root];
+        for m in solve(g, &tree, root, None) { order.extend(m.seq); }
+        let c = order_cost(g, &order);
+        if best.as_ref().map_or(true, |b| c < b.0) { best = Some((c, order)); }
+    }
+    best.unwrap().1
+}
+
+/// Linearized DP: optimal bushy plan among those whose every subtree covers a contiguous interval of `order`. O(n^3).
+pub fn linear_dp(g: &Graph, order: &[usize]) -> Option<(f64, Tree)> {
+    let n = order.len();
+    let mut mask = vec![vec![0u64; n]; n];
+    let mut card = vec![vec![0f64; n]; n];
+    let mut cost = vec![vec![f64::INFINITY; n]; n];
+    let mut split = vec![vec![0usize; n]; n];
+    for i in 0..n { mask[i][i] = 1 << order[i]; card[i][i] = g.card[order[i]]; cost[i][i] = 0.0; }
+    for len in 2..=n { for i in 0..=n - len {
+        let j = i + len - 1;
+        mask[i][j] = mask[i][j - 1] | (1 << order[j]);
+        card[i][j] = card[i][j - 1] * g.card[order[j]] * g.cross_sel(1 << order[j], mask[i][j - 1]);
+        for k in i..j {
+            if g.neighbors(mask[i][k]) & mask[k + 1][j] == 0 || cost[i][k].is_infinite() || cost[k + 1][j].is_infinite() { continue; }
+            let c = cost[i][k] + cost[k + 1][j] + card[i][j];
+            if c < cost[i][j] { cost[i][j] = c; split[i][j] = k; }
+        }
+    } }
+    fn rebuild(order: &[usize], split: &[Vec<usize>], i: usize, j: usize) -> Tree {
+        if i == j { Tree::Leaf(order[i]) } else { let k = split[i][j]; Tree::Join(Box::new(rebuild(order, split, i, k)), Box::new(rebuild(order, split, k + 1, j))) }
+    }
+    cost[0][n - 1].is_finite().then(|| (cost[0][n - 1], rebuild(order, &split, 0, n - 1)))
+}
+
+/// Exhaustive search over every cross-product-free bushy tree, written without any DP (only for tiny n; the test oracle).
+pub fn exhaustive(g: &Graph) -> f64 {
+    fn all_trees(g: &Graph, set: u64) -> Vec<(f64, f64)> {      // (cost, card) of every tree over `set`
+        if set.count_ones() == 1 { return vec![(0.0, g.card[set.trailing_zeros() as usize])]; }
+        let mut out = vec![];
+        let low = set & set.wrapping_neg();
+        let mut sub = (set - 1) & set;
+        while sub != 0 {
+            if sub & low != 0 && g.neighbors(sub) & (set ^ sub) != 0 {
+                let other = set ^ sub;
+                for &(c1, k1) in &all_trees(g, sub) { for &(c2, k2) in &all_trees(g, other) { let k = k1 * k2 * g.cross_sel(sub, other); out.push((c1 + c2 + k, k)); } }
+            }
+            sub = (sub - 1) & set;
+        }
+        out
+    }
+    let all = (1u64 << g.n) - 1;
+    all_trees(g, all).into_iter().map(|x| x.0).fold(f64::INFINITY, f64::min)
+}
+
+/// Cheap portfolio for queries too big for DP: the best of GOO, IKKBZ + interval DP and greedy + interval DP.
+/// Each member is polynomial and they fail on different shapes (IKKBZ on dense cyclic graphs, GOO on long chains).
+pub fn portfolio(g: &Graph) -> f64 {
+    let a = goo(g).0;
+    let b = linear_dp(g, &ikkbz(g)).map_or(f64::INFINITY, |x| x.0);
+    let c = linear_dp(g, &linearize_greedy(g)).map_or(f64::INFINITY, |x| x.0);
+    a.min(b).min(c)
+}
+```
+:::
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><code>csg_cmp_pair_counts_match_the_closed_forms</code>: DPccp's number of valid pairs equals (n³−n)/6, (n−1)2ⁿ⁻², (n³−2n²+n)/2 and (3ⁿ−2ⁿ⁺¹+1)/2 for chain, star, cycle and clique for every n from 2 to 12. A generator that emitted a pair twice or missed one would break an equation.</li> <li><code>all_enumerators_find_the_same_optimum_as_brute_force</code>: 300 random queries (n = 2…8, all six shapes): DPsize, DPsub and DPccp equal the brute-force optimum; the returned tree's cost is <strong>recomputed from scratch</strong> by an independent evaluator (it also rejects cross products and overlapping inputs); DPccp's valid-pair count equals DPsub's.</li> <li><code>restricted_and_heuristic_searches_are_valid_and_never_beat_the_optimum</code>: left-deep, GOO and linearized DP return valid trees whose recomputed cost equals what they report and is never below the bushy optimum. (Annealing is excluded from that bound: it may use cross products, which can win.)</li> <li><code>ikkbz_is_the_optimal_left_deep_order_on_tree_queries</code>: on 300 random chains, stars and trees, IKKBZ's order is a cross-product-free permutation whose cost <strong>equals the DP optimum over all left-deep orders</strong>. IKKBZ's correctness proof rests on a delicate rank/merge argument, and this is the test that would catch an off-by-one in it.</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p><strong>Work of the three exact enumerators</strong> (n = 12; "tested" is every pair they looked at):</p>
+
+```text title="enumerator work"
+shape     DPsize ms pairs tested   DPsub ms pairs tested   DPccp ms      csg-cmp valid/tested
+Chain           0.0         2331        0.6       261625       0.01          286        12.3%
+Star            0.7       894278        0.7       261625       0.15        11264         1.3%
+Cycle           0.0         4716        0.8       261625       0.03          726        15.4%
+Clique          6.8      4864993        3.8       261625       4.37       261625         5.4%
+```
+
+```text title="largest query DPccp optimizes"
+Chain     n=20: 0 ms (1330 pairs)  n=40: 1 ms (10660 pairs)  n=60: 6 ms (35990 pairs)
+Cycle     n=20: 0 ms (3610 pairs)  n=30: 1 ms (12615 pairs)  n=40: 4 ms (30420 pairs)
+Star      n=14: 1 ms (53248 pairs)  n=18: 15 ms (1114112 pairs)  n=20: 93 ms (4980736 pairs)
+Clique    n=10: 0 ms (28501 pairs)  n=12: 4 ms (261625 pairs)  n=14: 43 ms (2375101 pairs)
+```
+
+<p><strong>Plan quality</strong> (cost ÷ optimal bushy cost; p50 / p90 / max over 60 random queries per shape, n = 10):</p>
+
+```text title="plan quality"
+shape           left-deep opt                  GOO        annealing (20k)    IKKBZ + interval DP best of 3 heuristics
+Chain        1.08/12.60/58.61       1.01/1.43/1.96       1.08/11.65/64.06         1.00/1.12/1.31       1.00/1.00/1.12
+Star           1.00/1.00/1.00       1.00/1.00/1.00         1.00/1.00/1.00         1.00/1.00/1.00       1.00/1.00/1.00
+Cycle         2.00/8.38/19.44       1.27/2.72/5.29        2.04/9.24/19.44        1.40/3.17/20.37       1.00/1.41/2.69
+Clique         1.25/1.86/2.85      1.03/2.07/16.19         1.25/1.86/2.85  12.54/122.69/35482.07       1.01/1.15/1.60
+Tree          1.00/1.12/12.92       1.02/1.37/1.57        1.00/1.23/12.92         1.00/1.00/1.08       1.00/1.00/1.06
+Random         1.00/1.14/2.06       1.00/1.46/2.18         1.00/1.25/2.06    3.22/234.35/4204.26       1.00/1.23/2.18
+```
+
+<p><strong>Large queries</strong> (no exact optimum; cost ÷ the best cost any method found; planning time in ms in parentheses):</p>
+
+```text title="large queries"
+query                         GOO    IKKBZ left-deep  IKKBZ + interval DP greedy + interval DP       annealing (200k)
+Chain n=60           3.90 ( 0.0)       1.00 ( 0.3)         1.00 ( 0.7)                 1.54          14.35 (  36)
+Tree n=50            1.08 ( 0.0)       1.00 ( 0.2)         1.00 ( 0.4)                 1.17           1.04 (  34)
+Random n=40          1.14 ( 0.0) 119446087914.60 ( 0.2) 21779904272.90 ( 0.2)                 1.12           1.00 (  39)
+Star n=40            1.00 ( 0.0)       1.00 ( 0.1)         1.00 ( 0.2)                 1.00           1.00 (  11)
+Cycle n=60           6.96 ( 0.0)   76526.75 ( 0.3)         1.00 ( 0.6)                 2.18        3107.73 (  35)
+```
+
+<ul> <li><strong>The enumerators differ in how much they waste, not in what they find</strong>: at n = 12 on a chain DPsub examines <strong>261 625</strong> splits for the <strong>286</strong> that are valid (DPccp: 286, 60× less time); DPsize tests 2 331 pairs on a chain but <strong>894 278 on a star</strong> because nearly every pair of subsets overlaps or is disconnected. On the clique, where <em>every</em> pair is valid, all three do the same ~262 K useful pairs (DPsub is even a little faster: its loop is simpler than DPccp's recursion). The practical limits follow the formulas: a chain of 60 or a cycle of 40 takes single-digit milliseconds, a star of 20 takes 93 ms, but a <strong>clique of 14 already costs 43 ms and each extra relation triples it</strong>.</li> <li><strong>Left-deep is not good enough for chains and cycles</strong>: the best left-deep plan is a median 2.0× worse than the best bushy plan on cycles, and on 10% of chains it is <strong>12.6×</strong> worse (58× at worst); on stars it is always optimal (a star's centre must be joined with everything anyway).</li> <li><strong>Annealing over left-deep orders behaves like the left-deep optimum</strong> (same ratios to two digits): it finds the best order it <em>can express</em>, and it cannot express the bushy plan. A bigger search budget doesn't fix a search space that is too small. On the 60-relation cycle it gets <strong>3 108× worse</strong> than the best known plan: 200 K random swaps are no match for a space of 60! ≈ 8·10⁸¹ orders.</li> <li><strong>IKKBZ + interval DP is excellent exactly where its theory applies</strong>: on chains and trees it is within 1.31× of the <em>optimal bushy</em> plan at worst and finds the best plan for 50–60 relations in under a millisecond (GOO is 3.9× off on the 60-chain). <strong>On dense cyclic graphs it fails badly</strong>: the spanning tree ignores the predicates that make intermediate results small (clique p50 12.5×, random-graph max 4 204×; on a 40-relation random graph IKKBZ's order is 10¹¹× worse than the best).</li> <li><strong>A portfolio is robust</strong>: taking the best of GOO, IKKBZ + DP and greedy-order + DP (all polynomial, ~1 ms for 60 relations) gives <strong>median 1.00</strong> everywhere and p90 ≤ 1.41, worst case 2.69. This is the engineering lesson of adaptive join-order optimization: no heuristic is uniformly good, so run several cheap ones (and DP when the query is small enough) and keep the best by <em>estimated</em> cost.</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Relation sets are <code>u64</code> bitmasks</strong>: <code>s &amp; s.wrapping_neg()</code> is the lowest member, <code>s.trailing_zeros()</code> its index, <code>s &amp;= s - 1</code> removes it, and <strong><code>(sub - 1) &amp; set</code></strong> iterates every subset of <code>set</code> in decreasing order (<code>(s - n) &amp; n</code> in increasing order); DPsub and DPccp are almost entirely these four expressions. Limits (≤ 64 relations) are a deliberate choice; use <code>u128</code> or a <code>bitvec</code> for more.</li> <li><strong>Pass the DP table through the recursion by <code>&amp;mut</code></strong>: DPccp's four mutually recursive functions share a <code>St { g, t, pairs }</code> struct; the subset iterator takes <code>impl FnMut(u64)</code> so the callback can mutably borrow the state while the loop owns only the mask. A closure that captured <code>st</code> mutably <em>and</em> the iterator held it would not compile; passing <code>st</code> explicitly keeps the borrow checker happy without <code>RefCell</code>.</li> <li><strong>Sets as keys with a cheap hasher</strong>: <code>HashMap&lt;u64, Entry, BuildHasherDefault&lt;Fx&gt;&gt;</code> (the hasher of <a href="/cookbook/p/multi-way-and-worst-case-optimal-joins">A18</a>); for n ≤ 24 a <code>Vec&lt;Option&lt;Entry&gt;&gt;</code> indexed by the mask is faster still.</li> <li><strong>Trees are <code>Box</code> enums and the oracle recomputes</strong>: <code>Tree::cost(&amp;Graph)</code> recomputes the cost <em>and</em> checks that no join is a cross product; every algorithm is verified against it, so a bug in an algorithm's own cost bookkeeping cannot hide.</li> <li><strong>Sorting floats</strong>: <code>partial_cmp(..).unwrap()</code> panics on NaN; production code uses <code>f64::total_cmp</code>. A NaN cost is a real failure mode (0 × ∞ from an estimate), better caught loudly than silently mis-sorted.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Cost-model dependence</strong>: all of this optimizes <em>estimated</em> cost. A plan that is optimal for <code>C_out</code> can lose under a model that charges for hash-table builds, memory spills or pipeline breaks; and every estimation error (<a href="/cookbook/p/cardinality-estimation">Q8</a>) moves the optimum. DP finds the optimum of the model, not of the machine.</li> <li><strong>Cross products</strong> are sometimes required (disconnected query graphs, or a tiny dimension table that is cheaper to cross first in a star-schema plan); production optimizers allow them under conditions instead of banning them.</li> <li><strong>Outer, semi and anti joins</strong>: associativity and commutativity fail, and ignoring that gives <em>wrong results</em>, not just bad plans. Use DPhyp with hyperedges built from the join's SES/TES (conflict detection), and test rewrites against the oracle (<a href="/cookbook/p/plan-transformations-and-rule-soundness">Q3</a>).</li> <li><strong>Exponential blow-up is shape-dependent</strong>: a planner needs a <strong>budget</strong> (count the connected pairs first, which is cheap relative to costing them, and fall back to heuristics above a threshold), not a fixed relation-count cutoff: a 40-relation chain is trivial, a 15-relation clique is not.</li> <li><strong>Determinism and ties</strong>: equal-cost plans can flip with hash-map iteration order, making plans unstable across runs; sort candidates or break ties by a canonical key.</li> <li><strong>Physical properties</strong>: this lab has none. Real DP keeps the best plan <em>per interesting property</em> (sort order, partitioning), so the table is <code>|sets| × |orders|</code> and pruning must compare plans only within one property class.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Analysis of Two Existing and One New Dynamic Programming Algorithm for the Generation of Optimal Bushy Join Trees without Cross Products"
+url = "https://www.vldb.org/conf/2006/p930-moerkotte.pdf"
+
+[[sources]]
+title = "Adaptive Optimization of Very Large Join Queries"
+url = "https://dl.acm.org/doi/10.1145/3183713.3183733"

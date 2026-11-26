@@ -1,0 +1,64 @@
+title = "2-D Jacobi/heat stencil"
+module = "Performance and systems"
+module_order = 7
+chapter = "High-performance computing"
+chapter_order = 4
+order = 302
+kind = "recipe"
+lede = "Naive, tiled, rayon row-parallel, halo exchange with threads and channels"
+level = "advanced"
+code = ["examples/hpc/jacobi_stencil_tiling.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>PDE solvers (heat, Poisson)</li><li>image filters</li><li>cellular automata</li><li>any nearest-neighbour grid update</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+weather/CFD/finite-difference codes, Gaussian blur and convolution kernels, Game of Life, multigrid smoothers; domain decomposition with ghost cells is how MPI codes scale a grid across nodes. Course: CMU 15-418/618 (the grid solver / "ocean" example and message-passing decomposition).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+One Jacobi sweep: new[i][j] = 0.25 &#42; (up + down + left + right) for interior points; the boundary is fixed (Dirichlet).
+
+Because Jacobi reads **only** the old grid and writes **only** the new grid, every point is independent: any visiting order (row-major, tiled, parallel) yields bit-identical floats as long as each point evaluates the same expression in the same order. That is why this file can assert **exact** equality (not tolerance) between variants.
+
+Variants:
+
+- naive: row-major double loop (reads 5 values, writes 1 per point; neighbours reused from cache if a few rows fit).
+- tiled: loop blocking over (bi x bj) tiles. For a grid wider than cache, row-major reuse of row i-1 and i+1 only works if 3 full rows fit in cache; tiling shrinks the working set to 3&#42;bj values.
+
+   (Honest note: for a plain 5-point stencil on modern CPUs the hardware prefetcher already makes naive hard to beat; tiling pays off mostly for 3-D stencils and, combined with temporal blocking, for multi-sweep reuse.)
+- temporal blocking (described, not implemented): do T sweeps on a tile before moving on, shrinking the valid region by one cell per sweep (a trapezoid / "overlapped tiling"; or diamond/wavefront schemes). Cuts memory traffic by &#126;T since the tile stays in cache for T updates. The redundant halo recompute is the price.
+- rayon: split the **output** into row bands with `par_chunks_mut`; the borrow checker proves bands are disjoint.
+- halo exchange: each "rank" (thread) owns a strip of rows plus 2 ghost rows. Every step: compute, then send my edge rows to the neighbours over channels and receive theirs into the ghosts. This is exactly the MPI pattern, with mpsc channels as the network.
+
+   Convergence uses a reduction (max &#124;delta&#124;) to a coordinator, like MPI_Allreduce.
+
+Verification: blocked == naive and parallel == serial bit-for-bit on random grids with awkward sizes; halo result == the global grid after K sweeps; the number of messages equals 2&#42;(P-1) per step; the convergence step count is the same for serial and distributed runs. Timings and GB/s (ideal 16 B/point = 1 read stream + 1 write stream) are printed only.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Stencil_code>  and  <https://en.wikipedia.org/wiki/Jacobi_method>
+
+Algorithmica HPC book, cache locality chapters <https://en.algorithmica.org/hpc/cpu-cache/>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Stencil_code"
+url = "https://en.wikipedia.org/wiki/Stencil_code"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Jacobi_method"
+url = "https://en.wikipedia.org/wiki/Jacobi_method"
+
+[[sources]]
+title = "en.algorithmica.org/hpc/cpu-cache"
+url = "https://en.algorithmica.org/hpc/cpu-cache/"

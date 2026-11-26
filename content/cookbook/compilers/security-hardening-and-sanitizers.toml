@@ -1,0 +1,72 @@
+title = "Security hardening and sanitizers"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Back ends"
+chapter_order = 6
+order = 638
+kind = "guide"
+lede = "What compilers insert to stop exploits and find bugs: CFI, stack protection, Spectre mitigations, ASan, MSan, UBSan, memory tagging"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>Memory-safety bugs account for roughly 70% of serious security vulnerabilities in large C and C++ codebases, as both Microsoft and Chromium have reported. There are three lines of defense, and a compiler takes part in all of them:</p>
+
+<ul> <li><b>Prevent</b> the bugs through language design: bounds checks, ownership, no uninitialized reads.</li> <li><b>Find</b> them before shipping with sanitizers and fuzzing.</li> <li><b>Mitigate</b> the ones that remain, so a bug is harder to turn into an exploit.</li> </ul>
+
+<p>Classic exploitation corrupts a return address or function pointer and redirects control. Modern attacks chain existing code snippets (return-oriented programming, ROP) and leak addresses first to defeat randomization.</p>
+"""
+
+[[sections]]
+heading = "Mitigations compilers insert"
+body = """
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Mitigation</th><th>Mechanism</th><th>Stops</th><th>Flags</th></tr></thead> <tbody> <tr><td>Stack canaries</td><td>A random value between locals and the return address, checked before return</td><td>Linear stack buffer overflows</td><td><code>-fstack-protector-strong</code>; Rust <code>-Z stack-protector</code></td></tr> <tr><td>PIE, ASLR, RELRO, NX</td><td>Randomized load addresses, read-only GOT after startup, non-executable data</td><td>Hard-coded addresses, GOT overwrites, injected code</td><td>Linker and loader defaults; Rust builds PIE by default</td></tr> <tr><td>Forward-edge CFI</td><td>Check at every indirect call that the target is a valid function of the right type</td><td>Function-pointer and vtable hijacks</td><td>Clang <code>-fsanitize=cfi</code> or <code>kcfi</code>, MSVC CFG, Rust <code>-Z sanitizer=cfi</code>, Intel IBT and ARM BTI (hardware landing pads)</td></tr> <tr><td>Backward-edge CFI</td><td>Keep return addresses where attackers can't write, or sign them</td><td>ROP</td><td>Shadow call stack, Intel CET shadow stack, ARM pointer authentication (PAC)</td></tr> <tr><td>Stack clash protection</td><td>Probe every page when growing the stack (<a href="/cookbook/p/abis-object-files-linking-and-unwinding">chapter 19</a>)</td><td>Jumping over the guard page</td><td><code>-fstack-clash-protection</code>; on by default in Rust</td></tr> <tr><td>Auto-initialization</td><td>Zero or pattern-fill uninitialized stack variables</td><td>Info leaks and uninitialized-use bugs</td><td><code>-ftrivial-auto-var-init=zero</code></td></tr> <tr><td>Bounds and overflow checks</td><td>Insert checks; hardened standard library modes</td><td>Out-of-bounds access</td><td>Rust always bounds-checks; <code>_FORTIFY_SOURCE</code>, libc++ hardening modes</td></tr> <tr><td>Spectre v1 mitigation</td><td><code>lfence</code> after bounds checks, or speculative load hardening: mask loaded addresses with a predicate that is all-zero on mispredicted paths</td><td>Bounds-check bypass under speculation</td><td>LLVM <code>-mspeculative-load-hardening</code></td></tr> <tr><td>Spectre v2 mitigation</td><td><b>Retpolines</b>: replace indirect branches with a return-based trampoline the predictor can't be trained on</td><td>Branch target injection</td><td><code>-mretpoline</code>; newer CPUs use hardware IBRS/eIBRS</td></tr> </tbody> </table></div>
+
+```rust title="What type-based forward-edge CFI does at a call site (illustrative; KCFI stores a type hash before each function)"
+// For every function the compiler emits:   [u32 type_hash][function body...]
+// and at every indirect call through `target: fn(i64) -> i64` it emits:
+let expected = TYPE_HASH_FN_I64_TO_I64;                   // hash of the callee's signature
+let found = unsafe { *(target as *const u32).sub(1) };     // the word just before the entry
+if found != expected { core::intrinsics::abort(); }        // not a function of this type: trap
+target(x)
+```
+"""
+
+[[sections]]
+heading = "How sanitizers work"
+body = """
+<p>Sanitizers are compiler instrumentation plus a runtime library. They are debug tools, typically costing 2× in speed and more in memory, and they find bugs that tests alone miss, especially combined with fuzzing.</p>
+
+<ul> <li><b>AddressSanitizer (ASan)</b> maps every 8 bytes of application memory to one <em>shadow byte</em> at <code>(addr &gt;&gt; 3) + offset</code>. 0 means all 8 bytes are addressable, <code>k</code> in 1–7 means only the first <code>k</code> are, and negative values mean poisoned. The allocator surrounds each object with poisoned <em>redzones</em> and keeps freed memory poisoned in a <em>quarantine</em> for a while, so overflows and use-after-free touch poison. The compiler inserts a shadow check before every load and store.</li> <li><b>HWASan</b> and ARM <b>MTE</b> instead tag each pointer's top byte and each 16-byte granule of memory, and check that they match. HWASan does it in software; MTE in hardware, cheaply enough for production.</li> <li><b>MemorySanitizer (MSan)</b> keeps bit-precise shadow for “initialized”. It propagates through arithmetic and reports when uninitialized bits affect a branch, an address or a system call.</li> <li><b>ThreadSanitizer (TSan)</b> records recent accesses per memory word in shadow cells and uses happens-before clocks (<a href="/cookbook/p/tooling-in-code">chapter 35</a>).</li> <li><b>UBSan</b> inserts explicit checks for undefined behavior: signed overflow, oversized shifts, misaligned pointers, invalid enum values, and more.</li> <li><b>LeakSanitizer</b> does a conservative mark phase at exit.</li> </ul>
+
+<p>In Rust, <code>-Zsanitizer=address</code> (also <code>memory</code>, <code>thread</code>, <code>hwaddress</code>, <code>cfi</code>) works on nightly. It's most useful for <code>unsafe</code> code and FFI, alongside Miri.</p>
+
+```rust title="The ASan check the compiler inlines before an access of size bytes (size ≤ 8)"
+/// shadow[k] describes bytes 8k..8k+8: 0 = all addressable, 1..=7 = only the first k,
+/// negative = poisoned (redzone 0xfa, freed 0xfd, …).
+#[inline(always)]
+fn asan_check(shadow: &[i8], addr: usize, size: usize) {
+    let k = shadow[addr >> 3];
+    // The last byte touched must be below k. Negative k always fails the comparison.
+    if k != 0 && ((addr & 7) + size - 1) as i8 >= k {
+        report_bad_access(addr, size);           // prints the allocation and free stack traces
+    }
+}
+
+/// The instrumentation pass: one check per memory access.
+pub fn instrument_asan(f: &mut Function) {
+    let accesses: Vec<Inst> = f.all_insts()
+        .filter(|&i| matches!(f.insts[i].op, Opcode::Load | Opcode::Store))
+        .collect();
+    for i in accesses {
+        let addr = f.insts[i].args[0];
+        f.insert_call_before(i, ASAN_LOAD8, &[addr]);   // __asan_load8 / __asan_store8
+    }
+}
+```
+
+<div class="cb-g-tip"><h3>Compilers can undo security</h3> <p>Optimizations that are correct under the language semantics can still remove security properties:</p> <ul> <li><b>Dead-store elimination</b> deletes a <code>memset</code> that zeroes a secret before it goes out of scope. Use <code>explicit_bzero</code>, <code>volatile</code>, or the <code>zeroize</code> crate.</li> <li>A compiler may turn <b>constant-time</b> selects into branches that leak timing.</li> <li><b>UB-based reasoning</b> can delete checks, as in the Linux null-pointer check that GCC removed.</li> </ul> <p>Cryptographic code needs explicit barriers, or verification of the generated code. If you design a language, decide whether secret data needs its own types.</p></div>
+
+<div class="cb-g-tip"><h3>Language design is the strongest mitigation</h3> <p>Memory safety by default, an explicit <code>unsafe</code> boundary, defined integer overflow, initialized variables, no pointer arithmetic outside <code>unsafe</code>, and checked FFI signatures remove whole bug classes before any of the table above is needed. For a new language, also decide early how packages run build-time code. Sandboxing it in Wasm is one option.</p></div>
+"""

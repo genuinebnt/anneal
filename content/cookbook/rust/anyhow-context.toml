@@ -1,0 +1,34 @@
+title = "`anyhow`"
+module = "Rust language"
+module_order = 1
+chapter = "Errors and diagnostics"
+chapter_order = 4
+order = 35
+kind = "recipe"
+lede = "Context chains for application-level errors, and downcasting back to the cause."
+level = "simple"
+code = ["examples/errors/anyhow_context.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+`main`/CLI/glue code where you only need to **report** an error well (libraries use thiserror, error_enum).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+application glue code and CLIs: add context at each layer, report the whole chain.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+`anyhow::Result<T>` = `Result<T, anyhow::Error>`: any error type converts with `?`, and `.context("what I was doing")` stacks a human explanation on top. Print with `{:#}` for the whole chain on one line, `{:?}` for a multi-line report. `bail!` returns an error early; `ensure!` is assert-as-error; `downcast_ref::<T>()` recovers the original type.
+
+Real use: ripgrep's main <https://github.com/BurntSushi/ripgrep/blob/master/crates/core/main.rs>
+"""
+
+[[sources]]
+title = "github.com/BurntSushi/ripgrep/blob/master/crates/core/main.rs"
+url = "https://github.com/BurntSushi/ripgrep/blob/master/crates/core/main.rs"

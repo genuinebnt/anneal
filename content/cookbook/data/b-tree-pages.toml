@@ -1,0 +1,311 @@
+title = "B+Tree pages"
+module = "Databases"
+module_order = 8
+chapter = "Indexes"
+chapter_order = 3
+order = 336
+kind = "guide"
+lede = "BusTub P2 Task 1 · leaf, internal and header page layouts · typed access to raw bytes · capacity arithmetic · tombstone buffer"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>A B+Tree node <em>is</em> a buffer-pool page. There's no separate in-memory node object: every search, split and merge reads and writes bytes in a frame through a page guard. So the first task is purely about layout: what's in each page type, where, and how many entries fit.</p>
+"""
+
+[[sections]]
+heading = "BusTub's layouts"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Page</th> <th>Header</th> <th>Body</th> <th>Notes</th> </tr> </thead> <tbody> <tr> <td><strong>Header page</strong></td> <td><code>root_page_id</code></td> <td>—</td> <td>the only fixed entry point; its latch serializes root changes</td> </tr> <tr> <td><strong>Internal</strong></td> <td>page type, size (number of children), max size</td> <td><code>key_array[m]</code> + <code>page_id_array[m]</code></td> <td><code>key[0]</code> is unused: m children, m−1 separators</td> </tr> <tr> <td><strong>Leaf</strong></td> <td>page type, size, max size, <code>next_page_id</code>, <code>num_tombstones</code></td> <td><code>tombstones[K]</code>, <code>key_array[n]</code>, <code>rid_array[n]</code></td> <td><code>KeyAt</code> returns physical entries; <code>GetTombstones</code> lists pending deletes</td> </tr> </tbody> </table></div>
+
+<p>The reference below uses the same idea with explicit little-endian offsets. Keys are <code>u64</code> and values are <code>u64</code> (a packed RID), so the layout arithmetic stays visible. BusTub's <code>GenericKey&lt;N&gt;</code> plus a comparator generalizes this to fixed-width byte keys, and the <a href="/cookbook/p/b-trees">memcomparable encoding</a> generalizes it further.</p>
+
+```text title="capacity arithmetic (8 KiB pages)"
+leaf:      header 48 B  +  n × (8 B key + 8 B value)   ≤ 8192  →  n ≤ 509
+internal:  header  8 B  +  m × (8 B key + 4 B child)   ≤ 8192  →  m ≤ 682
+tree of height 3 with 682-way inner nodes: 682² × 509 ≈ 237 M keys
+```
+
+:::deeper Page layer: constants, accessors, leaf/internal read-modify-write helpers, tombstones
+```rust title="src/storage/index/b_plus_tree.rs (part 1: pages)"
+//! B+Tree over the buffer pool. Unique u64 keys -> u64 values (packed RIDs).
+//!
+//! Pages (little-endian):
+//!   leaf:     [0] type=1 [1] level=0 [2..4] size [4..8] next_leaf [8..10] ntombs [10..42] tombs u16×16
+//!             [48..] keys u64 × LEAF_CAP, then values u64 × LEAF_CAP
+//!   internal: [0] type=2 [1] level (1 = children are leaves) [2..4] size (= #children)
+//!             [8..] keys u64 × INTERNAL_CAP (key[0] unused), then children u32 × INTERNAL_CAP
+//!   header:   [0..4] root page id (INVALID = empty tree)
+//!
+//! Tombstones (BusTub Fall 2025): with K > 0, remove() only records the entry's index in the
+//! leaf's tombstone buffer; when the buffer holds more than K, the oldest deletion is applied.
+//! Moving entries between leaves carries their tombstones; tombstones arriving in a leaf are
+//! newer than the ones already there.
+//!
+//! Concurrency: readers crab with shared latches. Writers use `Latching::Optimistic` (default): a
+//! descent with shared latches and an exclusive latch only on the leaf, falling back to pessimistic
+//! crabbing (exclusive latches, released as soon as a node is safe) when the leaf would split or
+//! underflow. `Latching::Pessimistic` skips the optimistic attempt. Both agree on every result.
+//! BusTub's `Optimistic*Test`s assert the optimistic behaviour: one write latch for a leaf-only change.
+use std::collections::VecDeque;
+
+use crate::buffer::buffer_pool_manager::{BpmError, BufferPoolManager, WritePageGuard};
+use crate::common::config::{PAGE_SIZE, PageId};
+use crate::buffer::replacer::Replacer;
+
+type Buf = [u8; PAGE_SIZE];
+type Res<T> = Result<T, BpmError>;
+
+const LEAF: u8 = 1;
+const INTERNAL: u8 = 2;
+pub const MAX_TOMBS: usize = 16;
+const L_KEYS: usize = 48;
+pub const LEAF_CAP: usize = (PAGE_SIZE - L_KEYS) / 16; // 509
+const L_VALS: usize = L_KEYS + 8 * LEAF_CAP;
+const I_KEYS: usize = 8;
+pub const INTERNAL_CAP: usize = (PAGE_SIZE - I_KEYS) / 12; // 682
+const I_KIDS: usize = I_KEYS + 8 * INTERNAL_CAP;
+
+// ---------------- raw page accessors ----------------------------------------------------
+#[inline]
+fn rd16(b: &Buf, at: usize) -> u16 {
+    u16::from_le_bytes([b[at], b[at + 1]])
+}
+#[inline]
+fn wr16(b: &mut Buf, at: usize, v: u16) {
+    b[at..at + 2].copy_from_slice(&v.to_le_bytes())
+}
+#[inline]
+fn rd32(b: &Buf, at: usize) -> u32 {
+    u32::from_le_bytes(b[at..at + 4].try_into().unwrap())
+}
+#[inline]
+fn wr32(b: &mut Buf, at: usize, v: u32) {
+    b[at..at + 4].copy_from_slice(&v.to_le_bytes())
+}
+#[inline]
+fn rd64(b: &Buf, at: usize) -> u64 {
+    u64::from_le_bytes(b[at..at + 8].try_into().unwrap())
+}
+#[inline]
+fn wr64(b: &mut Buf, at: usize, v: u64) {
+    b[at..at + 8].copy_from_slice(&v.to_le_bytes())
+}
+
+#[inline]
+fn is_leaf(b: &Buf) -> bool {
+    b[0] == LEAF
+}
+#[inline]
+fn level(b: &Buf) -> u8 {
+    b[1]
+}
+#[inline]
+fn size(b: &Buf) -> usize {
+    rd16(b, 2) as usize
+}
+#[inline]
+fn set_size(b: &mut Buf, n: usize) {
+    wr16(b, 2, n as u16)
+}
+#[inline]
+fn next_leaf(b: &Buf) -> PageId {
+    PageId(rd32(b, 4))
+}
+#[inline]
+fn set_next_leaf(b: &mut Buf, p: PageId) {
+    wr32(b, 4, p.0)
+}
+#[inline]
+fn lkey(b: &Buf, i: usize) -> u64 {
+    rd64(b, L_KEYS + 8 * i)
+}
+#[inline]
+fn lval(b: &Buf, i: usize) -> u64 {
+    rd64(b, L_VALS + 8 * i)
+}
+#[inline]
+fn ikey(b: &Buf, i: usize) -> u64 {
+    rd64(b, I_KEYS + 8 * i)
+}
+#[inline]
+fn ichild(b: &Buf, i: usize) -> PageId {
+    PageId(rd32(b, I_KIDS + 4 * i))
+}
+fn root_of(b: &Buf) -> PageId {
+    PageId(rd32(b, 0))
+}
+fn set_root(b: &mut Buf, p: PageId) {
+    wr32(b, 0, p.0)
+}
+
+fn tombs(b: &Buf) -> Vec<usize> {
+    (0..rd16(b, 8) as usize)
+        .map(|i| rd16(b, 10 + 2 * i) as usize)
+        .collect()
+}
+fn set_tombs(b: &mut Buf, t: &[usize]) {
+    assert!(t.len() <= MAX_TOMBS);
+    wr16(b, 8, t.len() as u16);
+    for (i, &x) in t.iter().enumerate() {
+        wr16(b, 10 + 2 * i, x as u16);
+    }
+}
+fn is_tomb(b: &Buf, i: usize) -> bool {
+    (0..rd16(b, 8) as usize).any(|j| rd16(b, 10 + 2 * j) as usize == i)
+}
+
+/// Leaf entries and internal nodes are rewritten wholesale on the (rare) structural paths.
+fn leaf_read(b: &Buf) -> (Vec<(u64, u64)>, Vec<usize>) {
+    (
+        (0..size(b)).map(|i| (lkey(b, i), lval(b, i))).collect(),
+        tombs(b),
+    )
+}
+fn leaf_write(b: &mut Buf, e: &[(u64, u64)], t: &[usize], next: PageId) {
+    b[..L_KEYS].fill(0);
+    b[0] = LEAF;
+    set_size(b, e.len());
+    set_next_leaf(b, next);
+    set_tombs(b, t);
+    for (i, &(k, v)) in e.iter().enumerate() {
+        wr64(b, L_KEYS + 8 * i, k);
+        wr64(b, L_VALS + 8 * i, v);
+    }
+}
+fn int_read(b: &Buf) -> (Vec<u64>, Vec<PageId>) {
+    (
+        (0..size(b)).map(|i| ikey(b, i)).collect(),
+        (0..size(b)).map(|i| ichild(b, i)).collect(),
+    )
+}
+fn int_write(b: &mut Buf, lvl: u8, keys: &[u64], kids: &[PageId]) {
+    debug_assert_eq!(keys.len(), kids.len());
+    b[..I_KEYS].fill(0);
+    b[0] = INTERNAL;
+    b[1] = lvl;
+    set_size(b, kids.len());
+    for (i, (&k, &c)) in keys.iter().zip(kids).enumerate() {
+        wr64(b, I_KEYS + 8 * i, k);
+        wr32(b, I_KIDS + 4 * i, c.0);
+    }
+}
+
+/// Index of the child to follow for `k`: the last i with key[i] <= k (key[0] = -∞).
+fn child_idx(b: &Buf, k: u64) -> usize {
+    let (mut lo, mut hi) = (1, size(b));
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if ikey(b, mid) <= k {
+            lo = mid + 1
+        } else {
+            hi = mid
+        }
+    }
+    lo - 1
+}
+/// First index with key >= k.
+fn leaf_lower_bound(b: &Buf, k: u64) -> usize {
+    let (mut lo, mut hi) = (0, size(b));
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if lkey(b, mid) < k {
+            lo = mid + 1
+        } else {
+            hi = mid
+        }
+    }
+    lo
+}
+fn leaf_find(b: &Buf, k: u64) -> Option<usize> {
+    let i = leaf_lower_bound(b, k);
+    (i < size(b) && lkey(b, i) == k).then_some(i)
+}
+
+fn leaf_insert_at(b: &mut Buf, i: usize, k: u64, v: u64) {
+    let n = size(b);
+    b.copy_within(L_KEYS + 8 * i..L_KEYS + 8 * n, L_KEYS + 8 * (i + 1));
+    b.copy_within(L_VALS + 8 * i..L_VALS + 8 * n, L_VALS + 8 * (i + 1));
+    wr64(b, L_KEYS + 8 * i, k);
+    wr64(b, L_VALS + 8 * i, v);
+    set_size(b, n + 1);
+    let t: Vec<usize> = tombs(b)
+        .into_iter()
+        .map(|x| if x >= i { x + 1 } else { x })
+        .collect();
+    set_tombs(b, &t);
+}
+fn leaf_remove_at(b: &mut Buf, i: usize) {
+    let n = size(b);
+    b.copy_within(L_KEYS + 8 * (i + 1)..L_KEYS + 8 * n, L_KEYS + 8 * i);
+    b.copy_within(L_VALS + 8 * (i + 1)..L_VALS + 8 * n, L_VALS + 8 * i);
+    set_size(b, n - 1);
+    let t: Vec<usize> = tombs(b)
+        .into_iter()
+        .filter(|&x| x != i)
+        .map(|x| if x > i { x - 1 } else { x })
+        .collect();
+    set_tombs(b, &t);
+}
+/// Physically apply the oldest deletions until at most `k` are pending.
+fn apply_excess_tombs(b: &mut Buf, k: usize) {
+    loop {
+        let t = tombs(b);
+        if t.len() <= k {
+            return;
+        }
+        leaf_remove_at(b, t[0]);
+    }
+}
+
+pub fn pack_rid(page: u32, slot: u16) -> u64 {
+    (page as u64) << 16 | slot as u64
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Design decisions"
+body = """
+<ol> <li><strong>Where does <code>size</code> mean children vs keys?</strong> BusTub counts <em>children</em> in internal pages (size = number of pointers) and <em>entries</em> in leaves. Mixing the two up is the most common off-by-one in P2. Write it in the page's doc comment.</li> <li><strong>In-place vs read-modify-write.</strong> The hot paths (search, insert without split) touch one slot in place with <code>copy_within</code>. The structural paths (split, borrow, merge) read the node into <code>Vec</code>s, rearrange, and write it back. That's 8 KiB of copying on a rare path, in exchange for code that is obviously right.</li> <li><strong>The <code>level</code> byte.</strong> Internal pages record their height above the leaves (1 means "my children are leaves"). An optimistic descent needs to know <em>before</em> latching the next page whether it's a leaf, so that it can take a write latch on the leaf and read latches everywhere else (<a href="/cookbook/p/b-tree-concurrency">P2.5</a>).</li> <li><strong>Fixed arrays, not <code>Vec</code>.</strong> Pages must be valid for any byte pattern and have no heap pointers, which is why BusTub forbids <code>std::vector</code> members in page classes. In Rust, the typed-view approach makes this automatic: there is no struct to put a <code>Vec</code> into.</li> </ol>
+
+<aside data-call="rust"><b>Why not <code>#[repr(C)] struct LeafPage { keys: [u64; N], … }</code>?</b><p>It works if every field is plain old data (integers, arrays of integers), and the <code>zerocopy</code> crate can prove that at compile time (<code>FromBytes + IntoBytes + KnownLayout</code>). Two things make offset accessors attractive anyway. <strong>Endianness</strong>: an on-disk format should be fixed-endian, and <code>u64</code> fields are native-endian. <strong>Runtime <code>max_size</code></strong>: tests want small nodes (max 3–5) while the physical capacity stays 509. With views, <code>leaf_max</code> is just a number in the tree, not a type parameter. If you choose the struct route, use <code>zerocopy::little_endian::U64</code> fields to get both properties.</p></aside>
+"""
+
+[[sections]]
+heading = "Visualizing a tree"
+body = """
+<p>A tree you can't see is a tree you can't debug. BusTub ships <code>b_plus_tree_printer</code> and a <code>Draw()</code> that emits Graphviz DOT. The Rust equivalent is about 25 lines: walk from the root, emit one record-shaped node per page, and emit edges parent → child plus dashed sibling edges.</p>
+
+```rust title="debug: Graphviz output (render with dot -Tsvg tree.dot > tree.svg)"
+pub fn to_dot(&self) -> Res<String> {
+    use std::fmt::Write;
+    let mut out = String::from("digraph btree {\\n  node [shape=record, fontname=monospace];\\n");
+    let root = root_of(self.bpm.read_page(self.header)?.data());
+    let mut stack = if root.is_valid() { vec![root] } else { vec![] };
+    while let Some(pid) = stack.pop() {
+        let b = *self.bpm.read_page(pid)?.data();
+        if is_leaf(&b) {
+            let t = tombs(&b);
+            let keys: Vec<String> = (0..size(&b)).map(|i| if t.contains(&i) { format!("~{}", lkey(&b, i)) } else { lkey(&b, i).to_string() }).collect();
+            writeln!(out, "  p{} [label="{}"];", pid.0, keys.join("|")).unwrap();
+            if next_leaf(&b).is_valid() { writeln!(out, "  p{} -> p{} [style=dashed, constraint=false];", pid.0, next_leaf(&b).0).unwrap(); }
+        } else {
+            let keys: Vec<String> = (1..size(&b)).map(|i| ikey(&b, i).to_string()).collect();
+            writeln!(out, "  p{} [label="·|{}"];", pid.0, keys.join("|·|")).unwrap();
+            for i in 0..size(&b) { writeln!(out, "  p{} -> p{};", pid.0, ichild(&b, i).0).unwrap(); stack.push(ichild(&b, i)); }
+        }
+    }
+    out.push_str("}\\n");
+    Ok(out)
+}
+```
+
+Tombstoned keys print with a `~` prefix, so you can watch the deletion buffer fill and drain.
+
+
+
+Done whenLeaf and internal page accessors round-trip under a property test (write entries, read back)You can compute LEAF_CAP and INTERNAL_CAP for your own key/value sizesA DOT dump of a 3-level tree renders and matches your mental model
+"""

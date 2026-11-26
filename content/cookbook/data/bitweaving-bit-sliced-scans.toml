@@ -1,0 +1,70 @@
+title = "Bit-parallel scans over compressed codes"
+module = "Databases"
+module_order = 8
+chapter = "Indexes"
+chapter_order = 3
+order = 348
+kind = "recipe"
+lede = "BitWeaving/V, BitWeaving/H and ByteSlice."
+level = "advanced"
+code = ["examples/database/bitweaving_bit_sliced_scans.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+column stores scanning dictionary- or frame-of-reference-encoded columns with comparison predicates.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+the BitWeaving research prototype and its descendants in main-memory column stores (the layouts were designed for scans over order-preserving dictionary codes in the style of **sap HANA** and Vertica-like engines), ByteSlice in the same line of work, "bit-sliced indexes" in bitmap-index systems, SIMD bit-packed scans in Parquet/Arrow readers and DuckDB's bit-unpacking.
+
+Course: CMU 15-721 (Advanced Database Systems): storage models / compression and vectorised scan lectures (BitWeaving, ByteSlice).
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a column of n unsigned **codes** of w bits each (1 &lt;= w &lt;= 32; a dictionary-encoded or min-subtracted column). A scan evaluates `code <op> constant` (=, !=, &lt;, &lt;=, >, >=, **between**) and produces a **result bitmap** (bit i = row i qualifies), which predicates combine with plain **and/or** on words. Five physical layouts are compared:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Naive</div><div class="cb-g-says"><p>Codes bit-packed tight in u64 words (w bits each, a code may straddle two words); the scan unpacks and compares <strong>one</strong> code at a time. Smallest memory, but unpacking dominates.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Plain</div><div class="cb-g-says"><p>U32: a Vec&lt;u32&gt;, 4 bytes per code regardless of width; the loop is trivially auto-vectorised. Fast per byte, but moves 32 bits for a 5-bit code.</p></div></div><div class="cb-g-term"><div class="cb-g-name">BITWEAVING/V (vertical)</div><div class="cb-g-says"><p>The <strong>bit-sliced</strong> layout. For every group of 64 rows store w words, word j holding <strong>bit</strong> j (MSB first) of those 64 codes. A comparison with constant c runs MSB to LSB with two masks per group: <code>eq</code> (rows whose processed prefix equals c's prefix) and <code>lt</code> (rows already known smaller).</p><p>Per bit: if c's bit is 1, rows with a 0 here become <code>lt</code> (<code>lt |= eq &amp; !p</code>) and rows with a 1 stay equal (<code>eq &amp;= p</code>); if c's bit is 0, rows with a 1 here are larger and drop out (<code>eq &amp;= !p</code>). One word operation decides 64 rows.</p><p><strong>Early pruning</strong>: once <code>eq == 0</code> for the group every row is decided, so the remaining low-order bit words are never even read: on random data a 32-bit scan usually reads only ~8..10 of the 32 words. Bytes touched scale with the entropy needed to decide, not with the code width.</p></div></div><div class="cb-g-term"><div class="cb-g-name">BITWEAVING/H (horizontal)</div><div class="cb-g-says"><p>Each code occupies a <strong>field</strong> of w+1 bits whose top bit is a <strong>delimiter</strong> kept 0; as many fields as fit are packed into each u64 (no field straddles words). With D = the delimiter bits and C = the constant replicated into every field, <code>((C | D) - X) &amp; D</code> has the delimiter of a field set iff x &lt;= c.</p><p>The delimiter guarantees the subtraction never borrows across fields, so <strong>one</strong> 64-bit subtraction compares all fields at once (SWAR: SIMD within a register). <code>&gt;=</code> is the mirror <code>((X | D) - C) &amp; D</code>, equality is their <strong>and</strong>. Needs no transposition for point lookups (codes stay contiguous) but cannot prune.</p></div></div><div class="cb-g-term"><div class="cb-g-name">BYTESLICE</div><div class="cb-g-says"><p>Split each code (left-aligned to whole bytes) into ceil(w/8) byte slices stored as separate arrays, most significant first. A group of 64 rows is compared byte-slice by byte-slice with the same lt/eq masks; after the first slice, <code>eq</code> is nearly empty for high-selectivity-free constants, so later slices are skipped.</p><p>Compared with BitWeaving/V it wastes at most 7 bits per code but gets byte granularity that real SIMD (<code>pcmpgtb</code>+<code>movemask</code>, 32 bytes at a time) handles natively and needs no bit-level shuffling; Rust's auto-vectoriser handles the inner loop here.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+scans are memory-bandwidth bound; reading fewer bytes per row is the whole game. Narrow codes mean a 10-bit column is a fifth of a u32 column, and bit-parallel evaluation does the compare work for 64 rows per instruction instead of one.
+
+The price: Naive/H cannot stop early and V/ByteSlice make point reads of a single code (re-assembling bits across w words) slower.
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+500 random columns, one per code width cycled over 1..=32 (n from 0 to &#126;300 rows, incl. non-multiples of 64, all-equal, skewed and full-range data), every layout x every operator x boundary constants (0, max, max+1, random, the column median) must equal a row-by-row oracle on the raw values; 300 random **and/or** expression trees over three columns of different widths are evaluated with every layout and compared; padding rows must never leak into results.
+
+Bytes touched and speed are printed.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+BitWeaving: Fast Scans for Main Memory Data Processing <https://pages.cs.wisc.edu/~jignesh/publ/BitWeaving.pdf> ByteSlice: Pushing the Envelop of Main Memory Data Processing with a New Storage Layout <https://www.cs.cmu.edu/~15721-f24/papers/ByteSlice.pdf>
+
+```text
+CMU 15-721 https://15721.courses.cs.cmu.edu/spring2024/
+```
+"""
+
+[[sources]]
+title = "pages.cs.wisc.edu/~jignesh/publ/BitWeaving.pdf"
+url = "https://pages.cs.wisc.edu/~jignesh/publ/BitWeaving.pdf"
+
+[[sources]]
+title = "cs.cmu.edu/~15721-f24/papers/ByteSlice.pdf"
+url = "https://www.cs.cmu.edu/~15721-f24/papers/ByteSlice.pdf"
+
+[[sources]]
+title = "15721.courses.cs.cmu.edu/spring2024"
+url = "https://15721.courses.cs.cmu.edu/spring2024/"

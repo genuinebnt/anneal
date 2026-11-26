@@ -1,0 +1,88 @@
+title = "Tempfile walkdir glob ignore"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Data, text and encoding crates"
+chapter_order = 1
+order = 124
+kind = "recipe"
+lede = "tempfile, walkdir, globset, ignore, same-file and dirs: temporary files, tree walking and matching"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/tempfile_walkdir_glob_ignore.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>build tools</li><li>search tools</li><li>linters</li><li>backup and sync programs</li><li>any test that touches the filesystem</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>atomic config rewrites</li><li>isolated test directories</li><li><code>ignore</code> is the directory walker used by ripgrep</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>tempfile::tempdir</code></li><li><code>tempfile::Builder::{prefix, suffix, tempdir_in}</code></li><li><code>TempDir::path</code></li><li><code>TempDir::close</code></li><li><code>TempDir::keep</code></li><li><code>NamedTempFile::new_in</code></li><li><code>NamedTempFile::persist</code></li><li><code>NamedTempFile::persist_noclobber</code></li><li><code>NamedTempFile::reopen</code></li><li><code>tempfile::tempfile</code></li><li><code>SpooledTempFile</code></li><li><code>walkdir::WalkDir::new</code></li><li><code>WalkDir::{min_depth, max_depth, sort_by_file_name, follow_links, contents_first}</code></li><li><code>IntoIter::filter_entry</code></li><li><code>IntoIter::skip_current_dir</code></li><li><code>DirEntry::{depth, path, file_name, file_type}</code></li><li><code>walkdir::Error::{loop_ancestor, path, depth}</code></li><li><code>globset::Glob</code></li><li><code>globset::GlobBuilder::literal_separator</code></li><li><code>GlobSetBuilder</code></li><li><code>GlobSet::{is_match, matches}</code></li><li><code>ignore::WalkBuilder::{hidden, require_git, git_global, add_custom_ignore_filename, overrides}</code></li><li><code>ignore::overrides::OverrideBuilder</code></li><li><code>ignore::gitignore::GitignoreBuilder</code></li><li><code>Gitignore::matched</code></li><li><code>same_file::is_same_file</code></li><li><code>dirs::{home_dir, config_dir, cache_dir}</code></li><li><code>NamedTempFile::{into_temp_path, as_file}</code></li><li><code>TempPath</code></li><li><code>tempfile::Builder::{permissions, rand_bytes, make_in}</code></li><li><code>WalkDir::sort_by_key</code></li><li><code>globset::escape</code></li><li><code>GlobBuilder::case_insensitive</code></li><li><code>ignore::types::TypesBuilder</code></li><li><code>WalkBuilder::{types, filter_entry, max_depth, max_filesize, build_parallel, threads}</code></li><li><code>ignore::WalkState</code></li><li><code>Gitignore::matched_path_or_any_parents</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/tempfile/3/" target="_blank" rel="noreferrer">https://docs.rs/tempfile/3/</a></li><li><a href="https://docs.rs/walkdir/2/" target="_blank" rel="noreferrer">https://docs.rs/walkdir/2/</a></li><li><a href="https://docs.rs/globset/0.4/" target="_blank" rel="noreferrer">https://docs.rs/globset/0.4/</a></li><li><a href="https://docs.rs/ignore/0.4/" target="_blank" rel="noreferrer">https://docs.rs/ignore/0.4/</a></li><li><a href="https://docs.rs/same-file/1/" target="_blank" rel="noreferrer">https://docs.rs/same-file/1/</a></li><li><a href="https://docs.rs/dirs/6/" target="_blank" rel="noreferrer">https://docs.rs/dirs/6/</a></li></ul>
+"""
+
+[[sections]]
+heading = "Crates"
+body = """
+tempfile = "3", walkdir = "2", globset = "0.4", ignore = "0.4", same-file = "1", dirs = "6"
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Scratch directory for a test</td><td><code>tempfile::tempdir()  (deleted on drop; keep the guard ALIVE)</code></td></tr><tr><td>Replace a file atomically</td><td><code>NamedTempFile::new_in(SAME directory) -&gt; write -&gt; sync_all -&gt; persist</code></td></tr><tr><td>Walk everything</td><td><code>WalkDir (yields Result: permission errors do not stop the walk)</code></td></tr><tr><td>Prune subtrees</td><td><code>filter_entry (Iterator::filter only hides, it still descends)</code></td></tr><tr><td>Walk like a developer tool</td><td><code>ignore::WalkBuilder (.gitignore, hidden files)</code></td></tr><tr><td>Many globs against one path</td><td><code>GlobSet ; literal text inside a glob -&gt; globset::escape</code></td></tr><tr><td>"only Rust files" (like rg -t rust)</td><td><code>ignore::types::TypesBuilder</code></td></tr><tr><td>Use every core while walking</td><td><code>build_parallel().run(..)  (no ordering guarantee)</code></td></tr><tr><td>Hand a temp file name to another tool</td><td><code>into_temp_path() (handle closed, still deleted on drop)</code></td></tr><tr><td>User directories</td><td><code>dirs::config_dir() and friends (platform specific, Option) FS HELPERS: fs_extra-style recursive copy is about fifteen lines with walkdir (copy_tree below). WATCHING: file watching crates are out of scope; the polling snapshot at the end shows the portable fallback. PLATFORM: the symlink sections are compiled only on Unix.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://github.com/BurntSushi/walkdir" target="_blank" rel="noreferrer">https://github.com/BurntSushi/walkdir</a></li><li><a href="https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore" target="_blank" rel="noreferrer">https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore</a></li><li><a href="https://git-scm.com/docs/gitignore" target="_blank" rel="noreferrer">https://git-scm.com/docs/gitignore</a></li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/tempfile/3"
+url = "https://docs.rs/tempfile/3/"
+
+[[sources]]
+title = "docs.rs/walkdir/2"
+url = "https://docs.rs/walkdir/2/"
+
+[[sources]]
+title = "docs.rs/globset/0.4"
+url = "https://docs.rs/globset/0.4/"
+
+[[sources]]
+title = "docs.rs/ignore/0.4"
+url = "https://docs.rs/ignore/0.4/"
+
+[[sources]]
+title = "docs.rs/same-file/1"
+url = "https://docs.rs/same-file/1/"
+
+[[sources]]
+title = "docs.rs/dirs/6"
+url = "https://docs.rs/dirs/6/"
+
+[[sources]]
+title = "github.com/BurntSushi/walkdir"
+url = "https://github.com/BurntSushi/walkdir"
+
+[[sources]]
+title = "github.com/BurntSushi/ripgrep/tree/master/crates/ignore"
+url = "https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore"
+
+[[sources]]
+title = "git-scm.com/docs/gitignore"
+url = "https://git-scm.com/docs/gitignore"

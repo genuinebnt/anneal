@@ -1,0 +1,38 @@
+title = "The borrow checker"
+module = "Rust language"
+module_order = 1
+chapter = "Ownership and borrowing"
+chapter_order = 1
+order = 2
+kind = "recipe"
+lede = "8 common errors and how experienced Rust avoids them."
+level = "intermediate"
+code = ["examples/language/borrowck_patterns.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+everywhere, especially structs with several fields and collections you mutate while reading.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>day-to-day Rust: mutate collections while reading</li><li>move out of &amp;mut</li><li>avoid clone-everything</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Core rule: at any moment you may have **either** many `&T` OR exactly one `&mut T`, never both, to the same data. The fixes are mostly about &#42;structuring&#42; code so the two uses do not overlap.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Rust Book ch. 4 <https://doc.rust-lang.org/book/ch04-00-understanding-ownership.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch04-00-understanding-ownership.html"
+url = "https://doc.rust-lang.org/book/ch04-00-understanding-ownership.html"

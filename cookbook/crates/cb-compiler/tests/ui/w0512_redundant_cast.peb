@@ -1,0 +1,4 @@
+fn main() {
+    let x = 5 as int;
+    println(to_str(x));
+}

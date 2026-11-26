@@ -1,0 +1,237 @@
+title = "Cloud-native OLTP"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 424
+kind = "guide"
+lede = "Databases! #1, #5–#7 (Umbra, Litestream, Neon, OceanBase), PostgreSQL vs the World #2, #4, #6 (Aurora DSQL, HorizonDB, YugabyteDB) · the log is the database: stateless compute, safekeepers, a page server with page versions, branches and point-in-time reads · image policy, cache, log volume and quorum safety measured"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<p><em>(No notes exist for these talks and I have not transcribed them. The points below are the design space the systems share, from their papers and documentation, not a summary of what any speaker said.)</em></p>
+
+<ul> <li><strong>Separate compute from storage, and let the log be the storage protocol.</strong> A conventional engine writes the log <em>and</em> dirty pages (checkpoints, full-page writes, double-write buffers) to local disks. A cloud-native engine (Amazon Aurora, 2017; Neon; Azure's HorizonDB; Aurora DSQL's journal) ships <strong>only the log</strong> from a stateless compute node to a storage service that <strong>materializes pages itself</strong>. The compute node's cache is a cache, not a database: evicting a page costs nothing because the log can rebuild it.</li> <li><strong>The storage service has three jobs</strong>: make the log <strong>durable</strong> (a quorum of log servers, Neon's <em>safekeepers</em>, Aurora's 4-of-6 storage quorum), <strong>ingest</strong> it into per-page version chains (full images plus deltas, in LSM-style layer files, with cold layers in object storage), and <strong>serve <code>get_page(page, LSN)</code></strong>, reconstructing a page <em>as of any LSN</em> from the newest image at or before it plus the later deltas. A background process writes new images so reconstruction stays short.</li> <li><strong>Versions in the storage layer buy features for free</strong>: <strong>point-in-time recovery</strong> is a read at an older LSN; <strong>branches</strong> (copy-on-write forks of the database at an LSN, O(1) to create) give instant clones for testing and previews; <strong>read replicas</strong> read at a consistent LSN; <strong>scale to zero</strong> is possible because compute holds no durable state. The price is a <strong>retention horizon</strong>: history costs space, and garbage collection decides how far back you can go.</li> <li><strong>Consistency of a read depends on the LSN you ask for.</strong> A compute node must request each page at <strong>at least the LSN of the last change it made to it</strong> (Neon tracks this per page in a "last-written LSN" cache); asking for an older LSN returns a stale page. Replicas use the primary's replay position. Getting this wrong silently returns old data.</li> <li><strong>Latency moves from the disk to the network.</strong> A cache miss becomes a round trip to the page server (hundreds of microseconds in the same availability zone) instead of a local read; throughput is governed by the <strong>cache hit rate</strong>, so cloud-native engines keep large buffer pools and use local SSDs as a second-level cache. Commit latency is the quorum round trip to the log servers, not a local <code>fsync</code>.</li> <li><strong>A durable, ordered log needs a consensus-style protocol.</strong> Log servers are replicated with Paxos or Raft-like rules: a record is committed when a majority stores it, a lagging server must catch up before it takes new records, and <strong>a node that is alone must not make progress</strong> (it may have missed committed records and would fork the log).</li> <li><strong>Other points in the same design space.</strong> <em>Litestream</em> streams SQLite's WAL to object storage and restores a snapshot plus the WAL (point-in-time recovery for a single-node embedded database). <em>YugabyteDB</em> and <em>OceanBase</em> shard data into replicated tablets (a Raft/Paxos group per shard over an LSM engine) and provide distributed SQL by running transactions across groups with hybrid logical clocks or global timestamps. <em>Aurora DSQL</em> uses optimistic concurrency so that no lock is held across wide-area round trips and conflicts are detected at commit. <em>Umbra</em> gets in-memory speed on disk-resident data with variable-size pages and a pointer-swizzling buffer manager (<a href="/cookbook/p/larger-than-memory-databases">A-LTM</a>).</li> </ul>
+"""
+
+[[sections]]
+heading = "The model"
+body = """
+```text
+compute ──WAL record (lsn, page, delta)──▶ safekeepers (3, majority = 2)
+   │                                          │
+   │ get_page(page, lsn)                      ▼
+   └──────────────────────────────────▶ page server: (page, lsn) → image | delta   (+ parent timeline for branches)
+```
+
+<ul> <li><strong><code>Rec</code></strong>: a full page <code>Image</code> or a byte-range <code>Delta</code>. A page is <code>PAGE</code> bytes; all-zero before its first record.</li> <li><strong><code>Timeline</code></strong>: the page server's store for one history, a <code>BTreeMap&lt;(page, lsn), Rec&gt;</code>. <code>get_page(page, lsn)</code> scans the page's records backwards from <code>lsn</code> to the newest image, then applies the deltas after it. A <strong>branch</strong> is a <code>Timeline</code> with a parent and a fork LSN; reads that find no image in the branch continue in the parent, never past the fork. <code>ingest</code> can <strong>replace a delta by an image of the page it produced</strong> once <code>image_every</code> deltas have accumulated, bounding reconstruction.</li> <li><strong><code>Compute</code></strong>: a bounded LRU cache. <code>update</code> loads the page (a miss asks the page server for the page at the last LSN written to it, or at the node's start LSN if untouched), applies the change, emits a WAL record, and remembers its LSN. Eviction just drops the page. The counters record log bytes and, for comparison, the bytes a page-writing engine would have written for the same dirty evictions.</li> <li><strong><code>Safekeepers</code></strong>: three logs; an append needs a majority up; the up nodes first catch up to the longest log among them; a record is committed when a majority stored it.</li> </ul>
+
+:::deeper Reference: page records, timelines with branches and image policy, a stateless compute node with a page cache, the safekeeper quorum
+```rust title="src/pageserver/mod.rs"
+//! "The log is the database": a compute node that only emits WAL records, a page server that keeps versions of every page as
+//! full images plus deltas and reconstructs any page at any LSN, copy-on-write branches, and safekeepers that make the log durable
+//! by quorum. Pages are `PAGE` bytes; a record either replaces a page (an image) or overwrites a byte range (a delta).
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::sync::{Arc, RwLock};
+
+pub const PAGE: usize = 512;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Rec { Image(Vec<u8>), Delta { off: u16, data: Vec<u8> } }
+impl Rec {
+    pub fn bytes(&self) -> usize { match self { Rec::Image(v) => v.len(), Rec::Delta { data, .. } => 4 + data.len() } }
+    pub fn apply(&self, page: &mut Vec<u8>) {
+        match self {
+            Rec::Image(v) => { page.clear(); page.extend_from_slice(v); }
+            Rec::Delta { off, data } => page[*off as usize..*off as usize + data.len()].copy_from_slice(data),
+        }
+    }
+}
+
+/// One timeline of page versions: records keyed by `(page, lsn)`. A branch has a parent timeline and the LSN at which it forked; it
+/// stores only its own records and reads through to the parent for anything older.
+pub struct Timeline {
+    parent: Option<(Arc<Timeline>, u64)>,
+    recs: RwLock<BTreeMap<(u32, u64), Rec>>,
+    chain: RwLock<HashMap<u32, usize>>,       // deltas since the last image, per page
+    /// Store a full image once this many deltas follow the previous image of a page (0 = never).
+    pub image_every: usize,
+}
+
+impl Timeline {
+    pub fn new(image_every: usize) -> Arc<Timeline> { Arc::new(Timeline { parent: None, recs: RwLock::new(BTreeMap::new()), chain: RwLock::new(HashMap::new()), image_every }) }
+    /// Fork at `lsn`: O(1), nothing is copied.
+    pub fn branch(self: &Arc<Self>, lsn: u64, image_every: usize) -> Arc<Timeline> {
+        Arc::new(Timeline { parent: Some((self.clone(), lsn)), recs: RwLock::new(BTreeMap::new()), chain: RwLock::new(HashMap::new()), image_every })
+    }
+    pub fn depth(&self) -> usize { self.parent.as_ref().map_or(0, |(p, _)| 1 + p.depth()) }
+
+    /// Reconstruct `page` as of `lsn`: find the newest image at or before `lsn` (own records first, then the ancestors, capped at the
+    /// fork point), then apply the deltas after it in order. Returns the page and the number of records applied.
+    pub fn get_page(&self, page: u32, lsn: u64) -> (Vec<u8>, usize) {
+        let recs = self.recs.read().unwrap();
+        let mut deltas: Vec<&Rec> = vec![];
+        let mut base: Option<Vec<u8>> = None;
+        for (_, r) in recs.range((page, 0)..=(page, lsn)).rev() {
+            match r { Rec::Image(v) => { base = Some(v.clone()); break; } d => deltas.push(d) }
+        }
+        let (mut buf, mut applied) = match base {
+            Some(b) => (b, 0),
+            None => match &self.parent { Some((p, fork)) => p.get_page(page, lsn.min(*fork)), None => (vec![0u8; PAGE], 0) },
+        };
+        for d in deltas.iter().rev() { d.apply(&mut buf); applied += 1; }
+        (buf, applied)
+    }
+
+    /// Ingest a WAL record; LSNs must increase per page. May store a materialized image to bound reconstruction cost.
+    pub fn ingest(&self, page: u32, lsn: u64, rec: Rec) {
+        let is_delta = matches!(rec, Rec::Delta { .. });
+        self.recs.write().unwrap().insert((page, lsn), rec);
+        let mut ch = self.chain.write().unwrap();
+        let c = ch.entry(page).or_insert(0);
+        if is_delta { *c += 1; } else { *c = 0; }
+        if self.image_every > 0 && *c >= self.image_every {
+            *c = 0;
+            drop(ch);
+            let (img, _) = self.get_page(page, lsn);
+            self.recs.write().unwrap().insert((page, lsn), Rec::Image(img));      // replaces the delta with the page it produced
+        }
+    }
+    pub fn stored_bytes(&self) -> usize { self.recs.read().unwrap().values().map(|r| r.bytes() + 12).sum() }
+    pub fn record_count(&self) -> usize { self.recs.read().unwrap().len() }
+}
+
+/// A compute node: a bounded page cache, no local data files. Every update emits a WAL record to the page server; eviction just drops
+/// the page, because the log already contains everything needed to rebuild it. A miss asks the page server for the page at the
+/// *last LSN this node wrote to it* (or at the node's start LSN for pages it never touched).
+pub struct Compute {
+    ps: Arc<Timeline>,
+    cap: usize,
+    cache: HashMap<u32, Vec<u8>>,
+    lru: VecDeque<u32>,
+    dirty: HashMap<u32, bool>,
+    lw_lsn: HashMap<u32, u64>,
+    start_lsn: u64,
+    pub next_lsn: u64,
+    pub fetches: u64, pub wal_bytes: u64, pub page_write_bytes: u64,
+}
+impl Compute {
+    pub fn new(ps: Arc<Timeline>, cap: usize, start_lsn: u64) -> Self {
+        Compute { ps, cap, cache: HashMap::new(), lru: VecDeque::new(), dirty: HashMap::new(), lw_lsn: HashMap::new(), start_lsn, next_lsn: start_lsn + 1, fetches: 0, wal_bytes: 0, page_write_bytes: 0 }
+    }
+    fn touch(&mut self, page: u32) {
+        if let Some(i) = self.lru.iter().position(|&p| p == page) { self.lru.remove(i); }
+        self.lru.push_back(page);
+    }
+    fn load(&mut self, page: u32) {
+        if !self.cache.contains_key(&page) {
+            let lsn = self.lw_lsn.get(&page).copied().unwrap_or(self.start_lsn);
+            let (p, _) = self.ps.get_page(page, lsn);
+            self.fetches += 1;
+            self.cache.insert(page, p);
+            while self.cache.len() > self.cap {
+                let victim = self.lru.pop_front().expect("cache is non-empty");
+                if victim == page { self.lru.push_back(victim); continue; }
+                self.cache.remove(&victim);
+                if self.dirty.remove(&victim).unwrap_or(false) { self.page_write_bytes += PAGE as u64; }   // what a page-writing engine would flush
+            }
+        }
+        self.touch(page);
+    }
+    pub fn read(&mut self, page: u32) -> Vec<u8> { self.load(page); self.cache[&page].clone() }
+    pub fn update(&mut self, page: u32, off: u16, data: &[u8]) {
+        self.load(page);
+        self.cache.get_mut(&page).unwrap()[off as usize..off as usize + data.len()].copy_from_slice(data);
+        self.dirty.insert(page, true);
+        let lsn = self.next_lsn;
+        self.next_lsn += 1;
+        let rec = Rec::Delta { off, data: data.to_vec() };
+        self.wal_bytes += 8 + 4 + rec.bytes() as u64;
+        self.ps.ingest(page, lsn, rec);
+        self.lw_lsn.insert(page, lsn);
+    }
+    pub fn flush_page_bytes(&mut self) -> u64 { self.page_write_bytes + self.dirty.values().filter(|&&d| d).count() as u64 * PAGE as u64 }
+}
+
+/// Three safekeepers: a record is acknowledged when a majority has stored it. Logs are *contiguous prefixes* of one sequence: before
+/// each append the nodes that are up first catch up from the longest log among them (what a new leader does when it syncs a quorum),
+/// then every up node stores the record; with fewer than a majority up nothing happens. A node that was down simply stays behind until it is up again at the next append.
+pub struct Safekeepers { logs: Vec<Vec<u64>>, pub up: Vec<bool> }
+impl Safekeepers {
+    pub fn new(n: usize) -> Self { Safekeepers { logs: vec![vec![]; n], up: vec![true; n] } }
+    pub fn majority(&self) -> usize { self.logs.len() / 2 + 1 }
+    /// Returns whether a majority stored the record (it is then committed).
+    pub fn append(&mut self, lsn: u64) -> bool {
+        // Without a majority up nothing is stored: a lone node may be stale (it can have missed committed records while it was down),
+        // and appending after its stale log would make it diverge from the committed one. Any two nodes include a holder of every
+        // committed record, so with a majority up the longest log is complete.
+        if self.up.iter().filter(|&&u| u).count() < self.majority() { return false; }
+        self.catch_up();
+        let mut stored = 0;
+        for (i, l) in self.logs.iter_mut().enumerate() { if self.up[i] { l.push(lsn); stored += 1; } }
+        stored >= self.majority()
+    }
+    /// Bring every up node to the longest log among the up nodes.
+    pub fn catch_up(&mut self) {
+        let best = (0..self.logs.len()).filter(|&i| self.up[i]).max_by_key(|&i| self.logs[i].len());
+        if let Some(b) = best { let src = self.logs[b].clone(); for i in 0..self.logs.len() { if self.up[i] { self.logs[i] = src.clone(); } } }
+    }
+    pub fn log(&self, i: usize) -> &Vec<u64> { &self.logs[i] }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>400 000 small updates (1 to 24 bytes) on 1 000 pages of 512 bytes with Zipf(1.0) popularity (the hottest pages receive tens of thousands of updates), in memory, one thread. The page-server round trip in the compute table is an assumption (0.3 ms); everything else is measured.</p>
+
+```text title="image policy, branches, compute cache, reading the past, safekeeper commits"
+400000 small updates (1-24 bytes) over 1000 pages of 512 bytes, page popularity Zipf(1.0); WAL volume 11.4 MB
+image every N deltas     stored MB  amplification  deltas applied (now)  deltas applied (any LSN)      get_page
+never                         11.4           1.0x               11491.1                    5976.0      190.2 us   (ingest 120 ns/record)
+64                            14.3           1.2x                  36.9                      30.9        0.7 us   (ingest 146 ns/record)
+16                            23.6           2.1x                   7.5                       7.6        0.3 us   (ingest 154 ns/record)
+4                             60.8           5.3x                   1.8                       1.5        0.2 us   (ingest 205 ns/record)
+1                            209.6          18.4x                   0.0                       0.0        0.2 us   (ingest 378 ns/record)
+branching: main holds 100 000 records (5.7 MB); 100 branches created in 3 us total, each then writes 1 000 records
+storage with sharing: 5.7 MB (main) + 3.9 MB (all branches' own records) = 9.6 MB; copying main into every branch would take 578 MB
+branch depth      get_page of a page untouched since the fork
+0                              0.23 us
+1                              0.21 us
+2                              0.22 us
+4                              0.22 us
+8                              0.27 us
+16                             0.27 us
+compute node: 200000 operations (80% updates, 20% reads), 2000 pages, Zipf(1.0); page server round trip assumed 0.3 ms
+   cache |   hit rate     fetches/op |  WAL sent (MB) page writes (MB)    ratio |     stall per op
+      16 |      24.4%          0.756 |           4.55            63.48    13.9x |           227 us
+      64 |      44.2%          0.558 |           4.55            47.27    10.4x |           167 us
+     256 |      65.2%          0.348 |           4.55            30.02     6.6x |           104 us
+    1024 |      88.1%          0.119 |           4.55            10.82     2.4x |            36 us
+    2000 |      99.0%          0.010 |           4.55             1.02     0.2x |             3 us
+reading the database as of record 300 000: replaying the whole log into memory (without the cost of copying a base backup, which is not modelled) takes 3.8 ms for this small database; the page server serves the first 10 pages as of that LSN in 15 us, because an old version is read exactly like the current one
+safekeepers: 100 000 appends with random node crashes and recoveries: 73230 committed (73.23%); every committed record was on at least 2 of 3 nodes at all times
+```
+
+<ul> <li><strong>Without images, reconstruction cost grows with the history of the page</strong>: an average of 11 491 deltas applied for the latest version of a randomly chosen update's page and <strong>190 µs</strong> per <code>get_page</code>. Storing a full image every 16 deltas cuts that to <strong>7.5 deltas and 0.3 µs</strong> (630× faster) for <strong>2.1×</strong> the storage; every 4 deltas gives 1.8 deltas and 5.3× storage; an image for every record is <strong>18.4×</strong> the log volume. Image frequency is a straight trade of space for read latency, and the knee is around 16 here. Ingest cost per record rises from 120 to 154 ns (K = 16) because some records trigger a materialization.</li> <li><strong>Branching is metadata</strong>: 100 branches off a 100 000-record main were created in <strong>4 µs</strong> in total; after each wrote 1 000 records the whole set takes <strong>9.6 MB</strong> (5.7 MB shared plus 3.9 MB of branch-private records) where copying the database into every branch would take <strong>578 MB</strong>. Reading a page untouched since the fork through up to 16 ancestors costs 0.22–0.27 µs here (in memory; a real layer map pays an index probe, and perhaps an I/O, per level).</li> <li><strong>The log is much smaller than the pages it replaces, until the cache holds everything.</strong> The 200 000-operation compute workload sends <strong>4.55 MB</strong> of WAL (28 bytes per update). A page-writing engine with the same cache would write each dirty page on eviction: <strong>63 MB</strong> (14× more) with a 16-page cache, 47 MB with 64 pages, 30 MB with 256, 11 MB with 1 024; only when the cache holds all 2 000 pages does writing every page once (1 MB) cost less than logging every update. Small, frequent updates to a larger-than-cache database is the log-structured design's good case.</li> <li><strong>Cache hit rate is the throughput knob.</strong> With 16 cached pages the hit rate is 24% and each operation stalls 227 µs on average waiting for page fetches (at the assumed 0.3 ms round trip); with 1 024 pages the hit rate is 88% and the stall 36 µs; with all pages 99% and 3 µs. A miss costs ~100× a hit, so the buffer pool (and a local SSD tier) must hold the hot set.</li> <li><strong>Reading the past is the same operation as reading the present</strong>: the first 10 pages as of record 300 000 take <strong>15 µs</strong>, with no restore step. (The comparison with replaying the log, 3.8 ms for this tiny database, omits the cost of copying a base backup, which dominates in practice and is not modelled.)</li> <li><strong>The safekeeper rule that matters</strong>: in the quorum model 73% of 100 000 appends committed under random crashes and recoveries (appends need two of three nodes up), and every committed record was on at least two nodes at all times, so any single further failure loses nothing. The first version of the model let a returning, stale node <em>alone</em> accept records; the test showed it forking its log away from the committed one. A node (or a minority) must never make progress by itself.</li> </ul>
+
+<aside data-call="note"><b>Why a stale read is silent</b><p><code>get_page(page, lsn)</code> with an LSN older than the page's last change returns a perfectly valid <em>older</em> page; nothing fails. That is why <code>Compute</code> tracks the last LSN it wrote to each page and requests exactly that, and why the test <code>compute_with_a_tiny_cache_equals_a_plain_database</code> (cache of 1 to 5 pages against a plain in-memory database) is the most valuable one: with a small cache every operation exercises the fetch path.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong><code>BTreeMap&lt;(u32, u64), Rec&gt;</code> is a multi-version index</strong>: <code>range((page, 0)..=(page, lsn)).rev()</code> visits a page's versions at or before <code>lsn</code>, newest first, which is exactly "find the newest image and the deltas after it". Tuple keys sort by page then LSN, so one structure serves every page.</li> <li><strong><code>Arc&lt;Timeline&gt;</code> parent pointers</strong> express copy-on-write branching: a child holds an <code>Arc</code> to its parent and a fork LSN, nothing is copied, and reads recurse upward. <code>RwLock</code> around the maps lets many readers reconstruct pages while one writer ingests.</li> <li><strong>Replacing a record in place</strong> (<code>insert</code> of the image at the delta's key) keeps history addressable: reads at older LSNs still find earlier records, and a read at exactly that LSN gets the image, which equals the page after the delta.</li> <li><strong>A cache that does not write back</strong>: <code>Compute::load</code> evicts with <code>HashMap::remove</code> and a <code>VecDeque</code> LRU; the "dirty page" bookkeeping exists only to count what a page-writing engine would have written, so the comparison in the table is measured on the same run.</li> <li><strong>Simple <code>O(n)</code> LRU</strong> (<code>position</code> on a <code>VecDeque</code>) is fine for a lab cache of at most 2 000 pages; production code uses an intrusive list or CLOCK (<a href="/cookbook/p/buffer-pools">L04</a>).</li> <li><strong>State machines as plain structs</strong>: <code>Safekeepers</code> is data plus three methods, which makes the property test (random crashes, recoveries and appends, with invariants checked after every step) trivial to write and the bug (a lone node diverging) trivial to see.</li> <li><strong>No unsafe, no async</strong>: the real systems are asynchronous (tokio in Neon's page server) with layer files on disk and in S3; the lab shows the algorithms, not the I/O.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Reconstruction at every LSN</strong>: for <code>image_every</code> 0, 1, 2, 3 and 8, 600 random deltas on 12 pages, 300 random <code>(page, LSN)</code> reads (including LSNs before the first record and after the last) equal a reference that keeps every historical page; with <code>image_every = K</code> at most <code>K − 1</code> deltas are applied, and with 1 none.</li> <li><strong>Image policy counting</strong>: an explicit image restarts the delta count; no extra image appears before <code>K</code> deltas have followed it, one appears at the <code>K</code>-th, and the page read there applies zero deltas.</li> <li><strong>Branches</strong>: branching copies no bytes; the branch reads the parent as of the fork; 300 interleaved writes to both sides do not leak in either direction; the history before the fork is shared; a branch of a branch reads through two levels.</li> <li><strong>Compute against a plain database</strong>: caches of 1, 2, 5 and 64 pages, 1 500 random reads and updates, every read equal to the reference, all pages equal at the end, the page server alone has the final state, and a one-page cache fetches constantly. A restarted compute with an empty cache sees everything that was logged.</li> <li><strong>Safekeepers (randomized)</strong>: 40 rounds of 300 appends with random crashes, recoveries and catch-ups; after every step all logs are prefixes of the longest and every recently committed record is on a majority; at the end losing any single node loses no committed record; one node alone cannot commit and stores nothing, and a second node joining then commits.</li> <li><strong>Mutants run against these tests</strong> (all killed): a branch reading its parent beyond the fork; a materialized image that misses the record it replaces; a miss fetching at the start LSN instead of the last written; deltas applied at offset zero; reconstruction scanning past the newest image; an update that does not log; appending without a quorum; skipping the catch-up; counting a minority as a majority; a branch that loses its parent; and the delta counter not resetting at an image (<strong>survived until the policy-counting test</strong>).</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Amazon Aurora</strong> (Verbitski et al., SIGMOD 2017) introduced "the log is the database": the engine sends redo records to a six-way replicated storage fleet (writes acknowledged by 4 of 6) that applies them to pages in the background; the engine never writes data pages, so there are no checkpoints or full-page writes, and crash recovery is the storage layer's job.</li> <li><strong>Neon</strong> (open source, Rust): Postgres compute with a storage-manager hook that fetches pages remotely; <strong>safekeepers</strong> (a Paxos-based WAL service, three nodes) acknowledge commits; the <strong>pageserver</strong> ingests WAL into <em>layer files</em> (image layers and delta layers, an LSM-like layout) uploaded to object storage, serves <code>get_page&#64;LSN</code>, garbage-collects beyond the PITR window, and supports <strong>timelines/branches</strong>; compute nodes scale to zero and are started on demand.</li> <li><strong>Litestream</strong> replicates a SQLite database by shipping its WAL frames to object storage (roughly every second) with periodic snapshots; restore is the latest snapshot plus WAL replay up to the chosen time; it protects a single-writer database with no storage service.</li> <li><strong>Aurora DSQL</strong> and <strong>Azure HorizonDB</strong> (cloud-native PostgreSQL variants described in the seminar): DSQL separates query processing, a journal and storage, uses optimistic concurrency with time-based snapshots to avoid cross-region locks; HorizonDB co-designs Postgres with Azure's storage. Consult their documentation for current architecture.</li> <li><strong>YugabyteDB</strong> runs the PostgreSQL query layer over <em>DocDB</em>, a distributed RocksDB-based store with a Raft group per tablet and hybrid logical clocks for transactions; <strong>OceanBase</strong> replicates partitions with Paxos over an LSM-tree engine and runs distributed transactions with two-phase commit and global timestamps.</li> <li><strong>Umbra</strong> keeps the buffer manager but changes the page: variable-size pages and pointer swizzling give in-memory speed for disk-resident data (<a href="/cookbook/p/larger-than-memory-databases">A-LTM</a>).</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Stale reads are silent</strong>: always request a page at (or after) the last LSN you wrote to it; replicas must wait until the storage service has replayed up to the requested LSN. Test with a cache smaller than the working set.</li> <li><strong>Reconstruction cost is unbounded without images</strong>: a hot page with a million deltas takes milliseconds to rebuild (190 µs for 11 000 here); materialize in the background, driven by chain length and read frequency.</li> <li><strong>History costs space</strong>: PITR windows, branches and replicas pin layers; garbage collection must respect the oldest branch point and the oldest LSN any reader may still ask for.</li> <li><strong>Network round trips replace disk reads</strong>: size the cache from the miss penalty, not from habit, and prefetch (sequential scans can request page ranges).</li> <li><strong>Commit latency is a quorum round trip</strong>: cross-zone log servers add milliseconds to every commit; group commit and batching matter more than in a single-node engine.</li> <li><strong>A minority must not progress</strong>: quorum logic needs terms/epochs, catch-up before append, and truncation of uncommitted suffixes; the lab's simplified model omits terms and leader election, which real protocols (Paxos, Raft) require.</li> <li><strong>Full-page images and hint bits</strong>: engines that modify pages without logging (hint bits, some index updates) break "the log is the database"; Neon had to log or ignore such changes. Audit every page-modifying path.</li> <li><strong>Don't confuse branches with backups</strong>: a branch shares the parent's storage; losing the storage loses both. Durability still needs replicated or object-store copies of layers.</li> <li><strong>Cold starts</strong>: scale-to-zero trades cost for a cold cache and a slow first query; keep warm pools or fast cache restore.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Amazon Aurora: Design Considerations for High Throughput Cloud-Native Relational Databases"
+url = "https://www.amazon.science/publications/amazon-aurora-design-considerations-for-high-throughput-cloud-native-relational-databases"

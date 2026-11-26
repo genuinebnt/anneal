@@ -1,0 +1,52 @@
+title = "A write-ahead log"
+module = "Performance and systems"
+module_order = 7
+chapter = "Files, processes and the OS"
+chapter_order = 3
+order = 301
+kind = "recipe"
+lede = "Length-prefixed + checksummed records, torn-write detection, and crash recovery."
+level = "advanced"
+code = ["examples/os_and_storage/wal_append_log.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>durable state (execution history, event sourcing)</li><li>the DBMS roadmap (WAL, recovery)</li><li>combines bytes</li><li>IO</li><li>errors</li><li>tests</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>databases (WAL)</li><li>message brokers</li><li>event sourcing</li><li>filesystems: durable append with crash recovery</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Record = [len: u32 LE][crc32: u32 LE][payload]. Append-only: the only operation that can be half-done by a crash is the **last** write. On startup, scan from the beginning; the first record that is truncated or fails its checksum marks the end of valid data; **truncate** the file there and continue appending.
+
+A record is durable only after `sync_data` (fsync), so decide per workload whether to sync every record (safe, slow), or batch (group commit). The checksum catches torn writes **and** silent corruption.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://www.postgresql.org/docs/current/wal-intro.html" target="_blank" rel="noreferrer">https://www.postgresql.org/docs/current/wal-intro.html</a></li><li><a href="https://github.com/skyzh/mini-lsm" target="_blank" rel="noreferrer">https://github.com/skyzh/mini-lsm</a> (WAL chapter)</li><li>and <a href="https://github.com/tikv/raft-engine" target="_blank" rel="noreferrer">https://github.com/tikv/raft-engine</a></li><li>Production crates compute CRC32 with hardware acceleration: <a href="https://docs.rs/crc32fast" target="_blank" rel="noreferrer">https://docs.rs/crc32fast</a></li></ul>
+"""
+
+[[sources]]
+title = "postgresql.org/docs/current/wal-intro.html"
+url = "https://www.postgresql.org/docs/current/wal-intro.html"
+
+[[sources]]
+title = "github.com/skyzh/mini-lsm"
+url = "https://github.com/skyzh/mini-lsm"
+
+[[sources]]
+title = "github.com/tikv/raft-engine"
+url = "https://github.com/tikv/raft-engine"
+
+[[sources]]
+title = "docs.rs/crc32fast"
+url = "https://docs.rs/crc32fast"

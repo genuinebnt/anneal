@@ -1,0 +1,84 @@
+title = "`std::net` by use case"
+module = "Standard library and core"
+module_order = 2
+chapter = "Processes, signals and networking"
+chapter_order = 8
+order = 105
+kind = "recipe"
+lede = "IP and socket addresses, CIDR checks, blocking TCP and UDP on loopback, framing, timeouts, shutdown."
+level = "intermediate"
+code = ["examples/std_tour/std_net_tcp_udp_ip_addr.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>health checks</li><li>small internal services</li><li>test servers</li><li>allow/deny lists</li><li>SSRF filters</li><li>understanding what async runtimes wrap</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>parse and validate configured addresses</li><li>bind port 0 in tests</li><li>length-prefixed or line protocols</li><li>read timeouts</li><li>half-close</li><li>stopping an accept loop</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>IpAddr</code></li><li><code>Ipv4Addr::new</code></li><li><code>Ipv4Addr::from</code></li><li><code>Ipv4Addr::octets</code></li><li><code>Ipv4Addr::to_bits</code></li><li><code>Ipv4Addr::from_bits</code></li><li><code>Ipv4Addr::is_loopback</code></li><li><code>Ipv4Addr::is_private</code></li><li><code>Ipv4Addr::is_link_local</code></li><li><code>Ipv4Addr::is_multicast</code></li><li><code>Ipv4Addr::is_broadcast</code></li><li><code>Ipv4Addr::is_unspecified</code></li><li><code>Ipv4Addr::to_ipv6_mapped</code></li><li><code>Ipv6Addr::segments</code></li><li><code>Ipv6Addr::to_ipv4_mapped</code></li><li><code>Ipv6Addr::to_canonical</code></li><li><code>IpAddr::to_canonical</code></li><li><code>Ipv6Addr::is_unique_local</code></li><li><code>Ipv6Addr::is_unicast_link_local</code></li><li><code>SocketAddr::new</code></li><li><code>SocketAddr::from</code></li><li><code>SocketAddr::ip</code></li><li><code>SocketAddr::port</code></li><li><code>SocketAddr::set_port</code></li><li><code>SocketAddr::is_ipv4</code></li><li><code>ToSocketAddrs::to_socket_addrs</code></li><li><code>TcpListener::bind</code></li><li><code>TcpListener::local_addr</code></li><li><code>TcpListener::accept</code></li><li><code>TcpListener::incoming</code></li><li><code>TcpListener::set_nonblocking</code></li><li><code>TcpStream::connect</code></li><li><code>TcpStream::connect_timeout</code></li><li><code>TcpStream::peer_addr</code></li><li><code>TcpStream::local_addr</code></li><li><code>TcpStream::set_read_timeout</code></li><li><code>TcpStream::set_write_timeout</code></li><li><code>TcpStream::read_timeout</code></li><li><code>TcpStream::set_nodelay</code></li><li><code>TcpStream::nodelay</code></li><li><code>TcpStream::set_ttl</code></li><li><code>TcpStream::ttl</code></li><li><code>TcpStream::peek</code></li><li><code>TcpStream::shutdown</code></li><li><code>TcpStream::try_clone</code></li><li><code>TcpStream::set_nonblocking</code></li><li><code>TcpStream::take_error</code></li><li><code>UdpSocket::bind</code></li><li><code>UdpSocket::send_to</code></li><li><code>UdpSocket::recv_from</code></li><li><code>UdpSocket::connect</code></li><li><code>UdpSocket::send</code></li><li><code>UdpSocket::recv</code></li><li><code>UdpSocket::peek_from</code></li><li><code>UdpSocket::set_read_timeout</code></li><li><code>UdpSocket::set_broadcast</code></li><li><code>UdpSocket::broadcast</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/net/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/net/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+core: the address types `IpAddr`, `Ipv4Addr`, `Ipv6Addr`, `SocketAddr`, `SocketAddrV4/V6`, `AddrParseError` (`core::net`, re-exported by std). std: `TcpListener`, `TcpStream`, `UdpSocket`, `ToSocketAddrs`, `Shutdown` (they need an OS). std has no TLS, HTTP or async networking.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+`is_global`, `is_documentation` for IPv6, `is_shared`, `set_linger`, `set_quickack` (unstable or Linux only); multicast joins (needs a multicast-capable interface); DNS lookups and any non-loopback traffic (this file never leaves 127.0.0.1/::1); socket options std lacks (use `socket2`).
+
+Beyond `tcp_framed_server` (one framed server): this file is the API look-up page. Only the macOS build was run when this was written.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Parse "1.2.3.4:80" / "[::1]:80"</td><td><code>s.parse::&lt;SocketAddr&gt;() (never resolves names)</code></td></tr><tr><td>Accept "localhost:80" or ("host", 80)</td><td><code>to_socket_addrs()? (may do blocking DNS; may return several addresses: try each)</code></td></tr><tr><td>A free port in a test</td><td><code>bind "127.0.0.1:0", then local_addr()</code></td></tr><tr><td>Avoid hanging on a silent peer</td><td><code>set_read_timeout(Some(d)) and set_write_timeout; connect: connect_timeout</code></td></tr><tr><td>Recognise a timeout portably</td><td><code>matches!(e.kind(), WouldBlock | TimedOut) (unix and Windows differ)</code></td></tr><tr><td>Tell the peer "I am done sending"</td><td><code>shutdown(Shutdown::Write); you can still read the reply</code></td></tr><tr><td>Read and write from two threads</td><td><code>try_clone() (same socket: shutdown and timeouts affect both)</code></td></tr><tr><td>Read one whole message</td><td><code>frame it: length prefix + read_exact, or delimiter + BufReader; ALWAYS cap the size</code></td></tr><tr><td>Small request/response latency</td><td><code>one write_all per message and/or set_nodelay(true)</code></td></tr><tr><td>Stop a blocking accept loop</td><td><code>set a flag, then connect to yourself to wake it; or non-blocking accept + poll</code></td></tr><tr><td>Block internal targets (SSRF)</td><td><code>call to_canonical() first, then check every range on the resolved IP you will connect to</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Pitfalls"
+body = """
+TCP is a byte stream: one `write` is not one `read`. `set_read_timeout(Some(ZERO))` is an error. A UDP datagram longer than the buffer is truncated (some platforms report an error instead).
+
+On Apple/BSD an accepted socket inherits the listener's non-blocking flag (Linux does not): always set the mode you want on the accepted stream.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/net/struct.TcpStream.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/net/struct.TcpStream.html</a></li><li><a href="https://doc.rust-lang.org/std/net/struct.UdpSocket.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/net/struct.UdpSocket.html</a></li><li>OWASP SSRF cheat sheet <a href="https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html" target="_blank" rel="noreferrer">https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/net/index.html"
+url = "https://doc.rust-lang.org/std/net/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/net/struct.TcpStream.html"
+url = "https://doc.rust-lang.org/std/net/struct.TcpStream.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/net/struct.UdpSocket.html"
+url = "https://doc.rust-lang.org/std/net/struct.UdpSocket.html"
+
+[[sources]]
+title = "cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention…"
+url = "https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html"

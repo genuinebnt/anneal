@@ -1,0 +1,70 @@
+title = "Protocol Buffers wire format by hand"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Networking and protocols"
+chapter_order = 3
+order = 536
+kind = "recipe"
+lede = "Protocol Buffers wire format by hand (schema parser, reflective codec, compatibility rules) and the gRPC framing layer"
+level = "advanced"
+code = ["examples/networking/protobuf_grpc_wire_format.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>debugging "why did this field come back as 0"</li><li>reviewing .proto changes</li><li>writing codecs or proxies</li><li>understanding gRPC streaming</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>gRPC services</li><li>Kafka payloads with a schema registry</li><li>on-disk records</li><li><code>prost</code> and <code>protobuf</code> generate typed code for what this file does reflectively</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Wire format**: a message is a flat sequence of (tag, payload). tag = varint(field_number &lt;&lt; 3 &#124; wire_type). Wire types: 0 VARINT, 1 I64, 2 LEN, 3/4 SGROUP/EGROUP (deprecated, still skippable), 5 I32. **Names and declared types are not on the wire**, only numbers and these five shapes.
+
+Every compatibility rule follows from that:
+
+- rename or reorder declarations: bytes identical. Change a **number**: a different field.
+- int32/int64/uint32/uint64/bool share the VARINT encoding: interchangeable, but values are **truncated** to the reader's width.
+- sint32/sint64 use ZigZag: **not** compatible with int32 (same shape, different meaning: silently wrong numbers).
+- a different wire type for a known number is treated like an unknown field: the reader sees the default.
+- reusing a deleted number is silent corruption; declare it `reserved`. **Parsing rules** a codec must honour: any field order; unknown fields are **kept** and re-emitted (an old proxy must not strip new
+
+data); a repeated singular scalar means **last one wins**; repeated singular message occurrences **merge**; packed and expanded repeated encodings must both be accepted; in a oneof the last member wins; hence parse(a ++ b) == merge(parse(a), parse(b)).
+
+**Presence**: a proto3 scalar without `optional` has **implicit** presence: the default (0, "", false) is not sent, so "unset" and "zero" are indistinguishable. `optional`, oneof members and message fields have **explicit** presence.
+
+**Decoder safety**: lengths are checked against the remaining input before allocating; nesting depth is capped. gRPC: each message is [compressed flag: 1 byte][length: 4 bytes big endian][bytes]. These are carried in **HTTP/2 data** frames whose boundaries are **unrelated** to message boundaries.
+
+The status travels in **trailers** (`grpc-status`, percent-encoded `grpc-message`), the deadline in `grpc-timeout`. HTTP/2 itself is abstracted here: frames are enum values on in-memory queues, with **one** per-stream flow-control window (no HPACK, no connection window, no TLS).
+
+**Simplifications**: proto3 subset (no imports, packages, services, field options or well-known types); enums decode as open int32. The hex vectors marked **docs** were copied from the official encoding guide (first link).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://protobuf.dev/programming-guides/encoding/> and <https://protobuf.dev/programming-guides/proto3/#updating>
+
+<https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md> and <https://httpwg.org/specs/rfc9113.html#FlowControl>
+"""
+
+[[sources]]
+title = "protobuf.dev/programming-guides/encoding"
+url = "https://protobuf.dev/programming-guides/encoding/"
+
+[[sources]]
+title = "protobuf.dev/programming-guides/proto3/#updating"
+url = "https://protobuf.dev/programming-guides/proto3/#updating"
+
+[[sources]]
+title = "github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md"
+url = "https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md"
+
+[[sources]]
+title = "httpwg.org/specs/rfc9113.html#FlowControl"
+url = "https://httpwg.org/specs/rfc9113.html#FlowControl"

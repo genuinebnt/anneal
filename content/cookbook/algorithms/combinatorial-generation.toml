@@ -1,0 +1,54 @@
+title = "Generating combinatorial objects as iterators"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Dynamic programming, greedy and search"
+chapter_order = 5
+order = 211
+kind = "recipe"
+lede = "generating combinatorial objects as iterators (Gray codes, combinations, permutations, partitions, Catalan, necklaces, de Bruijn)."
+level = "advanced"
+code = ["examples/algorithms/combinatorial_generation.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>exhaustive search</li><li>test-case enumeration</li><li>puzzle solvers</li><li>hardware test sequences</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Knuth (TAOCP Vol 4A, 7.2.1) treats generation as a first-class problem: visit every object of a family exactly once, with O(1) **amortised** work per object, ideally changing as little as possible between neighbours.
+
+Every generator here is an `Iterator` that keeps a tiny state and mutates it in place (the `Vec` yielded by some of them is a clone for convenience; the state update itself is the amortised O(1) part). Each is checked against a known count and a brute-force oracle for small n.
+
+- Gray code: gray(i) = i &#94; (i >> 1); neighbours differ in **one** bit.
+- Combinations: lexicographic in-place successor, and Gosper's hack (next mask with the same popcount).
+- Permutations: next_permutation (lexicographic), Heap's (one swap per step), Steinhaus-Johnson-Trotter (adjacent transposition per step; this version scans for the mobile element in O(n), Even's speed-up makes it O(1)).
+- Rank/unrank via the factorial number system (Lehmer code).
+- Integer partitions p(n), set partitions via restricted growth strings (Bell numbers), Dyck words &lt;-> binary trees (Catalan numbers), Lyndon words/necklaces (Duval/FKM), de Bruijn sequences from Lyndon words.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>exhaustive and combinatorial test generation</li><li>Gray codes in rotary encoders and error-minimising labelling</li><li>de Bruijn sequences in lock-picking/brute-force analysis and position encoding</li><li>necklace counting in chemistry/music/cryptography</li><li>Gosper's hack for subset-DP over bitmasks</li><li>next_permutation in contest code and the C++ standard library</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Knuth, The Art of Computer Programming Vol 4A (Combinatorial Algorithms, Part 1)</li><li>section 7.2.1</li><li>Skiena, The Algorithm Design Manual (generating permutations/subsets/partitions in the problem catalog)</li><li><a href="https://en.wikipedia.org/wiki/Gray_code" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Gray_code</a>  <a href="https://en.wikipedia.org/wiki/Heap%27s_algorithm" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Heap%27s_algorithm</a> <a href="https://www-cs-faculty.stanford.edu/~knuth/taocp.html" target="_blank" rel="noreferrer">https://www-cs-faculty.stanford.edu/~knuth/taocp.html</a></li></ul>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Gray_code"
+url = "https://en.wikipedia.org/wiki/Gray_code"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Heap%27s_algorithm"
+url = "https://en.wikipedia.org/wiki/Heap%27s_algorithm"
+
+[[sources]]
+title = "www-cs-faculty.stanford.edu/~knuth/taocp.html"
+url = "https://www-cs-faculty.stanford.edu/~knuth/taocp.html"

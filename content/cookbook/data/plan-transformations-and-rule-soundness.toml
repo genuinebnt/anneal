@@ -1,0 +1,336 @@
+title = "Plan transformations and rule soundness"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 382
+kind = "guide"
+lede = "Optimize! #6 · pushdown, outer-join simplification and reordering, eager aggregation · bag semantics, NULLs, three-valued logic · a harness that proves a rule wrong · measured: rows saved by pushdown"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Two kinds of transformation</strong>: <em>always-good</em> rewrites a heuristic phase applies unconditionally (split conjunctions, push selections and projections down, constant folding, join elimination) and <em>maybe-good</em> rewrites that need the cost model (join reordering, eager aggregation, semi-join reduction, unnesting <a href="/cookbook/p/unnesting-subqueries">Q6</a>). The first stage is cheap and shrinks the plan the second has to search.</li> <li><strong>Selection pushdown</strong>: a predicate that references one input of a join can run before the join. Through an <strong>inner join</strong> it can go to either side; through a <strong>left outer join</strong> only to the <strong>preserved</strong> (left) side: pushing it into the null-supplying side changes the result, because rows that matched nothing would no longer be filtered afterwards.</li> <li><strong>Outer-join simplification</strong>: a <code>WHERE</code> predicate that <strong>rejects NULLs</strong> on the null-supplying side (any comparison with a column of that side) cannot be satisfied by a null-padded row, so the left join is really an <strong>inner join</strong>, and then all inner-join freedoms (reordering, pushdown to both sides) are back. <code>IS NULL</code> predicates do <em>not</em> reject nulls.</li> <li><strong>Reordering joins</strong>: inner joins are commutative and associative; <strong>outer joins are neither</strong> in general. Left-join associativity <code>(A ⟕ B) ⟕ C = A ⟕ (B ⟕ C)</code> holds only if the predicate between B and C <strong>rejects NULLs on B</strong> and does not mention A. Anti-joins, semi-joins and full outer joins have their own conditions; production optimizers encode them as <em>conflict detection</em> or <em>eligibility sets</em> (<a href="/cookbook/p/join-ordering">Q4</a>).</li> <li><strong>Aggregation pushdown / eager aggregation</strong> (Yan &amp; Larson, Chaudhuri &amp; Shim): pre-aggregate one side of a join, <em>grouped by the join key as well</em>, and sum the partial results afterwards (partial <code>COUNT</code>s must be <strong>summed</strong>, not recounted). It can shrink a join input dramatically or enlarge it, so it is a cost-based choice.</li> <li><strong>Semantics to keep</strong>: SQL is a <strong>bag</strong> language (duplicates matter), with <strong>three-valued logic</strong> (<code>NULL</code> comparisons are <em>unknown</em>; <code>WHERE</code> keeps only <em>true</em>), <code>SUM</code> of nothing is <code>NULL</code> but <code>COUNT</code> is 0, and expressions may have <strong>side effects or errors</strong>; every rule must preserve all of these.</li> <li><strong>Rule ordering matters</strong>: rules interact (pushdown can enable simplification which enables more pushdown); a rule set must <strong>terminate</strong> (never include a rule and its inverse without a guard) and be applied to a fixpoint or in a designed order (<a href="/cookbook/p/query-planning-and-rewriting">Part I, L15</a>).</li> <li><strong>Starburst's lesson</strong>: a declarative <em>rewrite</em> stage over a rich internal representation (the Query Graph Model) before cost-based planning made rules independent of the search; modern optimizers keep that split (SQL Server's simplification stage, Calcite's rule sets).</li> </ul>
+"""
+
+[[sections]]
+heading = "A soundness harness for rewrite rules"
+body = """
+<p>A rule is a claim: <em>for every database, plan and rewritten plan return the same bag of rows</em>. The cheapest way to hold a rule to that claim is to <strong>run both plans on random data</strong> and compare. The harness is a complete miniature: relational algebra (<code>Scan</code>, <code>Filter</code>, <code>Join</code> inner/left, <code>Agg</code> with sums), predicates with <code>AND</code>/<code>OR</code>/<code>IS NULL</code> and SQL's three-valued logic, a nested-loop executor, bag comparison (canonical column and row order), and rules as functions <code>&amp;Plan → Option&lt;Plan&gt;</code> applied at every node of a plan.</p>
+
+<ul> <li><strong>Correct rules</strong>: <code>filter_through_join</code>, <code>outer_to_inner</code>, <code>filter_merge</code>, <code>inner_commute</code>, <code>inner_assoc</code> (the outer predicate must not mention A), <code>left_assoc</code> (with the null-rejection condition), <code>agg_pushdown</code> (eager aggregation through an equi-join, grouped by group columns of the left side <em>and</em> the join key).</li> <li><strong>Mutants</strong>: five rules that <em>look</em> right and are not: a filter pushed into the null-supplying side of a left join, a left join turned into an inner join without checking null-rejection, left-join associativity without that check, commuting a left join, and an aggregation pushdown that recounts rows instead of summing partial counts.</li> </ul>
+
+:::deeper Reference: algebra with NULLs, three-valued predicates, executor with work counting, rules and wrong rules, single-step rewriting, bag canonicalization
+```rust title="src/opt/rules.rs"
+//! Logical plan transformations with a soundness harness: a tiny relational algebra with NULLs and three-valued logic,
+//! an executor, rewrite rules (correct and deliberately wrong ones), and bag-equality checking on random data.
+use std::cmp::Ordering;
+
+pub type Val = Option<i64>;
+pub type Row = Vec<Val>;
+pub type Db = Vec<Vec<Row>>;
+
+/// A column is (table, position). Pseudo-columns: ONE (constant 1, for COUNT(*)) and aggregate outputs.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct Col(pub u8, pub u8);
+pub const ONE: Col = Col(253, 0);
+pub const PARTIAL: u8 = 254;
+pub const AGG: u8 = 255;
+
+#[derive(Clone, Copy, Debug, PartialEq)] pub enum Cmp { Eq, Ne, Lt }
+#[derive(Clone, Copy, Debug)] pub enum Operand { C(Col), K(i64) }
+#[derive(Clone, Debug)]
+pub enum Pred { True, Cmp(Cmp, Operand, Operand), IsNull(Col), And(Box<Pred>, Box<Pred>), Or(Box<Pred>, Box<Pred>) }
+
+#[derive(Clone, Copy, PartialEq, Debug)] pub enum Kind { Inner, Left }
+#[derive(Clone, Debug)]
+pub enum Plan {
+    Scan(u8),
+    Filter(Pred, Box<Plan>),
+    Join(Kind, Pred, Box<Plan>, Box<Plan>),
+    /// GROUP BY `group`, outputs the group columns then SUM(s) for each `sums` entry as Col(AGG, i)
+    Agg { group: Vec<Col>, sums: Vec<Col>, input: Box<Plan> },
+}
+use Plan::*;
+
+pub fn schema(p: &Plan) -> Vec<Col> {
+    match p {
+        Scan(t) => vec![Col(*t, 0), Col(*t, 1)],
+        Filter(_, i) => schema(i),
+        Join(_, _, l, r) => { let mut s = schema(l); s.extend(schema(r)); s }
+        Agg { group, sums, .. } => { let mut s = group.clone(); s.extend((0..sums.len()).map(|i| Col(AGG, i as u8))); s }
+    }
+}
+
+// ------------------------------------------------------------------ predicates
+fn operand(o: &Operand, sch: &[Col], row: &Row) -> Val {
+    match o { Operand::K(k) => Some(*k), Operand::C(c) => if *c == ONE { Some(1) } else { row[sch.iter().position(|x| x == c).unwrap_or_else(|| panic!("unknown column {c:?}"))] } }
+}
+pub fn eval(p: &Pred, sch: &[Col], row: &Row) -> Option<bool> {
+    match p {
+        Pred::True => Some(true),
+        Pred::Cmp(op, a, b) => { let (x, y) = (operand(a, sch, row)?, operand(b, sch, row)?); Some(match op { Cmp::Eq => x == y, Cmp::Ne => x != y, Cmp::Lt => x < y }) }
+        Pred::IsNull(c) => Some(operand(&Operand::C(*c), sch, row).is_none()),
+        Pred::And(a, b) => match (eval(a, sch, row), eval(b, sch, row)) { (Some(false), _) | (_, Some(false)) => Some(false), (Some(true), Some(true)) => Some(true), _ => None },
+        Pred::Or(a, b) => match (eval(a, sch, row), eval(b, sch, row)) { (Some(true), _) | (_, Some(true)) => Some(true), (Some(false), Some(false)) => Some(false), _ => None },
+    }
+}
+pub fn cols_of(p: &Pred) -> Vec<Col> {
+    match p {
+        Pred::True => vec![],
+        Pred::Cmp(_, a, b) => [a, b].iter().filter_map(|o| if let Operand::C(c) = o { Some(*c) } else { None }).collect(),
+        Pred::IsNull(c) => vec![*c],
+        Pred::And(a, b) | Pred::Or(a, b) => { let mut v = cols_of(a); v.extend(cols_of(b)); v }
+    }
+}
+pub fn conjuncts(p: &Pred) -> Vec<Pred> { match p { Pred::And(a, b) => { let mut v = conjuncts(a); v.extend(conjuncts(b)); v } Pred::True => vec![], _ => vec![p.clone()] } }
+pub fn and_all(v: Vec<Pred>) -> Pred { v.into_iter().reduce(|a, b| Pred::And(Box::new(a), Box::new(b))).unwrap_or(Pred::True) }
+fn within(p: &Pred, sch: &[Col]) -> bool { cols_of(p).iter().all(|c| sch.contains(c)) }
+/// Conservative null-rejection: `p` is never TRUE when a column of `set` is NULL.
+pub fn rejects_null(p: &Pred, set: &[Col]) -> bool {
+    match p {
+        Pred::Cmp(..) => cols_of(p).iter().any(|c| set.contains(c)),
+        Pred::And(a, b) => rejects_null(a, set) || rejects_null(b, set),
+        Pred::Or(a, b) => rejects_null(a, set) && rejects_null(b, set),
+        Pred::True | Pred::IsNull(_) => false,
+    }
+}
+
+// ------------------------------------------------------------------ executor
+pub fn run(p: &Plan, db: &Db) -> Vec<Row> { let mut work = 0; run_counting(p, db, &mut work) }
+
+/// Executes the plan; `work` accumulates the number of rows produced by every operator (a machine-independent cost).
+pub fn run_counting(p: &Plan, db: &Db, work: &mut u64) -> Vec<Row> {
+    let out = match p {
+        Scan(t) => db[*t as usize].clone(),
+        Filter(pr, i) => { let sch = schema(i); run_counting(i, db, work).into_iter().filter(|r| eval(pr, &sch, r) == Some(true)).collect() }
+        Join(kind, on, l, r) => {
+            let (ls, rs) = (schema(l), schema(r));
+            let mut both = ls.clone(); both.extend(rs.iter().copied());
+            let (lrows, rrows) = (run_counting(l, db, work), run_counting(r, db, work));
+            let mut out = vec![];
+            for lr in &lrows {
+                let mut matched = false;
+                for rr in &rrows {
+                    let mut row = lr.clone(); row.extend(rr.iter().cloned());
+                    if eval(on, &both, &row) == Some(true) { matched = true; out.push(row); }
+                }
+                if !matched && *kind == Kind::Left { let mut row = lr.clone(); row.extend(std::iter::repeat(None).take(rs.len())); out.push(row); }
+            }
+            out
+        }
+        Agg { group, sums, input } => {
+            let sch = schema(input);
+            let rows = run_counting(input, db, work);
+            let mut groups: Vec<(Vec<Val>, Vec<Val>)> = vec![];
+            for r in rows {
+                let key: Vec<Val> = group.iter().map(|c| operand(&Operand::C(*c), &sch, &r)).collect();
+                let vals: Vec<Val> = sums.iter().map(|c| operand(&Operand::C(*c), &sch, &r)).collect();
+                match groups.iter_mut().find(|g| g.0 == key) {
+                    Some(g) => for (acc, v) in g.1.iter_mut().zip(vals) { if let Some(v) = v { *acc = Some(acc.unwrap_or(0) + v); } },
+                    None => groups.push((key, vals)),
+                }
+            }
+            groups.into_iter().map(|(mut k, v)| { k.extend(v); k }).collect()
+        }
+    };
+    *work += out.len() as u64;
+    out
+}
+
+/// Canonical bag: columns in sorted order, rows sorted (so plans that order columns differently compare equal).
+pub fn bag(p: &Plan, db: &Db) -> Vec<Row> {
+    let sch = schema(p);
+    let mut perm: Vec<usize> = (0..sch.len()).collect();
+    perm.sort_by_key(|&i| sch[i]);
+    let mut rows: Vec<Row> = run(p, db).into_iter().map(|r| perm.iter().map(|&i| r[i]).collect()).collect();
+    rows.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    rows
+}
+
+// ------------------------------------------------------------------ rules
+pub type Rule = fn(&Plan) -> Option<Plan>;
+fn bx(p: Plan) -> Box<Plan> { Box::new(p) }
+
+/// Push conjuncts of a filter below a join: both sides of an inner join, only the preserved (left) side of a left join.
+pub fn filter_through_join(p: &Plan) -> Option<Plan> {
+    let Filter(pred, inner) = p else { return None };
+    let Join(kind, on, l, r) = &**inner else { return None };
+    let (ls, rs) = (schema(l), schema(r));
+    let (mut to_l, mut to_r, mut keep) = (vec![], vec![], vec![]);
+    for c in conjuncts(pred) {
+        if within(&c, &ls) { to_l.push(c) } else if within(&c, &rs) && *kind == Kind::Inner { to_r.push(c) } else { keep.push(c) }
+    }
+    if to_l.is_empty() && to_r.is_empty() { return None; }
+    let wrap = |ps: Vec<Pred>, x: &Plan| if ps.is_empty() { x.clone() } else { Filter(and_all(ps), bx(x.clone())) };
+    let j = Join(*kind, on.clone(), bx(wrap(to_l, l)), bx(wrap(to_r, r)));
+    Some(if keep.is_empty() { j } else { Filter(and_all(keep), bx(j)) })
+}
+/// A WHERE predicate that rejects NULLs on the null-supplying side turns a left join into an inner join.
+pub fn outer_to_inner(p: &Plan) -> Option<Plan> {
+    let Filter(pred, inner) = p else { return None };
+    let Join(Kind::Left, on, l, r) = &**inner else { return None };
+    rejects_null(pred, &schema(r)).then(|| Filter(pred.clone(), bx(Join(Kind::Inner, on.clone(), l.clone(), r.clone()))))
+}
+pub fn filter_merge(p: &Plan) -> Option<Plan> {
+    let Filter(a, inner) = p else { return None };
+    let Filter(b, x) = &**inner else { return None };
+    Some(Filter(Pred::And(Box::new(a.clone()), Box::new(b.clone())), x.clone()))
+}
+pub fn inner_commute(p: &Plan) -> Option<Plan> { let Join(Kind::Inner, on, l, r) = p else { return None }; Some(Join(Kind::Inner, on.clone(), r.clone(), l.clone())) }
+/// (A ⋈ B) ⋈ C → A ⋈ (B ⋈ C), when the outer predicate does not mention A.
+pub fn inner_assoc(p: &Plan) -> Option<Plan> {
+    let Join(Kind::Inner, p2, ab, c) = p else { return None };
+    let Join(Kind::Inner, p1, a, b) = &**ab else { return None };
+    let mut bc = schema(b); bc.extend(schema(c));
+    within(p2, &bc).then(|| Join(Kind::Inner, p1.clone(), a.clone(), bx(Join(Kind::Inner, p2.clone(), b.clone(), c.clone()))))
+}
+/// (A ⟕ B) ⟕ C → A ⟕ (B ⟕ C), valid only if the C-predicate does not mention A and *rejects NULLs on B*.
+pub fn left_assoc(p: &Plan) -> Option<Plan> {
+    let Join(Kind::Left, p2, ab, c) = p else { return None };
+    let Join(Kind::Left, p1, a, b) = &**ab else { return None };
+    let mut bc = schema(b); bc.extend(schema(c));
+    (within(p2, &bc) && rejects_null(p2, &schema(b))).then(|| Join(Kind::Left, p1.clone(), a.clone(), bx(Join(Kind::Left, p2.clone(), b.clone(), c.clone()))))
+}
+/// Eager aggregation: SUM over a column of L pre-aggregated per (group-by columns of L, join key), through an
+/// equi-join; the final aggregate sums the partial sums *and* the partial counts.
+pub fn agg_pushdown(p: &Plan) -> Option<Plan> { agg_pushdown_impl(p, false) }
+fn agg_pushdown_impl(p: &Plan, wrong_count: bool) -> Option<Plan> {
+    let Agg { group, sums, input } = p else { return None };
+    let Join(kind, on, l, r) = &**input else { return None };
+    let Pred::Cmp(Cmp::Eq, Operand::C(lk), Operand::C(rk)) = on else { return None };
+    let (ls, rs) = (schema(l), schema(r));
+    if !ls.contains(lk) || !rs.contains(rk) { return None; }
+    if !sums.iter().all(|s| *s == ONE || ls.contains(s)) { return None; }
+    let gl: Vec<Col> = group.iter().copied().filter(|c| ls.contains(c)).collect();
+    let mut pg = gl.clone(); if !pg.contains(lk) { pg.push(*lk); }
+    let partial_sums: Vec<Col> = sums.clone();
+    let part = Agg { group: pg, sums: partial_sums, input: l.clone() };
+    let joined = Join(*kind, on.clone(), bx(part), r.clone());
+    let finals: Vec<Col> = (0..sums.len()).map(|i| if wrong_count && sums[i] == ONE { ONE } else { Col(AGG, i as u8) }).collect();
+    // the partial aggregate's output columns are named Col(AGG, i); rename by re-labelling through a projection-free trick:
+    Some(relabel_final(group.clone(), finals, joined))
+}
+/// The final aggregate reads the partial sums, which the inner Agg exposes as Col(AGG, i); to keep every column
+/// name unique we build the final Agg over a join whose left schema carries those names.
+fn relabel_final(group: Vec<Col>, finals: Vec<Col>, joined: Plan) -> Plan { Agg { group, sums: finals, input: bx(joined) } }
+
+// ---- deliberately wrong rules (mutants) the harness must catch
+pub fn wrong_filter_into_right_of_left_join(p: &Plan) -> Option<Plan> {
+    let Filter(pred, inner) = p else { return None };
+    let Join(Kind::Left, on, l, r) = &**inner else { return None };
+    within(pred, &schema(r)).then(|| Join(Kind::Left, on.clone(), l.clone(), bx(Filter(pred.clone(), r.clone()))))
+}
+pub fn wrong_outer_to_inner(p: &Plan) -> Option<Plan> {
+    let Filter(pred, inner) = p else { return None };
+    let Join(Kind::Left, on, l, r) = &**inner else { return None };
+    Some(Filter(pred.clone(), bx(Join(Kind::Inner, on.clone(), l.clone(), r.clone()))))
+}
+pub fn wrong_left_assoc(p: &Plan) -> Option<Plan> {
+    let Join(Kind::Left, p2, ab, c) = p else { return None };
+    let Join(Kind::Left, p1, a, b) = &**ab else { return None };
+    let mut bc = schema(b); bc.extend(schema(c));
+    within(p2, &bc).then(|| Join(Kind::Left, p1.clone(), a.clone(), bx(Join(Kind::Left, p2.clone(), b.clone(), c.clone()))))
+}
+pub fn wrong_left_commute(p: &Plan) -> Option<Plan> { let Join(Kind::Left, on, l, r) = p else { return None }; Some(Join(Kind::Left, on.clone(), r.clone(), l.clone())) }
+pub fn wrong_agg_pushdown(p: &Plan) -> Option<Plan> { agg_pushdown_impl(p, true) }
+
+/// Every plan obtained by applying `rule` at exactly one node of `p`.
+pub fn rewrites(p: &Plan, rule: Rule) -> Vec<Plan> {
+    let mut out = vec![];
+    if let Some(q) = rule(p) { out.push(q); }
+    match p {
+        Scan(_) => {}
+        Filter(pr, i) => for q in rewrites(i, rule) { out.push(Filter(pr.clone(), bx(q))) },
+        Join(k, on, l, r) => {
+            for q in rewrites(l, rule) { out.push(Join(*k, on.clone(), bx(q), r.clone())) }
+            for q in rewrites(r, rule) { out.push(Join(*k, on.clone(), l.clone(), bx(q))) }
+        }
+        Agg { group, sums, input } => for q in rewrites(input, rule) { out.push(Agg { group: group.clone(), sums: sums.clone(), input: bx(q) }) },
+    }
+    out
+}
+/// Apply a list of rules until none applies anywhere (the rule set must be terminating).
+pub fn fixpoint(mut p: Plan, rules: &[Rule]) -> Plan {
+    'again: loop { for r in rules { if let Some(q) = rewrites(&p, *r).into_iter().next() { p = q; continue 'again; } } return p; }
+}
+
+pub fn show(p: &Plan) -> String {
+    match p {
+        Scan(t) => format!("T{t}"),
+        Filter(pr, i) => format!("σ[{}]({})", show_pred(pr), show(i)),
+        Join(k, on, l, r) => format!("({} {} [{}] {})", show(l), if *k == Kind::Inner { "⋈" } else { "⟕" }, show_pred(on), show(r)),
+        Agg { group, sums, input } => format!("γ[{:?}; sum {:?}]({})", group.iter().map(|c| format!("{}.{}", c.0, c.1)).collect::<Vec<_>>(), sums.iter().map(|c| format!("{}.{}", c.0, c.1)).collect::<Vec<_>>(), show(input)),
+    }
+}
+pub fn show_pred(p: &Pred) -> String {
+    let o = |x: &Operand| match x { Operand::C(c) => format!("{}.{}", c.0, c.1), Operand::K(k) => k.to_string() };
+    match p {
+        Pred::True => "true".into(),
+        Pred::Cmp(op, a, b) => format!("{} {} {}", o(a), match op { Cmp::Eq => "=", Cmp::Ne => "<>", Cmp::Lt => "<" }, o(b)),
+        Pred::IsNull(c) => format!("{}.{} IS NULL", c.0, c.1),
+        Pred::And(a, b) => format!("({} AND {})", show_pred(a), show_pred(b)),
+        Pred::Or(a, b) => format!("({} OR {})", show_pred(a), show_pred(b)),
+    }
+}
+```
+:::
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Random plans</strong>: 2–4 tables of 2 integer columns over the domain {0, 1, 2, NULL}, 0–5 rows each (tiny domains and sizes make <em>every</em> edge case—duplicates, empty inputs, all-NULL columns, unmatched rows—likely within a few thousand trials); plans are random join trees (inner or left, equality, inequality, <code>OR … IS NULL</code> predicates), filters (stacked, mixed <code>AND</code>/<code>OR</code>/<code>IS NULL</code>) and an optional aggregate on top.</li> <li><strong><code>correct_rules_preserve_results_on_random_plans_and_data</code></strong>: for each correct rule, every plan on which the rule applies <em>at any node</em> is rewritten at <em>every</em> applicable node and compared on 4 random databases; <strong>zero counterexamples</strong> and a <strong>minimum application count</strong> (so a generator that never produces the pattern can't make a rule look sound). Associativity gets a targeted <code>(A ⋈ B) ⋈ C</code> generator where the second predicate is sometimes <code>IS NULL</code> or <code>… OR IS NULL</code>, the non-null-rejecting forms that break outer-join reordering.</li> <li><strong><code>wrong_rules_are_caught_with_small_counterexamples</code></strong>: every mutant must produce at least one counterexample; the smallest plan found is printed. The mutants double as the proof that the harness is able to fail.</li> <li>Every rewrite must also <strong>preserve the output columns</strong> (a rule that silently drops one is wrong even if the remaining columns match).</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+```text title="rule soundness: applications / counterexamples (4 random databases each)"
+filter_through_join    applied  1619 times, counterexamples 0
+outer_to_inner         applied   778 times, counterexamples 0
+filter_merge           applied  1672 times, counterexamples 0
+inner_commute          applied  2019 times, counterexamples 0
+inner_assoc            applied  2000 times, counterexamples 0
+left_assoc             applied  1193 times, counterexamples 0
+agg_pushdown           applied    36 times, counterexamples 0
+```
+
+```text title="wrong rules: smallest counterexample found"
+MUTANT filter into right side of left join: 113 of 463 applications wrong
+   σ[1.0 < 1]((σ[0.0 <> 2](T0) ⟕ [0.0 = 1.0] T1))
+MUTANT left join -> inner join, ignoring the predicate: 113 of 1547 applications wrong
+   σ[0.0 = 0.1]((T0 ⟕ [0.0 < 1.0] T1))
+MUTANT left-join associativity without the null-rejection condition: 561 of 2000 applications wrong
+   ((T0 ⟕ [0.1 < 1.1] T1) ⟕ [1.0 IS NULL] T2)
+MUTANT left-join commutativity: 406 of 1994 applications wrong
+   (T0 ⟕ [0.0 < 1.1] T1)
+MUTANT aggregate pushdown that counts join rows: 4 of 36 applications wrong
+   γ[["0.0"]; sum ["0.0", "253.0"]]((T0 ⟕ [0.1 = 1.1] T1))
+```
+
+<p>(<code>253.0</code> is the pseudo-column ONE: <code>SUM(ONE)</code> is <code>COUNT(*)</code>.)</p>
+
+<p><strong>Effect of the always-good rules</strong> on executor work (rows produced by all operators; 250-row tables over 30 values, a selective equality filter on the first and on the last table above the joins; median of 120 queries): the rules <code>outer_to_inner</code>, <code>filter_through_join</code> and <code>filter_merge</code> applied to a fixpoint, with results checked equal to the original plan's:</p>
+
+```text title="rows produced by all operators, before vs after"
+query shape           rows before     rows after    reduction p50          p90
+2 inner joins               20370            845            24.1x        25.3x
+3 inner joins              165981           1728            96.2x       124.1x
+2 left joins                20372            862            23.7x        25.0x
+3 left joins               165981           1787            93.7x       119.4x
+```
+
+<ul> <li><strong>Correct and wrong rules separate cleanly</strong>: seven rules, thousands of applications each, no counterexample; five wrong rules, each caught (7% to 28% of their applications are wrong; eager aggregation only 4 of 36, a rare shape, which is exactly why the minimum-coverage assertion exists). The counterexamples are small enough to read: the <strong>left-associativity</strong> mutant dies on <code>((T0 ⟕ T1) ⟕[IS NULL] T2)</code>, the textbook case where a null-padded B row satisfies <code>B.x IS NULL</code> before reordering and cannot after.</li> <li><strong>Pushdown is worth 24× to 96× in rows processed</strong>, growing with the number of joins (each filter applied below a join shrinks every later join's input). The left-join queries do just as well because the filter on the <em>last</em> table rejects NULLs there, so <code>outer_to_inner</code> turns them into inner joins and unlocks pushdown to <strong>both</strong> sides: the two rules together are worth more than either.</li> <li><strong>Eager aggregation applies rarely and carries its own bug class</strong>: the mutant that recounts rows instead of summing partial counts is only exposed by plans with duplicate join matches; random testing found it in 4 of 36 applications.</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Rules as plain functions</strong>: <code>type Rule = fn(&amp;Plan) -&gt; Option&lt;Plan&gt;</code>; a rule set is an array of function pointers, a rule is testable in isolation, and <code>rewrites(plan, rule)</code> (apply at exactly one node, return every result) is the only traversal machinery: no visitor trait, no mutation, so a failing rewrite is a value you can print.</li> <li><strong>Boxed enums for plans</strong>: <code>Plan</code> and <code>Pred</code> are recursive enums with <code>Box</code>; <code>Clone</code> is derived (rules clone the parts they keep); pattern matching with <code>let Join(Kind::Left, on, l, r) = &amp;**inner else { return None };</code> states each rule's <em>pattern</em> in one line, and the <code>Option</code> return is the rule's guard.</li> <li><strong>Three-valued logic is <code>Option&lt;bool&gt;</code></strong>: <code>eval</code> returns <code>None</code> for <em>unknown</em>; <code>Filter</code> keeps <code>Some(true)</code> only. NULL is <code>Option&lt;i64&gt;</code> and the derived ordering of <code>Vec&lt;Option&lt;i64&gt;&gt;</code> (None first) is enough to canonicalize bags.</li> <li><strong>Bag equality without hashing</strong>: reorder each row's columns by column id, sort the rows, compare vectors; plans that emit columns in different orders (a commuted join) compare equal.</li> <li><strong>Make the executor count work</strong>: <code>run_counting</code> adds each operator's output rows to a counter; an optimization claim ("pushdown saves work") is then a number, independent of machine speed.</li> <li><strong>A reserved word</strong>: <code>gen</code> is a keyword in the 2024 edition; the generator functions are named <code>make_*</code>.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>NULL is the source of almost every wrong rule</strong>: <code>NOT IN</code> with a NULL in the list, <code>&lt;&gt; ALL</code>, outer joins, <code>COUNT</code> vs <code>SUM</code> over empty groups. A rule validated only on NULL-free data is untested; the harness makes NULL a quarter of all values.</li> <li><strong>Bag vs set</strong>: a rule that is right for sets may duplicate or drop rows in bags (<code>DISTINCT</code> elimination needs a key; semi-joins must not multiply rows). Include duplicates in every test database.</li> <li><strong>Errors and side effects</strong>: pushing a filter below a join (or reordering predicates) can evaluate an expression on rows that previously never reached it (<code>x / y</code> with <code>y = 0</code>, a cast that can fail, a function with side effects); production engines restrict pushdown of fallible and volatile expressions and rely on <code>CASE</code>'s guarantee.</li> <li><strong>Expensive predicates</strong>: pushing a filter down is not always cheaper if the filter is a costly UDF applied to more rows than a join would let through (<em>predicate migration</em>): the cost model must be consulted for non-trivial predicates.</li> <li><strong>Non-terminating rule sets</strong>: push-down and pull-up together, or commute applied unconditionally, cycle forever; guard with a canonical form or apply in strata.</li> <li><strong>Testing is part of the optimizer</strong>: this harness's mutants are the bugs production optimizers actually shipped; fuzz the full engine the same way in practice (<a href="/cookbook/p/deterministic-simulation">Part VI</a>: SQLancer's ternary-logic partitioning, NoREC and pivoted-query synthesis find optimizer bugs by comparing equivalent queries).</li> </ul></aside>
+"""
+
+[[sources]]
+title = "Outerjoin Simplification and Reordering for Query Optimization"
+url = "https://dl.acm.org/doi/10.1145/244810.244812"
+
+[[sources]]
+title = "Finding Bugs in Database Systems via Query Partitioning"
+url = "https://dl.acm.org/doi/10.1145/3428279"

@@ -1,0 +1,68 @@
+title = "Bufreader bufwriter patterns (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "I/O, files and paths"
+chapter_order = 9
+order = 108
+kind = "recipe"
+lede = "`BufReader`, `BufWriter`, `LineWriter` in depth, with syscall counting."
+level = "intermediate"
+code = ["examples/std_tour/std_bufreader_bufwriter_patterns.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>log tailers</li><li>CSV/JSONL pipelines</li><li>grep-like tools</li><li>anything that does many small reads or writes</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li><code>BufWriter::new(File::create(..))</code> for exports</li><li><code>BufReader::new(File::open(..)).lines()</code></li><li><code>stdout().lock()</code> + <code>BufWriter</code> for CLI output</li><li>reusing one <code>String</code> for <code>read_line</code> in hot loops</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>BufReader::new</code></li><li><code>BufWriter::new</code></li><li><code>BufRead::lines</code></li><li><code>BufRead::read_line</code></li><li><code>BufWriter::flush</code></li><li><code>BufWriter::with_capacity</code></li><li><code>BufReader::with_capacity</code></li><li><code>BufWriter::buffer</code></li><li><code>BufWriter::capacity</code></li><li><code>BufReader::buffer</code></li><li><code>BufReader::capacity</code></li><li><code>BufWriter::get_ref</code></li><li><code>BufWriter::get_mut</code></li><li><code>BufReader::get_ref</code></li><li><code>BufReader::get_mut</code></li><li><code>BufReader::into_inner</code></li><li><code>BufWriter::into_inner</code></li><li><code>BufWriter::into_parts</code></li><li><code>std::io::IntoInnerError</code></li><li><code>IntoInnerError::error</code></li><li><code>IntoInnerError::into_inner</code></li><li><code>IntoInnerError::into_error</code></li><li><code>IntoInnerError::into_parts</code></li><li><code>BufReader::seek_relative</code></li><li><code>Seek::seek</code></li><li><code>LineWriter::new</code></li><li><code>LineWriter::with_capacity</code></li><li><code>LineWriter::get_ref</code></li><li><code>LineWriter::into_inner</code></li><li><code>std::io::stdin</code></li><li><code>Stdin::lock</code></li><li><code>std::io::stdout</code></li><li><code>Stdout::lock</code></li><li><code>BufRead::read_until</code></li><li><code>std::io::WriterPanicked</code></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+std: `BufReader`, `BufWriter`, `LineWriter`, `IntoInnerError`, `BufRead`, `Write`, `stdin`/`stdout` are all `std::io`.
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/io/struct.BufWriter.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/io/struct.BufWriter.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+BufReader::peek (unstable in 1.98.1); BufRead::has_data_left (unstable). Course: none. Goes beyond `buffered_io_internals` (how a buffer works) by covering the full std API and failure semantics.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Write many small pieces to a file</td><td><code>BufWriter::new(file); call flush() (or into_inner()) and CHECK it</code></td></tr><tr><td>Read a file line by line</td><td><code>BufReader::new(file).lines(); hot loop: reuse a String with read_line + clear</code></td></tr><tr><td>Tune the buffer</td><td><code>with_capacity(64 * 1024) for big sequential I/O</code></td></tr><tr><td>See unflushed bytes</td><td><code>BufWriter::buffer(), capacity()</code></td></tr><tr><td>Get the file back AND learn about failure</td><td><code>into_inner() (flushes; Err keeps the data)</code></td></tr><tr><td>Get unflushed bytes without any I/O</td><td><code>into_parts() =&gt; (writer, Ok(buffered_bytes))</code></td></tr><tr><td>Interactive output (flush per line)</td><td><code>LineWriter (stdout already is one)</code></td></tr><tr><td>Jump a little inside a BufReader</td><td><code>seek_relative (keeps the buffer if within it)</code></td></tr><tr><td>Fast stdout for 1M lines</td><td><code>BufWriter::new(stdout().lock()) + writeln!</code></td></tr><tr><td>Read stdin lines</td><td><code>stdin().lock().lines()</code></td></tr><tr><td>Count syscalls</td><td><code>wrap the inner Read/Write in a counter</code></td></tr><tr><td>Read until a delimiter</td><td><code>read_until(b';', &amp;mut Vec) Design: a CountingWrite wrapper stands in for the kernel: each write call it sees is one would-be syscall.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/io/struct.BufWriter.html> (see the Drop and `into_inner` notes)
+
+<https://doc.rust-lang.org/std/io/struct.BufReader.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/io/struct.BufWriter.html"
+url = "https://doc.rust-lang.org/std/io/struct.BufWriter.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/io/struct.BufReader.html"
+url = "https://doc.rust-lang.org/std/io/struct.BufReader.html"

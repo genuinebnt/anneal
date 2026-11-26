@@ -1,0 +1,60 @@
+title = "Amortised analysis"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Sorting, strings, bits and theory"
+chapter_order = 6
+order = 223
+kind = "recipe"
+lede = "amortised analysis (aggregate / accounting / potential) and online algorithms (competitive analysis)."
+level = "advanced"
+code = ["examples/algorithms/amortized_analysis_online_algorithms.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>sizing growth policies of Vec/hash tables</li><li>proving "O(1) amortised" claims</li><li>cache/page replacement policy choice</li><li>rent-or-buy decisions</li><li>load balancing</li><li>ad allocation</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Vec/String/HashMap growth (std doubles capacity)</li><li>binary counters and carry chains</li><li>queues built from two stacks</li><li>union-find in Kruskal/connected components</li><li>splay trees and self-adjusting caches</li><li>OS page replacement (LRU/CLOCK approximate it)</li><li>CDN/buffer-pool caches</li><li>list schedulers (greedy list scheduling)</li><li>ad-allocation (online matching). Course: CMU 15-451/651 (amortised analysis and online algorithms lectures)</li><li>Sleator and Tarjan</li><li>"Amortized efficiency of list update and paging rules" (1985)</li><li>Karp</li><li>Vazirani</li><li>Vazirani (1990) for <strong>ranking</strong></li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Part** 1, amortised analysis. A sequence of n operations costs T(n); the amortised cost is T(n)/n, a guarantee for the **worst** sequence (no probability involved). Three proof methods, each demonstrated by an instrumented structure that **checks** the proof at runtime:
+
+- aggregate: count everything, divide. Dynamic array: doubling copies &lt; 2n elements in total; additive growth (+k) copies &#126; n&#94;2/(2k), which is why growth must be multiplicative.
+- accounting (banker's): charge each operation a fixed number of credits, store unspent credits on elements, and check the bank never goes negative. Two-stack queue: 4 credits per element pay for push, pop, re-push, pop.
+- potential (physicist's): amortised = actual + (Phi_after - Phi_before) with Phi >= Phi_0. Binary counter with Phi = number of one bits gives **exactly** 2 per increment; doubling array with Phi = 2&#42;len - cap gives exactly 3.
+
+   Also: union-find with union by size + path halving (finds bounded by log2 n steps each, checked), and a splay tree whose rotation count is checked against the Sleator-Tarjan bound m(3 log2 n + 1) + n log2 n. Fibonacci heap decrease-key (described only): cut the node and cascade cuts upward through nodes that already lost a child (marks).
+
+   Phi = trees + 2&#42;marked; a cascade of c cuts pays for itself because each cut un-marks a node, so decrease-key is O(1) amortised and extract-min O(log n) amortised, which gives Dijkstra O(E + V log V).
+
+**Part** 2, online algorithms. The input arrives piece by piece and decisions are irrevocable. We measure the **competitive ratio**: worst case of ALG(sigma)/OPT(sigma) where **opt** is the offline optimum that sees the whole input (an "adversary").
+
+We assert the proven bounds on 2000 random instances and on the adversarial constructions:
+
+- ski rental: deterministic break-even rule is (2 - 1/B)-competitive; the randomised strategy of Karlin et al. achieves 1/(1-(1-1/B)&#94;B) -> e/(e-1) = 1.58, the best possible against an oblivious adversary.
+- paging: LRU and FIFO are k-competitive (up to an additive k); Belady's farthest-in-future is optimal offline; the adversary that always requests the page missing from the cache forces LRU to fault on **every** request.
+- list update: move-to-front cost &lt;= 2&#42;C_A - m + n(n-1)/2 for any static ordering A.
+- online bipartite matching: greedy is 1/2 (tight instance below); **ranking** (one random permutation) gets 1-1/e.
+- load balancing: greedy list scheduling is (2 - 1/m)-competitive, tight example m(m-1) unit jobs then one of size m. **Why** the order matters: the potential function is the same trick in both halves (list update, paging and splay all use "inversions"/"log sizes" as Phi), so reading the two parts together shows one proof technique.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://en.wikipedia.org/wiki/Amortized_analysis" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Amortized_analysis</a></li><li><a href="https://en.wikipedia.org/wiki/Competitive_analysis_%28online_algorithm%29" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Competitive_analysis_%28online_algorithm%29</a></li><li>Sleator and Tarjan 1985 (cited by title only, not re-read for this recipe)</li><li>Borodin and El-Yaniv, "Online Computation and Competitive Analysis" (book, title only)</li></ul>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Amortized_analysis"
+url = "https://en.wikipedia.org/wiki/Amortized_analysis"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Competitive_analysis_%28online_algorithm%29"
+url = "https://en.wikipedia.org/wiki/Competitive_analysis_%28online_algorithm%29"

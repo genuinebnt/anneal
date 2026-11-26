@@ -1,0 +1,60 @@
+title = "Inlining codegen"
+module = "Performance and systems"
+module_order = 7
+chapter = "Measuring and CPU performance"
+chapter_order = 1
+order = 275
+kind = "recipe"
+lede = "inlining, `#[inline]`, `#[cold]`, dynamic dispatch cost, and the build settings that matter."
+level = "advanced"
+code = ["examples/perf/inlining_codegen.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>hot small functions</li><li>trait-object-heavy code</li><li>deciding generics vs <code>dyn</code></li><li>tuning release builds</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>hot small functions</li><li>trait-object-heavy code</li><li>deciding generics vs dyn</li><li>tuning release profiles</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+INLINING pastes a function's body into the caller. It removes call overhead **and** lets the optimiser see across the boundary (constants propagate, loops vectorise). The compiler inlines small functions in the **same** crate by itself.
+
+Hints: #[inline]          "consider inlining, even across crates" (needed for small public lib fns, else cross-crate calls stay calls unless LTO is on). Generic functions are always available for inlining.
+
+```text
+#[inline(always)]  force (rarely right; can bloat code)       #[inline(never)]  forbid (benchmarks, cold paths, shrink binary)
+```
+
+&#35;[cold]            "rarely called": moves error/panic paths away from the hot path and biases branch layout. Dispatch cost: generic `F: Fn` = monomorphised + inlinable; `&dyn Fn`/`Box<dyn Trait>` = indirect call through a vtable, usually **not** inlinable when the callee is really unknown at compile time, so it blocks vectorisation.
+
+(If the optimiser can **prove** the concrete type it will devirtualise; do not rely on that across module/crate boundaries.) Use dyn when you need runtime polymorphism, generics in hot loops. Inspect what the compiler did: <https://github.com/pacak/cargo-show-asm> (`cargo asm`) or <https://godbolt.org/>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://nnethercote.github.io/perf-book/inlining.html> and <https://nnethercote.github.io/perf-book/build-configuration.html>
+"""
+
+[[sources]]
+title = "github.com/pacak/cargo-show-asm"
+url = "https://github.com/pacak/cargo-show-asm"
+
+[[sources]]
+title = "godbolt.org"
+url = "https://godbolt.org/"
+
+[[sources]]
+title = "nnethercote.github.io/perf-book/inlining.html"
+url = "https://nnethercote.github.io/perf-book/inlining.html"
+
+[[sources]]
+title = "nnethercote.github.io/perf-book/build-configuration.html"
+url = "https://nnethercote.github.io/perf-book/build-configuration.html"

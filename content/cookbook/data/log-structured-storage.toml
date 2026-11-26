@@ -1,0 +1,348 @@
+title = "Log-structured storage"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 322
+kind = "guide"
+lede = "memtables, SSTables, compaction, Bloom filters, read/write/space amplification · index-organized tables"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Slotted pages have three costs</strong>: fragmentation after deletes, reading a whole page to change one tuple, and random I/O when updates touch many pages.</li> <li><strong>Log-structured storage never updates in place.</strong> Writes go to an in-memory <strong>MemTable</strong>. When it fills, it's sorted and written sequentially as an immutable <strong>SSTable</strong>. Each record is (key, PUT value | DELETE), and the newest record per key wins.</li> <li><strong>It fits append-only storage</strong> (HDFS, Colossus, object stores) and turns random writes into sequential ones.</li> <li><strong>Reads get harder.</strong> Check the MemTable, then SSTables from newest to oldest. Per-table <strong>min/max keys</strong> and <strong>Bloom filters</strong> let most tables be skipped.</li> <li><strong>Compaction</strong> merges SSTables (a sort-merge), keeps the newest version per key, and reclaims space. <strong>Universal (tiered)</strong>: merge runs of similar size. <strong>Leveled</strong>: L0 may overlap, while each deeper level is one sorted, non-overlapping run about T× larger than the one above.</li> <li><strong>Trade-offs</strong>: fast sequential writes; slower reads; expensive compaction; <strong>write amplification</strong> (one logical write becomes many physical writes as data moves down the levels).</li> <li><strong>Index-organized storage</strong>: the table <em>is</em> an index (B+Tree, skip list, trie) with tuples stored in key order in the leaves, instead of a heap plus a separate index.</li> <li><strong>Buffer pool optimizations</strong> from the same lecture: multiple pools (by object or by hash of page id), prefetching (including the next <em>logical</em> leaf in an index scan), and scan sharing (a second scan attaches to a running one and wraps around).</li> </ul>
+"""
+
+[[sections]]
+heading = "Architecture"
+body = """
+<figure class="cb-g-fig"><svg viewBox="0 0 820 230" role="img" aria-label="LSM tree"> <g font-size="12"> <rect x="10" y="20" width="150" height="40" rx="4" class="cb-g-boxa"></rect><text x="22" y="45">put / delete</text> <rect x="190" y="20" width="150" height="40" rx="4" class="cb-g-box"></rect><text x="202" y="45">WAL (append)</text> <rect x="370" y="20" width="200" height="40" rx="4" class="cb-g-boxa"></rect><text x="382" y="45">MemTable (skip list)</text> <rect x="600" y="20" width="210" height="40" rx="4" class="cb-g-box"></rect><text x="612" y="45">immutable MemTable → flush</text> <rect x="370" y="90" width="440" height="34" rx="4" class="cb-g-box"></rect><text x="382" y="112">L0: SST SST SST SST   (overlapping ranges, newest wins)</text> <rect x="370" y="134" width="440" height="34" rx="4" class="cb-g-box"></rect><text x="382" y="156">L1: one sorted run, ~T × L0     (non-overlapping SSTs)</text> <rect x="370" y="178" width="440" height="34" rx="4" class="cb-g-box"></rect><text x="382" y="200">L2: one sorted run, ~T × L1 …   (tombstones dropped here)</text> <line x1="160" y1="40" x2="188" y2="40" class="cb-g-lna"></line><line x1="340" y1="40" x2="368" y2="40" class="cb-g-lna"></line><line x1="570" y1="40" x2="598" y2="40" class="cb-g-lna"></line> <line x1="705" y1="60" x2="705" y2="88" class="cb-g-lna"></line> <text x="10" y="112" class="cb-g-mut">read: MemTable → L0 newest→oldest</text><text x="10" y="132" class="cb-g-mut">→ one SST per level (fence pointers)</text><text x="10" y="152" class="cb-g-mut">Bloom filter skips most tables</text> <text x="10" y="200" class="cb-g-mut">compaction: k-way merge down a level</text> </g></svg></figure>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Path</th> <th>Steps</th> <th>Cost</th> </tr> </thead> <tbody> <tr> <td><strong>Write</strong></td> <td>append to WAL (durability) → insert into MemTable → when full, freeze it and flush as a new L0 SSTable</td> <td>one sequential log write + an in-memory insert</td> </tr> <tr> <td><strong>Point read</strong></td> <td>MemTable → each L0 table newest first → one table per deeper level (binary search on key ranges) → inside a table, binary search the block index → decode one block</td> <td>worst case one block per level; Bloom filters cut negative lookups to about 1% per level</td> </tr> <tr> <td><strong>Range scan</strong></td> <td>k-way merge iterator over the MemTable plus <em>every</em> table that overlaps the range; newest version wins; skip tombstones</td> <td>touches every level: the weak spot</td> </tr> <tr> <td><strong>Delete</strong></td> <td>write a <strong>tombstone</strong></td> <td>the tombstone can only be dropped when it reaches the bottom level; before that it has to keep shadowing older versions</td> </tr> <tr> <td><strong>Compaction</strong></td> <td>pick input tables, merge, write new tables, atomically swap the manifest</td> <td>rewrites data again at every level: write amplification</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "The RUM trade-off"
+body = """
+<p>Every access method trades <strong>R</strong>ead, <strong>U</strong>pdate (write) and <strong>M</strong>emory (space) amplification (Athanassoulis et al., EDBT 2016). You can optimize two at the cost of the third. For an LSM with size ratio <em>T</em> and <em>L</em> levels:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Compaction</th> <th>Write amp</th> <th>Point read (no Bloom)</th> <th>Space amp</th> <th>Used by</th> </tr> </thead> <tbody> <tr> <td><strong>Leveled</strong></td> <td>≈ T · L</td> <td>≈ L tables</td> <td>≈ 1.1×</td> <td>RocksDB default, LevelDB, Pebble</td> </tr> <tr> <td><strong>Tiered / universal</strong></td> <td>≈ L</td> <td>≈ T · L tables</td> <td>up to ≈ T× (temporarily)</td> <td>Cassandra STCS, ScyllaDB, RocksDB universal</td> </tr> <tr> <td><strong>B+Tree (in place)</strong></td> <td>≈ page size / record size per update (plus WAL)</td> <td>≈ tree height</td> <td>≈ 1.3–1.5× (half-full pages)</td> <td>everything else</td> </tr> </tbody> </table></div>
+
+<p>The toy LSM below measures <strong>9.7× write amplification</strong> for 200k random 100-byte puts. Every byte is written roughly 10 times on its way to the bottom level. That's why LSM engines compress SSTables, and why WiscKey separates large values from keys.</p>
+"""
+
+[[sections]]
+heading = "Toy LSM in Rust"
+body = """
+<p>This is a complete (but small) LSM: SSTables use a real layout (data blocks, block index, Bloom filter, footer), reads use fence pointers and Bloom checks, and compaction is a k-way merge that drops tombstones only at the bottom. It's verified against a <code>BTreeMap</code> model. The production engine (WAL, manifest, concurrency, block cache) is System 2 in Part V.</p>
+
+:::deeper Toy LSM: SSTable format, Bloom filter, k-way merge, leveled compaction
+```rust title="src/lsm.rs"
+//! A toy LSM tree: memtable -> immutable sorted runs (SSTables) -> compaction.
+//! SSTables are byte blobs with the real layout (blocks, index, bloom, footer),
+//! kept in memory so the logic is testable without files.
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BinaryHeap};
+use std::ops::Bound;
+
+pub type Key = Vec<u8>;
+pub type Val = Option<Vec<u8>>;               // None = tombstone
+
+const BLOCK: usize = 4096;
+const BLOOM_BITS_PER_KEY: usize = 10;         // ≈1% false positives with k = 7
+
+// ---------------- SSTable ----------------------------------------------------
+// [data block]* [index block] [bloom] [footer: index_off u32 | bloom_off u32 | n u32]
+// entry: key_len u16 | key | tag u8 (1 = put, 0 = delete) | val_len u32 | val
+pub struct SsTable { bytes: Vec<u8>, index: Vec<(Key, u32, u32)>, bloom: Bloom, pub min: Key, pub max: Key }
+
+pub fn build_sst(entries: impl IntoIterator<Item = (Key, Val)>) -> SsTable {
+    let (mut bytes, mut index, mut keys) = (Vec::new(), Vec::new(), Vec::new());
+    let mut block = Vec::new();
+    let mut first: Option<Key> = None;
+    let flush = |block: &mut Vec<u8>, first: &mut Option<Key>, bytes: &mut Vec<u8>, index: &mut Vec<(Key, u32, u32)>| {
+        if block.is_empty() { return; }
+        index.push((first.take().unwrap(), bytes.len() as u32, block.len() as u32));
+        bytes.append(block);
+    };
+    for (k, v) in entries {
+        if first.is_none() { first = Some(k.clone()); }
+        block.extend_from_slice(&(k.len() as u16).to_le_bytes());
+        block.extend_from_slice(&k);
+        match &v {
+            Some(v) => { block.push(1); block.extend_from_slice(&(v.len() as u32).to_le_bytes()); block.extend_from_slice(v); }
+            None => { block.push(0); block.extend_from_slice(&0u32.to_le_bytes()); }
+        }
+        keys.push(k);
+        if block.len() >= BLOCK { flush(&mut block, &mut first, &mut bytes, &mut index); }
+    }
+    flush(&mut block, &mut first, &mut bytes, &mut index);
+    let bloom = Bloom::build(&keys);
+    let index_off = bytes.len() as u32;
+    for (k, off, len) in &index {
+        bytes.extend_from_slice(&(k.len() as u16).to_le_bytes()); bytes.extend_from_slice(k);
+        bytes.extend_from_slice(&off.to_le_bytes()); bytes.extend_from_slice(&len.to_le_bytes());
+    }
+    let bloom_off = bytes.len() as u32;
+    bytes.extend_from_slice(&bloom.bits);
+    bytes.extend_from_slice(&index_off.to_le_bytes());
+    bytes.extend_from_slice(&bloom_off.to_le_bytes());
+    bytes.extend_from_slice(&(index.len() as u32).to_le_bytes());
+    let (min, max) = (keys.first().cloned().unwrap_or_default(), keys.last().cloned().unwrap_or_default());
+    SsTable { bytes, index, bloom, min, max }
+}
+
+fn decode_block(b: &[u8]) -> Vec<(Key, Val)> {
+    let (mut i, mut out) = (0, Vec::new());
+    while i < b.len() {
+        let kl = u16::from_le_bytes([b[i], b[i + 1]]) as usize; i += 2;
+        let k = b[i..i + kl].to_vec(); i += kl;
+        let tag = b[i]; i += 1;
+        let vl = u32::from_le_bytes(b[i..i + 4].try_into().unwrap()) as usize; i += 4;
+        let v = (tag == 1).then(|| b[i..i + vl].to_vec()); i += vl;
+        out.push((k, v));
+    }
+    out
+}
+
+impl SsTable {
+    /// Some(Some(v)) = found, Some(None) = tombstone, None = not in this table.
+    pub fn get(&self, key: &[u8]) -> Option<Val> {
+        if key < self.min.as_slice() || key > self.max.as_slice() || !self.bloom.may_contain(key) { return None; }
+        // Fence pointers: the last block whose first key <= key.
+        let i = self.index.partition_point(|(first, _, _)| first.as_slice() <= key).checked_sub(1)?;
+        let (_, off, len) = &self.index[i];
+        let block = decode_block(&self.bytes[*off as usize..(*off + *len) as usize]);
+        block.binary_search_by(|(k, _)| k.as_slice().cmp(key)).ok().map(|j| block[j].1.clone())
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (Key, Val)> + '_ {
+        self.index.iter().flat_map(|(_, off, len)| decode_block(&self.bytes[*off as usize..(*off + *len) as usize]))
+    }
+    pub fn size(&self) -> usize { self.bytes.len() }
+}
+
+// ---------------- Bloom filter ----------------------------------------------
+pub struct Bloom { bits: Vec<u8>, k: u32 }
+fn h64(key: &[u8], seed: u64) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64 ^ seed;
+    for &b in key { h ^= b as u64; h = h.wrapping_mul(0x0100_0000_01b3); }
+    h ^= h >> 33; h = h.wrapping_mul(0xff51_afd7_ed55_8ccd); h ^ (h >> 33)
+}
+impl Bloom {
+    pub fn build(keys: &[Key]) -> Self {
+        let nbits = (keys.len() * BLOOM_BITS_PER_KEY).max(64);
+        let k = ((BLOOM_BITS_PER_KEY as f64) * std::f64::consts::LN_2).round() as u32;   // optimal k = (m/n)·ln2
+        let mut b = Bloom { bits: vec![0; nbits.div_ceil(8)], k };
+        for key in keys { b.probe(key, |bits, i| bits[i / 8] |= 1 << (i % 8)); }
+        b
+    }
+    fn probe(&mut self, key: &[u8], mut f: impl FnMut(&mut [u8], usize)) {
+        let (h1, h2, m) = (h64(key, 0), h64(key, 0x9e37) | 1, self.bits.len() * 8);
+        for i in 0..self.k as u64 { f(&mut self.bits, (h1.wrapping_add(i.wrapping_mul(h2)) % m as u64) as usize); }
+    }
+    pub fn may_contain(&self, key: &[u8]) -> bool {
+        let (h1, h2, m) = (h64(key, 0), h64(key, 0x9e37) | 1, self.bits.len() * 8);
+        (0..self.k as u64).all(|i| { let b = (h1.wrapping_add(i.wrapping_mul(h2)) % m as u64) as usize; self.bits[b / 8] & (1 << (b % 8)) != 0 })
+    }
+}
+
+// ---------------- The tree ----------------------------------------------------
+pub struct Lsm {
+    mem: BTreeMap<Key, Val>,
+    mem_bytes: usize,
+    mem_limit: usize,
+    l0: Vec<SsTable>,              // newest last; key ranges may overlap
+    levels: Vec<Vec<SsTable>>,     // L1..: each a sorted, non-overlapping run
+    l0_limit: usize,
+    ratio: usize,                  // size ratio T between levels
+    pub bytes_written: usize,      // for write-amplification measurement
+    pub user_bytes: usize,
+}
+
+impl Lsm {
+    pub fn new(mem_limit: usize) -> Self {
+        Lsm { mem: BTreeMap::new(), mem_bytes: 0, mem_limit, l0: vec![], levels: vec![], l0_limit: 4, ratio: 10, bytes_written: 0, user_bytes: 0 }
+    }
+
+    pub fn put(&mut self, k: &[u8], v: &[u8]) { self.write(k.to_vec(), Some(v.to_vec())) }
+    pub fn delete(&mut self, k: &[u8]) { self.write(k.to_vec(), None) }
+
+    fn write(&mut self, k: Key, v: Val) {
+        let sz = k.len() + v.as_ref().map_or(0, |v| v.len()) + 8;
+        self.user_bytes += sz;
+        self.mem_bytes += sz;
+        self.mem.insert(k, v);                     // a real engine appends to the WAL first
+        if self.mem_bytes >= self.mem_limit { self.flush(); }
+    }
+
+    pub fn flush(&mut self) {
+        if self.mem.is_empty() { return; }
+        let sst = build_sst(std::mem::take(&mut self.mem));
+        self.bytes_written += sst.size();
+        self.mem_bytes = 0;
+        self.l0.push(sst);
+        if self.l0.len() > self.l0_limit { self.compact(0); }
+    }
+
+    pub fn get(&self, k: &[u8]) -> Option<Vec<u8>> {
+        if let Some(v) = self.mem.get(k) { return v.clone(); }
+        for t in self.l0.iter().rev() { if let Some(v) = t.get(k) { return v; } }   // newest first
+        for level in &self.levels {
+            // Non-overlapping: at most one table per level can hold k.
+            let i = level.partition_point(|t| t.max.as_slice() < k);
+            if let Some(t) = level.get(i) { if let Some(v) = t.get(k) { return v; } }
+        }
+        None
+    }
+
+    /// Merge `src` (level index: 0 = L0) into the next level.
+    fn compact(&mut self, src: usize) {
+        let inputs: Vec<SsTable> = if src == 0 { std::mem::take(&mut self.l0) } else { std::mem::take(&mut self.levels[src - 1]) };
+        if self.levels.len() <= src { self.levels.push(vec![]); }
+        let target = std::mem::take(&mut self.levels[src]);
+        let is_last = self.levels.len() == src + 1;
+        // Sources in priority order: newer data first. L0 tables: newest last, so reverse.
+        let merged: Vec<(Key, Val)> = {
+            let mut sources: Vec<Box<dyn Iterator<Item = (Key, Val)> + '_>> = Vec::new();
+            for t in inputs.iter().rev() { sources.push(Box::new(t.iter())); }
+            for t in target.iter() { sources.push(Box::new(t.iter())); }
+            merge(sources).filter(|(_, v)| !(is_last && v.is_none())).collect()   // drop tombstones only at the bottom
+        };
+        // Cut into ~64 KiB tables.
+        let mut run = Vec::new();
+        let mut chunk = Vec::new();
+        let mut sz = 0;
+        for (k, v) in merged {
+            sz += k.len() + v.as_ref().map_or(0, |v| v.len()) + 7;
+            chunk.push((k, v));
+            if sz >= 64 * 1024 { let t = build_sst(std::mem::take(&mut chunk)); self.bytes_written += t.size(); run.push(t); sz = 0; }
+        }
+        if !chunk.is_empty() { let t = build_sst(chunk); self.bytes_written += t.size(); run.push(t); }
+        self.levels[src] = run;
+        let level_bytes: usize = self.levels[src].iter().map(|t| t.size()).sum();
+        let limit = self.mem_limit * self.l0_limit * self.ratio.pow(src as u32 + 1);
+        if level_bytes > limit { self.compact(src + 1); }
+    }
+
+    pub fn scan(&self, lo: &[u8], hi: &[u8]) -> Vec<(Key, Vec<u8>)> {
+        let mut sources: Vec<Box<dyn Iterator<Item = (Key, Val)> + '_>> = Vec::new();
+        sources.push(Box::new(self.mem.range::<[u8], _>((Bound::Included(lo), Bound::Included(hi))).map(|(k, v)| (k.clone(), v.clone()))));
+        for t in self.l0.iter().rev() { sources.push(Box::new(t.iter())); }
+        for level in &self.levels { for t in level { sources.push(Box::new(t.iter())); } }
+        merge(sources).filter(|(k, _)| k.as_slice() >= lo && k.as_slice() <= hi)
+            .filter_map(|(k, v)| v.map(|v| (k, v))).collect()
+    }
+
+    pub fn shape(&self) -> (usize, Vec<usize>) { (self.l0.len(), self.levels.iter().map(|l| l.len()).collect()) }
+}
+
+/// K-way merge of sorted sources; for equal keys the source with the lowest index wins.
+pub fn merge<'a>(mut sources: Vec<Box<dyn Iterator<Item = (Key, Val)> + 'a>>) -> impl Iterator<Item = (Key, Val)> + 'a {
+    let mut heap = BinaryHeap::new();
+    let mut heads: Vec<Option<(Key, Val)>> = sources.iter_mut().map(|s| s.next()).collect();
+    for (i, h) in heads.iter().enumerate() { if let Some((k, _)) = h { heap.push(Reverse((k.clone(), i))); } }
+    std::iter::from_fn(move || {
+        let Reverse((key, i)) = heap.pop()?;
+        let (_, val) = heads[i].take().unwrap();
+        if let Some(n) = sources[i].next() { heap.push(Reverse((n.0.clone(), i))); heads[i] = Some(n); }
+        // Skip older versions of the same key from other sources.
+        while let Some(Reverse((k2, j))) = heap.peek().cloned() {
+            if k2 != key { break; }
+            heap.pop();
+            heads[j].take();
+            if let Some(n) = sources[j].next() { heap.push(Reverse((n.0.clone(), j))); heads[j] = Some(n); }
+        }
+        Some((key, val))
+    })
+}
+```
+:::
+
+```rust title="tests: model-based + write amplification"
+use proptest::prelude::*;
+use std::collections::BTreeMap;
+use scratch::lsm::Lsm;
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 64, ..ProptestConfig::default() })]
+    #[test]
+    fn lsm_matches_model(ops in prop::collection::vec((0u8..3, 0u16..400, prop::collection::vec(any::<u8>(), 0..40)), 0..3000)) {
+        let mut lsm = Lsm::new(2048);                        // tiny memtable: many flushes and compactions
+        let mut model = BTreeMap::new();
+        for (op, k, v) in ops {
+            let key = format!("k{k:05}").into_bytes();
+            match op {
+                0 | 1 => { lsm.put(&key, &v); model.insert(key, v); }
+                _ => { lsm.delete(&key); model.remove(&key); }
+            }
+        }
+        for k in 0u16..400 { let key = format!("k{k:05}").into_bytes(); prop_assert_eq!(lsm.get(&key), model.get(&key).cloned()); }
+        let want: Vec<_> = model.range(b"k00100".to_vec()..=b"k00300".to_vec()).map(|(k, v)| (k.clone(), v.clone())).collect();
+        prop_assert_eq!(lsm.scan(b"k00100", b"k00300"), want);
+    }
+}
+
+#[test]
+fn write_amplification() {
+    for &(n, val) in &[(200_000usize, 100usize)] {
+        let mut lsm = Lsm::new(64 * 1024);
+        let mut x = 42u64;
+        for _ in 0..n { x ^= x << 13; x ^= x >> 7; x ^= x << 17; lsm.put(format!("{:016x}", x % 1_000_000).as_bytes(), &vec![7u8; val]); }
+        lsm.flush();
+        eprintln!("{n} random puts, {val}B values: shape L0={} levels={:?}, write amplification = {:.1}×",
+            lsm.shape().0, lsm.shape().1, lsm.bytes_written as f64 / lsm.user_bytes as f64);
+    }
+}
+```
+
+```text title="cargo test --release --test lsm -- --nocapture"
+200000 random puts, 100B values: shape L0=4 levels=[25, 318], write amplification = 9.7×
+```
+
+<aside data-call="rust"><b><code>Box&lt;dyn Iterator + 'a&gt;</code> for heterogeneous sources</b><p>The merge takes iterators of <em>different</em> types: a <code>BTreeMap</code> range, SSTable block decoders, and so on. <code>Vec&lt;Box&lt;dyn Iterator&lt;Item = …&gt; + 'a&gt;&gt;</code> erases the type, at the cost of one virtual call per item. The <code>'a</code> says that each source borrows the tree. The borrow checker caught a real bug while this was written: the <code>Vec</code> of sources was declared <em>before</em> the tables it borrows from, so it would have outlived them. Declaring it inside the block that owns the tables fixes that. For the hot path, write an enum over the known source types instead. It's static dispatch and lets the calls inline. Reference: <a href="https://doc.rust-lang.org/book/ch18-02-trait-objects.html" target="_blank" rel="noreferrer">trait objects</a>.</p></aside>
+
+<aside data-call="rust"><b><code>BinaryHeap</code> is a max-heap</b><p>The merge wants the <em>smallest</em> key first, so it pushes <code>Reverse((key, source_index))</code>. Using the source index as the tiebreaker makes "newest wins" fall out of the ordering: newer sources get lower indices, so they pop first for equal keys, and the loop skips the older duplicates. Reference: <a href="https://doc.rust-lang.org/std/cmp/struct.Reverse.html" target="_blank" rel="noreferrer"><code>std::cmp::Reverse</code></a>.</p></aside>
+"""
+
+[[sections]]
+heading = "Bloom filters in one paragraph"
+body = """
+<p><em>m</em> bits, <em>k</em> hash functions, <em>n</em> keys. Insert sets <em>k</em> bits; a lookup checks them. False positives are possible, false negatives never. The optimal <em>k</em> = (<em>m</em>/<em>n</em>)·ln 2, and the false-positive rate ≈ (1 − e<sup>−kn/m</sup>)<sup>k</sup>. At 10 bits per key that's about 1% with <em>k</em> = 7. Double hashing (h₁ + i·h₂) replaces <em>k</em> independent hashes. <a href="/cookbook/p/filters-tries-inverted-and-vector-indexes">L09</a> covers the variants: blocked Bloom (one cache line per key), Cuckoo and Ribbon filters, and the Monkey result that deeper levels deserve fewer bits per key.</p>
+
+<aside data-call="production"><b>LSM engines in the wild</b><ul> <li><strong>RocksDB</strong> (Meta): leveled by default, with universal and FIFO options. Column families, block cache, prefix Bloom filters, rate-limited compaction, <code>DeleteRange</code> tombstones. It underneath MyRocks, CockroachDB (before Pebble), TiKV, Kafka Streams and many more.</li> <li><strong>Pebble</strong> (CockroachDB): a RocksDB-compatible Go engine with range keys and better flush scheduling.</li> <li><strong>Cassandra / ScyllaDB</strong>: size-tiered, leveled and time-window compaction. Time-window compaction is ideal for TTL'd time series (Part IV).</li> <li><strong>WiscKey</strong> (FAST 2016): keep only keys in the LSM and values in a separate log. Write amplification falls sharply for large values. Used by Badger, TiKV's Titan, and RocksDB BlobDB.</li> <li><strong>Index-organized tables</strong>: InnoDB, SQLite (rowid tables), SQL Server clustered indexes and Oracle IOTs store rows inside a B+Tree. Secondary indexes then point to the <em>primary key</em>, not a physical RID.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "The Log-Structured Merge-Tree (LSM-Tree)"
+url = "https://www.cs.umb.edu/~poneil/lsmtree.pdf"
+
+[[sources]]
+title = "The Design and Implementation of a Log-Structured File System"
+url = "https://dl.acm.org/doi/10.1145/146941.146943"
+
+[[sources]]
+title = "Designing Access Methods: The RUM Conjecture"
+url = "https://stratos.seas.harvard.edu/files/stratos/files/rum.pdf"
+
+[[sources]]
+title = "Monkey: Optimal Navigable Key-Value Store"
+url = "https://stratos.seas.harvard.edu/files/stratos/files/monkeykeyvaluestore.pdf"
+
+[[sources]]
+title = "WiscKey: Separating Keys from Values in SSD-Conscious Storage"
+url = "https://www.usenix.org/conference/fast16/technical-sessions/presentation/lu"
+
+[[sources]]
+title = "mini-lsm"
+url = "https://skyzh.github.io/mini-lsm/"
+
+[[sources]]
+title = "RocksDB (Databaseology)"
+url = "https://www.youtube.com/watch?v=jGCv4r8CJEI"
+
+[[sources]]
+title = "SplinterDB"
+url = "https://www.youtube.com/watch?v=1gOlXfbiT_Y"

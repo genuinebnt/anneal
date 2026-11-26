@@ -1,0 +1,30 @@
+title = "State machine"
+module = "Rust language"
+module_order = 1
+chapter = "Design patterns"
+chapter_order = 5
+order = 44
+kind = "recipe"
+lede = "an enum state machine where illegal transitions are impossible to write silently."
+level = "intermediate"
+code = ["examples/patterns/state_machine.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+anything with a lifecycle (job/task/connection states); modelling "can this move from A to B?".
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+order/payment/job/connection lifecycles: make illegal transitions unrepresentable and testable.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: states are enum variants that **carry** the data valid in that state; `transition(self, event)` consumes the old state and returns the new one (or an error). An exhaustive `match` on `(state, event)` makes every legal move explicit and everything else an error. Terminal states can never be left because no arm leaves them.
+
+Domain here: parcel delivery (not tasks!). Compare with the typestate approach in typestate_builder.
+"""

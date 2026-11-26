@@ -1,0 +1,66 @@
+title = "Pointer / alias analysis"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Middle end and analysis"
+chapter_order = 5
+order = 628
+kind = "recipe"
+lede = "Andersen (inclusion), Steensgaard (unification), field, flow and context sensitivity."
+level = "advanced"
+code = ["examples/compilers_runtimes/alias_analysis_points_to.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>optimisers that must know whether two memory operations may touch the same cell</li><li>escape analysis</li><li>call graph construction</li><li>bug finders</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Question**: "can `*p` and `*q` name the same memory?" Everything that reorders, hoists or removes a load/store needs it. IR: a heap language with `x = new` (allocation **site**), `x = null`, `x = y`, `x = y.f`, `x.f = y`, `x = call f(y)` and a non-deterministic `if`. Objects have NF=2 fields that hold pointers.
+
+A tiny builder + line parser creates the demos. **Analyses** (all start from the same list of four constraint kinds, `Addr`, `Copy`, `Load`, `Store`):
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">ANDERSEN (inclusion based, O(n&#94;3)</div><div class="cb-g-says"><p>Worst case): <code>x = y</code> means pts(x) <strong>contains</strong> pts(y). Solved on a constraint graph with a worklist. <strong>Difference propagation</strong>: a node pushes only the objects that are new since its last visit.</p><p><strong>Cycle elimination</strong>: nodes on a copy-edge cycle have equal sets, so a Tarjan SCC pass collapses them into one union-find representative (we run it before solving and whenever the worklist drains, "periodic" collapse; production solvers detect cycles lazily).</p></div></div><div class="cb-g-term"><div class="cb-g-name">STEENSGAARD (unification based, almost linear)</div><div class="cb-g-says"><p><code>x = y</code> <strong>unifies</strong> pts(x) with pts(y) in a union-find; the two classes become one, recursively merging what they point to. Fast, coarser: <code>p = &amp;a; q = &amp;b; r = p; r = q;</code> makes a and b one class.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Field sensitivity</div><div class="cb-g-says"><p>On/off: with it off every field index is folded to 0 (one summary cell per object).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Flow sensitivity</div><div class="cb-g-says"><p>A per-statement state (var -&gt; set, (object, field) -&gt; set). A store through a pointer that <strong>must</strong> target a single non-null object is a <strong>strong update</strong> (overwrite); otherwise <strong>weak</strong> (union).</p><p>The special element <strong>null</strong> is tracked precisely so we know when the singleton is really non-null (storing through null is a no-op in the concrete semantics, so a strong update through a maybe-null pointer would be unsound). <code>if</code> joins by union.</p><p>No loops here, so each site runs at most once and one abstract object per (site, calling context) really is one concrete object.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Heap abstraction</div><div class="cb-g-says"><p>By allocation site: every object created by the same <code>new</code> is one abstract object.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Context sensitivity (k-CFA, k=0 or 1)</div><div class="cb-g-says"><p>With k=1 a function body is analysed once per call site (locals <strong>and</strong> heap objects it allocates are cloned per call site, "heap cloning"), so <code>id(a)</code> and <code>id(b)</code> stop contaminating each other.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+a concrete interpreter runs 1500 random programs (random branch choices). At **every** main-level statement and at the end: every concrete pointer value is in the abstract set, every equal concrete pair is reported may-alias, every concrete field value is in the abstract field set (flow-sensitive: also null-ness).
+
+Precision lattice asserted on every program: flow-sensitive(end) &lt;= Andersen k=1 &lt;= Andersen k=0 &lt;= Steensgaard (as sets of may-alias pairs), field-sens &lt;= field-insens. Then a timing table on large generated programs: difference propagation and cycle elimination on/off vs Steensgaard.
+
+**Rust**: `&mut T` is guaranteed unique and `&T` guarantees no mutation behind it (except UnsafeCell). Rustc therefore emits LLVM `noalias` on such parameters: the optimiser gets, for free and from the **type system**, the answer a points-to analysis has to compute expensively (and conservatively across function boundaries). C needs `restrict` and trust.
+
+Result: Rust can keep values in registers across stores, vectorise `a[i] = b[i] + 1` without runtime overlap checks, and reorder loads (see main()).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>LLVM's alias analysis stack (BasicAA, TBAA, plus pointer-analysis research tools)</li><li>Doop and Soot/<strong>spark</strong> (Java call-graph and taint analyses use Andersen-style points-to)</li><li>escape analysis in JIT compilers</li><li>Rust's noalias metadata</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Andersen, "Program Analysis and Specialization for the C Programming Language" (PhD thesis 1994)</li><li>Steensgaard, "Points-to Analysis in Almost Linear Time" (POPL 1996)</li><li>cited by title only (not opened)</li><li>Smaragdakis and Balatsouras, "Pointer Analysis" <a href="https://yanniss.github.io/points-to-tutorial15.pdf" target="_blank" rel="noreferrer">https://yanniss.github.io/points-to-tutorial15.pdf</a></li><li>LLVM LangRef (noalias) <a href="https://llvm.org/docs/LangRef.html" target="_blank" rel="noreferrer">https://llvm.org/docs/LangRef.html</a></li><li><a href="https://doc.rust-lang.org/nomicon/aliasing.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/nomicon/aliasing.html</a></li><li><a href="https://en.wikipedia.org/wiki/Alias_analysis" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Alias_analysis</a></li></ul>
+"""
+
+[[sources]]
+title = "yanniss.github.io/points-to-tutorial15.pdf"
+url = "https://yanniss.github.io/points-to-tutorial15.pdf"
+
+[[sources]]
+title = "llvm.org/docs/LangRef.html"
+url = "https://llvm.org/docs/LangRef.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/aliasing.html"
+url = "https://doc.rust-lang.org/nomicon/aliasing.html"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Alias_analysis"
+url = "https://en.wikipedia.org/wiki/Alias_analysis"

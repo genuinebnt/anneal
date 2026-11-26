@@ -1,0 +1,38 @@
+title = "Consistent hashing ring with virtual nodes"
+module = "Distributed systems"
+module_order = 10
+chapter = "Time, partitioning and replication"
+chapter_order = 1
+order = 480
+kind = "recipe"
+lede = "consistent hashing ring with virtual nodes."
+level = "intermediate"
+code = ["examples/distributed/consistent_hashing.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+partitioning work/data across workers (distributed roadmap).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+sharding keys across caches/DB nodes (Cassandra, memcached clients) so adding a node moves &#126;1/N of keys.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: hash nodes (many virtual points each) and keys onto the same ring; a key belongs to the first node clockwise. Adding a node only steals the keys in its arcs (about 1/N of them), unlike `hash % N`, which reshuffles almost everything.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Consistent_hashing>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Consistent_hashing"
+url = "https://en.wikipedia.org/wiki/Consistent_hashing"

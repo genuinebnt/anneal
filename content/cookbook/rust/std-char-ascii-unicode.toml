@@ -1,0 +1,74 @@
+title = "`char` and `u8` ASCII/Unicode methods"
+module = "Standard library and core"
+module_order = 2
+chapter = "Text"
+chapter_order = 2
+order = 72
+kind = "recipe"
+lede = "Classification, case, digits, conversions, UTF-16, and byte-level lexers."
+level = "simple"
+code = ["examples/std_tour/std_char_ascii_unicode.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>tokenizers</li><li>validators</li><li>ciphers</li><li>word counting</li><li>identifier rules</li><li>protocol parsers that work on bytes</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>lexers for config/DSL/SQL</li><li>HTTP header token checks (RFC 7230 tchar)</li><li>hex/base64 decoding</li><li>password-policy checks</li><li>search normalisation</li><li>ROT13/Caesar toys</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>char::is_alphabetic</code></li><li><code>char::is_numeric</code></li><li><code>char::is_alphanumeric</code></li><li><code>char::is_whitespace</code></li><li><code>char::is_uppercase</code></li><li><code>char::is_lowercase</code></li><li><code>char::to_digit</code></li><li><code>char::from_digit</code></li><li><code>char::to_ascii_uppercase</code></li><li><code>char::to_ascii_lowercase</code></li><li><code>char::is_ascii_digit</code></li><li><code>char::is_ascii_alphabetic</code></li><li><code>char::is_ascii_alphanumeric</code></li><li><code>char::is_ascii_hexdigit</code></li><li><code>char::is_ascii_punctuation</code></li><li><code>char::is_ascii_whitespace</code></li><li><code>char::is_ascii</code></li><li><code>char::from_u32</code></li><li><code>char::from</code></li><li><code>char::try_from</code></li><li><code>char::to_uppercase</code></li><li><code>char::to_lowercase</code></li><li><code>char::is_control</code></li><li><code>char::len_utf8</code></li><li><code>char::len_utf16</code></li><li><code>char::encode_utf8</code></li><li><code>char::encode_utf16</code></li><li><code>char::MAX</code></li><li><code>char::REPLACEMENT_CHARACTER</code></li><li><code>char::is_digit</code></li><li><code>char::escape_default</code></li><li><code>char::escape_unicode</code></li><li><code>char::eq_ignore_ascii_case</code></li><li><code>char::make_ascii_uppercase</code></li><li><code>char::make_ascii_lowercase</code></li><li><code>char::is_ascii_graphic</code></li><li><code>char::is_ascii_control</code></li><li><code>char::is_ascii_uppercase</code></li><li><code>char::is_ascii_lowercase</code></li><li><code>char::from_digit</code></li><li><code>char::decode_utf16</code></li><li><code>char::from_u32_unchecked</code></li><li><code>u8::is_ascii_digit</code></li><li><code>u8::is_ascii_alphabetic</code></li><li><code>u8::is_ascii_alphanumeric</code></li><li><code>u8::to_ascii_uppercase</code></li><li><code>u8::to_ascii_lowercase</code></li><li><code>u8::is_ascii_whitespace</code></li><li><code>u8::is_ascii_hexdigit</code></li><li><code>u8::eq_ignore_ascii_case</code></li><li><code>u8::is_ascii_punctuation</code></li><li><code>u8::as_ascii</code></li><li><code>slice::is_ascii</code></li><li><code>slice::to_ascii_uppercase</code></li><li><code>slice::eq_ignore_ascii_case</code></li><li><code>slice::trim_ascii</code></li><li><code>slice::make_ascii_lowercase</code></li><li><code>u8::escape_ascii</code></li><li><code>slice::escape_ascii</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/primitive.char.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/primitive.char.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+char and u8 methods are all core (`core::char`, `core::num`); String-producing helpers in the scenarios are alloc.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+from_u32_unchecked (unsafe), as_ascii (nightly), is_ascii_octdigit (trivial), is_digit (shown through to_digit), `char::MIN`/`UNICODE_VERSION` (trivia).
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Is it a letter (any language)</td><td><code>c.is_alphabetic(); ASCII letter only -&gt; c.is_ascii_alphabetic()</code></td></tr><tr><td>Digit value of '7'</td><td><code>c.to_digit(10) -&gt; Some(7); hex -&gt; to_digit(16)</code></td></tr><tr><td>Digit char from a number</td><td><code>char::from_digit(7, 10)</code></td></tr><tr><td>Upper/lower case a char</td><td><code>c.to_uppercase() (ITERATOR: ß -&gt; SS) / to_ascii_uppercase() (char)</code></td></tr><tr><td>A code point number</td><td><code>c as u32; back -&gt; char::from_u32(n) (Option) / char::from(u8) (infallible)</code></td></tr><tr><td>Byte as char</td><td><code>b as char (Latin-1 semantic) / char::from(b)</code></td></tr><tr><td>Bytes in UTF-8 of this char</td><td><code>c.len_utf8()</code></td></tr><tr><td>Lex a byte buffer</td><td><code>b.is_ascii_digit(), b.is_ascii_alphabetic() on u8</code></td></tr><tr><td>Compare ASCII case-insensitively</td><td><code>eq_ignore_ascii_case (u8, char, str, [u8])</code></td></tr><tr><td>Skip whitespace</td><td><code>c.is_whitespace() (Unicode) / b.is_ascii_whitespace() (protocols)</code></td></tr><tr><td>Hex pair to byte</td><td><code>(hi.to_digit(16)? &lt;&lt; 4 | lo.to_digit(16)?) as u8</code></td></tr><tr><td>Is the whole buffer ASCII</td><td><code>bytes.is_ascii() (vectorised)</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/primitive.char.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/primitive.char.html</a>, <a href="https://www.unicode.org/reports/tr15/" target="_blank" rel="noreferrer">https://www.unicode.org/reports/tr15/</a> (normalisation)</li><li><a href="https://www.unicode.org/faq/casemap_charprop.html" target="_blank" rel="noreferrer">https://www.unicode.org/faq/casemap_charprop.html</a>, <a href="https://doc.rust-lang.org/std/primitive.u8.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/primitive.u8.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/primitive.char.html"
+url = "https://doc.rust-lang.org/std/primitive.char.html"
+
+[[sources]]
+title = "unicode.org/reports/tr15"
+url = "https://www.unicode.org/reports/tr15/"
+
+[[sources]]
+title = "unicode.org/faq/casemap_charprop.html"
+url = "https://www.unicode.org/faq/casemap_charprop.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/primitive.u8.html"
+url = "https://doc.rust-lang.org/std/primitive.u8.html"

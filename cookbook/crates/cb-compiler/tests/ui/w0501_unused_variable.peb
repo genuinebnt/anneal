@@ -1,0 +1,4 @@
+fn main() {
+    let unused = 5;
+    let _fine = 6;
+}

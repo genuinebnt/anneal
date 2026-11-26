@@ -1,0 +1,36 @@
+title = "Typed JSON parsing with defaults and strict rejection"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Data, text and encoding crates"
+chapter_order = 1
+order = 115
+kind = "recipe"
+lede = "typed JSON parsing with defaults and strict rejection."
+level = "simple"
+code = ["examples/encoding_compression/serde_defaults.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+stages 1 and 3.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+config/API payload parsing (serde is the default for JSON/TOML/YAML in nearly every Rust service); strict schemas reject typos early.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: let the &#42;types&#42; do the validating. `u32` cannot be negative, a missing `Vec` can default to empty, and `deny_unknown_fields` turns typos into errors instead of silently ignoring them. Real code: <https://github.com/serde-rs/serde> (derive attributes: <https://serde.rs/field-attrs.html>)
+"""
+
+[[sources]]
+title = "github.com/serde-rs/serde"
+url = "https://github.com/serde-rs/serde"
+
+[[sources]]
+title = "serde.rs/field-attrs.html"
+url = "https://serde.rs/field-attrs.html"

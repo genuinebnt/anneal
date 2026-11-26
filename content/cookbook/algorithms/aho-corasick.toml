@@ -1,0 +1,50 @@
+title = "Aho-Corasick multi-pattern matching"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Sorting, strings, bits and theory"
+chapter_order = 6
+order = 219
+kind = "recipe"
+lede = "Trie + failure links + dictionary links."
+level = "advanced"
+code = ["examples/algorithms/aho_corasick.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+scanning one text for thousands of patterns at once (signatures, banned words, log markers).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Problem: find every occurrence (overlaps included) of **any** of k patterns in a text. Running KMP per pattern costs O(k &#42; n). Aho-Corasick merges the patterns into one automaton and scans the text once: O(n + total pattern length + number of matches), independent of k.
+
+Construction:
+
+1. Trie in an arena (`Vec<Node>`, children addressed by index; no Rc/Box pointer soup, cache friendly).
+2. Failure link of node v (string s) = the node for the **longest proper suffix** of s that is also a trie prefix. BFS order guarantees a node's fail target is shallower, hence already finished. fail(child of v by c) is found by walking fail(v), fail(fail(v)), ... until some node has a c-child: exactly KMP's fallback, on a trie.
+3. Dictionary (output) link of v = nearest node on its fail chain that ends a pattern. Without it, reporting matches would have to walk the whole fail chain, including nodes that match nothing. Search: keep a current node; on each byte follow fail links until a c-child exists, then step.
+
+   Each step down deepens the state by 1 and each fail hop makes it shallower, so total hops &lt;= text length (amortised linear). At every position, report the node's own patterns and then everything reachable by dictionary links.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>network intrusion detection and antivirus signature scanning (many byte patterns, one pass)</li><li>profanity and keyword filters</li><li>log scanners that tag lines against hundreds of known error strings</li><li>bioinformatics motif search. The Rust crate by Andrew Gallant (BurntSushi) is the production-grade version: DFA/NFA variants</li><li>leftmost-first/longest semantics</li><li>SIMD prefilters</li><li>it powers multi-literal optimisations in the regex crate</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://github.com/BurntSushi/aho-corasick> and <https://en.wikipedia.org/wiki/Aho%E2%80%93Corasick_algorithm>
+"""
+
+[[sources]]
+title = "github.com/BurntSushi/aho-corasick"
+url = "https://github.com/BurntSushi/aho-corasick"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Aho%E2%80%93Corasick_algorithm"
+url = "https://en.wikipedia.org/wiki/Aho%E2%80%93Corasick_algorithm"

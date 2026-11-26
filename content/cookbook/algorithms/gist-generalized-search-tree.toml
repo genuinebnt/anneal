@@ -1,0 +1,66 @@
+title = "GiST, the Generalized Search Tree"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Trees and ordered structures"
+chapter_order = 2
+order = 179
+kind = "recipe"
+lede = "ONE balanced tree, two index types (B-tree-like ranges and an R-tree)."
+level = "advanced"
+code = ["examples/data_structures/gist_generalized_search_tree.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>extensible databases (new index types without new tree code)</li><li>spatial/range/text indexes</li><li>nearest-neighbour search</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a height-balanced tree whose shape logic (descend, split, grow the root, condense on delete, best-first kNN) is written **once**, and whose &#42;semantics&#42; come from a small trait, the GiST "extension methods": consistent(key, query, is_leaf) : may this subtree contain a match?
+
+(must never give a false negative; false positives are fine) union(keys)                     : the smallest key that covers all of them (the parent's "bounding predicate") penalty(old, new)               : how bad is it to insert `new` below the entry keyed `old`?
+
+(drives the descent) pick_split(keys)                : partition an overflowing node's keys into two groups same(a, b) / contains(outer, inner) : equality and coverage (needed to find an entry again on delete) min_dist(key, target)           : a **lower bound** on the distance to anything under `key` (drives nearest-neighbour search)
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+B-trees, R-trees, and trees over text or ranges all share the same skeleton. PostgreSQL ships exactly this idea as the GiST access method, so extension authors (PostGIS, pg_trgm, btree_gist) only supply the methods above.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+the tree is an arena of nodes (`Vec`, usize ids). An internal entry is (key = union of the child's keys, child id); a leaf entry is (key, record id). Insert descends along the minimum penalty, pushes into a leaf, then walks back up splitting overflowing nodes and refreshing the parent keys.
+
+Delete finds the entry through `contains`, removes it, **dissolves** any node that falls below the minimum fill and **reinserts** its orphaned records (the R-tree "condense tree" idea), then shrinks the root. kNN is best-first: a min-heap of (distance lower bound, node or record); a record popped from the heap is provably the next nearest because every unexpanded node has a lower bound at least as large.
+
+Instances: `Ranges` (keys are integer intervals, points are degenerate intervals: a B-tree-like ordered index with range search) and `Rects` (2-D rectangles: an R-tree with overlap / within queries). The `Tree<G>` code is identical for both.
+
+Verified by two 5k-operation seeded differential tests (insert / delete / search / kNN) against brute-force oracles, plus an invariant checker run along the way: uniform leaf depth, fill bounds, each parent key equals the union of its child's keys.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+PostgreSQL's GiST (PostGIS geometry indexes, range types, trigram and full-text indexes) is this framework; R-tree variants index spatial data in many databases and GIS tools. Course: CMU 15-721 (Advanced Database Systems) index/access-method lectures; CMU 15-445 tree-index lectures for the B+tree baseline.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Hellerstein, Naughton, Pfeffer, "Generalized Search Trees for Database Systems": <https://dsf.berkeley.edu/papers/vldb95-gist.pdf>
+
+PostgreSQL manual, GiST indexes: <https://www.postgresql.org/docs/current/gist.html>
+"""
+
+[[sources]]
+title = "dsf.berkeley.edu/papers/vldb95-gist.pdf"
+url = "https://dsf.berkeley.edu/papers/vldb95-gist.pdf"
+
+[[sources]]
+title = "postgresql.org/docs/current/gist.html"
+url = "https://www.postgresql.org/docs/current/gist.html"

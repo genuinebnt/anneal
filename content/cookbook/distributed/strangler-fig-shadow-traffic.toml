@@ -1,0 +1,50 @@
+title = "Migrating off a legacy service"
+module = "Distributed systems"
+module_order = 10
+chapter = "Microservice patterns"
+chapter_order = 5
+order = 508
+kind = "recipe"
+lede = "Strangler-fig routing, shadow-traffic diffing, canary analysis with rollback, dual write + backfill"
+level = "advanced"
+code = ["examples/microservices/strangler_fig_shadow_traffic.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>replacing a service</li><li>endpoint or datastore while it keeps serving traffic</li><li>any risky rewrite that cannot be switched in one step</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>GitHub's Scientist library (compare old and new code paths)</li><li>Diffy-style response diffing</li><li>canary analysis in Spinnaker/Kayenta and Argo Rollouts</li><li>online datastore migrations (dual write, backfill, verify, cut over)</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The strangler fig**: put a routing facade in front of the legacy system and move one capability at a time behind it. Every step is small, measurable and **reversible**; the legacy system is deleted only when nothing routes to it.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Route</div><div class="cb-g-says"><p>Per-endpoint rules: kill switch &gt; allow/deny list &gt; cohort &gt; sticky percentage. Sticky = hash(endpoint, user), so a user does not flap between implementations, and raising the percentage only moves users <strong>one</strong> way.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Shadow</div><div class="cb-g-says"><p>(dark launch) legacy answers the user; a <strong>copy</strong> goes to the new service and its answer is only compared. The shadow must not be able to hurt: its errors are swallowed and counted, and its <strong>writes</strong> go to a sandbox, never to real systems (double charges and double emails are the classic shadowing accident).</p></div></div><div class="cb-g-term"><div class="cb-g-name">DIFF</div><div class="cb-g-says"><p>Compare structurally, not as bytes. <strong>Noise</strong> (request ids, timestamps) is ignored by <strong>path</strong>; floats get a tolerance; collections with no defined order are compared as multisets. Every ignore rule is a blind spot: keep the list short.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Canary</div><div class="cb-g-says"><p>Serve a small share for real and compare error rates with a two-proportion z-test against a <strong>concurrent</strong> control. <strong>Looking repeatedly</strong> inflates false alarms: each extra look is another chance to cross the line.</p><p>This file uses a Bonferroni split of alpha over the planned looks (simple and conservative; sequential tests such as SPRT or alpha-spending are tighter), plus a minimum practical difference and a minimum event count for the normal approximation.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Data</div><div class="cb-g-says"><p>Dual write + backfill. The race: backfill <strong>reads</strong> an old row, a live write lands in both stores, then backfill <strong>writes</strong> its stale copy over it. Fix: every write carries the source <strong>version</strong> and the target applies only newer ones, with <strong>tombstones</strong> for deletes (otherwise backfill resurrects deleted rows).</p><p>Then <strong>verify</strong> with bucketed checksums. <strong>Limits</strong>: the simulation's errors are independent Bernoulli trials. Real traffic is correlated (one user retrying), so real canaries need more samples than this suggests.</p><p>Error rate is one metric; latency percentiles need a different test.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://martinfowler.com/bliki/StranglerFigApplication.html" target="_blank" rel="noreferrer">https://martinfowler.com/bliki/StranglerFigApplication.html</a></li><li><a href="https://github.com/github/scientist" target="_blank" rel="noreferrer">https://github.com/github/scientist</a></li></ul>
+
+<https://sre.google/workbook/canarying-releases/>
+"""
+
+[[sources]]
+title = "martinfowler.com/bliki/StranglerFigApplication.html"
+url = "https://martinfowler.com/bliki/StranglerFigApplication.html"
+
+[[sources]]
+title = "github.com/github/scientist"
+url = "https://github.com/github/scientist"
+
+[[sources]]
+title = "sre.google/workbook/canarying-releases"
+url = "https://sre.google/workbook/canarying-releases/"

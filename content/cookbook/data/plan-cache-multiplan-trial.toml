@@ -1,0 +1,66 @@
+title = "Plan cache multiplan trial"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 400
+kind = "recipe"
+lede = "plan cache, plan baselines, MongoDB-style multi-plan trial, UDF optimisation and hints."
+level = "advanced"
+code = ["examples/database/plan_cache_multiplan_trial.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>query engines with prepared/ad-hoc statement caches</li><li>plan-regression tooling</li><li>document databases</li><li>engines with user-defined functions</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+PostgreSQL / MySQL / SQL Server statement-plan caches keyed by normalised text (literals replaced by parameters), SQL Server Query Store plan forcing and automatic plan correction, Oracle SQL plan baselines and SQL profiles, MongoDB's plan cache with a multi-planner trial (candidate plans race for a bounded number of works; the winner is cached and evicted when it later underperforms), optimizer hints (`INDEX`, `LEADING`, `USE_HASH`) in Oracle, MySQL and SQL Server, inlining of scalar UDFs (Froid in SQL Server 2019) and batching of UDF calls in analytics engines.
+
+Course: CMU 15-799 Query Optimization (Spring 2025), lectures 19-23 (UDF optimizations; Calcite, Orca, MongoDB and Fabric implementations)
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+the production plumbing around an optimizer, on a two-table engine whose executor counts work units (sequential row 1, index entry fetch 4, index descent 2, hash build 1.5 per row, probe 1, UDF call 20). Every number below is **executed** work.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Plan cache</div><div class="cb-g-says"><p>Statements are normalised (literals -&gt; <code>?</code>, conjuncts sorted, IN lists collapsed) into a fingerprint; the cache maps fingerprint -&gt; plan optimised for the <strong>first</strong> literals seen ("parameter sniffing").</p><p>Entries record the schema and statistics version of the tables they read, and are invalidated exactly when one of those changes (create/drop index, <strong>analyze</strong>), not when an unrelated table changes.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Plan baselines</div><div class="cb-g-says"><p>After a statistics refresh the next plan may be <strong>worse</strong> than the previous one (a refresh from a biased sample is simulated). On the first execution after invalidation the engine runs the candidate and the previous (baseline) plan, keeps the cheaper, and counts rollbacks.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Multi-plan trial (MongoDB)</div><div class="cb-g-says"><p>Candidate plans (collection scan, each usable index) run interleaved in quanta of work; the first to produce 100 results or reach EOF wins; if the budget (29% of the collection) runs out, the best results-per-work (or progress) wins. The winner continues where it stopped, so no work is repeated. No statistics are consulted, so a bad <strong>analyze</strong> cannot mislead it.</p></div></div><div class="cb-g-term"><div class="cb-g-name">UDF optimisation</div><div class="cb-g-says"><p>A pure scalar UDF is (1) called opaquely per row, (2) <strong>inlined</strong> by substituting the argument into the body and constant folding (same semantics, no call overhead), (3) evaluated in batches of 1024 (amortised call overhead) or (4) memoised by argument value; the cost model carries a per-call <strong>cost annotation</strong> so that conjuncts are ordered by rank (1 - sel) / cost and the expensive UDF runs last.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Hints</div><div class="cb-g-says"><p><code>/*+ SEQ */</code>, <code>/*+ INDEX(col) */</code>, <code>/*+ BUILD(u) */</code> override the cost-based choice (and are part of the fingerprint); an impossible hint falls back to the optimizer instead of failing.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+optimisation is expensive, plans are reused, and statistics change; the engineering question is when a reused plan stops being valid and how to notice a regression. A trial trades a bounded amount of duplicate work for independence from estimates.
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+fingerprints equal for literal/conjunct-order variants and differ otherwise; cached execution equals fresh optimisation on 300 random queries; scripted scenarios invalidate exactly the dependent entries; baselines never cost more than plain caching over a bad-**analyze** window and roll back at least once;
+
+The trial's work stays within 3x of the hindsight-best plan on average over 500 workloads and beats the stale-statistics cost-based plans in total; every UDF strategy returns identical results, inlining equals calling on 300 random UDF bodies; hints change the plan, not the answer.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Implementation: MongoDB / Calcite / Orca / Fabric, CMU 15-799 lectures 19-23 <https://15799.courses.cs.cmu.edu/spring2025/schedule.html> First Past the Post: Evaluating Query Optimization in MongoDB (Tao et al., ADC 2024) ROME: Robust Query Optimization via Parallel Multi-Plan Execution (Wei et al., SIGMOD 2024) Froid: Optimization of Imperative Programs in a Relational Database (Ramachandra et al., VLDB 2017) Dear User-Defined Functions, Inlining isn't working out so great for us.
+
+Let's try batching to make our relationship work. (Franz et al., CIDR 2024)
+
+```text
+PostgreSQL PREPARE https://www.postgresql.org/docs/current/sql-prepare.html
+```
+"""
+
+[[sources]]
+title = "15799.courses.cs.cmu.edu/spring2025/schedule.html"
+url = "https://15799.courses.cs.cmu.edu/spring2025/schedule.html"
+
+[[sources]]
+title = "postgresql.org/docs/current/sql-prepare.html"
+url = "https://www.postgresql.org/docs/current/sql-prepare.html"

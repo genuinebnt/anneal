@@ -1,0 +1,173 @@
+title = "HTAP: one table, two engines"
+module = "Databases"
+module_order = 8
+chapter = "Building complete engines"
+chapter_order = 9
+order = 447
+kind = "guide"
+lede = "A column-store main and a versioned row delta · analytical queries that compensate for the delta · merges that change no result · compaction · measured on 2 000 000 rows · the cost of freshness"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Transactions want rows, analytics wants columns.</strong> An OLTP workload updates a few rows by key; an analytical query scans millions of rows of a few columns. One layout cannot be best at both, and running two systems with ETL between them means the analytics are hours stale and the two copies disagree.</li> <li><strong>HTAP keeps both layouts in one table.</strong> The <em>main</em> store is columnar and immutable-ish: it holds the table as of an older timestamp. The <em>delta</em> is a small, write-optimized structure that holds every row version committed since. Writers touch only the delta; readers combine both. This is SAP HANA's delta/main design, SQL Server's columnstore with a delta store, and Vertica's WOS/ROS.</li> <li><strong>A query does not have to wait for a merge.</strong> To aggregate at snapshot <code>t</code>: run the column scan over the main store, then <em>compensate</em> for the keys the delta has changed: subtract the old value of each changed row (read from main by key) and add its new value (from the delta) if it satisfies the predicates. The compensation costs one main lookup and one delta lookup per changed key, so a query is <code>O(main scan + delta keys)</code>. This works for aggregates you can subtract (<code>SUM</code>, <code>COUNT</code>, <code>AVG</code>); <code>MIN</code> and <code>MAX</code> need the changed keys excluded from the scan instead.</li> <li><strong>A merge changes nothing visible.</strong> It folds all delta versions up to a timestamp into the main store (delete the old row, insert the new one) and drops them from the delta. Every query at a timestamp not older than the merge must return the same result before and after; the tests check exactly that, for every readable snapshot.</li> <li><strong>The merge threshold is a trade-off.</strong> A large delta makes queries slower (more compensation); frequent merges cost CPU and write amplification. The right point is where compensation cost equals merge cost, which the measurements below locate.</li> <li><strong>Snapshots older than the last merge cannot be served</strong> from this structure, so a merge must wait for (or invalidate) older readers: the same watermark rule as garbage collection (<a href="/cookbook/p/transactions-on-the-key-space">M2</a>).</li> <li><strong>Freshness is the product</strong>: an analytical query sees every committed transaction, immediately, without a lag, at the price of reading the delta.</li> </ul>
+"""
+
+[[sections]]
+heading = "The structure"
+body = """
+```text
+OLTP writes ─►  delta:  key → [(ts₁, row₁), (ts₂, row₂), …]      (newest last)        small, in memory
+                                   │ merge(upto): fold versions ≤ upto into main
+                                   ▼
+analytic scan ─► main: column store (segments, zone maps, delete bitmaps)  + key → row id   as of main_ts
+
+SUM(v) WHERE g < 10  at snapshot t
+  = main scan(preds)                                              (columns only, encoded)
+  − Σ over delta keys with a version ≤ t:  old main row, if it matches
+  + Σ over delta keys with a version ≤ t:  newest version ≤ t, if it matches
+```
+
+<ul> <li><strong><code>commit</code></strong> appends versions to the delta at the next timestamp; several writes in one commit are atomic (same timestamp) and the later write to a key wins.</li> <li><strong><code>get(pk, t)</code></strong> looks at the delta's newest version <code>≤ t</code>, then falls back to the main row.</li> <li><strong><code>sum_count(col, preds, t)</code></strong> is the compensated aggregate.</li> <li><strong><code>merge(upto)</code></strong> applies, per key, its newest version <code>≤ upto</code>, deleting the old main row; versions after <code>upto</code> stay.</li> <li><strong><code>compact()</code></strong> rebuilds the main store from its live rows, reclaiming deleted space.</li> </ul>
+
+:::deeper Reference: delta versions, compensated aggregates, merge and compaction over the column store
+```rust title="src/multimodel/htap.rs"
+//! Hybrid transactional and analytical processing on one table: a column store ("main") that holds the table as of an older timestamp,
+//! and a small write-optimized "delta" of versioned row changes made since. Writes go to the delta. A query at snapshot `t` aggregates
+//! over the main store and then *compensates* for the rows the delta changed (subtract their old values, add their new ones), so its
+//! cost is the main scan plus the size of the delta. A merge folds the delta into the main store without changing any query result.
+use crate::colstore::{ColTable, Pred, Ty};
+use crate::mmkey::Val;
+use std::collections::HashMap;
+
+pub type Row = Vec<i64>;
+#[derive(Clone, Debug)]
+pub enum Write { Put(Row), Delete(i64) }
+
+pub struct Htap {
+    pub main: ColTable,
+    index: HashMap<i64, usize>,                       // primary key → row id in `main`
+    pub main_ts: u64,
+    now: u64,
+    delta: HashMap<i64, Vec<(u64, Option<Row>)>>,     // primary key → versions after `main_ts`, oldest first
+    ncols: usize,
+    pub merged_rows: u64,
+}
+
+fn vals(r: &Row) -> Vec<Val> { r.iter().map(|&x| Val::Int(x)).collect() }
+fn matches(r: &Row, preds: &[(usize, Pred)]) -> bool { preds.iter().all(|(c, p)| p.matches(&Val::Int(r[*c]))) }
+
+impl Htap {
+    /// Column 0 is the primary key.
+    pub fn new(ncols: usize, seg_rows: usize) -> Htap {
+        Htap { main: ColTable::new(vec![Ty::Int; ncols], seg_rows), index: HashMap::new(), main_ts: 0, now: 0, delta: HashMap::new(), ncols, merged_rows: 0 }
+    }
+    pub fn now(&self) -> u64 { self.now }
+    pub fn delta_keys(&self) -> usize { self.delta.len() }
+    pub fn delta_versions(&self) -> usize { self.delta.values().map(|v| v.len()).sum() }
+
+    /// Apply a batch atomically at the next timestamp.
+    pub fn commit(&mut self, writes: &[Write]) -> u64 {
+        self.now += 1;
+        for w in writes {
+            match w {
+                Write::Put(r) => { assert_eq!(r.len(), self.ncols); self.delta.entry(r[0]).or_default().push((self.now, Some(r.clone()))); }
+                Write::Delete(k) => self.delta.entry(*k).or_default().push((self.now, None)),
+            }
+        }
+        self.now
+    }
+
+    fn main_row(&self, pk: i64) -> Option<Row> {
+        let id = *self.index.get(&pk)?;
+        self.main.get(id).map(|r| r.iter().map(|v| if let Val::Int(x) = v { *x } else { unreachable!() }).collect())
+    }
+    /// The row with this key as of timestamp `ts` (which must not be older than the last merge).
+    pub fn get(&self, pk: i64, ts: u64) -> Option<Row> {
+        assert!(ts >= self.main_ts, "snapshot {ts} is older than the merged state {}", self.main_ts);
+        if let Some(vs) = self.delta.get(&pk) {
+            if let Some((_, v)) = vs.iter().rev().find(|(t, _)| *t <= ts) { return v.clone(); }
+        }
+        self.main_row(pk)
+    }
+
+    /// `(SUM(col), COUNT(*))` over the rows that satisfy `preds` at snapshot `ts`.
+    pub fn sum_count(&mut self, col: usize, preds: &[(usize, Pred)], ts: u64) -> (i128, usize) {
+        assert!(ts >= self.main_ts);
+        let (mut sum, mut n) = self.main.sum(col, preds);
+        // compensation: every key with a version at or before `ts` is read from the delta instead of the main store
+        for (&pk, vs) in &self.delta {
+            let Some((_, new)) = vs.iter().rev().find(|(t, _)| *t <= ts) else { continue };
+            if let Some(&id) = self.index.get(&pk) {
+                let int = |c: usize| match self.main.value(id, c) { Some(Val::Int(x)) => x, other => panic!("main row {id} column {c}: {other:?}") };
+                if preds.iter().all(|(c, p)| p.matches(&Val::Int(int(*c)))) { sum -= int(col) as i128; n -= 1; }
+            }
+            if let Some(new) = new { if matches(new, preds) { sum += new[col] as i128; n += 1; } }
+        }
+        (sum, n)
+    }
+
+    /// Fold every change up to `upto` into the main store; later versions stay in the delta. Returns the number of keys merged.
+    pub fn merge(&mut self, upto: u64) -> usize {
+        assert!(upto >= self.main_ts && upto <= self.now);
+        let mut merged = 0;
+        let keys: Vec<i64> = self.delta.iter().filter(|(_, vs)| vs.iter().any(|(t, _)| *t <= upto)).map(|(&k, _)| k).collect();
+        for pk in keys {
+            let vs = self.delta.get_mut(&pk).unwrap();
+            let latest = vs.iter().rev().find(|(t, _)| *t <= upto).unwrap().1.clone();
+            vs.retain(|(t, _)| *t > upto);
+            if vs.is_empty() { self.delta.remove(&pk); }
+            if let Some(id) = self.index.remove(&pk) { self.main.delete(id); }
+            if let Some(row) = latest { let id = self.main.insert(vals(&row)); self.index.insert(pk, id); }
+            merged += 1;
+        }
+        self.main_ts = upto;
+        self.merged_rows += merged as u64;
+        merged
+    }
+
+    /// Rebuild the main store from its live rows, dropping the space of deleted ones.
+    pub fn compact(&mut self) {
+        let rows = self.main.scan(&[], &(0..self.ncols).collect::<Vec<_>>());
+        let mut fresh = ColTable::new(vec![Ty::Int; self.ncols], self.main.seg_rows);
+        self.index.clear();
+        for r in rows { let pk = if let Val::Int(x) = r[0] { x } else { unreachable!() }; let id = fresh.insert(r); self.index.insert(pk, id); }
+        fresh.seal();
+        self.main = fresh;
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>2 000 000 rows <code>(id, g, v)</code> with <code>g</code> in 0 to 99 and <code>v</code> in 0 to 999 are loaded and merged into the column store; then random keys are updated until the delta holds a given number of distinct keys. The query is <code>SUM(v) WHERE g &lt; 10</code>. The <em>row-store scan</em> column iterates an in-memory ordered map of rows as an OLTP-only system would: an idealized baseline with no locking, no pages, no MVCC. The HTAP answer is checked equal to the row-store answer at every delta size, before and after the merge.</p>
+
+```text title="the cost of a delta: query time, a row-store scan, the same query after a merge, and the merge"
+2000000 rows loaded and merged into the column store in 0.82 s (408 ns per row)
+SUM(v) WHERE g < 10, 2000000 rows; the delta holds updates to random keys (ms, best of 3)
+  delta keys HTAP query row-store scan  after merge merge (ms, us/key)   update txn/s
+           0       0.9            5.3          0.9          0     0.0            NaN
+        1000       1.2            5.3          0.9          1     0.8           9004
+       10072       1.6            5.3          1.0          4     0.4          15698
+      100057      16.5            6.0          0.9         54     0.5          19109
+      500053      65.4           11.0          1.1        277     0.6          16080
+```
+
+<ul> <li><strong>With an empty delta the analytical query takes 0.9 ms</strong> against 5.3 ms for scanning rows: the column store reads two columns as byte lanes (<a href="/cookbook/p/a-column-store">M3</a>).</li> <li><strong>Compensation costs about 0.16 µs per delta key</strong>: 1.2 ms at 1 000 keys, 1.6 ms at 10 000, 16.5 ms at 100 000 (5% of the table), 65 ms at 500 000. The curve is linear in the delta, as designed, and, interpolating between the 10 000 and 100 000 rows, the HTAP query stays faster than a row scan until the delta reaches about <strong>30 000 keys, 1.5% of the table</strong>. Beyond that, merge.</li> <li><strong>A merge costs about 0.5 µs per changed key</strong> (54 ms for 100 057 keys) and brings the query back to 0.9 to 1.1 ms. Merging whenever the delta passes about 0.5% of the table (10 000 keys) keeps the query within 1.8× of the best case (1.6 ms against 0.9 ms) with zero lag.</li> <li><strong>The delta absorbs 9 000 to 19 000 commits of 100 updates per second</strong> on one thread (0.9 to 1.9 million row writes per second), because a write is a hash lookup and a push; the rate varies with how many of the keys are new to the delta.</li> <li><strong>Reading the main rows by key is the expensive part of a compensation.</strong> The first version of the table looked segments up with a linear scan and fetched whole rows: it cost 0.31 µs per delta key (31.6 ms at 100 000 keys). A binary search over segment starts and fetching only the needed columns halved it.</li> </ul>
+
+<aside data-call="note"><b>One structure, two consistency stories</b><p>The column store knows nothing about transactions: it holds the table as of <code>main_ts</code>. All the isolation work (which version of a row a snapshot sees) is in the delta, which stores versions with commit timestamps. The merge is the only place the two meet, and its contract is a single sentence: <em>for every <code>t ≥ main_ts</code>, a query at <code>t</code> returns the same rows before and after the merge.</em> The test checks that sentence directly, for all readable snapshots, at every merge.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong><code>HashMap&lt;i64, Vec&lt;(u64, Option&lt;Row&gt;)&gt;&gt;</code></strong> is the delta: <code>Option&lt;Row&gt;</code> makes a delete a version like any other, and <code>iter().rev().find(|(t, _)| *t &lt;= ts)</code> finds the visible version.</li> <li><strong>The main store is reused unchanged</strong> from <a href="/cookbook/p/a-column-store">M3</a>: <code>ColTable::sum</code> for the scan, <code>delete</code> and <code>insert</code> for the merge; the only additions were a <code>starts</code> index for <code>O(log segments)</code> row-id lookup and <code>value(id, col)</code> to fetch one column of one row.</li> <li><strong><code>assert!(ts &gt;= self.main_ts)</code></strong> makes the contract part of the type's behaviour: asking for a snapshot older than the merged state is a bug in the caller (a reader the merge should have waited for), not a quietly wrong answer; a <code>#[should_panic]</code> test pins it.</li> <li><strong>Borrowing in the compensation loop</strong>: it iterates <code>&amp;self.delta</code> while calling <code>self.main.value</code> and reading <code>self.index</code>, all shared borrows; the aggregate state is local. Splitting the structure into separate fields (rather than one lock) is what lets a real implementation run the merge on another thread against a frozen delta.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong>Against a full history</strong>: 60 seeds × 120 steps of random commits (batches of puts and deletes over 60 keys), merges to a random timestamp, compactions, and queries at random readable snapshots (<code>SUM</code> of a random column under 0 to 2 range or equality predicates, and point reads); each result equals a model that keeps every version of every key and evaluates the query at timestamp <code>t</code> directly.</li> <li><strong>A merge changes nothing</strong>: before every merge, the query result for every snapshot from <code>upto</code> to <code>now</code> is recorded; after the merge the same snapshots return the same results (1 436 merges checked).</li> <li><strong>Final merge</strong>: after merging everything the delta holds no versions and the sum equals the model's.</li> <li><strong>Refusal</strong>: a read at a timestamp older than the last merge panics with an explanation.</li> <li><strong>Mutants run against these tests</strong>: the old value not subtracted, or not counted out; the new value added without its predicates; a query not seeing a version committed at its own timestamp; a merge leaving the old main row alive, applying the oldest version, dropping the next timestamp's version, or not advancing <code>main_ts</code>; compaction losing the key index; point reads ignoring the delta; deletes not recorded; the first of two writes in a commit winning. <strong>All 12 were killed.</strong> The row-id lookup added to the column store was checked with four more mutants (a segment found one early, deleted rows readable by id, double deletes accepted, segment starts not recorded); the column store now has 24 mutants, all killed.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>SAP HANA</strong> is the canonical delta/main design: a read-optimized dictionary-compressed main store and a write-optimized delta store per column, merged by an online "delta merge" that builds a new main store in the background and swaps it in.</li> <li><strong>SQL Server</strong> columnstore indexes: compressed row groups plus a delta store (a B-tree of rows) and a delete bitmap, with a tuple mover that compresses full delta groups; a nonclustered columnstore on an OLTP table gives HTAP in one engine.</li> <li><strong>TiDB</strong> replicates each Raft group's log to <strong>TiFlash</strong> column replicas (learners), which apply changes into a delta-tree plus stable columnar files; queries read a consistent snapshot from either side. <strong>SingleStore</strong> keeps an in-memory rowstore segment per columnstore table and flushes it into column segments.</li> <li><strong>Oracle Database In-Memory</strong> keeps a columnar copy of tables in memory, kept in sync with the row store; <strong>AlloyDB</strong> has a columnar engine cache; <strong>CockroachDB</strong> and <strong>Yugabyte</strong> have no columnar replica and rely on vectorized row scans.</li> <li><strong>Snowflake Hybrid Tables (Unistore)</strong> and <strong>Databricks Lakebase</strong> add row-oriented transactional stores next to column files; <strong>Greenplum/ClickHouse</strong>-style pairs use CDC to separate systems instead (Debezium-style change data capture).</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>The delta must stay small.</strong> Compensation cost is linear; a merge that cannot keep up lets analytics degrade slowly until someone notices. Alert on delta size and merge lag.</li> <li><strong>Non-subtractable aggregates</strong> (<code>MIN</code>, <code>MAX</code>, <code>COUNT DISTINCT</code>, medians) cannot be compensated; they need the changed keys excluded from the scan, or a scan over a merged copy.</li> <li><strong>Merge versus long readers</strong>: a merge to timestamp <code>u</code> makes snapshots older than <code>u</code> unservable; either wait for those readers, or keep the previous main store alive until they finish.</li> <li><strong>Write amplification of an update</strong> is high in the main store (delete one row, insert another, eventually compact); wide tables with frequent updates favour smaller segments or a row store.</li> <li><strong>Hot keys</strong>: a key updated thousands of times has thousands of versions in the delta; trim versions no snapshot can read.</li> <li><strong>Consistency across the two copies</strong> in an architecture with a replica (TiFlash) depends on the replication timestamp: a query must wait until the replica has applied everything up to its snapshot.</li> <li><strong>The main store's key index</strong> (key → row id) costs memory proportional to the table; engines keep it only for the columns that need it or rebuild it per segment.</li> </ul></aside>
+"""

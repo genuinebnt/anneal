@@ -1,0 +1,57 @@
+title = "The performance workflow and checklist"
+module = "Performance and systems"
+module_order = 7
+chapter = "Measuring and CPU performance"
+chapter_order = 1
+order = 273
+kind = "recipe"
+lede = "What to try, in what order, and how to verify."
+level = "simple"
+code = ["examples/perf/perf_checklist.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any time something is "too slow"; stage 8 and every later benchmark.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>the workflow for any perf work: measure</li><li>algorithm</li><li>allocations</li><li>layout</li><li>branches</li><li>build flags</li><li>parallelism</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Order of operations (cheapest and highest-impact first):
+
+0. **Measure** in --release with a realistic input (bench_harness). Profile before touching code: `cargo flamegraph` (needs `debug = 1`).
+1. Algorithm and data structure: O(n&#94;2) -> O(n log n); Vec scan -> HashSet/index (bench_harness); dense ids instead of strings (index_graph).
+2. Allocations: count them (counting_allocator), `with_capacity`, reuse buffers, avoid `clone`/`format!` in loops, small-value storage (small_string_inline).
+3. Memory layout and access order: struct size (struct_packing), SoA (data_layout), cache-friendly traversal (cache_locality), no false sharing (false_sharing).
+4. Branches and bounds checks; SIMD-friendly loops (branches_vectorization); byte-order-friendly formats (byte_order_keys).
+5. Dispatch and inlining: generics over `dyn` in hot loops, `#[inline]` for tiny lib functions, `#[cold]` error paths (inlining_codegen).
+6. Build settings: lto, codegen-units=1, panic=abort, target-cpu, PGO, allocator (mimalloc/jemalloc).
+7. Parallelism: rayon for data-parallel CPU work <https://docs.rs/rayon> ; tokio for IO concurrency (async_patterns). Measure scaling. Never skip step 0.
+
+   Verify **every** change with the same benchmark and an equality check on the output.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://nnethercote.github.io/perf-book/> and <https://github.com/flamegraph-rs/flamegraph>
+"""
+
+[[sources]]
+title = "docs.rs/rayon"
+url = "https://docs.rs/rayon"
+
+[[sources]]
+title = "nnethercote.github.io/perf-book"
+url = "https://nnethercote.github.io/perf-book/"
+
+[[sources]]
+title = "github.com/flamegraph-rs/flamegraph"
+url = "https://github.com/flamegraph-rs/flamegraph"

@@ -1,0 +1,12 @@
+// passes: inline,simplify-cfg
+// A larger function with exactly one call site is inlined; the callee is then removed.
+fn work(n: int) -> int {
+    let mut i = 0;
+    let mut s = 0;
+    while i < n {
+        s = s + i * i;
+        i += 1;
+    }
+    s
+}
+fn main() { println(to_str(work(10))); }

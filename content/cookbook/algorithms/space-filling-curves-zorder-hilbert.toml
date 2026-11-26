@@ -1,0 +1,62 @@
+title = "Space-filling curves"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Mathematics and numerics"
+chapter_order = 7
+order = 234
+kind = "recipe"
+lede = "Morton/Z-order, Hilbert, BIGMIN/LITMAX, range decomposition, data-skipping layouts."
+level = "intermediate"
+code = ["examples/math_science/space_filling_curves_zorder_hilbert.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>multi-dimensional clustering of tables (Delta/Iceberg Z-order)</li><li>spatial indexes</li><li>geohash/S2 cells</li><li>cache-friendly array layouts</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Delta Lake <code>OPTIMIZE ... ZORDER BY</code> and Iceberg sort/z-order rewrite (data skipping on several columns)</li><li>Databricks liquid clustering (Hilbert)</li><li>UB-trees (Z-order keys in a B-tree, queried with BIGMIN)</li><li>geohash (Morton on lon/lat bits, Base32 text)</li><li>Google S2 (Hilbert curve on the faces of a cube, 64-bit cell ids whose range contains all descendants)</li><li>texture/tile swizzling on GPUs</li><li>Morton-ordered octrees and N-body codes</li><li>cache-oblivious matrix layouts</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**What**. A space-filling curve maps a d-dimensional grid point to a 1-D index so that points close in space tend to be close in the index; a B-tree or a sorted file layout over that index then answers box queries with a few index ranges.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">MORTON (Z-order)</div><div class="cb-g-says"><p>Interleave the bits of the coordinates. Cheap: with BMI2 it is one PDEP per coordinate; <strong>without</strong> it the "magic number" trick spreads bits by log steps (shift, OR, mask): x -&gt; x|x&lt;&lt;16 &amp; 0x0000FFFF0000FFFF -&gt; ... -&gt; 0x5555... (2-D) and the 0x1249... masks (3-D, 21 bits per coordinate).</p><p>Decoding is the same steps reversed. Z has long <strong>jumps</strong> where the curve crosses a quadrant boundary (the Z "diagonal").</p></div></div><div class="cb-g-term"><div class="cb-g-name">HILBERT</div><div class="cb-g-says"><p>The curve never jumps (consecutive indices are always adjacent cells) so it clusters better, but encoding is stateful: each quadrant rotates/reflects the sub-curve. Two implementations: Skilling's Gray-code "transpose" algorithm (works for any dimension; used for 2-D and 3-D) and the classic rotate-and-flip xy2d loop (2-D only, cross-checked).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Range query</div><div class="cb-g-says"><p>On a Z-ordered sorted table: scan from zmin to zmax but skip the stretches outside the box: when the current key z is outside, BIGMIN(z) = the smallest in-box key greater than z (Tropf-Herzog), computed by one pass over the bits; LITMAX is its mirror (largest in-box key smaller than z), used to end a run. Both are tested against brute force.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Interval splitting (works for Z and Hilbert)</div><div class="cb-g-says"><p>An aligned 2&#94;k-sided cell occupies <strong>one</strong> contiguous index range of 4&#94;k (8&#94;k in 3-D); recurse over the quad/octree, emit the range of every cell fully inside the box, drop disjoint cells, split partial ones, then merge adjacent ranges. <code>coarsen</code> merges the smallest gaps to cap the number of ranges (S2's region coverer trades the same way).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Clustering metrics</div><div class="cb-g-says"><p>The <strong>clustering number</strong> of a query box is how many index runs cover it (= disk seeks); the <strong>jump distance</strong> is |index(p) - index(q)| over grid neighbours. Row-major wins on one axis and loses on the other; Hilbert is the most balanced.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Data skipping</div><div class="cb-g-says"><p>Sort a 200k-row table by (a), (a,b), Z(a,b) or Hilbert(a,b), cut it into files of 1000 rows, keep per-file min/max of both columns and prune files whose box misses the query: lexicographic order is perfect for <code>a</code> and useless for <code>b</code>, a space-filling curve is decent for both and best for conjunctions. That is Delta's Z-order and the reason it exists.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>Hierarchical cell systems (described): geohash = Morton on (lon,lat) in base 32, prefix = containing cell; S2 = Hilbert per cube face with 30 levels, a cell id's range covers its children (the interval-splitting property above); H3 = hexagons, indexes are hierarchical but cells are not nested exactly, so region covering is approximate.</p></div></div></div>
+
+**Checks**.
+
+Exhaustive encode/decode round trips and bijection for every grid up to 2&#94;12 points (2-D, orders 1..6; 3-D, orders 1..4) including the Hilbert adjacency invariant (consecutive indices differ by exactly 1 in exactly one coordinate); random round trips at 32 bits (2-D) and 21 bits (3-D) against a naive bit loop;
+
+The two Hilbert implementations agree up to a symmetry; BIGMIN and LITMAX equal brute force on every out-of-box key of random small boxes; the interval decomposition of random boxes in 2-D (Z and Hilbert) and 3-D (Z and Hilbert) contains exactly the points in the box (oracle: filter every grid point); `coarsen` only adds false positives;
+
+BIGMIN scans over 100k Z-sorted points equal the filter oracle; data-skipping file counts are computed for four layouts and the expected ordering is asserted.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Skilling, "Programming the Hilbert curve" AIP Conf.
+
+Proc. 707 (2004) (cited by title; URL not checked) Tropf, Herzog, "Multidimensional Range Search in Dynamically Balanced Trees" (1981) (cited by title) Moon, Jagadish, Faloutsos, Saltz, "Analysis of the Clustering Properties of the Hilbert Space-Filling Curve" (cited by title) Z-order curve <https://en.wikipedia.org/wiki/Z-order_curve>   Hilbert curve <https://en.wikipedia.org/wiki/Hilbert_curve>
+
+```text
+S2 geometry overview http://s2geometry.io/devguide/s2cell_hierarchy
+```
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Z-order_curve"
+url = "https://en.wikipedia.org/wiki/Z-order_curve"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Hilbert_curve"
+url = "https://en.wikipedia.org/wiki/Hilbert_curve"
+
+[[sources]]
+title = "s2geometry.io/devguide/s2cell_hierarchy"
+url = "http://s2geometry.io/devguide/s2cell_hierarchy"

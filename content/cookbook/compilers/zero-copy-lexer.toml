@@ -1,0 +1,32 @@
+title = "A zero-copy lexer"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 563
+kind = "recipe"
+lede = "Tokens borrow from the input via a lifetime."
+level = "intermediate"
+code = ["examples/text_and_parsing/zero_copy_lexer.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+the future DSL / bytecode VM.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>DSL/config lexers</li><li>query parsers</li><li>log parsers: tokens that borrow from the input allocate nothing</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: `Token<'a>` holds `&'a str` slices of the source, so lexing allocates nothing per token. The lexer is an `Iterator`, so you get map/filter/collect for free. Study real parsers: <https://github.com/oxc-project/oxc/tree/main/crates/oxc_parser>
+"""
+
+[[sources]]
+title = "github.com/oxc-project/oxc/tree/main/crates/oxc_parser"
+url = "https://github.com/oxc-project/oxc/tree/main/crates/oxc_parser"

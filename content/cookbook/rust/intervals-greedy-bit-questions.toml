@@ -1,0 +1,48 @@
+title = "Intervals greedy bit questions"
+module = "Worked questions"
+module_order = 14
+chapter = "Coding and design questions"
+chapter_order = 2
+order = 678
+kind = "recipe"
+lede = "interval, greedy and bit-manipulation interview questions in Rust (sort + sweep, exchange arguments, XOR/mask tricks), each checked against a brute-force oracle."
+level = "intermediate"
+code = ["examples/interview/intervals_greedy_bit_questions.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>coding interviews (LeetCode "intervals", "greedy", "bit manipulation" tags)</li><li>calendar and scheduling code</li><li>low-level protocol and flag handling</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>calendar and meeting-room booking</li><li>merging log or time windows</li><li>capacity planning (car pooling, rooms)</li><li>schedulers and cooldown queues</li><li>parity/checksum and flag fields</li><li>subset enumeration</li><li>UTF-8 and varint decoders</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://www.techinterviewhandbook.org/grind75" target="_blank" rel="noreferrer">https://www.techinterviewhandbook.org/grind75</a> (confirmed reachable, HTTP 200)</li><li><a href="https://neetcode.io/practice" target="_blank" rel="noreferrer">https://neetcode.io/practice</a> (HTTP 200)</li><li><a href="https://graphics.stanford.edu/~seander/bithacks.html" target="_blank" rel="noreferrer">https://graphics.stanford.edu/~seander/bithacks.html</a></li><li><a href="https://doc.rust-lang.org/std/primitive.u32.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/primitive.u32.html</a></li><li><a href="https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by_key" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by_key</a> FREQUENCY TAGS ARE EDITORIAL JUDGMENT: the LeetCode problem-list pages answered HTTP 403 to curl, so per-company counts could not be confirmed</li><li>The question SELECTION follows the interval/greedy/bit sections of the Grind 75 and NeetCode lists linked above (pages reachable</li><li>the exact membership of each problem was not machine-checked)</li><li>and <code>[asked: ...]</code> is my own estimate</li><li>See also: examples/algorithms/greedy_and_interval_algorithms.rs (the proofs and counterexamples behind these)</li><li>examples/algorithms/bit_manipulation_real_world.rs and bit_tricks.rs (the bit toolbox)</li><li>examples/interview/stacks_queues_heaps_questions.rs (Q18/Q19 task scheduler and meeting rooms with heaps)</li><li>examples/interview/tries_advanced_questions.rs (Maximum XOR lives there, deliberately not here)</li></ul>
+"""
+
+[[sources]]
+title = "techinterviewhandbook.org/grind75"
+url = "https://www.techinterviewhandbook.org/grind75"
+
+[[sources]]
+title = "neetcode.io/practice"
+url = "https://neetcode.io/practice"
+
+[[sources]]
+title = "graphics.stanford.edu/~seander/bithacks.html"
+url = "https://graphics.stanford.edu/~seander/bithacks.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/primitive.u32.html"
+url = "https://doc.rust-lang.org/std/primitive.u32.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/primitive.slice.html#method.sort_by_key"
+url = "https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by_key"

@@ -1,0 +1,61 @@
+title = "Reading map"
+module = "Appendices"
+module_order = 15
+chapter = "Courses, reading and glossary"
+chapter_order = 1
+order = 693
+kind = "guide"
+lede = "Ten paths through the guide by goal · what to read first, what to skip, and what you will have built at the end · prerequisites between sections"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>The guide is a graph, not a line.</strong> Part I is the foundation for everything and is worth reading in order. Parts II to V are chosen by goal. Part VI applies to any of them. Part VII is about the world around the code.</li> <li><strong>Each section is a unit of build-and-test.</strong> Read the notes first, then the code, then run its tests and change something, then read the measurements and the warning. A section is done when you can say its invariant and name the test that checks it.</li> <li><strong>Skip freely, but not the first sections of a path.</strong> The paths below list the sections in a useful order. Where a section needs another, it links to it; follow the link once, not all of them.</li> </ul>
+"""
+
+[[sections]]
+heading = "Path 0: the common start"
+body = """
+<p>Read <a href="/cookbook/p/how-to-use-this-guide">How to use this guide</a>, <a href="/cookbook/p/the-dbms-stack">The DBMS stack</a> and <a href="/cookbook/p/toolchain">Toolchain</a>, then <strong>L01</strong> <a href="/cookbook/p/relational-model-algebra">Relational model</a>, <strong>L02</strong> <a href="/cookbook/p/modern-sql">Modern SQL</a>, <strong>L04</strong> <a href="/cookbook/p/buffer-pools">Buffer pools</a> with <a href="/cookbook/p/arc-replacer">P1.1</a>–<a href="/cookbook/p/buffer-pool-manager">P1.3</a>, <strong>L03</strong> <a href="/cookbook/p/pages-and-tuples">Pages and tuples</a> and <a href="/cookbook/p/table-heap">Table heap</a>, <strong>L08</strong> <a href="/cookbook/p/b-trees">B+Trees</a> with <a href="/cookbook/p/b-tree-pages">P2.1</a>–<a href="/cookbook/p/index-iterator">P2.4</a>. That is a working storage layer and index, and enough to follow any path.</p>
+"""
+
+[[sections]]
+heading = "Paths by goal"
+body = """
+<p><strong>1. "I want to know how a database works" (broad).</strong> After Path 0: <a href="/cookbook/p/sorting-and-aggregation">L11</a> sorting and aggregation, <a href="/cookbook/p/join-algorithms">L12</a> joins, <a href="/cookbook/p/query-execution">L13</a> query execution, <a href="/cookbook/p/catalog-types-expressions">P3.0</a>–<a href="/cookbook/p/optimizer-rules-and-the-engine">P3.6</a> the engine; <a href="/cookbook/p/concurrency-control-theory">L17</a>–<a href="/cookbook/p/multi-version-concurrency-control">L20</a> concurrency control; <a href="/cookbook/p/logging">L21</a>, <a href="/cookbook/p/crash-recovery-aries">L22</a>, <a href="/cookbook/p/build-wal-and-aries">22b</a> logging and recovery; <a href="/cookbook/p/distributed-databases-i">L23</a>–<a href="/cookbook/p/industry-systems-and-where-next">L25</a> distribution and industry. Build at the end: SQL in, rows out, durable and concurrent.</p>
+
+<p><strong>2. Storage engines.</strong> Path 0, then <a href="/cookbook/p/log-structured-storage">L05</a> log-structured storage, <a href="/cookbook/p/storage-models-and-compression">L06</a> storage models, <a href="/cookbook/p/hash-tables">L07</a> hash tables, <a href="/cookbook/p/filters-tries-inverted-and-vector-indexes">L09</a> filters and other indexes, <a href="/cookbook/p/index-concurrency-control">L10</a> and <a href="/cookbook/p/b-tree-concurrency">P2.5</a> index concurrency; <a href="/cookbook/p/in-memory-dbms-design">A2</a>, <a href="/cookbook/p/latch-free-indexes-and-the-bw-tree">A5</a>, <a href="/cookbook/p/tries-and-the-adaptive-radix-tree">A6</a>, <a href="/cookbook/p/larger-than-memory-databases">A8</a>; <a href="/cookbook/p/a-durable-lsm-tree">M7</a> an LSM tree with a WAL and crash recovery; <a href="/cookbook/p/disk-i-o-fsync-the-page-cache-and-queues">I/O</a>, <a href="/cookbook/p/concurrent-memory">Concurrent memory</a>, <a href="/cookbook/p/rust-for-systems-code">Rust for systems</a>.</p>
+
+<p><strong>3. Query engines and optimizers.</strong> <a href="/cookbook/p/sorting-and-aggregation">L11</a>–<a href="/cookbook/p/cost-models-and-join-ordering">L16</a>, <a href="/cookbook/p/catalog-types-expressions">P3.0</a>–<a href="/cookbook/p/optimizer-rules-and-the-engine">P3.6</a>; <a href="/cookbook/p/vectorized-execution-with-simd">A14</a>, <a href="/cookbook/p/query-compilation-and-code-generation">A15</a>, <a href="/cookbook/p/parallel-hash-joins">A16</a>, <a href="/cookbook/p/parallel-sort-merge-joins">A17</a>, <a href="/cookbook/p/multi-way-and-worst-case-optimal-joins">A18</a>, <a href="/cookbook/p/execution-pipelines">A21</a>; all of Part III (Q1–Q11); <a href="/cookbook/p/a-column-store">M3</a>, <a href="/cookbook/p/a-vectorized-engine">M4</a>, <a href="/cookbook/p/a-bytecode-virtual-machine">M5</a>, <a href="/cookbook/p/one-planner-for-many-models">M18</a>; <a href="/cookbook/p/testing-a-database">Testing</a>, <a href="/cookbook/p/profiling-and-observability">Profiling</a>.</p>
+
+<p><strong>4. Transactions and recovery.</strong> <a href="/cookbook/p/concurrency-control-theory">L17</a>–<a href="/cookbook/p/crash-recovery-aries">L22</a>, <a href="/cookbook/p/build-wal-and-aries">22b</a>, <a href="/cookbook/p/project-4-mvocc">P4</a>; <a href="/cookbook/p/mvcc-protocols-compared">A3</a>, <a href="/cookbook/p/mvcc-garbage-collection">A4</a>, <a href="/cookbook/p/recovery-for-main-memory-systems">A7</a>; <a href="/cookbook/p/transactions-on-the-key-space">M2</a>; <a href="/cookbook/p/testing-a-database">Testing</a> for linearizability checks and <a href="/cookbook/p/deterministic-simulation">Simulation</a> for crashes.</p>
+
+<p><strong>5. Distributed systems.</strong> <a href="/cookbook/p/distributed-databases-i">L23</a>, <a href="/cookbook/p/distributed-databases-ii">L24</a>; <a href="/cookbook/p/a-durable-lsm-tree">M7</a>, <a href="/cookbook/p/raft">M8</a>, <a href="/cookbook/p/sharding">M9</a>, <a href="/cookbook/p/distributed-transactions">M10</a>, <a href="/cookbook/p/crdts">M11</a>; <a href="/cookbook/p/cloud-native-oltp">S6</a> cloud-native OLTP; <a href="/cookbook/p/deterministic-simulation">Simulation</a>; <a href="/cookbook/p/testing-a-database">Testing</a>.</p>
+
+<p><strong>6. Analytics and columns.</strong> <a href="/cookbook/p/storage-models-and-compression">L06</a>, <a href="/cookbook/p/modern-olap-systems">A11</a>, <a href="/cookbook/p/columnar-formats-and-nested-data">A12</a>, <a href="/cookbook/p/modern-encodings-btrblocks-fastlanes-bitweaving">A13</a>, <a href="/cookbook/p/vectorized-execution-with-simd">A14</a>; <a href="/cookbook/p/lakehouses-and-table-formats">S5</a>, <a href="/cookbook/p/embedded-engines">S10</a>; <a href="/cookbook/p/a-column-store">M3</a>, <a href="/cookbook/p/a-vectorized-engine">M4</a>, <a href="/cookbook/p/htap-one-table-two-engines">M6</a>; <a href="/cookbook/p/benchmarking">Benchmarking</a>.</p>
+
+<p><strong>7. Search, vectors, graphs, documents, time series.</strong> <a href="/cookbook/p/filters-tries-inverted-and-vector-indexes">L09</a>; <a href="/cookbook/p/time-series-databases">S1</a>, <a href="/cookbook/p/vector-databases">S2</a>, <a href="/cookbook/p/streaming-and-incremental-views">S3</a>; <a href="/cookbook/p/the-vector-store">M12</a>, <a href="/cookbook/p/the-graph-store">M13</a>, <a href="/cookbook/p/the-document-store">M14</a>, <a href="/cookbook/p/the-time-series-engine">M15</a>, <a href="/cookbook/p/full-text-search">M16</a>, <a href="/cookbook/p/streams-and-windows">M17</a>, <a href="/cookbook/p/one-planner-for-many-models">M18</a>. Read <a href="/cookbook/p/one-key-space">M1</a> first: the key space they all share.</p>
+
+<p><strong>8. Product surface: protocols, security, embedding.</strong> <a href="/cookbook/p/networking-protocols">A9</a>, <a href="/cookbook/p/the-postgresql-wire-protocol">M19</a>, <a href="/cookbook/p/passwords-and-scram">M21</a>, <a href="/cookbook/p/roles-privileges-and-row-level-security">M22</a>, <a href="/cookbook/p/the-engine-in-webassembly">M20</a>, <a href="/cookbook/p/query-languages">S9</a> query languages, <a href="/cookbook/p/server-side-logic-and-udfs">A19</a> UDFs.</p>
+
+<p><strong>9. Correctness and testing.</strong> <a href="/cookbook/p/testing-a-database">Testing</a>, <a href="/cookbook/p/deterministic-simulation">Simulation</a>, <a href="/cookbook/p/rust-for-systems-code">Rust for systems</a>, <a href="/cookbook/p/concurrent-memory">Concurrent memory</a>; then the mutation paragraphs in any section of Part V to see the practice applied; <a href="/cookbook/p/benchmarking">Benchmarking</a> for performance regressions.</p>
+
+<p><strong>10. Operating databases.</strong> Part I for what the engine does; <a href="/cookbook/p/logging">L21</a>, <a href="/cookbook/p/crash-recovery-aries">L22</a> for recovery and backup; <a href="/cookbook/p/a-durable-lsm-tree">M7</a>, <a href="/cookbook/p/sharding">M9</a> for what moves when you scale; <a href="/cookbook/p/disk-i-o-fsync-the-page-cache-and-queues">I/O</a>, <a href="/cookbook/p/profiling-and-observability">Profiling</a>, <a href="/cookbook/p/benchmarking">Benchmarking</a>; <a href="/cookbook/p/contributing-to-a-database">Contributing</a> for reading the engine you run.</p>
+"""
+
+[[sections]]
+heading = "Prerequisites in one picture"
+body = """
+```text
+Part I:  L01 → L02 → L04 → L03 → L08 → L11 → L12 → L13 → P3.x
+                         ↘ P1.x                     ↘ L15 → L16 → Part III
+         L17 → L18/L19/L20 → L21 → L22 → L23/L24
+Part II: A-sections are independent of each other; each assumes Part I's matching lecture
+Part IV: S-sections are independent; each assumes Part I
+Part V:  M1 → M2 → everything else; M7 → M8 → M9 → M10; M18 needs M12–M16; M19 → M21 → M22
+Part VI: Testing and Simulation are independent of the others; Concurrent memory needs Rust for systems
+```
+"""

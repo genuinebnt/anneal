@@ -1,0 +1,54 @@
+title = "TimescaleDB-style hypertables"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 433
+kind = "recipe"
+lede = "Time/space chunking, chunk exclusion, columnar chunk compression, retention, continuous aggregates, gapfill."
+level = "advanced"
+code = ["examples/database/hypertables_continuous_aggregates.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+understanding how a relational engine is turned into a time-series store by partitioning on time and pre-aggregating.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>TimescaleDB hypertables and continuous aggregates</li><li>the same ideas appear in PostgreSQL declarative partitioning with pg_partman</li><li>ClickHouse materialized views over MergeTree partitions</li><li>Druid/Pinot segment pruning and rollups</li><li>BigQuery/Snowflake partition pruning. Course: CMU 15-445 (partitioning, materialized views)</li><li>CMU Database Group time-series talks (TimescaleDB)</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a HYPERTABLE looks like one table `(ts, device, value)` but is stored as many **chunks** keyed by (time slot, space partition). Queries with a time (or device) predicate only touch chunks whose range can match: **chunk exclusion**. Old chunks are cheap to drop as a whole (**retention**) and cheap to store if converted to compressed columnar **segments**.
+
+**A continuous aggregate** (cagg) keeps a materialised rollup per (time_bucket, device) so dashboards do not rescan raw data.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Chunks</div><div class="cb-g-says"><p>Slot = ts.div_euclid(interval); space = hash(device) % S. <code>scan(lo, hi, device)</code> uses a BTreeMap range over (slot, space) so excluded chunks are never even visited; with a device equality predicate the space dimension prunes too.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Compression</div><div class="cb-g-says"><p>A chunk older than the policy age becomes <strong>segments</strong>: rows grouped by the <strong>segment-by</strong> column (device), sorted by the <strong>order-by</strong> column (ts), each segment holding delta+varint timestamps, XOR+varint values and min/max metadata that lets a query skip it without decoding.</p><p>Late inserts into a compressed chunk land in an uncompressed staging area (as in TimescaleDB); the next policy run recompresses it. Deleting from compressed data first decompresses the chunk.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Retention</div><div class="cb-g-says"><p><code>drop_chunks(cutoff)</code> removes whole chunks with end &lt;= cutoff (partial chunks stay: the guarantee is chunk-granular), advances a floor (older inserts are rejected) and <strong>first</strong> refreshes caggs up to that floor, so the rollup keeps the history the raw data loses.</p></div></div><div class="cb-g-term"><div class="cb-g-name">CAGG</div><div class="cb-g-says"><p><code>mat[(bucket, device)] -&gt; (count, sum, min, max, last)</code> for buckets below a <strong>watermark</strong>. Any write below the watermark appends its time range to an <strong>invalidation log</strong> (inserts at or above it are the tail, found by the real-time part). <code>refresh(end)</code> re-materialises invalidated buckets from raw data and extends the watermark.</p><p><code>RealTime</code> read = materialised part <strong>union</strong> raw tail aggregated on the fly (TimescaleDB's default); it is stale only in buckets with pending invalidations. <code>Fresh</code> read additionally recomputes those buckets.</p></div></div><div class="cb-g-term"><div class="cb-g-name">GAPFILL</div><div class="cb-g-says"><p><code>time_bucket_gapfill</code> semantics over sparse bucket values: <strong>null</strong>, zero, LOCF (last observation carried forward, may come from before the window) and linear interpolation between the neighbours on both sides.</p><p><strong>Tests</strong>: 2000 random insert / late arrival / delete / compress / retention / refresh / query sequences compared with a brute-force oracle that keeps all rows and recomputes every aggregate; plus 3000 random sparse series checking gapfill against an O(n*m) scan. Pruning statistics are printed.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+TimescaleDB docs, hypertables  <https://docs.timescale.com/use-timescale/latest/hypertables/>
+
+TimescaleDB docs, continuous aggregates  <https://docs.timescale.com/use-timescale/latest/continuous-aggregates/>
+
+<ul class="cb-g-reading"><li>Freedman et al., "Timescale: SQL made scalable for time-series data" (TimescaleDB design paper</li><li>cited by title, link not checked)</li></ul>
+"""
+
+[[sources]]
+title = "docs.timescale.com/use-timescale/latest/hypertables"
+url = "https://docs.timescale.com/use-timescale/latest/hypertables/"
+
+[[sources]]
+title = "docs.timescale.com/use-timescale/latest/continuous-aggregates"
+url = "https://docs.timescale.com/use-timescale/latest/continuous-aggregates/"

@@ -1,0 +1,58 @@
+title = "A deterministic laboratory comparing six rate-limit algorithms"
+module = "Complete projects"
+module_order = 13
+chapter = "Capstones"
+chapter_order = 1
+order = 655
+kind = "capstone"
+lede = "a deterministic laboratory comparing six rate-limit algorithms"
+level = "capstone"
+code = ["examples/capstones/rate_limiter_lab.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>API gateways</li><li>per-tenant quotas</li><li>choosing between limiter algorithms</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+six algorithms behind one `Limiter` trait (fixed window, sliding log, sliding counter, token bucket, leaky-bucket meter, GCRA), a per-key `KeyedLimiter` with idle eviction, and a lock-free concurrency limiter with an **aimd** (additive-increase / multiplicative-decrease) adaptive limit.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+every limiter trades accuracy, burst behaviour and memory differently. Seeing them run on identical seeded traffic makes the trade-offs concrete instead of folklore.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+time is never read from the OS. Each `check` takes `now_ms`, so a replay is exactly reproducible and the whole lab runs in milliseconds. The harness measures the metric that matters to a protected backend: the maximum number of **admitted** requests in any 1-second sliding window.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>API gateway quotas (Stripe-style)</li><li>login brute-force throttling</li><li>per-tenant fairness in multi-tenant SaaS</li><li>outbound politeness toward third-party APIs</li><li>tower/governor middleware</li><li>database connection or in-flight request caps</li><li>adaptive concurrency control (TCP-Vegas / Netflix-style) to shed load before collapse</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://stripe.com/blog/rate-limiters>, <https://github.com/boinkor-net/governor>, <https://docs.rs/tower/latest/tower/limit/index.html>
+"""
+
+[[sources]]
+title = "stripe.com/blog/rate-limiters"
+url = "https://stripe.com/blog/rate-limiters"
+
+[[sources]]
+title = "github.com/boinkor-net/governor"
+url = "https://github.com/boinkor-net/governor"
+
+[[sources]]
+title = "docs.rs/tower/latest/tower/limit/index.html"
+url = "https://docs.rs/tower/latest/tower/limit/index.html"

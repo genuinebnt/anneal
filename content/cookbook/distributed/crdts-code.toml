@@ -1,0 +1,60 @@
+title = "State-based CRDTs"
+module = "Distributed systems"
+module_order = 10
+chapter = "Collaboration and CRDTs"
+chapter_order = 3
+order = 496
+kind = "recipe"
+lede = "state-based CRDTs (counters, registers, sets, map) plus an RGA sequence CRDT, verified by law tests."
+level = "advanced"
+code = ["examples/distributed/crdts.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+replicated data that must accept writes everywhere and converge without coordination.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a CRDT (conflict-free replicated data type) is a value whose `merge` is a join in a semilattice: merge must be **commutative** (a+b = b+a), **associative** ((a+b)+c = a+(b+c)) and **idempotent** (a+a = a).
+
+If it is, replicas converge no matter how states are ordered, duplicated, delayed or re-sent: the network may be lossy, as long as everything is eventually re-gossiped.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+no locks, no leader, no consensus; every replica stays writable while partitioned.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+each type keeps enough **metadata** to make merge a pure join: per-replica slots (GCounter), (time, replica) stamps for last-writer-wins with a deterministic tie-break, unique add-tags so a remove only kills what it **observed** (OR-Set, add wins).
+
+The RGA list is the sequence sketch: every character has a unique (lamport, replica) id and names the element it was inserted after; concurrent inserts at one spot are ordered by id so every replica picks the same order. It is op-based, so ops are idempotent and buffered until their causal dependency (the `after` element) exists.
+
+Compare operational_transform (operational transform): OT needs an ordering server and is hard to get right; CRDTs pay in metadata instead.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>collaborative editors and note apps</li><li>offline-first sync</li><li>shopping carts / presence / like counters in eventually consistent stores (Riak ships counters, sets and maps as data types)</li><li>multi-region configuration and feature flags</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Conflict-free_replicated_data_type> and <https://crdt.tech>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Conflict-free_replicated_data_type"
+url = "https://en.wikipedia.org/wiki/Conflict-free_replicated_data_type"
+
+[[sources]]
+title = "crdt.tech"
+url = "https://crdt.tech"

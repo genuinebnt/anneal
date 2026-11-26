@@ -1,0 +1,62 @@
+title = "Undo/redo for a text editor"
+module = "Rust language"
+module_order = 1
+chapter = "Design patterns"
+chapter_order = 5
+order = 50
+kind = "recipe"
+lede = "Command, memento, persistent rope, piece table and undo tree, tested against a model"
+level = "advanced"
+code = ["examples/patterns/undo_redo_editors.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>editors</li><li>drawing tools</li><li>form builders</li><li>spreadsheets</li><li>any app with history</li><li>also persistent data structures and version control ideas</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Five ways to remember the past, all behind one `Editor` trait and all checked against a deliberately naive **model** (a vector of full document states plus a cursor into it), so any disagreement points at the design, not at the test. (a) **command**: each edit stores its inverse (insert &lt;-> delete with the removed text).
+
+Tiny entries, but every operation needs a correct inverse, and undo replays work. Consecutive typing is **coalesced** into one undo step (a burst of adjacent inserts, capped at 16 chars), as users expect; any undo/redo or non-adjacent edit ends the burst. (b) **memento**: copy the whole document per step.
+
+Trivial and obviously correct, but cost is O(document) per entry. (c) **persistent**: the document is an immutable rope of `Arc` nodes. An edit rebuilds only the path to the change and **shares** everything else, so a snapshot is one pointer copy and entries cost O(log n) new nodes (sharing is asserted with `Arc::ptr_eq` and strong counts).
+
+This is the idea behind persistent vectors and git trees. (d) **piece table**: the original text and an append-only add buffer never change; the document is a list of (buffer, start, len) pieces. Edits touch O(pieces) and undo restores an older piece list; text is never copied or moved.
+
+(e) **undo tree**: history is a tree. Undo then a new edit creates a **branch** instead of discarding the redo stack, and any state can be reached (goto = undo to the common ancestor, then redo down the other branch); nothing is ever lost.
+
+Properties (20k seeded random sequences): undo followed by redo is the identity; any edits followed by undoing everything returns the initial text and redoing everything returns the final text; every design equals the model after every step.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+text and code editors (VS Code uses a piece-tree buffer; Vim has an undo tree), Photoshop-style history, **caveat**: the piece-table design here snapshots by **cloning** the whole piece vector, so its per-history-entry memory is larger than the memento in the printed table.
+
+A production piece table shares structure (persistent tree) or stores deltas, which is what makes it cheap; read the table as "naive snapshots", not as a verdict on piece tables. collaborative editing (operations have inverses), Emacs undo, database transactions (savepoints), game save states.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://refactoring.guru/design-patterns/command" target="_blank" rel="noreferrer">https://refactoring.guru/design-patterns/command</a></li><li><a href="https://en.wikipedia.org/wiki/Piece_table" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Piece_table</a></li><li><a href="https://www.finseth.com/craft/" target="_blank" rel="noreferrer">https://www.finseth.com/craft/</a> and <a href="https://docs.rs/im" target="_blank" rel="noreferrer">https://docs.rs/im</a> (persistent collections in Rust)</li></ul>
+"""
+
+[[sources]]
+title = "refactoring.guru/design-patterns/command"
+url = "https://refactoring.guru/design-patterns/command"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Piece_table"
+url = "https://en.wikipedia.org/wiki/Piece_table"
+
+[[sources]]
+title = "finseth.com/craft"
+url = "https://www.finseth.com/craft/"
+
+[[sources]]
+title = "docs.rs/im"
+url = "https://docs.rs/im"

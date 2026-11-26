@@ -1,0 +1,42 @@
+title = "Brute-force cosine kNN with a top-k heap"
+module = "Search and vectors"
+module_order = 9
+chapter = "Vector search"
+chapter_order = 2
+order = 464
+kind = "recipe"
+lede = "The baseline every ANN index is measured against."
+level = "intermediate"
+code = ["examples/search_vectors/knn_bruteforce.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+vector search roadmap.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>semantic search</li><li>recommendations</li><li>dedup: exact kNN is the correctness baseline for every ANN index</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: score every vector, keep only the best k in a **min**-heap of size k (pop the worst when it grows past k). O(n log k), O(k) memory. Recall of any approximate index (HNSW, IVF) is judged against this exact answer.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://ann-benchmarks.com/> and the HNSW paper <https://arxiv.org/abs/1603.09320>
+"""
+
+[[sources]]
+title = "ann-benchmarks.com"
+url = "https://ann-benchmarks.com/"
+
+[[sources]]
+title = "arxiv.org/abs/1603.09320"
+url = "https://arxiv.org/abs/1603.09320"

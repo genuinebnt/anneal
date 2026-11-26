@@ -1,0 +1,239 @@
+title = "Query planning and rewriting"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 377
+kind = "guide"
+lede = "the optimizer's place in the pipeline · logical vs physical plans · equivalences · heuristic vs cost-based · predicate and projection pushdown · expression rewriting · search strategies · subqueries"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Declarative SQL says <em>what</em>, not <em>how</em>.</strong> The optimizer maps a statement to an executable plan; different plans for one query can differ by orders of magnitude. The first optimizer (IBM System R, 1970s) made it believable that a program could beat a human, and many of its ideas are still current. Query optimization is widely considered the hardest part of building a DBMS. ML-based optimizers are researched but no major DBMS ships one as its default.</li> <li><strong>Pipeline</strong>: (optional SQL rewriter) → <strong>parser</strong> (tokens → AST) → <strong>binder</strong> (names → internal ids via the catalog) → logical plan → (optional tree rewriter) → <strong>optimizer</strong>, which uses a <strong>cost model</strong> and catalog statistics → <strong>physical plan</strong>.</li> <li><strong>Logical vs physical</strong>: a logical plan is roughly relational algebra. A physical plan picks a strategy per operator (access path, join algorithm) and may depend on physical data properties (sort order, compression). The mapping isn't one-to-one.</li> <li><strong>Equivalence-based rewriting</strong>: two algebra expressions are equivalent if they produce the same tuples, so the optimizer can transform a plan freely within the equivalence class.</li> <li><strong>Two strategies</strong>: <strong>static rules / heuristics</strong> (pattern-match known inefficiencies; may consult the catalog, never the data) and <strong>cost-based search</strong> (enumerate equivalent plans, estimate costs from statistics, pick the cheapest).</li> <li><strong>Logical rewrites</strong>: <strong>predicate pushdown</strong> (filter as early as possible), reorder predicates by selectivity, <strong>split conjunctions</strong> and push each part, replace <strong>Cartesian products with joins</strong> using the join predicates; <strong>projection pushdown</strong> (project away unused columns early; matters more with many columns).</li> <li><strong>Cost</strong>: CPU (small, hard to estimate), disk I/O (block transfers), memory, network. Joins are commutative and associative, so there are about 4ⁿ orderings of an n-way join: the search space must be limited. <strong>Search termination</strong>: wall-clock budget, cost threshold, exhaustion, or a transformation count.</li> <li><strong>Access paths</strong>: single-relation plans are mostly about choosing the access method (sequential, index, ...). OLTP queries are <strong>sargable</strong> (a best index exists), so simple heuristics suffice; many newer systems use heuristics only here.</li> <li><strong>Multi-relation search</strong>: <strong>bottom-up / generative</strong> (System R, DB2, MySQL, PostgreSQL: static rules, then dynamic programming over join orders for <strong>left-deep</strong> trees) vs <strong>top-down / transformational</strong> (Volcano/Cascades: MSSQL, Greenplum, CockroachDB: apply logical→logical and logical→physical rules recursively, <strong>memoize</strong> equivalent expressions, track the best plan, treat physical properties as first-class, use <strong>enforcers</strong> such as sort).</li> <li><strong>Nested subqueries</strong>: treated as functions of their parameters. Either <strong>flatten/decorrelate</strong> them into joins (<code>EXISTS (... WHERE s.sid = r.sid ...)</code> becomes a join), or <strong>decompose</strong>: compute the inner block once into a temporary result and use it in the outer.</li> <li><strong>Expression rewriting</strong>: pattern-match on expression trees and rewrite until no rule fires: <strong>impossible predicates</strong> (<code>WHERE 1 = 0</code> → empty result), <strong>merging predicates</strong> (<code>BETWEEN 1 AND 100 OR BETWEEN 50 AND 150</code> → <code>BETWEEN 1 AND 150</code>), constant folding.</li> </ul>
+"""
+
+[[sections]]
+heading = "The two stages of the reference optimizer"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Stage</th> <th>Input → output</th> <th>Needs</th> </tr> </thead> <tbody> <tr> <td><strong>Rewrite</strong> (this lecture)</td> <td>logical plan → equivalent, cheaper logical plan</td> <td>the catalog (index existence, schemas), no data</td> </tr> <tr> <td><strong>Cost-based</strong> (<a href="/cookbook/p/cost-models-and-join-ordering">L16</a>)</td> <td>logical plan → physical plan, chosen from alternatives by estimated cost</td> <td>statistics: row counts, distinct values, histograms</td> </tr> </tbody> </table></div>
+
+<p>The reference engine's pipeline is <code>simplify → pushdown → reorder joins → bottom-up rewrites</code> (<a href="/cookbook/p/optimizer-rules-and-the-engine">P3.6</a>). Rewrite rules are cheap, always-beneficial transformations. Cost-based choices are the ones where the right answer depends on the data.</p>
+"""
+
+[[sections]]
+heading = "Expression rewriting, executable"
+body = """
+<p>The lecture's two examples (impossible predicates and merging ranges) generalize into a small <strong>simplifier</strong>. It works on bound expression trees and applies:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Rule</th> <th>Example</th> </tr> </thead> <tbody> <tr> <td>constant folding</td> <td><code>a &gt; 2 + 3</code> → <code>a &gt; 5</code>; <code>1 = 0</code> → <code>FALSE</code></td> </tr> <tr> <td>conjunction identities</td> <td><code>p AND TRUE</code> → <code>p</code>; <code>p AND FALSE</code> → <code>FALSE</code>; <code>p AND p</code> → <code>p</code></td> </tr> <tr> <td>range merging</td> <td><code>x &gt; 5 AND x &gt; 3 AND x &lt; 10</code> → <code>x &gt;= 6 AND x &lt;= 9</code></td> </tr> <tr> <td>contradiction</td> <td><code>x = 1 AND x = 2</code> → <code>FALSE</code>; <code>x &gt; 9 AND x &lt; 3</code> → <code>FALSE</code></td> </tr> <tr> <td>disjunction union</td> <td><code>x BETWEEN 1 AND 100 OR x BETWEEN 50 AND 150</code> → <code>x BETWEEN 1 AND 150</code></td> </tr> <tr> <td>negation</td> <td><code>NOT NOT p</code> → <code>p</code>; <code>NOT (a &lt; b)</code> → <code>a &gt;= b</code></td> </tr> </tbody> </table></div>
+
+<p>A filter that simplifies to <code>FALSE</code> replaces its whole input subtree with an <strong>empty relation</strong> (no scan at all), and one that simplifies to <code>TRUE</code> disappears.</p>
+
+<aside data-call="warning"><b>Rewrites are valid <em>in a context</em></b><p><code>x = 1 AND x = 2</code> is <code>FALSE</code> for every non-NULL <code>x</code>, but for <code>x = NULL</code> it is <code>NULL AND NULL = NULL</code>. In a <strong>filter</strong> position <code>NULL</code> and <code>FALSE</code> both drop the row, so the rewrite is sound. In a <code>SELECT</code> list it would turn NULLs into <code>false</code> and change the answer. The simplifier here is therefore <code>simplify_filter</code>, called only on <code>WHERE</code>/<code>ON</code> predicates. Production optimizers track this as <em>null-rejecting</em> vs <em>null-preserving</em> positions, and the same distinction decides when an outer join can be turned into an inner join.</p></aside>
+
+:::deeper Predicate simplifier: folding, range merging, contradiction detection, range union
+```rust title="src/optimizer/simplify.rs"
+//! Predicate simplification, valid in a *filter* position only: there UNKNOWN and FALSE are
+//! interchangeable (WHERE drops both), so `x = 1 AND x = 2` may become FALSE even though for a
+//! NULL x it evaluates to NULL. In a SELECT list that rewrite would change NULL into false.
+use crate::types::value::Value;
+use super::expr::{BinOp, Expr};
+
+const MIN: i64 = i64::MIN;
+const MAX: i64 = i64::MAX;
+fn lit_false() -> Expr { Expr::Lit(Value::Bool(false)) }
+fn is_false(e: &Expr) -> bool { matches!(e, Expr::Lit(Value::Bool(false)) | Expr::Lit(Value::Null)) }
+fn is_true(e: &Expr) -> bool { matches!(e, Expr::Lit(Value::Bool(true))) }
+
+fn has_cols(e: &Expr) -> bool { let mut v = vec![]; e.cols(&mut v); !v.is_empty() }
+
+/// 1. Constant folding: evaluate every column-free subtree once, at plan time. Errors (1/0) are
+///    left in place so they surface at run time, only if the row is actually evaluated.
+pub fn fold(e: Expr) -> Expr {
+    let e = match e {
+        Expr::Bin(op, a, b) => Expr::Bin(op, Box::new(fold(*a)), Box::new(fold(*b))),
+        Expr::Not(a) => Expr::Not(Box::new(fold(*a))),
+        Expr::Neg(a) => Expr::Neg(Box::new(fold(*a))),
+        Expr::IsNull(a, n) => Expr::IsNull(Box::new(fold(*a)), n),
+        Expr::Func(f, args) => Expr::Func(f, args.into_iter().map(fold).collect()),
+        e => e,
+    };
+    if !matches!(e, Expr::Lit(_)) && !has_cols(&e) { if let Ok(v) = e.eval(&[]) { return Expr::Lit(v); } }
+    e
+}
+
+/// An inclusive integer interval on one column.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Range { col: usize, lo: i64, hi: i64 }
+
+fn atom(e: &Expr) -> Option<Range> {
+    let Expr::Bin(op, a, b) = e else { return None };
+    let (col, k, op) = match (&**a, &**b) {
+        (Expr::Col(c), Expr::Lit(Value::Int(k))) => (*c, *k, *op),
+        (Expr::Lit(Value::Int(k)), Expr::Col(c)) => (*c, *k, flip(*op)?),     // 5 < x  ==  x > 5
+        _ => return None,
+    };
+    Some(match op {
+        BinOp::Eq => Range { col, lo: k, hi: k },
+        BinOp::Lt => Range { col, lo: MIN, hi: k.checked_sub(1)? },
+        BinOp::Le => Range { col, lo: MIN, hi: k },
+        BinOp::Gt => Range { col, lo: k.checked_add(1)?, hi: MAX },
+        BinOp::Ge => Range { col, lo: k, hi: MAX },
+        _ => return None,
+    })
+}
+fn flip(op: BinOp) -> Option<BinOp> { Some(match op { BinOp::Eq => BinOp::Eq, BinOp::Lt => BinOp::Gt, BinOp::Le => BinOp::Ge, BinOp::Gt => BinOp::Lt, BinOp::Ge => BinOp::Le, _ => return None }) }
+
+fn emit(r: Range) -> Vec<Expr> {
+    let c = || Box::new(Expr::Col(r.col));
+    let k = |v: i64| Box::new(Expr::Lit(Value::Int(v)));
+    if r.lo == r.hi { return vec![Expr::Bin(BinOp::Eq, c(), k(r.lo))]; }
+    // A range covering every integer is NOT `true`: NULL belongs to no range, so the predicate is x IS NOT NULL.
+    if r.lo == MIN && r.hi == MAX { return vec![Expr::IsNull(c(), true)]; }
+    let mut out = vec![];
+    if r.lo > MIN { out.push(Expr::Bin(BinOp::Ge, c(), k(r.lo))); }
+    if r.hi < MAX { out.push(Expr::Bin(BinOp::Le, c(), k(r.hi))); }
+    out
+}
+
+fn disjuncts(e: Expr) -> Vec<Expr> { match e { Expr::Bin(BinOp::Or, a, b) => { let mut v = disjuncts(*a); v.extend(disjuncts(*b)); v } e => vec![e] } }
+fn or_all(es: Vec<Expr>) -> Expr { Expr::or_balanced(es) }
+
+/// Simplify a predicate used as a filter. Rules: fold constants; drop TRUE conjuncts; collapse any
+/// FALSE conjunct; merge range conjuncts per column (and detect empty ranges); union overlapping
+/// ranges in a disjunction over one column; remove NOT NOT; push NOT into comparisons.
+pub fn simplify_filter(e: Expr) -> Expr {
+    let e = fold(e);
+    let e = match e {
+        Expr::Not(inner) => match fold(*inner) {
+            Expr::Not(x) => *x,                                                                // NOT NOT x = x (also in 3VL)
+            Expr::Bin(op @ (BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge), a, b) => {
+                let inv = match op { BinOp::Eq => BinOp::Ne, BinOp::Ne => BinOp::Eq, BinOp::Lt => BinOp::Ge, BinOp::Le => BinOp::Gt, BinOp::Gt => BinOp::Le, _ => BinOp::Lt };
+                Expr::Bin(inv, a, b)                                                           // NOT (a < b) = a >= b; UNKNOWN stays UNKNOWN
+            }
+            other => Expr::Not(Box::new(other)),
+        },
+        e => e,
+    };
+    match e {
+        Expr::Bin(BinOp::And, ..) => {
+            let (mut ranges, mut rest): (Vec<Range>, Vec<Expr>) = (vec![], vec![]);
+            for c in e.conjuncts() {
+                let c = simplify_filter(c);
+                if is_true(&c) { continue; }
+                if is_false(&c) { return lit_false(); }
+                match atom(&c) {
+                    Some(r) => match ranges.iter_mut().find(|x| x.col == r.col) {
+                        Some(x) => { x.lo = x.lo.max(r.lo); x.hi = x.hi.min(r.hi); if x.lo > x.hi { return lit_false(); } }
+                        None => ranges.push(r),
+                    },
+                    None => if !rest.contains(&c) { rest.push(c) },                              // x AND x = x
+                }
+            }
+            let mut all: Vec<Expr> = ranges.into_iter().flat_map(emit).collect();
+            all.extend(rest);
+            Expr::and_all(all).unwrap_or(Expr::Lit(Value::Bool(true)))
+        }
+        Expr::Bin(BinOp::Or, ..) => {
+            let ds: Vec<Expr> = disjuncts(e).into_iter().map(simplify_filter).filter(|d| !is_false(d)).collect();
+            if ds.iter().any(is_true) { return Expr::Lit(Value::Bool(true)); }
+            if ds.is_empty() { return lit_false(); }
+            // Every disjunct a range on the same column (after merging its own conjuncts)? Union them.
+            let rs: Option<Vec<Range>> = ds.iter().map(|d| {
+                let cs = d.clone().conjuncts();
+                let mut it = cs.iter().map(atom);
+                let first = it.next()??;
+                it.try_fold(first, |a, b| { let b = b?; (a.col == b.col).then(|| Range { col: a.col, lo: a.lo.max(b.lo), hi: a.hi.min(b.hi) }) })
+            }).collect();
+            if let Some(mut rs) = rs {
+                if rs.iter().all(|r| r.col == rs[0].col) {
+                    rs.sort_by_key(|r| r.lo);
+                    let mut merged: Vec<Range> = vec![];
+                    for r in rs {
+                        match merged.last_mut() { Some(l) if r.lo <= l.hi.saturating_add(1) => l.hi = l.hi.max(r.hi), _ => merged.push(r) }
+                    }
+                    return or_all(merged.into_iter().map(|r| Expr::and_all(emit(r)).unwrap_or(Expr::Lit(Value::Bool(true)))).collect());
+                }
+            }
+            or_all(ds)
+        }
+        e => e,
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Testing a rewriter: the property that matters"
+body = """
+<p>The only requirement of a rewrite rule is <strong>semantic preservation</strong>. That's directly testable: generate random predicates over a small column domain <em>including NULL</em>, simplify them, and require that both versions keep exactly the same rows from an exhaustive grid of inputs. 50,000 random predicates per run:</p>
+
+```rust title="tests/simplify.rs (the semantic-preservation property)"
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 3000, ..ProptestConfig::default() })]
+    /// The simplified filter must keep exactly the same rows as the original, over every row of a grid
+    /// that includes NULLs and boundary values.
+    #[test]
+    fn simplify_preserves_filter_semantics(p in pred()) {
+        let s = simplify_filter(p.clone());
+        for r in rows() { prop_assert_eq!(kept(&p, &r), kept(&s, &r), "original {:?}\\nsimplified {:?}\\nrow {:?}", p, s, r); }
+        // and folding alone is exactly value-preserving, even for NULL results
+        let f = fold(p.clone());
+        for r in rows() { prop_assert_eq!(p.eval(&r).ok(), f.eval(&r).ok()); }
+    }
+}
+```
+
+<aside data-call="testing"><b>The first run found a real bug</b><p><code>x &lt; 0 OR x = 0 OR x &gt; 0</code> merges into one range covering <em>every</em> integer, and the first version emitted <code>TRUE</code> for it. For <code>x = NULL</code> the original is UNKNOWN (row dropped) and <code>TRUE</code> keeps it. The shrunk counterexample the property test printed was <code>Or(Or(Gt(0, x), Eq(0, x)), Lt(0, x))</code> on the row <code>(NULL, NULL)</code>. The fix: a range with no bounds must emit <code>x IS NOT NULL</code>, not <code>TRUE</code>: NULL belongs to no range. A hand-written test suite would have needed someone to think of NULL <em>in this particular rewrite</em>. The property test needed one line (<code>Just(Expr::Lit(Value::Null))</code> in the strategy).</p></aside>
+"""
+
+[[sections]]
+heading = "Rule ordering is the hard part of heuristic optimizers"
+body = """
+<p>Rules interact. <a href="/cookbook/p/optimizer-rules-and-the-engine">P3.6</a> shows a real case: converting a join into an index join <em>before</em> pushing the filters above it made the filters unpushable. Three standard answers:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Approach</th> <th>How</th> <th>Used by</th> </tr> </thead> <tbody> <tr> <td><strong>Fixed phases</strong></td> <td>simplify → pushdown → join selection, in a hand-chosen order</td> <td>this engine, MySQL, SQLite's query planner</td> </tr> <tr> <td><strong>Fixpoint rule sets</strong></td> <td>apply a batch of rules repeatedly until no rule changes the plan</td> <td>Spark Catalyst (rule batches with <code>FixedPoint(100)</code>), Calcite's HepPlanner</td> </tr> <tr> <td><strong>Memo-based search</strong></td> <td>keep <em>all</em> equivalent forms, so no rule ever blocks another</td> <td>Volcano/Cascades: SQL Server, CockroachDB, Greenplum Orca, Calcite's VolcanoPlanner (Part III)</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Subqueries"
+body = """
+<p>A correlated subquery is a function called once per outer row, the worst case for performance. Optimizers rewrite them away:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Form</th> <th>Rewrite</th> </tr> </thead> <tbody> <tr> <td><code>WHERE x IN (SELECT y FROM t)</code></td> <td><strong>semi-join</strong> (output each outer row at most once)</td> </tr> <tr> <td><code>WHERE EXISTS (SELECT … WHERE t.k = outer.k)</code></td> <td>semi-join on the correlation predicate (the lecture's <code>sailors/reserves</code> example)</td> </tr> <tr> <td><code>WHERE NOT EXISTS (…)</code></td> <td><strong>anti-join</strong></td> </tr> <tr> <td><code>WHERE x NOT IN (SELECT y …)</code></td> <td><strong>null-aware</strong> anti-join: any NULL in the subquery makes the result empty (<a href="/cookbook/p/join-algorithms">L12</a>)</td> </tr> <tr> <td><code>SELECT (SELECT MAX(r) FROM t WHERE t.k = o.k)</code></td> <td>left join against a pre-aggregated <code>GROUP BY k</code> result</td> </tr> <tr> <td>deeply correlated or lateral</td> <td><strong>dependent join</strong> + general decorrelation (Neumann &amp; Kemper, Part III)</td> </tr> </tbody> </table></div>
+
+<p>The engine's join operators from <a href="/cookbook/p/aggregation-and-nested-loop-joins">P3</a> and <a href="/cookbook/p/join-algorithms">L12</a> already contain everything the rewritten plans need (inner, left, semi and anti variants exist in the L12 reference). What's missing is the binder support for subquery syntax.</p>
+"""
+
+[[sources]]
+title = "Access Path Selection in a Relational Database Management System"
+url = "https://www.cs.cmu.edu/~15721-f24/papers/System_R.pdf"
+
+[[sources]]
+title = "An Overview of Query Optimization in Relational Systems"
+url = "https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/pods98-optimization.pdf"
+
+[[sources]]
+title = "The Cascades Framework for Query Optimization"
+url = "https://15721.courses.cs.cmu.edu/spring2019/papers/22-optimizer1/graefe-ieee1995.pdf"
+
+[[sources]]
+title = "The Volcano Optimizer Generator"
+url = "https://ieeexplore.ieee.org/document/344061"
+
+[[sources]]
+title = "CockroachDB's optimizer"
+url = "https://www.youtube.com/watch?v=wHo-VtzTHx0"
+
+[[sources]]
+title = "PostgreSQL optimizer methodology (Robert Haas)"
+url = "https://www.youtube.com/watch?v=XA3SBgcZwtE"
+
+[[sources]]
+title = "Cascades at Microsoft"
+url = "https://www.youtube.com/watch?v=pQe1LQJiXN0"

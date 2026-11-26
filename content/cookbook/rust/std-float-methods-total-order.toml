@@ -1,0 +1,82 @@
+title = "F32/f64 look-up page"
+module = "Standard library and core"
+module_order = 2
+chapter = "Numbers, traits and formatting"
+chapter_order = 5
+order = 85
+kind = "recipe"
+lede = "Rounding, special values, comparison and total order, approximate equality, summation error, bit access, Duration conversions."
+level = "intermediate"
+code = ["examples/std_tour/std_float_methods_total_order.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>metrics</li><li>percentiles</li><li>geometry</li><li>rates and backoff</li><li>unit conversion</li><li>scoring and ranking</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>latency statistics</li><li>requests-per-second</li><li>jittered backoff</li><li>distance and angle maths</li><li>sorting scores that may contain NaN</li><li>comparing computed results in tests</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>f64::floor</code></li><li><code>f64::ceil</code></li><li><code>f64::round</code></li><li><code>f64::trunc</code></li><li><code>f64::fract</code></li><li><code>f64::round_ties_even</code></li><li><code>f64::abs</code></li><li><code>f64::signum</code></li><li><code>f64::copysign</code></li></ul>
+
+<ul class="cb-g-names"><li><code>f64::min</code></li><li><code>f64::max</code></li><li><code>f64::clamp</code></li><li><code>f64::is_nan</code></li><li><code>f64::is_finite</code></li><li><code>f64::is_infinite</code></li><li><code>f64::total_cmp</code></li><li><code>f64::partial_cmp</code></li></ul>
+
+<ul class="cb-g-names"><li><code>f64::sqrt</code></li><li><code>f64::cbrt</code></li><li><code>f64::powi</code></li><li><code>f64::powf</code></li><li><code>f64::exp</code></li><li><code>f64::ln</code></li><li><code>f64::log</code></li><li><code>f64::log2</code></li><li><code>f64::log10</code></li><li><code>f64::ln_1p</code></li><li><code>f64::exp_m1</code></li></ul>
+
+<ul class="cb-g-names"><li><code>f64::hypot</code></li><li><code>f64::sin</code></li><li><code>f64::cos</code></li><li><code>f64::tan</code></li><li><code>f64::atan2</code></li><li><code>f64::sin_cos</code></li><li><code>f64::to_degrees</code></li><li><code>f64::to_radians</code></li><li><code>f64::mul_add</code></li><li><code>f64::recip</code></li></ul>
+
+<ul class="cb-g-names"><li><code>f64::rem_euclid</code></li><li><code>f64::midpoint</code></li><li><code>f64::is_sign_negative</code></li><li><code>f64::is_sign_positive</code></li><li><code>f64::is_normal</code></li><li><code>f64::is_subnormal</code></li><li><code>f64::classify</code></li></ul>
+
+<ul class="cb-g-names"><li><code>f64::to_bits</code></li><li><code>f64::from_bits</code></li><li><code>f64::to_be_bytes</code></li><li><code>f64::from_be_bytes</code></li><li><code>f64::next_up</code></li><li><code>f64::next_down</code></li><li><code>f64::EPSILON</code></li><li><code>f64::MAX</code></li><li><code>f64::MIN</code></li></ul>
+
+<ul class="cb-g-names"><li><code>f64::MIN_POSITIVE</code></li><li><code>f64::INFINITY</code></li><li><code>f64::NAN</code></li><li><code>std::f64::consts::PI</code></li><li><code>std::f64::consts::TAU</code></li><li><code>std::f64::consts::E</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Duration::as_secs_f64</code></li><li><code>Duration::from_secs_f64</code></li><li><code>Duration::try_from_secs_f64</code></li><li><code>Duration::mul_f64</code></li><li><code>Duration::div_duration_f64</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/primitive.f64.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/primitive.f64.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+core: abs, signum, copysign, min, max, clamp, midpoint, total_cmp, classification, bit/byte access, to_degrees, to_radians, recip, next_up/down, constants, Duration.
+
+**Std only** in 1.98.1 (the core versions are unstable "float math in core"): floor, ceil, round, round_ties_even, trunc, fract, sqrt, cbrt, powi, powf, exp, ln, log&#42;, hypot, trig, mul_add, rem_euclid. So no_std code cannot call those without a maths crate.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+parse/format round trips (see std_num_parsing_formatting section 7), hyperbolic and inverse trig (same shape), exp2, div_euclid, the little/native-endian byte forms, algebraic&#95;&#42; (1.98, permits reordering so results are not reproducible), abs_sub (deprecated), f16/f128, gamma/erf/maximum/minimum (unstable), to_int_unchecked (unsafe).
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Round half away from zero / half to even</td><td><code>round() / round_ties_even()</code></td></tr><tr><td>Toward -inf / +inf / zero</td><td><code>floor() / ceil() / trunc()</code></td></tr><tr><td>Compare for sorting</td><td><code>total_cmp</code></td></tr><tr><td>Keep inside bounds</td><td><code>clamp(lo, hi)        (NaN stays NaN!)</code></td></tr><tr><td>Check input is a usable number</td><td><code>is_finite()</code></td></tr><tr><td>Approximately equal</td><td><code>|a-b| &lt;= max(abs_tol, rel_tol * max(|a|,|b|))</code></td></tr><tr><td>Distance without overflow</td><td><code>dx.hypot(dy)</code></td></tr><tr><td>Angle of a vector</td><td><code>y.atan2(x)           (note the argument order)</code></td></tr><tr><td>Wrap an angle into 0..360</td><td><code>rem_euclid(360.0)</code></td></tr><tr><td>Average two values without overflow</td><td><code>midpoint</code></td></tr><tr><td>Exact bit identity / hashing</td><td><code>to_bits</code></td></tr><tr><td>Seconds &lt;</td><td><code>Duration                       -&gt; as_secs_f64 / try_from_secs_f64 PRECISION (std docs): sqrt is correctly rounded. Transcendental functions and powi have "unspecified precision" that may vary by platform, Rust version and even between calls, so every assert on them here uses a tolerance.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/primitive.f64.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/primitive.f64.html</a></li><li><a href="https://docs.oracle.com/cd/E19957-01/806-3568/ncg_goldberg.html" target="_blank" rel="noreferrer">https://docs.oracle.com/cd/E19957-01/806-3568/ncg_goldberg.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/primitive.f64.html"
+url = "https://doc.rust-lang.org/std/primitive.f64.html"
+
+[[sources]]
+title = "docs.oracle.com/cd/E19957-01/806-3568/ncg_goldberg.html"
+url = "https://docs.oracle.com/cd/E19957-01/806-3568/ncg_goldberg.html"

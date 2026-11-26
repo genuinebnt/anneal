@@ -1,0 +1,88 @@
+title = "Panics"
+module = "Standard library and core"
+module_order = 2
+chapter = "Processes, signals and networking"
+chapter_order = 8
+order = 102
+kind = "recipe"
+lede = "panics (payloads, catch_unwind, hooks, drop order), ending a process (exit, abort, ExitCode) and running child processes with std::process::Command."
+level = "intermediate"
+code = ["examples/std_tour/std_panic_process_exit_catch.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>worker isolation</li><li>test harnesses</li><li>CLI exit codes</li><li>running external tools with pipes and timeouts</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>keeping a server alive when one request handler panics</li><li>crash reporting hooks</li><li><code>git</code>/<code>ffmpeg</code> wrappers</li><li>health-check commands</li><li>supervising a subprocess</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>std::panic</code></li><li><code>std::assert</code></li><li><code>std::unreachable</code></li><li><code>Option::expect</code></li><li><code>Result::unwrap</code></li><li><code>std::process::Command::new</code></li><li><code>Command::arg</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Command::args</code></li><li><code>Command::output</code></li><li><code>Command::status</code></li><li><code>Command::spawn</code></li><li><code>Command::stdin</code></li><li><code>Command::stdout</code></li><li><code>Command::stderr</code></li><li><code>Command::env</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Command::envs</code></li><li><code>Command::current_dir</code></li><li><code>Stdio::piped</code></li><li><code>Stdio::null</code></li><li><code>Child::wait</code></li><li><code>Child::wait_with_output</code></li><li><code>Child::try_wait</code></li><li><code>Child::kill</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Child::id</code></li><li><code>ExitStatus::success</code></li><li><code>ExitStatus::code</code></li><li><code>std::os::unix::process::ExitStatusExt::signal</code></li><li><code>std::process::ExitCode</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::process::Termination</code></li><li><code>std::process::exit</code></li><li><code>std::process::abort</code></li><li><code>std::process::id</code></li><li><code>std::panic::catch_unwind</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::panic::AssertUnwindSafe</code></li><li><code>std::panic::resume_unwind</code></li><li><code>std::panic::panic_any</code></li><li><code>std::panic::set_hook</code></li><li><code>std::panic::take_hook</code></li></ul>
+
+<ul class="cb-g-names"><li><code>PanicHookInfo::payload</code></li><li><code>PanicHookInfo::payload_as_str</code></li><li><code>PanicHookInfo::location</code></li><li><code>std::panic::Location::caller</code></li><li><code>std::thread::panicking</code></li></ul>
+
+<ul class="cb-g-names"><li><code>JoinHandle::join</code></li><li><code>Command::get_program</code></li><li><code>Command::get_args</code></li><li><code>Mutex::is_poisoned</code></li><li><code>PoisonError::into_inner</code></li><li><code>Mutex::clear_poison</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/panic/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/panic/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+panic!/assert!/unreachable! and `Location` are core; catch_unwind, hooks, resume_unwind, panic_any, process (Command, exit, abort, ExitCode, Termination), thread and Mutex are std. `AssertUnwindSafe` is core (`core::panic`). Also: <https://doc.rust-lang.org/std/process/index.html>
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+always_abort, update_hook, ExitStatus::exit_ok (unstable), the unix `pre_exec` (unsafe), uid/gid/ process_group extensions, io::pipe (see the io pages), `#[panic_handler]` (no_std only), panic=abort cannot be demonstrated inside one build profile (described below).
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>A bug / broken invariant</td><td><code>panic! / assert! / unreachable! / expect("why it holds")</code></td></tr><tr><td>An expected failure (input, I/O)</td><td><code>Result</code></td></tr><tr><td>Isolate a panic in a worker</td><td><code>thread::spawn(..).join()  or catch_unwind</code></td></tr><tr><td>Re-raise after cleanup</td><td><code>resume_unwind(payload)</code></td></tr><tr><td>Read the message from a payload</td><td><code>downcast_ref::&lt;&amp;str&gt;() then ::&lt;String&gt;()</code></td></tr><tr><td>Log every panic once</td><td><code>set_hook (process-wide)</code></td></tr><tr><td>Set the exit status</td><td><code>return ExitCode from main (destructors run)</code></td></tr><tr><td>Quit from deep inside (no destructors)</td><td><code>process::exit(code)</code></td></tr><tr><td>Die immediately</td><td><code>process::abort()</code></td></tr><tr><td>Run and capture output</td><td><code>Command::output()</code></td></tr><tr><td>Run, inherit the terminal</td><td><code>Command::status()</code></td></tr><tr><td>Stream or feed a child</td><td><code>spawn() with Stdio::piped(), then wait() PANIC STRATEGY: by default a panic UNWINDS the thread, running destructors. With panic = "abort" in a Cargo profile the process aborts after the hook runs: no destructors, catch_unwind catches nothing, a panicking thread takes the whole process down. So a library must not rely on catch_unwind for correctness.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/panic/index.html> , <https://doc.rust-lang.org/std/process/index.html> ,
+
+```text
+https://doc.rust-lang.org/nomicon/unwinding.html
+```
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/panic/index.html"
+url = "https://doc.rust-lang.org/std/panic/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/process/index.html"
+url = "https://doc.rust-lang.org/std/process/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/unwinding.html"
+url = "https://doc.rust-lang.org/nomicon/unwinding.html"

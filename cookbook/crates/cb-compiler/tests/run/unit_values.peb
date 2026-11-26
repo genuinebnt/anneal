@@ -1,0 +1,9 @@
+fn nothing() {}
+fn also() -> () { () }
+fn main() {
+    let u = nothing();
+    let v = also();
+    println(to_str(u == v));
+    print(u);
+    println("");
+}

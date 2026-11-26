@@ -1,0 +1,54 @@
+title = "A Datalog engine"
+module = "Databases"
+module_order = 8
+chapter = "Analytics, time series and streaming"
+chapter_order = 8
+order = 437
+kind = "recipe"
+lede = "Parser, safety checks, stratified negation/aggregation, naive vs semi-naive, indexes, magic sets."
+level = "advanced"
+code = ["examples/database/datalog_engine_semi_naive.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>program analysis</li><li>access control/policy engines</li><li>graph reachability</li><li>knowledge graphs</li><li>query optimisers (magic sets)</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+Soufflé (points-to and security analyses over large codebases), Doop (Java pointer analysis), CodeQL and Semmle QL descend from Datalog, Datomic queries, LogicBlox, Differential Datalog, Cozo, Google's Zanzibar-style permission checks as recursive group membership, and magic-set rewriting inside SQL engines for recursive CTEs.
+
+Course: CMU 15-721 (recursive queries) and Abiteboul-Hull-Vianu "Foundations of Databases" (the "Alice book").
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**What**. Datalog is SQL's recursive cousin: a program is **facts** (`edge(1,2).`) and **rules** (`path(X,Z) :- path(X,Y), edge(Y,Z).`); lower-case terms are constants, Capitalised terms are variables; the answer is the least set of facts closed under the rules. This file builds the whole pipeline:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Parser</div><div class="cb-g-says"><p>A tiny lexer plus recursive-descent parser for facts, rules, <code>not p(..)</code>, <code>X != Y</code>, aggregate heads <code>n(X, count(Y))</code>, and a goal <code>?- path(1, X).</code></p></div></div><div class="cb-g-term"><div class="cb-g-name">Safety</div><div class="cb-g-says"><p>Every head variable and every variable under negation or <code>!=</code> must also occur in a <strong>positive</strong> body atom, otherwise the result could be infinite or ill-defined (<code>p(X) :- not q(X).</code> is rejected).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Stratification</div><div class="cb-g-says"><p>Build the predicate dependency graph; an edge is <strong>strict</strong> when it goes through <code>not</code> or an aggregate. If a strict edge lies on a cycle the program has no clean meaning (<code>win(X) :- move(X,Y), not win(Y).</code>) and is rejected.</p><p>Otherwise stratum(h) = max over body predicates of stratum(b) + (1 if strict) is computed by relaxation, and strata are evaluated bottom-up so a negated or aggregated relation is <strong>complete</strong> before anyone looks at it.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Naive</div><div class="cb-g-says"><p>Evaluation re-applies every rule to the full database until nothing new appears: round k recomputes every fact found in rounds &lt; k. <strong>Semi-naive</strong> keeps a <strong>delta</strong> (the tuples new in the previous round) and, for a rule with recursive body atoms b_1..b_m, evaluates m variants: variant i joins <strong>delta</strong> at b_i, <strong>old</strong> (full minus delta) at b_j for j&lt;i and <strong>full</strong> for j&gt;i.</p><p>Every new derivation uses at least one new tuple, and the <strong>old/full</strong> split makes each derivation appear in exactly one variant. Storage trick: a relation is an append-only Vec, so "delta" and "old" are just index ranges into it.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Indexes</div><div class="cb-g-says"><p>The join plan for each rule variant is chosen greedily (start from the delta atom, then the atom with the most already-bound columns; filters run as soon as their variables are bound). The bound-column sets of the chosen plan <strong>are</strong> the indexes the engine builds (hash maps from key columns to ascending tuple positions), so no index is built that no rule uses.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Aggregation</div><div class="cb-g-says"><p>(count/min/max/sum over the <strong>distinct</strong> values of the aggregate variable per group) is evaluated in a stratum above its input, once, because aggregates are non-monotonic.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Magic sets (lite)</div><div class="cb-g-says"><p>For a goal like <code>path(1,X)</code> (binding pattern <code>bf</code>) rewrite the program so bottom-up evaluation only derives facts relevant to the goal: each IDB atom gets an <strong>adornment</strong> (b/f per argument, propagated left to right through the body), a <code>m_p__bf(bound args)</code> "magic" predicate collects the bindings that are ever asked for, every rule is guarded by its magic atom, and each IDB body atom spawns a rule that passes bindings sideways to it.</p><p>Only positive programs are supported.</p></div></div></div>
+
+**Checks**. (1) Worked programs with asserted answers: transitive closure with a cycle, same-generation, an Andersen-style points-to analysis, group-inheritance access control with deny rules and `count`, `min` plus a join on the min.
+
+(2) Rejection of unstratifiable, unsafe and arity-inconsistent programs, plus 100 random rings that are rejected iff they contain a negative edge.
+
+(3) 500 random programs (recursion, negation, `!=`, constants, aggregates) where **naive** == **semi-naive** == a brute-force oracle that enumerates every variable assignment over the active domain, and magic-set answers equal the filtered full answers for the goals that rewrite.
+
+(4) Work counters (tuples fetched through indexes) show the semi-naive saving, asserted on a long chain.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Ceri, Gottlob, Tanca, "What you always wanted to know about Datalog (and never dared to ask)" (cited by title; no URL checked) Bancilhon, Maier, Sagiv, Ullman, "Magic Sets and Other Strange Ways to Implement Logic Programs" (cited by title)
+
+```text
+Soufflé documentation https://souffle-lang.github.io/
+```
+"""
+
+[[sources]]
+title = "souffle-lang.github.io"
+url = "https://souffle-lang.github.io/"

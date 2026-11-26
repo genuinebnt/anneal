@@ -1,0 +1,72 @@
+title = "Rust ownership borrowing questions and answers"
+module = "Worked questions"
+module_order = 14
+chapter = "Rust concept answers"
+chapter_order = 1
+order = 671
+kind = "recipe"
+lede = "Ownership, borrowing, lifetimes and Drop: the questions every Rust interview opens with."
+level = "intermediate"
+code = ["examples/interview/rust_ownership_borrowing_qa.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>interview preparation</li><li>onboarding reviews</li><li>explaining borrow-checker errors to teammates</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>screening interviews</li><li>code-review vocabulary</li><li>debugging E0382/E0499/E0502/E0597/E0505 errors</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://www.techinterview.org/post/3233474457/rust-interview-questions-2025-ownership-borrowing-lifetimes-traits-async-await-error-handling-smart-pointers-concurrency/>
+
+<https://www.techinterview.org/post/3233460429/rust-interview-questions/> and <https://codeforgeek.com/rust-interview-questions/>
+
+<https://github.com/devinterview-io/rust-interview-questions> and <https://flakm.github.io/posts/rust_interview_questions>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Question bank Q1**. What is the difference between move, Copy and Clone? [Easy] [asked: very common] Q2. Why does `let a = b;` invalidate `b` when `b` is a String but not when it is an i32? [Easy] [asked: very common] Q3.
+
+State the borrowing rules. Why "one &amp;mut XOR many &amp;"? [Easy] [asked: very common] Q4. What are non-lexical lifetimes (NLL)?
+
+Show code that compiles only because of NLL. [Medium] [asked: very common] Q5. How does Rust prevent dangling references? [Easy] [asked: very common] Q6. What are the lifetime elision rules?
+
+When must you write lifetimes explicitly? [Medium] [asked: very common] Q7. Does `'static` mean "lives forever"? Difference between `T: 'static` and `&'static T`? [Hard] [asked: very common] Q8.
+
+String vs &amp;str vs &amp;String: which should a function parameter take? [Easy] [asked: very common] Q9. What are slices, and how does `split_at_mut` give two `&mut` into one buffer? [Medium] [asked: common] Q10. Shadowing vs mutation: what is the difference? [Easy] [asked: common] Q11.
+
+In what order are values dropped? [Medium] [asked: very common] Q12. What happens on a partial move out of a struct? What is still usable? [Medium] [asked: common] Q13.
+
+How do `mem::take`, `mem::replace` and `mem::swap` help move out of a `&mut`? [Medium] [asked: common] Q14. How do you mutate a collection while iterating it? [Medium] [asked: common] Q15. What do `Option<&mut T>`, `as_mut`, `as_ref` and `take` do? [Medium] [asked: common] Q16.
+
+Why does `v.push(v.len())` compile? (two-phase borrows) [Hard] [asked: occasional] Q17. Is `clone()` always the right fix for a borrow-checker error? [Medium] [asked: very common]
+"""
+
+[[sources]]
+title = "techinterview.org/post/3233474457/rust-interview-questions-2025-ownership-bor…"
+url = "https://www.techinterview.org/post/3233474457/rust-interview-questions-2025-ownership-borrowing-lifetimes-traits-async-await-error-handling-smart-pointers-concurrency/"
+
+[[sources]]
+title = "techinterview.org/post/3233460429/rust-interview-questions"
+url = "https://www.techinterview.org/post/3233460429/rust-interview-questions/"
+
+[[sources]]
+title = "codeforgeek.com/rust-interview-questions"
+url = "https://codeforgeek.com/rust-interview-questions/"
+
+[[sources]]
+title = "github.com/devinterview-io/rust-interview-questions"
+url = "https://github.com/devinterview-io/rust-interview-questions"
+
+[[sources]]
+title = "flakm.github.io/posts/rust_interview_questions"
+url = "https://flakm.github.io/posts/rust_interview_questions"

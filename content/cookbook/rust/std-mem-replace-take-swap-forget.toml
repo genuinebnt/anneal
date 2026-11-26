@@ -1,0 +1,76 @@
+title = "`std::mem` by use case"
+module = "Standard library and core"
+module_order = 2
+chapter = "Memory and low level"
+chapter_order = 6
+order = 92
+kind = "recipe"
+lede = "Take, replace, swap, drop, forget, sizes, discriminants, `ManuallyDrop`, `MaybeUninit`."
+level = "intermediate (sections 7 and 8 are advanced)"
+code = ["examples/std_tour/std_mem_replace_take_swap_forget.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>state machines behind <code>&amp;mut self</code></li><li>linked structures</li><li>buffer reuse</li><li>layout checks</li><li>careful unsafe code</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>move a field out of <code>&amp;mut self</code> and put something back</li><li>flush a batch with <code>mem::take</code></li><li>double buffering</li><li>compare enum variants</li><li>initialise an array element by element</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>std::mem::take</code></li><li><code>std::mem::replace</code></li><li><code>std::mem::swap</code></li><li><code>std::mem::drop</code></li><li><code>std::mem::forget</code></li><li><code>std::mem::size_of</code></li><li><code>std::mem::size_of_val</code></li><li><code>std::mem::align_of</code></li><li><code>std::mem::align_of_val</code></li><li><code>std::mem::needs_drop</code></li><li><code>std::mem::discriminant</code></li><li><code>std::mem::offset_of!</code></li><li><code>std::mem::zeroed</code></li><li><code>std::mem::ManuallyDrop::new</code></li><li><code>ManuallyDrop::into_inner</code></li><li><code>ManuallyDrop::drop</code></li><li><code>std::mem::MaybeUninit::uninit</code></li><li><code>MaybeUninit::new</code></li><li><code>MaybeUninit::zeroed</code></li><li><code>MaybeUninit::write</code></li><li><code>MaybeUninit::as_ptr</code></li><li><code>MaybeUninit::as_mut_ptr</code></li><li><code>MaybeUninit::assume_init</code></li><li><code>MaybeUninit::assume_init_ref</code></li><li><code>MaybeUninit::assume_init_drop</code></li><li><code>Option::take</code></li><li><code>Option::replace</code></li><li><code>Vec::swap_remove</code></li><li><code>Box::leak</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/mem/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/mem/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+core: all of `std::mem` is `core::mem` re-exported, including `ManuallyDrop` and `MaybeUninit`. `size_of`, `size_of_val`, `align_of`, `align_of_val` and `drop` are also in the prelude. alloc: `Box::leak`, `Vec::swap_remove`.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+`transmute` and `transmute_copy` (deliberately: use `to_bits`, `from_le_bytes`, pointer casts; see Nomicon), `variant_count`, `MaybeUninit` array helpers (`array_assume_init`, `transpose`), `std::array::try_from_fn` (unstable in 1.98.1); `Pin` (see the pin recipes). **Unsafe**: every block states why it is sound.
+
+This file asserts behaviour on the paths it runs; it does not **prove** soundness. MIRI: run on 2026-11-26 with rustc 1.100.0-nightly (5a2be9f5f 2026-09-06) and `-Zmiri-ignore-leaks` (the file leaks **on purpose** with forget and Box::leak): no undefined behaviour under Stacked Borrows or Tree Borrows on the executed paths (smaller loops under `cfg(miri)`).
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Move out of <code>&amp;mut</code> and leave the default</td><td><code>mem::take(&amp;mut self.items) (needs Default; no allocation for Vec/String)</code></td></tr><tr><td>Move out and leave a specific value</td><td><code>mem::replace(&amp;mut self.state, State::Idle)</code></td></tr><tr><td>Same for an Option</td><td><code>opt.take() / opt.replace(v)</code></td></tr><tr><td>Exchange two places</td><td><code>mem::swap(&amp;mut a, &amp;mut b); two items of ONE slice: slice.swap(i, j)</code></td></tr><tr><td>End a borrow or release a lock early</td><td><code>drop(guard) (a no-op for Copy values and references)</code></td></tr><tr><td>Hand ownership to C or a raw pointer</td><td><code>Box::into_raw / Vec::leak / ManuallyDrop, NOT forget after reading a pointer</code></td></tr><tr><td>"which variant is this" without the data</td><td><code>mem::discriminant(&amp;a) == mem::discriminant(&amp;b)</code></td></tr><tr><td>Layout assertions for FFI / file formats</td><td><code>#[repr(C)] + size_of, align_of, offset_of! in a const _: () = assert!(..)</code></td></tr><tr><td>Skip drop bookkeeping in generic code</td><td><code>needs_drop::&lt;T&gt;()</code></td></tr><tr><td>Delay or reorder a destructor</td><td><code>ManuallyDrop&lt;T&gt;</code></td></tr><tr><td>Build <code>[T; N]</code> safely</td><td><code>std::array::from_fn first; MaybeUninit only when it cannot express the need KEY FACT: leaking is SAFE (forget, Rc cycles, Box::leak). So unsafe code must never rely on a destructor running for memory safety.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/mem/union.MaybeUninit.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/mem/union.MaybeUninit.html</a></li><li><a href="https://doc.rust-lang.org/nomicon/leaking.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/nomicon/leaking.html</a></li><li><a href="https://doc.rust-lang.org/nomicon/unchecked-uninit.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/nomicon/unchecked-uninit.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/mem/index.html"
+url = "https://doc.rust-lang.org/std/mem/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/mem/union.MaybeUninit.html"
+url = "https://doc.rust-lang.org/std/mem/union.MaybeUninit.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/leaking.html"
+url = "https://doc.rust-lang.org/nomicon/leaking.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon/unchecked-uninit.html"
+url = "https://doc.rust-lang.org/nomicon/unchecked-uninit.html"

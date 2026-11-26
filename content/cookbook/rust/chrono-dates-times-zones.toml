@@ -1,0 +1,70 @@
+title = "Chrono"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Data, text and encoding crates"
+chapter_order = 1
+order = 122
+kind = "recipe"
+lede = "Dates, times, durations, formatting, time zones, DST and schedules"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/chrono_dates_times_zones.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>billing periods</li><li>schedulers</li><li>log/event timestamps</li><li>report windows</li><li>APIs that exchange RFC 3339</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>storing <code>DateTime&lt;Utc&gt;</code> in databases</li><li>rendering local times for users</li><li>business-day SLAs</li><li>cron-like recurring jobs</li><li>age/anniversary maths</li><li>JSON APIs (serde)</li><li>parsing log timestamps in odd formats</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>NaiveDate::from_ymd_opt</code></li><li><code>NaiveDate::checked_add_months</code></li><li><code>NaiveDate::checked_add_days</code></li><li><code>NaiveDate::weekday</code></li><li><code>NaiveDate::iso_week</code></li><li><code>NaiveDate::signed_duration_since</code></li><li><code>NaiveDate::succ_opt</code></li><li><code>NaiveDate::with_day</code></li><li><code>NaiveTime::from_hms_opt</code></li><li><code>NaiveDateTime::and_utc</code></li><li><code>NaiveDate::and_hms_opt</code></li><li><code>DateTime::parse_from_rfc3339</code></li><li><code>DateTime::parse_from_rfc2822</code></li><li><code>DateTime::to_rfc3339</code></li><li><code>DateTime::with_timezone</code></li><li><code>DateTime::timestamp</code></li><li><code>DateTime::from_timestamp</code></li><li><code>Utc::now</code></li><li><code>Utc::with_ymd_and_hms</code></li><li><code>TimeZone::from_local_datetime</code></li><li><code>LocalResult</code></li><li><code>Duration::hours</code></li><li><code>TimeDelta::num_minutes</code></li><li><code>NaiveDateTime::parse_from_str</code></li><li><code>format</code></li><li><code>Datelike::month</code></li><li><code>Timelike::hour</code></li><li><code>FixedOffset::east_opt</code></li><li><code>Months</code></li><li><code>Weekday::succ</code></li><li><code>DateTime::signed_duration_since</code></li><li><code>DurationRound::duration_trunc</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/chrono/0.4/chrono/" target="_blank" rel="noreferrer">https://docs.rs/chrono/0.4/chrono/</a></li></ul>
+"""
+
+[[sections]]
+heading = "Crates"
+body = """
+chrono = "0.4" (0.4.45 is current; this chapter pins &#94;0.4), chrono-tz = "0.10"
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+`Local` assertions (machine dependent; only constructed), `NaiveWeek` details, deprecated `Duration::seconds` family panics, `serde::ts_*` helpers beyond one example.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Store an instant</td><td><code>DateTime&lt;Utc&gt; (or i64 epoch seconds); convert at the edge</code></td></tr><tr><td>A calendar date without a zone</td><td><code>NaiveDate (birthday, due date, billing day)</code></td></tr><tr><td>Parse "2024-03-05T10:00:00+02:00"</td><td><code>DateTime::parse_from_rfc3339 (keeps the offset: DateTime&lt;FixedOffset&gt;)</code></td></tr><tr><td>Parse a custom log format</td><td><code>NaiveDateTime::parse_from_str(s, "%d/%b/%Y:%H:%M:%S") then .and_utc()</code></td></tr><tr><td>Add 1 month safely</td><td><code>date.checked_add_months(Months::new(1)) (clamps Jan 31 -&gt; Feb 28/29)</code></td></tr><tr><td>Add 24h vs "same time tomorrow"</td><td><code>Duration::hours(24) on UTC vs add Days on the LOCAL naive time</code></td></tr><tr><td>Difference between two instants</td><td><code>a.signed_duration_since(b) -&gt; TimeDelta, then num_seconds()/num_days()</code></td></tr><tr><td>Weekday / ISO week</td><td><code>date.weekday(), date.iso_week().week()</code></td></tr><tr><td>Convert zone</td><td><code>dt.with_timezone(&amp;Tz) (never re-interpret the wall clock!)</code></td></tr><tr><td>A local wall time in a real zone</td><td><code>tz.from_local_datetime(&amp;naive) -&gt; LocalResult (None in gaps, Ambiguous in overlaps)</code></td></tr><tr><td>Epoch seconds</td><td><code>instant              -&gt; DateTime::from_timestamp(secs, nanos) -&gt; Option</code></td></tr><tr><td>Round to the hour/day</td><td><code>DurationRound::duration_trunc / DateTime::date_naive</code></td></tr><tr><td>First/last day of month</td><td><code>with_day(1) ; next month first day minus 1 day</code></td></tr><tr><td>JSON</td><td><code>chrono's serde feature: RFC 3339 strings; ts_seconds for numbers</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>chrono docs <a href="https://docs.rs/chrono" target="_blank" rel="noreferrer">https://docs.rs/chrono</a></li><li>IANA tz notes <a href="https://data.iana.org/time-zones/tz-link.html" target="_blank" rel="noreferrer">https://data.iana.org/time-zones/tz-link.html</a></li><li>"Falsehoods programmers believe about time" (Noah Sussman, title only)</li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/chrono/0.4/chrono"
+url = "https://docs.rs/chrono/0.4/chrono/"
+
+[[sources]]
+title = "docs.rs/chrono"
+url = "https://docs.rs/chrono"
+
+[[sources]]
+title = "data.iana.org/time-zones/tz-link.html"
+url = "https://data.iana.org/time-zones/tz-link.html"

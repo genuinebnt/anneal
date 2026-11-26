@@ -1,0 +1,5 @@
+# BuildKit reads this file because it sits next to the Dockerfile.
+**/target
+**/.git
+**/*.db
+**/.env*

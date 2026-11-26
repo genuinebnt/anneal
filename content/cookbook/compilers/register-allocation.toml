@@ -1,0 +1,116 @@
+title = "Register allocation"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Back ends"
+chapter_order = 6
+order = 635
+kind = "guide"
+lede = "LLVM greedy, regalloc2 (Cranelift), linear scan (HotSpot C1, V8), graph coloring (GCC's IRA)"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>Register allocation maps an unlimited number of virtual registers onto a few physical ones. Where two values are live at once they need different registers; where no register is free, a value is <em>spilled</em> to the stack. The problem has four parts:</p>
+
+<ul> <li><b>Allocation</b>: which values get registers.</li> <li><b>Assignment</b>: which register each one gets.</li> <li><b>Spilling</b>: where to insert loads and stores.</li> <li><b>Coalescing</b>: removing copies by giving source and destination the same register.</li> </ul>
+
+<p>The inputs come from liveness (<a href="/cookbook/p/dataflow-analysis-and-abstract-interpretation">chapter 10</a>): live intervals, or live ranges with holes.</p>
+
+<p><b>Graph coloring</b> (Chaitin) builds an interference graph and colors it with <em>k</em> colors. The main steps:</p>
+
+<ol> <li><b>Simplify</b>: remove any node with degree &lt; <em>k</em>, since it can always be colored later.</li> <li><b>Spill</b>: when none is left, pick a spill candidate by cost divided by degree.</li> <li><b>Select</b>: pop nodes in reverse order and assign colors.</li> </ol>
+
+<p>Briggs's <em>optimistic</em> variant pushes spill candidates too, and only spills if they really get no color. Iterated register coalescing (George–Appel) interleaves conservative coalescing with simplification.</p>
+
+<p><b>Linear scan</b> (Poletto–Sarkar) sorts live intervals by start and sweeps once, keeping an “active” list. It is much faster, and slightly worse code. Second-chance binpacking and interval splitting (Wimmer–Mössenböck) close most of the gap. It is the standard choice for JITs.</p>
+
+<p><b>SSA-based allocation</b> (Hack et al.) exploits the fact that SSA interference graphs are chordal. Spilling can then be decided first, and coloring is optimal and linear afterwards. Leaving SSA then becomes a separate coalescing problem.</p>
+
+```rust title="Linear scan (Poletto and Sarkar 1999)"
+#[derive(Clone, Copy, Debug)]
+pub struct Interval { pub vreg: u32, pub start: u32, pub end: u32 }
+
+#[derive(Debug, PartialEq)]
+pub enum Loc { Reg(u8), Stack(u32) }
+
+/// `intervals` must be sorted by start. `num_regs` must be at least 1.
+pub fn linear_scan(intervals: &[Interval], num_regs: u8) -> HashMap<u32, Loc> {
+    let mut free: Vec<u8> = (0..num_regs).rev().collect();
+    let mut active: Vec<(Interval, u8)> = Vec::new();          // sorted by end
+    let mut result = HashMap::new();
+    let mut next_slot = 0;
+
+    for &cur in intervals {
+        // Expire intervals that ended before this one starts; their registers become free.
+        active.retain(|&(iv, r)| if iv.end < cur.start { free.push(r); false } else { true });
+
+        let insert_sorted = |active: &mut Vec<(Interval, u8)>, iv: Interval, r: u8| {
+            let pos = active.partition_point(|(a, _)| a.end <= iv.end);
+            active.insert(pos, (iv, r));
+        };
+
+        if let Some(r) = free.pop() {
+            result.insert(cur.vreg, Loc::Reg(r));
+            insert_sorted(&mut active, cur, r);
+        } else {
+            // Spill whichever lives longer: cur, or the active interval ending last.
+            let (last, r) = *active.last().unwrap();
+            if last.end > cur.end {
+                result.insert(last.vreg, Loc::Stack(next_slot));
+                result.insert(cur.vreg, Loc::Reg(r));
+                active.pop();
+                insert_sorted(&mut active, cur, r);
+            } else {
+                result.insert(cur.vreg, Loc::Stack(next_slot));
+            }
+            next_slot += 1;
+        }
+    }
+    result
+}
+```
+
+```rust title="Optimistic graph coloring (Chaitin–Briggs simplify/select)"
+/// Returns a color per node, or None where the node must be spilled.
+pub fn color(adj: &[HashSet<usize>], k: usize, spill_cost: &[f32]) -> Vec<Option<usize>> {
+    let n = adj.len();
+    let mut degree: Vec<usize> = adj.iter().map(HashSet::len).collect();
+    let mut removed = vec![false; n];
+    let mut stack = Vec::with_capacity(n);
+
+    for _ in 0..n {
+        let alive = || (0..n).filter(|&v| !removed[v]);
+        // Simplify: a node with < k neighbours is always colorable, so remove it.
+        // Otherwise push the cheapest spill candidate optimistically (Briggs).
+        let pick = alive().find(|&v| degree[v] < k).unwrap_or_else(|| {
+            alive().min_by(|&a, &b| {
+                let (ca, cb) = (spill_cost[a] / degree[a] as f32, spill_cost[b] / degree[b] as f32);
+                ca.total_cmp(&cb)
+            }).unwrap()
+        });
+        removed[pick] = true;
+        stack.push(pick);
+        for &w in &adj[pick] { if !removed[w] { degree[w] -= 1; } }
+    }
+
+    // Select: give each node a color its already-colored neighbours don't use.
+    let mut colors = vec![None; n];
+    while let Some(v) = stack.pop() {
+        let used: HashSet<usize> = adj[v].iter().filter_map(|&w| colors[w]).collect();
+        colors[v] = (0..k).find(|c| !used.contains(c));          // None: actual spill
+    }
+    colors
+}
+```
+
+<p>After a spill, insert a store after each definition and a load before each use. That creates new tiny live ranges, so rebuild the graph and repeat. Rematerialization avoids memory entirely for values that are cheap to recompute, such as constants and frame addresses.</p>
+
+<div class="cb-g-tip"><h3>What makes real allocators hard</h3> <ul> <li><b>Constraints.</b> Calling conventions fix argument and return registers and clobber caller-saved registers at calls. x86 two-address instructions tie the destination to the first source. Some instructions need specific registers, such as x86 shifts using <code>cl</code>.</li> <li><b>Register classes and aliasing.</b> <code>al</code>, <code>ax</code>, <code>eax</code> and <code>rax</code> overlap. Float and vector registers form separate banks.</li> <li><b>Live-range splitting</b> is where most of the quality comes from. It lets a value live in a register in hot code and in memory elsewhere.</li> <li><b>Moves at edges</b> are parallel copies; reuse the sequentialization from <a href="/cookbook/p/ssa-construction-and-destruction">chapter 12</a>.</li> </ul></div>
+
+<div class="cb-g-tip"><h3>Test it: a symbolic checker</h3> <p>regalloc2 ships a checker that abstractly interprets the allocated program. It tracks, for every physical register and stack slot, which virtual register it holds on every path, and verifies that each use reads the right virtual register. Combined with fuzzing over random programs, this found bugs that years of normal testing had missed. It's worth building for any allocator you write.</p></div>
+"""
+
+[[sources]]
+title = "Fallin, “Cranelift, Part 3: Correctness in Register Allocation”"
+url = "https://cfallin.org/blog/"

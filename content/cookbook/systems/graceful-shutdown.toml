@@ -1,0 +1,34 @@
+title = "Graceful shutdown"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Async Rust"
+chapter_order = 4
+order = 269
+kind = "recipe"
+lede = "Stop accepting work, drain what is queued, then exit."
+level = "intermediate"
+code = ["examples/async/graceful_shutdown.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+worker pool / service stages.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+servers and workers: finish in-flight work on SIGTERM instead of dropping jobs (Kubernetes rolling deploys).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: a `watch` channel broadcasts "shutting down". The worker `select!`s between a job and that signal; when it fires, it drains jobs already queued (`try_recv`) before returning. No job is lost.
+
+Docs: <https://tokio.rs/tokio/topics/shutdown>
+"""
+
+[[sources]]
+title = "tokio.rs/tokio/topics/shutdown"
+url = "https://tokio.rs/tokio/topics/shutdown"

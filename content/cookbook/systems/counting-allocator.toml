@@ -1,0 +1,38 @@
+title = "Counting allocator"
+module = "Performance and systems"
+module_order = 7
+chapter = "Memory layout and allocation"
+chapter_order = 2
+order = 283
+kind = "recipe"
+lede = "count heap allocations with a custom global allocator, then remove them."
+level = "advanced"
+code = ["examples/perf/counting_allocator.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>stage 8</li><li>hot loops</li><li>finding hidden allocations (String/Vec/Box/clone/format!)</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+finding hidden allocations in hot paths; asserting allocation counts in tests.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Allocation is often the real cost in Rust code, and it is invisible in the source. A wrapper around the system allocator that counts calls lets you **assert** "this function allocates at most N times", which makes a perf test deterministic (unlike timing). Tools: dhat <https://docs.rs/dhat> , heaptrack, cargo-flamegraph.
+
+Tactics shown: `with_capacity`, reusing a buffer (`clear()` keeps capacity), `write!` instead of `format!`, borrowing instead of `clone`. Read: <https://nnethercote.github.io/perf-book/heap-allocations.html>
+"""
+
+[[sources]]
+title = "docs.rs/dhat"
+url = "https://docs.rs/dhat"
+
+[[sources]]
+title = "nnethercote.github.io/perf-book/heap-allocations.html"
+url = "https://nnethercote.github.io/perf-book/heap-allocations.html"

@@ -1,0 +1,119 @@
+title = "One data model, seven formats"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Data, text and encoding crates"
+chapter_order = 1
+order = 113
+kind = "recipe"
+lede = "JSON, TOML, YAML, bincode, postcard, MessagePack, CBOR, plus CSV"
+level = "intermediate"
+code = ["crates/cb-crate-tour/examples/serde_formats_json_toml_yaml_bincode.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+choosing a wire/disk format; migrating between formats without surprising data loss.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>JSON for HTTP APIs</li><li>TOML for hand-edited config (Cargo)</li><li>YAML for CI/Kubernetes files</li><li>postcard for embedded and compact RPC</li><li>MessagePack/CBOR for schemaless binary payloads (CBOR is the base of COSE/WebAuthn)</li><li>CSV for exports</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>serde_json::to_vec</code></li><li><code>serde_json::from_slice</code></li><li><code>toml::to_string</code></li><li><code>toml::from_str</code></li><li><code>toml::value::Datetime</code></li><li><code>toml::Table</code></li><li><code>serde_yaml_ng::to_string</code></li><li><code>serde_yaml_ng::from_str</code></li><li><code>bincode::serialize</code></li><li><code>bincode::deserialize</code></li><li><code>bincode::DefaultOptions</code></li><li><code>bincode::Options::with_limit</code></li><li><code>postcard::to_allocvec</code></li><li><code>postcard::from_bytes</code></li><li><code>postcard::take_from_bytes</code></li><li><code>rmp_serde::to_vec</code></li><li><code>rmp_serde::to_vec_named</code></li><li><code>rmp_serde::from_slice</code></li><li><code>ciborium::into_writer</code></li><li><code>ciborium::from_reader</code></li><li><code>csv::Writer::serialize</code></li><li><code>csv::Reader::deserialize</code></li><li><code>csv::ReaderBuilder</code></li><li><code>serde_bytes (#[serde(with = "serde_bytes")])</code></li><li><code>serde_yaml_ng::Deserializer (multi-document)</code></li><li><code>Value::apply_merge</code></li><li><code>postcard::{to_slice, to_allocvec_cobs, from_bytes_cobs, take_from_bytes_cobs}</code></li><li><code>csv::WriterBuilder::has_headers</code></li><li><code>csv::ReaderBuilder::{has_headers, flexible}</code></li><li><code>serde_json::Deserializer::from_str</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://docs.rs/serde_json/1/serde_json/" target="_blank" rel="noreferrer">https://docs.rs/serde_json/1/serde_json/</a></li><li><a href="https://docs.rs/toml/0.8/toml/" target="_blank" rel="noreferrer">https://docs.rs/toml/0.8/toml/</a></li><li><a href="https://docs.rs/serde_yaml_ng/0.10/serde_yaml_ng/" target="_blank" rel="noreferrer">https://docs.rs/serde_yaml_ng/0.10/serde_yaml_ng/</a></li><li><a href="https://docs.rs/bincode/1/bincode/" target="_blank" rel="noreferrer">https://docs.rs/bincode/1/bincode/</a></li><li><a href="https://docs.rs/postcard/1/postcard/" target="_blank" rel="noreferrer">https://docs.rs/postcard/1/postcard/</a></li><li><a href="https://docs.rs/rmp-serde/1/rmp_serde/" target="_blank" rel="noreferrer">https://docs.rs/rmp-serde/1/rmp_serde/</a></li><li><a href="https://docs.rs/ciborium/0.2/ciborium/" target="_blank" rel="noreferrer">https://docs.rs/ciborium/0.2/ciborium/</a></li><li><a href="https://docs.rs/csv/1/csv/" target="_blank" rel="noreferrer">https://docs.rs/csv/1/csv/</a></li></ul>
+"""
+
+[[sections]]
+heading = "Crates"
+body = """
+serde_json = "1", toml = "0.8" (not the newest major line), serde_yaml_ng = "0.10", bincode = "1.3", postcard = "1", rmp-serde = "1", ciborium = "0.2", csv = "1", serde_bytes = "0.11"
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Maintenance status** (checked on crates.io and rustsec.org while writing; check again before you adopt anything):
+
+- `serde_yaml` (dtolnay) is published as 0.9.34+deprecated.
+- `serde_yml` has advisory RUSTSEC-2025-0068 (unsound and unmaintained). Do not use it. <https://rustsec.org/advisories/RUSTSEC-2025-0068.html>
+- `serde_yaml_ng` is **chosen** here: the advisory above lists it as an alternative and keeps the serde_yaml API. Caveat from the same advisory: it still builds on the unmaintained `unsafe-libyaml`; `serde_norway` is the other fork it lists.
+- `bincode` has advisory RUSTSEC-2025-0141 (unmaintained; the team says 1.3.3 is complete). It is shown because existing code uses it; for **new** code prefer postcard (or evaluate the advisory's other alternatives). <https://rustsec.org/advisories/RUSTSEC-2025-0141.html>
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Humans read it, other languages consume it</td><td><code>JSON</code></td></tr><tr><td>Humans EDIT it</td><td><code>TOML (flat-ish config), YAML only if the ecosystem forces it</code></td></tr><tr><td>Compact, both ends are Rust, schema versioned</td><td><code>postcard (NOT self-describing: field order IS the schema)</code></td></tr><tr><td>Compact but self-describing</td><td><code>MessagePack with to_vec_named, or CBOR</code></td></tr><tr><td>Flat rows for spreadsheets</td><td><code>CSV</code></td></tr><tr><td>U64 ids that JavaScript will read</td><td><code>encode as strings</code></td></tr><tr><td>Vec&lt;u8&gt; in MessagePack/CBOR</td><td><code>mark it with serde_bytes, or every byte is encoded as a number</code></td></tr><tr><td>Packet framing for postcard over a serial line</td><td><code>COBS (0x00 never appears inside a frame)</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://serde.rs/#data-formats" target="_blank" rel="noreferrer">https://serde.rs/#data-formats</a></li><li><a href="https://toml.io/en/v1.0.0" target="_blank" rel="noreferrer">https://toml.io/en/v1.0.0</a></li><li><a href="https://postcard.jamesmunns.com/" target="_blank" rel="noreferrer">https://postcard.jamesmunns.com/</a></li><li><a href="https://www.rfc-editor.org/rfc/rfc8949.html" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc8949.html</a></li></ul>
+"""
+
+[[sources]]
+title = "docs.rs/serde_json/1/serde_json"
+url = "https://docs.rs/serde_json/1/serde_json/"
+
+[[sources]]
+title = "docs.rs/toml/0.8/toml"
+url = "https://docs.rs/toml/0.8/toml/"
+
+[[sources]]
+title = "docs.rs/serde_yaml_ng/0.10/serde_yaml_ng"
+url = "https://docs.rs/serde_yaml_ng/0.10/serde_yaml_ng/"
+
+[[sources]]
+title = "docs.rs/bincode/1/bincode"
+url = "https://docs.rs/bincode/1/bincode/"
+
+[[sources]]
+title = "docs.rs/postcard/1/postcard"
+url = "https://docs.rs/postcard/1/postcard/"
+
+[[sources]]
+title = "docs.rs/rmp-serde/1/rmp_serde"
+url = "https://docs.rs/rmp-serde/1/rmp_serde/"
+
+[[sources]]
+title = "docs.rs/ciborium/0.2/ciborium"
+url = "https://docs.rs/ciborium/0.2/ciborium/"
+
+[[sources]]
+title = "docs.rs/csv/1/csv"
+url = "https://docs.rs/csv/1/csv/"
+
+[[sources]]
+title = "rustsec.org/advisories/RUSTSEC-2025-0068.html"
+url = "https://rustsec.org/advisories/RUSTSEC-2025-0068.html"
+
+[[sources]]
+title = "rustsec.org/advisories/RUSTSEC-2025-0141.html"
+url = "https://rustsec.org/advisories/RUSTSEC-2025-0141.html"
+
+[[sources]]
+title = "serde.rs/#data-formats"
+url = "https://serde.rs/#data-formats"
+
+[[sources]]
+title = "toml.io/en/v1.0.0"
+url = "https://toml.io/en/v1.0.0"
+
+[[sources]]
+title = "postcard.jamesmunns.com"
+url = "https://postcard.jamesmunns.com/"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc8949.html"
+url = "https://www.rfc-editor.org/rfc/rfc8949.html"

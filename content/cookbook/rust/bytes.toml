@@ -1,0 +1,38 @@
+title = "Bytes"
+module = "Rust language"
+module_order = 1
+chapter = "Everyday language"
+chapter_order = 3
+order = 27
+kind = "recipe"
+lede = "`&[u8]`, endianness, bit tricks, hex, UTF-8 validation, and a varint codec."
+level = "intermediate"
+code = ["examples/language/bytes.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>file/wire formats (logs, WAL, indexes)</li><li>checksums</li><li>compact ids</li><li>binary protocols</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>binary file formats</li><li>network protocols</li><li>checksums</li><li>index keys</li><li>compact ids (varints in protobuf/Kafka/SQLite)</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+`&[u8]` / `Vec<u8>` are the raw currency of IO. Convert to text only when needed (`from_utf8` validates). Integers have `to_le_bytes/from_le_bytes` (little endian), `_be_` (big endian, network order), `_ne_` (native).
+
+For high-performance byte scanning see BurntSushi's memchr <https://github.com/BurntSushi/memchr> and the `bytes` crate <https://docs.rs/bytes> for cheap shared buffers.
+"""
+
+[[sources]]
+title = "github.com/BurntSushi/memchr"
+url = "https://github.com/BurntSushi/memchr"
+
+[[sources]]
+title = "docs.rs/bytes"
+url = "https://docs.rs/bytes"

@@ -1,0 +1,11 @@
+struct P { x: int }
+fn main() {
+    let a = P { x: 1 };
+    let mut b = a;
+    b.x = 99;
+    println(to_str(a.x) + " " + to_str(b.x));
+    let t = (1, 2);
+    let mut u = t;
+    u.0 = 50;
+    println(to_str(t.0) + " " + to_str(u.0));
+}

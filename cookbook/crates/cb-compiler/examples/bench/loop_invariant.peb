@@ -1,0 +1,27 @@
+// Loop-invariant code motion: every iteration recomputes bounds and constants that
+// depend only on the parameters. Inner loop bounds `w * 4` sit in the loop header.
+fn kernel(w: int, h: int, k: int) -> int {
+    let mut y = 0;
+    let mut acc = 0;
+    while y < h * 2 {
+        let mut x = 0;
+        while x < w * 4 {
+            let wide = k % 13 > 6;
+            let step = k % 7;
+            if wide { acc = (acc + step + x) % 1000003; } else { acc = (acc + x + y) % 1000003; }
+            x += 1;
+        }
+        y += 1;
+    }
+    acc
+}
+
+fn main() {
+    let mut total = 0;
+    let mut r = 0;
+    while r < 10 {
+        total = (total + kernel(64, 100, r + len("ab"))) % 1000003;
+        r += 1;
+    }
+    println(to_str(total));
+}

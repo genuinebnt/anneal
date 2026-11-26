@@ -1,0 +1,5 @@
+error: #[memoize] does not support methods
+ --> tests/ui/memoize_method.rs:5:10
+  |
+5 |     fn f(&self) -> u8 {
+  |          ^^^^^

@@ -1,0 +1,16 @@
+[package]
+name = "cb-macros"
+version = "0.1.0"
+edition = "2024"
+description = "Procedural macros (derive, attribute, function-like) built with syn 2, quote and proc-macro2."
+publish = false
+
+# Proc macros are compiled into a compiler plugin (a dylib loaded by rustc),
+# so they MUST live in their own crate with this flag.
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"

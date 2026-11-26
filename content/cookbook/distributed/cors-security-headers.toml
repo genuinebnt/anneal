@@ -1,0 +1,64 @@
+title = "Cors security headers"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Authentication and web security"
+chapter_order = 2
+order = 527
+kind = "recipe"
+lede = "CORS from first principles, security headers, body limits, timeouts and Retry-After"
+level = "intermediate"
+code = ["examples/web/cors_security_headers.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+browser-facing APIs, hardening a service.
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+(1) **simple** vs **preflight** cross-origin requests, a hand-written CORS middleware (origin allow-list, credentials with a **specific** origin never `*`, `Vary: Origin`, `Access-Control-Max-Age`) and tower-http's `CorsLayer` configured identically, compared header by header on 10 scenarios against two real servers.
+
+(2) A small model of what the **browser** enforces (it reads the response and decides whether JS may see it) versus what the server does (it executes the request regardless; curl/reqwest are never blocked). (3) Security headers (HSTS, nosniff, CSP, Referrer-Policy, X-Frame-Options) via `SetResponseHeaderLayer`.
+
+(4) Request body limits (413 via `RequestBodyLimitLayer`), request timeouts (408 vs 504 via `TimeoutLayer`), and `Retry-After` on 429/503 with a client that honours both its delta-seconds and HTTP-date forms.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+CORS is the most misunderstood browser feature: it is **not** access control. It relaxes the same-origin policy for reading responses; a "simple" cross-origin **post** still reaches your handler (so CSRF defences are separate), and only non-simple requests are gated by an **options** preflight the server answers.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+a request is non-simple if its method is not **get/head/post**, or it has a non-safelisted header (`Authorization`, `X-Api-Key`, ...), or a Content-Type other than form/multipart/text-plain. The preflight carries `Access-Control-Request-Method/Headers`; the answer lists what is allowed and for how long to cache it.
+
+Responses that vary by Origin **must** send `Vary: Origin` or a shared cache serves one origin's headers to another. `Access-Control-Allow-Credentials: true` needs an exact origin (tower-http panics on `*`).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li><strong>Spa</strong> front end on another origin calling an API</li><li>public read-only APIs (<code>*</code> without credentials)</li><li>locking APIs to known origins</li><li>defence-in-depth headers on every response</li><li>protecting against oversized or slow requests</li><li>polite client back-off with <code>Retry-After</code> on rate limits and maintenance windows</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS" target="_blank" rel="noreferrer">https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS</a></li><li><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP" target="_blank" rel="noreferrer">https://developer.mozilla.org/en-US/docs/Web/HTTP</a></li><li><a href="https://datatracker.ietf.org/doc/html/rfc9110" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc9110</a></li></ul>
+"""
+
+[[sources]]
+title = "developer.mozilla.org/en-US/docs/Web/HTTP/CORS"
+url = "https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS"
+
+[[sources]]
+title = "developer.mozilla.org/en-US/docs/Web/HTTP"
+url = "https://developer.mozilla.org/en-US/docs/Web/HTTP"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc9110"
+url = "https://datatracker.ietf.org/doc/html/rfc9110"

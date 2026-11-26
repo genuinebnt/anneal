@@ -1,0 +1,7 @@
+fn main() {
+    let big = 9223372036854775807;
+    println(to_str(big));
+    println(to_str(-big - 1));
+    println(to_str(7 / 2) + " " + to_str(-7 / 2) + " " + to_str(-7 % 3));
+    println(to_str(1_000_000 * 1_000));
+}

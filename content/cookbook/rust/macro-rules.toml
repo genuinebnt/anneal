@@ -1,0 +1,52 @@
+title = "Macro_rules! in depth"
+module = "Rust language"
+module_order = 1
+chapter = "Everyday language"
+chapter_order = 3
+order = 30
+kind = "recipe"
+lede = "Repetition, fragments, tt-munchers, internal rules, hygiene, $crate."
+level = "advanced"
+code = ["examples/language/macro_rules.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>removing boilerplate</li><li>DSL-like literals</li><li>generated enums and impls</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a declarative macro matches token trees against rules (like `match` for syntax) and expands to code. Fragment specifiers: `expr`, `ident`, `ty`, `tt` (one token tree: the universal escape hatch), `literal`, `pat`, `block`, `stmt`. Repetition: `$( ... ),*` (zero or more, comma separated), `$( ... );+` (one or more), and `$(,)?` accepts a trailing comma.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+prefer a function or generic when one works; reach for macros when you need to generate items, take variable syntax, or capture `stringify!`/`line!`. Internal rules begin with `@name` so helpers live in the same macro. Hygiene: local variables created inside a macro are invisible to the caller and vice versa (items and macro names are **not** hygienic).
+
+`$crate` names the defining crate so exported macros keep working when used from other crates.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+`vec!`/`format!`-style helpers, `hashmap!` literals (as in the maplit crate), newtype and error-enum boilerplate, test tables, implementing one trait for many numeric types.
+
+**PROC macros** (not runnable here, need their own crate with `proc-macro = true`): derive (`#[derive(MyTrait)]`, how serde works), attribute (`#[route(GET, "/")]`) and function-like (`sql!(...)`) macros operate on `TokenStream`, typically with the syn and quote crates.
+
+Learn: <https://github.com/dtolnay/proc-macro-workshop> , inspect expansions with <https://github.com/dtolnay/cargo-expand> , and read the declarative-macro bible <https://danielkeep.github.io/tlborm/book/>
+"""
+
+[[sources]]
+title = "github.com/dtolnay/proc-macro-workshop"
+url = "https://github.com/dtolnay/proc-macro-workshop"
+
+[[sources]]
+title = "github.com/dtolnay/cargo-expand"
+url = "https://github.com/dtolnay/cargo-expand"
+
+[[sources]]
+title = "danielkeep.github.io/tlborm/book"
+url = "https://danielkeep.github.io/tlborm/book/"

@@ -1,0 +1,56 @@
+title = "Ref patterns"
+module = "Rust language"
+module_order = 1
+chapter = "Ownership and borrowing"
+chapter_order = 1
+order = 4
+kind = "recipe"
+lede = "ref / ref mut in patterns, match ergonomics, as_ref/as_deref, @ bindings, partial moves."
+level = "simple"
+code = ["examples/language/ref_patterns.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>reading old code</li><li>matching on borrowed data</li><li>taking parts of structs without moving them</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+in a pattern, `&p` **destructures** a reference (it removes a layer of `&`), while `ref x` **creates** a reference to the matched place (it adds one). `&x` in a pattern and `ref x` are opposites.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+matching `Some(s)` on an `Option<String>` **moves** the string out. `ref` (or matching on a reference) borrows instead.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+since Rust 2018 "default binding modes" make this automatic: matching a `&T` or `&mut T` against a non-reference pattern binds fields by reference. Explicit `ref` is still needed for partial moves (move one field, borrow another from the same value), for binding by reference when matching an owned value you keep using, and you will meet it in older code.
+
+**Note.** In edition 2024 you may not write `ref`/`&` inside a pattern that already relies on default binding modes.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li><code>opt.as_deref()</code> to get <code>Option&lt;&amp;str&gt;</code> from <code>Option&lt;String&gt;</code></li><li><code>if let Some(x) = map.get_mut(k)</code></li><li>splitting a struct into owned and borrowed parts</li><li><code>n &#64; 1..=9</code> range bindings in parsers and dispatchers</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/reference/patterns.html#binding-modes> and <https://doc.rust-lang.org/std/option/enum.Option.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/reference/patterns.html#binding-modes"
+url = "https://doc.rust-lang.org/reference/patterns.html#binding-modes"
+
+[[sources]]
+title = "doc.rust-lang.org/std/option/enum.Option.html"
+url = "https://doc.rust-lang.org/std/option/enum.Option.html"

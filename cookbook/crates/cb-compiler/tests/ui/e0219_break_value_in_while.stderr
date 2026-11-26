@@ -1,0 +1,9 @@
+error[E0219]: `break` with value from a `while` loop
+ --> e0219_break_value_in_while.peb:5:15
+  |
+5 |         break 5;
+  |               ^ can only break with a value inside `loop`
+  |
+  = help: use `loop` if you need a value
+
+error: aborting due to 1 previous error

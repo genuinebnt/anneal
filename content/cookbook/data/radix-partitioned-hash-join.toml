@@ -1,0 +1,84 @@
+title = "In-memory hash joins"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 370
+kind = "recipe"
+lede = "No-partition join vs radix-partitioned join vs sort-merge."
+level = "advanced"
+code = ["examples/database/radix_partitioned_hash_join.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+analytical engines and dataframe libraries whose hash joins outgrow the CPU caches.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>main-memory OLAP engines (MonetDB's radix-cluster join, the research lineage behind HyPer/Umbra and DuckDB's partitioned hash join)</li><li>the "partition both sides first" step of <strong>grace</strong>/hybrid hash joins (on disk the same idea is used with pages instead of cache lines)</li><li>shuffle joins in distributed engines</li><li>radix sort. Course: CMU 15-721 (Advanced Database Systems): "To partition or not to partition" hash-join lecture (parallel/in-memory joins)</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+the equi-join R(key, payload) **join** S(key, payload) with three in-memory algorithms, all emitting (key, r_payload, s_payload) and all compared on identical inputs:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">No-partition</div><div class="cb-g-says"><p>Join (NPJ): build <strong>one</strong> hash table over R, probe it with every tuple of S. Minimal work: two passes over the data.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Radix-partitioned</div><div class="cb-g-says"><p>Join: first split <strong>both</strong> inputs by the low <code>bits</code> bits of a hash of the key into 2&#94;bits partitions, then join partition i of R with partition i of S using a small private hash table. Equal keys have equal hashes, so matching tuples always land in the same partition pair.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Sort-merge</div><div class="cb-g-says"><p>Sort both inputs on the key and merge equal-key groups (cross product per group).</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**How** the partitioning works (one pass): (1) **histogram**: count tuples per digit; (2) **prefix sum** turns counts into start offsets, so every partition owns an exact slice of the output and no resizing or linked lists are needed; (3) **scatter**: each tuple is written to the next free slot of its partition.
+
+Multi-pass: a second pass refines every partition of the first by the **next** bits of the hash. `Cfg { bits_per_pass }` parameterises radix bits and passes; the final partition order is identical for R and S.
+
+The table inside a partition indexes buckets with hash bits **above** the radix bits; reusing the radix bits would put every tuple of a partition into the same bucket (they all share them), a classic bug. **Software write-combining** (`wc = true`): the scatter writes to `fanout` different places, i.e. touches `fanout` cache lines and as many TLB pages at once.
+
+With a few hundred partitions that exceeds the L1 data cache and the L1 TLB, and every store becomes a miss. Instead, each partition owns a small buffer of one cache line (8 tuples of 8 bytes); tuples are collected there and flushed to the destination as a full line.
+
+In C this is combined with non-temporal stores that bypass the cache; here the flush is a slice copy, which keeps the same access pattern.
+
+**Why** partition at all (cost model, N = &#124;R&#124; build tuples, 8 bytes each, plus a 4-byte chain link and a 4-byte bucket head):
+
+- NPJ probes a table of &#126;16&#42;N bytes at **random** positions. While the table fits the L2 (a few hundred KB to some MB) a probe costs a few ns. Once it exceeds the last-level cache every probe is a cache miss (&#126;80-100 ns) **and** a TLB miss (the table spans far more 4 KB pages than the TLB holds), so cost per probe jumps by an order of magnitude.
+
+   Out-of-order execution hides some of it by overlapping independent probes.
+- Radix join pays up to `passes` extra sequential read+write passes over **both** inputs (cheap: bandwidth-bound, prefetcher friendly), then every partition's table (&lt;= &#126;64 KB) is cache resident, so build and probe run at cache speed.
+- Fan-out per pass is bounded by the TLB/L1 (rule of thumb &lt;= 2&#94;6..2&#94;8): more bits are reached with several passes (cost: one more full pass each) rather than one huge fan-out.
+- Crossover: small inputs -> NPJ wins (partitioning is pure overhead); beyond the cache -> radix wins, in the original studies by 2x or more.
+
+   On modern hardware with big caches, hardware prefetchers and huge pages, NPJ is much more competitive than the early papers suggested (that is the "to partition or not" debate), so the printed table is machine-specific and the example only asserts results, never times.
+- Skew: a hot key piles into one partition; hashing cannot split equal keys, so that partition (and its join output) stays big, but the algorithm remains correct. Sort-merge is immune to hash collisions but pays O(n log n) sorting.
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+300 random input pairs (empty, tiny, skewed hot key, heavy duplicates, tiny and wide key domains), random radix settings (0..9 bits, 1..3 passes, write-combining on/off) must give multiset-identical results for NPJ, radix and sort-merge against an independent BTreeMap oracle; partition invariants (permutation of the input, one hash-digit value per partition, distinct per partition) are checked; plain and write-combined scatter must produce byte-identical partitions.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Multi-Core, Main-Memory Joins: Sort vs. Hash Revisited <https://www.vldb.org/pvldb/vol7/p85-balkesen.pdf>
+
+```text
+Hash join https://en.wikipedia.org/wiki/Hash_join   CMU 15-721 https://15721.courses.cs.cmu.edu/spring2024/
+```
+"""
+
+[[sources]]
+title = "vldb.org/pvldb/vol7/p85-balkesen.pdf"
+url = "https://www.vldb.org/pvldb/vol7/p85-balkesen.pdf"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Hash_join"
+url = "https://en.wikipedia.org/wiki/Hash_join"
+
+[[sources]]
+title = "15721.courses.cs.cmu.edu/spring2024"
+url = "https://15721.courses.cs.cmu.edu/spring2024/"

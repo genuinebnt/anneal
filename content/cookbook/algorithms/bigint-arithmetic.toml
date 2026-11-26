@@ -1,0 +1,56 @@
+title = "Arbitrary-precision unsigned integers"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Mathematics and numerics"
+chapter_order = 7
+order = 226
+kind = "recipe"
+lede = "Limbs, Karatsuba, Knuth division, gcd."
+level = "advanced"
+code = ["examples/math_science/bigint_arithmetic.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>cryptography</li><li>exact arithmetic</li><li>big factorials/Fibonacci</li><li>rational/decimal libraries</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+`BigUint` stores a number as little-endian base-2&#94;32 "limbs" in a Vec&lt;u32>, normalized so the top limb is non-zero (zero = empty vec).
+
+Every operation is the grade-school algorithm in base 2&#94;32, with u64 as the carry-holding intermediate type: that is the whole trick for add/sub/mul. u32 limbs (not u64) keep the intermediates in native u64 so no u128 is needed.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+add/sub are O(n) carry/borrow loops. Multiplication is O(n&#94;2) schoolbook, switching to Karatsuba (three half-size products instead of four, &#126;O(n&#94;1.58)) once both operands have >= 32 limbs; below that the recursion overhead loses.
+
+Division by a single limb is a simple loop; general division is Knuth's Algorithm D (TAOCP 4.3.1): normalize so the divisor's top bit is set, estimate each quotient limb from the top two limbs (the estimate is at most 2 too big, fixed by a cheap correction and a rare add-back). Decimal output repeatedly divides by 10&#94;9.
+
+Correctness is pinned by differential tests vs u128 and by algebraic identities on huge random values (including limbs full of 0 and 0xFFFFFFFF, which trigger the rare Algorithm D paths).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>RSA/Diffie-Hellman/elliptic-curve arithmetic (real libraries use fixed-width, constant-time limbs, never a variable-length one like this)</li><li>exact factorials/binomials/Fibonacci</li><li>rational and decimal types</li><li>computing digits of pi/e</li><li>big-ID and money math without overflow</li><li>checking u128 overflow logic. Real code: the <code>num-bigint</code> crate <a href="https://github.com/rust-num/num-bigint" target="_blank" rel="noreferrer">https://github.com/rust-num/num-bigint</a> (or <code>rug</code>/<code>crypto-bigint</code>)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+```text
+https://en.wikipedia.org/wiki/Karatsuba_algorithm   https://github.com/rust-num/num-bigint
+```
+"""
+
+[[sources]]
+title = "github.com/rust-num/num-bigint"
+url = "https://github.com/rust-num/num-bigint"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Karatsuba_algorithm"
+url = "https://en.wikipedia.org/wiki/Karatsuba_algorithm"

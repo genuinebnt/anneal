@@ -1,0 +1,84 @@
+title = "Option<T> look-up page"
+module = "Standard library and core"
+module_order = 2
+chapter = "Option, Result, conversions, ownership types"
+chapter_order = 1
+order = 67
+kind = "recipe"
+lede = "Every common method, with the scenario where it is the right tool."
+level = "simple"
+code = ["examples/std_tour/std_option_methods.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>config merging</li><li>optional fields</li><li>caches</li><li>linked lists</li><li>lazy parsing</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>optional config keys and CLI flags</li><li>nullable DB columns</li><li>"not found" from lookups</li><li>cursors and linked structures (<code>take()</code> moves out of <code>&amp;mut</code>)</li><li>memo cells (<code>get_or_insert_with</code>)</li><li><code>?</code> early return in parsers</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>Option::map</code></li><li><code>Option::and_then</code></li><li><code>Option::unwrap_or</code></li><li><code>Option::unwrap_or_else</code></li><li><code>Option::ok_or</code></li><li><code>Option::as_ref</code></li><li><code>Option::take</code></li><li><code>Option::filter</code></li><li><code>Option::is_some_and</code></li><li><code>Option::map_or</code></li><li><code>Option::map_or_else</code></li><li><code>Option::and_then</code></li><li><code>Option::and</code></li><li><code>Option::or</code></li><li><code>Option::or_else</code></li><li><code>Option::xor</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Option::filter</code></li><li><code>Option::zip</code></li><li><code>Option::unzip</code></li><li><code>Option::take</code></li><li><code>Option::take_if</code></li><li><code>Option::replace</code></li><li><code>Option::insert</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Option::get_or_insert</code></li><li><code>Option::get_or_insert_with</code></li><li><code>Option::as_ref</code></li><li><code>Option::as_mut</code></li><li><code>Option::as_deref</code></li><li><code>Option::as_deref_mut</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Option::copied</code></li><li><code>Option::cloned</code></li><li><code>Option::flatten</code></li><li><code>Option::transpose</code></li><li><code>Option::ok_or</code></li><li><code>Option::ok_or_else</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Option::is_some</code></li><li><code>Option::is_none</code></li><li><code>Option::is_some_and</code></li><li><code>Option::is_none_or</code></li><li><code>Option::unwrap_or</code></li><li><code>Option::unwrap_or_default</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Option::unwrap_or_else</code></li><li><code>Option::unwrap</code></li><li><code>Option::expect</code></li><li><code>Option::inspect</code></li><li><code>Option::iter</code></li><li><code>Option::iter_mut</code></li><li><code>Option::into_iter</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Option::as_slice</code></li><li><code>Option::as_mut_slice</code></li><li><code>Option::sum</code></li><li><code>Option::product</code></li><li><code>Iterator::flatten</code></li><li><code>Iterator::filter_map</code></li><li><code>Iterator::find_map</code></li></ul>
+
+Option::get_or_insert_default, Option::map_or_default
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/option/enum.Option.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/option/enum.Option.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+core (`core::option`), re-exported as `std::option`; usable in no_std.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+unwrap_unchecked (unsafe), as_pin_ref/as_pin_mut (see std_smart_pointers_use_cases), zip_with, get_or_try_insert_with, flatten_ref/flatten_mut/into_flat_iter (all unstable in 1.98.1).
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Transform the value if present</td><td><code>map</code></td></tr><tr><td>Transform with something that may fail</td><td><code>and_then</code></td></tr><tr><td>Default if absent</td><td><code>unwrap_or / unwrap_or_else (lazy) / unwrap_or_default</code></td></tr><tr><td>Turn None into an error</td><td><code>ok_or / ok_or_else</code></td></tr><tr><td>Bubble None up</td><td><code>?</code></td></tr><tr><td>Look without moving a String/Vec</td><td><code>as_ref / as_deref</code></td></tr><tr><td>Mutate in place</td><td><code>as_mut</code></td></tr><tr><td>Move the value out of &amp;mut self.field</td><td><code>take / replace</code></td></tr><tr><td>Take only if</td><td><code>take_if</code></td></tr><tr><td>Compute once and cache</td><td><code>get_or_insert_with</code></td></tr><tr><td>First Some of several</td><td><code>or / or_else</code></td></tr><tr><td>Keep only if predicate</td><td><code>filter</code></td></tr><tr><td>Test present+predicate</td><td><code>is_some_and</code></td></tr><tr><td>Absent means "no limit"</td><td><code>is_none_or</code></td></tr><tr><td>Option&lt;Result&gt;</td><td><code>Result&lt;Option&gt; -&gt; transpose</code></td></tr><tr><td>Option&lt;&amp;T&gt;</td><td><code>Option&lt;T&gt;                   -&gt; copied / cloned</code></td></tr><tr><td>Option&lt;Option&lt;T&gt;&gt;</td><td><code>flatten</code></td></tr><tr><td>Both present</td><td><code>zip</code></td></tr><tr><td>Exactly one present</td><td><code>xor</code></td></tr><tr><td>Drop Nones from an iterator</td><td><code>flatten / filter_map</code></td></tr><tr><td>Bind or return early</td><td><code>let-else How to read this file: sections are grouped by what you want to DO with an optional value, not alphabetically. Every section is a small scenario with asserts; PITFALL lines show the trap and the idiom to use instead. Rule of thumb: Option is a value that may be absent; transform it with combinators, unwrap only where absence is a bug, and prefer ? / let-else when absence should leave the function.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/std/option/> and <https://doc.rust-lang.org/book/ch06-01-defining-an-enum.html>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/option/enum.Option.html"
+url = "https://doc.rust-lang.org/std/option/enum.Option.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/option"
+url = "https://doc.rust-lang.org/std/option/"
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch06-01-defining-an-enum.html"
+url = "https://doc.rust-lang.org/book/ch06-01-defining-an-enum.html"

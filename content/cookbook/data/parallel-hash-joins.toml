@@ -1,0 +1,265 @@
+title = "Parallel hash joins"
+module = "Databases"
+module_order = 8
+chapter = "Query execution"
+chapter_order = 4
+order = 361
+kind = "guide"
+lede = "15-721 S2024 lecture #9 · partition, build, probe · hashing schemes · no-partitioning vs radix · Bloom filters (sideways information passing) · measured throughput by build size and threads"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Assumptions</strong>: two-way equi-joins, inputs fit in memory (spilling was the intro-course topic), and <strong>hash join beats sort-merge in most cases</strong>, so it is the OLAP operator that matters most: the point is to keep every core busy <em>without becoming memory-bound</em>.</li> <li><strong>Design goals</strong>: <strong>minimize synchronization</strong> (avoid latches while running) and <strong>minimize memory-access cost</strong>: keep data local to the worker, reuse cache lines (for scans: cluster data and do more work per line; for random lookups: <em>partition so the working set fits cache and TLB</em>).</li> <li><strong>Three phases</strong> (Schuh et al.): <strong>(1) Partition</strong> (optional): split R and S by a hash of the join key; <strong>(2) Build</strong>: scan R into one logical hash table (it may be physically spread over partitions); <strong>(3) Probe</strong>: for each S tuple look up its key and emit combined tuples. Materializing the output is <strong>not negligible</strong>, and some papers ignored it in their setups.</li> <li><strong>Partitioning</strong>: ideally cheaper than the cache misses it saves in the build phase (<em>hybrid/radix hash join</em>). <strong>Non-blocking</strong>: one pass, either <strong>shared partitions</strong> (one global set, latched) or <strong>private partitions</strong> (per-thread sets consolidated later). <strong>Blocking (radix)</strong>: scan R, compute a <strong>histogram</strong> of tuples per hash-bit range, <strong>prefix-sum</strong> it into output offsets, scan again and <strong>scatter</strong>; results materialize only at the end.</li> <li><strong>Build phase</strong>: scan R (or its partitions), hash the key, insert; <strong>buckets should be a few cache lines</strong>. Decisions: <strong>hash function</strong> (fast vs few collisions; SMHasher measures this) and <strong>hashing scheme</strong>: <em>chained</em> (HyPer uses the unused 16 of the 64 pointer bits as a tiny Bloom filter), <em>linear probing</em> (store the key to know when to stop; needs ~2× slots; clustering), <em>Robin Hood</em> (steal slots from "rich" keys to bound probe-length variance), <em>hopscotch</em> (keys stay within a fixed neighbourhood), <em>cuckoo</em> (multiple tables; lookup is O(1); with two functions rebuild at ~50% full, three at ~90%). <strong>What to store</strong>: just the key, or <strong>key + hash</strong> (faster comparisons for strings); the tuple itself (fixed-width only in open addressing) or <strong>a pointer/offset</strong> (late materialization).</li> <li><strong>Probe phase</strong>: hash S's key, check the bucket. If partitioned, give each thread a partition; otherwise synchronize on the cursor over S. A <strong>Bloom filter</strong> built during the build phase is checked first (it fits in cache): <strong>sideways information passing</strong>.</li> <li><strong>Results</strong> (Blanas et al.; Schuh et al.): <strong>partitioned joins beat no-partitioning in most settings, but are non-trivial to tune</strong>; every DBMS picks one implementation and few adapt. Bandle et al. (SIGMOD 2021, <em>To Partition, or Not to Partition</em>) found that in a real system, with materialization and pipelines, the gap is <strong>much smaller than in micro-benchmarks</strong>.</li> </ul>
+"""
+
+[[sections]]
+heading = "Four joins, built from scratch"
+body = """
+<p>R has unique 32-bit keys (the build side, with a payload); S is a column of probe keys (16 million rows). The result is <code>(match count, sum of matched payloads)</code>, compared across algorithms and against a single-threaded <code>HashMap</code> reference for sizes 0, 1, 7, 1 000, 70 000 and thread counts 1, 3 and 8, with match rates from 0% to 100%.</p>
+
+<ol> <li><strong>NOP, chained</strong> (no partitioning): bucket heads in an <code>AtomicU32</code> array; the <strong>build is latch-free</strong>: each thread pushes entries onto bucket lists with a <strong>CAS loop</strong>; probes chase <code>next</code> links.</li> <li><strong>NOP, linear probing</strong>: one open-addressing table of <code>AtomicU64</code> slots (key in the high half, payload in the low half), <strong>inserted with <code>compare_exchange(0, packed)</code></strong>; probes scan to an empty slot.</li> <li><strong>Radix</strong>: both inputs are <strong>partitioned</strong> by hash bits into pieces of ~16 K R-tuples; each partition is joined by a worker with a <strong>private, cache-resident, non-atomic</strong> linear-probing table; workers pull partitions from an atomic counter.</li> <li><strong>Radix + Bloom</strong>: build a Bloom filter (10 bits per key, 2 probes) of R, drop S rows that can't match, then run the radix join.</li> </ol>
+
+:::deeper Reference: latch-free chained and linear-probing builds, histogram/prefix-sum/scatter partitioning, partition-wise join, Bloom pre-filter
+```rust title="src/exec/hashjoin.rs"
+//! Parallel in-memory equi-join of R (build, unique u32 keys ≥ 1) and S (probe keys): four implementations of the
+//! three phases (partition, build, probe). Result = (number of matches, wrapping sum of matched R payloads).
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering::*};
+
+pub type Row = (u32, u32);   // (key, payload)
+
+#[inline] fn h(k: u32) -> u64 { let x = (k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15); x ^ (x >> 29) }
+
+fn par_chunks<T: Sync, F: Fn(&[T]) -> (u64, u64) + Sync>(data: &[T], threads: usize, f: F) -> (u64, u64) {
+    let chunk = data.len().div_ceil(threads).max(1);
+    std::thread::scope(|s| {
+        let hs: Vec<_> = data.chunks(chunk).map(|c| { let f = &f; s.spawn(move || f(c)) }).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).fold((0u64, 0u64), |a, b| (a.0 + b.0, a.1.wrapping_add(b.1)))
+    })
+}
+
+/// Reference: one HashMap, one thread.
+pub fn reference(r: &[Row], s: &[u32]) -> (u64, u64) {
+    let m: std::collections::HashMap<u32, u32> = r.iter().copied().collect();
+    s.iter().filter_map(|k| m.get(k)).fold((0, 0), |a, &p| (a.0 + 1, a.1.wrapping_add(p as u64)))
+}
+
+// ------------------------------------------------------------ no partitioning, chained buckets (latch-free build)
+
+pub fn nop_chained(r: &[Row], s: &[u32], threads: usize) -> (u64, u64) {
+    let buckets = r.len().next_power_of_two().max(2);
+    let mask = (buckets - 1) as u64;
+    let heads: Vec<AtomicU32> = (0..buckets).map(|_| AtomicU32::new(0)).collect();
+    let next: Vec<AtomicU32> = (0..r.len()).map(|_| AtomicU32::new(0)).collect();
+    let idx: Vec<usize> = (0..r.len()).collect();
+    par_chunks(&idx, threads, |c| {
+        for &i in c {
+            let b = (h(r[i].0) & mask) as usize;
+            loop {
+                let old = heads[b].load(Relaxed);
+                next[i].store(old, Relaxed);
+                if heads[b].compare_exchange_weak(old, i as u32 + 1, AcqRel, Relaxed).is_ok() { break; }   // push on the bucket's list
+            }
+        }
+        (0, 0)
+    });
+    par_chunks(s, threads, |c| {
+        let (mut n, mut sum) = (0u64, 0u64);
+        for &k in c {
+            let mut e = heads[(h(k) & mask) as usize].load(Acquire);
+            while e != 0 {
+                let row = r[e as usize - 1];
+                if row.0 == k { n += 1; sum = sum.wrapping_add(row.1 as u64); break; }
+                e = next[e as usize - 1].load(Relaxed);
+            }
+        }
+        (n, sum)
+    })
+}
+
+// ------------------------------------------------------------ no partitioning, linear probing with CAS inserts
+
+pub fn nop_linear(r: &[Row], s: &[u32], threads: usize) -> (u64, u64) {
+    let size = (r.len() * 2).next_power_of_two().max(4);
+    let mask = (size - 1) as u64;
+    let table: Vec<AtomicU64> = (0..size).map(|_| AtomicU64::new(0)).collect();
+    par_chunks(r, threads, |c| {
+        for &(k, p) in c {
+            let packed = ((k as u64) << 32) | p as u64;
+            let mut i = (h(k) & mask) as usize;
+            while table[i].compare_exchange(0, packed, AcqRel, Relaxed).is_err() { i = (i + 1) & mask as usize; }
+        }
+        (0, 0)
+    });
+    par_chunks(s, threads, |c| {
+        let (mut n, mut sum) = (0u64, 0u64);
+        for &k in c {
+            let mut i = (h(k) & mask) as usize;
+            loop {
+                let v = table[i].load(Relaxed);
+                if v == 0 { break; }
+                if (v >> 32) as u32 == k { n += 1; sum = sum.wrapping_add(v & 0xFFFF_FFFF); break; }
+                i = (i + 1) & mask as usize;
+            }
+        }
+        (n, sum)
+    })
+}
+
+// ------------------------------------------------------------ radix partitioning, then cache-resident joins
+
+struct Shared<T>(*mut T);
+unsafe impl<T> Send for Shared<T> {}
+unsafe impl<T> Sync for Shared<T> {}
+impl<T> Shared<T> { fn ptr(&self) -> *mut T { self.0 } }
+
+fn part_of(k: u32, bits: u32) -> usize { if bits == 0 { 0 } else { ((h(k) >> 40) as usize) & ((1 << bits) - 1) } }
+
+/// Histogram → prefix sums → scatter. Each thread writes only into its own pre-computed ranges, so no locks or atomics.
+fn partition<T: Copy + Send + Sync>(data: &[T], key: impl Fn(&T) -> u32 + Sync, bits: u32, threads: usize) -> (Vec<T>, Vec<usize>) {
+    let parts = 1usize << bits;
+    let chunk = data.len().div_ceil(threads).max(1);
+    let chunks: Vec<&[T]> = data.chunks(chunk).collect();
+    let hist: Vec<Vec<usize>> = std::thread::scope(|s| {
+        let hs: Vec<_> = chunks.iter().map(|c| { let key = &key; s.spawn(move || { let mut hst = vec![0usize; parts]; for x in *c { hst[part_of(key(x), bits)] += 1; } hst }) }).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    // offsets[t][p]: where thread t starts writing partition p; partition boundaries come out of the same pass
+    let mut offsets = vec![vec![0usize; parts]; chunks.len()];
+    let mut bounds = vec![0usize; parts + 1];
+    let mut cur = 0;
+    for p in 0..parts { bounds[p] = cur; for t in 0..chunks.len() { offsets[t][p] = cur; cur += hist[t][p]; } }
+    bounds[parts] = cur;
+    let mut out: Vec<T> = Vec::with_capacity(data.len());
+    let dst = Shared(out.as_mut_ptr());
+    std::thread::scope(|s| {
+        for (t, c) in chunks.iter().enumerate() {
+            let (key, dst, mut off) = (&key, &dst, offsets[t].clone());
+            s.spawn(move || { for x in *c { let p = part_of(key(x), bits); unsafe { dst.ptr().add(off[p]).write(*x); } off[p] += 1; } });
+        }
+    });
+    unsafe { out.set_len(data.len()); }
+    (out, bounds)
+}
+
+fn bits_for(r_len: usize) -> u32 { let parts = r_len.div_ceil(16_384).next_power_of_two(); parts.trailing_zeros() }   // ≈ 128 KB of build data per partition
+
+pub fn radix(r: &[Row], s: &[u32], threads: usize) -> (u64, u64) {
+    let bits = bits_for(r.len());
+    let (rp, rb) = partition(r, |x| x.0, bits, threads);
+    let (sp, sb) = partition(s, |&k| k, bits, threads);
+    let next = AtomicUsize::new(0);
+    let parts = 1usize << bits;
+    std::thread::scope(|sc| {
+        let hs: Vec<_> = (0..threads).map(|_| sc.spawn(|| {
+            let (mut n, mut sum) = (0u64, 0u64);
+            let mut table: Vec<u64> = vec![];
+            loop {
+                let p = next.fetch_add(1, Relaxed);
+                if p >= parts { break; }
+                let (rs, ss) = (&rp[rb[p]..rb[p + 1]], &sp[sb[p]..sb[p + 1]]);
+                let size = (rs.len() * 2).next_power_of_two().max(4);
+                let mask = (size - 1) as u64;
+                table.clear(); table.resize(size, 0);                         // a private, cache-resident table: no atomics at all
+                for &(k, pl) in rs { let mut i = (h(k) & mask) as usize; while table[i] != 0 { i = (i + 1) & mask as usize; } table[i] = ((k as u64) << 32) | pl as u64; }
+                for &k in ss {
+                    let mut i = (h(k) & mask) as usize;
+                    loop { let v = table[i]; if v == 0 { break; } if (v >> 32) as u32 == k { n += 1; sum = sum.wrapping_add(v & 0xFFFF_FFFF); break; } i = (i + 1) & mask as usize; }
+                }
+            }
+            (n, sum)
+        })).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).fold((0u64, 0u64), |a, b| (a.0 + b.0, a.1.wrapping_add(b.1)))
+    })
+}
+
+// ------------------------------------------------------------ Bloom filter on the build side ("sideways information passing")
+
+pub struct Bloom { bits: Vec<AtomicU64>, mask: u64 }
+impl Bloom {
+    pub fn build(r: &[Row], threads: usize) -> Bloom {
+        let nbits = (r.len() * 10).next_power_of_two().max(64);
+        let b = Bloom { bits: (0..nbits / 64).map(|_| AtomicU64::new(0)).collect(), mask: nbits as u64 - 1 };
+        par_chunks(r, threads, |c| { for &(k, _) in c { let x = h(k); for p in [x & b.mask, (x >> 20) & b.mask] { b.bits[(p / 64) as usize].fetch_or(1 << (p % 64), Relaxed); } } (0, 0) });
+        b
+    }
+    #[inline] pub fn may_contain(&self, k: u32) -> bool { let x = h(k); [x & self.mask, (x >> 20) & self.mask].iter().all(|&p| self.bits[(p / 64) as usize].load(Relaxed) >> (p % 64) & 1 == 1) }
+}
+
+/// Radix join with the probe side pre-filtered by a Bloom filter of R's keys.
+pub fn radix_bloom(r: &[Row], s: &[u32], threads: usize) -> (u64, u64) {
+    let bloom = Bloom::build(r, threads);
+    let chunk = s.len().div_ceil(threads).max(1);
+    let parts: Vec<Vec<u32>> = std::thread::scope(|sc| {
+        let hs: Vec<_> = s.chunks(chunk).map(|c| { let bloom = &bloom; sc.spawn(move || c.iter().copied().filter(|&k| bloom.may_contain(k)).collect::<Vec<u32>>()) }).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let filtered: Vec<u32> = parts.concat();
+    radix(r, &filtered, threads)
+}
+```
+:::
+
+```text title="|S| = 16M probe rows; total ms and million tuples/s ((|R|+|S|)/time), 1 thread"
+       |R|   match          NOP chained           NOP linear                radix        radix + Bloom
+     32768    100%      99 ms    162M/s      52 ms    311M/s      86 ms    186M/s     103 ms    155M/s
+   1000000    100%     128 ms    132M/s      65 ms    263M/s      69 ms    245M/s      97 ms    176M/s
+  16000000    100%     544 ms     59M/s     266 ms    121M/s     132 ms    242M/s     313 ms    102M/s
+  16000000     10%     465 ms     69M/s     831 ms     39M/s     211 ms    152M/s     260 ms    123M/s
+```
+
+```text title="the same, 8 threads"
+       |R|   match          NOP chained           NOP linear                radix        radix + Bloom
+     32768    100%      14 ms   1138M/s       8 ms   2073M/s      35 ms    456M/s      46 ms    348M/s
+   1000000    100%      24 ms    695M/s      15 ms   1162M/s      11 ms   1574M/s      34 ms    504M/s
+  16000000    100%      91 ms    352M/s      45 ms    708M/s      21 ms   1523M/s     162 ms    198M/s
+  16000000     10%      84 ms    382M/s     115 ms    277M/s      32 ms    994M/s     148 ms    216M/s
+```
+
+<p>Reading the tables (Apple M-series, best of 3):</p>
+
+<ul> <li><strong>Chained buckets lose everywhere</strong> (59–162 M/s on one thread, 2–5× behind the best): every probe walks pointers into a separate entry array, so each hit costs two dependent cache misses; open addressing with the key in the slot costs one.</li> <li><strong>Small build side (|R| = 32 K, 256 KB of table, cache-resident): do not partition.</strong> NOP linear reaches <strong>2.07 G tuples/s on 8 threads, 4.5× faster than radix</strong> (8 vs 35 ms): partitioning S costs a full extra pass over 16 M rows to shuffle them into partitions the table already fit in cache for.</li> <li><strong>Large build side (|R| = 16 M, a 256 MB table, far beyond cache): partition.</strong> On one thread radix is <strong>2× faster than NOP linear</strong> (132 vs 266 ms) and 4× faster than chained; on 8 threads <strong>2.1×</strong> (21 vs 45 ms): after partitioning, every probe is a cache hit on a private table (no atomics, no coherence traffic), and the extra passes are sequential, so they run at memory bandwidth. The crossover is around |R| ≈ 1 M here (a 16 MB table): there radix wins on 8 threads (1.57 vs 1.16 G/s) but not on 1.</li> <li><strong>Low match rate punishes open addressing hardest</strong>: at 10% matches NOP linear takes <strong>831 ms on one thread</strong> (3× slower than at 100% matches), because an <em>unsuccessful</em> probe scans a whole cluster before reaching an empty slot; radix barely changes (211 ms): short clusters in a cache-resident table.</li> <li><strong>Scaling</strong>: 8 threads give <strong>6.3×</strong> on radix, ~6× on NOP (21 vs 132 ms; 45 vs 266 ms) at 16 M. NOP's lock-free CAS insertion scales well here; the two-sided latch-free build is not the bottleneck, <strong>memory is</strong>.</li> <li><strong>The Bloom filter hurt in every row</strong> (e.g. 162 ms vs 21 ms at 8 threads, 100% match: pure overhead; and 148 vs 32 ms at 10% match, where it <em>should</em> help). The filter (20 MB at 16 M keys) is itself larger than the cache, so each filter probe is as expensive as the probe it was meant to avoid, and it adds two hashes per row. A Bloom filter pays when <strong>(a)</strong> it fits in cache while the table doesn't, <strong>(b)</strong> most probe keys have no partner, and <strong>(c)</strong> the work after the filter is expensive (a distributed shuffle, <a href="/cookbook/p/distributed-databases-ii">L24</a>; a join further up). With a radix join already making probes cache-resident, it has little to save.</li> </ul>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Latch-free build with plain atomics</strong>: <code>AtomicU32</code> bucket heads + <code>compare_exchange_weak</code> push is a Treiber stack per bucket; the entries are pre-allocated, so there is no ABA or reclamation problem. <strong><code>AtomicU64</code> slots with <code>compare_exchange(0, packed)</code></strong> are the simplest open-addressing insert; the sentinel 0 requires keys ≥ 1.</li> <li><strong>Disjoint scatter writes without locks</strong>: each thread owns the offsets <code>[offsets[t][p], +hist[t][p])</code> for every partition <code>p</code>. In Rust this needs <code>unsafe</code> raw-pointer writes (a <code>Shared&lt;*mut T&gt;</code> wrapper with <code>unsafe impl Send/Sync</code>), with the safety argument <em>"ranges are disjoint by construction of the prefix sums"</em> written next to it. The alternative is <code>split_at_mut</code> chains per partition (safe, but only for contiguous ownership), or per-thread buffers merged later (extra copy).</li> <li><strong><code>Vec::with_capacity</code> + <code>set_len</code></strong> to fill uninitialized output after all writes: valid only because every slot in <code>0..len</code> is written exactly once (assert it in debug builds with a counter).</li> <li><strong>Reuse allocations across partitions</strong> (<code>table.clear(); table.resize(size, 0)</code>): per-partition allocation would dominate small partitions.</li> <li><strong><code>std::thread::scope</code></strong> lets workers borrow <code>r</code>, <code>s</code> and the partition arrays; an <code>AtomicUsize</code> ticket is the simplest work queue (morsel-driven, <a href="/cookbook/p/query-scheduling">A10</a>).</li> <li><strong>Pick the hash for the data</strong>: a multiplicative hash with a final xor-shift is fast and good enough for integer keys; use <code>ahash</code>/<code>foldhash</code>/<code>xxh3</code> for strings, and <strong>never <code>SipHash</code> in a join</strong> (std's default <code>HashMap</code> hasher is ~5× slower, and hides the algorithmic differences).</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Measure end to end</strong>: Schuh et al. showed that results differ when the output is <em>materialized</em>; counting matches without copying payloads makes every algorithm look faster and partitioning look better than in a pipeline (Bandle et al.).</li> <li><strong>Skew</strong>: one hot key makes one partition (or one chain) huge; radix partitions become unbalanced and the slowest worker sets the latency. Split heavy hitters (broadcast the hot keys' build rows, probe in parallel) and use dynamic partition assignment as above.</li> <li><strong>Duplicate build keys</strong> need chains or counts (here keys are unique: a <em>primary-key</em> join); semi, anti and outer joins need per-entry "matched" flags.</li> <li><strong>NULL join keys never match</strong>: filter them before partitioning; they otherwise cluster into one partition.</li> <li><strong>Load factor and memory</strong>: open addressing at 50% load uses 16 bytes per 8-byte build row; at 256 MB tables the <em>table size</em>, not the hash function, is the speed limit: store 32-bit offsets, not payloads, and join late.</li> <li><strong>Tuning knobs</strong>: radix bits (partition size ≈ L2 half), number of passes (multi-pass radix when fan-out exceeds the TLB: software write-combining buffers help), and thread count vs memory bandwidth. Parameter sweeps should be part of the benchmark suite.</li> <li><strong>Adaptivity</strong>: because the best algorithm depends on |R|, cache size and match rate (as the tables show), production systems pick by estimated build size; wrong estimates (<a href="/cookbook/p/cost-models-and-join-ordering">L16</a>) cause the wrong choice, so the decision belongs at run time, after the build side is known.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "An Experimental Comparison of Thirteen Relational Equi-Joins in Main Memory"
+url = "https://dl.acm.org/doi/10.1145/2882903.2882917"
+
+[[sources]]
+title = "Design and Evaluation of Main Memory Hash Join Algorithms for Multi-core CPUs"
+url = "https://dl.acm.org/doi/10.1145/1989323.1989328"
+
+[[sources]]
+title = "Main-Memory Hash Joins on Multi-Core CPUs: Tuning to the Underlying Hardware"
+url = "https://dl.acm.org/doi/10.1109/ICDE.2013.6544839"
+
+[[sources]]
+title = "To Partition, or Not to Partition, That is the Join Question in a Real System"
+url = "https://dl.acm.org/doi/10.1145/3448016.3452831"
+
+[[sources]]
+title = "github.com/aappleby/smhasher"
+url = "https://github.com/aappleby/smhasher"
+
+[[sources]]
+title = "rurban fork"
+url = "https://github.com/rurban/smhasher"
+
+[[sources]]
+title = "hashbrown"
+url = "https://docs.rs/hashbrown"
+
+[[sources]]
+title = "ahash"
+url = "https://docs.rs/ahash"
+
+[[sources]]
+title = "xxhash-rust"
+url = "https://docs.rs/xxhash-rust"

@@ -1,0 +1,78 @@
+title = "A toy UNIX filesystem on a block device"
+module = "Complete projects"
+module_order = 13
+chapter = "Capstones"
+chapter_order = 1
+order = 660
+kind = "capstone"
+lede = "Inodes, indirect blocks, directories, a write-ahead journal, fsck, and a buffer cache."
+level = "capstone"
+code = ["examples/capstones/toy_filesystem.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>understanding ext2/ext3/ext4 and xv6-style filesystems</li><li>embedded storage engines</li><li>crash-consistency testing of any on-disk format</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a filesystem stored in **one** file that is treated as an array of 4096-byte blocks (a **block device**). Everything above the device (cache, journal, allocators, inodes, directories, path resolution) is ordinary Rust over `read_block / write_block / sync`.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**On-disk layout** (block numbers; the example geometry is 256 blocks, 64 inodes, 64 journal blocks):
+
+'''text
+
+```text
+ 0        1 .. 1+J          ibm        dbm .. dbm+D        itable ..            data_start .. total
++--------+-----------------+----------+-------------------+--------------------+--------------------+
+| super  | journal         | inode    | data-block bitmap | inode table        | data blocks        |
+| block  | hdr|images..|cmt| bitmap   | (1 bit per block)  | (32 x 128 B/block) | files, dirs, ind.  |
++--------+-----------------+----------+-------------------+--------------------+--------------------+
+```
+
+magic, version, geometry, crc32        bit i = block i (metadata bits pre-set; next-fit allocator)
+
+inode (128 B): kind, nlink, mode, size, mtime, ctime, direct[12], single-indirect, double-indirect file blocks: 12 direct + 1024 (via indirect) + 1024&#42;1024 (via double indirect) = 1,049,612 blocks  (about 4.0 GiB) directory  : a regular file whose content is 64-byte entries [inode u32][name_len u8][name &lt;= 59 B]; "." and ".." are real entries '''
+
+**Journal** (ext3 `data=journal` style, one transaction at a time): every public operation is a **transaction**. Block writes only go to the buffer cache (dirty, never evicted).
+
+**Commit** = write [header: seq, target block numbers] + [block images], sync, write [commit record: seq + crc32 over header and images], sync, then **checkpoint** the images to their home locations, sync, and finally mark the journal clean.
+
+Recovery on mount: a header with a matching, checksummed commit record is replayed (idempotent: the same images are written again); anything else is discarded. So a crash at any write boundary leaves the operation either entirely applied or not applied at all.
+
+The checksum is what makes torn and **reordered** writes between two syncs harmless (the fault injector below simulates both).
+
+FSCK walks the tree from the root and checks: every entry points at an allocated inode, link counts equal the number of directory entries, no block is claimed twice (cross-link), bitmaps equal the set of reachable blocks, no orphan inodes, "." and ".." are right, every directory is reachable exactly once.
+
+Simple problems (link counts, leaked blocks, orphans, missing bits) are repaired.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+ext2 taught the inode/indirect-block/bitmap design (that is this file's layout); ext3/ext4 added the journal (crash recovery in time proportional to the log, not the disk, and the checksummed commit block of ext4's journal_checksum); FFS introduced cylinder groups and locality-aware allocation (here: next-fit);
+
+Xv6's file system (a few hundred lines in C) is the smallest teaching implementation of inodes + log + directories; ZFS-style designs put checksums on everything and detect silent corruption (here: the superblock and journal records are checksummed).
+
+The same crash-injection method tests databases and key-value stores.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://pages.cs.wisc.edu/~remzi/OSTEP/file-implementation.pdf" target="_blank" rel="noreferrer">https://pages.cs.wisc.edu/~remzi/OSTEP/file-implementation.pdf</a></li><li><a href="https://pdos.csail.mit.edu/6.828/2023/xv6/book-riscv-rev3.pdf" target="_blank" rel="noreferrer">https://pdos.csail.mit.edu/6.828/2023/xv6/book-riscv-rev3.pdf</a></li></ul>
+"""
+
+[[sources]]
+title = "pages.cs.wisc.edu/~remzi/OSTEP/file-implementation.pdf"
+url = "https://pages.cs.wisc.edu/~remzi/OSTEP/file-implementation.pdf"
+
+[[sources]]
+title = "pdos.csail.mit.edu/6.828/2023/xv6/book-riscv-rev3.pdf"
+url = "https://pdos.csail.mit.edu/6.828/2023/xv6/book-riscv-rev3.pdf"

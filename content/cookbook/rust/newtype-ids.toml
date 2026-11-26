@@ -1,0 +1,40 @@
+title = "Newtype ids so the compiler stops you mixing things up"
+module = "Rust language"
+module_order = 1
+chapter = "Types, traits and generics"
+chapter_order = 2
+order = 18
+kind = "recipe"
+lede = "newtype ids so the compiler stops you mixing things up."
+level = "simple"
+code = ["examples/language/newtype_ids.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+stages 3 and 5.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>database ids</li><li>API ids</li><li>units: stop mixing a UserId with an OrderId at compile time at zero runtime cost</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: `struct StopId(u32)` costs nothing at runtime but a `LineId` can no longer be passed where a `StopId` is expected. Typed indices into a `Vec` are how Rust graphs usually work. Real code: petgraph's `NodeIndex` -> <https://docs.rs/petgraph/latest/petgraph/graph/struct.NodeIndex.html>
+
+```text
+API Guidelines C-NEWTYPE -> https://rust-lang.github.io/api-guidelines/type-safety.html
+```
+"""
+
+[[sources]]
+title = "docs.rs/petgraph/latest/petgraph/graph/struct.NodeIndex.html"
+url = "https://docs.rs/petgraph/latest/petgraph/graph/struct.NodeIndex.html"
+
+[[sources]]
+title = "rust-lang.github.io/api-guidelines/type-safety.html"
+url = "https://rust-lang.github.io/api-guidelines/type-safety.html"

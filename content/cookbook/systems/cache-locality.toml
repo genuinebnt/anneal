@@ -1,0 +1,44 @@
+title = "Cache locality"
+module = "Performance and systems"
+module_order = 7
+chapter = "Memory layout and allocation"
+chapter_order = 2
+order = 279
+kind = "recipe"
+lede = "Row vs column order, the stride experiment, pointer chasing, and blocked algorithms."
+level = "intermediate"
+code = ["examples/perf/cache_locality.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+any loop over big arrays (graph adjacency, matrices, records); explains why "same Big-O" can differ 10x.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>anything iterating large arrays</li><li>matrices or graphs</li><li>choosing layout and traversal order</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+The CPU loads memory in 64-byte **cache lines** (16 u32s). Touching the next element is nearly free (same line, and the hardware prefetcher guesses sequential access). Jumping around costs a trip to L2/L3/RAM (&#126;4ns / &#126;15ns / &#126;80ns).
+
+(On Apple Silicon the cache line is 128 bytes and the prefetcher is aggressive, so exact numbers differ from x86.) Rules: iterate in memory order; keep data that is used together close together; prefer Vec&lt;T> over linked structures; process big data in **blocks** that fit in cache. Numbers vary by machine; the **ratios** are the lesson.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.algorithmica.org/hpc/cpu-cache/> and <https://nnethercote.github.io/perf-book/>
+"""
+
+[[sources]]
+title = "en.algorithmica.org/hpc/cpu-cache"
+url = "https://en.algorithmica.org/hpc/cpu-cache/"
+
+[[sources]]
+title = "nnethercote.github.io/perf-book"
+url = "https://nnethercote.github.io/perf-book/"

@@ -1,0 +1,298 @@
+title = "Larger-than-memory databases"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 325
+kind = "guide"
+lede = "15-721 lecture #23 (2020) · what to do when RAM isn't enough · OS paging, anti-caching, hybrid storage, LeanStore pointer swizzling, Umbra · measured access-path cost"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>The dilemma</strong>: a memory-resident design (<a href="/cookbook/p/in-memory-dbms-design">A2</a>) is fast because it never translates or pins; but data outgrows RAM, and RAM is expensive relative to flash. The question is how to keep <strong>in-memory speed for hot data</strong> while spilling cold data, <strong>without</strong> paying the buffer-pool tax on every access.</li> <li><strong>Approach 1: let the OS page</strong> (<code>mmap</code>). Easy, and fast while everything fits, but the DBMS loses control of <strong>eviction order, write ordering (WAL), prefetching and I/O scheduling</strong>; a page fault stalls a thread inside what looks like a memory access; errors become signals (<code>SIGBUS</code>); and TLB shootdowns and page-table contention hurt multi-core scaling. (<em>Are You Sure You Want to Use MMAP in Your DBMS?</em>, Crotty, Leis, Pavlo, CIDR 2022.)</li> <li><strong>Approach 2: anti-caching</strong> (H-Store): the database is memory-resident; when memory fills, the DBMS <strong>evicts cold tuples</strong> (tracked with an LRU chain) to a disk block store and leaves a <strong>tombstone</strong> with the block id. A transaction that touches a tombstone is <strong>aborted, the block is fetched asynchronously, and the transaction restarts</strong>: no blocking, at the price of a restart. Works with a single-threaded, partitioned design.</li> <li><strong>Approach 3: cold-data tiers</strong> (Hekaton's <em>Siberia</em>): hot data stays in the memory-optimized engine; cold rows move to a secondary store, with <strong>Bloom filters / adaptive range filters</strong> to avoid probing the cold store for rows that aren't there.</li> <li><strong>Approach 4: a buffer manager designed for speed</strong> (<strong>LeanStore</strong>, Leis et al., ICDE 2018): get rid of the <strong>page table</strong> and <strong>pin counts</strong> on the hot path with <strong>pointer swizzling</strong>: a child reference is either a <em>swizzled</em> pointer (direct frame address) or an <em>unswizzled</em> page id; a hot page is reached by following a plain pointer; replacement is done by a <strong>cooling stage</strong> that unswizzles random pages and lets them be re-swizzled for free on re-access, approximating LRU without bookkeeping on every access; synchronization is <strong>optimistic latches</strong> plus <strong>epoch-based reclamation</strong>. Result: in-memory-system speed when data fits and graceful degradation when it doesn't.</li> <li><strong>Approach 5</strong>: <strong>Umbra</strong> (variable-size pages with swizzling and a better eviction pipeline), <strong>vmcache</strong> (using virtual memory <em>with</em> explicit control: <code>madvise</code>, explicit eviction, DBMS-controlled page table in hardware), and <strong>Cloud/object-storage tiers</strong> (cache in local NVMe, data on S3).</li> <li><strong>Rules that follow</strong>: ① <strong>access-path cost matters more than hit rate</strong> when most accesses hit; ② eviction decisions can be <strong>approximate and random</strong> if the <em>re-reference</em> path is cheap; ③ track hotness <strong>at the granularity you can evict</strong> (tuples for anti-caching, pages for LeanStore); ④ <strong>never block a thread in an I/O it can't schedule</strong> (async I/O, io_uring, restart-on-miss).</li> </ul>
+"""
+
+[[sections]]
+heading = "The cost of an access, measured"
+body = """
+<p>The two managers share a disk image of a static B+Tree (fan-out 64, 1 000 000 keys, 15 875 pages, four levels) and answer point lookups for a <strong>Zipf(0.99)</strong> key distribution, in a single thread:</p>
+
+<ul> <li><strong>Table + CLOCK</strong>: the classic buffer pool. Every page visit translates a page id through a hash table and sets a reference bit; replacement is CLOCK.</li> <li><strong>Swizzled</strong>: inner pages hold, next to each child's page id, a <em>frame index</em> if the child is hot. A hot visit is <code>frames[idx]</code>: no hash, no reference bit. Replacement: when frames run out, <strong>pick random hot pages whose children are all cold</strong>, <em>unswizzle</em> them (clear the parent's frame index, keeping the page in memory in a <strong>cooling FIFO</strong> and a small <code>pid → frame</code> map), and evict the oldest cooling page. A lookup that lands on a cooling page <strong>re-swizzles</strong> it for free (a <em>cooling hit</em>); anything else reads from disk.</li> </ul>
+
+:::deeper Reference: swizzling manager with cooling stage and a page-table CLOCK pool (single-threaded)
+```rust title="src/storage/swizzle.rs"
+//! Larger-than-memory index access: a pointer-swizzling buffer manager (LeanStore-style cooling stage)
+//! compared with a classic page-table pool (CLOCK). Single-threaded, to isolate the access path.
+use std::collections::{HashMap, VecDeque};
+
+pub const FAN: usize = 64;
+const NONE: u32 = u32::MAX;
+
+#[derive(Clone)]
+pub struct Page { pub leaf: bool, pub n: usize, pub keys: [u64; FAN], pub payload: [u64; FAN] }   // inner: payload = child page id
+
+impl Page {
+    #[inline] fn slot(&self, key: u64) -> usize { self.keys[..self.n].partition_point(|&k| k <= key).saturating_sub(1) }
+}
+
+/// The "disk": every page ever built, with a read counter.
+pub struct Disk { pub pages: Vec<Page>, pub root: u32, pub reads: u64 }
+
+impl Disk {
+    /// Static tree over keys 0..n (value = 3k+1); returns the disk image. Page 0 is the root.
+    pub fn build(n: u64) -> Disk {
+        let mut levels: Vec<Vec<Page>> = vec![];
+        let mut leaves = vec![];
+        let mut k = 0;
+        while k < n {
+            let mut p = Page { leaf: true, n: 0, keys: [0; FAN], payload: [0; FAN] };
+            while p.n < FAN && k < n { p.keys[p.n] = k; p.payload[p.n] = 3 * k + 1; p.n += 1; k += 1; }
+            leaves.push(p);
+        }
+        levels.push(leaves);
+        while levels.last().unwrap().len() > 1 {
+            let below = levels.last().unwrap();
+            let base: usize = 0;
+            let _ = base;
+            let mut up = vec![];
+            for chunk in below.chunks(FAN) {
+                let mut p = Page { leaf: false, n: 0, keys: [0; FAN], payload: [0; FAN] };
+                for c in chunk { p.keys[p.n] = c.keys[0]; p.n += 1; }
+                up.push(p);
+            }
+            levels.push(up);
+        }
+        // assign page ids top-down so the root is 0, then wire child ids
+        let mut ids: Vec<Vec<u32>> = vec![];
+        let mut next = 0u32;
+        for lv in levels.iter().rev() { ids.push((next..next + lv.len() as u32).collect()); next += lv.len() as u32; }
+        ids.reverse();                                                  // ids[l] matches levels[l]
+        let mut pages = vec![Page { leaf: true, n: 0, keys: [0; FAN], payload: [0; FAN] }; next as usize];
+        for (l, lv) in levels.iter().enumerate() {
+            for (i, p) in lv.iter().enumerate() {
+                let mut p = p.clone();
+                if !p.leaf { for j in 0..p.n { p.payload[j] = ids[l - 1][i * FAN + j] as u64; } }
+                pages[ids[l][i] as usize] = p;
+            }
+        }
+        Disk { root: ids.last().unwrap()[0], pages, reads: 0 }
+    }
+    fn read(&mut self, pid: u32) -> Page { self.reads += 1; self.pages[pid as usize].clone() }
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+pub struct Stats { pub ops: u64, pub disk_reads: u64, pub table_lookups: u64, pub cooling_hits: u64, pub evictions: u64 }
+
+pub trait PageStore { fn get(&mut self, key: u64) -> Option<u64>; fn stats(&self) -> Stats; fn pages_resident(&self) -> usize; }
+
+// ------------------------------------------------------------------ swizzled
+
+struct Frame { pid: u32, page: Page, hot: [u32; FAN], nhot: u32, parent: Option<(u32, u8)>, cooling: bool, valid: bool }
+
+pub struct Swizzled {
+    disk: Disk,
+    frames: Vec<Frame>,
+    free: Vec<u32>,
+    cooling_map: HashMap<u32, u32>,                    // pid → frame, for pages in the cooling stage
+    cooling_fifo: VecDeque<u32>,
+    cool_target: usize,
+    pin: u32,                                          // the page the current traversal is standing on: never cooled
+    rng: u64,
+    st: Stats,
+}
+
+impl Swizzled {
+    pub fn new(mut disk: Disk, capacity: usize, cooling_pct: usize) -> Self {
+        assert!(capacity >= 8);
+        let root = disk.read(disk.root);
+        let mut frames: Vec<Frame> = (0..capacity).map(|_| Frame { pid: NONE, page: root.clone(), hot: [NONE; FAN], nhot: 0, parent: None, cooling: false, valid: false }).collect();
+        frames[0] = Frame { pid: 0, page: root, hot: [NONE; FAN], nhot: 0, parent: None, cooling: false, valid: true };   // the root is pinned in frame 0
+        Self { disk, frames, free: (1..capacity as u32).rev().collect(), cooling_map: HashMap::new(), cooling_fifo: VecDeque::new(), cool_target: (capacity * cooling_pct / 100).max(1), pin: 0, rng: 0x2545F4914F6CDD1D, st: Stats::default() }
+    }
+
+    fn rand(&mut self, m: usize) -> usize { self.rng ^= self.rng << 13; self.rng ^= self.rng >> 7; self.rng ^= self.rng << 17; (self.rng % m as u64) as usize }
+
+    /// Move a random hot page without swizzled children into the cooling stage: its parent's pointer becomes unswizzled.
+    fn cool_one(&mut self) -> bool {
+        for _ in 0..64 {
+            let g = self.rand(self.frames.len());
+            let f = &self.frames[g];
+            if g == 0 || g as u32 == self.pin || !f.valid || f.cooling || f.nhot > 0 { continue; }
+            let (pf, slot) = f.parent.unwrap();
+            self.frames[pf as usize].hot[slot as usize] = NONE;
+            self.frames[pf as usize].nhot -= 1;
+            let pid = self.frames[g].pid;
+            self.frames[g].cooling = true;
+            self.cooling_map.insert(pid, g as u32);
+            self.cooling_fifo.push_back(g as u32);
+            return true;
+        }
+        false
+    }
+
+    /// Free the oldest cooling page (it was never touched again).
+    fn evict_one(&mut self) -> Option<u32> {
+        while let Some(g) = self.cooling_fifo.pop_front() {
+            let f = &mut self.frames[g as usize];
+            if !f.valid || !f.cooling { continue; }                  // re-heated meanwhile: stale FIFO entry
+            self.cooling_map.remove(&f.pid);
+            f.valid = false;
+            f.cooling = false;
+            f.parent = None;
+            self.st.evictions += 1;
+            return Some(g);
+        }
+        None
+    }
+
+    fn frame_for_load(&mut self) -> u32 {
+        loop {
+            if let Some(g) = self.free.pop() { return g; }
+            if let Some(g) = self.evict_one() { return g; }
+            if !self.cool_one() { panic!("pool too small: nothing evictable"); }
+        }
+    }
+
+    fn top_up_cooling(&mut self) { while self.cooling_map.len() < self.cool_target && self.cool_one() {} }
+}
+
+impl PageStore for Swizzled {
+    fn get(&mut self, key: u64) -> Option<u64> {
+        self.st.ops += 1;
+        let mut f = 0u32;
+        loop {
+            self.pin = f;
+            let fr = &self.frames[f as usize];
+            let i = fr.page.slot(key);
+            if fr.page.leaf { return (fr.page.keys[i] == key).then_some(fr.page.payload[i]); }
+            if fr.hot[i] != NONE { f = fr.hot[i]; continue; }                  // swizzled: a plain index, no table, no latch
+            let pid = fr.page.payload[i] as u32;
+            self.st.table_lookups += 1;                                         // only the unswizzled path touches a table
+            let g = if let Some(&g) = self.cooling_map.get(&pid) {              // still in memory, merely cooling: re-heat it
+                self.cooling_map.remove(&pid);
+                self.frames[g as usize].cooling = false;
+                self.st.cooling_hits += 1;
+                g
+            } else {
+                let g = self.frame_for_load();
+                let page = self.disk.read(pid);
+                self.st.disk_reads += 1;
+                self.frames[g as usize] = Frame { pid, page, hot: [NONE; FAN], nhot: 0, parent: None, cooling: false, valid: true };
+                g
+            };
+            self.frames[g as usize].parent = Some((f, i as u8));
+            self.frames[f as usize].hot[i] = g;
+            self.frames[f as usize].nhot += 1;
+            self.pin = g;
+            self.top_up_cooling();
+            f = g;
+        }
+    }
+    fn stats(&self) -> Stats { Stats { disk_reads: self.disk.reads, ..self.st } }
+    fn pages_resident(&self) -> usize { self.frames.iter().filter(|f| f.valid).count() }
+}
+
+// ------------------------------------------------------------------ page-table pool with CLOCK
+
+struct CFrame { pid: u32, page: Page, referenced: bool }
+
+pub struct TablePool { disk: Disk, table: HashMap<u32, usize>, frames: Vec<Option<CFrame>>, hand: usize, st: Stats }
+
+impl TablePool {
+    pub fn new(disk: Disk, capacity: usize) -> Self { Self { disk, table: HashMap::new(), frames: (0..capacity).map(|_| None).collect(), hand: 0, st: Stats::default() } }
+
+    fn fetch(&mut self, pid: u32) -> usize {
+        self.st.table_lookups += 1;                                             // every page visit goes through the table
+        if let Some(&i) = self.table.get(&pid) { self.frames[i].as_mut().unwrap().referenced = true; return i; }
+        let i = loop {
+            if self.frames[self.hand].is_none() { break self.hand; }
+            let f = self.frames[self.hand].as_mut().unwrap();
+            if f.referenced { f.referenced = false; self.hand = (self.hand + 1) % self.frames.len(); }
+            else { break self.hand; }
+        };
+        self.hand = (i + 1) % self.frames.len();
+        if let Some(old) = self.frames[i].take() { self.table.remove(&old.pid); self.st.evictions += 1; }
+        let page = self.disk.read(pid);
+        self.st.disk_reads += 1;
+        self.frames[i] = Some(CFrame { pid, page, referenced: true });
+        self.table.insert(pid, i);
+        i
+    }
+}
+
+impl PageStore for TablePool {
+    fn get(&mut self, key: u64) -> Option<u64> {
+        self.st.ops += 1;
+        let mut pid = self.disk.root;
+        loop {
+            let i = self.fetch(pid);
+            let p = &self.frames[i].as_ref().unwrap().page;
+            let s = p.slot(key);
+            if p.leaf { return (p.keys[s] == key).then_some(p.payload[s]); }
+            pid = p.payload[s] as u32;
+        }
+    }
+    fn stats(&self) -> Stats { Stats { disk_reads: self.disk.reads, ..self.st } }
+    fn pages_resident(&self) -> usize { self.frames.iter().flatten().count() }
+}
+```
+:::
+
+```text title="1M keys, 2M Zipf(0.99) lookups after a 500k warm-up"
+   memory manager     Mlookup/s    disk/op      table/op cooling hits    evictions   hit rate
+     100% swizzled        22.75      0.000          0.05        72607            0     100.0%
+     100% table+CLOCK       5.96      0.000          4.00            0            0     100.0%
+      50% swizzled        12.64      0.252          0.29        62059       377578      93.7%
+      50% table+CLOCK       6.45      0.242          4.00            0       362321      94.0%
+      20% swizzled        10.10      0.460          0.49        47780       690459      88.5%
+      20% table+CLOCK       5.95      0.449          4.00            0       672968      88.8%
+      10% swizzled         8.84      0.570          0.60        43724       854826      85.8%
+      10% table+CLOCK       5.71      0.567          4.00            0       850520      85.8%
+       5% swizzled         8.04      0.685          0.72        55854      1027854      82.9%
+       5% table+CLOCK       5.32      0.745          4.00            0       1117698      81.4%
+```
+
+<p>(<code>memory</code> = frames as a share of all pages; <code>disk/op</code> = page reads from the <em>simulated disk</em> per lookup; <code>table/op</code> = hash-table lookups per lookup; <code>hit rate</code> = share of the four page visits per lookup that were already resident.)</p>
+
+<ul> <li><strong>When the data fits (100%), swizzling is 3.8× faster</strong> (22.8 vs 6.0 M lookups/s) because the table manager does <strong>4.00 hash lookups per lookup</strong> and the swizzled one <strong>0.05</strong> (only the cooling stage's re-swizzles). Nothing is evicted; the entire gap is access-path cost.</li> <li><strong>As memory shrinks the gap narrows but stays</strong>: 2.0× at 50% memory, 1.7× at 20%, 1.5× at 10%, 1.5× at 5%, as disk work (simulated here as a memcpy; in reality microseconds to milliseconds) starts to dominate.</li> <li><strong>Hit rates are the same.</strong> Random eviction with a cooling stage matches CLOCK within about a point (93.7 vs 94.0% at 50% memory, 85.8 vs 85.8% at 10%) and is slightly <em>better</em> at 5% (82.9 vs 81.4%): the cooling FIFO gives hot pages a <strong>second chance at zero bookkeeping cost</strong> (44 000–73 000 cooling hits per 1.5 M lookups were pages saved from eviction by being touched again).</li> <li><strong>The "table/op" column for swizzling rises with memory pressure</strong> (0.29 → 0.72) since more child pointers are unswizzled at any time: the price of the cooling design.</li> </ul>
+
+<p>Correctness is checked against a formula oracle (<code>value = 3·key + 1</code>, absent beyond the key range) for 200 000 lookups mixing Zipf and uniform keys at 2%, 10%, 50% and 120% memory for <em>both</em> managers, and asserts residency never exceeds the frame count.</p>
+
+<aside data-call="why"><b>The bug the test caught</b><p>The first swizzling version "randomly cools any hot page whose children are all cold", which includes <strong>the page the current lookup is standing on</strong> (a bottom-level inner page has no swizzled children until the lookup attaches one). Under memory pressure that page was unswizzled and then evicted <em>while the lookup still held its frame index</em>; the correctness test at 2% memory surfaced it first as a "pool too small: nothing evictable" panic, with the stale frame behind it. The fix is a <strong>pin on the traversal's current page</strong> (<code>self.pin</code>), the single-threaded stand-in for what LeanStore does with optimistic latches and epochs. Concurrency is the same bug with more interleavings.</p></aside>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong>Index-based pointers (<code>u32</code> frame ids) instead of references.</strong> A swizzled pointer is a plain index into <code>frames</code>, so the borrow checker never sees aliasing; the invariants live in the data structure ("a page is in a parent's <code>hot[i]</code> iff its <code>parent</code> field points back and <code>nhot</code> counts it").</li> <li><strong>Mirror data structures need an invariant checker.</strong> <code>hot</code>, <code>parent</code>, <code>nhot</code>, <code>cooling</code>, <code>cooling_map</code> and <code>cooling_fifo</code> all describe the same facts; write <code>fn check(&amp;self)</code> that cross-verifies them and call it in tests after every operation.</li> <li><strong>Stale FIFO entries</strong> (a page re-heated while still queued) are cheaper to skip at pop time (<code>if !f.cooling { continue }</code>) than to remove from the middle of a <code>VecDeque</code>.</li> <li>For concurrency the swizzled word becomes an <strong><code>AtomicU64</code></strong> holding either a frame pointer or <code>pid | UNSWIZZLED_BIT</code>; swizzling is a CAS from unswizzled to swizzled, which makes two threads loading the same page safe.</li> <li><strong>Parent pointers</strong> are required to unswizzle without a search; maintaining them is the main complexity cost of the design (and why B-tree splits need care).</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>Evicting a page with swizzled children</strong> leaves dangling frame pointers; LeanStore therefore only cools pages whose children are all unswizzled, and the check isn't free for hot inner nodes.</li> <li><strong>Pointer swizzling needs a tree-shaped reference structure</strong> (each page has one parent); graphs with shared pages, or secondary references, need extra indirection.</li> <li><strong>mmap pitfalls</strong> are operational, not just performance: dirty pages may be written back <strong>in any order and at any time</strong> (breaks WAL), an I/O error surfaces as a signal inside arbitrary code, and <code>fsync</code> semantics on mappings vary by OS.</li> <li><strong>Anti-caching restarts</strong> only work if transactions are restartable and cheap; with large, long transactions the abort-fetch-restart loop can livelock.</li> <li><strong>Zipf is generous</strong>: real hot sets drift. Test with <strong>shifting</strong> hot spots and scans (a table scan evicts everything unless the policy is scan-resistant: LeanStore treats scans specially; CLOCK doesn't).</li> <li><strong>Simulating disk by memcpy flatters the miss path.</strong> Use a real device or an injected-latency model when comparing replacement policies.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "LeanStore: In-Memory Data Management Beyond Main Memory"
+url = "https://db.in.tum.de/~leis/papers/leanstore.pdf"
+
+[[sources]]
+title = "Virtual-Memory Assisted Buffer Management"
+url = "https://www.cs.cit.tum.de/fileadmin/w00cfj/dis/_my_direct_uploads/vmcache.pdf"
+
+[[sources]]
+title = "Umbra: A Disk-Based System with In-Memory Performance"
+url = "https://www.cidrdb.org/cidr2020/papers/p29-neumann-cidr20.pdf"
+
+[[sources]]
+title = "Are You Sure You Want to Use MMAP in Your Database Management System?"
+url = "https://db.cs.cmu.edu/papers/2022/cidr2022-p13-crotty.pdf"
+
+[[sources]]
+title = "Anti-Caching: A New Approach to Database Management System Architecture"
+url = "https://www.vldb.org/pvldb/vol6/p1942-debrabant.pdf"
+
+[[sources]]
+title = "In-Memory Performance for Big Data"
+url = "https://www.vldb.org/pvldb/vol8/p37-graefe.pdf"
+
+[[sources]]
+title = "Enabling Efficient OS Paging for Main-Memory OLTP Databases"
+url = "https://dl.acm.org/doi/10.1145/2485278.2485285"

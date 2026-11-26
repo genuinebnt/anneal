@@ -1,0 +1,88 @@
+title = "Parsing and building packets from raw bytes"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Networking and protocols"
+chapter_order = 3
+order = 535
+kind = "recipe"
+lede = "Ethernet/VLAN, ARP, IPv4/IPv6, TCP, UDP, ICMP, Internet checksum, fragmentation, pcap, flow table"
+level = "advanced"
+code = ["examples/networking/packet_parsing_checksums.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>packet capture tools</li><li>firewalls</li><li>load balancers</li><li><strong>Ids</strong></li><li>userspace network stacks (smoltcp-style)</li><li>protocol test harnesses</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a bounds-checked, zero-copy dissector. Each header type is a thin **view** over `&[u8]`: `parse` validates lengths **once** (header present, IHL/data-offset sane, total length within the buffer) and the accessors then read fixed offsets without copying. Anything inconsistent returns `ParseError`; nothing panics, which the 30,000-input fuzz at the end checks.
+
+Stack handled: Ethernet II with 802.1Q/QinQ tags, ARP, IPv4 (IHL, options, flags, fragment offset), IPv6 (extension-header chain), TCP (flags, MSS/WS/SACK/timestamp options), UDP, ICMP and ICMPv6 echo.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The internet checksum** (RFC 1071): ones' complement of the ones' complement sum of 16-bit big-endian words (odd trailing byte padded with 0).
+
+Properties used here: the sum is order-independent and can be folded lazily (carries added back at the end); verifying = summing everything **including** the checksum field and getting 0xFFFF; RFC 1624 incremental update HC' = &#126;(&#126;HC + &#126;m + m') patches a header when one word changes (TTL decrement in a router) without re-summing.
+
+TCP/UDP/ICMPv6 checksums also cover a **pseudo-header** (addresses, protocol, length) so a segment delivered to the wrong host or protocol fails.
+
+**Fragmentation**: IPv4 splits a datagram into fragments whose payload offsets are multiples of 8, all sharing (src, dst, id, protocol); the last has MF=0.
+
+**Reassembly** is attack surface: out-of-order and duplicate fragments must work, but **overlapping** fragments with different bytes (teardrop, and the ambiguity **ids** evasion exploits) are rejected here by dropping the whole datagram; sizes past 65535 (ping of death), too many fragments, and unbounded tables are capped.
+
+PCAP: the classic libpcap file (24-byte global header with a magic that tells byte order and microsecond vs nanosecond timestamps, then 16-byte record headers). **Flow table**: packets grouped by canonical 5-tuple with a simplified TCP state machine (SYN -> SYN/ACK -> ACK -> FINs -> closed, RST), ignoring sequence validation and timers.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>tcpdump/Wireshark dissectors</li><li>Suricata/Zeek-style monitors</li><li>Linux netfilter conntrack</li><li>NAT devices (they patch addresses and ports with incremental checksum updates)</li><li>software routers</li><li>smoltcp</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>RFC 1071 <a href="https://www.rfc-editor.org/rfc/rfc1071" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc1071</a></li><li>RFC 1624 <a href="https://www.rfc-editor.org/rfc/rfc1624" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc1624</a></li><li>RFC 791 (IPv4) <a href="https://www.rfc-editor.org/rfc/rfc791" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc791</a></li><li>RFC 8200 (IPv6) <a href="https://www.rfc-editor.org/rfc/rfc8200" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc8200</a></li><li>RFC 793 (TCP) <a href="https://www.rfc-editor.org/rfc/rfc793" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc793</a></li><li>RFC 768 (UDP) <a href="https://www.rfc-editor.org/rfc/rfc768" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc768</a></li><li>RFC 826 (ARP) <a href="https://www.rfc-editor.org/rfc/rfc826" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc826</a></li><li>RFC 792 (ICMP) <a href="https://www.rfc-editor.org/rfc/rfc792" target="_blank" rel="noreferrer">https://www.rfc-editor.org/rfc/rfc792</a></li><li>libpcap file format <a href="https://wiki.wireshark.org/Development/LibpcapFileFormat" target="_blank" rel="noreferrer">https://wiki.wireshark.org/Development/LibpcapFileFormat</a></li></ul>
+"""
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc1071"
+url = "https://www.rfc-editor.org/rfc/rfc1071"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc1624"
+url = "https://www.rfc-editor.org/rfc/rfc1624"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc791"
+url = "https://www.rfc-editor.org/rfc/rfc791"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc8200"
+url = "https://www.rfc-editor.org/rfc/rfc8200"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc793"
+url = "https://www.rfc-editor.org/rfc/rfc793"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc768"
+url = "https://www.rfc-editor.org/rfc/rfc768"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc826"
+url = "https://www.rfc-editor.org/rfc/rfc826"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc792"
+url = "https://www.rfc-editor.org/rfc/rfc792"
+
+[[sources]]
+title = "wiki.wireshark.org/Development/LibpcapFileFormat"
+url = "https://wiki.wireshark.org/Development/LibpcapFileFormat"

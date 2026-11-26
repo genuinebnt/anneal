@@ -1,0 +1,143 @@
+# cb-testing-tools: a testing toolbox around one small library
+
+Multi-crate recipe (workspace member). The library under test (`src/`, ~400 lines) is a tiny
+expression parser/pretty-printer (`expr`), a duration codec (`duration`), a bounded LRU map
+(`lru`) and atomic counters on a loom-ready `sync` facade (`counter`). Each technique has its
+own file with the explanation next to the code.
+
+```
+cargo test -q --release -p cb-testing-tools          # everything below except benchmarks (a few seconds)
+cargo test --release -p cb-testing-tools --benches   # runs each criterion benchmark once (smoke test)
+cargo bench -p cb-testing-tools                      # real measurements; add `-- --quick` for a fast rough run
+cargo bench -p cb-testing-tools --no-run             # compile only
+RUSTFLAGS="--cfg loom" cargo test --release -p cb-testing-tools --test loom_model   # + loom on the REAL counters (~10 s;
+                                                     # use a separate CARGO_TARGET_DIR: the cfg rebuilds everything)
+```
+
+## Which tool for which question
+
+| Technique | Question it answers | Strength | Blind spot | Here |
+|---|---|---|---|---|
+| Unit test | Does this example behave as I expect? | Fast, readable, documents intent | Only the inputs you thought of | `#[cfg(test)]` in `src/` |
+| Property test ([proptest](https://docs.rs/proptest)) | Does this LAW hold for all inputs (round trip, idempotence, model equivalence)? | Finds edge cases you did not imagine, shrinks to a minimal case | Needs a stated property and a good generator | `tests/proptest_properties.rs` |
+| Snapshot ([insta](https://insta.rs)) | Did the output of this big/ugly value change, and is the change intended? | Cheap to write, review-driven | Rubber-stamping with `accept`; volatile data needs redaction | `tests/snapshots.rs` |
+| Fuzzing (libFuzzer via [cargo-fuzz](https://rust-fuzz.github.io/book/), or the in-process harness here) | Can hostile bytes panic, hang, overflow, or blow the stack? | Coverage-guided search finds crashes nobody modelled | Needs an oracle (panic = bug); slow to saturate | `tests/fuzz_style.rs` |
+| Model checking ([loom](https://docs.rs/loom)) | Is this lock-free code correct under EVERY interleaving/ordering? | Exhaustive for small scenarios; catches missing Acquire/Release | State explosion; only loom types are modelled | `tests/loom_model.rs` |
+| Benchmark ([criterion](https://bheisler.github.io/criterion.rs/book/)) | Is it fast, and did a change make it slower? | Statistics, regression detection, throughput | Noisy machines; measures only what you wrote | `benches/criterion_bench.rs` |
+| Mutation testing (cargo-mutants) | Would my tests notice if the code were wrong? | Tests the tests: finds weak/missing assertions | Slow (reruns the suite per mutant) | describe only, below |
+| Miri | Is my `unsafe` free of UB (aliasing, uninit, leaks, races)? | Catches UB that "works" in release | 10-100x slower, no FFI/most I/O | describe only, below |
+
+Rule of thumb: unit tests for examples and regressions, properties for logic with laws,
+snapshots for rendering/structure, fuzzing for parsers and anything fed untrusted bytes, loom
+for hand-rolled atomics, criterion before/after an optimisation, mutants/Miri periodically
+(nightly CI job).
+
+## proptest
+
+* `prop_compose!` (named strategy from other strategies), `prop_oneof!` (weighted choice),
+  `prop_recursive` (trees: depth, total size, branching), `any::<T>()`, `prop::collection::vec`,
+  regex string strategies (`"[a-z][a-z0-9_]{0,3}"`).
+* Properties used: round trip, canonical-form idempotence, optimiser idempotence + semantic
+  preservation, commutativity/associativity, "never panics on any String", and a model-based
+  test (random operation sequences on `LruMap` vs a naive ordered Vec, compared after each step).
+* Shrinking: `shrinking_finds_a_minimal_counterexample` runs a deliberately buggy printer
+  through `TestRunner` programmatically and asserts the counterexample shrinks to at most 5
+  nodes (`a op (b op c)`). The `#[ignore]`d `buggy_printer_roundtrip` shows the raw failure
+  output: `cargo test --test proptest_properties -- --ignored`.
+* Regression persistence: when a property fails, proptest appends a `cc <hex seed>` line to a
+  regression file and REPLAYS it first on every later run. The default location is
+  `proptest-regressions/<src file>.txt` next to the source; integration tests cannot use the
+  default, so we set `FileFailurePersistence::Direct("proptest-regressions/proptest_properties.txt")`.
+  Commit that directory. Fix the bug, keep the seed.
+* Determinism: `ProptestConfig { cases: 128, rng_seed: RngSeed::Fixed(..), .. }`; env overrides
+  `PROPTEST_CASES`, `PROPTEST_RNG_SEED`. Fixed seeds make CI reproducible; run a nightly job
+  with a random seed (and more cases) to keep exploring.
+
+## loom
+
+`loom::model(|| ...)` re-executes the closure under every permitted schedule. Tests: correct
+Acquire/Release spinlock and flag handoff pass exhaustively; the same code with `Relaxed` makes
+loom panic (causality violation on `loom::cell::UnsafeCell`), asserted with `catch_unwind`; a
+load-then-store counter loses updates under any ordering; a CAS loop does not.
+* Facade pattern (`src/sync.rs`): library code imports atomics from `crate::sync`, which is
+  `std::sync` normally and `loom::sync` under `RUSTFLAGS="--cfg loom"`. `loom` is a
+  `[target.'cfg(loom)'.dependencies]` entry, and `[lints.rust] unexpected_cfgs` declares the cfg.
+  The loom test file here also runs in-process without the cfg by using loom types directly.
+* Limits: state explosion (keep 2-3 threads, few operations; `LOOM_MAX_PREEMPTIONS=3` or
+  `Builder::preemption_bound`), `LOOM_LOG=1` / `LOOM_CHECKPOINT_FILE` to debug a failing
+  schedule, spin loops need `loom::thread::yield_now()`, only loom's types are modelled, some
+  orderings (SeqCst fences) are approximated, so a pass is strong evidence for the modelled
+  scenario, not a proof for the whole program.
+
+## insta
+
+Snapshots are committed in `tests/snapshots/`. Review workflow: change code, run tests (fail +
+`*.snap.new` written), `cargo insta review` (install: `cargo install cargo-insta`; not used
+here) to accept/reject each diff, commit the `.snap` files. `INSTA_UPDATE=no` in CI (never
+write, missing snapshot = failure); `INSTA_UPDATE=always` rewrites in place (this is how the
+files here were produced). Features used: `assert_snapshot!`, `assert_debug_snapshot!`, named
+and inline (`@"..."`, `@r#"..."#`) snapshots, `assert_json_snapshot!` with redactions
+(`".run_id" => "[id]"`, `dynamic_redaction`), and `with_settings!` (regex `filters`,
+`snapshot_suffix`, `description`).
+
+## criterion
+
+Groups, `Throughput::Elements`, `BenchmarkId::new(name, size)` / `from_parameter`,
+`std::hint::black_box`. `harness = false` in `[[bench]]` is required because criterion supplies
+`main`. `cargo test --benches` (verified) executes each benchmark once without timing, so the
+bench code cannot silently rot. `cargo bench -- --quick` gives rough numbers in seconds;
+`cargo bench -- --save-baseline before` then `-- --baseline before` compares across changes.
+Default features are off (`cargo_bench_support` only), so no plotters/rayon: HTML reports are
+not generated.
+
+## Fuzzing
+
+In-process (`tests/fuzz_style.rs`): `fuzz_target(&[u8])` must never panic or exceed a 250 ms
+budget; a seeded xorshift mutation fuzzer (bit flips, byte replace/insert/delete, chunk
+duplication, splicing between corpus entries, dictionary tokens from `tests/corpus/dict.txt`)
+runs 50k iterations from the seed corpus in `tests/corpus/`; a delta-debugging minimiser shrinks
+a crash to its essence (tested on a planted bug: `((`). Writing the adversarial-shape test
+exposed a real flaw in this library: `1+1+1+...` nests without parentheses, so the depth limit
+alone did not bound recursion; `MAX_NODES` fixes it.
+
+Real coverage-guided fuzzing (describe only; needs nightly and `cargo install cargo-fuzz`):
+
+```
+cargo install cargo-fuzz
+cargo fuzz init                      # creates fuzz/Cargo.toml and fuzz/fuzz_targets/fuzz_target_1.rs
+# fuzz/fuzz_targets/fuzz_target_1.rs:
+#   #![no_main]
+#   use libfuzzer_sys::fuzz_target;
+#   fuzz_target!(|data: &[u8]| { cb_testing_tools::fuzz_target(data); });
+cargo +nightly fuzz run fuzz_target_1 -- -max_total_time=60 -dict=fuzz/dict.txt
+cargo +nightly fuzz cmin fuzz_target_1                # minimise the corpus
+cargo +nightly fuzz tmin fuzz_target_1 fuzz/artifacts/fuzz_target_1/crash-<hash>   # minimise one crash
+cargo +nightly fuzz coverage fuzz_target_1            # see what the corpus reaches
+```
+Layout: `fuzz/corpus/<target>/` (seed with the files from `tests/corpus/`), `fuzz/artifacts/<target>/`
+(crashes, commit minimised ones as regression tests), dictionary in AFL/libFuzzer format
+(`kw1="ms"`). Sanitizers: AddressSanitizer is on by default (`--sanitizer address`); try
+`--sanitizer memory|thread` for unsafe code. `arbitrary::Arbitrary` turns bytes into structured
+inputs (e.g. a whole `Expr`). Rust's overflow checks are off in release, so use
+`cargo fuzz run --release -- ...` with `-C debug-assertions` (the default) if you want them.
+
+## Mutation testing and Miri (describe only)
+
+* cargo-mutants (https://mutants.rs): `cargo install cargo-mutants`, then
+  `cargo mutants -p cb-testing-tools` replaces expressions (`+` to `-`, `return x` to default,
+  etc.) one at a time and reruns the tests. A "missed" mutant is a behaviour no test pins down.
+  Use `--in-diff` on PRs and `-j` for parallelism.
+* Miri (https://github.com/rust-lang/miri): `rustup +nightly component add miri` then
+  `cargo +nightly miri test`. Interprets MIR and reports UB: out-of-bounds, use-after-free,
+  uninitialised reads, invalid aliasing (Stacked/Tree Borrows), data races. Set
+  `MIRIFLAGS="-Zmiri-many-seeds"` to vary thread schedules; it will not run FFI or most I/O, so
+  gate with `#[cfg(not(miri))]`. This crate has no `unsafe` outside loom tests, so Miri is shown
+  for completeness only.
+
+## Layout
+
+```
+src/{lib,expr,duration,lru,counter,sync}.rs     library under test
+tests/proptest_properties.rs   tests/loom_model.rs   tests/snapshots.rs   tests/fuzz_style.rs
+tests/snapshots/*.snap         tests/corpus/*        benches/criterion_bench.rs
+```

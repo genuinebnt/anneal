@@ -1,0 +1,50 @@
+title = "Untyped lambda calculus toolkit"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Types and semantics"
+chapter_order = 4
+order = 612
+kind = "recipe"
+lede = "Substitution, de Bruijn, reduction strategies, Church/Scott encodings, SKI."
+level = "intermediate"
+code = ["examples/compilers_runtimes/lambda_calculus_toolkit.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>understanding what every functional-language core does</li><li>writing interpreters</li><li>optimisers and proof-assistant kernels</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>the semantic core of ML/Haskell/Lisp compilers (Core/ANF are typed, strict or lazy cousins)</li><li>term rewriting engines</li><li>proof-assistant kernels (Lean/Coq/Agda all rely on capture-free substitution or de Bruijn terms)</li><li>template/macro hygiene</li><li>combinator-based execution of lazy languages (the Miranda/early Haskell graph-reduction lineage) and</li><li>via the S and K combinators</li><li>point-free code generation. Course: Pierce</li><li>"Types and Programming Languages"</li><li>ch. 5-7 (untyped lambda calculus, nameless representation)</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The idea**: a term is a variable, `\\x. body` or an application `f a`. The only computation rule is **beta**: `(\\x. b) a -> b[x := a]`. Everything else (numbers, booleans, data, recursion) is an **encoding**.
+
+This file builds the machinery around that one rule:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Named</div><div class="cb-g-says"><p>Terms with <strong>capture-avoiding</strong> substitution (rename a binder when it would capture a free variable of the argument) and <strong>alpha</strong>-equivalence (equal up to consistent renaming of bound variables).</p></div></div><div class="cb-g-term"><div class="cb-g-name">De BRUIJN</div><div class="cb-g-says"><p>Indices: a variable is the number of binders between it and its binder, so alpha-equivalent terms are literally <code>==</code> and substitution needs <code>shift</code> instead of fresh names. The cost is that humans cannot read them. The two evaluators (named and nameless) must take exactly the same steps: tested on thousands of random terms.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Reduction strategies</div><div class="cb-g-says"><p>Normal order (leftmost-outermost, reduces under lambdas; finds a normal form whenever one exists), applicative order (innermost first; may diverge on terms that have a normal form), call-by-name and call-by-value (<strong>weak</strong>: never reduce under a lambda, stop at a lambda value) and call-by-need (call-by-name plus memoised arguments, here a Krivine-style environment machine whose thunks are updated in place).</p><p><strong>Church-rosser</strong> (confluence): any two reduction orders that reach a normal form reach the <strong>same</strong> one (up to alpha); tested with a random-redex strategy.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Encodings</div><div class="cb-g-says"><p>As library terms: Church numerals/booleans/pairs/lists, Scott numerals/lists (data = its own case analysis, predecessor is O(1) but folding needs recursion), recursion through the Y combinator (normal order) and the Z combinator (an eta-expanded Y that survives call-by-value).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Combinators</div><div class="cb-g-says"><p><strong>Bracket abstraction</strong> removes variables altogether: <code>[x]x = I</code>, <code>[x]E = K E</code> if x is not free in E, <code>[x](E1 E2) = S [x]E1 [x]E2</code>. Optimised variants add B (compose) and C (flip), and eta (<code>[x](E x) = E</code>), which shrinks output. Eta is <strong>not</strong> a beta rule, so the eta variant is only checked observationally (Church arithmetic), not by normal-form equality.</p><p>The BCKW family (B, C, K, W) and S, K, I are standard; this file uses S K I B C. <strong>Why non-termination is detected by fuel</strong>: beta-equivalence of terms is undecidable (it can encode the halting problem), so every evaluator here counts steps and size and gives up with <code>Out::Fuel</code>; <code>omega = (&#92;x. x x)(&#92;x. x x)</code> reduces to itself forever.</p><p><strong>How rust differs</strong>: a closure <code>|x| body</code> is a lambda whose free variables are captured by an <strong>environment</strong> (the Krivine machine below is exactly what a closure is), but Rust is call-by-value and its types forbid self-application, so <code>omega</code> does not typecheck: <code>let f = |x| x(x)</code> fails the occurs check.</p><p><code>Rc&lt;RefCell&lt;..&gt;&gt;</code> thunks are how <code>lazy_static</code>/<code>OnceCell</code> implement need.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Pierce "Types and Programming Languages" <a href="https://www.cis.upenn.edu/~bcpierce/tapl/" target="_blank" rel="noreferrer">https://www.cis.upenn.edu/~bcpierce/tapl/</a></li><li>Barendregt "The Lambda Calculus: its Syntax and Semantics" (cited by title, not fetched)</li><li>Turner "Another algorithm for bracket abstraction" (JSL 1979, by title)</li><li><a href="https://en.wikipedia.org/wiki/Lambda_calculus" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Lambda_calculus</a></li><li><a href="https://en.wikipedia.org/wiki/Church%E2%80%93Rosser_theorem" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Church%E2%80%93Rosser_theorem</a> and Krivine "A call-by-name lambda-calculus machine" (by title)</li></ul>
+"""
+
+[[sources]]
+title = "cis.upenn.edu/~bcpierce/tapl"
+url = "https://www.cis.upenn.edu/~bcpierce/tapl/"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Lambda_calculus"
+url = "https://en.wikipedia.org/wiki/Lambda_calculus"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Church%E2%80%93Rosser_theorem"
+url = "https://en.wikipedia.org/wiki/Church%E2%80%93Rosser_theorem"

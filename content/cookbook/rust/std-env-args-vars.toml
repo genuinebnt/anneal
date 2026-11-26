@@ -1,0 +1,78 @@
+title = "Std::env"
+module = "Standard library and core"
+module_order = 2
+chapter = "Processes, signals and networking"
+chapter_order = 8
+order = 101
+kind = "recipe"
+lede = "std::env (args, environment variables, process paths), a hand-written CLI parser, layered config, and the FFI string types OsStr/OsString/CStr/CString."
+level = "intermediate"
+code = ["examples/std_tour/std_env_args_vars.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>CLI tools</li><li>12-factor service config</li><li>container entrypoints</li><li>passing paths and names to the OS or C</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>DATABASE_URL / <strong>port</strong> / RUST_LOG</li><li><code>--flag=value</code> parsing</li><li><code>--</code> pass-through to a child command</li><li>config precedence (defaults &lt; file &lt; env &lt; flags)</li><li>non-UTF-8 file names</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>std::env::args</code></li><li><code>std::env::var</code></li><li><code>std::env::VarError</code></li><li><code>std::env::args_os</code></li><li><code>std::env::var_os</code></li><li><code>std::env::vars</code></li><li><code>std::env::vars_os</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::env::current_dir</code></li><li><code>std::env::temp_dir</code></li><li><code>std::env::current_exe</code></li><li><code>std::env::set_var</code></li><li><code>std::env::remove_var</code></li><li><code>std::env::split_paths</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::env::join_paths</code></li><li><code>std::env::home_dir</code></li><li><code>std::env::consts::OS</code></li><li><code>std::env::consts::ARCH</code></li><li><code>std::env</code></li><li><code>std::option_env</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::process::Command::env</code></li><li><code>Command::env_remove</code></li><li><code>Command::env_clear</code></li><li><code>Command::args</code></li><li><code>OsStr::new</code></li><li><code>OsStr::to_str</code></li><li><code>OsStr::to_string_lossy</code></li></ul>
+
+<ul class="cb-g-names"><li><code>OsStr::as_encoded_bytes</code></li><li><code>OsString::from</code></li><li><code>OsString::into_string</code></li><li><code>OsString::push</code></li><li><code>std::os::unix::ffi::OsStrExt::from_bytes</code></li></ul>
+
+<ul class="cb-g-names"><li><code>std::os::unix::ffi::OsStringExt::from_vec</code></li><li><code>std::ffi::CString::new</code></li><li><code>CString::into_bytes</code></li><li><code>CString::as_bytes_with_nul</code></li><li><code>CString::as_c_str</code></li></ul>
+
+<ul class="cb-g-names"><li><code>NulError::nul_position</code></li><li><code>CStr::from_bytes_with_nul</code></li><li><code>CStr::from_bytes_until_nul</code></li><li><code>CStr::to_str</code></li><li><code>CStr::to_bytes</code></li><li><code>CStr::count_bytes</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/env/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/env/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+`std::env`, `std::process`, `OsStr`/`OsString` and the unix extension traits are std only. `CStr` is core (`core::ffi`), `CString` is alloc (`alloc::ffi`); `env!`/`option_env!` are compiler built-in macros exported by core. Also: <https://doc.rust-lang.org/std/ffi/index.html>
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+set_current_dir (process-global, racy in tests: use Command::current_dir), env::chdir-like helpers, unsafe raw-pointer functions (CStr::from_ptr, CString::into_raw/from_raw: see the FFI chapter), from_encoded_bytes_unchecked (unsafe), Windows OsStringExt (cannot run here).
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Arguments, may be non-UTF-8 (robust)</td><td><code>args_os().skip(1)</code></td></tr><tr><td>Arguments as Strings (panics on bad UTF-8)</td><td><code>args().skip(1)</code></td></tr><tr><td>Optional text setting</td><td><code>env::var("X").ok()   (but that hides NotUnicode)</code></td></tr><tr><td>Distinguish unset from garbage</td><td><code>match env::var("X") { NotPresent / NotUnicode }</code></td></tr><tr><td>Path-valued variable</td><td><code>var_os("X").map(PathBuf::from)</code></td></tr><tr><td>Value fixed at COMPILE time</td><td><code>env!("CARGO_PKG_VERSION") / option_env!("X")</code></td></tr><tr><td>Give a variable to a child process</td><td><code>Command::env (never set_var for this)</code></td></tr><tr><td>Testable config code</td><td><code>take an args iterator and a Fn(&amp;str) -&gt; Option&lt;String&gt; lookup</code></td></tr><tr><td>Split or build PATH</td><td><code>split_paths / join_paths</code></td></tr><tr><td>OS string</td><td><code>&amp;str                          -&gt; to_str() (None if invalid) or to_string_lossy() (replacement chars)</code></td></tr><tr><td>String for a C API</td><td><code>CString::new(s)  (fails on an interior NUL) SAFETY NOTE (std docs for set_var): set_var/remove_var are unsafe in edition 2024. They are sound in a single-threaded program and on Windows. In a multi-threaded program on other systems the only sound option is not to call them, because C code (even DNS lookup) reads the environment without synchronisation. cargo test is multi-threaded.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/env/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/env/index.html</a></li><li><a href="https://doc.rust-lang.org/std/ffi/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/ffi/index.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/env/index.html"
+url = "https://doc.rust-lang.org/std/env/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/ffi/index.html"
+url = "https://doc.rust-lang.org/std/ffi/index.html"

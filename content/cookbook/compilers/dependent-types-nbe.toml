@@ -1,0 +1,64 @@
+title = "A tiny dependent type theory"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Types and semantics"
+chapter_order = 4
+order = 615
+kind = "recipe"
+lede = "Normalisation by evaluation, bidirectional elaboration with holes, proofs by induction."
+level = "advanced"
+code = ["examples/compilers_runtimes/dependent_types_nbe.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>proof assistants</li><li>dependently typed languages (Agda, Lean, Idris, Coq)</li><li>refinement/indexed types</li><li>any checker that compares types up to computation</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>the kernel/elaborator split of Lean 4</li><li>Agda</li><li>Coq</li><li>Idris 2 and Arend (evaluate into a semantic domain, compare there, read back only to print)</li><li>type-level computation in Rust-adjacent tools (const generics are the tiny, decidable cousin: <code>[T; N + 1]</code>)</li><li>proof-carrying code</li><li>verified compilers such as CompCert and seL4's Isabelle proofs (the same idea, different logic)</li><li>checking SMT/proof certificates. Course: Abel</li><li>Coquand and others</li><li>tutorials on normalisation by evaluation</li><li>András Kovács</li><li>"elaboration-zoo" (structure of this file)</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The theory** (Martin-Lof style, deliberately small): terms and types are the **same** syntax. `(x : A) -> B` is the dependent function type (a Pi type: the result type may mention the argument, which is how `Vec A n` can say "n elements").
+
+`Type : Type` keeps the rule set tiny but is **inconsistent** (Girard's paradox): fine for a teaching kernel, never for a real prover, which has a universe hierarchy `Type 0 : Type 1 : ...`. Nat has zero, suc and the eliminator `natrec` (induction principle **and** recursion). `Vec A n` is an indexed family with `nil`, `cons`, `vecrec`.
+
+`Id A a b` is propositional equality with `refl` and the eliminator `J` (the induction principle of equality: to prove something about every `p : Id A a b` it is enough to prove it for `refl`).
+
+All constants are **primitives** with their types written as ordinary source text and checked once; their computation rules live in one function (`reduce_elim`), so the checker has no special cases. **Why normalisation by evaluation**: type checking needs "are these two types equal up to computation?" (`Vec A (plus 2 3)` vs `Vec A 5`).
+
+Substituting naively and reducing terms is slow and capture-prone. NbE instead **evaluates** a term into a semantic domain of host-language values (closures for lambdas, **neutrals** for stuck terms such as `natrec P z s n` with a variable `n`), compares values, and only reads back (`quote`) to syntax when printing.
+
+Two index systems fall out naturally: terms use de Bruijn **indices** (distance to the binder: good for substitution and alpha-equivalence), values use de Bruijn **levels** (distance from the root: a variable keeps its name when it is moved under more binders, which is what makes weakening free). `quote` converts levels back to indices: `index = depth - level - 1`.
+
+**Conversion** (definitional equality) compares values structurally and uses the **eta** rule for functions: `f` equals `\\x. f x`, checked by applying both sides to a fresh variable. It is symmetric and transitive because it equates normal forms; the tests check exactly that.
+
+**Bidirectional elaboration**: `infer` returns a term and its type; `check` takes the expected type, which is what lets `\\x. e` omit its annotation.
+
+**Holes**: `_` makes a **metavariable** solved by unification (so `cons Nat _ 1 xs` needs no length argument, and `cong suc _ _ ih` finds both sides from `ih`); `?name` is a **typed hole** that fails with the goal type and the context, the "what do I need here?" workflow of Agda/Lean.
+
+Our metas are simple: a meta may be solved only by a term whose variables were all in scope where the meta was created (checked with levels) and that does not mention the meta (occurs check); metas are never applied to arguments, so there is no higher-order pattern unification (the elaboration-zoo covers that next).
+
+**The examples**, all checked by the kernel here: plus, cong, sym, trans, transport (from J), vector append with the length index `Vec A (plus m n)`, vmap, associativity and commutativity of plus by induction (proof terms written out), plus 20 deliberately wrong programs.
+
+**How rust differs**: Rust's const generics evaluate `N + 1` only for concrete literals; `Vec<T, N>` with N a variable and a proof that `N + M == M + N` is impossible without nightly `generic_const_exprs` precisely because the compiler has no normaliser for open terms. Everything here is the opposite design: types are values you can compute with.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>András Kovács, elaboration-zoo <a href="https://github.com/AndrasKovacs/elaboration-zoo" target="_blank" rel="noreferrer">https://github.com/AndrasKovacs/elaboration-zoo</a></li><li>Abel, "Normalization by Evaluation: Dependent Types and Impredicativity" (habilitation thesis, by title) and the tutorial "Checking Dependent Types with Normalization by Evaluation: A Tutorial" (Coquand-style, cited by title, not fetched)</li><li>Löh, McBride and Swierstra, "A tutorial implementation of a dependently typed lambda calculus" (Fundamenta Informaticae 2010, by title)</li><li><a href="https://en.wikipedia.org/wiki/Normalisation_by_evaluation" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Normalisation_by_evaluation</a></li></ul>
+"""
+
+[[sources]]
+title = "github.com/AndrasKovacs/elaboration-zoo"
+url = "https://github.com/AndrasKovacs/elaboration-zoo"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Normalisation_by_evaluation"
+url = "https://en.wikipedia.org/wiki/Normalisation_by_evaluation"

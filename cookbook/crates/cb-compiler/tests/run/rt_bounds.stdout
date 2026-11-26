@@ -1,0 +1,4 @@
+3
+--- runtime error: index out of bounds: the length is 3 but the index is 3
+  at get
+  at main

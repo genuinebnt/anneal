@@ -1,0 +1,37 @@
+title = "How to use this guide"
+module = "Appendices"
+module_order = 15
+chapter = "Courses, reading and glossary"
+chapter_order = 1
+order = 686
+kind = "guide"
+lede = "The loop every section follows, and what the labels mean"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "The loop"
+body = """
+<p>A database is built <strong>bottom-up</strong>: the buffer pool has to exist before a B+Tree can sit on it, and the tree has to exist before an index scan can use it. Each layer gets its own loop, and each loop ends with a test you can run and a number you can measure.</p>
+
+<ol class="cb-g-steps"><li><b>Watch</b><p>The linked CMU lecture, at 1.25×. Pause at every diagram and predict the next slide.</p></li><li><b>Read</b><p>The textbook chapter and the one required paper. The paper tells you what the lecture's diagram simplified away.</p></li><li><b>Break</b><p>Build the naive version in <code>crates/scratch/</code>, then write the test that exposes it. A replacer that evicts a pinned frame, a tree descent without latches that tears.</p></li><li><b>Build</b><p>The real component in <code>crates/relational/</code> (or the right sibling crate). Stick to <code>std</code> until a stage genuinely needs a dependency.</p></li><li><b>Prove</b><p>Port BusTub's test for that component, then add a property test and, for anything concurrent, a <code>loom</code> or <code>shuttle</code> model.</p></li><li><b>Measure</b><p>A criterion bench or a workload driver. No optimization lands without a benchmark that showed the problem <em>first</em>.</p></li><li><b>Write down</b><p>One paragraph in the component's module doc on what you'd do differently in production, and why.</p></li></ol>
+"""
+
+[[sections]]
+heading = "Labels"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Tier</th> <th>What you'll find here</th> <th>How it's shown</th> </tr> </thead> <tbody> <tr> <td><strong>BUILD</strong></td> <td>Page layouts, executors, B+Tree split and merge, every design decision with a real trade-off</td> <td>Spec, invariants, test plan and design questions in the open. A full reference implementation in a collapsed <span class="cb-g-tier cb-g-build">BUILD</span> block.</td> </tr> <tr> <td><strong>SCAFFOLD</strong></td> <td>Places people usually stall: latch crabbing, Grace hash join partitioning, undo-chain traversal</td> <td>A ladder of smaller questions in the open, each answerable from what came before. Code collapsed.</td> </tr> <tr> <td><strong>TEACH</strong></td> <td>Invented techniques nobody derives at a desk: ARC's ghost lists, ARIES, MVCC version chains, join-order DP, HNSW, Raft</td> <td>The mechanism is explained in the open, with the paper; full code is collapsed.</td> </tr> <tr> <td><strong>REF</strong></td> <td>Look-up-able engineering knowledge: atomics, <code>unsafe</code>, <code>io_uring</code>, criterion</td> <td>Shown in the open, with a pointer to where it's documented.</td> </tr> </tbody> </table></div>
+
+<p>Attempt the code first, then open the block to compare. Collapsed code is complete and compiles against the BusTub-shaped API used throughout the guide.</p>
+"""
+
+[[sections]]
+heading = "Reading a section"
+body = """
+<ul> <li><strong>The header strip</strong> shows which layers of the stack the section touches: parser, binder·planner, optimizer, executor, access methods, buffer pool, disk, transactions, recovery, distributed. The ▶ chips link to the lecture recordings.</li> <li><strong>Callouts</strong> are colour-coded: <b>Rust</b> for idioms and borrow-checker lessons, <b>Performance</b>, <b>Testing</b>, <b>Pitfall</b>, <b>In production</b> for what PostgreSQL, InnoDB, DuckDB, RocksDB and others do, and <b>Cairn</b> for decisions specific to this project.</li> <li><strong>“Done when”</strong> checklists are saved in your browser. The counter at the top of the contents shows overall progress.</li> <li><strong>Exercises</strong> go past the course, into what a production system would need next.</li> </ul>
+"""
+
+[[sections]]
+heading = "Pacing"
+body = """
+<p>Taken at a sustainable pace (10–12 hours a week), Part I takes roughly 16–20 weeks: about one lecture plus its project slice per week, with P2 and P4 taking two to three weeks each. Part II's OLTP half and Part III each take about 8 weeks. Part V's systems take 4–10 weeks apiece. The whole guide is a multi-year project, and the order matters more than the pace. Systems 1 and 2 alone cover nine of the twelve domains in <code>LEARNING.md</code>.</p>
+"""

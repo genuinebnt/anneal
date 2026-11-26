@@ -1,0 +1,44 @@
+title = "False sharing"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Atomics and memory ordering"
+chapter_order = 2
+order = 250
+kind = "recipe"
+lede = "Two threads, two separate counters, one cache line, 5-10x slower."
+level = "advanced"
+code = ["examples/perf/false_sharing.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>per-thread/per-worker counters</li><li>stats</li><li>queues with head/tail indices</li><li>any hot shared atomics</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>per-thread counters/metrics</li><li>queue head/tail indices</li><li>any hot shared atomics</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Cores keep their own copy of each cache line and must agree via a coherence protocol. If thread A writes variable X and thread B writes a **different** variable Y that happens to sit in the **same** 64-byte line, every write invalidates the other core's copy: the line ping-pongs although the threads share no data.
+
+Fix: pad/align hot per-thread data to its own line (`#[repr(align(64))]`; crossbeam's `CachePadded` does this, using 128 on some CPUs where the prefetcher pairs lines).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.algorithmica.org/hpc/cpu-cache/sharing/> and <https://docs.rs/crossbeam-utils/latest/crossbeam_utils/struct.CachePadded.html>
+"""
+
+[[sources]]
+title = "en.algorithmica.org/hpc/cpu-cache/sharing"
+url = "https://en.algorithmica.org/hpc/cpu-cache/sharing/"
+
+[[sources]]
+title = "docs.rs/crossbeam-utils/latest/crossbeam_utils/struct.CachePadded.html"
+url = "https://docs.rs/crossbeam-utils/latest/crossbeam_utils/struct.CachePadded.html"

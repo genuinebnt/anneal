@@ -1,0 +1,691 @@
+title = "Build WAL and ARIES"
+module = "Databases"
+module_order = 8
+chapter = "Logging and recovery"
+chapter_order = 7
+order = 416
+kind = "guide"
+lede = "A recoverable store · log framing with CRCs · buffer pool with STEAL / NO-FORCE · fuzzy checkpoints · analysis / redo / undo · crash injection at every durable step · mutation testing"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p>Recovery code is the part of a DBMS you cannot test by running it. The bugs only show when the machine dies at exactly the wrong instruction, possibly <em>twice</em>. So this stage is built <strong>test-first around a crash simulator</strong>: stable storage is an explicit value (<code>Durable</code>: pages, log bytes, master record), everything else is volatile and thrown away at a crash, and a <strong>fuel counter</strong> makes any durable-effect step (log append, log flush, page write, master update) fail on demand.</p>
+
+### Key ideas
+
+<ul> <li><strong>Model the crash as data.</strong> <code>Db::into_durable(torn)</code> returns what survives; <code>Db::recover(durable, fuel, …)</code> starts from it. Every durable step calls <code>tick()</code>, which returns <code>Err(Crashed)</code> when the fuel is spent. Rust's <code>?</code> makes every operation crash-aware for free.</li> <li><strong>Frame the log</strong>: <code>[len][crc32][payload]</code>. A torn tail fails its CRC; recovery <strong>truncates to the last good record</strong> before appending anything.</li> <li><strong>LSN = byte offset + header</strong>, so records are found by seeking and the log needs no index.</li> <li><strong>Page = (pageLSN, slots)</strong>. A page write is the only way data reaches disk, and <code>flush_page</code> enforces the WAL rule by flushing the log first.</li> <li><strong>Oracle without recovery logic.</strong> The test model replays the driver's own writes, applying only transactions whose COMMIT is in the <em>durable log</em>, so it checks recovery against an independent definition of correct.</li> <li><strong>Crash during recovery</strong> is part of the protocol: recovery runs with fuel too, crashes, runs again, and must still converge to the same state.</li> <li><strong>Mutation testing</strong> proves the harness has teeth: disable one rule at a time and the harness must fail.</li> </ul>
+"""
+
+[[sections]]
+heading = "Reference implementation"
+body = """
+<p>Records, framing, buffer pool, transactions, fuzzy checkpoints and the three recovery passes. Single-threaded: concurrency is a separate concern, covered below.</p>
+
+:::deeper Reference: WAL records + framing, buffer pool, normal execution, checkpoint, ARIES recovery
+```rust title="src/recovery/aries.rs"
+//! Write-ahead logging and ARIES recovery on a simulated crash-prone store.
+//! Stable storage = `Durable` (pages + log bytes + master record); everything else is lost in a crash.
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
+
+pub type Lsn = u64;
+pub type TxnId = u32;
+pub type PageId = u32;
+pub const SLOTS: usize = 8;
+/// LSN of a record = HEADER + its byte offset in the log, so 0 can mean "none".
+pub const HEADER: u64 = 8;
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub struct Crashed;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TxStatus { Running, Committed, Undo }
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Rec {
+    Begin { txn: TxnId },
+    Update { txn: TxnId, prev: Lsn, page: PageId, slot: u8, before: i64, after: i64 },
+    Commit { txn: TxnId, prev: Lsn },
+    Abort { txn: TxnId, prev: Lsn },
+    End { txn: TxnId, prev: Lsn },
+    /// Compensation: redo-only record describing an undo; `undo_next` skips what was already undone.
+    Clr { txn: TxnId, prev: Lsn, page: PageId, slot: u8, after: i64, undo_next: Lsn },
+    CkptBegin,
+    CkptEnd { att: Vec<(TxnId, TxStatus, Lsn)>, dpt: Vec<(PageId, Lsn)>, next_txn: TxnId },
+}
+
+// ---------- framing: [len u32][crc32 u32][payload] ----------
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut c = !0u32;
+    for &b in data {
+        c ^= b as u32;
+        for _ in 0..8 { c = (c >> 1) ^ (0xEDB8_8320 & 0u32.wrapping_sub(c & 1)); }
+    }
+    !c
+}
+
+fn encode(r: &Rec) -> Vec<u8> {
+    let mut p = Vec::new();
+    let (u32_, u64_, i64_) = (|p: &mut Vec<u8>, v: u32| p.extend(v.to_le_bytes()), |p: &mut Vec<u8>, v: u64| p.extend(v.to_le_bytes()), |p: &mut Vec<u8>, v: i64| p.extend(v.to_le_bytes()));
+    match r {
+        Rec::Begin { txn } => { p.push(1); u32_(&mut p, *txn); }
+        Rec::Update { txn, prev, page, slot, before, after } => {
+            p.push(2); u32_(&mut p, *txn); u64_(&mut p, *prev); u32_(&mut p, *page); p.push(*slot); i64_(&mut p, *before); i64_(&mut p, *after);
+        }
+        Rec::Commit { txn, prev } => { p.push(3); u32_(&mut p, *txn); u64_(&mut p, *prev); }
+        Rec::Abort { txn, prev } => { p.push(4); u32_(&mut p, *txn); u64_(&mut p, *prev); }
+        Rec::End { txn, prev } => { p.push(5); u32_(&mut p, *txn); u64_(&mut p, *prev); }
+        Rec::Clr { txn, prev, page, slot, after, undo_next } => {
+            p.push(6); u32_(&mut p, *txn); u64_(&mut p, *prev); u32_(&mut p, *page); p.push(*slot); i64_(&mut p, *after); u64_(&mut p, *undo_next);
+        }
+        Rec::CkptBegin => p.push(7),
+        Rec::CkptEnd { att, dpt, next_txn } => {
+            p.push(8);
+            u32_(&mut p, *next_txn);
+            u32_(&mut p, att.len() as u32);
+            for &(t, s, l) in att { u32_(&mut p, t); p.push(s as u8); u64_(&mut p, l); }
+            u32_(&mut p, dpt.len() as u32);
+            for &(pg, l) in dpt { u32_(&mut p, pg); u64_(&mut p, l); }
+        }
+    }
+    let mut out = Vec::with_capacity(p.len() + 8);
+    out.extend((p.len() as u32).to_le_bytes());
+    out.extend(crc32(&p).to_le_bytes());
+    out.extend(p);
+    out
+}
+
+struct Rd<'a>(&'a [u8]);
+impl Rd<'_> {
+    fn take<const N: usize>(&mut self) -> Option<[u8; N]> {
+        let (a, b) = self.0.split_first_chunk::<N>()?;
+        self.0 = b;
+        Some(*a)
+    }
+    fn u8(&mut self) -> Option<u8> { self.take::<1>().map(|b| b[0]) }
+    fn u32(&mut self) -> Option<u32> { self.take().map(u32::from_le_bytes) }
+    fn u64(&mut self) -> Option<u64> { self.take().map(u64::from_le_bytes) }
+    fn i64(&mut self) -> Option<i64> { self.take().map(i64::from_le_bytes) }
+}
+
+/// Decode one frame at the start of `b`; `None` if it's incomplete or fails its checksum (a torn tail).
+fn decode(b: &[u8]) -> Option<(Rec, usize)> {
+    let mut h = Rd(b);
+    let (len, crc) = (h.u32()? as usize, h.u32()?);
+    let payload = b.get(8..8 + len)?;
+    if crc32(payload) != crc { return None; }
+    let mut r = Rd(payload);
+    let status = |v: u8| match v { 0 => TxStatus::Running, 1 => TxStatus::Committed, _ => TxStatus::Undo };
+    let rec = match r.u8()? {
+        1 => Rec::Begin { txn: r.u32()? },
+        2 => Rec::Update { txn: r.u32()?, prev: r.u64()?, page: r.u32()?, slot: r.u8()?, before: r.i64()?, after: r.i64()? },
+        3 => Rec::Commit { txn: r.u32()?, prev: r.u64()? },
+        4 => Rec::Abort { txn: r.u32()?, prev: r.u64()? },
+        5 => Rec::End { txn: r.u32()?, prev: r.u64()? },
+        6 => Rec::Clr { txn: r.u32()?, prev: r.u64()?, page: r.u32()?, slot: r.u8()?, after: r.i64()?, undo_next: r.u64()? },
+        7 => Rec::CkptBegin,
+        8 => {
+            let next_txn = r.u32()?;
+            let mut att = vec![];
+            for _ in 0..r.u32()? { att.push((r.u32()?, status(r.u8()?), r.u64()?)); }
+            let mut dpt = vec![];
+            for _ in 0..r.u32()? { dpt.push((r.u32()?, r.u64()?)); }
+            Rec::CkptEnd { att, dpt, next_txn }
+        }
+        _ => return None,
+    };
+    Some((rec, 8 + len))
+}
+
+/// Parse a durable log into `(lsn, record)` pairs, stopping at the first damaged frame.
+/// Returns the records and the offset just past the last good one.
+pub fn scan_log(log: &[u8], from: Lsn) -> (Vec<(Lsn, Rec)>, usize) {
+    let mut off = (from - HEADER) as usize;
+    let mut out = vec![];
+    while let Some((r, n)) = log.get(off..).and_then(decode) {
+        out.push((HEADER + off as u64, r));
+        off += n;
+    }
+    (out, off)
+}
+
+// ---------- storage and engine ----------
+
+#[derive(Clone, Default)]
+pub struct Durable {
+    pub pages: Vec<(Lsn, [i64; SLOTS])>,
+    pub log: Vec<u8>,
+    pub master: Lsn,                 // LSN of the last completed CkptBegin; 0 = none
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct Faults {
+    pub skip_wal_rule: bool,         // let a dirty page reach disk before its log records
+    pub skip_commit_flush: bool,     // acknowledge COMMIT without forcing the log
+    pub ignore_ckpt_dpt: bool,       // analysis forgets the dirty page table saved in the checkpoint
+}
+
+#[derive(Clone, Copy, Default, Debug)]
+pub struct IoStats { pub page_writes: u64, pub page_reads: u64, pub log_flushes: u64, pub log_bytes: u64 }
+
+#[derive(Clone, Copy, Default, Debug)]
+pub struct RecStats {
+    pub analysis_records: u64, pub redo_scanned: u64, pub redo_applied: u64,
+    pub skipped_not_in_dpt: u64, pub skipped_below_rec_lsn: u64, pub skipped_page_lsn: u64,
+    pub losers: u64, pub clrs_written: u64,
+}
+
+struct Frame { lsn: Lsn, slots: [i64; SLOTS], dirty: bool }
+struct Tx { status: TxStatus, last: Lsn }
+
+pub struct Db {
+    pub d: Durable,
+    tail: Vec<u8>,                           // log buffer: lost in a crash
+    pool: HashMap<PageId, Frame>,
+    att: BTreeMap<TxnId, Tx>,
+    dpt: BTreeMap<PageId, Lsn>,              // page → recLSN
+    next_txn: TxnId,
+    pub fuel: Option<u64>,                   // crash after this many durable-effect steps
+    pub faults: Faults,
+    pub io: IoStats,
+    evict_every: u64,
+    evict_ctr: u64,
+}
+
+impl Db {
+    pub fn new(pages: usize) -> Self { Self::open(Durable { pages: vec![(0, [0; SLOTS]); pages], ..Default::default() }) }
+
+    fn open(d: Durable) -> Self {
+        Self { d, tail: vec![], pool: HashMap::new(), att: BTreeMap::new(), dpt: BTreeMap::new(), next_txn: 1, fuel: None,
+               faults: Faults::default(), io: IoStats::default(), evict_every: 0, evict_ctr: 0 }
+    }
+
+    fn tick(&mut self) -> Result<(), Crashed> {
+        if let Some(f) = &mut self.fuel { if *f == 0 { return Err(Crashed); } *f -= 1; }
+        Ok(())
+    }
+
+    /// What survives a crash: the stable storage, plus `torn` bytes of the unflushed log tail that happened to reach disk.
+    pub fn into_durable(mut self, torn: usize) -> Durable {
+        let n = torn.min(self.tail.len());
+        self.d.log.extend_from_slice(&self.tail[..n]);
+        self.d
+    }
+
+    // ----- log -----
+    fn next_lsn(&self) -> Lsn { HEADER + (self.d.log.len() + self.tail.len()) as u64 }
+    pub fn flushed_end(&self) -> Lsn { HEADER + self.d.log.len() as u64 }
+
+    fn append(&mut self, r: &Rec) -> Result<Lsn, Crashed> {
+        self.tick()?;
+        let lsn = self.next_lsn();
+        self.tail.extend(encode(r));
+        Ok(lsn)
+    }
+
+    pub fn flush_log(&mut self) -> Result<(), Crashed> {
+        if self.tail.is_empty() { return Ok(()); }
+        self.tick()?;
+        self.io.log_flushes += 1;
+        self.io.log_bytes += self.tail.len() as u64;
+        self.d.log.append(&mut self.tail);
+        Ok(())
+    }
+
+    fn rec_at(&self, lsn: Lsn) -> Rec {
+        let off = (lsn - HEADER) as usize;
+        let src = if off < self.d.log.len() { &self.d.log[off..] } else { &self.tail[off - self.d.log.len()..] };
+        decode(src).expect("record").0
+    }
+
+    // ----- buffer pool -----
+    fn frame(&mut self, p: PageId) -> &mut Frame {
+        if !self.pool.contains_key(&p) {
+            self.io.page_reads += 1;
+            if self.d.pages.len() <= p as usize { self.d.pages.resize(p as usize + 1, (0, [0; SLOTS])); }
+            let (lsn, slots) = self.d.pages[p as usize];
+            self.pool.insert(p, Frame { lsn, slots, dirty: false });
+        }
+        self.pool.get_mut(&p).unwrap()
+    }
+
+    /// Apply a change to the cached page and stamp it with the record's LSN.
+    fn apply(&mut self, p: PageId, slot: u8, v: i64, lsn: Lsn) {
+        let f = self.frame(p);
+        f.slots[slot as usize] = v;
+        f.lsn = lsn;
+        if !std::mem::replace(&mut f.dirty, true) { self.dpt.insert(p, lsn); }   // first change since last flush ⇒ recLSN
+    }
+
+    pub fn read(&mut self, p: PageId, slot: u8) -> i64 { self.frame(p).slots[slot as usize] }
+
+    /// Write one page back (STEAL: may hold uncommitted data). The WAL rule: log first.
+    pub fn flush_page(&mut self, p: PageId) -> Result<(), Crashed> {
+        let Some(f) = self.pool.get(&p) else { return Ok(()) };
+        if !f.dirty { return Ok(()); }
+        let (lsn, slots) = (f.lsn, f.slots);
+        if lsn >= self.flushed_end() && !self.faults.skip_wal_rule { self.flush_log()?; }
+        self.tick()?;
+        self.io.page_writes += 1;
+        self.d.pages[p as usize] = (lsn, slots);
+        self.pool.get_mut(&p).unwrap().dirty = false;
+        self.dpt.remove(&p);
+        Ok(())
+    }
+
+    pub fn evict(&mut self, p: PageId) -> Result<(), Crashed> { self.flush_page(p)?; self.pool.remove(&p); Ok(()) }
+    pub fn dirty_pages(&self) -> Vec<PageId> { self.dpt.keys().copied().collect() }
+
+    // ----- transactions -----
+    pub fn begin(&mut self) -> Result<TxnId, Crashed> {
+        let t = self.next_txn;
+        self.next_txn += 1;
+        let lsn = self.append(&Rec::Begin { txn: t })?;
+        self.att.insert(t, Tx { status: TxStatus::Running, last: lsn });
+        Ok(t)
+    }
+
+    pub fn write(&mut self, t: TxnId, p: PageId, slot: u8, v: i64) -> Result<(), Crashed> {
+        let before = self.read(p, slot);
+        let prev = self.att[&t].last;
+        let lsn = self.append(&Rec::Update { txn: t, prev, page: p, slot, before, after: v })?;   // log first …
+        self.att.get_mut(&t).unwrap().last = lsn;
+        self.apply(p, slot, v, lsn);                                                                 // … then change the page
+        Ok(())
+    }
+
+    pub fn commit(&mut self, t: TxnId) -> Result<(), Crashed> {
+        let prev = self.att[&t].last;
+        let lsn = self.append(&Rec::Commit { txn: t, prev })?;
+        self.att.get_mut(&t).unwrap().last = lsn;
+        if !self.faults.skip_commit_flush { self.flush_log()?; }      // the commit point: sequential, synchronous
+        self.att.get_mut(&t).unwrap().status = TxStatus::Committed;
+        self.append(&Rec::End { txn: t, prev: lsn })?;                // bookkeeping: not flushed
+        self.att.remove(&t);
+        Ok(())
+    }
+
+    pub fn abort(&mut self, t: TxnId) -> Result<(), Crashed> {
+        let prev = self.att[&t].last;
+        let lsn = self.append(&Rec::Abort { txn: t, prev })?;
+        self.att.get_mut(&t).unwrap().last = lsn;
+        let mut next = prev;                                           // walk the transaction's own chain backwards
+        while next != 0 {
+            match self.rec_at(next) {
+                Rec::Update { page, slot, before, prev, .. } => { self.undo_step(t, page, slot, before, prev)?; next = prev; }
+                Rec::Clr { undo_next, .. } => next = undo_next,
+                Rec::Begin { .. } => next = 0,
+                other => unreachable!("{other:?}"),
+            }
+        }
+        let last = self.att[&t].last;
+        self.append(&Rec::End { txn: t, prev: last })?;
+        self.att.remove(&t);
+        Ok(())
+    }
+
+    /// Undo one update: log a CLR (redo-only), then change the page. Never undone itself.
+    fn undo_step(&mut self, t: TxnId, page: PageId, slot: u8, before: i64, undo_next: Lsn) -> Result<(), Crashed> {
+        let prev = self.att[&t].last;
+        let lsn = self.append(&Rec::Clr { txn: t, prev, page, slot, after: before, undo_next })?;
+        self.att.get_mut(&t).unwrap().last = lsn;
+        self.apply(page, slot, before, lsn);
+        Ok(())
+    }
+
+    /// Fuzzy checkpoint: transactions keep running. With `flush_dirty`, a background writer first cleans the pool.
+    pub fn checkpoint(&mut self, flush_dirty: bool) -> Result<(), Crashed> {
+        if flush_dirty { for p in self.dirty_pages() { self.flush_page(p)?; } }
+        let begin = self.append(&Rec::CkptBegin)?;
+        let att = self.att.iter().map(|(&t, x)| (t, x.status, x.last)).collect();
+        let dpt = self.dpt.iter().map(|(&p, &l)| (p, l)).collect();
+        let next_txn = self.next_txn;
+        self.append(&Rec::CkptEnd { att, dpt, next_txn })?;
+        self.flush_log()?;
+        self.tick()?;
+        self.d.master = begin;                                         // atomic one-word write
+        Ok(())
+    }
+
+    // ---------- recovery ----------
+
+    /// Restart after a crash. On `Err` the (partially recovered) `Db` is returned so the caller can crash it again.
+    pub fn recover(d: Durable, fuel: Option<u64>, faults: Faults, evict_every: u64) -> (Db, Result<RecStats, Crashed>) {
+        let mut db = Db::open(d);
+        db.fuel = fuel;
+        db.faults = faults;
+        db.evict_every = evict_every;
+        let r = db.run_recovery();
+        db.fuel = None;
+        (db, r)
+    }
+
+    fn run_recovery(&mut self) -> Result<RecStats, Crashed> {
+        let mut st = RecStats::default();
+        // a torn final record must go before anything new is appended behind it
+        let (_, good) = scan_log(&self.d.log, HEADER);
+        self.d.log.truncate(good);
+
+        // ---- 1. analysis: rebuild ATT and DPT from the last checkpoint forward ----
+        let start = if self.d.master == 0 { HEADER } else { self.d.master };
+        let (recs, _) = scan_log(&self.d.log, start);
+        let mut ended: HashSet<TxnId> = HashSet::new();
+        let mut max_txn: TxnId = 0;
+        for (lsn, r) in &recs {
+            st.analysis_records += 1;
+            if let Rec::Begin { txn } | Rec::Update { txn, .. } | Rec::Clr { txn, .. } | Rec::Commit { txn, .. } | Rec::Abort { txn, .. } | Rec::End { txn, .. } = r { max_txn = max_txn.max(*txn); }
+            match r {
+                Rec::Begin { txn } => { self.att.insert(*txn, Tx { status: TxStatus::Undo, last: *lsn }); }
+                Rec::Update { txn, page, .. } | Rec::Clr { txn, page, .. } => {
+                    let e = self.att.entry(*txn).or_insert(Tx { status: TxStatus::Undo, last: *lsn });
+                    e.last = *lsn;
+                    self.dpt.entry(*page).or_insert(*lsn);
+                }
+                Rec::Commit { txn, .. } => { let e = self.att.entry(*txn).or_insert(Tx { status: TxStatus::Undo, last: *lsn }); e.status = TxStatus::Committed; e.last = *lsn; }
+                Rec::Abort { txn, .. } => { let e = self.att.entry(*txn).or_insert(Tx { status: TxStatus::Undo, last: *lsn }); e.last = *lsn; }
+                Rec::End { txn, .. } => { self.att.remove(txn); ended.insert(*txn); }
+                Rec::CkptBegin => {}
+                Rec::CkptEnd { att, dpt, next_txn } => {
+                    max_txn = max_txn.max(*next_txn - 1);
+                    for &(t, s, l) in att {
+                        if ended.contains(&t) { continue; }               // it finished after the checkpoint began
+                        let e = self.att.entry(t).or_insert(Tx { status: if s == TxStatus::Committed { s } else { TxStatus::Undo }, last: l });
+                        e.last = e.last.max(l);
+                    }
+                    if !self.faults.ignore_ckpt_dpt {
+                        for &(p, l) in dpt { let e = self.dpt.entry(p).or_insert(l); *e = (*e).min(l); }
+                    }
+                }
+            }
+        }
+
+        self.next_txn = max_txn + 1;                                  // ids must never be reused across restarts
+
+        // ---- 2. redo: repeat history from the oldest recLSN, losers included ----
+        let analysis_dpt = self.dpt.clone();       // redo decides from this fixed table; flushing pages meanwhile must not shrink it
+        if let Some(&redo_from) = analysis_dpt.values().min() {
+            let (recs, _) = scan_log(&self.d.log, redo_from);
+            for (lsn, r) in recs {
+                st.redo_scanned += 1;
+                let (page, slot, val) = match r {
+                    Rec::Update { page, slot, after, .. } => (page, slot, after),
+                    Rec::Clr { page, slot, after, .. } => (page, slot, after),
+                    _ => continue,
+                };
+                match analysis_dpt.get(&page) {
+                    None => { st.skipped_not_in_dpt += 1; continue; }
+                    Some(&rec) if lsn < rec => { st.skipped_below_rec_lsn += 1; continue; }
+                    _ => {}
+                }
+                if self.frame(page).lsn >= lsn { st.skipped_page_lsn += 1; continue; }    // the page already has it
+                self.apply(page, slot, val, lsn);
+                st.redo_applied += 1;
+                self.maybe_evict(page)?;
+            }
+        }
+        // committed transactions are done: record their End
+        let committed: Vec<(TxnId, Lsn)> = self.att.iter().filter(|(_, x)| x.status == TxStatus::Committed).map(|(&t, x)| (t, x.last)).collect();
+        for (t, last) in committed { self.append(&Rec::End { txn: t, prev: last })?; self.att.remove(&t); }
+
+        // ---- 3. undo: roll back losers, newest log record first, writing CLRs ----
+        let mut heap: BinaryHeap<(Lsn, TxnId)> = self.att.iter().map(|(&t, x)| (x.last, t)).collect();
+        st.losers = heap.len() as u64;
+        while let Some((lsn, t)) = heap.pop() {
+            match self.rec_at(lsn) {
+                Rec::Update { page, slot, before, prev, .. } => {
+                    self.undo_step(t, page, slot, before, prev)?;
+                    st.clrs_written += 1;
+                    self.maybe_evict(page)?;
+                    heap.push((prev, t));
+                }
+                Rec::Clr { undo_next, .. } => heap.push((undo_next, t)),   // already undone up to here: skip ahead
+                Rec::Abort { prev, .. } => heap.push((prev, t)),
+                Rec::Begin { .. } => {
+                    let last = self.att[&t].last;
+                    self.append(&Rec::End { txn: t, prev: last })?;
+                    self.att.remove(&t);
+                }
+                other => unreachable!("{other:?}"),
+            }
+        }
+        self.flush_log()?;
+        Ok(st)
+    }
+
+    fn maybe_evict(&mut self, p: PageId) -> Result<(), Crashed> {
+        if self.evict_every > 0 {
+            self.evict_ctr += 1;
+            if self.evict_ctr % self.evict_every == 0 { self.flush_page(p)?; }
+        }
+        Ok(())
+    }
+}
+```
+:::
+
+<aside data-call="rust"><b>Rust design notes</b><ul> <li><strong>Crash as <code>Result&lt;_, Crashed&gt;</code></strong>: any function that causes a durable effect returns it, so a crash at step <em>k</em> unwinds through the operation exactly where it happened, leaving the in-memory structure half-updated, which is precisely what a power cut does. Because the <code>Db</code> is then discarded and rebuilt from <code>Durable</code>, there is no cleanup code to get wrong.</li> <li><strong>Recovery returns <code>(Db, Result&lt;…&gt;)</code></strong>, not <code>Result&lt;Db, …&gt;</code>: when recovery itself crashes, the partially recovered <code>Db</code> still owns the durable state that must be crashed <em>again</em>.</li> <li><strong>Zero-copy-ish codec</strong>: a tiny cursor (<code>Rd</code>) over <code>&amp;[u8]</code> using <code>split_first_chunk::&lt;N&gt;()</code> and <code>from_le_bytes</code> returns <code>Option</code>, so a truncated record is <code>None</code>, never a panic, and <code>?</code> threads it through nested reads.</li> <li><strong><code>BTreeMap</code> for ATT/DPT</strong>, <code>BinaryHeap&lt;(Lsn, TxnId)&gt;</code> for undo order (largest LSN first, <code>Reverse</code> not needed because it's a max-heap).</li> <li><strong>LSN as byte offset</strong> means <code>rec_at(lsn)</code> can read from the durable log or the in-memory tail with one subtraction.</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "The harness"
+body = """
+<p>A random workload (begin, write, commit, abort, page flush, evict, log flush, checkpoint) runs until the fuel runs out. Then: tear a random prefix of the unflushed tail onto disk, check durability (every <strong>acknowledged</strong> commit is in the durable log), run recovery, possibly crashing it again up to three times, and compare the database with the model. Four such crash/recover cycles run back to back on every seed.</p>
+
+:::deeper Reference: crash-injection harness (model, epoch, mutation flags)
+```rust title="tests/recovery.rs"
+/// What a correct database must contain after a crash, computed without looking at recovery:
+/// the state at the start of the epoch plus the writes of every transaction whose COMMIT reached the durable log.
+struct Model {
+    base: Vec<i64>,                                  // PAGES * SLOTS values
+    ops: Vec<(TxnId, usize, i64)>,                   // execution order: (txn, flat slot, value written)
+    acked: HashSet<TxnId>,
+}
+
+impl Model {
+    fn expected(&self, durable_commits: &HashSet<TxnId>) -> Vec<i64> {
+        let mut v = self.base.clone();
+        for &(t, s, val) in &self.ops { if durable_commits.contains(&t) { v[s] = val; } }
+        v
+    }
+}
+
+fn durable_commits(d: &Durable) -> HashSet<TxnId> {
+    scan_log(&d.log, HEADER).0.into_iter().filter_map(|(_, r)| if let Rec::Commit { txn, .. } = r { Some(txn) } else { None }).collect()
+}
+
+fn epoch(rng: &mut Rng, db: Db, base: Vec<i64>, faults: Faults, stats: &mut Vec<RecStats>) -> Result<(Db, Vec<i64>), String> {
+    let mut db = db;
+    db.faults = faults;
+    db.fuel = Some(20 + rng.next(400));
+    let mut model = Model { base: base.clone(), ops: vec![], acked: HashSet::new() };
+    let mut active: Vec<TxnId> = vec![];
+    let mut locks: HashMap<usize, TxnId> = HashMap::new();
+    let mut written: HashMap<TxnId, Vec<usize>> = HashMap::new();
+
+    let crashed = loop {
+        let step = (|| -> Result<(), Crashed> {
+            match rng.next(14) {
+                0..=1 if active.len() < 4 => { let t = db.begin()?; active.push(t); written.insert(t, vec![]); }
+                2..=6 if !active.is_empty() => {
+                    let t = active[rng.next(active.len() as u64) as usize];
+                    let flat = rng.next((PAGES * SLOTS) as u64) as usize;
+                    if locks.get(&flat).is_some_and(|&o| o != t) { return Ok(()); }       // strict 2PL on slots
+                    let v = rng.next(1000) as i64 + 1;
+                    db.write(t, (flat / SLOTS) as u32, (flat % SLOTS) as u8, v)?;
+                    locks.insert(flat, t);
+                    written.get_mut(&t).unwrap().push(flat);
+                    model.ops.push((t, flat, v));
+                }
+                7 if !active.is_empty() => {
+                    let i = rng.next(active.len() as u64) as usize;
+                    let t = active[i];
+                    db.commit(t)?;
+                    model.acked.insert(t);
+                    active.swap_remove(i);
+                    locks.retain(|_, o| *o != t);
+                }
+                8 if !active.is_empty() => {
+                    let i = rng.next(active.len() as u64) as usize;
+                    let t = active[i];
+                    db.abort(t)?;
+                    // an aborted transaction's writes vanish: drop them from the model
+                    model.ops.retain(|o| o.0 != t);
+                    active.swap_remove(i);
+                    locks.retain(|_, o| *o != t);
+                }
+                9..=10 => { db.flush_page(rng.next(PAGES as u64) as u32)?; }
+                11 => { db.evict(rng.next(PAGES as u64) as u32)?; }
+                12 => { if rng.next(4) == 0 { db.checkpoint(rng.next(2) == 0)?; } }
+                _ => { db.flush_log()?; }
+            }
+            Ok(())
+        })();
+        if step.is_err() { break true; }
+        if db.fuel == Some(0) && rng.next(8) == 0 { /* fuel exhausted soon; loop continues until a step fails */ }
+    };
+    assert!(crashed);
+
+    // ----- crash: volatile state is gone; a prefix of the unflushed tail may have been written -----
+    let torn = if rng.next(2) == 0 { 0 } else { rng.next(64) as usize };
+    let mut d = db.into_durable(torn);
+    let (_, good) = scan_log(&d.log, HEADER);
+    let mut truncated = d.clone();
+    truncated.log.truncate(good);
+    let commits = durable_commits(&truncated);
+    for t in &model.acked {
+        if !commits.contains(t) { return Err(format!("acknowledged commit of txn {t} is not in the durable log")); }
+    }
+
+    let pre = d.clone();
+    // ----- recovery, itself subject to crashes -----
+    let mut attempts = 0;
+    let (mut db, st) = loop {
+        attempts += 1;
+        let fuel = if attempts <= 3 && rng.next(3) == 0 { Some(1 + rng.next(60)) } else { None };
+        let (db, r) = Db::recover(d.clone(), fuel, faults, rng.next(4));
+        match r {
+            Ok(st) => break (db, st),
+            Err(Crashed) => { d = db.into_durable(rng.next(32) as usize); }
+        }
+    };
+    stats.push(st);
+
+    let expected = model.expected(&commits);
+    let got = snapshot(&mut db);
+    if got != expected {
+        let diffs: Vec<_> = (0..got.len()).filter(|&i| got[i] != expected[i]).collect();
+        let log: Vec<String> = scan_log(&db.d.log, HEADER).0.into_iter().map(|(l, r)| format!("{l}: {r:?}")).collect();
+        let pages: Vec<String> = pre.pages.iter().enumerate().map(|(i, (l, sl))| format!("page {i}: lsn {l} {sl:?}")).collect();
+        return Err(format!("state mismatch after recovery at slots {diffs:?}\\n pre-recovery disk: {pages:?} master {}\\n expected {expected:?}\\n      got {got:?}\\n stats {st:?}\\n log:\\n{}", pre.master, log.join("\\n")));
+    }
+    // recovery must be idempotent and leave no active transactions
+    db.fuel = None;
+    Ok((db, expected))
+}
+```
+:::
+
+<p>The two directed tests pin down the lecture's behaviours:</p>
+
+:::deeper Reference: directed tests (the worked example, torn tail)
+```rust title="tests/recovery.rs"
+#[test]
+fn the_lecture_walkthrough() {
+    // T1 updates A, T2 updates B and commits; crash with T1 uncommitted and nothing flushed except the log
+    let mut db = Db::new(2);
+    let t1 = db.begin().unwrap();
+    db.write(t1, 0, 0, 10).unwrap();                         // A = 10 (uncommitted)
+    let t2 = db.begin().unwrap();
+    db.write(t2, 1, 0, 20).unwrap();                         // B = 20
+    db.commit(t2).unwrap();                                  // forces the log (including T1's update)
+    db.flush_page(0).unwrap();                               // STEAL: T1's dirty page reaches disk
+    let d = db.into_durable(0);
+    assert_eq!(d.pages[0].1[0], 10, "uncommitted data is on disk");
+    assert_eq!(d.pages[1].1[0], 0, "committed data is not (NO-FORCE)");
+    let (mut db, r) = Db::recover(d, None, Faults::default(), 0);
+    let st = r.unwrap();
+    println!("{st:?}");
+    assert_eq!((db.read(0, 0), db.read(1, 0)), (0, 20), "T1 undone, T2 redone");
+    assert_eq!((st.redo_applied, st.clrs_written, st.losers), (1, 1, 1));
+    // recovering again after a clean recovery does no undo
+    let d = db.into_durable(0);
+    let (_, r) = Db::recover(d, None, Faults::default(), 0);
+    assert_eq!(r.unwrap().clrs_written, 0, "the CLR and END made the first undo permanent");
+}
+
+#[test]
+fn torn_tail_is_discarded() {
+    let mut db = Db::new(1);
+    let t = db.begin().unwrap();
+    db.write(t, 0, 0, 5).unwrap();
+    db.commit(t).unwrap();
+    let t2 = db.begin().unwrap();
+    db.write(t2, 0, 1, 6).unwrap();
+    let d = db.into_durable(7);                              // 7 bytes of an unflushed record reach disk
+    let (_, good) = scan_log(&d.log, HEADER);
+    assert!(good < d.log.len(), "the log ends in garbage");
+    let (mut db, r) = Db::recover(d, None, Faults::default(), 0);
+    r.unwrap();
+    assert_eq!((db.read(0, 0), db.read(0, 1)), (5, 0));
+    let t3 = db.begin().unwrap();                            // new records append cleanly after truncation
+    db.write(t3, 0, 2, 7).unwrap();
+    db.commit(t3).unwrap();
+    let d = db.into_durable(0);
+    assert!(scan_log(&d.log, HEADER).0.len() > 5);
+    let (mut db, _) = Db::recover(d, None, Faults::default(), 0);
+    assert_eq!(db.read(0, 2), 7);
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Results"
+body = """
+```text title="3000 seeds × 4 crash/recover cycles, correct implementation"
+3000 seeds × 4 crash/recover cycles = 12000 recoveries (about a third crashed again mid-recovery): 0 failures
+across them: 59116 updates redone, 257633 redo records skipped by the DPT/recLSN/pageLSN tests, 23754 loser transactions, 51387 CLRs written
+```
+
+<p>The workload exercises every phase: 59 116 redos, 257 633 skips by the three tests, 23 754 losers rolled back, 51 387 CLRs.</p>
+
+```text title="each rule broken in turn (seeds out of 3000 on which the harness reported a violation)"
+log not forced at commit      : caught in 1603 of 3000 seeds  (first: seed 0: acknowledged commit of txn 87 is not in the durable log)
+WAL rule off (page before log): caught in 1492 of 3000 seeds  (first: seed 1: state mismatch after recovery at slots [0, 14, 27])
+checkpoint DPT ignored        : caught in 1108 of 3000 seeds  (first: seed 2: state mismatch after recovery at slots [7, 16])
+```
+
+<p>Each rule is <em>necessary</em>: break any one and more than a third of random runs expose it, usually within the first seed.</p>
+
+<aside data-call="why"><b>Bugs the harness found while this was being built</b><ol> <li><strong>Transaction ids reused after restart.</strong> The first version restarted ids at 1 after every recovery; old log records with the same ids were then taken for the new transactions' (analysis put a stale COMMIT on a live transaction, and the model disagreed). Fix: the checkpoint-end record stores <code>next_txn</code>, and analysis takes <code>max(that, every id seen) + 1</code>.</li> <li><strong>Redo decided from a shrinking DPT.</strong> Redo flushed pages as it went (to test partial progress) and removed them from the DPT; the next record for that page, a CLR from before the crash, was skipped as "not dirty", so a page that had been flushed <em>with</em> the loser's update never got its undo redone. Fix: redo decides from a copy of the DPT as analysis left it.</li> </ol> <p>Neither shows up in a scripted test. Both appeared within the first few seeds of the randomized one.</p></aside>
+"""
+
+[[sections]]
+heading = "Measurements"
+body = """
+```text title="recovery work vs checkpoint interval (crash halfway between checkpoints)"
+checkpoint every  analysis recs   redo scanned   redo applied       log MB
+           never          59999          59998          21547         1.81
+       5000 txns          15001          14998           6727         2.26
+       1000 txns           3001           2998           1479         1.90
+        200 txns            601            598            300         1.83
+```
+
+<p>Recovery time is dominated by the log records scanned (analysis + redo) plus the <strong>page reads</strong> redo triggers, so it grows linearly with the checkpoint interval. At production log rates (hundreds of MB/s) the same law turns a few minutes of log into long restarts, which is why checkpoint intervals are tuned from a recovery-time objective.</p>
+"""
+
+[[sections]]
+heading = "From simulator to production"
+body = """
+<p>What changes when the single-threaded simulator becomes a real engine:</p>
+
+<div class="cb-g-tt"><table> <thead> <tr> <th>Concern</th> <th>Simulator</th> <th>Production</th> </tr> </thead> <tbody> <tr> <td>Log append</td> <td><code>Vec&lt;u8&gt;</code> push</td> <td><strong>reserve LSN range with an atomic fetch-add</strong>, copy into a ring buffer, mark filled; a flusher thread writes contiguous filled ranges (PostgreSQL WAL insert locks, InnoDB log buffer)</td> </tr> <tr> <td>Commit wait</td> <td>direct flush</td> <td><strong>group commit</strong> (<a href="/cookbook/p/logging">L21</a>): queue the LSN, sleep until <code>flushed_lsn ≥ lsn</code></td> </tr> <tr> <td>pageLSN update</td> <td>assignment</td> <td>under the <strong>page's exclusive latch</strong>, in the same critical section that logs the change and modifies the page</td> </tr> <tr> <td>Flush a page</td> <td><code>flush_page</code></td> <td>background writer + checkpointer; hold the page's <em>shared</em> latch while copying, flush log to pageLSN first</td> </tr> <tr> <td>Torn pages</td> <td>assumed atomic</td> <td><strong>full-page images</strong> after each checkpoint, or double-write buffer; page checksums</td> </tr> <tr> <td>Log growth</td> <td>one file</td> <td><strong>segments</strong>, recycled when older than <code>min(checkpoint, oldest recLSN, oldest active txn start)</code>; optional archive for point-in-time recovery</td> </tr> <tr> <td>ATT / DPT</td> <td>maps</td> <td>per-transaction records in the txn manager; DPT maintained by the buffer pool (recLSN set when a clean page is first dirtied)</td> </tr> <tr> <td>Undo</td> <td>in-line</td> <td>for abort: per-transaction log chain; for recovery: <strong>parallel redo</strong> by page partition, background undo</td> </tr> <tr> <td>Transaction ids</td> <td>counter</td> <td>persisted in the checkpoint; 64-bit or epoch to avoid wraparound</td> </tr> </tbody> </table></div>
+
+<p><strong>Testing beyond the simulator:</strong> run the real engine under a <em>fault-injecting file layer</em> (every <code>write</code>, <code>fsync</code>, <code>rename</code> can fail or tear), kill -9 processes mid-workload on a loop and verify invariants, and use <code>dm-log-writes</code> or <code>CrashMonkey</code>-style replay to check that your fsync/ordering assumptions hold on a real filesystem.</p>
+"""
+
+[[sources]]
+title = "FoundationDB simulation testing"
+url = "https://www.youtube.com/watch?v=4fFDFbi3toc"

@@ -1,0 +1,9 @@
+fn a( {
+}
+struct S { x: int, y }
+fn main() {
+    let x = ;
+    let y = 1 +;
+    println(to_str(y));
+}
+enum {

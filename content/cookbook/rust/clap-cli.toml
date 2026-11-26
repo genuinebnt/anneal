@@ -1,0 +1,34 @@
+title = "A CLI with clap derive"
+module = "Crates and tooling"
+module_order = 3
+chapter = "Application crates"
+chapter_order = 2
+order = 127
+kind = "recipe"
+lede = "Subcommands, flags, enums, validation, and testing arg parsing."
+level = "intermediate"
+code = ["examples/dev_tools/clap_cli.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+the CLI-client stage, any tool with more than one command.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>every command-line tool: subcommands</li><li>flags</li><li>validation</li><li>completion</li><li>testable arg parsing</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Derive a struct/enum and clap generates parsing, `--help`, usage errors, and shell completions. Keep `main` thin: parse -> call a function -> map Result to an exit code (error_enum). Use `try_parse_from(args)` in tests: it returns an error instead of exiting the process.
+
+Docs: <https://docs.rs/clap/latest/clap/_derive/index.html>
+"""
+
+[[sources]]
+title = "docs.rs/clap/latest/clap/_derive/index.html"
+url = "https://docs.rs/clap/latest/clap/_derive/index.html"

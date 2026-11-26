@@ -1,0 +1,58 @@
+title = "Advanced trie interview questions in Rust"
+module = "Worked questions"
+module_order = 14
+chapter = "Coding and design questions"
+chapter_order = 2
+order = 680
+kind = "recipe"
+lede = "Word Search II, XOR tries, Aho-Corasick streams, prefix+suffix search, palindrome pairs, word squares."
+level = "advanced"
+code = ["examples/interview/tries_advanced_questions.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+coding interviews (LeetCode 212, 421, 1707, 1803, 1032, 745, 472, 642, 588, 336, 425) and system-design follow-ups (autocomplete, filesystems, multi-pattern scanning).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>boggle/crossword solvers</li><li>XOR maximization</li><li>log/keyword scanning (Aho-Corasick)</li><li>autocomplete state machines</li><li>path trees</li><li>palindromic word pairs</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://www.techinterview.org/post/3233474786/word-search-ii-trie-pattern-recognition/" target="_blank" rel="noreferrer">https://www.techinterview.org/post/3233474786/word-search-ii-trie-pattern-recognition/</a></li><li><a href="https://www.techinterview.org/post/3233463531/trie-interview-patterns-autocomplete/" target="_blank" rel="noreferrer">https://www.techinterview.org/post/3233463531/trie-interview-patterns-autocomplete/</a></li><li><a href="https://rust-unofficial.github.io/too-many-lists/" target="_blank" rel="noreferrer">https://rust-unofficial.github.io/too-many-lists/</a> See also: examples/interview/tries_core_questions.rs (the basics: three trie layouts, wildcards, top-k autocomplete, radix tries)</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Question bank Q1**. Word Search II: find all dictionary words in a letter grid (adjacent cells, no cell reused). Trie + DFS + pruning exhausted branches (LeetCode 212). [Hard] [asked: very common] Q2.
+
+Maximum XOR of two numbers in an array with a binary trie (LeetCode 421). [Medium] [asked: very common] Q3. Maximum XOR with an element not exceeding m, for many queries (offline sort + binary trie, LeetCode 1707). [Hard] [asked: common] Q4. Maximum XOR of any non-empty subarray (prefix XORs + binary trie). [Medium] [asked: common] Q5.
+
+Count pairs whose XOR lies in [low, high] (binary trie with subtree counts, LeetCode 1803). [Hard] [asked: occasional] Q6. Stream of Characters: after each letter, does some word end the stream? Reversed-word trie (LeetCode 1032). [Hard] [asked: common] Q7.
+
+Aho-Corasick: find every occurrence of many patterns in a text in one pass (failure links). [Hard] [asked: common] Q8. Prefix and Suffix Search: the largest index of a word with a given prefix and suffix (LeetCode 745). [Hard] [asked: common] Q9.
+
+Concatenated Words: which words are built from at least two other words in the list (LeetCode 472). [Hard] [asked: common] Q10. Design Search Autocomplete System with an input(c) state machine and an end marker '#' (LeetCode 642). [Hard] [asked: very common] Q11.
+
+Design an in-memory file system with mkdir, ls, addContentToFile, readContentFromFile (LeetCode 588, a path trie). [Hard] [asked: very common] Q12. Palindrome Pairs: all pairs of words whose concatenation is a palindrome (trie of reversed words, LeetCode 336). [Hard] [asked: common] Q13.
+
+Shortest unique prefix for each word (pass counts in the trie). [Medium] [asked: common] Q14. Word Squares: all squares where the k-th row equals the k-th column (backtracking with prefix lookups, LeetCode 425). [Hard] [asked: occasional] Q15. Put an LRU cache of prefix results in front of a trie, and invalidate it correctly on insert. [Medium] [asked: common]
+"""
+
+[[sources]]
+title = "techinterview.org/post/3233474786/word-search-ii-trie-pattern-recognition"
+url = "https://www.techinterview.org/post/3233474786/word-search-ii-trie-pattern-recognition/"
+
+[[sources]]
+title = "techinterview.org/post/3233463531/trie-interview-patterns-autocomplete"
+url = "https://www.techinterview.org/post/3233463531/trie-interview-patterns-autocomplete/"
+
+[[sources]]
+title = "rust-unofficial.github.io/too-many-lists"
+url = "https://rust-unofficial.github.io/too-many-lists/"

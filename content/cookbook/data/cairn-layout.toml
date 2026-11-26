@@ -1,0 +1,128 @@
+title = "Cairn layout"
+module = "Databases"
+module_order = 8
+chapter = "Foundations and SQL"
+chapter_order = 1
+order = 312
+kind = "guide"
+lede = "Target workspace shape · which BusTub module each Rust module mirrors · where Rust changes the design"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Workspace"
+body = """
+```text title="target workspace"
+cairn/
+├── Cargo.toml                 # [workspace] resolver = "3", edition 2024
+├── crates/
+│   ├── relational/            # System 1 — mirrors bustub-private/src
+│   │   ├── src/primer/        # P0 count-min sketch (+ HLL, skiplist, trie extras)
+│   │   ├── src/common/        # config, ids, errors, hash_util, rwlatch, channel
+│   │   ├── src/storage/disk/  # DiskManager trait, file + memory impls, DiskScheduler
+│   │   ├── src/storage/page/  # slotted TablePage, B+Tree pages, hash pages, page guards
+│   │   ├── src/storage/table/ # TableHeap, TableIterator, Tuple, TupleMeta
+│   │   ├── src/storage/index/ # BPlusTree, IndexIterator, extendible hash index
+│   │   ├── src/buffer/        # Replacer trait, LruK, Arc, Clock, BufferPoolManager
+│   │   ├── src/catalog/       # Catalog, Schema, Column, TableInfo, IndexInfo, stats
+│   │   ├── src/types/         # Value, TypeId, comparisons, NULL semantics, Vector
+│   │   ├── src/sql/           # lexer, parser → AST (or sqlparser-rs behind a trait)
+│   │   ├── src/binder/        # AST → BoundStatement
+│   │   ├── src/planner/       # BoundStatement → logical PlanNode
+│   │   ├── src/optimizer/     # rule rewrites, cost model, join ordering (Part III)
+│   │   ├── src/execution/     # executors, expressions, ExecutorContext
+│   │   ├── src/concurrency/   # TransactionManager, Watermark, lock manager (2PL)
+│   │   └── src/recovery/      # LogManager, LogRecord, ARIES, checkpoints
+│   ├── columnar/              # stage 7 — column pages, encodings, vectorized ops
+│   ├── vm/                    # stage 8 — plan → bytecode → interpreter
+│   ├── kv/                    # System 2 — LSM engine
+│   ├── raft/                  # System 2 — consensus, transport-agnostic
+│   ├── vector/                # System 3 — flat, IVF, PQ, HNSW
+│   ├── graph/                 # System 4 — property graph, CSR, traversal ops
+│   ├── document/              # System 5 — binary JSON, path indexes
+│   ├── timeseries/            # optional sixth model
+│   ├── federation/            # the multi-model planner, last
+│   ├── server/                # pgwire + HTTP (Track N)
+│   ├── wasm/                  # wasm-bindgen facade (Track W)
+│   └── scratch/               # deliberately broken experiments, tests only
+├── tests/sql/                 # .slt files shared by every engine
+└── benches/                   # criterion + workload drivers (TPC-C, TPC-H, YCSB)
+```
+"""
+
+[[sections]]
+heading = "BusTub → Rust module map"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>BusTub (C++)</th> <th>Cairn (Rust)</th> <th>What changes in Rust</th> </tr> </thead> <tbody> <tr> <td><code>buffer/arc_replacer.h</code></td> <td><code>buffer/arc_replacer.rs</code></td> <td>Keep <code>Replacer</code> as a trait with <code>&amp;mut self</code> methods; the BPM owns it inside its <code>Mutex</code>, so the replacer needs no latch of its own.</td> </tr> <tr> <td><code>buffer/buffer_pool_manager.h</code></td> <td><code>buffer/buffer_pool_manager.rs</code></td> <td>Frames live in one <code>Box&lt;[Frame]&gt;</code>; the BPM is shared as <code>Arc&lt;BufferPoolManager&gt;</code>; guards borrow <code>&amp;'a BufferPoolManager</code> instead of carrying five <code>shared_ptr</code>s.</td> </tr> <tr> <td><code>storage/page/page_guard.h</code></td> <td><code>storage/page/page_guard.rs</code></td> <td>RAII is <code>Drop</code>. Moving a guard is free, and there is no "invalid default-constructed guard" state at all.</td> </tr> <tr> <td><code>storage/disk/disk_scheduler.h</code></td> <td><code>storage/disk/disk_scheduler.rs</code></td> <td><code>std::sync::mpsc</code> or a crossbeam channel for requests; <code>std::promise</code> becomes a one-shot channel or a <code>Condvar</code>-backed slot.</td> </tr> <tr> <td><code>storage/page/b_plus_tree_*_page.h</code></td> <td><code>storage/page/btree_{leaf,internal}.rs</code></td> <td>No <code>reinterpret_cast</code>: typed views over <code>&amp;[u8]</code> / <code>&amp;mut [u8]</code> with explicit offsets, or <code>zerocopy</code>/<code>bytemuck</code> for fixed headers.</td> </tr> <tr> <td><code>storage/index/b_plus_tree.h</code></td> <td><code>storage/index/btree.rs</code></td> <td><code>Context</code>'s <code>deque&lt;WritePageGuard&gt;</code> becomes <code>Vec&lt;WritePageGuard&lt;'_&gt;&gt;</code>; the borrow checker enforces that guards don't outlive the pool.</td> </tr> <tr> <td><code>storage/table/table_heap.h</code></td> <td><code>storage/table/heap.rs</code></td> <td><code>TableIterator</code> implements <code>Iterator&lt;Item = (Rid, TupleMeta, Tuple)&gt;</code>.</td> </tr> <tr> <td><code>execution/executors/*.h</code></td> <td><code>execution/*.rs</code></td> <td><code>AbstractExecutor</code> becomes a <code>trait Executor { fn init(&amp;mut self); fn next(&amp;mut self) -&gt; Result&lt;Option&lt;(Tuple, Rid)&gt;&gt;; }</code> over <code>Box&lt;dyn Executor&gt;</code>.</td> </tr> <tr> <td><code>execution/plans/*.h</code></td> <td><code>planner/plan.rs</code></td> <td>One <code>enum PlanNode</code> with struct variants instead of a class hierarchy; optimizer rules become <code>match</code> arms.</td> </tr> <tr> <td><code>execution/expressions/*.h</code></td> <td><code>execution/expr.rs</code></td> <td><code>enum Expr</code> + <code>fn eval(&amp;self, tuple, schema) -&gt; Value</code>; later, compiled closures (<a href="/cookbook/p/query-compilation-and-code-generation">Part II, code generation</a>).</td> </tr> <tr> <td><code>binder/*</code></td> <td><code>binder/*</code></td> <td>BusTub uses libpg_query (PostgreSQL's real parser). Cairn writes its own parser or uses <code>sqlparser-rs</code>; see <a href="/cookbook/p/sql-front-end">SQL front end</a>.</td> </tr> <tr> <td><code>concurrency/transaction_manager.h</code></td> <td><code>concurrency/txn_manager.rs</code></td> <td><code>UndoLink</code> stays a <code>(TxnId, u32)</code> index, not a pointer, which removes most of the lifetime trouble in version chains.</td> </tr> <tr> <td><code>recovery/*</code> (stubbed in BusTub)</td> <td><code>recovery/*</code></td> <td>BusTub no longer ships a recovery project. Cairn builds full ARIES from the lectures, see <a href="/cookbook/p/crash-recovery-aries">Database Recovery</a>.</td> </tr> <tr> <td><code>type/*</code></td> <td><code>types/*</code></td> <td><code>Value</code> becomes an enum; <code>NULL</code> is a variant, not a sentinel; comparisons return <code>Option&lt;Ordering&gt;</code> so NULL can't compare equal by accident.</td> </tr> </tbody> </table></div>
+"""
+
+[[sections]]
+heading = "Core types"
+body = """
+<p>These types thread through every layer. Decide them once.</p>
+
+```rust title="src/common/config.rs"
+/// Size of every page on disk and every frame in memory. BusTub uses 8 KiB.
+pub const PAGE_SIZE: usize = 8192;
+
+/// Newtypes stop a frame id from ever being passed where a page id belongs —
+/// the single most common bug in a first buffer pool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(transparent)]
+pub struct PageId(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(transparent)]
+pub struct FrameId(pub u32);
+
+impl PageId {
+    pub const INVALID: PageId = PageId(u32::MAX);
+    #[inline] pub fn is_valid(self) -> bool { self != Self::INVALID }
+}
+
+/// Record id: where a tuple physically lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Rid { pub page: PageId, pub slot: u16 }
+
+pub type TxnId = u64;
+pub type Timestamp = u64;
+pub type Lsn = u64;
+
+/// BusTub marks uncommitted versions with `TXN_START_ID + txn_id` in the
+/// timestamp field. Same trick: bit 62 set means "owned by a running txn".
+pub const TXN_START_ID: u64 = 1 << 62;
+```
+
+<aside data-call="rust"><b>Newtypes cost nothing</b><p><code>#[repr(transparent)]</code> guarantees <code>PageId</code> has exactly <code>u32</code>'s layout and ABI, so it can sit inside on-disk structs. Derive <code>Ord</code> so it works as a <code>BTreeMap</code> key. What you give up is arithmetic: <code>page_id + 1</code> won't compile. That's deliberate. Add <code>fn next(self) -&gt; Self</code> where you actually need it. Reference: <a href="https://doc.rust-lang.org/reference/type-layout.html#the-transparent-representation" target="_blank" rel="noreferrer">The Rust Reference, <code>repr(transparent)</code></a>; <a href="https://rust-lang.github.io/api-guidelines/type-safety.html#c-newtype" target="_blank" rel="noreferrer">Rust API Guidelines C-NEWTYPE</a>.</p></aside>
+"""
+
+[[sections]]
+heading = "Errors"
+body = """
+```rust title="src/common/error.rs"
+use std::io;
+
+#[derive(Debug, thiserror::Error)]    // or hand-written Display impls, std-only
+pub enum Error {
+    #[error("I/O: {0}")]
+    Io(#[from] io::Error),
+    #[error("buffer pool has no evictable frame")]
+    NoFreeFrame,
+    #[error("page {0:?} does not exist")]
+    PageNotFound(crate::common::config::PageId),
+    #[error("tuple too large for a page: {0} bytes")]
+    TupleTooLarge(usize),
+    #[error("duplicate key")]
+    DuplicateKey,
+    #[error("transaction {0} aborted: {1}")]
+    Aborted(u64, &'static str),
+    #[error("{0}")]
+    Execution(String),
+    #[error("corrupt page {page:?}: {why}")]
+    Corrupt { page: crate::common::config::PageId, why: &'static str },
+}
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+```
+
+<aside data-call="rust"><b>One error enum per crate, not per module</b><p>Per-module error enums lead to <code>From</code> conversion chains that grow quadratically. One enum per crate, with <code>#[from]</code> on the variants that wrap lower layers, gives you <code>?</code> everywhere with no boilerplate. Keep <code>Aborted</code> as its own variant: the transaction layer needs to tell "retry me" apart from "you have a bug". <code>thiserror</code> is the only dependency worth taking this early, and it's derive-only with no runtime cost. With <code>std</code> only, implement <code>Display</code> and <code>std::error::Error</code> by hand. Reference: <a href="https://docs.rs/thiserror" target="_blank" rel="noreferrer">thiserror docs</a>.</p></aside>
+"""

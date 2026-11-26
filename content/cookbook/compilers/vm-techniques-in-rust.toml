@@ -1,0 +1,25 @@
+title = "VM techniques in Rust"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Bytecode and virtual machines"
+chapter_order = 3
+order = 595
+kind = "guide"
+lede = "The Rust-specific choices from the slices above, in one place."
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<div class="cb-g-tip"><h3>A typed <code>Op</code> enum instead of a byte stream</h3> <p>Each op is 4 bytes, and the compiler checks that operands match their op. You don't need <code>TryFrom&lt;u8&gt;</code> or <code>transmute</code> in the hot loop. Put variable-length data, like upvalue descriptors, in the function object.</p></div>
+
+<div class="cb-g-tip"><h3><code>match</code> is your dispatch loop <span class="cb-g-src"><span>rustc codegen</span></span></h3> <p>Rust has no computed goto. A dense <code>match</code> on a fieldless or small enum compiles to a jump table, which is close enough. Keep <code>ip</code> and the current frame in local variables, and don't call <code>self.frames.last_mut().unwrap()</code> on every instruction.</p></div>
+
+<div class="cb-g-tip"><h3>Split borrows by field</h3> <p>Most borrow checker trouble in a VM comes from methods on <code>&amp;mut self</code> that need both the heap and the stack. Write helpers that take the fields they need, such as <code>fn concat(heap: &amp;mut Heap, a: ObjRef, b: ObjRef)</code>. Closures in edition 2021 and later capture disjoint fields, so <code>self.strings.retain(|_, r| self.marks[…])</code> compiles when those are separate fields.</p></div>
+
+<div class="cb-g-tip"><h3>Handles over pointers <span class="cb-g-src"><span>rustc arenas</span><span>gc-arena</span></span></h3> <p>rustc refers to its IR through indices and interned IDs rather than pointers. <code>gc-arena</code>, which the piccolo Lua VM uses, shows how far a safe GC in Rust can go. For clox, <code>ObjRef(u32)</code> with an <code>expect</code> on every access is the easy middle ground.</p></div>
+
+<div class="cb-g-tip"><h3>Debug features, not <code>#define</code>s</h3> <p>The book's <code>DEBUG_TRACE_EXECUTION</code>, <code>DEBUG_PRINT_CODE</code>, <code>DEBUG_STRESS_GC</code> and <code>DEBUG_LOG_GC</code> become Cargo features. Gate them with <code>if cfg!(feature = "trace") { … }</code> so the code is always type-checked, and CI can run the suite with each one on.</p></div>
+
+<div class="cb-g-tip"><h3>Keep line info cheap</h3> <p>A <code>lines: Vec&lt;u32&gt;</code> parallel to <code>code</code> is the simplest option. The book's run-length encoding exercise saves memory. You can also store the op's <code>Span</code> and reuse Part I's <code>LineIndex</code> when you report an error.</p></div>
+"""

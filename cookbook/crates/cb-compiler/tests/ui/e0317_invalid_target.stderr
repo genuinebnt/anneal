@@ -1,0 +1,9 @@
+error[E0317]: invalid left-hand side of assignment
+ --> e0317_invalid_target.peb:3:5
+  |
+3 |     f() = 3;
+  |     ^^^ this expression cannot be assigned to
+  |
+  = note: assignable places are variables, struct fields, tuple fields and array elements
+
+error: aborting due to 1 previous error

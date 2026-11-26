@@ -1,0 +1,15 @@
+// passes: bce
+// The length is read once before the loop and `pop` may shrink the array, so
+// the bound is no longer known and the check must stay (this program traps).
+fn shrink(mut xs: [int]) -> int {
+    let n = len(xs);
+    let mut i = 0;
+    let mut s = 0;
+    while i < n {
+        s += xs[i];
+        if i < 1 { pop(xs); }
+        i += 1;
+    }
+    s
+}
+fn main() { println(to_str(shrink([1, 2, 3]))); }

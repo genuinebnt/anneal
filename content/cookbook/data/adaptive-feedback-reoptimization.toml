@@ -1,0 +1,72 @@
+title = "Learning from execution"
+module = "Databases"
+module_order = 8
+chapter = "Query optimization"
+chapter_order = 5
+order = 398
+kind = "recipe"
+lede = "LEO-style feedback repository, mid-query re-optimization with checkpoints, plan stitching."
+level = "advanced"
+code = ["examples/database/adaptive_feedback_reoptimization.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>cost-based optimizers with runtime statistics</li><li>adaptive executors</li><li>plan-regression repair</li><li>self-tuning databases</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+IBM DB2 LEO (learning optimizer: store actual-vs-estimated ratios per predicate/subplan and apply them to later plans), progressive optimization with **check** operators (**DB2 pop**), Oracle statistics feedback / SQL plan directives and adaptive plans, SQL Server batch-mode adaptive joins and cardinality feedback, Spark AQE re-planning at shuffle (materialisation) boundaries, plan-stitching research for cloud engines that stitch the best sub-plans of previously executed plans.
+
+Course: CMU 15-799 Query Optimization (Spring 2025), lectures 17-18 (Adaptivity: Feedback; Adaptivity: Runtime Processing)
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+three ways an optimizer uses what it observed while executing.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Feedback repository (LEO)</div><div class="cb-g-says"><p>While a query runs, the actual cardinality of every executed sub-plan is recorded under a <strong>canonical fingerprint</strong> (the set of joined tables plus the sorted predicates inside it, independent of join order).</p><p>Later optimisations first look the fingerprint up; a miss falls back to the largest <strong>known</strong> sub-expression scaled by the independence ratio est(S) = actual(K) * indep(S) / indep(K). The estimate of repeated work converges to the truth over repeated runs of a workload.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Mid-query re-optimisation (POP / progressive optimisation)</div><div class="cb-g-says"><p>At plan time a <strong>validity range</strong> [lo, hi] is computed for each checkpoint, the interval of cardinalities of the intermediate result for which the rest of the plan stays within 5% of optimal (found by re-optimising the remaining joins over a geometric sweep of that cardinality).</p><p>Execution materialises the intermediate at the checkpoint; when its <strong>actual</strong> size leaves the range, the remaining query is re-planned around the materialised result (no work is thrown away) and execution continues.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Plan stitching (Ding et al.)</div><div class="cb-g-says"><p>Logical sub-expressions produce identical results whichever plan computed them, so measured sub-plan costs from several executed plans can be recombined. A DP over the lattice of table intervals picks the cheapest combination of <strong>observed</strong> steps, which is never worse than the best executed plan and can beat all of them.</p></div></div></div>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+The testbed is a five-table chain R0-R1-R2-R3-R4 (R_i.fk -> R&#95;{i-1}.id) with Zipf foreign keys, a predicate/fan-out correlation (hot parents have v1 = 0) and a correlated column pair (v2 = v1 90% of the time), so the independence estimator is badly wrong.
+
+A query is an interval of tables plus filters; plans are left-deep orders that grow an interval left or right.
+
+**Work** = rows processed: reading the start table (index on its filtered column, else a full scan) plus, per join step, the cost of its algorithm: index nested loop (4 per left row + output) or hash join (scan + filter the right table, 0.5 per probe + output). Executed work is the ground truth for every number below.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+static optimisation commits to a plan on estimates that can be off by orders of magnitude. Feedback fixes the **next** run, checkpoints fix **this** run, stitching reuses history; together they trade a small, measured overhead when estimates were right for large savings when wrong.
+"""
+
+[[sections]]
+heading = "What is checked"
+body = """
+the geometric-mean q-error of the repository-backed estimator never increases over 6 runs of a workload and ends below the start; static and re-optimised execution return identical results (count and order-independent checksum) on 200 random queries; re-optimisation processes fewer rows than static execution when estimates are bad;
+
+With exact estimates no checkpoint fires and overhead is bounded; the stitched plan is never costlier than the best executed plan, matches its predicted cost when executed and returns equal results.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Adaptivity: Feedback / Runtime Processing, CMU 15-799 lectures 17-18 <https://15799.courses.cs.cmu.edu/spring2025/schedule.html>
+
+```text
+LEO - DB2's LEarning Optimizer (Stillger et al., VLDB 2001)
+Plan Stitch: Harnessing the Best of Many Plans (Ding et al., VLDB 2018)
+Adaptive Query Processing in the Looking Glass (Babu et al., CIDR 2015)
+```
+"""
+
+[[sources]]
+title = "15799.courses.cs.cmu.edu/spring2025/schedule.html"
+url = "https://15799.courses.cs.cmu.edu/spring2025/schedule.html"

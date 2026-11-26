@@ -1,0 +1,58 @@
+title = "Succinct data structures"
+module = "Databases"
+module_order = 8
+chapter = "Indexes"
+chapter_order = 3
+order = 346
+kind = "recipe"
+lede = "Rank/select bitvector, wavelet matrix, BWT, FM-index, Elias-Fano."
+level = "advanced"
+code = ["examples/database/succinct_wavelet_fm_index.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>full-text and genome search in compressed space</li><li>column stores with compressed posting lists</li><li>any "index smaller than the data"</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>bowtie/BWA read aligners (FM-index over a genome)</li><li>the <code>sdsl-lite</code> library</li><li>Elias-Fano posting lists in search engines (PISA and the Partitioned Elias-Fano line of work)</li><li>wavelet trees for rank/quantile queries over sequences and sorted columns</li><li>succinct tries and graph representations</li><li>bzip2 (BWT as the transform). Course: Navarro "Compact Data Structures" (the book)</li><li>Ferragina-Manzini "Opportunistic Data Structures with Applications"</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**What**. **A succinct** structure stores data in close to its information-theoretic minimum **and** still answers queries in place. Building blocks, bottom up:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Rank/select bitvector</div><div class="cb-g-says"><p>. rank1(i) = ones in [0,i); select1(k) = position of the k-th one. Two-level sampling: every 2048 bits a u32 cumulative count (superblock), every 256 bits a u16 count <strong>relative</strong> to its superblock (so 16 bits suffice), then at most 3 full words plus a masked partial word are popcounted.</p><p>Extra space ~7.8% of the bits, rank in O(1). select = binary search over superblocks, scan &lt;= 8 blocks, scan &lt;= 4 words, pick the bit inside a word (O(log n) here; a sampled-select directory makes it O(1) practically).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Wavelet matrix</div><div class="cb-g-says"><p>Over a sequence of symbols from an alphabet of sigma values: one bitvector per bit <strong>level</strong> (MSB first); at each level the sequence is stably partitioned by that bit (zeros first), remembering <code>zeros[level]</code> = number of zeros. Navigation uses only rank on the level bitvectors: bit 0 goes to rank0(i), bit 1 goes to zeros + rank1(i).</p><p>From that: access(i), rank(c,i), select(c,k), the k-th smallest in a range (QUANTILE, hence median), and count of values in [lo,hi) over a position range, all in O(log sigma) time and n*ceil(log2 sigma) bits (+ overhead).</p><p>The matrix variant keeps one contiguous bitvector per level and no pointers, which is why it is faster and simpler than the classic wavelet <strong>tree</strong>.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Burrows-wheeler transform</div><div class="cb-g-says"><p>. Append a unique smallest sentinel <code>&#92;0</code>, sort all suffixes (suffix array SA, built here by prefix doubling), and write BWT[i] = T[SA[i]-1].</p><p>Equal contexts end up adjacent, which compresses well (bzip2) and, more importantly, gives the LF-MAPPING: the character at BWT row i is the character that <strong>precedes</strong> row i's suffix, and its rank among equal characters is preserved when we move to the row of the preceding suffix: LF(i) = C[c] + rank_c(BWT, i), where C[c] counts characters smaller than c.</p><p>Iterating LF walks the text backwards, so the BWT inverts without storing the text.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>FM-INDEX = wavelet matrix over the BWT + C array. <strong>Backward search</strong>: for the pattern's characters from the <strong>last</strong> to the first, keep the row range [l,r) of suffixes starting with the processed suffix of the pattern: l = C[c] + rank_c(l), r = C[c] + rank_c(r). Empty range = no match; otherwise count = r-l, in O(|P| log sigma) with no access to the text.</p><p><strong>Locate</strong> needs positions: store SA[row] only for rows whose text position is a multiple of <code>rate</code>, then walk LF from any row until a sampled row is hit (&lt;= rate-1 steps) and add the steps. <code>rate</code> trades space (32 bits per sample) against locate time.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>ELIAS-FANO encodes a monotone sequence of m values below u in about m*(2 + log2(u/m)) bits: split each value into low l = floor(log2(u/m)) bits (stored verbatim in a packed array) and high bits (stored as a unary-coded <strong>bitvector</strong> where the i-th one sits at position (v_i &gt;&gt; l) + i). access(i) = (select1(i) - i) &lt;&lt; l | low_i; next_geq(x) uses select0 to jump straight to the bucket of x's high part.</p><p>This is how huge sorted id lists (inverted index postings) are kept compressed yet randomly accessible.</p></div></div></div>
+
+Alphabet remapping: the FM-index maps the bytes actually present to dense ids so the wavelet matrix has ceil(log2 sigma) levels (DNA: 5 symbols with the sentinel -> 3 bits per symbol, not 8).
+
+This implementation uses **plain** bitvectors, so it stores n&#42;ceil(log2 sigma) bits, above the entropy n&#42;H0; swapping in RRR/entropy-compressed bitvectors or Huffman-shaped wavelets is what reaches n&#42;H0 (and n&#42;H_k with a BWT) in the literature. The report prints that gap honestly.
+
+**Checks**. 2000 random strings (alphabets of size 1..26, lengths 1..300, sample rates 1/4/16) and random present/absent patterns: FM `count` and `locate` equal a naive scan; 2000 random sequences: wavelet access/rank/select/quantile/range_count equal brute force;
+
+Random bitvectors (all-zero, all-one, lengths not multiples of 64) equal naive rank/select0/select1; BWT equals the sorted rotations and inverts; 2000 random Elias-Fano sequences (empty, duplicates, dense, sparse): access and next_geq equal a plain Vec.
+
+Space (bytes, bits per character) for DNA-like and English-like text vs plain text, suffix array and entropy baselines is printed.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Navarro, "Compact Data Structures: A Practical Approach" <https://users.dcc.uchile.cl/~gnavarro/CDSbook/> Ferragina, Manzini, "Opportunistic Data Structures with Applications" FOCS 2000 (cited by title; URL not checked) Claude, Navarro, Ordonez, "The wavelet matrix" (cited by title); FM-index <https://en.wikipedia.org/wiki/FM-index> Vigna, "Quasi-succinct indices" (Elias-Fano for inverted indexes) <https://arxiv.org/abs/1206.4300>
+"""
+
+[[sources]]
+title = "users.dcc.uchile.cl/~gnavarro/CDSbook"
+url = "https://users.dcc.uchile.cl/~gnavarro/CDSbook/"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/FM-index"
+url = "https://en.wikipedia.org/wiki/FM-index"
+
+[[sources]]
+title = "arxiv.org/abs/1206.4300"
+url = "https://arxiv.org/abs/1206.4300"

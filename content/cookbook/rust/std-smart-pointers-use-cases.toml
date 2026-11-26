@@ -1,0 +1,90 @@
+title = "Smart pointers use cases (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "Option, Result, conversions, ownership types"
+chapter_order = 1
+order = 71
+kind = "recipe"
+lede = "Box, Rc/Weak, Arc, Cell/RefCell/OnceCell/LazyCell/OnceLock/LazyLock: one real use case each."
+level = "intermediate"
+code = ["examples/std_tour/std_smart_pointers_use_cases.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>recursive types</li><li>shared ownership</li><li>trees with parent pointers</li><li>caches</li><li>lazy statics</li><li>interior mutability</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>AST nodes (<code>Box&lt;Expr&gt;</code>)</li><li>DOM/UI trees with parent links (Rc/Weak)</li><li>config snapshots swapped atomically (Arc)</li><li>memoisation (RefCell/OnceCell)</li><li>process-wide regex/config (LazyLock/OnceLock)</li><li>trait objects (<code>Box&lt;dyn Trait&gt;</code>)</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>Box::new</code></li><li><code>Rc::new</code></li><li><code>Rc::clone</code></li><li><code>Rc::strong_count</code></li><li><code>Arc::new</code></li><li><code>Arc::clone</code></li><li><code>RefCell::borrow</code></li><li><code>RefCell::borrow_mut</code></li><li><code>Cell::get</code></li><li><code>Cell::set</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Rc::downgrade</code></li><li><code>Weak::upgrade</code></li><li><code>Rc::weak_count</code></li><li><code>Rc::ptr_eq</code></li><li><code>Rc::try_unwrap</code></li><li><code>Rc::get_mut</code></li><li><code>Rc::make_mut</code></li><li><code>Arc::make_mut</code></li><li><code>Arc::strong_count</code></li><li><code>Arc::try_unwrap</code></li></ul>
+
+<ul class="cb-g-names"><li><code>Box::leak</code></li><li><code>Box::into_raw</code></li><li><code>Box::from_raw</code></li><li><code>Box::into_boxed_slice</code></li><li><code>Vec::into_boxed_slice</code></li><li><code>Cell::replace</code></li><li><code>Cell::take</code></li><li><code>RefCell::try_borrow</code></li><li><code>RefCell::try_borrow_mut</code></li></ul>
+
+<ul class="cb-g-names"><li><code>RefCell::replace</code></li><li><code>RefCell::take</code></li><li><code>RefCell::into_inner</code></li><li><code>OnceCell::get_or_init</code></li><li><code>OnceCell::set</code></li><li><code>OnceCell::get</code></li><li><code>LazyCell::new</code></li><li><code>LazyCell::force</code></li><li><code>OnceLock::get_or_init</code></li></ul>
+
+<ul class="cb-g-names"><li><code>OnceLock::set</code></li><li><code>LazyLock::new</code></li><li><code>LazyLock::force</code></li><li><code>Mutex::lock</code></li><li><code>Mutex::into_inner</code></li><li><code>Arc::from</code></li><li><code>Rc::from</code></li><li><code>Pin::new</code></li><li><code>Box::pin</code></li><li><code>Weak::new</code></li><li><code>Weak::strong_count</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/boxed/struct.Box.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/boxed/struct.Box.html</a></li><li><a href="https://doc.rust-lang.org/std/rc/struct.Rc.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/rc/struct.Rc.html</a></li><li><a href="https://doc.rust-lang.org/std/sync/struct.Arc.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/sync/struct.Arc.html</a></li><li><a href="https://doc.rust-lang.org/std/cell/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/cell/index.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+Box/Rc/Weak/Arc alloc; Cell/RefCell/OnceCell/LazyCell/Pin core; OnceLock/LazyLock/Mutex std (`std::sync`).
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+Rc::new_cyclic / Arc::new_cyclic beyond mention, UniqueRc and allocator-aware APIs (nightly), RefCell::map/Ref::map projections, Rc::into_raw/from_raw (unsafe, same shape as Box).
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Recursive type / big value on the heap</td><td><code>Box&lt;T&gt;</code></td></tr><tr><td>Heterogeneous list</td><td><code>Vec&lt;Box&lt;dyn Trait&gt;&gt;</code></td></tr><tr><td>Shared ownership, single thread</td><td><code>Rc&lt;T&gt;</code></td></tr><tr><td>... across threads</td><td><code>Arc&lt;T&gt;</code></td></tr><tr><td>Parent pointer without a leak</td><td><code>Weak&lt;T&gt; (downgrade/upgrade)</code></td></tr><tr><td>Mutate through &amp;self, Copy types</td><td><code>Cell&lt;T&gt;</code></td></tr><tr><td>... non-Copy, runtime-checked</td><td><code>RefCell&lt;T&gt;</code></td></tr><tr><td>Shared AND mutable across threads</td><td><code>Arc&lt;Mutex&lt;T&gt;&gt; / Arc&lt;RwLock&lt;T&gt;&gt;</code></td></tr><tr><td>Copy-on-write shared value</td><td><code>Rc::make_mut / Arc::make_mut</code></td></tr><tr><td>Compute once, then read-only</td><td><code>OnceCell / OnceLock (set once) or LazyCell / LazyLock (init closure)</code></td></tr><tr><td>Global lazily built table</td><td><code>static X: LazyLock&lt;T&gt;</code></td></tr><tr><td>Cheap-to-clone immutable string/slice</td><td><code>Arc&lt;str&gt; / Rc&lt;[T]&gt;</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/book/ch15-00-smart-pointers.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/book/ch15-00-smart-pointers.html</a></li><li><a href="https://doc.rust-lang.org/nomicon/" target="_blank" rel="noreferrer">https://doc.rust-lang.org/nomicon/</a> (ownership chapters)</li><li><a href="https://doc.rust-lang.org/std/cell/index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/cell/index.html</a></li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/boxed/struct.Box.html"
+url = "https://doc.rust-lang.org/std/boxed/struct.Box.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/rc/struct.Rc.html"
+url = "https://doc.rust-lang.org/std/rc/struct.Rc.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/sync/struct.Arc.html"
+url = "https://doc.rust-lang.org/std/sync/struct.Arc.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/cell/index.html"
+url = "https://doc.rust-lang.org/std/cell/index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/book/ch15-00-smart-pointers.html"
+url = "https://doc.rust-lang.org/book/ch15-00-smart-pointers.html"
+
+[[sources]]
+title = "doc.rust-lang.org/nomicon"
+url = "https://doc.rust-lang.org/nomicon/"

@@ -1,0 +1,9 @@
+error[E0217]: expected value, found struct `P`
+ --> e0217_type_as_value.peb:3:13
+  |
+3 |     let p = P;
+  |             ^ `P` is a type, not a value
+  |
+  = help: construct it with `P { field: value, .. }`
+
+error: aborting due to 1 previous error

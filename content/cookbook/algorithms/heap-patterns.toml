@@ -1,0 +1,52 @@
+title = "Heaps from scratch"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Caches, queues, heaps and bit sets"
+chapter_order = 3
+order = 185
+kind = "recipe"
+lede = "heaps from scratch (binary, d-ary, indexed) and the classic heap patterns."
+level = "intermediate"
+code = ["examples/data_structures/heap_patterns.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>priority queues</li><li>shortest paths</li><li>streaming statistics</li><li>scheduling</li><li>merging sorted data</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a heap keeps the smallest (or largest) element at index 0 of a plain `Vec`. The tree is implicit: children of i are 2i+1 and 2i+2 (d-ary: d&#42;i+1 ..= d&#42;i+d). **Why** a Vec: no pointers, great cache behaviour.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+`push` appends and sifts UP; `pop` swaps the last element to the root and sifts **down**; `heapify` sifts down every internal node from the last parent to the root, which is O(n) (not O(n log n)) because most nodes sit near the leaves and barely move. Heapsort = heapify, then repeatedly swap max to the end.
+
+A d-ary heap is shallower (log_d n levels): cheaper push, costlier pop; often faster in practice. An **indexed** heap also stores each id's position, so `decrease_key(id, new)` is O(log n): that is what Dijkstra wants (dijkstra instead pushes duplicates and skips stale entries, "lazy deletion").
+
+Patterns below each have a brute-force oracle fed with seeded random data.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>OS and job schedulers</li><li>event-driven simulation</li><li>Dijkstra/A*/Prim</li><li>top-k leaderboards</li><li>log-merging (k sorted streams)</li><li>running percentiles/medians</li><li>rate limiters and timer wheels' fallbacks</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/Binary_heap> and <https://doc.rust-lang.org/std/collections/struct.BinaryHeap.html>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Binary_heap"
+url = "https://en.wikipedia.org/wiki/Binary_heap"
+
+[[sources]]
+title = "doc.rust-lang.org/std/collections/struct.BinaryHeap.html"
+url = "https://doc.rust-lang.org/std/collections/struct.BinaryHeap.html"

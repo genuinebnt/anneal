@@ -1,0 +1,63 @@
+title = "Four MPMC queues side by side"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Concurrent data structures"
+chapter_order = 3
+order = 253
+kind = "recipe"
+lede = "Michael-Scott (tagged indices), two-lock, flat combining, bounded ring."
+level = "advanced"
+code = ["examples/concurrency/mpmc_queues_michael_scott_and_combining.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>picking a work queue for a thread pool or pipeline</li><li>understanding <strong>aba</strong> and why tags/epochs exist</li><li>interviews on lock-free queues</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>task queues in schedulers (tokio's inject queue, crossbeam <code>SegQueue</code>/<code>ArrayQueue</code>)</li><li>log/metric pipelines</li><li>actor mailboxes</li><li>the Java <code>ConcurrentLinkedQueue</code> (a Michael-Scott variant). Course: Herlihy &amp; Shavit</li><li>"The Art of Multiprocessor Programming" ch. 10 (queues)</li><li>Michael &amp; Scott</li><li>PODC 1996</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+one `Queue` trait (`push(tid, u64)`, `pop(tid) -> Option<u64>`) and four implementations, all in **safe** Rust:
+
+1. `MsQueue`   : the Michael-Scott lock-free queue. Nodes are slots in an arena; a "pointer" is a packed u64 = (index:32 &#124; tag:32). The **tag** is bumped on every successful CAS of that word, so a CAS that would succeed only because the same index came back ("A -> B -> A") fails instead.
+
+   That is the **aba** defence without hazard pointers: arena memory is never returned to the OS, so a stale index is always a valid slot, and the tag makes stale &#42;decisions&#42; fail. A Treiber free list (also tagged) recycles dequeued nodes, which is exactly what makes **aba** possible in the first place.
+
+   The "helping" rule: if `tail.next` is non-null the tail is lagging, so **any** thread advances it before doing its own work. This is what makes the queue lock-free: a stalled enqueuer never blocks others.
+2. `TwoLock`   : the textbook two-lock queue needs a dummy node and unsafe pointers; this safe variant keeps the idea (producers and consumers use **different** locks) with an in-vector and an out-vector, swapped when the out side runs dry.
+3. `FlatCombining`: threads publish a request in their own slot and one thread at a time (whoever wins `try_lock`) executes every pending request against a plain `VecDeque`. Few cache-line transfers for the data; great when the structure is the bottleneck.
+4. `Ring`      : bounded array queue with per-cell sequence numbers (Vyukov); see `mpmc_bounded_queue` for the `MaybeUninit` version, this one stores `AtomicU64` so it needs no unsafe. `push` spins when full (back-pressure).
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+values are encoded `(producer << 32) | seq`. With 4 producers and 4 consumers (8 threads) we check exactly-once delivery (a counter array, no loss, no duplicates) and that each consumer sees each producer's items in **increasing** order (per-producer FIFO is implied by linearizable FIFO).
+
+Single-threaded differential tests against `VecDeque` cover empty/full edge cases. **Orderings**: all CAS/loads that carry a hand-off use Acquire/Release; the tag only has to be correct per word so CAS on the word is enough.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Michael &amp; Scott, "Simple, Fast, and Practical Non-Blocking and Blocking Concurrent Queue Algorithms" (PODC 1996, title only, not re-read here).
+
+Hendler, Incze, Shavit, Tzafrir, "Flat Combining and the Synchronization-Parallelism Tradeoff" (SPAA 2010, title only).
+
+<https://www.1024cores.net/home/lock-free-algorithms/queues> and <https://marabos.nl/atomics/>
+"""
+
+[[sources]]
+title = "1024cores.net/home/lock-free-algorithms/queues"
+url = "https://www.1024cores.net/home/lock-free-algorithms/queues"
+
+[[sources]]
+title = "marabos.nl/atomics"
+url = "https://marabos.nl/atomics/"

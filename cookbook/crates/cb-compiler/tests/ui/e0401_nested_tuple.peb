@@ -1,0 +1,7 @@
+fn main() {
+    let r = match (true, 3) {
+        (true, _) => 1,
+        (false, 0) => 2,
+    };
+    println(to_str(r));
+}

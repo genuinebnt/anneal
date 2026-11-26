@@ -1,0 +1,76 @@
+title = "Signals env exit hooks ctrlc (std)"
+module = "Standard library and core"
+module_order = 2
+chapter = "Processes, signals and networking"
+chapter_order = 8
+order = 104
+kind = "recipe"
+lede = "Unix signals with `libc`, Ctrl-C and SIGTERM shutdown, SIGPIPE, environment variables, exit hooks, and which destructors run."
+level = "advanced"
+code = ["examples/std_tour/std_signals_env_exit_hooks_ctrlc.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>services that must drain on deploy (SIGTERM)</li><li>CLIs that clean up on Ctrl-C</li><li>supervisors</li><li>anything embedded next to C code. Run: cargo run --release --example std_signals_env_exit_hooks_ctrlc</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>set a flag on SIGTERM and finish in-flight work</li><li>wake a blocked thread with a self-pipe</li><li>force quit on a second Ctrl-C</li><li>read configuration from the environment</li></ul>
+"""
+
+[[sections]]
+heading = "Methods"
+body = """
+<ul class="cb-g-names"><li><code>libc::sigaction</code></li><li><code>libc::sigemptyset</code></li><li><code>libc::sigaddset</code></li><li><code>libc::sigismember</code></li><li><code>libc::sigpending</code></li><li><code>libc::pthread_sigmask</code></li><li><code>libc::raise</code></li><li><code>libc::kill</code></li><li><code>libc::write</code></li><li><code>libc::fcntl</code></li><li><code>libc::_exit</code></li><li><code>libc::atexit</code></li><li><code>std::io::pipe</code></li><li><code>AsRawFd::as_raw_fd</code></li><li><code>ExitStatusExt::signal</code></li><li><code>std::process::exit</code></li><li><code>std::process::abort</code></li><li><code>std::env::var</code></li><li><code>std::env::var_os</code></li><li><code>std::env::vars_os</code></li><li><code>std::env::set_var</code></li><li><code>std::env::remove_var</code></li><li><code>std::env::VarError</code></li></ul>
+"""
+
+[[sections]]
+heading = "Documentation"
+body = """
+<ul class="cb-g-reading"><li><a href="https://doc.rust-lang.org/std/process/fn.exit.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/process/fn.exit.html</a></li></ul>
+"""
+
+[[sections]]
+heading = "Where it is defined"
+body = """
+std has NO signal API: everything signal related comes from the `libc` crate (bindings to the platform C library). std: `std::env`, `std::process`, `std::io::pipe`, `std::os::fd`, `std::os::unix`. core: the atomics used inside handlers.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+the `signal-hook` and `ctrlc` crates and `tokio::signal` (what production code should normally use; they implement the same self-pipe idea); signalfd (Linux only) and `sigwait` threads; realtime signals; `siginfo_t` handlers; SIGCHLD reaping; Windows console control events. **Platform**: unix only; other targets print a notice.
+
+Written and run on macOS; the Linux path was **not** run.
+"""
+
+[[sections]]
+heading = "Cheat sheet"
+body = """
+<table class="cb-g-cheat"><thead><tr><th>I want to</th><th>Use</th></tr></thead><tbody><tr><td>Shut down cleanly on SIGTERM / Ctrl-C</td><td><code>handler stores to an atomic flag (or writes a byte to a self-pipe); normal code does the work</code></td></tr><tr><td>Wake a thread blocked in I/O</td><td><code>self-pipe: handler writes, the thread reads</code></td></tr><tr><td>Force quit on the second Ctrl-C</td><td><code>handler: if already requested, _exit(130)</code></td></tr><tr><td>Handle a closed pipe</td><td><code>nothing to install: Rust ignores SIGPIPE, so writes return BrokenPipe</code></td></tr><tr><td>Defer a signal over a critical section</td><td><code>block it with pthread_sigmask, unblock afterwards</code></td></tr><tr><td>Read an env var</td><td><code>env::var (Err: NotPresent / NotUnicode) or env::var_os</code></td></tr><tr><td>Give a child different variables</td><td><code>Command::env, not set_var</code></td></tr><tr><td>Run cleanup reliably</td><td><code>return from main so destructors run; NOTHING runs on SIGKILL or power loss WHAT RUNS WHEN (asserted in section 6; "std stdout" is a partial line still in std's buffer) how the process ends     | local destructors | atexit handlers | std stdout flushed | user BufWriter flushed return from main         | yes               | yes             | yes                | yes (its Drop) std::process::exit       | NO                | yes             | yes (1.98.1 impl)  | NO libc::_exit              | NO                | NO              | NO                 | NO std::process::abort      | NO                | NO              | NO                 | NO unhandled SIGTERM        | NO                | NO              | NO                 | NO HANDLER RULES: only async-signal-safe operations. NOT allowed: allocating, locking, println!, formatting, panicking. Allowed here: lock-free atomics, write, _exit. Preserve errno. Dispositions are process wide, so a library should not silently install them.</code></td></tr></tbody></table>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>POSIX async-signal-safe list <a href="https://man7.org/linux/man-pages/man7/signal-safety.7.html" target="_blank" rel="noreferrer">https://man7.org/linux/man-pages/man7/signal-safety.7.html</a></li><li>sigaction <a href="https://man7.org/linux/man-pages/man2/sigaction.2.html" target="_blank" rel="noreferrer">https://man7.org/linux/man-pages/man2/sigaction.2.html</a></li><li><a href="https://doc.rust-lang.org/std/env/fn.set_var.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/env/fn.set_var.html</a> (Safety section)</li></ul>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/std/process/fn.exit.html"
+url = "https://doc.rust-lang.org/std/process/fn.exit.html"
+
+[[sources]]
+title = "man7.org/linux/man-pages/man7/signal-safety.7.html"
+url = "https://man7.org/linux/man-pages/man7/signal-safety.7.html"
+
+[[sources]]
+title = "man7.org/linux/man-pages/man2/sigaction.2.html"
+url = "https://man7.org/linux/man-pages/man2/sigaction.2.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/env/fn.set_var.html"
+url = "https://doc.rust-lang.org/std/env/fn.set_var.html"

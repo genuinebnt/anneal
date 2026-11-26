@@ -1,0 +1,40 @@
+title = "Bipartite matching"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Graph algorithms"
+chapter_order = 4
+order = 194
+kind = "recipe"
+lede = "bipartite matching (Kuhn's augmenting paths): assign each worker to at most one job."
+level = "intermediate"
+code = ["examples/algorithms/bipartite_matching.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+worker-to-task assignment where each side takes at most one partner (resource-aware scheduling roadmap).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>assigning workers to jobs</li><li>ride matching</li><li>staff rosters</li><li>flow generalises it</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Try to match each left node. If its preferred right node is taken, ask the **current** owner to move to another option (recursively): that chain is an "augmenting path". Each success grows the matching by one.
+
+O(V&#42;E). For big inputs use Hopcroft-Karp O(E sqrt V); for **costs** use the Hungarian algorithm / min-cost flow.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://cp-algorithms.com/graph/kuhn_maximum_bipartite_matching.html>
+"""
+
+[[sources]]
+title = "cp-algorithms.com/graph/kuhn_maximum_bipartite_matching.html"
+url = "https://cp-algorithms.com/graph/kuhn_maximum_bipartite_matching.html"

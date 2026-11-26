@@ -1,0 +1,25 @@
+[package]
+name = "cb-testing-tools"
+version = "0.0.0"
+edition = "2024"
+description = "Cookbook recipe: testing toolbox (proptest, loom, insta, criterion, fuzz-style harness) around a tiny expression parser, LRU map and duration codec"
+publish = false
+
+# `cfg(loom)` is set by RUSTFLAGS="--cfg loom"; tell rustc it is a known cfg so it does not warn.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+
+# loom is only a *library* dependency when the cfg is on (see src/sync.rs facade).
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
+
+[dev-dependencies]
+proptest = "1"
+loom = "0.7"
+insta = { version = "1", features = ["redactions", "json", "filters"] }
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+serde = { version = "1", features = ["derive"] }
+
+[[bench]]
+name = "criterion_bench"
+harness = false

@@ -1,0 +1,6 @@
+---
+source: crates/cb-testing-tools/tests/snapshots.rs
+description: "timings vary per machine, so they are filtered"
+expression: text
+---
+parsed in [N]ms, printed in [N]ms, cached 7 items

@@ -13,10 +13,21 @@ const CALLOUTS: Record<string, { label: string; icon: string }> = {
     WARNING: { label: "Watch out", icon: '<path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4M12 17v.01"/>' },
     INTERVIEW: { label: "Say it in the interview", icon: '<path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>' },
     ASIDE: { label: "Aside", icon: '<path d="M4 6h16M4 12h10M4 18h7"/>' },
+    // the cookbook's own kinds (content/cookbook)
+    RUST: { label: "In Rust", icon: '<path d="m8 8-4 4 4 4M16 8l4 4-4 4M13.5 6l-3 12"/>' },
+    TESTING: { label: "Testing", icon: '<path d="M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3M9 3h6"/>' },
+    PRODUCTION: { label: "In production", icon: '<path d="M3 21h18M5 21V10l5 3V10l5 3V5h4v16"/>' },
+    PERFORMANCE: { label: "Performance", icon: '<path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/>' },
+    WHY: { label: "Why", icon: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7M12 17v.01"/>' },
+    IDEA: { label: "Idea", icon: '<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.8.8 1 1.5 1 2.5h6c0-1 .2-1.7 1-2.5A6 6 0 0 0 12 3z"/>' },
+};
+const callout = (kind: string, body: string) => {
+    const c = CALLOUTS[kind]!;
+    return `<aside class="sd-call sd-call-${kind.toLowerCase()}">${icon(c.icon)}<b>${c.label}</b><div>${body}</div></aside>`;
 };
 const icon = (paths: string) => `<svg class="sd-ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 
-type CodeSeg = { k: "code"; lang: string; title?: string; hl: Set<number>; group?: string; code: string; id?: string };
+export type CodeSeg = { k: "code"; lang: string; title?: string; hl: Set<number>; group?: string; code: string; id?: string; fails?: string };
 type Seg = { k: "md"; text: string } | CodeSeg | { k: "math"; tex: string } | { k: "steps"; title: string; items: { who: string; what: string; say?: string }[] } | { k: "deeper"; title: string; meta?: string; text: string };
 
 /** `hl=13,15-16` as a set of line numbers. */
@@ -47,8 +58,9 @@ export function segments(text: string): Seg[] {
             flush();
             const body: string[] = [];
             for (i++; i < lines.length && !/^```\s*$/.test(lines[i]!); i++) body.push(lines[i]!);
-            const meta = Object.fromEntries([...(fence[2] ?? "").matchAll(/(\w+)=(\S+)/g)].map((m) => [m[1], m[2]]));
-            out.push({ k: "code", lang: fence[1] || "text", title: meta.title, hl: lineSet(meta.hl), group: meta.group, code: body.join("\n"), id: meta.id });
+            // a value may be quoted to hold spaces: title="two words"
+            const meta = Object.fromEntries([...(fence[2] ?? "").matchAll(/(\w+)=("[^"]*"|\S+)/g)].map((m) => [m[1], m[2]!.replace(/^"(.*)"$/, "$1")]));
+            out.push({ k: "code", lang: fence[1] || "text", title: meta.title, hl: lineSet(meta.hl), group: meta.group, code: body.join("\n"), id: meta.id, fails: meta.compile_fail });
             continue;
         }
         const one = /^\$\$(.+)\$\$\s*$/.exec(line);
@@ -102,10 +114,11 @@ function proseHtml(text: string, id: string, start: number): string {
         return `<label class="sn-ref" for="${nid}">${n}</label><input type="checkbox" id="${nid}" class="sn-toggle"><span class="sn"><b>${n}</b>${marked.parseInline(note, { async: false })}</span>`;
     });
     let html = marked.parse(src, { async: false });
-    html = html.replace(/<blockquote>\s*<p>\[!(NOTE|TIP|WARNING|INTERVIEW|ASIDE)\]\s*([\s\S]*?)<\/blockquote>/g, (_m, kind: string, body: string) => {
-        const c = CALLOUTS[kind]!;
-        return `<aside class="sd-call sd-call-${kind.toLowerCase()}">${icon(c.icon)}<b>${c.label}</b><div><p>${body}</div></aside>`;
-    });
+    html = html.replace(/<blockquote>\s*<p>\[!(NOTE|TIP|WARNING|INTERVIEW|ASIDE|RUST|TESTING|PRODUCTION)\]\s*([\s\S]*?)<\/blockquote>/g, (_m, kind: string, body: string) => callout(kind, `<p>${body}`));
+    // the same panels written as HTML, for notes whose text is already HTML (the cookbook's guide pages)
+    html = html.replace(/<aside data-call="(note|tip|warning|aside|rust|testing|production|performance|why|idea)">([\s\S]*?)<\/aside>/g, (_m, kind: string, body: string) => callout(kind.toUpperCase(), body));
+    // `### Title {#anchor}` names a heading so that tables and links can point at it
+    html = html.replace(/<(h[3-5])>([\s\S]*?)\s*\{#([\w-]+)\}<\/\1>/g, '<$1 id="$3">$2</$1>');
     // a table can be wider than the column: it scrolls inside its own box
     html = html.replace(/<table>/g, '<div class="sd-tbl"><table>').replace(/<\/table>/g, "</table></div>");
     return html.replace(/@@TEX(\d+)@@/g, (_m, i: string) => `<span class="sd-tex" data-tex="${(maths[Number(i)] ?? "").replace(/&/g, "&amp;").replace(/"/g, "&quot;")}"></span>`);
@@ -144,7 +157,7 @@ function MathBlock({ tex }: { tex: string }) {
 
 /** Code with its language, a file name, tabs when several blocks form a group, Copy, and line numbers that copy a link to the
  *  line (`#<block>-L13`); a link like that opens with the line lit. */
-function CodeGroup({ blocks, id }: { blocks: CodeSeg[]; id: string }) {
+export function CodeGroup({ blocks, id }: { blocks: CodeSeg[]; id: string }) {
     const [tab, setTab] = useState(0);
     const [copied, setCopied] = useState<string | null>(null);
     const [lit, setLit] = useState<number | null>(null);
@@ -171,6 +184,7 @@ function CodeGroup({ blocks, id }: { blocks: CodeSeg[]; id: string }) {
             <div className="sd-code-h">
                 <span className="sd-code-l">{CODE_LANGS[b.lang]?.label ?? b.lang}</span>
                 {b.title && <span className="sd-code-t">{b.title}</span>}
+                {b.fails && <span className="sd-code-fail">does not compile · {b.fails}</span>}
                 <span className="sd-code-sp" />
                 {blocks.length > 1 && (
                     <div className="sd-code-tabs" role="tablist" aria-label="Language">

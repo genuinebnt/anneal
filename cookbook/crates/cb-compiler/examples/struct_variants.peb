@@ -1,0 +1,17 @@
+enum Event { Click { x: int, y: int }, Key(str), Quit }
+fn handle(e: Event) -> str {
+    match e {
+        Event::Click { x, y: 0 } => "click on axis at " + to_str(x),
+        Event::Click { x, .. } => "click x=" + to_str(x),
+        Event::Key(k) if k == "q" => "quit key",
+        Event::Key(k) => "key " + k,
+        Event::Quit => "quit",
+    }
+}
+fn main() {
+    println(handle(Event::Click { x: 3, y: 0 }));
+    println(handle(Event::Click { x: 3, y: 9 }));
+    println(handle(Event::Key("q")));
+    println(handle(Event::Key("z")));
+    println(handle(Event::Quit));
+}

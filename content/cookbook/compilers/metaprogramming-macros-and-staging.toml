@@ -1,0 +1,71 @@
+title = "Metaprogramming, macros and staging"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Types and semantics"
+chapter_order = 4
+order = 610
+kind = "guide"
+lede = "macro_rules, proc macros, Racket, Zig comptime, MetaOCaml, partial evaluation"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Mechanism</th><th>Operates on</th><th>Examples</th><th>Trade-off</th></tr></thead> <tbody> <tr><td>Textual substitution</td><td>characters or tokens, no scoping</td><td>C preprocessor</td><td>Simple; unhygienic; tools can't understand code</td></tr> <tr><td>Pattern macros</td><td>token trees, matched by fragment type</td><td><code>macro_rules!</code>, Scheme <code>syntax-rules</code></td><td>Hygienic, declarative, limited computation</td></tr> <tr><td>Procedural macros</td><td>token streams in, token streams out, arbitrary code</td><td>Rust proc macros, Lisp <code>defmacro</code>, Scala 3 macros</td><td>Unlimited power; compile-time cost; error spans need care</td></tr> <tr><td>Compile-time execution</td><td>typed values in the language itself</td><td>Zig <code>comptime</code>, C++ <code>constexpr</code>, Rust <code>const fn</code></td><td>One language for both stages; the compiler needs an interpreter</td></tr> <tr><td>Multi-stage programming</td><td>typed code values (<code>code&lt;int&gt;</code>)</td><td>MetaOCaml, LMS (Scala), Terra</td><td>Well-typed generated code by construction</td></tr> <tr><td>Partial evaluation</td><td>a program plus some static inputs</td><td>Truffle, PyPy, research specializers</td><td>Automatic; hard to control</td></tr> </tbody> </table></div>
+
+<p>Expansion has to interleave with name resolution: a macro can't be expanded until its name is resolved, and expansion can define new names. rustc runs a fixed-point loop that resolves what it can, expands what it can, and repeats until nothing changes. <code>macro_rules!</code> matching is done by an NFA-style matcher over the macro's fragment specifiers. Hygiene is covered in <a href="/cookbook/p/name-resolution-hygiene-and-modules">chapter 8</a>.</p>
+
+<p><b>Futamura projections.</b> Specialize an interpreter to a program and you get a compiled program. Specialize the specializer to the interpreter and you get a compiler. Specialize the specializer to itself and you get a compiler generator. Truffle and PyPy are practical realizations of the first projection.</p>
+
+```rust title="A derive macro with syn 2 and quote"
+// field_names/Cargo.toml:  [lib] proc-macro = true
+//                          [dependencies] syn = "2", quote = "1", proc-macro2 = "1"
+use proc_macro::TokenStream;
+use quote::quote;
+use syn::{parse_macro_input, Data, DeriveInput, Fields};
+
+#[proc_macro_derive(FieldNames)]
+pub fn field_names(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = &input.ident;
+    let Data::Struct(data) = &input.data else {
+        // Errors become compile_error! at the right span, not a panic.
+        return syn::Error::new_spanned(&input.ident, "FieldNames only supports structs")
+            .to_compile_error()
+            .into();
+    };
+    let fields: Vec<String> = match &data.fields {
+        Fields::Named(f) => f.named.iter().map(|f| f.ident.as_ref().unwrap().to_string()).collect(),
+        _ => Vec::new(),
+    };
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    quote! {
+        impl #impl_generics #name #ty_generics #where_clause {
+            pub const FIELD_NAMES: &'static [&'static str] = &[#(#fields),*];
+        }
+    }
+    .into()
+}
+```
+
+```rust title="Hygiene in action: the macro's m can't capture the caller's m"
+macro_rules! hashmap {
+    ($($k:expr => $v:expr),* $(,)?) => {{
+        let mut m = ::std::collections::HashMap::new();
+        $( m.insert($k, $v); )*
+        m
+    }};
+}
+
+let m = 10;
+let h = hashmap! { "a" => m, "b" => m + 1 };   // `m` here is the caller's 10, not the macro's map
+```
+"""
+
+[[sources]]
+title = "The Little Book of Rust Macros"
+url = "https://veykril.github.io/tlborm/"
+
+[[sources]]
+title = "dtolnay's proc-macro workshop"
+url = "https://github.com/dtolnay/proc-macro-workshop"

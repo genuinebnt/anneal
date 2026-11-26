@@ -1,0 +1,17 @@
+warning[W0501]: unused variable: `xs`
+ --> e0310_annotations_needed.peb:2:9
+  |
+2 |     let xs = [];
+  |         ^^ this variable is never read
+  |
+  = help: if this is intentional, prefix it with an underscore: `_xs`
+
+error[E0310]: type annotations needed
+ --> e0310_annotations_needed.peb:2:14
+  |
+2 |     let xs = [];
+  |              ^^ cannot infer the type (found `[_]`)
+  |
+  = help: add a type annotation, e.g. `let x: [int] = [];`
+
+error: aborting due to 1 previous error; 1 warning emitted

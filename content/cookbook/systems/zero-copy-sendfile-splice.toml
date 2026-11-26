@@ -1,0 +1,92 @@
+title = "Zero-copy IO"
+module = "Performance and systems"
+module_order = 7
+chapter = "Files, processes and the OS"
+chapter_order = 3
+order = 293
+kind = "recipe"
+lede = "Read/write loop vs sendfile, io::copy, clonefile/copy_file_range, mmap, splice, bytes::Bytes."
+level = "intermediate"
+code = ["examples/os_and_storage/zero_copy_sendfile_splice.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>static file servers</li><li>proxies</li><li>backup/copy tools</li><li>log shippers</li><li>anything moving big byte ranges disk &lt;-&gt; disk/socket</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+one 64 MiB file is copied to another file and sent over loopback TCP with every method this OS offers; each result is checked by checksum, and the number of user-visible calls (syscalls) and MB/s are printed.
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+the classic `read(fd, buf)` + `write(sock, buf)` loop moves every byte **twice** across the user/kernel boundary: disk -> page cache -> (copy 1) user buffer -> (copy 2) socket buffer -> NIC, plus 2 syscalls and 2 context switches per chunk.
+
+`sendfile(2)` asks the kernel to do page cache -> socket buffer itself (no user-space copy, 1 syscall per call; with DMA-capable NICs even that copy can be skipped on Linux). `copy_file_range`/`clonefile`/reflinks can avoid moving the data at all: the filesystem just points the new file at the same blocks (copy-on-write).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**How**, per method (what ran on this machine is printed at the end):
+
+- read/write loop: baseline. Larger buffers = fewer syscalls (1 MiB buffer: 64 reads + 64 writes instead of 1024 + 1024).
+- `std::io::copy`: with the generic fallback it is an 8 KiB read/write loop. On LINUX std specialises it (library/std/src/sys/io/kernel_copy.rs): File->File uses `copy_file_range`, File->socket/pipe uses `sendfile` or `splice`, falling back to the loop when the kernel says no.
+
+   The specialisation only triggers when both ends are plain std `File`/`TcpStream`/`UnixStream`/pipe types: wrap one in your own struct (as the counting wrapper below does) and you silently get the slow loop.
+
+   On macOS (this machine) `io::copy` is the generic loop (measured below: same speed as the wrapper loop); `std::fs::copy` instead calls `fcopyfile(3)`, a kernel-side copy that on APFS turned out to be a copy-on-write **clone** (observed below: &#126;1000x the read/write speed because no data moves); on Linux it uses `copy_file_range`.
+- `sendfile`: signature differs. Linux: `sendfile(out_fd, in_fd, *offset, count) -> ssize_t` (any out fd since 2.6.33). macOS/BSD: `sendfile(fd, socket, offset, *len /*in: max, out: sent*/, hdtr, flags)`, destination **must** be a socket; the `len` out-parameter reports partial progress when the call is interrupted or times out, so always loop.
+- `clonefile(2)` (macOS, APFS) / `FICLONE` ioctl (Linux btrfs/XFS reflink): O(1) copy-on-write clone, no data moved. Fails with EXDEV/ENOTSUP across volumes or on non-**cow** filesystems (ext4): always keep a fallback.
+- mmap + write: the file's pages are mapped, so there is no `read` copy, but `write` still copies page cache -> socket buffer, and page faults cost; a good middle ground when you also want to inspect the data (checksums, headers).
+- Linux only (described here, compiled under `cfg(target_os = "linux")` but **not** run on this macOS machine): `splice(2)` moves pages between a file/socket and a **pipe** without copying (the pipe is just a ring of page references; file -> pipe -> socket is the sendfile of old kernels and works for socket -> file too), `tee(2)` duplicates pipe contents without consuming them (fan-out to two sockets, e.g. a TCP proxy that also logs), `vmsplice(2)` maps user pages into a pipe (the caller must not touch them until the consumer is done, which is hard to know: rarely worth it). io_uring has splice/send_zc opcodes too.
+- `bytes::Bytes` is the **user-space** version of the idea: an immutable, reference-counted view of a buffer. `clone()` and `slice()` only bump a counter and move a pointer, so parsers and servers can hand header/body slices to many tasks with no memcpy. `Bytes::from(Vec)` takes ownership of the allocation; `Bytes::from_owner(mmap)` makes slices of a mapped file.
+
+**Footguns**: (1) none of the page-cache copies are `fsync`ed: MB/s here is memory speed, not disk speed (use `sync_all` and a cold cache for durability numbers). (2) sendfile on a file truncated meanwhile sends short/garbage; mmap on a truncated file raises SIGBUS.
+
+(3) zero-copy is not free of cost: a splice/sendfile call has setup overhead, so for tiny payloads (&lt; &#126;4-16 KiB) a plain `write` wins, which is why servers send small responses from memory and large static files with sendfile. (4) TLS defeats sendfile (the kernel cannot encrypt for you unless kTLS is enabled). (5) Always set socket timeouts in tests.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>nginx/Apache static files (<code>sendfile on;</code>)</li><li>Kafka brokers serving consumer fetches straight from the page cache</li><li><code>cp --reflink</code></li><li><code>cp -c</code> on macOS</li><li>rsync/backup tools</li><li>proxies (HAProxy splices between sockets)</li><li>Rust servers that hold response bodies as <code>Bytes</code> (hyper/tonic/tokio-util codecs)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://man7.org/linux/man-pages/man2/sendfile.2.html> <https://man7.org/linux/man-pages/man2/splice.2.html> <https://man7.org/linux/man-pages/man2/tee.2.html> <https://man7.org/linux/man-pages/man2/vmsplice.2.html> <https://man7.org/linux/man-pages/man2/copy_file_range.2.html> <https://doc.rust-lang.org/std/io/fn.copy.html> <https://docs.rs/bytes>
+"""
+
+[[sources]]
+title = "man7.org/linux/man-pages/man2/sendfile.2.html"
+url = "https://man7.org/linux/man-pages/man2/sendfile.2.html"
+
+[[sources]]
+title = "man7.org/linux/man-pages/man2/splice.2.html"
+url = "https://man7.org/linux/man-pages/man2/splice.2.html"
+
+[[sources]]
+title = "man7.org/linux/man-pages/man2/tee.2.html"
+url = "https://man7.org/linux/man-pages/man2/tee.2.html"
+
+[[sources]]
+title = "man7.org/linux/man-pages/man2/vmsplice.2.html"
+url = "https://man7.org/linux/man-pages/man2/vmsplice.2.html"
+
+[[sources]]
+title = "man7.org/linux/man-pages/man2/copy_file_range.2.html"
+url = "https://man7.org/linux/man-pages/man2/copy_file_range.2.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/io/fn.copy.html"
+url = "https://doc.rust-lang.org/std/io/fn.copy.html"
+
+[[sources]]
+title = "docs.rs/bytes"
+url = "https://docs.rs/bytes"

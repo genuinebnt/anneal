@@ -1,0 +1,9 @@
+warning[W0505]: `x` shadows an earlier variable
+ --> w0505_shadowed.peb:4:9
+  |
+3 |     let x = 1;
+  |         - the shadowed binding
+4 |     let x = x + 1;
+  |         ^ this binding shadows
+
+warning: 1 warning emitted

@@ -1,0 +1,530 @@
+title = "Rust for systems code"
+module = "Rust language"
+module_order = 1
+chapter = "Unsafe and FFI"
+chapter_order = 7
+order = 59
+kind = "guide"
+lede = "What safe Rust guarantees and what unsafe promises · atomics and memory ordering measured on an Apple M4 Pro and in Miri · false sharing and a 128-byte cache line · two small sound abstractions (an inline vector, a page header view) · undefined behavior caught by Miri"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Safe Rust cannot have undefined behavior or data races; <code>unsafe</code> is a promise that you have not introduced one.</strong> The compiler checks every reference for validity, exclusivity and lifetime, and every shared value for thread safety. An <code>unsafe</code> block turns off those checks for five operations (dereferencing a raw pointer, calling an unsafe function, accessing a mutable static, implementing an unsafe trait, accessing a union field) and leaves their obligations to you. The point of Rust for a database is not that it has no <code>unsafe</code>; it is that <code>unsafe</code> is <em>small</em>, <em>marked</em>, and wrapped in an interface that no safe caller can misuse.</li> <li><strong>A sound abstraction states its invariant and is tested against it.</strong> <code>StackVec&lt;T, N&gt;</code> below keeps <code>buf[..len]</code> initialized and <code>buf[len..]</code> untouched; every <code>unsafe</code> block says why that invariant makes it correct (a <code>// SAFETY:</code> comment is the convention), and the tests compare the vector with a <code>Vec</code> while counting drops. <code>PageHeader::view</code> looks at bytes in place as a struct, which is sound only if the address is aligned and the length sufficient, so it checks both and returns <code>None</code> otherwise.</li> <li><strong>Why a database needs <code>unsafe</code> at all:</strong> page frames that are viewed as typed structures without copying; a buffer pool that hands out references into frames; lock-free and optimistic structures; arenas; memory-mapped files; SIMD; calls into the operating system. Each can be wrapped.</li> <li><strong>Atomics are not magic variables; they are the vocabulary of the memory model.</strong> The <em>language's</em> model says what a program may observe; the compiler may reorder to anything it allows; the <em>processor</em> may reorder further, differently on x86 (total store order: mostly strong) and ARM (weak). A <code>Relaxed</code> operation is atomic but orders nothing; a <code>Release</code> store and an <code>Acquire</code> load that reads it order everything before the store before everything after the load; <code>SeqCst</code> adds one total order of all <code>SeqCst</code> operations.</li> <li><strong>A program can pass every test on one machine and be wrong.</strong> The tests below count outcomes the language permits that this processor does or does not show. Miri, which implements the language's model rather than a processor's, shows the ones the hardware hides.</li> <li><strong>Contention is a property of cache lines.</strong> One shared atomic counter incremented by many threads scales <em>down</em>; the same counter split into per-thread cells scales <em>up</em>, provided each cell has a cache line of its own. On this machine a line is 128 bytes, not 64.</li> </ul>
+"""
+
+[[sections]]
+heading = "What the hardware does with each ordering"
+body = """
+```text title="the arm64 instruction each atomic operation becomes"
+operation   ordering   arm64 instruction (rustc --emit asm, default aarch64-apple-darwin target)
+load        Relaxed    ldr
+load        Acquire    ldapr
+load        SeqCst     ldar
+store       Relaxed    str
+store       Release    stlr
+store       SeqCst     stlr
+fetch_add   Relaxed    ldadd
+fetch_add   SeqCst     ldaddal
+```
+
+<p>On x86-64, loads and stores of every ordering below <code>SeqCst</code> compile to plain <code>mov</code>, and only a <code>SeqCst</code> store (or a <code>fetch_add</code>, which is a locked instruction anyway) costs a fence. On ARM the cheaper orderings are cheaper in instructions too, and the weaker orderings allow more hardware reordering. The language does not tell you which machine you will meet.</p>
+
+:::deeper Reference: litmus tests on real threads (store buffering, message passing, load buffering), false-sharing and counter experiments
+```rust title="src/test/litmus.rs"
+//! Memory-model litmus tests and shared-counter experiments on real threads. A litmus test is a tiny concurrent program whose possible
+//! outcomes tell which reorderings the language and the processor allow. Each test here runs two threads over many independent instances
+//! of the same variables and counts how often each outcome appears. The outcomes depend on the compiler *and* the processor: a weak
+//! outcome that is allowed but never seen on this machine proves nothing about another.
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
+
+/// Counts of outcome pairs `(r0, r1)` over all runs.
+#[derive(Default, Debug, Clone)]
+pub struct Outcomes {
+    pub counts: std::collections::BTreeMap<(u64, u64), u64>,
+}
+impl Outcomes {
+    pub fn get(&self, a: u64, b: u64) -> u64 {
+        self.counts.get(&(a, b)).copied().unwrap_or(0)
+    }
+    pub fn total(&self) -> u64 {
+        self.counts.values().sum()
+    }
+}
+
+/// Instances run per synchronization point: each thread finishes its batch before the next starts, so the two threads are close in time.
+const BATCH: usize = 64;
+
+/// A pair of atomics on separate cache lines (so that the test measures ordering, not false sharing).
+#[repr(align(128))]
+pub struct Cell(pub AtomicU64);
+
+/// Run `body0` on one thread and `body1` on another over `iters` instances of `State`, `BATCH` at a time, and count the pairs returned.
+pub fn run<S, F0, F1>(iters: usize, make: fn() -> S, reset: fn(&S), body0: F0, body1: F1) -> Outcomes
+where
+    S: Send + Sync + 'static,
+    F0: Fn(&S) -> u64 + Send + Sync + 'static,
+    F1: Fn(&S) -> u64 + Send + Sync + 'static,
+{
+    let batches = iters / BATCH;
+    let states: Arc<Vec<S>> = Arc::new((0..BATCH).map(|_| make()).collect());
+    let results: Arc<Vec<[AtomicU64; 2]>> = Arc::new((0..BATCH).map(|_| [AtomicU64::new(0), AtomicU64::new(0)]).collect());
+    // two barriers per batch: "start" (both threads ready, the instances reset) and "done"
+    let start = Arc::new(AtomicUsize::new(0));
+    let done = Arc::new(AtomicUsize::new(0));
+    let worker = |id: usize, body: Arc<dyn Fn(&S) -> u64 + Send + Sync>, states: Arc<Vec<S>>, results: Arc<Vec<[AtomicU64; 2]>>, start: Arc<AtomicUsize>, done: Arc<AtomicUsize>| {
+        std::thread::spawn(move || {
+            for b in 0..batches {
+                // wait for the batch to be released
+                while start.load(Ordering::Acquire) <= b {
+                    std::hint::spin_loop();
+                }
+                for (i, s) in states.iter().enumerate() {
+                    results[i][id].store(body(s), Ordering::Relaxed);
+                }
+                done.fetch_add(1, Ordering::AcqRel);
+            }
+        })
+    };
+    let h0 = worker(0, Arc::new(body0), states.clone(), results.clone(), start.clone(), done.clone());
+    let h1 = worker(1, Arc::new(body1), states.clone(), results.clone(), start.clone(), done.clone());
+    let mut out = Outcomes::default();
+    for b in 0..batches {
+        for s in states.iter() {
+            reset(s);
+        }
+        start.fetch_add(1, Ordering::Release);
+        while done.load(Ordering::Acquire) < 2 * (b + 1) {
+            std::hint::spin_loop();
+        }
+        for r in results.iter() {
+            *out.counts.entry((r[0].load(Ordering::Relaxed), r[1].load(Ordering::Relaxed))).or_default() += 1;
+        }
+    }
+    h0.join().unwrap();
+    h1.join().unwrap();
+    out
+}
+
+pub struct Two {
+    pub x: Cell,
+    pub y: Cell,
+}
+pub fn two() -> Two {
+    Two { x: Cell(AtomicU64::new(0)), y: Cell(AtomicU64::new(0)) }
+}
+pub fn zero(s: &Two) {
+    s.x.0.store(0, Ordering::Relaxed);
+    s.y.0.store(0, Ordering::Relaxed);
+}
+
+/// Store buffering: `x = 1; r0 = y` on one thread, `y = 1; r1 = x` on the other. `(0, 0)` means both stores were still in a store buffer
+/// when the other thread read: forbidden under sequential consistency.
+pub fn store_buffering(iters: usize, store: Ordering, load: Ordering) -> Outcomes {
+    run(
+        iters,
+        two,
+        zero,
+        move |s| {
+            s.x.0.store(1, store);
+            s.y.0.load(load)
+        },
+        move |s| {
+            s.y.0.store(1, store);
+            s.x.0.load(load)
+        },
+    )
+}
+
+/// Message passing: the writer sets data, then a flag; the reader reads the flag, then the data. `(1, 0)` as (flag, data) is the reader
+/// seeing the flag but not the data the writer wrote before it.
+pub fn message_passing(iters: usize, flag_store: Ordering, flag_load: Ordering) -> Outcomes {
+    run(
+        iters,
+        two,
+        zero,
+        move |s| {
+            s.x.0.store(1, Ordering::Relaxed); // data
+            s.y.0.store(1, flag_store); // flag
+            0
+        },
+        move |s| {
+            let flag = s.y.0.load(flag_load);
+            let data = s.x.0.load(Ordering::Relaxed);
+            flag * 2 + data // 0..=3; (flag 1, data 0) = 2
+        },
+    )
+}
+
+/// Load buffering: `r0 = y; x = 1` and `r1 = x; y = 1`. `(1, 1)` means each load saw the store that comes *after* the other's load.
+pub fn load_buffering(iters: usize, store: Ordering, load: Ordering) -> Outcomes {
+    run(
+        iters,
+        two,
+        zero,
+        move |s| {
+            let r = s.y.0.load(load);
+            s.x.0.store(1, store);
+            r
+        },
+        move |s| {
+            let r = s.x.0.load(load);
+            s.y.0.store(1, store);
+            r
+        },
+    )
+}
+
+// ---- shared counters -----------------------------------------------------------------------------------------------------------------
+
+/// Each of `threads` threads adds 1 to its own counter `ops` times; the counters are `stride_bytes` apart. Returns nanoseconds per
+/// increment across all threads (wall time divided by the total number of increments times the thread count, i.e. per-thread latency).
+pub fn increments_per_thread_ns(threads: usize, stride_bytes: usize, ops: u64) -> f64 {
+    assert!(stride_bytes % 8 == 0 && stride_bytes >= 8);
+    let step = stride_bytes / 8;
+    let cells: Arc<Vec<AtomicU64>> = Arc::new((0..threads * step + 32).map(|_| AtomicU64::new(0)).collect());
+    // align the first counter to a 128-byte boundary so the stride is the only thing that varies
+    let base = {
+        let p = cells.as_ptr() as usize;
+        ((128 - p % 128) % 128) / 8
+    };
+    let go = Arc::new(AtomicUsize::new(0));
+    let hs: Vec<_> = (0..threads)
+        .map(|t| {
+            let (cells, go) = (cells.clone(), go.clone());
+            std::thread::spawn(move || {
+                while go.load(Ordering::Acquire) == 0 {
+                    std::hint::spin_loop();
+                }
+                let c = &cells[base + t * step];
+                let start = std::time::Instant::now();
+                for _ in 0..ops {
+                    c.fetch_add(1, Ordering::Relaxed);
+                }
+                start.elapsed().as_secs_f64()
+            })
+        })
+        .collect();
+    go.store(1, Ordering::Release);
+    let times: Vec<f64> = hs.into_iter().map(|h| h.join().unwrap()).collect();
+    let total: u64 = (0..threads).map(|t| cells[base + t * step].load(Ordering::Relaxed)).sum();
+    assert_eq!(total, threads as u64 * ops, "no increment may be lost");
+    times.iter().sum::<f64>() / threads as f64 * 1e9 / ops as f64
+}
+
+/// A counter that every thread increments: one atomic, or a lock, or one padded cell per thread (summed when read).
+pub enum Counter {
+    Shared(AtomicU64),
+    Locked(std::sync::Mutex<u64>),
+    Sharded(Vec<Cell>),
+}
+impl Counter {
+    pub fn add(&self, thread: usize) {
+        match self {
+            Counter::Shared(a) => {
+                a.fetch_add(1, Ordering::Relaxed);
+            }
+            Counter::Locked(m) => *m.lock().unwrap() += 1,
+            Counter::Sharded(cells) => {
+                cells[thread].0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+    pub fn value(&self) -> u64 {
+        match self {
+            Counter::Shared(a) => a.load(Ordering::SeqCst),
+            Counter::Locked(m) => *m.lock().unwrap(),
+            Counter::Sharded(cells) => cells.iter().map(|c| c.0.load(Ordering::SeqCst)).sum(),
+        }
+    }
+}
+
+/// Million increments per second across all threads for each kind of counter.
+pub fn counter_throughput(kind: &str, threads: usize, ops_per_thread: u64) -> f64 {
+    let counter = Arc::new(match kind {
+        "shared atomic" => Counter::Shared(AtomicU64::new(0)),
+        "mutex" => Counter::Locked(std::sync::Mutex::new(0)),
+        _ => Counter::Sharded((0..threads).map(|_| Cell(AtomicU64::new(0))).collect()),
+    });
+    let go = Arc::new(AtomicUsize::new(0));
+    let hs: Vec<_> = (0..threads)
+        .map(|t| {
+            let (c, go) = (counter.clone(), go.clone());
+            std::thread::spawn(move || {
+                while go.load(Ordering::Acquire) == 0 {
+                    std::hint::spin_loop();
+                }
+                for _ in 0..ops_per_thread {
+                    c.add(t);
+                }
+            })
+        })
+        .collect();
+    let start = std::time::Instant::now();
+    go.store(1, Ordering::Release);
+    for h in hs {
+        h.join().unwrap();
+    }
+    let secs = start.elapsed().as_secs_f64();
+    assert_eq!(counter.value(), threads as u64 * ops_per_thread, "{kind}: no increment may be lost");
+    (threads as u64 * ops_per_thread) as f64 / secs / 1e6
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Measured"
+body = """
+<p>The litmus harness runs two threads over 2 million independent instances of two variables each, 64 at a time per synchronization, and counts outcomes. A <em>forbidden</em> outcome is one the model rules out for those orderings. The outcome counts for the weak cases change from run to run by a factor of several; the zeros do not.</p>
+
+```text title="on the Apple M4 Pro (12 cores, 128-byte cache line, weak memory model)"
+store buffering (0,0): SeqCst 0, Release/Acquire 0, Relaxed 1628739 of 2097152
+message passing (flag seen, data not): Release/Acquire 0, Relaxed 4273 of 2097152
+load buffering (1,1): Release/Acquire 0, Relaxed 0 of 2097152
+```
+
+```text title="in Miri, which implements the language's model (256 instances)"
+store buffering (0,0): SeqCst 0, Release/Acquire 130, Relaxed 130 of 256
+message passing (flag seen, data not): Release/Acquire 0, Relaxed 15 of 256
+load buffering (1,1): Release/Acquire 0, Relaxed 0 of 256
+```
+
+<ul> <li><strong>Store buffering.</strong> Each thread stores to its own variable and reads the other's. Under sequential consistency at least one thread must see the other's store, so <code>(0, 0)</code> is forbidden. With <code>SeqCst</code> it never happened. With <code>Relaxed</code> it happened in <strong>78% of runs</strong> (1.63 million of 2.10 million): each store waited in a store buffer while the other thread's load went ahead, which is exactly what a store buffer is for. With <code>Release</code>/<code>Acquire</code> the language <em>allows</em> <code>(0, 0)</code> (Miri produced it in 130 of 256 instances), but <strong>this processor never showed it</strong> in 2 million runs: <code>stlr</code> followed by <code>ldapr</code> is the cheapest correct translation, and whether a core reorders that pair is a property of the core. Code that works here by luck of the microarchitecture can break on another core or after a compiler change.</li> <li><strong>Message passing.</strong> The writer stores data then sets a flag; the reader reads the flag then the data. Seeing the flag without the data is forbidden with a <code>Release</code> store and an <code>Acquire</code> load: <strong>0 occurrences</strong> in hardware and in Miri. With <code>Relaxed</code> on both it is allowed, and it happened 4 273 times in 2.1 million runs (15 of 256 in Miri). That is the failure a lock-free queue with a relaxed flag has: rare, silent, and data-dependent.</li> <li><strong>Load buffering</strong> <code>(1, 1)</code> is allowed for relaxed operations by the model and by ARM; neither hardware nor Miri produced it. Not seeing an allowed outcome is not evidence that it cannot occur.</li> </ul>
+
+```text title="false sharing: 8 threads each incrementing their own counter, the counters a given number of bytes apart"
+stride      ns per increment (8 threads)
+8 bytes                     121.14
+16 bytes                     75.68
+32 bytes                     23.32
+64 bytes                      2.71
+128 bytes                     1.79
+256 bytes                     1.79
+```
+
+```text title="million increments per second, all threads together, by kind of counter and number of threads"
+counter                  1         2         4         8        12   (million increments per second, all threads)
+shared atomic          558       112        72        39        20
+mutex                  236        93        68        76        91
+sharded                553      1112      2167      4322      4699
+```
+
+<ul> <li><strong>False sharing costs 68×.</strong> Counters 8 bytes apart (all in the same cache line) take 121 ns per increment per thread; 16 bytes 76 ns; 32 bytes 23 ns; <strong>64 bytes still 2.7 ns, against 1.8 ns at 128 bytes and beyond</strong>. The 64-byte padding that is right for most x86 machines is not enough here: the coherence unit on this processor is 128 bytes (<code>sysctl hw.cachelinesize</code> says 128), so two counters 64 bytes apart still share one. <code>crossbeam</code>'s <code>CachePadded</code> pads to 128 bytes on aarch64 and x86-64 for this reason.</li> <li><strong>One shared atomic gets slower with every thread</strong> (558 million increments per second on one thread, 20 on twelve), because every increment must own the line. <strong>A mutex is slower still at one thread and flat beyond</strong> (236 → 91). <strong>Sharded counters scale almost linearly</strong> (553 → 4 699, 8.5× on twelve threads), each thread's cell on its own line, at the price that reading the total means summing the cells and sees a count that may be a moment old.</li> <li>The same shape governs buffer-pool statistics, hit counters, per-operator row counts and every metric you add (<a href="/cookbook/p/profiling-and-observability">Profiling</a>): a global counter on the hot path is a scalability bug.</li> </ul>
+"""
+
+[[sections]]
+heading = "The unsafe code under Miri"
+body = """
+<p>Miri interprets the program's MIR and checks every operation against the rules: alignment, validity of values, initialization, the aliasing model for references, data races, memory leaks and use after free. All the tests of <code>StackVec</code> and <code>PageHeader</code> and the litmus harness pass under it (<code>cargo +nightly miri test --test sysrust</code>). To see what it catches, here are five deliberately undefined programs and one that fixes a race (the sources are in <code>verify/miri/</code>):</p>
+
+```text title="cargo +nightly miri run, one small program per bin"
+$ cargo +nightly miri run --bin unaligned
+error: Undefined Behavior: constructing invalid value of type &u32: encountered an unaligned reference (required 4 byte alignment but found 1)
+$ cargo +nightly miri run --bin race_relaxed
+error: Undefined Behavior: Data race detected between (1) non-atomic write on thread `unnamed-1` and (2) non-atomic read on thread `unnamed-2` at alloc210
+$ cargo +nightly miri run --bin race_release
+42
+$ cargo +nightly miri run --bin use_after_free
+error: Undefined Behavior: memory access failed: alloc289 has been freed, so this pointer is dangling
+$ cargo +nightly miri run --bin uninit
+error: Undefined Behavior: constructing invalid value of type u32: encountered uninitialized memory, but expected an integer
+$ cargo +nightly miri run --bin two_mut
+error: Undefined Behavior: attempting a read access using <541> at alloc207[0x0], but that tag does not exist in the borrow stack for this location
+```
+
+<p>The race is the lesson of the litmus tests in a form a compiler cannot see:</p>
+
+```rust title="the relaxed version (src/bin/race_relaxed.rs); the release/acquire version differs in the two orderings"
+// Message passing with a relaxed flag: the reader may see the flag without the data, and the plain read of the data races with the write.
+use std::cell::UnsafeCell;
+use std::sync::atomic::{AtomicBool, Ordering};
+struct Shared { data: UnsafeCell<u64>, ready: AtomicBool }
+unsafe impl Sync for Shared {}
+impl Shared { fn data(&self) -> *mut u64 { self.data.get() } }
+fn main() {
+    let s = Shared { data: UnsafeCell::new(0), ready: AtomicBool::new(false) };
+    std::thread::scope(|sc| {
+        sc.spawn(|| {
+            unsafe { *s.data() = 42 };
+            s.ready.store(true, Ordering::Relaxed);
+        });
+        sc.spawn(|| {
+            while !s.ready.load(Ordering::Relaxed) { std::hint::spin_loop(); }
+            println!("{}", unsafe { *s.data() });
+        });
+    });
+}
+```
+
+<p>With <code>Relaxed</code> on the flag, the plain write of <code>data</code> and the plain read of <code>data</code> are not ordered by anything, so Miri reports a data race: undefined behavior, even though on x86 and on this processor the program would almost always print 42. With <code>Release</code> and <code>Acquire</code> the write happens before the read and Miri prints 42.</p>
+
+:::deeper Reference: an inline vector and a page header view, with their invariants
+```rust title="src/test/stackvec.rs"
+//! A growable vector with room for `N` elements inside the value itself, and a view of a page header cast from bytes: two of the small
+//! `unsafe` abstractions that storage engines are full of. Each is a safe interface over code that is sound only if a stated invariant
+//! holds; the tests state the invariant and check it, and the whole file is meant to be run under Miri (`cargo +nightly miri test`).
+use std::mem::MaybeUninit;
+
+/// A vector of at most `N` elements stored inline. Invariant: `buf[..len]` is initialized and `buf[len..]` is not (and is never read).
+pub struct StackVec<T, const N: usize> {
+    buf: [MaybeUninit<T>; N],
+    len: usize,
+}
+
+impl<T, const N: usize> StackVec<T, N> {
+    pub fn new() -> Self {
+        StackVec { buf: [const { MaybeUninit::uninit() }; N], len: 0 }
+    }
+    pub fn len(&self) -> usize {
+        self.len
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+    pub fn capacity(&self) -> usize {
+        N
+    }
+    /// Append, or give the element back when the vector is full.
+    pub fn push(&mut self, x: T) -> Result<(), T> {
+        if self.len == N {
+            return Err(x);
+        }
+        self.buf[self.len].write(x);
+        self.len += 1;
+        Ok(())
+    }
+    pub fn pop(&mut self) -> Option<T> {
+        if self.len == 0 {
+            return None;
+        }
+        self.len -= 1;
+        // SAFETY: slot `len` was initialized (it was inside `buf[..len]`) and is now outside it, so it is read exactly once.
+        Some(unsafe { self.buf[self.len].assume_init_read() })
+    }
+    pub fn as_slice(&self) -> &[T] {
+        // SAFETY: `buf[..len]` is initialized, and `MaybeUninit<T>` has the layout of `T`.
+        unsafe { std::slice::from_raw_parts(self.buf.as_ptr() as *const T, self.len) }
+    }
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        // SAFETY: as in `as_slice`, and the exclusive borrow of `self` makes the unique borrow of the slice sound.
+        unsafe { std::slice::from_raw_parts_mut(self.buf.as_mut_ptr() as *mut T, self.len) }
+    }
+    /// Insert at `at`, shifting the tail right; gives the element back when full.
+    pub fn insert(&mut self, at: usize, x: T) -> Result<(), T> {
+        assert!(at <= self.len, "insert index {at} beyond length {}", self.len);
+        if self.len == N {
+            return Err(x);
+        }
+        // SAFETY: the source range `at..len` is initialized, the destination `at+1..len+1` is within `N`; `copy` handles the overlap.
+        // After the move slot `at` holds a stale bit copy that is overwritten without being dropped.
+        unsafe {
+            let p = self.buf.as_mut_ptr().add(at);
+            std::ptr::copy(p, p.add(1), self.len - at);
+            (*p).write(x);
+        }
+        self.len += 1;
+        Ok(())
+    }
+    pub fn remove(&mut self, at: usize) -> T {
+        assert!(at < self.len, "remove index {at} beyond length {}", self.len);
+        // SAFETY: slot `at` is initialized; it is read out once and the tail is moved over it, after which the length shrinks by one.
+        unsafe {
+            let p = self.buf.as_mut_ptr().add(at);
+            let x = (*p).assume_init_read();
+            std::ptr::copy(p.add(1), p, self.len - at - 1);
+            self.len -= 1;
+            x
+        }
+    }
+    pub fn clear(&mut self) {
+        while self.pop().is_some() {}
+    }
+}
+
+impl<T, const N: usize> Default for StackVec<T, N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T, const N: usize> Drop for StackVec<T, N> {
+    fn drop(&mut self) {
+        // SAFETY: exactly the initialized prefix is dropped, once.
+        unsafe { std::ptr::drop_in_place(self.as_mut_slice()) }
+    }
+}
+
+impl<T: Clone, const N: usize> Clone for StackVec<T, N> {
+    fn clone(&self) -> Self {
+        let mut v = StackVec::new();
+        for x in self.as_slice() {
+            let _ = v.push(x.clone()); // never fails: same capacity, same length
+        }
+        v
+    }
+}
+
+// ---- a page header viewed in place -------------------------------------------------------------------------------------------------------
+
+/// The fixed part of a page, as stored: little-endian integers at known offsets, 16 bytes, alignment 4.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PageHeader {
+    pub magic: u32,
+    pub page_id: u32,
+    pub slots: u16,
+    pub flags: u16,
+    pub free_end: u32,
+}
+const _: () = assert!(std::mem::size_of::<PageHeader>() == 16 && std::mem::align_of::<PageHeader>() == 4);
+
+pub const MAGIC: u32 = 0xB10C_5EED;
+
+impl PageHeader {
+    /// Look at the first 16 bytes of `bytes` as a header **without copying**. Sound only when the bytes are suitably aligned (checked)
+    /// and long enough (checked), and every bit pattern is a valid `PageHeader` (true: it is made of integers). The values are in the
+    /// machine's byte order, which is how pages are stored here; a portable format would store little-endian and convert.
+    pub fn view(bytes: &[u8]) -> Option<&PageHeader> {
+        if bytes.len() < std::mem::size_of::<PageHeader>() || bytes.as_ptr() as usize % std::mem::align_of::<PageHeader>() != 0 {
+            return None;
+        }
+        // SAFETY: length and alignment were checked above; any 16 bytes are a valid PageHeader; the result borrows `bytes`.
+        let h = unsafe { &*(bytes.as_ptr() as *const PageHeader) };
+        (h.magic == MAGIC).then_some(h)
+    }
+    /// The same, for bytes that may be misaligned: reads a copy.
+    pub fn read(bytes: &[u8]) -> Option<PageHeader> {
+        if bytes.len() < std::mem::size_of::<PageHeader>() {
+            return None;
+        }
+        // SAFETY: length checked; `read_unaligned` has no alignment requirement; any 16 bytes are a valid PageHeader.
+        let h = unsafe { std::ptr::read_unaligned(bytes.as_ptr() as *const PageHeader) };
+        (h.magic == MAGIC).then_some(h)
+    }
+    pub fn write(&self, out: &mut [u8]) {
+        assert!(out.len() >= 16);
+        // SAFETY: length checked; `write_unaligned` has no alignment requirement.
+        unsafe { std::ptr::write_unaligned(out.as_mut_ptr() as *mut PageHeader, *self) }
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "Rules of thumb that held up"
+body = """
+<ol> <li><strong>Default to <code>SeqCst</code>; weaken it only with an argument and a test.</strong> An argument names the happens-before edge you rely on; a test is a litmus test or a Miri run.</li> <li><strong>Pair every <code>Acquire</code> with a <code>Release</code> on the same variable and write down what the pair publishes.</strong></li> <li><strong>A lock hides the memory model; a lock-free structure exposes it.</strong> Use <code>std::sync::Mutex</code> and <code>RwLock</code> until a profile says otherwise (<a href="/cookbook/p/profiling-and-observability">Profiling</a>).</li> <li><strong>Keep <code>unsafe</code> blocks small, one operation each, with a <code>// SAFETY:</code> comment saying which invariant makes it sound.</strong> Put <code>#![deny(unsafe_op_in_unsafe_fn)]</code> on the crate.</li> <li><strong>Give every unsafe abstraction a model test.</strong> Compare with the safe equivalent on random operations, count drops, and run the tests under Miri.</li> <li><strong>Pad hot, per-thread data to the coherence unit</strong> (128 bytes on this machine) and shard counters.</li> <li><strong>Treat <code>unsafe impl Send/Sync</code> as the most dangerous line in a file.</strong> It is a statement about every use of the type from now on.</li> </ol>
+
+<aside data-call="rust"><b>Rust notes</b><ul> <li><strong><code>MaybeUninit&lt;T&gt;</code></strong> is the only sound way to hold memory that is not yet a <code>T</code>. <code>StackVec</code> stores <code>[MaybeUninit&lt;T&gt;; N]</code>, writes with <code>.write(x)</code>, and reads with <code>assume_init_read()</code> exactly once per element; <code>[const { MaybeUninit::uninit() }; N]</code> builds the array without requiring <code>T: Copy</code>.</li> <li><strong><code>ptr::copy</code> handles overlap (<code>memmove</code>); <code>copy_nonoverlapping</code> does not (<code>memcpy</code>).</strong> <code>insert</code> and <code>remove</code> shift within one buffer, so they use <code>copy</code>.</li> <li><strong><code>read_unaligned</code> and <code>write_unaligned</code></strong> copy a value out of or into bytes at any address; <code>&amp;*(ptr as *const T)</code> requires alignment and validity. <code>PageHeader::view</code> checks alignment and falls back to <code>None</code>; <code>read</code> always works, at the price of a copy.</li> <li><strong><code>#[repr(C)]</code></strong> fixes field order and layout, <code>#[repr(align(128))]</code> raises alignment; <code>const _: () = assert!(size_of::&lt;PageHeader&gt;() == 16)</code> turns a layout assumption into a compile error.</li> <li><strong><code>UnsafeCell&lt;T&gt;</code></strong> is the one primitive that permits mutation through a shared reference; <code>Mutex</code>, <code>RefCell</code>, atomics and <code>Cell</code> are built on it. A type containing it is <code>!Sync</code> until you write <code>unsafe impl Sync</code>, and the compiler's disjoint closure capture means a closure that touches a <em>field</em> bypasses the wrapper's <code>Sync</code> impl; use a method (the Miri demos do).</li> <li><strong><code>std::hint::spin_loop()</code></strong> in a wait loop tells the processor it is spinning; on ARM it compiles to <code>isb</code> or <code>yield</code> depending on the target.</li> <li><strong><code>Drop</code> runs for the initialized prefix only:</strong> <code>StackVec::drop</code> calls <code>drop_in_place</code> on the slice <code>buf[..len]</code>; dropping the <code>MaybeUninit</code> array does nothing by design.</li> </ul></aside>
+
+<aside data-call="testing"><b>Test plan</b><ul> <li><strong><code>StackVec</code></strong>: 600 rounds of 40 random operations (push, pop, insert, remove, clear, clone, with a full vector rejecting an insert and returning the element) against a <code>Vec</code> model; every element made is dropped exactly once (a leak or a double drop fails the count); zero-sized elements and capacity 0.</li> <li><strong><code>PageHeader</code></strong>: write then read round trip; <code>view</code> at an aligned address returns a reference, at an odd address returns <code>None</code> while <code>read</code> still works; too short, wrong magic; 20 000 random buffers on which <code>view</code> and <code>read</code> agree.</li> <li><strong>Litmus</strong>: the totals equal the iterations; the forbidden outcomes are zero (<code>SeqCst</code> store buffering, <code>Release</code>/<code>Acquire</code> message passing, acquire/release load buffering); the allowed ones are seen (each thread wins store buffering sometimes; the reader sometimes sees the message and sometimes does not), or the harness is not racing.</li> <li><strong>Counters</strong>: no increment is lost in any kind of counter or in the padded-increment experiment.</li> <li><strong>Miri</strong>: the above, with fewer iterations, under <code>cargo +nightly miri test</code>; six programs of <code>verify/miri/</code> with the verdicts above.</li> <li><strong>Mutants run against these tests</strong> (15): in <code>StackVec</code>, <code>push</code> one past the end, <code>pop</code> not shrinking, the slice one short, <code>insert</code> and <code>remove</code> moving too few elements, <code>drop</code> leaking, <code>remove</code> and <code>insert</code> not changing the length; in <code>PageHeader</code>, a view at any address, in a short buffer, a copy without its magic check; in the harness, instances not reset, a counter that loses increments, a store-buffering test with relaxed orderings, a message-passing test that sets the flag before the data. <strong>All 15 were killed</strong>; three (<code>pop</code> not shrinking, and the two moves) by the test process crashing, which the first version of the mutation runner misreported as survival until it checked the exit status.</li> </ul></aside>
+
+<aside data-call="production"><b>What production systems do</b><ul> <li><strong>Rust database engines</strong> (TiKV, Materialize, RisingWave, DataFusion, Neon's storage layer, SurrealDB, Databend, GreptimeDB, and many others) use <code>unsafe</code> for the same reasons as above, behind small interfaces, and lean on <code>crossbeam</code>, <code>parking_lot</code>, <code>bytes</code> and <code>zerocopy</code>/<code>bytemuck</code> for the sound versions of common patterns.</li> <li><strong><code>loom</code></strong> explores every interleaving of a small concurrent program under the C++ memory model; <strong>Miri</strong> runs in the continuous integration of <code>crossbeam</code>, <code>tokio</code> and the standard library itself; <strong>ThreadSanitizer</strong> (nightly) finds races in executions it observes; <strong><code>cargo-careful</code></strong> and <strong><code>cargo-fuzz</code></strong> add debug assertions and input fuzzing for unsafe code.</li> <li><strong>Memory models in C and C++ systems</strong>: the Linux kernel has its own model (checked with <code>herd7</code>), PostgreSQL implements <code>pg_atomic_*</code> operations with explicit barriers per platform, and most engines wrap the compiler's atomics in a small layer that names the intent (<code>acquire_load</code>, <code>publish</code>).</li> <li><strong>Cache-line padding and sharding</strong> appear in every engine's statistics, lock tables, latch arrays and epoch counters (<code>CachePadded</code>, <code>alignas(64)</code> or 128), and the Linux kernel has <code>____cacheline_aligned</code> and per-CPU variables.</li> <li><strong>Safety audits</strong>: crates that use <code>unsafe</code> are reviewed by <code>cargo geiger</code> counts and by Miri runs; the Rust project's <code>unsafe</code> code guidelines working group maintains the reference for what is and is not allowed.</li> </ul></aside>
+
+<aside data-call="warning"><b>Pitfalls</b><ul> <li><strong>"It passes on my machine" is not a memory-model argument.</strong> x86 hides most reorderings; this processor hides some that others show. Run Miri, <code>loom</code>, or a litmus test on weak hardware.</li> <li><strong><code>Relaxed</code> is atomic, not ordered.</strong> Counters are fine with it; flags that publish data are not.</li> <li><strong><code>SeqCst</code> is not a cure for everything.</strong> It orders only <code>SeqCst</code> operations with each other, and it can cost a fence per store.</li> <li><strong>A raw pointer cast to a reference is a claim about alignment, validity, aliasing and lifetime.</strong> Check each, or copy the bytes.</li> <li><strong>Padding is machine-specific.</strong> 64 is not enough on this processor; 128 wastes space on a machine with 64-byte lines. Measure on the target.</li> <li><strong><code>unsafe impl Sync</code> after a failed compile is the wrong fix.</strong> Read the error: it usually says a closure captured a field, or a type contains a raw pointer, and the real answer is a method or a wrapper that carries the promise in one place.</li> <li><strong><code>mem::forget</code> and leaks are safe; use-after-free is not.</strong> Leaking memory is allowed in safe Rust; do not confuse the two when wrapping unsafe code.</li> <li><strong>Miri cannot run everything.</strong> It is slow (the litmus test above runs 256 instances, not 2 million), does not model all hardware, and cannot call most foreign code; use it on the unit-sized pieces.</li> </ul></aside>
+"""

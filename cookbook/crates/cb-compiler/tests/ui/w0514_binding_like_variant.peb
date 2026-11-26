@@ -1,0 +1,7 @@
+enum Option<T> { None, Some(T) }
+fn main() {
+    let o: Option<int> = Option::None;
+    match o {
+        None => println("none"),
+    }
+}

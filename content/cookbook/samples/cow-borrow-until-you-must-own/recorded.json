@@ -1,0 +1,9 @@
+[
+ {
+  "stamp": "Recorded run · 26 Nov 2026 · rustc 1.98.1",
+  "problems": "No errors and no warnings in the recorded build.",
+  "run": "plain text   -> plain text                   borrowed\na < b && c   -> a &lt; b &amp;&amp; c        owned\nsay \"hi\"     -> say &quot;hi&quot;           owned\nsize in bytes: &str 16, String 24, Cow<str> 24",
+  "tests": "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 3 tests\ntest the_borrowed_paths_do_not_allocate ... ok\ntest moving_and_reusing_buffers ... ok\ntest the_owned_paths_do ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 11 tests\ntest a_map_with_cow_keys_is_searched_with_str ... ok\ntest constructors_and_static_values ... ok\ntest into_owned_moves_but_to_string_copies ... ok\ntest invalid_os_strings_are_copied ... ok\ntest owned_does_not_mean_changed ... ok\ntest slices ... ok\ntest std_lossy_conversions_borrow_valid_input ... ok\ntest to_mut_leaves_the_source_alone_and_is_only_as_lazy_as_you_are ... ok\ntest lossy_from_vec_keeps_the_buffer_when_valid ... ok\ntest to_owned_on_a_cow_gives_a_cow ... ok\ntest escape_matches_the_oracle_and_borrows_exactly_when_clean ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+  "passed": 14
+ }
+]

@@ -1,0 +1,54 @@
+title = "Timing wheel"
+module = "Performance and systems"
+module_order = 7
+chapter = "Files, processes and the OS"
+chapter_order = 3
+order = 299
+kind = "recipe"
+lede = "hierarchical timing wheel with O(1) insert/cancel, cascading and an overflow list"
+level = "advanced"
+code = ["examples/os_and_storage/timing_wheel.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>timeouts</li><li>retransmit timers</li><li>session expiry</li><li>delay queues</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a timer container where `schedule`, `cancel` and "advance one tick" are O(1) amortised, instead of the O(log n) of a binary heap. Time is an integer tick count (resolution = one tick, e.g. 1 ms).
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+- **Levels** wheels of 64 slots each. Level 0 slot = the low 6 bits of the deadline, level 1 = the next 6 bits, ...
+- A timer goes to the level of the **highest** bit in which `deadline` differs from `now` (`deadline ^ now`), into the slot named by its digit at that level. If the difference is above all levels it parks in an **overflow** list.
+- `tick()` does `now += 1`. Whenever the low 6&#42;l bits of `now` become zero, slot `(now >> 6l) & 63` of level l is **cascaded**: its timers are re-placed relative to the new `now` and fall to lower levels (like a carry in an odometer). A full wrap of the top level also re-places the overflow list.
+
+   Then level-0 slot `now & 63` fires.
+- Each timer lives in a slab and remembers (bucket, position) so `cancel` is a `swap_remove` plus one fix-up.
+- Each timer is touched at most once per level it descends through, so total work is O(levels) per timer. Time comes from an injectable `Clock` so tests never sleep. A BinaryHeap queue is the oracle in a differential test.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>the Linux kernel's timer wheel for timeouts (cascading wheels, tuned for timers that are usually cancelled before they fire)</li><li>Kafka's purgatory of delayed operations</li><li>Netty's HashedWheelTimer</li><li>tokio's timer driver (a hierarchical wheel with 64-slot levels). Also: TCP retransmit and idle timeouts</li><li>lease/session expiry</li><li>rate-limiter refills</li><li>game-server cooldowns. Heaps still win for few timers</li><li>exact (non-quantised) deadlines</li><li>when you need "next deadline" cheaply to sleep precisely</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://github.com/tokio-rs/tokio/tree/master/tokio/src/runtime/time> and <https://netty.io/4.1/api/io/netty/util/HashedWheelTimer.html> and the paper "Hashed and Hierarchical Timing Wheels" (Varghese &amp; Lauck, 1987)
+"""
+
+[[sources]]
+title = "github.com/tokio-rs/tokio/tree/master/tokio/src/runtime/time"
+url = "https://github.com/tokio-rs/tokio/tree/master/tokio/src/runtime/time"
+
+[[sources]]
+title = "netty.io/4.1/api/io/netty/util/HashedWheelTimer.html"
+url = "https://netty.io/4.1/api/io/netty/util/HashedWheelTimer.html"

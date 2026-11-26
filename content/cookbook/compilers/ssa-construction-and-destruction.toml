@@ -1,0 +1,127 @@
+title = "SSA construction and destruction"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Middle end and analysis"
+chapter_order = 5
+order = 622
+kind = "guide"
+lede = "cranelift-frontend implements Braun et al.; LLVM uses mem2reg (Cytron-style) · Builds on 7 and 9"
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<p><b>Cytron et al.</b> build SSA with global information. Compute dominance frontiers. For each variable, place φs at the <em>iterated</em> dominance frontier of its definition sites, pruned by liveness. Then rename by walking the dominator tree with a stack of current definitions per variable.</p>
+
+<p><b>Braun et al.</b> build SSA <em>during</em> IR construction from the AST, without dominance frontiers. The idea is <em>local value numbering</em> per block. When a block doesn't define a variable, look it up recursively in its predecessors, inserting a φ where there are several. A block is <em>sealed</em> once all its predecessors are known; lookups in unsealed blocks create placeholder φs that are completed at sealing time. Trivial φs (whose operands are all the same value or itself) are removed on the fly. This produces minimal SSA for reducible CFGs, and it's what you want in a front end that emits SSA directly.</p>
+
+```rust title="Braun et al. 2013, with block parameters instead of φ-nodes"
+pub struct SsaBuilder {
+    current_def: HashMap<(Var, Block), Value>,
+    sealed: HashSet<Block>,
+    incomplete: HashMap<Block, Vec<(Var, Value)>>,       // params awaiting predecessors
+}
+
+impl SsaBuilder {
+    pub fn write(&mut self, var: Var, block: Block, v: Value) {
+        self.current_def.insert((var, block), v);
+    }
+
+    pub fn read(&mut self, f: &mut Function, var: Var, block: Block) -> Value {
+        match self.current_def.get(&(var, block)) {
+            Some(&v) => v,                                     // local value numbering
+            None => self.read_recursive(f, var, block),
+        }
+    }
+
+    fn read_recursive(&mut self, f: &mut Function, var: Var, block: Block) -> Value {
+        let v = if !self.sealed.contains(&block) {
+            // Predecessors not all known yet: add a placeholder parameter.
+            let param = f.add_block_param(block, f.var_type(var));
+            self.incomplete.entry(block).or_default().push((var, param));
+            param
+        } else if let [pred] = f.preds(block)[..] {
+            self.read(f, var, pred)                            // one predecessor: no merge needed
+        } else {
+            let param = f.add_block_param(block, f.var_type(var));
+            self.write(var, block, param);                     // break cycles before recursing
+            self.add_param_args(f, var, block, param)
+        };
+        self.write(var, block, v);
+        v
+    }
+
+    /// Give `param` an argument on every incoming edge, then try to remove it.
+    fn add_param_args(&mut self, f: &mut Function, var: Var, block: Block, param: Value) -> Value {
+        for pred in f.preds(block) {
+            let arg = self.read(f, var, pred);
+            f.append_branch_arg(pred, block, arg);
+        }
+        self.try_remove_trivial(f, param)
+    }
+
+    pub fn seal(&mut self, f: &mut Function, block: Block) {
+        for (var, param) in self.incomplete.remove(&block).unwrap_or_default() {
+            self.add_param_args(f, var, block, param);
+        }
+        self.sealed.insert(block);
+    }
+
+    /// A parameter whose incoming values are all `x` (or itself) is just `x`.
+    fn try_remove_trivial(&mut self, f: &mut Function, param: Value) -> Value {
+        let mut same = None;
+        for op in f.incoming_args(param) {
+            if Some(op) == same || op == param { continue; }
+            if same.is_some() { return param; }                // two distinct inputs: a real merge
+            same = Some(op);
+        }
+        let same = same.unwrap_or_else(|| f.undef(f.value_type(param)));   // unreachable or uninitialized
+        let users = f.param_users(param);                      // other params fed by this one
+        f.replace_all_uses(param, same);
+        f.remove_block_param(param);
+        for d in self.current_def.values_mut() { if *d == param { *d = same; } }
+        for u in users { if u != param { self.try_remove_trivial(f, u); } }
+        same
+    }
+}
+```
+
+<p>A front end uses it like this: create blocks, and <code>seal</code> each one when no more predecessors will be added. For a <code>while</code> loop, seal the header after emitting the back edge. Call <code>write</code> on assignment and <code>read</code> on use. cranelift-frontend's <code>FunctionBuilder</code> exposes exactly this API (<code>declare_var</code>, <code>def_var</code>, <code>use_var</code>, <code>seal_block</code>).</p>
+"""
+
+[[sections]]
+heading = "Leaving SSA"
+body = """
+<p>Machines don't have φs. Destruction replaces each φ, or each set of block parameters, with copies at the end of the predecessors. Two classic bugs follow from doing that naively:</p>
+
+<ul> <li><b>The lost-copy problem.</b> A copy placed on a critical edge (from a block with several successors to a block with several predecessors) runs on paths where it shouldn't. Split critical edges first.</li> <li><b>The swap problem.</b> The copies for one edge form a <em>parallel</em> assignment. <code>(a, b) ← (b, a)</code> can't be done as two sequential moves.</li> </ul>
+
+<p>Sequentialize parallel copies carefully:</p>
+
+```rust title="Parallel-copy sequentialization with one scratch register"
+/// `moves` = (dst, src) pairs meant to happen simultaneously; all dsts are distinct.
+pub fn sequentialize(mut moves: Vec<(Reg, Reg)>, scratch: Reg) -> Vec<(Reg, Reg)> {
+    moves.retain(|(d, s)| d != s);
+    let mut out = Vec::new();
+    while !moves.is_empty() {
+        // A move is safe once no other pending move still needs its destination's old value.
+        if let Some(i) = moves.iter().position(|(d, _)| !moves.iter().any(|(_, s)| s == d)) {
+            out.push(moves.swap_remove(i));
+        } else {
+            // Only cycles remain. Save one destination and redirect its readers to the copy.
+            let (d, _) = moves[0];
+            out.push((scratch, d));
+            for m in moves.iter_mut() { if m.1 == d { m.1 = scratch; } }
+        }
+    }
+    out
+}
+// (a,b)←(b,a) becomes: scratch←a; a←b; b←scratch
+```
+
+<div class="cb-g-tip"><h3>SSA flavors worth knowing</h3> <ul> <li><b>Minimal</b> SSA has the fewest φs that the dominance frontier criterion allows. <b>Pruned</b> SSA additionally drops dead φs. <b>Semi-pruned</b> skips φs for block-local names.</li> <li><b>Conventional SSA</b> (CSSA) can be destructed by simply dropping indices. Copy propagation breaks that property, which is why destruction needs care (Sreedhar; Boissinot).</li> <li><b>Memory SSA</b> gives loads and stores SSA-like def-use chains over memory states (LLVM's <code>MemorySSA</code>).</li> <li><b>SSI and e-SSA</b> add π-nodes after branches, so a value can carry the facts learned from the condition. Range analysis and bounds-check elimination use this.</li> <li>SSA interference graphs are <b>chordal</b>. That makes register allocation directly on SSA optimal in polynomial time (<a href="/cookbook/p/register-allocation">chapter 18</a>).</li> </ul></div>
+"""
+
+[[sources]]
+title = "Braun, Buchwald, Hack, Leißa, Mallon and Zwinkau 2013, “Simple and Efficient Construction of Static Single Assignment Form”"
+url = "https://c9x.me/compile/bib/braun13cc.pdf"

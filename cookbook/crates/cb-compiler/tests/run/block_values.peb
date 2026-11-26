@@ -1,0 +1,6 @@
+fn main() {
+    let a = { let t = 3; t * t };
+    let b = if a > 5 { "big" } else { "small" };
+    let c = match a { 9 => { let z = a + 1; z }, _ => 0 };
+    println(to_str(a) + " " + b + " " + to_str(c));
+}

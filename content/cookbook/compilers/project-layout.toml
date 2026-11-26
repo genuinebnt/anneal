@@ -1,0 +1,37 @@
+title = "Project layout"
+module = "Compilers and languages"
+module_order = 12
+chapter = "A tree-walking interpreter"
+chapter_order = 2
+order = 574
+kind = "guide"
+lede = "Keep one file per stage until a file gets too long to read. The harness and the golden files go in tests/."
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+```rust title="rlox/"
+Cargo.toml
+src/
+  main.rs         CLI: file or REPL, exit codes
+  lib.rs          pub fn run(src, out) -> Result<(), LoxError>
+  span.rs         Span { start: u32, end: u32 }, LineIndex
+  token.rs        TokenKind, Token
+  lexer.rs        Lexer: cursor over Chars, never panics
+  ast.rs          Expr, Stmt, Display as S-expressions
+  parser.rs       recursive descent + Pratt for binary ops
+  resolver.rs     slice 7
+  value.rs        Value, Display in Lox format
+  env.rs          Rc<RefCell<Env>> chain
+  interp.rs       Interpreter { env, out }
+  error.rs        LoxError, Diagnostic (thiserror)
+tests/
+  lang.rs         golden-file runner (uses the built binary)
+  lox/
+    slice1/ … slice8/     your own cases
+    official/             copied from craftinginterpreters/test
+bench/
+  fib.lox
+```
+"""

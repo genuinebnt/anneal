@@ -1,0 +1,65 @@
+title = "Parallel prefix scan and reduction"
+module = "Performance and systems"
+module_order = 7
+chapter = "High-performance computing"
+chapter_order = 4
+order = 305
+kind = "recipe"
+lede = "Hillis-Steele, Blelloch, blocked 3-phase, segmented, compaction"
+level = "advanced"
+code = ["examples/hpc/parallel_prefix_scan_reduction.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>GPU/CPU data-parallel kernels</li><li>radix sort offsets</li><li>stream compaction</li><li>parallel parsing</li><li>deterministic sums</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>radix sort histograms -&gt; offsets</li><li>filter/compaction in columnar engines</li><li>parallel tokenizers (segmented scan)</li><li>reproducible reductions (fixed reduction trees) in numerical libraries and ML frameworks</li><li>GPU scan primitives (<strong>cub</strong>/Thrust style). Course: CMU 15-418/618 (parallel computer architecture and programming)</li><li>lectures on data-parallel primitives</li><li>Blelloch 1990/1993</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+A scan (prefix sum) looks inherently sequential (out[i] depends on out[i-1]) but any **associative** operator can be re-bracketed, which exposes parallelism. This file implements, with std threads only:
+
+1. Hillis-Steele scan: log2(n) rounds, each element combines with the one `d` to its left. Depth O(log n) but **work** O(n log n): wasteful when cores &lt; n (the usual CPU case).
+2. Blelloch scan: up-sweep (reduce tree) + down-sweep. Work O(n), depth 2 log n. We **count** operator applications and assert the work gap (HS &#126; n log n, Blelloch &#126; 2n).
+3. Blocked three-phase scan (what you actually write on a CPU): per-block local reduce, scan the few block sums, per-block local scan with an offset. 2 passes over memory, work &#126;2n, only `threads` blocks.
+4. Segmented scan: restart the scan at flagged elements; trick = lift to pairs (flag, value) with an associative operator, then reuse **any** scan unchanged.
+5. Reductions: float addition is **not** associative, so a reduction whose bracketing depends on the thread count changes its answer with the thread count. Fix = fixed-shape tree (fixed leaf size, pairwise combine) independent of threads.
+6. Stream compaction: flags -> exclusive scan -> scatter. The scan result IS each survivor's output index.
+
+Verification: 2000 seeded random inputs; integers (wrapping add, also max and a non-commutative operator) must match the sequential scan exactly; floats must match within tolerance; the fixed-tree float reduction must be **bit**-identical for every thread count tested. Timings are printed, never asserted.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+Blelloch, "Prefix Sums and Their Applications" <https://www.cs.cmu.edu/~guyb/papers/Ble93.pdf>
+
+GPU Gems 3 ch.39 <https://developer.nvidia.com/gpugems/gpugems3/part-vi-gpu-computing/chapter-39-parallel-prefix-sum-scan-cuda>
+
+```text
+Algorithmica, "Prefix sum with SIMD" https://en.algorithmica.org/hpc/algorithms/prefix/   and   https://en.wikipedia.org/wiki/Prefix_sum
+```
+"""
+
+[[sources]]
+title = "cs.cmu.edu/~guyb/papers/Ble93.pdf"
+url = "https://www.cs.cmu.edu/~guyb/papers/Ble93.pdf"
+
+[[sources]]
+title = "developer.nvidia.com/gpugems/gpugems3/part-vi-gpu-computing/chapter-39-parall…"
+url = "https://developer.nvidia.com/gpugems/gpugems3/part-vi-gpu-computing/chapter-39-parallel-prefix-sum-scan-cuda"
+
+[[sources]]
+title = "en.algorithmica.org/hpc/algorithms/prefix"
+url = "https://en.algorithmica.org/hpc/algorithms/prefix/"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Prefix_sum"
+url = "https://en.wikipedia.org/wiki/Prefix_sum"

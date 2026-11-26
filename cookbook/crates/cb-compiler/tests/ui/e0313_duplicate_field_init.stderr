@@ -1,0 +1,9 @@
+error[E0313]: field `x` is specified more than once
+ --> e0313_duplicate_field_init.peb:3:23
+  |
+3 |     let p = P { x: 1, x: 2 };
+  |                 -     ^ used more than once
+  |                 |
+  |                 first use of the field
+
+error: aborting due to 1 previous error

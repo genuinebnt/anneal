@@ -20,6 +20,7 @@ pub mod reviews;
 mod routes;
 pub mod settings;
 pub mod calendar;
+pub mod cookbook;
 pub mod course;
 pub mod planner;
 pub mod solutions;
@@ -125,6 +126,8 @@ pub fn app(state: AppState, web_dist: Option<&Path>) -> Router {
         .route("/dsa/review", get(review::queue))
         .route("/dsa/mock", get(mock::get))
         .route("/dsa/meaning", get(meaning::get))
+        .route("/cookbook", get(cookbook::index))
+        .route("/cookbook/pages/{id}", get(cookbook::page))
         .route("/sd", get(sd::overview))
         .route("/sd/concepts/{id}", get(sd::concept))
         .route("/sd/problems/{id}", get(sd::problem))

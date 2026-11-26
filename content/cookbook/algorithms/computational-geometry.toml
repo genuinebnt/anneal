@@ -1,0 +1,62 @@
+title = "Computational geometry"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Mathematics and numerics"
+chapter_order = 7
+order = 227
+kind = "recipe"
+lede = "Exact predicates, hulls, triangulations, collision."
+level = "advanced"
+code = ["examples/math_science/computational_geometry.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>GIS</li><li>games</li><li><strong>Cad</strong></li><li>mesh generation</li><li>collision detection</li><li>anything that asks "which side of the line?"</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>convex hulls for outlier/bounding shapes</li><li>point-in-polygon for map lookups</li><li>triangulation for rendering concave polygons</li><li>Delaunay meshes for terrain and interpolation</li><li>Voronoi diagrams for nearest-facility regions</li><li>SAT/GJK for physics engines</li><li>closest-pair for clustering and collision pruning</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Everything rests on **one** predicate: orientation(a, b, c) = sign of the cross product (b-a) x (c-a). With f64 the sign of a near-zero cross product is noise (rounding), and a wrong sign makes hulls non-convex and triangulations overlap.
+
+With i64 coordinates (&#124;c&#124; &lt; &#126;1e9) computed in i128 the predicate is **exact**, so every algorithm below is checked against a brute-force oracle with `assert_eq!`, no epsilons. The same trick gives an exact in-circle test (a 3x3 determinant in i128) for Delaunay.
+
+Sections: 1 float-vs-exact orientation, 2 hull (monotone chain vs gift wrapping), 3 segment intersection, 4 point in polygon (ray casting vs winding), 5 shoelace area/centroid, 6 closest pair (divide and conquer), 7 ear clipping, 8 Bowyer-Watson Delaunay + Voronoi dual, 9 rotating calipers, 10 SAT convex collision.
+
+Optional picture files are written only if the env var COOKBOOK_GALLERY names a directory.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://cp-algorithms.com/geometry/basic-geometry.html>
+
+<https://cp-algorithms.com/geometry/convex-hull.html>
+
+<https://en.wikipedia.org/wiki/Bowyer%E2%80%93Watson_algorithm>
+
+<https://floating-point-gui.de/>
+"""
+
+[[sources]]
+title = "cp-algorithms.com/geometry/basic-geometry.html"
+url = "https://cp-algorithms.com/geometry/basic-geometry.html"
+
+[[sources]]
+title = "cp-algorithms.com/geometry/convex-hull.html"
+url = "https://cp-algorithms.com/geometry/convex-hull.html"
+
+[[sources]]
+title = "en.wikipedia.org/wiki/Bowyer%E2%80%93Watson_algorithm"
+url = "https://en.wikipedia.org/wiki/Bowyer%E2%80%93Watson_algorithm"
+
+[[sources]]
+title = "floating-point-gui.de"
+url = "https://floating-point-gui.de/"

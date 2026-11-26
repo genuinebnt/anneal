@@ -1,0 +1,5 @@
+error: #[timed] takes no arguments
+ --> tests/ui/timed_args.rs:2:9
+  |
+2 | #[timed(fast)]
+  |         ^^^^

@@ -1,0 +1,66 @@
+title = "Modern buffer management"
+module = "Databases"
+module_order = 8
+chapter = "Storage and buffer management"
+chapter_order = 2
+order = 333
+kind = "recipe"
+lede = "Pointer swizzling + cooling FIFO (LeanStore), page-state words + optimistic latches (vmcache)"
+level = "advanced"
+code = ["examples/database/buffer_management_vmcache_swizzling.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+storage engines and caches that must be as fast as an in-memory structure while the data is bigger than RAM.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+`buffer_pool_clock` (recipe 173) is the **classic** design: every page access goes `page_id -> hash table -> frame`, then pins the frame. With everything cached that translation (plus its latch and the pin counter, both written by every reader) is pure overhead and a scalability bottleneck.
+
+Two modern answers: **part a**, **pointer swizzling** (LeanStore; also used by Umbra). A child reference in a B+tree node is a SWIP: one word that holds **either** the child's page id (unswizzled) OR a direct reference to the frame that caches it (swizzled; here a tagged frame index, in a real engine a pointer).
+
+A hot traversal follows swips and never touches a hash table.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">One parent</div><div class="cb-g-says"><p>Evicting a page means finding the swip that points at it and turning it back into a page id. So every page must have exactly <strong>one</strong> referencing swip and know where it is.</p><p><strong>Consequences.</strong> No B-link sibling pointers (range scans re-descend using the parent's separator as the next start key), and no general graphs or shared pages.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Bottom-up</div><div class="cb-g-says"><p>A page may only start leaving memory if none of its children is swizzled (otherwise its disk image would contain a memory address). Writing a swizzled swip to disk is asserted against.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Cooling stage</div><div class="cb-g-says"><p>Instead of LRU bookkeeping on every hit: now and then pick a <strong>random</strong> hot page, UNSWIZZLE its parent's swip and append it to a FIFO. It stays resident. If it is touched again before reaching the end of the FIFO it is found in a small table (a "rescue": no I/O) and swizzled again, otherwise it is evicted.</p><p>Hot pages pay nothing; replacement state is only updated for pages that are already suspected to be cold. It approximates LRU (second chance). <strong>Part B</strong>, VMCACHE.</p><p>Reserve a huge <strong>virtual</strong> region and use <code>base + pid * PAGE</code> as the pointer: the MMU does the translation, so page ids work for any data structure (no one-parent rule). The DBMS still decides what is resident: one 64-bit <strong>state word</strong></p></div></div></div>
+
+per page = 8 bits of state &#124; 56 bits of **version**; it faults a page in with `pread` and drops it with `madvise(DONTNEED)`. states: 0 Unlocked, 1..=252 Shared(n readers), 253 Locked (exclusive), 254 Marked (clock candidate), 255 Evicted.
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Optimistic latch</div><div class="cb-g-says"><p>A reader writes <strong>nothing</strong>. Read the word, read the data, read the word again; if it changed, retry. Every exclusive unlock and every eviction bumps the version, so a reader can never accept data that was modified or dropped.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Clock</div><div class="cb-g-says"><p>On the state word: first sweep Unlocked -&gt; Marked; any access clears the mark; a page still Marked on the next visit is locked, written back if dirty, dropped, and published as Evicted with a new version. <strong>What is simulated</strong>: std has no mmap.</p><p>The "virtual region" is an array with one slot per pid, <code>madvise</code> overwrites the slot with <strong>poison</strong> (so a reader that wrongly accepted it would fail its checksum), and the physical budget is <code>capacity</code> resident slots.</p><p>Page words are <code>AtomicU64</code> with relaxed accesses plus fences: that keeps the seqlock race free of undefined behaviour in safe Rust (a plain <code>&amp;[u8]</code> read racing a write would be UB). Not modelled: TLB shootdowns, the cost that</p></div></div></div>
+
+vmcache's `exmap` kernel module attacks.
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+Part A runs random lookups / updates / range scans against a `BTreeMap` oracle at several memory sizes, checking all swizzling invariants, next to a hash-table + **clock** pool over the same tree.
+
+Part B: deterministic interleavings (a write or eviction in the middle of an optimistic read must be rejected; a shared-locked page must survive any eviction pressure), then 5 runs of 8 threads: per-page checksums, no lost update, and no eviction of a locked page.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>LeanStore</li><li>Umbra (variable-size pages with swizzling)</li><li>the vmcache/exmap research line</li><li>the same ideas in caches that swap object references between "id" and "pointer" (ORMs, object stores). Seqlocks: Linux kernel time reads</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://db.in.tum.de/~leis/papers/leanstore.pdf" target="_blank" rel="noreferrer">https://db.in.tum.de/~leis/papers/leanstore.pdf</a> (Leis et al., "LeanStore: In-Memory Data Management beyond Main Memory")</li><li><a href="https://db.in.tum.de/~freitag/papers/p29-neumann-cidr20.pdf" target="_blank" rel="noreferrer">https://db.in.tum.de/~freitag/papers/p29-neumann-cidr20.pdf</a> (Neumann, Freitag, "Umbra")</li><li><a href="https://www.cs.cit.tum.de/fileadmin/w00cfj/dis/_my_direct_uploads/vmcache.pdf" target="_blank" rel="noreferrer">https://www.cs.cit.tum.de/fileadmin/w00cfj/dis/_my_direct_uploads/vmcache.pdf</a> (Leis et al., virtual-memory assisted buffer management)</li></ul>
+"""
+
+[[sources]]
+title = "db.in.tum.de/~leis/papers/leanstore.pdf"
+url = "https://db.in.tum.de/~leis/papers/leanstore.pdf"
+
+[[sources]]
+title = "db.in.tum.de/~freitag/papers/p29-neumann-cidr20.pdf"
+url = "https://db.in.tum.de/~freitag/papers/p29-neumann-cidr20.pdf"
+
+[[sources]]
+title = "cs.cit.tum.de/fileadmin/w00cfj/dis/_my_direct_uploads/vmcache.pdf"
+url = "https://www.cs.cit.tum.de/fileadmin/w00cfj/dis/_my_direct_uploads/vmcache.pdf"

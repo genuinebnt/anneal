@@ -1,0 +1,48 @@
+title = "Const evaluation and generics at the edge"
+module = "Rust language"
+module_order = 1
+chapter = "Types, traits and generics"
+chapter_order = 2
+order = 19
+kind = "recipe"
+lede = "Tables, typed dimensions, const asserts, ZST tricks."
+level = "advanced"
+code = ["examples/language/const_and_generics_advanced.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>embedded/no-alloc code</li><li>protocol and crypto tables</li><li>unit/dimension safety</li><li>API design with zero-cost abstractions</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+What: `const fn` with loops builds lookup tables during compilation (no build.rs, no startup cost); const generics put sizes in the type so a dimension mismatch is a compile error; `const { assert!(..) }` turns invariants into build failures; zero-sized types carry state at the type level; blanket impls fake trait aliases; autoref method resolution fakes specialisation.
+
+Why: errors move from runtime to compile time and the checks cost nothing at runtime.
+
+How: each section is a small module-like block with asserts in `main`. Only **stable** features are used: arithmetic on const parameters in types (`[T; N + 1]`, `where [(); N]:`) is `generic_const_exprs`, which is still unstable, so it is avoided and the workaround patterns are shown instead.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>CRC/hash/base64 tables</li><li>fixed-capacity buffers (heapless style)</li><li>matrix/vector libraries</li><li>state machines (typestate)</li><li>hardware register wrappers</li><li>ID newtypes</li><li>compile-time config validation</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://doc.rust-lang.org/reference/const_eval.html>
+
+<https://doc.rust-lang.org/std/>
+"""
+
+[[sources]]
+title = "doc.rust-lang.org/reference/const_eval.html"
+url = "https://doc.rust-lang.org/reference/const_eval.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std"
+url = "https://doc.rust-lang.org/std/"

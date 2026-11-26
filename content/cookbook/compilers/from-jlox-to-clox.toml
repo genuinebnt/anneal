@@ -1,0 +1,17 @@
+title = "From jlox to clox"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Bytecode and virtual machines"
+chapter_order = 3
+order = 584
+kind = "guide"
+lede = "What changes in the second implementation. The last row changes your tests the most."
+origin = "Compiler guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+<div class="cb-g-pipe-wrap"><div class="cb-g-pipe"> <div class="cb-g-node"><b>Source</b><span>&amp;str</span></div> <div class="cb-g-arrow">→</div> <div class="cb-g-node"><b>Lexer</b><span>shared crate</span></div> <div class="cb-g-arrow">→</div> <div class="cb-g-node"><b>Compiler</b><span>single-pass Pratt</span></div> <div class="cb-g-arrow">→</div> <div class="cb-g-node"><b>Chunk</b><span>Vec&lt;Op&gt;, constants</span></div> <div class="cb-g-arrow">→</div> <div class="cb-g-node"><b>VM</b><span>stack, frames, heap</span></div> <div class="cb-g-probe cb-g-tok"><i>Lexer tests</i>already written in Part I; they move with the crate</div> <div class="cb-g-probe cb-g-res"><i>Compile errors</i>clox reports scope errors while compiling, since it has no resolver pass</div> <div class="cb-g-probe cb-g-dis"><i>Disassembly</i>snapshots of the ops: <code>Constant 1 · Constant 2 · Add</code></div> <div class="cb-g-probe cb-g-val"><i>VM tests</i>stdout, stack traces, and live-object counts after a GC</div> <div class="cb-g-golden"><i>Golden files</i><span>The Part I <code>.lox</code> files, run against the <code>clox</code> binary. Run them again with <code>--features stress-gc</code>.</span></div> </div></div>
+
+<div class="cb-g-tt"><table class="cb-g-cmp"> <thead><tr><th>Concern</th><th>jlox in Rust</th><th>clox in Rust</th></tr></thead> <tbody> <tr><td>Front end</td><td>Recursive descent that builds <code>Expr</code> and <code>Stmt</code></td><td>Pratt compiler that emits ops as it parses, with no tree</td></tr> <tr><td>Scope analysis</td><td>Separate resolver pass</td><td>Built into the compiler's locals array</td></tr> <tr><td>Values</td><td><code>Value</code> holding <code>Rc</code>s, cloned freely</td><td><code>Copy</code> <code>Value</code> of 16 bytes, or 8 with NaN boxing</td></tr> <tr><td>Variables</td><td><code>Rc&lt;RefCell&lt;Env&gt;&gt;</code> chain</td><td>Stack slots, plus upvalues for captured variables</td></tr> <tr><td>Memory</td><td><code>Rc</code>; cycles leak</td><td>Your own heap and a mark-sweep GC</td></tr> <tr><td>Middle-stage tests</td><td>S-expression snapshots</td><td>Disassembly snapshots</td></tr> </tbody> </table></div>
+"""

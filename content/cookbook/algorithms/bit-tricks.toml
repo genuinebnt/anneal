@@ -1,0 +1,58 @@
+title = "Bit-twiddling toolbox"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Sorting, strings, bits and theory"
+chapter_order = 6
+order = 220
+kind = "recipe"
+lede = "bit-twiddling toolbox (Hacker's Delight / TAOCP 7.1.3), every trick checked against std or a naive loop."
+level = "intermediate"
+code = ["examples/algorithms/bit_tricks.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>bitsets</li><li>hashing</li><li>compression</li><li>spatial indexes</li><li>SIMD-within-a-register code</li><li>performance hot loops</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Each trick below is implemented in the "classic" form, then asserted equal to the standard-library intrinsic or to an obviously-correct loop on the edge cases 0, 1, MAX, powers of two, and thousands of seeded random inputs.
+
+The tricks: lowest-set-bit tools, SWAR popcount / parity / bit reversal, smearing for next power of two, zero-byte detection (word-at-a-time strlen), branchless min/max/abs/sign, Gosper's hack, Morton codes with PDEP/PEXT semantics (and a Z-order range query), 8x8 bit-matrix transpose, carry-less multiply, Gray code, rank/select inside a word, division by constants via multiply-high magic numbers, sign extension, and saturating arithmetic.
+
+**What LLVM already does**: modern compilers recognise many of these idioms.
+
+`x & (x - 1)` becomes BLSR on x86 with BMI1, a hand-written SWAR popcount is often replaced by a single POPCNT (or by the `ctpop` intrinsic lowered per target), `x / 7` is always compiled into the multiply-high form shown here (never emit a real `div` for a constant), and min/max/abs patterns become cmov or dedicated instructions.
+
+So: prefer `count_ones`, `leading_zeros`, `reverse_bits`, `rotate_left`, `isqrt`, `div_ceil` and friends; they map to the best instruction per target.
+
+Write a manual trick when std has no equivalent (Morton, bit-matrix transpose, SWAR on bytes) and **check** the assembly: `cargo install cargo-show-asm`, then `cargo asm --example bit_tricks <function>` (<https://github.com/pacak/cargo-show-asm>).
+
+Use `std::hint::black_box` on inputs/outputs in micro-benchmarks, otherwise the optimiser folds your constant inputs away and you time nothing (see the timing at the end of main).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>bitset/bitmap indexes and roaring-style containers</li><li>hash functions and PRNGs</li><li>chess engines (bitboards)</li><li>spatial indexing with Z-order/Morton keys (databases, GPUs, quadtrees)</li><li>fast string scanning (memchr-style zero-byte tests)</li><li>checksums (carry-less multiply drives CRC/GHASH hardware)</li><li>compilers (division by constants)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>Henry S</li><li>Warren, Hacker's Delight (2nd ed.)</li><li>Knuth, The Art of Computer Programming Vol 4A, section 7.1.3 (Bitwise Tricks and Techniques)</li><li><a href="https://graphics.stanford.edu/~seander/bithacks.html" target="_blank" rel="noreferrer">https://graphics.stanford.edu/~seander/bithacks.html</a> <a href="https://github.com/pacak/cargo-show-asm" target="_blank" rel="noreferrer">https://github.com/pacak/cargo-show-asm</a>  <a href="https://www-cs-faculty.stanford.edu/~knuth/taocp.html" target="_blank" rel="noreferrer">https://www-cs-faculty.stanford.edu/~knuth/taocp.html</a></li></ul>
+"""
+
+[[sources]]
+title = "github.com/pacak/cargo-show-asm"
+url = "https://github.com/pacak/cargo-show-asm"
+
+[[sources]]
+title = "graphics.stanford.edu/~seander/bithacks.html"
+url = "https://graphics.stanford.edu/~seander/bithacks.html"
+
+[[sources]]
+title = "www-cs-faculty.stanford.edu/~knuth/taocp.html"
+url = "https://www-cs-faculty.stanford.edu/~knuth/taocp.html"

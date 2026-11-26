@@ -1,0 +1,34 @@
+title = "BinaryHeap as a min-heap with a deterministic tie-break"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Caches, queues, heaps and bit sets"
+chapter_order = 3
+order = 186
+kind = "recipe"
+lede = "BinaryHeap as a min-heap with a deterministic tie-break."
+level = "simple"
+code = ["examples/data_structures/heap_tiebreak.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+stage 7 (and later priority scheduling).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+schedulers and top-k trackers: BinaryHeap + Reverse + a sequence number gives deterministic priority queues.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Pattern: `BinaryHeap` is a MAX-heap; wrap keys in `Reverse` for min-first. Tuples compare field by field, so `(priority, sequence, name)` gives "lowest priority number first, then first-come-first-served". Never rely on `HashMap`/`HashSet` iteration order for output: it differs between runs.
+
+Real code: std BinaryHeap -> <https://github.com/rust-lang/rust/blob/master/library/alloc/src/collections/binary_heap/mod.rs>
+"""
+
+[[sources]]
+title = "github.com/rust-lang/rust/blob/master/library/alloc/src/collections/binary_he…"
+url = "https://github.com/rust-lang/rust/blob/master/library/alloc/src/collections/binary_heap/mod.rs"

@@ -1,0 +1,186 @@
+title = "Logging"
+module = "Databases"
+module_order = 8
+chapter = "Logging and recovery"
+chapter_order = 7
+order = 414
+kind = "guide"
+lede = "steal / force · shadow paging · write-ahead logging · group commit · log record styles · checkpoints"
+origin = "Database systems guide"
+
+[[sections]]
+heading = "Overview"
+body = """
+### Key ideas
+
+<ul> <li><strong>Recovery has two halves</strong>: work during normal execution that makes recovery possible, and work after a crash that restores a state with atomicity, consistency and durability. The primitives are <strong>UNDO</strong> (remove effects of incomplete or aborted transactions) and <strong>REDO</strong> (re-apply effects of committed ones). Memory is far faster than storage, so every DBMS keeps dirty data in RAM and has to be smart about what a crash loses.</li> <li><strong>Two guarantees</strong>: once the DBMS has told anyone a transaction committed, its changes are durable; if a transaction aborted, no partial changes are.</li> <li><strong>Buffer-pool policy</strong>: <strong>STEAL</strong> = a dirty page of an <em>uncommitted</em> transaction may be written to disk (⇒ need UNDO); <strong>FORCE</strong> = all of a transaction's pages must be on disk at commit (⇒ no REDO needed). Four combinations; two matter: <strong>NO-STEAL + FORCE</strong> (trivial recovery, poor runtime, write set must fit in memory, random writes) and <strong>STEAL + NO-FORCE</strong> (fast runtime, needs both UNDO and REDO; this is what everyone uses).</li> <li><strong>Shadow paging</strong> (copy-on-write, NO-STEAL + FORCE): master and shadow page tables; commit = atomically flip the root pointer. Recovery is trivial (drop the shadow), but commits flush many random pages, data fragments, and concurrent writers need merging of shadow tables. <strong>Journal file</strong> (SQLite before 2010): copy the old page to a journal before overwriting; allows STEAL, single writer; SQLite moved to WAL.</li> <li><strong>Write-ahead logging</strong>: record every change in a sequential log on stable storage <strong>before</strong> the data page changes reach disk. Rules: ① log records for a page reach disk <strong>before</strong> that page; ② a transaction is committed only when <strong>all</strong> its records, including COMMIT, are on stable storage (flush before acknowledging); ③ dirty pages may be written whenever, after rule ①. A record carries txn id, object id, <strong>before</strong> value (undo), <strong>after</strong> value (redo) and system data (checksum…). With MVCC the before-image may be redundant, since old versions already exist.</li> <li><strong>Group commit</strong>: batch many transactions' log flushes into one; flush when the buffer is full or a timer fires. WAL wins because the log is written <strong>sequentially</strong>, at the price of slower recovery (replay) than shadow paging.</li> <li><strong>WAL is also a replication and integration stream</strong>: <strong>change data capture</strong> feeds replicas, warehouses and microservices from the same log.</li> <li><strong>Record styles</strong>: <strong>physical</strong> (byte diffs at a location; like <code>git diff</code>), <strong>logical</strong> (the high-level operation, e.g. the SQL; small, but replay is slow and hard under nondeterministic concurrency), <strong>physiological</strong> (targets one page, identifies tuples by <em>slot number</em>, not by byte offset, so pages can be reorganized; the common choice).</li> <li><strong>Checkpoints</strong> bound log growth and recovery time: flush dirty buffers, write a CHECKPOINT record, and recovery starts there. Too frequent = runtime cost; too rare = long restarts, so it's tunable. A <em>blocking</em> checkpoint halts new transactions, waits for active ones, flushes everything and logs the record: simple, but a stall. (<a href="/cookbook/p/crash-recovery-aries">L22</a> improves it into the fuzzy checkpoint.)</li> </ul>
+"""
+
+[[sections]]
+heading = "Four buffer-pool policies, and what recovery must do"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th></th> <th><strong>FORCE</strong></th> <th><strong>NO-FORCE</strong></th> </tr> </thead> <tbody> <tr> <td><strong>NO-STEAL</strong></td> <td>no UNDO, no REDO; write set must fit in RAM; commit = many random writes</td> <td>needs REDO only; same memory limit</td> </tr> <tr> <td><strong>STEAL</strong></td> <td>needs UNDO only; commit still forces pages</td> <td><strong>UNDO + REDO</strong>: fastest at runtime; what WAL implements</td> </tr> </tbody> </table></div>
+
+<p>The I/O difference is large even in a toy workload (10 000 transactions, 3 writes each, 256 pages):</p>
+
+```text title="FORCE vs WAL"
+NO-STEAL + FORCE : 29895 random page writes at commit time, 0 log bytes
+STEAL + NO-FORCE : 10010 sequential log flushes (1.8 MB of log), 2560 page writes (checkpoints only)
+```
+
+<p>FORCE issues <strong>12× more page writes</strong>, each a random I/O, in the commit path; WAL issues one <strong>sequential</strong> flush per commit (which group commit then shares) and writes pages lazily, coalescing repeated updates of hot pages into one write.</p>
+"""
+
+[[sections]]
+heading = "The WAL protocol"
+body = """
+```text
+update(T, page P, slot s, new):
+    lsn = log.append(UPDATE{T, P, s, old, new, prevLSN(T)})   // 1. log first (in memory buffer)
+    P.slots[s] = new; P.pageLSN = lsn                          // 2. then change the cached page
+
+flush page P (any time, STEAL):   log.flush_up_to(P.pageLSN)   // 3. WAL rule: log before page
+                                  disk.write(P)
+commit(T):  lsn = log.append(COMMIT{T}); log.flush_up_to(lsn)  // 4. commit point = COMMIT record durable
+            ack the client; later append TXN-END (no flush needed)
+```
+
+<p>Everything else in logging follows from these four lines. <em>Durability</em> comes from rule 4, <em>atomicity</em> from the before-images that rule 3 guarantees are on disk whenever a stolen page is.</p>
+"""
+
+[[sections]]
+heading = "Group commit, measured with real fsync"
+body = """
+<p>Forcing the log is a synchronous device flush: milliseconds on a laptop SSD (macOS <code>fsync</code> = <code>F_FULLFSYNC</code>), 20–100 µs on enterprise NVMe with power-loss protection, ~10 ms on a spinning disk. A per-commit flush caps throughput at <code>1 / fsync_latency</code>. <strong>Leader/follower group commit</strong> removes the cap: the first committer that finds no flush in progress flushes <em>everything buffered</em>; the others wait on a condvar and find their LSN already durable.</p>
+
+:::deeper Reference: group-commit log on a real file
+```rust title="src/recovery/group_log.rs"
+//! Group commit on a real file: many committers, one fsync per batch (leader/follower).
+use std::fs::File;
+use std::io::Write;
+use std::sync::{Condvar, Mutex};
+
+struct Inner {
+    buf: Vec<u8>,          // appended records not yet written
+    next: u64,             // LSN (byte offset) the next record will get
+    durable: u64,          // everything below this LSN is on stable storage
+    flushing: bool,        // a leader is inside write + fsync
+    syncs: u64,
+}
+
+pub struct GroupLog { file: File, inner: Mutex<Inner>, cv: Condvar }
+
+impl GroupLog {
+    pub fn create(path: &std::path::Path) -> std::io::Result<Self> {
+        Ok(Self { file: File::create(path)?, inner: Mutex::new(Inner { buf: vec![], next: 0, durable: 0, flushing: false, syncs: 0 }), cv: Condvar::new() })
+    }
+
+    /// Append a record; returns the LSN one past its end (what a commit must see durable).
+    pub fn append(&self, rec: &[u8]) -> u64 {
+        let mut g = self.inner.lock().unwrap();
+        g.buf.extend_from_slice(rec);
+        g.next += rec.len() as u64;
+        g.next
+    }
+
+    /// Block until `lsn` is durable. The first waiter to find no flush in progress becomes the leader and
+    /// writes + syncs *everything buffered so far*, which covers every other waiter that arrived meanwhile.
+    pub fn wait_durable(&self, lsn: u64) {
+        let mut g = self.inner.lock().unwrap();
+        while g.durable < lsn {
+            if g.flushing { g = self.cv.wait(g).unwrap(); continue; }
+            g.flushing = true;
+            let batch = std::mem::take(&mut g.buf);
+            let upto = g.next;
+            drop(g);                                      // other threads keep appending during the slow part
+            (&self.file).write_all(&batch).unwrap();
+            self.file.sync_all().unwrap();
+            g = self.inner.lock().unwrap();
+            g.durable = upto;
+            g.syncs += 1;
+            g.flushing = false;
+            self.cv.notify_all();
+        }
+    }
+
+    pub fn commit(&self, rec: &[u8]) { let l = self.append(rec); self.wait_durable(l); }
+    pub fn syncs(&self) -> u64 { self.inner.lock().unwrap().syncs }
+    pub fn durable(&self) -> u64 { self.inner.lock().unwrap().durable }
+}
+```
+:::
+
+```text title="300 commits per thread of 100-byte records, fsync = durable"
+ threads    commits     fsyncs    commits/s avg latency µs    commits/fsync
+       1        300        300          248           4039              1.0
+       4       1200        508          579           6908              2.4
+      16       4800        584         2008           7969              8.2
+      64      19200        600         7733           8276             32.0
+```
+
+<ul> <li><strong>31× more commits per second at 64 threads</strong> at about 2× the latency of a single commit. The device sustains ~250 fsyncs/s no matter how many threads ask (300 syncs in 1.2 s for one thread, 600 in 2.5 s for 64), so each fsync simply carries more commits: 1.0 → 32.0 per sync. A commit waits for at most "the flush in progress + the next one".</li> <li>Knobs in real systems: PostgreSQL <code>commit_delay</code> / <code>commit_siblings</code>, <code>synchronous_commit = off</code> (acknowledge before flush; may lose the last ~3 × <code>wal_writer_delay</code> of commits but never corrupts), InnoDB <code>innodb_flush_log_at_trx_commit</code> (1 = flush each commit, 2 = write to OS cache each commit and fsync per second, 0 = both per second).</li> <li><strong>Do not hold the lock during the syscall.</strong> The leader releases the mutex while writing and syncing, so appenders keep filling the <em>next</em> batch. That one <code>drop(g)</code> is the whole optimization.</li> </ul>
+
+<aside data-call="warning"><b>Durability pitfalls</b><ul> <li><strong><code>write</code> is not durable; <code>fsync</code> is</strong> (and on macOS plain <code>fsync</code> isn't either: use <code>F_FULLFSYNC</code>, which Rust's <code>File::sync_all</code> does). Also fsync the <strong>directory</strong> after creating or renaming a log segment.</li> <li><strong>A failed <code>fsync</code> must be fatal.</strong> Linux marks the dirty pages clean after reporting EIO; retrying the fsync "succeeds" and the data is gone (PostgreSQL's "fsyncgate", 2018; Rebello et al., ATC 2020). Panic and recover from the log.</li> <li><strong>Torn writes</strong>: a 16 KiB page write may land partly. Protect with full-page images in the WAL (PostgreSQL logs a full page the first time it's dirtied after a checkpoint) or a double-write buffer (InnoDB); detect with page checksums.</li> <li><strong>A torn log tail</strong> is normal after a crash: frame every record with length + CRC, stop at the first bad frame, and <strong>truncate</strong> it before appending new records.</li> <li><strong>Disk write caches</strong> that lie: use <code>O_DSYNC</code>/<code>fdatasync</code> semantics deliberately and test with power-fail rigs or <code>dm-log-writes</code> (see Zheng et al. in the references).</li> </ul></aside>
+"""
+
+[[sections]]
+heading = "Log record styles"
+body = """
+<div class="cb-g-tt"><table> <thead> <tr> <th>Style</th> <th>Record says</th> <th>Size</th> <th>Recovery</th> <th>Notes</th> </tr> </thead> <tbody> <tr> <td><strong>Physical</strong></td> <td>"bytes 120–135 of page 7 changed from X to Y"</td> <td>big</td> <td>simple, idempotent</td> <td>page layout is part of the log format</td> </tr> <tr> <td><strong>Logical</strong></td> <td>"<code>UPDATE t SET b=2 WHERE a=1</code>"</td> <td>small</td> <td>re-execute operations: slow; needs determinism and care with concurrency</td> <td>MySQL binlog (statement mode), logical replication</td> </tr> <tr> <td><strong>Physiological</strong></td> <td>"page 7, slot 3: set <code>b</code> from 1 to 2"</td> <td>medium</td> <td>idempotent per page, page can be reorganized</td> <td>PostgreSQL WAL, InnoDB redo, SQL Server, DB2</td> </tr> </tbody> </table></div>
+
+<p>Physiological = <strong>physical to a page, logical within it</strong>: because the slot id (not a byte offset) names the tuple, compaction and defragmentation don't invalidate old log records. Systems often keep <em>two</em> logs: a physiological <strong>redo</strong> log for crash recovery and a logical <strong>binlog / logical decoding</strong> stream for replication and CDC (Debezium, PostgreSQL <code>pgoutput</code>).</p>
+"""
+
+[[sections]]
+heading = "Checkpoints: bounding the restart"
+body = """
+<p>Without checkpoints the log grows forever and recovery replays all of it. Measured on a 10 000-transaction workload with the crash halfway between checkpoints (a background writer cleans pages at each checkpoint):</p>
+
+```text title="recovery work vs checkpoint interval"
+checkpoint every  analysis recs   redo scanned   redo applied       log MB
+           never          59999          59998          21547         1.81
+       5000 txns          15001          14998           6727         2.26
+       1000 txns           3001           2998           1479         1.90
+        200 txns            601            598            300         1.83
+```
+
+<p>Restart work shrinks <strong>linearly with the checkpoint interval</strong> (60 000 → 600 records) while the log barely grows (the extra bytes are the checkpoint records themselves). Costs on the other side: every checkpoint flushes dirty pages (a write burst; PostgreSQL spreads it with <code>checkpoint_completion_target = 0.9</code>) and, with full-page writes, causes a burst of page images right after. Defaults worth knowing: PostgreSQL <code>checkpoint_timeout = 5min</code>, <code>max_wal_size = 1GB</code>; InnoDB sizes redo capacity to bound it.</p>
+
+<aside data-call="production"><b>Logging in real systems</b><ul> <li><strong>PostgreSQL</strong>: physiological WAL, 16 MiB segments recycled after checkpoints, full-page writes, <code>wal_level = replica/logical</code>, archiving for <strong>point-in-time recovery</strong>, streaming replication ships WAL records.</li> <li><strong>MySQL/InnoDB</strong>: redo (physiological, circular, doublewrite buffer for pages), <strong>undo</strong> log doubles as MVCC history, and the <strong>binlog</strong> is a separate logical log, kept consistent with redo through an internal two-phase commit.</li> <li><strong>SQLite</strong>: rollback journal (default for years) vs WAL mode (readers don't block the writer; checkpoint copies WAL pages into the database file).</li> <li><strong>Amazon Aurora</strong>: "the log is the database": the compute node ships only redo records; storage nodes materialize pages.</li> <li><strong>SQL Server</strong>: ARIES-style; <strong>Accelerated Database Recovery</strong> keeps row versions in a persistent version store so rollback and recovery undo are near-instant.</li> <li><strong>LSM engines</strong> (RocksDB, <a href="/cookbook/p/log-structured-storage">L05</a>): WAL protects the memtable; the SSTables are never overwritten, so there is no UNDO and recovery just replays the WAL into a memtable.</li> </ul></aside>
+"""
+
+[[sources]]
+title = "ARIES: A Transaction Recovery Method Supporting Fine-Granularity Locking and Partial Rollbacks Using Write-Ahead Logging"
+url = "https://web.stanford.edu/class/cs345d-01/rl/aries.pdf"
+
+[[sources]]
+title = "Architecture of a Database System"
+url = "https://dsf.berkeley.edu/papers/fntdb07-architecture.pdf"
+
+[[sources]]
+title = "Amazon Aurora: Design Considerations for High Throughput Cloud-Native Relational Databases"
+url = "https://www.amazon.science/publications/amazon-aurora-design-considerations-for-high-throughput-cloud-native-relational-databases"
+
+[[sources]]
+title = "Can Applications Recover from fsync Failures?"
+url = "https://www.usenix.org/conference/atc20/presentation/rebello"
+
+[[sources]]
+title = "All File Systems Are Not Created Equal"
+url = "https://www.usenix.org/conference/osdi14/technical-sessions/presentation/pillai"
+
+[[sources]]
+title = "Torturing Databases for Fun and Profit"
+url = "https://www.usenix.org/conference/osdi14/technical-sessions/presentation/zheng_mai"
+
+[[sources]]
+title = "WAL internals"
+url = "https://www.postgresql.org/docs/current/wal-internals.html"
+
+[[sources]]
+title = "WAL configuration"
+url = "https://www.postgresql.org/docs/current/wal-configuration.html"
+
+[[sources]]
+title = "Write-Ahead Logging"
+url = "https://www.sqlite.org/wal.html"

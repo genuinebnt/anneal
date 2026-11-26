@@ -1,0 +1,40 @@
+title = "Byte order"
+module = "Performance and systems"
+module_order = 7
+chapter = "Memory layout and allocation"
+chapter_order = 2
+order = 284
+kind = "recipe"
+lede = "Endianness, memcmp-sortable keys, bulk byte swaps, unaligned reads, and `align_to`."
+level = "intermediate"
+code = ["examples/perf/byte_order_keys.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>storage formats</li><li>index keys</li><li>network protocols</li><li>checksums</li><li>reading binary files fast</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>index keys in databases (LSM/B-trees)</li><li>protocols</li><li>file formats</li><li>checksums</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Little-endian (x86, Apple Silicon) stores the **least** significant byte first; big-endian ("network order") stores the **most** significant first.
+
+**Consequences.** (1) file/wire formats must pick one explicitly (`to_le_bytes`/`to_be_bytes`), never `as` or transmute; (2) **big**-endian bytes compare lexicographically in numeric order, so databases encode integer **keys** big-endian and compare with plain `memcmp`. Signed ints and floats need a tweak (flip the sign bit / invert negatives) to sort correctly as bytes.
+
+(3) Reading `u32` from an arbitrary byte offset may be unaligned: use `from_le_bytes`, `read_unaligned`, or the `bytemuck` crate <https://docs.rs/bytemuck> for safe casts. Docs: <https://doc.rust-lang.org/std/primitive.u32.html#method.swap_bytes>
+"""
+
+[[sources]]
+title = "docs.rs/bytemuck"
+url = "https://docs.rs/bytemuck"
+
+[[sources]]
+title = "doc.rust-lang.org/std/primitive.u32.html#method.swap_bytes"
+url = "https://doc.rust-lang.org/std/primitive.u32.html#method.swap_bytes"

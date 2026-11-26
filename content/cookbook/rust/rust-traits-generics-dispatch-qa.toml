@@ -1,0 +1,72 @@
+title = "Rust traits generics dispatch questions and answers"
+module = "Worked questions"
+module_order = 14
+chapter = "Rust concept answers"
+chapter_order = 1
+order = 673
+kind = "recipe"
+lede = "Traits, generics, dyn dispatch, closures as traits, and the standard conversion/comparison traits."
+level = "advanced"
+code = ["examples/interview/rust_traits_generics_dispatch_qa.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>interview preparation</li><li>API design reviews ("generic or dyn?")</li><li>explaining E0038/E0277/E0117 errors</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>plugin systems</li><li>callback registries</li><li>builder/config APIs</li><li>operator-overloaded numeric types</li><li>error and conversion plumbing</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://www.lurklurk.org/effective-rust/generics.html> (Item 12: generics vs trait objects)
+
+<https://quinedot.github.io/rust-learning/dyn-trait-vs.html>
+
+<https://www.techinterview.org/post/3233474457/rust-interview-questions-2025-ownership-borrowing-lifetimes-traits-async-await-error-handling-smart-pointers-concurrency/>
+
+<https://codeforgeek.com/rust-interview-questions/> and <https://github.com/devinterview-io/rust-interview-questions>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Question bank Q1**. Generics vs `dyn Trait`: what is static vs dynamic dispatch and what is a fat pointer? [Medium] [asked: very common] Q2. When do you choose generics and when trait objects? [Medium] [asked: very common] Q3.
+
+What is object safety (dyn compatibility)? Which traits cannot be `dyn`? [Hard] [asked: very common] Q4. `impl Trait` in argument and return position: how do they differ from generics and `Box<dyn>`? [Medium] [asked: very common] Q5.
+
+Trait bounds, `where` clauses and conditional method availability. [Easy] [asked: common] Q6. Associated types vs generic parameters on a trait (Iterator::Item vs From&lt;T>). [Medium] [asked: very common] Q7. What is the orphan rule?
+
+How does the newtype pattern work around it? [Medium] [asked: very common] Q8. Blanket impls, default methods and supertraits. [Medium] [asked: common] Q9. Fn vs FnMut vs FnOnce: which closure implements which? [Medium] [asked: very common] Q10.
+
+Storing and returning closures: `Box<dyn Fn + Send + 'static>`, `impl Fn`, `Box<dyn FnOnce>`. [Medium] [asked: common] Q11. How does operator overloading work? [Easy] [asked: common] Q12. PartialEq vs Eq vs PartialOrd vs Ord: why is f64 not Ord?
+
+Derive vs manual. [Medium] [asked: very common] Q13. Default, From/Into and TryFrom: how do they relate? [Easy] [asked: common] Q14. AsRef vs Borrow vs Deref: what is the difference? [Hard] [asked: occasional] Q15.
+
+What are `Sized` and `?Sized`? [Hard] [asked: common] Q16. How does `dyn Any` downcasting work? [Medium] [asked: occasional] Q17. What are marker traits (Copy, Send, Sync, Unpin)? [Medium] [asked: common]
+"""
+
+[[sources]]
+title = "lurklurk.org/effective-rust/generics.html"
+url = "https://www.lurklurk.org/effective-rust/generics.html"
+
+[[sources]]
+title = "quinedot.github.io/rust-learning/dyn-trait-vs.html"
+url = "https://quinedot.github.io/rust-learning/dyn-trait-vs.html"
+
+[[sources]]
+title = "techinterview.org/post/3233474457/rust-interview-questions-2025-ownership-bor…"
+url = "https://www.techinterview.org/post/3233474457/rust-interview-questions-2025-ownership-borrowing-lifetimes-traits-async-await-error-handling-smart-pointers-concurrency/"
+
+[[sources]]
+title = "codeforgeek.com/rust-interview-questions"
+url = "https://codeforgeek.com/rust-interview-questions/"
+
+[[sources]]
+title = "github.com/devinterview-io/rust-interview-questions"
+url = "https://github.com/devinterview-io/rust-interview-questions"

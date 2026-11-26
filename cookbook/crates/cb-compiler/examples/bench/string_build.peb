@@ -1,0 +1,20 @@
+// String concatenation, comparison and splitting into characters.
+fn main() {
+    let mut s = "";
+    let mut i = 0;
+    while i < 3000 {
+        s = s + to_str(i % 10);
+        if i % 100 == 0 { s = s + "-"; }
+        i += 1;
+    }
+    println(to_str(len(s)));
+    let cs = chars(s);
+    let mut dashes = 0;
+    let mut k = 0;
+    while k < len(cs) {
+        if cs[k] == "-" { dashes += 1; }
+        k += 1;
+    }
+    println(to_str(dashes));
+    println(to_str(s < s + "x"));
+}

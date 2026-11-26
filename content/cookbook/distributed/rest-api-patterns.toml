@@ -1,0 +1,65 @@
+title = "REST API design patterns, shown as real HTTP transcripts"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 515
+kind = "recipe"
+lede = "REST API design patterns, shown as real HTTP transcripts"
+level = "advanced"
+code = ["examples/web/rest_api_patterns.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+REST API stage (pagination, **patch**, ETags, async jobs, problem+json).
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+What: one in-memory `/v1/items` API (real axum server on 127.0.0.1:0, reqwest client) demonstrating the patterns a production API needs, each with a `curl -v` style transcript and asserts:
+
+- offset pagination breaks under concurrent writes (duplicate after an insert, skipped row after a delete); keyset/cursor pagination (opaque base64url cursor + `Link: rel="next"`) does not.
+- filtering + sorting through a **whitelist** (unknown field => 400, it never reaches the "query layer").
+- **Put** (replace, idempotent) vs **patch**; JSON Merge Patch (RFC 7396) and JSON Patch (RFC 6902: add/remove/replace/ move/copy/test) written by hand; a JSON Patch is applied to a **copy** and committed only if **every** op succeeds.
+- optimistic concurrency: `ETag` + `If-Match` (412 stale write, 428 header missing), `If-None-Match` => 304.
+- idempotency: **put/delete** are naturally idempotent, **post** gets `Idempotency-Key`; 201 + `Location`; 202 Accepted + a status resource for long-running work.
+- errors as `application/problem+json` (RFC 9457) with stable `type` URIs clients can switch on.
+- versioning: URL (`/v2/..`) vs media-type header (`Accept: application/vnd.forge.v2+json`), compared.
+- HATEOAS-style `_links`, and bulk operations answering with per-item results (207 Multi-Status style).
+
+   Why: these are the decisions that are expensive to change once clients exist.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>public/partner APIs</li><li>mobile backends</li><li>admin consoles with infinite scroll</li><li>payment-style APIs (Idempotency-Key + ETag)</li><li>long-running exports/reports</li><li>gateways that enforce one stable error contract</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://datatracker.ietf.org/doc/html/rfc9457" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc9457</a></li><li><a href="https://datatracker.ietf.org/doc/html/rfc7396" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc7396</a></li><li><a href="https://datatracker.ietf.org/doc/html/rfc6902" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc6902</a></li><li><a href="https://datatracker.ietf.org/doc/html/rfc8288" target="_blank" rel="noreferrer">https://datatracker.ietf.org/doc/html/rfc8288</a></li><li><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/ETag" target="_blank" rel="noreferrer">https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/ETag</a></li></ul>
+"""
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc9457"
+url = "https://datatracker.ietf.org/doc/html/rfc9457"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc7396"
+url = "https://datatracker.ietf.org/doc/html/rfc7396"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc6902"
+url = "https://datatracker.ietf.org/doc/html/rfc6902"
+
+[[sources]]
+title = "datatracker.ietf.org/doc/html/rfc8288"
+url = "https://datatracker.ietf.org/doc/html/rfc8288"
+
+[[sources]]
+title = "developer.mozilla.org/en-US/docs/Web/HTTP/Headers/ETag"
+url = "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/ETag"

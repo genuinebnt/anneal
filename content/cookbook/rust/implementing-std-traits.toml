@@ -1,0 +1,62 @@
+title = "Implementing std traits"
+module = "Rust language"
+module_order = 1
+chapter = "Types, traits and generics"
+chapter_order = 2
+order = 15
+kind = "recipe"
+lede = "implementing the std traits for your own collection and value types"
+level = "intermediate"
+code = ["examples/language/implementing_std_traits.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>library types</li><li>newtypes</li><li>domain values</li><li>small collections</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a tour of the std traits you implement by hand (not derive), each with a law or consistency test: collections (`FromIterator`, `Extend`, three `IntoIterator` impls, `Index`, `Deref`), keys (`Eq`/`Hash`/`Borrow`), ordering (`Ord` and floats), formatting (`Display` flags, `Debug` builders), conversions (`From`/`TryFrom`/`FromStr`), lifecycle (`Drop`, `Clone`/`Copy`), iterators (`size_hint`, `DoubleEndedIterator`, `ExactSizeIterator`), errors (`source`), operators (`Add`/`Sum`/`Product`), and I/O (`Read`/`Write`).
+"""
+
+[[sections]]
+heading = "Why it matters"
+body = """
+users of your type expect it to compose with `collect()`, `for` loops, `HashMap`, `sort`, `{:>8}` and `?`. Each trait carries a &#42;law&#42; the compiler cannot check; breaking it gives wrong answers, not compile errors.
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+every section prints a line and asserts the law, including seeded random tests (xorshift, no deps).
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>sorted/unique collections</li><li>case-insensitive map keys (HTTP headers, identifiers)</li><li>numeric newtypes (money, units)</li><li>colour/version/id values with a text form</li><li>in-memory buffers for tests</li><li>error chains in CLIs</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+The Rust API Guidelines, Interoperability <https://rust-lang.github.io/api-guidelines/interoperability.html>
+
+<ul class="cb-g-reading"><li>std::ops::Index <a href="https://doc.rust-lang.org/std/ops/trait.Index.html" target="_blank" rel="noreferrer">https://doc.rust-lang.org/std/ops/trait.Index.html</a></li><li>The Rust Book ch.15 (Deref, Drop)</li></ul>
+
+std::borrow::Borrow <https://doc.rust-lang.org/std/borrow/trait.Borrow.html> (the Hash/Eq contract)
+"""
+
+[[sources]]
+title = "rust-lang.github.io/api-guidelines/interoperability.html"
+url = "https://rust-lang.github.io/api-guidelines/interoperability.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/ops/trait.Index.html"
+url = "https://doc.rust-lang.org/std/ops/trait.Index.html"
+
+[[sources]]
+title = "doc.rust-lang.org/std/borrow/trait.Borrow.html"
+url = "https://doc.rust-lang.org/std/borrow/trait.Borrow.html"

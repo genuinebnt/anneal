@@ -1,0 +1,72 @@
+title = "Doing things once"
+module = "Distributed systems"
+module_order = 10
+chapter = "Microservice patterns"
+chapter_order = 5
+order = 507
+kind = "recipe"
+lede = "Idempotency keys, consumer dedup windows, CAS leader election with fencing, and a fenced resource under chaos"
+level = "advanced"
+code = ["examples/microservices/idempotency_dedup_leader_fencing_store.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>any API that clients retry</li><li>any consumer of an at-least-once stream</li><li>any "only one active worker" job</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>Stripe-style Idempotency-Key headers</li><li>Kafka idempotent producer sequence numbers</li><li>IPsec/DTLS anti-replay windows</li><li>etcd/ZooKeeper leader election with revisions</li><li>Kafka controller and Raft term fencing</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Companions: `axum_idempotency` is the HTTP shape; `lease_fencing_sim` shows **why** a lease without tokens fails (not repeated here); `transactional_outbox_inbox_sqlite` makes "record the key" and "do the effect" one transaction.
+
+A. **Idempotency keys**. State per (key): IN-FLIGHT(attempt, fingerprint, lock expiry) or DONE(response, fingerprint, retention expiry).
+
+Same key + different request body is a **client bug** and is refused, never replayed. A concurrent duplicate gets "in flight" (HTTP 409), not a second execution. A handler that dies leaves a lock that expires; the takeover gets a **new** attempt number and the old attempt can no longer complete.
+
+**What this cannot do**: if the handler died **after** the effect and **before** `complete`, the retry runs the effect again. Only an effect committed **atomically** with the key (same database transaction) or an effect that is itself keyed closes that gap; both outcomes are demonstrated. B.
+
+**Dedup for consumers**. Three tools: (1) exact set with a time window; (2) per-producer **sliding window** over sequence numbers (a high-water mark plus a bitmap; anything older than the window is refused, so memory is constant); (3) a **bloom filter** as a pre-check: "definitely new" skips the expensive exact lookup, "maybe seen" **must** fall through to it.
+
+Dropping on a Bloom hit silently loses new messages. No window is forever: a duplicate older than the window is a design decision, not a surprise. C.
+
+**Leader election** on a linearisable store with only `read` and `compare_and_set(revision)`. The record is (holder, expires_at, token); every change of leadership increments the token. Expiry is judged by the **store**'s clock.
+
+Nodes measure their own lease with their own, skewed clocks, and may be paused at any instruction. D. **The fenced resource** rejects a token lower than the highest it has seen, checking and writing in **one** atomic step.
+
+**The subtle part**: that alone is not enough. Until the new leader **touches** the resource, the resource has not heard of the new token, so an old leader's delayed write is still accepted, possibly **after** the new leader has read the state it is about to overwrite: a lost update. So a new leader must first **fence** the resource (publish its token) and only **then** read.
+
+The chaos test runs the same schedules with: no check, check only, check + fence-before-read. **Simulation**: single threaded and seeded; each node is a state machine advanced one step at a time, so a "pause" is simply not being scheduled while the store clock runs. In-flight messages are delayed and reordered.
+
+Not modelled: the lease store itself failing (that is consensus: see the Raft recipes), or Byzantine nodes that forge tokens.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li><a href="https://stripe.com/blog/idempotency" target="_blank" rel="noreferrer">https://stripe.com/blog/idempotency</a></li><li><a href="https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html" target="_blank" rel="noreferrer">https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html</a></li></ul>
+
+<https://etcd.io/docs/v3.5/learning/api/> and <https://www.rfc-editor.org/rfc/rfc4303#section-3.4.3> (anti-replay window)
+"""
+
+[[sources]]
+title = "stripe.com/blog/idempotency"
+url = "https://stripe.com/blog/idempotency"
+
+[[sources]]
+title = "martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html"
+url = "https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html"
+
+[[sources]]
+title = "etcd.io/docs/v3.5/learning/api"
+url = "https://etcd.io/docs/v3.5/learning/api/"
+
+[[sources]]
+title = "rfc-editor.org/rfc/rfc4303#section-3.4.3"
+url = "https://www.rfc-editor.org/rfc/rfc4303#section-3.4.3"

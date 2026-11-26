@@ -1,0 +1,74 @@
+title = "SPANN-style disk-resident ANN"
+module = "Search and vectors"
+module_order = 9
+chapter = "Vector search"
+chapter_order = 2
+order = 468
+kind = "recipe"
+lede = "Centroids in RAM, posting lists on a simulated SSD, boundary replication, query-aware pruning, I/O accounting vs a DiskANN-style graph."
+level = "advanced"
+code = ["examples/search_vectors/spann_disk_ivf_lite.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+billion-scale vector search where the vectors do not fit in RAM and the SSD is the bottleneck: count **block reads**, not distance computations.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**The cost model**: on an SSD one random 4 KiB read costs &#126;80-100 us at queue depth 1, and the next sequential blocks of the same request cost &#126;5-10 us each. So an index is judged by (a) how many requests ("seeks") a query issues and (b) how many blocks they cover, at a given recall.
+
+The simulated `Device` counts both, and we print a modelled latency (80 us per seek + 8 us per block; a model, not a measurement). **Spann** (Chen et al., NeurIPS 2021) design, reproduced in miniature:
+
+<div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">Head</div><div class="cb-g-says"><p>In memory: ~n/100 centroids from <strong>balanced</strong> k-means (capacity cap = 1.25 n/k, because a huge posting list is a latency outlier). <strong>Caveat</strong> of this miniature: the cap bounds the k-means assignment only. The lists are then rebuilt by nearest-centroid + closure assignment, which can exceed it (the run prints the largest list).</p><p>A production system has to split oversized postings (see SPFresh).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Posting lists</div><div class="cb-g-says"><p>On disk: all vectors assigned to a centroid, stored contiguously: <strong>one</strong> seek reads a whole list.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Boundary replication ("closure assignment" + RNG pruning)</div><div class="cb-g-says"><p>A vector near the boundary of two cells is stored in <strong>both</strong> lists so a query that lands on the "wrong" side still finds it.</p><p>Replica rule for vector x with sorted centroid distances d_1 &lt;= d_2 &lt;= ...: take c_j only if d_j &lt;= (1+eps) d_1 (it is almost as close as the nearest) <strong>and</strong> for every already chosen c_s, d(c_j, c_s) &gt;= d(x, c_j) (RNG rule: if c_j is closer to a chosen centroid than to x, it lies "behind" it and adds no new direction). At most <code>R_MAX</code> replicas.</p><p>Costs disk space, saves I/O per query.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Query-aware dynamic pruning</div><div class="cb-g-says"><p>Probe centroid i only while d_i(q) &lt;= (1+eps_q) d_1(q) (up to <code>nprobe</code>): easy queries (one clear cell) read one list, ambiguous queries read several. It is a <strong>heuristic</strong> and its value depends on the data (see below).</p></div></div><div class="cb-g-term"><div class="cb-g-name">Page-aligned layout</div><div class="cb-g-says"><p>Each list starts on a 4 KiB boundary, so a list of L bytes costs ceil(L/4096) blocks instead of up to one more when packed.</p></div></div></div>
+
+DISKANN-STYLE BASELINE: graph (R=24 links) + in-RAM SQ8 copy of vectors for navigation; each node's record [degree, links, full vector] lives in its own slot (17 per block); expanding a node = one block read; the answer is re-ranked with the full vectors read along the way.
+"""
+
+[[sections]]
+heading = "Verification"
+body = """
+(1) with nothing pruned and every list probed, recall is exactly 1.0 (every vector is in >= 1 list); (2) the block reads the device counted equal the layout model, for packed and aligned layouts, for every query; aligned never reads more blocks than packed; (3) balanced k-means respects its capacity;
+
+Sampled replica sets obey the closure and RNG rules; (4) at a **fixed** nprobe, replication (same centroids) never lowers recall (replicated lists are supersets) and raises recall@10 at nprobe=1 by more than 0.1 on low-intrinsic-dimension data;
+
+(5) **at equal mean blocks read**, dynamic pruning has higher recall than fixed nprobe on clustered and low-intrinsic-dimension data (eps_q 0.05 and 0.10) and **lower** recall on near-isotropic data (eps_q 0.10); (6) both indexes reach recall 0.95.
+
+**How to compare pruning honestly**: "pruned reads fewer blocks than nprobe=16" proves nothing, because it also has lower recall. Compare recall at the **same** mean I/O. The fixed-nprobe curve between p and p+1 is linearly interpolated; that point is achievable (send a random fraction of queries to p+1).
+
+**Where it fails**: when the data is close to one isotropic blob, the ratio d_i(q)/d_1(q) says little about which queries need more lists, and here the uneven budget does worse than giving every query the same number of lists. Measure on your own data before enabling it. The gain where it does work is a few recall points in this miniature, not a multiple.
+
+**Why replication barely fires on isotropic data** (read the x factor in the first table): centroids are averages of noisy points, so they tend to sit closer to each other than a point sits to them, and the RNG rule then rejects the second centroid.
+
+**Honest note**: the comparison I/O-per-recall depends on data, entry size and parameters; the graph here keeps SQ8 vectors in RAM (8 bits/dim; DiskANN uses &#126;32 byte PQ codes) and counts every expansion as a read; **spann** keeps only centroids. Read the numbers as a demonstration of the accounting, not a benchmark verdict.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li><strong>Spann</strong> (Microsoft SPTAG, Bing-scale)</li><li>Pinecone/Turbopuffer-style object-storage IVF layouts (a posting list = one object range-<strong>get</strong>)</li><li>DiskANN/Vamana in Azure and in Milvus</li><li>Lucene on SSD</li><li>Faiss IVF with on-disk inverted lists (<code>OnDiskInvertedLists</code>)</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<ul class="cb-g-reading"><li>SPANN: Highly-efficient Billion-scale Approximate Nearest Neighbor Search, Chen et al. <a href="https://arxiv.org/abs/2111.08566" target="_blank" rel="noreferrer">https://arxiv.org/abs/2111.08566</a></li><li>DiskANN: Fast Accurate Billion-point Nearest Neighbor Search on a Single Node, Subramanya et al. <a href="https://proceedings.neurips.cc/paper/2019/file/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Paper.pdf" target="_blank" rel="noreferrer">https://proceedings.neurips.cc/paper/2019/file/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Paper.pdf</a></li><li>FreshDiskANN <a href="https://arxiv.org/abs/2105.09613" target="_blank" rel="noreferrer">https://arxiv.org/abs/2105.09613</a></li><li><a href="https://arxiv.org/abs/1603.09320" target="_blank" rel="noreferrer">https://arxiv.org/abs/1603.09320</a> (HNSW)</li></ul>
+"""
+
+[[sources]]
+title = "arxiv.org/abs/2111.08566"
+url = "https://arxiv.org/abs/2111.08566"
+
+[[sources]]
+title = "proceedings.neurips.cc/paper/2019/file/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Paper…"
+url = "https://proceedings.neurips.cc/paper/2019/file/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Paper.pdf"
+
+[[sources]]
+title = "arxiv.org/abs/2105.09613"
+url = "https://arxiv.org/abs/2105.09613"
+
+[[sources]]
+title = "arxiv.org/abs/1603.09320"
+url = "https://arxiv.org/abs/1603.09320"

@@ -1,0 +1,60 @@
+title = "Slab generational"
+module = "Rust language"
+module_order = 1
+chapter = "Memory and allocators"
+chapter_order = 6
+order = 58
+kind = "recipe"
+lede = "a slab / object pool with a free list through vacant slots and GENERATIONAL typed handles."
+level = "advanced"
+code = ["examples/memory/slab_generational.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>ECS entity storage</li><li>connection/session tables</li><li>IO resource tables</li><li>graph nodes</li></ul>
+"""
+
+[[sections]]
+heading = "What it is"
+body = """
+a `Vec<Entry<T>>` where each slot is either `Occupied { ver, val }` or `Vacant { ver, next_free }`. Vacant slots form an intrusive singly linked **list** through `next_free` (no second Vec): insert pops the head (O(1)), remove pushes the slot back. Slots are reused, so memory is dense and stable, and a handle is just two integers.
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Why generations**: with plain indices, `remove(3)` then `insert(x)` reuses slot 3, and an old copy of index 3 now silently refers to the **new** object (the **aba** problem / a use-after-free on indices; in a game it means "the bullet hits the wrong entity", in a server "the reply goes to someone else's connection").
+
+Fix: each slot has a generation counter bumped on remove; a `Handle` stores `(index, generation)` and `get` compares. A stale handle yields `None` (a clean error) instead of aliasing.
+
+**Caveat.** The u32 generation wraps after 2&#94;32 reuses of **one** slot, after which a very old handle could match again; use u64 or retire the slot if that matters.
+
+**Typed**: `Handle<T>` carries `PhantomData<fn() -> T>` so a `Handle<Conn>` cannot index a `Slab<Player>` (compile error) and the handle is `Copy`/`Send`/`Sync` regardless of T. Clone/Eq/Hash are written by hand to avoid derive's `T: Clone` bounds.
+
+Verified by a **model test**: 50k seeded random ops against `HashMap`, with an oracle that says exactly which of **all** handles ever issued (including stale ones) must be valid.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+entity-component systems in game engines (the `slotmap` and `generational-arena` crates implement this idea; bevy's `Entity` is an index plus a generation); connection tables in servers (an event loop stores the handle as the poll token); tokio's IO driver keeps registered IO resources in an internal slab and uses the slot index as the token; graph/tree nodes referenced by handle instead of pointers (see arena_ids, lru_cache).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://docs.rs/slotmap> and <https://docs.rs/slab> and <https://docs.rs/generational-arena>
+"""
+
+[[sources]]
+title = "docs.rs/slotmap"
+url = "https://docs.rs/slotmap"
+
+[[sources]]
+title = "docs.rs/slab"
+url = "https://docs.rs/slab"
+
+[[sources]]
+title = "docs.rs/generational-arena"
+url = "https://docs.rs/generational-arena"

@@ -1,0 +1,76 @@
+=== before ===
+// monomorphisation: 2 function instances
+// fn#0 (main)
+fn main() -> () {
+    let _0: int;
+    let _1: str;
+    let _2: ();
+  bb0:
+    _0 = call fn#1(21) -> bb1
+  bb1:
+    _1 = to_str(_0)
+    _2 = println(_1)
+    return ()
+}
+// fn#1
+fn f(_0: int) -> int {
+    let _1: int;
+    let _2: int;  // a
+    let _3: int;
+    let _4: int;  // b
+    let _5: int;
+    let _6: int;  // c
+    let _7: int;
+    let _8: int;  // d
+    let _9: int;
+    let _10: int;  // e
+    let _11: int;
+    let _12: int;
+    let _13: int;
+  bb0:
+    _2 = _0 * 2
+    _4 = _0 + 0
+    _6 = _4 * 1
+    _8 = _0 - _0
+    _10 = _0 % 1
+    _11 = _2 + _6
+    _12 = _11 + _8
+    _13 = _12 + _10
+    return _13
+}
+
+=== after: strength, dce ===
+// monomorphisation: 2 function instances
+// fn#0 (main)
+fn main() -> () {
+    let _0: int;
+    let _1: str;
+    let _2: ();
+  bb0:
+    _0 = call fn#1(21) -> bb1
+  bb1:
+    _1 = to_str(_0)
+    _2 = println(_1)
+    return ()
+}
+// fn#1
+fn f(_0: int) -> int {
+    let _1: int;  // a
+    let _2: int;  // b
+    let _3: int;  // c
+    let _4: int;  // d
+    let _5: int;  // e
+    let _6: int;
+    let _7: int;
+    let _8: int;
+  bb0:
+    _1 = _0 + _0
+    _2 = _0
+    _3 = _2
+    _4 = 0
+    _5 = 0
+    _6 = _1 + _3
+    _7 = _6 + _4
+    _8 = _7 + _5
+    return _8
+}

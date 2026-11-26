@@ -1,0 +1,43 @@
+title = "Locks deadlocks"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Threads, locks and channels"
+chapter_order = 1
+order = 240
+kind = "recipe"
+lede = "Mutex, RwLock, poisoning, lock ordering, try_lock, and Condvar."
+level = "advanced"
+code = ["examples/concurrency/locks_deadlocks.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>shared caches</li><li>schedulers with shared state</li><li>anything where two threads touch the same data</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>shared caches and accounts: lock ordering</li><li>poisoning policy</li><li>Condvar signalling</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Rules that prevent most lock bugs:
+
+1. Keep critical sections **small**; never do IO/sleep/await while holding a guard.
+2. If code ever needs two locks, always take them in the **same** global order (or you can deadlock).
+3. Prefer message passing or one owner task (shared_state) when the logic gets complicated.
+4. `RwLock` helps only when reads vastly outnumber writes and critical sections are not tiny. A std `Mutex` is "poisoned" if a thread panicked while holding it; decide whether to recover. Faster/fairer locks: <https://docs.rs/parking_lot> .
+
+   Read: <https://doc.rust-lang.org/std/sync/struct.Mutex.html>
+"""
+
+[[sources]]
+title = "docs.rs/parking_lot"
+url = "https://docs.rs/parking_lot"
+
+[[sources]]
+title = "doc.rust-lang.org/std/sync/struct.Mutex.html"
+url = "https://doc.rust-lang.org/std/sync/struct.Mutex.html"
