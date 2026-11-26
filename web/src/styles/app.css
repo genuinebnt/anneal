@@ -482,3 +482,6 @@ a.tr.kb, .tr.kb { background: var(--sel); box-shadow: inset 3px 0 0 var(--vio); 
 .acct-menu a.acct-link:hover { background: var(--raise); color: var(--fg); }
 .acct-menu a.acct-first { margin-top: 6px; border-top: 1px solid var(--line2); border-radius: 0 0 5px 5px; }
 .acct-menu a.acct-link + .acct-out { margin-top: 0; border-top: 0; }
+/* the pinned error card: stays while you read or copy rustc's full output */
+.cm-editor .cm-tooltip.cm-diag-pinned { max-width: min(720px, calc(100vw - 32px)); max-height: min(440px, 60vh); overflow: auto; scrollbar-width: none; user-select: text; }
+.cm-diag-pinned .cm-lens { max-width: none; margin: 0; }

@@ -20,11 +20,13 @@ import { autocompletion, closeBrackets, closeBracketsKeymap, completeAnyWord, co
 import { rust } from "@codemirror/lang-rust";
 import { pythonLanguage } from "./pythonEditing";
 import { serverCompletionSource } from "@codemirror/lsp-client";
+import { setDiagnostics } from "@codemirror/lint";
 import { tags as t } from "@lezer/highlight";
 import type { Diagnostic } from "../api";
 import type { LaneModel } from "./lanes";
 import { diagCard } from "./diagcard";
 import { inlayHints, refreshInlays } from "./inlay";
+import { pinnedDiagnostic } from "./pinned";
 import type { RaSession } from "./lsp";
 
 const highlight = HighlightStyle.define([
@@ -254,6 +256,9 @@ export interface EditorProps {
 // Vim: leave insert mode with `jk` or `kj`, typed within insertModeEscKeysTimeout (200 ms).
 Vim.map("jk", "<Esc>", "insert");
 Vim.map("kj", "<Esc>", "insert");
+// Space w in normal mode saves, like :w. Space alone moves right by default, so that goes first.
+Vim.unmap("<Space>", undefined as unknown as string);
+Vim.map("<Space>w", ":w<CR>", "normal");
 
 // Vim's :w formats and saves the editor it was typed in, like ⌘S.
 const vimSave = new WeakMap<EditorView, () => void>();
@@ -357,6 +362,7 @@ export function Editor(props: EditorProps) {
       theme,
       lensField,
       lanesField,
+      pinnedDiagnostic,
       keymap.of([
         { key: "Mod-Enter", run },
         { key: "Shift-Mod-Enter", run: submit },
@@ -432,7 +438,11 @@ export function Editor(props: EditorProps) {
 
   useEffect(() => {
     const lsp = props.lsp;
-    view.current?.dispatch({ effects: lspCompartment.current.reconfigure(lsp ? [lsp.client.plugin(lsp.uri, "rust"), inlayHints()] : []) });
+    const v = view.current;
+    if (!v) return;
+    v.dispatch({ effects: lspCompartment.current.reconfigure(lsp ? [lsp.client.plugin(lsp.uri, "rust"), inlayHints()] : []) });
+    // Underlines from a session that ended would stay for ever: nothing is left to update them.
+    v.dispatch(setDiagnostics(v.state, []));
   }, [props.lsp]);
 
   useEffect(() => {

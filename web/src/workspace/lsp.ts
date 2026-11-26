@@ -3,6 +3,7 @@ import { setDiagnostics } from "@codemirror/lint";
 import { LSPClient, LSPPlugin, type LSPClientExtension, type Transport, hoverTooltips, jumpToDefinitionKeymap, signatureHelp, signatureKeymap } from "@codemirror/lsp-client";
 import type { Diagnostic, Level, Span } from "../api";
 import { diagCard } from "./diagcard";
+import { pinDiagnostic } from "./pinned";
 
 /** The server shows rust-analyzer this virtual root instead of the real path. */
 export const ROOT = "file:///workspace";
@@ -14,6 +15,8 @@ export interface RaCallbacks {
   status: (s: RaStatus, detail?: string) => void;
   /** Error and warning counts for src/lib.rs, from rust-analyzer and its cargo check. */
   diagnostics: (errors: number, warnings: number) => void;
+  /** The connection failed or dropped without us closing it; the session is no use any more. */
+  lost: () => void;
 }
 
 export interface RaSession {
@@ -77,10 +80,13 @@ export function connectRa(problemId: string, on: RaCallbacks, clippy: boolean): 
     };
     ws.onerror = () => reject(new Error("rust-analyzer connection failed"));
   });
+  // A failed start also closes the socket, so this one handler reports every loss, with the server's reason.
   ws.onclose = (e) => {
-    if (!closed) on.status("error", e.reason || "rust-analyzer stopped");
+    if (closed) return;
+    on.status("error", e.reason || "connection lost");
+    on.lost();
   };
-  ready.catch(() => !closed && on.status("error", "couldn't start rust-analyzer"));
+  ready.catch(() => {});
 
   return {
     client,
@@ -175,7 +181,13 @@ function richDiagnostics(): LSPClientExtension {
         const view = file.getView();
         const plugin = view && LSPPlugin.get(view);
         if (!view || !plugin) return false;
-        const at = (p: LspPosition) => plugin.unsyncedChanges.mapPos(plugin.fromPosition(p, plugin.syncedDoc));
+        // cargo check reads the copy saved on the server, which can be longer than the buffer it is reported against.
+        // A position past the end would throw and lose the whole update, leaving the old errors on screen.
+        const at = (p: LspPosition) => {
+          const doc = plugin.syncedDoc;
+          const line = doc.line(Math.min(p.line + 1, doc.lines));
+          return plugin.unsyncedChanges.mapPos(Math.min(line.from + p.character, line.to));
+        };
         view.dispatch(
           setDiagnostics(
             view.state,
@@ -186,7 +198,7 @@ function richDiagnostics(): LSPClientExtension {
                 to: at(item.range.end),
                 severity: d.level === "error" ? "error" : d.level === "warning" ? "warning" : d.level === "note" ? "info" : "hint",
                 message: item.message,
-                renderMessage: (v) => diagCard(d, v.state.doc.toString().split("\n")),
+                renderMessage: (v) => diagCard(d, v.state.doc.toString().split("\n"), { onFull: () => pinDiagnostic(v, at(item.range.start), d) }),
               };
             }),
           ),

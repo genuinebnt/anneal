@@ -5,8 +5,16 @@ import { appendAnsi, stripAnsi } from "./ansi";
 
 const LEVEL_COLOUR: Record<Level, string> = { error: "var(--bad)", warning: "var(--warn)", note: "var(--dim)", help: "var(--grn)" };
 
+export interface CardOptions {
+  /** Show rustc's full output from the start. */
+  open?: boolean;
+  /** Called instead of opening the full output in place. */
+  onFull?: () => void;
+}
+
 /** Builds the card's DOM. `lines` is the file's text split into lines, for the span snippets. */
-export function diagCard(d: Diagnostic, lines: string[], file = "src/lib.rs"): HTMLElement {
+export function diagCard(d: Diagnostic, lines: string[], options: CardOptions = {}): HTMLElement {
+  const file = "src/lib.rs";
   const el = document.createElement("div");
   el.className = `lens cm-lens lv-${d.level}`;
   const head = document.createElement("div");
@@ -50,10 +58,12 @@ export function diagCard(d: Diagnostic, lines: string[], file = "src/lib.rs"): H
     appendAnsi(more, body);
     const toggle = document.createElement("button");
     toggle.className = "lens-more";
-    toggle.setAttribute("aria-expanded", "false");
-    toggle.textContent = "▸ full output";
+    more.hidden = !options.open;
+    toggle.setAttribute("aria-expanded", String(!more.hidden));
+    toggle.textContent = more.hidden ? "▸ full output" : "▾ full output";
     // mousedown, not click: inside the editor a click would move the cursor first.
     const flip = () => {
+      if (options.onFull) return options.onFull();
       more.hidden = !more.hidden;
       toggle.setAttribute("aria-expanded", String(!more.hidden));
       toggle.textContent = more.hidden ? "▸ full output" : "▾ full output";

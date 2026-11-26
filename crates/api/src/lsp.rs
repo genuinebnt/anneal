@@ -15,12 +15,32 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
 
-use axum::extract::ws::{Message, WebSocket};
+use axum::extract::ws::{CloseFrame, Message, WebSocket, close_code};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, Command};
 use tokio::sync::{Semaphore, mpsc};
+use tokio::time::Instant;
+
+/// Why a fourth editor gets no rust-analyzer. A close reason holds at most 123 bytes.
+pub const BUSY: &str = "already running for 3 editors; close one";
+
+/// How often the browser is pinged, and how long it may stay silent before its session is ended and its slot freed
+/// (a sleeping laptop or a dropped network never closes the socket itself).
+const PING_EVERY: Duration = Duration::from_secs(20);
+const SILENT_FOR: Duration = Duration::from_secs(70);
+
+/// Closes a new socket, saying why.
+pub async fn refuse(mut socket: WebSocket, reason: &'static str) {
+    let _ = socket
+        .send(Message::Close(Some(CloseFrame {
+            code: close_code::AGAIN,
+            reason: reason.into(),
+        })))
+        .await;
+}
 
 /// What the browser sees as the workspace root.
 pub const VIRTUAL_ROOT: &str = "file:///workspace";
@@ -123,17 +143,29 @@ pub async fn session(
         }
     });
 
+    let mut ping = tokio::time::interval(PING_EVERY);
+    let mut heard = Instant::now();
     loop {
         tokio::select! {
-            msg = socket.recv() => match msg {
-                Some(Ok(Message::Text(text))) => {
-                    if let Some(frame) = from_client(&text, &root, &real_root, files.clippy) {
-                        write_frame(&mut stdin, &frame).await?;
-                    }
+            _ = ping.tick() => {
+                if heard.elapsed() > SILENT_FOR
+                    || socket.send(Message::Ping(Default::default())).await.is_err()
+                {
+                    break;
                 }
-                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
-                Some(Ok(_)) => {}
             },
+            received = socket.recv() => {
+                heard = Instant::now();
+                match received {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Some(frame) = from_client(&text, &root, &real_root, files.clippy) {
+                            write_frame(&mut stdin, &frame).await?;
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    Some(Ok(_)) => {}
+                }
+            }
             out = rx.recv() => match out {
                 Some(FromServer::Forward(text)) => {
                     if socket.send(Message::Text(text.into())).await.is_err() {

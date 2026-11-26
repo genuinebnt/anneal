@@ -416,11 +416,10 @@ pub async fn lsp(
         Some(c) => c,
         None => crate::settings::editor(&s.db).await?.live_clippy,
     };
-    let permit = s.lsp.slots.clone().try_acquire_owned().map_err(|_| {
-        ApiError::Busy(
-            "rust-analyzer is already running for 3 editors; close one and try again".into(),
-        )
-    })?;
+    let Ok(permit) = s.lsp.slots.clone().try_acquire_owned() else {
+        // A browser can't read why an upgrade was refused, so accept it and close with the reason.
+        return Ok(ws.on_upgrade(|socket| lsp::refuse(socket, lsp::BUSY)));
+    };
     let cfg = s.lsp.clone();
     Ok(ws.on_upgrade(move |socket| async move {
         if let Err(e) = lsp::session(

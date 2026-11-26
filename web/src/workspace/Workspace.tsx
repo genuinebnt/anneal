@@ -146,6 +146,12 @@ function Loaded({ p }: { p: ProblemDetail }) {
   const [raSession, setRaSession] = useState<RaSession | null>(null);
   const [raDiag, setRaDiag] = useState({ errors: 0, warnings: 0 });
   const [raEpoch, setRaEpoch] = useState(0);
+  // Raising the attempt opens a new session; the counter of failures sets how long to wait first.
+  const [raAttempt, setRaAttempt] = useState(0);
+  const raFailures = useRef(0);
+  useEffect(() => {
+    raFailures.current = 0;
+  }, [ra, py, liveClippy, p.id]);
 
   // rust-analyzer: one session per open problem, closed when toggled off or on leaving.
   useEffect(() => {
@@ -153,24 +159,38 @@ function Loaded({ p }: { p: ProblemDetail }) {
       setRaStatus("off");
       return;
     }
+    let retry: ReturnType<typeof setTimeout> | undefined;
     const session = connectRa(p.id, {
       status: (s, detail) => {
         setRaStatus(s);
         setRaDetail(detail);
-        if (s === "ready") setRaEpoch((n) => n + 1);
+        if (s === "ready") {
+          raFailures.current = 0;
+          setRaEpoch((n) => n + 1);
+        }
       },
       diagnostics: (errors, warnings) => setRaDiag({ errors, warnings }),
+      lost: () => {
+        // Drop the dead session at once, with its errors, then try again.
+        setRaSession(null);
+        setRaDiag({ errors: 0, warnings: 0 });
+        const waits = [2, 5, 15, 30];
+        const wait = waits[Math.min(raFailures.current, waits.length - 1)]!;
+        raFailures.current += 1;
+        retry = setTimeout(() => setRaAttempt((n) => n + 1), wait * 1000);
+      },
     }, liveClippy);
     session.ready.then(
       () => setRaSession(session),
       () => {},
     );
     return () => {
+      clearTimeout(retry);
       session.close();
       setRaSession(null);
       setRaDiag({ errors: 0, warnings: 0 });
     };
-  }, [ra, py, liveClippy, p.id]);
+  }, [ra, py, liveClippy, p.id, raAttempt]);
 
   // Save to the server a second after typing stops so rust-analyzer's cargo check sees borrow errors.
   useEffect(() => {
@@ -309,8 +329,10 @@ function Loaded({ p }: { p: ProblemDetail }) {
   const shown = (selected !== null ? runs.find((r) => r.id === selected) : latest) ?? null;
   const shownIdx = shown ? runs.indexOf(shown) : -1;
   const prevRun = shownIdx > 0 ? runs[shownIdx - 1] : undefined;
-  const lanes = useMemo(() => (latest && !py ? deriveLanes(latest.diagnostics, latest.code) : null), [latest, py]);
-  const lensDiags = useMemo(() => (latest && latest.code === code ? latest.diagnostics : (latest?.diagnostics ?? [])), [latest, code]);
+  // A run's errors belong to the code that ran: once the buffer differs, their lines and messages are out of date.
+  const current = latest?.code === code ? latest : undefined;
+  const lanes = useMemo(() => (current && !py ? deriveLanes(current.diagnostics, current.code) : null), [current, py]);
+  const lensDiags = useMemo(() => current?.diagnostics ?? [], [current]);
   const names = useMemo(() => (py ? pyTestNames(p.visible_tests) : testNames(p.visible_tests)), [p.visible_tests, py]);
   const cases = useMemo(() => (py ? pythonTestCases(p.visible_tests) : testCases(p.visible_tests)), [p.visible_tests, py]);
   const hiddenCases = useMemo(() => (p.hidden_tests ? (py ? pythonTestCases(p.hidden_tests) : testCases(p.hidden_tests)) : null), [p.hidden_tests, py]);
@@ -747,7 +769,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
                 </span>
               ) : (
               <button className={`si${ra ? "" : " off"}`} onClick={() => setRa(!ra)} title={`${raDetail ? `${raDetail} · ` : ""}Click to turn rust-analyzer ${ra ? "off" : "on"}`} aria-pressed={ra}>
-                <RaStatusLine status={raStatus} errors={raDiag.errors} warnings={raDiag.warnings} />
+                <RaStatusLine status={raStatus} detail={raDetail} errors={raDiag.errors} warnings={raDiag.warnings} />
               </button>
               )}
               <button
@@ -901,7 +923,7 @@ function RaStatusLine({ status, detail, errors, warnings }: { status: RaStatus; 
         : status === "indexing"
           ? ["rust-analyzer · indexing…", "var(--acc)"]
           : status === "error"
-            ? [`rust-analyzer unavailable${detail ? ` · ${detail}` : ""}`, "var(--bad)"]
+            ? [`rust-analyzer unavailable${detail ? ` · ${detail}` : ""} · retrying`, "var(--bad)"]
             : [
                 `rust-analyzer · ${errors} error${errors === 1 ? "" : "s"}${warnings ? ` · ${warnings} warning${warnings === 1 ? "" : "s"}` : ""}`,
                 errors ? "var(--bad)" : "var(--grn)",
