@@ -9,7 +9,11 @@ pub struct Scheduler {
 
 impl Scheduler {
     pub fn new() -> Self {
-        Scheduler { queue: RefCell::new(Vec::new()), seen: RefCell::new(HashMap::new()), done: RefCell::new(Vec::new()) }
+        Scheduler {
+            queue: RefCell::new(Vec::new()),
+            seen: RefCell::new(HashMap::new()),
+            done: RefCell::new(Vec::new()),
+        }
     }
 
     /// Counts a submission of `job`, and queues it if the counts had no entry for it yet. Returns whether it

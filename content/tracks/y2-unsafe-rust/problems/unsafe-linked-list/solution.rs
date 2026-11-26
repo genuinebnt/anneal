@@ -21,7 +21,12 @@ pub struct List<T> {
 
 impl<T> List<T> {
     pub fn new() -> Self {
-        List { head: None, tail: None, len: 0, _own: PhantomData }
+        List {
+            head: None,
+            tail: None,
+            len: 0,
+            _own: PhantomData,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -33,7 +38,11 @@ impl<T> List<T> {
     }
 
     pub fn push_front(&mut self, elem: T) {
-        let node = NonNull::from(Box::leak(Box::new(Node { elem, prev: None, next: self.head })));
+        let node = NonNull::from(Box::leak(Box::new(Node {
+            elem,
+            prev: None,
+            next: self.head,
+        })));
         match self.head {
             // SAFETY: head points at a live node we own, and we hold `&mut self`.
             Some(h) => unsafe { (*h.as_ptr()).prev = Some(node) },
@@ -44,7 +53,11 @@ impl<T> List<T> {
     }
 
     pub fn push_back(&mut self, elem: T) {
-        let node = NonNull::from(Box::leak(Box::new(Node { elem, prev: self.tail, next: None })));
+        let node = NonNull::from(Box::leak(Box::new(Node {
+            elem,
+            prev: self.tail,
+            next: None,
+        })));
         match self.tail {
             // SAFETY: tail points at a live node we own, and we hold `&mut self`.
             Some(t) => unsafe { (*t.as_ptr()).next = Some(node) },
@@ -141,11 +154,21 @@ impl<T> List<T> {
     }
 
     pub fn iter(&self) -> Iter<'_, T> {
-        Iter { head: self.head, tail: self.tail, len: self.len, _borrow: PhantomData }
+        Iter {
+            head: self.head,
+            tail: self.tail,
+            len: self.len,
+            _borrow: PhantomData,
+        }
     }
 
     pub fn iter_mut(&mut self) -> IterMut<'_, T> {
-        IterMut { head: self.head, tail: self.tail, len: self.len, _borrow: PhantomData }
+        IterMut {
+            head: self.head,
+            tail: self.tail,
+            len: self.len,
+            _borrow: PhantomData,
+        }
     }
 }
 

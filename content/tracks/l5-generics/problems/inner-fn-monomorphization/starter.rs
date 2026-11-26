@@ -11,10 +11,13 @@ pub fn word_counts<R: Read>(mut reader: R) -> io::Result<Vec<(String, usize)>> {
         if n == 0 {
             break;
         }
-        let chunk = std::str::from_utf8(&buf[..n]).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let chunk = std::str::from_utf8(&buf[..n])
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         partial.push_str(chunk);
         // Count every complete word; keep a word that may continue in the next chunk.
-        let keep_from = partial.rfind(char::is_whitespace).map_or(0, |i| i + partial[i..].chars().next().unwrap().len_utf8());
+        let keep_from = partial
+            .rfind(char::is_whitespace)
+            .map_or(0, |i| i + partial[i..].chars().next().unwrap().len_utf8());
         for w in partial[..keep_from].split_whitespace() {
             *counts.entry(w.to_string()).or_insert(0) += 1;
         }

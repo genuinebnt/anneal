@@ -35,7 +35,10 @@ pub struct Length<U> {
 
 impl<U: Unit> Length<U> {
     pub fn new(value: f64) -> Self {
-        Length { value, unit: PhantomData }
+        Length {
+            value,
+            unit: PhantomData,
+        }
     }
 
     pub fn value(self) -> f64 {
@@ -52,14 +55,20 @@ impl<U: Unit> Length<U> {
 impl<U, V> Add<Length<V>> for Length<U> {
     type Output = Length<U>;
     fn add(self, rhs: Length<V>) -> Length<U> {
-        Length { value: self.value + rhs.value, unit: PhantomData }
+        Length {
+            value: self.value + rhs.value,
+            unit: PhantomData,
+        }
     }
 }
 
 impl<U> Mul<f64> for Length<U> {
     type Output = Length<U>;
     fn mul(self, k: f64) -> Length<U> {
-        Length { value: self.value * k, unit: PhantomData }
+        Length {
+            value: self.value * k,
+            unit: PhantomData,
+        }
     }
 }
 

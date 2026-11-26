@@ -28,7 +28,12 @@ impl<K: Hash + Eq, V> OaMap<K, V, RandomState> {
 
 impl<K: Hash + Eq, V, S: BuildHasher> OaMap<K, V, S> {
     pub fn with_hasher(hasher: S) -> Self {
-        OaMap { slots: empty_slots(8), len: 0, tombs: 0, hasher }
+        OaMap {
+            slots: empty_slots(8),
+            len: 0,
+            tombs: 0,
+            hasher,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -89,7 +94,11 @@ impl<K: Hash + Eq, V, S: BuildHasher> OaMap<K, V, S> {
     /// (which is what clears the tombstones).
     fn rehash(&mut self) {
         let cap = self.slots.len();
-        let new_cap = if (self.len + 1) * 2 > cap { cap * 2 } else { cap };
+        let new_cap = if (self.len + 1) * 2 > cap {
+            cap * 2
+        } else {
+            cap
+        };
         let old = std::mem::replace(&mut self.slots, empty_slots(new_cap));
         let mask = new_cap - 1;
         self.tombs = 0;

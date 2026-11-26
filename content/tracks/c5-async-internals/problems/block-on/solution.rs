@@ -25,7 +25,10 @@ impl Wake for ThreadWaker {
 /// Runs `fut` to completion on the current thread, sleeping (not spinning) while it is pending.
 pub fn block_on<F: Future>(fut: F) -> F::Output {
     let mut fut = pin!(fut); // pinned on this stack frame: the future never moves again
-    let tw = Arc::new(ThreadWaker { thread: thread::current(), woken: AtomicBool::new(false) });
+    let tw = Arc::new(ThreadWaker {
+        thread: thread::current(),
+        woken: AtomicBool::new(false),
+    });
     let waker = Waker::from(tw.clone());
     let mut cx = Context::from_waker(&waker);
     loop {

@@ -26,7 +26,9 @@ impl Cfg {
     }
 
     pub fn with_capacity(blocks: usize) -> Cfg {
-        Cfg { blocks: Vec::with_capacity(blocks) }
+        Cfg {
+            blocks: Vec::with_capacity(blocks),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -39,7 +41,11 @@ impl Cfg {
 
     pub fn add_block(&mut self, stmts: u32) -> BlockId {
         let id = BlockId(self.blocks.len() as u32);
-        self.blocks.push(Block { stmts, succs: Edges::new(), preds: Edges::new() });
+        self.blocks.push(Block {
+            stmts,
+            succs: Edges::new(),
+            preds: Edges::new(),
+        });
         id
     }
 
@@ -108,10 +114,17 @@ impl Cfg {
                 succs.push(to);
                 let mut preds = Edges::new();
                 preds.push(BlockId(from as u32));
-                self.blocks.push(Block { stmts: 0, succs, preds });
+                self.blocks.push(Block {
+                    stmts: 0,
+                    succs,
+                    preds,
+                });
                 self.blocks[from].succs[i] = mid;
                 let to_preds = &mut self.blocks[to.0 as usize].preds;
-                let at = to_preds.iter().position(|&p| p.0 as usize == from).expect("edges are kept in both lists");
+                let at = to_preds
+                    .iter()
+                    .position(|&p| p.0 as usize == from)
+                    .expect("edges are kept in both lists");
                 to_preds[at] = mid;
                 split += 1;
             }

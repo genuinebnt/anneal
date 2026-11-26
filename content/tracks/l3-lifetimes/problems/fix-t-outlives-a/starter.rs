@@ -26,7 +26,11 @@ impl<'a> Board<'a> {
 
     /// Every item's description, joined with " ".
     pub fn render(&self) -> String {
-        self.items.iter().map(|i| i.describe()).collect::<Vec<_>>().join(" ")
+        self.items
+            .iter()
+            .map(|i| i.describe())
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 }
 

@@ -19,8 +19,16 @@ unsafe impl<T: Sync> Sync for MyVec<T> {}
 impl<T> MyVec<T> {
     pub fn new() -> Self {
         // A zero-sized type never needs memory, so its capacity is "infinite".
-        let cap = if mem::size_of::<T>() == 0 { usize::MAX } else { 0 };
-        MyVec { ptr: NonNull::dangling(), cap, len: 0 }
+        let cap = if mem::size_of::<T>() == 0 {
+            usize::MAX
+        } else {
+            0
+        };
+        MyVec {
+            ptr: NonNull::dangling(),
+            cap,
+            len: 0,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -134,7 +142,12 @@ impl<T> Drop for MyVec<T> {
         self.clear();
         if self.cap != 0 && mem::size_of::<T>() != 0 {
             // SAFETY: ptr was allocated with exactly this layout and is freed once.
-            unsafe { alloc::dealloc(self.ptr.as_ptr() as *mut u8, Layout::array::<T>(self.cap).unwrap()) };
+            unsafe {
+                alloc::dealloc(
+                    self.ptr.as_ptr() as *mut u8,
+                    Layout::array::<T>(self.cap).unwrap(),
+                )
+            };
         }
     }
 }

@@ -28,10 +28,16 @@ impl<'a> Cursor<'a> {
         let start = self.skip_ws();
         let rest = &src[start..];
         let b = rest.as_bytes();
-        if !b.first().is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_') {
+        if !b
+            .first()
+            .is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_')
+        {
             return None;
         }
-        let len = b.iter().take_while(|c| c.is_ascii_alphanumeric() || **c == b'_').count();
+        let len = b
+            .iter()
+            .take_while(|c| c.is_ascii_alphanumeric() || **c == b'_')
+            .count();
         self.pos = start + len;
         Some(&rest[..len])
     }

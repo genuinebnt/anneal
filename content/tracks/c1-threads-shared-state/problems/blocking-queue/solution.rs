@@ -25,7 +25,15 @@ impl<T> BlockingQueue<T> {
     /// Panics if `cap` is 0.
     pub fn new(cap: usize) -> Self {
         assert!(cap > 0, "capacity must be at least 1");
-        BlockingQueue { state: Mutex::new(State { items: VecDeque::new(), cap, closed: false }), not_empty: Condvar::new(), not_full: Condvar::new() }
+        BlockingQueue {
+            state: Mutex::new(State {
+                items: VecDeque::new(),
+                cap,
+                closed: false,
+            }),
+            not_empty: Condvar::new(),
+            not_full: Condvar::new(),
+        }
     }
 
     /// Waits for room. Gives the value back if the queue is (or becomes) closed.

@@ -19,7 +19,11 @@ pub fn describe(batch: Batch) -> (String, Vec<String>) {
             long += 1;
         }
     }
-    let mut line = format!("{name}: {} items ({long} long), longest {}", batch.items.len(), longest.unwrap_or("-"));
+    let mut line = format!(
+        "{name}: {} items ({long} long), longest {}",
+        batch.items.len(),
+        longest.unwrap_or("-")
+    );
     if unlabelled {
         line.push_str(" [unlabelled]");
     }

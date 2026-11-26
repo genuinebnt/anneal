@@ -11,7 +11,10 @@ pub struct ArrayVec<T, const N: usize> {
 impl<T, const N: usize> ArrayVec<T, N> {
     pub fn new() -> Self {
         // SAFETY: an array of `MaybeUninit` needs no initialisation.
-        ArrayVec { buf: unsafe { MaybeUninit::<[MaybeUninit<T>; N]>::uninit().assume_init() }, len: 0 }
+        ArrayVec {
+            buf: unsafe { MaybeUninit::<[MaybeUninit<T>; N]>::uninit().assume_init() },
+            len: 0,
+        }
     }
 
     pub fn len(&self) -> usize {

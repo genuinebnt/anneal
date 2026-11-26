@@ -1,6 +1,8 @@
 /// Words of `text` longer than `min` chars, as owned `String`s.
 pub fn long_words(text: &str, min: usize) -> impl Iterator<Item = String> {
-    text.split_whitespace().filter(move |w| w.chars().count() > min).map(String::from)
+    text.split_whitespace()
+        .filter(move |w| w.chars().count() > min)
+        .map(String::from)
 }
 
 /// Pairs up `a` and `b` element by element (stopping at the shorter one).

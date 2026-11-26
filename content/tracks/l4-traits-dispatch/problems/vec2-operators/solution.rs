@@ -11,7 +11,10 @@ impl Add for Vec2 {
     type Output = Vec2;
 
     fn add(self, o: Vec2) -> Vec2 {
-        Vec2 { x: self.x + o.x, y: self.y + o.y }
+        Vec2 {
+            x: self.x + o.x,
+            y: self.y + o.y,
+        }
     }
 }
 
@@ -19,7 +22,10 @@ impl Sub for Vec2 {
     type Output = Vec2;
 
     fn sub(self, o: Vec2) -> Vec2 {
-        Vec2 { x: self.x - o.x, y: self.y - o.y }
+        Vec2 {
+            x: self.x - o.x,
+            y: self.y - o.y,
+        }
     }
 }
 
@@ -27,7 +33,10 @@ impl Neg for Vec2 {
     type Output = Vec2;
 
     fn neg(self) -> Vec2 {
-        Vec2 { x: -self.x, y: -self.y }
+        Vec2 {
+            x: -self.x,
+            y: -self.y,
+        }
     }
 }
 
@@ -43,7 +52,10 @@ impl Mul<i64> for Vec2 {
     type Output = Vec2;
 
     fn mul(self, k: i64) -> Vec2 {
-        Vec2 { x: self.x * k, y: self.y * k }
+        Vec2 {
+            x: self.x * k,
+            y: self.y * k,
+        }
     }
 }
 

@@ -29,7 +29,10 @@ pub struct Id<T> {
 
 impl<T> Id<T> {
     pub fn new(raw: u32) -> Self {
-        Id { raw, marker: PhantomData }
+        Id {
+            raw,
+            marker: PhantomData,
+        }
     }
 }
 
@@ -67,7 +70,15 @@ impl<T> fmt::Debug for Id<T> {
 
 /// `n` pixels: `p` moved 0, 1, ..., n - 1 to the right.
 pub fn trail(p: Pixel, n: i32) -> Vec<Pixel> {
-    (0..n).map(|i| Pixel { at: Point { x: p.at.x + i, y: p.at.y }, rgb: p.rgb }).collect()
+    (0..n)
+        .map(|i| Pixel {
+            at: Point {
+                x: p.at.x + i,
+                y: p.at.y,
+            },
+            rgb: p.rgb,
+        })
+        .collect()
 }
 
 /// The sprite, and a copy of it placed at `to`.

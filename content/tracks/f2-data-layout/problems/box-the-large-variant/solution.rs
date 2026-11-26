@@ -24,8 +24,16 @@ pub enum Event {
 impl Event {
     /// A packet event for `conn` carrying `payload`. Panics if `payload` is longer than `MTU`.
     pub fn packet(conn: u32, payload: &[u8]) -> Event {
-        assert!(payload.len() <= MTU, "payload of {} bytes is over the MTU", payload.len());
-        let mut packet = Box::new(Packet { conn, len: payload.len() as u16, data: [0; MTU] });
+        assert!(
+            payload.len() <= MTU,
+            "payload of {} bytes is over the MTU",
+            payload.len()
+        );
+        let mut packet = Box::new(Packet {
+            conn,
+            len: payload.len() as u16,
+            data: [0; MTU],
+        });
         packet.data[..payload.len()].copy_from_slice(payload);
         Event::Packet(packet)
     }

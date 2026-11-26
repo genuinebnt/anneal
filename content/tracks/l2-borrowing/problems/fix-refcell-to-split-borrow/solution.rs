@@ -6,7 +6,11 @@ pub struct Cart {
 
 impl Cart {
     pub fn new() -> Self {
-        Cart { items: Vec::new(), total: 0, log: Vec::new() }
+        Cart {
+            items: Vec::new(),
+            total: 0,
+            log: Vec::new(),
+        }
     }
 
     /// Logs "[<n>] <msg>".

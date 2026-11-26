@@ -7,7 +7,11 @@ pub struct Ring<T, const N: usize> {
 
 impl<T: Default, const N: usize> Ring<T, N> {
     pub fn new() -> Self {
-        Ring { items: [T::default(); N], start: 0, len: 0 }
+        Ring {
+            items: [T::default(); N],
+            start: 0,
+            len: 0,
+        }
     }
 }
 
@@ -38,7 +42,10 @@ impl<T, const N: usize> Ring<T, N> {
 }
 
 /// `a` followed by `b`.
-pub fn concat<T: Copy + Default, const A: usize, const B: usize>(a: [T; A], b: [T; B]) -> [T; A + B] {
+pub fn concat<T: Copy + Default, const A: usize, const B: usize>(
+    a: [T; A],
+    b: [T; B],
+) -> [T; A + B] {
     let mut out = [T::default(); A + B];
     out[..A].copy_from_slice(&a);
     out[A..].copy_from_slice(&b);

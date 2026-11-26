@@ -27,10 +27,17 @@ impl Hash for Word<'_> {
 pub fn top_words(text: &str, k: usize) -> Vec<(&str, usize)> {
     // word -> (count, index of its first appearance)
     let mut counts: HashMap<Word, (usize, usize)> = HashMap::new();
-    for (i, w) in text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).enumerate() {
+    for (i, w) in text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .enumerate()
+    {
         counts.entry(Word(w)).or_insert((0, i)).0 += 1;
     }
-    let mut top: Vec<(&str, usize, usize)> = counts.into_iter().map(|(w, (n, first))| (w.0, n, first)).collect();
+    let mut top: Vec<(&str, usize, usize)> = counts
+        .into_iter()
+        .map(|(w, (n, first))| (w.0, n, first))
+        .collect();
     top.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.2.cmp(&b.2)));
     top.into_iter().take(k).map(|(w, n, _)| (w, n)).collect()
 }

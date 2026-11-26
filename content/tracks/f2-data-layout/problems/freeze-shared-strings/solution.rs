@@ -26,7 +26,10 @@ pub struct Head {
 impl Head {
     /// Room for `series` series and `symbols` distinct strings, reserved up front.
     pub fn with_capacity(series: usize, symbols: usize) -> Head {
-        Head { symbols: HashSet::with_capacity(symbols), series: Vec::with_capacity(series) }
+        Head {
+            symbols: HashSet::with_capacity(symbols),
+            series: Vec::with_capacity(series),
+        }
     }
 
     /// The shared copy of `s`, made on first sight. `Arc<str>: Borrow<str>`, so the lookup takes a `&str`.
@@ -45,8 +48,15 @@ impl Head {
         let symbols = &mut self.symbols;
         let name = Head::intern(symbols, name);
         // A mapped slice iterator knows its length, so this collects straight into one allocation.
-        let labels: Labels = labels.iter().map(|&(k, v)| (Head::intern(symbols, k), Head::intern(symbols, v))).collect();
-        self.series.push(Series { name, labels, samples: Vec::new() });
+        let labels: Labels = labels
+            .iter()
+            .map(|&(k, v)| (Head::intern(symbols, k), Head::intern(symbols, v)))
+            .collect();
+        self.series.push(Series {
+            name,
+            labels,
+            samples: Vec::new(),
+        });
         id
     }
 
@@ -60,7 +70,10 @@ impl Head {
 
     pub fn label(&self, id: SeriesId, key: &str) -> Option<&str> {
         let labels = &self.series[id.0 as usize].labels;
-        labels.binary_search_by(|(k, _)| k[..].cmp(key)).ok().map(|i| &labels[i].1[..])
+        labels
+            .binary_search_by(|(k, _)| k[..].cmp(key))
+            .ok()
+            .map(|i| &labels[i].1[..])
     }
 
     pub fn samples(&self, id: SeriesId) -> &[(i64, f64)] {
@@ -74,7 +87,10 @@ impl Head {
 
     /// Every series with label `key` = `value`, in id order.
     pub fn select(&self, key: &str, value: &str) -> Vec<SeriesId> {
-        (0..self.series.len() as u32).map(SeriesId).filter(|&id| self.label(id, key) == Some(value)).collect()
+        (0..self.series.len() as u32)
+            .map(SeriesId)
+            .filter(|&id| self.label(id, key) == Some(value))
+            .collect()
     }
 
     /// How many distinct strings (metric names, label names and values) the head holds.

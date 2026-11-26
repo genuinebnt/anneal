@@ -22,9 +22,20 @@ pub struct Consumer<T> {
 
 pub fn channel<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
     assert!(capacity > 0, "capacity must be at least 1");
-    let buf: Box<[UnsafeCell<MaybeUninit<T>>]> = (0..capacity).map(|_| UnsafeCell::new(MaybeUninit::uninit())).collect();
-    let shared = Arc::new(Shared { buf, head: AtomicUsize::new(0), tail: AtomicUsize::new(0) });
-    (Producer { shared: shared.clone() }, Consumer { shared })
+    let buf: Box<[UnsafeCell<MaybeUninit<T>>]> = (0..capacity)
+        .map(|_| UnsafeCell::new(MaybeUninit::uninit()))
+        .collect();
+    let shared = Arc::new(Shared {
+        buf,
+        head: AtomicUsize::new(0),
+        tail: AtomicUsize::new(0),
+    });
+    (
+        Producer {
+            shared: shared.clone(),
+        },
+        Consumer { shared },
+    )
 }
 
 impl<T> Producer<T> {

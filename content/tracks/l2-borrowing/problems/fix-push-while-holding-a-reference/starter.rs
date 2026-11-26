@@ -6,7 +6,10 @@ pub struct Series {
 
 impl Series {
     pub fn new() -> Self {
-        Series { points: Vec::new(), labels: Vec::new() }
+        Series {
+            points: Vec::new(),
+            labels: Vec::new(),
+        }
     }
 
     /// Records `x`, reported by `label`. Returns the label of the record holder after this point (the `String`

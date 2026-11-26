@@ -51,7 +51,12 @@ pub struct Receiver<T> {
 pub fn channel<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
     assert!(cap > 0, "capacity must be at least 1");
     let chan = Arc::new(Chan {
-        state: Mutex::new(State { queue: VecDeque::new(), cap, senders: 1, receivers: 1 }),
+        state: Mutex::new(State {
+            queue: VecDeque::new(),
+            cap,
+            senders: 1,
+            receivers: 1,
+        }),
         not_empty: Condvar::new(),
         not_full: Condvar::new(),
     });
@@ -111,7 +116,11 @@ impl<T> Receiver<T> {
             self.chan.not_full.notify_one();
             return Ok(v);
         }
-        if s.senders == 0 { Err(TryRecvError::Disconnected) } else { Err(TryRecvError::Empty) }
+        if s.senders == 0 {
+            Err(TryRecvError::Disconnected)
+        } else {
+            Err(TryRecvError::Empty)
+        }
     }
 
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
@@ -129,7 +138,12 @@ impl<T> Receiver<T> {
             if now >= deadline {
                 return Err(RecvTimeoutError::Timeout);
             }
-            s = self.chan.not_empty.wait_timeout(s, deadline - now).unwrap().0;
+            s = self
+                .chan
+                .not_empty
+                .wait_timeout(s, deadline - now)
+                .unwrap()
+                .0;
         }
     }
 }
@@ -144,14 +158,18 @@ impl<T> Iterator for Receiver<T> {
 impl<T> Clone for Sender<T> {
     fn clone(&self) -> Self {
         self.chan.state.lock().unwrap().senders += 1;
-        Sender { chan: self.chan.clone() }
+        Sender {
+            chan: self.chan.clone(),
+        }
     }
 }
 
 impl<T> Clone for Receiver<T> {
     fn clone(&self) -> Self {
         self.chan.state.lock().unwrap().receivers += 1;
-        Receiver { chan: self.chan.clone() }
+        Receiver {
+            chan: self.chan.clone(),
+        }
     }
 }
 

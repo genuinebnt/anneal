@@ -8,7 +8,11 @@ pub struct Outbox {
 impl Outbox {
     /// An empty outbox with no limit.
     pub fn new() -> Self {
-        Outbox { msgs: Vec::new(), limit: usize::MAX, used: 0 }
+        Outbox {
+            msgs: Vec::new(),
+            limit: usize::MAX,
+            used: 0,
+        }
     }
 
     /// Builder: the same outbox, limited to `bytes` bytes of messages in total.

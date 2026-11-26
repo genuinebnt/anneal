@@ -31,7 +31,14 @@ pub fn transform(a: &Op, b: &Op) -> (Op, Op) {
     use Op::*;
     match (a, b) {
         (Nop, _) | (_, Nop) => (a.clone(), b.clone()),
-        (Insert { pos: pa, site: sa, .. }, Insert { pos: pb, site: sb, .. }) => {
+        (
+            Insert {
+                pos: pa, site: sa, ..
+            },
+            Insert {
+                pos: pb, site: sb, ..
+            },
+        ) => {
             if pa < pb || (pa == pb && sa < sb) {
                 // a lands to the left of b: b shifts right
                 (a.clone(), shift_insert(b, 1))
@@ -64,14 +71,22 @@ pub fn transform(a: &Op, b: &Op) -> (Op, Op) {
 
 fn shift_insert(op: &Op, by: usize) -> Op {
     match op {
-        Op::Insert { pos, ch, site } => Op::Insert { pos: pos + by, ch: *ch, site: *site },
+        Op::Insert { pos, ch, site } => Op::Insert {
+            pos: pos + by,
+            ch: *ch,
+            site: *site,
+        },
         other => other.clone(),
     }
 }
 
 fn shift_back(op: &Op) -> Op {
     match op {
-        Op::Insert { pos, ch, site } => Op::Insert { pos: pos - 1, ch: *ch, site: *site },
+        Op::Insert { pos, ch, site } => Op::Insert {
+            pos: pos - 1,
+            ch: *ch,
+            site: *site,
+        },
         other => other.clone(),
     }
 }

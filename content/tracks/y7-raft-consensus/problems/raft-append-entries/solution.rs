@@ -36,7 +36,11 @@ pub struct Node {
 impl Node {
     pub fn handle_append(&mut self, req: &AppendRequest) -> AppendReply {
         if req.term < self.term {
-            return AppendReply { term: self.term, success: false, match_index: 0 };
+            return AppendReply {
+                term: self.term,
+                success: false,
+                match_index: 0,
+            };
         }
         if req.term > self.term {
             self.term = req.term;
@@ -46,7 +50,13 @@ impl Node {
         if p > 0 {
             match self.log.get(p as usize - 1) {
                 Some(e) if e.term == req.prev_log_term => {}
-                _ => return AppendReply { term: self.term, success: false, match_index: 0 },
+                _ => {
+                    return AppendReply {
+                        term: self.term,
+                        success: false,
+                        match_index: 0,
+                    }
+                }
             }
         }
         for (k, e) in req.entries.iter().enumerate() {
@@ -65,6 +75,10 @@ impl Node {
         if req.leader_commit > self.commit_index {
             self.commit_index = self.commit_index.max(req.leader_commit.min(last_new));
         }
-        AppendReply { term: self.term, success: true, match_index: last_new }
+        AppendReply {
+            term: self.term,
+            success: true,
+            match_index: last_new,
+        }
     }
 }

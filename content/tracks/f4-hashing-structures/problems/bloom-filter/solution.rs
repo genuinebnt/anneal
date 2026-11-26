@@ -14,9 +14,16 @@ impl Bloom {
     /// m = ceil(-n ln p / (ln 2)^2) bits, k = round(m / n * ln 2) hashes (at least 1).
     pub fn new(expected: usize, fp: f64) -> Self {
         let n = expected.max(1) as f64;
-        let m = (-(n * fp.ln()) / std::f64::consts::LN_2.powi(2)).ceil().max(1.0) as usize;
+        let m = (-(n * fp.ln()) / std::f64::consts::LN_2.powi(2))
+            .ceil()
+            .max(1.0) as usize;
         let k = ((m as f64 / n) * std::f64::consts::LN_2).round().max(1.0) as u32;
-        Bloom { bits: vec![0; m.div_ceil(64)], m, k, inserted: 0 }
+        Bloom {
+            bits: vec![0; m.div_ceil(64)],
+            m,
+            k,
+            inserted: 0,
+        }
     }
 
     /// Two independent-enough 64-bit hashes from one `Hash` run; the k indices are `h1 + i * h2` (double hashing).

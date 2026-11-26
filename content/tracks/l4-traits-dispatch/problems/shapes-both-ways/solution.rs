@@ -66,5 +66,7 @@ pub fn total_area_dyn(shapes: &[&dyn Shape]) -> f64 {
 
 /// The shape with the largest area; the first of them on a tie.
 pub fn largest<T: Shape>(shapes: &[T]) -> Option<&T> {
-    shapes.iter().reduce(|best, s| if s.area() > best.area() { s } else { best })
+    shapes
+        .iter()
+        .reduce(|best, s| if s.area() > best.area() { s } else { best })
 }

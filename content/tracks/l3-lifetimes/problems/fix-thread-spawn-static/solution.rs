@@ -4,8 +4,14 @@ use std::thread::{self, JoinHandle};
 pub fn parallel_sum(data: &[u64], chunks: usize) -> u64 {
     let size = data.len().div_ceil(chunks.max(1)).max(1);
     thread::scope(|s| {
-        let handles: Vec<_> = data.chunks(size).map(|chunk| s.spawn(move || chunk.iter().sum::<u64>())).collect();
-        handles.into_iter().map(|h| h.join().expect("worker panicked")).sum()
+        let handles: Vec<_> = data
+            .chunks(size)
+            .map(|chunk| s.spawn(move || chunk.iter().sum::<u64>()))
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("worker panicked"))
+            .sum()
     })
 }
 
@@ -22,5 +28,8 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    thread::Builder::new().name(name.to_string()).spawn(job).expect("spawning a thread")
+    thread::Builder::new()
+        .name(name.to_string())
+        .spawn(job)
+        .expect("spawning a thread")
 }

@@ -1,6 +1,11 @@
 /// The longest prefix of `s` that fits in `max` bytes without splitting a character.
 fn truncate(s: &str, max: usize) -> &str {
-    let end = s.char_indices().map(|(i, c)| i + c.len_utf8()).take_while(|&e| e <= max).last().unwrap_or(0);
+    let end = s
+        .char_indices()
+        .map(|(i, c)| i + c.len_utf8())
+        .take_while(|&e| e <= max)
+        .last()
+        .unwrap_or(0);
     &s[..end]
 }
 
@@ -51,13 +56,23 @@ pub struct ProcArray {
 
 impl ProcArray {
     pub fn new(max_backends: usize) -> ProcArray {
-        ProcArray { hot: vec![Hot::default(); max_backends], cold: vec![EMPTY; max_backends] }
+        ProcArray {
+            hot: vec![Hot::default(); max_backends],
+            cold: vec![EMPTY; max_backends],
+        }
     }
 
     /// A backend attaches to a free `slot`. `application` is cut to 64 bytes.
     pub fn connect(&mut self, slot: usize, pid: u32, database: u32, application: &str, now: u64) {
         let app = truncate(application, 64);
-        let mut c = Cold { connected: true, pid, database, backend_start: now, app_len: app.len() as u8, ..EMPTY };
+        let mut c = Cold {
+            connected: true,
+            pid,
+            database,
+            backend_start: now,
+            app_len: app.len() as u8,
+            ..EMPTY
+        };
         c.application_name[..app.len()].copy_from_slice(app.as_bytes());
         self.cold[slot] = c;
         self.hot[slot] = Hot::default();
@@ -101,12 +116,14 @@ impl ProcArray {
 
     pub fn application(&self, slot: usize) -> Option<&str> {
         let c = &self.cold[slot];
-        c.connected.then(|| std::str::from_utf8(&c.application_name[..c.app_len as usize]).unwrap())
+        c.connected
+            .then(|| std::str::from_utf8(&c.application_name[..c.app_len as usize]).unwrap())
     }
 
     pub fn query(&self, slot: usize) -> Option<&str> {
         let c = &self.cold[slot];
-        c.connected.then(|| std::str::from_utf8(&c.query[..c.query_len as usize]).unwrap())
+        c.connected
+            .then(|| std::str::from_utf8(&c.query[..c.query_len as usize]).unwrap())
     }
 
     /// When the backend's running transaction started, if it has one.
@@ -124,7 +141,9 @@ impl ProcArray {
     pub fn oldest_xmin(&self, next_xid: u32) -> u32 {
         // Disconnected and idle slots hold 0, which maps to u32::MAX: no branch on the cold `connected` flag.
         let none = |x: u32| if x == 0 { u32::MAX } else { x };
-        self.hot.iter().fold(next_xid, |oldest, h| oldest.min(none(h.xid)).min(none(h.xmin)))
+        self.hot.iter().fold(next_xid, |oldest, h| {
+            oldest.min(none(h.xid)).min(none(h.xmin))
+        })
     }
 
     /// GetSnapshotData: clears `xip` and fills it with the running xids in ascending order; returns the

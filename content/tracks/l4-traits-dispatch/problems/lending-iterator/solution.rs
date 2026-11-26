@@ -18,7 +18,11 @@ pub struct WindowsMut<'s, T> {
 /// Panics if `size` is 0.
 pub fn windows_mut<T>(slice: &mut [T], size: usize) -> WindowsMut<'_, T> {
     assert!(size > 0, "window size 0");
-    WindowsMut { slice, size, start: 0 }
+    WindowsMut {
+        slice,
+        size,
+        start: 0,
+    }
 }
 
 impl<'s, T> LendingIterator for WindowsMut<'s, T> {
@@ -45,7 +49,10 @@ pub struct UpperLines<'s> {
 }
 
 pub fn upper_lines(text: &str) -> UpperLines<'_> {
-    UpperLines { lines: text.lines(), buf: String::new() }
+    UpperLines {
+        lines: text.lines(),
+        buf: String::new(),
+    }
 }
 
 impl<'s> LendingIterator for UpperLines<'s> {

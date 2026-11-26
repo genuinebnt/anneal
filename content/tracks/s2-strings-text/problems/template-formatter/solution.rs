@@ -19,7 +19,9 @@ pub fn render(template: &str, vars: &HashMap<&str, &str>) -> Result<String, Temp
                 }
                 let close = i + template[i..].find('}').ok_or(TemplateError::Unclosed(i))?;
                 let name = &template[i + 1..close];
-                let value = vars.get(name).ok_or_else(|| TemplateError::Unknown(name.to_string()))?;
+                let value = vars
+                    .get(name)
+                    .ok_or_else(|| TemplateError::Unknown(name.to_string()))?;
                 out.push_str(value);
                 while chars.next_if(|&(j, _)| j <= close).is_some() {}
             }

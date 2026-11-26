@@ -29,7 +29,10 @@ impl<'a> Round<'a> {
         self.players[from].score -= moved;
         self.players[to].score += moved;
         let (a, b) = (&self.players[from], &self.players[to]);
-        record(&mut *self.log, &format!("{} -> {}: {moved}", a.name, b.name));
+        record(
+            &mut *self.log,
+            &format!("{} -> {}: {moved}", a.name, b.name),
+        );
         moved
     }
 

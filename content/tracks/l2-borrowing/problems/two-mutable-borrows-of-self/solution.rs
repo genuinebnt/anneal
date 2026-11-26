@@ -21,8 +21,17 @@ impl Inventory {
     }
 
     pub fn new(stock: &[(&str, u32)]) -> Self {
-        let items = stock.iter().map(|&(name, qty)| Item { name: name.to_string(), qty }).collect();
-        Inventory { items, log: Vec::new() }
+        let items = stock
+            .iter()
+            .map(|&(name, qty)| Item {
+                name: name.to_string(),
+                qty,
+            })
+            .collect();
+        Inventory {
+            items,
+            log: Vec::new(),
+        }
     }
 
     pub fn qty(&self, name: &str) -> Option<u32> {

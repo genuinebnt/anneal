@@ -13,7 +13,12 @@ pub struct Editor {
 
 impl Editor {
     pub fn new(text: &str) -> Self {
-        Editor { text: String::from(text), clipboard: String::new(), macros: Vec::new(), log: Vec::new() }
+        Editor {
+            text: String::from(text),
+            clipboard: String::new(),
+            macros: Vec::new(),
+            log: Vec::new(),
+        }
     }
 
     pub fn log(&self) -> &[String] {

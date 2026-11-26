@@ -17,7 +17,9 @@ impl BitSet {
 
     /// Room for indices below `bits` without reallocating. The set stays empty.
     pub fn with_capacity(bits: usize) -> Self {
-        BitSet { words: Vec::with_capacity(bits.div_ceil(64)) }
+        BitSet {
+            words: Vec::with_capacity(bits.div_ceil(64)),
+        }
     }
 
     /// True if `i` was not in the set yet.
@@ -45,7 +47,9 @@ impl BitSet {
     }
 
     pub fn contains(&self, i: usize) -> bool {
-        self.words.get(i / 64).is_some_and(|w| w >> (i % 64) & 1 == 1)
+        self.words
+            .get(i / 64)
+            .is_some_and(|w| w >> (i % 64) & 1 == 1)
     }
 
     pub fn len(&self) -> usize {
@@ -58,7 +62,11 @@ impl BitSet {
 
     /// Ascending.
     pub fn iter(&self) -> Iter<'_> {
-        Iter { words: &self.words, word: 0, current: self.words.first().copied().unwrap_or(0) }
+        Iter {
+            words: &self.words,
+            word: 0,
+            current: self.words.first().copied().unwrap_or(0),
+        }
     }
 
     /// The smallest member that is `>= from`.
@@ -117,7 +125,9 @@ impl Iterator for Iter<'_> {
 impl PartialEq for BitSet {
     fn eq(&self, other: &Self) -> bool {
         let n = self.words.len().max(other.words.len());
-        (0..n).all(|i| self.words.get(i).copied().unwrap_or(0) == other.words.get(i).copied().unwrap_or(0))
+        (0..n).all(|i| {
+            self.words.get(i).copied().unwrap_or(0) == other.words.get(i).copied().unwrap_or(0)
+        })
     }
 }
 

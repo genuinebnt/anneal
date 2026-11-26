@@ -52,7 +52,10 @@ impl ChainMap {
     /// `buckets` is a power of two.
     pub fn with_buckets(buckets: usize) -> ChainMap {
         assert!(buckets.is_power_of_two());
-        ChainMap { heads: vec![None; buckets], entries: Vec::new() }
+        ChainMap {
+            heads: vec![None; buckets],
+            entries: Vec::new(),
+        }
     }
 
     fn bucket(&self, key: u32) -> usize {
@@ -86,7 +89,11 @@ impl ChainMap {
         }
         let b = self.bucket(key);
         let at = Idx::new(self.entries.len());
-        self.entries.push(Entry { key, value, next: self.heads[b] });
+        self.entries.push(Entry {
+            key,
+            value,
+            next: self.heads[b],
+        });
         self.heads[b] = Some(at);
         None
     }

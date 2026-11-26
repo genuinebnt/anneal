@@ -27,7 +27,12 @@ pub struct RequestBuilder<S> {
 impl RequestBuilder<NoUrl> {
     /// No URL, no headers, a 30 000 ms timeout.
     pub fn new() -> Self {
-        RequestBuilder { url: String::new(), headers: Vec::new(), timeout_ms: 30_000, state: PhantomData }
+        RequestBuilder {
+            url: String::new(),
+            headers: Vec::new(),
+            timeout_ms: 30_000,
+            state: PhantomData,
+        }
     }
 
     /// The only way to get a builder that can `build`.
@@ -40,7 +45,12 @@ impl RequestBuilder<NoUrl> {
             return Err(UrlError::NoScheme);
         }
         // A different type parameter means a new value: move each field across.
-        Ok(RequestBuilder { url: url.to_string(), headers: self.headers, timeout_ms: self.timeout_ms, state: PhantomData })
+        Ok(RequestBuilder {
+            url: url.to_string(),
+            headers: self.headers,
+            timeout_ms: self.timeout_ms,
+            state: PhantomData,
+        })
     }
 }
 
@@ -58,6 +68,10 @@ impl<S> RequestBuilder<S> {
 
 impl RequestBuilder<HasUrl> {
     pub fn build(self) -> Request {
-        Request { url: self.url, headers: self.headers, timeout_ms: self.timeout_ms }
+        Request {
+            url: self.url,
+            headers: self.headers,
+            timeout_ms: self.timeout_ms,
+        }
     }
 }

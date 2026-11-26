@@ -6,7 +6,11 @@ pub struct Registry {
 
 impl Registry {
     pub fn new(names: &[&str]) -> Self {
-        let ids = names.iter().enumerate().map(|(i, n)| (String::from(*n), i as u32)).collect();
+        let ids = names
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (String::from(*n), i as u32))
+            .collect();
         Registry { ids }
     }
 

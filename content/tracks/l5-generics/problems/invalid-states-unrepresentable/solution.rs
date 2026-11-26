@@ -11,7 +11,10 @@ pub struct Empty;
 
 impl<T> NonEmpty<T> {
     pub fn new(head: T) -> Self {
-        NonEmpty { head, tail: Vec::new() }
+        NonEmpty {
+            head,
+            tail: Vec::new(),
+        }
     }
 
     pub fn push(&mut self, x: T) {
@@ -36,7 +39,11 @@ impl<T> NonEmpty<T> {
     }
 
     pub fn get(&self, i: usize) -> Option<&T> {
-        if i == 0 { Some(&self.head) } else { self.tail.get(i - 1) }
+        if i == 0 {
+            Some(&self.head)
+        } else {
+            self.tail.get(i - 1)
+        }
     }
 
     pub fn split_first(&self) -> (&T, &[T]) {
@@ -49,7 +56,10 @@ impl<T> NonEmpty<T> {
 
     pub fn map<U>(self, mut f: impl FnMut(T) -> U) -> NonEmpty<U> {
         let head = f(self.head);
-        NonEmpty { head, tail: self.tail.into_iter().map(f).collect() }
+        NonEmpty {
+            head,
+            tail: self.tail.into_iter().map(f).collect(),
+        }
     }
 
     /// The largest item; the first of equal largest ones. No Option: there's always one.
@@ -57,7 +67,8 @@ impl<T> NonEmpty<T> {
     where
         T: Ord,
     {
-        self.iter().fold(&self.head, |best, x| if x > best { x } else { best })
+        self.iter()
+            .fold(&self.head, |best, x| if x > best { x } else { best })
     }
 
     pub fn sort(&mut self)
@@ -95,7 +106,10 @@ impl<T> TryFrom<Vec<T>> for NonEmpty<T> {
     fn try_from(v: Vec<T>) -> Result<Self, Empty> {
         let mut items = v.into_iter();
         match items.next() {
-            Some(head) => Ok(NonEmpty { head, tail: items.collect() }),
+            Some(head) => Ok(NonEmpty {
+                head,
+                tail: items.collect(),
+            }),
             None => Err(Empty),
         }
     }

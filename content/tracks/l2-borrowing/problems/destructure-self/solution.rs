@@ -18,7 +18,10 @@ impl Worker {
             return false;
         }
         self.log.push(format!("start {job}"));
-        self.state = State::Busy { job: job.to_string(), tries: 0 };
+        self.state = State::Busy {
+            job: job.to_string(),
+            tries: 0,
+        };
         true
     }
 
@@ -26,8 +29,14 @@ impl Worker {
     /// back to Idle, logging "give up <job>" instead, and `None`. Otherwise returns the new tries count.
     /// Not busy: no change, `None`.
     pub fn retry(&mut self) -> Option<u32> {
-        let Worker { state, log, max_tries } = self;
-        let State::Busy { job, tries } = state else { return None };
+        let Worker {
+            state,
+            log,
+            max_tries,
+        } = self;
+        let State::Busy { job, tries } = state else {
+            return None;
+        };
         *tries += 1;
         if *tries < *max_tries {
             log.push(format!("retry {job} #{tries}"));

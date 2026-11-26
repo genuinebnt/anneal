@@ -12,7 +12,10 @@ where
 
     /// The mean, or None if empty.
     pub fn mean(&self) -> Option<f64> {
-        let (sum, n) = self.data.into_iter().fold((0u64, 0u64), |(s, n), &x| (s + u64::from(x), n + 1));
+        let (sum, n) = self
+            .data
+            .into_iter()
+            .fold((0u64, 0u64), |(s, n), &x| (s + u64::from(x), n + 1));
         (n > 0).then(|| sum as f64 / n as f64)
     }
 

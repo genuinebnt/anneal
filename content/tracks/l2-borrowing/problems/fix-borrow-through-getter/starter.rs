@@ -12,7 +12,11 @@ pub mod shop {
 
     impl Shop {
         pub fn new(items: Vec<Item>, discount: u32) -> Self {
-            Shop { items, log: Vec::new(), discount }
+            Shop {
+                items,
+                log: Vec::new(),
+                discount,
+            }
         }
 
         pub fn items(&self) -> &[Item] {
@@ -42,7 +46,8 @@ pub mod shop {
             for it in self.items_mut() {
                 if it.price >= min {
                     let new = it.price - it.price * self.discount() / 100;
-                    self.log_mut().push(format!("{}: {} -> {new}", it.name, it.price));
+                    self.log_mut()
+                        .push(format!("{}: {} -> {new}", it.name, it.price));
                     if new != it.price {
                         n += 1;
                     }

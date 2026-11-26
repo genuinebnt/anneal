@@ -6,7 +6,11 @@ pub trait IterExt: Iterator + Sized {
     /// Items 0, n, 2n, ... Panics if `n` is 0.
     fn every_nth(self, n: usize) -> EveryNth<Self> {
         assert!(n > 0, "every_nth(0)");
-        EveryNth { iter: self, n, first: true }
+        EveryNth {
+            iter: self,
+            n,
+            first: true,
+        }
     }
 
     /// Drops each item equal to the item just before it.
@@ -14,7 +18,10 @@ pub trait IterExt: Iterator + Sized {
     where
         Self::Item: PartialEq + Clone,
     {
-        DedupAdjacent { iter: self, last: None }
+        DedupAdjacent {
+            iter: self,
+            last: None,
+        }
     }
 
     /// How many times each item occurs.
@@ -53,7 +60,13 @@ impl<I: Iterator> Iterator for EveryNth<I> {
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         let (lo, hi) = self.iter.size_hint();
-        let f = |x: usize| if self.first { x.div_ceil(self.n) } else { x / self.n };
+        let f = |x: usize| {
+            if self.first {
+                x.div_ceil(self.n)
+            } else {
+                x / self.n
+            }
+        };
         (f(lo), hi.map(f))
     }
 }

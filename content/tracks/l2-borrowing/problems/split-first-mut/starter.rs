@@ -3,7 +3,9 @@
 pub fn qualify(names: &mut [String]) {
     for i in 1..names.len() {
         let ns = &names[0];
-        let done = names[i].strip_prefix(ns.as_str()).is_some_and(|rest| rest.starts_with("::"));
+        let done = names[i]
+            .strip_prefix(ns.as_str())
+            .is_some_and(|rest| rest.starts_with("::"));
         if !done {
             names[i].insert_str(0, "::");
             names[i].insert_str(0, ns);

@@ -13,7 +13,14 @@ pub struct Reassembler {
 
 impl Reassembler {
     pub fn new(isn: u32, window: usize) -> Self {
-        Reassembler { isn, window, next: 0, pending: BTreeMap::new(), ready: Vec::new(), fin_at: None }
+        Reassembler {
+            isn,
+            window,
+            next: 0,
+            pending: BTreeMap::new(),
+            ready: Vec::new(),
+            fin_at: None,
+        }
     }
 
     /// The 64-bit stream offset whose low 32 bits match `seq` and which is closest to `next`.
@@ -43,7 +50,10 @@ impl Reassembler {
         let start = offset.max(self.next);
         let end = end.min(limit);
         if start < end {
-            self.store(start, &data[(start - offset) as usize..(end - offset) as usize]);
+            self.store(
+                start,
+                &data[(start - offset) as usize..(end - offset) as usize],
+            );
         }
         // Hand over everything that is now contiguous.
         while let Some(entry) = self.pending.first_entry() {
@@ -67,7 +77,10 @@ impl Reassembler {
                 continue;
             }
             if s > cursor {
-                new_chunks.push((cursor, data[(cursor - start) as usize..(s - start) as usize].to_vec()));
+                new_chunks.push((
+                    cursor,
+                    data[(cursor - start) as usize..(s - start) as usize].to_vec(),
+                ));
             }
             cursor = cursor.max(e);
         }

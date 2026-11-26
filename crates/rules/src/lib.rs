@@ -5,6 +5,9 @@
 //! `T::clone(&x)`; a forbidden type is caught anywhere its name appears in a path.
 //! Code that doesn't parse skips the AST checks, since the compiler will report it.
 
+use std::io::Write;
+use std::process::{Command, Stdio};
+
 use anneal_content::Rules;
 use serde::{Deserialize, Serialize};
 use syn::spanned::Spanned;
@@ -34,7 +37,7 @@ pub fn check(code: &str, starter: &str, rules: &Rules) -> Vec<Violation> {
         out.extend(v.found);
     }
     if let Some(max) = rules.max_changed_lines {
-        let changed = changed_lines(starter, code);
+        let changed = counted_lines(starter, code, max as usize);
         if changed > max as usize {
             out.push(Violation {
                 rule: "lines".into(),
@@ -157,6 +160,40 @@ impl<'ast> Visit<'ast> for Finder<'_> {
     }
 }
 
+/// The count the line limit judges. Formatting the editor does must not decide whether a fix passes, so when the plain
+/// count is over `max`, both versions are laid out again with long lines allowed and counted that way; the lower count
+/// wins. So nothing that passes the plain count can fail. Code rustfmt can't read keeps the plain count.
+fn counted_lines(starter: &str, code: &str, max: usize) -> usize {
+    let plain = changed_lines(starter, code);
+    if plain <= max {
+        return plain;
+    }
+    match (unwrapped(starter), unwrapped(code)) {
+        (Some(a), Some(b)) => plain.min(changed_lines(&a, &b)),
+        _ => plain,
+    }
+}
+
+/// `source` as rustfmt writes it when it never has to wrap a line to fit. `None` if rustfmt is missing or rejects it.
+fn unwrapped(source: &str) -> Option<String> {
+    let binary = std::env::var("ANNEAL_RUSTFMT").unwrap_or_else(|_| "rustfmt".into());
+    let mut child = Command::new(binary)
+        .args(["--edition", "2021", "--emit", "stdout", "--quiet"])
+        .args(["--config", "max_width=1000,use_small_heuristics=Max"])
+        // away from any rustfmt.toml of the directory the server happens to run in
+        .current_dir(std::env::temp_dir())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    // rustfmt reads all of its input before it writes; dropping the handle ends the input.
+    child.stdin.take()?.write_all(source.as_bytes()).ok()?;
+    let out = child.wait_with_output().ok()?;
+    let text = String::from_utf8(out.stdout).ok()?;
+    (out.status.success() && !text.is_empty()).then_some(text)
+}
+
 /// Lines changed between two versions: a line edited in place counts once.
 /// Whitespace at line ends and blank lines are ignored.
 pub fn changed_lines(before: &str, after: &str) -> usize {
@@ -260,6 +297,22 @@ mod tests {
             v.last().map(|v| v.message.as_str()),
             Some("3 lines changed; the limit is 2")
         );
+    }
+
+    /// The case that was reported: a long call the editor wrapped must not use up the line limit.
+    #[test]
+    fn wrapping_a_long_line_does_not_count() {
+        let starter = "fn f(a: u32) -> String {\n    let name = a;\n    format!(\"{name}: {} items ({} long), longest {}\", a + 1, a + 2, a + 3)\n}\n";
+        let wrapped = "fn f(a: u32) -> String {\n    let name = a;\n    format!(\n        \"{name}: {} items ({} long), longest {}\",\n        a + 1,\n        a + 2,\n        a + 4\n    )\n}\n";
+        assert!(changed_lines(starter, wrapped) > 2);
+        assert_eq!(check(wrapped, starter, &rules()), vec![]);
+    }
+
+    #[test]
+    fn real_changes_still_count_when_wrapped_or_not() {
+        let many = STARTER.replace("let a = 1;", "let a = 10;\n    let c = 3;\n    let d = 4;");
+        let found = check(&many, STARTER, &rules());
+        assert_eq!(found.last().map(|v| v.rule.as_str()), Some("lines"));
     }
 
     #[test]

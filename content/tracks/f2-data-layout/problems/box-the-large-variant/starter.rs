@@ -7,18 +7,33 @@ pub const MTU: usize = 1500;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     Tick(u64),
-    Ack { conn: u32, seq: u32 },
+    Ack {
+        conn: u32,
+        seq: u32,
+    },
     Close(u32),
-    Packet { conn: u32, len: u16, data: [u8; MTU] },
+    Packet {
+        conn: u32,
+        len: u16,
+        data: [u8; MTU],
+    },
 }
 
 impl Event {
     /// A packet event for `conn` carrying `payload`. Panics if `payload` is longer than `MTU`.
     pub fn packet(conn: u32, payload: &[u8]) -> Event {
-        assert!(payload.len() <= MTU, "payload of {} bytes is over the MTU", payload.len());
+        assert!(
+            payload.len() <= MTU,
+            "payload of {} bytes is over the MTU",
+            payload.len()
+        );
         let mut data = [0; MTU];
         data[..payload.len()].copy_from_slice(payload);
-        Event::Packet { conn, len: payload.len() as u16, data }
+        Event::Packet {
+            conn,
+            len: payload.len() as u16,
+            data,
+        }
     }
 
     /// The connection an event is about, if any.

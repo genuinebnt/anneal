@@ -26,7 +26,8 @@ impl<'a> Iterator for Tokenizer<'a> {
         let s = self.rest.trim_start();
         let c = s.chars().next()?;
         let len = if is_ident_start(c) {
-            s.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(s.len())
+            s.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(s.len())
         } else if c.is_ascii_digit() {
             s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len())
         } else {

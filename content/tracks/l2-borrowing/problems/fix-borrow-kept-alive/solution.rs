@@ -6,7 +6,10 @@ pub struct Batch<'a> {
 
 impl<'a> Batch<'a> {
     pub fn new(out: &'a mut Vec<String>) -> Self {
-        Batch { out, buf: Vec::new() }
+        Batch {
+            out,
+            buf: Vec::new(),
+        }
     }
 
     pub fn line(&mut self, s: String) {
@@ -39,7 +42,11 @@ pub fn render(out: &mut Vec<String>, items: &[&str]) -> usize {
         }
     }
     let mut batch = Batch::new(out);
-    batch.line(format!("{} items, longest: {}", items.len(), longest.unwrap_or("-")));
+    batch.line(format!(
+        "{} items, longest: {}",
+        items.len(),
+        longest.unwrap_or("-")
+    ));
     drop(batch);
     out.len()
 }

@@ -19,7 +19,10 @@ impl Pipeline {
 
 /// Every line of `text`, trimmed, skipping blank ones.
 pub fn trimmed_lines(text: &str) -> Vec<&str> {
-    text.lines().map(str::trim).filter(|l| !l.is_empty()).collect()
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect()
 }
 
 /// The first comma-separated field of every line.

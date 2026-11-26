@@ -24,14 +24,20 @@ impl<T, const R: usize, const C: usize> Matrix<T, R, C> {
     /// Moves every element; needs nothing from T.
     pub fn transpose(self) -> Matrix<T, C, R> {
         let mut rows = self.rows.map(|row| row.into_iter());
-        Matrix { rows: std::array::from_fn(|_| std::array::from_fn(|r| rows[r].next().unwrap())) }
+        Matrix {
+            rows: std::array::from_fn(|_| std::array::from_fn(|r| rows[r].next().unwrap())),
+        }
     }
 }
 
 /// Only square matrices have an identity.
 impl<T: Clone + Default, const N: usize> Matrix<T, N, N> {
     pub fn identity(one: T) -> Self {
-        Matrix { rows: std::array::from_fn(|r| std::array::from_fn(|c| if r == c { one.clone() } else { T::default() })) }
+        Matrix {
+            rows: std::array::from_fn(|r| {
+                std::array::from_fn(|c| if r == c { one.clone() } else { T::default() })
+            }),
+        }
     }
 }
 

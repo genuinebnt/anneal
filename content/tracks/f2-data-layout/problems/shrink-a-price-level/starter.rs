@@ -82,7 +82,13 @@ impl Book {
 
     /// Room for `orders` resting orders, reserved up front.
     pub fn with_capacity(symbol: &str, orders: usize) -> Book {
-        Book { symbol: symbol.to_string(), bids: BTreeMap::new(), asks: BTreeMap::new(), orders: HashMap::with_capacity(orders), next_id: 0 }
+        Book {
+            symbol: symbol.to_string(),
+            bids: BTreeMap::new(),
+            asks: BTreeMap::new(),
+            orders: HashMap::with_capacity(orders),
+            next_id: 0,
+        }
     }
 
     pub fn symbol(&self) -> &str {
@@ -134,7 +140,9 @@ impl Book {
             Side::Bid => &mut self.bids,
             Side::Ask => &mut self.asks,
         };
-        let level = levels.get_mut(&o.price).expect("a resting order's level exists");
+        let level = levels
+            .get_mut(&o.price)
+            .expect("a resting order's level exists");
         level.orders.retain(|&x| x != id);
         level.total_qty -= o.qty;
         level.last_update = Some(ts);
@@ -161,7 +169,12 @@ impl Book {
 
     /// The orders resting at a price, oldest first, with their remaining quantity.
     pub fn orders_at(&self, side: Side, price: u32) -> Vec<(OrderId, u64)> {
-        self.level(side, price).map_or(Vec::new(), |l| l.orders.iter().map(|id| (*id, self.orders[id].qty)).collect())
+        self.level(side, price).map_or(Vec::new(), |l| {
+            l.orders
+                .iter()
+                .map(|id| (*id, self.orders[id].qty))
+                .collect()
+        })
     }
 
     /// A market order: takes from the other side, best price first and oldest order first, until `qty`
@@ -192,7 +205,11 @@ impl Book {
                 o.qty -= take;
                 left -= take;
                 level.total_qty -= take;
-                fills.push(Fill { maker: id, price, qty: take });
+                fills.push(Fill {
+                    maker: id,
+                    price,
+                    qty: take,
+                });
                 if o.qty == 0 {
                     level.orders.pop_front();
                     self.orders.remove(&id);

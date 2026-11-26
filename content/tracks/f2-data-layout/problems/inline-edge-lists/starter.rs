@@ -22,7 +22,9 @@ impl Cfg {
     }
 
     pub fn with_capacity(blocks: usize) -> Cfg {
-        Cfg { blocks: Vec::with_capacity(blocks) }
+        Cfg {
+            blocks: Vec::with_capacity(blocks),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -35,7 +37,11 @@ impl Cfg {
 
     pub fn add_block(&mut self, stmts: u32) -> BlockId {
         let id = BlockId(self.blocks.len() as u32);
-        self.blocks.push(Block { stmts, succs: Edges::new(), preds: Edges::new() });
+        self.blocks.push(Block {
+            stmts,
+            succs: Edges::new(),
+            preds: Edges::new(),
+        });
         id
     }
 

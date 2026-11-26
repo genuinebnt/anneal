@@ -12,12 +12,19 @@ pub struct Index {
 }
 
 pub fn tokenize(text: &str) -> Vec<String> {
-    text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(|w| w.to_lowercase()).collect()
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_lowercase())
+        .collect()
 }
 
 impl Index {
     pub fn new() -> Index {
-        Index { postings: HashMap::new(), docs: BTreeMap::new(), total_len: 0 }
+        Index {
+            postings: HashMap::new(),
+            docs: BTreeMap::new(),
+            total_len: 0,
+        }
     }
 
     pub fn add(&mut self, id: u32, text: &str) {
@@ -35,7 +42,12 @@ impl Index {
         let terms = tokenize(text);
         self.total_len += terms.len();
         for t in &terms {
-            *self.postings.entry(t.clone()).or_default().entry(id).or_insert(0) += 1;
+            *self
+                .postings
+                .entry(t.clone())
+                .or_default()
+                .entry(id)
+                .or_insert(0) += 1;
         }
         self.docs.insert(id, terms);
     }
@@ -60,7 +72,8 @@ impl Index {
             for (&doc, &tf) in posting {
                 let len = self.docs[&doc].len() as f64;
                 let tf = tf as f64;
-                *scores.entry(doc).or_insert(0.0) += idf * tf * (K1 + 1.0) / (tf + K1 * (1.0 - B + B * len / avglen));
+                *scores.entry(doc).or_insert(0.0) +=
+                    idf * tf * (K1 + 1.0) / (tf + K1 * (1.0 - B + B * len / avglen));
             }
         }
         let mut out: Vec<(u32, f64)> = scores.into_iter().collect();

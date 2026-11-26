@@ -23,7 +23,12 @@ impl FromStr for Setting {
             return Err(SettingError::EmptyKey);
         }
         let value = value.trim();
-        let value = value.parse().map_err(|_| SettingError::BadValue(value.to_string()))?;
-        Ok(Setting { key: key.to_string(), value })
+        let value = value
+            .parse()
+            .map_err(|_| SettingError::BadValue(value.to_string()))?;
+        Ok(Setting {
+            key: key.to_string(),
+            value,
+        })
     }
 }

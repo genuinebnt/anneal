@@ -13,7 +13,9 @@ pub struct Entity {
 impl Entity {
     fn position<T: Component>(&self) -> Option<usize> {
         // `(**c)` is the dyn Component, so type_id comes from its vtable: the concrete type.
-        self.components.iter().position(|c| (**c).type_id() == TypeId::of::<T>())
+        self.components
+            .iter()
+            .position(|c| (**c).type_id() == TypeId::of::<T>())
     }
 
     /// Adds `c`, replacing a component of the same type in place. Returns the one it replaced.
@@ -21,7 +23,8 @@ impl Entity {
         match self.position::<T>() {
             Some(i) => {
                 let new: Box<dyn Component> = Box::new(c);
-                let old: Box<dyn Any> = std::mem::replace(&mut self.components[i], new) as Box<dyn Component>;
+                let old: Box<dyn Any> =
+                    std::mem::replace(&mut self.components[i], new) as Box<dyn Component>;
                 old.downcast::<T>().ok().map(|b| *b)
             }
             None => {

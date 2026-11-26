@@ -28,7 +28,12 @@ fn pop_slot(list: &AtomicU64, next: &[AtomicU32]) -> Option<u32> {
             return None;
         }
         let after = next[index as usize].load(Ordering::Relaxed);
-        match list.compare_exchange_weak(cur, pack(tag.wrapping_add(1), after), Ordering::Acquire, Ordering::Acquire) {
+        match list.compare_exchange_weak(
+            cur,
+            pack(tag.wrapping_add(1), after),
+            Ordering::Acquire,
+            Ordering::Acquire,
+        ) {
             Ok(_) => return Some(index),
             Err(seen) => cur = seen,
         }
@@ -40,7 +45,12 @@ fn push_slot(list: &AtomicU64, next: &[AtomicU32], index: u32) {
     loop {
         let (tag, head) = unpack(cur);
         next[index as usize].store(head, Ordering::Relaxed);
-        match list.compare_exchange_weak(cur, pack(tag.wrapping_add(1), index), Ordering::Release, Ordering::Relaxed) {
+        match list.compare_exchange_weak(
+            cur,
+            pack(tag.wrapping_add(1), index),
+            Ordering::Release,
+            Ordering::Relaxed,
+        ) {
             Ok(_) => return,
             Err(seen) => cur = seen,
         }
@@ -52,9 +62,16 @@ impl Stack {
     pub fn new(capacity: usize) -> Self {
         assert!(capacity < NIL as usize);
         let values = (0..capacity).map(|_| AtomicU64::new(0)).collect();
-        let next = (0..capacity).map(|i| AtomicU32::new(if i + 1 < capacity { i as u32 + 1 } else { NIL })).collect();
+        let next = (0..capacity)
+            .map(|i| AtomicU32::new(if i + 1 < capacity { i as u32 + 1 } else { NIL }))
+            .collect();
         let first_free = if capacity == 0 { NIL } else { 0 };
-        Stack { values, next, top: AtomicU64::new(pack(0, NIL)), free: AtomicU64::new(pack(0, first_free)) }
+        Stack {
+            values,
+            next,
+            top: AtomicU64::new(pack(0, NIL)),
+            free: AtomicU64::new(pack(0, first_free)),
+        }
     }
 
     pub fn capacity(&self) -> usize {

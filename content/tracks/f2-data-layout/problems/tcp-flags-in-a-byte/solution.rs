@@ -14,8 +14,14 @@ impl TcpFlags {
     pub const ACK: TcpFlags = TcpFlags(0x10);
     pub const URG: TcpFlags = TcpFlags(0x20);
     const ALL: u8 = 0x3F;
-    const NAMES: [(TcpFlags, &'static str); 6] =
-        [(TcpFlags::FIN, "FIN"), (TcpFlags::SYN, "SYN"), (TcpFlags::RST, "RST"), (TcpFlags::PSH, "PSH"), (TcpFlags::ACK, "ACK"), (TcpFlags::URG, "URG")];
+    const NAMES: [(TcpFlags, &'static str); 6] = [
+        (TcpFlags::FIN, "FIN"),
+        (TcpFlags::SYN, "SYN"),
+        (TcpFlags::RST, "RST"),
+        (TcpFlags::PSH, "PSH"),
+        (TcpFlags::ACK, "ACK"),
+        (TcpFlags::URG, "URG"),
+    ];
 
     pub const fn empty() -> TcpFlags {
         TcpFlags(0)
@@ -32,7 +38,11 @@ impl TcpFlags {
 
     /// `None` if any bit outside the six is set.
     pub const fn from_bits(bits: u8) -> Option<TcpFlags> {
-        if bits & !TcpFlags::ALL == 0 { Some(TcpFlags(bits)) } else { None }
+        if bits & !TcpFlags::ALL == 0 {
+            Some(TcpFlags(bits))
+        } else {
+            None
+        }
     }
 
     /// Drops unknown bits.
@@ -132,7 +142,11 @@ impl fmt::Debug for TcpFlags {
         if self.is_empty() {
             return write!(f, "TcpFlags(empty)");
         }
-        let names: Vec<&str> = TcpFlags::NAMES.iter().filter(|(flag, _)| self.contains(*flag)).map(|(_, name)| *name).collect();
+        let names: Vec<&str> = TcpFlags::NAMES
+            .iter()
+            .filter(|(flag, _)| self.contains(*flag))
+            .map(|(_, name)| *name)
+            .collect();
         write!(f, "TcpFlags({})", names.join(" | "))
     }
 }

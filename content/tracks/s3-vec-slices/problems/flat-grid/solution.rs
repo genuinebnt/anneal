@@ -6,7 +6,11 @@ pub struct Grid {
 
 impl Grid {
     pub fn new(w: usize, h: usize) -> Self {
-        Grid { w, h, cells: vec![0; w * h] }
+        Grid {
+            w,
+            h,
+            cells: vec![0; w * h],
+        }
     }
 
     fn index(&self, x: usize, y: usize) -> Option<usize> {

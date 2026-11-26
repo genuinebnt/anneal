@@ -11,7 +11,12 @@ pub fn first_word(text: &str) -> &str {
 
 impl Glossary {
     pub fn new(pairs: &[(&str, &str)]) -> Self {
-        Glossary { terms: pairs.iter().map(|&(w, d)| (w.to_string(), d.to_string())).collect() }
+        Glossary {
+            terms: pairs
+                .iter()
+                .map(|&(w, d)| (w.to_string(), d.to_string()))
+                .collect(),
+        }
     }
 
     /// The definition of `word`.

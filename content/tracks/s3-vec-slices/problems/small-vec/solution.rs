@@ -5,7 +5,10 @@ pub enum SmallVec4<T> {
 
 impl<T> SmallVec4<T> {
     pub fn new() -> Self {
-        SmallVec4::Inline { items: [None, None, None, None], len: 0 }
+        SmallVec4::Inline {
+            items: [None, None, None, None],
+            len: 0,
+        }
     }
 
     pub fn push(&mut self, value: T) {

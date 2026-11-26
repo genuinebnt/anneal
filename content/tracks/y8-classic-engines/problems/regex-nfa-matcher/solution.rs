@@ -35,7 +35,11 @@ impl Parser {
             self.pos += 1;
             branches.push(self.cat()?);
         }
-        Ok(if branches.len() == 1 { branches.pop().unwrap() } else { Node::Alt(branches) })
+        Ok(if branches.len() == 1 {
+            branches.pop().unwrap()
+        } else {
+            Node::Alt(branches)
+        })
     }
 
     fn cat(&mut self) -> Result<Node, ParseError> {
@@ -154,7 +158,10 @@ pub struct Regex {
 
 impl Regex {
     pub fn new(pattern: &str) -> Result<Regex, ParseError> {
-        let mut p = Parser { s: pattern.chars().collect(), pos: 0 };
+        let mut p = Parser {
+            s: pattern.chars().collect(),
+            pos: 0,
+        };
         let node = p.alt()?;
         if p.pos < p.s.len() {
             return Err(ParseError::UnbalancedParen); // a `)` with no `(`

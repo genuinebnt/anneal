@@ -62,5 +62,7 @@ impl FromIterator<Point> for Path {
 
 /// Total Manhattan length of a path.
 pub fn length(path: &[Point]) -> u32 {
-    path.windows(2).map(|w| w[0].x.abs_diff(w[1].x) + w[0].y.abs_diff(w[1].y)).sum()
+    path.windows(2)
+        .map(|w| w[0].x.abs_diff(w[1].x) + w[0].y.abs_diff(w[1].y))
+        .sum()
 }

@@ -7,7 +7,11 @@ pub struct Splitter<'t, 's> {
 
 impl<'t, 's> Splitter<'t, 's> {
     pub fn new(text: &'t str, sep: &'s str) -> Self {
-        Splitter { text, sep, done: false }
+        Splitter {
+            text,
+            sep,
+            done: false,
+        }
     }
 
     /// The next piece, without advancing.
@@ -15,7 +19,11 @@ impl<'t, 's> Splitter<'t, 's> {
         if self.done {
             return None;
         }
-        Some(self.text.find(self.sep).map_or(self.text, |i| &self.text[..i]))
+        Some(
+            self.text
+                .find(self.sep)
+                .map_or(self.text, |i| &self.text[..i]),
+        )
     }
 }
 

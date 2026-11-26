@@ -25,7 +25,9 @@ impl Username {
     pub fn parse(s: &str) -> Option<Username> {
         let mut chars = s.chars();
         let first_ok = chars.next().is_some_and(|c| c.is_ascii_lowercase());
-        let ok = first_ok && (3..=16).contains(&s.len()) && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+        let ok = first_ok
+            && (3..=16).contains(&s.len())
+            && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
         ok.then(|| Username(s.to_string()))
     }
 
@@ -45,13 +47,23 @@ impl<S> User<S> {
 
     // Changing the state parameter builds a new value; moving the fields keeps it free.
     fn into_state<T>(self) -> User<T> {
-        User { name: self.name, password: self.password, failures: self.failures, state: PhantomData }
+        User {
+            name: self.name,
+            password: self.password,
+            failures: self.failures,
+            state: PhantomData,
+        }
     }
 }
 
 impl User<LoggedOut> {
     pub fn new(name: Username, password: &str) -> Self {
-        User { name, password: password.to_string(), failures: 0, state: PhantomData }
+        User {
+            name,
+            password: password.to_string(),
+            failures: 0,
+            state: PhantomData,
+        }
     }
 
     /// Right password: logged in, failures reset. Wrong: one more failure; the third in a row locks the account.

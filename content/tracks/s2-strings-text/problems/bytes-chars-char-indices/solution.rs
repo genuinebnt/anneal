@@ -3,7 +3,10 @@ pub fn sizes(s: &str) -> (usize, usize) {
 }
 
 pub fn positions(s: &str, target: char) -> Vec<usize> {
-    s.char_indices().filter(|&(_, c)| c == target).map(|(i, _)| i).collect()
+    s.char_indices()
+        .filter(|&(_, c)| c == target)
+        .map(|(i, _)| i)
+        .collect()
 }
 
 pub fn nth_char(s: &str, n: usize) -> Option<char> {

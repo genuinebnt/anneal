@@ -4,7 +4,13 @@ use std::ffi::{c_int, c_void};
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 
 extern "C" {
-    fn qsort_r(base: *mut c_void, nmemb: usize, size: usize, compar: extern "C" fn(*const c_void, *const c_void, *mut c_void) -> c_int, arg: *mut c_void);
+    fn qsort_r(
+        base: *mut c_void,
+        nmemb: usize,
+        size: usize,
+        compar: extern "C" fn(*const c_void, *const c_void, *mut c_void) -> c_int,
+        arg: *mut c_void,
+    );
 }
 
 struct Ctx<'a, T> {
@@ -29,9 +35,18 @@ extern "C" fn trampoline<T>(a: *const c_void, b: *const c_void, arg: *mut c_void
 }
 
 pub fn sort_by_c<T: Copy, F: FnMut(&T, &T) -> Ordering>(v: &mut [T], mut cmp: F) {
-    let mut ctx = Ctx::<T> { cmp: &mut cmp, panic: None };
+    let mut ctx = Ctx::<T> {
+        cmp: &mut cmp,
+        panic: None,
+    };
     unsafe {
-        qsort_r(v.as_mut_ptr() as *mut c_void, v.len(), std::mem::size_of::<T>(), trampoline::<T>, &mut ctx as *mut Ctx<T> as *mut c_void);
+        qsort_r(
+            v.as_mut_ptr() as *mut c_void,
+            v.len(),
+            std::mem::size_of::<T>(),
+            trampoline::<T>,
+            &mut ctx as *mut Ctx<T> as *mut c_void,
+        );
     }
     if let Some(payload) = ctx.panic {
         resume_unwind(payload); // back on the Rust side of the boundary

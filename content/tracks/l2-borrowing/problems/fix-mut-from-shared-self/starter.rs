@@ -14,7 +14,11 @@ pub struct Warehouse {
 
 impl Warehouse {
     pub fn new() -> Self {
-        Warehouse { items: HashMap::new(), last: None, log: Vec::new() }
+        Warehouse {
+            items: HashMap::new(),
+            last: None,
+            log: Vec::new(),
+        }
     }
 
     /// Remembers `name` as the last item touched.
@@ -31,7 +35,9 @@ impl Warehouse {
     /// Reserves up to `qty` free units of `name` and returns how many it reserved. An unknown item reserves
     /// nothing and isn't touched.
     pub fn reserve(&mut self, name: &str, qty: u32) -> u32 {
-        let Some(s) = self.items.get(name) else { return 0 };
+        let Some(s) = self.items.get(name) else {
+            return 0;
+        };
         self.touch(name);
         let n = qty.min(s.qty - s.reserved);
         s.reserved += n;

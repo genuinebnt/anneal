@@ -34,7 +34,14 @@ impl Drop for Pooled {
 /// "<id> <method> <path> (<n> headers, <body length> bytes)"; a request without a body has 0 bytes.
 pub fn describe(req: &Request) -> String {
     let body = req.body.as_ref().map_or(0, |b| b.len());
-    format!("{} {} {} ({} headers, {} bytes)", req.id, req.method, req.path, req.headers.len(), body)
+    format!(
+        "{} {} {} ({} headers, {} bytes)",
+        req.id,
+        req.method,
+        req.path,
+        req.headers.len(),
+        body
+    )
 }
 
 /// Consumes the request. The route is "<METHOD in upper case> <path>", the content type is the value of the
@@ -44,12 +51,22 @@ pub fn route(req: Request) -> Routed {
     let trace = describe(&req);
     let Request { method, path, .. } = req;
     let route = format!("{} {path}", method.to_uppercase());
-    let content_type = req.headers.into_iter().find(|(k, _)| k.eq_ignore_ascii_case("content-type")).map(|(_, v)| v);
+    let content_type = req
+        .headers
+        .into_iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+        .map(|(_, v)| v);
     let body = match req.body {
         Some(b) => b,
         None => Vec::new(),
     };
-    Routed { id: req.id, route, content_type, body, trace }
+    Routed {
+        id: req.id,
+        route,
+        content_type,
+        body,
+        trace,
+    }
 }
 
 /// Routes a pooled request. Its pool slot must still be given back.

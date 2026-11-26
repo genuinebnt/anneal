@@ -11,15 +11,26 @@ pub struct Matrix<T> {
 impl<T: Copy + Default> Matrix<T> {
     /// Every entry `T::default()`.
     pub fn zeros(rows: usize, cols: usize) -> Self {
-        Matrix { rows, cols, data: vec![T::default(); rows * cols] }
+        Matrix {
+            rows,
+            cols,
+            data: vec![T::default(); rows * cols],
+        }
     }
 
     /// Panics if the rows have different lengths. No rows gives a 0 × 0 matrix.
     pub fn from_rows(rows: Vec<Vec<T>>) -> Self {
         let r = rows.len();
         let c = rows.first().map_or(0, Vec::len);
-        assert!(rows.iter().all(|row| row.len() == c), "rows have different lengths");
-        Matrix { rows: r, cols: c, data: rows.into_iter().flatten().collect() }
+        assert!(
+            rows.iter().all(|row| row.len() == c),
+            "rows have different lengths"
+        );
+        Matrix {
+            rows: r,
+            cols: c,
+            data: rows.into_iter().flatten().collect(),
+        }
     }
 
     pub fn transpose(&self) -> Self {
@@ -59,14 +70,24 @@ impl<T> Index<(usize, usize)> for Matrix<T> {
     type Output = T;
 
     fn index(&self, (r, c): (usize, usize)) -> &T {
-        assert!(r < self.rows && c < self.cols, "({r}, {c}) is outside {}x{}", self.rows, self.cols);
+        assert!(
+            r < self.rows && c < self.cols,
+            "({r}, {c}) is outside {}x{}",
+            self.rows,
+            self.cols
+        );
         &self.data[r * self.cols + c]
     }
 }
 
 impl<T> IndexMut<(usize, usize)> for Matrix<T> {
     fn index_mut(&mut self, (r, c): (usize, usize)) -> &mut T {
-        assert!(r < self.rows && c < self.cols, "({r}, {c}) is outside {}x{}", self.rows, self.cols);
+        assert!(
+            r < self.rows && c < self.cols,
+            "({r}, {c}) is outside {}x{}",
+            self.rows,
+            self.cols
+        );
         &mut self.data[r * self.cols + c]
     }
 }
@@ -76,7 +97,10 @@ impl<T: Copy + Add<Output = T>> Add for Matrix<T> {
     type Output = Matrix<T>;
 
     fn add(mut self, rhs: Matrix<T>) -> Matrix<T> {
-        assert!(self.rows == rhs.rows && self.cols == rhs.cols, "shapes differ");
+        assert!(
+            self.rows == rhs.rows && self.cols == rhs.cols,
+            "shapes differ"
+        );
         for (a, &b) in self.data.iter_mut().zip(&rhs.data) {
             *a = *a + b;
         }

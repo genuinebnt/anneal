@@ -14,14 +14,22 @@ pub struct PackedVec {
 }
 
 fn mask(width: u32) -> u64 {
-    if width == 64 { u64::MAX } else { (1u64 << width) - 1 }
+    if width == 64 {
+        u64::MAX
+    } else {
+        (1u64 << width) - 1
+    }
 }
 
 impl PackedVec {
     /// Panics unless `1 <= width <= 64`.
     pub fn new(width: u32) -> Self {
         assert!((1..=64).contains(&width), "width must be 1..=64");
-        PackedVec { width, len: 0, words: Vec::new() }
+        PackedVec {
+            width,
+            len: 0,
+            words: Vec::new(),
+        }
     }
 
     /// The fewest bits (at least 1) that hold every value.

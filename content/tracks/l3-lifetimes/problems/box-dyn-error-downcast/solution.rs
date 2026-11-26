@@ -33,8 +33,14 @@ pub fn sum_config(text: &str) -> Result<i64, Box<dyn Error + Send + Sync>> {
         if line.trim().is_empty() {
             continue;
         }
-        let (_, value) = line.split_once('=').ok_or(ConfigError { line: i + 1, source: None })?;
-        total += value.trim().parse::<i64>().map_err(|e| ConfigError { line: i + 1, source: Some(e) })?;
+        let (_, value) = line.split_once('=').ok_or(ConfigError {
+            line: i + 1,
+            source: None,
+        })?;
+        total += value.trim().parse::<i64>().map_err(|e| ConfigError {
+            line: i + 1,
+            source: Some(e),
+        })?;
     }
     Ok(total)
 }

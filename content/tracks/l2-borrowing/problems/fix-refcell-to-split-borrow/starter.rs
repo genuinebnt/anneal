@@ -8,7 +8,11 @@ pub struct Cart {
 
 impl Cart {
     pub fn new() -> Self {
-        Cart { items: RefCell::new(Vec::new()), total: RefCell::new(0), log: RefCell::new(Vec::new()) }
+        Cart {
+            items: RefCell::new(Vec::new()),
+            total: RefCell::new(0),
+            log: RefCell::new(Vec::new()),
+        }
     }
 
     /// Logs "[<n>] <msg>", where n is the number of items right now.

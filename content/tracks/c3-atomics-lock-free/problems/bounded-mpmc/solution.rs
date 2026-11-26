@@ -28,8 +28,18 @@ impl<T> Queue<T> {
     /// Capacity is rounded up to a power of two, at least 2.
     pub fn new(capacity: usize) -> Self {
         let cap = capacity.max(2).next_power_of_two();
-        let slots = (0..cap).map(|i| Slot { seq: AtomicUsize::new(i), value: UnsafeCell::new(MaybeUninit::uninit()) }).collect();
-        Queue { slots, mask: cap - 1, head: Padded(AtomicUsize::new(0)), tail: Padded(AtomicUsize::new(0)) }
+        let slots = (0..cap)
+            .map(|i| Slot {
+                seq: AtomicUsize::new(i),
+                value: UnsafeCell::new(MaybeUninit::uninit()),
+            })
+            .collect();
+        Queue {
+            slots,
+            mask: cap - 1,
+            head: Padded(AtomicUsize::new(0)),
+            tail: Padded(AtomicUsize::new(0)),
+        }
     }
 
     pub fn capacity(&self) -> usize {
@@ -43,7 +53,12 @@ impl<T> Queue<T> {
             let seq = slot.seq.load(Ordering::Acquire);
             let diff = seq as isize - pos as isize;
             if diff == 0 {
-                match self.tail.0.compare_exchange_weak(pos, pos.wrapping_add(1), Ordering::Relaxed, Ordering::Relaxed) {
+                match self.tail.0.compare_exchange_weak(
+                    pos,
+                    pos.wrapping_add(1),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
                     Ok(_) => {
                         unsafe { (*slot.value.get()).write(value) };
                         slot.seq.store(pos.wrapping_add(1), Ordering::Release);
@@ -66,10 +81,16 @@ impl<T> Queue<T> {
             let seq = slot.seq.load(Ordering::Acquire);
             let diff = seq as isize - pos.wrapping_add(1) as isize;
             if diff == 0 {
-                match self.head.0.compare_exchange_weak(pos, pos.wrapping_add(1), Ordering::Relaxed, Ordering::Relaxed) {
+                match self.head.0.compare_exchange_weak(
+                    pos,
+                    pos.wrapping_add(1),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
                     Ok(_) => {
                         let value = unsafe { (*slot.value.get()).assume_init_read() };
-                        slot.seq.store(pos.wrapping_add(self.mask + 1), Ordering::Release);
+                        slot.seq
+                            .store(pos.wrapping_add(self.mask + 1), Ordering::Release);
                         return Some(value);
                     }
                     Err(now) => pos = now,

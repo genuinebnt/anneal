@@ -7,11 +7,18 @@ pub fn total_chars(words: impl IntoIterator<Item = impl AsRef<str>>) -> usize {
 
 /// The items formatted with Display, joined with `sep`.
 pub fn join_display(items: impl IntoIterator<Item = impl Display>, sep: &str) -> String {
-    items.into_iter().map(|x| x.to_string()).collect::<Vec<_>>().join(sep)
+    items
+        .into_iter()
+        .map(|x| x.to_string())
+        .collect::<Vec<_>>()
+        .join(sep)
 }
 
 /// How many words `keep` accepts.
-pub fn count_where(words: impl IntoIterator<Item = impl AsRef<str>>, keep: impl Fn(&str) -> bool) -> usize {
+pub fn count_where(
+    words: impl IntoIterator<Item = impl AsRef<str>>,
+    keep: impl Fn(&str) -> bool,
+) -> usize {
     words.into_iter().filter(|w| keep(w.as_ref())).count()
 }
 

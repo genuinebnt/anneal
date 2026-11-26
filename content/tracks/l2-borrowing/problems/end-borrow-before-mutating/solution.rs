@@ -8,7 +8,10 @@ pub struct Interner {
 
 impl Interner {
     pub fn new() -> Self {
-        Interner { ids: HashMap::new(), names: Vec::new() }
+        Interner {
+            ids: HashMap::new(),
+            names: Vec::new(),
+        }
     }
 
     /// Stores `name` if it's new, and returns the stored name.
@@ -44,7 +47,10 @@ pub fn intern_all<'i>(interner: &'i mut Interner, names: &[&str]) -> Vec<&'i str
 }
 
 /// Interns both ends of every edge. Returns the edges as pairs of stored names, and how many names were new.
-pub fn intern_edges<'i>(interner: &'i mut Interner, edges: &[(&str, &str)]) -> (Vec<(&'i str, &'i str)>, usize) {
+pub fn intern_edges<'i>(
+    interner: &'i mut Interner,
+    edges: &[(&str, &str)],
+) -> (Vec<(&'i str, &'i str)>, usize) {
     let before = interner.len();
     for &(a, b) in edges {
         interner.intern(a);
@@ -52,6 +58,9 @@ pub fn intern_edges<'i>(interner: &'i mut Interner, edges: &[(&str, &str)]) -> (
     }
     let added = interner.len() - before;
     let interner = &*interner;
-    let pairs = edges.iter().map(|&(a, b)| (interner.get(a).unwrap(), interner.get(b).unwrap())).collect();
+    let pairs = edges
+        .iter()
+        .map(|&(a, b)| (interner.get(a).unwrap(), interner.get(b).unwrap()))
+        .collect();
     (pairs, added)
 }

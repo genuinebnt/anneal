@@ -38,7 +38,10 @@ fn record(key: &[u8], value: Option<&[u8]>) -> Vec<u8> {
 
 impl Store {
     pub fn new() -> Store {
-        Store { map: BTreeMap::new(), log: Vec::new() }
+        Store {
+            map: BTreeMap::new(),
+            log: Vec::new(),
+        }
     }
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) {
@@ -87,7 +90,13 @@ impl Store {
             }
             at = end;
         }
-        (Store { map, log: log[..at].to_vec() }, at)
+        (
+            Store {
+                map,
+                log: log[..at].to_vec(),
+            },
+            at,
+        )
     }
 
     pub fn compact(&mut self) {

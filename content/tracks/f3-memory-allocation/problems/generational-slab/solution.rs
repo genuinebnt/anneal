@@ -25,7 +25,11 @@ pub struct Slab<T> {
 
 impl<T> Slab<T> {
     pub fn new() -> Self {
-        Slab { entries: Vec::new(), free_head: None, len: 0 }
+        Slab {
+            entries: Vec::new(),
+            free_head: None,
+            len: 0,
+        }
     }
 
     pub fn insert(&mut self, value: T) -> Key {
@@ -33,14 +37,19 @@ impl<T> Slab<T> {
         match self.free_head {
             Some(idx) => {
                 let e = &mut self.entries[idx as usize];
-                let Slot::Empty { next_free } = e.slot else { unreachable!("free list points at a full slot") };
+                let Slot::Empty { next_free } = e.slot else {
+                    unreachable!("free list points at a full slot")
+                };
                 self.free_head = next_free;
                 e.slot = Slot::Full(value);
                 Key { idx, gen: e.gen }
             }
             None => {
                 let idx = self.entries.len() as u32;
-                self.entries.push(Entry { gen: 0, slot: Slot::Full(value) });
+                self.entries.push(Entry {
+                    gen: 0,
+                    slot: Slot::Full(value),
+                });
                 Key { idx, gen: 0 }
             }
         }
@@ -48,14 +57,20 @@ impl<T> Slab<T> {
 
     pub fn get(&self, key: Key) -> Option<&T> {
         match self.entries.get(key.idx as usize) {
-            Some(Entry { gen, slot: Slot::Full(v) }) if *gen == key.gen => Some(v),
+            Some(Entry {
+                gen,
+                slot: Slot::Full(v),
+            }) if *gen == key.gen => Some(v),
             _ => None,
         }
     }
 
     pub fn get_mut(&mut self, key: Key) -> Option<&mut T> {
         match self.entries.get_mut(key.idx as usize) {
-            Some(Entry { gen, slot: Slot::Full(v) }) if *gen == key.gen => Some(v),
+            Some(Entry {
+                gen,
+                slot: Slot::Full(v),
+            }) if *gen == key.gen => Some(v),
             _ => None,
         }
     }
@@ -65,7 +80,12 @@ impl<T> Slab<T> {
         if e.gen != key.gen || matches!(e.slot, Slot::Empty { .. }) {
             return None;
         }
-        let old = std::mem::replace(&mut e.slot, Slot::Empty { next_free: self.free_head });
+        let old = std::mem::replace(
+            &mut e.slot,
+            Slot::Empty {
+                next_free: self.free_head,
+            },
+        );
         e.gen += 1; // every key handed out so far for this slot is now stale
         self.free_head = Some(key.idx);
         self.len -= 1;
@@ -90,9 +110,18 @@ impl<T> Slab<T> {
 
     /// Live entries in slot order.
     pub fn iter(&self) -> impl Iterator<Item = (Key, &T)> {
-        self.entries.iter().enumerate().filter_map(|(i, e)| match &e.slot {
-            Slot::Full(v) => Some((Key { idx: i as u32, gen: e.gen }, v)),
-            Slot::Empty { .. } => None,
-        })
+        self.entries
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| match &e.slot {
+                Slot::Full(v) => Some((
+                    Key {
+                        idx: i as u32,
+                        gen: e.gen,
+                    },
+                    v,
+                )),
+                Slot::Empty { .. } => None,
+            })
     }
 }

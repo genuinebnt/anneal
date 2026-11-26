@@ -12,8 +12,16 @@ pub struct MiniVec<T> {
 
 impl<T> MiniVec<T> {
     pub fn new() -> Self {
-        assert!(std::mem::size_of::<T>() != 0, "zero-sized types aren't supported");
-        MiniVec { ptr: NonNull::dangling(), cap: 0, len: 0, _owns: PhantomData }
+        assert!(
+            std::mem::size_of::<T>() != 0,
+            "zero-sized types aren't supported"
+        );
+        MiniVec {
+            ptr: NonNull::dangling(),
+            cap: 0,
+            len: 0,
+            _owns: PhantomData,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -62,7 +70,8 @@ impl<T> MiniVec<T> {
             // SAFETY: ptr was allocated with old_layout by this allocator.
             unsafe { alloc::realloc(self.ptr.as_ptr().cast(), old_layout, new_layout.size()) }
         };
-        self.ptr = NonNull::new(raw.cast()).unwrap_or_else(|| alloc::handle_alloc_error(new_layout));
+        self.ptr =
+            NonNull::new(raw.cast()).unwrap_or_else(|| alloc::handle_alloc_error(new_layout));
         self.cap = new_cap;
     }
 }
@@ -78,7 +87,12 @@ impl<T> Drop for MiniVec<T> {
         while self.pop().is_some() {}
         if self.cap != 0 {
             // SAFETY: ptr was allocated with this layout and every element has been dropped.
-            unsafe { alloc::dealloc(self.ptr.as_ptr().cast(), Layout::array::<T>(self.cap).expect("layout")) };
+            unsafe {
+                alloc::dealloc(
+                    self.ptr.as_ptr().cast(),
+                    Layout::array::<T>(self.cap).expect("layout"),
+                )
+            };
         }
     }
 }

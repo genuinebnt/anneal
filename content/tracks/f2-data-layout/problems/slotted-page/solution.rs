@@ -19,7 +19,9 @@ pub struct Page {
 
 impl Page {
     pub fn new() -> Page {
-        let mut p = Page { buf: [0; PAGE_SIZE] };
+        let mut p = Page {
+            buf: [0; PAGE_SIZE],
+        };
         p.set_u16(2, PAGE_SIZE);
         p
     }
@@ -70,7 +72,10 @@ impl Page {
     }
 
     fn slot(&self, i: usize) -> (usize, usize) {
-        (self.u16_at(HEADER + SLOT * i), self.u16_at(HEADER + SLOT * i + 2))
+        (
+            self.u16_at(HEADER + SLOT * i),
+            self.u16_at(HEADER + SLOT * i + 2),
+        )
     }
 
     fn set_slot(&mut self, i: usize, offset: usize, len: usize) {
@@ -108,7 +113,10 @@ impl Page {
     fn remove_slot(&mut self, i: usize) {
         let n = self.len();
         let (_, len) = self.slot(i);
-        self.buf.copy_within(HEADER + SLOT * (i + 1)..HEADER + SLOT * n, HEADER + SLOT * i);
+        self.buf.copy_within(
+            HEADER + SLOT * (i + 1)..HEADER + SLOT * n,
+            HEADER + SLOT * i,
+        );
         self.set_u16(0, n - 1);
         self.set_u16(4, self.fragmented() + len);
     }
@@ -136,7 +144,10 @@ impl Page {
             self.compact();
         }
         let n = self.len();
-        self.buf.copy_within(HEADER + SLOT * at..HEADER + SLOT * n, HEADER + SLOT * (at + 1));
+        self.buf.copy_within(
+            HEADER + SLOT * at..HEADER + SLOT * n,
+            HEADER + SLOT * (at + 1),
+        );
         let offset = self.cell_start() - cell;
         self.buf[offset..offset + 2].copy_from_slice(&(key.len() as u16).to_le_bytes());
         self.buf[offset + 2..offset + 2 + key.len()].copy_from_slice(key);
@@ -166,8 +177,10 @@ impl Page {
         for i in 0..n {
             let (offset, len) = self.slot(i);
             out[end - len..end].copy_from_slice(&self.buf[offset..offset + len]);
-            out[HEADER + SLOT * i..HEADER + SLOT * i + 2].copy_from_slice(&((end - len) as u16).to_le_bytes());
-            out[HEADER + SLOT * i + 2..HEADER + SLOT * i + 4].copy_from_slice(&(len as u16).to_le_bytes());
+            out[HEADER + SLOT * i..HEADER + SLOT * i + 2]
+                .copy_from_slice(&((end - len) as u16).to_le_bytes());
+            out[HEADER + SLOT * i + 2..HEADER + SLOT * i + 4]
+                .copy_from_slice(&(len as u16).to_le_bytes());
             end -= len;
         }
         out[0..2].copy_from_slice(&(n as u16).to_le_bytes());

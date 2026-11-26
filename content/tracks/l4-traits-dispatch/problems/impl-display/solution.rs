@@ -31,6 +31,9 @@ impl fmt::Display for Money {
 
 impl fmt::Debug for Credentials {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Credentials").field("user", &self.user).field("password", &"***").finish()
+        f.debug_struct("Credentials")
+            .field("user", &self.user)
+            .field("password", &"***")
+            .finish()
     }
 }

@@ -7,7 +7,10 @@ pub struct Index {
 
 impl Index {
     pub fn new() -> Self {
-        Index { postings: HashMap::new(), hits: HashMap::new() }
+        Index {
+            postings: HashMap::new(),
+            hits: HashMap::new(),
+        }
     }
 
     /// Records that document `doc` contains each whitespace-separated word of `text`. A document is listed once

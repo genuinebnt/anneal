@@ -35,6 +35,10 @@ pub fn parse_list(s: &str) -> Result<Vec<i32>, ParseListError> {
     }
     s.split(',')
         .enumerate()
-        .map(|(index, item)| item.trim().parse().map_err(|source| ParseListError::Bad { index, source }))
+        .map(|(index, item)| {
+            item.trim()
+                .parse()
+                .map_err(|source| ParseListError::Bad { index, source })
+        })
         .collect()
 }

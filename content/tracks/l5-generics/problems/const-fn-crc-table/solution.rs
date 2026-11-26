@@ -10,7 +10,11 @@ pub const fn make_table(poly: u8) -> [u8; 256] {
         let mut crc = b as u8;
         let mut bit = 0;
         while bit < 8 {
-            crc = if crc & 0x80 != 0 { (crc << 1) ^ poly } else { crc << 1 };
+            crc = if crc & 0x80 != 0 {
+                (crc << 1) ^ poly
+            } else {
+                crc << 1
+            };
             bit += 1;
         }
         table[b] = crc;

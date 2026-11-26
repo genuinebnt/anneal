@@ -9,7 +9,10 @@ use std::ops::Deref;
 /// the box. A `String` there (24 bytes) would make every value 32.
 #[derive(Clone)]
 enum Repr {
-    Inline { len: u8, buf: [u8; SmallStr::INLINE_CAP] },
+    Inline {
+        len: u8,
+        buf: [u8; SmallStr::INLINE_CAP],
+    },
     Heap(Box<str>),
 }
 
@@ -25,7 +28,10 @@ impl SmallStr {
         if s.len() <= SmallStr::INLINE_CAP {
             let mut buf = [0; SmallStr::INLINE_CAP];
             buf[..s.len()].copy_from_slice(s.as_bytes());
-            SmallStr(Repr::Inline { len: s.len() as u8, buf })
+            SmallStr(Repr::Inline {
+                len: s.len() as u8,
+                buf,
+            })
         } else {
             SmallStr(Repr::Heap(Box::from(s)))
         }
@@ -34,7 +40,9 @@ impl SmallStr {
     pub fn as_str(&self) -> &str {
         match &self.0 {
             // Always a whole `&str`'s bytes, so this can't fail (compact_str skips the check with unsafe).
-            Repr::Inline { len, buf } => std::str::from_utf8(&buf[..*len as usize]).expect("copied from a &str"),
+            Repr::Inline { len, buf } => {
+                std::str::from_utf8(&buf[..*len as usize]).expect("copied from a &str")
+            }
             Repr::Heap(s) => s,
         }
     }

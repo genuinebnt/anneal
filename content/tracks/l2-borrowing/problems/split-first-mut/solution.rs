@@ -1,9 +1,13 @@
 /// `names[0]` is a namespace. Prefixes every other name with "<namespace>::" in place, unless it already starts
 /// with exactly that. An empty slice is left alone.
 pub fn qualify(names: &mut [String]) {
-    let Some((ns, rest)) = names.split_first_mut() else { return };
+    let Some((ns, rest)) = names.split_first_mut() else {
+        return;
+    };
     for name in rest {
-        let done = name.strip_prefix(ns.as_str()).is_some_and(|rest| rest.starts_with("::"));
+        let done = name
+            .strip_prefix(ns.as_str())
+            .is_some_and(|rest| rest.starts_with("::"));
         if !done {
             name.insert_str(0, "::");
             name.insert_str(0, ns);

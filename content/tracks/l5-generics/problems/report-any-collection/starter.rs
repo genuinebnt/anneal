@@ -8,7 +8,10 @@ pub struct Report<T> {
 
 impl<T> Report<T> {
     pub fn new(title: &str, rows: Vec<T>) -> Self {
-        Report { title: title.to_string(), rows }
+        Report {
+            title: title.to_string(),
+            rows,
+        }
     }
 
     pub fn rows(&self) -> &Vec<T> {

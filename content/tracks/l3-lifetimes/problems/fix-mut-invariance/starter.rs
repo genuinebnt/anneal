@@ -22,7 +22,9 @@ pub fn keep_shortest(slot: &Cell<&'static str>, candidate: &str) {
 /// The shortest line of `text` (the first on a tie), or "(none)" when there are no lines.
 pub fn shortest_line(text: &str) -> &str {
     let mut lines = text.lines();
-    let Some(first) = lines.next() else { return "(none)" };
+    let Some(first) = lines.next() else {
+        return "(none)";
+    };
     let slot = Cell::new(first);
     for line in lines {
         keep_shortest(&slot, line);

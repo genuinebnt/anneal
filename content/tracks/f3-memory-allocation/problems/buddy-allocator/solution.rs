@@ -50,11 +50,18 @@ impl Buddy {
 
     /// Total units currently free.
     pub fn free_units(&self) -> usize {
-        self.free.iter().enumerate().map(|(k, s)| s.len() << k).sum()
+        self.free
+            .iter()
+            .enumerate()
+            .map(|(k, s)| s.len() << k)
+            .sum()
     }
 
     /// The largest block `alloc` could hand out right now, in units (0 if none).
     pub fn largest_free(&self) -> usize {
-        (0..=self.max_order).rev().find(|&k| !self.free[k as usize].is_empty()).map_or(0, |k| 1 << k)
+        (0..=self.max_order)
+            .rev()
+            .find(|&k| !self.free[k as usize].is_empty())
+            .map_or(0, |k| 1 << k)
     }
 }

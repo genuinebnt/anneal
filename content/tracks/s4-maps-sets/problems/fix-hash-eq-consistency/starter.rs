@@ -15,5 +15,9 @@ impl Eq for Username {}
 
 /// How many different usernames there are, ignoring case.
 pub fn distinct(names: &[&str]) -> usize {
-    names.iter().map(|n| Username(n.to_string())).collect::<HashSet<_>>().len()
+    names
+        .iter()
+        .map(|n| Username(n.to_string()))
+        .collect::<HashSet<_>>()
+        .len()
 }

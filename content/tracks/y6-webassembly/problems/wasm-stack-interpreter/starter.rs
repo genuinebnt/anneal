@@ -28,7 +28,9 @@ fn read_u32(code: &[u8], pc: &mut usize) -> Result<u32, Trap> {
     for i in 0..5 {
         let b = *code.get(*pc).ok_or(Trap::Malformed)?;
         *pc += 1;
-        result |= ((b & 0x7F) as u32).checked_shl(7 * i).ok_or(Trap::Malformed)?;
+        result |= ((b & 0x7F) as u32)
+            .checked_shl(7 * i)
+            .ok_or(Trap::Malformed)?;
         if b & 0x80 == 0 {
             return Ok(result);
         }

@@ -13,7 +13,8 @@ pub fn word_counts_dyn(reader: &mut dyn Read) -> io::Result<Vec<(String, usize)>
     // so a character split across two reads is decoded whole.
     let mut bytes = Vec::new();
     reader.read_to_end(&mut bytes)?;
-    let text = String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let text =
+        String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let mut counts: HashMap<String, usize> = HashMap::new();
     for w in text.split_whitespace() {
         *counts.entry(w.to_string()).or_insert(0) += 1;

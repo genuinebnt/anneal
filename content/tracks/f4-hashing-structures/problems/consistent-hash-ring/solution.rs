@@ -23,7 +23,11 @@ pub struct Ring {
 
 impl Ring {
     pub fn new(vnodes: usize) -> Self {
-        Ring { vnodes: vnodes.max(1), points: BTreeMap::new(), nodes: BTreeSet::new() }
+        Ring {
+            vnodes: vnodes.max(1),
+            points: BTreeMap::new(),
+            nodes: BTreeSet::new(),
+        }
     }
 
     /// Adds a node (no effect if already present).
@@ -32,7 +36,8 @@ impl Ring {
             return;
         }
         for i in 0..self.vnodes {
-            self.points.insert(hash64(format!("{name}#{i}").as_bytes()), name.to_string());
+            self.points
+                .insert(hash64(format!("{name}#{i}").as_bytes()), name.to_string());
         }
     }
 
@@ -52,7 +57,11 @@ impl Ring {
     /// The node responsible for `key`: the owner of the first point clockwise from the key's hash (wrapping past the top).
     pub fn get(&self, key: &str) -> Option<&str> {
         let h = hash64(key.as_bytes());
-        self.points.range(h..).next().or_else(|| self.points.iter().next()).map(|(_, n)| n.as_str())
+        self.points
+            .range(h..)
+            .next()
+            .or_else(|| self.points.iter().next())
+            .map(|(_, n)| n.as_str())
     }
 
     /// Up to `n` distinct nodes walking clockwise from the key: the primary first, then its replicas.

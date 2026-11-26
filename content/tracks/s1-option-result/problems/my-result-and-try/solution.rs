@@ -43,7 +43,9 @@ macro_rules! try_my {
     ($e:expr) => {
         match $e {
             $crate::MyResult::Ok(v) => v,
-            $crate::MyResult::Err(e) => return $crate::MyResult::Err(::core::convert::From::from(e)),
+            $crate::MyResult::Err(e) => {
+                return $crate::MyResult::Err(::core::convert::From::from(e))
+            }
         }
     };
 }

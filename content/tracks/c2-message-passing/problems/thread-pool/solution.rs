@@ -67,18 +67,33 @@ impl ThreadPool {
     /// Panics if `workers` is 0.
     pub fn new(workers: usize) -> Self {
         assert!(workers > 0, "a pool needs at least one worker");
-        let shared = Arc::new(Shared { queue: Mutex::new(Queue { jobs: VecDeque::new(), closed: false }), wake: Condvar::new(), panicked: AtomicUsize::new(0) });
+        let shared = Arc::new(Shared {
+            queue: Mutex::new(Queue {
+                jobs: VecDeque::new(),
+                closed: false,
+            }),
+            wake: Condvar::new(),
+            panicked: AtomicUsize::new(0),
+        });
         let workers = (0..workers)
             .map(|i| {
                 let shared = shared.clone();
-                std::thread::Builder::new().name(format!("pool-worker-{i}")).spawn(move || worker(shared)).unwrap()
+                std::thread::Builder::new()
+                    .name(format!("pool-worker-{i}"))
+                    .spawn(move || worker(shared))
+                    .unwrap()
             })
             .collect();
         ThreadPool { shared, workers }
     }
 
     pub fn execute<F: FnOnce() + Send + 'static>(&self, f: F) {
-        self.shared.queue.lock().unwrap().jobs.push_back(Box::new(f));
+        self.shared
+            .queue
+            .lock()
+            .unwrap()
+            .jobs
+            .push_back(Box::new(f));
         self.shared.wake.notify_one();
     }
 

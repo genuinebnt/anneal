@@ -23,7 +23,9 @@ pub struct Particles {
 
 impl Particles {
     pub fn with_capacity(n: usize) -> Particles {
-        Particles { items: Vec::with_capacity(n) }
+        Particles {
+            items: Vec::with_capacity(n),
+        }
     }
 
     pub fn push(&mut self, p: Particle) {
@@ -60,6 +62,9 @@ impl Particles {
 
     /// The total kinetic energy, Σ ½·m·|v|², summed in `f64`.
     pub fn kinetic_energy(&self) -> f64 {
-        self.items.iter().map(|p| 0.5 * p.mass as f64 * p.vel.iter().map(|&v| v as f64 * v as f64).sum::<f64>()).sum()
+        self.items
+            .iter()
+            .map(|p| 0.5 * p.mass as f64 * p.vel.iter().map(|&v| v as f64 * v as f64).sum::<f64>())
+            .sum()
     }
 }

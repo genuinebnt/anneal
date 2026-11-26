@@ -13,12 +13,20 @@ pub struct CountMin {
 impl CountMin {
     pub fn new(width: usize, depth: usize) -> Self {
         let (width, depth) = (width.max(1), depth.max(1));
-        CountMin { width, depth, table: vec![0; width * depth], total: 0 }
+        CountMin {
+            width,
+            depth,
+            table: vec![0; width * depth],
+            total: 0,
+        }
     }
 
     /// width = ceil(e / eps), depth = ceil(ln(1 / delta)).
     pub fn with_error(eps: f64, delta: f64) -> Self {
-        CountMin::new((std::f64::consts::E / eps).ceil() as usize, (1.0 / delta).ln().ceil() as usize)
+        CountMin::new(
+            (std::f64::consts::E / eps).ceil() as usize,
+            (1.0 / delta).ln().ceil() as usize,
+        )
     }
 
     pub fn width(&self) -> usize {
@@ -48,7 +56,10 @@ impl CountMin {
 
     /// The smallest counter among the item's cells: every counter is an overestimate, the least-collided one is closest.
     pub fn estimate<T: Hash + ?Sized>(&self, item: &T) -> u64 {
-        (0..self.depth).map(|row| self.table[row * self.width + self.column(row, item)]).min().unwrap()
+        (0..self.depth)
+            .map(|row| self.table[row * self.width + self.column(row, item)])
+            .min()
+            .unwrap()
     }
 
     /// The sum of everything added.

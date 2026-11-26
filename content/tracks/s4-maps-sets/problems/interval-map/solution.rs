@@ -7,15 +7,25 @@ pub struct IntervalMap<V> {
 
 impl<V> IntervalMap<V> {
     pub fn new() -> Self {
-        IntervalMap { by_start: BTreeMap::new() }
+        IntervalMap {
+            by_start: BTreeMap::new(),
+        }
     }
 
     pub fn insert(&mut self, start: u32, end: u32, value: V) -> Result<(), V> {
         if start >= end {
             return Err(value);
         }
-        let before_overlaps = self.by_start.range(..=start).next_back().is_some_and(|(_, (e, _))| *e > start);
-        let after_overlaps = self.by_start.range(start..).next().is_some_and(|(s, _)| *s < end);
+        let before_overlaps = self
+            .by_start
+            .range(..=start)
+            .next_back()
+            .is_some_and(|(_, (e, _))| *e > start);
+        let after_overlaps = self
+            .by_start
+            .range(start..)
+            .next()
+            .is_some_and(|(s, _)| *s < end);
         if before_overlaps || after_overlaps {
             return Err(value);
         }

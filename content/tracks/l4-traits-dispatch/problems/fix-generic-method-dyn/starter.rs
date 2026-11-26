@@ -40,7 +40,8 @@ impl Store for UpperStore {
     }
 
     fn put<V: Display>(&mut self, key: &str, value: V) {
-        self.map.insert(key.to_string(), value.to_string().to_uppercase());
+        self.map
+            .insert(key.to_string(), value.to_string().to_uppercase());
     }
 
     fn keys(&self) -> impl Iterator<Item = &str> {
@@ -65,11 +66,16 @@ impl Store for Prefixed {
 
     /// Only the inner keys under the prefix, with the prefix removed.
     fn keys(&self) -> impl Iterator<Item = &str> {
-        self.inner.keys().filter_map(|k| k.strip_prefix(self.prefix.as_str()))
+        self.inner
+            .keys()
+            .filter_map(|k| k.strip_prefix(self.prefix.as_str()))
     }
 }
 
 /// One of each basic store.
 pub fn all_stores() -> Vec<Box<dyn Store>> {
-    vec![Box::new(MemStore::default()), Box::new(UpperStore::default())]
+    vec![
+        Box::new(MemStore::default()),
+        Box::new(UpperStore::default()),
+    ]
 }

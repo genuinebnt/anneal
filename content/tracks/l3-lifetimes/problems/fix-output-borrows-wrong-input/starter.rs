@@ -24,6 +24,10 @@ pub struct Layered<'g, 'l> {
 
 impl<'g, 'l> Layered<'g, 'l> {
     pub fn get(&self, key: &str) -> Option<&'l str> {
-        self.local.iter().chain(self.global.iter()).find(|e| e.0 == key).map(|e| e.1)
+        self.local
+            .iter()
+            .chain(self.global.iter())
+            .find(|e| e.0 == key)
+            .map(|e| e.1)
     }
 }

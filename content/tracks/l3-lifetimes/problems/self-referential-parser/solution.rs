@@ -41,7 +41,11 @@ pub struct Parser<'a, T> {
 
 impl<'a, T: Tokenize> Parser<'a, T> {
     pub fn new(source: &'a str) -> Self {
-        Parser { remaining: source, current: None, _tokenizer: PhantomData }
+        Parser {
+            remaining: source,
+            current: None,
+            _tokenizer: PhantomData,
+        }
     }
 
     pub fn advance(&mut self) -> Option<&'a str> {

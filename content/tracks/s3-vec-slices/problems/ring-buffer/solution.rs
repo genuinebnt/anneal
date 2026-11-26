@@ -8,7 +8,11 @@ impl<T> Ring<T> {
     /// Panics if `capacity` is 0.
     pub fn with_capacity(capacity: usize) -> Self {
         assert!(capacity > 0, "capacity must be at least 1");
-        Ring { buf: (0..capacity).map(|_| None).collect(), head: 0, len: 0 }
+        Ring {
+            buf: (0..capacity).map(|_| None).collect(),
+            head: 0,
+            len: 0,
+        }
     }
 
     /// Adds `value`, returning the evicted oldest value if the ring was full.

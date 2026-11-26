@@ -18,7 +18,10 @@ pub struct Decoder {
 
 impl Decoder {
     pub fn new(max_frame: usize) -> Self {
-        Decoder { buf: Vec::new(), max: max_frame }
+        Decoder {
+            buf: Vec::new(),
+            max: max_frame,
+        }
     }
 
     pub fn feed(&mut self, data: &[u8]) {

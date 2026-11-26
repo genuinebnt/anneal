@@ -8,5 +8,9 @@ pub fn compare_tags(a: &[&str], b: &[&str]) -> (Vec<String>, Vec<String>, Vec<St
         v.sort();
         v
     };
-    (sorted(&mut a.intersection(&b)), sorted(&mut a.difference(&b)), sorted(&mut b.difference(&a)))
+    (
+        sorted(&mut a.intersection(&b)),
+        sorted(&mut a.difference(&b)),
+        sorted(&mut b.difference(&a)),
+    )
 }

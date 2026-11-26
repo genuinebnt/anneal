@@ -19,8 +19,14 @@ unsafe impl<T: Send + Sync> Sync for MiniArc<T> {}
 
 impl<T> MiniArc<T> {
     pub fn new(data: T) -> Self {
-        let b = Box::new(Inner { strong: AtomicUsize::new(1), data });
-        MiniArc { ptr: NonNull::from(Box::leak(b)), _owns: PhantomData }
+        let b = Box::new(Inner {
+            strong: AtomicUsize::new(1),
+            data,
+        });
+        MiniArc {
+            ptr: NonNull::from(Box::leak(b)),
+            _owns: PhantomData,
+        }
     }
 
     fn inner(&self) -> &Inner<T> {
@@ -46,7 +52,12 @@ impl<T> MiniArc<T> {
 
     /// Takes the value out if this is the only owner, else gives `this` back.
     pub fn try_unwrap(this: Self) -> Result<T, Self> {
-        if this.inner().strong.compare_exchange(1, 0, Ordering::Relaxed, Ordering::Relaxed).is_err() {
+        if this
+            .inner()
+            .strong
+            .compare_exchange(1, 0, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
             return Err(this);
         }
         fence(Ordering::Acquire);
@@ -82,7 +93,10 @@ impl<T> Clone for MiniArc<T> {
         if old > isize::MAX as usize {
             std::process::abort(); // a leaked-clone loop would wrap the count and free live data
         }
-        MiniArc { ptr: self.ptr, _owns: PhantomData }
+        MiniArc {
+            ptr: self.ptr,
+            _owns: PhantomData,
+        }
     }
 }
 

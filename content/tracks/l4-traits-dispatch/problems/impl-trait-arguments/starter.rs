@@ -7,7 +7,11 @@ pub fn total_chars(words: &[String]) -> usize {
 
 /// The items formatted with Display, joined with `sep`.
 pub fn join_display(items: &[i32], sep: &str) -> String {
-    items.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(sep)
+    items
+        .iter()
+        .map(|x| x.to_string())
+        .collect::<Vec<_>>()
+        .join(sep)
 }
 
 /// How many words `keep` accepts.
@@ -22,7 +26,10 @@ pub fn compose(f: fn(i64) -> i64, g: fn(i64) -> i64) -> Box<dyn Fn(i64) -> i64> 
 
 /// The even numbers from 0 up to `limit`, inclusive.
 pub fn evens(limit: u64) -> std::vec::IntoIter<u64> {
-    (0..=limit).filter(|n| n % 2 == 0).collect::<Vec<_>>().into_iter()
+    (0..=limit)
+        .filter(|n| n % 2 == 0)
+        .collect::<Vec<_>>()
+        .into_iter()
 }
 
 /// The items in order, or in reverse when `descending`.

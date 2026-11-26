@@ -9,5 +9,8 @@ pub fn sum_everywhere(data: Vec<u64>, n: usize) -> Vec<u64> {
         let data = Arc::clone(&data);
         handles.push(thread::spawn(move || data.iter().sum::<u64>()));
     }
-    handles.into_iter().map(|h| h.join().expect("worker panicked")).collect()
+    handles
+        .into_iter()
+        .map(|h| h.join().expect("worker panicked"))
+        .collect()
 }

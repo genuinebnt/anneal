@@ -6,11 +6,16 @@ pub struct Batcher {
 impl Batcher {
     pub fn new(size: usize) -> Self {
         assert!(size > 0, "batch size must be at least 1");
-        Batcher { current: None, size }
+        Batcher {
+            current: None,
+            size,
+        }
     }
 
     pub fn push(&mut self, value: u32) -> Option<Vec<u32>> {
-        let batch = self.current.get_or_insert_with(|| Vec::with_capacity(self.size));
+        let batch = self
+            .current
+            .get_or_insert_with(|| Vec::with_capacity(self.size));
         batch.push(value);
         if batch.len() == self.size {
             self.current.take()

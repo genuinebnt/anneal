@@ -16,7 +16,11 @@ pub fn extension(path: &str) -> Option<&str> {
 
 /// The non-empty parts, joined with `sep`.
 pub fn join_nonempty<S: AsRef<str>>(parts: &[S], sep: &str) -> String {
-    let kept: Vec<&str> = parts.iter().map(|p| p.as_ref()).filter(|p| !p.is_empty()).collect();
+    let kept: Vec<&str> = parts
+        .iter()
+        .map(|p| p.as_ref())
+        .filter(|p| !p.is_empty())
+        .collect();
     kept.join(sep)
 }
 
@@ -26,5 +30,8 @@ where
     I: IntoIterator,
     I::Item: AsRef<str>,
 {
-    words.into_iter().filter(|w| w.as_ref().eq_ignore_ascii_case(needle)).count()
+    words
+        .into_iter()
+        .filter(|w| w.as_ref().eq_ignore_ascii_case(needle))
+        .count()
 }

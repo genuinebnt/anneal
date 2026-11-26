@@ -18,13 +18,22 @@ pub struct Stats {
 
 impl Stats {
     pub fn new() -> Self {
-        Stats { count: AtomicU64::new(0), sum: AtomicU64::new(0), min: AtomicU64::new(u64::MAX), max: AtomicU64::new(0) }
+        Stats {
+            count: AtomicU64::new(0),
+            sum: AtomicU64::new(0),
+            min: AtomicU64::new(u64::MAX),
+            max: AtomicU64::new(0),
+        }
     }
 
     pub fn record(&self, v: u64) {
         self.count.fetch_add(1, Ordering::Relaxed);
         // saturating add as a compare-exchange loop: `fetch_update` retries until nobody raced us
-        let _ = self.sum.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |s| Some(s.saturating_add(v)));
+        let _ = self
+            .sum
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |s| {
+                Some(s.saturating_add(v))
+            });
         self.min.fetch_min(v, Ordering::Relaxed);
         self.max.fetch_max(v, Ordering::Relaxed);
     }
@@ -51,6 +60,11 @@ impl Stats {
         if count == 0 {
             return None;
         }
-        Some(Snapshot { count, sum, min, max })
+        Some(Snapshot {
+            count,
+            sum,
+            min,
+            max,
+        })
     }
 }

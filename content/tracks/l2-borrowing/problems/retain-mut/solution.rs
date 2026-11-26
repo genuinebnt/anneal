@@ -15,7 +15,13 @@ pub struct Pool {
 
 impl Pool {
     pub fn new(conns: Vec<Conn>, max_idle: u64, refill: u32, cap: u32) -> Self {
-        Pool { conns, max_idle, refill, cap, closed: Vec::new() }
+        Pool {
+            conns,
+            max_idle,
+            refill,
+            cap,
+            closed: Vec::new(),
+        }
     }
 
     fn is_stale(&self, c: &Conn) -> bool {

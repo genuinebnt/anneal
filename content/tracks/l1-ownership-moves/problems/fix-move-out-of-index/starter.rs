@@ -8,7 +8,12 @@ pub struct Queue {
 
 impl Queue {
     pub fn new(name: &str, items: Vec<String>) -> Self {
-        Queue { name: String::from(name), items, current: None, done: Vec::new() }
+        Queue {
+            name: String::from(name),
+            items,
+            current: None,
+            done: Vec::new(),
+        }
     }
 
     /// Moves the first item out, leaving "" in its slot so the other items keep their positions.

@@ -27,5 +27,7 @@ pub unsafe fn free_greeting(p: *mut c_char) {
 }
 
 pub fn c_prefix_len(buf: &[u8]) -> Option<usize> {
-    CStr::from_bytes_until_nul(buf).ok().map(|c| c.to_bytes().len())
+    CStr::from_bytes_until_nul(buf)
+        .ok()
+        .map(|c| c.to_bytes().len())
 }

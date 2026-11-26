@@ -65,7 +65,10 @@ impl Shape for Rect {
     }
 
     fn scaled(&self, k: f64) -> Self {
-        Rect { w: self.w * k, h: self.h * k }
+        Rect {
+            w: self.w * k,
+            h: self.h * k,
+        }
     }
 }
 

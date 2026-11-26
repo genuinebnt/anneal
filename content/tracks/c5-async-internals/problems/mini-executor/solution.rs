@@ -90,7 +90,13 @@ pub struct Executor {
 
 impl Executor {
     pub fn new() -> Self {
-        Executor { shared: Arc::new(Shared { queue: Mutex::new(VecDeque::new()), cv: Condvar::new(), pending: AtomicUsize::new(0) }) }
+        Executor {
+            shared: Arc::new(Shared {
+                queue: Mutex::new(VecDeque::new()),
+                cv: Condvar::new(),
+                pending: AtomicUsize::new(0),
+            }),
+        }
     }
 
     pub fn spawn<F>(&self, fut: F) -> JoinHandle<F::Output>
@@ -98,7 +104,10 @@ impl Executor {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        let state = Arc::new(Mutex::new(JoinState { result: None, waker: None }));
+        let state = Arc::new(Mutex::new(JoinState {
+            result: None,
+            waker: None,
+        }));
         let st = state.clone();
         let wrapped = async move {
             let out = fut.await;
@@ -112,7 +121,10 @@ impl Executor {
             }
         };
         self.shared.pending.fetch_add(1, Ordering::SeqCst);
-        let task = Arc::new(Task { future: Mutex::new(Some(Box::pin(wrapped))), shared: self.shared.clone() });
+        let task = Arc::new(Task {
+            future: Mutex::new(Some(Box::pin(wrapped))),
+            shared: self.shared.clone(),
+        });
         self.shared.queue.lock().unwrap().push_back(task);
         self.shared.cv.notify_one();
         JoinHandle { state }

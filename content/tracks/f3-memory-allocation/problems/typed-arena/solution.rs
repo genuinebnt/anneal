@@ -9,7 +9,9 @@ pub struct Arena<T> {
 
 impl<T> Arena<T> {
     pub fn new() -> Self {
-        Arena { chunks: RefCell::new(Vec::new()) }
+        Arena {
+            chunks: RefCell::new(Vec::new()),
+        }
     }
 
     pub fn alloc(&self, value: T) -> &mut T {

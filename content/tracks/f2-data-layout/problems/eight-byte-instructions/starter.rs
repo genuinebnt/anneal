@@ -5,15 +5,45 @@ pub type Reg = u8;
 /// `BrTable` jumps to `targets[index]`, or to `default` when `index` is negative or out of range.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Op {
-    Const { dst: Reg, value: i64 },
-    Add { dst: Reg, a: Reg, b: Reg },
-    Sub { dst: Reg, a: Reg, b: Reg },
-    Mul { dst: Reg, a: Reg, b: Reg },
-    Lt { dst: Reg, a: Reg, b: Reg },
-    Jump { target: u32 },
-    BrIf { cond: Reg, target: u32 },
-    BrTable { index: Reg, targets: Vec<u32>, default: u32 },
-    Ret { src: Reg },
+    Const {
+        dst: Reg,
+        value: i64,
+    },
+    Add {
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Sub {
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Mul {
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Lt {
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Jump {
+        target: u32,
+    },
+    BrIf {
+        cond: Reg,
+        target: u32,
+    },
+    BrTable {
+        index: Reg,
+        targets: Vec<u32>,
+        default: u32,
+    },
+    Ret {
+        src: Reg,
+    },
 }
 
 /// What the interpreter runs, one per op. For now, the op itself.
@@ -53,19 +83,35 @@ impl Program {
             pc += 1;
             match inst {
                 Op::Const { dst, value } => regs[*dst as usize] = *value,
-                Op::Add { dst, a, b } => regs[*dst as usize] = regs[*a as usize].wrapping_add(regs[*b as usize]),
-                Op::Sub { dst, a, b } => regs[*dst as usize] = regs[*a as usize].wrapping_sub(regs[*b as usize]),
-                Op::Mul { dst, a, b } => regs[*dst as usize] = regs[*a as usize].wrapping_mul(regs[*b as usize]),
-                Op::Lt { dst, a, b } => regs[*dst as usize] = (regs[*a as usize] < regs[*b as usize]) as i64,
+                Op::Add { dst, a, b } => {
+                    regs[*dst as usize] = regs[*a as usize].wrapping_add(regs[*b as usize])
+                }
+                Op::Sub { dst, a, b } => {
+                    regs[*dst as usize] = regs[*a as usize].wrapping_sub(regs[*b as usize])
+                }
+                Op::Mul { dst, a, b } => {
+                    regs[*dst as usize] = regs[*a as usize].wrapping_mul(regs[*b as usize])
+                }
+                Op::Lt { dst, a, b } => {
+                    regs[*dst as usize] = (regs[*a as usize] < regs[*b as usize]) as i64
+                }
                 Op::Jump { target } => pc = *target as usize,
                 Op::BrIf { cond, target } => {
                     if regs[*cond as usize] != 0 {
                         pc = *target as usize;
                     }
                 }
-                Op::BrTable { index, targets, default } => {
+                Op::BrTable {
+                    index,
+                    targets,
+                    default,
+                } => {
                     let i = regs[*index as usize];
-                    pc = usize::try_from(i).ok().and_then(|i| targets.get(i)).copied().unwrap_or(*default) as usize;
+                    pc = usize::try_from(i)
+                        .ok()
+                        .and_then(|i| targets.get(i))
+                        .copied()
+                        .unwrap_or(*default) as usize;
                 }
                 Op::Ret { src } => return Some(regs[*src as usize]),
             }

@@ -33,7 +33,12 @@ pub trait Shape: Named {
 
     /// "<name>, <SIDES> sides, area <area to 2 decimals>".
     fn describe(&self) -> String {
-        format!("{}, {} sides, area {:.2}", self.name(), Self::SIDES, self.area())
+        format!(
+            "{}, {} sides, area {:.2}",
+            self.name(),
+            Self::SIDES,
+            self.area()
+        )
     }
 }
 

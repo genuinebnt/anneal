@@ -31,7 +31,10 @@ pub struct Node {
 impl Node {
     pub fn handle_vote_request(&mut self, req: &VoteRequest) -> VoteReply {
         if req.term < self.term {
-            return VoteReply { term: self.term, granted: false };
+            return VoteReply {
+                term: self.term,
+                granted: false,
+            };
         }
         if req.term > self.term {
             self.term = req.term;
@@ -40,12 +43,16 @@ impl Node {
         let my_last_term = self.log.last().map_or(0, |e| e.term);
         let my_last_index = self.log.len() as u64;
         // The candidate's log must be at least as up to date as ours: later last term wins, then the longer log.
-        let up_to_date = req.last_log_term > my_last_term || (req.last_log_term == my_last_term && req.last_log_index >= my_last_index);
+        let up_to_date = req.last_log_term > my_last_term
+            || (req.last_log_term == my_last_term && req.last_log_index >= my_last_index);
         let free = self.voted_for.map_or(true, |v| v == req.candidate);
         let granted = up_to_date && free;
         if granted {
             self.voted_for = Some(req.candidate);
         }
-        VoteReply { term: self.term, granted }
+        VoteReply {
+            term: self.term,
+            granted,
+        }
     }
 }

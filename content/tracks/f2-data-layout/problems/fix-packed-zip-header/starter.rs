@@ -67,7 +67,10 @@ impl LocalHeader {
 
     /// `crc 0000abcd, 12 -> 34 bytes`, for logs.
     pub fn describe(&self) -> String {
-        format!("crc {:08x}, {} -> {} bytes", self.crc32, self.compressed_size, self.uncompressed_size)
+        format!(
+            "crc {:08x}, {} -> {} bytes",
+            self.crc32, self.compressed_size, self.uncompressed_size
+        )
     }
 }
 
@@ -93,7 +96,12 @@ pub fn entries(archive: &[u8]) -> Option<Vec<Entry<'_>>> {
         if end > archive.len() {
             return None;
         }
-        out.push(Entry { name: &archive[name_at..name_at + h.name_len()], method: h.method(), crc32: h.crc32(), data: &archive[data_at..end] });
+        out.push(Entry {
+            name: &archive[name_at..name_at + h.name_len()],
+            method: h.method(),
+            crc32: h.crc32(),
+            data: &archive[data_at..end],
+        });
         at = end;
     }
     Some(out)

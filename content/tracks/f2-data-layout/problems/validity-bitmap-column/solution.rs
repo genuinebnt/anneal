@@ -10,7 +10,11 @@ pub struct Float64Column {
 impl Float64Column {
     /// Room for `rows` rows, reserved up front: two allocations, 8 bytes and 1 bit per row.
     pub fn with_capacity(rows: usize) -> Float64Column {
-        Float64Column { values: Vec::with_capacity(rows), validity: Vec::with_capacity(rows.div_ceil(64)), nulls: 0 }
+        Float64Column {
+            values: Vec::with_capacity(rows),
+            validity: Vec::with_capacity(rows.div_ceil(64)),
+            nulls: 0,
+        }
     }
 
     pub fn from_options(rows: &[Option<f64>]) -> Float64Column {

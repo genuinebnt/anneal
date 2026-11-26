@@ -22,12 +22,23 @@ pub struct Permit<'a> {
 
 impl Semaphore {
     pub fn new(total: usize) -> Self {
-        Semaphore { total, state: Mutex::new(State { available: total, next_ticket: 0, serving: 0 }), turn: Condvar::new() }
+        Semaphore {
+            total,
+            state: Mutex::new(State {
+                available: total,
+                next_ticket: 0,
+                serving: 0,
+            }),
+            turn: Condvar::new(),
+        }
     }
 
     /// Waits for its turn and for `n` permits. Panics unless `1 <= n <= total`.
     pub fn acquire(&self, n: usize) -> Permit<'_> {
-        assert!(n >= 1 && n <= self.total, "request must be between 1 and the total");
+        assert!(
+            n >= 1 && n <= self.total,
+            "request must be between 1 and the total"
+        );
         let mut s = self.state.lock().unwrap();
         let ticket = s.next_ticket;
         s.next_ticket += 1;
@@ -43,7 +54,10 @@ impl Semaphore {
 
     /// Succeeds only if nobody is queued and `n` permits are free right now.
     pub fn try_acquire(&self, n: usize) -> Option<Permit<'_>> {
-        assert!(n >= 1 && n <= self.total, "request must be between 1 and the total");
+        assert!(
+            n >= 1 && n <= self.total,
+            "request must be between 1 and the total"
+        );
         let mut s = self.state.lock().unwrap();
         if s.next_ticket != s.serving || s.available < n {
             return None;

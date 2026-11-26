@@ -14,6 +14,9 @@ pub fn parse_every_error(items: &[&str]) -> Result<Vec<i32>, Vec<String>> {
 }
 
 /// Runs `check` on each item in order and stops at the first error.
-pub fn validate(items: &[&str], mut check: impl FnMut(&str) -> Result<(), String>) -> Result<(), String> {
+pub fn validate(
+    items: &[&str],
+    mut check: impl FnMut(&str) -> Result<(), String>,
+) -> Result<(), String> {
     todo!()
 }

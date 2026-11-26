@@ -15,7 +15,12 @@ fn note(alerts: Option<&mut Vec<String>>, msg: &str) {
 /// Writes the first `header` lines as "[<line> / <line>]", then every remaining line as "; <line>". Each
 /// remaining line that starts with '!' is also noted in `alerts` (when given), and the last note is
 /// "<n> lines", where n counts the remaining lines. Returns n.
-pub fn report<'a, I>(out: &mut String, mut lines: I, header: usize, mut alerts: Option<&mut Vec<String>>) -> usize
+pub fn report<'a, I>(
+    out: &mut String,
+    mut lines: I,
+    header: usize,
+    mut alerts: Option<&mut Vec<String>>,
+) -> usize
 where
     I: Iterator<Item = &'a str>,
 {

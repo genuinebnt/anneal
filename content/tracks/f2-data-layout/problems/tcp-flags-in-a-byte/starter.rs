@@ -11,7 +11,14 @@ pub struct TcpFlags {
     urg: bool,
 }
 
-const NONE: TcpFlags = TcpFlags { fin: false, syn: false, rst: false, psh: false, ack: false, urg: false };
+const NONE: TcpFlags = TcpFlags {
+    fin: false,
+    syn: false,
+    rst: false,
+    psh: false,
+    ack: false,
+    urg: false,
+};
 
 impl TcpFlags {
     pub const FIN: TcpFlags = TcpFlags { fin: true, ..NONE };
@@ -26,12 +33,23 @@ impl TcpFlags {
     }
 
     pub fn all() -> TcpFlags {
-        TcpFlags { fin: true, syn: true, rst: true, psh: true, ack: true, urg: true }
+        TcpFlags {
+            fin: true,
+            syn: true,
+            rst: true,
+            psh: true,
+            ack: true,
+            urg: true,
+        }
     }
 
     /// The wire byte: FIN = 0x01, SYN = 0x02, RST = 0x04, PSH = 0x08, ACK = 0x10, URG = 0x20.
     pub fn bits(self) -> u8 {
-        [self.fin, self.syn, self.rst, self.psh, self.ack, self.urg].iter().enumerate().map(|(i, &on)| (on as u8) << i).sum()
+        [self.fin, self.syn, self.rst, self.psh, self.ack, self.urg]
+            .iter()
+            .enumerate()
+            .map(|(i, &on)| (on as u8) << i)
+            .sum()
     }
 
     /// `None` if any bit outside the six is set.
@@ -45,7 +63,14 @@ impl TcpFlags {
     /// Drops unknown bits.
     pub fn from_bits_truncate(bits: u8) -> TcpFlags {
         let on = |i: u8| bits & (1 << i) != 0;
-        TcpFlags { fin: on(0), syn: on(1), rst: on(2), psh: on(3), ack: on(4), urg: on(5) }
+        TcpFlags {
+            fin: on(0),
+            syn: on(1),
+            rst: on(2),
+            psh: on(3),
+            ack: on(4),
+            urg: on(5),
+        }
     }
 
     pub fn is_empty(self) -> bool {
@@ -81,7 +106,10 @@ impl TcpFlags {
     /// Whether conntrack accepts this combination (PSH is ignored): SYN, SYN|URG, SYN|ACK, RST, RST|ACK,
     /// FIN|ACK, FIN|ACK|URG, ACK or ACK|URG.
     pub fn is_valid(self) -> bool {
-        matches!(self.bits() & !0x08, 0x02 | 0x22 | 0x12 | 0x04 | 0x14 | 0x11 | 0x31 | 0x10 | 0x30)
+        matches!(
+            self.bits() & !0x08,
+            0x02 | 0x22 | 0x12 | 0x04 | 0x14 | 0x11 | 0x31 | 0x10 | 0x30
+        )
     }
 }
 

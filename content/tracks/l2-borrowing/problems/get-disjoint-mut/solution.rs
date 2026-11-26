@@ -14,7 +14,11 @@ pub enum SettleError {
 
 /// Applies `deltas[k]` to account `idx[k]` for every k, all or nothing. On error nothing changes. Index errors
 /// are reported as std's `get_disjoint_mut` finds them, then `Unbalanced`, then `Insufficient`.
-pub fn settle<const N: usize>(balances: &mut [i64], idx: [usize; N], deltas: [i64; N]) -> Result<(), SettleError> {
+pub fn settle<const N: usize>(
+    balances: &mut [i64],
+    idx: [usize; N],
+    deltas: [i64; N],
+) -> Result<(), SettleError> {
     let accounts = balances.get_disjoint_mut(idx).map_err(|e| match e {
         GetDisjointMutError::IndexOutOfBounds => SettleError::NoSuchAccount,
         GetDisjointMutError::OverlappingIndices => SettleError::SameAccount,
@@ -32,6 +36,11 @@ pub fn settle<const N: usize>(balances: &mut [i64], idx: [usize; N], deltas: [i6
 }
 
 /// Moves `amount` (>= 0) from account `from` to account `to`, with the same rules as `settle`.
-pub fn transfer(balances: &mut [i64], from: usize, to: usize, amount: i64) -> Result<(), SettleError> {
+pub fn transfer(
+    balances: &mut [i64],
+    from: usize,
+    to: usize,
+    amount: i64,
+) -> Result<(), SettleError> {
     settle(balances, [from, to], [-amount, amount])
 }

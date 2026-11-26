@@ -18,7 +18,13 @@ impl Inbox {
     }
 
     pub fn push(&mut self, id: u32, from: &str, body: &str) {
-        self.msgs.push(Msg { id, from: from.to_string(), body: body.to_string(), read: false, reply: None });
+        self.msgs.push(Msg {
+            id,
+            from: from.to_string(),
+            body: body.to_string(),
+            read: false,
+            reply: None,
+        });
     }
 
     pub fn get(&self, id: u32) -> Option<&Msg> {
@@ -59,7 +65,12 @@ impl Inbox {
 /// Marks every unread message from `boss` read, appends "on it" to the reply of the newest message still
 /// unread (if there is one), and returns the ids still unread, oldest first.
 pub fn triage(inbox: &mut Inbox, boss: &str) -> Vec<u32> {
-    let from_boss: Vec<u32> = inbox.unread().iter().filter(|m| m.from == boss).map(|m| m.id).collect();
+    let from_boss: Vec<u32> = inbox
+        .unread()
+        .iter()
+        .filter(|m| m.from == boss)
+        .map(|m| m.id)
+        .collect();
     for id in from_boss {
         inbox.mark_read(id);
     }

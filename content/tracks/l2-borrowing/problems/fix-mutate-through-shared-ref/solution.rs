@@ -26,7 +26,8 @@ pub fn top_up(to: &mut Account, from: &mut Account, amount: i64) {
 
 /// Pays interest to every account with a balance of at least `min`, and returns their ids in order.
 pub fn reward(accounts: &mut [Account], min: i64, pct: i64) -> Vec<u32> {
-    let mut selected: Vec<&mut Account> = accounts.iter_mut().filter(|a| a.balance >= min).collect();
+    let mut selected: Vec<&mut Account> =
+        accounts.iter_mut().filter(|a| a.balance >= min).collect();
     pay_interest(&mut selected, pct);
     selected.iter().map(|a| a.id).collect()
 }

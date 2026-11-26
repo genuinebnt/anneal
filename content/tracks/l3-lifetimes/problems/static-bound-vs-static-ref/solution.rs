@@ -10,7 +10,9 @@ pub struct Extensions {
 
 impl Extensions {
     pub fn new() -> Self {
-        Extensions { map: HashMap::new() }
+        Extensions {
+            map: HashMap::new(),
+        }
     }
 
     pub fn insert<T: Any>(&mut self, value: T) -> Option<T> {

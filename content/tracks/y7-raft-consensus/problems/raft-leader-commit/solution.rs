@@ -1,4 +1,9 @@
-pub fn advance_commit(log_terms: &[u64], current_term: u64, follower_match: &[u64], commit_index: u64) -> u64 {
+pub fn advance_commit(
+    log_terms: &[u64],
+    current_term: u64,
+    follower_match: &[u64],
+    commit_index: u64,
+) -> u64 {
     let cluster = follower_match.len() + 1; // the followers and the leader
     let majority = cluster / 2 + 1;
     let mut best = commit_index;

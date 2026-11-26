@@ -19,16 +19,27 @@ pub struct Body<'a> {
 
 impl Document {
     pub fn header(&mut self) -> Header<'_> {
-        Header { title: &mut self.title, tags: &mut self.tags }
+        Header {
+            title: &mut self.title,
+            tags: &mut self.tags,
+        }
     }
 
     pub fn body(&mut self) -> Body<'_> {
-        Body { lines: &mut self.lines, words: &mut self.words }
+        Body {
+            lines: &mut self.lines,
+            words: &mut self.words,
+        }
     }
 
     /// Both views at once.
     pub fn split(&mut self) -> (Header<'_>, Body<'_>) {
-        let Document { title, tags, lines, words } = self;
+        let Document {
+            title,
+            tags,
+            lines,
+            words,
+        } = self;
         (Header { title, tags }, Body { lines, words })
     }
 }

@@ -19,7 +19,11 @@ impl Tree {
     /// Inserts `key`. Returns false if it was already there.
     pub fn insert(&mut self, key: i32) -> bool {
         if self.nodes.is_empty() {
-            self.nodes.push(Node { key, left: None, right: None });
+            self.nodes.push(Node {
+                key,
+                left: None,
+                right: None,
+            });
             return true;
         }
         let new = u32::try_from(self.nodes.len()).expect("too many nodes");
@@ -41,7 +45,11 @@ impl Tree {
                 }
             }
         }
-        self.nodes.push(Node { key, left: None, right: None });
+        self.nodes.push(Node {
+            key,
+            left: None,
+            right: None,
+        });
         true
     }
 
@@ -52,7 +60,11 @@ impl Tree {
             if key == node.key {
                 return true;
             }
-            link = if key < node.key { node.left } else { node.right };
+            link = if key < node.key {
+                node.left
+            } else {
+                node.right
+            };
         }
         false
     }

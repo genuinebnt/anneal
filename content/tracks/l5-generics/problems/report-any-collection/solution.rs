@@ -8,7 +8,10 @@ pub struct Report<C> {
 
 impl<C> Report<C> {
     pub fn new(title: &str, rows: C) -> Self {
-        Report { title: title.to_string(), rows }
+        Report {
+            title: title.to_string(),
+            rows,
+        }
     }
 
     pub fn rows(&self) -> &C {

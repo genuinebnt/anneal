@@ -1,10 +1,10 @@
-    pub trait Shape: Clone {
-        fn area(&self) -> f64;
-        fn name(&self) -> String;
+pub trait Shape: Clone {
+    fn area(&self) -> f64;
+    fn name(&self) -> String;
 
-        /// A copy scaled by `k` (every length times k).
-        fn scaled(&self, k: f64) -> Self;
-    }
+    /// A copy scaled by `k` (every length times k).
+    fn scaled(&self, k: f64) -> Self;
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Circle {
@@ -41,7 +41,10 @@ impl Shape for Rect {
     }
 
     fn scaled(&self, k: f64) -> Self {
-        Rect { w: self.w * k, h: self.h * k }
+        Rect {
+            w: self.w * k,
+            h: self.h * k,
+        }
     }
 }
 

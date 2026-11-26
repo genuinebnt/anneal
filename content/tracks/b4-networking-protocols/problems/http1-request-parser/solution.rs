@@ -11,7 +11,10 @@ pub struct Request {
 impl Request {
     /// The first header with this name, compared case-insensitively.
     pub fn header(&self, name: &str) -> Option<&str> {
-        self.headers.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+        self.headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
     }
 }
 
@@ -51,7 +54,10 @@ fn is_token_char(b: u8) -> bool {
 
 impl Parser {
     pub fn new(limits: Limits) -> Self {
-        Parser { buf: Vec::new(), limits }
+        Parser {
+            buf: Vec::new(),
+            limits,
+        }
     }
 
     pub fn feed(&mut self, data: &[u8]) {
@@ -81,7 +87,12 @@ impl Parser {
         // request line: METHOD SP target SP HTTP/1.x
         let line = lines.next().unwrap_or("");
         let parts: Vec<&str> = line.split(' ').collect();
-        if parts.len() != 3 || parts[0].is_empty() || !parts[0].bytes().all(|b| b.is_ascii_uppercase()) || parts[1].is_empty() || parts[1].bytes().any(|b| b.is_ascii_control()) {
+        if parts.len() != 3
+            || parts[0].is_empty()
+            || !parts[0].bytes().all(|b| b.is_ascii_uppercase())
+            || parts[1].is_empty()
+            || parts[1].bytes().any(|b| b.is_ascii_control())
+        {
             return Err(ParseError::BadRequestLine);
         }
         let minor = match parts[2] {
@@ -98,7 +109,10 @@ impl Parser {
             if name.is_empty() || !name.bytes().all(is_token_char) {
                 return Err(ParseError::BadHeader); // includes a space before the colon and obsolete line folding
             }
-            headers.push((name.to_string(), value.trim_matches(|c| c == ' ' || c == '\t').to_string()));
+            headers.push((
+                name.to_string(),
+                value.trim_matches(|c| c == ' ' || c == '\t').to_string(),
+            ));
             if headers.len() > self.limits.max_headers {
                 return Err(ParseError::TooManyHeaders);
             }
@@ -145,7 +159,13 @@ impl Parser {
             (Vec::new(), head_len)
         };
         self.buf.drain(..consumed);
-        Ok(Some(Request { method, target, minor, headers, body }))
+        Ok(Some(Request {
+            method,
+            target,
+            minor,
+            headers,
+            body,
+        }))
     }
 }
 
@@ -155,7 +175,11 @@ fn parse_chunked(buf: &[u8], max_body: usize) -> Result<Option<(Vec<u8>, usize)>
     let mut pos = 0;
     loop {
         let Some(eol) = find(&buf[pos..], b"\r\n") else {
-            return if buf.len() - pos > 64 { Err(ParseError::BadChunk) } else { Ok(None) };
+            return if buf.len() - pos > 64 {
+                Err(ParseError::BadChunk)
+            } else {
+                Ok(None)
+            };
         };
         let line = std::str::from_utf8(&buf[pos..pos + eol]).map_err(|_| ParseError::BadChunk)?;
         let size_str = line.split(';').next().unwrap_or(""); // drop chunk extensions
@@ -167,7 +191,9 @@ fn parse_chunked(buf: &[u8], max_body: usize) -> Result<Option<(Vec<u8>, usize)>
         if size == 0 {
             // trailer lines until an empty line
             loop {
-                let Some(eol) = find(&buf[pos..], b"\r\n") else { return Ok(None) };
+                let Some(eol) = find(&buf[pos..], b"\r\n") else {
+                    return Ok(None);
+                };
                 let empty = eol == 0;
                 pos += eol + 2;
                 if empty {

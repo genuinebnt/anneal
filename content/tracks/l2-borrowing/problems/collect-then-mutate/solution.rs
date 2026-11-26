@@ -12,12 +12,20 @@ impl Life {
         for &(x, y) in alive {
             cells[y * w + x] = true;
         }
-        Life { w, h, cells, next: vec![false; w * h] }
+        Life {
+            w,
+            h,
+            cells,
+            next: vec![false; w * h],
+        }
     }
 
     /// Live cells as (x, y), row by row.
     pub fn alive(&self) -> Vec<(usize, usize)> {
-        (0..self.w * self.h).filter(|&i| self.cells[i]).map(|i| (i % self.w, i / self.w)).collect()
+        (0..self.w * self.h)
+            .filter(|&i| self.cells[i])
+            .map(|i| (i % self.w, i / self.w))
+            .collect()
     }
 
     fn live_neighbors(&self, x: usize, y: usize) -> usize {

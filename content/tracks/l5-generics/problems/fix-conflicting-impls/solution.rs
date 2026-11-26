@@ -27,7 +27,10 @@ macro_rules! describe_via_display {
     };
 }
 
-describe_via_display!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64, bool, char, str, String, Name);
+describe_via_display!(
+    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64, bool, char, str,
+    String, Name
+);
 
 impl<T: Describe + ?Sized> Describe for &T {
     fn describe(&self) -> String {

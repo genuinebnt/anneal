@@ -9,7 +9,11 @@ impl Add for Poly {
     type Output = Poly;
 
     fn add(self, rhs: Poly) -> Poly {
-        let (mut long, short) = if self.0.len() >= rhs.0.len() { (self.0, rhs.0) } else { (rhs.0, self.0) };
+        let (mut long, short) = if self.0.len() >= rhs.0.len() {
+            (self.0, rhs.0)
+        } else {
+            (rhs.0, self.0)
+        };
         for (i, c) in short.into_iter().enumerate() {
             long[i] += c;
         }

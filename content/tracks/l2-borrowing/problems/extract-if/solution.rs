@@ -12,7 +12,10 @@ impl Queue {
     /// Removes up to `limit` expired jobs (deadline before `now`), taking the earliest in the queue first, and
     /// returns them in queue order. Expired jobs past the limit stay queued where they are.
     pub fn take_expired(&mut self, now: u64, limit: usize) -> Vec<Job> {
-        self.jobs.extract_if(.., |j| j.deadline < now).take(limit).collect()
+        self.jobs
+            .extract_if(.., |j| j.deadline < now)
+            .take(limit)
+            .collect()
     }
 
     /// Removes the first `n` jobs (all of them if there are fewer) and returns them in order.

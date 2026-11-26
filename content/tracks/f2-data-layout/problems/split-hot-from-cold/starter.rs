@@ -1,6 +1,11 @@
 /// The longest prefix of `s` that fits in `max` bytes without splitting a character.
 fn truncate(s: &str, max: usize) -> &str {
-    let end = s.char_indices().map(|(i, c)| i + c.len_utf8()).take_while(|&e| e <= max).last().unwrap_or(0);
+    let end = s
+        .char_indices()
+        .map(|(i, c)| i + c.len_utf8())
+        .take_while(|&e| e <= max)
+        .last()
+        .unwrap_or(0);
     &s[..end]
 }
 
@@ -45,13 +50,22 @@ pub struct ProcArray {
 
 impl ProcArray {
     pub fn new(max_backends: usize) -> ProcArray {
-        ProcArray { procs: vec![EMPTY; max_backends] }
+        ProcArray {
+            procs: vec![EMPTY; max_backends],
+        }
     }
 
     /// A backend attaches to a free `slot`. `application` is cut to 64 bytes.
     pub fn connect(&mut self, slot: usize, pid: u32, database: u32, application: &str, now: u64) {
         let app = truncate(application, 64);
-        let mut p = Proc { connected: true, pid, database, backend_start: now, app_len: app.len() as u8, ..EMPTY };
+        let mut p = Proc {
+            connected: true,
+            pid,
+            database,
+            backend_start: now,
+            app_len: app.len() as u8,
+            ..EMPTY
+        };
         p.application_name[..app.len()].copy_from_slice(app.as_bytes());
         self.procs[slot] = p;
     }
@@ -96,12 +110,14 @@ impl ProcArray {
 
     pub fn application(&self, slot: usize) -> Option<&str> {
         let p = &self.procs[slot];
-        p.connected.then(|| std::str::from_utf8(&p.application_name[..p.app_len as usize]).unwrap())
+        p.connected
+            .then(|| std::str::from_utf8(&p.application_name[..p.app_len as usize]).unwrap())
     }
 
     pub fn query(&self, slot: usize) -> Option<&str> {
         let p = &self.procs[slot];
-        p.connected.then(|| std::str::from_utf8(&p.query[..p.query_len as usize]).unwrap())
+        p.connected
+            .then(|| std::str::from_utf8(&p.query[..p.query_len as usize]).unwrap())
     }
 
     /// When the backend's running transaction started, if it has one.

@@ -44,7 +44,16 @@ pub struct Particles {
 impl Particles {
     pub fn with_capacity(n: usize) -> Particles {
         let v = || Vec::with_capacity(n);
-        Particles { x: v(), y: v(), z: v(), vx: v(), vy: v(), vz: v(), mass: v(), cold: Vec::with_capacity(n) }
+        Particles {
+            x: v(),
+            y: v(),
+            z: v(),
+            vx: v(),
+            vy: v(),
+            vz: v(),
+            mass: v(),
+            cold: Vec::with_capacity(n),
+        }
     }
 
     pub fn push(&mut self, p: Particle) {
@@ -55,7 +64,15 @@ impl Particles {
         self.vy.push(p.vel[1]);
         self.vz.push(p.vel[2]);
         self.mass.push(p.mass);
-        self.cold.push(Cold { id: p.id, charge: p.charge, radius: p.radius, temperature: p.temperature, species: p.species, flags: p.flags, tag: p.tag });
+        self.cold.push(Cold {
+            id: p.id,
+            charge: p.charge,
+            radius: p.radius,
+            temperature: p.temperature,
+            species: p.species,
+            flags: p.flags,
+            tag: p.tag,
+        });
     }
 
     pub fn len(&self) -> usize {
@@ -107,7 +124,13 @@ impl Particles {
     /// The total kinetic energy, Σ ½·m·|v|², summed in `f64`.
     pub fn kinetic_energy(&self) -> f64 {
         (0..self.len())
-            .map(|i| 0.5 * self.mass[i] as f64 * [self.vx[i], self.vy[i], self.vz[i]].iter().map(|&v| v as f64 * v as f64).sum::<f64>())
+            .map(|i| {
+                0.5 * self.mass[i] as f64
+                    * [self.vx[i], self.vy[i], self.vz[i]]
+                        .iter()
+                        .map(|&v| v as f64 * v as f64)
+                        .sum::<f64>()
+            })
             .sum()
     }
 }

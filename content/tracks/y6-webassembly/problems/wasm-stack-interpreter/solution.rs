@@ -28,7 +28,9 @@ fn read_u32(code: &[u8], pc: &mut usize) -> Result<u32, Trap> {
     for i in 0..5 {
         let b = *code.get(*pc).ok_or(Trap::Malformed)?;
         *pc += 1;
-        result |= ((b & 0x7F) as u32).checked_shl(7 * i).ok_or(Trap::Malformed)?;
+        result |= ((b & 0x7F) as u32)
+            .checked_shl(7 * i)
+            .ok_or(Trap::Malformed)?;
         if b & 0x80 == 0 {
             return Ok(result);
         }
@@ -67,7 +69,17 @@ fn next_pc(code: &[u8], pc: usize) -> Result<usize, Trap> {
     let op = code[pc];
     let mut q = pc + 1;
     match op {
-        0x00 | 0x01 | 0x05 | 0x0B | 0x0F | 0x1A | 0x1B | 0x45..=0x4F | 0x6A..=0x6D | 0x6F | 0x71..=0x76 => {}
+        0x00
+        | 0x01
+        | 0x05
+        | 0x0B
+        | 0x0F
+        | 0x1A
+        | 0x1B
+        | 0x45..=0x4F
+        | 0x6A..=0x6D
+        | 0x6F
+        | 0x71..=0x76 => {}
         0x02..=0x04 => q += 1,
         0x0C | 0x0D | 0x10 | 0x20..=0x22 => {
             read_u32(code, &mut q)?;
@@ -140,7 +152,12 @@ fn pop(stack: &mut Vec<i32>) -> Result<i32, Trap> {
 }
 
 /// Branch to label `depth`: keep the label's arity values, drop the rest of that block's stack, and continue at its target.
-fn branch(labels: &mut Vec<Label>, stack: &mut Vec<i32>, depth: usize, pc: &mut usize) -> Result<(), Trap> {
+fn branch(
+    labels: &mut Vec<Label>,
+    stack: &mut Vec<i32>,
+    depth: usize,
+    pc: &mut usize,
+) -> Result<(), Trap> {
     if depth >= labels.len() {
         return Err(Trap::Malformed);
     }
@@ -200,7 +217,14 @@ fn binop(op: u8, a: i32, b: i32) -> Result<i32, Trap> {
     })
 }
 
-fn exec(funcs: &[Func], all: &[Jumps], idx: usize, args: &[i32], fuel: &mut u64, depth: usize) -> Result<Vec<i32>, Trap> {
+fn exec(
+    funcs: &[Func],
+    all: &[Jumps],
+    idx: usize,
+    args: &[i32],
+    fuel: &mut u64,
+    depth: usize,
+) -> Result<Vec<i32>, Trap> {
     let f = funcs.get(idx).ok_or(Trap::BadFunction(idx))?;
     if depth > 100 {
         return Err(Trap::StackOverflow);
@@ -213,7 +237,12 @@ fn exec(funcs: &[Func], all: &[Jumps], idx: usize, args: &[i32], fuel: &mut u64,
     let mut locals: Vec<i32> = args.to_vec();
     locals.resize(f.params + f.locals, 0);
     let mut stack: Vec<i32> = Vec::new();
-    let mut labels = vec![Label { is_loop: false, cont: code.len(), height: 0, arity: f.results }];
+    let mut labels = vec![Label {
+        is_loop: false,
+        cont: code.len(),
+        height: 0,
+        arity: f.results,
+    }];
     let mut pc = 0;
     while pc < code.len() {
         if *fuel == 0 {
@@ -229,16 +258,31 @@ fn exec(funcs: &[Func], all: &[Jumps], idx: usize, args: &[i32], fuel: &mut u64,
                 let arity = block_arity(code, pc)?;
                 let (end, _) = jumps[&pc];
                 labels.push(if op == 0x03 {
-                    Label { is_loop: true, cont: next, height: stack.len(), arity: 0 }
+                    Label {
+                        is_loop: true,
+                        cont: next,
+                        height: stack.len(),
+                        arity: 0,
+                    }
                 } else {
-                    Label { is_loop: false, cont: end + 1, height: stack.len(), arity }
+                    Label {
+                        is_loop: false,
+                        cont: end + 1,
+                        height: stack.len(),
+                        arity,
+                    }
                 });
             }
             0x04 => {
                 let arity = block_arity(code, pc)?;
                 let cond = pop(&mut stack)?;
                 let (end, els) = jumps[&pc];
-                labels.push(Label { is_loop: false, cont: end + 1, height: stack.len(), arity });
+                labels.push(Label {
+                    is_loop: false,
+                    cont: end + 1,
+                    height: stack.len(),
+                    arity,
+                });
                 if cond == 0 {
                     next = match els {
                         Some(e) => e + 1,
@@ -321,7 +365,10 @@ fn exec(funcs: &[Func], all: &[Jumps], idx: usize, args: &[i32], fuel: &mut u64,
 }
 
 pub fn run(funcs: &[Func], entry: usize, args: &[i32], fuel: u64) -> Result<Vec<i32>, Trap> {
-    let all: Vec<Jumps> = funcs.iter().map(|f| analyze(&f.code)).collect::<Result<_, _>>()?;
+    let all: Vec<Jumps> = funcs
+        .iter()
+        .map(|f| analyze(&f.code))
+        .collect::<Result<_, _>>()?;
     let mut fuel = fuel;
     exec(funcs, &all, entry, args, &mut fuel, 1)
 }

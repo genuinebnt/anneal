@@ -65,15 +65,35 @@ pub const OP_WRITE: u8 = 23;
 
 impl Sqe {
     pub fn nop(user_data: u64) -> Sqe {
-        Sqe { opcode: OP_NOP, user_data, ..Sqe::default() }
+        Sqe {
+            opcode: OP_NOP,
+            user_data,
+            ..Sqe::default()
+        }
     }
 
     pub fn read(fd: i32, addr: u64, len: u32, off: u64, user_data: u64) -> Sqe {
-        Sqe { opcode: OP_READ, fd, addr, len, off, user_data, ..Sqe::default() }
+        Sqe {
+            opcode: OP_READ,
+            fd,
+            addr,
+            len,
+            off,
+            user_data,
+            ..Sqe::default()
+        }
     }
 
     pub fn write(fd: i32, addr: u64, len: u32, off: u64, user_data: u64) -> Sqe {
-        Sqe { opcode: OP_WRITE, fd, addr, len, off, user_data, ..Sqe::default() }
+        Sqe {
+            opcode: OP_WRITE,
+            fd,
+            addr,
+            len,
+            off,
+            user_data,
+            ..Sqe::default()
+        }
     }
 }
 

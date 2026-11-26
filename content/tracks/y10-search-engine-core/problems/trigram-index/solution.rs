@@ -12,7 +12,10 @@ fn grams_of(text: &str) -> BTreeSet<[char; 3]> {
 
 impl Index {
     pub fn new() -> Index {
-        Index { docs: BTreeMap::new(), grams: HashMap::new() }
+        Index {
+            docs: BTreeMap::new(),
+            grams: HashMap::new(),
+        }
     }
 
     pub fn add(&mut self, id: u32, text: &str) {
@@ -59,8 +62,16 @@ impl Index {
 
     pub fn search(&self, query: &str) -> Vec<u32> {
         match self.candidates(query) {
-            Some(c) => c.into_iter().filter(|id| self.docs[id].contains(query)).collect(), // trigrams present is not the same as contiguous
-            None => self.docs.iter().filter(|(_, t)| t.contains(query)).map(|(&id, _)| id).collect(),
+            Some(c) => c
+                .into_iter()
+                .filter(|id| self.docs[id].contains(query))
+                .collect(), // trigrams present is not the same as contiguous
+            None => self
+                .docs
+                .iter()
+                .filter(|(_, t)| t.contains(query))
+                .map(|(&id, _)| id)
+                .collect(),
         }
     }
 }

@@ -12,14 +12,26 @@ pub struct Server {
 pub fn server(cfg: &HashMap<String, String>) -> Result<Server, String> {
     // An empty value counts as unset, so filter each key before falling back.
     let set = |key: &str| cfg.get(key).filter(|v| !v.is_empty());
-    let host = set("host").or_else(|| set("bind")).map_or("127.0.0.1", String::as_str).to_string();
+    let host = set("host")
+        .or_else(|| set("bind"))
+        .map_or("127.0.0.1", String::as_str)
+        .to_string();
     let port = cfg
         .get("port")
         .ok_or_else(|| "missing port".to_string())
-        .and_then(|v| v.parse::<u16>().ok().filter(|&p| p != 0).ok_or_else(|| format!("invalid port: {v}")))?;
+        .and_then(|v| {
+            v.parse::<u16>()
+                .ok()
+                .filter(|&p| p != 0)
+                .ok_or_else(|| format!("invalid port: {v}"))
+        })?;
     let workers = match cfg.get("workers") {
         None => 1,
-        Some(v) => v.parse::<usize>().ok().filter(|&w| w > 0).ok_or_else(|| format!("invalid workers: {v}"))?,
+        Some(v) => v
+            .parse::<usize>()
+            .ok()
+            .filter(|&w| w > 0)
+            .ok_or_else(|| format!("invalid workers: {v}"))?,
     };
     Ok(Server {
         host,

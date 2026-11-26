@@ -5,15 +5,45 @@ pub type Reg = u8;
 /// `BrTable` jumps to `targets[index]`, or to `default` when `index` is negative or out of range.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Op {
-    Const { dst: Reg, value: i64 },
-    Add { dst: Reg, a: Reg, b: Reg },
-    Sub { dst: Reg, a: Reg, b: Reg },
-    Mul { dst: Reg, a: Reg, b: Reg },
-    Lt { dst: Reg, a: Reg, b: Reg },
-    Jump { target: u32 },
-    BrIf { cond: Reg, target: u32 },
-    BrTable { index: Reg, targets: Vec<u32>, default: u32 },
-    Ret { src: Reg },
+    Const {
+        dst: Reg,
+        value: i64,
+    },
+    Add {
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Sub {
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Mul {
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Lt {
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Jump {
+        target: u32,
+    },
+    BrIf {
+        cond: Reg,
+        target: u32,
+    },
+    BrTable {
+        index: Reg,
+        targets: Vec<u32>,
+        default: u32,
+    },
+    Ret {
+        src: Reg,
+    },
 }
 
 /// What the interpreter runs: 8 bytes. A tag byte and at most 7 bytes of operands laid out around it;
@@ -41,7 +71,11 @@ pub struct Program {
 
 impl Program {
     pub fn new() -> Program {
-        Program { insts: Vec::new(), consts: Vec::new(), tables: Vec::new() }
+        Program {
+            insts: Vec::new(),
+            consts: Vec::new(),
+            tables: Vec::new(),
+        }
     }
 
     /// Appends `op` and returns its index.
@@ -49,7 +83,10 @@ impl Program {
         let inst = match op {
             Op::Const { dst, value } => {
                 self.consts.push(value);
-                Inst::Const { dst, k: self.consts.len() as u32 - 1 }
+                Inst::Const {
+                    dst,
+                    k: self.consts.len() as u32 - 1,
+                }
             }
             Op::Add { dst, a, b } => Inst::Add { dst, a, b },
             Op::Sub { dst, a, b } => Inst::Sub { dst, a, b },
@@ -57,13 +94,20 @@ impl Program {
             Op::Lt { dst, a, b } => Inst::Lt { dst, a, b },
             Op::Jump { target } => Inst::Jump { target },
             Op::BrIf { cond, target } => Inst::BrIf { cond, target },
-            Op::BrTable { index, targets, default } => {
+            Op::BrTable {
+                index,
+                targets,
+                default,
+            } => {
                 // Default first, then the targets: one slice per table in a side pool.
                 let mut table = Vec::with_capacity(targets.len() + 1);
                 table.push(default);
                 table.extend(targets);
                 self.tables.push(table.into_boxed_slice());
-                Inst::BrTable { index, table: self.tables.len() as u32 - 1 }
+                Inst::BrTable {
+                    index,
+                    table: self.tables.len() as u32 - 1,
+                }
             }
             Op::Ret { src } => Inst::Ret { src },
         };
@@ -89,10 +133,18 @@ impl Program {
             pc += 1;
             match inst {
                 Inst::Const { dst, k } => regs[dst as usize] = self.consts[k as usize],
-                Inst::Add { dst, a, b } => regs[dst as usize] = regs[a as usize].wrapping_add(regs[b as usize]),
-                Inst::Sub { dst, a, b } => regs[dst as usize] = regs[a as usize].wrapping_sub(regs[b as usize]),
-                Inst::Mul { dst, a, b } => regs[dst as usize] = regs[a as usize].wrapping_mul(regs[b as usize]),
-                Inst::Lt { dst, a, b } => regs[dst as usize] = (regs[a as usize] < regs[b as usize]) as i64,
+                Inst::Add { dst, a, b } => {
+                    regs[dst as usize] = regs[a as usize].wrapping_add(regs[b as usize])
+                }
+                Inst::Sub { dst, a, b } => {
+                    regs[dst as usize] = regs[a as usize].wrapping_sub(regs[b as usize])
+                }
+                Inst::Mul { dst, a, b } => {
+                    regs[dst as usize] = regs[a as usize].wrapping_mul(regs[b as usize])
+                }
+                Inst::Lt { dst, a, b } => {
+                    regs[dst as usize] = (regs[a as usize] < regs[b as usize]) as i64
+                }
                 Inst::Jump { target } => pc = target as usize,
                 Inst::BrIf { cond, target } => {
                     if regs[cond as usize] != 0 {
@@ -103,7 +155,11 @@ impl Program {
                     let table = &self.tables[table as usize];
                     let i = regs[index as usize];
                     // Targets start at 1; anything negative or past the end takes the default at 0.
-                    pc = usize::try_from(i).ok().and_then(|i| table.get(i + 1)).copied().unwrap_or(table[0]) as usize;
+                    pc = usize::try_from(i)
+                        .ok()
+                        .and_then(|i| table.get(i + 1))
+                        .copied()
+                        .unwrap_or(table[0]) as usize;
                 }
                 Inst::Ret { src } => return Some(regs[src as usize]),
             }

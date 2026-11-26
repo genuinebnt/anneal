@@ -33,7 +33,10 @@ impl<'a> Parse<'a> for &'a str {
 impl<'a> Parse<'a> for Pair<'a> {
     fn parse(s: &'a str) -> Option<Self> {
         let (key, value) = s.split_once('=')?;
-        Some(Pair { key: key.trim(), value: value.trim() })
+        Some(Pair {
+            key: key.trim(),
+            value: value.trim(),
+        })
     }
 }
 

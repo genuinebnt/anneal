@@ -22,5 +22,7 @@ pub fn rfind(s: &str, c: char) -> Option<usize> {
 
 /// The `ms` argument for the legacy `wait(ms)`: -1 waits forever, 0 polls, n > 0 waits up to n ms.
 pub fn timeout_ms(t: Option<Duration>) -> i64 {
-    t.map_or(-1, |d| i64::try_from(d.as_nanos().div_ceil(1_000_000)).unwrap_or(i64::MAX))
+    t.map_or(-1, |d| {
+        i64::try_from(d.as_nanos().div_ceil(1_000_000)).unwrap_or(i64::MAX)
+    })
 }

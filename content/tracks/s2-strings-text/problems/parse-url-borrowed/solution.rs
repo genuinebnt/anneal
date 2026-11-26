@@ -26,5 +26,11 @@ pub fn parse_url(s: &str) -> Option<Url<'_>> {
         .filter(|kv| !kv.is_empty())
         .map(|kv| kv.split_once('=').unwrap_or((kv, "")))
         .collect();
-    Some(Url { scheme, host, port, path, query })
+    Some(Url {
+        scheme,
+        host,
+        port,
+        path,
+        query,
+    })
 }

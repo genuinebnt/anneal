@@ -107,7 +107,14 @@ impl Book {
 
     /// Room for `orders` resting orders, reserved up front.
     pub fn with_capacity(symbol: &str, orders: usize) -> Book {
-        Book { symbol: symbol.into(), bids: BTreeMap::new(), asks: BTreeMap::new(), orders: Vec::with_capacity(orders), free: None, live: 0 }
+        Book {
+            symbol: symbol.into(),
+            bids: BTreeMap::new(),
+            asks: BTreeMap::new(),
+            orders: Vec::with_capacity(orders),
+            free: None,
+            live: 0,
+        }
     }
 
     pub fn symbol(&self) -> &str {
@@ -141,7 +148,10 @@ impl Book {
             Some(s) => {
                 let old = &mut self.orders[s.get()];
                 self.free = old.next;
-                *old = Order { gen: old.gen, ..order };
+                *old = Order {
+                    gen: old.gen,
+                    ..order
+                };
                 s
             }
             None => {
@@ -154,12 +164,27 @@ impl Book {
     /// Rests an order for `qty` (more than 0) at `price`, behind every order already there.
     pub fn add(&mut self, side: Side, price: u32, qty: u64, ts: u64) -> OrderId {
         assert!(qty > 0, "orders need a quantity");
-        let slot = self.alloc(Order { qty, price, gen: 0, prev: None, next: None, side, live: true });
+        let slot = self.alloc(Order {
+            qty,
+            price,
+            gen: 0,
+            prev: None,
+            next: None,
+            side,
+            live: true,
+        });
         let levels = match side {
             Side::Bid => &mut self.bids,
             Side::Ask => &mut self.asks,
         };
-        let level = levels.entry(price).or_insert(PriceLevel { qty: 0, last_update: ts, price, count: 0, head: None, tail: None });
+        let level = levels.entry(price).or_insert(PriceLevel {
+            qty: 0,
+            last_update: ts,
+            price,
+            count: 0,
+            head: None,
+            tail: None,
+        });
         let old_tail = level.tail;
         self.orders[slot.get()].prev = old_tail;
         match old_tail {
@@ -181,7 +206,9 @@ impl Book {
             Side::Bid => &mut self.bids,
             Side::Ask => &mut self.asks,
         };
-        let level = levels.get_mut(&price).expect("a resting order's level exists");
+        let level = levels
+            .get_mut(&price)
+            .expect("a resting order's level exists");
         match prev {
             Some(p) => self.orders[p.get()].next = next,
             None => level.head = next,
@@ -253,7 +280,11 @@ impl Book {
             };
             let (price, head) = (level.price, level.head.expect("empty levels are removed"));
             let take = self.orders[head.get()].qty.min(left);
-            fills.push(Fill { maker: self.id_of(head), price, qty: take });
+            fills.push(Fill {
+                maker: self.id_of(head),
+                price,
+                qty: take,
+            });
             left -= take;
             if take == self.orders[head.get()].qty {
                 self.remove(head, ts);

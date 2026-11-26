@@ -11,7 +11,11 @@ impl<T, const N: usize> Ring<T, N> {
 
     pub fn new() -> Self {
         // `[None; N]` would need `Option<T>: Copy`; from_fn builds each slot separately.
-        Ring { items: std::array::from_fn(|_| None), start: 0, len: 0 }
+        Ring {
+            items: std::array::from_fn(|_| None),
+            start: 0,
+            len: 0,
+        }
     }
 
     /// Adds `x` as the newest item; if the ring was full, returns the evicted oldest one.

@@ -44,6 +44,9 @@ impl Router {
 
     /// "<path>: <handler name>" for every route, sorted by path.
     pub fn describe(&self) -> Vec<String> {
-        self.routes.iter().map(|(p, h)| format!("{p}: {}", h.name())).collect()
+        self.routes
+            .iter()
+            .map(|(p, h)| format!("{p}: {}", h.name()))
+            .collect()
     }
 }

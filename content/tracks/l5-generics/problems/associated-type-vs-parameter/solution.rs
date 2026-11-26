@@ -56,7 +56,9 @@ impl From<&str> for Grid {
 /// One string per row.
 impl From<Vec<&str>> for Grid {
     fn from(rows: Vec<&str>) -> Self {
-        Grid { cells: rows.iter().map(|r| r.as_bytes().to_vec()).collect() }
+        Grid {
+            cells: rows.iter().map(|r| r.as_bytes().to_vec()).collect(),
+        }
     }
 }
 

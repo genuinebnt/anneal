@@ -26,7 +26,10 @@ pub struct PrefixLogger {
 
 impl PrefixLogger {
     pub fn new(prefix: &str, inner: BoxLogger) -> Self {
-        PrefixLogger { prefix: prefix.to_string(), inner }
+        PrefixLogger {
+            prefix: prefix.to_string(),
+            inner,
+        }
     }
 }
 

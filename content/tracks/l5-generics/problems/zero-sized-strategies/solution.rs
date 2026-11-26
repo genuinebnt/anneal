@@ -29,12 +29,17 @@ pub struct SortedVec<T, O = Asc> {
 
 impl<T: Ord, O: Order> SortedVec<T, O> {
     pub fn new() -> Self {
-        SortedVec { items: Vec::new(), order: PhantomData }
+        SortedVec {
+            items: Vec::new(),
+            order: PhantomData,
+        }
     }
 
     /// Inserts `x` after any items that compare equal to it.
     pub fn insert(&mut self, x: T) {
-        let i = self.items.partition_point(|y| O::cmp(y, &x) != Ordering::Greater);
+        let i = self
+            .items
+            .partition_point(|y| O::cmp(y, &x) != Ordering::Greater);
         self.items.insert(i, x);
     }
 
@@ -50,7 +55,10 @@ impl<T: Ord, O: Order> SortedVec<T, O> {
     /// The same items sorted by another order; equal items keep their relative order.
     pub fn reorder<O2: Order>(mut self) -> SortedVec<T, O2> {
         self.items.sort_by(O2::cmp);
-        SortedVec { items: self.items, order: PhantomData }
+        SortedVec {
+            items: self.items,
+            order: PhantomData,
+        }
     }
 }
 

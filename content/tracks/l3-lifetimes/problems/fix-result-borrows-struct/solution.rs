@@ -4,17 +4,26 @@ pub struct Index<'a> {
 
 impl<'a> Index<'a> {
     pub fn new(text: &'a str) -> Self {
-        Index { lines: text.lines().collect() }
+        Index {
+            lines: text.lines().collect(),
+        }
     }
 
     /// The longest line; the first on a tie.
     pub fn longest_line(&self) -> &'a str {
-        self.lines.iter().copied().fold("", |best, l| if l.len() > best.len() { l } else { best })
+        self.lines
+            .iter()
+            .copied()
+            .fold("", |best, l| if l.len() > best.len() { l } else { best })
     }
 
     /// Every line containing `word`.
     pub fn lines_with(&self, word: &str) -> Vec<&'a str> {
-        self.lines.iter().copied().filter(|l| l.contains(word)).collect()
+        self.lines
+            .iter()
+            .copied()
+            .filter(|l| l.contains(word))
+            .collect()
     }
 
     /// The lines, in order.

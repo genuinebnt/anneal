@@ -10,7 +10,15 @@ pub struct Header {
 }
 
 pub fn layout() -> (usize, usize, [usize; 3]) {
-    (size_of::<Header>(), align_of::<Header>(), [offset_of!(Header, tag), offset_of!(Header, len), offset_of!(Header, flags)])
+    (
+        size_of::<Header>(),
+        align_of::<Header>(),
+        [
+            offset_of!(Header, tag),
+            offset_of!(Header, len),
+            offset_of!(Header, flags),
+        ],
+    )
 }
 
 pub fn to_bytes(h: &Header) -> [u8; 12] {

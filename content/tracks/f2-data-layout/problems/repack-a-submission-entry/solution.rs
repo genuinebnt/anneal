@@ -39,7 +39,16 @@ pub type Q7 = (u8, [u16; 3]);
 pub type Q8 = [u64; 0];
 
 /// `(size_of, align_of)` of `Q1` to `Q8`, in order.
-pub const LAYOUT: [(usize, usize); 8] = [(8, 4), (12, 4), (16, 8), (16, 8), (32, 8), (16, 4), (8, 2), (0, 8)];
+pub const LAYOUT: [(usize, usize); 8] = [
+    (8, 4),
+    (12, 4),
+    (16, 8),
+    (16, 8),
+    (32, 8),
+    (16, 4),
+    (8, 2),
+    (0, 8),
+];
 
 /// One submission queue entry. The C consumer reads it by field offset, so it stays `#[repr(C)]`.
 /// Ordered so every field lands on its alignment with no hole: 1 + 1 + 2 + 4 fill the first 8 bytes
@@ -67,15 +76,35 @@ pub const OP_WRITE: u8 = 23;
 
 impl Sqe {
     pub fn nop(user_data: u64) -> Sqe {
-        Sqe { opcode: OP_NOP, user_data, ..Sqe::default() }
+        Sqe {
+            opcode: OP_NOP,
+            user_data,
+            ..Sqe::default()
+        }
     }
 
     pub fn read(fd: i32, addr: u64, len: u32, off: u64, user_data: u64) -> Sqe {
-        Sqe { opcode: OP_READ, fd, addr, len, off, user_data, ..Sqe::default() }
+        Sqe {
+            opcode: OP_READ,
+            fd,
+            addr,
+            len,
+            off,
+            user_data,
+            ..Sqe::default()
+        }
     }
 
     pub fn write(fd: i32, addr: u64, len: u32, off: u64, user_data: u64) -> Sqe {
-        Sqe { opcode: OP_WRITE, fd, addr, len, off, user_data, ..Sqe::default() }
+        Sqe {
+            opcode: OP_WRITE,
+            fd,
+            addr,
+            len,
+            off,
+            user_data,
+            ..Sqe::default()
+        }
     }
 }
 
@@ -94,8 +123,16 @@ impl SqRing {
 
     /// Both counters start at `counter`. Panics unless `entries` is a power of two.
     pub fn starting_at(entries: u32, counter: u32) -> SqRing {
-        assert!(entries.is_power_of_two(), "entries must be a power of two, got {entries}");
-        SqRing { slots: vec![Sqe::default(); entries as usize].into_boxed_slice(), mask: entries - 1, head: counter, tail: counter }
+        assert!(
+            entries.is_power_of_two(),
+            "entries must be a power of two, got {entries}"
+        );
+        SqRing {
+            slots: vec![Sqe::default(); entries as usize].into_boxed_slice(),
+            mask: entries - 1,
+            head: counter,
+            tail: counter,
+        }
     }
 
     pub fn head(&self) -> u32 {

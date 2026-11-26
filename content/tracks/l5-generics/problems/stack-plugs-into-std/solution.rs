@@ -42,7 +42,9 @@ impl<T> Default for Stack<T> {
 /// Pushes in iteration order, so the last item ends up on top.
 impl<T> FromIterator<T> for Stack<T> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
-        Stack { items: iter.into_iter().collect() }
+        Stack {
+            items: iter.into_iter().collect(),
+        }
     }
 }
 

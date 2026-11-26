@@ -28,7 +28,10 @@ impl Drop for Reset<'_> {
 
 impl<T> Once<T> {
     pub const fn new() -> Self {
-        Once { state: AtomicU8::new(EMPTY), slot: UnsafeCell::new(MaybeUninit::uninit()) }
+        Once {
+            state: AtomicU8::new(EMPTY),
+            slot: UnsafeCell::new(MaybeUninit::uninit()),
+        }
     }
 
     pub fn get(&self) -> Option<&T> {
@@ -42,7 +45,10 @@ impl<T> Once<T> {
 
     pub fn get_or_init<F: FnOnce() -> T>(&self, f: F) -> &T {
         loop {
-            match self.state.compare_exchange(EMPTY, RUNNING, Ordering::Acquire, Ordering::Acquire) {
+            match self
+                .state
+                .compare_exchange(EMPTY, RUNNING, Ordering::Acquire, Ordering::Acquire)
+            {
                 Ok(_) => {
                     let reset = Reset(&self.state);
                     let value = f();

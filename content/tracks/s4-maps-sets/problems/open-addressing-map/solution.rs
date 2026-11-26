@@ -17,7 +17,11 @@ impl<V> OpenMap<V> {
     }
 
     fn with_slots(n: usize) -> Self {
-        OpenMap { slots: (0..n).map(|_| Slot::Empty).collect(), len: 0, used: 0 }
+        OpenMap {
+            slots: (0..n).map(|_| Slot::Empty).collect(),
+            len: 0,
+            used: 0,
+        }
     }
 
     /// Fibonacci hashing: multiply, then take the high bits.

@@ -31,7 +31,10 @@ impl<T: Label + ?Sized> Label for &T {
 /// A list shows its items' labels in brackets: [1, 2, 3].
 impl<T: Label> Label for Vec<T> {
     fn label(&self) -> String {
-        format!("[{}]", self.iter().map(Label::label).collect::<Vec<_>>().join(", "))
+        format!(
+            "[{}]",
+            self.iter().map(Label::label).collect::<Vec<_>>().join(", ")
+        )
     }
 }
 

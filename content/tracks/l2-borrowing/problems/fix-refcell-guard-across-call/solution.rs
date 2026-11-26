@@ -8,7 +8,10 @@ pub struct Bus {
 
 impl Bus {
     pub fn new() -> Self {
-        Bus { listeners: RefCell::new(Vec::new()), log: RefCell::new(Vec::new()) }
+        Bus {
+            listeners: RefCell::new(Vec::new()),
+            log: RefCell::new(Vec::new()),
+        }
     }
 
     pub fn subscribe(&self, f: impl Fn(&Bus, &str) + 'static) {

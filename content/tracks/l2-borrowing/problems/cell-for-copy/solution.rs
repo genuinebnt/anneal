@@ -11,7 +11,12 @@ pub struct Node<'a> {
 
 impl<'a> Node<'a> {
     pub fn new(name: &str) -> Self {
-        Node { name: name.to_string(), visits: Cell::new(0), next: Cell::new(None), prev: Cell::new(None) }
+        Node {
+            name: name.to_string(),
+            visits: Cell::new(0),
+            next: Cell::new(None),
+            prev: Cell::new(None),
+        }
     }
 
     pub fn visits(&self) -> u32 {

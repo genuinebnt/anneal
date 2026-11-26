@@ -8,7 +8,11 @@ pub struct Profile {
 
 impl Profile {
     pub fn new(name: &str, nickname: Option<&str>) -> Profile {
-        Profile { name: String::from(name), nickname: nickname.map(String::from), labels: HashMap::new() }
+        Profile {
+            name: String::from(name),
+            nickname: nickname.map(String::from),
+            labels: HashMap::new(),
+        }
     }
 
     /// The nickname, if any.

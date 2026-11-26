@@ -9,7 +9,11 @@ impl Library {
 
     /// Titles containing `needle`.
     pub fn search(&self, needle: &str) -> Vec<String> {
-        self.books.clone().into_iter().filter(|b| b.contains(needle)).collect()
+        self.books
+            .clone()
+            .into_iter()
+            .filter(|b| b.contains(needle))
+            .collect()
     }
 
     /// The longest title; the last one on a tie.

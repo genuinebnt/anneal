@@ -28,8 +28,18 @@ pub enum TryRecvError {
 }
 
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
-    let state = Arc::new(Mutex::new(State { value: None, waker: None, tx_gone: false, rx_gone: false }));
-    (Sender { state: state.clone() }, Receiver { state })
+    let state = Arc::new(Mutex::new(State {
+        value: None,
+        waker: None,
+        tx_gone: false,
+        rx_gone: false,
+    }));
+    (
+        Sender {
+            state: state.clone(),
+        },
+        Receiver { state },
+    )
 }
 
 impl<T> Sender<T> {

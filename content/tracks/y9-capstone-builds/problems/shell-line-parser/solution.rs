@@ -39,11 +39,19 @@ fn is_name_start(c: char) -> bool {
 }
 
 /// Expands the `$` at `chars[*i]`, appending to `out`; leaves `*i` after the variable.
-fn expand(chars: &[char], i: &mut usize, env: &HashMap<String, String>, out: &mut String) -> Result<(), ParseError> {
+fn expand(
+    chars: &[char],
+    i: &mut usize,
+    env: &HashMap<String, String>,
+    out: &mut String,
+) -> Result<(), ParseError> {
     *i += 1; // the `$`
     let name: String;
     if chars.get(*i) == Some(&'{') {
-        let close = chars[*i..].iter().position(|&c| c == '}').ok_or(ParseError::BadVariable)?;
+        let close = chars[*i..]
+            .iter()
+            .position(|&c| c == '}')
+            .ok_or(ParseError::BadVariable)?;
         name = chars[*i + 1..*i + close].iter().collect();
         *i += close + 1;
     } else if chars.get(*i).map_or(false, |&c| is_name_start(c)) {
@@ -129,7 +137,9 @@ fn tokenize(line: &str, env: &HashMap<String, String>) -> Result<Vec<Tok>, Parse
                             i += 1;
                             break;
                         }
-                        Some('\\') if matches!(chars.get(i + 1), Some('"') | Some('\\') | Some('$')) => {
+                        Some('\\')
+                            if matches!(chars.get(i + 1), Some('"') | Some('\\') | Some('$')) =>
+                        {
                             w.push(chars[i + 1]);
                             i += 2;
                         }
@@ -183,8 +193,18 @@ pub fn parse(line: &str, env: &HashMap<String, String>) -> Result<Vec<Command>, 
         match t {
             Tok::Word(w) => match pending.take() {
                 Some(Tok::In) => cur.stdin = Some(w),
-                Some(Tok::Out) => cur.stdout = Some(Redirect { path: w, append: false }),
-                Some(Tok::Append) => cur.stdout = Some(Redirect { path: w, append: true }),
+                Some(Tok::Out) => {
+                    cur.stdout = Some(Redirect {
+                        path: w,
+                        append: false,
+                    })
+                }
+                Some(Tok::Append) => {
+                    cur.stdout = Some(Redirect {
+                        path: w,
+                        append: true,
+                    })
+                }
                 _ => cur.args.push(w),
             },
             Tok::Pipe => {

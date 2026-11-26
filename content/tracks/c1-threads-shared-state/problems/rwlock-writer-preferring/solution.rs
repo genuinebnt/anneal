@@ -29,7 +29,11 @@ pub struct WriteGuard<'a, T> {
 
 impl<T> RwLock<T> {
     pub fn new(value: T) -> Self {
-        RwLock { state: Mutex::new(State::default()), cv: Condvar::new(), value: UnsafeCell::new(value) }
+        RwLock {
+            state: Mutex::new(State::default()),
+            cv: Condvar::new(),
+            value: UnsafeCell::new(value),
+        }
     }
 
     pub fn read(&self) -> ReadGuard<'_, T> {

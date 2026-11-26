@@ -12,7 +12,11 @@ pub mod shop {
 
     impl Shop {
         pub fn new(items: Vec<Item>, discount: u32) -> Self {
-            Shop { items, log: Vec::new(), discount }
+            Shop {
+                items,
+                log: Vec::new(),
+                discount,
+            }
         }
 
         pub fn items(&self) -> &[Item] {

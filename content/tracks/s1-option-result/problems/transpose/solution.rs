@@ -8,7 +8,9 @@ pub fn parse_optional(s: Option<&str>) -> Result<Option<i32>, ParseIntError> {
 /// After trimming: a blank line or a `#` comment is `Ok(None)`; anything else must be a number.
 pub fn parse_line(line: &str) -> Result<Option<i64>, ParseIntError> {
     let t = line.trim();
-    (!t.is_empty() && !t.starts_with('#')).then(|| t.parse()).transpose()
+    (!t.is_empty() && !t.starts_with('#'))
+        .then(|| t.parse())
+        .transpose()
 }
 
 /// Every number in `text`, in order, or the 1-based line number and error of the first bad line.

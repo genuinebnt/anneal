@@ -16,7 +16,10 @@ pub struct Guard<'a, T> {
 
 impl<T> SpinLock<T> {
     pub const fn new(value: T) -> Self {
-        SpinLock { locked: AtomicBool::new(false), value: UnsafeCell::new(value) }
+        SpinLock {
+            locked: AtomicBool::new(false),
+            value: UnsafeCell::new(value),
+        }
     }
 
     pub fn lock(&self) -> Guard<'_, T> {
@@ -32,7 +35,11 @@ impl<T> SpinLock<T> {
     }
 
     pub fn try_lock(&self) -> Option<Guard<'_, T>> {
-        if self.locked.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok() {
+        if self
+            .locked
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
             Some(Guard { lock: self })
         } else {
             None

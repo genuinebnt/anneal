@@ -7,7 +7,8 @@ pub trait Player {
 
     /// True if `self` ranks above `other`: a higher score, or the same score and a name that sorts first.
     fn beats(&self, other: &dyn Player) -> bool {
-        self.score() > other.score() || (self.score() == other.score() && self.name() < other.name())
+        self.score() > other.score()
+            || (self.score() == other.score() && self.name() < other.name())
     }
 }
 
@@ -24,7 +25,10 @@ pub struct Team {
 
 impl Player for Human {
     fn new(name: &str, score: u32) -> Self {
-        Human { name: name.to_string(), score }
+        Human {
+            name: name.to_string(),
+            score,
+        }
     }
 
     fn name(&self) -> String {
@@ -38,7 +42,10 @@ impl Player for Human {
 
 impl Player for Team {
     fn new(name: &str, score: u32) -> Self {
-        Team { members: name.split('+').map(String::from).collect(), score }
+        Team {
+            members: name.split('+').map(String::from).collect(),
+            score,
+        }
     }
 
     fn name(&self) -> String {

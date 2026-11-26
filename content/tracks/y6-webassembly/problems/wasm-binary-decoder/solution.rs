@@ -193,7 +193,10 @@ pub fn decode(bytes: &[u8]) -> Result<Module, DecodeError> {
                     10 => {
                         for _ in 0..s.count()? {
                             let size = s.u32()? as usize;
-                            let mut body = Reader { b: s.take(size)?, p: 0 };
+                            let mut body = Reader {
+                                b: s.take(size)?,
+                                p: 0,
+                            };
                             let mut locals = Vec::new();
                             let mut total: u64 = 0;
                             for _ in 0..body.count()? {

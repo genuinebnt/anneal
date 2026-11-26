@@ -8,7 +8,11 @@ pub struct Cache {
 
 impl Cache {
     pub fn new() -> Self {
-        Cache { map: HashMap::new(), order: Vec::new(), misses: 0 }
+        Cache {
+            map: HashMap::new(),
+            order: Vec::new(),
+            misses: 0,
+        }
     }
 
     /// Keys in the order they were first stored.

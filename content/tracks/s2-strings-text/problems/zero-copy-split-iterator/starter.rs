@@ -5,7 +5,10 @@ pub struct SplitOn<'a> {
 }
 
 pub fn split_on(s: &str, delim: char) -> SplitOn<'_> {
-    SplitOn { rest: Some(s), delim }
+    SplitOn {
+        rest: Some(s),
+        delim,
+    }
 }
 
 impl<'a> Iterator for SplitOn<'a> {
