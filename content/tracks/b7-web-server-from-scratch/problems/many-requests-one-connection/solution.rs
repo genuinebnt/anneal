@@ -24,6 +24,12 @@ pub enum Next {
     Invalid,
 }
 
+/// The characters a header name may hold: an HTTP "token". Anything else could be read as a different
+/// name by a proxy in front of the server, which is how requests are smuggled past it.
+fn is_token_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
+}
+
 /// Reads one request from the front of `buf`. (A small reader: it does not enforce limits.)
 pub fn next_request(buf: &[u8]) -> Next {
     let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
@@ -44,6 +50,9 @@ pub fn next_request(buf: &[u8]) -> Next {
         let Some((name, value)) = line.split_once(':') else {
             return Next::Invalid;
         };
+        if name.is_empty() || !name.bytes().all(is_token_byte) {
+            return Next::Invalid;
+        }
         headers.push((name.to_ascii_lowercase(), value.trim().to_string()));
     }
     let value = |name: &str| {

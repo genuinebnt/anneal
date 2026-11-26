@@ -22,6 +22,12 @@ pub struct Invalid {
 
 const BLANK_LINE: &[u8] = b"\r\n\r\n";
 
+/// The characters a header name may hold: an HTTP "token". Anything else could be read as a different
+/// name by a proxy in front of the server, which is how requests are smuggled past it.
+fn is_token_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
+}
+
 /// The parsed head and the body length it announces.
 fn parse_head(head: &str) -> Option<(Message, usize)> {
     let mut lines = head.split("\r\n");
@@ -36,7 +42,7 @@ fn parse_head(head: &str) -> Option<(Message, usize)> {
     let mut length = None;
     for line in lines {
         let (key, value) = line.split_once(':')?;
-        if key.is_empty() {
+        if key.is_empty() || !key.bytes().all(is_token_byte) {
             return None;
         }
         let key = key.to_ascii_lowercase();

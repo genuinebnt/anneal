@@ -12,6 +12,8 @@ hello
 
 The first line is three non-empty parts separated by single spaces; the third must be `MSG/1`. Then zero or more header lines `name:value`, an empty line, and a body of exactly `Content-Length` bytes (none without that header). Names are not empty; they are stored in lower case. Spaces and tabs around a value are removed. `Content-Length` (any case) is ASCII digits only; if it appears twice, or does not fit in a `usize`, the request is invalid. The lines before the body must be UTF-8. The body may be any bytes.
 
+A real server must also refuse any name that is not an HTTP token (letters, digits and a few punctuation marks); these tests do not require that, but the reference code does it.
+
 **`read_one(buf)`** looks at all the bytes received and not yet used:
 
 - `Read::NeedMore`: they could still become a request;
