@@ -204,7 +204,7 @@ export function CoursePage({ course = COURSE_ID }: { course?: string }) {
         <>
             <Header area="courses" />
             <MockRoot>
-                <div className="k-wrap">
+                <div className="k-wrap rs-courses">
                     <section className="k-hero">
                         <div>
                             <div className="k-eye k-rv" style={{ "--i": 0 } as CSSProperties}>
@@ -260,6 +260,9 @@ export function CoursePage({ course = COURSE_ID }: { course?: string }) {
                                     </article>
                                 )}
 
+                                <h2 className="rs-secth">
+                                    The path<small>in order, each part builds on the one before</small>
+                                </h2>
                                 <div className="k-map k-rv" style={{ "--i": 5 } as CSSProperties} aria-label="Course map">
                                     <h5>
                                         <span>COURSE MAP</span>
@@ -268,7 +271,7 @@ export function CoursePage({ course = COURSE_ID }: { course?: string }) {
                                     <div className="kp-grid">
                                         {c.projects
                                             .filter((p) => p.modules.length > 0)
-                                            .map((p) => {
+                                            .map((p, at) => {
                                                 const [first, ...rest] = projectLabel(p.number, p.title).split(" · ");
                                                 const head = first ?? p.title;
                                                 const total = p.modules.reduce((n, m) => n + coreStages(m.stages).length, 0);
@@ -277,6 +280,7 @@ export function CoursePage({ course = COURSE_ID }: { course?: string }) {
                                                 const art = projectArt(p.number, p.title);
                                                 return (
                                                     <article className={`kp-card tint${total > 0 && passed === total ? " kp-done" : ""}`} key={p.number}>
+                                                        <span className="rs-no" aria-hidden="true">{String(at).padStart(2, "0")}</span>
                                                         <header>
                                                             <span className="kp-lab">
                                                                 {rest.length > 0 ? (
@@ -412,6 +416,7 @@ export function CoursePage({ course = COURSE_ID }: { course?: string }) {
                                 </div>
                             </div>
                             <aside className="k-side">
+                                <p className="rs-sidelead">Do these once on your machine, then every stage is: write code, run the test.</p>
                                 <div className="k-sc k-rv" style={{ "--i": 6 } as CSSProperties}>
                                     <h5>
                                         <span>GET STARTED</span>

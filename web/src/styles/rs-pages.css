@@ -1,0 +1,123 @@
+/* The approved restyle of Progress, Analytics, Settings, the course page and the course stage page
+   (docs/mockups/restyle-more.html and the courses and stage screens of docs/mockups/restyle-courses-plan.html).
+   Every rule is scoped to .rs or an .rs-* class that only these pages set. */
+
+/* ---- the shared head and panels ---- */
+.rs .ly-crumb{font-size:12px;letter-spacing:.14em}
+.rs .ly-head{align-items:flex-end;padding-top:18px;margin-bottom:22px}
+.rs .ly-h1{font-size:clamp(32px,4.2vw,54px);line-height:1.06;letter-spacing:-.04em;font-weight:700}
+.rs .ly-h1>span{background-image:linear-gradient(90deg,var(--acc),var(--vio),var(--fn),var(--grn),var(--acc));background-size:300% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;padding-bottom:.06em}
+.rs .ly-sub{font-size:16px;line-height:1.6;max-width:72ch}
+.rs .ly-tl{border-radius:14px;padding:14px 18px;min-width:130px}
+.rs .ly-tl strong{font-size:26px}
+
+.rs-tidy .ly-lay{gap:16px}
+.rs-tidy .ly-lp,.rs-tidy .ly-cp,.rs-tidy .ly-rp{row-gap:16px}
+.rs-tidy .ly-pn,.rs-tidy .pbox,.rs-tidy .an-kpi,.rs-tidy .st-card{border-radius:16px}
+.rs-tidy .ly-pn,.rs-tidy .pbox{padding:22px 24px}
+.rs-tidy .ly-cp{display:grid;grid-template-columns:minmax(0,1fr);align-content:start}
+.rs-tidy .ly-cp>*{margin:0;min-width:0;max-width:none}
+/* rows as soft pills, no lines between them */
+.rs-tidy table{border-collapse:separate;border-spacing:0 3px}
+.rs-tidy table th,.rs-tidy table td{border:0}
+.rs-tidy table tbody td{background:var(--inset);padding-block:9px}
+.rs-tidy table tbody td:first-child{border-radius:9px 0 0 9px;padding-left:10px}
+.rs-tidy table tbody td:last-child{border-radius:0 9px 9px 0;padding-right:10px}
+.rs-tidy .pr-secs>div,.rs-tidy .ly-kv>div,.rs-tidy .an-tr{border:0}
+
+/* ---- Progress ---- */
+/* three columns only when there is a third panel (the Overview tab), so the other tabs use the full width */
+@media (min-width:1321px){.rs-progress .ly-lay:not(.two){grid-template-columns:264px minmax(0,1fr) 330px}}
+.rs-progress .pr-secs>div{padding-block:8px;gap:3px 10px}
+.rs-progress .pr-secs span,.rs-progress .ly-rp .ptable td:first-child{white-space:normal;overflow:visible;text-overflow:clip}
+.rs-progress .ly-rp .ly-pn,.rs-progress .ly-rp .pbox{padding:18px 16px}
+
+/* ---- Analytics ---- */
+.rs-analytics .an-kpis,.rs-analytics .an-grid{gap:16px}
+.rs-analytics .an-tr:not(.th){background:var(--inset);border-radius:9px;margin-bottom:3px;padding-inline:10px}
+.rs-analytics .an-tr.th{padding-inline:10px}
+
+/* ---- Settings ---- */
+.rs-settings .ly-cp section{padding:24px 28px;border-radius:16px}
+
+@media (max-width:700px){
+    .rs .ly-crumb,.rs .ly-crumb>span,.rs .ly-crumb span span{display:inline-flex;flex-wrap:wrap;align-items:center;gap:0 6px;line-height:1.8}
+    .rs .ly-h1{font-size:32px}
+    .rs .ly-tl{min-width:0}
+    .rs-tidy .ly-pn,.rs-tidy .pbox,.rs-settings .ly-cp section{padding:16px 14px}
+    .rs-tidy table tbody td:first-child{padding-left:8px}
+    /* six columns must fit a phone: tighter cells, and the box scrolls (no bar) if a long value still does not fit */
+    .rs-progress .ly-cp .ptable th{letter-spacing:.04em}
+    .rs-progress .ly-cp .ptable th,.rs-progress .ly-cp .ptable td{padding-inline:3px}
+    .rs-progress .ly-cp .ptable tr>:first-child{padding-left:6px}
+    .rs-progress .ly-cp .pbox{overflow-x:auto;scrollbar-width:none}
+}
+
+/* ---- the course page ---- */
+.k-root .k-wrap.rs-courses .k-hero{border:0;padding-bottom:4px}
+.k-root .rs-courses .k-hero h1{letter-spacing:-.04em}
+.k-root .rs-courses .k-hero h1 em{font-style:normal;background-image:linear-gradient(90deg,var(--grn),var(--fn),var(--grn));-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;padding-bottom:.08em;display:inline-block}
+.k-root .rs-courses .k-mod .k-body a,.k-root .rs-courses .k-mod .k-body li,.k-root .rs-courses .k-mod .k-body>*>*{border-top-color:transparent;border-bottom-color:transparent}
+.k-root .rs-courses .k-stats{border-radius:16px;overflow:hidden}
+.k-root .rs-courses .k-cont{border-radius:20px;padding:30px;border-color:color-mix(in oklab,var(--grn) 40%,var(--line2));background:radial-gradient(120% 110% at 100% 0%,color-mix(in oklab,var(--grn) 18%,transparent),transparent 62%),var(--panel)}
+/* no strip along the top of a card */
+.k-root .rs-courses .k-cont::before,.k-root .rs-courses .k-cont::after,.k-root .rs-courses .kp-card::before,.k-root .rs-courses .kp-card::after,.k-root .rs-courses .k-map::before,.k-root .rs-courses .k-side>*::before,.k-root .rs-courses .k-mod::before{display:none}
+.k-root .rs-courses .k-cont h3{font-size:clamp(24px,2.6vw,36px);letter-spacing:-.03em}
+.k-root .rs-secth{margin:26px 0 6px;font-size:21px;letter-spacing:-.02em;color:var(--fg)}
+.k-root .rs-secth small{margin-left:12px;font:500 12px var(--mono);letter-spacing:0;color:var(--dim)}
+.k-root .rs-courses .k-map{border:0;background:none;padding:0;box-shadow:none}
+.k-root .rs-courses .k-map h5{border:0;padding:0 2px 8px}
+/* the path: one card per row, numbered, its drawing on the right */
+.k-root .rs-courses .kp-grid{grid-template-columns:minmax(0,1fr);gap:10px}
+.k-root .rs-courses .kp-card{box-shadow:none;display:grid;grid-template-columns:76px minmax(0,1fr) 230px;grid-template-rows:auto auto auto auto;gap:8px 18px;align-items:start;padding:20px 22px;border-radius:16px;background:var(--panel);border:1px solid var(--line2)}
+.k-root .rs-courses .rs-no{grid-column:1;grid-row:1/span 4;font:700 40px/1 var(--sans);letter-spacing:-.04em;color:color-mix(in oklab,var(--grn) 82%,var(--panel))}
+.k-root .rs-courses .kp-card header{grid-column:2;grid-row:1;justify-content:flex-start;gap:14px;flex-direction:row-reverse;align-items:center;justify-self:start}
+.k-root .rs-courses .kp-card header .kp-lab em{font-size:20px;letter-spacing:-.02em}
+.k-root .rs-courses .kp-card .kp-stage{grid-column:3;grid-row:1/span 4;align-self:center;height:auto;min-height:0}
+.k-root .rs-courses .kp-stage svg{width:100%;height:auto;max-height:130px}
+.k-root .rs-courses .kp-card .kp-tag{grid-column:2;grid-row:2;margin:0;font-size:14.5px;line-height:1.65;max-width:none;min-height:0}
+.k-root .rs-courses .kp-card .k-nodes{grid-column:2;grid-row:3;margin:0}
+.k-root .rs-courses .kp-card .kp-foot{grid-column:2;grid-row:4;margin:4px 0 0;border:0;padding:0}
+.k-root .rs-courses .k-side>*{border-radius:16px}
+.k-root .rs-courses .rs-sidelead{margin:0 2px 10px;font-size:13.5px;line-height:1.6;color:var(--mut);background:none;border:0}
+.k-root .rs-courses .k-mod{border-radius:14px}
+@media (max-width:1180px){
+    .k-root .rs-courses .kp-card{grid-template-columns:60px minmax(0,1fr)}
+    .k-root .rs-courses .kp-card .kp-stage{display:none}
+}
+@media (max-width:700px){
+    .k-root .rs-courses .kp-card{grid-template-columns:minmax(0,1fr);padding:16px}
+    .k-root .rs-courses .kp-card>*{grid-column:1!important;grid-row:auto!important}
+    .k-root .rs-courses .rs-no{font-size:24px}
+}
+
+/* ---- the course stage page ---- */
+.k-root .rs-stagepage .k-read2 :is(.k-prose,.k-prose p,.k-prose ul,.k-prose ol,.k-prose li,.k-pane>p){max-width:none}
+.k-root .rs-stagepage .k-tabs{border:0}
+.k-root .rs-stagepage .k-tabs button{padding-inline:14px;border-radius:10px}
+.k-root .rs-stagepage .k-tabs button.k-on{background:var(--panel)}
+.k-root .rs-stagepage .k-read2 .k-sh{margin-top:36px;font-size:15px}
+.k-root .rs-stagepage .k-sh::after{display:none}
+.k-root .rs-how{list-style:none;margin:18px 0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.k-root .rs-how li{display:grid;grid-template-columns:34px minmax(0,1fr);gap:12px;align-content:start;padding:16px;margin:0;border-radius:14px;background:var(--panel);border:1px solid var(--line2)}
+.k-root .rs-how li>b{font:700 26px/1 var(--sans);color:var(--grn)}
+.k-root .rs-how li>div{display:grid;gap:7px;align-content:start;min-width:0}
+.k-root .rs-how strong{font-size:15.5px}
+.k-root .rs-how li>div>span{font-size:13px;line-height:1.55;color:var(--mut)}
+.k-root .rs-how [data-jump]{justify-self:start;text-align:left;font:600 12px var(--mono);color:var(--grn)}
+.k-root .rs-how .k-cli{display:flex;flex-wrap:wrap;gap:6px;margin:0}
+.k-root .rs-how .k-cli code{overflow-wrap:anywhere;white-space:normal;min-width:0}
+.k-root .rs-stagepage .k-task{border-radius:16px}
+.k-root .rs-stagepage .k-th span{display:none}
+.k-root .rs-stagepage .k-th{border:0}
+.k-root .rs-stagepage [data-anchor]{scroll-margin-top:130px}
+.k-root .rs-tests .k-prose>ul{list-style:none;margin:0;padding:0;display:grid;gap:8px;counter-reset:rs-t}
+.k-root .rs-tests .k-prose>ul>li{counter-increment:rs-t;position:relative;margin:0;padding:14px 16px 14px 60px;border-radius:14px;background:var(--panel);border:1px solid var(--line2)}
+.k-root .rs-tests .k-prose>ul>li::before{content:counter(rs-t,decimal-leading-zero);position:absolute;left:18px;top:13px;font:700 18px/1.4 var(--sans);color:var(--grn)}
+.k-root .rs-tests .rs-testlead{margin:0 0 10px;font-size:13px;color:var(--dim)}
+/* numbered blocks keep one row for each line: their numbers are a separate column, so a wrapped line would put every
+   number after it against the wrong line. They scroll sideways instead. */
+.k-root .rs-stagepage pre:not(.k-cb pre),.k-root .rs-stagepage pre:not(.k-cb pre) *{white-space:pre-wrap;overflow-wrap:anywhere}
+@media (max-width:900px){
+    .k-root .rs-how{grid-template-columns:minmax(0,1fr)}
+}

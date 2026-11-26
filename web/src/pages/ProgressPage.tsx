@@ -165,6 +165,11 @@ function ReadinessLines({ trend }: { trend: ProgressOverview["readiness_trend"] 
   const x = (i: number) => l + ((W - l - r) * i) / Math.max(1, n - 1);
   const y = (v: number) => t + (H - t - b) * (1 - v / top);
   const ticks = Array.from({ length: top / 20 + 1 }, (_, i) => i * 20);
+  // two lines ending close together would print their names over each other: the lower one's name moves down, or both move up
+  const ends = trend.filter((a) => a.points.some((p) => p !== null)).map((a) => ({ area: a.area, at: y(a.points[a.points.length - 1] ?? 0) })).sort((a, b) => a.at - b.at);
+  for (let i = 1; i < ends.length; i++) ends[i]!.at = Math.max(ends[i]!.at, ends[i - 1]!.at + 12);
+  const over = Math.max(0, (ends[ends.length - 1]?.at ?? 0) - y(0));
+  const labelAt = (area: string) => (ends.find((e) => e.area === area)?.at ?? 0) - over;
   return (
     <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Readiness by area over 12 weeks">
       {ticks.map((v) => (
@@ -185,7 +190,7 @@ function ReadinessLines({ trend }: { trend: ProgressOverview["readiness_trend"] 
             <g key={a.area}>
               <polyline fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" points={pts.map(([px, py]) => `${px},${py}`).join(" ")} />
               <circle cx={x(n - 1)} cy={y(last)} r="4" fill={color} stroke="var(--panel)" strokeWidth="2" />
-              <text className="lbl" x={x(n - 1) + 9} y={y(last) + 4} style={{ fill: color }}>
+              <text className="lbl" x={x(n - 1) + 9} y={labelAt(a.area) + 4} style={{ fill: color }}>
                 {AREA_NAME[a.area]} {Math.round(last)}%
               </text>
             </g>
@@ -637,7 +642,7 @@ export function ProgressPage() {
     <>
       <Header />
       <div className="pr-3">
-        <Page3 crumb={["Progress", "DSA · Rust · Courses"]} title={<>Steady practice, <span style={{ color: "var(--acc)" }}>measured.</span></>} tiles={tiles} left={left} center={center} right={tab === "overview" ? <DsaReadiness /> : undefined} label="Progress" />
+        <Page3 crumb={["Progress", "DSA · Rust · Courses"]} title={<>Steady practice, <span style={{ color: "var(--acc)" }}>measured.</span></>} tiles={tiles} left={left} center={center} right={tab === "overview" ? <DsaReadiness /> : undefined} label="Progress" className="rs rs-tidy rs-progress" />
       </div>
     </>
   );

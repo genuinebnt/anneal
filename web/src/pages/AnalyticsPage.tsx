@@ -162,7 +162,7 @@ function Body({ s, range, setRange }: { s: SystemView; range: "1h" | "6h" | "24h
         </>
     );
 
-    return <Page3 crumb={["Analytics"]} title="Analytics" sub="The VPS, its containers and the app on it." tiles={tiles} left={left} center={center} right={right} label="Analytics" />;
+    return <Page3 className="rs rs-tidy rs-analytics" crumb={["Analytics"]} title="Analytics" sub="The VPS, its containers and the app on it." tiles={tiles} left={left} center={center} right={right} label="Analytics" />;
 }
 
 /** A small line of the last values. */

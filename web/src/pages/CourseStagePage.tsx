@@ -49,7 +49,7 @@ function blocks(text: string): [string | null, string][] {
 
 function TaskBox({ stageId, text }: { stageId: string; text: string }) {
     return (
-        <div className="k-task">
+        <div className="k-task" data-anchor="task">
             <div className="k-th">
                 YOUR TURN<span>run  anneal course test {stageId}</span>
             </div>
@@ -57,6 +57,60 @@ function TaskBox({ stageId, text }: { stageId: string; text: string }) {
                 <Prose text={text} />
             </div>
         </div>
+    );
+}
+
+/** How many behaviours a Tests section lists: its top-level bullets, outside code fences. */
+function behaviours(md: string): number {
+    let fence = false;
+    let n = 0;
+    for (const line of md.split("\n")) {
+        if (line.trimStart().startsWith("```")) fence = !fence;
+        else if (!fence && /^[-*] /.test(line)) n++;
+    }
+    return n;
+}
+
+/** The three steps of every stage, above the tabs. The buttons go to the sections this stage really has. */
+function HowTo({ boxed, taskTitle, testsTitle, onTask, onTests, cmd }: { boxed: boolean; taskTitle: string | undefined; testsTitle: string | undefined; onTask: () => void; onTests: () => void; cmd: string }) {
+    return (
+        <ol className="rs-how k-rv" style={{ "--i": 2 } as React.CSSProperties} aria-label="How to do this stage">
+            <li>
+                <b aria-hidden="true">1</b>
+                <div>
+                    <strong>Read the task</strong>
+                    <span>{boxed ? 'The box marked "Your turn" is all you must build.' : taskTitle ? `"${taskTitle}" says what you must do.` : "The instructions say what you must do."}</span>
+                    {(boxed || taskTitle) && (
+                        <button type="button" data-jump="task" onClick={onTask}>
+                            Go to the task
+                        </button>
+                    )}
+                </div>
+            </li>
+            <li>
+                <b aria-hidden="true">2</b>
+                <div>
+                    <strong>Write it in your repo</strong>
+                    <span>Any design is fine; the tests use only the public methods.</span>
+                    {testsTitle && (
+                        <button type="button" data-jump="tests" onClick={onTests}>
+                            See what is tested
+                        </button>
+                    )}
+                </div>
+            </li>
+            <li>
+                <b aria-hidden="true">3</b>
+                <div>
+                    <strong>Run the tests</strong>
+                    <span>The result also appears under "Last run".</span>
+                    <div className="k-cli">
+                        <code>{cmd}</code>
+                        <MockCopy text={cmd} />
+                    </div>
+                </div>
+            </li>
+        </ol>
     );
 }
 
@@ -133,27 +187,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
         window.scrollTo({ top: 0 });
     }, [stage]);
 
-    // The sliding underline under the active tab.
     const tabsRef = useRef<HTMLDivElement>(null);
-    const placeUnderline = () => {
-        const box = tabsRef.current;
-        const on = box?.querySelector<HTMLElement>("button.k-on");
-        const ul = box?.querySelector<HTMLElement>(".k-ul");
-        if (!on || !ul || !on.offsetWidth) return;
-        ul.style.width = `${on.offsetWidth}px`;
-        ul.style.transform = `translateX(${on.offsetLeft}px)`;
-    };
-    useLayoutEffect(placeUnderline);
-    useEffect(() => {
-        addEventListener("resize", placeUnderline);
-        // The panels slide for a moment when they open or close and the column changes width with them.
-        const t = setTimeout(placeUnderline, 450);
-        document.fonts?.ready.then(placeUnderline);
-        return () => {
-            removeEventListener("resize", placeUnderline);
-            clearTimeout(t);
-        };
-    }, [panels.p.lc, panels.p.rc, !!p]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // A run that arrives while the page is open (or one from the last half minute) pops a result: "Tests passed, proceed" or the count.
     const lastRun = p?.last_run ?? null;
@@ -384,6 +418,16 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
             toast("in", "Run it in your repo", cmd);
         }
     };
+    // The "Your turn" box, or on a stage without one (the challenges) the section that says what to build.
+    const boxed = entries.some((e) => !e.optional && (e.title === "The task" || /^### The task\s*$/m.test(e.md))) || /^### The task\s*$/m.test(p.stage.intro ?? "");
+    const taskEntry = entries.find((e) => ["The task", "What to build", "What to fix"].includes(e.title));
+    const testsEntry = entries.find((e) => e.title === "Tests" || e.title === "What the tests check");
+    // The target is only on the page under Instructions, so another tab is left first.
+    const jumpTo = (selector: string) => {
+        if (tab !== "instructions") pick("instructions");
+        restore.current = null;
+        setTimeout(() => document.querySelector(`.k-read2 ${selector}`)?.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "start" }), tab === "instructions" ? 0 : 60);
+    };
     let number = 0;
     const part = (title: string) => /^Part (\d+) · (.*)$/.exec(title);
     return (
@@ -412,7 +456,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                 </div>
                 <div className={`k-dbk${panels.drawer ? " k-on" : ""}`} onClick={() => panels.setDrawer(null)} aria-hidden="true" />
                 <div
-                    className={`k-stage${panels.dragging ? " k-dragging" : ""}${panels.p.lc ? " k-lc" : ""}${panels.p.rc ? " k-rc" : ""}`}
+                    className={`k-stage rs-stagepage${panels.dragging ? " k-dragging" : ""}${panels.p.lc ? " k-lc" : ""}${panels.p.rc ? " k-rc" : ""}`}
                     style={{ "--lw": `${panels.p.l}px`, "--rw": `${panels.p.r}px` } as React.CSSProperties}
                 >
                     <Tree course={course} page={p} panels={panels} />
@@ -427,11 +471,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                         <h2 className="k-ttl k-rv" style={{ "--i": 1 } as React.CSSProperties}>
                             {p.stage.title}
                         </h2>
-                        <div className="k-cli k-rv" style={{ "--i": 2 } as React.CSSProperties}>
-                            <span>test this stage</span>
-                            <code>{cmd}</code>
-                            <MockCopy text={cmd} />
-                        </div>
+                        <HowTo boxed={boxed} taskTitle={taskEntry?.title} testsTitle={testsEntry?.title} onTask={() => jumpTo(boxed ? '[data-anchor="task"]' : `#${taskEntry?.id}`)} onTests={() => jumpTo(`#${testsEntry?.id}`)} cmd={cmd} />
                         {p.stage.learn.length > 0 && (
                             <div className="k-learn k-rv" style={{ "--i": 3 } as React.CSSProperties}>
                                 <span>YOU'LL LEARN</span>
@@ -463,7 +503,6 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                                     {n !== "" && <> <small>{n}</small></>}
                                 </button>
                             ))}
-                            <span className="k-ul" />
                         </div>
 
                         <section className="k-pane k-on" key={tab} id={`pane-${tab}`} role="tabpanel">
@@ -543,11 +582,20 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                                         const pt = part(e.title);
                                         return (
                                             <Fragment key={e.id}>
-                                                <div className="k-sh" id={e.id}>
+                                                <div className="k-sh" id={e.id} data-anchor={e.id === testsEntry?.id ? "tests" : undefined}>
                                                     <b>{pt ? `PART ${pt[1]}` : String(number).padStart(2, "0")}</b>
                                                     {(pt ? pt[2] ?? "" : e.title).toUpperCase()}
                                                 </div>
-                                                {e.title === "The task" ? <TaskBox stageId={p.stage.id} text={e.md} /> : <Body text={e.md} stageId={p.stage.id} />}
+                                                {e.title === "The task" ? (
+                                                    <TaskBox stageId={p.stage.id} text={e.md} />
+                                                ) : e.id === "sec-tests" && behaviours(e.md) > 0 ? (
+                                                    <div className="rs-tests">
+                                                        <p className="rs-testlead">{behaviours(e.md) === 1 ? "1 behaviour is checked." : `${behaviours(e.md)} behaviours are checked.`}</p>
+                                                        <Body text={e.md} stageId={p.stage.id} />
+                                                    </div>
+                                                ) : (
+                                                    <Body text={e.md} stageId={p.stage.id} />
+                                                )}
                                                 {e.id === "sec-tests" && run && run.tests.length > 0 && (
                                                     <div className="k-tests" style={{ marginTop: 14 }}>
                                                         {run.tests.map((t) => (

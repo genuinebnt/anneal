@@ -25,16 +25,11 @@ test("a reading bar across the top grows with the scroll; the condensed header a
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBeLessThan(5);
 });
 
-test("the tab underline sits under the active tab and slides to the next", async ({ page }) => {
-    const ul = page.locator(".k-tabs .k-ul");
-    const under = async (name: RegExp) => {
-        const tab = (await page.getByRole("tab", { name }).boundingBox())!;
-        const line = (await ul.boundingBox())!;
-        return Math.abs(line.x - tab.x) < 2 && Math.abs(line.width - tab.width) < 2;
-    };
-    await expect.poll(() => under(/^Instructions/)).toBe(true);
+test("the active tab alone is filled, and the fill moves with it", async ({ page }) => {
+    const filled = () => page.locator(".k-tabs [role=tab]").evaluateAll((tabs) => tabs.filter((t) => getComputedStyle(t).backgroundColor !== "rgba(0, 0, 0, 0)").map((t) => t.textContent!.replace(/[\s\d/]+$/, "")));
+    await expect.poll(filled).toEqual(["Instructions"]);
     await page.getByRole("tab", { name: /^Hints/ }).click();
-    await expect.poll(() => under(/^Hints/)).toBe(true);
+    await expect.poll(filled).toEqual(["Hints"]);
 });
 
 test("arrow keys move between the tabs", async ({ page }) => {

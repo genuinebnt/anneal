@@ -96,7 +96,7 @@ export function SettingsPage() {
         <>
             <Header />
             <div className="st-3" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
-                <Page3 crumb={["Settings"]} title="Settings" sub="What anneal counts and shows, how it looks, and your data." right={right} center={!srs ? (
+                <Page3 className="rs rs-tidy rs-settings" crumb={["Settings"]} title="Settings" sub="What anneal counts and shows, how it looks, and your data." right={right} center={!srs ? (
                         <Skeleton lines={6} />
                     ) : (
                         <>
