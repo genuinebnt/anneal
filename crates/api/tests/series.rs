@@ -1,6 +1,7 @@
 //! `/api/series`: progress comes from the stored attempts and review dates only. Each test gets its own database from
 //! `#[sqlx::test]`.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -85,12 +86,23 @@ fn copy_dir(from: &Path, to: &Path) {
 
 /// The runnable fixtures with a series over their three problems.
 fn test_app(db: PgPool, name: &str) -> Router {
+    fixture_app(db, name, &[("path", SERIES)])
+}
+
+/// The runnable fixtures with these series files over them.
+fn fixture_app(db: PgPool, name: &str, files: &[(&str, &str)]) -> Router {
     let content = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("series-content-{name}"));
     let _ = std::fs::remove_dir_all(&content);
     copy_dir(&fixtures(), &content);
     std::fs::create_dir_all(content.join("series")).unwrap();
-    std::fs::write(content.join("series/path.toml"), SERIES).unwrap();
-    let loaded = Catalog::load(&content).expect("content");
+    for (id, text) in files {
+        std::fs::write(content.join(format!("series/{id}.toml")), text).unwrap();
+    }
+    app_over(db, &content)
+}
+
+fn app_over(db: PgPool, content: &Path) -> Router {
+    let loaded = Catalog::load(content).expect("content");
     assert!(loaded.issues.is_empty(), "{:?}", loaded.issues);
     let work = Path::new(env!("CARGO_TARGET_TMPDIR")).join("anneal-series");
     app(
@@ -220,4 +232,131 @@ async fn a_passing_submit_moves_the_series_on_and_a_re_solve_keeps_the_credit(db
     // starting the re-solve opens a new attempt; the series still counts the part as solved
     assert_eq!(call(&app, Method::POST, &format!("/api/problems/{ONE}/resolve"), None).await.0, StatusCode::OK);
     assert_eq!(get(&app, "/api/series/path").await["solved"], 1);
+}
+
+/// A series of these problems, in order.
+fn series_of(title: &str, rank: Option<u32>, ids: &[&str]) -> String {
+    let rank = rank.map_or_else(String::new, |r| format!("rank = {r}\n"));
+    let parts: String = ids.iter().map(|id| format!("[[part]]\nid = \"{id}\"\nstage = \"s\"\n")).collect();
+    format!("[series]\ntitle = \"{title}\"\n{rank}[[stage]]\nid = \"s\"\nname = \"S\"\n{parts}")
+}
+
+/// `TWO` is in all three; `ONE` is only in `alpha` and `STEP` only in `zeta`. Only `zeta` has a rank.
+fn shared_app(db: PgPool, name: &str) -> Router {
+    let (alpha, beta, zeta) = (series_of("Alpha", None, &[ONE, TWO]), series_of("Beta", None, &[TWO]), series_of("Zeta", Some(1), &[TWO, STEP]));
+    fixture_app(db, name, &[("alpha", &alpha), ("beta", &beta), ("zeta", &zeta)])
+}
+
+/// The series shown for a problem, then the others it can be switched to.
+async fn shown(app: &Router, id: &str, query: &str) -> Vec<String> {
+    let place = get(app, &format!("/api/problems/{id}/series{query}")).await;
+    let others = place["others"].as_array().unwrap().iter().map(|o| o["id"].as_str().unwrap().to_owned());
+    std::iter::once(place["series"]["id"].as_str().unwrap().to_owned()).chain(others).collect()
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn the_series_the_reader_came_from_is_the_one_shown(db: PgPool) {
+    let app = shared_app(db.clone(), "asked");
+    assert_eq!(shown(&app, TWO, "").await, ["zeta", "alpha", "beta"], "ranked first, then by id");
+    assert_eq!(shown(&app, TWO, "?series=alpha").await, ["alpha", "zeta", "beta"]);
+    assert_eq!(shown(&app, TWO, "?series=beta").await, ["beta", "zeta", "alpha"]);
+    // everything about the place is that series' own
+    let place = get(&app, &format!("/api/problems/{TWO}/series?series=alpha")).await;
+    assert_eq!((&place["series"]["title"], &place["number"], &place["total"]), (&json!("Alpha"), &json!(2), &json!(2)));
+    assert_eq!(place["others"][0], json!({ "id": "zeta", "title": "Zeta", "kind": "part", "number": 1 }));
+    // an unknown series, an empty one and one that lacks the problem are passed over
+    for query in ["?series=none", "?series=", "?series=..%2Fzeta"] {
+        assert_eq!(shown(&app, TWO, query).await, ["zeta", "alpha", "beta"], "{query}");
+    }
+    assert_eq!(shown(&app, ONE, "?series=zeta").await, ["alpha"]);
+    assert_eq!(get(&app, "/api/problems/no-such-problem/series?series=zeta").await, Value::Null);
+    assert_eq!(stored_rows(&db).await, (0, 0, 0));
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn without_one_progress_that_only_one_series_has_decides(db: PgPool) {
+    let app = shared_app(db.clone(), "choice");
+    // solving the shared problem says nothing about which series is being followed, so a Submit can't move the reader
+    attempt(&db, TWO, "practice", 3, false).await;
+    assert_eq!(shown(&app, TWO, "").await, ["zeta", "alpha", "beta"]);
+    // something only `alpha` has: it wins over the rank
+    attempt(&db, ONE, "practice", 2, true).await;
+    assert_eq!(shown(&app, TWO, "").await, ["alpha", "zeta", "beta"]);
+    assert_eq!(shown(&app, TWO, "?series=zeta").await, ["zeta", "alpha", "beta"], "what was asked for still wins");
+    let next = get(&app, &format!("/api/problems/{TWO}/series?series=zeta")).await["done"]["next"]["id"].clone();
+    assert_eq!(next, STEP, "the next one is that series' next");
+    assert_eq!(get(&app, &format!("/api/problems/{TWO}/series")).await["done"]["next"], Value::Null, "`alpha` ends here");
+    // progress in both: back to the stable order
+    attempt(&db, STEP, "practice", 1, false).await;
+    assert_eq!(shown(&app, TWO, "").await, ["zeta", "alpha", "beta"]);
+}
+
+/// With the real content: a reader with nothing that says otherwise sees the web-server series for each of its problems,
+/// as they did when it was the only one.
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn the_web_server_series_keeps_its_problems(db: PgPool) {
+    let app = app_over(db, &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"));
+    let view = get(&app, "/api/series/web-server").await;
+    let rows = view["groups"].as_array().unwrap().iter().flat_map(|g| g["rows"].as_array().unwrap()).filter(|r| r["row"] == "item");
+    let ids: Vec<&str> = rows.chain(view["capstone"]["steps"].as_array().unwrap()).filter_map(|r| r["id"].as_str()).collect();
+    let mut shared = 0;
+    for id in ids {
+        let here = shown(&app, id, "").await;
+        assert_eq!(here[0], "web-server", "{id}");
+        shared += usize::from(here.len() > 1);
+    }
+    assert!(shared > 0, "the test needs a problem that another series has too");
+}
+
+/// The exercises that two series share. Each is shown in whichever of its series was asked for, with that series' own
+/// number, neighbours and switch. A new overlap fails here, so that someone decides which series comes first.
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn each_shared_exercise_works_in_both_of_its_series(db: PgPool) {
+    // in the stable order, so the first is the one shown when nothing says otherwise
+    const SHARED: [(&str, [&str; 2]); 3] = [
+        ("c3-atomic-stats", ["web-server", "rate-limiter"]),
+        ("l1-raii-span-guard", ["web-server", "rate-limiter"]),
+        ("y5-catch-the-broken-queue", ["key-value-store", "regex-engine"]),
+    ];
+    let app = app_over(db.clone(), &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"));
+    // each series' written items in order, as its page lists them
+    let mut paths = Vec::new();
+    let mut holders: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for summary in get(&app, "/api/series").await.as_array().unwrap() {
+        let id = summary["id"].as_str().unwrap().to_owned();
+        let view = get(&app, &format!("/api/series/{id}")).await;
+        let rows = view["groups"].as_array().unwrap().iter().flat_map(|g| g["rows"].as_array().unwrap()).filter(|r| r["row"] == "item");
+        let mut items: Vec<Value> = rows.chain(view["capstone"]["steps"].as_array().unwrap()).filter(|r| r["id"].is_string()).cloned().collect();
+        items.sort_by_key(|r| (r["kind"] != "part", r["number"].as_u64()));
+        for item in &items {
+            holders.entry(item["id"].as_str().unwrap().to_owned()).or_default().push(id.clone());
+        }
+        paths.push((id, items));
+    }
+    holders.retain(|_, in_series| in_series.len() > 1);
+    let sorted = |mut v: Vec<String>| {
+        v.sort();
+        v
+    };
+    let found: Vec<(String, Vec<String>)> = holders.into_iter().map(|(id, v)| (id, sorted(v))).collect();
+    let expected: Vec<(String, Vec<String>)> = SHARED.iter().map(|(id, v)| ((*id).to_owned(), sorted(v.iter().map(|x| (*x).to_owned()).collect()))).collect();
+    assert_eq!(found, expected);
+
+    for (id, [first, second]) in SHARED {
+        assert_eq!(shown(&app, id, "").await, [first, second], "{id}");
+        assert_eq!(shown(&app, id, "?series=nope").await, [first, second], "{id}");
+        for (asked, other) in [(first, second), (second, first)] {
+            assert_eq!(shown(&app, id, &format!("?series={asked}")).await, [asked, other], "{id}");
+            let place = get(&app, &format!("/api/problems/{id}/series?series={asked}")).await;
+            let items = &paths.iter().find(|(s, _)| s == asked).unwrap().1;
+            let at = items.iter().position(|r| r["id"] == id).unwrap();
+            assert_eq!(place["number"], items[at]["number"], "{id} in {asked}");
+            assert_eq!(place["minutes"], items[at]["minutes"], "{id} in {asked}");
+            let side = |i: Option<usize>| i.and_then(|i| items.get(i)).map_or(Value::Null, |r| r["id"].clone());
+            assert_eq!((&place["prev"], &place["next"]), (&side(at.checked_sub(1)), &side(Some(at + 1))), "{id} in {asked}");
+            let there = &paths.iter().find(|(s, _)| s == other).unwrap().1;
+            assert_eq!(place["others"][0]["number"], there.iter().find(|r| r["id"] == id).unwrap()["number"], "{id} from {asked}");
+        }
+    }
+    assert_eq!(stored_rows(&db).await, (0, 0, 0));
 }

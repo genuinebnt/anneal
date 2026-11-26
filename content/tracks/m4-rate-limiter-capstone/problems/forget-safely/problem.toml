@@ -1,0 +1,33 @@
+slug = "forget-safely"
+title = "A limit per client, and forgetting safely"
+mode = "write"
+level = "hard"
+stage = "serve-many"
+order = 4
+status = "ready"
+tags = ["capstone", "rate limiting", "eviction", "amortised cost", "property testing", "90-min"]
+teaches = ["Dropping a limiter's state is safe only when a new limiter would behave the same. That moment differs by algorithm.", "The strongest test of a cache is that nobody can tell it is there: compare with a version that never forgets.", "A full pass over a map is cheap on average when it runs only after the map has doubled."]
+follow_up = "1) The idle-time rule of the earlier rate limiter exercise forgets by age. When does that change an answer? 2) How would you spread a sweep over many calls to avoid a pause?"
+related = ["M2", "S4"]
+
+[[hints]]
+kind = "approach"
+text = "For each limiter, find what it still remembers at time `t` that can change a future answer. Then decide when `Keyed` should look for such limiters, without looking at all of them on every call."
+
+[[hints]]
+kind = "rust"
+text = "`HashMap::retain` keeps the entries for which a closure returns `true`. `entry(key).or_insert_with(&self.make)` creates a limiter only when needed. If you sweep when `len` reaches twice what the last sweep left, each call pays O(1) on average."
+
+[[hints]]
+kind = "edge"
+text = "A window counter that has rolled over once still remembers the previous count. A log is fresh when its newest entry has left. A limiter that can never admit is always fresh. `Keyed` must clamp earlier times itself, or a new limiter would see a time its predecessor never would."
+
+[solution]
+explanation = "Each limiter is fresh once nothing it admitted can weigh on a decision. That is when the window has changed, the newest log entry has left, or both counts are gone. For one number, it is when the paid-off time is not in the future. The keyed map clamps times, and removes fresh limiters with a full pass that runs only when the map has doubled since the last one, or has reached 64."
+time = "O(1) amortised per call"
+space = "O(keys that still matter)"
+
+[[cookbook]]
+level = "similar"
+page = "rate-limiter-lab"
+note = "Its per-key wrapper forgets by idle time, which is only safe when the idle time is long enough."

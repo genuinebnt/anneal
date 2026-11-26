@@ -1,0 +1,32 @@
+slug = "a-second-matcher"
+title = "A second matcher that tries one way at a time"
+mode = "write"
+level = "hard"
+stage = "check-it"
+order = 6
+status = "ready"
+tags = ["regular expressions", "backtracking", "continuations", "step limits", "ReDoS", "test oracle"]
+teaches = [
+  "A second implementation that works in a completely different way is what you check a clever one against.",
+  "Matching a tree one way at a time falls out of recursion once each call receives \"the rest of the match\" as a function.",
+  "The same patterns that a state set handles instantly can cost this method exponential time. That is the bug class called ReDoS, and here you can watch it.",
+]
+follow_up = "1) Which failed attempts could be remembered to remove the blow-up, and what stops that from working once patterns have backreferences? 2) How would this matcher give Perl-style \"first alternative wins\" results, and what would `find` have to change?"
+related = ["Y15", "Y8"]
+
+[[hints]]
+kind = "approach"
+text = "Match a node at a position with one extra argument: a function that says whether the rest of the match succeeds from a given end. A node that can match in several ways calls it once for each way until one returns true."
+
+[[hints]]
+kind = "rust"
+text = "`type Rest<'a> = &'a dyn Fn(usize) -> Result<bool, StepLimit>`. `split_first` walks a `Cat`. `Cell<u64>` holds the steps left and `Cell<Option<usize>>` the longest end, because a `Fn` closure cannot assign to a captured variable. `None` is smaller than any `Some`, so `Option`'s `max` keeps the longest end."
+
+[[hints]]
+kind = "edge"
+text = "In a repetition, refuse a round that ends where it began. For `find`, give a rest that records the end and returns `Ok(false)`, so every way is visited. The step limit covers the whole call, over all starts. An exhausted limit is an error, never `false`."
+
+[solution]
+explanation = "Each node tries its ways in turn, passing the rest of the match down as a closure; returning false is how it goes back. A repetition tries one more round, then none, and refuses empty rounds. Matching the whole text asks for the first success at the end. Finding asks, for each start, to see every end and keeps the largest."
+time = "exponential in the worst case; the limit bounds it"
+space = "O(depth of the search)"

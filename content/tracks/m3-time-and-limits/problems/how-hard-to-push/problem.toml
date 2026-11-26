@@ -1,0 +1,33 @@
+slug = "how-hard-to-push"
+title = "How big should the next batch be?"
+mode = "write"
+level = "medium"
+stage = "one-idea-at-a-time"
+order = 4
+status = "ready"
+tags = ["feedback control", "simulation", "overload", "75-min"]
+teaches = ["When you cannot see a limit, you can only learn it by sometimes exceeding it. The design question is how often and how far.", "Cautious growth keeps refusals rare. A large cut recovers quickly when the limit falls a long way. One rule for both directions fails one of the two.", "A policy can be judged by simulation: bounds on refusals, throughput and recovery time, with no real service and no clock."]
+follow_up = "1) Two senders run your rule against one service. Do they end up with equal shares? Why? 2) The service starts answering slowly before it refuses. How could you use that?"
+related = ["B5", "M2"]
+
+[[hints]]
+kind = "approach"
+text = "Treat the two answers differently. Think about how many refusals each growth rule causes once you are near the limit, and how many rounds each cut needs to fall from 1000 to 10."
+
+[[hints]]
+kind = "rust"
+text = "A `u32` size and two small update rules are enough. `saturating_add`, then `min(max)`; never let the size reach 0."
+
+[[hints]]
+kind = "edge"
+text = "If every acceptance multiplies the size, you hit the limit again almost at once. If every refusal removes a fixed amount, a large drop takes hundreds of rounds. Starting again from 1 wastes most of the climb."
+
+[solution]
+explanation = "After an accepted batch the size grows by one; after a refused one it is halved. Near the limit the sawtooth refuses about one batch per half-capacity of rounds and averages about three quarters of the capacity. A fall by a factor of 100 needs only seven halvings, and a rise is followed one unit per round."
+time = "O(1) per call"
+space = "O(1)"
+
+[[cookbook]]
+level = "similar"
+page = "tcp-congestion-control-sim"
+note = "A packet-level simulation of congestion control on the same kind of problem. It shows a method, so open it afterwards."

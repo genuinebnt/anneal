@@ -1,0 +1,38 @@
+slug = "two-counts"
+title = "A smoother count from two numbers"
+mode = "write"
+level = "medium"
+stage = "six-ways-to-count"
+order = 2
+status = "ready"
+tags = ["capstone", "rate limiting", "sliding window counter", "integer arithmetic", "75-min"]
+teaches = ["Weighting the previous window by how much of it is still in view smooths the edge of a fixed window for a few bytes more.", "It is an estimate: it assumes the previous requests were spread evenly, so real traffic can exceed it or be refused early.", "A wait time can be solved from the admission rule itself, one case at a time, with exact integers."]
+follow_up = "1) Make up traffic where the estimate admits more than the limit in some stretch. How bad can it get? 2) How would sub-windows change the error and the cost?"
+related = ["M2", "B5"]
+
+[[hints]]
+kind = "approach"
+text = "Write the admission rule as an inequality with no division. For the wait, ask in turn: later in this window? At some point in the next one? If neither, when are both counts forgotten?"
+
+[[hints]]
+kind = "rust"
+text = "Multiply every term by `window` and compare in `u128`. Integer division rounds down; check which direction that is safe in when you solve for the offset."
+
+[[hints]]
+kind = "edge"
+text = "A refused request does not count. Two or more windows later, both counts are zero. With `limit == 1`, one request in this window blocks all of the next one. If the earliest passing time is past `u64::MAX`, answer `None`."
+
+[solution]
+explanation = "The counter keeps two counts and admits when the weighted previous count, plus the current count, plus one, is at most the limit, compared after multiplying by the window. For the wait it solves that inequality for the offset. It tries the current window first, then the next, where the current count has become the previous one. Failing both, the answer is two windows after this one began."
+time = "O(1) per call"
+space = "O(1)"
+
+[[cookbook]]
+level = "exact"
+page = "rate-limiter-lab"
+note = "Part: the estimate, in floating point. It has no retry time."
+
+[[cookbook]]
+level = "similar"
+page = "systems-design-in-code"
+note = "Its rate limiter question has the same estimate in integers."

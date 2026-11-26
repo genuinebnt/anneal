@@ -1,0 +1,33 @@
+slug = "pace-by-period"
+title = "Faster or slower than last time?"
+mode = "write"
+level = "easy"
+stage = "one-idea-at-a-time"
+order = 1
+status = "ready"
+tags = ["time as an argument", "periods", "integer arithmetic", "45-min"]
+teaches = ["Time passed in as a number makes behaviour over hours testable in microseconds.", "A rolling total needs very little memory if you only compare neighbouring periods, but a skipped period must still count as empty.", "Two fractions can be compared exactly by multiplying across in a wider integer type."]
+follow_up = "1) What would you store to compare with the same hour yesterday? 2) Why is the first millisecond of a period a poor moment to raise an alarm?"
+related = ["M2", "B5"]
+
+[[hints]]
+kind = "approach"
+text = "Nothing happens between calls, so bring your state up to date at the start of each call. Ask which period the new time is in, and how many periods have passed since the one you hold."
+
+[[hints]]
+kind = "rust"
+text = "`now / period` numbers the period and `now % period` is the position inside it. Comparing `a / b` with `c / d` is the same as comparing `a * d` with `c * b`; two `u64` values always fit when multiplied as `u128`."
+
+[[hints]]
+kind = "edge"
+text = "One period later, the old current total becomes the previous one. Two or more later, the previous period was empty. All three methods move time forward, and none of them ever moves it back."
+
+[solution]
+explanation = "The meter keeps the latest time seen, the number of that period and two totals. Every method first moves forward: one period on, the current total becomes the previous one; further on, both are zero. The rates are compared by cross-multiplying in u128, so no value is ever rounded."
+time = "O(1) per call"
+space = "O(1)"
+
+[[cookbook]]
+level = "related"
+page = "stream-processing-windows"
+note = "Event-time windows in a stream processor, a much larger topic. Its tumbling windows are aligned like these periods."

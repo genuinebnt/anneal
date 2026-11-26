@@ -1,0 +1,38 @@
+slug = "one-number-per-client"
+title = "The same promise in one number"
+mode = "write"
+level = "medium"
+stage = "six-ways-to-count"
+order = 3
+status = "ready"
+tags = ["capstone", "rate limiting", "GCRA", "leaky bucket", "equivalence", "90-min"]
+teaches = ["Different state can give identical behaviour. Testing against a trusted implementation on random traffic is how you find out.", "A single time can hold both how much has been spent and when it was spent.", "One number of state is what makes a limiter cheap to keep in a shared store and update with one compare-and-set."]
+follow_up = "1) Two gateways share one stored number. What must the update look like? 2) Where would the stored number's expiry time come from?"
+related = ["M2", "B5"]
+
+[[hints]]
+kind = "approach"
+text = "The leaky level is the bucket seen from the other side. For one number, ask: if everything admitted were paid for one interval at a time, back to back, at what moment would the payments end?"
+
+[[hints]]
+kind = "rust"
+text = "Work in `u128`: `burst * interval` is below 2^96. `saturating_sub` handles a level that has drained completely."
+
+[[hints]]
+kind = "edge"
+text = "Idle time must not be stored up: an old moment in the past counts as now. A refusal changes nothing. `n == 0` always succeeds, even with `burst == 0`. `n > burst` is `Err(None)`."
+
+[solution]
+explanation = "The meter's level is the bucket's capacity minus its credit, so both make the same decisions. The one-number limiter keeps the moment at which all admitted work would be paid off. A request moves it forward by its cost from there or from now, whichever is later, and is admitted when the result is at most burst intervals ahead. The excess is the wait."
+time = "O(1) per call"
+space = "one u128"
+
+[[cookbook]]
+level = "exact"
+page = "rate-limiter-lab"
+note = "Part: both limiters, for one unit and without waits. A burst of 0 underflows in it."
+
+[[cookbook]]
+level = "similar"
+page = "systems-design-in-code"
+note = "Its rate limiter question compares the same policies."

@@ -2,7 +2,7 @@
 
 use crate::codec::{Entry, Key, KvError, Result, Val};
 use crate::merge::merge_sources;
-use crate::sstable::SsTable;
+use crate::sstable::{sync_dir, DirSync, SsTable};
 use crate::wal::Wal;
 use std::collections::BTreeMap;
 use std::fs;
@@ -13,17 +13,19 @@ use std::path::{Path, PathBuf};
 pub struct Stats {
     pub bloom_skips: u64,
     pub table_reads: u64,
+    pub failed_auto_flushes: u64,
 }
 
 pub struct Store {
     dir: PathBuf,
     memtable: BTreeMap<Key, Val>,
     mem_bytes: usize,
-    wal: Wal,
+    pub(crate) wal: Wal,
     tables: Vec<SsTable>, // oldest first
     next_id: u64,
     flush_threshold: usize,
     stats: Stats,
+    pub(crate) dir_sync: DirSync,
 }
 
 impl Store {
@@ -53,6 +55,7 @@ impl Store {
             next_id,
             flush_threshold,
             stats: Stats::default(),
+            dir_sync: sync_dir,
         };
         for (k, v) in entries {
             store.mem_insert(k, v);
@@ -70,8 +73,10 @@ impl Store {
     fn apply(&mut self, key: &[u8], val: Option<&[u8]>) -> Result<()> {
         self.wal.append(key, val)?;
         self.mem_insert(key.to_vec(), val.map(<[u8]>::to_vec));
-        if self.mem_bytes >= self.flush_threshold {
-            self.flush()?;
+        // the write has happened whatever becomes of the flush: an Err here would tell the caller it had not.
+        // The memtable and log keep everything, and the next write tries again.
+        if self.mem_bytes >= self.flush_threshold && self.flush().is_err() {
+            self.stats.failed_auto_flushes += 1;
         }
         Ok(())
     }
@@ -115,6 +120,9 @@ impl Store {
 
     /// Keys in [from, to): overlay oldest tables first and the memtable last, so newer versions overwrite older ones.
     pub fn scan(&self, from: &[u8], to: &[u8]) -> Result<Vec<(Key, Vec<u8>)>> {
+        if from >= to {
+            return Ok(Vec::new()); // BTreeMap::range panics when start > end
+        }
         let mut merged: BTreeMap<Key, Val> = BTreeMap::new();
         for t in &self.tables {
             for (k, v) in t.read_all()? {
@@ -135,7 +143,8 @@ impl Store {
             return Ok(());
         }
         let entries: Vec<Entry> = self.memtable.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        self.tables.push(SsTable::write(&self.dir, self.next_id, &entries)?);
+        let table = SsTable::write(&self.dir, self.next_id, &entries, self.dir_sync)?;
+        self.tables.push(table);
         self.next_id += 1;
         self.memtable.clear();
         self.mem_bytes = 0;
@@ -144,30 +153,54 @@ impl Store {
 
     /// Full compaction: merge every table into one.
     pub fn compact(&mut self) -> Result<()> {
-        self.compact_removing(usize::MAX)
+        self.compact_with(|path| fs::remove_file(path))
     }
 
     /// FAULT INJECTION for tests. Runs a compaction that "dies" after deleting `removes` of the old files. It takes the
     /// store by value because after a crash there is no store: reopen the directory.
     #[doc(hidden)]
     pub fn crash_during_compaction(mut self, removes: usize) -> Result<()> {
-        self.compact_removing(removes)
+        let (mut done, mut died) = (0, false);
+        let result = self.compact_with(|path| {
+            if done == removes {
+                died = true;
+                return Err(std::io::Error::other("injected crash"));
+            }
+            done += 1;
+            fs::remove_file(path)
+        });
+        if died {
+            Ok(())
+        } else {
+            result
+        }
     }
 
-    fn compact_removing(&mut self, max_removes: usize) -> Result<()> {
+    /// `compact` with the delete passed in, so that a test can make it fail
+    pub(crate) fn compact_with(&mut self, mut remove: impl FnMut(&Path) -> std::io::Result<()>) -> Result<()> {
         if self.tables.len() < 2 {
             return Ok(());
         }
         let sources = self.tables.iter().rev().map(SsTable::read_all).collect::<Result<Vec<_>>>()?;
         let merged = merge_sources(sources, true);
-        let new_table = if merged.is_empty() { None } else { Some(SsTable::write(&self.dir, self.next_id, &merged)?) };
+        let new_table = if merged.is_empty() {
+            None
+        } else {
+            Some(SsTable::write(&self.dir, self.next_id, &merged, self.dir_sync)?)
+        };
         self.next_id += 1;
+        let old = self.tables.len();
+        // the new table is the newest, and visible on disk already
+        self.tables.extend(new_table);
         // OLDEST FIRST, and it matters: the new table holds no tombstones, so until an old value's file is gone, the
         // newer file with its tombstone must still be there. Deleting oldest first leaves only a newest-suffix behind.
-        for old in self.tables.drain(..).take(max_removes) {
-            fs::remove_file(&old.path)?;
+        for _ in 0..old {
+            // forget a table only after its file is gone; on an error the list still matches the directory
+            remove(&self.tables[0].path)?;
+            self.tables.remove(0);
+            // make this removal durable before the next one: after a power cut, the order must still hold
+            (self.dir_sync)(&self.dir)?;
         }
-        self.tables.extend(new_table);
         Ok(())
     }
 }

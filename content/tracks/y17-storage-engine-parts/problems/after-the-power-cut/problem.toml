@@ -1,0 +1,31 @@
+slug = "after-the-power-cut"
+title = "What is on the disk after a power cut"
+mode = "write"
+level = "medium"
+stage = "files-that-survive"
+order = 2
+status = "ready"
+tags = ["durability", "fsync", "crash states", "simulation", "file systems"]
+teaches = [
+  "A file's bytes and its name are saved separately: one sync does not do the other's work.",
+  "A rename can be on disk while the renamed file's bytes are not.",
+  "A crash test is only as good as its model of what a crash can leave.",
+]
+follow_up = "1) By these rules, write the shortest list of operations that replaces a file's contents so that every possible disk holds the old or the new bytes. 2) Real file systems can reorder some of these, and can leave zeros where unsynced data should be. Which of your rules would you loosen first? 3) Why does `fsync` on a new file not make the file findable?"
+
+[[hints]]
+kind = "approach"
+text = "Walk through `ops` once, keeping what the running program sees and, apart from it, what the disk is certain to have. At the end, build the possible disks from the second plus the things that are still in doubt."
+
+[[hints]]
+kind = "rust"
+text = "Give each file a number and keep the files in a `Vec`; a directory is then a `BTreeMap<String, usize>`. To combine independent choices, start with one empty result and, for each file, replace the list by every pairing of the list with that file's choices."
+
+[[hints]]
+kind = "edge"
+text = "A write after a rename goes to the same file, so it shows under whichever name the cut leaves. A removed file can come back with bytes that were never synced."
+
+[solution]
+explanation = "Files are numbered, so that a name change never copies or loses bytes. Names have a stored version and a list of changes still in doubt; bytes have a safe length. The possible disks are every prefix of the doubtful changes, combined with every length of every file."
+time = "O(states x size of a state)"
+space = "O(states x size of a state)"

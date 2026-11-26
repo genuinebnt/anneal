@@ -1,0 +1,31 @@
+slug = "test-your-store"
+title = "Capstone 7: prove it survives"
+mode = "write"
+level = "hard"
+stage = "trust-it"
+order = 7
+status = "ready"
+tags = ["model testing", "crash testing", "torn writes", "oracle", "testing"]
+teaches = [
+  "A model for crash testing must know what may be lost, not only what is stored.",
+  "Random histories find bugs only if the generator reaches the states they need: tune it, and count what it reached.",
+  "A test is only as good as the bugs it has been shown to catch.",
+]
+follow_up = "1) Your check panics. What would you add so that the failure shows a short history that reproduces it? 2) These crashes happen between operations. How would you crash inside a flush or a compaction of the real store? 3) Which bugs can no test of this kind find, however long it runs?"
+
+[[hints]]
+kind = "approach"
+text = "Build the smallest model that can say what `get` must return after any history, including a tear. It needs to know more than the current contents."
+
+[[hints]]
+kind = "rust"
+text = "A few lines of xorshift give a seeded generator, so each run does the same thing. `assert_eq!` with a message naming the key is enough to panic."
+
+[[hints]]
+kind = "edge"
+text = "Use very few keys, so they collide across tables. Vary how often you flush: some bugs need many tables, others a long log. Compare after every step."
+
+[solution]
+explanation = "The model keeps the flushed contents and the list of writes still in the log, so a tear is just removing the last of the list. Random histories over very few keys, with different flush rates, reach many tables, long logs and repeated crashes. Every key is compared after every step."
+time = "O(rounds x steps x keys)"
+space = "O(keys + log)"

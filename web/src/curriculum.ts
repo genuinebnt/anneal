@@ -56,6 +56,10 @@ export const PLANNED: PlannedTrack[] = [
   { code: "Y12", name: "Database engine parts", planned: 1, tier: "sde3" },
   { code: "Y13", name: "Distributed systems parts", planned: 1, tier: "sde3" },
   { code: "Y14", name: "Parsers & languages", planned: 1, tier: "sde3" },
+  { code: "Y15", name: "Regex engine: preparation", planned: 8, tier: "sde3" },
+  { code: "Y16", name: "Regex engine: capstone", planned: 7, tier: "sde3" },
+  { code: "Y17", name: "Storage engine parts", planned: 8, tier: "sde3" },
+  { code: "Y18", name: "Key-value store capstone", planned: 7, tier: "sde3" },
   { code: "F2", name: "Data layout", planned: 14, tier: "sde3" },
   { code: "F3", name: "Memory & allocation", planned: 4, tier: "sde3" },
   { code: "F4", name: "Hashing & purpose-built structures", planned: 8, tier: "sde3" },
@@ -68,6 +72,8 @@ export const PLANNED: PlannedTrack[] = [
   { code: "B7", name: "A web server from scratch", planned: 15, tier: "core" },
   { code: "B8", name: "Web server capstone", planned: 10, tier: "core" },
   { code: "M2", name: "Machine coding", planned: 12, tier: "core" },
+  { code: "M3", name: "Time and limits", planned: 5, tier: "core" },
+  { code: "M4", name: "Rate limiter capstone", planned: 7, tier: "core" },
 ];
 
 export const SECTION_NAMES: Record<Section, string> = {
@@ -151,6 +157,10 @@ export const BLURB: Record<string, string> = {
   Y12: "The pieces inside a database: versioned keys, snapshots and write conflicts.",
   Y13: "Replicas that accept writes apart and still converge.",
   Y14: "Turning text into a tree: precedence, associativity and errors with positions.",
+  Y15: "Small exercises on the ideas a regular-expression engine needs.",
+  Y16: "Build a regex engine that stays fast on any pattern, then check it.",
+  Y17: "Files that survive failures, sorted blocks, saved filters and layers of changes.",
+  Y18: "Build a key-value store that recovers after a crash, in seven steps.",
   B1: "Handlers, extractors and one consistent error shape.",
   B2: "Service and Layer: readiness, backpressure and what a clone shares.",
   B4: "Framing and stream reassembly as pure state machines you can test.",
@@ -158,6 +168,8 @@ export const BLURB: Record<string, string> = {
   B7: "The pieces of a web server, one small exercise at a time.",
   B8: "Build the whole server in ten steps.",
   M2: "A working core under time pressure, then follow-ups that test your design.",
+  M3: "Time passed in, exact counting, and changes that stay correct when something happens in the middle.",
+  M4: "Build a rate limiter laboratory in seven steps.",
 };
 
 /** DSA tracks in the order CURRICULUM.md recommends (graphs before heaps and greedy). */

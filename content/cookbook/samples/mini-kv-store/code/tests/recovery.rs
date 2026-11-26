@@ -2,8 +2,8 @@
 
 mod support;
 
-use mini_kv::Store;
-use std::fs;
+use mini_kv::{KvError, Store};
+use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use support::{assert_matches, contents, table_files, Model, TempDir};
@@ -95,6 +95,50 @@ fn one_flipped_bit_anywhere_in_the_log_keeps_only_the_records_before_it() {
             assert_eq!(contents(&store), log.states[n], "byte {byte} bit {bit}");
         }
     }
+}
+
+#[test]
+fn a_zero_filled_log_tail_is_cut_off() {
+    assert_eq!(mini_kv::crc32(b""), 0, "why zeros would pass the checksum");
+    for zeros in [1usize, 7, 8, 9, 64, 4096] {
+        let tmp = TempDir::new(&format!("zero_tail_{zeros}"));
+        let mut store = Store::open(&tmp.0, NO_AUTO_FLUSH).unwrap();
+        store.put(b"a", b"1").unwrap();
+        let good = store.wal_len();
+        drop(store);
+        OpenOptions::new().append(true).open(tmp.join("wal.log")).unwrap().write_all(&vec![0; zeros]).unwrap();
+        let mut store = Store::open(&tmp.0, NO_AUTO_FLUSH).unwrap();
+        assert_eq!(store.wal_len(), good, "{zeros} zeros");
+        store.put(b"b", b"2").unwrap();
+        drop(store);
+        let mut store = Store::open(&tmp.0, NO_AUTO_FLUSH).unwrap();
+        assert_eq!(store.get(b"a").unwrap(), Some(b"1".to_vec()));
+        assert_eq!(store.get(b"b").unwrap(), Some(b"2".to_vec()));
+    }
+}
+
+#[test]
+fn a_failed_automatic_flush_does_not_fail_the_write() {
+    let tmp = TempDir::new("auto_flush");
+    let mut store = Store::open(&tmp.0, 1).unwrap(); // every write triggers a flush
+    fs::create_dir(tmp.join("sst_000001.tmp")).unwrap(); // and the flush will fail
+    store.put(b"k", b"v").unwrap();
+    assert_eq!(store.stats().failed_auto_flushes, 1);
+    assert_eq!(store.get(b"k").unwrap(), Some(b"v".to_vec()));
+    assert!(store.wal_len() > 0);
+    assert!(matches!(store.flush(), Err(KvError::Io(_))), "an explicit flush still reports it");
+    fs::remove_dir(tmp.join("sst_000001.tmp")).unwrap();
+    store.put(b"j", b"w").unwrap();
+    assert_eq!((store.wal_len(), store.tables().len()), (0, 1));
+}
+
+#[test]
+fn a_reversed_or_empty_scan_returns_nothing() {
+    let tmp = TempDir::new("reversed_scan");
+    let mut store = Store::open(&tmp.0, NO_AUTO_FLUSH).unwrap();
+    store.put(b"m", b"1").unwrap(); // BTreeMap only looks at the bounds when it holds something
+    assert!(store.scan(b"z", b"a").unwrap().is_empty());
+    assert!(store.scan(b"m", b"m").unwrap().is_empty());
 }
 
 #[test]

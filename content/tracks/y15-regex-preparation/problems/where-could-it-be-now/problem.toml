@@ -1,0 +1,32 @@
+slug = "where-could-it-be-now"
+title = "Where could it be now?"
+mode = "write"
+level = "medium"
+stage = "many-possibilities"
+order = 5
+status = "ready"
+tags = ["state machines", "state sets", "linear time", "closure"]
+teaches = [
+  "When you cannot know which way something went, keep every possibility, as a set. One step turns the whole set into the next set.",
+  "There are only as many different possibilities as there are positions, however many histories lead to them. That is why the cost stays proportional to the input.",
+  "Free moves are added to a set until nothing new appears, and a \"seen\" table makes loops of free moves end.",
+]
+follow_up = "1) How would you also report, for each possible position, one history that leads there? 2) The same set often comes back. How would you remember the result of a step, and what bounds the memory? 3) How could you tell that two machines accept the same signals?"
+related = ["Y8", "Y16"]
+
+[[hints]]
+kind = "approach"
+text = "Do not follow one history at a time. Keep the set of positions it could be in. A signal builds a new set from the old one; then the silent moves widen that set until nothing new can be added."
+
+[[hints]]
+kind = "rust"
+text = "Group the moves by their starting position when the tracker is created. For each new set use a fresh `Vec<bool>` to say what is already in it, and one function that adds a position together with everything silently reachable from it."
+
+[[hints]]
+kind = "edge"
+text = "Silent moves apply before the first signal too, and may form loops. A silent move adds a possibility; the position it leaves stays possible. Once the set is empty it stays empty."
+
+[solution]
+explanation = "The tracker holds the set of positions as a list without repeats. A silent closure starts from given positions and follows silent moves with an explicit stack, adding each position once. A signal collects the targets of matching moves from every member and closes over them. Histories can double at each signal, but the set never holds more than the number of positions."
+time = "O(positions + moves) per signal at worst"
+space = "O(positions + moves)"

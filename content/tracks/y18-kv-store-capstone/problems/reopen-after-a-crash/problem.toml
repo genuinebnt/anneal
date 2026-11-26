@@ -1,0 +1,32 @@
+slug = "reopen-after-a-crash"
+title = "Capstone 5: open after any crash"
+mode = "write"
+level = "hard"
+stage = "the-store"
+order = 5
+status = "ready"
+tags = ["crash recovery", "read_dir", "startup", "write-ahead log", "file naming"]
+teaches = [
+  "Recovery is the other half of every write path: list what each crash can leave and handle each.",
+  "Compare file ids as numbers.",
+  "Delete only files you are sure are yours.",
+]
+follow_up = "1) Why is replaying already-flushed writes harmless here? Name an operation for which it would not be. 2) Two processes could open the same directory. What would each destroy, and what lock would stop it? 3) With thousands of tables, opening is slow. What could the store write down to avoid listing and checking them all?"
+crates = ["thiserror"]
+
+[[hints]]
+kind = "approach"
+text = "Go through the four things a crash can leave, and say for each what `open` does about it. Most of the work was done by earlier steps."
+
+[[hints]]
+kind = "rust"
+text = "`fs::read_dir` yields entries in no particular order. `strip_prefix` and `strip_suffix` pick a name apart. Formatting the parsed number again shows whether the name was in the store's own form."
+
+[[hints]]
+kind = "edge"
+text = "Sorted as text, `sst_1000000.sst` comes before `sst_999999.sst`. `parse::<u64>()` accepts a leading `+`."
+
+[solution]
+explanation = "Open removes unfinished tables, loads the finished ones in numeric order and replays the log into the memtable. Replaying writes that a table already holds changes nothing, because the memtable gives the same answers. Names are accepted only in the exact form the store writes."
+time = "O(files + table bytes + log)"
+space = "O(indexes + log)"

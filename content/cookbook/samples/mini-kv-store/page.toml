@@ -13,7 +13,7 @@ summary = [
   "A read checks the memtable, then tables from newest to oldest, and stops at the first answer, even a tombstone.",
   "Compaction merges all tables into one; it must delete the old files oldest first, or a crash can bring deleted keys back.",
   "Tested here: acknowledged writes survive killing the process. By design they are not protected against power loss, because the log is never synced.",
-  "The code has real limits, among them a zero-filled log tail that stops it from opening; each limit listed as tested has a test.",
+  "The code still has limits, among them no sync of the log and no lock on the directory; each limit listed as tested has a test.",
 ]
 
 layers = ["Callers", "Store: put, get, delete, scan", "Memtable and write-ahead log", "SSTables, bloom filters, compaction", "File system"]
@@ -72,15 +72,16 @@ A directory holds at most one live log, `wal.log`, and any number of tables, `ss
 
 :::steps A put
 - caller | `put(k, v)` |
-- WAL | appends `[len][crc32][record]` | One `write_all` to the file. No sync.
+- WAL | appends `[len][crc32][record]` | One `write_all` to the file, no sync. If it fails, the log is cut back to its last whole frame.
 - memtable | inserts `k -> Some(v)` | Only after the append returned `Ok`.
-- store | flushes if the byte counter reached the threshold | The flush runs inside this `put`.
+- store | flushes if the byte counter reached the threshold | The flush runs inside this `put`. Its failure is counted, not returned.
 :::
 
 :::steps A flush
 - memtable | copied out in key order | A `BTreeMap` iterates in order.
 - table | written to `sst_N.tmp`, then `sync_all` | The final name does not exist yet.
 - table | renamed to `sst_N.sst` | A reader never sees a half-written table under that name.
+- directory | synced | So that the new name is durable before the log is thrown away.
 - memtable | cleared |
 - WAL | `set_len(0)` | Last, because until now the log was the only other copy.
 :::
@@ -122,7 +123,7 @@ body = '''
 | sparse index, one key in 16 | less memory than indexing every key | a lookup reads and decodes a run of up to 16 records |
 | one bloom filter per table | lets `get` skip most tables that lack the key | memory per table; no help for `scan` |
 | compaction merges everything | tombstones can always be dropped | rewrites all data and holds it all in memory |
-| temp file, sync, rename | no half-written table under a final name | one device sync per table |
+| temp file, sync, rename, directory sync | no half-written table under a final name, and the name is durable before what it replaces is dropped | two syncs per table, and one per delete in compaction |
 
 ### The flush threshold counts writes, not live bytes {#flush-threshold}
 
@@ -186,7 +187,7 @@ Each such lookup opens the file again. There is no block cache and no handle cac
 :::
 
 > [!RUST]
-> Bytes from disk are untrusted input. The decoders go through `take`, which uses `checked_add` and `slice::get`, so a cut record is an `Err`, not a panic (`record_layout` cuts one at every length). One path is not guarded: `read_range` computes `end - start` from index offsets that `open` does not check against each other. A hand-made file with a **valid** checksum and bad offsets could make it panic or ask for a huge buffer. This is from reading the code; no test builds such a file.
+> Bytes from disk are untrusted input. The decoders go through `take`, which uses `checked_add` and `slice::get`, so a cut record is an `Err`, not a panic (`record_layout` cuts one at every length). A right checksum does not make numbers sensible, so `open` also checks that the index offsets start at 0, rise and stay inside the data. Without that, `read_range` could compute a negative `end - start` (`wrong_index_offsets_under_a_right_checksum_are_rejected_at_open`).
 
 ### The bloom filter {#bloom}
 
@@ -241,7 +242,7 @@ body = '''
 | until a table is complete and renamed, the log still holds its writes | order inside `flush` | `a_flush_that_fails_leaves_the_log_intact` |
 | after recovery, new log frames follow the last valid frame | `set_len` in `Wal::open` | `log_cut_at_every_byte_...`, model test |
 | a merge drops tombstones only when asked, and `compact` asks because it covers every table | `merge_sources`, `compact` | the merge test (flag ignored) |
-| during compaction, old files are deleted oldest first | the loop in `compact_removing` | both compaction crash tests |
+| during compaction, old files are deleted oldest first | the loop in `compact_with` | both compaction crash tests, and two in `faults.rs` |
 
 The merge takes its sources newest first. In a min-heap ordered by `(key, source number)`, the newest copy of a key comes out first, and the loop discards the rest:
 
@@ -272,17 +273,33 @@ body = '''
 The new table holds no tombstones. While old files are being deleted, the directory holds the new table **and some old ones**. Reads then depend on which old ones are left.
 
 ```rust title=src/store.rs
-let sources = self.tables.iter().rev().map(SsTable::read_all).collect::<Result<Vec<_>>>()?;
-let merged = merge_sources(sources, true);
-let new_table = if merged.is_empty() { None } else { Some(SsTable::write(&self.dir, self.next_id, &merged)?) };
-self.next_id += 1;
-// OLDEST FIRST, and it matters: the new table holds no tombstones, so until an old value's file is gone, the
-// newer file with its tombstone must still be there. Deleting oldest first leaves only a newest-suffix behind.
-for old in self.tables.drain(..).take(max_removes) {
-    fs::remove_file(&old.path)?;
+/// `compact` with the delete passed in, so that a test can make it fail
+pub(crate) fn compact_with(&mut self, mut remove: impl FnMut(&Path) -> std::io::Result<()>) -> Result<()> {
+    if self.tables.len() < 2 {
+        return Ok(());
+    }
+    let sources = self.tables.iter().rev().map(SsTable::read_all).collect::<Result<Vec<_>>>()?;
+    let merged = merge_sources(sources, true);
+    let new_table = if merged.is_empty() {
+        None
+    } else {
+        Some(SsTable::write(&self.dir, self.next_id, &merged, self.dir_sync)?)
+    };
+    self.next_id += 1;
+    let old = self.tables.len();
+    // the new table is the newest, and visible on disk already
+    self.tables.extend(new_table);
+    // OLDEST FIRST, and it matters: the new table holds no tombstones, so until an old value's file is gone, the
+    // newer file with its tombstone must still be there. Deleting oldest first leaves only a newest-suffix behind.
+    for _ in 0..old {
+        // forget a table only after its file is gone; on an error the list still matches the directory
+        remove(&self.tables[0].path)?;
+        self.tables.remove(0);
+        // make this removal durable before the next one: after a power cut, the order must still hold
+        (self.dir_sync)(&self.dir)?;
+    }
+    Ok(())
 }
-self.tables.extend(new_table);
-Ok(())
 ```
 
 :::steps Why deleting newest first would bring a key back
@@ -295,9 +312,11 @@ Ok(())
 
 Deleting oldest first, the old files left behind are always the **newest** ones. If an old value of `a` is still there, every newer version or tombstone of `a` is still there too, and shadows it.
 
-The comment in the original single-file example explains crash safety by saying that the new table shadows the old data. That is not enough for a deleted key, which the new table does not contain. The code is correct because of the delete order, which that comment does not mention.
+It is not enough to say that the new table shadows the old data: it does not mention a deleted key at all. What makes the code correct is the delete order.
 
-**How this is tested.** The original has no test that stops a compaction half-way. For this page, the delete loop takes a limit, and `crash_during_compaction(n)` stops after `n` removals. It consumes the store, so a test must reopen the directory. `compact()` passes no effective limit and behaves as before.
+**A delete that fails** is a smaller version of the same problem. The loop forgets a table only after its file is gone, so the open store's list always matches the directory. An earlier version drained the whole list inside the loop. One failed delete then made the open store report every key as missing, because dropping a `Drain` removes the rest of its range.
+
+**How this is tested.** `crash_during_compaction(n)` makes the delete after the first `n` fail and then drops the store, so a test must reopen the directory. `faults.rs` makes a delete fail and keeps using the same store.
 
 ```rust title=tests/recovery.rs
     }
@@ -316,9 +335,9 @@ fn crash_while_compacting_to_nothing_does_not_bring_keys_back() {
         let mut store = Store::open(&tmp.0, NO_AUTO_FLUSH).unwrap();
 ```
 
-Tested here: with `.rev()` added to the delete loop, both compaction crash tests fail.
+Tested here: with the delete loop run newest first, both compaction crash tests fail.
 
-This argument assumes that the file system **keeps** the removals in the order they were made. That holds for what a running system sees after a process dies. After power loss it is not established: this code never syncs the directory.
+This argument assumes that the file system **keeps** the removals in the order they were made. That holds for what a running system sees after a process dies. For power loss the loop syncs the directory after each removal, which is meant to keep the order; no power loss was tested.
 '''
 
 [[sections]]
@@ -334,6 +353,11 @@ Two different failures are often both called "a crash". In a **process crash** t
 | temp file left over | removed at `open` | tested |
 | new table in place, log not yet reset | replay repeats writes already in the table; reads are unchanged | tested by rebuilding that disk state |
 | compaction stopped between deletes | contents unchanged | tested after each number of deletes |
+| a delete fails during compaction | the error is returned; the same store and a reopened one answer as before | tested for each delete |
+| zeros after the last log record | they are cut off | tested for several lengths |
+| a log append fails part-way | the log is cut back; later writes survive reopening | tested with an injected failing write |
+| only the automatic flush fails | the write succeeds; the next write tries to flush again | tested through a blocked temp path |
+| a directory sync fails | the log is not reset, and compaction deletes nothing further | tested with an injected failing sync |
 | a table file changed before `open` | `open` fails with `Corrupt` | tested: every byte inverted, every shorter length |
 | power loss or OS crash | **no guarantee** | not testable here; reasoned below |
 
@@ -345,6 +369,10 @@ fn replay(bytes: &[u8]) -> Result<(Vec<Entry>, u64)> {
     while let Some(h) = bytes.get(pos..pos + 8) {
         let len = u32::from_le_bytes([h[0], h[1], h[2], h[3]]) as usize;
         let crc = u32::from_le_bytes([h[4], h[5], h[6], h[7]]);
+        // No real record is empty. A zero-filled tail reads as len 0 and crc 0, and crc32(b"") IS 0, so it would pass the checksum.
+        if len == 0 {
+            break;
+        }
         let Some(payload) = bytes.get(pos + 8..pos + 8 + len) else { break };
         if crc32(payload) != crc {
             break;
@@ -357,7 +385,7 @@ fn replay(bytes: &[u8]) -> Result<(Vec<Entry>, u64)> {
 }
 ```
 
-Replay stops at the first frame that is short or fails its checksum. `Wal::open` then truncates the file there, so later appends never land behind bad bytes. A frame with a good checksum but a bad record is different: that is not a torn write, so `open` returns an error.
+Replay stops at the first frame that is short, empty or fails its checksum. `Wal::open` then truncates the file there, so later appends never land behind bad bytes. A frame with a good checksum but a bad record is different: that is not a torn write, so `open` returns an error.
 
 The weak point: replay cannot tell a torn last write from damage in the middle. Both end replay, and truncation then **destroys** every later record, with no error and no count. RocksDB makes this a setting. Its default, `kPointInTimeRecovery`, also stops replay at the first inconsistency, while `kAbsoluteConsistency` expects no corruption at all ([`options.h`](https://github.com/facebook/rocksdb/blob/main/include/rocksdb/options.h)). LevelDB's log is cut into 32 KB blocks so that a reader can resynchronise after corruption ([log format](https://github.com/google/leveldb/blob/main/doc/log_format.md)). Here the CRC also leaves the length field uncovered.
 
@@ -367,47 +395,54 @@ The model test's "crash" is `drop(store)`. That is a useful reopen test, but des
 
 The assertion allows for timing: the recovered contents must equal the state after the first `n` operations, for some `n` that includes every acknowledged one. It passed 15 runs in a row here, after a first version of the test was fixed: that version closed the pipe before the kill, so the child could die of a write error instead.
 
-The test does not record **which** step each kill interrupted. It cannot be relied on to hit a particular window; the tests that build one state each are there for that. In the mutation runs below it failed for several planted bugs, among them a user-space buffer (`BufWriter`) around the log and a log reset before the table write.
+The test does not record **which** step each kill interrupted. It cannot be relied on to hit a particular window; the tests that build one state each are there for that. In the mutation runs below it failed for several planted bugs, among them a user-space buffer around the log and a log reset before the table write.
 
 ### Power loss {#power-loss}
 
 This part is reasoning from the code and documentation. **No power-loss test was run.**
 
 - `Wal::append` calls `write_all` and never `sync_data`. An acknowledged write may be only in the kernel's cache.
-- `SsTable::write` syncs the file's contents, then renames. It does not sync the **directory**. Linux's [fsync(2)](https://man7.org/linux/man-pages/man2/fsync.2.html) says that syncing a file does not necessarily make its directory entry durable, and that the directory needs its own sync. The safe recipe is write, sync the file, rename, sync the directory ([LWN](https://lwn.net/Articles/457667/)).
-- So after `flush` or `compact`, the later steps (resetting the log, removing old tables) could become durable while the rename did not. That would lose data that had already been synced inside the new table.
+- `SsTable::write` syncs the file, renames it, then syncs the **directory**. Linux's [fsync(2)](https://man7.org/linux/man-pages/man2/fsync.2.html) says that syncing a file does not necessarily make its directory entry durable, and that the directory needs its own sync. The safe recipe is write, sync the file, rename, sync the directory ([LWN](https://lwn.net/Articles/457667/)).
+- `compact` also syncs the directory after each delete, before the next one.
+- Creating `wal.log` for the first time is not followed by a directory sync.
+
+**What the tests show about the syncs.** A test passes in its own function in place of the directory sync. It checks that the sync is called after each rename while the log is still full, and after each delete, and that its failure stops what depends on it. Nothing here can show that a sync made anything durable.
 
 > [!RUST]
 > `sync_all` and `sync_data` are not the same system call on every platform. In the Rust 1.98.1 standard library, on Apple targets both call `fcntl(F_FULLFSYNC)` (read in `std/src/sys/fs/unix.rs`). On Linux, measure and reason about `fsync` and `fdatasync` separately.
 
 > [!PRODUCTION]
-> To claim durability, choose when a write is acknowledged: after its own sync, or after a shared one (group commit). Sync the directory after creating or renaming files, and before deleting what they replace. Then test with a tool that can drop unsynced writes. None of this is in the code, and these changes were not tried.
+> To claim durability, choose when a write is acknowledged: after its own sync, or after a shared one (group commit). Then test with a tool that can drop unsynced writes. The code does neither: it syncs the directory, not the log.
 '''
 
 [[sections]]
 heading = "Known limits"
 body = '''
-`tests/limitations.rs` pins the first seven rows. Each of those tests **passes because the limit is real**, so a fix makes it fail, and you replace it with a test of the new behaviour.
+`tests/limitations.rs` pins the first three rows. Each of those tests **passes because of the behaviour it names**, so a change makes it fail, and you replace it with a test of the new behaviour.
 
 | Limit | Consequence | Test |
 |---|---|---|
-| eight zero bytes at the log tail parse as a frame of length 0 with a matching CRC | `open` returns `Corrupt`: the store will not start | `a_zero_filled_log_tail_stops_...` |
-| bytes from a partial append stay in the file | later writes return `Ok` but disappear at the next open | `bytes_left_by_a_partial_append_...` (junk added by hand) |
-| a flush can fail after the write was applied | `put` returns `Err`, yet the value is readable and survives reopen | `an_error_from_put_does_not_mean_...` |
 | tables are checked only at `open` | damage after that is returned as a normal value | `a_table_damaged_after_open_...` |
-| `scan` with `from > to` | panics if the memtable has entries; returns empty if it is empty | `scan_with_reversed_bounds_panics_...` |
 | no lock on the directory | two `Store` values overwrite each other's tables | `two_stores_on_one_directory_lose_data` |
 | the threshold counts writes | overwrites cause flushes (intended, see above) | `overwriting_one_key_still_triggers_flushes` |
+| the log is never synced | acknowledged writes can be lost on power failure | none; from the code |
+| damage in the middle of the log looks like a torn end | every later record is cut off, without an error | the bit-flip test shows it |
 | lengths are cast to `u32` | a key, value or frame of 4 GiB or more would be written wrongly | none; from the code |
 | `.tmp` files are removed on open | any file with that ending in the directory is deleted | partly: the leftover-table test |
 
-### The zero tail {#zero-tail}
+### Limits that were fixed {#fixed}
 
-The CRC-32 of an empty input is 0. A header of eight zero bytes therefore passes the checksum, and decoding an empty record fails. LevelDB's log reader has an explicit case for records of type zero and length zero, which it skips because its memory-mapped writer preallocates file regions ([`log_reader.cc`](https://github.com/google/leveldb/blob/main/db/log_reader.cc)). RocksDB's comments also mention tolerating zeroed bytes left by preallocation. This store does not preallocate. Whether a crash on your file system can leave zeros after the last record was **not tested**; if it does, this code does not recover by itself. One possible fix is to treat `len == 0` as the end of the log, since a real record is at least 9 bytes.
+Five earlier limits are gone. Each now has a test of the new behaviour.
 
-### The scan panic {#scan-panic}
+**A zero-filled log tail** stopped the store from opening. The CRC-32 of an empty input is 0, so eight zero bytes passed the checksum and then failed to decode. Replay now treats a length of 0 as the end of the log, since a real record is at least 9 bytes. LevelDB's reader also has a case for records of type zero and length zero ([`log_reader.cc`](https://github.com/google/leveldb/blob/main/db/log_reader.cc)).
 
-`scan` passes its bounds to `BTreeMap::range`, which documents a panic when the start is greater than the end. The empty-memtable case does not panic because the standard library never searches a map with no root. That is an implementation detail, not a promise.
+**A partial append** stayed in the file, and every later write sat behind it, to be dropped at the next open. The log is now cut back to its last whole frame. If that fails too, it refuses further writes.
+
+**A failed automatic flush** made `put` return an error although the write was in the log and readable. Now the write succeeds, and `Stats::failed_auto_flushes` counts the failure.
+
+**A reversed `scan`** panicked once the memtable had entries, because `BTreeMap::range` documents a panic when the start is greater than the end. `scan` now returns nothing.
+
+**Index offsets** were not checked, so a crafted file with a right checksum could break a later read. `open` now refuses it.
 '''
 
 [[sections]]
@@ -424,8 +459,9 @@ cargo test --release    # the same tests, faster
 | `recovery.rs` | one disk state or event per test, and the process kill | the model after a known number of operations |
 | `format.rs` | CRC check value, record bytes, merge rule, corruption of a table, bloom error rate | fixed expected values |
 | `limitations.rs` | what does not work | the limit itself |
+| `src/faults.rs` | a write, a delete or a directory sync that fails | the same answers as before, and the order of syncs |
 
-The model test also asserts that it **reached** what it claims to cover. With these seeds it runs 832 reopen "crashes", 337 torn tails, 654 explicit flushes and 430 compaction calls, with up to 15 tables. The original single-file example, run here with the same seeds, printed the same tally, including the same 2,980 bloom false positives in 126,600 probes. That is good evidence that the split kept the behaviour; it is not a proof.
+The model test also asserts that it **reached** what it claims to cover. With these seeds it runs 832 reopen "crashes", 337 torn tails, 654 explicit flushes and 430 compaction calls, with up to 15 tables. The original single-file example, run here with the same seeds, printed the same tally, including the same 2,980 bloom false positives in 126,600 probes. That is good evidence that the split kept the behaviour on these paths; it is not a proof.
 
 The strongest tests are exhaustive over a small space. This one cuts the log at **every** byte, and then writes again after recovery to show that nothing was left in the way:
 
@@ -461,25 +497,33 @@ Each change below was made alone in a scratch copy, then `cargo test --release` 
 
 | Planted bug | Tests that failed |
 |---|---|
-| delete old tables newest first | 2: both compaction crash tests |
-| reset the log before writing the table | 3: failed flush, put error, process kill |
-| do not truncate the torn tail | 2: cut-log, model |
-| skip the log checksum (except for empty frames) | 2: bit flip, partial append |
-| weaken the table checksum check | 1: every-byte corruption |
-| `get` searches the oldest table first | 3: both compaction crash tests, model |
-| compaction treats the oldest table as newest | 4: both compaction crash tests, process kill, model |
-| keep leftover temp files | 1: leftover temp file |
-| do not log deletes | 5, including cut-log and model |
-| buffer the log in user space | 4: cut-log, bit flip, process kill, partial append |
-| reverse the table order in `open` | 4: both compaction crash tests, process kill, model |
-| the merge drops tombstones even when told not to | 1: the merge test |
+| delete old tables newest first | 4: compaction crash, compaction-to-nothing crash, `a_failed_delete_during_compaction_changes_no_answer`, `a_failed_directory_sync_stops_the_step_that_depends_on_it` |
+| reset the log before writing the table | 5: `a_failed_automatic_flush_does_not_fail_the_write`, `a_flush_that_fails_leaves_the_log_intact`, `a_failed_directory_sync_stops_the_step_that_depends_on_it`, `the_directory_is_synced_after_the_rename_and_after_each_delete`, process kill |
+| do not truncate the torn tail | 3: `a_zero_filled_log_tail_is_cut_off`, cut-log, model |
+| skip the log checksum | 1: bit flip |
+| weaken the table checksum check | 1: `every_single_byte_change_or_truncation_of_a_table_is_rejected_at_open` |
+| `get` searches the oldest table first | 3: compaction crash, compaction-to-nothing crash, model |
+| compaction treats the oldest table as newest | 5: compaction crash, compaction-to-nothing crash, `a_failed_delete_during_compaction_changes_no_answer`, process kill, model |
+| keep leftover temp files | 1: `leftover_temp_file_is_removed_and_ignored` |
+| do not log deletes | 5: `crash_after_the_table_is_written_but_before_the_log_is_reset`, process kill, cut-log, bit flip, model |
+| buffer the log in user space | 8: `a_flush_that_fails_leaves_the_log_intact`, `a_zero_filled_log_tail_is_cut_off`, `a_partial_append_is_cut_off_and_later_writes_survive`, `the_directory_is_synced_after_the_rename_and_after_each_delete`, process kill, cut-log, bit flip, model |
+| reverse the table order in `open` | 5: compaction crash, compaction-to-nothing crash, `a_failed_delete_during_compaction_changes_no_answer`, process kill, model |
+| the merge drops tombstones even when told not to | 1: `merge_keeps_the_newest_version_and_drops_tombstones_only_when_asked` |
 | **remove `sync_all` before the rename** | **none** |
+| let a zero length through replay | 1: `a_zero_filled_log_tail_is_cut_off` |
+| do not cut a failed append off the log | 2: `a_log_that_cannot_be_repaired_takes_no_more_writes`, `a_partial_append_is_cut_off_and_later_writes_survive` |
+| do not sync the directory after the rename | 2: `a_failed_directory_sync_stops_the_step_that_depends_on_it`, `the_directory_is_synced_after_the_rename_and_after_each_delete` |
+| do not sync the directory after a delete | 2: `a_failed_directory_sync_stops_the_step_that_depends_on_it`, `the_directory_is_synced_after_the_rename_and_after_each_delete` |
+| do not check the index offsets | 1: `wrong_index_offsets_under_a_right_checksum_are_rejected_at_open` |
+| return the automatic flush's error from the write | 1: `a_failed_automatic_flush_does_not_fail_the_write` |
+| let a reversed scan reach `BTreeMap::range` | 1: `a_reversed_or_empty_scan_returns_nothing` |
+| forget every table when one delete fails | 3: `a_failed_delete_during_compaction_changes_no_answer`, `a_failed_directory_sync_stops_the_step_that_depends_on_it`, `the_directory_is_synced_after_the_rename_and_after_each_delete` |
 
 Note the `sync_all` row. No test here can see a missing sync, because a running operating system shows unsynced data to the next reader. Failures of the process-kill test can depend on timing. In this run, every bug it caught was also caught by another test.
 
 This exercise also found a weak test. With the user-space buffer, the cut-log and bit-flip tests first **passed**: they read the log file while it was still empty, so their loops had nothing to check. They now assert that the file holds the whole log.
 
-Also not tested: a failing `write`, `rename` or `remove_file` other than through the blocked temp path; a full disk; power loss; a second process; very large keys and values.
+Also not tested: a failing `rename` other than through the blocked paths; a real full disk; power loss; a second process; very large keys and values.
 
 > [!TESTING]
 > To make a file operation fail on purpose without a mocking layer, one cheap trick works here: create a **directory** where the code wants to create its temp file. It makes the table write fail at a known point. It covers only that one point.
@@ -490,8 +534,8 @@ heading = "Where to take it"
 body = '''
 These are suggestions in a sensible order, not tested here.
 
-1. **Fix the recovery limits:** the zero tail, an append that fails part-way (cut the log back to the last good length, or refuse further writes), and a clear result for `put` when only the flush failed.
-2. **Say what durable means:** sync policy for the log, and directory syncs around rename and delete.
+1. **Resynchronise after damage:** tell a torn last write from damage in the middle of the log, and report what was dropped.
+2. **Say what durable means:** a sync policy for the log, and a directory sync when the log is first created.
 3. **Lock the directory,** so a second writer is refused.
 4. **Checksum blocks** and verify on every read, so late damage is detected.
 5. **Stream the merge,** so that compaction and `scan` do not load whole tables.
@@ -539,7 +583,7 @@ section = "Crash and recovery: what is true"
 [[labs]]
 title = "The store and its tests"
 after = "How it is tested"
-files = ["src/store.rs", "src/wal.rs", "src/sstable.rs", "src/bloom.rs", "src/merge.rs", "src/codec.rs", "src/main.rs", "tests/recovery.rs", "tests/limitations.rs", "tests/model.rs", "tests/format.rs"]
+files = ["src/store.rs", "src/wal.rs", "src/sstable.rs", "src/bloom.rs", "src/merge.rs", "src/codec.rs", "src/faults.rs", "src/main.rs", "tests/recovery.rs", "tests/limitations.rs", "tests/model.rs", "tests/format.rs"]
 run = true
 test = true
 
@@ -628,6 +672,6 @@ read = false
 
 [verified]
 toolchain = "rustc and cargo 1.98.1"
-date = "2026-11-26"
+date = "2026-11-27"
 platform = "aarch64-apple-darwin, Apple M4 Pro, macOS 27.0, APFS temp directory"
-not_checked = "No power-loss, OS-crash or full-disk test; the power-loss section is reasoning. Not run on Linux or Windows. The partial-append case is simulated by writing junk by hand. The crafted-table panic and the u32 length truncation come from reading the code. The kill test does not record which step it interrupted. No performance was measured. The higher bloom false-positive rate for small tables was not explained. Suggested fixes were not implemented."
+not_checked = "No power-loss, OS-crash or full-disk test; the power-loss section is reasoning. Not run on Linux or Windows. Failing writes, deletes and directory syncs are injected, not produced by a real disk. No test shows that a sync made data durable. The u32 length truncation comes from reading the code. The kill test does not record which step it interrupted. No performance was measured. The higher bloom false-positive rate for small tables was not explained. The suggestions at the end were not implemented."

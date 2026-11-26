@@ -1,0 +1,32 @@
+slug = "expand-the-braces"
+title = "Expand the braces"
+mode = "write"
+level = "medium"
+stage = "read-notation"
+order = 1
+status = "ready"
+tags = ["parsing", "recursion", "error positions", "input limits"]
+teaches = [
+  "One function for each level of a grammar: a list of choices is made of sequences, and a sequence is made of items.",
+  "The function that read the opening character is the one that knows what to report when the closer never comes.",
+  "Work out how big an answer would be before you build it, with arithmetic that cannot wrap.",
+]
+follow_up = "1) How would you return the words one at a time without building them all? 2) How would you add number ranges such as `{1..12}`? 3) Which part of your parser changes if a comma outside braces also separated choices?"
+related = ["Y14", "Y16"]
+
+[[hints]]
+kind = "approach"
+text = "Turn the text into a tree first: a piece of text, a sequence of parts, or a list of choices. Expanding the tree is then a separate, short function. Let one function read a sequence and another read a braced group; the second calls the first once per choice."
+
+[[hints]]
+kind = "rust"
+text = "Collect the pattern into a `Vec<char>` and keep a position, with small `peek` and `bump` methods. The index of a `{` that you remember before reading its contents is the one `Unclosed` needs. `saturating_add` and `saturating_mul` keep a count honest."
+
+[[hints]]
+kind = "edge"
+text = "A sequence stops at `}` or `,` only inside a group. At the top level a comma is ordinary text, and a `}` is `UnmatchedClose`. An empty sequence is allowed and expands to one empty word."
+
+[solution]
+explanation = "The grammar has two rules. A sequence is a run of characters and groups. A group is a brace, one or more sequences separated by commas, and a closing brace. Each rule is one function. A flag, here the current depth, says whether a comma or a closing brace ends the sequence. The number of words is the product over a sequence and the sum over a group, so it can be counted on the tree before any string is built."
+time = "O(pattern + total length of the words)"
+space = "O(pattern + output)"

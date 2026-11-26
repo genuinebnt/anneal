@@ -1,0 +1,33 @@
+slug = "busiest-stretch"
+title = "The busiest stretch"
+mode = "write"
+level = "medium"
+stage = "one-idea-at-a-time"
+order = 2
+status = "ready"
+tags = ["sliding window", "two pointers", "half-open intervals", "60-min"]
+teaches = ["The worst moment of a log can start anywhere, so fixed periods can hide half of it.", "Two positions that only move forward visit every candidate stretch in linear time.", "A half-open interval decides what happens to two events exactly one span apart."]
+follow_up = "1) The log arrives live and never ends. What do you keep? 2) How would you report the busiest stretch for each customer in one pass?"
+related = ["M2", "S3"]
+
+[[hints]]
+kind = "approach"
+text = "A best stretch can always be slid forward until it begins at an event. Then think about the stretches by where they end, and what changes from one ending to the next."
+
+[[hints]]
+kind = "rust"
+text = "Keep the index of the oldest event still inside and a running sum. Add the new event, then drop old ones from the front with `while`. Sum in `u128`."
+
+[[hints]]
+kind = "edge"
+text = "Compare ages (`now - then >= span`) instead of adding to a time, which can overflow. An event exactly `span_ms` older is outside. Among equal totals keep the earliest start, and count every event of that stretch, including those of size 0."
+
+[solution]
+explanation = "Both questions walk the log with the oldest event still inside and a running total. For each new event the old ones drop off the front, and each event is added and removed once. The best stretch is updated only when the total grows, so ties keep the earliest start."
+time = "O(n)"
+space = "O(1) beyond the input"
+
+[[cookbook]]
+level = "related"
+page = "algorithmic-optimization-toolbox"
+note = "Compares quadratic code with window and two-pointer versions on other tasks."

@@ -1,0 +1,38 @@
+slug = "let-the-cap-find-itself"
+title = "Let the cap find itself"
+mode = "write"
+level = "hard"
+stage = "serve-many"
+order = 6
+status = "ready"
+tags = ["capstone", "adaptive concurrency", "AIMD", "RAII", "90-min"]
+teaches = ["Raise a limit only on evidence that the limit was being used, or quiet periods will inflate it.", "Many failures from one moment are one signal. Reacting to each of them cuts far too deep.", "Remembering which generation a piece of work belongs to is a small way to ignore stale reports."]
+follow_up = "1) What would you use as the overload signal for an HTTP dependency? 2) Latency rises before errors do. How could the limit react to it?"
+related = ["C3", "B5"]
+
+[[hints]]
+kind = "approach"
+text = "Each ticket has to know two things from the moment it was given. One concerns how full the gate was. The other concerns what has happened to the limit since."
+
+[[hints]]
+kind = "rust"
+text = "`try_acquire_when` shows you the counts that held when the permit was given: record them from its last call. A small `Mutex` is enough for the control values. A ticket owns its `Permit`, so dropping the ticket releases the place."
+
+[[hints]]
+kind = "edge"
+text = "Number the cuts. A ticket from before the latest cut changes nothing, whether it reports success or overload. A cut at `min` still counts as a cut. A dropped ticket reports nothing."
+
+[solution]
+explanation = "Each ticket records the number of cuts so far and whether it took the last free place, both read while the control lock is held. A success raises the limit by one only for a ticket that filled the gate. An overload halves it, never below the minimum, and counts a cut. A report from before the latest cut is ignored, so one burst of failures cuts once."
+time = "O(1) per call"
+space = "O(1) plus one ticket per piece of work"
+
+[[cookbook]]
+level = "similar"
+page = "rate-limiter-lab"
+note = "Its adaptive limit raises on every success call and halves on every overload call, with no tickets."
+
+[[cookbook]]
+level = "related"
+page = "tcp-congestion-control-sim"
+note = "How congestion control reacts once per round trip, not once per lost packet."

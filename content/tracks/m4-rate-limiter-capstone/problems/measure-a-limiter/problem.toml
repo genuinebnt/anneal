@@ -1,0 +1,33 @@
+slug = "measure-a-limiter"
+title = "Measure a limiter"
+mode = "write"
+level = "medium"
+stage = "six-ways-to-count"
+order = 1
+status = "ready"
+tags = ["capstone", "rate limiting", "traits", "fixed window", "60-min"]
+teaches = ["A limiter that takes the time as an argument can be replayed over recorded traffic, years of it in milliseconds.", "What protects a backend is the most it receives in any stretch of time, not in the limiter's own windows.", "Counting in fixed windows can let through twice the limit in a moment."]
+follow_up = "1) Which of the two limiters would you use for a million clients, and why? 2) What does the busiest stretch hide that you might still care about?"
+related = ["M2", "B5"]
+
+[[hints]]
+kind = "approach"
+text = "The fixed window is the period roll you have done before, with a counter in place of a total. `replay` needs the time each admitted request counts at, in order."
+
+[[hints]]
+kind = "rust"
+text = "`&mut L` with `L: ?Sized` accepts both a concrete limiter and a `&mut dyn Limiter`. Keep the admitted times in a `Vec`; it is already sorted."
+
+[[hints]]
+kind = "edge"
+text = "Pass the limiter the effective time, never an earlier one. Call `check` exactly once per arrival. A stretch is half-open, and times can be near `u64::MAX`."
+
+[solution]
+explanation = "The fixed window keeps the latest time, the window's number and its count. Replay clamps each arrival to the latest time so far, asks the limiter once and keeps the admitted times. The busiest stretch is then one pass with two positions over those sorted times."
+time = "O(n) for n arrivals"
+space = "O(n) for the report"
+
+[[cookbook]]
+level = "exact"
+page = "rate-limiter-lab"
+note = "Part: the fixed window, the sliding log, the trait and the busiest-window measure. It does not clamp earlier times."

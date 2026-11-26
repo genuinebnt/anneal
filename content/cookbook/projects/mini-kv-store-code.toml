@@ -30,7 +30,13 @@ appends and sequential writes are the fastest thing disks do; sorting once per f
 
 **Compaction** merges all tables with a BinaryHeap (k-way merge), keeping only the newest version of each key and dropping tombstones (safe only because nothing older remains). **Recovery** = reopen the directory: load tables, replay the WAL, stop at the first torn/corrupt frame and truncate it away.
 
-A WAL reset after a flush is safe to crash through: replay is idempotent. **Verified** by a model test: thousands of seeded random operations (put/delete/get/scan/flush/compact/crash/torn-tail) against a BTreeMap.
+A WAL reset after a flush is safe to crash through: replay is idempotent. A frame header with length 0 also ends the log: a tail of zeros would otherwise pass the checksum, because the CRC32 of nothing is 0.
+
+Compaction deletes the old tables **oldest first** and forgets each one only after its file is gone, so a delete that fails leaves the open store, like the directory, with every table that still matters.
+
+A log append that fails is cut back off the log, so later writes never sit behind half a frame; if even that fails, the log refuses more writes. The directory is synced after a table is renamed into place (before the log is emptied) and after each delete. Once a write is logged and applied it has happened: a failed automatic flush is counted and retried by the next write, not returned. Opening a table also checks that its index offsets rise and stay inside the data. **Not** promised: the log itself is never synced, so an acknowledged write can still be lost when the power fails.
+
+**Verified** by a model test: thousands of seeded random operations (put/delete/get/scan/flush/compact/crash/torn-tail) against a BTreeMap, plus checks that force each failure: logs followed by zeros, a delete that fails at each point of a compaction, an append that fails part-way, a reversed scan, index offsets that are wrong under a right checksum, and a flush that fails. For the directory sync the checks show only that it is called at the right moments and that its failure stops the next step; no test here can show that data survives a power cut.
 """
 
 [[sections]]

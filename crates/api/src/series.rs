@@ -6,9 +6,9 @@ use std::collections::{HashMap, HashSet};
 use anneal_content::series::{CookbookLevel, Item, ItemKind, Series};
 use anneal_content::Catalog;
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use chrono::{DateTime, Local, NaiveDate, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::error::{ApiError, ApiResult};
@@ -450,9 +450,21 @@ pub struct Repeat {
     pub due: Option<NaiveDate>,
 }
 
+/// Another series that has the same problem, so the reader can switch to it.
+#[derive(Debug, Serialize)]
+pub struct Elsewhere {
+    pub id: String,
+    pub title: String,
+    pub kind: &'static str,
+    /// Which part or step the problem is there.
+    pub number: usize,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Place {
     pub series: PageRef,
+    /// The other series with this problem, in their stable order; usually none.
+    pub others: Vec<Elsewhere>,
     pub kind: &'static str,
     pub number: usize,
     /// How many parts (or steps) there are.
@@ -566,7 +578,37 @@ fn neighbours(series: &Series, item: &Item) -> (Option<String>, Option<String>) 
     (prev, next)
 }
 
-fn place(catalog: &Catalog, series: &Series, item: &Item, facts: &Facts) -> Place {
+const fn kind_name(kind: ItemKind) -> &'static str {
+    match kind {
+        ItemKind::Part => "part",
+        ItemKind::Step => "step",
+    }
+}
+
+/// The series that have `id` as a written part or step, in their stable order: by rank, then by id.
+fn holders<'a>(all: &'a [Series], id: &str) -> Vec<(&'a Series, &'a Item)> {
+    let mut found: Vec<_> = all.iter().filter_map(|x| x.item(id).filter(|i| i.written).map(|i| (x, i))).collect();
+    found.sort_by_key(|(x, _)| (x.rank.unwrap_or(u32::MAX), x.id.as_str()));
+    found
+}
+
+/// Which of `holders` to show, as an index. The one the reader asked for wins, if it has the problem. Otherwise it is
+/// the first in which they have solved something that the others don't have, and failing that the first. A problem they
+/// all share never counts, so solving it can't move the reader to another series.
+fn choose(holders: &[(&Series, &Item)], asked: Option<&str>, facts: &Facts) -> usize {
+    let own_progress = |series: &Series| {
+        series.items().any(|i| {
+            let only_here = i.id.as_deref().is_some_and(|id| holders.iter().all(|(x, _)| x.id == series.id || x.item(id).is_none()));
+            only_here && facts.solved(i)
+        })
+    };
+    asked
+        .and_then(|a| holders.iter().position(|(x, _)| x.id == a))
+        .or_else(|| holders.iter().position(|(x, _)| own_progress(x)))
+        .unwrap_or(0)
+}
+
+fn place(catalog: &Catalog, series: &Series, item: &Item, others: Vec<Elsewhere>, facts: &Facts) -> Place {
     let all = match item.kind {
         ItemKind::Part => &series.parts,
         ItemKind::Step => &series.steps,
@@ -576,10 +618,8 @@ fn place(catalog: &Catalog, series: &Series, item: &Item, facts: &Facts) -> Plac
         prev,
         next,
         series: PageRef { id: series.id.clone(), title: series.title.clone() },
-        kind: match item.kind {
-            ItemKind::Part => "part",
-            ItemKind::Step => "step",
-        },
+        others,
+        kind: kind_name(item.kind),
         number: item.number,
         total: all.len(),
         minutes: item.minutes,
@@ -624,12 +664,24 @@ pub async fn get(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult
     Ok(Json(view(&s.catalog, series, &facts)))
 }
 
-/// `GET /api/problems/{id}/series`: where the problem sits in the first series that has it, or `null`.
-pub async fn of_problem(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<Option<Place>>> {
-    let found = s.catalog.series.iter().find_map(|x| x.item(&id).filter(|i| i.written).map(|i| (x, i)));
-    let Some((series, item)) = found else { return Ok(Json(None)) };
+#[derive(Debug, Deserialize)]
+pub struct CameFrom {
+    /// The series the reader came from.
+    series: Option<String>,
+}
+
+/// `GET /api/problems/{id}/series?series=`: where the problem sits in a series, or `null` if none has it. `series` names
+/// the one the reader came from; one that is unknown or lacks the problem is passed over (see `choose`).
+pub async fn of_problem(State(s): State<AppState>, Path(id): Path<String>, Query(from): Query<CameFrom>) -> ApiResult<Json<Option<Place>>> {
+    let mut holders = holders(&s.catalog.series, &id);
+    if holders.is_empty() {
+        return Ok(Json(None));
+    }
     let facts = Facts::load(&s).await?;
-    Ok(Json(Some(place(&s.catalog, series, item, &facts))))
+    let chosen = choose(&holders, from.series.as_deref(), &facts);
+    let (series, item) = holders.remove(chosen);
+    let others = holders.iter().map(|(x, i)| Elsewhere { id: x.id.clone(), title: x.title.clone(), kind: kind_name(i.kind), number: i.number }).collect();
+    Ok(Json(Some(place(&s.catalog, series, item, others, &facts))))
 }
 
 #[cfg(test)]

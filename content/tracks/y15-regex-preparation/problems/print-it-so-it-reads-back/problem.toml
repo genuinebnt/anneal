@@ -1,0 +1,32 @@
+slug = "print-it-so-it-reads-back"
+title = "Print it so that it reads back"
+mode = "write"
+level = "medium"
+stage = "second-opinion"
+order = 7
+status = "ready"
+tags = ["pretty printing", "grammars", "random generation", "test data", "round trip"]
+teaches = [
+  "A printer needs brackets exactly where the reader would otherwise build a different tree. That is where a looser form sits inside a tighter one, or a list sits inside its own kind.",
+  "Printing then reading must give back the same value. That one property tests the printer, the reader and the grammar together.",
+  "A random generator is built like the grammar, with a depth limit. What it never produces is never tested, so check what it covers.",
+]
+follow_up = "1) How would you shrink a failing random formula to a small one? 2) How would you generate text that is almost, but not quite, valid? 3) How would you make rare forms appear often without making formulas huge?"
+related = ["Y5", "Y14", "Y16"]
+
+[[hints]]
+kind = "approach"
+text = "Give every form a strength: a choice of alternatives is the loosest, then a list joined by `&`, then `!`, then a letter. When you print a child, you know the strength its place requires. For the generator, write one function that calls itself with one less depth."
+
+[[hints]]
+kind = "rust"
+text = "A helper `fn write(formula, at_least: u8, out: &mut String)` adds brackets when the formula's own strength is below `at_least`. For random numbers a few lines are enough: multiply and shift a `u64` state (xorshift or splitmix64), seeded from the argument."
+
+[[hints]]
+kind = "edge"
+text = "`a&(b&c)` and `a&b&c` are different trees, so a list inside the same kind of list keeps its brackets. At depth 1 only a letter fits. A seed of 0 must not leave a xorshift generator stuck at 0."
+
+[solution]
+explanation = "Each form has a rank, and each place a child can appear demands a minimum rank. A child below the minimum is bracketed. The children of `|` demand more than `|` itself, which is why a nested `|` keeps its brackets, and likewise for `&`. The generator chooses a form uniformly, with only a letter left when the depth is used up, so every nesting appears often."
+time = "O(size of the formula)"
+space = "O(size of the formula)"

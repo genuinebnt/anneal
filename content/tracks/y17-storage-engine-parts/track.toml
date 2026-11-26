@@ -1,0 +1,21 @@
+code = "Y17"
+name = "Storage engine parts"
+section = "Y"
+tier = "sde3"
+order = 17
+summary = "Preparation for the key-value store capstone: files that survive failures and power cuts, sorted blocks, saved filters and layers of changes."
+
+[[stages]]
+slug = "files-that-survive"
+name = "Files that survive"
+band = "medium"
+
+[[stages]]
+slug = "sorted-data"
+name = "Sorted data you can search"
+band = "medium"
+
+[[stages]]
+slug = "many-layers"
+name = "Many layers, one answer"
+band = "hard"

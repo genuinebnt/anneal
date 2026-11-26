@@ -24,7 +24,8 @@ export function Segments({ on, label }: { on: boolean[]; label: string }) {
 
 const named = (l: SeriesLink) => (l.number === null ? l.title : `${l.number}. ${l.title}`);
 
-function Connection({ tag, link }: { tag: string; link: SeriesLink }) {
+/** `series` is the one being read; a problem outside it ("Another problem") is not opened as part of it. */
+function Connection({ tag, link, series }: { tag: string; link: SeriesLink; series: string }) {
   const body = (
     <>
       <em>{tag}</em>
@@ -32,7 +33,7 @@ function Connection({ tag, link }: { tag: string; link: SeriesLink }) {
       {link.why && <small>{link.why}</small>}
     </>
   );
-  return link.id ? <Link to="/p/$id" params={{ id: link.id }}>{body}</Link> : <div>{body}</div>;
+  return link.id ? <Link to="/p/$id" params={{ id: link.id }} search={link.number === null ? {} : { series }}>{body}</Link> : <div>{body}</div>;
 }
 
 const COOKBOOK_TAG = { exact: "Gives the solution away", similar: "Same technique", related: "Related" } as const;
@@ -40,6 +41,8 @@ const COOKBOOK_TAG = { exact: "Gives the solution away", similar: "Same techniqu
 export function Connections({ place, solved }: { place: SeriesPlace; solved: boolean }) {
   const closed = place.helpful.length + place.cookbook.length;
   const earlier = (l: SeriesLink) => (l.number === null ? "Another problem" : l.label.startsWith("Part") ? "Earlier part" : "Earlier step");
+  // a part with nothing to connect to gets no box, rather than a heading over nothing
+  if (closed === 0 && !place.know_first && place.required.length === 0) return null;
   return (
     <section className="sx-links" aria-label="Connections">
       <h2>Connections</h2>
@@ -47,7 +50,7 @@ export function Connections({ place, solved }: { place: SeriesPlace; solved: boo
         <div className="sx-first">
           <b>Know first</b>
           {place.know_first && <p>{place.know_first}</p>}
-          {place.required.map((l) => <Connection key={l.label} tag={l.label} link={l} />)}
+          {place.required.map((l) => <Connection key={l.label} tag={l.label} link={l} series={place.series.id} />)}
         </div>
       )}
       {closed > 0 && (
@@ -55,7 +58,7 @@ export function Connections({ place, solved }: { place: SeriesPlace; solved: boo
         <details key={`${place.series.id}:${place.kind}${place.number}:${solved}`} open={solved || undefined}>
           <summary>Show helpful ideas<small>{solved ? "You have solved this one" : "This may give away part of the approach"}</small></summary>
           {place.helpful.map((l) => (
-            <Connection key={l.label + l.title} tag={`${l.number === null ? "Another problem" : l.number < place.number ? earlier(l) : l.label}${l.reveals_method ? " · gives away the method" : ""}`} link={l} />
+            <Connection key={l.label + l.title} series={place.series.id} tag={`${l.number === null ? "Another problem" : l.number < place.number ? earlier(l) : l.label}${l.reveals_method ? " · gives away the method" : ""}`} link={l} />
           ))}
           {place.cookbook.map((c) => (
             <Link key={c.page} to="/cookbook/p/$id" params={{ id: c.page }}>
@@ -66,6 +69,22 @@ export function Connections({ place, solved }: { place: SeriesPlace; solved: boo
         </details>
       )}
     </section>
+  );
+}
+
+/** For a problem that more than one series has: which others, each a switch that stays on this problem. */
+export function SeriesSwitch({ place, id }: { place: SeriesPlace; id: string }) {
+  if (place.others.length === 0) return null;
+  return (
+    <ul className="sx-also" aria-label="Other series with this problem">
+      {place.others.map((o) => (
+        <li key={o.id}>
+          <Link to="/p/$id" params={{ id }} search={{ series: o.id }} replace resetScroll={false}>
+            Switch to <b>{o.title}</b> <span>({o.kind === "part" ? "part" : "capstone step"} {o.number} there)</span>
+          </Link>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -106,7 +125,7 @@ export function SeriesComplete({ place, done, how }: { place: SeriesPlace; done:
       {done.skipped.length > 0 && <p className="sx-skipped">Still to be written: {done.skipped.join(", ")}.</p>}
       <div className="sx-acts">
         {next?.id && (
-          <Link className="sx-btn" to="/p/$id" params={{ id: next.id }}>
+          <Link className="sx-btn" to="/p/$id" params={{ id: next.id }} search={{ series: place.series.id }}>
             Start {next.kind === "part" ? "part" : "capstone step"} {next.number}: {lowerFirst(next.title)}
           </Link>
         )}

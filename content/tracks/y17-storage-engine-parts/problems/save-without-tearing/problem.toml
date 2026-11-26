@@ -1,0 +1,31 @@
+slug = "save-without-tearing"
+title = "Save a file that a crash cannot tear"
+mode = "write"
+level = "hard"
+stage = "files-that-survive"
+order = 4
+status = "ready"
+tags = ["atomic replace", "rename", "fsync", "directory sync", "crash recovery", "std::fs"]
+teaches = [
+  "Sync the bytes, then rename, then sync the directory: each step covers what the others do not.",
+  "Delete the old version only after the new one cannot be lost.",
+  "After the point of no return, a clean-up failure is not a failure of the operation.",
+]
+follow_up = "1) This keeps a whole copy per save. At what size would you rather append changes to a log, and what would you still need this function for? 2) What can two processes calling `save` on one directory do to each other? 3) On macOS, `sync_all` uses a different system call from a plain `fsync`. Why?"
+
+[[hints]]
+kind = "approach"
+text = "For each pair of neighbouring steps, ask what the disk can look like if the power fails between them, using the four rules. Then ask the same about a restart that happens without a power cut, after a save that failed late."
+
+[[hints]]
+kind = "rust"
+text = "`File::create` empties or creates. `OpenOptions::new().append(true)` writes at the end of an existing file. `File::open(dir)?.sync_all()` syncs a directory on Unix. `entry.file_type()?.is_file()` and `file_name().into_string()` help with `read_dir`."
+
+[[hints]]
+kind = "edge"
+text = "`state-10` is newer than `state-9`, though it sorts first as text. After a failed directory sync, a new name is visible to the running program but may still vanish: what should the next `recover` do before it hands that version out?"
+
+[solution]
+explanation = "The bytes are synced under a temporary name, so the real name can never point at half a file. The directory sync is the moment the save becomes true, and only after it may older versions go. `recover` syncs the directory too, because the name it reads may so far exist only in memory."
+time = "O(files + bytes)"
+space = "O(bytes)"

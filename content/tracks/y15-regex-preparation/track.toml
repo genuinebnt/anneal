@@ -1,0 +1,21 @@
+code = "Y15"
+name = "Regex engine: preparation"
+section = "Y"
+tier = "sde3"
+order = 15
+summary = "Small exercises on the ideas a regular-expression engine needs, each on a different task."
+
+[[stages]]
+slug = "read-notation"
+name = "Read a small notation"
+band = "medium"
+
+[[stages]]
+slug = "many-possibilities"
+name = "Many possibilities"
+band = "medium"
+
+[[stages]]
+slug = "second-opinion"
+name = "A second opinion"
+band = "hard"

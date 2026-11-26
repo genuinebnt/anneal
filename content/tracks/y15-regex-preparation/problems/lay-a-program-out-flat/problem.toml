@@ -1,0 +1,33 @@
+slug = "lay-a-program-out-flat"
+title = "Lay a program out flat"
+mode = "write"
+level = "medium"
+stage = "many-possibilities"
+order = 3
+status = "ready"
+tags = ["compiling", "graphs in a Vec", "indices as links", "recursion"]
+teaches = [
+  "Pieces of a graph can live in one `Vec` and point at each other with indices. There is nothing to borrow and nothing to free.",
+  "Translate from the end backwards: if each piece is told where to go next, nothing has to be patched afterwards.",
+  "A program that can loop needs a bound, and hitting the bound is a different answer from finishing.",
+  "A loop is the one place where a piece must point at something not built yet. Reserve its slot, build the body, then fill the slot in.",
+]
+follow_up = "1) How would you add `Loop` with `break` carrying a label that names which loop it leaves? 2) How would you remove operations that can never be reached? 3) What would change if the operations had no `next` field and ran in order, with explicit jumps?"
+related = ["Y6", "Y14", "Y16"]
+
+[[hints]]
+kind = "approach"
+text = "Write one function that is given a statement and the index to go to when it is done, and returns the index where it begins. An empty sequence begins where it ends. What else must the function be told so that `Break` and `Continue` know where to go?"
+
+[[hints]]
+kind = "rust"
+text = "Push a placeholder to get the index of a loop's test before its body exists, then assign to `ops[index]` afterwards. Pass the current loop as an `Option<(usize, usize)>`: where `continue` goes and where `break` goes. A sequence can be walked with `.iter().rev()`."
+
+[[hints]]
+kind = "edge"
+text = "`While(t, Seq([]))` is a test whose yes-link is itself. `While(t, Break)` has a yes-link that leaves the loop. A sequence may hold hundreds of thousands of statements, so walk it with a loop, not by recursion."
+
+[solution]
+explanation = "The translation runs backwards: a statement is built when the place that follows it is already known, so every link can be written at once. A sequence is folded from its last statement to its first. `Break` and `Continue` produce nothing: their entry is simply the loop's exit or the loop's test. Only a loop needs a slot reserved first, because its body must link back to a test that cannot be completed until the body's entry is known."
+time = "O(statements)"
+space = "O(statements)"

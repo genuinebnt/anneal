@@ -1,0 +1,32 @@
+slug = "which-roles-do-you-have"
+title = "Which roles do you really have?"
+mode = "write"
+level = "medium"
+stage = "many-possibilities"
+order = 4
+status = "ready"
+tags = ["graphs", "reachability", "explicit stack", "cycles"]
+teaches = [
+  "Everything reachable from a set of starting points is one walk with a \"seen\" table: each node is handled once, whatever the number of paths to it.",
+  "A `Vec` used as a stack of work does what recursion does, without a limit set by the thread's stack.",
+  "Some edges exist only when a fact about the moment is true. The walk is the same; the test is made on each edge.",
+]
+follow_up = "1) How would you also return one chain of links that explains each role? 2) If thousands of requests arrive with the same links, what could you work out once? 3) How would links that need two facts at once change the code?"
+related = ["P1", "Y16"]
+
+[[hints]]
+kind = "approach"
+text = "Walk outwards from the held roles, following only links that are open now, and handle each role once. When you meet a closed link, remember its target and decide about it after the walk has finished."
+
+[[hints]]
+kind = "rust"
+text = "Keep a `Vec<bool>` of seen roles and a `Vec<usize>` of work. Mark a role when you push it, or check the mark when you pop it. A `match` on `When` decides whether a link is open."
+
+[[hints]]
+kind = "edge"
+text = "A closed link's target may be reached later by another route, and then it is not blocked. The links may form loops, chains may be hundreds of thousands long, and the number of different paths can be astronomically large."
+
+[solution]
+explanation = "The walk keeps its own stack, so a long chain costs memory on the heap and not stack frames. A role is pushed only the first time it is seen, which both ends cycles and keeps the work proportional to roles plus links. Targets of closed links are collected during the walk and filtered at the end, when it is known which of them were reached another way."
+time = "O(roles + links)"
+space = "O(roles + links)"

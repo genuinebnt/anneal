@@ -74,3 +74,29 @@ fn bloom_has_no_false_negatives_and_about_one_percent_false_positives() {
     // theory for 10 bits per key and 4 probes, with ideal hashes: (1 - e^(-0.4))^4 = 1.18%
     assert!((0.005..0.02).contains(&rate), "{rate}");
 }
+
+#[test]
+fn wrong_index_offsets_under_a_right_checksum_are_rejected_at_open() {
+    let tmp = TempDir::new("bad_index");
+    let mut store = Store::open(&tmp.0, 1 << 20).unwrap();
+    for i in 0..40 {
+        store.put(format!("k{i:03}").as_bytes(), &[1]).unwrap();
+    }
+    store.flush().unwrap();
+    let path = store.tables()[0].path().to_path_buf();
+    drop(store);
+    let good = fs::read(&path).unwrap();
+    let footer = good.len() - 32;
+    let data_end = u64::from_le_bytes(good[footer..footer + 8].try_into().unwrap());
+    // the index: count, then three times [klen 4][key 4][offset 8]
+    for (entry, offset) in [(0usize, 5u64), (2, 1), (1, 0), (2, data_end), (2, u64::MAX)] {
+        let mut bad = good.clone();
+        let at = data_end as usize + 4 + entry * 16 + 8;
+        bad[at..at + 8].copy_from_slice(&offset.to_le_bytes());
+        let crc_at = bad.len() - 8;
+        let crc = crc32(&bad[..crc_at]);
+        bad[crc_at..crc_at + 4].copy_from_slice(&crc.to_le_bytes());
+        fs::write(&path, bad).unwrap();
+        assert!(matches!(Store::open(&tmp.0, 1 << 20), Err(KvError::Corrupt(_))), "entry {entry} offset {offset}");
+    }
+}

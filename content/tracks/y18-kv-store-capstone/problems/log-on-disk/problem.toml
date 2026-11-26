@@ -1,0 +1,32 @@
+slug = "log-on-disk"
+title = "Capstone 2: the log on disk"
+mode = "write"
+level = "medium"
+stage = "on-disk"
+order = 2
+status = "ready"
+tags = ["write-ahead log", "File", "recovery", "truncate", "failure handling"]
+teaches = [
+  "Recovery repairs the file as well as reading it, or later writes are lost behind the damage.",
+  "Roll back a partial append before anything else is written.",
+  "A trait around the file makes disk failures testable.",
+]
+follow_up = "1) `append` returns before the data is safe from a power cut. Who in the store should decide when to call `sync`, and what would one `sync` per write cost? 2) What else must happen once when the log file is first created, to be sure it exists after a power cut? 3) Two processes open the same log. What goes wrong, and how would you stop it?"
+crates = ["thiserror"]
+
+[[hints]]
+kind = "approach"
+text = "Two things must be remembered between calls: how long the good part of the file is, and whether the log can still be trusted."
+
+[[hints]]
+kind = "rust"
+text = "The given implementation expects a file opened with `OpenOptions` for reading and appending, created if missing. `Wal<F: LogFile = File>` lets `Wal` alone mean the real one."
+
+[[hints]]
+kind = "edge"
+text = "Cutting the tail must happen when the log is opened, not at the next append. After a `Corrupt` error the evidence must stay on disk."
+
+[solution]
+explanation = "Opening replays the file and truncates it to the valid length, so new frames never sit behind damaged bytes. A failed append is rolled back to the remembered length. Whenever the file's state is no longer known, the log refuses further work."
+time = "append O(record); open O(log)"
+space = "O(record) per append"

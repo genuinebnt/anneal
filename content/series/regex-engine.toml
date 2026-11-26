@@ -1,0 +1,528 @@
+# The series "Build a regular-expression engine": an order over existing and new problems, not a track.
+# required: do these first. helpful: keep closed (hidden = true); reveals_method = true means the link gives away how to
+# solve the part. cookbook: reference pages (slugs in content/cookbook), also closed by default; level is exact (solves
+# the task), similar (same technique, different task) or related (explains the idea). Minutes are estimates; nobody has
+# been timed.
+
+[series]
+id = "regex-engine"
+title = "Build a regular-expression engine"
+summary = "Small parts give you what the capstone needs. Then you build an engine that stays fast on any pattern, and check it."
+note = "All times are estimates; nobody has been timed."
+capstone_title = "Capstone: build a regular-expression engine"
+capstone_summary = "A parser, a compiler to a state machine, a matcher that cannot blow up, search, a second matcher and a bug hunter."
+capstone_note = "From step 2 on, each starter contains reference code for earlier steps. It is a stand-in until the app can carry your own code from step to step, and it gives away those steps and much of the preparation before them."
+capstone_cookbook = "regex-nfa-engine"
+
+[[stage]]
+id = "read-notation"
+name = "Read a small notation"
+
+[[stage]]
+id = "many-possibilities"
+name = "Handle many possibilities"
+
+[[stage]]
+id = "second-opinion"
+name = "Get a second opinion"
+
+[[part]]
+number = 1
+id = "l3-zero-copy-tokenizer"
+stage = "read-notation"
+status = "existing"
+minutes = 45
+blurb = "Cut source text into pieces without copying it"
+new_idea = "Walking through text and handing out pieces of it"
+reuses = "nothing"
+required = []
+helpful = [
+    { id = "l3-cursor-over-str", why = "optional warm-up: moving through text and keeping your place", reveals_method = false, hidden = true },
+    { id = "s2-bytes-chars-char-indices", why = "positions in bytes and in characters", reveals_method = false, hidden = true },
+]
+used_again = ["y15-the-longest-word-first"]
+real_uses = "The first stage of compilers, linters and config readers."
+
+[[part]]
+number = 2
+id = "y15-expand-the-braces"
+stage = "read-notation"
+status = "new"
+minutes = 75
+blurb = "Work out every word a short pattern stands for"
+new_idea = "One function for each level of a nested notation, with errors that name a position and limits on what a stranger sends"
+reuses = "walking through text"
+required = []
+helpful = [
+    { id = "y9-shell-line-parser", why = "another shell notation, with positions of a different kind", reveals_method = false, hidden = true },
+    { id = "l8-import-errors", why = "error types a caller can match on", reveals_method = false, hidden = true },
+]
+used_again = ["y15-characters-in-a-few-keystrokes", "y15-print-it-so-it-reads-back", "y16-read-a-pattern"]
+real_uses = "Shells, build tools, route and glob patterns."
+
+[[part]]
+number = 3
+id = "y15-characters-in-a-few-keystrokes"
+stage = "read-notation"
+status = "new"
+minutes = 60
+blurb = "Turn a few keystrokes into an exact set of characters"
+new_idea = "Rules for a dash that depend on what comes next, escapes, and one standard form for a set"
+reuses = "positions and errors from part 2"
+required = ["y15-expand-the-braces"]
+helpful = [
+    { id = "s4-interval-map", why = "ranges kept in order in a map", reveals_method = false, hidden = true },
+]
+used_again = ["y16-sets-and-escapes"]
+real_uses = "tr, regex classes, Unicode tables, firewall port lists."
+cookbook = [
+    { level = "similar", page = "regex-nfa-engine", note = "Its class parser and Class type. It has bugs with escapes inside brackets.", source = "examples/capstones/regex_nfa_engine.rs", hidden = true },
+]
+
+[[part]]
+number = 4
+id = "y15-lay-a-program-out-flat"
+stage = "many-possibilities"
+status = "new"
+minutes = 105
+blurb = "Turn nested instructions into a flat list a simple machine can run"
+new_idea = "A graph stored in a Vec with indices as links, built from the end backwards, then run within a step limit"
+reuses = "nothing from this series"
+required = []
+helpful = [
+    { id = "y6-wasm-stack-interpreter", why = "running structured control flow without flattening it first", reveals_method = false, hidden = true },
+    { id = "f3-generational-slab", why = "indices as handles", reveals_method = false, hidden = true },
+]
+used_again = ["y16-build-the-machine", "y16-a-second-matcher"]
+real_uses = "Compilers, query plans, workflow engines."
+cookbook = [
+    { level = "similar", page = "regex-nfa-engine", note = "Nfa::emit builds states the same way, for a different source language.", source = "examples/capstones/regex_nfa_engine.rs", hidden = true },
+]
+
+[[part]]
+number = 5
+id = "y15-which-roles-do-you-have"
+stage = "many-possibilities"
+status = "new"
+minutes = 60
+blurb = "Work out everything one account can really do"
+new_idea = "Everything reachable, each node once, without recursion, where some links hold only in some situations"
+reuses = "nothing new"
+required = []
+helpful = []
+used_again = ["y15-where-could-it-be-now", "y16-match-the-whole-text"]
+real_uses = "Access control, dependency closure, garbage-collector marking."
+
+[[part]]
+number = 6
+id = "y15-where-could-it-be-now"
+stage = "many-possibilities"
+status = "new"
+minutes = 75
+blurb = "Follow a device you cannot see, from the sounds it makes"
+new_idea = "Keeping the set of all possibilities, and advancing the whole set one input at a time"
+reuses = "the closure walk of part 5"
+required = ["y15-which-roles-do-you-have"]
+helpful = []
+used_again = ["y16-match-the-whole-text", "y16-find-inside-a-text"]
+real_uses = "Protocol monitors, fuzzy matching, tokenizers, model checking."
+cookbook = [
+    { level = "similar", page = "regex-nfa-engine", note = "closure and step run the same idea on regex states.", source = "examples/capstones/regex_nfa_engine.rs", hidden = true },
+]
+
+[[part]]
+number = 7
+id = "y15-the-longest-word-first"
+stage = "many-possibilities"
+status = "new"
+minutes = 60
+blurb = "Cut text into words when one word can be the start of a longer one"
+new_idea = "Remembering the last success while still reading, and falling back to it"
+reuses = "walking through text from part 1"
+required = ["l3-zero-copy-tokenizer"]
+helpful = [
+    { id = "y15-where-could-it-be-now", why = "a rule here keeps one state; there a whole set was kept", reveals_method = false, hidden = true },
+]
+used_again = ["y16-find-inside-a-text"]
+real_uses = "Lexers (longest match), routers, CSV and protocol scanners."
+
+[[part]]
+number = 8
+id = "y15-an-order-that-stays-in-bounds"
+stage = "second-opinion"
+status = "new"
+minutes = 90
+blurb = "Choose an order for a nested job sheet that never breaks its limits"
+new_idea = "Passing the rest of the work as a function, so that a finished group can be reopened by just returning"
+reuses = "nothing from this series"
+required = []
+helpful = [
+    { id = "l4-closures-generic-vs-dyn", why = "taking closures as trait objects", reveals_method = false, hidden = true },
+    { id = "l3-fix-box-dyn-fn-borrows", why = "closures that borrow", reveals_method = false, hidden = true },
+    { id = "l2-cell-for-copy", why = "changing a value through a shared reference", reveals_method = false, hidden = true },
+]
+used_again = ["y16-a-second-matcher"]
+real_uses = "Schedulers with ordering constraints, planners, solvers, backtracking parsers."
+cookbook = [
+    { level = "similar", page = "regex-nfa-engine", note = "bt and bt_cat pass the rest as a function, for a different task.", source = "examples/capstones/regex_nfa_engine.rs", hidden = true },
+]
+
+[[part]]
+number = 9
+id = "y15-print-it-so-it-reads-back"
+stage = "second-opinion"
+status = "new"
+minutes = 60
+blurb = "Write trees as text that means the same, and make up many trees"
+new_idea = "Brackets only where the reader needs them, and a random generator shaped like the grammar"
+reuses = "the levels of a grammar from part 2"
+required = ["y15-expand-the-braces"]
+helpful = [
+    { id = "y14-pratt-parser", why = "the reading side of operator strengths", reveals_method = false, hidden = true },
+]
+used_again = ["y16-read-a-pattern", "y16-catch-a-wrong-engine"]
+real_uses = "Formatters, property tests, fuzzers, SQL printers."
+
+[[part]]
+number = 10
+id = "y5-catch-the-broken-queue"
+stage = "second-opinion"
+status = "existing"
+minutes = 60
+blurb = "Write the one test that no broken version gets past"
+new_idea = "Comparing with a trusted model over many made-up histories"
+reuses = "seeded random choices from part 9"
+required = []
+helpful = []
+used_again = ["y16-catch-a-wrong-engine"]
+real_uses = "Testing data structures, parsers, storage engines and rewrites."
+
+[[capstone]]
+step = 1
+id = "y16-read-a-pattern"
+title = "Read a pattern"
+minutes = 75
+blurb = "Understand how a pattern is put together"
+new_idea = "Three levels of binding turned into a tree, with positioned errors and depth limits"
+prepared_by = ["y15-expand-the-braces", "y15-print-it-so-it-reads-back"]
+required = []
+cookbook = [
+    { level = "similar", page = "regex-nfa-engine", note = "Its parser has no depth limit, so deep or long patterns overflow the stack.", source = "examples/capstones/regex_nfa_engine.rs", hidden = true },
+]
+helpful = [
+    { id = "y14-pratt-parser", why = "another way to handle operator strengths", reveals_method = false, hidden = true },
+]
+
+[[capstone]]
+step = 2
+id = "y16-sets-and-escapes"
+title = "Sets and escapes"
+minutes = 60
+blurb = "Add bracket sets and backslashes"
+new_idea = "A second grammar inside brackets"
+prepared_by = ["y15-characters-in-a-few-keystrokes"]
+required = ["y16-read-a-pattern"]
+cookbook = [
+    { level = "similar", page = "regex-nfa-engine", note = "It reads \\s and \\t as the letters s and t, and shorthands inside brackets wrongly. Do not copy those parts.", source = "examples/capstones/regex_nfa_engine.rs", hidden = true },
+]
+
+[[capstone]]
+step = 3
+id = "y16-build-the-machine"
+title = "Build the machine"
+minutes = 75
+blurb = "Turn the tree into something that can be run"
+new_idea = "Thompson's construction: states that link by index, built from the back"
+prepared_by = ["y15-lay-a-program-out-flat"]
+required = ["y16-sets-and-escapes"]
+cookbook = [
+    { level = "exact", page = "regex-nfa-engine", note = "The capstone file solves this step.", source = "examples/capstones/regex_nfa_engine.rs", hidden = true },
+]
+
+[[capstone]]
+step = 4
+id = "y16-match-the-whole-text"
+title = "Match the whole text"
+minutes = 90
+blurb = "Answer yes or no, quickly, whatever the pattern"
+new_idea = "Simulating all states at once, with free moves that depend on the position"
+prepared_by = ["y15-which-roles-do-you-have", "y15-where-could-it-be-now"]
+required = ["y16-build-the-machine"]
+cookbook = [
+    { level = "exact", page = "regex-nfa-engine", note = "The capstone file solves this step.", source = "examples/capstones/regex_nfa_engine.rs", hidden = true },
+]
+
+[[capstone]]
+step = 5
+id = "y16-find-inside-a-text"
+title = "Find a match inside a text"
+minutes = 60
+blurb = "Find where in a text the pattern occurs"
+new_idea = "Leftmost-longest search"
+prepared_by = ["y15-the-longest-word-first"]
+required = ["y16-match-the-whole-text"]
+cookbook = [
+    { level = "exact", page = "regex-nfa-engine", note = "The capstone file solves this step.", source = "examples/capstones/regex_nfa_engine.rs", hidden = true },
+]
+
+[[capstone]]
+step = 6
+id = "y16-a-second-matcher"
+title = "A second matcher that tries one way at a time"
+minutes = 90
+blurb = "Build a plain second opinion, and watch it struggle"
+new_idea = "A backtracking matcher over the tree, with a step limit"
+prepared_by = ["y15-an-order-that-stays-in-bounds", "y15-lay-a-program-out-flat"]
+required = ["y16-sets-and-escapes"]
+cookbook = [
+    { level = "exact", page = "regex-nfa-engine", note = "The capstone file solves this step.", source = "examples/capstones/regex_nfa_engine.rs", hidden = true },
+]
+
+[[capstone]]
+step = 7
+id = "y16-catch-a-wrong-engine"
+title = "Catch a wrong engine"
+minutes = 75
+blurb = "Find the input on which a faulty engine goes wrong"
+new_idea = "Differential testing with generated patterns"
+prepared_by = ["y15-print-it-so-it-reads-back", "y5-catch-the-broken-queue"]
+required = ["y16-find-inside-a-text"]
+cookbook = [
+    { level = "similar", page = "regex-nfa-engine", note = "gen_regex and the comparison loop. Its generator makes no escapes, so it missed the file's escape bugs.", source = "examples/capstones/regex_nfa_engine.rs", hidden = true },
+]
+helpful = [
+    { id = "y5-shrink-failing-input", why = "making a failing input small, once you have one", reveals_method = false, hidden = true },
+]
+
+[[revisit]]
+part = "y15-expand-the-braces"
+after = "y15-print-it-so-it-reads-back"
+how = "Solve part 2 again from a blank starter before you meet the capstone's parser."
+minutes = 35
+
+[[revisit]]
+part = "y15-lay-a-program-out-flat"
+before = "y16-build-the-machine"
+how = "Write part 4's loop case again from memory."
+minutes = 25
+
+[[revisit]]
+part = "y15-where-could-it-be-now"
+before = "y16-match-the-whole-text"
+how = "Solve part 6 again from a blank starter before capstone step 4."
+minutes = 40
+
+[[readiness]]
+group = "Reading text"
+concept = "chars(), collecting into a Vec<char>, peek and bump with get().copied()"
+parts = ["l3-zero-copy-tokenizer", "y15-expand-the-braces", "y15-characters-in-a-few-keystrokes"]
+steps = [1, 2]
+
+[[readiness]]
+group = "Reading text"
+concept = "One function per level of a grammar; recursion for groups; the outermost level owns a stray closer"
+parts = ["y15-expand-the-braces", "y15-print-it-so-it-reads-back"]
+steps = [1]
+
+[[readiness]]
+group = "Reading text"
+concept = "A loop that applies suffixes to the item just read; `q @ ('*' | '+' | '?')` patterns and matches!"
+parts = ["y15-print-it-so-it-reads-back"]
+steps = [1]
+note = "Part 9 shows the three strengths; the suffix loop itself is new, and step 1's hints explain it."
+
+[[readiness]]
+group = "Reading text"
+concept = "Error enums that carry a character position; the innermost unclosed opener"
+parts = ["y15-expand-the-braces", "y15-characters-in-a-few-keystrokes"]
+steps = [1, 2]
+
+[[readiness]]
+group = "Reading text"
+concept = "Depth limits that stop a stack overflow"
+parts = ["y15-expand-the-braces"]
+steps = [1]
+note = "Step 1 adds a second limit, on stacked quantifiers."
+
+[[readiness]]
+group = "Reading text"
+concept = "An enum tree with Box and Vec children, compared with =="
+parts = ["y15-expand-the-braces", "y15-print-it-so-it-reads-back"]
+steps = [1]
+
+[[readiness]]
+group = "Reading text"
+concept = "Ranges of char, negation, looking two characters ahead for a dash"
+parts = ["y15-characters-in-a-few-keystrokes"]
+steps = [2]
+
+[[readiness]]
+group = "Reading text"
+concept = "Escapes, and an enum for 'one character or a ready-made set'; is_ascii_alphanumeric; &'static slices"
+parts = ["y15-characters-in-a-few-keystrokes", "y15-expand-the-braces"]
+steps = [2]
+note = "The two-case enum and the static slice are in step 2's Rust hint."
+
+[[readiness]]
+group = "Building the machine"
+concept = "States in a Vec with usize links; reserve a slot and fill it in later"
+parts = ["y15-lay-a-program-out-flat"]
+steps = [3]
+
+[[readiness]]
+group = "Building the machine"
+concept = "Building from the back with a 'next' argument; iter().rev(), fold and reduce"
+parts = ["y15-lay-a-program-out-flat"]
+steps = [3]
+note = "reduce is not used in part 4; fold does the same job there."
+
+[[readiness]]
+group = "Running it"
+concept = "An explicit work stack and a seen table; std::mem::replace"
+parts = ["y15-which-roles-do-you-have", "y15-where-could-it-be-now"]
+steps = [4, 5]
+
+[[readiness]]
+group = "Running it"
+concept = "A set of states advanced one character at a time"
+parts = ["y15-where-could-it-be-now"]
+steps = [4, 5]
+
+[[readiness]]
+group = "Running it"
+concept = "Free moves that hold only in some situations"
+parts = ["y15-which-roles-do-you-have"]
+steps = [4]
+note = "Part 5 has conditions that are fixed for a whole walk. In step 4 they change with the position; the statement says how."
+
+[[readiness]]
+group = "Running it"
+concept = "peekable() to know whether a character is the last"
+parts = ["l3-zero-copy-tokenizer"]
+steps = [4]
+note = "Counting positions works too; peekable is only one way."
+
+[[readiness]]
+group = "Searching"
+concept = "Remember the last success and keep going until nothing can continue; positions in characters"
+parts = ["y15-the-longest-word-first"]
+steps = [5]
+
+[[readiness]]
+group = "Searching"
+concept = "(0..=n).find_map for the first start with an answer"
+parts = []
+steps = [5]
+note = "Given in step 5's Rust hint."
+
+[[readiness]]
+group = "Second opinion"
+concept = "&dyn Fn continuations, a type alias for them, split_first"
+parts = ["y15-an-order-that-stays-in-bounds"]
+steps = [6]
+
+[[readiness]]
+group = "Second opinion"
+concept = "Cell inside a Fn closure; Option's max"
+parts = ["y15-an-order-that-stays-in-bounds"]
+steps = [6]
+note = "Option ordering (None is smallest) is explained in step 6's Rust hint."
+
+[[readiness]]
+group = "Second opinion"
+concept = "A step limit whose error is a different answer from 'no' or from partial output"
+parts = ["y15-lay-a-program-out-flat"]
+steps = [6]
+note = "Part 4 counts steps while running. Step 6 counts them inside a search and passes the error out through each call with ?."
+
+[[readiness]]
+group = "Second opinion"
+concept = "Never accept a step that made no progress, or the work never ends"
+parts = ["y15-the-longest-word-first"]
+steps = [6]
+note = "Part 7 refuses empty words for this reason. Step 6 states the same rule for repetitions."
+
+[[readiness]]
+group = "Testing"
+concept = "A seeded generator in your own code (xorshift or splitmix64)"
+parts = ["y15-print-it-so-it-reads-back"]
+steps = [7]
+
+[[readiness]]
+group = "Testing"
+concept = "Generating text from a grammar with a depth limit"
+parts = ["y15-print-it-so-it-reads-back"]
+steps = [7]
+
+[[readiness]]
+group = "Testing"
+concept = "Differential testing against a trusted answer; taking the thing under test as a closure"
+parts = ["y5-catch-the-broken-queue"]
+steps = [7]
+note = "In part 10 a closure builds the queue under test; in step 7 the closure is the engine's search itself."
+
+[[connection]]
+idea = "Reading a small notation"
+learn = ["y15-expand-the-braces"]
+again = ["y15-characters-in-a-few-keystrokes", "y15-print-it-so-it-reads-back"]
+apply = ["y16-read-a-pattern", "y16-sets-and-escapes"]
+
+[[connection]]
+idea = "Limits on what a stranger sends"
+learn = ["y15-expand-the-braces"]
+again = ["y15-lay-a-program-out-flat"]
+apply = ["y16-read-a-pattern", "y16-a-second-matcher"]
+
+[[connection]]
+idea = "Pieces that point at each other by number"
+learn = ["y15-lay-a-program-out-flat"]
+again = ["y15-which-roles-do-you-have", "y15-where-could-it-be-now"]
+apply = ["y16-build-the-machine", "y16-match-the-whole-text"]
+
+[[connection]]
+idea = "More than one thing can happen"
+learn = ["y15-which-roles-do-you-have"]
+again = ["y15-where-could-it-be-now"]
+apply = ["y16-match-the-whole-text", "y16-find-inside-a-text"]
+
+[[connection]]
+idea = "The best answer may come later"
+learn = ["y15-the-longest-word-first"]
+apply = ["y16-find-inside-a-text"]
+
+[[connection]]
+idea = "Two ways to explore choices"
+learn = ["y15-where-could-it-be-now"]
+again = ["y15-an-order-that-stays-in-bounds"]
+apply = ["y16-match-the-whole-text", "y16-a-second-matcher"]
+
+[[connection]]
+idea = "Letting the computer look for bugs"
+learn = ["y15-print-it-so-it-reads-back"]
+again = ["y5-catch-the-broken-queue"]
+apply = ["y16-catch-a-wrong-engine"]
+
+[[side_path]]
+id = "l3-cursor-over-str"
+why = "before part 1: a smaller walk through borrowed text"
+before = "l3-zero-copy-tokenizer"
+
+[[side_path]]
+id = "y9-shell-line-parser"
+why = "before part 3: a longer notation with quotes and escapes"
+before = "y15-characters-in-a-few-keystrokes"
+
+[[side_path]]
+id = "y14-pratt-parser"
+why = "before capstone step 1: operator strengths with one function instead of one per level"
+before = "y16-read-a-pattern"
+
+[[side_path]]
+id = "y8-regex-nfa-matcher"
+why = "after capstone step 5: the whole engine again in one sitting, with a smaller pattern language and your own design"
+after = "y16-find-inside-a-text"
+
+[[side_path]]
+id = "y5-shrink-failing-input"
+why = "after capstone step 7: make a failing input small"
+after = "y16-catch-a-wrong-engine"

@@ -11,6 +11,14 @@
 //! a file that definitely lacks the key. COMPACTION merges all tables with a BinaryHeap (k-way merge), keeping only the newest version of
 //! each key and dropping tombstones (safe only because nothing older remains). RECOVERY = reopen the directory: load tables, replay the
 //! WAL, stop at the first torn/corrupt frame and truncate it away. A WAL reset after a flush is safe to crash through: replay is idempotent.
+//! A frame header with length 0 also ends the log: a tail of zeros would otherwise pass the checksum, because the CRC32 of nothing is 0.
+//! Compaction deletes the old tables OLDEST FIRST and forgets each one only after its file is gone, so a delete that fails leaves the open
+//! store, like the directory, with every table that still matters.
+//! A log append that fails is cut back off the log, so later writes never sit behind half a frame; if even that fails, the log refuses
+//! more writes. The directory is synced after a table is renamed into place (before the log is emptied) and after each delete. Once a
+//! write is logged and applied it has happened: a failed automatic flush is counted and retried by the next write, not returned.
+//! Opening a table also checks that its index offsets rise and stay inside the data. NOT promised: the log itself is never synced, so
+//! an acknowledged write can still be lost when the power fails.
 //! VERIFIED by a model test: thousands of seeded random operations (put/delete/get/scan/flush/compact/crash/torn-tail) against a BTreeMap.
 //! COMMON USES: RocksDB/LevelDB/Cassandra/ScyllaDB storage engines, Kafka-style commit logs, embedded state in stream processors, sled-like
 //! stores, search-index segments (Lucene merges), time-series ingest (write-optimised), any "append fast, compact later" system.
@@ -29,6 +37,8 @@ enum KvError {
     Io(#[from] std::io::Error),
     #[error("corrupt data: {0}")]
     Corrupt(&'static str),
+    #[error("the log is unusable after an earlier failure")]
+    LogUnusable,
 }
 type Result<T> = std::result::Result<T, KvError>;
 
@@ -94,7 +104,8 @@ fn decode_entry(buf: &[u8], pos: &mut usize) -> Result<Entry> {
 // ---------- write-ahead log ----------
 struct Wal {
     file: File,
-    len: u64,
+    len: u64,     // the bytes of whole frames
+    broken: bool, // the file may hold something after `len`: nothing more may be appended
 }
 
 /// parse frames from the start; the first short or checksum-failing frame is the torn tail. Returns (entries, valid_len).
@@ -106,6 +117,11 @@ fn replay(bytes: &[u8]) -> Result<(Vec<Entry>, u64)> {
         };
         let len = u32::from_le_bytes([h[0], h[1], h[2], h[3]]) as usize;
         let crc = u32::from_le_bytes([h[4], h[5], h[6], h[7]]);
+        // No real record is empty. A zero-filled tail (left by some crashes) reads as len 0 and crc 0, and crc32(b"") IS 0,
+        // so without this line it would pass the checksum, fail to decode, and the store could never be opened again.
+        if len == 0 {
+            break;
+        }
         let Some(payload) = bytes.get(pos + 8..pos + 8 + len) else {
             break;
         };
@@ -129,23 +145,52 @@ impl Wal {
         let (entries, valid) = replay(&bytes)?;
         let file = OpenOptions::new().create(true).append(true).open(path)?;
         file.set_len(valid)?; // chop the torn tail so new appends never follow garbage
-        Ok((Wal { file, len: valid }, entries))
+        let wal = Wal {
+            file,
+            len: valid,
+            broken: false,
+        };
+        Ok((wal, entries))
     }
 
     fn append(&mut self, key: &[u8], val: Option<&[u8]>) -> Result<()> {
+        // one write keeps the frame contiguous; a real store would also sync_data() (group commit)
+        self.append_with(key, val, |file, frame| file.write_all(frame))
+    }
+
+    /// `append` with the write passed in, so that a check can make it fail part-way
+    fn append_with(
+        &mut self,
+        key: &[u8],
+        val: Option<&[u8]>,
+        write: impl FnOnce(&mut File, &[u8]) -> std::io::Result<()>,
+    ) -> Result<()> {
+        if self.broken {
+            return Err(KvError::LogUnusable);
+        }
         let mut payload = Vec::new();
         encode_entry(key, val, &mut payload);
         let mut frame = Vec::with_capacity(8 + payload.len());
         frame.extend((payload.len() as u32).to_le_bytes());
         frame.extend(crc32(&payload).to_le_bytes());
         frame.extend(payload);
-        self.file.write_all(&frame)?; // one write keeps the frame contiguous; a real store would also sync_data() (group commit)
+        if let Err(e) = write(&mut self.file, &frame) {
+            // part of the frame may be in the file. Replay would stop there and silently drop every LATER write, so cut it off now
+            self.broken = self.file.set_len(self.len).is_err();
+            return Err(e.into());
+        }
         self.len += frame.len() as u64;
         Ok(())
     }
 
     fn reset(&mut self) -> Result<()> {
-        self.file.set_len(0)?;
+        if self.broken {
+            return Err(KvError::LogUnusable);
+        }
+        if let Err(e) = self.file.set_len(0) {
+            self.broken = true; // the real length is unknown now
+            return Err(e.into());
+        }
         self.len = 0;
         Ok(())
     }
@@ -207,6 +252,15 @@ impl Bloom {
     }
 }
 
+// ---------- directory sync ----------
+/// how the store makes a change of names (rename, remove) durable. A function pointer, so that a check can watch or fail it.
+type DirSync = fn(&Path) -> std::io::Result<()>;
+
+/// syncing a file does not make its NAME durable: that needs a sync of the directory (opening one read-only works on Unix)
+fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    File::open(dir)?.sync_all()
+}
+
 // ---------- SSTable: [data][index][bloom][footer: data_end, bloom_off, count, crc32, magic] ----------
 const INDEX_EVERY: usize = 16;
 const MAGIC: u32 = 0x5353_5431;
@@ -225,8 +279,9 @@ impl SsTable {
         dir.join(format!("sst_{id:06}.sst"))
     }
 
-    /// write to a temp file, fsync, then rename: readers/recovery never see a half-written table under its final name
-    fn write(dir: &Path, id: u64, entries: &[Entry]) -> Result<SsTable> {
+    /// write to a temp file, fsync, rename, fsync the directory: readers/recovery never see a half-written table under its final
+    /// name, and when this returns the name is durable too, so the caller may discard what the table replaces
+    fn write(dir: &Path, id: u64, entries: &[Entry], sync: DirSync) -> Result<SsTable> {
         let (mut buf, mut index) = (Vec::new(), Vec::new());
         for (i, (k, v)) in entries.iter().enumerate() {
             if i % INDEX_EVERY == 0 {
@@ -257,6 +312,7 @@ impl SsTable {
         f.write_all(&buf)?;
         f.sync_all()?;
         fs::rename(&tmp, &path)?;
+        sync(dir)?;
         Ok(SsTable {
             id,
             path,
@@ -284,13 +340,26 @@ impl SsTable {
         if data_end_u > bloom_off_u || bloom_off_u > body_len {
             return Err(KvError::Corrupt("bad sstable offsets"));
         }
-        let mut pos = data_end_u;
-        let n = take_u32(&bytes, &mut pos)?;
-        let mut index = Vec::new();
+        let section = &bytes[data_end_u..bloom_off_u];
+        let mut pos = 0;
+        let n = take_u32(section, &mut pos)?;
+        let mut index: Vec<(Key, u64)> = Vec::new();
         for _ in 0..n {
-            let klen = take_u32(&bytes, &mut pos)? as usize;
-            let key = take(&bytes, &mut pos, klen)?.to_vec();
-            index.push((key, take_u64(&bytes, &mut pos)?));
+            let klen = take_u32(section, &mut pos)? as usize;
+            let key = take(section, &mut pos, klen)?.to_vec();
+            let off = take_u64(section, &mut pos)?;
+            // a valid checksum does not make offsets sensible: reads compute `end - start` and allocate that much
+            let in_order = match index.last() {
+                None => off == 0,
+                Some((last_key, last)) => *last_key < key && *last < off,
+            };
+            if !in_order || off >= data_end {
+                return Err(KvError::Corrupt("bad sstable index"));
+            }
+            index.push((key, off));
+        }
+        if pos != section.len() || index.is_empty() != (data_end == 0) {
+            return Err(KvError::Corrupt("bad sstable index"));
         }
         let bloom = Bloom::decode(&bytes[bloom_off_u..body_len])?;
         Ok(SsTable {
@@ -376,6 +445,7 @@ fn merge_sources(sources: Vec<Vec<Entry>>, drop_tombstones: bool) -> Vec<Entry> 
 struct Stats {
     bloom_skips: u64,
     table_reads: u64,
+    failed_auto_flushes: u64,
 }
 
 struct Store {
@@ -387,6 +457,7 @@ struct Store {
     next_id: u64,
     flush_threshold: usize,
     stats: Stats,
+    dir_sync: DirSync,
 }
 
 impl Store {
@@ -430,6 +501,7 @@ impl Store {
             next_id,
             flush_threshold,
             stats: Stats::default(),
+            dir_sync: sync_dir,
         };
         for (k, v) in entries {
             store.mem_insert(k, v);
@@ -446,8 +518,10 @@ impl Store {
     fn apply(&mut self, key: &[u8], val: Option<&[u8]>) -> Result<()> {
         self.wal.append(key, val)?;
         self.mem_insert(key.to_vec(), val.map(<[u8]>::to_vec));
-        if self.mem_bytes >= self.flush_threshold {
-            self.flush()?;
+        // the write has happened whatever becomes of the flush: an Err here would tell the caller it had not.
+        // The memtable and log keep everything, and the next write tries again.
+        if self.mem_bytes >= self.flush_threshold && self.flush().is_err() {
+            self.stats.failed_auto_flushes += 1;
         }
         Ok(())
     }
@@ -480,6 +554,9 @@ impl Store {
 
     /// keys in [from, to): overlay oldest tables first, memtable last, so newer versions overwrite older ones
     fn scan(&self, from: &[u8], to: &[u8]) -> Result<Vec<(Key, Vec<u8>)>> {
+        if from >= to {
+            return Ok(Vec::new()); // BTreeMap::range panics when start > end
+        }
         let mut merged: BTreeMap<Key, Val> = BTreeMap::new();
         for t in &self.tables {
             for (k, v) in t.read_all()? {
@@ -510,17 +587,23 @@ impl Store {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        self.tables
-            .push(SsTable::write(&self.dir, self.next_id, &entries)?);
+        let table = SsTable::write(&self.dir, self.next_id, &entries, self.dir_sync)?;
+        self.tables.push(table);
         self.next_id += 1;
         self.memtable.clear();
         self.mem_bytes = 0;
         self.wal.reset()
     }
 
-    /// full compaction: merge every table into one. The new table gets the highest id, so a crash before the old files are deleted
-    /// leaves redundant-but-correct data (the new table shadows them) rather than lost data.
+    /// full compaction: merge every table into one, then delete the old files OLDEST FIRST. The order matters: the merged table holds
+    /// no tombstones, so the table with a delete marker must outlive every older table that still holds the deleted value. Then any
+    /// state a crash or a failed delete leaves behind reads the same as before.
     fn compact(&mut self) -> Result<()> {
+        self.compact_with(|path| fs::remove_file(path))
+    }
+
+    /// `compact` with the delete passed in, so that a check can make it fail
+    fn compact_with(&mut self, mut remove: impl FnMut(&Path) -> std::io::Result<()>) -> Result<()> {
         if self.tables.len() < 2 {
             return Ok(());
         }
@@ -534,13 +617,24 @@ impl Store {
         let new_table = if merged.is_empty() {
             None
         } else {
-            Some(SsTable::write(&self.dir, self.next_id, &merged)?)
+            Some(SsTable::write(
+                &self.dir,
+                self.next_id,
+                &merged,
+                self.dir_sync,
+            )?)
         };
         self.next_id += 1;
-        for old in self.tables.drain(..) {
-            fs::remove_file(&old.path)?;
+        let old = self.tables.len();
+        self.tables.extend(new_table); // newest: it is visible on disk already
+        for _ in 0..old {
+            // forget a table only after its file is gone; on an error the list still matches the directory.
+            // (Draining the list here lost EVERY table when one delete failed: dropping a Drain removes the rest.)
+            remove(&self.tables[0].path)?;
+            self.tables.remove(0);
+            // make this removal durable before the next one: after a power cut, "oldest first" must still hold
+            (self.dir_sync)(&self.dir)?;
         }
-        self.tables.extend(new_table);
         Ok(())
     }
 
@@ -765,9 +859,240 @@ fn demo(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// a log followed by zeros (any number of them) must open, keep every record and accept new writes after them
+fn check_zero_filled_tail(dir: &Path) -> Result<()> {
+    for zeros in [1usize, 7, 8, 9, 64, 4096] {
+        let dir = dir.join(format!("zeros{zeros}"));
+        let mut s = Store::open(&dir, 1 << 20)?;
+        s.put(b"a", b"1")?;
+        let good = s.wal_len();
+        drop(s);
+        OpenOptions::new()
+            .append(true)
+            .open(dir.join("wal.log"))?
+            .write_all(&vec![0; zeros])?;
+        let mut s = Store::open(&dir, 1 << 20)?;
+        assert_eq!(s.wal_len(), good, "the {zeros} zeros are cut off");
+        s.put(b"b", b"2")?;
+        drop(s);
+        let mut s = Store::open(&dir, 1 << 20)?;
+        assert_eq!(s.get(b"a")?, Some(b"1".to_vec()));
+        assert_eq!(s.get(b"b")?, Some(b"2".to_vec()));
+    }
+    Ok(())
+}
+
+/// let `ok` deletes succeed and fail the next one, for every `ok`: the open store and a reopened one must both still read the same.
+/// `live` decides whether the compaction writes a new table or has nothing left to write.
+fn check_failed_delete(dir: &Path) -> Result<()> {
+    for live in [false, true] {
+        for ok in 0..3 {
+            let dir = dir.join(format!("delete{live}{ok}"));
+            let mut s = Store::open(&dir, 1 << 20)?;
+            s.put(b"gone", b"old")?;
+            s.flush()?;
+            if live {
+                s.put(b"kept", b"yes")?;
+            } else {
+                s.put(b"gone", b"newer")?;
+            }
+            s.flush()?;
+            s.delete(b"gone")?;
+            s.flush()?;
+            let want: Vec<(Key, Vec<u8>)> = live
+                .then(|| (b"kept".to_vec(), b"yes".to_vec()))
+                .into_iter()
+                .collect();
+            let mut done = 0;
+            let failed = s.compact_with(|path| {
+                if done == ok {
+                    return Err(std::io::Error::other("injected delete failure"));
+                }
+                done += 1;
+                fs::remove_file(path)
+            });
+            assert!(matches!(failed, Err(KvError::Io(_))));
+            assert_eq!(s.scan(b"", b"\xff")?, want, "open store, {ok} deleted");
+            assert_eq!(s.tables.len(), s.sst_files_on_disk()?);
+            assert_eq!(s.get(b"gone")?, None);
+            drop(s);
+            let mut s = Store::open(&dir, 1 << 20)?;
+            assert_eq!(s.scan(b"", b"\xff")?, want, "reopened, {ok} deleted");
+            assert_eq!(s.get(b"gone")?, None);
+        }
+    }
+    Ok(())
+}
+
+/// a write that fails after part of the frame reached the file must not hide the writes that come after it
+fn check_partial_append(dir: &Path) -> Result<()> {
+    for keep in [0, 1, 7, 8, 12] {
+        let dir = dir.join(format!("keep{keep}"));
+        let mut s = Store::open(&dir, 1 << 20)?;
+        s.put(b"before", b"1")?;
+        let failed = s
+            .wal
+            .append_with(b"lost", Some(b"x".as_slice()), |file, frame| {
+                file.write_all(&frame[..keep])?;
+                Err(std::io::Error::other("injected: disk full"))
+            });
+        assert!(matches!(failed, Err(KvError::Io(_))));
+        s.put(b"after", b"2")?;
+        drop(s);
+        let mut s = Store::open(&dir, 1 << 20)?;
+        assert_eq!(s.get(b"before")?, Some(b"1".to_vec()));
+        assert_eq!(s.get(b"after")?, Some(b"2".to_vec()), "{keep} bytes kept");
+        assert_eq!(s.get(b"lost")?, None);
+    }
+    // if the half frame cannot be removed either, no later write may be accepted. A read-only handle makes set_len fail.
+    let dir = dir.join("stuck");
+    let mut s = Store::open(&dir, 1 << 20)?;
+    let log = dir.join("wal.log");
+    let failed = s.wal.append_with(b"k", None, |file, _| {
+        *file = File::open(&log)?;
+        Err(std::io::Error::other("injected"))
+    });
+    assert!(matches!(failed, Err(KvError::Io(_))));
+    assert!(matches!(s.put(b"later", b"v"), Err(KvError::LogUnusable)));
+    assert_eq!(s.get(b"later")?, None);
+    Ok(())
+}
+
+fn check_reversed_scan(dir: &Path) -> Result<()> {
+    let mut s = Store::open(dir, 1 << 20)?;
+    s.put(b"m", b"1")?; // the memtable must not be empty: an empty BTreeMap does not even look at the bounds
+    assert!(s.scan(b"z", b"a")?.is_empty());
+    assert!(s.scan(b"m", b"m")?.is_empty());
+    Ok(())
+}
+
+/// what each directory sync saw: (number of tables, bytes in the log)
+fn observed_sync(dir: &Path) -> std::io::Result<()> {
+    let mut tables = 0;
+    for entry in fs::read_dir(dir)? {
+        tables += entry?.file_name().to_string_lossy().ends_with(".sst") as usize;
+    }
+    let log = fs::metadata(dir.join("wal.log"))?.len();
+    SYNCS.with(|seen| seen.borrow_mut().push((tables, log)));
+    sync_dir(dir)
+}
+thread_local!(static SYNCS: std::cell::RefCell<Vec<(usize, u64)>> = Default::default());
+
+/// No test in a running system can see whether a sync was durable. These check what CAN be checked: the directory is synced
+/// after the rename and before the log is emptied, after each delete, and a failed sync stops the step that depends on it.
+fn check_directory_syncs(dir: &Path) -> Result<()> {
+    let mut s = Store::open(&dir.join("order"), 1 << 20)?;
+    s.dir_sync = observed_sync;
+    let mut logs = Vec::new();
+    for key in [b"a", b"b", b"c"] {
+        s.put(key, b"v")?;
+        logs.push(s.wal_len());
+        s.flush()?;
+    }
+    let seen = SYNCS.with(|seen| std::mem::take(&mut *seen.borrow_mut()));
+    assert_eq!(
+        seen,
+        vec![(1, logs[0]), (2, logs[1]), (3, logs[2])],
+        "each table is in place and the log still full"
+    );
+    s.compact()?;
+    let seen = SYNCS.with(|seen| std::mem::take(&mut *seen.borrow_mut()));
+    let counts: Vec<usize> = seen.iter().map(|s| s.0).collect();
+    assert_eq!(counts, [4, 3, 2, 1], "the new table, then every delete");
+
+    let mut s = Store::open(&dir.join("failing"), 1 << 20)?;
+    s.dir_sync = |_| Err(std::io::Error::other("injected: sync failed"));
+    s.put(b"k", b"v")?;
+    let log = s.wal_len();
+    assert!(matches!(s.flush(), Err(KvError::Io(_))));
+    assert_eq!(
+        s.wal_len(),
+        log,
+        "the table's name may not be durable: keep the log"
+    );
+    assert_eq!(s.get(b"k")?, Some(b"v".to_vec()));
+    s.dir_sync = sync_dir;
+    s.flush()?;
+    s.put(b"j", b"w")?;
+    s.flush()?;
+    // the first delete works and its sync fails: no further delete may follow
+    let mut deletes = 0;
+    s.dir_sync = |dir| {
+        let old_gone = !SsTable::path_for(dir, 1).exists();
+        if old_gone {
+            Err(std::io::Error::other("injected"))
+        } else {
+            sync_dir(dir)
+        }
+    };
+    let failed = s.compact_with(|path| {
+        deletes += 1;
+        fs::remove_file(path)
+    });
+    assert!(matches!(failed, Err(KvError::Io(_))));
+    assert_eq!(deletes, 1);
+    assert_eq!(s.tables.len(), s.sst_files_on_disk()?);
+    assert_eq!(s.get(b"k")?, Some(b"v".to_vec()));
+    assert_eq!(s.get(b"j")?, Some(b"w".to_vec()));
+    Ok(())
+}
+
+/// a table whose checksum is right but whose index offsets are wrong must be refused when it is opened
+fn check_bad_index_offsets(dir: &Path) -> Result<()> {
+    fs::create_dir_all(dir)?;
+    let entries: Vec<Entry> = (0..40)
+        .map(|i| (format!("k{i:03}").into_bytes(), Some(vec![1])))
+        .collect();
+    let table = SsTable::write(dir, 1, &entries, sync_dir)?;
+    let good = fs::read(&table.path)?;
+    // the index: count, then three times [klen 4][key 4][offset 8]
+    let offset_at = |i: usize| table.data_end as usize + 4 + i * 16 + 8;
+    for (entry, offset) in [
+        (0, 5u64),
+        (2, 1),
+        (1, 0),
+        (2, table.data_end),
+        (2, u64::MAX),
+    ] {
+        let mut bad = good.clone();
+        bad[offset_at(entry)..offset_at(entry) + 8].copy_from_slice(&offset.to_le_bytes());
+        let crc_at = bad.len() - 8;
+        let crc = crc32(&bad[..crc_at]);
+        bad[crc_at..crc_at + 4].copy_from_slice(&crc.to_le_bytes());
+        fs::write(&table.path, bad)?;
+        assert!(
+            matches!(SsTable::open(&table.path, 1), Err(KvError::Corrupt(_))),
+            "index entry {entry} with offset {offset}"
+        );
+    }
+    Ok(())
+}
+
+/// when only the automatic flush fails, the write has happened and must be reported as done
+fn check_failed_auto_flush(dir: &Path) -> Result<()> {
+    let mut s = Store::open(dir, 1)?; // every write triggers a flush
+    fs::create_dir(dir.join("sst_000001.tmp"))?; // and the flush will fail
+    s.put(b"k", b"v")?;
+    assert_eq!(s.stats.failed_auto_flushes, 1);
+    assert_eq!(s.get(b"k")?, Some(b"v".to_vec()));
+    assert!(s.wal_len() > 0);
+    assert!(s.flush().is_err(), "an explicit flush still reports it");
+    fs::remove_dir(dir.join("sst_000001.tmp"))?;
+    s.put(b"j", b"w")?;
+    assert_eq!((s.wal_len(), s.tables.len()), (0, 1));
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let tmp = TempDir::new("c01_mini_kv")?;
     demo(&tmp.0.join("demo"))?;
+    check_zero_filled_tail(&tmp.0.join("zero_tail"))?;
+    check_failed_delete(&tmp.0.join("failed_delete"))?;
+    check_partial_append(&tmp.0.join("partial_append"))?;
+    check_reversed_scan(&tmp.0.join("reversed_scan"))?;
+    check_directory_syncs(&tmp.0.join("dir_sync"))?;
+    check_bad_index_offsets(&tmp.0.join("bad_index"))?;
+    check_failed_auto_flush(&tmp.0.join("auto_flush"))?;
 
     // merge unit check: newest version wins, tombstone dropped only when asked
     let newer = vec![(b"a".to_vec(), Some(b"2".to_vec())), (b"b".to_vec(), None)];

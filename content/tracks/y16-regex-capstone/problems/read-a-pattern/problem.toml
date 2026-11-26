@@ -1,0 +1,32 @@
+slug = "read-a-pattern"
+title = "Read a pattern"
+mode = "write"
+level = "medium"
+stage = "engine"
+order = 1
+status = "ready"
+tags = ["regular expressions", "parsing", "precedence", "error positions"]
+teaches = [
+  "A pattern is a small language with three strengths: `|` binds loosest, then writing things side by side, then `*`, `+` and `?`.",
+  "Give the tree one shape for each meaning that matters (`Empty`, no one-item lists) so that tests can compare trees.",
+  "A parser for untrusted patterns needs limits on everything that makes the tree deeper, because later code walks the tree by recursion.",
+]
+follow_up = "1) How would you add counted repetition such as `a{2,5}`, and what limit would it need? 2) How would you keep, for each node, the part of the pattern it came from?"
+related = ["Y15", "Y8"]
+
+[[hints]]
+kind = "approach"
+text = "Write one function for each strength. The loosest calls the next one and looks for `|`. The middle one collects items until it meets `|`, `)` or the end. The tightest reads one item and then any `*`, `+` and `?` after it."
+
+[[hints]]
+kind = "rust"
+text = "Collect the pattern into a `Vec<char>` so that positions count characters. Small `peek`, `bump` and `eat` methods keep the grammar functions readable. `while let Some(q @ ('*' | '+' | '?')) = self.peek()` reads the suffixes."
+
+[[hints]]
+kind = "edge"
+text = "A `)` that is still there after the outermost level has finished is `UnmatchedClose`. Count open groups when you enter one and give the count back when it closes: 200 groups side by side are fine."
+
+[solution]
+explanation = "One function per level: the alternation collects sequences, the sequence collects repeated items, and a repeated item is an atom with its suffixes. A group calls the top level again. Only the outermost caller can see a stray `)`, so that check lives in `parse`. Two counters bound the depth of the tree."
+time = "O(pattern)"
+space = "O(pattern)"

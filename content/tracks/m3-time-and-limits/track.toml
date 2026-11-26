@@ -1,0 +1,11 @@
+code = "M3"
+name = "Time and limits"
+section = "M"
+tier = "core"
+order = 3
+summary = "Preparation for the rate limiter capstone: periods, sliding stretches, send times, unknown capacity and claiming without a lock. All time is passed in."
+
+[[stages]]
+slug = "one-idea-at-a-time"
+name = "One idea at a time"
+band = "easy"

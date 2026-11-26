@@ -1,0 +1,32 @@
+slug = "memtable-and-flush"
+title = "Capstone 4: the store, from memory to tables"
+mode = "write"
+level = "hard"
+stage = "the-store"
+order = 4
+status = "ready"
+tags = ["LSM tree", "memtable", "delete markers", "flush", "layered reads"]
+teaches = [
+  "In layered storage a delete is data: it must travel down with the flush.",
+  "Publish the new copy before discarding the old one.",
+  "Do not report failure for work that has already taken effect.",
+]
+follow_up = "1) `scan` reads every table completely. What would you use to read only the part in range, and to merge without collecting everything? 2) Writes wait while a flush runs. What has to be true of the old memtable if new writes continue during the flush? 3) Why does the threshold count overwrites?"
+crates = ["thiserror"]
+
+[[hints]]
+kind = "approach"
+text = "Write down what each layer must remember about a deleted key. Then decide, for flush, which step must have succeeded before the next may throw anything away."
+
+[[hints]]
+kind = "rust"
+text = "`BTreeMap<Vec<u8>, Option<Vec<u8>>>` can be ranged with `range::<[u8], _>((Bound::Included(from), Bound::Excluded(to)))`. Read the docs of `range` for when it panics."
+
+[[hints]]
+kind = "edge"
+text = "What should `put` return when the log took the write but the flush it triggered failed? A caller who gets an error may try again or give up."
+
+[solution]
+explanation = "A write goes to the log and then the memtable, where a delete is stored as a marker. Reads check the memtable and then tables from newest to oldest, stopping at the first mention. A flush publishes the table before it empties the log, and a failed automatic flush leaves the write in place."
+time = "put O(log n) plus flushes; get O(tables); scan O(all records)"
+space = "O(memtable + table indexes)"

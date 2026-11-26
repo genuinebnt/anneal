@@ -1,0 +1,32 @@
+slug = "find-inside-a-text"
+title = "Find a match inside a text"
+mode = "write"
+level = "hard"
+stage = "engine"
+order = 5
+status = "ready"
+tags = ["regular expressions", "leftmost-longest", "unanchored search", "char indices"]
+teaches = [
+  "\"Leftmost-longest\" is two rules in order: the earliest start that has any match, and then the furthest end from that start.",
+  "A success is not the end of the attempt. Note it, keep reading while any state is alive, and report the last note.",
+  "Start and end of text keep their meaning when the search begins in the middle.",
+]
+follow_up = "1) Trying each start costs `text x text x states` in the worst case. How would one pass do it, if each live state remembered where its match began? Which starts could it then forget? 2) How would you give all matches, one after another, without looping for ever on empty matches?"
+related = ["Y15", "Y8"]
+
+[[hints]]
+kind = "approach"
+text = "Try the start positions from left to right. From one start, run the machine and remember the last position at which it accepted. The first start that has such a position wins."
+
+[[hints]]
+kind = "rust"
+text = "`(0..=chars.len()).find_map(..)` expresses \"the first start with an answer\". Collect the text into a `Vec<char>` once, so that positions are character counts."
+
+[[hints]]
+kind = "edge"
+text = "An empty match at the very end counts, so the start `len` is tried too. `at_start` is true only at position 0 of the text, not at the start of each attempt. Stop an attempt as soon as no state is alive."
+
+[solution]
+explanation = "`find` tries starts in order. Each attempt runs the same set simulation with flags taken from real positions. It records the latest position whose set holds the match state. It stops when the set is empty or the text ends. The first start with a record is the answer."
+time = "O(text x text x states) at worst; O(text x states) when attempts die early"
+space = "O(states + text)"

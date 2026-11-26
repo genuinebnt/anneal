@@ -1,0 +1,38 @@
+slug = "cap-work-in-flight"
+title = "Cap the work in flight"
+mode = "write"
+level = "hard"
+stage = "serve-many"
+order = 5
+status = "ready"
+tags = ["capstone", "concurrency limit", "atomics", "RAII", "linearizability", "75-min"]
+teaches = ["A rate limit bounds how often work starts. It does not bound how much is running when work turns slow.", "A permit that gives its place back in Drop cannot be forgotten on an error path or a panic.", "If a decision depends on two values, reading them separately lets one change between the read and the write."]
+follow_up = "1) How would a caller wait for a place instead of being refused, and in what order? 2) What would you measure to choose the limit?"
+related = ["C3", "L1"]
+
+[[hints]]
+kind = "approach"
+text = "A permit has to outlive the borrow of the gate and may move to another thread. Then ask which values the admission decision depends on, and how to change them only if **none** of them has changed."
+
+[[hints]]
+kind = "rust"
+text = "Keep what clones and permits share behind an `Arc`. Two `u32` values fit in one `AtomicU64`, which `compare_exchange_weak` or `fetch_update` can change as a unit. `fetch_max` keeps a high-water mark."
+
+[[hints]]
+kind = "edge"
+text = "Lowering the limit below what is in flight revokes nothing, and releases must still count down correctly. Ask `allow` again after any change you notice. Update the peak with the count you installed, not with a later read."
+
+[solution]
+explanation = "The limit and the count in flight share one atomic word, so a compare-and-swap succeeds only if neither has changed since the caller's policy looked at them. Otherwise the loop asks again with the new values. Each permit holds an Arc to the shared state and subtracts one when dropped. The peak is raised with the count each successful swap installed."
+time = "O(1) without contention"
+space = "O(1) per gate"
+
+[[cookbook]]
+level = "similar"
+page = "rate-limiter-lab"
+note = "Its concurrency limiter reads the limit once, outside the retry loop, so a lowered limit can be missed."
+
+[[cookbook]]
+level = "similar"
+page = "std-atomics-ordering-use-cases"
+note = "A gauge with a fixed limit and a borrowed permit."

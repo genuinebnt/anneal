@@ -1,0 +1,34 @@
+slug = "fix-filter-after-restart"
+title = "Fix: a saved filter that forgets its keys"
+mode = "fix"
+level = "medium"
+stage = "sorted-data"
+order = 6
+status = "ready"
+tags = ["Bloom filter", "stable hashing", "file formats", "decoding", "fix"]
+teaches = [
+  "A hash whose output is stored is part of the file format: fix it exactly, and test its bytes.",
+  "`HashMap`'s hasher is seeded at random on purpose, so it must never reach a file.",
+  "A round-trip test in one process cannot see a format that depends on that process.",
+]
+follow_up = "1) Rust's `DefaultHasher::new()` gives the same results within one build. Why is it still wrong for a file? 2) What would you add to the format so that you can change the hash later without misreading old files? 3) A flipped bit can turn a present key into a refused one. Where should that be caught?"
+
+[[hints]]
+kind = "approach"
+text = "Ask what the loaded filter knows that the writing filter knew. One thing the bits depend on is not in the file."
+
+[[hints]]
+kind = "rust"
+text = "`split_first` and `slice.get(..4)` return `None` on short input. The documentation of `DefaultHasher` says what it promises across releases."
+
+[[hints]]
+kind = "edge"
+text = "Check the whole length: too long is as wrong as too short. A length field of four billion must not be used to slice before it is checked."
+
+[solution]
+explanation = "The bits depend on the hash function, so the hash is part of the file format. A randomly seeded hasher gives every instance different positions, and a loaded filter then denies keys it holds. Fixing the function in the specification makes the bytes meaningful anywhere; checking the lengths makes damaged bytes harmless."
+time = "O(probes + key)"
+space = "O(bits)"
+
+[rules]
+forbid_types = ["RandomState", "DefaultHasher"]

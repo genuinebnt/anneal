@@ -5,6 +5,8 @@
 # been timed.
 
 [series]
+# shown first for a problem that another series also has, unless the reader's progress says otherwise (docs/SERIES.md)
+rank = 1
 id = "threads-to-web-server"
 title = "From threads to a web server"
 summary = "Small parts give you what the capstone needs. Then you build the web server yourself, one step at a time."

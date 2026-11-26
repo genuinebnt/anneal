@@ -1,0 +1,32 @@
+slug = "build-the-machine"
+title = "Build the machine"
+mode = "write"
+level = "hard"
+stage = "engine"
+order = 3
+status = "ready"
+tags = ["regular expressions", "Thompson construction", "graphs in a Vec", "compiling"]
+teaches = [
+  "Each node of the tree becomes a small piece of a state graph that is told where to carry on.",
+  "Only a repetition needs a state that is reserved first and completed after its body is built.",
+  "With one state at most for each item of the pattern, the machine's size grows in step with the pattern and never faster.",
+]
+follow_up = "1) How would counted repetition `a{1000}{1000}` break the size promise, and what would you refuse? 2) Which states could be removed in a second pass, and is it worth it?"
+related = ["Y15", "Y8"]
+
+[[hints]]
+kind = "approach"
+text = "Write a function that receives a piece of the tree and the state to continue at, and returns the entry of what it built. Think about what it returns for `Empty`, then work outwards from there."
+
+[[hints]]
+kind = "rust"
+text = "States live in a `Vec<State>` and refer to each other by index. Push a placeholder for a loop's `Split`, build the body with the placeholder as its continuation, then assign `states[split]`. Walk a `Cat` with `.iter().rev()`, or `fold`."
+
+[[hints]]
+kind = "edge"
+text = "`Plus` is entered through its body, `Star` through its split. An `Alt` of n branches needs n-1 splits. A `Cat` may have hundreds of thousands of items, so do not recurse over the list itself."
+
+[solution]
+explanation = "The tree is translated from the back: when a piece is built, the state that follows it already exists. A sequence is folded from its last item to its first. Alternatives share the continuation and are joined by a chain of splits. A loop reserves its split, builds the body so that it returns there, and completes it."
+time = "O(pattern)"
+space = "O(pattern)"

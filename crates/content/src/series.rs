@@ -20,6 +20,9 @@ pub struct Series {
     pub summary: String,
     /// A line for the foot of the path, e.g. that times are estimates.
     pub note: String,
+    /// For a problem that several series have, when the reader has not said which one and their progress does not
+    /// decide: the lowest rank is shown. A series without one comes after the ranked ones; ties go by id.
+    pub rank: Option<u32>,
     pub project: Project,
     /// Preparation parts, in order.
     pub parts: Vec<Item>,
@@ -270,6 +273,8 @@ struct Head {
     #[serde(default)]
     note: String,
     #[serde(default)]
+    rank: Option<u32>,
+    #[serde(default)]
     capstone_title: Option<String>,
     #[serde(default)]
     capstone_summary: String,
@@ -451,6 +456,7 @@ fn build(id: String, file: SeriesFile, problems: &HashMap<&str, (&str, bool)>, f
         title: head.title,
         summary: head.summary,
         note: head.note,
+        rank: head.rank,
         project: Project {
             title: head.capstone_title.unwrap_or_else(|| "Capstone".to_owned()),
             summary: head.capstone_summary,

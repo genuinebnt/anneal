@@ -144,9 +144,12 @@ const routes = [
   createRoute({
     getParentRoute: () => rootRoute,
     path: "/p/$id",
+    // `?series=` is the series the reader came from: it survives a reload and Back (docs/SERIES.md)
+    validateSearch: (search: Record<string, unknown>): { series?: string } => (typeof search.series === "string" ? { series: search.series } : {}),
     component: function Problem() {
       const { id } = problemRoute.useParams();
-      return <Workspace id={id} />;
+      const { series } = problemRoute.useSearch();
+      return <Workspace id={id} from={series} />;
     },
   }),
   createRoute({ getParentRoute: () => rootRoute, path: "/progress", component: ProgressPage }),

@@ -10,15 +10,32 @@ progress is worked out from the attempts and review dates the app already keeps.
 | `/p/<problem>` of a series | the pane layout of the mockup (`.sx-ws` in `series.css`; every workspace control stays), breadcrumb "Part n of m", the practice clock set to the part's minutes, a Connections block in the problem pane, and after a solve a "Solved" tab beside the code (it replaces the celebration popup for these problems). Until it is solved, "What this teaches" and the follow-up questions are not shown, and the tags wait for "Show tags" (or the "Show the key idea" setting) |
 
 Code: `crates/content/src/series.rs` (loader and checks), `crates/api/src/series.rs` (`GET /api/series`,
-`/api/series/{id}`, `/api/problems/{id}/series`), `web/src/pages/SeriesPage.tsx`, `web/src/components/seriesBits.tsx`.
+`/api/series/{id}`, `/api/problems/{id}/series?series=`), `web/src/pages/SeriesPage.tsx`, `web/src/components/seriesBits.tsx`.
 Tests: `crates/content/tests/series.rs`, `crates/api/tests/series.rs`, `web/e2e/series.spec.ts`.
+
+## A problem in more than one series
+
+The series being read is in the address: `/p/<problem>?series=<id>`. Every link into a problem from a series sets it
+(the series page, Connections, the completion view and its next part, the workspace's own next links and pager), so it
+survives a reload, Back and Forward. Nothing is stored. A link to a problem outside the series ("Another problem",
+optional side paths) sets none. The series list and the Rust home lead to series pages, not straight to problems.
+
+`GET /api/problems/{id}/series?series=<id>` picks, in this order:
+
+1. the series asked for, if it has the problem as a written part or step (otherwise it is passed over);
+2. the first series, in the stable order, where the reader has solved something that the problem's other series don't
+   have. What they all share never counts, so a Submit on a shared problem can't change the answer;
+3. the first in the stable order: `rank` (lowest first; unranked last), then id. `web-server` has `rank = 1`.
+
+The answer lists the problem's `others`, and the problem pane offers "Switch to ..." for each under "Part n of m". It
+changes `?series=` in place (no new history entry); the code, clock and tabs stay.
 
 ## The file: `content/series/<id>.toml`
 
 The file name is the address (a-z, 0-9, `-`). Unknown fields are errors. A file with any mistake is left out, and
 `anneal validate` lists the mistakes (the API refuses to start with content issues, as for all content).
 
-`[series]`: `title`; optional `summary`, `note` (foot of the path), `id` (not used), `capstone_title`,
+`[series]`: `title`; optional `rank` (see above), `summary`, `note` (foot of the path), `id` (not used), `capstone_title`,
 `capstone_summary`, `capstone_note`, `capstone_cookbook` (the page behind "Show the Cookbook solution"; without it,
 the first page a capstone step refers to).
 

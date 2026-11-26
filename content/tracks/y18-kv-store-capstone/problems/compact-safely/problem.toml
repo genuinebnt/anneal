@@ -1,0 +1,32 @@
+slug = "compact-safely"
+title = "Capstone 6: compaction that survives failure"
+mode = "write"
+level = "hard"
+stage = "the-store"
+order = 6
+status = "ready"
+tags = ["compaction", "k-way merge", "delete markers", "crash safety", "ordering", "BinaryHeap"]
+teaches = [
+  "The order of deletions decides what every crash point recovers to.",
+  "Keep in-memory state in step with the disk at each fallible step, not only at the end.",
+  "`Vec::drain` removes its whole range even when you stop early.",
+]
+follow_up = "1) This holds every record in memory. How would you merge and write block by block? 2) The argument assumes that removals reach the disk in the order they were made. What would you write down to avoid depending on that? 3) Compacting everything rewrites the whole store each time. How do real stores limit that, and what happens to delete markers then?"
+crates = ["thiserror"]
+
+[[hints]]
+kind = "approach"
+text = "Take a key that is deleted by a newer table and held by an older one. After the merge, the new table says nothing about it. Which old files may still be there at each moment, and what do they say together?"
+
+[[hints]]
+kind = "rust"
+text = "A `BinaryHeap` of `Reverse((key, run, value))`, with runs numbered newest first, yields keys in order and the newest version first. Dropping a `Vec::drain` iterator early removes the rest of the drained range too."
+
+[[hints]]
+kind = "edge"
+text = "When a removal fails, the list in memory must name exactly the files that are still there, including the new one."
+
+[solution]
+explanation = "The merged table is published first, so every live key is safe in it. The old files are then removed oldest first: whatever remains of them is a newest part of the history, in which every delete marker still sits above the values it hides. A table leaves the in-memory list only after its file is gone."
+time = "O(records x log tables)"
+space = "O(all records) in this version"

@@ -1,0 +1,32 @@
+slug = "sets-and-escapes"
+title = "Sets and escapes"
+mode = "write"
+level = "medium"
+stage = "engine"
+order = 2
+status = "ready"
+tags = ["regular expressions", "parsing", "escapes", "character classes"]
+teaches = [
+  "Inside brackets the grammar is different: `*`, `|`, `(` and `.` are ordinary, and `-` can mean a range.",
+  "An escape can stand for one character or for a whole set. Only a single character can be an end of a range, so give the two their own types.",
+  "A literal, a shorthand and a bracket set can all be the same kind of node, which leaves the matcher one case to handle.",
+]
+follow_up = "1) How would you add `\\D`, `\\W` and `\\S`, and what is hard about using one inside brackets? 2) What would case-insensitive matching change, and in which step?"
+related = ["Y15", "Y8"]
+
+[[hints]]
+kind = "approach"
+text = "The new rules live in two places: a `\\` read as an item, and everything after a `[`. Let one function read what follows a backslash and use it in both."
+
+[[hints]]
+kind = "rust"
+text = "A small `enum Item { One(char), Shorthand(&'static [(char, char)]) }` lets a `match` on the pair of range ends say which ranges are allowed. `is_ascii_alphanumeric` decides which unknown escapes are errors."
+
+[[hints]]
+kind = "edge"
+text = "`]` closes the set wherever an item is expected, even first, so `[]` is empty and `[^]` is everything. A `-` right before `]` is ordinary. Report `UnclosedClass` at the `[` and escape errors at the backslash."
+
+[solution]
+explanation = "The escape reader returns either one character or a shorthand's ranges. Outside brackets either becomes a `Class` node. Inside, the reader takes an item, looks two characters ahead for a range, and accepts a range only between two single characters in order."
+time = "O(pattern)"
+space = "O(pattern)"

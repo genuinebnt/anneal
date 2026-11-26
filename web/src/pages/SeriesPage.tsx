@@ -13,7 +13,7 @@ const STATE: Record<SeriesItem["state"], string> = { solved: "Solved", assisted:
 
 const done = (s: SeriesItem["state"]) => s === "solved" || s === "assisted";
 
-function PartRow({ item }: { item: SeriesItem }) {
+function PartRow({ item, series }: { item: SeriesItem; series: string }) {
   const body = (
     <>
       <b>{item.title}</b>
@@ -23,7 +23,7 @@ function PartRow({ item }: { item: SeriesItem }) {
   return (
     <li className={`sx-part is-${item.state}`}>
       <span className="sx-n" aria-hidden="true">{done(item.state) ? "✓" : item.number}</span>
-      {item.id ? <Link to="/p/$id" params={{ id: item.id }}>{body}</Link> : <div>{body}</div>}
+      {item.id ? <Link to="/p/$id" params={{ id: item.id }} search={{ series }}>{body}</Link> : <div>{body}</div>}
       <span className="sx-min">{item.minutes ? `${item.minutes} min` : ""}</span>
       <span className="sx-state">{STATE[item.state]}</span>
     </li>
@@ -50,7 +50,7 @@ function RepeatRow({ row }: { row: Extract<SeriesRow, { row: "repeat" }> }) {
   );
 }
 
-function Capstone({ cap }: { cap: NonNullable<SeriesView["capstone"]> }) {
+function Capstone({ cap, series }: { cap: NonNullable<SeriesView["capstone"]>; series: string }) {
   const solved = cap.steps.filter((s) => done(s.state)).length;
   const written = cap.steps.filter((s) => s.state !== "to_write").length;
   return (
@@ -64,7 +64,7 @@ function Capstone({ cap }: { cap: NonNullable<SeriesView["capstone"]> }) {
         {cap.steps.map((s) => (
           <li key={s.number} className={`is-${s.state}`}>
             <i aria-hidden="true">{done(s.state) ? "✓" : s.number}</i>
-            {s.id ? <Link to="/p/$id" params={{ id: s.id }}>{s.title}</Link> : <b>{s.title}</b>}
+            {s.id ? <Link to="/p/$id" params={{ id: s.id }} search={{ series }}>{s.title}</Link> : <b>{s.title}</b>}
             <span>{[s.idea, s.state === "to_write" ? (written > 0 ? "To write" : "") : STATE[s.state]].filter(Boolean).join(" · ")}</span>
           </li>
         ))}
@@ -105,7 +105,7 @@ function Body({ s }: { s: SeriesView }) {
             <h2>Next: {next.kind === "part" ? "part" : "capstone step"} {next.number}, {lowerFirst(next.title)}</h2>
             <p>{s.next_why}</p>
           </div>
-          <Link className="sx-btn" to="/p/$id" params={{ id: next.id }}>Start {next.kind === "part" ? "part" : "step"} {next.number}</Link>
+          <Link className="sx-btn" to="/p/$id" params={{ id: next.id }} search={{ series: s.id }}>Start {next.kind === "part" ? "part" : "step"} {next.number}</Link>
         </section>
       ) : (
         <section className="sx-next" aria-label="Next">
@@ -122,11 +122,11 @@ function Body({ s }: { s: SeriesView }) {
             <div key={g.name}>
               <h3 className="sx-stage">{g.name}</h3>
               <ol className="sx-path">
-                {g.rows.map((r) => (r.row === "item" ? <PartRow key={`p${r.number}`} item={r} /> : <RepeatRow key={`r${r.id}${r.number}`} row={r} />))}
+                {g.rows.map((r) => (r.row === "item" ? <PartRow key={`p${r.number}`} item={r} series={s.id} /> : <RepeatRow key={`r${r.id}${r.number}`} row={r} />))}
               </ol>
             </div>
           ))}
-          {s.capstone && <Capstone cap={s.capstone} />}
+          {s.capstone && <Capstone cap={s.capstone} series={s.id} />}
           <p className="sx-open">Every preparation part has its own starter code. You can open any written part at any time.{s.note ? ` ${s.note}` : ""}</p>
         </section>
         <aside>

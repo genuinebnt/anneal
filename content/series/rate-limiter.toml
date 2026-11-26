@@ -1,0 +1,539 @@
+# The series "From a clock to a rate limiter lab": an order over existing problems, not a track. It copies and moves
+# nothing. required: do these first. helpful: keep closed (hidden = true); reveals_method = true means the link gives
+# away how to solve the part. cookbook: reference pages (slugs in content/cookbook), closed by default; level is exact
+# (solves the task), similar (same technique, different task) or related (explains the idea). Notes say how much of a
+# page was read. Minutes are estimates; nobody has been timed.
+
+[series]
+id = "rate-limiter"
+title = "From a clock to a rate limiter lab"
+summary = "Small parts teach you to work with time, shared counts and unknown limits. Then you build a laboratory that compares rate limiters, one step at a time."
+note = "All times are estimates; nobody has been timed. No part reads a real clock: every test passes the time in."
+capstone_title = "Capstone: a rate limiter lab"
+capstone_summary = "Run six limiters on the same traffic, give each client its own, and cap the work in flight with a limit that adjusts itself."
+capstone_note = "Each step whose starter has reference code begins with a warning that names what the code solves. Read it before opening the editor."
+capstone_cookbook = "rate-limiter-lab"
+
+[[stage]]
+id = "measure-time"
+name = "Work with time"
+
+[[stage]]
+id = "share"
+name = "Share a limit between threads"
+
+[[stage]]
+id = "react"
+name = "React to what happens"
+
+[[part]]
+number = 1
+id = "m3-pace-by-period"
+stage = "measure-time"
+title = "Faster or slower than last time?"
+status = "new"
+minutes = 45
+blurb = "Compare this hour with the last one while it is still running"
+new_idea = "Time as an argument, rolling from one period to the next, and comparing fractions without dividing"
+reuses = "nothing"
+required = []
+used_again = ["m4-measure-a-limiter", "m4-two-counts"]
+real_uses = "Usage dashboards, billing periods, alerting on a rising rate, quota counters."
+cookbook = [
+    { level = "related", page = "stream-processing-windows", note = "Only its header and the window assignment were read.", hidden = true },
+]
+
+[[part]]
+number = 2
+id = "m3-busiest-stretch"
+stage = "measure-time"
+title = "The busiest stretch"
+status = "new"
+minutes = 60
+blurb = "Find the worst moment in a log, wherever it starts"
+new_idea = "Two positions that only move forward over sorted times, and half-open stretches"
+reuses = "half-open time from part 1"
+required = []
+used_again = ["m2-rate-limiter", "m4-measure-a-limiter", "m4-side-by-side"]
+real_uses = "Capacity planning, abuse detection, checking whether a limit was really kept."
+cookbook = [
+    { level = "related", page = "algorithmic-optimization-toolbox", note = "Its sliding maximum was read: a window over a list on another task.", hidden = true },
+]
+
+[[part]]
+number = 3
+id = "m2-rate-limiter"
+stage = "measure-time"
+title = "A rate limiter on a clock you control"
+status = "existing"
+minutes = 120
+blurb = "Build two kinds of limiter on a clock the test moves, one for each client"
+new_idea = "Allowance worked out lazily from elapsed time, exact retry times, and forgetting idle clients"
+reuses = "time as an argument from part 1"
+know_first = "Traits, generics, VecDeque and HashMap"
+required = ["m3-pace-by-period"]
+helpful = [
+    { id = "m3-busiest-stretch", why = "the same two ends moving over times", reveals_method = true, hidden = true },
+]
+used_again = ["m4-measure-a-limiter", "m4-one-number-per-client", "m4-forget-safely"]
+real_uses = "API quotas, login throttling, outbound call budgets."
+cookbook = [
+    { level = "similar", page = "token-bucket", note = "Read in full. A floating-point bucket with an injected clock.", hidden = true },
+    { level = "similar", page = "concurrency-interview-questions", note = "Its token bucket question was read. It can lose part of a refill when called often.", hidden = true },
+]
+
+[[part]]
+number = 4
+id = "m3-book-the-next-slot"
+stage = "measure-time"
+title = "Give every message a send time"
+status = "new"
+minutes = 60
+blurb = "Plan when each message goes out, and refuse with the time to come back"
+new_idea = "One number, the moment the line is next free, stands for the whole queue"
+reuses = "exact retry times from part 3"
+required = []
+used_again = ["m4-one-number-per-client"]
+real_uses = "Outbound API pacing, network traffic shaping, honouring Retry-After."
+
+[[part]]
+number = 5
+id = "l1-raii-span-guard"
+stage = "share"
+title = "An RAII span guard"
+status = "existing"
+minutes = 45
+blurb = "Make something happen however a piece of code ends"
+new_idea = "Undoing something in Drop, so every way out of a scope does it"
+reuses = "nothing"
+required = []
+used_again = ["m4-cap-work-in-flight", "m4-let-the-cap-find-itself"]
+real_uses = "Gauges, tracing spans, lock guards, in-flight counts."
+
+[[part]]
+number = 6
+id = "l4-plugin-logger"
+stage = "share"
+title = "Plugin logger with trait objects"
+status = "existing"
+minutes = 60
+blurb = "Combine pieces chosen at run time, and share one between several owners"
+new_idea = "Boxed trait objects, sharing through Arc, and implementing a trait for a smart pointer"
+reuses = "the Limiter trait of part 3"
+required = []
+used_again = ["m4-cap-work-in-flight", "m4-side-by-side"]
+real_uses = "Middleware stacks, plugin systems, choosing a policy from configuration."
+
+[[part]]
+number = 7
+id = "c3-atomic-stats"
+stage = "share"
+title = "Lock-free statistics counters"
+status = "existing"
+minutes = 45
+blurb = "Keep correct counts when many threads report at once"
+new_idea = "Atomic add, minimum, maximum, and an update that retries"
+reuses = "nothing new from this series"
+required = []
+used_again = ["m3-claim-without-a-lock", "m4-cap-work-in-flight"]
+real_uses = "Metrics libraries, high-water marks, allocator statistics."
+cookbook = [
+    { level = "related", page = "std-atomics-ordering-use-cases", note = "Its header and its gauge section were read.", hidden = true },
+]
+
+[[part]]
+number = 8
+id = "m3-claim-without-a-lock"
+stage = "share"
+title = "Hand out space that nobody else has"
+status = "new"
+minutes = 60
+blurb = "Give many threads pieces of one buffer, with no overlap, and close it cleanly"
+new_idea = "A change that only happens if what was looked at is still true, retried otherwise"
+reuses = "atomics from part 7"
+required = ["c3-atomic-stats"]
+used_again = ["m4-cap-work-in-flight"]
+real_uses = "Bump allocators, log reservation in storage engines, id ranges."
+cookbook = [
+    { level = "similar", page = "std-atomics-ordering-use-cases", note = "Its gauge section was read: check and add as one step, on another task. This shows the method.", hidden = true },
+]
+
+[[part]]
+number = 9
+id = "m3-how-hard-to-push"
+stage = "react"
+title = "How big should the next batch be?"
+status = "new"
+minutes = 75
+blurb = "Find a limit that nobody tells you, and keep up when it moves"
+new_idea = "Learning a hidden limit from yes and no answers, judged by simulation"
+reuses = "nothing from earlier parts"
+required = []
+used_again = ["m4-let-the-cap-find-itself"]
+real_uses = "Congestion control, adaptive batch sizes, client-side throttling."
+cookbook = [
+    { level = "similar", page = "tcp-congestion-control-sim", note = "Its header and its window growth and loss handling were read. This shows a method.", hidden = true },
+]
+
+[[capstone]]
+step = 1
+id = "m4-measure-a-limiter"
+title = "Measure a limiter"
+minutes = 60
+blurb = "Run any limiter over recorded arrivals and report what got through"
+new_idea = "A harness over one trait, and the measure that matters to the backend"
+reuses = "periods from part 1, the busiest stretch from part 2"
+prepared_by = ["m3-pace-by-period", "m3-busiest-stretch", "m2-rate-limiter"]
+required = ["m3-busiest-stretch", "m2-rate-limiter"]
+used_again = ["m4-side-by-side"]
+real_uses = "Replaying production traffic against a proposed limit."
+cookbook = [
+    { level = "similar", page = "rate-limiter-lab", note = "The Cookbook lab, read in full. Shows the method for the whole capstone; its rules differ.", hidden = true },
+]
+
+[[capstone]]
+step = 2
+id = "m4-two-counts"
+title = "A smoother count from two numbers"
+minutes = 75
+blurb = "Smooth the edge between windows with almost no extra memory"
+new_idea = "A weighted estimate in exact integers, and the wait solved from the rule"
+reuses = "comparing fractions from part 1, retry times from part 3"
+prepared_by = ["m3-pace-by-period", "m2-rate-limiter"]
+required = ["m4-measure-a-limiter"]
+used_again = ["m4-forget-safely", "m4-side-by-side"]
+real_uses = "Edge and gateway limits that cannot store every request."
+cookbook = [
+    { level = "similar", page = "rate-limiter-lab", note = "The Cookbook lab, read in full. Shows the method for the whole capstone; its rules differ.", hidden = true },
+    { level = "similar", page = "systems-design-in-code", note = "Its rate limiter question was read. The same estimate in integers, with no retry time.", hidden = true },
+]
+
+[[capstone]]
+step = 3
+id = "m4-one-number-per-client"
+title = "The same promise in one number"
+minutes = 90
+blurb = "Keep a client's whole limit in a single stored value"
+new_idea = "Two other states that behave exactly like a token bucket, one of them a single number"
+reuses = "the token bucket and retry times from part 3"
+prepared_by = ["m2-rate-limiter", "m3-book-the-next-slot"]
+required = ["m4-two-counts", "m2-rate-limiter"]
+helpful = [
+    { id = "m3-book-the-next-slot", why = "one number standing for a whole queue", reveals_method = true, hidden = true },
+]
+used_again = ["m4-forget-safely", "m4-side-by-side"]
+real_uses = "Distributed limiters that keep one value per key and update it atomically."
+cookbook = [
+    { level = "similar", page = "rate-limiter-lab", note = "The Cookbook lab, read in full. Shows the method for the whole capstone; its rules differ.", hidden = true },
+]
+
+[[capstone]]
+step = 4
+id = "m4-forget-safely"
+title = "A limit per client, and forgetting safely"
+minutes = 90
+blurb = "Serve millions of clients without ever giving one a second allowance"
+new_idea = "Forgetting only what no future answer depends on, at a constant average cost"
+reuses = "one limiter per client from part 3"
+prepared_by = ["m2-rate-limiter"]
+required = ["m4-one-number-per-client", "m2-rate-limiter"]
+used_again = ["m4-side-by-side"]
+real_uses = "Per-key limiters in gateways, expiry in caches and session tables."
+cookbook = [
+    { level = "similar", page = "rate-limiter-lab", note = "The Cookbook lab, read in full. Shows the method for the whole capstone; its rules differ.", hidden = true },
+]
+
+[[capstone]]
+step = 5
+id = "m4-cap-work-in-flight"
+title = "Cap the work in flight"
+minutes = 75
+blurb = "Bound how much runs at once, however slow it becomes"
+new_idea = "A permit that returns itself, over a count and a limit that must change together"
+reuses = "Drop from part 5, Arc from part 6, the retried change from part 8"
+prepared_by = ["l1-raii-span-guard", "l4-plugin-logger", "c3-atomic-stats", "m3-claim-without-a-lock"]
+required = ["m3-claim-without-a-lock", "l1-raii-span-guard"]
+helpful = [
+    { id = "c2-bounded-channel", why = "handles that share state and give something back when dropped", reveals_method = false, hidden = true },
+]
+used_again = ["m4-let-the-cap-find-itself"]
+real_uses = "Connection and request caps, bulkheads, load shedding."
+cookbook = [
+    { level = "similar", page = "rate-limiter-lab", note = "The Cookbook lab, read in full. Shows the method for the whole capstone; its rules differ.", hidden = true },
+]
+
+[[capstone]]
+step = 6
+id = "m4-let-the-cap-find-itself"
+title = "Let the cap find itself"
+minutes = 90
+blurb = "Raise and lower a limit from how the admitted work turns out"
+new_idea = "Counting one overload episode once, and growing only when the limit is really used"
+reuses = "the rule you found in part 9, the gate from step 5"
+prepared_by = ["m3-how-hard-to-push", "l1-raii-span-guard"]
+required = ["m4-cap-work-in-flight", "m3-how-hard-to-push"]
+real_uses = "Adaptive concurrency limits in service clients and proxies."
+cookbook = [
+    { level = "similar", page = "rate-limiter-lab", note = "The Cookbook lab, read in full. Shows the method for the whole capstone; its rules differ.", hidden = true },
+    { level = "related", page = "tcp-congestion-control-sim", note = "Its header and its window growth and loss handling were read.", hidden = true },
+]
+
+[[capstone]]
+step = 7
+id = "m4-side-by-side"
+title = "Put them side by side"
+minutes = 90
+blurb = "Compare every limiter on the same traffic, shared and per client"
+new_idea = "One harness over limiters chosen at run time, with per-client results"
+reuses = "boxed traits from part 6, steps 1 to 4"
+prepared_by = ["l4-plugin-logger", "m2-rate-limiter", "m3-busiest-stretch"]
+required = ["m4-forget-safely"]
+real_uses = "Choosing a limiter policy from recorded traffic before shipping it."
+cookbook = [
+    { level = "similar", page = "rate-limiter-lab", note = "The Cookbook lab, read in full. Shows the method for the whole capstone; its rules differ.", hidden = true },
+]
+
+[[revisit]]
+part = "m3-pace-by-period"
+after = "m2-rate-limiter"
+how = "Write part 1 again from memory."
+minutes = 20
+
+[[revisit]]
+part = "m2-rate-limiter"
+before = "m4-one-number-per-client"
+how = "Solve the rate limiter again from a blank starter before capstone step 3."
+minutes = 60
+
+[[revisit]]
+part = "m3-claim-without-a-lock"
+before = "m4-cap-work-in-flight"
+how = "Write part 8 again from memory before capstone step 5."
+minutes = 25
+
+[[revisit]]
+part = "m3-busiest-stretch"
+before = "m4-side-by-side"
+how = "Solve part 2 again from a blank starter before capstone step 7."
+minutes = 20
+
+[[connection]]
+idea = "Time is an argument"
+learn = ["m3-pace-by-period"]
+again = ["m2-rate-limiter", "m3-book-the-next-slot"]
+apply = ["m4-measure-a-limiter", "m4-side-by-side"]
+
+[[connection]]
+idea = "Looking back over a stretch of time"
+learn = ["m3-busiest-stretch"]
+again = ["m2-rate-limiter"]
+apply = ["m4-measure-a-limiter", "m4-two-counts"]
+
+[[connection]]
+idea = "Exact integer arithmetic"
+learn = ["m3-pace-by-period"]
+again = ["m2-rate-limiter", "m3-book-the-next-slot"]
+apply = ["m4-two-counts", "m4-one-number-per-client"]
+
+[[connection]]
+idea = "Saying when to come back"
+learn = ["m2-rate-limiter"]
+again = ["m3-book-the-next-slot"]
+apply = ["m4-two-counts", "m4-one-number-per-client"]
+
+[[connection]]
+idea = "Little state that means a lot"
+learn = ["m3-book-the-next-slot"]
+again = ["m2-rate-limiter"]
+apply = ["m4-one-number-per-client", "m4-forget-safely"]
+
+[[connection]]
+idea = "Giving back what you took"
+learn = ["l1-raii-span-guard"]
+again = ["l4-plugin-logger"]
+apply = ["m4-cap-work-in-flight", "m4-let-the-cap-find-itself"]
+
+[[connection]]
+idea = "Check and change as one step"
+learn = ["c3-atomic-stats"]
+again = ["m3-claim-without-a-lock"]
+apply = ["m4-cap-work-in-flight"]
+
+[[connection]]
+idea = "Learning a limit from feedback"
+learn = ["m3-how-hard-to-push"]
+again = []
+apply = ["m4-let-the-cap-find-itself"]
+
+[[readiness]]
+group = "Time"
+concept = "Time passed in as u64 milliseconds; a time that goes back counts as the latest"
+steps = [1, 2, 3, 4, 7]
+parts = ["m3-pace-by-period", "m2-rate-limiter", "m3-book-the-next-slot"]
+
+[[readiness]]
+group = "Time"
+concept = "Aligned windows with / and %, rolling over, skipped windows"
+steps = [1, 2]
+parts = ["m3-pace-by-period"]
+
+[[readiness]]
+group = "Time"
+concept = "Half-open stretches; two positions over sorted times"
+steps = [1, 7]
+parts = ["m3-busiest-stretch", "m2-rate-limiter"]
+
+[[readiness]]
+group = "Arithmetic"
+concept = "Cross-multiplying in u128, saturating and checked conversion"
+steps = [2, 3]
+parts = ["m3-pace-by-period", "m2-rate-limiter", "m3-book-the-next-slot"]
+
+[[readiness]]
+group = "Arithmetic"
+concept = "Retry times: the smallest wait that works"
+steps = [2, 3]
+parts = ["m2-rate-limiter", "m3-book-the-next-slot"]
+note = "Step 2 adds the case split across two windows; its hints cover it."
+
+[[readiness]]
+group = "Limiters"
+concept = "A trait with &mut self; a generic function with ?Sized over it"
+steps = [1, 7]
+parts = ["m2-rate-limiter", "l4-plugin-logger"]
+note = "?Sized for trait objects: part 6 uses it on an impl; the step 1 hint repeats it."
+
+[[readiness]]
+group = "Limiters"
+concept = "A sliding log of admitted times in a VecDeque"
+steps = [1, 4, 7]
+parts = ["m2-rate-limiter"]
+note = "Given in the capstone starters."
+
+[[readiness]]
+group = "Limiters"
+concept = "A token bucket in integer time"
+steps = [3, 7]
+parts = ["m2-rate-limiter"]
+note = "Given as the reference from step 3 on."
+
+[[readiness]]
+group = "Limiters"
+concept = "One time that stands for a queue of work"
+steps = [3]
+parts = ["m3-book-the-next-slot"]
+
+[[readiness]]
+group = "Limiters"
+concept = "Fixed window, sliding counter, leaky meter, the one-number limiter"
+steps = [1, 2, 3]
+parts = []
+note = "These are what the capstone steps themselves teach, on top of parts 1 to 4."
+
+[[readiness]]
+group = "Many clients"
+concept = "HashMap entry with a factory closure; generic over Fn() -> L"
+steps = [4, 7]
+parts = ["m2-rate-limiter"]
+
+[[readiness]]
+group = "Many clients"
+concept = "HashMap::retain; BTreeMap entry with or_default"
+steps = [4, 7]
+parts = []
+note = "Not taught by a part. Named in the hints of steps 4 and 7."
+
+[[readiness]]
+group = "Many clients"
+concept = "Amortised cost: occasional full passes"
+steps = [4]
+parts = ["m2-rate-limiter"]
+note = "Part 3 forbids a full scan per call and solves it with a queue. The step 4 hint gives the doubling rule."
+
+[[readiness]]
+group = "Sharing"
+concept = "Drop on every exit path, including a panic"
+steps = [5, 6]
+parts = ["l1-raii-span-guard"]
+
+[[readiness]]
+group = "Sharing"
+concept = "Arc::clone, and values that are Send and 'static"
+steps = [5, 6]
+parts = ["l4-plugin-logger"]
+note = "A permit that owns an Arc combines parts 5 and 6; step 5 is where you first write it."
+
+[[readiness]]
+group = "Sharing"
+concept = "Atomic add, subtract, maximum and fetch_update"
+steps = [5]
+parts = ["c3-atomic-stats", "m3-claim-without-a-lock"]
+
+[[readiness]]
+group = "Sharing"
+concept = "compare_exchange_weak loops; two facts in one atomic word"
+steps = [5]
+parts = ["m3-claim-without-a-lock"]
+
+[[readiness]]
+group = "Sharing"
+concept = "A Mutex around a few values that change together"
+steps = [6]
+parts = []
+note = "Not taught by a part. std::sync::Mutex::lock is all that is needed."
+
+[[readiness]]
+group = "Adapting"
+concept = "Cautious growth, a large cut, a floor and a ceiling"
+steps = [6]
+parts = ["m3-how-hard-to-push"]
+
+[[readiness]]
+group = "Putting it together"
+concept = "Box<dyn Trait>, and implementing a trait for the box"
+steps = [7]
+parts = ["l4-plugin-logger"]
+
+[[readiness]]
+group = "Putting it together"
+concept = "Deriving Debug, Clone, Copy, PartialEq and Default"
+steps = [7]
+parts = []
+note = "The types are given in the starter."
+
+[[readiness]]
+group = "Testing"
+concept = "Comparing with a slow model on seeded random input"
+steps = []
+parts = ["m3-pace-by-period", "m3-busiest-stretch", "m2-rate-limiter"]
+note = "You do not write the capstone tests. Reading them shows the method."
+
+[[side_path]]
+id = "b7-clients-that-go-quiet"
+why = "deadlines with a clock passed in, on a connection"
+after = "m3-pace-by-period"
+
+[[side_path]]
+id = "y5-catch-the-broken-queue"
+why = "practise writing tests that catch broken implementations"
+after = "m4-one-number-per-client"
+
+[[side_path]]
+id = "l2-fix-map-mutation-during-iteration"
+why = "before step 4: changing a map while expiring its entries"
+before = "m4-forget-safely"
+
+[[side_path]]
+id = "c1-fair-semaphore"
+why = "the other kind of cap: callers wait their turn instead of being refused"
+after = "m4-cap-work-in-flight"
+
+[[side_path]]
+id = "c4-bounded-fan-out"
+why = "at most N tasks at once in async code"
+after = "m4-cap-work-in-flight"
+
+[[side_path]]
+id = "b7-turn-work-away"
+why = "refusing work when a bounded queue is full"
+after = "m4-cap-work-in-flight"

@@ -61,6 +61,8 @@ export interface SeriesDone {
 /** Where a problem sits in a series. */
 export interface SeriesPlace {
   series: { id: string; title: string };
+  /** The other series that have this problem; usually none. */
+  others: { id: string; title: string; kind: "part" | "step"; number: number }[];
   kind: "part" | "step";
   number: number;
   total: number;

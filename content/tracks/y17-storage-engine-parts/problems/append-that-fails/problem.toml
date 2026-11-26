@@ -1,0 +1,31 @@
+slug = "append-that-fails"
+title = "An append that fails half-way"
+mode = "write"
+level = "medium"
+stage = "files-that-survive"
+order = 1
+status = "ready"
+tags = ["file io", "partial writes", "error handling", "durability"]
+teaches = [
+  "A failed write may have written part of the data. Remove it before anything is written after it.",
+  "Remember the last good length yourself; the file's length is not it after a failure.",
+  "A failed sync cannot be retried away: stop and let recovery sort it out.",
+]
+follow_up = "1) PostgreSQL changed how it treats a failed fsync in 2018. What did it do before, and why was that unsafe? 2) Appends here sync one by one. How would you let many writers share one sync without acknowledging any of them early? 3) The reader still has to cope with a torn last record after a power cut. Why can this code not prevent that?"
+
+[[hints]]
+kind = "approach"
+text = "Think about what the device holds after each kind of failure. The log needs to remember two things between calls that the device cannot tell it."
+
+[[hints]]
+kind = "rust"
+text = "`OpenOptions::new().create(true).append(true)` puts every write at the current end. `File::set_len` truncates, `File::sync_data` syncs, `metadata()?.len()` gives the length."
+
+[[hints]]
+kind = "edge"
+text = "After a failed append, `device.len()` includes the partial bytes. The length to go back to must have been remembered before the call, and it only grows when a record is acknowledged."
+
+[solution]
+explanation = "The log tracks the length made of acknowledged records. A failed write is cut off before anything else can be written behind it. A failed sync is not retried, because success the second time proves nothing about the first bytes."
+time = "O(record) per append"
+space = "O(record)"

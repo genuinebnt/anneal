@@ -1,0 +1,37 @@
+slug = "an-order-that-stays-in-bounds"
+title = "An order that stays in bounds"
+mode = "write"
+level = "hard"
+stage = "second-opinion"
+order = 8
+status = "ready"
+tags = ["backtracking", "continuations", "closures", "Cell and RefCell", "nested ordering"]
+teaches = [
+  "A group that is finished may still have to be reopened: another order inside it leaves a different value behind.",
+  "Hand each step a function that means \"now do the rest\". It carries the way back into finished groups, and going back is just returning `false` from it.",
+  "A `&dyn Fn` cannot assign to what it captured. `Cell` and `RefCell` let it keep a record anyway.",
+]
+follow_up = "1) Two different orders often leave the same members still to do at the same level. What could you remember, and what would the key be? 2) How would you return every level the job can finish at? 3) How would you rewrite the search with your own stack instead of recursion?"
+related = ["L4", "Y16"]
+
+[[hints]]
+kind = "approach"
+text = "Finishing a group does not settle it, because a later action may need the level that a different inner order would leave. So a step should not return the level it reached. Give it a function for everything still to be done, and let it return whether that remainder succeeded."
+
+[[hints]]
+kind = "rust"
+text = "One signature does it: `fn go(job, level, rest: &dyn Fn(i64) -> bool) -> bool`. For `InOrder`, recurse over the slice with `split_first`, building a closure for the tail. Keep the actions performed in a `RefCell<Vec<usize>>` and the best count in a `Cell<usize>`."
+
+[[hints]]
+kind = "edge"
+text = "Pop the action you pushed when the rest returns `false`, but keep the best count. Try the members of `AnyOrder` in written order, and stop at the first success. Use `checked_add` and `checked_mul`: a level that does not fit in `i64` is certainly out of bounds."
+
+[solution]
+explanation = "Each call receives the rest of the work as a closure. An action checks the new level and calls the closure with it, undoing its record if the closure fails. A list in order builds a closure that runs the tail. A free list tries each unused member next, with a closure that continues with the others. Trying members in written order makes the first success the smallest sequence of numbers, because earlier members hold smaller numbers. The best count is updated at every action, so it also covers attempts that were later undone."
+time = "exponential in the worst case; the first success ends the search"
+space = "O(actions) stack"
+
+[[cookbook]]
+level = "related"
+page = "regex-nfa-engine"
+note = "Its second matcher passes \"the rest\" as a function in the same way, for a different task."

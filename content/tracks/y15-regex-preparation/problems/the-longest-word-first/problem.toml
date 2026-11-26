@@ -1,0 +1,32 @@
+slug = "the-longest-word-first"
+title = "Take the longest word first"
+mode = "write"
+level = "medium"
+stage = "many-possibilities"
+order = 6
+status = "ready"
+tags = ["lexing", "longest match", "trait objects", "char indices"]
+teaches = [
+  "\"The longest match\" cannot be decided at the first success. Keep reading, remember the last place that was a success, and fall back to it.",
+  "Three states of an attempt are different things: still alive, successful here, and dead for good.",
+  "Positions counted in characters and positions counted in bytes part company at the first non-ASCII letter.",
+]
+follow_up = "1) Which patterns make this take time proportional to the square of the text, and how could remembered failures fix it? 2) How would you report the longest match anywhere in a text, not just at the front? 3) How would a rule that only applies at the start of a line fit in?"
+related = ["L3", "Y14", "Y16"]
+
+[[hints]]
+kind = "approach"
+text = "At each starting point, feed characters to every rule that is still alive. Whenever some rule accepts, note how far you are and which rule it was. Stop when no rule is alive, then go back to the note."
+
+[[hints]]
+kind = "rust"
+text = "`Option<u32>` per rule holds its state, with `None` for dead. Keep `best: Option<(usize, usize)>` for (end, rule). Collect the text into a `Vec<char>` so that a position is a character count."
+
+[[hints]]
+kind = "edge"
+text = "A rule may accept, stop accepting, and accept again later. Reaching the end of the text is not a failure if something was noted. Do not accept an empty word, or you will never move. Stop reading as soon as every rule is dead."
+
+[solution]
+explanation = "From each start, one state per rule is advanced a character at a time. A longer success always replaces a shorter one; within one length the first rule to claim it keeps it. The loop ends when all states are dead or the text ends. The next word starts where the best one ended, which may be well before the last character read."
+time = "O(characters read x rules); reading stops when every rule is dead"
+space = "O(rules + words)"

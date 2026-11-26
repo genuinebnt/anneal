@@ -1,0 +1,33 @@
+slug = "claim-without-a-lock"
+title = "Hand out space that nobody else has"
+mode = "write"
+level = "hard"
+stage = "one-idea-at-a-time"
+order = 5
+status = "ready"
+tags = ["atomics", "compare and exchange", "linearizability", "60-min"]
+teaches = ["A check followed by a change is only correct if nothing can happen between them. Atomics can make the two one step.", "A retry loop must redo the whole decision with the new value, not only the final write.", "Two facts that must agree, such as a count and a closed flag, belong in the same atomic word."]
+follow_up = "1) Which memory ordering is needed if the claimer then writes into its units and another thread reads them? 2) Units are now given back in any order. Why does one number stop being enough?"
+related = ["C3", "F3"]
+
+[[hints]]
+kind = "approach"
+text = "Between the moment you look at what is free and the moment you take it, anything may have happened. Make the taking succeed only if what you looked at is still true, and start the decision again if it is not."
+
+[[hints]]
+kind = "rust"
+text = "`AtomicUsize::compare_exchange_weak(seen, new, ..)` writes only if the value is still `seen`, and otherwise hands you the current one. `fetch_or` sets a bit and returns the old value. `len <= usize::MAX / 2` leaves one bit unused."
+
+[[hints]]
+kind = "edge"
+text = "`close` is one of the things that can happen in the middle of a claim, so the compare must notice it too. Call `choose` again on every retry. If it asks for more than it was offered, give `None`; never compute `used + n` before checking, as it can overflow."
+
+[solution]
+explanation = "One atomic word holds the number of units handed out and, in its top bit, whether the region is closed. A claim reads it, asks the caller how much to take, and writes the new count only if the word is unchanged; otherwise it starts again from the new value. Closing sets the bit with fetch_or, which makes every claim that read the older word fail and retry."
+time = "O(1) without contention; a retry per competing change"
+space = "O(1)"
+
+[[cookbook]]
+level = "related"
+page = "std-atomics-ordering-use-cases"
+note = "The atomic operations by use case. Its gauge with a limit shows how to join a check and a change."

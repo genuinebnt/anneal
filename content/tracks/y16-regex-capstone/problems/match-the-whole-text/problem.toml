@@ -1,0 +1,32 @@
+slug = "match-the-whole-text"
+title = "Match the whole text"
+mode = "write"
+level = "hard"
+stage = "engine"
+order = 4
+status = "ready"
+tags = ["regular expressions", "state sets", "epsilon closure", "linear time", "ReDoS"]
+teaches = [
+  "Run all the ways at once: keep the set of states the machine could be in, and turn it into the next set with each character.",
+  "Free moves are followed until nothing new appears, with a \"seen\" table that is fresh for each position. That is what ends loops around nothing.",
+  "A free move that depends on the position (start or end of text) must be judged with the position the new set stands at, not the one just left.",
+]
+follow_up = "1) How would you remember which sets you have seen and where each character led, so that most steps become one table lookup? What bounds the table? 2) Where could you avoid allocating for each character?"
+related = ["Y15", "Y8"]
+
+[[hints]]
+kind = "approach"
+text = "Keep a set of states. Begin with everything freely reachable from the start. For each character, collect where each state that can read it leads, then widen that collection by free moves again."
+
+[[hints]]
+kind = "rust"
+text = "One function can take the seed states and two flags, `at_start` and `at_end`, and return the widened set. Use a `Vec<bool>` for what is already in it, and `std::mem::replace(&mut seen[id], true)` to test and mark at once."
+
+[[hints]]
+kind = "edge"
+text = "For the empty text the first set stands at the start and at the end. After the last character the new set stands at the end. Once the set is empty you can stop."
+
+[solution]
+explanation = "A closure function follows splits always and anchors only when their flag is true, handling each state once. Matching holds one set, builds the next from the states that can read the character, and closes it with the flags of the new position. The answer is whether the final set holds the match state."
+time = "O(text x states)"
+space = "O(states)"

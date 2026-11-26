@@ -1,0 +1,31 @@
+slug = "one-block-is-enough"
+title = "One block is enough"
+mode = "write"
+level = "medium"
+stage = "sorted-data"
+order = 5
+status = "ready"
+tags = ["sparse index", "binary search", "sorted blocks", "range queries", "I/O cost"]
+teaches = [
+  "A sorted file needs only one key per block in memory to find any record with one read.",
+  "A range touches the blocks whose possible key interval meets it, and no others.",
+  "Count reads in tests: a correct answer that reads everything is still wrong.",
+]
+follow_up = "1) A missing key still costs one block read. What could you keep in memory to avoid most of those? 2) How do you choose `max_bytes`? Name what gets better and worse as it grows. 3) The index keeps whole keys. How could it keep shorter ones and still choose the same blocks?"
+
+[[hints]]
+kind = "approach"
+text = "Write down, for block `i`, the smallest and largest keys it could possibly hold, knowing only the first keys. Both functions follow from that."
+
+[[hints]]
+kind = "rust"
+text = "A binary search over `0..count()` that calls `first_key` is a short loop. `saturating_sub` and `checked_sub` express the two ways of handling a key before the first block."
+
+[[hints]]
+kind = "edge"
+text = "A block that starts exactly at `to` holds nothing wanted. A key equal to a first key lives in that block, not the one before."
+
+[solution]
+explanation = "Block `i` can only hold keys from its first key up to the next block's first key. So a point lookup needs the last block that starts at or before the key, found by binary search. A range starts there and goes on while blocks start before `to`."
+time = "get: O(log blocks + block); range: O(log blocks + records fetched)"
+space = "O(block)"

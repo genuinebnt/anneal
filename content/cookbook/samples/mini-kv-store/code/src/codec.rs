@@ -8,6 +8,8 @@ pub enum KvError {
     Io(#[from] std::io::Error),
     #[error("corrupt data: {0}")]
     Corrupt(&'static str),
+    #[error("the log is unusable after an earlier failure")]
+    LogUnusable,
 }
 pub type Result<T> = std::result::Result<T, KvError>;
 

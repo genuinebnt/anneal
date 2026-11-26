@@ -1,0 +1,32 @@
+slug = "catch-a-wrong-engine"
+title = "Catch a wrong engine"
+mode = "write"
+level = "hard"
+stage = "check-it"
+order = 7
+status = "ready"
+tags = ["differential testing", "random testing", "grammars", "determinism", "regular expressions"]
+teaches = [
+  "Two independent answers to the same random question find bugs that nobody thought to write a test for.",
+  "The generator is the test: a bug on newlines, accented letters or nested repetition is found only if those are ever made.",
+  "A seeded generator makes every failure repeatable, and reporting the exact input makes it fixable.",
+]
+follow_up = "1) The pair you report may be long. How would you shrink the pattern and the text while they still disagree? 2) How would you measure which parts of your engine the random inputs reach? 3) Where could `backtrack_find` from step 6 serve as the judge, and what would you do when it gives up?"
+related = ["Y15", "Y8"]
+
+[[hints]]
+kind = "approach"
+text = "Make many random patterns that are valid by construction, and a few short random texts for each. Ask both engines and return the first pair on which they differ."
+
+[[hints]]
+kind = "rust"
+text = "Write the pattern generator like the grammar, with a depth limit, and put brackets round anything you repeat. A few lines of xorshift give repeatable numbers. `Regex::new` in the starter is your trusted answer."
+
+[[hints]]
+kind = "edge"
+text = "Think of what must appear for a bug to show. Characters: newlines, non-ASCII letters, `_`, digits and spaces, and the empty text. Pattern shapes: ranges, negated sets, empty or triple branches, anchors in the middle, nested repeats."
+
+[solution]
+explanation = "The search generates text from the grammar, so every pattern parses. The alphabet is small, so that matches are common, and it includes the characters that implementations treat specially. A fixed seed makes the run repeatable, and the first disagreement is returned as it is."
+time = "O(calls x text x text x pattern)"
+space = "O(pattern + text)"

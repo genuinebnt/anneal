@@ -1,0 +1,16 @@
+code = "M4"
+name = "Rate limiter capstone"
+section = "M"
+tier = "core"
+order = 4
+summary = "Build a laboratory that runs rate limiters and a concurrency limit on the same traffic, in seven steps. All time is passed in."
+
+[[stages]]
+slug = "six-ways-to-count"
+name = "Six ways to count"
+band = "medium"
+
+[[stages]]
+slug = "serve-many"
+name = "Serve many clients"
+band = "hard"

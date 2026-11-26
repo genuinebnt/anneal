@@ -1,0 +1,31 @@
+slug = "read-from-the-back"
+title = "A bundle you read from the back"
+mode = "write"
+level = "medium"
+stage = "files-that-survive"
+order = 3
+status = "ready"
+tags = ["file formats", "Seek", "read_exact", "validation", "untrusted input"]
+teaches = [
+  "Read a large file by following positions: footer, then directory, then the one thing you need.",
+  "Check every length and offset from a file before using it, with arithmetic that cannot overflow.",
+  "A single `read` may return part of what you asked for.",
+]
+follow_up = "1) Nothing here detects a changed byte inside an entry. Where would you put checksums so that `get` can verify without reading the whole file? 2) Why do formats such as ZIP and Parquet put their directory at the end? 3) `Read::read` may return fewer bytes than asked. Name two kinds of reader that often do."
+
+[[hints]]
+kind = "approach"
+text = "The end is the only place with a known position. Each thing you read tells you where the next one is, and each of those numbers must be checked before it is used."
+
+[[hints]]
+kind = "rust"
+text = "`seek(SeekFrom::End(0))` returns the file's length. `read_exact` repeats `read` until the buffer is full. Reading numbers from a slice that you shorten as you go keeps the bounds checks in one place."
+
+[[hints]]
+kind = "edge"
+text = "`offset + len` can overflow. A `count` of four billion must not reserve room for four billion entries."
+
+[solution]
+explanation = "The footer is read first, then the directory it points to. Every number from the file is compared with something already known to be real before it sizes a buffer or becomes a position. Checking all ranges at open means `get` can trust them."
+time = "O(directory) to open; O(entry) per get after the name lookup"
+space = "O(directory)"

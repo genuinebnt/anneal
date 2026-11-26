@@ -1,0 +1,32 @@
+slug = "records-and-frames"
+title = "Capstone 1: records and frames"
+mode = "write"
+level = "medium"
+stage = "on-disk"
+order = 1
+status = "ready"
+tags = ["binary format", "CRC-32", "decoding", "torn writes", "thiserror"]
+teaches = [
+  "Give every read of file bytes one bounds-checked path.",
+  "Tell a torn write apart from corruption: one ends the log, the other is an error.",
+  "Test a checksum format on all zeros: the checksum of nothing is zero.",
+]
+follow_up = "1) The checksum does not cover `len`. What can one flipped bit in `len` do, and how would you detect it? 2) A flipped bit in the middle of the log silently drops every later record. How could a reader tell that apart from a torn end? 3) Why would a table-driven CRC be faster, and what would it cost?"
+crates = ["thiserror"]
+
+[[hints]]
+kind = "approach"
+text = "Write one helper that hands out the next `n` bytes or an error, and build all decoding on it. In `replay`, decide for each way of failing whether the log has merely ended or something is wrong."
+
+[[hints]]
+kind = "rust"
+text = "`checked_add` and `slice.get(a..b)` turn every bad length into `None`. Decode with a local copy of the position and store it only on success. `let (Ok(a), Ok(b)) = .. else` fits the header."
+
+[[hints]]
+kind = "edge"
+text = "Work out `crc32` of an empty slice, then look at what eight zero bytes would mean as a frame."
+
+[solution]
+explanation = "All reads go through one bounds-checked helper, so no length from disk can cause a panic. Replay separates the two kinds of failure: a short or mismatched frame is the torn end of the log, while a matching checksum around a bad record is reported. A zero length is treated as the end, since the checksum of nothing is zero."
+time = "O(bytes)"
+space = "O(records)"

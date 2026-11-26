@@ -1,0 +1,32 @@
+slug = "table-files"
+title = "Capstone 3: table files"
+mode = "write"
+level = "hard"
+stage = "on-disk"
+order = 3
+status = "ready"
+tags = ["SSTable", "sparse index", "Bloom filter", "atomic publish", "validation", "file io"]
+teaches = [
+  "An immutable file with a small index in memory answers any lookup with one read.",
+  "Publish a file by writing under another name, syncing, renaming and syncing the directory.",
+  "A checksum shows that bytes are unchanged, not that they make sense: validate offsets anyway.",
+]
+follow_up = "1) The checksum is verified only when the table is opened. What can go wrong later, and where would per-block checksums go? 2) `open` reads the whole file once. How would you change the format so that it does not need to? 3) What does the sync of the directory protect against?"
+crates = ["thiserror"]
+
+[[hints]]
+kind = "approach"
+text = "Build the whole file in a `Vec<u8>` and note the position where each part begins. In `open`, work backwards from the fixed-size footer and check each number before it is used."
+
+[[hints]]
+kind = "rust"
+text = "`partition_point` finds the number of index keys at or before a key. `File::seek` and `read_exact` read one block. `path.with_extension(\"tmp\")` gives the temporary name."
+
+[[hints]]
+kind = "edge"
+text = "A crafted file can have a valid checksum and offsets that go backwards: `end - start` then underflows. An empty table has no index entries."
+
+[solution]
+explanation = "The file is assembled in memory, written under a temporary name, synced and renamed. Opening checks the checksum once and then every offset, so later reads can trust the index. A point read uses the index and the filter to read one block or nothing."
+time = "write and open O(file); get O(log blocks + block)"
+space = "O(index + filter) per open table"

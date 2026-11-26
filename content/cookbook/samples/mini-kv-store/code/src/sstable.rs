@@ -11,6 +11,14 @@ pub const INDEX_EVERY: usize = 16;
 const MAGIC: u32 = 0x5353_5431;
 pub const FOOTER: usize = 32;
 
+/// How the store makes a change of names durable. A function pointer, so that a test can watch or fail it.
+pub(crate) type DirSync = fn(&Path) -> std::io::Result<()>;
+
+/// Syncing a file does not make its NAME durable: that needs a sync of the directory (opening one read-only works on Unix).
+pub(crate) fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    File::open(dir)?.sync_all()
+}
+
 pub struct SsTable {
     pub(crate) id: u64,
     pub(crate) path: PathBuf,
@@ -32,13 +40,13 @@ impl SsTable {
         &self.bloom
     }
 
-    fn path_for(dir: &Path, id: u64) -> PathBuf {
+    pub(crate) fn path_for(dir: &Path, id: u64) -> PathBuf {
         dir.join(format!("sst_{id:06}.sst"))
     }
 
-    /// Write to a temp file, fsync it, then rename: a reader never sees a half-written table under its final name.
-    /// The directory itself is not synced.
-    pub(crate) fn write(dir: &Path, id: u64, entries: &[Entry]) -> Result<SsTable> {
+    /// Write to a temp file, fsync it, rename it, sync the directory: a reader never sees a half-written table under its
+    /// final name, and when this returns the name is durable too, so the caller may discard what the table replaces.
+    pub(crate) fn write(dir: &Path, id: u64, entries: &[Entry], sync: DirSync) -> Result<SsTable> {
         let (mut buf, mut index) = (Vec::new(), Vec::new());
         for (i, (k, v)) in entries.iter().enumerate() {
             if i % INDEX_EVERY == 0 {
@@ -69,6 +77,7 @@ impl SsTable {
         f.write_all(&buf)?;
         f.sync_all()?;
         fs::rename(&tmp, &path)?;
+        sync(dir)?;
         Ok(SsTable { id, path, index, data_end, bloom })
     }
 
@@ -87,13 +96,26 @@ impl SsTable {
         if data_end_u > bloom_off_u || bloom_off_u > body_len {
             return Err(KvError::Corrupt("bad sstable offsets"));
         }
-        let mut pos = data_end_u;
-        let n = take_u32(&bytes, &mut pos)?;
-        let mut index = Vec::new();
+        let section = &bytes[data_end_u..bloom_off_u];
+        let mut pos = 0;
+        let n = take_u32(section, &mut pos)?;
+        let mut index: Vec<(Key, u64)> = Vec::new();
         for _ in 0..n {
-            let klen = take_u32(&bytes, &mut pos)? as usize;
-            let key = take(&bytes, &mut pos, klen)?.to_vec();
-            index.push((key, take_u64(&bytes, &mut pos)?));
+            let klen = take_u32(section, &mut pos)? as usize;
+            let key = take(section, &mut pos, klen)?.to_vec();
+            let off = take_u64(section, &mut pos)?;
+            // a valid checksum does not make offsets sensible: reads compute `end - start` and allocate that much
+            let in_order = match index.last() {
+                None => off == 0,
+                Some((last_key, last)) => *last_key < key && *last < off,
+            };
+            if !in_order || off >= data_end {
+                return Err(KvError::Corrupt("bad sstable index"));
+            }
+            index.push((key, off));
+        }
+        if pos != section.len() || index.is_empty() != (data_end == 0) {
+            return Err(KvError::Corrupt("bad sstable index"));
         }
         let bloom = Bloom::decode(&bytes[bloom_off_u..body_len])?;
         Ok(SsTable { id, path: path.to_path_buf(), index, data_end, bloom })

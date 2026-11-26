@@ -1,0 +1,32 @@
+slug = "which-delete-markers-can-go"
+title = "Which delete markers can go"
+mode = "write"
+level = "medium"
+stage = "many-layers"
+order = 8
+status = "ready"
+tags = ["merging runs", "delete markers", "space reclaim", "invariants"]
+teaches = [
+  "A delete marker can be dropped only when no older value is left for it to hide.",
+  "Merging must keep what every read would have answered: check that as an invariant.",
+  "Only neighbouring runs can be merged, because order is what says which version is newer.",
+]
+constraints = ["Runs of up to 200 000 entries"]
+follow_up = "1) This merges any neighbouring window. Why would merging two runs that are not neighbours give wrong answers? 2) If you always merge everything into one run, what becomes of markers, and what do you pay for that simplicity? 3) How much do you rewrite in total if you merge every time there are four runs of about the same size?"
+
+[[hints]]
+kind = "approach"
+text = "Take one marker in the window and ask which other runs can make it matter. Then ask which of their entries for that key is the one that counts."
+
+[[hints]]
+kind = "rust"
+text = "Inserting runs into a `BTreeMap` oldest first leaves the newest version of each key. `Vec::splice` replaces a range, and an `Option` can serve as the replacement. `binary_search_by_key` searches a sorted run."
+
+[[hints]]
+kind = "edge"
+text = "A window that does not start at the oldest run may still drop a marker, and a marker over an older marker hides nothing. Newer runs are not your concern."
+
+[solution]
+explanation = "A marker matters only when an older value would show through without it. That depends on the newest entry for the key below the window: a value means keep, a marker or nothing means drop. Runs are sorted, so each check is a binary search per older run."
+time = "O(window x log + markers x older runs x log)"
+space = "O(window)"

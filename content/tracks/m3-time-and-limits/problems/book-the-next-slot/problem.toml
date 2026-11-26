@@ -1,0 +1,33 @@
+slug = "book-the-next-slot"
+title = "Give every message a send time"
+mode = "write"
+level = "medium"
+stage = "one-idea-at-a-time"
+order = 3
+status = "ready"
+tags = ["scheduling", "time as an argument", "backpressure", "60-min"]
+teaches = ["A line that serves one thing at a time can be described by the moment it is next free; no queue is needed to plan it.", "Time spent idle is gone. It must not turn into permission to send a burst later.", "A refusal is more useful when it says exactly when to try again."]
+follow_up = "1) How would you let a short burst through without waiting, while keeping the same long-run rate? 2) Ten processes send to the same partner. What would you have to share?"
+related = ["M2", "B5"]
+
+[[hints]]
+kind = "approach"
+text = "Ask what you need to know to plan the next message. The messages already planned form one unbroken block of busy time, followed by nothing."
+
+[[hints]]
+kind = "rust"
+text = "`start = max(free_at, now)`. Keep `free_at` in a `u128`, because it can lie beyond the largest time. `u64::try_from` tells you whether a send time exists at all."
+
+[[hints]]
+kind = "edge"
+text = "A refusal changes nothing about the plan. A wait of exactly `max_wait_ms` is accepted. A pause never makes the line free earlier than it already was. If the send time would not fit in a `u64`, no later call can help: answer `Err(u64::MAX)`."
+
+[solution]
+explanation = "The whole plan is one number: when the line is next free. A message starts then, or now if that is later, and moves the number to its own end. A refusal reports how far the wait is above the limit, which is exactly how long the caller must let time pass. A pause only ever moves the number later."
+time = "O(1) per call"
+space = "O(1)"
+
+[[cookbook]]
+level = "related"
+page = "rate-limiter-lab"
+note = "Rate limiters that answer yes or no. None of them hands out send times."

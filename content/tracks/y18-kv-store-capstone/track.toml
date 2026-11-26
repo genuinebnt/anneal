@@ -1,0 +1,21 @@
+code = "Y18"
+name = "Key-value store capstone"
+section = "Y"
+tier = "sde3"
+order = 18
+summary = "Build a key-value store with a write-ahead log, sorted table files, recovery and compaction, in seven steps. Each step's starter carries the earlier steps."
+
+[[stages]]
+slug = "on-disk"
+name = "Bytes on disk"
+band = "medium"
+
+[[stages]]
+slug = "the-store"
+name = "The store"
+band = "hard"
+
+[[stages]]
+slug = "trust-it"
+name = "Trust it"
+band = "hard"

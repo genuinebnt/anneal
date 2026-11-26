@@ -1,0 +1,32 @@
+slug = "characters-in-a-few-keystrokes"
+title = "A set of characters in a few keystrokes"
+mode = "write"
+level = "medium"
+stage = "read-notation"
+order = 2
+status = "ready"
+tags = ["parsing", "escapes", "ranges", "Unicode", "binary search"]
+teaches = [
+  "A dash means \"range\" only when it sits between two characters. State that as a rule about what comes next, and the odd cases follow.",
+  "A set written as sorted ranges with gaps between them has one form only, so equal sets compare equal and a lookup can search by halves.",
+  "`char` has a hole at U+D800..=U+DFFF. Arithmetic on code points has to step over it.",
+]
+follow_up = "1) How would you add the union, intersection and difference of two sets in one pass each? 2) When would a 128-bit table for ASCII beat searching the ranges? 3) How would you add named classes such as `[:digit:]`?"
+related = ["S2", "Y16"]
+
+[[hints]]
+kind = "approach"
+text = "First read the notation into a list of (low, high) pairs without caring about order. Then sort the pairs and join the ones that overlap or touch. The complement is the list of gaps between the joined pairs."
+
+[[hints]]
+kind = "rust"
+text = "`char` compares by code point. `char::from_u32` returns `None` inside the hole, so write one small function for \"the next character\" and one for \"the previous\". `binary_search_by` or `partition_point` finds the only range that can hold a character."
+
+[[hints]]
+kind = "edge"
+text = "After a character, look for `-` followed by at least one more character. That second character may itself be a dash, or start an escape. Two ranges that meet across the hole, ending at U+D7FF and starting at U+E000, touch."
+
+[solution]
+explanation = "Reading takes one item at a time and, when a dash and something else follow, takes both as the other end of a range. Sorting by the low end makes joining a single pass: a range starts a new entry only if it begins after the character following the previous end. The complement walks those entries and keeps what lies between them. Because the result is sorted with gaps, `contains` searches by halves."
+time = "O(n log n) to parse, O(log n) per lookup"
+space = "O(n)"

@@ -396,7 +396,8 @@ export function SectionPage({ area }: { area: NavArea }) {
             </div>
           </div>
           {loading && <div className="cb-skel" aria-label="Loading"><i /><i /><i /></div>}
-          {sections.map((x) => {
+          {/* not before the tracks are here: a card changes from a plain box to a link, so it would be built twice */}
+          {!loading && sections.map((x) => {
             const all = rows.filter((r) => sectionOf(r.code) === x);
             const count = all.filter(shown).length;
             if (!all.length) return null;

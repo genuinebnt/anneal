@@ -1,0 +1,16 @@
+code = "Y16"
+name = "Regex engine: capstone"
+section = "Y"
+tier = "sde3"
+order = 16
+summary = "Build a regular-expression engine that stays fast on any pattern, then check it against a second one. Each step's starter carries the earlier steps."
+
+[[stages]]
+slug = "engine"
+name = "The engine"
+band = "hard"
+
+[[stages]]
+slug = "check-it"
+name = "Check it"
+band = "hard"

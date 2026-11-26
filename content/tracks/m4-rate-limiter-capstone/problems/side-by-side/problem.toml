@@ -1,0 +1,33 @@
+slug = "side-by-side"
+title = "Put them side by side"
+mode = "write"
+level = "hard"
+stage = "serve-many"
+order = 7
+status = "ready"
+tags = ["capstone", "rate limiting", "trait objects", "simulation", "90-min"]
+teaches = ["Trait objects let one harness drive limiters chosen at run time.", "A shared limit and a per-client limit with the same numbers protect different things: the backend, or the clients from each other.", "Replaying one recorded traffic through several policies turns an argument about algorithms into a table."]
+follow_up = "1) Which policy would you ship for a public API, and what would you measure first? 2) How would you combine a per-client limit with a global one, and who pays when the global one refuses?"
+related = ["M2", "L4"]
+
+[[hints]]
+kind = "approach"
+text = "Every entry is run alone, from a fresh start. Decide what turns a `Policy` into a working limiter, and whether `Shared` needs separate code at all."
+
+[[hints]]
+kind = "rust"
+text = "`Box<dyn Forget>` can hold any of the six once the two remaining meters implement `Forget`. For `Keyed` to hold boxes, the box itself must implement `Limiter` and `Forget`. `BTreeMap::entry(..).or_default()` collects per-client facts."
+
+[[hints]]
+kind = "edge"
+text = "Clamp times once per run, across all clients. A client's busiest stretch uses only that client's admitted times. `differs_from_first_at` always compares with entry 0. `held` is what remains after a sweep at the last time."
+
+[solution]
+explanation = "Each entry builds a keyed map of boxed limiters; shared scope is the same map with one key. The run clamps times once, records every decision and each admitted time, globally and per client, then sweeps to count the limiters that still matter. The busiest stretches use the two-position walk, and a final pass finds each entry's first disagreement with entry 0."
+time = "O(entries × requests × log clients)"
+space = "O(requests)"
+
+[[cookbook]]
+level = "exact"
+page = "rate-limiter-lab"
+note = "Part: the six algorithms behind one trait, replayed over seeded traffic with a shared and a per-key comparison. Its reports differ."

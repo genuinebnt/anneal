@@ -105,6 +105,12 @@
 .sx-crumb a{display:inline-block;line-height:32px}
 .sx-crumb a:hover{color:var(--fg)}
 .sx-crumb a.sx-name{font-weight:700;color:var(--fg)}
+.sx-also{list-style:none;margin:-10px 0 0;padding:0;display:grid;justify-items:start;font-size:12.5px;line-height:1.5;color:var(--mut)}
+.sx-also a{display:inline-block;padding:6px 0;color:var(--mut);text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:3px}
+.sx-also a:hover{color:var(--fg);text-decoration-color:currentColor}
+.sx-also b{font-weight:700;color:var(--fg)}
+.sx-also span{white-space:nowrap}
+@media (max-width:900px){.sx-also a{padding:13px 0}}
 .sx-about{display:grid;justify-items:start;gap:8px;font-size:12.5px;color:var(--dim)}
 .sx-about p{margin:0}
 .sx-about p a{display:inline-block;color:var(--mut);text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:3px}

@@ -1,0 +1,31 @@
+slug = "unsaved-changes"
+title = "Unsaved changes over a read-only catalogue"
+mode = "write"
+level = "medium"
+stage = "many-layers"
+order = 7
+status = "ready"
+tags = ["layers", "delete markers", "BTreeMap range", "peekable", "ordered merge"]
+teaches = [
+  "When a newer layer sits over older data, a delete must be stored, not just applied.",
+  "Two sorted layers are read together by always taking the smaller key, with the newer layer winning ties.",
+  "Fetch lazily: ask for the next item only when it is needed.",
+]
+follow_up = "1) Add a second draft on top of the first, such as a personal one over a team one. What has to change in your types? 2) If the catalogue changes between two pages, what can the editor see twice or miss? 3) Saving sends `changes()`. Which of them could be left out safely, and what would you need to know?"
+
+[[hints]]
+kind = "approach"
+text = "Decide what has to be remembered about a deleted key. Then picture two sorted lists, yours and the catalogue's, and how you would read the combined list from the top."
+
+[[hints]]
+kind = "rust"
+text = "`BTreeMap::range` accepts a `(Bound, Bound)` pair; for `String` keys searched by `&str` write `range::<str, _>`. `Iterator::peekable` lets you look at your next change before taking it."
+
+[[hints]]
+kind = "edge"
+text = "When both sides have the same key, only one row may come out, and both sides must move on. Ask the catalogue for its next entry only after you know the page is not full."
+
+[solution]
+explanation = "A delete is stored as a marker, because removing the local record would let the catalogue's entry show through. A page walks both sorted sides at once, taking the smaller key; the local change wins a tie. The next catalogue entry is requested only when another row is still needed."
+time = "O(rows walked x log changes)"
+space = "O(changes + page)"

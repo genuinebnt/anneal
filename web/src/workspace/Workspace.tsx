@@ -2,7 +2,7 @@ import { FollowUps } from "../components/trackBits";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Skeleton } from "../components/Skeleton";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { marked } from "marked";
 import { ApiError, api, type CookbookLevel, type CookbookLink, type Diagnostic, type ProblemDetail, type RunOutcome, type RunView, type ScratchResult, type TestOutcome } from "../api";
 import { Header } from "../components/Header";
@@ -16,7 +16,7 @@ import { changedLines } from "./diff";
 import { deriveLanes } from "./lanes";
 import { FocusTimer } from "../components/FocusTimer";
 import { useShowIdeas } from "../spoilers";
-import { Connections, SeriesComplete, placeName } from "../components/seriesBits";
+import { Connections, SeriesComplete, SeriesSwitch, placeName } from "../components/seriesBits";
 import { Ansi } from "./ansi";
 import { type TestCase, pythonTestCases, testCases } from "./testcases";
 import { type RaSession, type RaStatus, connectRa } from "./lsp";
@@ -89,7 +89,7 @@ function runLabel(r: RunView): [string, string] {
   }
 }
 
-export function Workspace({ id }: { id: string }) {
+export function Workspace({ id, from }: { id: string; from?: string }) {
   const q = useQuery({ queryKey: ["problem", id], queryFn: () => api.problem(id), retry: (n, e) => !(e instanceof ApiError && e.status === 423) && n < 2 });
   if (q.error instanceof ApiError && q.error.status === 423) {
     return (
@@ -126,10 +126,10 @@ export function Workspace({ id }: { id: string }) {
       </>
     );
   }
-  return <Loaded key={id} p={q.data} />;
+  return <Loaded key={id} p={q.data} from={from} />;
 }
 
-function Loaded({ p }: { p: ProblemDetail }) {
+function Loaded({ p, from }: { p: ProblemDetail; from: string | undefined }) {
   const { editor: editorSettings, set: saveEditor } = useEditorSettings();
   // Python practice problems have no scratch file, language server, formatter or lints: the editor and panels adapt.
   const py = p.language === "python";
@@ -157,9 +157,13 @@ function Loaded({ p }: { p: ProblemDetail }) {
   const [leftOpen, setLeftOpen] = useStoredNumber("anneal-left-open", 1);
   const [rightOpen, setRightOpen] = useStoredNumber("anneal-right-open", 1);
   const [file, setFile] = useState<"lib" | "main" | "tests" | "hidden" | "solution" | "done">("lib");
-  // Where this problem sits in a series (content/series), or null. It carries the completion view once solved.
-  const placeQuery = useQuery({ queryKey: ["problem-series", p.id], queryFn: () => api.problemSeries(p.id) });
+  // Where this problem sits in a series (content/series), or null. It carries the completion view once solved. `from`
+  // is the series in the address; without one, or with one that lacks the problem, the API picks. Switching keeps the
+  // old place on screen until the new one arrives.
+  const placeQuery = useQuery({ queryKey: ["problem-series", p.id, from ?? null], queryFn: () => api.problemSeries(p.id, from), placeholderData: keepPreviousData });
   const place = placeQuery.data ?? null;
+  // links to another problem keep the series being read
+  const keepSeries = place ? { series: place.series.id } : {};
   // The pager follows the series for a part of one, the track otherwise; nothing is linked until that is known.
   const pager = placeQuery.isPending ? null : place ? { prev: place.prev, next: place.next, at: place.number, of: place.total } : { prev: p.prev, next: p.next, at: p.position, of: p.count };
   // What names the method (tags, what this teaches, follow-ups) waits until it is known that this is not a part of a
@@ -488,7 +492,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
           <div className="sbr">
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               {pager?.prev ? (
-                <Link to="/p/$id" params={{ id: pager.prev }} style={{ color: "var(--dim)" }} aria-label="Previous problem">
+                <Link to="/p/$id" params={{ id: pager.prev }} search={keepSeries} style={{ color: "var(--dim)" }} aria-label="Previous problem">
                   ‹
                 </Link>
               ) : (
@@ -498,7 +502,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
                 {pager ? `${pager.at} / ${pager.of}` : "– / –"}
               </span>
               {pager?.next ? (
-                <Link to="/p/$id" params={{ id: pager.next }} style={{ color: "var(--dim)" }} aria-label="Next problem">
+                <Link to="/p/$id" params={{ id: pager.next }} search={keepSeries} style={{ color: "var(--dim)" }} aria-label="Next problem">
                   ›
                 </Link>
               ) : (
@@ -549,7 +553,10 @@ function Loaded({ p }: { p: ProblemDetail }) {
                   <div className="stack">
                     <h2 className="ptitle">{p.title}</h2>
                     {place ? (
-                      <p className="rx-meta sx-meta">{placeName(place)}{place.minutes ? `, about ${place.minutes} minutes` : ""}</p>
+                      <>
+                        <p className="rx-meta sx-meta">{placeName(place)}{place.minutes ? `, about ${place.minutes} minutes` : ""}</p>
+                        <SeriesSwitch place={place} id={p.id} />
+                      </>
                     ) : (
                       <p className="rx-meta">{p.track.code} · {p.stage.name}, stage {p.stage.position} of {p.stage.count}</p>
                     )}
@@ -1007,7 +1014,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
                       SOLVED{p.attempt.assisted ? " · ASSISTED" : ""}
                     </span>
                     {done?.next?.id ? (
-                      <Link to="/p/$id" params={{ id: done.next.id }}>
+                      <Link to="/p/$id" params={{ id: done.next.id }} search={keepSeries}>
                         Next {done.next.kind === "part" ? "part" : "step"} →
                       </Link>
                     ) : place ? (

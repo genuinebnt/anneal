@@ -1,10 +1,12 @@
 //! An LSM-tree-lite key-value store: write-ahead log, memtable, immutable sorted tables with bloom filters, full compaction.
 //!
 //! Split from the single-file capstone `cookbook/examples/capstones/mini_kv_store.rs`. The behaviour is meant to be the same,
-//! including its limitations, which `tests/limitations.rs` pins down.
+//! including the limitations that remain, which `tests/limitations.rs` pins down.
 
 mod bloom;
 mod codec;
+#[cfg(test)]
+mod faults;
 mod merge;
 mod sstable;
 mod store;

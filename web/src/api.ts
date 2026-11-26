@@ -1082,7 +1082,7 @@ export const api = {
   resolve: (id: string) => request<ProblemDetail>("POST", `/problems/${id}/resolve`),
   seriesList: () => request<SeriesSummary[]>("GET", "/series"),
   series: (id: string) => request<SeriesView>("GET", `/series/${id}`),
-  problemSeries: (id: string) => request<SeriesPlace | null>("GET", `/problems/${id}/series`),
+  problemSeries: (id: string, from?: string) => request<SeriesPlace | null>("GET", `/problems/${id}/series${from ? `?series=${encodeURIComponent(from)}` : ""}`),
   dsa: () => request<DsaOverview>("GET", "/dsa"),
   preview: (id: string) => request<{ previews: Record<Grade, ReviewPreview> | null; history: TryMark[] }>("GET", `/dsa/problems/${id}/preview`),
   statement: (id: string) => request<DsaStatement>("GET", `/dsa/problems/${id}/statement`),

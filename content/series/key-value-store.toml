@@ -1,0 +1,643 @@
+# The series "From bytes on disk to a key-value store": an order over problems, not a track. It copies and moves nothing.
+# required: do these first. helpful: keep closed (hidden = true); reveals_method = true means the link gives away how to
+# solve the part. cookbook: reference pages (slugs in content/cookbook), also closed by default; level is exact (solves
+# the task), similar (same technique, different task) or related (explains the idea). Minutes are estimates; nobody has
+# been timed.
+
+[series]
+id = "key-value-store"
+title = "From bytes on disk to a key-value store"
+summary = "Small parts give you what the capstone needs. Then you build a key-value store that recovers after a crash, one step at a time."
+note = "All times are estimates; nobody has been timed."
+capstone_title = "Capstone: build a key-value store"
+capstone_summary = "A log, sorted table files with their own index and filter, recovery after any crash, and compaction. Then a test that proves it."
+capstone_note = "From step 2 to step 6, each starter contains reference code for the earlier steps. It is a stand-in until the app can carry your own code from step to step, and it gives away those steps. Step 3 also gives the filter you repaired in part 12. Power loss itself cannot be tested here: the tests check the files each crash would leave."
+capstone_cookbook = "mini-kv-store-code"
+
+[[stage]]
+id = "bytes"
+name = "Bytes you can trust"
+
+[[stage]]
+id = "files"
+name = "Files that survive"
+
+[[stage]]
+id = "sorted"
+name = "Sorted data you can search"
+
+[[stage]]
+id = "layers"
+name = "Many layers, one answer"
+
+[[stage]]
+id = "proof"
+name = "Tests you can trust"
+
+[[part]]
+number = 1
+id = "l8-import-errors"
+stage = "bytes"
+status = "existing"
+minutes = 45
+blurb = "Report failures that a caller can act on"
+new_idea = "A typed error that keeps its cause"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y18-records-and-frames"]
+real_uses = "Every storage library: callers must tell a disk error from damaged data."
+know_first = "Enums, Result and the ? operator"
+
+[[part]]
+number = 2
+id = "l3-binary-frame-parser"
+stage = "bytes"
+status = "existing"
+minutes = 45
+blurb = "Take messages out of a byte slice"
+new_idea = "Reading a binary header and payload from a slice without panicking"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y17-read-from-the-back", "y18-records-and-frames"]
+real_uses = "Wire protocols, file formats, packet parsers."
+know_first = "Slices and borrowing"
+
+[[part]]
+number = 3
+id = "l5-const-fn-crc-table"
+stage = "bytes"
+status = "existing"
+minutes = 45
+blurb = "Compute a short number that changes when the bytes do"
+new_idea = "A cyclic redundancy check, bit by bit and by table"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y18-records-and-frames"]
+real_uses = "Ethernet, gzip, database pages and logs."
+
+[[part]]
+number = 4
+id = "y9-kv-store-wal"
+stage = "bytes"
+status = "existing"
+minutes = 75
+blurb = "Keep a map that survives a half-written record"
+new_idea = "Log every change before applying it, and trust only the good start of the log"
+reuses = "headers and lengths from part 2"
+required = ["l3-binary-frame-parser"]
+helpful = []
+used_again = ["y17-append-that-fails", "y17-unsaved-changes", "y18-records-and-frames", "y18-test-your-store"]
+real_uses = "Bitcask, Redis AOF, the write-ahead log of every database."
+cookbook = [
+    { level = "similar", page = "wal-append-log", note = "A log over a real file with the same torn-end rule. Read in full. It takes a tail of zeros as empty records.", source = "examples/os_and_storage/wal_append_log.rs", hidden = true },
+]
+
+[[part]]
+number = 5
+id = "y17-append-that-fails"
+stage = "files"
+status = "new"
+minutes = 60
+blurb = "Keep a log honest when the disk says no"
+new_idea = "A failed write may have written half; a failed sync cannot be retried"
+reuses = "the log of part 4"
+required = ["y9-kv-store-wal"]
+helpful = []
+used_again = ["y18-log-on-disk", "y18-reopen-after-a-crash"]
+real_uses = "PostgreSQL after fsyncgate, any append-only file on a disk that can fill up."
+
+[[part]]
+number = 6
+id = "y17-after-the-power-cut"
+stage = "files"
+status = "new"
+minutes = 60
+blurb = "Work out what is left when the power goes"
+new_idea = "File bytes and file names reach the disk separately"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y17-save-without-tearing", "y18-table-files", "y18-compact-safely"]
+real_uses = "Crash testing tools for databases and file systems."
+
+[[part]]
+number = 7
+id = "y17-save-without-tearing"
+stage = "files"
+status = "new"
+minutes = 90
+blurb = "Save a new version without risking the old one"
+new_idea = "Publish by temporary file, sync, rename and directory sync"
+reuses = "the crash rules of part 6"
+required = ["y17-after-the-power-cut"]
+helpful = [
+    { id = "y17-append-that-fails", why = "the same care about calls that fail", reveals_method = false, hidden = true },
+]
+used_again = ["y18-table-files", "y18-memtable-and-flush", "y18-reopen-after-a-crash", "y18-compact-safely"]
+real_uses = "Config files, package managers, database manifests."
+cookbook = [
+    { level = "similar", page = "file-locking-atomic-replace", note = "Its atomic replace overwrites one file by the same steps; that part was read. The locks are another subject.", source = "examples/os_and_storage/file_locking_atomic_replace.rs", hidden = true },
+]
+
+[[part]]
+number = 8
+id = "y17-read-from-the-back"
+stage = "files"
+status = "new"
+minutes = 60
+blurb = "Find one thing in a big file without reading it all"
+new_idea = "Following positions from a footer, and checking every number from disk"
+reuses = "bounds-checked reading from part 2"
+required = ["l3-binary-frame-parser"]
+helpful = []
+used_again = ["y18-table-files"]
+real_uses = "ZIP archives, Parquet, SSTables."
+
+[[part]]
+number = 9
+id = "s3-keep-sorted"
+stage = "sorted"
+status = "existing"
+minutes = 45
+blurb = "Find your place in sorted data"
+new_idea = "partition_point on a sorted slice"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y17-one-block-is-enough", "y18-table-files"]
+real_uses = "Any lookup in sorted data."
+
+[[part]]
+number = 10
+id = "y17-one-block-is-enough"
+stage = "sorted"
+status = "new"
+minutes = 75
+blurb = "Answer lookups with as little reading as possible"
+new_idea = "One remembered key per block says which block to read"
+reuses = "binary search from part 9"
+required = ["s3-keep-sorted"]
+helpful = []
+used_again = ["y18-table-files"]
+real_uses = "SSTable indexes, database primary indexes, Parquet statistics."
+
+[[part]]
+number = 11
+id = "f4-bloom-filter"
+stage = "sorted"
+status = "existing"
+minutes = 60
+blurb = "Answer \"surely not here\" from very little memory"
+new_idea = "Several bit positions per key give no false negatives"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y17-fix-filter-after-restart", "y18-table-files"]
+real_uses = "RocksDB, Cassandra, caches, web crawlers."
+
+[[part]]
+number = 12
+id = "y17-fix-filter-after-restart"
+stage = "sorted"
+status = "new"
+minutes = 45
+blurb = "Make something saved today readable tomorrow"
+new_idea = "A hash whose output is stored is part of the file format"
+reuses = "the filter of part 11"
+required = ["f4-bloom-filter"]
+helpful = []
+used_again = ["y18-table-files"]
+real_uses = "Any stored hash: filters, partitioning, content addresses."
+
+[[part]]
+number = 13
+id = "s4-btreemap-ranges"
+stage = "layers"
+status = "existing"
+minutes = 30
+blurb = "Take a range out of a sorted map"
+new_idea = "BTreeMap::range and its edge cases"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y17-unsaved-changes", "y18-memtable-and-flush"]
+real_uses = "Time ranges, indexes."
+
+[[part]]
+number = 14
+id = "y17-unsaved-changes"
+stage = "layers"
+status = "new"
+minutes = 75
+blurb = "Show the result of changes that are not applied yet"
+new_idea = "Over older data, a delete has to be remembered"
+reuses = "ranges from part 13, deletes from part 4"
+required = ["s4-btreemap-ranges"]
+helpful = []
+used_again = ["y17-which-delete-markers-can-go", "y18-memtable-and-flush"]
+real_uses = "LSM reads, database transaction buffers, overlay file systems."
+
+[[part]]
+number = 15
+id = "s6-merge-sorted-streams"
+stage = "layers"
+status = "existing"
+minutes = 75
+blurb = "Combine many sorted inputs into one"
+new_idea = "A heap over the front item of each input"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y18-compact-safely"]
+real_uses = "Compaction, external sorting, log merging."
+
+[[part]]
+number = 16
+id = "y17-which-delete-markers-can-go"
+stage = "layers"
+status = "new"
+minutes = 60
+blurb = "Shrink old data without changing any answer"
+new_idea = "A delete marker may go only when nothing older is left to hide"
+reuses = "delete markers from part 14"
+required = ["y17-unsaved-changes"]
+helpful = []
+used_again = ["y18-compact-safely"]
+real_uses = "Compaction in RocksDB and Cassandra, tombstone garbage collection."
+
+[[part]]
+number = 17
+id = "y5-catch-the-broken-queue"
+stage = "proof"
+status = "existing"
+minutes = 60
+blurb = "Write a test that catches bugs you have not seen"
+new_idea = "Random operations compared against a simple model"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y18-test-your-store"]
+real_uses = "Property testing of databases, queues and caches."
+
+[[capstone]]
+step = 1
+id = "y18-records-and-frames"
+minutes = 60
+blurb = "Fix the bytes that everything else relies on"
+new_idea = "A reader that tells a torn end from corruption"
+reuses = "parts 1 to 4"
+status = "new"
+prepared_by = ["l8-import-errors", "l3-binary-frame-parser", "l5-const-fn-crc-table", "y9-kv-store-wal"]
+required = ["y9-kv-store-wal"]
+helpful = []
+real_uses = "The log formats of storage engines."
+cookbook = [
+    { level = "similar", page = "mini-kv-store-code", note = "The Cookbook store's record and frame code. It shows the method; it accepts some records this step refuses.", source = "examples/capstones/mini_kv_store.rs", hidden = true },
+]
+
+[[capstone]]
+step = 2
+id = "y18-log-on-disk"
+minutes = 75
+blurb = "Put the log in a real file"
+new_idea = "Recovery that repairs the file it reads"
+reuses = "step 1 and parts 4 and 5"
+status = "new"
+prepared_by = ["y9-kv-store-wal", "y17-append-that-fails"]
+required = ["y18-records-and-frames", "y17-append-that-fails"]
+helpful = []
+real_uses = "Opening any append-only log after a crash."
+cookbook = [
+    { level = "similar", page = "mini-kv-store-code", note = "Its Wal. It does not undo a failed append, which this step requires.", source = "examples/capstones/mini_kv_store.rs", hidden = true },
+]
+
+[[capstone]]
+step = 3
+id = "y18-table-files"
+minutes = 120
+blurb = "Write sorted data once and find any key cheaply"
+new_idea = "An immutable file with its own index and filter"
+reuses = "parts 7, 8, 10 and 12"
+status = "new"
+prepared_by = ["y17-save-without-tearing", "y17-read-from-the-back", "y17-one-block-is-enough", "y17-fix-filter-after-restart"]
+required = ["y18-log-on-disk", "y17-one-block-is-enough"]
+helpful = [
+    { id = "y17-read-from-the-back", why = "reading a footer and checking what it says", reveals_method = true, hidden = true },
+]
+real_uses = "SSTables in LevelDB, RocksDB and Cassandra."
+cookbook = [
+    { level = "similar", page = "mini-kv-store-code", note = "Its SsTable. It does not sync the directory or check index offsets.", source = "examples/capstones/mini_kv_store.rs", hidden = true },
+]
+
+[[capstone]]
+step = 4
+id = "y18-memtable-and-flush"
+minutes = 90
+blurb = "Make the pieces behave like one map"
+new_idea = "Layers read newest first, and flushed in a safe order"
+reuses = "parts 13 and 14, steps 2 and 3"
+status = "new"
+prepared_by = ["s4-btreemap-ranges", "y17-unsaved-changes", "y17-save-without-tearing"]
+required = ["y18-table-files", "y17-unsaved-changes"]
+helpful = []
+real_uses = "The write path of every LSM store."
+cookbook = [
+    { level = "similar", page = "mini-kv-store-code", note = "Its Store. It reports a failed automatic flush as a failed write, and a reversed scan can panic.", source = "examples/capstones/mini_kv_store.rs", hidden = true },
+]
+
+[[capstone]]
+step = 5
+id = "y18-reopen-after-a-crash"
+minutes = 60
+blurb = "Start correctly from whatever a crash left"
+new_idea = "Handling every state a crash can leave on disk"
+reuses = "parts 6 and 7, steps 2 to 4"
+status = "new"
+prepared_by = ["y17-after-the-power-cut", "y17-save-without-tearing", "y17-append-that-fails"]
+required = ["y18-memtable-and-flush"]
+helpful = []
+real_uses = "Database startup and recovery."
+cookbook = [
+    { level = "similar", page = "mini-kv-store-code", note = "Its Store::open. It removes every .tmp file, which this step does not allow.", source = "examples/capstones/mini_kv_store.rs", hidden = true },
+]
+
+[[capstone]]
+step = 6
+id = "y18-compact-safely"
+minutes = 90
+blurb = "Reclaim space without ever losing or reviving a key"
+new_idea = "The order of removals decides what a crash leaves behind"
+reuses = "parts 7, 15 and 16, steps 3 to 5"
+status = "new"
+prepared_by = ["y17-which-delete-markers-can-go", "s6-merge-sorted-streams", "y17-save-without-tearing"]
+required = ["y18-reopen-after-a-crash", "y17-which-delete-markers-can-go"]
+helpful = [
+    { id = "y17-after-the-power-cut", why = "which removals can be on disk after a cut", reveals_method = false, hidden = true },
+]
+real_uses = "Compaction in LSM stores; any rewrite that replaces several files."
+cookbook = [
+    { level = "similar", page = "mini-kv-store-code", note = "Its compact and merge_sources. Its check_failed_delete shows the failure cases.", source = "examples/capstones/mini_kv_store.rs", hidden = true },
+]
+
+[[capstone]]
+step = 7
+id = "y18-test-your-store"
+minutes = 75
+blurb = "Show that your tests would notice a broken store"
+new_idea = "A model that knows what a crash may take away"
+reuses = "parts 4 and 17"
+status = "new"
+prepared_by = ["y5-catch-the-broken-queue", "y9-kv-store-wal"]
+required = ["y18-compact-safely", "y5-catch-the-broken-queue"]
+helpful = []
+real_uses = "Crash and fault testing of storage engines."
+cookbook = [
+    { level = "similar", page = "mini-kv-store-code", note = "Its model_test tears the last record; it is a test of one store, not a checker for many.", source = "examples/capstones/mini_kv_store.rs", hidden = true },
+]
+
+[[revisit]]
+part = "y9-kv-store-wal"
+after = "y17-save-without-tearing"
+how = "Write part 4 again from a blank starter."
+minutes = 30
+
+[[revisit]]
+part = "y17-one-block-is-enough"
+before = "y18-table-files"
+how = "Solve part 10 again before capstone step 3."
+minutes = 25
+
+[[revisit]]
+part = "y17-save-without-tearing"
+after = "y18-table-files"
+how = "Write the two functions of part 7 again from memory."
+minutes = 30
+
+[[revisit]]
+part = "y17-which-delete-markers-can-go"
+before = "y18-compact-safely"
+how = "Solve part 16 again before capstone step 6."
+minutes = 20
+
+[[readiness]]
+group = "Errors"
+concept = "A thiserror enum with From<io::Error> through #[from], and ? to convert"
+steps = [1, 2]
+parts = ["l8-import-errors"]
+note = "Part 1 teaches the enum and sources; #[from] is in the starter of step 1."
+
+[[readiness]]
+group = "Bytes"
+concept = "to_le_bytes, from_le_bytes, try_into on a slice, extend_from_slice"
+steps = [1, 3]
+parts = ["y9-kv-store-wal", "y17-append-that-fails", "y17-read-from-the-back"]
+
+[[readiness]]
+group = "Bytes"
+concept = "Bounds-checked reading: slice.get, split_first, checked_add; never panic on input"
+steps = [1, 3]
+parts = ["l3-binary-frame-parser", "y17-read-from-the-back", "y17-fix-filter-after-restart"]
+
+[[readiness]]
+group = "Bytes"
+concept = "CRC-32 with the reflected polynomial"
+steps = [1]
+parts = ["l5-const-fn-crc-table"]
+note = "Part 3 is CRC-8, most significant bit first. Step 1 gives the polynomial, the start and end values and a check value."
+
+[[readiness]]
+group = "Bytes"
+concept = "Checksummed length-prefixed frames and the torn-end rule"
+steps = [1, 2, 5]
+parts = ["y9-kv-store-wal"]
+
+[[readiness]]
+group = "Bytes"
+concept = "Tag bytes and tombstones: a delete as a record"
+steps = [1, 4]
+parts = ["y9-kv-store-wal"]
+
+[[readiness]]
+group = "Files"
+concept = "OpenOptions with read, create and append; set_len; sync_data; metadata"
+steps = [2]
+parts = ["y17-append-that-fails"]
+note = "The LogFile implementation for File is given in step 2."
+
+[[readiness]]
+group = "Files"
+concept = "What to do when an append or a sync fails"
+steps = [2]
+parts = ["y17-append-that-fails"]
+
+[[readiness]]
+group = "Files"
+concept = "What sync_all and a directory sync make durable"
+steps = [3, 4, 6]
+parts = ["y17-after-the-power-cut", "y17-save-without-tearing"]
+
+[[readiness]]
+group = "Files"
+concept = "File::create, write_all, fs::rename, fs::remove_file, syncing a directory"
+steps = [3, 6]
+parts = ["y17-save-without-tearing"]
+
+[[readiness]]
+group = "Files"
+concept = "fs::read_dir, file_type, file names as text, fs::read, create_dir_all, Path::join"
+steps = [3, 4, 5]
+parts = ["y17-save-without-tearing"]
+note = "Path::with_extension and Path::file_name are named in the hints of steps 3 and 5."
+
+[[readiness]]
+group = "Files"
+concept = "File::open, seek with SeekFrom, read_exact, short reads"
+steps = [3]
+parts = ["y17-read-from-the-back"]
+
+[[readiness]]
+group = "Files"
+concept = "strip_prefix and strip_suffix on names; numbers compared as numbers"
+steps = [5]
+parts = ["y17-save-without-tearing", "l3-binary-frame-parser"]
+
+[[readiness]]
+group = "Tables"
+concept = "partition_point on a sorted index; one block per lookup"
+steps = [3]
+parts = ["s3-keep-sorted", "y17-one-block-is-enough"]
+
+[[readiness]]
+group = "Tables"
+concept = "A filter with double hashing over a stable FNV-1a hash"
+steps = [3]
+parts = ["f4-bloom-filter", "y17-fix-filter-after-restart"]
+note = "Step 3 gives the filter's code."
+
+[[readiness]]
+group = "Tables"
+concept = "A footer that says where the other parts are, with validated offsets"
+steps = [3]
+parts = ["y17-read-from-the-back"]
+
+[[readiness]]
+group = "Layers"
+concept = "BTreeMap with Option values; range with a pair of Bounds; the panic on a reversed range"
+steps = [4]
+parts = ["s4-btreemap-ranges", "y17-unsaved-changes"]
+
+[[readiness]]
+group = "Layers"
+concept = "Reading through layers, some of which delete keys"
+steps = [4, 6]
+parts = ["y17-unsaved-changes", "y17-which-delete-markers-can-go"]
+
+[[readiness]]
+group = "Layers"
+concept = "Merging sorted inputs with BinaryHeap"
+steps = [6]
+parts = ["s6-merge-sorted-streams"]
+note = "std::cmp::Reverse, which turns the max-heap round, is named in the hint of step 6."
+
+[[readiness]]
+group = "Layers"
+concept = "When a delete marker can be dropped"
+steps = [6]
+parts = ["y17-which-delete-markers-can-go"]
+
+[[readiness]]
+group = "Ordering"
+concept = "The order of the durable steps in flush and compaction"
+steps = [4, 6]
+parts = ["y17-save-without-tearing"]
+note = "The order among the old removals is the new idea of step 6."
+
+[[readiness]]
+group = "Rust"
+concept = "A trait around a file so that tests can inject failures"
+steps = [2]
+parts = ["y17-append-that-fails"]
+note = "The default type parameter Wal<F: LogFile = File> is given."
+
+[[readiness]]
+group = "Rust"
+concept = "Passing a closure as impl FnMut"
+steps = [6]
+parts = []
+note = "Given in the signature of compact_with. You only call it."
+
+[[readiness]]
+group = "Testing"
+concept = "Random operations against a model, with a seeded generator"
+steps = [7]
+parts = ["y5-catch-the-broken-queue"]
+
+[[readiness]]
+group = "Testing"
+concept = "Cutting and damaging files to imitate crashes"
+steps = [7]
+parts = ["y9-kv-store-wal"]
+note = "The tests of steps 2 to 6 do this; reading them helps."
+
+[[connection]]
+idea = "Reading bytes that may be damaged or hostile"
+learn = ["l3-binary-frame-parser"]
+again = ["y17-read-from-the-back", "y17-fix-filter-after-restart"]
+apply = ["y18-records-and-frames", "y18-table-files"]
+
+[[connection]]
+idea = "A process that dies in the middle of a write"
+learn = ["y9-kv-store-wal"]
+again = ["y17-append-that-fails"]
+apply = ["y18-log-on-disk", "y18-reopen-after-a-crash"]
+
+[[connection]]
+idea = "Replacing files when a crash can come at any moment"
+learn = ["y17-after-the-power-cut"]
+again = ["y17-save-without-tearing"]
+apply = ["y18-table-files", "y18-memtable-and-flush", "y18-compact-safely"]
+
+[[connection]]
+idea = "Deleting a key that older data still holds"
+learn = ["y9-kv-store-wal"]
+again = ["y17-unsaved-changes", "y17-which-delete-markers-can-go"]
+apply = ["y18-memtable-and-flush", "y18-compact-safely"]
+
+[[connection]]
+idea = "Finding one key without reading everything"
+learn = ["s3-keep-sorted"]
+again = ["y17-one-block-is-enough", "f4-bloom-filter"]
+apply = ["y18-table-files"]
+
+[[connection]]
+idea = "Knowing whether a store is still right"
+learn = ["y5-catch-the-broken-queue"]
+apply = ["y18-test-your-store"]
+
+[[side_path]]
+id = "f5-varint-codec"
+why = "side path after part 2: shorter integers; the store uses fixed widths"
+after = "l3-binary-frame-parser"
+
+[[side_path]]
+id = "f2-slotted-page"
+why = "side path after part 10: how stores that update in place lay out a page"
+after = "y17-one-block-is-enough"
+
+[[side_path]]
+id = "s5-binary-heap"
+why = "before part 15 if heaps are new to you: build one yourself"
+before = "s6-merge-sorted-streams"
+
+[[side_path]]
+id = "y12-mvcc-snapshot-isolation"
+why = "side path after the capstone: versions instead of one newest value"
+after = "y18-compact-safely"
+
+[[side_path]]
+id = "y5-shrink-failing-input"
+why = "after step 7: turn a long failing history into a short one"
+after = "y18-test-your-store"

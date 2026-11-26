@@ -67,6 +67,21 @@ test.describe("/rust", () => {
     });
 });
 
+// A card is a plain box until its track is known and a link after, so one drawn early is thrown away and built again.
+test("no track card is drawn before the tracks are here", async ({ page }) => {
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route("**/api/tracks", async (route) => {
+        await held;
+        await route.continue();
+    });
+    await page.goto("/rust");
+    await expect(page.locator(".cb-skel")).toBeVisible();
+    await expect(page.locator(".s-trk")).toHaveCount(0);
+    release();
+    await expect(page.locator("a.s-trk").first()).toBeVisible();
+});
+
 test.describe("reduced motion", () => {
     test.use({ contextOptions: { reducedMotion: "reduce" } });
     test("nothing animates and the numbers are final at once", async ({ page }) => {
