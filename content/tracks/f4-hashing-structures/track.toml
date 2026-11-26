@@ -3,7 +3,7 @@ name = "Hashing & purpose-built structures"
 section = "F"
 tier = "sde3"
 order = 4
-summary = "Hashing as an engineering tool: a Bloom filter, a count-min sketch, a consistent-hash ring and an open-addressing hash map."
+summary = "Hashing as an engineering tool: a Bloom filter, a count-min sketch, a consistent-hash ring, an open-addressing hash map and an O(1) LRU cache, then union-find, a prefix trie and range queries."
 
 [[stages]]
 slug = "sketches-and-rings"
@@ -13,4 +13,9 @@ band = "medium"
 [[stages]]
 slug = "tables"
 name = "Build a table"
+band = "hard"
+
+[[stages]]
+slug = "query-structures"
+name = "Query structures"
 band = "hard"

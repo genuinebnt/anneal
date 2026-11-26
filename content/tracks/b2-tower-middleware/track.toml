@@ -1,0 +1,11 @@
+code = "B2"
+name = "Tower & middleware"
+section = "B"
+tier = "core"
+order = 2
+summary = "The Service trait by hand: readiness, backpressure and middleware that survives cancellation."
+
+[[stages]]
+slug = "build-it"
+name = "Build it"
+band = "hard"

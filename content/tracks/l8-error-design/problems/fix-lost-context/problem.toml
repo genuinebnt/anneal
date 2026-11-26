@@ -1,0 +1,47 @@
+slug = "fix-lost-context"
+title = "Fix: the report that forgot why"
+mode = "fix"
+level = "medium"
+stage = "conversion-and-crates"
+order = 2
+status = "ready"
+tags = ["anyhow", "context", "downcast_ref", "error chain"]
+teaches = [
+  "`anyhow!(\"...: {e}\")` turns an error into text. The type is gone, so nothing can downcast it or walk below it.",
+  "`.context(..)` and `.with_context(..)` add a layer on top and keep the original error underneath.",
+  "Decide by type (`downcast_ref`, walking `chain()`), never by searching a message.",
+]
+follow_up = "1) What do `{}`, `{:#}` and `{:?}` print for an `anyhow::Error` with two layers of context? 2) Why does a library return an enum while an application returns `anyhow::Result`? 3) What is the cost of `.context(format!(..))` on the success path, and what does `with_context` change?"
+related = ["L8"]
+crates = ["anyhow"]
+
+[rules]
+forbid_methods = ["map_err"]
+
+[[hints]]
+kind = "approach"
+text = "Every place that builds a new error out of an old one's text is a place where the cause is thrown away. Attach a message to the existing error instead."
+
+[[hints]]
+kind = "rust"
+text = "`use anyhow::Context;` gives `.context(msg)` and `.with_context(|| ..)` on both `Result` and `Option`. For a missing key you need your own typed error as the root: `anyhow::Error::new(MissingKey(..))`, or return it with `?` from `ok_or_else`."
+
+[[hints]]
+kind = "edge"
+text = "The error you classify may be wrapped by code you did not write. `err.chain()` yields every layer, and each can be tried with `downcast_ref::<T>()`. `err.downcast_ref` also sees through anyhow's own context layers."
+
+[solution]
+explanation = "The starter formatted each cause into a new message. That reads fine on screen, which is why the bug survives review, but the new error has no source and no type. `with_context` pushes a message onto the chain and leaves the cause where it was, and `raw` creates a `MissingKey` value rather than a sentence about one. `exit_code` can then walk the chain and ask each layer what it is. Syntax to remember: `.with_context(|| format!(\"loading {service}\"))?`, `err.chain().any(|c| c.is::<MissingKey>())`."
+time = "O(layers) per report"
+space = "O(layers)"
+
+[[cookbook]]
+level = "related"
+page = "choosing-an-error-type"
+section = "cb-pitfalls"
+note = "Ways an error loses its type, so downcasting stops working."
+
+[[cookbook]]
+level = "similar"
+page = "anyhow-context"
+note = "Context layers, chain() and downcast_ref while loading a JSON file."

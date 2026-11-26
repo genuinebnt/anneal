@@ -1,0 +1,32 @@
+slug = "send-a-complete-answer"
+title = "Send a complete answer"
+mode = "write"
+level = "medium"
+stage = "one-piece-at-a-time"
+order = 3
+status = "ready"
+tags = ["io::Write", "write_all", "chunked encoding", "response splitting"]
+teaches = [
+  "Writing against `W: Write` makes the same code serve a socket, a file and a test.",
+  "`write` may take part of the buffer; `write_all` loops until done.",
+  "Framing is a promise to the reader, so nothing from the caller may be able to change it.",
+]
+follow_up = "1) When would you gather the head and a small body into one `write_all`, and what does that have to do with Nagle's algorithm? 2) Make `send` async: what happens to a half-written reply if the future is dropped?"
+related = ["B4", "B8"]
+
+[[hints]]
+kind = "approach"
+text = "Check everything the caller gave you before writing the first byte. Then head, then the body according to its kind."
+
+[[hints]]
+kind = "rust"
+text = "`write!` works on any `io::Write`, including `Vec<u8>`. `?` on each write gives you \"stop at the first error\" for free."
+
+[[hints]]
+kind = "edge"
+text = "A chunk of length zero means \"the end\", so an empty piece must send nothing. Flush after each piece and at the end."
+
+[solution]
+explanation = "Validation happens before any byte is written. All writes use `write_all` (directly or through `write!`), which loops over partial writes. A for loop over the pieces, with a flush inside it, gives streaming, and `?` stops it at the first error."
+time = "O(bytes sent)"
+space = "O(largest piece)"

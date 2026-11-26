@@ -1,0 +1,57 @@
+slug = "rate-limiter"
+title = "A rate limiter on a clock you control"
+mode = "write"
+level = "hard"
+stage = "core-and-extend"
+order = 1
+status = "ready"
+tags = ["rate limiting", "token bucket", "fake clock", "machine-coding", "120-min"]
+teaches = [
+    "Passing the clock in makes time-dependent behaviour testable exactly, with no sleeping.",
+    "Integer bookkeeping in the smallest time unit loses nothing, however often it is updated.",
+    "Two limiters with the same average rate can allow very different bursts.",
+]
+follow_up = "1) Your limiter runs on ten servers. What is the real limit, and what are the options? 2) When would you reject a request, and when delay it? 3) How would you store one number per key instead of two (look up GCRA)? 4) What would you change to share a limiter between threads?"
+related = ["L4", "L5", "S4"]
+
+[[hints]]
+kind = "approach"
+text = "Do not add tokens on a timer. Work out what has accrued when somebody asks, from the time that has passed. If you keep the balance in milliseconds of credit, one token costs `refill_every_ms` and every elapsed millisecond earns one unit, with no division and no remainder to lose."
+
+[[hints]]
+kind = "rust"
+text = "Make each limiter generic over `C: Clock`. Use `u128`, or saturating arithmetic, for `capacity × interval` and for elapsed time. A `VecDeque<u64>` suits a log of admitted times. For the keyed limiter, `HashMap::entry` plus something that keeps keys in order of last use."
+
+[[hints]]
+kind = "edge"
+text = "Cap the credit at a full bucket, so idle time beyond that is forgotten. Never move your last-seen time backwards: a clock that jumps back and returns must earn nothing twice. In a window of length `w` ending now, an event at `now - w` is already out. To forget idle keys cheaply, look only at the oldest ones; examining every key on every call is too slow."
+
+[solution]
+explanation = "The bucket stores credit in milliseconds, capped at capacity times the refill interval. On each call it adds the time passed since the latest time it has seen, then spends one interval per token if it can, so polling often or rarely gives the same answers. retry_after is the missing credit. The sliding log keeps the admitted timestamps, drops those that have left the window and admits while fewer than the limit remain, so its memory never exceeds the limit. The keyed limiter keeps, beside the map, a queue of (time, key) in order of use; each call pops entries from the front that are old enough and removes a key only if that entry still describes its latest use."
+time = "bucket O(1); sliding log O(1) amortised; keyed O(1) amortised expected"
+space = "bucket O(1); log O(limit); keyed O(active keys + calls within the idle time)"
+
+[[cookbook]]
+level = "related"
+page = "tower-service-layer"
+note = "Where a limiter sits in a service."
+
+[[cookbook]]
+level = "similar"
+page = "systems-design-in-code"
+note = "Its Q2: five limiter algorithms side by side."
+
+[[cookbook]]
+level = "similar"
+page = "concurrency-interview-questions"
+note = "Its Q2: a token bucket shared between threads."
+
+[[cookbook]]
+level = "exact"
+page = "rate-limiter-lab"
+note = "Part: token bucket, sliding log, and a per-key wrapper with idle eviction by a periodic sweep over all keys. Not covered: retry_after, backwards clocks, the no-full-scan rule."
+
+[[cookbook]]
+level = "exact"
+page = "token-bucket"
+note = "Part: a token bucket with an injected clock, in floating point."

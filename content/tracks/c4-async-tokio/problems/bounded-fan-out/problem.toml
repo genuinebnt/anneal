@@ -1,0 +1,48 @@
+slug = "bounded-fan-out"
+title = "At most N in flight"
+mode = "write"
+level = "medium"
+stage = "understand-it"
+order = 2
+status = "ready"
+tags = ["tokio", "JoinSet", "bounded concurrency", "fail fast"]
+teaches = [
+  "Spawning everything and limiting later still creates every future at once. Create the next one only when a slot frees up.",
+  "`JoinSet` yields results in completion order; carry the input index to put them back in order.",
+  "Aborting a task is a request. The task's future is dropped only when the runtime gets to it, so await the shutdown before returning.",
+]
+follow_up = "1) How does `futures::StreamExt::buffer_unordered` differ from this, and what runs on which task? 2) When is a `Semaphore` the better limiter? 3) What happens to your tasks if the caller drops the `fan_out` future itself?"
+related = ["C4", "C2"]
+crates = ["tokio"]
+
+[[hints]]
+kind = "approach"
+text = "Keep one loop with two phases: while fewer than `limit` tasks are running and inputs remain, start one; then wait for any one to finish. Never wait for a particular one."
+
+[[hints]]
+kind = "rust"
+text = "`tokio::task::JoinSet`: `spawn` an async block that returns `(index, result)`, take them with `join_next().await`. A `JoinError` that is a panic can be passed on with `std::panic::resume_unwind(e.into_panic())`."
+
+[[hints]]
+kind = "edge"
+text = "On the first error, `set.shutdown().await` aborts the rest and waits until their futures are gone. Dropping a `JoinSet` only asks."
+
+[solution]
+explanation = "The loop fills the free slots, then waits for whichever task finishes first, so one slow input never holds the others back (processing in chunks of `limit` does). `f` is called only when a slot is free, which bounds memory as well as concurrency. Results are written into a slot chosen by input index. On the first error `shutdown().await` both aborts and joins, so when the function returns nothing is still running. Syntax to remember: `JoinSet::spawn`, `join_next`, `shutdown`, `JoinError::into_panic`."
+time = "O(n) spawns"
+space = "O(n) results, O(limit) running tasks"
+
+[[cookbook]]
+level = "related"
+page = "joinset-semaphore"
+note = "JoinSet and a limit. Warning: it spawns every task up front, which this problem forbids."
+
+[[cookbook]]
+level = "related"
+page = "async-streams-concurrency"
+note = "buffered and buffer_unordered: bounded concurrency without spawning."
+
+[[cookbook]]
+level = "similar"
+page = "structured-concurrency-cancellation"
+note = "A scope that joins tasks as they finish and cancels the rest on the first failure."

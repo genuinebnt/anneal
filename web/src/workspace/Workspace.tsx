@@ -4,7 +4,7 @@ import { Skeleton } from "../components/Skeleton";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { marked } from "marked";
-import { ApiError, api, type Diagnostic, type ProblemDetail, type RunOutcome, type RunView, type ScratchResult, type TestOutcome } from "../api";
+import { ApiError, api, type CookbookLevel, type CookbookLink, type Diagnostic, type ProblemDetail, type RunOutcome, type RunView, type ScratchResult, type TestOutcome } from "../api";
 import { Header } from "../components/Header";
 import { Celebration, celebrateOff } from "../components/kit";
 import { BAND_LABEL, LEVEL_COLOR, modeColor, pad2 } from "../components/bits";
@@ -15,11 +15,51 @@ import { useEditorSettings } from "../settings";
 import { changedLines } from "./diff";
 import { deriveLanes } from "./lanes";
 import { FocusTimer } from "../components/FocusTimer";
+import { useShowIdeas } from "../spoilers";
+import { Connections, SeriesComplete, placeName } from "../components/seriesBits";
 import { Ansi } from "./ansi";
 import { type TestCase, pythonTestCases, testCases } from "./testcases";
 import { type RaSession, type RaStatus, connectRa } from "./lsp";
 
 type LeftTab = "problem" | "hints" | "solution" | "related";
+
+const COOKBOOK_LEVELS: { level: CookbookLevel; label: string; about: string }[] = [
+  { level: "related", label: "Related", about: "explains the idea" },
+  { level: "similar", label: "Similar", about: "the technique on another problem" },
+  { level: "exact", label: "Exact", about: "solves this, or a named part" },
+];
+
+/** Cookbook pages for this problem, one closed fold per level. They open in a new tab, so the editor stays put. */
+function CookbookHelp({ links }: { links: CookbookLink[] }) {
+  return (
+    <div className="cbhelp">
+      <div className="lab">FROM THE COOKBOOK</div>
+      {COOKBOOK_LEVELS.map(({ level, label, about }) => {
+        const here = links.filter((l) => l.level === level);
+        return here.length === 0 ? null : (
+          <details key={level} className="hint lock">
+            <summary>
+              <strong>{label}</strong>
+              <small>
+                {about} · {here.length} page{here.length === 1 ? "" : "s"}
+              </small>
+            </summary>
+            <ul>
+              {here.map((l) => (
+                <li key={`${l.page}#${l.section ?? ""}`}>
+                  <a href={`/cookbook/p/${l.page}${l.section ? `#${l.section}` : ""}`} target="_blank" rel="noopener">
+                    {l.title} ↗
+                  </a>
+                  <p className="note">{l.note}</p>
+                </li>
+              ))}
+            </ul>
+          </details>
+        );
+      })}
+    </div>
+  );
+}
 type ConsoleTab = "compiler" | "output" | "timeline";
 
 const CONSOLE_MIN = 120;
@@ -100,8 +140,9 @@ function Loaded({ p }: { p: ProblemDetail }) {
   const [consoleTab, setConsoleTab] = useState<ConsoleTab>("compiler");
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [consoleH, setConsoleH] = useStoredNumber("anneal-console-height", 260);
-  const [leftW, setLeftW] = useStoredNumber("anneal-left-width", 360);
-  const [rightW, setRightW] = useStoredNumber("anneal-right-width", 340);
+  // 0 means the reader has not dragged the pane: it then takes the default width of the layout it is in.
+  const [storedLeftW, setLeftW] = useStoredNumber("anneal-left-width", 0);
+  const [storedRightW, setRightW] = useStoredNumber("anneal-right-width", 0);
   // Under 900 px the panes (problem, code, tests) are shown one at a time, whatever the saved layout says.
   const [narrow, setNarrow] = useState(() => window.matchMedia("(max-width: 900px)").matches);
   useEffect(() => {
@@ -113,7 +154,16 @@ function Loaded({ p }: { p: ProblemDetail }) {
   const [mobilePane, setMobilePane] = useState<"l" | "c" | "r">("l");
   const [leftOpen, setLeftOpen] = useStoredNumber("anneal-left-open", 1);
   const [rightOpen, setRightOpen] = useStoredNumber("anneal-right-open", 1);
-  const [file, setFile] = useState<"lib" | "main" | "tests" | "hidden" | "solution">("lib");
+  const [file, setFile] = useState<"lib" | "main" | "tests" | "hidden" | "solution" | "done">("lib");
+  // Where this problem sits in a series (content/series), or null. It carries the completion view once solved.
+  const placeQuery = useQuery({ queryKey: ["problem-series", p.id], queryFn: () => api.problemSeries(p.id) });
+  const place = placeQuery.data ?? null;
+  // What names the method (tags, what this teaches, follow-ups) waits until it is known that this is not a part of a
+  // series, or until the part is solved. While the answer is on its way, nothing is shown that might have to be hidden.
+  const outsideSeries = placeQuery.isSuccess && !place;
+  const openAboutMethod = outsideSeries || p.attempt.solved;
+  const [showIdeas] = useShowIdeas();
+  const [tagsAsked, setTagsAsked] = useState(false);
   const [main, setMain] = useState(p.scratch);
   const [scratchOut, setScratchOut] = useState<ScratchResult | null>(null);
   const [lastAction, setLastAction] = useState<"tests" | "scratch">("tests");
@@ -265,14 +315,23 @@ function Loaded({ p }: { p: ProblemDetail }) {
     // Solving unlocks things only the full problem carries.
     if (out.run.status === "passed") qc.invalidateQueries({ queryKey: ["problem", p.id] });
     setSelected(null);
-    if (out.run.kind === "submit" && out.run.status === "passed" && !celebrateOff()) {
+    // A part of a series shows its completion view beside the code in place of the popup.
+    const passed = out.run.kind === "submit" && out.run.status === "passed" && out.attempt.solved;
+    if (passed) {
+      for (const queryKey of [["problem-series"], ["series"], ["reviews"]]) qc.invalidateQueries({ queryKey });
+    }
+    if (passed && place) {
+      setFile("done");
+      setMobilePane("c");
+    } else if (out.run.kind === "submit" && out.run.status === "passed" && !celebrateOff()) {
       setWin({ passed: out.run.passed, total: out.run.total, ms: out.run.duration_ms, hints: out.attempt.hints_revealed, assisted: out.attempt.assisted });
     }
     const firstFail = out.run.tests.find((t) => t.outcome !== "passed");
     setOpen(firstFail ? (firstFail.suite === "hidden" ? "hidden:" : "") + firstFail.name : null);
     setLastAction("tests");
-    // The console comes back after every run, on whichever tab has something to say.
-    if (out.run.diagnostics.length) showConsole("compiler");
+    // The console comes back after every run, on whichever tab has something to say; the completion view takes the room.
+    if (passed && place) setConsoleOpen(false);
+    else if (out.run.diagnostics.length) showConsole("compiler");
     else if (out.run.tests.some((t) => t.stdout)) showConsole("output");
     else showConsole("compiler");
   };
@@ -323,6 +382,8 @@ function Loaded({ p }: { p: ProblemDetail }) {
     submit.mutate();
   };
   const failure = run.error ?? submit.error ?? scratch.error;
+  const done = place?.done && p.attempt.solved ? place.done : null;
+  const centre = file === "done" && !(place && p.attempt.solved) ? "lib" : file;
 
   const runs = p.runs;
   const latest = runs.at(-1);
@@ -336,8 +397,13 @@ function Loaded({ p }: { p: ProblemDetail }) {
   const names = useMemo(() => (py ? pyTestNames(p.visible_tests) : testNames(p.visible_tests)), [p.visible_tests, py]);
   const cases = useMemo(() => (py ? pythonTestCases(p.visible_tests) : testCases(p.visible_tests)), [p.visible_tests, py]);
   const hiddenCases = useMemo(() => (p.hidden_tests ? (py ? pythonTestCases(p.hidden_tests) : testCases(p.hidden_tests)) : null), [p.hidden_tests, py]);
-  const budget = BUDGET[p.mode][p.level];
+  // A series gives its own estimate for the part; everything else has the interview budget for its kind.
+  const budget = place?.minutes ?? BUDGET[p.mode][p.level];
   const area = areaOf(p.track.section);
+  // a series part takes the pane widths of docs/mockups/series.html
+  const leftW = storedLeftW || (place ? 340 : 360);
+  const rightW = storedRightW || (place ? 270 : 340);
+  const overBudget = elapsed > budget * 60;
 
   return (
     <>
@@ -361,7 +427,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
           onClose={() => setWin(null)}
         />
       )}
-      <main>
+      <main className={place ? "sx-ws" : undefined}>
         {p.attempt.resolve && (
           <div className="resolve-bar">
             <b>{p.attempt.solved ? "RE-SOLVED" : "RE-SOLVE"}</b>
@@ -375,34 +441,46 @@ function Loaded({ p }: { p: ProblemDetail }) {
           </div>
         )}
         <div className="subbar">
-          <div className="crumb">
-            <Link to={`/${area}`} style={{ color: modeColor(p.mode) }}>
-              {SECTION_NAMES[p.track.section].toUpperCase()}
-            </Link>
-            <span>/</span>
-            <Link to="/t/$track" params={{ track: p.track.slug }}>
-              {p.track.code} {p.track.name.toUpperCase()}
-            </Link>
-            <span>/</span>
-            <span>
-              <span style={{ color: LEVEL_COLOR[p.stage.band] }}>{BAND_LABEL[p.stage.band]}</span> · {p.stage.name.toUpperCase()}
-            </span>
-          </div>
-          <div className="vr" />
-          <span className="wtitle">{p.title}</span>
-          <div className="subpills">
-            <span className="pill solid" style={{ background: modeColor(p.mode) }}>
-              {py ? "PYTHON" : p.mode === "fix" ? "FIX THIS" : p.mode === "stage" ? "STAGE" : "WRITE IT"}
-            </span>
-            <span className="pill" style={{ borderColor: LEVEL_COLOR[p.level], color: LEVEL_COLOR[p.level] }}>
-              {p.level.toUpperCase()}
-            </span>
-            {p.tags.slice(0, 3).map((t) => (
-              <span className="pill" key={t}>
-                {t}
-              </span>
-            ))}
-          </div>
+          {place ? (
+            <nav className="crumb sx-crumb" aria-label="Breadcrumb">
+              <Link to="/rust">Rust</Link>
+              <span>/</span>
+              <Link className="sx-name" to="/rust/series/$id" params={{ id: place.series.id }}>{place.series.title}</Link>
+              <span>/</span>
+              <span>{placeName(place)}</span>
+            </nav>
+          ) : (
+            <>
+              <div className="crumb">
+                <Link to={`/${area}`} style={{ color: modeColor(p.mode) }}>
+                  {SECTION_NAMES[p.track.section].toUpperCase()}
+                </Link>
+                <span>/</span>
+                <Link to="/t/$track" params={{ track: p.track.slug }}>
+                  {p.track.code} {p.track.name.toUpperCase()}
+                </Link>
+                <span>/</span>
+                <span>
+                  <span style={{ color: LEVEL_COLOR[p.stage.band] }}>{BAND_LABEL[p.stage.band]}</span> · {p.stage.name.toUpperCase()}
+                </span>
+              </div>
+              <div className="vr" />
+              <span className="wtitle">{p.title}</span>
+              <div className="subpills">
+                <span className="pill solid" style={{ background: modeColor(p.mode) }}>
+                  {py ? "PYTHON" : p.mode === "fix" ? "FIX THIS" : p.mode === "stage" ? "STAGE" : "WRITE IT"}
+                </span>
+                <span className="pill" style={{ borderColor: LEVEL_COLOR[p.level], color: LEVEL_COLOR[p.level] }}>
+                  {p.level.toUpperCase()}
+                </span>
+                {outsideSeries && p.tags.slice(0, 3).map((t) => (
+                  <span className="pill" key={t}>
+                    {t}
+                  </span>
+                ))}
+              </div>
+            </>
+          )}
           <div className="sbr">
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               {p.prev ? (
@@ -423,9 +501,9 @@ function Loaded({ p }: { p: ProblemDetail }) {
                 <span style={{ color: "var(--line)" }}>›</span>
               )}
             </div>
-            <div className="clock" title={`Interview budget for a ${p.level} ${p.mode === "fix" ? "fix-this" : "problem"}: ${budget} minutes`}>
-              <span className="dot" style={{ background: elapsed > budget * 60 ? "var(--bad)" : modeColor(p.mode) }} />
-              <small>PRACTICE</small>
+            <div className={`clock${overBudget ? " over" : ""}`} title={place?.minutes ? `This part is estimated at ${budget} minutes; nobody has been timed` : `Interview budget for a ${p.level} ${p.mode === "fix" ? "fix-this" : "problem"}: ${budget} minutes`}>
+              <span className="dot" style={{ background: overBudget ? "var(--bad)" : modeColor(p.mode) }} />
+              <small>{place ? "Practice" : "PRACTICE"}</small>
               <span style={{ color: "var(--fg)" }}>{mmss(elapsed)}</span>
               <small>/ {budget}:00</small>
             </div>
@@ -461,10 +539,13 @@ function Loaded({ p }: { p: ProblemDetail }) {
               <div className="pbody">
                 {left === "problem" && (
                   <div className="stack">
-                    <div className="lab">
-                      {p.track.code} · {p.stage.name.toUpperCase()} · {p.stage.position} OF {p.stage.count}
-                    </div>
+                    {!place && (
+                      <div className="lab">
+                        {p.track.code} · {p.stage.name.toUpperCase()} · {p.stage.position} OF {p.stage.count}
+                      </div>
+                    )}
                     <h2 className="ptitle">{p.title}</h2>
+                    {place && <p className="sx-meta">{placeName(place)}{place.minutes ? `, about ${place.minutes} minutes` : ""}</p>}
                     <div className="md" dangerouslySetInnerHTML={{ __html: md(p.statement) }} />
                     {p.rules && (
                       <div className="stack" style={{ gap: 8 }}>
@@ -512,7 +593,31 @@ function Loaded({ p }: { p: ProblemDetail }) {
                         </div>
                       </div>
                     )}
-                    {p.teaches.length > 0 && (
+                    {place && <Connections place={place} solved={p.attempt.solved} />}
+                    {place && (
+                      // what the breadcrumb row shows outside a series: what kind of problem this is, its track and its tags
+                      <div className="sx-about">
+                        <p>
+                          {p.level} · {py ? "Python" : p.mode === "fix" ? "fix this" : p.mode === "stage" ? "stage" : "write it"} ·{" "}
+                          <Link to="/t/$track" params={{ track: p.track.slug }}>{p.track.code} {p.track.name}</Link>
+                        </p>
+                        {p.tags.length > 0 &&
+                          (p.attempt.solved || showIdeas || tagsAsked ? (
+                            <div className="sx-tags">
+                              {p.tags.map((t) => (
+                                <span className="pill" key={t}>
+                                  {t}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <button className="sx-showtags" onClick={() => setTagsAsked(true)}>
+                              Show tags <small>they may name the technique</small>
+                            </button>
+                          ))}
+                      </div>
+                    )}
+                    {openAboutMethod && p.teaches.length > 0 && (
                       <div className="stack" style={{ gap: 10, paddingTop: 14, borderTop: "1px solid var(--line2)" }}>
                         <div className="lab">WHAT THIS TEACHES</div>
                         {p.teaches.map((t) => (
@@ -522,7 +627,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
                         ))}
                       </div>
                     )}
-                    {p.follow_up && <FollowUps text={p.follow_up} label={p.mode === "fix" ? "ASKED AS" : "INTERVIEW FOLLOW-UP"} />}
+                    {openAboutMethod && p.follow_up && <FollowUps text={p.follow_up} label={p.mode === "fix" ? "ASKED AS" : "INTERVIEW FOLLOW-UP"} />}
                   </div>
                 )}
 
@@ -548,6 +653,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
                       </div>
                     )}
                     {p.hints.locked.length > 1 && <p className="note">{p.hints.locked.length - 1} more after this one.</p>}
+                    {p.cookbook.length > 0 && <CookbookHelp key={p.id} links={p.cookbook} />}
                   </div>
                 )}
 
@@ -633,6 +739,11 @@ function Loaded({ p }: { p: ProblemDetail }) {
                   {py ? "solution.py" : "src/lib.rs"}
                   {code !== (latest?.code ?? p.starter) && <span className="dot" style={{ background: "var(--mut)" }} title="Changed since the last test run" />}
                 </button>
+                {place && p.attempt.solved && (
+                  <button className={`ftab${centre === "done" ? " on" : ""}`} onClick={() => setFile("done")} title="What you practised, and what comes next">
+                    Solved
+                  </button>
+                )}
                 {!py && (
                   <button className={`ftab${file === "main" ? " on" : ""}`} onClick={() => setFile("main")} title="Scratch main: Run builds and runs it">
                     main.rs<small>SCRATCH</small>
@@ -687,7 +798,8 @@ function Loaded({ p }: { p: ProblemDetail }) {
                 )}
               </div>
             </div>
-            <div className="gbar">
+            {centre === "done" && place && (done ? <SeriesComplete place={place} done={done} how={p.attempt.assisted ? "All tests passed, with help, so it counts as assisted." : "All tests passed, with no hints."} /> : <div className="sx-done"><Skeleton lines={6} /></div>)}
+            <div className="gbar" hidden={centre === "done"}>
               <div className="fp">
                 <span style={{ color: "var(--fg)" }}>
                   {file === "lib" ? (py ? "solution.py" : "src/lib.rs") : file === "main" ? "src/bin/scratch.rs" : file === "solution" ? "reference solution" : file === "hidden" ? `more tests` : `tests/visible.${ext}`}
@@ -703,7 +815,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
                 </div>
               )}
             </div>
-            <div className="edit-host" hidden={file !== "lib"}>
+            <div className="edit-host" hidden={centre !== "lib"}>
               <Editor
                 language={p.language}
                 vim={editorSettings.vim}
@@ -792,6 +904,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
                   rustfmt: {formatError}
                 </span>
               )}
+              {place && !py && <span className="si sx-lang">edition 2021 · {p.crates.length ? `crates: ${p.crates.join(" · ")}` : "std only"}</span>}
               <span className="si sb-pos" title={py ? "Python 3 · Tab indents by 4 spaces · ⇧Tab dedents · sandboxed" : `rustc 1.98.1 stable · clippy ${liveClippy ? "while editing and " : ""}on test runs · ⌘S formats · sandboxed`}>
                 Ln {cursor[0]}, Col {cursor[1]}
               </span>
@@ -886,7 +999,11 @@ function Loaded({ p }: { p: ProblemDetail }) {
                     <span className="lab" style={{ color: "var(--grn)" }}>
                       SOLVED{p.attempt.assisted ? " · ASSISTED" : ""}
                     </span>
-                    {p.next ? (
+                    {done?.next?.id ? (
+                      <Link to="/p/$id" params={{ id: done.next.id }}>
+                        Next {done.next.kind === "part" ? "part" : "step"} →
+                      </Link>
+                    ) : p.next ? (
                       <Link to="/p/$id" params={{ id: p.next }}>
                         Next problem →
                       </Link>
@@ -1051,7 +1168,7 @@ function CaseCard({
   const failed = t && !ok;
   const expanded = open === id || (failed && open === null);
   return (
-    <div className={`tcase${failed ? " bad" : ""}`}>
+    <div className={`tcase${failed ? " bad" : ok ? " ok" : ""}`}>
       <button className="tcase-h" onClick={() => setOpen(expanded ? "" : id)} aria-expanded={expanded}>
         <CaseIcon t={t} waiting={busy} />
         <span className="nm">

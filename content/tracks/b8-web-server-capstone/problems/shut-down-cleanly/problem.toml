@@ -1,0 +1,32 @@
+slug = "shut-down-cleanly"
+title = "Shut down cleanly"
+mode = "write"
+level = "hard"
+stage = "server"
+order = 10
+status = "ready"
+tags = ["graceful shutdown", "JoinHandle", "Drop", "AtomicBool"]
+teaches = [
+  "A blocked `accept` has to be woken; a flag alone wakes nobody.",
+  "Closing the sending side of a channel is how queued work gets finished before workers exit.",
+  "Shutdown is done only when every thread has been joined.",
+]
+follow_up = "1) What would you add so that shutdown always returns within a fixed time, even with a handler that never returns? 2) How does a load balancer learn to stop sending you traffic before you stop accepting?"
+related = ["B7", "B4"]
+
+[[hints]]
+kind = "approach"
+text = "Set a flag, make `accept` return, let the acceptor drop the senders, then join in an order that lets each thread finish."
+
+[[hints]]
+kind = "rust"
+text = "Connecting to your own address wakes `accept`. Keep every `JoinHandle`. `shutdown(self)` and `Drop` can share one path."
+
+[[hints]]
+kind = "edge"
+text = "A queued connection whose request has already arrived must be answered, so do not close a connection for being idle before you have tried to read from it. Idle reads need to return often enough to notice the flag."
+
+[solution]
+explanation = "The acceptor leaves its loop and drops the listener and both senders, so workers drain the queue and then see a disconnected channel. Connections read in short slices and close when idle and stopping; a half-sent request is still bounded by the request timeout. Joining all threads makes the return mean something."
+time = "bounded by the running handlers and the request timeout"
+space = "O(threads)"

@@ -9,6 +9,7 @@ pub mod cookbook;
 pub mod course;
 mod dsa;
 pub mod sd;
+pub mod series;
 pub mod model;
 pub mod test_source;
 

@@ -1,0 +1,32 @@
+slug = "clients-that-go-quiet"
+title = "Clients that go quiet, or drip"
+mode = "write"
+level = "hard"
+stage = "strict-and-live"
+order = 14
+status = "ready"
+tags = ["timeouts", "deadlines", "injected clock", "slow loris"]
+teaches = [
+  "A read timeout measures silence; a deadline measures how long something has taken. You need the second.",
+  "Two states, two clocks: waiting for a request, and receiving one.",
+  "Passing the clock in makes timing behaviour testable without any waiting.",
+]
+follow_up = "1) With real sockets, how do you turn a deadline into `set_read_timeout`, and why is a zero duration an error there? 2) What limits a client that reads your reply one byte at a time?"
+related = ["B4", "B8"]
+
+[[hints]]
+kind = "approach"
+text = "Keep two instants and decide which one matters from whether a line has begun. Where in the loop must the check be so that no kind of input can skip it?"
+
+[[hints]]
+kind = "rust"
+text = "`Option<Duration>` for \"when the current line began\"; `saturating_sub` for elapsed time. Treat `WouldBlock`, `TimedOut` and `Interrupted` alike."
+
+[[hints]]
+kind = "edge"
+text = "A client that sends a byte before each of your timeouts never gives you a quiet read. When you answer a line and bytes remain, when did they arrive?"
+
+[solution]
+explanation = "Complete lines are answered first, then the deadline for the current state is checked on every turn of the loop, then the stream is read. Bytes left after a finished line arrived with the latest read, which is when their line began."
+time = "O(bytes)"
+space = "O(longest line)"

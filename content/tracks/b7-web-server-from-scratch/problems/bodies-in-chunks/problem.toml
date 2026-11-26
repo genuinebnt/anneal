@@ -1,0 +1,32 @@
+slug = "bodies-in-chunks"
+title = "A body that arrives in chunks"
+mode = "write"
+level = "hard"
+stage = "strict-and-live"
+order = 11
+status = "ready"
+tags = ["chunked encoding", "incremental parsing", "limits"]
+teaches = [
+  "Decoding a nested format in which the data may contain the delimiters: follow the announced sizes, do not search the data.",
+  "Bounding every part a sender controls, not only the part you keep.",
+  "Refusing an announced size before its bytes arrive.",
+]
+follow_up = "1) This decoder starts again from the beginning after every read. Sketch the states a resumable one needs. 2) Why have chunk extensions and trailers been a source of attacks?"
+related = ["B4", "B8"]
+
+[[hints]]
+kind = "approach"
+text = "Loop: a size line, then exactly that many bytes, then CRLF. Return \"not yet\" from wherever the bytes run out. Everything that has no announced length needs a cap."
+
+[[hints]]
+kind = "rust"
+text = "A helper \"the next line, at most n bytes long\" with the three outcomes covers both size lines and trailers. `bytes.starts_with` the other way round checks a partly received CRLF."
+
+[[hints]]
+kind = "edge"
+text = "`body.len() + size` can overflow; compare `size` with what is left. `usize::from_str_radix` accepts `+`. The trailer cap counts all lines together."
+
+[solution]
+explanation = "One bounded line reader serves the size lines and the trailers. Sizes are checked against the room left before looking for data, and data is taken by length, so it may contain anything."
+time = "O(n) per call"
+space = "O(max_body)"

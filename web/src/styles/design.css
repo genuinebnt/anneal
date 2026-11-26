@@ -357,6 +357,12 @@ a.tr:hover{background:var(--sel)}
 .acts button:disabled{opacity:.45;cursor:not-allowed}
 .hint{padding:14px;border-radius:4px;border:1px solid var(--line);background:var(--inset)}
 .hint.lock{border-style:dashed;background:transparent}
+.cbhelp{display:flex;flex-direction:column;gap:8px;margin-top:8px;padding-top:14px;border-top:1px solid var(--line2)}
+.cbhelp summary{cursor:pointer;color:var(--fg)}
+.cbhelp summary small{display:block;color:var(--dim);font-size:12px}
+.cbhelp ul{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}
+.cbhelp li a{color:var(--vio);overflow-wrap:anywhere}
+.cbhelp li p{margin:3px 0 0;overflow-wrap:anywhere}
 .tree{font:400 12px/1 var(--mono)}
 .tree .it{display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border-radius:4px;color:var(--mut);white-space:nowrap}
 .tree .it.on{background:var(--raise);color:var(--fg)}

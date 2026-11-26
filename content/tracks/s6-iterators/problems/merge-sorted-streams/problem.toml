@@ -1,0 +1,42 @@
+slug = "merge-sorted-streams"
+title = "A lazy k-way merge"
+mode = "write"
+level = "hard"
+stage = "build-it"
+order = 1
+status = "ready"
+tags = ["Iterator", "BinaryHeap", "laziness", "size_hint", "k-way merge"]
+teaches = [
+  "A lazy adapter does work only inside `next`. Building it must not pull from its sources, or it cannot sit on a socket or an infinite stream.",
+  "A `BinaryHeap` is a max-heap. To use it as a stable min-heap, order entries by `(item, source index)` and reverse.",
+  "`Iterator` does not promise that `next` keeps returning `None`. An adapter must remember which sources are finished.",
+]
+follow_up = "1) When does a loser tree beat a binary heap here? 2) What would you change to merge `Result` items from fallible sources? 3) How does an LSM tree use this merge to let newer runs hide older values?"
+related = ["S6", "S5"]
+
+[[hints]]
+kind = "approach"
+text = "The heap holds at most one item per source: that source's next one. `next` takes the smallest and refills from the same source. The first call has to fill the heap, and no earlier moment may."
+
+[[hints]]
+kind = "rust"
+text = "`BinaryHeap` needs `Ord` on the whole entry. Wrap `(item, index)` in a struct with its own `Ord` that compares the item, then the index, and reverses the result, or push `std::cmp::Reverse<Entry>`. The source itself stays outside the heap, in a `Vec<Option<I>>`."
+
+[[hints]]
+kind = "edge"
+text = "When a source returns `None`, replace it with `None` in the vector so it is never asked again. `size_hint` adds the hints of the live sources to the number of buffered items, saturating the lower bound and giving up on the upper one when it overflows or any source has none."
+
+[solution]
+explanation = "The merge keeps one candidate per source in a min-heap, so each item costs one pop and one push, O(log k) comparisons. Ties are broken by source index, which makes the merge stable. Nothing is pulled until the first `next`, which primes the heap. A finished source is dropped by setting its slot to `None`, so it is never polled again even if it is not fused. `size_hint` counts what is buffered plus what the live sources promise, and because of that the whole adapter works with `take`, infinite inputs and `collect` pre-allocation."
+time = "O(log k) per item for k sources"
+space = "O(k)"
+
+[[cookbook]]
+level = "related"
+page = "std-iterator-adapters-lazy"
+note = "What laziness means for an adapter."
+
+[[cookbook]]
+level = "exact"
+page = "kway-merge-family"
+note = "Part: KMerge, a heap of (item, source) that is stable. It pulls from every source in the constructor, refills early and has no size_hint, which this problem does not allow."

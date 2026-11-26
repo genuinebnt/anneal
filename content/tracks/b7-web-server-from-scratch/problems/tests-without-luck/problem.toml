@@ -1,0 +1,32 @@
+slug = "tests-without-luck"
+title = "Take the luck out of a test"
+mode = "write"
+level = "medium"
+stage = "one-piece-at-a-time"
+order = 9
+status = "ready"
+tags = ["Condvar", "test doubles", "deterministic testing", "Read", "Write"]
+teaches = [
+  "Replace \"sleep and hope\" with a signal: wait for the state you need, with a deadline that only fires when something is broken.",
+  "A signal that is sent before anyone waits must not be lost, so the state, not the wake-up, carries the meaning.",
+  "The `Read` contract: short reads are normal, and 0 means the end.",
+]
+follow_up = "1) Which bug would this gate help you reproduce on every run? 2) What do loom and shuttle do that gates cannot?"
+related = ["B4", "B8"]
+
+[[hints]]
+kind = "approach"
+text = "Decide what facts the gate has to remember. A wake-up only says \"look again\", so every promise must be visible in those facts."
+
+[[hints]]
+kind = "rust"
+text = "`Condvar::wait_while` and `wait_timeout_while` re-check for you. One mutex can guard all the fields."
+
+[[hints]]
+kind = "edge"
+text = "A release before the arrival must still count. An empty `Data` event must not return `Ok(0)`."
+
+[solution]
+explanation = "The gate is three facts behind one mutex: arrivals, unused permits and an open flag. Because waiting is always \"until the facts allow it\", nothing is lost when a release comes early. The script keeps a queue of events and shortens the front one when a read takes only part of it."
+time = "O(1) per operation"
+space = "O(events + bytes written)"

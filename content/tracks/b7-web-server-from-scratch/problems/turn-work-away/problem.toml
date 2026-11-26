@@ -1,0 +1,32 @@
+slug = "turn-work-away"
+title = "Say no when you are full"
+mode = "write"
+level = "medium"
+stage = "one-piece-at-a-time"
+order = 1
+status = "ready"
+tags = ["load shedding", "sync_channel", "try_send", "backpressure"]
+teaches = [
+  "A bounded waiting room turns overload into quick refusals instead of growing delay and memory.",
+  "`std::sync::mpsc::sync_channel` with `try_send` is a bounded queue that can say no; dropping the sender ends the workers after they drain it.",
+  "The lifetime of a lock guard decides whether workers sharing one receiver run in parallel.",
+]
+follow_up = "1) Which is better for a caller under overload, a refusal now or an answer in ten seconds, and when does that flip? 2) How would you pick `room` from a latency budget? 3) Drop the oldest waiting item instead of the new one: when is that right?"
+related = ["B4", "B8"]
+
+[[hints]]
+kind = "approach"
+text = "The standard library already has a queue with a size limit that can refuse. Think about what each end of it tells the other when it is dropped."
+
+[[hints]]
+kind = "rust"
+text = "`let next = receiver.lock().unwrap().recv();` releases the lock at the semicolon. `match receiver.lock().unwrap().recv() { .. }` holds it for the whole `match`. Count a waiting item before handing it over, and take the count back if the hand-over fails."
+
+[[hints]]
+kind = "edge"
+text = "`close` can only join workers that will end: what makes their `recv` fail? `handle` must not be kept alive by anything after `close` returns."
+
+[solution]
+explanation = "A `sync_channel(room)` is the waiting room: `try_send` fails exactly when it is full. Workers share the receiver behind a mutex, holding the lock only while waiting for an item. Dropping the sender is the shutdown signal: `recv` returns what is queued and then an error, so nothing accepted is lost. The `waiting` count rises before the hand-over, so a fast worker cannot make it wrap below zero."
+time = "O(1) per offer"
+space = "O(workers + room)"

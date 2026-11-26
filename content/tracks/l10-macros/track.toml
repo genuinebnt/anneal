@@ -1,0 +1,11 @@
+code = "L10"
+name = "Macros"
+section = "L"
+tier = "sde3"
+order = 10
+summary = "Writing macro_rules! that behaves in other people's code: single evaluation, hygiene and repetition."
+
+[[stages]]
+slug = "repetition-hygiene"
+name = "Repetition and hygiene"
+band = "medium"

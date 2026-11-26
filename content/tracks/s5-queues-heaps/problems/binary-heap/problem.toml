@@ -1,0 +1,47 @@
+slug = "binary-heap"
+title = "Build a priority queue"
+mode = "write"
+level = "medium"
+stage = "build-it"
+order = 1
+status = "ready"
+tags = ["priority queue", "machine-coding", "60-min", "comparator"]
+teaches = [
+    "A priority queue needs less order than a sorted list, and that is why it is cheaper to keep.",
+    "Counting comparisons shows the cost of an operation without timing anything.",
+    "A comparator stored as a closure lets one type serve many orderings.",
+]
+follow_up = "1) Why can a queue be built from n items faster than by n pushes? 2) What changes if each node has four children instead of two? 3) How would you serve equal priorities in arrival order, and what does it cost? 4) `std`'s `BinaryHeap` takes no comparator. How do callers change its order?"
+related = ["S4", "F4"]
+
+[[hints]]
+kind = "approach"
+text = "Keep the items in a `Vec` and read it as a complete binary tree: the children of index `i` are `2i + 1` and `2i + 2`. The only rule is that no child is greater than its parent. A push can break it on one path upwards, a pop on one path downwards."
+
+[[hints]]
+kind = "rust"
+text = "`Vec::swap` and `Vec::swap_remove` move items without needing `Clone`. Store the ordering as `Box<dyn Fn(&T, &T) -> Ordering>`; `Box::new(T::cmp)` is a valid value for it."
+
+[[hints]]
+kind = "edge"
+text = "When sifting down, compare the two children with each other first and take the greater one. For building from a vector, start at the last item that has a child and sift each one down, walking towards index 0. For the k largest, decide which end of the queue you want to throw away."
+
+[solution]
+explanation = "The vector is a complete binary tree in which every parent is at least as great as its children, so the greatest item is at index 0. A push appends and swaps upwards. A pop moves the last item to the root and swaps it with its greater child until neither child is greater. Building from a vector sifts down every parent from the bottom up: most items are near the leaves and move very little, so the total work is linear. The ordering is a boxed closure, so a min-queue or an order by one field needs no new type. For the k largest items the same queue is used with the order reversed, which keeps the smallest of the kept items on top, ready to be replaced."
+time = "push and pop O(log n), peek O(1), from_vec O(n), top_k O(n log k)"
+space = "O(n); top_k O(k)"
+
+[[cookbook]]
+level = "related"
+page = "std-btree-binaryheap-ordered"
+note = "What std's BinaryHeap offers."
+
+[[cookbook]]
+level = "similar"
+page = "heap-patterns"
+note = "A d-ary heap and the top-k pattern."
+
+[[cookbook]]
+level = "exact"
+page = "stacks-queues-heaps-questions"
+note = "Part (its Q23): a generic heap with push, pop, peek and from_vec. A min-heap; no comparator, no top_k. Source of the reference's sifts."

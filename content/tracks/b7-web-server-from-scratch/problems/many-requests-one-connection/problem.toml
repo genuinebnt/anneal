@@ -1,0 +1,32 @@
+slug = "many-requests-one-connection"
+title = "Many requests on one connection"
+mode = "write"
+level = "hard"
+stage = "strict-and-live"
+order = 13
+status = "ready"
+tags = ["keep-alive", "pipelining", "100-continue", "generic over Read + Write"]
+teaches = [
+  "The order of a connection loop: use what you hold, then read.",
+  "Deciding when a connection ends from the version, the headers and a count.",
+  "Making the loop generic over `Read + Write`, so a scripted client can catch a deadlock on every run.",
+]
+follow_up = "1) Pipelining sends replies in request order. What happens to the others when the first is slow, and how do HTTP/2 streams change that? 2) Why do servers cap requests per connection?"
+related = ["B4", "B8"]
+
+[[hints]]
+kind = "approach"
+text = "One loop: ask `next_request` about the buffer first; only when it says \"more\" do you read."
+
+[[hints]]
+kind = "rust"
+text = "`loop { match next_request(&buf) { Whole(..) => { ..; continue } .. } stream.read(..) }`. Remember per request whether you already gave permission."
+
+[[hints]]
+kind = "edge"
+text = "After the last reply, return without reading. `Connection` may appear as a list, in any case, more than once."
+
+[solution]
+explanation = "The parse step runs before every read, so pipelined requests need no special case and the loop never waits while it owes a reply. The permission flag is reset when a request is completed."
+time = "O(bytes), with a rescan per read"
+space = "O(largest request)"

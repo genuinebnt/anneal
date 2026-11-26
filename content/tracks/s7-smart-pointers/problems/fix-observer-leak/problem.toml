@@ -1,0 +1,50 @@
+slug = "fix-observer-leak"
+title = "Fix: dropped, but still listening"
+mode = "fix"
+level = "medium"
+stage = "understand-it"
+order = 1
+status = "ready"
+tags = ["Rc", "Weak", "reference cycle", "observer"]
+teaches = [
+  "Two `Rc`s that reach each other keep each other alive for ever. No destructor runs and nothing reports it.",
+  "Ownership should point one way. Every edge that points back is a `Weak`, and so is every registry that only needs to find things.",
+  "A `Weak` does not clean itself up: the list that holds it has to drop the dead entries.",
+]
+follow_up = "1) What do `strong_count` and `weak_count` say about when the allocation itself is freed, as opposed to the value? 2) Rewrite this with ids in an arena instead of pointers: what changes? 3) What changes with `Arc` and threads, and where would a lock need to be released before delivering?"
+related = ["S7", "L2"]
+
+[rules]
+forbid_unsafe = true
+
+[[hints]]
+kind = "approach"
+text = "Draw who holds what: the caller, the hub's list, and each subscriber's field. Which of those arrows expresses ownership? The caller's handle is the only thing that should keep a subscriber alive."
+
+[[hints]]
+kind = "rust"
+text = "`Rc::downgrade` makes a `Weak`, and `Weak::upgrade` returns `Option<Rc<T>>`. `Vec::retain` can upgrade, deliver and drop the dead ones in one pass."
+
+[[hints]]
+kind = "edge"
+text = "Both arrows between the hub and a subscriber need attention, not just one. `post` must cope with a hub that is already gone."
+
+[solution]
+explanation = "The hub held its subscribers with `Rc` and every subscriber held the hub with `Rc`, a cycle, so neither count could reach zero. The caller's handle was meant to own the subscription, so the hub now keeps `Weak` entries, which let a dropped handle die. The subscriber's way back to the hub is `Weak` too, so a subscriber does not keep a discarded hub alive. `publish` upgrades each entry to deliver and removes the ones that fail, which stops the list from growing for ever."
+time = "O(subscribers) per publish"
+space = "O(live subscribers) after a publish"
+
+[[cookbook]]
+level = "related"
+page = "smart-pointers"
+note = "Weak as the back pointer in a tree."
+
+[[cookbook]]
+level = "exact"
+page = "std-smart-pointers-use-cases"
+note = "Part: an observer list of Weak, pruned with retain while notifying. Not covered: the subscriber's pointer back to the hub, and post()."
+
+[[cookbook]]
+level = "exact"
+page = "design-patterns-high"
+note = "Part: the observer section, a subject that holds only Weak subscribers."

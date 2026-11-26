@@ -9,6 +9,16 @@ the date below. Do not let it drift: a wrong line here costs the next agent more
 
 Last updated: **2026-11-02** (SQL course modules 5 to 7, which finish part I; system design in depth and the reading view, error screens, the crash fix, the SQL performance course pilot with its plan pipeline and plan view; see section 0 for what to do next).
 
+## Series (local, not committed or released; 2026-11-26)
+
+The series feature is built from the approved `docs/mockups/series.html`: `content/series/*.toml`, the page at
+`/rust/series/<id>`, the entry on the Rust home, and the series pieces of the workspace. See [SERIES.md](SERIES.md).
+`content/series/web-server.toml` here is a stand-in over today's problems; the full file (21 parts, 10 capstone steps)
+comes with the B7 and B8 tracks and replaces it. Still open: carrying code between capstone steps.
+
+Fidelity pass (local): series parts now use the mockup's pane layout (`.sx-ws`), keep the breadcrumb on phones, and hold
+back "What this teaches", follow-ups and tags until solved or asked; small series-page layout fixes.
+
 ## 0. Handover (for the next agent; written 2026-11-01)
 
 **Where things stand.** `master` is deployed up to the commit before this batch; this batch adds the SQL course pilot (nothing
@@ -77,6 +87,7 @@ built); rotating the AI key (replace it on the server with `ssh deploy@46.224.10
 
 ## 2. Done (newest first)
 
+- **2026-11-26: 26 staged Rust exercises integrated (not committed, not released).** 20 practice problems and 6 build-your-own: 15 new tracks (L8, L10, S5, S6, S7, S9, C4, Y5, Y12, Y13, Y14, B1, B2, B5, M2) and additions to C1, F4, F7 (C1 `order` renumbered to 1 to 4; ids unchanged). Sections B and M are on the Rust tab and in its readiness. New `[[cookbook]]` field in problem.toml, checked by `validate`, shown as closed Related / Similar / Exact folds in the Hints tab. Opening one does not mark the attempt assisted (undecided, RUST_PRACTICE.md 6.3). Verified with the host runner. docs/CURRICULUM.md and HANDOFF.md counts are not updated.
 - **2026-11-26: Cookbook, first release (released 2026-11-26).** Eight subjects, 707 pages: guides, code examples, projects and six draft samples; tree, filterable subject index, wide reading view with hideable panels, read-only sample projects with recorded output, `⌘K` search. The renderer (`SdMd.tsx`) gained cookbook callouts, quoted code titles, "does not compile" labels and heading anchors. Nothing about the reader is stored; no migrations.
 
 | Commit | What |

@@ -30,26 +30,44 @@ export const PLANNED: PlannedTrack[] = [
   { code: "L3", name: "Lifetimes", planned: 22, tier: "core" },
   { code: "L4", name: "Traits & dispatch", planned: 22, tier: "core" },
   { code: "L5", name: "Generics & associated types", planned: 16, tier: "core" },
+  { code: "L8", name: "Error design", planned: 16, tier: "core" },
+  { code: "L10", name: "Macros", planned: 12, tier: "sde3" },
   { code: "S1", name: "Option & Result", planned: 17, tier: "core" },
   { code: "S2", name: "Strings & text", planned: 18, tier: "core" },
   { code: "S3", name: "Vec & slices", planned: 20, tier: "core" },
   { code: "S4", name: "Maps & sets", planned: 11, tier: "core" },
-  { code: "C1", name: "Threads & shared state", planned: 3, tier: "core" },
+  { code: "S5", name: "Queues & heaps", planned: 14, tier: "core" },
+  { code: "S6", name: "Iterators", planned: 22, tier: "core" },
+  { code: "S7", name: "Smart pointers & interior mutability", planned: 20, tier: "core" },
+  { code: "S9", name: "I/O & filesystem", planned: 14, tier: "core" },
+  { code: "C1", name: "Threads & shared state", planned: 4, tier: "core" },
   { code: "C2", name: "Message passing", planned: 2, tier: "core" },
   { code: "C3", name: "Atomics & lock-free", planned: 7, tier: "sde3" },
+  { code: "C4", name: "Async & Tokio", planned: 26, tier: "core" },
   { code: "C5", name: "Async internals", planned: 3, tier: "sde3" },
   { code: "Y2", name: "Unsafe Rust", planned: 3, tier: "sde3" },
   { code: "Y3", name: "FFI: C and Rust together", planned: 4, tier: "sde3" },
+  { code: "Y5", name: "Testing & verification", planned: 14, tier: "core" },
   { code: "Y6", name: "WebAssembly from scratch", planned: 2, tier: "sde3" },
   { code: "Y7", name: "Raft consensus rules", planned: 3, tier: "sde3" },
   { code: "Y8", name: "Classic engines: regex and diff", planned: 2, tier: "sde3" },
   { code: "Y9", name: "Capstone builds: parts of real systems", planned: 3, tier: "sde3" },
   { code: "Y10", name: "Search engine core", planned: 2, tier: "sde3" },
+  { code: "Y12", name: "Database engine parts", planned: 1, tier: "sde3" },
+  { code: "Y13", name: "Distributed systems parts", planned: 1, tier: "sde3" },
+  { code: "Y14", name: "Parsers & languages", planned: 1, tier: "sde3" },
   { code: "F2", name: "Data layout", planned: 14, tier: "sde3" },
   { code: "F3", name: "Memory & allocation", planned: 4, tier: "sde3" },
-  { code: "F4", name: "Hashing & purpose-built structures", planned: 4, tier: "sde3" },
+  { code: "F4", name: "Hashing & purpose-built structures", planned: 8, tier: "sde3" },
   { code: "F5", name: "CPU-level tricks", planned: 4, tier: "sde3" },
-  { code: "F7", name: "I/O & serialization", planned: 2, tier: "sde3" },
+  { code: "F7", name: "I/O & serialization", planned: 3, tier: "sde3" },
+  { code: "B1", name: "HTTP services with axum", planned: 16, tier: "core" },
+  { code: "B2", name: "Tower & middleware", planned: 12, tier: "core" },
+  { code: "B4", name: "Networking & protocols", planned: 14, tier: "core" },
+  { code: "B5", name: "Resilience", planned: 12, tier: "core" },
+  { code: "B7", name: "A web server from scratch", planned: 15, tier: "core" },
+  { code: "B8", name: "Web server capstone", planned: 10, tier: "core" },
+  { code: "M2", name: "Machine coding", planned: 12, tier: "core" },
 ];
 
 export const SECTION_NAMES: Record<Section, string> = {
@@ -59,13 +77,15 @@ export const SECTION_NAMES: Record<Section, string> = {
   C: "Concurrency & Async",
   Y: "Systems Rust",
   F: "Performance Rust",
+  B: "Backend Rust",
+  M: "Design in Rust",
   P: "DSA Practice",
 };
 
 /** Which nav area each section belongs to. */
 export const NAV_SECTIONS = {
   dsa: ["D"],
-  rust: ["L", "S", "C", "Y", "F"],
+  rust: ["L", "S", "C", "Y", "F", "B", "M"],
 } as const satisfies Record<string, Section[]>;
 
 export type NavArea = keyof typeof NAV_SECTIONS;
@@ -128,6 +148,16 @@ export const BLURB: Record<string, string> = {
   F5: "Branchless code, SWAR, auto-vectorization and std::arch intrinsics.",
   F6: "False sharing, sharded counters, and lock-free structures that actually scale.",
   F7: "Zero-copy parsing, compact encodings and write-ahead logs.",
+  Y12: "The pieces inside a database: versioned keys, snapshots and write conflicts.",
+  Y13: "Replicas that accept writes apart and still converge.",
+  Y14: "Turning text into a tree: precedence, associativity and errors with positions.",
+  B1: "Handlers, extractors and one consistent error shape.",
+  B2: "Service and Layer: readiness, backpressure and what a clone shares.",
+  B4: "Framing and stream reassembly as pure state machines you can test.",
+  B5: "Signatures, retries and limits that hold up against a hostile caller.",
+  B7: "The pieces of a web server, one small exercise at a time.",
+  B8: "Build the whole server in ten steps.",
+  M2: "A working core under time pressure, then follow-ups that test your design.",
 };
 
 /** DSA tracks in the order CURRICULUM.md recommends (graphs before heaps and greedy). */

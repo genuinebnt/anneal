@@ -3,7 +3,7 @@ name = "I/O & serialization"
 section = "F"
 tier = "sde3"
 order = 7
-summary = "Moving numbers in and out fast: allocation-free integer formatting and a delta + bit-packed posting-list codec."
+summary = "Moving numbers in and out fast: allocation-free integer formatting and a delta + bit-packed posting-list codec, plus a serde mapping for a wire format you do not control."
 
 [[stages]]
 slug = "output"

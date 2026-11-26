@@ -1,0 +1,40 @@
+slug = "fix-transfer-deadlock"
+title = "Fix: two locks, two orders"
+mode = "fix"
+level = "medium"
+stage = "understand-it"
+order = 1
+status = "ready"
+tags = ["Mutex", "deadlock", "lock ordering", "consistent snapshot"]
+teaches = [
+  "Two threads that take the same two locks in opposite orders can each hold one and wait for the other for ever.",
+  "A global lock order, here by account index, makes a cycle of waiters impossible.",
+  "Reading values one lock at a time gives a total that never existed. A consistent snapshot holds every lock it needs at once.",
+]
+follow_up = "1) Which of the four conditions for deadlock does lock ordering remove, and what would `try_lock` with back-off remove instead? 2) How do you order locks that have no index? 3) What happens to this bank if a thread panics while holding an account?"
+related = ["C1", "C3"]
+
+[rules]
+forbid_methods = ["try_lock"]
+
+[[hints]]
+kind = "approach"
+text = "Decide which lock is taken first from something both directions agree on. Which account the money comes *from* is not such a thing."
+
+[[hints]]
+kind = "rust"
+text = "Lock `min(from, to)` and then `max(from, to)`, and afterwards work out which guard is which. `std::sync::Mutex` is not re-entrant, so `from == to` must not lock twice."
+
+[[hints]]
+kind = "edge"
+text = "For `total`, keep each guard alive (collect them into a `Vec`) until the last account has been read, taking them in the same order as `transfer` does. Keep the probe calls: the tests use them to hold threads at the worst moment."
+
+[solution]
+explanation = "`transfer(0, 1)` locked 0 then 1 while `transfer(1, 0)` locked 1 then 0, so each could end up holding what the other needed. Taking the lower index first gives every thread the same order, and a thread that waits for a higher lock can only be waiting for someone who is further along. `total` had a quieter bug: it released each account before reading the next, so money in flight could be counted twice or not at all. Holding all the guards, taken in the same order, makes the sum a real moment in time without introducing a new cycle. A single bank-wide lock would also be correct, but transfers between unrelated accounts would wait for each other."
+time = "O(1) per transfer, O(n) per total"
+space = "O(n) guards in total"
+
+[[cookbook]]
+level = "exact"
+page = "locks-deadlocks"
+note = "Part: transfer() takes the lower account id first. Not covered: transfer to itself, the consistent total(), the probe."

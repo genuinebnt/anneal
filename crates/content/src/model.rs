@@ -236,6 +236,35 @@ pub struct ProblemFile {
     /// How a performance problem (section F) is built and measured. Absent for everything else.
     #[serde(default)]
     pub perf: Option<Perf>,
+    /// Cookbook pages to open when stuck. The workspace shows them closed, one level at a time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cookbook: Vec<CookbookRef>,
+}
+
+/// How much a cookbook page gives away, least first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CookbookLevel {
+    /// Explains the idea.
+    Related,
+    /// The same technique on a different problem.
+    Similar,
+    /// Solves this problem, or the part its note names.
+    Exact,
+}
+
+/// One `[[cookbook]]` table in problem.toml.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CookbookRef {
+    pub level: CookbookLevel,
+    /// A cookbook page id (`/cookbook/p/<page>`).
+    pub page: String,
+    /// The anchor of one section of that page: `cb-<heading slug>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
+    /// What the page gives, and what it leaves out.
+    pub note: String,
 }
 
 /// `[perf]` in problem.toml: what a performance problem's tests need from the runner.

@@ -1,0 +1,11 @@
+code = "B1"
+name = "HTTP services with axum"
+section = "B"
+tier = "core"
+order = 1
+summary = "HTTP services with axum: handlers, extractors and one consistent error shape."
+
+[[stages]]
+slug = "understand-it"
+name = "Understand it"
+band = "medium"

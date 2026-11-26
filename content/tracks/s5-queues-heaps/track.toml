@@ -1,0 +1,11 @@
+code = "S5"
+name = "Queues & heaps"
+section = "S"
+tier = "core"
+order = 5
+summary = "Priority queues you write yourself: a binary heap, then one whose priorities can change."
+
+[[stages]]
+slug = "build-it"
+name = "Build it"
+band = "hard"

@@ -1,0 +1,11 @@
+code = "S6"
+name = "Iterators"
+section = "S"
+tier = "core"
+order = 6
+summary = "Lazy adapters of your own: what an Iterator promises, and what it costs."
+
+[[stages]]
+slug = "build-it"
+name = "Build it"
+band = "hard"

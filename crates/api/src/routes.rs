@@ -15,7 +15,7 @@ use crate::reviews::Outcome;
 use crate::error::{ApiError, ApiResult};
 use crate::lsp::{self, SessionFiles};
 use crate::store;
-use crate::views::{self, CodeBody, ProblemDetail, RunOutcome, ScratchBody, TrackDetail, TrackSummary};
+use crate::views::{self, CodeBody, CookbookLink, ProblemDetail, RunOutcome, ScratchBody, TrackDetail, TrackSummary};
 
 /// Longest editor buffer accepted, in bytes.
 const MAX_CODE: usize = 256 * 1024;
@@ -217,7 +217,20 @@ async fn detail(s: &AppState, id: &str) -> ApiResult<ProblemDetail> {
     let scratch = store::scratch(&s.db, id).await?;
     let mut view = views::problem_detail(t, p, attempt.as_ref(), draft, scratch, runs);
     view.unlocked_by = crate::practice::unlock_refs(s, p);
+    view.cookbook = cookbook_links(s, p);
     Ok(view)
+}
+
+/// The problem's cookbook pages with their titles, least revealing first.
+fn cookbook_links(s: &AppState, p: &Problem) -> Vec<CookbookLink> {
+    let mut refs: Vec<_> = p.meta.cookbook.iter().collect();
+    refs.sort_by_key(|r| r.level);
+    refs.into_iter()
+        .filter_map(|r| {
+            let page = s.catalog.cookbook.pages.get(&r.page)?;
+            Some(CookbookLink { level: r.level, page: r.page.clone(), title: page.title.clone(), section: r.section.clone(), note: r.note.clone() })
+        })
+        .collect()
 }
 
 pub async fn problem(

@@ -1,0 +1,11 @@
+code = "S7"
+name = "Smart pointers & interior mutability"
+section = "S"
+tier = "core"
+order = 7
+summary = "Who owns what: Rc and Weak, and the cycles that never get dropped."
+
+[[stages]]
+slug = "understand-it"
+name = "Understand it"
+band = "medium"

@@ -1,0 +1,11 @@
+code = "Y12"
+name = "Database engine parts"
+section = "Y"
+tier = "sde3"
+order = 12
+summary = "The pieces inside a database, one at a time: transactions over versioned keys."
+
+[[stages]]
+slug = "transactions"
+name = "Transactions"
+band = "hard"

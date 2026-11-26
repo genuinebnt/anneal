@@ -1,0 +1,32 @@
+slug = "stop-a-listening-server"
+title = "Stop a server that is waiting"
+mode = "write"
+level = "hard"
+stage = "strict-and-live"
+order = 15
+status = "ready"
+tags = ["graceful shutdown", "JoinHandle", "AtomicBool", "Drop", "TcpListener"]
+teaches = [
+  "A thread blocked in `accept` or `read` does not see a flag: something has to make the call return.",
+  "Order of shutdown: stop taking work, finish what is in progress, join, then return.",
+  "Proving that threads have ended through what they release.",
+]
+follow_up = "1) Other ways to wake a blocked thread: nonblocking accept with polling, `shutdown` on a saved clone of the stream, a poller with a wake event. What does each cost? 2) What would a deadline on `stop` do with an `answer` that never returns?"
+related = ["B4", "B8"]
+
+[[hints]]
+kind = "approach"
+text = "List every place a thread can be waiting. For each, decide what makes it return once you want to stop, then who joins that thread."
+
+[[hints]]
+kind = "rust"
+text = "A connection to your own address makes `accept` return. A read timeout makes an idle connection thread look at the flag. Keep the `JoinHandle`s and join them."
+
+[[hints]]
+kind = "edge"
+text = "A client that keeps sending never gives you a read timeout. Close the listener before waiting for the clients, or new connections queue up meanwhile. Do not count your own wake-up connection."
+
+[solution]
+explanation = "One flag, checked on every turn of every loop; read timeouts make idle connections turn. `stop` sets it and connects once to wake `accept`. The acceptor drops the listener first, then joins the connection threads, and `stop` joins the acceptor, so returning proves that everything has ended."
+time = "bounded by the answers in progress plus one read slice"
+space = "O(open connections)"

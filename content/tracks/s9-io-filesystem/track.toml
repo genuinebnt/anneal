@@ -1,0 +1,11 @@
+code = "S9"
+name = "I/O & filesystem"
+section = "S"
+tier = "core"
+order = 9
+summary = "Read and Write done properly: bounded memory, short reads, interrupted calls and errors that end a stream."
+
+[[stages]]
+slug = "understand-it"
+name = "Understand it"
+band = "medium"

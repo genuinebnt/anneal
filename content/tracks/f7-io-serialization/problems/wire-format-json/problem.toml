@@ -1,0 +1,43 @@
+slug = "wire-format-json"
+title = "JSON you do not control"
+mode = "write"
+level = "medium"
+stage = "encodings"
+order = 3
+status = "ready"
+tags = ["serde", "enum representations", "serde attributes", "wire formats"]
+teaches = [
+  "The wire format is fixed by someone else. Shape the Rust types for your code and describe the difference with attributes.",
+  "`tag` and `content` choose how an enum looks on the wire; `rename_all`, `rename`, `default` and `skip_serializing_if` handle the rest.",
+  "A format with no attribute for it, such as a number sent as a string, goes in a `with` module.",
+]
+follow_up = "1) What does `deny_unknown_fields` cost you when the other side adds a field? 2) Why can `#[serde(untagged)]` give unhelpful errors, and what does it do to performance? 3) Which of these fields could borrow from the input with `&'a str`, and when would that fail at run time?"
+related = ["F7"]
+crates = ["serde", "serde_json"]
+
+[[hints]]
+kind = "approach"
+text = "Work from the examples one rule at a time. First get the enum's shape right (where the tag and the payload sit), then field names, then what is optional in each direction."
+
+[[hints]]
+kind = "rust"
+text = "`#[serde(tag = \"type\", content = \"data\")]` on the enum, `#[serde(flatten)]` on the field that holds it. Renaming a variant and renaming the fields inside it are separate attributes. For the amount, `#[serde(with = \"my_module\")]` names a module with `serialize` and `deserialize` functions."
+
+[[hints]]
+kind = "edge"
+text = "`str::parse::<u64>` accepts a leading `+`, which the format forbids. `#[serde(other)]` on a unit variant catches every unknown name. A missing `Option` field is already `None`, but you still have to say when to leave it out of the output."
+
+[solution]
+explanation = "`Event` keeps `id` and `created` as ordinary fields and flattens the enum, which is adjacently tagged, so `type` and `data` sit beside them. A unit variant then has a tag and no `data`. Variant names are renamed one by one because the dots rule out `rename_all`. The money field arrives as a string, so a small `with` module formats and parses it and rejects everything but plain digits. `other` makes new refund reasons readable instead of fatal, and unknown fields are ignored because nothing denies them. Syntax to remember: `#[serde(tag, content)]`, `#[serde(flatten)]`, `#[serde(rename_all = \"camelCase\")]` on a struct variant, `#[serde(default, skip_serializing_if = \"...\")]`."
+time = "O(n) in the size of the document"
+space = "O(n)"
+
+[[cookbook]]
+level = "related"
+page = "serde-defaults"
+note = "Defaults and strictness decided by the types."
+
+[[cookbook]]
+level = "similar"
+page = "serde-attributes-enum-representations"
+note = "tag and content, rename_all, other, skip_serializing_if and with modules, on other data."

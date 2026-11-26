@@ -3,7 +3,7 @@ import { Skeleton } from "../components/Skeleton";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { marked } from "marked";
-import { api, ApiError, type Band, type ProblemSummary, type TrackSummary } from "../api";
+import { api, ApiError, type Band, type ProblemSummary, type Section, type TrackSummary } from "../api";
 import { Header } from "../components/Header";
 import { ResetTrack } from "../components/ResetTrack";
 import { Level, ModeTag, StatusIcon, pad2, pctColor, progressLabel } from "../components/bits";
@@ -11,7 +11,7 @@ import { Opt } from "../components/filterBits";
 import { Page3, Panel, ReadingPath, RingTile, Tile, type PathStep } from "../components/layout";
 import { MockRoot } from "../components/mock";
 import { FollowUps, Fold, PhaseBar, PhaseTag, Teaches, TestResults } from "../components/trackBits";
-import { BLURB, PLANNED, SECTION_NAMES, sectionOf } from "../curriculum";
+import { BLURB, NAV_SECTIONS, PLANNED, SECTION_NAMES, sectionOf } from "../curriculum";
 import "../styles/cookbook.css";
 
 const TIER = { core: "CORE", light: "LIGHT", sde3: "SDE-3" } as const;
@@ -71,7 +71,7 @@ function firstSentence(statement: string): string {
   return first.length > 220 ? `${first.slice(0, 220).replace(/\s+\S*$/, "")}…` : first;
 }
 
-const AREA_COLOR: Record<string, string> = { L: "var(--vio)", S: "var(--acc)", C: "var(--fn)", Y: "var(--grn)", F: "var(--warn)" };
+const AREA_COLOR: Record<string, string> = { L: "var(--vio)", S: "var(--acc)", C: "var(--fn)", Y: "var(--grn)", F: "var(--warn)", B: "var(--lt)", M: "var(--mac)" };
 
 /** Every written track as a card, grouped by section; the open one lists its stages. */
 function TrackRail({ tracks, slug, here, onStage }: { tracks: TrackSummary[]; slug: string; here: { slug: string; name: string; solved: number; total: number }[]; onStage: (stage: string) => void }) {
@@ -186,7 +186,7 @@ export function TrackPage({ slug }: { slug: string }) {
   // The tracks of this area that are written, in the recommended order: the strip across the top.
   const written = useMemo(() => {
     const sec = t?.section;
-    const area = sec ? (sec === "D" ? ["D"] : ["L", "S", "C", "Y", "F"]) : [];
+    const area = sec ? (sec === "D" ? NAV_SECTIONS.dsa : NAV_SECTIONS.rust) as readonly Section[] : [];
     const order = (c: string) => PLANNED.findIndex((x) => x.code === c);
     return (all.data ?? []).filter((x) => area.includes(x.section) && x.ready > 0).sort((a, b) => order(a.code) - order(b.code));
   }, [all.data, t?.section]);

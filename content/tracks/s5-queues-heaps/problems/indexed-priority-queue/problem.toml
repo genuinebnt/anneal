@@ -1,0 +1,47 @@
+slug = "indexed-priority-queue"
+title = "A priority queue whose priorities change"
+mode = "write"
+level = "hard"
+stage = "build-it"
+order = 2
+status = "ready"
+tags = ["priority queue", "machine-coding", "60-min", "change priority"]
+teaches = [
+    "Changing an item you cannot find is the hard part; the structure has to know where everything is.",
+    "Two structures that describe the same data must change together, in one place.",
+    "Leaving stale entries behind is simple, and it costs memory in proportion to the number of updates.",
+]
+follow_up = "1) When is it better to push a new entry and skip stale ones on pop? 2) Your keys are cloned. How would you store each key once? 3) How would you add `pop` of the greatest priority as well as the smallest? 4) What would a shortest-path search gain from this type?"
+related = ["S4", "F4"]
+
+[[hints]]
+kind = "approach"
+text = "A heap can reorder an item cheaply once you know its position. So keep a map from key to position beside the heap, and make sure every move of an item updates the map."
+
+[[hints]]
+kind = "rust"
+text = "Write one private `swap(i, j)` that swaps the two heap entries and writes both new positions, and let nothing else reorder the vector. `HashMap::get_mut` updates a position without cloning the key again."
+
+[[hints]]
+kind = "edge"
+text = "After a change or a removal from the middle, the item now at that position may need to move up or down: try both. Removing the last position needs no repair at all. For ties, an insertion counter makes every priority pair unique."
+
+[solution]
+explanation = "The entries form a binary heap ordered by (priority, insertion number), and a map gives the heap position of every key. All reordering goes through one swap function, which keeps the map right. Changing a priority finds the entry through the map and sifts it up or down. Removal moves the last entry into the hole, then repairs in whichever direction is needed. The insertion number is assigned once, when a key is pushed, so equal priorities leave in arrival order even after priorities change. Memory follows the number of live keys, not the number of updates."
+time = "push, pop, change_priority and remove O(log n); priority and peek O(1) expected"
+space = "O(n) for n live keys"
+
+[[cookbook]]
+level = "related"
+page = "priority-queue-zoo"
+note = "Other priority queues with a changeable key."
+
+[[cookbook]]
+level = "similar"
+page = "stacks-queues-heaps-questions"
+note = "Its IndexedHeap: dense integer ids, decrease only, no removal."
+
+[[cookbook]]
+level = "exact"
+page = "heap-patterns"
+note = "Part: push, pop and lowering a key with a position map. Not covered: raising a priority, removal, arrival-order ties, generic keys."

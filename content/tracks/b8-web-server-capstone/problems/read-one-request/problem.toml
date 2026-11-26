@@ -1,0 +1,31 @@
+slug = "read-one-request"
+title = "Read one request"
+mode = "write"
+level = "medium"
+stage = "protocol"
+order = 1
+status = "ready"
+tags = ["HTTP/1.1", "parsing", "enums"]
+teaches = [
+  "A parser as a pure function from bytes to \"need more\", \"here is one, using n bytes\" or \"never\".",
+  "Checking each part of the request line and headers instead of splitting and hoping.",
+]
+follow_up = "1) Which of your checks would a lenient parser skip, and what could an attacker do with each? 2) Why does the function take bytes and not a &str?"
+related = ["B7", "B4"]
+
+[[hints]]
+kind = "approach"
+text = "Find the end of the head first. Nothing about the headers or the body can be judged before the blank line is there."
+
+[[hints]]
+kind = "rust"
+text = "`windows(4).position(..)` finds the blank line; `let [a, b, c] = parts[..] else { .. }` demands exactly three parts; `split_once(':')` cuts a header."
+
+[[hints]]
+kind = "edge"
+text = "The body is bytes, not text: only the head must be UTF-8. The bytes used end where this request ends, even if more follow."
+
+[solution]
+explanation = "The head ends at the first blank line. Only that part is turned into text, so a binary body cannot make the request invalid. The function never keeps state: the caller owns the buffer and drops the bytes it used."
+time = "O(bytes in the buffer)"
+space = "O(size of the request)"

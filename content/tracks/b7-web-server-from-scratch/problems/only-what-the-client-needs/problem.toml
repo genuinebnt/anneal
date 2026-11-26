@@ -1,0 +1,32 @@
+slug = "only-what-the-client-needs"
+title = "Send only what the client needs"
+mode = "write"
+level = "medium"
+stage = "one-piece-at-a-time"
+order = 7
+status = "ready"
+tags = ["conditional requests", "byte ranges", "checked arithmetic"]
+teaches = [
+  "Separating the decision (pure, easy to test) from the file reading and the writing.",
+  "Rules with an order of precedence, written so the order is visible.",
+  "Boundary arithmetic that survives empty files and the largest numbers.",
+]
+follow_up = "1) What does `If-Range` add, and what goes wrong with resumed downloads without it? 2) Strong and weak validators: why may a weak one not be used for ranges?"
+related = ["B4", "B8"]
+
+[[hints]]
+kind = "approach"
+text = "First decide whether anything needs sending; only then look at the range. Parse the range into numbers before comparing it with the length."
+
+[[hints]]
+kind = "rust"
+text = "`len.checked_sub(1)` is the last position, or `None` for an empty file. `str::parse` accepts a leading `+`, so check the characters first."
+
+[[hints]]
+kind = "edge"
+text = "A number too big for `u64` is still a number. `bytes=-0` asks for nothing. A range that is badly formed is ignored; one that is well formed but out of reach is unsatisfiable."
+
+[solution]
+explanation = "The two questions are separate functions. The range parser handles the suffix form first, saturates huge numbers, and uses `checked_sub` so that the empty file falls out of the same code."
+time = "O(length of the headers)"
+space = "O(1)"

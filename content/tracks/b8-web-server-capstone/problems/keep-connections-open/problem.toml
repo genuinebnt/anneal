@@ -1,0 +1,32 @@
+slug = "keep-connections-open"
+title = "Keep connections open, with time limits"
+mode = "write"
+level = "hard"
+stage = "server"
+order = 7
+status = "ready"
+tags = ["keep-alive", "pipelining", "timeouts", "100-continue", "slow loris"]
+teaches = [
+  "After each reply the bytes already received are the start of the next request.",
+  "A read timeout only measures silence; a deadline has to be checked on every turn of the loop.",
+  "An idle connection and a half-sent request need different clocks.",
+]
+follow_up = "1) A worker is tied to a connection while it is open. What does that do with 1,000 idle clients, and what do event loops change? 2) Why is `max_requests_per_conn` useful behind a load balancer?"
+related = ["B7", "B4"]
+
+[[hints]]
+kind = "approach"
+text = "Parse what you hold before reading again. Keep two instants: when the connection became idle, and when the current request began."
+
+[[hints]]
+kind = "rust"
+text = "Before each read, compute the time left to the current deadline; if none is left, act, else `set_read_timeout(left)`. A timeout of zero is an error in std. Timeouts arrive as `WouldBlock` or `TimedOut`."
+
+[[hints]]
+kind = "edge"
+text = "A client that sends one byte every few milliseconds never lets a read time out. Send `100 Continue` once per request."
+
+[solution]
+explanation = "The loop first consumes complete requests from the buffer, so pipelining needs nothing special. The deadline is chosen by whether a request has begun and is checked before every read, which is what stops a client that drips bytes."
+time = "O(bytes) per request, with a rescan per read"
+space = "O(limits) per connection"

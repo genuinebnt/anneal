@@ -4,7 +4,7 @@ import type { PlanFile } from "./plan";
 
 export type Band = "easy" | "medium" | "hard";
 export type Mode = "write" | "fix" | "stage";
-export type Section = "D" | "L" | "S" | "C" | "Y" | "F" | "P";
+export type Section = "D" | "L" | "S" | "C" | "Y" | "F" | "B" | "M" | "P";
 export type Tier = "core" | "light" | "sde3";
 export type ContentStatus = "draft" | "ready";
 export type Progress = "not_started" | "started" | "solved" | "assisted";
@@ -144,6 +144,16 @@ export interface Violation {
 
 export type Language = "rust" | "python";
 
+export type CookbookLevel = "related" | "similar" | "exact";
+
+export interface CookbookLink {
+  level: CookbookLevel;
+  page: string;
+  title: string;
+  section: string | null;
+  note: string;
+}
+
 export interface ProblemDetail {
   id: string;
   slug: string;
@@ -170,6 +180,8 @@ export interface ProblemDetail {
   examples: { input: string; output: string }[];
   follow_up: string | null;
   related: string[];
+  /** Cookbook pages to open when stuck, least revealing first. */
+  cookbook: CookbookLink[];
   /** Crates the problem may use, e.g. ["tokio", "serde"]. */
   crates: string[];
   rules: Rules | null;
@@ -1067,6 +1079,9 @@ export const api = {
     request<MeaningAnswer>("GET", `/dsa/meaning?${new URLSearchParams(Object.entries(ask).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)])).toString()}`),
   reviews: () => request<ReviewsView>("GET", "/reviews"),
   resolve: (id: string) => request<ProblemDetail>("POST", `/problems/${id}/resolve`),
+  seriesList: () => request<SeriesSummary[]>("GET", "/series"),
+  series: (id: string) => request<SeriesView>("GET", `/series/${id}`),
+  problemSeries: (id: string) => request<SeriesPlace | null>("GET", `/problems/${id}/series`),
   dsa: () => request<DsaOverview>("GET", "/dsa"),
   preview: (id: string) => request<{ previews: Record<Grade, ReviewPreview> | null; history: TryMark[] }>("GET", `/dsa/problems/${id}/preview`),
   statement: (id: string) => request<DsaStatement>("GET", `/dsa/problems/${id}/statement`),
@@ -1170,3 +1185,6 @@ export interface SystemView {
   db: { size: number; connections: number; tables: [string, number][] };
   app: { version: string; image: string | null; status: string | null; up: number; requests: number; errors: number; minutes: SystemMinute[]; recent: SystemHit[] };
 }
+
+export * from "./seriesTypes";
+import type { SeriesPlace, SeriesSummary, SeriesView } from "./seriesTypes";

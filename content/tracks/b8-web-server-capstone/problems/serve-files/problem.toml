@@ -1,0 +1,32 @@
+slug = "serve-files"
+title = "Serve files"
+mode = "write"
+level = "hard"
+stage = "server"
+order = 8
+status = "ready"
+tags = ["std::fs", "path traversal", "ETag", "conditional GET", "Range"]
+teaches = [
+  "Checking the text of a path is not enough: links are resolved by the file system.",
+  "Compare paths by components, never as strings.",
+  "A validator lets the client ask \"has it changed?\" and get a 304 instead of the file.",
+]
+follow_up = "1) What can change between `canonicalize` and `read`? 2) This reads the whole file into memory. What changes to stream a large one, and what happens to ranges?"
+related = ["B7", "B4"]
+
+[[hints]]
+kind = "approach"
+text = "Decode, refuse suspicious segments, join, resolve the real path, and only then check it is inside the resolved root."
+
+[[hints]]
+kind = "rust"
+text = "`Path::starts_with` compares whole components. `fs::canonicalize` resolves links, for the root too. `fs::metadata(&path)?` has `is_file()` and `modified()`, a `SystemTime`; `duration_since(UNIX_EPOCH)` turns it into a number for the tag."
+
+[[hints]]
+kind = "edge"
+text = "Decide the order: unchanged first, then the range. An unreadable range header is ignored; a readable one that starts past the end is 416."
+
+[solution]
+explanation = "Two layers keep requests inside the folder: refusing `..` after decoding, and comparing the resolved path with the resolved root by components, which catches links. Then the validators are checked, and only then the range."
+time = "O(file size)"
+space = "O(file size)"

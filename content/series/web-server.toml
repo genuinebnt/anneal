@@ -1,0 +1,923 @@
+# The series "From threads to a web server": an order over existing problems, not a track. It copies and moves nothing.
+# required: do these first. helpful: keep closed (hidden = true); reveals_method = true means the link gives away how to
+# solve the part. cookbook: reference pages (slugs in content/cookbook), also closed by default; level is exact (solves
+# the task), similar (same technique, different task) or related (explains the idea). Minutes are estimates; nobody has
+# been timed.
+
+[series]
+id = "threads-to-web-server"
+title = "From threads to a web server"
+summary = "Small parts give you what the capstone needs. Then you build the web server yourself, one step at a time."
+note = "All times are estimates; nobody has been timed."
+capstone_title = "Capstone: build a web server"
+capstone_note = "From step 2 on, each starter contains reference code for the earlier steps. It is a stand-in until the app can carry your own code from step to step, and it gives away those steps and much of the preparation before them."
+
+[[stage]]
+id = "hand-work-to-workers"
+name = "Hand work to workers"
+
+[[stage]]
+id = "read-requests"
+name = "Read requests"
+
+[[stage]]
+id = "answer-requests"
+name = "Answer requests"
+
+[[stage]]
+id = "run-it-for-real"
+name = "Run it for real"
+
+[[part]]
+number = 1
+id = "c1-blocking-queue"
+stage = "hand-work-to-workers"
+title = "A bounded blocking queue with Condvar"
+status = "existing"
+minutes = 60
+blurb = "Let threads hand work to each other, and finish cleanly when the work ends"
+new_idea = "Waiting for a condition, and waking waiters when the work ends"
+reuses = "Mutex, VecDeque"
+required = []
+helpful = []
+used_again = ["c2-bounded-channel", "c2-thread-pool", "b7-tests-without-luck"]
+real_uses = "Job queues, connection pools, bounded buffers between pipeline stages."
+cookbook = [
+    { level = "related", page = "mutex-condvar-channel", note = "Builds locks, a condvar and a bounded channel. Chosen by its summary; code not read.", hidden = true },
+]
+
+[[part]]
+number = 2
+id = "c2-bounded-channel"
+know_first = "Threads, and sharing a value between them"
+stage = "hand-work-to-workers"
+title = "A bounded MPMC channel with disconnect"
+status = "existing"
+minutes = 75
+blurb = "Let each side find out when the other has gone"
+new_idea = "The other side being gone is a count that reaches zero"
+reuses = "the wait loop of part 1"
+required = ["c1-blocking-queue"]
+helpful = []
+used_again = ["c2-thread-pool", "b7-turn-work-away"]
+real_uses = "std::sync::mpsc, crossbeam channels, actor mailboxes."
+cookbook = [
+    { level = "similar", page = "mutex-condvar-channel", note = "A bounded MPMC channel from simpler pieces. Chosen by its summary; code not read.", hidden = true },
+]
+
+[[part]]
+number = 3
+id = "c2-thread-pool"
+stage = "hand-work-to-workers"
+title = "A thread pool with results and graceful shutdown"
+status = "existing"
+minutes = 90
+blurb = "Run many jobs, survive a failing one and stop without losing work"
+new_idea = "A fixed set of workers that survives failing jobs and finishes the queue before it stops"
+reuses = "parts 1 and 2"
+required = ["c1-blocking-queue"]
+helpful = [
+    { id = "c2-bounded-channel", why = "results come back through a channel", reveals_method = false, hidden = true },
+]
+used_again = ["b7-turn-work-away", "b7-stop-a-listening-server", "b8-many-clients-and-overload"]
+real_uses = "rayon, web server worker pools, background job runners; later the FlowForge executor with a limit."
+cookbook = [
+    { level = "related", page = "thread-pool-work-stealing", note = "Chosen by title; not read.", hidden = true },
+    { level = "related", page = "worker-pool", note = "An async pool with a bounded queue, panic isolation and drain; the Pool type and its submit were read.", hidden = true },
+]
+
+[[part]]
+number = 4
+id = "b7-turn-work-away"
+stage = "hand-work-to-workers"
+title = "Say no when you are full"
+status = "new"
+minutes = 60
+blurb = "Stay in control when more work arrives than you can take"
+new_idea = "Refusing work when the waiting room is full"
+reuses = "workers and draining shutdown from part 3, disconnect from part 2"
+required = ["c2-thread-pool"]
+helpful = [
+    { id = "c2-bounded-channel", why = "what it means for a send to find the channel full or closed", reveals_method = true, hidden = true },
+    { id = "c1-blocking-queue", why = "try_push and close", reveals_method = false, hidden = true },
+]
+used_again = ["b8-many-clients-and-overload", "b8-report-what-is-happening", "b8-shut-down-cleanly"]
+real_uses = "Load shedding in Tomcat, nginx and API gateways; tower::load_shed; any bounded admission queue."
+cookbook = [
+    { level = "similar", page = "mini-http-server-thread-pool", note = "acceptor_loop and worker_loop use the same channel to shed load over sockets. This shows the method.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+]
+
+[[part]]
+number = 5
+id = "b4-length-prefixed-codec"
+stage = "read-requests"
+title = "A length-prefixed frame codec that survives partial reads"
+status = "existing"
+minutes = 45
+blurb = "Get whole messages out of bytes that arrive in any size"
+new_idea = "A stream has no boundaries: say \"need more\", take whole messages only"
+reuses = "nothing"
+required = []
+helpful = [
+    { id = "l3-binary-frame-parser", why = "optional warm-up on byte slices", reveals_method = false, hidden = true },
+]
+used_again = ["b7-requests-in-pieces", "b7-bodies-in-chunks", "b8-pieces-and-limits"]
+real_uses = "tokio_util codecs, Kafka, gRPC and database wire protocols."
+cookbook = [
+    { level = "similar", page = "tcp-framed-server", note = "Length-prefixed frames over TCP. parse_len and the connection loop were read.", hidden = true },
+]
+
+[[part]]
+number = 6
+id = "b7-requests-in-pieces"
+stage = "read-requests"
+title = "Requests that arrive in pieces"
+status = "new"
+minutes = 60
+blurb = "Read requests that arrive in halves, or several at once"
+new_idea = "Finding where a text message ends, when its head says how long its body is"
+reuses = "need-more and consume-once from part 5"
+required = ["b4-length-prefixed-codec"]
+helpful = [
+    { id = "l3-cursor-over-str", why = "optional: moving through text and only committing on success", reveals_method = false, hidden = true },
+]
+used_again = ["b7-bad-and-oversized-requests", "b7-many-requests-one-connection", "b8-read-one-request"]
+real_uses = "HTTP/1.1, Redis RESP, SMTP, language server protocol."
+cookbook = [
+    { level = "similar", page = "http1-parser", note = "A fuller HTTP/1.1 parser with the same three outcomes; parse_chunked and parse_request were read.", hidden = true },
+]
+
+[[part]]
+number = 7
+id = "b7-bad-and-oversized-requests"
+stage = "read-requests"
+title = "Refuse bad and oversized requests"
+status = "new"
+minutes = 75
+blurb = "Turn down broken and oversized requests early"
+new_idea = "Limits that fire before the input is complete, and refusing ambiguity"
+reuses = "part 6"
+required = ["b7-requests-in-pieces"]
+helpful = []
+used_again = ["b7-bodies-in-chunks", "b8-pieces-and-limits"]
+real_uses = "Every internet-facing parser; request smuggling defences in proxies."
+cookbook = [
+    { level = "similar", page = "http1-parser", note = "Limits and smuggling defences; parts of its parser were read.", hidden = true },
+    { level = "similar", page = "mini-http-server-thread-pool", note = "parse_request. It has an off-by-one at the request-line limit (see README).", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+]
+
+[[part]]
+number = 8
+id = "b7-bodies-in-chunks"
+stage = "read-requests"
+title = "A body that arrives in chunks"
+status = "new"
+minutes = 75
+blurb = "Read a body that is sent a piece at a time, safely"
+new_idea = "A nested format where every part the sender controls needs a bound"
+reuses = "need-more from part 5, limits from part 7"
+required = ["b7-bad-and-oversized-requests"]
+helpful = [
+    { id = "b7-send-a-complete-answer", why = "the writing side of the same format", reveals_method = false, hidden = true },
+]
+used_again = ["b8-pieces-and-limits"]
+real_uses = "HTTP chunked uploads, streaming decoders."
+cookbook = [
+    { level = "similar", page = "http1-parser", note = "parse_chunked, read in full. Its limits and error cases differ.", hidden = true },
+    { level = "similar", page = "mini-http-server-thread-pool", note = "parse_chunked. It leaves trailers unbounded (see README).", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+]
+
+[[part]]
+number = 9
+id = "b7-send-a-complete-answer"
+stage = "answer-requests"
+title = "Send a complete answer"
+status = "new"
+minutes = 60
+blurb = "Send replies the client can read, even when you don't know their length at first"
+new_idea = "Framing what you send, including a body whose length is not known yet"
+reuses = "the chunk form read in part 8"
+required = []
+helpful = [
+    { id = "b7-requests-in-pieces", why = "the same framing seen from the reader", reveals_method = false, hidden = true },
+]
+used_again = ["b8-write-responses", "b7-many-requests-one-connection", "b8-serve-one-client"]
+real_uses = "hyper and axum bodies, server-sent events, file downloads, any protocol writer."
+cookbook = [
+    { level = "similar", page = "mini-http-server-thread-pool", note = "write_response frames fixed and streamed bodies.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+    { level = "related", page = "http1-parser", note = "Has a serializer (Response::to_bytes); seen by signature only.", hidden = true },
+]
+
+[[part]]
+number = 10
+id = "b7-route-table"
+stage = "answer-requests"
+title = "Which route is this?"
+status = "new"
+minutes = 75
+blurb = "Choose the right handler for an address"
+new_idea = "Matching a path against patterns, with three possible outcomes"
+reuses = "splitting text as in part 6"
+required = []
+helpful = []
+used_again = ["b8-routes-and-shared-steps"]
+real_uses = "axum, actix and gateway routers; command dispatch."
+cookbook = [
+    { level = "similar", page = "mini-http-server-thread-pool", note = "Route::matches and Router::dispatch.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+    { level = "related", page = "axum-router-state", note = "Chosen by title; not read.", hidden = true },
+]
+
+[[part]]
+number = 11
+id = "b7-shared-steps"
+stage = "answer-requests"
+title = "Wrap every handler in the same steps"
+status = "new"
+minutes = 75
+blurb = "Give every handler the same extra behaviour, even when one fails"
+new_idea = "Stacking functions that are handed the rest of the chain, with a panic boundary as one of them"
+reuses = "catch_unwind from part 3"
+required = ["c2-thread-pool"]
+helpful = [
+    { id = "l4-closures-generic-vs-dyn", why = "boxed closures", reveals_method = false, hidden = true },
+    { id = "l4-plugin-logger", why = "a Vec of trait objects", reveals_method = false, hidden = true },
+]
+used_again = ["b8-routes-and-shared-steps"]
+real_uses = "tower layers, axum middleware, job-runner hooks, interceptors."
+cookbook = [
+    { level = "similar", page = "mini-http-server-thread-pool", note = "run_chain and the catch_panic middleware.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+    { level = "related", page = "tower-service-layer", note = "The same idea with traits; chosen by summary.", hidden = true },
+    { level = "related", page = "std-panic-process-exit-catch", note = "Panic payloads and catch_unwind; chosen by summary.", hidden = true },
+]
+
+[[part]]
+number = 12
+id = "b7-stay-inside-the-folder"
+stage = "answer-requests"
+title = "Stay inside the folder"
+status = "new"
+minutes = 60
+blurb = "Serve files without letting a request reach outside the folder"
+new_idea = "An untrusted name must be judged after decoding and after the file system has resolved it"
+reuses = "strict judging of input from part 7"
+required = []
+helpful = []
+used_again = ["b8-serve-files"]
+real_uses = "Static file servers, archive extraction, upload handling, sandboxes."
+cookbook = [
+    { level = "similar", page = "security-pitfalls-secure-coding", note = "fixed_resolve, read. It refuses any component that is not a plain name; this task has other rules and decodes percent escapes.", hidden = true },
+    { level = "similar", page = "mini-http-server-thread-pool", note = "serve_static and pct_decode (which accepts %+5, see README).", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+]
+
+[[part]]
+number = 13
+id = "b7-only-what-the-client-needs"
+stage = "answer-requests"
+title = "Send only what the client needs"
+status = "new"
+minutes = 60
+blurb = "Send nothing new, or only the part a client asks for"
+new_idea = "Ordering the rules for \"unchanged\" and \"part of it\", and surviving the edge numbers"
+reuses = "digit checks from part 7"
+required = []
+helpful = []
+used_again = ["b8-serve-files"]
+real_uses = "CDNs, resumable downloads, video seeking, optimistic concurrency with ETags."
+cookbook = [
+    { level = "similar", page = "http-caching-conditional", note = "parse_range, read. It trims inside the range and would underflow for an empty body.", hidden = true },
+    { level = "similar", page = "mini-http-server-thread-pool", note = "parse_range and the conditional part of serve_static.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+]
+
+[[part]]
+number = 14
+id = "l1-raii-span-guard"
+stage = "run-it-for-real"
+title = "An RAII span guard"
+status = "existing"
+minutes = 45
+blurb = "Make something happen however a piece of code ends"
+new_idea = "Undoing something in Drop, so every way out of a scope does it"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["b8-report-what-is-happening", "b7-stop-a-listening-server"]
+real_uses = "Gauges, tracing spans, lock guards, temporary files."
+cookbook = [
+    { level = "related", page = "mini-http-server-thread-pool", note = "LiveGuard and the Active guard.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+]
+
+[[part]]
+number = 15
+id = "c3-atomic-stats"
+stage = "run-it-for-real"
+title = "Lock-free statistics counters"
+status = "existing"
+minutes = 45
+blurb = "Keep correct counts when many threads report at once"
+new_idea = "Counting from many threads without a lock"
+reuses = "nothing new from this series"
+required = []
+helpful = []
+used_again = ["b7-how-long-requests-take", "b8-report-what-is-happening"]
+real_uses = "Metrics libraries, rate counters, allocator statistics."
+cookbook = [
+    { level = "related", page = "concurrent-counters-and-statistics", note = "Chosen by title; not read.", hidden = true },
+]
+
+[[part]]
+number = 16
+id = "b7-how-long-requests-take"
+stage = "run-it-for-real"
+title = "How long do requests take?"
+status = "new"
+minutes = 90
+blurb = "Report how long requests take without using ever more memory"
+new_idea = "Percentiles and a report from fixed memory"
+reuses = "atomics from part 15"
+required = ["c3-atomic-stats"]
+helpful = []
+used_again = ["b8-report-what-is-happening"]
+real_uses = "Prometheus histograms, HdrHistogram, latency SLOs; later FlowForge task timings."
+cookbook = [
+    { level = "similar", page = "metrics-prometheus-histograms-load-testing", note = "A fixed-bucket Prometheus histogram; struct and constructor read.", hidden = true },
+    { level = "similar", page = "mini-http-server-thread-pool", note = "Histogram (log-linear). Its le buckets and values above 2^40 are wrong (see README).", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+]
+
+[[part]]
+number = 17
+id = "b7-talk-over-a-connection"
+stage = "run-it-for-real"
+title = "Talk to clients over the network"
+status = "new"
+minutes = 90
+blurb = "Exchange complete messages over a real connection"
+new_idea = "A socket is a stream: loop on reads, write all of it, and close without losing the last reply"
+reuses = "need-more from part 5, limits from part 7, write_all from part 9"
+required = ["b7-requests-in-pieces"]
+helpful = [
+    { id = "b7-send-a-complete-answer", why = "write_all", reveals_method = false, hidden = true },
+]
+used_again = ["b7-stop-a-listening-server", "b8-serve-one-client"]
+real_uses = "Any TCP service or client: databases, proxies, chat, line protocols."
+cookbook = [
+    { level = "related", page = "std-net-tcp-udp-ip-addr", note = "std::net by use case; chosen by summary.", hidden = true },
+    { level = "similar", page = "mini-http-server-thread-pool", note = "lingering_close and the read loop of serve_connection.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+]
+
+[[part]]
+number = 18
+id = "b7-many-requests-one-connection"
+stage = "run-it-for-real"
+title = "Many requests on one connection"
+status = "new"
+minutes = 75
+blurb = "Answer several requests on one connection, and know when to end it"
+new_idea = "One loop over a buffer that serves many requests and knows when to stop"
+reuses = "parts 6 and 9"
+required = ["b7-requests-in-pieces"]
+helpful = [
+    { id = "b7-tests-without-luck", why = "part 21 builds a scripted stream like the one these tests use", reveals_method = false, hidden = true },
+]
+used_again = ["b7-clients-that-go-quiet", "b8-keep-connections-open"]
+real_uses = "HTTP keep-alive, Redis and Postgres pipelining."
+cookbook = [
+    { level = "similar", page = "mini-http-server-thread-pool", note = "serve_connection and wants_keep_alive.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+    { level = "related", page = "sans-io-protocol", note = "A protocol driven without sockets; chosen by summary.", hidden = true },
+]
+
+[[part]]
+number = 19
+id = "b7-clients-that-go-quiet"
+stage = "run-it-for-real"
+title = "Clients that go quiet, or drip"
+status = "new"
+minutes = 75
+blurb = "Stop slow or silent clients from holding the server"
+new_idea = "Deadlines for idle and half-sent input, checked on every turn"
+reuses = "the buffer loop of part 18; one deadline across many waits from part 1"
+required = ["b7-many-requests-one-connection"]
+helpful = [
+    { id = "c1-blocking-queue", why = "one total timeout across many waits", reveals_method = false, hidden = true },
+]
+used_again = ["b8-keep-connections-open", "b8-shut-down-cleanly"]
+real_uses = "Slow-loris defence, idle connection reaping, protocol timers tested with a fake clock."
+cookbook = [
+    { level = "similar", page = "mini-http-server-thread-pool", note = "The timeout branches of serve_connection. They miss a client that keeps dripping (see README).", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+    { level = "related", page = "deterministic-simulation-testing", note = "Simulated time on a larger scale; chosen by summary.", hidden = true },
+]
+
+[[part]]
+number = 20
+id = "b7-stop-a-listening-server"
+stage = "run-it-for-real"
+title = "Stop a server that is waiting"
+status = "new"
+minutes = 90
+blurb = "Stop a server that is busy waiting"
+new_idea = "Making every blocked thread return, then joining them all"
+reuses = "draining shutdown from part 3, Drop from part 14, sockets from part 17"
+required = ["b7-talk-over-a-connection"]
+helpful = [
+    { id = "c2-thread-pool", why = "join on shutdown and in Drop", reveals_method = false, hidden = true },
+    { id = "b7-clients-that-go-quiet", why = "why a check must not depend on quiet reads", reveals_method = true, hidden = true },
+]
+used_again = ["b8-shut-down-cleanly"]
+real_uses = "Rolling deploys, test servers, any long-running service."
+cookbook = [
+    { level = "similar", page = "tcp-framed-server", note = "Stop flag, drain and join over a framed protocol; shutdown and the connection loop were read.", hidden = true },
+    { level = "related", page = "graceful-shutdown", note = "Async version; chosen by title.", hidden = true },
+]
+
+[[part]]
+number = 21
+id = "b7-tests-without-luck"
+stage = "run-it-for-real"
+title = "Take the luck out of a test"
+status = "new"
+minutes = 75
+blurb = "Write tests that give the same result every time"
+new_idea = "Letting the test decide timing and input instead of sleeping and hoping"
+reuses = "condition waiting from part 1, the Read and Write contracts from parts 9 and 17"
+required = ["c1-blocking-queue"]
+helpful = []
+used_again = ["b8-many-clients-and-overload", "b8-shut-down-cleanly"]
+real_uses = "Testing servers, queues and protocol code; mocks for streams."
+cookbook = [
+    { level = "similar", page = "mini-http-server-thread-pool", note = "Gate and wait_until.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+    { level = "related", page = "testing-patterns", note = "Chosen by title.", hidden = true },
+    { level = "related", page = "deterministic-simulation", note = "Chosen by title.", hidden = true },
+]
+
+[[revisit]]
+part = "c1-blocking-queue"
+after = "c2-thread-pool"
+how = "Solve part 1 again from a blank starter."
+
+[[revisit]]
+part = "b7-turn-work-away"
+after = "b7-send-a-complete-answer"
+how = "Write part 4 again from memory."
+minutes = 20
+
+[[revisit]]
+part = "c2-thread-pool"
+before = "b8-many-clients-and-overload"
+how = "Solve part 3 again from a blank starter before capstone step 6."
+
+[[connection]]
+idea = "Waiting for something to change"
+learn = ["c1-blocking-queue"]
+again = ["c2-bounded-channel", "c2-thread-pool", "b7-turn-work-away", "b7-tests-without-luck"]
+apply = ["b8-many-clients-and-overload"]
+
+[[connection]]
+idea = "Handling incomplete input"
+learn = ["b4-length-prefixed-codec"]
+again = ["b7-requests-in-pieces", "b7-bodies-in-chunks", "b7-talk-over-a-connection"]
+apply = ["b8-read-one-request", "b8-pieces-and-limits"]
+
+[[connection]]
+idea = "Limits on what the sender controls"
+learn = ["b7-bad-and-oversized-requests"]
+again = ["b7-bodies-in-chunks", "b7-talk-over-a-connection", "b7-stay-inside-the-folder"]
+apply = ["b8-pieces-and-limits", "b8-serve-files"]
+
+[[connection]]
+idea = "Framing what you send"
+learn = ["b7-send-a-complete-answer"]
+again = ["b7-many-requests-one-connection"]
+apply = ["b8-write-responses", "b8-serve-one-client"]
+
+[[connection]]
+idea = "Surviving a panic"
+learn = ["c2-thread-pool"]
+again = ["b7-shared-steps"]
+apply = ["b8-routes-and-shared-steps", "b8-many-clients-and-overload"]
+
+[[connection]]
+idea = "Time limits"
+learn = ["c1-blocking-queue"]
+again = ["b7-clients-that-go-quiet", "b7-stop-a-listening-server"]
+apply = ["b8-keep-connections-open", "b8-shut-down-cleanly"]
+
+[[connection]]
+idea = "Measuring while serving"
+learn = ["l1-raii-span-guard", "c3-atomic-stats"]
+again = ["b7-how-long-requests-take"]
+apply = ["b8-report-what-is-happening"]
+
+[[connection]]
+idea = "Ending cleanly"
+learn = ["c1-blocking-queue"]
+again = ["c2-thread-pool", "b7-turn-work-away", "b7-talk-over-a-connection", "b7-stop-a-listening-server"]
+apply = ["b8-shut-down-cleanly"]
+
+[[capstone]]
+step = 1
+id = "b8-read-one-request"
+title = "Read one request"
+minutes = 60
+blurb = "Understand a single request"
+prepared_by = ["b7-requests-in-pieces", "b7-bad-and-oversized-requests"]
+required = []
+cookbook = [
+    { level = "similar", page = "mini-http-server-thread-pool", note = "The Cookbook server. Shows the complete approach.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+]
+
+[[capstone]]
+step = 2
+id = "b8-pieces-and-limits"
+title = "Handle pieces and limits"
+minutes = 90
+blurb = "Cope with requests in pieces, and with too much"
+prepared_by = ["b7-bad-and-oversized-requests", "b7-bodies-in-chunks"]
+required = ["b8-read-one-request"]
+cookbook = [
+    { level = "similar", page = "mini-http-server-thread-pool", note = "The Cookbook server. Shows the complete approach.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+]
+
+[[capstone]]
+step = 3
+id = "b8-write-responses"
+title = "Write responses"
+minutes = 60
+blurb = "Answer in a form clients can read"
+prepared_by = ["b7-send-a-complete-answer"]
+required = ["b8-pieces-and-limits"]
+cookbook = [
+    { level = "similar", page = "mini-http-server-thread-pool", note = "The Cookbook server. Shows the complete approach.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+]
+
+[[capstone]]
+step = 4
+id = "b8-routes-and-shared-steps"
+title = "Routes and shared steps"
+minutes = 75
+blurb = "Send each request to its handler, with shared behaviour"
+prepared_by = ["b7-route-table", "b7-shared-steps"]
+required = ["b8-write-responses"]
+cookbook = [
+    { level = "similar", page = "mini-http-server-thread-pool", note = "The Cookbook server. Shows the complete approach.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+]
+
+[[capstone]]
+step = 5
+id = "b8-serve-one-client"
+title = "Serve one client"
+minutes = 90
+blurb = "Answer a real client"
+prepared_by = ["b7-talk-over-a-connection"]
+required = ["b8-routes-and-shared-steps"]
+cookbook = [
+    { level = "similar", page = "mini-http-server-thread-pool", note = "The Cookbook server. Shows the complete approach.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+]
+
+[[capstone]]
+step = 6
+id = "b8-many-clients-and-overload"
+title = "Serve many clients, and say when full"
+minutes = 75
+blurb = "Answer many clients, and say so when full"
+prepared_by = ["b7-turn-work-away", "b7-talk-over-a-connection"]
+required = ["b8-serve-one-client"]
+cookbook = [
+    { level = "similar", page = "mini-http-server-thread-pool", note = "The Cookbook server. Shows the complete approach.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+]
+
+[[capstone]]
+step = 7
+id = "b8-keep-connections-open"
+title = "Keep connections open, with time limits"
+minutes = 105
+blurb = "Serve several requests per connection, within time limits"
+prepared_by = ["b7-many-requests-one-connection", "b7-clients-that-go-quiet"]
+required = ["b8-many-clients-and-overload"]
+cookbook = [
+    { level = "similar", page = "mini-http-server-thread-pool", note = "The Cookbook server. Shows the complete approach.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+]
+
+[[capstone]]
+step = 8
+id = "b8-serve-files"
+title = "Serve files"
+minutes = 75
+blurb = "Serve files safely"
+prepared_by = ["b7-stay-inside-the-folder", "b7-only-what-the-client-needs"]
+required = ["b8-keep-connections-open"]
+cookbook = [
+    { level = "similar", page = "mini-http-server-thread-pool", note = "The Cookbook server. Shows the complete approach.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+]
+
+[[capstone]]
+step = 9
+id = "b8-report-what-is-happening"
+title = "Report what is happening"
+minutes = 90
+blurb = "Show what the server is doing"
+prepared_by = ["b7-how-long-requests-take", "l1-raii-span-guard"]
+required = ["b8-serve-files"]
+cookbook = [
+    { level = "similar", page = "mini-http-server-thread-pool", note = "The Cookbook server. Shows the complete approach.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+]
+
+[[capstone]]
+step = 10
+id = "b8-shut-down-cleanly"
+title = "Shut down cleanly"
+minutes = 75
+blurb = "Finish accepted work, then stop"
+prepared_by = ["b7-stop-a-listening-server", "b7-turn-work-away"]
+required = ["b8-report-what-is-happening"]
+cookbook = [
+    { level = "similar", page = "mini-http-server-thread-pool", note = "The Cookbook server. Shows the complete approach.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+]
+
+[[readiness]]
+group = "Threads and sharing"
+concept = "thread::spawn, JoinHandle::join, draining a Vec of handles"
+steps = [5, 6, 10]
+parts = ["c2-thread-pool", "b7-stop-a-listening-server"]
+
+[[readiness]]
+group = "Threads and sharing"
+concept = "thread::Builder with a name"
+steps = []
+parts = []
+note = "Reference only; not needed to pass."
+
+[[readiness]]
+group = "Threads and sharing"
+concept = "Arc, Mutex, boxed Fn trait objects that are Send + Sync"
+steps = [4, 6]
+parts = ["c1-blocking-queue", "c2-thread-pool", "b7-turn-work-away", "b7-shared-steps"]
+
+[[readiness]]
+group = "Threads and sharing"
+concept = "sync_channel, try_send, TrySendError::Full; dropping the sender ends recv"
+steps = [6, 10]
+parts = ["b7-turn-work-away"]
+note = "Part 2 first builds the idea by hand."
+
+[[readiness]]
+group = "Threads and sharing"
+concept = "One receiver shared as Arc<Mutex<Receiver>>; how long the guard lives"
+steps = [6]
+parts = ["b7-turn-work-away"]
+
+[[readiness]]
+group = "Threads and sharing"
+concept = "catch_unwind, AssertUnwindSafe"
+steps = [4, 5, 6]
+parts = ["c2-thread-pool", "b7-shared-steps"]
+
+[[readiness]]
+group = "Threads and sharing"
+concept = "AtomicU64: fetch_add, fetch_max, fetch_update"
+steps = [4, 9]
+parts = ["c3-atomic-stats", "b7-how-long-requests-take"]
+
+[[readiness]]
+group = "Threads and sharing"
+concept = "An AtomicBool stop flag"
+steps = [10]
+parts = ["b7-stop-a-listening-server"]
+
+[[readiness]]
+group = "Threads and sharing"
+concept = "A gauge that goes up and down through a guard with Drop"
+steps = [9]
+parts = ["l1-raii-span-guard", "b7-turn-work-away"]
+note = "Part 14 teaches the guard; part 4 counting before the hand-over."
+
+[[readiness]]
+group = "Parsing"
+concept = "Byte search with windows().position, from_utf8, split, split_once, slice patterns"
+steps = [1]
+parts = ["b7-requests-in-pieces", "b7-bad-and-oversized-requests"]
+
+[[readiness]]
+group = "Parsing"
+concept = "ASCII case functions, trim_matches, digit checks before parse"
+steps = [1, 2, 7]
+parts = ["b7-requests-in-pieces", "b7-bad-and-oversized-requests", "b7-many-requests-one-connection"]
+
+[[readiness]]
+group = "Parsing"
+concept = "Incomplete, done with bytes used, or invalid, as an enum"
+steps = [1, 2]
+parts = ["b4-length-prefixed-codec", "b7-requests-in-pieces"]
+
+[[readiness]]
+group = "Parsing"
+concept = "Limits on partial input; request smuggling rules"
+steps = [2]
+parts = ["b7-bad-and-oversized-requests"]
+
+[[readiness]]
+group = "Parsing"
+concept = "Chunked decoding: hex sizes, trailers, bounds"
+steps = [2]
+parts = ["b7-bodies-in-chunks"]
+
+[[readiness]]
+group = "Parsing"
+concept = "Reporting Expect: 100-continue from the parser"
+steps = [2]
+parts = ["b7-bad-and-oversized-requests"]
+note = "Step 2 explains the flag; part 7 shows the head-complete state it depends on."
+
+[[readiness]]
+group = "Parsing"
+concept = "Once refused, always refused"
+steps = [2]
+parts = ["b7-bad-and-oversized-requests", "b7-bodies-in-chunks"]
+
+[[readiness]]
+group = "Writing"
+concept = "io::Write, write! into a Vec, write_all, flush, io::Result"
+steps = [3]
+parts = ["b7-send-a-complete-answer"]
+
+[[readiness]]
+group = "Writing"
+concept = "Chunked encoding, HEAD, statuses without a body"
+steps = [3]
+parts = ["b7-send-a-complete-answer"]
+
+[[readiness]]
+group = "Writing"
+concept = "A boxed iterator that is Send; builder methods taking self"
+steps = [3]
+parts = ["b7-send-a-complete-answer"]
+note = "Part 9 teaches the boxed iterator; the signatures are given."
+
+[[readiness]]
+group = "Writing"
+concept = "Reason phrases"
+steps = [3]
+parts = []
+note = "Given in the starter (reason)."
+
+[[readiness]]
+group = "Routing"
+concept = "Patterns, captures, 404 against 405, Allow, HEAD through GET"
+steps = [4]
+parts = ["b7-route-table"]
+
+[[readiness]]
+group = "Routing"
+concept = "A chain of boxed closures with a borrowed Next; recursion over a slice"
+steps = [4]
+parts = ["b7-shared-steps"]
+
+[[readiness]]
+group = "Routing"
+concept = "Validating and generating request ids"
+steps = [4]
+parts = []
+note = "Explained in step 4."
+
+[[readiness]]
+group = "Network"
+concept = "TcpListener::bind on port 0, local_addr, incoming, TcpStream"
+steps = [5]
+parts = ["b7-talk-over-a-connection"]
+
+[[readiness]]
+group = "Network"
+concept = "read returning 0, partial reads, ErrorKind::Interrupted"
+steps = [5]
+parts = ["b7-talk-over-a-connection", "b7-many-requests-one-connection"]
+
+[[readiness]]
+group = "Network"
+concept = "shutdown(Shutdown::Write), draining before drop, why a reset loses data"
+steps = [5, 6]
+parts = ["b7-talk-over-a-connection"]
+
+[[readiness]]
+group = "Network"
+concept = "set_read_timeout, WouldBlock against TimedOut, a zero duration is an error"
+steps = [5, 7, 10]
+parts = ["b7-talk-over-a-connection", "b7-stop-a-listening-server", "b7-clients-that-go-quiet"]
+note = "Parts 17 and 20 use it; part 19 teaches both error kinds; see the step 7 hint."
+
+[[readiness]]
+group = "Network"
+concept = "set_write_timeout, set_nodelay"
+steps = []
+parts = []
+note = "Reference only; not needed to pass."
+
+[[readiness]]
+group = "Network"
+concept = "Waking accept with TcpStream::connect_timeout"
+steps = [10]
+parts = ["b7-stop-a-listening-server"]
+
+[[readiness]]
+group = "Network"
+concept = "Keep-alive rules, pipelining, a maximum number of requests, sending 100 Continue once"
+steps = [7]
+parts = ["b7-many-requests-one-connection"]
+
+[[readiness]]
+group = "Network"
+concept = "Instant, Duration, deadlines, saturating_duration_since"
+steps = [7]
+parts = ["c1-blocking-queue", "b7-clients-that-go-quiet"]
+
+[[readiness]]
+group = "Network"
+concept = "HTTP/1.0 clients cannot read chunks"
+steps = [5]
+parts = []
+note = "Explained in step 5."
+
+[[readiness]]
+group = "Files"
+concept = "Percent decoding, to_digit"
+steps = [8]
+parts = ["b7-stay-inside-the-folder"]
+
+[[readiness]]
+group = "Files"
+concept = "fs::canonicalize, Path::starts_with, join"
+steps = [8]
+parts = ["b7-stay-inside-the-folder"]
+
+[[readiness]]
+group = "Files"
+concept = "fs::read, fs::metadata, modified, UNIX_EPOCH, Path::extension"
+steps = [8]
+parts = []
+note = "Explained in the statement and a hint of step 8."
+
+[[readiness]]
+group = "Files"
+concept = "An HTTP date from a SystemTime"
+steps = [8]
+parts = []
+note = "Given in the starter (http_date)."
+
+[[readiness]]
+group = "Files"
+concept = "ETag, If-None-Match, If-Modified-Since, 304"
+steps = [8]
+parts = ["b7-only-what-the-client-needs"]
+
+[[readiness]]
+group = "Files"
+concept = "Byte ranges, 206, 416, checked_sub"
+steps = [8]
+parts = ["b7-only-what-the-client-needs"]
+
+[[readiness]]
+group = "Metrics"
+concept = "A log-scaled histogram with leading_zeros; nearest-rank quantiles"
+steps = [9]
+parts = ["b7-how-long-requests-take"]
+
+[[readiness]]
+group = "Metrics"
+concept = "Cumulative Prometheus buckets, le inclusive"
+steps = [9]
+parts = ["b7-how-long-requests-take"]
+
+[[readiness]]
+group = "Metrics"
+concept = "Counter and gauge lines, status classes, counting before writing"
+steps = [9]
+parts = []
+note = "Explained in step 9."
+
+[[readiness]]
+group = "Testing"
+concept = "A gate, a scripted stream, waiting with a deadline"
+steps = []
+parts = ["b7-tests-without-luck", "b7-many-requests-one-connection", "b7-clients-that-go-quiet"]
+note = "You do not write the capstone tests. This helps to read them and to write your own."
+
+[[side_path]]
+id = "l3-cursor-over-str"
+why = "before part 6: mostly struct lifetimes, which the server does not need"
+before = "b7-requests-in-pieces"
+
+[[side_path]]
+id = "l3-binary-frame-parser"
+why = "before part 5: byte slices; it returns None for both truncated and invalid input"
+before = "b4-length-prefixed-codec"
+
+[[side_path]]
+id = "b4-http1-request-parser"
+why = "after part 8: the whole request parser again, in one exercise"
+after = "b7-bodies-in-chunks"
+
+[[side_path]]
+id = "c3-spsc-ring"
+why = "side path after part 3: queues without locks; the server does not need them"
+after = "c2-thread-pool"
+
+[[side_path]]
+id = "c5-mini-executor"
+why = "side path before an async comparison server"

@@ -23,6 +23,8 @@ pub struct Catalog {
     pub sd: crate::sd::SdCatalog,
     /// The cookbook: reference pages by subject, and the draft sample pages (`content/cookbook`).
     pub cookbook: crate::cookbook::Cookbook,
+    /// Ordered paths through the problems that end in a capstone (`content/series`, docs/SERIES.md).
+    pub series: Vec<crate::series::Series>,
 }
 
 #[derive(Debug)]
@@ -117,11 +119,13 @@ impl Catalog {
         let retired = read_retired(root);
         let sd = crate::sd::load(root, &mut issues);
         let cookbook = crate::cookbook::load(root, &mut issues);
+        check_cookbook_refs(&tracks, &cookbook, &mut issues);
+        let series = crate::series::load(root, &tracks, &cookbook, &mut issues);
         for id in tracks.iter().flat_map(|t| &t.problems).map(|p| &p.id).filter(|id| retired.contains(*id)) {
             issues.push(Issue { path: root.join("retired.txt"), message: format!("{id} is retired but also a current problem") });
         }
         Ok(Loaded {
-            catalog: Catalog { tracks, dsa, practice_tracks, retired, sd, cookbook },
+            catalog: Catalog { tracks, dsa, practice_tracks, retired, sd, cookbook, series },
             issues,
         })
     }
@@ -518,6 +522,30 @@ fn check_unlocks(tracks: &[Track], issues: &mut Vec<Issue>) {
                 if !dsa.contains(id.as_str()) && !dsa.is_empty() {
                     issues.push(issue(&p.dir, format!("unlocked_by {id}: not a DSA problem")));
                 }
+            }
+        }
+    }
+}
+
+/// Every `[[cookbook]]` entry of a problem names a page that exists and, if it names a section, one on that page.
+fn check_cookbook_refs(tracks: &[Track], cookbook: &crate::cookbook::Cookbook, issues: &mut Vec<Issue>) {
+    for p in tracks.iter().flat_map(|t| &t.problems) {
+        for (i, r) in p.meta.cookbook.iter().enumerate() {
+            let mut report = |message: String| issues.push(issue(&p.dir.join("problem.toml"), message));
+            if r.note.trim().is_empty() {
+                report(format!("cookbook page {:?} needs a note", r.page));
+            }
+            if p.meta.cookbook[..i].iter().any(|o| o.page == r.page && o.section == r.section) {
+                report(format!("cookbook page {:?} is listed twice", r.page));
+            }
+            let Some(page) = cookbook.pages.get(&r.page) else {
+                report(format!("cookbook page {:?} does not exist", r.page));
+                continue;
+            };
+            if let Some(anchor) = &r.section
+                && !page.sections.iter().any(|s| crate::cookbook::anchor_of(&s.heading) == *anchor)
+            {
+                report(format!("cookbook page {:?} has no section {anchor:?}", r.page));
             }
         }
     }

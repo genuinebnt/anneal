@@ -1,0 +1,42 @@
+slug = "pratt-parser"
+title = "A Pratt parser for expressions"
+mode = "write"
+level = "medium"
+stage = "parsing"
+order = 1
+status = "ready"
+tags = ["parsing", "Pratt", "operator precedence", "error positions", "recursion limit"]
+teaches = [
+  "Pratt parsing: parse one operand, then keep taking operators whose left binding power is at least the minimum you were called with.",
+  "Associativity is the difference between an operator's left and right binding powers. Prefix operators have only a right one.",
+  "A recursive parser on untrusted input needs a depth limit, or the input chooses how much stack you use.",
+]
+follow_up = "1) How would you add the ternary `c ? a : b`, which is mixfix? 2) How would you keep parsing after an error and report several? 3) What does an arena of nodes with `ExprId` change compared with `Box<Expr>`?"
+related = ["L3", "Y8"]
+
+[[hints]]
+kind = "approach"
+text = "One function `expr(min_power)`: read a prefix (an atom, a parenthesised expression, or a unary operator followed by `expr(its power)`), then loop. In the loop, look at the next token; if its left power is below `min_power`, stop; otherwise consume it and parse the right side with its right power."
+
+[[hints]]
+kind = "rust"
+text = "A table `fn infix(op) -> Option<(u8, u8)>` holds the powers. Left associative is `(n, n + 1)`, right associative is `(n + 1, n)`. Calls and indexing are just operators with the highest left power and no right operand in the usual sense."
+
+[[hints]]
+kind = "edge"
+text = "`^` binds tighter than a prefix minus on its left, but its right side may itself start with a minus: give prefix operators a power between `*` and `^`. A comparison must not take another comparison on either side without parentheses: check what you are about to combine. Count depth in the one place every nesting passes through."
+
+[solution]
+explanation = "The parser is one loop per precedence level without writing the levels out. `expr(min)` reads an operand and then absorbs operators while they bind at least as tightly as `min`. A right operand is parsed with the operator's right power, which is one higher than the left for left-associative operators and one lower for right-associative ones. Prefix operators recurse with a power below `^`, which makes `-2^2` group as `-(2^2)`. Comparisons are rejected when the loop sees a second one after having built one at the same level. Every recursive path goes through `expr`, so one counter there bounds the stack."
+time = "O(n) tokens"
+space = "O(depth) stack, O(n) output"
+
+[[cookbook]]
+level = "related"
+page = "pratt-parser"
+note = "The core loop on numbers: binding powers, right-associative ^, prefix minus below it. No calls, comparisons, positions or depth limit."
+
+[[cookbook]]
+level = "exact"
+page = "expression-parsing-three-ways"
+note = "Nearly all: its Pratt parser has the same precedence levels, non-associative comparisons, calls, indexing and a depth guard. Differs: ** for ^, no assignment, extra ternary and member access, other error values."

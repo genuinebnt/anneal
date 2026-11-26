@@ -1,0 +1,16 @@
+code = "B7"
+name = "A web server from scratch"
+section = "B"
+tier = "core"
+order = 7
+summary = "Preparation for the web server capstone: bounded work, requests that arrive in pieces, replies, routes, files, timings, sockets, time limits, shutdown and repeatable tests."
+
+[[stages]]
+slug = "one-piece-at-a-time"
+name = "One piece at a time"
+band = "medium"
+
+[[stages]]
+slug = "strict-and-live"
+name = "Strict, and on a connection"
+band = "hard"

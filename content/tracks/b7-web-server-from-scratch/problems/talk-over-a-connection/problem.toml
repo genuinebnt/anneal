@@ -1,0 +1,32 @@
+slug = "talk-over-a-connection"
+title = "Talk to clients over the network"
+mode = "write"
+level = "hard"
+stage = "strict-and-live"
+order = 12
+status = "ready"
+tags = ["TcpListener", "TcpStream", "partial reads", "lingering close"]
+teaches = [
+  "TCP delivers a stream: one write on one side is not one read on the other.",
+  "`write_all`, end of stream as `Ok(0)`, and errors that belong to one client only.",
+  "Why closing with unread input loses your last reply, and how to close instead.",
+]
+follow_up = "1) What do FIN and RST mean, and which does your close send? 2) What is Nagle's algorithm, and when does `set_nodelay` matter for a request and reply protocol?"
+related = ["B4", "B8"]
+
+[[hints]]
+kind = "approach"
+text = "Keep a buffer. After each read, answer every complete line in it, then check whether what is left is already too long."
+
+[[hints]]
+kind = "rust"
+text = "`TcpListener::bind(\"127.0.0.1:0\")` then `local_addr()`. `read_line` on a `BufReader` has no limit, so it is not enough here. `TcpStream::shutdown(Shutdown::Write)` ends your side only."
+
+[[hints]]
+kind = "edge"
+text = "Dropping a socket with unread input resets the connection. What can you do between sending your last reply and dropping, and how do you keep it from lasting for ever?"
+
+[solution]
+explanation = "The loop answers complete lines before reading, and refuses a line as soon as the bytes held without a newline pass the limit. After the error it shuts down its sending side and drains for a bounded time, so the close is a normal FIN. Each client runs under `catch_unwind` and its errors end only that client."
+time = "O(bytes)"
+space = "O(max_line)"

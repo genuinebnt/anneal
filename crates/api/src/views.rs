@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use anneal_content::model::{Example, Hint, SolutionNotes};
+use anneal_content::model::{CookbookLevel, Example, Hint, SolutionNotes};
 use anneal_content::{Band, Language, Mode, Problem, Rules, Section, Status, Tier, Track};
 use anneal_rules::Violation;
 use anneal_runner::{Diagnostic, RunResult, RunStatus, TestOutcome};
@@ -218,6 +218,16 @@ pub struct UnlockRef {
     pub title: String,
 }
 
+/// A cookbook page offered on a problem.
+#[derive(Debug, Clone, Serialize)]
+pub struct CookbookLink {
+    pub level: CookbookLevel,
+    pub page: String,
+    pub title: String,
+    pub section: Option<String>,
+    pub note: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ProblemDetail {
     pub id: String,
@@ -246,6 +256,8 @@ pub struct ProblemDetail {
     pub examples: Vec<Example>,
     pub follow_up: Option<String>,
     pub related: Vec<String>,
+    /// Cookbook pages to open when stuck, least revealing first.
+    pub cookbook: Vec<CookbookLink>,
     /// Crates the problem may use, from the sandbox's crate set.
     pub crates: Vec<String>,
     pub rules: Option<Rules>,
@@ -437,6 +449,7 @@ pub fn problem_detail(
         examples: p.meta.examples.clone(),
         follow_up: p.meta.follow_up.clone(),
         related: p.meta.related.clone(),
+        cookbook: Vec::new(), // filled in by the route, which can see the cookbook
         crates: p.meta.crates.clone(),
         rules: p.meta.rules.clone(),
         draft: draft.filter(|d| *d != starter),

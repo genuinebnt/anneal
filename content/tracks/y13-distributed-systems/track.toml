@@ -1,0 +1,11 @@
+code = "Y13"
+name = "Distributed systems parts"
+section = "Y"
+tier = "sde3"
+order = 13
+summary = "Replicas that disagree for a while and still converge."
+
+[[stages]]
+slug = "replication"
+name = "Replication"
+band = "medium"

@@ -1,0 +1,49 @@
+slug = "or-set-crdt"
+title = "A set that replicas can edit offline"
+mode = "write"
+level = "medium"
+stage = "replication"
+order = 1
+status = "ready"
+tags = ["CRDT", "observed-remove set", "eventual consistency", "merge laws"]
+teaches = [
+  "A state-based CRDT converges because `merge` is commutative, associative and idempotent: delivery order and repeats stop mattering.",
+  "To remove something safely, name what you saw. A remove cancels the additions it observed and no others, so a concurrent add survives.",
+  "Every addition needs an identity that no other replica can produce: the replica's id and its own counter.",
+]
+follow_up = "1) Tombstones grow without bound: what does an optimised OR-Set keep instead, and what must it know about the replicas? 2) What goes wrong if a replica restarts and its counter begins again at zero? 3) When would last-writer-wins be an acceptable choice, and what does it lose?"
+related = ["Y7", "Y9"]
+
+[[hints]]
+kind = "approach"
+text = "Don't store whether an element is present. Store two sets that only grow: the additions, each with a unique tag, and the tags that have been removed. Presence is computed from them."
+
+[[hints]]
+kind = "rust"
+text = "A tag can be `(replica, counter)`. With `BTreeSet<(T, Tag)>` for additions and `BTreeSet<Tag>` for removals, `merge` is two unions."
+
+[[hints]]
+kind = "edge"
+text = "`remove` records only the tags this replica currently holds for the element. Removing something it has never seen records nothing. A tag stays removed even if its addition arrives later."
+
+[solution]
+explanation = "Both parts of the state only grow, and merging takes their union, so merge inherits commutativity, associativity and idempotence from set union. That is the whole convergence argument. An element is present when at least one of its addition tags has not been removed. `remove` tombstones exactly the tags it can see. An addition made concurrently elsewhere has a tag the remover never saw, so it survives: add wins. Adding again after a remove creates a new tag, so elements can come back, which a two-phase set cannot do."
+time = "O((n + m) log(n + m)) per merge"
+space = "O(additions ever seen)"
+
+[[cookbook]]
+level = "related"
+page = "crdts"
+section = "cb-the-types"
+note = "What each CRDT stores and how it merges."
+
+[[cookbook]]
+level = "exact"
+page = "crdts-code"
+note = "Part: OrSet add, remove and merge with unique tags. The replica id is an argument of add and the interface differs."
+
+[[cookbook]]
+level = "exact"
+page = "more-primers"
+section = "cb-or-set-crdt"
+note = "Part: a state-based OR-Set in which the caller supplies the unique ids."

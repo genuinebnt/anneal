@@ -24,7 +24,7 @@ const TABS: [Tab, string][] = [
 
 const AREA_COLOR = { dsa: "var(--acc)", rust: "var(--vio)" } as const;
 const AREA_NAME = { dsa: "DSA", rust: "Rust" } as const;
-const SECTION_COLOR: Record<string, string> = { D: "var(--acc)", L: "var(--vio)", S: "var(--vio)", C: "var(--vio)", Y: "var(--vio)" };
+const SECTION_COLOR: Record<string, string> = { D: "var(--acc)", L: "var(--vio)", S: "var(--vio)", C: "var(--vio)", Y: "var(--vio)", B: "var(--vio)", M: "var(--vio)" };
 
 const pct = (v: number | null) => (v === null ? "—" : `${Math.round(v)}%`);
 const dur = (s: number) => (s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`);

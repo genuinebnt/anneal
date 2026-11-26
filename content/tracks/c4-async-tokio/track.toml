@@ -1,0 +1,16 @@
+code = "C4"
+name = "Async & Tokio"
+section = "C"
+tier = "core"
+order = 4
+summary = "Using Tokio without losing data or work: cancellation safety, bounded concurrency and shutdown with a deadline."
+
+[[stages]]
+slug = "understand-it"
+name = "Understand it"
+band = "medium"
+
+[[stages]]
+slug = "design-it"
+name = "Design it"
+band = "hard"

@@ -1,0 +1,32 @@
+slug = "many-clients-and-overload"
+title = "Serve many clients, and say when full"
+mode = "write"
+level = "hard"
+stage = "server"
+order = 6
+status = "ready"
+tags = ["thread pool", "sync_channel", "try_send", "load shedding", "panic isolation"]
+teaches = [
+  "A fixed number of workers behind a bounded queue keeps threads and memory independent of the number of clients.",
+  "Refusing early is better than waiting without bound.",
+  "Even the refusal needs care: it must arrive, and it must not slow down accepting.",
+]
+follow_up = "1) What should `Retry-After` be, and what happens if every refused client obeys it exactly? 2) How would you choose workers and queue length from a latency target?"
+related = ["B7", "B4"]
+
+[[hints]]
+kind = "approach"
+text = "One acceptor hands streams to the workers through a bounded channel. When the hand-over fails because it is full, the stream goes to the refusal path instead."
+
+[[hints]]
+kind = "rust"
+text = "A `std::sync::mpsc::sync_channel` receiver can be shared as `Arc<Mutex<Receiver<_>>>`. Mind how long the lock guard lives: `let job = rx.lock().unwrap().recv();` drops it at the semicolon, a `match` on that expression does not."
+
+[[hints]]
+kind = "edge"
+text = "Writing the 503 and closing takes time. Do it somewhere a silent or slow client cannot delay `accept`."
+
+[solution]
+explanation = "Workers take streams from one bounded channel; the guard is released before the connection is served, so they really run in parallel. A full channel means refusal: the stream goes to a separate rejector thread, which writes 503 and closes politely."
+time = "O(1) hand-over per connection"
+space = "O(workers + queue_cap)"

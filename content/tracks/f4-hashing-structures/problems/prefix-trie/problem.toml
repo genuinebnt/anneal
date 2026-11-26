@@ -1,0 +1,47 @@
+slug = "prefix-trie"
+title = "A dictionary that answers prefix questions"
+mode = "write"
+level = "medium"
+stage = "query-structures"
+order = 7
+status = "ready"
+tags = ["trie", "machine-coding", "60-min", "prefix search"]
+teaches = [
+    "A set organised by whole words cannot answer questions about parts of words quickly.",
+    "Keeping a count where it will be asked for turns a search into a lookup.",
+    "Removal has to leave the structure as if the word had never been added.",
+]
+follow_up = "1) Children could be a `Vec`, a `HashMap`, a `BTreeMap` or a fixed array. When would you pick each? 2) How would you merge chains of single children, and what gets harder? 3) What changes if you walk bytes instead of chars? 4) How would you return the 10 most used completions of a prefix quickly?"
+related = ["S2", "S4"]
+
+[[hints]]
+kind = "approach"
+text = "Let each node stand for one prefix, with a child for each next character. A word is stored by walking, creating what is missing, and marking the last node. Every question about a prefix then starts by walking to one node."
+
+[[hints]]
+kind = "rust"
+text = "Nodes in a `Vec`, with `usize` links, avoid fighting the borrow checker while walking and changing. A `BTreeMap<char, usize>` per node is forbidden here, but a `Vec<(char, usize)>` kept sorted gives the same order with `binary_search_by_key`."
+
+[[hints]]
+kind = "edge"
+text = "Check that a word is present before you change any counts. If each node knows how many words pass through it, `count_prefix` is one walk, and a node whose count falls to zero can be unlinked. The empty word lives at the root. When listing with a limit, stop walking as soon as you have enough."
+
+[solution]
+explanation = "The root stands for the empty prefix and every other node for one non-empty prefix of at least one stored word. Each node keeps its children sorted by character, whether a word ends there, and how many stored words pass through it. count_prefix is a walk plus one read. Listing walks the subtree in child order, which is ascending string order, and stops at the limit. Removal first confirms the word is stored, then lowers the counts along the path; the first child whose count reaches zero is unlinked and its whole chain goes to a free list, so node_count equals what a freshly built trie would have."
+time = "insert, contains, remove and count_prefix O(length × log branching); listing O(prefix + output characters)"
+space = "O(distinct prefixes)"
+
+[[cookbook]]
+level = "related"
+page = "tries-advanced-questions"
+note = "Where tries lead next."
+
+[[cookbook]]
+level = "exact"
+page = "trie-radix"
+note = "Part: insert, remove with pruning, listing under a prefix and longest prefix, on bytes with values. Not covered: counts per prefix, a listing limit."
+
+[[cookbook]]
+level = "exact"
+page = "tries-core-questions"
+note = "Part (its Q1): counting words by prefix and deletion, for a to z only."

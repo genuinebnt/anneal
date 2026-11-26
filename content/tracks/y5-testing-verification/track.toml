@@ -1,0 +1,11 @@
+code = "Y5"
+name = "Testing & verification"
+section = "Y"
+tier = "sde3"
+order = 5
+summary = "Tests that find bugs: check implementations against a model, and shrink a random failure to something you can read."
+
+[[stages]]
+slug = "understand-it"
+name = "Understand it"
+band = "medium"

@@ -1,0 +1,48 @@
+slug = "drain-with-deadline"
+title = "Shut down without losing work"
+mode = "write"
+level = "hard"
+stage = "design-it"
+order = 3
+status = "ready"
+tags = ["tokio", "graceful shutdown", "CancellationToken", "select!", "deadline"]
+teaches = [
+  "Graceful shutdown is three steps: stop accepting, drain what was accepted, and give up at a deadline while saying exactly what was not done.",
+  "The shutdown signal must be watched while a job runs, or the grace period starts late.",
+  "`Receiver::close` makes senders fail while `recv` still hands out what is already queued, so no accepted job is silently dropped.",
+]
+follow_up = "1) Why is one deadline for the whole drain safer than a timeout per job? 2) A dropped handler future may leave a job half done: what do idempotency keys or an outbox add? 3) How would several workers share one deadline?"
+related = ["C4", "C2"]
+crates = ["tokio", "tokio-util"]
+
+[[hints]]
+kind = "approach"
+text = "Keep one `Option<Instant>`: the drain deadline, empty until the token is cancelled. It is set in exactly one way, whether the signal arrives between jobs or in the middle of one, and setting it closes the receiver."
+
+[[hints]]
+kind = "rust"
+text = "Pin the handler's future (`tokio::pin!`) and loop over a `select!` that polls `&mut work`, `token.cancelled()` (only while there is no deadline) and `sleep_until(deadline)` (only once there is one). Branch preconditions are written `pat = fut, if cond => ..`."
+
+[[hints]]
+kind = "edge"
+text = "After `close`, `try_recv` until it fails to collect what never started. If the deadline has passed between two jobs, don't start the next one."
+
+[solution]
+explanation = "The worker is always waiting for two things at once: its current work and the shutdown signal. When the signal arrives it closes the channel, so new sends fail and the caller still owns those jobs, and it fixes a single deadline. Jobs already accepted are run in order until the deadline. The one running then is dropped and reported, and the ones never started are returned in order. Every accepted job is therefore in exactly one of three places in the report. Syntax to remember: `CancellationToken::cancelled`, `Receiver::close`, `tokio::time::sleep_until`, `select!` with `biased;` and `if` preconditions."
+time = "O(jobs)"
+space = "O(queued jobs) at shutdown"
+
+[[cookbook]]
+level = "related"
+page = "graceful-shutdown"
+note = "Stop, then drain what is queued. No deadline, and the channel is not closed."
+
+[[cookbook]]
+level = "similar"
+page = "structured-concurrency-cancellation"
+note = "One grace deadline that starts when cancellation is seen, over a set of tasks."
+
+[[cookbook]]
+level = "similar"
+page = "tokio-runtime-tasks-channels-timers"
+note = "Its graceful-shutdown example: a CancellationToken and workers that drain."

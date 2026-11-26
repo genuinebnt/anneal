@@ -1,0 +1,47 @@
+slug = "union-find"
+title = "Groups that merge, and can be undone"
+mode = "write"
+level = "medium"
+stage = "query-structures"
+order = 6
+status = "ready"
+tags = ["union-find", "machine-coding", "60-min", "rollback"]
+teaches = [
+    "A forest stored as a vector of parent indices answers \"same group?\" without storing the groups.",
+    "A small rule about which tree goes under which keeps every path short.",
+    "Undo is cheap when each change is small and recorded; an optimisation that rewrites many entries makes it dear.",
+]
+follow_up = "1) Path compression makes finds faster. Why does it fight with undo? 2) What do union by size and union by rank each guarantee? 3) How would you answer \"when did a and b first become connected\"? 4) Why can this structure add links but not delete an arbitrary one?"
+related = ["S3", "F3"]
+
+[[hints]]
+kind = "approach"
+text = "Give every element a parent index; a group is a tree and its root names it. Two elements are in one group when their roots are equal, and merging two groups changes a single parent. Decide which root goes under which so that trees stay shallow."
+
+[[hints]]
+kind = "rust"
+text = "Two vectors (parent and size) and a counter are enough for the first three parts. For undo, push a small enum onto a `Vec` for every change, and make a checkpoint the length of that history."
+
+[[hints]]
+kind = "edge"
+text = "A union of two elements that already share a root must change nothing, including the counter and the history. If you attach the smaller tree under the larger one, a find takes at most `log2 n` steps even if you never compress paths, so there is nothing extra to undo."
+
+[solution]
+explanation = "Each group is a tree held in a parent vector. A union finds both roots and hangs the smaller tree under the larger, so an element gets one step deeper only when its group at least doubles, which bounds every path at log2 n. No path compression is used: without it, a union changes one parent, one size and two counters, so undoing it is trivial. The history records each union by the root that was attached, and each added element; a checkpoint is just the history's length. The largest group size is saved with each union so it can be restored."
+time = "find, connected and union O(log n); size and count O(log n) or O(1); rollback O(changes undone)"
+space = "O(n + unions)"
+
+[[cookbook]]
+level = "related"
+page = "amortized-analysis-online-algorithms"
+note = "Why the usual optimisations make finds nearly constant."
+
+[[cookbook]]
+level = "similar"
+page = "graphs-and-union-find-questions"
+note = "Union-find on other questions, including a weighted one."
+
+[[cookbook]]
+level = "exact"
+page = "union-find"
+note = "Part: union, connected and the group count. Not covered: sizes in the interface, adding elements, undo. It halves paths, which this reference does not."

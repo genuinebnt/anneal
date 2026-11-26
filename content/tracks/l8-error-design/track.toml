@@ -1,0 +1,11 @@
+code = "L8"
+name = "Error design"
+section = "L"
+tier = "core"
+order = 8
+summary = "Errors callers can act on: typed library errors that keep their cause, and application errors that add context without throwing the cause away."
+
+[[stages]]
+slug = "conversion-and-crates"
+name = "Conversion and crates"
+band = "medium"

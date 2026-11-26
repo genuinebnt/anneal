@@ -1,0 +1,243 @@
+/* A series (docs/SERIES.md): its page, the entry on the Rust home, and what the workspace adds for a problem in one
+   (the Connections block and the completion view). Taken from docs/mockups/series.html; every class is sx- prefixed. */
+.sx-page{padding:26px clamp(16px,4vw,56px) 96px}
+.sx-back{font:600 12.5px var(--mono);color:var(--dim)}
+.sx-back a{display:inline-flex;align-items:center;min-height:32px;color:var(--vio)}
+.sx-hero{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:40px;align-items:end;margin-top:14px}
+.sx-hero h1{margin:0;font-size:clamp(34px,4.4vw,56px);line-height:1.1;letter-spacing:-.02em;text-wrap:balance}
+.sx-hero p{max-width:66ch;margin:16px 0 0;color:var(--mut);font-size:17px;line-height:1.6}
+.sx-progress{display:grid;gap:10px;padding:18px;border:1px solid var(--line2);border-radius:16px;background:var(--panel)}
+.sx-progress span{color:var(--dim);font-size:13px}
+.sx-segs{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:5px}
+.sx-segs i{height:6px;border-radius:3px;background:var(--raise)}
+.sx-segs i.on{background:var(--grn)}
+.sx-next{display:flex;flex-wrap:wrap;gap:20px;align-items:center;justify-content:space-between;margin-top:28px;padding:22px 26px;border:1px solid color-mix(in oklab,var(--vio) 55%,var(--line));border-radius:18px;background:color-mix(in oklab,var(--vio) 11%,var(--panel))}
+.sx-next>div{min-width:0}
+.sx-next h2{margin:0;font-size:21px}
+.sx-next p{margin:8px 0 0;color:var(--mut);font-size:14.5px;line-height:1.55}
+.sx-btn{display:inline-block;padding:13px 24px;border-radius:10px;background:var(--vio);color:var(--on-acc);font-weight:700;font-size:14px;text-align:center}
+.sx-ghost{display:inline-block;padding:12px 22px;border:1px solid var(--line);border-radius:10px;font-weight:600;font-size:14px;color:var(--fg)}
+.sx-ghost:hover{background:var(--raise)}
+.sx-cols{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:28px;margin-top:34px;align-items:start}
+.sx-cols h2{margin:0 0 14px;font-size:18px}
+.sx-stage{margin:22px 0 10px;font-size:15px;color:var(--mut)}
+.sx-cols h2+div .sx-stage{margin-top:0}
+.sx-path{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:minmax(0,1fr);gap:10px}
+.sx-part{display:grid;grid-template-columns:34px minmax(0,1fr) 64px 76px;gap:16px;align-items:center;padding:16px 18px;border:1px solid var(--line2);border-radius:14px;background:var(--panel)}
+.sx-part:has(>a:hover){border-color:var(--line);background:var(--raise)}
+.sx-part.is-next{border-color:color-mix(in oklab,var(--vio) 60%,var(--line))}
+.sx-part.is-to_write{border-style:dashed}
+.sx-part>a,.sx-part>div{display:grid;gap:5px;color:var(--fg)}
+.sx-part>a b,.sx-part>div b{font-size:16px}
+.sx-part>a span,.sx-part>div span{color:var(--mut);font-size:14px;line-height:1.5}
+.sx-n{display:grid;place-items:center;width:34px;height:34px;border-radius:50%;border:1px solid var(--line);font:700 13px var(--mono);color:var(--mut)}
+.sx-part.is-solved .sx-n,.sx-part.is-assisted .sx-n,.sx-revisit.is-done .sx-n{background:var(--grn);border-color:var(--grn);color:var(--on-acc)}
+.sx-part.is-next .sx-n{border-color:var(--vio);color:var(--vio)}
+.sx-min{font:500 12.5px var(--mono);color:var(--dim);text-align:right}
+.sx-state{font:700 12px var(--mono);color:var(--grn);text-align:right}
+.sx-part.is-next .sx-state{color:var(--vio)}
+.sx-part.is-to_write .sx-state{color:var(--acc)}
+.sx-part.is-started .sx-state{color:var(--warn)}
+.sx-revisit{display:grid;border:1px dashed var(--line);border-radius:14px}
+.sx-revisit:not(:has(>a)),.sx-revisit>a{display:grid;grid-template-columns:34px minmax(0,1fr);gap:16px;align-items:center;padding:12px 18px;color:var(--fg)}
+.sx-revisit>a:hover{background:var(--raise);border-radius:14px}
+.sx-revisit div{display:grid;gap:3px}
+.sx-revisit b{font-size:14px}
+.sx-revisit div span{color:var(--dim);font-size:13px}
+.sx-revisit .sx-n{border-style:dashed}
+.sx-revisit.is-due{border-color:color-mix(in oklab,var(--vio) 60%,var(--line))}
+.sx-revisit.is-due div span{color:var(--vio)}
+.sx-open{margin:14px 2px 0;color:var(--dim);font-size:13px}
+.sx-box{padding:20px;border:1px solid var(--line2);border-radius:16px;background:var(--panel);margin-bottom:14px}
+.sx-small{margin:0 0 10px;font-size:13px;color:var(--dim);line-height:1.5}
+.sx-need{width:100%;border-collapse:collapse;font-size:13.5px}
+.sx-need th{text-align:left;font-size:12px;color:var(--dim);padding:0 0 6px}
+.sx-need td{padding:9px 0;border-top:1px solid var(--line2);vertical-align:top;color:var(--mut);line-height:1.45}
+.sx-need td:last-child,.sx-need th:last-child{text-align:right;padding-left:12px;width:132px}
+.sx-need td:last-child{color:var(--fg)}
+.sx-need td{padding:4px 0}
+.sx-need td:last-child{padding-top:11px}
+.sx-need summary{cursor:pointer;color:var(--fg);padding:7px 0;line-height:18px}
+.sx-need ul{margin:4px 0 6px;padding:0 0 0 16px;display:grid;gap:8px}
+.sx-need li small{display:block;font-size:12px;color:var(--dim)}
+.sx-map{list-style:none;margin:0;padding:0}
+.sx-map li{display:grid;gap:5px;padding:14px 0;border-top:1px solid var(--line2)}
+.sx-map li:first-child{border:0;padding-top:0}
+.sx-map b{font-size:14.5px}
+.sx-map span{display:grid;grid-template-columns:52px minmax(0,1fr);gap:10px;font-size:13.5px;color:var(--mut)}
+.sx-map em{font:600 11.5px var(--mono);font-style:normal;color:var(--vio);padding-top:2px}
+.sx-side>a{display:grid;gap:3px;padding:10px 0;border-top:1px solid var(--line2);color:var(--fg);font-size:14px}
+.sx-side>a:hover{color:var(--vio)}
+.sx-side>a small{color:var(--dim);font-size:12.5px}
+
+/* capstone */
+.sx-cap{margin-top:26px;padding:24px;border:1px solid color-mix(in oklab,var(--acc) 50%,var(--line));border-radius:18px;background:color-mix(in oklab,var(--acc) 7%,var(--panel))}
+.sx-caphead{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;align-items:baseline}
+.sx-cap h2{margin:0;font-size:21px}
+.sx-caphead span{font:600 12px var(--mono);color:var(--acc)}
+.sx-cap>p{margin:10px 0 0;color:var(--mut);font-size:14.5px;line-height:1.55}
+.sx-cap ol{margin:18px 0 0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.sx-cap li{display:grid;grid-template-columns:22px minmax(0,1fr);align-content:start;gap:3px 10px;padding:13px 15px;border-radius:12px;background:var(--inset)}
+.sx-cap li i{grid-row:span 2;font:700 13px var(--mono);font-style:normal;color:var(--acc);padding-top:2px}
+.sx-cap li b,.sx-cap li a{font-size:14.5px;font-weight:700;color:var(--fg)}
+/* the padding makes the link big enough to tap without moving the lines under it */
+.sx-cap li a{display:block;margin:-8px 0;padding:8px 0}
+.sx-cap li a:hover{text-decoration:underline;text-underline-offset:3px}
+.sx-cap li span{font-size:13.5px;color:var(--mut);line-height:1.5}
+.sx-cap li.is-next{box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--vio) 60%,var(--line))}
+.sx-cap li.is-solved i,.sx-cap li.is-assisted i{color:var(--grn)}
+.sx-cap>p.sx-capnote{margin-top:16px;font-size:13px;color:var(--dim)}
+.sx-cap details{margin-top:12px;font-size:14px}
+.sx-cap summary,.sx-links summary{cursor:pointer;font-weight:600}
+.sx-cap summary small{display:block;margin:3px 0 0 17px;font-weight:400;color:var(--dim)}
+.sx-cap details a{display:inline-flex;align-items:center;min-height:32px;margin:6px 0 0 17px;color:var(--vio)}
+
+/* the entry on the Rust home */
+.sx-entry{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) auto;gap:20px 40px;align-items:center;margin-bottom:12px;padding:22px 26px;border:1px solid color-mix(in oklab,var(--vio) 45%,var(--line2));border-radius:16px;background:color-mix(in oklab,var(--vio) 8%,var(--panel));color:var(--fg)}
+.sx-entry:hover{border-color:color-mix(in oklab,var(--vio) 70%,var(--line))}
+.sx-entry h3{margin:0;font-size:21px;letter-spacing:-.01em}
+.sx-entry p{margin:8px 0 0;color:var(--mut);font-size:14px;line-height:1.55}
+.sx-entry-p{display:grid;gap:9px;font-size:13.5px;min-width:0}
+.sx-entry-p span{color:var(--mut);font-size:13px}
+
+/* the workspace: breadcrumb, Connections, completion view */
+.subbar .crumb.sx-crumb{font:500 13px var(--sans);letter-spacing:0;color:var(--mut)}
+.sx-crumb a{display:inline-block;line-height:32px}
+.sx-crumb a:hover{color:var(--fg)}
+.sx-crumb a.sx-name{font-weight:700;color:var(--fg)}
+.sx-meta{margin:-6px 0 0;font:400 12.5px var(--sans);color:var(--dim);line-height:1.6}
+.sx-about{display:grid;justify-items:start;gap:8px;font-size:12.5px;color:var(--dim)}
+.sx-about p{margin:0}
+.sx-about p a{display:inline-block;color:var(--mut);text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:3px}
+.sx-tags{display:flex;flex-wrap:wrap;gap:6px}
+.sx-showtags{min-height:32px;text-align:left;font:600 12.5px var(--sans);color:var(--mut)}
+.sx-showtags small{margin-left:6px;font-weight:400;font-size:12px;color:var(--dim)}
+.sx-links{padding:16px;border:1px solid color-mix(in oklab,var(--vio) 40%,var(--line));border-radius:14px;background:color-mix(in oklab,var(--vio) 8%,var(--panel));display:grid;gap:12px}
+.sx-links h2{margin:0;font-size:15px}
+.sx-first{display:grid;gap:4px}
+.sx-first>b{font-size:12.5px;color:var(--fg)}
+.sx-first p{margin:0;font-size:13.5px;color:var(--mut);line-height:1.55}
+.sx-links summary{font-size:13.5px;color:var(--fg)}
+.sx-links summary small{display:block;margin:3px 0 0 17px;font-weight:400;color:var(--dim)}
+.sx-links details>a,.sx-links details>div,.sx-first>a,.sx-first>div{display:grid;gap:2px;margin-top:10px;font-size:13.5px;color:var(--fg);line-height:1.45}
+.sx-links details>a:hover span,.sx-first>a:hover span{text-decoration:underline;text-underline-offset:3px}
+.sx-links em{font:600 11px var(--mono);font-style:normal;color:var(--vio)}
+.sx-links a small,.sx-links div>small{color:var(--dim);font-size:12.5px}
+.sx-done{flex:1;min-height:0;overflow:auto;scrollbar-width:none;padding:28px clamp(18px,3vw,40px) 36px;display:grid;grid-template-columns:minmax(0,1fr);gap:24px;align-content:start}
+.sx-done::-webkit-scrollbar{display:none}
+.sx-done header h2{margin:0;font-size:27px;line-height:1.2;text-wrap:balance}
+.sx-done header p{margin:10px 0 0;color:var(--mut);font-size:14px}
+.sx-done h3{margin:0 0 10px;font-size:15.5px}
+.sx-done ul{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.sx-done li{display:grid;grid-template-columns:130px minmax(0,1fr);gap:14px;padding:11px 14px;border-radius:10px;background:var(--inset);font-size:14px;line-height:1.5}
+.sx-done li b{font:700 11.5px var(--mono);color:var(--vio);padding-top:3px}
+.sx-done table{width:100%;border-collapse:collapse;font-size:14px}
+.sx-done th,.sx-done td{padding:10px 0;border-top:1px solid var(--line2);text-align:left;vertical-align:top;line-height:1.5}
+.sx-done th{width:156px;font-size:13px;padding-right:12px}
+.sx-done td{color:var(--mut)}
+.sx-done section p{margin:0 0 8px;font-size:14px;color:var(--mut);line-height:1.55}
+.sx-done section p a{color:var(--vio);text-decoration:underline;text-underline-offset:3px}
+.sx-skipped{margin:0;font-size:13px;color:var(--dim)}
+.sx-acts{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+
+@media (max-width:1100px){
+    .sx-cols,.sx-hero{grid-template-columns:minmax(0,1fr)}
+    .sx-entry{grid-template-columns:minmax(0,1fr)}
+    .sx-entry .sx-btn{justify-self:start}
+    /* as in the mockup, a row keeps only its time at this width; the state stays for screen readers. "Started" and
+       "With help" have no mark of their own, so they stay in sight under the time */
+    .sx-part{grid-template-columns:34px minmax(0,1fr) auto;column-gap:16px;row-gap:0}
+    .sx-part>.sx-n,.sx-part>a,.sx-part>div{grid-row:1/span 2}
+    .sx-part>.sx-n{grid-column:1}
+    .sx-part>a,.sx-part>div:not(.sx-n){grid-column:2}
+    .sx-part>.sx-min{grid-column:3;grid-row:1/span 2}
+    .sx-part.is-solved>.sx-state,.sx-part.is-next>.sx-state,.sx-part.is-open>.sx-state,.sx-part.is-to_write>.sx-state{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+    .sx-part:is(.is-started,.is-assisted)>.sx-min{grid-row:1;align-self:end}
+    .sx-part:is(.is-started,.is-assisted)>.sx-state{grid-column:3;grid-row:2;align-self:start}
+    .sx-part{position:relative}
+}
+@media (max-width:700px){
+    .sx-cap ol{grid-template-columns:minmax(0,1fr)}
+    .sx-cap{padding:18px 14px}
+    .sx-part{column-gap:12px;padding:16px 14px}
+    .sx-next{padding:18px}
+}
+@media (max-width:600px){
+    .sx-done li{grid-template-columns:minmax(0,1fr);gap:3px}
+    /* "Where it returns" keeps its two columns, as drawn */
+    .sx-done th{width:40%}
+}
+.pane.c>.gbar[hidden]{display:none}
+
+/* ---- the exercise screen: the pane layout of docs/mockups/series.html. Only a problem in a series gets it. Every control
+   of the workspace stays; the rules below change how it looks. ---- */
+.sx-ws .subbar{height:52px;padding:0 14px;border:0;background:var(--bg)}
+.sx-ws .clock{padding:5px 12px;border-radius:8px;font:600 12.5px var(--mono);color:var(--mut)}
+.sx-ws .clock small{font:inherit;letter-spacing:0;color:var(--mut)}
+.sx-ws .clock .dot{display:none}
+.sx-ws .clock.over{border-color:var(--bad)}
+.sx-ws .clock.over>span:not(.dot){color:var(--bad)!important}
+
+.sx-ws .ws{gap:8px;padding:0 10px 6px;background:var(--bg);height:calc(100vh - var(--hdr-h,52px) - 52px)}
+.sx-ws .ws>.pane{border:0;border-radius:14px;overflow:hidden}
+
+.sx-ws .pane.l>.tabs,.sx-ws .pane.r>.tabs{height:42px;gap:18px;padding:6px 18px 0!important;border:0;font-size:13.5px}
+.sx-ws .pane.l>.tabs button,.sx-ws .pane.r>.tabs button{margin:0;border:0}
+.sx-ws .pane>.tabs button.on{font-weight:700}
+.sx-ws .pane.l>.pbody{padding:6px 18px 24px;font-size:14px;line-height:1.65}
+.sx-ws .pane.l .ptitle{margin-top:6px;font-size:21px;line-height:1.2}
+.sx-ws .pane.l .md{font-size:14px;line-height:1.65}
+
+.sx-ws .ftabs{height:53px;padding:0 10px 0 16px;border-bottom:1px solid var(--line2)}
+.sx-ws .ftab-list{gap:18px}
+.sx-ws .ftab{min-width:32px;justify-content:center;padding:0;border:0;box-shadow:none;font:500 13px var(--sans)}
+.sx-ws .ftab.on{box-shadow:none;font-weight:700}
+.sx-ws .ftab small,.sx-ws .ftabs .tools .ebtn kbd{display:none}
+.sx-ws .ftabs .tools .ebtn{border-radius:8px;background:transparent}
+.sx-ws .gbar{border:0}
+/* the file line moves to the status bar; the heading of the borrow lanes keeps its row */
+.sx-ws .gbar:not(:has(.lh)){display:none}
+.sx-ws .statusb{height:32px;border-top:1px solid var(--line2);background:transparent;font-size:12px}
+.sx-ws .statusb .si{height:26px;font-size:12px}
+.sx-ws .statusb .dot{width:6px;height:6px;border-radius:50%}
+.sx-ws .statusb .sx-lang{margin-left:auto}
+.sx-ws .statusb .sx-lang+.sb-pos{margin-left:8px}
+
+.sx-ws .pane.r>.pbody{padding:6px 18px 18px!important}
+.sx-ws .pane.r .tstrip{top:-6px;margin:0 -18px;padding:8px 18px 10px;background:var(--panel);backdrop-filter:none}
+.sx-ws .pane.r .tstrip .tsum{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px}
+.sx-ws .pane.r .tstrip .tsum b{grid-area:1/1;font-size:17px}
+.sx-ws .pane.r .tstrip .tsum span{grid-area:2/1/auto/-1;margin:0;font-size:12.5px;white-space:normal}
+.sx-ws .pane.r .tstrip .tsum .tstrip-run{grid-area:1/2}
+.sx-ws .pane.r .tstrip .tsum .tstrip-run .spin{grid-area:auto}
+.sx-ws .pane.r .passbar{display:none}
+.sx-ws .pane.r .tcases{gap:8px;border:0}
+.sx-ws .pane.r .tcase{padding:2px 12px 8px;border:1px solid var(--line2);border-radius:10px;background:none}
+.sx-ws .pane.r .tcase.ok{border-color:color-mix(in oklab,var(--grn) 45%,var(--line))}
+.sx-ws .pane.r .tcase.bad{border-color:color-mix(in oklab,var(--bad) 55%,var(--line));background:var(--bad-bg)}
+.sx-ws .pane.r .tcase-h .nm{white-space:normal;overflow-wrap:anywhere}
+/* the focus timer in the narrower right pane: its modes take a row of their own */
+.sx-ws .pane.r .ft{margin:0 10px 6px;padding:12px}
+.sx-ws .pane.r .ft-h{flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.sx-ws .pane.r .ft-body{gap:12px}
+.sx-ws .pane.r .acts{padding:8px 18px 14px;border:0}
+.sx-ws .pane.r .acts button{height:42px;border-radius:10px;font-size:14px;font-weight:700}
+
+@media (max-width:1180px){
+    .sx-ws .ws{height:auto}
+}
+@media (max-width:900px){
+    .sx-ws .ws{padding:8px 8px 6px}
+    /* the breadcrumb gets a row to itself, so it is not squeezed out by the clock and its neighbours */
+    .sx-ws .subbar{flex-wrap:wrap;height:auto;gap:2px 10px;padding:6px 14px 8px}
+    .sx-ws .subbar .sx-crumb{flex:1 0 100%;white-space:normal;line-height:1.4}
+    .sx-ws .subbar .sbr{margin-left:0;width:100%;gap:10px;justify-content:space-between}
+    .sx-ws .subbar .sbr>*,.sx-ws .clock{white-space:nowrap;flex:none}
+    .sx-ws .clock{gap:6px;padding:5px 10px}
+    /* the file tabs get the whole width; the tools go under them */
+    .sx-ws .ftabs{flex-wrap:wrap;height:auto;padding:0 10px 0 14px}
+    .sx-ws .ftab-list{flex:1 0 100%;height:44px;gap:14px}
+    .sx-ws .ftabs .tools{margin-left:auto;padding:0 0 8px}
+    .sx-ws .statusb .sx-lang{display:none}
+    .sx-ws .statusb .sx-lang+.sb-pos{margin-left:auto}
+}

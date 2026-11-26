@@ -1,0 +1,32 @@
+slug = "requests-in-pieces"
+title = "Requests that arrive in pieces"
+mode = "write"
+level = "medium"
+stage = "one-piece-at-a-time"
+order = 2
+status = "ready"
+tags = ["incremental parsing", "framing", "pipelining", "enums"]
+teaches = [
+  "A stream has no message boundaries: the reader must be able to say \"not yet\".",
+  "Three answers, not two: need more, one message using n bytes, or invalid.",
+  "Consume only whole messages, so the same function works however the bytes are cut.",
+]
+follow_up = "1) Your function rescans from the start each time. For a body of 10 MB arriving in 1 KB reads, how much work is that, and what would you remember between calls? 2) What would returning slices of the buffer instead of owned strings change for the caller?"
+related = ["B4", "B8"]
+
+[[hints]]
+kind = "approach"
+text = "Look for the end of the head first. Before it is there, there is nothing to judge. After it, you know exactly how long the whole request is."
+
+[[hints]]
+kind = "rust"
+text = "`windows(4).position(..)` finds the blank line in bytes; `slice.get(a..b)` returns `None` instead of panicking when the body is not all there. `Vec::drain(..n)` removes the front."
+
+[[hints]]
+kind = "edge"
+text = "Turn only the head into text. `parse::<usize>()` accepts `+1`. Adding the body length to the head length can overflow."
+
+[solution]
+explanation = "The blank line is the first thing to find; until then the answer is \"need more\". The head fixes the total length, and `get` answers `None` while the body is short. `take_all` advances a cursor over the buffer and drains once at the end."
+time = "O(n) per call"
+space = "O(size of the requests returned)"

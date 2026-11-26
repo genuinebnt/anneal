@@ -1,0 +1,37 @@
+slug = "shrink-failing-input"
+title = "Shrink a failing input"
+mode = "write"
+level = "medium"
+stage = "understand-it"
+order = 2
+status = "ready"
+tags = ["property testing", "shrinking", "delta debugging"]
+teaches = [
+  "A random failure is only useful once it is small. Shrinking is a greedy search: try something simpler, keep it if it still fails.",
+  "Removing large blocks first makes the number of attempts grow with the size of the answer, not of the input.",
+  "One pass is not enough: simplifying a value can make another element removable, so repeat until nothing changes.",
+]
+follow_up = "1) The result is only locally minimal. Give a predicate where a smaller failing input exists that no single step reaches. 2) How does proptest shrink a `Vec` of values built with `prop_map`, and why is that hard for generate-then-shrink designs? 3) What goes wrong when the predicate is flaky?"
+related = ["Y5"]
+
+[[hints]]
+kind = "approach"
+text = "Two kinds of step: remove a block of elements, and make one element closer to zero. Whenever a step still fails, keep its result and carry on from there. Stop when a whole round of every step changes nothing."
+
+[[hints]]
+kind = "rust"
+text = "For removal, start with a block of half the length and halve it down to 1. After a successful removal, stay at the same start index: new elements have moved into it. Build the candidate as `[&v[..start], &v[end..]].concat()`."
+
+[[hints]]
+kind = "edge"
+text = "When 0 and `x / 2` both pass, try `x` minus a quarter, an eighth, and so on down to 1 (towards zero). `x / 2` rounds towards zero for negative numbers too, and `x - x.signum()` moves one step towards zero without overflowing, even for `i64::MIN`. Never try a candidate equal to the current value, or the loop will not end."
+
+[solution]
+explanation = "This is a small version of delta debugging. Removal starts with blocks of half the length, so a long input whose failure depends on a few elements collapses in a number of calls close to the logarithm of its length per needed element. Block sizes halve down to single elements, which gives the removal guarantee. Then each value is moved towards zero: straight to 0, then to half, then by steps that halve down to 1, so even a value near `i64::MIN` arrives in a few thousand calls at most. Any success marks the round as changed, and rounds repeat until a full one makes no progress, at which point both guarantees hold by construction."
+time = "O(r * n log n) predicate calls for r rounds, far fewer when large blocks go at once"
+space = "O(n)"
+
+[[cookbook]]
+level = "exact"
+page = "shrinking"
+note = "Part: the greedy loop that removes one element or halves a value while the input still fails. Not covered: removing blocks (the call budget) and the one-step and large-step value moves."

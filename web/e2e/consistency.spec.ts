@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { PART, solvePart } from "./seriesSolve";
 
 // A consistency check over the key pages: both themes, every accent, phone and laptop. It measures instead of comparing pictures, so it holds on any
 // machine: nothing wider than the screen, no console errors, no control without a name, and readable text. A change that breaks one of these fails here.
@@ -6,6 +7,7 @@ const PAGES: [string, string][] = [
     ["dsa-home", "/dsa"], ["problem", "/d/two-sum"], ["review", "/dsa/review"], ["calendar", "/dsa/calendar"], ["plan", "/dsa/plan"], ["company", "/dsa/company"],
     ["settings", "/settings"], ["log", "/log"], ["progress", "/progress"], ["mock-setup", "/dsa/mock"], ["pattern-learn", "/dsa/patterns/D1"],
     ["rust-home", "/rust"], ["rust-track", "/t/l1-ownership-moves"], ["rust-workspace", "/p/l1-fix-use-after-move"],
+    ["series", "/rust/series/web-server"], ["series-part", "/p/c2-thread-pool"],
     ["course-home", "/courses"], ["course-stage", "/courses/bustub/1a-01"], ["course-concept", "/courses/bustub/concept/positional-io-and-short-reads"],
 ];
 /** Text this check cannot judge: it cannot see a pill's moving background, gradient headline text, or a blur made on purpose; the dim items are meant to be dim. */
@@ -129,6 +131,31 @@ for (const theme of ["dark", "light"]) {
                 errors.length = 0;
                 await check(page, path, `${accent} ${theme} ${name}`, errors);
             }
+        });
+    }
+}
+
+// The completion view of a series part is not a page of its own: solve a part, then open its tab. It is checked in both themes.
+for (const theme of ["dark", "light"]) {
+    for (const [view, width, height] of [["laptop", 1440, 900], ["phone", 390, 844]] as const) {
+        test(`the series completion view is consistent in ${theme} on a ${view}`, async ({ page, request }) => {
+            test.setTimeout(240_000);
+            await solvePart(request);
+            const errors = watch(page);
+            await page.addInitScript((t) => localStorage.setItem("anneal-theme", t), theme);
+            await page.setViewportSize({ width, height });
+            await page.goto(`/p/${PART}`);
+            await page.waitForSelector(".ws .sx-meta", { state: "attached" });
+            if (view === "phone") await page.getByRole("tab", { name: "Code" }).click();
+            await page.getByRole("button", { name: "Solved", exact: true }).click();
+            await expect(page.getByRole("region", { name: "Solved" })).toBeVisible();
+            await page.waitForTimeout(600);
+            const r = (await page.evaluate(probe)) as { overflowX: number; unnamed: string[]; lowContrast: { el: string; ratio: number; text: string }[] };
+            expect.soft(r.overflowX, "wider than the screen").toBeLessThanOrEqual(1);
+            expect.soft(r.unnamed, "controls with no name").toEqual([]);
+            expect.soft(r.lowContrast.filter((c) => !NOT_JUDGED.test(c.el) && c.ratio < MIN_CONTRAST), "text under 4.5:1").toEqual([]);
+            // rust-analyzer is not part of this check, and a server without it logs the failed connection
+            expect.soft(errors.filter((e) => !e.includes("/api/lsp/")), "console errors").toEqual([]);
         });
     }
 }

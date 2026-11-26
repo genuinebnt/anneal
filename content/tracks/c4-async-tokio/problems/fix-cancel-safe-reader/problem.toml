@@ -1,0 +1,48 @@
+slug = "fix-cancel-safe-reader"
+title = "Fix: select! is eating bytes"
+mode = "fix"
+level = "medium"
+stage = "understand-it"
+order = 1
+status = "ready"
+tags = ["tokio", "select!", "cancellation safety", "AsyncRead"]
+teaches = [
+  "`select!` drops the futures that lose. Whatever a dropped future held in its own state is gone, including bytes it had already read.",
+  "Cancel-safe means: dropping the future before it finishes loses nothing. `read` and `read_buf` are; `read_exact` is not.",
+  "The fix is to keep progress in something that outlives the future: a buffer in the reader, filled by cancel-safe reads and parsed from the front.",
+]
+follow_up = "1) Which of `mpsc::Receiver::recv`, `Mutex::lock`, `write_all` and `Interval::tick` are cancel-safe, and what does each lose if not? 2) Pinning one future and polling `&mut fut` across loop iterations also works: when is that the better fix? 3) How does `tokio_util::codec::FramedRead` solve this?"
+related = ["C4", "B4"]
+crates = ["tokio"]
+
+[[hints]]
+kind = "approach"
+text = "Ask of every `.await` inside `next`: if the future were dropped right here, where would the bytes read so far be? Anything stored only in a local variable of that future is lost."
+
+[[hints]]
+kind = "rust"
+text = "Give `FrameReader` a `Vec<u8>` of bytes received but not yet returned. `AsyncReadExt::read_buf(&mut self.buf)` is cancel-safe: it either appends bytes and completes, or does nothing."
+
+[[hints]]
+kind = "edge"
+text = "One read may deliver the end of a frame, a whole second frame and half a third. Parse from the buffer before reading again, and remove only the frame you return. End of stream with a non-empty buffer is an error; with an empty one it is `Ok(None)`."
+
+[solution]
+explanation = "`read_exact` keeps how far it got inside its own future. When the tick branch wins, `select!` drops that future and the bytes it had consumed from the stream go with it, so the next call reads from the middle of a frame. The fixed reader keeps every received byte in `self.buf` before doing anything else, and the only await point is `read_buf`, which has no state of its own to lose. Parsing is plain synchronous code over the buffer. Syntax to remember: `tokio::io::AsyncReadExt::read_buf`, `Vec::drain(..n)`."
+time = "O(n) bytes, plus the cost of shifting the buffer after each frame"
+space = "O(largest frame plus one read)"
+
+[[cookbook]]
+level = "related"
+page = "async-cancel-safety"
+note = "What a losing select! branch drops, shown with a pair of channel messages."
+
+[[cookbook]]
+level = "related"
+page = "tokio-runtime-tasks-channels-timers"
+note = "Its select-and-cancellation-safety example: a batch lost with its future, and the pinned-future fix."
+
+[[cookbook]]
+level = "similar"
+page = "bytes-buf-buf-mut-framing"
+note = "decode() parses frames from the front of a buffer and consumes nothing until one is complete. Synchronous, another frame format."

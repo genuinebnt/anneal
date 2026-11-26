@@ -1,0 +1,32 @@
+slug = "report-what-is-happening"
+title = "Report what is happening"
+mode = "write"
+level = "hard"
+stage = "server"
+order = 9
+status = "ready"
+tags = ["histogram", "atomics", "RAII guard", "Prometheus text format"]
+teaches = [
+  "Percentiles from fixed memory, with a known error.",
+  "Count before the client can see the result, or a test (and a dashboard) can read stale numbers.",
+  "A guard that undoes in `Drop` keeps a gauge right on every exit path.",
+]
+follow_up = "1) The report reads many counters one by one. What can be inconsistent in it, and does it matter? 2) Why are percentiles from two servers not something you can average, and what can you add up instead?"
+related = ["B7", "B4"]
+
+[[hints]]
+kind = "approach"
+text = "Counters at the points where things happen: accept, refuse, take from the queue, answer. The report is built from them on demand."
+
+[[hints]]
+kind = "rust"
+text = "For fixed memory with a bounded relative error, give each power of two a fixed number of slots; `leading_zeros` finds the power. The report's own buckets can be separate exact counters."
+
+[[hints]]
+kind = "edge"
+text = "`le` means \"less than or equal\", and each bucket line includes all smaller ones. A gauge raised on entry must fall on every way out, also by panic."
+
+[solution]
+explanation = "The log-linear histogram gives quantiles within one eighth using 496 counters for the whole u64 range. The exposition buckets are exact counters, summed when rendering, because a log-linear slot can straddle a bound. Gauges use a drop guard."
+time = "O(1) per record, O(slots) per report"
+space = "O(1)"

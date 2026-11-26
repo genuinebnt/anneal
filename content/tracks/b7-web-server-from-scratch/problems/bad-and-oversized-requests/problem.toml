@@ -1,0 +1,32 @@
+slug = "bad-and-oversized-requests"
+title = "Refuse bad and oversized requests"
+mode = "write"
+level = "hard"
+stage = "strict-and-live"
+order = 10
+status = "ready"
+tags = ["limits", "validation", "request smuggling", "denial of service"]
+teaches = [
+  "A limit must fire while the input is incomplete, and give the same answer as on the complete input.",
+  "Ambiguity is a security bug: two programs that read one request differently can be made to disagree about the next.",
+  "The invariant \"once refused, refused for every extension\" as a test.",
+]
+follow_up = "1) Show how a proxy that uses the first `Content-Length` and a server that uses the last can be made to see different requests. 2) Which of these limits protect memory, which CPU, and what protects time?"
+related = ["B4", "B8"]
+
+[[hints]]
+kind = "approach"
+text = "For each limit write down two checks: one for when the end is here and one for when it is not. Use the same threshold in both."
+
+[[hints]]
+kind = "rust"
+text = "`bytes().all(|b| b.is_ascii_digit())` before parsing; after that, a parse error can only mean \"too big\"."
+
+[[hints]]
+kind = "edge"
+text = "The last byte so far may be the `\\r` of the line end. A space before the colon must not be trimmed away."
+
+[solution]
+explanation = "Line and head limits are checked first on whatever has arrived, allowing for half a CRLF. Only a complete head is parsed, and every ambiguous form is refused rather than interpreted."
+time = "O(bytes in the buffer)"
+space = "O(max_head)"

@@ -1,0 +1,38 @@
+slug = "fix-poll-ready"
+title = "Fix: the middleware that broke backpressure"
+mode = "fix"
+level = "hard"
+stage = "build-it"
+order = 1
+status = "ready"
+tags = ["tower", "Service", "poll_ready", "cancellation", "RAII guard"]
+teaches = [
+  "`poll_ready` reserves capacity in one particular service value. `call` must be made on that value, not on a fresh clone of it.",
+  "When a future must own the service, swap: keep the new clone in `self` and move the ready one into the future.",
+  "Code after an `.await` does not run if the future is dropped. Bookkeeping that must happen goes in a `Drop` guard.",
+]
+follow_up = "1) Why does `ConcurrencyLimit`'s clone not carry the permit? What would go wrong if it did? 2) What does `tower::Buffer` change about readiness? 3) Where does this middleware belong relative to a timeout layer, and how does the order change the counts?"
+related = ["B2", "C4", "L1"]
+crates = ["tower", "tokio"]
+
+[[hints]]
+kind = "approach"
+text = "Follow one value: which `inner` was polled ready, and which one is called? Then follow one counter: list every way the future can end, including never being polled at all."
+
+[[hints]]
+kind = "rust"
+text = "`std::mem::replace(&mut self.inner, clone)` hands you the ready service and leaves a clone behind for next time. A guard struct whose `Drop` updates the counters, created in `call` and moved into the async block, covers every ending."
+
+[[hints]]
+kind = "edge"
+text = "Give the guard an outcome that starts as \"cancelled\" and is overwritten when the inner future resolves. Beware: an `async move` block that only writes `guard.field` captures just that field, so the guard is dropped when `call` returns. Name the whole value inside the block."
+
+[solution]
+explanation = "`poll_ready` was forwarded to `self.inner`, but `call` cloned it and called the clone, which had never been polled. A service such as `ConcurrencyLimit` keeps the permit it acquired in the value that was polled, so the clone had none and panicked, while the permit stayed parked in the original. `mem::replace` moves out the ready value and leaves a new clone that will be polled before its first use. The counters were updated after the `.await`, which never runs for a dropped future, so `in_flight` only grew. A guard created in `call` and owned by the future does the accounting in `Drop`, whichever way the future ends. One catch: since edition 2021 a `move` block captures only the paths it uses, and `guard.succeeded = ..` alone would copy that `Option<bool>` and leave the guard behind in `call`, so the block first rebinds `let mut guard = guard;`. Syntax to remember: `let clone = self.inner.clone(); let mut ready = std::mem::replace(&mut self.inner, clone);`."
+time = "O(1) per request"
+space = "O(1) per request in flight"
+
+[[cookbook]]
+level = "related"
+page = "tower-service-layer"
+note = "The Service and Layer idea. Its trait is simplified and has no poll_ready, so it does not show this bug or its fix."

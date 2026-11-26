@@ -31,6 +31,7 @@ pub mod ai;
 pub mod meaning;
 pub mod reading;
 pub mod sd;
+pub mod series;
 pub mod system;
 mod views;
 
@@ -83,6 +84,9 @@ pub fn app(state: AppState, web_dist: Option<&Path>) -> Router {
         .route("/stats", get(routes::stats))
         .route("/reviews", get(routes::reviews))
         .route("/problems/{id}/resolve", post(routes::resolve))
+        .route("/series", get(series::list))
+        .route("/series/{id}", get(series::get))
+        .route("/problems/{id}/series", get(series::of_problem))
         .route("/problems/{id}/focus", post(routes::focus))
         .route("/tracks", get(routes::tracks))
         .route("/tracks/{track}", get(routes::track))

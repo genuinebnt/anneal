@@ -1,0 +1,43 @@
+slug = "api-error-response"
+title = "One error shape for the whole API"
+mode = "write"
+level = "medium"
+stage = "understand-it"
+order = 1
+status = "ready"
+tags = ["axum", "IntoResponse", "extractors", "rejections", "error mapping"]
+teaches = [
+  "Handlers return `Result<T, ApiError>`, and one `IntoResponse` impl decides every status and body.",
+  "An internal error is logged, not sent: the client gets a fixed message.",
+  "Extractor rejections happen before your handler runs. To give them your shape, you have to take them over.",
+]
+follow_up = "1) Where would you log the internal cause, and how would the client quote it back to you? 2) How does `#[derive(FromRequest)]` with `rejection(ApiError)` compare to taking `Result<Json<T>, JsonRejection>`? 3) What belongs in a tower layer instead of in the error type?"
+related = ["B1", "L8"]
+crates = ["axum", "tokio", "serde", "serde_json", "tower"]
+
+[[hints]]
+kind = "approach"
+text = "Start with `IntoResponse for ApiError`: it is a `match` that picks a status and a code, then one place that builds the JSON. Handlers become short, because `?` does the rest."
+
+[[hints]]
+kind = "rust"
+text = "An extractor argument can be `Result<Json<T>, JsonRejection>` (and `Result<Path<u64>, PathRejection>`): the handler then runs even when extraction failed. Each rejection has `.status()` and `.body_text()`. `(StatusCode, Json<Value>)` already implements `IntoResponse`."
+
+[[hints]]
+kind = "edge"
+text = "The routes that match nothing need `Router::fallback`, and a known path with the wrong method needs `method_not_allowed_fallback`. Read the table again for which rejections become 400, 415 and 422."
+
+[solution]
+explanation = "All the knowledge about status codes lives in one `match`. `Internal` keeps its cause for logs and sends a fixed sentence, so no connection string or file path leaks. Handlers take extractors as `Result`s and convert a rejection into the same type with a `From` impl, after which `?` is enough. The status comes from the rejection itself, collapsed into the three cases the contract allows. Both fallbacks are set so that even requests no handler sees get the same body. Syntax to remember: `impl IntoResponse for ApiError`, `Result<Json<T>, JsonRejection>`, `Router::new().route(\"/users/{id}\", get(handler)).with_state(state)`."
+time = "O(1) per request, beyond parsing"
+space = "O(size of the request body)"
+
+[[cookbook]]
+level = "related"
+page = "backend-request-validation-extractors"
+note = "Custom extractors that turn bad input into one problem format."
+
+[[cookbook]]
+level = "exact"
+page = "axum-errors"
+note = "Part: IntoResponse with one JSON shape that does not leak internal errors. Not covered: extractor rejections and the two fallbacks."

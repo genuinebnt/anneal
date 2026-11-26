@@ -15,6 +15,7 @@ import { PracticePage } from "./pages/PracticePage";
 import { LoginPage } from "./pages/LoginPage";
 import { ProgressPage } from "./pages/ProgressPage";
 import { SectionPage } from "./pages/SectionPage";
+import { SeriesPage } from "./pages/SeriesPage";
 import { TrackPage } from "./pages/TrackPage";
 import { COURSE_ID, CoursePage } from "./pages/CoursePage";
 import { CourseStagePage } from "./pages/CourseStagePage";
@@ -230,6 +231,14 @@ const routes = [
     component: function CookbookPageRoute() {
       const { id } = useParams({ strict: false }) as { id: string };
       return <CookbookRead id={id} />;
+    },
+  }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/rust/series/$id",
+    component: function SeriesRoute() {
+      const { id } = useParams({ strict: false }) as { id: string };
+      return <SeriesPage key={id} id={id} />;
     },
   }),
 ] as const;

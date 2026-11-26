@@ -1,0 +1,32 @@
+slug = "serve-one-client"
+title = "Serve one client"
+mode = "write"
+level = "hard"
+stage = "server"
+order = 5
+status = "ready"
+tags = ["TcpListener", "TcpStream", "lingering close", "HTTP/1.0"]
+teaches = [
+  "A read returns whatever has arrived, so reading and parsing form a loop.",
+  "Closing a socket that holds unread input resets the connection, and the reset can destroy your last reply.",
+  "One client must not be able to stop the server.",
+]
+follow_up = "1) What do FIN and RST each tell the other side? 2) Which client behaviour still blocks this server completely, and what will the next two steps do about it?"
+related = ["B7", "B4"]
+
+[[hints]]
+kind = "approach"
+text = "A background thread accepts. For each stream: read into a growing buffer, parse after every read, reply once, close."
+
+[[hints]]
+kind = "rust"
+text = "Bind to `127.0.0.1:0` and ask `local_addr()`. `read` returning `Ok(0)` is the end of the stream. `Shutdown::Write` sends your end of stream while you can still read."
+
+[[hints]]
+kind = "edge"
+text = "Before dropping the stream, read away what the client is still sending, but not for ever. A panic in one connection must not end the accept loop."
+
+[solution]
+explanation = "The server is the parser and the writer joined by a read loop. The close is the subtle part: the server sends its end of stream, then drains for a bounded time, so the kernel has no unread bytes that would make it send a reset. Each connection runs under `catch_unwind`."
+time = "O(request + response) per connection"
+space = "O(limits)"

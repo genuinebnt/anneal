@@ -1,0 +1,11 @@
+code = "B5"
+name = "Resilience"
+section = "B"
+tier = "core"
+order = 5
+summary = "Services that survive their callers and their dependencies: signed webhooks and replay protection."
+
+[[stages]]
+slug = "understand-it"
+name = "Understand it"
+band = "medium"

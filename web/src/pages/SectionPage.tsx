@@ -10,6 +10,7 @@ import { Tile } from "../components/layout";
 import "../styles/cookbook.css";
 import { BLURB, DSA_ORDER, NAV_SECTIONS, PLANNED, SECTION_NAMES, type NavArea, sectionOf } from "../curriculum";
 import { CountUp } from "../components/kit";
+import { SeriesEntries } from "./SeriesPage";
 
 const COPY: Record<NavArea, { eyebrow: string; color: string; title: [string, string]; lead: ReactNode }> = {
   dsa: {
@@ -95,7 +96,7 @@ function useStored<T extends string>(key: string, initial: T): [T, (v: T) => voi
 
 
 
-const AREA_COLOR: Record<Section, string> = { D: "var(--acc)", L: "var(--vio)", S: "var(--acc)", C: "var(--fn)", Y: "var(--grn)", F: "var(--warn)", P: "var(--acc)" };
+const AREA_COLOR: Record<Section, string> = { D: "var(--acc)", L: "var(--vio)", S: "var(--acc)", C: "var(--fn)", Y: "var(--grn)", F: "var(--warn)", B: "var(--lt)", M: "var(--mac)", P: "var(--acc)" };
 
 /** A track as a book on the shelf: its code, its stages and how far you are. */
 function BookCard({ row, i, gone, color }: { row: Row; i: number; gone: boolean; color: string }) {
@@ -364,6 +365,7 @@ export function SectionPage({ area }: { area: NavArea }) {
             )}
             <Pulse activity={activity.data} sections={sections} live={tracks.data ?? []} due={due} ready={ready} />
           </section>
+          {area === "rust" && <SeriesEntries />}
           <div className="cb-kbar">
             <label className="cb-search">
               <span aria-hidden="true">⌕</span>

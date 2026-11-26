@@ -34,6 +34,13 @@ pub const CALLOUTS: &[&str] = &["NOTE", "TIP", "WARNING", "ASIDE", "RUST", "TEST
 /// The largest lab file sent with a page.
 const MAX_LAB_FILE: u64 = 256 * 1024;
 
+/// The anchor the web app gives a section heading (`anchorOf` in `web/src/pages/cookbook/shared.tsx`).
+pub fn anchor_of(heading: &str) -> String {
+    let lower = heading.to_lowercase();
+    let words: Vec<&str> = lower.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    format!("cb-{}", words.join("-"))
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Cookbook {
     /// By id.
@@ -405,6 +412,12 @@ mod tests {
         let mut issues = Vec::new();
         assert!(load(&d.0.join("content"), &mut issues).pages.is_empty());
         assert!(issues.iter().any(|i| i.message.contains("stay inside")));
+    }
+
+    #[test]
+    fn an_anchor_matches_the_web_apps_rule() {
+        assert_eq!(anchor_of("Anomalies and isolation levels"), "cb-anomalies-and-isolation-levels");
+        assert_eq!(anchor_of("`select!`: what is dropped?"), "cb-select-what-is-dropped");
     }
 
     #[test]

@@ -1,0 +1,43 @@
+slug = "fix-macro-hygiene"
+title = "Fix: macros that surprise their caller"
+mode = "fix"
+level = "medium"
+stage = "repetition-hygiene"
+order = 1
+status = "ready"
+tags = ["macro_rules!", "$crate", "repetition", "double evaluation"]
+teaches = [
+  "A macro substitutes syntax. Every place `$x:expr` appears in the expansion evaluates the caller's expression again.",
+  "`macro_rules!` is hygienic for local variables, not for paths: name your own items with `$crate::` and std items with `::std::` or `::core::`.",
+  "`$(...),* $(,)?` accepts a trailing comma. Binding both operands with `match` evaluates each once and keeps temporaries alive.",
+]
+follow_up = "1) Why does `dbg!` expand to a `match` rather than a `let`? 2) What is the difference between `$crate` in `macro_rules!` and a plain `crate::` path? 3) When must a macro recurse (a tt-muncher), and what limits it?"
+related = ["L10"]
+
+[[hints]]
+kind = "approach"
+text = "Expand each macro by hand for a call whose argument has a side effect, and count how often it appears. Then ask which names in the expansion would have to be in scope at the call site."
+
+[[hints]]
+kind = "rust"
+text = "`match (a_expr, b_expr) { (a, b) => if b > a { b } else { a } }` evaluates both once, in order. The names `a` and `b` cannot collide with the caller's."
+
+[[hints]]
+kind = "edge"
+text = "In `ensure!`, put the `format!` inside the failing branch. A caller may define their own `Result`, `Err` or `HashMap`, so spell out `::core::result::Result::Err` and `::std::collections::HashMap`."
+
+[solution]
+explanation = "`max_of!` pasted each argument into the condition and again into a branch, so a call such as `max_of!(next(), 0)` advanced the iterator twice. Binding with `match` evaluates every expression once, left to right, and for more than two arguments the macro recurses on the tail. `map!` and `ensure!` named `HashMap`, `Err` and `Failure` as the caller sees them. Full paths and `$crate` resolve them where the macro was defined. `ensure!` also built its message before checking the condition, which paid for formatting on the success path and evaluated the arguments when nothing was wrong."
+time = "expansion is linear in the number of arguments"
+space = "no overhead at run time"
+
+[[cookbook]]
+level = "related"
+page = "metaprogramming-macros-and-staging"
+section = "cb-overview"
+note = "Hygiene compared across macro systems."
+
+[[cookbook]]
+level = "exact"
+page = "macro-rules"
+note = "Part: its hashmap! has the repetition and trailing comma of map!, but names HashMap without a full path. Warning: its max_of! evaluates an argument more than once, which is this problem's bug."

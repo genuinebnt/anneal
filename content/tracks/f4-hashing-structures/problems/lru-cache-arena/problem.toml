@@ -1,0 +1,42 @@
+slug = "lru-cache-arena"
+title = "An O(1) LRU cache without Rc or unsafe"
+mode = "write"
+level = "hard"
+stage = "tables"
+order = 5
+status = "ready"
+tags = ["LRU", "index-linked list", "HashMap", "arena"]
+teaches = [
+  "A doubly linked list can live in a `Vec`, with `usize` indices as links. The borrow checker has nothing to object to.",
+  "A `HashMap` from key to slot index plus that list gives every operation in constant time.",
+  "Freed slots must be reused, or churn grows the arena for ever.",
+]
+follow_up = "1) How would you store each key once instead of twice? 2) Why does a database often prefer CLOCK or LRU-K to strict LRU? 3) What would you change to share this cache between threads?"
+related = ["F4", "S4", "F3"]
+
+[[hints]]
+kind = "approach"
+text = "Two structures that agree: a map from key to slot, and the slots, each holding its neighbours' indices. Write `unlink(i)` and `push_front(i)` first. Every operation is made of those."
+
+[[hints]]
+kind = "rust"
+text = "Slots in a `Vec<Option<Node<K, V>>>`, or a `Vec<Node<K, V>>` with a free list of indices. `Option<usize>` for links avoids sentinel values. To move a value out of a slot, `take()` the whole node."
+
+[[hints]]
+kind = "edge"
+text = "Capacity 0 stores nothing and `put` hands the pair straight back as evicted. Updating an existing key never evicts, and counts as a use. `peek` must not move anything."
+
+[solution]
+explanation = "The map answers where a key lives and the list answers which key was used longest ago. The list is stored in a vector and linked by index, so moving a node is a few integer writes with no allocation, no reference counting and no unsafe code. `get` and `put` unlink the node and push it to the front. A full cache takes the tail, removes its key from the map and reuses its slot, so the arena never holds more than `capacity` nodes. The key is stored twice, which is the price of using only safe std types."
+time = "O(1) expected per get, put and remove"
+space = "O(capacity)"
+
+[[cookbook]]
+level = "related"
+page = "cache-policy-zoo"
+note = "LRU beside other eviction policies, all on index-linked lists."
+
+[[cookbook]]
+level = "exact"
+page = "lru-cache"
+note = "Part: get and put with an index-linked list, and eviction. Not covered: peek, remove with slot reuse, capacity 0 and the Put result."

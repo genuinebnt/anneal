@@ -1,0 +1,11 @@
+code = "Y14"
+name = "Parsers & languages"
+section = "Y"
+tier = "sde3"
+order = 14
+summary = "From source text to structure: precedence, error positions and limits on hostile input."
+
+[[stages]]
+slug = "parsing"
+name = "Parsing"
+band = "medium"

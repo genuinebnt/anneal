@@ -1,0 +1,43 @@
+slug = "mvcc-snapshot-isolation"
+title = "Snapshot isolation over versioned keys"
+mode = "write"
+level = "hard"
+stage = "transactions"
+order = 1
+status = "ready"
+tags = ["MVCC", "snapshot isolation", "first committer wins", "garbage collection"]
+teaches = [
+  "Readers never block writers when each key keeps its old versions, stamped with the commit that made them.",
+  "Snapshot isolation checks only write-write conflicts: the first committer wins. Write skew gets through, by design.",
+  "A version can be dropped only when no current or future snapshot can reach it. The oldest active snapshot sets that line.",
+]
+follow_up = "1) Give a write-skew example with an invariant across two keys, and two ways to prevent it. 2) How does PostgreSQL store old versions, and what does one very old transaction do to vacuum? 3) What changes when commits arrive on several threads?"
+related = ["Y9"]
+
+[[hints]]
+kind = "approach"
+text = "Keep one logical clock. A transaction remembers the clock value when it began. A commit takes the next value and stamps every version it installs with it. A read sees the newest version stamped at or before the reader's start."
+
+[[hints]]
+kind = "rust"
+text = "`BTreeMap<String, Vec<(u64, Option<i64>)>>` works: versions per key in commit order, `None` for a delete. Uncommitted writes live in the transaction, in their own map, not in the shared one."
+
+[[hints]]
+kind = "edge"
+text = "A conflict is a committed version newer than your start on a key you wrote, deletes included. For vacuum, the line is the oldest active start (or the latest commit when nothing is active): keep everything newer than the line and the newest version at or before it, unless that one is a delete."
+
+[solution]
+explanation = "Every key holds its committed versions in commit order, and a transaction reads the last one that is not newer than its start, after looking at its own pending writes. Writes are buffered, so an abort is just forgetting them and other transactions never see them. At commit the transaction is checked against every key it wrote: a newer committed version means someone else committed first, and this one loses. Vacuum computes the oldest snapshot still in use. Versions older than the one that snapshot sees are unreachable for ever. If the version it sees is a delete, that marker can go too, because finding nothing means the same."
+time = "O(log keys + versions of the key) per read, O(writes) per commit"
+space = "O(live versions + pending writes)"
+
+[[cookbook]]
+level = "related"
+page = "concurrency-control-theory"
+section = "cb-anomalies-and-isolation-levels"
+note = "The anomalies, and what snapshot isolation does and does not prevent."
+
+[[cookbook]]
+level = "exact"
+page = "mvcc-snapshot-isolation"
+note = "Part: snapshot reads, own writes, first committer wins and vacuum below a horizon. Differs: version intervals, and a delete marker is dropped only when it is the only version left."

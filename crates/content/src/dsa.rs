@@ -606,6 +606,7 @@ fn problem(p: &Raw, names: &BTreeMap<&str, &str>, root: &Path, page: Option<&Pag
             renamed_from: Vec::new(),
             crates: Vec::new(),
             perf: None,
+            cookbook: Vec::new(),
         },
         dir: root.join("dsa"),
         files: ProblemFiles::default(),

@@ -1,0 +1,47 @@
+slug = "range-queries"
+title = "Range sums that survive updates"
+mode = "write"
+level = "hard"
+stage = "query-structures"
+order = 8
+status = "ready"
+tags = ["Fenwick tree", "segment tree", "lazy propagation", "machine-coding", "120-min"]
+teaches = [
+    "Storing the totals of well-chosen blocks makes both reading and writing cheap.",
+    "A combining operation does not have to commute, so the order of the pieces matters.",
+    "Work on a whole block can be written down now and carried out only when someone looks inside.",
+]
+follow_up = "1) When would you pick a Fenwick tree over a segment tree, and when can you not? 2) What must an operation satisfy to be used in your segment tree? 3) How would you add range assignment beside range add? 4) How would you make an old version of the structure readable after updates?"
+related = ["L4", "L5", "F5"]
+
+[[hints]]
+kind = "approach"
+text = "Each part wants a tree in which a node summarises a block of positions. Any range is a handful of whole blocks, and any position belongs to only a handful of blocks, both about `log n`. Part 1 needs only blocks that end where a prefix ends."
+
+[[hints]]
+kind = "rust"
+text = "A 1-based `Vec<i64>` works for part 1: `i & i.wrapping_neg()` is the length of the block ending at `i`. For the segment tree, store leaves at `n..2n` of a `Vec<T>` and node `i` as `combine(&t[2i], &t[2i+1])`. For part 4, recursion over `(node, lo, hi)` is the easiest to get right."
+
+[[hints]]
+kind = "edge"
+text = "In a bottom-up query, keep a left result and a right result and join them only at the end, or a non-commutative operation comes out in the wrong order. In part 4, hand a pending addition down to the children before you step below a node, and remember that adding `d` to a block changes its sum by `d` times its length."
+
+[solution]
+explanation = "A Fenwick tree stores, at each 1-based index, the sum of a block whose length is the lowest set bit of the index; a prefix is a few such blocks, and an update touches the few blocks containing a position. The k-th query descends by halving steps. The segment tree keeps leaves in the second half of one array and each parent as the combination of its children; a query climbs from both ends and keeps the pieces from the left and from the right apart so that order is preserved. Range addition keeps, for each node, its true sum and an amount not yet passed to its children; an update stops at nodes it covers completely, and any later walk below such a node passes the amount down first."
+time = "every update and query O(log n); construction O(n) or O(n log n)"
+space = "O(n)"
+
+[[cookbook]]
+level = "related"
+page = "amortized-analysis-online-algorithms"
+note = "Fenwick trees among other analyses."
+
+[[cookbook]]
+level = "similar"
+page = "sql-window-functions-ctes"
+note = "A segment tree used for window frames."
+
+[[cookbook]]
+level = "exact"
+page = "segment-fenwick"
+note = "All four ideas, with a different interface: its monoid is a trait on a marker type, and its search by total returns by count k."

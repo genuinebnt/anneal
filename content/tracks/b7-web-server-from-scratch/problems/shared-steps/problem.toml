@@ -1,0 +1,32 @@
+slug = "shared-steps"
+title = "Wrap every handler in the same steps"
+mode = "write"
+level = "medium"
+stage = "one-piece-at-a-time"
+order = 5
+status = "ready"
+tags = ["closures", "Box<dyn Fn>", "middleware", "catch_unwind"]
+teaches = [
+  "Storing different closures in one `Vec` as boxed trait objects with `Send + Sync`.",
+  "A chain where each step is handed the rest of the chain as a closure.",
+  "`catch_unwind`, `AssertUnwindSafe` and reading a panic payload.",
+]
+follow_up = "1) What can still be broken after a caught panic, and what does `AssertUnwindSafe` claim about it? 2) How do `tower::Layer` and `Service` express the same idea, and what do they add?"
+related = ["B4", "B8"]
+
+[[hints]]
+kind = "approach"
+text = "`run` can be recursion: the first step gets a `next` that runs the same function on the remaining steps."
+
+[[hints]]
+kind = "rust"
+text = "`slice.split_first()` gives the step and the rest, and `&|c| through(rest, handler, c)` is a `&dyn Fn`. A panic payload is `Box<dyn Any + Send>`: try `downcast_ref::<&str>()` and `downcast_ref::<String>()`."
+
+[[hints]]
+kind = "edge"
+text = "Pass `&*payload`, not `&payload`, or you will ask the box what type it is. A step must be able to call `next` twice."
+
+[solution]
+explanation = "The steps sit in a vector; running them is recursion over the slice, where each level builds a closure for the level below. `shield` is an ordinary step around `next` with `catch_unwind`, so its position in the chain decides what it protects. Nothing is locked while a call runs, so calls run in parallel and a panic poisons nothing."
+time = "O(steps) per call"
+space = "O(steps)"

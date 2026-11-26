@@ -3,7 +3,7 @@ name = "Threads & shared state"
 section = "C"
 tier = "core"
 order = 1
-summary = "Threads, mutexes and condition variables, by building the blocking primitives yourself: a queue, a fair semaphore and a readers-writer lock."
+summary = "Threads, mutexes and condition variables, by building the blocking primitives yourself: a queue, a fair semaphore and a readers-writer lock. Then fix a bank that deadlocks."
 
 [[stages]]
 slug = "understand-it"

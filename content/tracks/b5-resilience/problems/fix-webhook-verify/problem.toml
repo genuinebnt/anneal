@@ -1,0 +1,48 @@
+slug = "fix-webhook-verify"
+title = "Fix: a webhook check that lets forgeries in"
+mode = "fix"
+level = "medium"
+stage = "understand-it"
+order = 1
+status = "ready"
+tags = ["HMAC", "webhooks", "replay protection", "constant time", "security"]
+teaches = [
+  "A signature proves only what was signed. If the timestamp is outside the signed bytes, anyone can freshen an old request.",
+  "`zip` stops at the shorter side, so a comparison built on it accepts a prefix, including the empty one. Check the length first.",
+  "A replay window has two sides: too old and too far in the future.",
+]
+follow_up = "1) Why must the comparison not stop at the first differing byte, and why can a test not show that it doesn't? 2) A replay inside the window still passes: what stops it? 3) Why verify the raw body bytes and not the re-serialised JSON? 4) How do two active secrets make rotation safe?"
+related = ["B5"]
+crates = ["sha2", "hex"]
+
+[[hints]]
+kind = "approach"
+text = "Read the contract as an attacker. Which parts of the request can be changed without changing the signature? What is the shortest signature the check accepts? What does it do with a timestamp from next year?"
+
+[[hints]]
+kind = "rust"
+text = "The signed bytes are the timestamp's text as it appears in the header, a `.`, then the body. `now.abs_diff(t)` measures both directions without overflow."
+
+[[hints]]
+kind = "edge"
+text = "A header may carry several `v1` entries during key rotation: any one of them may match. Check the signature before the age, so that a forger learns nothing about your clock."
+
+[solution]
+explanation = "There were four holes. The MAC covered only the body, so an old signature stayed valid with any timestamp. The comparison zipped the two slices and never compared their lengths, so an empty `v1=` matched everything. `now.saturating_sub(t)` is zero for any future time, so a far-future request never expired. And only the first `v1` was read, which breaks key rotation. The fixed comparison rejects a wrong length first (the expected length is public) and then folds every byte difference into one value, with no early exit. The compiler gives no formal guarantee about timing, so production code uses `Mac::verify_slice` from the `hmac` crate or the `subtle` crate."
+time = "O(body + signatures)"
+space = "O(1) beyond the signed message"
+
+[[cookbook]]
+level = "related"
+page = "hmac-hkdf-pbkdf2"
+note = "Why HMAC is built as it is."
+
+[[cookbook]]
+level = "related"
+page = "constant-time-side-channels"
+note = "Why comparing a MAC with == leaks."
+
+[[cookbook]]
+level = "exact"
+page = "webhooks-signatures"
+note = "Nearly all: sign t.body, a comparison that checks the length, any v1 may match, signature before a two-sided window. Differs: it trims spaces, accepts a repeated t and signs the re-formatted number."

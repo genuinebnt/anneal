@@ -1,0 +1,32 @@
+slug = "stay-inside-the-folder"
+title = "Stay inside the folder"
+mode = "write"
+level = "medium"
+stage = "one-piece-at-a-time"
+order = 6
+status = "ready"
+tags = ["std::fs", "Path", "canonicalize", "path traversal", "percent decoding"]
+teaches = [
+  "Decode first, then judge: a check made on the encoded text checks the wrong thing.",
+  "`fs::canonicalize` follows links; `Path::starts_with` compares components, not characters.",
+  "Two layers of defence, and tests that try to get past both.",
+]
+follow_up = "1) Between `canonicalize` and opening the file, the folder can change. What is that class of bug called, and what do `openat2` with `RESOLVE_BENEATH` or a capability-based file API change? 2) Why refuse `..` even when the result would be inside?"
+related = ["B4", "B8"]
+
+[[hints]]
+kind = "approach"
+text = "Two separate questions: is the name acceptable as text (after decoding), and where does it really lead?"
+
+[[hints]]
+kind = "rust"
+text = "`std::fs::canonicalize` gives the real path with links followed, and fails if nothing is there. `Path::starts_with` is not `str::starts_with`."
+
+[[hints]]
+kind = "edge"
+text = "Resolve the root too. A folder next to yours may share its name as a prefix. `u8::from_str_radix` accepts `+1`."
+
+[solution]
+explanation = "The name is decoded once and split; `..` is refused outright. The joined path and the root are both canonicalised, and containment is checked component by component, which handles links in either place."
+time = "O(length of the path) plus file system lookups"
+space = "O(length of the path)"

@@ -1,0 +1,11 @@
+code = "M2"
+name = "Machine coding"
+section = "M"
+tier = "core"
+order = 2
+summary = "Interview builds with a core part and follow-ups: first a rate limiter on a clock you control."
+
+[[stages]]
+slug = "core-and-extend"
+name = "Core and extend"
+band = "medium"

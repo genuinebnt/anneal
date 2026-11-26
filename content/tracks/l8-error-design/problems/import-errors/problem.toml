@@ -1,0 +1,50 @@
+slug = "import-errors"
+title = "A library error that keeps its cause"
+mode = "write"
+level = "medium"
+stage = "conversion-and-crates"
+order = 1
+status = "ready"
+tags = ["thiserror", "error enum", "source()", "error chain"]
+teaches = [
+  "A library error is an enum callers can match on; the cause stays a value in `source()`, not text pasted into the message.",
+  "Each level of the chain describes only its own level. If `Display` repeats the source, every report prints it twice.",
+  "Decisions such as retrying belong on the typed error, where the compiler can see the cause.",
+]
+follow_up = "1) When would you give the `Read` variant a `#[from] io::Error`, and what context would you lose? 2) What does `#[non_exhaustive]` change for callers of a public error enum? 3) Why is `#[error(transparent)]` wrong for a variant that adds a line number?"
+related = ["L8", "S1"]
+crates = ["thiserror"]
+
+[[hints]]
+kind = "approach"
+text = "Two enums, two levels. `RowError` says what is wrong with one row and knows nothing about line numbers or files. `ImportError` says where it happened and holds the `RowError` as its source."
+
+[[hints]]
+kind = "rust"
+text = "With `thiserror`, a field named `source` (or marked `#[source]`) is returned by `source()`. `#[error(\"line {line} is invalid\")]` formats only this level: don't mention the source in it."
+
+[[hints]]
+kind = "edge"
+text = "Walking a chain is a loop over `std::error::Error::source`, starting from the error itself. `std::iter::successors` does it in one expression."
+
+[solution]
+explanation = "`thiserror` writes the `Display`, `Error` and `source()` code for an enum you design. The design is the work: `RowError` is the leaf and wraps the standard parse error, `ImportError` adds the place. Messages never include their source, so a reporter that walks the chain prints each fact once. Because the `io::Error` is still a value, `is_retryable` can match its `ErrorKind` instead of searching message text. Syntax to remember: `#[derive(Debug, thiserror::Error)]`, `#[error(\"...\")]`, `#[source]`."
+time = "O(n) in the length of the input"
+space = "O(rows)"
+
+[[cookbook]]
+level = "related"
+page = "choosing-an-error-type"
+section = "cb-context-and-sources"
+note = "Why a message must not repeat its source, and walking the chain."
+
+[[cookbook]]
+level = "related"
+page = "anyhow-thiserror-eyre-error-design"
+section = "cb-cheat-sheet"
+note = "thiserror attributes at a glance."
+
+[[cookbook]]
+level = "similar"
+page = "error-chain-retryable"
+note = "A typed library error with #[source], a chain printer and a retry decision, for a network call."

@@ -28,7 +28,7 @@ pub fn budget(mode: Mode, level: Band) -> u32 {
 
 const AREAS: [(&str, &[Section]); 2] = [
     ("dsa", &[Section::Dsa]),
-    ("rust", &[Section::Language, Section::StandardLibrary, Section::Concurrency, Section::Systems, Section::Performance]),
+    ("rust", &[Section::Language, Section::StandardLibrary, Section::Concurrency, Section::Systems, Section::Performance, Section::Backend, Section::Design]),
 ];
 
 fn local_day(t: DateTime<Utc>) -> NaiveDate {

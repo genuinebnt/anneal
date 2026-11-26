@@ -1,0 +1,48 @@
+slug = "catch-the-broken-queue"
+title = "Write the test that catches every broken queue"
+mode = "write"
+level = "medium"
+stage = "understand-it"
+order = 1
+status = "ready"
+tags = ["testing", "model-based testing", "seeded randomness", "test oracle"]
+teaches = [
+  "A test is only as good as the wrong implementations it rejects. Writing it against broken versions makes that measurable.",
+  "A model is a second, obviously correct implementation. Run the same random operations on both and compare every result.",
+  "Where the bugs live decides the generator: small capacities, repeated and extreme values, and long runs that fill and empty the queue many times.",
+]
+follow_up = "1) Your check found a failure after 400 random operations: how do you turn that into a five-step reproduction? 2) What does proptest add to a hand-written loop like this? 3) Which bugs can a single-threaded model never find in a concurrent queue, and what would you use for those?"
+related = ["Y5", "S5"]
+
+[[hints]]
+kind = "approach"
+text = "`std::collections::VecDeque` plus the capacity is a complete model of this contract. After every operation, compare the operation's result and every observer (`len`, `is_empty`, `peek`) with the model."
+
+[[hints]]
+kind = "rust"
+text = "No crates are available, so write a small generator: any `x = x.wrapping_mul(A).wrapping_add(C)` with output taken from the high bits is enough. Use fixed seeds so a failure repeats."
+
+[[hints]]
+kind = "edge"
+text = "Think about which inputs a broken queue would need before it misbehaves: a capacity of 1, the same value twice in a row, `0` and `u32::MAX`, a push on a full queue, a pop on an empty one, and many fill-and-drain cycles so that any wrap-around is crossed."
+
+[solution]
+explanation = "The checker is a model-based test. A `VecDeque` with a capacity check is short enough to be trusted, so any disagreement is the subject's fault. Operations are chosen by a seeded generator, and the same sequences run for several small capacities. Values come mostly from a tiny set, which makes duplicates common, with the extremes mixed in. A bias towards pushing, then towards popping, drives the queue to both limits again and again. Comparing the observers after every step turns a silent bad state into a failure at the step that caused it."
+time = "O(capacities x seeds x operations)"
+space = "O(capacity)"
+
+[[cookbook]]
+level = "related"
+page = "testing-patterns"
+note = "Seeded, table-driven and property-style tests."
+
+[[cookbook]]
+level = "similar"
+page = "lru-cache"
+note = "A model-based test: random operations on the real cache and a slow Vec model, compared after each step."
+
+[[cookbook]]
+level = "similar"
+page = "testing-unsafe-code"
+section = "cb-show-that-each-check-can-fail"
+note = "Planting bugs to show that a check can catch them."

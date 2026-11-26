@@ -1,0 +1,35 @@
+slug = "how-long-requests-take"
+title = "How long do requests take?"
+mode = "write"
+level = "medium"
+stage = "one-piece-at-a-time"
+order = 8
+status = "ready"
+tags = ["histogram", "percentiles", "atomics", "Prometheus", "allocation counting"]
+teaches = [
+  "Percentiles from a fixed number of counters, with an error you can state.",
+  "Choosing bucket widths that grow with the value.",
+  "Exact report buckets and approximate quantiles are two different structures.",
+]
+follow_up = "1) You may add histograms from ten servers bucket by bucket; why can you not average their p99s? 2) What does HdrHistogram let you choose that this does not?"
+related = ["B4", "B8"]
+
+[perf]
+count_allocs = true
+
+[[hints]]
+kind = "approach"
+text = "Small values can each have a counter. For large ones, a counter may cover a range, as long as the range is narrow compared with the values in it. What ranges have that property?"
+
+[[hints]]
+kind = "rust"
+text = "`63 - v.leading_zeros()` is the power of two below `v`; the next few bits split that power into equal parts. `fetch_max` and `fetch_update` cover the maximum and a saturating sum."
+
+[[hints]]
+kind = "edge"
+text = "The report counts `<= bound` exactly, which an approximate bucket cannot always tell you. Check the very top of `u64` for overflow when you compute a bucket's upper end."
+
+[solution]
+explanation = "Values below 16 have a slot each; above that every power of two is cut into 8 equal slots, so a slot is at most an eighth of its smallest value wide. A quantile is the top of the slot that reaches the rank, capped by the maximum. The report keeps its own exact counters."
+time = "O(log bounds) per record, O(slots) per quantile"
+space = "O(bounds + 496)"

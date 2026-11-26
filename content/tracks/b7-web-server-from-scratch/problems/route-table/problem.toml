@@ -1,0 +1,32 @@
+slug = "route-table"
+title = "Which route is this?"
+mode = "write"
+level = "medium"
+stage = "one-piece-at-a-time"
+order = 4
+status = "ready"
+tags = ["routing", "generics", "enums", "lifetimes"]
+teaches = [
+  "Modelling a lookup with three outcomes as an enum, so a caller cannot forget one.",
+  "A container generic over what it stores: the same table holds strings, numbers or closures.",
+  "The difference between \"no such thing\" and \"not that way\" (404 and 405).",
+]
+follow_up = "1) With 10,000 routes the linear scan is slow. What structure would you build, and how do you keep \"first added wins\"? 2) Should `/a` and `/a/` differ? What do real routers do?"
+related = ["B4", "B8"]
+
+[[hints]]
+kind = "approach"
+text = "Turn each pattern into a list of segment kinds once, when it is added. Matching walks the two lists together."
+
+[[hints]]
+kind = "rust"
+text = "An enum for the segment kinds and `split('/')` on both sides. While scanning, remember the methods of routes whose pattern matched."
+
+[[hints]]
+kind = "edge"
+text = "Splitting `/a/` gives a trailing empty segment. A capture must not match it, but a rest segment may match nothing at all. HEAD prefers a HEAD route even if a GET route came first."
+
+[solution]
+explanation = "Patterns become segment lists. One pass over the routes finds the first full match; along the way it records a GET fallback for HEAD and the allowed methods. The value type is a parameter, so the table never needs to know about handlers."
+time = "O(routes x segments)"
+space = "O(routes x segments)"

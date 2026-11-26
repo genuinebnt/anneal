@@ -1,0 +1,45 @@
+slug = "bounded-line-reader"
+title = "Lines from a stranger, in bounded memory"
+mode = "write"
+level = "medium"
+stage = "understand-it"
+order = 1
+status = "ready"
+tags = ["BufRead", "fill_buf", "consume", "bounded memory", "io::ErrorKind"]
+teaches = [
+  "`lines()` and `read_line` grow a `String` until they find a newline. On input you do not control, that is an unbounded allocation.",
+  "`fill_buf` shows what is already buffered and `consume` says how much you used: you can skip a gigabyte without keeping any of it.",
+  "`ErrorKind::Interrupted` means try again. Only some helpers retry it for you.",
+]
+follow_up = "1) Why does `reader.by_ref().take(max).read_until(..)` almost solve this, and what is left to do? 2) How would you return borrowed lines without allocating, and why can that not be an `Iterator`? 3) What does `tokio_util::codec::LinesCodec` do at its length limit?"
+related = ["S9", "B4"]
+
+[perf]
+count_allocs = true
+
+[[hints]]
+kind = "approach"
+text = "Handle one buffered chunk at a time: look for `\\n` in `fill_buf()`, keep at most a bounded part of what you see, then `consume` up to and including the newline."
+
+[[hints]]
+kind = "rust"
+text = "`fill_buf` borrows the reader, so work out how many bytes to consume, copy what you keep, let the borrow end, then call `consume`. An empty slice means end of input."
+
+[[hints]]
+kind = "edge"
+text = "A line of exactly `max_len` bytes followed by `\\r\\n` is allowed, so you may need to hold `max_len + 1` bytes. Once a line is too long, stop storing but keep consuming up to its newline."
+
+[solution]
+explanation = "The reader walks the buffered chunks itself, so it decides what to keep. It stores at most `max_len + 1` bytes (the extra one may turn out to be the `\\r` of a CRLF). Beyond that it only remembers that the line is too long and goes on consuming until the newline, which leaves the stream at the start of the next line. Memory is bounded by the limit plus the `BufRead` buffer, whatever the sender does. `Interrupted` is retried. Any other I/O error ends the iteration, because the stream's position is unknown after it."
+time = "O(n) bytes"
+space = "O(max_len) beyond the reader's own buffer"
+
+[[cookbook]]
+level = "related"
+page = "std-io-read-write-seek-traits"
+note = "fill_buf and consume, take for untrusted input, retrying Interrupted."
+
+[[cookbook]]
+level = "similar"
+page = "buffered-io-internals"
+note = "read_until written over fill_buf and consume with Interrupted retried. It has no length limit."

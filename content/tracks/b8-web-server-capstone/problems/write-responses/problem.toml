@@ -1,0 +1,32 @@
+slug = "write-responses"
+title = "Write responses"
+mode = "write"
+level = "medium"
+stage = "protocol"
+order = 3
+status = "ready"
+tags = ["io::Write", "builder", "chunked encoding", "trait objects"]
+teaches = [
+  "Writing through `impl Write` so the same code serves a socket and a test.",
+  "`write_all` and `write` are different promises.",
+  "Streaming means each piece has left before the next one is made.",
+]
+follow_up = "1) What happens if a header value holds CRLF, and where would you stop that? 2) When would you gather the head and a small body into one write, and why?"
+related = ["B7", "B4"]
+
+[[hints]]
+kind = "approach"
+text = "Build the head in a `Vec<u8>`, then decide the body from the status, `head_only` and the kind of body."
+
+[[hints]]
+kind = "rust"
+text = "`write!` works on a `Vec<u8>` because it implements `io::Write`. A chunk is the length in hex, CRLF, the bytes, CRLF; a final `0` line and an empty line end the body."
+
+[[hints]]
+kind = "edge"
+text = "An empty chunk is the end marker, so skip empty pieces. 1xx, 204 and 304 have no body and no length."
+
+[solution]
+explanation = "The head is assembled in memory and sent with `write_all`. A stream is pulled one piece at a time and flushed after each, so the first piece reaches the client before the last exists, and a failed write stops the iterator."
+time = "O(bytes written)"
+space = "O(largest piece)"

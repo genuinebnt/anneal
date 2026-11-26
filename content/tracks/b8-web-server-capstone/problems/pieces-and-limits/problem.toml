@@ -1,0 +1,32 @@
+slug = "pieces-and-limits"
+title = "Handle pieces and limits"
+mode = "write"
+level = "medium"
+stage = "protocol"
+order = 2
+status = "ready"
+tags = ["incremental parsing", "limits", "chunked encoding", "request smuggling"]
+teaches = [
+  "A limit has to fire while the input is still incomplete, or it limits nothing.",
+  "The answer for a prefix must never contradict the answer for the whole.",
+  "Two ways of giving a body length make two programs disagree about where a request ends.",
+]
+follow_up = "1) Your parser rescans from the start after every read. What does that cost for a request sent one byte at a time, and what state would remove it? 2) How would you fuzz the rule \"once refused, always refused\"?"
+related = ["B7", "B4"]
+
+[[hints]]
+kind = "approach"
+text = "For every limit ask two questions: what do I answer when the end has arrived, and what when it has not? Both answers must agree for every way of cutting the bytes."
+
+[[hints]]
+kind = "rust"
+text = "A line that has not ended yet may already hold the `\\r` of its CRLF; do not count it. `bytes().all(|b| b.is_ascii_digit())` before `parse`, because `parse` accepts a leading `+`."
+
+[[hints]]
+kind = "edge"
+text = "A chunk size, its extension and the trailer section can all grow without the body growing. Bound each. Refuse an announced size over the limit before its data arrives."
+
+[solution]
+explanation = "Every limit is checked on the part that has arrived, with the same threshold it uses on the complete input, so splitting the bytes cannot change the answer. Chunk lines are capped at 64 bytes and trailers at the head limit, so the buffer a peer can force the server to hold is bounded."
+time = "O(n) per call, O(n^2) over many small reads"
+space = "O(limits)"

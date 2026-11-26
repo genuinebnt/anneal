@@ -1,0 +1,32 @@
+slug = "routes-and-shared-steps"
+title = "Routes and shared steps"
+mode = "write"
+level = "medium"
+stage = "protocol"
+order = 4
+status = "ready"
+tags = ["closures", "trait objects", "middleware", "catch_unwind"]
+teaches = [
+  "Storing closures of different types as `Box<dyn Fn + Send + Sync>`.",
+  "A chain of steps as functions that are handed \"the rest\".",
+  "A panic boundary is just another step, and its place in the chain matters.",
+]
+follow_up = "1) Why must handlers be `Send + Sync` here? 2) What does `AssertUnwindSafe` promise, and when would that promise be false?"
+related = ["B7", "B4"]
+
+[[hints]]
+kind = "approach"
+text = "Match segment by segment. Remember which methods matched the path but not the request, to choose between 404 and 405."
+
+[[hints]]
+kind = "rust"
+text = "To run the steps, split the slice: the first step gets a closure that runs the rest. `&|r| run(rest, r)` is a `&dyn Fn`."
+
+[[hints]]
+kind = "edge"
+text = "A `:name` segment does not match an empty segment, `*name` may match nothing, and a trailing slash adds an empty segment."
+
+[solution]
+explanation = "A pattern is a list of segments, matched left to right. The chain is recursion over a slice of boxed steps: each receives a `Next` that runs what is inside it, so it can skip it, change its input, call it twice or wrap it in `catch_unwind`."
+time = "O(routes x path segments) per request"
+space = "O(routes + steps)"

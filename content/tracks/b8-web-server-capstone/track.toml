@@ -1,0 +1,16 @@
+code = "B8"
+name = "Web server capstone"
+section = "B"
+tier = "core"
+order = 8
+summary = "Build a multithreaded HTTP/1.1 server on the standard library in ten steps. Each step's starter carries the earlier steps."
+
+[[stages]]
+slug = "protocol"
+name = "The protocol, in memory"
+band = "medium"
+
+[[stages]]
+slug = "server"
+name = "The server"
+band = "hard"
