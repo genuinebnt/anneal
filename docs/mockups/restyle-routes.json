@@ -1,0 +1,20 @@
+[
+    { "match": "^/rust/series$", "file": "series.html", "hash": "series" },
+    { "match": "^/rust/series/exercise$", "file": "series.html", "hash": "exercise" },
+    { "match": "^/rust/series/done$", "file": "series.html", "hash": "done" },
+    { "match": "^/p/[^/]+$", "file": "restyle-exercise.html", "hash": "exercise" },
+    { "match": "^/sd/learn/[^/]+$", "file": "restyle-reading.html", "hash": "learn" },
+    { "match": "^/sd/practice/[^/]+$", "file": "restyle-reading.html", "hash": "brief" },
+    { "match": "^/d/[^/]+$", "file": "restyle-dsa-problem.html", "hash": "problem" },
+    { "match": "^/courses(?:/bustub)?$", "file": "restyle-courses-plan.html", "hash": "courses" },
+    { "match": "^/courses/bustub/[^/]+$", "file": "restyle-courses-plan.html", "hash": "stage" },
+    { "match": "^/dsa/plan$", "file": "restyle-courses-plan.html", "hash": "plan" },
+    { "match": "^/dsa/review$", "file": "restyle-courses-plan.html", "hash": "review" },
+    { "match": "^/dsa/calendar$", "file": "restyle-courses-plan.html", "hash": "calendar" },
+    { "match": "^/dsa/graph$", "file": "restyle-dsa-tools.html", "hash": "graph" },
+    { "match": "^/dsa/mock$", "file": "restyle-dsa-tools.html", "hash": "mock" },
+    { "match": "^/dsa/practice/[^/]+$", "file": "restyle-dsa-tools.html", "hash": "practice" },
+    { "match": "^/progress$", "file": "restyle-more.html", "hash": "progress" },
+    { "match": "^/analytics$", "file": "restyle-more.html", "hash": "analytics" },
+    { "match": "^/settings$", "file": "restyle-more.html", "hash": "settings" }
+]

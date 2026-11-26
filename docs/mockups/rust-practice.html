@@ -1,0 +1,707 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mockup: Rust practice</title>
+<style>
+/* Tokens copied from web/src/styles/design.css. */
+:root{--bg:oklch(0.135 0.012 262);--panel:oklch(0.158 0.013 262);--raise:oklch(0.185 0.015 262);--line:oklch(0.285 0.016 262);--line2:oklch(0.215 0.014 262);--fg:oklch(0.95 0.005 255);--mut:oklch(0.79 0.012 262);--dim:oklch(0.66 0.014 262);--acc:oklch(0.76 0.11 55);--acc-bg:oklch(0.76 0.11 55 / 0.14);--vio:oklch(0.70 0.13 290);--vio-bg:oklch(0.70 0.13 290 / 0.13);--grn:oklch(0.73 0.12 160);--grn-bg:oklch(0.73 0.12 160 / 0.13);--bad:oklch(0.68 0.14 26);--bad-bg:oklch(0.68 0.14 26 / 0.13);--warn:oklch(0.80 0.11 80);--warn-bg:oklch(0.80 0.11 80 / 0.12);--on-acc:oklch(0.17 0.02 255);--kw:oklch(0.75 0.12 290);--ty:oklch(0.82 0.10 70);--fn:oklch(0.79 0.10 235);--str:oklch(0.79 0.11 160);--num:oklch(0.79 0.11 45);--mac:oklch(0.79 0.09 200);--com:oklch(0.63 0.012 255);--inlay:oklch(0.67 0.012 255);--inlay-bg:oklch(0.19 0.013 262);--sel:oklch(0.76 0.11 55 / 0.07);--shadow:oklch(0 0 0 / 0.5);
+--mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;--code:'Fira Code',ui-monospace,SFMono-Regular,Menlo,monospace;--sans:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;--ease:cubic-bezier(.22,1,.36,1);color-scheme:dark}
+:root[data-theme="light"]{--bg:oklch(0.975 0.003 255);--panel:oklch(0.995 0.002 255);--raise:color-mix(in oklab,var(--panel) 95%,var(--fg) 5%);--line:oklch(0.86 0.008 255);--line2:oklch(0.915 0.006 255);--fg:oklch(0.20 0.015 255);--mut:oklch(0.40 0.015 255);--dim:oklch(0.48 0.015 255);--acc:oklch(0.50 0.13 50);--acc-bg:oklch(0.50 0.13 50 / 0.11);--vio:oklch(0.50 0.17 290);--vio-bg:oklch(0.52 0.17 290 / 0.10);--grn:oklch(0.47 0.12 165);--grn-bg:oklch(0.515 0.12 165 / 0.11);--bad:oklch(0.52 0.18 25);--bad-bg:oklch(0.54 0.18 25 / 0.09);--warn:oklch(0.49 0.12 75);--warn-bg:oklch(0.535 0.12 75 / 0.10);--on-acc:oklch(0.99 0.002 255);--kw:oklch(0.50 0.17 290);--ty:oklch(0.52 0.11 65);--fn:oklch(0.47 0.13 250);--str:oklch(0.48 0.12 160);--num:oklch(0.54 0.13 45);--mac:oklch(0.48 0.10 200);--com:oklch(0.50 0.012 255);--inlay:oklch(0.50 0.012 255);--inlay-bg:oklch(0.935 0.005 255);--sel:oklch(0.54 0.13 50 / 0.06);--shadow:oklch(0.3 0.02 255 / 0.14);color-scheme:light}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]){--bg:oklch(0.975 0.003 255);--panel:oklch(0.995 0.002 255);--raise:color-mix(in oklab,var(--panel) 95%,var(--fg) 5%);--line:oklch(0.86 0.008 255);--line2:oklch(0.915 0.006 255);--fg:oklch(0.20 0.015 255);--mut:oklch(0.40 0.015 255);--dim:oklch(0.48 0.015 255);--acc:oklch(0.50 0.13 50);--acc-bg:oklch(0.50 0.13 50 / 0.11);--vio:oklch(0.50 0.17 290);--vio-bg:oklch(0.52 0.17 290 / 0.10);--grn:oklch(0.47 0.12 165);--grn-bg:oklch(0.515 0.12 165 / 0.11);--bad:oklch(0.52 0.18 25);--bad-bg:oklch(0.54 0.18 25 / 0.09);--warn:oklch(0.49 0.12 75);--warn-bg:oklch(0.535 0.12 75 / 0.10);--on-acc:oklch(0.99 0.002 255);--kw:oklch(0.50 0.17 290);--ty:oklch(0.52 0.11 65);--fn:oklch(0.47 0.13 250);--str:oklch(0.48 0.12 160);--num:oklch(0.54 0.13 45);--mac:oklch(0.48 0.10 200);--com:oklch(0.50 0.012 255);--inlay:oklch(0.50 0.012 255);--inlay-bg:oklch(0.935 0.005 255);--sel:oklch(0.54 0.13 50 / 0.06);--shadow:oklch(0.3 0.02 255 / 0.14);color-scheme:light}}
+:root{--inset:color-mix(in oklab,color-mix(in oklab,var(--bg) 45%,var(--panel)) 97%,var(--fg) 3%)}
+*{box-sizing:border-box;scrollbar-width:none}
+::-webkit-scrollbar{display:none}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:inherit}
+input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+code,pre,kbd{font-family:var(--code)}
+code{font-size:.9em}
+kbd{font-size:11px;border:1px solid var(--line2);border-radius:4px;padding:0 5px;background:var(--inset);color:var(--dim)}
+[hidden]{display:none!important}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* mockup banner and header */
+.mockbar{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;justify-content:center;padding:6px 16px;background:var(--warn-bg);color:var(--warn);font:600 11px var(--mono);letter-spacing:.06em;text-align:center}
+.hdr{display:flex;align-items:center;gap:14px;height:54px;padding:0 16px;border-bottom:1px solid var(--line2)}
+.logo{font:600 13px var(--mono)}
+.areas{display:flex;gap:2px;padding:3px;border:1px solid var(--line2);border-radius:12px;background:var(--panel)}
+.areas span{padding:6px 12px;border-radius:8px;font:600 12px var(--mono);color:var(--mut)}
+.areas .on{background:var(--fg);color:var(--bg);box-shadow:inset 0 -3px 0 var(--vio)}
+.srch{margin-left:auto;display:flex;gap:10px;align-items:center;height:34px;padding:0 12px;border:1px solid var(--line2);border-radius:12px;color:var(--dim);font:500 12px var(--mono)}
+.btn{height:32px;display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:0 12px;border:1px solid var(--line);border-radius:4px;font:500 12px var(--mono);white-space:nowrap;transition:border-color .2s,transform .2s var(--ease)}
+.btn:hover{border-color:var(--mut);transform:translateY(-1px)}
+.btn.solid{background:var(--fg);color:var(--bg);border-color:transparent}
+.btn.lg{height:46px;padding:0 20px;font-size:13px}
+.views{display:flex;gap:4px;padding:0 16px;border-bottom:1px solid var(--line2);overflow-x:auto}
+.views button{padding:11px 12px;font:500 12px var(--mono);color:var(--dim);border-bottom:2px solid transparent;white-space:nowrap}
+.views button[aria-selected="true"]{color:var(--fg);border-color:var(--vio)}
+
+/* shared pieces, in the blog's manner: mono eyebrows, quiet panels, square pills */
+.wrap{max-width:1240px;margin:0 auto;padding:28px 16px 56px}
+.eyebrow{font:600 11px var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+h1{margin:10px 0 8px;font-size:30px;font-weight:600;letter-spacing:-.025em;line-height:1.15;text-wrap:balance}
+h1 em{font-style:normal;color:var(--vio)}
+h2{margin:32px 0 12px;font:600 11px var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+h3{margin:0;font-size:16px;letter-spacing:-.01em}
+.lead{max-width:640px;margin:0;color:var(--mut);font-size:15px;line-height:1.65}
+.card{display:block;border:1px solid var(--line2);border-radius:14px;background:var(--panel);padding:16px 18px;min-width:0}
+.pill{display:inline-flex;align-items:center;gap:5px;padding:2px 7px;border-radius:3px;border:1px solid color-mix(in oklab,var(--c,var(--dim)) 45%,transparent);color:var(--c,var(--dim));background:color-mix(in oklab,var(--c,var(--dim)) 9%,transparent);font:500 11px var(--mono);white-space:nowrap}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.meter{height:5px;border-radius:3px;background:var(--line2);overflow:hidden}
+.meter i{display:block;height:100%;background:var(--c,var(--vio))}
+.note{margin:6px 0 0;color:var(--dim);font-size:12.5px}
+
+/* home */
+.home{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:24px;margin-top:24px}
+.now{border-color:color-mix(in oklab,var(--vio) 45%,var(--line2));box-shadow:0 0 0 4px var(--vio-bg)}
+.now h3{font-size:22px;margin:8px 0 6px}
+.steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:16px}
+.step{display:flex;gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--line2);border-radius:12px;background:var(--panel)}
+.step i{flex:none;width:22px;height:22px;border-radius:50%;border:1px solid var(--line);display:grid;place-items:center;font:600 11px var(--mono);font-style:normal}
+.step.on i{background:var(--vio);color:var(--on-acc);border-color:transparent}
+.step b{display:block;font-size:13px}.step small{color:var(--dim);font:500 11px var(--mono)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr));gap:12px}
+.kind{border-left:2px solid var(--c);text-align:left}
+.kind:hover{border-color:var(--c)}
+.kind[aria-pressed="true"]{background:color-mix(in oklab,var(--c) 10%,var(--panel))}
+.kind p{margin:6px 0 10px;color:var(--mut);font-size:13px}
+.list{border:1px solid var(--line2);border-radius:14px;background:var(--panel);overflow:hidden}
+.item{display:grid;grid-template-columns:18px minmax(0,1fr) auto;gap:12px;align-items:center;width:100%;padding:12px 16px;border-top:1px solid var(--line2)}
+.item:first-child{border-top:0}
+.item:hover{background:var(--raise)}
+.item small{display:block;color:var(--dim);font:500 11px var(--mono)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--c,var(--line))}
+.side{display:grid;gap:12px;align-content:start}
+
+/* path */
+.part{display:grid;grid-template-columns:52px minmax(0,1fr) 170px;gap:16px;align-items:center;padding:16px 18px;border:1px solid var(--line2);border-radius:14px;background:var(--panel);margin-bottom:10px}
+.part>.btn{justify-self:start;grid-column:auto}
+.part .no{font:800 28px var(--sans);letter-spacing:-.03em;color:var(--dim)}
+.part.cur{border-color:color-mix(in oklab,var(--vio) 45%,var(--line));box-shadow:0 0 0 4px var(--vio-bg)}.part.cur .no{color:var(--vio)}
+.part.done .no{color:var(--grn)}
+.part p{margin:4px 0 8px;color:var(--mut);font-size:13px}
+.phase{height:30px;display:flex;align-items:center;justify-content:center;border-radius:3px;border:1px solid var(--line);color:var(--dim);font:600 11px var(--mono);letter-spacing:.14em;text-transform:uppercase}
+.phase.done{background:var(--grn);color:var(--on-acc);border-color:transparent}.phase.cur{background:var(--vio);color:var(--on-acc);border-color:transparent}
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+
+/* workspace: a small IDE */
+.subbar{display:flex;align-items:center;gap:12px;height:44px;padding:0 14px;border-bottom:1px solid var(--line2);background:var(--panel);white-space:nowrap;overflow:hidden}
+.crumb{font:500 11px var(--mono);letter-spacing:.1em;color:var(--dim)}
+.subbar b{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.subbar .end{margin-left:auto;display:flex;gap:10px;align-items:center;font:500 12px var(--mono);color:var(--mut)}
+.lay button{width:30px;height:28px;border-radius:6px;display:inline-grid;place-items:center;color:var(--dim)}
+.lay button[aria-pressed="true"]{color:var(--fg);background:var(--raise)}
+.lay svg{width:16px;height:14px;fill:none;stroke:currentColor;stroke-width:1.3}.lay svg .f{fill:currentColor;stroke:none}
+.ide{display:grid;grid-template-columns:48px var(--sw,290px) minmax(0,1fr) var(--rw,310px);height:max(620px,calc(100vh - 170px));position:relative}
+.ide.noside{--sw:0px}.ide.noside .sidebar{visibility:hidden}
+.ide.notests{--rw:0px}.ide.notests .tests{visibility:hidden}
+.act{grid-column:1;display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 0;border-right:1px solid var(--line2);background:var(--bg)}
+.act button{width:40px;height:40px;border-radius:8px;display:grid;place-items:center;color:var(--dim);position:relative}
+.act button[aria-pressed="true"]{color:var(--fg);background:var(--raise);box-shadow:inset 2px 0 0 var(--vio)}
+.act svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.act .gear{margin-top:auto}
+.sidebar{grid-column:2;display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;background:var(--panel);border-right:1px solid var(--line2)}
+.shead{flex:none;display:flex;gap:14px;align-items:center;height:36px;padding:0 14px;border-bottom:1px solid var(--line2);font:600 11px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+.sbody{flex:1;min-height:0;overflow:auto;padding:14px;color:var(--mut);font-size:13px;line-height:1.6}
+.sbody h4{margin:16px 0 6px;font:600 11px var(--mono);letter-spacing:.14em;color:var(--dim)}
+.sbody h4:first-child{margin-top:0}
+.minitabs{display:flex;gap:14px;margin:-14px -14px 12px;padding:0 14px;border-bottom:1px solid var(--line2)}
+.minitabs button{padding:8px 0;font-size:13px;color:var(--dim);border-bottom:2px solid transparent;white-space:nowrap}
+.minitabs button[aria-selected="true"]{color:var(--fg);border-color:var(--vio)}
+details{border:1px dashed var(--line);border-radius:8px;padding:8px 10px;margin-top:10px}
+summary{cursor:pointer;color:var(--fg);font-size:13px}
+.file{display:flex;gap:8px;align-items:center;width:100%;padding:5px 8px;border-radius:6px;font:500 12px var(--mono);color:var(--mut)}
+.file:hover{background:var(--raise)}.file small{margin-left:auto;color:var(--dim);font-size:10.5px}
+.file:disabled{opacity:.5;cursor:default}
+.link{display:block;padding:8px 10px;margin-bottom:6px;border:1px solid var(--line2);border-radius:8px;color:var(--fg)}
+.link small{display:block;color:var(--dim);font:500 11px var(--mono)}
+.link.locked{border-style:dashed;color:var(--dim)}
+.field{width:100%;height:32px;padding:0 10px;border:1px solid var(--line);border-radius:6px;background:var(--inset);font:500 12px var(--mono)}
+.main{grid-column:3;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--inset);position:relative}
+.ftabs{flex:none;display:flex;align-items:center;height:38px;border-bottom:1px solid var(--line2);background:var(--panel)}
+.tablist{flex:1;min-width:0;display:flex;height:100%;overflow-x:auto}
+.ftab{display:flex;align-items:center;gap:6px;padding:0 4px 0 12px;border-right:1px solid var(--line2);font:500 12px var(--mono);color:var(--dim);white-space:nowrap}
+.ftab.on{color:var(--fg);box-shadow:inset 0 2px 0 var(--vio);background:var(--inset)}
+.ftab>button:first-child{height:100%;display:flex;align-items:center;gap:6px}
+.ftab .x{width:22px;height:22px;border-radius:4px;display:grid;place-items:center;text-align:center}.ftab .x:hover{background:var(--raise)}
+.ftab .d{width:7px;height:7px;border-radius:50%;background:var(--mut)}
+.tools{flex:none;display:flex;gap:6px;padding:0 8px}
+.tools .btn{height:28px;padding:0 9px}
+.bc{flex:none;display:flex;gap:8px;align-items:center;height:28px;padding:0 12px;border-bottom:1px solid var(--line2);font:500 11px var(--mono);color:var(--dim);white-space:nowrap;overflow:hidden}
+.bc .sp{margin-left:auto}
+.editors{flex:1;min-height:0;display:flex;position:relative}
+.pane{flex:1;min-width:0;overflow:auto;padding:10px 0}
+.pane+.pane{border-left:1px solid var(--line2)}
+.ln{display:grid;grid-template-columns:40px 16px max-content;font:400 var(--fz,12.5px)/20px var(--code);min-height:20px}
+.ln .g{text-align:right;padding-right:6px;color:var(--dim);user-select:none}
+.ln .fold{color:var(--dim);font-size:10px;text-align:center}
+.ln .t{white-space:pre;padding-right:24px}
+.wrapon .ln{grid-template-columns:40px 16px minmax(0,1fr)}
+.wrapon .ln .t{white-space:pre-wrap;overflow-wrap:anywhere}
+.ln.err{background:var(--bad-bg)}.ln.cur{background:var(--sel)}
+.k{color:var(--kw)}.y{color:var(--ty)}.f{color:var(--fn)}.s{color:var(--str)}.n{color:var(--num)}.m{color:var(--mac)}.c{color:var(--com)}
+.ih{color:var(--inlay);background:var(--inlay-bg);border-radius:3px;padding:0 4px;font-size:11px}
+.sq{text-decoration:underline wavy var(--bad);text-underline-offset:4px}
+.lens{margin:4px 12px 8px 56px;max-width:520px;padding:10px 12px;border:1px solid var(--bad);border-radius:8px;background:var(--bad-bg);font:400 12px/1.5 var(--mono)}
+.lens .row{margin-top:6px}
+.code-link{color:var(--bad);text-decoration:underline;text-underline-offset:3px;font:600 12px var(--mono)}
+.minimap{flex:none;width:60px;padding:10px 6px;border-left:1px solid var(--line2)}
+.minimap i{display:block;height:2px;margin-bottom:3px;background:var(--line);border-radius:1px}
+.find{position:absolute;top:6px;right:10px;z-index:6;width:min(360px,calc(100% - 20px));display:grid;gap:6px;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel);box-shadow:0 16px 40px -16px var(--shadow)}
+.find div{display:flex;gap:6px}.find .field{flex:1;min-width:0;height:28px}.find .btn{height:28px;padding:0 8px}
+.bottom{flex:none;display:flex;flex-direction:column;height:200px;border-top:1px solid var(--line2);background:var(--panel)}
+.ide.nobottom .bottom{display:none}
+.btabs{flex:none;display:flex;align-items:center;gap:16px;height:34px;padding:0 12px;border-bottom:1px solid var(--line2);overflow-x:auto}
+.btabs button{height:100%;font:500 12px var(--mono);color:var(--dim);border-bottom:2px solid transparent;white-space:nowrap}
+.btabs button[aria-selected="true"]{color:var(--fg);border-color:var(--vio)}
+.bbody{flex:1;min-height:0;overflow:auto;padding:10px 12px;font:400 12px/1.7 var(--mono);color:var(--mut)}
+.prob{display:flex;gap:10px;width:100%;padding:3px 6px;border-radius:5px}.prob:hover{background:var(--raise)}
+.status{flex:none;display:flex;gap:4px;align-items:center;height:26px;padding:0 6px;border-top:1px solid var(--line2);background:var(--panel);font:400 11px var(--mono);color:var(--dim);white-space:nowrap;overflow-x:auto}
+.status button,.status span{display:inline-flex;gap:5px;align-items:center;padding:0 6px;height:20px;border-radius:4px}
+.status button:hover{background:var(--raise);color:var(--fg)}.status button[aria-pressed="false"]{opacity:.5}
+.status .sp{margin-left:auto}
+.tests{grid-column:4;display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;background:var(--panel);border-left:1px solid var(--line2)}
+.tcase{display:flex;gap:8px;align-items:center;padding:8px 10px;margin-bottom:6px;border:1px solid var(--line2);border-radius:8px;font:500 12px var(--mono);overflow-wrap:anywhere}
+.tcase small{margin-left:auto;color:var(--dim);white-space:nowrap}
+.ft{flex:none;margin:0 12px 10px;padding:8px 10px;border:1px solid var(--line2);border-radius:12px;font:500 11px var(--mono)}
+.ft .row{flex-wrap:nowrap}.ft b{font-size:16px}
+.acts{flex:none;padding:0 12px 12px;display:grid}
+.overlay{position:fixed;inset:0;z-index:50;background:oklch(0 0 0 / .45);display:grid;place-items:start center;padding:12vh 12px 12px}
+.palette{width:min(600px,100%);max-height:70vh;overflow:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:0 30px 70px -20px var(--shadow)}
+.palette .field{height:46px;border:0;border-bottom:1px solid var(--line2);border-radius:0;background:transparent}
+.palette button{display:flex;justify-content:space-between;gap:12px;width:100%;padding:8px 14px;font-size:13px;color:var(--mut)}
+.palette button:hover{background:var(--raise);color:var(--fg)}
+.sheet{position:fixed;z-index:51;top:0;right:0;bottom:0;width:min(460px,100%);overflow:auto;padding:20px;border-left:1px solid var(--line);background:var(--panel);box-shadow:-30px 0 60px -30px var(--shadow)}
+.sheet pre,.cmp pre{margin:8px 0;padding:10px 12px;border:1px solid var(--line2);border-radius:8px;background:var(--inset);font-size:12px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}
+.cmp{flex:1;min-width:0;overflow:auto;padding:12px}
+.cmpgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.cmp mark{background:var(--warn-bg);color:inherit;display:inline-block;width:100%}
+.cmpswitch{display:none}
+.mtabs{display:none}
+.shortcuts{width:100%;border-collapse:collapse;font-size:12.5px}
+.shortcuts td{padding:5px 6px;border-top:1px solid var(--line2);vertical-align:top}
+
+@media (max-width:1180px){.ide{--sw:250px;--rw:260px}.tools .lbl{display:none}}
+@media (max-width:900px){
+    .areas,.srch{display:none}
+    .hdr .btn{margin-left:auto}
+    .home{grid-template-columns:minmax(0,1fr)}
+    .steps,.two{grid-template-columns:minmax(0,1fr)}
+    .part{grid-template-columns:40px minmax(0,1fr)}.part .phase,.part>.btn{grid-column:2}
+    .subbar .crumb,.subbar .lay{display:none}
+    .subbar{height:auto;min-height:44px;flex-wrap:wrap;row-gap:0;padding-block:6px}.subbar .end{font-size:11px}
+    .ftabs{flex-wrap:wrap;height:auto}.tablist{flex-basis:100%;height:38px}.tools{flex-basis:100%;padding:5px 8px;justify-content:flex-end;border-top:1px solid var(--line2)}
+    .mtabs{display:flex;gap:4px;padding:8px 10px;border-bottom:1px solid var(--line2);background:var(--panel)}
+    .mtabs button{flex:1;height:40px;border-radius:8px;text-align:center;font:600 12px var(--mono);color:var(--dim)}
+    .mtabs button[aria-selected="true"]{background:var(--raise);color:var(--fg)}
+    .ide{display:flex;flex-direction:column;height:calc(100vh - 215px);min-height:520px}
+    .act{display:none}
+    .sidebar,.main,.tests{flex:1;border:0}
+    .ide[data-pane="p"] .main,.ide[data-pane="p"] .tests,.ide[data-pane="c"] .sidebar,.ide[data-pane="c"] .tests,.ide[data-pane="t"] .sidebar,.ide[data-pane="t"] .main{display:none}
+    .ide.noside .sidebar,.ide.notests .tests{visibility:visible}
+    .desk{display:none!important}
+    .bc .sp{display:none}
+    .tools .btn,.ftab{min-height:36px}
+    .bottom{height:170px}
+    .status button{height:24px}
+    .cmpgrid{grid-template-columns:minmax(0,1fr)}.cmpswitch{display:flex;gap:6px;margin-bottom:8px}
+    .cmpgrid>div:not(.show){display:none}
+}
+</style>
+</head>
+<body>
+<div class="mockbar" role="note"><span>MOCKUP · NOT THE APP</span><span>ALL PROGRESS, COUNTS, TIMES AND THE EXERCISE ARE SAMPLE DATA</span></div>
+<header class="hdr">
+    <span class="logo">anneal</span>
+    <div class="areas" aria-hidden="true"><span>DSA</span><span class="on">Rust</span><span>Courses</span><span>System design</span><span>Cookbook</span></div>
+    <div class="srch">Search everything <kbd>⌘K</kbd></div>
+    <button class="btn" id="theme" type="button">Theme: system</button>
+</header>
+<nav class="views" role="tablist" aria-label="Mockup screens">
+    <button role="tab" data-view="home" aria-selected="true">1 · Rust home</button>
+    <button role="tab" data-view="path" aria-selected="false">2 · Path and project</button>
+    <button role="tab" data-view="ex" aria-selected="false">3 · Exercise (editor)</button>
+</nav>
+
+<!-- ================= home ================= -->
+<main id="v-home" class="wrap">
+    <div class="eyebrow">Rust · practice</div>
+    <h1>Learn it by <em>making it compile, pass and hold.</em></h1>
+    <p class="lead">Every item here is something you do: write, repair, test, audit, speed up or build. The Cookbook is where you look things up.</p>
+    <div class="home">
+        <div>
+            <div class="steps">
+                <div class="step on"><i>1</i><span><b>Re-solves</b><small>2 due (sample)</small></span></div>
+                <div class="step"><i>2</i><span><b>Resume</b><small>The report that would not borrow</small></span></div>
+                <div class="step"><i>3</i><span><b>Done for today</b><small>not yet</small></span></div>
+            </div>
+            <section class="card now">
+                <div class="eyebrow">Next up · path: senior interview · sample</div>
+                <h3>The report that would not borrow</h3>
+                <p class="lead">Started yesterday. Your last run did not compile.</p>
+                <div class="row" style="margin:12px 0"><span class="pill" style="--c:var(--vio)">fix the compile error</span><span class="pill" style="--c:var(--warn)">medium</span><span class="pill">about 15 min</span></div>
+                <button class="btn solid lg" data-go="ex">Continue in the workspace →</button>
+            </section>
+            <h2>Choose by what you want to do</h2>
+            <div class="grid" id="kinds">
+                <button class="card kind" style="--c:var(--acc)" aria-pressed="false"><h3>Implement</h3><p>Write code until the tests pass.</p><span class="pill">145 today</span></button>
+                <button class="card kind" style="--c:var(--vio)" aria-pressed="false"><h3>Fix</h3><p>Repair a compile error or a bug, under rules.</p><span class="pill">103 today</span></button>
+                <button class="card kind" style="--c:var(--grn)" aria-pressed="false"><h3>Write the tests</h3><p>Your check must catch every broken version.</p><span class="pill">new</span></button>
+                <button class="card kind" style="--c:var(--bad)" aria-pressed="false"><h3>Review unsafe code</h3><p>Find the hole before it drops twice.</p><span class="pill">new</span></button>
+                <button class="card kind" style="--c:var(--warn)" aria-pressed="false"><h3>Make it faster</h3><p>Meet an allocation or timing budget.</p><span class="pill">9 measured today</span></button>
+                <button class="card kind" style="--c:var(--mac)" aria-pressed="false"><h3>Build a project</h3><p>Your code carries from stage to stage.</p><span class="pill">new</span></button>
+            </div>
+            <p class="note" id="kindnote" aria-live="polite">"Today" counts are measured from the content on 2026-11-26. Refactor and predict are labels too.</p>
+            <h2>Paths · ordered lists of exercises, nothing is moved</h2>
+            <div class="list">
+                <button class="item" data-go="path"><i class="dot" style="--c:var(--vio)"></i><span>Async in production<small>cancellation · back-pressure · shutdown</small></span><span class="pill">3 / 9 sample</span></button>
+                <button class="item" data-go="path"><i class="dot" style="--c:var(--grn)"></i><span>Senior interview<small>ownership · traits · lifetimes · concurrency</small></span><span class="pill">18 / 60 sample</span></button>
+                <button class="item" data-go="path"><i class="dot" style="--c:var(--bad)"></i><span>Unsafe and proof<small>contracts · panic safety · auto traits</small></span><span class="pill">1 / 14 sample</span></button>
+                <button class="item" data-go="path"><i class="dot" style="--c:var(--mac)"></i><span>Build a key-value store<small>4 stages · one library, your code</small></span><span class="pill">0 / 4 sample</span></button>
+            </div>
+            <h2>All tracks</h2>
+            <div class="grid">
+                <div class="card"><div class="eyebrow">L2 · core</div><h3>Borrowing</h3><div class="meter" style="margin:12px 0 6px"><i style="width:54%"></i></div><small class="note">20 / 37 sample</small></div>
+                <div class="card"><div class="eyebrow">C4 · new track</div><h3>Async and Tokio</h3><div class="meter" style="margin:12px 0 6px"><i style="width:0"></i></div><small class="note">0 / 4 planned</small></div>
+                <div class="card"><div class="eyebrow">B4 · now listed</div><h3>Networking and protocols</h3><div class="meter" style="margin:12px 0 6px"><i style="width:33%"></i></div><small class="note">1 / 3 sample</small></div>
+            </div>
+        </div>
+        <aside class="side">
+            <div class="card"><div class="eyebrow">Re-solve due · sample</div><p class="note">Fix: push while iterating · 2 days late</p><p class="note">MiniVec: push, pop and Drop · today</p></div>
+            <div class="card"><div class="eyebrow">Compiler errors you hit most · sample</div><p style="margin:10px 0 0"><button class="code-link" data-err>E0502</button> <span class="note">11 runs</span></p><p class="note">Each code opens an explanation.</p></div>
+            <div class="card"><div class="eyebrow">Practised by kind · sample</div><p class="note">Implement 41 · Fix 33</p><p class="note">Write tests 0 · Review 0 · Faster 2 · Build 0</p></div>
+        </aside>
+    </div>
+</main>
+
+<!-- ================= path ================= -->
+<main id="v-path" class="wrap" hidden>
+    <div class="eyebrow">Path · sample progress</div>
+    <h1>Async in <em>production.</em></h1>
+    <p class="lead">Use it, understand it, build it. A path lists exercises by id; your history stays on each exercise wherever it is listed.</p>
+    <h2>Stages</h2>
+    <div class="part done"><span class="no">01</span><div><h3>Futures you already await</h3><p>block_on, a oneshot channel, a small executor.</p><div class="row"><span class="pill">C5 · 3 existing</span></div></div><div class="phase done">3 / 3 sample</div></div>
+    <div class="part cur"><span class="no">02</span><div><h3>Losing work at an await</h3><p>Cancellation safety, bounded fan-out, a stalled runtime.</p><div class="row"><span class="pill" style="--c:var(--vio)">fix the bug</span><span class="pill" style="--c:var(--acc)">implement</span><span class="pill">tokio</span></div></div><div class="phase cur">now on</div></div>
+    <div class="part"><span class="no">03</span><div><h3>Stopping cleanly</h3><p>Drain with a deadline; give back what could not finish.</p><div class="row"><span class="pill" style="--c:var(--acc)">implement</span><span class="pill">tokio-util</span></div></div><div class="phase">ahead</div></div>
+    <h2>Project path · build a key-value store</h2>
+    <div class="part cur"><span class="no">1</span><div><h3>Commands and an in-memory store</h3><p>Parse command lines, answer them.</p><span class="pill" style="--c:var(--mac)">build stage</span></div><button class="btn solid" data-go="ex">Start</button></div>
+    <div class="part"><span class="no">2</span><div><h3>An append-only log and recovery</h3><p>Stage 1 tests keep running. The log is cut at every byte.</p><div class="row"><button class="btn" id="carry">Start from my passing stage 1</button><button class="btn">Start from the given starter</button></div><p class="note" id="carrynote" aria-live="polite">Writes only this stage's draft. An existing draft is archived first, after you confirm.</p></div><div class="phase">after 1, or any time</div></div>
+    <div class="part"><span class="no">3</span><div><h3>Segments and compaction</h3><p>Release 3 or later.</p></div><div class="phase">later</div></div>
+    <div class="part"><span class="no">4</span><div><h3>Reads during writes</h3><p>Release 3 or later.</p></div><div class="phase">later</div></div>
+    <h2>Look things up in the Cookbook</h2>
+    <div class="two">
+        <div class="card"><div class="eyebrow">Read first · explains the idea, no answer</div><p style="margin:10px 0 0">Async cancellation, in another setting</p><p class="note">cookbook / systems</p></div>
+        <div class="card" style="border-style:dashed"><div class="eyebrow">After you solve · may contain a full answer</div><p class="note" style="margin-top:10px">2 pages appear on each exercise once it passes.</p></div>
+    </div>
+</main>
+
+<!-- ================= exercise ================= -->
+<main id="v-ex" hidden>
+    <div class="subbar">
+        <span class="crumb">RUST / L2 BORROWING / SAMPLE</span>
+        <b>The report that would not borrow</b>
+        <span class="pill desk" style="--c:var(--vio)">FIX THE COMPILE ERROR</span>
+        <span class="end"><span>‹ 4 / 9 ›</span><span class="clock">PRACTICE 04:12 / 10:00</span>
+            <span class="lay" role="group" aria-label="Layout">
+                <button data-tog="noside" aria-pressed="true" title="Side bar (⌘B)" aria-label="Toggle side bar"><svg viewBox="0 0 16 14"><rect x="1" y="1" width="14" height="12" rx="2"/><rect class="f" x="2" y="2" width="4" height="10"/></svg></button>
+                <button data-tog="nobottom" aria-pressed="true" title="Bottom panel (⌘J)" aria-label="Toggle bottom panel"><svg viewBox="0 0 16 14"><rect x="1" y="1" width="14" height="12" rx="2"/><rect class="f" x="2" y="8" width="12" height="4"/></svg></button>
+                <button data-tog="notests" aria-pressed="true" title="Tests panel (⌥⌘B)" aria-label="Toggle tests panel"><svg viewBox="0 0 16 14"><rect x="1" y="1" width="14" height="12" rx="2"/><rect class="f" x="10" y="2" width="4" height="10"/></svg></button>
+            </span>
+        </span>
+    </div>
+    <div class="mtabs" role="tablist" aria-label="Workspace">
+        <button role="tab" data-pane="p" aria-selected="false">Problem</button><button role="tab" data-pane="c" aria-selected="true">Code</button><button role="tab" data-pane="t" aria-selected="false">Tests</button>
+    </div>
+    <div class="ide" id="ide" data-pane="c">
+        <div class="act" role="toolbar" aria-label="Activity bar">
+            <button data-side="exercise" aria-pressed="true" title="Exercise" aria-label="Exercise"><svg viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5z"/><path d="M8 10h8M8 14h8M8 17h5"/></svg></button>
+            <button data-side="explorer" aria-pressed="false" title="Explorer (⇧⌘E)" aria-label="Explorer"><svg viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3z"/></svg></button>
+            <button data-side="search" aria-pressed="false" title="Search the exercise's files (⇧⌘F)" aria-label="Search"><svg viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="M15 15l5 5"/></svg></button>
+            <button data-side="outline" aria-pressed="false" title="Outline (⇧⌘O)" aria-label="Outline"><svg viewBox="0 0 24 24"><path d="M4 5h6M8 12h8M8 19h8M4 5v14h4M4 12h4"/></svg></button>
+            <button data-side="cookbook" aria-pressed="false" title="Cookbook links" aria-label="Cookbook links"><svg viewBox="0 0 24 24"><path d="M4 5c3-1 6-1 8 1 2-2 5-2 8-1v14c-3-1-6-1-8 1-2-2-5-2-8-1z"/><path d="M12 6v14"/></svg></button>
+            <button class="gear" data-side="settings" aria-pressed="false" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M6 6l2 2M16 16l2 2M18 6l-2 2M8 16l-2 2"/></svg></button>
+        </div>
+
+        <aside class="sidebar">
+            <div class="shead" id="shead">Exercise</div>
+            <div class="sbody">
+                <div data-sv="exercise">
+                    <div class="minitabs" role="tablist">
+                        <button role="tab" data-lt="problem" aria-selected="true">Problem</button><button role="tab" data-lt="hints" aria-selected="false">Hints 0/2</button><button role="tab" data-lt="solution" aria-selected="false">Solution</button><button role="tab" data-lt="related" aria-selected="false">Related</button>
+                    </div>
+                    <div data-lv="problem">
+                        <p style="color:var(--fg)"><code>report</code> should add the largest score again and return a label for it. It does not compile. Fix it without copying the list.</p>
+                        <h4>RULES</h4><div>× no <code>.clone()</code></div><div>+ change at most 4 lines</div>
+                        <details><summary>What this teaches <span class="note">may give the answer away</span></summary><p>Closed until you solve it. Opening it early is your choice.</p></details>
+                        <details><summary>Interview follow-up</summary><p>Closed until you solve it.</p></details>
+                    </div>
+                    <div data-lv="hints" hidden><p>Each hint opened before solving marks the attempt as assisted.</p><button class="btn">Reveal hint 1 →</button></div>
+                    <div data-lv="solution" hidden><p>The solution opens when every test passes on Submit.</p><button class="btn">Reveal anyway (marks assisted)</button></div>
+                    <div data-lv="related" hidden><span class="link">L2 · Borrowing<small>written track: a link</small></span><span class="link locked">S6 · Iterators<small>not written yet: plain text</small></span></div>
+                </div>
+                <div data-sv="explorer" hidden>
+                    <h4>EXERCISE FILES · FIXED SET</h4>
+                    <button class="file" data-open="lib">src/lib.rs</button>
+                    <button class="file" data-open="main">main.rs <small>scratch</small></button>
+                    <button class="file" data-open="tests">tests/visible.rs <small>read-only</small></button>
+                    <button class="file locked" data-open="hidden" disabled>tests/hidden.rs <small>after solving</small></button>
+                    <button class="file locked" data-open="solution" disabled>solution.rs <small>locked</small></button>
+                    <button class="file locked" data-open="compare" disabled>compare <small>after a passing submit</small></button>
+                    <p class="note">No new, rename or delete: there is no file system behind this list.</p>
+                </div>
+                <div data-sv="search" hidden>
+                    <input class="field" aria-label="Search files" value="scores">
+                    <h4>3 RESULTS · SAMPLE</h4>
+                    <button class="file" data-open="lib">src/lib.rs <small>:2</small></button><button class="file" data-open="lib">src/lib.rs <small>:4</small></button><button class="file" data-open="tests">tests/visible.rs <small>:5</small></button>
+                    <p class="note">Hidden and locked files are never searched.</p>
+                </div>
+                <div data-sv="outline" hidden>
+                    <h4>SYMBOLS IN SRC/LIB.RS</h4><button class="file" data-open="lib">fn report <small>:2</small></button><button class="file" data-open="lib">fn label <small>:11</small></button>
+                    <p class="note">From rust-analyzer document symbols (planned).</p>
+                </div>
+                <div data-sv="cookbook" hidden>
+                    <h4>READ FIRST</h4><span class="link">Ownership and borrowing<small>explains the idea · no answer</small></span>
+                    <h4>AFTER YOU SOLVE</h4><span class="link locked" id="afterlink">1 page · hidden until you pass<small>it may contain a full answer</small></span>
+                </div>
+                <div data-sv="settings" hidden>
+                    <h4>EDITOR</h4>
+                    <button class="file" data-act="wrap">Line wrapping <small id="s-wrap">off</small></button>
+                    <button class="file" data-act="map">Minimap <small id="s-map">off</small></button>
+                    <button class="file" data-act="split">Split view <small id="s-split">off</small></button>
+                    <p class="note">The existing settings stay in the Aa panel: size, Vim mode, format on pause, live clippy, ligatures, font, reset.</p>
+                    <h4>SHORTCUTS</h4>
+                    <table class="shortcuts"><tbody>
+                        <tr><td><kbd>⌘K</kbd></td><td>anneal palette, as today</td></tr>
+                        <tr><td><kbd>⇧⌘P</kbd> <kbd>F1</kbd></td><td>editor commands</td></tr>
+                        <tr><td><kbd>⌘P</kbd></td><td>quick open</td></tr>
+                        <tr><td><kbd>⌘F</kbd> <kbd>⌥⌘F</kbd></td><td>find, replace</td></tr>
+                        <tr><td><kbd>⇧⌘O</kbd> <kbd>Ctrl G</kbd></td><td>symbol, line</td></tr>
+                        <tr><td><kbd>⌘↵</kbd> <kbd>⇧⌘↵</kbd> <kbd>⌘'</kbd></td><td>tests, submit, scratch</td></tr>
+                        <tr><td><kbd>⌘S</kbd> <kbd>⇧⌥F</kbd></td><td>format</td></tr>
+                        <tr><td><kbd>⌘B</kbd> <kbd>⌘J</kbd> <kbd>⌥⌘B</kbd></td><td>panels</td></tr>
+                        <tr><td><kbd>⌥W</kbd></td><td>close tab; <kbd>⌘W</kbd> stays the browser's</td></tr>
+                        <tr><td><kbd>⌘\</kbd> <kbd>⌥Z</kbd></td><td>split, wrap</td></tr>
+                        <tr><td><kbd>F8</kbd> <kbd>F12</kbd> <kbd>⇧F12</kbd> <kbd>F2</kbd></td><td>next diagnostic, definition, references, rename</td></tr>
+                    </tbody></table>
+                </div>
+            </div>
+        </aside>
+
+        <section class="main">
+            <div class="ftabs">
+                <div class="tablist" id="tablist" role="tablist"></div>
+                <div class="tools">
+                    <button class="btn" data-act="cmd" title="Editor commands (⇧⌘P)">⌘<span class="lbl">Commands</span></button>
+                    <button class="btn" data-act="find" title="Find (⌘F)" aria-label="Find">⌕</button>
+                    <button class="btn" id="runbtn">▷ <span id="runlbl">Run tests</span></button>
+                    <button class="btn" title="Editor settings: size, Vim, format on pause, live clippy, ligatures, font" data-side="settings">Aa</button>
+                    <button class="btn" title="Reset to starter (asks first)">Reset</button>
+                </div>
+            </div>
+            <div class="bc"><span id="bcfile">src/lib.rs</span><span>›</span><span id="bcsym">fn report</span><span class="sp">edition 2021 · std only · 6 visible tests, hidden on Submit</span></div>
+            <div class="editors" id="editors">
+                <div class="find" id="find" hidden>
+                    <div><input class="field" aria-label="Find" value="scores"><span class="btn">1/3</span><button class="btn" data-act="find" aria-label="Close find">×</button></div>
+                    <div><input class="field" aria-label="Replace with" placeholder="replace with"><span class="btn">Replace</span><span class="btn">All</span></div>
+                </div>
+                <div class="pane" id="code"></div>
+                <div class="pane desk" id="split" hidden></div>
+                <div class="cmp" id="cmp" hidden>
+                    <div class="eyebrow">Compare · shown only after a passing submit</div>
+                    <div class="cmpswitch"><button class="btn" data-cmp="0">Yours</button><button class="btn" data-cmp="1">Reference</button></div>
+                    <div class="cmpgrid">
+                        <div class="show"><b>Yours · submit #3</b><pre>let mut best = 0;
+for &amp;s in scores.iter() {
+    best = best.max(s);
+}
+<mark>scores.push(best);</mark>
+label(best)</pre></div>
+                        <div><b>Reference</b><pre><mark>let best = scores.iter().copied().max().unwrap_or(0);</mark>
+scores.push(best);
+label(best)</pre></div>
+                    </div>
+                    <h2>Why they differ · written with the exercise</h2>
+                    <div class="card"><b>The borrow ends at the same place in both.</b><p class="note">Each copies the number out, so nothing still points into the list when it grows.</p></div>
+                    <div class="card" style="margin-top:8px"><b>The reference says what it wants in one line.</b><p class="note">A loop is just as good if the body later does more than find a maximum. Passing a different way is not wrong.</p></div>
+                    <p class="note">Facts: 2 lines differ · 0 clippy warnings on your passing run (sample).</p>
+                </div>
+                <div class="minimap desk" id="minimap" hidden aria-hidden="true"></div>
+            </div>
+            <div class="bottom">
+                <div class="btabs" role="tablist" aria-label="Bottom panel">
+                    <button role="tab" data-b="problems" aria-selected="true">Problems 1</button><button role="tab" data-b="results" aria-selected="false">Test results</button><button role="tab" data-b="compiler" aria-selected="false">Compiler · 1</button><button role="tab" data-b="output" aria-selected="false">Output</button><button role="tab" data-b="timeline" aria-selected="false">Timeline</button>
+                    <button data-tog="nobottom" style="margin-left:auto" aria-label="Hide bottom panel">▾</button>
+                </div>
+                <div class="bbody">
+                    <div data-bv="problems"><button class="prob" id="probrow"><span style="color:var(--bad)">error</span><span>cannot borrow `*scores` as mutable… E0502</span><span style="margin-left:auto;color:var(--dim)">lib.rs 5:5</span></button></div>
+                    <div data-bv="results" hidden><div id="restext">Does not compile. No test ran.</div><div>This is a text view of the last test run. It is not a terminal.</div></div>
+                    <div data-bv="compiler" hidden><div><span style="color:var(--bad)">error</span> <button class="code-link" data-err>E0502</button> cannot borrow `*scores` as mutable because it is also borrowed as immutable</div><div>  5 |     scores.push(*best);</div></div>
+                    <div data-bv="output" hidden>println! and dbg! output from visible tests, and main.rs output after Run, as today.</div>
+                    <div data-bv="timeline" hidden>#2 run · E0502 · 14:02<br>#1 run · E0502 · 13:58<br>Pick a run to see the diff from the one before, as today.</div>
+                </div>
+            </div>
+            <div class="status">
+                <button aria-pressed="true"><i class="dot" style="--c:var(--grn)"></i>rust-analyzer</button>
+                <button data-b-open="problems" id="errcount">⊗ 1 ⚠ 0</button>
+                <button aria-pressed="true">autocomplete</button>
+                <button aria-pressed="false">lanes</button>
+                <button data-act="wrap" id="st-wrap">wrap off</button>
+                <span>Vim off</span>
+                <span class="sp">edition 2021</span><span>Ln 5, Col 5</span>
+            </div>
+        </section>
+
+        <aside class="tests">
+            <div class="shead">Tests <span id="tcount">not passing</span></div>
+            <div class="sbody">
+                <div class="row" style="justify-content:space-between;margin-bottom:10px"><b id="tstate" style="color:var(--bad)">Doesn't compile</b><button class="btn" id="runbtn2">Run tests</button></div>
+                <div class="meter" style="margin-bottom:12px"><i id="tmeter" style="width:0;--c:var(--grn)"></i></div>
+                <div class="tcase"><span class="ti">○</span>adds_the_largest_again<small>sample</small></div>
+                <div class="tcase"><span class="ti">○</span>empty_list<small>sample</small></div>
+                <div class="tcase"><span class="ti">○</span>label_text<small>sample</small></div>
+                <div id="solved" hidden>
+                    <h4>NOW OPEN</h4>
+                    <button class="btn solid" data-open="compare">Compare with the reference</button>
+                    <p class="note">Also open: what this teaches, the follow-up, hidden tests, the "after" Cookbook page.</p>
+                </div>
+            </div>
+            <div class="ft">
+                <div class="row"><b>25:00</b><span class="note" style="margin:0">focus 1 / 4</span><button class="btn" style="margin-left:auto">Start</button><button class="btn" id="ftx" aria-expanded="false" aria-label="Expand focus timer">▴</button></div>
+                <div id="ftfull" hidden>
+                    <div class="row" style="margin-top:8px"><span class="pill" style="--c:var(--grn)">POMODORO</span><span class="pill">TIMER</span><span class="pill">STOPWATCH</span></div>
+                    <div class="row" style="margin-top:8px"><span class="btn">Reset</span><span class="btn">Skip</span><span class="btn">Settings</span></div>
+                    <p class="note">this session 0 min · 0 pomodoros</p>
+                </div>
+            </div>
+            <div class="acts"><button class="btn solid lg" id="submit" title="Mockup only: pretends every test passes">Submit (sample pass)</button></div>
+        </aside>
+    </div>
+</main>
+
+<div class="overlay" id="cmd" hidden>
+    <div class="palette" role="dialog" aria-modal="true" aria-label="Editor commands">
+        <input class="field" id="cmdin" value="&gt; " aria-label="Command">
+        <button data-run="find">Find and replace <kbd>⌘F</kbd></button>
+        <button data-run="wrap">Toggle line wrapping <kbd>⌥Z</kbd></button>
+        <button data-run="split">Toggle split view <kbd>⌘\</kbd></button>
+        <button data-run="map">Toggle minimap <span></span></button>
+        <button data-run="outline">Go to symbol <kbd>⇧⌘O</kbd></button>
+        <button data-run="close">Go to line <kbd>Ctrl G</kbd></button>
+        <button data-run="close">Rename symbol (src/lib.rs) <kbd>F2</kbd></button>
+        <button data-run="close">Find references <kbd>⇧F12</kbd></button>
+        <button data-run="close">Go to definition <kbd>F12</kbd></button>
+        <button data-run="close">Next diagnostic <kbd>F8</kbd></button>
+        <button data-run="close">Format document <kbd>⇧⌥F</kbd></button>
+        <button data-run="close">Open the anneal palette instead <kbd>⌘K</kbd></button>
+    </div>
+</div>
+<aside class="sheet" id="sheet" role="dialog" aria-label="Error E0502 explained" hidden>
+    <div class="row" style="justify-content:space-between"><div class="eyebrow">Compiler error · E0502</div><button class="btn" id="closesheet">Close</button></div>
+    <h1 style="font-size:22px">Changing something that is still being read</h1>
+    <p class="lead">While a shared reference is still in use, the value it points into cannot be changed. The change could move or remove what the reference sees.</p>
+    <h2>A small example, from another setting</h2>
+<pre>let mut names = vec![String::from("a")];
+let first = &amp;names[0];
+names.clear();          // E0502
+println!("{first}");</pre>
+    <h2>Ways out, and when each fits</h2>
+    <div class="card"><b>Finish reading first.</b><p class="note">When the later change does not need the reference.</p></div>
+    <div class="card" style="margin-top:8px"><b>Keep an owned value or a position instead.</b><p class="note">When what you need is small, or can be found again.</p></div>
+    <div class="card" style="margin-top:8px"><b>Borrow separate parts.</b><p class="note">When the read and the change touch different data.</p></div>
+    <h2>Look it up</h2>
+    <span class="link" style="display:block;border:1px solid var(--line2);border-radius:8px;padding:8px 10px">Cookbook · Ownership and borrowing</span>
+    <p class="note">The official explanation stays linked. This text depends only on the error code: it never reads your code or names the exercise's fix.</p>
+</aside>
+
+<script>
+(function () {
+    const $ = (s, r = document) => r.querySelector(s);
+    const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+    const press = (els, on, attr) => els.forEach((e) => e.setAttribute(attr, String(on(e))));
+
+    const modes = ["system", "dark", "light"];
+    let mode = 0;
+    $("#theme").onclick = () => {
+        mode = (mode + 1) % 3;
+        if (modes[mode] === "system") delete document.documentElement.dataset.theme;
+        else document.documentElement.dataset.theme = modes[mode];
+        $("#theme").textContent = "Theme: " + modes[mode];
+    };
+
+    function view(v) {
+        ["home", "path", "ex"].forEach((x) => ($("#v-" + x).hidden = x !== v));
+        press($$(".views button"), (b) => b.dataset.view === v, "aria-selected");
+        window.scrollTo(0, 0);
+    }
+    $$("[data-view]").forEach((b) => (b.onclick = () => view(b.dataset.view)));
+    $$("[data-go]").forEach((b) => (b.onclick = () => view(b.dataset.go)));
+    $$(".kind").forEach((b) => (b.onclick = () => {
+        const on = b.getAttribute("aria-pressed") !== "true";
+        press($$(".kind"), (e) => e === b && on, "aria-pressed");
+        $("#kindnote").textContent = on ? "Mockup: the lists would now show only “" + $("h3", b).textContent + "”." : "Showing every kind.";
+    }));
+    $("#carry").onclick = () => ($("#carrynote").textContent = "Mockup: a draft already exists. Archive it and replace it with your stage 1 code? Nothing is changed without a yes.");
+
+    // sample exercise: invented for this mockup, not one of the planned exercises
+    const files = {
+        lib: ['<span class="c">/// Adds the largest score again and says which it was. Long comment lines wrap when wrapping is on, instead of running past the edge.</span>',
+            '<span class="k">pub fn</span> <span class="f">report</span>(scores: &amp;<span class="k">mut</span> <span class="y">Vec</span>&lt;<span class="y">u32</span>&gt;) -&gt; <span class="y">String</span> {',
+            '    <span class="k">let</span> first = scores.<span class="f">first</span>();',
+            '    <span class="k">let</span> best<span class="ih">: &amp;u32</span> = scores.<span class="f">iter</span>().<span class="f">max</span>().<span class="f">unwrap_or</span>(&amp;<span class="n">0</span>);',
+            '    <span class="sq">scores.<span class="f">push</span>(*best)</span>;',
+            '    <span class="f">label</span>(*best)', '}', '', '', '',
+            '<span class="k">fn</span> <span class="f">label</span>(n: <span class="y">u32</span>) -&gt; <span class="y">String</span> {', '    <span class="m">format!</span>(<span class="s">"best {n}"</span>)', '}'],
+        main: ['<span class="k">use</span> solution::*;', '', '<span class="k">fn</span> <span class="f">main</span>() {', '    <span class="c">// call your code and print what you want to see</span>', '}'],
+        tests: ['<span class="k">use</span> solution::*;', '', '#[test]', '<span class="k">fn</span> <span class="f">adds_the_largest_again</span>() {', '    <span class="k">let mut</span> scores = <span class="m">vec!</span>[<span class="n">3</span>, <span class="n">9</span>];', '    <span class="m">check!</span>(<span class="s">"[3, 9]"</span>, <span class="f">report</span>(&amp;<span class="k">mut</span> scores), <span class="s">"best 9"</span>);', '}'],
+        hidden: ['<span class="c">// the hidden tests, open after solving</span>'],
+        solution: ['<span class="c">// the reference, open after solving</span>']
+    };
+    const names = { lib: "src/lib.rs", main: "main.rs", tests: "tests/visible.rs", hidden: "tests/hidden.rs", solution: "solution.rs", compare: "compare" };
+    let open = ["lib", "main", "tests"], cur = "lib", passed = false, folded = false, wrap = window.innerWidth <= 900, split = false, map = false;
+
+    function lines(key) {
+        let out = "";
+        files[key].forEach((t, i) => {
+            if (key === "lib" && folded && i > 10 && i < 13) return;
+            const isErr = key === "lib" && i === 4 && !passed;
+            const foldable = key === "lib" && i === 10;
+            out += '<div class="ln' + (isErr ? " err cur" : "") + '"><span class="g">' + (i + 1) + "</span>" +
+                (foldable ? '<button class="fold" data-fold aria-label="Fold this function">' + (folded ? "▸" : "▾") + "</button>" : '<span class="fold"></span>') +
+                '<span class="t">' + (passed && isErr === false ? t.replace('class="sq"', "") : t) + (foldable && folded ? ' <span class="ih">…</span>' : "") + "</span></div>";
+            if (isErr) out += '<div class="lens"><div><button class="code-link" data-err>E0502</button> cannot borrow `*scores` as mutable because it is also borrowed as immutable</div><div class="row"><button class="btn" data-err>Explain this error</button><span class="note" style="margin:0">hides until the next run ×</span></div></div>';
+        });
+        return out;
+    }
+    function render() {
+        $("#tablist").innerHTML = open.map((k) => '<span class="ftab' + (k === cur ? " on" : "") + '"><button role="tab" aria-selected="' + (k === cur) + '" data-tab="' + k + '">' + names[k] + (k === "lib" && !passed ? '<i class="d" title="Changed since the last test run"></i>' : "") + "</button>" + (k === "lib" ? '<span style="width:8px"></span>' : '<button class="x" data-x="' + k + '" aria-label="Close ' + names[k] + '">×</button>') + "</span>").join("");
+        const cmp = cur === "compare";
+        $("#cmp").hidden = !cmp;
+        $("#code").hidden = cmp;
+        if (!cmp) $("#code").innerHTML = lines(cur);
+        $("#split").hidden = !split || cmp;
+        $("#split").innerHTML = lines("tests");
+        $("#minimap").hidden = !map || cmp;
+        $("#editors").classList.toggle("wrapon", wrap);
+        $("#bcfile").textContent = names[cur];
+        $("#bcsym").textContent = cur === "lib" ? "fn report" : "—";
+        $("#runlbl").textContent = cur === "main" ? "Run" : "Run tests";
+        $("#st-wrap").textContent = "wrap " + (wrap ? "on" : "off");
+        $("#s-wrap").textContent = wrap ? "on" : "off";
+        $("#s-map").textContent = map ? "on" : "off";
+        $("#s-split").textContent = split ? "on" : "off";
+    }
+    $("#minimap").innerHTML = [70, 95, 60, 85, 50, 30, 10, 0, 0, 0, 55, 40, 10].map((w) => '<i style="width:' + w + '%"></i>').join("");
+
+    function pane(p) {
+        $("#ide").dataset.pane = p;
+        press($$(".mtabs button"), (b) => b.dataset.pane === p, "aria-selected");
+    }
+    function openFile(k) {
+        if (!open.includes(k)) open.push(k);
+        cur = k;
+        pane("c");
+        render();
+    }
+    function side(name) {
+        $$("[data-sv]").forEach((e) => (e.hidden = e.dataset.sv !== name));
+        press($$(".act button"), (b) => b.dataset.side === name, "aria-pressed");
+        $("#shead").textContent = name === "cookbook" ? "Cookbook links" : name;
+        setTog("noside", false);
+        pane("p");
+    }
+    function setTog(c, hide) {
+        $("#ide").classList.toggle(c, hide);
+        press($$('.lay [data-tog="' + c + '"]'), () => !hide, "aria-pressed");
+    }
+    function bottom(name) {
+        setTog("nobottom", false);
+        press($$(".btabs [data-b]"), (b) => b.dataset.b === name, "aria-selected");
+        $$("[data-bv]").forEach((e) => (e.hidden = e.dataset.bv !== name));
+    }
+    function act(a) {
+        $("#cmd").hidden = a !== "cmd";
+        if (a === "cmd") $("#cmdin").focus();
+        if (a === "find") $("#find").hidden = !$("#find").hidden;
+        if (a === "wrap") wrap = !wrap;
+        if (a === "map") map = !map;
+        if (a === "split") split = !split;
+        if (a === "outline") side("outline");
+        render();
+    }
+    document.addEventListener("click", (e) => {
+        const t = e.target.closest("button");
+        if (e.target === $("#cmd")) $("#cmd").hidden = true;
+        if (!t) return;
+        if (t.dataset.tab) { cur = t.dataset.tab; render(); }
+        if (t.dataset.x) { open = open.filter((k) => k !== t.dataset.x); if (cur === t.dataset.x) cur = "lib"; render(); }
+        if (t.dataset.open) openFile(t.dataset.open);
+        if (t.dataset.side) side(t.dataset.side);
+        if (t.dataset.act) act(t.dataset.act);
+        if (t.dataset.run) act(t.dataset.run);
+        if (t.dataset.tog) setTog(t.dataset.tog, !$("#ide").classList.contains(t.dataset.tog));
+        if (t.dataset.b) bottom(t.dataset.b);
+        if (t.dataset.bOpen) bottom(t.dataset.bOpen);
+        if (t.hasAttribute("data-err")) { $("#sheet").hidden = false; $("#closesheet").focus(); }
+        if (t.hasAttribute("data-fold")) { folded = !folded; render(); }
+        if (t.dataset.lt) {
+            press($$("[data-lt]"), (b) => b === t, "aria-selected");
+            $$("[data-lv]").forEach((x) => (x.hidden = x.dataset.lv !== t.dataset.lt));
+        }
+        if (t.dataset.cmp) $$(".cmpgrid>div").forEach((d, i) => d.classList.toggle("show", i === Number(t.dataset.cmp)));
+    });
+    $$(".mtabs button").forEach((b) => (b.onclick = () => pane(b.dataset.pane)));
+    $("#probrow").onclick = () => openFile("lib");
+    $("#closesheet").onclick = () => ($("#sheet").hidden = true);
+    $("#ftx").onclick = () => {
+        $("#ftfull").hidden = !$("#ftfull").hidden;
+        $("#ftx").setAttribute("aria-expanded", String(!$("#ftfull").hidden));
+    };
+    $("#runbtn").onclick = $("#runbtn2").onclick = () => { bottom("results"); };
+    $("#submit").onclick = () => {
+        passed = true;
+        $("#tstate").textContent = "All passing (sample)";
+        $("#tstate").style.color = "var(--grn)";
+        $("#tcount").textContent = "solved";
+        $("#tmeter").style.width = "100%";
+        $$(".ti").forEach((i) => { i.textContent = "✓"; i.style.color = "var(--grn)"; });
+        $("#solved").hidden = false;
+        $$(".file.locked").forEach((f) => { f.disabled = false; $("small", f).textContent = "open"; });
+        $("#afterlink").innerHTML = "borrowck patterns<small>after-solve page · now open</small>";
+        $("#afterlink").classList.remove("locked");
+        $("#restext").textContent = "All tests passed (sample).";
+        $("#errcount").textContent = "⊗ 0 ⚠ 0";
+        $('.btabs [data-b="problems"]').textContent = "Problems 0";
+        $('.btabs [data-b="compiler"]').textContent = "Compiler";
+        $('[data-bv="problems"]').textContent = "No problems.";
+        openFile("compare");
+        if (window.innerWidth <= 900) { setTog("nobottom", true); pane("c"); }
+        const on = $("#tablist .on");
+        on.parentElement.scrollLeft = on.offsetLeft;
+    };
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") { $("#cmd").hidden = true; $("#sheet").hidden = true; $("#find").hidden = true; return; }
+        if ($("#v-ex").hidden) return;
+        const mod = e.metaKey || e.ctrlKey;
+        let hit = true;
+        if (e.key === "F1" || (mod && e.shiftKey && e.code === "KeyP")) act("cmd");
+        else if (mod && !e.altKey && !e.shiftKey && e.code === "KeyF") act("find");
+        else if (mod && e.altKey && e.code === "KeyB") setTog("notests", !$("#ide").classList.contains("notests"));
+        else if (mod && e.code === "KeyB") setTog("noside", !$("#ide").classList.contains("noside"));
+        else if (mod && e.code === "KeyJ") setTog("nobottom", !$("#ide").classList.contains("nobottom"));
+        else if (e.altKey && e.code === "KeyZ") act("wrap");
+        else if (e.altKey && e.code === "KeyW" && cur !== "lib") { open = open.filter((k) => k !== cur); cur = "lib"; render(); }
+        else hit = false;
+        if (hit) e.preventDefault();
+    });
+    render();
+    const want = location.hash.slice(1);
+    if (["home", "path", "ex"].includes(want)) view(want);
+})();
+</script>
+</body>
+</html>
