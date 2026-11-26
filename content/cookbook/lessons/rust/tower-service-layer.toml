@@ -44,7 +44,8 @@ pub trait Service<Request> {
 }
 ```
 
-`call` starts one request and returns a future. Before that, you must see `poll_ready` return ready. This is how a busy service says "not yet", which is called **backpressure**. A service may reserve a place during `poll_ready` and use it in the next `call`.
+`call` starts one request and returns a future. Before that, you must see `poll_ready` return ready. This is how a busy service says "not yet", which is called **backpressure**.
+The Tower documentation states the full contract between the two methods.
 
 The page's version has one method, `async fn call(&self, req)`. That makes each wrapper short, but it loses the separate "are you ready?" step. A wrapper that is full waits inside `call`, and the rate limit rejects inside it.
 
@@ -181,7 +182,7 @@ heading = "What happens when a caller gives up?"
 body = """
 In async Rust, a timeout stops a call by **dropping** its future. Work that the dependency already started may still finish.
 
-Dropping also changes what happens inside your own wrappers. This causes real bugs, and the explanation gives away part of [the Tower middleware fix](/p/b2-fix-poll-ready). So it is folded.
+Dropping also changes what happens inside your own wrappers. This is an easy place to go wrong, and the explanation gives away part of [the Tower middleware fix](/p/b2-fix-poll-ready). So it is folded.
 
 :::deeper Show what cancellation breaks (gives away part of the middleware fix)
 A dropped future never runs the code after the `.await` it was waiting on. Bookkeeping written there is skipped.

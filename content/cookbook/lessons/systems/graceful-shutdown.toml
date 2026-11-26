@@ -182,7 +182,7 @@ body = """
 | Workers should stop when there are no more senders | Drop every `mpsc` sender, then receive until `None` | One forgotten sender keeps the channel open |
 | The receiver must refuse new jobs while senders still exist | `Receiver::close`, then receive until `None` | Unused permits delay the end |
 | Several tasks need one "stop" flag | A `watch` channel | A late subscriber can miss the change |
-| You need to cancel groups of tasks | `CancellationToken` from `tokio-util` | Each task must listen and clean up |
+| You need to cancel groups of tasks | A cancel token from the `tokio-util` crate | Each task must listen and clean up |
 
 A receiver made with `subscribe` treats the current value as already seen. If stop was sent earlier, its `changed()` call keeps waiting. Use `wait_for(|stop| *stop)` when the current value should count.
 

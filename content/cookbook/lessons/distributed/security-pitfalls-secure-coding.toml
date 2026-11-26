@@ -7,7 +7,7 @@ order = 530
 kind = "lesson"
 level = "intermediate"
 code = ["examples/web/security_pitfalls_secure_coding.rs"]
-code_spoils = ["/p/b7-stay-inside-the-folder", "/p/b8-serve-files"]
+code_spoils = ["/p/b7-stay-inside-the-folder", "/p/b8-serve-files", "/rust/series/regex-engine", "/p/y8-regex-nfa-matcher"]
 lede = "Sixteen ways input from outside goes wrong, each with an attack that works and a fix that stops it."
 summary = """Most of these bugs happen when data from outside is read as code or structure: a query, a command, a path, a page. Others come from trusting a sender's sizes, or from secrets that leak. The code pairs a broken function with a repaired one and tests both. Use it to review your own handlers, not as a security library."""
 
@@ -18,7 +18,7 @@ Say your login code builds a query by pasting a name and a password hash into a 
 
 The best fix keeps data and structure apart. A **query parameter** sends the value separately from the SQL text. A command's argument list does the same for a program you start.
 
-Sometimes you cannot keep them apart. Then parse the input strictly, check the parsed value, and use that same value. Checking one form and then using another leaves a gap.
+Sometimes you cannot keep them apart, as with a file name or a web address. Then you need strict checks of your own, and the obvious ones often fall short. The code shows several that fail.
 
 Rust does not do this for you. Safe Rust stops out-of-bounds reads, use-after-free and data races. It does not stop injection, logic errors, huge allocations or recursion that overflows the stack.
 """
@@ -32,7 +32,7 @@ A test that only shows the fixed code refusing an attack proves little. Perhaps 
 2. The same attack fails on the fixed one.
 3. Ordinary input still works, where the pair has an ordinary case. A fix that refuses everything is useless.
 
-The broken functions have names that start with `vuln_`, or the test builds the unsafe string itself. Never copy them. The attacks run inside the program or in a private temporary folder. Nothing goes over the network.
+Many broken functions have names that start with `vuln_`. Other tests build the unsafe string themselves, or call a function with its limit turned off. Never copy these. The attacks run inside the program or in a private temporary folder. Nothing goes over the network.
 
 Passing these tests shows that the listed attacks fail. It does not show that no other attack works.
 """
@@ -157,9 +157,9 @@ For the second row, the example uses `O_NOFOLLOW`. It refuses a symbolic link on
 [[sections]]
 heading = "How does the code show each attack?"
 body = """
-The file is long, with one section per topic and a `main` that runs them in turn. Its path code gives away much of [Stay inside the folder](/p/b7-stay-inside-the-folder) and the path part of [Serve files](/p/b8-serve-files). Its token comparison also shows one requirement of [the webhook fix](/p/b5-fix-webhook-verify).
+The file is long, with one section per topic and a `main` that runs them in turn. Its path code gives away much of [Stay inside the folder](/p/b7-stay-inside-the-folder) and the path part of [Serve files](/p/b8-serve-files). Its pattern matchers give away much of the series [Build a regular-expression engine](/rust/series/regex-engine) and of [its side exercise](/p/y8-regex-nfa-matcher). Its token comparison shows one requirement of [the webhook fix](/p/b5-fix-webhook-verify).
 
-:::deeper Walk through selected pairs (gives away much of the two folder exercises, and shows one part of the webhook fix)
+:::deeper Walk through selected pairs (gives away the two folder exercises and the regex series, and part of the webhook fix)
 ```walkthrough
 file = "examples/web/security_pitfalls_secure_coding.rs"
 [[step]]
@@ -192,11 +192,11 @@ lines = "912-925"
 text = "An odd number of bytes is malformed. The cap is checked before the output grows."
 [[step]]
 title = "Read only what arrived"
-lines = "942-963"
+lines = "949-970"
 text = "The fixed method refuses a payload larger than the buffer, then limits the reply to this request's bytes."
 [[step]]
 title = "Compare without an early exit"
-lines = "1057-1067"
+lines = "1067-1077"
 text = "This shows the idea and counts work. It cannot promise constant time after compiler optimisation."
 ```
 :::
@@ -246,6 +246,13 @@ kind = "returns"
 title = "Webhooks end to end"
 link = "/cookbook/p/webhooks-signatures"
 why = "Follow signed requests between two services. It also overlaps the webhook fix."
+
+[[connections]]
+kind = "practise"
+title = "A regex engine that cannot be made to blow up"
+link = "/p/y8-regex-nfa-matcher"
+level = "similar"
+why = "Solve it before opening this page's code, which shows two ways to match patterns."
 
 [[connections]]
 kind = "project"

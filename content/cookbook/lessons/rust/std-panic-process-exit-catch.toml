@@ -71,7 +71,7 @@ There are two kinds of boundary.
 | Boundary | What you get |
 |---|---|
 | A separate thread, then `join` | The thread ends, and `join` returns `Err` with what the panic sent |
-| `std::panic::catch_unwind` | The current thread continues, with the panic returned as `Err` |
+| `catch_unwind` | The current thread continues, with the panic returned as `Err` |
 
 `catch_unwind` asks for a closure that is **unwind safe**. This marker warns you when a panic could leave something half changed in view. A captured `&mut` is such a case.
 
@@ -142,11 +142,11 @@ The panic hook belongs to the whole process. Set it once in your application, us
 [[sections]]
 heading = "How should your program end?"
 body = """
-| Way to end | Runs `Drop`? | Use it when |
-|---|---|---|
-| Return from `main`, for example an `ExitCode` | Yes, for its local values | This is the normal choice |
-| `std::process::exit(code)` | No, not on any thread's stack | Nothing is left that needs cleanup |
-| `std::process::abort()` | No | Continuing is unsafe |
+| Way to end | Does cleanup run, and when to use it |
+|---|---|
+| Return from `main` | `Drop` runs for its local values. This is the normal choice |
+| `process::exit` | No `Drop` runs, on any thread's stack. Use it when nothing needs cleanup |
+| `process::abort` | No `Drop` runs. Use it when continuing is unsafe |
 
 An **exit status** is the number a program leaves for whoever started it. By custom, zero means success. `ExitCode` lets `main` choose that number and still clean up.
 

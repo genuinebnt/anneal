@@ -161,24 +161,24 @@ lines = "389-404"
 text = "When `If-None-Match` is present, it decides alone. Otherwise the date is compared. Only the first line of a repeated header is read."
 [[step]]
 title = "Read one range"
-lines = "506-540"
+lines = "526-560"
 text = "Only digits count as a number, and huge ones saturate. An empty body has no last byte, so a suffix range cannot subtract from zero."
 [[step]]
 title = "Apply the checks in order"
-lines = "542-558"
+lines = "562-578"
 text = "An unchanged file gets 304 before any range is considered. A range counts only for `GET`, and only while `If-Range` still matches."
 [[step]]
 title = "Guard a write"
-lines = "622-652"
+lines = "642-673"
 text = "One lock covers reading the tag and replacing the note. The three checks run in turn, and the number of notes is capped."
 [[step]]
 title = "Use a fresh copy"
-lines = "738-749"
+lines = "760-771"
 text = "A fresh entry returns with no request. Otherwise the cache sends the stored tag."
 [[step]]
 title = "Update what is stored"
-lines = "761-786"
-text = "A 304 keeps the old body and restarts its age. Only a 200 response is stored, so an error page cannot replace the resource."
+lines = "784-812"
+text = "A 304 keeps the old body and restarts its age. Directives change only if it sends a new `Cache-Control`. Only a 200 response is stored, so an error page cannot replace the resource."
 ```
 :::
 """

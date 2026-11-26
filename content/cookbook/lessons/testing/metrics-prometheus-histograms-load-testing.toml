@@ -47,7 +47,7 @@ You pick upper limits, such as 10, 20 and 30 ms. Each limit is called `le`, for 
 
 Take five measurements: 5, 10, 10.5, 29 and 1000 ms.
 
-| `le` | Cumulative count | Which measurements |
+| Limit | Cumulative count | Which measurements |
 | --- | --- | --- |
 | 10 | 2 | 5 and 10, because the limit is included |
 | 20 | 3 | adds 10.5 |
@@ -200,9 +200,9 @@ heading = "Can you repair closed-loop results?"
 body = """
 Partly. HdrHistogram can fill in the missing samples if you know the planned interval. With a 10 ms interval, one reply that took 50 ms also records 40, 30, 20 and 10 ms.
 
-This is an estimate. It assumes the missing requests would only have waited for that same stall. It ignores the extra time needed to work through the backlog, so it came out low in this test.
+This is an estimate. It assumes the missing requests would only have waited for that same stall. It ignores the extra time needed to work through the backlog, so in this example its p98 is far too low.
 
-Look at the p98 column in the table. The open loop shows 200.9 ms, while the corrected figure shows 1.0 ms. The correction did better far into the tail. Prefer a tester that keeps a fixed arrival rate, such as wrk2 or k6's arrival-rate executors.
+Look at the p98 column in the table. The open loop shows 200.9 ms, while the corrected figure shows 1.0 ms. Farther into the tail, the two come much closer. Prefer a tester that keeps a fixed arrival rate, such as wrk2 or k6's arrival-rate executors.
 
 If `expected_interval` is zero or less, the example skips the back-fill. Without that check, its loop would never end.
 """
@@ -214,16 +214,16 @@ body = """
 
 Latency also climbs much faster than load. The example simulates one worker that takes 10 ms on average, so it can handle about 100 requests per second. Arrivals and service times are random.
 
-| Requests per second | Measured p99 |
+| Requests per second | Simulated p99 |
 | --- | --- |
 | 50 | 92 ms |
 | 80 | 218 ms |
 | 90 | 456 ms |
 | 95 | 995 ms |
 
-You may want to find the "knee", where the curve turns upward. A common way to compute it gave 80 requests per second on the full sweep. On a sweep that stopped at 80, it gave 60. The answer depended on which points were tested.
+You may want to find the "knee", where the curve turns upward. A common way to compute it gives 80 requests per second on the full sweep. On a sweep that stops at 80, it gives 60. The answer depends on which points you test.
 
-A target is easier to defend. Decide what users need, such as a p99 of at most 200 ms. Among the loads this sweep tested, that target held up to 70 requests per second.
+A target is easier to defend. Decide what users need, such as a p99 of at most 200 ms. Among the loads in this sweep, that target holds up to 70 requests per second.
 """
 
 [[sections]]

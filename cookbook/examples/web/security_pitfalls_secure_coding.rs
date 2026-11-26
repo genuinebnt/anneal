@@ -939,6 +939,13 @@ fn nesting(s: &[u8], at: &mut usize, depth: u32, limit: Option<u32>) -> Option<u
     }
     Some(deepest)
 }
+/// The depth of the WHOLE input. `nesting` stops at the first byte it does not understand, so "[]garbage"
+/// would pass if nobody checked how far it got.
+fn nesting_depth(s: &[u8], limit: Option<u32>) -> Option<u32> {
+    let mut at = 0;
+    let depth = nesting(s, &mut at, 0, limit)?;
+    (at == s.len()).then_some(depth)
+}
 /// A server that reuses one buffer. The reply length comes from the CLIENT (the Heartbleed shape).
 struct EchoServer {
     buffer: [u8; 128],
@@ -1012,12 +1019,15 @@ fn input_limits() {
     // 5000 levels is safe to run here; a few hundred thousand would overflow the stack and ABORT (not catchable)
     let deep: Vec<u8> = [vec![b'['; 5000], vec![b']'; 5000]].concat();
     assert_eq!(
-        nesting(&deep, &mut 0, 0, None),
+        nesting_depth(&deep, None),
         Some(5000),
         "attack: recursion depth chosen by the sender"
     );
-    assert_eq!(nesting(&deep, &mut 0, 0, Some(64)), None);
-    assert_eq!(nesting(b"[[][]]", &mut 0, 0, Some(64)), Some(2));
+    assert_eq!(nesting_depth(&deep, Some(64)), None);
+    assert_eq!(nesting_depth(b"[[][]]", Some(64)), Some(2));
+    for trailing in [&b"[]garbage"[..], b"abc", b"[]]", b"["] {
+        assert_eq!(nesting_depth(trailing, Some(64)), None, "{trailing:?}");
+    }
 }
 fn stale_buffer() {
     let mut s = EchoServer { buffer: [0; 128] };

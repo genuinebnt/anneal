@@ -18,10 +18,10 @@ heading = "Should you read this before building your own?"
 body = """
 All ten capstone steps of [From threads to a web server](/rust/series/web-server) link here. So do many of its smaller parts. If you're working through the series, this page can save you from a dead end or take the learning away.
 
+What you see without opening anything is what the server does, why it is shaped that way, and what it can't do. Those are safe to read before any step.
+
 > [!WARNING]
 > The full code solves much of the series. It stays closed until you open it. Every fold on this page names the parts it gives away.
-
-What you see without opening anything is what the server does, why it is shaped that way, and what it can't do. Those are safe to read before any step.
 """
 
 [[sections]]

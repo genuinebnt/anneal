@@ -162,7 +162,7 @@ text = "The new task pauses for 20 ms after each message. Its loop ends when `re
 [[step]]
 title = "Send and wait"
 lines = "39-46"
-text = "Each send needs a free place. The printed time is mostly spent waiting, about 60 ms in one test run. Your timing will differ."
+text = "Each send needs a free place. The printed time is mostly spent waiting. Your timing will differ."
 [[step]]
 title = "Close the channel and check"
 lines = "47-51"
@@ -191,8 +191,8 @@ body = """
 |---|---|---|
 | Every message should get into the queue, and the sender can pause | `send(value).await` | The sender may wait for a long time |
 | You must answer now, even if the answer is "busy" | `try_send(value)` | You handle the refused value |
-| You want room before you give up or build the value | `reserve().await`, then send on the returned **permit** | The place stays taken while you hold the permit |
-| Something else already limits how much can be sent | `unbounded_channel()` | The channel itself never slows the sender |
+| You want room before you give up or build the value | `reserve().await`, then use the **permit** | The place stays taken while you hold the permit |
+| Something else already limits how much can be sent | An unbounded channel | The channel itself never slows the sender |
 
 A **permit** here is a claim on one free place in the queue. Dropping it without sending gives the place back.
 

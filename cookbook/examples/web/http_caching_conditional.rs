@@ -471,6 +471,26 @@ async fn cc(State(s): St, Path(kind): Path<String>, h: HeaderMap) -> Response {
     (hdrs, body).into_response()
 }
 
+/// A 304 need not repeat `Cache-Control`. "silent" leaves it out; "changed" sends a new one.
+async fn reval(Path(kind): Path<String>, h: HeaderMap) -> Response {
+    let etag = [(header::ETAG, "\"r1\"")];
+    let silent = kind == "silent";
+    if !h.contains_key(header::IF_NONE_MATCH) {
+        let directive = if silent {
+            "no-cache, max-age=60"
+        } else {
+            "max-age=0"
+        };
+        return (etag, [(header::CACHE_CONTROL, directive)], "body").into_response();
+    }
+    let mut response = (StatusCode::NOT_MODIFIED, etag).into_response();
+    if !silent {
+        let fresh = header::HeaderValue::from_static("max-age=60");
+        response.headers_mut().insert(header::CACHE_CONTROL, fresh);
+    }
+    response
+}
+
 /// Content negotiation: the representation depends on `Accept`, so the response says `Vary: Accept`.
 async fn negotiate(h: HeaderMap) -> Response {
     let accept = h
@@ -623,7 +643,8 @@ async fn flaky_h(State(s): St, method: Method, h: HeaderMap) -> Response {
 async fn put_note(State(s): St, Path(name): Path<String>, h: HeaderMap, body: String) -> Response {
     let mut notes = s.notes.lock().unwrap();
     let current = notes.get(&name).map(|b| etag_of(b.as_bytes()));
-    let im = h.get(header::IF_MATCH).and_then(|v| v.to_str().ok());
+    // an `If-Match` we cannot read is still a condition, and it matches no version: never drop it
+    let im = h.get(header::IF_MATCH).map(|v| v.to_str().unwrap_or(""));
     let inm = h.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok());
     let created = current.is_none();
     let failed = |why: &'static str| (StatusCode::PRECONDITION_FAILED, why).into_response();
@@ -672,6 +693,7 @@ fn app(s: Arc<S>) -> Router {
     let plain = Router::new()
         .route("/doc", get(doc))
         .route("/cc/{kind}", get(cc))
+        .route("/reval/{kind}", get(reval))
         .route("/blob", get(blob_h))
         .route("/flaky", get(flaky_h))
         .route("/notes/{name}", put(put_note).get(get_note))
@@ -747,6 +769,7 @@ impl HttpCache {
             rb = rb.header("if-none-match", t);
         }
         let resp = rb.send().await.unwrap();
+        let has_cc = resp.headers().contains_key("cache-control");
         let cc = parse_cc(
             resp.headers()
                 .get("cache-control")
@@ -761,8 +784,11 @@ impl HttpCache {
         if resp.status() == 304 {
             let e = self.map.get_mut(url).expect("304 without a stored entry");
             e.stored_at = now;
-            e.max_age = cc.max_age.unwrap_or(e.max_age);
-            e.no_cache = cc.no_cache;
+            // a header the 304 does not send stays as stored; one it does send replaces the old one
+            if has_cc {
+                e.max_age = cc.max_age.unwrap_or(0);
+                e.no_cache = cc.no_cache;
+            }
             return (e.body.clone(), Src::Revalidated);
         }
         let ok = resp.status() == 200;
@@ -1012,6 +1038,19 @@ async fn main() {
         1,
         state.hits("immutable"),
     );
+    // a 304 without Cache-Control keeps "no-cache"; one that sends a new header replaces the old
+    for (path, third) in [
+        ("/reval/silent", Src::Revalidated),
+        ("/reval/changed", Src::Fresh),
+    ] {
+        let u = srv.url(path);
+        let mut seen = vec![];
+        for _ in 0..3 {
+            seen.push(cache.get(&u).await.1);
+        }
+        assert_eq!(seen, [Src::Network, Src::Revalidated, third], "{path}");
+    }
+
     let u = srv.url("/cc/unknown");
     cache.get(&u).await;
     assert!(!cache.map.contains_key(&u), "a 404 is not stored");
@@ -1269,6 +1308,14 @@ async fn main() {
     )
     .await;
     assert_eq!(r.status.as_u16(), 200);
+
+    // an If-Match that is not text must not be ignored: there is nothing it can match
+    let unreadable = reqwest::header::HeaderValue::from_bytes(b"\xff").unwrap();
+    for url in [srv.url("/notes/never-made"), srv.url("/notes/a")] {
+        let rb = c.put(&url).header("if-match", unreadable.clone());
+        let status = rb.body("x").send().await.unwrap().status();
+        assert_eq!(status.as_u16(), 412, "{url}");
+    }
 
     // the number of stored notes is bounded ("a" is already one of them)
     for i in 1..=MAX_NOTES {

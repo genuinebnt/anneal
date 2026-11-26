@@ -19,4 +19,6 @@ The head is a request line, header lines and an empty line, each ending in CRLF.
 
 `head.body_len` is the announced length, 0 if none. `head.head_len` counts the bytes up to and including the empty line.
 
+A real server must also refuse any name that is not an HTTP token (letters, digits and a few punctuation marks); these tests do not require that, but the reference code does it.
+
 **For all inputs:** if a prefix of `buf` is refused, every longer buffer that starts with it is refused with the same value. Every strict prefix of an acceptable head gives `Ok(None)`.

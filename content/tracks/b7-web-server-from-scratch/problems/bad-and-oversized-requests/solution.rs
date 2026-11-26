@@ -34,6 +34,12 @@ pub struct Head {
     pub body_len: usize,
 }
 
+/// The characters a header name may hold: an HTTP "token". Anything else could be read as a different
+/// name by a proxy in front of the server, which is how requests are smuggled past it.
+fn is_token_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
+}
+
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
@@ -82,7 +88,7 @@ pub fn check_head(buf: &[u8], limits: &Limits) -> Result<Option<Head>, Refusal> 
             return Err(Refusal::BadRequest);
         }
         let (name, value) = line.split_once(':').ok_or(Refusal::BadRequest)?;
-        if name.is_empty() || name.bytes().any(|b| b <= b' ' || b == 0x7f) {
+        if name.is_empty() || !name.bytes().all(is_token_byte) {
             return Err(Refusal::BadRequest);
         }
         let name = name.to_ascii_lowercase();

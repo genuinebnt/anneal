@@ -62,15 +62,16 @@ title = "A reaches the threshold"
 text = "A adds its 100 events. B's events are still hidden."
 lanes = [ { name = "Thread A", items = ["0 pending"] }, { name = "Shared total", items = ["100"] }, { name = "Thread B", items = ["99 pending"] } ]
 [[frame]]
-title = "Handles go away"
-text = "Each handle adds what is left when it is dropped. Now the total is complete."
-lanes = [ { name = "Thread A", items = ["dropped"] }, { name = "Shared total", items = ["199"] }, { name = "Thread B", items = ["dropped"] } ]
+title = "Handles finish"
+text = "Each handle adds what is left before it goes away. Now the total is complete."
+lanes = [ { name = "Thread A", items = ["done"] }, { name = "Shared total", items = ["199"] }, { name = "Thread B", items = ["done"] } ]
 ```
 
 Each handle hides at most `threshold - 1` events. So the amount not yet added is at most the number of live handles times that. `Relaxed` also promises nothing about how soon a reader sees another thread's add. The test checks the bound after the writers have been joined.
 
-The leftover is easy to lose.
+The leftover is easy to lose. A thread that ends with a part-filled batch must still add it, however it ends. Doing that is the idea behind [An RAII span guard](/p/l1-raii-span-guard), so the example is folded.
 
+:::deeper Show how the leftover is saved (gives away the idea of the span guard exercise)
 ```compare
 takeaway = "A final flush in `Drop` runs when a handle goes away normally or during unwinding. It does not run if the process exits or aborts."
 [wrong]
@@ -161,6 +162,7 @@ fn main() {
 '''
 result = "Prints `4200`."
 ```
+:::
 
 Thread-local storage can hold the private batch instead. Be careful about when it is flushed. `std::thread::scope` may return while a thread's thread-local destructors are still running. The example uses `spawn` and `join`, which waits for the whole thread.
 """
@@ -234,14 +236,14 @@ body = """
 |---|---|---|
 | A simple exact total | One atomic | Speed when many cores write at once |
 | A hot counter, read now and then | Shards on separate lines | Memory, slower reads, no single instant |
-| Very cheap writes | Private batches | Reads lag behind, and leftovers need a flush |
+| Very cheap writes | Private batches | Reads lag behind, and leftovers must not be lost |
 | A rough count in a byte | Morris | Accuracy and, eventually, range |
 | A count of different items | HyperLogLog | Exactness, and you cannot list the items |
 
 | Symptom | Likely cause |
 |---|---|
 | Sharding did not help | Threads pick the same slot, slots share a line, or the counter was never the problem |
-| Totals are short after shutdown | A private batch was not flushed |
+| Totals are short after shutdown | A private batch was never added |
 | Two related numbers disagree | Each was updated and read on its own |
 
 Several atomics do not form a consistent **snapshot**. If numbers must agree with each other, protect them with a lock, or design a way to swap them out together.

@@ -20,7 +20,7 @@ body = """
 |---|---|
 | Hold an address without a port | `IpAddr`, or `Ipv4Addr` and `Ipv6Addr` |
 | Hold an address with a port | `SocketAddr` |
-| Turn a host name into addresses | `ToSocketAddrs::to_socket_addrs` |
+| Turn a host name into addresses | `to_socket_addrs` |
 | Wait for incoming TCP connections | `TcpListener` |
 | Send and receive a TCP stream | `TcpStream` |
 | Send and receive single UDP packets | `UdpSocket` |
@@ -69,11 +69,15 @@ heading = "How do you avoid waiting forever?"
 body = """
 By default a read or write can wait with no end. Set a limit on every socket whose other end you don't control.
 
-| Wait | Limit | Note |
-|---|---|---|
-| Connecting | `connect_timeout` | Takes one `SocketAddr`, and a zero duration is an error |
-| Reading | `set_read_timeout` | `Some(Duration::ZERO)` is an error, and `None` means no limit |
-| Writing | `set_write_timeout` | A write waits when the other end stops reading and buffers fill |
+| Wait | Limit |
+|---|---|
+| Connecting | `connect_timeout` |
+| Reading | `set_read_timeout` |
+| Writing | `set_write_timeout` |
+
+- `connect_timeout` takes one `SocketAddr`, and a zero duration is an error.
+- For a read limit, `Some(Duration::ZERO)` is an error, and `None` means no limit.
+- A write waits when the other end stops reading and buffers fill.
 
 When a read or write limit expires, the error kind differs between systems. Check for both `WouldBlock` and `TimedOut`.
 

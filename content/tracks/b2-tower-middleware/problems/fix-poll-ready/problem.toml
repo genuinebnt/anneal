@@ -35,4 +35,4 @@ space = "O(1) per request in flight"
 [[cookbook]]
 level = "related"
 page = "tower-service-layer"
-note = "The Service and Layer idea. Its trait is simplified and has no poll_ready, so it does not show this bug or its fix."
+note = "The Service and Layer idea, with a simplified trait that has no poll_ready. A folded part explains cancelled calls, which gives away part of this task."
