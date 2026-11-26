@@ -16,7 +16,7 @@
 .cb-secth small{font:500 12px var(--mono);color:var(--dim)}
 
 /* ---- front page ---- */
-.cb-home{max-width:1440px;margin:0 auto;padding:0 clamp(16px,4vw,56px) 96px}
+.cb-home{max-width:none;margin:0;padding:0 clamp(16px,4vw,56px) 96px}
 .cb-intro{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:28px;padding-top:40px}
 .cb-intro>div{max-width:760px;min-width:0}
 .cb-intro h1{margin:0;font-size:clamp(38px,5vw,62px);line-height:1.02;font-weight:700;letter-spacing:-.04em;text-wrap:balance}
@@ -111,7 +111,7 @@
 /* ---- a subject ---- */
 .cb-sub{max-width:none;display:grid;grid-template-columns:288px minmax(0,1fr);gap:24px;align-items:start;padding:14px 20px 96px}
 .cb-side{position:sticky;top:calc(var(--hdr-h,52px) + 12px);min-width:0}
-.cb-main{min-width:0;max-width:1280px}
+.cb-main{min-width:0}
 .cb-banner{padding:30px clamp(18px,3vw,36px);border:1px solid var(--line2);border-radius:18px;background:radial-gradient(110% 130% at 100% 0%,color-mix(in oklab,var(--c) 17%,transparent),transparent 62%),var(--panel)}
 .cb-banner h1{margin:16px 0 0;font-size:clamp(34px,4.4vw,52px);line-height:1.04;letter-spacing:-.035em;text-wrap:balance}
 .cb-banner p{margin:14px 0 0;font-size:17px;color:var(--mut)}
@@ -142,7 +142,7 @@
 .cb-left,.cb-right{position:sticky;top:calc(var(--hdr-h,52px) + 12px);max-height:calc(100vh - var(--hdr-h,52px) - 24px);min-width:0}
 .cb-right{overflow-y:auto;scrollbar-width:none;display:flex;flex-direction:column;gap:12px}
 .cb-right>*{flex:none}
-.cb-art{min-width:0;width:100%;max-width:1180px;justify-self:center;padding:12px clamp(0px,1.6vw,22px) 40px;font-size:16.5px;line-height:1.75}
+.cb-art{min-width:0;width:100%;padding:12px clamp(0px,1.6vw,22px) 40px;font-size:16.5px;line-height:1.75}
 /* text, panels, tables and code share one width: the shared page style caps text at 78 characters, which left it short of the code */
 .cb-art .sd-md{font-size:16.5px;line-height:1.75;max-width:none}
 .cb-art .sd-deeper,.cb-art .sd-math,.cb-art .sd-call,.cb-art .sd-tbl,.cb-art .sd-steps-fig{max-width:none}

@@ -485,3 +485,7 @@ a.tr.kb, .tr.kb { background: var(--sel); box-shadow: inset 3px 0 0 var(--vio); 
 /* the pinned error card: stays while you read or copy rustc's full output */
 .cm-editor .cm-tooltip.cm-diag-pinned { max-width: min(720px, calc(100vw - 32px)); max-height: min(440px, 60vh); overflow: auto; scrollbar-width: none; user-select: text; }
 .cm-diag-pinned .cm-lens { max-width: none; margin: 0; }
+/* the area switcher is icons only; each has its name as a label and a tooltip */
+.hd-areas a{justify-content:center;min-width:42px;padding-left:11px;padding-right:11px}
+.hd-areas .hd-aicon{width:18px;height:18px;flex:none;color:var(--c)}
+.hd-areas a.on .hd-aicon{color:currentColor}

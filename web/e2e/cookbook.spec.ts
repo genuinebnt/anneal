@@ -7,7 +7,7 @@ test("The front page: headline, featured pages, the shelf of subjects and a sear
     page.on("pageerror", (e) => errors.push(e.message));
     await page.setViewportSize({ width: 1600, height: 1000 });
     await page.goto("/cookbook");
-    await expect(page.locator(".hd-areas a.on")).toContainText("Cookbook");
+    await expect(page.locator(".hd-areas a.on")).toHaveAttribute("aria-label", "Cookbook");
     await expect(page.locator(".hd-tabs a")).toHaveText(["Overview", "Rust", "Algorithms", "Systems", "Data", "Distributed", "Compilers", "Testing", "Projects"]);
     await expect(page.locator(".cb-lead")).toBeVisible();
     await expect(page.locator(".cb-mini")).toHaveCount(3);

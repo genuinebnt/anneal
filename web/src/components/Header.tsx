@@ -26,6 +26,23 @@ const AREAS: { id: AreaId; label: string; to: "/dsa" | "/rust" | "/courses" | "/
     { id: "cb", label: "Cookbook", to: "/cookbook", color: "var(--mac)" },
 ];
 
+/** One drawing per area, for the icon-only switcher: a tree, a gear, a mortarboard, connected boxes and an open book. */
+const AREA_ICONS: Record<AreaId, string> = {
+    dsa: "M8 5v2.5M8 7.5 4 10.5M8 7.5l4 3M8 5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM4 13.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM12 13.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z",
+    rust: "M8 10.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4zM8 3.6a4.4 4.4 0 1 0 0 8.8 4.4 4.4 0 0 0 0-8.8zM8 1.5v2.1M8 12.4v2.1M1.5 8h2.1M12.4 8h2.1M3.4 3.4l1.5 1.5M11.1 11.1l1.5 1.5M12.6 3.4l-1.5 1.5M4.9 11.1l-1.5 1.5",
+    courses: "M1.5 6 8 3l6.5 3L8 9zM4 7.5v3.2c1 .9 2.4 1.5 4 1.5s3-.6 4-1.5V7.5M14.5 6v4",
+    sd: "M5.5 2.5h5v3.5h-5zM1.5 10.5h5V14h-5zM9.5 10.5h5V14h-5zM8 6v2.3M4 10.5V8.3h8v2.2",
+    cb: "M8 4.2C6.6 3.2 4.8 2.8 2 2.8v9.6c2.8 0 4.6.4 6 1.4 1.4-1 3.2-1.4 6-1.4V2.8c-2.8 0-4.6.4-6 1.4zM8 4.2v9.6",
+};
+
+function AreaIcon({ id }: { id: AreaId }) {
+    return (
+        <svg className="hd-aicon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d={AREA_ICONS[id]} />
+        </svg>
+    );
+}
+
 /** How long the Mock page's data counts as fresh, so coming back to it within a minute shows it at once. */
 export const MOCK_FRESH = 60_000;
 
@@ -341,16 +358,13 @@ function AreaSwitcher({ current, counts, progress }: { current: AreaId | null; c
         <nav className="hd-areas" ref={box} aria-label="Areas">
             {thumb && <span className="hd-thumb" style={{ transform: `translateX(${thumb.x}px)`, width: thumb.w, "--tc": color } as React.CSSProperties} />}
             {AREAS.map((a) => (
-                <Link key={a.id} to={a.to} className={a.id === current ? "on" : ""} style={{ "--c": a.color } as React.CSSProperties} aria-current={a.id === current ? "page" : undefined}>
-                    <Ring p={ratio(counts[a.id])} color={a.color} />
-                    {a.label}
-                    <small>{counts[a.id].done ?? "–"}</small>
+                <Link key={a.id} to={a.to} className={a.id === current ? "on" : ""} style={{ "--c": a.color } as React.CSSProperties} aria-current={a.id === current ? "page" : undefined} aria-label={a.label} title={`${a.label} · ${counts[a.id].done ?? "–"} of ${counts[a.id].total || "–"}`}>
+                    <AreaIcon id={a.id} />
                 </Link>
             ))}
             <span className="hd-asep" aria-hidden="true" />
-            <Link to="/progress" className={progress ? "on" : ""} aria-current={progress ? "page" : undefined} title="Progress across DSA, Rust and Courses">
+            <Link to="/progress" className={progress ? "on" : ""} aria-current={progress ? "page" : undefined} aria-label="Progress" title="Progress across DSA, Rust and Courses">
                 <TrophyIcon />
-                Progress
             </Link>
         </nav>
     );
