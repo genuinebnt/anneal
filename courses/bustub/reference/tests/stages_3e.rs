@@ -441,33 +441,47 @@ fn s3e_02_the_primary_key_index_is_an_index_too() {
 }
 
 #[test]
-fn s3e_02_a_key_that_is_already_in_the_index_fails_the_insert_and_changes_nothing() {
+fn s3e_02_rows_that_share_a_key_or_have_a_null_key_each_get_an_entry() {
     let db = new_db();
     sql(&db, "create table t(a int, b int)");
     sql(&db, "create index ia on t(a)");
     sql(&db, "insert into t values (1, 100)");
-    let result = try_sql(&db, "insert into t values (1, 200)");
-    assert!(is_unique_violation(&result, "ia"), "a second live row with the key 1 is a unique violation: {result:?}");
-    assert_eq!(sql(&db, "select * from t"), vec!["1 100"], "the refused row is not in the table");
-    let result = try_sql(&db, "insert into t values (2, 1), (3, 1), (2, 9), (4, 4)");
-    assert!(is_unique_violation(&result, "ia"), "a key repeated inside one insert is a unique violation too: {result:?}");
     assert_eq!(
-        sql(&db, "select * from t"),
-        vec!["1 100", "2 1", "3 1"],
-        "the rows before the refused one stay; it and the rows after it are not inserted"
+        sql(&db, "insert into t values (1, 200), (null, 5), (2, 1), (null, 6)"),
+        vec!["4"],
+        "an index that is not a primary key takes any key"
     );
-    assert_eq!(sql(&db, "insert into t values (null, 5), (null, 6)"), vec!["2"], "two NULL keys do not collide: NULL equals nothing");
     let catalog = db.catalog.read().unwrap();
     let table = catalog.get_table("t").unwrap();
     let index = catalog.get_index("ia", "t").unwrap();
     let rids = lookup(&index, &[1]);
-    assert_eq!(rids.len(), 1, "the index still has one entry for the key 1");
+    let bs: Vec<Value> = rids.iter().map(|r| table.table.get_tuple(*r).unwrap().1.get_value(&table.schema, 1)).collect();
+    assert_eq!(bs, vec![int(100), int(200)], "the key 1 finds both of its rows, in rid order");
+    let entries = index.index.scan_all();
+    assert_eq!(entries.len(), 5, "every row has its entry, the NULL keys included");
+    assert!(entries[..2].iter().all(|(k, _)| k.get_value(&index.key_schema, 0).is_null()), "the NULL keys come first in the index");
+}
+
+#[test]
+fn s3e_02_a_primary_key_that_is_taken_fails_the_insert_and_the_rows_before_it_stay() {
+    let db = new_db();
+    sql(&db, "create table t(id int primary key, v int)");
+    sql(&db, "create index tv on t(v)");
+    sql(&db, "insert into t values (1, 100)");
+    let result = try_sql(&db, "insert into t values (1, 200)");
+    assert!(is_unique_violation(&result, "t_pk"), "a second live row with the primary key 1 is a unique violation: {result:?}");
+    let result = try_sql(&db, "insert into t values (2, 1), (3, 1), (2, 9), (4, 4)");
+    assert!(is_unique_violation(&result, "t_pk"), "a key repeated inside one insert is a unique violation too: {result:?}");
     assert_eq!(
-        table.table.get_tuple(rids[0]).unwrap().1.get_value(&table.schema, 1),
-        int(100),
-        "the entry for the key 1 leads to the first row"
+        sql(&db, "select * from t"),
+        vec!["1 100", "2 1", "3 1"],
+        "the rows before the refused one stay; it and the rows after it do not"
     );
-    assert_eq!(index.index.scan_all().len(), 3, "the keys 1, 2, 3 are indexed; the refused rows and the NULL keys are not");
+    let catalog = db.catalog.read().unwrap();
+    assert_eq!(catalog.get_index("t_pk", "t").unwrap().index.scan_all().len(), 3, "the primary key has one entry per row");
+    let tv = catalog.get_index("tv", "t").unwrap();
+    assert_eq!(tv.index.scan_all().len(), 3, "the refused rows have no entry in the other index either");
+    assert_eq!(lookup(&tv, &[1]).len(), 2, "while the other index holds the repeated value 1 twice");
 }
 
 #[test]
@@ -553,13 +567,13 @@ fn s3e_03_delete_removes_the_index_entries() {
     sql(&db, "create table t(a int, b int)");
     sql(&db, "create index ia on t(a)");
     sql(&db, "create index ib on t(b)");
-    sql(&db, "insert into t values (1, 10), (2, 20), (3, 30)");
-    assert_eq!(sql(&db, "delete from t where a = 2"), vec!["1"], "delete removes the index entries");
+    sql(&db, "insert into t values (1, 10), (2, 20), (3, 30), (2, 21)");
+    assert_eq!(sql(&db, "delete from t where b = 20"), vec!["1"], "delete removes the index entries");
     let catalog = db.catalog.read().unwrap();
-    assert!(
-        lookup(&catalog.get_index("ia", "t").unwrap(), &[2]).is_empty(),
-        "delete removes the index entries: expected `lookup(&catalog.get_index(\"ia\", \"t\").unwrap(), &[2]).is_empty()`"
-    );
+    let table = catalog.get_table("t").unwrap();
+    let left = lookup(&catalog.get_index("ia", "t").unwrap(), &[2]);
+    assert_eq!(left.len(), 1, "the deleted row's entry under 2 is gone; the other row with 2 keeps its own");
+    assert_eq!(table.table.get_tuple(left[0]).unwrap().1.get_value(&table.schema, 1), int(21), "the entry left is the other row's");
     assert!(
         lookup(&catalog.get_index("ib", "t").unwrap(), &[20]).is_empty(),
         "delete removes the index entries: expected `lookup(&catalog.get_index(\"ib\", \"t\").unwrap(), &[20]).is_empty()`"
@@ -721,23 +735,27 @@ fn s3e_03_an_update_may_not_make_a_primary_key_null() {
 }
 
 #[test]
-fn s3e_03_an_update_that_would_duplicate_a_key_fails_and_changes_nothing() {
+fn s3e_03_only_a_primary_key_refuses_an_update_that_repeats_a_key() {
     let db = new_db();
     sql(&db, "create table t(a int, b int)");
     sql(&db, "create index ia on t(a)");
-    sql(&db, "insert into t values (1, 10), (2, 20), (3, 30), (null, 40)");
-    let result = try_sql(&db, "update t set a = 2 where a = 1");
-    assert!(is_unique_violation(&result, "ia"), "the key 2 belongs to a row the update does not change: {result:?}");
-    let result = try_sql(&db, "update t set a = 7 where a >= 2");
-    assert!(is_unique_violation(&result, "ia"), "two changed rows may not end with one key either: {result:?}");
-    let mut rows = sql(&db, "select * from t");
-    rows.sort();
-    assert_eq!(rows, vec!["1 10", "2 20", "3 30", "integer_null 40"], "a failed update changes no row");
-    assert_eq!(sql(&db, "update t set a = null where a >= 2"), vec!["2"], "NULL keys never collide");
+    sql(&db, "insert into t values (1, 10), (2, 20), (3, 30)");
+    assert_eq!(sql(&db, "update t set a = 2 where a = 1"), vec!["1"], "an index that is not a primary key takes a repeated key");
+    assert_eq!(sql(&db, "update t set a = null where a = 3"), vec!["1"], "and a NULL one");
     let catalog = db.catalog.read().unwrap();
     let ia = catalog.get_index("ia", "t").unwrap();
-    assert_eq!(ia.index.scan_all().len(), 1, "only the row with the key 1 is indexed now");
-    assert_eq!(lookup(&ia, &[1]).len(), 1, "the failed updates left the entry of the key 1 in place");
+    assert_eq!(lookup(&ia, &[2]).len(), 2, "both rows with the key 2 are found");
+    assert_eq!(ia.index.scan_all().len(), 3, "one entry per row, the NULL key included");
+    drop(catalog);
+    sql(&db, "create table p(id int primary key, v int)");
+    sql(&db, "insert into p values (1, 10), (2, 20), (3, 30)");
+    let result = try_sql(&db, "update p set id = 2 where id = 1");
+    assert!(is_unique_violation(&result, "p_pk"), "the primary key 2 belongs to a row the update does not change: {result:?}");
+    let result = try_sql(&db, "update p set id = 7 where id >= 2");
+    assert!(is_unique_violation(&result, "p_pk"), "two changed rows may not end with one primary key either: {result:?}");
+    assert_eq!(sql(&db, "select * from p"), vec!["1 10", "2 20", "3 30"], "a failed update changes no row");
+    let catalog = db.catalog.read().unwrap();
+    assert_eq!(lookup(&catalog.get_index("p_pk", "p").unwrap(), &[1]).len(), 1, "the failed updates left the entry of the key 1 in place");
 }
 
 // ---- 3e-04 · index scan: every row in key order ---------------------------------------------------------------------------
@@ -829,8 +847,14 @@ fn s3e_04_order_by_on_an_indexed_column_becomes_an_index_scan() {
     assert_eq!(sql(&db, "select * from t order by a"), vec!["1 10", "2 20", "3 30"], "order by on an indexed column becomes an index scan");
     let no_index = sql(&db, "explain (o) select * from t order by b").join("\n");
     assert!(!no_index.contains("IndexScan"), "no index on b: the sort stays a sort\n{no_index}");
-    sql(&db, "insert into t values (0, 0)");
-    assert_eq!(sql(&db, "select * from t order by a"), vec!["0 0", "1 10", "2 20", "3 30"], "an inserted row is in the index");
+    sql(&db, "insert into t values (0, 0), (null, 5), (2, 21)");
+    assert_eq!(
+        sql(&db, "select * from t order by a"),
+        vec!["integer_null 5", "0 0", "1 10", "2 20", "2 21", "3 30"],
+        "inserted rows are in the index: a NULL key first, a repeated key in rid order"
+    );
+    let nulls_last = sql(&db, "explain (o) select * from t order by a nulls last").join("\n");
+    assert!(!nulls_last.contains("IndexScan"), "the index puts NULLs first, so NULLS LAST keeps the sort\n{nulls_last}");
 }
 
 // ---- 3e-04 · index scan: point lookups and predicates -------------------------------------------------------------------------
@@ -847,6 +871,18 @@ fn s3e_04_a_key_finds_its_row() {
     assert_eq!(rows.len(), 1, "a key finds its row");
     assert_eq!(rows[0].get_value(&info.schema, 1), int(20), "a key finds its row");
     assert!(execute(&db, &index_scan_plan(&info, index_oid, None, vec![key(9)])).is_empty(), "a missing key finds nothing");
+}
+
+#[test]
+fn s3e_04_a_key_finds_every_row_that_has_it() {
+    let (db, table_oid, index_oid) = db_with_index(&[vec![2, 1], vec![1, 10], vec![2, 2], vec![3, 30], vec![2, 3]]);
+    let info = db.catalog.read().unwrap().get_table_by_oid(table_oid).unwrap();
+    let rows = execute(&db, &index_scan_plan(&info, index_oid, None, vec![key(2)]));
+    let bs: Vec<Value> = rows.iter().map(|t| t.get_value(&info.schema, 1)).collect();
+    assert_eq!(bs, vec![int(1), int(2), int(3)], "the key 2 finds its three rows, in rid order");
+    sql(&db, "delete from t where b = 2");
+    assert_eq!(execute(&db, &index_scan_plan(&info, index_oid, None, vec![key(2)])).len(), 2, "a deleted row of the key is not found");
+    assert_eq!(sql(&db, "select b from t where a = 2"), vec!["1", "3"], "the same rows through SQL");
 }
 
 #[test]
@@ -954,16 +990,21 @@ fn has_duplicate_key(rows: &[Row]) -> bool {
     keys.iter().collect::<std::collections::HashSet<_>>().len() != keys.len()
 }
 
-/// Inserts `batch` into the model row by row; with a unique index on `a`, stops at the first row whose non-NULL `a` is taken (the rows
+/// Inserts `batch` into the model row by row; with a primary key on `a`, stops at the first row whose `a` is NULL or taken (the rows
 /// before it stay). Whether every row went in.
-fn insert_into_model(rows: &mut Vec<Row>, batch: &[Row], unique: bool) -> bool {
+fn insert_into_model(rows: &mut Vec<Row>, batch: &[Row], primary: bool) -> bool {
     for r in batch {
-        if unique && r[0].is_some() && rows.iter().any(|m| m[0] == r[0]) {
+        if primary && (r[0].is_none() || rows.iter().any(|m| m[0] == r[0])) {
             return false;
         }
         rows.push(r.clone());
     }
     true
+}
+
+/// The primary key on `a` refused the statement: a repeated key or a NULL one.
+fn refused_by_primary_key(result: &Result<Vec<String>, String>) -> bool {
+    is_unique_violation(result, "t_pk") || matches!(result, Err(e) if e.contains("violates not-null constraint"))
 }
 
 proptest! {
@@ -994,34 +1035,32 @@ proptest! {
     }
 
     /// Inserts answer with how many rows they added, and the table (and the index) then holds exactly the rows inserted so far. Keys
-    /// repeat and may be NULL: with the index in place, an insert stops with a unique violation at the first row whose key a live row
-    /// has; an index created over rows that share a key fails. Every live row with a non-NULL key has exactly one entry.
+    /// repeat and may be NULL: an index on `a` created before or after the inserts takes them all, one entry per row. With a primary
+    /// key on `a` instead, an insert stops at the first row whose key is taken or NULL.
     #[test]
-    fn s3e_02_inserts_add_exactly_their_rows_and_refuse_a_taken_key(batches in prop::collection::vec(prop::collection::vec(row_strategy(), 1..6), 1..8), index_first in any::<bool>()) {
+    fn s3e_02_inserts_add_exactly_their_rows_and_only_a_primary_key_refuses_one(batches in prop::collection::vec(prop::collection::vec(row_strategy(), 1..6), 1..8), index_first in any::<bool>(), primary in prop::bool::weighted(0.3)) {
         let db = new_db();
-        sql(&db, "create table t(a int, b int, c int)");
-        if index_first { sql(&db, "create index ia on t(a)"); }
+        sql(&db, if primary { "create table t(a int primary key, b int, c int)" } else { "create table t(a int, b int, c int)" });
+        if index_first && !primary { sql(&db, "create index ia on t(a)"); }
         let mut model_rows: Vec<Row> = vec![];
         for batch in batches {
             let statement = format!("insert into t values {}", batch.iter().map(model::values).collect::<Vec<_>>().join(", "));
             let result = try_sql(&db, &statement);
-            if insert_into_model(&mut model_rows, &batch, index_first) {
+            if insert_into_model(&mut model_rows, &batch, primary) {
                 prop_assert_eq!(result, Ok(vec![batch.len().to_string()]), "{}", statement);
             } else {
-                prop_assert!(is_unique_violation(&result, "ia"), "{}: a taken key fails the insert: {:?}", statement, result);
+                prop_assert!(refused_by_primary_key(&result), "{}: a taken or NULL primary key fails the insert: {:?}", statement, result);
             }
             prop_assert_eq!(rows_of(&db), model::sorted_lines(&model_rows), "after {}", statement);
         }
+        if primary {
+            return check_index(&db, "t_pk", &model_rows);
+        }
         if !index_first {
             let result = try_sql(&db, "create index ia on t(a)");
-            if has_duplicate_key(&model_rows) {
-                prop_assert!(result.is_err(), "an index over rows that share a key fails: {:?}", result);
-                prop_assert!(db.catalog.read().unwrap().get_index("ia", "t").is_none(), "a failed index is not in the catalog");
-                return Ok(());
-            }
-            prop_assert!(result.is_ok(), "an index over distinct keys is created: {:?}", result);
+            prop_assert!(result.is_ok(), "an index over any keys is created: {:?}", result);
         }
-        check_index(&db, &model_rows)?;
+        check_index(&db, "ia", &model_rows)?;
     }
 }
 
@@ -1050,9 +1089,9 @@ fn change_strategy(set_a: bool) -> BoxedStrategy<Change> {
     prop_oneof![7 => others, 1 => (model::arith(&model::COLUMNS, 1), any_column).prop_map(|(e, p)| Change::SetA(e, p))].boxed()
 }
 
-/// Applies `change` to the model and returns how many rows it touched. With a unique index on `a`, an update that would leave two
-/// rows with one non-NULL `a` changes nothing and gives `None`.
-fn apply(change: &Change, rows: &mut Vec<Row>, unique: bool) -> Option<usize> {
+/// Applies `change` to the model and returns how many rows it touched. With a primary key on `a`, an update that would leave two
+/// rows with one `a`, or a row with a NULL `a`, changes nothing and gives `None`.
+fn apply(change: &Change, rows: &mut Vec<Row>, primary: bool) -> Option<usize> {
     if let Change::Delete(p) = change {
         let before = rows.len();
         rows.retain(|r| !model::keeps(p, r));
@@ -1077,7 +1116,7 @@ fn apply(change: &Change, rows: &mut Vec<Row>, unique: bool) -> Option<usize> {
             Change::Delete(_) => unreachable!(),
         }
     }
-    if unique && has_duplicate_key(&new_rows) {
+    if primary && (has_duplicate_key(&new_rows) || new_rows.iter().any(|r| r[0].is_none())) {
         return None;
     }
     *rows = new_rows;
@@ -1094,31 +1133,33 @@ fn statement(change: &Change) -> String {
     }
 }
 
-/// Runs `change` on the database and on the model: the database answers with the model's count, or fails with the unique
-/// violation of `ia` when the model says the change would duplicate a key.
-fn run_change(db: &BusTubInstance, change: &Change, rows: &mut Vec<Row>, unique: bool) -> Result<(), TestCaseError> {
+/// Runs `change` on the database and on the model: the database answers with the model's count, or fails with the error of the
+/// primary key when the model says the change would repeat a primary key or make one NULL.
+fn run_change(db: &BusTubInstance, change: &Change, rows: &mut Vec<Row>, primary: bool) -> Result<(), TestCaseError> {
     let result = try_sql(db, &statement(change));
-    match apply(change, rows, unique) {
+    match apply(change, rows, primary) {
         Some(touched) => prop_assert_eq!(result, Ok(vec![touched.to_string()]), "{}", statement(change)),
-        None => prop_assert!(is_unique_violation(&result, "ia"), "{}: a duplicate key fails the update: {:?}", statement(change), result),
+        None => prop_assert!(refused_by_primary_key(&result), "{}: the primary key refuses the update: {:?}", statement(change), result),
     }
     Ok(())
 }
 
-/// Every live row with a non-NULL `a` has exactly one entry in the index of `a`, and every entry leads to a live row with that key.
-fn check_index(db: &BusTubInstance, rows: &[Row]) -> Result<(), TestCaseError> {
+/// Every live row has exactly one entry in the index `name` on `a`, whatever its key, and every entry leads to a live row with the
+/// entry's key; the entries are in key order, NULL first.
+fn check_index(db: &BusTubInstance, name: &str, rows: &[Row]) -> Result<(), TestCaseError> {
     let catalog = db.catalog.read().unwrap();
     let table = catalog.get_table("t").unwrap();
-    let index = catalog.get_index("ia", "t").unwrap();
-    let mut found: Vec<(i32, String)> = vec![];
-    for rid in index.index.scan_all() {
+    let index = catalog.get_index(name, "t").unwrap();
+    let mut found: Vec<(Option<i64>, String)> = vec![];
+    for (key, rid) in index.index.scan_all() {
         let (meta, tuple) = table.table.get_tuple(rid).unwrap();
         prop_assert!(!meta.is_deleted, "an index entry leads to a deleted row");
         let row: Row = (0..3).map(|i| tuple.get_value(&table.schema, i).as_i64()).collect();
-        prop_assert!(row[0].is_some(), "a row whose key is NULL has an index entry");
-        found.push((row[0].unwrap() as i32, model::line(&row)));
+        prop_assert_eq!(key.get_value(&index.key_schema, 0).as_i64(), row[0], "an entry's key is the key of its row");
+        found.push((row[0], model::line(&row)));
     }
-    let mut want: Vec<(i32, String)> = rows.iter().filter(|r| r[0].is_some()).map(|r| (r[0].unwrap() as i32, model::line(r))).collect();
+    prop_assert!(found.windows(2).all(|w| w[0].0 <= w[1].0), "the entries are in key order, NULL first: {:?}", found);
+    let mut want: Vec<(Option<i64>, String)> = rows.iter().map(|r| (r[0], model::line(r))).collect();
     found.sort();
     want.sort();
     prop_assert_eq!(found, want, "the index and the table disagree");
@@ -1129,49 +1170,49 @@ proptest! {
     #![proptest_config(pconfig())]
 
     /// Deletes and updates answer with how many rows they changed, change exactly those rows (computing every new value from the OLD
-    /// row), and keep the index of `a` in step with the table, including when `a` itself changes: `a = a + 1` over consecutive keys
-    /// succeeds, and an update that would leave two rows with one non-NULL key fails and changes nothing.
+    /// row), and keep the index of `a` in step with the table, including when `a` itself changes to a repeated or NULL key. With a
+    /// primary key on `a` instead, `a = a + 1` over consecutive keys succeeds, and an update that would leave two rows with one key, or
+    /// a NULL key, fails and changes nothing.
     #[test]
-    fn s3e_03_deletes_and_updates_agree_with_a_vector_of_rows_and_keep_the_index(start in keyed_rows(25), changes in prop::collection::vec(change_strategy(true), 1..10)) {
+    fn s3e_03_deletes_and_updates_agree_with_a_vector_of_rows_and_keep_the_index(start in keyed_rows(25), changes in prop::collection::vec(change_strategy(true), 1..10), primary in prop::bool::weighted(0.3)) {
         let db = new_db();
-        sql(&db, "create table t(a int, b int, c int)");
-        sql(&db, "create index ia on t(a)");
+        sql(&db, if primary { "create table t(a int primary key, b int, c int)" } else { "create table t(a int, b int, c int)" });
+        if !primary { sql(&db, "create index ia on t(a)"); }
+        let start: Vec<Row> = if primary { start.into_iter().filter(|r| r[0].is_some()).collect() } else { start };
         if !start.is_empty() {
             sql(&db, &format!("insert into t values {}", start.iter().map(model::values).collect::<Vec<_>>().join(", ")));
         }
         let mut rows = start;
         for change in &changes {
-            run_change(&db, change, &mut rows, true)?;
+            run_change(&db, change, &mut rows, primary)?;
             prop_assert_eq!(rows_of(&db), model::sorted_lines(&rows), "after {}", statement(change));
-            check_index(&db, &rows)?;
+            check_index(&db, if primary { "t_pk" } else { "ia" }, &rows)?;
         }
     }
 
-    /// An index scan with no keys returns the rows in the order of the key (negative keys first), and with keys returns the rows of
-    /// those keys in the order the keys were given; a key that is not there finds nothing; a filter applies to what the index finds.
+    /// An index scan with no keys returns the rows in the order of the key (negative keys first, rows of one key in the order they were
+    /// inserted, which is rid order), and with keys returns every row of each key, the keys in the order given; a key given twice finds
+    /// its rows once; a key that is not there finds nothing; a filter applies to what the index finds.
     #[test]
-    fn s3e_04_an_index_scan_is_in_key_order_and_a_point_lookup_finds_its_rows(keys in prop::collection::btree_set(-40i32..40, 0..40), order in any::<u64>(), probes in prop::collection::vec(-45i32..45, 0..12), limit in -40i32..40) {
-        let mut keys: Vec<i32> = keys.into_iter().collect();
-        // insert in a scrambled order
-        let mut x = order | 1;
-        let mut tagged: Vec<(u64, i32)> = keys.iter().map(|k| { x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407); (x >> 33, *k) }).collect();
-        tagged.sort();
-        keys = tagged.into_iter().map(|t| t.1).collect();
-        let rows: Vec<Vec<i32>> = keys.iter().map(|k| vec![*k, k * 10]).collect();
+    fn s3e_04_an_index_scan_is_in_key_order_and_a_point_lookup_finds_its_rows(keys in prop::collection::vec(-20i32..20, 0..40), probes in prop::collection::vec(-22i32..22, 0..12), limit in -20i32..20) {
+        // b is the row's position: it tells rows of one key apart
+        let rows: Vec<Vec<i32>> = keys.iter().enumerate().map(|(i, k)| vec![*k, i as i32]).collect();
         let (db, table_oid, index_oid) = db_with_index(&rows);
         let info = db.catalog.read().unwrap().get_table_by_oid(table_oid).unwrap();
-        let mut sorted = keys.clone();
+        let pairs = |tuples: Vec<Tuple>| -> Vec<(i32, i32)> {
+            tuples.iter().map(|t| (t.get_value(&info.schema, 0).as_i64().unwrap() as i32, t.get_value(&info.schema, 1).as_i64().unwrap() as i32)).collect()
+        };
+        let mut sorted: Vec<(i32, i32)> = rows.iter().map(|r| (r[0], r[1])).collect();
         sorted.sort();
-        let all: Vec<i32> = execute(&db, &index_scan_plan(&info, index_oid, None, vec![])).iter().map(|t| t.get_value(&info.schema, 0).as_i64().unwrap() as i32).collect();
-        prop_assert_eq!(&all, &sorted, "an index scan is in key order");
-        let filtered: Vec<i32> = execute(&db, &index_scan_plan(&info, index_oid, Some(cmp(0, ComparisonType::GreaterThan, limit)), vec![])).iter().map(|t| t.get_value(&info.schema, 0).as_i64().unwrap() as i32).collect();
-        prop_assert_eq!(filtered, sorted.iter().copied().filter(|k| *k > limit).collect::<Vec<_>>(), "the filter applies after the index");
+        let all = pairs(execute(&db, &index_scan_plan(&info, index_oid, None, vec![])));
+        prop_assert_eq!(&all, &sorted, "an index scan is in key order, rows of one key in rid order");
+        let filtered = pairs(execute(&db, &index_scan_plan(&info, index_oid, Some(cmp(0, ComparisonType::GreaterThan, limit)), vec![])));
+        prop_assert_eq!(filtered, sorted.iter().copied().filter(|(k, _)| *k > limit).collect::<Vec<_>>(), "the filter applies after the index");
         prop_assume!(!probes.is_empty()); // no keys at all means "scan everything", checked above
-        let found: Vec<(i32, i32)> = execute(&db, &index_scan_plan(&info, index_oid, None, probes.iter().map(|k| key(*k)).collect()))
-            .iter().map(|t| (t.get_value(&info.schema, 0).as_i64().unwrap() as i32, t.get_value(&info.schema, 1).as_i64().unwrap() as i32)).collect();
+        let found = pairs(execute(&db, &index_scan_plan(&info, index_oid, None, probes.iter().map(|k| key(*k)).collect())));
         let mut seen = std::collections::HashSet::new();
-        let want: Vec<(i32, i32)> = probes.iter().filter(|k| keys.contains(k) && seen.insert(**k)).map(|k| (*k, k * 10)).collect();
-        prop_assert_eq!(found, want, "point lookups in the order given, a repeated key finds its row once; absent keys find nothing");
+        let want: Vec<(i32, i32)> = probes.iter().filter(|k| seen.insert(**k)).flat_map(|k| sorted.iter().copied().filter(move |(a, _)| a == k)).collect();
+        prop_assert_eq!(found, want, "every row of each key, keys in the order given, a repeated key once; absent keys find nothing");
     }
 }
 
@@ -1210,24 +1251,19 @@ proptest! {
         let mut indexed = false;
         for (i, step) in steps.iter().enumerate() {
             if i == index_at && !indexed {
-                // `a = a + 1` before the index existed may have given two rows one key: then the index cannot be unique
                 let created = try_sql(&db, "create index ia on t(a)");
-                prop_assert_eq!(created.is_ok(), !has_duplicate_key(&rows), "create index: {:?}", created);
-                indexed = created.is_ok();
+                prop_assert!(created.is_ok(), "an index over any keys is created: {:?}", created);
+                indexed = true;
             }
             match step {
                 Step::Insert(new_rows) => {
                     let mut new_rows = new_rows.clone();
                     for r in new_rows.iter_mut() { r[0] = Some(next_key); next_key += 1; }
                     let text = format!("insert into t values {}", new_rows.iter().map(model::values).collect::<Vec<_>>().join(", "));
-                    let result = try_sql(&db, &text);
-                    if insert_into_model(&mut rows, &new_rows, indexed) {
-                        prop_assert_eq!(result, Ok(vec![new_rows.len().to_string()]), "{}", text);
-                    } else {
-                        prop_assert!(is_unique_violation(&result, "ia"), "{}: a key moved there by `a = a + 1` is taken: {:?}", text, result);
-                    }
+                    prop_assert_eq!(try_sql(&db, &text), Ok(vec![new_rows.len().to_string()]), "{}", text);
+                    rows.extend(new_rows);
                 }
-                Step::Change(c) => run_change(&db, c, &mut rows, indexed)?,
+                Step::Change(c) => run_change(&db, c, &mut rows, false)?,
                 Step::Select(p) => {
                     let mut got = sql(&db, &format!("select * from t where {}", model::show(p)));
                     got.sort();
@@ -1238,10 +1274,16 @@ proptest! {
             }
             prop_assert_eq!(rows_of(&db), model::sorted_lines(&rows), "after step {}: {:?}", i, step);
             if indexed {
-                check_index(&db, &rows)?;
-                let mut by_key = rows.clone();
-                by_key.sort_by_key(|r| r[0]);
-                prop_assert_eq!(sql(&db, "select * from t order by a"), by_key.iter().map(model::line).collect::<Vec<_>>(), "order by a, after step {}", i);
+                check_index(&db, "ia", &rows)?;
+                // rows that share a key may come in any order among themselves: compare the keys in order and the rows as a set
+                let ordered = sql(&db, "select * from t order by a");
+                let mut keys: Vec<Option<i64>> = rows.iter().map(|r| r[0]).collect();
+                keys.sort();
+                let got_keys: Vec<Option<i64>> = ordered.iter().map(|l| l.split(' ').next().unwrap().parse().ok()).collect();
+                prop_assert_eq!(got_keys, keys, "order by a gives the keys in order, NULL first, after step {}", i);
+                let mut ordered = ordered;
+                ordered.sort();
+                prop_assert_eq!(ordered, model::sorted_lines(&rows), "order by a returns every row, after step {}", i);
             }
         }
     }

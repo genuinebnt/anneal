@@ -1,7 +1,7 @@
 **Where this fits.** Scans, inserts, deletes, updates and index scans work one by one. This stage runs them **together**, as a user would: a random session of SQL statements against a table with an index created at a random moment, checked after every statement against plain Rust vectors, plus BusTub's own SQL tests for the same executors.
 
 > [!CHECK] After any sequence of inserts, deletes and updates, name the invariants that must hold between the table, its index and a plain vector of rows. Which of them can a *single-statement* test never catch, and which of your executors would break first if you forgot one?
-> ||(1) The table's live rows equal the vector, as a multiset. (2) The index holds exactly one entry per live row, with the right key, and no entry for a dead row. (3) A full index scan lists the rows in key order. The index/table agreement is the one a single statement cannot catch: an update that forgets to drop the old entry is invisible until a later scan or lookup, and an index created *after* some statements must start with the rows already there (module 3c's `create_index`).||
+> ||(1) The table's live rows equal the vector, as a multiset. (2) The index holds exactly one entry per live row, with the right key and the row's rid, and no entry for a dead row. (3) A full index scan lists the rows in key order. The index/table agreement is the one a single statement cannot catch: an update that forgets to drop the old entry is invisible until a later scan or lookup, and an index created *after* some statements must start with the rows already there (module 3c's `create_index`).||
 >
 > - Which statement did the test run last when it failed?
 > - Does the failure disappear if you create the index earlier or later?
@@ -11,7 +11,7 @@
 
 Nothing new to write. Make both pass:
 
-- **`stages_3e::s3e_05`**: a random session of up to two dozen statements (inserts of rows with NULLs, deletes, updates of `b`, `c` or `a = a + 1` by random predicates, selects with random predicates), with `create index ia on t(a)` at a random point (it fails if `a = a + 1` has already given two rows one key). After every statement: the statement answers with the right count, or, once the index exists, fails with a unique violation exactly when the vector would hold a repeated key; `select * from t` equals the vector; once the index exists, it agrees with the table (every live row once, no dead entries) and `select * from t order by a` comes back in key order (the optimizer, given, rewrites it to an index scan).
+- **`stages_3e::s3e_05`**: a random session of up to two dozen statements (inserts of rows with NULLs, deletes, updates of `b`, `c` or `a = a + 1` by random predicates, selects with random predicates), with `create index ia on t(a)` at a random point (keys repeat once `a = a + 1` moves one onto another, and the index takes them). After every statement: the statement answers with the right count; `select * from t` equals the vector; once the index exists, it agrees with the table (every live row once, NULL keys included, no dead entries) and `select * from t order by a` comes back in key order, NULL first (the optimizer, given, rewrites it to an index scan).
 - **`sql_access_methods_test`** (`cargo test --test sql_access_methods_test`): BusTub's `p3.00-primer`, `p3.01-seqscan`, `p3.02-insert`, `p3.03-update` and `p3.04-delete` files. (`p3.05` and `p3.06` need the optimizer rules of module 3h, so they come later.)
 
 ## Your freedom

@@ -938,17 +938,11 @@ proptest! {
     }
 }
 
-/// Two tables `l(k, x)` and `r(k, y)` with small keys (so there are many matches) and NULLs.
-fn two_tables(unique_right: bool) -> impl Strategy<Value = (Vec<model::Row>, Vec<model::Row>)> {
+/// Two tables `l(k, x)` and `r(k, y)` with small keys (so there are many matches, and keys repeat on both sides) and NULLs.
+fn two_tables() -> impl Strategy<Value = (Vec<model::Row>, Vec<model::Row>)> {
     let cell = || prop_oneof![1 => Just(None), 5 => (0i64..4).prop_map(Some)];
     let left = prop::collection::vec((cell(), prop::option::of(-3i64..3)).prop_map(|(k, x)| vec![k, x]), 0..14);
-    let right = if unique_right {
-        prop::collection::vec(prop::option::of(-3i64..3), 0..4)
-            .prop_map(|ys| ys.into_iter().enumerate().map(|(i, y)| vec![Some(i as i64), y]).collect::<Vec<_>>())
-            .boxed()
-    } else {
-        prop::collection::vec((cell(), prop::option::of(-3i64..3)).prop_map(|(k, y)| vec![k, y]), 0..14).boxed()
-    };
+    let right = prop::collection::vec((cell(), prop::option::of(-3i64..3)).prop_map(|(k, y)| vec![k, y]), 0..14);
     (left, right)
 }
 
@@ -988,7 +982,7 @@ proptest! {
     /// A nested loop join of two random tables on a random predicate (any comparison of sums and differences of the four columns)
     /// gives the pairs the predicate keeps, and a left join also the unmatched left rows padded with NULLs.
     #[test]
-    fn s3f_03_nested_loop_joins_agree_with_every_pair_checked((l, r) in two_tables(false), on in model::predicate(&PAIR)) {
+    fn s3f_03_nested_loop_joins_agree_with_every_pair_checked((l, r) in two_tables(), on in model::predicate(&PAIR)) {
         let db = new_db();
         load_two(&db, &l, &r);
         let text = model::show(&on);
@@ -999,7 +993,7 @@ proptest! {
     /// A hash join on one or two key columns, inner or left, gives the pairs whose keys are all equal (a NULL key matches nothing,
     /// not even another NULL) and, for a left join, the unmatched left rows padded with NULLs.
     #[test]
-    fn s3f_04_hash_joins_agree_with_every_pair_checked((l, r) in two_tables(false), two_keys in any::<bool>(), left in any::<bool>()) {
+    fn s3f_04_hash_joins_agree_with_every_pair_checked((l, r) in two_tables(), two_keys in any::<bool>(), left in any::<bool>()) {
         let db = new_db();
         load_two(&db, &l, &r);
         let n = if two_keys { 2 } else { 1 };
@@ -1010,9 +1004,10 @@ proptest! {
     }
 
     /// A nested index join (an equality join on an indexed column of the inner table, chosen by the optimizer) gives the same rows
-    /// as the naive join, for inner and left joins, and the plan says so.
+    /// as the naive join, for inner and left joins, and the plan says so. Inner keys repeat and may be NULL: an outer row meets every
+    /// inner row with its key, and a NULL meets none.
     #[test]
-    fn s3f_05_nested_index_joins_agree_with_every_pair_checked((l, r) in two_tables(true), left in any::<bool>()) {
+    fn s3f_05_nested_index_joins_agree_with_every_pair_checked((l, r) in two_tables(), left in any::<bool>()) {
         let db = new_db();
         load_two(&db, &l, &r);
         sql(&db, "create index rk on r(k)");
@@ -1033,7 +1028,7 @@ proptest! {
     /// naive one, for inner and left joins; swapping the two tables gives the same multiset with the columns swapped; and an
     /// aggregate over the join (`count(*)`, `sum`) agrees with the same aggregate over the naive rows.
     #[test]
-    fn s3f_06_three_join_algorithms_agree_with_each_other_and_with_the_naive_join((l, r) in two_tables(true), left in any::<bool>()) {
+    fn s3f_06_three_join_algorithms_agree_with_each_other_and_with_the_naive_join((l, r) in two_tables(), left in any::<bool>()) {
         let db = new_db();
         load_two(&db, &l, &r);
         let want = naive_join(&l, &r, left, |p| p[0].is_some() && p[0] == p[2]);

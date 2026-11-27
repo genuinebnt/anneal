@@ -11,7 +11,7 @@
 
 Nothing new to write. Make both pass:
 
-- **`stages_3h::s3h_04`**: for random tables `a(x, y)` and `b(p, q)` with NULLs and duplicates (distinct keys when an index on `b.p` exists), the query `select * from a join b on a.x = b.p where a.y > k order by a.x, a.y, b.p, b.q limit n` returns exactly the rows of a plain Rust computation with every optimizer rule on and with only BusTub's starter rules (`set force_optimizer_starter_rule=yes`: a nested index join where there is an index, no hash join, no top-N).
+- **`stages_3h::s3h_04`**: for random tables `a(x, y)` and `b(p, q)` with NULLs and duplicates (in the indexed column `b.p` too), the query `select * from a join b on a.x = b.p where a.y > k order by a.x, a.y, b.p, b.q limit n` returns exactly the rows of a plain Rust computation with every optimizer rule on and with only BusTub's starter rules (`set force_optimizer_starter_rule=yes`: a nested index join where there is an index, no hash join, no top-N).
 - **`sql_optimizer_test`** (`cargo test --test sql_optimizer_test`): BusTub's `p3.05-index-scan-btree`, `p3.06-empty-table`, `p3.14-hash-join`, `p3.15-multi-way-hash-join`, `p3.16-sort-limit` (with its `+ensure:hash_join` checks), `p3.17-topn` (with the heap-size check) and four small files (`hash_join`, `order_by`, `nested_index_join`, `update`) that issue `explain` and the query for each of several shapes.
 
 ## Your freedom
@@ -40,9 +40,9 @@ None new: a failure belongs to one of your rules (or to an executor of an earlie
 
 Read the plan first (`explain (o)`), then the rows. If the plan has a `HashJoin` and the rows are wrong, the bug is in the rule's keys or in the executor of module 3f; if the plan is unchanged and the rows differ, it is an executor.
 
-### Starter rules need unique keys
+### Repeated keys on the indexed side
 
-Indexes hold one row per non-NULL key, and creating one over a column with a repeated key fails. The property gives the indexed table distinct keys for that reason; the nested index join (a starter rule, given) relies on the same uniqueness.
+An index holds one entry per row, so a key of `b.p` that three rows share is three entries, and the nested index join (a starter rule, given) must meet all three for each matching row of `a`. If the starter-rule run returns fewer rows than the plain one only when `b.p` repeats, look at the lookup's range in your index (module 3c), not at the join.
 
 ## Performance
 

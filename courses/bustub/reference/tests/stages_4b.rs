@@ -8,9 +8,11 @@ use proptest::prelude::*;
 use bustub::catalog::catalog::TableInfo;
 use bustub::common::bustub_instance::BusTubInstance;
 use bustub::common::result_writer::SimpleStreamWriter;
+use bustub::common::rid::Rid;
 use bustub::concurrency::transaction::{IsolationLevel, Transaction, TransactionState, TXN_START_ID};
 use bustub::execution::execution_common::is_write_write_conflict;
-use bustub::storage::table::tuple::TupleMeta;
+use bustub::storage::table::tuple::{Tuple, TupleMeta};
+use bustub::types::value::Value;
 
 fn new_db() -> BusTubInstance {
     BusTubInstance::new(256)
@@ -113,6 +115,19 @@ fn txn_exists(db: &BusTubInstance, txn: &Transaction) -> bool {
     db.txn_manager.txn_map.read().unwrap().contains_key(&txn.id())
 }
 
+/// The rows of a query, one string per row, in the order the query gives them.
+fn ordered(db: &BusTubInstance, txn: &Arc<Transaction>, sql: &str) -> Vec<String> {
+    let (ok, out) = try_run(db, txn, sql);
+    assert!(ok, "{sql} failed");
+    out.lines().map(|l| l.trim_end().to_string()).filter(|l| !l.is_empty()).collect()
+}
+
+/// The rids of the entries of `key` in the one-column index `index` of `table`.
+fn index_lookup(db: &BusTubInstance, index: &str, table: &str, key: i32) -> Vec<Rid> {
+    let info = db.catalog.read().unwrap().get_index(index, table).unwrap();
+    info.index.scan_key(&Tuple::new(&[Value::integer(key)], &info.key_schema))
+}
+
 fn ensure_index_scan(db: &BusTubInstance) {
     exec(db, "CREATE TABLE pk_test_table_n(pk int primary key)");
     exec(db, "set force_optimizer_starter_rule=yes");
@@ -200,6 +215,32 @@ fn s4b_01_an_insert_select_in_a_transaction_does_not_see_its_own_new_rows() {
     run(&db, &t, "INSERT INTO maintable VALUES (1), (2)");
     run(&db, &t, "INSERT INTO maintable SELECT a + 10 FROM maintable");
     expect(&db, &t, "SELECT a FROM maintable", &["1", "2", "11", "12"]);
+}
+
+#[test]
+fn s4b_01_every_index_gets_the_entries_of_the_new_rows() {
+    let db = new_db();
+    exec(&db, "CREATE TABLE s(a int, b int)");
+    exec(&db, "CREATE INDEX sb ON s(b)");
+    let t1 = begin(&db);
+    run(&db, &t1, "INSERT INTO s VALUES (1, 2), (2, 2), (3, null), (4, 7)");
+    let info = table(&db, "s");
+    let written: Vec<Rid> = t1.write_sets().get(&info.oid).expect("the insert joined the write set").iter().copied().collect();
+    let found = index_lookup(&db, "sb", "s", 2);
+    assert_eq!(found.len(), 2, "both rows with b = 2 have their entries, before the commit");
+    assert!(found.iter().all(|rid| written.contains(rid)), "the entries name the transaction's own new tuples");
+    let entries = db.catalog.read().unwrap().get_index("sb", "s").unwrap().index.scan_all();
+    assert_eq!(entries.len(), 4, "every new row has an entry, the NULL key included");
+    for (_, rid) in &entries {
+        let meta = info.table.get_tuple_meta(*rid).unwrap();
+        assert_eq!(meta.ts, t1.temp_ts(), "each entry leads to a tuple that carries the temporary timestamp until commit");
+    }
+    commit(&db, &t1);
+    let t2 = begin(&db);
+    let (_, plan) = try_run(&db, &t2, "EXPLAIN SELECT * FROM s WHERE b = 2");
+    assert!(plan.contains("IndexScan"), "a lookup on b inside a transaction reads the index:\n{plan}");
+    expect(&db, &t2, "SELECT * FROM s WHERE b = 2", &["1 2", "2 2"]);
+    expect(&db, &t2, "SELECT * FROM s WHERE b = 7", &["4 7"]);
 }
 
 // ---- 4b-02: delete and write-write conflicts -------------------------------------------------------------------------------------------
@@ -432,6 +473,26 @@ fn s4b_03_a_conflicting_updater_is_tainted_and_the_winner_commits() {
     commit(&db, &t1);
     expect(&db, &t_ref, "SELECT * FROM table1", &["0 0 0"]);
     assert_eq!(heap_entries(&info), 1, "a conflicting updater is tainted and the winner commits");
+}
+
+#[test]
+fn s4b_03_an_update_of_an_indexed_column_adds_the_new_key_and_keeps_the_old() {
+    let db = new_db();
+    exec(&db, "CREATE TABLE s(a int, b int)");
+    exec(&db, "CREATE INDEX sb ON s(b)");
+    let t1 = begin(&db);
+    run(&db, &t1, "INSERT INTO s VALUES (1, 2), (2, 2)");
+    commit(&db, &t1);
+    let t2 = begin(&db);
+    run(&db, &t2, "UPDATE s SET b = 5 WHERE a = 1");
+    let (old, new) = (index_lookup(&db, "sb", "s", 2), index_lookup(&db, "sb", "s", 5));
+    assert_eq!(old.len(), 2, "the old key's entry stays for the readers that still see b = 2");
+    assert_eq!(new.len(), 1, "the new key has its entry");
+    assert!(old.contains(&new[0]), "both entries name the same rid: the row was updated in place");
+    commit(&db, &t2);
+    let t3 = begin(&db);
+    expect(&db, &t3, "SELECT * FROM s WHERE b = 5", &["1 5"]);
+    expect(&db, &t3, "SELECT * FROM s WHERE b = 2", &["2 2"]);
 }
 
 // ---- 4b-04: abort ----------------------------------------------------------------------------------------------------------------------
@@ -672,14 +733,57 @@ fn s4b_06_a_lookup_on_an_index_that_is_not_the_primary_key_finds_rows_written_in
     run(&db, &t1, "INSERT INTO s VALUES (1, 2), (2, 3)");
     commit(&db, &t1);
     let t2 = begin(&db);
+    let (_, plan) = try_run(&db, &t2, "EXPLAIN SELECT * FROM s WHERE b = 2");
+    assert!(plan.contains("IndexScan"), "inside a transaction the index on b is read:\n{plan}");
     expect(&db, &t2, "SELECT * FROM s WHERE b = 2", &["1 2"]);
+    let t3 = begin(&db);
     run(&db, &t2, "UPDATE s SET b = 5 WHERE a = 1");
     expect(&db, &t2, "SELECT * FROM s WHERE b = 5", &["1 5"]);
     expect(&db, &t2, "SELECT * FROM s WHERE b = 2", &[]);
-    let (_, plan) = try_run(&db, &t2, "EXPLAIN SELECT * FROM s WHERE b = 2");
-    assert!(!plan.contains("IndexScan"), "transactional writes do not maintain sb, so a transaction does not read it:\n{plan}");
-    let (_, plan) = try_run(&db, &t2, "EXPLAIN SELECT * FROM s WHERE a = 2");
-    assert!(plan.contains("IndexScan"), "the primary-key index is still used:\n{plan}");
+    expect(&db, &t3, "SELECT * FROM s WHERE b = 2", &["1 2"]);
+    expect(&db, &t3, "SELECT * FROM s WHERE b = 5", &[]);
+    commit(&db, &t2);
+    let t4 = begin(&db);
+    expect(&db, &t4, "SELECT * FROM s WHERE b = 5", &["1 5"]);
+    expect(&db, &t4, "SELECT * FROM s WHERE b = 2", &[]);
+    expect(&db, &t3, "SELECT * FROM s WHERE b = 2", &["1 2"]);
+    let (_, plan) = try_run(&db, &t4, "EXPLAIN SELECT * FROM s WHERE a = 2");
+    assert!(plan.contains("IndexScan"), "the primary-key index is used too:\n{plan}");
+}
+
+#[test]
+fn s4b_06_order_by_through_an_index_gives_each_row_once_under_the_key_its_reader_sees() {
+    let db = new_db();
+    exec(&db, "CREATE TABLE s(a int, b int)");
+    exec(&db, "CREATE INDEX sb ON s(b)");
+    let t1 = begin(&db);
+    run(&db, &t1, "INSERT INTO s VALUES (1, 2), (2, 2), (3, null), (4, 7)");
+    commit(&db, &t1);
+    let old = begin(&db);
+    let t2 = begin(&db);
+    run(&db, &t2, "UPDATE s SET b = 9 WHERE a = 1");
+    run(&db, &t2, "UPDATE s SET b = 1 WHERE a = 4");
+    commit(&db, &t2);
+    let t3 = begin(&db);
+    run(&db, &t3, "UPDATE s SET b = 8 WHERE a = 2");
+    abort(&db, &t3);
+    let new = begin(&db);
+    let (_, plan) = try_run(&db, &new, "EXPLAIN SELECT * FROM s ORDER BY b");
+    assert!(plan.contains("IndexScan"), "ORDER BY b reads the index:\n{plan}");
+    assert_eq!(
+        ordered(&db, &old, "SELECT * FROM s ORDER BY b"),
+        vec!["3 integer_null", "1 2", "2 2", "4 7"],
+        "a reader from before the update sees the old keys, NULL first, each row once"
+    );
+    assert_eq!(
+        ordered(&db, &new, "SELECT * FROM s ORDER BY b"),
+        vec!["3 integer_null", "4 1", "2 2", "1 9"],
+        "a reader from after it sees the new keys, each row once, though the old entries are still there"
+    );
+    expect(&db, &old, "SELECT * FROM s WHERE b = 2", &["1 2", "2 2"]);
+    expect(&db, &new, "SELECT * FROM s WHERE b = 2", &["2 2"]);
+    expect(&db, &new, "SELECT * FROM s WHERE b = 8", &[]);
+    expect(&db, &old, "SELECT * FROM s WHERE b = 9", &[]);
 }
 
 #[test]
@@ -1643,9 +1747,9 @@ enum KeyOp {
 
 fn key_op() -> impl Strategy<Value = KeyOp> {
     prop_oneof![
-        4 => (0..6i32, 0..100i32).prop_map(|(k, v)| KeyOp::Insert(k, v)),
+        4 => (0..6i32, 0..4i32).prop_map(|(k, v)| KeyOp::Insert(k, v)),
         2 => (0..6i32).prop_map(KeyOp::Delete),
-        2 => (0..6i32, 0..100i32).prop_map(|(k, v)| KeyOp::SetValue(k, v)),
+        2 => (0..6i32, 0..4i32).prop_map(|(k, v)| KeyOp::SetValue(k, v)),
         2 => (0..6i32, 0..6i32).prop_map(|(a, b)| KeyOp::MoveKey(a, b)),
     ]
 }
@@ -1653,14 +1757,16 @@ fn key_op() -> impl Strategy<Value = KeyOp> {
 proptest! {
     #![proptest_config(ProptestConfig { cases: 40, max_shrink_iters: 1500, failure_persistence: None, ..ProptestConfig::default() })]
 
-    /// Transactions one after another on a table with a primary key: a duplicate key fails and taints, deletes make the key free again
-    /// (a tombstone is reused, never a second tuple), updating the key moves the row, and aborts leave the map unchanged. After every
-    /// transaction the table, every point lookup and every snapshot taken before it equal the model, and the heap never holds more tuples
-    /// than there are different keys.
+    /// Transactions one after another on a table with a primary key and an index on its value: a duplicate key fails and taints,
+    /// deletes make the key free again (a tombstone is reused, never a second tuple), updating the key moves the row, updating the value
+    /// moves it in the other index, and aborts leave the map unchanged. After every transaction the table, every point lookup by key or
+    /// by value, the order by value, and every snapshot taken before it equal the model, and the heap never holds more tuples than there
+    /// are different keys.
     #[test]
     fn s4b_06_a_primary_key_table_behaves_like_a_map_and_reuses_its_tombstones(txns in prop::collection::vec((prop::collection::vec(key_op(), 1..6), any::<bool>()), 1..14)) {
         let db = new_db();
         exec(&db, "CREATE TABLE p(pk int primary key, v int)");
+        exec(&db, "CREATE INDEX pv ON p(v)");
         exec(&db, "set force_optimizer_starter_rule=yes");
         let info = table(&db, "p");
         let mut committed: BTreeMap<i32, i32> = BTreeMap::new();
@@ -1705,13 +1811,25 @@ proptest! {
                 let want: Vec<String> = committed.get(&k).map(|v| format!("{k} {v}")).into_iter().collect();
                 prop_assert_eq!(rows(&db, &fresh, &format!("SELECT pk, v FROM p WHERE pk = {k}")), want, "point lookup of {}", k);
             }
+            let by_value = |state: &BTreeMap<i32, i32>, v: i32| -> Vec<String> { state.iter().filter(|(_, x)| **x == v).map(|(k, x)| format!("{k} {x}")).collect() };
+            for v in 0..4 {
+                prop_assert_eq!(rows(&db, &fresh, &format!("SELECT pk, v FROM p WHERE v = {v}")), by_value(&committed, v), "lookup of the value {}", v);
+            }
+            let mut values: Vec<i32> = committed.values().copied().collect();
+            values.sort();
+            let got: Vec<i32> = ordered(&db, &fresh, "SELECT v FROM p ORDER BY v").iter().map(|l| l.parse().unwrap()).collect();
+            prop_assert_eq!(got, values, "ORDER BY v gives each row once, in value order");
             prop_assert!(heap_entries(&info) <= 6, "{} tuples for at most 6 different keys: a deleted key's tuple is reused", heap_entries(&info));
             snapshots.push((fresh, committed.clone()));
         }
-        // every snapshot still reads the state it was taken in
+        // every snapshot still reads the state it was taken in, through the table and through both indexes
         for (txn, state) in &snapshots {
             let want: Vec<String> = state.iter().map(|(k, v)| format!("{k} {v}")).collect();
             prop_assert_eq!(rows(&db, txn, "SELECT pk, v FROM p"), want, "snapshot at {}", txn.read_ts());
+            for v in 0..4 {
+                let want: Vec<String> = state.iter().filter(|(_, x)| **x == v).map(|(k, x)| format!("{k} {x}")).collect();
+                prop_assert_eq!(rows(&db, txn, &format!("SELECT pk, v FROM p WHERE v = {v}")), want, "snapshot at {}, lookup of the value {}", txn.read_ts(), v);
+            }
         }
     }
 }

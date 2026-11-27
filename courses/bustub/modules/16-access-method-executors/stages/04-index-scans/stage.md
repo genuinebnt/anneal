@@ -1,29 +1,29 @@
-An index does not hold rows; it holds **record ids** in key order. An **index scan** asks the index for rids, fetches each row from the heap, and answers like any other scan. It has two jobs. With no keys it scans the whole index: the rows come back **in key order**, which is how `ORDER BY a` can be answered without a sort. With a list of keys (a **point lookup**, `WHERE a = 5` or `a = 5 OR a = 9`) it asks the index for each key in turn and fetches only those rows, which is why an indexed lookup in a million-row table is a handful of page reads.
+An index does not hold rows; it holds **entries** `(key, rid)` in key order, one per row (module 3c). An **index scan** asks the index for entries, fetches each row from the heap, and answers like any other scan. It has two jobs. With no keys it scans the whole index: the rows come back **in key order**, rows of one key in rid order and rows with a NULL key first, which is how `ORDER BY a` can be answered without a sort. With a list of keys (a **point lookup**, `WHERE a = 5` or `a = 5 OR a = 9`) it asks the index for each key in turn and fetches **every row of that key**, which is why an indexed lookup in a million-row table is a handful of page reads.
 
 > [!CHECK] A row is deleted, its heap tuple is flagged, and (a bug in some earlier stage) its index entry survives. What does an index scan return, and what should it return? Separately: `where a = 5 and b > 3` uses the index for `a = 5`. Where is `b > 3` applied, and why must it still be applied to rows the index found?
 > ||The scan must consult the heap tuple's metadata and skip a deleted row (the index is a hint about where rows are, not the truth about which exist). `b > 3` is applied to each fetched row by the scan's own filter: an index only knows about its key, so every other condition is a filter on the rows it finds.||
 >
 > - In which order do rows come back with no keys, and with keys?
-> - What does `scan_key` return for a key that is not there?
+> - What does `scan_key` return for a key that is not there, and for a key three rows share?
 > - Where do you evaluate the key expressions, and against which tuple?
 
 ## The task
 
 In `src/execution/executors/index_scan_executor.rs` (the struct and `new` are given):
 
-- **`init` fixes the rows to visit.** With no `pred_keys`, every rid of the index in key order. With `pred_keys` (constant expressions), the rids each key finds, keys in the order given; a rid found under two keys is visited **once**, at its first key: `v1 = 4 or v1 = 4` is one row, not two.
+- **`init` fixes the entries to visit.** With no `pred_keys`, every entry of the index, in order. With `pred_keys` (constant expressions), the entries of each key (every row the key finds, in rid order), keys in the order given; a key given twice is looked up **once**: `v1 = 4 or v1 = 4` is one row per match, not two.
 - **`next` returns those rows in that order**, each with its rid, at most `batch_size` per call. A row that is deleted, or that the plan's `filter_predicate` (when there is one) does not make TRUE, does not come back. It returns `true` exactly when the batch is not empty.
 
 > [!ASIDE] The steps, if you would rather not work them out
-> - `collect_rids()` (called by `init`): with **no** `pred_keys`, every rid of the index in key order (`index.scan_all()`); with `pred_keys`, for each key expression **in order**: evaluate it (it is a constant: use an empty tuple and an empty schema), make a one-column **key tuple** with the index's key schema (`Tuple::new(&[value], &self.index_info.key_schema)`), look it up with `index.scan_key(&key)` and append the rids found. A rid found under two keys is visited **once**, at its first key: `v1 = 4 or v1 = 4` is one row, not two.
-> - `init`: remember the rids to visit and start at the first.
-> - `next`: fill the batch from the rids: fetch each row with `table.get_tuple(rid)?`, skip it if it is deleted or if the plan's `filter_predicate` (when there is one) is not TRUE, push the tuple and its rid; stop at `batch_size` or the end. Return `true` if the batch is not empty.
+> - `collect_entries()` (called by `init`): with **no** `pred_keys`, every entry of the index (`index.scan_all()`); with `pred_keys`, for each key expression **in order**: evaluate it (it is a constant: use an empty tuple and an empty schema), make a one-column **key tuple** with the index's key schema (`Tuple::new(&[value], &self.index_info.key_schema)`), skip it if an earlier key was the same, look it up with `index.scan_key(&key)` and append `(key, rid)` for every rid found.
+> - `init`: remember the entries to visit and start at the first.
+> - `next`: fill the batch from the entries' rids: fetch each row with `table.get_tuple(rid)?`, skip it if it is deleted or if the plan's `filter_predicate` (when there is one) is not TRUE, push the tuple and its rid; stop at `batch_size` or the end. Return `true` if the batch is not empty.
 
-The tests: exact scenarios (rows come back in key order, not storage order; negative keys sort as numbers; the batch size is respected; an empty table gives nothing; deleted rows do not come back; `order by` on an indexed column becomes an index scan; a key finds its row; several keys in the order given; a key listed twice finds its row once; a deleted row is not found; the filter applies to what the index found; a lookup sees an update from the same session; a batch of lookups larger than the batch size), and a property: **for a random set of keys inserted in a scrambled order**, a full index scan returns the rows in ascending key order, a filtered one returns the keys passing the filter, and a list of probes returns the rows of the present keys in the order given (absent keys find nothing, a repeated key finds its row once).
+The tests: exact scenarios (rows come back in key order, not storage order; negative keys sort as numbers; the batch size is respected; an empty table gives nothing; deleted rows do not come back; `order by` on an indexed column becomes an index scan, with NULL keys first and repeated keys in rid order; a key finds its row; a key finds every row that has it; several keys in the order given; a key listed twice finds its row once; a deleted row is not found; the filter applies to what the index found; a lookup sees an update from the same session; a batch of lookups larger than the batch size), and a property: **for random keys with repeats**, a full index scan returns the rows by key and then in insertion (rid) order, a filtered one returns the rows passing the filter, and a list of probes returns every row of each present key, keys in the order given (absent keys find nothing, a probe given twice finds its rows once).
 
 ## Your freedom
 
-Collecting all rids at `init` (simple, holds a list in memory) or asking the index lazily as `next` goes; how you evaluate keys.
+Collecting all entries at `init` (simple, holds a list in memory) or asking the index lazily as `next` goes; how you evaluate keys.
 
 ## The Rust toolbox
 
@@ -31,9 +31,9 @@ Collecting all rids at `init` (simple, holds a list in memory) or asking the ind
 
 **Building a key tuple.** `Tuple::new(&[value], &self.index_info.key_schema)`: the same kind of tuple the index stores.
 
-**`extend`.** `rids.extend(index.scan_key(&key))` appends the rids found.
+**`extend`.** `entries.extend(index.scan_key(&key).into_iter().map(|rid| (key.clone(), rid)))` appends the entries found.
 
-**A cursor into a `Vec`.** `self.rids[self.cursor..].iter()` and `self.cursor += 1`; or `std::mem::take`/`drain` if you prefer to consume.
+**A cursor into a `Vec`.** `self.entries[self.cursor..].iter()` and `self.cursor += 1`; or `std::mem::take`/`drain` if you prefer to consume.
 
 **Skipping with `continue`.** `let (meta, tuple) = table.get_tuple(rid)?; if meta.is_deleted { continue; }` keeps the loop flat.
 
@@ -46,9 +46,9 @@ Collecting all rids at `init` (simple, holds a list in memory) or asking the ind
 
 ## Tests
 
-- A full index scan returns rows in key order (not storage order), negative keys first; batches respect the size; an empty table gives nothing; deleted rows do not come back; `order by` on an indexed column becomes an index scan.
-- A key finds its row; several keys in the order given; a missing key finds nothing; a deleted row is not found; the filter applies after the index; updates are seen.
-- Property: random key sets against sorted vectors, filters and probes.
+- A full index scan returns rows in key order (not storage order), negative keys first; batches respect the size; an empty table gives nothing; deleted rows do not come back; `order by` through the index puts NULL keys first.
+- A key finds every row that has it; several keys in the order given; a missing key finds nothing; a deleted row is not found; the filter applies after the index; updates are seen.
+- Property: random keys with repeats against sorted vectors, filters and probes.
 
 ## Hints
 
@@ -72,6 +72,7 @@ Optional. Predict first, then run.
 
 1. **Lazy.** Ask the index for one key at a time inside `next` instead of at `init`. What changes if a row is inserted between two `next` calls?
 2. **Duplicates.** Remove your de-duplication of repeated keys. Which test fails, and what query would show the bug to a user?
+3. **Many rows per key.** Fill a table with a million rows over ten values of `a` and time `where a = 3` through the index and through a sequential scan. At what share of the table does the index stop paying?
 
 ## Other designs
 
@@ -88,7 +89,7 @@ The executors of Project 3, task 1 (`seq_scan_executor.cpp`, `insert_executor.cp
 
 | C / C++ | Rust |
 |---|---|
-| `std::vector<RID> rids_;` and a cursor index | `Vec<Rid>` and `cursor: usize` |
+| `std::vector<RID> rids_;` and a cursor index | `Vec<(Tuple, Rid)>` of entries and `cursor: usize` |
 | `index_->ScanKey(key, &result, txn)` | `index.scan_key(&key)` returning `Vec<Rid>` |
 | `pred_key->Evaluate(nullptr, empty_schema)` | `expr.evaluate(&Tuple::empty(), &Schema::new(vec![]))?` |
 

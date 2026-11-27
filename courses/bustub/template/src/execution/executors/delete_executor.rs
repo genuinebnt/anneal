@@ -1,6 +1,6 @@
 //! Deletes every tuple its child produces and produces one row: how many it deleted.
 //!
-//! Deleting marks the tuple deleted in the heap and removes its index entries.
+//! Deleting marks the tuple deleted in the heap and removes its entry from every index.
 
 use std::sync::Arc;
 
@@ -39,9 +39,10 @@ impl<'e> DeleteExecutor<'e> {
         Ok(DeleteExecutor { plan, table_info, indexes, child, done: false, txn })
     }
 
-    /// Removes the entries of `tuple` from every index of the table.
-    fn delete_from_indexes(&self, tuple: &Tuple) {
-        // 3e-03: for every index, delete the entry for the key of the tuple (Tuple::key_from_tuple, as in the insert executor)
+    /// Removes the entry of the tuple stored at `rid` from every index of the table. The entries of other rows stay, those with
+    /// the same key included.
+    fn delete_from_indexes(&self, tuple: &Tuple, rid: Rid) {
+        // 3e-03: for every index, delete the entry (the tuple's key, rid); the key is Tuple::key_from_tuple, as in the insert executor
     }
 }
 
@@ -54,7 +55,7 @@ impl Executor for DeleteExecutor<'_> {
         tuple_batch.clear();
         rid_batch.clear();
         // 4b-02: when self.txn is Some: once, for every rid of the child call modify_tuple(.., None) (index entries stay), count, and answer with one tuple holding the count
-        todo!("3e-03: marks every tuple of the child deleted and removes its index entries; answers once with how many, then false")
+        todo!("3e-03: marks every tuple of the child deleted and removes its entry (key, rid) from every index; answers once with how many, then false")
     }
 
     fn output_schema(&self) -> &Schema {

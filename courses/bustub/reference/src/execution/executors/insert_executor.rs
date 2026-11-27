@@ -1,7 +1,8 @@
 //! Inserts every tuple of its child into a table and its indexes, then produces one row: how many it inserted.
 //!
-//! Every index of the table is unique over non-NULL keys, and a primary key has no NULL: a tuple whose key an index already holds, or
-//! whose primary key has a NULL, is not inserted, and the statement fails at that tuple. The tuples before it stay inserted.
+//! Every inserted tuple gets an entry in every index of the table. An index that is not a primary key takes any key, repeated or
+//! with a NULL in it. A primary key is unique and has no NULL: a tuple whose primary key a live row already has, or whose primary key
+//! has a NULL, is not inserted, and the statement fails at that tuple. The tuples before it stay inserted.
 
 use std::sync::Arc;
 
@@ -43,29 +44,29 @@ impl<'e> InsertExecutor<'e> {
     }
 
     /// Fails with a not-null violation if the primary key of `tuple` has a NULL ([`IndexInfo::check_primary_key`]), and with a
-    /// unique violation if an index of the table already holds the key of `tuple`. Any other key with a NULL passes: NULL equals nothing.
-    fn check_unique(&self, tuple: &Tuple) -> Result<()> {
+    /// unique violation if the primary-key index already holds the key of `tuple`. Without a primary key every tuple passes.
+    fn check_constraints(&self, tuple: &Tuple) -> Result<()> {
         // @begin 3e-02
-        for index in &self.indexes {
-            let key = tuple.key_from_tuple(&self.table_info.schema, &index.key_schema, index.index.metadata().get_key_attrs());
-            index.check_primary_key(&key)?;
-            if !index.index.scan_key(&key).is_empty() {
-                return Err(unique_violation(&index.name));
+        if let Some(pk) = self.indexes.iter().find(|i| i.is_primary_key) {
+            let key = tuple.key_from_tuple(&self.table_info.schema, &pk.key_schema, pk.index.metadata().get_key_attrs());
+            pk.check_primary_key(&key)?;
+            if !pk.index.scan_key(&key).is_empty() {
+                return Err(unique_violation(&pk.name));
             }
         }
         Ok(())
-        //~ todo!("3e-02: the not-null error of IndexInfo::check_primary_key for a NULL primary key; Err(unique_violation(index name)) if any index of the table already holds the tuple's key; Ok otherwise")
+        //~ todo!("3e-02: the not-null error of IndexInfo::check_primary_key for a NULL primary key; Err(unique_violation(index name)) if the primary-key index already holds the tuple's key; Ok otherwise, and always without a primary key")
         // @end
     }
 
-    /// Adds the tuple stored at `rid` to every index of the table whose key it has without a NULL.
+    /// Gives the tuple stored at `rid` its entry in every index of the table.
     fn insert_into_indexes(&self, tuple: &Tuple, rid: Rid) {
         // @begin 3e-02
         for index in &self.indexes {
             let key = tuple.key_from_tuple(&self.table_info.schema, &index.key_schema, index.index.metadata().get_key_attrs());
             index.index.insert_entry(&key, rid);
         }
-        //~ // 3e-02: in every index, the tuple's key (Tuple::key_from_tuple) maps to rid
+        //~ // 3e-02: every index gets the entry (the tuple's key, rid); the key is Tuple::key_from_tuple
         // @end
     }
 }
@@ -110,7 +111,7 @@ impl Executor for InsertExecutor<'_> {
         let mut count = 0;
         while self.child.next(&mut child_tuples, &mut child_rids, BUSTUB_BATCH_SIZE)? {
             for tuple in &child_tuples {
-                self.check_unique(tuple)?;
+                self.check_constraints(tuple)?;
                 let rid = self.table_info.table.insert_tuple(&TupleMeta { ts: 0, is_deleted: false }, tuple)?;
                 self.insert_into_indexes(tuple, rid);
                 count += 1;
@@ -120,7 +121,7 @@ impl Executor for InsertExecutor<'_> {
         tuple_batch.push(Tuple::new(&[Value::integer(count)], &self.plan.output_schema));
         rid_batch.push(Rid::default());
         Ok(true)
-        //~ todo!("3e-02: once: inserts every tuple of the child into the table and its indexes, failing at the first tuple whose key an index already holds (that tuple is in neither); answers with how many, then false")
+        //~ todo!("3e-02: once: inserts every tuple of the child into the table and every index, failing at the first tuple whose primary key is taken or NULL (that tuple is in neither); answers with how many, then false")
         // @end
     }
 

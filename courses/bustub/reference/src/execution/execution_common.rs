@@ -411,12 +411,26 @@ pub fn true_predicate() -> crate::execution::expressions::abstract_expression::E
     Arc::new(ConstantValueExpression::new(Value::boolean(true)))
 }
 
-/// Inserts `tuple` into `table` inside `txn`. A table with a primary-key index goes through the index: a key with a NULL fails with a
-/// not-null violation and writes nothing (the transaction stays usable); an existing live tuple under the
-/// key is a duplicate (the transaction is tainted and the statement fails); a tombstone under the key is **reused** (the same rid
-/// becomes live again, as a normal in-place change, [`modify_tuple`]); a new key gets a new tuple and then its entry, and if the entry
-/// cannot be added (another transaction took the key first) the new tuple is buried and the statement fails. Without a primary key the
-/// tuple is simply added. The tuple carries the transaction's temporary timestamp and its rid joins the write set.
+/// Gives the row at `rid`, whose version `tuple` has just been written, its entry `(key, rid)` in every index of `table`. An entry
+/// an index already holds stays as it is, and so do the entries of the row's other versions: a reader that sees an older version
+/// finds the row under that version's key.
+pub fn insert_index_entries(table: &TableInfo<'_>, indexes: &[Arc<crate::catalog::catalog::IndexInfo<'_>>], tuple: &Tuple, rid: Rid) {
+    // @begin 4b-01
+    for index in indexes {
+        let key = tuple.key_from_tuple(&table.schema, &index.key_schema, index.index.metadata().get_key_attrs());
+        index.index.insert_entry(&key, rid); // `false` only for an entry that is there already
+    }
+    //~ // TODO(4b-01): every index gets the entry (the tuple's key, rid); an entry that is already there is fine
+    // @end
+}
+
+/// Inserts `tuple` into `table` inside `txn`, and gives it its entry in every index of the table ([`insert_index_entries`]). A table
+/// with a primary-key index goes through that index: a key with a NULL fails with a not-null violation and writes nothing (the
+/// transaction stays usable); an existing live tuple under the key is a duplicate (the transaction is tainted and the statement fails);
+/// a tombstone under the key is **reused** (the same rid becomes live again, as a normal in-place change, [`modify_tuple`]); a new key
+/// gets a new tuple and then its entry, and if the entry cannot be added (another transaction took the key first) the new tuple is
+/// buried and the statement fails. Without a primary key the tuple is simply added. The tuple carries the transaction's temporary
+/// timestamp and its rid joins the write set.
 pub fn insert_mvcc(
     txn: &Arc<Transaction>,
     txn_mgr: &TransactionManager,
@@ -433,7 +447,9 @@ pub fn insert_mvcc(
             if !meta.is_deleted {
                 return Err(write_write_conflict(txn)); // the key is taken
             }
-            return modify_tuple(txn, txn_mgr, table, rid, Some(tuple)); // a tombstone: reuse the rid
+            modify_tuple(txn, txn_mgr, table, rid, Some(tuple))?; // a tombstone: reuse the rid
+            insert_index_entries(table, indexes, tuple, rid);
+            return Ok(());
         }
         let rid = table.table.insert_tuple(&TupleMeta { ts: txn.temp_ts(), is_deleted: false }, tuple)?;
         txn.append_write_set(table.oid, rid);
@@ -442,14 +458,16 @@ pub fn insert_mvcc(
             table.table.update_tuple_meta(&TupleMeta { ts: txn.temp_ts(), is_deleted: true }, rid)?;
             return Err(write_write_conflict(txn));
         }
+        insert_index_entries(table, indexes, tuple, rid);
         return Ok(());
     }
-    //~ // 4b-06: with a primary-key index in indexes: a NULL key fails with check_primary_key before anything is written; look the key up (scan_key); a live tuple at its rid: taint and fail (write_write_conflict); a deleted one: reuse the rid with modify_tuple(.., Some(tuple)); no entry: insert the tuple (temp ts), add it to the write set, insert_entry, and if that fails bury the tuple (update_tuple_meta with is_deleted) and fail
+    //~ // 4b-06: with a primary-key index in indexes: a NULL key fails with check_primary_key before anything is written; look the key up (scan_key); a live tuple at its rid: taint and fail (write_write_conflict); a deleted one: reuse the rid with modify_tuple(.., Some(tuple)); no entry: insert the tuple (temp ts), add it to the write set, insert_entry, and if that fails bury the tuple (update_tuple_meta with is_deleted) and fail; a row that went in gets its entries in the other indexes (insert_index_entries)
     // @end
     // @begin 4b-01
     let rid = table.table.insert_tuple(&TupleMeta { ts: txn.temp_ts(), is_deleted: false }, tuple)?;
     txn.append_write_set(table.oid, rid);
+    insert_index_entries(table, indexes, tuple, rid);
     Ok(())
-    //~ todo!("4b-01: insert the tuple with this transaction's temporary timestamp (not deleted) and add the rid to the write set")
+    //~ todo!("4b-01: insert the tuple with this transaction's temporary timestamp (not deleted), add the rid to the write set, and give the row its index entries")
     // @end
 }

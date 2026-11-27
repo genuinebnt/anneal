@@ -5,21 +5,21 @@ Everything an executor needs to find (a table's heap and schema, an index and it
 >
 > - What does `&mut self` on `create_table` guarantee?
 > - Which rows must the new index contain?
-> - What happens to rows that share a key?
+> - What happens to rows that share a key, in an index and in a primary key?
 
 ## The task
 
 `Catalog<'a>` over a buffer pool; tables and indexes are shared as `Arc<TableInfo>` / `Arc<IndexInfo>` (the record types are given).
 
 - `new(bpm)`; `create_table(name, schema) -> Option<Arc<TableInfo>>`: `None` if the name is in use (names are case sensitive); otherwise a new heap and the next **table oid** (0, 1, 2, ...); `get_table(name)`, `get_table_by_oid(oid)`, `table_info(oid)` (borrowed), `get_table_names()`.
-- `create_index(name, table, key_attrs, is_primary_key) -> Result<Option<Arc<IndexInfo>>>`: `Ok(None)` if the table does not exist or has an index of that name; an **error** unless every key column is an `INTEGER` (and the key is 1 to 64 bytes, 4 per column); build an index of the smallest key size that fits (4, 8, 16, 32 or 64 bytes); the index holds the key of **every live tuple** whose key has no NULL (deleted tuples and NULL keys are not indexed); two live tuples with the same non-NULL key are an **error**, `unique_violation(name)` (given in `index.rs`), and no index is created; the next **index oid**.
+- `create_index(name, table, key_attrs, is_primary_key) -> Result<Option<Arc<IndexInfo>>>`: `Ok(None)` if the table does not exist or has an index of that name; an **error** unless every key column is an `INTEGER` (and the key is 1 to 64 bytes, 4 per column); build an index whose entries fit (an entry is the key and an 8-byte rid: 16, 24, 40 or 72 bytes); the index holds **one entry per live tuple** (deleted tuples have none; keys may repeat and may have a NULL); a **primary-key** index is unique instead, so a live tuple whose key has a NULL is an error (`not_null_violation`) and two live tuples with one key are an error (`unique_violation(name)`, both given in `index.rs`), and no index is created; the next **index oid**.
 - `get_index(name, table)`, `get_index_by_oid(oid)`, `get_table_indexes(table)` (in creation order).
 
-The tests: a created table is found by name and oid; oids in creation order; every table has its own heap; names are unique and case sensitive; many tables; a new index holds the table's existing rows; deleted rows are skipped and two live rows with one key fail the index; the failures that are `Ok(None)` and the ones that are errors; composite indexes; and a property: random table names (with repeats) behave like a `HashMap` (oids, lookups, listing) and an index created over a table with random live and deleted rows holds exactly the live rows in key order, or fails if two live rows share a key. The boss test uses the catalog, a heap and an index together.
+The tests: a created table is found by name and oid; oids in creation order; every table has its own heap; names are unique and case sensitive; many tables; a new index holds the table's existing rows; deleted rows are skipped, rows that share a key each get an entry, and a primary key over a shared or NULL key fails; the failures that are `Ok(None)` and the ones that are errors; composite indexes; and a property: random table names (with repeats) behave like a `HashMap` (oids, lookups, listing) and an index created over a table with random live and deleted rows holds exactly the live rows, by key then rid, and a primary key over the same rows fails exactly when two live rows share a key. The boss test uses the catalog, a heap and an index together.
 
 ## Your freedom
 
-How you store the registry (maps keyed by oid and by name, a `Vec` indexed by oid, a nested map for the indexes of a table), and how `create_index` chooses the key size.
+How you store the registry (maps keyed by oid and by name, a `Vec` indexed by oid, a nested map for the indexes of a table), and how `create_index` chooses the entry size.
 
 ## The Rust toolbox
 
@@ -31,9 +31,9 @@ How you store the registry (maps keyed by oid and by name, a `Vec` indexed by oi
 
 **`Result<Option<T>>`.** `Err` for a real error, `Ok(None)` for "nothing to do or not found", `Ok(Some(x))` for success: a `match` on the three cases is clear.
 
-**`match` on a range.** `match key_size { 1..=4 => .., 5..=8 => .., _ => return Err(..) }` chooses the key size.
+**`match` on a range.** `match key_size { 1..=8 => .., 9..=16 => .., _ => return Err(..) }` chooses the entry size.
 
-**Boxing different types behind one trait.** `let index: Box<dyn Index + 'a> = match .. { 4 => Box::new(BPlusTreeIndex::<4>::new(..)), 8 => Box::new(BPlusTreeIndex::<8>::new(..)), .. };` each arm has a different concrete type; the annotation tells the compiler which common type they convert to.
+**Boxing different types behind one trait.** `let index: Box<dyn Index + 'a> = match .. { 1..=8 => Box::new(BPlusTreeIndex::<16>::new(..)), 9..=16 => Box::new(BPlusTreeIndex::<24>::new(..)), .. };` each arm has a different concrete type; the annotation tells the compiler which common type they convert to.
 
 ## If this is new
 
@@ -46,7 +46,7 @@ How you store the registry (maps keyed by oid and by name, a `Vec` indexed by oi
 ## Tests
 
 - Tables are found by name and oid; oids count from zero in creation order; names are unique and case sensitive.
-- An index is filled with the table's live rows; two live rows with one key fail it; failures as `Ok(None)` and errors; found by name, oid and table.
+- An index is filled with one entry per live row; a primary key over a repeated or NULL key fails; failures as `Ok(None)` and errors; found by name, oid and table.
 - Properties against maps; the boss ties heap, index and catalog together.
 
 ## Hints
