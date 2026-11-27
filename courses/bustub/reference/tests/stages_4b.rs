@@ -850,6 +850,23 @@ fn s4b_07_a_failed_validation_undoes_the_transactions_writes() {
 }
 
 #[test]
+fn s4b_07_garbage_collection_keeps_what_a_running_serializable_transaction_validates_against() {
+    // Write skew through inserts: each reads an empty predicate and inserts what the other read. t2 only inserted, so it owns no undo
+    // log; a collection that forgot it would leave t1 nothing to validate against, and both would commit.
+    let db = new_db();
+    exec(&db, "CREATE TABLE t(v int)");
+    let (t1, t2) = (begin_serializable(&db), begin_serializable(&db));
+    expect(&db, &t1, "SELECT * FROM t WHERE v = 5", &[]);
+    expect(&db, &t2, "SELECT * FROM t WHERE v = 6", &[]);
+    run(&db, &t1, "INSERT INTO t VALUES (6)");
+    run(&db, &t2, "INSERT INTO t VALUES (5)");
+    commit(&db, &t2);
+    db.txn_manager.garbage_collection();
+    assert!(txn_exists(&db, &t2), "t2 committed after t1's read timestamp, and t1 (serializable) is still running: it must stay");
+    assert!(!db.txn_manager.commit(&t1).unwrap(), "t1 read v = 5 and found nothing, t2 then inserted v = 5: t1 must fail validation, collection or not");
+}
+
+#[test]
 fn s4b_07_transactions_that_read_different_things_both_commit() {
     let db = new_db();
     exec(&db, "CREATE TABLE maintable(a int, b int)");

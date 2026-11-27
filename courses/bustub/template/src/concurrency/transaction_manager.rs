@@ -101,7 +101,7 @@ impl TransactionManager {
     /// Stop-the-world garbage collection: call it when no transaction is executing. Forgets every finished transaction whose undo logs no
     /// reader can still need.
     pub fn garbage_collection(&self) {
-        // 4b-05: watermark = get_watermark(); for every tuple of every table (the catalog's table names, make_eager_iterator): a tuple at or below the watermark needs no chain (clear its link); otherwise walk the chain collecting the owner of each log, stopping after the first log whose ts <= watermark. Then txn_map.retain: keep running and tainted transactions and those collected as needed
+        // 4b-05: forget every finished transaction nobody can still need: none of its undo logs is reachable by a reader at or above the watermark, and no running serializable transaction will validate against its writes. Tuples no reader needs an older version of lose their chain.
     }
 
     // ---- version chains (given) ------------------------------------------------------------------------------------------------

@@ -2,15 +2,18 @@ Snapshot isolation allows write skew: two transactions read the same snapshot an
 
 ## The task
 
-**Recording.** In `init` of `SeqScanExecutor` and of `IndexScanExecutor` (regions `4b-08`): if the transaction's isolation level is `Serializable`, record the scan with `txn.append_scan_predicate(table oid, the scan's filter predicate or true_predicate())` (`true_predicate` is given: a scan with no filter read everything).
+**Recording.** In `init` of `SeqScanExecutor` and of `IndexScanExecutor` (regions `4b-07`): if the transaction's isolation level is `Serializable`, record the scan with `txn.append_scan_predicate(table oid, the scan's filter predicate or true_predicate())` (`true_predicate` is given: a scan with no filter read everything).
 
-**Checking.** In `src/concurrency/transaction_manager.rs`, `verify_txn(txn) -> bool`, the region marked `4b-08` (called by `commit` for serializable transactions; a `false` aborts the transaction and makes `commit` return `false`):
+**Checking.** In `src/concurrency/transaction_manager.rs`, `verify_txn(txn) -> bool`, the region marked `4b-07` (called by `commit` for serializable transactions; a `false` aborts the transaction and makes `commit` return `false`): a serializable transaction may commit only if no transaction that committed after its read timestamp changed a tuple that one of its recorded predicates matches, either as the tuple was just before that commit or as the commit left it. A transaction with no writes, or no recorded predicates, read one consistent snapshot and passes.
 
-- a transaction with no writes or no recorded predicates passes (it read one consistent snapshot);
-- otherwise take the transactions that are `Committed` with `commit_ts > txn.read_ts()`; for each tuple in their write sets of a table `txn` scanned, rebuild the tuple **as of `commit_ts - 1`** and **as of `commit_ts`** (use a throwaway `Transaction::new(INVALID_TXN_ID, ..)` with `set_read_ts(ts)`, `collect_undo_logs`, `reconstruct_tuple`); if any of `txn`'s predicates on that table is true for either version, return `false`;
-- if nothing matches, `true`.
+> [!ASIDE] The steps, if you would rather not work them out
+> - A transaction with no writes or no recorded predicates passes.
+> - Otherwise take the transactions that are `Committed` with `commit_ts > txn.read_ts()`; for each tuple in their write sets of a table `txn` scanned, rebuild the tuple **as of `commit_ts - 1`** and **as of `commit_ts`** (a throwaway `Transaction::new(INVALID_TXN_ID, ..)` with `set_read_ts(ts)`, `collect_undo_logs`, `reconstruct_tuple`); if any of `txn`'s predicates on that table is true for either version, return `false`.
+> - If nothing matches, `true`.
 
-The tests: exact scenarios (a serializable transaction whose reads changed fails to commit; a failed validation undoes the transaction's writes; transactions that read different things both commit; snapshot isolation does not validate; a full scan conflicts with any change in the table; of two concurrent swaps exactly one commits; a row deleted after it was read still fails the reader), and a property: **serializable transactions that each read one key and write another, interleaved at random**: whichever commit (the others fail on a conflict or at validation) read what they read and leave the table in the state of **some serial order** of just those transactions. The oracle tries every order.
+**Keeping what validation needs.** In `garbage_collection`, the region marked `4b-07` inside it: a running serializable transaction validates against everything that committed after its read timestamp, so collection keeps those transactions too, including one that owns no undo log (a transaction that only inserted).
+
+The tests: exact scenarios (a serializable transaction whose reads changed fails to commit; a failed validation undoes the transaction's writes; transactions that read different things both commit; snapshot isolation does not validate; a full scan conflicts with any change in the table; of two concurrent swaps exactly one commits; a row deleted after it was read still fails the reader; write skew through inserts is caught even after a garbage collection), and a property: **serializable transactions that each read one key and write another, interleaved at random**: whichever commit (the others fail on a conflict or at validation) read what they read and leave the table in the state of **some serial order** of just those transactions. The oracle tries every order.
 
 ## Your freedom
 
@@ -55,6 +58,7 @@ pred.evaluate(&version, &table.schema)?.as_bool() == Some(true)
 ## Tests
 
 - Reads that changed; undone writes; independent readers; no validation under snapshot isolation; full scans; swaps; a read row deleted since.
+- Garbage collection keeps what a running serializable transaction validates against (write skew through inserts).
 - Property: committed transactions equal some serial order.
 
 ## Hints

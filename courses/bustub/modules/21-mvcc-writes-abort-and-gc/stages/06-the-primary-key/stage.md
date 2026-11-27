@@ -1,6 +1,6 @@
 Tables with a primary key have an index that must stay consistent with versions. Entries are **never removed** by a delete: a deleted tuple is a tombstone, and the next insert of its key finds the entry and reuses the rid. The index also arbitrates races: two transactions that insert the same new key at once, one of them must fail. And an index scan must hand each rid to the same version-reading code as the sequential scan.
 
-Changing a primary key in place would break the rule from stage 6: a rid belongs to one key for life. So an update that changes the key columns is executed as **a delete of the old tuple and an insert of the new one**. The order matters: `UPDATE t SET k = k + 1` over keys 1 to 4 deletes 1, 2, 3, 4 and inserts 2, 3, 4, 5. If each tuple were deleted and inserted in turn, inserting 2 would hit the live tuple with key 2 and fail. Do all the deletes first.
+Changing a primary key in place would break the rule of Part 1: a rid belongs to one key for life. So an update that changes the key columns is executed as **a delete of the old tuple and an insert of the new one**. The order matters: `UPDATE t SET k = k + 1` over keys 1 to 4 deletes 1, 2, 3, 4 and inserts 2, 3, 4, 5. If each tuple were deleted and inserted in turn, inserting 2 would hit the live tuple with key 2 and fail. Do all the deletes first.
 
 ## The task
 
@@ -12,7 +12,7 @@ Changing a primary key in place would break the rule from stage 6: a rid belongs
 
 In `src/execution/executors/index_scan_executor.rs`, the region marked `4b-06` at the top of `next`: when `self.txn` is `Some`, for every rid use `read_visible_version(txn, txn_mgr, table, rid)` (given: tuple + link under one latch, `collect_undo_logs`, `reconstruct_tuple`) instead of reading the heap directly; skip `None`; apply the filter predicate as before.
 
-**Part 2.** In `src/execution/executors/update_executor.rs`, `update_by_delete_and_insert(txn, txn_mgr, changes)` (region `4b-07`; `changes` is the list of `(rid, new tuple)` from stage 3, and `changes_primary_key` already decided this path is needed):
+**Part 2.** In `src/execution/executors/update_executor.rs`, `update_by_delete_and_insert(txn, txn_mgr, changes)` (region `4b-06`; `changes` is the list of `(rid, new tuple)` from stage 3, and `changes_primary_key` already decided this path is needed):
 
 1. for every change, `modify_tuple(txn, txn_mgr, table, rid, None)`: delete the old tuple (its index entry stays);
 2. for every change, `insert_mvcc(txn, txn_mgr, table, &self.indexes, new)`: insert the new tuple. A new key that equals a key just deleted finds the tombstone and reuses its rid; a key nobody had gets a new tuple and entry.
@@ -55,7 +55,7 @@ for (_, new) in changes { insert_mvcc(txn, txn_mgr, self.table_info, &self.index
 
 **Only the primary key.** This course's transactions maintain the primary-key index only. Other indexes are not touched by transactional writes (BusTub's own tests use primary keys); a secondary index in a transactional table can return stale rids.
 
-**Why two loops.** Everything about the order follows from stage 6's rule: an insert onto a key whose tuple is *live* is a duplicate, and onto a key whose tuple is a tombstone is a reuse. The first loop turns all old keys into tombstones (owned by this transaction, with logs), so the second loop's inserts find tombstones for the keys that are being vacated and shifted into.
+**Why two loops.** Everything about the order follows from Part 1's rule: an insert onto a key whose tuple is *live* is a duplicate, and onto a key whose tuple is a tombstone is a reuse. The first loop turns all old keys into tombstones (owned by this transaction, with logs), so the second loop's inserts find tombstones for the keys that are being vacated and shifted into.
 
 **What the logs say.** The rid under key 2 is deleted by the first loop (its log keeps the whole old row) and written again by the second loop, in the same transaction. The log is kept as the delete made it, so a reader from before the update who asks for key 2 is given the old row for key 2, which is right for that reader; a reader from after it gets the new row now stored there (the one that came from old key 1). The rid under key 1 stays a tombstone: new readers find nothing there, old readers find the old row.
 

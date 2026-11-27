@@ -222,8 +222,25 @@ impl TransactionManager {
                 }
             }
         }
-        self.txn_map.write().unwrap().retain(|id, t| matches!(t.state(), TransactionState::Running | TransactionState::Tainted) || needed.contains(id));
-        //~ // 4b-05: watermark = get_watermark(); for every tuple of every table (the catalog's table names, make_eager_iterator): a tuple at or below the watermark needs no chain (clear its link); otherwise walk the chain collecting the owner of each log, stopping after the first log whose ts <= watermark. Then txn_map.retain: keep running and tainted transactions and those collected as needed
+        // A running serializable transaction validates at commit against the write sets of everything that committed after its read
+        // timestamp, so those transactions stay too, logs or not (a transaction that only inserted owns no undo log at all).
+        let mut map = self.txn_map.write().unwrap();
+        let validating_from: Option<Timestamp> = {
+            // @begin 4b-07
+            map.values()
+                .filter(|t| matches!(t.state(), TransactionState::Running | TransactionState::Tainted))
+                .filter(|t| t.isolation_level() == IsolationLevel::Serializable)
+                .map(|t| t.read_ts())
+                .min()
+            //~ None // 4b-07: the oldest read timestamp of a running serializable transaction, which validates against later commits
+            // @end
+        };
+        map.retain(|id, t| {
+            matches!(t.state(), TransactionState::Running | TransactionState::Tainted)
+                || needed.contains(id)
+                || (t.state() == TransactionState::Committed && validating_from.is_some_and(|ts| t.commit_ts() > ts))
+        });
+        //~ // 4b-05: forget every finished transaction nobody can still need: none of its undo logs is reachable by a reader at or above the watermark, and no running serializable transaction will validate against its writes. Tuples no reader needs an older version of lose their chain.
         // @end
     }
 
