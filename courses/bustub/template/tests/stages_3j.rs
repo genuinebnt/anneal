@@ -449,7 +449,8 @@ fn s3j_03_a_full_join_loses_the_side_the_filter_rejects() {
 fn s3j_03_only_the_conditions_that_fail_on_nulls_count() {
     let (a, b) = sample();
     let db = db_ab(&a, &b);
-    // IS NULL, NOT, and an OR with one free side can all be TRUE for a padded row
+    // IS NULL, an OR with one free side, and a NOT such as `not (b.z is not null)` can be TRUE for a padded row; `not (b.z > 250)`
+    // is NULL there, but a NOT is never counted as rejecting, so these keep the join outer and the answer is the same either way
     for cond in ["not (b.z > 250)", "b.z is null and a.y > 5", "b.z > 250 or b.z is null"] {
         let sql = format!("select a.x, b.z from a left join b on a.x = b.x where {cond}");
         assert_eq!(bag(&db, &sql), plain(&db, &sql), "{cond}");
