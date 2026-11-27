@@ -210,6 +210,7 @@ fn nothing_is_built_when_there_is_no_error() {
 ### In the exercises
 
 - **3k-01 to 3k-03:** the whole module builds a `DbError`: keep the cause, convert every layer's error, add context and walk the chain (01), derive a code and a client-safe message (02), and check it across threads and random stacks of context (03).
+- **4e-01:** the SQL session returns `DbResult`, converting the engine's errors with `?`. **4e-04:** its own outcomes (a conflict, a refused commit, a statement in a failed transaction) become one more cause with its own codes, and the shell prints `client_message()` to the client and `report()` to the log. **4e-c1:** a retry loop that decides by `code()`, never by the words of the message.
 
 ### Where it is used
 

@@ -4,7 +4,7 @@ Nothing new to write. The last stage of the module runs your sessions against ea
 
 Make the tests of this stage pass. They run threads or interleave sessions deterministically:
 
-- **A bank:** four threads move money between four accounts with retry on conflict; the total never changes, conflicts really happen (a test that never conflicted proves nothing), and nothing is left running.
+- **A bank:** four threads move money between four accounts with retry on conflict; the total never changes, conflicts really happen (a test that never conflicted proves nothing), every refusal is a serialization failure (`40001`, the one code a client retries), and nothing is left running.
 - **A consistent reader:** while transfers run, a snapshot transaction sees a total of exactly 400, twice in a row.
 - **No lost update:** two transactions read a counter and write it back; one is rolled back.
 - **Write skew:** two doctors each check that the other is on call and go off call. At snapshot isolation both commit and nobody is on call; at serializable exactly one commit is refused.
@@ -17,7 +17,7 @@ Everything. A failure here is a bug in one of the four stages before, or in 4a a
 
 ## The Rust toolbox
 
-**Retry loops.** `while transfer(...).is_err() { ... }` is the client's half of the contract: a conflict is an expected outcome, not a crash. Bound the loop in real code.
+**Retry loops.** `while let Err(e) = transfer(...) { ... }` is the client's half of the contract: a conflict is an expected outcome, not a crash, and `e.code() == "40001"` is how the client knows it is one. Bound the loop in real code.
 
 **Reading a hang.** A test that does not finish names a transaction that is never ended: a session that did not abort on a failure path, or a `commit` that returned early. The watermark and `in_transaction()` tell you which.
 
@@ -28,7 +28,7 @@ Everything. A failure here is a bug in one of the four stages before, or in 4a a
 
 ## Tests
 
-- The bank: nothing lost, conflicts happen, nothing left running.
+- The bank: nothing lost, conflicts happen and are all `40001`, nothing left running.
 - A reader sees consistent totals during transfers.
 - Lost updates are prevented; write skew passes snapshot and fails serializable.
 - Cleanup after failures; a random script against a model.

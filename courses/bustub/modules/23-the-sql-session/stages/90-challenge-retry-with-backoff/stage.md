@@ -6,11 +6,11 @@ A challenge: no walkthrough, no hints, no solution. Solve it with what this modu
 
 ## Why
 
-Every system with optimistic concurrency control (snapshot isolation, serializable validation, compare-and-swap) pushes retrying onto the caller. Done badly it either gives up on the first conflict, retries errors that can never succeed (a syntax error, ten times), or retries in lockstep so that the same two transactions collide for ever. The three decisions are small and each is a classic bug.
+Every system with optimistic concurrency control (snapshot isolation, serializable validation, compare-and-swap) pushes retrying onto the caller. Done badly it either gives up on the first conflict, retries errors that can never succeed (a syntax error, ten times), or retries in lockstep so that the same two transactions collide for ever. The three decisions are small and each is a classic bug. The first is made on the SQLSTATE code: a message is written for people and reworded at will, and a retry loop that matches words retries an internal error that happens to say "could not commit".
 
 ## The contract
 
-- `is_retryable(e)`: true for `Execution` errors whose message contains `conflict` or `could not commit`; false for everything else.
+- `is_retryable(e)`: true exactly when `e.code()` is `40001`, a serialization failure (a write conflict or a refused commit, from your session of 4e-04, with any context on top); false for everything else, whatever its message says.
 - `run_with_retry(max_attempts, f)` calls `f(attempt)` with attempts numbered from 1. Success returns `Ok((value, attempts_used))`. A retryable error is retried while attempts remain; any other error, or the last failure, is returned at once. `max_attempts` of 0 behaves as 1.
 - `backoff_ms(attempt, seed)`: the wait before attempt `attempt + 1`: an exponential base `min(2^(attempt - 1), 64)` milliseconds with jitter, a value in `[base / 2, base]` that depends only on `(attempt, seed)`.
 
@@ -36,12 +36,13 @@ Worked cases (the tests include them):
 ```text
 f fails with a conflict twice, then succeeds: Ok((v, 3))
 f fails with a syntax error: Err after one call
+an internal error worded "could not commit: it conflicts" (XX000): not retryable
 ```
 
 ## What the tests check
 
-- Success, retried success, giving up.
-- Non-retryable errors stop at once.
+- Real conflicts and refused commits are retryable, under context too; nothing else is, whatever its words.
+- Success, retried success, giving up; non-retryable errors stop at once.
 - Backoff bounds and determinism.
 
 ## Done when

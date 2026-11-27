@@ -13,7 +13,7 @@ Extend `Session` (in `src/common/session.rs`):
 
 - `begin` (or `begin transaction`, `start transaction`) opens a transaction with the session's default level and answers `BEGIN`. Statements after it run in that transaction and are **not** committed one by one.
 - `commit` ends it, makes its changes visible and answers `COMMIT`. `rollback` (or `abort`) throws them away and answers `ROLLBACK`. After either, the session is idle again (autocommit).
-- `begin` inside a transaction changes nothing and answers `WARNING: there is already a transaction in progress`. `commit` or `rollback` with none open answers `WARNING: there is no transaction in progress`. Neither is an error.
+- `begin` inside a transaction changes nothing and answers `WARNING 25001: there is already a transaction in progress`. `commit` or `rollback` with none open answers `WARNING 25P01: there is no transaction in progress`. Neither is an error; the codes are PostgreSQL's SQLSTATEs for the two warnings, in the format of your `client_message` from 3k.
 - `in_transaction()` says whether one is open.
 - Dropping a session with a transaction open aborts it.
 
@@ -83,7 +83,7 @@ BusTub's shell keeps a `txn` variable and passes it to `ExecuteSqlTxn`; `begin`,
 |---|---|
 | a destructor `~Session() { if (txn_) txn_mgr_->Abort(txn_); }` | `impl Drop for Session` |
 | `txn_ = nullptr;` after committing | `self.txn.take()` |
-| `std::cout << "WARNING: ..."` | a returned line: the session has no stdout |
+| `std::cout << "WARNING: ..."` | a returned line with its code: the session has no stdout |
 
 **Port rule:** a resource that a client can abandon needs an owner whose destructor cleans it up.
 

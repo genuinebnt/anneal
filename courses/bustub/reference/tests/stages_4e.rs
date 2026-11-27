@@ -8,7 +8,7 @@ use std::time::Duration;
 use proptest::prelude::*;
 
 use bustub::common::bustub_instance::BusTubInstance;
-use bustub::common::exception::{Exception, ExceptionType};
+use bustub::common::db_error::DbError;
 use bustub::common::session::Session;
 use bustub::concurrency::transaction::IsolationLevel;
 
@@ -16,7 +16,7 @@ fn exec(s: &mut Session<'_>, sql: &str) -> Vec<String> {
     s.execute(sql).unwrap_or_else(|e| panic!("{sql}: {e:?}"))
 }
 
-fn fail(s: &mut Session<'_>, sql: &str) -> Exception {
+fn fail(s: &mut Session<'_>, sql: &str) -> DbError {
     match s.execute(sql) {
         Ok(r) => panic!("{sql}: expected an error, got {r:?}"),
         Err(e) => e,
@@ -66,7 +66,7 @@ fn s4e_01_a_statement_that_fails_halfway_changes_nothing() {
     let db = db();
     let mut a = Session::new(&db);
     // id = 1 is updated first; id = 2 divides by zero
-    assert_eq!(fail(&mut a, "update t set v = v / (id - 2)").kind, ExceptionType::DivideByZero, "the error comes out as it is");
+    assert_eq!(fail(&mut a, "update t set v = v / (id - 2)").code(), "22012", "the error comes out as it is: a division by zero");
     assert_eq!(
         exec(&mut a, "select id, v from t order by id"),
         ["1 10", "2 20", "3 30"],
@@ -155,11 +155,11 @@ fn s4e_02_a_transaction_spans_several_calls_and_many_statements() {
 fn s4e_02_begin_inside_a_transaction_and_commit_outside_one_only_warn() {
     let db = db();
     let mut a = Session::new(&db);
-    assert_eq!(exec(&mut a, "commit"), ["WARNING: there is no transaction in progress"], "COMMIT without BEGIN");
-    assert_eq!(exec(&mut a, "rollback"), ["WARNING: there is no transaction in progress"], "ROLLBACK without BEGIN");
+    assert_eq!(exec(&mut a, "commit"), ["WARNING 25P01: there is no transaction in progress"], "COMMIT without BEGIN");
+    assert_eq!(exec(&mut a, "rollback"), ["WARNING 25P01: there is no transaction in progress"], "ROLLBACK without BEGIN");
     exec(&mut a, "begin");
     exec(&mut a, "update t set v = 1 where id = 1");
-    assert_eq!(exec(&mut a, "begin"), ["WARNING: there is already a transaction in progress"], "BEGIN inside a transaction");
+    assert_eq!(exec(&mut a, "begin"), ["WARNING 25001: there is already a transaction in progress"], "BEGIN inside a transaction");
     assert_eq!(exec(&mut a, "select v from t where id = 1"), ["1"], "the transaction and its change are still there");
     exec(&mut a, "rollback");
 }
@@ -240,9 +240,9 @@ fn s4e_03_levels_the_engine_does_not_have_are_refused_and_open_nothing() {
     let db = db();
     let mut a = Session::new(&db);
     assert_eq!(
-        fail(&mut a, "begin isolation level read committed").kind,
-        ExceptionType::NotImplemented,
-        "read committed is not a level of this engine"
+        fail(&mut a, "begin isolation level read committed").code(),
+        "0A000",
+        "read committed is not a level of this engine: a feature that is not supported"
     );
     assert!(!a.in_transaction(), "a refused BEGIN opens no transaction");
     assert!(a.execute("begin isolation level banana").is_err(), "an unknown level");
@@ -295,7 +295,8 @@ fn s4e_04_an_error_fails_the_transaction_until_it_ends() {
     assert!(a.is_failed() && a.in_transaction(), "the transaction is failed but still open");
     for sql in ["select 1", "update t set v = 5", "insert into t values (7, 7)"] {
         let e = fail(&mut a, sql);
-        assert!(e.message.contains("current transaction is aborted"), "{sql}: refused with the reason, got {e:?}");
+        assert_eq!(e.code(), "25P02", "{sql}: refused as a statement in a failed transaction, got {e:?}");
+        assert!(e.to_string().contains("current transaction is aborted"), "{sql}: and the message says why, got {e:?}");
     }
 }
 
@@ -349,7 +350,7 @@ fn s4e_04_a_write_conflict_fails_the_second_writer_and_not_the_first() {
     exec(&mut b, "begin");
     exec(&mut a, "update t set v = 100 where id = 2");
     let e = fail(&mut b, "update t set v = 200 where id = 2");
-    assert_eq!(e.kind, ExceptionType::Execution, "a conflict is an execution failure: {e:?}");
+    assert_eq!(e.code(), "40001", "a conflict is a serialization failure, the code a client retries on: {e:?}");
     assert!(b.is_failed(), "the transaction that lost is failed");
     assert!(!a.is_failed(), "the one that won is not");
     assert_eq!(exec(&mut a, "commit"), ["COMMIT"], "the winner commits");
@@ -364,7 +365,7 @@ fn s4e_04_an_autocommit_statement_that_conflicts_fails_alone() {
     exec(&mut a, "begin");
     exec(&mut a, "update t set v = 100 where id = 2");
     let e = fail(&mut b, "update t set v = 200 where id = 2");
-    assert_eq!(e.kind, ExceptionType::Execution, "the writer that arrives second is refused: {e:?}");
+    assert_eq!(e.code(), "40001", "the writer that arrives second is refused with a serialization failure: {e:?}");
     assert!(!b.in_transaction() && !b.is_failed(), "autocommit has nothing to fail: the session is as before");
     assert_eq!(exec(&mut b, "select v from t where id = 1"), ["10"], "and works at once");
     exec(&mut a, "commit");
@@ -380,6 +381,71 @@ fn s4e_04_a_failed_transaction_does_not_hold_the_garbage_collector_back() {
     assert!(a.execute("select 1 / 0").is_err(), "an error");
     assert!(a.is_failed(), "failed, and the client has not said ROLLBACK yet");
     assert!(quiet(&db), "but its work was already undone, and the watermark is free to move");
+}
+
+#[test]
+fn s4e_04_a_refused_commit_is_a_serialization_failure_the_client_sees_by_code() {
+    let db = db();
+    let (mut a, mut b) = (Session::new(&db), Session::new(&db));
+    exec(&mut a, "begin isolation level serializable");
+    exec(&mut a, "select sum(v) from t");
+    exec(&mut b, "update t set v = 0 where id = 1");
+    exec(&mut a, "insert into t values (10, 600)");
+    let e = fail(&mut a, "commit");
+    assert_eq!(e.code(), "40001", "a commit that no longer validates is a serialization failure: {e:?}");
+    assert!(e.client_message().starts_with("ERROR 40001: "), "and the client is shown its code: {}", e.client_message());
+    assert!(!a.in_transaction() && !a.is_failed(), "the refused commit ended the transaction: {e:?}");
+    assert!(quiet(&db), "nothing is left running");
+}
+
+/// Runs the shell with `script` as its standard input and returns what it wrote to standard output and to standard error.
+fn shell(script: &str) -> (Vec<String>, String) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(env!("CARGO_BIN_EXE_bustub_shell"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the shell starts");
+    child.stdin.take().expect("a piped stdin").write_all(script.as_bytes()).expect("the shell reads its input");
+    let out = child.wait_with_output().expect("the shell exits at the end of its input");
+    let stdout = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.trim_end().to_string()).collect();
+    (stdout, String::from_utf8_lossy(&out.stderr).into_owned())
+}
+
+#[test]
+fn s4e_04_the_shell_runs_a_transaction_across_inputs() {
+    let (out, _) = shell(
+        "create table acct(id int, bal int);\n\
+         begin;\n\
+         insert into acct values (1, 100);\n\
+         update acct\n   set bal = 90\n where id = 1;\n\
+         commit;\n\
+         select bal from acct;\n",
+    );
+    assert!(!out.iter().any(|l| l.contains("managed txn mode")), "BEGIN and COMMIT are the session's, not refused: {out:?}");
+    let begin = out.iter().position(|l| l == "BEGIN").unwrap_or_else(|| panic!("BEGIN is answered with its tag: {out:?}"));
+    assert_eq!(out[begin + 1..], ["1", "1", "COMMIT", "90"], "the insert and the update count a row each, COMMIT, then the value: {out:?}");
+}
+
+#[test]
+fn s4e_04_the_shell_shows_an_error_by_its_code_and_logs_the_rest() {
+    let (out, log) = shell("begin;\nselect 1 / 0;\nselect 1;\nrollback;\ncommit;\nselect 2;\n");
+    let error = out.iter().position(|l| l.starts_with("ERROR ")).unwrap_or_else(|| panic!("the division fails: {out:?}"));
+    assert!(out[error].starts_with("ERROR 22012: "), "the client sees the code and the message: {out:?}");
+    assert_eq!(
+        out[error + 1..],
+        [
+            "ERROR 25P02: current transaction is aborted, commands ignored until end of transaction block",
+            "ROLLBACK",
+            "WARNING 25P01: there is no transaction in progress",
+            "2"
+        ],
+        "the failed transaction refuses work until ROLLBACK, and the session is idle after it: {out:?}"
+    );
+    assert!(log.contains("select 1 / 0"), "the log names the statement that failed: {log}");
+    assert!(log.contains("22012") && log.contains("25P02"), "and the code of each error: {log}");
 }
 
 // ---- 4e-05 · boss: sessions in conflict -------------------------------------------------------------------------------------
@@ -409,7 +475,7 @@ fn account_db(accounts: i32, balance: i32) -> Arc<BusTubInstance> {
 }
 
 /// Moves `amount` from `from` to `to` inside one transaction; Err if any statement or the commit was refused (the session is idle again).
-fn transfer(s: &mut Session<'_>, from: i32, to: i32, amount: i32) -> Result<(), Exception> {
+fn transfer(s: &mut Session<'_>, from: i32, to: i32, amount: i32) -> Result<(), DbError> {
     s.execute("begin")?;
     let result = (|| {
         s.execute(&format!("update acct set bal = bal - {amount} where id = {from}"))?;
@@ -441,7 +507,12 @@ fn s4e_05_a_bank_of_sessions_loses_no_money_and_conflicts_really_happen() {
                             continue;
                         }
                         // retry until it commits: a conflict means someone else got there first
-                        while transfer(&mut s, from, to, 1 + ((x >> 8) % 5) as i32).is_err() {
+                        while let Err(e) = transfer(&mut s, from, to, 1 + ((x >> 8) % 5) as i32) {
+                            assert_eq!(
+                                e.code(),
+                                "40001",
+                                "a transfer is only ever refused for a conflict, the error a client retries: {e:?}"
+                            );
                             conflicts.fetch_add(1, Ordering::SeqCst);
                             thread::yield_now();
                         }
@@ -593,36 +664,59 @@ proptest! {
 mod ch_4e_c1 {
 
     use super::*;
+    use bustub::common::exception::{Exception, ExceptionType};
     use bustub::common::retry::{backoff_ms, is_retryable, run_with_retry};
 
-    fn conflict() -> Exception {
-        Exception::new(ExceptionType::Execution, "could not execute the statement: it conflicts with a concurrent transaction")
+    /// A real write conflict: the second of two transactions to update one row.
+    fn conflict() -> DbError {
+        let db = db();
+        let (mut a, mut b) = (Session::new(&db), Session::new(&db));
+        exec(&mut a, "begin");
+        exec(&mut a, "update t set v = 1 where id = 1");
+        fail(&mut b, "update t set v = 2 where id = 1")
+    }
+
+    /// A real refused commit: a serializable transaction whose read a later commit changed.
+    fn refused_commit() -> DbError {
+        let db = db();
+        let (mut a, mut b) = (Session::new(&db), Session::new(&db));
+        exec(&mut a, "begin isolation level serializable");
+        exec(&mut a, "select sum(v) from t");
+        exec(&mut b, "update t set v = 0 where id = 1");
+        exec(&mut a, "insert into t values (10, 600)");
+        fail(&mut a, "commit")
+    }
+
+    fn syntax_error() -> DbError {
+        fail(&mut Session::new(&db()), "selec 1")
     }
 
     #[test]
-    fn s4e_c1_only_conflicts_are_retryable() {
+    fn s4e_c1_only_serialization_failures_are_retryable() {
         assert!(is_retryable(&conflict()), "a write conflict");
-        assert!(
-            is_retryable(&Exception::new(ExceptionType::Execution, "could not commit: the transaction conflicts with a concurrent one")),
-            "a refused commit"
-        );
-        assert!(
-            !is_retryable(&Exception::new(ExceptionType::Invalid, "syntax error at or near selec")),
-            "a syntax error never gets better"
-        );
-        assert!(!is_retryable(&Exception::new(ExceptionType::DivideByZero, "Division by zero")), "nor does a division by zero");
-        assert!(
-            !is_retryable(&Exception::new(
-                ExceptionType::Execution,
-                "current transaction is aborted, commands ignored until end of transaction block"
-            )),
-            "an Execution error that is not about a conflict"
-        );
+        assert!(is_retryable(&refused_commit()), "a refused commit");
+        assert!(is_retryable(&conflict().context("transferring 5 from 1 to 2")), "a conflict under context: the code is the root's");
+        assert!(!is_retryable(&syntax_error()), "a syntax error never gets better");
+        let db = db();
+        let mut a = Session::new(&db);
+        assert!(!is_retryable(&fail(&mut a, "select 1 / 0")), "nor does a division by zero");
+        exec(&mut a, "begin");
+        let _ = a.execute("select 1 / 0");
+        assert!(!is_retryable(&fail(&mut a, "select 1")), "a statement refused in a failed transaction: only ROLLBACK helps");
+    }
+
+    #[test]
+    fn s4e_c1_the_decision_is_the_code_not_the_words() {
+        let worded = DbError::from(Exception::new(ExceptionType::Execution, "could not commit: it conflicts with a concurrent one"));
+        assert_ne!(worded.code(), "40001", "an internal error that only sounds like a conflict");
+        assert!(!is_retryable(&worded), "is not retried: the message is for people, the code is for programs");
+        let duplicate = DbError::from(bustub::storage::index::index::unique_violation("t_pk"));
+        assert!(!is_retryable(&duplicate), "a duplicate key (23505) is a conflict of data, not of transactions: retrying repeats it");
     }
 
     #[test]
     fn s4e_c1_success_reports_the_attempts_used() {
-        assert_eq!(run_with_retry(5, |_| Ok::<_, Exception>("v")).unwrap(), ("v", 1), "first try");
+        assert_eq!(run_with_retry(5, |_| Ok::<_, DbError>("v")).unwrap(), ("v", 1), "first try");
         let mut calls = vec![];
         let r = run_with_retry(5, |a| {
             calls.push(a);
@@ -639,23 +733,23 @@ mod ch_4e_c1 {
     #[test]
     fn s4e_c1_it_gives_up_after_the_limit_with_the_last_error() {
         let mut n = 0;
-        let r: Result<((), usize), Exception> = run_with_retry(3, |_| {
+        let r: Result<((), usize), DbError> = run_with_retry(3, |_| {
             n += 1;
             Err(conflict())
         });
-        assert!(r.is_err(), "still conflicting");
+        assert_eq!(r.map_err(|e| e.code()).unwrap_err(), "40001", "still conflicting: the last conflict comes back");
         assert_eq!(n, 3, "exactly three attempts");
-        assert_eq!(run_with_retry(0, |_| Ok::<_, Exception>(1)).unwrap(), (1, 1), "a limit of zero still tries once");
+        assert_eq!(run_with_retry(0, |_| Ok::<_, DbError>(1)).unwrap(), (1, 1), "a limit of zero still tries once");
     }
 
     #[test]
     fn s4e_c1_a_non_retryable_error_stops_at_once() {
         let mut n = 0;
-        let r: Result<((), usize), Exception> = run_with_retry(10, |_| {
+        let r: Result<((), usize), DbError> = run_with_retry(10, |_| {
             n += 1;
-            Err(Exception::new(ExceptionType::Invalid, "syntax error"))
+            Err(syntax_error())
         });
-        assert_eq!(r.unwrap_err().kind, ExceptionType::Invalid, "the error is passed on as it is");
+        assert_eq!(r.unwrap_err().code(), syntax_error().code(), "the error is passed on as it is");
         assert_eq!(n, 1, "no retry");
     }
 
@@ -1018,8 +1112,8 @@ mod ch_4e_c6 {
             ("create index i on t(id)", "CREATE INDEX"),
         ] {
             let e = r.execute(sql).unwrap_err();
-            assert_eq!(e.kind, ExceptionType::Invalid, "{sql}");
-            assert!(e.message.contains(kind), "{sql}: the message names the statement: {e:?}");
+            assert_eq!(e.code(), "25006", "{sql}: refused as a write in a read-only transaction");
+            assert!(e.to_string().contains(kind), "{sql}: the message names the statement: {e:?}");
         }
     }
 

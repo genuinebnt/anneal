@@ -6,22 +6,22 @@ CH.append(C("4e-c1", M4E, "90-challenge-retry-with-backoff", "build", "Challenge
   ["telling a conflict you should retry from an error you should not","a backoff schedule that spreads competing clients apart"],
   ["snapshot-isolation","sessions-and-the-transaction-state-machine","property-testing-and-fuzzing"],
   "`is_retryable`, `backoff_ms` and `run_with_retry` in `src/common/retry.rs`: the client's half of optimistic concurrency. A transaction that lost a conflict is not a bug, it is the contract: run it again. `run_with_retry` calls a closure up to a limit, retrying only errors that are conflicts, and `backoff_ms` says how long to wait before attempt `n` so that two clients that collided do not collide again in lockstep.",
-  "Every system with optimistic concurrency control (snapshot isolation, serializable validation, compare-and-swap) pushes retrying onto the caller. Done badly it either gives up on the first conflict, retries errors that can never succeed (a syntax error, ten times), or retries in lockstep so that the same two transactions collide for ever. The three decisions are small and each is a classic bug.",
-  ["`is_retryable(e)`: true for `Execution` errors whose message contains `conflict` or `could not commit`; false for everything else.","`run_with_retry(max_attempts, f)` calls `f(attempt)` with attempts numbered from 1. Success returns `Ok((value, attempts_used))`. A retryable error is retried while attempts remain; any other error, or the last failure, is returned at once. `max_attempts` of 0 behaves as 1.","`backoff_ms(attempt, seed)`: the wait before attempt `attempt + 1`: an exponential base `min(2^(attempt - 1), 64)` milliseconds with jitter, a value in `[base / 2, base]` that depends only on `(attempt, seed)`."],
+  "Every system with optimistic concurrency control (snapshot isolation, serializable validation, compare-and-swap) pushes retrying onto the caller. Done badly it either gives up on the first conflict, retries errors that can never succeed (a syntax error, ten times), or retries in lockstep so that the same two transactions collide for ever. The three decisions are small and each is a classic bug. The first is made on the SQLSTATE code: a message is written for people and reworded at will, and a retry loop that matches words retries an internal error that happens to say "could not commit".",
+  ["`is_retryable(e)`: true exactly when `e.code()` is `40001`, a serialization failure (a write conflict or a refused commit, from your session of 4e-04, with any context on top); false for everything else, whatever its message says.","`run_with_retry(max_attempts, f)` calls `f(attempt)` with attempts numbered from 1. Success returns `Ok((value, attempts_used))`. A retryable error is retried while attempts remain; any other error, or the last failure, is returned at once. `max_attempts` of 0 behaves as 1.","`backoff_ms(attempt, seed)`: the wait before attempt `attempt + 1`: an exponential base `min(2^(attempt - 1), 64)` milliseconds with jitter, a value in `[base / 2, base]` that depends only on `(attempt, seed)`."],
   ["The closure is called at most `max_attempts` times and never after a non-retryable error.","`backoff_ms` is deterministic and never above 64."],
   ["Attempts used is 1 when the first call succeeds.","The upper envelope of the backoff doubles until the cap.","Different seeds give different jitter for some attempt."],
-  ["f fails with a conflict twice, then succeeds: Ok((v, 3))","f fails with a syntax error: Err after one call"],
-  ["Success, retried success, giving up.","Non-retryable errors stop at once.","Backoff bounds and determinism."],
+  ["f fails with a conflict twice, then succeeds: Ok((v, 3))","f fails with a syntax error: Err after one call","an internal error worded \"could not commit: it conflicts\" (XX000): not retryable"],
+  ["Real conflicts and refused commits are retryable, under context too; nothing else is, whatever its words.","Success, retried success, giving up; non-retryable errors stop at once.","Backoff bounds and determinism."],
   src=("src/common/retry.rs", '''
 //! Retrying a transaction that lost a conflict.
 
-use crate::common::exception::{Exception, ExceptionType};
+use crate::common::db_error::{DbError, DbResult};
 
-/// Is this error a conflict the client should answer by running the transaction again?
-pub fn is_retryable(e: &Exception) -> bool {
+/// Is this error a serialization failure (code `40001`), which the client answers by running the transaction again?
+pub fn is_retryable(e: &DbError) -> bool {
     // @begin 4e-c1
-    e.kind == ExceptionType::Execution && (e.message.contains("conflict") || e.message.contains("could not commit"))
-    //~ todo!("4e-c1: Execution errors about conflicts and refused commits only")
+    e.code() == "40001"
+    //~ todo!("4e-c1: serialization failures only, whatever their message says")
     // @end
 }
 
@@ -41,7 +41,7 @@ pub fn backoff_ms(attempt: usize, seed: u64) -> u64 {
 }
 
 /// Runs `f(1)`, `f(2)`, ... until it succeeds, fails with something that is not retryable, or `max_attempts` calls were made.
-pub fn run_with_retry<T>(max_attempts: usize, mut f: impl FnMut(usize) -> Result<T, Exception>) -> Result<(T, usize), Exception> {
+pub fn run_with_retry<T>(max_attempts: usize, mut f: impl FnMut(usize) -> DbResult<T>) -> DbResult<(T, usize)> {
     // @begin 4e-c1
     let max = max_attempts.max(1);
     let mut attempt = 1;
@@ -59,28 +59,67 @@ pub fn run_with_retry<T>(max_attempts: usize, mut f: impl FnMut(usize) -> Result
 '''),
   test=("tests/stages_4e.rs", '''
 use super::*;
+use bustub::common::exception::{Exception, ExceptionType};
 use bustub::common::retry::{backoff_ms, is_retryable, run_with_retry};
 
-fn conflict() -> Exception {
-    Exception::new(ExceptionType::Execution, "could not execute the statement: it conflicts with a concurrent transaction")
+/// A real write conflict: the second of two transactions to update one row.
+fn conflict() -> DbError {
+    let db = db();
+    let (mut a, mut b) = (Session::new(&db), Session::new(&db));
+    exec(&mut a, "begin");
+    exec(&mut a, "update t set v = 1 where id = 1");
+    fail(&mut b, "update t set v = 2 where id = 1")
+}
+
+/// A real refused commit: a serializable transaction whose read a later commit changed.
+fn refused_commit() -> DbError {
+    let db = db();
+    let (mut a, mut b) = (Session::new(&db), Session::new(&db));
+    exec(&mut a, "begin isolation level serializable");
+    exec(&mut a, "select sum(v) from t");
+    exec(&mut b, "update t set v = 0 where id = 1");
+    exec(&mut a, "insert into t values (10, 600)");
+    fail(&mut a, "commit")
+}
+
+fn syntax_error() -> DbError {
+    fail(&mut Session::new(&db()), "selec 1")
 }
 
 #[test]
-fn s4e_c1_only_conflicts_are_retryable() {
+fn s4e_c1_only_serialization_failures_are_retryable() {
     assert!(is_retryable(&conflict()), "a write conflict");
-    assert!(is_retryable(&Exception::new(ExceptionType::Execution, "could not commit: the transaction conflicts with a concurrent one")), "a refused commit");
-    assert!(!is_retryable(&Exception::new(ExceptionType::Invalid, "syntax error at or near selec")), "a syntax error never gets better");
-    assert!(!is_retryable(&Exception::new(ExceptionType::DivideByZero, "Division by zero")), "nor does a division by zero");
-    assert!(!is_retryable(&Exception::new(ExceptionType::Execution, "current transaction is aborted, commands ignored until end of transaction block")), "an Execution error that is not about a conflict");
+    assert!(is_retryable(&refused_commit()), "a refused commit");
+    assert!(is_retryable(&conflict().context("transferring 5 from 1 to 2")), "a conflict under context: the code is the root's");
+    assert!(!is_retryable(&syntax_error()), "a syntax error never gets better");
+    let db = db();
+    let mut a = Session::new(&db);
+    assert!(!is_retryable(&fail(&mut a, "select 1 / 0")), "nor does a division by zero");
+    exec(&mut a, "begin");
+    let _ = a.execute("select 1 / 0");
+    assert!(!is_retryable(&fail(&mut a, "select 1")), "a statement refused in a failed transaction: only ROLLBACK helps");
+}
+
+#[test]
+fn s4e_c1_the_decision_is_the_code_not_the_words() {
+    let worded = DbError::from(Exception::new(ExceptionType::Execution, "could not commit: it conflicts with a concurrent one"));
+    assert_ne!(worded.code(), "40001", "an internal error that only sounds like a conflict");
+    assert!(!is_retryable(&worded), "is not retried: the message is for people, the code is for programs");
+    let duplicate = DbError::from(bustub::storage::index::index::unique_violation("t_pk"));
+    assert!(!is_retryable(&duplicate), "a duplicate key (23505) is a conflict of data, not of transactions: retrying repeats it");
 }
 
 #[test]
 fn s4e_c1_success_reports_the_attempts_used() {
-    assert_eq!(run_with_retry(5, |_| Ok::<_, Exception>("v")).unwrap(), ("v", 1), "first try");
+    assert_eq!(run_with_retry(5, |_| Ok::<_, DbError>("v")).unwrap(), ("v", 1), "first try");
     let mut calls = vec![];
     let r = run_with_retry(5, |a| {
         calls.push(a);
-        if a < 3 { Err(conflict()) } else { Ok(a * 10) }
+        if a < 3 {
+            Err(conflict())
+        } else {
+            Ok(a * 10)
+        }
     });
     assert_eq!(r.unwrap(), (30, 3), "two conflicts, then success");
     assert_eq!(calls, [1, 2, 3], "attempts are numbered from 1");
@@ -89,23 +128,23 @@ fn s4e_c1_success_reports_the_attempts_used() {
 #[test]
 fn s4e_c1_it_gives_up_after_the_limit_with_the_last_error() {
     let mut n = 0;
-    let r: Result<((), usize), Exception> = run_with_retry(3, |_| {
+    let r: Result<((), usize), DbError> = run_with_retry(3, |_| {
         n += 1;
         Err(conflict())
     });
-    assert!(r.is_err(), "still conflicting");
+    assert_eq!(r.map_err(|e| e.code()).unwrap_err(), "40001", "still conflicting: the last conflict comes back");
     assert_eq!(n, 3, "exactly three attempts");
-    assert_eq!(run_with_retry(0, |_| Ok::<_, Exception>(1)).unwrap(), (1, 1), "a limit of zero still tries once");
+    assert_eq!(run_with_retry(0, |_| Ok::<_, DbError>(1)).unwrap(), (1, 1), "a limit of zero still tries once");
 }
 
 #[test]
 fn s4e_c1_a_non_retryable_error_stops_at_once() {
     let mut n = 0;
-    let r: Result<((), usize), Exception> = run_with_retry(10, |_| {
+    let r: Result<((), usize), DbError> = run_with_retry(10, |_| {
         n += 1;
-        Err(Exception::new(ExceptionType::Invalid, "syntax error"))
+        Err(syntax_error())
     });
-    assert_eq!(r.unwrap_err().kind, ExceptionType::Invalid, "the error is passed on as it is");
+    assert_eq!(r.unwrap_err().code(), syntax_error().code(), "the error is passed on as it is");
     assert_eq!(n, 1, "no retry");
 }
 
@@ -697,7 +736,7 @@ CH.append(C("4e-c6", M4E, "95-challenge-a-read-only-session", "extend", "Challen
   ["sessions-and-the-transaction-state-machine","the-sql-pipeline","property-testing-and-fuzzing"],
   "`ReadOnlySession` in `src/common/read_only.rs`: a wrapper around **your** `Session` that accepts queries and refuses everything that would change the database (`INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE`, `CREATE INDEX`, and an `EXPLAIN ANALYZE` of one of those). The check is made on the whole text *before* anything runs, so a script that ends in a delete never executes its first statements either.",
   "Reporting users, replicas and dashboards get read-only credentials, and the safe version of \"read-only\" is enforced where statements are understood, not by hoping the application is careful. The detail that makes it a good exercise is *before anything runs*: refusing at the third statement of three leaves two of them committed, which is exactly what a read-only guarantee exists to prevent.",
-  ["`new(session)` wraps a session; `execute(sql)` parses the text with `parser::parse`; if any statement is a data or schema change (including one inside `EXPLAIN`), it returns an `Invalid` error that names the kind of statement and runs nothing.","Otherwise it forwards the text to the wrapped session and returns its answer. `BEGIN`, `COMMIT`, `ROLLBACK`, `SET`, `SHOW`, `SELECT` and `EXPLAIN` of a query are allowed.","`inner()` gives access to the wrapped session (for `in_transaction()` and so on)."],
+  ["`new(session)` wraps a session; `execute(sql)` parses the text with `parser::parse`; if any statement is a data or schema change (including one inside `EXPLAIN`), it returns an error with code `25006` (PostgreSQL's read-only SQL transaction; an `Exception` can name its code with `with_sqlstate`) whose message names the kind of statement, and runs nothing. Errors of the wrapped session come back as they are.","Otherwise it forwards the text to the wrapped session and returns its answer. `BEGIN`, `COMMIT`, `ROLLBACK`, `SET`, `SHOW`, `SELECT` and `EXPLAIN` of a query are allowed.","`inner()` gives access to the wrapped session (for `in_transaction()` and so on)."],
   ["No statement of a refused text is executed.","A text of only queries behaves exactly as it does without the wrapper."],
   ["Adding a write to the end of any allowed text makes it refused.","Refusal changes no state: an open transaction stays open."],
   ["`select 1; delete from t` -> Err, and `t` is untouched","`explain select * from t` -> allowed"],
@@ -705,6 +744,7 @@ CH.append(C("4e-c6", M4E, "95-challenge-a-read-only-session", "extend", "Challen
   src=("src/common/read_only.rs", '''
 //! A session that cannot change anything.
 
+use crate::common::db_error::DbResult;
 use crate::common::exception::{Exception, ExceptionType, Result};
 use crate::common::session::Session;
 use crate::sql::ast::Statement;
@@ -718,6 +758,7 @@ pub struct ReadOnlySession<'a> {
 }
 
 impl<'a> ReadOnlySession<'a> {
+    /// Wraps `session`.
     pub fn new(session: Session<'a>) -> ReadOnlySession<'a> {
         // @begin 4e-c6
         ReadOnlySession { inner: session }
@@ -725,6 +766,7 @@ impl<'a> ReadOnlySession<'a> {
         // @end
     }
 
+    /// The wrapped session. Statements run through it are not checked.
     pub fn inner(&mut self) -> &mut Session<'a> {
         // @begin 4e-c6
         &mut self.inner
@@ -732,11 +774,19 @@ impl<'a> ReadOnlySession<'a> {
         // @end
     }
 
-    pub fn execute(&mut self, sql: &str) -> Result<Vec<String>> {
+    /// Runs `sql` if none of its statements changes data or schema.
+    ///
+    /// # Errors
+    ///
+    /// Refuses the whole text, running nothing, with an error of code `25006` (a read-only transaction) naming the first kind of
+    /// statement that would change something. Otherwise, the errors of `Session::execute`.
+    pub fn execute(&mut self, sql: &str) -> DbResult<Vec<String>> {
         // @begin 4e-c6
         for statement in parser::parse(sql)? {
             if let Some(kind) = Self::change_kind(&statement) {
-                return Err(Exception::new(ExceptionType::Invalid, format!("cannot execute {kind} in a read-only session")));
+                return Err(Exception::new(ExceptionType::Invalid, format!("cannot execute {kind} in a read-only session"))
+                    .with_sqlstate("25006")
+                    .into());
             }
         }
         self.inner.execute(sql)
@@ -791,8 +841,8 @@ fn s4e_c6_every_kind_of_change_is_refused_by_name() {
         ("create index i on t(id)", "CREATE INDEX"),
     ] {
         let e = r.execute(sql).unwrap_err();
-        assert_eq!(e.kind, ExceptionType::Invalid, "{sql}");
-        assert!(e.message.contains(kind), "{sql}: the message names the statement: {e:?}");
+        assert_eq!(e.code(), "25006", "{sql}: refused as a write in a read-only transaction");
+        assert!(e.to_string().contains(kind), "{sql}: the message names the statement: {e:?}");
     }
 }
 

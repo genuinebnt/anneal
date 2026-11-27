@@ -1,5 +1,6 @@
 //! A session that cannot change anything.
 
+use crate::common::db_error::DbResult;
 use crate::common::exception::{Exception, ExceptionType, Result};
 use crate::common::session::Session;
 use crate::sql::ast::Statement;
@@ -33,12 +34,15 @@ impl<'a> ReadOnlySession<'a> {
     ///
     /// # Errors
     ///
-    /// Refuses the whole text, running nothing, with an `Invalid` exception naming the first kind of statement that would change something.
-    pub fn execute(&mut self, sql: &str) -> Result<Vec<String>> {
+    /// Refuses the whole text, running nothing, with an error of code `25006` (a read-only transaction) naming the first kind of
+    /// statement that would change something. Otherwise, the errors of `Session::execute`.
+    pub fn execute(&mut self, sql: &str) -> DbResult<Vec<String>> {
         // @begin 4e-c6
         for statement in parser::parse(sql)? {
             if let Some(kind) = Self::change_kind(&statement) {
-                return Err(Exception::new(ExceptionType::Invalid, format!("cannot execute {kind} in a read-only session")));
+                return Err(Exception::new(ExceptionType::Invalid, format!("cannot execute {kind} in a read-only session"))
+                    .with_sqlstate("25006")
+                    .into());
             }
         }
         self.inner.execute(sql)

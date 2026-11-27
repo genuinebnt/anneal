@@ -1,8 +1,8 @@
 id = "4e-04"
-title = "When a statement fails inside a transaction"
+title = "A failed transaction, and what the client sees"
 kind = "build"
 difficulty = "hard"
 tests = ["stages_4e::s4e_04"]
-learn = ["a transaction that cannot continue: the failed state", "what COMMIT means for a failed transaction", "write conflicts and syntax errors as the same kind of failure"]
-concepts = ["sessions-and-the-transaction-state-machine", "rolling-back-with-undo-logs"]
-concepts_optional = ["snapshot-isolation", "watermarks-and-garbage-collection", "designing-error-types", "errors-4b"]
+learn = ["a transaction that cannot continue: the failed state, and what COMMIT means in it", "a SQLSTATE code for each outcome a client acts on: retry (40001), roll back (25P02)", "a new cause in the error type of 3k: one From and one code", "what the client is shown and what stays in the server's log", "a shell that is one session"]
+concepts = ["sessions-and-the-transaction-state-machine"]
+concepts_optional = ["rolling-back-with-undo-logs", "errors-that-carry-their-cause", "snapshot-isolation", "watermarks-and-garbage-collection", "designing-error-types", "errors-4b"]

@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_4e::s4e_01"]
 learn = ["what a session adds to a transaction manager", "running a statement inside a transaction and ending it", "why a failed statement must leave nothing behind"]
-concepts = ["sessions-and-the-transaction-state-machine", "multi-version-concurrency-control"]
-concepts_optional = ["rolling-back-with-undo-logs", "watermarks-and-garbage-collection", "raii-guards-and-lifetimes", "errors-4b"]
+concepts = ["sessions-and-the-transaction-state-machine"]
+concepts_optional = ["errors-that-carry-their-cause", "multi-version-concurrency-control", "rolling-back-with-undo-logs", "watermarks-and-garbage-collection", "raii-guards-and-lifetimes", "errors-4b"]
