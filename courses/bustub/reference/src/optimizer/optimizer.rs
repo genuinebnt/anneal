@@ -384,7 +384,7 @@ impl<'c, 'a> Optimizer<'c, 'a> {
             }
         }
         self.optimize_children(plan, &Self::optimize_filter_pushdown)
-        //~ plan.clone() // 3j-02: a Filter whose child is a NestedLoopJoin: split the predicate into conjuncts (Optimizer::conjuncts), find which columns each reads (columns_read) and move the ones that only read one input below the join when the join type allows it (see the doc comment), shifting the right side's columns (shift_columns); keep the rest above (and_all); then apply the rule to the new children; any other node: apply it to the children
+        //~ plan.clone() // 3j-02: a filter above a join keeps above only the conjuncts the join type does not let move; each other conjunct is applied below the join, on the one input it reads; the rows never change; the rule applies at every depth
         // @end
     }
 
@@ -401,7 +401,7 @@ impl<'c, 'a> Optimizer<'c, 'a> {
             || expr.as_any().downcast_ref::<crate::execution::expressions::arithmetic_expression::ArithmeticExpression>().is_some()
             || expr.as_any().downcast_ref::<OperatorExpression>().is_some_and(|o| !matches!(o.op, Operator::IsNull | Operator::IsNotNull));
         strict && expr.children().iter().any(|c| Self::is_null_when(c, cols))
-        //~ false // 3j-03: a column of the set is; a comparison, LIKE, arithmetic or `||` (but not IS NULL / IS NOT NULL) is when any of its operands is
+        //~ false // 3j-03: true when the value is certainly NULL once those columns are: a column of the set, or a comparison, LIKE, arithmetic or `||` with such an operand
         // @end
     }
 
@@ -424,7 +424,7 @@ impl<'c, 'a> Optimizer<'c, 'a> {
         }
         // a comparison, LIKE or arithmetic condition is NULL (not TRUE) when an operand is NULL
         Self::is_null_when(expr, cols)
-        //~ false // 3j-03: AND rejects if either side does, OR if both do; `x IS NOT NULL` if x is NULL when the columns are; anything else if is_null_when says its value is NULL; NOT and IS NULL never (be careful: they can be TRUE for NULL)
+        //~ false // 3j-03: true when the condition is certainly not TRUE once those columns are NULL; when unsure, false (IS NULL is TRUE for NULL, and a NOT such as `NOT (x IS NOT NULL)` can be)
         // @end
     }
 
@@ -442,7 +442,7 @@ impl<'c, 'a> Optimizer<'c, 'a> {
             },
             other => other,
         }
-        //~ join_type // 3j-03: LEFT pads the right with NULLs: if the filter rejects those rows it is an INNER join; RIGHT likewise for the left side; FULL pads both sides: each side the filter rejects is dropped (rejects the right padding: RIGHT join; the left: LEFT join; both: INNER)
+        //~ join_type // 3j-03: the join type once the rows padded on each rejected side are dropped: an outer join loses each padding the filter rejects (LEFT or RIGHT becomes INNER; FULL becomes RIGHT, LEFT or INNER)
         // @end
     }
 
@@ -474,7 +474,7 @@ impl<'c, 'a> Optimizer<'c, 'a> {
             }
         }
         self.optimize_children(plan, &Self::optimize_outer_join_simplification)
-        //~ plan.clone() // 3j-03: a Filter over a NestedLoopJoin that is not INNER: does some conjunct reject NULLs on the left columns (col_idx < the left child's column count)? on the right? Then change the join type (simplified_join_type); apply the rule to the children
+        //~ plan.clone() // 3j-03: an outer join under a filter that rejects the NULL-padded rows of a side stops padding that side; the rows never change; the rule applies at every depth
         // @end
     }
 
@@ -519,7 +519,7 @@ impl<'c, 'a> Optimizer<'c, 'a> {
             return None;
         }
         Some((left_keys, right_keys))
-        //~ None // 3h-01: split the predicate into conjuncts (Optimizer::conjuncts); each must be a ComparisonExpression of type Equal whose two children are ColumnValueExpressions, one reading tuple 0 (left) and the other tuple 1 (right); collect the left columns and the right columns (as ColumnValueExpression(0, col_idx, type)); None if any conjunct is anything else
+        //~ None // 3h-01: Some((left keys, right keys)) when every conjunct is an equality between a left column and a right column, each key reading its own side; None otherwise
         // @end
     }
 
@@ -555,7 +555,7 @@ impl<'c, 'a> Optimizer<'c, 'a> {
             }
         }
         optimized
-        //~ plan.clone() // 3h-01: bottom-up (self.optimize_children); an INNER or LEFT NestedLoopJoin whose predicate gives equi-join keys that pairwise hash alike (Self::hash_alike) becomes a HashJoin with the same schema, children and join type; anything else is unchanged
+        //~ plan.clone() // 3h-01: at every depth, an INNER or LEFT nested loop join on equi-join keys that pairwise hash alike becomes a hash join with the same schema, children and join type; anything else is unchanged
         // @end
     }
 
@@ -660,7 +660,7 @@ impl<'c, 'a> Optimizer<'c, 'a> {
             }
         }
         optimized
-        //~ plan.clone() // 3h-03: bottom-up; a SeqScan whose filter is (or has an AND-conjunct that is) a point lookup on an indexed column (self.match_index), with every key convertible to the column's type without loss (lossless_key), becomes an IndexScan with the scan's schema, that index, the converted keys as pred_keys and the WHOLE predicate as filter_predicate; otherwise unchanged
+        //~ plan.clone() // 3h-03: at every depth, a sequential scan whose filter is (or has an AND-conjunct that is) a point lookup on an indexed column, every key converting without loss, becomes an index scan with the converted keys that still applies the whole predicate; anything else is unchanged
         // @end
     }
 }

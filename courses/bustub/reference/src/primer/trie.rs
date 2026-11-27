@@ -52,7 +52,7 @@ impl Trie {
             node = node.children.get(&c)?;
         }
         node.value.as_ref()?.downcast_ref::<T>()
-        //~ todo!("0a-01: walk from the root along the key's characters; at the end the node must have a value; downcast it to T")
+        //~ todo!("0a-01: the value stored under exactly this key, if it is a T; None for a missing key, a key whose node holds no value, or a value of another type")
         // @end
     }
 
@@ -64,7 +64,7 @@ impl Trie {
             node = node.children.get(&c)?;
         }
         node.value.clone()?.downcast::<T>().ok()
-        //~ todo!("0a-01: as get, but clone the Arc of the value and downcast it with Arc::downcast")
+        //~ todo!("0a-01: the value get would find, as an owner the caller can keep after the trie is gone")
         // @end
     }
 
