@@ -22,11 +22,11 @@ How the placeholder count is kept (a counter in the parser, or a pass over the t
 
 ## The Rust toolbox
 
-**A visitor as a closure.** `visit_exprs_mut(&mut statements, &mut |e| { ... })` hands you every expression mutably; `*e = literal` replaces a node in place.
+**A visitor as a closure.** A walker with a signature like `fn visit_mut(tree: &mut [Node], f: &mut dyn FnMut(&mut Leaf))` hands your closure every leaf mutably, and `*leaf = replacement` swaps one in place. The SQL syntax tree (`src/sql/ast.rs`) has such a walker for expressions.
 
 **Capturing state in a closure.** A counter or an `Option<Error>` captured by the visitor is how an error leaves a callback that cannot return one.
 
-**Clone before you bind.** `prepared.statements.clone()` keeps the original untouched; the clone is the work copy.
+**Clone before you change.** A value that must be used again with other inputs is never edited in place: `let mut draft = template.clone();` and the changes go into the copy.
 
 ## If this is new
 
