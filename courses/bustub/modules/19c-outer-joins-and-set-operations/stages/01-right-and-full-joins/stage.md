@@ -31,7 +31,7 @@ How the right side is stored and how you remember which rows matched (a flag per
 
 ## If this is new
 
-- [S2 Collections](/t/s2-strings-text): `VecDeque`, `Vec<bool>`.
+- [S3 Vec & slices](/t/s3-vec-slices): `VecDeque`, `Vec<bool>`.
 - Y5 Testing & verification: comparing an implementation with a model written in a few obvious lines.
 
 ## Tests

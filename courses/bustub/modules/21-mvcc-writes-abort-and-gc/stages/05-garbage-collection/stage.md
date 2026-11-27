@@ -28,23 +28,11 @@ How you walk the tables and chains, and what you keep per tuple while walking; t
 
 ## The Rust toolbox
 
-**A set of needed owners.** `let mut needed: HashSet<TxnId> = HashSet::new();` filled while you walk the chains.
+**A set filled while walking.** A `HashSet` you insert into during one pass and query in the next separates "find what is still needed" from "drop the rest": the walk never has to decide anything final.
 
-**`retain`.** `map.retain(|id, t| keep(t) || needed.contains(id))` removes the others in one pass under the write lock.
+**`retain`.** `scores.retain(|name, s| *s > 0 || pinned.contains(name))` keeps the entries that pass and removes the others in one pass, under one write lock.
 
-**Eager iteration.** `table.table.make_eager_iterator()` visits every tuple including those added during the walk, which is fine here (nothing runs).
-
-```rust
-let watermark = self.get_watermark();
-let mut needed: HashSet<TxnId> = HashSet::new();
-let catalog = self.catalog.read().unwrap();
-for name in catalog.get_table_names() {
-    let Some(table) = catalog.get_table(&name) else { continue };
-    let mut iter = table.table.make_eager_iterator();
-    while !iter.is_end() { let rid = iter.get_rid(); iter.advance(); ... }
-}
-self.txn_map.write().unwrap().retain(|id, t| matches!(t.state(), Running | Tainted) || needed.contains(id));
-```
+**Eager iteration.** `make_eager_iterator()` visits every tuple, including those added during the walk, which is fine here (nothing runs). It is a cursor (`is_end`, `get_rid`, `advance`), not a Rust `Iterator`: read the rid and advance before you act on the tuple.
 
 ## Design notes
 

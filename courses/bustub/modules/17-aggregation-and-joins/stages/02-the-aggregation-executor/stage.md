@@ -11,9 +11,14 @@ An aggregation is the first executor that cannot answer until it has seen **ever
 
 In `src/execution/executors/aggregation_executor.rs`:
 
-- `make_aggregate_key(tuple)`: evaluate every group-by expression on the child's tuple (with the child's output schema) into an `AggregateKey`; `make_aggregate_value(tuple)`: evaluate every aggregate's input expression into an `AggregateValue`.
-- `init`: initialise the child; empty the table; for every tuple of the child `insert_combine` its key and value; if the table is still empty and there is **no** `GROUP BY`, add the empty key's group with `insert_initial`; then build one output tuple per group (group-by values, then aggregate values, with the plan's output schema) and reset the cursor.
-- `next`: hand out the next at-most-`batch_size` of those tuples (each with a default rid); `true` if the batch is not empty.
+- **`make_aggregate_key(tuple)` and `make_aggregate_value(tuple)`** evaluate the group-by expressions and the aggregates' input expressions on a child tuple, with the child's output schema.
+- **After `init`, the executor yields one row per group**: the group-by values, then the aggregate values, in the plan's output schema. Empty input gives no rows with a `GROUP BY` and exactly one row of initial values without one (`count(*)` is 0). `init` starts over: calling it again gives the same rows, not twice as many.
+- **`next` hands out those rows**, at most `batch_size` per call, each with a default rid, and returns `true` exactly when the batch is not empty.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `make_aggregate_key(tuple)`: evaluate every group-by expression on the child's tuple (with the child's output schema) into an `AggregateKey`; `make_aggregate_value(tuple)`: evaluate every aggregate's input expression into an `AggregateValue`.
+> - `init`: initialise the child; empty the table; for every tuple of the child `insert_combine` its key and value; if the table is still empty and there is **no** `GROUP BY`, add the empty key's group with `insert_initial`; then build one output tuple per group (group-by values, then aggregate values, with the plan's output schema) and reset the cursor.
+> - `next`: hand out the next at-most-`batch_size` of those tuples (each with a default rid); `true` if the batch is not empty.
 
 The tests: exact scenarios (group by one column; several columns and expressions; no `GROUP BY` is one row; empty input with and without `GROUP BY`; `HAVING`; more groups than a batch; `select distinct`; `init` can be repeated; an aggregation under another operator), and a property: **for random tables with NULLs in both columns**, `group by g` returns one row per group with the five aggregates a Rust fold gives, the no-`GROUP BY` form is one row, and `select distinct g` is the list of groups.
 

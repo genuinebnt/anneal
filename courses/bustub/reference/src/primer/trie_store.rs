@@ -41,7 +41,7 @@ impl TrieStore {
         // @begin 0a-03
         let snapshot = self.root.lock().unwrap().clone();
         snapshot.get_shared::<T>(key).map(|value| ValueGuard { value })
-        //~ todo!("0a-03: take the root lock only to clone the current trie; read from the clone with get_shared; wrap the value in a guard")
+        //~ todo!("0a-03: the value under the key in the current version, in a guard that keeps it alive through later writes; a reader never waits for a writer to finish building")
         // @end
     }
 

@@ -27,7 +27,7 @@ impl<K: Clone + Send + Sync + 'static, const MAX_HEIGHT: usize, const SEED: u32>
     /// An empty list ordered by `compare` ("is `a` before `b`?"). The random generator is a fixed-seed `Mt19937`, so the shape of a list depends only
     /// on the operations applied to it.
     pub fn with_compare(compare: impl Fn(&K, &K) -> bool + Send + Sync + 'static) -> Self {
-        todo!("0b-01: an empty list: the header node with MAX_HEIGHT empty links, height 1, size 0, a generator seeded with SEED")
+        todo!("0b-01: an empty list ordered by compare, with node heights drawn from a generator seeded with SEED")
     }
 
     pub fn is_empty(&self) -> bool {
@@ -41,7 +41,7 @@ impl<K: Clone + Send + Sync + 'static, const MAX_HEIGHT: usize, const SEED: u32>
 
     /// Forgets every element (the arena restarts with just the header).
     pub fn clear(&self) {
-        todo!("0b-02: under the write lock: forget every element; the list is as new (height 1, size 0)")
+        todo!("0b-02: forget every element; the list is as new (height 1, size 0)")
     }
 
     /// Adds `key`. Returns `false`, changing nothing, if an equivalent key is already there (neither is before the other).
@@ -56,16 +56,16 @@ impl<K: Clone + Send + Sync + 'static, const MAX_HEIGHT: usize, const SEED: u32>
 
     /// Is an equivalent key in the list? Neither `compare(a, b)` nor `compare(b, a)` for an equivalent key.
     pub fn contains(&self, key: &K) -> bool {
-        todo!("0b-01: read lock; search; is there a node?")
+        todo!("0b-01: whether an equivalent key is in the list")
     }
 
     /// The keys with their heights, in order.
     pub fn nodes(&self) -> Vec<(K, usize)> {
-        todo!("0b-01: walk level 0 from the start: every key with the height of its node")
+        todo!("0b-01: every key in order, with the height of its node")
     }
 
     /// The keys linked on `level`, in order.
     pub fn level(&self, level: usize) -> Vec<K> {
-        todo!("0b-01: walk the given level from the start: the keys of the nodes linked on it")
+        todo!("0b-01: the keys linked on the given level, in order")
     }
 }

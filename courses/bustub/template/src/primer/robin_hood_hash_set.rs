@@ -87,12 +87,12 @@ impl<K: RobinHoodHash + Clone + PartialEq> RobinHoodHashSet<K> {
 
     /// Adds `key`. Returns `true` if it was added or an equal key was already there (the key is replaced), `false` if the table is full.
     pub fn insert(&self, key: &K) -> bool {
-        todo!("0c-02: true if added or replaced, false when full (before touching anything); probing from the home bucket, a resident closer to its home is displaced and carries on, and a tombstone is free")
+        todo!("0c-02: true if the key is added or an equal key replaced; false when every bucket holds another key, with nothing changed; a key takes the bucket of a resident that is closer to its own home, and a removed key's bucket is free")
     }
 
     /// Is `key` in the set?
     pub fn contains(&self, key: &K) -> bool {
-        todo!("0c-02: read lock; is there a bucket for the key (find)?")
+        todo!("0c-02: whether the key is in the set")
     }
 
     /// The bucket that holds `key`, or `bucket_count()` if it is absent.
@@ -104,16 +104,16 @@ impl<K: RobinHoodHash + Clone + PartialEq> RobinHoodHashSet<K> {
 
     /// Removes `key`, leaving a tombstone. Returns whether it was there.
     pub fn remove(&self, key: &K) -> bool {
-        todo!("0c-03: write lock; find the key; put a tombstone in its bucket; size - 1; true. Absent: false")
+        todo!("0c-03: whether the key was there; afterwards it is absent and every other key is still found")
     }
 
     /// Forgets every key and tombstone; the capacity stays.
     pub fn clear(&self) {
-        todo!("0c-03: write lock; every bucket empty; size 0")
+        todo!("0c-03: no keys left and no trace of removed ones; the capacity stays")
     }
 
     /// The largest probe distance among live keys (0 for an empty table); tombstones do not count.
     pub fn max_probe_distance(&self) -> usize {
-        todo!("0c-03: read lock; the largest probe_distance(home, bucket) over live buckets")
+        todo!("0c-03: the largest probe distance among live keys; 0 for an empty table; removed keys do not count")
     }
 }

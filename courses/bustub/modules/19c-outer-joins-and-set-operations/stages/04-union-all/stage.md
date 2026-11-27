@@ -30,8 +30,8 @@ Whether the executor streams or buffers (the later operators need to buffer, so 
 
 ## If this is new
 
-- S5 Enums and pattern matching: an operator and a flag as one `match` on a tuple.
-- [S4 Smart pointers](/t/s4-maps-sets): `Box` for a recursive type.
+- [Patterns](https://doc.rust-lang.org/reference/patterns.html) (the Rust Reference): an operator and a flag as one `match` on a tuple.
+- [L1 Ownership & moves](/t/l1-ownership-moves): `Box` for a recursive type.
 
 ## Tests
 

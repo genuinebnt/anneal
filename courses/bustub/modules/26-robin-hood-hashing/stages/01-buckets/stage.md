@@ -4,10 +4,16 @@ Before any key is stored, the table needs its vocabulary: how many buckets, whic
 
 In `src/primer/robin_hood_hash_set.rs` the public API is fixed (`new`, `home_bucket`, `probe_distance`, `capacity`, `bucket_count`, `size`, `load_factor`, `insert`, `contains`, `get_bucket`, `remove`, `clear`, `max_probe_distance`); how the buckets are stored is yours: a bucket is empty, **removed** (a tombstone: stage 3) or holds a key.
 
-- `new(capacity)`: `Err(Invalid)` for capacity 0; otherwise `capacity` empty buckets and size 0, behind a reader-writer lock.
-- `home_bucket(key)`: `key.robin_hood_hash() % capacity` (the hash trait is given: for integers it is `key × 0x9e3779b97f4a7c15` with wrapping arithmetic, BusTub's constant).
-- `probe_distance(home, bucket)`: the number of steps forward from `home` to `bucket`, wrapping around the end of the table.
-- `capacity()` and `bucket_count()`: the number of buckets; `size()`: live keys (read lock); `load_factor()`: `size / capacity`.
+- **`new(capacity)` is `Err(Invalid)` for a capacity of 0**; otherwise an empty set of `capacity` buckets that many threads can use at once.
+- **`home_bucket(key)` is `key.robin_hood_hash() % capacity`** (the hash trait is given: for integers it is `key × 0x9e3779b97f4a7c15` with wrapping arithmetic, BusTub's constant).
+- **`probe_distance(home, bucket)` is the number of steps forward from `home` to `bucket`**, wrapping around the end of the table: never negative, always below the capacity.
+- **`capacity()` and `bucket_count()` are the number of buckets; `size()` is the number of live keys; `load_factor()` is `size / capacity`.**
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `new(capacity)`: `Err(Invalid)` for capacity 0; otherwise `capacity` empty buckets and size 0, behind a reader-writer lock.
+> - `home_bucket(key)`: `key.robin_hood_hash() % capacity` (the hash trait is given: for integers it is `key × 0x9e3779b97f4a7c15` with wrapping arithmetic, BusTub's constant).
+> - `probe_distance(home, bucket)`: the number of steps forward from `home` to `bucket`, wrapping around the end of the table.
+> - `capacity()` and `bucket_count()`: the number of buckets; `size()`: live keys (read lock); `load_factor()`: `size / capacity`.
 
 The tests: exact scenarios (a set has the capacity it was made with; capacity zero is an error; the home bucket is the hash modulo the capacity; the probe distance counts steps forward and wraps; the integer hash is the course's multiplicative one).
 
@@ -19,17 +25,13 @@ How buckets are represented and what the table is made of; the three states of a
 
 **A trait for the hash.** `trait RobinHoodHash { fn robin_hood_hash(&self) -> usize; }` (given) lets the set work for integers and strings without `std::hash`: tests can pick keys with a given home bucket.
 
-**Modular arithmetic on `usize`.** `(bucket + capacity - home) % capacity` is the forward distance with wrap-around, without underflow.
+**Modular arithmetic on `usize`.** `a - b` panics in a debug build when `b > a`. For two positions below a modulus `m`, add `m` before you subtract, `(a + m - b) % m`, and the forward distance from `b` to `a` with wrap-around never goes below zero.
 
 **`Result` for a constructor.** `Err(Exception::new(ExceptionType::Invalid, ..))` for a capacity of zero (a modulo by zero would panic).
 
-**An enum with data for a bucket.** `enum Slot<K> { Empty, Tombstone, Live(K) }`: the compiler makes you handle all three everywhere.
+**An enum with data for a state.** `enum Seat { Free, Vacated, Taken(Guest) }`: one variant carries data, the others do not, and every `match` must handle all three, so a state you forget is a compile error, not a bug.
 
-```rust
-(bucket + self.capacity - home) % self.capacity      // no negative numbers with unsigned types
-key.robin_hood_hash() % self.capacity
-vec![Slot::Empty; capacity]                          // needs Slot: Clone
-```
+**`vec![value; n]`.** Builds `n` copies of a value; the type must be `Clone` (derive it).
 
 ## Design notes
 

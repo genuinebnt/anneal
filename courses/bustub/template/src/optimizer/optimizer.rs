@@ -327,29 +327,29 @@ impl<'c, 'a> Optimizer<'c, 'a> {
     /// right tuples before the join pads the unmatched left ones with NULLs, which a filter above the join would then have removed);
     /// a RIGHT join only parts on the right; a FULL join none. What cannot move stays in a filter above.
     pub fn optimize_filter_pushdown(&self, plan: &PlanRef) -> PlanRef {
-        plan.clone() // 3j-02: a Filter whose child is a NestedLoopJoin: split the predicate into conjuncts (Optimizer::conjuncts), find which columns each reads (columns_read) and move the ones that only read one input below the join when the join type allows it (see the doc comment), shifting the right side's columns (shift_columns); keep the rest above (and_all); then apply the rule to the new children; any other node: apply it to the children
+        plan.clone() // 3j-02: a filter above a join keeps above only the conjuncts the join type does not let move; each other conjunct is applied below the join, on the one input it reads; the rows never change; the rule applies at every depth
     }
 
     /// Is `expr` certainly NULL when every one of the columns `cols` is NULL? (Arithmetic, comparisons, LIKE and `||` are: their operand is.)
     pub fn is_null_when(expr: &ExprRef, cols: &dyn Fn(u32) -> bool) -> bool {
-        false // 3j-03: a column of the set is; a comparison, LIKE, arithmetic or `||` (but not IS NULL / IS NOT NULL) is when any of its operands is
+        false // 3j-03: true when the value is certainly NULL once those columns are: a column of the set, or a comparison, LIKE, arithmetic or `||` with such an operand
     }
 
     /// Does the condition fail (is not TRUE) whenever every column of `cols` is NULL? This is what lets a filter above an outer join remove
     /// the rows the join padded with NULLs.
     pub fn rejects_nulls(expr: &ExprRef, cols: &dyn Fn(u32) -> bool) -> bool {
-        false // 3j-03: AND rejects if either side does, OR if both do; `x IS NOT NULL` if x is NULL when the columns are; anything else if is_null_when says its value is NULL; NOT and IS NULL never (be careful: they can be TRUE for NULL)
+        false // 3j-03: true when the condition is certainly not TRUE once those columns are NULL; when unsure, false (IS NULL is TRUE for NULL, and a NOT such as `NOT (x IS NOT NULL)` can be)
     }
 
     /// The type a join has once a filter above it rejects NULL-padded rows on the given sides.
     pub fn simplified_join_type(join_type: JoinType, rejects_left_nulls: bool, rejects_right_nulls: bool) -> JoinType {
-        join_type // 3j-03: LEFT pads the right with NULLs: if the filter rejects those rows it is an INNER join; RIGHT likewise for the left side; FULL pads both sides: each side the filter rejects is dropped (rejects the right padding: RIGHT join; the left: LEFT join; both: INNER)
+        join_type // 3j-03: the join type once the rows padded on each rejected side are dropped: an outer join loses each padding the filter rejects (LEFT or RIGHT becomes INNER; FULL becomes RIGHT, LEFT or INNER)
     }
 
     /// A filter above an outer join that fails on every NULL-padded row makes the padding pointless: the join is cheaper as an INNER (or a
     /// one-sided) join, and may be reordered or pushed into like one.
     pub fn optimize_outer_join_simplification(&self, plan: &PlanRef) -> PlanRef {
-        plan.clone() // 3j-03: a Filter over a NestedLoopJoin that is not INNER: does some conjunct reject NULLs on the left columns (col_idx < the left child's column count)? on the right? Then change the join type (simplified_join_type); apply the rule to the children
+        plan.clone() // 3j-03: an outer join under a filter that rejects the NULL-padded rows of a side stops padding that side; the rows never change; the rule applies at every depth
     }
 
     // ---- the rules you write ------------------------------------------------------------------------------------------------
@@ -370,7 +370,7 @@ impl<'c, 'a> Optimizer<'c, 'a> {
     /// two sides, in the same order: `(left keys, right keys)`. Anything else (another operator, an `OR`, both columns on one side, a
     /// constant) makes it `None`: the join cannot be a hash join.
     pub fn extract_equi_join_keys(predicate: &ExprRef) -> Option<(Vec<ExprRef>, Vec<ExprRef>)> {
-        None // 3h-01: split the predicate into conjuncts (Optimizer::conjuncts); each must be a ComparisonExpression of type Equal whose two children are ColumnValueExpressions, one reading tuple 0 (left) and the other tuple 1 (right); collect the left columns and the right columns (as ColumnValueExpression(0, col_idx, type)); None if any conjunct is anything else
+        None // 3h-01: Some((left keys, right keys)) when every conjunct is an equality between a left column and a right column, each key reading its own side; None otherwise
     }
 
     /// Whether a value of type `a` and one of type `b` that are equal under `=` always have the same hash key: the types are the same,
@@ -383,7 +383,7 @@ impl<'c, 'a> Optimizer<'c, 'a> {
     /// Turns a nested loop join whose predicate is equalities between the two sides into a hash join, if every pair of keys hashes
     /// alike ([`Self::hash_alike`]).
     pub fn optimize_nlj_as_hash_join(&self, plan: &PlanRef) -> PlanRef {
-        plan.clone() // 3h-01: bottom-up (self.optimize_children); an INNER or LEFT NestedLoopJoin whose predicate gives equi-join keys that pairwise hash alike (Self::hash_alike) becomes a HashJoin with the same schema, children and join type; anything else is unchanged
+        plan.clone() // 3h-01: at every depth, an INNER or LEFT nested loop join on equi-join keys that pairwise hash alike becomes a hash join with the same schema, children and join type; anything else is unchanged
     }
 
     /// Turns `Limit(Sort(child))` into `TopN(child)`.
@@ -406,6 +406,6 @@ impl<'c, 'a> Optimizer<'c, 'a> {
     /// Turns a scan with a point-lookup predicate on an indexed column into an index scan, if every key converts to the column's type
     /// without loss ([`Self::lossless_key`]); the index scan's keys are the converted ones.
     pub fn optimize_seq_scan_as_index_scan(&self, plan: &PlanRef) -> PlanRef {
-        plan.clone() // 3h-03: bottom-up; a SeqScan whose filter is (or has an AND-conjunct that is) a point lookup on an indexed column (self.match_index), with every key convertible to the column's type without loss (lossless_key), becomes an IndexScan with the scan's schema, that index, the converted keys as pred_keys and the WHOLE predicate as filter_predicate; otherwise unchanged
+        plan.clone() // 3h-03: at every depth, a sequential scan whose filter is (or has an AND-conjunct that is) a point lookup on an indexed column, every key converting without loss, becomes an index scan with the converted keys that still applies the whole predicate; anything else is unchanged
     }
 }

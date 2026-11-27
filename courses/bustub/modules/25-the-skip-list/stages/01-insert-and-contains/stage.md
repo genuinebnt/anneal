@@ -11,11 +11,17 @@ A skip list is a sorted linked list with express lanes: every node has a random 
 
 In `src/primer/skiplist.rs` the public API is fixed (`SkipList::new`, `with_compare`, `insert`, `contains`, `erase`, `clear`, `size`, `is_empty`, and the two observers `nodes` and `level`); the **inside is yours**: the node type, how nodes are linked and stored (an arena of nodes linked by index is the intended design: no `Rc<RefCell<..>>`), the search, the random height. The generator `Mt19937` (given) is seeded with the `SEED` const generic.
 
-- `with_compare(compare)`: an empty list ordered by `compare(a, b)` = "is `a` before `b`?" (`new()` uses `<`); a header node with `MAX_HEIGHT` empty links; height 1; size 0; `Mt19937::new(SEED)`.
-- the **search**: from the top level in use, on each level move right while the next key is before the sought one; remember the node you stop at on each level (the **update vector**); the candidate is the next node on level 0; it is found if the sought key is not before it (equivalence, as in `std::set`).
-- `insert(&key)`: write lock; an equivalent key: `false`, nothing changes; draw a height (BusTub's rule: 1, plus one for every draw of the generator divisible by 4, capped at `MAX_HEIGHT`); if it exceeds the list's height raise it (the new levels start at the header); on each level `0..height` link the new node between `update[level]` and that node's next; size + 1; `true`.
-- `contains`, `size` (read lock); `is_empty` is given.
-- the observers: `nodes()` returns every key with the height of its node, in order (walk level 0); `level(l)` returns the keys linked on level `l`, in order.
+- **`with_compare(compare)` is an empty list ordered by `compare(a, b)` = "is `a` before `b`?"** (`new()` uses `<`). Two keys neither of which is before the other are **equivalent** (as in `std::set`): the list holds at most one of them.
+- **`insert(&key)` adds a key that has no equivalent in the list and returns `true`**; otherwise it returns `false` and nothing changes. The new node's height is drawn from the list's own generator, seeded with `SEED` (BusTub's rule: 1, plus one for every draw of the generator divisible by 4, capped at `MAX_HEIGHT`), so the same inserts always give the same heights; a node of height `h` is linked on levels `0..h`, in key order on each.
+- **`contains(&key)` is whether an equivalent key is in the list; `size()` is how many keys there are.** Readers may run at the same time; a write runs alone. `is_empty` is given.
+- **The observers:** `nodes()` returns every key with the height of its node, in order; `level(l)` returns the keys linked on level `l`, in order.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `with_compare(compare)`: an empty list ordered by `compare(a, b)` = "is `a` before `b`?" (`new()` uses `<`); a header node with `MAX_HEIGHT` empty links; height 1; size 0; `Mt19937::new(SEED)`.
+> - the **search**: from the top level in use, on each level move right while the next key is before the sought one; remember the node you stop at on each level (the **update vector**); the candidate is the next node on level 0; it is found if the sought key is not before it (equivalence, as in `std::set`).
+> - `insert(&key)`: write lock; an equivalent key: `false`, nothing changes; draw a height (BusTub's rule: 1, plus one for every draw of the generator divisible by 4, capped at `MAX_HEIGHT`); if it exceeds the list's height raise it (the new levels start at the header); on each level `0..height` link the new node between `update[level]` and that node's next; size + 1; `true`.
+> - `contains`, `size` (read lock); `is_empty` is given.
+> - the observers: `nodes()` returns every key with the height of its node, in order (walk level 0); `level(l)` returns the keys linked on level `l`, in order.
 
 The tests: exact scenarios (a new list is empty; insert adds and contains finds; a duplicate is refused and changes nothing; the list stays sorted whatever the insertion order; a comparison function decides the order; node heights come from the seeded generator; strings work too), and a property: **a list ordered by absolute value or in reverse** treats keys that neither precede the other as one key and keeps the order given. (The set-model property needs `erase`: it comes in stage 2.)
 
@@ -33,16 +39,7 @@ Everything inside: how nodes are stored and linked, how you represent levels, wh
 
 **`RwLock` for many readers.** `self.inner.read().unwrap()` for `contains` and `size`; `write()` for `insert`; one lock around the whole structure is the simplest correct design.
 
-**`Option<usize>` links.** `links: Vec<Option<NodeId>>` indexed by level: `links.get(level).copied().flatten()` is 'the next node on this level, if the node is that tall and the link is set'.
-
-```rust
-let (update, found) = inner.search(&self.compare, key);
-let id = inner.alloc(SkipNode::new(new_height, Some(key.clone())));
-let prev = if level < old_height { update[level] } else { HEADER };
-let next = inner.nodes[prev].next(level);
-inner.nodes[id].set_next(level, next);
-inner.nodes[prev].set_next(level, Some(id));
-```
+**`Option<usize>` links.** On a `Vec<Option<usize>>`, `slots.get(i).copied().flatten()` is "the entry at `i`, if the vector is that long and the entry is set": one expression for two kinds of absence, with no index that can panic.
 
 ## Design notes
 

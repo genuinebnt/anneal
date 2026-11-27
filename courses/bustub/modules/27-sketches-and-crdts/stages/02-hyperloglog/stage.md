@@ -11,11 +11,18 @@ HyperLogLog estimates how many **distinct** items a stream contains in a few kil
 
 In `src/primer/hyperloglog.rs` the public API is fixed (`HyperLogLog::new`, `add_elem`, `compute_cardinality`, `cardinality`, `registers`, `register_index`, `position_of_leftmost_one`); the inside is yours (`hash64`, a 64-bit hash with well-mixed bits, and `CONSTANT = 0.79402` are given).
 
-- `new(n_bits)`: `2^n_bits` registers, all zero, and the estimate 0; a **negative** `n_bits` gives no registers (and an estimate of 0 forever).
-- `register_index(hash)`: the top `n_bits` bits of the hash as a number; 0 when `n_bits` is 0.
-- `position_of_leftmost_one(hash)`: drop the first `n_bits` bits (shift left), count the leading zeros of what is left (at most `64 - n_bits`), plus one. An all-zero rest gives `64 - n_bits + 1`.
-- `add_elem(&val)`: hash it; with no registers do nothing; otherwise raise the register at `register_index` to `position_of_leftmost_one` if that is larger, under the lock.
-- `compute_cardinality()`: lock the registers, compute `CONSTANT × m² / Σ 2^(-register)` rounded down (0 with no registers), store it; `cardinality()` returns the stored value; `registers()` a copy. Keep the estimator as a function of its own: stage 3 needs it too.
+- **`new(n_bits)` has `2^n_bits` registers, all zero, and the estimate 0**; a **negative** `n_bits` gives no registers (and an estimate of 0 forever).
+- **`register_index(hash)` is the top `n_bits` bits of the hash as a number**; 0 when `n_bits` is 0.
+- **`position_of_leftmost_one(hash)` is one more than the number of leading zeros of the hash once its first `n_bits` bits are dropped**; an all-zero rest gives `64 - n_bits + 1`.
+- **`add_elem(&val)` keeps, in the register the value's hash selects, the largest position seen**: a register only ever grows, also when threads add at once, and adding a value twice changes nothing. With no registers it does nothing.
+- **`compute_cardinality()` stores `CONSTANT × m² / Σ 2^(-register)` rounded down** (0 with no registers); `cardinality()` returns the stored value and `registers()` a copy. Stage 3 needs the same estimator: keep it a function of its own.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `new(n_bits)`: `2^n_bits` registers, all zero, and the estimate 0; a **negative** `n_bits` gives no registers (and an estimate of 0 forever).
+> - `register_index(hash)`: the top `n_bits` bits of the hash as a number; 0 when `n_bits` is 0.
+> - `position_of_leftmost_one(hash)`: drop the first `n_bits` bits (shift left), count the leading zeros of what is left (at most `64 - n_bits`), plus one. An all-zero rest gives `64 - n_bits + 1`.
+> - `add_elem(&val)`: hash it; with no registers do nothing; otherwise raise the register at `register_index` to `position_of_leftmost_one` if that is larger, under the lock.
+> - `compute_cardinality()`: lock the registers, compute `CONSTANT × m² / Σ 2^(-register)` rounded down (0 with no registers), store it; `cardinality()` returns the stored value; `registers()` a copy. Keep the estimator as a function of its own: stage 3 needs it too.
 
 The tests: exact scenarios (the register is the top bits of the hash; the run length is the position of the leftmost one after the register bits; with no register bits all 64 bits count; adding a value raises exactly one register to its rank; the same value twice changes nothing; a register only ever grows; a negative size ignores everything; adding is thread-safe; an empty sketch estimates the formula on all-zero registers; zero register bits is one register; the estimate is close for many distinct values and plausible for a small set), and two properties: **the registers depend only on the set of values** (any order, with every value repeated, gives the same registers and the same estimate; registers never go down); and **the estimate tracks the number of distinct values** across sizes (a band of ±40%, since the course's constant runs about 10% high).
 
@@ -25,27 +32,15 @@ How you lock (one `Mutex` per field, one around both), how you hold the register
 
 ## The Rust toolbox
 
-**Bit tricks.** `hash >> (64 - b)` is the top `b` bits; `(hash << b).leading_zeros()` counts zeros after them; `u64::leading_zeros` is one instruction.
+**Bit tricks.** For a `u64` `x`, `x >> (64 - k)` is its top `k` bits as a number (for `k` from 1 to 64: a shift by 64 overflows, so `k = 0` is a case of its own); `x << k` drops them; `u64::leading_zeros` is one instruction.
 
-**`min` to cap a run.** `rest.leading_zeros().min(64 - b) + 1` handles an all-zero remainder (whose `leading_zeros` is 64).
+**`min` to cap a count.** `leading_zeros` of 0 is 64, even when only part of the word holds data: cap the count with `min` at the number of bits that do.
 
 **`f64::powi`.** `2f64.powi(-(r as i32))` is `2^-r`; sum over registers with `iter().map(..).sum::<f64>()`.
 
 **Casting a float to an integer rounds toward zero.** `(x as u64)` truncates (and saturates): that is the 'rounded down' of the estimate.
 
-**Lock before you read-modify-write.** `registers[idx] = registers[idx].max(rank)` under one lock; a read under one lock and a write under another can let a smaller rank overwrite a larger one.
-
-```rust
-(hash >> (64 - self.n_bits as u32)) as usize           // careful: a shift by 64 is an overflow
-let rest = hash << used;                                // drop the register bits
-(rest.leading_zeros().min(64 - used) + 1) as u8
-```
-
-```rust
-let registers = self.registers.lock().unwrap();
-let value = estimate(registers.iter().map(|r| *r as u32), registers.len());
-*self.cardinality.lock().unwrap() = value;
-```
+**Lock before you read-modify-write.** `best[i] = best[i].max(score)` under one lock; a read under one lock and a write under another can let a smaller value overwrite a larger one.
 
 ## Design notes
 

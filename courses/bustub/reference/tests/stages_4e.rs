@@ -269,7 +269,9 @@ fn s4e_03_the_same_interleaving_commits_at_snapshot_and_is_refused_at_serializab
     for (level, commits) in [("snapshot", true), ("serializable", false)] {
         let db = db();
         let (mut a, mut b) = (Session::new(&db), Session::new(&db));
-        // a reads the whole table, b changes a row of it and commits, a writes elsewhere and commits: a's decision rested on stale data
+        // a reads the whole table, b changes a row of it and commits, a inserts elsewhere and commits. The schedule is serializable
+        // (a, then b), but the commit-time check is conservative: a later commit that wrote a row a's scan matches refuses a, a false
+        // positive that serializable snapshot isolation in PostgreSQL would commit. Write skew is the anomaly the check is there for.
         exec(&mut a, &format!("begin isolation level {level}"));
         assert_eq!(exec(&mut a, "select sum(v) from t"), ["60"], "{level}: a reads");
         exec(&mut b, "update t set v = 0 where id = 1");

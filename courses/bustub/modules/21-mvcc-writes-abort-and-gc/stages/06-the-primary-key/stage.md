@@ -6,19 +6,34 @@ Changing a primary key in place would break the rule of Part 1: a rid belongs to
 
 ## The task
 
-**Part 1.** In `src/execution/execution_common.rs`, `insert_mvcc`, the region marked `4b-06` (before the `4b-01` fallback): if `indexes` contains a primary-key index (`is_primary_key`):
+**Part 1: inserting under a primary key.** In `src/execution/execution_common.rs`, `insert_mvcc`, the region marked `4b-06` (before the `4b-01` fallback), for a table with a primary-key index (`is_primary_key`):
 
-- the key is `tuple.key_from_tuple(&table.schema, &pk.key_schema, pk.index.metadata().get_key_attrs())`; a key with a NULL fails with the error of `pk.check_primary_key(&key)` before anything is written (the transaction is not tainted);
-- `pk.index.scan_key(&key)`: if an entry exists, look at the tuple at its rid (`get_tuple_and_undo_link`). **Live** (`!is_deleted`): duplicate key, fail with `write_write_conflict(txn)`. **Deleted**: reuse the rid, `modify_tuple(txn, txn_mgr, table, rid, Some(tuple))` (stage 2/3's path);
-- no entry: insert the tuple (temporary timestamp), add it to the write set, then `insert_entry(&key, rid)`. If that returns `false` another transaction got the key between your lookup and now: mark your new tuple deleted (`update_tuple_meta`) and fail the same way.
+- **A key with a NULL is refused before anything is written**, with the error of `pk.check_primary_key(&key)`; the transaction is not tainted.
+- **A key that a live tuple holds is a duplicate**, whoever committed or wrote it: the insert fails with `write_write_conflict(txn)`.
+- **A key whose tuple is deleted is reused**: the new row goes into that tuple's rid as a new version (stage 2/3's path), so the heap never holds two tuples for one key.
+- **A key nobody has gets a new tuple and an index entry.** If another transaction adds the key between your lookup and your entry, your new tuple is left deleted and the insert fails like a duplicate.
 
-In `src/execution/executors/index_scan_executor.rs`, the region marked `4b-06` at the top of `next`: when `self.txn` is `Some`, for every rid use `read_visible_version(txn, txn_mgr, table, rid)` (given: tuple + link under one latch, `collect_undo_logs`, `reconstruct_tuple`) instead of reading the heap directly; skip `None`; apply the filter predicate as before.
+In `src/execution/executors/index_scan_executor.rs`, the region marked `4b-06` at the top of `next`: **inside a transaction (`self.txn` is `Some`), every rid the index finds gives the version that transaction may see** (`read_visible_version`, given), and a rid with no visible version gives nothing; the filter predicate applies as before.
 
-**Part 2.** In `src/execution/executors/update_executor.rs`, `update_by_delete_and_insert(txn, txn_mgr, changes)` (region `4b-06`; `changes` is the list of `(rid, new tuple)` from stage 3, and `changes_primary_key` already decided this path is needed):
+**Part 2: updating the key.** In `src/execution/executors/update_executor.rs`, `update_by_delete_and_insert(txn, txn_mgr, changes)` (region `4b-06`; `changes` is the list of `(rid, new tuple)` from stage 3, and `changes_primary_key` already decided this path is needed):
 
-1. a new key with a NULL fails (`check_primary_key`) before any change is made;
-2. for every change, `modify_tuple(txn, txn_mgr, table, rid, None)`: delete the old tuple (its index entry stays);
-3. for every change, `insert_mvcc(txn, txn_mgr, table, &self.indexes, new)`: insert the new tuple. A new key that equals a key just deleted finds the tombstone and reuses its rid; a key nobody had gets a new tuple and entry.
+- **A new key with a NULL fails before any change is made.**
+- **The statement behaves as if every old row were deleted first and every new row inserted after**: `UPDATE t SET k = k + 1` over keys 1 to 4 succeeds, a new key that equals a key just deleted reuses that tombstone's rid, a key nobody had gets a new tuple and entry, and a new key that a live row not in `changes` holds is a duplicate.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> **Part 1.** In `src/execution/execution_common.rs`, `insert_mvcc`, the region marked `4b-06` (before the `4b-01` fallback): if `indexes` contains a primary-key index (`is_primary_key`):
+>
+> - the key is `tuple.key_from_tuple(&table.schema, &pk.key_schema, pk.index.metadata().get_key_attrs())`; a key with a NULL fails with the error of `pk.check_primary_key(&key)` before anything is written (the transaction is not tainted);
+> - `pk.index.scan_key(&key)`: if an entry exists, look at the tuple at its rid (`get_tuple_and_undo_link`). **Live** (`!is_deleted`): duplicate key, fail with `write_write_conflict(txn)`. **Deleted**: reuse the rid, `modify_tuple(txn, txn_mgr, table, rid, Some(tuple))` (stage 2/3's path);
+> - no entry: insert the tuple (temporary timestamp), add it to the write set, then `insert_entry(&key, rid)`. If that returns `false` another transaction got the key between your lookup and now: mark your new tuple deleted (`update_tuple_meta`) and fail the same way.
+>
+> In `src/execution/executors/index_scan_executor.rs`, the region marked `4b-06` at the top of `next`: when `self.txn` is `Some`, for every rid use `read_visible_version(txn, txn_mgr, table, rid)` (given: tuple + link under one latch, `collect_undo_logs`, `reconstruct_tuple`) instead of reading the heap directly; skip `None`; apply the filter predicate as before.
+>
+> **Part 2.** In `src/execution/executors/update_executor.rs`, `update_by_delete_and_insert(txn, txn_mgr, changes)` (region `4b-06`; `changes` is the list of `(rid, new tuple)` from stage 3, and `changes_primary_key` already decided this path is needed):
+>
+> 1. a new key with a NULL fails (`check_primary_key`) before any change is made;
+> 2. for every change, `modify_tuple(txn, txn_mgr, table, rid, None)`: delete the old tuple (its index entry stays);
+> 3. for every change, `insert_mvcc(txn, txn_mgr, table, &self.indexes, new)`: insert the new tuple. A new key that equals a key just deleted finds the tombstone and reuses its rid; a key nobody had gets a new tuple and entry.
 
 The tests: exact scenarios (a duplicate primary key fails and taints; a key committed by somebody else is a duplicate too; a deleted key is reused without a second tuple; index scans see the version of their snapshot; aborting an insert keeps the entry and the next insert reuses it; delete then insert in one transaction reuses the tuple; updating the key moves the row; shifting every key reuses the tombstones it just made; older snapshots still see the old keys; a non-key update stays in place; updating a key onto a live key fails; a NULL primary key is refused before anything is written; a lookup on another index inside a transaction finds the rows written in transactions), and a property: **transactions one after another on a table with a primary key**, with inserts, deletes, value updates and key moves, committed or aborted, against a `BTreeMap`: every duplicate fails and taints, every other statement succeeds, the table and every point lookup equal the map after each transaction, every earlier snapshot still reads its state, and the heap never holds more tuples than there are different keys.
 
@@ -36,17 +51,7 @@ How you detect a live key (through the index and the heap) and how you order the
 
 **Two phases.** Collect the changes, delete all old keys, then insert all new ones: `UPDATE t SET k = k + 1` over keys 1 to 4 only works that way.
 
-```rust
-let key = tuple.key_from_tuple(&table.schema, &pk.key_schema, pk.index.metadata().get_key_attrs());
-pk.index.scan_key(&key)            // Vec<Rid>: the rid(s) under the key
-pk.index.insert_entry(&key, rid)   // bool: false if the key is there
-read_visible_version(txn, txn_mgr, table, rid)?   // Result<Option<Tuple>>
-```
-
-```rust
-for (rid, _) in changes { modify_tuple(txn, txn_mgr, self.table_info, *rid, None)?; }
-for (_, new) in changes { insert_mvcc(txn, txn_mgr, self.table_info, &self.indexes, new)?; }
-```
+**The calls you need, by shape.** `Tuple::key_from_tuple(&self, schema, key_schema, key_attrs) -> Tuple` projects a row onto an index's key; `Index::scan_key(&key) -> Vec<Rid>` lists the rids under a key; `Index::insert_entry(&key, rid) -> bool` is `false` if the key is already there; `read_visible_version(..) -> Result<Option<Tuple>>` is the version a transaction may see, if any.
 
 ## Design notes
 

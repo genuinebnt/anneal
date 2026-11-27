@@ -1,11 +1,11 @@
 Your transaction manager can begin a transaction at one of three levels, and so far nothing in SQL can ask for one: the session always uses snapshot isolation. The level is the contract a client buys: which of the anomalies from the lab of module 4d it may see. This stage lets a client say what it wants, `begin isolation level serializable`, or set a default for its session, and then **shows the difference** in the one place it matters: the same interleaving of two transactions commits at snapshot isolation and is refused at serializable.
 
-> [!CHECK] Transaction A reads the whole table. Transaction B updates one row of it and commits. Transaction A then inserts a different row and commits. At snapshot isolation A commits; at serializable it must not. What exactly did A do that makes the second case wrong, and why is it fine at snapshot isolation?
-> ||A made a **decision on data that is no longer true**: it read the table, B changed a row A had read, and A's later write may rest on the old value. At snapshot isolation that is allowed: A reads a consistent snapshot, and writes conflict only if they touch the *same row* (first committer wins). Serializable promises a result equivalent to *some* serial order, and no order is consistent with A having read before B's change and written after it, so the commit-time validation sees that A's read set was invalidated by a later commit and refuses.||
+> [!CHECK] Transaction A reads the whole table. Transaction B updates one row of it and commits. Transaction A then inserts a different row and commits. At snapshot isolation A commits; at serializable this engine refuses it. Is the schedule really not serializable? Look for a serial order of A and B that gives the same reads and the same final table, and explain why the engine refuses either way.
+> ||It **is** serializable: A, then B. A's read saw the table before B's update, and A's insert touches no row B read or wrote, so running all of A first and then all of B gives the same reads and the same table; PostgreSQL's serializable snapshot isolation commits this schedule. This engine's check is **conservative**: at commit it looks at every row written by a transaction that committed after A's read timestamp and refuses A if one of A's scan predicates matches that row, before or after the write. B's row matches A's full scan, so A is refused: a false positive, the price of a check that never asks whether some serial order exists. The anomaly serializable is there to stop is **write skew** (the two doctors of the boss stage): each transaction reads what the other writes, so neither order explains both, and snapshot isolation lets both commit.||
 >
-> - Which levels does the engine have? Which common ones does it not?
-> - Does a level named in `begin` apply only to that transaction?
-> - What does autocommit use?
+> - Run all of A before B: does A read the same sum? Does the table end the same?
+> - What does the commit-time check compare, and does it ever look for a serial order?
+> - In write skew, which transaction reads what the other one writes?
 
 ## The task
 
@@ -21,15 +21,15 @@ Where the level name is turned into `IsolationLevel` (the parser could do it; th
 
 ## The Rust toolbox
 
-**Words until something else.** `while let Some(Token::Word(w)) = self.peek().cloned() { ... }` collects `read uncommitted` without knowing its length.
+**Items until something else.** `while let Some(Item::Name(n)) = items.peek().cloned() { .. }` consumes a run of one kind of item and stops at the first of another kind, so a name of one, two or three words needs no length.
 
-**A `match` on a `&str`.** `match name.trim().to_lowercase().as_str() { "serializable" => ..., "repeatable read" | "snapshot" => ..., other => Err(...) }`: aliases are or-patterns.
+**A `match` on a `&str`.** `match answer.trim().to_lowercase().as_str() { "yes" | "y" => .., "no" | "n" => .., other => Err(..) }`: normalise once, then aliases are or-patterns and `other` binds whatever is left for the error message.
 
-**A guard in a pattern.** `Statement::Set { name, value } if name == "default_transaction_isolation"` picks one variable out of all `SET`s.
+**A guard in a pattern.** `Command::Set { key, value } if key == "colour" => ..` picks one case out of a variant; an arm without the guard further down takes the rest of that variant.
 
 ## If this is new
 
-- L7 Enums and patterns: guards and or-patterns.
+- [Patterns](https://doc.rust-lang.org/reference/patterns.html) (the Rust Reference): guards and or-patterns.
 - [S2 Strings and text](/t/s2-strings-text): case-insensitive comparison without allocation surprises.
 
 ## Tests

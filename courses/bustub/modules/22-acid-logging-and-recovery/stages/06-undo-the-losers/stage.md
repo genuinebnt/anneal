@@ -11,7 +11,11 @@ After redo the pages hold everything that was logged, including the changes of t
 
 In `src/recovery/recover.rs`:
 
-- `undo(store, log, records, losers) -> StoreResult<usize>`: walk `records` **newest first**; for every `Change` of a transaction in `losers`: append to the log the change with `before` and `after` swapped (same `txn` and `rid`), and put the slot in its `before` state (`set_state`); count it. Afterwards append an `Abort` record for each loser and **flush the log**. Return how many changes were undone.
+- **`undo(store, log, records, losers) -> StoreResult<usize>` rolls back every change of a loser in `records`, newest first.** Each undo is logged before it is applied, as the change with `before` and `after` exchanged (same `txn` and `rid`), and leaves the slot in the change's `before` state.
+- **Each loser then ends with an `Abort` record, and the log is durable before `undo` returns.** It returns how many changes it undid.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `undo(store, log, records, losers) -> StoreResult<usize>`: walk `records` **newest first**; for every `Change` of a transaction in `losers`: append to the log the change with `before` and `after` swapped (same `txn` and `rid`), and put the slot in its `before` state (`set_state`); count it. Afterwards append an `Abort` record for each loser and **flush the log**. Return how many changes were undone.
 
 (`recover(store, log)`, given, is: read the durable records, `analyse`, `redo` from `analysis.redo_from`, `undo` the losers, flush every page.)
 
@@ -25,7 +29,7 @@ How you iterate (`records.iter().rev()` once for all losers is the intended desi
 
 **Backwards iteration.** `records.iter().rev()` walks the slice from the end without copying.
 
-**Struct update syntax for a swap.** `LogRecord::Change { txn: *txn, rid: *rid, before: after.clone(), after: before.clone() }`: the record is built from the one you are undoing with the two fields exchanged.
+**Building the inverse.** An enum variant is rebuilt from the fields of another, with two of them exchanged: `Move::Step { piece: *piece, from: *to, to: *from }` undoes a step. Clone the fields that own heap data.
 
 **`contains` on a small slice.** `losers.contains(txn)` is fine here; for many losers build a `HashSet`.
 

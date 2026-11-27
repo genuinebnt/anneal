@@ -2,10 +2,17 @@ A persistent trie is the perfect basis for a concurrent store. A **reader** take
 
 ## The task
 
-In `src/primer/trie_store.rs`, `TrieStore` has two mutexes: `root` (guards the pointer to the current version) and `write_lock` (makes writers take turns).
+In `src/primer/trie_store.rs`, `TrieStore` holds the current version of the trie and is shared by many threads (the fields are yours; the type must stay `Default`):
 
-- `get::<T>(key) -> Option<ValueGuard<T>>`: lock `root` just long enough to clone the trie, then read with `get_shared` and wrap the value in a `ValueGuard` (given: it derefs to the value and keeps it alive).
-- `put(key, value)` and `remove(key)`: hold `write_lock` for the whole operation; clone the current trie under `root`; build the new trie **without** holding `root`; take `root` again only to store the new trie.
+- **`get::<T>(key) -> Option<ValueGuard<T>>` reads the current version** and wraps the value in a `ValueGuard` (given: it derefs to the value and keeps it alive), which stays valid however many writes follow, a remove of the key included.
+- **`put(key, value)` and `remove(key)` publish the next version.** Writers take turns, so no write is lost; a reader sees the old version or the new one, never a partial one.
+- **Readers never wait for a writer to finish building**: the only thing a reader may wait for is a pointer being cloned or replaced.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> In `src/primer/trie_store.rs`, `TrieStore` has two mutexes: `root` (guards the pointer to the current version) and `write_lock` (makes writers take turns).
+>
+> - `get::<T>(key) -> Option<ValueGuard<T>>`: lock `root` just long enough to clone the trie, then read with `get_shared` and wrap the value in a `ValueGuard` (given: it derefs to the value and keeps it alive).
+> - `put(key, value)` and `remove(key)`: hold `write_lock` for the whole operation; clone the current trie under `root`; build the new trie **without** holding `root`; take `root` again only to store the new trie.
 
 The tests: exact scenarios (put, get and remove; a guard stays valid after the key is removed; a guard sees the version it was taken from; values need not be clonable; four writers and four readers; readers are not blocked by a writer building a big trie), and a property: **the store used from one thread behaves like a map, and a guard taken before later writes still holds the value it was taken with**.
 
@@ -15,19 +22,13 @@ How you share the root (two mutexes as in the intended design, a `RwLock<Arc<Tri
 
 ## The Rust toolbox
 
-**Lock, clone, unlock, work.** `let snapshot = self.root.lock().unwrap().clone();` holds the lock for the duration of one pointer clone (the temporary guard drops at the end of the statement); the work happens on the clone.
+**Lock, clone, unlock, work.** `let settings = self.current.lock().unwrap().clone();` holds the lock for the duration of one clone (the temporary guard drops at the end of the statement); the work happens on the clone. Cloning a value that is one `Arc` inside is a pointer copy.
 
-**A second lock for writers.** `let _writer = self.write_lock.lock().unwrap();` kept alive for the whole function makes writers take turns without blocking readers, who only ever take the first, short lock.
+**A guard held to the end of the function.** `let _turn = self.turn.lock().unwrap();` on a `Mutex<()>` holds the lock until the function returns: a named binding lives to the end of the scope, while `let _ = ..` drops the guard at once. A lock that only writers take makes them take turns without blocking anybody else.
 
 **A guard that owns its value.** `ValueGuard<T>` holds an `Arc<T>`: it keeps the value alive even if the trie version it came from is dropped.
 
 **`Default` for a struct of locks.** `#[derive(Default)]` builds the store with an empty trie and an unlocked mutex; keep your fields `Default`.
-
-```rust
-let snapshot = self.root.lock().unwrap().clone();     // a Trie is a pointer: cloning is cheap
-let _writer = self.write_lock.lock().unwrap();        // released at the end of the function
-*self.root.lock().unwrap() = next;                    // publish
-```
 
 ## Design notes
 

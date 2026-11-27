@@ -2,8 +2,15 @@ Erasing mirrors inserting: search for the key, remember the update vector, then 
 
 ## The task
 
-- `erase(&key) -> bool`: write lock; search; not found: `false`; on each level of the node make the predecessor (`update[level]`) skip it; make the slot reusable; lower the list's height while its top level has no nodes; size - 1; `true`.
-- `clear()`: write lock; forget every element; the list is as new (height 1, size 0).
+In `src/primer/skiplist.rs`:
+
+- **`erase(&key)` removes the equivalent key, if there is one, from every level and returns `true`**; otherwise it returns `false` and nothing changes. The list's height falls to that of its tallest remaining node (at least 1).
+- **`clear()` forgets every element**: the list is as new (height 1, size 0) and can be filled again.
+- **After every call the list is well formed**: keys in order, level 0 holds every key, each higher level holds exactly the nodes tall enough for it, and nothing is linked above the tallest node.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `erase(&key) -> bool`: write lock; search; not found: `false`; on each level of the node make the predecessor (`update[level]`) skip it; make the slot reusable; lower the list's height while its top level has no nodes; size - 1; `true`.
+> - `clear()`: write lock; forget every element; the list is as new (height 1, size 0).
 
 The tests: exact scenarios (erase removes the key; erasing a missing key changes nothing; every level forgets the erased node; erased slots are reused and the list still works; clear empties the list and it can be filled again; erasing the tallest node lowers the height of the list), and a property: **any inserts, erases, lookups and clears against a `BTreeSet`**, checking after every step that the list is well formed (keys in order, every height between 1 and 14, level 0 holds all keys, **each higher level is exactly the nodes tall enough**, nothing above the tallest node).
 
@@ -13,20 +20,11 @@ How you reuse the slots of erased nodes (a free list, or leave them), and whethe
 
 ## The Rust toolbox
 
-**The update vector again.** The same search gives you the predecessors on every level: `for level in 0..node_height { pred[level].next[level] = node.next[level] }` unlinks the node everywhere at once.
+**The update vector again.** The search that `insert` uses already gives you the predecessor on every level; unlinking a node is the mirror image of linking it, level by level.
 
 **A free list.** `free.push(id)` on erase and `free.pop()` on the next insert keeps the arena from growing under churn.
 
 **Early return.** `let Some(id) = found else { return false };` keeps the erase path flat.
-
-```rust
-for level in 0..inner.nodes[id].height() {
-    let next = inner.nodes[id].next(level);
-    inner.nodes[update[level]].set_next(level, next);
-}
-inner.release(id);
-while inner.height > 1 && inner.nodes[HEADER].next(inner.height - 1).is_none() { inner.height -= 1; }
-```
 
 ## Design notes
 

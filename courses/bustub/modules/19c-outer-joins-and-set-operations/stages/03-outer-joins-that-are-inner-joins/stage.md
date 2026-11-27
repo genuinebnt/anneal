@@ -1,7 +1,7 @@
 Programmers write `LEFT JOIN` by habit, then add `WHERE b.z > 250`. The padded rows have a NULL `b.z`; `NULL > 250` is unknown; the filter removes every padded row; and what is left is exactly what an inner join would have returned. The outer join was never needed. The optimizer can see this, and acting on it matters: an inner join may be reordered with other joins, run by a hash join, and receive filters on both sides (the previous stage), none of which a LEFT join allows. This stage teaches the optimizer to ask one question: **does this filter fail for every row that the join padded?**
 
-> [!CHECK] For `a left join b on a.x = b.x`, decide for each filter whether the join can become an inner join: (1) `b.z > 250`, (2) `b.z is null`, (3) `b.z > 250 or a.y > 5`, (4) `b.z > 250 and a.y > 5`, (5) `coalesce(b.z, 0) > 250`, (6) `b.z is not null`.
-> ||(1) yes: a padded row has `b.z` NULL, the comparison is unknown, the row is dropped. (2) no: that is *true* for padded rows; the filter is how you find them. (3) no: a padded row can pass through the `a.y > 5` side. (4) yes: `AND` fails when either side fails. (5) no: the default turns the NULL into a value that may pass. (6) yes. The pattern: `AND` rejects if **either** part does, `OR` only if **both** do, `IS NULL` and `COALESCE` never.||
+> [!CHECK] For `a left join b on a.x = b.x`, decide for each filter whether the join can become an inner join: (1) `b.z > 250`, (2) `b.z is null`, (3) `b.z > 250 or a.y > 5`, (4) `b.z > 250 and a.y > 5`, (5) `coalesce(b.z, 300) > 250`, (6) `b.z is not null`.
+> ||(1) yes: a padded row has `b.z` NULL, the comparison is unknown, the row is dropped. (2) no: that is *true* for padded rows; the filter is how you find them. (3) no: a padded row can pass through the `a.y > 5` side. (4) yes: `AND` fails when either side fails. (5) no: on a padded row the default makes it `300 > 250`, TRUE, so padded rows pass. With a default of 0 it would reject them (`0 > 250` is FALSE), but this stage's rule still says no: `COALESCE` is not strict (a NULL argument does not make it NULL), so the rule cannot tell without evaluating the default; challenge 3j-c5 answers that case precisely. (6) yes. The pattern: `AND` rejects if **either** part does, `OR` only if **both** do, `IS NULL` and `COALESCE` never.||
 >
 > - Which join types can be simplified by a filter on the left side, and into what?
 > - A FULL join is filtered by `b.z > 250`. What does the join become? And by `a.y > 15 and b.z > 250`?
@@ -31,13 +31,13 @@ How precisely you analyse conditions. "No" is always safe; a more precise "yes" 
 
 ## If this is new
 
-- S6 Trait objects: downcasting a `dyn Trait` with `Any`.
+- [L4 Traits & dispatch](/t/l4-traits-dispatch): downcasting a `dyn Trait` with `Any`.
 - Y5 Testing & verification: a property that compares optimized and unoptimized plans.
 
 ## Tests
 
 - A LEFT join filtered on the right side with a NULL-rejecting condition becomes INNER (comparison, `IS NOT NULL`, arithmetic, `AND` with an unrelated part), and the rows are unchanged.
-- Conditions that a padded row can pass (`IS NULL`, `OR` with a free side, `COALESCE`) leave the join alone.
+- Conditions that a padded row can pass (`IS NULL`, `OR` with a free side), and `COALESCE`, which the rule does not look into, leave the join alone.
 - RIGHT join: a filter on the left side makes it INNER; a filter on the right does not.
 - FULL join: each side is judged separately (RIGHT, LEFT, INNER, or unchanged).
 - After simplification the filters reach the scans.

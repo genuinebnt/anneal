@@ -9,10 +9,18 @@ Emptying a bucket on removal would cut the probe chains of keys that went past i
 
 ## The task
 
-- `remove(&key) -> bool`: write lock; find the key; absent: `false`; otherwise leave a **tombstone** in its bucket (not an empty one: a lookup that stops at an empty bucket would never reach keys that were placed past it), size - 1, `true`.
-- `clear()`: write lock; every bucket empty; size 0; the capacity stays.
-- `max_probe_distance()`: read lock; the largest probe distance over **live** buckets; 0 for an empty table. Tombstones do not count.
-- inserts may **reuse** a tombstone (and the lookup still probes past tombstones).
+In `src/primer/robin_hood_hash_set.rs`:
+
+- **`remove(&key)` returns whether the key was there.** Afterwards it is absent, `size()` is one less, and **every other key is still found**: a removed key's bucket must not stop the lookup of a key placed past it.
+- **`clear()` empties the set**; the capacity stays.
+- **`max_probe_distance()` is the largest probe distance over live keys**, 0 for an empty table; removed keys do not count.
+- **A removed key's bucket is free for inserts again**: a table whose keys have all been removed accepts as many inserts as a new one.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `remove(&key) -> bool`: write lock; find the key; absent: `false`; otherwise leave a **tombstone** in its bucket (not an empty one: a lookup that stops at an empty bucket would never reach keys that were placed past it), size - 1, `true`.
+> - `clear()`: write lock; every bucket empty; size 0; the capacity stays.
+> - `max_probe_distance()`: read lock; the largest probe distance over **live** buckets; 0 for an empty table. Tombstones do not count.
+> - inserts may **reuse** a tombstone (and the lookup still probes past tombstones).
 
 The tests: exact scenarios (remove reports whether the key was there; a lookup continues past a tombstone; an insert reuses a tombstone; the maximum probe distance ignores tombstones; a key stays reachable when a tombstone in front of it is reused; random inserts and removes agree with a hash set; clear keeps the capacity; a table full of tombstones accepts inserts again), and a property: **any inserts, removes, lookups and clears on a small table against a `HashSet`** (an insert fails exactly when the table is full of other keys, every key found is at a bucket inside the table, tombstones pile up and are reused).
 
@@ -22,20 +30,13 @@ How you remember a removed key (a bucket state); nothing else is specified.
 
 ## The Rust toolbox
 
-**A tombstone is a state, not a hole.** `table.slots[bucket] = Slot::Tombstone;` keeps the probe sequence of every key that went past it intact.
+**A tombstone is a state, not a hole.** A removed key's bucket gets a third state, neither empty nor live: a lookup walks past it, so the probe sequence of every key that went past it stays intact.
 
-**Statistics with `filter_map`.** `slots.iter().enumerate().filter_map(|(b, s)| match s { Slot::Live(k) => Some(distance(home(k), b)), _ => None }).max().unwrap_or(0)`.
+**Statistics with `filter_map`.** `seats.iter().filter_map(|s| match s { Seat::Taken(g) => Some(g.age), _ => None }).max().unwrap_or(0)` keeps one variant, maps it to a number and takes the largest, with 0 for none; `enumerate()` first if the number depends on the position.
 
 **Reuse on insert.** In the probe loop an `Empty` or a `Tombstone` bucket takes the carried key; lookup, though, may only stop at `Empty`.
 
 **`fill`.** `slots.fill(Slot::Empty)` (for `Clone` slots) resets the table in one call.
-
-```rust
-let Some(bucket) = self.find(&table, key) else { return false };
-table.slots[bucket] = Slot::Tombstone;
-table.size -= 1;
-(0..self.capacity).filter_map(|b| match &table.slots[b] { Slot::Live(k) => Some(self.probe_distance(self.home_bucket(k), b)), _ => None }).max().unwrap_or(0)
-```
 
 ## Design notes
 

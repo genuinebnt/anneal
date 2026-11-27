@@ -1,7 +1,7 @@
 Every expression you have written so far evaluates **all** its children and then combines them. `CASE` cannot: `case when b = 0 then 0 else a / b end` exists so that the division is *not* evaluated when `b` is zero, and an engine that evaluated both branches first would turn the guard into an error. This is the first expression of the engine with an evaluation *order* that is part of its meaning, and it has a type problem of its own: a CASE has one type, decided at plan time, made of branches that may include a bare `NULL` that has no type at all.
 
 > [!CHECK] `select case when a > 1 then 'x' else null end from t`. The binder types a bare NULL literal as INTEGER (module 3d). What is the type of this CASE, and what should happen to the NULL branch? What would the output column look like if the NULL branch were allowed to make the CASE an INTEGER?
-> ||The CASE is VARCHAR, because the one branch that has a real type says so. The NULL branch must be re-typed as a NULL of that type (a `Value::null(Varchar)`), not rejected as a type mismatch and not allowed to win. If the INTEGER NULL won, the column would be INTEGER and the `'x'` rows would fail to store or print; and a CASE of `1` and `NULL` would become a VARCHAR if the rule were "last branch wins". The rule is: all non-NULL-literal branches must agree, and NULL literals take that type.||
+> ||The CASE is VARCHAR, because the one branch that has a real type says so. The NULL branch must be re-typed as a NULL of that type (a `Value::null(Varchar)`), not rejected as a type mismatch and not allowed to win. If the INTEGER NULL won, the column would be INTEGER and the `'x'` rows would fail to store or print. The rule is: all non-NULL-literal branches must agree, and NULL literals take that type.||
 >
 > - What is the type of a CASE whose results are all NULL?
 > - Which branch's expression is evaluated for a row that matches the second `when`?
@@ -31,7 +31,7 @@ How the branches are stored (pairs, or a flat list of children as BusTub stores 
 
 ## If this is new
 
-- L7 Enums and patterns: matching on shapes, not types.
+- [Patterns](https://doc.rust-lang.org/reference/patterns.html) (the Rust Reference): matching on shapes, not types.
 - Y5 Testing & verification: a model written as a `match`.
 
 ## Tests

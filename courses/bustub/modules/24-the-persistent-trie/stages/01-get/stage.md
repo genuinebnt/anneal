@@ -4,8 +4,12 @@ A trie stores a string key as a path: one node per character, from the root. A *
 
 In `src/primer/trie.rs`:
 
-- `Trie::get::<T>(&self, key) -> Option<&T>`: walk from the root along the characters of `key` (each node's `children` map); at the end the node must have a `value`; downcast it to `T` (`downcast_ref`).
-- `Trie::get_shared::<T>(&self, key) -> Option<Arc<T>>`: the same walk, but return an owner of the value (`Arc::downcast`) so that the caller can keep it after the trie is gone (the store of stage 0a-03 needs it).
+- **`Trie::get::<T>(&self, key) -> Option<&T>` is the value stored under exactly `key`, if it is a `T`.** A missing key, a key that is only a prefix of others (its node holds no value) and a value of another type all give `None`. The empty key's value lives in the root.
+- **`Trie::get_shared::<T>(&self, key) -> Option<Arc<T>>` is the same answer as an owner of the value**, which the caller can keep after the trie is gone (the store of stage 0a-03 needs it).
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `Trie::get::<T>(&self, key) -> Option<&T>`: walk from the root along the characters of `key` (each node's `children` map); at the end the node must have a `value`; downcast it to `T` (`downcast_ref`).
+> - `Trie::get_shared::<T>(&self, key) -> Option<Arc<T>>`: the same walk, but return an owner of the value (`Arc::downcast`) so that the caller can keep it after the trie is gone (the store of stage 0a-03 needs it).
 
 Stage 1 comes before `put`, so the tests build their tries by hand from the given `TrieNode` fields and `Trie::from_root`.
 
@@ -17,20 +21,13 @@ Almost none: the node type and the trie are given (they are the contract), and a
 
 ## The Rust toolbox
 
-**`?` on an `Option` inside a loop.** `node = node.children.get(&c)?;` returns `None` from the whole function the moment a character has no child: the shortest possible 'not found'.
+**`?` on an `Option` inside a loop.** `for part in path.split('/') { dir = dir.entries.get(part)?; }` returns `None` from the whole function the moment a step is missing: the shortest possible 'not found'.
 
 **Type-erased values.** A value is `Arc<dyn Any + Send + Sync>`; `value.downcast_ref::<T>()` gives `Some(&T)` only if the stored value really is a `T`, which is how one trie holds a `u32` under one key and a `String` under another.
 
-**`Arc::downcast`.** `value.clone().downcast::<T>().ok()` turns the shared erased pointer into an `Arc<T>` that owns the value independently of the trie.
+**`Arc::downcast`.** `Arc<dyn Any + Send + Sync>::downcast::<T>()` consumes the `Arc` and gives `Ok(Arc<T>)` if the value is a `T` (or the `Arc` back as `Err`). It takes the pointer by value, so clone the `Arc` first (a pointer copy) when you only borrow it: `let n: Option<Arc<u32>> = shared.clone().downcast::<u32>().ok();`. The result owns the value independently of where you found it.
 
 **`char`s, not bytes.** `key.chars()` walks Unicode scalar values: the children map is keyed by `char`, so a multi-byte letter is one step.
-
-```rust
-let mut node = self.root.as_ref()?;              // Option<&Arc<TrieNode>>: no root, no value
-for c in key.chars() { node = node.children.get(&c)?; }
-node.value.as_ref()?.downcast_ref::<T>()          // Option<&T>
-node.value.clone()?.downcast::<T>().ok()          // Option<Arc<T>>
-```
 
 ## Design notes
 

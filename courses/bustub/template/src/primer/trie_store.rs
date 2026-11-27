@@ -32,7 +32,7 @@ impl TrieStore {
 
     /// Looks `key` up in the current version.
     pub fn get<T: Any + Send + Sync>(&self, key: &str) -> Option<ValueGuard<T>> {
-        todo!("0a-03: take the root lock only to clone the current trie; read from the clone with get_shared; wrap the value in a guard")
+        todo!("0a-03: the value under the key in the current version, in a guard that keeps it alive through later writes; a reader never waits for a writer to finish building")
     }
 
     /// Stores `value` under `key`. Writers are serialised and readers never wait for them: a reader sees the old trie or the new one, never a partial one.

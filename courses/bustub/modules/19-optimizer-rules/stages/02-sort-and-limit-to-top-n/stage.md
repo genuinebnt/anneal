@@ -9,7 +9,10 @@
 
 ## The task
 
-In `src/optimizer/optimizer.rs`, `optimize_sort_limit_as_top_n(&self, plan) -> PlanRef`: optimise the children first; if the node is a `Limit` whose child is a `Sort`, return a `TopN` plan with the **limit node's output schema**, the **sort's children**, the sort's `order_bys` and `n` equal to the limit; otherwise the node unchanged.
+In `src/optimizer/optimizer.rs`, `optimize_sort_limit_as_top_n(&self, plan) -> PlanRef` replaces **every** `Limit` whose child is a `Sort`, at any depth of the plan, by a `TopN` that returns the same rows: the limit's output schema, the sort's input and `order_bys`, and `n` equal to the limit. Any other node is unchanged.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> In `src/optimizer/optimizer.rs`, `optimize_sort_limit_as_top_n(&self, plan) -> PlanRef`: optimise the children first; if the node is a `Limit` whose child is a `Sort`, return a `TopN` plan with the **limit node's output schema**, the **sort's children**, the sort's `order_bys` and `n` equal to the limit; otherwise the node unchanged.
 
 The tests: exact scenarios (order by with a limit becomes a top-N; order by alone and limit alone are left alone; the rows equal sorting everything; ties come out as sort-then-limit gives; limit 0 and a limit larger than the table; two top-Ns in one query and a top-N inside a join), and a property: **for random tables and random `order by` / `limit` combinations, the plan contains a `TopN` exactly when both an order by and a limit are present, and the rows equal the stable sort's prefix**.
 
@@ -19,11 +22,11 @@ How you destructure the plan (`if let` chains, `match` on `(&plan.kind, &child.k
 
 ## The Rust toolbox
 
-**Matching two levels.** `if let PlanKind::Limit { limit } = &node.kind { if let PlanKind::Sort { order_bys } = &node.children[0].kind { ... } }`, or one `match` on both.
+**Matching two levels.** Two nested `if let`s, or one `match` on a pair of references, test a value and the value inside it together and bind the fields you need: `if let Shape::Group { items } = &outer { if let [Shape::Circle { radius }] = items.as_slice() { .. } }`.
 
-**Cloning pieces.** `order_bys.clone()` and `child.children.clone()`: plan data is cheap to clone (`Arc`s).
+**Cloning pieces.** Plan data is cheap to clone: expressions and children are `Arc`s, so cloning a list of them copies pointers, not trees.
 
-**Bottom-up.** The first line, `let node = self.optimize_children(plan, &Self::optimize_sort_limit_as_top_n);`, is what lets nested pairs be found.
+**Bottom-up.** A rule that rewrites the children (with itself) before it looks at the node finds a pair at any depth; one that looks only at the root misses a `Limit` over a `Sort` inside a join or a subquery.
 
 ## If this is new
 

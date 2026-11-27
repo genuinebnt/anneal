@@ -13,12 +13,20 @@ Now the store gets its transactions. `begin` logs a `Begin`; `insert`, `update` 
 
 In `src/recovery/store.rs` (`create`, `get`, `scan`, `set_state`, `open` and `flush_all_pages` are given or from stage 3):
 
-- `begin(&self) -> TxnId`: the next transaction id; logs `Begin`; remembers the transaction as active with no changes yet.
-- a private `change(txn, rid, before, after)` that every write goes through: refuse if the transaction is not active, or if **another active transaction has written this record** (a hold, released when the writer ends); append `LogRecord::Change { txn, rid, before, after }` **first**; then `set_state(rid, &after)`; then remember the change for rollback, the hold, and the page's last LSN.
-- `insert(txn, bytes)`: the first page whose next slot fits the record: its rid is that slot (`None -> Some`). `update(txn, rid, bytes)`: the record must be live (`Some -> Some`). `delete(txn, rid)`: the record must be live (`Some -> None`). Wrong lengths, missing records and records held by others are errors that change nothing and log nothing.
-- `commit(txn)`: log `Commit` and make the log durable up to it (`flush_to`); the transaction ends and its holds are released.
-- `abort(txn)`: for each of the transaction's changes, **newest first**: append the swapped change (`before` and `after` exchanged) and apply the `before` state; then log `Abort`; release the holds. Nothing needs to be flushed.
-- `flush_page(page)`: **first** make the log durable up to the page's last change (`flush_to`), **then** write the page (`bpm.flush_page`).
+- **`begin(&self) -> TxnId`** returns a new transaction id, logs `Begin`, and the transaction is active with no changes yet.
+- **Every write is logged before it is made.** An insert, update or delete of an active transaction appends `LogRecord::Change { txn, rid, before, after }` (an insert is `None -> Some`, a delete `Some -> None`) and only then puts the slot in its `after` state. **A record another active transaction has written is held**: writing it is refused until that transaction ends.
+- **`insert(txn, bytes)`** puts the record in the first page whose next slot fits it, and its rid is that slot; **`update(txn, rid, bytes)`** and **`delete(txn, rid)`** need a live record. Wrong lengths, missing records, held records and transactions that are not active are errors that change nothing and log nothing.
+- **`commit(txn)`** logs `Commit` and returns only when the log is durable up to it; the transaction ends and its holds are released.
+- **`abort(txn)`** undoes the transaction's changes **newest first**, logging each undo as the change with `before` and `after` exchanged, then logs `Abort` and releases the holds. Nothing needs to be flushed.
+- **`flush_page(page)` never lets a page reach the disk before the log records of its changes**: the log is durable up to the page's last change before the page is written.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `begin(&self) -> TxnId`: the next transaction id; logs `Begin`; remembers the transaction as active with no changes yet.
+> - a private `change(txn, rid, before, after)` that every write goes through: refuse if the transaction is not active, or if **another active transaction has written this record** (a hold, released when the writer ends); append `LogRecord::Change { txn, rid, before, after }` **first**; then `set_state(rid, &after)`; then remember the change for rollback, the hold, and the page's last LSN.
+> - `insert(txn, bytes)`: the first page whose next slot fits the record: its rid is that slot (`None -> Some`). `update(txn, rid, bytes)`: the record must be live (`Some -> Some`). `delete(txn, rid)`: the record must be live (`Some -> None`). Wrong lengths, missing records and records held by others are errors that change nothing and log nothing.
+> - `commit(txn)`: log `Commit` and make the log durable up to it (`flush_to`); the transaction ends and its holds are released.
+> - `abort(txn)`: for each of the transaction's changes, **newest first**: append the swapped change (`before` and `after` exchanged) and apply the `before` state; then log `Abort`; release the holds. Nothing needs to be flushed.
+> - `flush_page(page)`: **first** make the log durable up to the page's last change (`flush_to`), **then** write the page (`bpm.flush_page`).
 
 The tests: exact scenarios (inserts fill pages slot by slot; a write is described to the log before it is made, in the exact shape above; commit makes the transaction and all records before it durable; a page reaches the disk only after its log records; abort undoes newest first and logs each undo; another transaction's record is refused until it ends; bad calls leave no trace in the log), and two properties: **transactions beginning, writing, committing and rolling back in any order with page and log flushes in between** keep the store equal to a model of committed records overlaid with the active transactions' writes; and **no record on a disk page is missing an explanation in the durable log** (the write-ahead rule).
 

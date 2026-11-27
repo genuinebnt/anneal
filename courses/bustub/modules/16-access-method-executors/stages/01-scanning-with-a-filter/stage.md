@@ -11,9 +11,14 @@ The plan the planner builds is a tree of operators; the **executors** run it. Ea
 
 In `src/execution/executors/seq_scan_executor.rs` (the struct, `new` and the plan are given):
 
-- `passes_filter(filter, schema, tuple) -> Result<bool>`: no predicate keeps everything; a predicate is evaluated on the tuple with the scan's output schema and keeps the row only if the answer is the BOOLEAN **true**. An error from `evaluate` is passed on.
-- `init`: start a table iterator over the table with `make_iterator()` (module 3c's: the one that stops where the table ended when the scan began) and keep it.
-- `next`: replace the batch with up to `batch_size` rows: for each tuple the iterator gives, skip it if its metadata says `is_deleted`, keep it if `passes_filter` says so; push the tuple and its rid. Return `true` if the batch is not empty.
+- **`passes_filter(filter, schema, tuple) -> Result<bool>`** keeps a row exactly when there is no predicate or the predicate, evaluated on the tuple with the scan's output schema, is the BOOLEAN **true**: FALSE and NULL drop it, and an evaluation error comes back as the `Err`.
+- **After `init`, the `next` calls return the table as it was when `init` ran**: every live row that passes the filter, each with its rid, in storage order, at most `batch_size` per call. A deleted row never comes back, and rows inserted during the scan are not seen.
+- **`next` returns `true` exactly when the batch it leaves is not empty.** The call that returns `false` leaves both vectors empty.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `passes_filter(filter, schema, tuple) -> Result<bool>`: no predicate keeps everything; a predicate is evaluated on the tuple with the scan's output schema and keeps the row only if the answer is the BOOLEAN **true**. An error from `evaluate` is passed on.
+> - `init`: start a table iterator over the table with `make_iterator()` (module 3c's: the one that stops where the table ended when the scan began) and keep it.
+> - `next`: replace the batch with up to `batch_size` rows: for each tuple the iterator gives, skip it if its metadata says `is_deleted`, keep it if `passes_filter` says so; push the tuple and its rid. Return `true` if the batch is not empty.
 
 The tests: exact scenarios (an empty table has no batches; every row comes back in storage order across pages; the batch size is respected; deleted rows are skipped; comparisons, `AND`, NULL is not TRUE), and two properties: **for random rows with NULLs and random predicates** (comparisons of sums and differences of columns, combined with `and`/`or`) `select * from t where p` returns exactly the rows a Rust model of three-valued logic keeps, in storage order; and **the batch size changes how many rows come back per call, never which**.
 

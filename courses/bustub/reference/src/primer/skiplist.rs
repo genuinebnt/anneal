@@ -129,7 +129,7 @@ impl<K: Clone + Send + Sync + 'static, const MAX_HEIGHT: usize, const SEED: u32>
             compare: Box::new(compare),
             inner: RwLock::new(Inner { nodes: vec![header], free: vec![], height: 1, size: 0, rng: Mt19937::new(SEED) }),
         }
-        //~ todo!("0b-01: an empty list: the header node with MAX_HEIGHT empty links, height 1, size 0, a generator seeded with SEED")
+        //~ todo!("0b-01: an empty list ordered by compare, with node heights drawn from a generator seeded with SEED")
         // @end
     }
 
@@ -154,7 +154,7 @@ impl<K: Clone + Send + Sync + 'static, const MAX_HEIGHT: usize, const SEED: u32>
         inner.free.clear();
         inner.height = 1;
         inner.size = 0;
-        //~ todo!("0b-02: under the write lock: forget every element; the list is as new (height 1, size 0)")
+        //~ todo!("0b-02: forget every element; the list is as new (height 1, size 0)")
         // @end
     }
 
@@ -210,7 +210,7 @@ impl<K: Clone + Send + Sync + 'static, const MAX_HEIGHT: usize, const SEED: u32>
         // @begin 0b-01
         let inner = self.inner.read().unwrap();
         inner.search(&self.compare, key).1.is_some()
-        //~ todo!("0b-01: read lock; search; is there a node?")
+        //~ todo!("0b-01: whether an equivalent key is in the list")
         // @end
     }
 
@@ -225,7 +225,7 @@ impl<K: Clone + Send + Sync + 'static, const MAX_HEIGHT: usize, const SEED: u32>
             cur = inner.nodes[id].next(LOWEST_LEVEL);
         }
         out
-        //~ todo!("0b-01: walk level 0 from the start: every key with the height of its node")
+        //~ todo!("0b-01: every key in order, with the height of its node")
         // @end
     }
 
@@ -240,7 +240,7 @@ impl<K: Clone + Send + Sync + 'static, const MAX_HEIGHT: usize, const SEED: u32>
             cur = inner.nodes[id].next(level);
         }
         out
-        //~ todo!("0b-01: walk the given level from the start: the keys of the nodes linked on it")
+        //~ todo!("0b-01: the keys linked on the given level, in order")
         // @end
     }
 }

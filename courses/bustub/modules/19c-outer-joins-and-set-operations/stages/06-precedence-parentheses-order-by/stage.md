@@ -1,7 +1,7 @@
 With one operator, a chain is easy to read left to right. With three operators the question "what does `a UNION b INTERSECT c` mean?" has two answers that differ, and the standard picks one: `INTERSECT` binds tighter, the way `*` binds tighter than `+`. `UNION` and `EXCEPT` have the same rank and group from the left, which matters more than it looks: `a EXCEPT b EXCEPT c` is not `a EXCEPT (b EXCEPT c)`. This stage replaces the parser's flat left-to-right chain with a reader that knows the precedence, adds parenthesised operands, and settles which query an `ORDER BY` or a `LIMIT` belongs to.
 
 > [!CHECK] `a = {1, 2}`, `b = {2, 3}`, `c = {3, 4}`. Evaluate `a union b intersect c`, `a intersect b union c`, and `(a union b) intersect c`. Then for `a = {1, 2, 3}`, `b = {2}`, `c = {3, 4}`: `a except b except c` and `a except (b except c)`.
-> ||`a union (b intersect c)` = {1, 2} ∪ {3} = {1, 2, 3}. `(a intersect b) union c` = {2} ∪ {3, 4} = {2, 3, 4}. `(a union b) intersect c` = {3}. `(a except b) except c` = {1, 3} minus {3, 4} = {1}; `a except (b except c)` = {1, 2, 3} minus ({2} minus {3, 4}) = {1, 2, 3} minus {2} = {1, 3}. A parser that groups from the right gets the last one wrong, and one that ignores precedence gets the first two wrong.||
+> ||`a union (b intersect c)` = {1, 2} ∪ {3} = {1, 2, 3}. `(a intersect b) union c` = {2} ∪ {3, 4} = {2, 3, 4}. `(a union b) intersect c` = {3}. `(a except b) except c` = {1, 3} minus {3, 4} = {1}; `a except (b except c)` = {1, 2, 3} minus ({2} minus {3, 4}) = {1, 2, 3} minus {2} = {1, 3}. A parser that groups from the right gets `a except b except c` wrong: it computes `a except (b except c)` and gives {1, 3}; the parenthesised form comes out right with any parser. One that ignores precedence gets one of the first two wrong: grouping from the left, `a union b intersect c` becomes `(a union b) intersect c` = {3}; grouping from the right, `a intersect b union c` becomes `a intersect (b union c)` = {2}.||
 >
 > - If the operator *after* the right operand binds tighter, who gets the right operand?
 > - In `select x from a union all select x from b order by x limit 3`, what does the `ORDER BY` sort? How do you sort or limit only one side?
@@ -31,8 +31,7 @@ The algorithm for precedence (climbing with a minimum level, two functions, a sh
 
 ## If this is new
 
-- S5 Enums and pattern matching: ranks as a `match`.
-- [Y2 Functions and tooling](/t/y2-unsafe-rust): small private helpers.
+- [Patterns](https://doc.rust-lang.org/reference/patterns.html) (the Rust Reference): ranks as a `match`.
 
 ## Tests
 

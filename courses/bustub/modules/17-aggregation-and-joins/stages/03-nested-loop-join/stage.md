@@ -11,9 +11,15 @@ The simplest correct join: for every row of the **left** child, scan the whole *
 
 In `src/execution/executors/nested_loop_join_executor.rs` (the struct, `new`, the `TupleStream` wrappers around the children, `values_of` and `joined` are given):
 
-- `init`: initialise both children and forget the current left tuple, the `matched` flag and any pending output.
-- `next`: until the batch is full: hand out `pending` output first; if there is no current left tuple, take the next from the left (none: stop) and **re-initialise the right**; take the next right tuple and, if the predicate's `evaluate_join` is TRUE for the pair, queue the joined tuple and set `matched`; when the right side is exhausted, queue `unmatched_output(..)` if it returns something and drop the left tuple. Return `true` if the batch is not empty.
-- `unmatched_output(left) -> Option<Tuple>`: for a **LEFT** join and a left tuple for which `matched` is false, `Some` tuple of the left values followed by a NULL of the right column's type for every right column (`values_of`, `nulls_for`); otherwise `None`.
+- **The output is every pair the predicate makes TRUE**, left tuple by left tuple in the left child's order, and for each left tuple its matches in the right child's order; a joined tuple is the left values followed by the right values. FALSE and NULL do not match.
+- **A LEFT join outputs every left tuple that matched nothing exactly once**, as its values followed by a NULL of the right column's type for every right column. `unmatched_output(left)` returns that tuple, and `None` for an inner join or a left tuple that matched.
+- **The batches split the output anywhere.** At most `batch_size` per call: a left tuple with more matches than a batch carries on in the next call. `next` returns `true` exactly when the batch is not empty.
+- **`init` starts the join over**, with no left tuple or pending output carried from before; the right child is scanned again from its start for every left tuple.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `init`: initialise both children and forget the current left tuple, the `matched` flag and any pending output.
+> - `next`: until the batch is full: hand out `pending` output first; if there is no current left tuple, take the next from the left (none: stop) and **re-initialise the right**; take the next right tuple and, if the predicate's `evaluate_join` is TRUE for the pair, queue the joined tuple and set `matched`; when the right side is exhausted, queue `unmatched_output(..)` if it returns something and drop the left tuple. Return `true` if the batch is not empty.
+> - `unmatched_output(left) -> Option<Tuple>`: for a **LEFT** join and a left tuple for which `matched` is false, `Some` tuple of the left values followed by a NULL of the right column's type for every right column (`values_of`, `nulls_for`); otherwise `None`.
 
 The tests: exact scenarios (an inner join outputs the matching pairs; the predicate can be any expression; NULL never matches; a cross join has every pair; one left row with more matches than a batch; a left join pads unmatched rows once and with typed NULLs; the join works over non-table children), and a property: **for random tables with NULLs and random predicates** (any comparison of sums and differences of the four columns, combined with `and`/`or`) the inner join returns exactly the pairs the predicate keeps and the left join also the unmatched left rows, padded.
 

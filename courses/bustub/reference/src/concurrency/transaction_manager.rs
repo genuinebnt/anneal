@@ -149,7 +149,7 @@ impl TransactionManager {
             }
         }
         drop(catalog);
-        //~ // 4b-04: for every rid in the write set (the table from the catalog), under the page's write latch (with_page_mut): if the tuple's head link is this transaction's own log, rebuild the old version with reconstruct_tuple from that one log and write it with meta ts = the log's ts (is_deleted if the log says so), then set the link to the log's prev_version (None if invalid); with no own log the tuple was created by this transaction: make it a deleted tuple with ts 0
+        //~ // 4b-04: every tuple the transaction wrote is back as it was before, with that version's timestamp and the rest of its version chain; a tuple it created is a deleted tuple nobody can see
         // @end
         // @begin 4a-02
         txn.set_state(TransactionState::Aborted);
@@ -195,7 +195,7 @@ impl TransactionManager {
             }
         }
         true
-        //~ true // 4b-07: a transaction with no writes or no scans passes. Otherwise for every transaction that committed after txn.read_ts(), for each tuple in its write set, rebuild the tuple as of commit_ts - 1 and as of commit_ts (a throwaway Transaction with that read ts and collect_undo_logs + reconstruct_tuple); if one of txn's predicates on that table is true for either version, fail
+        //~ true // 4b-07: true when no transaction that committed after txn's read timestamp wrote a row that one of txn's scan predicates matches, as it was before that commit or as it left it; a transaction with no writes or no scans passes
         // @end
     }
 

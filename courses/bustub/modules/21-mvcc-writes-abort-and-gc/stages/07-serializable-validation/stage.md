@@ -21,19 +21,11 @@ How you record predicates (one per scan, as given) and how you evaluate them (be
 
 ## The Rust toolbox
 
-**A throwaway reader.** `let reader = Transaction::new(INVALID_TXN_ID, IsolationLevel::SnapshotIsolation); reader.set_read_ts(ts);` lets you reuse `collect_undo_logs` and `reconstruct_tuple` to see a tuple as of any timestamp.
+**A throwaway reader.** A `Transaction` that is never begun, with an invalid id and a read timestamp you set yourself (`set_read_ts` is `pub(crate)`: you are inside the crate), is a reader that `collect_undo_logs` and `reconstruct_tuple` accept: it sees a tuple as of any timestamp you choose.
 
 **Both images.** For each tuple written by a recently committed transaction, evaluate your predicates on the version at `commit_ts - 1` (what it was) and at `commit_ts` (what it became): a row that was *deleted* only matches before, a row *inserted* only after.
 
-**`any` with a lenient error.** `preds.iter().any(|p| p.evaluate(..).map_or(true, |v| v.as_bool() == Some(true)))` treats an evaluation error as 'might match'.
-
-```rust
-let reader = Transaction::new(INVALID_TXN_ID, IsolationLevel::SnapshotIsolation);
-reader.set_read_ts(ts);                                         // pub(crate): you are inside the crate
-let logs = collect_undo_logs(rid, &meta, &tuple, link, &reader, self)?;
-let version = reconstruct_tuple(&table.schema, &tuple, &meta, &logs)?;   // None: did not exist at ts
-pred.evaluate(&version, &table.schema)?.as_bool() == Some(true)
-```
+**`any` with a lenient error.** `checks.iter().any(|c| c.run(&input).map_or(true, |passed| passed))` is `true` as soon as one check passes, and treats a check that fails to run as "might pass": the safe answer for a validator, which may refuse a commit but must never let a conflict through.
 
 ## Design notes
 

@@ -46,12 +46,12 @@ impl Trie {
     /// The value under `key`, if there is one **of type `T`**. A key with a value of another type, a key that is only a prefix of other
     /// keys, and a missing key all give `None`.
     pub fn get<T: Any + Send + Sync>(&self, key: &str) -> Option<&T> {
-        todo!("0a-01: walk from the root along the key's characters; at the end the node must have a value; downcast it to T")
+        todo!("0a-01: the value stored under exactly this key, if it is a T; None for a missing key, a key whose node holds no value, or a value of another type")
     }
 
     /// The value under `key` as a shared pointer, for callers that must keep it alive after the trie is gone (see `TrieStore`).
     pub fn get_shared<T: Any + Send + Sync>(&self, key: &str) -> Option<Arc<T>> {
-        todo!("0a-01: as get, but clone the Arc of the value and downcast it with Arc::downcast")
+        todo!("0a-01: the value get would find, as an owner the caller can keep after the trie is gone")
     }
 
     /// A new trie with `value` under `key` (replacing what was there, whatever its type). Only the nodes on the path from the root to
