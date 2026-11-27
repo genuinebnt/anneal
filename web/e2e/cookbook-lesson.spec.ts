@@ -366,9 +366,24 @@ for (const width of [2560, 2200, 1728, 1440, 1280, 390]) {
         }
         // blocks that need room span the frame
         for (const s of [".cb-cmp", ".cb-walk", ".cb-lab .cb-view", ".cb-conn", ".cb-sources"]) expect(Math.round((await box(page, s)).width), s).toBe(Math.round(frame.width));
-        // two programs are side by side only where both fit
+        // two programs are side by side exactly where both fit. How wide a line is depends on the machine's fonts, so the
+        // screen width where that starts is not fixed
         const [a, b] = [await box(page, ".cb-cmp-side.wrong"), await box(page, ".cb-cmp-side.fixed")];
-        expect(Math.round(a.y) === Math.round(b.y)).toBe(width >= 2200);
+        const room = await page.locator(".cb-cmp").first().evaluate((cmp) => {
+            const range = document.createRange();
+            const widest = Math.max(...[...cmp.querySelectorAll(".sd-ln")].map((line) => {
+                range.selectNodeContents(line.lastElementChild!);
+                return range.getBoundingClientRect().width + line.firstElementChild!.getBoundingClientRect().width;
+            }));
+            const side = cmp.querySelector<HTMLElement>(".cb-cmp-side")!;
+            const half = (cmp.clientWidth - 12) / 2 - (side.offsetWidth - side.querySelector("pre")!.clientWidth);
+            return half - widest;
+        });
+        const sideBySide = Math.round(a.y) === Math.round(b.y);
+        // the page keeps a few spare pixels after the longest line, so only a clear result is asserted
+        if (room > 48) expect(sideBySide, `${Math.round(room)}px to spare in half the frame`).toBe(true);
+        if (room < 0) expect(sideBySide, `${Math.round(-room)}px short in half the frame`).toBe(false);
+        if (width <= 1440) expect(sideBySide).toBe(false);
         const beside = page.getByRole("complementary", { name: "Beside the text" });
         if (width >= 1728) {
             // the column beside the text ends with the frame and starts clear of the text
