@@ -1,0 +1,16 @@
+code = "Y152"
+name = "Type-ahead: capstone"
+section = "Y"
+tier = "sde3"
+order = 152
+summary = "Build a suggest-as-you-type service in four steps, from ranked beginnings to an HTTP API. Each step's starter carries the earlier steps."
+
+[[stages]]
+slug = "rank"
+name = "Rank what fits"
+band = "hard"
+
+[[stages]]
+slug = "serve"
+name = "Serve it"
+band = "hard"

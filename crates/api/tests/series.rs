@@ -313,8 +313,10 @@ async fn the_web_server_series_keeps_its_problems(db: PgPool) {
 #[sqlx::test(migrator = "anneal_api::MIGRATOR")]
 async fn each_shared_exercise_works_in_each_of_its_series(db: PgPool) {
     // in the stable order, so the first is the one shown when nothing says otherwise
-    const SHARED: [(&str, &[&str]); 28] = [
+    const SHARED: [(&str, &[&str]); 32] = [
+        ("b1-api-error-response", &["job-service", "type-ahead"]),
         ("b4-length-prefixed-codec", &["web-server", "mini-redis"]),
+        ("b7-how-long-requests-take", &["web-server", "type-ahead"]),
         ("b7-requests-in-pieces", &["web-server", "mini-redis"]),
         ("b7-talk-over-a-connection", &["web-server", "mini-redis"]),
         ("c1-blocking-queue", &["web-server", "async-runtime"]),
@@ -323,6 +325,7 @@ async fn each_shared_exercise_works_in_each_of_its_series(db: PgPool) {
         ("c4-bounded-fan-out", &["job-service", "mini-redis"]),
         ("c4-drain-with-deadline", &["job-service", "mini-redis"]),
         ("c4-fix-cancel-safe-reader", &["mini-redis", "async-runtime"]),
+        ("f4-lru-cache-arena", &["toy-filesystem", "type-ahead"]),
         ("f7-wire-format-json", &["job-service", "event-ledger"]),
         ("l1-raii-span-guard", &["web-server", "rate-limiter", "scripting-language"]),
         ("l3-binary-frame-parser", &["key-value-store", "toy-filesystem"]),
@@ -332,6 +335,7 @@ async fn each_shared_exercise_works_in_each_of_its_series(db: PgPool) {
         ("m3-claim-without-a-lock", &["rate-limiter", "lease-simulator"]),
         ("s4-btreemap-ranges", &["key-value-store", "mini-redis"]),
         ("s6-merge-sorted-streams", &["key-value-store", "query-optimizer"]),
+        ("y10-trigram-index", &["search-engine", "type-ahead"]),
         ("y14-pratt-parser", &["scripting-language", "sql-engine"]),
         ("y15-expand-the-braces", &["regex-engine", "scripting-language"]),
         ("y15-lay-a-program-out-flat", &["regex-engine", "scripting-language"]),

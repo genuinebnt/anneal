@@ -1,0 +1,38 @@
+slug = "names-worth-a-closer-look"
+title = "Which names are worth a closer look?"
+mode = "write"
+level = "hard"
+stage = "what-was-meant"
+order = 3
+status = "ready"
+tags = ["typo tolerance", "candidate filtering", "inverted index", "filter then verify"]
+teaches = [
+  "A slip changes only a few neighbouring places, so most short windows of a close name survive. A name that shares too few windows cannot be close.",
+  "File each name under what survives a slip. Then a question fetches a few short lists instead of every name.",
+  "The threshold must be a proven lower bound: a swap of neighbours breaks four windows, one more than other slips.",
+  "When the bound drops to zero the filter says nothing. A filter may only ever drop names that cannot match.",
+]
+follow_up = "1) Which keys have the longest lists, and what would shorten them? 2) What do you gain and pay with longer windows? 3) How would you remove a name from the index?"
+related = ["Y10", "Y151"]
+
+[[hints]]
+kind = "approach"
+text = "Look at every run of three neighbouring characters in a name. If a name is one slip away, how many of those runs in the typed text can it be missing at most? Think about each kind of slip."
+
+[[hints]]
+kind = "rust"
+text = "Return each window as a `String` key. In `near`, count per number in a map how many of the typed windows' lists hold it. Adding empty places at both ends (`'\\0'` works) gives the first and last letters their fair share of windows."
+
+[[hints]]
+kind = "edge"
+text = "Count distinct windows on both sides, so that repeated letters do not inflate the requirement. `4 * slips` can overflow. When the requirement is zero, you still need a way to reach every name: file that under a key too."
+
+[solution]
+explanation = "Each name is filed under its distinct windows of three places, with two empty places added at each end. One slip removes at most four of the typed text's windows, and a swap does that.\n\nSo a close name is in at least the number of typed windows minus four per slip of those lists. Only such names are compared. If the bound is zero, the list of every name is fetched."
+time = "O(numbers fetched * log) plus one comparison per candidate"
+space = "O(total length of the names) in the index"
+
+[[cookbook]]
+level = "related"
+page = "typeahead-service"
+note = "A whole type-ahead service. Its typo rule asks for at least two shared windows, which misses some short close names."

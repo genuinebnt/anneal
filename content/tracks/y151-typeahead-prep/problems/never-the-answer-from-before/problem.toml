@@ -1,0 +1,33 @@
+slug = "never-the-answer-from-before"
+title = "Never serve an answer from before the change"
+mode = "write"
+level = "hard"
+stage = "what-comes-first"
+order = 6
+status = "ready"
+tags = ["caching", "invalidation", "race condition", "locks"]
+teaches = [
+  "Removing stored answers is not enough. An answer being built when the change lands is just as old, and it arrives later.",
+  "Note each piece of work before it starts. A change marks the ones it touches, and a marked result is not stored.",
+  "Never hold a lock while calling code you did not write, such as the slow work. Do check the mark and store under one lock.",
+  "A guard that cleans up when dropped also cleans up when the work panics.",
+]
+follow_up = "1) How would you make a second caller wait for the first one's work instead of repeating it, and what must happen if a change lands then? 2) A single change counter is simpler. What does it throw away? 3) `touches` is asked about every stored key. How would you avoid that for large caches?"
+related = ["Y151", "C1", "M3"]
+
+[[hints]]
+kind = "approach"
+text = "Think of a change that lands while `work` runs. At that moment nothing is stored yet. What does the shelf need to know about work in progress?"
+
+[[hints]]
+kind = "rust"
+text = "One `Mutex` around the stored answers and a map of running work is enough. Lock, note the work, unlock, run it, lock again. A small struct with `Drop` can remove the note."
+
+[[hints]]
+kind = "edge"
+text = "Two threads may work on the same key, so give each piece of work its own number. Check its mark and store under the same lock. A poisoned lock can be taken with `PoisonError::into_inner` when the state is still consistent."
+
+[solution]
+explanation = "Every miss gets a numbered note under the lock before the work starts. The work runs with no lock. A change removes the touched answers and marks the touched notes in one locked step. When the work ends, its result is stored only if its note is unmarked, with the check and the insert under one lock. A guard removes the note even if the work panics."
+time = "O(1) per hit; O(stored + running) per change"
+space = "O(stored + running)"

@@ -1,0 +1,16 @@
+code = "Y151"
+name = "Type-ahead: preparation"
+section = "Y"
+tier = "sde3"
+order = 151
+summary = "Small exercises on the ideas a suggest-as-you-type service needs, each on a different task."
+
+[[stages]]
+slug = "what-was-meant"
+name = "Work out what was meant"
+band = "medium"
+
+[[stages]]
+slug = "what-comes-first"
+name = "Decide what comes first"
+band = "hard"

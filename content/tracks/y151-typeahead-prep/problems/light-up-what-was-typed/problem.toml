@@ -1,0 +1,32 @@
+slug = "light-up-what-was-typed"
+title = "Light up what the user typed"
+mode = "write"
+level = "medium"
+stage = "what-was-meant"
+order = 1
+status = "ready"
+tags = ["unicode", "text matching", "case folding", "byte offsets"]
+teaches = [
+  "Match on a normalised key, and show the original. The two have different lengths, so a position in one is not a position in the other.",
+  "One character can lowercase to two, and one of them may be a combining mark. Clean the text after lowercasing, not before.",
+  "A normalising function should give the same result when applied twice. Test that over every character.",
+]
+follow_up = "1) What would a full Unicode normalisation (NFKD) add, and what would it cost? 2) How would you light up a match in the middle of a name? 3) Why might a Turkish user disagree with this lowercasing?"
+related = ["S2", "Y151"]
+
+[[hints]]
+kind = "approach"
+text = "First write the key. Then ask: as you build the key of the name one original character at a time, when has it grown long enough to cover what was typed?"
+
+[[hints]]
+kind = "rust"
+text = "`char_indices` gives each character with its byte position; `len_utf8` gives its width. `char::to_lowercase` returns an iterator, so you can filter what it yields."
+
+[[hints]]
+kind = "edge"
+text = "A trailing space is not part of a key yet. `İ` lowercases to two characters. The marks that follow the last lit letter belong to it."
+
+[solution]
+explanation = "The key is built one character at a time, so the same step can be replayed over the name. A trailing space does not count until a word follows it. The first character at which the key is long enough ends the lit part, which then takes the marks after it. Marks are removed after lowercasing, because lowercasing can produce one."
+time = "O(n) in the length of both texts"
+space = "O(n)"
