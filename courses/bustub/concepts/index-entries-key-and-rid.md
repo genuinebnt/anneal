@@ -48,7 +48,7 @@ Under MVCC a row has several versions at one rid. If an update changes an indexe
 | C / C++ | Rust |
 |---|---|
 | `std::multimap<Key, Rid>` (duplicates by design) | `BTreeSet<(Key, Rid)>`: the rid makes every element unique |
-| `index.lower_bound({key, kMinRid})` then `while (it->first == key)` | `set.range((key, Rid::MIN)..).take_while(|(k, _)| *k == key)` |
+| `index.lower_bound({key, kMinRid})` then `while (it->first == key)` | `set.range((key, Rid::MIN)..).take_while(\|(k, _)\| *k == key)` |
 | a `GenericComparator` that ignores the rid for a unique index | `EntryComparator` with the rid left out of the order |
 
 ## In real code

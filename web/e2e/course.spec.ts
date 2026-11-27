@@ -224,7 +224,7 @@ const rawCourseMarks = (page: import("@playwright/test").Page) =>
     });
 
 // one page for each place that showed the marks: headings, the outline, ledes, "you'll learn", note cards, callout titles, captions and table cells
-for (const path of ["1b-01", "1g-c2", "3d-06", "3e-03", "concept/bytes-endianness-and-views", "concept/name-resolution-and-the-binder", "concept/shifts-masks-and-bit-tricks", "concept/reader-writer-latches", "concept/positional-io-and-short-reads", "concept/property-testing-and-fuzzing", "concept/durability-and-fsync", "concept/option-and-result-combinators", "concept/top-n-with-a-bounded-heap"]) {
+for (const path of ["1b-01", "1g-c2", "3d-02", "3e-03", "concept/bytes-endianness-and-views", "concept/name-resolution-and-the-binder", "concept/shifts-masks-and-bit-tricks", "concept/reader-writer-latches", "concept/positional-io-and-short-reads", "concept/property-testing-and-fuzzing", "concept/durability-and-fsync", "concept/option-and-result-combinators", "concept/top-n-with-a-bounded-heap"]) {
     test(`course page ${path} shows no Markdown marks`, async ({ page }) => {
         await page.goto(`/courses/bustub/${path}`);
         await expect(page.locator(".k-ttl")).toBeVisible();

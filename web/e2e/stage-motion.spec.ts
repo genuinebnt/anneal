@@ -26,7 +26,7 @@ test("a reading bar across the top grows with the scroll; the condensed header a
 });
 
 test("the active tab alone is filled, and the fill moves with it", async ({ page }) => {
-    const filled = () => page.locator(".k-tabs [role=tab]").evaluateAll((tabs) => tabs.filter((t) => getComputedStyle(t).backgroundColor !== "rgba(0, 0, 0, 0)").map((t) => t.textContent!.replace(/[\s\d/]+$/, "")));
+    const filled = () => page.locator(".k-tabs [role=tab]").evaluateAll((tabs) => tabs.filter((t) => getComputedStyle(t).backgroundColor !== "rgba(0, 0, 0, 0)").map((t) => (t.querySelector(".k-tl") ?? t).textContent!.replace(/[\s\d/]+$/, "")));
     await expect.poll(filled).toEqual(["Instructions"]);
     await page.getByRole("tab", { name: /^Hints/ }).click();
     await expect.poll(filled).toEqual(["Hints"]);

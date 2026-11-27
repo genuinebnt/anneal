@@ -21,6 +21,12 @@ In `src/execution/execution_common.rs`:
 
 > [!ASIDE] Why not rebuild the tuple after every log?
 > Applying the logs to a list of values and building the tuple once at the end is cheaper and simpler than creating a tuple per log: each log only overwrites some entries of the list, and one tuple is encoded at the end.
+>
+> ```rust
+> let mut values: Vec<Value> = (0..n).map(|i| base.get_value(schema, i)).collect();
+> for log in undo_logs { /* overwrite the columns this log restores */ }
+> Tuple::new(values, schema)
+> ```
 
 The tests: exact scenarios for `reconstruct_tuple` (no logs gives the base; a deleted base with no logs does not exist; a full log brings a deleted tuple back; stale bytes in the slot of a deleted tuple do not leak; partial logs restore only their columns; the last log wins; a deleting log) and `collect_undo_logs` (committed at or before the read timestamp needs no logs; the transaction's own write needs none; a newer tuple without a chain did not exist yet; another transaction's uncommitted tuple is not visible; the chain is followed until a version old enough; a chain of only newer versions; a garbage-collected log ends the search), and a property: **for a row with a random history** (updates, deletes, re-inserts, columns going to and from NULL, optionally an uncommitted version) **a reader at every timestamp collects and reconstructs exactly the newest version at or before its timestamp**, a reader before the first version sees nothing, and the writer sees its own uncommitted version while everyone else sees the history.
 

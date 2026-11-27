@@ -83,13 +83,17 @@ test.describe("Last run", () => {
 });
 
 test.describe("Concepts", () => {
-    // every module is written with optional concepts now, so the counting tests below skip themselves when the stage has no required one
+    // a stage marks at most one concept to read first and the rest optional; the counting tests skip themselves when it marks none
     const stage = "1a-01";
     let required = 0;
+    let total = 0;
+    // what the header says once `n` required concepts are read
+    const progress = (n: number) => (n === required ? "Required reading done" : `${n} of ${required} done`);
     // Read state lives on the server: start each test from "nothing read".
     test.beforeEach(async ({ page, request }) => {
         const st = await (await request.get(`/api/courses/bustub/stages/${stage}`)).json();
         required = st.concepts.filter((k: { required: boolean }) => k.required).length;
+        total = st.concepts.length;
         for (const k of st.concepts) await request.put(`/api/courses/bustub/concepts/${k.id}/read`, { data: { read: false } });
         await page.goto(`/courses/bustub/${stage}#concepts`);
         await expect(page.locator(".k-chdr")).toBeVisible();
@@ -98,25 +102,26 @@ test.describe("Concepts", () => {
     test("the header counts the required reading and each concept has a card", async ({ page }) => {
         test.skip(required === 0, "this stage has no required concepts");
         await expect(page.locator(".k-chdr")).toContainText(`Required reading: 0 of ${required} done`);
-        await expect(page.locator(".k-ccard")).toHaveCount(required);
+        await expect(page.locator(".k-ccard")).toHaveCount(total);
         await expect(page.locator(".k-badge2.k-req")).toHaveCount(required);
         await expect(page.getByRole("tab", { name: /^Concepts/ })).toContainText(`0/${required}`);
     });
 
     test("marking one as read updates the header, the tab and the page panel, and it is kept", async ({ page }) => {
         test.skip(required === 0, "this stage has no required concepts");
-        await page.locator(".k-ccard").first().getByRole("button", { name: /Preview/ }).click();
-        await page.locator(".k-ccard").first().getByRole("switch").click();
-        await expect(page.locator(".k-chdr")).toContainText(`1 of ${required} done`);
+        const card = page.locator(".k-ccard", { has: page.locator(".k-badge2.k-req") }).first();
+        await card.getByRole("button", { name: /Preview/ }).click();
+        await card.getByRole("switch").click();
+        await expect(page.locator(".k-chdr")).toContainText(progress(1));
         await expect(page.getByRole("tab", { name: /^Concepts/ })).toContainText(`1/${required}`);
         await expect(page.locator(".k-toc .k-cc2:not(.k-todo)")).toHaveCount(1);
         await expect(page.locator(".k-ccard.k-isread")).toHaveCount(1);
         await page.reload();
-        await expect(page.locator(".k-chdr")).toContainText(`1 of ${required} done`);
+        await expect(page.locator(".k-chdr")).toContainText(progress(1));
         // and it can be undone
-        await page.locator(".k-ccard").first().getByRole("button", { name: /Preview/ }).click();
-        await page.locator(".k-ccard").first().getByRole("switch").click();
-        await expect(page.locator(".k-chdr")).toContainText(`0 of ${required} done`);
+        await card.getByRole("button", { name: /Preview/ }).click();
+        await card.getByRole("switch").click();
+        await expect(page.locator(".k-chdr")).toContainText(progress(0));
     });
 
     test("Preview opens a card and Read opens the article", async ({ page }) => {
@@ -132,7 +137,7 @@ test.describe("Concepts", () => {
     test("marking all the required ones read says so", async ({ page }) => {
         test.skip(required === 0, "this stage has no required concepts");
         for (let i = 0; i < required; i++) {
-            const c = page.locator(".k-ccard").nth(i);
+            const c = page.locator(".k-ccard", { has: page.locator(".k-badge2.k-req") }).nth(i);
             await c.getByRole("button", { name: /Preview/ }).click();
             await c.getByRole("switch").click();
         }
