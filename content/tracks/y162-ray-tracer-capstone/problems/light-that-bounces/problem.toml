@@ -1,0 +1,33 @@
+slug = "light-that-bounces"
+title = "Capstone 8: light that bounces around"
+mode = "write"
+level = "hard"
+stage = "finish"
+order = 8
+status = "ready"
+tags = ["monte carlo", "importance sampling", "path tracing", "unbiased estimators", "ray tracing", "100-min"]
+teaches = [
+    "One random path is a poor guess; the average of many is the right answer, if no step of the guess leans one way.",
+    "Choosing directions as often as they matter makes the weights cancel, and some answers become exact in every sample.",
+    "Paths can be ended by chance without lowering the average, if the survivors count for more.",
+    "A closed scene with a known answer is the test that catches a renderer that looks right but loses light.",
+]
+follow_up = "1) With a very small lamp almost every path finds nothing. How could a bounce ask the lamps directly, and what must you then not count twice? 2) Your estimate with max_bounces = 5 is a little too low. Why, and for which scenes does it matter?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "Keep two running values: the light gathered, and the weight of what is still to come. Each surface either adds to the first (and ends) or filters the second and picks a new direction."
+
+[[hints]]
+kind = "approach"
+text = "For the direction: a point spread evenly over the disk under the normal, lifted straight up onto the half ball, has exactly the density asked for. You need two unit vectors at right angles to the normal."
+
+[[hints]]
+kind = "edge"
+text = "When you end a path by chance with survival probability p, divide the weight of the survivors by p. Keep p away from 0 and from 1."
+
+[solution]
+explanation = "The path keeps gathered light and a weight. A matte bounce multiplies the weight by the colour and picks a cosine-weighted direction, so the cosine and the density cancel. Glass takes one of its two ways with probability given by the reflected share, so the weight stays. After a few bounces the path survives with a probability tied to its weight, clamped, and the weight is divided by it."
+time = "O(bounces) world queries per path"
+space = "O(1)"

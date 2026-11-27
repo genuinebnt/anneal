@@ -69,7 +69,8 @@ fn main() {
     );
     println!("pipeline = {}", block_on(pipeline()));
 
-    // Different futures behind one type: Pin<Box<dyn Future>> (what `tokio::spawn` stores internally)
+    // Different futures behind one type: Pin<Box<dyn Future>>. (`tokio::spawn` also puts a future on the heap and hides
+    // its type, but with its own vtable, not as this trait object.)
     let tasks: Vec<Pin<Box<dyn Future<Output = u32>>>> = vec![
         Box::pin(add(2, 2)),
         Box::pin(async { 7 }),

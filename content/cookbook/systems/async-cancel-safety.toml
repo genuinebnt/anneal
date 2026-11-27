@@ -28,7 +28,7 @@ When a `select!` branch loses, its future is DROPPED mid-way. If that future had
 
 A user-written `async fn` that does recv + recv is **not**: the first value lives only in the future's local variable. Fix: keep progress in state **owned by the caller** (outside the future) and only await cancel-safe primitives inside `select!`.
 
-Tokio documents the cancel-safety of every method: <https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety>
+The demo runs on tokio's **paused** clock (one thread, virtual time that jumps to the next timer; feature `test-util`), so which side of each race wins is the same on every run, however loaded the machine is. Tokio documents the cancel-safety of every method: <https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety>
 """
 
 [[sources]]

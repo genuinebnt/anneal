@@ -24,9 +24,23 @@ body = """
 [[sections]]
 heading = "Design notes"
 body = """
-Record = [len: u32 LE][crc32: u32 LE][payload]. Append-only: the only operation that can be half-done by a crash is the **last** write. On startup, scan from the beginning; the first record that is truncated or fails its checksum marks the end of valid data; **truncate** the file there and continue appending.
+Record = [len: u32 LE][crc32: u32 LE][payload]. The checksum covers the length bytes **and** the payload, so eight zero bytes (what some filesystems leave at the end of a file after a crash) are not a valid empty record.
 
-A record is durable only after `sync_data` (fsync), so decide per workload whether to sync every record (safe, slow), or batch (group commit). The checksum catches torn writes **and** silent corruption.
+Append-only: with one writer, syncing every record, and storage that keeps what it has synced, an interrupted append damages only the end of the file.
+
+On startup, call `recover`: it scans from the beginning, the first record that is truncated or fails its checksum marks the end of valid data, the file is **truncated** there, and it is synced even if nothing was cut (the last writer may have stopped between its write and its sync). Then open it and continue appending.
+
+`open` does not check the tail: records appended after a torn one are cut off by the next recovery. If an append returns an error, the log refuses further appends: part of the record may be in the file (a later record would sit behind it and be lost), and after a failed fsync nobody knows what reached the disk. Drop it, recover, open again.
+
+The failed record may or may not be there afterwards. **After a failed FSYNC** even that is not safe: some kernels (Linux among them) may drop the unwritten pages' dirty mark, so `recover` can read the record from memory and its sync can succeed although the record never reached the disk.
+
+A power cut then damages the middle of the log, and the next recovery deletes everything after it, including records acknowledged later. This code does not rewrite the log; real systems stop and rebuild from what is known to be durable.
+
+The payload is synced by `sync_data` (fsync) before `append` returns; sync every record (safe, slow) or batch (group commit; not shown). The checksum detects torn writes and, with high probability, corruption. **Limits**: recovery cannot tell a torn end from damage in the middle.
+
+Either way it **deletes** everything from the first bad record, including later records that were synced and are intact; a real log would keep a copy and report it. The parent directory is not synced, so a power cut just after the file is created can lose the whole file (on Linux, fsync the directory too). `recover` reads the whole file into memory.
+
+Nothing stops two writers from opening the same log.
 """
 
 [[sections]]

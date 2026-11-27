@@ -1,0 +1,21 @@
+code = "Y162"
+name = "Ray tracer: capstone"
+section = "Y"
+tier = "sde3"
+order = 162
+summary = "Build a ray tracer in nine steps, from one ray to a saved picture. Each step's starter carries the earlier steps."
+
+[[stages]]
+slug = "see"
+name = "See shapes"
+band = "hard"
+
+[[stages]]
+slug = "shine"
+name = "Make it shine"
+band = "hard"
+
+[[stages]]
+slug = "finish"
+name = "Finish it"
+band = "hard"

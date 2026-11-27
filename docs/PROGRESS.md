@@ -67,6 +67,15 @@ pushed. `git log origin/master..review/bustub-assessment` lists it.
   `Display` of the seven error enums that only optional challenges introduce is given; the learner writes `DbError`, the lexer
   error's message (what and where), the eight `From`s (one macro) and the context chain.
 
+## Cookbook guide blocks repaired (local, not released; 2026-11-27)
+
+Step 0, first half, of [plans/COOKBOOK_CONTENT_PLAN.md](plans/COOKBOOK_CONTENT_PLAN.md): the diagrams, drawings, tables,
+lists and labels that the converter keeps as HTML are styled again, in `web/src/styles/cookbook-guide.css`. A content test
+(`every_class_a_cookbook_page_uses_is_styled`) fails when a page uses a class with no rule there. Two drawings whose
+words did not fit are repaired in the pages and in the converter (`DRAWING_FIXES`). Left from step 0: checking the
+example code for bugs. Note: a full converter run on today's guides and code also changes 25 other generated pages;
+read that diff before committing a run.
+
 ## Cookbook pages: one frame (local, not released; 2026-11-27)
 
 After an independent review of the first balanced-width commit. Each reading page has one frame (up to 1480px) between the

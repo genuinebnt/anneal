@@ -1,0 +1,32 @@
+slug = "light-through-a-stack-of-sheets"
+title = "How much light gets through a stack of panes?"
+mode = "write"
+level = "medium"
+stage = "light"
+order = 9
+status = "ready"
+tags = ["optics", "refraction", "floating point", "invariants", "75-min"]
+teaches = [
+    "At a flat face the index times the sine of the angle stays the same. If that would need a sine above 1, nothing crosses.",
+    "An estimate formula has conditions. Schlick is only sound with the angle on the thinner side of the face.",
+    "A symmetry that physics promises, the same result backwards, is a test that needs no expected value.",
+]
+follow_up = "1) Your share ignores light that bounces back and forth inside a pane and still gets out. For one clear pane, how much is that? 2) Glass bends blue light more than red. What would a white beam do?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "Walk the faces in order: outside to the first sheet, sheet to sheet, last sheet to outside. Keep the current index and cosine."
+
+[[hints]]
+kind = "approach"
+text = "Inside a sheet the beam travels thickness / cos. The loss depends on that length, and the sideways step is the length times the sine."
+
+[[hints]]
+kind = "edge"
+text = "The reflected share needs the cosine on the side with the smaller index. Going into the thinner side, that is the cosine after the face."
+
+[solution]
+explanation = "Index times sine is the same on every layer. A sine above 1 means total reflection.\n\nAt each face the share keeps 1 - R. Schlick uses the cosine on the side of the smaller index, so a face behaves the same both ways. Inside a sheet the length is thickness / cos; the loss is exponential in it and the shift is sine times it."
+time = "O(sheets)"
+space = "O(1)"

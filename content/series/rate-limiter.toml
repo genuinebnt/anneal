@@ -80,7 +80,7 @@ used_again = ["m4-measure-a-limiter", "m4-one-number-per-client", "m4-forget-saf
 real_uses = "API quotas, login throttling, outbound call budgets."
 cookbook = [
     { level = "similar", page = "token-bucket", note = "Read in full. A floating-point bucket with an injected clock.", hidden = true },
-    { level = "similar", page = "concurrency-interview-questions", note = "Its token bucket question was read. It can lose part of a refill when called often.", hidden = true },
+    { level = "similar", page = "concurrency-interview-questions", note = "Its token bucket question was read. Integer tokens, an injected clock and a carried refill remainder.", hidden = true },
 ]
 
 [[part]]

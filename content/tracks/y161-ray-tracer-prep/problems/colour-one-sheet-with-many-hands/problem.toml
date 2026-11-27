@@ -1,0 +1,33 @@
+slug = "colour-one-sheet-with-many-hands"
+title = "Colour one sheet with many hands"
+mode = "write"
+level = "medium"
+stage = "build"
+order = 12
+status = "ready"
+tags = ["scoped threads", "Mutex", "chunks_mut", "work sharing", "60-min"]
+teaches = [
+    "chunks_mut cuts one buffer into pieces that cannot overlap, so different threads may write them at once without unsafe code.",
+    "An iterator behind a Mutex is a work list: each item goes to exactly one thread.",
+    "How long a lock guard lives is part of the design: a guard held while working turns many threads into one.",
+    "Fixed shares waste time when items cost unequal amounts. Threads that take the next item do not.",
+]
+follow_up = "1) With a million tiny rows, what would the lock cost, and how would you hand out several rows at once? 2) What does rayon do instead of one shared lock?"
+related = ["Y161", "Y162", "C1"]
+
+[[hints]]
+kind = "approach"
+text = "Do not decide in advance who paints what. Let each worker ask for the next unpainted row when it is free."
+
+[[hints]]
+kind = "rust"
+text = "sheet.chunks_mut(width).enumerate() yields disjoint mutable rows. Put the iterator in a Mutex, and use thread::scope so the threads may borrow it."
+
+[[hints]]
+kind = "edge"
+text = "In while let Some(x) = rows.lock().unwrap().next() the guard lives for the whole loop body. Take the item in its own statement. Cap the thread count before spawning."
+
+[solution]
+explanation = "The sheet is split with chunks_mut into rows. The enumerated iterator sits in a Mutex. A capped number of scoped threads each loop: lock, take the next row, unlock at the end of that statement, paint. The scope joins them and passes a panic on to the caller."
+time = "O(width * height) divided among the workers"
+space = "O(width * height)"

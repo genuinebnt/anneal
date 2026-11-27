@@ -18,7 +18,7 @@ body = """
 [[sections]]
 heading = "What it is"
 body = """
-six indexes that answer "what is near this?" without scanning everything. Every one is verified against a brute-force oracle on seeded random data, and the work done is **counted** (nodes visited / distance evaluations) so the speed-up is a number, not a claim.
+six indexes that answer "what is near this?" without scanning everything. Every one is verified against a brute-force oracle on seeded random data. For all but the grid the work done is **counted** (nodes visited / distance evaluations), so the speed-up is a number, not a claim.
 
 <div class="cb-g-terms"><div class="cb-g-term"><div class="cb-g-name">K-D tree</div><div class="cb-g-says"><p>Median split on a cycling axis (select_nth, implicit balanced layout in one index array). Nearest neighbour with branch pruning (skip the far side when the splitting plane is farther than the best so far), k-nearest with a bounded max-heap, orthogonal range (box) query.</p><p>The <strong>curse of dimensionality</strong> table (d = 2, 5, 10, 20) shows pruning collapsing: in 2-D a query touches a tiny fraction of n, in 20-D nearly every node, because in high dimensions all points are almost equally far away and a sphere around the query crosses almost every splitting plane.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Region QUADTREE</div><div class="cb-g-says"><p>For 2-D points: a leaf splits into four equal quadrants at a capacity; range and nearest queries.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>R-TREE bulk-loaded with <strong>sort-tile-recursive</strong> (STR): sort by x into vertical slices, sort each slice by y, pack M per node, repeat on the node boxes. Stores rectangles (not points); window query equals a linear scan.</p></div></div><div class="cb-g-term"><div class="cb-g-name">Uniform grid / spatial hash</div><div class="cb-g-says"><p>With cell size = the query radius: a fixed-radius neighbour query inspects 3x3 cells.</p></div></div><div class="cb-g-term"><div class="cb-g-name"></div><div class="cb-g-says"><p>BK-TREE for a discrete metric (Levenshtein): children keyed by distance to the parent; the triangle inequality lets a radius-r query visit only children whose key is within r of the query's distance. "Words within 2 edits".</p></div></div><div class="cb-g-term"><div class="cb-g-name">VP-TREE (vantage point)</div><div class="cb-g-says"><p>Split by distance to a pivot (inside / outside radius mu); needs only a metric, so the same code indexes Euclidean vectors and strings.</p></div></div></div>
 """
@@ -29,6 +29,10 @@ body = """
 **Which index for which workload** (printed at the end too): low-dimensional static points -> k-d tree; points inserted over time in 2-D/3-D maps -> quadtree/octree; rectangles/polygons on disk -> R-tree (STR for static, R&#42;-tree for dynamic); many moving objects with a known interaction radius (games, particles) -> grid;
 
 Strings/edit distance -> BK-tree; arbitrary metric, moderate intrinsic dimension -> VP-tree; high-dimensional embeddings (50-1000 dims) -> approximate indexes, see ivf_flat (IVF-Flat), hnsw_lite (HNSW), vamana_diskann_lite (Vamana/DiskANN), product_quantization (product quantization).
+
+**Limits**: teaching versions, built for finite coordinates (NaN is not handled). The quadtree covers only the unit square and refuses points outside it. The R-tree is bulk-loaded and takes no later inserts; its fan-out must be at least 2.
+
+The grid answers only radii from 0 up to its cell size, and a distance within rounding error of a cell edge is not specially treated. The BK-tree and the string demo measure edit distance in **bytes**, so one changed non-ASCII letter can count as two edits.
 """
 
 [[sections]]

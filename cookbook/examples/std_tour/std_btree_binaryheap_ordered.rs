@@ -24,7 +24,8 @@
 //!   first entry at or after k (ceiling)          -> `m.range(k..).next()`
 //!   strictly after k                             -> `m.range((Bound::Excluded(k), Bound::Unbounded))`
 //!   smallest / largest                           -> `first_key_value` / `last_key_value`; remove: `pop_first` / `pop_last`
-//!   expire everything older than t               -> `let keep = m.split_off(&t);` (old stays in `m`)  or `extract_if(..t, |_,_| true)`
+//!   expire everything older than t               -> `let keep = m.split_off(&t);` (old stays in `m`)  or `extract_if(..t, |_,_| true).for_each(drop)`
+//!                                                (`extract_if` is lazy: without `for_each` it removes nothing)
 //!   merge two maps (right wins)                  -> `a.append(&mut b)`
 //!   max-priority queue                           -> `BinaryHeap`
 //!   min-priority queue                           -> `BinaryHeap<Reverse<T>>`
@@ -497,7 +498,7 @@ impl Eq for TotalF64 {}
 
 /// Largest k items, descending. Memory O(k), time O(n log k): the heap's top is the weakest of the current best.
 fn top_k<T: Ord>(items: impl IntoIterator<Item = T>, k: usize) -> Vec<T> {
-    let mut h: BinaryHeap<Reverse<T>> = BinaryHeap::with_capacity(k);
+    let mut h: BinaryHeap<Reverse<T>> = BinaryHeap::new(); // not with_capacity(k): k may be far above the item count
     for x in items {
         if h.len() < k {
             h.push(Reverse(x));
@@ -544,6 +545,11 @@ fn s08_floats_topk() {
         oracle.truncate(k);
         assert_eq!(top_k(data, k), oracle, "case {case} k={k}");
     }
+    assert_eq!(
+        top_k([1, 3, 2], usize::MAX),
+        [3, 2, 1],
+        "a k above the item count"
+    );
     println!("8. floats and top-k ok");
 }
 
@@ -557,7 +563,7 @@ fn shortest(adj: &[Vec<(usize, u64)>], src: usize) -> Vec<Option<u64>> {
             continue; // stale entry: a shorter route was pushed after this one
         }
         for &(v, w) in &adj[u] {
-            let nd = d + w;
+            let nd = d.saturating_add(w); // distances stop at u64::MAX; a wrapped sum would look like a short path
             if dist[v].is_none_or(|best| nd < best) {
                 dist[v] = Some(nd);
                 heap.push(Reverse((nd, v)));
@@ -568,6 +574,11 @@ fn shortest(adj: &[Vec<(usize, u64)>], src: usize) -> Vec<Option<u64>> {
 }
 
 fn s09_dijkstra() {
+    let long = [vec![(1, u64::MAX)], vec![(2, 5)], vec![]];
+    assert_eq!(
+        shortest(&long, 0),
+        [Some(0), Some(u64::MAX), Some(u64::MAX)]
+    );
     let mut rng = Rng(11);
     for case in 0..300 {
         let n = 1 + rng.below(12) as usize;

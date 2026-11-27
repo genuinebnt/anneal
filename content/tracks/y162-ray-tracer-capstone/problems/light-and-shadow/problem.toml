@@ -1,0 +1,33 @@
+slug = "light-and-shadow"
+title = "Capstone 5: light, shade and shadow"
+mode = "write"
+level = "hard"
+stage = "shine"
+order = 5
+status = "ready"
+tags = ["shading", "shadows", "sampling", "floating point", "ray tracing", "90-min"]
+teaches = [
+    "A surface under a lamp gets less light when the lamp is farther or lower. Both factors come from geometry.",
+    "Shadow is one more ray query: is anything between here and the lamp?",
+    "A soft shadow is the average of many sharp ones, from points spread over the lamp.",
+    "A computed point is never exactly on its surface, so a ray that starts there needs a rule against hitting it again.",
+]
+follow_up = "1) Your panel has no direction: it lights what is above it as strongly as what is below. What factor would a real flat lamp add? 2) Why does a larger panel need more samples for the same noise?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "Write the work for one lamp point first: direction, distance, is it in front, is it blocked, how much arrives. A panel is that, repeated at random points and averaged."
+
+[[hints]]
+kind = "edge"
+text = "The shadow ray must not find its own starting surface, and must not find things beyond the lamp. Both are a matter of its window."
+
+[[hints]]
+kind = "rust"
+text = "f64 as i64 stops at the ends of the range. Reduce each of the two checker numbers to its parity before you combine them."
+
+[solution]
+explanation = "A lamp point counts if the cosine is positive and nothing blocks the open stretch between the two ends. It adds power times (colour times cosine, plus the glint) over distance squared. Panels average random points. The checker takes the parity of each coordinate on its own, so nothing can overflow."
+time = "O(lamps * samples * world query)"
+space = "O(1)"

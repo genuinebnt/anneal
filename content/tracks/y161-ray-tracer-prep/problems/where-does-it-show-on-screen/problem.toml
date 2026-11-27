@@ -1,0 +1,32 @@
+slug = "where-does-it-show-on-screen"
+title = "Where on the screen does it show?"
+mode = "write"
+level = "medium"
+stage = "aim"
+order = 4
+status = "ready"
+tags = ["camera", "perspective", "dot product", "cross product", "60-min"]
+teaches = [
+    "A viewer is a place and three directions at right angles: forward, right and up. A cross product makes one from two others.",
+    "In the viewer own directions, a point is just three dot products.",
+    "Perspective is one division: sideways and upward distances divided by how far ahead the point is.",
+]
+follow_up = "1) How would you turn a pixel back into a ray from the eye? 2) Why do straight lines stay straight in this picture, and what would a fisheye need instead?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "First find three unit vectors: forward, right, and the picture own up. Express the point in these three directions, starting from the eye."
+
+[[hints]]
+kind = "approach"
+text = "Picture a screen one unit ahead. Divide the sideways and upward parts by the part ahead. Half the height of that screen is tan(vfov / 2)."
+
+[[hints]]
+kind = "edge"
+text = "The given up is only a hint: it may lean towards the view. Decide about points behind the eye before you divide."
+
+[solution]
+explanation = "forward points at the target; right is forward cross up; the picture up is right cross forward, which removes any lean of the given up. Three dot products give the point in these directions. Dividing the first two by the third projects onto the screen one unit ahead, whose half height is tan(vfov / 2) and half width that times width over height. The rest is scaling to pixels, with down flipped."
+time = "O(1)"
+space = "O(1)"

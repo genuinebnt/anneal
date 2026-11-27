@@ -2,6 +2,7 @@
 //! LEVEL: capstone
 //! Use in: learning how offline renderers work, synthetic image generation, a base for experiments with sampling and acceleration structures.   Run: cargo run --release --example ray_tracer
 #![allow(dead_code)]
+//! OVERFLOW-CHECKS: the checkerboard regression only fails with them; `check.sh` runs this file a second time with them.
 //!
 //! WHAT: a self-contained CPU ray tracer. Scene = spheres, an infinite checkerboard plane and triangle meshes (a generated
 //! icosphere, boxes, quads). Materials: Lambert, checker, Blinn-Phong, perfect mirror, dielectric glass (Fresnel by
@@ -24,11 +25,16 @@
 //!   Whitted shading at a diffuse hit: albedo * (ambient + sum over lights of light * max(0, n.l) / d^2 * visibility)
 //!     + Blinn term ks * max(0, n.h)^shininess, with h = normalize(l + v).
 //!   path tracing (Lambert): next dir ~ cos(theta)/pi so pdf cancels the cosine and throughput *= albedo; after 3 bounces
-//!     Russian roulette keeps the path with probability p = clamp(max(throughput), .05, .95) and divides by p (unbiased).
+//!     Russian roulette keeps the path with probability p = clamp(max(throughput), .05, .95) and divides by p (this step
+//!     adds no bias; the hard limit `max_depth` does cut off a little light).
 //!     Glass picks reflection with probability R (Fresnel), refraction otherwise, so throughput needs no extra weight.
 //!   white furnace: any closed lossless material inside uniform radiance 1 must look exactly 1; a deviation means the
 //!     BRDF/refraction code creates or destroys energy. Convergence: RMSE of an N-sample image against a very
 //!     high-sample reference falls like 1/sqrt(N).
+//! LIMITS: the path tracer sees only the sky and emissive surfaces (it ignores point and area lights) and treats Blinn as
+//!   matte. Whitted shadow rays treat glass as opaque. Area lights have no emitter-cosine term. Glass is always assumed to
+//!   be surrounded by air. The convergence check tests that the error falls and drops by 2.5x from 1 to 64 samples, not
+//!   the exact 1/sqrt(N) rate.
 //! COMMON USES: film and product-visualisation offline renderers (the same ideas as PBRT/Cycles), game-engine lightmap
 //!   baking and reference images, synthetic data generation for computer vision, teaching sampling/variance.
 //! Read: https://raytracing.github.io/ and https://www.pbr-book.org/
@@ -36,6 +42,7 @@ use std::collections::HashMap;
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub};
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
 // =====================================================================================
@@ -185,7 +192,17 @@ fn random_in_disk(rng: &mut Rng) -> (f64, f64) {
         }
     }
 }
-fn schlick(cos: f64, n1: f64, n2: f64) -> f64 {
+/// Schlick's estimate of the reflected share. `cos_i` is measured on the incoming side.
+fn schlick(cos_i: f64, n1: f64, n2: f64) -> f64 {
+    let mut cos = cos_i;
+    if n1 > n2 {
+        // The estimate only holds with the angle on the side with the smaller index: here the outgoing one.
+        let sin2_t = (n1 / n2).powi(2) * (1.0 - cos_i * cos_i);
+        if sin2_t > 1.0 {
+            return 1.0;
+        }
+        cos = (1.0 - sin2_t).sqrt();
+    }
     let r0 = ((n1 - n2) / (n1 + n2)).powi(2);
     r0 + (1.0 - r0) * (1.0 - cos).powi(5)
 }
@@ -217,7 +234,7 @@ impl Ray {
 #[derive(Clone, Copy, Debug)]
 enum Material {
     Lambert(Vec3),
-    /// two albedos alternating on a grid of cell size `.2` (only meaningful on planes)
+    /// two albedos alternating on a grid; the number is cells per unit length (only meaningful on planes)
     Checker(Vec3, Vec3, f64),
     /// diffuse albedo + Blinn-Phong specular (ks, shininess)
     Blinn(Vec3, f64, f64),
@@ -277,7 +294,10 @@ impl Env {
 fn hit_sphere(r: &Ray, c: Vec3, rad: f64, tmin: f64, tmax: f64) -> Option<f64> {
     let oc = r.o - c;
     let hb = oc.dot(r.d);
-    let disc = hb * hb - (oc.dot(oc) - rad * rad);
+    // `hb * hb - (oc.oc - rad^2)` subtracts two huge numbers when the origin is far away, and keeps only noise.
+    // The part of `oc` at right angles to the ray stays small.
+    let side = oc - r.d * hb;
+    let disc = rad * rad - side.dot(side);
     if disc < 0.0 {
         return None;
     }
@@ -290,7 +310,8 @@ fn hit_tri(r: &Ray, a: Vec3, b: Vec3, c: Vec3, tmin: f64, tmax: f64) -> Option<f
     let (e1, e2) = (b - a, c - a);
     let p = r.d.cross(e2);
     let det = e1.dot(p);
-    if det.abs() < 1e-14 {
+    // Compared with the sizes that went in: an absolute limit would make every tiny triangle invisible.
+    if det * det <= 1e-24 * e1.dot(e1) * e2.dot(e2) * r.d.dot(r.d) {
         return None;
     }
     let inv = 1.0 / det;
@@ -309,6 +330,9 @@ fn hit_tri(r: &Ray, a: Vec3, b: Vec3, c: Vec3, tmin: f64, tmax: f64) -> Option<f
 }
 impl Prim {
     fn intersect(&self, r: &Ray, tmin: f64, tmax: f64) -> Option<f64> {
+        if COUNTING.load(Ordering::Relaxed) {
+            PRIM_TESTS.fetch_add(1, Ordering::Relaxed);
+        }
         match self.shape {
             Shape::Sphere { c, r: rad } => hit_sphere(r, c, rad, tmin, tmax),
             Shape::Tri { a, b, c } => hit_tri(r, a, b, c, tmin, tmax),
@@ -317,7 +341,10 @@ impl Prim {
     fn bounds(&self) -> (Vec3, Vec3) {
         let pad = v3(1e-6, 1e-6, 1e-6);
         match self.shape {
-            Shape::Sphere { c, r } => (c - v3(r, r, r) - pad, c + v3(r, r, r) + pad),
+            Shape::Sphere { c, r } => {
+                let r = r.abs(); // a negative radius is the same surface with the normal pointing inward
+                (c - v3(r, r, r) - pad, c + v3(r, r, r) + pad)
+            }
             Shape::Tri { a, b, c } => (a.min(b).min(c) - pad, a.max(b).max(c) + pad),
         }
     }
@@ -397,8 +424,7 @@ impl Bvh {
         ids.sort_by(|&p, &q| {
             cent[p as usize]
                 .get(axis)
-                .partial_cmp(&cent[q as usize].get(axis))
-                .unwrap()
+                .total_cmp(&cent[q as usize].get(axis))
                 .then(p.cmp(&q))
         });
         self.nodes.push(Node {
@@ -431,6 +457,11 @@ impl Bvh {
         }
     }
 }
+/// Off except while section 6 counts, so that rendering threads do not fight over one counter.
+static COUNTING: AtomicBool = AtomicBool::new(false);
+/// How many ray-primitive tests have run. A count is the same on every machine; a stopwatch is not.
+static PRIM_TESTS: AtomicU64 = AtomicU64::new(0);
+
 /// Slab test against a node box limited to [0, tmax].
 fn box_hit(lo: Vec3, hi: Vec3, o: Vec3, inv: Vec3, tmax: f64) -> bool {
     let (mut t0, mut t1) = (0.0f64, tmax);
@@ -711,8 +742,18 @@ impl Camera {
         aperture: f64,
         focus: f64,
     ) -> Camera {
+        assert!(
+            (target - pos).length() > 0.0,
+            "a camera cannot look at the point where it stands"
+        );
         let fwd = (target - pos).norm();
-        let right = fwd.cross(v3(0.0, 1.0, 0.0)).norm();
+        // Looking straight up or down, "up is +y" says nothing about which way the picture is turned: use -z.
+        let up = if fwd.cross(v3(0.0, 1.0, 0.0)).length() > 1e-9 {
+            v3(0.0, 1.0, 0.0)
+        } else {
+            v3(0.0, 0.0, -1.0)
+        };
+        let right = fwd.cross(up).norm();
         Camera {
             pos,
             fwd,
@@ -770,8 +811,9 @@ struct Cfg {
 }
 
 fn checker_albedo(a: Vec3, b: Vec3, scale: f64, p: Vec3) -> Vec3 {
-    let k = (p.x * scale).floor() as i64 + (p.z * scale).floor() as i64;
-    if k.rem_euclid(2) == 0 { a } else { b }
+    // `as` stops at the ends of i64, so adding the two cells first can overflow. Take each parity on its own.
+    let parity = |v: f64| ((v * scale).floor() as i64).rem_euclid(2);
+    if parity(p.x) == parity(p.z) { a } else { b }
 }
 fn diffuse_albedo(m: &Material, p: Vec3) -> Option<Vec3> {
     match *m {
@@ -875,7 +917,8 @@ fn whitted(sc: &Scene, r: &Ray, depth: u32, rng: &mut Rng, cfg: &Cfg) -> Vec3 {
                     let dist = to.length();
                     let l = to / dist;
                     let ndl = n.dot(l);
-                    if ndl <= 0.0 {
+                    // A lamp exactly on the point gives 0 / 0: NaN fails every comparison, so ask for it by name.
+                    if ndl.is_nan() || ndl <= 0.0 {
                         continue;
                     }
                     let origin = h.p + n * 1e-4;
@@ -996,6 +1039,10 @@ fn render_pixel(sc: &Scene, cam: &Camera, cfg: &Cfg, x: usize, y: usize) -> Vec3
 /// output is bit-identical for any thread count.
 fn render(sc: &Scene, cam: &Camera, cfg: &Cfg) -> Vec<Vec3> {
     let mut fb = vec![Vec3::ZERO; cfg.w * cfg.h];
+    if fb.is_empty() {
+        return fb; // chunks_mut(0) would panic
+    }
+    assert!(cfg.spp > 0, "at least one sample per pixel");
     let band = 4;
     let queue = Mutex::new(fb.chunks_mut(cfg.w * band).enumerate());
     std::thread::scope(|s| {
@@ -1048,6 +1095,12 @@ fn png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(&crc32(&body).to_be_bytes());
 }
 fn encode_png(w: usize, h: usize, rgb: &[u8]) -> Vec<u8> {
+    // PNG has no empty images, and the header must agree with the data.
+    assert!(w > 0 && h > 0, "a PNG needs at least one pixel");
+    assert!(
+        w.checked_mul(h).and_then(|n| n.checked_mul(3)) == Some(rgb.len()),
+        "rgb must hold width * height * 3 bytes"
+    );
     let mut raw = Vec::with_capacity((w * 3 + 1) * h);
     for row in rgb.chunks(w * 3) {
         raw.push(0);
@@ -1385,8 +1438,150 @@ fn rmse(a: &[Vec3], b: &[Vec3]) -> f64 {
     (s / (3.0 * a.len() as f64)).sqrt()
 }
 
+/// One deterministic check for each bug this file once had.
+fn regressions() {
+    // Just before total internal reflection almost everything must be reflected, not 4 percent.
+    let critical = (1.0f64 - (1.0f64 / 1.5).powi(2)).sqrt();
+    assert!(
+        schlick(critical + 1e-9, 1.5, 1.0) > 0.99,
+        "Schlick from the dense side"
+    );
+    // ...and the same face gives the same share from both sides.
+    let (cos_out, sin_in) = (0.6f64, 0.8 / 1.5);
+    let cos_in = (1.0f64 - sin_in * sin_in).sqrt();
+    assert!((schlick(cos_out, 1.0, 1.5) - schlick(cos_in, 1.5, 1.0)).abs() < 1e-12);
+
+    // A ray passing 1.5 from the centre of a unit sphere, from 1e8 away, misses it.
+    let far = |x: f64| Ray {
+        o: v3(x, 0.0, 1e8),
+        d: v3(0.0, 0.0, -1.0),
+    };
+    assert!(
+        hit_sphere(&far(1.5), Vec3::ZERO, 1.0, 1e-4, 1e30).is_none(),
+        "far sphere, miss"
+    );
+    let t = hit_sphere(&far(0.6), Vec3::ZERO, 1.0, 1e-4, 1e30).expect("far sphere, hit");
+    assert!((t - (1e8 - 0.8)).abs() < 1e-6, "far sphere, distance {t}");
+
+    // A triangle with sides of 1e-8 is still a triangle.
+    let e = 1e-8;
+    let down = Ray {
+        o: v3(e * 0.2, e * 0.2, 1.0),
+        d: v3(0.0, 0.0, -1.0),
+    };
+    assert!(
+        hit_tri(
+            &down,
+            Vec3::ZERO,
+            v3(e, 0.0, 0.0),
+            v3(0.0, e, 0.0),
+            1e-4,
+            10.0
+        )
+        .is_some(),
+        "tiny triangle"
+    );
+
+    // Spheres with a negative radius: the BVH and brute force must agree.
+    let mut s = Scene::new(vec![Material::Lambert(Vec3::ONE)], Env::Black);
+    let mut g = Rng(5);
+    let spot = |g: &mut Rng| {
+        v3(
+            g.f() * 40.0 - 20.0,
+            g.f() * 40.0 - 20.0,
+            g.f() * 40.0 - 20.0,
+        )
+    };
+    for _ in 0..200 {
+        let c = spot(&mut g);
+        s.prims.push(Prim {
+            shape: Shape::Sphere { c, r: -1.5 },
+            mat: 0,
+        });
+    }
+    s.finish();
+    for _ in 0..500 {
+        let o = (spot(&mut g)).norm() * 60.0;
+        let r = Ray {
+            o,
+            d: (spot(&mut g) - o).norm(),
+        };
+        assert!(
+            s.closest(&r, 1e-4, 1e30, true, false) == s.closest(&r, 1e-4, 1e30, false, false),
+            "negative radius: BVH differs from brute force"
+        );
+    }
+
+    // A NaN coordinate must not panic the build.
+    let odd: Vec<Prim> = (0..8)
+        .map(|i| {
+            let x = if i == 3 { f64::NAN } else { i as f64 };
+            Prim {
+                shape: Shape::Sphere {
+                    c: v3(x, 0.0, 0.0),
+                    r: 0.1,
+                },
+                mat: 0,
+            }
+        })
+        .collect();
+    assert_eq!(Bvh::build(&odd).order.len(), 8);
+
+    // A camera looking straight down works.
+    let down = Camera::new(v3(0.0, 5.0, 0.0), Vec3::ZERO, 40.0, 1.0, 0.0, 5.0);
+    let d = down.ray(0.5, 0.5, &mut Rng(1)).d;
+    assert!(
+        d.near(v3(0.0, -1.0, 0.0), 1e-12),
+        "straight-down camera, got {d:?}"
+    );
+
+    // The checkerboard does not overflow, however far the point is. This needs overflow checks (a debug build, or the
+    // second run in `check.sh`): with wrapping arithmetic the old sum happened to keep the right parity.
+    for far in [1e19, -1e19, f64::INFINITY] {
+        checker_albedo(Vec3::ZERO, Vec3::ONE, 1.0, v3(far, 0.0, far));
+    }
+
+    // A lamp exactly on the shaded point adds nothing, and certainly not NaN.
+    let mut s = Scene::new(vec![Material::Lambert(Vec3::ONE)], Env::Black);
+    s.planes.push(Plane {
+        n: v3(0.0, 1.0, 0.0),
+        k: 0.0,
+        mat: 0,
+    });
+    s.lights.push(Light::Point {
+        pos: Vec3::ZERO,
+        color: Vec3::ONE,
+    });
+    s.finish();
+    let down = Ray {
+        o: v3(0.0, 1.0, 0.0),
+        d: v3(0.0, -1.0, 0.0),
+    };
+    let c = whitted(&s, &down, 3, &mut Rng(1), &base_cfg(1, 1, Mode::Whitted, 1));
+    assert!(c.is_finite(), "lamp on the surface gave {c:?}");
+
+    // Empty pictures render as empty instead of panicking; the PNG writer refuses them.
+    let (sc, cam) = whitted_scene(0);
+    assert!(render(&sc, &cam, &base_cfg(0, 4, Mode::Whitted, 1)).is_empty());
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let refused = |w: usize, h: usize, rgb: &[u8]| {
+        std::panic::catch_unwind(|| encode_png(w, h, rgb)).is_err()
+    };
+    let results = [refused(4, 0, &[]), refused(2, 2, &[0; 3])];
+    std::panic::set_hook(hook);
+    assert_eq!(
+        results,
+        [true, true],
+        "encode_png must refuse h = 0 and short data"
+    );
+}
+
 fn main() {
     let t_all = Instant::now();
+
+    // ---------- 0. regressions: each line fails without its fix ----------
+    regressions();
 
     // ---------- 1. BVH sanity and equality with brute force ----------
     let (sc3, cam3) = whitted_scene(3);
@@ -1652,21 +1847,25 @@ fn main() {
         .count();
     let mut sp = base_cfg(64, 48, Mode::Whitted, 1);
     sp.threads = 1;
-    let t0 = Instant::now();
-    let fast = render(&big, &bigcam, &sp);
-    let t_bvh = t0.elapsed().as_secs_f64();
+    let counted = |cfg: &Cfg| {
+        PRIM_TESTS.store(0, Ordering::Relaxed);
+        COUNTING.store(true, Ordering::Relaxed);
+        let t0 = Instant::now();
+        let img = render(&big, &bigcam, cfg);
+        let secs = t0.elapsed().as_secs_f64();
+        COUNTING.store(false, Ordering::Relaxed);
+        (img, PRIM_TESTS.load(Ordering::Relaxed), secs)
+    };
+    let (fast, n_bvh, t_bvh) = counted(&sp);
     sp.use_bvh = false;
-    let t0 = Instant::now();
-    let slow = render(&big, &bigcam, &sp);
-    let t_brute = t0.elapsed().as_secs_f64();
+    let (slow, n_brute, t_brute) = counted(&sp);
     assert!(fast == slow);
-    let speedup = t_brute / t_bvh.max(1e-9);
     println!(
-        "BVH speed-up on {tris} triangles (64x48, 1 thread): brute {t_brute:.3}s, BVH {t_bvh:.3}s => {speedup:.1}x"
+        "BVH on {tris} triangles (64x48, 1 thread): {n_brute} primitive tests brute force, {n_bvh} with the BVH ({t_brute:.3}s and {t_bvh:.3}s)"
     );
     assert!(
-        speedup > 3.0,
-        "BVH should be several times faster than brute force"
+        n_bvh * 20 < n_brute,
+        "the BVH must test at most a twentieth of the primitives: {n_bvh} of {n_brute}"
     );
 
     // ---------- 7. final images ----------

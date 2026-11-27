@@ -269,9 +269,11 @@ struct Valid<P: Parse>(P::Out);
 fn classify(e: &serde_json::Error, lang: String) -> Problem {
     use serde_json::error::Category::*;
     let msg = e.to_string();
+    // Only at the START of the message: further on it may quote a submitted VALUE, which could contain these very words and
+    // so pick the code and be echoed back as a field name.
     let backticked = |marker: &str| {
-        msg.split_once(marker)
-            .and_then(|(_, r)| r.split('`').next())
+        msg.strip_prefix(marker)
+            .and_then(|r| r.split('`').next())
             .map(str::to_string)
     };
     let mut p = Problem {
@@ -315,7 +317,17 @@ where
             .headers()
             .get(header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v.starts_with("application/json") || v.contains("+json"));
+            .is_some_and(|v| {
+                // the media type itself, without its parameters: a substring test lets `text/plain; x=+json` through
+                let essence = v
+                    .split(';')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_lowercase();
+                essence == "application/json"
+                    || (essence.starts_with("application/") && essence.ends_with("+json"))
+            });
         if !is_json {
             return Err(Problem::simple(
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -395,14 +407,7 @@ impl Parse for CreateUser {
         r.name = norm_name(&r.name);
         r.email = norm_email(&r.email);
         r.role = r.role.trim().to_lowercase();
-        let mut tags: Vec<String> = r
-            .tags
-            .iter()
-            .map(|t| t.trim().to_lowercase())
-            .filter(|t| !t.is_empty())
-            .collect();
-        tags.sort();
-        tags.dedup();
+        let mut tags: Vec<String> = r.tags.iter().map(|t| t.trim().to_lowercase()).collect();
         // 2. validate (collect everything)
         let mut c = Collector::default();
         c.field(
@@ -419,12 +424,17 @@ impl Parse for CreateUser {
             r.role.as_str(),
             &[one_of(&["admin", "member", "viewer"])],
         );
-        if tags.len() > 10 {
-            c.push("tags", fe("too_many", json!({"max": 10})));
-        }
+        // checked while the list is still as the client sent it, so `tags[i]` names the client's element
         for (i, t) in tags.iter().enumerate() {
             c.field(&format!("tags[{i}]"), t.as_str(), &[max_chars(20)]);
         }
+        tags.retain(|t| !t.is_empty());
+        tags.sort();
+        tags.dedup();
+        if tags.len() > 10 {
+            c.push("tags", fe("too_many", json!({"max": 10})));
+        }
+        c.field("locale", r.locale.as_str(), &[one_of(&["en", "es"])]);
         // 3. convert: the domain type is only constructible after validation
         let role = match r.role.as_str() {
             "admin" => Role::Admin,
@@ -860,6 +870,16 @@ async fn less_known() {
             assert_eq!(u.email, norm_email(&u.email));
         }
     }
+    // the loop's invariants are only checked on accepted inputs, and random strings are rarely a valid e-mail address
+    let known = RawCreateUser {
+        name: " Zoë  ß ".into(),
+        email: " A@B.Co ".into(),
+        age: None,
+        role: "member".into(),
+        locale: "en".into(),
+        tags: vec![],
+    };
+    assert!(CreateUser::parse(known).is_ok());
     println!("   fuzz: 3000 random inputs, {accepted} accepted, 0 panics");
 }
 
@@ -922,6 +942,42 @@ async fn production_tips() {
     )
     .await;
     assert_eq!(b["errors"]["is_admin"][0]["code"], "unknown_field");
+    // a value that imitates serde's own wording must not choose the error or come back in it
+    for age in [
+        "unknown field `hunter2-secret",
+        "missing field `hunter2-secret",
+    ] {
+        let body = format!(r#"{{"name":"Bob","email":"a@b.co","age":"{age}"}}"#);
+        let (_, _, b, text) = call(&app, "POST", "/users", &[JSON], Some(&body)).await;
+        assert!(!text.contains("hunter2-secret"), "echoed: {text}");
+        assert_eq!(b["errors"]["$body"][0]["code"], "invalid_type");
+    }
+    // the media type decides, not a substring of the header; its case does not matter
+    for (content_type, ok) in [
+        ("text/plain; x=+json", false),
+        ("application/jsonp", false),
+        ("Application/JSON; charset=utf-8", true),
+        ("application/merge-patch+json", true),
+    ] {
+        let headers = [("content-type", content_type)];
+        let (st, ..) = call(&app, "PATCH", "/prefs", &headers, Some("{}")).await;
+        let want = if ok {
+            StatusCode::OK
+        } else {
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        };
+        assert_eq!(st, want, "{content_type}");
+    }
+    // `tags[i]` is the position in the request, although the stored list is sorted
+    let body = format!(
+        r#"{{"name":"Bob","email":"a@b.co","tags":["b","{}","a"]}}"#,
+        "z".repeat(21)
+    );
+    let (_, _, b, _) = call(&app, "POST", "/users", &[JSON], Some(&body)).await;
+    assert!(b["errors"].get("tags[1]").is_some(), "{b}");
+    let body = r#"{"name":"Bob","email":"a@b.co","locale":"<script>"}"#;
+    let (_, _, b, _) = call(&app, "POST", "/users", &[JSON], Some(body)).await;
+    assert_eq!(b["errors"]["locale"][0]["code"], "invalid_value");
     println!("   12 tips asserted");
 }
 

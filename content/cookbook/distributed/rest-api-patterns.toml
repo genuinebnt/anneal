@@ -29,7 +29,13 @@ What: one in-memory `/v1/items` API (real axum server on 127.0.0.1:0, reqwest cl
 - versioning: URL (`/v2/..`) vs media-type header (`Accept: application/vnd.forge.v2+json`), compared.
 - HATEOAS-style `_links`, and bulk operations answering with per-item results (207 Multi-Status style).
 
-   Why: these are the decisions that are expensive to change once clients exist.
+**Limits**: a JSON Patch is limited in operations, growth and nesting depth. Without that, a few `copy` operations double the document until memory runs out, or nest it until the stack overflows and the process aborts. An item has a size limit too, so that many patches cannot grow it without end.
+
+`test` compares numbers by how they are written (`1` and `1.0` differ, although RFC 6902 calls them equal). `If-None-Match` matches one exact tag only (no list, `*` or `W/`). `Accept` is matched by substring (no `q` values).
+
+Idempotency keys and finished report jobs are kept in memory and are never evicted.
+
+Why: these are the decisions that are expensive to change once clients exist.
 """
 
 [[sections]]

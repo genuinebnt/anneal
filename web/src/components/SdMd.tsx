@@ -121,8 +121,11 @@ function proseHtml(text: string, id: string, start: number): string {
     html = html.replace(/<aside data-call="(note|tip|warning|aside|rust|testing|production|performance|why|idea)">([\s\S]*?)<\/aside>/g, (_m, kind: string, body: string) => callout(kind.toUpperCase(), body));
     // `### Title {#anchor}` names a heading so that tables and links can point at it
     html = html.replace(/<(h[3-5])>([\s\S]*?)\s*\{#([\w-]+)\}<\/\1>/g, '<$1 id="$3">$2</$1>');
-    // a table can be wider than the column: it scrolls inside its own box
-    html = html.replace(/<table>/g, '<div class="sd-tbl"><table>').replace(/<\/table>/g, "</table></div>");
+    // a table can be wider than the column: it scrolls inside its own box. A cookbook table may come with its box (and a
+    // class); wrapping only the end of one would close that box early.
+    html = html.replace(/(<div class="cb-g-tt">\s*)?<table>([\s\S]*?)<\/table>/g, (m, own: string | undefined, rows: string) => (own ? m : `<div class="sd-tbl"><table>${rows}</table></div>`));
+    // a cookbook drawing scrolls inside its figure, and the caption stays where it is
+    html = html.replace(/(<figure class="cb-g-fig">)\s*(<svg[\s\S]*?<\/svg>)/g, '$1<div class="cb-g-fig-scroll">$2</div>');
     return html.replace(/@@TEX(\d+)@@/g, (_m, i: string) => `<span class="sd-tex" data-tex="${(maths[Number(i)] ?? "").replace(/&/g, "&amp;").replace(/"/g, "&quot;")}"></span>`);
 }
 

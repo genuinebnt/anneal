@@ -26,7 +26,11 @@ heading = "Design notes"
 body = """
 Pieces: (1) `Task` = a boxed future + a handle to the queue; (2) `impl Wake for Task` so `waker.wake()` re-queues the task; (3) the executor loop pulls **ready** tasks and polls them; a task that returns Pending is parked until its waker fires; (4) a `Timer` future stores the latest waker and a helper thread calls it when time is up.
 
-Nothing busy-waits: the executor blocks on `recv()` when nothing is ready (compare futures_by_hand, which polls in a loop). This is the executor from the Async Book <https://rust-lang.github.io/async-book/02_execution/04_executor.html> extended to count polls. Real runtimes add multi-threading, timers wheels, IO reactors (mio/epoll), work stealing.
+Nothing busy-waits: the executor blocks on `recv()` when nothing is ready (compare futures_by_hand, which polls in a loop). This is the executor from the Async Book <https://rust-lang.github.io/async-book/02_execution/04_executor.html> extended to count polls. Real runtimes add multi-threading, timer wheels, IO reactors (mio/epoll), work stealing.
+
+One change from the book matters: the ready queue is **unbounded**. With a bounded one, a `wake` or a `spawn` made by the executor thread while the queue is full waits for the executor itself, for ever.
+
+**Limits**: waking a task twice queues it twice (harmless, one wasted visit); every `Timer` starts a thread; a panic in one task stops `run`; `run` returns once no task is queued and no waker is left, so a stored waker that is never used keeps it waiting.
 """
 
 [[sources]]

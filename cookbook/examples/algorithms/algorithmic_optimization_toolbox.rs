@@ -18,6 +18,15 @@
 //!   - van Emde Boas layout: store a search tree recursively by halving height so any block size B is served at
 //!     O(log_B n) misses without knowing B (cache-oblivious); section 12 shows the same trick on transposition.
 //!   - HyperLogLog: approximate distinct counting in O(log log n) space; see the probabilistic data structure recipes.
+//!
+//! Mo's algorithm here keeps one counter for every value up to the largest one, so values must be small: a huge value
+//! can overflow or exhaust memory. Compress the values first for real data.
+//! LIMITS: these are teaching versions. Sums and squares must fit in their integer types (nothing checks for overflow, also not
+//! `d * d` in `prime_6k` for n close to `u64::MAX`). The group-split and Knuth optimisations are only valid for non-negative
+//! numbers, and the convex hull trick expects the heights in increasing order. The pair count of the two-pointer version
+//! leaves out the sort. A random pivot does NOT save this quickselect from many equal values: its two-way partition then
+//! takes a quadratic number of comparisons (a three-way partition avoids that).
+//!
 //! Read: https://en.wikipedia.org/wiki/Amortized_analysis and https://en.wikipedia.org/wiki/Cache-oblivious_algorithm
 //!   and https://cp-algorithms.com/ (sections: sqrt decomposition, Mo's algorithm, convex hull trick, divide and conquer DP,
 //!   Knuth optimisation; page names checked only at the site root, so search there).
@@ -264,7 +273,8 @@ fn mo_distinct(a: &[usize], qs: &[(usize, usize)], moves: &mut u64) -> (Vec<usiz
     let b = ((a.len() as f64 / (q as f64).sqrt()) as usize).max(1);
     let mut order: Vec<usize> = (0..qs.len()).collect();
     order.sort_by_key(|&i| (qs[i].0 / b, qs[i].1));
-    let mut cnt = vec![0usize; a.len().max(1)];
+    // indexed by VALUE, so sized by the largest value, not by the length of `a`
+    let mut cnt = vec![0usize; a.iter().max().map_or(0, |&m| m + 1)];
     let (mut cl, mut cr, mut distinct) = (0usize, 0usize, 0usize); // window is [cl, cr)
     let mut ans = vec![0; qs.len()];
     let add = |x: usize, cnt: &mut Vec<usize>, d: &mut usize| {
@@ -380,6 +390,9 @@ fn partition_dc(a: &[i64], g: usize, ops: &mut u64) -> i64 {
 // 6b. Knuth optimisation: merge adjacent piles at cost = total weight ---------------------------------------------
 fn stones_cubic(w: &[i64], ops: &mut u64) -> i64 {
     let n = w.len();
+    if n == 0 {
+        return 0; // no piles, nothing to merge
+    }
     let pre: Vec<i64> = std::iter::once(0)
         .chain(w.iter().scan(0, |s, &x| {
             *s += x;
@@ -405,6 +418,9 @@ fn stones_cubic(w: &[i64], ops: &mut u64) -> i64 {
 }
 fn stones_knuth(w: &[i64], ops: &mut u64) -> i64 {
     let n = w.len();
+    if n == 0 {
+        return 0; // no piles, nothing to merge
+    }
     let pre: Vec<i64> = std::iter::once(0)
         .chain(w.iter().scan(0, |s, &x| {
             *s += x;
@@ -447,13 +463,16 @@ fn frog_naive(h: &[i64], c: i64, ops: &mut u64) -> i64 {
             .min()
             .unwrap();
     }
-    *dp.last().unwrap()
+    dp.last().copied().unwrap_or(0)
 }
 fn frog_cht(h: &[i64], c: i64, ops: &mut u64) -> i64 {
     // line_j(x) = m*x + b with m = -2h[j], b = dp[j] + h[j]^2; query x = h[i] increasing, slopes decreasing.
     let mut dp = vec![0i64; h.len()];
     let mut dq: VecDeque<(i128, i128)> = VecDeque::new();
-    dq.push_back((-2 * h[0] as i128, 0 + (h[0] as i128).pow(2)));
+    let Some(&first) = h.first() else {
+        return 0;
+    };
+    dq.push_back((-2 * first as i128, (first as i128).pow(2)));
     for i in 1..h.len() {
         let x = h[i] as i128;
         while dq.len() >= 2 && dq[0].0 * x + dq[0].1 >= dq[1].0 * x + dq[1].1 {
@@ -659,7 +678,7 @@ fn quickselect(a: &mut [i64], k: usize, random: bool, r: &mut Rng, cmps: &mut u6
     }
 }
 fn reservoir(n: usize, k: usize, r: &mut Rng) -> Vec<usize> {
-    let mut res: Vec<usize> = (0..k).collect();
+    let mut res: Vec<usize> = (0..k.min(n)).collect(); // a sample never holds more than there is
     for i in k..n {
         let j = r.below(i as u64 + 1) as usize;
         if j < k {
@@ -981,7 +1000,23 @@ fn main() {
     assert!(mv * 5 < o1);
     report("Mo distinct n=q=20000", o1, mv);
 
+    // values larger than the array is long
+    let (a, qs_) = ([100, 7, 100], [(0, 2), (1, 1)]);
+    assert_eq!(
+        mo_distinct(&a, &qs_, &mut 0).0,
+        distinct_naive(&a, &qs_, &mut 0)
+    );
+    assert!(mo_distinct(&[], &[], &mut 0).0.is_empty());
+
     println!("6. DP optimisations");
+    assert_eq!(
+        (stones_cubic(&[], &mut 0), stones_knuth(&[], &mut 0)),
+        (0, 0)
+    );
+    assert_eq!(
+        (frog_naive(&[], 1, &mut 0), frog_cht(&[], 1, &mut 0)),
+        (0, 0)
+    );
     for _ in 0..ROUNDS / 2 {
         let n = 2 + r.below(14) as usize;
         let a = vec_below(&mut r, n, 20);
@@ -1203,6 +1238,9 @@ fn main() {
         5.0 * sigma
     );
 
+    assert_eq!(reservoir(2, 5, &mut r), [0, 1]);
+    assert!(reservoir(0, 3, &mut r).is_empty());
+
     println!("11. pruning: A* and early termination");
     let (mut sb, mut sa, mut solvable) = (0u64, 0u64, 0);
     for _ in 0..ROUNDS {
@@ -1225,6 +1263,7 @@ fn main() {
         sb += eb;
         sa += ea;
     }
+    assert!(sa < sb, "over all grids the heuristic saves work");
     println!(
         "  grid search ({solvable} solvable of {ROUNDS}): BFS expansions {sb}, A* expansions {sa}"
     );

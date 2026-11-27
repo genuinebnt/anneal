@@ -12,7 +12,8 @@
 //! HOW (the math, plain text):
 //!   reflect(i, n)  = i - 2 (i.n) n                          (n unit)
 //!   refract(i,n,e) = e i + (e c - sqrt(1 - e^2 (1 - c^2))) n, c = -i.n, e = n1/n2; radicand < 0 => total internal reflection
-//!   Schlick(c)     = R0 + (1 - R0)(1 - c)^5, R0 = ((n1-n2)/(n1+n2))^2
+//!   Schlick(c)     = R0 + (1 - R0)(1 - c)^5, R0 = ((n1-n2)/(n1+n2))^2, c = cosine on the side with the SMALLER index
+//!       (the outgoing angle when n1 > n2); total internal reflection gives 1.
 //!   point vs direction: points use w = 1 (translation applies, then divide by w), directions use w = 0 (no translation).
 //!   perspective (OpenGL, right-handed, camera looks down -z, NDC cube [-1,1]^3):
 //!       x' = x/(r), y' = y/t scaled by n; z' = (-(f+n) z - 2fn)/(f-n) before dividing by w = -z.
@@ -25,6 +26,10 @@
 //!       of freedom is lost: many (yaw, roll) pairs give the SAME rotation. Quaternions have no such singularity.
 //!   SHADOW ACNE: a ray starting exactly on a surface can re-hit it at t ~ 1e-7 from rounding; fix with a t_min epsilon
 //!       or by offsetting the origin along the normal.
+//!   LIMITS: the tolerances are absolute, so they depend on scale: `ray_triangle` calls a determinant below 1e-9 parallel
+//!       and so misses very small triangles (edges of 1e-5 head on), and `inverse` calls a pivot below 1e-12 singular.
+//!       `look_at` needs an `up` that is not parallel to the view direction. `transform_point` returns the undivided x, y, z
+//!       when w is about 0 and divides by a negative w (a point behind a perspective camera): clipping is the caller's job.
 //! COMMON USES: games (cameras, skeletal animation with slerp), CAD/CAM viewers, film VFX and offline renderers, robotics
 //!   (orientation interpolation, frame transforms), synthetic image generation for ML datasets.
 //! Read: https://raytracing.github.io/ and https://www.pbr-book.org/
@@ -154,8 +159,17 @@ impl Neg for Vec3 {
     }
 }
 
-/// Schlick's approximation of Fresnel reflectance; `cos` = cosine of the incident angle.
-fn schlick(cos: f64, n1: f64, n2: f64) -> f64 {
+/// Schlick's approximation of Fresnel reflectance; `cos_i` = cosine of the incident angle. The formula only holds with
+/// the angle on the side with the smaller index, so going into a thinner medium it uses the outgoing angle.
+fn schlick(cos_i: f64, n1: f64, n2: f64) -> f64 {
+    let mut cos = cos_i;
+    if n1 > n2 {
+        let sin2_t = (n1 / n2).powi(2) * (1.0 - cos_i * cos_i);
+        if sin2_t > 1.0 {
+            return 1.0; // total internal reflection
+        }
+        cos = (1.0 - sin2_t).sqrt();
+    }
     let r0 = ((n1 - n2) / (n1 + n2)).powi(2);
     r0 + (1.0 - r0) * (1.0 - cos).powi(5)
 }
@@ -237,14 +251,13 @@ impl Mat4 {
             - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
             + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
     }
-    /// Gauss-Jordan with partial pivoting. None if singular.
+    /// Gauss-Jordan with partial pivoting. None if singular, or if a pivot is not a number.
     fn inverse(&self) -> Option<Mat4> {
         let mut a = self.m;
         let mut inv = Mat4::identity().m;
         for col in 0..4 {
-            let piv =
-                (col..4).max_by(|&i, &j| a[i][col].abs().partial_cmp(&a[j][col].abs()).unwrap())?;
-            if a[piv][col].abs() < 1e-12 {
+            let piv = (col..4).max_by(|&i, &j| a[i][col].abs().total_cmp(&a[j][col].abs()))?;
+            if a[piv][col].is_nan() || a[piv][col].abs() < 1e-12 {
                 return None;
             }
             a.swap(col, piv);
@@ -520,8 +533,16 @@ fn ray_aabb(o: Vec3, d: Vec3, lo: Vec3, hi: Vec3) -> Option<(f64, f64)> {
         (o.y, d.y, lo.y, hi.y),
         (o.z, d.z, lo.z, hi.z),
     ] {
-        let inv = 1.0 / dd; // dd == 0 gives +-inf, which the min/max below handle correctly
-        let (mut a, mut b) = ((l - oo) * inv, (h - oo) * inv);
+        if dd == 0.0 {
+            // Parallel to this pair of planes (also true for -0.0): inside the slab, faces included, or never.
+            // Dividing would give 0 * inf = NaN for an origin on a face, and the answer then depended on the zero's sign.
+            if oo < l || oo > h {
+                return None;
+            }
+            continue;
+        }
+        // Divide, do not multiply by 1 / dd: that is infinite for a subnormal dd, and 0 * inf is NaN again.
+        let (mut a, mut b) = ((l - oo) / dd, (h - oo) / dd);
         if a > b {
             std::mem::swap(&mut a, &mut b);
         }
@@ -589,6 +610,17 @@ fn main() {
         schlick(0.01, 1.0, 1.5) > 0.9,
         "grazing angles are nearly mirrors"
     );
+    // Leaving glass: just before total internal reflection almost everything is reflected...
+    let critical = (1.0f64 - (1.0f64 / 1.5).powi(2)).sqrt();
+    assert!(
+        schlick(critical + 1e-9, 1.5, 1.0) > 0.99,
+        "Schlick from the dense side"
+    );
+    assert_eq!(schlick(critical - 1e-9, 1.5, 1.0), 1.0);
+    // ...and one face reflects the same share from both sides.
+    let sin_inside: f64 = 0.8 / 1.5;
+    let cos_inside = (1.0 - sin_inside * sin_inside).sqrt();
+    assert!((schlick(0.6, 1.0, 1.5) - schlick(cos_inside, 1.5, 1.0)).abs() < 1e-12);
     println!(
         "refract/Schlick ok: R(0 deg) = {r_normal:.3}, R(89.4 deg) = {:.3}",
         schlick(0.01, 1.0, 1.5)
@@ -616,6 +648,9 @@ fn main() {
         Mat4 { m: [[1.0; 4]; 4] }.inverse().is_none(),
         "singular matrix has no inverse"
     );
+    let mut bad = Mat4::identity();
+    bad.m[0][0] = f64::NAN;
+    assert!(bad.inverse().is_none(), "NaN is refused, not a panic");
 
     // --- view + projection: frustum corners map to the NDC cube corners
     let (fov, aspect, n, f) = (90f64.to_radians(), 2.0, 0.5, 50.0);
@@ -765,6 +800,26 @@ fn main() {
         )
         .is_none()
     );
+    // a ray along a face: the sign of a zero component must not change the answer
+    let (lo, hi) = (Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 1.0, 1.0));
+    for ox in [0.0, 1.0] {
+        for dx in [0.0, -0.0] {
+            let o = Vec3::new(ox, 0.5, 5.0);
+            let hit = ray_aabb(o, Vec3::new(dx, 0.0, -1.0), lo, hi);
+            assert_eq!(hit, Some((4.0, 5.0)), "origin x = {ox}, direction x = {dx}");
+        }
+    }
+    assert!(ray_aabb(Vec3::new(1.5, 0.5, 5.0), -z, lo, hi).is_none());
+    // a subnormal component, pointing from a face into the box: its reciprocal is infinite
+    let tiny = f64::from_bits(1);
+    for (ox, dx) in [(0.0, tiny), (1.0, -tiny)] {
+        let hit = ray_aabb(Vec3::new(ox, 0.5, 5.0), Vec3::new(dx, 0.0, -1.0), lo, hi);
+        assert_eq!(
+            hit,
+            Some((4.0, 5.0)),
+            "origin x = {ox}, direction x = {dx:e}"
+        );
+    }
     println!("barycentric and ray tests ok");
 
     // --- property tests (seeded)

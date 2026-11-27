@@ -1,0 +1,33 @@
+slug = "stay-fast-with-many-shapes"
+title = "Capstone 7: stay fast with many shapes"
+mode = "write"
+level = "hard"
+stage = "finish"
+order = 7
+status = "ready"
+tags = ["bounding volume hierarchy", "trees", "spatial search", "floating point", "ray tracing", "120-min"]
+teaches = [
+    "A box around a group answers for all of it: if the ray misses the box, it misses everything inside.",
+    "The order of the search matters as much as the tree. A hit found early shrinks the window for all that is left.",
+    "A fast path must give the very same answer as the slow one, ties and faces included. Trying everything is the oracle.",
+    "A tree that splits by count has logarithmic depth even when every item sits in one place.",
+]
+follow_up = "1) When would splitting the list in half give a poor tree, and what could the build measure instead? 2) The shapes move a little each frame. What could you keep, and when would you rebuild? 3) How would you make any() cheaper than closest()?"
+related = ["Y161", "Y162"]
+
+[[hints]]
+kind = "approach"
+text = "Split the solids into two halves of equal count along the direction in which their box middles are most spread out. Each node stores the box around everything below it. Small groups stay as leaves."
+
+[[hints]]
+kind = "rust"
+text = "A Vec of nodes in depth-first order needs only the index of the right child: the left one is the next. select_nth_unstable_by with total_cmp splits a slice without sorting it all, and split_at_mut hands the halves to the recursion."
+
+[[hints]]
+kind = "edge"
+text = "For a ray with a zero component, ask whether the origin is between the two faces. For ties, keep searching boxes that start exactly at the best distance: next_up gives the window that includes it. Rounding wants a hair of room around each box."
+
+[solution]
+explanation = "Build: pad each box a little, then split by count along the widest spread of middles, ordering by (middle, number) with total_cmp. \n\nSearch keeps a stack of nodes with their entry distances. A node that starts beyond the best hit is dropped. A leaf tries each solid up to just past the best and keeps the smaller (t, number). An inner node asks about both children and pushes the farther one first."
+time = "build O(n log n); a query O(log n) on well spread scenes, O(n) at worst"
+space = "O(n)"

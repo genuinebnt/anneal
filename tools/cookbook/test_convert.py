@@ -71,6 +71,29 @@ class Lessons(unittest.TestCase):
             self.assertEqual(self.files(), {place: LESSON})
             (self.out / place).unlink()
 
+    def test_drawings_that_ran_over_are_repaired_on_every_run(self):
+        old, new = convert.DRAWING_FIXES[0]
+        # the guide names its classes without the prefix the converter adds
+        figure = f'<section><h2>Joins</h2><figure class="fig"><svg viewBox="0 0 820 190">{old.replace("cb-g-", "")}</svg></figure></section>'
+        self.write("db.html", figure)
+        self.run_converter()
+        made = self.files()["data/joins.toml"]
+        self.assertNotIn('x=\\"520\\"', made)
+        self.assertIn(">child i holds keys in [key_i, key_{i+1})</text>", made)
+        self.assertEqual(convert.fix_drawings(new), new)
+
+    def test_a_cheat_sheet_splits_at_the_arrow_between_its_two_columns(self):
+        split = convert.code_pages.layout.split_at_arrow
+        for entry, halves in [
+            ("infallible widening (u8 -> u32)      -> From / Into", ("infallible widening (u8 -> u32)", "From / Into")),
+            ("path <-> file URL      -> to_file_path", ("path <-> file URL", "to_file_path")),
+            ("OS string -> &str                  -> to_str()", ("OS string -> &str", "to_str()")),
+            ("fallible narrowing -> TryFrom / try_into", ("fallible narrowing", "TryFrom / try_into")),
+            ("exit code      -> main() -> ExitCode", ("exit code", "main() -> ExitCode")),
+            ("only in brackets (a -> b)", None),
+        ]:
+            self.assertEqual(split(entry), halves, entry)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,8 +6,12 @@
 //! WHAT: PPM P6 is `P6\nW H\n255\n` + raw RGB bytes: the simplest image format. PNG is a signature, then chunks
 //! [length u32 BE][type 4 bytes][data][CRC-32 of type+data]. We write IHDR, IDAT, IEND. The IDAT payload is a ZLIB stream:
 //! 2 header bytes (0x78 0x01), DEFLATE blocks, then the Adler-32 of the uncompressed data (big endian).
-//! WHY: knowing the byte layout lets you emit pictures from any program, and a decoder for the same subset proves the
-//! encoder correct by round trip (including CRC and Adler checks) instead of "it opens in a viewer".
+//! WHY: knowing the byte layout lets you emit pictures from any program, and a decoder for the same subset checks the
+//! encoder by round trip (including CRC and Adler checks) instead of "it opens in a viewer". A round trip only shows that
+//! the two agree, so the 2x2 PNG is also compared byte for byte and the Huffman decoder reads a stream made by zlib.
+//! LIMITS: the decoder reads only what is described here (8-bit RGB, no interlace, stored and fixed-Huffman blocks), so
+//! most PNG files from other programs are refused. Both decoders refuse images above 2^26 pixels, and inflate stops as
+//! soon as there is more data than the header's size needs.
 //! HOW (plain text):
 //!   scanline = [filter type byte] + row bytes. Filters: 0 None, 1 Sub (x - left), 2 Up (x - above), 3 Average
 //!     (x - floor((left+above)/2)), 4 Paeth (x - predictor(left, above, upper-left) choosing the closest to left+above-upleft).
@@ -80,6 +84,15 @@ struct Image {
     rgb: Vec<u8>, // w*h*3
 }
 
+/// The largest image either decoder accepts (192 MB of pixels).
+const MAX_PIXELS: usize = 1 << 26;
+fn pixel_bytes(w: usize, h: usize) -> Result<usize, String> {
+    match w.checked_mul(h) {
+        Some(n) if n <= MAX_PIXELS && w <= MAX_PIXELS && h <= MAX_PIXELS => Ok(n * 3),
+        _ => Err(format!("{w}x{h} is too large")),
+    }
+}
+
 // ---------- PPM ----------
 fn write_ppm(img: &Image) -> Vec<u8> {
     let mut out = format!("P6\n{} {}\n255\n", img.w, img.h).into_bytes();
@@ -122,8 +135,8 @@ fn read_ppm(data: &[u8]) -> Result<Image, String> {
         return Err("only maxval 255 supported".into());
     }
     pos += 1; // exactly one whitespace byte after maxval
-    let need = w * h * 3;
-    if data.len() < pos + need {
+    let need = pixel_bytes(w, h)?; // the header is untrusted: `w * h * 3` can wrap to a small number
+    if data.len() < pos || data.len() - pos < need {
         return Err("truncated pixel data".into());
     }
     Ok(Image {
@@ -298,6 +311,7 @@ fn deflate_fixed(data: &[u8]) -> Vec<u8> {
 }
 
 // ---------- INFLATE (stored + fixed Huffman only) ----------
+const TOO_MUCH: &str = "more data than expected";
 fn read_fixed_symbol(r: &mut BitReader) -> Result<u32, String> {
     let mut code = 0u32;
     for len in 1..=9 {
@@ -312,7 +326,8 @@ fn read_fixed_symbol(r: &mut BitReader) -> Result<u32, String> {
     }
     Err("bad fixed Huffman code".into())
 }
-fn inflate(data: &[u8]) -> Result<Vec<u8>, String> {
+/// Refuses to produce more than `limit` bytes: a small stream can expand more than a hundredfold.
+fn inflate(data: &[u8], limit: usize) -> Result<Vec<u8>, String> {
     let mut r = BitReader { data, pos: 0 };
     let mut out: Vec<u8> = vec![];
     loop {
@@ -334,13 +349,17 @@ fn inflate(data: &[u8]) -> Result<Vec<u8>, String> {
                 if e > data.len() {
                     return Err("truncated stored block".into());
                 }
+                if len as usize > limit - out.len() {
+                    return Err(TOO_MUCH.into());
+                }
                 out.extend_from_slice(&data[s..e]);
                 r.pos = e * 8;
             }
             1 => loop {
                 let sym = read_fixed_symbol(&mut r)?;
                 match sym {
-                    0..=255 => out.push(sym as u8),
+                    0..=255 if out.len() < limit => out.push(sym as u8),
+                    0..=255 => return Err(TOO_MUCH.into()),
                     256 => break,
                     257..=285 => {
                         let li = (sym - 257) as usize;
@@ -355,6 +374,9 @@ fn inflate(data: &[u8]) -> Result<Vec<u8>, String> {
                         let dist = (DBASE[dc as usize] + r.bits(DEXTRA[dc as usize])?) as usize;
                         if dist > out.len() {
                             return Err("distance too far back".into());
+                        }
+                        if len > limit - out.len() {
+                            return Err(TOO_MUCH.into());
                         }
                         for _ in 0..len {
                             out.push(out[out.len() - dist]); // byte by byte: matches may overlap themselves
@@ -521,14 +543,16 @@ fn png_decode(data: &[u8]) -> Result<Image, String> {
     if idat.len() < 6 || ((idat[0] as u32) << 8 | idat[1] as u32) % 31 != 0 || idat[0] & 0x0F != 8 {
         return Err("bad zlib header".into());
     }
+    pixel_bytes(w, h)?;
+    let stride = w * 3; // cannot overflow, nor can the size below: both sides are at most MAX_PIXELS
+    let size = (stride + 1) * h;
     let body = &idat[2..idat.len() - 4];
-    let raw = inflate(body)?;
+    let raw = inflate(body, size)?;
     let adler = u32::from_be_bytes(idat[idat.len() - 4..].try_into().unwrap());
     if adler != adler32(&raw) {
         return Err("Adler-32 mismatch".into());
     }
-    let stride = w * 3;
-    if raw.len() != (stride + 1) * h {
+    if raw.len() != size {
         return Err("decompressed size does not match IHDR".into());
     }
     let mut rgb = vec![0u8; stride * h];
@@ -703,6 +727,53 @@ fn main() {
     assert_eq!(rd, img2);
     assert_eq!(read_ppm(&write_ppm(&img2)).unwrap(), img2);
     assert!(read_ppm(b"P3\n1 1\n255\n").is_err());
+
+    // --- headers and streams that lie are errors, not panics, wraps or huge allocations
+    // 3 * this width is 2 modulo 2^64, so unchecked arithmetic accepts two bytes of pixels
+    assert!(read_ppm(b"P6 6148914691236517206 1 255\nab").is_err());
+    assert!(read_ppm(b"P6 4294967296 4294967296 255\n").is_err());
+    assert!(read_ppm(b"P6 0 0 255").is_err(), "no byte after maxval");
+    assert!(read_ppm(b"P6 0 0 255\n").unwrap().rgb.is_empty());
+    let claim = |w: u32, h: u32, raw: &[u8]| {
+        let mut z = vec![0x78, 0x01];
+        z.extend(deflate_fixed(raw));
+        z.extend(adler32(raw).to_be_bytes());
+        let mut ihdr = [w.to_be_bytes(), h.to_be_bytes()].concat();
+        ihdr.extend([8, 2, 0, 0, 0]);
+        let mut out = PNG_SIG.to_vec();
+        chunk(&mut out, b"IHDR", &ihdr);
+        chunk(&mut out, b"IDAT", &z);
+        chunk(&mut out, b"IEND", &[]);
+        out
+    };
+    let huge = png_decode(&claim(u32::MAX, u32::MAX, b"x"));
+    assert!(huge.unwrap_err().contains("too large"));
+    let bomb = png_decode(&claim(1, 1, &[0; 100_000])); // a 1x1 image is 4 bytes
+    assert_eq!(bomb.unwrap_err(), TOO_MUCH);
+    let stored_bomb = deflate_stored(&[7; 100]);
+    assert_eq!(inflate(&stored_bomb, 99).unwrap_err(), TOO_MUCH);
+    assert_eq!(inflate(&stored_bomb, 100).unwrap().len(), 100);
+    let literals = deflate_fixed(b"abc");
+    assert_eq!(inflate(&literals, 2).unwrap_err(), TOO_MUCH);
+
+    // --- a fixed-Huffman stream made by ANOTHER implementation (Python 3 zlib, strategy Z_FIXED, raw deflate). A round
+    // trip alone cannot catch a mistake that the encoder and decoder here share, such as a wrong table entry.
+    let mut other = vec![0u8, 143, 144, 200, 255];
+    other.extend(b"abc".repeat(5));
+    other.extend([b'z'; 300]);
+    other.extend([0u8, 143, 144, 200, 255]);
+    let from_zlib = [
+        0x63, 0xe8, 0x9f, 0x70, 0xe2, 0x7f, 0x62, 0x52, 0x32, 0x32, 0xaa, 0x1a, 0x05, 0x44, 0x03,
+        0x06, 0x50, 0xf8, 0x01, 0x00,
+    ];
+    assert_eq!(inflate(&from_zlib, other.len()).unwrap(), other);
+
+    // and every table entry, from RFC 1951's rule: each code's range of lengths or distances starts where the one before
+    // ends (the last two length codes are the exception: 284 stops at 258, which also has its own code 285)
+    assert!((LBASE[0], LBASE[28], DBASE[0]) == (3, 258, 1) && LBASE[27] + 31 == 258);
+    assert!((0..27).all(|i| LBASE[i + 1] == LBASE[i] + (1 << LEXTRA[i])));
+    assert!((0..29).all(|i| DBASE[i + 1] == DBASE[i] + (1 << DEXTRA[i])));
+    assert_eq!(DBASE[29] + (1 << DEXTRA[29]), 32769);
 
     // --- stored blocks are split at 65535 bytes
     let big = Image {

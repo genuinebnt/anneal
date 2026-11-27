@@ -10,8 +10,9 @@
 //! catches a panic through the `JoinHandle` (`JoinError::is_panic`), waits an exponentially growing backoff, builds a FRESH
 //! actor from a factory (state is intentionally reset: "let it crash") and resumes on the SAME mailbox: the receiver lives in
 //! an `Arc<tokio::sync::Mutex<..>>` owned by the supervisor, so queued messages survive (only the message being handled when it
-//! crashed is lost). After `max_restarts` it gives up and the mailbox closes (senders get `Err`). Graceful stop: a `Stop`
-//! envelope (or `Control::Stop`) closes the mailbox to NEW sends and then DRAINS everything already queued before exiting.
+//! crashed is lost). After `max_restarts` restarts (a lifetime total, never reset) it gives up and the mailbox closes (senders get `Err`). Graceful stop: a `Stop`
+//! envelope (or `Control::Stop`) closes the mailbox to NEW sends and then DRAINS everything already queued before exiting,
+//! also across a crash during the drain (if it does not run out of restarts). Aborting the supervisor aborts the actor.
 //! A `Registry` maps names to type-erased `Addr`s (`Box<dyn Any>` + downcast).
 //!
 //! ACTORS vs SHARED-STATE LOCKS (see shared_state/locks_deadlocks for the lock side):
@@ -28,11 +29,11 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::sync::{Mutex, mpsc, oneshot};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Control {
@@ -102,38 +103,39 @@ pub struct Report {
 #[derive(Clone, Copy)]
 pub struct Policy {
     pub max_restarts: u32,
-    pub backoff: Duration, // doubled per consecutive restart, capped at 8x
+    pub backoff: Duration, // doubled with each restart, capped at 8x (the count is never reset)
 }
 
 type Rx<A> = Arc<Mutex<mpsc::Receiver<Envelope<<A as Actor>::Msg>>>>;
 
-async fn run<A: Actor>(mut actor: A, rx: Rx<A>) -> Exit {
+/// `stopping` lives outside the actor's task: a crash while draining must not forget that a stop was requested.
+async fn run<A: Actor>(mut actor: A, rx: Rx<A>, stopping: Arc<AtomicBool>) -> Exit {
     let mut rx = rx.lock().await; // guard is dropped on panic unwinding; tokio's Mutex has no poisoning
-    let mut stopping = false;
     loop {
         match rx.recv().await {
             None => {
-                return if stopping {
+                return if stopping.load(Ordering::SeqCst) {
                     Exit::Stopped
                 } else {
                     Exit::Drained
                 };
             }
             Some(Envelope::Stop) => {
-                stopping = true;
+                stopping.store(true, Ordering::SeqCst);
                 rx.close(); // refuse new sends, keep draining what is queued
             }
             Some(Envelope::Msg(m)) => {
-                if actor.handle(m).await == Control::Stop && !stopping {
-                    stopping = true;
-                    rx.close();
+                if actor.handle(m).await == Control::Stop {
+                    stopping.store(true, Ordering::SeqCst);
+                    rx.close(); // closing twice is harmless
                 }
             }
         }
     }
 }
 
-/// Spawn a supervised actor. `factory` builds a fresh actor at start and after every crash.
+/// Spawn a supervised actor. `factory` builds a fresh actor at start and after every crash (a panic in `factory` itself
+/// is not supervised). Aborting the returned handle also aborts the actor.
 pub fn spawn_supervised<A: Actor>(
     factory: impl Fn() -> A + Send + 'static,
     mailbox: usize,
@@ -143,8 +145,12 @@ pub fn spawn_supervised<A: Actor>(
     let rx: Rx<A> = Arc::new(Mutex::new(rx));
     let sup = tokio::spawn(async move {
         let mut restarts = 0u32;
+        let stopping = Arc::new(AtomicBool::new(false));
+        // a JoinSet aborts its tasks when dropped; a plain JoinHandle would leave the actor running without us
+        let mut child = JoinSet::new();
         loop {
-            match tokio::spawn(run(factory(), rx.clone())).await {
+            child.spawn(run(factory(), rx.clone(), stopping.clone()));
+            match child.join_next().await.expect("one child") {
                 Ok(exit) => return Report { exit, restarts },
                 Err(e) if e.is_panic() => {
                     restarts += 1;
@@ -280,6 +286,28 @@ impl Actor for Flaky {
         }
         self.processed.fetch_add(1, Ordering::SeqCst);
         Control::Continue
+    }
+}
+
+enum DrainMsg {
+    Hold(oneshot::Receiver<()>), // waits, so that the check can queue the messages behind it
+    Stop,
+    Crash,
+    Other,
+}
+struct StopThenCrash;
+impl Actor for StopThenCrash {
+    type Msg = DrainMsg;
+    async fn handle(&mut self, m: DrainMsg) -> Control {
+        match m {
+            DrainMsg::Hold(gate) => {
+                let _ = gate.await;
+                Control::Continue
+            }
+            DrainMsg::Stop => Control::Stop,
+            DrainMsg::Crash => panic!("simulated crash while draining"),
+            DrainMsg::Other => Control::Continue,
+        }
     }
 }
 
@@ -447,7 +475,33 @@ async fn main() {
         "mailbox closed after giving up"
     );
     assert!(addr.try_send(FlakyMsg::Work(1)).is_err());
+
+    // --- a crash while draining: the stop request survives the restart (an Addr is still alive, so not `Drained`).
+    let (addr, h) = spawn_supervised(|| StopThenCrash, 8, pol);
+    let (open, gate) = oneshot::channel();
+    for m in [
+        DrainMsg::Hold(gate),
+        DrainMsg::Stop,
+        DrainMsg::Crash,
+        DrainMsg::Other,
+    ] {
+        assert!(addr.send(m).await.is_ok());
+    }
+    open.send(()).unwrap();
+    let rep2 = h.await.unwrap();
     let _ = std::panic::take_hook();
+    assert_eq!((rep2.exit, rep2.restarts), (Exit::Stopped, 1));
+
+    // --- aborting the supervisor takes the actor with it: nobody is left to answer
+    let (account, h) = spawn_supervised(|| Account { balance: 7 }, 8, pol);
+    assert_eq!(account.ask(AccMsg::Balance).await, Some(7));
+    h.abort();
+    assert!(h.await.unwrap_err().is_cancelled());
+    // the actor's task is cancelled and drops the mailbox; the time limit only turns a hang into a failure
+    tokio::time::timeout(Duration::from_secs(10), account.tx.closed())
+        .await
+        .expect("no orphan actor keeps the mailbox open");
+    assert_eq!(account.ask(AccMsg::Balance).await, None);
     println!(
         "limit: gave up after {} restarts, sends now fail",
         rep.restarts

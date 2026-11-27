@@ -433,6 +433,134 @@ mod tests {
         }
     }
 
+    /// Classes in a page's HTML that need no rule of their own. Keep it short: a class belongs here only when the element
+    /// is already styled by what holds it. `cmp` and `map` are kinds of table: the table is styled by its box (`cb-g-tt`),
+    /// and the kind only picks a weight for the cells of the first column.
+    const NEEDS_NO_STYLE: &[&str] = &["cb-g-cmp", "cb-g-map"];
+
+    /// The classes of the HTML in a page's Markdown. Code, fenced or inline, is only text.
+    fn classes_in(markdown: &str) -> BTreeSet<String> {
+        let mut found = BTreeSet::new();
+        let mut fenced = false;
+        for line in markdown.lines() {
+            if line.starts_with("```") {
+                fenced = !fenced;
+                continue;
+            }
+            if fenced {
+                continue;
+            }
+            // every other piece between backticks is inline code
+            let prose: String = line.split('`').step_by(2).collect();
+            for tag in prose.split('<').skip(1).filter(|t| t.starts_with(|c: char| c.is_ascii_alphabetic())) {
+                let tag = tag.split('>').next().unwrap_or_default();
+                for quote in ['"', '\''] {
+                    for value in tag.split(&format!(" class={quote}")).skip(1) {
+                        found.extend(value.split(quote).next().unwrap_or_default().split_whitespace().map(str::to_owned));
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    /// `text` cut at `at` wherever it is outside brackets.
+    fn split_outside_brackets(text: &str, at: impl Fn(char) -> bool) -> Vec<&str> {
+        let (mut depth, mut from, mut parts) = (0_i32, 0, Vec::new());
+        for (i, c) in text.char_indices() {
+            match c {
+                '(' | '[' => depth += 1,
+                ')' | ']' => depth -= 1,
+                _ if depth == 0 && at(c) => {
+                    parts.push(&text[from..i]);
+                    from = i + c.len_utf8();
+                }
+                _ => {}
+            }
+        }
+        parts.push(&text[from..]);
+        parts
+    }
+
+    /// The classes of the elements a selector styles: those of its last compound, `:is(...)` included. A class that only
+    /// names an ancestor (`.a li`), or sits in `:not(...)` or `:has(...)`, styles nothing of its own.
+    fn subject_classes(selector: &str) -> Vec<String> {
+        let compounds = split_outside_brackets(selector.trim(), |c| c.is_whitespace() || matches!(c, '>' | '+' | '~'));
+        let mut subject = compounds.last().copied().unwrap_or_default().to_owned();
+        for not_it in [":not(", ":has("] {
+            while let Some(from) = subject.find(not_it) {
+                let mut depth = 0;
+                let end = subject[from..].char_indices().find(|(_, c)| {
+                    depth += i32::from(*c == '(') - i32::from(*c == ')');
+                    *c == ')' && depth == 0
+                });
+                let to = end.map_or(subject.len(), |(i, _)| from + i + 1);
+                subject.replace_range(from..to, "");
+            }
+        }
+        subject
+            .split('.')
+            .skip(1)
+            .map(|t| t.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect())
+            .collect()
+    }
+
+    /// The classes that have a rule of their own in a stylesheet: some selector styles an element for having the class,
+    /// and its block declares something. It does not prove the rule applies at every width or that the block looks right.
+    fn classes_styled(css: &str) -> BTreeSet<String> {
+        let mut plain = String::new();
+        let mut rest = css;
+        while let Some((before, after)) = rest.split_once("/*") {
+            plain.push_str(before);
+            rest = after.split_once("*/").map_or("", |(_, tail)| tail);
+        }
+        plain.push_str(rest);
+        let mut styled = BTreeSet::new();
+        let blocks: Vec<&str> = plain.split('{').collect();
+        for pair in blocks.windows(2) {
+            // the selectors are what follows the previous block or declaration; the block is what comes before its end
+            let selectors = pair[0].rsplit(['}', ';']).next().unwrap_or_default().trim();
+            let declares = pair[1].split_once('}').is_some_and(|(body, _)| body.contains(':'));
+            if declares && !selectors.starts_with('@') {
+                for selector in split_outside_brackets(selectors, |c| c == ',') {
+                    styled.extend(subject_classes(selector));
+                }
+            }
+        }
+        styled
+    }
+
+    #[test]
+    fn classes_are_read_from_html_and_not_from_code() {
+        let md = "<div class=\"a b\"><span class='c'>x</span></div>\n`<p class=\"inline\">`\n```html\n<p class=\"fenced\">\n```\nif a < b the class=\"prose\"";
+        assert_eq!(classes_in(md).into_iter().collect::<Vec<_>>(), ["a", "b", "c"]);
+        let css = "/* .no{a:b} */ .up .b-c:hover{x:1.5em} @media (x){.d>i,:is(.e,.f)+.g:not(.h):has(.i){k:v}} :is(.j,table.k){k:v} .empty{}";
+        assert_eq!(classes_styled(css).into_iter().collect::<Vec<_>>(), ["b-c", "g", "j", "k"]);
+    }
+
+    /// The converter keeps HTML from the guides, whose own styling does not come with it: a class with no rule of
+    /// its own in `cookbook-guide.css` can show as run-together lines of text, or as a black drawing.
+    #[test]
+    fn every_class_a_cookbook_page_uses_is_styled() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let css = fs::read_to_string(root.join("web/src/styles/cookbook-guide.css")).unwrap();
+        let styled = classes_styled(&css);
+        let mut issues = Vec::new();
+        let cookbook = load(&root.join("content"), &mut issues);
+        assert!(!cookbook.pages.is_empty());
+        let mut bare: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+        for (id, page) in &cookbook.pages {
+            for section in &page.sections {
+                for class in classes_in(&section.body) {
+                    if !styled.contains(&class) && !NEEDS_NO_STYLE.contains(&class.as_str()) {
+                        bare.entry(class).or_default().push(id);
+                    }
+                }
+            }
+        }
+        assert!(bare.is_empty(), "classes with no rule in web/src/styles/cookbook-guide.css, and the pages that use them: {bare:#?}");
+    }
+
     const PAGE: &str = "title = \"T\"\nmodule = \"M\"\nchapter = \"C\"\norder = 1\nkind = \"guide\"\nlede = \"L\"\n[[sections]]\nheading = \"H\"\nbody = \"> [!RUST]\\n> yes\"\n";
 
     fn load_dir(d: &Dir) -> (Cookbook, Vec<String>) {

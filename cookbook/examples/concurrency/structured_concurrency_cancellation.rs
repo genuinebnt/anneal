@@ -13,7 +13,8 @@
 //! 3. `Scope`: tasks spawned in a scope cannot outlive it. `join()` waits for all of them; the FIRST error or panic
 //!    cancels the scope's token (fail-fast) so siblings stop at their next cancellation point; after cancellation
 //!    there is a GRACE period, then stragglers are aborted (counted as `forced`). Dropping a scope without `join`
-//!    aborts everything (JoinSet semantics). Real borrowing scopes (like `std::thread::scope`) are impossible for
+//!    aborts everything (JoinSet semantics), but an abort only asks: the tasks end a little later. Only a finished `join()` means
+//!    that they are gone. Real borrowing scopes (like `std::thread::scope`) are impossible for
 //!    async without unsafe, hence `'static` futures plus a runtime guarantee of joining.
 //! SHUTDOWN ORDER (servers): (1) stop accepting new work, (2) cancel in-flight work cooperatively, (3) drain with a
 //! DEADLINE, (4) abort whatever is still running. Skipping (1) lets new work arrive during the drain; skipping (4)
@@ -29,7 +30,11 @@
 //! - `JoinSet::join_next*`: safe, a completed task is returned by the next call. `mpsc::Receiver::recv`: safe.
 //! - `tokio::time::sleep` / `timeout_at`: safe (timeout_at drops the inner future on expiry; that is our intent).
 //! - `JoinHandle` await: dropping a `JoinHandle` DETACHES the task, it does not cancel it.
-//! - A hand written `async fn` with two awaits holding locals is NOT cancel-safe (see async_cancel_safety).
+//! - A hand written `async fn` with several awaits is not cancel-safe if what it has taken so far lives only in its locals
+//!   (see async_cancel_safety).
+//! LIMITS of the token: a second `cancel()` racing the first may return before every descendant is marked; propagation (and
+//! dropping a very long chain of child tokens) recurses; `child()` scans the parent's live children, so very many are slow.
+//! A grace period near `Duration::MAX` overflows the deadline and panics.
 //! COMMON USES: HTTP servers (stop the listener, let in-flight requests finish, then force close), Kubernetes style
 //! SIGTERM handling, request fan-out with deadlines (first failure cancels the rest), test harnesses that must not leak
 //! tasks between tests, supervisors in actor systems.
@@ -55,6 +60,9 @@ struct TokenInner {
     cancelled: AtomicBool,
     notify: Notify,
     children: Mutex<Vec<Weak<TokenInner>>>,
+    /// Keeps the chain up to the root alive: a parent only holds its children weakly, so without this, dropping a middle
+    /// token's last handle would cut its descendants off from every later `cancel()` above it.
+    _parent: Option<Arc<TokenInner>>,
 }
 
 #[derive(Clone)]
@@ -62,10 +70,15 @@ struct CancellationToken(Arc<TokenInner>);
 
 impl CancellationToken {
     fn new() -> Self {
+        Self::with_parent(None)
+    }
+
+    fn with_parent(parent: Option<Arc<TokenInner>>) -> Self {
         Self(Arc::new(TokenInner {
             cancelled: AtomicBool::new(false),
             notify: Notify::new(),
             children: Mutex::new(Vec::new()),
+            _parent: parent,
         }))
     }
 
@@ -87,7 +100,7 @@ impl CancellationToken {
 
     /// A token cancelled when `self` is, but whose own cancellation does not touch `self`.
     fn child(&self) -> CancellationToken {
-        let child = CancellationToken::new();
+        let child = CancellationToken::with_parent(Some(self.0.clone()));
         {
             let mut kids = self.0.children.lock().unwrap();
             kids.retain(|w| w.strong_count() > 0); // prune dropped children so a long-lived root does not grow forever
@@ -357,22 +370,36 @@ impl Drop for LiveGuard {
     }
 }
 
-/// Runs until cancelled; wakes immediately on cancel (no polling delay).
-async fn polite_worker(token: CancellationToken, live: Live) -> Result<(), String> {
-    let _alive = live.enter();
-    // CANCEL-SAFE select: `cancelled()` and `sleep` are both safe to drop.
-    tokio::select! {
-        _ = token.cancelled() => Ok(()),
-        _ = sleep(Duration::from_secs(10)) => Err("timed out waiting for cancel".into()),
+// The helpers below are counted from the moment their future is CREATED, not from its first poll: otherwise a task that
+// leaked before it ever ran would not be seen by the leak checks.
+
+/// Puts a guard into a future now.
+fn counted<F: Future>(live: &Live, fut: F) -> impl Future<Output = F::Output> + use<F> {
+    let alive = live.enter();
+    async move {
+        let _alive = alive;
+        fut.await
     }
 }
 
+/// Runs until cancelled; wakes immediately on cancel (no polling delay).
+fn polite_worker(token: CancellationToken, live: Live) -> impl Future<Output = Result<(), String>> {
+    counted(&live, async move {
+        // CANCEL-SAFE select: `cancelled()` and `sleep` are both safe to drop.
+        tokio::select! {
+            _ = token.cancelled() => Ok(()),
+            _ = sleep(Duration::from_secs(10)) => Err("timed out waiting for cancel".into()),
+        }
+    })
+}
+
 /// Never looks at the token: only an abort can stop it.
-async fn stuck_worker(live: Live) -> Result<(), String> {
-    let _alive = live.enter();
-    loop {
-        sleep(Duration::from_secs(3600)).await; // an await point, so abort() works
-    }
+fn stuck_worker(live: Live) -> impl Future<Output = Result<(), String>> {
+    counted(&live, async {
+        loop {
+            sleep(Duration::from_secs(3600)).await; // an await point, so abort() works
+        }
+    })
 }
 
 /// Tiny seeded xorshift so the "random" cancel timings are reproducible.
@@ -408,6 +435,14 @@ async fn test_token_tree() {
         .unwrap();
     root.cancel();
     assert!(b.is_cancelled());
+    // nobody keeps the middle token: its child must still hear the root
+    let top = CancellationToken::new();
+    let leaf = top.child().child();
+    top.cancel();
+    assert!(
+        leaf.is_cancelled(),
+        "dropping a middle token cut off its child"
+    );
     assert!(
         root.child().is_cancelled(),
         "a child of a cancelled parent starts cancelled"
@@ -477,6 +512,7 @@ async fn test_scope_no_outlive() {
         let live = live.clone();
         scope.spawn("stuck", move |_| stuck_worker(live));
     }
+    assert_eq!(live.now(), 20, "all are counted, started or not");
     yield_now().await;
     drop(scope);
     live.wait_zero().await;
@@ -723,27 +759,30 @@ async fn random_trial(rng: &mut Rng, live: &Live) {
         let live = live.clone();
         match rng.below(4) {
             0 => scope.spawn("polite", move |t| polite_worker(t, live)),
-            1 => scope.spawn("nested", move |t| async move {
-                // A scope inside a task: its token is a child of ours, so the outer cancel reaches it.
-                let _alive = live.enter();
-                let mut inner = Scope::child_of(&t, Duration::from_secs(2));
-                for _ in 0..2 {
-                    let live = live.clone();
-                    inner.spawn("inner", move |t| polite_worker(t, live));
-                }
-                inner.join().await.map(|_| ()).map_err(|e| e.to_string())
+            1 => scope.spawn("nested", move |t| {
+                counted(&live.clone(), async move {
+                    // A scope inside a task: its token is a child of ours, so the outer cancel reaches it.
+                    let mut inner = Scope::child_of(&t, Duration::from_secs(2));
+                    for _ in 0..2 {
+                        let live = live.clone();
+                        inner.spawn("inner", move |t| polite_worker(t, live));
+                    }
+                    inner.join().await.map(|_| ()).map_err(|e| e.to_string())
+                })
             }),
-            2 => scope.spawn("spinner", move |t| async move {
-                let _alive = live.enter();
-                while !t.is_cancelled() {
-                    yield_now().await;
-                }
-                Ok(())
+            2 => scope.spawn("spinner", move |t| {
+                counted(&live, async move {
+                    while !t.is_cancelled() {
+                        yield_now().await;
+                    }
+                    Ok(())
+                })
             }),
-            _ => scope.spawn("sleeper", move |_| async move {
-                let _alive = live.enter();
-                sleep(ms(2)).await; // ignores cancel but finishes by itself
-                Ok(())
+            _ => scope.spawn("sleeper", move |_| {
+                counted(&live, async {
+                    sleep(ms(2)).await; // ignores cancel but finishes by itself
+                    Ok(())
+                })
             }),
         }
     }

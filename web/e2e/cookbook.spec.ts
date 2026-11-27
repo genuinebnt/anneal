@@ -270,3 +270,138 @@ test("page titles and descriptions show inline code, not backticks, wherever the
     await expect(page.locator(".cb-rows li").first()).toBeVisible();
     expect(await rawMarkup(page)).toEqual([]);
 });
+
+// The HTML the guide pages keep (styles/cookbook-guide.css). What is checked holds with any font.
+async function guide(page: Page, id: string, width: number) {
+    await page.setViewportSize({ width, height: width < 500 ? 844 : 950 });
+    await page.goto(`/cookbook/p/${id}`);
+    await expect(page.locator(".cb-head h1")).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+}
+
+const boxes = (page: Page, selector: string) => page.locator(selector).evaluateAll((all) => all.map((e) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, bottom: r.bottom, width: r.width }; }));
+
+for (const width of [2200, 1440]) {
+    test(`The pipeline diagram is a row of stages with each test under its stage, ${width} wide`, async ({ page }) => {
+        await guide(page, "the-pipeline-and-where-tests-attach", width);
+        const stages = await boxes(page, ".cb-g-node");
+        expect(new Set(stages.map((s) => Math.round(s.y))).size).toBe(1);
+        const tests = await boxes(page, ".cb-g-probe");
+        tests.forEach((t, i) => {
+            expect(Math.abs(t.x - stages[i + 1]!.x)).toBeLessThan(2);
+            expect(t.y).toBeGreaterThanOrEqual(stages[i + 1]!.bottom);
+        });
+        expect(await noSideScroll(page)).toBeLessThanOrEqual(0);
+        await expect(page.locator(".cb-art")).not.toContainText("Its exercises are left out");
+    });
+}
+
+test("On a phone the pipeline diagram reads from top to bottom, each stage followed by its tests", async ({ page }) => {
+    await guide(page, "the-pipeline-and-where-tests-attach", 390);
+    const [stages, tests] = [await boxes(page, ".cb-g-node"), await boxes(page, ".cb-g-probe")];
+    stages.slice(1).forEach((s, i) => expect(s.y).toBeGreaterThanOrEqual(stages[i]!.bottom));
+    tests.forEach((t, i) => {
+        expect(t.y).toBeGreaterThanOrEqual(stages[i + 1]!.bottom);
+        if (stages[i + 2]) expect(t.bottom).toBeLessThanOrEqual(stages[i + 2]!.y);
+    });
+    for (const s of stages) expect(s.width).toBeGreaterThan(200);
+    expect(await noSideScroll(page)).toBeLessThanOrEqual(0);
+});
+
+for (const theme of ["dark", "light"] as const) {
+    test(`A drawing takes the ${theme} theme's colours, and on a phone it scrolls at a readable size with a fade and no bar`, async ({ page }) => {
+        await page.emulateMedia({ colorScheme: theme });
+        await guide(page, "the-dbms-stack", 390);
+        const paint = await page.locator(".cb-g-fig svg").evaluate((svg) => {
+            const of = (s: string) => getComputedStyle(svg.querySelector(s)!).fill;
+            return { box: of("rect.cb-g-box"), words: of("text:not([class])") };
+        });
+        // unstyled shapes and words are painted black
+        expect(paint.box).not.toBe("rgb(0, 0, 0)");
+        expect(paint.words).not.toBe("rgb(0, 0, 0)");
+        expect(paint.words).not.toBe(paint.box);
+        expect((await page.locator(".cb-g-fig svg").boundingBox())!.width).toBeGreaterThanOrEqual(800);
+        const scroller = page.locator(".cb-g-fig-scroll");
+        await expect(scroller).toHaveAttribute("data-more", "");
+        await expect(scroller).toHaveAttribute("tabindex", "0");
+        expect(await scroller.evaluate((e) => [getComputedStyle(e).maskImage !== "none", (e as HTMLElement).offsetHeight - e.clientHeight])).toEqual([true, 0]);
+        await scroller.evaluate((e) => (e.scrollLeft = e.scrollWidth));
+        await expect(scroller).not.toHaveAttribute("data-more", "");
+        // the caption stays in place while the drawing scrolls
+        const [caption, figure] = [(await page.locator(".cb-g-figcap").boundingBox())!, (await page.locator(".cb-g-fig").boundingBox())!];
+        expect(caption.x).toBeGreaterThanOrEqual(figure.x);
+        expect(caption.x + caption.width).toBeLessThanOrEqual(figure.x + figure.width + 1);
+        expect(await noSideScroll(page)).toBeLessThanOrEqual(0);
+    });
+}
+
+test("A table the page wrote keeps its own box, and no guide block pushes a phone sideways", async ({ page }) => {
+    for (const id of ["arithmetic", "dp-trees-and-specialized-algorithms", "tooling-around-a-new-language", "backends-hir-mir-llvm-and-cranelift", "reading-map-from-front-end-to-back-end", "the-slice-loop", "glossary-compilers", "how-to-use-this-guide", "recoverable-parsing-and-advanced-compiler-theory"]) {
+        await guide(page, id, 390);
+        const stray = await page.locator(".cb-art table:is(.cb-g-cmp, .cb-g-map)").evaluateAll((all) => all.filter((t) => !t.parentElement!.matches(".cb-g-tt")).length);
+        expect(stray, id).toBe(0);
+        // one box around a table, never a box inside a box
+        await expect(page.locator(".cb-art .cb-g-tt .sd-tbl"), id).toHaveCount(0);
+        // a box that was closed too early leaves what follows it outside the section's text
+        expect(await page.locator(".cb-sec > :not(h2, .sd-md, .sd-code, .sd-deeper, .sd-math, .sd-steps-fig, .cb-methods)").count(), id).toBe(0);
+        expect(await noSideScroll(page), id).toBeLessThanOrEqual(0);
+    }
+});
+
+for (const id of ["backends-hir-mir-llvm-and-cranelift", "dsls-and-sql-parsing", "sql-front-end"]) {
+    test(`A ladder is one row or one column, and every arrow points from a stage to the next: ${id}`, async ({ page }) => {
+        await guide(page, id, 1440);
+        for (const width of [390, 600, 900, 1100, 1280, 1440, 1600, 1728, 1900, 2200, 2560]) {
+            await page.setViewportSize({ width, height: 900 });
+            const wrong = () => page.locator(".cb-g-ladder").first().evaluate((ladder) => {
+                const parts = [...ladder.children].map((e) => ({ r: e.getBoundingClientRect(), tag: e.tagName, turn: getComputedStyle(e).rotate }));
+                if (parts.length < 3 || parts.length % 2 === 0) return ["not stages with arrows between them"];
+                const row = Math.abs(parts[0]!.r.y - parts[parts.length - 1]!.r.y) < 2;
+                const bad: string[] = [];
+                parts.forEach((p, i) => {
+                    if (p.tag !== "I") return;
+                    const [from, to] = [parts[i - 1]!.r, parts[i + 1]!.r];
+                    const middle = { x: p.r.x + p.r.width / 2, y: p.r.y + p.r.height / 2 };
+                    const between = row
+                        ? p.turn === "none" && middle.x > from.right && middle.x < to.x && middle.y > from.y && middle.y < from.bottom && Math.abs(from.y - to.y) < 2
+                        : p.turn === "90deg" && middle.y > from.bottom && middle.y < to.y && Math.abs(from.x - to.x) < 2 && Math.abs(from.width - to.width) < 2;
+                    if (!between) bad.push(`arrow ${(i + 1) / 2} in a ${row ? "row" : "column"}`);
+                });
+                return bad;
+            });
+            await expect.poll(wrong, { message: `${width} wide` }).toEqual([]);
+            expect(await noSideScroll(page), `${width} wide`).toBeLessThanOrEqual(0);
+        }
+    });
+}
+
+for (const id of ["std-convert-from-into-asref", "std-fs-file-operations-usecases", "std-process-command-pipelines", "mem-functions", "std-time-instant-duration-systemtime", "std-smart-pointers-use-cases", "std-sync-primitives-use-cases", "chrono-dates-times-zones", "time-crate-dates-formatting", "serde-attributes-enum-representations"]) {
+    test(`On a phone nothing pushes the page sideways: ${id}`, async ({ page }) => {
+        await guide(page, id, 390);
+        await expect.poll(() => noSideScroll(page)).toBeLessThanOrEqual(0);
+        // the title, the line under it and every cheat sheet cell end inside the window
+        const out = await page.locator(".cb-head h1, .cb-head .cb-dek, .cb-topics li, .cb-g-cheat td").evaluateAll((all) => all.filter((e) => e.getBoundingClientRect().right > innerWidth + 1 || e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent));
+        expect(out).toEqual([]);
+    });
+}
+
+test("A cheat sheet keeps an arrow in brackets with its words, and a titled note stands apart from what follows", async ({ page }) => {
+    await guide(page, "std-convert-from-into-asref", 1440);
+    await expect(page.locator(".cb-g-cheat tr", { hasText: "Infallible widening" }).locator("td")).toHaveText(["Infallible widening (u8 -> u32)", "From / Into"]);
+    await guide(page, "performance-data-layout-simd-threads-and-lock-free-structure", 1440);
+    const gaps = await page.locator(".cb-g-tip + p").evaluateAll((all) => all.map((p) => p.getBoundingClientRect().top - p.previousElementSibling!.getBoundingClientRect().bottom));
+    expect(gaps.length).toBeGreaterThan(0);
+    for (const gap of gaps) expect(gap).toBeGreaterThanOrEqual(12);
+});
+
+test("No words in a drawing come out much under 12px on a desktop", async ({ page }) => {
+    for (const id of ["the-dbms-stack", "b-trees"]) {
+        await guide(page, id, 1440);
+        const smallest = await page.locator(".cb-g-fig svg").first().evaluate((svg) => {
+            const s = svg as SVGSVGElement;
+            const scale = s.getBoundingClientRect().width / s.viewBox.baseVal.width;
+            return Math.min(...[...s.querySelectorAll("text")].map((t) => parseFloat(getComputedStyle(t).fontSize) * scale));
+        });
+        expect(smallest, id).toBeGreaterThanOrEqual(11.8);
+    }
+});

@@ -5,6 +5,7 @@ import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { api, type CbIndex, type CbRow, type CbSubject } from "../../api";
 import "../../styles/cookbook.css";
+import "../../styles/cookbook-guide.css";
 import { Inline } from "../../components/InlineMd";
 
 export const useCookbook = () => useQuery({ queryKey: ["cookbook"], queryFn: api.cookbook, staleTime: 5 * 60_000 });

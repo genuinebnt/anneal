@@ -20,7 +20,7 @@ heading = "Design notes"
 body = """
 **Atomic replace**: to update `state.json` so a crash leaves either the **old** or the **new** file, never a mix:
 
-1. write the new bytes to a temp file **in the same directory** (rename is atomic only within a filesystem);
+1. write the new bytes to a **new** temp file **in the same directory** (rename is atomic only within a filesystem). Each writer needs its own name: two writers sharing one can install a mix of both;
 2. `fsync` the temp file (data durable **before** it becomes visible);
 3. `rename(tmp, target)` (atomic replace on POSIX);
 4. `fsync` the **directory** (the rename is a directory-entry change; without this it may be lost on power failure even though the file data was synced). **What FSYNC guarantees**: when it returns Ok, the kernel has asked the device to persist that file's data (and the metadata needed to find it) and the device reported done.
@@ -29,16 +29,20 @@ body = """
 
    Drives or VMs that lie about flushes defeat it; and a failed fsync may have dropped dirty pages, so never "retry fsync and carry on" (PostgreSQL's 2018 "fsyncgate"): treat it as fatal.
 
-   Without any fsync, `rename` still gives atomicity against process crashes, just not durability on power loss.
+   Without any fsync, `rename` still gives atomicity against process crashes, just not durability on power loss. **Limits of this code**: it keeps the old file's permission bits, not its owner, ACLs or extended attributes. A target that is a symlink is replaced by a regular file (with the mode of the file the link pointed to).
+
+   Concurrent replaces each install a whole file and the last rename wins: an update that reads first still needs a lock. An error from the directory sync means the new content is already visible but may not be durable. A crash leaves its temp file behind and nothing here removes it.
+
+   A name close to the filesystem's length limit leaves no room for the temp suffix.
 
 **Locks** (all **advisory**: they only work if every party cooperates; nothing stops a rogue `write`):
 
-- `flock(2)`: whole-file lock attached to the open file description; auto-released when the descriptor is closed or the process dies (no stale locks!). Two separate `open`s conflict, even within one process (so it works between threads here). Shared (LOCK_SH, many readers) vs exclusive (LOCK_EX); `LOCK_NB` returns EWOULDBLOCK instead of waiting.
+- `flock(2)`: whole-file lock attached to the open file description; auto-released when the last descriptor for that open file description is closed (`dup` and `fork` share it), as happens when its processes die (no stale locks!). Two separate `open`s conflict, even within one process (so it works between threads here).
 
-   Lock a dedicated `.lock` file, **not** the data file you replace by rename (the lock would stay on the old inode). Not reliable on some network filesystems (NFS).
+   Shared (LOCK_SH, many readers) vs exclusive (LOCK_EX); `LOCK_NB` returns EWOULDBLOCK instead of waiting. Lock a dedicated `.lock` file, **not** the data file you replace by rename (the lock would stay on the old inode). Not reliable on some network filesystems (NFS).
 - PID lock file: create-exclusive, write your pid, delete on exit. Crashes leave the file behind, so a new starter checks `kill(pid, 0)` (signal 0 = existence check only): ESRCH means dead, so the lock is stale.
 
-   Caveats: PID reuse, and two starters may both decide a lock is stale (the check-then-remove is racy; flock avoids that).
+   Caveats: PID reuse, and two starters may both decide a lock is stale (the check-then-remove is racy; flock avoids that). A crash between create and write leaves a file with no pid, and every later starter refuses until someone removes it.
 - `O_EXCL|O_CREAT` (`create_new`): the kernel guarantees exactly one creator wins. A primitive for lock files and unique names.
 """
 

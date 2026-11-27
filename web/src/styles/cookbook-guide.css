@@ -1,0 +1,202 @@
+/* The HTML the converter keeps inside cookbook pages (tools/cookbook): every `cb-g-*` class a page uses is styled here.
+   A test (crates/content/src/cookbook.rs) fails when a page uses a class with no rule in this file. Sizes follow the
+   article's text size `--fs`; colours are theme tokens, so each block reads in dark and light. */
+
+/* ---- notes from a code file's comments, laid out to be scanned (tools/cookbook/notes.py) ---- */
+.cb-art .cb-g-terms{display:grid;gap:8px;margin:18px 0}
+.cb-art .cb-g-term{display:grid;grid-template-columns:minmax(150px,210px) minmax(0,1fr);gap:6px 22px;padding:16px 20px;border:1px solid var(--line2);border-radius:14px;background:var(--panel)}
+.cb-art .cb-g-name{font-weight:600;font-size:15px;line-height:1.45;color:var(--c);overflow-wrap:anywhere}
+.cb-art .cb-g-says{min-width:0}
+.cb-art .cb-g-says p{margin:0;line-height:1.7}
+.cb-art .cb-g-says p+p{margin-top:10px}
+.cb-art .cb-g-uses{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 18px;padding:0;list-style:none}
+.cb-art .sd-md .cb-g-uses li{margin:0;padding:7px 14px;border:1px solid var(--line2);border-radius:10px;background:var(--panel);font-size:14.5px;line-height:1.5}
+.cb-art .cb-g-reading{display:grid;gap:8px;margin:6px 0 18px;padding:0;list-style:none}
+.cb-art .sd-md .cb-g-reading li{margin:0;padding:11px 16px;border:1px solid var(--line2);border-radius:10px;background:var(--panel);font-size:15px;line-height:1.55}
+@media (max-width:640px){.cb-art .cb-g-term{grid-template-columns:minmax(0,1fr);padding:14px}}
+.cb-art .cb-g-cheat{width:100%;border-collapse:separate;border-spacing:0 4px;margin:6px 0 18px;font-size:14.5px;line-height:1.55}
+.cb-art .cb-g-cheat th{padding:4px 16px;text-align:left;font:600 12px var(--mono);color:var(--dim)}
+.cb-art .cb-g-cheat td{padding:10px 16px;background:var(--panel);vertical-align:top;overflow-wrap:anywhere}
+.cb-art .cb-g-cheat td:first-child{width:44%;border-radius:10px 0 0 10px}
+.cb-art .cb-g-cheat td:last-child{border-radius:0 10px 10px 0}
+.cb-art .cb-g-cheat td code{background:none;padding:0;color:var(--c)}
+.cb-art .cb-g-names{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 18px;padding:0;list-style:none}
+.cb-art .sd-md .cb-g-names li{margin:0;max-width:100%}
+.cb-art .cb-g-names code{display:inline-block;max-width:100%;padding:4px 10px;border:1px solid var(--line2);border-radius:8px;background:var(--panel);font-size:13px;overflow-wrap:anywhere}
+.cb-art .sd-md .cb-g-uses li,.cb-art .sd-md .cb-g-reading li,.cb-art .sd-md .cb-g-names li{margin:0}
+.cb-art .sd-md ul.cb-g-uses,.cb-art .sd-md ul.cb-g-reading,.cb-art .sd-md ul.cb-g-names{padding-left:0}
+.cb-art .sd-md table.cb-g-cheat{display:table;width:100%;max-width:none;table-layout:auto}
+/* a narrow article has no room for two columns of long names: each entry is a card, the want above the use */
+@container (max-width:559px){
+    .cb-art .sd-md table.cb-g-cheat,.cb-art .cb-g-cheat :is(tbody,tr,td){display:block;width:auto}
+    .cb-art .cb-g-cheat thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+    .cb-art .cb-g-cheat tr{margin-bottom:6px;padding:10px 14px;border-radius:10px;background:var(--panel)}
+    .cb-art .sd-md .cb-g-cheat td{width:auto;padding:0;background:none}
+    .cb-art .cb-g-cheat td+td{margin-top:4px}
+    .cb-art .sd-md .cb-g-cheat td code{overflow-wrap:anywhere}
+}
+
+/* names joined by slashes or colons, in the line under a title, have nowhere else to break */
+.cb-head :is(.cb-dek,.cb-topics li){min-width:0;max-width:100%;overflow-wrap:anywhere}
+
+/* ---- boxes that scroll sideways: no bar, and the edge fades while there is more (pages/cookbook/codeFades.ts) ---- */
+.cb-art :is(.cb-g-tt,.cb-g-pipe-wrap,.cb-g-fig-scroll){overflow-x:auto;scrollbar-width:none;overscroll-behavior-x:contain}
+.cb-art :is(.cb-g-tt,.cb-g-pipe-wrap,.cb-g-fig-scroll)::-webkit-scrollbar{display:none}
+.cb-art :is(.cb-g-tt,.cb-g-pipe-wrap,.cb-g-fig-scroll,.sd-tbl)[data-more]{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 48px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 48px),transparent)}
+.cb-art :is(.cb-g-tt,.cb-g-pipe-wrap,.cb-g-fig-scroll,.sd-tbl)[data-more]:focus-visible{-webkit-mask-image:none;mask-image:none}
+
+/* ---- tables ---- */
+.cb-art .cb-g-tt{margin:20px 0;padding:4px 6px;border:1px solid var(--line2);border-radius:14px;max-width:100%}
+.cb-art .sd-md .cb-g-tt table{display:table;width:100%;margin:0;overflow:visible;font-size:calc(var(--fs) - 2.5px);line-height:1.6}
+.cb-art .sd-md .cb-g-tt th{padding:6px 14px 2px}
+.cb-art .sd-md .cb-g-tt td{padding:10px 14px;min-width:7em}
+.cb-art .sd-md .cb-g-tt :is(table.cb-g-cmp,table.cb-g-map) td:first-child{font-weight:600}
+/* three or more columns keep a readable width and scroll when the box is narrower */
+.cb-art .sd-md .cb-g-tt table:has(th+th+th){min-width:640px}
+
+/* ---- labels: what a test row or a block is about ---- */
+.cb-art :is(.cb-g-pill,.cb-g-tier){--pc:var(--c);display:inline-block;padding:2px 9px;border-radius:6px;font:600 12px/1.6 var(--mono);white-space:nowrap;color:var(--pc);background:color-mix(in oklab,var(--pc) 14%,transparent)}
+.cb-art .cb-g-build{--pc:var(--c)}
+/* the same colour for a kind of test, on its label and in the pipeline diagram */
+.cb-art .cb-g-tok{--pc:var(--vio)}
+.cb-art .cb-g-ast{--pc:var(--fn)}
+.cb-art .cb-g-val{--pc:var(--grn)}
+.cb-art .cb-g-out{--pc:var(--mut)}
+.cb-art :is(.cb-g-cerr,.cb-g-res){--pc:var(--warn)}
+.cb-art .cb-g-rerr{--pc:var(--bad)}
+.cb-art .cb-g-dis{--pc:var(--lt)}
+
+/* ---- the compiler pipeline: five stages in a row, the tests that attach to each below it, golden files across ---- */
+.cb-art .cb-g-pipe-wrap{margin:20px 0;border:1px solid var(--line2);border-radius:14px;background:var(--panel)}
+.cb-art .cb-g-pipe{display:grid;grid-template-columns:minmax(0,1fr) 18px minmax(0,1fr) 18px minmax(0,1fr) 18px minmax(0,1fr) 18px minmax(0,1fr);gap:10px 2px;min-width:780px;padding:14px;line-height:1.5}
+.cb-art .cb-g-node{display:grid;align-content:start;gap:4px;min-width:0;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--inset);overflow-wrap:anywhere}
+.cb-art .cb-g-node b{font-size:15.5px;font-weight:600;color:var(--fg)}
+.cb-art .cb-g-node span{font:500 calc(var(--fs) - 5px)/1.5 var(--mono);color:var(--mut)}
+.cb-art .cb-g-node.cb-g-opt{border-style:dashed;border-color:var(--dim)}
+.cb-art .cb-g-arrow{display:grid;place-items:center;font:14px var(--mono);color:var(--dim)}
+.cb-art .cb-g-probe{min-width:0;padding:10px 12px;border-radius:10px;background:color-mix(in oklab,var(--pc,var(--c)) 12%,var(--panel));font-size:calc(var(--fs) - 3.5px);color:var(--fg);overflow-wrap:anywhere}
+.cb-art :is(.cb-g-probe,.cb-g-golden)>i{font:600 calc(var(--fs) - 5px) var(--mono);color:var(--pc,var(--c))}
+.cb-art .cb-g-probe>i{display:block;margin-bottom:4px}
+.cb-art .cb-g-golden{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px;padding:12px 14px;border:1px dashed var(--c);border-radius:10px;font-size:calc(var(--fs) - 3.5px);color:var(--fg)}
+.cb-art .cb-g-golden>span{flex:1 1 280px;min-width:0}
+.cb-art :is(.cb-g-probe,.cb-g-golden) code{font-size:calc(var(--fs) - 4.5px);padding:1px 4px;background:var(--inset);white-space:normal}
+/* in a row, the tests sit under the second to the fifth stage, in the order they are written */
+@container (min-width:760px){
+    .cb-art :is(.cb-g-node,.cb-g-arrow){grid-row:1}
+    .cb-art .cb-g-probe{grid-row:2;grid-column:3}
+    .cb-art .cb-g-probe+.cb-g-probe{grid-column:5}
+    .cb-art .cb-g-probe+.cb-g-probe+.cb-g-probe{grid-column:7}
+    .cb-art .cb-g-probe+.cb-g-probe+.cb-g-probe+.cb-g-probe{grid-column:9}
+    .cb-art .cb-g-golden{grid-row:3}
+}
+/* a narrow article reads it from top to bottom: each stage, then its tests */
+@container (max-width:759px){
+    .cb-art .cb-g-pipe{grid-template-columns:minmax(0,1fr);gap:8px;min-width:0;padding:12px}
+    .cb-art .cb-g-arrow{justify-self:center;width:18px;height:18px;rotate:90deg}
+    .cb-art .cb-g-pipe>:nth-child(1){order:1}
+    .cb-art .cb-g-pipe>:nth-child(2){order:2}
+    .cb-art .cb-g-pipe>:nth-child(3){order:3}
+    .cb-art .cb-g-pipe>.cb-g-probe{order:4;margin-left:20px}
+    .cb-art .cb-g-pipe>:nth-child(4){order:5}
+    .cb-art .cb-g-pipe>:nth-child(5){order:6}
+    .cb-art .cb-g-pipe>.cb-g-probe+.cb-g-probe{order:7}
+    .cb-art .cb-g-pipe>:nth-child(6){order:8}
+    .cb-art .cb-g-pipe>:nth-child(7){order:9}
+    .cb-art .cb-g-pipe>.cb-g-probe+.cb-g-probe+.cb-g-probe{order:10}
+    .cb-art .cb-g-pipe>:nth-child(8){order:11}
+    .cb-art .cb-g-pipe>:nth-child(9){order:12}
+    .cb-art .cb-g-pipe>.cb-g-probe+.cb-g-probe+.cb-g-probe+.cb-g-probe{order:13}
+    .cb-art .cb-g-pipe>.cb-g-golden{order:14}
+}
+
+/* ---- a ladder of stages, each lowering into the next. A wrapped row would leave arrows pointing at nothing, so there are
+   only two shapes: one row where every stage fits, else one column with the arrows pointing down. ---- */
+.cb-art .cb-g-ladder{display:flex;flex-direction:column;gap:4px;margin:20px 0;line-height:1.5}
+.cb-art .cb-g-ladder>div{display:grid;align-content:start;gap:4px 16px;min-width:0;padding:10px 14px;border:1px solid var(--line2);border-radius:10px;background:var(--panel);overflow-wrap:anywhere}
+.cb-art .cb-g-ladder b{font-size:15px;font-weight:600;color:var(--fg)}
+.cb-art .cb-g-ladder span{font-size:calc(var(--fs) - 3.5px);color:var(--mut)}
+.cb-art .cb-g-ladder>i{align-self:flex-start;width:18px;height:18px;margin-left:14px;font:14px/18px var(--mono);font-style:normal;text-align:center;color:var(--dim);rotate:90deg}
+/* in a column with room, each stage's words sit beside its name */
+@container (min-width:560px){
+    .cb-art .cb-g-ladder>div{grid-template-columns:minmax(0,200px) minmax(0,1fr);align-items:baseline}
+}
+/* seven stages, the longest ladder, fit in one row from here */
+@container (min-width:1100px){
+    .cb-art .cb-g-ladder{flex-direction:row;align-items:stretch}
+    .cb-art .cb-g-ladder>div{flex:1 1 0;grid-template-columns:minmax(0,1fr);align-content:start;align-items:start}
+    .cb-art .cb-g-ladder>i{flex:none;align-self:center;margin:0;rotate:none}
+}
+
+/* ---- one core with the tools around it ---- */
+.cb-art .cb-g-hub{display:grid;gap:12px;margin:20px 0;padding:16px;border:1px solid var(--line2);border-radius:14px;background:var(--panel)}
+.cb-art .cb-g-core{display:grid;gap:4px;padding:14px 16px;border:1px solid color-mix(in oklab,var(--c) 55%,transparent);border-radius:10px;background:color-mix(in oklab,var(--c) 14%,var(--panel))}
+.cb-art .cb-g-core b{font-size:16px;font-weight:600;color:var(--fg)}
+.cb-art .cb-g-core span{font:500 13px/1.6 var(--mono);color:var(--mut);overflow-wrap:anywhere}
+.cb-art .sd-md .cb-g-hub ul{display:flex;flex-wrap:wrap;gap:8px;margin:0;padding:0;list-style:none}
+.cb-art .sd-md .cb-g-hub li{margin:0;padding:6px 12px;border:1px solid var(--line2);border-radius:8px;background:var(--inset);font:500 13px/1.6 var(--mono)}
+
+/* ---- a list of fixes for one code base ---- */
+.cb-art .cb-g-repo{display:grid;gap:12px;margin:20px 0;padding:18px 22px;border:1px solid var(--line2);border-radius:14px;background:var(--panel)}
+.cb-art .sd-md .cb-g-repo :is(ol,p){margin:0}
+.cb-art .sd-md .cb-g-repo ol{display:grid;gap:12px}
+.cb-art .sd-md .cb-g-repo li{margin:0}
+
+/* ---- numbered steps, as cards ---- */
+.cb-art .sd-md ol.cb-g-steps{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,240px),1fr));gap:12px;margin:20px 0;padding:0;list-style:none;counter-reset:cb-step}
+.cb-art .sd-md ol.cb-g-steps>li{counter-increment:cb-step;display:grid;align-content:start;gap:8px;margin:0;padding:16px;border:1px solid var(--line2);border-radius:14px;background:var(--panel);font-size:calc(var(--fs) - 2px);line-height:1.65}
+.cb-art .cb-g-steps>li::before{content:counter(cb-step);font:600 24px/1 var(--mono);color:var(--c)}
+.cb-art .cb-g-steps b{color:var(--fg);font-weight:600}
+.cb-art .sd-md .cb-g-steps p{margin:0}
+
+/* ---- the reading map: one card for each topic ---- */
+.cb-art .cb-g-rmap{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,320px),1fr));gap:16px;margin:20px 0}
+.cb-art .cb-g-rgroup{display:grid;align-content:start;gap:8px;min-width:0;padding:18px 20px;border:1px solid var(--line2);border-radius:14px;background:var(--panel);font-size:calc(var(--fs) - 2px);line-height:1.6}
+.cb-art .sd-md .cb-g-rgroup h3{margin:0 0 4px;font-size:18px;color:var(--c)}
+.cb-art .sd-md .cb-g-rgroup h4{margin:8px 0 0;font-size:14px;color:var(--fg)}
+.cb-art .sd-md .cb-g-rgroup ul{margin:0;padding-left:18px}
+.cb-art .sd-md .cb-g-rgroup li{margin:0 0 6px}
+
+/* ---- a glossary: the term beside what it means ---- */
+.cb-art .cb-g-gloss{display:grid;grid-template-columns:minmax(140px,220px) minmax(0,1fr);gap:4px;margin:20px 0}
+.cb-art .cb-g-gloss :is(dt,dd){margin:0;padding:10px 14px;background:var(--panel);overflow-wrap:anywhere}
+.cb-art .cb-g-gloss dt{border-radius:10px 0 0 10px;font-weight:600;color:var(--fg)}
+.cb-art .cb-g-gloss dd{border-radius:0 10px 10px 0}
+@container (max-width:559px){
+    .cb-art .cb-g-gloss{grid-template-columns:minmax(0,1fr);gap:0}
+    .cb-art .cb-g-gloss dt{padding-bottom:2px;border-radius:10px 10px 0 0}
+    .cb-art .cb-g-gloss dd{margin-bottom:6px;padding-top:2px;border-radius:0 0 10px 10px}
+}
+
+/* ---- where to read more on a topic ---- */
+.cb-art .sd-md p.cb-g-deep{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:18px 0;padding:12px 14px;border:1px solid var(--line2);border-radius:10px;background:var(--panel);font-size:14.5px;line-height:1.5}
+.cb-art .cb-g-deep b{flex-basis:100%;font:600 12px var(--mono);color:var(--c)}
+/* each lesson apart: their numbers would run into the names around them */
+.cb-art .sd-md p.cb-g-deep a{padding:4px 10px;border:1px solid var(--line2);border-radius:8px;background:var(--inset);text-decoration:none}
+.cb-art .sd-md p.cb-g-deep a:hover{border-color:var(--c)}
+
+/* ---- a topic with where it comes from ---- */
+.cb-art .cb-g-tip{display:grid;gap:8px;margin:24px 0 18px}
+.cb-art .sd-md .cb-g-tip :is(h3,h4,p){margin:0}
+.cb-art .sd-md .cb-g-tip :is(ul,ol){margin:0;padding-left:22px}
+.cb-art .cb-g-src{display:inline-flex;flex-wrap:wrap;gap:4px;margin-left:8px;vertical-align:2px}
+.cb-art .cb-g-src span{padding:1px 8px;border:1px solid var(--line2);border-radius:999px;font:500 12px/1.6 var(--mono);color:var(--dim)}
+
+/* ---- drawn figures (inline SVG). The drawings are about 820 units wide with 12-unit text, so they are never drawn
+   narrower than that: on a narrower page they scroll. ---- */
+.cb-art .cb-g-fig{margin:20px 0;border:1px solid var(--line2);border-radius:14px;background:var(--panel);overflow:hidden}
+.cb-art .cb-g-fig-scroll{padding:14px 0}
+.cb-art .sd-md .cb-g-fig svg{display:block;width:100%;min-width:806px;max-width:1180px;height:auto;margin:0 auto}
+.cb-art .cb-g-fig text{fill:var(--fg);font-family:var(--sans);white-space:pre}
+.cb-art .cb-g-fig text.cb-g-mut{fill:var(--mut)}
+.cb-art .cb-g-fig .cb-g-acc{fill:var(--c)}
+.cb-art .cb-g-fig .cb-g-box{fill:var(--inset);stroke:color-mix(in oklab,var(--fg) 30%,transparent)}
+.cb-art .cb-g-fig .cb-g-boxa{fill:color-mix(in oklab,var(--c) 18%,var(--panel));stroke:var(--c)}
+.cb-art .cb-g-fig .cb-g-ln{fill:none;stroke:var(--dim);stroke-width:1.25}
+.cb-art .cb-g-fig .cb-g-lna{fill:none;stroke:var(--c);stroke-width:1.5}
+/* the smallest words in a drawing would come out under 12px where it is drawn at about its own size: they are raised */
+.cb-art .cb-g-fig :is(text[font-size="11"],g[font-size="11"] text:not([font-size])){font-size:12.5px}
+/* this one is drawn wider than the others, so it shrinks more */
+.cb-art .sd-md .cb-g-fig svg[aria-label="DBMS layer diagram"] text{font-size:13.2px}
+.cb-art .cb-g-fig svg[aria-label="DBMS layer diagram"] text.cb-g-mut{letter-spacing:-.028em}
+.cb-art .cb-g-fig svg[aria-label="DBMS layer diagram"] text[x="430"]{translate:-10px 0}
+.cb-art .cb-g-figcap{padding:0 16px 14px;font-size:14.5px;line-height:1.6;color:var(--mut)}

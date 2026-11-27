@@ -8,7 +8,9 @@
 //! With f64 the sign of a near-zero cross product is noise (rounding), and a wrong sign makes hulls
 //! non-convex and triangulations overlap. With i64 coordinates (|c| < ~1e9) computed in i128 the predicate
 //! is EXACT, so every algorithm below is checked against a brute-force oracle with `assert_eq!`, no epsilons.
-//! The same trick gives an exact in-circle test (a 3x3 determinant in i128) for Delaunay.
+//! The same trick gives an exact in-circle test (a 3x3 determinant in i128, |c| <= 3e8) for Delaunay. The hull needs
+//! care there too: the usual far-away "super triangle" silently loses thin hull triangles, so this one uses "ghost"
+//! triangles with a corner at infinity. Each insertion scans every triangle, so n points cost O(n^2).
 //!
 //! Sections: 1 float-vs-exact orientation, 2 hull (monotone chain vs gift wrapping), 3 segment intersection,
 //! 4 point in polygon (ray casting vs winding), 5 shoelace area/centroid, 6 closest pair (divide and conquer),
@@ -379,17 +381,47 @@ fn incircle(a: Pt, b: Pt, c: Pt, d: Pt) -> i128 {
     (ax * ax + ay * ay) * (bx * cy - cx * by) - (bx * bx + by * by) * (ax * cy - cx * ay)
         + (cx * cx + cy * cy) * (ax * by - bx * ay)
 }
+/// The vertex "at infinity". A GHOST triangle stands for the outside of one hull edge a->b (in cyclic order a, b,
+/// GHOST), with the outside on the LEFT of a->b. A finite "super triangle" is the common shortcut and is wrong: a thin
+/// triangle on the hull has a huge circumcircle that reaches any fixed far-away corner, and the triangle is lost.
+const GHOST: usize = usize::MAX;
+/// Does inserting d destroy triangle t? A real one: d strictly inside its circumcircle. A ghost: d strictly outside
+/// its hull edge, or on that edge between the ends (the limit of a circle whose third corner goes to infinity).
+fn conflicts(v: &[Pt], t: [usize; 3], d: Pt) -> bool {
+    match t.iter().position(|&k| k == GHOST) {
+        None => incircle(v[t[0]], v[t[1]], v[t[2]], d) > 0,
+        Some(g) => {
+            let (a, b) = (v[t[(g + 1) % 3]], v[t[(g + 2) % 3]]);
+            let side = cross(a, b, d);
+            side > 0 || (side == 0 && d != a && d != b && on_seg(a, b, d))
+        }
+    }
+}
+/// CCW triangles of the Delaunay triangulation; empty if all points are on one line. A repeated point is used once.
 fn delaunay(pts: &[Pt]) -> Vec<[usize; 3]> {
-    let n = pts.len();
-    let big = 100_000_000;
-    let mut v = pts.to_vec();
-    v.extend([p(-big, -big), p(3 * big, -big), p(-big, 3 * big)]); // super triangle, CCW
-    let mut tris: Vec<[usize; 3]> = vec![[n, n + 1, n + 2]];
-    for i in 0..n {
+    assert!(
+        pts.iter()
+            .all(|q| q.x.unsigned_abs() <= 300_000_000 && q.y.unsigned_abs() <= 300_000_000),
+        "incircle is exact only for |coord| <= 3e8"
+    );
+    // the first triangle with an area
+    let Some(second) = (1..pts.len()).find(|&j| pts[j] != pts[0]) else {
+        return vec![];
+    };
+    let Some(third) = (1..pts.len()).find(|&k| cross(pts[0], pts[second], pts[k]) != 0) else {
+        return vec![];
+    };
+    let (a, b, c) = if cross(pts[0], pts[second], pts[third]) > 0 {
+        (0, second, third)
+    } else {
+        (0, third, second)
+    };
+    let mut tris: Vec<[usize; 3]> = vec![[a, b, c], [b, a, GHOST], [c, b, GHOST], [a, c, GHOST]];
+    for i in (0..pts.len()).filter(|&i| i != a && i != b && i != c) {
         let (bad, good): (Vec<[usize; 3]>, Vec<[usize; 3]>) = tris
             .iter()
             .copied()
-            .partition(|t| incircle(v[t[0]], v[t[1]], v[t[2]], v[i]) > 0);
+            .partition(|&t| conflicts(pts, t, pts[i]));
         let edges: Vec<(usize, usize)> = bad
             .iter()
             .flat_map(|t| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])])
@@ -401,8 +433,42 @@ fn delaunay(pts: &[Pt]) -> Vec<[usize; 3]> {
             }
         }
     }
-    tris.retain(|t| t.iter().all(|&k| k < n));
+    tris.retain(|t| !t.contains(&GHOST));
     tris
+}
+/// Empty circumcircles and the Euler count 2n - 2 - h for DISTINCT, not all collinear points. Returns (triangles, h).
+fn check_delaunay(pts: &[Pt]) -> (Vec<[usize; 3]>, usize) {
+    let tris = delaunay(pts);
+    for t in &tris {
+        assert!(
+            cross(pts[t[0]], pts[t[1]], pts[t[2]]) > 0,
+            "CCW, non-degenerate"
+        );
+        for (k, &q) in pts.iter().enumerate() {
+            if !t.contains(&k) {
+                assert!(
+                    incircle(pts[t[0]], pts[t[1]], pts[t[2]], q) <= 0,
+                    "empty circumcircle"
+                );
+            }
+        }
+    }
+    let hull = convex_hull(pts);
+    let h = pts
+        .iter()
+        .filter(|&&q| {
+            (0..hull.len()).any(|i| {
+                cross(hull[i], hull[(i + 1) % hull.len()], q) == 0
+                    && on_seg(hull[i], hull[(i + 1) % hull.len()], q)
+            })
+        })
+        .count();
+    assert_eq!(
+        tris.len(),
+        2 * pts.len() - 2 - h,
+        "Euler: triangles = 2n - 2 - h for {pts:?}"
+    );
+    (tris, h)
 }
 fn circumcenter(a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> (f64, f64) {
     let d = 2.0 * (a.0 * (b.1 - c.1) + b.0 * (c.1 - a.1) + c.0 * (a.1 - b.1));
@@ -755,32 +821,7 @@ fn main() {
         pts.sort();
         pts.dedup();
         let n = pts.len();
-        let tris = delaunay(&pts);
-        for t in &tris {
-            assert!(
-                cross(pts[t[0]], pts[t[1]], pts[t[2]]) > 0,
-                "CCW, non-degenerate"
-            );
-            for (k, &q) in pts.iter().enumerate() {
-                if !t.contains(&k) {
-                    assert!(
-                        incircle(pts[t[0]], pts[t[1]], pts[t[2]], q) <= 0,
-                        "empty circumcircle"
-                    );
-                }
-            }
-        }
-        let hull = convex_hull(&pts);
-        let h = pts
-            .iter()
-            .filter(|&&q| {
-                (0..hull.len()).any(|i| {
-                    cross(hull[i], hull[(i + 1) % hull.len()], q) == 0
-                        && on_seg(hull[i], hull[(i + 1) % hull.len()], q)
-                })
-            })
-            .count();
-        assert_eq!(tris.len(), 2 * n - 2 - h, "Euler: triangles = 2n - 2 - h");
+        let (tris, h) = check_delaunay(&pts);
         // Voronoi dual: each triangle <-> a Voronoi vertex = circumcenter, equidistant to its 3 sites, no site closer
         let f = |k: usize| (pts[k].x as f64, pts[k].y as f64);
         for t in &tris {
@@ -804,6 +845,29 @@ fn main() {
             );
         }
     }
+
+    // hull triangles so thin that their circles are enormous, and the largest allowed coordinates
+    check_delaunay(&[p(0, 0), p(1_000_000, 0), p(500_000, 1), p(500_000, 500_000)]);
+    const M: i64 = 300_000_000;
+    check_delaunay(&[p(-M, -M), p(M, -M), p(-M, M), p(M - 1, M - 1), p(0, 1)]);
+    // not sorted: the last point lands ON a hull edge that already exists
+    check_delaunay(&[p(0, 0), p(4, 0), p(0, 4), p(2, 0)]);
+    // small sets: tiny ranges give collinear and cocircular points, wide ones give thin hull triangles
+    for trial in 0..4000 {
+        let range = if trial % 2 == 0 { 5 } else { 100_000_000 };
+        let mut pts: Vec<Pt> = (0..8)
+            .map(|_| p(rng.range(0, range), rng.range(0, range)))
+            .collect();
+        pts.sort();
+        pts.dedup();
+        if convex_hull(&pts).len() >= 3 {
+            let (tris, _) = check_delaunay(&pts);
+            let mut doubled = pts.clone();
+            doubled.extend_from_slice(&pts);
+            assert_eq!(delaunay(&doubled).len(), tris.len(), "repeats are ignored");
+        }
+    }
+    assert!(delaunay(&[p(0, 0), p(1, 1), p(2, 2)]).is_empty() && delaunay(&[]).is_empty());
 
     // 9. rotating calipers
     for trial in 0..300 {

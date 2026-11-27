@@ -7,6 +7,9 @@
 //! return 201. Retry with the same key: return the SAME result (200), do NOT create a second execution.
 //! This is what makes client retries and at-least-once delivery safe. (Real systems also persist the key in
 //! the DB in the same transaction as the work, and compare the request body hash.)
+//! LIMITS: here the "work" is one counter under the same lock as the key table, which is why check-and-record is atomic. Keys are
+//! not tied to a caller, route or body (a reused key silently gets the old result), live in memory only, and are never evicted.
+//! An empty key is refused: clients that all send one would otherwise share one result.
 //! Background: https://stripe.com/blog/idempotency
 #![allow(dead_code)]
 use axum::{
@@ -30,7 +33,8 @@ struct St {
 }
 
 async fn start(State(st): State<St>, headers: HeaderMap) -> (StatusCode, Json<serde_json::Value>) {
-    let Some(key) = headers.get("idempotency-key").and_then(|v| v.to_str().ok()) else {
+    let key = headers.get("idempotency-key").and_then(|v| v.to_str().ok());
+    let Some(key) = key.filter(|k| !k.is_empty()) else {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"error":"Idempotency-Key header required"})),
@@ -107,4 +111,6 @@ async fn main() {
     );
     assert!(a.1.contains(r#""execution_id":1"#) && b.1.contains(r#""execution_id":1"#));
     assert!(c.1.contains(r#""execution_id":2"#));
+    let empty = send(&app, Some("")).await;
+    assert_eq!(empty.0, StatusCode::BAD_REQUEST, "an empty key is no key");
 }

@@ -313,7 +313,7 @@ async fn the_web_server_series_keeps_its_problems(db: PgPool) {
 #[sqlx::test(migrator = "anneal_api::MIGRATOR")]
 async fn each_shared_exercise_works_in_each_of_its_series(db: PgPool) {
     // in the stable order, so the first is the one shown when nothing says otherwise
-    const SHARED: [(&str, &[&str]); 32] = [
+    const SHARED: [(&str, &[&str]); 33] = [
         ("b1-api-error-response", &["job-service", "type-ahead"]),
         ("b4-length-prefixed-codec", &["web-server", "mini-redis"]),
         ("b7-how-long-requests-take", &["web-server", "type-ahead"]),
@@ -344,6 +344,7 @@ async fn each_shared_exercise_works_in_each_of_its_series(db: PgPool) {
         ("y17-append-that-fails", &["key-value-store", "event-ledger"]),
         ("y17-unsaved-changes", &["key-value-store", "toy-filesystem"]),
         ("y18-records-and-frames", &["key-value-store", "mini-redis"]),
+        ("y41-rolls-you-can-replay", &["lease-simulator", "ray-tracer"]),
         ("y5-catch-the-broken-queue", &["key-value-store", "regex-engine", "event-ledger"]),
         ("y9-kv-store-wal", &["key-value-store", "mini-redis", "event-ledger"]),
     ];

@@ -1,10 +1,12 @@
-//! RECIPE 07 (concurrency): bounded concurrency with JoinSet + Semaphore, and PROVING the bound.
+//! RECIPE 07 (concurrency): bounded concurrency with JoinSet + Semaphore, and CHECKING the bound.
 //! LEVEL: intermediate
 //! Use in: concurrent executor stage (later).   Run: cargo run --example joinset_semaphore
-//! COMMON USES: bounded concurrency in crawlers, batch processors and API clients: Semaphore + JoinSet with a provable limit.
+//! COMMON USES: bounded concurrency in crawlers, batch processors and API clients: Semaphore + JoinSet with a limit that each run checks.
 //!
 //! Pattern: spawn everything into a `JoinSet`, but each task must hold a semaphore permit to run.
-//! The test is an invariant: track in-flight count with atomics and assert max_seen <= limit.
+//! The test is an invariant: track in-flight count with atomics and assert max_seen <= limit. A run can show that the bound
+//! was broken; passing does not prove it holds in every schedule. All 12 tasks are spawned at once (only 3 run past the
+//! permit): the limit bounds the work in progress, not the number of waiting tasks.
 //! Real code: tokio's sync primitives -> https://github.com/tokio-rs/tokio/tree/master/tokio/src/sync
 #![allow(dead_code)]
 use std::sync::Arc;

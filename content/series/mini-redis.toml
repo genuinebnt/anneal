@@ -242,7 +242,7 @@ helpful = []
 used_again = ["y31-write-down-what-happened", "y32-log-and-replay"]
 real_uses = "Bitcask, Redis AOF, the write-ahead log of every database."
 cookbook = [
-    { level = "similar", page = "wal-append-log", note = "A log over a real file with the same torn-end rule. Read in full. It takes a tail of zeros as empty records.", source = "examples/os_and_storage/wal_append_log.rs", hidden = true },
+    { level = "similar", page = "wal-append-log", note = "A log over a real file with the same torn-end rule. Read in full. Its checksum covers the length, so a tail of zeros is not read as records.", source = "examples/os_and_storage/wal_append_log.rs", hidden = true },
 ]
 
 [[part]]

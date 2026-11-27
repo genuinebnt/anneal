@@ -15,6 +15,13 @@
 //!  * errors as `application/problem+json` (RFC 9457) with stable `type` URIs clients can switch on.
 //!  * versioning: URL (`/v2/..`) vs media-type header (`Accept: application/vnd.forge.v2+json`), compared.
 //!  * HATEOAS-style `_links`, and bulk operations answering with per-item results (207 Multi-Status style).
+//!
+//! LIMITS: a JSON Patch is limited in operations, growth and nesting depth. Without that, a few `copy` operations double the
+//! document until memory runs out, or nest it until the stack overflows and the process aborts. An item has a size limit too,
+//! so that many patches cannot grow it without end. `test` compares numbers by how they are written (`1` and `1.0` differ,
+//! although RFC 6902 calls them equal). `If-None-Match` matches one exact tag only (no list, `*` or `W/`). `Accept` is matched
+//! by substring (no `q` values). Idempotency keys and finished report jobs are kept in memory and are never evicted.
+//!
 //! Why: these are the decisions that are expensive to change once clients exist.
 //! COMMON USES: public/partner APIs, mobile backends, admin consoles with infinite scroll, payment-style APIs
 //! (Idempotency-Key + ETag), long-running exports/reports, gateways that enforce one stable error contract.
@@ -268,6 +275,14 @@ fn split_ptr(p: &str) -> Result<(String, String), String> {
     let i = p.rfind('/').unwrap();
     Ok((p[..i].to_string(), unescape(&p[i + 1..])))
 }
+/// RFC 6901: digits only, without a leading zero (`str::parse` alone would also take `+1` and `01`).
+fn array_index(s: &str) -> Result<usize, String> {
+    let digits = !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    match s.parse() {
+        Ok(i) if digits && (s == "0" || !s.starts_with('0')) => Ok(i),
+        _ => Err(format!("bad array index `{s}`")),
+    }
+}
 fn ptr_add(doc: &mut Value, path: &str, v: Value) -> Result<(), String> {
     if path.is_empty() {
         *doc = v;
@@ -287,9 +302,7 @@ fn ptr_add(doc: &mut Value, path: &str, v: Value) -> Result<(), String> {
                 a.push(v);
                 return Ok(());
             }
-            let i: usize = last
-                .parse()
-                .map_err(|_| format!("bad array index `{last}`"))?;
+            let i = array_index(&last)?;
             if i > a.len() {
                 return Err(format!("index {i} out of range"));
             }
@@ -300,6 +313,9 @@ fn ptr_add(doc: &mut Value, path: &str, v: Value) -> Result<(), String> {
     }
 }
 fn ptr_remove(doc: &mut Value, path: &str) -> Result<Value, String> {
+    if path.is_empty() {
+        return Err("the whole document cannot be removed".into());
+    }
     let (parent, last) = split_ptr(path)?;
     match doc
         .pointer_mut(&parent)
@@ -307,9 +323,7 @@ fn ptr_remove(doc: &mut Value, path: &str) -> Result<Value, String> {
     {
         Value::Object(m) => m.remove(&last).ok_or(format!("`{path}` does not exist")),
         Value::Array(a) => {
-            let i: usize = last
-                .parse()
-                .map_err(|_| format!("bad array index `{last}`"))?;
+            let i = array_index(&last)?;
             if i >= a.len() {
                 return Err(format!("index {i} out of range"));
             }
@@ -318,12 +332,31 @@ fn ptr_remove(doc: &mut Value, path: &str) -> Result<Value, String> {
         _ => Err(format!("parent of `{path}` is a scalar")),
     }
 }
+const MAX_PATCH_OPS: usize = 32;
+const MAX_PATCH_GROWTH: usize = 64 * 1024; // bytes of JSON
+const MAX_DOC_DEPTH: usize = 32;
+const MAX_ITEM_BYTES: usize = 64 * 1024; // of the stored item, however it got there
+
+/// True if arrays and objects are nested at most `left` deep. It recurses no deeper than that, so any input is safe.
+fn within_depth(v: &Value, left: usize) -> bool {
+    match v {
+        Value::Array(a) => left > 0 && a.iter().all(|x| within_depth(x, left - 1)),
+        Value::Object(m) => left > 0 && m.values().all(|x| within_depth(x, left - 1)),
+        _ => true,
+    }
+}
+
 /// Apply every operation to a COPY; the caller only commits on Ok (all-or-nothing).
 fn json_patch(doc: &Value, ops: &Value) -> Result<Value, (usize, String)> {
     let mut d = doc.clone();
     let ops = ops
         .as_array()
         .ok_or((0, "patch must be an array".to_string()))?;
+    if ops.len() > MAX_PATCH_OPS {
+        return Err((0, format!("more than {MAX_PATCH_OPS} operations")));
+    }
+    // checked after every operation: one `copy` can at most double the document before it is caught
+    let max_len = doc.to_string().len() + MAX_PATCH_GROWTH;
     for (i, op) in ops.iter().enumerate() {
         let e = |m: String| (i, m);
         let s = |k: &str| op.get(k).and_then(Value::as_str).map(str::to_string);
@@ -350,6 +383,10 @@ fn json_patch(doc: &Value, ops: &Value) -> Result<Value, (usize, String)> {
             }
             Some("move") => {
                 let from = s("from").ok_or(e("missing `from`".into()))?;
+                // after the removal an array index would name the NEXT element, so this must be refused up front
+                if path.starts_with(&format!("{from}/")) {
+                    return Err(e("cannot move a value into itself".into()));
+                }
                 let v = ptr_remove(&mut d, &from).map_err(e)?;
                 ptr_add(&mut d, &path, v).map_err(e)?;
             }
@@ -362,11 +399,21 @@ fn json_patch(doc: &Value, ops: &Value) -> Result<Value, (usize, String)> {
                 ptr_add(&mut d, &path, v).map_err(e)?;
             }
             Some("test") => {
-                if d.pointer(&path) != op.get("value") {
+                // without this, a missing value and a missing target would compare equal
+                let want = op.get("value").ok_or(e("missing `value`".into()))?;
+                if d.pointer(&path) != Some(want) {
                     return Err(e(format!("test failed at `{path}`")));
                 }
             }
             other => return Err(e(format!("unknown op {other:?}"))),
+        }
+        // depth first: writing out (like cloning and comparing) recurses once per level. One operation on a document within
+        // the limit at most adds a request value (serde_json parses at most 128 levels) or doubles the depth.
+        if !within_depth(&d, MAX_DOC_DEPTH) {
+            return Err(e("the document is nested too deeply".into()));
+        }
+        if d.to_string().len() > max_len {
+            return Err(e("the document grew too much".into()));
         }
     }
     Ok(d)
@@ -382,7 +429,7 @@ struct Item {
 struct Store {
     items: BTreeMap<u64, Item>,
     next: u64,
-    idem: HashMap<String, (String, u64)>, // key -> (body, id)
+    idem: HashMap<String, (String, u64, Item)>, // key -> (body, id, the item as first answered)
     job_polls: HashMap<u64, u32>,
     next_job: u64,
 }
@@ -443,6 +490,9 @@ fn validate(doc: &Value) -> Result<(), Vec<String>> {
             .is_some_and(|a| a.iter().all(Value::is_string))
     {
         errs.push("`tags` must be an array of strings".into());
+    }
+    if doc.to_string().len() > MAX_ITEM_BYTES {
+        errs.push(format!("the item is larger than {MAX_ITEM_BYTES} bytes"));
     }
     if errs.is_empty() { Ok(()) } else { Err(errs) }
 }
@@ -507,20 +557,20 @@ fn parse_usize(
     q: &HashMap<String, String>,
     k: &str,
     def: usize,
-    max: usize,
+    (min, max): (usize, usize),
 ) -> Result<usize, Response> {
     match q.get(k) {
         None => Ok(def),
         Some(s) => s
             .parse::<usize>()
             .ok()
-            .filter(|n| *n <= max)
+            .filter(|n| (min..=max).contains(n))
             .ok_or_else(|| {
                 problem(
                     400,
                     "invalid-parameter",
                     "Invalid parameter",
-                    &format!("`{k}` must be an integer in 0..={max}"),
+                    &format!("`{k}` must be an integer in {min}..={max}"),
                     json!({"parameter": k}),
                 )
             }),
@@ -541,8 +591,8 @@ async fn list_offset(State(db): State<Db>, Query(q): Query<HashMap<String, Strin
         }
     }
     let (limit, offset) = match (
-        parse_usize(&q, "limit", 5, 50),
-        parse_usize(&q, "offset", 0, 1_000_000),
+        parse_usize(&q, "limit", 5, (1, 50)), // a page of 0 would link to itself
+        parse_usize(&q, "offset", 0, (0, 1_000_000)),
     ) {
         (Ok(l), Ok(o)) => (l, o),
         (Err(r), _) | (_, Err(r)) => return r,
@@ -628,7 +678,7 @@ async fn list_offset(State(db): State<Db>, Query(q): Query<HashMap<String, Strin
 
 /// Keyset (cursor) pagination, newest first. The cursor is opaque to clients.
 async fn feed(State(db): State<Db>, Query(q): Query<HashMap<String, String>>) -> Response {
-    let limit = match parse_usize(&q, "limit", 3, 50) {
+    let limit = match parse_usize(&q, "limit", 3, (1, 50)) {
         Ok(l) => l,
         Err(r) => return r,
     };
@@ -697,7 +747,7 @@ async fn create(State(db): State<Db>, headers: HeaderMap, body: Bytes) -> Respon
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
     if let Some(k) = &key
-        && let Some((orig, id)) = g.idem.get(k).cloned()
+        && let Some((orig, id, it)) = g.idem.get(k).cloned()
     {
         if orig != text {
             return problem(
@@ -708,7 +758,7 @@ async fn create(State(db): State<Db>, headers: HeaderMap, body: Bytes) -> Respon
                 json!({}),
             );
         }
-        let it = g.items[&id].clone();
+        // the stored answer, not the live item: it may have been changed or deleted since
         return item_reply(
             201,
             id,
@@ -724,7 +774,7 @@ async fn create(State(db): State<Db>, headers: HeaderMap, body: Bytes) -> Respon
     let it = Item { version: 1, doc };
     g.items.insert(id, it.clone());
     if let Some(k) = key {
-        g.idem.insert(k, (text, id));
+        g.idem.insert(k, (text, id, it.clone()));
     }
     item_reply(201, id, &it, &[("location", format!("/v1/items/{id}"))])
 }
@@ -1476,6 +1526,82 @@ async fn main() {
     assert_eq!(one["_links"]["self"]["href"], "/v1/items/5");
     assert_eq!(one["_links"]["delete"]["method"], "DELETE");
     println!("   item 5 links: {}", one["_links"]);
+
+    println!("\n==== 13. hostile input ====");
+    for path in ["/v1/feed?limit=0", "/v1/items?limit=0"] {
+        let r = call(&c, c.get(u(path)), "a page size of 0 => 400").await;
+        assert_eq!(r.status, 400, "{path}");
+    }
+    let keyed = || {
+        c.post(u("/v1/items"))
+            .header("idempotency-key", "k-200")
+            .json(&new_item("short-lived"))
+    };
+    let first = call(&c, keyed(), "POST with a new key").await;
+    let location = first.h("location");
+    call(&c, c.delete(u(&location)), "the item is deleted").await;
+    let replay = call(
+        &c,
+        keyed(),
+        "late retry: the first answer, nothing re-created",
+    )
+    .await;
+    assert_eq!((replay.status, &replay.body), (201, &first.body));
+    assert_eq!(c.get(u(&location)).send().await.unwrap().status(), 404);
+
+    let base = json!({"l": [{"a": 1}, {"b": 2}], "": 5, "tags": ["x"]});
+    for bad in [
+        json!([{"op": "test", "path": "/nothing"}]), // no value
+        json!([{"op": "move", "from": "/l/0", "path": "/l/0/x"}]), // into itself
+        json!([{"op": "remove", "path": ""}]),       // not the member named ""
+        json!([{"op": "add", "path": "/l/+1", "value": 0}]),
+        json!([{"op": "add", "path": "/l/01", "value": 0}]),
+        json!([{"op": "remove", "path": "/l/+1"}]),
+        Value::Array(vec![
+            json!({"op": "test", "path": "/l/0/a", "value": 1});
+            33
+        ]),
+        Value::Array(vec![
+            json!({"op": "copy", "from": "/tags", "path": "/tags/-"});
+            20 // about 4 MB if nothing stopped it
+        ]),
+    ] {
+        assert!(json_patch(&base, &bad).is_err(), "accepted: {bad}");
+    }
+    // `[[]]`, then copy the whole of it into its own innermost array: 15 small operations, 32768 levels
+    let mut deep = vec![json!({"op": "add", "path": "/tags", "value": [[]]})];
+    let mut levels = 2;
+    for _ in 0..14 {
+        let into = format!("/tags{}/-", "/0".repeat(levels - 1));
+        deep.push(json!({"op": "copy", "from": "/tags", "path": into}));
+        levels *= 2;
+    }
+    quiet(true);
+    let r = call(
+        &c,
+        c.patch(u("/v1/items/5"))
+            .header("content-type", "application/json-patch+json")
+            .body(Value::Array(deep).to_string()),
+        "a patch that nests the document 32768 deep",
+    )
+    .await;
+    assert_eq!(r.status, 422);
+    // each patch is small enough by itself; the item still cannot grow without end
+    let grow = json!([{"op": "add", "path": "/tags/-", "value": "x".repeat(40_000)}]).to_string();
+    for want in [200, 422, 422] {
+        let r = call(
+            &c,
+            c.patch(u("/v1/items/5"))
+                .header("content-type", "application/json-patch+json")
+                .body(grow.clone()),
+            "grow an item patch by patch",
+        )
+        .await;
+        assert_eq!(r.status, want);
+    }
+    quiet(false);
+    let alive = call(&c, c.get(u("/v1/items/1")), "the server still answers").await;
+    assert_eq!(alive.status, 200);
 
     srv.stop().await;
     println!("\nOK: all REST pattern assertions passed");

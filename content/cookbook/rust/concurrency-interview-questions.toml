@@ -18,7 +18,13 @@ body = """
 [[sections]]
 heading = "Common uses"
 body = """
-<ul class="cb-g-uses"><li>every primitive here is something production code re-implements or wraps: bounded channels</li><li>token buckets in API gateways</li><li>sharded caches</li><li>thread pools</li><li>singleflight in caches (Go's <code>singleflight</code>, Rust's <code>moka</code>)</li><li>lock-order checkers (Linux lockdep). <strong>Spoiler</strong>: Q11 (lock-order graph) contains graph cycle detection</li><li>skip Q11 if you have not yet solved FlowForge's cycle-detection stage yourself</li></ul>
+<ul class="cb-g-uses"><li>every primitive here is something production code re-implements or wraps: bounded channels</li><li>token buckets in API gateways</li><li>sharded caches</li><li>thread pools</li><li>singleflight in caches (Go's <code>singleflight</code>, Rust's <code>moka</code>)</li><li>lock-order checkers (Linux lockdep)</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Spoiler**: Q11 (lock-order graph) contains graph cycle detection (skip Q11 if you want to work that out yourself first).
 """
 
 [[sections]]

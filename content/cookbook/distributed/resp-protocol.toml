@@ -24,7 +24,11 @@ RESP2 has five frame kinds, each starting with a type byte and ending in CRLF: `
 
 (Re-parsing from the start on every read is O(n&#94;2) for one huge frame; real servers keep resumable parser state.) **zero-copy**: bulk/simple/error payloads are `Cow::Borrowed` slices of the input; only replies we build are `Owned`. **Hostile input**: every length is untrusted.
 
-`$99999999999` must not allocate, `*1\\r\\n` repeated 100k times must not recurse 100k deep, and a line with no CRLF must not buffer forever. `Limits` caps line, bulk, array and depth, and we never pre-allocate from a declared count (capacity is `min(n, 64)`); memory is then bounded by bytes actually received.
+`$99999999999` must not allocate, `*1\\r\\n` repeated 100k times must not recurse 100k deep, and a line with no CRLF must not buffer forever. `Limits` caps line, bulk, array, depth and the whole frame (many elements that are each within limits must not add up without end), and we never pre-allocate from a declared count (capacity is `min(n, 64)`).
+
+The caller must still read in modest chunks and call `serve` after each. **Replies** are hostile too: an error message that quotes the client's bytes could contain CRLF and forge further replies, so the encoder turns CR and LF in simple strings and errors into spaces.
+
+**Limits**: the whole-frame limit does not bound the quadratic re-parsing by itself (a frame of many tiny elements arriving in tiny pieces is still expensive), and the store has no memory limit.
 """
 
 [[sections]]

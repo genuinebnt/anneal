@@ -24,7 +24,9 @@ Request/reply = put a `oneshot::Sender` in the message (`Addr::ask`).
 
 A supervisor task runs the actor as a child task, catches a panic through the `JoinHandle` (`JoinError::is_panic`), waits an exponentially growing backoff, builds a **fresh** actor from a factory (state is intentionally reset: "let it crash") and resumes on the **same** mailbox: the receiver lives in an `Arc<tokio::sync::Mutex<..>>` owned by the supervisor, so queued messages survive (only the message being handled when it crashed is lost).
 
-After `max_restarts` it gives up and the mailbox closes (senders get `Err`). Graceful stop: a `Stop` envelope (or `Control::Stop`) closes the mailbox to **new** sends and then **drains** everything already queued before exiting. A `Registry` maps names to type-erased `Addr`s (`Box<dyn Any>` + downcast).
+After `max_restarts` restarts (a lifetime total, never reset) it gives up and the mailbox closes (senders get `Err`). Graceful stop: a `Stop` envelope (or `Control::Stop`) closes the mailbox to **new** sends and then **drains** everything already queued before exiting, also across a crash during the drain (if it does not run out of restarts).
+
+Aborting the supervisor aborts the actor. A `Registry` maps names to type-erased `Addr`s (`Box<dyn Any>` + downcast).
 """
 
 [[sections]]

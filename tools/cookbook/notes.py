@@ -180,6 +180,24 @@ def columns(line):
     return bool(re.search(r"\S\s{3,}\S", t) or re.search(r"[│├└┌┐┘┤┬┴┼─]{2}|\+--|--\+|\|\s.*\s\|$", t))
 
 
+def split_at_arrow(entry):
+    """An "I want to -> use" entry as its two halves. None when no arrow separates them. An arrow inside brackets
+    ("(u8 -> u32)") or in "<->" is part of the words. Where one arrow is set apart in a column, it is the separator."""
+    found = []
+    for m in re.finditer(r"->(?=\s)", entry):
+        before = entry[:m.start()]
+        if before.endswith("<") or sum(before.count(c) for c in "([") > sum(before.count(c) for c in ")]"):
+            continue
+        found.append(m)
+    if not found:
+        return None
+    # set apart: two or more spaces before it, and no other such gap earlier in the line (that would be a second entry)
+    column = next((m for m in found if re.search(r"\S\s{2,}$", entry[:m.start()]) and not re.search(r"\S\s{2,}\S", entry[:m.start()])), None)
+    at = column or found[0]
+    want, use = entry[:at.start()].rstrip(), entry[at.end():].lstrip()
+    return (want, use) if want and use else None
+
+
 def cheat_sheet(lines):
     """"I want to ... -> use ..." entries, two of which may share a line, as a table. None if the lines are something else."""
     entries, loose = [], 0
@@ -190,9 +208,9 @@ def cheat_sheet(lines):
         parts = [p for p in re.split(r"\s{2,}(?=- )", t) if p]
         for part in parts:
             part = re.sub(r"^-\s+", "", part)
-            m = re.match(r"(.*?)\s*->\s+(.+)$", part)
-            if m and m[1]:
-                entries.append((m[1], m[2]))
+            halves = split_at_arrow(part)
+            if halves:
+                entries.append(halves)
             elif entries and not part.startswith("-"):
                 entries[-1] = (entries[-1][0], entries[-1][1] + " " + part)
             else:

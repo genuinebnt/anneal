@@ -31,11 +31,13 @@ body = """
 
    The 8-bit minifloat (1-4-3) is checked **exhaustively** (all 65536 operand pairs, all modes) against an independent reference: exact f64 arithmetic (exact because operands are tiny) followed by "pick the nearest representable value" from a table of all codes. binary16 (1-5-10) is checked on random pairs.
 
-   Ties-to-even is the default because it is unbiased: ties go up and down equally often, so errors do not drift.
+   Soft **add** aligns its operands exactly in an i128, so it refuses layouts with a wide exponent (bfloat16, f32, f64); soft multiply has no such limit.
+
+   Ties-to-even is the default because on varied data ties go up and down about equally often, so they do not push a sum one way (a particular input can still: the demo adds the same tie again and again and nearest-even never moves).
 3. ulp, next_up/next_down by bit twiddling (compared with std), and a monotone integer key that turns float comparison into integer comparison; ulp distance; why "relative + absolute + ulps" tolerance tests.
 4. Catastrophic cancellation: (1-cos x)/x&#94;2 and the quadratic formula, naive vs stable.
 5. FMA: exact product error `fma(a,b,-a*b)`, checked against Dekker's FMA-free two_prod; Kahan's accurate 2x2 determinant.
-6. Summation: naive, Kahan, Neumaier, pairwise, and exact (Shewchuk partials, as in Python's `math.fsum`), with the exact one verified against i128 integer arithmetic and the others ranked by measured error.
+6. Summation: naive, Kahan, Neumaier, pairwise, and exact (Shewchuk partials, as in Python's `math.fsum`), with the exact one verified against i128 integer arithmetic and the others ranked by measured error. The exact one **panics** on finite input when a partial sum overflows, also in cases where the exact total would fit.
 7. Comparison pitfalls: NaN != NaN, `total_cmp`, signed zero, `min`/`max` with NaN, floats as hash keys.
 8. Shortest round-trip printing (Rust's `{}`/`{:?}`): parse(print(x)) == x for random bit patterns and no shorter digit string round-trips; why 0.1 + 0.2 != 0.3; why money should use integers (see `decimal_fixed_point_money`).
 """

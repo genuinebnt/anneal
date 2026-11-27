@@ -16,7 +16,7 @@
 //! * WATERMARK W = "I expect no more records with ts <= W". A source broadcasts max_ts_seen - B - 1 (B = out-of-orderness bound); an end-of-partition source
 //!   sends i64::MAX. An operator's W is the MINIMUM over its input channels, so the slowest partition holds everyone back (Flink also marks idle partitions
 //!   so they do not stall W forever; not modelled here).
-//! * WINDOWS [start, end): tumbling, sliding (a record is in about size/slide windows) and session (each record opens [ts, ts+gap); windows of a key that
+//! * WINDOWS [start, end): tumbling, sliding (0 < slide <= size; a record is in about size/slide windows) and session (each record opens [ts, ts+gap); windows of a key that
 //!   OVERLAP merge; merely touching ones do not, whereas Flink's TimeWindow.intersects also merges touching ones: see below).
 //! * LATENESS: a window is complete when W >= end-1 and its state is kept until W >= end-1+L (L = allowed lateness). A record for a window with end-1+L <= W is
 //!   dropped from it; if it is dropped from all of its windows it goes to the LATE side output. A session record is judged after merging with live sessions.
@@ -224,6 +224,16 @@ struct WindowOp {
 }
 impl WindowOp {
     fn new(kind: Kind, lateness: i64, trigger: Trigger, mode: Accumulation) -> Self {
+        let sized = match kind {
+            Kind::Tumbling { size } => size > 0,
+            // a slide above the size leaves gaps: an on-time record in one would be reported as late
+            Kind::Sliding { size, slide } => 0 < slide && slide <= size,
+            Kind::Session { gap } => gap > 0,
+        };
+        assert!(
+            sized && lateness >= 0,
+            "bad window: {kind:?}, lateness {lateness}"
+        );
         assert!(
             !(matches!(kind, Kind::Session { .. }) && mode == Accumulation::Discarding),
             "discarding sessions would need delta retractions"
@@ -1678,6 +1688,35 @@ fn test_assigners_and_session_retraction() {
         .len(),
         2
     );
+    // parameters that would silently misbehave are refused at construction
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let refused = [
+        (Kind::Tumbling { size: -10 }, 0),
+        (Kind::Sliding { size: 2, slide: 10 }, 0),
+        (
+            Kind::Sliding {
+                size: 10,
+                slide: -1,
+            },
+            0,
+        ),
+        (Kind::Session { gap: 0 }, 0),
+        (Kind::Tumbling { size: 10 }, -1),
+    ]
+    .map(|(kind, lateness)| {
+        std::panic::catch_unwind(|| {
+            WindowOp::new(
+                kind,
+                lateness,
+                Trigger::OnWatermark,
+                Accumulation::Accumulating,
+            );
+        })
+        .is_err()
+    });
+    std::panic::set_hook(hook);
+    assert_eq!(refused, [true; 5]);
     println!("window assigners, session merge with retraction, idempotent commit: ok");
 }
 

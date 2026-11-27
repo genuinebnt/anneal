@@ -351,7 +351,7 @@ def convert(sec, h2, links):
             groups[-1][1].append(k)
     out, seen = [], set()
     for heading, kids in groups:
-        md = page.blocks(kids)
+        md = fix_drawings(page.blocks(kids))
         if not md.strip():
             continue
         heading = heading or "Overview"
@@ -386,6 +386,21 @@ def write_page(out, subject, pid, fields, sections, sources, code=()):
     d = out / subject
     d.mkdir(parents=True, exist_ok=True)
     (d / f"{pid}.toml").write_text("\n".join(lines) + "\n")
+
+
+# drawings whose words run out of their box or off the drawing at the app's fonts: no stylesheet can move them
+DRAWING_FIXES = (
+    ('<text x="520" y="62" class="cb-g-mut">inner: k keys, k+1 children; child i holds keys in [key_i, key_{i+1})</text>',
+     '<text x="592" y="26" class="cb-g-mut">inner: k keys, k+1 children;</text><text x="592" y="42" class="cb-g-mut">child i holds keys in [key_i, key_{i+1})</text>'),
+    *((f'<rect x="{x}" y="164" width="170" height="22" rx="3" class="cb-g-box"></rect>',
+       f'<rect x="{x}" y="164" width="205" height="22" rx="3" class="cb-g-box"></rect>') for x in (60, 320, 580)),
+)
+
+
+def fix_drawings(body):
+    for old, new in DRAWING_FIXES:
+        body = body.replace(old, new)
+    return body
 
 
 # folders of content/cookbook that are written by hand: nothing in them is ever deleted or written

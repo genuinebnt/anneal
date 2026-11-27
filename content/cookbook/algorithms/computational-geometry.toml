@@ -26,7 +26,9 @@ heading = "Design notes"
 body = """
 Everything rests on **one** predicate: orientation(a, b, c) = sign of the cross product (b-a) x (c-a). With f64 the sign of a near-zero cross product is noise (rounding), and a wrong sign makes hulls non-convex and triangulations overlap.
 
-With i64 coordinates (&#124;c&#124; &lt; &#126;1e9) computed in i128 the predicate is **exact**, so every algorithm below is checked against a brute-force oracle with `assert_eq!`, no epsilons. The same trick gives an exact in-circle test (a 3x3 determinant in i128) for Delaunay.
+With i64 coordinates (&#124;c&#124; &lt; &#126;1e9) computed in i128 the predicate is **exact**, so every algorithm below is checked against a brute-force oracle with `assert_eq!`, no epsilons. The same trick gives an exact in-circle test (a 3x3 determinant in i128, &#124;c&#124; &lt;= 3e8) for Delaunay.
+
+The hull needs care there too: the usual far-away "super triangle" silently loses thin hull triangles, so this one uses "ghost" triangles with a corner at infinity. Each insertion scans every triangle, so n points cost O(n&#94;2).
 
 Sections: 1 float-vs-exact orientation, 2 hull (monotone chain vs gift wrapping), 3 segment intersection, 4 point in polygon (ray casting vs winding), 5 shoelace area/centroid, 6 closest pair (divide and conquer), 7 ear clipping, 8 Bowyer-Watson Delaunay + Voronoi dual, 9 rotating calipers, 10 SAT convex collision.
 

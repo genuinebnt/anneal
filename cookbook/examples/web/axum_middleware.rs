@@ -6,6 +6,9 @@
 //! Pattern: a middleware is `async fn(Request, Next) -> Response`. It can inspect/modify the request before
 //! calling `next.run(req)` and the response after. Here: reuse the caller's `x-request-id` or mint one, and
 //! echo it back so logs across services can be joined. Layers wrap routes added BEFORE `.layer(..)`.
+//! LIMITS: the caller's id is copied as it comes (any length the server accepts for a header), so check or replace it before
+//! trusting it in logs, and never use it for access control. The minted ids come from a counter: they repeat after a restart
+//! and between instances. Use a random or time-based unique id (a UUID, say) to join logs across services.
 #![allow(dead_code)]
 use axum::{
     Router,
@@ -45,6 +48,7 @@ async fn main() {
         .route("/ping", get(ping))
         .layer(middleware::from_fn(request_id));
 
+    let mut seen = std::collections::HashSet::new();
     for supplied in [None, None, Some("trace-abc")] {
         let mut b = Request::builder().uri("/ping");
         if let Some(s) = supplied {
@@ -57,6 +61,7 @@ async fn main() {
             .unwrap();
         let id = resp.headers()["x-request-id"].to_str().unwrap().to_string();
         println!("supplied {supplied:?} -> response x-request-id = {id}");
+        assert!(seen.insert(id.clone()), "each request has its own id");
         if let Some(s) = supplied {
             assert_eq!(id, s, "caller's id must be preserved");
         }
