@@ -1636,9 +1636,11 @@ fn core_counts(course: &Course, progress: &Progress) -> (usize, usize) {
     (core.clone().filter(|s| progress.passed.contains_key(&s.def.id)).count(), core.count())
 }
 
-/// What the stage banner shows about `s`: its place in its module and in the course.
+/// What the stage banner shows about `s`: its place in its module (a challenge among the module's challenges, any other stage among its
+/// core stages) and in the course.
 fn stage_info<'a>(course: &Course, progress: &Progress, s: &'a Stage) -> crate::ui::StageInfo<'a> {
-    let in_module: Vec<&Stage> = course.stages.iter().filter(|x| x.module == s.module && x.def.kind != "challenge").collect();
+    let challenge = s.def.kind == "challenge";
+    let in_module: Vec<&Stage> = course.stages.iter().filter(|x| x.module == s.module && (x.def.kind == "challenge") == challenge).collect();
     let of = in_module.len().max(1);
     let at = in_module.iter().position(|x| x.def.id == s.def.id).map_or(of, |i| i + 1);
     let (course_done, course_total) = core_counts(course, progress);
@@ -2484,6 +2486,12 @@ mod learner_screens {
         // not a stage prefix: left alone
         assert_eq!(readable_test_name("plain_name_here"), "plain name here");
         assert_eq!(readable_test_name("short"), "short");
+    }
+
+    #[test]
+    fn a_fix_it_challenge_is_told_apart_by_its_what_to_fix_section() {
+        assert!(is_fix_it("Intro.\n\n## What to fix\n\nThe reader sees stale bytes.\n"));
+        assert!(!is_fix_it("Intro.\n\n## The task\n\nBuild it. Says what to fix in prose.\n"));
     }
 
     #[test]
