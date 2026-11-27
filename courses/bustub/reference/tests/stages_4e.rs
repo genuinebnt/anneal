@@ -336,7 +336,8 @@ fn s4e_04_a_syntax_error_fails_the_open_transaction_too() {
     let mut a = Session::new(&db);
     exec(&mut a, "begin");
     exec(&mut a, "update t set v = 1 where id = 1");
-    assert!(a.execute("selec 1").is_err(), "a syntax error");
+    let e = a.execute("selec 1").expect_err("a syntax error");
+    assert_eq!(e.code(), "42601", "a syntax error has its own code, as in PostgreSQL: {e:?}");
     assert!(a.is_failed(), "it fails the transaction as any other error does");
     assert_eq!(exec(&mut a, "commit"), ["ROLLBACK"], "and the earlier update is not committed");
     assert_eq!(exec(&mut a, "select v from t where id = 1"), ["10"], "it is gone");
@@ -356,6 +357,26 @@ fn s4e_04_a_write_conflict_fails_the_second_writer_and_not_the_first() {
     assert_eq!(exec(&mut a, "commit"), ["COMMIT"], "the winner commits");
     assert_eq!(exec(&mut b, "commit"), ["ROLLBACK"], "the loser's COMMIT is a rollback");
     assert_eq!(exec(&mut a, "select v from t where id = 2"), ["100"], "the winner's value stands");
+}
+
+#[test]
+fn s4e_04_a_duplicate_key_is_a_unique_violation_and_a_key_still_being_written_is_a_conflict() {
+    let db = db();
+    let (mut a, mut b) = (Session::new(&db), Session::new(&db));
+    exec(&mut a, "create table k(id int primary key, v int)");
+    exec(&mut a, "insert into k values (1, 10)");
+    // a key the transaction's snapshot sees: retrying cannot help, so the code is not 40001
+    exec(&mut b, "begin");
+    let e = fail(&mut b, "insert into k values (1, 11)");
+    assert_eq!(e.code(), "23505", "a key that is already committed is a unique violation, which a client must not retry: {e:?}");
+    assert!(b.is_failed(), "the transaction is failed, as after any error");
+    exec(&mut b, "rollback");
+    // a key another transaction is still writing: it may roll back, so running again may succeed
+    exec(&mut a, "begin");
+    exec(&mut a, "insert into k values (2, 20)");
+    let e = fail(&mut b, "insert into k values (2, 21)");
+    assert_eq!(e.code(), "40001", "a key a running transaction holds is a conflict, which a client may retry: {e:?}");
+    exec(&mut a, "rollback");
 }
 
 #[test]

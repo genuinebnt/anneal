@@ -45,11 +45,13 @@ fn abort(db: &BusTubInstance, txn: &Arc<Transaction>) {
     assert_eq!(txn.state(), TransactionState::Aborted, "in helper `abort`");
 }
 
-/// Runs a statement in a transaction; its success.
+/// Runs a statement in a transaction; its success. A statement that fails with an error (a unique violation, say) has failed too.
 fn try_run(db: &BusTubInstance, txn: &Arc<Transaction>, sql: &str) -> (bool, String) {
     let mut out = String::new();
-    let ok = db.execute_sql_txn(sql, &mut SimpleStreamWriter::new(&mut out, true, " "), txn).unwrap_or_else(|e| panic!("{sql}: {e}"));
-    (ok, out)
+    match db.execute_sql_txn(sql, &mut SimpleStreamWriter::new(&mut out, true, " "), txn) {
+        Ok(ok) => (ok, out),
+        Err(e) => (false, e.to_string()),
+    }
 }
 
 fn run(db: &BusTubInstance, txn: &Arc<Transaction>, sql: &str) {
@@ -1368,7 +1370,8 @@ fn s4b_08_index_concurrent_insert_test() {
                                 &mut SimpleStreamWriter::new(&mut out, true, " "),
                                 &txn,
                             )
-                            .unwrap()
+                            .unwrap_or(false)
+                        // a key somebody already committed is a unique violation: this insert lost
                         {
                             assert!(db.txn_manager.commit(&txn).unwrap(), "cannot commit??");
                             won.push(true);

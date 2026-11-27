@@ -18,7 +18,7 @@ pub enum Token {
 }
 
 pub fn parse_error(msg: impl std::fmt::Display) -> Exception {
-    Exception::new(ExceptionType::Invalid, format!("Query failed to parse: {msg}"))
+    Exception::new(ExceptionType::Invalid, format!("Query failed to parse: {msg}")).with_sqlstate("42601")
 }
 
 /// Splits `sql` into tokens. Whitespace and comments are skipped, words are lower-cased, `'strings'` use `''` for a quote, and a two-character
