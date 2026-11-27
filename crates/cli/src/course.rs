@@ -1625,7 +1625,7 @@ fn print_hint(course_id: &str, s: &Stage, n: usize, no_pager: bool) -> anyhow::R
     if opened {
         eprintln!("Hint {n} opened. When stage {} passes, the website will count it as passed with help.", s.def.id);
     }
-    let text = format!("{}\n\n{}", term::bold(&format!("Stage {} · hint {n}: {title}", s.def.id)), render::render(&md, term::text_width(), term::color_on()));
+    let text = format!("{}\n\n{}", term::bold(&format!("Stage {} · hint {n}: {title}", s.def.id)), render::render_page(&md, term::text_width(), term::color_on(), &s.def.id, false));
     term::page(&text, no_pager);
     Ok(())
 }
@@ -1743,7 +1743,7 @@ fn tests_command(stage: Option<&str>) -> anyhow::Result<ExitCode> {
         println!("  {mark} {}", crate::ui::clip(&readable_test_name(n), room));
     }
     println!("\n{}", dim("✓ passed · ✗ failed · · not run yet"));
-    println!("Run them:  anneal course test       One of them:  anneal course test --filter <words of its name, with _>");
+    println!("Run them:  anneal course test {id}       One of them:  anneal course test {id} --filter <words of its name, with _>", id = s.def.id);
     let hints = render::split_hints(&s.readme).1.len();
     if hints > 0 {
         println!("Stuck?     anneal course show {} --hint 1   ({hints} hint{}; the website counts the stage as passed with help)", s.def.id, if hints == 1 { "" } else { "s" });
@@ -1786,6 +1786,11 @@ fn stage_files(repo: &Path, id: &str) -> Vec<(String, usize)> {
     out
 }
 
+/// A challenge that hands over broken code to repair (its page has `## What to fix`), rather than a spec to build.
+fn is_fix_it(readme: &str) -> bool {
+    readme.lines().any(|l| l.trim_end() == "## What to fix")
+}
+
 fn print_stage(repo: &Path, course: &Course, progress: &Progress, s: &Stage, no_pager: bool, answers: bool) {
     let (body, hints) = render::split_hints(&s.readme);
     let (color, width) = (term::color_on(), term::text_width());
@@ -1795,13 +1800,19 @@ fn print_stage(repo: &Path, course: &Course, progress: &Progress, s: &Stage, no_
         let list = files.iter().map(|(f, n)| format!("  {f}  ({n} place{})", if *n == 1 { "" } else { "s" })).collect::<Vec<_>>().join("\n");
         text.push_str(&format!("{}\n{list}\n{}\n\n", term::bold("Where to work"), term::dim(&format!("each place is a stub marked {}: find them with  grep -rn '{}:' src", s.def.id, s.def.id))));
     }
-    text.push_str(&if answers { render::render_with_answers(body, width, color) } else { render::render(body, width, color) });
-    text.push('\n');
-    text.push_str(&render::render("Your way: the tests call only the public items named above. How you build the inside is up to you; change the given structs and helpers if you want a different design.", width, color));
+    // "Your way" closes the part about the task, where the hints were; the sections after the hints (Performance, Experiment, ...) follow.
+    // A fix-it challenge hands over code that is already designed: there is nothing to build your own way.
+    let mut page = body;
+    if !is_fix_it(&s.readme) {
+        let your_way = "Your way: the tests call only the public items named above. How you build the inside is up to you; change the given structs and helpers if you want a different design.\n\n";
+        let at = s.readme.find("\n## Hints\n").map_or(page.len(), |i| i + 1).min(page.len());
+        page.insert_str(at, your_way);
+    }
+    text.push_str(&render::render_page(&page, width, color, &s.def.id, answers));
     if !s.resources.is_empty() {
         text.push_str(&format!("\n{}\n{}\n", term::bold("Module resources"), s.resources.trim_end()));
     }
-    text.push_str(&format!("\n{} {}\n{}\n", term::bold("Tests:"), s.def.tests.iter().map(|t| format!("cargo test --test {}", t.replace("::", " -- "))).collect::<Vec<_>>().join("   "), term::dim(&format!("`anneal course tests {}` lists the test cases; `anneal course test` runs them", s.def.id))));
+    text.push_str(&format!("\n{} {}\n{}\n", term::bold("Tests:"), s.def.tests.iter().map(|t| format!("cargo test --test {}", t.replace("::", " -- "))).collect::<Vec<_>>().join("   "), term::dim(&format!("`anneal course tests {id}` lists the test cases; `anneal course test {id}` runs them", id = s.def.id))));
     if !hints.is_empty() {
         let titles = hints.iter().enumerate().map(|(i, (t, _))| format!("{}. {t}", i + 1)).collect::<Vec<_>>().join("  ");
         text.push_str(&format!("\n{} {titles}\n{}\n", term::bold("Hints:"), term::dim(&format!("open one with `anneal course show {} --hint 1`; the website then counts the stage as passed with help once it passes", s.def.id))));
