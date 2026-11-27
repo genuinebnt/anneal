@@ -11,12 +11,19 @@
 
 In `src/execution/executors/limit_executor.rs` (the struct and `new` are given; `self.limit` is the plan's limit, `self.emitted` the count so far):
 
-- `init`: `emitted = 0` and initialise the child. `next`: if `emitted >= limit` return `false` **without touching the child**; otherwise ask the child for at most `batch_size.min(limit - emitted)` tuples; if it has none return `false`; truncate the batch (and the rids) to that many (a child may return more than it was asked for), add the batch length to `emitted`, and return `true` if the batch is not empty.
+- **Limit returns the child's first `limit` rows** (all of them if the child has fewer), at most `batch_size` per call, `true` exactly when the batch is not empty. **Once it has returned `limit` rows it never asks the child for more**, and it never passes on more than it was asked for, even from a child that returns extra. `init` starts over.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `init`: `emitted = 0` and initialise the child. `next`: if `emitted >= limit` return `false` **without touching the child**; otherwise ask the child for at most `batch_size.min(limit - emitted)` tuples; if it has none return `false`; truncate the batch (and the rids) to that many (a child may return more than it was asked for), add the batch length to `emitted`, and return `true` if the batch is not empty.
 
 In `src/execution/executors/topn_executor.rs` (`HeapEntry`, a wrapper whose `Ord` makes the **worst** kept tuple the greatest, `new`, `get_num_in_heap` and the check executor are given):
 
-- `init`: initialise the child; read all its batches; for each tuple make its sort key (`generate_sort_key`) and a `HeapEntry { entry: (key, tuple), seq, cmp }` (`seq` counts arrivals); push it while the heap holds fewer than `n`; otherwise, if the new entry is smaller than the heap's greatest (`peek`), pop that one and push the new one. After each tuple store `heap.len()` in `self.num_in_heap`. At the end pop the heap into `self.result` in **output order** (best first). An `n` of 0 reads nothing.
-- `next`: hand out the next at most `batch_size` tuples of `self.result` (a default rid with each).
+- **After `init`, top-N holds the best `n` rows of the child in output order**: the first `n` of a stable sort, so ties keep the earlier row. `next` hands them out, at most `batch_size` per call with a default rid. An `n` of 0 reads nothing.
+- **It never keeps more than `n` rows**: after each tuple, `self.num_in_heap` records how many it holds, and the check executor tests it. Memory is `O(n)`, not `O(rows)`.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `init`: initialise the child; read all its batches; for each tuple make its sort key (`generate_sort_key`) and a `HeapEntry { entry: (key, tuple), seq, cmp }` (`seq` counts arrivals); push it while the heap holds fewer than `n`; otherwise, if the new entry is smaller than the heap's greatest (`peek`), pop that one and push the new one. After each tuple store `heap.len()` in `self.num_in_heap`. At the end pop the heap into `self.result` in **output order** (best first). An `n` of 0 reads nothing.
+> - `next`: hand out the next at most `batch_size` tuples of `self.result` (a default rid with each).
 
 The tests: exact scenarios (limit returns the first n rows; larger than the input returns everything; not a multiple of the batch; the rest of the child is never read; after `order by` and in a subquery; `init` starts over; the best n in order; n larger than the input and zero; ties keep the earlier rows; several keys, NULLs and a big input; the heap never holds more than n; re-initialising), and a property: **for random rows and keys, top-N and `order by .. limit n` are exactly the first n rows of the stable sort, and `limit n` returns `min(n, rows)` rows**, for any n including 0 and more than the table has.
 
