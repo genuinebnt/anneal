@@ -100,12 +100,7 @@ impl<K: RobinHoodHash + Clone + PartialEq> RobinHoodHashSet<K> {
         todo!("0c-02: the bucket found for the key, or bucket_count() if none")
     }
 
-    /// The bucket of `key`: probe from its home until an empty bucket, past tombstones and past other keys.
-    ///
-    /// A textbook Robin Hood lookup also stops at a key that is closer to its home than we are to ours (our key would have displaced
-    /// it). With tombstones that rule is **unsafe**: `remove` leaves a tombstone, a later insert may put a key with a short probe
-    /// distance into it, and a key that was already further on is then unreachable if the lookup stops in front of that new key.
-    // TODO(0c-02): a private lookup of your own: probe from the home bucket until an empty bucket; an equal live key is the answer; tombstones and other keys are probed past
+    // TODO(0c-02): private helpers of your own, if you want them (a lookup shared by contains, get_bucket and remove, for instance)
 
     /// Removes `key`, leaving a tombstone. Returns whether it was there.
     pub fn remove(&self, key: &K) -> bool {

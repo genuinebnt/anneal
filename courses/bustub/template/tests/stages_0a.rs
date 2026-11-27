@@ -324,6 +324,47 @@ fn s0a_03_four_writers_and_four_readers() {
 }
 
 #[test]
+fn s0a_03_a_reader_never_waits_for_a_writer_even_one_stuck_in_a_drop() {
+    use std::sync::mpsc;
+    use std::sync::Mutex;
+    use std::time::Duration;
+    // A value whose drop blocks until it is released. Overwriting it makes the writer drop the old version, and the drop blocks: a
+    // store that does that while holding the lock readers need would keep every reader waiting.
+    struct Blocker {
+        started: Mutex<mpsc::Sender<()>>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+    impl Drop for Blocker {
+        fn drop(&mut self) {
+            let _ = self.started.lock().unwrap().send(());
+            let _ = self.release.lock().unwrap().recv_timeout(Duration::from_secs(10));
+        }
+    }
+    let store = Arc::new(TrieStore::new());
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    store.put("a", 1u32);
+    store.put("slow", Blocker { started: Mutex::new(started_tx), release: Mutex::new(release_rx) });
+    let writer = {
+        let store = store.clone();
+        std::thread::spawn(move || store.put("slow", 0u32))
+    };
+    started_rx.recv_timeout(Duration::from_secs(10)).expect("overwriting the value drops it once no version holds it any more");
+    // the writer is now stuck inside the drop of the old value
+    let (tx, rx) = mpsc::channel();
+    {
+        let store = store.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(store.get::<u32>("a").map(|g| *g));
+        });
+    }
+    let got = rx.recv_timeout(Duration::from_secs(2));
+    release_tx.send(()).unwrap();
+    writer.join().unwrap();
+    assert_eq!(got, Ok(Some(1)), "a reader must not wait for a writer, not even one stuck cleaning up the old version: drop it outside the lock readers take");
+}
+
+#[test]
 fn s0a_03_readers_are_not_blocked_by_a_writer_building_a_big_trie() {
     let store = Arc::new(TrieStore::new());
     for i in 0..1000u32 {
