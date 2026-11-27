@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use anneal_content::course::{FormerStage, check_renamed_from, former_ids, passed_through_former};
 use anyhow::{Context, bail};
 use clap::Subcommand;
 
@@ -295,6 +296,9 @@ struct StageToml {
     /// Concept articles worth reading beyond what the stage needs.
     #[serde(default)]
     concepts_optional: Vec<String>,
+    /// The stages this one replaces: it counts as passed when every one of them passed.
+    #[serde(default)]
+    renamed_from: Vec<FormerStage>,
 }
 
 #[derive(Debug)]
@@ -387,6 +391,7 @@ impl Course {
                 bail!("stage id {} is used twice (positions {prev} and {})", s.def.id, s.rank);
             }
         }
+        check_renamed_from(stages.iter().map(|s| (s.def.id.as_str(), s.def.renamed_from.as_slice()))).map_err(anyhow::Error::msg)?;
         Ok(Course { meta, stages, module_files })
     }
 
@@ -785,8 +790,15 @@ const STATE_DIR: &str = ".anneal";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Progress {
-    /// stage id -> when it first passed.
+    /// stage id -> when it first passed. Entries of stages that were renamed stay: the stages that replace them read them.
     passed: BTreeMap<String, Passed>,
+}
+
+impl Progress {
+    /// The stage passed under its own id or, without an entry of its own, every stage it replaces (`renamed_from`) passed.
+    fn has_passed(&self, s: &Stage) -> bool {
+        self.passed.contains_key(&s.def.id) || passed_through_former(&s.def.renamed_from, |id| self.passed.contains_key(id))
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -838,7 +850,7 @@ fn learner_course(repo: &Path) -> anyhow::Result<Course> {
 }
 
 fn current<'a>(course: &'a Course, progress: &Progress) -> Option<&'a Stage> {
-    course.stages.iter().find(|s| !s.optional && !progress.passed.contains_key(&s.def.id))
+    course.stages.iter().find(|s| !s.optional && !progress.has_passed(s))
 }
 
 fn head_commit(repo: &Path) -> String {
@@ -1436,24 +1448,35 @@ fn archive_progress(repo: &Path) -> anyhow::Result<Option<PathBuf>> {
     Ok(Some(to))
 }
 
+/// Removes the passes of these stages, and those of the stages they replace (`renamed_from`), which would otherwise pass them again.
+/// The caller keeps a copy of the progress first.
+fn forget(progress: &mut Progress, stages: &[&Stage]) {
+    for s in stages {
+        progress.passed.remove(&s.def.id);
+        for old in former_ids(&s.def.renamed_from) {
+            progress.passed.remove(old);
+        }
+    }
+}
+
 /// `anneal course reset`: forgets which stages passed, for one module or for the whole course. The learner's code stays as it is.
 fn reset(module: Option<&str>, all: bool, yes: bool) -> anyhow::Result<ExitCode> {
     use std::io::{BufRead, IsTerminal, Write};
     let repo = find_repo()?;
     let course = learner_course(&repo)?;
     let mut progress = load_progress(&repo);
-    let (ids, what): (Vec<String>, String) = match (module, all) {
+    let (stages, what): (Vec<&Stage>, String) = match (module, all) {
         (Some(code), false) => {
-            let ids: Vec<String> = course.stages.iter().filter(|s| s.module == code).map(|s| s.def.id.clone()).collect();
-            if ids.is_empty() {
+            let stages: Vec<&Stage> = course.stages.iter().filter(|s| s.module == code).collect();
+            if stages.is_empty() {
                 bail!("no module {code:?}; `anneal course status` lists them");
             }
-            (ids, format!("module {code}"))
+            (stages, format!("module {code}"))
         }
-        (None, true) => (course.stages.iter().map(|s| s.def.id.clone()).collect(), "the whole course".to_owned()),
+        (None, true) => (course.stages.iter().collect(), "the whole course".to_owned()),
         _ => bail!("say what to reset: `--module 1a` or `--all`"),
     };
-    let done = ids.iter().filter(|id| progress.passed.contains_key(*id)).count();
+    let done = stages.iter().filter(|s| progress.has_passed(s)).count();
     println!("This forgets {done} passed stage{} of {what}. Your code is not touched, and files already unlocked stay.", if done == 1 { "" } else { "s" });
     if !yes {
         if !std::io::stdin().is_terminal() {
@@ -1469,9 +1492,7 @@ fn reset(module: Option<&str>, all: bool, yes: bool) -> anyhow::Result<ExitCode>
         }
     }
     let archived = archive_progress(&repo)?;
-    for id in &ids {
-        progress.passed.remove(id);
-    }
+    forget(&mut progress, &stages);
     save_progress(&repo, &progress)?;
     println!("Reset {what}.");
     if let Some(path) = archived {
@@ -1590,7 +1611,7 @@ fn status(json: bool) -> anyhow::Result<ExitCode> {
     let (done, total) = core_counts(&course, &progress);
     let (optional_done, optional_total, optional_modules) = optional_counts(&course, &progress);
     let challenges = course.stages.iter().filter(|s| s.def.kind == "challenge").count();
-    let challenges_done = course.stages.iter().filter(|s| s.def.kind == "challenge" && progress.passed.contains_key(&s.def.id)).count();
+    let challenges_done = course.stages.iter().filter(|s| s.def.kind == "challenge" && progress.has_passed(s)).count();
     let mut modules: Vec<(String, String, Vec<&Stage>)> = Vec::new();
     for s in &course.stages {
         match modules.last_mut() {
@@ -1602,12 +1623,12 @@ fn status(json: bool) -> anyhow::Result<ExitCode> {
         let mods: Vec<serde_json::Value> = modules
             .iter()
             .map(|(code, title, stages)| {
-                let d = stages.iter().filter(|s| core(s)).filter(|s| progress.passed.contains_key(&s.def.id)).count();
+                let d = stages.iter().filter(|s| core(s)).filter(|s| progress.has_passed(s)).count();
                 serde_json::json!({
                     "code": code, "title": title, "done": d, "total": stages.iter().filter(|s| core(s)).count(), "optional": optional_modules.contains(code),
                     "stages": stages.iter().map(|s| serde_json::json!({
                         "id": s.def.id, "title": s.def.title, "difficulty": s.def.difficulty, "kind": s.def.kind,
-                        "state": if progress.passed.contains_key(&s.def.id) { "done" } else if Some(&s.def.id) == cur.as_ref() { "current" } else { "todo" },
+                        "state": if progress.has_passed(s) { "done" } else if Some(&s.def.id) == cur.as_ref() { "current" } else { "todo" },
                     })).collect::<Vec<_>>(),
                 })
             })
@@ -1624,16 +1645,16 @@ fn status(json: bool) -> anyhow::Result<ExitCode> {
         let s = if optional_modules.len() == 1 { "" } else { "s" };
         println!("{}", dim(&format!("{optional_done} of {optional_total} stages in the optional module{s} {} (not part of the course)", optional_modules.join(", "))));
     }
-    let strip: Vec<(String, usize, usize)> = modules.iter().map(|(code, _, stages)| (code.clone(), stages.iter().filter(|s| core(s)).filter(|s| progress.passed.contains_key(&s.def.id)).count(), stages.iter().filter(|s| core(s)).count())).collect();
+    let strip: Vec<(String, usize, usize)> = modules.iter().map(|(code, _, stages)| (code.clone(), stages.iter().filter(|s| core(s)).filter(|s| progress.has_passed(s)).count(), stages.iter().filter(|s| core(s)).count())).collect();
     let here = cur.as_deref().and_then(|id| course.stage(id).ok()).map(|s| s.module.clone());
     println!("\n{}", crate::ui::roadmap(&strip, here.as_deref(), term::text_width()));
     for (code, title, stages) in &modules {
         let n = stages.iter().filter(|s| core(s)).count();
-        let d = stages.iter().filter(|s| core(s)).filter(|s| progress.passed.contains_key(&s.def.id)).count();
+        let d = stages.iter().filter(|s| core(s)).filter(|s| progress.has_passed(s)).count();
         let header = format!("{code}  {title}  ({d}/{n})  {}", bar(d, n, 10));
         println!("\n{}", if d == n { green(&header) } else { header });
         for s in stages {
-            let mark = if progress.passed.contains_key(&s.def.id) {
+            let mark = if progress.has_passed(s) {
                 green("✓")
             } else if Some(&s.def.id) == cur.as_ref() {
                 bold("→")
@@ -1703,7 +1724,7 @@ fn local_hint(readme: &str, stage: &str, n: usize) -> anyhow::Result<(String, St
 /// optional modules have counts of their own. (passed, all).
 fn core_counts(course: &Course, progress: &Progress) -> (usize, usize) {
     let core = course.stages.iter().filter(|s| !s.optional);
-    (core.clone().filter(|s| progress.passed.contains_key(&s.def.id)).count(), core.count())
+    (core.clone().filter(|s| progress.has_passed(s)).count(), core.count())
 }
 
 /// The stages of optional modules, challenges left out: (passed, all, the modules' codes).
@@ -1711,7 +1732,7 @@ fn optional_counts(course: &Course, progress: &Progress) -> (usize, usize, Vec<S
     let stages: Vec<&Stage> = course.stages.iter().filter(|s| s.optional && s.def.kind != "challenge").collect();
     let mut modules: Vec<String> = stages.iter().map(|s| s.module.clone()).collect();
     modules.dedup();
-    (stages.iter().filter(|s| progress.passed.contains_key(&s.def.id)).count(), stages.len(), modules)
+    (stages.iter().filter(|s| progress.has_passed(s)).count(), stages.len(), modules)
 }
 
 /// What a course holds, for `init`: "169 stages in 31 modules, plus 143 challenges and 5 stages in the optional module r".
@@ -2256,7 +2277,7 @@ fn test(stage: Option<&str>, opts: TestOpts, filter: Option<&str>) -> anyhow::Re
     let earlier: Vec<String> = if only {
         Vec::new()
     } else {
-        course.stages.iter().filter(|s| s.rank < target.rank && (progress.passed.contains_key(&s.def.id) || (all && s.def.kind != "challenge"))).flat_map(|s| s.def.tests.clone()).collect()
+        course.stages.iter().filter(|s| s.rank < target.rank && (progress.has_passed(s) || (all && s.def.kind != "challenge"))).flat_map(|s| s.def.tests.clone()).collect()
     };
     if !earlier.is_empty() {
         let mut uniq = earlier;
@@ -2284,13 +2305,13 @@ fn test(stage: Option<&str>, opts: TestOpts, filter: Option<&str>) -> anyhow::Re
         println!("{} earlier tests still pass.", reg.tests.len());
     }
     report_to_web(&stage_tests, None);
-    if !progress.passed.contains_key(&target.def.id) {
+    if !progress.has_passed(target) {
         let at = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         progress.passed.insert(target.def.id.clone(), Passed { at, commit: head_commit(&repo), ms });
         save_progress(&repo, &progress)?;
         let (course_done, course_total) = core_counts(&course, &progress);
         let module_core: Vec<&Stage> = course.stages.iter().filter(|s| s.module == target.module && s.def.kind != "challenge").collect();
-        let module_done = module_core.iter().filter(|s| progress.passed.contains_key(&s.def.id)).count();
+        let module_done = module_core.iter().filter(|s| progress.has_passed(s)).count();
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let last_day = progress.passed.values().filter(|p| p.at + 86_400 >= now).count();
         println!("\n{}", crate::ui::stage_complete(&crate::ui::StageDone { id: &target.def.id, title: &target.def.title, course_done, course_total, took_ms: ms, last_day, module_done, module_total: module_core.len() }));
@@ -2832,7 +2853,7 @@ mod learner_screens {
             .iter()
             .enumerate()
             .map(|(i, (id, module, kind))| Stage {
-                def: StageToml { id: (*id).into(), title: format!("title {id}"), kind: (*kind).into(), difficulty: "easy".into(), tests: vec![format!("stages_{module}::s{}", id.replace('-', "_"))], retest: false, concepts: vec![], concepts_optional: vec![] },
+                def: StageToml { id: (*id).into(), title: format!("title {id}"), kind: (*kind).into(), difficulty: "easy".into(), tests: vec![format!("stages_{module}::s{}", id.replace('-', "_"))], retest: false, concepts: vec![], concepts_optional: vec![], renamed_from: vec![] },
                 module: (*module).into(),
                 optional: optional_modules.contains(module) || *kind == "challenge",
                 module_title: format!("module {module}"),
@@ -2855,6 +2876,72 @@ mod learner_screens {
         assert_eq!(optional_counts(&course, &p), (1, 2, vec!["r".to_owned()]));
         assert_eq!(course_size(&course), "3 stages in 2 modules, plus 2 challenges and 2 stages in the optional module r");
         assert_eq!(current(&course, &p).map(|s| s.def.id.as_str()), Some("1a-02"), "the same path `current` walks");
+    }
+
+    fn passed(ids: &[&str]) -> Progress {
+        let mut p = Progress::default();
+        for id in ids {
+            p.passed.insert((*id).into(), Passed { at: 0, commit: String::new(), ms: 0 });
+        }
+        p
+    }
+
+    #[test]
+    fn a_stage_passes_through_the_stages_it_replaces_when_every_one_passed() {
+        let mut course = course_of(&[("1a-01", "1a", "build"), ("1a-02", "1a", "build"), ("1a-03", "1a", "build"), ("1b-01", "1b", "build"), ("1b-02", "1b", "boss"), ("1b-03", "1b", "build")], &[]);
+        let one = |id: &str| FormerStage::Id(id.into());
+        let twice = FormerStage::Ids(vec!["0y-06".into(), "0x-06".into()]);
+        // renamed; split in two; merged; merged with a stage renamed twice
+        let former = [vec![one("0x-01")], vec![one("0x-02")], vec![one("0x-02")], vec![one("0x-03"), one("0x-04")], vec![one("0x-05"), twice]];
+        for (s, f) in course.stages.iter_mut().zip(former) {
+            s.def.renamed_from = f;
+        }
+        let p = passed(&["0x-01", "0x-02", "0x-03", "0x-05", "0x-06"]);
+        let state: Vec<bool> = course.stages.iter().map(|s| p.has_passed(s)).collect();
+        assert_eq!(state, [true, true, true, false, true, false], "a merge needs every half; 0x-04 never passed");
+        assert_eq!(core_counts(&course, &p), (4, 6));
+        assert_eq!(current(&course, &p).map(|s| s.def.id.as_str()), Some("1b-01"));
+        assert_eq!(unlocked_modules(&course, &p), ["1a", "1b"], "module 1a counts as done, so 1b unlocks");
+        let own = passed(&["0x-01", "0x-02", "0x-03", "0x-05", "0x-06", "1b-01"]);
+        assert_eq!(current(&course, &own).map(|s| s.def.id.as_str()), Some("1b-03"), "a stage's own pass counts as before");
+        assert_eq!(p.passed.len(), 5, "reading the progress keeps every old entry");
+    }
+
+    #[test]
+    fn a_reset_forgets_the_entries_of_the_stages_a_stage_replaces() {
+        let mut course = course_of(&[("1a-01", "1a", "build"), ("1b-01", "1b", "build")], &[]);
+        course.stages[0].def.renamed_from = vec![FormerStage::Id("0x-01".into())];
+        course.stages[1].def.renamed_from = vec![FormerStage::Id("0x-02".into())];
+        let mut p = passed(&["0x-01", "0x-02", "1a-01"]);
+        forget(&mut p, &[&course.stages[0]]);
+        assert!(!p.has_passed(&course.stages[0]), "the old entry would pass it again");
+        assert_eq!(p.passed.keys().collect::<Vec<_>>(), ["0x-02"], "other modules keep theirs");
+    }
+
+    #[test]
+    fn a_learner_course_reads_renamed_from_and_refuses_a_current_id() {
+        let root = std::env::temp_dir().join(format!("anneal-cli-renamed-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let write = |second: &str| {
+            for (dir, id, extra) in [("01", "1a-01", ""), ("02", "1a-02", second)] {
+                let st = root.join("modules/01-a/stages").join(dir);
+                fs::create_dir_all(&st).unwrap();
+                fs::write(st.join("stage.toml"), format!("id = \"{id}\"\ntitle = \"S\"\nkind = \"build\"\ndifficulty = \"easy\"\ntests = [\"t\"]\n{extra}\n")).unwrap();
+                fs::write(st.join("stage.md"), "Intro.\n").unwrap();
+            }
+        };
+        fs::create_dir_all(root.join("modules/01-a")).unwrap();
+        fs::write(root.join("course.toml"), "id = \"t\"\ntitle = \"T\"\nrepo_name = \"t\"\n").unwrap();
+        fs::write(root.join("modules/01-a/module.toml"), "code = \"1a\"\ntitle = \"M\"\n").unwrap();
+        write("renamed_from = [\"0x-01\", [\"0y-02\", \"0x-02\"]]");
+        let course = Course::load(&root).expect("loads");
+        let s = course.stage("1a-02").unwrap();
+        assert_eq!(former_ids(&s.def.renamed_from).collect::<Vec<_>>(), ["0x-01", "0y-02", "0x-02"]);
+        assert!(passed(&["0x-01", "0x-02"]).has_passed(s));
+        write("renamed_from = [\"1a-01\"]");
+        let err = Course::load(&root).expect_err("a current id is refused").to_string();
+        assert!(err.contains("current stage"), "{err}");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -2948,7 +3035,7 @@ mod learner_screens {
         )
         .unwrap();
         let stage = |tests: &[&str]| Stage {
-            def: StageToml { id: "9z-01".into(), title: "t".into(), kind: "build".into(), difficulty: "easy".into(), tests: tests.iter().map(|t| (*t).to_owned()).collect(), retest: false, concepts: vec![], concepts_optional: vec![] },
+            def: StageToml { id: "9z-01".into(), title: "t".into(), kind: "build".into(), difficulty: "easy".into(), tests: tests.iter().map(|t| (*t).to_owned()).collect(), retest: false, concepts: vec![], concepts_optional: vec![], renamed_from: vec![] },
             module: "9z".into(),
             optional: false,
             module_title: "m".into(),

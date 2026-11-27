@@ -7,8 +7,11 @@
    `content/retired.txt` (removed on purpose; its progress is deleted at startup). Progress is stored by id
    (`<track code>-<slug>`, or `lc-<slug>` for the DSA lists), so a renamed, moved or deleted problem would otherwise
    vanish from every dashboard.
-2. Migrations are append-only: editing or deleting an applied one makes the API refuse to start.
-3. A new migration may not destroy stored data: DROP TABLE, DROP COLUMN, TRUNCATE, DELETE FROM, ALTER COLUMN ... TYPE
+2. Every course stage id at <base-rev> (`id` in courses/<course>/modules/*/stages/*/stage.toml) must still be a stage of
+   that course or be listed in some stage's `renamed_from`, and every id listed in a `renamed_from` at <base-rev> must still
+   be listed (or be a stage again). Course progress is stored by stage id, and a stage reads its former ids' progress.
+3. Migrations are append-only: editing or deleting an applied one makes the API refuse to start.
+4. A new migration may not destroy stored data: DROP TABLE, DROP COLUMN, TRUNCATE, DELETE FROM, ALTER COLUMN ... TYPE
    or a bare UPDATE of every row fail unless the file says `-- allow-data-loss: <why>` (the owner's rule: progress is
    never lost; add columns and tables, copy, then stop reading the old ones).
 
@@ -75,6 +78,65 @@ def current():
     return ids, renamed
 
 
+STAGE_TOML = re.compile(r"^courses/([^/]+)/modules/[^/]+/stages/[^/]+/stage\.toml$")
+
+
+def former_ids(meta):
+    """Every id in a stage's `renamed_from`: an entry is an id, or a list of the ids of a stage renamed more than once."""
+    for entry in meta.get("renamed_from", []):
+        yield from ([entry] if isinstance(entry, str) else entry)
+
+
+def stages_of(files):
+    """{course: (stage ids, ids listed in renamed_from)} from (path, stage.toml text) pairs."""
+    out = {}
+    for path, text in files:
+        course = STAGE_TOML.match(path).group(1)
+        meta = tomllib.loads(text)
+        ids, former = out.setdefault(course, (set(), set()))
+        ids.add(meta["id"])
+        former.update(former_ids(meta))
+    return out
+
+
+def stages_at(rev):
+    paths = [p for p in git("ls-tree", "-r", "--name-only", rev, "--", "courses").splitlines() if STAGE_TOML.match(p)]
+    if not paths:
+        return {}
+    batch = subprocess.run(["git", "cat-file", "--batch"], cwd=ROOT, check=True, capture_output=True,
+                           input="".join(f"{rev}:{p}\n" for p in paths).encode()).stdout
+    files, at = [], 0
+    for path in paths:
+        header_end = batch.index(b"\n", at)
+        size = int(batch[at:header_end].split()[2])
+        files.append((path, batch[header_end + 1:header_end + 1 + size].decode()))
+        at = header_end + 1 + size + 1
+    return stages_of(files)
+
+
+def current_stages():
+    paths = sorted(str(p.relative_to(ROOT)) for p in ROOT.glob("courses/*/modules/*/stages/*/stage.toml"))
+    return stages_of((p, (ROOT / p).read_text()) for p in paths)
+
+
+def stage_problems(base, now):
+    """What a change of course stages would orphan, comparing {course: (ids, former ids)} at the base and now."""
+    problems = []
+    for course, (ids, former) in sorted(base.items()):
+        now_ids, now_former = now.get(course, (set(), set()))
+        for gone in sorted(ids - now_ids - now_former):
+            problems.append(
+                f"course {course}: stage {gone} disappeared. If it was renamed, moved, split or merged, add renamed_from = "
+                f"[\"{gone}\"] to the stage.toml of every stage that replaces it; progress stored under {gone} then counts for them."
+            )
+        for dropped in sorted(former - now_ids - now_former):
+            problems.append(
+                f"course {course}: {dropped} is no longer listed in any renamed_from, so the progress stored under it stops "
+                f"counting. A stage renamed again keeps its old ids, newest first: renamed_from = [[\"<previous id>\", \"{dropped}\"]]."
+            )
+    return problems
+
+
 DESTRUCTIVE = [
     (r"\bDROP\s+TABLE\b", "DROP TABLE"),
     (r"\bDROP\s+COLUMN\b", "DROP COLUMN"),
@@ -108,6 +170,9 @@ def main():
             "progress), list its id in content/retired.txt."
         )
 
+    stages = current_stages()
+    problems += stage_problems(stages_at(base), stages)
+
     for line in git("diff", "--name-status", base, "HEAD", "--", "crates/api/migrations").splitlines():
         status, *paths = line.split("\t")
         if not status.startswith("A"):
@@ -125,7 +190,9 @@ def main():
         print(f"::error::{p}")
     if problems:
         sys.exit(1)
-    print(f"progress safety: ok ({len(ids)} problems, {len(renamed)} renames, compared with {base[:12]})")
+    stage_count = sum(len(i) for i, _ in stages.values())
+    print(f"progress safety: ok ({len(ids)} problems, {len(renamed)} renames, {stage_count} course stages, compared with {base[:12]})")
 
 
-main()
+if __name__ == "__main__":
+    main()

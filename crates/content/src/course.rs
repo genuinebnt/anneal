@@ -109,6 +109,77 @@ struct StageToml {
     /// Not part of BusTub: an extra the course adds (a challenge is always beyond BusTub).
     #[serde(default)]
     beyond: bool,
+    /// The stages this one replaces (see [`FormerStage`]).
+    #[serde(default)]
+    renamed_from: Vec<FormerStage>,
+}
+
+/// One entry of a stage's `renamed_from`: a stage that no longer exists under its id, whose stored progress this stage takes
+/// over. A renamed or moved stage lists its old id; each stage of a split lists the stage it came from; a merged stage lists
+/// every stage it merges. A stage that was renamed more than once is one entry with all its ids, newest first:
+/// `renamed_from = ["2a-02", ["2a-03", "1c-05"]]` replaces `2a-02` and the stage once called `1c-05`, then `2a-03`. Renaming a
+/// stage that itself replaced several keeps one entry per stage it replaced, each led by its newest id:
+/// `[["2b-01", "2a-01"], ["2b-01", "2a-02"]]` is `2b-01`, which merged `2a-01` and `2a-02`.
+///
+/// Progress is stored by stage id and never moved: a stage with no stored state of its own reads its former stages'
+/// (see [`former_states`]). A stage passes that way only when every former stage passed.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum FormerStage {
+    Id(String),
+    Ids(Vec<String>),
+}
+
+impl FormerStage {
+    /// The ids the stage had, newest first.
+    pub fn ids(&self) -> &[String] {
+        match self {
+            FormerStage::Id(id) => std::slice::from_ref(id),
+            FormerStage::Ids(ids) => ids,
+        }
+    }
+}
+
+/// Every id in a `renamed_from` list.
+pub fn former_ids(former: &[FormerStage]) -> impl Iterator<Item = &str> {
+    former.iter().flat_map(|f| f.ids()).map(String::as_str)
+}
+
+/// The stored state of each former stage, in `renamed_from` order: the state `stored` returns for the newest of the stage's ids
+/// that has one, or `None` when none of them has.
+pub fn former_states<T>(former: &[FormerStage], mut stored: impl FnMut(&str) -> Option<T>) -> Vec<Option<T>> {
+    former.iter().map(|f| f.ids().iter().find_map(|id| stored(id))).collect()
+}
+
+/// Whether a stage with no stored pass of its own counts as passed: it replaces at least one stage and every one of them passed.
+pub fn passed_through_former(former: &[FormerStage], passed: impl Fn(&str) -> bool) -> bool {
+    !former.is_empty() && former_states(former, |id| passed(id).then_some(())).iter().all(Option::is_some)
+}
+
+/// Checks the `renamed_from` lists of a course's stages, given as `(stage id, renamed_from)`. A former id must not be a current
+/// stage id (its progress would count twice), an entry names each id once and no entry is repeated. Several stages may list the
+/// same former stage: the parts of a split each take over the stage they came from.
+pub fn check_renamed_from<'a>(stages: impl IntoIterator<Item = (&'a str, &'a [FormerStage])> + Clone) -> std::result::Result<(), String> {
+    let current: std::collections::HashSet<&str> = stages.clone().into_iter().map(|(id, _)| id).collect();
+    for (id, former) in stages {
+        for (i, f) in former.iter().enumerate() {
+            if f.ids().is_empty() {
+                return Err(format!("stage {id}: an empty list in renamed_from"));
+            }
+            if former[..i].iter().any(|e| e.ids() == f.ids()) {
+                return Err(format!("stage {id}: renamed_from lists {:?} twice", f.ids()));
+            }
+            for (j, old) in f.ids().iter().enumerate() {
+                if current.contains(old.as_str()) {
+                    return Err(format!("stage {id}: renamed_from {old}: that id is a current stage"));
+                }
+                if f.ids()[..j].contains(old) {
+                    return Err(format!("stage {id}: renamed_from names {old} twice in one entry"));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// One `## Heading` of a stage's markdown, with its body.
@@ -142,6 +213,9 @@ pub struct Stage {
     /// very-easy · easy · medium · hard
     pub difficulty: String,
     pub tests: Vec<String>,
+    /// The stages this one replaces: their stored progress counts for it until it has its own.
+    #[serde(skip)]
+    pub renamed_from: Vec<FormerStage>,
     pub module: String,
     /// 1-based position in the whole course.
     pub rank: usize,
@@ -266,6 +340,7 @@ impl Course {
                     kind: def.kind,
                     difficulty: def.difficulty,
                     tests: def.tests,
+                    renamed_from: def.renamed_from,
                     module: mt.code.clone(),
                     rank,
                     intro,
@@ -288,6 +363,8 @@ impl Course {
                 stages,
             });
         }
+        // checked over every module, published or not: an unpublished stage may already claim an id
+        check_renamed_from(modules.iter().flat_map(|m| &m.stages).map(|s| (s.id.as_str(), s.renamed_from.as_slice()))).map_err(CourseError::Invalid)?;
         if let Some(only) = meta.published_modules.as_ref().filter(|_| only_published) {
             modules.retain(|m| only.contains(&m.code));
             let mut rank = 0;
@@ -312,6 +389,11 @@ impl Course {
 
     pub fn stage(&self, id: &str) -> Option<&Stage> {
         self.stages().find(|s| s.id == id)
+    }
+
+    /// The stage with this id or, for an id that is gone, the first stage that lists it in `renamed_from`.
+    pub fn stage_or_successor(&self, id: &str) -> Option<&Stage> {
+        self.stage(id).or_else(|| self.stages().find(|s| former_ids(&s.renamed_from).any(|old| old == id)))
     }
 
     /// The stages that count towards the course, in order: not challenges, in modules that are neither optional nor planned. The next
@@ -535,5 +617,107 @@ mod tests {
         let err = Course::load(&root).expect_err("a missing optional concept is refused").to_string();
         assert!(err.contains("nope"), "{err}");
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// A one-module course of the given stages, each `(id, extra stage.toml lines)`.
+    fn course_with(tag: &str, stages: &[(&str, &str)]) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("anneal-course-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("modules/01-a")).unwrap();
+        fs::write(root.join("course.toml"), "id = \"t\"\ntitle = \"T\"\n").unwrap();
+        fs::write(root.join("modules/01-a/module.toml"), "code = \"1a\"\ntitle = \"M\"\n").unwrap();
+        for (i, (id, extra)) in stages.iter().enumerate() {
+            let st = root.join(format!("modules/01-a/stages/{:02}", i + 1));
+            fs::create_dir_all(&st).unwrap();
+            fs::write(st.join("stage.toml"), format!("id = \"{id}\"\ntitle = \"S\"\nkind = \"build\"\ndifficulty = \"easy\"\ntests = [\"t\"]\n{extra}")).unwrap();
+            fs::write(st.join("stage.md"), "Intro.\n").unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn renamed_from_takes_ids_and_chains_of_ids() {
+        let root = course_with(
+            "renamed",
+            &[("1a-01", "renamed_from = [\"0x-01\"]\n"), ("1a-02", "renamed_from = [\"0x-02\", [\"0y-03\", \"0x-03\"]]\n"), ("1a-03", "")],
+        );
+        let c = Course::load(&root).expect("loads");
+        assert_eq!(c.stage("1a-01").unwrap().renamed_from, [FormerStage::Id("0x-01".into())]);
+        let merged = &c.stage("1a-02").unwrap().renamed_from;
+        assert_eq!(former_ids(merged).collect::<Vec<_>>(), ["0x-02", "0y-03", "0x-03"]);
+        assert!(c.stage("1a-03").unwrap().renamed_from.is_empty(), "optional: none by default");
+        assert_eq!(c.stage_or_successor("0y-03").map(|s| s.id.as_str()), Some("1a-02"), "an old id leads to the stage that took it over");
+        assert_eq!(c.stage_or_successor("1a-03").map(|s| s.id.as_str()), Some("1a-03"));
+        assert!(c.stage_or_successor("0z-01").is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_former_id_may_not_be_a_current_stage_or_listed_twice() {
+        let root = course_with("renamed-current", &[("1a-01", ""), ("1a-02", "renamed_from = [\"1a-01\"]\n")]);
+        let err = Course::load(&root).expect_err("a current id is refused").to_string();
+        assert!(err.contains("1a-02") && err.contains("1a-01") && err.contains("current stage"), "{err}");
+        let root2 = course_with("renamed-twice", &[("1a-01", "renamed_from = [\"0x-01\", \"0x-01\"]\n")]);
+        let err = Course::load(&root2).expect_err("a repeated entry is refused").to_string();
+        assert!(err.contains("0x-01") && err.contains("twice"), "{err}");
+        let root4 = course_with("renamed-twice-in-chain", &[("1a-01", "renamed_from = [[\"0x-02\", \"0x-01\", \"0x-02\"]]\n")]);
+        assert!(Course::load(&root4).is_err(), "an id twice in one chain is refused");
+        let root5 = course_with("renamed-after-merge", &[("1a-01", "renamed_from = [[\"0y-01\", \"0x-01\"], [\"0y-01\", \"0x-02\"]]\n")]);
+        Course::load(&root5).expect("a merged stage renamed again keeps one entry per half");
+        let root3 = course_with("renamed-empty", &[("1a-01", "renamed_from = [[]]\n")]);
+        assert!(Course::load(&root3).is_err(), "an empty chain is refused");
+        for r in [root, root2, root3, root4, root5] {
+            let _ = fs::remove_dir_all(r);
+        }
+    }
+
+    #[test]
+    fn the_parts_of_a_split_may_each_list_the_stage_they_came_from() {
+        let root = course_with("split", &[("1a-01", "renamed_from = [\"0x-01\"]\n"), ("1a-02", "renamed_from = [\"0x-01\"]\n"), ("1a-03", "renamed_from = [\"0x-01\"]\n")]);
+        let c = Course::load(&root).expect("a split loads");
+        assert!(c.stages().all(|s| former_ids(&s.renamed_from).eq(["0x-01"])));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_unpublished_stage_claiming_a_published_id_is_still_refused() {
+        let root = course_with("renamed-unpublished", &[("1a-01", "")]);
+        fs::write(root.join("course.toml"), "id = \"t\"\ntitle = \"T\"\npublished_modules = [\"1a\"]\n").unwrap();
+        let hidden = root.join("modules/02-b/stages/01");
+        fs::create_dir_all(&hidden).unwrap();
+        fs::write(root.join("modules/02-b/module.toml"), "code = \"1b\"\ntitle = \"M\"\n").unwrap();
+        fs::write(hidden.join("stage.toml"), "id = \"1b-01\"\ntitle = \"S\"\nkind = \"build\"\ndifficulty = \"easy\"\ntests = [\"t\"]\nrenamed_from = [\"1a-01\"]\n").unwrap();
+        fs::write(hidden.join("stage.md"), "Intro.\n").unwrap();
+        assert!(Course::load(&root).is_err(), "checked across every module, not only the published ones");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_stage_passes_through_its_former_stages_only_when_every_one_passed() {
+        let one = |id: &str| FormerStage::Id(id.into());
+        let passed = |ids: &'static [&'static str]| move |id: &str| ids.contains(&id);
+        assert!(passed_through_former(&[one("a")], passed(&["a"])), "a rename");
+        assert!(!passed_through_former(&[], passed(&["a"])), "a stage that replaces nothing passes only on its own");
+        assert!(passed_through_former(&[one("a"), one("b")], passed(&["a", "b"])), "a merge of two passed stages");
+        assert!(!passed_through_former(&[one("a"), one("b")], passed(&["a"])), "a merge needs both halves");
+        let chain = FormerStage::Ids(vec!["b2".into(), "b1".into()]);
+        assert!(passed_through_former(&[one("a"), chain.clone()], passed(&["a", "b1"])), "a stage renamed twice: passed under its first id");
+        assert!(!passed_through_former(&[one("a"), chain], passed(&["b2"])));
+        let merged_then_renamed = [FormerStage::Ids(vec!["m".into(), "x".into()]), FormerStage::Ids(vec!["m".into(), "y".into()])];
+        assert!(passed_through_former(&merged_then_renamed, passed(&["m"])), "the merged stage passed under its own id");
+        assert!(passed_through_former(&merged_then_renamed, passed(&["x", "y"])), "or both its halves did");
+        assert!(!passed_through_former(&merged_then_renamed, passed(&["x"])));
+    }
+
+    #[test]
+    fn each_former_stage_takes_the_state_of_its_newest_id_that_has_one() {
+        let former = [FormerStage::Ids(vec!["new".into(), "old".into()]), FormerStage::Id("other".into())];
+        let stored = |id: &str| match id {
+            "new" => Some(2),
+            "old" => Some(1),
+            _ => None,
+        };
+        assert_eq!(former_states(&former, stored), [Some(2), None]);
+        assert_eq!(former_states(&former, |id| (id == "old").then_some(1)), [Some(1), None]);
     }
 }
