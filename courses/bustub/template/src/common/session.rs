@@ -5,11 +5,14 @@
 use std::sync::Arc;
 
 use crate::common::bustub_instance::BusTubInstance;
-use crate::common::exception::{Exception, ExceptionType, Result};
+use crate::common::db_error::{Context, DbResult};
+use crate::common::exception::{Exception, ExceptionType};
 use crate::common::result_writer::SimpleStreamWriter;
 use crate::concurrency::transaction::{IsolationLevel, Transaction};
 use crate::sql::ast::{Expr, Statement};
 use crate::sql::parser;
+
+// TODO(4e-04): the outcomes of a transaction a client must act on, with their codes
 
 pub struct Session<'a> {
     db: &'a BusTubInstance,
@@ -39,8 +42,14 @@ impl<'a> Session<'a> {
     }
 
     /// Runs the statements of `sql` in order and returns what they printed: the rows of each (one string per row, cells separated by
-    /// one space), and for transaction control the tag `BEGIN`, `COMMIT` or `ROLLBACK`. Stops at the first error.
-    pub fn execute(&mut self, sql: &str) -> Result<Vec<String>> {
+    /// one space), for transaction control the tag `BEGIN`, `COMMIT` or `ROLLBACK`, and for a stray one a line
+    /// `WARNING <code>: <message>`. Stops at the first error.
+    ///
+    /// # Errors
+    ///
+    /// The error of the first statement that fails, with its SQLSTATE code: `40001` for a conflict with a concurrent transaction
+    /// (running the transaction again may succeed) and `25P02` for a statement in a failed transaction.
+    pub fn execute(&mut self, sql: &str) -> DbResult<Vec<String>> {
         let _ = sql;
         todo!("4e-01: parse, run each statement in its own transaction (autocommit); the rows each printed, one string per row")
     }

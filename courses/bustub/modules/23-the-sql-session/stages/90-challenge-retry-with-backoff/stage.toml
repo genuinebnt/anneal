@@ -5,4 +5,4 @@ difficulty = "easy"
 tests = ["stages_4e::s4e_c1"]
 learn = ["telling a conflict you should retry from an error you should not", "a backoff schedule that spreads competing clients apart"]
 concepts = []
-concepts_optional = ["snapshot-isolation", "sessions-and-the-transaction-state-machine", "property-testing-and-fuzzing"]
+concepts_optional = ["errors-that-carry-their-cause", "snapshot-isolation", "sessions-and-the-transaction-state-machine", "property-testing-and-fuzzing"]

@@ -13,11 +13,12 @@ This stage gives `DbError` a code, and a second face for the client: what a stra
 
 In `src/common/db_error.rs`:
 
-- **`code()`:** a five-character code, digits and capital letters, read from the **innermost cause**. Anything not in the table is `XX000`.
+- **`code()`:** a five-character code, digits and capital letters, read from the **innermost cause**. Anything not in the table is `XX000`. An `Exception`'s kind is coarse (a duplicate key and a bad argument are both `Invalid`), so the place that raises one may name a precise code in its `sqlstate` field; when it does, that code wins over the kind's.
 - **`client_message()`:** `ERROR <code>: <message>` where the message is this error's own `Display`; but for codes of class `58` and class `XX` it is `ERROR <code>: internal error`, with nothing else.
 
 | cause | code |
 |---|---|
+| an `Exception` that names its own code (`sqlstate` is `Some`): a unique violation, a not-null violation | that code (`23505`, `23502`) |
 | an `io::Error`; an `Exception` of kind `Io` | `58030` |
 | `Exception`: `Invalid` | `22023` |
 | `Exception`: `OutOfRange`, `Decimal`; `IntError::OutOfRange`; `IntOpError::Overflow` | `22003` |
@@ -52,7 +53,7 @@ Where the table lives (a `match`, a lookup, a method on each layer's error); whe
 
 ## Tests
 
-- Every cause in the table has its code.
+- Every cause in the table has its code; a code an exception names wins over its kind.
 - A code is five characters of digits and capitals; context never changes it.
 - A client's own mistake is shown with its message: `ERROR 42P07: creating table orders`.
 - A system failure shows only `internal error`, whatever its message and context said.
@@ -86,7 +87,7 @@ Optional. Predict first, then run.
 
 ## Other designs
 
-- **The code stored in the error:** chosen where the error is made, by the layer that knows best; simple to read, easy to get inconsistent.
+- **The code stored in the error:** chosen where the error is made, by the layer that knows best; simple to read, easy to get inconsistent. The `sqlstate` field of `Exception` is this design in a small dose: only where a kind is too coarse.
 - **PostgreSQL's way:** the code is the primary datum (`errcode(ERRCODE_...)`), and the message is written next to it at the site of the failure.
 - **Typed classes:** an enum of classes instead of strings, converted to the five characters at the edge.
 

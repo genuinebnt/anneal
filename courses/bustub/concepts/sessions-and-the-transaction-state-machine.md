@@ -127,7 +127,7 @@ fn every_state_has_a_way_out() {
 
 ### In the exercises
 
-- **4e-01:** the `Idle` row: a statement is its own transaction. **4e-02:** `Begin`, `Commit`, `Rollback` and the warnings. **4e-03:** the level taken by `Begin`. **4e-04:** the `Failed` state and what `Commit` does in it.
+- **4e-01:** the `Idle` row: a statement is its own transaction. **4e-02:** `Begin`, `Commit`, `Rollback` and the warnings. **4e-03:** the level taken by `Begin`. **4e-04:** the `Failed` state and what `Commit` does in it, the codes a client reads in each row (`40001` to retry, `25P02` while failed, `25P01` and `25001` for the warnings), and the shell, which becomes one session.
 
 ### Where it is used
 

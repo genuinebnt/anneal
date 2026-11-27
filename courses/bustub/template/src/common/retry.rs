@@ -1,10 +1,10 @@
 //! Retrying a transaction that lost a conflict.
 
-use crate::common::exception::{Exception, ExceptionType};
+use crate::common::db_error::{DbError, DbResult};
 
-/// Is this error a conflict the client should answer by running the transaction again?
-pub fn is_retryable(e: &Exception) -> bool {
-    todo!("4e-c1: Execution errors about conflicts and refused commits only")
+/// Is this error a serialization failure (code `40001`), which the client answers by running the transaction again?
+pub fn is_retryable(e: &DbError) -> bool {
+    todo!("4e-c1: serialization failures only, whatever their message says")
 }
 
 /// Milliseconds to wait before attempt `attempt + 1`.
@@ -13,7 +13,7 @@ pub fn backoff_ms(attempt: usize, seed: u64) -> u64 {
 }
 
 /// Runs `f(1)`, `f(2)`, ... until it succeeds, fails with something that is not retryable, or `max_attempts` calls were made.
-pub fn run_with_retry<T>(max_attempts: usize, mut f: impl FnMut(usize) -> Result<T, Exception>) -> Result<(T, usize), Exception> {
+pub fn run_with_retry<T>(max_attempts: usize, mut f: impl FnMut(usize) -> DbResult<T>) -> DbResult<(T, usize)> {
     let _ = (max_attempts, &mut f);
     todo!("4e-c1: call f with the attempt number; retry only retryable errors while attempts remain")
 }

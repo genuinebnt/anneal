@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_4e::s4e_02"]
 learn = ["keeping a transaction open across calls", "what COMMIT and ROLLBACK return, and the warnings for stray ones", "cleaning up when a session is dropped"]
-concepts = ["sessions-and-the-transaction-state-machine", "snapshot-isolation"]
-concepts_optional = ["raii-guards-and-lifetimes", "watermarks-and-garbage-collection", "rolling-back-with-undo-logs", "errors-4b"]
+concepts = ["sessions-and-the-transaction-state-machine"]
+concepts_optional = ["snapshot-isolation", "raii-guards-and-lifetimes", "watermarks-and-garbage-collection", "rolling-back-with-undo-logs", "errors-4b"]

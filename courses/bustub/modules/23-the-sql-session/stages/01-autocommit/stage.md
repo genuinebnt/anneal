@@ -11,7 +11,7 @@ In modules 4a and 4b you built a transaction manager: `begin` gives you a transa
 
 Implement `Session` in `src/common/session.rs` for the case where no transaction is open:
 
-- `Session::new(&db)` and `execute(sql) -> Result<Vec<String>>`: parse the text (`parser::parse`) and run each statement in order.
+- `Session::new(&db)` and `execute(sql) -> DbResult<Vec<String>>`: parse the text (`parser::parse`) and run each statement in order. The error is your `DbError` from module 3k: the engine's `Exception` converts with `?`, and keeps its code (a division by zero is still `22012` when it reaches the client).
 - Each data statement runs in **its own transaction**, begun with the session's default isolation level (snapshot isolation), executed with `BusTubInstance::execute_statements(..., Some(&txn))`, and committed when it succeeds. If it fails (an `Err`, or `Ok(false)`, which is the engine saying the statement conflicted) the transaction is aborted and the error comes back.
 - The answer is the rows the statements printed, one string per row, cells separated by one space (use `SimpleStreamWriter::new(&mut out, true, " ")`).
 - The first failing statement ends the text; the statements before it stay committed.
@@ -28,6 +28,8 @@ Whether a statement is run through `execute_statements` once per statement or th
 **`matches!` on a nested result.** `matches!(reply, Ok(Some(_)))` is `true` for one shape of a `Result<Option<_>>` and `false` for the other two, without a three-armed `match`.
 
 **Abort on every exit.** There are several ways out of "run the statement": success, `Err`, `Ok(false)`. Put the cleanup in one place after the call instead of at each `return`.
+
+**`?` across error types.** The engine returns `Result<_, Exception>` and the session `DbResult<_>`; `?` calls your `From<Exception> for DbError` on the way out. Where the error is the session's own doing (the transaction manager refusing to begin or commit), `.context("committing a transaction")` from 3k says what the session was doing, for the log.
 
 ## If this is new
 
@@ -84,6 +86,7 @@ Optional. Predict first, then run.
 | `Transaction *txn = txn_mgr->Begin(); ... txn_mgr->Commit(txn);` and a `catch` that aborts | `begin()?`, a call, then one `if ok { commit } else { abort }` |
 | a raw pointer that may be null for "no transaction" | `Option<Arc<Transaction>>` |
 | a bool return that means success | `Result<bool>`: `Ok(false)` is a failure the engine reports without an error |
+| a `catch (Exception &)` per layer that rethrows | `?` and one `From` per layer, into the one error type of module 3k |
 
 **Port rule:** every path out of a function that opened a transaction closes it; the compiler cannot check this, so structure the code so there is only one path.
 

@@ -5,18 +5,69 @@
 use std::sync::Arc;
 
 use crate::common::bustub_instance::BusTubInstance;
-use crate::common::exception::{Exception, ExceptionType, Result};
+use crate::common::db_error::{Context, DbResult};
+use crate::common::exception::{Exception, ExceptionType};
 use crate::common::result_writer::SimpleStreamWriter;
 use crate::concurrency::transaction::{IsolationLevel, Transaction};
 use crate::sql::ast::{Expr, Statement};
 use crate::sql::parser;
+
+// @begin 4e-04
+/// A transaction outcome a client has to act on, with the SQLSTATE code it is reported under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TxnError {
+    /// A concurrent transaction wrote the same row first.
+    WriteConflict,
+    /// The commit was refused: a transaction that committed meanwhile conflicts with this one.
+    CommitRefused,
+    /// A statement other than COMMIT or ROLLBACK in a failed transaction.
+    InFailedTransaction,
+    /// COMMIT or ROLLBACK with no transaction open: a warning, not an error.
+    NoTransaction,
+    /// BEGIN inside a transaction: a warning, not an error.
+    AlreadyInTransaction,
+}
+
+impl TxnError {
+    /// `40001` for a conflict (the whole transaction may succeed if run again), `25P02` in a failed transaction, `25P01` with no
+    /// transaction open and `25001` inside one.
+    pub fn code(self) -> &'static str {
+        match self {
+            TxnError::WriteConflict | TxnError::CommitRefused => "40001",
+            TxnError::InFailedTransaction => "25P02",
+            TxnError::NoTransaction => "25P01",
+            TxnError::AlreadyInTransaction => "25001",
+        }
+    }
+
+    /// The reply to a statement that only warns: `WARNING <code>: <message>`.
+    fn warning(self) -> Vec<String> {
+        vec![format!("WARNING {}: {self}", self.code())]
+    }
+}
+
+impl std::fmt::Display for TxnError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            TxnError::WriteConflict => "could not serialize access due to concurrent update",
+            TxnError::CommitRefused => "could not serialize access: a concurrent transaction committed a conflicting change",
+            TxnError::InFailedTransaction => "current transaction is aborted, commands ignored until end of transaction block",
+            TxnError::NoTransaction => "there is no transaction in progress",
+            TxnError::AlreadyInTransaction => "there is already a transaction in progress",
+        })
+    }
+}
+
+impl std::error::Error for TxnError {}
+//~ // TODO(4e-04): the outcomes of a transaction a client must act on, with their codes
+// @end
 
 pub struct Session<'a> {
     db: &'a BusTubInstance,
     // @begin 4e-01
     /// The open transaction, if any.
     txn: Option<Arc<Transaction>>,
-    /// The open transaction hit an error: only COMMIT and ROLLBACK are accepted until it ends (4e-04).
+    /// The open transaction hit an error: only COMMIT and ROLLBACK are accepted until it ends.
     failed: bool,
     /// What `BEGIN` and autocommit use when no level is named.
     default_isolation: IsolationLevel,
@@ -59,8 +110,14 @@ impl<'a> Session<'a> {
     }
 
     /// Runs the statements of `sql` in order and returns what they printed: the rows of each (one string per row, cells separated by
-    /// one space), and for transaction control the tag `BEGIN`, `COMMIT` or `ROLLBACK`. Stops at the first error.
-    pub fn execute(&mut self, sql: &str) -> Result<Vec<String>> {
+    /// one space), for transaction control the tag `BEGIN`, `COMMIT` or `ROLLBACK`, and for a stray one a line
+    /// `WARNING <code>: <message>`. Stops at the first error.
+    ///
+    /// # Errors
+    ///
+    /// The error of the first statement that fails, with its SQLSTATE code: `40001` for a conflict with a concurrent transaction
+    /// (running the transaction again may succeed) and `25P02` for a statement in a failed transaction.
+    pub fn execute(&mut self, sql: &str) -> DbResult<Vec<String>> {
         // @begin 4e-01
         let statements = match parser::parse(sql) {
             Ok(s) => s,
@@ -72,7 +129,7 @@ impl<'a> Session<'a> {
                     self.failed = true;
                 }
                 // @end
-                return Err(e);
+                return Err(e.into());
             }
         };
         let mut lines = Vec::new();
@@ -86,7 +143,7 @@ impl<'a> Session<'a> {
     }
 
     // @begin 4e-01
-    fn run_statement(&mut self, statement: &Statement) -> Result<Vec<String>> {
+    fn run_statement(&mut self, statement: &Statement) -> DbResult<Vec<String>> {
         match statement {
             // @begin 4e-02
             Statement::Begin { isolation } => self.begin(isolation.as_deref()),
@@ -96,7 +153,7 @@ impl<'a> Session<'a> {
             // @begin 4e-03
             Statement::Set { name, value } if name == "default_transaction_isolation" => {
                 let Expr::Str(level) = value else {
-                    return Err(Exception::new(ExceptionType::Invalid, "default_transaction_isolation takes a level name"));
+                    return Err(Exception::new(ExceptionType::Invalid, "default_transaction_isolation takes a level name").into());
                 };
                 self.default_isolation = Self::level(level)?;
                 Ok(vec![])
@@ -106,19 +163,16 @@ impl<'a> Session<'a> {
         }
     }
 
-    fn run_data_statement(&mut self, statement: &Statement) -> Result<Vec<String>> {
+    fn run_data_statement(&mut self, statement: &Statement) -> DbResult<Vec<String>> {
         // @begin 4e-04
         if self.failed {
-            return Err(Exception::new(
-                ExceptionType::Execution,
-                "current transaction is aborted, commands ignored until end of transaction block",
-            ));
+            return Err(TxnError::InFailedTransaction.into());
         }
         // @end
         let autocommit = self.txn.is_none();
         let txn = match &self.txn {
             Some(t) => t.clone(),
-            None => self.db.txn_manager.begin(self.default_isolation)?,
+            None => self.db.txn_manager.begin(self.default_isolation).context("beginning a transaction")?,
         };
         let mut out = String::new();
         let outcome = self.db.execute_statements(
@@ -127,8 +181,7 @@ impl<'a> Session<'a> {
             None,
             Some(&txn),
         );
-        let ok = matches!(outcome, Ok(true));
-        if !ok {
+        if !matches!(outcome, Ok(true)) {
             // a failed statement ends the transaction's usefulness: undo it at once
             let _ = self.db.txn_manager.abort(&txn);
             // @begin 4e-04
@@ -138,13 +191,13 @@ impl<'a> Session<'a> {
                 self.failed = true;
             }
             // @end
-            return match outcome {
-                Err(e) => Err(e),
-                Ok(_) => Err(Exception::new(
-                    ExceptionType::Execution,
-                    "could not execute the statement: it conflicts with a concurrent transaction",
-                )),
-            };
+            return Err(match outcome {
+                // @begin 4e-04
+                Ok(_) => TxnError::WriteConflict.into(),
+                //~ Ok(_) => Exception::new(ExceptionType::Execution, "could not execute the statement: it conflicts with a concurrent transaction").into(),
+                // @end
+                Err(e) => e.into(),
+            });
         }
         if autocommit {
             self.finish(&txn)?;
@@ -153,64 +206,74 @@ impl<'a> Session<'a> {
     }
 
     /// Commits `txn`; a refusal (a conflict, or a serializable transaction that no longer validates) is an error.
-    fn finish(&mut self, txn: &Arc<Transaction>) -> Result<()> {
-        if self.db.txn_manager.commit(txn)? {
+    fn finish(&mut self, txn: &Arc<Transaction>) -> DbResult<()> {
+        if self.db.txn_manager.commit(txn).context("committing a transaction")? {
             Ok(())
         } else {
-            Err(Exception::new(ExceptionType::Execution, "could not commit: the transaction conflicts with a concurrent one"))
+            // @begin 4e-04
+            Err(TxnError::CommitRefused.into())
+            //~ Err(Exception::new(ExceptionType::Execution, "could not commit: the transaction conflicts with a concurrent one").into())
+            // @end
         }
     }
     //~ // TODO(4e-01): helpers of yours
     // @end
 
     // @begin 4e-02
-    fn begin(&mut self, isolation: Option<&str>) -> Result<Vec<String>> {
+    fn begin(&mut self, isolation: Option<&str>) -> DbResult<Vec<String>> {
         if self.in_transaction() {
-            return Ok(vec!["WARNING: there is already a transaction in progress".to_string()]);
+            // @begin 4e-04
+            return Ok(TxnError::AlreadyInTransaction.warning());
+            //~ return Ok(vec!["WARNING 25001: there is already a transaction in progress".to_string()]);
+            // @end
         }
         let level = match isolation {
             // @begin 4e-03
             Some(name) => Self::level(name)?,
-            //~ Some(_) => return Err(Exception::new(ExceptionType::NotImplemented, "isolation levels arrive in stage 4e-03")),
+            //~ Some(_) => return Err(Exception::new(ExceptionType::NotImplemented, "isolation levels arrive in stage 4e-03").into()),
             // @end
             None => self.default_isolation,
         };
-        self.txn = Some(self.db.txn_manager.begin(level)?);
+        self.txn = Some(self.db.txn_manager.begin(level).context("beginning a transaction")?);
         Ok(vec!["BEGIN".to_string()])
     }
 
-    fn commit(&mut self) -> Result<Vec<String>> {
+    fn commit(&mut self) -> DbResult<Vec<String>> {
         if self.failed {
             self.failed = false;
             return Ok(vec!["ROLLBACK".to_string()]);
         }
         let Some(txn) = self.txn.take() else {
-            return Ok(vec!["WARNING: there is no transaction in progress".to_string()]);
+            // @begin 4e-04
+            return Ok(TxnError::NoTransaction.warning());
+            //~ return Ok(vec!["WARNING 25P01: there is no transaction in progress".to_string()]);
+            // @end
         };
         self.finish(&txn)?;
         Ok(vec!["COMMIT".to_string()])
     }
 
-    fn rollback(&mut self) -> Result<Vec<String>> {
+    fn rollback(&mut self) -> DbResult<Vec<String>> {
         if self.failed {
             // the failed transaction was undone when it failed; this only ends it
             self.failed = false;
             return Ok(vec!["ROLLBACK".to_string()]);
         }
-        match self.txn.take() {
-            Some(txn) => {
-                self.db.txn_manager.abort(&txn)?;
-                Ok(vec!["ROLLBACK".to_string()])
-            }
-            None => Ok(vec!["WARNING: there is no transaction in progress".to_string()]),
-        }
+        let Some(txn) = self.txn.take() else {
+            // @begin 4e-04
+            return Ok(TxnError::NoTransaction.warning());
+            //~ return Ok(vec!["WARNING 25P01: there is no transaction in progress".to_string()]);
+            // @end
+        };
+        self.db.txn_manager.abort(&txn).context("rolling back a transaction")?;
+        Ok(vec!["ROLLBACK".to_string()])
     }
     //~ // TODO(4e-02): BEGIN, COMMIT and ROLLBACK
     // @end
 
     // @begin 4e-03
     /// `read uncommitted`, `repeatable read` and `snapshot`, `serializable`; PostgreSQL's `read committed` has no equivalent here.
-    fn level(name: &str) -> Result<IsolationLevel> {
+    fn level(name: &str) -> Result<IsolationLevel, Exception> {
         match name.trim().to_lowercase().as_str() {
             "read uncommitted" => Ok(IsolationLevel::ReadUncommitted),
             "repeatable read" | "snapshot" | "snapshot isolation" => Ok(IsolationLevel::SnapshotIsolation),

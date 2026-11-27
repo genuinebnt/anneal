@@ -178,6 +178,9 @@ macro_rules! convert_from {
     };
 }
 convert_from!(IntError, IntOpError, LikeError, NameError, LexError, ResolveError, FreeError, SealError);
+// @begin 4e-04
+convert_from!(crate::common::session::TxnError);
+// @end
 //~ // TODO(3k-01): the eight conversions below are stubs. Each keeps its cause as a value, like the two above. Write them by hand, or
 //~ // replace all eight with one macro; delete these lines either way (two impls for one type do not compile).
 //~ impl From<IntError> for DbError { fn from(_: IntError) -> DbError { todo!("3k-01: keep the IntError as the cause") } }
@@ -265,6 +268,9 @@ impl DbError {
         // @begin 3k-02
         let root = self.root_cause();
         if let Some(e) = root.downcast_ref::<Exception>() {
+            if let Some(code) = e.sqlstate {
+                return code;
+            }
             return match e.kind {
                 ExceptionType::Invalid => "22023",
                 ExceptionType::OutOfRange | ExceptionType::Decimal => "22003",
@@ -309,8 +315,13 @@ impl DbError {
         if root.is::<SealError>() {
             return "XX001";
         }
+        // @begin 4e-04
+        if let Some(e) = root.downcast_ref::<crate::common::session::TxnError>() {
+            return e.code();
+        }
+        // @end
         "XX000"
-        //~ todo!("3k-02: look at the innermost cause and answer from the table on the stage page; anything not listed is XX000")
+        //~ todo!("3k-02: look at the innermost cause and answer from the table on the stage page (an exception's own sqlstate first); anything not listed is XX000")
         // @end
     }
 

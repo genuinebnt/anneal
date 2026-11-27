@@ -24,11 +24,19 @@ pub enum ExceptionType {
 pub struct Exception {
     pub kind: ExceptionType,
     pub message: String,
+    /// The SQLSTATE code a client sees for this failure, when the place that raised it knows a more precise one than its kind
+    /// implies (a unique violation is `23505`, not the `22023` of any `Invalid` error). `None` for most errors.
+    pub sqlstate: Option<&'static str>,
 }
 
 impl Exception {
     pub fn new(kind: ExceptionType, message: impl Into<String>) -> Exception {
-        Exception { kind, message: message.into() }
+        Exception { kind, message: message.into(), sqlstate: None }
+    }
+
+    /// The same failure, reported to clients under the SQLSTATE code `code` (five digits or capital letters).
+    pub fn with_sqlstate(self, code: &'static str) -> Exception {
+        Exception { sqlstate: Some(code), ..self }
     }
 }
 

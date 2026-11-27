@@ -445,7 +445,13 @@ pub fn insert_mvcc(
         if let Some(&rid) = pk.index.scan_key(&key).first() {
             let (meta, _, _) = get_tuple_and_undo_link(txn_mgr, table, rid)?;
             if !meta.is_deleted {
-                return Err(write_write_conflict(txn)); // the key is taken
+                // The key is taken; either way the transaction is done (tainted). Taken by this transaction or by a commit its
+                // snapshot sees, it is a plain duplicate (23505): running again cannot help. Taken by a transaction still running,
+                // or one that committed after this snapshot, it is a conflict (40001): running again may succeed.
+                let conflict = write_write_conflict(txn);
+                let seen =
+                    meta.ts == txn.temp_ts() || (meta.ts < crate::concurrency::transaction::TXN_START_ID && meta.ts <= txn.read_ts());
+                return Err(if seen { crate::storage::index::index::unique_violation(&pk.name) } else { conflict });
             }
             modify_tuple(txn, txn_mgr, table, rid, Some(tuple))?; // a tombstone: reuse the rid
             insert_index_entries(table, indexes, tuple, rid);
@@ -461,7 +467,7 @@ pub fn insert_mvcc(
         insert_index_entries(table, indexes, tuple, rid);
         return Ok(());
     }
-    //~ // 4b-06: with a primary-key index in indexes: a NULL key fails with check_primary_key before anything is written; look the key up (scan_key); a live tuple at its rid: taint and fail (write_write_conflict); a deleted one: reuse the rid with modify_tuple(.., Some(tuple)); no entry: insert the tuple (temp ts), add it to the write set, insert_entry, and if that fails bury the tuple (update_tuple_meta with is_deleted) and fail; a row that went in gets its entries in the other indexes (insert_index_entries)
+    //~ // 4b-06: with a primary key: a NULL key is refused before anything is written; a key held by a live row taints the transaction and fails (a unique violation when this snapshot sees that row, a write-write conflict otherwise); a key whose row is deleted reuses that row; a new key gets a new row, unless another transaction takes the key first; every row that goes in gets its entries in the other indexes
     // @end
     // @begin 4b-01
     let rid = table.table.insert_tuple(&TupleMeta { ts: txn.temp_ts(), is_deleted: false }, tuple)?;

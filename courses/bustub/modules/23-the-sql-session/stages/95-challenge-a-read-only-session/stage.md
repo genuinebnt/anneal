@@ -10,7 +10,7 @@ Reporting users, replicas and dashboards get read-only credentials, and the safe
 
 ## The contract
 
-- `new(session)` wraps a session; `execute(sql)` parses the text with `parser::parse`; if any statement is a data or schema change (including one inside `EXPLAIN`), it returns an `Invalid` error that names the kind of statement and runs nothing.
+- `new(session)` wraps a session; `execute(sql)` parses the text with `parser::parse`; if any statement is a data or schema change (including one inside `EXPLAIN`), it returns an error with code `25006` (PostgreSQL's read-only SQL transaction; an `Exception` can name its code with `with_sqlstate`) whose message names the kind of statement, and runs nothing. Errors of the wrapped session come back as they are.
 - Otherwise it forwards the text to the wrapped session and returns its answer. `BEGIN`, `COMMIT`, `ROLLBACK`, `SET`, `SHOW`, `SELECT` and `EXPLAIN` of a query are allowed.
 - `inner()` gives access to the wrapped session (for `in_transaction()` and so on).
 

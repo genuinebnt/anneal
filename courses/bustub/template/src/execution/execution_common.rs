@@ -264,6 +264,6 @@ pub fn insert_mvcc(
     indexes: &[Arc<crate::catalog::catalog::IndexInfo<'_>>],
     tuple: &Tuple,
 ) -> Result<()> {
-    // 4b-06: with a primary-key index in indexes: a NULL key fails with check_primary_key before anything is written; look the key up (scan_key); a live tuple at its rid: taint and fail (write_write_conflict); a deleted one: reuse the rid with modify_tuple(.., Some(tuple)); no entry: insert the tuple (temp ts), add it to the write set, insert_entry, and if that fails bury the tuple (update_tuple_meta with is_deleted) and fail; a row that went in gets its entries in the other indexes (insert_index_entries)
+    // 4b-06: with a primary key: a NULL key is refused before anything is written; a key held by a live row taints the transaction and fails (a unique violation when this snapshot sees that row, a write-write conflict otherwise); a key whose row is deleted reuses that row; a new key gets a new row, unless another transaction takes the key first; every row that goes in gets its entries in the other indexes
     todo!("4b-01: insert the tuple with this transaction's temporary timestamp (not deleted), add the rid to the write set, and give the row its index entries")
 }

@@ -4,5 +4,5 @@ kind = "build"
 difficulty = "medium"
 tests = ["stages_4e::s4e_03"]
 learn = ["naming an isolation level in SQL and parsing it", "a per-session default", "the difference snapshot and serializable make at commit"]
-concepts = ["snapshot-isolation", "serializable-validation-by-predicates"]
-concepts_optional = ["multi-version-concurrency-control", "lexers-and-precedence-climbing", "sessions-and-the-transaction-state-machine", "errors-4b"]
+concepts = ["snapshot-isolation"]
+concepts_optional = ["serializable-validation-by-predicates", "multi-version-concurrency-control", "lexers-and-precedence-climbing", "sessions-and-the-transaction-state-machine", "errors-4b"]

@@ -14,6 +14,7 @@ use bustub::common::exception::{Exception, ExceptionType};
 use bustub::sql::mini_lexer::{LexError, LexErrorKind};
 use bustub::sql::resolve::ResolveError;
 use bustub::storage::disk::page_bitmap::FreeError;
+use bustub::storage::index::index::{not_null_violation, unique_violation};
 use bustub::storage::table::checksum::SealError;
 use bustub::types::int_ops::IntOpError;
 use bustub::types::int_parse::IntError;
@@ -297,6 +298,22 @@ fn s3k_02_the_other_layers_have_their_codes() {
     for (what, e, code) in table {
         assert_eq!(e.code(), code, "the code of {what}");
     }
+}
+
+#[test]
+fn s3k_02_a_code_the_engine_named_wins_over_the_kind() {
+    let unique = DbError::from(unique_violation("orders_pk"));
+    assert_eq!(unique.code(), "23505", "a unique violation is an Invalid exception that names 23505");
+    let not_null = DbError::from(not_null_violation("id", "orders")).context("inserting into orders");
+    assert_eq!(not_null.code(), "23502", "a not-null violation names 23502, under context too");
+    let named = DbError::from(Exception::new(ExceptionType::Execution, "read-only").with_sqlstate("25006"));
+    assert_eq!(named.code(), "25006", "any code an exception names comes before the one of its kind");
+    assert_eq!(engine(ExceptionType::Invalid).code(), "22023", "an exception that names none still has the code of its kind");
+    assert_eq!(
+        unique.client_message(),
+        "ERROR 23505: Exception: [Invalid] duplicate key value violates unique constraint \"orders_pk\"",
+        "a constraint violation is the client's own mistake: the message is shown"
+    );
 }
 
 #[test]

@@ -1,6 +1,6 @@
 code = "4e"
 title = "SQL transactions"
-summary = "The transactions you built in 4a and 4b, spoken in SQL: a session that runs each statement in its own transaction (autocommit), `BEGIN`, `COMMIT` and `ROLLBACK`, the isolation level of a transaction, and what a failed statement does to the transaction around it. The boss runs sessions against each other and checks the guarantees the lab of 4d showed on paper. New in this course: BusTub's shell stops at `bustub-shell`'s \"managed txn mode\" message."
+summary = "The transactions you built in 4a and 4b, spoken in SQL: a session that runs each statement in its own transaction (autocommit), `BEGIN`, `COMMIT` and `ROLLBACK`, the isolation level of a transaction, and what a failed statement does to the transaction around it. Every outcome a client acts on has its SQLSTATE code, through the error type of 3k (`40001` to retry, `25P02` while a failed transaction waits for ROLLBACK), and the shell becomes one session. The boss runs sessions against each other and checks the guarantees the lab of 4d showed on paper. New in this course: BusTub's shell stops at `bustub-shell`'s \"managed txn mode\" message."
 lectures = ["concurrencycontrol", "multiversioning"]
 bustub = []
 files = []
