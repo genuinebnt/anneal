@@ -617,6 +617,46 @@ fn s4b_06_a_duplicate_primary_key_fails_and_taints_the_transaction() {
 }
 
 #[test]
+fn s4b_06_a_null_primary_key_is_refused_before_anything_is_written() {
+    let db = new_db();
+    exec(&db, "CREATE TABLE maintable(a int primary key, b int)");
+    let info = table(&db, "maintable");
+    let t1 = begin(&db);
+    let refused = |sql: &str| {
+        let mut out = String::new();
+        let result = db.execute_sql_txn(sql, &mut SimpleStreamWriter::new(&mut out, true, " "), &t1);
+        assert!(matches!(&result, Err(e) if e.to_string().contains("violates not-null constraint")), "{sql}: a NULL primary key is a not-null violation: {result:?}");
+    };
+    refused("INSERT INTO maintable VALUES (null, 1)");
+    assert_eq!(heap_entries(&info), 0, "the refused row left no tuple in the heap");
+    assert_eq!(t1.state(), TransactionState::Running, "a NULL key is not a write-write conflict: the transaction goes on");
+    run(&db, &t1, "INSERT INTO maintable VALUES (1, 1), (2, 2)");
+    refused("UPDATE maintable SET a = null WHERE a = 1");
+    expect(&db, &t1, "SELECT * FROM maintable", &["1 1", "2 2"]);
+    commit(&db, &t1);
+    expect(&db, &begin(&db), "SELECT * FROM maintable WHERE a = 1", &["1 1"]);
+}
+
+#[test]
+fn s4b_06_a_lookup_on_an_index_that_is_not_the_primary_key_finds_rows_written_in_transactions() {
+    let db = new_db();
+    exec(&db, "CREATE TABLE s(a int primary key, b int)");
+    exec(&db, "CREATE INDEX sb ON s(b)");
+    let t1 = begin(&db);
+    run(&db, &t1, "INSERT INTO s VALUES (1, 2), (2, 3)");
+    commit(&db, &t1);
+    let t2 = begin(&db);
+    expect(&db, &t2, "SELECT * FROM s WHERE b = 2", &["1 2"]);
+    run(&db, &t2, "UPDATE s SET b = 5 WHERE a = 1");
+    expect(&db, &t2, "SELECT * FROM s WHERE b = 5", &["1 5"]);
+    expect(&db, &t2, "SELECT * FROM s WHERE b = 2", &[]);
+    let (_, plan) = try_run(&db, &t2, "EXPLAIN SELECT * FROM s WHERE b = 2");
+    assert!(!plan.contains("IndexScan"), "transactional writes do not maintain sb, so a transaction does not read it:\n{plan}");
+    let (_, plan) = try_run(&db, &t2, "EXPLAIN SELECT * FROM s WHERE a = 2");
+    assert!(plan.contains("IndexScan"), "the primary-key index is still used:\n{plan}");
+}
+
+#[test]
 fn s4b_06_a_key_committed_by_somebody_else_is_a_duplicate_too() {
     let db = new_db();
     exec(&db, "CREATE TABLE maintable(a int primary key, b int)");

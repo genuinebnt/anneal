@@ -11,7 +11,7 @@
 
 Nothing new to write. Make both pass:
 
-- **`stages_3e::s3e_05`**: a random session of up to two dozen statements (inserts of rows with NULLs, deletes, updates of `b`, `c` or the key `a` by random predicates, selects with random predicates), with `create index ia on t(a)` at a random point. After every statement: the statement answers with the right count; `select * from t` equals the vector; once the index exists, it agrees with the table (every live row once, no dead entries) and `select * from t order by a` comes back in key order (the optimizer, given, rewrites it to an index scan).
+- **`stages_3e::s3e_05`**: a random session of up to two dozen statements (inserts of rows with NULLs, deletes, updates of `b`, `c` or `a = a + 1` by random predicates, selects with random predicates), with `create index ia on t(a)` at a random point (it fails if `a = a + 1` has already given two rows one key). After every statement: the statement answers with the right count, or, once the index exists, fails with a unique violation exactly when the vector would hold a repeated key; `select * from t` equals the vector; once the index exists, it agrees with the table (every live row once, no dead entries) and `select * from t order by a` comes back in key order (the optimizer, given, rewrites it to an index scan).
 - **`sql_access_methods_test`** (`cargo test --test sql_access_methods_test`): BusTub's `p3.00-primer`, `p3.01-seqscan`, `p3.02-insert`, `p3.03-update` and `p3.04-delete` files. (`p3.05` and `p3.06` need the optimizer rules of module 3h, so they come later.)
 
 ## Your freedom

@@ -12,6 +12,7 @@ use super::fixed_size::FixedSize;
 use super::generic_key::{GenericKey, KeyComparator};
 use crate::buffer::buffer_pool_manager::BufferPoolManager;
 use crate::catalog::schema::Schema;
+use crate::common::exception::{Exception, ExceptionType};
 use crate::common::rid::Rid;
 use crate::storage::table::tuple::Tuple;
 use crate::types::value::Value;
@@ -69,10 +70,27 @@ impl IndexMetadata {
     }
 }
 
+/// True if any column of `key` (laid out with `key_schema`) is NULL. Such a key is never stored in an index: NULL equals nothing.
+pub fn key_has_null(key: &Tuple, key_schema: &Schema) -> bool {
+    (0..key_schema.column_count()).any(|i| key.get_value(key_schema, i).is_null())
+}
+
+/// The error of a statement that would give a second live row a key the index `index_name` already holds. It is an `Invalid`
+/// error, so it reaches the caller with its message instead of only failing the statement.
+pub fn unique_violation(index_name: &str) -> Exception {
+    Exception::new(ExceptionType::Invalid, format!("duplicate key value violates unique constraint \"{index_name}\""))
+}
+
+/// The error of a statement that would store a NULL in column `column` of the primary key of `table`.
+pub fn not_null_violation(column: &str, table: &str) -> Exception {
+    Exception::new(ExceptionType::Invalid, format!("null value in column \"{column}\" of relation \"{table}\" violates not-null constraint"))
+}
+
+/// An index maps each non-NULL key to at most one rid: keys are unique, and a key with a NULL in it is not stored.
 pub trait Index: Send + Sync {
     fn metadata(&self) -> &IndexMetadata;
 
-    /// Adds `key -> rid`. `false` if the key is already there: keys are unique.
+    /// Adds `key -> rid`. `false`, and nothing is added, if the key is already there or has a NULL in it.
     fn insert_entry(&self, key: &Tuple, rid: Rid) -> bool;
 
     /// Removes the entry for `key`, if there is one.

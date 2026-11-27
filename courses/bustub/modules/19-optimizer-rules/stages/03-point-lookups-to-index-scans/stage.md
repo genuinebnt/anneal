@@ -1,4 +1,4 @@
-`SELECT * FROM t WHERE id = 5` on a table with an index on `id` should not read the table. This rule turns a **sequential scan with a filter** into an **index scan with keys** when the filter contains a **point lookup** on an indexed column: `id = 5`, `5 = id`, or an `OR` of such equalities on the same column (`id = 4 or id = 7`). Two details make it correct: the index scan keeps the **whole** predicate as its filter (the index finds candidate rows; the other conditions still have to hold), and a predicate that is not a point lookup on an *indexed* column leaves the scan alone.
+`SELECT * FROM t WHERE id = 5` on a table with an index on `id` should not read the table. This rule turns a **sequential scan with a filter** into an **index scan with keys** when the filter contains a **point lookup** on an indexed column: `id = 5`, `5 = id`, or an `OR` of such equalities on the same column (`id = 4 or id = 7`). Three details make it correct: the index scan keeps the **whole** predicate as its filter (the index finds candidate rows; the other conditions still have to hold); a predicate that is not a point lookup on an *indexed* column leaves the scan alone; and the index holds keys of the **column's type**, so a constant of another type (`v1 = '2'`, `v1 = 3000000000`) is looked up only if it converts to that type without loss.
 
 > [!CHECK] Which of these become index scans on a table with an index on `v1` only: `v1 = 2`; `3 = v1`; `v1 = 4 or v1 = 5`; `v1 > 2`; `v2 = 20`; `v1 = 2 or v2 = 20`; `v1 = 5 and v3 = 445`; `v1 = null`? For the last, what rows must come back? For the `and`, which condition does the index use and which does the filter check?
 > ||Index scans: the first, second, third and the `and` (the index uses `v1 = 5`; the filter `v1 = 5 and v3 = 445` is applied to what it finds). Sequential: `v1 > 2` (a range, not a point), `v2 = 20` (no index), `v1 = 2 or v2 = 20` (an OR over two columns cannot be answered by one index). `v1 = null` finds nothing: `NULL` is never equal to anything, and an index does not hold NULL keys.||
@@ -12,9 +12,10 @@
 In `src/optimizer/optimizer.rs`:
 
 - `extract_point_lookup(predicate: &ExprRef) -> Option<(u32, Vec<ExprRef>)>`: an `Equal` comparison between a `ColumnValueExpression` and a `ConstantValueExpression`, in either order, gives `(the column's index, [the constant])`; an `OR` whose two sides are both point lookups **on the same column** gives that column and the keys of the left side followed by those of the right (nested `OR`s by recursion); anything else is `None`: another operator, column = column, constant = constant, an `OR` over different columns or with a non-lookup side, an `AND` (the rule deals with `AND` conjunct by conjunct).
-- `optimize_seq_scan_as_index_scan(&self, plan) -> PlanRef`: optimise the children first; if the node is a `SeqScan` with a filter predicate: take the whole predicate and, if it is an `AND`, each of its conjuncts as candidates (`Optimizer::conjuncts`); for the first candidate for which `extract_point_lookup` succeeds **and** an index exists on that column (`self.match_index(table_name, column)`), return `PlanNode::new(the scan's output schema, vec![], PlanKind::IndexScan { table_oid, index_oid, filter_predicate: Some(the whole predicate), pred_keys: keys })`; otherwise the node unchanged.
+- `lossless_key(key: &ExprRef, column_type: TypeId) -> Option<ExprRef>`: the constant converted to `column_type` (`Value::cast_as`, module 3a), if converting it back gives the original value; `None` if either conversion fails or the value changes. `'2'` becomes the INTEGER 2; `'2x'`, `' 2'`, `2.5` and `3000000000` give `None`.
+- `optimize_seq_scan_as_index_scan(&self, plan) -> PlanRef`, applied bottom-up: a `SeqScan` whose filter predicate is, or has an `AND`-conjunct that is (`Optimizer::conjuncts`), a point lookup on a column with an index (`self.match_index(table_name, column)`), every key converting without loss, becomes an `IndexScan` with the scan's output schema, that index, the **converted** keys as `pred_keys` and the **whole** predicate as `filter_predicate`; the first such candidate wins (the whole predicate first). Anything else is unchanged. The index scan must return exactly the rows of the sequential scan, and never panic.
 
-The tests: exact scenarios (column = constant either way round; an OR of equalities gives all the keys in order; other predicates are not point lookups; an OR over different columns or with another condition is not one; a negative constant, a computation is refused; equality on an indexed column uses the index; an OR of equalities looks up each key; other predicates and other columns stay sequential scans; another condition is checked on what the index finds; comparing with NULL finds nothing; updates and deletes see the same rows as a scan; an empty table with an index), and a property: **for random tables with an index on `v1` and random AND-ed predicates (point lookups, ORs of lookups, comparisons, conditions on other columns)**, the plan has an `IndexScan` exactly when some part is a point lookup on `v1`, and the rows equal a plain filter on a vector.
+The tests: exact scenarios (column = constant either way round; an OR of equalities gives all the keys in order; other predicates are not point lookups; an OR over different columns or with another condition is not one; a negative constant, a computation is refused; equality on an indexed column uses the index; an OR of equalities looks up each key; other predicates and other columns stay sequential scans; another condition is checked on what the index finds; a key of another type gives the rows of a sequential scan; comparing with NULL finds nothing; updates and deletes see the same rows as a scan; an empty table with an index), and a property: **for random tables with an index on `v1` and random AND-ed predicates (point lookups, ORs of lookups, comparisons, conditions on other columns)**, the plan has an `IndexScan` exactly when some part is a point lookup on `v1`, and the rows equal a plain filter on a vector.
 
 ## Your freedom
 
@@ -42,7 +43,7 @@ Which candidate you try first (the first usable one wins in the tests), and how 
 ## Tests
 
 - Point lookups: either order; ORs with all keys in order; non-lookups; negative constants.
-- Rule: indexed columns; ORs; sequential scans for ranges, other columns and ORs over columns; the whole predicate stays a filter; NULL; updates and deletes; empty tables.
+- Rule: indexed columns; ORs; sequential scans for ranges, other columns and ORs over columns; the whole predicate stays a filter; keys of another type; NULL; updates and deletes; empty tables.
 - Property: random predicates against the plan shape and a plain filter.
 
 ## Hints
@@ -50,6 +51,10 @@ Which candidate you try first (the first usable one wins in the tests), and how 
 ### The filter keeps everything
 
 `v1 = 5 and v3 = 445`: the index narrows to the row with `v1 = 5`; `v3 = 445` still has to be checked. The scan's filter is the whole predicate, and the keys are only a way to find candidates.
+
+### A key of the wrong type
+
+The index scan builds its key tuple from the constant as it is, and a tuple refuses a value of the wrong type: `v1 = '2'` would panic, although the sequential scan, whose `=` converts `'2'` to 2, finds the row. Convert at plan time. Converting is not enough on its own: `'2x'` converts to 2 (the leading number), and `2.5` to 2, but neither *is* 2. Converting back and comparing tells the two apart.
 
 ### Indexes do not hold NULLs
 

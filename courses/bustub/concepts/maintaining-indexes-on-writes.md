@@ -34,11 +34,11 @@ A **key** is built from the row by taking the indexed columns: `Tuple::key_from_
 
 ## Duplicates
 
-BusTub's B+ tree stores one entry per key, so `insert_entry` returns `false` for a key that is already there. A real **unique** index must turn that into an error (`duplicate key violates unique constraint`), and a **non-unique** index stores `(key, rid)` pairs. BusTub does neither: the table accepts the row, the index keeps the first, and the catalog "silently ignores the error". Tests of this course document that limitation rather than hide it.
+BusTub's B+ tree stores one entry per key, so `insert_entry` returns `false` for a key that is already there. A **non-unique** index would store `(key, rid)` pairs instead; this engine's indexes are **unique** over non-NULL keys, so the refusal must become an error (`duplicate key value violates unique constraint "<index>"`, PostgreSQL's words) and the statement fails. Ignoring the refusal, as BusTub's C++ executors do, leaves a live row with no entry: a lookup or an `ORDER BY` through the index then silently returns fewer rows than the table holds. The invariant to keep is exact: **every live row with a non-NULL key has exactly one entry in each index of its table**. A key with a NULL has none (NULL equals nothing), so two rows with NULL keys never collide.
 
 ## Order matters
 
-- **Update**: delete the old entry *before* inserting the new one. If the key did not change, the order "insert new, then delete old" would delete the entry just written.
+- **Update**: remove the old entries *before* adding the new ones, and for a statement that changes many rows, remove **every** old key first. `SET k = k + 1` over the keys 1, 2, 3 moves row 1 onto the old key of row 2: row by row, that insert collides with a key about to leave. Whether the keys are unique is a question about the rows once the statement has run.
 - **Delete**: remove the entry using the row's *old* values, which you have only before it is gone.
 - **Failures in the middle**: a crash between "wrote the table" and "wrote the index" leaves them inconsistent. Real systems write both inside a transaction with a log (module 5); BusTub's executors do not have to, but know why.
 
@@ -69,19 +69,24 @@ struct Index { entries: BTreeMap<i32, usize> }  // key (column a) -> rid
 struct Db { table: Table, index: Index }
 
 impl Db {
-    fn insert(&mut self, row: (i32, i32)) -> usize {
+    fn insert(&mut self, row: (i32, i32)) -> Result<usize, String> {
+        // unique keys: a taken key fails before anything is written
+        if self.index.entries.contains_key(&row.0) {
+            return Err(format!("duplicate key value violates unique constraint (key {})", row.0));
+        }
         self.table.rows.push(Some(row));
         let rid = self.table.rows.len() - 1;
-        self.index.entries.entry(row.0).or_insert(rid); // unique keys: a duplicate keeps the first
-        rid
+        self.index.entries.insert(row.0, rid);
+        Ok(rid)
     }
     fn delete(&mut self, rid: usize) {
         let row = self.table.rows[rid].take().expect("a live row");
-        if self.index.entries.get(&row.0) == Some(&rid) {
-            self.index.entries.remove(&row.0);
-        }
+        self.index.entries.remove(&row.0);
     }
-    fn update(&mut self, rid: usize, new: (i32, i32)) -> usize {
+    fn update(&mut self, rid: usize, new: (i32, i32)) -> Result<usize, String> {
+        if self.index.entries.get(&new.0).is_some_and(|holder| *holder != rid) {
+            return Err(format!("duplicate key value violates unique constraint (key {})", new.0));
+        }
         self.delete(rid);          // the old entry goes first ...
         self.insert(new)           // ... then the new one, under the new rid
     }
@@ -93,8 +98,8 @@ impl Db {
 #[test]
 fn insert_writes_both_and_the_index_leads_to_the_row() {
     let mut db = Db::default();
-    db.insert((1, 10));
-    db.insert((2, 20));
+    db.insert((1, 10)).unwrap();
+    db.insert((2, 20)).unwrap();
     assert_eq!(db.lookup(2), Some((2, 20)));
     assert_eq!(db.lookup(3), None);
 }
@@ -102,42 +107,44 @@ fn insert_writes_both_and_the_index_leads_to_the_row() {
 #[test]
 fn delete_removes_the_entry_so_a_lookup_does_not_find_a_dead_row() {
     let mut db = Db::default();
-    let rid = db.insert((1, 10));
+    let rid = db.insert((1, 10)).unwrap();
     db.delete(rid);
     assert_eq!(db.lookup(1), None);
     assert!(db.index.entries.is_empty());
-    db.insert((1, 11));
+    db.insert((1, 11)).unwrap();
     assert_eq!(db.lookup(1), Some((1, 11)), "the key is free again");
 }
 
 #[test]
 fn update_moves_the_entry_from_the_old_key_to_the_new_one() {
     let mut db = Db::default();
-    let rid = db.insert((2, 20));
-    db.update(rid, (8, -20));
+    let rid = db.insert((2, 20)).unwrap();
+    db.update(rid, (8, -20)).unwrap();
     assert_eq!(db.lookup(2), None);
     assert_eq!(db.lookup(8), Some((8, -20)));
-    let rid = db.insert((5, 50));
-    db.update(rid, (5, 51)); // the key did not change: delete-then-insert keeps the entry
+    let rid = db.insert((5, 50)).unwrap();
+    db.update(rid, (5, 51)).unwrap(); // the key did not change: delete-then-insert keeps the entry
     assert_eq!(db.lookup(5), Some((5, 51)));
     assert_eq!(db.index.entries.len(), 2);
 }
 
 #[test]
-fn a_duplicate_key_keeps_the_first_row() {
+fn a_duplicate_key_fails_and_changes_nothing() {
     let mut db = Db::default();
-    db.insert((1, 100));
-    db.insert((1, 200));
-    assert_eq!(db.table.rows.iter().flatten().count(), 2, "both rows are in the table");
-    assert_eq!(db.lookup(1), Some((1, 100)), "the index remembers the first");
+    db.insert((1, 100)).unwrap();
+    assert!(db.insert((1, 200)).is_err(), "the key 1 is taken");
+    assert_eq!(db.table.rows.iter().flatten().count(), 1, "the refused row is not in the table");
+    let other = db.insert((2, 300)).unwrap();
+    assert!(db.update(other, (1, 300)).is_err(), "an update may not take a key either");
+    assert_eq!((db.lookup(1), db.lookup(2)), (Some((1, 100)), Some((2, 300))), "every live row keeps its one entry");
 }
 ```
 
 ### In the exercises
 
-- **3e-02:** `insert_into_indexes` builds a key per index and adds it.
+- **3e-02:** `insert_into_indexes` builds a key per index and adds it; a key an index already holds fails the insert before the row is written.
 - **3e-03:** `delete_from_indexes` removes the entries of a deleted row.
-- **3e-03:** the update executor does both, old key out first, new key in under the new rid.
+- **3e-03:** the update executor does both, every old key out first, every new key in under its new rid, after checking that the new keys are unique.
 
 ### Where it is used
 

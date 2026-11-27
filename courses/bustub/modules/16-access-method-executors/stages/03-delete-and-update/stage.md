@@ -9,22 +9,23 @@
 
 ## The task
 
-In `src/execution/executors/delete_executor.rs` (the struct and `new` are given):
+Both executors answer **once** with one tuple holding how many rows they changed, then `false`; `init` makes them run again. Both keep the invariant of stage 2: **every live row with a non-NULL key has exactly one entry in each index of its table**, and every entry leads to a live row with that key.
 
-- `delete_from_indexes(tuple)`: for each index of the table, build the key from the **deleted tuple's values** (`key_from_tuple`, as in stage 2) and `delete_entry(&key)`.
-- `init`: forget that the count was produced and initialise the child.
-- `next`: once, for every `(tuple, rid)` the child produces: mark the heap tuple deleted with `table.update_tuple_meta(&TupleMeta { ts: 0, is_deleted: true }, rid)?`, remove its index entries, count it; then answer with one tuple holding the count; every later call returns `false`.
+In `src/execution/executors/delete_executor.rs` (the struct and `new` are given): every row the child produces is marked deleted in the heap (`TupleMeta { ts: 0, is_deleted: true }`) and loses its entry in every index, found by the key of the **deleted tuple's values**.
 
 In `src/execution/executors/update_executor.rs` (the struct and `new` are given):
 
-- `make_new_tuple(old)`: evaluate each of `self.target_expressions` on the old tuple with the child's output schema, and build a tuple of those values with the **table's** schema.
-- `init`, and `next` as for delete, but for each `(old, old_rid)`: build the new tuple; flag the old heap tuple deleted and remove its entries from every index; insert the new tuple and add its key to every index under the **new rid**; count.
+- `make_new_tuple(old)`: the target expressions evaluated on the **old** tuple (with the child's output schema), laid out with the **table's** schema.
+- `next`: every row the child produces is replaced by its new version: the old tuple marked deleted, the new one stored under a new rid, and every index following.
+- **Uniqueness is judged on the rows as they are once the whole statement has run.** `update t set a = a + 1` over the keys 1, 2, 3 succeeds, although each new key is, for a moment, the old key of another row. A statement that would leave two live rows with one non-NULL key in an index (two changed rows, or a changed row and an unchanged one), or a NULL in a primary key, fails with `unique_violation(index name)` or the error of `IndexInfo::check_primary_key`, and **changes nothing**.
 
-The tests: exact scenarios (delete returns how many and the rows disappear; deleting nothing returns `0`; delete with no `WHERE`; the indexes lose the entries and a key can be inserted again; update returns how many and changes them; `set b = b + a` uses the old values; `set a = b, b = a` swaps; every row is updated exactly once even in a table of thousands; the indexes follow an update, including a change of the key), and a property: **random sessions of deletes and updates** (set `b` or `c` to a sum of columns, or shift the key `a`) agree with a vector of rows after every statement, each statement answers with the number of rows it touched, and the index of `a` has exactly one entry for every live row and no entry for a dead one.
+`check_unique` is a suggested helper; the tests use only SQL and the indexes' public methods.
+
+The tests: exact scenarios (delete returns how many and the rows disappear; deleting nothing returns `0`; delete with no `WHERE`; the indexes lose the entries and a key can be inserted again; update returns how many and changes them; `set b = b + a` uses the old values; `set a = b, b = a` swaps; every row is updated exactly once even in a table of thousands; the indexes follow an update, including a change of the key; `set a = a + 1` over consecutive keys; an update that would duplicate a key fails and changes nothing), and a property: **random sessions of deletes and updates** (set `a`, `b` or `c` to an expression, or shift the key `a` by one, over keys that are consecutive or NULL) agree with a vector of rows after every statement, each statement answers with the number of rows it touched or fails exactly when the vector would hold a repeated key, and the index of `a` has exactly one entry for every live row with a non-NULL key and no other.
 
 ## Your freedom
 
-Whether delete and update share code, whether the update computes all new tuples before changing anything or one at a time, and the order of the heap and index writes.
+Whether delete and update share code, how the update finds out that its new keys are unique before it has changed anything (or how it undoes what it changed), and the order of the heap and index writes within each phase.
 
 ## The Rust toolbox
 
@@ -52,7 +53,8 @@ Whether delete and update share code, whether the update computes all new tuples
 
 - Delete returns how many and the rows disappear; deleting nothing returns zero; a delete with no `WHERE` clears the table; the indexes lose their entries; a deleted key can be inserted again.
 - Update returns how many and changes them; new values use the old row; a swap works; every row is updated exactly once; the indexes follow, including when the key changes.
-- Property: random deletes and updates agree with a vector of rows and keep the index exact.
+- `set a = a + 1` over consecutive keys succeeds; an update that would duplicate a key or make a primary key NULL fails and changes nothing.
+- Property: random deletes and updates (repeated and NULL keys) agree with a vector of rows and keep the index exact.
 
 ## Hints
 
@@ -63,6 +65,10 @@ If `update t set a = b, b = a` leaves both columns equal, you are building the n
 ### The index of a changed key
 
 Delete the **old** key's entry and insert the **new** key under the **new** rid. An update that changes only `b` has the same key: it still gets a new rid, so the index entry must be replaced even though the key is the same.
+
+### Row by row is wrong for a key that moves
+
+`set a = a + 1` over 1, 2, 3, done row by row, inserts 2 for the first row while the second row still holds 2. All the old keys must be gone before any new key arrives, and a duplicate must be found before the first write: once rows are deleted and re-inserted, a failure half-way has nothing left to restore. A key is held by an *unchanged* row exactly when `scan_key` finds a rid that is not among the rids being updated.
 
 ### An index with a stale rid
 

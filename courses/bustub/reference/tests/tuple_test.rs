@@ -80,7 +80,7 @@ fn a_table_and_an_index_through_the_catalog() {
         info.table.insert_tuple(&TupleMeta { ts: 0, is_deleted: false }, &row).unwrap();
     }
     let by_id = catalog.create_index("people_id", "people", vec![0], true).unwrap().unwrap();
-    let by_score = catalog.create_index("people_score", "people", vec![2], false).unwrap().unwrap();
+    let by_score = catalog.create_index("people_score", "people", vec![2], false);
     // point lookups go index -> rid -> tuple
     for id in [0, 1, 999, 1999] {
         let rids = by_id.index.scan_key(&Tuple::new(&[Value::integer(id)], &by_id.key_schema));
@@ -88,8 +88,9 @@ fn a_table_and_an_index_through_the_catalog() {
         let (_, row) = info.table.get_tuple(rids[0]).unwrap();
         assert_eq!(row.get_value(&schema, 1), Value::varchar(&format!("person-{id}")));
     }
-    // a non-unique column keeps only the first row of each value (the tree's keys are unique)
-    assert_eq!(by_score.index.scan_all().len(), 50);
+    // indexes are unique: a column whose value repeats (40 rows per score) cannot be indexed
+    assert!(by_score.is_err(), "an index over a column with repeated values fails");
+    assert!(catalog.get_index("people_score", "people").is_none(), "the failed index is not in the catalog");
     // the index scan is ordered by key: ids come back 0, 1, 2, ...
     let ids: Vec<i64> = by_id.index.scan_all().iter().map(|r| info.table.get_tuple(*r).unwrap().1.get_value(&schema, 0).as_i64().unwrap()).collect();
     assert_eq!(ids, (0..2000).collect::<Vec<i64>>());

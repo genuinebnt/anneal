@@ -3,7 +3,12 @@
 //!
 //! An update is a **delete followed by an insert**: the old tuple is marked deleted and the new one is stored under a new rid (it may have another
 //! size), and the table's indexes follow.
+//!
+//! Every index of the table is unique over non-NULL keys, judged on the rows as they are once the whole statement has run: `SET k = k + 1`
+//! over the keys 1, 2, 3 succeeds. A statement that would leave two live rows with the same non-NULL key in an index fails with a unique
+//! violation and changes nothing.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::abstract_executor::{Executor, ExecutorBox, BUSTUB_BATCH_SIZE};
@@ -17,6 +22,7 @@ use crate::execution::execution_common::{insert_mvcc, modify_tuple};
 use crate::execution::executor_context::ExecutorContext;
 use crate::execution::expressions::abstract_expression::ExprRef;
 use crate::execution::plans::plan_node::{PlanKind, PlanRef};
+use crate::storage::index::index::{key_has_null, unique_violation};
 use crate::storage::table::tuple::{Tuple, TupleMeta};
 use crate::types::value::Value;
 
@@ -46,6 +52,13 @@ impl<'e> UpdateExecutor<'e> {
         todo!("3e-03: each target expression evaluated on the old tuple, laid out with the table's schema")
     }
 
+    /// Fails with a unique violation if, after replacing each old tuple at `changes[i].0` by `changes[i].1`, two live rows would have the
+    /// same non-NULL key in an index of the table: two new tuples with one key, or a new tuple with the key of a row the statement does
+    /// not change. Fails with a not-null violation if a new primary key has a NULL ([`IndexInfo::check_primary_key`]).
+    fn check_unique(&self, changes: &[(Rid, Tuple)]) -> Result<()> {
+        todo!("3e-03: the not-null error of IndexInfo::check_primary_key for a NULL primary key; Err(unique_violation(index name)) if the new tuples would give two live rows one non-NULL key in some index; Ok otherwise")
+    }
+
     /// Does any change give a tuple another primary key? Then the statement is a delete and an insert, not an in-place update.
     fn changes_primary_key(&self, changes: &[(Rid, Tuple)]) -> Result<bool> {
         let Some(pk) = self.indexes.iter().find(|i| i.is_primary_key) else { return Ok(false) };
@@ -61,9 +74,9 @@ impl<'e> UpdateExecutor<'e> {
     }
 
     /// An update that changes a primary key: first delete every old tuple, then insert every new one, so that `SET k = k + 1` can reuse
-    /// the tombstones it has just made.
+    /// the tombstones it has just made. A new key with a NULL fails with a not-null violation before anything is written.
     fn update_by_delete_and_insert(&self, txn: &Arc<Transaction>, txn_mgr: &TransactionManager, changes: &[(Rid, Tuple)]) -> Result<()> {
-        todo!("4b-06: modify_tuple(.., None) for every rid first; then insert_mvcc for every new tuple")
+        todo!("4b-06: a NULL new primary key fails (IndexInfo::check_primary_key) before anything is written; otherwise every old tuple is deleted (modify_tuple) before any new one is inserted (insert_mvcc)")
     }
 }
 
@@ -76,7 +89,7 @@ impl Executor for UpdateExecutor<'_> {
         tuple_batch.clear();
         rid_batch.clear();
         // 4b-03: when self.txn is Some: collect (rid, make_new_tuple(old)) for every child tuple first; if changes_primary_key(..)? call update_by_delete_and_insert, else modify_tuple(.., Some(new)) for each; answer with one tuple holding the count
-        todo!("3e-03: once: every tuple of the child is replaced by its new version (the old marked deleted, the new stored, the indexes following); answers with how many, then false")
+        todo!("3e-03: once: replaces every tuple of the child by its new version (the old marked deleted, the new stored, every index following), or, if the new keys would break uniqueness (check_unique), fails and changes nothing; answers with how many, then false")
     }
 
     fn output_schema(&self) -> &Schema {

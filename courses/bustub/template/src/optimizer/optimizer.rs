@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use crate::binder::bound_order_by::OrderByType;
-use crate::catalog::catalog::Catalog;
+use crate::catalog::catalog::{Catalog, IndexInfo, TableInfo};
 use crate::common::exception::Result;
 use crate::execution::expressions::abstract_expression::{ExprRef, Expression};
 use crate::execution::expressions::column_value_expression::ColumnValueExpression;
@@ -13,15 +13,33 @@ use crate::execution::expressions::comparison_expression::{ComparisonExpression,
 use crate::execution::expressions::constant_value_expression::ConstantValueExpression;
 use crate::execution::expressions::logic_expression::{LogicExpression, LogicType};
 use crate::execution::plans::plan_node::*;
+use crate::types::type_id::TypeId;
+use crate::types::value::Value;
 
 pub struct Optimizer<'c, 'a> {
     pub catalog: &'c Catalog<'a>,
     force_starter_rule: bool,
+    /// The plan runs inside a transaction: only primary-key indexes can be read.
+    in_transaction: bool,
 }
 
 impl<'c, 'a> Optimizer<'c, 'a> {
     pub fn new(catalog: &'c Catalog<'a>, force_starter_rule: bool) -> Optimizer<'c, 'a> {
-        Optimizer { catalog, force_starter_rule }
+        Optimizer { catalog, force_starter_rule, in_transaction: false }
+    }
+
+    /// Plans for a statement that runs inside a transaction (`yes`), where only primary-key indexes are used: transactional writes keep
+    /// the primary-key index (a row's key never changes in place, and its entry stays for every version), but not the others.
+    pub fn in_transaction(mut self, yes: bool) -> Optimizer<'c, 'a> {
+        self.in_transaction = yes;
+        self
+    }
+
+    /// The indexes of `table_name` that a plan may read: all of them, or inside a transaction only the primary key.
+    pub fn usable_indexes(&self, table_name: &str) -> Vec<Arc<IndexInfo<'a>>> {
+        let mut indexes = self.catalog.get_table_indexes(table_name);
+        indexes.retain(|i| i.is_primary_key || !self.in_transaction);
+        indexes
     }
 
     /// Applies the rules in order. With `set force_optimizer_starter_rule=yes` a smaller rule set is used (a nested index join instead of a hash
@@ -158,16 +176,26 @@ impl<'c, 'a> Optimizer<'c, 'a> {
 
     // ---- indexes ------------------------------------------------------------------------------------------------------------
 
-    /// The index on exactly the column `index_key_idx` of `table_name`, if there is one: (its oid, its name).
+    /// The usable index ([`Self::usable_indexes`]) on exactly the column `index_key_idx` of `table_name`, if there is one: (its oid, its
+    /// name).
     pub fn match_index(&self, table_name: &str, index_key_idx: u32) -> Option<(IndexOid, String)> {
-        self.catalog
-            .get_table_indexes(table_name)
+        self.usable_indexes(table_name)
             .iter()
             .find(|i| i.index.metadata().get_key_attrs() == [index_key_idx])
             .map(|i| (i.index_oid, i.name.clone()))
     }
 
-    /// `a JOIN b ON a.x = b.y` where `b` is a scan with an index on `y` becomes a nested index join (probe the index for each `a`).
+    /// Whether reading `index` reads every live row of `table`. A row whose key has a NULL has no entry, and every entry names a
+    /// different live row, so the index covers the table exactly when it has as many entries as the table has live tuples.
+    ///
+    /// Costs one pass over the index and one over the heap.
+    pub fn index_covers_table(table: &TableInfo<'_>, index: &IndexInfo<'_>) -> bool {
+        let live_tuples = table.table.make_iterator().filter(|(meta, _)| !meta.is_deleted).count();
+        index.index.scan_all().len() == live_tuples
+    }
+
+    /// `a JOIN b ON a.x = b.y` where `b` is a scan with an index on `y` becomes a nested index join (probe the index for each `a`). The
+    /// outer column must have the type of the indexed column: the probe key is the outer value as it is.
     pub fn optimize_nlj_as_index_join(&self, plan: &PlanRef) -> PlanRef {
         let optimized = self.optimize_children(plan, &Self::optimize_nlj_as_index_join);
         if let PlanKind::NestedLoopJoin { predicate, join_type } = &optimized.kind {
@@ -186,7 +214,7 @@ impl<'c, 'a> Optimizer<'c, 'a> {
                             } else {
                                 None
                             };
-                            if let Some((outer_expr, inner_expr)) = sides {
+                            if let Some((outer_expr, inner_expr)) = sides.filter(|(o, i)| o.return_type().type_id() == i.return_type().type_id()) {
                                 if let Some((index_oid, index_name)) = self.match_index(table_name, inner_expr.col_idx()) {
                                     let key: ExprRef = Arc::new(ColumnValueExpression::new(0, outer_expr.col_idx(), outer_expr.return_type().clone()));
                                     return PlanNode::new(
@@ -212,7 +240,8 @@ impl<'c, 'a> Optimizer<'c, 'a> {
         optimized
     }
 
-    /// `ORDER BY` columns that an index on the same columns already delivers in order: a sort over a scan becomes an index scan.
+    /// `ORDER BY` columns that an index on the same columns already delivers in order: a sort over a scan becomes an index scan, if the
+    /// index has every live row of the table ([`Self::index_covers_table`]).
     pub fn optimize_order_by_as_index_scan(&self, plan: &PlanRef) -> PlanRef {
         let optimized = self.optimize_children(plan, &Self::optimize_order_by_as_index_scan);
         if let PlanKind::Sort { order_bys } = &optimized.kind {
@@ -229,8 +258,8 @@ impl<'c, 'a> Optimizer<'c, 'a> {
             let child = &optimized.children[0];
             if let PlanKind::SeqScan { table_oid, .. } = &child.kind {
                 let table_info = self.catalog.get_table_by_oid(*table_oid).expect("the plan names a table that exists");
-                for index in self.catalog.get_table_indexes(&table_info.name) {
-                    if order_by_column_ids == index.index.metadata().get_key_attrs() {
+                for index in self.usable_indexes(&table_info.name) {
+                    if order_by_column_ids == index.index.metadata().get_key_attrs() && Self::index_covers_table(&table_info, &index) {
                         return PlanNode::new(
                             optimized.output_schema.clone(),
                             vec![],
@@ -325,9 +354,17 @@ impl<'c, 'a> Optimizer<'c, 'a> {
         None // 3h-01: split the predicate into conjuncts (Optimizer::conjuncts); each must be a ComparisonExpression of type Equal whose two children are ColumnValueExpressions, one reading tuple 0 (left) and the other tuple 1 (right); collect the left columns and the right columns (as ColumnValueExpression(0, col_idx, type)); None if any conjunct is anything else
     }
 
-    /// Turns a nested loop join whose predicate is equalities between the two sides into a hash join.
+    /// Whether a value of type `a` and one of type `b` that are equal under `=` always have the same hash key: the types are the same,
+    /// or both are integer types (a hash key holds any integer widened to 64 bits). Other mixes, such as INTEGER and VARCHAR, compare
+    /// equal only after a cast that a hash key does not make.
+    pub fn hash_alike(a: TypeId, b: TypeId) -> bool {
+        todo!("3h-01: true for two equal types or two integer types; false for any other pair")
+    }
+
+    /// Turns a nested loop join whose predicate is equalities between the two sides into a hash join, if every pair of keys hashes
+    /// alike ([`Self::hash_alike`]).
     pub fn optimize_nlj_as_hash_join(&self, plan: &PlanRef) -> PlanRef {
-        plan.clone() // 3h-01: optimize the children first (self.optimize_children(plan, &Self::optimize_nlj_as_hash_join)); then, for an INNER or LEFT NestedLoopJoin whose predicate gives equi-join keys, a HashJoin with the same schema, children and join type; otherwise the node unchanged
+        plan.clone() // 3h-01: bottom-up (self.optimize_children); an INNER or LEFT NestedLoopJoin whose predicate gives equi-join keys that pairwise hash alike (Self::hash_alike) becomes a HashJoin with the same schema, children and join type; anything else is unchanged
     }
 
     /// Turns `Limit(Sort(child))` into `TopN(child)`.
@@ -341,8 +378,15 @@ impl<'c, 'a> Optimizer<'c, 'a> {
         None // 3h-03: an Equal comparison between a ColumnValueExpression and a ConstantValueExpression (either order) gives (the column's index, [the constant]); an OR of two such lookups on the same column gives the same column and the keys of both, left first; anything else None
     }
 
-    /// Turns a scan with a point-lookup predicate on an indexed column into an index scan.
+    /// The constant `key` as a constant of type `column_type`, if the cast loses nothing: casting the result back gives the same
+    /// value. `'2'` and `2` become the INTEGER 2; `'2x'`, `2.5` and `3000000000` have no INTEGER that equals them and give `None`.
+    pub fn lossless_key(key: &ExprRef, column_type: TypeId) -> Option<ExprRef> {
+        todo!("3h-03: the constant cast to column_type, if casting it back gives the same value; None if either cast fails or the value changes")
+    }
+
+    /// Turns a scan with a point-lookup predicate on an indexed column into an index scan, if every key converts to the column's type
+    /// without loss ([`Self::lossless_key`]); the index scan's keys are the converted ones.
     pub fn optimize_seq_scan_as_index_scan(&self, plan: &PlanRef) -> PlanRef {
-        plan.clone() // 3h-03: optimize the children first; then a SeqScan with a filter predicate that is (or has an AND-conjunct that is) a point lookup on a column with an index (self.match_index(table_name, column)) becomes an IndexScan with the scan's schema, that index, the keys as pred_keys, and the WHOLE predicate as filter_predicate; otherwise unchanged
+        plan.clone() // 3h-03: bottom-up; a SeqScan whose filter is (or has an AND-conjunct that is) a point lookup on an indexed column (self.match_index), with every key convertible to the column's type without loss (lossless_key), becomes an IndexScan with the scan's schema, that index, the converted keys as pred_keys and the WHOLE predicate as filter_predicate; otherwise unchanged
     }
 }

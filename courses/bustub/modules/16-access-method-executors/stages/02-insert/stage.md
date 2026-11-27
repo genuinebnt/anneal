@@ -1,7 +1,7 @@
-`INSERT INTO t VALUES (1, 'a'), (2, 'b')` and `INSERT INTO t SELECT ...` are executed by an `InsertExecutor` whose **child** produces the rows (a `Values` node, or any query) and which itself answers with a **single row holding the number of rows inserted**. It is the first executor that changes things, and two rules come with that. The work happens **once**: calling `next` again after the count was produced must say "nothing more", or a parent that asks twice would insert twice. And a table has **indexes**: every row inserted into the heap must also be added to each index on the table, with the record id the heap gave it, or an index scan would not find the row (the index would lie).
+`INSERT INTO t VALUES (1, 'a'), (2, 'b')` and `INSERT INTO t SELECT ...` are executed by an `InsertExecutor` whose **child** produces the rows (a `Values` node, or any query) and which itself answers with a **single row holding the number of rows inserted**. It is the first executor that changes things, and two rules come with that. The work happens **once**: calling `next` again after the count was produced must say "nothing more", or a parent that asks twice would insert twice. And a table has **indexes**: every row inserted into the heap must also be added to each index on the table, with the record id the heap gave it, or an index scan would not find the row (the index would lie). The indexes are **unique**, so some rows cannot go in at all.
 
 > [!CHECK] A table has an index on `a`. `insert into t values (1, 10), (1, 20)`: what should happen to the second row's index entry, given that the index's keys are unique, and what does BusTub do? Then, in what order do you do the two writes for each row (heap, index), and what is visible to a concurrent reader if you crash between them?
-> ||The index refuses the second entry (a B+ tree key is unique); BusTub ignores the refusal and the row is in the table without an index entry (a primary-key constraint, enforced in module 4b, is what turns this into an error). Heap first, then index, because the index entry needs the rid the heap returns; between the two a reader scanning the table sees the row and one using the index does not, which is the window a real engine closes with transactions and a write-ahead log (module 4c).||
+> ||The second row must fail the statement. The index holds one rid per key, so it cannot hold both rows, and a row stored without its entry is invisible to every lookup and every `ORDER BY` that goes through the index: the query silently returns fewer rows than the table has. BusTub's C++ executor ignores the refusal and has exactly that bug; here the insert fails with PostgreSQL's `duplicate key value violates unique constraint`, before the row is written. Heap first, then index, because the index entry needs the rid the heap returns; between the two a reader scanning the table sees the row and one using the index does not, which is the window a real engine closes with transactions and a write-ahead log (module 4c).||
 >
 > - Where does the rid come from?
 > - What does the executor return the second time `next` is called?
@@ -9,17 +9,20 @@
 
 ## The task
 
-In `src/execution/executors/insert_executor.rs` (the struct and `new` are given):
+In `src/execution/executors/insert_executor.rs` (the struct and `new` are given), the executor behind `INSERT`:
 
-- `insert_into_indexes(tuple, rid)`: for each index in `self.indexes`, build the **key tuple** of the row with `tuple.key_from_tuple(&table_schema, &index.key_schema, index.index.metadata().get_key_attrs())` and add `index.index.insert_entry(&key, rid)`. A refused entry (`false`: the key is already there) is ignored.
-- `init`: forget that the count was produced (`done = false`) and initialise the child.
-- `next`: if `done`, return `false`. Otherwise pull batches from the child until it is exhausted; store each tuple with `table.insert_tuple(&TupleMeta { ts: 0, is_deleted: false }, tuple)?`, call `insert_into_indexes` with the rid you got, and count. Then set `done`, put **one** tuple holding the count (an INTEGER, with the plan's output schema) in the batch and a default rid, and return `true`.
+- `next` answers **once** with one tuple holding the number of rows inserted (an INTEGER, in the plan's output schema, with a default rid), and `false` after that; `init` makes it run again.
+- Every row of the child is stored in the heap (`TupleMeta { ts: 0, is_deleted: false }`) and added to **every index** of the table under the rid the heap gave it. The key of a row in an index is `tuple.key_from_tuple(&table_schema, &index.key_schema, key_attrs)`.
+- **Indexes are unique over non-NULL keys, and a primary key has no NULL.** A row whose key an index already holds fails the statement with `unique_violation(index name)` (in `index.rs`); a row whose primary key has a NULL fails with the error of `IndexInfo::check_primary_key`. The failing row is in neither the heap nor any index; the rows before it stay. Any other key with a NULL is stored and not indexed (module 3c): NULL equals nothing, so it collides with nothing.
+- The invariant after every statement, failed or not: **every live row with a non-NULL key has exactly one entry in each index of its table**, and every entry leads to a live row with that key.
 
-The tests: exact scenarios (`insert values` returns how many; `insert .. select` copies a query; inserting nothing still answers with `0`; the count is produced once; `init` makes the executor run again; every index of the table gets the row; a refused duplicate key does not stop the insert; a type mismatch is an error), and a property: **random inserts** (batches of rows with NULLs, with the index created before or after) leave the table holding exactly the rows inserted so far, each insert answers with its row count, and the index holds exactly one entry for every row.
+`check_unique` and `insert_into_indexes` are a suggested split; the tests use only SQL and the indexes' public methods.
+
+The tests: exact scenarios (`insert values` returns how many; `insert .. select` copies a query; inserting nothing still answers with `0`; the count is produced once; `init` makes the executor run again; every index of the table gets the row; a key already held fails at that row and changes nothing; a NULL primary key fails; a type mismatch is an error), and a property: **random inserts** (repeated and NULL keys, with the index created before or after) leave the table holding exactly the rows a vector holds when it stops at the first taken key, an index created over repeated keys fails, and the index holds one entry for every row with a non-NULL key.
 
 ## Your freedom
 
-How you iterate the child's batches, whether you insert row by row or collect first, and whether you update the indexes row by row or batch by batch.
+How you iterate the child's batches, whether you insert row by row or collect first, whether you check a row's keys before writing it or write and undo, and whether you update the indexes row by row or batch by batch.
 
 ## The Rust toolbox
 
@@ -47,8 +50,8 @@ How you iterate the child's batches, whether you insert row by row or collect fi
 ## Tests
 
 - `insert values` returns how many and the rows appear; `insert .. select` copies a query; inserting nothing returns `0`; the count is produced once and `init` rewinds.
-- Every index of the table has an entry for every inserted row; a duplicate key does not stop the insert; wrong types are errors.
-- Property: random inserts (with NULLs, with the index before or after) agree with a vector; the index has one entry per row.
+- Every index of the table has an entry for every inserted row; a key already held fails at that row and changes nothing; a NULL primary key fails; wrong types are errors.
+- Property: random inserts (repeated and NULL keys, the index before or after) agree with a vector; the index has one entry per non-NULL key.
 
 ## Hints
 
@@ -60,13 +63,17 @@ The *index* knows which columns form its key (`get_key_attrs`) and its key schem
 
 Heap first: the index entry holds the rid, and the rid exists only after the heap insert.
 
+### A refused row must leave nothing behind
+
+The heap insert comes before the index insert, so a row found to be a duplicate only when `insert_entry` returns `false` is already in the heap with no entry: the failure itself breaks the invariant. Either decide that a row can go in before writing anything (every index's `scan_key` of its key), or undo what you wrote (mark it deleted, remove the entries already added). Note that `insert_entry` returns `false` for a NULL key too, which is not a duplicate.
+
 ### Only once
 
 If a test says the count is `0` the second time, that is correct; if it says the rows are inserted twice, `done` is not set or not checked.
 
 ## Performance
 
-Each inserted row costs a heap insert (a latch, a copy) and one B+ tree insert per index (a descent, a latch crab, possibly a split). With three indexes a row costs about four times a row without. Real engines batch the index inserts or sort them by key first.
+Each inserted row costs a heap insert (a latch, a copy) and one B+ tree insert per index (a descent, a latch crab, possibly a split); checking uniqueness first adds one lookup per index, a second descent to the same leaf, which a real engine folds into the insert itself. With three indexes a row costs about four times a row without. Real engines batch the index inserts or sort them by key first.
 
 **Measure it.** Insert 100 000 rows into a table with 0, 1 and 3 indexes; predict the ratio before you run.
 
@@ -80,6 +87,7 @@ Optional. Predict first, then run.
 ## Other designs
 
 - **Row at a time, heap then index (ours).**
+- **Non-unique indexes:** the tree stores `(key, rid)` pairs, so a key may repeat; uniqueness becomes a separate constraint checked on insert.
 - **Bulk load:** build the index after the data, sorted: the fast path for `CREATE INDEX` and large imports.
 - **Deferred index maintenance** (LSM trees): the index change is appended to a log and merged later.
 - **Insert into the index first** with a reserved slot (some engines allocate the rid before writing).

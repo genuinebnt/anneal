@@ -134,7 +134,7 @@ impl BusTubInstance {
                     continue;
                 }
                 BoundStatement::Explain { statement, options } => {
-                    self.handle_explain_statement(statement, *options, writer)?;
+                    self.handle_explain_statement(statement, *options, writer, txn.is_some())?;
                     continue;
                 }
                 BoundStatement::Transaction(kind) => {
@@ -148,7 +148,7 @@ impl BusTubInstance {
             let mut planner = Planner::new(&catalog);
             planner.plan_query(&bound)?;
             let plan = planner.plan.clone().expect("plan_query sets the plan");
-            let optimized = Optimizer::new(&catalog, self.is_force_starter_rule()).optimize(&plan)?;
+            let optimized = Optimizer::new(&catalog, self.is_force_starter_rule()).in_transaction(txn.is_some()).optimize(&plan)?;
             let mut ctx = ExecutorContext::new(&catalog, self.buffer_pool_manager, is_modify);
             if let Some(options) = check_options {
                 ctx = ctx.with_check_options(options.clone());
@@ -273,7 +273,7 @@ impl BusTubInstance {
         Ok(())
     }
 
-    fn handle_explain_statement(&self, statement: &BoundStatement, options: u8, writer: &mut dyn ResultWriter) -> Result<()> {
+    fn handle_explain_statement(&self, statement: &BoundStatement, options: u8, writer: &mut dyn ResultWriter, in_txn: bool) -> Result<()> {
         let mut output = String::new();
         if options & explain_options::BINDER != 0 {
             output.push_str("=== BINDER ===\n");
@@ -291,7 +291,7 @@ impl BusTubInstance {
             output.push_str(&plan.to_string_with(show_schema));
             output.push('\n');
         }
-        let optimized = Optimizer::new(&catalog, self.is_force_starter_rule()).optimize(&plan)?;
+        let optimized = Optimizer::new(&catalog, self.is_force_starter_rule()).in_transaction(in_txn).optimize(&plan)?;
         if options & explain_options::OPTIMIZER != 0 {
             output.push_str("=== OPTIMIZER ===\n");
             output.push_str(&optimized.to_string_with(show_schema));

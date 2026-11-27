@@ -1,7 +1,7 @@
 **Where this fits.** The end of the storage layer for Project 3: a table, an index and the catalog used together, and BusTub's own `TableHeapTest`.
 
 > [!CHECK] The index is updated by the insert and delete code, not by the table heap. Name the invariant that must hold between a table and each of its indexes after every statement, and say which module's code is responsible for keeping it.
-> ||Every live row of the table has exactly one entry in the index (its key mapped to its record id), and every entry names a live row with that key. The heap does not know indexes exist, so the **executors** (module 3e: insert, update, delete) must update the table and every index of it together; a bug in one of them is exactly an index that disagrees with its table, which a test of this stage can detect by comparing a scan of the table with a scan of the index.||
+> ||Every live row with a non-NULL key has exactly one entry in each index of its table (its key mapped to its record id), a row whose key has a NULL has none, and every entry names a live row with that key. Keys are unique, so a statement that would give two live rows one key must fail, not leave one of them out. The heap does not know indexes exist, so the **executors** (module 3e: insert, update, delete) must update the table and every index of it together; a bug in one of them is exactly an index that disagrees with its table, which a test of this stage can detect by comparing a scan of the table with a scan of the index.||
 >
 > - Who updates the index when a row is deleted?
 > - What does the index do for a deleted row that is still in the heap?

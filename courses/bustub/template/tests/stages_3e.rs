@@ -50,6 +50,18 @@ fn sql_err(db: &BusTubInstance, sql: &str) -> bool {
     db.execute_sql(sql, &mut SimpleStreamWriter::new(&mut out, true, " "), None).is_err()
 }
 
+/// Runs SQL and returns the rows, or the error as text.
+fn try_sql(db: &BusTubInstance, sql: &str) -> Result<Vec<String>, String> {
+    let mut out = String::new();
+    db.execute_sql(sql, &mut SimpleStreamWriter::new(&mut out, true, " "), None).map_err(|e| e.to_string())?;
+    Ok(out.lines().map(|l| l.trim_end().to_string()).collect())
+}
+
+/// Whether `result` is the unique violation of the index `index`.
+fn is_unique_violation(result: &Result<Vec<String>, String>, index: &str) -> bool {
+    matches!(result, Err(e) if e.contains(&format!("duplicate key value violates unique constraint \"{index}\"")))
+}
+
 /// Creates the table `name` with integer columns and stores `rows` straight into its heap (no executors involved).
 fn table_with_rows(db: &BusTubInstance, name: &str, columns: &[&str], rows: &[Vec<i32>]) -> Arc<TableInfo<'static>> {
     let info = db.catalog.write().unwrap().create_table(name, &ints(columns)).unwrap();
@@ -382,18 +394,35 @@ fn s3e_02_the_primary_key_index_is_an_index_too() {
 }
 
 #[test]
-fn s3e_02_a_key_that_is_already_in_the_index_keeps_the_first_row() {
+fn s3e_02_a_key_that_is_already_in_the_index_fails_the_insert_and_changes_nothing() {
     let db = new_db();
     sql(&db, "create table t(a int, b int)");
     sql(&db, "create index ia on t(a)");
     sql(&db, "insert into t values (1, 100)");
-    sql(&db, "insert into t values (1, 200)");
-    assert_eq!(sql(&db, "select * from t").len(), 2, "both rows are in the table");
+    let result = try_sql(&db, "insert into t values (1, 200)");
+    assert!(is_unique_violation(&result, "ia"), "a second live row with the key 1 is a unique violation: {result:?}");
+    assert_eq!(sql(&db, "select * from t"), vec!["1 100"], "the refused row is not in the table");
+    let result = try_sql(&db, "insert into t values (2, 1), (3, 1), (2, 9), (4, 4)");
+    assert!(is_unique_violation(&result, "ia"), "a key repeated inside one insert is a unique violation too: {result:?}");
+    assert_eq!(sql(&db, "select * from t"), vec!["1 100", "2 1", "3 1"], "the rows before the refused one stay; it and the rows after it are not inserted");
+    assert_eq!(sql(&db, "insert into t values (null, 5), (null, 6)"), vec!["2"], "two NULL keys do not collide: NULL equals nothing");
     let catalog = db.catalog.read().unwrap();
     let table = catalog.get_table("t").unwrap();
-    let rids = lookup(&catalog.get_index("ia", "t").unwrap(), &[1]);
-    assert_eq!(rids.len(), 1, "a key that is already in the index keeps the first row");
-    assert_eq!(table.table.get_tuple(rids[0]).unwrap().1.get_value(&table.schema, 1), int(100), "the index remembers the first");
+    let index = catalog.get_index("ia", "t").unwrap();
+    let rids = lookup(&index, &[1]);
+    assert_eq!(rids.len(), 1, "the index still has one entry for the key 1");
+    assert_eq!(table.table.get_tuple(rids[0]).unwrap().1.get_value(&table.schema, 1), int(100), "the entry for the key 1 leads to the first row");
+    assert_eq!(index.index.scan_all().len(), 3, "the keys 1, 2, 3 are indexed; the refused rows and the NULL keys are not");
+}
+
+#[test]
+fn s3e_02_a_primary_key_may_not_be_null() {
+    let db = new_db();
+    sql(&db, "create table t(id int primary key, v int)");
+    let result = try_sql(&db, "insert into t values (null, 1)");
+    assert!(matches!(&result, Err(e) if e.contains("null value in column \"id\" of relation \"t\" violates not-null constraint")), "a NULL primary key is a not-null violation: {result:?}");
+    assert!(sql(&db, "select * from t").is_empty(), "the refused row is not in the table");
+    assert_eq!(sql(&db, "insert into t values (1, 1), (2, 2)"), vec!["2"], "keys without a NULL are inserted");
 }
 
 #[test]
@@ -565,6 +594,57 @@ fn s3e_03_updating_a_column_that_is_not_in_the_key_keeps_the_key() {
     let rids = lookup(&catalog.get_index("ia", "t").unwrap(), &[1]);
     assert_eq!(rids.len(), 1, "updating a column that is not in the key keeps the key");
     assert_eq!(table.table.get_tuple(rids[0]).unwrap().1.get_value(&table.schema, 1), int(99), "the index entry leads to the NEW tuple");
+}
+
+#[test]
+fn s3e_03_set_k_to_k_plus_one_over_consecutive_keys_moves_every_key() {
+    let db = new_db();
+    sql(&db, "create table t(a int, b int)");
+    sql(&db, "create index ia on t(a)");
+    let values: Vec<String> = (1..=50).map(|k| format!("({k}, {})", k * 10)).collect();
+    sql(&db, &format!("insert into t values {}", values.join(", ")));
+    assert_eq!(sql(&db, "update t set a = a + 1"), vec!["50"], "every key moves up by one, though each new key is an old key of another row");
+    let catalog = db.catalog.read().unwrap();
+    let table = catalog.get_table("t").unwrap();
+    let ia = catalog.get_index("ia", "t").unwrap();
+    assert!(lookup(&ia, &[1]).is_empty(), "no row has the key 1 any more");
+    for k in 2..=51 {
+        let rids = lookup(&ia, &[k]);
+        assert_eq!(rids.len(), 1, "the key {k} finds exactly one row");
+        assert_eq!(table.table.get_tuple(rids[0]).unwrap().1.get_value(&table.schema, 1), int((k - 1) * 10), "the key {k} leads to the row that had the key {}", k - 1);
+    }
+    assert_eq!(ia.index.scan_all().len(), 50, "one entry per row");
+}
+
+#[test]
+fn s3e_03_an_update_may_not_make_a_primary_key_null() {
+    let db = new_db();
+    sql(&db, "create table t(id int primary key, v int)");
+    sql(&db, "insert into t values (1, 1), (2, 2)");
+    let result = try_sql(&db, "update t set id = null where id = 2");
+    assert!(matches!(&result, Err(e) if e.contains("null value in column \"id\" of relation \"t\" violates not-null constraint")), "an update may not make a primary key NULL: {result:?}");
+    assert_eq!(sql(&db, "select * from t"), vec!["1 1", "2 2"], "the failed update changed no row");
+    assert_eq!(sql(&db, "select * from t where id = 2"), vec!["2 2"], "the row keeps its entry in the primary-key index");
+}
+
+#[test]
+fn s3e_03_an_update_that_would_duplicate_a_key_fails_and_changes_nothing() {
+    let db = new_db();
+    sql(&db, "create table t(a int, b int)");
+    sql(&db, "create index ia on t(a)");
+    sql(&db, "insert into t values (1, 10), (2, 20), (3, 30), (null, 40)");
+    let result = try_sql(&db, "update t set a = 2 where a = 1");
+    assert!(is_unique_violation(&result, "ia"), "the key 2 belongs to a row the update does not change: {result:?}");
+    let result = try_sql(&db, "update t set a = 7 where a >= 2");
+    assert!(is_unique_violation(&result, "ia"), "two changed rows may not end with one key either: {result:?}");
+    let mut rows = sql(&db, "select * from t");
+    rows.sort();
+    assert_eq!(rows, vec!["1 10", "2 20", "3 30", "integer_null 40"], "a failed update changes no row");
+    assert_eq!(sql(&db, "update t set a = null where a >= 2"), vec!["2"], "NULL keys never collide");
+    let catalog = db.catalog.read().unwrap();
+    let ia = catalog.get_index("ia", "t").unwrap();
+    assert_eq!(ia.index.scan_all().len(), 1, "only the row with the key 1 is indexed now");
+    assert_eq!(lookup(&ia, &[1]).len(), 1, "the failed updates left the entry of the key 1 in place");
 }
 
 // ---- 3e-04 · index scan: every row in key order ---------------------------------------------------------------------------
@@ -757,9 +837,29 @@ fn row_strategy() -> impl Strategy<Value = Row> {
     prop::collection::vec(model::cell(), 3)
 }
 
-/// The rows of a table with a distinct `a` (the indexed column), a random `b` and `c`.
+/// The rows of a table whose `a` (the indexed column) is the row's position or, now and then, NULL; a random `b` and `c`. The keys are
+/// consecutive, so `a = a + 1` moves each key onto the old key of the next row.
 fn keyed_rows(max: usize) -> impl Strategy<Value = Vec<Row>> {
-    prop::collection::vec((model::cell(), model::cell()), 0..max).prop_map(|bc| bc.into_iter().enumerate().map(|(i, (b, c))| vec![Some(i as i64), b, c]).collect())
+    prop::collection::vec((prop::bool::weighted(0.15), model::cell(), model::cell()), 0..max)
+        .prop_map(|rows| rows.into_iter().enumerate().map(|(i, (null, b, c))| vec![if null { None } else { Some(i as i64) }, b, c]).collect())
+}
+
+/// Whether two rows have the same non-NULL `a`.
+fn has_duplicate_key(rows: &[Row]) -> bool {
+    let keys: Vec<i64> = rows.iter().filter_map(|r| r[0]).collect();
+    keys.iter().collect::<std::collections::HashSet<_>>().len() != keys.len()
+}
+
+/// Inserts `batch` into the model row by row; with a unique index on `a`, stops at the first row whose non-NULL `a` is taken (the rows
+/// before it stay). Whether every row went in.
+fn insert_into_model(rows: &mut Vec<Row>, batch: &[Row], unique: bool) -> bool {
+    for r in batch {
+        if unique && r[0].is_some() && rows.iter().any(|m| m[0] == r[0]) {
+            return false;
+        }
+        rows.push(r.clone());
+    }
+    true
 }
 
 proptest! {
@@ -789,32 +889,35 @@ proptest! {
         prop_assert!(sizes.iter().all(|s| *s >= 1 && *s <= batch), "batches have between 1 and {} tuples: {:?}", batch, sizes);
     }
 
-    /// Inserts answer with how many rows they added, and the table (and, if there is one, the index) then holds exactly the rows
-    /// inserted so far.
+    /// Inserts answer with how many rows they added, and the table (and the index) then holds exactly the rows inserted so far. Keys
+    /// repeat and may be NULL: with the index in place, an insert stops with a unique violation at the first row whose key a live row
+    /// has; an index created over rows that share a key fails. Every live row with a non-NULL key has exactly one entry.
     #[test]
-    fn s3e_02_inserts_add_exactly_their_rows_to_the_table_and_the_index(batches in prop::collection::vec(keyed_rows(6), 1..8), index_first in any::<bool>()) {
+    fn s3e_02_inserts_add_exactly_their_rows_and_refuse_a_taken_key(batches in prop::collection::vec(prop::collection::vec(row_strategy(), 1..6), 1..8), index_first in any::<bool>()) {
         let db = new_db();
         sql(&db, "create table t(a int, b int, c int)");
         if index_first { sql(&db, "create index ia on t(a)"); }
         let mut model_rows: Vec<Row> = vec![];
-        for mut batch in batches {
-            let base = model_rows.len() as i64;
-            for r in batch.iter_mut() { r[0] = r[0].map(|a| a + base); }
-            if batch.is_empty() { continue; }
+        for batch in batches {
             let statement = format!("insert into t values {}", batch.iter().map(model::values).collect::<Vec<_>>().join(", "));
-            prop_assert_eq!(sql(&db, &statement), vec![batch.len().to_string()]);
-            model_rows.extend(batch);
-            prop_assert_eq!(rows_of(&db), model::sorted_lines(&model_rows));
+            let result = try_sql(&db, &statement);
+            if insert_into_model(&mut model_rows, &batch, index_first) {
+                prop_assert_eq!(result, Ok(vec![batch.len().to_string()]), "{}", statement);
+            } else {
+                prop_assert!(is_unique_violation(&result, "ia"), "{}: a taken key fails the insert: {:?}", statement, result);
+            }
+            prop_assert_eq!(rows_of(&db), model::sorted_lines(&model_rows), "after {}", statement);
         }
-        if !index_first { sql(&db, "create index ia on t(a)"); }
-        let catalog = db.catalog.read().unwrap();
-        let table = catalog.get_table("t").unwrap();
-        let index = catalog.get_index("ia", "t").unwrap();
-        let mut keys: Vec<i32> = index.index.scan_all().iter().map(|rid| table.table.get_tuple(*rid).unwrap().1.get_value(&table.schema, 0).as_i64().unwrap() as i32).collect();
-        let mut want: Vec<i32> = model_rows.iter().map(|r| r[0].unwrap() as i32).collect();
-        keys.sort();
-        want.sort();
-        prop_assert_eq!(keys, want, "the index holds one entry for every row");
+        if !index_first {
+            let result = try_sql(&db, "create index ia on t(a)");
+            if has_duplicate_key(&model_rows) {
+                prop_assert!(result.is_err(), "an index over rows that share a key fails: {:?}", result);
+                prop_assert!(db.catalog.read().unwrap().get_index("ia", "t").is_none(), "a failed index is not in the catalog");
+                return Ok(());
+            }
+            prop_assert!(result.is_ok(), "an index over distinct keys is created: {:?}", result);
+        }
+        check_index(&db, &model_rows)?;
     }
 }
 
@@ -822,63 +925,83 @@ proptest! {
 #[derive(Clone, Debug)]
 enum Change {
     Delete(bustub::sql::ast::Expr),
+    SetA(bustub::sql::ast::Expr, bustub::sql::ast::Expr),
     SetB(bustub::sql::ast::Expr, bustub::sql::ast::Expr),
     SetC(bustub::sql::ast::Expr, bustub::sql::ast::Expr),
     ShiftA(bustub::sql::ast::Expr),
 }
 
-fn change_strategy() -> impl Strategy<Value = Change> {
+/// Random deletes and updates; with `set_a`, also updates that set the key `a` to any expression (duplicates and NULLs).
+fn change_strategy(set_a: bool) -> BoxedStrategy<Change> {
     let any_column = model::predicate(&model::COLUMNS).boxed();
-    prop_oneof![
+    let others = prop_oneof![
         2 => any_column.clone().prop_map(Change::Delete),
         2 => (model::arith(&model::COLUMNS, 2), any_column.clone()).prop_map(|(e, p)| Change::SetB(e, p)),
         1 => (model::arith(&model::COLUMNS, 1), any_column.clone()).prop_map(|(e, p)| Change::SetC(e, p)),
-        1 => any_column.prop_map(Change::ShiftA),
-    ]
+        2 => any_column.clone().prop_map(Change::ShiftA),
+    ];
+    if !set_a {
+        return others.boxed();
+    }
+    prop_oneof![7 => others, 1 => (model::arith(&model::COLUMNS, 1), any_column).prop_map(|(e, p)| Change::SetA(e, p))].boxed()
 }
 
-/// Applies `change` to the model and returns how many rows it touched.
-fn apply(change: &Change, rows: &mut Vec<Row>) -> usize {
-    match change {
-        Change::Delete(p) => {
-            let before = rows.len();
-            rows.retain(|r| !model::keeps(p, r));
-            before - rows.len()
+/// Applies `change` to the model and returns how many rows it touched. With a unique index on `a`, an update that would leave two
+/// rows with one non-NULL `a` changes nothing and gives `None`.
+fn apply(change: &Change, rows: &mut Vec<Row>, unique: bool) -> Option<usize> {
+    if let Change::Delete(p) = change {
+        let before = rows.len();
+        rows.retain(|r| !model::keeps(p, r));
+        return Some(before - rows.len());
+    }
+    let mut new_rows = rows.clone();
+    let mut n = 0;
+    for r in new_rows.iter_mut() {
+        let p = match change {
+            Change::SetA(_, p) | Change::SetB(_, p) | Change::SetC(_, p) | Change::ShiftA(p) => p,
+            Change::Delete(_) => unreachable!(),
+        };
+        if !model::keeps(p, r) {
+            continue;
         }
-        Change::SetB(e, p) | Change::SetC(e, p) => {
-            let target = if matches!(change, Change::SetB(..)) { 1 } else { 2 };
-            let mut n = 0;
-            for r in rows.iter_mut() {
-                if model::keeps(p, r) {
-                    r[target] = model::as_int(model::eval(e, r));
-                    n += 1;
-                }
-            }
-            n
-        }
-        Change::ShiftA(p) => {
-            let mut n = 0;
-            for r in rows.iter_mut() {
-                if model::keeps(p, r) {
-                    r[0] = r[0].map(|a| a + 1000);
-                    n += 1;
-                }
-            }
-            n
+        n += 1;
+        match change {
+            Change::SetA(e, _) => r[0] = model::as_int(model::eval(e, r)),
+            Change::SetB(e, _) => r[1] = model::as_int(model::eval(e, r)),
+            Change::SetC(e, _) => r[2] = model::as_int(model::eval(e, r)),
+            Change::ShiftA(_) => r[0] = r[0].map(|a| a + 1),
+            Change::Delete(_) => unreachable!(),
         }
     }
+    if unique && has_duplicate_key(&new_rows) {
+        return None;
+    }
+    *rows = new_rows;
+    Some(n)
 }
 
 fn statement(change: &Change) -> String {
     match change {
         Change::Delete(p) => format!("delete from t where {}", model::show(p)),
+        Change::SetA(e, p) => format!("update t set a = {} where {}", model::show(e), model::show(p)),
         Change::SetB(e, p) => format!("update t set b = {} where {}", model::show(e), model::show(p)),
         Change::SetC(e, p) => format!("update t set c = {} where {}", model::show(e), model::show(p)),
-        Change::ShiftA(p) => format!("update t set a = a + 1000 where {}", model::show(p)),
+        Change::ShiftA(p) => format!("update t set a = a + 1 where {}", model::show(p)),
     }
 }
 
-/// Every live row has exactly one entry in the index of `a`, and every entry leads to a live row with that key.
+/// Runs `change` on the database and on the model: the database answers with the model's count, or fails with the unique
+/// violation of `ia` when the model says the change would duplicate a key.
+fn run_change(db: &BusTubInstance, change: &Change, rows: &mut Vec<Row>, unique: bool) -> Result<(), TestCaseError> {
+    let result = try_sql(db, &statement(change));
+    match apply(change, rows, unique) {
+        Some(touched) => prop_assert_eq!(result, Ok(vec![touched.to_string()]), "{}", statement(change)),
+        None => prop_assert!(is_unique_violation(&result, "ia"), "{}: a duplicate key fails the update: {:?}", statement(change), result),
+    }
+    Ok(())
+}
+
+/// Every live row with a non-NULL `a` has exactly one entry in the index of `a`, and every entry leads to a live row with that key.
 fn check_index(db: &BusTubInstance, rows: &[Row]) -> Result<(), TestCaseError> {
     let catalog = db.catalog.read().unwrap();
     let table = catalog.get_table("t").unwrap();
@@ -888,9 +1011,10 @@ fn check_index(db: &BusTubInstance, rows: &[Row]) -> Result<(), TestCaseError> {
         let (meta, tuple) = table.table.get_tuple(rid).unwrap();
         prop_assert!(!meta.is_deleted, "an index entry leads to a deleted row");
         let row: Row = (0..3).map(|i| tuple.get_value(&table.schema, i).as_i64()).collect();
+        prop_assert!(row[0].is_some(), "a row whose key is NULL has an index entry");
         found.push((row[0].unwrap() as i32, model::line(&row)));
     }
-    let mut want: Vec<(i32, String)> = rows.iter().map(|r| (r[0].unwrap() as i32, model::line(r))).collect();
+    let mut want: Vec<(i32, String)> = rows.iter().filter(|r| r[0].is_some()).map(|r| (r[0].unwrap() as i32, model::line(r))).collect();
     found.sort();
     want.sort();
     prop_assert_eq!(found, want, "the index and the table disagree");
@@ -901,9 +1025,10 @@ proptest! {
     #![proptest_config(pconfig())]
 
     /// Deletes and updates answer with how many rows they changed, change exactly those rows (computing every new value from the OLD
-    /// row), and keep the index of `a` in step with the table, including when `a` itself changes.
+    /// row), and keep the index of `a` in step with the table, including when `a` itself changes: `a = a + 1` over consecutive keys
+    /// succeeds, and an update that would leave two rows with one non-NULL key fails and changes nothing.
     #[test]
-    fn s3e_03_deletes_and_updates_agree_with_a_vector_of_rows_and_keep_the_index(start in keyed_rows(25), changes in prop::collection::vec(change_strategy(), 1..10)) {
+    fn s3e_03_deletes_and_updates_agree_with_a_vector_of_rows_and_keep_the_index(start in keyed_rows(25), changes in prop::collection::vec(change_strategy(true), 1..10)) {
         let db = new_db();
         sql(&db, "create table t(a int, b int, c int)");
         sql(&db, "create index ia on t(a)");
@@ -912,8 +1037,7 @@ proptest! {
         }
         let mut rows = start;
         for change in &changes {
-            let touched = apply(change, &mut rows);
-            prop_assert_eq!(sql(&db, &statement(change)), vec![touched.to_string()], "{}", statement(change));
+            run_change(&db, change, &mut rows, true)?;
             prop_assert_eq!(rows_of(&db), model::sorted_lines(&rows), "after {}", statement(change));
             check_index(&db, &rows)?;
         }
@@ -960,7 +1084,7 @@ enum Step {
 fn step_strategy() -> impl Strategy<Value = Step> {
     prop_oneof![
         3 => prop::collection::vec((model::cell(), model::cell()), 1..5).prop_map(|bc| Step::Insert(bc.into_iter().map(|(b, c)| vec![Some(0), b, c]).collect())),
-        3 => change_strategy().prop_map(Step::Change),
+        3 => change_strategy(false).prop_map(Step::Change),
         3 => model::predicate(&model::COLUMNS).prop_map(Step::Select),
         1 => Just(Step::IndexCheck),
     ]
@@ -982,21 +1106,24 @@ proptest! {
         let mut indexed = false;
         for (i, step) in steps.iter().enumerate() {
             if i == index_at && !indexed {
-                sql(&db, "create index ia on t(a)");
-                indexed = true;
+                // `a = a + 1` before the index existed may have given two rows one key: then the index cannot be unique
+                let created = try_sql(&db, "create index ia on t(a)");
+                prop_assert_eq!(created.is_ok(), !has_duplicate_key(&rows), "create index: {:?}", created);
+                indexed = created.is_ok();
             }
             match step {
                 Step::Insert(new_rows) => {
                     let mut new_rows = new_rows.clone();
                     for r in new_rows.iter_mut() { r[0] = Some(next_key); next_key += 1; }
                     let text = format!("insert into t values {}", new_rows.iter().map(model::values).collect::<Vec<_>>().join(", "));
-                    prop_assert_eq!(sql(&db, &text), vec![new_rows.len().to_string()]);
-                    rows.extend(new_rows);
+                    let result = try_sql(&db, &text);
+                    if insert_into_model(&mut rows, &new_rows, indexed) {
+                        prop_assert_eq!(result, Ok(vec![new_rows.len().to_string()]), "{}", text);
+                    } else {
+                        prop_assert!(is_unique_violation(&result, "ia"), "{}: a key moved there by `a = a + 1` is taken: {:?}", text, result);
+                    }
                 }
-                Step::Change(c) => {
-                    let touched = apply(c, &mut rows);
-                    prop_assert_eq!(sql(&db, &statement(c)), vec![touched.to_string()], "{}", statement(c));
-                }
+                Step::Change(c) => run_change(&db, c, &mut rows, indexed)?,
                 Step::Select(p) => {
                     let mut got = sql(&db, &format!("select * from t where {}", model::show(p)));
                     got.sort();

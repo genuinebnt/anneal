@@ -12,10 +12,10 @@ Everything an executor needs to find (a table's heap and schema, an index and it
 `Catalog<'a>` over a buffer pool; tables and indexes are shared as `Arc<TableInfo>` / `Arc<IndexInfo>` (the record types are given).
 
 - `new(bpm)`; `create_table(name, schema) -> Option<Arc<TableInfo>>`: `None` if the name is in use (names are case sensitive); otherwise a new heap and the next **table oid** (0, 1, 2, ...); `get_table(name)`, `get_table_by_oid(oid)`, `table_info(oid)` (borrowed), `get_table_names()`.
-- `create_index(name, table, key_attrs, is_primary_key) -> Result<Option<Arc<IndexInfo>>>`: `Ok(None)` if the table does not exist or has an index of that name; an **error** unless every key column is an `INTEGER` (and the key is 1 to 64 bytes, 4 per column); build an index of the smallest key size that fits (4, 8, 16, 32 or 64 bytes); insert the key of **every live tuple** of the table (deleted ones are not indexed; of several rows with the same key the first is kept); the next **index oid**.
+- `create_index(name, table, key_attrs, is_primary_key) -> Result<Option<Arc<IndexInfo>>>`: `Ok(None)` if the table does not exist or has an index of that name; an **error** unless every key column is an `INTEGER` (and the key is 1 to 64 bytes, 4 per column); build an index of the smallest key size that fits (4, 8, 16, 32 or 64 bytes); the index holds the key of **every live tuple** whose key has no NULL (deleted tuples and NULL keys are not indexed); two live tuples with the same non-NULL key are an **error**, `unique_violation(name)` (given in `index.rs`), and no index is created; the next **index oid**.
 - `get_index(name, table)`, `get_index_by_oid(oid)`, `get_table_indexes(table)` (in creation order).
 
-The tests: a created table is found by name and oid; oids in creation order; every table has its own heap; names are unique and case sensitive; many tables; a new index holds the table's existing rows; deleted rows and duplicate keys; the failures that are `Ok(None)` and the ones that are errors; composite indexes; and a property: random table names (with repeats) behave like a `HashMap` (oids, lookups, listing) and an index created over a table with random live and deleted rows holds exactly the first live row of each key, in key order. The boss test uses the catalog, a heap and an index together.
+The tests: a created table is found by name and oid; oids in creation order; every table has its own heap; names are unique and case sensitive; many tables; a new index holds the table's existing rows; deleted rows are skipped and two live rows with one key fail the index; the failures that are `Ok(None)` and the ones that are errors; composite indexes; and a property: random table names (with repeats) behave like a `HashMap` (oids, lookups, listing) and an index created over a table with random live and deleted rows holds exactly the live rows in key order, or fails if two live rows share a key. The boss test uses the catalog, a heap and an index together.
 
 ## Your freedom
 
@@ -46,7 +46,7 @@ How you store the registry (maps keyed by oid and by name, a `Vec` indexed by oi
 ## Tests
 
 - Tables are found by name and oid; oids count from zero in creation order; names are unique and case sensitive.
-- An index is filled with the table's rows; deleted rows and duplicate keys; failures as `Ok(None)` and errors; found by name, oid and table.
+- An index is filled with the table's live rows; two live rows with one key fail it; failures as `Ok(None)` and errors; found by name, oid and table.
 - Properties against maps; the boss ties heap, index and catalog together.
 
 ## Hints
