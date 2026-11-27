@@ -1128,7 +1128,7 @@ fn init(course_id: &str, dir: Option<PathBuf>, courses: &Path) -> anyhow::Result
     git(&["add", "-A"])?;
     let committed = git(&["commit", "-q", "-m", "Start the course"]).map(|s| s.success()).unwrap_or(false);
     let shipped = learner_course(&dir)?;
-    println!("Created {} ({} stages in {} modules).", dir.display(), shipped.stages.len(), count_modules(&shipped));
+    println!("Created {} ({}).", dir.display(), course_size(&shipped));
     if !committed {
         println!("(The first commit didn't happen: set git user.name and user.email, then `git commit -am start`.)");
     }
@@ -1198,8 +1198,8 @@ fn restore(url: Option<String>, dir: Option<PathBuf>, course: &str) -> anyhow::R
     install_hooks(&dir)?;
     let shipped = learner_course(&dir)?;
     let progress = load_progress(&dir);
-    let done = shipped.stages.iter().filter(|s| progress.passed.contains_key(&s.def.id)).count();
-    println!("\nRestored {}: {done} of {} stages passed in your committed work.", dir.display(), shipped.stages.len());
+    let (done, total) = core_counts(&shipped, &progress);
+    println!("\nRestored {}: {done} of {total} stages passed in your committed work.", dir.display());
     if let Some(next) = current(&shipped, &progress) {
         println!("Next: {} {}", next.def.id, next.def.title);
     }
@@ -1270,18 +1270,12 @@ fn update(course_id: &str, courses: &Path, from: Option<&str>, offline: bool) ->
     let course = learner_course(&repo)?;
     let progress = load_progress(&repo);
     let Sync { added, updated, conflicts } = sync_files(&repo, &kept, &unlocked_modules(&course, &progress))?;
-    println!("Updated: {added} new files, {updated} given files refreshed, {} stages in the course.", course.stages.len());
+    println!("Updated: {added} new files, {updated} given files refreshed, {} stages in the course.", core_counts(&course, &progress).1);
     for c in &conflicts {
         println!("  you edited {}: the new version is in {}.new (merge by hand)", c.display(), c.display());
     }
     println!("`anneal course status` shows where you are.");
     Ok(ExitCode::SUCCESS)
-}
-
-fn count_modules(c: &Course) -> usize {
-    let mut m: Vec<&str> = c.stages.iter().map(|s| s.module.as_str()).collect();
-    m.dedup();
-    m.len()
 }
 
 fn install_hooks(repo: &Path) -> anyhow::Result<()> {
@@ -1527,7 +1521,8 @@ fn doctor() -> anyhow::Result<ExitCode> {
         Ok(repo) => {
             let course = learner_course(&repo)?;
             let progress = load_progress(&repo);
-            line(Some(true), "repo", format!("{} · {} of {} stages done", course.meta.title, progress.passed.len(), course.stages.len()));
+            let (done, total) = core_counts(&course, &progress);
+            line(Some(true), "repo", format!("{} · {done} of {total} stages done", course.meta.title));
             let hook = fs::read_to_string(repo.join(".git/hooks/pre-push")).unwrap_or_default();
             if hook.contains("anneal") {
                 line(Some(true), "git hook", "pre-push runs the tests".into());
@@ -1562,12 +1557,13 @@ fn status(json: bool) -> anyhow::Result<ExitCode> {
     let course = learner_course(&repo)?;
     let progress = load_progress(&repo);
     let cur = current(&course, &progress).map(|s| s.def.id.clone());
-    // Challenges are extra practice: they have their own tally and never count towards the course.
+    // Challenges are extra practice: they have their own tally and never count towards the course, nor towards a module. The stages of an
+    // optional module count towards that module only.
     fn core(s: &Stage) -> bool {
         s.def.kind != "challenge"
     }
-    let total = course.stages.iter().filter(|s| core(s)).count();
-    let done = course.stages.iter().filter(|s| core(s)).filter(|s| progress.passed.contains_key(&s.def.id)).count();
+    let (done, total) = core_counts(&course, &progress);
+    let (optional_done, optional_total, optional_modules) = optional_counts(&course, &progress);
     let challenges = course.stages.iter().filter(|s| s.def.kind == "challenge").count();
     let challenges_done = course.stages.iter().filter(|s| s.def.kind == "challenge" && progress.passed.contains_key(&s.def.id)).count();
     let mut modules: Vec<(String, String, Vec<&Stage>)> = Vec::new();
@@ -1583,7 +1579,7 @@ fn status(json: bool) -> anyhow::Result<ExitCode> {
             .map(|(code, title, stages)| {
                 let d = stages.iter().filter(|s| core(s)).filter(|s| progress.passed.contains_key(&s.def.id)).count();
                 serde_json::json!({
-                    "code": code, "title": title, "done": d, "total": stages.iter().filter(|s| core(s)).count(),
+                    "code": code, "title": title, "done": d, "total": stages.iter().filter(|s| core(s)).count(), "optional": optional_modules.contains(code),
                     "stages": stages.iter().map(|s| serde_json::json!({
                         "id": s.def.id, "title": s.def.title, "difficulty": s.def.difficulty, "kind": s.def.kind,
                         "state": if progress.passed.contains_key(&s.def.id) { "done" } else if Some(&s.def.id) == cur.as_ref() { "current" } else { "todo" },
@@ -1591,13 +1587,17 @@ fn status(json: bool) -> anyhow::Result<ExitCode> {
                 })
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "course": course.meta.id, "title": course.meta.title, "done": done, "total": total, "challenges": challenges, "challenges_done": challenges_done, "current": cur, "modules": mods }))?);
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "course": course.meta.id, "title": course.meta.title, "done": done, "total": total, "challenges": challenges, "challenges_done": challenges_done, "optional_stages": optional_total, "optional_stages_done": optional_done, "current": cur, "modules": mods }))?);
         return Ok(ExitCode::SUCCESS);
     }
     println!("{}   {}", bold(&course.meta.title), dim(&format!("{done} of {total} stages · {}%", (done * 100).checked_div(total).unwrap_or(0))));
     println!("{}", bar(done, total, 40));
     if challenges > 0 {
         println!("{}", dim(&format!("{challenges_done} of {challenges} challenges (extra practice, not part of the course)")));
+    }
+    if optional_total > 0 {
+        let s = if optional_modules.len() == 1 { "" } else { "s" };
+        println!("{}", dim(&format!("{optional_done} of {optional_total} stages in the optional module{s} {} (not part of the course)", optional_modules.join(", "))));
     }
     let strip: Vec<(String, usize, usize)> = modules.iter().map(|(code, _, stages)| (code.clone(), stages.iter().filter(|s| core(s)).filter(|s| progress.passed.contains_key(&s.def.id)).count(), stages.iter().filter(|s| core(s)).count())).collect();
     let here = cur.as_deref().and_then(|id| course.stage(id).ok()).map(|s| s.module.clone());
@@ -1652,10 +1652,38 @@ fn print_hint(course_id: &str, s: &Stage, n: usize, no_pager: bool) -> anyhow::R
     Ok(())
 }
 
-/// Stages that count towards the course (challenges are extra practice): (passed, all).
+/// Stages that count towards the course: the core stages, the path `current` walks. Challenges (extra practice) and the stages of
+/// optional modules have counts of their own. (passed, all).
 fn core_counts(course: &Course, progress: &Progress) -> (usize, usize) {
-    let core = course.stages.iter().filter(|s| s.def.kind != "challenge");
+    let core = course.stages.iter().filter(|s| !s.optional);
     (core.clone().filter(|s| progress.passed.contains_key(&s.def.id)).count(), core.count())
+}
+
+/// The stages of optional modules, challenges left out: (passed, all, the modules' codes).
+fn optional_counts(course: &Course, progress: &Progress) -> (usize, usize, Vec<String>) {
+    let stages: Vec<&Stage> = course.stages.iter().filter(|s| s.optional && s.def.kind != "challenge").collect();
+    let mut modules: Vec<String> = stages.iter().map(|s| s.module.clone()).collect();
+    modules.dedup();
+    (stages.iter().filter(|s| progress.passed.contains_key(&s.def.id)).count(), stages.len(), modules)
+}
+
+/// What a course holds, for `init`: "169 stages in 31 modules, plus 143 challenges and 5 stages in the optional module r".
+fn course_size(course: &Course) -> String {
+    let (_, core) = core_counts(course, &Progress::default());
+    let mut modules: Vec<&str> = course.stages.iter().filter(|s| !s.optional).map(|s| s.module.as_str()).collect();
+    modules.dedup();
+    let challenges = course.stages.iter().filter(|s| s.def.kind == "challenge").count();
+    let (_, optional, optional_modules) = optional_counts(course, &Progress::default());
+    let mut extras = Vec::new();
+    if challenges > 0 {
+        extras.push(format!("{challenges} challenge{}", if challenges == 1 { "" } else { "s" }));
+    }
+    if optional > 0 {
+        let s = if optional_modules.len() == 1 { "" } else { "s" };
+        extras.push(format!("{optional} stage{} in the optional module{s} {}", if optional == 1 { "" } else { "s" }, optional_modules.join(", ")));
+    }
+    let extras = if extras.is_empty() { String::new() } else { format!(", plus {}", extras.join(" and ")) };
+    format!("{core} stage{} in {} module{}{extras}", if core == 1 { "" } else { "s" }, modules.len(), if modules.len() == 1 { "" } else { "s" })
 }
 
 /// What the stage banner shows about `s`: its place in its module (a challenge among the module's challenges, any other stage among its
@@ -2607,6 +2635,19 @@ mod learner_screens {
             })
             .collect();
         Course { meta: CourseToml { id: "t".into(), title: "T".into(), repo_name: "t".into(), planned_modules: vec![] }, stages, module_files: BTreeMap::new() }
+    }
+
+    #[test]
+    fn the_course_counts_only_core_stages_and_names_the_rest_apart() {
+        let course = course_of(&[("r-01", "r", "learn"), ("r-02", "r", "learn"), ("r-c1", "r", "challenge"), ("1a-01", "1a", "build"), ("1a-02", "1a", "boss"), ("1a-c1", "1a", "challenge"), ("1b-01", "1b", "build")], &["r"]);
+        let mut p = Progress::default();
+        for id in ["r-01", "1a-01", "1a-c1"] {
+            p.passed.insert(id.into(), Passed { at: 0, commit: String::new(), ms: 0 });
+        }
+        assert_eq!(core_counts(&course, &p), (1, 3), "1a-01 of 1a-01, 1a-02 and 1b-01: not r, not challenges");
+        assert_eq!(optional_counts(&course, &p), (1, 2, vec!["r".to_owned()]));
+        assert_eq!(course_size(&course), "3 stages in 2 modules, plus 2 challenges and 2 stages in the optional module r");
+        assert_eq!(current(&course, &p).map(|s| s.def.id.as_str()), Some("1a-02"), "the same path `current` walks");
     }
 
     #[test]
