@@ -31,17 +31,31 @@ pushed. `git log origin/master..review/bustub-assessment` lists it.
   challenge banners, a locked-module message, proptest counterexamples kept, `reset` archives progress.json first, a lint rule for
   unpaired `||`.
 - **Formatting:** the reference ships `rustfmt.toml` (max_width 140) and is formatted; `tools/check_course_regions.py` and
-  `cargo fmt --check` run in CI with `add_assert_messages.py --check` (all three new).
-- **Checked:** all 62 reference test binaries pass; the template compiles with its tests; course lint and validate clean; CLI and
-  content tests, clippy clean; `tsc` clean on the web changes. `anneal course verify` has **not** been run on the branch: run it
-  (in the background, hours) before merging.
-- **In flight:** branch `review/content-contracts` (recipe tasks into contracts, toolboxes that paste the reference, step-list `todo!`
-  messages, slice F's wrong check answers and dead track links).
-- **Waiting on the owner:** offline hints (opening one marks the stage "passed with help"); concepts in the CLI; the phone tab layout
-  (mockup first); soft-delete of concept-read rows; COURSE_STANDARDS.md §1 (required "Read first" concepts) against
-  BUSTUB_RESTRUCTURE.md §4b (all concepts optional), which one stands; the restructure proposals (split 2c-01, a concurrent B+ tree
-  module 2e, merge the tiny 2a stages, 4e wires 3k's DbError into the session and shell, promote some challenges to core stages, an
-  early end-to-end SQL moment). Indexes inside transactions use only the primary key; secondary indexes would need (key, rid) entries.
+  `cargo fmt --check` run in CI with `add_assert_messages.py --check` and `tools/test_check_progress_safety.py` (all new).
+- **Owner decisions taken 2026-11-27 ("go with your recommendations"), all built and merged on the branch:** hints open offline
+  (from the local course copy; the "helped" mark is queued in `.anneal/outbox.jsonl` and sent before any run at the next sync);
+  concepts in the CLI (`anneal course concept <id>`, `anneal course concepts [stage]`, listed by `show`; shipped in the course bundle);
+  one suggested "Read first" concept per core stage, never required (COURSE_STANDARDS.md §1 and BUSTUB_RESTRUCTURE.md §4b agree);
+  marking a concept unread keeps its row (migration 0025 `unread_at`); stage tabs fit one row whenever the reading column is narrow
+  (option C of docs/mockups/course-stage-tabs-phone.html, a container query on `main.k-read2`, checked by screenshots at 320 to 2200 px).
+- **Stage aliases:** `stage.toml` takes `renamed_from` (an old id, or a list of ids newest first for a chain). A stage with no stored
+  state takes it from its former stages (passed only if every former passed); old rows are never written or deleted; reset archives
+  them too. check-progress-safety.py fails a course stage id that disappears unclaimed. API, CLI and content share the rule.
+- **Restructures (the owner had passed nothing from 2a on, so ids were renumbered):** 2c in seven stages (header and one leaf, the
+  first split, splits all the way up, scanning, removing at the leaves, merges all the way up, boss); 2d gains "Reclaim before you
+  split" (was challenge 2d-c5); new module **2e "Concurrent B+ tree"** (`11b-concurrent-b-plus-tree`: latch crabbing, the optimistic
+  fast path, scans that survive writers, boss); the tiny-stage merges in 2a, 3d and 3k below. Secondary indexes are keyed by
+  (key, rid): repeated and NULL keys are indexed, primary keys stay unique and refuse NULL, transactions use every index again, an
+  update keeps the old entry for older snapshots (entries no version reaches are not collected: stated on 4b-05). 4e: the session
+  returns 3k's `DbError` with SQLSTATE codes (40001, 25P02, 25P01, 25001, 23505, 23502, 42601), the shell is a session (`begin;`
+  works; errors print `ERROR <code>: <message>`), challenge 4e-c1 retries by code.
+- **Checked on the merged branch:** all 63 reference test binaries; the template compiles; course lint (283 stages), regions,
+  assertions, comments, fmt, snippets (422), links (573), progress safety; `course verify --stage unlock` (315 stages, 0 problems);
+  anneal-cli/content/api tests (API tests on a throwaway Postgres) and clippy. The full `anneal course verify` was started at the
+  last commit; its result is the line below when it ends. An earlier full run (before the restructures) passed 280 of 281 stages and
+  found one test of ours that used a later stage's iterator (fixed).
+- **Known limits, stated on the pages:** index entries no version can reach are not garbage-collected; `CREATE INDEX` after
+  transactional writes indexes only the newest version of each row; the 3k boss itself runs no SQL statement (4e-04 does).
 - **Tiny stages merged (branch `review/restructure-merges`):** 2a is now 2a-01 "Values that survive bytes" (old 01 + 02), 2a-02 "A
   page array you can search" (old 03 + 04) and the boss 2a-03. Challenge 2a-c5 "the smeared slot" is removed: it repeated the overlap
   lesson of the page array word for word; its id is in 2a-02's `renamed_from`. Ids that still exist with a new meaning cannot be listed
