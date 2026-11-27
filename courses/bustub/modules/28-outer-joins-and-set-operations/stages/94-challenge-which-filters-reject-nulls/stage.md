@@ -51,3 +51,10 @@ COALESCE(c0, 5) > 3, nulls [0] -> false; COALESCE(c0, 1) > 3 -> true
 ## Done when
 
 All the `s3j_c5` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Plan transformations and rule soundness](/cookbook/p/plan-transformations-and-rule-soundness): null-rejection deciding when an outer join may become inner.
+- [Abstract interpretation](/cookbook/p/abstract-interpretation-intervals): sound abstract interpretation over sets of possible values.

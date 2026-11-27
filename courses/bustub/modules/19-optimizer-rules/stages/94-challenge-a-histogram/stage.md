@@ -46,3 +46,10 @@ values 0..100, 10 buckets: estimate_le(49) = 50 (exact), estimate_le(54) is abou
 ## Done when
 
 All the `s3h_c5` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Optimizer statistics](/cookbook/p/statistics-histograms-sketches): equi-width and other histograms, and the uniformity-within-bucket assumption.
+- [Statistics](/cookbook/p/statistics): equi-width histograms built and measured with q-error on skewed data.

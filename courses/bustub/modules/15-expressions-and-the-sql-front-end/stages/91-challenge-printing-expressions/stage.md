@@ -49,3 +49,9 @@ Neg(Bin(1 + 2)) -> -(1 + 2)
 ## Done when
 
 All the `s3d_c2` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [One expression language, four parsers](/cookbook/p/expression-parsing-three-ways): a minimal-parenthesis printer used as an oracle for four parsers.

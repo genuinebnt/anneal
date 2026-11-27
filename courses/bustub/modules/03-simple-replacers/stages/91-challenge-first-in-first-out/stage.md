@@ -49,3 +49,10 @@ pin 0; evict -> 1; unpin 0; evict -> 0
 ## Done when
 
 All the `s1c_c2` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [A cache replacement policy zoo](/cookbook/p/cache-policy-zoo): FIFO and the other policies, each checked against the same traces.
+- [A buffer pool](/cookbook/p/buffer-pool-clock): a buffer pool whose evictable set is checked against the frames after every operation.

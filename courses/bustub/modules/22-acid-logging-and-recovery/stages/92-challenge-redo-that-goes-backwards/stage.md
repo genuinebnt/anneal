@@ -48,3 +48,11 @@ page 0 = (5, 'new'); log [(3, 0, 'old'), (7, 0, 'newer')] -> (7, 'newer'), and '
 ## Done when
 
 All the `s4c_c3` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Build WAL and ARIES](/cookbook/p/build-wal-and-aries): redo skipped by the dirty page table, recLSN and pageLSN tests, counted.
+- [ARIES crash recovery](/cookbook/p/aries-recovery): page LSNs and the WAL rule in ARIES.
+- [Crash recovery (ARIES)](/cookbook/p/crash-recovery-aries): pageLSN, recLSN and flushedLSN, and what each decides.

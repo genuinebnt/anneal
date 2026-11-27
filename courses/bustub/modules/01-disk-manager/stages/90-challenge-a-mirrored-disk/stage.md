@@ -51,3 +51,9 @@ delete after write -> zeros
 ## Done when
 
 All the `s1a_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Disk-head scheduling](/cookbook/p/disk-scheduling-raid): RAID 1 mirroring with degraded reads, rebuild and a checksummed mirror.

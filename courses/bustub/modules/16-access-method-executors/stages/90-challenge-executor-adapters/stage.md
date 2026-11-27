@@ -48,3 +48,10 @@ scan [1..10] -> Filter(even) -> Limit(2, offset 1) -> 4, 6; the scan was pulled 
 ## Done when
 
 All the `s3e_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [One query, four execution models](/cookbook/p/volcano-vectorized-push): Box<dyn Operator> pipelines, and LIMIT stopping its child early.
+- [Access-method executors](/cookbook/p/access-method-executors): Volcano executors for scan, filter, projection and limit.

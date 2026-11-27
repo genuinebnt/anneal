@@ -46,3 +46,10 @@ set 1=1; sp A; set 1=2; sp B; set 2=9; rollback_to A -> {1: 1}; B is gone
 ## Done when
 
 All the `s4b_c5` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Undo/redo for a text editor](/cookbook/p/undo-redo-editors): undo stacks of inverse operations, the mechanism behind savepoints.
+- [Sqlx with SQLite](/cookbook/p/sqlx-sqlite-queries-transactions): savepoints used from application code.

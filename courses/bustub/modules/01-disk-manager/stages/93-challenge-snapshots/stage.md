@@ -50,3 +50,10 @@ read_at(s, 2) = None if page 2 was written only after the snapshot
 ## Done when
 
 All the `s1a_c4` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [MVCC implementation choices](/cookbook/p/mvcc-version-storage-gc): append-only version storage, time travel, and readers at an old snapshot.
+- [More primers](/cookbook/p/more-primers): a copy-on-write trie whose new versions share every untouched node.

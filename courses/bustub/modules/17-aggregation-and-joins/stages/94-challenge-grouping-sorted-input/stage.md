@@ -47,3 +47,10 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s3f_c5` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Sorting and aggregation](/cookbook/p/sorting-and-aggregation): hash versus sort aggregation, and when sorted input makes grouping cheap.
+- [External sort hash aggregation](/cookbook/p/external-sort-hash-aggregation): sort-based aggregation that combines neighbours and keeps output sorted.

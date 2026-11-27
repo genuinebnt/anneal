@@ -47,3 +47,10 @@ write(5, 1); read(3) -> abort; read(7) -> 1; write(6, 2) -> abort (7 has read); 
 ## Done when
 
 All the `s4a_c5` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Non-locking concurrency control](/cookbook/p/timestamp-ordering-occ): basic timestamp ordering with read and write timestamps per item.
+- [Timestamp ordering and OCC](/cookbook/p/timestamp-ordering-and-occ): basic T/O rules and the Thomas write rule.

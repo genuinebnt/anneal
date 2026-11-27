@@ -47,3 +47,10 @@ chain [C(ts 5, delete), C(ts 2, 'a')]: ts 3 -> 'a'; ts 6 -> none
 ## Done when
 
 All the `s4a_c2` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Project 4 · MVOCC](/cookbook/p/project-4-mvocc): reconstructing a tuple for a read timestamp, including own writes and deletes.
+- [MVCC snapshot isolation](/cookbook/p/mvcc-snapshot-isolation): version chains and which version a snapshot sees.

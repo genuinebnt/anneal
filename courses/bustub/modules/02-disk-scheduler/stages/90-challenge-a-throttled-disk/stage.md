@@ -49,3 +49,10 @@ rate 2, burst 1: write ok; +250ms write refused; +250ms write ok
 ## Done when
 
 All the `s1b_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Token-bucket rate limiter with an injectable clock](/cookbook/p/token-bucket): the same token bucket with an injectable clock for exact tests.
+- [A deterministic laboratory comparing six rate-limit algorithms](/cookbook/p/rate-limiter-lab): token bucket compared with five other rate limiters on one deterministic clock.

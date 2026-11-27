@@ -51,3 +51,9 @@ pages_for(u64::MAX, 4096) = Some(4503599627370496)
 ## Done when
 
 All the `sr_c5` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Integer methods look-up page](/cookbook/p/std-integer-methods-overflow): checked, wrapping and saturating arithmetic, and div_ceil for rounding up.

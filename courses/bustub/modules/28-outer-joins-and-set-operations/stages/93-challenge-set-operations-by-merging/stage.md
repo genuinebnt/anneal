@@ -48,3 +48,9 @@ Except all of the same pair -> [1, 2]; Except of the same pair -> [2]
 ## Done when
 
 All the `s3j_c4` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Relational model and algebra](/cookbook/p/relational-algebra-engine): bag semantics for set operations, the counts a merge must reproduce.

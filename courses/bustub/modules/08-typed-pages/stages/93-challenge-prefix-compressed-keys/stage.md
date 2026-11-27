@@ -47,3 +47,9 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s2a_c4` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Production B+tree features](/cookbook/p/btree-bulk-load-prefix-compression): prefix compression of sorted keys in B+ tree leaves.

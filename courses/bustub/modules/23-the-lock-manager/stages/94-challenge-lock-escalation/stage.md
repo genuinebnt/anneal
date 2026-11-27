@@ -47,3 +47,9 @@ threshold 2: rows 1, 2 granted; row 3 -> Escalate { released [1, 2] }; row 4 -> 
 ## Done when
 
 All the `s4d_c5` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Two-phase locking](/cookbook/p/two-phase-locking): lock escalation, intention locks, and escalation under concurrency.

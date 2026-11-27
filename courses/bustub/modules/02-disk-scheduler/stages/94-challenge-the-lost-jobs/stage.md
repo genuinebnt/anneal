@@ -50,3 +50,11 @@ submit after shutdown -> false
 ## Done when
 
 All the `s1b_c5` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Graceful shutdown](/cookbook/p/graceful-shutdown): stop accepting work, drain what is queued, then exit.
+- [Disk scheduler](/cookbook/p/disk-scheduler): a disk scheduler whose drop drains queued requests before workers stop.
+- [A generic async worker pool](/cookbook/p/worker-pool): a worker pool whose shutdown drains queued jobs.

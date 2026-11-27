@@ -48,3 +48,10 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s4b_c3` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [MVCC garbage collection](/cookbook/p/mvcc-garbage-collection): keep the newest version visible at the watermark, drop only older ones.
+- [Project 4 · MVOCC](/cookbook/p/project-4-mvocc): the watermark and garbage collection in BusTub's MVCC project.

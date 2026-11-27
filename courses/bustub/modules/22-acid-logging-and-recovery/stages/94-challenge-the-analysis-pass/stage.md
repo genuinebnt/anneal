@@ -46,3 +46,11 @@ checkpoint: active {1}, dirty {A: 10}; records: Update(1,A)@12, Begin(2)@13, Upd
 ## Done when
 
 All the `s4c_c5` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Build WAL and ARIES](/cookbook/p/build-wal-and-aries): the analysis pass rebuilding the transaction and dirty page tables from a checkpoint.
+- [ARIES crash recovery](/cookbook/p/aries-recovery): analysis, redo and undo from a fuzzy checkpoint.
+- [Crash recovery (ARIES)](/cookbook/p/crash-recovery-aries): the three ARIES passes and the tables they use.

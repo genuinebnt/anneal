@@ -51,3 +51,10 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s3a_c5` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [SQL front end](/cookbook/p/sql-front-end): SQL LIKE with escapes, matched without exponential backtracking.
+- [A regex engine](/cookbook/p/regex-nfa-engine): why backtracking matchers go exponential, and a linear-time alternative.

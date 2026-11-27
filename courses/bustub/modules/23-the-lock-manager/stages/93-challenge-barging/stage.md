@@ -49,3 +49,9 @@ holders []; waiting [S, S, X, S] -> [0, 1]
 ## Done when
 
 All the `s4d_c4` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [A lock manager](/cookbook/p/lock-manager-deadlock): FIFO fairness: a request waits behind incompatible waiting requests.

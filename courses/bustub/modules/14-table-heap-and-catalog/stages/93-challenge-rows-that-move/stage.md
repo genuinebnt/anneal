@@ -48,3 +48,9 @@ page size 10: insert 6 bytes -> rid 0 on page 0; insert 6 bytes -> rid 1 on page
 ## Done when
 
 All the `s3c_c4` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Slotted pages and a heap file](/cookbook/p/slotted-pages-heap-file): updates that relocate a tuple and leave a forward pointer so its rid survives.

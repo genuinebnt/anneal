@@ -47,3 +47,10 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s3d_c4` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Compiler-style diagnostics](/cookbook/p/diagnostics-spans): turning a byte span into line and column, with a caret under the problem.
+- [Rust-quality error messages](/cookbook/p/rust-quality-error-messages): rendering rustc-style diagnostics, including display width.

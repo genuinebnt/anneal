@@ -46,3 +46,10 @@ pred a in [10,20]: insert row [15] -> conflict; update [5] -> [8] -> fine; updat
 ## Done when
 
 All the `s4b_c4` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Transactions on the key space](/cookbook/p/transactions-on-the-key-space): serializable by validating every point read and scanned range at commit.
+- [Timestamp ordering and OCC](/cookbook/p/timestamp-ordering-and-occ): phantoms, and predicate and index locking as the alternatives.

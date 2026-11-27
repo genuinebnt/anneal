@@ -47,3 +47,9 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s0d_c3` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Merkle tree](/cookbook/p/merkle-tree): Merkle tree with inclusion proofs, and why duplicating the odd node is ambiguous.

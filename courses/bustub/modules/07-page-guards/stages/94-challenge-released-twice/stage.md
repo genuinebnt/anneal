@@ -47,3 +47,10 @@ new, new -> 2; release one -> returns 1; drop the other -> 0
 ## Done when
 
 All the `s1g_c3` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [`std::mem` by use case](/cookbook/p/std-mem-replace-take-swap-forget): mem::forget and ManuallyDrop for leaving a guard without running Drop.
+- [`Drop` and RAII](/cookbook/p/drop-raii): what Drop promises, and the paths where it runs.

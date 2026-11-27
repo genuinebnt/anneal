@@ -48,3 +48,9 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s3b_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Pages and tuples](/cookbook/p/pages-and-tuples): tuple layout with a null bitmap, a fixed region and variable-length slots.

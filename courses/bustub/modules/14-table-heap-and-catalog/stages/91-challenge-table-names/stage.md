@@ -46,3 +46,10 @@ create Users -> 1; create USERS -> Exists; lookup users -> 1; drop; create users
 ## Done when
 
 All the `s3c_c2` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Catalog, types, expressions](/cookbook/p/catalog-types-expressions): a catalog with case-insensitive table and column lookup.
+- [Slab generational](/cookbook/p/slab-generational): why reusing an id after removal lets old references hit a new object.

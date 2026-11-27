@@ -48,3 +48,10 @@ a = [] ; b = a.push(1) ; c = b.push(2) ; d = b.push(3): b = [1], c = [2,1], d = 
 ## Done when
 
 All the `s0a_c4` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Linked-list interview questions in Rust](/cookbook/p/linked-lists-in-rust): a persistent shared-tail list with Rc.
+- [More primers](/cookbook/p/more-primers): a persistent trie where no shared node is ever written.

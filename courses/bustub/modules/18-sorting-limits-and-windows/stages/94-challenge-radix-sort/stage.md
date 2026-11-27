@@ -45,3 +45,10 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s3g_c5` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Parallel sample sort and parallel LSD/MSD radix sort](/cookbook/p/parallel-sample-sort-radix): LSD radix sort by per-digit histogram and prefix-sum scatter.
+- [Sorting and searching toolkit, differential-tested against std](/cookbook/p/sorting-searching): LSD radix and counting sort tested against std's sort.

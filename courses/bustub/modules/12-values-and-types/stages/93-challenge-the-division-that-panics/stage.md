@@ -51,3 +51,9 @@ div(-7, 2) -> -3
 ## Done when
 
 All the `s3a_c4` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Integer methods look-up page](/cookbook/p/std-integer-methods-overflow): checked_div, and why MIN / -1 panics in every build.

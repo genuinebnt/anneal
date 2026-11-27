@@ -47,3 +47,9 @@ list {1, 2, 3} with heights {1, 3, 2}: level 1 = [2, 3]; level 2 = [2]
 ## Done when
 
 All the `s0b_c2` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Skip list](/cookbook/p/skiplist): the structure behind the invariants: towers, sorted lanes and a full level 0.

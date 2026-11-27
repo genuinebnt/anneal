@@ -47,3 +47,9 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s2c_c4` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [The k-way merge family](/cookbook/p/kway-merge-family): a lazy heap-based k-way merge, stable on ties by source index.

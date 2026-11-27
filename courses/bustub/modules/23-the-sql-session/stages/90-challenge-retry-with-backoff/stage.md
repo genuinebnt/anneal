@@ -47,3 +47,10 @@ f fails with a syntax error: Err after one call
 ## Done when
 
 All the `s4e_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Exponential backoff with full jitter](/cookbook/p/retry-backoff-jitter): exponential backoff with full jitter.
+- [Error chain retryable](/cookbook/p/error-chain-retryable): classifying errors as retryable or fatal.

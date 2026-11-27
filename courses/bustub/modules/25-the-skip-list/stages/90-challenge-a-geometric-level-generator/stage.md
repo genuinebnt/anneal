@@ -47,3 +47,10 @@ branching 2, 20 000 draws: about 10 000 are >= 2
 ## Done when
 
 All the `s0b_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Skip list](/cookbook/p/skiplist): random tower heights with promotion probability p, capped at a max level.
+- [A PRNG zoo](/cookbook/p/prng-zoo): seeded xorshift and other generators, and how to test them.

@@ -52,3 +52,10 @@ split(0): global 1, 2 buckets, hash 0b10 -> bucket 0, 0b11 -> bucket 1
 ## Done when
 
 All the `s2b_c2` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Hash tables](/cookbook/p/hash-tables): extendible hashing step by step: directory doubling and local depth.
+- [Hash indexes](/cookbook/p/hash-and-bitmap-indexes): extendible hashing: splitting a bucket and re-pointing directory slots.

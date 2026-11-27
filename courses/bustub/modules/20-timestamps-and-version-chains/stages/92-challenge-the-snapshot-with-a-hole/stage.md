@@ -48,3 +48,10 @@ reserve 1, 2, 3; finish 2 -> begin 0; finish 1 -> begin 2; finish 3 -> begin 3
 ## Done when
 
 All the `s4a_c3` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Project 4 · MVOCC](/cookbook/p/project-4-mvocc): stamping a commit before publishing it, so no reader sees half of one.
+- [Multi-version concurrency control](/cookbook/p/multi-version-concurrency-control): publishing the commit clock only after the whole write set is stamped.

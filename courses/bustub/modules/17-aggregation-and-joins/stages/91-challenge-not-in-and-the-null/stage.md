@@ -47,3 +47,11 @@ right [2, NULL]: semi [1]; anti [0, 2]; not_in []
 ## Done when
 
 All the `s3f_c2` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Modern SQL](/cookbook/p/modern-sql): the NOT IN trap: a NULL in the list means no row is ever TRUE.
+- [Unnesting subqueries](/cookbook/p/unnesting-subqueries): why NOT IN needs a null-aware anti-join when it is unnested.
+- [Join algorithms compared](/cookbook/p/join-algorithms-code): hash-based semi and anti joins for EXISTS and NOT EXISTS.

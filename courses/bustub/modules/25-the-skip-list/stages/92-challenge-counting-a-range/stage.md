@@ -45,3 +45,9 @@ keys {10, 20, 30}: range_count(15, 30) = 2; floor(25) = 20; floor(5) = None
 ## Done when
 
 All the `s0b_c3` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Skip list](/cookbook/p/skiplist): predecessor search and range scans by walking level 0.

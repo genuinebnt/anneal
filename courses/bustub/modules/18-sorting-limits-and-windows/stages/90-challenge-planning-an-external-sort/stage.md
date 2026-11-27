@@ -47,3 +47,10 @@ pages 8, buffer 10: passes 1
 ## Done when
 
 All the `s3g_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [External sort hash aggregation](/cookbook/p/external-sort-hash-aggregation): external merge sort with passes and IO asserted against the formula.
+- [Sorting and aggregation](/cookbook/p/sorting-and-aggregation): the external sort cost formula, verified on runs of different sizes.

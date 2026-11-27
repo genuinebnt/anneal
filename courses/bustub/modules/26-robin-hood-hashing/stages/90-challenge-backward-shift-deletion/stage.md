@@ -46,3 +46,9 @@ capacity 8, keys with the same home h: insert a, b, c in order -> slots h, h+1, 
 ## Done when
 
 All the `s0c_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Open addressing map](/cookbook/p/open-addressing-map): the same backward-shift deletion with Robin Hood linear probing.

@@ -48,3 +48,9 @@ insert 1,2,3; remove 2 -> slots 3, live 2, tombstones 1; insert 2 again -> slots
 ## Done when
 
 All the `s2d_c2` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Delete and tombstones](/cookbook/p/delete-and-tombstones): BusTub's leaf tombstone buffer, where re-inserting a tombstoned key revives it.

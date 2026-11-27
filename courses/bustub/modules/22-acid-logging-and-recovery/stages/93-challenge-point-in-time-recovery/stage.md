@@ -46,3 +46,9 @@ log: B1 S1(k=1) C1@4 B2 S2(k=1,v=2) C2@8: recover_until(5) -> {k: 1}; recover_un
 ## Done when
 
 All the `s4c_c4` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Cloud-native OLTP](/cookbook/p/cloud-native-oltp): point-in-time recovery as a read of the database at an older LSN.

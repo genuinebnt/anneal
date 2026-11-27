@@ -48,3 +48,9 @@ T2 reads x -> 1: StaleRead? no: that is a read of an uncommitted/not-yet-visible
 ## Done when
 
 All the `s4b_c2` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Transaction theory](/cookbook/p/transaction-theory-serializability): Adya's phenomena and isolation levels checked on recorded histories.

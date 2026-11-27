@@ -51,3 +51,10 @@ insert(1, A); insert(1, B) -> A is free
 ## Done when
 
 All the `s1f_c5` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [A buffer pool](/cookbook/p/buffer-pool-clock): a page table and frame table that are checked to agree after every operation.
+- [Buffer pool manager](/cookbook/p/buffer-pool-manager): the page table, pins and dirty bits, and the latch protocol around them.

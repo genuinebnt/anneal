@@ -46,3 +46,10 @@ g = bytes [1, 7, 7, 0, 255, 7, 2, 9]: match_byte(g, 7) flags bytes 1, 2, 5; firs
 ## Done when
 
 All the `s0c_c5` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Bit-twiddling toolbox](/cookbook/p/bit-tricks): SWAR zero-byte detection and other word-at-a-time tricks.
+- [Hash tables](/cookbook/p/hash-tables): SwissTable-style control bytes in a linear-probing table, measured.

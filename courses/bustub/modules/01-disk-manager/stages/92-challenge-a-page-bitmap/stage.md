@@ -50,3 +50,10 @@ free(3) -> Err(OutOfRange)
 ## Done when
 
 All the `s1a_c3` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [A toy UNIX filesystem on a block device](/cookbook/p/toy-filesystem): a block bitmap allocator that reports a double free as corruption.
+- [Bitset rank select roaring](/cookbook/p/bitset-rank-select-roaring): scanning u64 words with trailing_zeros to find a bit quickly.

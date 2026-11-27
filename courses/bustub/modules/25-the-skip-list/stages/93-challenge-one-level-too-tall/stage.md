@@ -50,3 +50,9 @@ max 1, any coin -> 1 with no flips
 ## Done when
 
 All the `s0b_c4` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Skip list](/cookbook/p/skiplist): drawing a tower height with a hard MAX_LEVEL.

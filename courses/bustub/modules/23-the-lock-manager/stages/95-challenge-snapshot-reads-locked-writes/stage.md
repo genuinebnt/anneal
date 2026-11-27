@@ -55,3 +55,10 @@ two writers on one key: the second `put` returns only after the first commits
 ## Done when
 
 All the `s4d_c6` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [MVCC protocols compared](/cookbook/p/mvcc-protocols-compared): MV2PL: writers lock and wait instead of aborting, compared with SI.
+- [Two-phase locking](/cookbook/p/two-phase-locking): SELECT ... FOR UPDATE to avoid the read-then-upgrade deadlock.

@@ -50,3 +50,9 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s3i_c3` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Query planning and rewriting](/cookbook/p/query-planning-and-rewriting): folding that is only valid where NULL and FALSE both drop the row.

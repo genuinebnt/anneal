@@ -51,3 +51,10 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s3i_c4` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [One key space](/cookbook/p/one-key-space): prefix_end: the upper bound of a prefix range scan.
+- [SQL front end](/cookbook/p/sql-front-end): LIKE semantics (%, _, escape) that the range must cover.

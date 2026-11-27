@@ -49,3 +49,9 @@ global 0 -> false
 ## Done when
 
 All the `s2b_c5` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Hash indexes](/cookbook/p/hash-and-bitmap-indexes): buddy-bucket merges and when an extendible directory can halve.

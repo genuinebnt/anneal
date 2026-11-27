@@ -50,3 +50,9 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s3f_c4` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Modern SQL](/cookbook/p/modern-sql): COUNT(*) versus COUNT(x), and aggregates over no non-NULL values being NULL.

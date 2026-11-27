@@ -46,3 +46,10 @@ checkpoint 100, dirty [], active [] -> 100
 ## Done when
 
 All the `s4c_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Write-ahead logging schemes](/cookbook/p/logging-schemes-group-commit): log truncation below min(redo start, first LSN of any active transaction).
+- [ARIES crash recovery](/cookbook/p/aries-recovery): fuzzy checkpoints recording the transaction and dirty page tables.

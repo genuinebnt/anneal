@@ -49,3 +49,9 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s2d_c1` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Index iterator](/cookbook/p/index-iterator): range scans over the leaf chain that skip tombstoned entries.

@@ -47,3 +47,10 @@ L=[(1,a),(2,b),(2,c)], R=[(2,x),(2,y),(3,z)] -> (b,x) (b,y) (c,x) (c,y)
 ## Done when
 
 All the `s3f_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Join algorithms compared](/cookbook/p/join-algorithms-code): sort-merge join emitting the cross product of each equal-key group.
+- [Join algorithms](/cookbook/p/join-algorithms): sort-merge join and its cost next to nested loop and hash join.

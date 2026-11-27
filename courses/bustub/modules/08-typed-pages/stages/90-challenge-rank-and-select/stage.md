@@ -52,3 +52,10 @@ count_range(20, 50) = 3
 ## Done when
 
 All the `s2a_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Sorting and searching toolkit, differential-tested against std](/cookbook/p/sorting-searching): lower and upper bound, and quickselect for the k-th smallest.
+- [A split/merge treap with pluggable augmentation](/cookbook/p/treap-interval): order statistics (rank and k-th) from subtree sizes in a balanced tree.

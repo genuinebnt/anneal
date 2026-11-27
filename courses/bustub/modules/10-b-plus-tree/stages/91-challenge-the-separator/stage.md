@@ -50,3 +50,10 @@ inner [10,20,30,40,50] -> ([10,20,30], 40, [50])
 ## Done when
 
 All the `s2c_c2` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Search and insert](/cookbook/p/search-and-insert): leaf split with copy-up and inner split with push-up.
+- [Bplus tree](/cookbook/p/bplus-tree): an in-memory B+ tree with leaf and inner splits.

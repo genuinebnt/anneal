@@ -49,3 +49,10 @@ remove a key -> not contained, the others still are
 ## Done when
 
 All the `s2b_c4` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Cuckoo hashing](/cookbook/p/cuckoo-hashing): two-table cuckoo hashing with a kick limit and rebuild on cycles.
+- [Hash tables](/cookbook/p/hash-tables): cuckoo hashing measured against the other hash schemes.

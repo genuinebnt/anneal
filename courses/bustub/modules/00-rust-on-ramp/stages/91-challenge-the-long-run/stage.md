@@ -53,3 +53,10 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `sr_c2` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Property testing with SHRINKING](/cookbook/p/shrinking): how a property test shrinks a failing input down to the smallest counterexample.
+- [Testing tools](/cookbook/p/criterion-proptest-insta-testing): proptest strategies and shrinking in practice, including stateful tests.

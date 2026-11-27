@@ -48,3 +48,9 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s3g_c3` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Modern SQL over in-memory tables](/cookbook/p/sql-window-functions-ctes): ROWS frames evaluated with prefix sums of non-NULL values in O(1) per row.

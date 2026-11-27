@@ -52,3 +52,10 @@ node 1, left 2, right 2 -> MergeLeft
 ## Done when
 
 All the `s2c_c5` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Delete and tombstones](/cookbook/p/delete-and-tombstones): the four delete fix-ups: borrow left or right before merging.
+- [Bplus tree](/cookbook/p/bplus-tree): delete that borrows from a sibling with spare keys, else merges.

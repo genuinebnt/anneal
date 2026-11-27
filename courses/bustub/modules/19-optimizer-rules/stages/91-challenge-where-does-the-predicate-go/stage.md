@@ -47,3 +47,11 @@ a.x=1 AND b.y>3 AND a.z<b.w with left_cols=2 -> left [a.x=1], right [b.y>3], bot
 ## Done when
 
 All the `s3h_c2` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Plan transformations and rule soundness](/cookbook/p/plan-transformations-and-rule-soundness): pushing filters through joins, and the wrong push into an outer join's null side.
+- [Query planning and rewriting](/cookbook/p/query-planning-and-rewriting): predicate pushdown in the optimizer pipeline.
+- [A cost-based query optimizer in miniature](/cookbook/p/query-optimizer): conjunction splitting and predicate pushdown in a small rule engine.

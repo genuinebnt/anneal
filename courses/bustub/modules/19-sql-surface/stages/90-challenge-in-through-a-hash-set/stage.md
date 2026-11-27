@@ -49,3 +49,10 @@ list [1, NULL]: contains(Some(3)) = NULL, not_in(Some(1)) = FALSE
 ## Done when
 
 All the `s3i_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Modern SQL](/cookbook/p/modern-sql): x IN (1, NULL): TRUE on a match, otherwise UNKNOWN.
+- [SQL front end](/cookbook/p/sql-front-end): the OR-chain desugaring of IN that a hash set replaces.

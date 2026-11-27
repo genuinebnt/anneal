@@ -48,3 +48,9 @@ Limit 0.9ms over Sort 0.8ms over Scan 0.5ms -> exclusive 0.1, 0.3, 0.5; slowest 
 ## Done when
 
 All the `s3i_c5` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Profiling and observability](/cookbook/p/profiling-and-observability): self time versus inclusive time, and per-operator timing like EXPLAIN ANALYZE.

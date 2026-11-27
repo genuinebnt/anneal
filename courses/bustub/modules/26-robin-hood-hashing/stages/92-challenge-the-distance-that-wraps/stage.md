@@ -50,3 +50,9 @@ home 4, slot 4 -> 0
 ## Done when
 
 All the `s0c_c3` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Open addressing map](/cookbook/p/open-addressing-map): distance from home in a circular probing table.

@@ -48,3 +48,10 @@ items 1..=5: mark; next=1, next=2; reset; next=1, next=2, next=3 (new from the s
 ## Done when
 
 All the `s3e_c5` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Aggregation and nested-loop joins](/cookbook/p/aggregation-and-nested-loop-joins): why a nested loop join materializes its inner side: an executor cannot rescan.
+- [Join algorithms compared](/cookbook/p/join-algorithms-code): merge join over duplicate groups, the job the mark/reset trick does.

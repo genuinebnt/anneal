@@ -47,3 +47,10 @@ seal("abc") = "abc" + crc32("abc") little-endian
 ## Done when
 
 All the `s3b_c4` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Hand-rolled serialisation on `std::io`](/cookbook/p/std-hash-collections-io-serialization-formats): a table-driven CRC-32 sealing records, with hostile-input decoding.
+- [A write-ahead log](/cookbook/p/wal-append-log): checksummed log records that detect torn writes and corruption.

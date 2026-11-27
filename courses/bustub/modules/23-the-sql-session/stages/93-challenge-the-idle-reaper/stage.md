@@ -47,3 +47,9 @@ timeout 100: a (txn, idle 150), b (txn, idle 100), c (no txn, idle 900) -> [a]; 
 ## Done when
 
 All the `s4e_c4` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Timing wheel](/cookbook/p/timing-wheel): timers for idle timeouts, and when a heap's next deadline is the better choice.

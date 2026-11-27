@@ -49,3 +49,9 @@ add(1, 2) -> counts [2,2,3]; find(2) = (1, 0)
 ## Done when
 
 All the `s2d_c3` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Segment fenwick](/cookbook/p/segment-fenwick): a Fenwick tree with prefix sums and a k-th element search.

@@ -46,3 +46,10 @@ claim(1, 'a') ok; claim(2, 'a') -> conflict with 1; release_all(1); claim(2, 'a'
 ## Done when
 
 All the `s4b_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Project 4 · MVOCC](/cookbook/p/project-4-mvocc): write-write conflict detection that aborts at write time.
+- [MVCC snapshot isolation](/cookbook/p/mvcc-snapshot-isolation): first-committer-wins and the lost updates it prevents.

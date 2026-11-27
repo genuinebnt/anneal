@@ -47,3 +47,9 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s4e_c6` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Roles, privileges and row-level security](/cookbook/p/roles-privileges-and-row-level-security): checking which kinds of statement a role may run, before running them.

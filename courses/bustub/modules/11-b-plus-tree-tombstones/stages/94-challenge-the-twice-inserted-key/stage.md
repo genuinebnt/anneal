@@ -48,3 +48,9 @@ insert 5; remove 5; insert 5 -> contains 5, len 1, keys [5]
 ## Done when
 
 All the `s2d_c4` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Delete and tombstones](/cookbook/p/delete-and-tombstones): tombstoned keys in a leaf, and reviving one on re-insert.

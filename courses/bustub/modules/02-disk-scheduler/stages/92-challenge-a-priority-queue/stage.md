@@ -48,3 +48,9 @@ push (5,x); pop -> x; pop -> None
 ## Done when
 
 All the `s1b_c3` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [BinaryHeap as a min-heap with a deterministic tie-break](/cookbook/p/heap-tiebreak): BinaryHeap with a sequence number so equal priorities pop in arrival order.

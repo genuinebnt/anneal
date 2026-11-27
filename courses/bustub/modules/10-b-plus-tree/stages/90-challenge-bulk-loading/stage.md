@@ -51,3 +51,10 @@ level_widths(1000, 10, 5) = [100, 20, 4, 1]
 ## Done when
 
 All the `s2c_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Production B+tree features](/cookbook/p/btree-bulk-load-prefix-compression): bulk loading a B+ tree from sorted input, leaf by leaf.
+- [Search and insert](/cookbook/p/search-and-insert): BusTub's B+ tree insert path, with a section on bulk loading.

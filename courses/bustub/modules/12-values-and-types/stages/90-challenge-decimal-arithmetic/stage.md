@@ -53,3 +53,9 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s3a_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Money done right](/cookbook/p/decimal-fixed-point-money): fixed-point decimals with checked arithmetic and rounding modes, half away from zero included.

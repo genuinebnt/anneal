@@ -45,3 +45,9 @@ a {1, 3, 5}, b {3, 4}: union {1, 3, 4, 5}
 ## Done when
 
 All the `s0b_c5` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [The k-way merge family](/cookbook/p/kway-merge-family): merging sorted sequences in one pass, with two-way merge variants.

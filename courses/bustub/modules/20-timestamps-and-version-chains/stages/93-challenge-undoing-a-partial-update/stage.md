@@ -47,3 +47,10 @@ old None, new [4] -> Remove; old [4], new None -> Restore([4])
 ## Done when
 
 All the `s4a_c4` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Project 4 · MVOCC](/cookbook/p/project-4-mvocc): delta undo logs holding only modified columns, applied newest first.
+- [MVCC implementation choices](/cookbook/p/mvcc-version-storage-gc): delta version storage compared with append-only and time-travel.

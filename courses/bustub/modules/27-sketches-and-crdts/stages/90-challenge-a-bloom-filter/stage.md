@@ -45,3 +45,10 @@ m 1000, k 3: insert 1..100 -> all contained; false positives among 1000..2000 ar
 ## Done when
 
 All the `s0d_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Bloom filter](/cookbook/p/bloom-filter): a Bloom filter with k hashes by double hashing, and its false-positive rate.
+- [Filters, tries, inverted and vector indexes](/cookbook/p/filters-tries-inverted-and-vector-indexes): Bloom, blocked Bloom and cuckoo filters: bits per key for 1% FPR.

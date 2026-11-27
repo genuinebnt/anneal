@@ -50,3 +50,11 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `sr_c4` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Bytes](/cookbook/p/bytes-buf-buf-mut-framing): an incremental length-delimited decoder that keeps partial input between calls.
+- [A length-prefixed TCP message server, built twice](/cookbook/p/tcp-framed-server): length-prefixed frames over TCP, where reads stop mid-frame.
+- [RESP2, the Redis wire protocol](/cookbook/p/resp-protocol): an incremental parser that leaves a partial command buffered for the next read.

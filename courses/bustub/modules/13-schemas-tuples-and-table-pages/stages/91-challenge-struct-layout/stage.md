@@ -47,3 +47,10 @@ packed order of the same -> [1,2,0], size 16
 ## Done when
 
 All the `s3b_c2` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Struct layout](/cookbook/p/struct-packing): padding, field order and repr(C) layout, with compile-time size checks.
+- [Memory layout](/cookbook/p/data-layout): struct size and padding, and how reordering fields shrinks a struct.

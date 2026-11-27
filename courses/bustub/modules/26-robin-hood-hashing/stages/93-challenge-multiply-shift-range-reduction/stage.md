@@ -46,3 +46,9 @@ reduce(0, 10) = 0; reduce(u32::MAX, 10) = 9; reduce(2^31, 10) = 5
 ## Done when
 
 All the `s0c_c4` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [A PRNG zoo](/cookbook/p/prng-zoo): Lemire's multiply-shift for a bounded integer instead of % n.

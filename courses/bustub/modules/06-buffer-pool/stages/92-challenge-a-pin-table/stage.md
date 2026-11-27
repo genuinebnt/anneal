@@ -46,3 +46,10 @@ pin 3, pin 3 -> 2; unpin 3 -> 1; unpin 3 -> 0 (page 3 no longer pinned); unpin 3
 ## Done when
 
 All the `s1f_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Buffer pool manager](/cookbook/p/buffer-pool-manager): pins, unpins and the race where a page is evicted while still in use.
+- [A buffer pool](/cookbook/p/buffer-pool-clock): pin counts held by an RAII guard so a pinned page is never evicted.

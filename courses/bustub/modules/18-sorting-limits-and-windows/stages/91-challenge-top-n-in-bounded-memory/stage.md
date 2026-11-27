@@ -45,3 +45,10 @@ n = 2; push (5,a) (1,b) (5,c) (1,d) -> [(1,b), (1,d)]
 ## Done when
 
 All the `s3g_c2` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Sort, top-N, limit, window](/cookbook/p/sort-top-n-limit-window): a top-N heap executor for ORDER BY ... LIMIT.
+- [Sorting and aggregation](/cookbook/p/sorting-and-aggregation): top-N with a heap, including how ties are handled.

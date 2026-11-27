@@ -51,3 +51,10 @@ first_clear on a full set -> None
 ## Done when
 
 All the `sr_c3` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Bitset rank select roaring](/cookbook/p/bitset-rank-select-roaring): a u64-word bit set with word-at-a-time set algebra and trailing_zeros iteration.
+- [Bit-twiddling toolbox](/cookbook/p/bit-tricks): the shift, mask and lowest-set-bit tricks a bit set is built from.

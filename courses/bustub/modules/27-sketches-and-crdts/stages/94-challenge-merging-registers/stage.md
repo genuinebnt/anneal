@@ -48,3 +48,10 @@ a registers [1,0,3,0], b [0,2,3,0] -> merged [1,2,3,0]
 ## Done when
 
 All the `s0d_c5` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [HyperLogLog cardinality estimation from scratch](/cookbook/p/hyperloglog): HyperLogLog merge by register-wise max equals the sketch of the union.
+- [State-based CRDTs](/cookbook/p/crdts-code): merge laws (commutative, associative, idempotent) as tests.

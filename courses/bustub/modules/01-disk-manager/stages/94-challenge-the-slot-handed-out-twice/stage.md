@@ -49,3 +49,10 @@ allocate -> 0, 1; free(0); free(0) (ignored); allocate -> 0; allocate -> 2 (not 
 ## Done when
 
 All the `s1a_c5` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Slab generational](/cookbook/p/slab-generational): a free list through vacant slots, and why reused slots need generations.
+- [A toy general-purpose allocator](/cookbook/p/size-class-allocator): free lists that refuse invalid and double frees.

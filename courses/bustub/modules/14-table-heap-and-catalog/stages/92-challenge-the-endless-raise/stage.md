@@ -49,3 +49,10 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s3c_c3` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Table heap](/cookbook/p/table-heap): the Halloween problem in a table heap, and a scan that avoids it.
+- [Access-method executors](/cookbook/p/access-method-executors): Halloween safety in the Update and Delete executors.

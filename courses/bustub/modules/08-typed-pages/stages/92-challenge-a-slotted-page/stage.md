@@ -49,3 +49,10 @@ delete(0); insert 4 -> slot 0
 ## Done when
 
 All the `s2a_c3` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Slotted pages and a heap file](/cookbook/p/slotted-pages-heap-file): slotted pages with stable record ids, tombstoned slots and compaction.
+- [Pages and tuples](/cookbook/p/pages-and-tuples): designing a slotted page: header, slot array and reclaiming dead bytes.

@@ -46,3 +46,10 @@ a: node 1 +5; b: node 2 +3, node 2 -1; merged value = 7; merged again = 7
 ## Done when
 
 All the `s0d_c4` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [State-based CRDTs](/cookbook/p/crdts-code): a PN-counter as two G-counters, checked with law tests.
+- [CRDTs](/cookbook/p/crdts): counters and other CRDTs whose merge converges without coordination.

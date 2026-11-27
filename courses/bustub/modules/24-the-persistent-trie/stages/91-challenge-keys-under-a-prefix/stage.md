@@ -46,3 +46,10 @@ keys {a, ab, abc, b}: prefix "a" -> [a, ab, abc]; prefix "ab" -> [ab, abc]; pref
 ## Done when
 
 All the `s0a_c2` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [A trie and a compressed radix tree](/cookbook/p/trie-radix): ordered prefix scans by walking children kept in byte order.
+- [Trie interview questions in Rust](/cookbook/p/tries-core-questions): prefix queries and autocomplete on a trie.

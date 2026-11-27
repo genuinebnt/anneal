@@ -51,3 +51,10 @@ x = 1, list [1, NULL]: FALSE
 ## Done when
 
 All the `s3i_c2` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Modern SQL](/cookbook/p/modern-sql): why NOT IN with a NULL in the list is never TRUE.
+- [Unnesting subqueries](/cookbook/p/unnesting-subqueries): NOT IN needing a null-aware anti-join, unlike NOT EXISTS.

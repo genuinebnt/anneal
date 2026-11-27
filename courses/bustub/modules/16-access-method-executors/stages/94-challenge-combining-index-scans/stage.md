@@ -45,3 +45,10 @@ a = [1,3,5], b = [3,4,5,6]: union [1,3,4,5,6]; intersect [3,5]; difference [1]
 ## Done when
 
 All the `s3e_c4` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Query execution](/cookbook/p/query-execution): multi-index scans: computing RID sets per index, then intersecting or uniting them.
+- [A mini full-text search engine](/cookbook/p/search-engine): linear intersection of sorted posting lists for AND queries.

@@ -54,3 +54,11 @@ u64::MAX -> 10 bytes
 ## Done when
 
 All the `sr_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Bytes](/cookbook/p/bytes): a 7-bit varint codec with its decode errors, next to endianness and bit tricks.
+- [Hand-rolled serialisation on `std::io`](/cookbook/p/std-hash-collections-io-serialization-formats): varints in a real file format, rejecting overlong and truncated encodings.
+- [From-scratch codecs](/cookbook/p/encodings-codecs): LEB128 and zigzag varints as protobuf and WebAssembly use them.

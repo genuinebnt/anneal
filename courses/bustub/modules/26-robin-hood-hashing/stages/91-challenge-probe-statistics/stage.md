@@ -45,3 +45,9 @@ capacity 16, keys 1..8: histogram sums to 8
 ## Done when
 
 All the `s0c_c2` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Open addressing map](/cookbook/p/open-addressing-map): Robin Hood displacement and the probe distances it equalizes.

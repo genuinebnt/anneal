@@ -51,3 +51,11 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s3d_c3` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [One expression language, four parsers](/cookbook/p/expression-parsing-three-ways): precedence climbing, Pratt and others, checked on left and right associativity.
+- [Pratt parser](/cookbook/p/pratt-parser): associativity as left and right binding powers.
+- [SQL front end](/cookbook/p/sql-front-end): the precedence-climbing loop of a SQL expression parser.

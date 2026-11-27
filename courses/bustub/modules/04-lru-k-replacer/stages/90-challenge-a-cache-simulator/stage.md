@@ -48,3 +48,10 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s1d_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [A cache replacement policy zoo](/cookbook/p/cache-policy-zoo): replaying traces through many policies, with Belady's OPT as the bound.
+- [Buffer pools](/cookbook/p/buffer-pools): a lab that replays traces to watch LRU lose to sequential flooding.

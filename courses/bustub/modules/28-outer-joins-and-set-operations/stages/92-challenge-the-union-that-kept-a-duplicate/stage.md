@@ -51,3 +51,9 @@ except_all([1, 1, 1, 2], [1, 1, 3]) -> [1, 2]
 ## Done when
 
 All the `s3j_c3` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Relational model and algebra](/cookbook/p/relational-algebra-engine): UNION ALL, INTERSECT and EXCEPT defined by bag counts (sum, min, monus).

@@ -51,3 +51,10 @@ a<=b -> Ident(a) Sym(<=) Ident(b)
 ## Done when
 
 All the `s3d_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [SQL front end](/cookbook/p/sql-front-end): a SQL lexer that handles '' inside strings and folds identifiers.
+- [A tiny language](/cookbook/p/edge-dsl-parser): a tokenizer that keeps a byte span on every token for error reporting.

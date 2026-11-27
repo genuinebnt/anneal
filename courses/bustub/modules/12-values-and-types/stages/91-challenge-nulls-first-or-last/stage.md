@@ -48,3 +48,10 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s3a_c2` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [SQL front end](/cookbook/p/sql-front-end): ORDER BY ... NULLS FIRST | LAST and where each engine sorts NULL.
+- [Modern SQL](/cookbook/p/modern-sql): NULL ordering defaults that differ between PostgreSQL, SQLite and MySQL.

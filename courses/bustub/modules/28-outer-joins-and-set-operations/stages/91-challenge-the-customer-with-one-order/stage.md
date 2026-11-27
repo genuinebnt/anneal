@@ -50,3 +50,10 @@ left [(NULL, id 30)], right [(NULL, a)] -> (30, 0)
 ## Done when
 
 All the `s3j_c2` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Modern SQL](/cookbook/p/modern-sql): COUNT(*) counts rows, COUNT(x) counts non-NULL values of x.
+- [Unnesting subqueries](/cookbook/p/unnesting-subqueries): the COUNT bug: rows with no match lose their count of zero.

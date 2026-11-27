@@ -47,3 +47,9 @@ k 1, 10 items, 20 000 runs: each item about 2 000 times
 ## Done when
 
 All the `s0d_c2` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Sampling](/cookbook/p/sampling): reservoir sampling (Algorithm R) and weighted variants.

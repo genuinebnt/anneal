@@ -46,3 +46,9 @@ table {"": A, "10": B, "1011": C}: lookup "10110" -> ("1011", C); "1001" -> ("10
 ## Done when
 
 All the `s0a_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [A trie and a compressed radix tree](/cookbook/p/trie-radix): a trie and radix tree with longest-prefix match.

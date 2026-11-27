@@ -47,3 +47,10 @@ keys [10,20,20,30]: row_number [1,2,3,4]; rank [1,2,2,4]; dense_rank [1,2,2,3]
 ## Done when
 
 All the `s3g_c4` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Modern SQL over in-memory tables](/cookbook/p/sql-window-functions-ctes): ROW_NUMBER, RANK and DENSE_RANK, and how peers share a rank.
+- [Sort, top-N, limit, window](/cookbook/p/sort-top-n-limit-window): a window executor with peer groups and RANK.

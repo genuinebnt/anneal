@@ -47,3 +47,9 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s3b_c5` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Modern SQL](/cookbook/p/modern-sql): SQL equality versus IS NOT DISTINCT FROM, and which one DISTINCT and GROUP BY use.

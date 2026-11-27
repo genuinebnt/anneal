@@ -50,3 +50,10 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s2a_c5` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Slice look-up page](/cookbook/p/std-slice-search-sort-binary): copy_within for an overlapping move inside one buffer.
+- [B+Tree pages](/cookbook/p/b-tree-pages): copy_within shifting keys and values to insert into a leaf page.

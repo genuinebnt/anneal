@@ -49,3 +49,10 @@ held; another thread releases after 20ms; acquire_timeout(1s) -> true
 ## Done when
 
 All the `s1g_c4` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [`std::sync` and thread coordination by use case](/cookbook/p/std-sync-primitives-use-cases): Condvar::wait_timeout_while and timed_out for waits with a deadline.
+- [A channel from a mutex and condition variables](/cookbook/p/mutex-condvar-channel): rechecking the condition after every wake-up, spurious or not.

@@ -50,3 +50,10 @@ NOT NOT (x < 5) -> x < 5
 ## Done when
 
 All the `s3h_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Query planning and rewriting](/cookbook/p/query-planning-and-rewriting): constant folding and boolean identities, with a property test that rewrites keep meaning.
+- [A mini compiler pipeline](/cookbook/p/bytecode-vm): a constant-folding pass over an expression tree before compilation.

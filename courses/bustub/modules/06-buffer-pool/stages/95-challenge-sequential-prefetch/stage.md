@@ -47,3 +47,9 @@ trigger 3, depth 2: access 1, 2 -> none; 3 -> [4, 5]; 4 -> [6]; 5 -> [7]; 9 -> n
 ## Done when
 
 All the `s1f_c4` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Buffered IO internals](/cookbook/p/buffered-io-internals): a prefetching reader that fetches the next block while the current one is used.

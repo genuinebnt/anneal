@@ -50,3 +50,10 @@ k=3, two accesses -> None
 ## Done when
 
 All the `s1d_c2` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [LRU k replacer disk scheduler](/cookbook/p/lru-k-replacer-disk-scheduler): backward k-distance over a bounded history of the last K accesses.
+- [Buffer pools](/cookbook/p/buffer-pools): LRU-K and its k-distance rule, with infinite distance for fewer than K accesses.

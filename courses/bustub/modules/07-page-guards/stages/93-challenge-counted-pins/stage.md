@@ -46,3 +46,10 @@ pin, pin -> 2; clone one -> 3; drop two -> 1; drop the last -> 0
 ## Done when
 
 All the `s1g_c2` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Your own `Arc<T>` and `Weak<T>` from scratch](/cookbook/p/own-arc-refcount): a shared count kept exact by Clone and Drop, built by hand.
+- [Buffer pool manager](/cookbook/p/buffer-pool-manager): page guards that hold a pin and release it on drop.

@@ -50,3 +50,10 @@ remove C: every key is back where it was
 ## Done when
 
 All the `s2b_c3` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Consistent hashing ring with virtual nodes](/cookbook/p/consistent-hashing): a ring with virtual nodes that moves about 1/N of keys.
+- [Partitioning keys across N nodes](/cookbook/p/hash-partitioning): ring, rendezvous, jump and Maglev hashing compared on keys moved.

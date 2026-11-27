@@ -49,3 +49,10 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s2b_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Hash indexes](/cookbook/p/hash-and-bitmap-indexes): linear hashing with a split pointer and no directory.
+- [Hash tables](/cookbook/p/hash-tables): linear hashing measured against extendible, cuckoo and probing tables.

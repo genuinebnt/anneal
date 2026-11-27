@@ -46,3 +46,9 @@ table {1: 10}; rows (1, 5), (2, 7), (2, 1); Add -> {1: 15, 2: 8}; inserted 1, up
 ## Done when
 
 All the `s3e_c2` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Sqlx with SQLite](/cookbook/p/sqlx-sqlite-queries-transactions): upserts with ON CONFLICT from the client side, against SQLite.

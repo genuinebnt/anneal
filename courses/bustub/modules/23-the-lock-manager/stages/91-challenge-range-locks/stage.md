@@ -47,3 +47,9 @@ T1 S[0,10); T2 S[5,15) ok; T3 X[9,12) refused; T3 X[10,12) refused (T2 holds up 
 ## Done when
 
 All the `s4d_c2` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Timestamp ordering and OCC](/cookbook/p/timestamp-ordering-and-occ): phantoms, and key-range and gap locks that prevent them.

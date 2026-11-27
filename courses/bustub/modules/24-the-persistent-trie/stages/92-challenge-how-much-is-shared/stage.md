@@ -46,3 +46,9 @@ t has 100 keys; t2 = t.put("abc", 1): at most 4 nodes of t2 are not in t
 ## Done when
 
 All the `s0a_c3` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [More primers](/cookbook/p/more-primers): the copy-on-write trie: put and remove share every untouched node.

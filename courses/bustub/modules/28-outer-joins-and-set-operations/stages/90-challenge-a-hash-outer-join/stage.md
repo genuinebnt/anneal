@@ -48,3 +48,10 @@ duplicate keys: left [(1,1)], right [(1,5),(1,6)] -> (1,5) (1,6) for every kind
 ## Done when
 
 All the `s3j_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Grace hash join and spilling](/cookbook/p/grace-hash-join-and-spilling): hash join with matched flags for LEFT joins and NULL keys never matching.
+- [Join algorithms compared](/cookbook/p/join-algorithms-code): hash-based outer, semi and anti joins tested against nested loops.

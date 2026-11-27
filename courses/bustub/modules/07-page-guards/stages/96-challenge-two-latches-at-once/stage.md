@@ -49,3 +49,10 @@ two threads: 5000 times 0->1 and 5000 times 1->0, both return
 ## Done when
 
 All the `s1g_c5` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Locks deadlocks](/cookbook/p/locks-deadlocks): lock ordering and try_lock as the cures for deadlock.
+- [Concurrency interview questions](/cookbook/p/concurrency-interview-questions): dining philosophers and other multi-lock problems solved without deadlock.

@@ -48,3 +48,10 @@ tie on one access: the one used first goes first
 ## Done when
 
 All the `s1c_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [A cache replacement policy zoo](/cookbook/p/cache-policy-zoo): LFU next to FIFO, LRU, ARC and others, replayed on the same traces.
+- [Problems that need several data structures working together](/cookbook/p/combo-algorithms): an O(1) LFU cache built from frequency buckets of linked lists.

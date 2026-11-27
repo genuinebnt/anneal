@@ -46,3 +46,10 @@ insert [1,2]; add_column(7); insert [3,4,5]; get(0) = [1,2,7]; drop_column(0); g
 ## Done when
 
 All the `s3c_c5` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Change data capture and logical replication](/cookbook/p/cdc-logical-replication-log): ADD COLUMN ... DEFAULT applied lazily on read, with no table rewrite.
+- [Delta Lake style table format](/cookbook/p/delta-lake-transaction-log): schema evolution where files written before ADD COLUMN read the column as NULL.

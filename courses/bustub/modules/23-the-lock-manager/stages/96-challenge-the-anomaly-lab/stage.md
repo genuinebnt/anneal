@@ -49,3 +49,11 @@ phantom at snapshot: both scans return the same two rows, the inserted row 50 is
 ## Done when
 
 All the `s4d_c7` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Transaction theory](/cookbook/p/transaction-theory-serializability): Adya's anomalies, and which isolation level forbids each.
+- [Concurrency control theory](/cookbook/p/concurrency-control-theory): dirty reads, unrepeatable reads and lost updates as conflicts.
+- [MVCC snapshot isolation](/cookbook/p/mvcc-snapshot-isolation): write skew under snapshot isolation, and SSI preventing it.

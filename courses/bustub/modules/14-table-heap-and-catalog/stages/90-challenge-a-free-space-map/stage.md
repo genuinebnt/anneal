@@ -47,3 +47,10 @@ set(0, 70) -> find(60) = 0
 ## Done when
 
 All the `s3c_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Slotted pages and a heap file](/cookbook/p/slotted-pages-heap-file): a heap file with a free-space map so inserts find a page without IO.
+- [Segment fenwick](/cookbook/p/segment-fenwick): a monoid segment tree that gives range max in O(log n).

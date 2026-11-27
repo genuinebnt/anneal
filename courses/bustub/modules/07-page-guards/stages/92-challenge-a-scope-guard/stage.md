@@ -50,3 +50,9 @@ two guards: runs in reverse order
 ## Done when
 
 All the `s1g_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [`Drop` and RAII](/cookbook/p/drop-raii): Drop guards that run on return, ? and panic.

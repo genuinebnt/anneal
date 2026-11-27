@@ -46,3 +46,9 @@ keys {abc, abd, aec, xyz}: "a?c" -> [abc, aec]; "ab?" -> [abc, abd]; "???" -> al
 ## Done when
 
 All the `s0a_c5` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Trie interview questions in Rust](/cookbook/p/tries-core-questions): add-and-search words where '.' matches any one letter.

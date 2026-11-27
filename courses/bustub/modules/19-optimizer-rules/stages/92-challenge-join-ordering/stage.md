@@ -48,3 +48,11 @@ card [1000, 10, 100], sel(0,1) = 0.001: join 0,1 first (size 10) then 2 (size 10
 ## Done when
 
 All the `s3h_c3` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Cost models and join ordering](/cookbook/p/cost-models-and-join-ordering): System R dynamic programming over left-deep orders with subset bitmasks and C_out.
+- [Join ordering](/cookbook/p/join-ordering): DPsize, DPsub and left-deep DP compared on the C_out cost.
+- [Join enumeration](/cookbook/p/join-enumeration-dpccp-dphyp): DPsub over subsets, and faster enumerators that give the same optimum.

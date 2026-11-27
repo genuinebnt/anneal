@@ -47,3 +47,9 @@ max 2, three threads calling `with`: never more than two inside at once; created
 ## Done when
 
 All the `s4e_c5` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [A channel from a mutex and condition variables](/cookbook/p/mutex-condvar-channel): a semaphore from a mutex and condvar: wait for a free permit.

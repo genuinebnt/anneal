@@ -47,3 +47,10 @@ k = 3: rows with key 5 on both sides are in the same bucket and joined there
 ## Done when
 
 All the `s3f_c3` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Grace hash join and spilling](/cookbook/p/grace-hash-join-and-spilling): Grace partitioning, joining partition by partition, and recursion on skew.
+- [Join algorithms compared](/cookbook/p/join-algorithms-code): Grace hash join tested against the other join algorithms.

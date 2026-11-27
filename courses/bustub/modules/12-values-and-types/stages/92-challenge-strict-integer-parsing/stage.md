@@ -50,3 +50,9 @@ Worked cases (the tests include them):
 ## Done when
 
 All the `s3a_c3` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Number parsing and formatting end to end](/cookbook/p/std-num-parsing-formatting): FromStr and IntErrorKind: naming every way an integer parse fails.

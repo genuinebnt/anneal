@@ -45,3 +45,10 @@ cycle [(id 1, start 10), (id 2, start 30), (id 3, start 20)] Youngest -> id 2
 ## Done when
 
 All the `s4d_c3` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [A lock manager](/cookbook/p/lock-manager-deadlock): deadlock detection and victims: youngest or fewest locks.
+- [Two-phase locking](/cookbook/p/two-phase-locking): victim heuristics: age, progress, locks held, past restarts.

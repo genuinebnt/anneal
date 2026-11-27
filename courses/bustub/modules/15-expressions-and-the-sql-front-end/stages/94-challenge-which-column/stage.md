@@ -47,3 +47,9 @@ a(id, x), b(id, y): id -> Ambiguous([0, 1]); a.id -> (0, 0); y -> (1, 1); z -> U
 ## Done when
 
 All the `s3d_c5` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Catalog, types, expressions](/cookbook/p/catalog-types-expressions): name resolution that fails on unknown and ambiguous column references.

@@ -47,3 +47,10 @@ wound-wait: requester 5, holder 9 -> AbortHolder; requester 9, holder 5 -> Wait
 ## Done when
 
 All the `s4d_c1` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [A lock manager](/cookbook/p/lock-manager-deadlock): wait-die and wound-wait prevention in a lock manager.
+- [Two-phase locking](/cookbook/p/two-phase-locking): wait-die and wound-wait, and why waits only go one way.

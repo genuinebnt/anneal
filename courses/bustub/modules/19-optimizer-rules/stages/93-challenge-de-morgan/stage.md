@@ -49,3 +49,10 @@ NOT (a OR NOT b) -> NOT a AND b
 ## Done when
 
 All the `s3h_c4` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Query planning and rewriting](/cookbook/p/query-planning-and-rewriting): checking a rewrite by comparing results on every row of a grid.
+- [Reduced ordered BDDs](/cookbook/p/bdd-zdd): BDDs that prove De Morgan-rewritten formulas equal, checked against truth tables.

@@ -47,3 +47,10 @@ max_batch 3, max_wait 10: submit 1@0, 2@1: poll@2 -> None; submit 3@2: poll@2 ->
 ## Done when
 
 All the `s4c_c2` tests pass.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [Write-ahead logging schemes](/cookbook/p/logging-schemes-group-commit): group commit with real threads: one fsync for many commits.
+- [Logging](/cookbook/p/logging): group commit among the logging schemes.

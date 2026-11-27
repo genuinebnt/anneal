@@ -49,3 +49,10 @@ two gates: opening one releases only its waiters
 ## Done when
 
 All the `s1b_c2` tests pass, and you can say in one sentence what the bug was.
+
+## Further reading
+
+In the cookbook. Some of these pages show a complete solution, so they are best read after your own attempt.
+
+- [A channel from a mutex and condition variables](/cookbook/p/mutex-condvar-channel): condition variables from scratch: who gets woken, and rechecking after wake-up.
+- [`std::sync` and thread coordination by use case](/cookbook/p/std-sync-primitives-use-cases): when every waiter must see a change, so notify_all is required.
