@@ -20,7 +20,7 @@ use bustub::storage::table::tuple::{Tuple, TupleMeta};
 use bustub::types::type_id::TypeId::*;
 use bustub::types::value::Value;
 use proptest::prelude::*;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 fn bpm(frames: usize) -> BufferPoolManager {
     BufferPoolManager::new(frames, Arc::new(DiskManagerUnlimitedMemory::new()))
@@ -459,73 +459,129 @@ fn s3c_03_keys_compare_column_by_column_as_numbers() {
     assert_eq!(cmp.compare(&k(0, -1), &k(0, 1)), Less, "keys compare column by column as numbers");
 }
 
+fn slots(rids: &[Rid]) -> Vec<u32> {
+    rids.iter().map(|r| r.slot_num()).collect()
+}
+
+fn entry_slots(entries: &[(Tuple, Rid)]) -> Vec<u32> {
+    entries.iter().map(|(_, r)| r.slot_num()).collect()
+}
+
 #[test]
 fn s3c_03_an_index_inserts_scans_and_deletes() {
     let bpm = bpm(50);
     let table = three_ints();
-    let index = BPlusTreeIndex::<4>::new(IndexMetadata::new("i", "t", &table, vec![0], false), &bpm);
+    let index = BPlusTreeIndex::<16>::new(IndexMetadata::new("i", "t", &table, vec![0], false), &bpm);
     let ks = index.metadata().get_key_schema().clone();
     for i in 0..500 {
-        assert!(
-            index.insert_entry(&key(&ks, &[i * 3]), Rid::new(PageId(1), i as u32)),
-            "an index inserts scans and deletes: expected `index.insert_entry(&key(&ks, &[i * 3]), Rid::new(PageId(1), i as u32))`"
-        );
+        assert!(index.insert_entry(&key(&ks, &[i * 3]), Rid::new(PageId(1), i as u32)), "a new entry (key {}, slot {i}) is added", i * 3);
     }
-    assert!(!index.insert_entry(&key(&ks, &[30]), Rid::new(PageId(9), 9)), "a key is in the index once");
-    assert_eq!(index.scan_key(&key(&ks, &[30])), vec![Rid::new(PageId(1), 10)], "an index inserts scans and deletes");
-    assert!(
-        index.scan_key(&key(&ks, &[31])).is_empty(),
-        "an index inserts scans and deletes: expected `index.scan_key(&key(&ks, &[31])).is_empty()`"
-    );
-    index.delete_entry(&key(&ks, &[30]));
-    assert!(
-        index.scan_key(&key(&ks, &[30])).is_empty(),
-        "an index inserts scans and deletes: expected `index.scan_key(&key(&ks, &[30])).is_empty()`"
-    );
-    index.delete_entry(&key(&ks, &[30])); // deleting a missing key is not an error
-    assert_eq!(index.scan_all().len(), 499, "an index inserts scans and deletes");
+    assert!(!index.insert_entry(&key(&ks, &[30]), Rid::new(PageId(1), 10)), "an entry is in the index once");
+    assert_eq!(index.scan_key(&key(&ks, &[30])), vec![Rid::new(PageId(1), 10)], "a key finds the rid of its entry");
+    assert!(index.scan_key(&key(&ks, &[31])).is_empty(), "a key that is not there finds nothing");
+    index.delete_entry(&key(&ks, &[30]), Rid::new(PageId(1), 10));
+    assert!(index.scan_key(&key(&ks, &[30])).is_empty(), "a deleted entry is gone");
+    index.delete_entry(&key(&ks, &[30]), Rid::new(PageId(1), 10)); // deleting a missing entry is not an error
+    index.delete_entry(&key(&ks, &[33]), Rid::new(PageId(1), 99)); // nor is deleting a key with a rid it does not have
+    assert_eq!(index.scan_key(&key(&ks, &[33])), vec![Rid::new(PageId(1), 11)], "an entry is removed only with its own rid");
+    assert_eq!(index.scan_all().len(), 499, "every other entry is still there");
 }
 
 #[test]
-fn s3c_03_a_key_with_a_null_is_not_indexed_and_finds_nothing() {
+fn s3c_03_a_key_may_have_many_rows_found_in_rid_order() {
+    let bpm = bpm(50);
+    let table = three_ints();
+    let index = BPlusTreeIndex::<16>::new(IndexMetadata::new("i", "t", &table, vec![0], false), &bpm);
+    let ks = index.metadata().get_key_schema().clone();
+    // 300 rows over the keys 0, 1, 2, inserted in an order that is neither by key nor by rid
+    for n in 0..300u32 {
+        let slot = (n * 7) % 300;
+        assert!(index.insert_entry(&key(&ks, &[(slot % 3) as i32]), Rid::new(PageId(slot as i32 / 100), slot)), "rows may share a key");
+    }
+    let ones = index.scan_key(&key(&ks, &[1]));
+    assert_eq!(ones.len(), 100, "the key 1 finds every one of its 100 rows, across leaves");
+    assert!(ones.windows(2).all(|w| w[0] < w[1]), "the rids of one key come in rid order");
+    assert!(ones.iter().all(|r| r.slot_num() % 3 == 1), "a lookup finds only the rows of its key");
+    index.delete_entry(&key(&ks, &[1]), Rid::new(PageId(0), 1));
+    assert_eq!(index.scan_key(&key(&ks, &[1])).len(), 99, "deleting one row's entry leaves the key's other rows");
+    let all = index.scan_all();
+    let order: Vec<(i64, Rid)> = all.iter().map(|(k, r)| (k.get_value(&ks, 0).as_i64().unwrap(), *r)).collect();
+    assert!(order.windows(2).all(|w| w[0] < w[1]), "a scan gives the entries by key, then by rid");
+    assert_eq!(index.scan_from(&key(&ks, &[2])).len(), 100, "from the key 2 on: the key's 100 rows and nothing before them");
+}
+
+#[test]
+fn s3c_03_a_key_with_a_null_is_indexed_first_but_a_lookup_with_a_null_finds_nothing() {
     let bpm = bpm(20);
     let table = three_ints();
-    let index = BPlusTreeIndex::<8>::new(IndexMetadata::new("i", "t", &table, vec![0, 1], false), &bpm);
+    let index = BPlusTreeIndex::<16>::new(IndexMetadata::new("i", "t", &table, vec![0, 1], false), &bpm);
     let ks = index.metadata().get_key_schema().clone();
     let null_key = |a: Option<i32>, b: Option<i32>| {
         Tuple::new(&[a.map_or(Value::null(Integer), Value::integer), b.map_or(Value::null(Integer), Value::integer)], &ks)
     };
-    assert!(index.insert_entry(&null_key(Some(1), Some(1)), Rid::new(PageId(2), 0)), "a key without NULLs is indexed");
-    assert!(!index.insert_entry(&null_key(None, Some(1)), Rid::new(PageId(2), 1)), "a key with a NULL is not indexed");
-    assert!(!index.insert_entry(&null_key(Some(1), None), Rid::new(PageId(2), 2)), "in any column");
-    assert!(!index.insert_entry(&null_key(None, None), Rid::new(PageId(2), 3)), "even if every column is NULL");
-    assert_eq!(index.scan_all().len(), 1, "only the first key is in the index");
+    for (slot, (a, b)) in
+        [(Some(1), Some(1)), (None, Some(1)), (Some(1), None), (None, None), (None, None), (Some(-5), Some(0))].iter().enumerate()
+    {
+        assert!(index.insert_entry(&null_key(*a, *b), Rid::new(PageId(2), slot as u32)), "row {slot} is indexed, NULL or not");
+    }
+    assert_eq!(
+        entry_slots(&index.scan_all()),
+        vec![3, 4, 1, 5, 2, 0],
+        "NULL orders before every value: (N,N) (N,N) (N,1) (-5,0) (1,N) (1,1)"
+    );
     assert!(index.scan_key(&null_key(None, Some(1))).is_empty(), "NULL = 1 is never true: a lookup with a NULL finds nothing");
     assert!(index.scan_key(&null_key(None, None)).is_empty(), "NULL = NULL is never true either");
-    index.delete_entry(&null_key(None, Some(1)));
-    assert_eq!(index.scan_all().len(), 1, "deleting a key that was never there changes nothing");
+    let (k, _) = &index.scan_all()[0];
+    assert!(k.get_value(&ks, 0).is_null() && k.get_value(&ks, 1).is_null(), "a scan gives each entry's key tuple, NULLs included");
+    index.delete_entry(&null_key(None, None), Rid::new(PageId(2), 3));
+    assert_eq!(entry_slots(&index.scan_all()), vec![4, 1, 5, 2, 0], "an entry whose key has a NULL is deleted like any other");
 }
 
 #[test]
-fn s3c_03_a_scan_returns_rids_in_key_order_even_for_negative_and_composite_keys() {
+fn s3c_03_a_primary_key_index_holds_each_key_once_and_no_null() {
+    let bpm = bpm(20);
+    let table = three_ints();
+    let index = BPlusTreeIndex::<16>::new(IndexMetadata::new("pk", "t", &table, vec![0], true), &bpm);
+    let ks = index.metadata().get_key_schema().clone();
+    let rid = |slot| Rid::new(PageId(3), slot);
+    assert!(index.insert_entry(&key(&ks, &[7]), rid(0)), "a new key is added");
+    assert!(!index.insert_entry(&key(&ks, &[7]), rid(1)), "a key that is there is refused, whatever the rid");
+    assert!(!index.insert_entry(&Tuple::new(&[Value::null(Integer)], &ks), rid(2)), "a key with a NULL is refused");
+    assert_eq!(index.scan_key(&key(&ks, &[7])), vec![rid(0)], "the key keeps its first rid");
+    index.delete_entry(&key(&ks, &[7]), rid(1));
+    assert_eq!(index.scan_key(&key(&ks, &[7])), vec![rid(0)], "deleting the key with another rid removes nothing");
+    index.delete_entry(&key(&ks, &[7]), rid(0));
+    assert!(index.scan_key(&key(&ks, &[7])).is_empty(), "deleting the key with its own rid removes it");
+    assert!(index.insert_entry(&key(&ks, &[7]), rid(1)), "and then the key is free for another row");
+}
+
+#[test]
+fn s3c_03_a_scan_returns_entries_in_key_order_even_for_negative_and_composite_keys() {
     let bpm = bpm(50);
     let table = three_ints();
-    let index = BPlusTreeIndex::<8>::new(IndexMetadata::new("i", "t", &table, vec![0, 1], false), &bpm);
+    let index = BPlusTreeIndex::<16>::new(IndexMetadata::new("i", "t", &table, vec![0, 1], false), &bpm);
     let ks = index.metadata().get_key_schema().clone();
     let keys = [(2, 1), (-5, 9), (2, -1), (0, 0), (-5, -9), (7, 7)];
     for (n, (a, b)) in keys.iter().enumerate() {
         index.insert_entry(&key(&ks, &[*a, *b]), Rid::new(PageId(0), n as u32));
     }
-    let order: Vec<u32> = index.scan_all().iter().map(|r| r.slot_num()).collect();
+    let all = index.scan_all();
     let mut expected: Vec<(usize, (i32, i32))> = keys.iter().copied().enumerate().collect();
     expected.sort_by_key(|(_, k)| *k);
     assert_eq!(
-        order,
+        entry_slots(&all),
         expected.iter().map(|(n, _)| *n as u32).collect::<Vec<_>>(),
-        "a scan returns rids in key order even for negative and composite keys"
+        "a scan returns entries in key order even for negative and composite keys"
     );
-    let from: Vec<u32> = index.scan_from(&key(&ks, &[0, 0])).iter().map(|r| r.slot_num()).collect();
-    assert_eq!(from, vec![3, 2, 0, 5], "keys from (0, 0) on: (0,0) (2,-1) (2,1) (7,7) are slots 3, 2, 0, 5");
+    let scanned_keys: Vec<(i64, i64)> =
+        all.iter().map(|(k, _)| (k.get_value(&ks, 0).as_i64().unwrap(), k.get_value(&ks, 1).as_i64().unwrap())).collect();
+    assert_eq!(scanned_keys, expected.iter().map(|(_, (a, b))| (*a as i64, *b as i64)).collect::<Vec<_>>(), "each entry carries its key");
+    assert_eq!(
+        entry_slots(&index.scan_from(&key(&ks, &[0, 0]))),
+        vec![3, 2, 0, 5],
+        "keys from (0, 0) on: (0,0) (2,-1) (2,1) (7,7) are slots 3, 2, 0, 5"
+    );
+    assert_eq!(slots(&index.scan_key(&key(&ks, &[2, -1]))), vec![2], "a composite key is looked up whole");
 }
 
 // ---- 3c-04 · The catalog: tables --------------------------------------------------------------------------------------------------
@@ -645,7 +701,7 @@ fn s3c_04_a_new_index_is_filled_with_the_rows_the_table_already_has() {
 }
 
 #[test]
-fn s3c_04_deleted_rows_are_not_indexed_and_two_live_rows_with_one_key_fail_the_index() {
+fn s3c_04_deleted_rows_are_not_indexed_and_rows_that_share_a_key_each_have_an_entry() {
     let bpm = bpm(50);
     let mut catalog = Catalog::new(&bpm);
     let schema = three_ints();
@@ -654,26 +710,25 @@ fn s3c_04_deleted_rows_are_not_indexed_and_two_live_rows_with_one_key_fail_the_i
     table.table.update_tuple_meta(&meta(true), rids[1]).unwrap();
     let index = catalog.create_index("i", "t", vec![0], false).unwrap().unwrap();
     assert_eq!(
-        index.index.scan_all(),
+        index.index.scan_all().iter().map(|(_, r)| *r).collect::<Vec<_>>(),
         vec![rids[0], rids[3], rids[2]],
         "every live row has one entry; the deleted row with key 6 has none"
     );
-    table.table.insert_tuple(&meta(false), &key(&schema, &[7, 1, 1])).unwrap();
-    let err = catalog.create_index("j", "t", vec![0], false).err().expect("two live rows with the key 7 make creating an index on it fail");
-    assert!(
-        err.message.contains("duplicate key value violates unique constraint \"j\""),
-        "the error names the unique violation and the index: {err}"
-    );
-    assert!(catalog.get_index("j", "t").is_none(), "an index that failed to fill is not in the catalog");
-    let mut with_nulls = vec![];
+    let second_seven = table.table.insert_tuple(&meta(false), &key(&schema, &[7, 1, 1])).unwrap();
+    let j = catalog.create_index("j", "t", vec![0], false).unwrap().expect("two live rows with the key 7 can share an index");
+    assert_eq!(j.index.scan_key(&key(&j.key_schema, &[7])), vec![rids[2], second_seven], "the key 7 finds both of its rows");
+    let err = catalog.create_index("pk", "t", vec![0], true).err().expect("a primary key over two rows with the key 7 fails");
+    assert!(err.message.contains("duplicate key value violates unique constraint \"pk\""), "the error names the unique violation: {err}");
+    assert!(catalog.get_index("pk", "t").is_none(), "an index that failed to fill is not in the catalog");
     let u = catalog.create_table("u", &schema).unwrap();
     for _ in 0..2 {
         let values = [Value::null(Integer), Value::integer(0), Value::integer(0)];
-        with_nulls.push(u.table.insert_tuple(&meta(false), &Tuple::new(&values, &schema)).unwrap());
+        u.table.insert_tuple(&meta(false), &Tuple::new(&values, &schema)).unwrap();
     }
-    let index =
-        catalog.create_index("i", "u", vec![0], false).unwrap().expect("two rows with a NULL key do not share a key: NULL equals nothing");
-    assert!(index.index.scan_all().is_empty(), "a row whose key has a NULL is not indexed");
+    let index = catalog.create_index("i", "u", vec![0], false).unwrap().expect("rows whose key is NULL are indexed too");
+    assert_eq!(index.index.scan_all().len(), 2, "each row whose key is NULL has its entry");
+    let err = catalog.create_index("pk", "u", vec![0], true).err().expect("a primary key over a NULL fails");
+    assert!(err.message.contains("violates not-null constraint"), "the error names the not-null violation: {err}");
 }
 
 #[test]
@@ -754,7 +809,7 @@ fn s3c_04_a_composite_index_scans_in_key_order() {
     let index = catalog.create_index("ix", "t", vec![1, 0], false).unwrap().unwrap(); // (i % 10, i)
     let table = catalog.get_table("t").unwrap();
     let order: Vec<i64> =
-        index.index.scan_all().iter().map(|r| table.table.get_tuple(*r).unwrap().1.get_value(&schema, 0).as_i64().unwrap()).collect();
+        index.index.scan_all().iter().map(|(_, r)| table.table.get_tuple(*r).unwrap().1.get_value(&schema, 0).as_i64().unwrap()).collect();
     let mut expected: Vec<i64> = (0..100).collect();
     expected.sort_by_key(|i| (i % 10, *i));
     assert_eq!(order, expected, "a composite index scans in key order");
@@ -853,36 +908,44 @@ proptest! {
         prop_assert_eq!(heap.make_iterator().count(), model.len() + more.len());
     }
 
-    /// An index over two integer columns behaves like a `BTreeMap` from the key to a record id: inserts refuse a key that is there (and a key
-    /// with a NULL in it), deletes of missing keys are fine, and every scan is in key order (negative numbers first).
+    /// An index over two integer columns behaves like a sorted set of entries `(key, rid)`: keys repeat and may have a NULL in them
+    /// (ordered first); an insert refuses only an entry that is there, a delete removes only its own entry, a lookup finds the rids of
+    /// its key in rid order (none for a key with a NULL), and every scan is in order. A primary-key index behaves like a `BTreeMap`
+    /// from the key to one rid instead, refusing a key it holds and a key with a NULL.
     #[test]
-    fn s3c_03_an_index_behaves_like_a_btreemap(ops in prop::collection::vec((prop::option::weighted(0.88, -6i32..6), prop::option::weighted(0.88, -6i32..6), 0u8..3), 1..120), probe in (-7i32..7, -7i32..7)) {
+    fn s3c_03_an_index_behaves_like_a_sorted_set_of_entries(ops in prop::collection::vec((prop::option::weighted(0.85, -4i32..4), prop::option::weighted(0.85, -4i32..4), 0u8..3, 0u32..6), 1..150), probe in (prop::option::weighted(0.9, -5i32..5), -5i32..5), unique in any::<bool>()) {
         let bpm = bpm(50);
         let table = three_ints();
-        let index = BPlusTreeIndex::<8>::new(IndexMetadata::new("i", "t", &table, vec![0, 1], false), &bpm);
+        let index = BPlusTreeIndex::<16>::new(IndexMetadata::new("i", "t", &table, vec![0, 1], unique), &bpm);
         let ks = index.metadata().get_key_schema().clone();
         let tuple = |a: Option<i32>, b: Option<i32>| Tuple::new(&[a.map_or(Value::null(Integer), Value::integer), b.map_or(Value::null(Integer), Value::integer)], &ks);
-        let mut model: BTreeMap<(i32, i32), Rid> = BTreeMap::new();
-        for (n, (a, b, op)) in ops.into_iter().enumerate() {
-            let rid = Rid::new(PageId(2), n as u32);
-            // a key with a NULL in it is never indexed and never found
-            let real = a.zip(b);
+        type Key = (Option<i32>, Option<i32>);
+        let mut model: BTreeSet<(Key, Rid)> = BTreeSet::new();
+        for (a, b, op, slot) in ops {
+            let (k, rid) = ((a, b), Rid::new(PageId(slot as i32 % 3), slot));
+            let has_null = a.is_none() || b.is_none();
             match op {
                 0 | 1 => {
-                    let fresh = real.is_some_and(|k| !model.contains_key(&k));
-                    prop_assert_eq!(index.insert_entry(&tuple(a, b), rid), fresh);
-                    if fresh { model.insert(real.unwrap(), rid); }
+                    let fresh = if unique { !has_null && !model.iter().any(|(m, _)| *m == k) } else { !model.contains(&(k, rid)) };
+                    prop_assert_eq!(index.insert_entry(&tuple(a, b), rid), fresh, "insert ({:?}, {:?})", k, rid);
+                    if fresh { model.insert((k, rid)); }
                 }
-                _ => { index.delete_entry(&tuple(a, b)); if let Some(k) = real { model.remove(&k); } }
+                _ => { index.delete_entry(&tuple(a, b), rid); model.remove(&(k, rid)); }
             }
-            prop_assert_eq!(index.scan_key(&tuple(a, b)), real.and_then(|k| model.get(&k).copied()).into_iter().collect::<Vec<_>>());
+            let want: Vec<Rid> = if has_null { vec![] } else { model.iter().filter(|(m, _)| *m == k).map(|(_, r)| *r).collect() };
+            prop_assert_eq!(index.scan_key(&tuple(a, b)), want, "lookup of {:?}", k);
         }
-        prop_assert_eq!(index.scan_all(), model.values().copied().collect::<Vec<_>>());
-        prop_assert_eq!(index.scan_from(&key(&ks, &[probe.0, probe.1])), model.range(probe..).map(|(_, r)| *r).collect::<Vec<_>>());
+        let as_model = |entries: Vec<(Tuple, Rid)>| -> Vec<(Key, Rid)> {
+            entries.iter().map(|(t, r)| ((t.get_value(&ks, 0).as_i64().map(|v| v as i32), t.get_value(&ks, 1).as_i64().map(|v| v as i32)), *r)).collect()
+        };
+        prop_assert_eq!(as_model(index.scan_all()), model.iter().copied().collect::<Vec<_>>(), "scan_all");
+        let from: Key = (probe.0, Some(probe.1));
+        prop_assert_eq!(as_model(index.scan_from(&tuple(from.0, from.1))), model.iter().filter(|(k, _)| *k >= from).copied().collect::<Vec<_>>(), "scan_from {:?}", from);
     }
 
     /// The catalog hands out oids in creation order, refuses a name that is in use (names are case sensitive), and finds every table by name
-    /// and by oid; an index created on a table with rows holds exactly the live rows' keys, or fails if two live rows share a key.
+    /// and by oid; an index created on a table with rows holds one entry per live row, and a primary key fails if two live rows share
+    /// a key.
     #[test]
     fn s3c_04_a_catalog_behaves_like_maps(names in prop::collection::vec("[a-cA-C]{1,2}", 1..25), rows in prop::collection::vec((-30i32..30, any::<bool>()), 0..50)) {
         let bpm = bpm(40);
@@ -910,20 +973,20 @@ proptest! {
         prop_assert_eq!(listed, expected);
         // an index over a table with rows
         let t = catalog.get_table(&names[0]).unwrap();
-        let mut live: BTreeMap<i32, Rid> = BTreeMap::new();
+        let mut live: Vec<(i32, Rid)> = vec![];
         for (v, deleted) in &rows {
             let rid = t.table.insert_tuple(&meta(false), &key(&schema, &[*v, 0, 0])).unwrap();
-            if *deleted { t.table.update_tuple_meta(&meta(true), rid).unwrap(); } else { live.entry(*v).or_insert(rid); }
+            if *deleted { t.table.update_tuple_meta(&meta(true), rid).unwrap(); } else { live.push((*v, rid)); }
         }
-        // a deleted row is not indexed; two live rows with one key make the index fail
-        let live_keys: Vec<i32> = rows.iter().filter(|(_, deleted)| !deleted).map(|(v, _)| *v).collect();
-        let created = catalog.create_index("idx", &names[0], vec![0], false);
-        if live_keys.len() == live.len() {
-            prop_assert_eq!(created.unwrap().unwrap().index.scan_all(), live.values().copied().collect::<Vec<_>>(), "every live row has its entry, in key order");
-        } else {
-            prop_assert!(created.is_err(), "live rows share a key: the index cannot be unique");
-            prop_assert!(catalog.get_index("idx", &names[0]).is_none(), "a failed index is not in the catalog");
-        }
+        live.sort();
+        // a deleted row is not indexed; every live row is, keys shared or not
+        let created = catalog.create_index("idx", &names[0], vec![0], false).unwrap().unwrap();
+        prop_assert_eq!(created.index.scan_all().iter().map(|(_, r)| *r).collect::<Vec<_>>(), live.iter().map(|(_, r)| *r).collect::<Vec<_>>(), "every live row has its entry, by key then rid");
+        // a primary key fails when two live rows share a key
+        let shared = live.windows(2).any(|w| w[0].0 == w[1].0);
+        let pk = catalog.create_index("pk", &names[0], vec![0], true);
+        prop_assert_eq!(pk.is_err(), shared, "a primary key over live rows fails exactly when two share a key: {:?}", pk.as_ref().err());
+        prop_assert_eq!(catalog.get_index("pk", &names[0]).is_some(), !shared, "a failed index is not in the catalog");
     }
 }
 
@@ -947,10 +1010,14 @@ fn s3c_05_a_table_and_its_index_agree_after_inserts_and_deletes_through_the_cata
     for k in (0..401).step_by(3) {
         if let Some(rid) = live.remove(&k) {
             table.table.update_tuple_meta(&meta(true), rid).unwrap();
-            index.index.delete_entry(&key(&index.key_schema, &[k]));
+            index.index.delete_entry(&key(&index.key_schema, &[k]), rid);
         }
     }
-    assert_eq!(index.index.scan_all(), live.values().copied().collect::<Vec<_>>(), "the index lists the live rows in key order");
+    assert_eq!(
+        index.index.scan_all().iter().map(|(_, r)| *r).collect::<Vec<_>>(),
+        live.values().copied().collect::<Vec<_>>(),
+        "the index lists the live rows in key order"
+    );
     let scanned: Vec<i32> =
         table.table.make_iterator().filter(|(m, _)| !m.is_deleted).map(|(_, t)| t.get_value(&schema, 0).as_i64().unwrap() as i32).collect();
     let mut sorted = scanned.clone();

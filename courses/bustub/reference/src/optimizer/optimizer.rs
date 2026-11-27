@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use crate::binder::bound_order_by::OrderByType;
-use crate::catalog::catalog::{Catalog, IndexInfo, TableInfo};
+use crate::binder::bound_order_by::{OrderByNullType, OrderByType};
+use crate::catalog::catalog::Catalog;
 use crate::common::exception::Result;
 use crate::execution::expressions::abstract_expression::{ExprRef, Expression};
 use crate::execution::expressions::column_value_expression::ColumnValueExpression;
@@ -19,7 +19,7 @@ use crate::types::value::Value;
 pub struct Optimizer<'c, 'a> {
     pub catalog: &'c Catalog<'a>,
     force_starter_rule: bool,
-    /// The plan runs inside a transaction: only primary-key indexes can be read.
+    /// The plan runs inside a transaction, where every read must see the versions of the transaction's snapshot.
     in_transaction: bool,
 }
 
@@ -28,18 +28,11 @@ impl<'c, 'a> Optimizer<'c, 'a> {
         Optimizer { catalog, force_starter_rule, in_transaction: false }
     }
 
-    /// Plans for a statement that runs inside a transaction (`yes`), where only primary-key indexes are used: transactional writes keep
-    /// the primary-key index (a row's key never changes in place, and its entry stays for every version), but not the others.
+    /// Plans for a statement that runs inside a transaction (`yes`). Index scans read the versions of the transaction's snapshot; a
+    /// nested index join reads the newest tuples, so inside a transaction a join is never turned into one.
     pub fn in_transaction(mut self, yes: bool) -> Optimizer<'c, 'a> {
         self.in_transaction = yes;
         self
-    }
-
-    /// The indexes of `table_name` that a plan may read: all of them, or inside a transaction only the primary key.
-    pub fn usable_indexes(&self, table_name: &str) -> Vec<Arc<IndexInfo<'a>>> {
-        let mut indexes = self.catalog.get_table_indexes(table_name);
-        indexes.retain(|i| i.is_primary_key || !self.in_transaction);
-        indexes
     }
 
     /// Applies the rules in order. With `set force_optimizer_starter_rule=yes` a smaller rule set is used (a nested index join instead of a hash
@@ -191,28 +184,23 @@ impl<'c, 'a> Optimizer<'c, 'a> {
 
     // ---- indexes ------------------------------------------------------------------------------------------------------------
 
-    /// The usable index ([`Self::usable_indexes`]) on exactly the column `index_key_idx` of `table_name`, if there is one: (its oid, its
-    /// name).
+    /// The index on exactly the column `index_key_idx` of `table_name`, if there is one: (its oid, its name).
     pub fn match_index(&self, table_name: &str, index_key_idx: u32) -> Option<(IndexOid, String)> {
-        self.usable_indexes(table_name)
+        self.catalog
+            .get_table_indexes(table_name)
             .iter()
             .find(|i| i.index.metadata().get_key_attrs() == [index_key_idx])
             .map(|i| (i.index_oid, i.name.clone()))
     }
 
-    /// Whether reading `index` reads every live row of `table`. A row whose key has a NULL has no entry, and every entry names a
-    /// different live row, so the index covers the table exactly when it has as many entries as the table has live tuples.
-    ///
-    /// Costs one pass over the index and one over the heap.
-    pub fn index_covers_table(table: &TableInfo<'_>, index: &IndexInfo<'_>) -> bool {
-        let live_tuples = table.table.make_iterator().filter(|(meta, _)| !meta.is_deleted).count();
-        index.index.scan_all().len() == live_tuples
-    }
-
     /// `a JOIN b ON a.x = b.y` where `b` is a scan with an index on `y` becomes a nested index join (probe the index for each `a`). The
-    /// outer column must have the type of the indexed column: the probe key is the outer value as it is.
+    /// outer column must have the type of the indexed column: the probe key is the outer value as it is. Not inside a transaction
+    /// ([`Self::in_transaction`]).
     pub fn optimize_nlj_as_index_join(&self, plan: &PlanRef) -> PlanRef {
         let optimized = self.optimize_children(plan, &Self::optimize_nlj_as_index_join);
+        if self.in_transaction {
+            return optimized;
+        }
         if let PlanKind::NestedLoopJoin { predicate, join_type } = &optimized.kind {
             assert_eq!(optimized.children.len(), 2, "NLJ should have exactly 2 children.");
             if let Some(cmp) = predicate.as_any().downcast_ref::<ComparisonExpression>() {
@@ -261,14 +249,18 @@ impl<'c, 'a> Optimizer<'c, 'a> {
         optimized
     }
 
-    /// `ORDER BY` columns that an index on the same columns already delivers in order: a sort over a scan becomes an index scan, if the
-    /// index has every live row of the table ([`Self::index_covers_table`]).
+    /// `ORDER BY` columns that an index on the same columns already delivers in order: a sort over a scan becomes an index scan. Every
+    /// live row has an entry, so the index scan returns every row; it orders a NULL first, so an `ORDER BY` that puts NULLs last keeps
+    /// its sort.
     pub fn optimize_order_by_as_index_scan(&self, plan: &PlanRef) -> PlanRef {
         let optimized = self.optimize_children(plan, &Self::optimize_order_by_as_index_scan);
         if let PlanKind::Sort { order_bys } = &optimized.kind {
             let mut order_by_column_ids = vec![];
             for ob in order_bys {
                 if ob.order_type != OrderByType::Asc && ob.order_type != OrderByType::Default {
+                    return optimized;
+                }
+                if ob.null_order == OrderByNullType::NullsLast {
                     return optimized;
                 }
                 match ob.expr.as_any().downcast_ref::<ColumnValueExpression>() {
@@ -279,8 +271,8 @@ impl<'c, 'a> Optimizer<'c, 'a> {
             let child = &optimized.children[0];
             if let PlanKind::SeqScan { table_oid, .. } = &child.kind {
                 let table_info = self.catalog.get_table_by_oid(*table_oid).expect("the plan names a table that exists");
-                for index in self.usable_indexes(&table_info.name) {
-                    if order_by_column_ids == index.index.metadata().get_key_attrs() && Self::index_covers_table(&table_info, &index) {
+                for index in self.catalog.get_table_indexes(&table_info.name) {
+                    if order_by_column_ids == index.index.metadata().get_key_attrs() {
                         return PlanNode::new(
                             optimized.output_schema.clone(),
                             vec![],

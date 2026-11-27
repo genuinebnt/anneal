@@ -9,7 +9,7 @@ use super::schema::Schema;
 use crate::buffer::buffer_pool_manager::BufferPoolManager;
 use crate::common::exception::{Exception, ExceptionType, Result};
 use crate::storage::index::generic_key::GenericKey;
-use crate::storage::index::index::{key_has_null, not_null_violation, unique_violation, BPlusTreeIndex, Index, IndexMetadata, IndexType};
+use crate::storage::index::index::{not_null_violation, unique_violation, BPlusTreeIndex, Index, IndexMetadata, IndexType};
 use crate::storage::table::table_heap::TableHeap;
 use crate::storage::table::tuple::Tuple;
 
@@ -136,12 +136,13 @@ impl<'a> Catalog<'a> {
     /// Creates an index on the columns `key_attrs` of `table_name`, fills it with the table's live tuples and returns it. `Ok(None)` if
     /// the table does not exist or the table already has an index of that name.
     ///
-    /// Every live tuple whose key has no NULL gets exactly one entry; a tuple whose key has a NULL gets none.
+    /// Every live tuple gets exactly one entry, whatever its key: two tuples may share a key, and a key may have a NULL in it. A
+    /// primary-key index is unique instead: it holds each key once and no key with a NULL.
     ///
     /// # Errors
     ///
-    /// The key is not made of INTEGER columns or is bigger than 64 bytes, or two live tuples have the same non-NULL key (a unique
-    /// violation). No index is created then.
+    /// The key is not made of INTEGER columns or is bigger than 64 bytes; or the index is a primary key and a live tuple's key has a
+    /// NULL (a not-null violation) or two live tuples have the same key (a unique violation). No index is created then.
     pub fn create_index(
         &mut self,
         index_name: &str,
@@ -162,22 +163,26 @@ impl<'a> Catalog<'a> {
             }
         }
         let key_size = key_attrs.len() * 4;
-        // the smallest key size the tree supports that fits
+        // an entry is the key and a rid (8 bytes): the smallest entry size the tree supports that fits
         let index: Box<dyn Index + 'a> = match key_size {
             0 => return Err(Exception::new(ExceptionType::NotImplemented, "Index columns cannot be empty")),
-            1..=4 => Box::new(BPlusTreeIndex::<4>::new(metadata, self.bpm)),
-            5..=8 => Box::new(BPlusTreeIndex::<8>::new(metadata, self.bpm)),
-            9..=16 => Box::new(BPlusTreeIndex::<16>::new(metadata, self.bpm)),
-            17..=32 => Box::new(BPlusTreeIndex::<32>::new(metadata, self.bpm)),
-            33..=64 => Box::new(BPlusTreeIndex::<64>::new(metadata, self.bpm)),
+            1..=8 => Box::new(BPlusTreeIndex::<16>::new(metadata, self.bpm)),
+            9..=16 => Box::new(BPlusTreeIndex::<24>::new(metadata, self.bpm)),
+            17..=32 => Box::new(BPlusTreeIndex::<40>::new(metadata, self.bpm)),
+            33..=64 => Box::new(BPlusTreeIndex::<72>::new(metadata, self.bpm)),
             _ => return Err(Exception::new(ExceptionType::NotImplemented, "Unsupported: index key size exceeds 64 bytes")),
         };
         // fill it with what the table already holds (deleted tuples are not indexed)
         for (meta, tuple) in table.table.make_iterator() {
             if !meta.is_deleted {
                 let key = tuple.key_from_tuple(&table.schema, &key_schema, &key_attrs);
-                if !index.insert_entry(&key, tuple.get_rid()) && !key_has_null(&key, &key_schema) {
-                    return Err(unique_violation(index_name)); // a second live tuple with this key
+                if is_primary_key {
+                    if let Some(i) = (0..key_schema.column_count()).find(|i| key.is_null(&key_schema, *i)) {
+                        return Err(not_null_violation(key_schema.column(i).name(), table_name));
+                    }
+                }
+                if !index.insert_entry(&key, tuple.get_rid()) {
+                    return Err(unique_violation(index_name)); // a primary key that a second live tuple has
                 }
             }
         }
@@ -196,7 +201,7 @@ impl<'a> Catalog<'a> {
         self.indexes.insert(index_oid, info.clone());
         self.index_names.get_mut(table_name).unwrap().insert(index_name.to_owned(), index_oid);
         Ok(Some(info))
-        //~ todo!("3c-04: Ok(None) for a missing table or a taken name; an error unless the key is 1 to 64 bytes of INTEGER columns, or if two live tuples share a non-NULL key; the index holds every live tuple whose key has no NULL")
+        //~ todo!("3c-04: Ok(None) for a missing table or a taken name; an error unless the key is 1 to 64 bytes of INTEGER columns; the index holds one entry per live tuple; a primary key fails on a NULL key (not-null violation) or a key two live tuples share (unique violation)")
         // @end
     }
 

@@ -1,7 +1,7 @@
 //! Reads a table through one of its indexes.
 //!
-//! Without `pred_keys` it reads every row **in key order**; with `pred_keys` it looks each key up. Rows that are deleted, or that fail the
-//! plan's `filter_predicate`, are skipped.
+//! Without `pred_keys` it reads every row **in key order** (rows that share a key in rid order); with `pred_keys` it looks each key up
+//! and reads every row of that key. Rows that are deleted, or that fail the plan's `filter_predicate`, are skipped.
 
 use std::sync::Arc;
 
@@ -24,8 +24,8 @@ pub struct IndexScanExecutor<'e> {
     index_info: Arc<IndexInfo<'e>>,
     filter_predicate: Option<ExprRef>,
     pred_keys: Vec<ExprRef>,
-    /// The rids to visit, in the order to visit them; `cursor` is how many were visited.
-    rids: Vec<Rid>,
+    /// The index entries `(key, rid)` to visit, in the order to visit them; `cursor` is how many were visited.
+    entries: Vec<(Tuple, Rid)>,
     cursor: usize,
     /// The transaction to read as, with its manager.
     txn: Option<(Arc<Transaction>, &'e TransactionManager)>,
@@ -51,34 +51,37 @@ impl<'e> IndexScanExecutor<'e> {
             index_info,
             filter_predicate,
             pred_keys,
-            rids: vec![],
+            entries: vec![],
             cursor: 0,
             txn: ctx.txn().cloned().zip(ctx.txn_mgr()),
         })
     }
 
-    /// The rids this scan visits: with `pred_keys`, the rid under each key (in the order of the keys); without, every rid of the index in
-    /// key order.
-    fn collect_rids(&self) -> Result<Vec<Rid>> {
+    /// The entries this scan visits: with `pred_keys`, the entries of each key, a key given twice looked up once (in the order of the
+    /// keys); without, every entry of the index, in order.
+    fn collect_entries(&self) -> Result<Vec<(Tuple, Rid)>> {
         // @begin 3e-04
         if self.pred_keys.is_empty() {
             return Ok(self.index_info.index.scan_all());
         }
         let empty = Tuple::empty();
         let no_schema = Schema::new(vec![]);
-        let mut rids = vec![];
+        let mut entries: Vec<(Tuple, Rid)> = vec![];
+        let mut looked_up: Vec<Tuple> = vec![];
         for key_expr in &self.pred_keys {
             let value = key_expr.evaluate(&empty, &no_schema)?;
             let key = Tuple::new(&[value], &self.index_info.key_schema);
-            for rid in self.index_info.index.scan_key(&key) {
-                // `v1 = 4 or v1 = 4` is one row, not two: a rid is visited once, at its first key
-                if !rids.contains(&rid) {
-                    rids.push(rid);
-                }
+            // `v1 = 4 or v1 = 4` is one lookup, not two: each row once
+            if looked_up.iter().any(|k| k.data() == key.data()) {
+                continue;
             }
+            for rid in self.index_info.index.scan_key(&key) {
+                entries.push((key.clone(), rid));
+            }
+            looked_up.push(key);
         }
-        Ok(rids)
-        //~ Ok(self.index_info.index.scan_all()) // 3e-04: with pred_keys: evaluate each key (a constant), make a one-column key tuple with the index's key schema and look it up (Index::scan_key); a rid found under two keys is visited once
+        Ok(entries)
+        //~ Ok(self.index_info.index.scan_all()) // 3e-04: with pred_keys: evaluate each key (a constant), make a one-column key tuple with the index's key schema and take the entries of its rids (Index::scan_key); a key given twice is looked up once
         // @end
     }
 }
@@ -94,10 +97,10 @@ impl Executor for IndexScanExecutor<'_> {
         //~ // 4b-07: a serializable transaction remembers what it scans with: append_scan_predicate(table oid, the filter predicate, or true_predicate())
         // @end
         // @begin 3e-04
-        self.rids = self.collect_rids()?;
+        self.entries = self.collect_entries()?;
         self.cursor = 0;
         Ok(())
-        //~ todo!("3e-04: remember the rids to visit (collect_rids) and start at the first")
+        //~ todo!("3e-04: remember the entries to visit (collect_entries) and start at the first")
         // @end
     }
 
@@ -106,8 +109,8 @@ impl Executor for IndexScanExecutor<'_> {
         rid_batch.clear();
         // @begin 4b-06
         if let Some((txn, txn_mgr)) = &self.txn {
-            while tuple_batch.len() < batch_size && self.cursor < self.rids.len() {
-                let rid = self.rids[self.cursor];
+            while tuple_batch.len() < batch_size && self.cursor < self.entries.len() {
+                let rid = self.entries[self.cursor].1;
                 self.cursor += 1;
                 // the index leads to a rid; the version this transaction may see there (maybe none) is read as the sequential scan does
                 let Some(tuple) = read_visible_version(txn, txn_mgr, self.table_info, rid)? else { continue };
@@ -124,8 +127,8 @@ impl Executor for IndexScanExecutor<'_> {
         //~ // 4b-06: when self.txn is Some: for each rid use read_visible_version (given) instead of the heap's tuple, skip None, apply the filter as below
         // @end
         // @begin 3e-04
-        while tuple_batch.len() < batch_size && self.cursor < self.rids.len() {
-            let rid = self.rids[self.cursor];
+        while tuple_batch.len() < batch_size && self.cursor < self.entries.len() {
+            let rid = self.entries[self.cursor].1;
             self.cursor += 1;
             let (meta, tuple) = self.table_info.table.get_tuple(rid)?;
             if meta.is_deleted {
@@ -140,7 +143,7 @@ impl Executor for IndexScanExecutor<'_> {
             rid_batch.push(rid);
         }
         Ok(!tuple_batch.is_empty())
-        //~ todo!("3e-04: the batch holds the live tuples of the rids that satisfy the filter; true if it is not empty")
+        //~ todo!("3e-04: the batch holds the live tuples at the entries' rids that satisfy the filter; true if it is not empty")
         // @end
     }
 

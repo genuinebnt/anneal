@@ -1,7 +1,8 @@
 //! Inserts every tuple of its child into a table and its indexes, then produces one row: how many it inserted.
 //!
-//! Every index of the table is unique over non-NULL keys, and a primary key has no NULL: a tuple whose key an index already holds, or
-//! whose primary key has a NULL, is not inserted, and the statement fails at that tuple. The tuples before it stay inserted.
+//! Every inserted tuple gets an entry in every index of the table. An index that is not a primary key takes any key, repeated or
+//! with a NULL in it. A primary key is unique and has no NULL: a tuple whose primary key a live row already has, or whose primary key
+//! has a NULL, is not inserted, and the statement fails at that tuple. The tuples before it stay inserted.
 
 use std::sync::Arc;
 
@@ -43,14 +44,14 @@ impl<'e> InsertExecutor<'e> {
     }
 
     /// Fails with a not-null violation if the primary key of `tuple` has a NULL ([`IndexInfo::check_primary_key`]), and with a
-    /// unique violation if an index of the table already holds the key of `tuple`. Any other key with a NULL passes: NULL equals nothing.
-    fn check_unique(&self, tuple: &Tuple) -> Result<()> {
-        todo!("3e-02: the not-null error of IndexInfo::check_primary_key for a NULL primary key; Err(unique_violation(index name)) if any index of the table already holds the tuple's key; Ok otherwise")
+    /// unique violation if the primary-key index already holds the key of `tuple`. Without a primary key every tuple passes.
+    fn check_constraints(&self, tuple: &Tuple) -> Result<()> {
+        todo!("3e-02: the not-null error of IndexInfo::check_primary_key for a NULL primary key; Err(unique_violation(index name)) if the primary-key index already holds the tuple's key; Ok otherwise, and always without a primary key")
     }
 
-    /// Adds the tuple stored at `rid` to every index of the table whose key it has without a NULL.
+    /// Gives the tuple stored at `rid` its entry in every index of the table.
     fn insert_into_indexes(&self, tuple: &Tuple, rid: Rid) {
-        // 3e-02: in every index, the tuple's key (Tuple::key_from_tuple) maps to rid
+        // 3e-02: every index gets the entry (the tuple's key, rid); the key is Tuple::key_from_tuple
     }
 }
 
@@ -63,7 +64,7 @@ impl Executor for InsertExecutor<'_> {
         tuple_batch.clear();
         rid_batch.clear();
         // 4b-01: when self.txn is Some: as below, but insert each tuple with insert_mvcc (in execution_common.rs) instead of the heap and the indexes directly
-        todo!("3e-02: once: inserts every tuple of the child into the table and its indexes, failing at the first tuple whose key an index already holds (that tuple is in neither); answers with how many, then false")
+        todo!("3e-02: once: inserts every tuple of the child into the table and every index, failing at the first tuple whose primary key is taken or NULL (that tuple is in neither); answers with how many, then false")
     }
 
     fn output_schema(&self) -> &Schema {

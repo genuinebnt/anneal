@@ -1,6 +1,6 @@
 //! Deletes every tuple its child produces and produces one row: how many it deleted.
 //!
-//! Deleting marks the tuple deleted in the heap and removes its index entries.
+//! Deleting marks the tuple deleted in the heap and removes its entry from every index.
 
 use std::sync::Arc;
 
@@ -39,14 +39,15 @@ impl<'e> DeleteExecutor<'e> {
         Ok(DeleteExecutor { plan, table_info, indexes, child, done: false, txn })
     }
 
-    /// Removes the entries of `tuple` from every index of the table.
-    fn delete_from_indexes(&self, tuple: &Tuple) {
+    /// Removes the entry of the tuple stored at `rid` from every index of the table. The entries of other rows stay, those with
+    /// the same key included.
+    fn delete_from_indexes(&self, tuple: &Tuple, rid: Rid) {
         // @begin 3e-03
         for index in &self.indexes {
             let key = tuple.key_from_tuple(&self.table_info.schema, &index.key_schema, index.index.metadata().get_key_attrs());
-            index.index.delete_entry(&key);
+            index.index.delete_entry(&key, rid);
         }
-        //~ // 3e-03: for every index, delete the entry for the key of the tuple (Tuple::key_from_tuple, as in the insert executor)
+        //~ // 3e-03: for every index, delete the entry (the tuple's key, rid); the key is Tuple::key_from_tuple, as in the insert executor
         // @end
     }
 }
@@ -93,7 +94,7 @@ impl Executor for DeleteExecutor<'_> {
         while self.child.next(&mut child_tuples, &mut child_rids, BUSTUB_BATCH_SIZE)? {
             for (tuple, rid) in child_tuples.iter().zip(&child_rids) {
                 self.table_info.table.update_tuple_meta(&TupleMeta { ts: 0, is_deleted: true }, *rid)?;
-                self.delete_from_indexes(tuple);
+                self.delete_from_indexes(tuple, *rid);
                 count += 1;
             }
         }
@@ -101,7 +102,7 @@ impl Executor for DeleteExecutor<'_> {
         tuple_batch.push(Tuple::new(&[Value::integer(count)], &self.plan.output_schema));
         rid_batch.push(Rid::default());
         Ok(true)
-        //~ todo!("3e-03: marks every tuple of the child deleted and removes its index entries; answers once with how many, then false")
+        //~ todo!("3e-03: marks every tuple of the child deleted and removes its entry (key, rid) from every index; answers once with how many, then false")
         // @end
     }
 
