@@ -439,7 +439,7 @@ fn s3j_03_a_left_join_filtered_on_the_right_side_is_an_inner_join() {
 fn s3j_03_a_filter_that_a_padded_row_can_pass_leaves_the_join_alone() {
     let (a, b) = sample();
     let db = db_ab(&a, &b);
-    for cond in ["b.z is null", "b.z > 250 or a.y > 5", "a.y > 15", "coalesce(b.z, 0) > 250", "b.z is null or b.z > 250"] {
+    for cond in ["b.z is null", "b.z > 250 or a.y > 5", "a.y > 15", "coalesce(b.z, 300) > 250", "b.z is null or b.z > 250"] {
         let sql = format!("select a.x, b.z from a left join b on a.x = b.x where {cond}");
         assert_eq!(join_types(&plan(&db, &sql)), ["Left"], "{cond}: a padded row can pass it");
         assert_eq!(bag(&db, &sql), plain(&db, &sql), "{cond}: the answer");

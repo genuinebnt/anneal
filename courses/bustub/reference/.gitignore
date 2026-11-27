@@ -1,3 +1,4 @@
 /target
 *.bustub
 *.log
+/.anneal/outbox.jsonl
