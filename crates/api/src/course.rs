@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use anneal_content::course::{Course, Stage};
+use anneal_content::course::{Course, Stage, former_ids, former_states};
 use axum::Json;
 use axum::extract::{Path, State};
 use chrono::{DateTime, Utc};
@@ -32,14 +32,87 @@ struct StateRow {
     assisted: bool,
 }
 
-async fn states(s: &AppState, course: &str) -> ApiResult<HashMap<String, StateRow>> {
+/// The stored state of every stage, by stage id. A stage with no row of its own takes the state of the stages it replaces
+/// (`renamed_from`): passed when every one of them passed (at the latest of their times), assisted when any of them was, and with
+/// no hints or solution opened (a renamed stage's hints are new). The old rows are read, never changed.
+async fn states(s: &AppState, c: &Course) -> ApiResult<HashMap<String, StateRow>> {
     let rows: Vec<StateRow> = sqlx::query_as(
         "SELECT stage_id, hints_revealed, solution_revealed, solved_at, assisted FROM course_stage_state WHERE course = $1",
     )
-    .bind(course)
+    .bind(&c.id)
     .fetch_all(&s.db)
     .await?;
-    Ok(rows.into_iter().map(|r| (r.stage_id.clone(), r)).collect())
+    let mut by_id: HashMap<String, StateRow> = rows.into_iter().map(|r| (r.stage_id.clone(), r)).collect();
+    let inherited: Vec<StateRow> = c.stages().filter(|x| !by_id.contains_key(&x.id)).filter_map(|x| inherited_state(x, &by_id)).collect();
+    by_id.extend(inherited.into_iter().map(|r| (r.stage_id.clone(), r)));
+    Ok(by_id)
+}
+
+/// The state a stage without a row of its own takes from the stages it replaces, if any of them has one.
+fn inherited_state(x: &Stage, rows: &HashMap<String, StateRow>) -> Option<StateRow> {
+    let former = former_states(&x.renamed_from, |id| rows.get(id));
+    if former.iter().all(Option::is_none) {
+        return None;
+    }
+    let solved_at = former.iter().map(|r| r.and_then(|r| r.solved_at)).collect::<Option<Vec<_>>>().and_then(|at| at.into_iter().max());
+    let assisted = former.iter().flatten().any(|r| r.assisted);
+    Some(StateRow { stage_id: x.id.clone(), hints_revealed: 0, solution_revealed: false, solved_at, assisted })
+}
+
+/// Before the first write of a stage's own state: a stage that takes its state from the stages it replaces gets a row holding
+/// that state, so opening a hint or passing again keeps the pass it inherited (and when it was). Nothing happens once it has a row.
+async fn own_state_row(s: &AppState, c: &Course, x: &Stage) -> ApiResult<()> {
+    if x.renamed_from.is_empty() {
+        return Ok(());
+    }
+    let st = states(s, c).await?;
+    let Some(r) = st.get(&x.id) else { return Ok(()) };
+    sqlx::query(
+        "INSERT INTO course_stage_state (course, stage_id, solved_at, assisted) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (course, stage_id) DO NOTHING",
+    )
+    .bind(&c.id)
+    .bind(&x.id)
+    .bind(r.solved_at)
+    .bind(r.assisted)
+    .execute(&s.db)
+    .await?;
+    Ok(())
+}
+
+/// The ids whose runs are a stage's run history: its own, or, before its first run, those of the stages it replaces too.
+async fn run_ids(s: &AppState, c: &Course, x: &Stage) -> ApiResult<Vec<String>> {
+    let mut ids = vec![x.id.clone()];
+    if !x.renamed_from.is_empty() {
+        let own: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM course_runs WHERE course = $1 AND stage_id = $2)")
+            .bind(&c.id)
+            .bind(&x.id)
+            .fetch_one(&s.db)
+            .await?;
+        if !own {
+            ids.extend(former_ids(&x.renamed_from).map(str::to_owned));
+        }
+    }
+    Ok(ids)
+}
+
+/// The stage's solution: its own, or else the files of the solutions of the stages it replaces, in `renamed_from` order.
+async fn solution_files(s: &AppState, c: &Course, x: &Stage) -> ApiResult<Option<Value>> {
+    let rows: Vec<(String, Value)> = sqlx::query_as("SELECT stage_id, files FROM course_solutions WHERE course = $1 AND stage_id = ANY($2)")
+        .bind(&c.id)
+        .bind(std::iter::once(x.id.as_str()).chain(former_ids(&x.renamed_from)).collect::<Vec<_>>())
+        .fetch_all(&s.db)
+        .await?;
+    let rows: HashMap<String, Value> = rows.into_iter().collect();
+    if let Some(own) = rows.get(&x.id) {
+        return Ok(Some(own.clone()));
+    }
+    let files: Vec<Value> = former_states(&x.renamed_from, |id| rows.get(id))
+        .into_iter()
+        .flatten()
+        .flat_map(|v| v.as_array().cloned().unwrap_or_default())
+        .collect();
+    Ok((!files.is_empty()).then_some(Value::Array(files)))
 }
 
 fn status(row: Option<&StateRow>) -> &'static str {
@@ -53,12 +126,17 @@ fn status(row: Option<&StateRow>) -> &'static str {
 /// `GET /api/courses/{course}`: projects → modules → stages with the owner's progress.
 pub async fn overview(State(s): State<AppState>, Path(course): Path<String>) -> ApiResult<Json<Value>> {
     let c = find(&s, &course)?;
-    let st = states(&s, &c.id).await?;
+    let st = states(&s, c).await?;
     let runs: Vec<(String, i64)> = sqlx::query_as("SELECT stage_id, count(*) FROM course_runs WHERE course = $1 GROUP BY stage_id")
         .bind(&c.id)
         .fetch_all(&s.db)
         .await?;
     let runs: HashMap<String, i64> = runs.into_iter().collect();
+    // a stage with no runs of its own counts the runs of the stages it replaces
+    let run_count = |x: &Stage| match runs.get(&x.id) {
+        Some(n) => *n,
+        None => former_ids(&x.renamed_from).filter_map(|id| runs.get(id)).sum(),
+    };
     let mut done = 0;
     let mut challenges = 0;
     let mut challenges_done = 0;
@@ -88,7 +166,7 @@ pub async fn overview(State(s): State<AppState>, Path(course): Path<String>) -> 
                                 done += 1;
                             }
                             json!({ "id": x.id, "title": x.title, "kind": x.kind, "difficulty": x.difficulty, "rank": x.rank, "beyond": x.beyond,
-                                    "state": state, "runs": runs.get(&x.id).copied().unwrap_or(0) })
+                                    "state": state, "runs": run_count(x) })
                         })
                         .collect();
                     json!({ "code": m.code, "title": m.title, "summary": m.summary, "planned": m.planned, "optional": m.optional, "beyond": m.beyond, "stages": stages })
@@ -104,7 +182,11 @@ pub async fn overview(State(s): State<AppState>, Path(course): Path<String>) -> 
     // The last run the CLI reported, from any laptop: tells you whether the CLI you are using is signed in to this app.
     let last_run: Option<(String, bool, i32, i32, DateTime<Utc>)> =
         sqlx::query_as("SELECT stage_id, ok, passed, total, at FROM course_runs WHERE course = $1 ORDER BY at DESC, id DESC LIMIT 1").bind(&c.id).fetch_optional(&s.db).await?;
-    let last_run = last_run.map(|(stage, ok, passed, total, at)| json!({ "stage_id": stage, "ok": ok, "passed": passed, "total": total, "at": at }));
+    // a run of a stage that has since been renamed points to the stage that replaces it
+    let last_run = last_run.map(|(stage, ok, passed, total, at)| {
+        let stage = c.stage_or_successor(&stage).map_or(stage, |x| x.id.clone());
+        json!({ "stage_id": stage, "ok": ok, "passed": passed, "total": total, "at": at })
+    });
     Ok(Json(json!({ "id": c.id, "title": c.title, "total": total, "done": done, "challenges": challenges, "challenges_done": challenges_done, "current": current, "current_at": current_at.map(|i| i + 1), "last_run": last_run, "projects": projects })))
 }
 
@@ -128,22 +210,11 @@ pub async fn stage(State(s): State<AppState>, Path((course, id)): Path<(String, 
     let m = c.module(&x.module).ok_or_else(|| ApiError::NotFound(format!("module {}", x.module)))?;
     let all: Vec<&Stage> = c.stages().collect();
     let at = all.iter().position(|y| y.id == id).unwrap_or(0);
-    let st = states(&s, &c.id).await?;
+    let st = states(&s, c).await?;
     let me = st.get(&id);
     let solved = me.is_some_and(|r| r.solved_at.is_some());
-    let last: Option<RunView> = sqlx::query_as(
-        "SELECT id, ok, passed, total, tests, problem, commit_sha, duration_ms, at FROM course_runs
-         WHERE course = $1 AND stage_id = $2 ORDER BY at DESC, id DESC LIMIT 1",
-    )
-    .bind(&c.id)
-    .bind(&id)
-    .fetch_optional(&s.db)
-    .await?;
-    let stored: Option<(Value,)> = sqlx::query_as("SELECT files FROM course_solutions WHERE course = $1 AND stage_id = $2")
-        .bind(&c.id)
-        .bind(&id)
-        .fetch_optional(&s.db)
-        .await?;
+    let run_ids = run_ids(&s, c, x).await?;
+    let stored = solution_files(&s, c, x).await?;
     // a run the CLI started and has not reported yet (ten minutes at most: a run that died leaves no report)
     let running: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
         "SELECT started_at FROM course_run_starts WHERE course = $1 AND stage_id = $2 AND started_at > now() - interval '10 minutes'",
@@ -156,12 +227,13 @@ pub async fn stage(State(s): State<AppState>, Path((course, id)): Path<(String, 
     // The most recent runs, newest first, for the Last run tab's history.
     let runs: Vec<RunView> = sqlx::query_as(
         "SELECT id, ok, passed, total, tests, problem, commit_sha, duration_ms, at FROM course_runs
-         WHERE course = $1 AND stage_id = $2 ORDER BY at DESC, id DESC LIMIT 10",
+         WHERE course = $1 AND stage_id = ANY($2) ORDER BY at DESC, id DESC LIMIT 10",
     )
     .bind(&c.id)
-    .bind(&id)
+    .bind(&run_ids)
     .fetch_all(&s.db)
     .await?;
+    let last = runs.first().map(|r| json!(r));
     let revealed_hints = me.map_or(0, |r| r.hints_revealed.max(0) as usize).min(x.hints.len());
     let solution_open = me.is_some_and(|r| r.solution_revealed) || solved;
     let pn = |i: Option<usize>| i.and_then(|i| all.get(i)).map(|y| json!({ "id": y.id, "title": y.title, "rank": y.rank }));
@@ -189,7 +261,7 @@ pub async fn stage(State(s): State<AppState>, Path((course, id)): Path<(String, 
         "hints": { "total": x.hints.len(), "revealed": x.hints.iter().take(revealed_hints).collect::<Vec<_>>(),
                    "titles": x.hints.iter().map(|h| &h.title).collect::<Vec<_>>() },
         "solution": { "available": stored.is_some() && x.kind != "challenge", "open": solution_open && stored.is_some() && x.kind != "challenge",
-                      "files": if solution_open { stored.map(|r| r.0) } else { None } },
+                      "files": if solution_open { stored } else { None } },
         "last_run": last,
         "runs": runs,
     })))
@@ -252,6 +324,7 @@ pub async fn reveal_hint(State(s): State<AppState>, Path((course, id)): Path<(St
     if x.hints.is_empty() {
         return Err(ApiError::BadRequest(format!("{id} has no hints written yet")));
     }
+    own_state_row(&s, c, x).await?;
     sqlx::query(
         "INSERT INTO course_stage_state (course, stage_id, hints_revealed, assisted) VALUES ($1, $2, 1, true)
          ON CONFLICT (course, stage_id) DO UPDATE SET
@@ -269,15 +342,11 @@ pub async fn reveal_hint(State(s): State<AppState>, Path((course, id)): Path<(St
 /// `POST …/solution`: shows the stage's solution (marks the stage assisted unless it has already passed).
 pub async fn reveal_solution(State(s): State<AppState>, Path((course, id)): Path<(String, String)>) -> ApiResult<Json<Value>> {
     let c = find(&s, &course)?;
-    find_stage(c, &id)?;
-    let has: Option<i32> = sqlx::query_scalar("SELECT 1 FROM course_solutions WHERE course = $1 AND stage_id = $2")
-        .bind(&c.id)
-        .bind(&id)
-        .fetch_optional(&s.db)
-        .await?;
-    if has.is_none() {
+    let x = find_stage(c, &id)?;
+    if solution_files(&s, c, x).await?.is_none() {
         return Err(ApiError::NotFound(format!("a solution for {id}; upload them with `anneal course solutions push`")));
     }
+    own_state_row(&s, c, x).await?;
     sqlx::query(
         "INSERT INTO course_stage_state (course, stage_id, solution_revealed, assisted) VALUES ($1, $2, true, true)
          ON CONFLICT (course, stage_id) DO UPDATE SET solution_revealed = true,
@@ -315,7 +384,7 @@ pub struct RunBody {
 /// `POST …/runs`: one test run of a stage, reported by the CLI. A passing run marks the stage solved the first time.
 pub async fn post_run(State(s): State<AppState>, Path(course): Path<String>, Json(b): Json<RunBody>) -> ApiResult<Json<Value>> {
     let c = find(&s, &course)?;
-    find_stage(c, &b.stage_id)?;
+    let x = find_stage(c, &b.stage_id)?;
     if b.tests.len() > 2_000 || b.tests.iter().any(|t| t.name.len() > 300 || t.detail.len() > 4_000) {
         return Err(ApiError::BadRequest("that run report is too large".into()));
     }
@@ -340,6 +409,7 @@ pub async fn post_run(State(s): State<AppState>, Path(course): Path<String>, Jso
     .await?;
     sqlx::query("DELETE FROM course_run_starts WHERE course = $1 AND stage_id = $2").bind(&c.id).bind(&b.stage_id).execute(&s.db).await?;
     if ok {
+        own_state_row(&s, c, x).await?;
         sqlx::query(
             "INSERT INTO course_stage_state (course, stage_id, solved_at) VALUES ($1, $2, now())
              ON CONFLICT (course, stage_id) DO UPDATE SET solved_at = COALESCE(course_stage_state.solved_at, now())",
@@ -423,23 +493,30 @@ pub struct ResetBody {
 }
 
 /// `POST …/reset`: forgets the progress of the whole course, of one project or of one module: solved marks, runs, opened hints and solutions.
-/// Resetting the whole course also marks every concept article unread. Code in the learner's repo is not touched.
+/// Resetting the whole course also marks every concept article unread. Code in the learner's repo is not touched. The rows of the stages
+/// a reset stage replaces (`renamed_from`) go too, so none of them brings its old state back; every row is archived first.
 pub async fn reset_progress(State(s): State<AppState>, Path(course): Path<String>, Json(b): Json<ResetBody>) -> ApiResult<Json<Value>> {
     let c = find(&s, &course)?;
-    let ids: Vec<String> = match (b.all, &b.module, b.project) {
-        (true, None, None) => c.stages().map(|x| x.id.clone()).collect(),
+    let stages: Vec<&Stage> = match (b.all, &b.module, b.project) {
+        (true, None, None) => c.stages().collect(),
         (false, Some(code), None) => {
             let m = c.module(code).ok_or_else(|| ApiError::NotFound(format!("module {code}")))?;
-            m.stages.iter().map(|x| x.id.clone()).collect()
+            m.stages.iter().collect()
         }
         (false, None, Some(n)) => {
             if !c.projects.iter().any(|p| p.number == n) {
                 return Err(ApiError::NotFound(format!("project {n}")));
             }
-            c.modules.iter().filter(|m| m.project == n).flat_map(|m| m.stages.iter().map(|x| x.id.clone())).collect()
+            c.modules.iter().filter(|m| m.project == n).flat_map(|m| m.stages.iter()).collect()
         }
         _ => return Err(ApiError::BadRequest("say what to reset: {\"all\": true}, {\"module\": \"1a\"} or {\"project\": 1}".into())),
     };
+    let mut ids: Vec<String> = stages.iter().map(|x| x.id.clone()).collect();
+    for old in stages.iter().flat_map(|x| former_ids(&x.renamed_from)) {
+        if !ids.iter().any(|id| id == old) {
+            ids.push(old.to_owned());
+        }
+    }
     let mut tx = s.db.begin().await?;
     let source = format!("reset_course:{}", c.id);
     for table in ["course_runs", "course_stage_state", "course_run_starts"] {
@@ -449,13 +526,13 @@ pub async fn reset_progress(State(s): State<AppState>, Path(course): Path<String
         crate::store::archive_course_rows(&mut tx, &source, "course_concept_state", &c.id, None).await?;
     }
     let runs = sqlx::query("DELETE FROM course_runs WHERE course = $1 AND stage_id = ANY($2)").bind(&c.id).bind(&ids).execute(&mut *tx).await?.rows_affected();
-    let stages = sqlx::query("DELETE FROM course_stage_state WHERE course = $1 AND stage_id = ANY($2)").bind(&c.id).bind(&ids).execute(&mut *tx).await?.rows_affected();
+    let removed = sqlx::query("DELETE FROM course_stage_state WHERE course = $1 AND stage_id = ANY($2)").bind(&c.id).bind(&ids).execute(&mut *tx).await?.rows_affected();
     sqlx::query("DELETE FROM course_run_starts WHERE course = $1 AND stage_id = ANY($2)").bind(&c.id).bind(&ids).execute(&mut *tx).await?;
     if b.all {
         sqlx::query("DELETE FROM course_concept_state WHERE course = $1").bind(&c.id).execute(&mut *tx).await?;
     }
     tx.commit().await?;
-    Ok(Json(json!({ "stages": ids.len(), "stage_states_removed": stages, "runs_removed": runs })))
+    Ok(Json(json!({ "stages": stages.len(), "stage_states_removed": removed, "runs_removed": runs })))
 }
 
 /// `GET …/repo`: the repository that holds the learner's work, if `anneal course remote` recorded one.
