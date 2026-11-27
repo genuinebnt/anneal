@@ -1,0 +1,32 @@
+slug = "from-query-to-plan"
+title = "From a query to a plan you can read"
+mode = "write"
+level = "hard"
+stage = "choose"
+order = 9
+status = "ready"
+tags = ["query planning", "pipeline", "input limits", "EXPLAIN"]
+teaches = [
+  "A planner is a pipeline: check the query, move conditions down, list the ways to read each table, order the joins, add the output.",
+  "Check everything a stranger can send before any code that trusts it, and check depth without recursion.",
+  "A plan you can print is a plan you can debug. Each line shows what is done, how many rows are expected, and the price.",
+]
+follow_up = "1) How would you show actual row counts beside the estimates? 2) The estimate for one table is wrong by 100 times. Which lines of the output would tell you? 3) What would you cache if the same query arrives often?"
+related = ["Y91", "L8"]
+
+[[hints]]
+kind = "approach"
+text = "Write `optimize` as five small steps that reuse earlier functions. After `push_down`, a table's filter parts are its own conditions, and join conditions are edges. Turn each edge's table numbers into positions in `query.tables`."
+
+[[hints]]
+kind = "rust"
+text = "Measure depth with an explicit stack of `(condition, depth)` pairs before anything recursive touches the query. For `explain`, a stack of `(plan, depth)` works, pushing inputs in reverse. `{:.0}` and `{:.1}` format the numbers."
+
+[[hints]]
+kind = "edge"
+text = "The checks have a fixed order. A table number can be `usize::MAX`, so test it before shifting by it. A list with one part prints as that part, and takes brackets only if its parent needs them."
+
+[solution]
+explanation = "After checking the query, the naive plan is rewritten so every condition sits low. A walk over it gives each table's own conditions and the conditions between tables. Each table gets its leaf plans in a plan set, and each condition between tables becomes an edge with its selectivity. The join order search runs with the real join function, and a projection goes on top. Printing is a pre-order walk."
+time = "Dominated by the join order search: O(3^n) splits"
+space = "O(2^n) plan sets"

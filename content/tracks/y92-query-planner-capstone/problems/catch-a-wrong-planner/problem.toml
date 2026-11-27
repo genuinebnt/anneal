@@ -1,0 +1,32 @@
+slug = "catch-a-wrong-planner"
+title = "Catch a planner that gives wrong answers"
+mode = "write"
+level = "hard"
+stage = "check"
+order = 10
+status = "ready"
+tags = ["differential testing", "random queries", "test generation"]
+teaches = [
+  "A planner may choose any plan, but the rows are fixed. So a slow, obviously right answer can judge every plan.",
+  "Compare rows as sorted lists with repeats kept: order is free, counts are not.",
+  "What your generator never makes is never tested. Small value ranges, missing values and repeated rows are where planners break.",
+]
+follow_up = "1) How would you shrink a failing case further? 2) How would you test a planner whose bugs need 10 000 rows to appear? 3) Which part of your own generator might hide a bug forever?"
+related = ["Y5", "Y91"]
+
+[[hints]]
+kind = "approach"
+text = "Repeat: make a tiny random database and a random query, ask the planner, run its plan, and compare with `plain_answer`. The work is all in the generator. Which ingredients must a case have to expose each kind of mistake?"
+
+[[hints]]
+kind = "rust"
+text = "Write a few lines of splitmix64 or xorshift seeded from `seed`. `(0..tries).map(|_| make_case()).find(|case| ..)` gives the limit for free. Sort both row lists before comparing."
+
+[[hints]]
+kind = "edge"
+text = "Use very few different values, so that equal values and boundary values meet. Include missing values, repeated rows, empty tables, indexes, `Any`, `OneOf`, and two equalities between the same pair of tables. `seed` can be 0 or `u64::MAX`."
+
+[solution]
+explanation = "Each try builds up to three small tables with values from a tiny range, some missing, with some columns indexed. The query ties the tables with zero, one or two equalities per new table, then adds random conditions. The planner's plan runs on the data, and its sorted rows are compared with the plain answer. Small values make boundaries common, and two equalities on one pair give a join something left over to check."
+time = "O(tries × (planning + running a tiny case))"
+space = "O(case)"

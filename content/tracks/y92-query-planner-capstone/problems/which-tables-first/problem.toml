@@ -1,0 +1,32 @@
+slug = "which-tables-first"
+title = "Which tables first?"
+mode = "write"
+level = "hard"
+stage = "choose"
+order = 8
+status = "ready"
+tags = ["join ordering", "dynamic programming over subsets", "Selinger", "bushy trees", "interesting orders"]
+teaches = [
+  "The rows of a joined set do not depend on the order of the joins. So every plan for the same set competes fairly.",
+  "The best plan for a set is made of kept plans for two smaller sets. One table of the answers, indexed by set, is enough.",
+  "Keeping only the cheapest plan per set is not safe. Keep one per output order.",
+]
+follow_up = "1) How many splits are there for 10 tables, and for 20? 2) What would you do past the table limit? 3) When is pairing two unrelated tables first actually the cheapest, and what does this planner miss then?"
+related = ["Y91", "P2"]
+
+[[hints]]
+kind = "approach"
+text = "Keep a plan set for every set of tables, filled from the smallest sets up. For each set, try every way to cut it into two non-empty parts, in both directions. Feed every pair of kept plans to `join`."
+
+[[hints]]
+kind = "rust"
+text = "Index a `Vec<PlanSet>` of length `1 << n` by the set. `left = (left - 1) & set`, starting from `(set - 1) & set` and stopping at 0, gives every proper part; the other part is `set ^ left`."
+
+[[hints]]
+kind = "edge"
+text = "A condition is used at the split where it first has all its tables: inside the set, but inside neither part. First search with such conditions required. Only if the full set gets no plan, search again allowing every split. A condition over three tables can make the first search fail."
+
+[solution]
+explanation = "Entry `set` of a table holds the kept plans for that set of tables. Single tables start from their leaf plans. For a larger set, every split into two parts that already have plans offers new ones, built by `join` from each pair. The plan set keeps the best per order. Splits without a connecting condition are skipped in the first pass. This explores every tree shape, bushy ones included, in about 3^n steps."
+time = "O(3^n × p²) calls for n tables and p kept plans per set"
+space = "O(2^n × p)"

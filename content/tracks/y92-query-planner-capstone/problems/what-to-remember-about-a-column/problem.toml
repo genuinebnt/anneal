@@ -1,0 +1,32 @@
+slug = "what-to-remember-about-a-column"
+title = "What to remember about a column"
+mode = "write"
+level = "medium"
+stage = "estimate"
+order = 1
+status = "ready"
+tags = ["statistics", "equi-height histogram", "most common values"]
+teaches = [
+  "A planner never looks at the data while it plans. It looks at a small summary made in advance.",
+  "Slices of equal row count are narrow where values crowd, so the guess stays good on uneven data.",
+  "A few very frequent values spoil an average. Count those exactly and average only the rest.",
+]
+follow_up = "1) When does a summary go stale, and who should rebuild it? 2) How would you estimate the number of distinct values without sorting? 3) Which questions does this summary answer badly?"
+related = ["F4", "Y91"]
+
+[[hints]]
+kind = "approach"
+text = "Sort the present values once. Cuts, counts and frequent values all come from that one sorted list. `between` is the difference of two \"how many are at most v\" estimates."
+
+[[hints]]
+kind = "rust"
+text = "`partition_point` finds the slice that holds a value. Subtract in `i128`: two `i64` values can be further apart than an `i64` can say. Compare `4 * count * distinct > 5 * present` to avoid fractions."
+
+[[hints]]
+kind = "edge"
+text = "`low - 1` does not exist for `i64::MIN`. A column with no present value has no cuts and matches nothing. Several cuts can be equal when one value is frequent."
+
+[solution]
+explanation = "Sorting the present values gives everything. The cuts are the values at 33 evenly spaced positions. Run lengths give the counts, and only counts clearly above average are listed. For a range, estimate how many are at most the upper end and subtract how many are below the lower end. Inside one slice the values are assumed to be spread evenly. That assumption is the main source of error."
+time = "O(n log n) to summarise, O(log n) per estimate"
+space = "O(1) per column: 33 cuts and at most 8 counts"

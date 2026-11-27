@@ -1,0 +1,32 @@
+slug = "tidy-a-drawing"
+title = "Tidy up a drawing"
+mode = "write"
+level = "medium"
+stage = "reshape"
+order = 3
+status = "ready"
+tags = ["tree rewriting", "rules", "fixpoint"]
+teaches = [
+  "Write each simplification as a small rule on the top of a tree. A separate driver decides where to try rules and when to stop.",
+  "One rule can create the chance for another, above it or below it. So whatever a rule builds must be looked at again.",
+  "Check that every rule makes something smaller. That is your proof that the repeating ever ends.",
+]
+follow_up = "1) How would you record which rules fired, to explain a result? 2) Two rules can apply to the same node. Can the order change the result here? 3) How would you avoid walking parts that are already tidy?"
+related = ["L8", "Y92"]
+
+[[hints]]
+kind = "approach"
+text = "Tidy the parts first. Then try the rules on the node itself. Ask what must happen when a rule has just built something new."
+
+[[hints]]
+kind = "rust"
+text = "A function `Shape -> Result<Shape, Shape>` works well: `Ok` is a changed shape, `Err` hands the unchanged one back without a clone. `match` with a guard such as `Shape::Group(parts) if parts.len() == 1` keeps rules short."
+
+[[hints]]
+kind = "edge"
+text = "Taking a shared move out of a group can leave groups directly inside the group, or moves that are shared again. Adding two moves can give (0, 0)."
+
+[solution]
+explanation = "Each rule looks only at one node whose parts are already tidy. The driver tidies the parts, tries the rules, and when one fires, tidies the result again. That second pass matters: a rule can build a node that matches another rule, or put an untidy node below. It ends because every rule removes at least one node."
+time = "O(n · d) for n nodes at depth d"
+space = "O(n)"

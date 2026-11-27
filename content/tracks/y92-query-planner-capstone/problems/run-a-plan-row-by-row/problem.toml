@@ -1,0 +1,32 @@
+slug = "run-a-plan-row-by-row"
+title = "Run a plan, one row at a time"
+mode = "write"
+level = "hard"
+stage = "run"
+order = 4
+status = "ready"
+tags = ["Volcano model", "iterators", "trait objects", "nested loop join"]
+teaches = [
+  "Every operator offers the same one method: give me the next row. So any operator can feed any other.",
+  "Pulling means that no row is read before somebody asks for it. That is how a limit or an early stop saves work.",
+  "A nested loop reads its inner input once and keeps it, because it walks it again for every outer row.",
+]
+follow_up = "1) What does one `next` call per row cost, and how do batches help? 2) How would you stop a running plan early and free its memory? 3) Where would you count rows to compare them with the estimates?"
+related = ["S6", "L3", "Y91"]
+
+[[hints]]
+kind = "approach"
+text = "Write one operator per node kind. Each owns its inputs and asks them for rows only when it needs one. The nested loop needs two pieces of memory: the inner rows, and where it is for the current outer row."
+
+[[hints]]
+kind = "rust"
+text = "`Box<dyn Operator + 'a>` can borrow the plan and the store. A lazy iterator such as `(0..n).map(..)` already reads on demand; wrap any `Iterator<Item = Row>` in a small struct that implements `Operator`."
+
+[[hints]]
+kind = "edge"
+text = "`open` must not read a row, so the nested loop reads its inner side at the first `next`. `<>` is false for a missing value. An index range with `low > high` must give no rows, not a slice panic."
+
+[solution]
+explanation = "`open` builds a tree of operators that mirrors the plan, and reads nothing. Scans map row numbers to rows lazily. The index scan cuts the sorted index with two binary searches and reads one row per entry it hands out. The filter pulls until a row passes. The nested loop drains its inner input at the first call, then pairs it with one outer row at a time."
+time = "O(rows read) for scans and filters; O(outer × inner) for a nested loop"
+space = "O(inner) for a nested loop; constant otherwise"

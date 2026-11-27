@@ -1,0 +1,32 @@
+slug = "ask-each-question-early"
+title = "Ask each question as early as possible"
+mode = "write"
+level = "medium"
+stage = "estimate"
+order = 3
+status = "ready"
+tags = ["predicate pushdown", "join conditions", "logical plans", "rewrite rules"]
+teaches = [
+  "A condition may run as soon as every table it reads is there, and no sooner.",
+  "A condition on one table shrinks that table before any join. A condition on two turns a \"pair everything\" into a join.",
+  "Only parts joined by AND may be separated. An OR has to stay whole.",
+]
+follow_up = "1) From `a.x = b.x and a.x > 5`, which new condition could you add on `b`? 2) Why is this rewrite almost always a gain, and when is it not? 3) What would stop you from pushing a filter below an outer join?"
+related = ["Y91", "Y92"]
+
+[[hints]]
+kind = "approach"
+text = "Collect conditions on the way down and drop each where it belongs. At a pair of inputs, a part goes left if the left side has all its tables, right if the right side has them, and stays here otherwise."
+
+[[hints]]
+kind = "rust"
+text = "`needs & !have == 0` says that every needed table is present. A recursive function `place(plan, waiting: Vec<Cond>) -> Logical` rebuilds the tree from nothing."
+
+[[hints]]
+kind = "edge"
+text = "Old `Filter` and `Join` conditions at any depth must be picked up too. A part that reads no table may go to any single table. A node with one part holds that part itself, not an `All` of one."
+
+[solution]
+explanation = "Walk down the tree carrying the parts still looking for a place. Filters and join conditions add their parts, opened with `conjuncts`. At a pair of inputs, each part moves to a side that has all its tables; the rest stay and make the pair a `Join`. At a table, whatever arrived becomes one `Filter`. Parts only move down, and each is placed exactly once."
+time = "O(p · d) set checks for p parts at depth d, plus the cost of the table sets"
+space = "O(n + p)"

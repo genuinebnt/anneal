@@ -1,0 +1,32 @@
+slug = "how-many-rows-will-pass"
+title = "How many rows will pass?"
+mode = "write"
+level = "medium"
+stage = "estimate"
+order = 2
+status = "ready"
+tags = ["cardinality estimation", "selectivity", "independence assumption"]
+teaches = [
+  "An estimate for a whole condition is built from the estimates of its parts, with a rule for each way of joining them.",
+  "Multiplying for AND assumes that the parts are unrelated. Columns that move together break it, sometimes by a factor of hundreds.",
+  "Two bounds on one column are plainly related. Merge them into one range before estimating.",
+]
+follow_up = "1) What would you store to estimate two linked columns well? 2) Why is the q-error a better score than the plain difference? 3) How should `x = 3 and x = 4` be estimated, and what does your rule say?"
+related = ["Y91"]
+
+[[hints]]
+kind = "approach"
+text = "Handle each kind of condition on its own. For `All`, start from the flat list that `conjuncts` gives. Then set aside the ordering comparisons, grouped by column."
+
+[[hints]]
+kind = "rust"
+text = "A `BTreeMap<Column, (i64, i64)>` holds one range per column: start with the whole number line and narrow it with `max` and `min`. `checked_add` and `checked_sub` find the two comparisons that allow nothing."
+
+[[hints]]
+kind = "edge"
+text = "`x > i64::MAX` allows nothing, and it must stay \"nothing\" after meeting other bounds. A table with no rows gives 0, never 0 divided by 0. An empty `All` is 1 and an empty `Any` is 0."
+
+[solution]
+explanation = "A single comparison becomes an estimated row count from the summary, divided by the table's rows. `Any` is computed as one minus the chance that every part misses. For `All`, nested lists are opened first, and all ordering comparisons on one column become one range, estimated once. Everything else is multiplied. That product assumes the parts are unrelated, which is the weakness every planner of this kind has."
+time = "O(p log p) for p parts"
+space = "O(p)"

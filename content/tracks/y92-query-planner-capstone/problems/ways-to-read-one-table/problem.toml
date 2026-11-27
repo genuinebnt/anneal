@@ -1,0 +1,32 @@
+slug = "ways-to-read-one-table"
+title = "The ways to read one table"
+mode = "write"
+level = "medium"
+stage = "choose"
+order = 6
+status = "ready"
+tags = ["access paths", "cost model", "index scan", "sargable predicates"]
+teaches = [
+  "A planner first lists the ways to do something, with a price for each. Choosing comes later.",
+  "An index helps with the comparisons that make one range on its column. The other conditions are still checked on each row.",
+  "An index pays for every matching row with a costly random read, so with many matches the plain scan wins.",
+]
+follow_up = "1) At what share of matching rows do the two costs cross here? 2) How would an index on two columns change which conditions it can use? 3) What if the index already holds every column the query needs?"
+related = ["Y91"]
+
+[[hints]]
+kind = "approach"
+text = "Always make the plain scan. Then, for each indexed column, split the conditions in two: those that narrow a range on that column, and the rest. Without any of the first kind there is no index plan."
+
+[[hints]]
+kind = "rust"
+text = "`range_of` already says which comparisons are ranges. Narrow `(low, high)` with `max` and `min`. A helper that puts a `Filter` over a plan serves both kinds of plan."
+
+[[hints]]
+kind = "edge"
+text = "Overlapping ranges can be empty: the index plan then reads nothing. The topmost node of **every** alternative has the same `rows`. The nodes under it keep their own."
+
+[solution]
+explanation = "The plain plan scans and filters. For each indexed column, every comparison on it except `<>` narrows one range, which the index scan reads; the other conditions stay in a filter above. All alternatives answer the same question, so their topmost nodes claim the same number of rows. Their costs differ: pages in order for the scan, random reads per match for the index."
+time = "O(indexes × conditions)"
+space = "O(indexes × conditions)"

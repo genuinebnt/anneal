@@ -1,0 +1,32 @@
+slug = "ways-to-join-two-inputs"
+title = "The ways to join two inputs"
+mode = "write"
+level = "medium"
+stage = "choose"
+order = 7
+status = "ready"
+tags = ["join operators", "cost model", "interesting orders", "sort enforcer"]
+teaches = [
+  "For each pair of inputs there are several operators, and each has its own price formula.",
+  "A merge join needs sorted inputs. If an input is already sorted, the sort is free, so how a plan is sorted is worth money.",
+  "So the cheapest plan is not the only one worth keeping: keep the cheapest for each order.",
+]
+follow_up = "1) After a merge join the output is also sorted by the right key. What is lost by recording only the left one? 2) When would you throw away an ordered plan after all? 3) Which formula punishes a wrong row estimate the most?"
+related = ["Y91", "Y92"]
+
+[[hints]]
+kind = "approach"
+text = "The nested loop is always possible. Look for one condition that equates a column of each side. If there is one, build the two other joins around it, and keep the remaining conditions as `rest`."
+
+[[hints]]
+kind = "rust"
+text = "A `u64` per plan tells which tables it reads, so you can tell which side a column belongs to. `iter().enumerate().find_map(..)` finds the first key and its position. For the plan set, `iter_mut().find(|p| p.order == plan.order)` is enough."
+
+[[hints]]
+kind = "edge"
+text = "The equality can be written either way round; the node names the left plan's column first. An equality between two columns of the same side is not a key. A sort of 0 rows is priced as 2 rows."
+
+[solution]
+explanation = "The nested loop needs nothing and keeps the outer order. For the other two, the first equality across the sides is the key and the rest is checked on each pair. The merge join adds a sort only where an input is not already ordered by its key. The plan set compares plans only with others of the same order, because a dearer sorted plan can make a later merge join cheaper."
+time = "O(c) per pair of inputs, besides copying plans"
+space = "O(size of the copied plans)"

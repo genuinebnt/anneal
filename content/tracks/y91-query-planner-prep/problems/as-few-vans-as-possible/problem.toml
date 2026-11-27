@@ -1,0 +1,32 @@
+slug = "as-few-vans-as-possible"
+title = "As few vans as possible"
+mode = "write"
+level = "hard"
+stage = "choose"
+order = 6
+status = "ready"
+tags = ["dynamic programming over subsets", "bitmask", "partition"]
+teaches = [
+  "A set of up to 32 things is an integer, so an array can hold one answer for every set.",
+  "Build the answer for a set from answers for smaller sets. Smaller sets are smaller numbers, so counting upwards is a safe order.",
+  "`sub = (sub - 1) & set` walks through every subset of a set. Insisting that one chosen element is inside stops the same split being tried twice.",
+]
+follow_up = "1) How would you also minimise the heaviest van? 2) What could you skip if \"a part of a fitting load also fits\" were promised? 3) Why is the total work 3 to the power of n and not 4?"
+related = ["P2", "Y92"]
+
+[[hints]]
+kind = "approach"
+text = "Ask for every set of parcels: how few vans does exactly this set need? Take one parcel of the set. It travels in some van. What is left after that van?"
+
+[[hints]]
+kind = "rust"
+text = "`1 << set.trailing_zeros()` is the lowest parcel of a set. If `others` is the rest, then `extra = (extra - 1) & others`, starting from `others` and ending after 0, visits every subset."
+
+[[hints]]
+kind = "edge"
+text = "A load can fit although a part of it does not, so never build loads up one parcel at a time. Zero parcels need zero vans. `fits` must never be asked about the empty load."
+
+[solution]
+explanation = "Let `best[set]` be the fewest vans that carry exactly `set`. The lowest parcel of `set` is in one of those vans. So try every load made of that parcel and some of the others, and add one van to the best answer for what remains. Each set is built only from smaller numbers, so counting upwards works. Over all sets this looks at about 3^n pairs. Nothing is assumed about which loads fit."
+time = "O(3^n)"
+space = "O(2^n)"

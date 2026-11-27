@@ -20,7 +20,7 @@ heading = "What it is"
 body = """
 the pipeline every cost-based optimizer shares, in one standalone file (std only, seeded xorshift, deterministic): 1 **catalog** + **statistics**   row counts, NDV, min/max, null fraction, equi-height histograms, most-common-values (MCV) from generated data. 2 **cardinality estimation** selectivity for = &lt; range IN AND(independence) OR(inclusion-exclusion), join sel 1/max(ndv);
 
-Compared with **true** counts (q-error). 3 **logical plan** + **rules**   a rule engine run to a FIXPOINT: constant folding, conjunction splitting, predicate pushdown, join extraction, projection pruning. 4 **physical** + **cost model**  SeqScan / IndexScan / NestedLoop / HashJoin / SortMergeJoin(+Sort), cost = io pages + cpu per tuple, interesting orders. 5 **join ordering**          Selinger DP over bitmask subsets (left-deep and bushy, no cross products unless forced) + greedy **goo** heuristic.
+Compared with **true** counts (q-error). 3 **logical plan** + **rules**   a rule engine run to a FIXPOINT: constant folding, conjunction splitting, predicate pushdown, join extraction. A projection pruning rule is shown too, but the final pipeline does not use it. 4 **physical** + **cost model**  SeqScan / IndexScan / NestedLoop / HashJoin / SortMergeJoin(+Sort), cost = io pages + cpu per tuple, interesting orders. 5 **join ordering**          Selinger DP over bitmask subsets (left-deep and bushy, no cross products unless forced) + greedy **goo** heuristic.
 
 ```text
 6 EXPLAIN                plan tree with estimated rows and cost per node.   7 EXECUTION   Volcano iterators (`next()`), so plans really run.
@@ -38,7 +38,9 @@ Compared with **true** counts (q-error). 3 **logical plan** + **rules**   a rule
 [[sections]]
 heading = "Verification"
 body = """
-(a) DP == brute force over all join trees (n&lt;=5); (b) optimised == naive results over 200 random queries; (c) rewrites never raise estimated cost; (d) greedy >= DP; (e) q-error bounded on uniform data, large on correlated data; (f) IndexScan vs SeqScan choice; (g) hash build is smaller side.
+(a) DP == brute force over all join trees (n&lt;=5); (b) optimised == naive results over 200 random queries; (c) on those non-empty tables the first rule batch never raises estimated cost; (d) greedy >= DP; (e) q-error bounded on uniform data, large on correlated data; (f) IndexScan vs SeqScan choice; (g) hash build is smaller side; (h) regression checks for NULL, the ends of i64, empty tables, refused queries and EXPLAIN brackets, and random checks that folding keeps every value and every result, NULL in IN lists and numbers under AND or OR included.
+
+**Limits.** Projection pruning can raise the estimate, because this cost model charges for each added Project. So can pushing a filter below a join with an empty side. Join estimates ignore the share of NULLs. The brute-force check uses the same cost functions and pruning as the DP, so it checks only the enumeration. A query may name at most 12 tables, each once (no self-joins), with table ids below 32. Expressions have no depth limit: a very deep one overflows the stack.
 """
 
 [[sections]]

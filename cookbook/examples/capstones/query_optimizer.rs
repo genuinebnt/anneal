@@ -18,8 +18,14 @@
 //!   cheapest plan PER OUTPUT ORDER for each subset, not just the cheapest overall (Selinger's key insight).
 //! NOT IMPLEMENTED: a Cascades memo (groups of equivalent expressions + transformation/implementation rules + top-down search with pruning). The DP
 //!   here is the bottom-up ancestor; Cascades generalises it so new rules plug in without rewriting the search.
-//! VERIFICATION (asserts): (a) DP == brute force over all join trees (n<=5); (b) optimised == naive results over 200 random queries; (c) rewrites never
-//!   raise estimated cost; (d) greedy >= DP; (e) q-error bounded on uniform data, large on correlated data; (f) IndexScan vs SeqScan choice; (g) hash build is smaller side.
+//! VERIFICATION (asserts): (a) DP == brute force over all join trees (n<=5); (b) optimised == naive results over 200 random queries; (c) on those
+//!   non-empty tables the first rule batch never raises estimated cost; (d) greedy >= DP; (e) q-error bounded on uniform data, large on correlated data;
+//!   (f) IndexScan vs SeqScan choice; (g) hash build is smaller side; (h) regressions: NULL, the ends of i64, folding (differential, with NULL in IN lists and numbers under AND/OR),
+//!   empty tables, refused queries, EXPLAIN brackets.
+//! LIMITS: projection pruning is demonstrated but `optimize` does not use it (this cost model charges CPU for each added Project, so it can raise the
+//!   estimate). Pushing a filter below a join with an EMPTY side can raise the estimate too. Join selectivity ignores NULL fractions. The brute-force
+//!   check shares the cost functions and the keep-per-order pruning with the DP, so it checks the enumeration, not those. Index fetches are capped at the
+//!   table's page count, which flatters an unclustered index. At most 12 tables per query, table ids below 32, no self-joins, no depth limit on expressions.
 //! COMMON USES: PostgreSQL's planner (Selinger-style DP, histograms + MCV lists, `EXPLAIN`), Apache Spark Catalyst and Apache DataFusion (rule batches run to
 //!   fixpoint, predicate pushdown, projection pruning, cost-based join reorder), CockroachDB and the Volcano/Cascades papers (memo + rules); also
 //!   index advisors, "why is my query slow" tooling and what-if planners.
@@ -28,6 +34,10 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 
 // ---------- tiny utilities: seeded RNG, Zipf sampler ----------
 const NULL: i64 = i64::MIN; // NULL sentinel; every comparison with NULL is false
+/// A condition holds only for a non-zero value that is not NULL. (There is no NOT here, so UNKNOWN may be treated as false.)
+fn truthy(v: i64) -> bool {
+    v != 0 && v != NULL
+}
 type Row = Vec<i64>;
 
 struct Rng(u64);
@@ -135,7 +145,11 @@ impl ColStats {
             ndv,
             min: vals.first().copied().unwrap_or(0),
             max: vals.last().copied().unwrap_or(0),
-            null_frac: 1.0 - vals.len() as f64 / n,
+            null_frac: if rows.is_empty() {
+                0.0
+            } else {
+                1.0 - vals.len() as f64 / n
+            },
             hist,
             mcv,
         }
@@ -259,8 +273,10 @@ fn eval(e: &Expr, row: &[i64], schema: &[ColRef]) -> i64 {
         Bin(op, a, b) => {
             let (x, y) = (eval(a, row, schema), eval(b, row, schema));
             match op {
-                BinOp::Add => x.wrapping_add(y),
-                BinOp::Mul => x.wrapping_mul(y),
+                // NULL in, NULL out. An overflow also gives NULL (so does a result equal to the sentinel itself).
+                BinOp::Add | BinOp::Mul if x == NULL || y == NULL => NULL,
+                BinOp::Add => x.checked_add(y).unwrap_or(NULL),
+                BinOp::Mul => x.checked_mul(y).unwrap_or(NULL),
                 _ if x == NULL || y == NULL => 0,
                 BinOp::Eq => (x == y) as i64,
                 BinOp::Ne => (x != y) as i64,
@@ -270,8 +286,8 @@ fn eval(e: &Expr, row: &[i64], schema: &[ColRef]) -> i64 {
                 BinOp::Ge => (x >= y) as i64,
             }
         }
-        And(a, b) => (eval(a, row, schema) != 0 && eval(b, row, schema) != 0) as i64,
-        Or(a, b) => (eval(a, row, schema) != 0 || eval(b, row, schema) != 0) as i64,
+        And(a, b) => (truthy(eval(a, row, schema)) && truthy(eval(b, row, schema))) as i64,
+        Or(a, b) => (truthy(eval(a, row, schema)) || truthy(eval(b, row, schema))) as i64,
         In(x, vs) => {
             let v = eval(x, row, schema);
             (v != NULL && vs.contains(&v)) as i64
@@ -399,12 +415,19 @@ impl Catalog {
     }
 }
 
+/// An inclusive range that holds nothing.
+const NO_VALUES: (i64, i64) = (1, 0);
+
 /// Inclusive integer range implied by `col op v` (NULL+1 is the smallest real value).
+/// A comparison with NULL keeps nothing, and so does `col > i64::MAX`; both must stay empty when ranges are intersected.
 fn bounds(op: BinOp, v: i64) -> (i64, i64) {
+    if v == NULL {
+        return NO_VALUES;
+    }
     match op {
         BinOp::Lt => (NULL + 1, v - 1),
         BinOp::Le => (NULL + 1, v),
-        BinOp::Gt => (v + 1, i64::MAX),
+        BinOp::Gt => v.checked_add(1).map_or(NO_VALUES, |lo| (lo, i64::MAX)),
         BinOp::Ge => (v, i64::MAX),
         _ => (v, v),
     }
@@ -583,7 +606,18 @@ fn ltables(l: &Logical) -> u32 {
     }
 }
 
+/// Whether an expression can only be 0 or 1.
+fn is_boolean(e: &Expr) -> bool {
+    match e {
+        Lit(v) => *v == 0 || *v == 1,
+        Bin(op, ..) => !matches!(op, BinOp::Add | BinOp::Mul),
+        And(..) | Or(..) | In(..) => true,
+        Col(_) => false,
+    }
+}
+
 /// Constant folding: evaluate literal-only subtrees and simplify AND/OR with 0/1 literals.
+/// The folded expression has the same VALUE as the original on every row, not just the same truth: it may sit inside a comparison.
 fn fold(e: &Expr) -> Expr {
     match e {
         Bin(op, a, b) => {
@@ -594,18 +628,22 @@ fn fold(e: &Expr) -> Expr {
                 bin(*op, a, b)
             }
         }
+        // `1 AND x` is x only if x is already 0 or 1: AND turns 5 into 1
         And(a, b) => match (fold(a), fold(b)) {
             (Lit(0), _) | (_, Lit(0)) => Lit(0),
-            (Lit(1), x) | (x, Lit(1)) => x,
+            (x @ Lit(_), y @ Lit(_)) => Lit(eval(&and2(x, y), &[], &[])),
+            (Lit(1), x) | (x, Lit(1)) if is_boolean(&x) => x,
             (x, y) => and2(x, y),
         },
         Or(a, b) => match (fold(a), fold(b)) {
             (Lit(1), _) | (_, Lit(1)) => Lit(1),
-            (Lit(0), x) | (x, Lit(0)) => x,
+            (x @ Lit(_), y @ Lit(_)) => Lit(eval(&or2(x, y), &[], &[])),
+            (Lit(0), x) | (x, Lit(0)) if is_boolean(&x) => x,
             (x, y) => or2(x, y),
         },
         In(x, vs) => match fold(x) {
-            Lit(v) => Lit(vs.contains(&v) as i64),
+            // through eval, because NULL is in no list, not even in one that holds NULL
+            Lit(v) => Lit(eval(&In(Box::new(Lit(v)), vs.clone()), &[], &[])),
             x => In(Box::new(x), vs.clone()),
         },
         other => other.clone(),
@@ -1390,27 +1428,64 @@ fn brute_force_cost(ctx: &Ctx, cross: bool) -> Option<f64> {
         .min_by(f64::total_cmp)
 }
 
+/// Table ids are bits of a u32, and the DP keeps a table of 2^n subsets whose split enumeration grows as 3^n.
+const MAX_TABLE_ID: usize = 31;
+const MAX_QUERY_TABLES: usize = 12;
+
+/// What this planner can represent. A table may appear once only: columns are named by table id, so a self-join cannot be written.
+fn check_query(q: &Query, cat: &Catalog) -> Result<(), String> {
+    if q.tables.is_empty() || q.tables.len() > MAX_QUERY_TABLES {
+        return Err(format!(
+            "a query needs 1..={MAX_QUERY_TABLES} tables, got {}",
+            q.tables.len()
+        ));
+    }
+    for (i, &t) in q.tables.iter().enumerate() {
+        if t > MAX_TABLE_ID || t >= cat.tables.len() {
+            return Err(format!("unknown or unsupported table id {t}"));
+        }
+        if q.tables[..i].contains(&t) {
+            return Err(format!(
+                "table {t} appears twice (self-joins are not supported)"
+            ));
+        }
+    }
+    for c in col_refs(&q.pred).iter().chain(&q.out) {
+        if !q.tables.contains(&c.t) || c.c >= cat.tables[c.t].cols.len() {
+            return Err(format!("unknown column {}.{}", c.t, c.c));
+        }
+    }
+    Ok(())
+}
+
 /// Full pipeline: rewrite -> join graph -> DP (bushy) -> Project on top.
-fn optimize(q: &Query, cat: &Catalog) -> Plan {
+fn optimize(q: &Query, cat: &Catalog) -> Result<Plan, String> {
+    check_query(q, cat)?;
     let rewritten = rewrite(&naive_logical(q), &PHASE1, cat, &mut BTreeMap::new());
     let g = build_graph(&rewritten, cat);
     let ctx = Ctx::new(cat, &g);
     let best = dp(&ctx, Shape::Bushy, false)
         .or_else(|| dp(&ctx, Shape::Bushy, true))
         .expect("a plan exists");
-    project_plan(best, &g.out)
+    Ok(project_plan(best, &g.out))
 }
 
 // ---------- 6. EXPLAIN ----------
 fn show(e: &Expr, cat: &Catalog) -> String {
+    // an operator inside an operator keeps its brackets: (a + 1) * 2 is not a + 1 * 2
+    let operand = |x: &Expr| match x {
+        Bin(..) => format!("({})", show(x, cat)),
+        _ => show(x, cat),
+    };
     match e {
+        Lit(v) if *v == NULL => "NULL".into(),
         Lit(v) => v.to_string(),
         Col(c) => cat.name(*c),
         Bin(op, a, b) => format!(
             "{} {} {}",
-            show(a, cat),
+            operand(a),
             ["=", "<>", "<", "<=", ">", ">=", "+", "*"][*op as usize],
-            show(b, cat)
+            operand(b)
         ),
         And(a, b) => format!("({} AND {})", show(a, cat), show(b, cat)),
         Or(a, b) => format!("({} OR {})", show(a, cat), show(b, cat)),
@@ -1545,7 +1620,7 @@ impl RowIter for FilterIt<'_> {
     fn next(&mut self) -> Option<Row> {
         loop {
             let r = self.src.next()?;
-            if eval(&self.pred, &r, &self.schema) != 0 {
+            if truthy(eval(&self.pred, &r, &self.schema)) {
                 return Some(r);
             }
         }
@@ -1590,7 +1665,7 @@ impl RowIter for NljIt<'_> {
                 if self
                     .pred
                     .as_ref()
-                    .is_none_or(|p| eval(p, &row, &self.schema) != 0)
+                    .is_none_or(|p| truthy(eval(p, &row, &self.schema)))
                 {
                     return Some(row);
                 }
@@ -1630,7 +1705,7 @@ impl RowIter for HashIt<'_> {
                     if self
                         .resid
                         .as_ref()
-                        .is_none_or(|e| eval(e, &row, &self.schema) != 0)
+                        .is_none_or(|e| truthy(eval(e, &row, &self.schema)))
                     {
                         self.queue.push_back(row);
                     }
@@ -1696,7 +1771,7 @@ fn merge_join(
                 for x in &l[i..ie] {
                     for y in &r[j..je] {
                         let row: Row = x.iter().chain(y.iter()).copied().collect();
-                        if resid.as_ref().is_none_or(|e| eval(e, &row, schema) != 0) {
+                        if resid.as_ref().is_none_or(|e| truthy(eval(e, &row, schema))) {
                             out.push(row);
                         }
                     }
@@ -1853,8 +1928,198 @@ fn actual_count(db: &Db, t: usize, e: &Expr) -> f64 {
     let schema = full_schema(&db.cat, t);
     db.data[t]
         .iter()
-        .filter(|r| eval(e, r, &schema) != 0)
+        .filter(|r| truthy(eval(e, r, &schema)))
         .count() as f64
+}
+
+/// Values that make folding hard: NULL, the ends of i64, and numbers that are true but not 1.
+const AWKWARD: [i64; 8] = [NULL, NULL + 1, i64::MAX, -1, 0, 1, 2, 5];
+
+/// A random expression over the columns of one table, NOT limited to well-typed conditions: AND and OR get numbers,
+/// IN lists hold NULL, and arithmetic overflows.
+fn awkward_expr(rng: &mut Rng, t: usize, depth: usize) -> Expr {
+    let value = |rng: &mut Rng| AWKWARD[rng.below(AWKWARD.len() as u64) as usize];
+    if depth == 0 {
+        return if rng.chance(0.5) {
+            col(t, rng.below(2) as usize)
+        } else {
+            Lit(value(rng))
+        };
+    }
+    let sub = |rng: &mut Rng| awkward_expr(rng, t, depth - 1);
+    match rng.below(6) {
+        0 => {
+            let ops = [
+                BinOp::Eq,
+                BinOp::Ne,
+                BinOp::Lt,
+                BinOp::Le,
+                BinOp::Gt,
+                BinOp::Ge,
+                BinOp::Add,
+                BinOp::Mul,
+            ];
+            let op = ops[rng.below(8) as usize];
+            let a = sub(rng);
+            bin(op, a, sub(rng))
+        }
+        1 => {
+            let a = sub(rng);
+            and2(a, sub(rng))
+        }
+        2 => {
+            let a = sub(rng);
+            or2(a, sub(rng))
+        }
+        3 => {
+            let a = sub(rng);
+            In(Box::new(a), vec![value(rng), value(rng)])
+        }
+        _ => awkward_expr(rng, t, 0),
+    }
+}
+
+/// Differential check of the folding function alone: the same value on every row.
+fn fold_agrees_with_eval() {
+    let mut rng = Rng::new(0xF01D);
+    let schema = [ColRef { t: 0, c: 0 }, ColRef { t: 0, c: 1 }];
+    for _ in 0..40_000 {
+        let e = awkward_expr(&mut rng, 0, 3);
+        let folded = fold(&e);
+        for _ in 0..4 {
+            let row = [
+                AWKWARD[rng.below(8) as usize],
+                AWKWARD[rng.below(8) as usize],
+            ];
+            assert_eq!(
+                eval(&folded, &row, &schema),
+                eval(&e, &row, &schema),
+                "{e:?} folded to {folded:?} on {row:?}"
+            );
+        }
+    }
+}
+
+/// Differential check of the whole pipeline on the same kind of predicate, with an index on the first column.
+fn folded_queries_agree_with_naive() {
+    let mut rng = Rng::new(0xD1FF);
+    for _ in 0..4_000 {
+        let rows = (0..1 + rng.below(6))
+            .map(|_| {
+                vec![
+                    AWKWARD[rng.below(8) as usize],
+                    AWKWARD[rng.below(8) as usize],
+                ]
+            })
+            .collect();
+        let db = make_db(vec![spec("t", &["a", "b"], &[0], rows)]);
+        let mut pred = awkward_expr(&mut rng, 0, 3);
+        if rng.chance(0.5) {
+            let more = awkward_expr(&mut rng, 0, 2);
+            pred = and2(pred, more);
+        }
+        let q = Query {
+            tables: vec![0],
+            pred,
+            out: vec![ColRef { t: 0, c: 0 }, ColRef { t: 0, c: 1 }],
+        };
+        let naive = sorted(run(&naive_physical(&naive_logical(&q), &db.cat), &db));
+        let plan = optimize(&q, &db.cat).expect("a valid query");
+        assert_eq!(
+            sorted(run(&plan, &db)),
+            naive,
+            "{:?} over {:?}",
+            q.pred,
+            db.data[0]
+        );
+    }
+}
+
+/// Each check here failed on an earlier version of this file.
+fn regressions() {
+    let schema = [ColRef { t: 0, c: 0 }];
+    let plus_two = bin(BinOp::Add, col(0, 0), Lit(2));
+    assert_eq!(
+        eval(&bin(BinOp::Lt, plus_two, Lit(0)), &[NULL], &schema),
+        0,
+        "NULL + 2 is NULL, so it is not below 0"
+    );
+    assert_eq!(
+        eval(&and2(col(0, 0), Lit(1)), &[NULL], &schema),
+        0,
+        "a NULL condition does not hold"
+    );
+
+    let arith = |op: BinOp, a: i64, b: i64| eval(&bin(op, Lit(a), Lit(b)), &[], &[]);
+    // none of these wraps to the NULL sentinel itself, so a wrapping operator is noticed
+    assert_eq!(arith(BinOp::Add, i64::MAX, 2), NULL, "overflow of +");
+    assert_eq!(arith(BinOp::Add, NULL + 1, -3), NULL, "underflow of +");
+    assert_eq!(arith(BinOp::Mul, i64::MAX, 2), NULL, "overflow of *");
+    assert_eq!(arith(BinOp::Add, 2, 3), 5);
+    assert_eq!(arith(BinOp::Mul, -4, 3), -12);
+    assert_eq!(
+        bounds(BinOp::Gt, i64::MAX),
+        NO_VALUES,
+        "nothing is above i64::MAX"
+    );
+    for op in [BinOp::Eq, BinOp::Lt, BinOp::Le, BinOp::Gt, BinOp::Ge] {
+        assert_eq!(bounds(op, NULL), NO_VALUES, "{op:?} NULL");
+    }
+    fold_agrees_with_eval();
+    folded_queries_agree_with_naive();
+
+    let mut rows: Vec<Row> = (0..5000).map(|i| vec![i]).collect();
+    rows.push(vec![NULL]);
+    let db = make_db(vec![spec("t", &["a"], &[0], rows)]);
+    let query = |pred: Expr| Query {
+        tables: vec![0],
+        pred,
+        out: vec![ColRef { t: 0, c: 0 }],
+    };
+    let count = |pred: Expr| run(&optimize(&query(pred), &db.cat).expect("valid"), &db).len();
+    for (op, v) in [(BinOp::Gt, i64::MAX), (BinOp::Lt, NULL), (BinOp::Gt, NULL)] {
+        assert_eq!(count(bin(op, col(0, 0), Lit(v))), 0, "{op:?} {v}");
+    }
+    // the index consumes both conjuncts: the comparison with NULL must still empty the range
+    for op in [BinOp::Ge, BinOp::Gt] {
+        let pred = and2(
+            bin(op, col(0, 0), Lit(NULL)),
+            bin(BinOp::Le, col(0, 0), Lit(3)),
+        );
+        let plan = optimize(&query(pred.clone()), &db.cat).expect("valid");
+        assert!(uses_index(&plan), "this check needs the index path");
+        assert_eq!(count(pred), 0, "a {op:?} NULL AND a <= 3");
+    }
+
+    let empty = ColStats::analyze(&[], 0);
+    assert_eq!(empty.null_frac, 0.0, "an empty column is not NaN");
+
+    let many = make_db(
+        (0..33)
+            .map(|i| spec(&format!("t{i}"), &["x"], &[], vec![vec![1]]))
+            .collect(),
+    );
+    let refused = |tables: Vec<usize>| {
+        let first = tables.first().copied().unwrap_or(0);
+        let q = Query {
+            tables,
+            pred: Lit(1),
+            out: vec![ColRef { t: first, c: 0 }],
+        };
+        optimize(&q, &many.cat).is_err()
+    };
+    assert!(refused(vec![32]), "table id beyond the bitmask");
+    assert!(refused((0..13).collect()), "too many tables for the DP");
+    assert!(refused(vec![0, 0]), "self-join");
+    assert!(refused(vec![]), "no tables");
+    assert!(!refused(vec![0, 1]));
+
+    let text = show(
+        &bin(BinOp::Mul, bin(BinOp::Add, col(0, 0), Lit(1)), Lit(NULL)),
+        &db.cat,
+    );
+    assert_eq!(text, "(t.a + 1) * NULL");
+    println!("  (h) regression checks OK");
 }
 
 // ---------- demo + verification ----------
@@ -1960,7 +2225,7 @@ fn main() {
         pred: and_all(&[bin(BinOp::Eq, col(0, 0), col(1, 1)), lt(col(1, 3), 300)]),
         out: vec![ColRef { t: 0, c: 0 }],
     };
-    let jp = optimize(&jq, cat);
+    let jp = optimize(&jq, cat).expect("a valid query");
     let jact = run(&jp, &db).len() as f64;
     let jest = jp.kids[0].rows;
     println!(
@@ -2191,7 +2456,7 @@ fn main() {
             sorted(run(&naive_physical(&p2, &rdb.cat), &rdb)),
             "pruning changed results"
         );
-        let opt = optimize(&q, &rdb.cat);
+        let opt = optimize(&q, &rdb.cat).expect("a valid query");
         assert_eq!(
             expect,
             sorted(run(&opt, &rdb)),
@@ -2203,7 +2468,9 @@ fn main() {
     println!(
         "  (b) optimised == rewritten == naive result multisets on 200 random queries ({nonempty} non-empty) OK"
     );
-    println!("  (c) rewrites never raised estimated cost (worst new/old ratio {max_ratio:.3}) OK");
+    println!(
+        "  (c) the first rule batch never raised estimated cost here (worst new/old ratio {max_ratio:.3}) OK"
+    );
 
     // (d) greedy vs DP on larger queries
     let mut gr = Rng::new(99);
@@ -2233,4 +2500,5 @@ fn main() {
     println!(
         "  (f) IndexScan for selective, SeqScan for unselective predicates OK    (g) hash join builds the smaller input OK"
     );
+    regressions();
 }

@@ -1,0 +1,32 @@
+slug = "two-quicker-ways-to-match-rows"
+title = "Two quicker ways to match rows"
+mode = "write"
+level = "hard"
+stage = "run"
+order = 5
+status = "ready"
+tags = ["hash join", "sort-merge join", "blocking operators", "laziness"]
+teaches = [
+  "To match equal keys, either remember one side by key, or walk two sorted sides together.",
+  "A hash join must finish one side before it can answer, but streams the other.",
+  "A merge join keeps only the rows of one key. With repeated keys on both sides, that group is paired again and again.",
+]
+follow_up = "1) What happens to a hash join when the build side does not fit in memory? 2) How skewed can the keys be before a merge join keeps almost everything? 3) Which of the two can start producing rows sooner on sorted inputs?"
+related = ["S4", "S6", "Y92"]
+
+[[hints]]
+kind = "approach"
+text = "Hash join: fill a map from key to rows with the second input, then take first-input rows one at a time. Merge join: for the current left key, gather the right rows with that key into a group. The first right row past it must not be lost."
+
+[[hints]]
+kind = "rust"
+text = "A `VecDeque<Row>` can hold pairs not yet handed out. In the merge join, an `Option<Row>` field keeps the one right row read too far; `self.ahead.take().or_else(|| self.right.next())` reads it first."
+
+[[hints]]
+kind = "edge"
+text = "Missing keys never match. The next left row may have the same key as the last, so keep the group. A sort puts missing values first, keeps equal rows in their input order, and reads nothing until asked."
+
+[solution]
+explanation = "The hash join drains its second input into a map by key, skipping missing keys. It then streams the first input, so output follows left order and, within it, right order. The merge join holds the right rows of one key and one row read beyond it. A new left key replaces the group; the same key reuses it. The sort reads everything at the first call and uses a stable sort, where `None` comes first."
+time = "Hash join O(l + r + pairs); merge join O(l + r + pairs) on sorted inputs; sort O(n log n)"
+space = "O(r) for the hash join; O(largest group) for the merge join; O(n) for a sort"

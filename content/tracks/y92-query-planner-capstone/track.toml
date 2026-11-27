@@ -1,0 +1,26 @@
+code = "Y92"
+name = "Query planner: capstone"
+section = "Y"
+tier = "sde3"
+order = 92
+summary = "Build a small query planner that estimates, rewrites, prices, runs and explains plans. Each step's starter carries the earlier steps."
+
+[[stages]]
+slug = "estimate"
+name = "Estimate and rewrite"
+band = "hard"
+
+[[stages]]
+slug = "run"
+name = "Run a plan"
+band = "hard"
+
+[[stages]]
+slug = "choose"
+name = "Choose a plan"
+band = "hard"
+
+[[stages]]
+slug = "check"
+name = "Check it"
+band = "hard"

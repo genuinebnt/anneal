@@ -1,0 +1,32 @@
+slug = "cheapest-way-through-the-workshop"
+title = "The cheapest way through the workshop"
+mode = "write"
+level = "medium"
+stage = "choose"
+order = 5
+status = "ready"
+tags = ["dynamic programming", "state", "choosing operators"]
+teaches = [
+  "When a choice changes what later choices cost, the cheapest partial answer is not enough. Keep the cheapest for each state it can leave behind.",
+  "A dearer partial answer with a useful property can win later. Two partial answers compete only if they leave the same state.",
+  "Store, for each state, how you got there. The route is read backwards at the end.",
+]
+follow_up = "1) When could a partial answer be thrown away even though its state differs? 2) How would the table change if the state had two parts, such as wrapping and weight? 3) How would you also return the second-best route?"
+related = ["P2", "Y92"]
+
+[[hints]]
+kind = "approach"
+text = "After some stations, what about the past still matters for the future? Only that, and the price so far. How many different \"that\" can there be?"
+
+[[hints]]
+kind = "rust"
+text = "A `BTreeMap<u8, Best>` per station, holding for each wrapping the lowest price, the wrapping before and the machine used, is enough to rebuild the route. Read each machine once, then loop over the states."
+
+[[hints]]
+kind = "edge"
+text = "A machine with `leaves: None` keeps the wrapping the parcel had **inside** it, which is the new one if you rewrapped for it. A station with no machines means `None`, but no stations at all cost 0."
+
+[solution]
+explanation = "After a station, only the parcel's wrapping matters to the future. So for each wrapping keep the cheapest way to have it, and drop every other. The next layer comes from trying each machine from each kept wrapping. There are at most 256 wrappings, so the work grows with the number of machines, not with the number of routes. Back pointers give the route."
+time = "O(m · w) for m machines in all and w wrappings"
+space = "O(stations · w)"

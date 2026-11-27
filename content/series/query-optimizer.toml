@@ -1,0 +1,527 @@
+# The series "Build a query planner": an order over existing and new problems, not a track.
+# required: do these first. helpful: keep closed (hidden = true); reveals_method = true means the link gives away how to
+# solve the part. cookbook: reference pages (slugs in content/cookbook), also closed by default; level is exact (solves
+# the task), similar (same technique, different task) or related (explains the idea). Minutes are estimates; nobody has
+# been timed.
+
+[series]
+id = "query-optimizer"
+rank = 13
+title = "Build a query planner"
+summary = "Small parts give you what the capstone needs. Then you build the part of a database that decides how to run a query."
+note = "All times are estimates; nobody has been timed."
+capstone_title = "Capstone: build a query planner"
+capstone_summary = "Summaries of data, row estimates, a rewrite, plans that run, prices, a join order, printed plans and a bug hunter."
+capstone_note = "From step 2 on, each starter contains reference code for earlier steps. The given `conjuncts` function also does the work of one BusTub optimizer challenge. It is a stand-in until the app can carry your own code from step to step, and it gives away those steps. The capstone leaves out some pieces of the Cookbook file: simplifying constant expressions, dropping unused columns, a greedy join order and a left-deep-only mode. Its final pipeline does not use column dropping. Step 3 is close to one of the optimizer challenges in the BusTub course: whichever you do first will help with the other."
+capstone_cookbook = "query-optimizer"
+
+[[stage]]
+id = "estimate"
+name = "Guess without looking"
+
+[[stage]]
+id = "reshape"
+name = "Change a tree, keep its meaning"
+
+[[stage]]
+id = "pull"
+name = "Hand out results on request"
+
+[[stage]]
+id = "choose"
+name = "Choose well"
+
+[[stage]]
+id = "check"
+name = "Get ready to check it"
+
+[[part]]
+number = 1
+id = "y91-a-guess-from-a-few-numbers"
+stage = "estimate"
+status = "new"
+minutes = 60
+blurb = "Answer questions about a long list from a handful of numbers"
+new_idea = "Keeping values at evenly spaced positions, so that every gap hides the same number of rows"
+reuses = "nothing"
+required = []
+helpful = [
+    { id = "f4-count-min-sketch", why = "another small summary with a stated error", reveals_method = false, hidden = true },
+    { id = "f4-bloom-filter", why = "trading memory for certainty", reveals_method = false, hidden = true },
+]
+used_again = ["y92-what-to-remember-about-a-column"]
+real_uses = "Database statistics, latency percentiles, monitoring dashboards."
+cookbook = [
+    { level = "similar", page = "query-optimizer", note = "ColStats keeps equal-count cuts too, and reads a value's share by interpolation.", source = "examples/capstones/query_optimizer.rs", hidden = true },
+]
+
+[[part]]
+number = 2
+id = "y91-which-values-get-through"
+stage = "estimate"
+status = "new"
+minutes = 45
+blurb = "Find what a list of rules still allows, ends of the number line included"
+new_idea = "Turning comparisons into inclusive ranges, overlapping them, and slicing a sorted list safely"
+reuses = "nothing"
+required = []
+used_again = ["y92-how-many-rows-will-pass", "y92-ways-to-read-one-table"]
+real_uses = "Index range scans, partition pruning, validation rules."
+cookbook = [
+    { level = "similar", page = "query-optimizer", note = "bounds and sargable do this for a planner. The file's last checks cover the end-of-range cases that once broke them.", source = "examples/capstones/query_optimizer.rs", hidden = true },
+]
+
+[[part]]
+number = 3
+id = "y91-tidy-a-drawing"
+stage = "reshape"
+status = "new"
+minutes = 60
+blurb = "Simplify a picture tree until nothing more can go"
+new_idea = "Small rules on a tree, applied again to whatever they build until none applies"
+reuses = "nothing"
+required = []
+helpful = [
+    { id = "y14-pratt-parser", why = "another walk over a tree of expressions", reveals_method = false, hidden = true },
+]
+used_again = ["y92-ask-each-question-early"]
+real_uses = "Compiler passes, query rewriters, formatters."
+cookbook = [
+    { level = "similar", page = "query-optimizer", note = "Its rule engine rewrites query plans until they stop changing.", source = "examples/capstones/query_optimizer.rs", hidden = true },
+]
+
+[[part]]
+number = 4
+id = "y91-hang-each-notice-low"
+stage = "reshape"
+status = "new"
+minutes = 45
+blurb = "Place each notice as deep in a building as it can go"
+new_idea = "A set of rooms as the bits of one integer, and walking down while one side covers it"
+reuses = "walking a tree from part 3"
+required = []
+used_again = ["y92-ask-each-question-early", "y92-ways-to-join-two-inputs", "y92-which-tables-first"]
+real_uses = "Placing filters in plans, routing events to subtrees, ownership checks."
+cookbook = [
+    { level = "similar", page = "query-optimizer", note = "etables and r_pushdown use table bits to move conditions down.", source = "examples/capstones/query_optimizer.rs", hidden = true },
+]
+
+[[part]]
+number = 5
+id = "l3-fix-box-dyn-fn-borrows"
+stage = "pull"
+status = "existing"
+minutes = 25
+blurb = "Hold behaviour that borrows data, without copying it"
+new_idea = "A boxed trait object may borrow, if its type says for how long"
+reuses = "nothing"
+required = []
+helpful = [
+    { id = "l4-closures-generic-vs-dyn", why = "closures behind a trait object", reveals_method = false, hidden = true },
+]
+used_again = ["y92-run-a-plan-row-by-row"]
+real_uses = "Plugin lists, iterator chains built at run time, query operators."
+
+[[part]]
+number = 6
+id = "s6-merge-sorted-streams"
+stage = "pull"
+status = "existing"
+minutes = 75
+blurb = "Combine many sorted inputs into one, reading as little as possible"
+new_idea = "An iterator that pulls from its sources only when it must"
+reuses = "nothing"
+required = []
+used_again = ["y92-run-a-plan-row-by-row", "y92-two-quicker-ways-to-match-rows"]
+real_uses = "External sorts, log merging, database operators."
+
+[[part]]
+number = 7
+id = "y91-cheapest-way-through-the-workshop"
+stage = "choose"
+status = "new"
+minutes = 60
+blurb = "Pick one machine at every station for the lowest total price"
+new_idea = "Keeping the cheapest partial answer for each state it can leave behind"
+reuses = "nothing"
+required = []
+used_again = ["y92-ways-to-join-two-inputs", "y92-which-tables-first"]
+real_uses = "Query planners, compilers choosing instructions, route planning with fuel or tickets."
+
+[[part]]
+number = 8
+id = "y91-as-few-vans-as-possible"
+stage = "choose"
+status = "new"
+minutes = 90
+blurb = "Split parcels into the fewest loads, whatever the rules are"
+new_idea = "One best answer for every set of items, built from the answers for smaller sets"
+reuses = "sets as bits from part 4"
+required = ["y91-hang-each-notice-low"]
+used_again = ["y92-which-tables-first"]
+real_uses = "Join ordering, shift planning, packing, assigning work to groups."
+
+[[part]]
+number = 9
+id = "y15-print-it-so-it-reads-back"
+stage = "check"
+status = "existing"
+minutes = 60
+blurb = "Write trees as text and make up many trees"
+new_idea = "A seeded random generator shaped like the data, with a depth limit"
+reuses = "nothing from this series"
+required = []
+used_again = ["y92-catch-a-wrong-planner"]
+real_uses = "Property tests, fuzzers, test data."
+
+[[capstone]]
+step = 1
+id = "y92-what-to-remember-about-a-column"
+title = "What to remember about a column"
+minutes = 75
+blurb = "Boil a column down to what a planner needs"
+new_idea = "Cuts at equal counts, a list of frequent values, and estimates from both"
+prepared_by = ["y91-a-guess-from-a-few-numbers"]
+required = ["y91-a-guess-from-a-few-numbers"]
+cookbook = [
+    { level = "similar", page = "query-optimizer", note = "ColStats works out the same kind of summary in fractions, marks a missing value with a special number, and keeps cuts for an empty column.", source = "examples/capstones/query_optimizer.rs", hidden = true },
+]
+helpful = [
+    { id = "s4-most-common-word", why = "counting how often each value appears", reveals_method = false, hidden = true },
+]
+
+[[capstone]]
+step = 2
+id = "y92-how-many-rows-will-pass"
+title = "How many rows will pass?"
+minutes = 60
+blurb = "Estimate how much of a table a condition keeps"
+new_idea = "Combining estimates, and treating bounds on one column as one range"
+prepared_by = ["y91-which-values-get-through", "y91-tidy-a-drawing"]
+required = ["y92-what-to-remember-about-a-column", "y91-which-values-get-through"]
+cookbook = [
+    { level = "similar", page = "query-optimizer", note = "sel and sel_conj use these rules, but never let an estimate fall below 0.000000001, and give 1 for two columns with no values. This step wants 0 in both cases.", source = "examples/capstones/query_optimizer.rs", hidden = true },
+]
+
+[[capstone]]
+step = 3
+id = "y92-ask-each-question-early"
+title = "Ask each question as early as possible"
+minutes = 75
+blurb = "Move every check to where it can first be made"
+new_idea = "Sinking each part of a condition to the lowest node with all its tables"
+prepared_by = ["y91-tidy-a-drawing", "y91-hang-each-notice-low"]
+required = ["y92-how-many-rows-will-pass", "y91-hang-each-notice-low"]
+cookbook = [
+    { level = "similar", page = "query-optimizer", note = "It moves conditions down with rules, and builds nested filters instead of one per node.", source = "examples/capstones/query_optimizer.rs", hidden = true },
+]
+
+[[capstone]]
+step = 4
+id = "y92-run-a-plan-row-by-row"
+title = "Run a plan, one row at a time"
+minutes = 105
+blurb = "Make a plan produce its rows, reading no more than needed"
+new_idea = "Operators that all offer \"next row\" and pull from each other"
+prepared_by = ["l3-fix-box-dyn-fn-borrows", "s6-merge-sorted-streams"]
+required = ["l3-fix-box-dyn-fn-borrows", "s6-merge-sorted-streams"]
+cookbook = [
+    { level = "similar", page = "query-optimizer", note = "The same shape, with a special number for missing values and no promise about reads.", source = "examples/capstones/query_optimizer.rs", hidden = true },
+]
+
+[[capstone]]
+step = 5
+id = "y92-two-quicker-ways-to-match-rows"
+title = "Two quicker ways to match rows"
+minutes = 105
+blurb = "Pair rows with equal keys without trying every pair"
+new_idea = "A hash join, a streaming merge join and a sort"
+prepared_by = ["s6-merge-sorted-streams"]
+required = ["y92-run-a-plan-row-by-row"]
+cookbook = [
+    { level = "similar", page = "query-optimizer", note = "Its merge join reads both inputs completely first, which this step does not allow.", source = "examples/capstones/query_optimizer.rs", hidden = true },
+]
+helpful = [
+    { id = "s4-group-by-length", why = "a map from a key to a list", reveals_method = false, hidden = true },
+]
+
+[[capstone]]
+step = 6
+id = "y92-ways-to-read-one-table"
+title = "The ways to read one table"
+minutes = 75
+blurb = "List the ways to fetch a table's rows, each with a price"
+new_idea = "A cost model, and index ranges made from the conditions"
+prepared_by = ["y91-which-values-get-through"]
+required = ["y92-two-quicker-ways-to-match-rows", "y91-which-values-get-through"]
+cookbook = [
+    { level = "exact", page = "query-optimizer", note = "leaf_plans, index_scan and sargable, with the same costs.", source = "examples/capstones/query_optimizer.rs", hidden = true },
+]
+
+[[capstone]]
+step = 7
+id = "y92-ways-to-join-two-inputs"
+title = "The ways to join two inputs"
+minutes = 75
+blurb = "Price each way to join, and keep the ones worth keeping"
+new_idea = "Join costs, sorts only where needed, and the cheapest plan for each output order"
+prepared_by = ["y91-cheapest-way-through-the-workshop", "y91-hang-each-notice-low"]
+required = ["y92-ways-to-read-one-table", "y91-cheapest-way-through-the-workshop"]
+cookbook = [
+    { level = "exact", page = "query-optimizer", note = "join_candidates and PlanSet.", source = "examples/capstones/query_optimizer.rs", hidden = true },
+]
+
+[[capstone]]
+step = 8
+id = "y92-which-tables-first"
+title = "Which tables first?"
+minutes = 105
+blurb = "Find the cheapest order in which to join many tables"
+new_idea = "The best plans for every set of tables, built from two smaller sets"
+prepared_by = ["y91-as-few-vans-as-possible", "y91-cheapest-way-through-the-workshop"]
+required = ["y92-ways-to-join-two-inputs", "y91-as-few-vans-as-possible"]
+cookbook = [
+    { level = "exact", page = "query-optimizer", note = "dp with the bushy shape. Its join step is fixed, not passed in.", source = "examples/capstones/query_optimizer.rs", hidden = true },
+]
+
+[[capstone]]
+step = 9
+id = "y92-from-query-to-plan"
+title = "From a query to a plan you can read"
+minutes = 105
+blurb = "Turn a query into a plan, refuse bad ones, and print the choice"
+new_idea = "One pipeline from checked input to a printed plan"
+prepared_by = ["y15-print-it-so-it-reads-back"]
+required = ["y92-which-tables-first", "y92-ask-each-question-early"]
+cookbook = [
+    { level = "similar", page = "query-optimizer", note = "optimize and explain. Its limits, errors and printed format differ.", source = "examples/capstones/query_optimizer.rs", hidden = true },
+]
+
+[[capstone]]
+step = 10
+id = "y92-catch-a-wrong-planner"
+title = "Catch a planner that gives wrong answers"
+minutes = 90
+blurb = "Find the data on which a faulty plan goes wrong"
+new_idea = "Differential testing with made-up databases and queries"
+prepared_by = ["y15-print-it-so-it-reads-back"]
+required = ["y92-from-query-to-plan", "y15-print-it-so-it-reads-back"]
+cookbook = [
+    { level = "similar", page = "query-optimizer", note = "rand_db, rand_query and the comparison loop in main. They compare the file's own planner only.", source = "examples/capstones/query_optimizer.rs", hidden = true },
+]
+helpful = [
+    { id = "y5-catch-the-broken-queue", why = "testing code you cannot see against a trusted model", reveals_method = false, hidden = true },
+]
+
+[[revisit]]
+part = "y91-which-values-get-through"
+before = "y92-how-many-rows-will-pass"
+how = "Write the range for each comparison again from memory, ends included."
+minutes = 20
+
+[[revisit]]
+part = "y91-hang-each-notice-low"
+before = "y92-ask-each-question-early"
+how = "Solve part 4 again from a blank starter."
+minutes = 25
+
+[[revisit]]
+part = "y91-cheapest-way-through-the-workshop"
+before = "y92-ways-to-join-two-inputs"
+how = "Solve part 7 again, and say which two partial routes may be compared."
+minutes = 35
+
+[[revisit]]
+part = "y91-as-few-vans-as-possible"
+before = "y92-which-tables-first"
+how = "Write the loop over the parts of a set again from memory."
+minutes = 30
+
+[[readiness]]
+group = "Estimates"
+concept = "Sorting, positions of equal-count cuts, partition_point"
+parts = ["y91-a-guess-from-a-few-numbers", "y91-which-values-get-through"]
+steps = [1]
+
+[[readiness]]
+group = "Estimates"
+concept = "Counting runs of equal values in a sorted list; ordering by count, then value"
+parts = []
+steps = [1]
+note = "Not in a part. Step 1 gives the exact rules, and the optional link under step 1 practises counting."
+
+[[readiness]]
+group = "Estimates"
+concept = "Subtracting far-apart i64 values in i128; f64 arithmetic"
+parts = []
+steps = [1]
+note = "Named in step 1's Rust hint."
+
+[[readiness]]
+group = "Estimates"
+concept = "checked_add and checked_sub at the ends of i64; overlapping inclusive ranges; empty ranges"
+parts = ["y91-which-values-get-through"]
+steps = [2, 6]
+
+[[readiness]]
+group = "Estimates"
+concept = "Recursion over an enum tree with Vec children"
+parts = ["y91-tidy-a-drawing", "y15-print-it-so-it-reads-back"]
+steps = [2, 3, 4, 9]
+
+[[readiness]]
+group = "Estimates"
+concept = "A BTreeMap entry that narrows a value; sort_unstable and dedup; product over an iterator; clamp"
+parts = ["y91-which-values-get-through"]
+steps = [2]
+
+[[readiness]]
+group = "Rewriting"
+concept = "Rebuilding a tree of Box nodes from its parts"
+parts = ["y91-tidy-a-drawing"]
+steps = [3]
+
+[[readiness]]
+group = "Rewriting"
+concept = "A set of up to 64 items as a u64; \"is a subset\" with & and !"
+parts = ["y91-hang-each-notice-low"]
+steps = [3, 7, 8]
+
+[[readiness]]
+group = "Running"
+concept = "Box<dyn Trait + 'a> that borrows the plan and the data"
+parts = ["l3-fix-box-dyn-fn-borrows"]
+steps = [4, 5]
+
+[[readiness]]
+group = "Running"
+concept = "Pulling from a source only when needed; never asking a finished source again"
+parts = ["s6-merge-sorted-streams"]
+steps = [4, 5]
+
+[[readiness]]
+group = "Running"
+concept = "A generic wrapper that makes any iterator of rows an operator"
+parts = []
+steps = [4]
+note = "Shown in step 4's Rust hint."
+
+[[readiness]]
+group = "Running"
+concept = "partition_point to cut a sorted index"
+parts = ["y91-a-guess-from-a-few-numbers", "y91-which-values-get-through"]
+steps = [4]
+
+[[readiness]]
+group = "Running"
+concept = "HashMap entry or_default for a build table; VecDeque of pending rows; one item read ahead in an Option; stable sort_by_key with None first"
+parts = ["s6-merge-sorted-streams"]
+steps = [5]
+note = "The map, queue and read-ahead are named in step 5's hints; the optional link there practises a map of lists."
+
+[[readiness]]
+group = "Prices"
+concept = "Cost formulas from a table; div_ceil and log2"
+parts = []
+steps = [6, 7]
+note = "The statements give every formula."
+
+[[readiness]]
+group = "Prices"
+concept = "Keeping the cheapest candidate for each distinct state; iter_mut().find"
+parts = ["y91-cheapest-way-through-the-workshop"]
+steps = [7, 8]
+
+[[readiness]]
+group = "Ordering"
+concept = "A table with one entry for every set; walking all subsets with (sub - 1) & set"
+parts = ["y91-as-few-vans-as-possible"]
+steps = [8]
+
+[[readiness]]
+group = "Ordering"
+concept = "Calling a &mut dyn FnMut the caller supplies, within a call budget"
+parts = ["y91-as-few-vans-as-possible", "y91-cheapest-way-through-the-workshop"]
+steps = [8]
+
+[[readiness]]
+group = "Whole planner"
+concept = "An error enum for refused input"
+parts = []
+steps = [9]
+note = "The variants are given in the starter."
+
+[[readiness]]
+group = "Whole planner"
+concept = "Walking a tree with your own stack, to measure depth and to print"
+parts = []
+steps = [9]
+note = "Shown in step 9's Rust hint."
+
+[[readiness]]
+group = "Whole planner"
+concept = "format! with {:.0} and {:.1}; joining strings"
+parts = ["y15-print-it-so-it-reads-back"]
+steps = [9]
+note = "The number formats are in step 9's hint."
+
+[[readiness]]
+group = "Checking"
+concept = "A seeded generator in your own code, and random trees with a depth limit"
+parts = ["y15-print-it-so-it-reads-back"]
+steps = [10]
+
+[[readiness]]
+group = "Checking"
+concept = "Comparing with a trusted answer as sorted lists that keep repeats"
+parts = []
+steps = [10]
+note = "Step 10's statement and hints say how. The optional link there practises testing against a model."
+
+[[connection]]
+idea = "Guessing from a summary"
+learn = ["y91-a-guess-from-a-few-numbers"]
+apply = ["y92-what-to-remember-about-a-column", "y92-how-many-rows-will-pass"]
+
+[[connection]]
+idea = "Ranges and the ends of the numbers"
+learn = ["y91-which-values-get-through"]
+apply = ["y92-how-many-rows-will-pass", "y92-ways-to-read-one-table"]
+
+[[connection]]
+idea = "Changing a tree without changing its meaning"
+learn = ["y91-tidy-a-drawing"]
+apply = ["y92-ask-each-question-early", "y92-from-query-to-plan"]
+again = ["y91-hang-each-notice-low"]
+
+[[connection]]
+idea = "Sets as bits"
+learn = ["y91-hang-each-notice-low"]
+apply = ["y92-ask-each-question-early", "y92-which-tables-first"]
+again = ["y91-as-few-vans-as-possible"]
+
+[[connection]]
+idea = "Ask for the next one"
+learn = ["l3-fix-box-dyn-fn-borrows", "s6-merge-sorted-streams"]
+apply = ["y92-run-a-plan-row-by-row", "y92-two-quicker-ways-to-match-rows"]
+
+[[connection]]
+idea = "Which partial answers are worth keeping"
+learn = ["y91-cheapest-way-through-the-workshop"]
+apply = ["y92-ways-to-join-two-inputs", "y92-which-tables-first"]
+again = ["y91-as-few-vans-as-possible"]
+
+[[connection]]
+idea = "Checking with made-up cases"
+learn = ["y15-print-it-so-it-reads-back"]
+apply = ["y92-catch-a-wrong-planner"]
+
+[[side_path]]
+id = "y5-catch-the-broken-queue"
+why = "before capstone step 10: one test that no faulty queue gets past"
+before = "y92-catch-a-wrong-planner"
+
+[[side_path]]
+id = "y12-mvcc-snapshot-isolation"
+why = "side path after the capstone: another piece that sits inside a database"
+after = "y92-catch-a-wrong-planner"

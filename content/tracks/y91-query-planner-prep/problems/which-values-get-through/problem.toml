@@ -1,0 +1,32 @@
+slug = "which-values-get-through"
+title = "Which values get through?"
+mode = "write"
+level = "medium"
+stage = "estimate"
+order = 2
+status = "ready"
+tags = ["intervals", "integer limits", "binary search"]
+teaches = [
+  "Turn every comparison into an inclusive range first. Then \"all rules hold\" is just the overlap of ranges.",
+  "The two ends of the integers are where `v + 1` and `v - 1` stop existing. \"Nothing is above the maximum\" must be its own answer, not a wrapped or clamped number.",
+  "A range whose low end is above its high end is normal input. Slicing must give an empty slice for it, not a panic.",
+]
+follow_up = "1) How would you add \"not equal\" to the tests, and what stops being a single range? 2) How would you report which two rules contradict each other? 3) What changes for text fields?"
+related = ["Y92", "S3"]
+
+[[hints]]
+kind = "approach"
+text = "Do two small things. First, turn one test into the inclusive range it allows, or \"nothing\". Second, narrow a stored range by each new one. For `between`, find where the range starts and where it ends."
+
+[[hints]]
+kind = "rust"
+text = "`checked_add` and `checked_sub` return `None` exactly where there is no next or previous number. `BTreeMap::entry` gives you a field's range to narrow. `partition_point` finds both ends of a slice."
+
+[[hints]]
+kind = "edge"
+text = "`Above(i64::MAX)` and `Below(i64::MIN)` allow nothing. With `low > high`, the start you find can be after the end you find."
+
+[solution]
+explanation = "Each test allows an inclusive range, or nothing. All rules on one field hold exactly in the overlap of their ranges: the largest low end and the smallest high end. `checked_add` and `checked_sub` find the two cases that allow nothing. In `between`, the first entry not below `low` starts the slice and the first entry above `high` ends it. For a backwards range the end can come before the start, so take the larger of the two."
+time = "O(r log f) for r rules on f fields; O(log n) for a slice"
+space = "O(f)"

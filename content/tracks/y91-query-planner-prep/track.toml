@@ -1,0 +1,21 @@
+code = "Y91"
+name = "Query planner: preparation"
+section = "Y"
+tier = "sde3"
+order = 91
+summary = "Small exercises on the ideas a query planner needs, each on a different task."
+
+[[stages]]
+slug = "estimate"
+name = "Guess without looking"
+band = "medium"
+
+[[stages]]
+slug = "reshape"
+name = "Reshape a tree"
+band = "medium"
+
+[[stages]]
+slug = "choose"
+name = "Choose well"
+band = "hard"

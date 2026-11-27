@@ -1,0 +1,32 @@
+slug = "a-guess-from-a-few-numbers"
+title = "A guess from a few numbers"
+mode = "write"
+level = "medium"
+stage = "estimate"
+order = 1
+status = "ready"
+tags = ["summaries", "quantiles", "error bounds"]
+teaches = [
+  "To answer \"how many are at most x\" from little memory, keep values at evenly spaced positions of the sorted list, not at evenly spaced values.",
+  "Between two kept values you know the position of both. So the truth is trapped between two numbers, and their middle is the best guess.",
+  "State the worst error as a number, and test it against the exact count. \"Roughly right\" is not a promise.",
+]
+follow_up = "1) How would you keep the summary right while new times keep arriving? 2) How would you merge the summaries of two routes? 3) What would you add if one value made up half of all times?"
+related = ["Y92"]
+
+[[hints]]
+kind = "approach"
+text = "Sort first. Then ask what a kept number should tell you. A value by itself says little; a value whose position in the sorted list you can recompute says a lot."
+
+[[hints]]
+kind = "rust"
+text = "`partition_point(|&v| v <= x)` counts the kept values that are at most `x`. If you keep `k` values and know `total`, you can recompute where the i-th one stood, for example at position `i * (total - 1) / (k - 1)`."
+
+[[hints]]
+kind = "edge"
+text = "When `total` is small enough, keep every time and answer exactly. Below the smallest time and at or above the largest, the answer must be exact for any limit."
+
+[solution]
+explanation = "Keep the values at `limit` evenly spaced positions of the sorted list, first and last included. The positions need not be stored: `i * (total - 1) / (limit - 1)` recomputes them. If a question falls between kept value i and i + 1, the true count is more than position i and at most position i + 1. Those two are at most total / (limit - 1) apart, so any number between them is close enough. Slices of equal count stay narrow where values crowd, which is why slices of equal width fail on skewed data."
+time = "O(n log n) to build, O(log limit) per question"
+space = "O(limit)"

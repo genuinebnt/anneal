@@ -1,0 +1,32 @@
+slug = "hang-each-notice-low"
+title = "Hang each notice as low as it goes"
+mode = "write"
+level = "medium"
+stage = "reshape"
+order = 4
+status = "ready"
+tags = ["trees", "sets as bits", "lowest common ancestor"]
+teaches = [
+  "A set of at most 64 small numbers fits in one `u64`. \"Is this set inside that one?\" is then one operation.",
+  "Work out what is under every node once, not again for every question.",
+  "To place something as low as possible, walk down while one child still covers everything it needs.",
+]
+follow_up = "1) How would you answer if rooms could be added while notices arrive? 2) What would you use for 10 000 rooms? 3) How would you return one list per place, with the notices that hang there?"
+related = ["Y92", "F4"]
+
+[[hints]]
+kind = "approach"
+text = "For every place you need to know one thing: which rooms are inside it. With that, a notice walks from the entrance downwards. When must it stop?"
+
+[[hints]]
+kind = "rust"
+text = "Give each room one bit of a `u64`. `a & !b == 0` says that every room of `a` is in `b`. Build a second tree that stores the set for every place, so each is computed once."
+
+[[hints]]
+kind = "edge"
+text = "A notice can name room 200, and `1u64 << 200` is an overflow: `checked_shl` returns `None` instead. A notice for no room stays at the entrance, although every part \"covers\" it."
+
+[solution]
+explanation = "First compute, for every place, the set of rooms under it as the bits of a `u64`. A notice becomes a set of bits too; a number the building lacks ends it with `None`. Then walk down from the entrance while the left or the right part contains the whole set. Where neither does, the notice hangs. This is the lowest common ancestor of its rooms."
+time = "O(r) to prepare, then O(depth + rooms named) per notice"
+space = "O(r)"
