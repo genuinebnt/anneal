@@ -77,8 +77,8 @@ Optional. Predict first, then run.
 
 ## Other designs
 
-- **Undo with compensation records and an `Abort` (ours).**
-- **ARIES's** next-undo-LSN chain: skips what was already undone.
+- **Logged undo steps (swapped changes) and an `Abort` (ours).** Correct after any number of crashes, but a repeated recovery undoes the logged undo steps again before the originals: the work grows with every crash during recovery.
+- **ARIES compensation records:** redo-only, each with the next LSN still to undo, so a repeated recovery skips what was already undone and does bounded work.
 - **No undo at all:** MVCC engines like PostgreSQL leave aborted versions invisible and clean them up later.
 - **Shadow paging:** changes go to new pages and a commit swaps a root pointer; nothing to undo.
 

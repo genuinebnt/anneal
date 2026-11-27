@@ -453,6 +453,49 @@ fn durable(w: &World) -> Vec<LogRecord> {
 }
 
 #[test]
+fn s4c_04_an_abort_never_restores_a_stale_image_over_a_committed_update() {
+    // One thread keeps updating a record and aborting; another updates it and commits. An update that read its before-image outside
+    // the store's lock could take an image another transaction then replaced and committed, and its abort would put the old image back.
+    use std::sync::atomic::{AtomicBool, Ordering};
+    for _round in 0..20 {
+        let w = World::fresh(1);
+        let s = w.store(1);
+        let t = s.begin();
+        let r = s.insert(t, &rec(0)).unwrap();
+        s.commit(t).unwrap();
+        let stop = AtomicBool::new(false);
+        let last = std::thread::scope(|sc| {
+            let (s, stop) = (&s, &stop);
+            sc.spawn(move || {
+                let mut i = 1_000_000u64;
+                while !stop.load(Ordering::Relaxed) {
+                    let t = s.begin();
+                    let _ = s.update(t, r, &rec(i));
+                    s.abort(t).unwrap();
+                    i += 1;
+                }
+            });
+            let committer = sc.spawn(move || {
+                let mut last = 0u64;
+                for i in 1..1000u64 {
+                    let t = s.begin();
+                    if s.update(t, r, &rec(i)).is_ok() {
+                        s.commit(t).unwrap();
+                        last = i;
+                    } else {
+                        s.abort(t).unwrap();
+                    }
+                }
+                stop.store(true, Ordering::Relaxed);
+                last
+            });
+            committer.join().unwrap()
+        });
+        assert_eq!(s.get(r), Some(rec(last)), "the record holds the last committed update; an abort must not bring back an image it read before that commit");
+    }
+}
+
+#[test]
 fn s4c_04_inserts_fill_the_first_page_slot_by_slot_and_read_back() {
     let w = World::fresh(2);
     let s = w.store(1);

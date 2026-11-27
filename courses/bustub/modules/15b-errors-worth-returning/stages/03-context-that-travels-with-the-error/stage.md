@@ -3,7 +3,7 @@
 This stage adds that to `DbError`, and the three ways of looking at the result: one layer for a status line, the whole chain for a log, the root cause for a program that wants to know what really happened.
 
 > [!CHECK] `read_page(id)` fails with an I/O error "no such file". Three functions up, the log should say: "starting up: opening the log: reading page 7: no such file". Which of those pieces does each function know? And what must `Display` show for the top error, if the log line is the *report*?
-> ||Each function knows only what *it* was doing: `read_page` knows the page, its caller the log, the top one that the database was starting. The I/O error knows only the file problem. `Display` shows **one layer**, the outermost ("starting up"): it is what a status line prints. The log line is the **report**, which joins every layer's message from the outside in. If `Display` printed everything, the report would repeat the cause once per layer.
+> ||Each function knows only what *it* was doing: `read_page` knows the page, its caller the log, the top one that the database was starting. The I/O error knows only the file problem. `Display` shows **one layer**, the outermost ("starting up"): it is what a status line prints. The log line is the **report**, which joins every layer's message from the outside in. If `Display` printed everything, the report would repeat the cause once per layer.||
 >
 > - Which function adds which piece, and in what order does the report read them?
 > - What would a status line look like if `Display` showed the whole chain?

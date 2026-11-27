@@ -66,7 +66,7 @@ caption: Recovery after a crash, on a seven-record log (a sharp checkpoint at LS
 
 When a transaction is rolled back (at run time or in recovery), each undo step is itself a change to a page, and it must be **logged** like any other: as a change with `before` and `after` swapped (ARIES calls it a *compensation log record*). Three reasons:
 
-- If the machine dies *during* recovery, the next recovery repeats history, including the undo steps already done, and only the remaining ones have to be undone: recovery makes progress.
+- If the machine dies *during* recovery, the next recovery repeats history, including the undo steps already done, so the pages are back where the crash left them. In the course's store a logged undo step is an ordinary change with the states swapped, so the next recovery undoes those steps too and then the originals: the result is right (every undo restores a before image) but the work is repeated after each crash. Real ARIES makes its compensation records redo-only and gives each one an `UndoNxtLSN`, the next record still to undo, so a repeated recovery skips what was already undone and its work is bounded.
 - A transaction that was rolled back at run time and whose rids are then written by another transaction must not be rolled back *again* by recovery on top of the newer work. With the undo logged and an `Abort` record at the end, redo replays both the changes and their undos, and the transaction counts as finished.
 - The log stays the single truth: the state of the pages is always "the log applied in order".
 

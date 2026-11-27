@@ -1,7 +1,7 @@
 **Where this fits.** The end of the module. Nothing new to build: four layers fail at once, on four threads, each with its own context; then random stacks of context are checked against a model of what they must do; then everything a client may be shown is checked for leaks.
 
 > [!CHECK] A property test adds a random number of context layers to a base error and checks four things afterwards: the report, the number of elements in the chain, the code and the root cause. Which of the four would still pass if your `context` replaced the cause instead of wrapping it, and which would catch it?
-> ||The code and the root cause would be wrong, and so would the chain length and the report: a layer that replaces its cause loses the original. If the cause is *kept* but `code()` reads the outermost layer, only the code check fails. The four checks together pin down what context must do: it adds exactly one element, one sentence, and nothing else changes. A test of one of them alone leaves room for a wrong design that happens to satisfy it.
+> ||The code and the root cause would be wrong, and so would the chain length and the report: a layer that replaces its cause loses the original. If the cause is *kept* but `code()` reads the outermost layer, only the code check fails. The four checks together pin down what context must do: it adds exactly one element, one sentence, and nothing else changes. A test of one of them alone leaves room for a wrong design that happens to satisfy it.||
 >
 > - Which check catches a lost cause, and which a wrong code?
 > - What is the smallest base error that distinguishes the wrong designs?

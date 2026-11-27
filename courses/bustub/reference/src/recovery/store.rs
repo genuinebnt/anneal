@@ -178,10 +178,10 @@ impl<'a> Store<'a> {
     }
 
     /// Changes the slot at `rid` from `before` to `after` for `txn`: the **write-ahead rule** says the log record comes first, then the
-    /// page changes. Refused (and nothing happens) if another active transaction has written the record.
-    fn change(&self, txn: TxnId, rid: Rid, before: Option<Vec<u8>>, after: Option<Vec<u8>>) -> StoreResult<()> {
+    /// page changes. Refused (and nothing happens) if another active transaction has written the record. The caller holds the store's
+    /// lock from the moment it read `before` (or chose the slot), so no other change can come in between.
+    fn change(&self, inner: &mut Inner, txn: TxnId, rid: Rid, before: Option<Vec<u8>>, after: Option<Vec<u8>>) -> StoreResult<()> {
         // @begin 4c-04
-        let mut inner = self.inner.lock().unwrap();
         if !inner.active.contains_key(&txn) {
             return Err(refused("no such active transaction"));
         }
@@ -209,6 +209,7 @@ impl<'a> Store<'a> {
         if data.len() != RECORD_LEN {
             return Err(refused(format!("a record has {RECORD_LEN} bytes, not {}", data.len())));
         }
+        let mut inner = self.inner.lock().unwrap();
         for page_id in &self.pages {
             let slot = {
                 let guard = self.bpm.read_page(*page_id);
@@ -218,7 +219,7 @@ impl<'a> Store<'a> {
             };
             if let Some(slot) = slot {
                 let rid = Rid::new(*page_id, slot);
-                self.change(txn, rid, None, Some(data.to_vec()))?;
+                self.change(&mut inner, txn, rid, None, Some(data.to_vec()))?;
                 return Ok(rid);
             }
         }
@@ -230,8 +231,11 @@ impl<'a> Store<'a> {
     /// Replaces the live record at `rid`, logging the change first. The record must exist.
     pub fn update(&self, txn: TxnId, rid: Rid, data: &[u8]) -> StoreResult<()> {
         // @begin 4c-04
+        // read the old record under the store's lock: read outside it, another transaction could change the record in between, and
+        // an abort would then restore a stale image over that transaction's work
+        let mut inner = self.inner.lock().unwrap();
         let before = self.get(rid).ok_or_else(|| refused("no such record"))?;
-        self.change(txn, rid, Some(before), Some(data.to_vec()))
+        self.change(&mut inner, txn, rid, Some(before), Some(data.to_vec()))
         //~ todo!("4c-04: the record must be live; change(Some(old) -> Some(new))")
         // @end
     }
@@ -239,8 +243,9 @@ impl<'a> Store<'a> {
     /// Deletes the live record at `rid`, logging the change first. The record must exist.
     pub fn delete(&self, txn: TxnId, rid: Rid) -> StoreResult<()> {
         // @begin 4c-04
+        let mut inner = self.inner.lock().unwrap();
         let before = self.get(rid).ok_or_else(|| refused("no such record"))?;
-        self.change(txn, rid, Some(before), None)
+        self.change(&mut inner, txn, rid, Some(before), None)
         //~ todo!("4c-04: the record must be live; change(Some(old) -> None)")
         // @end
     }
@@ -280,11 +285,13 @@ impl<'a> Store<'a> {
     /// Writes the page to disk. The write-ahead rule: the log records that describe the page's contents must be durable first.
     pub fn flush_page(&self, page: PageId) -> io::Result<()> {
         // @begin 4c-04
-        let lsn = self.inner.lock().unwrap().page_lsn.get(&page).copied();
-        if let Some(lsn) = lsn {
+        // the lock is held until the page is written: a change in between would reach the disk before its log record
+        let inner = self.inner.lock().unwrap();
+        if let Some(&lsn) = inner.page_lsn.get(&page) {
             self.log.flush_to(lsn)?;
         }
         self.bpm.flush_page(page);
+        drop(inner);
         Ok(())
         //~ todo!("4c-04: flush the log up to the page's last change, then write the page")
         // @end

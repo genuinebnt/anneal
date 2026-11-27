@@ -3,7 +3,7 @@ The message of an error is for a person and changes whenever someone improves th
 This stage gives `DbError` a code, and a second face for the client: what a stranger on the other end of the connection may be shown.
 
 > [!CHECK] A `DbError` has three context layers on top of a division by zero. Where should its code come from, and what does that guarantee when someone adds a fourth layer? Then: an I/O error says "/var/lib/bustub/secret.db: permission denied". What should the client see?
-> ||From the **root cause**: the innermost error, the thing that really went wrong. A context layer says what the caller was doing, not what happened, so adding one cannot change the code, and this holds by construction rather than by everyone's care. The client should see the code and the words "internal error": a path in a message tells a stranger how the system is laid out, and a pointer value or a table name tells an attacker where to look. The log keeps everything.
+> ||From the **root cause**: the innermost error, the thing that really went wrong. A context layer says what the caller was doing, not what happened, so adding one cannot change the code, and this holds by construction rather than by everyone's care. The client should see the code and the words "internal error": a path in a message tells a stranger how the system is laid out, and a pointer value or a table name tells an attacker where to look. The log keeps everything.||
 >
 > - Which element of the chain decides the code, and why not the outermost?
 > - Which failures are the client's mistakes, and which are the system's?
