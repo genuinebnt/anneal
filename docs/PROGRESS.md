@@ -51,8 +51,8 @@ pushed. `git log origin/master..review/bustub-assessment` lists it.
   works; errors print `ERROR <code>: <message>`), challenge 4e-c1 retries by code.
 - **Checked on the merged branch:** all 63 reference test binaries; the template compiles; course lint (283 stages), regions,
   assertions, comments, fmt, snippets (422), links (573), progress safety; `course verify --stage unlock` (315 stages, 0 problems);
-  anneal-cli/content/api tests (API tests on a throwaway Postgres) and clippy. The full `anneal course verify` was started at the
-  last commit; its result is the line below when it ends. An earlier full run (before the restructures) passed 280 of 281 stages and
+  anneal-cli/content/api tests (API tests on a throwaway Postgres) and clippy. The full `anneal course verify` at a5ba9132
+  passed: 315 stages, 0 problems (every stage fails before and passes after; every unlock state compiles). An earlier full run (before the restructures) passed 280 of 281 stages and
   found one test of ours that used a later stage's iterator (fixed).
 - **Known limits, stated on the pages:** index entries no version can reach are not garbage-collected; `CREATE INDEX` after
   transactional writes indexes only the newest version of each row; the 3k boss itself runs no SQL statement (4e-04 does).
