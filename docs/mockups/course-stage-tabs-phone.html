@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stage tabs on a phone</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:oklch(0.165 0.012 255);--panel:oklch(0.195 0.013 255);--raise:oklch(0.235 0.014 255);--line:oklch(0.32 0.014 255);--line2:oklch(0.255 0.013 255);--fg:oklch(0.95 0.005 255);--mut:oklch(0.80 0.01 255);--dim:oklch(0.63 0.012 255);--acc:oklch(0.76 0.11 55);--acc-bg:oklch(0.76 0.11 55 / 0.14);--grn:oklch(0.77 0.13 165);--grn-bg:oklch(0.77 0.13 165 / 0.13);--bad:oklch(0.70 0.16 25);--mono:'JetBrains Mono',ui-monospace,Menlo,monospace;--sans:'Plus Jakarta Sans',system-ui,sans-serif;color-scheme:dark}
+:root[data-theme="light"]{--bg:oklch(0.975 0.003 255);--panel:oklch(0.995 0.002 255);--raise:oklch(0.95 0.005 255);--line:oklch(0.86 0.008 255);--line2:oklch(0.915 0.006 255);--fg:oklch(0.20 0.015 255);--mut:oklch(0.40 0.015 255);--dim:oklch(0.52 0.015 255);--acc:oklch(0.54 0.13 50);--acc-bg:oklch(0.54 0.13 50 / 0.11);--grn:oklch(0.515 0.12 165);--grn-bg:oklch(0.515 0.12 165 / 0.11);--bad:oklch(0.54 0.18 25);color-scheme:light}
+*{box-sizing:border-box}
+html,body{scrollbar-width:none}
+body::-webkit-scrollbar{display:none}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 var(--sans);padding:40px 24px 90px}
+h1{font:700 22px var(--sans);margin:0 0 6px}
+.lede{color:var(--mut);max-width:760px;margin:0 0 28px}
+.theme{float:right;background:var(--panel);border:1px solid var(--line2);color:var(--mut);font:500 11px var(--mono);letter-spacing:.12em;padding:6px 12px;border-radius:5px;cursor:pointer}
+.row{display:flex;flex-wrap:wrap;gap:36px;align-items:flex-start}
+.opt{width:375px;max-width:100%}
+.opt h2{font:600 15px var(--sans);margin:0 0 4px}
+.opt p.note{color:var(--dim);font-size:13px;margin:0 0 12px;min-height:60px}
+.opt .tag{font:500 10.5px var(--mono);letter-spacing:.1em;color:var(--acc);text-transform:uppercase}
+.phone{width:375px;max-width:100%;border:1px solid var(--line);border-radius:28px;background:var(--panel);overflow:hidden}
+.bar{height:26px}
+.page{padding:6px 16px 22px}
+.eyebrow{font:500 10.5px var(--mono);letter-spacing:.12em;color:var(--dim);text-transform:uppercase}
+.ttl{font:700 21px/1.25 var(--sans);margin:4px 0 14px}
+.prose{color:var(--mut);font-size:14.5px}
+.prose b{color:var(--fg)}
+/* A: today, one row that scrolls sideways with its scrollbar hidden */
+.tabsA{display:flex;gap:20px;overflow-x:auto;scrollbar-width:none;margin:0 -16px 18px;padding:0 16px;border-bottom:1px solid var(--line2)}
+.tabsA::-webkit-scrollbar{display:none}
+.tabsA button{flex:none;background:none;border:0;padding:12px 0;color:var(--dim);font:500 14.5px var(--sans);display:flex;gap:7px;align-items:center;position:relative}
+.tabsA button.on{color:var(--fg)}
+.tabsA button.on::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--acc)}
+.tabsA small,.pill small{font:500 10.5px var(--mono);padding:1px 7px;border:1px solid var(--line2);border-radius:9px}
+/* B: pills that wrap onto a second row */
+.tabsB{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}
+.pill{height:34px;padding:0 13px;border-radius:17px;border:1px solid var(--line2);background:none;color:var(--mut);font:500 13.5px var(--sans);display:inline-flex;gap:7px;align-items:center}
+.pill.on{border-color:var(--acc);background:var(--acc-bg);color:var(--acc)}
+.pill .ok{color:var(--grn)}
+.pill .bad{color:var(--bad)}
+/* C: one row of compact pills that always fits: short labels and counts, the active one spelled out */
+.tabsC{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin:0 0 18px;padding:4px;border-radius:14px;background:var(--raise)}
+.seg{height:40px;border-radius:10px;border:0;background:none;color:var(--dim);font:500 12.5px var(--sans);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;min-width:0}
+.seg span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.seg i{font:500 10px var(--mono);font-style:normal;color:var(--dim)}
+.seg.on{background:var(--panel);color:var(--fg);box-shadow:0 1px 0 var(--line2)}
+.seg.on i{color:var(--acc)}
+.seg .ok{color:var(--grn)}
+.verdict{margin-top:34px;max-width:780px;color:var(--mut)}
+.verdict b{color:var(--fg)}
+@media (prefers-reduced-motion:no-preference){.pill,.seg{transition:background .15s,color .15s,border-color .15s}}
+</style>
+</head>
+<body>
+<button class="theme" id="theme" type="button">LIGHT / DARK</button>
+<h1>Stage tabs on a phone</h1>
+<p class="lede">The stage page has five tabs: Instructions, Hints, Solution, Concepts and Last run. On a 375&nbsp;px screen they do not fit in one row. Today the row scrolls sideways with its scrollbar hidden, so <b>Concepts</b> and <b>Last run</b> sit off-screen with nothing to say they are there. Three ways to show them. Tap a tab in B or C to try it.</p>
+<div class="row">
+  <section class="opt">
+    <div class="tag">A · today</div>
+    <h2>One row, scrolls sideways</h2>
+    <p class="note">Concepts and Last run are cut off at the right edge. Nothing shows that the row scrolls. It also uses an underline for the active tab.</p>
+    <div class="phone"><div class="bar"></div><div class="page">
+      <div class="eyebrow">2C · Stage 3 of 6</div>
+      <div class="ttl">Scanning the leaves</div>
+      <div class="tabsA"><button class="on">Instructions</button><button>Hints <small>0/3</small></button><button>Solution</button><button>Concepts <small>1/4</small></button><button>Last run</button></div>
+      <p class="prose">The leaves are linked left to right, so a range scan finds its first key with one descent and then walks the chain…</p>
+    </div></div>
+  </section>
+  <section class="opt">
+    <div class="tag">B · pills that wrap</div>
+    <h2>Every tab visible, two rows</h2>
+    <p class="note">Nothing is hidden and the labels stay whole. Costs one more row of height (about 42&nbsp;px) above the text. Pills, as elsewhere in anneal.</p>
+    <div class="phone"><div class="bar"></div><div class="page">
+      <div class="eyebrow">2C · Stage 3 of 6</div>
+      <div class="ttl">Scanning the leaves</div>
+      <div class="tabsB" data-group><button class="pill on">Instructions</button><button class="pill">Hints <small>0/3</small></button><button class="pill">Solution</button><button class="pill">Concepts <small>1/4</small></button><button class="pill">Last run <span class="bad">✗</span></button></div>
+      <p class="prose">The leaves are linked left to right, so a range scan finds its first key with one descent and then walks the chain…</p>
+    </div></div>
+  </section>
+  <section class="opt">
+    <div class="tag">C · one compact row</div>
+    <h2>Five equal segments, always one row</h2>
+    <p class="note">Fits at 320&nbsp;px. Short labels (Task, Hints, Solution, Concepts, Run) with the count or the last result under each. Same height as today.</p>
+    <div class="phone"><div class="bar"></div><div class="page">
+      <div class="eyebrow">2C · Stage 3 of 6</div>
+      <div class="ttl">Scanning the leaves</div>
+      <div class="tabsC" data-group><button class="seg on"><span>Task</span><i>read</i></button><button class="seg"><span>Hints</span><i>0/3</i></button><button class="seg"><span>Solution</span><i>locked</i></button><button class="seg"><span>Concepts</span><i>1/4</i></button><button class="seg"><span>Run</span><i class="ok">✓ 7/7</i></button></div>
+      <p class="prose">The leaves are linked left to right, so a range scan finds its first key with one descent and then walks the chain…</p>
+    </div></div>
+  </section>
+</div>
+<p class="verdict"><b>Recommendation: C.</b> It keeps the header the same height as today, shows all five at once and puts each tab's state (hints opened, concepts read, last result) where it is useful on a phone. B is the safer change if you want the full labels. Both apply below 640&nbsp;px only; the desktop tabs stay as they are. Nothing is built until you pick one.</p>
+<script>
+document.getElementById('theme').onclick=()=>{const r=document.documentElement;r.dataset.theme=r.dataset.theme==='light'?'dark':'light'};
+document.querySelectorAll('[data-group]').forEach(g=>g.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;g.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b))}));
+</script>
+</body>
+</html>
