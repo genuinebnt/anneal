@@ -1,7 +1,7 @@
 `WHERE price > 10 AND stock > 0`: `AND` and `OR` combine two answers that can each be true, false or **NULL** (unknown). Some combinations are known anyway: `FALSE AND anything` is FALSE, because no value of "anything" can make it true; `TRUE OR anything` is TRUE. Getting the NULL rows right is what separates a database from a boolean calculator. The second node of this stage is the first *function*: `lower(name)` and `upper(name)`. Case mapping looks trivial and is not: `ß` becomes `SS`, `É` becomes `é`, and the string has a different length afterwards.
 
 > [!CHECK] What do `NULL AND FALSE`, `NULL OR TRUE` and `NULL AND TRUE` evaluate to, and why can the first two be answered without knowing the NULL? Separately: `upper('straße')` has how many characters, and what does that say about doing case mapping byte by byte?
-> ||FALSE, TRUE and NULL. `AND` is false when either side is false and `OR` is true when either side is true, whatever the unknown turns out to be; `NULL AND TRUE` depends on the unknown, so it stays NULL. `upper('straße')` is `STRASSE`: seven characters become seven here but `ß` (one char, two bytes) became `SS` (two chars, two bytes): case mapping works on characters, can change their count and cannot be done byte by byte.||
+> ||FALSE, TRUE and NULL. `AND` is false when either side is false and `OR` is true when either side is true, whatever the unknown turns out to be; `NULL AND TRUE` depends on the unknown, so it stays NULL. `upper('straße')` is `STRASSE`: six characters become seven, because `ß` (one character, two bytes in UTF-8) becomes `SS` (two characters, two bytes). Case mapping works on characters, can change their count and cannot be done byte by byte.||
 >
 > - Replace NULL by true, then by false: does the answer change?
 > - Does your `evaluate` have to evaluate the right side when the left side decides the answer?
@@ -24,6 +24,8 @@ In `src/execution/expressions/string_expression.rs` (the constructor with its VA
 
 - `compute(val: &str) -> String`: the lower- or upper-case form, by `expr_type`.
 - `result(val: &Value) -> Value`: the transformed string as a VARCHAR; the VARCHAR NULL stays NULL.
+
+The NULLs in these tables come from columns and comparisons. A bare `NULL` literal is typed INTEGER, as in BusTub, so in the shell `SELECT false AND null` and `SELECT lower(null)` are type errors, where PostgreSQL answers `false` and NULL.
 
 The tests: all nine combinations of AND and of OR, both sides BOOLEAN, logic over comparisons in a row and a join; lower and upper on ASCII, `école`, `straße` and an emoji, NULL in and out, a non-VARCHAR argument refused, nested calls; and two properties: AND and OR follow Kleene's logic and are commutative for every pair of true/false/NULL, and `lower`/`upper` equal the standard library's `to_lowercase`/`to_uppercase` for any text (and upper twice is upper once).
 

@@ -109,6 +109,18 @@ fn s3c_01_a_tuple_that_fits_no_page_is_an_error() {
 }
 
 #[test]
+fn s3c_01_a_refused_tuple_leaves_a_heap_with_tuples_as_it_was() {
+    let bpm = bpm(10);
+    let heap = TableHeap::new(&bpm);
+    let first = heap.insert_tuple(&meta(false), &bytes_tuple(1, 100)).unwrap();
+    assert!(heap.insert_tuple(&meta(false), &bytes_tuple(2, BUSTUB_PAGE_SIZE)).is_err(), "a tuple that fits no page is an error, also after other tuples");
+    assert_eq!(heap.make_iterator().count(), 1, "a scan after the refused insert sees exactly the tuple that was there (no empty page left behind)");
+    let next = heap.insert_tuple(&meta(false), &bytes_tuple(3, 100)).unwrap();
+    assert_eq!(next.page_id(), first.page_id(), "the refused tuple did not move the heap on to a new page");
+    assert_eq!(heap.make_iterator().count(), 2, "the heap goes on working after the refused insert");
+}
+
+#[test]
 fn s3c_01_a_tuple_too_big_for_the_rest_of_a_page_moves_on_to_a_new_one() {
     let bpm = bpm(10);
     let heap = TableHeap::new(&bpm);

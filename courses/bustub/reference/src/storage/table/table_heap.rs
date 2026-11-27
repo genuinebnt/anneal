@@ -45,19 +45,23 @@ impl<'a> TableHeap<'a> {
 
     /// Adds the tuple at the end of the table and returns where it went. If the last page has no room, a new page is allocated and linked
     /// after it (and becomes the last page). A tuple that does not fit even an empty page is an error ("tuple is too large, cannot
-    /// insert"). Inserts are serialised by the heap's lock.
+    /// insert") and leaves the heap as it was. Inserts are serialised by the heap's lock.
     pub fn insert_tuple(&self, meta: &TupleMeta, tuple: &Tuple) -> Result<Rid> {
         // @begin 3c-01
+        // A tuple that an empty page cannot take is refused before any page is linked: an empty page left at the end would be a
+        // page with no tuples for every scan to trip over.
+        let mut empty = [0u8; crate::common::config::BUSTUB_PAGE_SIZE];
+        let mut probe = TablePage::new(&mut empty[..]);
+        probe.init();
+        if probe.get_next_tuple_offset(meta, tuple).is_none() {
+            return Err(Exception::new(ExceptionType::Invalid, "tuple is too large, cannot insert"));
+        }
         let mut last_page_id = self.last_page_id.lock().unwrap();
         let mut page_guard = self.bpm.write_page(*last_page_id);
         loop {
             let mut page = TablePage::new(&mut page_guard[..]);
             if page.get_next_tuple_offset(meta, tuple).is_some() {
                 break;
-            }
-            // an empty page that cannot take it: no page ever will
-            if page.get_num_tuples() == 0 {
-                return Err(Exception::new(ExceptionType::Invalid, "tuple is too large, cannot insert"));
             }
             let next_page_id = self.bpm.new_page();
             page.set_next_page_id(Some(next_page_id));

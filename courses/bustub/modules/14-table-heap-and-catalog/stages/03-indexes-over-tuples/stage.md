@@ -30,7 +30,7 @@ How the comparator reads the keys (decoding through values, or comparing bytes o
 
 **`Arc<Schema>` for sharing.** The comparator keeps a clone of the key schema's `Arc`; cloning an `Arc` is a counter increment.
 
-**Reusing 3a.** `Value::compare_less_than` returns a `CmpBool` in a `Result`; for non-NULL integer columns `unwrap()` is fine, and a NULL key is a design question the tests do not ask (the catalog only indexes integer columns).
+**Reusing 3a.** `Value::compare_less_than` returns a `CmpBool` in a `Result`; for non-NULL integer columns `unwrap()` is fine; a key with a NULL never reaches the comparator, because it is not indexed (above).
 
 ## If this is new
 

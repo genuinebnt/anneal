@@ -21,7 +21,7 @@ The tests, in addition to exact scenarios (a full page makes the heap start and 
 
 ## Your freedom
 
-How the heap remembers the last page (a field under a lock, or by following the chain), when it allocates the next page (before it knows it needs it, or only when full), and how it orders its latches. The table page's layout is yours from 3b.
+How the heap remembers the last page (a field under a lock, or by following the chain) and how it orders its latches. The next page is allocated only when the last one is full: the tests check that the last page links to nothing. The table page's layout is yours from 3b.
 
 ## The Rust toolbox
 

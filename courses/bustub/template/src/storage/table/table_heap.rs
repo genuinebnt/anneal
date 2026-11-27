@@ -29,7 +29,7 @@ impl<'a> TableHeap<'a> {
 
     /// Adds the tuple at the end of the table and returns where it went. If the last page has no room, a new page is allocated and linked
     /// after it (and becomes the last page). A tuple that does not fit even an empty page is an error ("tuple is too large, cannot
-    /// insert"). Inserts are serialised by the heap's lock.
+    /// insert") and leaves the heap as it was. Inserts are serialised by the heap's lock.
     pub fn insert_tuple(&self, meta: &TupleMeta, tuple: &Tuple) -> Result<Rid> {
         todo!("3c-01: under the heap's lock the tuple goes into the last page; when it has no room a new page is linked after it; a tuple too large for an empty page is an error")
     }
