@@ -9,16 +9,25 @@ A persistent trie never changes: `put` and `remove` return **a new trie** that s
 
 ## The task
 
-In `src/primer/trie.rs`: `Trie::put::<T>(&self, key, value: T) -> Trie`. The recursive helper `put_at(node, key, value)` is part of the region: given the old node at this position (if any) and the rest of the key, it returns the new node:
+In `src/primer/trie.rs`:
 
-- start from a **clone** of the old node (its children map clones the child `Arc`s, not the subtrees) or from an empty node if there is none;
-- if the key is used up, set `value` on the clone (replacing what was there, whatever its type);
-- otherwise replace the clone's child for the next character by the result of the recursive call on the old child;
-- wrap the result in `Arc::new`.
+- **`Trie::put::<T>(&self, key, value: T) -> Trie` is a new trie with `value` under `key`**, replacing what was there whatever its type; the empty key puts the value in the root. Values need not be clonable.
+- **`Trie::remove(&self, key) -> Trie` is a new trie without the value under `key`.** A node left with no value and no children is removed, and so on up the path, so an emptied trie has no root. A key that holds no value gives a trie equal to the old one.
+- **Both leave the old trie unchanged and copy only the path.** The nodes from the root to the key are new; every other node is shared (the same `Arc`) with the old trie.
 
-The empty key puts the value in the root.
+The helpers you write for them, and any type they return, are part of the region: their shape is yours.
 
-In `src/primer/trie.rs`: `Trie::remove(&self, key) -> Trie`, with the helper `remove_at(node, key) -> Removal` in the same region. `Removal` is `Missing` (no value under the key: the answer is the old trie, unchanged) or `Replaced(Option<Arc<TrieNode>>)` (the node that takes this position: `None` if nothing is left of it). For each node on the path: clone it, recurse into the child (or clear the value at the end of the key), then put the replacement child back, drop the child if it became `None`, and return `None` yourself if you now have no value and no children.
+> [!ASIDE] The steps, if you would rather not work them out
+> In `src/primer/trie.rs`: `Trie::put::<T>(&self, key, value: T) -> Trie`. The recursive helper `put_at(node, key, value)` is part of the region: given the old node at this position (if any) and the rest of the key, it returns the new node:
+>
+> - start from a **clone** of the old node (its children map clones the child `Arc`s, not the subtrees) or from an empty node if there is none;
+> - if the key is used up, set `value` on the clone (replacing what was there, whatever its type);
+> - otherwise replace the clone's child for the next character by the result of the recursive call on the old child;
+> - wrap the result in `Arc::new`.
+>
+> The empty key puts the value in the root.
+>
+> In `src/primer/trie.rs`: `Trie::remove(&self, key) -> Trie`, with the helper `remove_at(node, key) -> Removal` in the same region. `Removal` is `Missing` (no value under the key: the answer is the old trie, unchanged) or `Replaced(Option<Arc<TrieNode>>)` (the node that takes this position: `None` if nothing is left of it). For each node on the path: clone it, recurse into the child (or clear the value at the end of the key), then put the replacement child back, drop the child if it became `None`, and return `None` yourself if you now have no value and no children.
 
 The tests: exact scenarios (put builds one node per character; replaces a value even with another type; keys that are prefixes share a path; putting never changes the old trie; only the path is copied and everything else is shared; values need not be clonable; remove deletes only the given key; removing everything leaves a trie with no root; empty nodes are pruned; a node that still leads somewhere stays; removing a missing key changes nothing; removing never changes the old trie), and a property: **random puts and removes, keeping every version**: at each step the new version equals a map, every older version still equals the map it was, the new version shares with the old one every child off the key's path, no empty branch is left behind, and a trie has a root exactly when it holds a key.
 
@@ -28,31 +37,15 @@ How you copy the path (recursion with a helper, an explicit stack of nodes, rebu
 
 ## The Rust toolbox
 
-**`Arc::new` and clone for copy-on-write.** `let mut copy = (**node).clone();` clones the node's children map: it copies the child *pointers* (`Arc`s), not the subtrees, so the copy is cheap and shares everything below.
+**`Arc::new` and clone for copy-on-write.** Cloning the struct inside an `Arc` (`Folder::clone(&folder)`, where `folder: Arc<Folder>`) clones its map of children: it copies the child *pointers* (`Arc`s), not the subtrees, so the copy is cheap and shares everything below. Change the copy, then `Arc::new` it.
 
-**Recursion that returns the new node.** `fn put_at(old: Option<&Arc<TrieNode>>, key: &[char], value: Value) -> Arc<TrieNode>`: build the copy, replace one child by the recursive result, wrap in `Arc::new`.
+**Recursion that returns the new node.** A helper such as `fn with_file(old: Option<&Arc<Folder>>, path: &[&str], file: File) -> Arc<Folder>` builds a path bottom-up: each level returns its own new node, and its caller stores that as one child. Taking the *old* node as an `Option` handles a path that does not exist yet with the same code.
 
-**An enum for 'nothing to do'.** `enum Removal { Missing, Replaced(Option<Arc<TrieNode>>) }` lets the helper say 'the key was not here, keep the old trie', 'this node is the new node' or 'nothing is left of this node'.
+**An enum for 'nothing to do'.** A recursive helper with three answers ("nothing changed, keep the old version", "here is the new node", "nothing is left of this node") is an enum with one unit variant and one that carries an `Option`: the caller's `match` must then handle all three, and an early "nothing changed" can skip the copying on the way back up.
 
 **`split_first`.** `match key.split_first() { None => .., Some((c, rest)) => .. }` takes a slice apart without indexing.
 
-**Type erasure on the way in.** `let value: Value = Arc::new(value);` turns any `T: Any + Send + Sync` into the shared erased value once, before the recursion.
-
-```rust
-let mut new = node.map(|n| (**n).clone()).unwrap_or_default();   // clone the node inside the Arc
-match key.split_first() { None => ..., Some((c, rest)) => ... }
-new.children.insert(*c, child);                                  // replace one child pointer
-Arc::new(new)
-```
-
-```rust
-enum Removal { Missing, Replaced(Option<Arc<TrieNode>>) }
-match Self::remove_at(child, rest) {
-    Removal::Missing => return Removal::Missing,
-    Removal::Replaced(Some(c)) => { new.children.insert(*c_char, c); }
-    Removal::Replaced(None) => { new.children.remove(c_char); }
-}
-```
+**Type erasure on the way in.** `let shared: Arc<dyn Any + Send + Sync> = Arc::new(x);` coerces any `T: Any + Send + Sync` into a shared erased value. Do it once, before the recursion, so the helper need not be generic.
 
 ## Design notes
 
