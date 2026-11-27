@@ -1,0 +1,31 @@
+slug = "folders-that-move"
+title = "Folders that can be moved"
+mode = "write"
+level = "medium"
+stage = "names"
+order = 4
+status = "ready"
+tags = ["tree", "arena", "parent links", "path resolution", "cycle prevention"]
+teaches = [
+  "Give each node a number and keep a parent link: a move is then two small changes, however large the folder.",
+  "Whether a move would make a loop is a question about parents, not about the spelling of two paths.",
+  "Follow '..' one step at a time. Cancelling it in the text changes what the path means.",
+]
+follow_up = "1) Two users move /a into /b and /b into /a at the same time. What must be held while you check? 2) How would links (a second name for a folder) change the check? 3) `path_of` walks to the top each time. When would you cache paths, and what makes the cache wrong?"
+
+[[hints]]
+kind = "approach"
+text = "Store the folders in a vector indexed by number. Each knows its parent, its name and its children by name. Then moving changes the two parents' child lists and two fields of the moved folder."
+
+[[hints]]
+kind = "rust"
+text = "`Vec<Option<Folder>>` keeps removed numbers unused. `BTreeMap<String, usize>` lists names already sorted. To change two folders, finish with one `&mut` borrow before taking the next."
+
+[[hints]]
+kind = "edge"
+text = "To ask whether the new parent is inside the moved folder, walk from the new parent towards the top. The top is its own parent, so stop there."
+
+[solution]
+explanation = "Folders are linked by numbers in both directions, so nothing about a moved folder's contents has to change. The loop check walks the new parent's ancestors looking for the moved folder."
+time = "a path costs O(parts log names); a rename adds O(depth)"
+space = "O(folders)"

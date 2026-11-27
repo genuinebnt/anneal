@@ -313,7 +313,7 @@ async fn the_web_server_series_keeps_its_problems(db: PgPool) {
 #[sqlx::test(migrator = "anneal_api::MIGRATOR")]
 async fn each_shared_exercise_works_in_each_of_its_series(db: PgPool) {
     // in the stable order, so the first is the one shown when nothing says otherwise
-    const SHARED: [(&str, &[&str]); 24] = [
+    const SHARED: [(&str, &[&str]); 27] = [
         ("b4-length-prefixed-codec", &["web-server", "mini-redis"]),
         ("b7-requests-in-pieces", &["web-server", "mini-redis"]),
         ("b7-talk-over-a-connection", &["web-server", "mini-redis"]),
@@ -325,8 +325,9 @@ async fn each_shared_exercise_works_in_each_of_its_series(db: PgPool) {
         ("c4-fix-cancel-safe-reader", &["mini-redis", "async-runtime"]),
         ("f7-wire-format-json", &["job-service", "event-ledger"]),
         ("l1-raii-span-guard", &["web-server", "rate-limiter", "scripting-language"]),
+        ("l3-binary-frame-parser", &["key-value-store", "toy-filesystem"]),
         ("l3-zero-copy-tokenizer", &["regex-engine", "scripting-language"]),
-        ("l5-const-fn-crc-table", &["key-value-store", "mini-redis"]),
+        ("l5-const-fn-crc-table", &["key-value-store", "mini-redis", "toy-filesystem"]),
         ("l8-import-errors", &["key-value-store", "event-ledger"]),
         ("m3-claim-without-a-lock", &["rate-limiter", "lease-simulator"]),
         ("s4-btreemap-ranges", &["key-value-store", "mini-redis"]),
@@ -334,7 +335,9 @@ async fn each_shared_exercise_works_in_each_of_its_series(db: PgPool) {
         ("y15-expand-the-braces", &["regex-engine", "scripting-language"]),
         ("y15-lay-a-program-out-flat", &["regex-engine", "scripting-language"]),
         ("y15-print-it-so-it-reads-back", &["regex-engine", "query-optimizer"]),
+        ("y17-after-the-power-cut", &["key-value-store", "toy-filesystem"]),
         ("y17-append-that-fails", &["key-value-store", "event-ledger"]),
+        ("y17-unsaved-changes", &["key-value-store", "toy-filesystem"]),
         ("y18-records-and-frames", &["key-value-store", "mini-redis"]),
         ("y5-catch-the-broken-queue", &["key-value-store", "regex-engine", "event-ledger"]),
         ("y9-kv-store-wal", &["key-value-store", "mini-redis", "event-ledger"]),

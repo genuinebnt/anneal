@@ -1,0 +1,31 @@
+slug = "the-first-block"
+title = "Capstone 1: the disk and its first block"
+mode = "write"
+level = "medium"
+stage = "pieces"
+order = 1
+status = "ready"
+tags = ["file systems", "superblock", "CRC-32", "fixed layout", "hostile input"]
+teaches = [
+  "Compute every position from a few chosen numbers, and store them only so that they can be checked.",
+  "A checksum says a block is as it was written. It does not say that what was written makes sense.",
+  "Block numbers are untrusted: the multiplication that finds a block can overflow.",
+]
+follow_up = "1) The superblock is the one block that cannot be lost. Where would you keep copies, and how would a mount choose? 2) What would a format with version 2 have to promise to old code? 3) Why store the positions at all if they are recomputed?"
+
+[[hints]]
+kind = "approach"
+text = "Write `layout` first, as one running sum. `encode` is then a list of fields, and `decode` is: two checks, then `layout` on the three chosen numbers."
+
+[[hints]]
+kind = "rust"
+text = "`u64::from_le_bytes(b[o..o + 8].try_into().unwrap())` reads a field. `div_ceil` rounds up. A `const` block with a `while` loop can build the CRC table at compile time. `checked_mul` and `checked_add` return `None` on overflow."
+
+[[hints]]
+kind = "edge"
+text = "Check the upper limit on `total_blocks` before adding anything to it. `crc32_extend` receives a finished checksum, which was inverted at the end: undo that before going on."
+
+[solution]
+explanation = "Everything follows from three numbers, so `decode` recomputes the layout and compares it with what is stored. Any disagreement is refused, without a separate check for each field."
+time = "layout, encode and decode O(1); CRC O(bytes)"
+space = "O(1)"

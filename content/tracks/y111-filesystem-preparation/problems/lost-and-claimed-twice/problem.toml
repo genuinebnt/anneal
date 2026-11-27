@@ -1,0 +1,31 @@
+slug = "lost-and-claimed-twice"
+title = "Take stock of a damaged store"
+mode = "write"
+level = "hard"
+stage = "damage"
+order = 7
+status = "ready"
+tags = ["reachability", "reference counting", "consistency check", "safe repair", "explicit stack"]
+teaches = [
+  "Derive what the summaries should say from the primary data, then compare.",
+  "Reference counts cannot find a lost ring. Walking from the root can.",
+  "When part of the data cannot be read, a repair may add protection but must not remove anything.",
+]
+follow_up = "1) The store is too large to check while it is stopped. What goes wrong if objects change during your walk? 2) Instead of removing lost objects, how would you let a person look at them first? 3) What extra information would make a `ClaimedTwice` page repairable?"
+
+[[hints]]
+kind = "approach"
+text = "Make one walk from the root that fills three tables: which objects were reached, how many references each has and which pages are claimed. Everything else is a comparison."
+
+[[hints]]
+kind = "rust"
+text = "A `Vec` used as a stack replaces recursion. `slice.get_mut(page)` returns `None` for a page that does not exist. A `BTreeSet<Finding>` sorts and removes repeats for you."
+
+[[hints]]
+kind = "edge"
+text = "Mark an object as reached when you first push it, not when you pop it, or a ring is walked for ever. Do not read the lists of an unreadable object."
+
+[solution]
+explanation = "One walk with an explicit stack derives reachability, reference counts and claimed pages. Comparing them with the stored summaries gives the findings, and any sign that the walk was incomplete turns off every destructive fix."
+time = "O(objects + references + pages), plus sorting"
+space = "O(objects + pages)"

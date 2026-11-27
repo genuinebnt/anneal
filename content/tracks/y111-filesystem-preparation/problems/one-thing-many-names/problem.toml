@@ -1,0 +1,31 @@
+slug = "one-thing-many-names"
+title = "One photo, many names"
+mode = "write"
+level = "medium"
+stage = "names"
+order = 5
+status = "ready"
+tags = ["reference counting", "HashMap", "ownership", "indirection", "rename semantics"]
+teaches = [
+  "Put a number between a name and its thing, and many names for one thing become easy.",
+  "Count the references yourself, and give the value back by moving it out when the count reaches zero.",
+  "Moving a name onto another name of the same thing must be a no-op, or it destroys a reference.",
+]
+follow_up = "1) Why not store `Rc<RefCell<T>>` under each name? Say what would be harder. 2) A viewer has a photo open while its last name is removed. How would you keep it until the viewer closes it? 3) After a crash the counts are wrong. How could you rebuild them?"
+
+[[hints]]
+kind = "approach"
+text = "Two maps: from name to an item number, and from item number to the item and its count of names. Write one function for 'this item has one name fewer' and use it from both places."
+
+[[hints]]
+kind = "rust"
+text = "`HashMap::remove` moves the value out, so no clone is needed. `Option::and_then` turns 'maybe an old target' into 'maybe a returned item'."
+
+[[hints]]
+kind = "edge"
+text = "Look up what `to` names before you change anything. When it is the same item, return at once."
+
+[solution]
+explanation = "Names point at item numbers and each item counts its names. Removing and replacing share one release step, which moves the item out when the count reaches zero."
+time = "O(1) expected per call"
+space = "O(names + items)"

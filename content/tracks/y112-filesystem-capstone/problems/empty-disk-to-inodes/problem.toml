@@ -1,0 +1,31 @@
+slug = "empty-disk-to-inodes"
+title = "Capstone 3: format, mount, and hand out space"
+mode = "write"
+level = "hard"
+stage = "files"
+order = 3
+status = "ready"
+tags = ["bitmaps", "next-fit", "inodes", "transactions", "poisoning"]
+teaches = [
+  "A group of block changes that can be thrown away is the start of every all-or-nothing promise.",
+  "Order the writes of a format so that a half-made filesystem cannot be mistaken for a whole one.",
+  "After a commit fails you no longer know what is stored, so stop rather than guess.",
+]
+follow_up = "1) Next-fit scatters a small file over the disk after many deletions. What would a filesystem that cares about seek time do instead? 2) Why does `free_blocks` count bits instead of keeping a counter, and what would a counter have to survive? 3) A caller panics inside the closure. What state is the `Fs` in?"
+
+[[hints]]
+kind = "approach"
+text = "Write one function that finds a clear bit from a starting place and sets it; both allocators use it. `tx` is: refuse, mark open, run, mark closed, then commit or discard."
+
+[[hints]]
+kind = "rust"
+text = "`FnOnce(&mut Fs<D>) -> R<T>` lets the closure call any method. `Box<dyn Clock>` holds either clock. `u16::try_from(i32::from(n) + change)` checks both ends at once."
+
+[[hints]]
+kind = "edge"
+text = "The search starts in the middle of a bitmap and must also look at the bits before its start, once. Check that an offered block is a data block before you write zeros over it."
+
+[solution]
+explanation = "Every change goes to the cache, so giving up costs nothing and committing is one flush. A failed commit poisons the object, because the disk may now hold half of the change."
+time = "allocation O(bits passed over); commit O(changed blocks)"
+space = "O(changed blocks)"

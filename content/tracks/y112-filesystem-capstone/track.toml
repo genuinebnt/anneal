@@ -1,0 +1,21 @@
+code = "Y112"
+name = "Toy filesystem capstone"
+section = "Y"
+tier = "sde3"
+order = 112
+summary = "Build a small UNIX filesystem in nine steps: layout, cache, allocation, files, directories, names, a lossy disk, crash recovery and a checker. Each step's starter carries the earlier work."
+
+[[stages]]
+slug = "pieces"
+name = "The disk"
+band = "medium"
+
+[[stages]]
+slug = "files"
+name = "Files and names"
+band = "hard"
+
+[[stages]]
+slug = "trust-it"
+name = "Trust it"
+band = "hard"

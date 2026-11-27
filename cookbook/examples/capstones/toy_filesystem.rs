@@ -21,7 +21,8 @@
 //!   directory  : a regular file whose content is 64-byte entries [inode u32][name_len u8][name <= 59 B]; "." and ".." are real entries
 //! ```
 //!
-//! JOURNAL (ext3 `data=journal` style, one transaction at a time): every public operation is a TRANSACTION. Block writes only go to the
+//! JOURNAL (ext3 `data=journal` style, one transaction at a time): every public operation is a TRANSACTION, except that a long write is
+//! cut into several (each is atomic, the whole write is not: after a crash or NoSpace a prefix of it may be there). Block writes only go to the
 //! buffer cache (dirty, never evicted). COMMIT = write [header: seq, target block numbers] + [block images], sync, write [commit record:
 //! seq + crc32 over header and images], sync, then CHECKPOINT the images to their home locations, sync, and finally mark the journal clean.
 //! Recovery on mount: a header with a matching, checksummed commit record is replayed (idempotent: the same images are written again);
@@ -30,7 +31,18 @@
 //!
 //! FSCK walks the tree from the root and checks: every entry points at an allocated inode, link counts equal the number of directory
 //! entries, no block is claimed twice (cross-link), bitmaps equal the set of reachable blocks, no orphan inodes, "." and ".." are right,
-//! every directory is reachable exactly once. Simple problems (link counts, leaked blocks, orphans, missing bits) are repaired.
+//! every directory is reachable exactly once, no name is there twice. Simple problems (link counts, leaked blocks, orphans, missing bits)
+//! are repaired. If some part of the tree cannot be read, repair only marks things used: it frees nothing it could not account for.
+//!
+//! REPAIR CAN FREE LIVE DATA: a directory whose size was shortened, or an entry that was zeroed, looks like fewer names. The walk seems
+//! complete, so the files named there are taken for orphans and freed.
+//!
+//! WHAT THE CRASH TESTS CANNOT PROVE: with a checksummed commit record, no cut shows a need for the sync between the journal copies and
+//! that record; nor for the last sync of a commit, of recovery or of format. Removing any other sync of these three makes a check fail.
+//!
+//! LIMITS: only the superblock and journal records are checksummed, so some damage elsewhere cannot be told from good data (a directory
+//! whose kind byte says "file" hides its children, and repair would free them). Timestamps come from a counter that restarts at each
+//! mount. A very large device with a small journal can make one unlink too big for a transaction.
 //!
 //! COMMON USES: ext2 taught the inode/indirect-block/bitmap design (that is this file's layout); ext3/ext4 added the journal (crash recovery
 //! in time proportional to the log, not the disk, and the checksummed commit block of ext4's journal_checksum); FFS introduced cylinder
@@ -67,6 +79,8 @@ enum FsError {
     Corrupt(String),
     Io(String),
     Crashed,
+    /// A commit failed on the device. What reached the disk is unknown, so only a fresh mount may go on.
+    Poisoned,
 }
 impl fmt::Display for FsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -166,6 +180,21 @@ trait BlockDevice {
     fn write_block(&mut self, n: u64, buf: &Block) -> R<()>;
     fn sync(&mut self) -> R<()>;
 }
+/// A borrowed device, for a caller that must still have it after a call fails.
+impl<D: BlockDevice> BlockDevice for &mut D {
+    fn num_blocks(&self) -> u64 {
+        (**self).num_blocks()
+    }
+    fn read_block(&mut self, n: u64, buf: &mut Block) -> R<()> {
+        (**self).read_block(n, buf)
+    }
+    fn write_block(&mut self, n: u64, buf: &Block) -> R<()> {
+        (**self).write_block(n, buf)
+    }
+    fn sync(&mut self) -> R<()> {
+        (**self).sync()
+    }
+}
 
 struct FileDevice {
     file: File,
@@ -238,7 +267,7 @@ impl BlockDevice for MemDisk {
     fn read_block(&mut self, n: u64, buf: &mut Block) -> R<()> {
         let o = (n as usize)
             .checked_mul(BS)
-            .filter(|o| o + BS <= self.data.len())
+            .filter(|o| o.checked_add(BS).is_some_and(|end| end <= self.data.len()))
             .ok_or_else(|| FsError::Io(format!("read past end: block {n}")))?;
         buf.copy_from_slice(&self.data[o..o + BS]);
         Ok(())
@@ -246,7 +275,7 @@ impl BlockDevice for MemDisk {
     fn write_block(&mut self, n: u64, buf: &Block) -> R<()> {
         let o = (n as usize)
             .checked_mul(BS)
-            .filter(|o| o + BS <= self.data.len())
+            .filter(|o| o.checked_add(BS).is_some_and(|end| end <= self.data.len()))
             .ok_or_else(|| FsError::Io(format!("write past end: block {n}")))?;
         self.data[o..o + BS].copy_from_slice(buf);
         Ok(())
@@ -265,7 +294,8 @@ enum CrashMode {
     Chaos(u64),
 }
 
-/// Memory disk + volatile write cache. `arm(Some(k))` makes the (k+1)-th write fail with `Crashed` (and every later call too).
+/// Memory disk + volatile write cache. With `arm(Some(k))`, after `k` more writes the next write or sync fails with `Crashed`
+/// (and every later call too).
 struct FaultDevice {
     durable: MemDisk,
     pending: Vec<(u64, Box<Block>)>,
@@ -357,7 +387,9 @@ impl BlockDevice for FaultDevice {
         Ok(())
     }
     fn sync(&mut self) -> R<()> {
-        if self.crashed {
+        // the cut can also come just before a sync: only then is a whole group of writes still in doubt
+        if self.crashed || self.crash_after.is_some_and(|k| self.writes >= k) {
+            self.crashed = true;
             return Err(FsError::Crashed);
         }
         for (n, b) in self.pending.drain(..) {
@@ -498,7 +530,10 @@ const ROOT: u32 = 1;
 const K_FREE: u8 = 0;
 const K_FILE: u8 = 1;
 const K_DIR: u8 = 2;
-const CHUNK_BYTES: usize = 16 * BS; // one transaction writes at most this much file data (keeps a tx inside the journal)
+const CHUNK_BLOCKS: u64 = 16; // one transaction writes into at most this many data blocks of a file
+/// A transaction may also hold pointer blocks, bitmap blocks and an inode block: this many beside the data.
+const TX_OVERHEAD: u64 = 8;
+const MIN_JOURNAL: u32 = TX_OVERHEAD as u32 + 4; // header + commit record + overhead + two data blocks
 
 #[derive(Clone, Copy, Debug)]
 struct Geometry {
@@ -522,9 +557,9 @@ impl Super {
         if g.inode_count == 0 || g.inode_count as u64 + 1 > BITS {
             return Err(FsError::BadGeometry("inode count must be 1..32767".into()));
         }
-        if g.journal_blocks < 4 || g.journal_blocks > 1000 {
+        if g.journal_blocks < MIN_JOURNAL || g.journal_blocks > 1000 {
             return Err(FsError::BadGeometry(
-                "journal must be 4..1000 blocks".into(),
+                "journal must be 12..1000 blocks".into(),
             ));
         }
         let journal_start = 1;
@@ -694,6 +729,7 @@ struct Fs<D: BlockDevice> {
     jseq: u64,
     now: u64,
     in_tx: bool,
+    poisoned: bool,
     ino_cursor: u64,
     blk_cursor: u64,
     stats: FsStats,
@@ -717,6 +753,11 @@ fn parse_dir(raw: &[u8]) -> R<Vec<(usize, u32, String)>> {
         }
         let name = std::str::from_utf8(&e[5..5 + n])
             .map_err(|_| FsError::Corrupt("directory name is not UTF-8".into()))?;
+        if name.contains(['/', '\0']) {
+            return Err(FsError::Corrupt(
+                "directory name holds a slash or a NUL".into(),
+            ));
+        }
         v.push((i * DIRENT, ino, name.to_string()));
     }
     Ok(v)
@@ -750,10 +791,13 @@ impl<D: BlockDevice> Fs<D> {
             ));
         }
         let z = zero_block();
-        for n in 0..sb.data_start {
+        // Take the old superblock away first, and make that durable. From here until the new one is written, nothing mounts:
+        // a half-made filesystem can never be read with the old one's journal or bitmaps.
+        dev.write_block(0, &z)?;
+        dev.sync()?;
+        for n in 1..sb.data_start {
             dev.write_block(n, &z)?;
         }
-        dev.write_block(0, &sb.encode())?;
         let mut jh = zero_block();
         p32(&mut jh[..], 0, JMAGIC);
         dev.write_block(sb.journal_start, &jh)?;
@@ -768,6 +812,8 @@ impl<D: BlockDevice> Fs<D> {
             }
             dev.write_block(sb.dbm_start + bi, &b)?;
         }
+        dev.sync()?;
+        dev.write_block(0, &sb.encode())?;
         dev.sync()?;
         let mut fs = Fs::mount_inner(dev, Box::new(TickClock(0)), false)?;
         fs.tx(|fs| {
@@ -857,6 +903,7 @@ impl<D: BlockDevice> Fs<D> {
             jseq: seq,
             now: 0,
             in_tx: false,
+            poisoned: false,
             ino_cursor: 1,
             blk_cursor: sb.data_start,
             stats: FsStats {
@@ -882,6 +929,9 @@ impl<D: BlockDevice> Fs<D> {
     // 4. transactions + journal commit
     // ---------------------------------------------------------------------------------------------------------------------
     fn tx<T>(&mut self, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
+        if self.poisoned {
+            return Err(FsError::Poisoned);
+        }
         if self.in_tx {
             return Err(FsError::Invalid("nested transaction"));
         }
@@ -911,8 +961,24 @@ impl<D: BlockDevice> Fs<D> {
             self.cache.discard_dirty();
             return Err(FsError::TxTooBig);
         }
+        let n = dirty.len() as u64;
+        // a header may hold any number, even u64::MAX: only equality with the commit record matters
+        let seq = self.jseq.wrapping_add(1);
+        if let Err(e) = self.write_through_journal(seq, &dirty) {
+            // Some of the writes may be on the disk and some not, and a failed sync may have lost writes that the cache
+            // already counts as clean. Going on could overwrite a committed transaction in the journal before it is home.
+            self.poisoned = true;
+            self.cache.discard_dirty();
+            return Err(e);
+        }
+        self.jseq = seq;
+        self.stats.commits += 1;
+        self.stats.journal_images += n;
+        Ok(())
+    }
+
+    fn write_through_journal(&mut self, seq: u64, dirty: &[(u64, Box<Block>)]) -> R<()> {
         let j = self.sb.journal_start;
-        let seq = self.jseq + 1;
         let n = dirty.len() as u64;
         let mut h = zero_block();
         p32(&mut h[..], 0, JMAGIC);
@@ -922,7 +988,7 @@ impl<D: BlockDevice> Fs<D> {
             p32(&mut h[..], 32 + 4 * i, *t as u32);
         }
         let mut crc = crc32(&h[..]);
-        for (_, img) in &dirty {
+        for (_, img) in dirty {
             crc = crc32_extend(crc, &img[..]);
         }
         let dev = &mut self.cache.dev;
@@ -944,9 +1010,6 @@ impl<D: BlockDevice> Fs<D> {
         p64(&mut clean[..], 8, seq);
         self.cache.dev.write_block(j, &clean)?;
         self.cache.dev.sync()?;
-        self.jseq = seq;
-        self.stats.commits += 1;
-        self.stats.journal_images += n;
         Ok(())
     }
 
@@ -954,6 +1017,9 @@ impl<D: BlockDevice> Fs<D> {
     // block access, bitmaps (next-fit allocator), inodes
     // ---------------------------------------------------------------------------------------------------------------------
     fn rd(&mut self, n: u64) -> R<Box<Block>> {
+        if self.poisoned {
+            return Err(FsError::Poisoned);
+        }
         if n >= self.sb.total_blocks {
             return Err(FsError::Corrupt(format!("block {n} out of range")));
         }
@@ -1155,6 +1221,12 @@ impl<D: BlockDevice> Fs<D> {
     }
     fn collect(&mut self, blk: u32, depth: u32, out: &mut Vec<u32>) -> R<()> {
         self.check_data_blk(blk)?;
+        // a sound tree cannot own more blocks than the disk has; pointer blocks that repeat each other could name millions
+        if out.len() as u64 >= self.sb.total_blocks {
+            return Err(FsError::Corrupt(
+                "a file owns more blocks than the disk has".into(),
+            ));
+        }
         out.push(blk);
         if depth == 0 {
             return Ok(());
@@ -1286,6 +1358,7 @@ impl<D: BlockDevice> Fs<D> {
         }
         ino.size = ino.size.max(end);
         ino.mtime = self.now;
+        ino.ctime = self.now;
         self.store_inode(num, ino)
     }
 
@@ -1295,6 +1368,10 @@ impl<D: BlockDevice> Fs<D> {
     fn dir_raw(&mut self, dir: &Inode) -> R<Vec<u8>> {
         if dir.kind != K_DIR {
             return Err(FsError::NotDir);
+        }
+        // a directory has no holes, so it cannot be larger than the data area: refuse before allocating its size
+        if dir.size > (self.sb.total_blocks - self.sb.data_start) * BS as u64 {
+            return Err(FsError::Corrupt("directory larger than the disk".into()));
         }
         self.read_data(dir, 0, dir.size as usize)
     }
@@ -1428,9 +1505,12 @@ impl<D: BlockDevice> Fs<D> {
         {
             return Err(FsError::FileTooBig); // checked up front: no partial write
         }
+        let chunk = CHUNK_BLOCKS.min(self.sb.journal_blocks as u64 - 2 - TX_OVERHEAD) as usize;
         let mut pos = 0;
         while pos < data.len() {
-            let n = CHUNK_BYTES.min(data.len() - pos);
+            // end each piece on a block edge, so it never touches more than `chunk` data blocks
+            let into = ((off + pos as u64) % BS as u64) as usize;
+            let n = (chunk * BS - into).min(data.len() - pos);
             let (abs, piece) = (off + pos as u64, &data[pos..pos + n]);
             self.tx(|fs| {
                 let ino = fs.resolve(path)?;
@@ -1473,6 +1553,7 @@ impl<D: BlockDevice> Fs<D> {
             }
             i.size = size;
             i.mtime = fs.now;
+            i.ctime = fs.now;
             fs.store_inode(ino, &i)
         })
     }
@@ -1529,7 +1610,12 @@ impl<D: BlockDevice> Fs<D> {
             let is_dir = fs.load_inode(sino)?.kind == K_DIR;
             if is_dir {
                 let mut cur = dp; // refuse to move a directory into its own subtree
+                let mut steps = 0;
                 loop {
+                    steps += 1;
+                    if steps > fs.sb.inode_count {
+                        return Err(FsError::Corrupt("'..' entries form a cycle".into()));
+                    }
                     if cur == sino {
                         return Err(FsError::Invalid("cannot move a directory into itself"));
                     }
@@ -1618,6 +1704,9 @@ impl<D: BlockDevice> Fs<D> {
             },
         );
         let mut stack = vec!["/".to_string()];
+        let mut seen = HashSet::from([ROOT]);
+        // a snapshot reads files whole, so it refuses a size that only a sparse or damaged inode can have
+        let largest = self.sb.total_blocks * BS as u64;
         while let Some(d) = stack.pop() {
             for (name, _) in self.readdir(&d)? {
                 let p = if d == "/" {
@@ -1627,6 +1716,9 @@ impl<D: BlockDevice> Fs<D> {
                 };
                 let st = self.stat(&p)?;
                 if st.kind == Kind::Dir {
+                    if !seen.insert(st.ino) {
+                        return Err(FsError::Corrupt("a directory is reachable twice".into()));
+                    }
                     out.insert(
                         p.clone(),
                         Node {
@@ -1637,6 +1729,9 @@ impl<D: BlockDevice> Fs<D> {
                     );
                     stack.push(p);
                 } else {
+                    if st.size > largest {
+                        return Err(FsError::FileTooBig);
+                    }
                     let data = self.read(&p, 0, st.size as usize)?;
                     out.insert(
                         p,
@@ -1655,15 +1750,19 @@ impl<D: BlockDevice> Fs<D> {
     // ---------------------------------------------------------------------------------------------------------------------
     // 4b. FSCK
     // ---------------------------------------------------------------------------------------------------------------------
+    /// Claims the inode's blocks. `false`: its block tree could not be read.
     fn fsck_blocks(
         &mut self,
         ino: u32,
         i: &Inode,
         owner: &mut HashMap<u32, u32>,
         problems: &mut Vec<String>,
-    ) {
+    ) -> bool {
         match self.file_blocks(i) {
-            Err(e) => problems.push(format!("inode {ino}: bad block tree ({e})")),
+            Err(e) => {
+                problems.push(format!("inode {ino}: bad block tree ({e})"));
+                return false;
+            }
             Ok(bs) => {
                 for b in bs {
                     if let Some(prev) = owner.insert(b, ino) {
@@ -1674,6 +1773,7 @@ impl<D: BlockDevice> Fs<D> {
                 }
             }
         }
+        true
     }
     fn fsck(&mut self, repair: bool) -> R<FsckReport> {
         let sb = self.sb;
@@ -1684,43 +1784,49 @@ impl<D: BlockDevice> Fs<D> {
         let mut reached: HashSet<u32> = HashSet::new();
         let mut seen_dirs: HashSet<u32> = HashSet::from([ROOT]);
         let mut queue = vec![(ROOT, ROOT)];
+        // set when some part of the tree could not be followed: what looks unreachable may then be in use
+        let mut incomplete = false;
         while let Some((d, parent)) = queue.pop() {
             let inode = match self.load_inode(d) {
                 Ok(i) if i.kind == K_DIR => i,
                 _ => {
                     problems.push(format!("directory inode {d} is damaged or not a directory"));
+                    incomplete = true;
                     continue;
                 }
             };
             reached.insert(d);
-            self.fsck_blocks(d, &inode, &mut owner, &mut problems);
+            incomplete |= !self.fsck_blocks(d, &inode, &mut owner, &mut problems);
             let entries = match self.dir_raw(&inode).and_then(|r| parse_dir(&r)) {
                 Ok(e) => e,
                 Err(e) => {
                     problems.push(format!("directory {d}: {e}"));
+                    incomplete = true;
                     continue;
                 }
             };
             let (mut dot, mut dotdot) = (false, false);
+            let mut names = HashSet::new();
             for (_, e, name) in entries {
+                if !names.insert(name.clone()) {
+                    problems.push(format!("directory {d}: the name '{name}' is there twice"));
+                }
                 if e == 0 || e > sb.inode_count {
                     problems.push(format!(
                         "directory {d}: entry '{name}' has invalid inode {e}"
                     ));
+                    incomplete = true;
                     continue;
                 }
-                if !self.bit_get(sb.ibm_start, e as u64)? {
-                    problems.push(format!(
-                        "directory {d}: entry '{name}' points to unallocated inode {e}"
-                    ));
-                    continue;
-                }
+                // The inode itself says whether it is in use. A lost bitmap bit must not hide it: it is followed like any
+                // other, and the bit is set again below.
                 let child = match self.load_inode(e) {
                     Ok(c) if c.kind != K_FREE => c,
                     _ => {
                         problems.push(format!(
                             "directory {d}: entry '{name}' points to a free or damaged inode {e}"
                         ));
+                        incomplete = true;
                         continue;
                     }
                 };
@@ -1744,7 +1850,7 @@ impl<D: BlockDevice> Fs<D> {
                         problems.push(format!("directory {e} is linked more than once (cycle or hard-linked directory)"));
                     }
                 } else if reached.insert(e) {
-                    self.fsck_blocks(e, &child, &mut owner, &mut problems);
+                    incomplete |= !self.fsck_blocks(e, &child, &mut owner, &mut problems);
                 }
             }
             if !dot || !dotdot {
@@ -1800,7 +1906,12 @@ impl<D: BlockDevice> Fs<D> {
         }
         let mut fixed = 0;
         if repair {
-            for chunk in fixes.chunks(16) {
+            if incomplete {
+                // only fixes that cannot lose anything: marking something as used
+                fixes.retain(|f| matches!(f, Fix::SetInodeBit(_) | Fix::SetBlockBit(_)));
+            }
+            // a fix dirties at most two blocks (freeing an inode: its table block and the inode bitmap)
+            for chunk in fixes.chunks(((sb.journal_blocks as usize - 2) / 2).min(16)) {
                 self.tx(|fs| {
                     for f in chunk {
                         match *f {
@@ -2272,19 +2383,30 @@ fn crash_test(seqs: u64) -> CrashStats {
                             let _ = Fs::<FaultDevice>::replay_journal(&mut p);
                             p.writes
                         };
-                        for rk in 0..probe_writes {
+                        // up to `probe_writes` itself: then the last sync is cut, with everything before it in doubt
+                        for rk in 0..=probe_writes {
                             d.arm(Some(rk));
                             let _ = Fs::<FaultDevice>::replay_journal(&mut d);
-                            let img2 = d.post_crash_image(CrashMode::Prefix);
-                            let mut f4 = Fs::mount(FaultDevice::from_image(img2))
-                                .expect("mount after crash during replay");
-                            let st = f4.dump().unwrap();
-                            assert!(
-                                st == pre || st == post,
-                                "crash during replay broke atomicity: {op:?} k={k} rk={rk}"
-                            );
-                            assert!(f4.fsck(false).unwrap().is_clean());
-                            cs.replay_crashes += 1;
+                            // in order, and also reordered, dropped and torn: only the latter can lose a block that
+                            // was written before one that survived
+                            let cuts = [CrashMode::Prefix]
+                                .into_iter()
+                                .chain((0..4).map(|i| CrashMode::Chaos(s * 977 + rk * 31 + i)));
+                            for cut in cuts {
+                                let img2 = d.post_crash_image(cut);
+                                let mut f4 = Fs::mount(FaultDevice::from_image(img2))
+                                    .expect("mount after crash during replay");
+                                let st = f4.dump().unwrap();
+                                assert!(
+                                    st == pre || st == post,
+                                    "crash during replay broke atomicity: {op:?} k={k} rk={rk} {cut:?}"
+                                );
+                                assert!(
+                                    f4.fsck(false).unwrap().is_clean(),
+                                    "fsck after crash during replay: {op:?} k={k} rk={rk} {cut:?}"
+                                );
+                                cs.replay_crashes += 1;
+                            }
                             d = FaultDevice::from_image(img.clone());
                         }
                     }
@@ -2429,7 +2551,7 @@ fn feature_tests() {
     // timestamps come from the injected clock and move forward
     let (m1, c1) = (fs.stat("/t").unwrap().mtime, fs.stat("/t").unwrap().ctime);
     fs.write("/t", 0, b"z").unwrap();
-    assert!(fs.stat("/t").unwrap().mtime > m1 && fs.stat("/t").unwrap().ctime == c1);
+    assert!(fs.stat("/t").unwrap().mtime > m1 && fs.stat("/t").unwrap().ctime > c1);
     // overwrite in the middle of a block (read-modify-write) keeps neighbours
     fs.write("/t", 4090, &[7u8; 12]).unwrap();
     let t = fs.read("/t", 4088, 16).unwrap();
@@ -2650,6 +2772,284 @@ fn garbage_test() {
     );
 }
 
+// ----- regressions: each of these failed before its fix -----
+/// A disk whose n-th write from now fails once; every other call works.
+struct FlakyDisk {
+    disk: MemDisk,
+    fail_in: Option<u64>,
+}
+impl BlockDevice for FlakyDisk {
+    fn num_blocks(&self) -> u64 {
+        self.disk.num_blocks()
+    }
+    fn read_block(&mut self, n: u64, buf: &mut Block) -> R<()> {
+        self.disk.read_block(n, buf)
+    }
+    fn write_block(&mut self, n: u64, buf: &Block) -> R<()> {
+        match self.fail_in {
+            Some(0) => {
+                self.fail_in = None;
+                Err(FsError::Io("injected".into()))
+            }
+            other => {
+                self.fail_in = other.map(|k| k - 1);
+                self.disk.write_block(n, buf)
+            }
+        }
+    }
+    fn sync(&mut self) -> R<()> {
+        self.disk.sync()
+    }
+}
+
+fn two_files() -> Fs<MemDisk> {
+    let mut fs = new_mem_fs(512, 64);
+    fs.mkdir("/d").unwrap();
+    fs.create("/d/f").unwrap();
+    fs.write("/d/f", 0, &[7; 5000]).unwrap();
+    fs
+}
+
+/// Blocks the data bitmap marks as used.
+fn used_blocks<D: BlockDevice>(fs: &mut Fs<D>) -> u64 {
+    fs.sb.total_blocks - fs.free_blocks().unwrap()
+}
+
+fn regression_tests() {
+    // 1. an inode whose bitmap bit was lost is still in use: repair must set the bit, not free the file's blocks
+    let mut fs = two_files();
+    let used = used_blocks(&mut fs);
+    let f = fs.resolve("/d/f").unwrap();
+    let ibm = fs.sb.ibm_start;
+    fs.tx(|fs| fs.bit_put(ibm, f as u64, false)).unwrap();
+    fs.fsck(true).unwrap();
+    assert!(fs.fsck(false).unwrap().is_clean(), "lost inode bit");
+    assert_eq!(fs.read("/d/f", 0, 5000).unwrap(), vec![7; 5000]);
+    assert_eq!(used_blocks(&mut fs), used);
+
+    // 2. a directory that cannot be read hides its children: repair must not free what it could not see
+    let mut fs = two_files();
+    let used = used_blocks(&mut fs);
+    let (d, f) = (fs.resolve("/d").unwrap(), fs.resolve("/d/f").unwrap());
+    let dir_block = fs.load_inode(d).unwrap().direct[0] as u64;
+    fs.tx(|fs| {
+        let mut b = fs.rd(dir_block)?;
+        b[4] = 200; // the name length of the first entry
+        fs.wr(dir_block, &b);
+        Ok(())
+    })
+    .unwrap();
+    let rep = fs.fsck(true).unwrap();
+    assert!(!rep.is_clean());
+    assert_eq!(
+        used_blocks(&mut fs),
+        used,
+        "repair freed blocks it could not account for"
+    );
+    assert!(
+        fs.bit_get(fs.sb.ibm_start, f as u64).unwrap(),
+        "repair freed a hidden file"
+    );
+    assert_eq!(fs.load_inode(f).unwrap().size, 5000);
+
+    // 3. a directory cycle: dump and rename answer with an error instead of looping
+    let mut fs = new_mem_fs(512, 64);
+    fs.mkdir("/a").unwrap();
+    fs.mkdir("/a/b").unwrap();
+    fs.mkdir("/x").unwrap();
+    let (a, b) = (fs.resolve("/a").unwrap(), fs.resolve("/a/b").unwrap());
+    fs.tx(|fs| fs.add_entry(b, "again", a)).unwrap();
+    assert!(
+        matches!(fs.dump(), Err(FsError::Corrupt(_))),
+        "dump of a cycle"
+    );
+    fs.tx(|fs| fs.set_entry(b, "..", b)).unwrap();
+    assert!(
+        matches!(fs.rename("/x", "/a/b/x"), Err(FsError::Corrupt(_))),
+        "'..' cycle"
+    );
+
+    // 4. a directory claiming gigabytes is refused before anything that size is allocated
+    let mut fs = two_files();
+    let d = fs.resolve("/d").unwrap();
+    let mut i = fs.load_inode(d).unwrap();
+    i.size = 1 << 31;
+    fs.tx(|fs| fs.store_inode(d, &i)).unwrap();
+    assert!(
+        matches!(fs.readdir("/d"), Err(FsError::Corrupt(_))),
+        "huge directory"
+    );
+
+    // 5. every journal that format accepts can format and take a large write across the indirect boundaries
+    for journal_blocks in 4..=20 {
+        let g = Geometry {
+            total_blocks: 1600,
+            inode_count: 32,
+            journal_blocks,
+        };
+        match Fs::format(MemDisk::new(1600), &g) {
+            Err(FsError::BadGeometry(_)) => assert!(journal_blocks < MIN_JOURNAL),
+            Err(e) => panic!("journal of {journal_blocks}: {e}"),
+            Ok(mut fs) => {
+                fs.create("/big").unwrap();
+                for off in [10 * BS as u64 + 1, (ND as u64 + PPB - 3) * BS as u64 + 7] {
+                    fs.write("/big", off, &vec![5; 40 * BS])
+                        .unwrap_or_else(|e| panic!("journal of {journal_blocks}: {e}"));
+                }
+            }
+        }
+    }
+
+    // 6. after a commit that failed on the device, nothing more is served until the next mount
+    let g = Geometry {
+        total_blocks: 256,
+        inode_count: 32,
+        journal_blocks: 32,
+    };
+    for k in 0..14 {
+        let dev = FlakyDisk {
+            disk: MemDisk::new(256),
+            fail_in: None,
+        };
+        let mut fs = Fs::format(dev, &g).unwrap();
+        fs.cache.dev.fail_in = Some(k);
+        if fs.create("/a").is_ok() {
+            continue;
+        }
+        assert_eq!(fs.create("/b"), Err(FsError::Poisoned), "write {k}");
+        assert_eq!(fs.readdir("/"), Err(FsError::Poisoned), "write {k}");
+        let mut fs = Fs::mount(fs.into_device()).unwrap();
+        assert!(fs.fsck(false).unwrap().is_clean(), "write {k}");
+    }
+
+    // 7. a journal header carrying the largest sequence number must not overflow the next commit
+    let mut dev = two_files().into_device();
+    let mut h = zero_block();
+    p32(&mut h[..], 0, JMAGIC);
+    p64(&mut h[..], 8, u64::MAX);
+    dev.write_block(1, &h).unwrap();
+    Fs::mount(dev).unwrap().create("/after").unwrap();
+
+    // 8. a power cut during a re-format leaves either an error at mount or an empty, clean filesystem
+    let g = Geometry {
+        total_blocks: 128,
+        inode_count: 32,
+        journal_blocks: 16,
+    };
+    let old = {
+        let mut fs = Fs::format(FaultDevice::new(128), &g).unwrap();
+        fs.mkdir("/old").unwrap();
+        fs.create("/old/f").unwrap();
+        fs.cache.dev.snapshot()
+    };
+    for k in 0..60 {
+        for seed in 0..40 {
+            let mut dev = FaultDevice::from_image(old.clone());
+            dev.arm(Some(k));
+            // format takes the device by value, so lend it through a handle that keeps it
+            let result = Fs::format(&mut dev, &g).map(|_| ());
+            if result.is_ok() {
+                continue;
+            }
+            let img = dev.post_crash_image(CrashMode::Chaos(seed));
+            if img == old {
+                continue; // nothing reached the disk
+            }
+            if let Ok(mut fs) = Fs::mount(MemDisk::from_image(img)) {
+                let tree = fs.dump().unwrap();
+                let rep = fs.fsck(false).unwrap();
+                assert!(
+                    (tree.len() == 1 || tree.len() == 3) && rep.is_clean(),
+                    "re-format cut after {k} writes (seed {seed}): {:?}",
+                    rep.problems
+                );
+            }
+        }
+    }
+
+    // 9. two entries with one name are reported
+    let mut fs = two_files();
+    let d = fs.resolve("/d").unwrap();
+    let f = fs.resolve("/d/f").unwrap();
+    fs.tx(|fs| {
+        fs.adjust_nlink(f, 1)?;
+        fs.add_entry(d, "f", f)
+    })
+    .unwrap();
+    assert!(
+        fs.fsck(false)
+            .unwrap()
+            .problems
+            .iter()
+            .any(|p| p.contains("twice"))
+    );
+
+    // 10. writing a file's data changes its change time too
+    let mut fs = two_files();
+    let before = fs.stat("/d/f").unwrap().ctime;
+    fs.write("/d/f", 0, b"x").unwrap();
+    assert!(fs.stat("/d/f").unwrap().ctime > before);
+
+    // 11. pointer blocks that name each other cannot make a file own more blocks than the disk has
+    let mut fs = two_files();
+    let f = fs.resolve("/d/f").unwrap();
+    let mut i = fs.load_inode(f).unwrap();
+    let (x, y) = (500u32, 501u32);
+    i.dind = x;
+    fs.tx(|fs| {
+        for (block, target) in [(x, y), (y, 502)] {
+            let mut b = zero_block();
+            for at in 0..PPB as usize {
+                p32(&mut b[..], at * 4, target);
+            }
+            fs.wr(block as u64, &b);
+        }
+        fs.store_inode(f, &i)
+    })
+    .unwrap();
+    assert!(
+        matches!(fs.stat("/d/f"), Err(FsError::Corrupt(_))),
+        "a tree bigger than the disk"
+    );
+
+    // 14. repair fits a small journal even when each fix dirties two blocks (freeing an inode: its table block and the bitmap)
+    let g = Geometry {
+        total_blocks: 600,
+        inode_count: 520,
+        journal_blocks: MIN_JOURNAL,
+    };
+    let mut fs = Fs::format(MemDisk::new(600), &g).unwrap();
+    for i in 0..500 {
+        fs.create(&format!("/{i}")).unwrap();
+    }
+    // sixteen orphans in sixteen different inode table blocks
+    for i in (0..500).step_by(32) {
+        fs.tx(|fs| fs.remove_entry(ROOT, &i.to_string())).unwrap();
+    }
+    assert_eq!(
+        fs.fsck(true).map(|r| r.fixed),
+        Ok(16),
+        "repair of many orphans"
+    );
+    assert!(fs.fsck(false).unwrap().is_clean());
+
+    // 13. a cut can fall on a sync, while every write before it is still in doubt
+    let mut dev = FaultDevice::new(4);
+    dev.arm(Some(1));
+    dev.write_block(1, &[1; BS]).unwrap();
+    assert_eq!(
+        dev.sync(),
+        Err(FsError::Crashed),
+        "the sync after the last allowed write"
+    );
+    assert_eq!(dev.pending.len(), 1);
+
+    // 12. a stored name with a slash is damage, and a block number near the end of u64 is only out of range
+    assert!(parse_dir(&encode_entry(3, "a/b")).is_err());
+    let mut buf = zero_block();
+    assert!(MemDisk::new(2).read_block((1 << 52) - 1, &mut buf).is_err());
+}
+
 // ----- test: real file persistence -----
 struct TempFile(PathBuf);
 impl Drop for TempFile {
@@ -2718,6 +3118,10 @@ fn main() {
     );
     assert!(cs.recovered_pre > 0 && cs.recovered_post > 0 && cs.replays > 0);
     persistence_test();
+    regression_tests();
+    println!(
+        "  regressions: repair keeps what it cannot see, cycles and huge sizes are errors, failed commits stop the mount: ok"
+    );
     enospc_test();
     fsck_test();
     garbage_test();

@@ -1,0 +1,31 @@
+slug = "changes-held-back"
+title = "Capstone 2: changes that wait"
+mode = "write"
+level = "medium"
+stage = "pieces"
+order = 2
+status = "ready"
+tags = ["buffer cache", "write-back", "dirty blocks", "eviction", "block device"]
+teaches = [
+  "Hold changes away from the disk until you decide: then giving up is just forgetting them.",
+  "A changed block cannot be evicted, because the disk does not have it yet.",
+  "Mark a block written only after the write succeeds.",
+]
+follow_up = "1) A large transaction makes the cache grow without limit. Where would you set the limit, and what does the caller see? 2) After a failed flush, the disk has some of the blocks. What would it take to make the whole flush all-or-nothing? 3) Why might a failed `sync` mean that blocks you marked as written are lost?"
+
+[[hints]]
+kind = "approach"
+text = "One map from block number to (content, changed, when last used). A counter that grows at every use is a good enough clock. Write the forgetting rule once and call it from three places."
+
+[[hints]]
+kind = "rust"
+text = "`HashMap::retain` drops the entries a closure refuses. `iter().filter(..).min_by_key(..)` finds the oldest. To borrow the device while holding an entry, collect the block numbers first and use `get_mut` for each."
+
+[[hints]]
+kind = "edge"
+text = "A read that fails must not leave a zero block behind. In `flush`, change the mark after the write, not before."
+
+[solution]
+explanation = "A write only changes the map, so the disk is untouched until somebody flushes. Eviction looks only at clean entries, because forgetting one of those loses nothing."
+time = "read and write O(1) while the cache fits; an eviction looks at every entry"
+space = "O(capacity + changed blocks)"

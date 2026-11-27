@@ -1,0 +1,31 @@
+slug = "a-file-of-numbered-pages"
+title = "A file of numbered pages"
+mode = "write"
+level = "medium"
+stage = "space"
+order = 1
+status = "ready"
+tags = ["std::fs", "OpenOptions", "FileExt", "positional I/O", "set_len"]
+teaches = [
+  "Read and write at a given place without moving a shared file position.",
+  "Choose the open options that say what you mean: 'make a new file' is not 'make or empty one'.",
+  "Check every number before it reaches the file: writing past the end silently makes a file longer.",
+]
+follow_up = "1) `sync` covers the data. What else must be durable before a brand new file can be counted on to exist? 2) Your program dies in the middle of `write`. What may the page hold? 3) When would you map the file into memory instead, and what new failure would that bring?"
+
+[[hints]]
+kind = "approach"
+text = "Put the checks that `read` and `write` share in one helper that returns the byte position. Do all size arithmetic before touching the file system."
+
+[[hints]]
+kind = "rust"
+text = "`std::os::unix::fs::FileExt` has `read_exact_at` and `write_all_at`, which take `&self`. `OpenOptions` has `create_new`. `File::set_len` grows a file with zeros, and `sync_data` flushes it."
+
+[[hints]]
+kind = "edge"
+text = "`checked_mul` for the length, then compare with `i64::MAX`. A `create` that fails because of its size must not leave an empty file behind."
+
+[solution]
+explanation = "Every page has a computed position, so the positional calls need no shared cursor. The checks come first, because the operating system would accept a write far past the end."
+time = "O(page size) per call"
+space = "O(1) beyond the caller's buffer"
