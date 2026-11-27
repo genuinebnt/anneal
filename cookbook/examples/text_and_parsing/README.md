@@ -4,7 +4,7 @@ Lexers, parser combinators, recursive descent, Pratt parsing, JSON/CSV, bytecode
 
 Run any recipe from the `cookbook/` directory: `cargo run --release --example <name>` (the name is the file name without `.rs`). Each file starts with a header: what it shows, `LEVEL`, `COMMON USES` and `Read:` links.
 
-10 examples.
+14 examples.
 
 | Example | What it shows | Level | Common uses | Crates |
 |---|---|---|---|---|
@@ -18,3 +18,7 @@ Run any recipe from the `cookbook/` directory: `cargo run --release --example <n
 | [`bytecode_vm`](bytecode_vm.rs) | a mini compiler pipeline: lex -> Pratt parse -> AST -> optimise -> bytecode -> stack VM | advanced | scripting/DSL engines, query evaluators, config languages, WASM-like VMs; differential testing against an oracle. | std only |
 | [`binary_format_parsing`](binary_format_parsing.rs) | safe binary format parsing: a bounds-checked Reader, TLV, a PNG-like chunk container, bit reading, zero-copy | advanced | image/audio/video container parsers, protobuf-like wire formats, network packet dissectors, database page and | std only |
 | [`expression_parsing_three_ways`](expression_parsing_three_ways.rs) | one expression language, four parsers (recursive descent, precedence climbing, Pratt, shunting-yard) that must agree | advanced | query-language WHERE clauses, spreadsheet formulas, feature-flag/rule expressions, calculators, template engines, | std only |
+| [`reading_html_safely`](reading_html_safely.rs) | Reading HTML safely: pull links and text out of a page you don't trust | intermediate | crawlers, link previews in chat and mail, feed readers, site audits. | std only |
+| [`javascript_syntax_tree`](javascript_syntax_tree.rs) | Reading JavaScript as a syntax tree: find the addresses a script fetches, without running it | advanced | linters, bundlers, code search, finding the API calls in a script. | std only |
+| [`source_maps`](source_maps.rs) | Source maps: from a place in generated code back to the file a person wrote | advanced | minified JavaScript and CSS, TypeScript and Sass output, crash report services. | serde, serde-json |
+| [`syntax_tree_diff`](syntax_tree_diff.rs) | Comparing syntax trees: show what changed in code, not which lines moved | advanced | review tools, ignoring formatting-only commits, finding moved functions, checking generated code. | std only |

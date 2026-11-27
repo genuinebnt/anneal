@@ -1,0 +1,38 @@
+title = "Source maps"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Language tooling and production"
+chapter_order = 7
+order = 647
+kind = "recipe"
+lede = "From a place in generated code back to the file a person wrote."
+level = "advanced"
+code = ["examples/text_and_parsing/source_maps.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>error reports</li><li>debuggers</li><li>build tools</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>minified JavaScript and CSS</li><li>TypeScript and Sass output</li><li>crash report services</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Reads and writes version 3 source maps: the base64 VLQ numbers, the `mappings` string and the lookup. A map from a stranger is hostile input, so every number, index and size is checked. It is stricter than the standard in places (it refuses where a browser may carry on), does not read index maps (`sections`), and never opens or downloads anything a map names.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://tc39.es/ecma426/>
+"""
+
+[[sources]]
+title = "tc39.es/ecma426"
+url = "https://tc39.es/ecma426/"

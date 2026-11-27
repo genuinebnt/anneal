@@ -1,0 +1,263 @@
+title = "Source maps"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Language tooling and production"
+chapter_order = 7
+order = 647
+kind = "lesson"
+level = "advanced"
+code = ["examples/text_and_parsing/source_maps.rs"]
+code_spoils = ["/p/f5-varint-codec"]
+lede = "How a place in generated code leads back to the line a person wrote."
+summary = """
+A source map is a JSON file that links positions in generated code to positions in original files. Tools use it to show a readable place for an error in built code. Its `mappings` string stores small differences as base64 VLQ numbers. A map is only as honest as whoever made it, so check every number and index, and never open what it names without checking.
+"""
+
+[[sections]]
+heading = "What problem does a source map solve?"
+body = """
+A build tool rewrites your code. It may join files, shorten names and remove line breaks. When the result fails, the report points into that output: line 1, column 52, of a file nobody wrote.
+
+A **source map** records where pieces of the output came from. The example has a toy build step that puts each file on one line. It turns these two files into two lines and one map.
+
+```text title="Output of the toy build"
+function total(items) { const label = "🛒"; return sum(items); }
+const cart = load(); show(total(cart));
+```
+
+Ask the map about `sum(` on the first output line, and it answers: `cart.js`, line 3.
+"""
+
+[[sections]]
+heading = "What is inside the file?"
+body = """
+Here is a map, in the format that [the ECMA-426 standard](https://tc39.es/ecma426/) calls version 3. This is the toy build's map, with its fields reordered.
+
+```json
+{
+  "version": 3,
+  "sources": ["cart.js", "main.js"],
+  "names": [],
+  "mappings": "AACA,wBACI,uCACJ;ACHA,qBAEE"
+}
+```
+
+`sources` lists the original files, and `names` lists original names that the output changed. An optional `sourcesContent` holds the files' text, and an optional `sourceRoot` goes in front of each source.
+
+All the positions are in `mappings`. A `;` ends a line of **output**. A `,` separates **segments**, and each segment says something about one output column. It holds one, four or five numbers:
+
+| Numbers | Meaning |
+|---|---|
+| 1 | From this output column on, there is no source |
+| 4 | Output column, source file, original line, original column |
+| 5 | The same, and an entry in `names` |
+
+Every number is a **difference** from the last number of its kind. The output column starts from zero again on each output line. The other four carry on through the whole string.
+
+Lines and columns in the map count from zero. Error reports usually count from one, so convert in both directions.
+"""
+
+[[sections]]
+heading = "How are the numbers written?"
+body = """
+Each number is a **VLQ**, a variable-length quantity: small values take fewer characters, all from the base64 alphabet. [Section 6 of the standard](https://tc39.es/ecma426/) defines it, with a limit of 32 bits.
+
+:::deeper Decoding one number (gives away much of "Varints, zigzag and delta-encoded lists")
+Every character is one of 64 base64 digits, so it carries six bits. One bit says that more digits follow. The other five carry the value, smallest part first. In the joined value, the lowest bit is the sign.
+
+```stepper
+caption = "Reading the two characters iB"
+[[frame]]
+title = "The first character"
+text = "`i` is digit 34, which is 32 + 2. The 32 says that more follows, and 2 is the lowest five bits."
+lanes = [ { name = "Text left", items = ["B"] }, { name = "Value so far", items = ["2"] } ]
+[[frame]]
+title = "The last character"
+text = "`B` is digit 1, below 32, so the number ends here. It counts for 32 times as much: 2 + 1 × 32 = 34."
+lanes = [ { name = "Text left", items = [] }, { name = "Value so far", items = ["34"] } ]
+[[frame]]
+title = "Split off the sign"
+text = "34 is even, so the sign is positive. Half of 34 is 17."
+lanes = [ { name = "Text left", items = [] }, { name = "Number", items = ["17"] } ]
+```
+
+So `A` is 0, `C` is 1 and `D` is -1. One odd case: `B`, a "minus zero", stands for the smallest 32-bit number.
+:::
+"""
+
+[[sections]]
+heading = "What can a hostile map do?"
+body = """
+You may load a map that someone else made, for example in a service that collects crash reports. A broken or hostile one can try to crash your program, exhaust its memory or give wrong places. Treat it like any input from a stranger:
+
+- Check every number before you use it, including every step of a running total.
+- Check every index against its list.
+- Limit the input size, the number of entries, and any text that your program builds from the map.
+
+The example makes these checks while it decodes and refuses a map that fails one. It is stricter than the standard, which lets a tool report some errors and carry on.
+
+:::deeper The attacks one by one (gives away much of "Varints, zigzag and delta-encoded lists": truncation, overflow and lying values)
+| The map holds | Without a check | The example |
+|---|---|---|
+| A long run of continuation digits | A shift that overflows | Stops after seven digits |
+| A value above 32 bits | Lost bits and a wrong number | Refuses it |
+| A number cut off at the end | A half-read value | Refuses it |
+| A difference that goes below zero | A huge position after wrapping | Adds with a checked operation |
+| A source or name index too large | A panic at lookup | Checks it while decoding |
+| Millions of `;` or `,` | Far more memory than the text | Counts lines and segments |
+| A long `sourceRoot` and many sources | Gigabytes of joined text | Bounds the product first |
+
+It also refuses zero-padded numbers longer than seven digits, which the standard's grammar permits.
+
+```compare
+takeaway = "Bound the number of digits before you shift, collect into a wider type, then check that the result fits. A debug build alone would not protect a release build."
+[wrong]
+title = "Shift as long as digits come"
+code = '''
+const DIGITS: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn unsigned(text: &str) -> u32 {
+    let (mut value, mut shift) = (0u32, 0);
+    for c in text.chars() {
+        let digit = DIGITS.find(c).unwrap() as u32;
+        value |= (digit & 31) << shift;
+        shift += 5;
+        if digit < 32 {
+            break;
+        }
+    }
+    value
+}
+
+fn main() {
+    println!("{}", unsigned(std::hint::black_box("ggggggggC")));
+}
+'''
+result = "A debug build panics with `attempt to shift left with overflow`. A release build prints `512`, because the shift of 40 was cut down to 8."
+[fixed]
+title = "At most seven digits, checked"
+code = '''
+const DIGITS: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn unsigned(text: &str) -> Option<u32> {
+    let mut value = 0u64;
+    for (position, c) in text.chars().take(7).enumerate() {
+        let digit = DIGITS.find(c)? as u64;
+        value |= (digit & 31) << (5 * position);
+        if digit < 32 {
+            return u32::try_from(value).ok();
+        }
+    }
+    None
+}
+
+fn main() {
+    println!("{:?}", unsigned("ggggggggC"));
+}
+'''
+result = "It prints `None`."
+```
+:::
+"""
+
+[[sections]]
+heading = "How do you look up a position?"
+body = """
+Among the segments of the asked output line, take the last one that starts at or before the asked column. A binary search finds it. Differences may be negative, so sort first.
+
+There is no answer if no segment starts early enough, or if the one found has only one number. A segment marks a start and no end. In a long stretch, a lookup gives only where the stretch **starts**.
+
+**Columns count UTF-16 code units** in JavaScript and CSS maps, not bytes or Rust's `char`. The cart emoji takes two units, one `char` and four bytes. Convert a column before you slice a Rust string with it. The example's `byte_of_column` returns nothing for a column inside a character.
+"""
+
+[[sections]]
+heading = "Can you trust the names in a map?"
+body = """
+No. `sources` is text that the map's author chose. It may be `../../etc/passwd`, or an address inside your own network. So may the `//# sourceMappingURL=` comment that says where the map is. A server that opens such names may read private files or make requests for a stranger. Show them as labels.
+
+A well-formed map may still be wrong or stale, and then it gives confident, false answers. Prefer maps from your own build, matched to the exact build by an ID you control. A map with `sourcesContent` publishes your source, so decide who may download it.
+"""
+
+[[sections]]
+heading = "How does the code do it?"
+body = """
+The example reads maps, writes them, and builds a toy bundle that records positions as it goes. Recording while you generate is far easier than working out positions afterwards.
+
+:::deeper The code, step by step (gives away much of "Varints, zigzag and delta-encoded lists": a similar variable-length number)
+```walkthrough
+file = "examples/text_and_parsing/source_maps.rs"
+[[step]]
+title = "Read one number"
+lines = "53-73"
+text = "The loop runs at most seven times and collects into 64 bits. Only the finished value is narrowed to 32."
+[[step]]
+title = "Add a difference"
+lines = "96-100"
+text = "Each position is a running total. `checked_add_signed` fails below zero and above the largest `u32`."
+[[step]]
+title = "Walk lines and segments"
+lines = "102-131"
+text = "Only the output column restarts on each line. Entries are counted as they arrive, and a segment must have an allowed size."
+[[step]]
+title = "Check the indexes"
+lines = "132-163"
+text = "A source or name index must point into its list. The segments are then sorted for the search."
+[[step]]
+title = "Parse the JSON"
+lines = "229-257"
+text = "The size is checked first. A leading line starting with `)]}'` is skipped, as some servers add it. Index maps are refused."
+[[step]]
+title = "Look up"
+lines = "259-271"
+text = "`partition_point` counts the segments at or before the column, so the one wanted is just before that count."
+```
+:::
+"""
+
+[[sections]]
+heading = "What does the example not do?"
+body = """
+It doesn't read **index maps**, which hold several maps with offsets. It also ignores `ignoreList` and doesn't combine the maps of two build steps. In a real program, use a maintained crate such as [sourcemap](https://docs.rs/sourcemap/latest/sourcemap/) or [oxc_sourcemap](https://docs.rs/oxc_sourcemap/latest/oxc_sourcemap/). Check which limits it applies before you give it a stranger's file.
+
+Run the example from the `cookbook` folder:
+
+```sh
+cargo run --release --example source_maps
+```
+
+It prints the bundle, its map and one lookup, after comparing its lookups with a plain scan on random tables.
+"""
+
+[[connections]]
+kind = "before"
+title = "Errors that point at the source"
+link = "/cookbook/p/diagnostics-spans"
+why = "How byte positions become lines, columns and a marker under the problem."
+
+[[connections]]
+kind = "practise"
+title = "Varints, zigzag and delta-encoded lists"
+link = "/p/f5-varint-codec"
+level = "similar"
+why = "A binary form of variable-length numbers and stored differences, read from a stranger. Try it before the folds."
+
+[[connections]]
+kind = "returns"
+title = "Reading JavaScript as a syntax tree"
+link = "/cookbook/p/javascript-syntax-tree"
+why = "The generated code that maps most often describe."
+
+[[sources]]
+title = "ECMA-426: Source map format"
+url = "https://tc39.es/ecma426/"
+note = "Section 6 defines the numbers, and section 9 the file and its mappings."
+
+[[sources]]
+title = "sourcemap crate"
+url = "https://docs.rs/sourcemap/latest/sourcemap/"
+note = "Compare its types for tokens and index maps with this page's."
+
+[[sources]]
+title = "oxc_sourcemap crate"
+url = "https://docs.rs/oxc_sourcemap/latest/oxc_sourcemap/"
+note = "A second implementation, from the Oxc project."

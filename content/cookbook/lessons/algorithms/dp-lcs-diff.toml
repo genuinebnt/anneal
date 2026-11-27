@@ -1,0 +1,253 @@
+title = "How a diff finds what changed"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Dynamic programming, greedy and search"
+chapter_order = 5
+order = 204
+kind = "lesson"
+level = "intermediate"
+code = ["examples/algorithms/dp_lcs_diff.rs"]
+code_spoils = ["/p/y8-shortest-edit-script", "/p/lc-longest-common-subsequence", "/p/p2-delete-to-match"]
+lede = "How a program finds which lines were deleted and which were added between two versions of a text."
+summary = """
+A diff turns an old list into a new one with as few deletes and inserts as it can. The lines it keeps form a longest common subsequence. A table finds it in a few lines of code, but its size grows with both lengths multiplied. Myers' algorithm is cheap for similar versions, and a budget stops very different ones from using up your memory.
+"""
+
+[[sections]]
+heading = "Why not compare line 1 with line 1?"
+body = """
+You change a port in a config file and add one line below it:
+
+```text
+  name = web
+- port = 80
++ port = 8080
+  workers = 4
++ timeout = 30
+  log = info
+```
+
+Compare the files by position, and every line after the new one is shifted. Even the untouched `log = info` looks changed.
+
+A **diff** lines the two versions up first. It returns an **edit script**: steps that each keep a line, delete an old one or insert a new one. A replaced line is a delete followed by an insert.
+"""
+
+[[sections]]
+heading = "What makes one diff better than another?"
+body = """
+Deleting every old line and inserting every new one is a correct script, but a useless one. You want as few deletes and inserts as possible, so you keep as many lines as possible.
+
+The kept lines must appear in both versions in the same order, though not necessarily side by side. Such a list is a **common subsequence**, and you want a **longest common subsequence**, or LCS.
+
+In the letters `ABCD` and `BXDA`, the LCS is `BD`. You can't also keep `A`: it comes before them on one side and after them on the other.
+
+Several scripts can be equally short. A diff tool picks one with a **tie rule**.
+
+:::deeper How many changes is that? (gives away a practice answer)
+With `n` old lines and `m` new lines, the smallest number of changes is `n + m - 2 * LCS`, where `LCS` is the length.
+:::
+"""
+
+[[sections]]
+heading = "What counts as a line?"
+body = """
+Decide this before you pick an algorithm. Rust's `str::lines` removes `\\n` and `\\r\\n` from each line. That is handy for reading input, and wrong for a diff.
+
+```compare
+takeaway = "Compare the bytes you claim to compare. You can still hide line endings when you print, as long as a change in them still shows."
+[wrong]
+title = "Split with lines()"
+code = '''
+fn main() {
+    let old = "port = 80\\nlog = info\\n";
+    let new = "port = 80\\r\\nlog = info";
+    println!("{}", old.lines().eq(new.lines()));
+}
+'''
+result = "It prints `true`. A diff built on this reports no changes, although a line ending changed and the final newline is gone."
+[fixed]
+title = "Keep the endings on"
+code = '''
+fn main() {
+    let old = "port = 80\\nlog = info\\n";
+    let new = "port = 80\\r\\nlog = info";
+    println!("{}", old.split_inclusive('\\n').eq(new.split_inclusive('\\n')));
+}
+'''
+result = "It prints `false`. `split_inclusive` leaves each ending on its line, so both changes can be found."
+```
+
+The code on this page keeps the endings. When it prints a line without one, it adds `\\ No newline at end of file`, as Git does.
+"""
+
+[[sections]]
+heading = "How does the table method work?"
+body = """
+The simple method fills a table with answers to smaller questions, then reads the script from it. This is **dynamic programming**. Try to find the smaller question yourself before opening the fold.
+
+:::deeper The table, its rule and the walk back (gives away a diff exercise and the problem "Longest Common Subsequence")
+The smaller question: how long is the LCS of the first `i` old lines and the first `j` new lines? Each answer uses only answers for shorter beginnings. The last cell holds the length for the whole files.
+
+If the two last lines are equal, the cell is one more than the cell diagonally before it. Otherwise it is the larger of two neighbours: the answer without the last old line, or without the last new one.
+
+```walkthrough
+file = "examples/algorithms/dp_lcs_diff.rs"
+[[step]]
+title = "Fill the table"
+lines = "28-40"
+text = "Row 0 and column 0 stay zero, because an empty list shares nothing. Every other cell reads three cells filled before it."
+[[step]]
+title = "Walk back from the far corner"
+lines = "41-57"
+text = "Equal lines are kept. Otherwise, move toward the neighbour that holds the longer LCS."
+[[step]]
+title = "Reverse the steps"
+lines = "58-59"
+text = "The walk produced the last step first. On a tie it took the insert first, so after reversing the delete reads first."
+```
+:::
+
+The cost is one cell for each pair of an old and a new line. Two files of 10,000 lines need about 100 million cells. At 8 bytes each, as in this code, that is about 800 MB.
+"""
+
+[[sections]]
+heading = "How does Myers' algorithm save work?"
+body = """
+Most edits are small. **Myers' algorithm** does little work when the number of changes, often called `D`, is small.
+
+It works in rounds. Round 0 asks how far you can get with no changes. Round 1 allows one delete or insert, round 2 allows two, and so on. After each change, it moves over equal lines at no cost.
+
+The first round that reaches the end of both files gives a shortest script. Here the old lines are `a b c` and the new lines are `a c d`.
+
+```stepper
+caption = "Turning a b c into a c d"
+[[frame]]
+title = "Round 0: no changes"
+text = "The first lines are equal, so both sides move past `a`. The next lines, `b` and `c`, differ."
+lanes = [ { name = "Old left", items = ["b", "c"] }, { name = "New left", items = ["c", "d"] } ]
+[[frame]]
+title = "Round 1: try a delete"
+text = "Delete `b`. Now `c` matches `c`, so both sides move past it for free. One new line is left."
+lanes = [ { name = "Old left", items = [] }, { name = "New left", items = ["d"] } ]
+[[frame]]
+title = "Round 1: try an insert"
+text = "The other choice is to insert `c` first. Then `b` faces `d`, so this path is behind."
+lanes = [ { name = "Old left", items = ["b", "c"] }, { name = "New left", items = ["d"] } ]
+[[frame]]
+title = "Round 2: finished"
+text = "From the first path, insert `d`. Both sides are used up, so the script is: keep `a`, delete `b`, keep `c`, insert `d`."
+lanes = [ { name = "Old left", items = [] }, { name = "New left", items = [] } ]
+```
+
+Following every path would double the work each round, and Myers avoids that.
+
+:::deeper How it avoids that, and the code (gives away a diff exercise)
+Many paths reach the same difference between old lines used and new lines used. Among those, only the one that got furthest is kept.
+
+`x` counts the old lines used and `y` the new ones. The difference `k = x - y` is called a **diagonal**. One number per diagonal, the largest `x`, is enough.
+
+```walkthrough
+file = "examples/algorithms/dp_lcs_diff.rs"
+[[step]]
+title = "Set a budget and make room"
+lines = "69-77"
+text = "The caller's budget caps the number of rounds. `history` keeps what each round started from."
+[[step]]
+title = "Choose the previous diagonal"
+lines = "62-66"
+text = "A path arrives by an insert or a delete. It comes from the neighbour that is further along, except at the two edges."
+[[step]]
+title = "Run one round"
+lines = "79-103"
+text = "Each diagonal takes one change, then follows equal lines. Reaching both ends finishes. Using all rounds returns `None`."
+[[step]]
+title = "Walk back"
+lines = "105-142"
+text = "For each round, repeat the same choice on the saved row. Emit the free lines, then the one change."
+```
+:::
+"""
+
+[[sections]]
+heading = "What does it cost when the files are very different?"
+body = """
+In the worst case, the time grows with the total number of lines times `D`. This page's version also saves a row each round, about `(D + 1)²` numbers after `D` rounds.
+
+| Changes needed | Numbers saved | Memory at 8 bytes each |
+|---|---|---|
+| 100 | about 10,000 | about 80 KB |
+| 1,000 | about 1 million | about 8 MB |
+| 10,000 | about 100 million | about 800 MB |
+
+So `myers_diff` takes `max_edits`. If the script needs more, it returns `None`, and you can report "files differ too much". For input from strangers, limit the file size too.
+
+Myers' paper also describes a linear-space refinement, which this code does not include.
+"""
+
+[[sections]]
+heading = "Which method should you use?"
+body = """
+| Your situation | Use | What you accept |
+|---|---|---|
+| Short lists, and code you can check at a glance | The table | Memory grows with `n * m` |
+| Large files with few changes | Myers with a budget | A refusal when the budget is too small |
+| A real tool | A maintained library such as `similar` | A dependency |
+| You only need to know whether two versions differ | `old != new` | No details |
+
+A shortest script is not always the easiest to read, so Git also offers choices such as `--patience` and `--histogram`. This page's code doesn't group changes into **hunks** with context lines, or mark changes inside a line.
+"""
+
+[[sections]]
+heading = "How do you know a diff is right?"
+body = """
+**Replay** the script. Its kept and deleted lines must rebuild the old version, and its kept and inserted lines the new one.
+
+Replay alone accepts "delete everything, insert everything". So also check that no script is shorter. The program compares both methods with a brute-force search on short lists, then with each other on longer random ones.
+
+```sh
+cargo run --release --example dp_lcs_diff
+```
+
+To see the tie rule matter, change `>=` to `>` in `table_diff` and run again. The first check of the table's script fails, because the replaced `port` line now reads insert, then delete.
+"""
+
+[[connections]]
+kind = "before"
+title = "DP memoization"
+link = "/cookbook/p/dp-memoization"
+why = "Read it if building an answer from saved smaller answers is new to you."
+
+[[connections]]
+kind = "practise"
+title = "diff: the shortest edit script between two files"
+link = "/p/y8-shortest-edit-script"
+level = "similar"
+why = "A close task with its own types and rules. Try it before you open any fold or the full code."
+
+[[connections]]
+kind = "practise"
+title = "Longest Common Subsequence"
+link = "/p/lc-longest-common-subsequence"
+level = "similar"
+why = "Only the length of the LCS, on letters. This page also rebuilds the script."
+
+[[connections]]
+kind = "returns"
+title = "Edit distance"
+link = "/cookbook/p/dp-edit-distance"
+why = "A close relative that also allows replacing one item with another, used on the characters of a word."
+
+[[sources]]
+title = "Myers: An O(ND) difference algorithm and its variations"
+url = "http://www.xmailserver.org/diff2.pdf"
+note = "The original paper. It shows the diff as a path through a grid and describes the linear-space refinement."
+
+[[sources]]
+title = "Git: git diff"
+url = "https://git-scm.com/docs/git-diff"
+note = "See the --diff-algorithm option for the choices Git offers and which is the default."
+
+[[sources]]
+title = "similar"
+url = "https://github.com/mitsuhiko/similar"
+note = "A Rust diffing library with line and text diffs."

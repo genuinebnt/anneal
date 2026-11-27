@@ -1,0 +1,266 @@
+title = "Comparing syntax trees"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Language tooling and production"
+chapter_order = 7
+order = 648
+kind = "lesson"
+level = "advanced"
+code = ["examples/text_and_parsing/syntax_tree_diff.rs"]
+code_spoils = ["/p/y8-shortest-edit-script", "/p/y15-expand-the-braces"]
+lede = "How to compare code by its structure, so that new line breaks don't look like new code."
+summary = """
+A line diff compares text, so reformatting can hide a one-word change among many changed lines. A tree diff first turns each file into a tree, then matches parts of the two trees. It can ignore layout, report a single changed name and spot a moved block. It depends on reading the language correctly. This page's small reader refuses what it can't cut into tokens for certain, and its "no change" never proves equal behaviour.
+"""
+
+[[sections]]
+heading = "What does a line diff get wrong?"
+body = """
+Someone renames one field and also reformats a function. A [line diff](/cookbook/p/dp-lcs-diff) compares whole lines, so it marks the reformatted lines as removed and added. The rename hides among them. If they also moved another function, the output grows again.
+
+The example takes such a pair of files and prints three changes:
+
+```text title="Output"
+Removed { line: 2, text: "count" }
+Moved { from: 6, to: 1, text: "fn show ( total : u32 ) { log ( total ) ; }" }
+Added { line: 10, text: "quantity" }
+```
+
+`count` became `quantity`, and one function moved unchanged. The new line breaks and the new comment don't appear.
+"""
+
+[[sections]]
+heading = "Can't you just ignore white space?"
+body = """
+It is tempting to remove all white space and compare the rest. But some spaces carry meaning.
+
+```compare
+takeaway = "Compare tokens, not squeezed text. Spaces separate tokens and then stop mattering, but inside a string they are data."
+[wrong]
+title = "Remove all white space"
+code = '''
+fn squeeze(code: &str) -> String {
+    code.split_whitespace().collect()
+}
+
+fn main() {
+    println!("{}", squeeze("a+b;") == squeeze("a + b;"));
+    println!("{}", squeeze(r#"name = "ab";"#) == squeeze(r#"name = "a b";"#));
+    println!("{}", squeeze("let x;") == squeeze("letx;"));
+}
+'''
+result = "It prints `true` three times. The last two are changes it has hidden."
+[fixed]
+title = "Compare tokens"
+code = '''
+fn main() {
+    // written by hand here; a lexer makes these lists
+    let spaced = ["a", "+", "b", ";"];
+    let tight = ["a", "+", "b", ";"];
+    println!("{}", spaced == tight);
+    println!("{}", [r#""ab""#] == [r#""a b""#]);
+    println!("{}", vec!["let", "x", ";"] == vec!["letx", ";"]);
+}
+'''
+result = "It prints `true`, then `false` twice."
+```
+
+The lexer has to match the language. Say it cuts the regular expression in `y = /\\//; send(secret);` wrongly. Its `//` then looks like a comment, and a change to the call after it disappears.
+"""
+
+[[sections]]
+heading = "What goes into the tree?"
+body = """
+Tokens alone are a flat list. A tree adds which tokens belong together, so a whole block can match as one unit. The example builds a shallow tree of four kinds:
+
+- an **atom**: one token, such as a name, a string or an operator;
+- **brackets**: a pair of brackets and what stands between them;
+- a **statement**: a run of items that ends at `;`, `,` or a `{...}` block;
+- the **file**.
+
+This knows almost no grammar, and its statements are a rough guess. [Difftastic](https://difftastic.wilfred.me.uk/parsing.html), a real tool, starts from a full parse by tree-sitter.
+
+Each node stores a **hash** of its whole subtree. Different hashes show at once that two subtrees differ. Equal hashes don't prove equality, so the code then compares the subtrees fully. Line numbers are left out of both, which lets a moved block equal its old self.
+"""
+
+[[sections]]
+heading = "How are two trees matched?"
+body = """
+Start at the two file nodes. If they are equal, nothing changed. Otherwise, line up their children, keeping the order on both sides.
+
+Each possible pair gets a score. Equal subtrees score highest, and bigger ones more. Two unequal nodes of the same kind score something only if they share enough tokens. The code then picks the pairs with the highest total, with no two crossing.
+
+:::deeper How the best pairs are found (gives away the method of "diff: the shortest edit script between two files")
+This is the table behind a [longest common subsequence](/cookbook/p/dp-lcs-diff), with scores in place of ones. [Edit distance](/cookbook/p/dp-edit-distance) fills a similar table with costs.
+:::
+
+```stepper
+caption = "Matching the statements of two blocks"
+[[frame]]
+title = "Two lists"
+text = "The old block has statements A, B and C. In the new one, B changed inside, and D is new."
+lanes = [ { name = "Old", items = ["A", "B", "C"] }, { name = "New", items = ["A", "B2", "D", "C"] } ]
+[[frame]]
+title = "Choose the pairs"
+text = "A and C each have an equal partner. B shares most of its tokens with B2. D shares too few with any of them."
+lanes = [ { name = "Pairs", items = ["A with A", "B with B2", "C with C"] }, { name = "Left over", items = ["D, added"] } ]
+[[frame]]
+title = "Go inside"
+text = "Only the unequal pair needs more work. The same steps run on the children of B and B2."
+lanes = [ { name = "Old B", items = ["let", "x", "=", "1"] }, { name = "New B2", items = ["let", "x", "=", "2"] } ]
+```
+
+An unpaired old node was removed, and an unpaired new one was added. A changed atom shows as one of each.
+"""
+
+[[sections]]
+heading = "How are moves found?"
+body = """
+Pairs can't cross, so a block that changed places shows up as removed in one spot and added in another. A second pass looks for a removed subtree that equals an added one, and calls it **moved**.
+
+The example asks for at least five tokens and brackets. Without a minimum, every deleted `x` could "move" to any new `x`.
+
+This pass is simple, and you can see its limit. A block that moved **and** changed equals nothing, so it stays one removal and one addition. A block moved inside a larger new block is missed too, because only whole removed and added subtrees are compared.
+"""
+
+[[sections]]
+heading = "Is the result the smallest change?"
+body = """
+Not always. The example matches level by level and never across depths. Wrap a statement in a new `if` block, and it may show as removed and added again.
+
+The cheapest way to edit one tree into another is the **tree edit distance** problem. [Zhang and Shasha's algorithm](https://zhang-shasha.readthedocs.io/en/latest/) solves a classic form of it, which has no "move". A smallest answer is also not always the easiest one to read.
+"""
+
+[[sections]]
+heading = "When does \"no change\" mislead you?"
+body = """
+This is the dangerous mistake. A tool that says "formatting only" may lead someone to skip the review.
+
+> [!WARNING]
+> **"No change" never means "safe".** At most it says that no token changed, and only under this reader's token rules.
+
+| What the tree ignores | When that is wrong |
+|---|---|
+| Line breaks | Python layout, and JavaScript without `;`. `return value` and the same on two lines compare equal, but JavaScript returns nothing from the second |
+| Comments | Rust doc comments hold tests. Some comments steer compilers and tools |
+| Anything outside the file | An equal call can reach a changed function |
+
+The reader **refuses** what it can't cut into tokens for certain, and gives no comparison at all. It reads ASCII names, numbers like `12` and `1.5`, plain `"..."` strings, brackets, listed operators and C-style comments. Among the things it refuses:
+
+- every `/` that doesn't open a comment, since it could start a regular expression. So division is refused too;
+- other numbers, such as `1e+5` or `0x1F`;
+- touching operator characters that aren't a listed operator, such as `:=`, `**`, `?.` or `<-`;
+- `#`, `@`, `$`, single quotes, backticks and text outside ASCII in code;
+- strings with a prefix or suffix, strings with code inside, and a few comments that may end elsewhere.
+
+This makes it useless for most real files, which is the honest result for a reader without a grammar. The refusals don't turn it into a parser for any language.
+"""
+
+[[sections]]
+heading = "What must be limited?"
+body = """
+Matching two lists of `n` and `m` items takes `n × m` work and memory. The example caps file size, tokens and `n × m`.
+
+Over that last cap, it returns an error and no changes. Calling both lists "replaced" would not do: the move step would then report unchanged statements as moved. A real tool might fall back to a line diff and say so.
+
+Brackets are read with an explicit stack and limited to 64 levels. Later steps call themselves once per level, so this bounds them too.
+"""
+
+[[sections]]
+heading = "How does the code do it?"
+body = """
+:::deeper The code, step by step (gives away much of "diff: the shortest edit script between two files" and "Expand the braces")
+```walkthrough
+file = "examples/text_and_parsing/syntax_tree_diff.rs"
+[[step]]
+title = "Define equality"
+lines = "49-54"
+text = "The hash rejects most unequal pairs at once. The full comparison guards against two subtrees that share a hash."
+[[step]]
+title = "Cut into tokens"
+lines = "142-229"
+text = "Spaces and comments go. Strings stay whole, and a run of operator characters must be a listed operator. Doubtful input is refused."
+[[step]]
+title = "Group statements"
+lines = "232-249"
+text = "A `;`, a comma or most `{...}` blocks end a statement. An `else` keeps the statement going."
+[[step]]
+title = "Build the brackets"
+lines = "251-282"
+text = "An explicit stack holds the open pairs. A wrong or missing closer is an error with a line number."
+[[step]]
+title = "Score a pair"
+lines = "314-326"
+text = "An equal pair beats any partial one for the same node. Different kinds never pair."
+[[step]]
+title = "Choose the pairs"
+lines = "330-362"
+text = "The table holds the best total for each pair of list starts. Walking back from the end recovers the pairs."
+[[step]]
+title = "Recurse only where needed"
+lines = "364-386"
+text = "A table over the cap is an error. Unpaired items become removals and additions, and unequal pairs are compared inside."
+[[step]]
+title = "Turn pairs into moves"
+lines = "426-444"
+text = "Each large enough removed node looks for an equal added one."
+```
+:::
+"""
+
+[[sections]]
+heading = "How can you test a diff?"
+body = """
+Run it from the `cookbook` folder:
+
+```sh
+cargo run --release --example syntax_tree_diff
+```
+
+The checks rebuild both files from the result. They also pair up every two punctuation characters, and break up tokens from other languages. A broken token must never give "no change": the reader refuses it or reports a difference. These are generated samples, not a proof for any language.
+"""
+
+[[connections]]
+kind = "before"
+title = "A line diff from a longest common subsequence"
+link = "/cookbook/p/dp-lcs-diff"
+why = "The line diff that this page improves on."
+
+[[connections]]
+kind = "before"
+title = "Edit distance between sequences"
+link = "/cookbook/p/dp-edit-distance"
+why = "Costs for changing one sequence into another, the flat form of tree edit distance."
+
+[[connections]]
+kind = "practise"
+title = "diff: the shortest edit script between two files"
+link = "/p/y8-shortest-edit-script"
+level = "related"
+why = "Build the line diff yourself. Try it before opening the folds or the code here."
+
+[[connections]]
+kind = "returns"
+title = "Reading JavaScript as a syntax tree"
+link = "/cookbook/p/javascript-syntax-tree"
+why = "A tree that follows a grammar, even if only for a small subset."
+
+[[sources]]
+title = "Difftastic manual: parsing"
+url = "https://difftastic.wilfred.me.uk/parsing.html"
+note = "How a real tool turns parse trees into atoms and lists."
+
+[[sources]]
+title = "Difftastic manual: tricky cases"
+url = "https://difftastic.wilfred.me.uk/tricky_cases.html"
+note = "Wrapping, moving brackets and trailing commas, with the answer a reader would want."
+
+[[sources]]
+title = "Fine-grained and accurate source code differencing (GumTree)"
+url = "https://hal.science/hal-01054552"
+note = "The paper behind GumTree: edits on syntax trees, with moves."
+
+[[sources]]
+title = "zss: Zhang-Shasha tree edit distance"
+url = "https://zhang-shasha.readthedocs.io/en/latest/"
+note = "A small Python library for the classic algorithm. Its interface shows which edits are counted."

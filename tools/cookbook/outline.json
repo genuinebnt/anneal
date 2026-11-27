@@ -1500,7 +1500,9 @@
      "examples/text_and_parsing/edge_dsl_parser.rs",
      "examples/text_and_parsing/json_parser.rs",
      "examples/text_and_parsing/csv_state_machine.rs",
-     "examples/text_and_parsing/markdown_block_parser.rs"
+     "examples/text_and_parsing/markdown_block_parser.rs",
+     "examples/text_and_parsing/reading_html_safely.rs",
+     "examples/text_and_parsing/javascript_syntax_tree.rs"
     ]
    },
    {
@@ -1782,7 +1784,10 @@
       "Reading rustc and contributing to it"
      ]
     ],
-    "recipes": []
+    "recipes": [
+     "examples/text_and_parsing/source_maps.rs",
+     "examples/text_and_parsing/syntax_tree_diff.rs"
+    ]
    },
    {
     "title": "Multi-file projects",

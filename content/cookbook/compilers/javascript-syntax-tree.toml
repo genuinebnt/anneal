@@ -1,0 +1,40 @@
+title = "Reading JavaScript as a syntax tree"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 573
+kind = "recipe"
+lede = "Find the addresses a script fetches, without running it."
+level = "advanced"
+code = ["examples/text_and_parsing/javascript_syntax_tree.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>code audits</li><li>link collectors</li><li>lint rules</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>linters</li><li>bundlers</li><li>code search</li><li>finding the API calls in a script</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+This parser reads a **small subset** of JavaScript and refuses everything else: top-level `const` and expression statements, each ending in `;`, with names, plain numbers, quoted strings, `.name`, calls, `+`, arrays and object literals. No functions, blocks, other operators, regular expressions or template strings.
+
+Refusing is the point: a reader that guesses reports things that are not there. It lists calls SPELLED `fetch(…)`, which is not the list of requests a script makes: finding none proves nothing. For real JavaScript use a full parser such as `oxc_parser`, `swc_ecma_parser` or tree-sitter.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://tc39.es/ecma262/#sec-ecmascript-language-lexical-grammar>
+"""
+
+[[sources]]
+title = "tc39.es/ecma262/#sec-ecmascript-language-lexical-grammar"
+url = "https://tc39.es/ecma262/#sec-ecmascript-language-lexical-grammar"

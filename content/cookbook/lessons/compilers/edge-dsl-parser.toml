@@ -1,0 +1,222 @@
+title = "A tiny language"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 568
+kind = "lesson"
+level = "intermediate"
+code = ["examples/text_and_parsing/edge_dsl_parser.rs"]
+code_spoils = ["/p/y122-read-the-source"]
+lede = "How to read a small language of your own, with errors that point at the right place."
+summary = """
+To read a small language, first write its grammar. A lexer cuts the text into tokens that remember their positions. A recursive-descent parser has one function per grammar rule, builds a tree and gives you control of every error message. Use an existing format when it can express your data, since your own language is one more thing to maintain.
+"""
+
+[[sections]]
+heading = "When is your own language worth it?"
+body = """
+You want people to describe a metro map in a text file. Each line of the metro has a name, perhaps a label, and some routes between stops:
+
+```text
+# the city map
+line red "Red line" {
+    central -> market -> harbor;
+    market -> airport;
+}
+```
+
+JSON or TOML could hold this, and you would get a tested parser for free. Choose that first. A language of your own pays off when people write much of it by hand and the shorter form prevents mistakes.
+
+Such a language for one job is often called a **domain-specific language**, or DSL. You then own its documentation, its error messages and every later change to it.
+"""
+
+[[sections]]
+heading = "Where do you start?"
+body = """
+Start with the **grammar**: a short list of rules that says which texts are allowed. This language needs three.
+
+```text
+map   := line*
+line  := "line" WORD TEXT? "{" route* "}"
+route := WORD ("->" WORD)* ";"
+```
+
+Read `:=` as "is made of". A `*` means any number, including none, and `?` means optional. `WORD` is a name, and `TEXT` is text in quotes.
+
+Writing the rules first forces decisions early. These rules allow an empty block and a route with a single stop. They also require `;` after the last route, so every route looks the same.
+"""
+
+[[sections]]
+heading = "What does the lexer do?"
+body = """
+The **lexer** reads characters and produces **tokens**: words, quoted text and punctuation. It drops spaces and comments. The parser then never has to think about them.
+
+Each token keeps its **span**, the byte range it came from. So `line red {` becomes the word `line` at `0..4`, the word `red` at `5..8` and a brace at `9..10`. Words borrow from the source text instead of copying it.
+
+The list always ends with an `End` token. The parser can then look at the next token at any time. It never has to handle a missing one, and an error at the end has a position like any other.
+
+The lexer doesn't know that `line` is special. Only the rule for a metro line expects that word first. Inside a block, a stop may be called `line`. This works because the grammar never needs to guess which meaning applies.
+"""
+
+[[sections]]
+heading = "How does a grammar become code?"
+body = """
+In a **recursive-descent** parser, each rule becomes a function. The function reads the tokens its rule lists, in order. When a rule mentions another rule, the function calls that function.
+
+| In the grammar | In the code |
+|---|---|
+| A fixed token, such as `->` | `expect`, or `eat` to test and take it |
+| `route*` inside braces | A loop that runs until `}` |
+| `TEXT?` | A look at the next token |
+| Another rule | A function call |
+| `("->" WORD)*` | `while` the next token is `->` |
+
+At each choice, this parser looks at only the next token. It never goes back. If your grammar can't be decided that way, look at the rules again before adding backtracking.
+
+:::deeper The code, step by step (overlaps the capstone step "Read the source into tokens")
+```walkthrough
+file = "examples/text_and_parsing/edge_dsl_parser.rs"
+[[step]]
+title = "Match one character at a time"
+lines = "65-90"
+text = "The first character decides the kind of token. Anything unknown is an error that covers the whole character, even a multi-byte one."
+[[step]]
+title = "Take a token if it fits"
+lines = "138-150"
+text = "`peek` looks without taking. `eat` moves forward only on a match, and no caller ever eats `End`."
+[[step]]
+title = "Read one metro line"
+lines = "196-228"
+text = "The keyword, the name and the optional label come in order. The loop stops at `}`, and reports an unclosed brace at the end of input."
+[[step]]
+title = "Read one route"
+lines = "230-238"
+text = "One stop, then any number of arrows with stops, then `;`. Compare it with the third grammar rule."
+```
+:::
+
+The result is a **syntax tree**: lines that hold routes that hold names. Each name keeps its span, so a later check can still point at it.
+"""
+
+[[sections]]
+heading = "Where should an error point?"
+body = """
+Suppose someone forgets a semicolon:
+
+```text
+line red {
+  a -> b
+  c;
+}
+```
+
+The parser notices only at `c`, on the third line. But the `;` belongs after `b`, on the second line. So there are two kinds of error position.
+
+| What is missing | Where the error points |
+|---|---|
+| Punctuation such as `;` or `{` | An empty span just after the token before |
+| A name | The token found in its place |
+| A closing `}` at the end of input | The `{` that was never closed |
+
+A message should say what was expected and what was found: ``expected `;`, found `c` ``. A long word is cut short, so one huge token can't flood the screen.
+
+The parser returns the byte span and prints nothing. A separate renderer can turn it into a line, a column and carets, as the page on diagnostics explains.
+"""
+
+[[sections]]
+heading = "What about errors after the first one?"
+body = """
+This parser stops at its first error. That is simple and never reports mistakes that were caused by an earlier one. The cost is that the user fixes one mistake per run.
+
+To report more, a parser must **recover**: skip to a place where it can safely start again, then continue. Choosing that place badly creates a flood of false errors. Add recovery when your users need it, and test that one mistake gives one report. The linked exercise on broken lines practises this.
+
+Parsing also checks only the form of the text. Two metro lines with one name still parse. Check such rules of meaning in a later pass over the tree, using the saved spans.
+"""
+
+[[sections]]
+heading = "What can hostile input do?"
+body = """
+Text from outside can be huge, cut short or full of odd characters. The lexer refuses a source over 64 KiB before it reads any of it. It advances by whole characters, so an emoji can't make it slice inside one. Quoted text must close on its own line.
+
+No rule in this grammar contains itself. So no parser function calls itself, directly or through another. A long run of `{` characters can't make it go deeper: the first one is already wrong.
+
+Add nested blocks and that changes. The block function would call itself once per level. Deep input could then overflow the stack, which ends the program rather than returning an error. Count the depth and refuse beyond a limit.
+
+| Not in this language | If you need it |
+|---|---|
+| Escapes such as a quote inside quoted text | The token must then own a new string, or decode it later |
+| Names with non-ASCII letters | Decide which characters a name may contain |
+| Arithmetic or other operators with precedence | See the page on the Pratt parser |
+| A tool that rewrites the file | Keep comments and spaces in the tree |
+"""
+
+[[sections]]
+heading = "How do you test a parser?"
+body = """
+Start with a table of bad inputs. For each, compare the exact message and span. "It returned some error" would accept an error at the wrong place.
+
+Next, generate random trees and write each as text with random spacing and comments. Parsing that text must give the same tree back. The program does this 3,000 times with a fixed start value. For every tenth text, it also parses every beginning of it.
+
+This grammar has no nesting, so a second recognizer can be a small table of states. On any text the lexer accepts, both must agree whether it is valid. They must also agree on where it first goes wrong. The program feeds them random nonsense and large inputs.
+
+```sh
+cargo run --release --example edge_dsl_parser
+```
+
+To see what the position table checks, make `expect` report the found token's span instead. The first case fails: it wants `17..17`, just after `b`, and gets the brace at `18..19`.
+"""
+
+[[connections]]
+kind = "before"
+title = "A zero-copy lexer"
+link = "/cookbook/p/zero-copy-lexer"
+why = "A closer look at tokens that borrow from their source."
+
+[[connections]]
+kind = "before"
+title = "Compiler-style diagnostics"
+link = "/cookbook/p/diagnostics-spans"
+why = "How to print the spans this parser returns."
+
+[[connections]]
+kind = "practise"
+title = "Expand the braces"
+link = "/p/y15-expand-the-braces"
+level = "related"
+why = "A small notation where groups nest, with error positions and a depth limit."
+
+[[connections]]
+kind = "practise"
+title = "Every broken line"
+link = "/p/y121-every-broken-line"
+level = "similar"
+why = "A different small format whose reader must report every mistake and survive deep nesting."
+
+[[connections]]
+kind = "returns"
+title = "Pratt parser"
+link = "/cookbook/p/pratt-parser"
+why = "The usual next step when your language gets operators of different strengths."
+
+[[connections]]
+kind = "returns"
+title = "JSON parser"
+link = "/cookbook/p/json-parser"
+why = "A recursive grammar with escapes and a depth limit."
+
+[[connections]]
+kind = "project"
+title = "Build a scripting language"
+link = "/rust/series/scripting-language"
+why = "Takes the same two stages, tokens and a tree, on to a language that runs."
+
+[[sources]]
+title = "Crafting Interpreters: Scanning"
+url = "https://craftinginterpreters.com/scanning.html"
+note = "How a hand-written lexer is built, one token kind at a time."
+
+[[sources]]
+title = "Crafting Interpreters: Parsing Expressions"
+url = "https://craftinginterpreters.com/parsing-expressions.html"
+note = "How grammar rules become functions. Its section on panic mode covers recovery."

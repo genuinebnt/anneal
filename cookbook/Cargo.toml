@@ -1329,6 +1329,9 @@ path = "examples/text_and_parsing/edge_dsl_parser.rs"
 name = "expression_parsing_three_ways"
 path = "examples/text_and_parsing/expression_parsing_three_ways.rs"
 [[example]]
+name = "javascript_syntax_tree"
+path = "examples/text_and_parsing/javascript_syntax_tree.rs"
+[[example]]
 name = "json_parser"
 path = "examples/text_and_parsing/json_parser.rs"
 [[example]]
@@ -1343,6 +1346,15 @@ path = "examples/text_and_parsing/parser_combinators.rs"
 [[example]]
 name = "pratt_parser"
 path = "examples/text_and_parsing/pratt_parser.rs"
+[[example]]
+name = "reading_html_safely"
+path = "examples/text_and_parsing/reading_html_safely.rs"
+[[example]]
+name = "source_maps"
+path = "examples/text_and_parsing/source_maps.rs"
+[[example]]
+name = "syntax_tree_diff"
+path = "examples/text_and_parsing/syntax_tree_diff.rs"
 [[example]]
 name = "zero_copy_lexer"
 path = "examples/text_and_parsing/zero_copy_lexer.rs"

@@ -1,0 +1,248 @@
+title = "Reading JavaScript as a syntax tree"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 573
+kind = "lesson"
+level = "advanced"
+code = ["examples/text_and_parsing/javascript_syntax_tree.rs"]
+code_spoils = ["/p/y15-expand-the-braces", "/rust/series/scripting-language"]
+lede = "How to ask what a script says without running it, and how to admit what you can't tell."
+summary = """
+A syntax tree shows a program's structure, so a search for calls can skip comments and strings. For real JavaScript, use a full parser library. This page teaches the idea with a hand-written parser for a very small subset, which refuses everything else. A tree shows only what is written, so finding no `fetch` call doesn't prove that a script makes no request.
+"""
+
+[[sections]]
+heading = "Why isn't a text search enough?"
+body = """
+Say you want every address a script asks for with `fetch`. Here is a short script:
+
+```text title="script.js"
+// fetch("/in-a-comment");
+const api = "https://api.example.com";
+log('then call fetch("/in-a-string")');
+fetch(api + "/v1/users", {method: "GET"});
+fetch("\\x2fhidden");
+fetch(api + location.hash);
+```
+
+A search finds `fetch(` five times, but only three are calls. None of their addresses stands there as plain text. The first is built from two pieces, the second uses an escape, and the third is partly unknown until the script runs.
+
+You need to know which characters are code, and how the code fits together. A parser gives you both.
+"""
+
+[[sections]]
+heading = "What is a syntax tree?"
+body = """
+Parsing has two steps. The **lexer** turns characters into **tokens**: names, strings and punctuation. Comments and spaces disappear here, and a whole string becomes one token. The **parser** arranges the tokens into a tree that follows the grammar.
+
+For `fetch(api + "/v1");` the tree looks like this:
+
+```text
+Call
+├── Name fetch
+└── Add
+    ├── Name api
+    └── Str "/v1"
+```
+
+Now the question is exact: find each `Call` whose function is the name `fetch`, then look at its first argument. A call inside a comment or a string can't match, because it never became a `Call`.
+"""
+
+[[sections]]
+heading = "Why is JavaScript hard to read?"
+body = """
+Its [lexical rules](https://tc39.es/ecma262/multipage/ecmascript-language-lexical-grammar.html) have traps for a quick lexer. A `/` may be a division or start a regular expression, and only the grammar around it tells. A wrong guess misreads every quote and comment after it.
+
+Four characters end a line, including the rarely seen U+2028 and U+2029. If your lexer ends a `//` comment only at a newline, a call after U+2028 looks like a comment. JavaScript runs it.
+
+Also, `"\\x2f"` and `"\\u002F"` are both `/`. Compare a string's value, not its spelling.
+"""
+
+[[sections]]
+heading = "Should you write your own parser?"
+body = """
+Not for real scripts: the language is large, and it grows. Use a full parser such as [oxc_parser](https://docs.rs/oxc_parser/latest/oxc_parser/), [swc_ecma_parser](https://docs.rs/swc_ecma_parser/latest/swc_ecma_parser/) or [tree-sitter](https://tree-sitter.github.io/tree-sitter/). Some can return a tree for a broken file, so check the errors before you trust it.
+
+This Cookbook has none of them among its dependencies, so the example is a **subset**. It reads top-level `const` and expression statements, with strings, plain numbers, names, `.name`, calls, `+`, arrays and objects. It has no functions, blocks or assignments.
+"""
+
+[[sections]]
+heading = "How does a small reader stay honest?"
+body = """
+It refuses what it doesn't understand, with a position and a reason. A guessing reader reports calls that don't exist, or misses ones that do.
+
+There are two main kinds of refusal. **Unsupported** means the text is outside the subset, and it may well be valid JavaScript. Examples are `[1,,2]`, `{a}`, a lone `;` and a missing `;`. **Syntax** is kept for text that is certainly wrong, such as an unfinished string or a name declared twice. (Very large or very deep input has its own two refusals.)
+
+Keywords are refused too. Without that list, `return(x);` would read as a call to a function named `return`. The price is plain: most real scripts are refused.
+"""
+
+[[sections]]
+heading = "How can a flat script make a deep tree?"
+body = """
+A hostile script chooses how deep your tree gets, even without a single bracket. Code that walks or frees a deep tree can run out of stack and crash. So limit the tree's height, not only the nesting that you can see. The input size and the token count have limits too.
+
+:::deeper Why counting brackets isn't enough (gives away part of "Expand the braces": limiting depth)
+`a.b.b.b` has no brackets, and a loop reads it. Yet each `.b` puts the old tree one level lower. Functions that walk the tree call themselves once per level, and so does freeing a tree built from `Box`.
+
+```compare
+takeaway = "Limit the height of the tree where each node is made. Then every later walk has a bound too. The cost is that a very long chain of method calls is refused."
+[wrong]
+title = "No limit on a loop"
+code = '''
+struct Node {
+    inner: Option<Box<Node>>,
+}
+
+fn height(node: &Node) -> u32 {
+    1 + node.inner.as_deref().map_or(0, height)
+}
+
+fn main() {
+    // the tree of `a.b.b.b…`, built by a loop
+    let mut tree = Node { inner: None };
+    for _ in 0..1_000_000 {
+        tree = Node { inner: Some(Box::new(tree)) };
+    }
+    println!("{}", height(&tree));
+}
+'''
+result = "A debug build aborts with `has overflowed its stack`. In a release build with Rust 1.98 it printed `1000001`, then overflowed while freeing the tree."
+[fixed]
+title = "Count the height"
+code = '''
+struct Node {
+    #[allow(dead_code)] // kept, never walked here
+    inner: Option<Box<Node>>,
+    height: u32,
+}
+
+fn wrap(inner: Node) -> Result<Node, &'static str> {
+    if inner.height >= 200 {
+        return Err("too deep");
+    }
+    let height = inner.height + 1;
+    Ok(Node { inner: Some(Box::new(inner)), height })
+}
+
+fn main() {
+    let mut tree = Node { inner: None, height: 1 };
+    for _ in 0..1_000_000 {
+        tree = match wrap(tree) {
+            Ok(taller) => taller,
+            Err(why) => return println!("{why}"),
+        };
+    }
+}
+'''
+result = "It prints `too deep`."
+```
+:::
+"""
+
+[[sections]]
+heading = "What can the tree tell you about an address?"
+body = """
+Some addresses follow from constants alone. `api + "/v1"` is known if `api` is an earlier `const` with a known string. `api + location.hash` is not, so the example reports it as unknown. Keep "unknown" as an answer of its own, because a report that drops such calls looks complete.
+
+Following constants adds a hazard. After many lines like `const b = a + a;`, a short script asks for a huge string. The example stops at 4,096 bytes.
+
+> [!WARNING]
+> **An empty list doesn't mean "no requests".** The example lists calls spelled `fetch(...)`, and nothing else.
+
+`const get = fetch; get("/x");` makes a request that isn't listed, and so does `window.fetch("/x")` in a browser. So every report ends by saying that other requests may exist. Don't use this to decide that a script is harmless.
+
+The name can mislead in the other direction too. A script with its own `const fetch` may mean something else, or the browser's function: `const fetch = window.fetch;`. The example can't tell, so it lists each call and marks it "may or may not be a request". A tree also can't say whether a call ever runs.
+"""
+
+[[sections]]
+heading = "How does the code do it?"
+body = """
+:::deeper The code, step by step (gives away much of "Expand the braces" and parts of the scripting language series: reading source, reporting positions and limiting depth)
+```walkthrough
+file = "examples/text_and_parsing/javascript_syntax_tree.rs"
+[[step]]
+title = "Skip what isn't code"
+lines = "135-149"
+text = "Spaces and both kinds of comment produce no token. A line comment stops at any of the four line endings."
+[[step]]
+title = "Refuse the rest"
+lines = "169-180"
+text = "Only a few punctuation characters pass. A lone `/` or a backtick is refused at once, before it can confuse anything."
+[[step]]
+title = "Limit the height"
+lines = "265-279"
+text = "Every node is made by this function, so brackets, chains of `.name` and long sums share one limit."
+[[step]]
+title = "Limit the recursion"
+lines = "294-300"
+text = "Brackets alone make no node, so a second count limits how often the parser calls itself."
+[[step]]
+title = "Read statements"
+lines = "361-384"
+text = "A `{` at the start is a block, which the subset lacks. Every statement must end in `;`."
+[[step]]
+title = "Follow constants"
+lines = "404-420"
+text = "Only strings, earlier constants and `+` give a known value. The length check stops the doubling script."
+[[step]]
+title = "Find the calls"
+lines = "459-475"
+text = "Calls are collected before the statement's own name is recorded, so a name can't describe itself or come from a later line. A declared `fetch` sets a flag, and the calls stay listed."
+```
+:::
+"""
+
+[[sections]]
+heading = "How can you test a parser?"
+body = """
+Run it from the `cookbook` folder:
+
+```sh
+cargo run --release --example javascript_syntax_tree
+```
+
+For the script above, it prints that a text search finds five. It lists addresses on lines 4 and 5, marks line 6 as unknown, and ends with the warning about other requests.
+
+Its main test prints random trees as untidy code and reads them back. That shows only that the parser agrees with the test's printer. For a real tool, also compare with an established engine: it must accept whatever your subset accepts.
+"""
+
+[[connections]]
+kind = "before"
+title = "Pratt parser"
+link = "/cookbook/p/pratt-parser"
+why = "How a parser handles operators of different strengths. This subset has only one operator."
+
+[[connections]]
+kind = "before"
+title = "A parser for a tiny language"
+link = "/cookbook/p/edge-dsl-parser"
+why = "A smaller lexer and parser, with positions in errors, for a notation you control."
+
+[[connections]]
+kind = "returns"
+title = "Reading HTML safely"
+link = "/cookbook/p/reading-html-safely"
+why = "Where the scripts often come from, and how to check the addresses you find."
+
+[[connections]]
+kind = "returns"
+title = "Comparing syntax trees"
+link = "/cookbook/p/syntax-tree-diff"
+why = "Another question that is easier on a tree than on lines of text."
+
+[[sources]]
+title = "ECMAScript: lexical grammar"
+url = "https://tc39.es/ecma262/multipage/ecmascript-language-lexical-grammar.html"
+note = "Read the line terminators and comments, and how the grammar around a `/` decides what it means."
+
+[[sources]]
+title = "oxc_parser"
+url = "https://docs.rs/oxc_parser/latest/oxc_parser/"
+note = "Its front page says which checks the parser leaves to a later pass."
+
+[[sources]]
+title = "Tree-sitter"
+url = "https://tree-sitter.github.io/tree-sitter/"
+note = "A parser library with grammars for many languages."

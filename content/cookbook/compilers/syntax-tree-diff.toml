@@ -1,0 +1,42 @@
+title = "Comparing syntax trees"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Language tooling and production"
+chapter_order = 7
+order = 648
+kind = "recipe"
+lede = "Show what changed in code, not which lines moved."
+level = "advanced"
+code = ["examples/text_and_parsing/syntax_tree_diff.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+code review, change detection.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>review tools</li><li>ignoring formatting-only commits</li><li>finding moved functions</li><li>checking generated code</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+The tree here is shallow on purpose: tokens, brackets and rough "statements" for a narrow C-like notation. It is enough to ignore layout and comments, and it knows no grammar. It REFUSES what it can't cut into tokens for certain, among it every `/` that doesn't open a comment, so no division and no regular expressions.
+
+Line breaks are thrown away, so it is wrong for languages where they matter (Python, and JavaScript without `;`), and comments are ignored. "No change" never proves that behaviour is the same. The answer is not always the smallest possible change.
+
+Real tools build trees with a parser for each language.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://difftastic.wilfred.me.uk/diffing.html>
+"""
+
+[[sources]]
+title = "difftastic.wilfred.me.uk/diffing.html"
+url = "https://difftastic.wilfred.me.uk/diffing.html"

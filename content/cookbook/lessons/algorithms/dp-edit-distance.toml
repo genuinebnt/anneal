@@ -1,0 +1,199 @@
+title = "Edit distance"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Dynamic programming, greedy and search"
+chapter_order = 5
+order = 202
+kind = "lesson"
+level = "intermediate"
+code = ["examples/algorithms/dp_edit_distance.rs"]
+code_spoils = ["/p/lc-edit-distance", "/p/y151-a-slip-of-the-finger"]
+lede = "How a program measures how close two words are, and uses that to ask \"did you mean ...?\"."
+summary = """
+Edit distance is the fewest single-character inserts, deletes and replacements that turn one text into another. It can suggest a known name for a mistyped one. The number alone is not enough: you also need a limit, a tie rule and a cap on input length. Plain Levenshtein distance counts two swapped letters as two edits, so it can miss common typos.
+"""
+
+[[sections]]
+heading = "What should a program say about a typo?"
+body = """
+A user types `tool chek`. Your program knows `build`, `check`, `clean` and `publish`. "Unknown command" is true, but "did you mean `check`?" saves a trip to the manual.
+
+To do that, you need a number that says how far apart two words are. The **Levenshtein distance** is the smallest number of edits that turns one into the other. Each edit adds, removes or replaces one character.
+
+| Words | Distance | One shortest way |
+|---|---|---|
+| `chek`, `check` | 1 | add `c` |
+| `flaw`, `lawn` | 2 | remove `f`, add `n` |
+| `kitten`, `sitting` | 3 | change `k` to `s` and `e` to `i`, add `g` |
+| `form`, `from` | 2 | change `o` to `r` and `r` to `o` |
+
+The last row matters for typing mistakes. A person sees one slip, two letters in the wrong order. Plain Levenshtein distance has no swap, so it counts two edits.
+"""
+
+[[sections]]
+heading = "How is the distance computed?"
+body = """
+Trying every series of edits would take far too long. **Dynamic programming** answers smaller questions first and reuses the answers. The time grows with the two lengths multiplied.
+
+:::deeper The approach and the code (gives away the problem "Edit Distance", and much of the exercise "How many slips of the finger?")
+Compare beginnings. The distance for two longer beginnings follows from the distances for shorter ones, so a table can be filled step by step. The whole table is not needed for the number: the code keeps only two rows.
+
+For each pair of beginnings, look at the last edit. It replaced a character, deleted one or inserted one. A replacement is free when the two characters are equal. Take the cheapest of the three.
+
+```walkthrough
+file = "examples/algorithms/dp_edit_distance.rs"
+[[step]]
+title = "Start from an empty first word"
+lines = "17-20"
+text = "To reach the first `j` characters of `b` from nothing, insert `j` characters. That is the first row."
+[[step]]
+title = "Fill one row"
+lines = "21-28"
+text = "The first cell deletes everything read from `a`. Each later cell takes the cheapest of replace, delete and insert."
+[[step]]
+title = "Reuse the two rows"
+lines = "29-31"
+text = "Swapping moves the new row into `previous` without allocating. After the last swap, the answer is there."
+```
+:::
+"""
+
+[[sections]]
+heading = "What is a character here?"
+body = """
+The code compares Rust's `char` values, not bytes. So `héllo` and `hello` are 1 apart. By bytes they would be further apart, because `é` takes two bytes.
+
+A `char` is still not always what a reader calls one letter. The letter `é` can be stored as one `char`, or as `e` followed by a combining accent. The two look the same on screen, yet the code reports a distance of 2 between `café` written each way.
+
+If your input can use both forms, **normalize** the text first. That means rewriting it into one standard form. Rust's standard library doesn't do this. Upper and lower case also differ here, so decide whether to lowercase both sides.
+"""
+
+[[sections]]
+heading = "When is a name close enough to suggest?"
+body = """
+The nearest name always exists if the list isn't empty. It may be nowhere near. Suggesting `build` for `xyz` only confuses, so `suggest` follows these rules.
+
+| Rule | Why |
+|---|---|
+| At most a third of the typed length in edits, and at least 1 | Longer words leave room for more slips |
+| The distance must be less than the length of the known name | `x` has nothing in common with `a` |
+| On a tie, the name that sorts first wins | The answer must not depend on list order |
+| No suggestion for a word over 64 characters | The work is bounded |
+
+These numbers are choices, not laws. They have a visible cost. `biuld` is two plain edits from `build`, and five letters allow only one. So this code suggests nothing.
+
+You could raise the limit, which also lets in worse guesses. Other distance measures treat some typing slips differently. If your users often make such slips, compare measures on real examples.
+"""
+
+[[sections]]
+heading = "Why does the tie rule need care?"
+body = """
+Two known names are often equally close. If the first one found wins, reordering a list or reading it from a hash map can change the message.
+
+```compare
+takeaway = "Give ties a rule of their own. Here the tuple's second field, the name, decides when the distances are equal."
+[wrong]
+title = "Compare only the distance"
+code = '''
+fn main() {
+    // two names, both one edit from "buil"
+    for close in [[(1, "built"), (1, "build")], [(1, "build"), (1, "built")]] {
+        let best = close.iter().min_by_key(|(distance, _)| *distance);
+        println!("{best:?}");
+    }
+}
+'''
+result = 'It prints `Some((1, "built"))`, then `Some((1, "build"))`. The answer follows the order of the list.'
+[fixed]
+title = "Compare distance, then name"
+code = '''
+fn main() {
+    // two names, both one edit from "buil"
+    for close in [[(1, "built"), (1, "build")], [(1, "build"), (1, "built")]] {
+        println!("{:?}", close.iter().min());
+    }
+}
+'''
+result = 'It prints `Some((1, "build"))` both times.'
+```
+
+Sorting by name makes the result stable, not clever. If you know how often each command is used, that may be a better tie rule.
+"""
+
+[[sections]]
+heading = "What can go wrong with long input?"
+body = """
+The typed word comes from outside your program. Two texts of 100,000 characters need 10 billion table cells. So `suggest` counts at most 65 characters and then gives up.
+
+It also skips a name whose length differs by more than the limit. Each extra character needs at least one insert or delete. So the length difference is a **lower bound** on the distance, and the table can't change the verdict.
+
+Known names are compared one by one. That is fine for a list of commands. For a large dictionary you need an index that picks likely names first.
+
+Don't act on a suggestion without asking. Running the guessed command can delete the wrong thing.
+"""
+
+[[sections]]
+heading = "How is the code checked?"
+body = """
+A table that is off by one still prints reasonable numbers. So the program has a second, slower way to get the answer. It starts with the first word and tries every single edit, then every pair, until the second word appears.
+
+Both ways must agree on all 14,641 pairs of words up to four characters from a three-letter alphabet. Then 20,000 random triples, from a fixed start value, check rules every distance obeys.
+
+- It is 0 only for equal words.
+- It is the same in both directions.
+- It lies between the difference of the lengths and the longer length.
+- Going through a third word is never shorter.
+
+The same loop checks that the shortcuts in `suggest` give the same answer as comparing without them.
+
+```sh
+cargo run --release --example dp_edit_distance
+```
+"""
+
+[[connections]]
+kind = "before"
+title = "How a diff finds what changed"
+link = "/cookbook/p/dp-lcs-diff"
+why = "The same kind of table with only keep, delete and insert, used to compare two versions of a file."
+
+[[connections]]
+kind = "practise"
+title = "Edit Distance"
+link = "/p/lc-edit-distance"
+level = "exact"
+why = "Compute the distance yourself before opening the fold or the full code."
+
+[[connections]]
+kind = "practise"
+title = "How many slips of the finger?"
+link = "/p/y151-a-slip-of-the-finger"
+level = "similar"
+why = "A harder distance with swaps and a work budget. This page's code covers neither."
+
+[[connections]]
+kind = "returns"
+title = "Compiler-style diagnostics"
+link = "/cookbook/p/diagnostics-spans"
+why = "A suggestion fits in the help line of an error that points at the mistyped word."
+
+[[connections]]
+kind = "project"
+title = "Build a type-ahead service"
+link = "/rust/series/type-ahead"
+why = "Its part 2 and its capstone deal with typed words that are a few slips off."
+
+[[sources]]
+title = "rustc: edit_distance.rs"
+url = "https://github.com/rust-lang/rust/blob/master/compiler/rustc_span/src/edit_distance.rs"
+note = "The compiler's suggestion code. See the early return on lengths and the default limit."
+
+[[sources]]
+title = "strsim-rs"
+url = "https://github.com/rapidfuzz/strsim-rs"
+note = "A Rust library with Levenshtein, Jaro-Winkler and other measures."
+
+[[sources]]
+title = "Wikipedia: Levenshtein distance"
+url = "https://en.wikipedia.org/wiki/Levenshtein_distance"
+note = "The definition, with its bounds and common variants of the computation."

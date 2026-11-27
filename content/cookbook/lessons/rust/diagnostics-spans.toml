@@ -1,0 +1,241 @@
+title = "Compiler-style diagnostics"
+module = "Rust language"
+module_order = 1
+chapter = "Errors and diagnostics"
+chapter_order = 4
+order = 36
+kind = "lesson"
+level = "intermediate"
+code = ["examples/errors/diagnostics_spans.rs"]
+code_spoils = ["/p/y122-read-the-source"]
+lede = "How to report an error with a line, a column and a caret under the exact bytes."
+summary = """
+Store each error as a message and a span, which is a byte range in the source. Only the renderer turns it into a line, a column and carets, so one renderer serves every error. The hard parts are in the printing: multi-byte characters, tabs, Windows line endings and hostile input. For polished output, use a diagnostics library.
+"""
+
+[[sections]]
+heading = "What makes an error easy to fix?"
+body = """
+A config checker could say `unknown key workres`. In a long file, you now have to search for it. This is more useful:
+
+```text
+error: unknown key `workres`
+ --> server.conf:2:1
+  |
+2 | workres = 4
+  | ^^^^^^^
+  = help: known keys: port, workers, log
+```
+
+It names the file, the line and the column. It shows the line and marks the wrong part with carets. The help line says what would be accepted. A report like this is called a **diagnostic**.
+"""
+
+[[sections]]
+heading = "What should an error store?"
+body = """
+Don't build that text where you find the mistake. Store the facts: a message, an optional help text and a **span**. A span is a start and an end offset into the source, counted in bytes. The end is not included.
+
+```rust
+struct Diagnostic {
+    message: String,
+    span: std::ops::Range<usize>,
+    help: Option<String>,
+}
+```
+
+A span is small and cheap to copy. The checker doesn't need to count lines while it works. Tests can slice the source with the span and see exactly what was blamed. Another program, such as an editor, can use the same facts without reading your printed text.
+
+Spans only help if you keep them from the start. A parser's tokens and tree nodes need them. A later check can't point at a name whose position was thrown away.
+
+A span means nothing without its source. With several files, store which file it belongs to as well.
+"""
+
+[[sections]]
+heading = "How does a byte offset become a line and a column?"
+body = """
+The line number is one more than the number of newlines before the offset. The column depends on the text between the start of that line and the offset. Both start at 1 in what people read.
+
+Counting newlines from the top for every error repeats the same work. A **line index** records once where each line starts. Then each offset can be looked up in that sorted list with a binary search. The column still needs a walk along its line.
+
+An offset counts bytes, but a column should not.
+
+```compare
+takeaway = "Use byte offsets to slice the source. Count characters to place something on screen."
+[wrong]
+title = "Pad by bytes"
+code = '''
+fn main() {
+    let line = "café = ou";
+    let at = line.find("ou").unwrap();
+    println!("{line}");
+    println!("{}^^", " ".repeat(at));
+}
+'''
+result = "The carets start one place to the right, under `u` and the empty space after it. `é` is one character of two bytes."
+[fixed]
+title = "Pad by characters"
+code = '''
+fn main() {
+    let line = "café = ou";
+    let at = line.find("ou").unwrap();
+    println!("{line}");
+    println!("{}^^", " ".repeat(line[..at].chars().count()));
+}
+'''
+result = "The carets sit under `ou`."
+```
+
+Columns mean different things in different tools. This page counts Rust `char` values. The Language Server Protocol, which editors use, counts UTF-16 code units unless both sides agree on another unit. Convert at that boundary.
+"""
+
+[[sections]]
+heading = "Which text breaks the carets?"
+body = """
+Plain ASCII works on the first try. Real files bring more.
+
+| In the source | What goes wrong | What this renderer does |
+|---|---|---|
+| A tab before the error | One space doesn't cover a tab's width | Copies each tab into the caret line |
+| `\\r\\n` line endings | A stray `\\r` ends up in the output | Removes it from the shown line |
+| An error at the very end | There is nothing to underline | Prints one caret |
+| A span over several lines | One row of carets can't cover it | Underlines the first line only |
+| An escape sequence in the file | The terminal may obey it | Shows a replacement character instead |
+| Characters that reorder text | The screen can differ from the file | Replaces them too |
+| The line and paragraph separators U+2028 and U+2029 | Some viewers break the line there | Replaces them too |
+
+The last three rows matter when the file comes from someone else. This also applies to names you copy into the message, so the renderer cleans the message, file name and help text too.
+
+Slicing is the other trap. Rust panics if you slice a string inside a character. Taking "the first letter" as one byte is enough:
+
+```rust
+let word = "über";
+println!("{}", &word[..1]);
+```
+
+It panics with `end byte index 1 is not a char boundary; it is inside 'ü' (bytes 0..2 of string)`. Use `word.chars().next()` for the first character.
+
+A renderer runs when something is already wrong, so it should not crash on a bad span. This one moves offsets back onto the source and onto character boundaries. That hides a bug in the span, so test your parser's spans separately.
+"""
+
+[[sections]]
+heading = "How does the code do it?"
+body = """
+:::deeper The renderer, step by step (gives away part of the capstone step "Read the source into tokens")
+```walkthrough
+file = "examples/errors/diagnostics_spans.rs"
+[[step]]
+title = "Index the lines once"
+lines = "32-41"
+text = "A line starts at offset 0 and after every newline. `Source` borrows the text and copies none of it."
+[[step]]
+title = "Find the line and column"
+lines = "43-54"
+text = "`partition_point` is a binary search. It returns how many lines start at or before the offset, which is the line number."
+[[step]]
+title = "Take one line without its ending"
+lines = "56-69"
+text = "A `\\r` is removed only when a newline follows it."
+[[step]]
+title = "Make any span safe"
+lines = "72-82"
+text = "Offsets move to character boundaries. An end before the start becomes an empty span. The range is then cut to the shown line."
+[[step]]
+title = "Line up the carets"
+lines = "84-90"
+text = "Tabs stay tabs, and every other character becomes one space. An empty range still gets one caret."
+[[step]]
+title = "Clean what you print"
+lines = "106-117"
+text = "Each unsafe character becomes one replacement character, so the number of characters stays the same."
+```
+:::
+"""
+
+[[sections]]
+heading = "What does this renderer not handle?"
+body = """
+It counts one screen cell per character, and a tab inside the span gets only one caret. Many East Asian characters and emoji take two cells, so carets after them drift. A combining accent takes none. Handling this needs Unicode width rules, which the standard library doesn't provide.
+
+It prints the whole line. A minified file with one huge line needs a window around the span. Printing many errors on that line would also repeat all of it each time. In a real tool, show only the first few errors and say how many remain.
+
+It shows one span per error, with no colour. Compilers often label a second place, such as where a name was first defined. `codespan-reporting` and `miette` support richer reports. Prefer one of them for a tool that others will use every day.
+"""
+
+[[sections]]
+heading = "How do you test an error printer?"
+body = """
+Compare whole outputs for a few chosen cases. A check that only looks for the message would miss a caret that moved. The program does this for tabs, Windows endings, multi-byte text and the end of input.
+
+Then it tries 20,000 random texts and spans, using a fixed start value. The text mixes tabs, line endings, multi-byte characters and escape characters. Some spans are reversed, too large or inside a character.
+
+Every offset's line and column must match a slow function that walks the text. The renderer must not panic, and no control character other than tab and newline may reach the output.
+
+```sh
+cargo run --release --example diagnostics_spans
+```
+
+To see a check work, replace the tab-copying closure for `indent` with one that always returns a space. Run again: the check on the line `lgo = info`, which starts with a tab, fails.
+"""
+
+[[connections]]
+kind = "before"
+title = "A zero-copy lexer"
+link = "/cookbook/p/zero-copy-lexer"
+why = "Shows tokens that borrow from the source, which is where positions come from."
+
+[[connections]]
+kind = "practise"
+title = "Read the source into tokens"
+link = "/p/y122-read-the-source"
+level = "similar"
+why = "A capstone step with its own message format. Solve it before opening the fold or the full code."
+
+[[connections]]
+kind = "practise"
+title = "Every broken line"
+link = "/p/y121-every-broken-line"
+level = "related"
+why = "About finding more than one mistake in a single run, which this page does not cover."
+
+[[connections]]
+kind = "returns"
+title = "A tiny language"
+link = "/cookbook/p/edge-dsl-parser"
+why = "A lexer and parser that put a span on every token and every error."
+
+[[connections]]
+kind = "returns"
+title = "Edit distance"
+link = "/cookbook/p/dp-edit-distance"
+why = "How to choose a \"did you mean ...?\" text for the help line."
+
+[[connections]]
+kind = "project"
+title = "Build a scripting language"
+link = "/rust/series/scripting-language"
+why = "Errors with positions run through the whole series."
+
+[[sources]]
+title = "Rust Compiler Development Guide: errors and lints"
+url = "https://rustc-dev-guide.rust-lang.org/diagnostics.html"
+note = "How a large compiler structures its diagnostics and what it asks of a good message."
+
+[[sources]]
+title = "codespan-reporting"
+url = "https://docs.rs/codespan-reporting"
+note = "A library for reports with labelled spans, across one or more files."
+
+[[sources]]
+title = "miette"
+url = "https://docs.rs/miette"
+note = "A diagnostics library built around an error trait."
+
+[[sources]]
+title = "Language Server Protocol: position encoding"
+url = "https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#position"
+note = "Read what the character field of a position counts."
+
+[[sources]]
+title = "Trojan Source"
+url = "https://trojansource.codes/"
+note = "Why characters that reorder text can make source code look different from what it does."

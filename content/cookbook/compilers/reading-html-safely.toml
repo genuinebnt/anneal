@@ -1,0 +1,42 @@
+title = "Reading HTML safely"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 572
+kind = "recipe"
+lede = "Pull links and text out of a page you don't trust."
+level = "intermediate"
+code = ["examples/text_and_parsing/reading_html_safely.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>link collectors</li><li>link checkers</li><li>previews</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>crawlers</li><li>link previews in chat and mail</li><li>feed readers</li><li>site audits</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+This is a teaching subset of the tokenizer in the HTML standard. It **reads** pages. It is not a sanitizer: never use it to decide what a browser may show.
+
+It builds no tree, knows five named character references, refuses `<svg>`, `<math>` and `<!--` inside a script, and treats `<noscript>` as ordinary markup (a browser with scripts on does not).
+
+In a browser, tree construction decides whether `<title>`, `<textarea>`, `<iframe>`, `<plaintext>`, `<style>`, `<script>`, `<xmp>`, `<noembed>` or `<noframes>` turns what follows into text. This reader always does, so a page can be written to **HIDE real links** from it: "no link found" proves nothing. For real pages use a full parser (html5ever).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://html.spec.whatwg.org/multipage/parsing.html#tokenization>
+"""
+
+[[sources]]
+title = "html.spec.whatwg.org/multipage/parsing.html#tokenization"
+url = "https://html.spec.whatwg.org/multipage/parsing.html#tokenization"

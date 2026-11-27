@@ -16,6 +16,8 @@
 .cb-lesson .cb-art .sd-tbl{clear:both;margin-block:24px}
 .cb-lesson .cb-art .sd-md td,.cb-lesson .cb-art .sd-md th{padding:10px 14px;line-height:1.6;vertical-align:top}
 .cb-lesson .cb-art .sd-code{margin-block:24px;clear:both}
+/* no ligatures in lesson code: it shows the exact characters a reader types */
+.cb-lesson .cb-art :is(code,pre){font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0}
 /* the syntax colours are a little nearer the text colour here, so they stay readable on code and on a highlighted line */
 .cb-lesson .cb-art .sd-code .t-t{color:color-mix(in oklab,var(--ty) 82%,var(--fg))}
 .cb-lesson .cb-art .sd-code .t-n{color:color-mix(in oklab,var(--num) 76%,var(--fg))}

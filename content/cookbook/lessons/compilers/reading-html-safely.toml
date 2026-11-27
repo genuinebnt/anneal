@@ -1,0 +1,256 @@
+title = "Reading HTML safely"
+module = "Compilers and languages"
+module_order = 12
+chapter = "Lexing and parsing"
+chapter_order = 1
+order = 572
+kind = "lesson"
+level = "intermediate"
+code = ["examples/text_and_parsing/reading_html_safely.rs"]
+lede = "How to pull links and text out of a page that may be broken or written to fool you."
+summary = """
+Don't search HTML as plain text: comments, scripts, quotes and escapes change what it means. Read it with the rules a browser uses, which in real programs means a maintained HTML parser. Treat the result as untrusted: limit the input and check each link's scheme against an allowed list. This page's tokenizer is not a sanitizer, and a page can hide real links from it.
+"""
+
+[[sections]]
+heading = "Why can't you just search the text for links?"
+body = """
+Say you want the links on a page. Searching the text for `href="` seems enough. Here is a page where it goes wrong:
+
+```text title="page.html"
+<!-- <a href="/old"> -->
+<script>var s = '<a href="/in-a-string">';</script>
+<A HREF='/docs'>Docs</A>
+<a title="1 > 0" href=/prices>Prices</a>
+```
+
+A browser finds two links here, `/docs` and `/prices`. The search finds the two that don't exist and misses both real ones.
+
+The first two are inside a comment and a script. The real tags differ in capitals, quotes and spacing, and one has a `>` inside quotes.
+
+A longer search pattern doesn't fix this, because a character's meaning depends on everything before it.
+"""
+
+[[sections]]
+heading = "What does a browser do with broken HTML?"
+body = """
+It reads it anyway. The [HTML standard](https://html.spec.whatwg.org/multipage/parsing.html) says what to do with wrong input as well as right input. It works in two stages. The **tokenizer** cuts the characters into tags, text and comments. **Tree construction** then arranges them into a tree by its own rules.
+
+The example is a subset of the first stage. Some of its rules surprise people:
+
+| Input | Result |
+|---|---|
+| `<!-->` | A complete, empty comment |
+| `<a href="/x" href="/y">` | The first `href` counts |
+| `<a href="/x"` at the end of the input | No tag at all |
+| `</scripture>` inside a script | Does not end the script |
+| `<script/>` | Still opens a script: the `/` is ignored |
+
+Inside `script` and `style`, nothing is markup. Inside `title` and `textarea`, tags are text, but references such as `&amp;` are still decoded.
+
+> [!WARNING]
+> **This reader can miss real links.** In a browser, tree construction decides whether `title`, `textarea`, `iframe`, `plaintext`, `style`, `script`, `xmp`, `noembed` or `noframes` turns what follows into text. A tokenizer alone can't know that, so this one always switches.
+
+A browser finds a link to `/seen` in this line. The example finds none, and reports no doubt:
+
+```text
+<template><col><title></template><a href=/seen>
+```
+
+Inside this `template`, the browser ignores the `title` tag. The reader takes it as real and reads the link as title text. The other eight tags in that place do the same. Anyone can write such a page on purpose, so "no link found" proves nothing.
+"""
+
+[[sections]]
+heading = "How does the example read a page?"
+body = """
+It moves from one `<` to the next, and the characters after each one say what opens there. Every search goes forwards.
+
+```walkthrough
+file = "examples/text_and_parsing/reading_html_safely.rs"
+[[step]]
+title = "Limit and prepare"
+lines = "227-233"
+text = "The size check comes first, before any copying. Then line breaks become one kind, and zero bytes become a visible replacement character."
+[[step]]
+title = "Decide what a `<` opens"
+lines = "245-268"
+text = "It can open a comment, an end tag, a start tag or nothing. A tag that the input cuts off produces no token."
+[[step]]
+title = "Read one tag"
+lines = "136-182"
+text = "Quoted values are read to the matching quote, so a `>` inside them is data. The attribute limit is checked before the search for repeated names, which would otherwise be quadratic."
+[[step]]
+title = "Find the end of a comment"
+lines = "197-212"
+text = "The two short forms come first. After that, either `-->` or `--!>` closes it."
+[[step]]
+title = "Switch rules inside some elements"
+lines = "280-298"
+text = "A script's content goes to a separate token kind, so it can't be taken for page text. Cases this reader would get wrong are refused."
+[[step]]
+title = "Find the real end tag"
+lines = "185-195"
+text = "The name must be followed by a space, `/` or `>`. Without that check, `</scripture>` would end a script."
+```
+
+Every cut is at an ASCII character or an end of the input, so slicing never panics. The reader takes a `&str`. A real collector must first work out the page's encoding, which may not be UTF-8.
+"""
+
+[[sections]]
+heading = "Why are character references a trap?"
+body = """
+A **character reference** is an escape such as `&amp;` for `&`, or `&#106;` for `j`. Browsers decode references in attribute values before they use them. So `href="&#106;avascript:go()"` is a script link, although the word never appears in the page.
+
+The standard has [a long table of names](https://html.spec.whatwg.org/multipage/named-characters.html). The example knows only `amp`, `lt`, `gt`, `quot`, `apos` and numbers, and it doesn't guess the rest. An attribute holding another one, such as `&colon;`, gets the value `None`, which the link check rejects. A text token keeps `&nbsp;` as written and sets `sure` to `false`. Check that flag before you compare or show the text.
+
+The cost is that some good links are rejected, such as a query ending in a bare `&flag`. A name followed by `=` is left alone, so `?a=1&page=2` still works.
+
+Numbers need care too. The code uses saturating arithmetic, which stops at the largest value. Wrapping arithmetic would turn `&#4294967402;` into `j`.
+"""
+
+[[sections]]
+heading = "Is a link safe to follow?"
+body = """
+A link is text that the page's author chose. Its **scheme**, the part before the first colon, may be `javascript:`, `file:` or `data:`. Allow `http` and `https`, and reject all others.
+
+First clean the text as a browser does. The [URL standard](https://url.spec.whatwg.org/#concept-basic-url-parser) removes leading and trailing control characters and spaces. It also removes every tab and line break, even in the middle of a word.
+
+```compare
+takeaway = "A list of bad prefixes must predict every spelling. A list of good ones, applied after cleaning, rejects what it doesn't recognise. It also rejects relative links, which need their own step."
+[wrong]
+title = "Block the bad prefix"
+code = '''
+fn main() {
+    // what a browser gets from href="&#32;JavaScript:go()"
+    let url = " JavaScript:go()";
+    let allowed = !url.starts_with("javascript:");
+    println!("follow it: {allowed}");
+}
+'''
+result = "It prints `follow it: true`. The space and the capitals slip past, and a browser ignores both."
+[fixed]
+title = "Clean, then allow"
+code = '''
+fn main() {
+    // what a browser gets from href="&#32;JavaScript:go()"
+    let url = " JavaScript:go()";
+    let cleaned: String = url
+        .trim_matches(|c: char| c <= ' ')
+        .chars()
+        .filter(|c| !matches!(c, '\\t' | '\\n' | '\\r'))
+        .collect::<String>()
+        .to_ascii_lowercase();
+    // this check wants a full address; relative ones need their own step
+    let allowed = cleaned.starts_with("https:") || cleaned.starts_with("http:");
+    println!("follow it: {allowed}");
+}
+'''
+result = "It prints `follow it: false`."
+```
+
+A link without a scheme is **relative**. Resolve it with a URL library, such as the [url crate](https://docs.rs/url/latest/url/). The example doesn't apply `<base href>`, which changes the address to resolve against.
+
+Then check the result. `//other.example/x` has no scheme, yet it leads to another site. An allowed scheme also says nothing about the host. A program that fetches links must check [which network address it will reach](/cookbook/p/std-net-tcp-udp-ip-addr), again after every redirect.
+"""
+
+[[sections]]
+heading = "What must be limited?"
+body = """
+Whoever wrote the page chose its size and shape. The example stops at 2 MiB of input, 200,000 tokens, and 100 attributes in one tag. The last limit bounds the search for repeated names.
+
+Apply the byte limit while you download too. A compressed response can expand to many times its size, so count the bytes after decompression.
+
+A tokenizer needs no depth limit, because it never calls itself. If you build a tree, limit its depth, or a function that walks it can run out of stack.
+"""
+
+[[sections]]
+heading = "Why must this never clean HTML?"
+body = """
+**This tokenizer is not a sanitizer.** A sanitizer takes untrusted HTML and returns HTML that is safe to show. It is only right if it reads every input as the browser will, and you just saw this reader fail at that. It also refuses `svg` and `math`, and reads `noscript` as markup, unlike a browser with scripts on.
+
+To show other people's HTML, use a maintained sanitizer. In Rust, [ammonia](https://docs.rs/ammonia/latest/ammonia/) is built on a full HTML parser and allows only listed tags and attributes.
+
+To show extracted *text*, escape it on the way out. The example's `escape_text` is for **two places only**:
+
+- the text between the tags of an ordinary element, such as `p`, `li` or `td`;
+- a quoted `title`, `alt` or `data-*` value that no script later runs, reads as HTML or uses as a template.
+
+Everywhere else it is **not safe**, even with quotes around the value:
+
+| Not safe in | Why |
+|---|---|
+| `onclick` and every other `on…` attribute | The browser decodes the value, then runs it as script |
+| `srcdoc` | The browser decodes the value, then reads it as a whole page |
+| `style`, and the `style` element | CSS has its own syntax; escaping leaves `url(...)` working |
+| `href`, `src`, `action` and other URL attributes | `javascript:go()` has nothing to escape |
+| the `script` element | Hostile text needs no escaped character to be code there |
+| unquoted values, tag names, attribute names, comments | Other characters end or change them |
+
+In headless Chrome, escaped input still ran code through `onclick`, `srcdoc`, a script link, a `script` element and an unquoted value. The [OWASP guide to cross-site scripting](https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html) explains what each place needs.
+"""
+
+[[sections]]
+heading = "What should you use for real pages?"
+body = """
+Use a maintained parser. [html5ever](https://docs.rs/html5ever/latest/html5ever/) has both stages, and [scraper](https://docs.rs/scraper/latest/scraper/) builds on it to give a tree you can search. Write your own only to learn, or for pages that your own program produced.
+
+Even a correct parser reads only the HTML it was given. Links that a script adds later are not in it.
+"""
+
+[[sections]]
+heading = "How can you check a reader like this?"
+body = """
+Run it from the `cookbook` folder:
+
+```sh
+cargo run --release --example reading_html_safely
+```
+
+It prints the three links of a small page: one relative, one rejected and one on the web. Before that, fixed cases, 4,000 generated pages and random hostile input must pass. One check records the hidden-link failure above. None of this compares the reader with a browser on every input.
+
+Try one change: in `comment_end`, remove the loop over the two short comment forms. The run then stops at the page that starts with `<!-->`, because the link after it has disappeared.
+"""
+
+[[connections]]
+kind = "before"
+title = "A zero-copy lexer"
+link = "/cookbook/p/zero-copy-lexer"
+why = "A simpler tokenizer, for a notation whose rules never change halfway."
+
+[[connections]]
+kind = "returns"
+title = "Reading JavaScript as a syntax tree"
+link = "/cookbook/p/javascript-syntax-tree"
+why = "The next step when the addresses you want sit inside the page's scripts."
+
+[[connections]]
+kind = "returns"
+title = "Addresses and sockets in std"
+link = "/cookbook/p/std-net-tcp-udp-ip-addr"
+why = "Look here before fetching a link, to tell public network addresses from private ones."
+
+[[connections]]
+kind = "returns"
+title = "Security pitfalls"
+link = "/cookbook/p/security-pitfalls-secure-coding"
+why = "Other places where a stranger's text becomes a command, a path or a page."
+
+[[sources]]
+title = "HTML standard: parsing"
+url = "https://html.spec.whatwg.org/multipage/parsing.html"
+note = "Section 13.2.5 gives every tokenizer state. Read the comment and script states to see how odd the real rules are."
+
+[[sources]]
+title = "URL standard: the URL parser"
+url = "https://url.spec.whatwg.org/#concept-basic-url-parser"
+note = "Its first steps say which characters are removed before a URL is read."
+
+[[sources]]
+title = "OWASP: Cross Site Scripting Prevention"
+url = "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html"
+note = "Which escaping each place on a page needs, and when only a sanitizer will do."
+
+[[sources]]
+title = "ammonia"
+url = "https://docs.rs/ammonia/latest/ammonia/"
+note = "See how an HTML sanitizer states what it allows."
