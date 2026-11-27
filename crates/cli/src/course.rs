@@ -1900,7 +1900,7 @@ fn locked(repo: &Path, course: &Course, progress: &Progress, s: &Stage) -> Optio
         return None;
     }
     let cur = current(course, progress)?;
-    let boss = course.stages.iter().filter(|x| x.module == cur.module && x.def.kind != "challenge").last().map_or(String::new(), |b| format!(" ({})", b.def.id));
+    let boss = course.stages.iter().rfind(|x| x.module == cur.module && x.def.kind != "challenge").map_or(String::new(), |b| format!(" ({})", b.def.id));
     Some(format!(
         "{} is in module {} · {}, which is not unlocked yet: its code and tests arrive when the last stage of your current module, {}{boss}, passes.\nYou are on {} · {}: `anneal course test` runs it.",
         s.def.id,
