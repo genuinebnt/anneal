@@ -7,7 +7,41 @@ this file says where the work stands today.
 **Keep it current.** At the end of every batch: add a line to "Done" (newest first, with the commit), update "Now" and "Next", and set
 the date below. Do not let it drift: a wrong line here costs the next agent more than a missing one.
 
-Last updated: **2026-11-02** (SQL course modules 5 to 7, which finish part I; system design in depth and the reading view, error screens, the crash fix, the SQL performance course pilot with its plan pipeline and plan view; see section 0 for what to do next).
+Last updated: **2026-11-27** (BusTub review branch, see its section below; before it, 2026-11-02: SQL course modules 5 to 7, which finish part I; system design in depth and the reading view, error screens, the crash fix, the SQL performance course pilot with its plan pipeline and plan view; see section 0 for what to do next).
+
+## BusTub course: review and fixes (branch `review/bustub-assessment`, not merged or released; 2026-11-27)
+
+A full review of courses/bustub (code, tests, pages, challenges, CLI and web) by nine reviewers, one per slice, plus research on how
+build-a-system courses are structured. Everything below is committed on the branch (worktree under the session scratchpad); nothing is
+pushed. `git log origin/master..review/bustub-assessment` lists it.
+
+- **Engine bugs fixed, each with a test that fails on the old code:** DiskManager::new truncated existing files; flush_page wrote with no
+  latch (the disk could go backwards); the recovery store read before-images outside its lock (an abort could restore a stale image);
+  ORDER BY through an index dropped NULL and duplicate keys, and UPDATE k = k + 1 lost index entries (indexes are now unique over
+  non-NULL keys, with errors, a two-phase update and a completeness check); an index lookup with a constant of another type panicked;
+  hash joins on mixed-type keys lost rows; WHERE above an outer join was merged into its ON; the lock manager missed deadlocks made by
+  its fair queue; GC let write skew through serializable validation; the B+ tree iterator panicked when its leaf shrank; an oversized
+  insert left a table unreadable; try_lock disagreed with lock; constant folding erased overflows.
+- **Learner experience:** `course show` printed every check answer (hidden now, `--answers`); 3k's five answers were open on the web;
+  ~25 fix-it challenges explained their bug (now a hidden check at the end); 138 challenges link cookbook pages; 3j unlocked after
+  project 4 in the CLI (directory renamed 19c, primers marked optional); about 15 wrong check answers fixed; checks added to 4d and r;
+  1,682 bare assertions now name their behaviour; toolboxes no longer paste the reference in eight stages; 2b-03/04 and 4b-07 are
+  contracts with the steps in an aside. CLI/web/API (merged from `review/course-ux-fixes`): one stage count everywhere, "next" skips
+  challenges, runs are reported after the regression check, `show` prints the sections after the hints, commands name their stage,
+  challenge banners, a locked-module message, proptest counterexamples kept, `reset` archives progress.json first, a lint rule for
+  unpaired `||`.
+- **Formatting:** the reference ships `rustfmt.toml` (max_width 140) and is formatted; `tools/check_course_regions.py` and
+  `cargo fmt --check` run in CI with `add_assert_messages.py --check` (all three new).
+- **Checked:** all 62 reference test binaries pass; the template compiles with its tests; course lint and validate clean; CLI and
+  content tests, clippy clean; `tsc` clean on the web changes. `anneal course verify` has **not** been run on the branch: run it
+  (in the background, hours) before merging.
+- **In flight:** branch `review/content-contracts` (recipe tasks into contracts, toolboxes that paste the reference, step-list `todo!`
+  messages, slice F's wrong check answers and dead track links).
+- **Waiting on the owner:** offline hints (opening one marks the stage "passed with help"); concepts in the CLI; the phone tab layout
+  (mockup first); soft-delete of concept-read rows; COURSE_STANDARDS.md §1 (required "Read first" concepts) against
+  BUSTUB_RESTRUCTURE.md §4b (all concepts optional), which one stands; the restructure proposals (split 2c-01, a concurrent B+ tree
+  module 2e, merge the tiny 2a stages, 4e wires 3k's DbError into the session and shell, promote some challenges to core stages, an
+  early end-to-end SQL moment). Indexes inside transactions use only the primary key; secondary indexes would need (key, rid) entries.
 
 ## Cookbook pages: one frame (local, not released; 2026-11-27)
 
