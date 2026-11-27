@@ -182,7 +182,8 @@ fn readers_never_see_a_torn_pair_and_never_block_the_writer() {
 
 ### In the exercises
 
-- **2c-05:** `insert_optimistic` and `remove_optimistic` check the leaf under its write latch (a duplicate or missing key is simply done); anything else falls back to the pessimistic path, which is the insert and remove of the earlier stages unchanged.
+- **2e-02:** the fast paths of insert and remove read-latch down, re-latch the leaf for writing under the parent's read latch and check it again (a duplicate or a missing key is simply done); anything else falls back to the pessimistic path of 2e-01, unchanged.
+- **2e-03:** a scan that holds no latch between calls checks each pair against the last key it returned: the same "act, then validate" idea applied to a position instead of a page.
 - **Version-checked retry:** the second test is the validation step in "optimistic lock coupling"; the course's index gets the same safety from the parent's read latch instead of a version number.
 
 ### Where it is used

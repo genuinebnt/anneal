@@ -1,0 +1,8 @@
+id = "2c-05"
+title = "Removing keys: borrow and merge at the leaves"
+kind = "build"
+difficulty = "hard"
+tests = ["stages_2c::s2c_05"]
+learn = ["underflow: borrow from a sibling, else merge", "a root with one child is replaced by that child", "freeing pages once nobody holds them"]
+concepts = ["underflow-borrow-and-merge"]
+concepts_optional = ["b-plus-tree-anatomy", "the-root-and-the-header-page", "checking-invariants", "model-based-testing", "errors-2c"]

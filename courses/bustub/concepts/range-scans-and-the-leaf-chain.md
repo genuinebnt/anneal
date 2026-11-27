@@ -166,7 +166,8 @@ fn an_ordered_index_answers_between_top_n_and_next_after() {
 
 ### In the exercises
 
-- **2c-03:** moving past the end of a leaf to the next, `Iterator::next`, `begin_at` as a descent plus `lower_bound`, and why no latch is kept between calls.
+- **2c-04:** moving past the end of a leaf to the next, `Iterator::next`, `begin_at` as a descent plus `lower_bound`, and why no latch is kept between calls.
+- **2e-03:** what a scan that keeps no latch may see while writers split, merge and borrow under it, and how checking each pair against the last key returned keeps it in order.
 - **The stage's tests** assert the same facts as the first test above (every leaf boundary), plus "nothing stays pinned between calls".
 
 ### Where it is used

@@ -1,0 +1,8 @@
+id = "2c-01"
+title = "A header and one leaf"
+kind = "learn"
+difficulty = "medium"
+tests = ["stages_2c::s2c_01"]
+learn = ["designing a leaf page and a header page for a tree that lives in the buffer pool", "a header page that says where the root is", "observers that let a test check the shape of a tree you designed"]
+concepts = ["b-plus-tree-anatomy"]
+concepts_optional = ["the-root-and-the-header-page", "slot-allocation-and-invariants", "bytes-endianness-and-views", "const-generics-for-page-layouts", "reading-compiler-errors", "routing-with-separator-keys", "errors-2c"]

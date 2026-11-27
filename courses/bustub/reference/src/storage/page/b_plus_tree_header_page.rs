@@ -31,5 +31,5 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> BPlusTreeHeaderPage<B> {
         write_page_id(self.page.as_mut(), 0, root_page_id);
     }
 }
-//~ // TODO(2c-01): your page type goes here. The tree module (module 2c) names it, and what it stores and how is up to you.
+//~ // TODO(2c-01): your header page type goes here: the one page a tree is created with, which says where the root is.
 // @end

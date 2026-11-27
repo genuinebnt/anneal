@@ -1,8 +1,0 @@
-id = "2c-04"
-title = "Removing keys: borrow, merge, shrink"
-kind = "build"
-difficulty = "hard"
-tests = ["stages_2c::s2c_04"]
-learn = ["underflow: borrow from a sibling, else merge", "propagating a merge up the tree", "a root with one child is replaced by that child"]
-concepts = ["underflow-borrow-and-merge"]
-concepts_optional = ["b-plus-tree-anatomy", "routing-with-separator-keys", "checking-invariants", "model-based-testing", "errors-2c"]

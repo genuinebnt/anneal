@@ -173,7 +173,7 @@ fn the_layout_is_header_then_entries() {
 
 ### In the exercises
 
-- **2c-01 to 2c-02:** the pages you design (capacities, the page header, `min_size`) and the split rule (the left page keeps `ceil`). The tests check the rules from outside with observers (`depth`, `leaf_sizes`) and a shape checker, not by reading your pages.
+- **2c-01 to 2c-03:** the pages you design (the leaf and the header in 2c-01, the internal page in 2c-02: capacities, the page header) and the split rule (the left page keeps `ceil`); **2c-05 and 2c-06** add the minimum sizes. The tests check the rules from outside with observers (`depth`, `leaf_sizes`) and a shape checker, not by reading your pages.
 - **Everywhere:** `levels` is how you know what height a test tree should have.
 
 ### Where it is used

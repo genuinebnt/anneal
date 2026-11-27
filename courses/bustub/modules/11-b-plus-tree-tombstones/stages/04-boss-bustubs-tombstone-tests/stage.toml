@@ -1,0 +1,8 @@
+id = "2d-04"
+title = "Boss: BusTub's tombstone tests"
+kind = "boss"
+difficulty = "easy"
+tests = ["stages_2d::s2d_04", "b_plus_tree_tombstone_test", "b_plus_tree_tombstone_variants_test::sequential_edge_mix_with_tombstones", "b_plus_tree_tombstone_variants_test::random_inserts_and_removes"]
+retest = true
+concepts = ["tombstones-and-lazy-deletion"]
+concepts_optional = ["model-based-testing", "property-testing-and-fuzzing", "errors-2d"]

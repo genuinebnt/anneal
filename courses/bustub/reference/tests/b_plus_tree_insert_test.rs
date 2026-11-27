@@ -1,6 +1,8 @@
 //! Port of `test/storage/b_plus_tree_insert_test.cpp` (BusTub, MIT, Copyright (c) 2015-2025 Carnegie Mellon University Database
 //! Group). `GetValue(key, &result)` returning a bool and filling a vector becomes `get_value(&key) -> Vec<V>`; the C++ iterator
 //! loop `for (iter = tree.Begin(); iter != tree.End(); ++iter)` becomes a `for` over the Rust iterator.
+//!
+//! `optimistic_insert_test` counts the latches of the optimistic fast path, which module 2e adds: the course runs it with that module's tests.
 
 mod b_plus_tree_utils;
 

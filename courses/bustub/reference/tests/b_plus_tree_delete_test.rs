@@ -1,6 +1,8 @@
 //! Port of `test/storage/b_plus_tree_delete_test.cpp` (BusTub, MIT, Copyright (c) 2015-2025 Carnegie Mellon University Database
 //! Group). The C++ test runs `SequentialEdgeMixTest` on a tree with a tombstone buffer (`NumTombs = 2`); the tombstone buffer is
 //! module 2d, so here it is the plain tree.
+//!
+//! `optimistic_delete_test` counts the latches of the optimistic fast path, which module 2e adds: the course runs it with that module's tests.
 
 mod b_plus_tree_utils;
 

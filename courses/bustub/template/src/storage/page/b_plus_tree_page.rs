@@ -1,3 +1,3 @@
 //! The part of a B+ tree page that every kind of page shares.
 
-// TODO(2c-01): your page type goes here. The tree module (module 2c) names it, and what it stores and how is up to you.
+// TODO(2c-01): what every page of your tree shares (a kind tag, a size) goes here, if you want a shared part at all.

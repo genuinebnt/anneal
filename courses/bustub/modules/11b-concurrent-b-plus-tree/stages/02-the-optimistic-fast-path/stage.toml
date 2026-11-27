@@ -1,0 +1,8 @@
+id = "2e-02"
+title = "The optimistic fast path"
+kind = "build"
+difficulty = "medium"
+tests = ["stages_2e::s2e_02"]
+learn = ["an optimistic descent that write-latches only the leaf", "upgrading a read latch by re-latching under the parent", "counting latches to prove the fast path is taken"]
+concepts = ["optimistic-latching"]
+concepts_optional = ["latch-crabbing-and-safe-nodes", "reader-writer-latches", "tombstones-and-lazy-deletion", "testing-concurrent-code-with-loom-and-miri", "errors-2c"]

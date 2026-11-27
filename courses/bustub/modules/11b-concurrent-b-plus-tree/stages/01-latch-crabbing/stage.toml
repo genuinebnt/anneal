@@ -1,0 +1,8 @@
+id = "2e-01"
+title = "Latch crabbing"
+kind = "build"
+difficulty = "hard"
+tests = ["stages_2e::s2e_01"]
+learn = ["latch crabbing: hold a parent only until the child is safe", "what safe means for an insert and for a remove", "proving a latch is let go by holding pages from a test"]
+concepts = ["latch-crabbing-and-safe-nodes"]
+concepts_optional = ["the-root-and-the-header-page", "deadlock-and-lock-ordering", "reader-writer-latches", "testing-concurrent-code-with-loom-and-miri", "errors-2c"]

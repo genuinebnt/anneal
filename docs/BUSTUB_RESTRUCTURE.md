@@ -113,8 +113,9 @@ Stage lists are capabilities. Each module still ends with BusTub's own tests por
 **Project 2 · Indexes**
 - **2a Typed pages (4).** Fixed-size encodings (round trip at any offset); a sorted page array (model: `Vec`); binary search (equals `partition_point`); a page layout of your design; boss.
 - **2b Extendible hash table (6).** MurmurHash3 against golden vectors; directory and bucket pages with an invariant checker (`verify_integrity`); insert and split (model: `HashMap`; invariant checked after every operation); remove, merge, shrink; concurrency; boss.
-- **2c B+ tree (7).** Pages; search and insert with splits (model: `BTreeMap`; invariants: order, occupancy, balance, depth); the iterator (equals `BTreeMap::range`); delete with borrow and merge; latch crabbing and the optimistic path; concurrency; boss.
-- **2d Tombstones (3).** The same model and invariants, plus: observable behaviour is identical to the plain tree.
+- **2c B+ tree (7), single-threaded, a level at a time.** A header page and one leaf; the first split (the internal page and a new root); splits all the way up; the iterator (equals `BTreeMap::range`); removes with borrow and merge at the leaves; merges all the way up; boss. Model: `BTreeMap`; invariants: order, occupancy, balance, depth, checked after every operation. (Restructured 2026-11-27: the old 2c-01 asked for all three page types at once, ~570 reference lines.)
+- **2d Tombstones (4).** Logical deletes in a bounded buffer; tombstones through splits, borrows and merges; reclaim before split (a full leaf with tombstones never splits); boss. The same model and invariants: observable behaviour is identical to the plain tree.
+- **2e Concurrent B+ tree (4).** Latch crabbing (a waiting writer has released the header; threaded models); the optimistic fast path (latch counts); scans that survive writers (never a key twice or out of order); boss: BusTub's concurrent tests, plain and with tombstones.
 
 **Project 3 · Query execution**
 - **3a Values and types (5).** Arithmetic against an `i128` oracle; comparisons are a total order on non-NULL values; three-valued logic as a truth-table property; casts; byte round trip.

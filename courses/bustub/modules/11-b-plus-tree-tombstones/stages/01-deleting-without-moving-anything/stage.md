@@ -16,9 +16,8 @@ For a tree with `TOMBS > 0` (the tests use 1 to 4), in your leaf pages and in `r
 - **Insert.** Inserting a key that is tombstoned **revives** it: the pair keeps its slot, takes the new value, and its tombstone goes. It succeeds (true). Inserting a live key is a duplicate (false).
 - **Counts.** A leaf's size counts every pair physically stored, tombstoned or not. With `TOMBS = 0` deletes are physical and nothing changes.
 - **Observers.** `leaf_keys()` returns the keys physically stored in each leaf (tombstoned ones included), `leaf_tombstones()` each leaf's buffer, oldest first. The leaf page type gains the buffer: the room it takes comes out of the room for pairs (`default_leaf_max_size` shrinks by the buffer size).
-- A delete that fits in the buffer, and the insert that revives, still write-latch **only the leaf** (the optimistic path of 2c-05).
 
-Tests, written with a text rendering of the leaves (`[0,1][2,3~2,3][4,5~4]`: three leaves, tombstones after the `~`): exact scenarios for each rule above, a tree whose every pair is deleted (empty to a scan, but its page still there), the one-write-latch count, a tree without tombstones reports no tombstones, and a property: on one big leaf, any inserts and removes agree with a set, every tombstone belongs to a pair in its leaf, and a buffer never overflows.
+Tests, written with a text rendering of the leaves (`[0,1][2,3~2,3][4,5~4]`: three leaves, tombstones after the `~`): exact scenarios for each rule above, a tree whose every pair is deleted (empty to a scan, but its page still there), a tree without tombstones reports no tombstones, and a property: on one big leaf, any inserts and removes agree with a set, every tombstone belongs to a pair in its leaf, and a buffer never overflows.
 
 ## Your freedom
 
@@ -45,14 +44,10 @@ Where the buffer lives in the page (before the pairs is the obvious place; after
 
 ## Tests
 
-- Remove buffers a tombstone instead of shifting pairs; removing a deleted or missing key changes nothing.
-- Deleted pairs are not found and not scanned; a scan from a deleted key starts at the next live one.
-- A full buffer makes room by really removing the oldest.
-- Inserting a deleted key again revives it with the new value.
-- A tree with every pair deleted is empty to a scan but keeps its page.
-- A fitting delete, and a revive, write-latch one page.
-- A tree without tombstones reports none.
-- Property: logical deletes agree with a set on one leaf for buffers of 1 to 3.
+- Remove buffers a tombstone instead of shifting pairs; removing a deleted or missing key changes nothing; a full buffer makes room by really removing the oldest.
+- Deleted pairs are not found and not scanned, and a scan from a deleted key starts at the next live one; a tree with every pair deleted is empty to a scan but keeps its page.
+- Inserting a deleted key again revives it with the new value; a tree without tombstones reports none.
+- Property: on one leaf, logical deletes agree with a set for buffers of 1 to 3.
 
 ## Hints
 
@@ -86,7 +81,7 @@ Optional. Predict first, then run.
 - **Tombstone keys in a buffer (ours).** Bounded, ordered by age, simple.
 - **A deleted flag per pair.** Unbounded dead pairs; needs a bit per pair and a sweep.
 - **Version chains** (MVCC, module 4): a delete is a new version; garbage collection frees the old ones.
-- **Immediate physical delete.** What module 2c did.
+- **Immediate physical delete.** What module 2c does.
 
 ## In BusTub
 

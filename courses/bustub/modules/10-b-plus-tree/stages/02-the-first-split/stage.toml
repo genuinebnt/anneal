@@ -1,0 +1,8 @@
+id = "2c-02"
+title = "The first split"
+kind = "build"
+difficulty = "medium"
+tests = ["stages_2c::s2c_02"]
+learn = ["splitting a full leaf and copying its first key up", "an internal page: separator keys and the ids of the pages below", "a new root above the two halves, named by the header"]
+concepts = ["splitting-and-promoting"]
+concepts_optional = ["routing-with-separator-keys", "b-plus-tree-anatomy", "the-root-and-the-header-page", "checking-invariants", "latch-crabbing-and-safe-nodes", "errors-2c"]

@@ -132,6 +132,7 @@ fn hll_register_never_loses_the_larger_run() {
 - **0a-03:** why the store has a write lock.
 - **4a-02:** the commit publication order.
 - **4b-02:** the conflict check under the page latch.
+- **2e-01 to 2e-04:** the concurrent B+ tree: tests that hold a page from the test thread to stop a writer in the middle, threaded workloads checked against models, and BusTub's concurrent tests.
 - **0b-03 / 0c-04:** the concurrent stress tests; run them under `cargo +nightly miri test` with a few seeds to see them pass a stricter check.
 
 ### Where it is used

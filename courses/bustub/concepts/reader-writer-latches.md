@@ -63,7 +63,7 @@ If a thread panics holding the *write* guard, the lock is poisoned, as with a mu
 
 ## Where this goes next
 
-A page in the buffer pool has one of these latches, and the B+ tree in module 2c walks from the root to a leaf *holding a latch on each page it passes*, releasing a parent only when the child is known to be **safe** (it cannot split or merge). That protocol is called **latch crabbing**, and it only works because latches are cheap, scoped by a guard, and acquired in a fixed order: parent before child, left before right.
+A page in the buffer pool has one of these latches, and the B+ tree in module 2e walks from the root to a leaf *holding a latch on each page it passes*, releasing a parent only when the child is known to be **safe** (it cannot split or merge). That protocol is called **latch crabbing**, and it only works because latches are cheap, scoped by a guard, and acquired in a fixed order: parent before child, left before right.
 
 | | C++ | Rust |
 |---|---|---|
@@ -151,10 +151,11 @@ fn a_writer_that_panics_poisons_the_latch() {
 - **1b-05 (`ReaderWriterLatch`):** a thin wrapper over `RwLock<T>` whose `read()` and `write()` ignore poisoning with `unwrap_or_else(PoisonError::into_inner)` (the third example), because the data is plain page bytes.
 - **1g-01 (page guards):** `ReadPageGuard` holds an `RwLockReadGuard`, `WritePageGuard` an `RwLockWriteGuard`. You will store each in an `Option`, so `release()` can `take()` and drop it *before* unpinning.
 - **2b-02, 2b-04 (insert and remove):** the directory is taken with `write_page` from the start, because the operation may need to change it, and the header is released as soon as the directory is held.
+- **2e-01, 2e-02 (the concurrent B+ tree):** readers share read latches down the tree; a writer's fast path read-latches the path and write-latches only the leaf, which it takes by dropping the leaf's read latch while the parent's read latch is still held, because a `RwLock` read guard cannot be upgraded.
 
 ### Where it is used
 
 - **Page latches in every buffer pool**: PostgreSQL's per-buffer content lock and InnoDB's block latches let many readers scan a page while one writer excludes them.
-- **B+ tree traversal** (module 2c): readers hold shared latches down the path; inserts take exclusive latches only where they might split.
+- **B+ tree traversal** (module 2e): readers hold shared latches down the path; inserts take exclusive latches only where they might split.
 - **Read-mostly shared state** in services: routing tables, feature flags, schema catalogs (read on every request, rewritten rarely).
 - Not for: write-heavy data (readers and writers fight; use a mutex or shard the data), and not as a way to get a "free" upgrade.

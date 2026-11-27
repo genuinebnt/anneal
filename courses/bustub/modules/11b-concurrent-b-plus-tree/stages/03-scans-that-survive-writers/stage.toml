@@ -1,0 +1,8 @@
+id = "2e-03"
+title = "Scans that survive writers"
+kind = "build"
+difficulty = "medium"
+tests = ["stages_2e::s2e_03"]
+learn = ["a scan that holds no latch between two pairs", "re-validating a remembered position against the last key returned", "what a scan may and may not see while writers move pairs"]
+concepts = ["range-scans-and-the-leaf-chain"]
+concepts_optional = ["optimistic-latching", "iterators-and-closures", "testing-concurrent-code-with-loom-and-miri", "errors-2c"]

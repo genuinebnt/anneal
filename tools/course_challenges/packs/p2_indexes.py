@@ -1086,7 +1086,7 @@ proptest! {
 }
 ''')))
 
-CH.append(C("2d-c2", M2D, "92-challenge-a-tombstone-leaf", "build", "Challenge: a tombstone leaf", "medium", "stages_2d::s2d_c2",
+CH.append(C("2d-c2", M2D, "91-challenge-a-tombstone-leaf", "build", "Challenge: a tombstone leaf", "medium", "stages_2d::s2d_c2",
   ["deleting by marking, and reviving a marked slot","a compaction rule driven by the share of dead entries"],
   ["range-scans-and-the-leaf-chain","slot-allocation-and-invariants","model-based-testing"],
   "`TombstoneLeaf` in `src/storage/index/tombstone_leaf.rs`: one leaf as a sorted list of slots where `remove` only **marks** a slot dead (a tombstone) and `insert` of a key that has a tombstone **revives** it in place. `should_compact()` says when more than half the slots are tombstones, and `compact()` drops them.",
@@ -1269,7 +1269,7 @@ proptest! {
 }
 ''')))
 
-CH.append(C("2d-c3", M2D, "93-challenge-counting-live-keys", "build", "Challenge: counting live keys", "medium", "stages_2d::s2d_c3",
+CH.append(C("2d-c3", M2D, "92-challenge-counting-live-keys", "build", "Challenge: counting live keys", "medium", "stages_2d::s2d_c3",
   ["a Fenwick tree for prefix sums with point updates","finding the leaf that holds the k-th live key"],
   ["range-scans-and-the-leaf-chain","model-based-testing"],
   "`LiveCounts` in `src/storage/index/live_counts.rs`: per-leaf counts of live keys with `O(log n)` operations: `add(leaf, delta)` when a key is inserted or tombstoned, `prefix(i)` (live keys in leaves before `i`), `range(l, r)`, and `find(k)` (which leaf holds the k-th live key, counting from 0, and how far into that leaf).",
@@ -1445,7 +1445,7 @@ proptest! {
 }
 ''')))
 
-CH.append(C("2d-c4", M2D, "94-challenge-the-twice-inserted-key", "debug", "Challenge: the twice-inserted key", "easy", "stages_2d::s2d_c4",
+CH.append(C("2d-c4", M2D, "93-challenge-the-twice-inserted-key", "debug", "Challenge: the twice-inserted key", "easy", "stages_2d::s2d_c4",
   ["finding a bug where reviving a deleted key creates a second entry"],
   ["checking-invariants","property-testing-and-fuzzing"],
   "`src/storage/index/dead_slots.rs` is a sorted list of keys in which `remove` leaves a dead slot behind. It looks right, and after a key is removed and inserted again it is sometimes reported missing and sometimes twice. Find the bug and fix it.",
@@ -1584,130 +1584,6 @@ proptest! {
             prop_assert_eq!(d.len(), m.len());
             prop_assert_eq!(d.keys(), m.iter().copied().collect::<Vec<_>>());
             for key in 0..6 { prop_assert_eq!(d.contains(key), m.contains(&key)); }
-        }
-    }
-}
-''')))
-
-CH.append(C("2d-c5", M2D, "95-challenge-reclaim-before-you-split", "build", "Challenge: reclaim before you split", "medium", "stages_2d::s2d_c5",
-  ["using tombstones as free space","when an insert should split a leaf and when it should clean it"],
-  ["tombstones-and-lazy-deletion","slot-allocation-and-invariants","model-based-testing"],
-  "`insert_into_leaf` in `src/storage/index/leaf_reclaim.rs`: insert a key into one sorted leaf of at most `capacity` entries, where an entry is a key with a live flag (`false` is a tombstone). If the key is already there it becomes live; if the leaf has room it is inserted; if the leaf is **full**, tombstones are dropped to make room, and only a full leaf with no tombstones splits in two.",
-  "Tombstones make a delete cheap and make a leaf look fuller than it is. A tree that splits a leaf half-full of dead keys grows deeper for nothing and never gets the space back. The rule \"reclaim, then split\" is the reason a tombstone design does not bloat; the part to be careful about is that reclaiming must never lose a live key or reorder the leaf.",
-  ["`insert_into_leaf(entries, capacity, key)` takes entries sorted by key and returns `Done(entries)` or `Split(left, right)`; both halves sorted, every key of `left` below every key of `right`.","Existing key (live or tombstone): it ends up live; the length does not change.","New key and `len < capacity`: inserted in order, `Done`.","New key and `len == capacity`: tombstones are removed first; if that leaves room it is `Done`, otherwise the leaf plus the new key (`capacity + 1` entries) is split with `(capacity + 2) / 2` entries on the left."],
-  ["Entries are sorted by key with no duplicates, in `Done` and in both halves of `Split`.","Every live key before the call is live after it (in `Done`, or in one half), plus the new key.","A `Split` is only returned for a full leaf with no tombstones."],
-  ["The live keys after equal the live keys before plus the key, whatever path was taken.","A leaf with at least one tombstone never splits.","`Done` never has more than `capacity` entries."],
-  ["capacity 3, [(1,live), (2,dead), (3,live)], insert 4 -> Done([(1,live), (3,live), (4,live)])","capacity 3, [(1,live), (2,live), (3,live)], insert 4 -> Split([(1),(2)], [(3),(4)])"],
-  ["Existing key revived, room available.","Full leaf with tombstones is cleaned, not split.","Full clean leaf splits in the middle.","A property against a model of live keys."],
-  src=("src/storage/index/leaf_reclaim.rs", '''
-//! Reclaim tombstones before splitting a leaf.
-
-/// `(key, live)`; `live == false` is a tombstone.
-pub type Entry = (i32, bool);
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum Inserted {
-    Done(Vec<Entry>),
-    Split(Vec<Entry>, Vec<Entry>),
-}
-
-/// Inserts `key` (live) into the sorted leaf `entries` of at most `capacity` entries.
-pub fn insert_into_leaf(entries: &[Entry], capacity: usize, key: i32) -> Inserted {
-    // @begin 2d-c5
-    let mut v: Vec<Entry> = entries.to_vec();
-    match v.binary_search_by_key(&key, |e| e.0) {
-        Ok(i) => {
-            v[i].1 = true;
-            return Inserted::Done(v);
-        }
-        Err(i) => {
-            if v.len() >= capacity {
-                v.retain(|e| e.1);
-                if v.len() >= capacity {
-                    let at = v.binary_search_by_key(&key, |e| e.0).unwrap_err();
-                    v.insert(at, (key, true));
-                    let right = v.split_off((v.len() + 1) / 2);
-                    return Inserted::Split(v, right);
-                }
-                let at = v.binary_search_by_key(&key, |e| e.0).unwrap_err();
-                v.insert(at, (key, true));
-                return Inserted::Done(v);
-            }
-            v.insert(i, (key, true));
-        }
-    }
-    Inserted::Done(v)
-    //~ todo!("2d-c5: revive, insert, reclaim tombstones of a full leaf, and only then split")
-    // @end
-}
-'''),
-  test=("tests/stages_2d.rs", '''
-use bustub::storage::index::leaf_reclaim::{insert_into_leaf, Entry, Inserted};
-use std::collections::BTreeSet;
-
-fn live(v: &[Entry]) -> BTreeSet<i32> {
-    v.iter().filter(|e| e.1).map(|e| e.0).collect()
-}
-
-#[test]
-fn s2d_c5_an_existing_key_becomes_live_and_nothing_else_changes() {
-    let leaf = vec![(1, true), (2, false), (3, true)];
-    assert_eq!(insert_into_leaf(&leaf, 3, 2), Inserted::Done(vec![(1, true), (2, true), (3, true)]));
-    assert_eq!(insert_into_leaf(&leaf, 3, 3), Inserted::Done(leaf.clone()), "already live: unchanged, and no split though full");
-}
-
-#[test]
-fn s2d_c5_a_leaf_with_room_takes_the_key_in_order() {
-    let leaf = vec![(1, true), (5, false)];
-    assert_eq!(insert_into_leaf(&leaf, 4, 3), Inserted::Done(vec![(1, true), (3, true), (5, false)]), "tombstones stay while there is room");
-    assert_eq!(insert_into_leaf(&[], 2, 9), Inserted::Done(vec![(9, true)]));
-}
-
-#[test]
-fn s2d_c5_a_full_leaf_with_tombstones_is_cleaned_not_split() {
-    let leaf = vec![(1, true), (2, false), (3, true)];
-    assert_eq!(insert_into_leaf(&leaf, 3, 4), Inserted::Done(vec![(1, true), (3, true), (4, true)]));
-    let all_dead = vec![(1, false), (2, false)];
-    assert_eq!(insert_into_leaf(&all_dead, 2, 0), Inserted::Done(vec![(0, true)]));
-}
-
-#[test]
-fn s2d_c5_a_full_clean_leaf_splits_in_the_middle() {
-    let leaf = vec![(1, true), (2, true), (3, true)];
-    assert_eq!(insert_into_leaf(&leaf, 3, 4), Inserted::Split(vec![(1, true), (2, true)], vec![(3, true), (4, true)]));
-    let leaf = vec![(10, true), (20, true), (30, true), (40, true)];
-    match insert_into_leaf(&leaf, 4, 25) {
-        Inserted::Split(l, r) => assert_eq!((l.len(), r.len()), (3, 2), "capacity + 1 entries, (capacity + 2) / 2 on the left"),
-        other => panic!("expected a split, got {other:?}"),
-    }
-}
-
-proptest! {
-    #![proptest_config(ProptestConfig { cases: 256, failure_persistence: None, ..ProptestConfig::default() })]
-
-    /// Property: live keys are conserved plus the new one; halves are sorted and ordered; a split only for a full clean leaf.
-    #[test]
-    fn s2d_c5_property_live_keys_are_conserved(raw in proptest::collection::btree_map(0i32..30, any::<bool>(), 0..8), extra in 0usize..3, key in 0i32..30) {
-        let leaf: Vec<Entry> = raw.into_iter().collect();
-        let capacity = leaf.len() + extra;
-        prop_assume!(capacity >= 1);
-        let mut want = live(&leaf);
-        want.insert(key);
-        match insert_into_leaf(&leaf, capacity, key) {
-            Inserted::Done(v) => {
-                prop_assert!(v.len() <= capacity);
-                prop_assert!(v.windows(2).all(|w| w[0].0 < w[1].0));
-                prop_assert_eq!(live(&v), want);
-            }
-            Inserted::Split(l, r) => {
-                prop_assert!(leaf.len() == capacity && leaf.iter().all(|e| e.1) && !leaf.iter().any(|e| e.0 == key));
-                prop_assert!(l.windows(2).all(|w| w[0].0 < w[1].0) && r.windows(2).all(|w| w[0].0 < w[1].0));
-                prop_assert!(l.last().unwrap().0 < r[0].0);
-                prop_assert_eq!(l.len() + r.len(), capacity + 1);
-                let mut both = live(&l);
-                both.extend(live(&r));
-                prop_assert_eq!(both, want);
-            }
         }
     }
 }

@@ -161,6 +161,6 @@ fn a_consistent_order_never_deadlocks() {
 
 ### Where it is used
 
-- **B+ tree traversal** in PostgreSQL's nbtree, InnoDB and BusTub (module 2c): the same *latch the child, then release the parent* step, with "safe node" rules to release more than one ancestor.
+- **B+ tree traversal** in PostgreSQL's nbtree, InnoDB and BusTub (module 2e): the same *latch the child, then release the parent* step, with "safe node" rules to release more than one ancestor.
 - **Lock-coupled linked lists and trees** in kernels and concurrent collections (hand-over-hand locking).
 - **Filesystems**: path lookup takes a directory's lock, then the child's, then releases the parent.

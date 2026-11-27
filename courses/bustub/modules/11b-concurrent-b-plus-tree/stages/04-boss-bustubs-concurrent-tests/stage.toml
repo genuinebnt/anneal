@@ -1,0 +1,8 @@
+id = "2e-04"
+title = "Boss: BusTub's concurrent tests"
+kind = "boss"
+difficulty = "easy"
+tests = ["stages_2e::s2e_04", "b_plus_tree_concurrent_test", "b_plus_tree_insert_test::optimistic_insert_test", "b_plus_tree_delete_test::optimistic_delete_test", "b_plus_tree_tombstone_variants_test::insert_test_", "b_plus_tree_tombstone_variants_test::delete_test_", "b_plus_tree_tombstone_variants_test::mix_test_", "b_plus_tree_tombstone_variants_test::optimistic_"]
+retest = true
+concepts = ["latch-crabbing-and-safe-nodes"]
+concepts_optional = ["testing-concurrent-code-with-loom-and-miri", "performance-tests-and-measuring", "deadlock-and-lock-ordering", "errors-2c"]

@@ -5,4 +5,4 @@ difficulty = "hard"
 tests = ["stages_2d::s2d_02"]
 learn = ["keeping an invariant when pages are split, topped up and merged", "deciding what happens to a tombstone that has to move", "properties that must hold for every buffer size"]
 concepts = ["tombstones-and-lazy-deletion"]
-concepts_optional = ["underflow-borrow-and-merge", "checking-invariants", "model-based-testing", "errors-2d"]
+concepts_optional = ["underflow-borrow-and-merge", "checking-invariants", "model-based-testing", "const-generics-for-page-layouts", "errors-2d"]

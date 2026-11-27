@@ -217,8 +217,9 @@ fn a_leaf_write_does_not_wait_for_a_reader_on_the_root_but_a_root_write_would() 
 
 ### In the exercises
 
-- **2c-01, 2c-02, 2c-05:** the read descent takes the child's latch before dropping the parent's; the pessimistic write path keeps every guard on a stack; `safe_to_insert` and `safe_to_remove` decide where the ancestors are released.
-- **2c-10 (boss):** the concurrent tests are the first concurrency test above, with a deadlock watchdog.
+- **2c-02:** the read descent takes the child's latch before dropping the parent's, and the write descent keeps every guard on a stack.
+- **2e-01:** "safe for an insert" and "safe for a remove" decide where the header and the ancestors are released; the stage's tests hold leaves from the test thread and check that a waiting writer has let go of the header.
+- **2e-04 (boss):** the concurrent tests are the first concurrency test above, with a deadlock watchdog.
 
 ### Where it is used
 

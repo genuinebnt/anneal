@@ -1,8 +1,0 @@
-id = "2c-01"
-title = "One leaf is a tree"
-kind = "learn"
-difficulty = "hard"
-tests = ["stages_2c::s2c_01"]
-learn = ["designing three page types for a tree that lives in the buffer pool", "a header page that says where the root is", "observers that let a test check the shape of a tree you designed"]
-concepts = ["b-plus-tree-anatomy"]
-concepts_optional = ["the-root-and-the-header-page", "routing-with-separator-keys", "slot-allocation-and-invariants", "bytes-endianness-and-views", "const-generics-for-page-layouts", "reading-compiler-errors", "errors-2c"]

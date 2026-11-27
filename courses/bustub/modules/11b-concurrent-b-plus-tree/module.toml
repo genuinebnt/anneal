@@ -1,0 +1,54 @@
+code = "2e"
+title = "Concurrent B+ tree"
+summary = "The B+ tree of module 2c, with and without tombstones, shared by many threads: latch crabbing that lets go of every ancestor above a safe page, an optimistic fast path that write-latches only the leaf, and a scan that holds no latch yet never returns a key twice or out of order while writers split and merge under it. BusTub Project 2, the concurrent index."
+lectures = ["indexconcurrency"]
+bustub = ["src/include/storage/index/b_plus_tree.h", "src/storage/index/b_plus_tree.cpp", "src/include/storage/index/index_iterator.h", "src/storage/index/index_iterator.cpp", "src/include/buffer/traced_buffer_pool_manager.h", "test/storage/b_plus_tree_concurrent_test.cpp", "test/storage/b_plus_tree_insert_test.cpp", "test/storage/b_plus_tree_delete_test.cpp"]
+
+[[resources]]
+kind = "docs"
+title = "std::sync::RwLock"
+url = "https://doc.rust-lang.org/std/sync/struct.RwLock.html"
+
+[[resources]]
+kind = "docs"
+title = "std::thread::scope"
+url = "https://doc.rust-lang.org/std/thread/fn.scope.html"
+
+[[resources]]
+kind = "docs"
+title = "Receiver::recv_timeout (a watchdog for the deadlock tests)"
+url = "https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html#method.recv_timeout"
+
+[[resources]]
+kind = "book"
+title = "The Rust Book: fearless concurrency"
+url = "https://doc.rust-lang.org/book/ch16-00-concurrency.html"
+
+[[resources]]
+kind = "book"
+title = "The Rustonomicon: atomics and memory ordering"
+url = "https://doc.rust-lang.org/nomicon/atomics.html"
+
+[[resources]]
+kind = "paper"
+title = "Bayer, Schkolnick: Concurrency of operations on B-trees (Acta Informatica, 1977): latch crabbing"
+url = "https://link.springer.com/article/10.1007/BF00263762"
+
+[[resources]]
+kind = "paper"
+title = "Lehman, Yao: Efficient locking for concurrent operations on B-trees (ACM TODS, 1981): the B-link tree"
+url = "https://dl.acm.org/doi/10.1145/319628.319663"
+
+[[resources]]
+kind = "paper"
+title = "Leis, Haubenschild, Neumann: The ART of Practical Synchronization (DaMoN, 2016): optimistic lock coupling"
+url = "https://db.in.tum.de/~leis/papers/artsync.pdf"
+
+[[resources]]
+kind = "docs"
+title = "Linux kernel seqlocks (optimistic readers)"
+url = "https://docs.kernel.org/locking/seqlock.html"
+[[resources]]
+kind = "code"
+title = "PostgreSQL nbtree README: Lehman-Yao with page deletion, written for implementers"
+url = "https://github.com/postgres/postgres/blob/master/src/backend/access/nbtree/README"

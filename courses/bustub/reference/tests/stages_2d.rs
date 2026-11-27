@@ -12,9 +12,6 @@ mod b_plus_tree_utils;
 mod common;
 
 use std::collections::BTreeSet;
-use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
 
 use b_plus_tree_utils::*;
 use bustub::buffer::buffer_pool_manager::BufferPoolManager;
@@ -140,20 +137,6 @@ fn s2d_01_a_tree_with_every_pair_deleted_is_empty_to_a_scan_but_still_has_its_pa
 }
 
 #[test]
-fn s2d_01_a_delete_that_fits_still_write_latches_only_the_leaf() {
-    let bpm = bpm(30);
-    let tree = new_tree_t::<2>(&bpm, 4, 10);
-    insert_all(&tree, 0..6);
-    let (reads, writes) = (tree.bpm.get_reads(), tree.bpm.get_writes());
-    remove(&tree, 2);
-    assert!(tree.bpm.get_reads() > reads, "a delete that fits still write latches only the leaf: expected `tree.bpm.get_reads() > reads`");
-    assert_eq!(tree.bpm.get_writes() - writes, 1, "a delete that fits still write latches only the leaf");
-    let writes = tree.bpm.get_writes();
-    assert!(insert(&tree, 2), "bringing a pair back is also a single-leaf write");
-    assert_eq!(tree.bpm.get_writes() - writes, 1, "a delete that fits still write latches only the leaf");
-}
-
-#[test]
 fn s2d_01_a_tree_without_tombstones_has_none_to_report() {
     let bpm = bpm(30);
     let tree = new_tree(&bpm, 4, 4);
@@ -200,8 +183,15 @@ fn s2d_02_a_split_sends_each_tombstone_with_its_pair() {
         remove(&tree, k);
     }
     assert_eq!(leaves_t(&tree), "[0,1,2,3~3,2,0]", "a split sends each tombstone with its pair");
-    insert(&tree, 4); // the leaf reaches max_size 5: split
-    assert_eq!(leaves_t(&tree), "[0,1,2~2,0][3,4~3]", "the buffer is divided by key; the order is kept");
+    insert(&tree, 4); // the leaf reaches max_size 5 and splits (from stage 2d-03 on it reclaims a dead pair instead)
+                      // [0,1,2~2,0][3,4~3] after a split: every buffer holds exactly the deleted keys still stored in its leaf, in the order they were deleted
+    for (keys, tombs) in tree.leaf_keys().into_iter().zip(tree.leaf_tombstones()) {
+        let keys: Vec<i64> = keys.iter().map(|k| k.get_as_integer()).collect();
+        let tombs: Vec<i64> = tombs.iter().map(|k| k.get_as_integer()).collect();
+        let want: Vec<i64> = [3, 2, 0].into_iter().filter(|k| keys.contains(k)).collect();
+        assert_eq!(tombs, want, "the leaf {keys:?} must buffer the deleted keys it stores, oldest first ({})", leaves_t(&tree));
+    }
+    assert_eq!(keys_by_scan(&tree), vec![1, 4], "a split sends each tombstone with its pair");
 }
 
 #[test]
@@ -307,52 +297,114 @@ proptest! {
     }
 }
 
-// ---- 2d-03 · Boss ----------------------------------------------------------------------------------------------------------
+// ---- 2d-03 · Reclaim before you split -------------------------------------------------------------------------------------
 
 #[test]
-fn s2d_03_threads_deleting_and_inserting_keep_every_live_key() {
-    let (tx, rx) = mpsc::channel();
-    let handle = thread::spawn(move || {
-        for _ in 0..5 {
-            let bpm = bpm(50);
-            let tree = new_tree_t::<3>(&bpm, 4, 5);
-            let preserved: Vec<i64> = (1..=400).filter(|k| k % 10 == 0).collect();
-            let dynamic: Vec<i64> = (1..=400).filter(|k| k % 10 != 0).collect();
-            insert_all(&tree, preserved.iter().copied());
-            thread::scope(|scope| {
-                for tid in 0..6 {
-                    let (tree, preserved, dynamic) = (&tree, &preserved, &dynamic);
-                    scope.spawn(move || match tid % 3 {
-                        0 => dynamic.iter().for_each(|&k| {
-                            insert(tree, k);
-                        }),
-                        1 => dynamic.iter().for_each(|&k| remove(tree, k)),
-                        _ => {
-                            for &k in preserved {
-                                assert_eq!(get(tree, k), vec![rid_of(k)], "preserved key {k} went missing");
-                            }
-                        }
-                    });
-                }
-            });
-            let scanned: BTreeSet<i64> = keys_by_scan(&tree).into_iter().collect();
-            assert!(preserved.iter().all(|k| scanned.contains(k)), "a preserved key is missing from the scan");
-            // whatever the dynamic keys ended as, the structure must be sound for the keys that are live
-            check_shape_t::<3>(&tree, &scanned, 4, 5, true).unwrap_or_else(|e| panic!("{e}"));
-            assert_no_pins(&bpm);
-        }
-        tx.send(()).unwrap();
-    });
-    match rx.recv_timeout(Duration::from_secs(90)) {
-        Ok(()) => handle.join().unwrap(),
-        // a worker that panicked (a failed assert, a todo!) ends the scope early: show its message, not a deadlock
-        Err(mpsc::RecvTimeoutError::Disconnected) => std::panic::resume_unwind(handle.join().unwrap_err()),
-        Err(mpsc::RecvTimeoutError::Timeout) => panic!("the workload did not finish in 90 s: a deadlock?"),
+fn s2d_03_a_full_leaf_with_tombstones_reclaims_a_dead_pair_instead_of_splitting() {
+    let bpm = bpm(30);
+    let tree = new_tree_t::<3>(&bpm, 5, 4);
+    insert_all(&tree, 0..4);
+    for k in [3, 2, 0] {
+        remove(&tree, k);
     }
+    assert_eq!(leaves_t(&tree), "[0,1,2,3~3,2,0]", "one leaf with room for one more pair, three of them deleted");
+    assert!(insert(&tree, 4), "a full leaf with tombstones reclaims a dead pair instead of splitting: expected `insert(&tree, 4)`");
+    assert_eq!((tree.depth(), tree.leaf_sizes().len()), (1, 1), "the leaf made room out of its dead pairs: no split, no new level");
+    let tombs: Vec<i64> = tree.leaf_tombstones()[0].iter().map(|k| k.get_as_integer()).collect();
+    assert!(
+        tombs.len() < 3 && [3, 2, 0].ends_with(&tombs),
+        "the oldest tombstones go first: {tombs:?} is not [3, 2, 0] without its oldest"
+    );
+    assert!(get(&tree, 3).is_empty(), "a reclaimed key stays deleted");
+    assert_eq!(keys_by_scan(&tree), vec![1, 4], "a full leaf with tombstones reclaims a dead pair instead of splitting");
 }
 
 #[test]
-fn s2d_03_long_runs_for_every_buffer_size_agree_with_a_set() {
+fn s2d_03_a_full_leaf_without_tombstones_still_splits() {
+    let bpm = bpm(30);
+    let tree = new_tree_t::<2>(&bpm, 5, 4);
+    insert_all(&tree, 0..4);
+    remove(&tree, 1);
+    assert!(insert(&tree, 1), "bringing 1 back leaves the buffer empty: expected `insert(&tree, 1)`");
+    assert_eq!(leaves_t(&tree), "[0,1,2,3]", "a full leaf without tombstones still splits");
+    assert!(insert(&tree, 4), "a full leaf without tombstones still splits: expected `insert(&tree, 4)`");
+    assert_eq!((tree.depth(), leaves_t(&tree)), (2, "[0,1,2][3,4]".to_string()), "nothing to reclaim: the leaf splits as in 2c");
+}
+
+#[test]
+fn s2d_03_bringing_a_deleted_key_back_into_a_full_leaf_reclaims_nothing() {
+    let bpm = bpm(30);
+    let tree = new_tree_t::<3>(&bpm, 5, 4);
+    insert_all(&tree, 0..4);
+    remove(&tree, 1);
+    remove(&tree, 2);
+    assert!(insert(&tree, 2), "a deleted key can come back: expected `insert(&tree, 2)`");
+    assert_eq!(leaves_t(&tree), "[0,1,2,3~1]", "2 takes its old slot back, so no slot is needed and 1 stays deleted, not reclaimed");
+}
+
+#[test]
+fn s2d_03_a_refused_duplicate_in_a_full_leaf_reclaims_nothing() {
+    let bpm = bpm(30);
+    let tree = new_tree_t::<3>(&bpm, 5, 4);
+    insert_all(&tree, 0..4);
+    remove(&tree, 1);
+    assert!(!insert(&tree, 0), "0 is live: a duplicate is refused");
+    assert_eq!(leaves_t(&tree), "[0,1,2,3~1]", "a refused insert changes nothing, not even the buffer");
+}
+
+#[test]
+fn s2d_03_a_stream_of_deletes_and_new_keys_never_splits_the_leaf() {
+    // a sliding window of five live keys: each step deletes the oldest and inserts a new one
+    let bpm = bpm(30);
+    let tree = new_tree_t::<3>(&bpm, 6, 4);
+    insert_all(&tree, 0..5);
+    for i in 0..200 {
+        remove(&tree, i);
+        assert!(insert(&tree, 5 + i), "step {i}: insert {}", 5 + i);
+        assert_eq!((tree.depth(), tree.leaf_sizes().len()), (1, 1), "step {i}: five live keys fit in one leaf, dead pairs or not");
+    }
+    assert_eq!(keys_by_scan(&tree), (200..205).collect::<Vec<_>>(), "a stream of deletes and new keys never splits the leaf");
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 24, max_shrink_iters: 2000, failure_persistence: None, ..ProptestConfig::default() })]
+
+    /// Trees of random shape and buffer size: an insert that adds a leaf split one without tombstones (the half that took the new key has
+    /// none), and after every step the structure rules of `check_shape_t` hold.
+    #[test]
+    fn s2d_03_only_a_leaf_without_tombstones_splits(t in 1usize..4, leaf_max in 2u32..8, internal_max in 3u32..6, ops in prop::collection::vec((-40i64..40, any::<bool>()), 1..140)) {
+        fn run<const T: usize>(leaf_max: u32, internal_max: u32, ops: &[(i64, bool)]) -> Result<(), String> {
+            let bpm = bpm(60);
+            let tree = new_tree_t::<T>(&bpm, leaf_max, internal_max);
+            let mut live = BTreeSet::new();
+            for (i, &(k, is_insert)) in ops.iter().enumerate() {
+                if is_insert {
+                    let (before, picture) = (tree.leaf_sizes().len(), leaves_t(&tree));
+                    if insert(&tree, k) != live.insert(k) { return Err(format!("step {i}: insert({k}) answered wrongly")); }
+                    if tree.leaf_sizes().len() > before {
+                        let leaf = tree.leaf_keys().into_iter().position(|l| l.iter().any(|x| x.get_as_integer() == k)).expect("the new key is in a leaf");
+                        if !tree.leaf_tombstones()[leaf].is_empty() {
+                            return Err(format!("step {i}: inserting {k} split a leaf that held tombstones\nbefore: {picture}\nafter:  {}", leaves_t(&tree)));
+                        }
+                    }
+                } else {
+                    remove(&tree, k);
+                    live.remove(&k);
+                }
+                check_shape_t::<T>(&tree, &live, leaf_max, internal_max, true).map_err(|e| format!("step {i}, T={T} leaf {leaf_max} internal {internal_max}: {e}\n{}", leaves_t(&tree)))?;
+            }
+            assert_no_pins(&bpm);
+            Ok(())
+        }
+        let r = match t { 1 => run::<1>(leaf_max, internal_max, &ops), 2 => run::<2>(leaf_max, internal_max, &ops), _ => run::<3>(leaf_max, internal_max, &ops) };
+        prop_assert!(r.is_ok(), "{:?}", r);
+    }
+}
+
+// ---- 2d-04 · Boss ----------------------------------------------------------------------------------------------------------
+
+#[test]
+fn s2d_04_long_runs_for_every_buffer_size_agree_with_a_set() {
     fn run<const T: usize>(leaf: u32, internal: u32, seed: u64) {
         let bpm = bpm(60);
         let tree = new_tree_t::<T>(&bpm, leaf, internal);
@@ -659,83 +711,3 @@ mod ch_2d_c4 {
     }
 }
 // @@ challenge 2d-c4 end
-
-// @@ challenge 2d-c5 begin
-mod ch_2d_c5 {
-    use proptest::prelude::*;
-
-    use bustub::storage::index::leaf_reclaim::{insert_into_leaf, Entry, Inserted};
-    use std::collections::BTreeSet;
-
-    fn live(v: &[Entry]) -> BTreeSet<i32> {
-        v.iter().filter(|e| e.1).map(|e| e.0).collect()
-    }
-
-    #[test]
-    fn s2d_c5_an_existing_key_becomes_live_and_nothing_else_changes() {
-        let leaf = vec![(1, true), (2, false), (3, true)];
-        assert_eq!(insert_into_leaf(&leaf, 3, 2), Inserted::Done(vec![(1, true), (2, true), (3, true)]), "this check");
-        assert_eq!(insert_into_leaf(&leaf, 3, 3), Inserted::Done(leaf.clone()), "already live: unchanged, and no split though full");
-    }
-
-    #[test]
-    fn s2d_c5_a_leaf_with_room_takes_the_key_in_order() {
-        let leaf = vec![(1, true), (5, false)];
-        assert_eq!(
-            insert_into_leaf(&leaf, 4, 3),
-            Inserted::Done(vec![(1, true), (3, true), (5, false)]),
-            "tombstones stay while there is room"
-        );
-        assert_eq!(insert_into_leaf(&[], 2, 9), Inserted::Done(vec![(9, true)]), "this check");
-    }
-
-    #[test]
-    fn s2d_c5_a_full_leaf_with_tombstones_is_cleaned_not_split() {
-        let leaf = vec![(1, true), (2, false), (3, true)];
-        assert_eq!(insert_into_leaf(&leaf, 3, 4), Inserted::Done(vec![(1, true), (3, true), (4, true)]), "this check");
-        let all_dead = vec![(1, false), (2, false)];
-        assert_eq!(insert_into_leaf(&all_dead, 2, 0), Inserted::Done(vec![(0, true)]), "this check");
-    }
-
-    #[test]
-    fn s2d_c5_a_full_clean_leaf_splits_in_the_middle() {
-        let leaf = vec![(1, true), (2, true), (3, true)];
-        assert_eq!(insert_into_leaf(&leaf, 3, 4), Inserted::Split(vec![(1, true), (2, true)], vec![(3, true), (4, true)]), "this check");
-        let leaf = vec![(10, true), (20, true), (30, true), (40, true)];
-        match insert_into_leaf(&leaf, 4, 25) {
-            Inserted::Split(l, r) => assert_eq!((l.len(), r.len()), (3, 2), "capacity + 1 entries, (capacity + 2) / 2 on the left"),
-            other => panic!("expected a split, got {other:?}"),
-        }
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig { cases: 256, failure_persistence: None, ..ProptestConfig::default() })]
-
-        /// Property: live keys are conserved plus the new one; halves are sorted and ordered; a split only for a full clean leaf.
-        #[test]
-        fn s2d_c5_property_live_keys_are_conserved(raw in proptest::collection::btree_map(0i32..30, any::<bool>(), 0..8), extra in 0usize..3, key in 0i32..30) {
-            let leaf: Vec<Entry> = raw.into_iter().collect();
-            let capacity = leaf.len() + extra;
-            prop_assume!(capacity >= 1);
-            let mut want = live(&leaf);
-            want.insert(key);
-            match insert_into_leaf(&leaf, capacity, key) {
-                Inserted::Done(v) => {
-                    prop_assert!(v.len() <= capacity);
-                    prop_assert!(v.windows(2).all(|w| w[0].0 < w[1].0));
-                    prop_assert_eq!(live(&v), want);
-                }
-                Inserted::Split(l, r) => {
-                    prop_assert!(leaf.len() == capacity && leaf.iter().all(|e| e.1) && !leaf.iter().any(|e| e.0 == key));
-                    prop_assert!(l.windows(2).all(|w| w[0].0 < w[1].0) && r.windows(2).all(|w| w[0].0 < w[1].0));
-                    prop_assert!(l.last().unwrap().0 < r[0].0);
-                    prop_assert_eq!(l.len() + r.len(), capacity + 1);
-                    let mut both = live(&l);
-                    both.extend(live(&r));
-                    prop_assert_eq!(both, want);
-                }
-            }
-        }
-    }
-}
-// @@ challenge 2d-c5 end

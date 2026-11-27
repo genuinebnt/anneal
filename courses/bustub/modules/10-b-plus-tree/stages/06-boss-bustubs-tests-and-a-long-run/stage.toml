@@ -1,8 +1,0 @@
-id = "2c-06"
-title = "Boss: BusTub's B+ tree tests and a long run"
-kind = "boss"
-difficulty = "easy"
-tests = ["stages_2c::s2c_06", "b_plus_tree_insert_test", "b_plus_tree_delete_test", "b_plus_tree_sequential_scale_test", "b_plus_tree_concurrent_test"]
-retest = true
-concepts = ["model-based-testing"]
-concepts_optional = ["testing-concurrent-code-with-loom-and-miri", "performance-tests-and-measuring", "errors-2c"]

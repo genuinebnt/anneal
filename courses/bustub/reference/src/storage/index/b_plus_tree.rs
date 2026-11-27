@@ -9,7 +9,6 @@
 //! path (`Context::write_set`) until a child that cannot split or underflow is reached ("safe"), which lets them let go of everything above it;
 //! and most writes try an optimistic path first that write-latches only the leaf.
 
-use std::cmp::Ordering;
 use std::marker::PhantomData;
 
 use super::index_iterator::IndexIterator;
@@ -21,11 +20,14 @@ use crate::storage::index::generic_key::KeyComparator;
 
 // @begin 2c-01
 use crate::storage::page::b_plus_tree_header_page::BPlusTreeHeaderPage as Header;
-use crate::storage::page::b_plus_tree_internal_page::BPlusTreeInternalPage as Internal;
 use crate::storage::page::b_plus_tree_leaf_page::BPlusTreeLeafPage as Leaf;
-use crate::storage::page::b_plus_tree_page::BPlusTreePage as Page;
 use crate::storage::page::page_guard::{ReadPageGuard, WritePageGuard};
-//~ // TODO(2c-01): your imports go here (your page types and the guards).
+//~ // TODO(2c-01): your imports go here (your header and leaf page types, and the guards).
+// @end
+// @begin 2c-02
+use crate::storage::page::b_plus_tree_internal_page::BPlusTreeInternalPage as Internal;
+use crate::storage::page::b_plus_tree_page::BPlusTreePage as Page;
+//~ // TODO(2c-02): the imports for your internal page type.
 // @end
 
 // @begin 2c-01
@@ -42,15 +44,19 @@ impl<'a> Context<'a> {
         Context { header_page: Some(header_page), root_page_id: PageId::INVALID, write_set: Vec::new() }
     }
 
+    // @begin 2c-05
     fn is_root_page(&self, page_id: PageId) -> bool {
         page_id == self.root_page_id
     }
+    // @end
 
+    // @begin 2e-01
     /// Lets go of everything latched so far: the header and every page on the path.
     fn release_ancestors(&mut self) {
         self.header_page = None;
         self.write_set.clear();
     }
+    // @end
 
     fn set_root(&mut self, root_page_id: PageId) {
         let header = self.header_page.as_mut().expect("the root can only change while the header page is latched");
@@ -98,10 +104,13 @@ where
             leaf_max_size >= 2 && leaf_max_size as usize <= Leaf::<&[u8], K, V, TOMBS>::capacity(),
             "leaf_max_size {leaf_max_size} is not usable"
         );
+        assert!(internal_max_size >= 3, "internal_max_size {internal_max_size} is not usable");
+        // @begin 2c-02
         assert!(
-            internal_max_size >= 3 && internal_max_size as usize <= Internal::<&[u8], K>::capacity(),
-            "internal_max_size {internal_max_size} is not usable"
+            internal_max_size as usize <= Internal::<&[u8], K>::capacity(),
+            "internal_max_size {internal_max_size} does not fit in a page"
         );
+        // @end
         let bpm = TracedBufferPoolManager::new(bpm);
         Header::new(&mut bpm.write_page(header_page_id)[..]).init();
         BPlusTree { index_name: index_name.to_owned(), bpm, cmp, leaf_max_size, internal_max_size, header_page_id, _entry: PhantomData }
@@ -119,9 +128,9 @@ where
 
     /// As many children as fit in an internal page.
     pub fn default_internal_max_size() -> u32 {
-        // @begin 2c-01
+        // @begin 2c-02
         Internal::<&[u8], K>::capacity() as u32
-        //~ todo!("2c-01: how many children fit in one of your internal pages")
+        //~ todo!("2c-02: how many children fit in one of your internal pages")
         // @end
     }
 
@@ -157,6 +166,7 @@ where
         if !root.is_valid() {
             return 0;
         }
+        // @begin 2c-02
         let mut guard = self.bpm.read_page(root);
         drop(header_guard);
         let mut levels = 1;
@@ -166,6 +176,8 @@ where
             levels += 1;
         }
         levels
+        //~ 1 // TODO(2c-02): below an internal root, follow the first child down to a leaf and count the levels
+        // @end
         //~ todo!("2c-01: 0 for an empty tree; otherwise follow the first child from the root down to a leaf and count the levels")
         // @end
     }
@@ -232,6 +244,7 @@ where
         if !root.is_valid() {
             return None;
         }
+        // @begin 2c-02
         let mut guard = self.bpm.read_page(root);
         drop(header_guard);
         while !Page::new(&guard[..]).is_leaf_page() {
@@ -243,6 +256,9 @@ where
             guard = self.bpm.read_page(child); // the child is latched before the parent guard is dropped by this assignment
         }
         Some(guard)
+        //~ let _ = key; // TODO(2c-02): below an internal root, follow the key (or the first child) down to a leaf
+        //~ Some(self.bpm.read_page(root))
+        // @end
     }
     //~ // TODO(2c-01): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
     // @end
@@ -263,11 +279,10 @@ where
     /// Adds the pair. `false` (and nothing changes) if the key is already in the tree.
     pub fn insert(&self, key: &K, value: &V) -> bool {
         // @begin 2c-01
-        // @begin 2c-05
+        // @begin 2e-02
         if let Some(inserted) = self.insert_optimistic(key, value) {
             return inserted;
         }
-        //~ // TODO(2c-02): try the optimistic path first: write-latch only the leaf, and do it all there if the leaf has room
         // @end
         let mut ctx = Context::new(self.bpm.write_page(self.header_page_id));
         let root = Header::new(&ctx.header_page.as_ref().unwrap()[..]).root_page_id();
@@ -282,13 +297,28 @@ where
             return true;
         }
         ctx.root_page_id = root;
-        // @begin 2c-05
+        // @begin 2c-02
+        // @begin 2e-01
         self.descend_for_write(&mut ctx, key, |this, page, _| this.safe_to_insert(page));
-        //~ self.descend_for_write(&mut ctx, key, |_, _, _| false); // TODO(2c-05): nothing is safe yet: keep every guard on the path
+        //~ self.descend_for_write(&mut ctx, key);
+        // @end
+        //~ ctx.write_set.push(self.bpm.write_page(root)); // TODO(2c-02): below an internal root, latch the path down to the key's leaf
         // @end
         let mut leaf_guard = ctx.write_set.pop().expect("the descent ends at a leaf");
         let leaf_page_id = leaf_guard.get_page_id();
         let mut leaf = Leaf::<_, K, V, TOMBS>::new(&mut leaf_guard[..]);
+        // @begin 2d-03
+        // A full leaf that holds deleted pairs makes room by really removing them, oldest first, instead of splitting: as many as it
+        // can lose and still hold its minimum once the new pair is in. A key that is already in the leaf (live, or deleted and about to
+        // come back) takes no new slot, so it needs no room.
+        if TOMBS > 0 && leaf.size() + 1 >= leaf.max_size() && leaf.find(key, &self.cmp).is_none() {
+            let spare = (leaf.max_size() - leaf.min_size()) as usize;
+            for dead in leaf.tombstones().into_iter().take(spare) {
+                leaf.remove(&dead, &self.cmp);
+            }
+        }
+        //~ // TODO(2d-03): a full leaf with tombstones reclaims a dead pair's slot instead of splitting
+        // @end
         if !leaf.insert(key, value, &self.cmp) {
             return false; // the key is already there
         }
@@ -306,7 +336,7 @@ where
         // @begin 2d-02
         // the tombstones go with their pairs, in the same order
         let (stay, go): (Vec<K>, Vec<K>) = leaf.tombstones().into_iter().partition(|t| leaf.lower_bound(t, &self.cmp) < keep);
-        //~ // TODO(2d-01): with tombstones, split the buffer too: the keys of the upper half go to the new leaf, the order kept
+        //~ // TODO(2d-02): with tombstones, split the buffer too: the keys of the upper half go to the new leaf, the order kept
         // @end
         for i in keep..size {
             let (k, v) = leaf.entry_at(i);
@@ -317,21 +347,22 @@ where
         // @begin 2d-02
         leaf.set_tombstones(&stay);
         right.set_tombstones(&go);
-        //~ // TODO(2d-01): store the two halves of the buffer
+        //~ // TODO(2d-02): store the two halves of the buffer
         // @end
         right.set_next_page_id(leaf.next_page_id());
         leaf.set_next_page_id(Some(new_page_id));
         let separator = right.key_at(0);
         drop(new_guard);
         self.insert_into_parent(&mut ctx, leaf_page_id, separator, new_page_id);
-        //~ // TODO(2c-01): a leaf that has reached max_size splits: upper half to a new leaf, next pointers, then insert_into_parent
+        //~ assert!(leaf.size() < leaf.max_size(), "2c-02: a leaf that reaches max_size splits in two ({leaf_page_id:?})");
         // @end
         true
-        //~ todo!("2c-01: latch the header; an empty tree gets a root leaf; otherwise latch down to the leaf (descend_for_write) and insert there")
+        //~ todo!("2c-01: latch the header; an empty tree gets a root leaf; otherwise latch the root leaf and insert there (false for a duplicate)")
         // @end
     }
 
-    // @begin 2c-01
+    // @begin 2c-02
+    // @begin 2e-01
     /// Latches `key`'s path from the root down, pushing each page's write guard on `ctx.write_set`. `safe(self, page, is_root)` says
     /// whether the operation cannot change anything above this page; from the first such page down, nothing above it is needed.
     fn descend_for_write(&self, ctx: &mut Context<'a>, key: &K, safe: impl Fn(&Self, &[u8], bool) -> bool) {
@@ -339,12 +370,9 @@ where
         loop {
             let guard = self.bpm.write_page(page_id);
             let next = (!Page::new(&guard[..]).is_leaf_page()).then(|| Internal::<_, K>::new(&guard[..]).child_for(key, &self.cmp));
-            // @begin 2c-05
-            if safe(self, &guard[..], ctx.is_root_page(page_id)) {
+            if safe(self, &guard[..], page_id == ctx.root_page_id) {
                 ctx.release_ancestors();
             }
-            //~ // TODO(2c-02): if this page is safe (it cannot split or underflow), release everything above it: ctx.release_ancestors()
-            // @end
             ctx.write_set.push(guard);
             match next {
                 Some(child) => page_id = child,
@@ -352,10 +380,25 @@ where
             }
         }
     }
-    //~ // TODO(2c-01): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
+    //~ /// Latches `key`'s path from the root down, pushing each page's write guard on `ctx.write_set`: a split or a merge may need
+    //~ /// any of them.
+    //~ fn descend_for_write(&self, ctx: &mut Context<'a>, key: &K) {
+    //~     let mut page_id = ctx.root_page_id;
+    //~     loop {
+    //~         let guard = self.bpm.write_page(page_id);
+    //~         let next = (!Page::new(&guard[..]).is_leaf_page()).then(|| Internal::<_, K>::new(&guard[..]).child_for(key, &self.cmp));
+    //~         ctx.write_set.push(guard);
+    //~         match next {
+    //~             Some(child) => page_id = child,
+    //~             None => return,
+    //~         }
+    //~     }
+    //~ }
+    // @end
+    //~ // TODO(2c-02): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
     // @end
 
-    // @begin 2c-05
+    // @begin 2e-01
     /// A page is safe for an insert when adding one pair (or child) cannot make it split.
     fn safe_to_insert(&self, page: &[u8]) -> bool {
         let p = Page::new(page);
@@ -365,7 +408,7 @@ where
             p.size() < p.max_size()
         }
     }
-    //~ // TODO(2c-05): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
+    //~ // TODO(2e-01): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
     // @end
 
     // @begin 2c-02
@@ -386,12 +429,12 @@ where
                 ctx.set_root(root_page_id);
                 return;
             };
-            let parent_page_id = parent_guard.get_page_id();
             let mut parent = Internal::<_, K>::new(&mut parent_guard[..]);
             if parent.size() < parent.max_size() {
                 parent.insert_child(&key, right_page_id, &self.cmp);
                 return;
             }
+            // @begin 2c-03
             // The parent is full as well: spread its children, plus the new one, over two pages. The first key of the right half
             // moves up (it separates the halves) instead of staying in either of them.
             let mut entries: Vec<(K, PageId)> = (0..parent.size()).map(|i| parent.entry_at(i)).collect();
@@ -411,9 +454,11 @@ where
             }
             parent.set_size(keep as u32);
             drop(new_guard);
-            left_page_id = parent_page_id;
+            left_page_id = parent_guard.get_page_id();
             key = entries[keep].0.clone();
             right_page_id = new_page_id;
+            //~ todo!("2c-03: a full parent splits in turn, and the split climbs: {left_page_id:?} split, but its parent has no room")
+            // @end
         }
     }
     //~ // TODO(2c-02): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
@@ -425,12 +470,11 @@ where
 
     /// Removes the pair with this key, if there is one.
     pub fn remove(&self, key: &K) {
-        // @begin 2c-04
         // @begin 2c-05
+        // @begin 2e-02
         if self.remove_optimistic(key) {
             return;
         }
-        //~ // TODO(2c-02): try the optimistic path first: write-latch only the leaf, and do it all there if the leaf stays at least half full
         // @end
         let mut to_delete = Vec::new();
         {
@@ -440,9 +484,9 @@ where
                 return;
             }
             ctx.root_page_id = root;
-            // @begin 2c-05
+            // @begin 2e-01
             self.descend_for_write(&mut ctx, key, |this, page, is_root| this.safe_to_remove(page, is_root));
-            //~ self.descend_for_write(&mut ctx, key, |_, _, _| false); // TODO(2c-05): nothing is safe yet: keep every guard on the path
+            //~ self.descend_for_write(&mut ctx, key);
             // @end
             let mut leaf_guard = ctx.write_set.pop().expect("the descent ends at a leaf");
             let leaf_page_id = leaf_guard.get_page_id();
@@ -468,11 +512,11 @@ where
         for page_id in to_delete {
             self.bpm.delete_page(page_id);
         }
-        //~ todo!("2c-02: removes the key from its leaf; an emptied root leaf makes the tree empty, and a leaf below its minimum size is rebalanced")
+        //~ todo!("2c-05: removes the key from its leaf; an emptied root leaf makes the tree empty, and a leaf below its minimum size is rebalanced")
         // @end
     }
 
-    // @begin 2c-05
+    // @begin 2e-01
     /// A page is safe for a remove when taking one pair (or child) away cannot make it underflow, or empty the root.
     fn safe_to_remove(&self, page: &[u8], is_root: bool) -> bool {
         let p = Page::new(page);
@@ -482,10 +526,10 @@ where
             (false, _) => p.size() > p.min_size(),
         }
     }
-    //~ // TODO(2c-05): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
+    //~ // TODO(2e-01): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
     // @end
 
-    // @begin 2c-04
+    // @begin 2c-05
     /// `node` (write-latched, not the root) has fewer than `min_size` entries. Borrow one from a sibling that has a spare; failing
     /// that, merge with a sibling and fix the parent, which may in turn underflow. Pages that are gone are added to `to_delete`.
     fn rebalance(&self, ctx: &mut Context<'a>, mut node_guard: WritePageGuard<'a>, to_delete: &mut Vec<PageId>) {
@@ -504,7 +548,7 @@ where
             if is_leaf && TOMBS > 0 {
                 Leaf::<_, K, V, TOMBS>::new(&mut node_guard[..]).purge_tombstones(&self.cmp);
             }
-            //~ // TODO(2d-01): with tombstones, purge the short leaf's own tombstones before borrowing or merging
+            //~ // TODO(2d-02): with tombstones, purge the short leaf's own tombstones before borrowing or merging
             // @end
             let sibling = |i: u32| self.bpm.write_page(Internal::<_, K>::new(&parent_guard[..]).value_at(i));
             let mut left_guard = (idx > 0).then(|| sibling(idx - 1));
@@ -551,13 +595,16 @@ where
             if parent.size() >= parent.min_size() {
                 return;
             }
+            // @begin 2c-06
             node_guard = parent_guard; // the parent is short now: repeat one level up
+                                       //~ todo!("2c-06: an internal page below its minimum is rebalanced in turn, and the repair climbs ({parent_page_id:?} is short)")
+                                       // @end
         }
     }
-    //~ // TODO(2c-04): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
+    //~ // TODO(2c-05): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
     // @end
 
-    // @begin 2c-04
+    // @begin 2c-05
     /// Moves the last entry of `left` to the front of `node`; `idx` is `node`'s slot in `parent`, whose separator changes.
     fn borrow_from_left(
         &self,
@@ -574,7 +621,7 @@ where
             let (k, v) = left.entry_at(last);
             // @begin 2d-02
             let was_deleted = left.is_deleted_at(last);
-            //~ let was_deleted = false; // TODO(2d-01): a tombstoned pair keeps its tombstone when it moves
+            //~ let was_deleted = false; // TODO(2d-02): a tombstoned pair keeps its tombstone when it moves
             // @end
             left.remove_at(last);
             let mut node = Leaf::<_, K, V, TOMBS>::new(&mut node_guard[..]);
@@ -587,10 +634,11 @@ where
                     node.remove_at(0); // no room for another tombstone: the deleted pair is simply dropped
                 }
             }
-            //~ // TODO(2d-01): re-buffer the tombstone of the moved pair in the node, or drop the pair if the buffer is full
+            //~ // TODO(2d-02): re-buffer the tombstone of the moved pair in the node, or drop the pair if the buffer is full
             // @end
             parent.set_key_at(idx, &k);
         } else {
+            // @begin 2c-06
             let mut left = Internal::<_, K>::new(&mut left_guard[..]);
             let last = left.size() - 1;
             let (k, child) = left.entry_at(last);
@@ -600,12 +648,14 @@ where
             node.insert_at_front(&k, child);
             node.set_key_at(1, &separator); // the old first child now follows `child`, split off by the old separator
             parent.set_key_at(idx, &k);
+            //~ todo!("2c-06: an internal page borrows its left neighbour's last child; the separator in the parent rotates through")
+            // @end
         }
     }
-    //~ // TODO(2c-04): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
+    //~ // TODO(2c-05): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
     // @end
 
-    // @begin 2c-04
+    // @begin 2c-05
     /// Moves the first entry of `right` to the end of `node`; `idx` is `node`'s slot in `parent`, so the separator is at `idx + 1`.
     fn borrow_from_right(
         &self,
@@ -621,7 +671,7 @@ where
             let (k, v) = right.entry_at(0);
             // @begin 2d-02
             let was_deleted = right.is_deleted_at(0);
-            //~ let was_deleted = false; // TODO(2d-01): a tombstoned pair keeps its tombstone when it moves
+            //~ let was_deleted = false; // TODO(2d-02): a tombstoned pair keeps its tombstone when it moves
             // @end
             right.remove_at(0);
             let mut node = Leaf::<_, K, V, TOMBS>::new(&mut node_guard[..]);
@@ -634,10 +684,11 @@ where
                     node.remove(&k, &self.cmp);
                 }
             }
-            //~ // TODO(2d-01): re-buffer the tombstone of the moved pair in the node, or drop the pair if the buffer is full
+            //~ // TODO(2d-02): re-buffer the tombstone of the moved pair in the node, or drop the pair if the buffer is full
             // @end
             parent.set_key_at(idx + 1, &right.key_at(0));
         } else {
+            // @begin 2c-06
             let mut right = Internal::<_, K>::new(&mut right_guard[..]);
             let child = right.value_at(0);
             let next_key = right.key_at(1);
@@ -648,12 +699,14 @@ where
             node.set_entry_at(size, &separator, child);
             node.set_size(size + 1);
             parent.set_key_at(idx + 1, &next_key);
+            //~ todo!("2c-06: an internal page borrows its right neighbour's first child; the separator in the parent rotates through")
+            // @end
         }
     }
-    //~ // TODO(2c-04): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
+    //~ // TODO(2c-05): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
     // @end
 
-    // @begin 2c-04
+    // @begin 2c-05
     /// Appends everything in `src` to `dest` (its right neighbour, `src_idx` in the parent). `src` is then empty of meaning: the caller
     /// removes it from the parent and deletes its page.
     fn merge(
@@ -684,9 +737,10 @@ where
             for key in &doomed {
                 dest.remove(key, &self.cmp);
             }
-            //~ // TODO(2d-01): the source's tombstones come along; if the two buffers together are over the limit, really remove the oldest pairs
+            //~ // TODO(2d-02): the source's tombstones come along; if the two buffers together are over the limit, really remove the oldest pairs
             // @end
         } else {
+            // @begin 2c-06
             let separator = Internal::<_, K>::new(&parent_guard[..]).key_at(src_idx);
             let src = Internal::<_, K>::new(&src_guard[..]);
             let mut dest = Internal::<_, K>::new(&mut dest_guard[..]);
@@ -697,16 +751,18 @@ where
                 dest.set_entry_at(size + i, &key, src.value_at(i));
             }
             dest.set_size(size + src.size());
+            //~ todo!("2c-06: two internal pages merge; the separator between them comes down from the parent")
+            // @end
         }
     }
-    //~ // TODO(2c-04): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
+    //~ // TODO(2c-05): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
     // @end
 
     // ------------------------------------------------------------------------------------------------------------------------
     // Optimistic paths: assume nothing above the leaf changes
     // ------------------------------------------------------------------------------------------------------------------------
 
-    // @begin 2c-05
+    // @begin 2e-02
     /// Read-latches down to the leaf for `key` and returns it write-latched, with whether it is the root; `None` for an empty tree.
     /// The parent stays read-latched while the leaf is re-latched for writing, so nobody can split or merge the leaf in between.
     fn latch_leaf_for_write(&self, key: &K) -> Option<(WritePageGuard<'a>, bool)> {
@@ -728,10 +784,10 @@ where
             page_id = child;
         }
     }
-    //~ // TODO(2c-05): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
+    //~ // TODO(2e-02): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
     // @end
 
-    // @begin 2c-05
+    // @begin 2e-02
     /// `Some(result)` if the insert could be done holding only the leaf's write latch; `None` if it needs the pessimistic path.
     fn insert_optimistic(&self, key: &K, value: &V) -> Option<bool> {
         let (mut leaf_guard, _) = self.latch_leaf_for_write(key)?;
@@ -744,10 +800,10 @@ where
         }
         None
     }
-    //~ // TODO(2c-05): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
+    //~ // TODO(2e-02): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
     // @end
 
-    // @begin 2c-05
+    // @begin 2e-02
     /// True if the remove was done (or there was nothing to do) holding only the leaf's write latch.
     fn remove_optimistic(&self, key: &K) -> bool {
         let Some((mut leaf_guard, is_root)) = self.latch_leaf_for_write(key) else { return true };
@@ -755,7 +811,6 @@ where
         if leaf.lookup(key, &self.cmp).is_none() {
             return true;
         }
-        // @begin 2d-01
         if TOMBS > 0 {
             // a logical delete removes a pair for real only when the buffer is full, and never changes the size otherwise
             let loses_a_pair = leaf.num_tombstones() as usize >= TOMBS;
@@ -764,14 +819,12 @@ where
             }
             return false;
         }
-        //~ // TODO(2d-01): with tombstones the optimistic remove is a logical delete
-        // @end
         if (is_root && leaf.size() > 1) || (!is_root && leaf.size() > leaf.min_size()) {
             return leaf.remove(key, &self.cmp);
         }
         false
     }
-    //~ // TODO(2c-05): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
+    //~ // TODO(2e-02): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
     // @end
 
     // ------------------------------------------------------------------------------------------------------------------------
@@ -779,43 +832,55 @@ where
     // ------------------------------------------------------------------------------------------------------------------------
 
     /// An iterator at the smallest key.
-    pub fn begin(&self) -> IndexIterator<'a, K, V, TOMBS> {
-        // @begin 2c-03
+    pub fn begin(&self) -> IndexIterator<'a, K, V, TOMBS>
+    where
+        C: Clone + 'a,
+    {
+        // @begin 2c-04
         match self.find_leaf(None) {
             Some(leaf_guard) => {
                 // let go of the latch first: the iterator latches the leaf again, and a second read latch on a page this thread already
                 // holds can wait behind a writer that is waiting for the first one
                 let leaf = leaf_guard.get_page_id();
                 drop(leaf_guard);
-                IndexIterator::at(self.bpm.inner(), leaf, 0)
+                // @begin 2e-03
+                IndexIterator::at(self.bpm.inner(), leaf, 0).ordered_by(Box::new(self.cmp.clone()))
+                //~ IndexIterator::at(self.bpm.inner(), leaf, 0)
+                // @end
             }
             None => self.end(),
         }
-        //~ todo!("2c-01: the leftmost leaf, slot 0; an empty tree has no leaf, so its begin is its end")
+        //~ todo!("2c-04: the leftmost leaf, slot 0; an empty tree has no leaf, so its begin is its end")
         // @end
     }
 
     /// An iterator at the first key that is not less than `key`.
-    pub fn begin_at(&self, key: &K) -> IndexIterator<'a, K, V, TOMBS> {
-        // @begin 2c-03
+    pub fn begin_at(&self, key: &K) -> IndexIterator<'a, K, V, TOMBS>
+    where
+        C: Clone + 'a,
+    {
+        // @begin 2c-04
         match self.find_leaf(Some(key)) {
             Some(leaf_guard) => {
                 let at = Leaf::<_, K, V, TOMBS>::new(&leaf_guard[..]).lower_bound(key, &self.cmp);
                 let leaf = leaf_guard.get_page_id();
                 drop(leaf_guard); // see `begin`
-                IndexIterator::at(self.bpm.inner(), leaf, at)
+                                  // @begin 2e-03
+                IndexIterator::at(self.bpm.inner(), leaf, at).ordered_by(Box::new(self.cmp.clone()))
+                //~ IndexIterator::at(self.bpm.inner(), leaf, at)
+                // @end
             }
             None => self.end(),
         }
-        //~ todo!("2c-01: the leaf for the key, at the first slot whose key is not less than it (IndexIterator::at moves on if that is past the leaf's end)")
+        //~ todo!("2c-04: the leaf for the key, at the first slot whose key is not less than it (moving on if that is past the leaf's end)")
         // @end
     }
 
     /// The iterator past the last pair.
     pub fn end(&self) -> IndexIterator<'a, K, V, TOMBS> {
-        // @begin 2c-03
+        // @begin 2c-04
         IndexIterator::end(self.bpm.inner())
-        //~ todo!("2c-01: IndexIterator::end")
+        //~ todo!("2c-04: the iterator that is past the last pair")
         // @end
     }
 }
