@@ -448,7 +448,9 @@ for (const width of [2200, 1440, 390]) {
         await expect(page.locator(".cb-margin")).toHaveCount(0);
         const [frame, text] = [await box(page, ".cb-head"), await box(page, ".cb-sec .sd-md > p")];
         expect(text.width).toBeLessThanOrEqual(column(width));
-        expect(frame.width - text.width, "room beside the text inside the frame").toBeLessThanOrEqual(width >= 1900 ? 122 : 220);
+        // its tables have a wider frame than its text
+        expect(frame.width).toBeLessThanOrEqual(1281);
+        expect(Math.round((await box(page, ".cb-sec .sd-tbl")).width)).toBe(Math.round(frame.width));
     });
 }
 
@@ -464,6 +466,57 @@ test("With the panels hidden or the text larger, a lesson stays in one frame wit
     await expectOneFrame(page, "larger text");
     await page.getByRole("button", { name: "Larger text" }).click();
 });
+
+test("On a wide screen a project with nothing beside its text gives its code and tables room", async ({ page }) => {
+    await read(page, "cb-macros", 2200);
+    await expect(page.locator(".cb-margin")).toHaveCount(0);
+    await expect(page.locator(".cb-view .sd-ln").first()).toBeVisible();
+    await expectFits(page);
+    expect((await box(page, ".cb-lab .cb-view")).width).toBeGreaterThanOrEqual(1279);
+    expect((await box(page, ".cb-head .cb-dek")).width).toBeLessThanOrEqual(column(2200));
+    expect(await sideways(page)).toBeLessThanOrEqual(0);
+    await read(page, "language-features-from-rust", 2200);
+    expect((await box(page, ".cb-sec .sd-md > .cb-g-tt")).width).toBeGreaterThanOrEqual(1239);
+});
+
+/** No code on the page runs past its box. */
+async function expectFits(page: Page) {
+    await expect.poll(() => page.locator(".cb-art pre").evaluateAll((all) => all.filter((e) => e.clientWidth && e.scrollWidth > e.clientWidth + 1).map((e) => e.scrollWidth - e.clientWidth))).toEqual([]);
+}
+
+/** The code boxes that can scroll sideways, and those among them (or among the rest) whose fade does not say so. */
+const fades = (page: Page) =>
+    page.locator(".cb-art pre").evaluateAll((all) => {
+        const wide = all.filter((e) => e.clientWidth && e.scrollWidth > e.clientWidth + 1);
+        return {
+            wide: wide.length,
+            wrong: all.filter((e) => e.clientWidth && e.hasAttribute("data-more") !== (e.scrollLeft + e.clientWidth < e.scrollWidth - 1)).length,
+            unfaded: wide.filter((e) => e.scrollLeft === 0 && getComputedStyle(e).maskImage === "none").length,
+            bars: wide.filter((e) => (e as HTMLElement).offsetHeight - e.clientHeight > 1).length,
+        };
+    });
+
+for (const [id, width] of [["cb-macros", 1728], ["cb-macros", 1440], ["cb-macros", 390], ["hash-tables", 1440], ["bounded-channel", 390]] as const) {
+    test(`Code that scrolls sideways fades at its edge, with no bar: ${id}, ${width} wide`, async ({ page }) => {
+        await read(page, id, width);
+        await page.evaluate(() => document.querySelectorAll<HTMLDetailsElement>(".cb-art details").forEach((d) => (d.open = true)));
+        await expect.poll(async () => (await fades(page)).wide).toBeGreaterThan(0);
+        await expect.poll(async () => { const f = await fades(page); return [f.wrong, f.unfaded, f.bars]; }).toEqual([0, 0, 0]);
+        // the fade goes at the end of the line and comes back
+        const first = page.locator(".cb-art pre[data-more]:not(.cb-cmp pre)").first();
+        const pre = (await first.elementHandle())!;
+        await pre.evaluate((e) => (e.scrollLeft = e.scrollWidth));
+        await expect.poll(() => pre.evaluate((e) => e.hasAttribute("data-more"))).toBe(false);
+        await pre.evaluate((e) => (e.scrollLeft = 0));
+        await expect.poll(() => pre.evaluate((e) => e.hasAttribute("data-more"))).toBe(true);
+        // wrapped code has nothing more to the right
+        if (id === "cb-macros") {
+            await page.getByRole("button", { name: "Wrap code" }).click();
+            await expect.poll(() => page.locator(".cb-art pre[data-more]").count()).toBe(0);
+            await page.getByRole("button", { name: "Wrap code" }).click();
+        }
+    });
+}
 
 test("Full window takes the whole window, not the article's column", async ({ page }) => {
     await read(page, "bounded-channel", 1440);

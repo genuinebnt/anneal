@@ -297,6 +297,8 @@ html.cb-noscroll{overflow:hidden}
     .cb-art>*,.cb-read:not(.cb-lesson) .cb-art>*{--frame:min(100cqi,calc(var(--fs) * 46));--text:min(100cqi,calc(var(--fs) * 40))}
     .cb-art.has-margin>*,.cb-read:not(.cb-lesson) .cb-art.has-margin>*{--frame:min(100cqi,1480px);--text:min(calc(var(--fs) * 40),var(--frame) - 388px);--side:clamp(340px,var(--frame) - var(--text) - 96px,480px)}
     .cb-art.has-margin>.cb-margin{display:block}
+    /* with no column beside it, a page with code or tables gives them a wider frame; its text stays as wide, on the left edge */
+    .cb-read:not(.cb-lesson) .cb-art:not(.has-margin):has(.cb-view,.sd-code,.sd-tbl,table)>*{--frame:min(100cqi,1280px)}
 }
 .cb-art>:not(.cb-margin){box-sizing:border-box;width:var(--frame);margin-inline:auto}
 .cb-art>:is(.cb-sum,.cb-short,.cb-glance,.cb-all,.cb-note){width:var(--text);margin-left:calc((100cqi - var(--frame)) / 2);margin-right:auto}
@@ -333,6 +335,9 @@ html.cb-noscroll{overflow:hidden}
     .cb-art{--fs:20px}
     .cb-read.big .cb-art{--fs:22px}
 }
+/* code with more to its right fades at that edge (pages/cookbook/codeFades.ts); there is no bar to show it */
+.cb-art pre[data-more]{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent)}
+.cb-art pre[data-more]:focus-visible{-webkit-mask-image:none;mask-image:none}
 /* "Full window" is the whole window, whatever column the viewer came from */
 .cb-art .cb-view.full{width:auto!important;max-width:none!important;margin:0!important}
 @media (min-width:1900px){

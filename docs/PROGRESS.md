@@ -20,7 +20,8 @@ both programs fit, and wraps rather than clip from 700px (`fit` in `Lesson.tsx`)
 wide block must be named there. Tests: `e2e/cookbook-lesson.spec.ts`.
 
 Limits: once a page's cards are used up, the room beside later text is empty; free-form code on pages that are not
-lessons still scrolls in its box when it is wider than a single column.
+lessons still scrolls in its box when it is wider than a single column; its edge fades while there is more
+(`pages/cookbook/codeFades.ts`). Without a margin, such a page with code or tables has a frame up to 1280px.
 
 ## UI review, round two (local, not released; 2026-11-27)
 

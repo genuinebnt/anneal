@@ -3,7 +3,7 @@
 import { marked } from "marked";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useRouter } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { ApiError, api, type CbLab, type CbMethod, type CbPage, type CbRow } from "../../api";
 import { Header } from "../../components/Header";
 import { Panel } from "../../components/layout";
@@ -13,6 +13,7 @@ import { KIND_COLOR, sourceKind } from "../sd/SdRead";
 import { CodeViewer } from "./CodeViewer";
 import { Connections, InShort, SpoilerGate, lessonFences } from "./Lesson";
 import { Margin, hasMargin } from "./Margin";
+import { useCodeFades } from "./codeFades";
 import { Shelf, anchorOf, isCodeKind, kindLabel, scrollToId, subjectPath, tint, topicsOf, useCookbook } from "./shared";
 import { Inline, plain } from "../../components/InlineMd";
 import { Crumbs } from "../../components/Crumbs";
@@ -329,6 +330,8 @@ export function CookbookRead({ id }: { id: string }) {
     const book = useCookbook();
     const nav = useNavigate();
     const router = useRouter();
+    const article = useRef<HTMLElement>(null);
+    useCodeFades(article);
     const [panels, setPanels] = useState(() => ({ left: true, right: true, wrap: false, big: false, ...getPref<{ left?: boolean; right?: boolean; wrap?: boolean; big?: boolean }>("cookbook.view", {}) }));
     const [drawer, setDrawer] = useState(false);
     const toggle = (side: "left" | "right" | "wrap" | "big") => setPanels((p) => { const n = { ...p, [side]: !p[side] }; setPref("cookbook.view", n); return n; });
@@ -391,7 +394,7 @@ export function CookbookRead({ id }: { id: string }) {
                         {page && book.data && <Shelf data={book.data} subject={page.subject} current={page.id} />}
                     </aside>
                     {drawer && <div className="cb-scrim" onClick={() => setDrawer(false)} />}
-                    <article className={`cb-art${page && isCodeKind(page.kind) ? " cb-code-page" : ""}${page && hasMargin(page) ? " has-margin" : ""}`} onClick={follow}>
+                    <article ref={article} className={`cb-art${page && isCodeKind(page.kind) ? " cb-code-page" : ""}${page && hasMargin(page) ? " has-margin" : ""}`} onClick={follow}>
                         {view.isError && missing && <p className="cb-note" role="alert">There is no cookbook page at this address. <Link to="/cookbook">Go to the cookbook</Link></p>}
                         {view.isError && !missing && <p className="cb-note" role="alert">This page could not be loaded. <button type="button" className="cb-link" onClick={() => void view.refetch()}>Try again</button></p>}
                         {view.isPending && <p className="cb-note">Loading…</p>}
