@@ -11,11 +11,17 @@ An **observed-remove set** is a set that can be copied to other machines, edited
 
 In `src/primer/orset.rs` the public API is fixed (`ORSet::new`, `contains`, `add`, `remove`, `merge`, `elements`, `to_string`; `to_string` sorts the elements and prints `{a, b}`, given; the driver `ORSetDriver`, a network of replicas, is given); the inside is yours.
 
-- `add(elem, uid)`: remember the pair `(elem, uid)`.
-- `remove(elem)`: mark every pair for `elem` that is **currently here** as removed.
-- `contains(elem)`: is there a pair for `elem` that is not removed?
-- `merge(&other)`: take in all of `other`'s adds and all of its removals.
-- `elements()`: the distinct elements that have at least one live pair, each once.
+- **`add(elem, uid)` puts `elem` in the set.**
+- **`remove(elem)` cancels exactly the adds of `elem` this replica has seen**: `elem` is absent here afterwards, but an add the remove did not see (a concurrent one, merged in later) brings it back. Removing an absent element is harmless.
+- **`contains(elem)` is whether some add of `elem` has not been cancelled; `elements()` is every element contained, each once.**
+- **`merge(&other)` takes in everything `other` has seen, adds and removes alike**, and is commutative, associative and idempotent: replicas that have seen the same operations hold the same set, whatever the order of the merges.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `add(elem, uid)`: remember the pair `(elem, uid)`.
+> - `remove(elem)`: mark every pair for `elem` that is **currently here** as removed.
+> - `contains(elem)`: is there a pair for `elem` that is not removed?
+> - `merge(&other)`: take in all of `other`'s adds and all of its removals.
+> - `elements()`: the distinct elements that have at least one live pair, each once.
 
 The tests: exact scenarios (add and remove on one replica; adding twice with two ids needs one remove; adding back after a remove works; removing an absent element is harmless; other elements are not affected; merge brings in adds and removes; add wins over a concurrent remove; merging twice changes nothing; `elements` lists each element once and `to_string` sorts them; merge order does not matter), and three properties: **merge is commutative, associative and idempotent** for replicas that did arbitrary adds and removes independently (and `elements` agrees with `contains`, each element once); **a remove only removes the adds it has seen** (a concurrent remove loses, a later add brings the element back); and **replicas in a network with random adds, removes, saves, loads and lost messages converge after a full sync** (twice, so nothing is in flight) to the same set, which contains every element that was never removed anywhere.
 
@@ -27,26 +33,13 @@ The representation: two sets of pairs (the intended design), a map from element 
 
 **`BTreeSet` of pairs.** `BTreeSet<(T, Uid)>` is ordered, deduplicated and cheap to union with `extend`.
 
-**Union as merge.** `self.adds.extend(other.adds.iter().cloned())` is the whole merge for one of the sets; the laws follow from the laws of set union.
+**Union as merge.** `seen.extend(other_seen.iter().cloned())` is the union of two `BTreeSet`s in place. A merge that is only unions inherits the laws of set union: commutative, associative, idempotent.
 
 **`dedup` on sorted data.** Pairs ordered by element put equal elements next to each other, so `Vec::dedup` after collecting the elements lists each one once.
 
 **Clone to publish.** The driver saves a replica by cloning it; `#[derive(Clone, Debug, Default)]` on `ORSet` is already there, so your fields must be `Clone`.
 
 **Property tests for algebraic laws.** Generate three replicas and check `(a ∪ b) ∪ c = a ∪ (b ∪ c)`: the cheapest way to find an order dependence.
-
-```rust
-self.adds.insert((elem.clone(), uid));
-let seen: Vec<(T, Uid)> = self.adds.iter().filter(|pair| pair.0 == *elem).cloned().collect();
-self.removed.extend(seen);
-self.adds.iter().any(|pair| pair.0 == *elem && !self.removed.contains(pair))
-```
-
-```rust
-self.adds.extend(other.adds.iter().cloned());
-let mut out: Vec<T> = self.adds.iter().filter(|p| !self.removed.contains(p)).map(|p| p.0.clone()).collect();
-out.dedup();     // the pairs are ordered by element, so equal elements are adjacent
-```
 
 ## Design notes
 

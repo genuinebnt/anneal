@@ -4,10 +4,16 @@ Presto's HyperLogLog stores each register compactly. The run length is the numbe
 
 In `src/primer/hyperloglog.rs`, `HyperLogLogPresto` (the hash is given: integers hash to themselves, so a test can choose the bits). The public API is fixed (`new`, `add_elem`, `compute_cardinality`, `cardinality`, `dense_bucket`, `overflow_bucket_of`); the inside is yours.
 
-- `new(n_leading_bits)`: `2^n` dense registers, all zero, no overflow entries; none at all for a negative `n`.
-- `add_elem(&val)`: with no registers do nothing; the register is the top `n_leading_bits` bits of the hash (0 if there are none); the run is the **trailing** zeros of the other `64 - b` bits (all of them if the rest is zero); if the run exceeds the register's current value (dense bits plus overflow bits shifted left by 4) store `run & 0xF` in the dense array and `(run >> 4) & 0x7` in the overflow map (removing the entry if it is zero). Hold both locks across the read and the write.
-- `dense_bucket()` (a copy of the dense array), `overflow_bucket_of(idx)` (0 if none).
-- `compute_cardinality()`: the same estimate as HyperLogLog (your estimator function from stage 2), over the registers reassembled from the dense and overflow bits.
+- **`new(n_leading_bits)` has `2^n` dense registers, all zero, and no overflow entries**; none at all for a negative `n`.
+- **`add_elem(&val)` keeps, in the register the top `n_leading_bits` bits of the hash select (0 if there are none), the longest run of trailing zeros seen in the other `64 - n` bits** (all of them if they are zero). A register is stored split: its low 4 bits in the dense array (`run & 0xF`), the next 3 in the overflow map (`(run >> 4) & 0x7`, no entry when they are zero). A register only ever grows, also when threads add at once. With no registers it does nothing.
+- **`dense_bucket()` is a copy of the dense array; `overflow_bucket_of(idx)` is a register's overflow bits, or 0.**
+- **`compute_cardinality()` is the same estimate as HyperLogLog** (your estimator function from stage 2), over the registers reassembled from the dense and overflow bits.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `new(n_leading_bits)`: `2^n` dense registers, all zero, no overflow entries; none at all for a negative `n`.
+> - `add_elem(&val)`: with no registers do nothing; the register is the top `n_leading_bits` bits of the hash (0 if there are none); the run is the **trailing** zeros of the other `64 - b` bits (all of them if the rest is zero); if the run exceeds the register's current value (dense bits plus overflow bits shifted left by 4) store `run & 0xF` in the dense array and `(run >> 4) & 0x7` in the overflow map (removing the entry if it is zero). Hold both locks across the read and the write.
+> - `dense_bucket()` (a copy of the dense array), `overflow_bucket_of(idx)` (0 if none).
+> - `compute_cardinality()`: the same estimate as HyperLogLog (your estimator function from stage 2), over the registers reassembled from the dense and overflow bits.
 
 The tests: exact scenarios (a run of 18 trailing zeros is split into dense and overflow bits; zero has all the remaining bits as trailing zeros; a second register and the estimate for long runs; one register uses all 64 bits; threads adding in any order leave the same registers as one thread; a negative size and strings), and a property: **for random 64-bit hashes the registers rebuilt from the dense and overflow bits are the longest run of trailing zeros of the values that fall in each register**, the dense part is below 16 and the overflow part below 8.
 
@@ -17,20 +23,13 @@ How you lock (both locks together is the intended design), and how you store the
 
 ## The Rust toolbox
 
-**`u64::trailing_zeros`.** One instruction; mask off the register bits first: `(hash & ((1u64 << rest) - 1)).trailing_zeros().min(rest)`, careful that `1 << 64` overflows (handle `b = 0` separately).
+**`u64::trailing_zeros`.** One instruction, over the whole word: mask off the bits that are not data first (`x & ((1u64 << k) - 1)` keeps the low `k` bits; `1u64 << 64` overflows, so `k = 64` is a case of its own), and remember that `trailing_zeros` of 0 is 64, more than `k`.
 
 **Two locks in one order.** Take `dense` then `overflow` everywhere; a different order in another function would deadlock.
 
 **A sparse map.** `HashMap<u16, u8>`: `entry`, `insert` and `remove` keep only registers whose run needs more than 4 bits.
 
-**Packing and unpacking.** `(run & 0xF) as u8` and `((run >> 4) & 0x7) as u8`; the whole value is `dense | (overflow << 4)`.
-
-```rust
-let idx = if b == 0 { 0 } else { (hash >> (64 - b)) as usize };
-let rest_bits = 64 - b;
-let tz = (hash & ((1u64 << rest_bits) - 1)).trailing_zeros().min(rest_bits);   // rest_bits < 64
-self.dense.lock().unwrap()[idx] = (tz & 0xF) as u8;
-```
+**Packing and unpacking.** A 7-bit value `v` splits into `v & 0xF` (the low four bits) and `(v >> 4) & 0x7` (the next three), and comes back as `low | (high << 4)`; cast each part to `u8` once it is masked.
 
 ## Design notes
 

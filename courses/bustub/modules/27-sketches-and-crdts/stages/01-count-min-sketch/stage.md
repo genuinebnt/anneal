@@ -11,12 +11,19 @@ A count-min sketch estimates how many times each item was seen, in a fixed amoun
 
 In `src/primer/count_min_sketch.rs` the public API is fixed (`new`, `column`, `insert`, `count`, `clear`, `merge`, `top_k`); the inside (the counters) is yours; atomic counters let many threads insert without a lock.
 
-- `CountMinSketch::new(width, depth)`: `Err(Invalid)` if either is zero; otherwise `width × depth` counters, all zero.
-- `column(row, item)`: the column of the item in a row: a hash of the item seeded by the row, modulo `width`. Every row must hash differently (the same item lands in different columns of different rows) and always the same way (the same row and item: the same column).
-- `insert(&item)`: add one to the item's counter in every row. `count(&item)`: the minimum of the item's counters over the rows.
-- `clear()`: every counter to zero.
-- `merge(&other)`: an error (`Invalid`) for different `width` or `depth` (the dimension check is given); otherwise add each of `other`'s counters to the same counter here.
-- `top_k(k, candidates)`: estimate every candidate, sort by count descending with a **stable** sort (equal counts keep the candidates' order), keep the first `k`; at most `candidates.len()` pairs.
+- **`CountMinSketch::new(width, depth)` is `Err(Invalid)` if either is zero**; otherwise a sketch whose every count is zero.
+- **`column(row, item)` is the item's column in a row, below `width`**: the same row and item always give the same column, and every row hashes differently (the same item lands in different columns of different rows).
+- **`count(&item)` is the smallest of the item's counters over the rows**, each of which `insert(&item)` raises by one: never below the number of times the item was inserted, never above the total number of insertions. Many threads may insert at once.
+- **`clear()` makes every count zero. `merge(&other)`** is an error (`Invalid`) for a different `width` or `depth` (the dimension check is given); otherwise this sketch then counts exactly as if it had seen both streams.
+- **`top_k(k, candidates)` is the at most `k` candidates with the highest estimates**, each with its estimate, highest first, equal counts in the candidates' order.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `CountMinSketch::new(width, depth)`: `Err(Invalid)` if either is zero; otherwise `width × depth` counters, all zero.
+> - `column(row, item)`: the column of the item in a row: a hash of the item seeded by the row, modulo `width`. Every row must hash differently (the same item lands in different columns of different rows) and always the same way (the same row and item: the same column).
+> - `insert(&item)`: add one to the item's counter in every row. `count(&item)`: the minimum of the item's counters over the rows.
+> - `clear()`: every counter to zero.
+> - `merge(&other)`: an error (`Invalid`) for different `width` or `depth` (the dimension check is given); otherwise add each of `other`'s counters to the same counter here.
+> - `top_k(k, candidates)`: estimate every candidate, sort by count descending with a **stable** sort (equal counts keep the candidates' order), keep the first `k`; at most `candidates.len()` pairs.
 
 The tests: exact scenarios (a zero dimension is an error; counts of strings and of integers; width one makes everything collide and the minimum is the total; each row hashes differently but always the same way; clear; merge with and without collisions and with incompatible sketches; top-k orders, truncates and keeps up with a sketch that keeps counting), and three properties: **an estimate is never below the truth** (any size, counts only ever grow, no count exceeds the number of insertions); **merging the sketch of one stream into another counts exactly like the sketch of both streams** (and in either order), and `clear` empties; and **`top_k` is the best candidates in order** (at most `k`, each with the sketch's own count, sorted, ties in candidate order, nobody left out beats the last).
 
@@ -28,27 +35,15 @@ How you store the counters (a `Vec<AtomicU32>` row after row, a `Vec<Vec<AtomicU
 
 **Atomics for counters.** `AtomicU32::fetch_add(1, Ordering::Relaxed)` increments without a lock; `Relaxed` is enough because no other memory depends on the counter's value.
 
-**`min` of an iterator.** `(0..depth).map(|row| cell(row, item).load(Relaxed)).min().unwrap_or(0)`.
+**`min` of an iterator.** `gauges.iter().map(|g| g.load(Relaxed)).min().unwrap_or(0)` reads every atomic and keeps the smallest; `min` is `None` for an empty iterator, so say what that means.
 
-**Seeding a hasher.** `let mut h = DefaultHasher::new(); (SEED, row).hash(&mut h); item.hash(&mut h); h.finish()` gives a different hash function for each row from one hasher type.
+**Salting a hasher.** Feeding a hasher a salt before the value, `let mut h = DefaultHasher::new(); salt.hash(&mut h); value.hash(&mut h); h.finish()`, gives a different hash function for every salt from one hasher type, and the same one every time for the same salt.
 
 **A generic key bound.** `impl<K: Hash> CountMinSketch<K>` and `PhantomData<fn(&K)>` make the type depend on `K` without owning one (so the sketch is `Send + Sync` for any `K`).
 
-**Stable sort.** `sort_by(|a, b| b.1.cmp(&a.1))` is stable: equal counts keep the order of the candidates.
+**Stable sort.** `players.sort_by(|a, b| b.score.cmp(&a.score))` sorts highest first (the comparison is reversed) and is stable: equal scores keep their order. `sort_unstable_by` would not.
 
-```rust
-self.cell(row, item).fetch_add(1, Ordering::Relaxed);                 // atomic increment through &self
-(0..self.depth).map(|row| self.cell(row, item).load(Ordering::Relaxed)).min().unwrap_or(0)
-(0..width as usize * depth as usize).map(|_| AtomicU32::new(0)).collect()
-```
-
-```rust
-for (mine, theirs) in self.counters.iter().zip(&other.counters) {
-    mine.fetch_add(theirs.load(Ordering::Relaxed), Ordering::Relaxed);
-}
-counted.sort_by(|a, b| b.1.cmp(&a.1));   // stable
-counted.truncate(k as usize);
-```
+**A vector of atomics.** `AtomicU32` is not `Clone`, so `vec![AtomicU32::new(0); n]` does not compile; `(0..n).map(|_| AtomicU32::new(0)).collect::<Vec<_>>()` builds one atomic per slot. `zip` walks two such vectors in step.
 
 ## Design notes
 
