@@ -2,6 +2,9 @@
 //!
 //! Without `pred_keys` it reads every row **in key order** (rows that share a key in rid order); with `pred_keys` it looks each key up
 //! and reads every row of that key. Rows that are deleted, or that fail the plan's `filter_predicate`, are skipped.
+//!
+//! Inside a transaction each row is the version the transaction may see. An index keeps the entries of a row's older versions, so an
+//! entry counts only if that version has the entry's key: each row comes back once, under the key the transaction sees.
 
 use std::sync::Arc;
 
@@ -110,10 +113,16 @@ impl Executor for IndexScanExecutor<'_> {
         // @begin 4b-06
         if let Some((txn, txn_mgr)) = &self.txn {
             while tuple_batch.len() < batch_size && self.cursor < self.entries.len() {
-                let rid = self.entries[self.cursor].1;
+                let (key, rid) = &self.entries[self.cursor];
+                let rid = *rid;
                 self.cursor += 1;
                 // the index leads to a rid; the version this transaction may see there (maybe none) is read as the sequential scan does
                 let Some(tuple) = read_visible_version(txn, txn_mgr, self.table_info, rid)? else { continue };
+                // the entry of another version's key: the row comes back once, at the entry of the key this version has
+                let attrs = self.index_info.index.metadata().get_key_attrs();
+                if tuple.key_from_tuple(&self.table_info.schema, &self.index_info.key_schema, attrs).data() != key.data() {
+                    continue;
+                }
                 if let Some(predicate) = &self.filter_predicate {
                     if predicate.evaluate(&tuple, &self.plan.output_schema)?.as_bool() != Some(true) {
                         continue;
@@ -124,7 +133,7 @@ impl Executor for IndexScanExecutor<'_> {
             }
             return Ok(!tuple_batch.is_empty());
         }
-        //~ // 4b-06: when self.txn is Some: for each rid use read_visible_version (given) instead of the heap's tuple, skip None, apply the filter as below
+        //~ // 4b-06: when self.txn is Some: for each entry use read_visible_version (given) instead of the heap's tuple, skip None, skip a version whose key is not the entry's key, apply the filter as below
         // @end
         // @begin 3e-04
         while tuple_batch.len() < batch_size && self.cursor < self.entries.len() {

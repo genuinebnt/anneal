@@ -14,10 +14,10 @@ In `src/execution/execution_common.rs`, `update_own_undo_log(txn, schema, own, b
 In `src/execution/executors/update_executor.rs`, the region marked `4b-03` at the top of `next`: when `self.txn` is `Some`:
 
 - read **all** of the child's output first, and make the new tuple for each (`make_new_tuple`, given from module 3e) with its rid;
-- if `changes_primary_key` (given) is true, call `update_by_delete_and_insert` (stage 7); otherwise call `modify_tuple(.., Some(&new))` for every change;
+- if `changes_primary_key` (given) is true, call `update_by_delete_and_insert` (stage 6); otherwise call `modify_tuple(.., Some(&new))` for every change, and give the new version its index entries (`insert_index_entries`, stage 1);
 - answer one row with the number of tuples.
 
-The tests: exact scenarios (an update is in place and the old version stays for older readers; a tuple the transaction inserted is updated without a log; changing the same tuple again widens its log instead of adding one; a delete after updates makes the log cover every column; updates over a version chain keep every older snapshot; a conflicting updater is tainted and the winner commits), and a property: **a session of interleaved transactions**, a session of interleaved transactions (inserts, updates that add a number, deletes, commits) run through SQL against a model of versions that says, for every transaction at every step, which rows it must see. A writer that meets a newer or uncommitted version of a row must be tainted; everything else must succeed.
+The tests: exact scenarios (an update is in place and the old version stays for older readers; a tuple the transaction inserted is updated without a log; changing the same tuple again widens its log instead of adding one; a delete after updates makes the log cover every column; updates over a version chain keep every older snapshot; a conflicting updater is tainted and the winner commits; an update of an indexed column adds the new key's entry and keeps the old one), and a property: **a session of interleaved transactions**, a session of interleaved transactions (inserts, updates that add a number, deletes, commits) run through SQL against a model of versions that says, for every transaction at every step, which rows it must see. A writer that meets a newer or uncommitted version of a row must be tainted; everything else must succeed.
 
 ## Your freedom
 
@@ -41,9 +41,11 @@ txn.modify_undo_log(idx, widened);
 
 **Own log or not.** In `modify_tuple`, the tuple's link is *this transaction's* when `link.prev_txn == txn.id()`; then the transaction already has a log for it and calls `update_own_undo_log`. A tuple the transaction inserted itself has a timestamp of its own and **no** log: nothing to widen.
 
-**Why collect first.** An in-place update does not add tuples, so the child scan could be consumed while writing; but the decision between "in place" and "delete + insert" (stage 7) needs to know whether *any* change touches the key, and a failure half-way must not leave you unable to explain it. Collecting also means the scan reads the table before any of this statement's own writes, so `SET a = a + 1` adds exactly one per row.
+**Why collect first.** An in-place update does not add tuples, so the child scan could be consumed while writing; but the decision between "in place" and "delete + insert" (stage 6) needs to know whether *any* change touches the primary key, and a failure half-way must not leave you unable to explain it. Collecting also means the scan reads the table before any of this statement's own writes, so `SET a = a + 1` adds exactly one per row.
 
 **No real change.** `UPDATE t SET a = 1` where `a` is already 1 still writes the tuple's metadata (the transaction now owns it) and creates a log with no modified columns. That is intended: the tuple is part of the write set, other writers conflict with it, and BusTub's tests expect it.
+
+**Indexes keep the old key.** The row keeps its rid, and a reader that began before this update still sees the old value of an indexed column. If the update removed the entry of the old key, that reader's lookup of the old key would miss the row. So the new key's entry is added and the old one stays; the index holds both, and a reader tells them apart by the version it reads (stage 6). The primary key never changes in place, so its entry is already right.
 
 **Same length.** The table page can only overwrite a tuple with one of the same length. For integer, decimal and boolean columns that always holds; an update that changes the length of a string fails with `Tuple size mismatch`. (A real system would store the tuple elsewhere and leave a forwarding pointer.)
 
@@ -58,6 +60,7 @@ txn.modify_undo_log(idx, widened);
 ## Tests
 
 - In-place updates with readable old versions; no log for own inserts; widened logs; deletes after updates; chains and snapshots; conflicts.
+- An update of an indexed column adds the entry of the new key and keeps the entry of the old one.
 - Property: sessions of writers against a model of versions.
 
 ## Hints

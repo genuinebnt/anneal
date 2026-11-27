@@ -18,7 +18,7 @@ use crate::common::exception::{Exception, ExceptionType, Result};
 use crate::common::rid::Rid;
 use crate::concurrency::transaction::Transaction;
 use crate::concurrency::transaction_manager::TransactionManager;
-use crate::execution::execution_common::{insert_mvcc, modify_tuple};
+use crate::execution::execution_common::{insert_index_entries, insert_mvcc, modify_tuple};
 use crate::execution::executor_context::ExecutorContext;
 use crate::execution::expressions::abstract_expression::ExprRef;
 use crate::execution::plans::plan_node::{PlanKind, PlanRef};
@@ -152,6 +152,8 @@ impl Executor for UpdateExecutor<'_> {
             } else {
                 for (rid, new) in &changes {
                     modify_tuple(txn, txn_mgr, self.table_info, *rid, Some(new))?;
+                    // a changed indexed column gets its new key's entry; the old one stays for older readers
+                    insert_index_entries(self.table_info, &self.indexes, new, *rid);
                 }
             }
             self.done = true;
@@ -159,7 +161,7 @@ impl Executor for UpdateExecutor<'_> {
             rid_batch.push(Rid::default());
             return Ok(true);
         }
-        //~ // 4b-03: when self.txn is Some: collect (rid, make_new_tuple(old)) for every child tuple first; if changes_primary_key(..)? call update_by_delete_and_insert, else modify_tuple(.., Some(new)) for each; answer with one tuple holding the count
+        //~ // 4b-03: when self.txn is Some: collect (rid, make_new_tuple(old)) for every child tuple first; if changes_primary_key(..)? call update_by_delete_and_insert, else modify_tuple(.., Some(new)) and insert_index_entries(.., new, rid) for each; answer with one tuple holding the count
         // @end
         // @begin 3e-03
         if self.done {

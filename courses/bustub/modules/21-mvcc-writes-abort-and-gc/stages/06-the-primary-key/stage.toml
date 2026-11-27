@@ -1,8 +1,8 @@
 id = "4b-06"
-title = "The primary key"
+title = "The primary key, and index scans that re-check"
 kind = "build"
 difficulty = "hard"
 tests = ["stages_4b::s4b_06"]
-learn = ["unique-key checks against tombstones", "reusing a rid instead of inserting a duplicate tuple", "arbitration by the index when two transactions race", "why a key change is a delete plus an insert", "ordering two phases to reuse tombstones", "detecting a key change"]
+learn = ["unique-key checks against tombstones", "reusing a rid instead of inserting a duplicate tuple", "arbitration by the index when two transactions race", "why a key change is a delete plus an insert", "ordering two phases to reuse tombstones", "detecting a key change", "re-checking an index entry against the version a reader sees"]
 concepts = ["unique-indexes-and-tombstone-reuse"]
-concepts_optional = ["maintaining-indexes-on-writes", "rolling-back-with-undo-logs", "halloween-problem", "errors-4b"]
+concepts_optional = ["index-entries-key-and-rid", "maintaining-indexes-on-writes", "rolling-back-with-undo-logs", "halloween-problem", "errors-4b"]

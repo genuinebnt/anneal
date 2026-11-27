@@ -18,7 +18,7 @@ use crate::common::exception::{Exception, ExceptionType, Result};
 use crate::common::rid::Rid;
 use crate::concurrency::transaction::Transaction;
 use crate::concurrency::transaction_manager::TransactionManager;
-use crate::execution::execution_common::{insert_mvcc, modify_tuple};
+use crate::execution::execution_common::{insert_index_entries, insert_mvcc, modify_tuple};
 use crate::execution::executor_context::ExecutorContext;
 use crate::execution::expressions::abstract_expression::ExprRef;
 use crate::execution::plans::plan_node::{PlanKind, PlanRef};
@@ -94,7 +94,7 @@ impl Executor for UpdateExecutor<'_> {
     fn next(&mut self, tuple_batch: &mut Vec<Tuple>, rid_batch: &mut Vec<Rid>, _batch_size: usize) -> Result<bool> {
         tuple_batch.clear();
         rid_batch.clear();
-        // 4b-03: when self.txn is Some: collect (rid, make_new_tuple(old)) for every child tuple first; if changes_primary_key(..)? call update_by_delete_and_insert, else modify_tuple(.., Some(new)) for each; answer with one tuple holding the count
+        // 4b-03: when self.txn is Some: collect (rid, make_new_tuple(old)) for every child tuple first; if changes_primary_key(..)? call update_by_delete_and_insert, else modify_tuple(.., Some(new)) and insert_index_entries(.., new, rid) for each; answer with one tuple holding the count
         todo!("3e-03: once: replaces every tuple of the child by its new version (the old marked deleted, the new stored, every index following), or, if the new primary keys would be repeated or NULL (check_constraints), fails and changes nothing; answers with how many, then false")
     }
 

@@ -42,7 +42,7 @@ How you walk the tables and chains, and what you keep per tuple while walking; t
 
 **Running and tainted stay for their own reasons.** They may yet write, or abort and need their logs; and their *read* state matters to the watermark.
 
-**What is not freed.** Tombstones stay in the table. Real systems also reclaim table space and index entries after garbage collection (PostgreSQL's `VACUUM`); this exercise only forgets transactions and chain links.
+**What is not freed.** Tombstones stay in the table, and so do index entries. An update in place that changes an indexed column leaves the entry of the old key behind for the readers that still see the old version (stage 6); once the watermark passes that version, no reader can reach the entry, and it is garbage: every lookup of the old key still reads the row's version only to skip it. This collector does not remove such entries (it would have to compute, for each row, the keys of the versions still reachable and delete every other entry of the row), so they stay until the row's entry is reused. Real systems reclaim table space and dead index entries after garbage collection (PostgreSQL's `VACUUM`, and its "bottom-up" deletion inside B-tree pages); this exercise only forgets transactions and chain links.
 
 ## If this is new
 
@@ -82,6 +82,7 @@ Optional. Predict first, then run.
 
 1. **Off by one.** Stop the walk one log earlier (`<` instead of `<=`). Which test notices?
 2. **Collect while running.** Run `garbage_collection` while a thread executes statements. What can go wrong?
+3. **Dead index entries.** After stage 6, create an index on `v`, update one row's `v` 1 000 times (committing each time), collect, and count the index's entries. Predict the count, then time `where v = <an old value>`. Write the rule that would let the collector delete an entry `(key, rid)`, and say which versions it must look at.
 
 ## Other designs
 

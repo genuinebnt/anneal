@@ -17,7 +17,7 @@ So the rule is simple and absolute: **a delete never removes an index entry.** D
 
 ## The index decides; visibility is the reader's business
 
-Two different questions get mixed up here. "Does this key exist in the table?" and "Can *I* see a row with this key?" have different answers for different transactions, and the index can only answer a crude version of the first. The index says "key 2 is at rid 7". It says nothing about timestamps. A reader at timestamp 4 gets rid 7 and reconstructs a row. A reader at timestamp 7 gets rid 7, finds the tombstone, and sees no tuple. Both are right, and neither re-checks that the row's key equals the key it searched for: a rid belongs to one key for its entire life, so that check would never fail.
+Two different questions get mixed up here. "Does this key exist in the table?" and "Can *I* see a row with this key?" have different answers for different transactions, and the index can only answer a crude version of the first. The index says "key 2 is at rid 7". It says nothing about timestamps. A reader at timestamp 4 gets rid 7 and reconstructs a row. A reader at timestamp 7 gets rid 7, finds the tombstone, and sees no tuple. Both are right. In a primary-key index neither needs to re-check that the row's key equals the key it searched for: a rid belongs to one key for its entire life, so that check would never fail. An index on another column is different: an update in place can change that column, the row keeps its rid, and the index ends up with an entry for the old key and one for the new ([index entries](index-entries-key-and-rid)). There the reader must re-check the version it reads against the entry's key.
 
 That crude answer is still exactly what a unique constraint needs, because uniqueness is about the future as well as the present. The index is the one place where two transactions that both want key 2 meet.
 
@@ -177,6 +177,7 @@ fn the_loser_buries_its_tuple() {
 
 - **4b-06:** primary-key inserts: unique check, tombstone reuse, the race.
 - **4b-06:** an update of the primary key as deletes followed by inserts.
+- **4b-06:** the index scan re-checks an entry of another index against the version it reads.
 - **4b-08:** BusTub's `txn_index_test` runs all of it.
 
 ### Where it is used

@@ -2,6 +2,9 @@
 //!
 //! Without `pred_keys` it reads every row **in key order** (rows that share a key in rid order); with `pred_keys` it looks each key up
 //! and reads every row of that key. Rows that are deleted, or that fail the plan's `filter_predicate`, are skipped.
+//!
+//! Inside a transaction each row is the version the transaction may see. An index keeps the entries of a row's older versions, so an
+//! entry counts only if that version has the entry's key: each row comes back once, under the key the transaction sees.
 
 use std::sync::Arc;
 
@@ -73,7 +76,7 @@ impl Executor for IndexScanExecutor<'_> {
     fn next(&mut self, tuple_batch: &mut Vec<Tuple>, rid_batch: &mut Vec<Rid>, batch_size: usize) -> Result<bool> {
         tuple_batch.clear();
         rid_batch.clear();
-        // 4b-06: when self.txn is Some: for each rid use read_visible_version (given) instead of the heap's tuple, skip None, apply the filter as below
+        // 4b-06: when self.txn is Some: for each entry use read_visible_version (given) instead of the heap's tuple, skip None, skip a version whose key is not the entry's key, apply the filter as below
         todo!("3e-04: the batch holds the live tuples at the entries' rids that satisfy the filter; true if it is not empty")
     }
 

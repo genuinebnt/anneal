@@ -5,15 +5,16 @@ Until now an `INSERT` wrote tuples with timestamp 0: everybody sees them at once
 In `src/execution/execution_common.rs`, `insert_mvcc(txn, txn_mgr, table, indexes, tuple)`: the region marked `4b-01` (the last lines of the function):
 
 - insert `tuple` into the table heap with `TupleMeta { ts: txn.temp_ts(), is_deleted: false }`;
-- add the new rid to the transaction's write set (`txn.append_write_set(table.oid, rid)`).
+- add the new rid to the transaction's write set (`txn.append_write_set(table.oid, rid)`);
+- give the row its entry `(key, rid)` in every index of the table: `insert_index_entries(table, indexes, tuple, rid)`, region `4b-01`, which the update of stage 3 reuses. The entry is there before commit; a reader that cannot see the row yet finds no visible version behind it, as for any other entry.
 
-In `src/execution/executors/insert_executor.rs`, the region marked `4b-01` at the top of `next`: when `self.txn` is `Some`, produce the same one-row answer as the non-transactional path (the number of rows inserted), but insert each tuple with `insert_mvcc` instead of writing the heap and the indexes directly. (Only tables **without** a primary key go through the simple path here; stage 6 adds the index.)
+In `src/execution/executors/insert_executor.rs`, the region marked `4b-01` at the top of `next`: when `self.txn` is `Some`, produce the same one-row answer as the non-transactional path (the number of rows inserted), but insert each tuple with `insert_mvcc` instead of writing the heap and the indexes directly. (Tables with a primary key go through the simple path until stage 6, which makes the primary key unique inside transactions.)
 
-The tests: exact scenarios (an inserted tuple is visible only to its transaction; insert reports how many rows it inserted; the tuple carries the temporary timestamp until commit; a commit makes it visible to later transactions only; an `INSERT .. SELECT` does not see its own new rows). Sessions of interleaved writers come in stage 3, where updates and deletes join in.
+The tests: exact scenarios (an inserted tuple is visible only to its transaction; insert reports how many rows it inserted; the tuple carries the temporary timestamp until commit; a commit makes it visible to later transactions only; an `INSERT .. SELECT` does not see its own new rows; every index of the table gets the new rows' entries, repeated and NULL keys included, and a later transaction finds them through the index). Sessions of interleaved writers come in stage 3, where updates and deletes join in.
 
 ## Your freedom
 
-Almost none: two small regions. The design is in the timestamp rule of module 4a; here you only apply it.
+Almost none: three small regions. The design is in the timestamp rule of module 4a; here you only apply it.
 
 ## The Rust toolbox
 
@@ -37,6 +38,8 @@ if let Some((txn, txn_mgr)) = &self.txn { ... }                                 
 
 **The Halloween guard comes for free.** The sequential scan below an `INSERT ... SELECT` stops at the table's end as it was when the scan began (module 3c), so the rows being inserted are not read again, whether or not there is a transaction.
 
+**Entries come with the tuple, before commit.** An index cannot wait for the commit: the writer itself must find its row through the index at once, and commit only rewrites timestamps. Entries of uncommitted rows are harmless to others, because a reader always goes from the entry to the version it may see, and an invisible row has none.
+
 **One statement, many tuples, one failure.** If inserting row 3 of 5 fails (stage 6: a duplicate key), the first two are already in the write set. The statement returns an error; the transaction is tainted; abort will undo the two.
 
 ## If this is new
@@ -48,6 +51,7 @@ if let Some((txn, txn_mgr)) = &self.txn { ... }                                 
 ## Tests
 
 - A new tuple is invisible to everyone but its writer until commit; the count is reported; the tuple carries the temporary timestamp and joins the write set; commit publishes it; `INSERT .. SELECT` ignores its own rows.
+- Every index gets the new rows' entries, repeated and NULL keys included; after commit a lookup through an index finds them.
 
 ## Hints
 
