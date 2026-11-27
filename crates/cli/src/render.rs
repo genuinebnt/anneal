@@ -5,19 +5,15 @@
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-/// Renders `md` in lines of at most `width` columns (a long unbreakable word or a code line may be longer). The answers and nudges of
-/// `> [!CHECK]` questions are left out, so the reader tries first.
-pub fn render(md: &str, width: usize, color: bool) -> String {
-    render_checks(md, width, color, false)
+/// Renders `md`, from the page of stage `stage`, in lines of at most `width` columns (a long unbreakable word or a code line may be longer).
+/// Without `answers`, the answers and nudges of `> [!CHECK]` questions are left out, so the reader tries first, and a line names the
+/// command that prints them for this stage.
+pub fn render_page(md: &str, width: usize, color: bool, stage: &str, answers: bool) -> String {
+    render_checks(md, width, color, answers, stage)
 }
 
-/// As [`render`], with the answers and nudges of `> [!CHECK]` questions printed.
-pub fn render_with_answers(md: &str, width: usize, color: bool) -> String {
-    render_checks(md, width, color, true)
-}
-
-fn render_checks(md: &str, width: usize, color: bool, answers: bool) -> String {
-    let md = checks(md, answers);
+fn render_checks(md: &str, width: usize, color: bool, answers: bool, stage: &str) -> String {
+    let md = checks(md, answers, stage);
     let (md, notes) = prepare(&md);
     let md = md.as_str();
     let mut r = Renderer { width: width.max(30), color, ..Renderer::default() };
@@ -101,19 +97,21 @@ fn prepare(md: &str) -> (String, Vec<String>) {
 /// `> [!CHECK] Question` opens a question the reader answers before looking: the answer is in `||spoiler||` marks and the nudges are the
 /// list that follows. The question becomes a bold lead. Without `answers`, the answer and nudges are replaced by one line saying how
 /// to see them; with it, the answer is labelled and the nudges stay as a list. Code fences are left alone.
-fn checks(md: &str, answers: bool) -> String {
+fn checks(md: &str, answers: bool, stage: &str) -> String {
     let mut out = String::with_capacity(md.len());
     let (mut in_check, mut hidden_answer, mut nudges, mut fence) = (false, false, 0usize, false);
+    let cmd = format!("anneal course show {stage} --answers");
     let close = |out: &mut String, hidden_answer: bool, nudges: usize| {
         if answers || (!hidden_answer && nudges == 0) {
             return;
         }
-        let what = match (hidden_answer, nudges) {
-            (true, 0) => "The answer is".to_owned(),
-            (true, n) => format!("The answer and {n} nudge{} are", if n == 1 { "" } else { "s" }),
-            (false, n) => format!("{n} nudge{} {}", if n == 1 { "" } else { "s" }, if n == 1 { "is" } else { "are" }),
+        let (what, it) = match (hidden_answer, nudges) {
+            (true, 0) => ("The answer is".to_owned(), "it"),
+            (true, n) => (format!("The answer and {n} nudge{} are", if n == 1 { "" } else { "s" }), "them"),
+            (false, 1) => ("1 nudge is".to_owned(), "it"),
+            (false, n) => (format!("{n} nudges are"), "them"),
         };
-        out.push_str(&format!(">\n> *Try it first. {what} hidden: `anneal course show --answers` prints them.*\n"));
+        out.push_str(&format!(">\n> *Try it first. {what} hidden: `{cmd}` prints {it}.*\n"));
     };
     for line in md.split_inclusive('\n') {
         let t = line.trim_start();
@@ -195,29 +193,39 @@ fn alert_lead(line: &str) -> Option<String> {
     Some(if title.is_empty() { format!("> **{label}.**\n") } else { format!("> **{label}: {title}**\n") })
 }
 
-/// A stage's markdown split at its `## Hints` section: (everything before it, the hints as (title, markdown)).
-pub fn split_hints(md: &str) -> (&str, Vec<(String, String)>) {
-    let Some(at) = md.lines().scan(0usize, |pos, l| {
-        let start = *pos;
-        *pos += l.len() + 1;
-        Some((start, l))
-    }).find(|(_, l)| l.trim_end() == "## Hints").map(|(p, _)| p) else {
-        return (md, Vec::new());
-    };
-    let (body, hints) = md.split_at(at);
+/// A stage's markdown split at its `## Hints` section: (the page without that section, the hints as (title, markdown)). The sections after
+/// the hints (Performance, Experiment, ...) stay in the page, in their order.
+pub fn split_hints(md: &str) -> (String, Vec<(String, String)>) {
+    let mut page = String::with_capacity(md.len());
     let mut out: Vec<(String, String)> = Vec::new();
-    for line in hints.lines().skip(1) {
-        if let Some(title) = line.strip_prefix("### ") {
+    let (mut in_hints, mut fence) = (false, false);
+    for line in md.split_inclusive('\n') {
+        let bare = line.trim_end();
+        if line.trim_start().starts_with("```") {
+            fence = !fence;
+        }
+        if !fence && bare == "## Hints" {
+            in_hints = true;
+            continue;
+        }
+        if in_hints && !fence && bare.starts_with("## ") {
+            in_hints = false;
+        }
+        if !in_hints {
+            page.push_str(line);
+            continue;
+        }
+        if let Some(title) = bare.strip_prefix("### ").filter(|_| !fence) {
             out.push((title.trim().to_owned(), String::new()));
         } else if let Some((_, text)) = out.last_mut() {
-            text.push_str(line);
+            text.push_str(bare);
             text.push('\n');
         }
     }
     for (_, text) in &mut out {
         *text = text.trim().to_owned();
     }
-    (body, out)
+    (page, out)
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -642,7 +650,11 @@ mod tests {
     use super::*;
 
     fn plain(md: &str, width: usize) -> String {
-        render(md, width, false)
+        render_page(md, width, false, "1a-01", false)
+    }
+
+    fn render(md: &str, width: usize, color: bool) -> String {
+        render_page(md, width, color, "1a-01", false)
     }
 
     #[test]
@@ -773,7 +785,13 @@ mod tests {
         let md = "Intro\n\n## The task\n\ntext\n\n## Hints\n\n### First\n\nbody one\n\n### Second\n\nbody two\nmore\n";
         let (body, hints) = split_hints(md);
         assert!(body.contains("The task") && !body.contains("Hints") && !body.contains("body one"));
+        assert!(!body.contains("## Performance"));
         assert_eq!(hints, vec![("First".to_owned(), "body one".to_owned()), ("Second".to_owned(), "body two\nmore".to_owned())]);
+        let after = format!("{md}\n## Performance\n\nO(1).\n\n```sh\n### not a hint\n```\n\n## Learn more\n\nA book.\n");
+        let (body, hints) = split_hints(&after);
+        assert_eq!(hints.len(), 2, "the sections after the hints are not hints");
+        let (perf, learn) = (body.find("## Performance").expect("Performance stays on the page"), body.find("## Learn more").expect("Learn more stays"));
+        assert!(perf < learn && body.contains("### not a hint") && !body.contains("body two"), "in page order, without the hints: {body}");
         let (whole, none) = split_hints("no hints here");
         assert_eq!(whole, "no hints here");
         assert!(none.is_empty());
@@ -793,8 +811,19 @@ mod tests {
     }
 
     #[test]
+    fn the_hidden_answer_notice_names_the_stage_and_agrees_in_number() {
+        let page = |md: &str| render_page(md, 200, false, "1a-02", false);
+        let both = page(CHECK);
+        assert!(both.contains("The answer and 2 nudges are hidden: `anneal course show 1a-02 --answers` prints them."), "{both}");
+        let one = page("> [!CHECK] Why?\n> ||Because.||\n");
+        assert!(one.contains("The answer is hidden: `anneal course show 1a-02 --answers` prints it."), "{one}");
+        let nudge = page("> [!CHECK] Why?\n>\n> - look here\n");
+        assert!(nudge.contains("1 nudge is hidden: `anneal course show 1a-02 --answers` prints it."), "{nudge}");
+    }
+
+    #[test]
     fn a_check_shows_its_answer_and_nudges_when_asked() {
-        let out = render_with_answers(CHECK, 120, false);
+        let out = render_page(CHECK, 120, false, "1a-02", true);
         assert!(out.contains("Page 3, because it is the oldest."), "{out}");
         assert!(!out.contains("||Page"), "the spoiler marks are removed: {out}");
         assert!(out.contains("Which pages are pinned?") && out.contains("Which one came first?"), "{out}");

@@ -1128,7 +1128,7 @@ fn init(course_id: &str, dir: Option<PathBuf>, courses: &Path) -> anyhow::Result
     git(&["add", "-A"])?;
     let committed = git(&["commit", "-q", "-m", "Start the course"]).map(|s| s.success()).unwrap_or(false);
     let shipped = learner_course(&dir)?;
-    println!("Created {} ({} stages in {} modules).", dir.display(), shipped.stages.len(), count_modules(&shipped));
+    println!("Created {} ({}).", dir.display(), course_size(&shipped));
     if !committed {
         println!("(The first commit didn't happen: set git user.name and user.email, then `git commit -am start`.)");
     }
@@ -1198,8 +1198,8 @@ fn restore(url: Option<String>, dir: Option<PathBuf>, course: &str) -> anyhow::R
     install_hooks(&dir)?;
     let shipped = learner_course(&dir)?;
     let progress = load_progress(&dir);
-    let done = shipped.stages.iter().filter(|s| progress.passed.contains_key(&s.def.id)).count();
-    println!("\nRestored {}: {done} of {} stages passed in your committed work.", dir.display(), shipped.stages.len());
+    let (done, total) = core_counts(&shipped, &progress);
+    println!("\nRestored {}: {done} of {total} stages passed in your committed work.", dir.display());
     if let Some(next) = current(&shipped, &progress) {
         println!("Next: {} {}", next.def.id, next.def.title);
     }
@@ -1270,18 +1270,12 @@ fn update(course_id: &str, courses: &Path, from: Option<&str>, offline: bool) ->
     let course = learner_course(&repo)?;
     let progress = load_progress(&repo);
     let Sync { added, updated, conflicts } = sync_files(&repo, &kept, &unlocked_modules(&course, &progress))?;
-    println!("Updated: {added} new files, {updated} given files refreshed, {} stages in the course.", course.stages.len());
+    println!("Updated: {added} new files, {updated} given files refreshed, {} stages in the course.", core_counts(&course, &progress).1);
     for c in &conflicts {
         println!("  you edited {}: the new version is in {}.new (merge by hand)", c.display(), c.display());
     }
     println!("`anneal course status` shows where you are.");
     Ok(ExitCode::SUCCESS)
-}
-
-fn count_modules(c: &Course) -> usize {
-    let mut m: Vec<&str> = c.stages.iter().map(|s| s.module.as_str()).collect();
-    m.dedup();
-    m.len()
 }
 
 fn install_hooks(repo: &Path) -> anyhow::Result<()> {
@@ -1399,6 +1393,24 @@ fn adopt(stage: Option<&str>, yes: bool) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Copies `progress.json` to `progress.before-reset-<unix seconds>.json` next to it (never over an existing copy), before a reset
+/// rewrites it. Returns the copy's path, or `None` when there is no progress file to keep.
+fn archive_progress(repo: &Path) -> anyhow::Result<Option<PathBuf>> {
+    let from = state_path(repo, "progress.json");
+    if !from.exists() {
+        return Ok(None);
+    }
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let mut to = state_path(repo, &format!("progress.before-reset-{secs}.json"));
+    let mut n = 1;
+    while to.exists() {
+        n += 1;
+        to = state_path(repo, &format!("progress.before-reset-{secs}-{n}.json"));
+    }
+    fs::copy(&from, &to).with_context(|| format!("keeping a copy of {} before the reset", from.display()))?;
+    Ok(Some(to))
+}
+
 /// `anneal course reset`: forgets which stages passed, for one module or for the whole course. The learner's code stays as it is.
 fn reset(module: Option<&str>, all: bool, yes: bool) -> anyhow::Result<ExitCode> {
     use std::io::{BufRead, IsTerminal, Write};
@@ -1431,11 +1443,15 @@ fn reset(module: Option<&str>, all: bool, yes: bool) -> anyhow::Result<ExitCode>
             return Ok(ExitCode::FAILURE);
         }
     }
+    let archived = archive_progress(&repo)?;
     for id in &ids {
         progress.passed.remove(id);
     }
     save_progress(&repo, &progress)?;
     println!("Reset {what}.");
+    if let Some(path) = archived {
+        println!("The progress from before is kept in {} (copy it back over {STATE_DIR}/progress.json to undo).", path.strip_prefix(&repo).unwrap_or(&path).display());
+    }
     let scope = match module {
         Some(code) => serde_json::json!({ "module": code }),
         None => serde_json::json!({ "all": true }),
@@ -1505,7 +1521,8 @@ fn doctor() -> anyhow::Result<ExitCode> {
         Ok(repo) => {
             let course = learner_course(&repo)?;
             let progress = load_progress(&repo);
-            line(Some(true), "repo", format!("{} · {} of {} stages done", course.meta.title, progress.passed.len(), course.stages.len()));
+            let (done, total) = core_counts(&course, &progress);
+            line(Some(true), "repo", format!("{} · {done} of {total} stages done", course.meta.title));
             let hook = fs::read_to_string(repo.join(".git/hooks/pre-push")).unwrap_or_default();
             if hook.contains("anneal") {
                 line(Some(true), "git hook", "pre-push runs the tests".into());
@@ -1540,12 +1557,13 @@ fn status(json: bool) -> anyhow::Result<ExitCode> {
     let course = learner_course(&repo)?;
     let progress = load_progress(&repo);
     let cur = current(&course, &progress).map(|s| s.def.id.clone());
-    // Challenges are extra practice: they have their own tally and never count towards the course.
+    // Challenges are extra practice: they have their own tally and never count towards the course, nor towards a module. The stages of an
+    // optional module count towards that module only.
     fn core(s: &Stage) -> bool {
         s.def.kind != "challenge"
     }
-    let total = course.stages.iter().filter(|s| core(s)).count();
-    let done = course.stages.iter().filter(|s| core(s)).filter(|s| progress.passed.contains_key(&s.def.id)).count();
+    let (done, total) = core_counts(&course, &progress);
+    let (optional_done, optional_total, optional_modules) = optional_counts(&course, &progress);
     let challenges = course.stages.iter().filter(|s| s.def.kind == "challenge").count();
     let challenges_done = course.stages.iter().filter(|s| s.def.kind == "challenge" && progress.passed.contains_key(&s.def.id)).count();
     let mut modules: Vec<(String, String, Vec<&Stage>)> = Vec::new();
@@ -1561,7 +1579,7 @@ fn status(json: bool) -> anyhow::Result<ExitCode> {
             .map(|(code, title, stages)| {
                 let d = stages.iter().filter(|s| core(s)).filter(|s| progress.passed.contains_key(&s.def.id)).count();
                 serde_json::json!({
-                    "code": code, "title": title, "done": d, "total": stages.iter().filter(|s| core(s)).count(),
+                    "code": code, "title": title, "done": d, "total": stages.iter().filter(|s| core(s)).count(), "optional": optional_modules.contains(code),
                     "stages": stages.iter().map(|s| serde_json::json!({
                         "id": s.def.id, "title": s.def.title, "difficulty": s.def.difficulty, "kind": s.def.kind,
                         "state": if progress.passed.contains_key(&s.def.id) { "done" } else if Some(&s.def.id) == cur.as_ref() { "current" } else { "todo" },
@@ -1569,13 +1587,17 @@ fn status(json: bool) -> anyhow::Result<ExitCode> {
                 })
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "course": course.meta.id, "title": course.meta.title, "done": done, "total": total, "challenges": challenges, "challenges_done": challenges_done, "current": cur, "modules": mods }))?);
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "course": course.meta.id, "title": course.meta.title, "done": done, "total": total, "challenges": challenges, "challenges_done": challenges_done, "optional_stages": optional_total, "optional_stages_done": optional_done, "current": cur, "modules": mods }))?);
         return Ok(ExitCode::SUCCESS);
     }
     println!("{}   {}", bold(&course.meta.title), dim(&format!("{done} of {total} stages · {}%", (done * 100).checked_div(total).unwrap_or(0))));
     println!("{}", bar(done, total, 40));
     if challenges > 0 {
         println!("{}", dim(&format!("{challenges_done} of {challenges} challenges (extra practice, not part of the course)")));
+    }
+    if optional_total > 0 {
+        let s = if optional_modules.len() == 1 { "" } else { "s" };
+        println!("{}", dim(&format!("{optional_done} of {optional_total} stages in the optional module{s} {} (not part of the course)", optional_modules.join(", "))));
     }
     let strip: Vec<(String, usize, usize)> = modules.iter().map(|(code, _, stages)| (code.clone(), stages.iter().filter(|s| core(s)).filter(|s| progress.passed.contains_key(&s.def.id)).count(), stages.iter().filter(|s| core(s)).count())).collect();
     let here = cur.as_deref().and_then(|id| course.stage(id).ok()).map(|s| s.module.clone());
@@ -1625,20 +1647,50 @@ fn print_hint(course_id: &str, s: &Stage, n: usize, no_pager: bool) -> anyhow::R
     if opened {
         eprintln!("Hint {n} opened. When stage {} passes, the website will count it as passed with help.", s.def.id);
     }
-    let text = format!("{}\n\n{}", term::bold(&format!("Stage {} · hint {n}: {title}", s.def.id)), render::render(&md, term::text_width(), term::color_on()));
+    let text = format!("{}\n\n{}", term::bold(&format!("Stage {} · hint {n}: {title}", s.def.id)), render::render_page(&md, term::text_width(), term::color_on(), &s.def.id, false));
     term::page(&text, no_pager);
     Ok(())
 }
 
-/// Stages that count towards the course (challenges are extra practice): (passed, all).
+/// Stages that count towards the course: the core stages, the path `current` walks. Challenges (extra practice) and the stages of
+/// optional modules have counts of their own. (passed, all).
 fn core_counts(course: &Course, progress: &Progress) -> (usize, usize) {
-    let core = course.stages.iter().filter(|s| s.def.kind != "challenge");
+    let core = course.stages.iter().filter(|s| !s.optional);
     (core.clone().filter(|s| progress.passed.contains_key(&s.def.id)).count(), core.count())
 }
 
-/// What the stage banner shows about `s`: its place in its module and in the course.
+/// The stages of optional modules, challenges left out: (passed, all, the modules' codes).
+fn optional_counts(course: &Course, progress: &Progress) -> (usize, usize, Vec<String>) {
+    let stages: Vec<&Stage> = course.stages.iter().filter(|s| s.optional && s.def.kind != "challenge").collect();
+    let mut modules: Vec<String> = stages.iter().map(|s| s.module.clone()).collect();
+    modules.dedup();
+    (stages.iter().filter(|s| progress.passed.contains_key(&s.def.id)).count(), stages.len(), modules)
+}
+
+/// What a course holds, for `init`: "169 stages in 31 modules, plus 143 challenges and 5 stages in the optional module r".
+fn course_size(course: &Course) -> String {
+    let (_, core) = core_counts(course, &Progress::default());
+    let mut modules: Vec<&str> = course.stages.iter().filter(|s| !s.optional).map(|s| s.module.as_str()).collect();
+    modules.dedup();
+    let challenges = course.stages.iter().filter(|s| s.def.kind == "challenge").count();
+    let (_, optional, optional_modules) = optional_counts(course, &Progress::default());
+    let mut extras = Vec::new();
+    if challenges > 0 {
+        extras.push(format!("{challenges} challenge{}", if challenges == 1 { "" } else { "s" }));
+    }
+    if optional > 0 {
+        let s = if optional_modules.len() == 1 { "" } else { "s" };
+        extras.push(format!("{optional} stage{} in the optional module{s} {}", if optional == 1 { "" } else { "s" }, optional_modules.join(", ")));
+    }
+    let extras = if extras.is_empty() { String::new() } else { format!(", plus {}", extras.join(" and ")) };
+    format!("{core} stage{} in {} module{}{extras}", if core == 1 { "" } else { "s" }, modules.len(), if modules.len() == 1 { "" } else { "s" })
+}
+
+/// What the stage banner shows about `s`: its place in its module (a challenge among the module's challenges, any other stage among its
+/// core stages) and in the course.
 fn stage_info<'a>(course: &Course, progress: &Progress, s: &'a Stage) -> crate::ui::StageInfo<'a> {
-    let in_module: Vec<&Stage> = course.stages.iter().filter(|x| x.module == s.module && x.def.kind != "challenge").collect();
+    let challenge = s.def.kind == "challenge";
+    let in_module: Vec<&Stage> = course.stages.iter().filter(|x| x.module == s.module && (x.def.kind == "challenge") == challenge).collect();
     let of = in_module.len().max(1);
     let at = in_module.iter().position(|x| x.def.id == s.def.id).map_or(of, |i| i + 1);
     let (course_done, course_total) = core_counts(course, progress);
@@ -1743,7 +1795,7 @@ fn tests_command(stage: Option<&str>) -> anyhow::Result<ExitCode> {
         println!("  {mark} {}", crate::ui::clip(&readable_test_name(n), room));
     }
     println!("\n{}", dim("✓ passed · ✗ failed · · not run yet"));
-    println!("Run them:  anneal course test       One of them:  anneal course test --filter <words of its name, with _>");
+    println!("Run them:  anneal course test {id}       One of them:  anneal course test {id} --filter <words of its name, with _>", id = s.def.id);
     let hints = render::split_hints(&s.readme).1.len();
     if hints > 0 {
         println!("Stuck?     anneal course show {} --hint 1   ({hints} hint{}; the website counts the stage as passed with help)", s.def.id, if hints == 1 { "" } else { "s" });
@@ -1786,6 +1838,11 @@ fn stage_files(repo: &Path, id: &str) -> Vec<(String, usize)> {
     out
 }
 
+/// A challenge that hands over broken code to repair (its page has `## What to fix`), rather than a spec to build.
+fn is_fix_it(readme: &str) -> bool {
+    readme.lines().any(|l| l.trim_end() == "## What to fix")
+}
+
 fn print_stage(repo: &Path, course: &Course, progress: &Progress, s: &Stage, no_pager: bool, answers: bool) {
     let (body, hints) = render::split_hints(&s.readme);
     let (color, width) = (term::color_on(), term::text_width());
@@ -1795,13 +1852,19 @@ fn print_stage(repo: &Path, course: &Course, progress: &Progress, s: &Stage, no_
         let list = files.iter().map(|(f, n)| format!("  {f}  ({n} place{})", if *n == 1 { "" } else { "s" })).collect::<Vec<_>>().join("\n");
         text.push_str(&format!("{}\n{list}\n{}\n\n", term::bold("Where to work"), term::dim(&format!("each place is a stub marked {}: find them with  grep -rn '{}:' src", s.def.id, s.def.id))));
     }
-    text.push_str(&if answers { render::render_with_answers(body, width, color) } else { render::render(body, width, color) });
-    text.push('\n');
-    text.push_str(&render::render("Your way: the tests call only the public items named above. How you build the inside is up to you; change the given structs and helpers if you want a different design.", width, color));
+    // "Your way" closes the part about the task, where the hints were; the sections after the hints (Performance, Experiment, ...) follow.
+    // A fix-it challenge hands over code that is already designed: there is nothing to build your own way.
+    let mut page = body;
+    if !is_fix_it(&s.readme) {
+        let your_way = "Your way: the tests call only the public items named above. How you build the inside is up to you; change the given structs and helpers if you want a different design.\n\n";
+        let at = s.readme.find("\n## Hints\n").map_or(page.len(), |i| i + 1).min(page.len());
+        page.insert_str(at, your_way);
+    }
+    text.push_str(&render::render_page(&page, width, color, &s.def.id, answers));
     if !s.resources.is_empty() {
         text.push_str(&format!("\n{}\n{}\n", term::bold("Module resources"), s.resources.trim_end()));
     }
-    text.push_str(&format!("\n{} {}\n{}\n", term::bold("Tests:"), s.def.tests.iter().map(|t| format!("cargo test --test {}", t.replace("::", " -- "))).collect::<Vec<_>>().join("   "), term::dim(&format!("`anneal course tests {}` lists the test cases; `anneal course test` runs them", s.def.id))));
+    text.push_str(&format!("\n{} {}\n{}\n", term::bold("Tests:"), s.def.tests.iter().map(|t| format!("cargo test --test {}", t.replace("::", " -- "))).collect::<Vec<_>>().join("   "), term::dim(&format!("`anneal course tests {id}` lists the test cases; `anneal course test {id}` runs them", id = s.def.id))));
     if !hints.is_empty() {
         let titles = hints.iter().enumerate().map(|(i, (t, _))| format!("{}. {t}", i + 1)).collect::<Vec<_>>().join("  ");
         text.push_str(&format!("\n{} {titles}\n{}\n", term::bold("Hints:"), term::dim(&format!("open one with `anneal course show {} --hint 1`; the website then counts the stage as passed with help once it passes", s.def.id))));
@@ -1824,6 +1887,29 @@ fn next() -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
     }
+}
+
+/// Why `s` cannot be tested yet, when its module has not been unlocked and its test files are not in the repo: which module it is in and
+/// what unlocks it. `None` when its tests are there (a repo made before modules were revealed one by one has every file).
+fn locked(repo: &Path, course: &Course, progress: &Progress, s: &Stage) -> Option<String> {
+    if unlocked_modules(course, progress).contains(&s.module) {
+        return None;
+    }
+    let missing = s.def.tests.iter().any(|t| !repo.join("tests").join(format!("{}.rs", split_entry(t).0)).exists());
+    if !missing {
+        return None;
+    }
+    let cur = current(course, progress)?;
+    let boss = course.stages.iter().rfind(|x| x.module == cur.module && x.def.kind != "challenge").map_or(String::new(), |b| format!(" ({})", b.def.id));
+    Some(format!(
+        "{} is in module {} · {}, which is not unlocked yet: its code and tests arrive when the last stage of your current module, {}{boss}, passes.\nYou are on {} · {}: `anneal course test` runs it.",
+        s.def.id,
+        s.module,
+        s.module_title,
+        cur.module,
+        cur.def.id,
+        cur.def.title
+    ))
 }
 
 /// `anneal course test`: once, or (with `--watch`) again after every change to the learner's files until the stage passes.
@@ -1910,6 +1996,10 @@ fn test(stage: Option<&str>, opts: TestOpts, filter: Option<&str>) -> anyhow::Re
             }
         },
     };
+    if let Some(why) = locked(&repo, &course, &progress, target) {
+        println!("{why}");
+        return Ok(failure_code(opts, cfg.block_on_fail, true));
+    }
     let (done, total) = core_counts(&course, &progress);
     println!("{}  {}\n", bold(&format!("Stage {} · {}", target.def.id, target.def.title)), dim(&format!("({done} of {total} stages done)")));
     let started = Instant::now();
@@ -1934,11 +2024,13 @@ fn test(stage: Option<&str>, opts: TestOpts, filter: Option<&str>) -> anyhow::Re
     if filter.is_some() {
         return Ok(if ok { ExitCode::SUCCESS } else { failure_code(opts, cfg.block_on_fail, report.tests.is_empty()) });
     }
-    {
-        let tests: Vec<(String, bool, String)> = report.tests.iter().map(|t| (t.name.clone(), t.ok, t.detail.lines().filter(|l| !l.trim().is_empty()).take(6).collect::<Vec<_>>().join("\n"))).collect();
-        course_sync::report_run(&repo, &course.meta.id, &target.def.id, &tests, report.problem.as_deref(), &head_commit(&repo), started.elapsed().as_millis() as u64);
-    }
+    // The web app marks the stage solved on the first passing report, so a pass is reported only after the regression check below.
+    let stage_tests: Vec<(String, bool, String)> = report.tests.iter().map(|t| (t.name.clone(), t.ok, report_detail(&t.detail))).collect();
+    let report_to_web = |tests: &[(String, bool, String)], problem: Option<&str>| {
+        course_sync::report_run(&repo, &course.meta.id, &target.def.id, tests, problem, &head_commit(&repo), started.elapsed().as_millis() as u64);
+    };
     if !ok {
+        report_to_web(&stage_tests, report.problem.as_deref());
         println!("\n{} `anneal course show {}` has the task and hints; `-v` shows every failure in full.", red("Not yet."), target.def.id);
         let failing: Vec<String> = report.tests.iter().filter(|t| !t.ok).map(|t| short_test_name(&t.name)).collect();
         // the first one in the order of the test file: the stage builds up, so that is the one to fix first
@@ -1968,17 +2060,23 @@ fn test(stage: Option<&str>, opts: TestOpts, filter: Option<&str>) -> anyhow::Re
         let broken: Vec<&TestOutcome> = reg.tests.iter().filter(|t| !t.ok).collect();
         if let Some(p) = &reg.problem {
             println!("\nRegression run failed: {}", crate::term::tty_text(p));
+            report_to_web(&stage_tests, Some(&format!("This stage's tests pass, but the check of the stages you already passed did not run.\n{p}")));
             return Ok(failure_code(opts, cfg.block_on_fail, true));
         }
         if !broken.is_empty() {
             println!("\nThis stage passes, but you broke earlier stages:");
-            for t in broken {
+            for t in &broken {
                 println!("  {} {}", red("✗"), t.name);
             }
+            // reported as a run that does not pass: the broken earlier tests are its failures
+            let mut tests = stage_tests.clone();
+            tests.extend(broken.iter().map(|t| (t.name.clone(), false, format!("A test of a stage you already passed: this change broke it.\n{}", report_detail(&t.detail)))));
+            report_to_web(&tests, None);
             return Ok(failure_code(opts, cfg.block_on_fail, false));
         }
         println!("{} earlier tests still pass.", reg.tests.len());
     }
+    report_to_web(&stage_tests, None);
     if !progress.passed.contains_key(&target.def.id) {
         let at = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         progress.passed.insert(target.def.id.clone(), Passed { at, commit: head_commit(&repo), ms });
@@ -2007,6 +2105,33 @@ fn test(stage: Option<&str>, opts: TestOpts, filter: Option<&str>) -> anyhow::Re
         println!("\n{}", green(&format!("✓ Stage {} passes (already recorded).", target.def.id)));
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// How many lines of a failure to show when it is shortened: the first few, or, for a property test, through the end of its "minimal
+/// failing input" block (the case to debug), at most `MAX_FAILURE_LINES`.
+fn shown_lines<S: AsRef<str>>(lines: &[S]) -> usize {
+    const FIRST: usize = 6;
+    let Some(start) = lines.iter().position(|l| l.as_ref().contains("minimal failing input")) else { return lines.len().min(FIRST) };
+    // proptest ends the block with its counters (`successes: 3`, `local rejects: 0`, ...): stop before them
+    let end = lines[start + 1..].iter().position(|l| l.as_ref().trim_start().starts_with("successes:")).map_or(lines.len(), |i| start + 1 + i);
+    end.max(FIRST).min(lines.len()).min(MAX_FAILURE_LINES)
+}
+
+const MAX_FAILURE_LINES: usize = 60;
+
+/// The failure text sent with a run report: the non-empty lines `shown_lines` keeps, within the size the web app accepts per test.
+fn report_detail(detail: &str) -> String {
+    let lines: Vec<&str> = detail.lines().filter(|l| !l.trim().is_empty()).collect();
+    let mut out = lines[..shown_lines(&lines)].join("\n");
+    if out.len() > 3_900 {
+        let mut cut = 3_900;
+        while !out.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        out.truncate(cut);
+        out.push_str("\n…");
+    }
+    out
 }
 
 /// The tests of one run: the passing ones a line each, the failing ones grouped by their message (a stage whose stub panics with the same
@@ -2038,7 +2163,7 @@ fn print_report(r: &RunReport, verbose: bool) {
             names.iter().for_each(|n| println!("      {}", dim(n)));
         }
         if verbose || k < 4 {
-            let shown = if verbose { lines.len() } else { 6 };
+            let shown = if verbose { lines.len() } else { shown_lines(lines) };
             lines.iter().take(shown).for_each(|l| println!("        {l}"));
         } else {
             hidden += 1;
@@ -2090,6 +2215,45 @@ fn tests_bullets(md: &str) -> Vec<usize> {
     blocks
 }
 
+/// The `> [!CHECK]` questions in `md` whose block has an odd number of `||` spoiler marks (outside inline code): the website then shows
+/// the answer in plain view. Returns the question of each.
+fn unpaired_check_spoilers(md: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let (mut fence, mut question, mut marks) = (false, None::<String>, 0usize);
+    let mut close = |question: &mut Option<String>, marks: &mut usize| {
+        if let Some(q) = question.take()
+            && *marks % 2 == 1
+        {
+            found.push(q);
+        }
+        *marks = 0;
+    };
+    for line in md.lines() {
+        if question.is_none() && line.trim_start().starts_with("```") {
+            fence = !fence;
+        }
+        if fence {
+            continue;
+        }
+        if let Some(q) = line.strip_prefix("> [!CHECK]") {
+            close(&mut question, &mut marks);
+            question = Some(q.trim().to_owned());
+            continue;
+        }
+        if question.is_some() && !line.starts_with('>') {
+            close(&mut question, &mut marks);
+            continue;
+        }
+        if question.is_some() {
+            // `a || b` inside inline code is code, not a spoiler mark
+            let outside_code: String = line.split('`').step_by(2).collect();
+            marks += outside_code.matches("||").count();
+        }
+    }
+    close(&mut question, &mut marks);
+    found
+}
+
 fn lint(course_id: &str, courses: &Path, all: bool) -> anyhow::Result<ExitCode> {
     use anneal_content::course::Course as Def;
     let root = courses.join(course_id);
@@ -2102,6 +2266,10 @@ fn lint(course_id: &str, courses: &Path, all: bool) -> anyhow::Result<ExitCode> 
             println!("note  {}: {} stages (6 to 10 is the sweet spot; not a hard limit)", m.code, core_stages);
         }
         for st in &m.stages {
+            let page = std::iter::once(st.intro.as_str()).chain(st.sections.iter().map(|s| s.md.as_str())).chain(st.hints.iter().map(|h| h.md.as_str()));
+            for q in page.flat_map(unpaired_check_spoilers) {
+                problems.push(format!("{}: the check {q:?} has an unpaired `||` spoiler mark (the website would show its answer)", st.id));
+            }
             if st.kind == "boss" {
                 continue;
             }
@@ -2168,6 +2336,11 @@ fn lint(course_id: &str, courses: &Path, all: bool) -> anyhow::Result<ExitCode> 
                     }
                 }
             }
+        }
+    }
+    for k in &def.concepts {
+        for q in k.sections.iter().flat_map(|x| unpaired_check_spoilers(&x.md)) {
+            problems.push(format!("concept {}: the check {q:?} has an unpaired `||` spoiler mark (the website would show its answer)", k.id));
         }
     }
     for p in &problems {
@@ -2428,6 +2601,96 @@ mod learner_screens {
     }
 
     #[test]
+    fn a_property_test_failure_keeps_its_whole_minimal_failing_input() {
+        let mut detail = vec!["thread 's1d_03_model' panicked at tests/stages_1d.rs:40:5:".to_owned(), "Test failed: the victims differ.".to_owned(), "minimal failing input: ops = [".to_owned()];
+        detail.extend((0..12).map(|i| format!("    Access({i}),")));
+        detail.extend(["]".to_owned(), "\tsuccesses: 3".to_owned(), "\tlocal rejects: 0".to_owned(), "\tglobal rejects: 0".to_owned()]);
+        let n = shown_lines(&detail);
+        assert_eq!(detail[n - 1], "]", "everything through the end of the input, and not the counters: {:?}", &detail[..n]);
+        let plain: Vec<String> = (0..20).map(|i| format!("line {i}")).collect();
+        assert_eq!(shown_lines(&plain), 6, "an ordinary failure is shortened to its first lines");
+        assert_eq!(shown_lines(&plain[..3]), 3);
+        let mut huge = vec!["minimal failing input: v = [".to_owned()];
+        huge.extend((0..500).map(|i| format!("    {i},")));
+        assert_eq!(shown_lines(&huge), MAX_FAILURE_LINES, "a huge input is bounded");
+        let sent = report_detail(&detail.join("\n"));
+        assert!(sent.contains("Access(11)") && !sent.contains("successes"), "the report carries the input too: {sent}");
+        let wide = report_detail(&format!("minimal failing input: s = \"{}\"", "é".repeat(5_000)));
+        assert!(wide.len() < 4_000, "within what the web app accepts per test");
+    }
+
+    /// A course of the given (id, module, kind) stages, in order.
+    fn course_of(stages: &[(&str, &str, &str)], optional_modules: &[&str]) -> Course {
+        let stages = stages
+            .iter()
+            .enumerate()
+            .map(|(i, (id, module, kind))| Stage {
+                def: StageToml { id: (*id).into(), title: format!("title {id}"), kind: (*kind).into(), difficulty: "easy".into(), tests: vec![format!("stages_{module}::s{}", id.replace('-', "_"))], retest: false },
+                module: (*module).into(),
+                optional: optional_modules.contains(module) || *kind == "challenge",
+                module_title: format!("module {module}"),
+                readme: String::new(),
+                resources: String::new(),
+                rank: i + 1,
+            })
+            .collect();
+        Course { meta: CourseToml { id: "t".into(), title: "T".into(), repo_name: "t".into(), planned_modules: vec![] }, stages, module_files: BTreeMap::new() }
+    }
+
+    #[test]
+    fn the_course_counts_only_core_stages_and_names_the_rest_apart() {
+        let course = course_of(&[("r-01", "r", "learn"), ("r-02", "r", "learn"), ("r-c1", "r", "challenge"), ("1a-01", "1a", "build"), ("1a-02", "1a", "boss"), ("1a-c1", "1a", "challenge"), ("1b-01", "1b", "build")], &["r"]);
+        let mut p = Progress::default();
+        for id in ["r-01", "1a-01", "1a-c1"] {
+            p.passed.insert(id.into(), Passed { at: 0, commit: String::new(), ms: 0 });
+        }
+        assert_eq!(core_counts(&course, &p), (1, 3), "1a-01 of 1a-01, 1a-02 and 1b-01: not r, not challenges");
+        assert_eq!(optional_counts(&course, &p), (1, 2, vec!["r".to_owned()]));
+        assert_eq!(course_size(&course), "3 stages in 2 modules, plus 2 challenges and 2 stages in the optional module r");
+        assert_eq!(current(&course, &p).map(|s| s.def.id.as_str()), Some("1a-02"), "the same path `current` walks");
+    }
+
+    #[test]
+    fn a_stage_of_a_locked_module_says_what_unlocks_it() {
+        let course = course_of(&[("r-01", "r", "learn"), ("1a-01", "1a", "build"), ("1a-02", "1a", "boss"), ("1a-c1", "1a", "challenge"), ("1b-01", "1b", "build")], &["r"]);
+        let dir = std::env::temp_dir().join(format!("anneal-locked-{}", std::process::id()));
+        fs::create_dir_all(dir.join("tests")).unwrap();
+        fs::write(dir.join("tests/stages_1a.rs"), "").unwrap();
+        let progress = Progress::default();
+        let why = locked(&dir, &course, &progress, course.stage("1b-01").unwrap()).expect("1b is locked while 1a is not done");
+        assert!(why.contains("module 1b") && why.contains("1a-02") && why.contains("You are on 1a-01"), "{why}");
+        assert!(locked(&dir, &course, &progress, course.stage("1a-02").unwrap()).is_none(), "the current module is unlocked");
+        fs::write(dir.join("tests/stages_1b.rs"), "").unwrap();
+        assert!(locked(&dir, &course, &progress, course.stage("1b-01").unwrap()).is_none(), "a repo that already has the tests runs them");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_reset_keeps_a_copy_of_the_progress_first() {
+        let dir = std::env::temp_dir().join(format!("anneal-reset-archive-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        assert!(archive_progress(&dir).unwrap().is_none(), "no progress file, nothing to keep");
+        let mut p = Progress::default();
+        p.passed.insert("1a-01".into(), Passed { at: 1, commit: "abc".into(), ms: 5 });
+        save_progress(&dir, &p).unwrap();
+        let before = fs::read_to_string(state_path(&dir, "progress.json")).unwrap();
+        let first = archive_progress(&dir).unwrap().expect("a copy");
+        let second = archive_progress(&dir).unwrap().expect("another copy");
+        assert_ne!(first, second, "a second reset in the same second does not overwrite the first copy");
+        assert_eq!(first.parent(), Some(dir.join(STATE_DIR).as_path()), "next to progress.json");
+        assert_eq!(fs::read_to_string(&first).unwrap(), before);
+        assert_eq!(fs::read_to_string(&second).unwrap(), before);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_fix_it_challenge_is_told_apart_by_its_what_to_fix_section() {
+        assert!(is_fix_it("Intro.\n\n## What to fix\n\nThe reader sees stale bytes.\n"));
+        assert!(!is_fix_it("Intro.\n\n## The task\n\nBuild it. Says what to fix in prose.\n"));
+    }
+
+    #[test]
     fn a_process_past_its_limit_is_stopped_and_what_it_printed_is_kept() {
         let mut cmd = Command::new("sh");
         cmd.args(["-c", "echo 'test a ... ok'; echo 'test b ... FAILED'; exec sleep 30"]);
@@ -2490,5 +2753,24 @@ mod learner_screens {
         assert_eq!(stage_test_names(&dir, &stage(&["stages_9z"])).len(), 3);
         assert!(stage_test_names(&dir, &stage(&["stages_missing"])).is_empty());
         let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod lint_tests {
+    use super::unpaired_check_spoilers;
+
+    #[test]
+    fn a_check_with_an_unpaired_spoiler_mark_is_found() {
+        let ok = "> [!CHECK] Which page goes?\n> ||Page 3.||\n>\n> - nudge\n\nText with `a || b` and || outside a check.\n";
+        assert!(unpaired_check_spoilers(ok).is_empty(), "paired marks, and marks outside a check, are fine");
+        let bad = "Intro.\n\n> [!CHECK] Which page goes?\n> ||Page 3, because it is the oldest.\n>\n> - nudge\n\n> [!CHECK] Second?\n> ||Fine.||\n";
+        assert_eq!(unpaired_check_spoilers(bad), ["Which page goes?"], "only the first check has a lone mark");
+        let code = "> [!CHECK] What does `x || y` give?\n> ||`true` when either is.||\n";
+        assert!(unpaired_check_spoilers(code).is_empty(), "`||` inside inline code is not a mark");
+        let fenced = "```text\n> [!CHECK] not a check\n> ||open\n```\n";
+        assert!(unpaired_check_spoilers(fenced).is_empty(), "a check inside a code fence is not a check");
+        let at_end = "> [!CHECK] Last?\n> ||the answer|";
+        assert_eq!(unpaired_check_spoilers(at_end).len(), 1, "a check at the end of the text is closed too");
     }
 }

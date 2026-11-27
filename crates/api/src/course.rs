@@ -71,6 +71,8 @@ pub async fn overview(State(s): State<AppState>, Path(course): Path<String>) -> 
                 .iter()
                 .filter(|m| m.project == p.number)
                 .map(|m| {
+                    // the course's tally is its core stages: not challenges, not the stages of an optional or planned module
+                    let counts = !m.optional && !m.planned;
                     let stages: Vec<Value> = m
                         .stages
                         .iter()
@@ -82,7 +84,7 @@ pub async fn overview(State(s): State<AppState>, Path(course): Path<String>) -> 
                                 if state != "todo" {
                                     challenges_done += 1;
                                 }
-                            } else if state != "todo" {
+                            } else if state != "todo" && counts {
                                 done += 1;
                             }
                             json!({ "id": x.id, "title": x.title, "kind": x.kind, "difficulty": x.difficulty, "rank": x.rank, "beyond": x.beyond,
@@ -95,14 +97,15 @@ pub async fn overview(State(s): State<AppState>, Path(course): Path<String>) -> 
             json!({ "number": p.number, "title": p.title, "planned": p.planned, "modules": modules })
         })
         .collect();
-    let total = c.stages().filter(|x| x.kind != "challenge").count();
-    // the next stage is the first undone one in the course's own order (the optional primer, project 0, comes last in it)
-    let current: Option<&str> = c.modules.iter().filter(|m| !m.planned && !m.optional).flat_map(|m| m.stages.iter()).filter(|x| x.kind != "challenge").find(|x| status(st.get(&x.id)) == "todo").map(|x| x.id.as_str());
+    let total = c.core_stages().count();
+    // the next stage is the first undone core stage in the course's own order; `current_at` is its place among the core stages
+    let current_at = c.core_stages().position(|x| status(st.get(&x.id)) == "todo");
+    let current: Option<&str> = current_at.and_then(|i| c.core_stages().nth(i)).map(|x| x.id.as_str());
     // The last run the CLI reported, from any laptop: tells you whether the CLI you are using is signed in to this app.
     let last_run: Option<(String, bool, i32, i32, DateTime<Utc>)> =
         sqlx::query_as("SELECT stage_id, ok, passed, total, at FROM course_runs WHERE course = $1 ORDER BY at DESC, id DESC LIMIT 1").bind(&c.id).fetch_optional(&s.db).await?;
     let last_run = last_run.map(|(stage, ok, passed, total, at)| json!({ "stage_id": stage, "ok": ok, "passed": passed, "total": total, "at": at }));
-    Ok(Json(json!({ "id": c.id, "title": c.title, "total": total, "done": done, "challenges": challenges, "challenges_done": challenges_done, "current": current, "last_run": last_run, "projects": projects })))
+    Ok(Json(json!({ "id": c.id, "title": c.title, "total": total, "done": done, "challenges": challenges, "challenges_done": challenges_done, "current": current, "current_at": current_at.map(|i| i + 1), "last_run": last_run, "projects": projects })))
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -162,13 +165,15 @@ pub async fn stage(State(s): State<AppState>, Path((course, id)): Path<(String, 
     let revealed_hints = me.map_or(0, |r| r.hints_revealed.max(0) as usize).min(x.hints.len());
     let solution_open = me.is_some_and(|r| r.solution_revealed) || solved;
     let pn = |i: Option<usize>| i.and_then(|i| all.get(i)).map(|y| json!({ "id": y.id, "title": y.title, "rank": y.rank }));
+    // where passing this stage leads (prev and next only browse the stages in order, challenges and optional modules included)
+    let up_next = c.up_next(&id, |y| status(st.get(y)) != "todo").map(|y| json!({ "id": y.id, "title": y.title, "rank": y.rank }));
     let module_stages: Vec<Value> = m
         .stages
         .iter()
         .map(|y| json!({ "id": y.id, "title": y.title, "kind": y.kind, "difficulty": y.difficulty, "rank": y.rank, "state": status(st.get(&y.id)) }))
         .collect();
     Ok(Json(json!({
-        "course": { "id": c.id, "title": c.title, "total": all.len() },
+        "course": { "id": c.id, "title": c.title, "total": c.core_stages().count() },
         "stage": { "id": x.id, "title": x.title, "learn": x.learn, "kind": x.kind, "difficulty": x.difficulty, "tests": x.tests, "rank": x.rank,
                    "intro": x.intro, "sections": x.sections, "test_sources": x.test_sources },
         "module": { "code": m.code, "title": m.title, "summary": m.summary, "project": m.project, "stages": module_stages,
@@ -179,6 +184,7 @@ pub async fn stage(State(s): State<AppState>, Path((course, id)): Path<(String, 
         "running": running,
         "prev": pn(at.checked_sub(1)),
         "next": pn(Some(at + 1)),
+        "up_next": up_next,
         "state": status(me),
         "hints": { "total": x.hints.len(), "revealed": x.hints.iter().take(revealed_hints).collect::<Vec<_>>(),
                    "titles": x.hints.iter().map(|h| &h.title).collect::<Vec<_>>() },

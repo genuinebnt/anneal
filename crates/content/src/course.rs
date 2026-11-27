@@ -314,6 +314,23 @@ impl Course {
         self.stages().find(|s| s.id == id)
     }
 
+    /// The stages that count towards the course, in order: not challenges, in modules that are neither optional nor planned. The next
+    /// stage to do is always one of these.
+    pub fn core_stages(&self) -> impl Iterator<Item = &Stage> {
+        self.modules.iter().filter(|m| !m.optional && !m.planned).flat_map(|m| m.stages.iter()).filter(|s| s.kind != "challenge")
+    }
+
+    /// The stage to go to after `id` passes: the next core stage (an optional module's stage leads on through its own module first). A
+    /// challenge is a side trip: after one, the first core stage not yet `passed`.
+    pub fn up_next(&self, id: &str, passed: impl Fn(&str) -> bool) -> Option<&Stage> {
+        let here = self.stage(id)?;
+        if here.kind == "challenge" {
+            return self.core_stages().find(|s| !passed(&s.id));
+        }
+        let core: std::collections::HashSet<&str> = self.core_stages().map(|s| s.id.as_str()).collect();
+        self.stages().skip_while(|s| s.id != id).skip(1).find(|s| core.contains(s.id.as_str()) || (s.module == here.module && s.kind != "challenge"))
+    }
+
     pub fn concept(&self, id: &str) -> Option<&Concept> {
         self.concepts.iter().find(|c| c.id == id)
     }
@@ -462,6 +479,44 @@ mod tests {
             fs::write(root.join(format!("concepts/{id}.md")), format!("---\ntitle: {id}\nsummary: s\nminutes: 3\n---\nBody.\n")).unwrap();
         }
         root
+    }
+
+    /// A course with an optional module r (two stages and a challenge), module 1a (two stages and a challenge) and module 1b.
+    fn three_modules(tag: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("anneal-course-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("concepts")).unwrap();
+        fs::write(root.join("course.toml"), "id = \"t\"\ntitle = \"T\"\n").unwrap();
+        for (dir, code, extra, stages) in [
+            ("00-r", "r", "project = 0\noptional = true\n", &[("01", "r-01", "learn"), ("02", "r-02", "learn"), ("90", "r-c1", "challenge")][..]),
+            ("01-a", "1a", "", &[("01", "1a-01", "build"), ("02", "1a-02", "boss"), ("90", "1a-c1", "challenge")][..]),
+            ("02-b", "1b", "", &[("01", "1b-01", "build")][..]),
+        ] {
+            fs::create_dir_all(root.join("modules").join(dir)).unwrap();
+            fs::write(root.join("modules").join(dir).join("module.toml"), format!("code = \"{code}\"\ntitle = \"M\"\n{extra}")).unwrap();
+            for (sd, id, kind) in stages {
+                let st = root.join("modules").join(dir).join("stages").join(sd);
+                fs::create_dir_all(&st).unwrap();
+                fs::write(st.join("stage.toml"), format!("id = \"{id}\"\ntitle = \"S\"\nkind = \"{kind}\"\ndifficulty = \"easy\"\ntests = [\"t\"]\n")).unwrap();
+                fs::write(st.join("stage.md"), "Intro.\n").unwrap();
+            }
+        }
+        root
+    }
+
+    #[test]
+    fn core_stages_and_what_comes_next_skip_challenges_and_optional_modules() {
+        let root = three_modules("next");
+        let c = Course::load(&root).expect("loads");
+        let ids = |v: Vec<&Stage>| v.into_iter().map(|s| s.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(c.core_stages().collect()), ["1a-01", "1a-02", "1b-01"]);
+        let next = |id: &str, passed: &[&str]| c.up_next(id, |x| passed.contains(&x)).map(|s| s.id.clone());
+        assert_eq!(next("1a-02", &[]).as_deref(), Some("1b-01"), "after a boss: the next module, not its challenge");
+        assert_eq!(next("r-01", &[]).as_deref(), Some("r-02"), "an optional module leads on through itself");
+        assert_eq!(next("r-02", &[]).as_deref(), Some("1a-01"), "then onto the path");
+        assert_eq!(next("1a-c1", &["1a-01"]).as_deref(), Some("1a-02"), "after a challenge: where the learner is");
+        assert_eq!(next("1b-01", &[]), None, "the last stage has none");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

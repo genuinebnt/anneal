@@ -238,7 +238,7 @@ export function CoursePage({ course = COURSE_ID }: { course?: string }) {
                                     <article className="k-cont k-rv" style={{ "--i": 4 } as CSSProperties}>
                                         <div className="k-k">
                                             <span className="k-pulse" />
-                                            {c.done ? "CONTINUE" : "START HERE"} · STAGE {current.rank} OF {c.total}
+                                            {c.done ? "CONTINUE" : "START HERE"} · STAGE {c.current_at ?? current.rank} OF {c.total}
                                         </div>
                                         <div className="k-ring" aria-label={`${hereDone} of ${coreStages(here.stages).length} stages in this module passed`}>
                                             <svg viewBox="0 0 64 64">

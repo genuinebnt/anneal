@@ -79,11 +79,14 @@ pub struct StageInfo<'a> {
 /// The box at the top of a stage: where it is, how hard it is, how far along you are.
 pub fn stage_banner(s: &StageInfo) -> String {
     let title = format!("{} · {}", s.module, s.module_title);
-    let kind = if s.kind == "challenge" { "  challenge" } else { "" };
+    let challenge = s.kind == "challenge";
+    let kind = if challenge { "  challenge" } else { "" };
+    // a challenge is extra practice: its place is among the module's challenges, not on the way through the module
+    let place = if challenge { format!("challenge {} of {} in this module", s.at, s.of) } else { format!("stage {} of {} in this module", s.at, s.of) };
     let lines = vec![
         format!("{}  {}", bold(s.id), bold(s.title)),
         format!("{}{}", dim(s.difficulty), dim(kind)),
-        format!("{} {}", meter(s.at - 1, s.of, 12), dim(&format!("stage {} of {} in this module · {} of {} overall", s.at, s.of, s.course_done, s.course_total))),
+        format!("{} {}", meter(s.at - 1, s.of, 12), dim(&format!("{place} · {} of {} overall", s.course_done, s.course_total))),
     ];
     boxed(Some(&title), &lines, 44)
 }
@@ -257,6 +260,8 @@ mod tests {
         let info = StageInfo { module: "1a", module_title: "Disk manager", id: "1a-01", title: "Pages that survive", difficulty: "Medium · 30 minutes to 1 hour", kind: "build", at: 1, of: 6, course_done: 0, course_total: 164 };
         let b = stage_banner(&info);
         assert!(b.contains("1a-01") && b.contains("Pages that survive") && b.contains("stage 1 of 6"), "{b}");
+        let c = stage_banner(&StageInfo { id: "1a-c2", title: "Challenge: the stale read", kind: "challenge", at: 2, of: 5, ..info });
+        assert!(c.contains("challenge 2 of 5 in this module") && !c.contains("stage 2 of 5"), "a challenge is placed among the challenges: {c}");
         let c = stage_complete(&StageDone { id: "1a-01", title: "Pages that survive", course_done: 1, course_total: 164, took_ms: 83_000, last_day: 2, module_done: 1, module_total: 6 });
         assert!(c.contains("STAGE 1a-01 COMPLETE") && c.contains("1m 23s") && c.contains("2 passed in the last 24h"), "{c}");
         assert!(module_complete("1a", "Disk manager", 6).contains("MODULE 1a COMPLETE"));

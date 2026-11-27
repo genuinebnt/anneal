@@ -929,6 +929,8 @@ export interface CourseOverview {
   challenges_done?: number;
   /** The first stage not passed yet. */
   current: string | null;
+  /** The current stage's place among the stages that count (`total`), from 1. */
+  current_at?: number | null;
   /** The newest run the CLI reported for this course, from any laptop. */
   last_run?: { stage_id: string; ok: boolean; passed: number; total: number; at: string } | null;
   projects: { number: number; title: string; planned: boolean;
@@ -1007,6 +1009,8 @@ export interface CourseStagePage {
   concepts: CourseConceptRef[];
   prev: { id: string; title: string; rank: number } | null;
   next: { id: string; title: string; rank: number } | null;
+  /** Where passing this stage leads: the next stage that counts (prev and next browse every stage, challenges included). */
+  up_next?: { id: string; title: string; rank: number } | null;
   state: StageState;
   hints: { total: number; revealed: { title: string; md: string }[]; titles: string[] };
   solution: { available: boolean; open: boolean; files: SolutionFile[] | null };

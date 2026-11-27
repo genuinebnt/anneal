@@ -9,7 +9,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { Skeleton } from "../components/Skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, type CourseStagePage as Page, type CourseRun } from "../api";
+import { api, coreStages, type CourseStagePage as Page, type CourseRun } from "../api";
 import { Header } from "../components/Header";
 import { Celebration, celebrateOff } from "../components/kit";
 import { MockCopy, MockRoot, reducedMotion } from "../components/mock";
@@ -30,7 +30,7 @@ type Tab = "instructions" | "hints" | "solution" | "concepts" | "run";
 const TAB_IDS: Tab[] = ["instructions", "hints", "solution", "concepts", "run"];
 
 /** Sections that go beyond what passing the stage needs; they can be hidden. */
-const OPTIONAL_SECTIONS = new Set(["performance", "learn-more", "experiment", "other-designs"]);
+const OPTIONAL_SECTIONS = new Set(["performance", "learn-more", "experiment", "other-designs", "further-reading"]);
 
 /** Splits markdown at its `### ` headings (not inside code fences): [title | null, body]. */
 function blocks(text: string): [string | null, string][] {
@@ -76,7 +76,7 @@ function behaviours(md: string): number {
 }
 
 /** The three steps of every stage, above the tabs. The buttons go to the sections this stage really has. */
-function HowTo({ boxed, taskTitle, testsTitle, onTask, onTests, cmd }: { boxed: boolean; taskTitle: string | undefined; testsTitle: string | undefined; onTask: () => void; onTests: () => void; cmd: string }) {
+function HowTo({ boxed, taskTitle, testsTitle, fixIt, onTask, onTests, cmd }: { boxed: boolean; taskTitle: string | undefined; testsTitle: string | undefined; fixIt: boolean; onTask: () => void; onTests: () => void; cmd: string }) {
     return (
         <ol className="rs-how k-rv" style={{ "--i": 2 } as React.CSSProperties} aria-label="How to do this stage">
             <li>
@@ -94,8 +94,9 @@ function HowTo({ boxed, taskTitle, testsTitle, onTask, onTests, cmd }: { boxed: 
             <li>
                 <b aria-hidden="true">2</b>
                 <div>
-                    <strong>Write it in your repo</strong>
-                    <span>Any design is fine; the tests use only the public methods.</span>
+                    <strong>{fixIt ? "Fix it in your repo" : "Write it in your repo"}</strong>
+                    {/* a fix-it challenge hands over code that is already designed: the job is to repair it */}
+                    <span>{fixIt ? "Find the bug in the given code and repair it; the tests show when it is gone." : "Any design is fine; the tests use only the public methods."}</span>
                     {testsTitle && (
                         <button type="button" data-jump="tests" onClick={onTests}>
                             See what is tested
@@ -208,7 +209,8 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
             return;
         }
         if (lastRun.ok) {
-            toast("ok", "Tests passed", p.next ? "Moving on is one click away." : "That was the last stage.", p.next ? { label: `PROCEED TO ${p.next.title.toUpperCase()} →`, run: () => nav({ to: "/courses/$course/$stage", params: { course, stage: p.next!.id } }) } : undefined);
+            const up = p.up_next;
+            toast("ok", "Tests passed", up ? "Moving on is one click away." : "That was the last stage.", up ? { label: `PROCEED TO ${up.title.toUpperCase()} →`, run: () => nav({ to: "/courses/$course/$stage", params: { course, stage: up.id } }) } : undefined);
         } else {
             toast("er", hitLimit(lastRun) ? "Time limit exceeded" : lastRun.problem ? "The tests did not run" : `${lastRun.passed} of ${lastRun.total} passing`, undefined, { label: "SEE DETAILS →", run: () => pick("run") });
         }
@@ -390,7 +392,11 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
             </>
         );
     }
-    const inModule = p.module.stages.findIndex((s) => s.id === p.stage.id);
+    // The stage's place in its module: a challenge among the module's challenges, any other stage among the stages that count.
+    const challenge = p.stage.kind === "challenge";
+    const peers = challenge ? p.module.stages.filter((s) => s.kind === "challenge") : coreStages(p.module.stages);
+    const inModule = peers.findIndex((s) => s.id === p.stage.id);
+    const place = `${challenge ? "challenge" : "stage"} ${inModule + 1} of ${peers.length}`;
     const run = p.last_run;
     // a run the CLI has started and not reported yet (it ends with the report)
     const running = p.running ?? null;
@@ -442,7 +448,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                 <div className="k-phead" ref={pheadRef}>
                     <b><Inline text={p.stage.title} /></b>
                     <span>
-                        {p.module.code.toUpperCase()} · stage {inModule + 1} of {p.module.stages.length}
+                        {p.module.code.toUpperCase()} · {place}
                     </span>
                     <span className="k-sp" />
                     <span className="k-pct" ref={pctRef}>0% read</span>
@@ -452,7 +458,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                 </div>
                 <div className="k-mbar" id="mbar">
                     <button onClick={() => panels.setDrawer(panels.drawer === "l" ? null : "l")} aria-expanded={panels.drawer === "l"}>
-                        ☰ Stages <b>{inModule + 1}/{p.module.stages.length}</b>
+                        ☰ Stages <b>{inModule + 1}/{peers.length}</b>
                     </button>
                     <button onClick={() => panels.setDrawer(panels.drawer === "r" ? null : "r")} aria-expanded={panels.drawer === "r"}>
                         ▤ Page &amp; notes <b>{notes.length}</b>
@@ -467,7 +473,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                     <main className="k-read2" key={p.stage.id}>
                         <div className="k-eye k-rv" style={{ "--i": 0 } as React.CSSProperties} id="s-top">
                             <b>
-                                {p.module.code.toUpperCase()} · STAGE {inModule + 1} OF {p.module.stages.length}
+                                {p.module.code.toUpperCase()} · {place.toUpperCase()}
                             </b>{" "}
                             / {DIFFICULTY_LABEL[p.stage.difficulty]} / #{p.stage.id}
                             {p.state !== "todo" && <> / {p.state === "assisted" ? "PASSED · ASSISTED" : "PASSED"}</>}
@@ -475,7 +481,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                         <h1 className="k-ttl k-rv" style={{ "--i": 1 } as React.CSSProperties}>
                             <Inline text={p.stage.title} />
                         </h1>
-                        <HowTo boxed={boxed} taskTitle={taskEntry?.title} testsTitle={testsEntry?.title} onTask={() => jumpTo(boxed ? '[data-anchor="task"]' : `#${taskEntry?.id}`)} onTests={() => jumpTo(`#${testsEntry?.id}`)} cmd={cmd} />
+                        <HowTo boxed={boxed} taskTitle={taskEntry?.title} testsTitle={testsEntry?.title} fixIt={entries.some((e) => e.title === "What to fix")} onTask={() => jumpTo(boxed ? '[data-anchor="task"]' : `#${taskEntry?.id}`)} onTests={() => jumpTo(`#${testsEntry?.id}`)} cmd={cmd} />
                         {p.stage.learn.length > 0 && (
                             <div className="k-learn k-rv" style={{ "--i": 3 } as React.CSSProperties}>
                                 <span>YOU'LL LEARN</span>
@@ -873,11 +879,11 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                         { value: `${(lastRun.duration_ms / 1000).toFixed(1)}s`, label: "RUN TIME" },
                         { value: String(p.hints.revealed.length), label: "HINTS" },
                     ]}
-                    next={p.next ? { kicker: "NEXT STAGE", title: p.next.title } : undefined}
-                    goLabel={p.next ? "Go to next stage" : "Back to the course"}
+                    next={p.up_next ? { kicker: "NEXT STAGE", title: p.up_next.title } : undefined}
+                    goLabel={p.up_next ? "Go to next stage" : "Back to the course"}
                     onGo={() => {
                         setWin(false);
-                        if (p.next) nav({ to: "/courses/$course/$stage", params: { course, stage: p.next.id } });
+                        if (p.up_next) nav({ to: "/courses/$course/$stage", params: { course, stage: p.up_next.id } });
                         else nav({ to: "/courses/$course", params: { course } });
                     }}
                     review={p.solution.available ? { label: "Review solution", onReview: () => (setWin(false), pick("solution")) } : undefined}
