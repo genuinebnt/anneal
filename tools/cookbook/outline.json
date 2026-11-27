@@ -1281,7 +1281,8 @@
      "examples/search_vectors/filtered_ann_hybrid_search.rs",
      "examples/search_vectors/vector_index_updates_persistence.rs",
      "examples/search_vectors/ann_evaluation_harness.rs",
-     "examples/search_vectors/mini_vector_database.rs"
+     "examples/search_vectors/mini_vector_database.rs",
+     "examples/search_vectors/ranking_quality.rs"
     ]
    }
   ]

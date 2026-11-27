@@ -1,0 +1,58 @@
+title = "Ranking quality"
+module = "Search and vectors"
+module_order = 9
+chapter = "Running a vector database"
+chapter_order = 3
+order = 478
+kind = "recipe"
+lede = "precision, recall, reciprocal rank, average precision and nDCG, with ties, missing judgements and a paired comparison of two rankers."
+level = "intermediate"
+code = ["examples/search_vectors/ranking_quality.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>search</li><li>recommendations</li><li>retrieval for a language model</li><li>any change to a ranking</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+**Input**: for each query, a ranked list of document ids, and judgements that give some documents a grade. Grade 0 means judged and not relevant. A document with no grade is UNJUDGED, which is not the same as 0.
+
+The metrics count it as 0 unless you ask otherwise, so this file also reports how many results were unjudged.
+
+**Conventions**: precision@k always divides by k, also for a short list. Recall, average precision and nDCG have no value for a query with no relevant document. nDCG builds its ideal list from every judged document, not only the returned ones. A list that repeats a document is refused.
+
+**Ties**: when scores are equal, the order is an accident. For DCG the average over all tie orders has a short form: each place in a tied group gets the group's mean gain.
+
+**Comparing two RANKERS**: use the same queries and take the difference per query. A sign-flip randomisation test and a bootstrap interval work on those differences. The simulations here measure their false alarms and coverage, and what happens when the best of twenty equal rankers is reported.
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>offline tests of search and recommendation changes</li><li>retrieval tests for retrieval-augmented generation</li><li>regression checks in a build</li></ul>
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://github.com/usnistgov/trec_eval>
+
+<https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=150469>
+
+<https://aclanthology.org/P18-1128/>
+"""
+
+[[sources]]
+title = "github.com/usnistgov/trec_eval"
+url = "https://github.com/usnistgov/trec_eval"
+
+[[sources]]
+title = "tsapps.nist.gov/publication/get_pdf.cfm?pub_id=150469"
+url = "https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=150469"
+
+[[sources]]
+title = "aclanthology.org/P18-1128"
+url = "https://aclanthology.org/P18-1128/"

@@ -1,4 +1,4 @@
-//! RECIPE (web): collect pages politely.
+//! RECIPE 1212 (web): collect pages politely.
 //! LEVEL: intermediate
 //! Use in: any program that asks someone else's server for many pages.   Run: cargo run --example polite_fetching
 //! COMMON USES: link checkers, feed readers, documentation indexers, importers.

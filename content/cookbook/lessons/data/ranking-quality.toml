@@ -1,0 +1,263 @@
+kind = "lesson"
+title = "Measuring ranking quality"
+module = "Search and vectors"
+chapter = "Running a vector database"
+chapter_order = 3
+order = 478
+level = "intermediate"
+code = ["examples/search_vectors/ranking_quality.rs"]
+lede = "Score ranked results against human judgements, and compare two rankers without believing noise."
+summary = """
+Ranking metrics score a list of results against human judgements. Precision and recall count relevant results, while reciprocal rank, average precision and nDCG also reward early ones. Each answers a different question, so two metrics can disagree. Fix the rules for ties and unjudged results, and compare rankers query by query on queries you did not tune on.
+"""
+
+[[sections]]
+heading = "What do you need before you can measure?"
+body = """
+Your help-centre search gets a new ranker, but a few better-looking searches prove little. You need a set of **queries**, each ranker's ordered results, and **judgements**.
+
+A judgement is a person's grade for one document on one query. Here 0 means not relevant, and 1 to 3 mean more and more useful. An **unjudged** document has no grade at all. Nobody has looked at it.
+
+This page uses one query. Five documents are judged: `d1` has grade 3, `d2` and `d7` have 2, `d3` has 1, and `d4` has 0. So four documents are relevant.
+
+Each cell shows a document and its grade. A question mark means unjudged.
+
+| Place | Ranker A | Ranker B |
+|---|---|---|
+| 1 | d3 (1) | d1 (3) |
+| 2 | d4 (0) | d8 (?) |
+| 3 | d1 (3) | d4 (0) |
+| 4 | d9 (?) | d2 (2) |
+| 5 | d2 (2) | d9 (?) |
+
+At first, count an unjudged result as not relevant.
+"""
+
+[[sections]]
+heading = "How many relevant results did you get?"
+body = """
+**Precision at k** is the number of relevant results in the first `k`, divided by `k`. A has three in its top five, so it scores 0.6. B scores 0.4.
+
+**Recall at k** divides the same count by all relevant documents. A finds 3 of 4, or 0.75, and B finds 0.5. Neither metric cares about the order inside the top `k`.
+
+The example divides precision by `k` even when fewer results come back. If a query has no relevant document, recall has no value. Dividing zero by zero is not a score.
+
+In vector index tests, "recall" compares against the exact nearest neighbours, not people's judgements. See [Evaluating ANN indexes](/cookbook/p/ann-evaluation-harness).
+"""
+
+[[sections]]
+heading = "Did the good results come early?"
+body = """
+**Reciprocal rank** is 1 divided by the place of the first relevant result, or 0 with no hit. Both rankers score 1 here. Use it when one good answer is enough. Its mean over queries is called MRR.
+
+**Average precision** takes the precision at each place that holds a relevant result. It adds them and divides by **all** relevant documents. For A that is `(1/1 + 2/3 + 3/5) / 4 = 0.567`. For B it is `(1/1 + 2/4) / 4 = 0.375`.
+
+The missing fourth document adds nothing but still counts in the division. Some tools divide by the smaller of `k` and that total when they cut the list at `k`. Check which one yours does. The mean over queries is called MAP.
+"""
+
+[[sections]]
+heading = "What if some results are better than others?"
+body = """
+So far, grades 1 and 3 count alike. **Discounted cumulative gain** (DCG) adds each result's gain, shrunk by its place. At place `i`, counting from 1, divide by `log2(i + 1)`.
+
+A long list of relevant documents allows a larger DCG. So **nDCG** divides it by the best possible DCG, built from all judged documents, best first. The result runs from 0 to 1.
+
+| Metric | A | B |
+|---|---|---|
+| Precision at 5 | 0.600 | 0.400 |
+| Average precision | 0.567 | 0.375 |
+| nDCG at 5, gain = grade | 0.575 | 0.678 |
+| nDCG at 5, gain = 2^grade - 1 | 0.523 | 0.766 |
+
+**The metrics disagree.** A finds more relevant documents. B puts the best one first, and nDCG values that more. The second gain formula values it even more. Choose the metric from what your users need before you see which ranker wins.
+
+Report the gain formula too. The standard TREC tool, `trec_eval`, uses the grade itself by default. Another common choice is `2^grade - 1`.
+
+The ideal list must include relevant documents that the ranker never returned. Otherwise a nearly empty answer can look perfect.
+
+```compare
+takeaway = "Build the ideal list from the judgements, never from the answer you are grading."
+[wrong]
+title = "Ideal from the returned results"
+code = '''
+fn dcg(grades: &[u32]) -> f64 {
+    let places = grades.iter().enumerate();
+    places.map(|(i, &g)| g as f64 / (i as f64 + 2.0).log2()).sum()
+}
+
+fn main() {
+    let judged = [3, 2, 1, 0, 2]; // every judged document
+    let returned = [1]; // the ranker found one weak document
+    let mut ideal = returned.to_vec();
+    ideal.sort_by(|a, b| b.cmp(a));
+    println!("{:.3} (judged: {})", dcg(&returned) / dcg(&ideal), judged.len());
+}
+'''
+result = "It prints `1.000 (judged: 5)`."
+[fixed]
+title = "Ideal from all judgements"
+code = '''
+fn dcg(grades: &[u32]) -> f64 {
+    let places = grades.iter().take(5).enumerate();
+    places.map(|(i, &g)| g as f64 / (i as f64 + 2.0).log2()).sum()
+}
+
+fn main() {
+    let judged = [3, 2, 1, 0, 2]; // every judged document
+    let returned = [1]; // the ranker found one weak document
+    let mut ideal = judged.to_vec();
+    ideal.sort_by(|a, b| b.cmp(a));
+    println!("{:.3}", dcg(&returned) / dcg(&ideal));
+}
+'''
+result = "It prints `0.176`."
+```
+
+Also refuse a list that returns a document twice. Counting it twice can push nDCG above 1.
+"""
+
+[[sections]]
+heading = "What happens when scores are equal?"
+body = """
+Ten documents get the same score, and only one is relevant. Ordered by ascending ID, it lands eighth, with nDCG 0.315. Other orders give anything from 0.289 to 1.000. Nothing about the ranker changed.
+
+Apply one tie rule to both rankers. `trec_eval` ignores the rank column in its input. It sorts by score and breaks ties the other way, by document ID in descending text order.
+
+For DCG you can also report the **average over all tie orders**. Give each place in a tied group the group's mean gain, which here gives 0.454. The example checks this shortcut against every possible order of small lists. Don't assume it works for average precision or reciprocal rank.
+"""
+
+[[sections]]
+heading = "What about results that nobody judged?"
+body = """
+People often judge only what earlier rankers returned. A new ranker that finds new documents is then punished if unjudged means 0.
+
+So report how many top results were unjudged: here one for A and two for B. For precision you can show both extremes. A lies between 0.6 and 0.8, and B between 0.4 and 0.8. The ranges overlap, so missing grades could decide this metric's winner.
+
+Another view removes unjudged documents before scoring, called a **condensed list**. Average precision then becomes 0.604 for A and 0.417 for B. This is a different measurement, not the truth.
+
+Research found that common metrics are not robust when many judgements are missing. The best repair is to judge both rankers' top results, without showing the judge which ranker found them.
+"""
+
+[[sections]]
+heading = "How do you compare two rankers without fooling yourself?"
+body = """
+Run both on the **same queries**, and subtract their scores query by query, so query difficulty cancels out. Skip a query only when neither ranker has a value for it. If just one has a value, stop and find out why.
+
+Report the mean difference, and read the queries that got worse.
+
+A **sign-flip test** asks how surprising that mean is if the two rankers were interchangeable. Then each difference could equally have had the other sign. Flip signs at random many times. The **p-value** is roughly the share of tries whose mean is at least as far from zero.
+
+A **bootstrap interval** shows the uncertainty in the size. Draw queries with replacement, take the mean, and repeat. The middle 95% of those means is the interval.
+
+The example checks these tools in simulations of 1,000 experiments each. It uses invented per-query scores with random noise, so your numbers will differ.
+
+| Situation | Result |
+|---|---|
+| Equal rankers, 50 queries | p below 0.05 in 5.2% |
+| A true gain of 0.05, scores paired by query | Found in 80.0% |
+| Same scores, paired with the wrong queries | Found in 5.7% |
+| 95% interval, 8 queries | Holds the true gain in 87.6% |
+| 95% interval, 50 queries | Holds the true gain in 93.2% |
+
+The wrong-pairing result belongs to this setup, where query difficulty varies more than a ranker's luck. On your data the loss may differ.
+
+Equal rankers still pass a 0.05 limit about one time in 20. With few queries, this interval is **too narrow** here. Neither tool helps if the queries don't resemble real traffic. Queries from one user's session also aren't independent.
+
+**Peeking breaks the 0.05 limit.** In another simulation, equal rankers were tested after every 10 queries, up to 200. Stopping at the first `p < 0.05` gave a false alarm in 27.5% of 600 runs. One test at 200 did so in 5.3%.
+
+Fix the sample size and stopping rule before you look. This applies to online A/B tests too. To stop early, use a method designed for repeated looks, chosen in advance.
+
+Now try 20 variants that are **no better** than the baseline, and report the best. It looks significantly better in 20.0% of experiments. Its mean gain is +0.023 on the queries used to choose it. On 50 new queries, the mean gain is +0.000.
+
+Requiring `p < 0.05/20` instead cut the false wins to 0.7%. This Bonferroni correction also hides more real gains. Better still, tune on one set of queries, and test your one chosen ranker once on another. If you keep returning to that test set, it becomes tuning data too.
+
+A small p-value does not say that a gain matters. Decide what size is worth shipping.
+"""
+
+[[sections]]
+heading = "How does the code do it?"
+body = """
+```walkthrough
+file = "examples/search_vectors/ranking_quality.rs"
+[[step]]
+title = "Counting metrics"
+lines = "63-73"
+text = "Precision divides by `k`. Recall returns `None` when nothing is relevant."
+[[step]]
+title = "Early results"
+lines = "75-97"
+text = "Average precision divides by all relevant documents, not just those found."
+[[step]]
+title = "nDCG"
+lines = "99-156"
+text = "A gain too large for an `f64` stops the run. The gain formula is an explicit choice. The ideal list comes from the judgements."
+[[step]]
+title = "Average over ties"
+lines = "160-190"
+text = "Scores that are not finite numbers are refused. Each tied place gets the group's mean gain."
+[[step]]
+title = "Pair and flip"
+lines = "275-307"
+text = "A value for only one ranker, or one that is not finite, stops the comparison. Adding 1 above and below keeps a sampled p-value above zero."
+[[step]]
+title = "Resample queries"
+lines = "309-320"
+text = "Whole queries are drawn, because a query is the unit that varies."
+```
+
+On 3,000 random cases, the metrics agree with separately written versions. The example omits bpref and live tests.
+
+```sh
+cargo run --release --example ranking_quality
+```
+"""
+
+[[connections]]
+kind = "practise"
+title = "Rank search results with BM25"
+link = "/p/y10-bm25-ranking"
+why = "Build a ranker. This page is about judging one."
+level = "related"
+
+[[connections]]
+kind = "returns"
+title = "Filtered ANN and hybrid search"
+link = "/cookbook/p/filtered-ann-hybrid-search"
+why = "It uses nDCG to compare keyword search, vector search and their combination."
+
+[[connections]]
+kind = "returns"
+title = "Evaluating ANN indexes"
+link = "/cookbook/p/ann-evaluation-harness"
+why = "The other meaning of recall: how many true nearest neighbours an index returns."
+
+[[connections]]
+kind = "returns"
+title = "Matching the same thing from different sources"
+link = "/cookbook/p/record-matching"
+why = "Precision and recall there count pairs of records, not ranked results."
+
+[[sources]]
+title = "trec_eval"
+url = "https://github.com/usnistgov/trec_eval"
+note = "Read m_ndcg_cut.c for gains and the ideal list, and form_res_rels.c for ties and duplicates."
+
+[[sources]]
+title = "Common evaluation measures (TREC)"
+url = "https://trec.nist.gov/pubs/trec16/appendices/measures.pdf"
+note = "Short definitions of precision, recall and average precision."
+
+[[sources]]
+title = "Discounted cumulative gain (Wikipedia)"
+url = "https://en.wikipedia.org/wiki/Discounted_cumulative_gain"
+note = "The two gain formulas."
+
+[[sources]]
+title = "Buckley and Voorhees: Retrieval evaluation with incomplete information"
+url = "https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=150469"
+note = "What missing judgements do to common metrics, and the bpref measure."
+
+[[sources]]
+title = "Dror and others: The hitchhiker's guide to testing statistical significance"
+url = "https://aclanthology.org/P18-1128/"
+note = "How to choose a significance test, including sampling tests."

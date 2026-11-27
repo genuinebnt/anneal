@@ -1,4 +1,4 @@
-//! RECIPE (security): control what a program may fetch.
+//! RECIPE 1211 (web): control what a program may fetch.
 //! LEVEL: intermediate
 //! Use in: any program that fetches an address it did not write.   Run: cargo run --example fetch_policy
 //! COMMON USES: link previews, webhooks, import-from-address features, link checkers, collectors.

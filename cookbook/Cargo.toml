@@ -1170,6 +1170,9 @@ path = "examples/search_vectors/mini_vector_database.rs"
 name = "product_quantization"
 path = "examples/search_vectors/product_quantization.rs"
 [[example]]
+name = "ranking_quality"
+path = "examples/search_vectors/ranking_quality.rs"
+[[example]]
 name = "scalar_binary_quantization_rescoring"
 path = "examples/search_vectors/scalar_binary_quantization_rescoring.rs"
 [[example]]

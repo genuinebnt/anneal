@@ -511,3 +511,7 @@ Recipes were first numbered (`RECIPE NN` in each header). Files are now named by
 | r765 | [`plan_cache_multiplan_trial`](examples/database/plan_cache_multiplan_trial.rs) | database |
 | r1207 | [`record_matching`](examples/database/record_matching.rs) | database |
 | r1208 | [`evidence_log`](examples/database/evidence_log.rs) | database |
+| r1209 | [`ranking_quality`](examples/search_vectors/ranking_quality.rs) | search_vectors |
+| r1210 | [`running_tools_safely`](examples/os_and_storage/running_tools_safely.rs) | os_and_storage |
+| r1211 | [`fetch_policy`](examples/web/fetch_policy.rs) | web |
+| r1212 | [`polite_fetching`](examples/web/polite_fetching.rs) | web |

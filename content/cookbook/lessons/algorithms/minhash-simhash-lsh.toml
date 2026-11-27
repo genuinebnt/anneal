@@ -1,0 +1,263 @@
+kind = "lesson"
+title = "MinHash, LSH and SimHash: finding near-duplicates"
+module = "Data structures and algorithms"
+chapter = "Hashing and probabilistic structures"
+chapter_order = 1
+order = 166
+level = "advanced"
+code = ["examples/data_structures/minhash_simhash_lsh.rs"]
+code_spoils = ["/p/lc-hamming-distance", "/p/lc-minimum-bit-flips-to-convert-number", "/p/lc-number-of-1-bits"]
+lede = "Turn each document into a small sketch, and use the sketches to find pairs that are almost the same."
+summary = """
+MinHash gives each document a short signature that estimates how many text pieces two documents share. Banding, a form of locality-sensitive hashing (LSH), uses signatures to propose likely pairs without comparing them all. SimHash makes one 64-bit fingerprint from word counts. All are estimates: they miss some pairs and propose some wrong ones, so confirm each candidate on the real data.
+"""
+
+[[sections]]
+heading = "Why not compare every pair?"
+body = """
+A news site collects the same story from many sources. Each copy differs in a date, an advert or one corrected sentence. A hash of the whole text catches only identical copies.
+
+You could compare every pair of documents, but 100,000 documents make 4,999,950,000 pairs. You need two things: a small stand-in for each document, and a way to look up likely partners.
+"""
+
+[[sections]]
+heading = "What does similar mean here?"
+body = """
+First cut the text into lowercase words, dropping punctuation. A **shingle** is a run of `k` words in a row. With `k = 3`, "the library opens at nine" gives three shingles. Word order matters, so "dog bites man" and "man bites dog" share none.
+
+The **Jaccard similarity** of two sets is the number of shared items divided by the number of items in either one. Take two 12-word sentences that differ only in "five" and "six". Each has 10 shingles. They share 7 out of 13 in total, so the similarity is 0.538.
+
+One changed word spoiled three shingles. A larger `k` makes chance matches rarer, but each edit does more damage.
+"""
+
+[[sections]]
+heading = "How does MinHash shrink a set?"
+body = """
+Shuffle all shingles into a random order. Take the first one in that order that belongs to document A, and do the same for B. When are they the same shingle?
+
+Look at the first shingle that belongs to either document. Each one in the combined set is equally likely to come first. The two answers agree only when that one is shared. So the chance of agreement **equals the Jaccard similarity**.
+
+The code imitates a random order by hashing each shingle with a seed and keeping the smallest value. A **signature** is `n` such minimums, each with its own seed. The share of equal places estimates the similarity `J`.
+
+With ideal, independent orders, the typical error is `sqrt(J(1-J)/n)`. A seeded mixing function is not ideal, so the example measures it. These are 1,500 trials per row, each with new sets and seeds:
+
+| True J | Places | Mean estimate | Measured spread | Formula |
+|---|---|---|---|---|
+| 0.1 | 32 | 0.101 | 0.0546 | 0.0530 |
+| 0.1 | 128 | 0.099 | 0.0265 | 0.0265 |
+| 0.5 | 32 | 0.502 | 0.0869 | 0.0884 |
+| 0.5 | 128 | 0.500 | 0.0449 | 0.0442 |
+
+Four times as many places halve the error. The spread here is the root of the mean squared distance from the truth.
+
+The mixing step matters. Change `mix(x ^ seed)` to `x ^ seed` and run again on these sets of consecutive numbers. At a true value of 0.1 with 32 places, the mean becomes 0.223 and the spread 0.181. The first accuracy check fails.
+
+An empty set has no smallest item. A text shorter than `k` words therefore has **no signature**. Giving it a filler value would make every blank page match every other one.
+
+```compare
+takeaway = "Say that there is no signature, instead of inventing one. The caller then has to decide what to do with such documents."
+[wrong]
+title = "A filler for nothing"
+code = '''
+fn signature(set: &[u64]) -> Vec<u64> {
+    [3u64, 5, 7]
+        .iter()
+        .map(|&seed| {
+            let hashes = set.iter().map(|&x| x.wrapping_mul(seed));
+            hashes.min().unwrap_or(u64::MAX)
+        })
+        .collect()
+}
+
+fn main() {
+    let (blank_scan, error_page) = (signature(&[]), signature(&[]));
+    println!("duplicates: {}", blank_scan == error_page);
+}
+'''
+result = "It prints `duplicates: true`. All documents without shingles look identical. (The three multipliers only keep this example short.)"
+[fixed]
+title = "No signature at all"
+code = '''
+fn signature(set: &[u64]) -> Option<Vec<u64>> {
+    [3u64, 5, 7]
+        .iter()
+        .map(|&seed| set.iter().map(|&x| x.wrapping_mul(seed)).min())
+        .collect()
+}
+
+fn main() {
+    let (blank_scan, error_page) = (signature(&[]), signature(&[]));
+    let same = matches!((blank_scan, error_page), (Some(a), Some(b)) if a == b);
+    println!("duplicates: {same}");
+}
+'''
+result = "It prints `duplicates: false`."
+```
+"""
+
+[[sections]]
+heading = "How do bands find pairs without comparing all of them?"
+body = """
+Cut each signature into `b` bands of `r` places. Put the document into one bucket per band, named by the band's number and values. Two documents that meet in any bucket are **candidates**.
+
+```stepper
+caption = "Three signatures, cut into three bands of two"
+[[frame]]
+title = "Cut the signatures"
+text = "Each document has six minimums. Short numbers stand in for 64-bit hashes."
+lanes = [ { name = "Document A", items = ["4 9", "2 7", "5 1"] }, { name = "Document B", items = ["4 8", "2 7", "6 1"] }, { name = "Document C", items = ["3 9", "1 7", "5 2"] } ]
+[[frame]]
+title = "Look at band 1"
+text = "All three bands differ. A shared single number is not enough."
+lanes = [ { name = "Bucket 4 9", items = ["A"] }, { name = "Bucket 4 8", items = ["B"] }, { name = "Bucket 3 9", items = ["C"] } ]
+[[frame]]
+title = "Look at band 2"
+text = "A and B land in the same bucket, so they become a candidate pair."
+lanes = [ { name = "Bucket 2 7", items = ["A", "B"] }, { name = "Bucket 1 7", items = ["C"] } ]
+```
+
+One place agrees with chance `s`, the pair's similarity. A whole band agrees with chance `s^r`. At least one of `b` bands agrees with chance `1 - (1 - s^r)^b`. That curve rises steeply in the middle.
+
+| Similarity | 32 bands of 4: formula / measured | 16 bands of 8: formula / measured |
+|---|---|---|
+| 0.2 | 0.050 / 0.047 | 0.000 / 0.000 |
+| 0.3 | 0.229 / 0.215 | 0.001 / 0.001 |
+| 0.4 | 0.564 / 0.578 | 0.010 / 0.006 |
+| 0.6 | 0.988 / 0.991 | 0.237 / 0.231 |
+| 0.8 | 1.000 / 1.000 | 0.947 / 0.943 |
+
+Each measurement uses 1,500 new pairs. A rounded 1.000 does not mean certain. More rows make the filter stricter, and more bands let more pairs through.
+
+You will see `(1/b)^(1/r)` quoted as the threshold. It is only a guide to where the curve climbs. For 32 bands of 4 it gives 0.42, where the chance is already 0.64. The chance is one half at 0.383.
+
+The full example plants five edited copies among 12 unrelated documents. With 32 bands of 4, all five become candidates, with similarities from 0.685 to 0.886. Change that test to 16 bands of 8 and its check fails. It misses the copy at 0.692, where the formula gave only a 0.58 chance.
+
+A candidate is **not a duplicate yet**. Compare the two real sets, or at least their full signatures, before you act.
+"""
+
+[[sections]]
+heading = "How is SimHash different?"
+body = """
+SimHash gives each document one 64-bit **fingerprint**. Hash each word to 64 bits, and keep 64 sums that start at zero. For each bit, add 1 to its sum if the bit is 1, and subtract 1 if it is 0. The fingerprint records which sums ended above zero.
+
+To compare two documents, count the bit positions that differ. This is the **Hamming distance**. Fewer differences suggest more similar word counts. In the sentence pair above, 4 of 64 differ.
+
+For ideal random-hyperplane hashing, each bit differs with chance angle / 180°. The angle lies between the two lists of word counts. Adding or subtracting 1 only approximates this, so measure it. Each row compares documents made of distinct words:
+
+| Words shared + only in each | Angle rule | Exact count of coin cases | Measured |
+|---|---|---|---|
+| 100 + 100 | 21.3 bits | 21.3 | 21.2 |
+| 0 + 200 | 32.0 bits | 31.9 | 32.1 |
+| 2 + 2 | 21.3 bits | 18.0 | 18.0 |
+| 0 + 4 | 32.0 bits | 27.5 | 27.5 |
+
+The exact count treats every word's bit as a fair coin and adds up all outcomes. With many distinct words, each used once, the measurements follow the angle rule closely. **Short texts don't**: two unrelated four-word texts differ in 27.5 bits on average, not 32. With an even number of words, many sums are exactly zero, and equal bits become more likely.
+
+**A few heavy words break it too.** Give two documents 200 different words each, then add "the" 100 times to both. The angle predicts 4.0 differing bits, but the example measures 0.0. One word decides every sum.
+
+Next, let both use 20 common words, 100, 50, 33 and so on down to 5 times. With 200 other words each, they average 2.6 differing bits, against a predicted 3.2. These otherwise unrelated documents look like near-duplicates. Remove or down-weight common words, and test the result on your own text.
+
+SimHash also ignores word order. A repeated word votes again, so "spam spam spam spam spam eggs ham" gets the same fingerprint as "spam". Real systems choose weights for words to control this.
+
+One study of 8 billion web pages used 64 bits and accepted at most 3 differing bits. Don't copy that limit blindly, because your words, weights and lengths differ. Finding all fingerprints within a limit also needs its own index.
+"""
+
+[[sections]]
+heading = "Which one should you use?"
+body = """
+| You need | Use | Cost |
+|---|---|---|
+| Only identical copies | A hash of the whole normalised text | One changed character hides the copy |
+| Shared passages or overlapping sets | MinHash with bands | A signature per document, here 128 numbers, plus buckets |
+| Near-identical long documents with well-chosen word weights, very small storage | SimHash | One number per document, but coarse and weak on short text |
+| A few thousand documents | Compare the real sets | Simple and exact, but grows with the square |
+
+Measure on pairs that people have labelled. Count both the true duplicates you miss and the candidates you have to reject.
+"""
+
+[[sections]]
+heading = "What goes wrong in real data?"
+body = """
+| Problem | What you see | What helps |
+|---|---|---|
+| Shared headers and footers | Unrelated pages look alike | Remove the repeated text first |
+| One very common text | 10,000 copies in a bucket make 49,995,000 pairs | Group exact copies first, and limit bucket size |
+| Signatures made with different seeds or `k` | Real copies stop matching | Store the settings and a version with each signature |
+| Chinese or Japanese text | A run without spaces becomes one word | Use a suitable word splitter, or character shingles |
+| The same accented letter encoded two ways | Equal-looking words differ | Apply Unicode normalisation first |
+| Text from people who want to evade you | Small edits or forced collisions slip through | Don't treat a sketch as a security check |
+
+The example does no normalisation, weighting or index for fingerprints. It also keeps everything in memory.
+"""
+
+[[sections]]
+heading = "How does the full code fit together?"
+body = """
+:::deeper The code, step by step (the whole file gives away "Hamming Distance", "Minimum Bit Flips to Convert Number" and "Number of 1 Bits")
+```walkthrough
+file = "examples/data_structures/minhash_simhash_lsh.rs"
+[[step]]
+title = "Words and shingles"
+lines = "57-71"
+text = "Punctuation separates words. A text with fewer than `k` words gives an empty set, and `k = 0` is refused."
+[[step]]
+title = "The signature"
+lines = "80-108"
+text = "Collecting `Option` values gives no signature for an empty set. Signatures of different lengths are refused, because `zip` would silently ignore the rest."
+[[step]]
+title = "The bands"
+lines = "110-140"
+text = "A signature must fit the shape exactly. The band's number is part of the key."
+[[step]]
+title = "Buckets, then proof"
+lines = "142-173"
+text = "A new document pairs with everyone already in its buckets. Then each candidate is checked on the real sets."
+[[step]]
+title = "The fingerprint"
+lines = "175-198"
+text = "Each word votes on all 64 bits."
+[[step]]
+title = "Count the coin cases"
+lines = "230-260"
+text = "This separate calculation gives the expected share of differing bits. It uses none of the fingerprint code."
+```
+:::
+
+The checks compare the buckets with a pair-by-pair search on 300 random cases. They also send empty, huge and mixed-script text through the sketches.
+
+```sh
+cargo run --release --example minhash_simhash_lsh
+```
+"""
+
+[[connections]]
+kind = "returns"
+title = "Matching the same thing from different sources"
+link = "/cookbook/p/record-matching"
+why = "Banding is one way to propose which records to compare. Scoring and grouping come afterwards."
+
+[[connections]]
+kind = "returns"
+title = "Measuring ranking quality"
+link = "/cookbook/p/ranking-quality"
+why = "How to judge a ranked list of similar items against what people marked as relevant."
+
+[[sources]]
+title = "MinHash (Wikipedia)"
+url = "https://en.wikipedia.org/wiki/MinHash"
+note = "Why the chance of equal minimums is the Jaccard similarity."
+
+[[sources]]
+title = "Locality-sensitive hashing (Wikipedia)"
+url = "https://en.wikipedia.org/wiki/Locality-sensitive_hashing"
+note = "The general idea behind buckets that favour similar items."
+
+[[sources]]
+title = "Charikar: Similarity estimation techniques from rounding algorithms"
+url = "https://www.cs.princeton.edu/courses/archive/spr04/cos598B/bib/CharikarEstim.pdf"
+note = "The random-hyperplane scheme behind SimHash and its angle rule."
+
+[[sources]]
+title = "Manku, Jain and Das Sarma: Detecting near-duplicates for web crawling"
+url = "https://research.google.com/pubs/archive/33026.pdf"
+note = "SimHash on 8 billion pages, and how to search for fingerprints within 3 bits."

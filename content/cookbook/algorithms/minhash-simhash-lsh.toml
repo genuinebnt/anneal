@@ -18,42 +18,42 @@ body = """
 [[sections]]
 heading = "Design notes"
 body = """
-MINHASH: represent a document as a set of k-word shingles. For a random hash function h, P[min h(A) == min h(B)] = Jaccard(A,B) exactly (the min is equally likely to be any element of A u B, and it is shared only if it lies in A n B). Use n hash functions -> an n-slot signature; the fraction of equal slots estimates Jaccard with std error sqrt(J(1-J)/n).
+MINHASH: turn a document into a set of k-word shingles. Under a random ordering of all shingles, the smallest shingle of A and B together is equally likely to be any of them. Both sets have the same smallest one only when it is shared, so the chance of agreement is the Jaccard similarity J.
 
-LSH (banding): comparing all pairs is O(N&#94;2). Split the n = b&#42;r signature into b bands of r rows; two docs become **candidates** if **any** band matches entirely (bucket by band hash). With similarity s:
+A seeded 64-bit mixer only imitates a random ordering, so this file measures how close it comes. With n independent slots the share of equal slots estimates J with a standard error of sqrt(J(1-J)/n).
 
-```text
-P[candidate] = 1 - (1 - s^r)^b          (the "S-curve")
-```
+BANDING (LSH): cut the signature into b bands of r rows. Two documents are candidates if any band is wholly equal. For similarity s the chance is 1 - (1 - s&#94;r)&#94;b.
 
-The threshold sits near (1/b)&#94;(1/r): above it nearly always found, below it nearly never. More rows per band = sharper &amp; stricter; more bands = more recall &amp; more false candidates. SIMHASH: a different idea for text.
+Candidates still have to be checked with the exact similarity.
 
-Hash every token to 64 bits, add +1/-1 per bit position across tokens, keep the sign of each sum. Similar docs get fingerprints with **small HAMMING distance** (cosine-like similarity), unrelated docs &#126;32 of 64 bits. Cheap: one u64 per document.
+SIMHASH: one 64-bit fingerprint per document. Each token adds +1 or -1 to each of 64 sums, and the signs are the fingerprint. Similar token counts give fingerprints that differ in few bits.
+
+A sum of zero counts as a 0 bit, which pulls short documents with an even number of tokens towards each other. A few very frequent words can decide every bit, so that unrelated documents look alike.
 """
 
 [[sections]]
 heading = "Common uses"
 body = """
-<ul class="cb-g-uses"><li>web crawlers dropping near-duplicate pages</li><li>news/article clustering</li><li>spam and plagiarism detection</li><li>deduplicating training corpora for ML</li><li>finding similar records or products</li><li>(SimHash) near-duplicate detection in large web-scale crawls. MinHash also estimates set similarity for recommendation and entity matching</li></ul>
+<ul class="cb-g-uses"><li>web crawlers dropping near-duplicate pages</li><li>news clustering</li><li>spam and plagiarism detection</li><li>removing repeats from training data</li><li>proposing candidate pairs for record matching</li></ul>
 """
 
 [[sections]]
 heading = "Further reading"
 body = """
-<https://en.wikipedia.org/wiki/MinHash>
+<https://research.google.com/pubs/archive/33026.pdf>
 
-<https://en.wikipedia.org/wiki/Locality-sensitive_hashing>
+<https://en.wikipedia.org/wiki/MinHash>
 
 <https://en.wikipedia.org/wiki/SimHash>
 """
 
 [[sources]]
-title = "en.wikipedia.org/wiki/MinHash"
-url = "https://en.wikipedia.org/wiki/MinHash"
+title = "research.google.com/pubs/archive/33026.pdf"
+url = "https://research.google.com/pubs/archive/33026.pdf"
 
 [[sources]]
-title = "en.wikipedia.org/wiki/Locality-sensitive_hashing"
-url = "https://en.wikipedia.org/wiki/Locality-sensitive_hashing"
+title = "en.wikipedia.org/wiki/MinHash"
+url = "https://en.wikipedia.org/wiki/MinHash"
 
 [[sources]]
 title = "en.wikipedia.org/wiki/SimHash"

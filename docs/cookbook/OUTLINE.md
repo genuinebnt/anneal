@@ -1215,6 +1215,7 @@ Examples with titles from the guides: [Efficient and Robust Approximate Nearest 
 | 9.3.3 | `vector_index_updates_persistence` | recipe · advanced | operating a vector index: deletes (tombstone vs graph repair vs rebuild), LSM segments, WAL, snapshots, crash recovery |
 | 9.3.4 | `ann_evaluation_harness` | recipe · intermediate | evaluating ANN indexes honestly: recall definitions, Pareto curves, tail latency, dataset difficulty (contrast, LID, ... |
 | 9.3.5 | `mini_vector_database` | recipe · capstone | an embedded mini vector database: schema'd collections, WAL + memtable + immutable HNSW-lite segments, SQ8 with resco... |
+| 9.3.6 | `ranking_quality` | recipe · intermediate | measuring ranked results: precision, recall, reciprocal rank, average precision, nDCG, ties, missing judgements, comparing two rankers |
 
 **Further resources:** 7 paper, 3 article or blog load; 0 broken, 0 unconfirmed.
 Examples with titles from the guides: [DiskANN: Fast Accurate Billion-point Nearest Neighbor Search on a Single Node](https://proceedings.neurips.cc/paper/2019/hash/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Abstract.html) (article or blog).
