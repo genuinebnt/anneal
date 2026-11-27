@@ -11,10 +11,16 @@ For an **equality** join the nested loop does `n × m` work that a hash table av
 
 In `src/execution/executors/hash_join_executor.rs` (the struct, `new`, the `TupleStream`s are given; the key type is stage 1's `AggregateKey`):
 
-- `join_key(exprs, tuple, schema) -> Result<Option<AggregateKey>>`: evaluate each key expression on the tuple; if **any** value is NULL the result is `None`; otherwise `Some(key)`.
-- `init`: initialise both children; clear the table and the pending output; **build** from the right: for every right tuple whose key is not NULL, push it onto `self.table[key]` (the right key expressions and the right schema).
-- `next`: until the batch is full: hand out `pending` first; take the next left tuple (none: stop); compute its key (the left key expressions, the left schema) and look it up; for every right tuple found queue `left values ++ right values` with the plan's output schema; with no match, or a NULL key, queue `unmatched_output(..)` if it returns something.
-- `unmatched_output(left) -> Option<Tuple>`: for a **LEFT** join the left values followed by a typed NULL for every right column; `None` for an inner join.
+- **`join_key(exprs, tuple, schema)`** is the tuple's key under those expressions, or `None` when any of its values is NULL: a NULL key matches nothing.
+- **The output is every (left, right) pair whose keys are equal and not NULL**, left tuple by left tuple in the left child's order, each joined as the left values followed by the right values in the plan's output schema. Duplicate keys on either side give every combination.
+- **A LEFT join also outputs every left tuple that matched nothing** (a NULL key included) once, padded with a typed NULL for every right column; `unmatched_output(left)` returns that tuple, and `None` for an inner join.
+- **`init` starts over** (no table or pending output carried from before), and the batches split the output anywhere: at most `batch_size` per call, `true` exactly when the batch is not empty.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `join_key(exprs, tuple, schema) -> Result<Option<AggregateKey>>`: evaluate each key expression on the tuple; if **any** value is NULL the result is `None`; otherwise `Some(key)`.
+> - `init`: initialise both children; clear the table and the pending output; **build** from the right: for every right tuple whose key is not NULL, push it onto `self.table[key]` (the right key expressions and the right schema).
+> - `next`: until the batch is full: hand out `pending` first; take the next left tuple (none: stop); compute its key (the left key expressions, the left schema) and look it up; for every right tuple found queue `left values ++ right values` with the plan's output schema; with no match, or a NULL key, queue `unmatched_output(..)` if it returns something.
+> - `unmatched_output(left) -> Option<Tuple>`: for a **LEFT** join the left values followed by a typed NULL for every right column; `None` for an inner join.
 
 The tests (the hash join is run from hand-built plans: the optimizer rule that chooses it is module 3h's): exact scenarios (matching pairs by hashing; the same rows as the nested loop join; NULL keys match nothing; duplicates on both sides; several key columns; keys of different integer widths; a left join pads unmatched and NULL-key rows; more matches than a batch), and a property: **for random tables with NULLs and duplicate keys**, a hash join on one or two key columns, inner or left, returns exactly the pairs with all keys equal (and non-NULL) and the padded unmatched left rows of a left join.
 

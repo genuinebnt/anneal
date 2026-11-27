@@ -11,9 +11,14 @@ If the right table has an **index on the join column**, there is a third way: fo
 
 In `src/execution/executors/nested_index_join_executor.rs` (the struct, `new` (it looks up the inner table and the index in the catalog) and the `TupleStream` over the outer child are given):
 
-- `probe(outer) -> Result<Vec<Tuple>>`: evaluate `self.key_predicate` on the outer tuple (with the child's schema) to get the key value (a NULL key matches nothing); make a one-column key tuple with the index's key schema; look it up (`self.index.index.scan_key(&key)`); fetch each rid from the inner table (`get_tuple(rid)?`) and keep the tuples that are **not deleted**.
-- `init`: forget pending output and initialise the child.
-- `next`: until the batch is full: hand out `pending` first; take the next outer tuple (none: stop); `probe` it; for every inner tuple queue `outer values ++ inner values` (laid out with the plan's output schema); if there is none and the join is a **LEFT** join, queue the outer values followed by NULLs for the inner columns (`nulls_for(&self.inner_schema)`).
+- **`probe(outer)`** returns the inner tuples whose indexed key equals `self.key_predicate` evaluated on the outer tuple (with the child's schema), skipping deleted ones; a NULL key finds nothing.
+- **The output is, for each outer tuple in the child's order, the outer values followed by each matching inner tuple's values** (in the plan's output schema). For a **LEFT** join, an outer tuple that matched nothing appears once, followed by NULLs for the inner columns.
+- **`init` starts over**, and the batches split the output anywhere: at most `batch_size` per call, `true` exactly when the batch is not empty.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `probe(outer) -> Result<Vec<Tuple>>`: evaluate `self.key_predicate` on the outer tuple (with the child's schema) to get the key value (a NULL key matches nothing); make a one-column key tuple with the index's key schema; look it up (`self.index.index.scan_key(&key)`); fetch each rid from the inner table (`get_tuple(rid)?`) and keep the tuples that are **not deleted**.
+> - `init`: forget pending output and initialise the child.
+> - `next`: until the batch is full: hand out `pending` first; take the next outer tuple (none: stop); `probe` it; for every inner tuple queue `outer values ++ inner values` (laid out with the plan's output schema); if there is none and the join is a **LEFT** join, queue the outer values followed by NULLs for the inner columns (`nulls_for(&self.inner_schema)`).
 
 The tests (SQL with `set force_optimizer_starter_rule=yes`, which makes the optimizer pick the index join): the optimizer turns an equality join on an indexed column into an index join; inner and left joins; either side of the `=` may be written first; a deleted inner row is not joined; rows inserted after the index was made are found; a NULL outer key matches nothing; and a property: **for random tables with a unique indexed key on the right**, inner and left joins return exactly the naive join's rows, and the plan says `NestedIndexJoin`.
 

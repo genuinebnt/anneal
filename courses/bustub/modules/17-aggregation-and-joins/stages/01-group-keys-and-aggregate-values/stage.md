@@ -11,9 +11,14 @@
 
 In `src/execution/executors/aggregation_executor.rs`:
 
-- `AggregateKey`'s `PartialEq` and `Hash` (a helper `canonical(value)` that turns a `Value` into a comparable, hashable shape is given): the same number of values, every pair "the same group", and a hash fed with the canonical form of every value so equal keys hash alike.
-- `generate_initial_aggregate_value` (given: `count(*)` starts at 0, the other aggregates at NULL) and `combine_aggregate_values(&mut running, &input)`: for each aggregate, `count(*)` adds 1 for every row; for the others a NULL input changes nothing; `count(x)`: 1 if nothing seen yet, else +1; `sum`: `x` if nothing seen yet, else running + x (an overflow is an error); `min`/`max`: likewise with `Value::min`/`Value::max`.
-- `SimpleAggregationHashTable::insert_combine(key, value)` (given) finds or creates a group and folds a value into it.
+- **Two `AggregateKey`s are equal exactly when they name the same group**: the same number of values, and every pair the same group value (two NULLs are one group whatever their type; equal numbers are one group whatever their width). **Equal keys hash alike.** A helper `canonical(value)` that turns a `Value` into a comparable, hashable shape is given.
+- **`combine_aggregate_values(&mut running, &input)` folds one row into the running values.** `count(*)` counts every row. For the other aggregates a NULL input changes nothing; `count(x)` counts the non-NULL inputs, `sum` adds them (an overflow is an error), `min` and `max` keep the smallest and the largest. An aggregate that has seen only NULLs keeps its initial value (`generate_initial_aggregate_value` is given: `count(*)` starts at 0, the others at NULL).
+- `SimpleAggregationHashTable::insert_combine(key, value)` (given) finds or creates a group and folds a value into it with these two.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> - `AggregateKey`'s `PartialEq` and `Hash` (a helper `canonical(value)` that turns a `Value` into a comparable, hashable shape is given): the same number of values, every pair "the same group", and a hash fed with the canonical form of every value so equal keys hash alike.
+> - `generate_initial_aggregate_value` (given: `count(*)` starts at 0, the other aggregates at NULL) and `combine_aggregate_values(&mut running, &input)`: for each aggregate, `count(*)` adds 1 for every row; for the others a NULL input changes nothing; `count(x)`: 1 if nothing seen yet, else +1; `sum`: `x` if nothing seen yet, else running + x (an overflow is an error); `min`/`max`: likewise with `Value::min`/`Value::max`.
+> - `SimpleAggregationHashTable::insert_combine(key, value)` (given) finds or creates a group and folds a value into it.
 
 The tests: exact scenarios (equal keys are equal and hash alike; two NULLs are one group, whatever their type; integers of different widths; the number of values matters; decimal zeros; keys work in a `HashMap`; the initial values; each aggregate over a few values; NULL inputs; a group of only NULLs stays NULL; the first value seeds; sum overflow is an error; one running value per group), and two properties: **keys are equal exactly when their values mean the same**, and equal keys hash alike (random lists of values of mixed types and widths); and **folding random (group, value) rows into the table gives, per group, the counts, the sum, the minimum and the maximum a per-group Rust fold gives**.
 
