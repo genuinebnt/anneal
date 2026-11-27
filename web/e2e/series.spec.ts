@@ -289,24 +289,37 @@ test("a series in the address that is unknown or lacks the problem is passed ove
 
 test("on a phone the switch sits close to its neighbours without losing its size or covering them", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
+    // this problem is in three series, so it offers two switches
     await page.goto("/p/y5-catch-the-broken-queue");
-    const link = page.locator(".sx-also a");
-    await expect(link).toBeVisible();
-    const m = await link.evaluate((a) => {
-        const r = a.getBoundingClientRect();
-        const text = document.createRange();
-        text.selectNodeContents(a);
-        const t = text.getBoundingClientRect();
+    const links = page.locator(".sx-also a");
+    await expect(links).toHaveCount(2);
+    const m = await links.evaluateAll((all) => {
+        const parts = all.map((a) => {
+            const r = a.getBoundingClientRect();
+            const text = document.createRange();
+            text.selectNodeContents(a);
+            // the whole padded box answers a press
+            const hits = [r.top + 2, r.bottom - 2].every((y) => a.contains(document.elementFromPoint(r.left + 20, y)));
+            return { box: r, text: text.getBoundingClientRect(), hits };
+        });
         const meta = document.querySelector(".pane.l .sx-meta")!.getBoundingClientRect();
         const after = document.querySelector(".sx-also")!.nextElementSibling!.getBoundingClientRect();
-        // the whole padded box answers a press
-        const hits = [r.top + 2, r.bottom - 2].every((y) => a.contains(document.elementFromPoint(r.left + 20, y)));
-        return { tap: r.height, above: t.top - meta.bottom, below: after.top - t.bottom, hits, textClear: t.top >= meta.bottom && t.bottom <= after.top };
+        const first = parts[0].text;
+        const last = parts[parts.length - 1].text;
+        return {
+            taps: parts.map((x) => x.box.height),
+            hits: parts.every((x) => x.hits),
+            apart: parts.every((x, i) => i === 0 || (x.box.top >= parts[i - 1].box.bottom - 0.5 && x.text.top >= parts[i - 1].text.bottom)),
+            above: first.top - meta.bottom,
+            below: after.top - last.bottom,
+            textClear: first.top >= meta.bottom && last.bottom <= after.top,
+        };
     });
-    expect(m.tap).toBeGreaterThanOrEqual(44);
+    for (const tap of m.taps) expect(tap).toBeGreaterThanOrEqual(44);
     expect(m.above).toBeLessThanOrEqual(14);
     expect(m.below).toBeLessThanOrEqual(24);
     expect(m.hits).toBe(true);
+    expect(m.apart).toBe(true);
     expect(m.textClear).toBe(true);
 });
 
