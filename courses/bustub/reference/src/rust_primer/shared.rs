@@ -154,10 +154,8 @@ pub fn parallel_sum(values: &[u64], threads: usize) -> u64 {
     let threads = threads.max(1);
     let chunk = values.len().div_ceil(threads).max(1);
     thread::scope(|scope| {
-        let handles: Vec<_> = values
-            .chunks(chunk)
-            .map(|part| scope.spawn(move || part.iter().fold(0u64, |a, &b| a.wrapping_add(b))))
-            .collect();
+        let handles: Vec<_> =
+            values.chunks(chunk).map(|part| scope.spawn(move || part.iter().fold(0u64, |a, &b| a.wrapping_add(b)))).collect();
         handles.into_iter().fold(0u64, |a, h| a.wrapping_add(h.join().unwrap()))
     })
     //~ todo!("r-04: chunks of the input, one scoped thread each (thread::scope lets them borrow `values`), their sums added up")

@@ -33,7 +33,8 @@ fn within<T: Send + 'static>(what: &str, limit: Duration, work: impl FnOnce() ->
     thread::spawn(move || {
         let _ = tx.send(work());
     });
-    rx.recv_timeout(limit).unwrap_or_else(|_| panic!("{what} did not finish in {limit:?}: the cost must not grow with the number of frames"))
+    rx.recv_timeout(limit)
+        .unwrap_or_else(|_| panic!("{what} did not finish in {limit:?}: the cost must not grow with the number of frames"))
 }
 
 struct Lcg(u64);
@@ -192,7 +193,10 @@ fn run(c: usize, ops: &[Op], check: Check, pages: Pages) -> Result<(), TestCaseE
                         fresh += 1;
                         fresh
                     }
-                    None => (0..PAGES).map(|d| (wanted + d) % PAGES).find(|p| m.live.values().all(|(q, _)| q != p)).expect("fewer frames than pages"),
+                    None => (0..PAGES)
+                        .map(|d| (wanted + d) % PAGES)
+                        .find(|p| m.live.values().all(|(q, _)| q != p))
+                        .expect("fewer frames than pages"),
                 };
                 r.record_access(f(x), pg(page));
                 m.access(x, page);
@@ -213,12 +217,27 @@ fn run(c: usize, ops: &[Op], check: Check, pages: Pages) -> Result<(), TestCaseE
                 match check {
                     Check::Arc => {
                         let want = m.evict();
-                        prop_assert_eq!(got, want.map(f), "step {}: evict must return the frame ARC chooses (p = {}, mru {:?}, mfu {:?}, ghosts {:?} / {:?})", step, m.p, m.mru, m.mfu, m.mru_ghost, m.mfu_ghost);
+                        prop_assert_eq!(
+                            got,
+                            want.map(f),
+                            "step {}: evict must return the frame ARC chooses (p = {}, mru {:?}, mfu {:?}, ghosts {:?} / {:?})",
+                            step,
+                            m.p,
+                            m.mru,
+                            m.mfu,
+                            m.mru_ghost,
+                            m.mfu_ghost
+                        );
                     }
                     Check::AnyEvictable => match got {
                         None => prop_assert!(m.size() == 0, "step {}: evict returned None but a frame is evictable", step),
                         Some(FrameId(v)) => {
-                            prop_assert!(m.live.get(&v).is_some_and(|&(_, e)| e), "step {}: evict returned frame {} which is not an evictable live frame", step, v);
+                            prop_assert!(
+                                m.live.get(&v).is_some_and(|&(_, e)| e),
+                                "step {}: evict returned frame {} which is not an evictable live frame",
+                                step,
+                                v
+                            );
                             m.forget(v);
                         }
                     },
@@ -276,7 +295,11 @@ fn s1e_01_remove_forgets_an_evictable_frame_ignores_unknown_ones_and_panics_for_
         r.set_evictable(f(x), true);
     }
     r.remove(f(0));
-    assert_eq!((r.size(), r.evict(), r.evict()), (1, Some(f(1)), None), "remove forgets an evictable frame ignores unknown ones and panics for pinned ones");
+    assert_eq!(
+        (r.size(), r.evict(), r.evict()),
+        (1, Some(f(1)), None),
+        "remove forgets an evictable frame ignores unknown ones and panics for pinned ones"
+    );
     let result = std::panic::catch_unwind(|| {
         let mut r = ArcReplacer::new(4);
         r.record_access(f(0), pg(0));
@@ -318,7 +341,11 @@ fn s1e_02_frames_seen_once_leave_before_frames_seen_twice() {
         r.record_access(f(x), pg(x as i32)); // seen once: mru
     }
     evictable(&mut r, &[1, 2, 3, 4]);
-    assert_eq!(drain(&mut r), [3, 4, 1, 2], "mru first (oldest first), then mfu (oldest first): a scan cannot push out the frames seen twice");
+    assert_eq!(
+        drain(&mut r),
+        [3, 4, 1, 2],
+        "mru first (oldest first), then mfu (oldest first): a scan cannot push out the frames seen twice"
+    );
 }
 
 #[test]

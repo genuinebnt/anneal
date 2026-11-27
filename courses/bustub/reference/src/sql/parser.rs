@@ -6,10 +6,60 @@ use crate::common::exception::Result;
 
 /// Words that end an expression or a table name and so cannot be used as an alias without `AS`.
 const RESERVED: &[&str] = &[
-    "select", "from", "where", "group", "having", "order", "limit", "offset", "join", "inner", "left", "right", "full", "outer", "cross",
-    "natural", "on", "using", "union", "intersect", "except", "as", "and", "or", "not", "with", "values", "by", "asc", "desc", "nulls",
-    "over", "partition", "is", "in", "like", "between", "case", "when", "then", "else", "end", "distinct", "set", "into", "returning",
-    "window", "rows", "range", "unbounded", "preceding", "following", "current", "row",
+    "select",
+    "from",
+    "where",
+    "group",
+    "having",
+    "order",
+    "limit",
+    "offset",
+    "join",
+    "inner",
+    "left",
+    "right",
+    "full",
+    "outer",
+    "cross",
+    "natural",
+    "on",
+    "using",
+    "union",
+    "intersect",
+    "except",
+    "as",
+    "and",
+    "or",
+    "not",
+    "with",
+    "values",
+    "by",
+    "asc",
+    "desc",
+    "nulls",
+    "over",
+    "partition",
+    "is",
+    "in",
+    "like",
+    "between",
+    "case",
+    "when",
+    "then",
+    "else",
+    "end",
+    "distinct",
+    "set",
+    "into",
+    "returning",
+    "window",
+    "rows",
+    "range",
+    "unbounded",
+    "preceding",
+    "following",
+    "current",
+    "row",
 ];
 
 pub fn parse(sql: &str) -> Result<Vec<Statement>> {
@@ -502,7 +552,13 @@ impl Parser {
     }
 
     fn set_node(op: SetOperator, all: bool, left: Query, right: Query) -> Query {
-        Query { ctes: vec![], body: QueryBody::SetOp { op, all, left: Box::new(left), right: Box::new(right) }, order_by: vec![], limit: None, offset: None }
+        Query {
+            ctes: vec![],
+            body: QueryBody::SetOp { op, all, left: Box::new(left), right: Box::new(right) },
+            order_by: vec![],
+            limit: None,
+            offset: None,
+        }
     }
 
     /// `first [UNION | INTERSECT | EXCEPT [ALL | DISTINCT] operand]...`: the chain of set operations that follows a query.

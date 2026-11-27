@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::{Arc, Mutex};
 
-
 #[derive(Debug, Default)]
 pub struct NodeStats {
     /// Tuples produced, over all calls of `next`.

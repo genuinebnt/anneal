@@ -91,7 +91,11 @@ struct PageModel {
 
 fn pick_mut(pages: &mut [PageModel], i: usize) -> Option<&mut PageModel> {
     let n = pages.len();
-    if n == 0 { None } else { pages.get_mut(i % n) }
+    if n == 0 {
+        None
+    } else {
+        pages.get_mut(i % n)
+    }
 }
 
 /// Runs `ops` on `bpm` and on the model. With `max_pages`, `New` stops creating pages at that many (so no eviction is ever needed).
@@ -113,7 +117,16 @@ fn run_model(bpm: &BufferPoolManager, disk: &MemDisk, frames: usize, ops: &[Op],
                 let got = bpm.fetch_page(m.id);
                 // a pinned page is in memory; any other page can be brought in exactly when some frame is not pinned
                 let should_succeed = m.pins > 0 || pinned < frames;
-                prop_assert_eq!(got.is_some(), should_succeed, "step {}: fetch_page({:?}) with {} of {} frames pinned and this page pinned {} times", step, m.id, pinned, frames, m.pins);
+                prop_assert_eq!(
+                    got.is_some(),
+                    should_succeed,
+                    "step {}: fetch_page({:?}) with {} of {} frames pinned and this page pinned {} times",
+                    step,
+                    m.id,
+                    pinned,
+                    frames,
+                    m.pins
+                );
                 if let Some(frame) = got {
                     if m.pins > 0 {
                         prop_assert_eq!(Some(frame), m.frame, "step {}: a page that is in memory keeps its frame", step);
@@ -136,12 +149,23 @@ fn run_model(bpm: &BufferPoolManager, disk: &MemDisk, frames: usize, ops: &[Op],
                 let Some(m) = pick_mut(&mut pages, i).filter(|m| !m.deleted) else { continue };
                 if m.pins == 0 {
                     // nothing to unpin: the pool says so (and a page that is not in memory has no pin either)
-                    prop_assert!(!bpm.unpin_page(m.id, false), "step {}: unpin_page of {:?}, which is not pinned, must return false", step, m.id);
+                    prop_assert!(
+                        !bpm.unpin_page(m.id, false),
+                        "step {}: unpin_page of {:?}, which is not pinned, must return false",
+                        step,
+                        m.id
+                    );
                     continue;
                 }
                 // report the writes at the last unpin at the latest; an earlier unpin may report them or not
                 let report = if m.pins == 1 { m.unreported } else { m.unreported && flag };
-                prop_assert!(bpm.unpin_page(m.id, report), "step {}: unpin_page of {:?}, pinned {} times, must return true", step, m.id, m.pins);
+                prop_assert!(
+                    bpm.unpin_page(m.id, report),
+                    "step {}: unpin_page of {:?}, pinned {} times, must return true",
+                    step,
+                    m.id,
+                    m.pins
+                );
                 if report {
                     m.unreported = false;
                 }
@@ -156,13 +180,25 @@ fn run_model(bpm: &BufferPoolManager, disk: &MemDisk, frames: usize, ops: &[Op],
                 let ok = bpm.flush_page(m.id);
                 if m.pins > 0 {
                     prop_assert!(ok, "step {}: flush_page of the pinned page {:?} must succeed", step, m.id);
-                    prop_assert!(disk.stored(m.id.0).iter().all(|&b| b == m.fill), "step {}: flush_page must write the page's current bytes ({} in every byte)", step, m.fill);
+                    prop_assert!(
+                        disk.stored(m.id.0).iter().all(|&b| b == m.fill),
+                        "step {}: flush_page must write the page's current bytes ({} in every byte)",
+                        step,
+                        m.fill
+                    );
                 }
             }
             Op::Delete(i) => {
                 let Some(m) = pick_mut(&mut pages, i).filter(|m| !m.deleted) else { continue };
                 let ok = bpm.delete_page(m.id);
-                prop_assert_eq!(ok, m.pins == 0, "step {}: delete_page({:?}) succeeds exactly when nobody has the page pinned (pins: {})", step, m.id, m.pins);
+                prop_assert_eq!(
+                    ok,
+                    m.pins == 0,
+                    "step {}: delete_page({:?}) succeeds exactly when nobody has the page pinned (pins: {})",
+                    step,
+                    m.id,
+                    m.pins
+                );
                 if ok {
                     m.deleted = true;
                 }
@@ -175,7 +211,11 @@ fn run_model(bpm: &BufferPoolManager, disk: &MemDisk, frames: usize, ops: &[Op],
     // a page that was never modified and never flushed is never written to disk
     let modified: BTreeSet<i32> = pages.iter().filter(|m| m.may_be_written).map(|m| m.id.0).collect();
     let written = disk.written_pages();
-    prop_assert!(written.is_subset(&modified), "pages {:?} were written to disk but never modified or flushed", written.difference(&modified).collect::<Vec<_>>());
+    prop_assert!(
+        written.is_subset(&modified),
+        "pages {:?} were written to disk but never modified or flushed",
+        written.difference(&modified).collect::<Vec<_>>()
+    );
     Ok(())
 }
 
@@ -202,7 +242,14 @@ fn s1f_01_new_page_ids_are_distinct_and_cost_no_frame_and_no_io() {
 fn s1f_01_threads_never_get_the_same_page_id() {
     let (bpm, _) = pool(2);
     let bpm = Arc::new(bpm);
-    let handles: Vec<_> = (0..8).map(|_| thread::spawn({ let bpm = Arc::clone(&bpm); move || (0..200).map(|_| bpm.new_page().0).collect::<Vec<_>>() })).collect();
+    let handles: Vec<_> = (0..8)
+        .map(|_| {
+            thread::spawn({
+                let bpm = Arc::clone(&bpm);
+                move || (0..200).map(|_| bpm.new_page().0).collect::<Vec<_>>()
+            })
+        })
+        .collect();
     let all: Vec<i32> = handles.into_iter().flat_map(|h| h.join().unwrap()).collect();
     assert_eq!(all.iter().collect::<BTreeSet<_>>().len(), all.len(), "1600 ids from 8 threads must all be different");
 }
@@ -230,7 +277,10 @@ fn s1f_01_fetching_pins_and_unpinning_releases() {
     }
     assert!(bpm.unpin_page(a, false), "fetching pins and unpinning releases: expected `bpm.unpin_page(a, false)`");
     assert_eq!(bpm.get_pin_count(a), Some(2), "fetching pins and unpinning releases");
-    assert!(bpm.unpin_page(a, false) && bpm.unpin_page(a, false), "fetching pins and unpinning releases: expected `bpm.unpin_page(a, false) && bpm.unpin_page(a, false)`");
+    assert!(
+        bpm.unpin_page(a, false) && bpm.unpin_page(a, false),
+        "fetching pins and unpinning releases: expected `bpm.unpin_page(a, false) && bpm.unpin_page(a, false)`"
+    );
     assert_eq!(bpm.get_pin_count(a), Some(0), "fetching pins and unpinning releases");
     assert!(!bpm.unpin_page(a, false), "a page that is not pinned cannot be unpinned");
     assert!(!bpm.unpin_page(p(99), false), "neither can a page that is not in memory");
@@ -402,7 +452,10 @@ fn s1f_02_the_pool_works_under_the_replacers_you_built() {
                 assert_eq!(read_text(&bpm, page, text.len()), text, "{policy:?}: page {i}");
             }
         }
-        assert!(disk.written_pages().len() <= 40, "the pool works under the replacers you built: expected `disk.written_pages().len() <= 40`");
+        assert!(
+            disk.written_pages().len() <= 40,
+            "the pool works under the replacers you built: expected `disk.written_pages().len() <= 40`"
+        );
     }
 }
 
@@ -464,7 +517,10 @@ fn s1f_03_a_pinned_page_cannot_be_deleted_but_an_unpinned_one_can_and_its_frame_
     bpm.fetch_page(a).unwrap();
     assert!(!bpm.delete_page(a), "a pinned page cannot be deleted");
     bpm.unpin_page(a, false);
-    assert!(bpm.delete_page(a), "a pinned page cannot be deleted but an unpinned one can and its frame is free again: expected `bpm.delete_page(a)`");
+    assert!(
+        bpm.delete_page(a),
+        "a pinned page cannot be deleted but an unpinned one can and its frame is free again: expected `bpm.delete_page(a)`"
+    );
     assert_eq!(bpm.get_pin_count(a), None, "a deleted page is not in memory");
     assert!(bpm.fetch_page(b).is_some(), "and its frame can be used again");
     assert!(disk.deletes.lock().unwrap().contains(&a.0), "the disk is told to free the page");
@@ -487,7 +543,10 @@ fn s1f_03_deleting_a_page_that_is_not_in_memory_succeeds_and_a_deleted_dirty_pag
     assert!(bpm.delete_page(p(77)), "nothing to do counts as success");
     let a = bpm.new_page();
     write_text(&bpm, a, "doomed", true);
-    assert!(bpm.delete_page(a), "deleting a page that is not in memory succeeds and a deleted dirty page is not written: expected `bpm.delete_page(a)`");
+    assert!(
+        bpm.delete_page(a),
+        "deleting a page that is not in memory succeeds and a deleted dirty page is not written: expected `bpm.delete_page(a)`"
+    );
     assert!(bpm.delete_page(a), "deleting twice is fine");
     assert!(disk.writes().is_empty(), "a page that is deleted is not written back");
 }
@@ -533,7 +592,10 @@ fn s1f_04_threads_share_a_small_pool_without_losing_updates() {
                         data[..4].copy_from_slice(&n.to_le_bytes());
                     }
                     applied[i].fetch_add(1, Ordering::SeqCst);
-                    assert!(bpm.unpin_page(pages[i], true), "threads share a small pool without losing updates: expected `bpm.unpin_page(pages[i], true)`");
+                    assert!(
+                        bpm.unpin_page(pages[i], true),
+                        "threads share a small pool without losing updates: expected `bpm.unpin_page(pages[i], true)`"
+                    );
                 }
             })
         })

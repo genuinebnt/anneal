@@ -28,7 +28,12 @@ pub struct CrashDisk {
 
 impl CrashDisk {
     pub fn new() -> Arc<CrashDisk> {
-        Arc::new(CrashDisk { pages: Mutex::new(HashMap::new()), log: Mutex::new(Vec::new()), page_writes: AtomicUsize::new(0), log_appends: AtomicUsize::new(0) })
+        Arc::new(CrashDisk {
+            pages: Mutex::new(HashMap::new()),
+            log: Mutex::new(Vec::new()),
+            page_writes: AtomicUsize::new(0),
+            log_appends: AtomicUsize::new(0),
+        })
     }
 
     /// What a restart finds: a copy of the pages and the log as they are now.
@@ -40,7 +45,12 @@ impl CrashDisk {
     pub fn crash_tearing(&self, cut: usize) -> Arc<CrashDisk> {
         let mut log = self.log.lock().unwrap().clone();
         log.truncate(log.len().saturating_sub(cut));
-        Arc::new(CrashDisk { pages: Mutex::new(self.pages.lock().unwrap().clone()), log: Mutex::new(log), page_writes: AtomicUsize::new(0), log_appends: AtomicUsize::new(0) })
+        Arc::new(CrashDisk {
+            pages: Mutex::new(self.pages.lock().unwrap().clone()),
+            log: Mutex::new(log),
+            page_writes: AtomicUsize::new(0),
+            log_appends: AtomicUsize::new(0),
+        })
     }
 
     pub fn log_bytes(&self) -> Vec<u8> {

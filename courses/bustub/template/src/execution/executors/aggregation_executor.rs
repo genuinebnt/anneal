@@ -125,7 +125,9 @@ pub struct AggregationExecutor<'e> {
 
 impl<'e> AggregationExecutor<'e> {
     pub fn new(plan: PlanRef, child: ExecutorBox<'e>) -> AggregationExecutor<'e> {
-        let PlanKind::Aggregation { group_bys, aggregates, agg_types } = &plan.kind else { unreachable!("an AggregationExecutor needs an Aggregation plan") };
+        let PlanKind::Aggregation { group_bys, aggregates, agg_types } = &plan.kind else {
+            unreachable!("an AggregationExecutor needs an Aggregation plan")
+        };
         let (group_bys, aggregates) = (group_bys.clone(), aggregates.clone());
         let table = SimpleAggregationHashTable::new(agg_types.clone());
         AggregationExecutor { plan, child, group_bys, aggregates, table, results: vec![], cursor: 0 }

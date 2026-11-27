@@ -36,13 +36,33 @@ pub enum BoundExpression {
     Constant(Value),
     /// `[table, column]`, `[alias, column]`, or just `[column]`.
     ColumnRef(Vec<String>),
-    BinaryOp { op: String, left: Box<BoundExpression>, right: Box<BoundExpression> },
-    UnaryOp { op: String, arg: Box<BoundExpression> },
-    FuncCall { func_name: String, args: Vec<BoundExpression> },
-    AggCall { func_name: String, is_distinct: bool, args: Vec<BoundExpression> },
+    BinaryOp {
+        op: String,
+        left: Box<BoundExpression>,
+        right: Box<BoundExpression>,
+    },
+    UnaryOp {
+        op: String,
+        arg: Box<BoundExpression>,
+    },
+    FuncCall {
+        func_name: String,
+        args: Vec<BoundExpression>,
+    },
+    AggCall {
+        func_name: String,
+        is_distinct: bool,
+        args: Vec<BoundExpression>,
+    },
     /// `CASE WHEN c THEN r ... [ELSE e] END`.
-    Case { branches: Vec<(BoundExpression, BoundExpression)>, otherwise: Option<Box<BoundExpression>> },
-    Alias { alias: String, child: Box<BoundExpression> },
+    Case {
+        branches: Vec<(BoundExpression, BoundExpression)>,
+        otherwise: Option<Box<BoundExpression>>,
+    },
+    Alias {
+        alias: String,
+        child: Box<BoundExpression>,
+    },
     Window(Box<BoundWindow>),
     Star,
 }
@@ -59,7 +79,8 @@ impl BoundExpression {
             BoundExpression::BinaryOp { left, right, .. } => left.has_aggregation() || right.has_aggregation(),
             BoundExpression::UnaryOp { arg, .. } => arg.has_aggregation(),
             BoundExpression::Case { branches, otherwise } => {
-                branches.iter().any(|(c, r)| c.has_aggregation() || r.has_aggregation()) || otherwise.as_ref().is_some_and(|e| e.has_aggregation())
+                branches.iter().any(|(c, r)| c.has_aggregation() || r.has_aggregation())
+                    || otherwise.as_ref().is_some_and(|e| e.has_aggregation())
             }
             _ => false,
         }

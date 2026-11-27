@@ -1,0 +1,3 @@
+# The house style of this crate: long lines, and a short construct stays on one line when it fits.
+max_width = 140
+use_small_heuristics = "Max"

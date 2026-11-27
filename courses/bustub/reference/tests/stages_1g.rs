@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use bustub::buffer::buffer_pool_manager::BufferPoolManager;
 use bustub::common::config::{PageData, BUSTUB_PAGE_SIZE};
-use bustub::storage::page::page_guard::{ReadPageGuard, WritePageGuard};
 use bustub::storage::disk::disk_manager::DiskIo;
+use bustub::storage::page::page_guard::{ReadPageGuard, WritePageGuard};
 #[path = "common/pool.rs"]
 mod pool;
 use pool::{pool_with, MemDisk, Policy};
@@ -52,7 +52,6 @@ fn finished<T, U>(rx: mpsc::Receiver<T>, thread: thread::JoinHandle<U>, stuck: &
 }
 
 // ---- 1g-01 · Guards that release themselves -------------------------------------------------------------------------------
-
 
 #[derive(Clone, Copy, Debug)]
 enum GuardOp {
@@ -107,9 +106,22 @@ fn run_guards(policy: Policy, frames: usize, ops: &[GuardOp]) -> Result<(), Test
                 let should_succeed = on_page > 0 || pinned_pages(&held) < frames;
                 if write {
                     let got = bpm.checked_write_page(pages[i]);
-                    prop_assert_eq!(got.is_some(), should_succeed, "step {}: checked_write_page with {} of {} frames pinned", step, pinned_pages(&held), frames);
+                    prop_assert_eq!(
+                        got.is_some(),
+                        should_succeed,
+                        "step {}: checked_write_page with {} of {} frames pinned",
+                        step,
+                        pinned_pages(&held),
+                        frames
+                    );
                     if let Some(mut guard) = got {
-                        prop_assert!(guard.get_data().iter().all(|&b| b == fill[i]), "step {}: page {} should hold {} in every byte", step, i, fill[i]);
+                        prop_assert!(
+                            guard.get_data().iter().all(|&b| b == fill[i]),
+                            "step {}: page {} should hold {} in every byte",
+                            step,
+                            i,
+                            fill[i]
+                        );
                         if let GuardOp::Write(_, byte) = *op {
                             guard.get_data_mut().fill(byte);
                             fill[i] = byte;
@@ -118,9 +130,22 @@ fn run_guards(policy: Policy, frames: usize, ops: &[GuardOp]) -> Result<(), Test
                     }
                 } else {
                     let got = bpm.checked_read_page(pages[i]);
-                    prop_assert_eq!(got.is_some(), should_succeed, "step {}: checked_read_page with {} of {} frames pinned", step, pinned_pages(&held), frames);
+                    prop_assert_eq!(
+                        got.is_some(),
+                        should_succeed,
+                        "step {}: checked_read_page with {} of {} frames pinned",
+                        step,
+                        pinned_pages(&held),
+                        frames
+                    );
                     if let Some(guard) = got {
-                        prop_assert!(guard.get_data().iter().all(|&b| b == fill[i]), "step {}: page {} should hold {} in every byte", step, i, fill[i]);
+                        prop_assert!(
+                            guard.get_data().iter().all(|&b| b == fill[i]),
+                            "step {}: page {} should hold {} in every byte",
+                            step,
+                            i,
+                            fill[i]
+                        );
                         held.push(Held::Reader(guard, i));
                     }
                 }
@@ -146,7 +171,13 @@ fn run_guards(policy: Policy, frames: usize, ops: &[GuardOp]) -> Result<(), Test
         for i in 0..8 {
             let live = held.iter().filter(|h| h.page() == i).count();
             if live > 0 {
-                prop_assert_eq!(bpm.get_pin_count(pages[i]), Some(live), "step {}: pin count of page {} must be the number of live guards on it", step, i);
+                prop_assert_eq!(
+                    bpm.get_pin_count(pages[i]),
+                    Some(live),
+                    "step {}: pin count of page {} must be the number of live guards on it",
+                    step,
+                    i
+                );
             }
         }
     }
@@ -174,7 +205,10 @@ fn s1g_01_a_read_guard_pins_the_page_and_shows_its_bytes() {
     assert_eq!(guard.get_page_id(), page, "a read guard pins the page and shows its bytes");
     assert_eq!(bpm.get_pin_count(page), Some(1), "a read guard pins the page and shows its bytes");
     assert_eq!(guard.get_data().len(), PS, "a read guard pins the page and shows its bytes");
-    assert!(guard.get_data().iter().all(|&b| b == 0), "a read guard pins the page and shows its bytes: expected `guard.get_data().iter().all(|&b| b == 0)`");
+    assert!(
+        guard.get_data().iter().all(|&b| b == 0),
+        "a read guard pins the page and shows its bytes: expected `guard.get_data().iter().all(|&b| b == 0)`"
+    );
 }
 
 #[test]
@@ -208,7 +242,6 @@ fn s1g_01_no_guard_when_every_frame_is_pinned() {
     let _gb = bpm.checked_read_page(b).unwrap();
     assert!(bpm.checked_read_page(c).is_none(), "no guard when every frame is pinned: expected `bpm.checked_read_page(c).is_none()`");
 }
-
 
 #[test]
 fn s1g_01_dropping_a_read_guard_unpins_the_page() {
@@ -277,7 +310,6 @@ fn s1g_01_each_guard_releases_only_its_own_pin() {
     assert_eq!(bpm.get_pin_count(page), Some(0), "each guard releases only its own pin");
 }
 
-
 #[test]
 fn s1g_01_a_write_guard_changes_the_page_and_the_change_is_seen() {
     let (bpm, _) = pool(3);
@@ -332,7 +364,11 @@ fn s1g_01_a_read_guard_leaves_the_page_clean() {
     early.release();
     drop(early);
     drop(bpm.checked_read_page(b).unwrap()); // evicts a
-    assert_eq!(disk.writes().len(), 0, "a read guard only looks: a page it released, by drop or by release, is clean and is not written back");
+    assert_eq!(
+        disk.writes().len(),
+        0,
+        "a read guard only looks: a page it released, by drop or by release, is clean and is not written back"
+    );
 }
 
 #[test]
@@ -376,7 +412,6 @@ fn s1g_01_deref_mut_works_like_get_data_mut() {
     assert_eq!(guard[0], 7, "deref mut works like get data mut");
 }
 
-
 #[test]
 fn s1g_02_they_return_a_guard_when_there_is_room() {
     let (bpm, _) = pool(2);
@@ -403,7 +438,6 @@ fn s1g_02_write_page_panics_when_nothing_can_be_evicted() {
     let _ga = bpm.write_page(a);
     let _gb = bpm.write_page(b);
 }
-
 
 #[test]
 fn s1g_02_a_write_guard_can_flush_its_page() {
@@ -458,7 +492,6 @@ fn s1g_02_flushing_while_holding_the_latch_does_not_deadlock() {
     };
     finished(rx, t, "flush() hung: it must not ask for the latch the guard already holds");
 }
-
 
 #[test]
 fn s1g_02_a_blocked_flush_does_not_block_the_rest_of_the_pool() {
@@ -562,7 +595,8 @@ fn s1g_02_flush_page_never_writes_an_older_version_after_a_newer_one() {
         }
         let _ = tx.send(disk.went_back.load(SeqCst));
     });
-    let went_back = rx.recv_timeout(Duration::from_secs(60)).expect("the writer and two flushers finish (a deadlock, or a panic in the pool?)");
+    let went_back =
+        rx.recv_timeout(Duration::from_secs(60)).expect("the writer and two flushers finish (a deadlock, or a panic in the pool?)");
     assert_eq!(went_back, 0, "the disk received an older version of the page after a newer one {went_back} times: flush_page must hold the latch until its write is done");
 }
 
@@ -575,20 +609,28 @@ fn s1g_02_a_flushed_page_is_not_left_pinned_so_it_can_be_evicted() {
     assert!(bpm.checked_read_page(b).is_some(), "a is unpinned again: its frame can be reused");
 }
 
-
 #[test]
 fn s1g_03_guards_moved_into_a_vec_keep_their_pages_pinned_until_dropped() {
     let (bpm, _) = pool(4);
     let pages: Vec<_> = (0..4).map(|_| bpm.new_page()).collect();
     let mut guards: Vec<_> = pages.iter().map(|&p| bpm.write_page(p)).collect();
-    assert!(pages.iter().all(|&p| bpm.get_pin_count(p) == Some(1)), "guards moved into a vec keep their pages pinned until dropped: expected `pages.iter().all(|&p| bpm.get_pin_count(p) == Some(1))`");
-    assert!(bpm.checked_read_page(bpm.new_page()).is_none(), "guards moved into a vec keep their pages pinned until dropped: expected `bpm.checked_read_page(bpm.new_page()).is_none()`");
+    assert!(
+        pages.iter().all(|&p| bpm.get_pin_count(p) == Some(1)),
+        "guards moved into a vec keep their pages pinned until dropped: expected `pages.iter().all(|&p| bpm.get_pin_count(p) == Some(1))`"
+    );
+    assert!(
+        bpm.checked_read_page(bpm.new_page()).is_none(),
+        "guards moved into a vec keep their pages pinned until dropped: expected `bpm.checked_read_page(bpm.new_page()).is_none()`"
+    );
     let first = guards.remove(0); // moved out of the Vec
     assert_eq!(bpm.get_pin_count(pages[0]), Some(1), "moving a guard doesn't release it");
     drop(first);
     assert_eq!(bpm.get_pin_count(pages[0]), Some(0), "guards moved into a vec keep their pages pinned until dropped");
     guards.clear();
-    assert!(pages.iter().all(|&p| bpm.get_pin_count(p) == Some(0)), "guards moved into a vec keep their pages pinned until dropped: expected `pages.iter().all(|&p| bpm.get_pin_count(p) == Some(0))`");
+    assert!(
+        pages.iter().all(|&p| bpm.get_pin_count(p) == Some(0)),
+        "guards moved into a vec keep their pages pinned until dropped: expected `pages.iter().all(|&p| bpm.get_pin_count(p) == Some(0))`"
+    );
 }
 
 #[test]

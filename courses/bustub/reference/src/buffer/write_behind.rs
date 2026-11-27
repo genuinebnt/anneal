@@ -30,7 +30,8 @@ impl WriteBehind {
     /// Pages dirty for at least `max_age` as of `now`, oldest first (ties by page number).
     pub fn due(&self, now: u64, max_age: u64) -> Vec<u32> {
         // @begin 1f-c3
-        let mut v: Vec<(u64, u32)> = self.dirty.iter().filter(|&(_, &since)| now.saturating_sub(since) >= max_age).map(|(&p, &since)| (since, p)).collect();
+        let mut v: Vec<(u64, u32)> =
+            self.dirty.iter().filter(|&(_, &since)| now.saturating_sub(since) >= max_age).map(|(&p, &since)| (since, p)).collect();
         v.sort();
         v.into_iter().map(|(_, p)| p).collect()
         //~ todo!("1f-c3: the pages that have been dirty long enough, oldest first")

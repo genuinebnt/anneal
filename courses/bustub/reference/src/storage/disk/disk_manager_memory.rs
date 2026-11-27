@@ -18,7 +18,11 @@ impl DiskManagerMemory {
     /// A zeroed disk of `capacity` pages.
     pub fn new(capacity: usize) -> DiskManagerMemory {
         // @begin 1a-04
-        DiskManagerMemory { memory: Mutex::new(vec![0; capacity * BUSTUB_PAGE_SIZE]), page_capacity: capacity, num_writes: AtomicUsize::new(0) }
+        DiskManagerMemory {
+            memory: Mutex::new(vec![0; capacity * BUSTUB_PAGE_SIZE]),
+            page_capacity: capacity,
+            num_writes: AtomicUsize::new(0),
+        }
         //~ todo!("1a-04: a zeroed buffer of capacity pages")
         // @end
     }
@@ -56,7 +60,12 @@ impl DiskManagerMemory {
     /// The byte range of a page; panics for an id outside `0..capacity`.
     fn range(&self, page_id: PageId, what: &str) -> std::ops::Range<usize> {
         // @begin 1a-04
-        assert!(page_id.is_valid() && (page_id.0 as usize) < self.page_capacity, "{what} of page {} on a disk of {} pages: ran out of disk space", page_id.0, self.page_capacity);
+        assert!(
+            page_id.is_valid() && (page_id.0 as usize) < self.page_capacity,
+            "{what} of page {} on a disk of {} pages: ran out of disk space",
+            page_id.0,
+            self.page_capacity
+        );
         let start = page_id.0 as usize * BUSTUB_PAGE_SIZE;
         start..start + BUSTUB_PAGE_SIZE
         //~ todo!("1a-04: assert the id is in 0..capacity (a message that says the disk ran out of space), then the page's byte range")

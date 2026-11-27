@@ -161,7 +161,9 @@ impl<K: RobinHoodHash + Clone + PartialEq> RobinHoodHashSet<K> {
                     // take the bucket from a key that is closer to its home than the carried one is to its own
                     let resident_home = self.home_bucket(resident);
                     if self.probe_distance(resident_home, bucket) < self.probe_distance(home, bucket) {
-                        let Slot::Live(displaced) = std::mem::replace(&mut table.slots[bucket], Slot::Live(carried)) else { unreachable!() };
+                        let Slot::Live(displaced) = std::mem::replace(&mut table.slots[bucket], Slot::Live(carried)) else {
+                            unreachable!()
+                        };
                         carried = displaced;
                         home = resident_home;
                     }

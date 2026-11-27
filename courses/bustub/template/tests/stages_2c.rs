@@ -98,7 +98,10 @@ fn s2c_01_creating_a_tree_formats_its_header_page_whatever_it_held() {
     bpm.write_page(header).get_data_mut().fill(0xFF); // a recycled page full of garbage
     let tree: Tree = BPlusTree::new("t", header, &bpm, GenericComparator::<8>, 4, 4);
     assert!(tree.is_empty(), "a new tree on a dirty page is still empty");
-    assert!(!tree.get_root_page_id().is_valid(), "creating a tree formats its header page whatever it held: expected `!tree.get_root_page_id().is_valid()`");
+    assert!(
+        !tree.get_root_page_id().is_valid(),
+        "creating a tree formats its header page whatever it held: expected `!tree.get_root_page_id().is_valid()`"
+    );
     assert!(insert(&tree, 1), "creating a tree formats its header page whatever it held: expected `insert(&tree, 1)`");
     // a second tree on another header page is independent
     let other = new_tree(&bpm, 4, 4);
@@ -181,7 +184,10 @@ fn s2c_02_the_tree_grows_taller_only_at_the_root_and_by_one_level_at_a_time() {
     let tree = new_tree(&bpm, 2, 3);
     let mut last = 0;
     for k in 0..300 {
-        assert!(insert(&tree, k * 13 % 301), "the tree grows taller only at the root and by one level at a time: expected `insert(&tree, k * 13 % 301)`");
+        assert!(
+            insert(&tree, k * 13 % 301),
+            "the tree grows taller only at the root and by one level at a time: expected `insert(&tree, k * 13 % 301)`"
+        );
         let d = tree.depth();
         assert!(d == last || d == last + 1, "inserting key {k} took the depth from {last} to {d}");
         last = d;
@@ -222,7 +228,10 @@ fn s2c_02_a_refused_duplicate_changes_nothing() {
     }
     let (depth, sizes) = (tree.depth(), tree.leaf_sizes());
     for k in (0..50).step_by(3) {
-        assert!(!tree.insert(&index_key(k), &rid_of(-1)), "a refused duplicate changes nothing: expected `!tree.insert(&index_key(k), &rid_of(-1))`");
+        assert!(
+            !tree.insert(&index_key(k), &rid_of(-1)),
+            "a refused duplicate changes nothing: expected `!tree.insert(&index_key(k), &rid_of(-1))`"
+        );
     }
     assert_eq!((tree.depth(), tree.leaf_sizes()), (depth, sizes), "a refused duplicate changes nothing");
     for k in 0..50 {
@@ -312,8 +321,14 @@ fn s2c_03_begin_at_starts_at_the_first_key_not_less_than_the_argument() {
 fn s2c_03_iterators_compare_by_position_and_the_end_is_reached_exactly_once() {
     let bpm = new_pool(30);
     let tree = filled(&bpm, 3, 3, &[1, 2, 3, 4, 5, 6, 7]);
-    assert!(tree.begin() == tree.begin(), "iterators compare by position and the end is reached exactly once: expected `tree.begin() == tree.begin()`");
-    assert!(tree.begin() != tree.end(), "iterators compare by position and the end is reached exactly once: expected `tree.begin() != tree.end()`");
+    assert!(
+        tree.begin() == tree.begin(),
+        "iterators compare by position and the end is reached exactly once: expected `tree.begin() == tree.begin()`"
+    );
+    assert!(
+        tree.begin() != tree.end(),
+        "iterators compare by position and the end is reached exactly once: expected `tree.begin() != tree.end()`"
+    );
     assert!(tree.begin_at(&index_key(4)) == { let mut it = tree.begin(); for _ in 0..3 { it.next(); } it }, "iterators compare by position and the end is reached exactly once: expected `tree.begin_at(&index_key(4)) == {{ let mut it = tree.begin(); for _ in 0..3 {{ it.next(); }} it }}`");
     let mut it = tree.begin();
     for _ in 0..7 {
@@ -419,14 +434,21 @@ fn s2c_04_removing_the_last_key_empties_the_tree_and_it_can_be_used_again() {
     assert!(tree.is_empty(), "removing the last key empties the tree and it can be used again: expected `tree.is_empty()`");
     assert_eq!(tree.get_root_page_id(), PageId::INVALID, "removing the last key empties the tree and it can be used again");
     assert_eq!((tree.depth(), tree.leaf_sizes()), (0, vec![]), "removing the last key empties the tree and it can be used again");
-    assert!(get(&tree, 2).is_empty(), "removing the last key empties the tree and it can be used again: expected `get(&tree, 2).is_empty()`");
+    assert!(
+        get(&tree, 2).is_empty(),
+        "removing the last key empties the tree and it can be used again: expected `get(&tree, 2).is_empty()`"
+    );
     assert!(insert(&tree, 9), "removing the last key empties the tree and it can be used again: expected `insert(&tree, 9)`");
     assert_eq!(keys_by_scan(&tree), vec![9], "removing the last key empties the tree and it can be used again");
 }
 
 #[test]
 fn s2c_04_removing_everything_in_any_order_keeps_every_rule_all_the_way_down() {
-    for (name, order) in [("ascending", (0..120).collect::<Vec<i64>>()), ("descending", (0..120).rev().collect()), ("scattered", (0..120).map(|i| (i * 53) % 120).collect())] {
+    for (name, order) in [
+        ("ascending", (0..120).collect::<Vec<i64>>()),
+        ("descending", (0..120).rev().collect()),
+        ("scattered", (0..120).map(|i| (i * 53) % 120).collect()),
+    ] {
         let bpm = new_pool(60);
         let tree = filled(&bpm, 4, 3, &(0..120).collect::<Vec<_>>());
         let mut live: BTreeSet<i64> = (0..120).collect();
@@ -449,7 +471,11 @@ fn s2c_04_the_tree_gets_shorter_when_its_keys_go() {
         remove(&tree, k);
     }
     assert_eq!(keys_by_scan(&tree), vec![198, 199], "the tree gets shorter when its keys go");
-    assert_eq!((tree.depth(), tree.leaf_sizes()), (1, vec![2]), "two keys fit in one leaf: the tree is back to a single root leaf (it was {tall} levels)");
+    assert_eq!(
+        (tree.depth(), tree.leaf_sizes()),
+        (1, vec![2]),
+        "two keys fit in one leaf: the tree is back to a single root leaf (it was {tall} levels)"
+    );
 }
 
 #[test]
@@ -461,7 +487,10 @@ fn s2c_04_pages_that_are_no_longer_part_of_the_tree_are_given_back() {
         remove(&tree, k);
     }
     let freed = disk.deletes.lock().unwrap().len();
-    assert!(freed >= peak_leaves, "the tree had {peak_leaves} leaves and is empty again, but only {freed} pages were deleted from the pool");
+    assert!(
+        freed >= peak_leaves,
+        "the tree had {peak_leaves} leaves and is empty again, but only {freed} pages were deleted from the pool"
+    );
 }
 
 proptest! {
@@ -498,7 +527,10 @@ fn s2c_05_an_insert_into_a_leaf_with_room_write_latches_only_that_leaf() {
     let firsts = leaf_first_keys(&tree);
     let roomy = tree.leaf_sizes().iter().position(|&s| (s as u32) + 1 < 4).expect("a leaf with room");
     let (r0, w0) = (tree.bpm.get_reads(), tree.bpm.get_writes());
-    assert!(insert(&tree, firsts[roomy] + 1), "an insert into a leaf with room write latches only that leaf: expected `insert(&tree, firsts[roomy] + 1)`");
+    assert!(
+        insert(&tree, firsts[roomy] + 1),
+        "an insert into a leaf with room write latches only that leaf: expected `insert(&tree, firsts[roomy] + 1)`"
+    );
     assert!(tree.bpm.get_reads() > r0, "the descent read-latches the path");
     assert_eq!(tree.bpm.get_writes() - w0, 1, "only the leaf is write-latched when it cannot split");
 }
@@ -533,7 +565,10 @@ fn s2c_05_an_insert_that_splits_holds_more_than_the_leaf() {
             splits += 1;
         }
     }
-    assert!(splits > 0 && tree.bpm.get_writes() > w0, "an insert that splits holds more than the leaf: expected `splits > 0 && tree.bpm.get_writes() > w0`");
+    assert!(
+        splits > 0 && tree.bpm.get_writes() > w0,
+        "an insert that splits holds more than the leaf: expected `splits > 0 && tree.bpm.get_writes() > w0`"
+    );
 }
 
 #[test]
@@ -575,7 +610,8 @@ fn s2c_05_threads_that_insert_remove_and_read_at_once_agree_with_their_models() 
         let bpm = new_pool(80);
         let tree = new_tree(&bpm, 3, 4);
         for k in 10_000..10_150 {
-            assert!(insert(&tree, k), "threads that insert remove and read at once agree with their models: expected `insert(&tree, k)`"); // stable keys the readers expect throughout
+            assert!(insert(&tree, k), "threads that insert remove and read at once agree with their models: expected `insert(&tree, k)`");
+            // stable keys the readers expect throughout
         }
         let models: Vec<BTreeSet<i64>> = thread::scope(|scope| {
             let writers: Vec<_> = (0..3i64)
@@ -634,7 +670,11 @@ fn s2c_05_a_scan_that_runs_while_writers_work_finishes_and_leaves_a_sound_tree()
                     // insert 200 keys, then remove them again: leaves split while the scan runs, then shrink and merge under it
                     for i in 0..400 {
                         let k = (i % 200) * 3 + 1 + t; // never a multiple of 3, and each writer has its own keys
-                        if i < 200 { insert(tree, k); } else { remove(tree, k); }
+                        if i < 200 {
+                            insert(tree, k);
+                        } else {
+                            remove(tree, k);
+                        }
                     }
                 });
             }
@@ -674,7 +714,8 @@ fn s2c_06_a_long_run_of_inserts_removes_scans_and_lookups_agrees_with_a_btreemap
                 _ => assert_eq!(get(&tree, k).len(), usize::from(live.contains(&k)), "({leaf_max},{internal_max}) step {step}: get {k}"),
             }
             if step % 500 == 0 {
-                check_shape(&tree, &live, leaf_max, internal_max, true).unwrap_or_else(|e| panic!("({leaf_max},{internal_max}) step {step}: {e}"));
+                check_shape(&tree, &live, leaf_max, internal_max, true)
+                    .unwrap_or_else(|e| panic!("({leaf_max},{internal_max}) step {step}: {e}"));
             }
         }
         check_shape(&tree, &live, leaf_max, internal_max, true).unwrap_or_else(|e| panic!("({leaf_max},{internal_max}) at the end: {e}"));
@@ -760,13 +801,21 @@ proptest! {
 #[test]
 fn s2c_c2_a_leaf_split_copies_the_separator_up_and_keeps_it_in_the_right_node() {
     let s = split_keys(&[1, 2, 3, 4], true);
-    assert_eq!((s.left, s.separator, s.right), (vec![1, 2], 3, vec![3, 4]), "s2c c2 a leaf split copies the separator up and keeps it in the right node");
+    assert_eq!(
+        (s.left, s.separator, s.right),
+        (vec![1, 2], 3, vec![3, 4]),
+        "s2c c2 a leaf split copies the separator up and keeps it in the right node"
+    );
 }
 
 #[test]
 fn s2c_c2_an_inner_split_moves_the_separator_up_and_out_of_both_nodes() {
     let s = split_keys(&[10, 20, 30, 40, 50], false);
-    assert_eq!((s.left, s.separator, s.right), (vec![10, 20, 30], 40, vec![50]), "s2c c2 an inner split moves the separator up and out of both nodes");
+    assert_eq!(
+        (s.left, s.separator, s.right),
+        (vec![10, 20, 30], 40, vec![50]),
+        "s2c c2 an inner split moves the separator up and out of both nodes"
+    );
 }
 
 #[test]
@@ -932,7 +981,11 @@ mod ch_2c_c5 {
 
     #[test]
     fn s2c_c5_borrowing_is_preferred_to_merging() {
-        assert_eq!(after_delete(1, 2, 4, Some(3), Some(2)), Action::BorrowLeft, "the left sibling has a key to spare, and merging would also fit");
+        assert_eq!(
+            after_delete(1, 2, 4, Some(3), Some(2)),
+            Action::BorrowLeft,
+            "the left sibling has a key to spare, and merging would also fit"
+        );
         assert_eq!(after_delete(1, 2, 4, Some(2), Some(3)), Action::BorrowRight, "this check");
     }
 

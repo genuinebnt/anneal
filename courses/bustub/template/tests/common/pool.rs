@@ -29,7 +29,12 @@ pub struct MemDisk {
 
 impl MemDisk {
     pub fn new() -> Arc<MemDisk> {
-        Arc::new(MemDisk { pages: Mutex::new(HashMap::new()), reads: AtomicUsize::new(0), writes: Mutex::new(Vec::new()), deletes: Mutex::new(Vec::new()) })
+        Arc::new(MemDisk {
+            pages: Mutex::new(HashMap::new()),
+            reads: AtomicUsize::new(0),
+            writes: Mutex::new(Vec::new()),
+            deletes: Mutex::new(Vec::new()),
+        })
     }
     pub fn reads(&self) -> usize {
         self.reads.load(Ordering::SeqCst)
@@ -118,7 +123,6 @@ pub fn pool_with(policy: Policy, frames: usize) -> (BufferPoolManager, Arc<MemDi
 pub fn pool(frames: usize) -> (BufferPoolManager, Arc<MemDisk>) {
     pool_with(Policy::Fifo, frames)
 }
-
 
 /// A `FifoReplacer` the test can also look at: the pool owns one handle, the test keeps the other.
 #[derive(Clone, Default)]

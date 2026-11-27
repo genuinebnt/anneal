@@ -338,7 +338,14 @@ impl<'c, 'a> Binder<'c, 'a> {
         let l = self.bind_subquery(left, &format!("{alias}.left"))?;
         let r = self.bind_subquery(right, &format!("{alias}.right"))?;
         let select_list_name = l.select_list_name.clone();
-        let table = BoundTableRef::SetOp { op, all, left: Box::new(l), right: Box::new(r), alias: alias.clone(), select_list_name: select_list_name.clone() };
+        let table = BoundTableRef::SetOp {
+            op,
+            all,
+            left: Box::new(l),
+            right: Box::new(r),
+            alias: alias.clone(),
+            select_list_name: select_list_name.clone(),
+        };
         let select_list = select_list_name
             .iter()
             .map(|n| BoundExpression::ColumnRef(std::iter::once(alias.clone()).chain(n.iter().cloned()).collect()))
@@ -352,7 +359,18 @@ impl<'c, 'a> Binder<'c, 'a> {
             None => BoundExpression::Invalid,
         };
         let sort = self.bind_sort(&query.order_by, &table)?;
-        Ok(SelectStatement { table, select_list, where_: BoundExpression::Invalid, group_by: vec![], having: BoundExpression::Invalid, limit_count, limit_offset, sort, ctes, is_distinct: false })
+        Ok(SelectStatement {
+            table,
+            select_list,
+            where_: BoundExpression::Invalid,
+            group_by: vec![],
+            having: BoundExpression::Invalid,
+            limit_count,
+            limit_offset,
+            sort,
+            ctes,
+            is_distinct: false,
+        })
     }
 
     fn bind_sort(&mut self, items: &[OrderItem], scope: &BoundTableRef) -> Result<Vec<BoundOrderBy>> {
@@ -420,7 +438,8 @@ impl<'c, 'a> Binder<'c, 'a> {
                 let left = self.bind_table_ref(left)?;
                 let right = self.bind_table_ref(right)?;
                 let on = on.as_ref().ok_or_else(|| exception("a join needs an ON condition"))?;
-                let mut join = BoundTableRef::Join { join_type, left: Box::new(left), right: Box::new(right), condition: BoundExpression::Invalid };
+                let mut join =
+                    BoundTableRef::Join { join_type, left: Box::new(left), right: Box::new(right), condition: BoundExpression::Invalid };
                 let condition = self.bind_expression(on, &join)?;
                 if let BoundTableRef::Join { condition: c, .. } = &mut join {
                     *c = condition;
@@ -440,7 +459,11 @@ impl<'c, 'a> Binder<'c, 'a> {
         match scope {
             BoundTableRef::Base { schema, .. } => {
                 let bound_name = scope.bound_table_name().unwrap();
-                Ok(schema.columns().iter().map(|c| BoundExpression::ColumnRef(vec![bound_name.to_string(), c.name().to_string()])).collect())
+                Ok(schema
+                    .columns()
+                    .iter()
+                    .map(|c| BoundExpression::ColumnRef(vec![bound_name.to_string(), c.name().to_string()]))
+                    .collect())
             }
             BoundTableRef::CrossProduct { left, right } | BoundTableRef::Join { left, right, .. } => {
                 let mut columns = self.get_all_columns(left)?;
@@ -523,7 +546,9 @@ impl<'c, 'a> Binder<'c, 'a> {
                 let arg = self.bind_expression_no_star(expr, scope)?;
                 Ok(BoundExpression::UnaryOp { op: op.clone(), arg: Box::new(arg) })
             }
-            Expr::Param(i) => Err(exception(format!("there is no value for parameter ${}: prepare the statement and execute it with values", i + 1))),
+            Expr::Param(i) => {
+                Err(exception(format!("there is no value for parameter ${}: prepare the statement and execute it with values", i + 1)))
+            }
             Expr::Case { branches, otherwise } => {
                 let _ = (branches, otherwise);
                 Err(not_implemented("CASE is not supported yet"))
@@ -556,7 +581,13 @@ impl<'c, 'a> Binder<'c, 'a> {
         }
     }
 
-    fn bind_window_expression(&mut self, func_name: String, args: Vec<BoundExpression>, spec: &WindowSpec, scope: &BoundTableRef) -> Result<BoundExpression> {
+    fn bind_window_expression(
+        &mut self,
+        func_name: String,
+        args: Vec<BoundExpression>,
+        spec: &WindowSpec,
+        scope: &BoundTableRef,
+    ) -> Result<BoundExpression> {
         let mut partition_by = vec![];
         for p in &spec.partition_by {
             partition_by.push(self.bind_expression_no_star(p, scope)?);
@@ -618,7 +649,9 @@ impl<'c, 'a> Binder<'c, 'a> {
             }
             BoundTableRef::Subquery(s) => Self::resolve_column_ref_from_subquery(&s.select_list_name, &s.alias, col_name),
             BoundTableRef::Cte { alias, select_list_name, .. } => Self::resolve_column_ref_from_subquery(select_list_name, alias, col_name),
-            BoundTableRef::SetOp { alias, select_list_name, .. } => Self::resolve_column_ref_from_subquery(select_list_name, alias, col_name),
+            BoundTableRef::SetOp { alias, select_list_name, .. } => {
+                Self::resolve_column_ref_from_subquery(select_list_name, alias, col_name)
+            }
             _ => Err(exception("unsupported TableReferenceType")),
         }
     }

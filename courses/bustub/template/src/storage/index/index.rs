@@ -79,7 +79,10 @@ pub fn unique_violation(index_name: &str) -> Exception {
 
 /// The error of a statement that would store a NULL in column `column` of the primary key of `table`.
 pub fn not_null_violation(column: &str, table: &str) -> Exception {
-    Exception::new(ExceptionType::Invalid, format!("null value in column \"{column}\" of relation \"{table}\" violates not-null constraint"))
+    Exception::new(
+        ExceptionType::Invalid,
+        format!("null value in column \"{column}\" of relation \"{table}\" violates not-null constraint"),
+    )
 }
 
 /// An index maps each non-NULL key to at most one rid: keys are unique, and a key with a NULL in it is not stored.

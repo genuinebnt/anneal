@@ -65,7 +65,13 @@ struct TestDisk {
 
 impl TestDisk {
     fn new() -> TestDisk {
-        TestDisk { inner: DiskManagerUnlimitedMemory::new(), log: Mutex::new(Vec::new()), delay: Duration::ZERO, fail_page: None, panic_page: None }
+        TestDisk {
+            inner: DiskManagerUnlimitedMemory::new(),
+            log: Mutex::new(Vec::new()),
+            delay: Duration::ZERO,
+            fail_page: None,
+            panic_page: None,
+        }
     }
     fn slow(ms: u64) -> TestDisk {
         TestDisk { delay: Duration::from_millis(ms), ..TestDisk::new() }
@@ -130,7 +136,11 @@ fn s1b_01_get_waits_until_something_is_put() {
     };
     assert!(rx.recv_timeout(SHORT).is_err(), "get returned from an empty channel instead of waiting");
     ch.put(42);
-    assert_eq!(rx.recv_timeout(WAIT).expect("get never noticed the put: a waiting getter must be woken"), 42, "get waits until something is put");
+    assert_eq!(
+        rx.recv_timeout(WAIT).expect("get never noticed the put: a waiting getter must be woken"),
+        42,
+        "get waits until something is put"
+    );
     getter.join().unwrap();
 }
 
@@ -191,7 +201,8 @@ fn s1b_01_every_element_reaches_exactly_one_of_many_consumers() {
     for _ in 0..4 {
         ch.put(None); // one stop signal per consumer
     }
-    let mut all: Vec<u32> = within("the consumers should all stop", move || consumers.into_iter().flat_map(|c| c.join().unwrap()).collect());
+    let mut all: Vec<u32> =
+        within("the consumers should all stop", move || consumers.into_iter().flat_map(|c| c.join().unwrap()).collect());
     all.sort();
     let mut expected: Vec<u32> = (0..4u32).flat_map(|p| (0..500).map(move |i| p * 1000 + i)).collect();
     expected.sort();
@@ -235,7 +246,11 @@ fn s1b_02_get_waits_for_a_promise_that_is_set_later_on_another_thread() {
     let waiter = thread::spawn(move || tx.send(f.get()).unwrap());
     assert!(rx.recv_timeout(SHORT).is_err(), "get returned before anything was set");
     p.set("hello".to_string());
-    assert_eq!(rx.recv_timeout(WAIT).expect("a set value must wake the waiting future"), Ok("hello".to_string()), "get waits for a promise that is set later on another thread");
+    assert_eq!(
+        rx.recv_timeout(WAIT).expect("a set value must wake the waiting future"),
+        Ok("hello".to_string()),
+        "get waits for a promise that is set later on another thread"
+    );
     waiter.join().unwrap();
 }
 
@@ -254,7 +269,11 @@ fn s1b_02_dropping_the_promise_wakes_a_future_that_is_already_waiting() {
     let waiter = thread::spawn(move || tx.send(f.get()).unwrap());
     assert!(rx.recv_timeout(SHORT).is_err(), "get returned before the promise was dropped");
     drop(p);
-    assert_eq!(rx.recv_timeout(WAIT).expect("a dropped promise must wake the waiting future, or the waiter hangs forever"), Err(BrokenPromise), "dropping the promise wakes a future that is already waiting");
+    assert_eq!(
+        rx.recv_timeout(WAIT).expect("a dropped promise must wake the waiting future, or the waiter hangs forever"),
+        Err(BrokenPromise),
+        "dropping the promise wakes a future that is already waiting"
+    );
     waiter.join().unwrap();
 }
 
@@ -505,7 +524,9 @@ fn s1b_05_several_readers_can_hold_the_latch_at_the_same_time() {
             })
         })
         .collect();
-    within("four readers meeting inside the read latch: readers must not exclude each other", move || handles.into_iter().for_each(|h| h.join().unwrap()));
+    within("four readers meeting inside the read latch: readers must not exclude each other", move || {
+        handles.into_iter().for_each(|h| h.join().unwrap())
+    });
 }
 
 #[test]
@@ -519,7 +540,11 @@ fn s1b_05_a_writer_keeps_readers_out_until_it_lets_go() {
     };
     assert!(rx.recv_timeout(SHORT).is_err(), "a reader got in while a writer held the latch");
     drop(guard);
-    assert_eq!(rx.recv_timeout(WAIT).expect("the reader must be let in when the writer lets go"), 0, "a writer keeps readers out until it lets go");
+    assert_eq!(
+        rx.recv_timeout(WAIT).expect("the reader must be let in when the writer lets go"),
+        0,
+        "a writer keeps readers out until it lets go"
+    );
     reader.join().unwrap();
 }
 
@@ -562,7 +587,10 @@ fn s1b_06_requests_for_different_pages_overlap_in_time() {
         assert!(wait(f).unwrap().is_ok(), "requests for different pages overlap in time: expected `wait(f).unwrap().is_ok()`");
     }
     let took = start.elapsed();
-    assert!(took < Duration::from_millis(8 * 100 * 3 / 4), "8 writes of 100 ms to different pages on 4 workers took {took:?}: one worker would take 800 ms, they should overlap");
+    assert!(
+        took < Duration::from_millis(8 * 100 * 3 / 4),
+        "8 writes of 100 ms to different pages on 4 workers took {took:?}: one worker would take 800 ms, they should overlap"
+    );
 }
 
 #[test]
@@ -619,7 +647,10 @@ fn s1b_07_many_threads_scheduling_at_once_each_get_their_own_answers() {
                     let (r, rf) = DiskRequest::read(PageId(page));
                     sched.schedule(vec![w]);
                     sched.schedule(vec![r]);
-                    assert!(wait(wf).unwrap().is_ok(), "many threads scheduling at once each get their own answers: expected `wait(wf).unwrap().is_ok()`");
+                    assert!(
+                        wait(wf).unwrap().is_ok(),
+                        "many threads scheduling at once each get their own answers: expected `wait(wf).unwrap().is_ok()`"
+                    );
                     let got = wait(rf).unwrap().unwrap();
                     assert!(got.iter().all(|&b| b == (page % 251) as u8), "thread {t} read the wrong bytes for page {page}");
                 }
@@ -694,20 +725,32 @@ fn s1b_c1_a_full_bucket_lets_a_burst_through_and_then_refuses() {
 fn s1b_c1_tokens_come_back_with_time_continuously() {
     let (d, clock, _inner) = throttled(2, 1);
     d.write_page(PageId(0), &page(1)).unwrap();
-    assert!(d.write_page(PageId(1), &page(1)).is_err(), "s1b c1 tokens come back with time continuously: expected `d.write_page(PageId(1), &page(1)).is_err()`");
+    assert!(
+        d.write_page(PageId(1), &page(1)).is_err(),
+        "s1b c1 tokens come back with time continuously: expected `d.write_page(PageId(1), &page(1)).is_err()`"
+    );
     clock.advance(Duration::from_millis(250));
     assert!(d.write_page(PageId(1), &page(1)).is_err(), "a quarter of a second at 2 per second is half a token");
     clock.advance(Duration::from_millis(250));
     assert!(d.write_page(PageId(1), &page(1)).is_ok(), "two quarters make a whole token: tokens add up between calls");
-    assert!(d.write_page(PageId(2), &page(1)).is_err(), "s1b c1 tokens come back with time continuously: expected `d.write_page(PageId(2), &page(1)).is_err()`");
+    assert!(
+        d.write_page(PageId(2), &page(1)).is_err(),
+        "s1b c1 tokens come back with time continuously: expected `d.write_page(PageId(2), &page(1)).is_err()`"
+    );
 }
 
 #[test]
 fn s1b_c1_the_bucket_never_holds_more_than_the_burst() {
     let (d, clock, _inner) = throttled(10, 2);
     clock.advance(Duration::from_secs(100));
-    assert!(d.write_page(PageId(0), &page(1)).is_ok(), "s1b c1 the bucket never holds more than the burst: expected `d.write_page(PageId(0), &page(1)).is_ok()`");
-    assert!(d.write_page(PageId(1), &page(1)).is_ok(), "s1b c1 the bucket never holds more than the burst: expected `d.write_page(PageId(1), &page(1)).is_ok()`");
+    assert!(
+        d.write_page(PageId(0), &page(1)).is_ok(),
+        "s1b c1 the bucket never holds more than the burst: expected `d.write_page(PageId(0), &page(1)).is_ok()`"
+    );
+    assert!(
+        d.write_page(PageId(1), &page(1)).is_ok(),
+        "s1b c1 the bucket never holds more than the burst: expected `d.write_page(PageId(1), &page(1)).is_ok()`"
+    );
     assert!(d.write_page(PageId(2), &page(1)).is_err(), "100 seconds of idleness do not buy more than the burst of 2");
 }
 
@@ -715,7 +758,10 @@ fn s1b_c1_the_bucket_never_holds_more_than_the_burst() {
 fn s1b_c1_reads_and_deletes_are_never_limited() {
     let (d, _clock, _inner) = throttled(1, 1);
     d.write_page(PageId(0), &page(7)).unwrap();
-    assert!(d.write_page(PageId(1), &page(8)).is_err(), "s1b c1 reads and deletes are never limited: expected `d.write_page(PageId(1), &page(8)).is_err()`");
+    assert!(
+        d.write_page(PageId(1), &page(8)).is_err(),
+        "s1b c1 reads and deletes are never limited: expected `d.write_page(PageId(1), &page(8)).is_err()`"
+    );
     let mut buf = [0u8; PS];
     for _ in 0..100 {
         d.read_page(PageId(0), &mut buf).unwrap();
@@ -1050,9 +1096,12 @@ mod ch_1b_c5 {
         let mut pool = JobPool::new(2);
         pool.shutdown();
         let r = Arc::clone(&ran);
-        assert!(!pool.submit(move || {
-            r.fetch_add(1, Ordering::SeqCst);
-        }), "this check: expected `!pool.submit(move || {{ r.fetch_add(1, Ordering::SeqCst); }})`");
+        assert!(
+            !pool.submit(move || {
+                r.fetch_add(1, Ordering::SeqCst);
+            }),
+            "this check: expected `!pool.submit(move || {{ r.fetch_add(1, Ordering::SeqCst); }})`"
+        );
         assert_eq!(ran.load(Ordering::SeqCst), 0, "this check");
     }
 

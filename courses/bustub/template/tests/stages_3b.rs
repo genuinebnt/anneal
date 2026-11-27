@@ -45,16 +45,24 @@ fn col() -> impl Strategy<Value = Col> {
 }
 
 fn schema_of(cols: &[Col]) -> Schema {
-    Schema::new(cols.iter().enumerate().map(|(i, c)| match c {
-        Col::Fixed(t) => Column::new(&format!("c{i}"), *t),
-        Col::Text(n) => Column::new_varchar(&format!("c{i}"), *n),
-    }).collect())
+    Schema::new(
+        cols.iter()
+            .enumerate()
+            .map(|(i, c)| match c {
+                Col::Fixed(t) => Column::new(&format!("c{i}"), *t),
+                Col::Text(n) => Column::new_varchar(&format!("c{i}"), *n),
+            })
+            .collect(),
+    )
 }
 
 /// A value for a column from some random bits; about one in six is a NULL.
 fn value_for(c: &Col, bits: u64) -> Value {
     if bits % 6 == 0 {
-        return match c { Col::Fixed(t) => Value::null(*t), Col::Text(_) => Value::null(Varchar) };
+        return match c {
+            Col::Fixed(t) => Value::null(*t),
+            Col::Text(_) => Value::null(Varchar),
+        };
     }
     match c {
         Col::Fixed(Boolean) => Value::boolean(bits >> 8 & 1 == 1),
@@ -99,7 +107,10 @@ fn s3b_01_a_column_has_its_types_size_or_its_declared_length() {
 fn s3b_01_wrong_constructors_are_bugs_and_panic() {
     assert!(std::panic::catch_unwind(|| Column::new("name", Varchar)).is_err(), "a varchar needs a length");
     assert!(std::panic::catch_unwind(|| Column::new("x", Invalid)).is_err(), "the invalid type is not a column type");
-    assert!(std::panic::catch_unwind(|| Schema::new(vec![Column::new("a", Integer)]).col_idx("nope")).is_err(), "a missing column by name is a bug");
+    assert!(
+        std::panic::catch_unwind(|| Schema::new(vec![Column::new("a", Integer)]).col_idx("nope")).is_err(),
+        "a missing column by name is a bug"
+    );
 }
 
 #[test]
@@ -109,9 +120,17 @@ fn s3b_01_columns_and_schemas_print_like_bustub() {
     assert_eq!(Column::new("c", BigInt).to_string(false), "Column[c, BIGINT, Offset:0, Length:8]", "columns and schemas print like bustub");
     let s = Schema::new(vec![Column::new("a", Integer), Column::new_varchar("b", 20)]);
     assert_eq!(s.to_string(true), "(a:INTEGER, b:VARCHAR(20))", "columns and schemas print like bustub");
-    assert_eq!(s.to_string(false), "Schema[NumColumns:2, IsInlined:0, Length:8] :: (Column[a, INTEGER, Offset:0, Length:4], Column[b, VARCHAR, Offset:4, Length:20])", "columns and schemas print like bustub");
+    assert_eq!(
+        s.to_string(false),
+        "Schema[NumColumns:2, IsInlined:0, Length:8] :: (Column[a, INTEGER, Offset:0, Length:4], Column[b, VARCHAR, Offset:4, Length:20])",
+        "columns and schemas print like bustub"
+    );
     let e = Schema::new(vec![]);
-    assert_eq!((e.column_count(), e.inlined_storage_size(), e.is_inlined(), e.to_string(true).as_str()), (0, 0, true, "()"), "columns and schemas print like bustub");
+    assert_eq!(
+        (e.column_count(), e.inlined_storage_size(), e.is_inlined(), e.to_string(true).as_str()),
+        (0, 0, true, "()"),
+        "columns and schemas print like bustub"
+    );
 }
 
 proptest! {
@@ -221,7 +240,10 @@ proptest! {
 fn s3b_02_a_tuple_needs_one_value_per_column_of_the_right_type() {
     let s = Schema::new(vec![Column::new("a", Integer), Column::new_varchar("b", 10)]);
     assert!(std::panic::catch_unwind(|| Tuple::new(&[Value::integer(1)], &s)).is_err(), "too few values");
-    assert!(std::panic::catch_unwind(|| Tuple::new(&[Value::integer(1), Value::varchar("x"), Value::integer(2)], &s)).is_err(), "too many values");
+    assert!(
+        std::panic::catch_unwind(|| Tuple::new(&[Value::integer(1), Value::varchar("x"), Value::integer(2)], &s)).is_err(),
+        "too many values"
+    );
     assert!(std::panic::catch_unwind(|| Tuple::new(&[Value::varchar("x"), Value::integer(1)], &s)).is_err(), "values of the wrong types");
 }
 
@@ -229,13 +251,23 @@ fn s3b_02_a_tuple_needs_one_value_per_column_of_the_right_type() {
 fn s3b_02_tuples_print_and_can_be_made_from_bytes() {
     let s = Schema::new(vec![Column::new("a", Integer), Column::new_varchar("b", 10), Column::new("c", Decimal)]);
     let t = Tuple::new(&[Value::integer(4), Value::null(Varchar), Value::decimal(1.5)], &s);
-    assert!(!t.is_null(&s, 0) && t.is_null(&s, 1), "tuples print and can be made from bytes: expected `!t.is_null(&s, 0) && t.is_null(&s, 1)`");
+    assert!(
+        !t.is_null(&s, 0) && t.is_null(&s, 1),
+        "tuples print and can be made from bytes: expected `!t.is_null(&s, 0) && t.is_null(&s, 1)`"
+    );
     assert_eq!(t.to_string(&s), "(4, <NULL>, 1.500000)", "tuples print and can be made from bytes");
-    assert_eq!(Tuple::new(&[Value::integer(-1), Value::varchar("x y"), Value::decimal(0.0)], &s).to_string(&s), "(-1, x y, 0.000000)", "tuples print and can be made from bytes");
+    assert_eq!(
+        Tuple::new(&[Value::integer(-1), Value::varchar("x y"), Value::decimal(0.0)], &s).to_string(&s),
+        "(-1, x y, 0.000000)",
+        "tuples print and can be made from bytes"
+    );
     let copy = Tuple::from_bytes(Rid::new(PageId(3), 4), t.data());
     assert_eq!((copy.get_rid(), copy.data()), (Rid::new(PageId(3), 4), t.data()), "tuples print and can be made from bytes");
     assert_eq!(copy.to_string(&s), t.to_string(&s), "tuples print and can be made from bytes");
-    assert!(!Tuple::empty().get_rid().page_id().is_valid(), "tuples print and can be made from bytes: expected `!Tuple::empty().get_rid().page_id().is_valid()`");
+    assert!(
+        !Tuple::empty().get_rid().page_id().is_valid(),
+        "tuples print and can be made from bytes: expected `!Tuple::empty().get_rid().page_id().is_valid()`"
+    );
 }
 
 // ---- 3b-03 · A table page: inserting ---------------------------------------------------------------------------------------
@@ -282,14 +314,22 @@ fn s3b_03_a_tuple_larger_than_the_page_is_refused_and_the_page_is_unchanged() {
     page.init();
     page.insert_tuple(&meta(false), &blob(1, 100)).unwrap();
     assert!(page.get_next_tuple_offset(&meta(false), &blob(2, BUSTUB_PAGE_SIZE)).is_none(), "a tuple larger than the page is refused and the page is unchanged: expected `page.get_next_tuple_offset(&meta(false), &blob(2, BUSTUB_PAGE_SIZE)).is_none()`");
-    assert_eq!(page.insert_tuple(&meta(false), &blob(2, BUSTUB_PAGE_SIZE)), None, "a tuple larger than the page is refused and the page is unchanged");
+    assert_eq!(
+        page.insert_tuple(&meta(false), &blob(2, BUSTUB_PAGE_SIZE)),
+        None,
+        "a tuple larger than the page is refused and the page is unchanged"
+    );
     assert_eq!(page.get_num_tuples(), 1, "a tuple larger than the page is refused and the page is unchanged");
     // the biggest tuple an empty page can take is almost the whole page (the header and one slot are the only overhead)
     let mut other = [0u8; BUSTUB_PAGE_SIZE];
     let mut empty = TablePage::new(&mut other[..]);
     empty.init();
-    let biggest = (BUSTUB_PAGE_SIZE - 200..BUSTUB_PAGE_SIZE).rev().find(|&len| empty.get_next_tuple_offset(&meta(false), &blob(0, len)).is_some());
-    assert!(biggest.is_some_and(|b| b >= BUSTUB_PAGE_SIZE - 100), "an empty page should take a tuple of nearly {BUSTUB_PAGE_SIZE} bytes; the largest found was {biggest:?}");
+    let biggest =
+        (BUSTUB_PAGE_SIZE - 200..BUSTUB_PAGE_SIZE).rev().find(|&len| empty.get_next_tuple_offset(&meta(false), &blob(0, len)).is_some());
+    assert!(
+        biggest.is_some_and(|b| b >= BUSTUB_PAGE_SIZE - 100),
+        "an empty page should take a tuple of nearly {BUSTUB_PAGE_SIZE} bytes; the largest found was {biggest:?}"
+    );
 }
 
 proptest! {
@@ -434,7 +474,10 @@ fn s3b_04_marking_deleted_counts_once_and_keeps_the_bytes() {
     page.update_tuple_meta(&meta(true), rid).unwrap();
     assert_eq!(page.get_num_deleted_tuples(), 1, "a tuple is counted once however often it is marked");
     let (m, t) = page.get_tuple(rid).unwrap();
-    assert!(m.is_deleted && t.data() == &[7u8; 30][..], "marking deleted counts once and keeps the bytes: expected `m.is_deleted && t.data() == &[7u8; 30][..]`");
+    assert!(
+        m.is_deleted && t.data() == &[7u8; 30][..],
+        "marking deleted counts once and keeps the bytes: expected `m.is_deleted && t.data() == &[7u8; 30][..]`"
+    );
 }
 
 #[test]
@@ -467,7 +510,11 @@ fn s3b_04_a_page_is_nothing_but_its_bytes() {
     assert_eq!((page.get_num_tuples(), page.get_next_page_id()), (30, Some(PageId(3))), "a page is nothing but its bytes");
     for i in 0..30u8 {
         let (m, t) = page.get_tuple(Rid::new(PageId(0), i as u32)).unwrap();
-        assert_eq!((m.ts, m.is_deleted, t.data()), (i as i64, i % 4 == 0, &vec![i; 20 + i as usize][..]), "a page is nothing but its bytes");
+        assert_eq!(
+            (m.ts, m.is_deleted, t.data()),
+            (i as i64, i % 4 == 0, &vec![i; 20 + i as usize][..]),
+            "a page is nothing but its bytes"
+        );
     }
 }
 
@@ -573,7 +620,17 @@ mod ch_3b_c1 {
 
     #[test]
     fn s3b_c1_rows_round_trip_including_more_than_eight_columns() {
-        let row: Vec<Option<Cell>> = (0..11).map(|n| if n % 3 == 0 { None } else if n % 2 == 0 { t("x") } else { i(n) }).collect();
+        let row: Vec<Option<Cell>> = (0..11)
+            .map(|n| {
+                if n % 3 == 0 {
+                    None
+                } else if n % 2 == 0 {
+                    t("x")
+                } else {
+                    i(n)
+                }
+            })
+            .collect();
         let types: Vec<Ty> = row.iter().enumerate().map(|(n, _)| if n % 2 == 0 { Ty::Text } else { Ty::Int }).collect();
         assert_eq!(decode_row(&encode_row(&row), &types), Some(row), "this check");
     }

@@ -8,9 +8,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::catalog::catalog::TableOid;
 use crate::common::rid::Rid;
 use crate::execution::expressions::abstract_expression::ExprRef;
-use crate::catalog::catalog::TableOid;
 use crate::storage::table::tuple::Tuple;
 
 pub type TxnId = i64;

@@ -141,7 +141,6 @@ impl BufferPoolManager {
             return Some(frame);
         }
         let frame = match inner.free_frames.pop() {
-            Some(frame) => frame,
             // @begin 1f-02
             None => {
                 let frame = inner.replacer.evict()?;
@@ -155,6 +154,7 @@ impl BufferPoolManager {
             }
             //~ None => return None, // TODO(1f-02): no free frame: evict an unpinned page, writing it back first if it is dirty
             // @end
+            Some(frame) => frame,
         };
         self.load(page_id, frame);
         inner.page_table.insert(page_id, frame);

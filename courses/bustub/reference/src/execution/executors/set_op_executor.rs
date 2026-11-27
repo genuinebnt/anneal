@@ -63,10 +63,6 @@ impl<'e> SetOpExecutor<'e> {
     fn compute(&self, left_rows: Vec<Tuple>, right_rows: Vec<Tuple>) -> Vec<Tuple> {
         let (ls, rs) = (self.left.output_schema(), self.right.output_schema());
         match (self.op, self.all) {
-            // @begin 3j-04
-            (SetOperator::Union, true) => left_rows.into_iter().chain(right_rows).collect(),
-            //~ (SetOperator::Union, true) => todo!("3j-04: every row of the left side, then every row of the right side"),
-            // @end
             // @begin 3j-05
             (SetOperator::Union, false) => {
                 let mut seen = HashSet::new();
@@ -123,7 +119,11 @@ impl<'e> SetOpExecutor<'e> {
                 }
                 out
             }
-            //~ _ => todo!("3j-05: UNION without ALL (every distinct row once), INTERSECT [ALL] and EXCEPT [ALL] by counting rows"),
+            //~ (SetOperator::Union, false) | (SetOperator::Intersect, _) | (SetOperator::Except, _) => todo!("3j-05: UNION without ALL (every distinct row once), INTERSECT [ALL] and EXCEPT [ALL] by counting rows"),
+            // @end
+            // @begin 3j-04
+            (SetOperator::Union, true) => left_rows.into_iter().chain(right_rows).collect(),
+            //~ (SetOperator::Union, true) => todo!("3j-04: every row of the left side, then every row of the right side"),
             // @end
         }
     }
@@ -137,11 +137,7 @@ impl Executor for SetOpExecutor<'_> {
         let schema = self.plan.output_schema.clone();
         let (ls, _) = (self.left.output_schema().clone(), 0);
         // the result is written in this node's own schema (the sides may declare different string lengths)
-        self.rows = self
-            .compute(left_rows, right_rows)
-            .into_iter()
-            .map(|t| Tuple::new(&values_of(&t, &ls), &schema))
-            .collect();
+        self.rows = self.compute(left_rows, right_rows).into_iter().map(|t| Tuple::new(&values_of(&t, &ls), &schema)).collect();
         Ok(())
         //~ todo!("3j-04: read both children completely, compute the result (compute), and keep it as tuples of this node's schema")
         // @end

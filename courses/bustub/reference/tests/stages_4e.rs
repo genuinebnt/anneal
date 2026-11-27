@@ -54,7 +54,11 @@ fn s4e_01_a_statement_outside_a_transaction_is_visible_to_other_sessions_at_once
 fn s4e_01_several_statements_in_one_text_run_in_order_and_each_returns_its_rows() {
     let db = db();
     let mut a = Session::new(&db);
-    assert_eq!(exec(&mut a, "insert into t values (4, 40); select id from t where id > 2 order by id;"), ["1", "3", "4"], "the insert's count, then the select's rows");
+    assert_eq!(
+        exec(&mut a, "insert into t values (4, 40); select id from t where id > 2 order by id;"),
+        ["1", "3", "4"],
+        "the insert's count, then the select's rows"
+    );
 }
 
 #[test]
@@ -63,7 +67,11 @@ fn s4e_01_a_statement_that_fails_halfway_changes_nothing() {
     let mut a = Session::new(&db);
     // id = 1 is updated first; id = 2 divides by zero
     assert_eq!(fail(&mut a, "update t set v = v / (id - 2)").kind, ExceptionType::DivideByZero, "the error comes out as it is");
-    assert_eq!(exec(&mut a, "select id, v from t order by id"), ["1 10", "2 20", "3 30"], "no row was changed, not even the ones before the error");
+    assert_eq!(
+        exec(&mut a, "select id, v from t order by id"),
+        ["1 10", "2 20", "3 30"],
+        "no row was changed, not even the ones before the error"
+    );
     assert!(quiet(&db), "and the transaction that failed was not left running");
 }
 
@@ -80,8 +88,15 @@ fn s4e_01_the_session_keeps_working_after_an_error() {
 fn s4e_01_an_error_stops_the_text_but_keeps_what_ran_before_it() {
     let db = db();
     let mut a = Session::new(&db);
-    assert!(a.execute("update t set v = 0 where id = 1; select 1 / 0; update t set v = 0 where id = 3").is_err(), "the second statement fails");
-    assert_eq!(exec(&mut a, "select id, v from t order by id"), ["1 0", "2 20", "3 30"], "the first statement committed on its own, the third never ran");
+    assert!(
+        a.execute("update t set v = 0 where id = 1; select 1 / 0; update t set v = 0 where id = 3").is_err(),
+        "the second statement fails"
+    );
+    assert_eq!(
+        exec(&mut a, "select id, v from t order by id"),
+        ["1 0", "2 20", "3 30"],
+        "the first statement committed on its own, the third never ran"
+    );
 }
 
 #[test]
@@ -174,7 +189,11 @@ fn s4e_02_transactions_of_different_sessions_do_not_interfere() {
     exec(&mut b, "update t set v = 222 where id = 2");
     exec(&mut a, "commit");
     exec(&mut b, "rollback");
-    assert_eq!(exec(&mut a, "select id, v from t order by id"), ["1 111", "2 20", "3 30"], "a's commit stands, b's rollback removed only b's work");
+    assert_eq!(
+        exec(&mut a, "select id, v from t order by id"),
+        ["1 111", "2 20", "3 30"],
+        "a's commit stands, b's rollback removed only b's work"
+    );
 }
 
 // ---- 4e-03 · isolation levels -----------------------------------------------------------------------------------------------
@@ -220,7 +239,11 @@ fn s4e_03_the_default_level_is_per_session_and_applies_to_later_transactions() {
 fn s4e_03_levels_the_engine_does_not_have_are_refused_and_open_nothing() {
     let db = db();
     let mut a = Session::new(&db);
-    assert_eq!(fail(&mut a, "begin isolation level read committed").kind, ExceptionType::NotImplemented, "read committed is not a level of this engine");
+    assert_eq!(
+        fail(&mut a, "begin isolation level read committed").kind,
+        ExceptionType::NotImplemented,
+        "read committed is not a level of this engine"
+    );
     assert!(!a.in_transaction(), "a refused BEGIN opens no transaction");
     assert!(a.execute("begin isolation level banana").is_err(), "an unknown level");
     assert!(a.execute("begin isolation").is_err(), "a level without a name is a syntax error");
@@ -284,7 +307,11 @@ fn s4e_04_commit_of_a_failed_transaction_is_a_rollback_and_everything_in_it_is_g
     assert!(a.execute("select nope from t").is_err(), "an error");
     assert_eq!(exec(&mut a, "commit"), ["ROLLBACK"], "COMMIT answers with the tag of what really happened");
     assert!(!a.is_failed() && !a.in_transaction(), "the session is idle again");
-    assert_eq!(exec(&mut b, "select id, v from t order by id"), ["1 10", "2 20", "3 30"], "the statements that had succeeded were undone too");
+    assert_eq!(
+        exec(&mut b, "select id, v from t order by id"),
+        ["1 10", "2 20", "3 30"],
+        "the statements that had succeeded were undone too"
+    );
 }
 
 #[test]
@@ -426,7 +453,10 @@ fn s4e_05_a_bank_of_sessions_loses_no_money_and_conflicts_really_happen() {
     });
     let mut s = Session::new(&db);
     assert_eq!(exec(&mut s, "select sum(bal) from acct"), ["400"], "the total never changes: a transfer is all or nothing");
-    assert!(conflicts.load(Ordering::SeqCst) > 0, "four sessions on four accounts must have conflicted at least once, or the test proves nothing");
+    assert!(
+        conflicts.load(Ordering::SeqCst) > 0,
+        "four sessions on four accounts must have conflicted at least once, or the test proves nothing"
+    );
     assert!(quiet(&db), "no transaction is left running");
 }
 
@@ -570,10 +600,22 @@ mod ch_4e_c1 {
     #[test]
     fn s4e_c1_only_conflicts_are_retryable() {
         assert!(is_retryable(&conflict()), "a write conflict");
-        assert!(is_retryable(&Exception::new(ExceptionType::Execution, "could not commit: the transaction conflicts with a concurrent one")), "a refused commit");
-        assert!(!is_retryable(&Exception::new(ExceptionType::Invalid, "syntax error at or near selec")), "a syntax error never gets better");
+        assert!(
+            is_retryable(&Exception::new(ExceptionType::Execution, "could not commit: the transaction conflicts with a concurrent one")),
+            "a refused commit"
+        );
+        assert!(
+            !is_retryable(&Exception::new(ExceptionType::Invalid, "syntax error at or near selec")),
+            "a syntax error never gets better"
+        );
         assert!(!is_retryable(&Exception::new(ExceptionType::DivideByZero, "Division by zero")), "nor does a division by zero");
-        assert!(!is_retryable(&Exception::new(ExceptionType::Execution, "current transaction is aborted, commands ignored until end of transaction block")), "an Execution error that is not about a conflict");
+        assert!(
+            !is_retryable(&Exception::new(
+                ExceptionType::Execution,
+                "current transaction is aborted, commands ignored until end of transaction block"
+            )),
+            "an Execution error that is not about a conflict"
+        );
     }
 
     #[test]
@@ -582,7 +624,11 @@ mod ch_4e_c1 {
         let mut calls = vec![];
         let r = run_with_retry(5, |a| {
             calls.push(a);
-            if a < 3 { Err(conflict()) } else { Ok(a * 10) }
+            if a < 3 {
+                Err(conflict())
+            } else {
+                Ok(a * 10)
+            }
         });
         assert_eq!(r.unwrap(), (30, 3), "two conflicts, then success");
         assert_eq!(calls, [1, 2, 3], "attempts are numbered from 1");
@@ -641,16 +687,40 @@ mod ch_4e_c2 {
 
     #[test]
     fn s4e_c2_a_semicolon_in_a_string_or_identifier_is_not_a_boundary() {
-        assert_eq!(split_statements("insert into t values ('a;b'); select 1"), ["insert into t values ('a;b')", "select 1"], "inside a string");
-        assert_eq!(split_statements("select \"we;ird\" from t; select 2"), ["select \"we;ird\" from t", "select 2"], "inside a quoted identifier");
-        assert_eq!(split_statements("select 'it''s; fine'; select 2"), ["select 'it''s; fine'", "select 2"], "a doubled quote does not end the string");
+        assert_eq!(
+            split_statements("insert into t values ('a;b'); select 1"),
+            ["insert into t values ('a;b')", "select 1"],
+            "inside a string"
+        );
+        assert_eq!(
+            split_statements("select \"we;ird\" from t; select 2"),
+            ["select \"we;ird\" from t", "select 2"],
+            "inside a quoted identifier"
+        );
+        assert_eq!(
+            split_statements("select 'it''s; fine'; select 2"),
+            ["select 'it''s; fine'", "select 2"],
+            "a doubled quote does not end the string"
+        );
     }
 
     #[test]
     fn s4e_c2_comments_hide_semicolons_and_quotes() {
-        assert_eq!(split_statements("select 1 -- a; b\n; select 2"), ["select 1 -- a; b", "select 2"], "a line comment runs to the end of the line");
-        assert_eq!(split_statements("select /* ; ' */ 1; select 2"), ["select /* ; ' */ 1", "select 2"], "a block comment, and the quote inside it starts nothing");
-        assert_eq!(split_statements("select 1; -- the end"), ["select 1", "-- the end"], "a trailing comment is a statement of its own as written");
+        assert_eq!(
+            split_statements("select 1 -- a; b\n; select 2"),
+            ["select 1 -- a; b", "select 2"],
+            "a line comment runs to the end of the line"
+        );
+        assert_eq!(
+            split_statements("select /* ; ' */ 1; select 2"),
+            ["select /* ; ' */ 1", "select 2"],
+            "a block comment, and the quote inside it starts nothing"
+        );
+        assert_eq!(
+            split_statements("select 1; -- the end"),
+            ["select 1", "-- the end"],
+            "a trailing comment is a statement of its own as written"
+        );
     }
 
     #[test]
@@ -786,7 +856,11 @@ mod ch_4e_c4 {
     #[test]
     fn s4e_c4_a_clock_that_went_backwards_expires_nothing() {
         assert_eq!(expired(&[s(1, true, 5000)], 1000, 10), Vec::<u64>::new(), "last activity after now: idle for zero");
-        assert_eq!(next_check_in(&[s(1, true, 5000)], 1000, 10), Some(11), "and it will expire 11 ms after it was last active (as far as we can tell)");
+        assert_eq!(
+            next_check_in(&[s(1, true, 5000)], 1000, 10),
+            Some(11),
+            "and it will expire 11 ms after it was last active (as far as we can tell)"
+        );
     }
 
     #[test]

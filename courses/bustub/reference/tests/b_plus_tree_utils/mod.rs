@@ -144,7 +144,13 @@ pub fn check_shape(tree: &Tree<0>, live: &BTreeSet<i64>, leaf_max: u32, internal
 /// every one of them physically in that leaf; the live keys are exactly the physical keys minus the tombstoned ones (and a scan, with
 /// `with_scan`, returns just those, in order); leaf sizes and depth obey the same limits as without tombstones; every lookup latches
 /// `depth() + 1` pages.
-pub fn check_shape_t<const T: usize>(tree: &Tree<T>, live: &BTreeSet<i64>, leaf_max: u32, internal_max: u32, with_scan: bool) -> Result<(), String> {
+pub fn check_shape_t<const T: usize>(
+    tree: &Tree<T>,
+    live: &BTreeSet<i64>,
+    leaf_max: u32,
+    internal_max: u32,
+    with_scan: bool,
+) -> Result<(), String> {
     let keys: Vec<Vec<i64>> = tree.leaf_keys().into_iter().map(|l| l.iter().map(|k| k.get_as_integer()).collect()).collect();
     let tombs: Vec<Vec<i64>> = tree.leaf_tombstones().into_iter().map(|l| l.iter().map(|k| k.get_as_integer()).collect()).collect();
     let depth = tree.depth();
@@ -177,7 +183,11 @@ pub fn check_shape_t<const T: usize>(tree: &Tree<T>, live: &BTreeSet<i64>, leaf_
         physical_live.extend(ks.iter().filter(|k| !ts.contains(k)).copied());
     }
     if &physical_live != live {
-        return Err(format!("the leaves hold {} live keys but {} were expected (tombstones in the leaves: {tombstoned})", physical_live.len(), live.len()));
+        return Err(format!(
+            "the leaves hold {} live keys but {} were expected (tombstones in the leaves: {tombstoned})",
+            physical_live.len(),
+            live.len()
+        ));
     }
     if live.is_empty() && tombstoned == 0 {
         return if depth == 0 { Ok(()) } else { Err(format!("nothing is stored but the depth is {depth}")) };
@@ -187,7 +197,11 @@ pub fn check_shape_t<const T: usize>(tree: &Tree<T>, live: &BTreeSet<i64>, leaf_
     }
     let (fewest, most) = leaf_range(internal_max, depth as u32 - 1);
     if (keys.len() as u128) < fewest || (keys.len() as u128) > most {
-        return Err(format!("{} leaves under {} internal levels with at most {internal_max} children each: that needs {fewest} to {most} leaves", keys.len(), depth - 1));
+        return Err(format!(
+            "{} leaves under {} internal levels with at most {internal_max} children each: that needs {fewest} to {most} leaves",
+            keys.len(),
+            depth - 1
+        ));
     }
     for &k in live.iter().step_by((live.len() / 40).max(1)) {
         let before = tree.bpm.get_reads();
@@ -219,7 +233,11 @@ pub fn leaves_t<const T: usize>(tree: &Tree<T>) -> String {
         .map(|(ks, ts)| {
             let k: Vec<String> = ks.iter().map(|k| k.get_as_integer().to_string()).collect();
             let t: Vec<String> = ts.iter().map(|k| k.get_as_integer().to_string()).collect();
-            if t.is_empty() { format!("[{}]", k.join(",")) } else { format!("[{}~{}]", k.join(","), t.join(",")) }
+            if t.is_empty() {
+                format!("[{}]", k.join(","))
+            } else {
+                format!("[{}~{}]", k.join(","), t.join(","))
+            }
         })
         .collect()
 }

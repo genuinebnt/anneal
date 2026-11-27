@@ -67,7 +67,10 @@ impl OperatorExpression {
     pub fn new(op: Operator, children: Vec<ExprRef>) -> Result<OperatorExpression> {
         // @begin 3i-01
         if children.len() != op.arity() {
-            return Err(Exception::new(ExceptionType::Invalid, format!("operator {} takes {} operand(s), got {}", op.symbol().trim(), op.arity(), children.len())));
+            return Err(Exception::new(
+                ExceptionType::Invalid,
+                format!("operator {} takes {} operand(s), got {}", op.symbol().trim(), op.arity(), children.len()),
+            ));
         }
         let types: Vec<TypeId> = children.iter().map(|c| c.return_type().type_id()).collect();
         let bad = |what: &str| Exception::new(ExceptionType::NotImplemented, format!("operator {} needs {what}", op.symbol().trim()));
@@ -165,8 +168,11 @@ impl Expression for OperatorExpression {
 
     fn evaluate_join(&self, left_tuple: &Tuple, left_schema: &Schema, right_tuple: &Tuple, right_schema: &Schema) -> Result<Value> {
         // @begin 3i-01
-        let args =
-            self.children.iter().map(|c| c.evaluate_join(left_tuple, left_schema, right_tuple, right_schema)).collect::<Result<Vec<_>>>()?;
+        let args = self
+            .children
+            .iter()
+            .map(|c| c.evaluate_join(left_tuple, left_schema, right_tuple, right_schema))
+            .collect::<Result<Vec<_>>>()?;
         self.compute(&args)
         //~ todo!("3i-01: the same with evaluate_join")
         // @end

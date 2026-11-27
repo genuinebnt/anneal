@@ -17,8 +17,14 @@ fn cms<K: std::hash::Hash>(width: u32, depth: u32) -> CountMinSketch<K> {
 #[test]
 fn s0d_01_a_zero_dimension_is_an_error() {
     for i in [10u32, 20, 30, 40] {
-        assert!(CountMinSketch::<i32>::new(0, i).is_err(), "a zero dimension is an error: expected `CountMinSketch::<i32>::new(0, i).is_err()`");
-        assert!(CountMinSketch::<i32>::new(i * 5, 0).is_err(), "a zero dimension is an error: expected `CountMinSketch::<i32>::new(i * 5, 0).is_err()`");
+        assert!(
+            CountMinSketch::<i32>::new(0, i).is_err(),
+            "a zero dimension is an error: expected `CountMinSketch::<i32>::new(0, i).is_err()`"
+        );
+        assert!(
+            CountMinSketch::<i32>::new(i * 5, 0).is_err(),
+            "a zero dimension is an error: expected `CountMinSketch::<i32>::new(i * 5, 0).is_err()`"
+        );
     }
     assert!(CountMinSketch::<i32>::new(1, 1).is_ok(), "a zero dimension is an error: expected `CountMinSketch::<i32>::new(1, 1).is_ok()`");
 }
@@ -101,7 +107,10 @@ fn s0d_01_each_row_hashes_differently_but_always_the_same_way() {
     let s: CountMinSketch<i64> = cms(1000, 8);
     let columns: Vec<usize> = (0..8).map(|row| s.column(row, &12345)).collect();
     assert_eq!(columns, (0..8).map(|row| s.column(row, &12345)).collect::<Vec<_>>(), "each row hashes differently but always the same way");
-    assert!(columns.iter().all(|c| *c < 1000), "each row hashes differently but always the same way: expected `columns.iter().all(|c| *c < 1000)`");
+    assert!(
+        columns.iter().all(|c| *c < 1000),
+        "each row hashes differently but always the same way: expected `columns.iter().all(|c| *c < 1000)`"
+    );
     let distinct: std::collections::BTreeSet<_> = columns.iter().collect();
     assert!(distinct.len() >= 5, "rows should not all pick the same column: {columns:?}");
 }
@@ -172,7 +181,11 @@ fn s0d_01_top_k_orders_the_candidates_by_estimated_count() {
         }
         let candidates: Vec<String> = ["rare", "frequent", "medium"].iter().map(|s| s.to_string()).collect();
         let top = s.top_k(3, &candidates);
-        assert_eq!(top, vec![("frequent".to_string(), iter + 4), ("medium".to_string(), iter + 2), ("rare".to_string(), iter)], "top k orders the candidates by estimated count");
+        assert_eq!(
+            top,
+            vec![("frequent".to_string(), iter + 4), ("medium".to_string(), iter + 2), ("rare".to_string(), iter)],
+            "top k orders the candidates by estimated count"
+        );
     }
 }
 
@@ -227,7 +240,11 @@ fn s0d_02_the_run_length_is_the_position_of_the_leftmost_one_after_the_register_
     // 3 register bits, then 61 bits
     assert_eq!(h.position_of_leftmost_one(0b000_1 << 60), 1, "the run length is the position of the leftmost one after the register bits");
     assert_eq!(h.position_of_leftmost_one(0b111_01 << 59), 2, "the run length is the position of the leftmost one after the register bits");
-    assert_eq!(h.position_of_leftmost_one(0b010_0001 << 57), 4, "the run length is the position of the leftmost one after the register bits");
+    assert_eq!(
+        h.position_of_leftmost_one(0b010_0001 << 57),
+        4,
+        "the run length is the position of the leftmost one after the register bits"
+    );
     assert_eq!(h.position_of_leftmost_one(0b101 << 61), 62, "all zeros after the register bits: 64 - 3 + 1");
     assert_eq!(h.position_of_leftmost_one(1), 61, "the last bit");
 }
@@ -243,11 +260,17 @@ fn s0d_02_with_no_register_bits_all_64_bits_count() {
 #[test]
 fn s0d_02_adding_a_value_raises_exactly_one_register_to_its_rank() {
     let h: HyperLogLog<i64> = HyperLogLog::new(4);
-    assert!(h.registers().iter().all(|r| *r == 0), "adding a value raises exactly one register to its rank: expected `h.registers().iter().all(|r| *r == 0)`");
+    assert!(
+        h.registers().iter().all(|r| *r == 0),
+        "adding a value raises exactly one register to its rank: expected `h.registers().iter().all(|r| *r == 0)`"
+    );
     h.add_elem(&42);
     let regs = h.registers();
     assert_eq!(regs.iter().filter(|r| **r > 0).count(), 1, "adding a value raises exactly one register to its rank");
-    assert!(*regs.iter().max().unwrap() >= 1, "adding a value raises exactly one register to its rank: expected `*regs.iter().max().unwrap() >= 1`");
+    assert!(
+        *regs.iter().max().unwrap() >= 1,
+        "adding a value raises exactly one register to its rank: expected `*regs.iter().max().unwrap() >= 1`"
+    );
 }
 
 #[test]
@@ -268,7 +291,10 @@ fn s0d_02_a_register_only_ever_grows() {
     for i in 0..500 {
         h.add_elem(&i);
         let after = h.registers();
-        assert!(before.iter().zip(&after).all(|(b, a)| a >= b), "a register only ever grows: expected `before.iter().zip(&after).all(|(b, a)| a >= b)`");
+        assert!(
+            before.iter().zip(&after).all(|(b, a)| a >= b),
+            "a register only ever grows: expected `before.iter().zip(&after).all(|(b, a)| a >= b)`"
+        );
         before = after;
     }
     assert!(before.iter().all(|r| *r > 0), "500 values reach all 4 registers");
@@ -439,7 +465,11 @@ fn s0d_03_threads_adding_in_any_order_leave_the_same_registers_as_one_thread() {
     }
     assert_eq!(h.dense_bucket(), one.dense_bucket(), "threads adding in any order leave the same registers as one thread");
     for i in 0..4 {
-        assert_eq!(h.overflow_bucket_of(i), one.overflow_bucket_of(i), "threads adding in any order leave the same registers as one thread");
+        assert_eq!(
+            h.overflow_bucket_of(i),
+            one.overflow_bucket_of(i),
+            "threads adding in any order leave the same registers as one thread"
+        );
     }
 }
 
@@ -553,7 +583,10 @@ fn s0d_04_merging_twice_changes_nothing() {
     a.merge(&copy_b);
     b.merge(&copy_a);
     for set in [&a, &b] {
-        assert!(set.contains(&s("15-410")) && set.contains(&s("15-721")), "merging twice changes nothing: expected `set.contains(&s(\"15-410\")) && set.contains(&s(\"15-721\"))`");
+        assert!(
+            set.contains(&s("15-410")) && set.contains(&s("15-721")),
+            "merging twice changes nothing: expected `set.contains(&s(\"15-410\")) && set.contains(&s(\"15-721\"))`"
+        );
     }
     a.merge(&copy_b);
     b.merge(&copy_a);
@@ -608,14 +641,20 @@ fn s0d_05_add_remove_and_sync_across_three_nodes() {
         assert!(d.contains(i % 3, &(i as i32)), "add remove and sync across three nodes: expected `d.contains(i % 3, &(i as i32))`");
         assert!(!d.contains((i + 1) % 3, &(i as i32)) && !d.contains((i + 2) % 3, &(i as i32)), "add remove and sync across three nodes: expected `!d.contains((i + 1) % 3, &(i as i32)) && !d.contains((i + 2) % 3, &(i as i32))`");
         d.sync();
-        assert!((0..3).all(|n| d.contains(n, &(i as i32))), "add remove and sync across three nodes: expected `(0..3).all(|n| d.contains(n, &(i as i32)))`");
+        assert!(
+            (0..3).all(|n| d.contains(n, &(i as i32))),
+            "add remove and sync across three nodes: expected `(0..3).all(|n| d.contains(n, &(i as i32)))`"
+        );
     }
     for i in 0..10usize {
         d.remove(i % 3, &(i as i32));
         assert!(!d.contains(i % 3, &(i as i32)), "add remove and sync across three nodes: expected `!d.contains(i % 3, &(i as i32))`");
         assert!(d.contains((i + 1) % 3, &(i as i32)) && d.contains((i + 2) % 3, &(i as i32)), "add remove and sync across three nodes: expected `d.contains((i + 1) % 3, &(i as i32)) && d.contains((i + 2) % 3, &(i as i32))`");
         d.sync();
-        assert!((0..3).all(|n| !d.contains(n, &(i as i32))), "add remove and sync across three nodes: expected `(0..3).all(|n| !d.contains(n, &(i as i32)))`");
+        assert!(
+            (0..3).all(|n| !d.contains(n, &(i as i32))),
+            "add remove and sync across three nodes: expected `(0..3).all(|n| !d.contains(n, &(i as i32)))`"
+        );
     }
 }
 
@@ -647,12 +686,18 @@ fn s0d_05_removing_everything_and_adding_it_back() {
     }
     d.sync();
     for i in 0..10usize {
-        assert!((0..3).all(|n| d.contains(n, &(i as i32))), "removing everything and adding it back: expected `(0..3).all(|n| d.contains(n, &(i as i32)))`");
+        assert!(
+            (0..3).all(|n| d.contains(n, &(i as i32))),
+            "removing everything and adding it back: expected `(0..3).all(|n| d.contains(n, &(i as i32)))`"
+        );
         d.remove(i % 3, &(i as i32));
     }
     d.sync();
     for i in 0..10 {
-        assert!((0..3).all(|n| !d.contains(n, &i)), "removing everything and adding it back: expected `(0..3).all(|n| !d.contains(n, &i))`");
+        assert!(
+            (0..3).all(|n| !d.contains(n, &i)),
+            "removing everything and adding it back: expected `(0..3).all(|n| !d.contains(n, &i))`"
+        );
     }
     for i in 0..10usize {
         d.add(i % 3, &(i as i32));
@@ -695,10 +740,16 @@ fn s0d_05_a_lost_network_still_converges_later() {
     d.load(0);
     d.load(1);
     for i in 0..10 {
-        assert!(d.contains(0, &i) && d.contains(1, &i) && d.contains(2, &i), "a lost network still converges later: expected `d.contains(0, &i) && d.contains(1, &i) && d.contains(2, &i)`");
+        assert!(
+            d.contains(0, &i) && d.contains(1, &i) && d.contains(2, &i),
+            "a lost network still converges later: expected `d.contains(0, &i) && d.contains(1, &i) && d.contains(2, &i)`"
+        );
     }
     for i in 10..20 {
-        assert!(!d.contains(0, &i) && !d.contains(1, &i) && d.contains(2, &i), "a lost network still converges later: expected `!d.contains(0, &i) && !d.contains(1, &i) && d.contains(2, &i)`");
+        assert!(
+            !d.contains(0, &i) && !d.contains(1, &i) && d.contains(2, &i),
+            "a lost network still converges later: expected `!d.contains(0, &i) && !d.contains(1, &i) && d.contains(2, &i)`"
+        );
         d.remove(0, &i);
     }
     for i in 10..20 {
@@ -863,7 +914,10 @@ fn replica_from(ops: &[SetOp], uids: &mut i64) -> ORSet<u8> {
     let mut r = ORSet::new();
     for op in ops {
         match op {
-            SetOp::Add(e) => { r.add(e, *uids); *uids += 1; }
+            SetOp::Add(e) => {
+                r.add(e, *uids);
+                *uids += 1;
+            }
             SetOp::Remove(e) => r.remove(e),
         }
     }
@@ -983,15 +1037,28 @@ mod ch_0d_c1 {
     #[test]
     fn s0d_c1_union_contains_everything_either_contained_and_checks_the_shape() {
         let (mut a, mut b) = (BloomFilter::new(1024, 4), BloomFilter::new(1024, 4));
-        for k in 0..50u64 { a.insert(k); }
-        for k in 100..150u64 { b.insert(k); }
+        for k in 0..50u64 {
+            a.insert(k);
+        }
+        for k in 100..150u64 {
+            b.insert(k);
+        }
         let u = a.union(&b).unwrap();
-        assert!((0..50u64).chain(100..150).all(|k| u.contains(k)), "this check: expected `(0..50u64).chain(100..150).all(|k| u.contains(k))`");
-        assert_eq!(u.bits_set() , {
-            let mut both = BloomFilter::new(1024, 4);
-            for k in (0..50u64).chain(100..150) { both.insert(k); }
-            both.bits_set()
-        }, "this check");
+        assert!(
+            (0..50u64).chain(100..150).all(|k| u.contains(k)),
+            "this check: expected `(0..50u64).chain(100..150).all(|k| u.contains(k))`"
+        );
+        assert_eq!(
+            u.bits_set(),
+            {
+                let mut both = BloomFilter::new(1024, 4);
+                for k in (0..50u64).chain(100..150) {
+                    both.insert(k);
+                }
+                both.bits_set()
+            },
+            "this check"
+        );
         assert!(a.union(&BloomFilter::new(512, 4)).is_none(), "this check: expected `a.union(&BloomFilter::new(512, 4)).is_none()`");
         assert!(a.union(&BloomFilter::new(1024, 5)).is_none(), "this check: expected `a.union(&BloomFilter::new(1024, 5)).is_none()`");
     }
@@ -1194,7 +1261,11 @@ mod ch_0d_c4 {
     fn counter(ops: &[(u32, bool, u64)]) -> PnCounter {
         let mut c = PnCounter::new();
         for &(n, up, v) in ops {
-            if up { c.inc(n, v) } else { c.dec(n, v) }
+            if up {
+                c.inc(n, v)
+            } else {
+                c.dec(n, v)
+            }
         }
         c
     }

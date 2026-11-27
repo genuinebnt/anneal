@@ -56,8 +56,8 @@ impl<'e> SetOpExecutor<'e> {
     fn compute(&self, left_rows: Vec<Tuple>, right_rows: Vec<Tuple>) -> Vec<Tuple> {
         let (ls, rs) = (self.left.output_schema(), self.right.output_schema());
         match (self.op, self.all) {
+            (SetOperator::Union, false) | (SetOperator::Intersect, _) | (SetOperator::Except, _) => todo!("3j-05: UNION without ALL (every distinct row once), INTERSECT [ALL] and EXCEPT [ALL] by counting rows"),
             (SetOperator::Union, true) => todo!("3j-04: every row of the left side, then every row of the right side"),
-            _ => todo!("3j-05: UNION without ALL (every distinct row once), INTERSECT [ALL] and EXCEPT [ALL] by counting rows"),
         }
     }
 }

@@ -162,7 +162,13 @@ impl<K: PrestoHash> HyperLogLogPresto<K> {
     pub fn new(n_leading_bits: i16) -> HyperLogLogPresto<K> {
         // @begin 0d-03
         let m = if n_leading_bits < 0 { 0 } else { 1usize << n_leading_bits };
-        HyperLogLogPresto { n_leading_bits, dense: Mutex::new(vec![0; m]), overflow: Mutex::new(HashMap::new()), cardinality: Mutex::new(0), _key: PhantomData }
+        HyperLogLogPresto {
+            n_leading_bits,
+            dense: Mutex::new(vec![0; m]),
+            overflow: Mutex::new(HashMap::new()),
+            cardinality: Mutex::new(0),
+            _key: PhantomData,
+        }
         //~ todo!("0d-03: 2^n registers, all zero, no overflow bits (none at all for a negative n)")
         // @end
     }

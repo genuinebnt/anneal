@@ -8,7 +8,12 @@ pub enum Op {
 }
 
 /// `left op [ALL] right` for two ascending iterators; the result is ascending and lazy.
-pub fn merge_set_op<'a>(left: impl Iterator<Item = i64> + 'a, right: impl Iterator<Item = i64> + 'a, op: Op, all: bool) -> Box<dyn Iterator<Item = i64> + 'a> {
+pub fn merge_set_op<'a>(
+    left: impl Iterator<Item = i64> + 'a,
+    right: impl Iterator<Item = i64> + 'a,
+    op: Op,
+    all: bool,
+) -> Box<dyn Iterator<Item = i64> + 'a> {
     // @begin 3j-c4
     struct Merge<L: Iterator<Item = i64>, R: Iterator<Item = i64>> {
         l: std::iter::Peekable<L>,

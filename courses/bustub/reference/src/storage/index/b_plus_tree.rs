@@ -85,10 +85,23 @@ where
 {
     /// Creates an empty tree whose header page is `header_page_id` (the caller allocated it) and formats that page.
     /// A leaf holds at most `leaf_max_size` pairs (at least 2), an internal page at most `internal_max_size` children (at least 3).
-    pub fn new(index_name: &str, header_page_id: PageId, bpm: &'a BufferPoolManager, cmp: C, leaf_max_size: u32, internal_max_size: u32) -> Self {
+    pub fn new(
+        index_name: &str,
+        header_page_id: PageId,
+        bpm: &'a BufferPoolManager,
+        cmp: C,
+        leaf_max_size: u32,
+        internal_max_size: u32,
+    ) -> Self {
         // @begin 2c-01
-        assert!(leaf_max_size >= 2 && leaf_max_size as usize <= Leaf::<&[u8], K, V, TOMBS>::capacity(), "leaf_max_size {leaf_max_size} is not usable");
-        assert!(internal_max_size >= 3 && internal_max_size as usize <= Internal::<&[u8], K>::capacity(), "internal_max_size {internal_max_size} is not usable");
+        assert!(
+            leaf_max_size >= 2 && leaf_max_size as usize <= Leaf::<&[u8], K, V, TOMBS>::capacity(),
+            "leaf_max_size {leaf_max_size} is not usable"
+        );
+        assert!(
+            internal_max_size >= 3 && internal_max_size as usize <= Internal::<&[u8], K>::capacity(),
+            "internal_max_size {internal_max_size} is not usable"
+        );
         let bpm = TracedBufferPoolManager::new(bpm);
         Header::new(&mut bpm.write_page(header_page_id)[..]).init();
         BPlusTree { index_name: index_name.to_owned(), bpm, cmp, leaf_max_size, internal_max_size, header_page_id, _entry: PhantomData }
@@ -464,8 +477,8 @@ where
     fn safe_to_remove(&self, page: &[u8], is_root: bool) -> bool {
         let p = Page::new(page);
         match (is_root, p.is_leaf_page()) {
-            (true, true) => p.size() > 1,    // a root leaf may shrink to one pair, but not to none
-            (true, false) => p.size() > 2,   // a root with two children must be replaced by its only child
+            (true, true) => p.size() > 1,  // a root leaf may shrink to one pair, but not to none
+            (true, false) => p.size() > 2, // a root with two children must be replaced by its only child
             (false, _) => p.size() > p.min_size(),
         }
     }
@@ -546,7 +559,14 @@ where
 
     // @begin 2c-04
     /// Moves the last entry of `left` to the front of `node`; `idx` is `node`'s slot in `parent`, whose separator changes.
-    fn borrow_from_left(&self, parent_guard: &mut WritePageGuard<'a>, idx: u32, left_guard: &mut WritePageGuard<'a>, node_guard: &mut WritePageGuard<'a>, is_leaf: bool) {
+    fn borrow_from_left(
+        &self,
+        parent_guard: &mut WritePageGuard<'a>,
+        idx: u32,
+        left_guard: &mut WritePageGuard<'a>,
+        node_guard: &mut WritePageGuard<'a>,
+        is_leaf: bool,
+    ) {
         let mut parent = Internal::<_, K>::new(&mut parent_guard[..]);
         if is_leaf {
             let mut left = Leaf::<_, K, V, TOMBS>::new(&mut left_guard[..]);
@@ -587,7 +607,14 @@ where
 
     // @begin 2c-04
     /// Moves the first entry of `right` to the end of `node`; `idx` is `node`'s slot in `parent`, so the separator is at `idx + 1`.
-    fn borrow_from_right(&self, parent_guard: &mut WritePageGuard<'a>, idx: u32, node_guard: &mut WritePageGuard<'a>, right_guard: &mut WritePageGuard<'a>, is_leaf: bool) {
+    fn borrow_from_right(
+        &self,
+        parent_guard: &mut WritePageGuard<'a>,
+        idx: u32,
+        node_guard: &mut WritePageGuard<'a>,
+        right_guard: &mut WritePageGuard<'a>,
+        is_leaf: bool,
+    ) {
         let mut parent = Internal::<_, K>::new(&mut parent_guard[..]);
         if is_leaf {
             let mut right = Leaf::<_, K, V, TOMBS>::new(&mut right_guard[..]);
@@ -629,7 +656,14 @@ where
     // @begin 2c-04
     /// Appends everything in `src` to `dest` (its right neighbour, `src_idx` in the parent). `src` is then empty of meaning: the caller
     /// removes it from the parent and deletes its page.
-    fn merge(&self, parent_guard: &mut WritePageGuard<'a>, src_idx: u32, dest_guard: &mut WritePageGuard<'a>, src_guard: &mut WritePageGuard<'a>, is_leaf: bool) {
+    fn merge(
+        &self,
+        parent_guard: &mut WritePageGuard<'a>,
+        src_idx: u32,
+        dest_guard: &mut WritePageGuard<'a>,
+        src_guard: &mut WritePageGuard<'a>,
+        is_leaf: bool,
+    ) {
         if is_leaf {
             let src = Leaf::<_, K, V, TOMBS>::new(&src_guard[..]);
             let mut dest = Leaf::<_, K, V, TOMBS>::new(&mut dest_guard[..]);

@@ -84,7 +84,11 @@ fn s3k_01_question_mark_converts_in_a_function_that_returns_a_dberror() {
         Ok(std::fs::read("/nonexistent-bustub-directory/missing.db")?)
     }
     let e = read_missing().expect_err("the file does not exist");
-    assert_eq!(cause::<io::Error>(&e).map(|c| c.kind()), Some(io::ErrorKind::NotFound), "`?` turned the I/O error into a DbError that keeps it");
+    assert_eq!(
+        cause::<io::Error>(&e).map(|c| c.kind()),
+        Some(io::ErrorKind::NotFound),
+        "`?` turned the I/O error into a DbError that keeps it"
+    );
 }
 
 // ---- 3k-02 · Every layer's error, and the question mark ---------------------------------------------------------------------
@@ -132,13 +136,20 @@ fn s3k_02_lexer_errors_say_what_and_where() {
     ];
     for (kind, phrase) in cases {
         let what = format!("{kind:?}");
-        check(|| LexError { pos: 17, kind: match &kind {
-            LexErrorKind::UnterminatedString => LexErrorKind::UnterminatedString,
-            LexErrorKind::UnterminatedIdent => LexErrorKind::UnterminatedIdent,
-            LexErrorKind::UnterminatedComment => LexErrorKind::UnterminatedComment,
-            LexErrorKind::BadChar => LexErrorKind::BadChar,
-            LexErrorKind::IntegerOverflow => LexErrorKind::IntegerOverflow,
-        } }, &[phrase, "17"], &what);
+        check(
+            || LexError {
+                pos: 17,
+                kind: match &kind {
+                    LexErrorKind::UnterminatedString => LexErrorKind::UnterminatedString,
+                    LexErrorKind::UnterminatedIdent => LexErrorKind::UnterminatedIdent,
+                    LexErrorKind::UnterminatedComment => LexErrorKind::UnterminatedComment,
+                    LexErrorKind::BadChar => LexErrorKind::BadChar,
+                    LexErrorKind::IntegerOverflow => LexErrorKind::IntegerOverflow,
+                },
+            },
+            &[phrase, "17"],
+            &what,
+        );
     }
 }
 
@@ -155,8 +166,10 @@ fn s3k_02_resolver_page_and_checksum_errors_are_described_and_kept() {
 
 #[test]
 fn s3k_02_different_causes_of_one_type_say_different_things() {
-    let ints: Vec<String> = [IntError::Empty, IntError::Invalid, IntError::OutOfRange].into_iter().map(|e| DbError::from(e).to_string()).collect();
-    let names: Vec<String> = [NameError::Exists, NameError::Missing, NameError::Invalid].into_iter().map(|e| DbError::from(e).to_string()).collect();
+    let ints: Vec<String> =
+        [IntError::Empty, IntError::Invalid, IntError::OutOfRange].into_iter().map(|e| DbError::from(e).to_string()).collect();
+    let names: Vec<String> =
+        [NameError::Exists, NameError::Missing, NameError::Invalid].into_iter().map(|e| DbError::from(e).to_string()).collect();
     for texts in [ints, names] {
         let mut unique = texts.clone();
         unique.sort();
@@ -196,7 +209,11 @@ fn s3k_03_context_puts_a_new_message_on_top() {
 #[test]
 fn s3k_03_the_source_of_a_context_is_the_error_it_wraps() {
     let e = DbError::from(not_found()).context("opening the log");
-    assert_eq!(e.source().expect("a context has a source").to_string(), "no such file", "the layer below says what the original error said");
+    assert_eq!(
+        e.source().expect("a context has a source").to_string(),
+        "no such file",
+        "the layer below says what the original error said"
+    );
 }
 
 #[test]
@@ -261,7 +278,11 @@ fn s3k_03_context_stacks_on_a_dbresult() {
         inner().context("running the statement")
     }
     let e = outer().unwrap_err();
-    assert_eq!(e.report(), format!("running the statement: looking up the table: {}", NameError::Missing), "contexts added in two functions stack in call order");
+    assert_eq!(
+        e.report(),
+        format!("running the statement: looking up the table: {}", NameError::Missing),
+        "contexts added in two functions stack in call order"
+    );
 }
 
 // ---- 3k-04 · Codes and what a client may see -------------------------------------------------------------------------------
@@ -345,7 +366,8 @@ fn s3k_04_a_clients_own_mistakes_are_shown_with_their_message() {
 
 #[test]
 fn s3k_04_system_failures_show_nothing_of_their_inside() {
-    let io = DbError::from(io::Error::new(io::ErrorKind::PermissionDenied, "/var/lib/bustub/secret.db: permission denied")).context("reading page 7");
+    let io = DbError::from(io::Error::new(io::ErrorKind::PermissionDenied, "/var/lib/bustub/secret.db: permission denied"))
+        .context("reading page 7");
     assert_eq!(io.client_message(), "ERROR 58030: internal error", "class 58: the path and the context stay inside");
     let internal = DbError::from(Exception::new(ExceptionType::Execution, "pointer 0xdeadbeef in executor")).context("running the plan");
     assert_eq!(internal.client_message(), "ERROR XX000: internal error", "class XX: nothing about the internals leaks");
@@ -394,7 +416,11 @@ fn s3k_05_errors_from_every_layer_cross_threads_with_their_context() {
     got.sort_by_key(|(i, _)| *i);
     let codes: Vec<&str> = got.iter().map(|(_, e)| e.code()).collect();
     assert_eq!(codes, ["42601", "42P01", "58030", "22012"], "one code per layer, whichever thread sent it first");
-    assert_eq!(got[0].1.report(), "statement 0: lexing the statement: unexpected character at position 3", "the lexer error, with both contexts");
+    assert_eq!(
+        got[0].1.report(),
+        "statement 0: lexing the statement: unexpected character at position 3",
+        "the lexer error, with both contexts"
+    );
     assert!(got[3].1.report().starts_with("statement 3: executing the projection: "), "the executor error keeps its contexts in order");
 }
 
@@ -434,10 +460,14 @@ proptest! {
 
 #[test]
 fn s3k_05_the_client_never_sees_what_lies_inside() {
-    let internal = Err::<(), _>(Exception::new(ExceptionType::Execution, "pointer 0xdeadbeef in the join executor")).context("running the plan");
+    let internal =
+        Err::<(), _>(Exception::new(ExceptionType::Execution, "pointer 0xdeadbeef in the join executor")).context("running the plan");
     for e in [storage_layer().unwrap_err(), internal.unwrap_err()] {
         let shown = e.client_message();
-        assert!(!shown.contains("secret") && !shown.contains("0xdeadbeef") && !shown.contains("page 7") && !shown.contains("running the plan"), "no internal text in {shown:?}");
+        assert!(
+            !shown.contains("secret") && !shown.contains("0xdeadbeef") && !shown.contains("page 7") && !shown.contains("running the plan"),
+            "no internal text in {shown:?}"
+        );
         assert!(shown.ends_with("internal error"), "a system failure only says so, got {shown:?}");
     }
     let shown = lex_layer().unwrap_err().client_message();
@@ -454,7 +484,10 @@ fn s3k_05_a_very_long_chain_is_walked_and_reported() {
     }
     assert_eq!(e.chain().count(), 2_002, "every layer is in the chain");
     let report = e.report();
-    assert!(report.starts_with("layer 1999: layer 1998: ") && report.ends_with(": layer 0: no such file"), "the report runs from the outermost layer to the cause");
+    assert!(
+        report.starts_with("layer 1999: layer 1998: ") && report.ends_with(": layer 0: no such file"),
+        "the report runs from the outermost layer to the cause"
+    );
     assert_eq!(e.code(), "58030", "and the code is still the cause's");
 }
 

@@ -177,11 +177,11 @@ impl<'a> Store<'a> {
         // @end
     }
 
+    // @begin 4c-04
     /// Changes the slot at `rid` from `before` to `after` for `txn`: the **write-ahead rule** says the log record comes first, then the
     /// page changes. Refused (and nothing happens) if another active transaction has written the record. The caller holds the store's
     /// lock from the moment it read `before` (or chose the slot), so no other change can come in between.
     fn change(&self, inner: &mut Inner, txn: TxnId, rid: Rid, before: Option<Vec<u8>>, after: Option<Vec<u8>>) -> StoreResult<()> {
-        // @begin 4c-04
         if !inner.active.contains_key(&txn) {
             return Err(refused("no such active transaction"));
         }
@@ -198,9 +198,14 @@ impl<'a> Store<'a> {
         inner.held.insert(rid, txn);
         inner.active.get_mut(&txn).unwrap().push((rid, before, after));
         Ok(())
-        //~ todo!("4c-04: refused if another transaction holds the record; otherwise the change is logged first, then applied, and remembered for the transaction and the page")
-        // @end
     }
+    //~ /// Changes the slot at `rid` from `before` to `after` for `txn`: the **write-ahead rule** says the log record comes first, then
+    //~ /// the page changes. Refused (and nothing happens) if another active transaction has written the record. Nothing may change the
+    //~ /// record between reading `before` and this change.
+    //~ fn change(&self, txn: TxnId, rid: Rid, before: Option<Vec<u8>>, after: Option<Vec<u8>>) -> StoreResult<()> {
+    //~     todo!("4c-04: refused if another transaction holds the record; otherwise the change is logged first, then applied, and remembered for the transaction and the page")
+    //~ }
+    // @end
 
     /// Inserts a record of `RECORD_LEN` bytes into the first page with a free slot, logging the change before the page sees it. Returns the new
     /// record's [`Rid`].
@@ -214,7 +219,8 @@ impl<'a> Store<'a> {
             let slot = {
                 let guard = self.bpm.read_page(*page_id);
                 let page = TablePage::new(&guard[..]);
-                let fits = page.get_next_tuple_offset(&TupleMeta { ts: 0, is_deleted: false }, &Tuple::from_bytes(Rid::default(), data)).is_some();
+                let fits =
+                    page.get_next_tuple_offset(&TupleMeta { ts: 0, is_deleted: false }, &Tuple::from_bytes(Rid::default(), data)).is_some();
                 fits.then(|| page.get_num_tuples())
             };
             if let Some(slot) = slot {

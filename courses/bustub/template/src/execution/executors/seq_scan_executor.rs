@@ -34,8 +34,13 @@ fn passes_filter(filter: &Option<ExprRef>, schema: &Schema, tuple: &Tuple) -> Re
 
 impl<'e> SeqScanExecutor<'e> {
     pub fn new(ctx: &'e ExecutorContext<'e>, plan: PlanRef) -> Result<SeqScanExecutor<'e>> {
-        let PlanKind::SeqScan { table_oid, filter_predicate, .. } = &plan.kind else { unreachable!("a SeqScanExecutor needs a SeqScan plan") };
-        let table_info = ctx.catalog.table_info(*table_oid).ok_or_else(|| Exception::new(ExceptionType::Execution, "the table of a scan does not exist"))?;
+        let PlanKind::SeqScan { table_oid, filter_predicate, .. } = &plan.kind else {
+            unreachable!("a SeqScanExecutor needs a SeqScan plan")
+        };
+        let table_info = ctx
+            .catalog
+            .table_info(*table_oid)
+            .ok_or_else(|| Exception::new(ExceptionType::Execution, "the table of a scan does not exist"))?;
         let filter_predicate = filter_predicate.clone();
         let txn = ctx.txn().cloned().zip(ctx.txn_mgr());
         Ok(SeqScanExecutor { plan, table_info, filter_predicate, iter: None, txn })

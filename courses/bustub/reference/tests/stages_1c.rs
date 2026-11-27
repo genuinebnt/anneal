@@ -35,7 +35,8 @@ fn within<T: Send + 'static>(what: &str, limit: Duration, work: impl FnOnce() ->
     thread::spawn(move || {
         let _ = tx.send(work());
     });
-    rx.recv_timeout(limit).unwrap_or_else(|_| panic!("{what} did not finish in {limit:?}: the cost must not grow with the number of elements"))
+    rx.recv_timeout(limit)
+        .unwrap_or_else(|_| panic!("{what} did not finish in {limit:?}: the cost must not grow with the number of elements"))
 }
 
 /// A tiny deterministic generator for the large runs.
@@ -91,9 +92,17 @@ fn s1c_01_push_back_keeps_order_and_each_handle_finds_its_element() {
     let mut list = IndexList::new();
     let hs: Vec<Handle> = ["a", "b", "c"].into_iter().map(|s| list.push_back(String::from(s))).collect();
     assert_eq!(list.len(), 3, "push back keeps order and each handle finds its element");
-    assert_eq!(list.iter().map(|s| s.as_str()).collect::<Vec<_>>(), ["a", "b", "c"], "elements are ordered front to back in the order pushed (and need not be Clone)");
+    assert_eq!(
+        list.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        ["a", "b", "c"],
+        "elements are ordered front to back in the order pushed (and need not be Clone)"
+    );
     assert_eq!(list.front().map(|s| s.as_str()), Some("a"), "push back keeps order and each handle finds its element");
-    assert_eq!(hs.iter().map(|h| list.get(*h).unwrap().as_str()).collect::<Vec<_>>(), ["a", "b", "c"], "each handle finds the element it was returned for");
+    assert_eq!(
+        hs.iter().map(|h| list.get(*h).unwrap().as_str()).collect::<Vec<_>>(),
+        ["a", "b", "c"],
+        "each handle finds the element it was returned for"
+    );
     assert!(hs[0] != hs[1] && hs[1] != hs[2] && hs[0] != hs[2], "handles for different elements differ");
 }
 
@@ -122,7 +131,11 @@ fn s1c_01_moving_to_the_back_keeps_the_handle_valid() {
     assert_eq!(all(&list), [0, 2, 3, 1], "moving to the back keeps the handle valid");
     assert!(list.move_to_back(hs[0]), "moving to the back keeps the handle valid: expected `list.move_to_back(hs[0])`");
     assert_eq!(all(&list), [2, 3, 1, 0], "moving to the back keeps the handle valid");
-    assert_eq!(hs.iter().map(|h| list.get(*h).copied()).collect::<Vec<_>>(), [Some(0), Some(1), Some(2), Some(3)], "every handle still names its own element");
+    assert_eq!(
+        hs.iter().map(|h| list.get(*h).copied()).collect::<Vec<_>>(),
+        [Some(0), Some(1), Some(2), Some(3)],
+        "every handle still names its own element"
+    );
     assert_eq!(list.pop_front(), Some(2), "moving to the back keeps the handle valid");
 }
 
@@ -329,7 +342,9 @@ fn lru_agrees_with_the_model(make: Make, ops: &[ROp]) -> Result<(), TestCaseErro
                 r.pin(f(x));
                 m.pin(x);
             }
-            ROp::Victim => prop_assert_eq!(r.victim(), m.victim().map(f), "step {}: the victim must be the least recently used frame", step),
+            ROp::Victim => {
+                prop_assert_eq!(r.victim(), m.victim().map(f), "step {}: the victim must be the least recently used frame", step)
+            }
         }
         prop_assert_eq!(r.size(), m.order.len(), "step {}: size is the number of frames that may be evicted", step);
     }
@@ -348,7 +363,9 @@ fn clock_agrees_with_the_model(make: Make, ops: &[ROp]) -> Result<(), TestCaseEr
                 r.pin(f(x));
                 m.pin(x);
             }
-            ROp::Victim => prop_assert_eq!(r.victim(), m.victim().map(f), "step {}: the victim must be the frame the clock hand finds", step),
+            ROp::Victim => {
+                prop_assert_eq!(r.victim(), m.victim().map(f), "step {}: the victim must be the frame the clock hand finds", step)
+            }
         }
         prop_assert_eq!(r.size(), m.size(), "step {}: size is the number of frames on the ring", step);
     }
@@ -372,7 +389,13 @@ fn satisfies_the_general_contract(make: Make, ops: &[ROp]) -> Result<(), TestCas
             }
             ROp::Victim => match r.victim() {
                 None => prop_assert!(evictable.is_empty(), "step {}: victim said nothing can be evicted, but {:?} can", step, evictable),
-                Some(FrameId(v)) => prop_assert!(evictable.remove(&v), "step {}: victim returned frame {} which was not evictable (evictable: {:?})", step, v, evictable),
+                Some(FrameId(v)) => prop_assert!(
+                    evictable.remove(&v),
+                    "step {}: victim returned frame {} which was not evictable (evictable: {:?})",
+                    step,
+                    v,
+                    evictable
+                ),
             },
         }
         prop_assert_eq!(r.size(), evictable.len(), "step {}: size is the number of evictable frames", step);
@@ -395,7 +418,11 @@ fn s1c_02_frames_leave_in_the_order_they_were_unpinned() {
         r.unpin(f(x));
     }
     assert_eq!(r.size(), 4, "frames leave in the order they were unpinned");
-    assert_eq!([r.victim(), r.victim(), r.victim(), r.victim(), r.victim()], [Some(f(3)), Some(f(1)), Some(f(4)), Some(f(2)), None], "least recently unpinned first, then nothing");
+    assert_eq!(
+        [r.victim(), r.victim(), r.victim(), r.victim(), r.victim()],
+        [Some(f(3)), Some(f(1)), Some(f(4)), Some(f(2)), None],
+        "least recently unpinned first, then nothing"
+    );
     assert_eq!(r.size(), 0, "frames leave in the order they were unpinned");
 }
 
@@ -504,7 +531,11 @@ fn s1c_03_unpinning_a_frame_on_the_ring_does_not_change_its_place_or_the_size() 
         r.unpin(f(x));
     }
     assert_eq!(r.size(), 3, "unpinning a frame on the ring does not change its place or the size");
-    assert_eq!([r.victim(), r.victim(), r.victim()], [Some(f(1)), Some(f(2)), Some(f(3))], "unpinning a frame on the ring does not change its place or the size");
+    assert_eq!(
+        [r.victim(), r.victim(), r.victim()],
+        [Some(f(1)), Some(f(2)), Some(f(3))],
+        "unpinning a frame on the ring does not change its place or the size"
+    );
 }
 
 #[test]

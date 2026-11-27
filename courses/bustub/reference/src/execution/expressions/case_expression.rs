@@ -35,7 +35,11 @@ impl CaseExpression {
         let mut results: Vec<ExprRef> = branches.iter().map(|(_, r)| r.clone()).collect();
         results.extend(otherwise.clone());
         // the type of the CASE: the first result that is not a bare NULL (a CASE of nothing but NULLs is INTEGER)
-        let ret = results.iter().find(|r| !is_null_literal(r)).map(|r| r.return_type().with_column_name("<val>")).unwrap_or_else(|| Column::new("<val>", TypeId::Integer));
+        let ret = results
+            .iter()
+            .find(|r| !is_null_literal(r))
+            .map(|r| r.return_type().with_column_name("<val>"))
+            .unwrap_or_else(|| Column::new("<val>", TypeId::Integer));
         let mut children = Vec::new();
         for (cond, result) in &branches {
             if cond.return_type().type_id() != TypeId::Boolean {

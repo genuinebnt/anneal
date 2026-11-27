@@ -1,9 +1,9 @@
 //! Tests for module 4c: the write-ahead log and crash recovery.
 
-#[path = "common/pool.rs"]
-mod pool;
 #[path = "common/crash.rs"]
 mod crash;
+#[path = "common/pool.rs"]
+mod pool;
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -204,7 +204,11 @@ fn s4c_02_what_was_not_flushed_does_not_survive_a_crash() {
     log.flush().unwrap();
     log.append(&begin(3));
     let after = World::restart(disk.crash(), &[]);
-    assert_eq!(after.log.records().unwrap().iter().map(|(_, r)| r.clone()).collect::<Vec<_>>(), vec![begin(1), begin(2)], "the flushed ones survive, the buffered one does not");
+    assert_eq!(
+        after.log.records().unwrap().iter().map(|(_, r)| r.clone()).collect::<Vec<_>>(),
+        vec![begin(1), begin(2)],
+        "the flushed ones survive, the buffered one does not"
+    );
 }
 
 #[test]
@@ -272,7 +276,11 @@ fn s4c_02_a_torn_tail_is_cut_away_before_new_records_are_added() {
     assert_eq!(restarted.append(&begin(9)), 2 * one, "and the new one starts where it was");
     restarted.flush().unwrap();
     let again = LogManager::new(torn).unwrap();
-    assert_eq!(again.records().unwrap().iter().map(|(_, r)| r.clone()).collect::<Vec<_>>(), vec![begin(1), begin(2), begin(9)], "no garbage between the old records and the new one");
+    assert_eq!(
+        again.records().unwrap().iter().map(|(_, r)| r.clone()).collect::<Vec<_>>(),
+        vec![begin(1), begin(2), begin(9)],
+        "no garbage between the old records and the new one"
+    );
 }
 
 #[derive(Clone, Debug)]
@@ -388,7 +396,10 @@ fn s4c_03_a_slot_cannot_be_skipped_and_a_missing_one_cannot_be_deleted() {
     assert!(s.set_state(Rid::new(p, 0), &None).is_err(), "deleting a slot that does not exist");
     assert!(s.scan().is_empty(), "the failed calls changed nothing");
     s.set_state(Rid::new(p, 0), &Some(rec(1))).unwrap();
-    assert!(s.set_state(Rid::new(p, 2), &Some(rec(2))).is_err(), "a slot cannot be skipped and a missing one cannot be deleted: expected `s.set_state(Rid::new(p, 2), &Some(rec(2))).is_err()`");
+    assert!(
+        s.set_state(Rid::new(p, 2), &Some(rec(2))).is_err(),
+        "a slot cannot be skipped and a missing one cannot be deleted: expected `s.set_state(Rid::new(p, 2), &Some(rec(2))).is_err()`"
+    );
 }
 
 #[test]
@@ -397,8 +408,14 @@ fn s4c_03_a_record_has_the_fixed_length() {
     let s = w.store(1);
     let r = Rid::new(w.pages[0], 0);
     assert_eq!(RECORD_LEN, 16, "a record has the fixed length");
-    assert!(s.set_state(r, &Some(vec![1; 5])).is_err(), "a record has the fixed length: expected `s.set_state(r, &Some(vec![1; 5])).is_err()`");
-    assert!(s.set_state(r, &Some(vec![1; 17])).is_err(), "a record has the fixed length: expected `s.set_state(r, &Some(vec![1; 17])).is_err()`");
+    assert!(
+        s.set_state(r, &Some(vec![1; 5])).is_err(),
+        "a record has the fixed length: expected `s.set_state(r, &Some(vec![1; 5])).is_err()`"
+    );
+    assert!(
+        s.set_state(r, &Some(vec![1; 17])).is_err(),
+        "a record has the fixed length: expected `s.set_state(r, &Some(vec![1; 17])).is_err()`"
+    );
     assert!(s.scan().is_empty(), "a record has the fixed length: expected `s.scan().is_empty()`");
 }
 
@@ -491,7 +508,11 @@ fn s4c_04_an_abort_never_restores_a_stale_image_over_a_committed_update() {
             });
             committer.join().unwrap()
         });
-        assert_eq!(s.get(r), Some(rec(last)), "the record holds the last committed update; an abort must not bring back an image it read before that commit");
+        assert_eq!(
+            s.get(r),
+            Some(rec(last)),
+            "the record holds the last committed update; an abort must not bring back an image it read before that commit"
+        );
     }
 }
 
@@ -540,9 +561,18 @@ fn s4c_04_commit_makes_the_transaction_durable_and_nothing_before_it_is_lost() {
     let crashed = World::restart(w.disk.crash(), &w.pages);
     let log = durable(&crashed);
     assert!(log.contains(&LogRecord::Commit { txn: a }), "the commit record is on disk when commit returns");
-    assert!(log.contains(&LogRecord::Change { txn: a, rid: ra, before: None, after: Some(rec(1)) }), "so is everything a transaction logged before it");
-    assert!(log.contains(&LogRecord::Change { txn: b, rid: Rid::new(w.pages[0], 1), before: None, after: Some(rec(2)) }), "and what was logged before it by others");
-    assert!(!log.contains(&LogRecord::Commit { txn: b }), "commit makes the transaction durable and nothing before it is lost: expected `!log.contains(&LogRecord::Commit {{ txn: b }})`");
+    assert!(
+        log.contains(&LogRecord::Change { txn: a, rid: ra, before: None, after: Some(rec(1)) }),
+        "so is everything a transaction logged before it"
+    );
+    assert!(
+        log.contains(&LogRecord::Change { txn: b, rid: Rid::new(w.pages[0], 1), before: None, after: Some(rec(2)) }),
+        "and what was logged before it by others"
+    );
+    assert!(
+        !log.contains(&LogRecord::Commit { txn: b }),
+        "commit makes the transaction durable and nothing before it is lost: expected `!log.contains(&LogRecord::Commit {{ txn: b }})`"
+    );
 }
 
 #[test]
@@ -555,7 +585,10 @@ fn s4c_04_a_page_reaches_the_disk_only_after_its_log_records_did() {
     assert!(durable(&w).is_empty(), "nothing has been flushed yet");
     s.flush_page(w.pages[0]).unwrap();
     let crashed = World::restart(w.disk.crash(), &w.pages);
-    assert!(durable(&crashed).contains(&LogRecord::Change { txn: t, rid: r0, before: Some(rec(1)), after: Some(rec(2)) }), "the page with the update is on disk, so the log record of the update must be too");
+    assert!(
+        durable(&crashed).contains(&LogRecord::Change { txn: t, rid: r0, before: Some(rec(1)), after: Some(rec(2)) }),
+        "the page with the update is on disk, so the log record of the update must be too"
+    );
     assert!(w.disk.stored(w.pages[0].0).iter().any(|b| *b != 0), "and the page was written");
 }
 
@@ -598,7 +631,10 @@ fn s4c_04_a_record_written_by_another_active_transaction_is_refused_until_it_end
     let (a, b) = (s.begin(), s.begin());
     let r = s.insert(a, &rec(1)).unwrap();
     assert!(s.update(b, r, &rec(2)).is_err(), "a has written it");
-    assert!(s.delete(b, r).is_err(), "a record written by another active transaction is refused until it ends: expected `s.delete(b, r).is_err()`");
+    assert!(
+        s.delete(b, r).is_err(),
+        "a record written by another active transaction is refused until it ends: expected `s.delete(b, r).is_err()`"
+    );
     assert_eq!(s.get(r), Some(rec(1)), "the refused calls changed nothing");
     s.update(a, r, &rec(3)).unwrap();
     s.commit(a).unwrap();
@@ -732,11 +768,15 @@ fn run_ops(w: &World, store: &Store<'_>, ops: &[Op]) -> Result<Model, TestCaseEr
                 let result = if let Op::Update(..) = op {
                     let v = model.next_value();
                     let res = store.update(t, rid, &v);
-                    if res.is_ok() { model.pending.get_mut(&t).unwrap().insert(k, Some(v)); }
+                    if res.is_ok() {
+                        model.pending.get_mut(&t).unwrap().insert(k, Some(v));
+                    }
                     res
                 } else {
                     let res = store.delete(t, rid);
-                    if res.is_ok() { model.pending.get_mut(&t).unwrap().insert(k, None); }
+                    if res.is_ok() {
+                        model.pending.get_mut(&t).unwrap().insert(k, None);
+                    }
                     res
                 };
                 prop_assert_eq!(result.is_ok(), allowed, "{:?} of {:?} by {} (held by {:?})", op, rid, t, model.holder(k));
@@ -754,7 +794,9 @@ fn run_ops(w: &World, store: &Store<'_>, ops: &[Op]) -> Result<Model, TestCaseEr
             }
             Op::FlushPage(p) => store.flush_page(w.pages[p % w.pages.len()]).unwrap(),
             Op::FlushLog => w.log.flush().unwrap(),
-            Op::Checkpoint => { store.checkpoint().unwrap(); }
+            Op::Checkpoint => {
+                store.checkpoint().unwrap();
+            }
             _ => continue,
         }
         prop_assert_eq!(contents(store), model.current(), "after {:?}", op);
@@ -824,7 +866,11 @@ fn s4c_05_a_transaction_with_a_commit_or_an_abort_record_finished() {
         LogRecord::Change { txn: 3, rid: rid(0, 1), before: None, after: Some(rec(2)) },
         LogRecord::Abort { txn: 3 },
     ]);
-    assert_eq!(analyse(&log), Analysis { redo_from: 0, finished: vec![1, 3], losers: vec![2] }, "a transaction with a commit or an abort record finished");
+    assert_eq!(
+        analyse(&log),
+        Analysis { redo_from: 0, finished: vec![1, 3], losers: vec![2] },
+        "a transaction with a commit or an abort record finished"
+    );
 }
 
 #[test]
@@ -857,7 +903,11 @@ fn s4c_05_redo_puts_back_what_no_page_ever_saw() {
     let records = w2.log.records().unwrap();
     let n = redo(&s2, &records, 0).unwrap();
     assert_eq!(n, 3, "three changes were logged durably");
-    assert_eq!(contents(&s2), BTreeMap::from([(key(ra), rec(3)), (key(rb), rec(2))]), "history is repeated: b's insert comes back too (undoing it is the next stage)");
+    assert_eq!(
+        contents(&s2),
+        BTreeMap::from([(key(ra), rec(3)), (key(rb), rec(2))]),
+        "history is repeated: b's insert comes back too (undoing it is the next stage)"
+    );
 }
 
 #[test]
@@ -875,7 +925,11 @@ fn s4c_05_redo_is_harmless_where_the_pages_already_have_the_change() {
     assert_eq!(contents(&s2), BTreeMap::from([(key(r), rec(2))]), "redo is harmless where the pages already have the change");
     let records = w2.log.records().unwrap();
     redo(&s2, &records, 0).unwrap();
-    assert_eq!(contents(&s2), BTreeMap::from([(key(r), rec(2)), (key(r2), rec(3))]), "redo is harmless where the pages already have the change");
+    assert_eq!(
+        contents(&s2),
+        BTreeMap::from([(key(r), rec(2)), (key(r2), rec(3))]),
+        "redo is harmless where the pages already have the change"
+    );
 }
 
 #[test]
@@ -966,7 +1020,11 @@ fn s4c_06_a_losers_insert_update_and_delete_are_all_rolled_back() {
     w.log.flush().unwrap(); // the loser's records are durable, its commit never happened
     let (w2, report) = full_recovery(&w);
     let s2 = w2.store(99_000);
-    assert_eq!(contents(&s2), BTreeMap::from([(key(keep), rec(1)), (key(edit), rec(2)), (key(drop_me), rec(3))]), "a losers insert update and delete are all rolled back");
+    assert_eq!(
+        contents(&s2),
+        BTreeMap::from([(key(keep), rec(1)), (key(edit), rec(2)), (key(drop_me), rec(3))]),
+        "a losers insert update and delete are all rolled back"
+    );
     assert_eq!(report.losers, vec![t], "a losers insert update and delete are all rolled back");
     assert_eq!(report.finished, vec![setup], "a losers insert update and delete are all rolled back");
     assert_eq!(report.undone, 3, "a losers insert update and delete are all rolled back");
@@ -983,11 +1041,15 @@ fn s4c_06_undo_logs_what_it_does_and_ends_each_loser_with_abort() {
     let (w2, _) = full_recovery(&w);
     let log = w2.log.records().unwrap();
     let mine: Vec<LogRecord> = log.into_iter().map(|(_, r)| r).filter(|r| r.txn() == Some(t)).collect();
-    assert_eq!(mine[mine.len() - 3..], [
-        LogRecord::Change { txn: t, rid: r, before: Some(rec(2)), after: Some(rec(1)) },
-        LogRecord::Change { txn: t, rid: r, before: Some(rec(1)), after: None },
-        LogRecord::Abort { txn: t },
-    ], "newest change first, each undo logged as the swapped change, then Abort, all durable");
+    assert_eq!(
+        mine[mine.len() - 3..],
+        [
+            LogRecord::Change { txn: t, rid: r, before: Some(rec(2)), after: Some(rec(1)) },
+            LogRecord::Change { txn: t, rid: r, before: Some(rec(1)), after: None },
+            LogRecord::Abort { txn: t },
+        ],
+        "newest change first, each undo logged as the swapped change, then Abort, all durable"
+    );
 }
 
 #[test]
@@ -1020,7 +1082,11 @@ fn s4c_06_recovery_leaves_the_pages_on_disk_so_a_second_crash_needs_no_log() {
     let (w2, _) = full_recovery(&w);
     // crash again at once and read the pages without any recovery
     let w3 = World::restart(w2.disk.crash(), &w.pages);
-    assert_eq!(contents(&w3.store(1)), BTreeMap::from([(key(r), rec(1))]), "recovery leaves the pages on disk so a second crash needs no log");
+    assert_eq!(
+        contents(&w3.store(1)),
+        BTreeMap::from([(key(r), rec(1))]),
+        "recovery leaves the pages on disk so a second crash needs no log"
+    );
 }
 
 #[test]
@@ -1096,8 +1162,14 @@ fn s4c_07_a_checkpoint_writes_the_log_and_every_page() {
     let crashed = World::restart(w.disk.crash(), &w.pages);
     assert_eq!(contents(&crashed.store(1)), BTreeMap::from([(key(r), rec(1))]), "the page is on disk, with an uncommitted record in it");
     let log = crashed.log.records().unwrap();
-    assert!(log.iter().any(|(l, rec)| *l == lsn && matches!(rec, LogRecord::Checkpoint { .. })), "the checkpoint record is durable at the LSN returned");
-    assert!(crashed.log.records().unwrap().iter().any(|(_, x)| matches!(x, LogRecord::Change { rid, .. } if *rid == r)), "and so are the changes the pages contain");
+    assert!(
+        log.iter().any(|(l, rec)| *l == lsn && matches!(rec, LogRecord::Checkpoint { .. })),
+        "the checkpoint record is durable at the LSN returned"
+    );
+    assert!(
+        crashed.log.records().unwrap().iter().any(|(_, x)| matches!(x, LogRecord::Change { rid, .. } if *rid == r)),
+        "and so are the changes the pages contain"
+    );
 }
 
 #[test]
@@ -1108,13 +1180,29 @@ fn s4c_07_a_checkpoint_names_the_transactions_that_are_active() {
     s.commit(b).unwrap();
     s.abort(c).unwrap();
     s.checkpoint().unwrap();
-    let last = w.log.records().unwrap().into_iter().rev().find_map(|(_, r)| match r { LogRecord::Checkpoint { active } => Some(active), _ => None }).unwrap();
+    let last = w
+        .log
+        .records()
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find_map(|(_, r)| match r {
+            LogRecord::Checkpoint { active } => Some(active),
+            _ => None,
+        })
+        .unwrap();
     assert_eq!(last, vec![a], "only a is still running");
 }
 
 #[test]
 fn s4c_07_analysis_starts_redo_at_the_last_checkpoint() {
-    let log = numbered(vec![begin(1), LogRecord::Checkpoint { active: vec![1] }, begin(2), LogRecord::Checkpoint { active: vec![1, 2] }, LogRecord::Commit { txn: 1 }]);
+    let log = numbered(vec![
+        begin(1),
+        LogRecord::Checkpoint { active: vec![1] },
+        begin(2),
+        LogRecord::Checkpoint { active: vec![1, 2] },
+        LogRecord::Commit { txn: 1 },
+    ]);
     let a = analyse(&log);
     assert_eq!(a.redo_from, 3, "the second checkpoint");
     assert_eq!(a.losers, vec![2], "analysis starts redo at the last checkpoint");
@@ -1164,7 +1252,11 @@ fn s4c_07_a_transaction_that_spans_a_checkpoint_is_rolled_back_whole() {
     s.insert(t, &rec(2)).unwrap();
     w.log.flush().unwrap();
     let (w2, report) = full_recovery(&w);
-    assert_eq!(contents(&w2.store(1)), BTreeMap::from([(key(base), rec(0))]), "the changes before the checkpoint (on disk already) and after it are all undone");
+    assert_eq!(
+        contents(&w2.store(1)),
+        BTreeMap::from([(key(base), rec(0))]),
+        "the changes before the checkpoint (on disk already) and after it are all undone"
+    );
     assert_eq!(report.undone, 3, "a transaction that spans a checkpoint is rolled back whole");
 }
 
@@ -1178,7 +1270,11 @@ fn s4c_07_a_transaction_that_began_before_the_checkpoint_and_committed_after_it_
     let r2 = s.insert(t, &rec(2)).unwrap();
     s.commit(t).unwrap();
     let (w2, _) = full_recovery(&w);
-    assert_eq!(contents(&w2.store(1)), BTreeMap::from([(key(r), rec(1)), (key(r2), rec(2))]), "a transaction that began before the checkpoint and committed after it is kept");
+    assert_eq!(
+        contents(&w2.store(1)),
+        BTreeMap::from([(key(r), rec(1)), (key(r2), rec(2))]),
+        "a transaction that began before the checkpoint and committed after it is kept"
+    );
 }
 
 proptest! {
@@ -1233,11 +1329,25 @@ enum Bank {
 fn bank_script() -> Vec<Bank> {
     use Bank::*;
     vec![
-        Begin, Debit(0, 30), Credit(1, 30), Commit,
-        Begin, Debit(1, 50), Credit(2, 50), Abort,
-        Begin, Debit(2, 10), Credit(3, 10), Commit,
-        Begin, Debit(3, 70), Credit(0, 70), Commit,
-        Begin, Debit(0, 5), Credit(1, 5),
+        Begin,
+        Debit(0, 30),
+        Credit(1, 30),
+        Commit,
+        Begin,
+        Debit(1, 50),
+        Credit(2, 50),
+        Abort,
+        Begin,
+        Debit(2, 10),
+        Credit(3, 10),
+        Commit,
+        Begin,
+        Debit(3, 70),
+        Credit(0, 70),
+        Commit,
+        Begin,
+        Debit(0, 5),
+        Credit(1, 5),
     ]
 }
 
@@ -1257,10 +1367,22 @@ fn s4c_08_money_is_neither_lost_nor_made_whenever_the_crash_comes() {
             for (i, step) in script.iter().take(crash_after).enumerate() {
                 match *step {
                     Bank::Begin => txn = Some(s.begin()),
-                    Bank::Debit(a, n) => { balances[a] -= n; s.update(txn.unwrap(), rids[a], &account(balances[a])).unwrap(); }
-                    Bank::Credit(a, n) => { balances[a] += n; s.update(txn.unwrap(), rids[a], &account(balances[a])).unwrap(); }
-                    Bank::Commit => { s.commit(txn.take().unwrap()).unwrap(); committed = balances; }
-                    Bank::Abort => { s.abort(txn.take().unwrap()).unwrap(); balances = committed; }
+                    Bank::Debit(a, n) => {
+                        balances[a] -= n;
+                        s.update(txn.unwrap(), rids[a], &account(balances[a])).unwrap();
+                    }
+                    Bank::Credit(a, n) => {
+                        balances[a] += n;
+                        s.update(txn.unwrap(), rids[a], &account(balances[a])).unwrap();
+                    }
+                    Bank::Commit => {
+                        s.commit(txn.take().unwrap()).unwrap();
+                        committed = balances;
+                    }
+                    Bank::Abort => {
+                        s.abort(txn.take().unwrap()).unwrap();
+                        balances = committed;
+                    }
                 }
                 match flush_mode {
                     1 => s.flush_all_pages().unwrap(),
@@ -1270,8 +1392,16 @@ fn s4c_08_money_is_neither_lost_nor_made_whenever_the_crash_comes() {
             }
             let (w2, _) = full_recovery(&w);
             let after: Vec<u64> = rids.iter().map(|r| balance(&w2.store(1).get(*r).expect("the account exists"))).collect();
-            assert_eq!(after.iter().sum::<u64>(), 400, "money was lost or made (crash after step {crash_after}, flush mode {flush_mode}): {after:?}");
-            assert_eq!(after, committed.to_vec(), "exactly the committed transfers survive (crash after step {crash_after}, flush mode {flush_mode})");
+            assert_eq!(
+                after.iter().sum::<u64>(),
+                400,
+                "money was lost or made (crash after step {crash_after}, flush mode {flush_mode}): {after:?}"
+            );
+            assert_eq!(
+                after,
+                committed.to_vec(),
+                "exactly the committed transfers survive (crash after step {crash_after}, flush mode {flush_mode})"
+            );
         }
     }
 }
@@ -1294,7 +1424,11 @@ fn s4c_08_a_garbage_tail_on_the_log_is_ignored_and_does_not_get_in_the_way_of_ne
     {
         let s2 = w2.store(500);
         recover(&s2, &w2.log).unwrap();
-        assert_eq!(contents(&s2), BTreeMap::from([(key(r), rec(1))]), "a garbage tail on the log is ignored and does not get in the way of new work");
+        assert_eq!(
+            contents(&s2),
+            BTreeMap::from([(key(r), rec(1))]),
+            "a garbage tail on the log is ignored and does not get in the way of new work"
+        );
         let t2 = s2.begin();
         let r2 = s2.insert(t2, &rec(7)).unwrap();
         s2.commit(t2).unwrap();
@@ -1607,7 +1741,11 @@ mod ch_4c_c4 {
     #[test]
     fn s4c_c4_interleaved_transactions_apply_in_log_order() {
         let l = vec![(1, Set(2, 5, 20)), (2, Set(1, 5, 10)), (3, Commit(1)), (4, Commit(2))];
-        assert_eq!(recover_until(&l, 100), BTreeMap::from([(5, 10)]), "the writes are applied in log order: transaction 1 wrote last, though transaction 2 committed last");
+        assert_eq!(
+            recover_until(&l, 100),
+            BTreeMap::from([(5, 10)]),
+            "the writes are applied in log order: transaction 1 wrote last, though transaction 2 committed last"
+        );
         assert_eq!(recover_until(&l, 3), BTreeMap::from([(5, 10)]), "this check");
         assert_eq!(recover_until(&l, 2), BTreeMap::new(), "this check");
     }

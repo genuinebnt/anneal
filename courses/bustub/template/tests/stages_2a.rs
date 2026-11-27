@@ -82,7 +82,11 @@ proptest! {
 
 #[test]
 fn s2a_01_sizes_are_what_a_page_layout_can_count_on() {
-    assert_eq!((<i32 as FixedSize>::SIZE, <u32 as FixedSize>::SIZE, <i64 as FixedSize>::SIZE), (4, 4, 8), "sizes are what a page layout can count on");
+    assert_eq!(
+        (<i32 as FixedSize>::SIZE, <u32 as FixedSize>::SIZE, <i64 as FixedSize>::SIZE),
+        (4, 4, 8),
+        "sizes are what a page layout can count on"
+    );
     assert_eq!((<PageId as FixedSize>::SIZE, <Rid as FixedSize>::SIZE), (4, 8), "sizes are what a page layout can count on");
 }
 
@@ -156,7 +160,11 @@ proptest! {
 fn s2a_02_array_size_is_what_fits_after_the_metadata() {
     assert_eq!(array_size(8, 16), (BUSTUB_PAGE_SIZE - 8) / 16, "array size is what fits after the metadata");
     assert_eq!(array_size(0, 8192), 1, "array size is what fits after the metadata");
-    assert_eq!(array_size(HTABLE_BUCKET_PAGE_METADATA_SIZE, <(GenericKey<8>, Rid) as FixedSize>::SIZE), 511, "array size is what fits after the metadata");
+    assert_eq!(
+        array_size(HTABLE_BUCKET_PAGE_METADATA_SIZE, <(GenericKey<8>, Rid) as FixedSize>::SIZE),
+        511,
+        "array size is what fits after the metadata"
+    );
     const AT_COMPILE_TIME: usize = array_size(8, 12);
     assert_eq!(AT_COMPILE_TIME, 682, "array size is what fits after the metadata");
 }
@@ -441,7 +449,11 @@ fn s2a_c1_rank_counts_the_smaller_numbers_whether_or_not_the_number_is_there() {
     for x in [10, 30, 20, 40] {
         assert!(s.insert(x), "s2a c1 rank counts the smaller numbers whether or not the number is there: expected `s.insert(x)`");
     }
-    assert_eq!((s.rank(5), s.rank(10), s.rank(15), s.rank(40), s.rank(41)), (0, 0, 1, 3, 4), "s2a c1 rank counts the smaller numbers whether or not the number is there");
+    assert_eq!(
+        (s.rank(5), s.rank(10), s.rank(15), s.rank(40), s.rank(41)),
+        (0, 0, 1, 3, 4),
+        "s2a c1 rank counts the smaller numbers whether or not the number is there"
+    );
 }
 
 #[test]
@@ -450,7 +462,11 @@ fn s2a_c1_select_is_the_inverse_of_rank() {
     for x in [7, 3, 9, 5] {
         s.insert(x);
     }
-    assert_eq!((s.select(0), s.select(1), s.select(3), s.select(4)), (Some(3), Some(5), Some(9), None), "s2a c1 select is the inverse of rank");
+    assert_eq!(
+        (s.select(0), s.select(1), s.select(3), s.select(4)),
+        (Some(3), Some(5), Some(9), None),
+        "s2a c1 select is the inverse of rank"
+    );
     for i in 0..s.len() {
         assert_eq!(s.rank(s.select(i).unwrap()), i, "s2a c1 select is the inverse of rank");
     }
@@ -493,7 +509,11 @@ fn s2a_c1_a_large_set_answers_quickly() {
         total += s.rank(q);
     }
     assert!(total > 0, "s2a c1 a large set answers quickly: expected `total > 0`");
-    assert!(t.elapsed() < std::time::Duration::from_secs(5), "200 000 ranks over 20 000 numbers took {:?}: rank must not scan", t.elapsed());
+    assert!(
+        t.elapsed() < std::time::Duration::from_secs(5),
+        "200 000 ranks over 20 000 numbers took {:?}: rank must not scan",
+        t.elapsed()
+    );
 }
 
 proptest! {

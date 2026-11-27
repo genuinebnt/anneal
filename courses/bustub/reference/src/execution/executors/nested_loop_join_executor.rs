@@ -35,7 +35,9 @@ pub fn nulls_for(schema: &Schema) -> Vec<Value> {
 
 impl<'e> NestedLoopJoinExecutor<'e> {
     pub fn new(plan: PlanRef, left: ExecutorBox<'e>, right: ExecutorBox<'e>) -> Result<NestedLoopJoinExecutor<'e>> {
-        let PlanKind::NestedLoopJoin { predicate, join_type } = &plan.kind else { unreachable!("a NestedLoopJoinExecutor needs a NestedLoopJoin plan") };
+        let PlanKind::NestedLoopJoin { predicate, join_type } = &plan.kind else {
+            unreachable!("a NestedLoopJoinExecutor needs a NestedLoopJoin plan")
+        };
         if !matches!(join_type, JoinType::Left | JoinType::Inner) {
             return Err(Exception::new(ExceptionType::NotImplemented, format!("join type {join_type} not supported")));
         }

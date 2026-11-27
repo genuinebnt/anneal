@@ -57,7 +57,9 @@ fn finish_within<T: Send + 'static>(what: &str, f: impl FnOnce() -> T + Send + '
     match rx.recv_timeout(Duration::from_secs(20)) {
         Ok(Ok(value)) => value,
         Ok(Err(panic)) => std::panic::resume_unwind(panic),
-        Err(_) => panic!("{what}: still going after 20 seconds. A lock request is waiting for a grant that never comes, or a thread was never woken."),
+        Err(_) => panic!(
+            "{what}: still going after 20 seconds. A lock request is waiting for a grant that never comes, or a thread was never woken."
+        ),
     }
 }
 
@@ -128,8 +130,14 @@ fn s4d_01_readers_and_intending_writers_do_not_mix() {
     assert!(compatible(Shared, Shared), "readers and intending writers do not mix: expected `compatible(Shared, Shared)`");
     assert!(compatible(IntentionExclusive, IntentionExclusive), "two writers of different rows can share a table");
     assert!(!compatible(Shared, IntentionExclusive), "a reader of the whole table and a writer of one row of it conflict");
-    assert!(!compatible(SharedIntentionExclusive, SharedIntentionExclusive), "readers and intending writers do not mix: expected `!compatible(SharedIntentionExclusive, SharedIntentionExclusive)`");
-    assert!(!compatible(SharedIntentionExclusive, Shared), "readers and intending writers do not mix: expected `!compatible(SharedIntentionExclusive, Shared)`");
+    assert!(
+        !compatible(SharedIntentionExclusive, SharedIntentionExclusive),
+        "readers and intending writers do not mix: expected `!compatible(SharedIntentionExclusive, SharedIntentionExclusive)`"
+    );
+    assert!(
+        !compatible(SharedIntentionExclusive, Shared),
+        "readers and intending writers do not mix: expected `!compatible(SharedIntentionExclusive, Shared)`"
+    );
 }
 
 #[test]
@@ -310,7 +318,11 @@ fn s4d_03_try_lock_of_a_mode_already_held_is_true_even_with_a_writer_waiting() {
         while m.waiting(a) != 1 {
             thread::sleep(Duration::from_millis(2));
         }
-        assert_eq!(m.try_lock(1, a, Shared), Ok(true), "a transaction that holds S already has what it asks for: try_lock agrees with lock");
+        assert_eq!(
+            m.try_lock(1, a, Shared),
+            Ok(true),
+            "a transaction that holds S already has what it asks for: try_lock agrees with lock"
+        );
         m.unlock(1, a).unwrap();
         assert!(writer.join().unwrap().is_ok(), "the waiting writer gets the lock once S is released");
     });
@@ -606,7 +618,11 @@ fn s4d_04_a_weaker_mode_than_the_one_held_is_not_an_upgrade() {
     let m = LockManager::new();
     m.lock(1, table(1), Exclusive).unwrap();
     assert_eq!(kind(m.lock(1, table(1), Shared)), LockErrorKind::IncompatibleUpgrade, "a weaker mode than the one held is not an upgrade");
-    assert_eq!(kind(m.lock(1, table(1), IntentionShared)), LockErrorKind::IncompatibleUpgrade, "a weaker mode than the one held is not an upgrade");
+    assert_eq!(
+        kind(m.lock(1, table(1), IntentionShared)),
+        LockErrorKind::IncompatibleUpgrade,
+        "a weaker mode than the one held is not an upgrade"
+    );
     m.lock(2, table(2), IntentionExclusive).unwrap();
     assert_eq!(kind(m.lock(2, table(2), Shared)), LockErrorKind::IncompatibleUpgrade, "IX to S is sideways, not up");
     assert_eq!(m.holders(table(1)), vec![(1, Exclusive)], "a refused request changes nothing");
@@ -628,13 +644,20 @@ fn s4d_04_an_upgrade_in_the_middle_of_a_queue_does_not_lose_the_others() {
             pause();
         }
         m.lock(1, table(1), Shared).unwrap();
-        assert_eq!(m.holders(table(1)), vec![(1, Shared), (2, IntentionShared)], "an upgrade in the middle of a queue does not lose the others");
+        assert_eq!(
+            m.holders(table(1)),
+            vec![(1, Shared), (2, IntentionShared)],
+            "an upgrade in the middle of a queue does not lose the others"
+        );
         m.unlock(1, table(1)).unwrap();
         m.unlock(2, table(1)).unwrap();
         for h in hs {
             h.join().unwrap();
         }
-        assert!(m.holders(table(1)).is_empty(), "an upgrade in the middle of a queue does not lose the others: expected `m.holders(table(1)).is_empty()`");
+        assert!(
+            m.holders(table(1)).is_empty(),
+            "an upgrade in the middle of a queue does not lose the others: expected `m.holders(table(1)).is_empty()`"
+        );
     });
 }
 
@@ -734,7 +757,11 @@ fn s4d_05_a_row_lock_needs_a_table_lock_that_is_enough() {
     }
     let s = txn(6, LockIsolation::RepeatableRead);
     m.lock_table(&s, Shared, 9).unwrap();
-    assert_eq!(kind(m.lock_row(&s, Exclusive, 9, rid(1))), LockErrorKind::TableLockNotPresent, "a shared table lock does not allow writing a row");
+    assert_eq!(
+        kind(m.lock_row(&s, Exclusive, 9, rid(1))),
+        LockErrorKind::TableLockNotPresent,
+        "a shared table lock does not allow writing a row"
+    );
 }
 
 #[test]
@@ -743,7 +770,11 @@ fn s4d_05_a_table_cannot_be_unlocked_while_its_rows_are() {
     let t = txn(1, LockIsolation::RepeatableRead);
     m.lock_table(&t, IntentionExclusive, 1).unwrap();
     m.lock_row(&t, Exclusive, 1, rid(1)).unwrap();
-    assert_eq!(kind(m.unlock_table(&t, 1)), LockErrorKind::TableUnlockedBeforeUnlockingRows, "a table cannot be unlocked while its rows are");
+    assert_eq!(
+        kind(m.unlock_table(&t, 1)),
+        LockErrorKind::TableUnlockedBeforeUnlockingRows,
+        "a table cannot be unlocked while its rows are"
+    );
     assert_eq!(t.state(), LockState::Aborted, "a table cannot be unlocked while its rows are");
 
     let t = txn(2, LockIsolation::RepeatableRead);
@@ -784,7 +815,10 @@ fn s4d_05_an_aborted_or_committed_transaction_takes_no_locks() {
     let t = txn(2, LockIsolation::RepeatableRead);
     t.set_state(LockState::Committed);
     assert_eq!(kind(m.lock_table(&t, Shared, 1)), LockErrorKind::NotRunning, "an aborted or committed transaction takes no locks");
-    assert!(m.holders(table(1)).is_empty(), "an aborted or committed transaction takes no locks: expected `m.holders(table(1)).is_empty()`");
+    assert!(
+        m.holders(table(1)).is_empty(),
+        "an aborted or committed transaction takes no locks: expected `m.holders(table(1)).is_empty()`"
+    );
 }
 
 #[test]
@@ -1042,7 +1076,11 @@ fn s4d_06_a_deadlock_through_queue_order_is_found() {
             thread::spawn(move || m.lock(1, b, Shared))
         };
         until(1, b);
-        assert_eq!(m.detect_deadlocks(), vec![3], "a request also waits for the earlier waiters it conflicts with: T3 is behind T2, and the youngest on the cycle is the victim");
+        assert_eq!(
+            m.detect_deadlocks(),
+            vec![3],
+            "a request also waits for the earlier waiters it conflicts with: T3 is behind T2, and the youngest on the cycle is the victim"
+        );
         assert_eq!(kind(t3.join().unwrap()), LockErrorKind::Deadlock, "the victim's waiting lock call returns Deadlock");
         m.unlock(3, b).unwrap();
         assert!(t1.join().unwrap().is_ok(), "once the victim lets go, T1 gets S(B)");
@@ -1160,7 +1198,8 @@ fn serializable(histories: &[History]) -> bool {
             if a == b {
                 continue;
             }
-            let conflict = histories[a].iter().any(|&(sa, ra, wa)| histories[b].iter().any(|&(sb, rb, wb)| ra == rb && (wa || wb) && sa < sb));
+            let conflict =
+                histories[a].iter().any(|&(sa, ra, wa)| histories[b].iter().any(|&(sb, rb, wb)| ra == rb && (wa || wb) && sa < sb));
             if conflict {
                 edges[a].insert(b);
             }
@@ -1206,7 +1245,14 @@ fn run_bank(iso: LockIsolation, workers: usize, transfers: usize, rows: u32) -> 
     let histories: Arc<Mutex<Vec<History>>> = Arc::new(Mutex::new(Vec::new()));
     let hs: Vec<_> = (0..workers)
         .map(|w| {
-            let (m, balances, seq, next_id, aborts, histories) = (Arc::clone(&m), Arc::clone(&balances), Arc::clone(&seq), Arc::clone(&next_id), Arc::clone(&aborts), Arc::clone(&histories));
+            let (m, balances, seq, next_id, aborts, histories) = (
+                Arc::clone(&m),
+                Arc::clone(&balances),
+                Arc::clone(&seq),
+                Arc::clone(&next_id),
+                Arc::clone(&aborts),
+                Arc::clone(&histories),
+            );
             thread::spawn(move || {
                 let mut rng = (w as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
                 let mut rand = move |n: u32| {
@@ -1386,7 +1432,11 @@ fn s4d_07_a_victim_that_is_waiting_for_a_row_gives_up_and_the_survivor_commits()
                 r
             })
         };
-        assert_eq!(kind(hb.join().unwrap()), LockErrorKind::Deadlock, "a victim that is waiting for a row gives up and the survivor commits");
+        assert_eq!(
+            kind(hb.join().unwrap()),
+            LockErrorKind::Deadlock,
+            "a victim that is waiting for a row gives up and the survivor commits"
+        );
         assert_eq!(b.state(), LockState::Aborted, "the victim's transaction is aborted");
         assert_eq!(ha.join().unwrap(), Ok(()), "a victim that is waiting for a row gives up and the survivor commits");
         assert_eq!(a.state(), LockState::Growing, "the survivor goes on");

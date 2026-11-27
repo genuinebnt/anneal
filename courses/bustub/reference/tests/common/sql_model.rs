@@ -37,7 +37,11 @@ fn prec(e: &Expr) -> u8 {
 }
 
 fn paren(e: &Expr, needed: bool) -> String {
-    if needed { format!("({})", show(e)) } else { show(e) }
+    if needed {
+        format!("({})", show(e))
+    } else {
+        show(e)
+    }
 }
 
 /// SQL text for `e` (integers, NULL, columns, `+ - = <> < <= > >= and or`).
@@ -133,13 +137,18 @@ pub fn arith(columns: &'static [&'static str], depth: u32) -> impl Strategy<Valu
         3 => (-9i64..=9).prop_map(Expr::Integer),
         1 => Just(Expr::Null),
     ];
-    leaf.prop_recursive(depth, 8, 2, |inner| (prop::sample::select(vec!["+", "-"]), inner.clone(), inner).prop_map(|(op, l, r)| bin(op, l, r)))
+    leaf.prop_recursive(depth, 8, 2, |inner| {
+        (prop::sample::select(vec!["+", "-"]), inner.clone(), inner).prop_map(|(op, l, r)| bin(op, l, r))
+    })
 }
 
 /// Comparisons of arithmetic, combined with `and` / `or`.
 pub fn predicate(columns: &'static [&'static str]) -> impl Strategy<Value = Expr> {
-    let cmp = (prop::sample::select(vec!["=", "<>", "<", "<=", ">", ">="]), arith(columns, 1), arith(columns, 1)).prop_map(|(op, l, r)| bin(op, l, r));
-    cmp.prop_recursive(2, 6, 2, |inner| (prop::sample::select(vec!["and", "or"]), inner.clone(), inner).prop_map(|(op, l, r)| bin(op, l, r)))
+    let cmp = (prop::sample::select(vec!["=", "<>", "<", "<=", ">", ">="]), arith(columns, 1), arith(columns, 1))
+        .prop_map(|(op, l, r)| bin(op, l, r));
+    cmp.prop_recursive(2, 6, 2, |inner| {
+        (prop::sample::select(vec!["and", "or"]), inner.clone(), inner).prop_map(|(op, l, r)| bin(op, l, r))
+    })
 }
 
 /// A cell: usually a small integer, sometimes NULL.

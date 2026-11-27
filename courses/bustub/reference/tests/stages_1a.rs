@@ -110,10 +110,14 @@ fn agrees_with_the_model(disk: &impl Store, ops: &[Op]) -> Result<(), TestCaseEr
                     continue;
                 }
                 let want = model.get(&p).map(|&s| pattern(s as usize)).unwrap_or(ZERO);
-                prop_assert!(buf == want, "step {step}: reading page {p} gave the wrong bytes (page {p} was {})", match model.get(&p) {
-                    Some(s) => format!("last written with pattern {s}"),
-                    None => "never written, so it must read as all zeros".to_string(),
-                });
+                prop_assert!(
+                    buf == want,
+                    "step {step}: reading page {p} gave the wrong bytes (page {p} was {})",
+                    match model.get(&p) {
+                        Some(s) => format!("last written with pattern {s}"),
+                        None => "never written, so it must read as all zeros".to_string(),
+                    }
+                );
             }
         }
     }
@@ -419,7 +423,10 @@ fn s1a_03_the_log_file_on_disk_holds_exactly_what_was_appended_and_survives_reop
     dm.write_log(b"again").unwrap();
     assert_eq!(std::fs::read(dm.log_file_name()).unwrap(), b"hello again", "the log is appended to, never truncated by reopening");
     let mut buf = [0u8; 11];
-    assert!(dm.read_log(&mut buf, 0).unwrap(), "the log file on disk holds exactly what was appended and survives reopening: expected `dm.read_log(&mut buf, 0).unwrap()`");
+    assert!(
+        dm.read_log(&mut buf, 0).unwrap(),
+        "the log file on disk holds exactly what was appended and survives reopening: expected `dm.read_log(&mut buf, 0).unwrap()`"
+    );
     assert_eq!(&buf, b"hello again", "read_log sees the earlier session's bytes too");
 }
 
@@ -620,9 +627,16 @@ fn s1a_05_concurrent_writes_deletes_and_log_appends_keep_the_counters_exact() {
     for h in handles {
         h.join().unwrap();
     }
-    assert_eq!((dm.get_num_writes(), dm.get_num_deletes(), dm.get_num_flushes()), (200, 200, 200), "writes, deletes and flushes, all exact");
+    assert_eq!(
+        (dm.get_num_writes(), dm.get_num_deletes(), dm.get_num_flushes()),
+        (200, 200, 200),
+        "writes, deletes and flushes, all exact"
+    );
     let mut buf = vec![0u8; 1000];
-    assert!(dm.read_log(&mut buf, 0).unwrap(), "concurrent writes deletes and log appends keep the counters exact: expected `dm.read_log(&mut buf, 0).unwrap()`");
+    assert!(
+        dm.read_log(&mut buf, 0).unwrap(),
+        "concurrent writes deletes and log appends keep the counters exact: expected `dm.read_log(&mut buf, 0).unwrap()`"
+    );
     assert!(buf.iter().all(|&b| b < 4), "1000 bytes were appended, each from one of the four threads");
 }
 
@@ -637,7 +651,10 @@ fn s1a_05_shut_down_makes_the_log_available_to_the_next_manager() {
     }
     let dm = new_dm(&dir);
     let mut buf = [0u8; 8];
-    assert!(dm.read_log(&mut buf, 0).unwrap(), "shut down makes the log available to the next manager: expected `dm.read_log(&mut buf, 0).unwrap()`");
+    assert!(
+        dm.read_log(&mut buf, 0).unwrap(),
+        "shut down makes the log available to the next manager: expected `dm.read_log(&mut buf, 0).unwrap()`"
+    );
     assert_eq!(&buf, b"commit 1", "the log written before shut_down is there when the same files are opened again");
 }
 
@@ -751,9 +768,15 @@ fn s1a_c1_a_write_fails_only_when_both_disks_fail() {
     let m = MirroredDisk::new(a.clone(), b.clone());
     a.set_down(true);
     b.set_down(true);
-    assert!(m.write_page(PageId(1), &pattern(1)).is_err(), "s1a c1 a write fails only when both disks fail: expected `m.write_page(PageId(1), &pattern(1)).is_err()`");
+    assert!(
+        m.write_page(PageId(1), &pattern(1)).is_err(),
+        "s1a c1 a write fails only when both disks fail: expected `m.write_page(PageId(1), &pattern(1)).is_err()`"
+    );
     let mut buf = ZERO;
-    assert!(m.read_page(PageId(1), &mut buf).is_err(), "s1a c1 a write fails only when both disks fail: expected `m.read_page(PageId(1), &mut buf).is_err()`");
+    assert!(
+        m.read_page(PageId(1), &mut buf).is_err(),
+        "s1a c1 a write fails only when both disks fail: expected `m.read_page(PageId(1), &mut buf).is_err()`"
+    );
 }
 
 #[derive(Clone, Debug)]

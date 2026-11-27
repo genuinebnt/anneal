@@ -72,9 +72,7 @@ impl BitSet {
     /// The set indexes, in increasing order.
     pub fn iter(&self) -> Box<dyn Iterator<Item = usize> + '_> {
         // @begin r-c3
-        Box::new(self.words.iter().enumerate().flat_map(|(w, &word)| {
-            (0..64).filter(move |b| word >> b & 1 == 1).map(move |b| w * 64 + b)
-        }))
+        Box::new(self.words.iter().enumerate().flat_map(|(w, &word)| (0..64).filter(move |b| word >> b & 1 == 1).map(move |b| w * 64 + b)))
         //~ todo!("r-c3: the set indexes in increasing order")
         // @end
     }

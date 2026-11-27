@@ -51,7 +51,11 @@ impl DiskIo for MirroredDisk {
                         let other = if is_primary { &self.secondary } else { &self.primary };
                         if other.write_page(page_id, buf).is_ok() {
                             let mut st = self.stale.lock().unwrap();
-                            if is_primary { st.1.remove(&page_id) } else { st.0.remove(&page_id) };
+                            if is_primary {
+                                st.1.remove(&page_id)
+                            } else {
+                                st.0.remove(&page_id)
+                            };
                         }
                     }
                     return Ok(());

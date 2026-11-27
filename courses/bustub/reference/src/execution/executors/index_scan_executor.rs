@@ -33,11 +33,28 @@ pub struct IndexScanExecutor<'e> {
 
 impl<'e> IndexScanExecutor<'e> {
     pub fn new(ctx: &'e ExecutorContext<'e>, plan: PlanRef) -> Result<IndexScanExecutor<'e>> {
-        let PlanKind::IndexScan { table_oid, index_oid, filter_predicate, pred_keys } = &plan.kind else { unreachable!("an IndexScanExecutor needs an IndexScan plan") };
-        let table_info = ctx.catalog.table_info(*table_oid).ok_or_else(|| Exception::new(ExceptionType::Execution, "the table of an index scan does not exist"))?;
-        let index_info = ctx.catalog.get_index_by_oid(*index_oid).ok_or_else(|| Exception::new(ExceptionType::Execution, "the index of an index scan does not exist"))?;
+        let PlanKind::IndexScan { table_oid, index_oid, filter_predicate, pred_keys } = &plan.kind else {
+            unreachable!("an IndexScanExecutor needs an IndexScan plan")
+        };
+        let table_info = ctx
+            .catalog
+            .table_info(*table_oid)
+            .ok_or_else(|| Exception::new(ExceptionType::Execution, "the table of an index scan does not exist"))?;
+        let index_info = ctx
+            .catalog
+            .get_index_by_oid(*index_oid)
+            .ok_or_else(|| Exception::new(ExceptionType::Execution, "the index of an index scan does not exist"))?;
         let (filter_predicate, pred_keys) = (filter_predicate.clone(), pred_keys.clone());
-        Ok(IndexScanExecutor { plan, table_info, index_info, filter_predicate, pred_keys, rids: vec![], cursor: 0, txn: ctx.txn().cloned().zip(ctx.txn_mgr()) })
+        Ok(IndexScanExecutor {
+            plan,
+            table_info,
+            index_info,
+            filter_predicate,
+            pred_keys,
+            rids: vec![],
+            cursor: 0,
+            txn: ctx.txn().cloned().zip(ctx.txn_mgr()),
+        })
     }
 
     /// The rids this scan visits: with `pred_keys`, the rid under each key (in the order of the keys); without, every rid of the index in

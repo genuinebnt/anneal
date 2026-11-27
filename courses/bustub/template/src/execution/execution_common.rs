@@ -93,7 +93,14 @@ pub fn reconstruct_tuple(schema: &Schema, base_tuple: &Tuple, base_meta: &TupleM
 /// timestamp, or a log of the chain has been garbage collected).
 ///
 /// `undo_link` is the head of the tuple's version chain.
-pub fn collect_undo_logs(rid: Rid, base_meta: &TupleMeta, base_tuple: &Tuple, undo_link: Option<UndoLink>, txn: &Transaction, txn_mgr: &TransactionManager) -> Option<Vec<UndoLog>> {
+pub fn collect_undo_logs(
+    rid: Rid,
+    base_meta: &TupleMeta,
+    base_tuple: &Tuple,
+    undo_link: Option<UndoLink>,
+    txn: &Transaction,
+    txn_mgr: &TransactionManager,
+) -> Option<Vec<UndoLog>> {
     todo!("4a-03: the table's version is visible when its timestamp is at or before the read timestamp or it is this transaction's own; otherwise the chain up to the first log at or before it; None if the chain runs out or a log is gone")
 }
 
@@ -102,7 +109,13 @@ pub fn collect_undo_logs(rid: Rid, base_meta: &TupleMeta, base_tuple: &Tuple, un
 /// `ts` the timestamp of the base version and `prev_version` the log that was the head of the chain.
 ///
 /// Otherwise the log restores exactly the columns whose values differ (compare with [`same_value`]), with `base_tuple`'s values.
-pub fn generate_new_undo_log(schema: &Schema, base_tuple: Option<&Tuple>, target_tuple: Option<&Tuple>, ts: Timestamp, prev_version: UndoLink) -> UndoLog {
+pub fn generate_new_undo_log(
+    schema: &Schema,
+    base_tuple: Option<&Tuple>,
+    target_tuple: Option<&Tuple>,
+    ts: Timestamp,
+    prev_version: UndoLink,
+) -> UndoLog {
     todo!("4a-04: no base: a deleting log; no target: every column; otherwise the columns that differ, with the base tuple's values")
 }
 
@@ -154,7 +167,11 @@ pub fn txn_mgr_dbg(info: &str, txn_mgr: &TransactionManager, table: &crate::cata
                         }
                         let v = log.tuple.get_value(&partial, next);
                         next += 1;
-                        if v.is_null() { "<NULL>".to_string() } else { v.to_string() }
+                        if v.is_null() {
+                            "<NULL>".to_string()
+                        } else {
+                            v.to_string()
+                        }
                     })
                     .collect();
                 format!("({})", cells.join(", "))
@@ -196,7 +213,13 @@ fn update_own_undo_log(txn: &Transaction, schema: &Schema, own: UndoLink, base: 
 /// update needs a target of the same length) with the transaction's temporary timestamp, an undo log leaves the old version for
 /// readers, and the rid joins the write set. Fails with a write-write conflict (and taints the transaction) if another transaction
 /// wrote the tuple first.
-pub fn modify_tuple(txn: &Arc<Transaction>, txn_mgr: &TransactionManager, table: &TableInfo<'_>, rid: Rid, target: Option<&Tuple>) -> Result<()> {
+pub fn modify_tuple(
+    txn: &Arc<Transaction>,
+    txn_mgr: &TransactionManager,
+    table: &TableInfo<'_>,
+    rid: Rid,
+    target: Option<&Tuple>,
+) -> Result<()> {
     let schema = &table.schema;
     let (meta, base_tuple, link) = get_tuple_and_undo_link(txn_mgr, table, rid)?;
     todo!("4b-02: another transaction's write is a write-write conflict that taints this one; the first change leaves an undo log and a later one widens it; the tuple is written in place under the temporary timestamp and joins the write set")
@@ -226,7 +249,13 @@ pub fn true_predicate() -> crate::execution::expressions::abstract_expression::E
 /// becomes live again, as a normal in-place change, [`modify_tuple`]); a new key gets a new tuple and then its entry, and if the entry
 /// cannot be added (another transaction took the key first) the new tuple is buried and the statement fails. Without a primary key the
 /// tuple is simply added. The tuple carries the transaction's temporary timestamp and its rid joins the write set.
-pub fn insert_mvcc(txn: &Arc<Transaction>, txn_mgr: &TransactionManager, table: &TableInfo<'_>, indexes: &[Arc<crate::catalog::catalog::IndexInfo<'_>>], tuple: &Tuple) -> Result<()> {
+pub fn insert_mvcc(
+    txn: &Arc<Transaction>,
+    txn_mgr: &TransactionManager,
+    table: &TableInfo<'_>,
+    indexes: &[Arc<crate::catalog::catalog::IndexInfo<'_>>],
+    tuple: &Tuple,
+) -> Result<()> {
     // 4b-06: with a primary-key index in indexes: a NULL key fails with check_primary_key before anything is written; look the key up (scan_key); a live tuple at its rid: taint and fail (write_write_conflict); a deleted one: reuse the rid with modify_tuple(.., Some(tuple)); no entry: insert the tuple (temp ts), add it to the write set, insert_entry, and if that fails bury the tuple (update_tuple_meta with is_deleted) and fail
     todo!("4b-01: insert the tuple with this transaction's temporary timestamp (not deleted) and add the rid to the write set")
 }

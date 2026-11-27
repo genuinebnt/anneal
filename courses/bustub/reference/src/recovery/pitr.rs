@@ -13,7 +13,8 @@ pub enum Rec {
 /// `log` is `(lsn, record)` in increasing LSN order.
 pub fn recover_until(log: &[(u64, Rec)], upto_lsn: u64) -> BTreeMap<i64, i64> {
     // @begin 4c-c4
-    let committed: BTreeSet<u32> = log.iter().filter(|(lsn, _)| *lsn <= upto_lsn).filter_map(|(_, r)| if let Rec::Commit(t) = r { Some(*t) } else { None }).collect();
+    let committed: BTreeSet<u32> =
+        log.iter().filter(|(lsn, _)| *lsn <= upto_lsn).filter_map(|(_, r)| if let Rec::Commit(t) = r { Some(*t) } else { None }).collect();
     let mut db = BTreeMap::new();
     for (lsn, rec) in log {
         if *lsn > upto_lsn {

@@ -125,7 +125,10 @@ impl<K: Clone + Send + Sync + 'static, const MAX_HEIGHT: usize, const SEED: u32>
     pub fn with_compare(compare: impl Fn(&K, &K) -> bool + Send + Sync + 'static) -> Self {
         // @begin 0b-01
         let header = SkipNode { key: None, links: vec![None; MAX_HEIGHT] };
-        SkipList { compare: Box::new(compare), inner: RwLock::new(Inner { nodes: vec![header], free: vec![], height: 1, size: 0, rng: Mt19937::new(SEED) }) }
+        SkipList {
+            compare: Box::new(compare),
+            inner: RwLock::new(Inner { nodes: vec![header], free: vec![], height: 1, size: 0, rng: Mt19937::new(SEED) }),
+        }
         //~ todo!("0b-01: an empty list: the header node with MAX_HEIGHT empty links, height 1, size 0, a generator seeded with SEED")
         // @end
     }

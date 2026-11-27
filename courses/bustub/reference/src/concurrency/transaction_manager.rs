@@ -8,7 +8,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use super::transaction::{INVALID_TXN_ID, IsolationLevel, Timestamp, Transaction, TransactionState, TxnId, UndoLink, UndoLog, TXN_START_ID};
+use super::transaction::{
+    IsolationLevel, Timestamp, Transaction, TransactionState, TxnId, UndoLink, UndoLog, INVALID_TXN_ID, TXN_START_ID,
+};
 use super::watermark::Watermark;
 use crate::catalog::catalog::{Catalog, TableInfo};
 use crate::common::config::PageId;
@@ -94,7 +96,9 @@ impl TransactionManager {
         let commit_ts = self.last_commit_ts.load(Ordering::SeqCst) + 1;
         let catalog = self.catalog.read().unwrap();
         for (table_oid, rids) in txn.write_sets() {
-            let table = catalog.table_info(table_oid).ok_or_else(|| Exception::new(ExceptionType::Execution, "a written table no longer exists"))?;
+            let table = catalog
+                .table_info(table_oid)
+                .ok_or_else(|| Exception::new(ExceptionType::Execution, "a written table no longer exists"))?;
             for rid in rids {
                 table.table.with_page_mut(rid, |page| -> Result<()> {
                     let meta = page.get_tuple_meta(rid)?;
@@ -163,8 +167,14 @@ impl TransactionManager {
         if txn.write_sets().is_empty() || predicates.is_empty() {
             return true;
         }
-        let committed: Vec<Arc<Transaction>> =
-            self.txn_map.read().unwrap().values().filter(|t| t.state() == TransactionState::Committed && t.commit_ts() > txn.read_ts()).cloned().collect();
+        let committed: Vec<Arc<Transaction>> = self
+            .txn_map
+            .read()
+            .unwrap()
+            .values()
+            .filter(|t| t.state() == TransactionState::Committed && t.commit_ts() > txn.read_ts())
+            .cloned()
+            .collect();
         let catalog = self.catalog.read().unwrap();
         for other in committed {
             for (table_oid, rids) in other.write_sets() {
@@ -323,7 +333,11 @@ pub fn update_tuple_and_undo_link(
 }
 
 /// Reads the tuple at `rid` and its undo link **atomically** (under the page's read latch).
-pub fn get_tuple_and_undo_link(txn_mgr: &TransactionManager, table: &TableInfo<'_>, rid: Rid) -> Result<(TupleMeta, Tuple, Option<UndoLink>)> {
+pub fn get_tuple_and_undo_link(
+    txn_mgr: &TransactionManager,
+    table: &TableInfo<'_>,
+    rid: Rid,
+) -> Result<(TupleMeta, Tuple, Option<UndoLink>)> {
     table.table.with_page(rid, |page| {
         let (meta, tuple) = page.get_tuple(rid)?;
         Ok((meta, tuple, txn_mgr.get_undo_link(rid)))

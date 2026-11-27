@@ -16,10 +16,10 @@ use crate::buffer::buffer_pool_manager::BufferPoolManager;
 use crate::catalog::catalog::Catalog;
 use crate::catalog::schema::Schema;
 use crate::catalog::table_generator::generate_test_tables;
-use crate::concurrency::transaction::Transaction;
-use crate::concurrency::transaction_manager::TransactionManager;
 use crate::common::exception::{Exception, ExceptionType, Result};
 use crate::common::result_writer::ResultWriter;
+use crate::concurrency::transaction::Transaction;
+use crate::concurrency::transaction_manager::TransactionManager;
 use crate::execution::analyze_stats::AnalyzeStats;
 use crate::execution::check_options::CheckOptions;
 use crate::execution::execution_engine::ExecutionEngine;
@@ -53,7 +53,12 @@ impl BusTubInstance {
     fn from_disk(bpm_size: usize, disk: Arc<dyn crate::storage::disk::disk_manager::DiskIo>) -> BusTubInstance {
         let bpm: &'static BufferPoolManager = Box::leak(Box::new(BufferPoolManager::new(bpm_size, disk)));
         let catalog: &'static RwLock<Catalog<'static>> = Box::leak(Box::new(RwLock::new(Catalog::new(bpm))));
-        BusTubInstance { buffer_pool_manager: bpm, catalog, txn_manager: TransactionManager::new(catalog), session_variables: Mutex::new(HashMap::new()) }
+        BusTubInstance {
+            buffer_pool_manager: bpm,
+            catalog,
+            txn_manager: TransactionManager::new(catalog),
+            session_variables: Mutex::new(HashMap::new()),
+        }
     }
 
     /// Creates the `__mock_*` tables (their rows are made up on the fly by the mock scan).
@@ -89,7 +94,13 @@ impl BusTubInstance {
         self.execute_sql_in(sql, writer, None, Some(txn))
     }
 
-    fn execute_sql_in(&self, sql: &str, writer: &mut dyn ResultWriter, check_options: Option<&CheckOptions>, txn: Option<&Arc<Transaction>>) -> Result<bool> {
+    fn execute_sql_in(
+        &self,
+        sql: &str,
+        writer: &mut dyn ResultWriter,
+        check_options: Option<&CheckOptions>,
+        txn: Option<&Arc<Transaction>>,
+    ) -> Result<bool> {
         if let Some(txn) = txn {
             if txn.state() != crate::concurrency::transaction::TransactionState::Running {
                 return Err(Exception::new(ExceptionType::Execution, "the transaction is not running"));
@@ -227,7 +238,13 @@ impl BusTubInstance {
 
     // ---- DDL ----------------------------------------------------------------------------------------------------------------
 
-    fn handle_create_statement(&self, table: &str, columns: &[crate::catalog::column::Column], primary_key: &[String], writer: &mut dyn ResultWriter) -> Result<()> {
+    fn handle_create_statement(
+        &self,
+        table: &str,
+        columns: &[crate::catalog::column::Column],
+        primary_key: &[String],
+        writer: &mut dyn ResultWriter,
+    ) -> Result<()> {
         let mut catalog = self.catalog.write().unwrap();
         let schema = Schema::new(columns.to_vec());
         let info = catalog.create_table(table, &schema).ok_or_else(|| Exception::new(ExceptionType::Invalid, "Failed to create table"))?;
@@ -235,13 +252,18 @@ impl BusTubInstance {
         if !primary_key.is_empty() {
             let mut col_ids = vec![];
             for col in primary_key {
-                let idx = info.schema.try_col_idx(col).ok_or_else(|| Exception::new(ExceptionType::Invalid, format!("Column does not exist: {col}")))?;
+                let idx = info
+                    .schema
+                    .try_col_idx(col)
+                    .ok_or_else(|| Exception::new(ExceptionType::Invalid, format!("Column does not exist: {col}")))?;
                 col_ids.push(idx);
             }
             index = catalog.create_index(&format!("{table}_pk"), table, col_ids, true)?;
         }
         match index {
-            Some(index) => writer.one_cell(&format!("Table created with id = {}, Primary key index created with id = {}", info.oid, index.index_oid)),
+            Some(index) => {
+                writer.one_cell(&format!("Table created with id = {}, Primary key index created with id = {}", info.oid, index.index_oid))
+            }
             None => writer.one_cell(&format!("Table created with id = {}", info.oid)),
         }
         Ok(())
@@ -260,7 +282,9 @@ impl BusTubInstance {
         let mut col_ids = vec![];
         for col in cols {
             let name = col.last().expect("a column reference has a name");
-            col_ids.push(schema.try_col_idx(name).ok_or_else(|| Exception::new(ExceptionType::Invalid, format!("Column does not exist: {name}")))?);
+            col_ids.push(
+                schema.try_col_idx(name).ok_or_else(|| Exception::new(ExceptionType::Invalid, format!("Column does not exist: {name}")))?,
+            );
         }
         if !(index_type.is_empty() || index_type == "bplustree") {
             return Err(Exception::new(ExceptionType::NotImplemented, format!("unsupported index type {index_type}")));

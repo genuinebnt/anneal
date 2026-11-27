@@ -10,15 +10,28 @@ pub type TxnId = u64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LogRecord {
-    Begin { txn: TxnId },
+    Begin {
+        txn: TxnId,
+    },
     /// The slot `rid` goes from the state `before` to the state `after` (`None`: no live record). An insert is `None -> Some`, an update
     /// `Some -> Some`, a delete `Some -> None`, and the undo of any of them is the same record with the two states swapped.
-    Change { txn: TxnId, rid: Rid, before: Option<Vec<u8>>, after: Option<Vec<u8>> },
-    Commit { txn: TxnId },
+    Change {
+        txn: TxnId,
+        rid: Rid,
+        before: Option<Vec<u8>>,
+        after: Option<Vec<u8>>,
+    },
+    Commit {
+        txn: TxnId,
+    },
     /// The transaction was rolled back: every undo of its changes is in the log before this record.
-    Abort { txn: TxnId },
+    Abort {
+        txn: TxnId,
+    },
     /// Every page was written to disk when this was logged; `active` are the transactions that had begun and not finished.
-    Checkpoint { active: Vec<TxnId> },
+    Checkpoint {
+        active: Vec<TxnId>,
+    },
 }
 
 impl LogRecord {

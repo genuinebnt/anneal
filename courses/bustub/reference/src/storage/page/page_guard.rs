@@ -32,7 +32,12 @@ pub struct ReadPageGuard<'a> {
 // @begin 1g-01
 impl<'a> ReadPageGuard<'a> {
     /// Only the buffer pool makes guards: the page must already be pinned and its frame latched.
-    pub(crate) fn new(bpm: &'a BufferPoolManager, page_id: PageId, frame: FrameId, latch: RwLockReadGuard<'a, Box<PageData>>) -> ReadPageGuard<'a> {
+    pub(crate) fn new(
+        bpm: &'a BufferPoolManager,
+        page_id: PageId,
+        frame: FrameId,
+        latch: RwLockReadGuard<'a, Box<PageData>>,
+    ) -> ReadPageGuard<'a> {
         ReadPageGuard { bpm, page_id, frame, latch: Some(latch) }
     }
 }
@@ -109,7 +114,12 @@ pub struct WritePageGuard<'a> {
 
 // @begin 1g-01
 impl<'a> WritePageGuard<'a> {
-    pub(crate) fn new(bpm: &'a BufferPoolManager, page_id: PageId, frame: FrameId, latch: RwLockWriteGuard<'a, Box<PageData>>) -> WritePageGuard<'a> {
+    pub(crate) fn new(
+        bpm: &'a BufferPoolManager,
+        page_id: PageId,
+        frame: FrameId,
+        latch: RwLockWriteGuard<'a, Box<PageData>>,
+    ) -> WritePageGuard<'a> {
         WritePageGuard { bpm, page_id, frame, latch: Some(latch), is_dirty: false }
     }
 }

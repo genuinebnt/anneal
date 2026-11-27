@@ -126,7 +126,16 @@ impl<'e, const K: usize> ExternalMergeSortExecutor<'e, K> {
         assert!(K >= 2, "a merge needs at least two runs");
         let PlanKind::Sort { order_bys } = &plan.kind else { unreachable!("a sort executor needs a Sort plan") };
         let order_bys = order_bys.clone();
-        ExternalMergeSortExecutor { plan, child, bpm: ctx.bpm, cmp: TupleComparator::new(order_bys.clone()), order_bys, sorted: None, next_page: 0, buffered: Default::default() }
+        ExternalMergeSortExecutor {
+            plan,
+            child,
+            bpm: ctx.bpm,
+            cmp: TupleComparator::new(order_bys.clone()),
+            order_bys,
+            sorted: None,
+            next_page: 0,
+            buffered: Default::default(),
+        }
     }
 
     /// Pass 0: reads the whole child and cuts it into sorted runs of **one page each**: collect tuples while they fit in a page, sort

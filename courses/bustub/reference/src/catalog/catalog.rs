@@ -10,8 +10,8 @@ use crate::buffer::buffer_pool_manager::BufferPoolManager;
 use crate::common::exception::{Exception, ExceptionType, Result};
 use crate::storage::index::generic_key::GenericKey;
 use crate::storage::index::index::{key_has_null, not_null_violation, unique_violation, BPlusTreeIndex, Index, IndexMetadata, IndexType};
-use crate::storage::table::tuple::Tuple;
 use crate::storage::table::table_heap::TableHeap;
+use crate::storage::table::tuple::Tuple;
 
 pub type TableOid = u32;
 pub type ColumnOid = u32;
@@ -71,7 +71,15 @@ impl<'a> Catalog<'a> {
     /// An empty catalog over `bpm`.
     pub fn new(bpm: &'a BufferPoolManager) -> Catalog<'a> {
         // @begin 3c-04
-        Catalog { bpm, tables: HashMap::new(), table_names: HashMap::new(), indexes: HashMap::new(), index_names: HashMap::new(), next_table_oid: 0, next_index_oid: 0 }
+        Catalog {
+            bpm,
+            tables: HashMap::new(),
+            table_names: HashMap::new(),
+            indexes: HashMap::new(),
+            index_names: HashMap::new(),
+            next_table_oid: 0,
+            next_index_oid: 0,
+        }
         //~ todo!("3c-04: an empty catalog over the buffer pool")
         // @end
     }
@@ -134,7 +142,13 @@ impl<'a> Catalog<'a> {
     ///
     /// The key is not made of INTEGER columns or is bigger than 64 bytes, or two live tuples have the same non-NULL key (a unique
     /// violation). No index is created then.
-    pub fn create_index(&mut self, index_name: &str, table_name: &str, key_attrs: Vec<u32>, is_primary_key: bool) -> Result<Option<Arc<IndexInfo<'a>>>> {
+    pub fn create_index(
+        &mut self,
+        index_name: &str,
+        table_name: &str,
+        key_attrs: Vec<u32>,
+        is_primary_key: bool,
+    ) -> Result<Option<Arc<IndexInfo<'a>>>> {
         // @begin 3c-04
         let Some(table) = self.get_table(table_name) else { return Ok(None) };
         if self.index_names[table_name].contains_key(index_name) {

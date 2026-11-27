@@ -194,7 +194,8 @@ impl ArcReplacer {
         // @begin 1e-01
         // @begin 1e-02
         // @begin 1e-03
-        let order = if self.mru.len() >= self.mru_target_size { [ArcStatus::Mru, ArcStatus::Mfu] } else { [ArcStatus::Mfu, ArcStatus::Mru] };
+        let order =
+            if self.mru.len() >= self.mru_target_size { [ArcStatus::Mru, ArcStatus::Mfu] } else { [ArcStatus::Mfu, ArcStatus::Mru] };
         //~ let order = [ArcStatus::Mru, ArcStatus::Mfu];
         // @end
         let (frame, status) = order.into_iter().find_map(|status| self.oldest_evictable(status).map(|frame| (frame, status)))?;

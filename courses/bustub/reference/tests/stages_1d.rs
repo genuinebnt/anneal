@@ -28,7 +28,8 @@ fn within<T: Send + 'static>(what: &str, limit: Duration, work: impl FnOnce() ->
     thread::spawn(move || {
         let _ = tx.send(work());
     });
-    rx.recv_timeout(limit).unwrap_or_else(|_| panic!("{what} did not finish in {limit:?}: the cost must not grow with the number of frames"))
+    rx.recv_timeout(limit)
+        .unwrap_or_else(|_| panic!("{what} did not finish in {limit:?}: the cost must not grow with the number of frames"))
 }
 
 struct Lcg(u64);
@@ -115,10 +116,21 @@ fn run(k: usize, ops: &[Op], check: Check) -> Result<(), TestCaseError> {
                 let got = r.evict();
                 let want = model_victim(&model, k);
                 match check {
-                    Check::LruK => prop_assert_eq!(got, want.map(f), "step {}: evict must return the frame with the largest backward k-distance (k = {})", step, k),
+                    Check::LruK => prop_assert_eq!(
+                        got,
+                        want.map(f),
+                        "step {}: evict must return the frame with the largest backward k-distance (k = {})",
+                        step,
+                        k
+                    ),
                     Check::AnyEvictable => match got {
                         None => prop_assert!(want.is_none(), "step {}: evict returned None but a frame is evictable", step),
-                        Some(FrameId(v)) => prop_assert!(model.get(&v).is_some_and(|t| t.evictable), "step {}: evict returned frame {} which is not an evictable frame", step, v),
+                        Some(FrameId(v)) => prop_assert!(
+                            model.get(&v).is_some_and(|t| t.evictable),
+                            "step {}: evict returned frame {} which is not an evictable frame",
+                            step,
+                            v
+                        ),
                     },
                 }
                 if let Some(FrameId(v)) = got {
@@ -191,7 +203,10 @@ fn s1d_01_remove_takes_out_an_evictable_frame_whatever_its_distance() {
 #[test]
 fn s1d_01_misuse_panics() {
     assert!(std::panic::catch_unwind(|| LruKReplacer::new(4, 0)).is_err(), "k = 0 is meaningless: panic");
-    assert!(std::panic::catch_unwind(|| LruKReplacer::new(4, 2).record_access(f(4))).is_err(), "frame 4 is out of range for 4 frames: panic");
+    assert!(
+        std::panic::catch_unwind(|| LruKReplacer::new(4, 2).record_access(f(4))).is_err(),
+        "frame 4 is out of range for 4 frames: panic"
+    );
     let result = std::panic::catch_unwind(|| {
         let mut r = LruKReplacer::new(4, 2);
         r.record_access(f(0));
@@ -224,7 +239,11 @@ fn s1d_02_a_frame_with_fewer_than_k_accesses_goes_before_one_with_k() {
     for x in 0..=4 {
         r.set_evictable(f(x), true);
     }
-    assert_eq!([r.evict(), r.evict(), r.evict(), r.evict()], [Some(f(1)), Some(f(2)), Some(f(3)), Some(f(4))], "the scanned frames go first, oldest first");
+    assert_eq!(
+        [r.evict(), r.evict(), r.evict(), r.evict()],
+        [Some(f(1)), Some(f(2)), Some(f(3)), Some(f(4))],
+        "the scanned frames go first, oldest first"
+    );
     assert_eq!(r.evict(), Some(f(0)), "the frame accessed twice survives the scan");
 }
 
@@ -375,7 +394,11 @@ fn s1d_03_an_access_to_an_evictable_frame_moves_it_in_the_eviction_order() {
     }
     r.record_access(f(0));
     r.record_access(f(0)); // frame 0's two latest accesses are now the most recent ones
-    assert_eq!([r.evict(), r.evict(), r.evict()], [Some(f(1)), Some(f(2)), Some(f(0))], "the order must change when an evictable frame is accessed");
+    assert_eq!(
+        [r.evict(), r.evict(), r.evict()],
+        [Some(f(1)), Some(f(2)), Some(f(0))],
+        "the order must change when an evictable frame is accessed"
+    );
 }
 
 #[test]
@@ -557,7 +580,10 @@ fn s1d_c1_a_scan_is_what_separates_lru_from_least_frequently_used() {
     let lfu_hits = simulate(&trace, 3, Box::new(LfuReplacer::new()));
     assert!(lfu_hits >= 59, "the hot page is never evicted by a frequency policy: {lfu_hits}");
     assert!(lfu_hits >= lru_hits, "on this trace LFU is at least as good as LRU");
-    assert!(belady_hits(&trace, 3) >= lfu_hits, "s1d c1 a scan is what separates lru from least frequently used: expected `belady_hits(&trace, 3) >= lfu_hits`");
+    assert!(
+        belady_hits(&trace, 3) >= lfu_hits,
+        "s1d c1 a scan is what separates lru from least frequently used: expected `belady_hits(&trace, 3) >= lfu_hits`"
+    );
 }
 
 #[test]
@@ -618,7 +644,11 @@ fn s1d_c2_the_distance_is_measured_to_the_kth_most_recent_access() {
     h.record(5);
     assert_eq!(h.k_distance(10), Some(9), "the 2nd most recent access is the one at time 1");
     h.record(9);
-    assert_eq!(h.k_distance(10), Some(5), "now the 2nd most recent is the one at time 5: the access at time 1 is no longer among the last two");
+    assert_eq!(
+        h.k_distance(10),
+        Some(5),
+        "now the 2nd most recent is the one at time 5: the access at time 1 is no longer among the last two"
+    );
 }
 
 #[test]

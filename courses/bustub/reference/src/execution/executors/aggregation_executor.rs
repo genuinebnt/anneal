@@ -38,7 +38,8 @@ fn canonical(v: &Value) -> (u8, i64, u64, &str) {
 impl PartialEq for AggregateKey {
     fn eq(&self, other: &AggregateKey) -> bool {
         // @begin 3f-01
-        self.group_bys.len() == other.group_bys.len() && self.group_bys.iter().zip(&other.group_bys).all(|(a, b)| canonical(a) == canonical(b))
+        self.group_bys.len() == other.group_bys.len()
+            && self.group_bys.iter().zip(&other.group_bys).all(|(a, b)| canonical(a) == canonical(b))
         //~ todo!("3f-01: the same number of values, each pair in the same group (two NULLs are the same; equal integers of any width are the same)")
         // @end
     }
@@ -171,7 +172,9 @@ pub struct AggregationExecutor<'e> {
 
 impl<'e> AggregationExecutor<'e> {
     pub fn new(plan: PlanRef, child: ExecutorBox<'e>) -> AggregationExecutor<'e> {
-        let PlanKind::Aggregation { group_bys, aggregates, agg_types } = &plan.kind else { unreachable!("an AggregationExecutor needs an Aggregation plan") };
+        let PlanKind::Aggregation { group_bys, aggregates, agg_types } = &plan.kind else {
+            unreachable!("an AggregationExecutor needs an Aggregation plan")
+        };
         let (group_bys, aggregates) = (group_bys.clone(), aggregates.clone());
         let table = SimpleAggregationHashTable::new(agg_types.clone());
         AggregationExecutor { plan, child, group_bys, aggregates, table, results: vec![], cursor: 0 }

@@ -9,9 +9,9 @@ use std::sync::Arc;
 use std::thread;
 
 use b_plus_tree_utils::*;
-use std::collections::BTreeSet;
 use bustub::buffer::buffer_pool_manager::BufferPoolManager;
 use bustub::storage::disk::disk_manager_memory::DiskManagerUnlimitedMemory;
+use std::collections::BTreeSet;
 
 const NUM_ITERS: usize = 50;
 const MIXTEST_NUM_ITERS: usize = 20;
@@ -316,7 +316,8 @@ fn random_workload<const T: usize>(leaf: u32, internal: u32, seed: u64) {
         }
         // the shape check walks the whole tree: every fifth step (and the last) finds a broken rule within five operations
         if step % 5 == 0 || step == 1499 {
-            check_shape_t::<T>(&tree, &model, leaf, internal, step % 25 == 0).unwrap_or_else(|e| panic!("T={T} ({leaf},{internal}) seed {seed} step {step}: {e}\n{}", leaves_t(&tree)));
+            check_shape_t::<T>(&tree, &model, leaf, internal, step % 25 == 0)
+                .unwrap_or_else(|e| panic!("T={T} ({leaf},{internal}) seed {seed} step {step}: {e}\n{}", leaves_t(&tree)));
         }
     }
     for k in 0..80 {

@@ -35,7 +35,9 @@ pub struct OuterJoinExecutor<'e> {
 
 impl<'e> OuterJoinExecutor<'e> {
     pub fn new(plan: PlanRef, left: ExecutorBox<'e>, right: ExecutorBox<'e>) -> OuterJoinExecutor<'e> {
-        let PlanKind::NestedLoopJoin { predicate, join_type } = &plan.kind else { unreachable!("an OuterJoinExecutor needs a NestedLoopJoin plan") };
+        let PlanKind::NestedLoopJoin { predicate, join_type } = &plan.kind else {
+            unreachable!("an OuterJoinExecutor needs a NestedLoopJoin plan")
+        };
         let (predicate, join_type) = (predicate.clone(), *join_type);
         OuterJoinExecutor {
             plan,

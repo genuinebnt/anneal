@@ -34,7 +34,13 @@ impl ThrottledDisk {
     pub fn new(inner: Arc<dyn DiskIo>, clock: Arc<dyn Clock>, writes_per_second: u32, burst: u32) -> ThrottledDisk {
         // @begin 1b-c1
         let start = clock.now();
-        ThrottledDisk { inner, clock, rate: writes_per_second as u128, burst: burst as u128 * ONE, bucket: Mutex::new((burst as u128 * ONE, start)) }
+        ThrottledDisk {
+            inner,
+            clock,
+            rate: writes_per_second as u128,
+            burst: burst as u128 * ONE,
+            bucket: Mutex::new((burst as u128 * ONE, start)),
+        }
         //~ todo!("1b-c1: a throttled disk with a full bucket")
         // @end
     }

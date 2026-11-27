@@ -40,7 +40,10 @@ pub struct UpdateExecutor<'e> {
 impl<'e> UpdateExecutor<'e> {
     pub fn new(ctx: &'e ExecutorContext<'e>, plan: PlanRef, child: ExecutorBox<'e>) -> Result<UpdateExecutor<'e>> {
         let PlanKind::Update { table_oid, target_expressions } = &plan.kind else { unreachable!("an UpdateExecutor needs an Update plan") };
-        let table_info = ctx.catalog.table_info(*table_oid).ok_or_else(|| Exception::new(ExceptionType::Execution, "the table of an update does not exist"))?;
+        let table_info = ctx
+            .catalog
+            .table_info(*table_oid)
+            .ok_or_else(|| Exception::new(ExceptionType::Execution, "the table of an update does not exist"))?;
         let indexes = ctx.catalog.get_table_indexes(&table_info.name);
         let target_expressions = target_expressions.clone();
         let txn = ctx.txn().cloned().zip(ctx.txn_mgr());
@@ -91,7 +94,10 @@ impl<'e> UpdateExecutor<'e> {
         let attrs = pk.index.metadata().get_key_attrs();
         for (rid, new) in changes {
             let old = self.table_info.table.get_tuple(*rid)?.1;
-            let (a, b) = (old.key_from_tuple(&self.table_info.schema, &pk.key_schema, attrs), new.key_from_tuple(&self.table_info.schema, &pk.key_schema, attrs));
+            let (a, b) = (
+                old.key_from_tuple(&self.table_info.schema, &pk.key_schema, attrs),
+                new.key_from_tuple(&self.table_info.schema, &pk.key_schema, attrs),
+            );
             if a.data() != b.data() {
                 return Ok(true);
             }

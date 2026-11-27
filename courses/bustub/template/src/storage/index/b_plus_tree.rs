@@ -40,7 +40,14 @@ where
 {
     /// Creates an empty tree whose header page is `header_page_id` (the caller allocated it) and formats that page.
     /// A leaf holds at most `leaf_max_size` pairs (at least 2), an internal page at most `internal_max_size` children (at least 3).
-    pub fn new(index_name: &str, header_page_id: PageId, bpm: &'a BufferPoolManager, cmp: C, leaf_max_size: u32, internal_max_size: u32) -> Self {
+    pub fn new(
+        index_name: &str,
+        header_page_id: PageId,
+        bpm: &'a BufferPoolManager,
+        cmp: C,
+        leaf_max_size: u32,
+        internal_max_size: u32,
+    ) -> Self {
         todo!("2c-01: checks the sizes are usable, remembers the parameters and formats the header page as an empty tree")
     }
 

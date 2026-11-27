@@ -22,9 +22,7 @@ fn matches(p: &Pred, row: &[i64]) -> bool {
 /// True when no write could have changed what any predicate returned.
 pub fn validate(preds: &[Pred], writes: &[Write]) -> bool {
     // @begin 4b-c4
-    !writes.iter().any(|w| {
-        [&w.old, &w.new].into_iter().flatten().any(|row| preds.iter().any(|p| matches(p, row)))
-    })
+    !writes.iter().any(|w| [&w.old, &w.new].into_iter().flatten().any(|row| preds.iter().any(|p| matches(p, row))))
     //~ todo!("4b-c4: a write conflicts when its old or its new row satisfies a predicate")
     // @end
 }

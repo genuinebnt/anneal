@@ -78,7 +78,11 @@ fn rows_1_to(n: i32) -> Vec<Vec<i32>> {
 
 fn seq_scan_plan(info: &TableInfo<'_>, filter: Option<ExprRef>) -> PlanRef {
     let schema = Schema::new(info.schema.columns().iter().map(|c| c.with_column_name(&format!("{}.{}", info.name, c.name()))).collect());
-    PlanNode::new(Arc::new(schema), vec![], PlanKind::SeqScan { table_oid: info.oid, table_name: info.name.clone(), filter_predicate: filter })
+    PlanNode::new(
+        Arc::new(schema),
+        vec![],
+        PlanKind::SeqScan { table_oid: info.oid, table_name: info.name.clone(), filter_predicate: filter },
+    )
 }
 
 fn cmp(col: u32, op: ComparisonType, v: i32) -> ExprRef {
@@ -157,9 +161,16 @@ fn s3e_01_the_rids_are_the_rids_of_the_rows() {
     let mut exec = create_executor(&ctx, &seq_scan_plan(&info, None)).unwrap();
     exec.init().unwrap();
     let (mut tuples, mut rids) = (vec![], vec![]);
-    assert!(exec.next(&mut tuples, &mut rids, 20).unwrap(), "the rids are the rids of the rows: expected `exec.next(&mut tuples, &mut rids, 20).unwrap()`");
+    assert!(
+        exec.next(&mut tuples, &mut rids, 20).unwrap(),
+        "the rids are the rids of the rows: expected `exec.next(&mut tuples, &mut rids, 20).unwrap()`"
+    );
     for (t, rid) in tuples.iter().zip(&rids) {
-        assert_eq!(info.table.get_tuple(*rid).unwrap().1.get_value(&info.schema, 0), t.get_value(&info.schema, 0), "the rids are the rids of the rows");
+        assert_eq!(
+            info.table.get_tuple(*rid).unwrap().1.get_value(&info.schema, 0),
+            t.get_value(&info.schema, 0),
+            "the rids are the rids of the rows"
+        );
     }
     assert_eq!(rids.iter().map(|r| r.slot_num()).collect::<Vec<_>>(), vec![0, 1, 2, 3, 4], "the rids are the rids of the rows");
 }
@@ -188,12 +199,21 @@ fn s3e_01_init_starts_over_and_rows_added_after_init_are_not_seen() {
     // a row stored after init is beyond the point where this scan stops (the Halloween problem)
     info.table.insert_tuple(&TupleMeta { ts: 0, is_deleted: false }, &Tuple::new(&[int(99)], &info.schema)).unwrap();
     let (mut tuples, mut rids) = (vec![], vec![]);
-    assert!(exec.next(&mut tuples, &mut rids, 20).unwrap(), "init starts over and rows added after init are not seen: expected `exec.next(&mut tuples, &mut rids, 20).unwrap()`");
+    assert!(
+        exec.next(&mut tuples, &mut rids, 20).unwrap(),
+        "init starts over and rows added after init are not seen: expected `exec.next(&mut tuples, &mut rids, 20).unwrap()`"
+    );
     assert_eq!(tuples.len(), 3, "init starts over and rows added after init are not seen");
-    assert!(!exec.next(&mut tuples, &mut rids, 20).unwrap(), "init starts over and rows added after init are not seen: expected `!exec.next(&mut tuples, &mut rids, 20).unwrap()`");
+    assert!(
+        !exec.next(&mut tuples, &mut rids, 20).unwrap(),
+        "init starts over and rows added after init are not seen: expected `!exec.next(&mut tuples, &mut rids, 20).unwrap()`"
+    );
     // a second init sees all four rows
     exec.init().unwrap();
-    assert!(exec.next(&mut tuples, &mut rids, 20).unwrap(), "init starts over and rows added after init are not seen: expected `exec.next(&mut tuples, &mut rids, 20).unwrap()`");
+    assert!(
+        exec.next(&mut tuples, &mut rids, 20).unwrap(),
+        "init starts over and rows added after init are not seen: expected `exec.next(&mut tuples, &mut rids, 20).unwrap()`"
+    );
     assert_eq!(tuples.len(), 4, "init starts over and rows added after init are not seen");
 }
 
@@ -262,7 +282,11 @@ fn s3e_01_the_optimizer_moves_a_where_into_the_scan() {
 fn s3e_01_a_scan_in_a_scan_each_with_its_own_predicate() {
     let db = new_db();
     table_with_rows(&db, "t", &["a"], &rows_1_to(5));
-    assert_eq!(sql(&db, "select * from (select a from t where a > 1) where a < 5"), vec!["2", "3", "4"], "a scan in a scan each with its own predicate");
+    assert_eq!(
+        sql(&db, "select * from (select a from t where a > 1) where a < 5"),
+        vec!["2", "3", "4"],
+        "a scan in a scan each with its own predicate"
+    );
     assert!(sql_err(&db, "select * from (select a + 1 from t where a > 3) where a > 0"), "an unnamed column cannot be referred to");
 }
 
@@ -295,7 +319,12 @@ fn s3e_02_the_count_is_produced_once() {
     let values_plan = PlanNode::new(
         Arc::new(ints(&["v.0"])),
         vec![],
-        PlanKind::Values { values: vec![vec![Arc::new(ConstantValueExpression::new(int(7))) as ExprRef], vec![Arc::new(ConstantValueExpression::new(int(8))) as ExprRef]] },
+        PlanKind::Values {
+            values: vec![
+                vec![Arc::new(ConstantValueExpression::new(int(7))) as ExprRef],
+                vec![Arc::new(ConstantValueExpression::new(int(8))) as ExprRef],
+            ],
+        },
     );
     let insert = PlanNode::new(Arc::new(ints(&["rows"])), vec![values_plan], PlanKind::Insert { table_oid: info.oid });
     let catalog = db.catalog.read().unwrap();
@@ -303,7 +332,10 @@ fn s3e_02_the_count_is_produced_once() {
     let mut exec = create_executor(&ctx, &insert).unwrap();
     exec.init().unwrap();
     let (mut tuples, mut rids) = (vec![], vec![]);
-    assert!(exec.next(&mut tuples, &mut rids, 20).unwrap(), "the count is produced once: expected `exec.next(&mut tuples, &mut rids, 20).unwrap()`");
+    assert!(
+        exec.next(&mut tuples, &mut rids, 20).unwrap(),
+        "the count is produced once: expected `exec.next(&mut tuples, &mut rids, 20).unwrap()`"
+    );
     assert_eq!(tuples.len(), 1, "the count is produced once");
     assert_eq!(tuples[0].get_value(exec.output_schema(), 0), int(2), "the count is produced once");
     assert!(!exec.next(&mut tuples, &mut rids, 20).unwrap(), "the second call has nothing more to say");
@@ -337,9 +369,18 @@ fn s3e_02_a_second_init_inserts_again_and_the_tuples_are_stored_as_given() {
 fn s3e_02_a_value_of_the_wrong_type_is_a_planning_error() {
     let db = new_db();
     sql(&db, "create table t(a int, b varchar(20))");
-    assert!(sql_err(&db, "insert into t values ('x', 1)"), "a value of the wrong type is a planning error: expected `sql_err(&db, \"insert into t values ('x', 1)\")`");
-    assert!(sql_err(&db, "insert into t values (1)"), "a value of the wrong type is a planning error: expected `sql_err(&db, \"insert into t values (1)\")`");
-    assert!(sql_err(&db, "insert into nosuchtable values (1)"), "a value of the wrong type is a planning error: expected `sql_err(&db, \"insert into nosuchtable values (1)\")`");
+    assert!(
+        sql_err(&db, "insert into t values ('x', 1)"),
+        "a value of the wrong type is a planning error: expected `sql_err(&db, \"insert into t values ('x', 1)\")`"
+    );
+    assert!(
+        sql_err(&db, "insert into t values (1)"),
+        "a value of the wrong type is a planning error: expected `sql_err(&db, \"insert into t values (1)\")`"
+    );
+    assert!(
+        sql_err(&db, "insert into nosuchtable values (1)"),
+        "a value of the wrong type is a planning error: expected `sql_err(&db, \"insert into nosuchtable values (1)\")`"
+    );
 }
 
 // ---- 3e-02 · insert and indexes ------------------------------------------------------------------------------------------------
@@ -363,7 +404,10 @@ fn s3e_02_an_insert_adds_the_rows_to_the_indexes_of_the_table() {
         assert_eq!(rids.len(), 1, "key {a}");
         assert_eq!(table.table.get_tuple(rids[0]).unwrap().1.get_value(&table.schema, 1), int(b), "the index leads to the row");
     }
-    assert!(lookup(&index, &[4]).is_empty(), "an insert adds the rows to the indexes of the table: expected `lookup(&index, &[4]).is_empty()`");
+    assert!(
+        lookup(&index, &[4]).is_empty(),
+        "an insert adds the rows to the indexes of the table: expected `lookup(&index, &[4]).is_empty()`"
+    );
     assert_eq!(index.index.scan_all().len(), 3, "an insert adds the rows to the indexes of the table");
 }
 
@@ -379,7 +423,10 @@ fn s3e_02_every_index_of_the_table_is_updated() {
     assert_eq!(lookup(&catalog.get_index("ia", "t").unwrap(), &[4]).len(), 1, "every index of the table is updated");
     assert_eq!(lookup(&catalog.get_index("ib", "t").unwrap(), &[2]).len(), 1, "every index of the table is updated");
     assert_eq!(lookup(&catalog.get_index("iab", "t").unwrap(), &[1, 2]).len(), 1, "every index of the table is updated");
-    assert!(lookup(&catalog.get_index("iab", "t").unwrap(), &[2, 1]).is_empty(), "every index of the table is updated: expected `lookup(&catalog.get_index(\"iab\", \"t\").unwrap(), &[2, 1]).is_empty()`");
+    assert!(
+        lookup(&catalog.get_index("iab", "t").unwrap(), &[2, 1]).is_empty(),
+        "every index of the table is updated: expected `lookup(&catalog.get_index(\"iab\", \"t\").unwrap(), &[2, 1]).is_empty()`"
+    );
 }
 
 #[test]
@@ -404,14 +451,22 @@ fn s3e_02_a_key_that_is_already_in_the_index_fails_the_insert_and_changes_nothin
     assert_eq!(sql(&db, "select * from t"), vec!["1 100"], "the refused row is not in the table");
     let result = try_sql(&db, "insert into t values (2, 1), (3, 1), (2, 9), (4, 4)");
     assert!(is_unique_violation(&result, "ia"), "a key repeated inside one insert is a unique violation too: {result:?}");
-    assert_eq!(sql(&db, "select * from t"), vec!["1 100", "2 1", "3 1"], "the rows before the refused one stay; it and the rows after it are not inserted");
+    assert_eq!(
+        sql(&db, "select * from t"),
+        vec!["1 100", "2 1", "3 1"],
+        "the rows before the refused one stay; it and the rows after it are not inserted"
+    );
     assert_eq!(sql(&db, "insert into t values (null, 5), (null, 6)"), vec!["2"], "two NULL keys do not collide: NULL equals nothing");
     let catalog = db.catalog.read().unwrap();
     let table = catalog.get_table("t").unwrap();
     let index = catalog.get_index("ia", "t").unwrap();
     let rids = lookup(&index, &[1]);
     assert_eq!(rids.len(), 1, "the index still has one entry for the key 1");
-    assert_eq!(table.table.get_tuple(rids[0]).unwrap().1.get_value(&table.schema, 1), int(100), "the entry for the key 1 leads to the first row");
+    assert_eq!(
+        table.table.get_tuple(rids[0]).unwrap().1.get_value(&table.schema, 1),
+        int(100),
+        "the entry for the key 1 leads to the first row"
+    );
     assert_eq!(index.index.scan_all().len(), 3, "the keys 1, 2, 3 are indexed; the refused rows and the NULL keys are not");
 }
 
@@ -420,7 +475,10 @@ fn s3e_02_a_primary_key_may_not_be_null() {
     let db = new_db();
     sql(&db, "create table t(id int primary key, v int)");
     let result = try_sql(&db, "insert into t values (null, 1)");
-    assert!(matches!(&result, Err(e) if e.contains("null value in column \"id\" of relation \"t\" violates not-null constraint")), "a NULL primary key is a not-null violation: {result:?}");
+    assert!(
+        matches!(&result, Err(e) if e.contains("null value in column \"id\" of relation \"t\" violates not-null constraint")),
+        "a NULL primary key is a not-null violation: {result:?}"
+    );
     assert!(sql(&db, "select * from t").is_empty(), "the refused row is not in the table");
     assert_eq!(sql(&db, "insert into t values (1, 1), (2, 2)"), vec!["2"], "keys without a NULL are inserted");
 }
@@ -433,7 +491,11 @@ fn s3e_02_an_index_created_after_the_insert_has_the_rows_and_later_inserts_join_
     sql(&db, "create index ia on t(a)");
     sql(&db, "insert into t values (4), (5)");
     let catalog = db.catalog.read().unwrap();
-    assert_eq!(catalog.get_index("ia", "t").unwrap().index.scan_all().len(), 5, "an index created after the insert has the rows and later inserts join them");
+    assert_eq!(
+        catalog.get_index("ia", "t").unwrap().index.scan_all().len(),
+        5,
+        "an index created after the insert has the rows and later inserts join them"
+    );
 }
 
 #[test]
@@ -444,7 +506,10 @@ fn s3e_02_other_tables_indexes_are_left_alone() {
     sql(&db, "create index iu on u(a)");
     sql(&db, "insert into t values (1), (2)");
     let catalog = db.catalog.read().unwrap();
-    assert!(catalog.get_index("iu", "u").unwrap().index.scan_all().is_empty(), "other tables indexes are left alone: expected `catalog.get_index(\"iu\", \"u\").unwrap().index.scan_all().is_empty()`");
+    assert!(
+        catalog.get_index("iu", "u").unwrap().index.scan_all().is_empty(),
+        "other tables indexes are left alone: expected `catalog.get_index(\"iu\", \"u\").unwrap().index.scan_all().is_empty()`"
+    );
 }
 
 // ---- 3e-03 · delete ---------------------------------------------------------------------------------------------------------------
@@ -456,7 +521,10 @@ fn s3e_03_delete_returns_how_many_rows_and_they_disappear() {
     assert_eq!(sql(&db, "delete from t where a >= 3"), vec!["2"], "delete returns how many rows and they disappear");
     assert_eq!(sql(&db, "select * from t"), vec!["1 10", "2 20"], "delete returns how many rows and they disappear");
     assert_eq!(sql(&db, "delete from t"), vec!["2"], "delete returns how many rows and they disappear");
-    assert!(sql(&db, "select * from t").is_empty(), "delete returns how many rows and they disappear: expected `sql(&db, \"select * from t\").is_empty()`");
+    assert!(
+        sql(&db, "select * from t").is_empty(),
+        "delete returns how many rows and they disappear: expected `sql(&db, \"select * from t\").is_empty()`"
+    );
     assert_eq!(sql(&db, "delete from t"), vec!["0"], "delete returns how many rows and they disappear");
 }
 
@@ -488,8 +556,14 @@ fn s3e_03_delete_removes_the_index_entries() {
     sql(&db, "insert into t values (1, 10), (2, 20), (3, 30)");
     assert_eq!(sql(&db, "delete from t where a = 2"), vec!["1"], "delete removes the index entries");
     let catalog = db.catalog.read().unwrap();
-    assert!(lookup(&catalog.get_index("ia", "t").unwrap(), &[2]).is_empty(), "delete removes the index entries: expected `lookup(&catalog.get_index(\"ia\", \"t\").unwrap(), &[2]).is_empty()`");
-    assert!(lookup(&catalog.get_index("ib", "t").unwrap(), &[20]).is_empty(), "delete removes the index entries: expected `lookup(&catalog.get_index(\"ib\", \"t\").unwrap(), &[20]).is_empty()`");
+    assert!(
+        lookup(&catalog.get_index("ia", "t").unwrap(), &[2]).is_empty(),
+        "delete removes the index entries: expected `lookup(&catalog.get_index(\"ia\", \"t\").unwrap(), &[2]).is_empty()`"
+    );
+    assert!(
+        lookup(&catalog.get_index("ib", "t").unwrap(), &[20]).is_empty(),
+        "delete removes the index entries: expected `lookup(&catalog.get_index(\"ib\", \"t\").unwrap(), &[20]).is_empty()`"
+    );
     assert_eq!(lookup(&catalog.get_index("ia", "t").unwrap(), &[3]).len(), 1, "delete removes the index entries");
 }
 
@@ -498,7 +572,10 @@ fn s3e_03_delete_everything_in_a_big_table() {
     let db = new_db();
     table_with_rows(&db, "t", &["a"], &rows_1_to(3000));
     assert_eq!(sql(&db, "delete from t"), vec!["3000"], "delete everything in a big table");
-    assert!(sql(&db, "select * from t").is_empty(), "delete everything in a big table: expected `sql(&db, \"select * from t\").is_empty()`");
+    assert!(
+        sql(&db, "select * from t").is_empty(),
+        "delete everything in a big table: expected `sql(&db, \"select * from t\").is_empty()`"
+    );
 }
 
 #[test]
@@ -514,7 +591,11 @@ fn s3e_03_a_key_can_be_inserted_again_after_it_was_deleted() {
     let table = catalog.get_table("t").unwrap();
     let rids = lookup(&catalog.get_index("ia", "t").unwrap(), &[7]);
     assert_eq!(rids.len(), 1, "a key can be inserted again after it was deleted");
-    assert_eq!(table.table.get_tuple(rids[0]).unwrap().1.get_value(&table.schema, 1), int(2), "a key can be inserted again after it was deleted");
+    assert_eq!(
+        table.table.get_tuple(rids[0]).unwrap().1.get_value(&table.schema, 1),
+        int(2),
+        "a key can be inserted again after it was deleted"
+    );
 }
 
 // ---- 3e-03 · update ---------------------------------------------------------------------------------------------------------------
@@ -603,7 +684,11 @@ fn s3e_03_set_k_to_k_plus_one_over_consecutive_keys_moves_every_key() {
     sql(&db, "create index ia on t(a)");
     let values: Vec<String> = (1..=50).map(|k| format!("({k}, {})", k * 10)).collect();
     sql(&db, &format!("insert into t values {}", values.join(", ")));
-    assert_eq!(sql(&db, "update t set a = a + 1"), vec!["50"], "every key moves up by one, though each new key is an old key of another row");
+    assert_eq!(
+        sql(&db, "update t set a = a + 1"),
+        vec!["50"],
+        "every key moves up by one, though each new key is an old key of another row"
+    );
     let catalog = db.catalog.read().unwrap();
     let table = catalog.get_table("t").unwrap();
     let ia = catalog.get_index("ia", "t").unwrap();
@@ -611,7 +696,12 @@ fn s3e_03_set_k_to_k_plus_one_over_consecutive_keys_moves_every_key() {
     for k in 2..=51 {
         let rids = lookup(&ia, &[k]);
         assert_eq!(rids.len(), 1, "the key {k} finds exactly one row");
-        assert_eq!(table.table.get_tuple(rids[0]).unwrap().1.get_value(&table.schema, 1), int((k - 1) * 10), "the key {k} leads to the row that had the key {}", k - 1);
+        assert_eq!(
+            table.table.get_tuple(rids[0]).unwrap().1.get_value(&table.schema, 1),
+            int((k - 1) * 10),
+            "the key {k} leads to the row that had the key {}",
+            k - 1
+        );
     }
     assert_eq!(ia.index.scan_all().len(), 50, "one entry per row");
 }
@@ -622,7 +712,10 @@ fn s3e_03_an_update_may_not_make_a_primary_key_null() {
     sql(&db, "create table t(id int primary key, v int)");
     sql(&db, "insert into t values (1, 1), (2, 2)");
     let result = try_sql(&db, "update t set id = null where id = 2");
-    assert!(matches!(&result, Err(e) if e.contains("null value in column \"id\" of relation \"t\" violates not-null constraint")), "an update may not make a primary key NULL: {result:?}");
+    assert!(
+        matches!(&result, Err(e) if e.contains("null value in column \"id\" of relation \"t\" violates not-null constraint")),
+        "an update may not make a primary key NULL: {result:?}"
+    );
     assert_eq!(sql(&db, "select * from t"), vec!["1 1", "2 2"], "the failed update changed no row");
     assert_eq!(sql(&db, "select * from t where id = 2"), vec!["2 2"], "the row keeps its entry in the primary-key index");
 }
@@ -651,7 +744,11 @@ fn s3e_03_an_update_that_would_duplicate_a_key_fails_and_changes_nothing() {
 
 fn index_scan_plan(info: &TableInfo<'_>, index_oid: u32, filter: Option<ExprRef>, keys: Vec<ExprRef>) -> PlanRef {
     let schema = Schema::new(info.schema.columns().iter().map(|c| c.with_column_name(&format!("{}.{}", info.name, c.name()))).collect());
-    PlanNode::new(Arc::new(schema), vec![], PlanKind::IndexScan { table_oid: info.oid, index_oid, filter_predicate: filter, pred_keys: keys })
+    PlanNode::new(
+        Arc::new(schema),
+        vec![],
+        PlanKind::IndexScan { table_oid: info.oid, index_oid, filter_predicate: filter, pred_keys: keys },
+    )
 }
 
 fn db_with_index(rows: &[Vec<i32>]) -> (BusTubInstance, u32, u32) {
@@ -706,7 +803,10 @@ fn s3e_04_batches_have_at_most_batch_size_tuples() {
 fn s3e_04_an_empty_table_gives_nothing() {
     let (db, table_oid, index_oid) = db_with_index(&[]);
     let info = db.catalog.read().unwrap().get_table_by_oid(table_oid).unwrap();
-    assert!(execute(&db, &index_scan_plan(&info, index_oid, None, vec![])).is_empty(), "an empty table gives nothing: expected `execute(&db, &index_scan_plan(&info, index_oid, None, vec![])).is_empty()`");
+    assert!(
+        execute(&db, &index_scan_plan(&info, index_oid, None, vec![])).is_empty(),
+        "an empty table gives nothing: expected `execute(&db, &index_scan_plan(&info, index_oid, None, vec![])).is_empty()`"
+    );
 }
 
 #[test]
@@ -762,7 +862,10 @@ fn s3e_04_a_deleted_row_is_not_found() {
     let (db, table_oid, index_oid) = db_with_index(&[vec![1, 10], vec![2, 20]]);
     let info = db.catalog.read().unwrap().get_table_by_oid(table_oid).unwrap();
     sql(&db, "delete from t where a = 2");
-    assert!(execute(&db, &index_scan_plan(&info, index_oid, None, vec![key(2)])).is_empty(), "a deleted row is not found: expected `execute(&db, &index_scan_plan(&info, index_oid, None, vec![key(2)])).is_empty()`");
+    assert!(
+        execute(&db, &index_scan_plan(&info, index_oid, None, vec![key(2)])).is_empty(),
+        "a deleted row is not found: expected `execute(&db, &index_scan_plan(&info, index_oid, None, vec![key(2)])).is_empty()`"
+    );
     assert_eq!(execute(&db, &index_scan_plan(&info, index_oid, None, vec![key(1)])).len(), 1, "a deleted row is not found");
 }
 
@@ -840,8 +943,9 @@ fn row_strategy() -> impl Strategy<Value = Row> {
 /// The rows of a table whose `a` (the indexed column) is the row's position or, now and then, NULL; a random `b` and `c`. The keys are
 /// consecutive, so `a = a + 1` moves each key onto the old key of the next row.
 fn keyed_rows(max: usize) -> impl Strategy<Value = Vec<Row>> {
-    prop::collection::vec((prop::bool::weighted(0.15), model::cell(), model::cell()), 0..max)
-        .prop_map(|rows| rows.into_iter().enumerate().map(|(i, (null, b, c))| vec![if null { None } else { Some(i as i64) }, b, c]).collect())
+    prop::collection::vec((prop::bool::weighted(0.15), model::cell(), model::cell()), 0..max).prop_map(|rows| {
+        rows.into_iter().enumerate().map(|(i, (null, b, c))| vec![if null { None } else { Some(i as i64) }, b, c]).collect()
+    })
 }
 
 /// Whether two rows have the same non-NULL `a`.

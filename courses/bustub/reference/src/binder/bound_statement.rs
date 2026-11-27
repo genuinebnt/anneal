@@ -54,14 +54,41 @@ pub mod explain_options {
 pub enum BoundStatement {
     Select(Box<SelectStatement>),
     /// `table` is always a `BoundTableRef::Base`.
-    Insert { table: BoundTableRef, select: Box<SelectStatement> },
-    Delete { table: BoundTableRef, expr: BoundExpression },
-    Update { table: BoundTableRef, filter_expr: BoundExpression, target_expr: Vec<(Vec<String>, BoundExpression)> },
-    Create { table: String, columns: Vec<Column>, primary_key: Vec<String> },
-    Index { index_name: String, table: BoundTableRef, cols: Vec<Vec<String>>, index_type: String },
-    Explain { statement: Box<BoundStatement>, options: u8 },
-    VariableSet { variable: String, value: String },
-    VariableShow { variable: String },
+    Insert {
+        table: BoundTableRef,
+        select: Box<SelectStatement>,
+    },
+    Delete {
+        table: BoundTableRef,
+        expr: BoundExpression,
+    },
+    Update {
+        table: BoundTableRef,
+        filter_expr: BoundExpression,
+        target_expr: Vec<(Vec<String>, BoundExpression)>,
+    },
+    Create {
+        table: String,
+        columns: Vec<Column>,
+        primary_key: Vec<String>,
+    },
+    Index {
+        index_name: String,
+        table: BoundTableRef,
+        cols: Vec<Vec<String>>,
+        index_type: String,
+    },
+    Explain {
+        statement: Box<BoundStatement>,
+        options: u8,
+    },
+    VariableSet {
+        variable: String,
+        value: String,
+    },
+    VariableShow {
+        variable: String,
+    },
     /// `"begin"`, `"commit"` or `"abort"`.
     Transaction(String),
 }

@@ -13,7 +13,13 @@ use bustub::types::value::Value;
 
 /// BusTub's `TableHeapTest` schema: `a varchar(20), b smallint, c bigint, d bool, e varchar(16)`.
 fn heap_test_schema() -> Schema {
-    Schema::new(vec![Column::new_varchar("a", 20), Column::new("b", SmallInt), Column::new("c", BigInt), Column::new("d", Boolean), Column::new_varchar("e", 16)])
+    Schema::new(vec![
+        Column::new_varchar("a", 20),
+        Column::new("b", SmallInt),
+        Column::new("c", BigInt),
+        Column::new("d", Boolean),
+        Column::new_varchar("e", 16),
+    ])
 }
 
 fn row(i: usize) -> Vec<Value> {
@@ -72,7 +78,11 @@ fn updating_in_place_keeps_the_length_and_changes_the_value() {
     let mut bytes = [0u8; BUSTUB_PAGE_SIZE];
     let mut page = TablePage::new(&mut bytes[..]);
     page.init();
-    let rid = Rid::new(PageId(1), page.insert_tuple(&TupleMeta { ts: 0, is_deleted: false }, &Tuple::new(&[Value::integer(1), Value::bigint(10)], &schema)).unwrap() as u32);
+    let rid = Rid::new(
+        PageId(1),
+        page.insert_tuple(&TupleMeta { ts: 0, is_deleted: false }, &Tuple::new(&[Value::integer(1), Value::bigint(10)], &schema)).unwrap()
+            as u32,
+    );
     let new = Tuple::new(&[Value::integer(1), Value::bigint(99)], &schema);
     page.update_tuple_in_place_unsafe(&TupleMeta { ts: 1, is_deleted: false }, &new, rid).unwrap();
     let (meta, t) = page.get_tuple(rid).unwrap();

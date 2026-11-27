@@ -33,7 +33,16 @@ pub struct ExecutorContext<'e> {
 
 impl<'e> ExecutorContext<'e> {
     pub fn new(catalog: &'e Catalog<'e>, bpm: &'e BufferPoolManager, is_delete: bool) -> ExecutorContext<'e> {
-        ExecutorContext { catalog, bpm, nlj_check_exec_set: Mutex::new(vec![]), check_options: CheckOptions::default(), is_delete, txn: None, txn_mgr: None, analyze: None }
+        ExecutorContext {
+            catalog,
+            bpm,
+            nlj_check_exec_set: Mutex::new(vec![]),
+            check_options: CheckOptions::default(),
+            is_delete,
+            txn: None,
+            txn_mgr: None,
+            analyze: None,
+        }
     }
 
     pub fn with_check_options(mut self, check_options: CheckOptions) -> ExecutorContext<'e> {

@@ -41,19 +41,59 @@ pub const MOCK_TABLE_LIST: &[&str] = &[
     "__mock_t11",
 ];
 
-const TA_LIST_2022: &[&str] =
-    &["amstqq", "durovo", "joyceliaoo", "karthik-ramanathan-3006", "kush789", "lmwnshn", "mkpjnx", "skyzh", "thepinetree", "timlee0119", "yliang412"];
-const TA_LIST_2023: &[&str] = &["abigalekim", "arvinwu168", "christopherlim98", "David-Lyons", "fanyuex2", "Mayank-Baranwal", "skyzh", "yarkhinephyo", "yliang412"];
-const TA_LIST_2023_FALL: &[&str] =
-    &["skyzh", "yliang412", "fernandolis10", "wiam8", "anurag-23", "Mayank-Baranwal", "abigalekim", "ChaosZhai", "aoleizhou", "averyqi115", "kswim8"];
-const TA_LIST_2024: &[&str] = &["AlSchlo", "walkingcabbages", "averyqi115", "lanlou1554", "sweetsuro", "ChaosZhai", "SDTheSlayer", "xx01cyx", "yliang412", "thelongmarch-azx"];
-const TA_LIST_2024_FALL: &[&str] = &["17zhangw", "connortsui20", "J-HowHuang", "lanlou1554", "prashanthduvvada", "unw9527", "xx01cyx", "yashkothari42"];
-const TA_LIST_2025_SPRING: &[&str] = &["AlSchlo", "carpecodeum", "ChrisLaspias", "hyoungjook", "joesunil123", "mrwhitezz", "rmboyce", "yliang412"];
-const TA_LIST_2025_FALL: &[&str] = &["17zhangw", "quantumish", "songwdfu", "notSaranshMalik", "shinyumh", "s-wangru", "rayhhome", "MrWhitezz"];
-const TA_OH_2022: &[&str] = &["Tuesday", "Wednesday", "Monday", "Wednesday", "Thursday", "Friday", "Wednesday", "Randomly", "Tuesday", "Monday", "Tuesday"];
+const TA_LIST_2022: &[&str] = &[
+    "amstqq",
+    "durovo",
+    "joyceliaoo",
+    "karthik-ramanathan-3006",
+    "kush789",
+    "lmwnshn",
+    "mkpjnx",
+    "skyzh",
+    "thepinetree",
+    "timlee0119",
+    "yliang412",
+];
+const TA_LIST_2023: &[&str] =
+    &["abigalekim", "arvinwu168", "christopherlim98", "David-Lyons", "fanyuex2", "Mayank-Baranwal", "skyzh", "yarkhinephyo", "yliang412"];
+const TA_LIST_2023_FALL: &[&str] = &[
+    "skyzh",
+    "yliang412",
+    "fernandolis10",
+    "wiam8",
+    "anurag-23",
+    "Mayank-Baranwal",
+    "abigalekim",
+    "ChaosZhai",
+    "aoleizhou",
+    "averyqi115",
+    "kswim8",
+];
+const TA_LIST_2024: &[&str] = &[
+    "AlSchlo",
+    "walkingcabbages",
+    "averyqi115",
+    "lanlou1554",
+    "sweetsuro",
+    "ChaosZhai",
+    "SDTheSlayer",
+    "xx01cyx",
+    "yliang412",
+    "thelongmarch-azx",
+];
+const TA_LIST_2024_FALL: &[&str] =
+    &["17zhangw", "connortsui20", "J-HowHuang", "lanlou1554", "prashanthduvvada", "unw9527", "xx01cyx", "yashkothari42"];
+const TA_LIST_2025_SPRING: &[&str] =
+    &["AlSchlo", "carpecodeum", "ChrisLaspias", "hyoungjook", "joesunil123", "mrwhitezz", "rmboyce", "yliang412"];
+const TA_LIST_2025_FALL: &[&str] =
+    &["17zhangw", "quantumish", "songwdfu", "notSaranshMalik", "shinyumh", "s-wangru", "rayhhome", "MrWhitezz"];
+const TA_OH_2022: &[&str] =
+    &["Tuesday", "Wednesday", "Monday", "Wednesday", "Thursday", "Friday", "Wednesday", "Randomly", "Tuesday", "Monday", "Tuesday"];
 const TA_OH_2023: &[&str] = &["Friday", "Thursday", "Tuesday", "Monday", "Tuesday", "Tuesday", "Randomly", "Wednesday", "Thursday"];
-const TA_OH_2023_FALL: &[&str] = &["Randomly", "Tuesday", "Wednesday", "Tuesday", "Thursday", "Tuesday", "Friday", "Yesterday", "Friday", "Friday", "Never"];
-const TA_OH_2024: &[&str] = &["Friday", "Thursday", "Friday", "Wednesday", "Thursday", "Yesterday", "Monday", "Tuesday", "Tuesday", "Monday"];
+const TA_OH_2023_FALL: &[&str] =
+    &["Randomly", "Tuesday", "Wednesday", "Tuesday", "Thursday", "Tuesday", "Friday", "Yesterday", "Friday", "Friday", "Never"];
+const TA_OH_2024: &[&str] =
+    &["Friday", "Thursday", "Friday", "Wednesday", "Thursday", "Yesterday", "Monday", "Tuesday", "Tuesday", "Monday"];
 const TA_OH_2024_FALL: &[&str] = &["Wednesday", "Thursday", "Tuesday", "Monday", "Friday", "Thursday", "Tuesday", "Friday"];
 const TA_OH_2025_SPRING: &[&str] = &["Friday", "Monday", "Wednesday", "Tuesday", "Friday", "Thursday", "Monday", "Tuesday"];
 const TA_OH_2025_FALL: &[&str] = &["Tuesday", "Monday", "Thursday", "Friday", "Tuesday", "Tuesday", "Friday", "Wednesday"];
@@ -73,10 +113,17 @@ pub fn get_mock_table_schema_of(table: &str) -> Result<Schema> {
         "__mock_table_2" => Schema::new(vec![vc("colC"), vc("colD")]),
         "__mock_table_3" => Schema::new(vec![int("colE"), vc("colF")]),
         "__mock_table_4" => Schema::new(vec![int("colG"), vc("colH")]),
-        "__mock_table_tas_2022" | "__mock_table_tas_2023" | "__mock_table_tas_2023_fall" | "__mock_table_tas_2024" | "__mock_table_tas_2024_fall"
-        | "__mock_table_tas_2025_spring" | "__mock_table_tas_2025_fall" => Schema::new(vec![vc("github_id"), vc("office_hour")]),
+        "__mock_table_tas_2022"
+        | "__mock_table_tas_2023"
+        | "__mock_table_tas_2023_fall"
+        | "__mock_table_tas_2024"
+        | "__mock_table_tas_2024_fall"
+        | "__mock_table_tas_2025_spring"
+        | "__mock_table_tas_2025_fall" => Schema::new(vec![vc("github_id"), vc("office_hour")]),
         "__mock_table_schedule_2022" | "__mock_table_schedule" => Schema::new(vec![vc("day_of_week"), int("has_lecture")]),
-        "__mock_agg_input_small" | "__mock_agg_input_big" => Schema::new(vec![int("v1"), int("v2"), int("v3"), int("v4"), int("v5"), vc("v6")]),
+        "__mock_agg_input_small" | "__mock_agg_input_big" => {
+            Schema::new(vec![int("v1"), int("v2"), int("v3"), int("v4"), int("v5"), vc("v6")])
+        }
         "__mock_external_merge_sort_input" => ints(&["v1", "v2", "v3"]),
         "__mock_graph" => ints(&["src", "dst", "src_label", "dst_label", "distance"]),
         "__mock_table_123" => ints(&["number"]),
@@ -128,7 +175,9 @@ fn mock_row(table: &str, cursor: usize, schema: &Schema) -> Vec<Value> {
         "__mock_table_schedule" => vec![s(COURSE_ON_DATE[cursor]), int(if cursor == 0 || cursor == 2 { 1 } else { 0 })],
         "__mock_table_1" => vec![int(cursor as i64), int(cursor as i64 * 100)],
         "__mock_table_2" => vec![s(&format!("{cursor}-\u{1F4A9}")), s(&"\u{1F607}".repeat(cursor % 8))],
-        "__mock_table_3" => vec![if cursor % 2 == 0 { int(cursor as i64) } else { Value::null(TypeId::Integer) }, s(&format!("{cursor}-\u{1F4A9}"))],
+        "__mock_table_3" => {
+            vec![if cursor % 2 == 0 { int(cursor as i64) } else { Value::null(TypeId::Integer) }, s(&format!("{cursor}-\u{1F4A9}"))]
+        }
         "__mock_table_4" => {
             let mut text = "\u{1F4A9}".to_string();
             for _ in 0..(cursor % 3) {
@@ -155,7 +204,9 @@ fn mock_row(table: &str, cursor: usize, schema: &Schema) -> Vec<Value> {
             int(233),
             s(&"\u{1F4A9}".repeat(cursor % 16 + 1)),
         ],
-        "__mock_external_merge_sort_input" => vec![int(cursor as i64), int(((cursor + 1777) % 15000) as i64), int(((cursor + 3) % 111) as i64)],
+        "__mock_external_merge_sort_input" => {
+            vec![int(cursor as i64), int(((cursor + 1777) % 15000) as i64), int(((cursor + 3) % 111) as i64)]
+        }
         "__mock_table_123" => vec![int(cursor as i64 + 1)],
         "__mock_graph" => {
             let (src, dst) = (cursor % GRAPH_NODE_CNT, cursor / GRAPH_NODE_CNT);

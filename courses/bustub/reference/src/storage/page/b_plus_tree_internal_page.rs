@@ -66,7 +66,13 @@ impl<B: AsRef<[u8]>, K: FixedSize> BPlusTreeInternalPage<B, K> {
     pub fn child_for(&self, key: &K, cmp: &impl KeyComparator<K>) -> PageId {
         let keys = PageArray::<_, (K, PageId)>::new(&self.page.as_ref()[INTERNAL_PAGE_HEADER_SIZE + <(K, PageId)>::SIZE..]);
         // the first of keys 1..size that is greater than `key`; the child before it is the one to follow
-        let first_greater = keys.lower_bound(self.size() as usize - 1, |(k, _)| if cmp.compare(k, key).is_le() { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater });
+        let first_greater = keys.lower_bound(self.size() as usize - 1, |(k, _)| {
+            if cmp.compare(k, key).is_le() {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            }
+        });
         self.value_at(first_greater as u32)
     }
 }
@@ -123,7 +129,14 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>, K: FixedSize> BPlusTreeInternalPage<B, K> {
         assert!(size < self.max_size(), "the page is full: split it instead");
         let at = {
             let keys = PageArray::<_, (K, PageId)>::new(&self.page.as_ref()[INTERNAL_PAGE_HEADER_SIZE + <(K, PageId)>::SIZE..]);
-            keys.lower_bound(size as usize - 1, |(k, _)| if cmp.compare(k, key).is_le() { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater }) as u32 + 1
+            keys.lower_bound(size as usize - 1, |(k, _)| {
+                if cmp.compare(k, key).is_le() {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                }
+            }) as u32
+                + 1
         };
         self.entries_mut().insert_at(at as usize, size as usize, &(key.clone(), child));
         self.set_size(size + 1);

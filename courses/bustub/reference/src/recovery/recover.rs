@@ -47,12 +47,6 @@ pub fn analyse(records: &[(Lsn, LogRecord)]) -> Analysis {
                     seen.push(*txn);
                 }
             }
-            LogRecord::Commit { txn } | LogRecord::Abort { txn } => {
-                if !seen.contains(txn) {
-                    seen.push(*txn);
-                }
-                finished.insert(*txn);
-            }
             // @begin 4c-07
             LogRecord::Checkpoint { active } => {
                 redo_from = i;
@@ -64,6 +58,12 @@ pub fn analyse(records: &[(Lsn, LogRecord)]) -> Analysis {
             }
             //~ LogRecord::Checkpoint { .. } => {} // TODO(4c-07): redo can start at the last checkpoint
             // @end
+            LogRecord::Commit { txn } | LogRecord::Abort { txn } => {
+                if !seen.contains(txn) {
+                    seen.push(*txn);
+                }
+                finished.insert(*txn);
+            }
         }
     }
     let mut done: Vec<TxnId> = finished.iter().copied().collect();

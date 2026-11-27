@@ -80,3 +80,11 @@ reader who has never seen the course, in the style of the Rust standard library:
   it states the behaviour wanted, not the steps.
 
 `tools/check_code_comments.py` lists breaches (course words, history, a stub without a doc); keep it at zero.
+
+## Formatting (2026-11-27)
+
+The reference is formatted with its own `rustfmt.toml` (`max_width = 140`, `use_small_heuristics = "Max"`), which the template ships, so a
+learner's format-on-save does not rewrite the course's code. Run `cargo fmt` in `courses/bustub/reference` after editing it.
+`tools/check_course_regions.py` checks that every `// @begin`, `// @end` and `//~` line starts its own line: rustfmt pulls a comment that
+follows the last block arm of a `match` onto the closing brace, which drops that stub from the learner's code. Put such a region's stub
+before an arm that follows it, or end the region with a comma-terminated arm. CI runs both.

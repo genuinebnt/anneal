@@ -227,7 +227,13 @@ where
     // @begin 2b-03
     /// Splits the full bucket in slot `bucket_idx` (one more hash bit now distinguishes it): a new bucket takes the entries whose
     /// new bit is 1, and the directory slots that pointed at the old bucket are divided between the two.
-    fn split_bucket(&self, directory: &mut Directory<&mut [u8]>, old_bucket: &mut Bucket<&mut [u8], K, V>, bucket_idx: u32, old_page_id: PageId) {
+    fn split_bucket(
+        &self,
+        directory: &mut Directory<&mut [u8]>,
+        old_bucket: &mut Bucket<&mut [u8], K, V>,
+        bucket_idx: u32,
+        old_page_id: PageId,
+    ) {
         let new_depth = directory.get_local_depth(bucket_idx) + 1;
         let new_bit = 1u32 << (new_depth - 1);
         let new_page_id = self.bpm.new_page();

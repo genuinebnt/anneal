@@ -73,11 +73,20 @@ pub fn generate_test_tables(catalog: &mut Catalog<'_>) -> Result<()> {
     let metas = vec![
         TableInsertMeta { name: "empty_table", num_rows: 0, cols: vec![col("colA", Dist::Serial, 0, 0)] },
         TableInsertMeta { name: "test_simple_seq_1", num_rows: 10, cols: vec![col("col1", Dist::Serial, 0, 10)] },
-        TableInsertMeta { name: "test_simple_seq_2", num_rows: 10, cols: vec![col("col1", Dist::Serial, 0, 10), col("col2", Dist::Serial, 10, 20)] },
+        TableInsertMeta {
+            name: "test_simple_seq_2",
+            num_rows: 10,
+            cols: vec![col("col1", Dist::Serial, 0, 10), col("col2", Dist::Serial, 10, 20)],
+        },
         TableInsertMeta {
             name: "test_1",
             num_rows: TEST1_SIZE,
-            cols: vec![col("colA", Dist::Serial, 0, 0), col("colB", Dist::Uniform, 0, 9), col("colC", Dist::Uniform, 0, 9999), col("colD", Dist::Uniform, 0, 99999)],
+            cols: vec![
+                col("colA", Dist::Serial, 0, 0),
+                col("colB", Dist::Uniform, 0, 9),
+                col("colC", Dist::Uniform, 0, 9999),
+                col("colD", Dist::Uniform, 0, 99999),
+            ],
         },
         TableInsertMeta {
             name: "test_2",

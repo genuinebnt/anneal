@@ -9,7 +9,6 @@ use crate::binder::bound_expression::{BoundExpression, BoundWindow, WindowBounda
 use crate::binder::bound_order_by::OrderBy;
 use crate::binder::bound_statement::{BoundStatement, SelectStatement};
 use crate::binder::bound_table_ref::{BoundSubqueryRef, BoundTableRef};
-use crate::sql::ast::SetOperator;
 use crate::catalog::catalog::Catalog;
 use crate::catalog::column::Column;
 use crate::catalog::schema::{Schema, SchemaRef};
@@ -22,6 +21,7 @@ use crate::execution::expressions::constant_value_expression::ConstantValueExpre
 use crate::execution::expressions::logic_expression::{LogicExpression, LogicType};
 use crate::execution::expressions::string_expression::{StringExpression, StringExpressionType};
 use crate::execution::plans::plan_node::*;
+use crate::sql::ast::SetOperator;
 use crate::types::type_id::TypeId;
 use crate::types::value::Value;
 
@@ -246,7 +246,9 @@ impl<'c, 'a> Planner<'c, 'a> {
             }
             BoundTableRef::ExpressionList { values, identifier } => self.plan_expression_list_ref(values, identifier),
             BoundTableRef::Subquery(s) => self.plan_subquery(s, &s.alias),
-            BoundTableRef::SetOp { op, all, left, right, alias, select_list_name } => self.plan_set_op(*op, *all, left, right, alias, select_list_name),
+            BoundTableRef::SetOp { op, all, left, right, alias, select_list_name } => {
+                self.plan_set_op(*op, *all, left, right, alias, select_list_name)
+            }
             BoundTableRef::Cte { cte_name, alias, .. } => {
                 let ctes = self.ctx.last().and_then(|c| c.cte_list.clone());
                 if let Some(ctes) = ctes {
@@ -265,7 +267,15 @@ impl<'c, 'a> Planner<'c, 'a> {
     /// `left UNION [ALL] right` and its relatives. Both sides must have the same number of columns, of the same types in the same order
     /// (PostgreSQL would convert an INTEGER to a DECIMAL; this engine says no). The result's columns are named after the left side, under
     /// `alias`.
-    fn plan_set_op(&mut self, op: SetOperator, all: bool, left: &BoundSubqueryRef, right: &BoundSubqueryRef, alias: &str, names: &[Vec<String>]) -> Result<PlanRef> {
+    fn plan_set_op(
+        &mut self,
+        op: SetOperator,
+        all: bool,
+        left: &BoundSubqueryRef,
+        right: &BoundSubqueryRef,
+        alias: &str,
+        names: &[Vec<String>],
+    ) -> Result<PlanRef> {
         // @begin 3j-04
         let l = self.plan_subquery(left, &left.alias)?;
         let r = self.plan_subquery(right, &right.alias)?;
@@ -280,7 +290,10 @@ impl<'c, 'a> Planner<'c, 'a> {
         }
         for (a, b) in lc.iter().zip(rc) {
             if a.type_id() != b.type_id() {
-                return Err(Exception::new(ExceptionType::MismatchType, format!("{word} types {:?} and {:?} cannot be matched", a.type_id(), b.type_id())));
+                return Err(Exception::new(
+                    ExceptionType::MismatchType,
+                    format!("{word} types {:?} and {:?} cannot be matched", a.type_id(), b.type_id()),
+                ));
             }
         }
         let renamed: Vec<String> = names.iter().map(|n| format!("{alias}.{}", n.join("."))).collect();
@@ -308,7 +321,11 @@ impl<'c, 'a> Planner<'c, 'a> {
         let info = self.catalog.get_table(table).ok_or_else(|| exception("table not found"))?;
         if info.name.starts_with("__") {
             if info.name.starts_with("__mock") {
-                return Ok(PlanNode::new(Arc::new(Self::infer_scan_schema(table_ref)), vec![], PlanKind::MockScan { table: info.name.clone() }));
+                return Ok(PlanNode::new(
+                    Arc::new(Self::infer_scan_schema(table_ref)),
+                    vec![],
+                    PlanKind::MockScan { table: info.name.clone() },
+                ));
             }
             return Err(exception(format!("unsupported internal table: {}", info.name)));
         }
@@ -616,7 +633,9 @@ impl<'c, 'a> Planner<'c, 'a> {
             let (child, group_by_exprs) = if aggregations.iter().any(|a| matches!(a, BoundExpression::AggCall { is_distinct: true, .. })) {
                 let mut arg: Option<&BoundExpression> = None;
                 for a in &aggregations {
-                    let BoundExpression::AggCall { is_distinct, args, .. } = a else { unreachable!("collect_aggregates keeps only aggregate calls") };
+                    let BoundExpression::AggCall { is_distinct, args, .. } = a else {
+                        unreachable!("collect_aggregates keeps only aggregate calls")
+                    };
                     if !*is_distinct || args.len() != 1 {
                         return Err(not_implemented("DISTINCT and plain aggregates in one query are not supported yet"));
                     }
@@ -636,7 +655,9 @@ impl<'c, 'a> Planner<'c, 'a> {
                     vec![child],
                     PlanKind::Aggregation { group_bys: inner_groups, aggregates: vec![], agg_types: vec![] },
                 );
-                let column = |i: usize| -> ExprRef { Arc::new(ColumnValueExpression::new(0, i as u32, inner.output_schema.column(i as u32).clone())) };
+                let column = |i: usize| -> ExprRef {
+                    Arc::new(ColumnValueExpression::new(0, i as u32, inner.output_schema.column(i as u32).clone()))
+                };
                 distinct_input = Some(column(g));
                 let outer_groups: Vec<ExprRef> = (0..g).map(column).collect();
                 (inner.clone(), outer_groups)
@@ -746,7 +767,9 @@ impl<'c, 'a> Planner<'c, 'a> {
                 return Err(exception("Invalid expression type has window function"));
             };
             let BoundWindow { func_name, args, partition_by, order_bys, start, end } = w.as_ref();
-            if *start != WindowBoundary::UnboundedPreceding || (*end != WindowBoundary::CurrentRowRows && *end != WindowBoundary::CurrentRowRange) {
+            if *start != WindowBoundary::UnboundedPreceding
+                || (*end != WindowBoundary::CurrentRowRows && *end != WindowBoundary::CurrentRowRange)
+            {
                 return Err(exception("BusTub currently only support window function with default window frame settings"));
             }
             let mut planned_partition_by = vec![];
@@ -773,7 +796,8 @@ impl<'c, 'a> Planner<'c, 'a> {
                 Some(e) => e,
                 None => Arc::new(ConstantValueExpression::new(Value::integer(1))),
             };
-            window_functions.insert(i as u32, WindowFunction { function, func_type: window_func_type, partition_by: planned_partition_by, order_by });
+            window_functions
+                .insert(i as u32, WindowFunction { function, func_type: window_func_type, partition_by: planned_partition_by, order_by });
         }
         Self::check_order_by_compatible(&order_by_exprs)?;
         let output = Schema::new(columns.iter().map(|c| c.return_type().with_column_name("<unnamed>")).collect());
@@ -804,7 +828,12 @@ impl<'c, 'a> Planner<'c, 'a> {
         Ok(PlanNode::new(schema, vec![filter], PlanKind::Delete { table_oid: *oid }))
     }
 
-    fn plan_update(&mut self, table: &BoundTableRef, filter_expr: &BoundExpression, target_expr: &[(Vec<String>, BoundExpression)]) -> Result<PlanRef> {
+    fn plan_update(
+        &mut self,
+        table: &BoundTableRef,
+        filter_expr: &BoundExpression,
+        target_expr: &[(Vec<String>, BoundExpression)],
+    ) -> Result<PlanRef> {
         let BoundTableRef::Base { oid, .. } = table else { unreachable!() };
         let scan = self.plan_table_ref(table)?;
         let (_, condition) = self.plan_expression(filter_expr, &[scan.clone()])?;
@@ -820,7 +849,9 @@ impl<'c, 'a> Planner<'c, 'a> {
         let target_exprs: Vec<ExprRef> = target_exprs
             .into_iter()
             .enumerate()
-            .map(|(idx, e)| e.unwrap_or_else(|| Arc::new(ColumnValueExpression::new(0, idx as u32, filter.output_schema.column(idx as u32).clone()))))
+            .map(|(idx, e)| {
+                e.unwrap_or_else(|| Arc::new(ColumnValueExpression::new(0, idx as u32, filter.output_schema.column(idx as u32).clone())))
+            })
             .collect();
         let schema: SchemaRef = Arc::new(Schema::new(vec![Column::new("__bustub_internal.update_rows", TypeId::Integer)]));
         Ok(PlanNode::new(schema, vec![filter], PlanKind::Update { table_oid: *oid, target_expressions: target_exprs }))

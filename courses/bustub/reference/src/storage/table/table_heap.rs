@@ -105,7 +105,13 @@ impl<'a> TableHeap<'a> {
 
     /// Overwrites the tuple at `rid` and its metadata with a tuple of the same length, if `check` (when present) approves the old tuple. Returns
     /// whether it did. The check runs under the page's write latch, so nothing can change between the check and the write.
-    pub fn update_tuple_in_place(&self, meta: &TupleMeta, tuple: &Tuple, rid: Rid, check: Option<&dyn Fn(&TupleMeta, &Tuple, Rid) -> bool>) -> Result<bool> {
+    pub fn update_tuple_in_place(
+        &self,
+        meta: &TupleMeta,
+        tuple: &Tuple,
+        rid: Rid,
+        check: Option<&dyn Fn(&TupleMeta, &Tuple, Rid) -> bool>,
+    ) -> Result<bool> {
         // @begin 3c-01
         let mut guard = self.bpm.write_page(rid.page_id());
         let mut page = TablePage::new(&mut guard[..]);

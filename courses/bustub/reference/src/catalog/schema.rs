@@ -110,7 +110,13 @@ impl Schema {
         if simplified {
             format!("({})", columns(true))
         } else {
-            format!("Schema[NumColumns:{}, IsInlined:{}, Length:{}] :: ({})", self.column_count(), self.tuple_is_inlined as u8, self.length, columns(false))
+            format!(
+                "Schema[NumColumns:{}, IsInlined:{}, Length:{}] :: ({})",
+                self.column_count(),
+                self.tuple_is_inlined as u8,
+                self.length,
+                columns(false)
+            )
         }
         //~ todo!("3b-01: the two formats in the doc comment (IsInlined is 0 or 1)")
         // @end

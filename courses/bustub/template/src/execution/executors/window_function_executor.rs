@@ -42,7 +42,9 @@ fn aggregation_of(t: WindowFunctionType) -> Option<AggregationType> {
 
 impl<'e> WindowFunctionExecutor<'e> {
     pub fn new(plan: PlanRef, child: ExecutorBox<'e>) -> WindowFunctionExecutor<'e> {
-        let PlanKind::Window { columns, window_functions } = &plan.kind else { unreachable!("a WindowFunctionExecutor needs a Window plan") };
+        let PlanKind::Window { columns, window_functions } = &plan.kind else {
+            unreachable!("a WindowFunctionExecutor needs a Window plan")
+        };
         let (columns, window_functions) = (columns.clone(), window_functions.clone());
         WindowFunctionExecutor { plan, child, columns, window_functions, results: vec![], cursor: 0 }
     }
@@ -62,7 +64,14 @@ impl<'e> WindowFunctionExecutor<'e> {
     /// The value of a window function for each row when there is an `order by` (`keys[i]` is row `i`'s sort key; the rows are already
     /// sorted by it): an aggregate over the partition's rows from the first up to the **last peer** of this row, or, for `rank`, the 1-based
     /// position of the row's first peer in the partition (ties share a rank and leave gaps).
-    fn compute_ordered(&self, wf: &WindowFunction, rows: &[Tuple], keys: &[SortKey], partitions: &[Vec<usize>], cmp: &TupleComparator) -> Result<Vec<Value>> {
+    fn compute_ordered(
+        &self,
+        wf: &WindowFunction,
+        rows: &[Tuple],
+        keys: &[SortKey],
+        partitions: &[Vec<usize>],
+        cmp: &TupleComparator,
+    ) -> Result<Vec<Value>> {
         todo!("3g-05: rows with equal sort keys are peers: an aggregate covers the partition up to the last peer; rank is the 1-based position of the first peer")
     }
 }

@@ -56,17 +56,23 @@ fn any_int() -> impl Strategy<Value = (Value, i128)> {
         let (lo, hi) = range(t);
         let span = (hi - lo + 1) as u128;
         let x = match flavour {
-            0 => lo,                                   // an extreme
-            1 => hi,                                   // the other extreme
-            2 => (bits as i128 % 7) - 3,               // near zero
-            _ => lo + (bits as u128 % span) as i128,   // anywhere
+            0 => lo,                                 // an extreme
+            1 => hi,                                 // the other extreme
+            2 => (bits as i128 % 7) - 3,             // near zero
+            _ => lo + (bits as u128 % span) as i128, // anywhere
         };
         (int_of(t, x), x)
     })
 }
 
 fn nulls() -> impl Strategy<Value = Value> {
-    prop_oneof![Just(Value::null(TinyInt)), Just(Value::null(SmallInt)), Just(Value::null(Integer)), Just(Value::null(BigInt)), Just(Value::null(Decimal))]
+    prop_oneof![
+        Just(Value::null(TinyInt)),
+        Just(Value::null(SmallInt)),
+        Just(Value::null(Integer)),
+        Just(Value::null(BigInt)),
+        Just(Value::null(Decimal))
+    ]
 }
 
 // ---- 3a-01 · Types and values ---------------------------------------------------------------------------------------------
@@ -78,7 +84,17 @@ fn s3a_01_every_type_has_a_size_in_bytes_and_a_name() {
         assert_eq!(t.type_size().unwrap(), size, "{t:?}");
     }
     assert_eq!(kind(Invalid.type_size()), ExceptionType::UnknownType, "the invalid type has no size");
-    let names = [(Invalid, "INVALID"), (Boolean, "BOOLEAN"), (TinyInt, "TINYINT"), (SmallInt, "SMALLINT"), (Integer, "INTEGER"), (BigInt, "BIGINT"), (Decimal, "DECIMAL"), (Varchar, "VARCHAR"), (Timestamp, "TIMESTAMP")];
+    let names = [
+        (Invalid, "INVALID"),
+        (Boolean, "BOOLEAN"),
+        (TinyInt, "TINYINT"),
+        (SmallInt, "SMALLINT"),
+        (Integer, "INTEGER"),
+        (BigInt, "BIGINT"),
+        (Decimal, "DECIMAL"),
+        (Varchar, "VARCHAR"),
+        (Timestamp, "TIMESTAMP"),
+    ];
     for (t, name) in names {
         assert_eq!(t.type_id_to_string(), name, "every type has a size in bytes and a name");
     }
@@ -160,7 +176,16 @@ fn s3a_01_values_print_like_bustub() {
     assert_eq!(Value::decimal(3.14).to_string(), "3.140000", "six digits after the point, like std::to_string");
     assert_eq!(Value::varchar("hi there").to_string(), "hi there", "values print like bustub");
     assert_eq!(Value::timestamp(77).to_string(), "77", "values print like bustub");
-    for (t, text) in [(Integer, "integer_null"), (Varchar, "varlen_null"), (Decimal, "decimal_null"), (Boolean, "boolean_null"), (TinyInt, "tinyint_null"), (SmallInt, "smallint_null"), (BigInt, "bigint_null"), (Timestamp, "timestamp_null")] {
+    for (t, text) in [
+        (Integer, "integer_null"),
+        (Varchar, "varlen_null"),
+        (Decimal, "decimal_null"),
+        (Boolean, "boolean_null"),
+        (TinyInt, "tinyint_null"),
+        (SmallInt, "smallint_null"),
+        (BigInt, "bigint_null"),
+        (Timestamp, "timestamp_null"),
+    ] {
         assert_eq!(Value::null(t).to_string(), text, "values print like bustub");
     }
 }
@@ -168,11 +193,20 @@ fn s3a_01_values_print_like_bustub() {
 #[test]
 fn s3a_01_which_types_can_be_compared() {
     let (i, d, s, b, t) = (Value::integer(1), Value::decimal(1.0), Value::varchar("1"), Value::boolean(true), Value::timestamp(5));
-    assert!(i.check_comparable(&d) && d.check_comparable(&i) && i.check_comparable(&s), "which types can be compared: expected `i.check_comparable(&d) && d.check_comparable(&i) && i.check_comparable(&s)`");
+    assert!(
+        i.check_comparable(&d) && d.check_comparable(&i) && i.check_comparable(&s),
+        "which types can be compared: expected `i.check_comparable(&d) && d.check_comparable(&i) && i.check_comparable(&s)`"
+    );
     assert!(s.check_comparable(&b) && s.check_comparable(&t) && s.check_comparable(&i), "anything can be compared with a string");
-    assert!(b.check_comparable(&b) && b.check_comparable(&s), "which types can be compared: expected `b.check_comparable(&b) && b.check_comparable(&s)`");
+    assert!(
+        b.check_comparable(&b) && b.check_comparable(&s),
+        "which types can be compared: expected `b.check_comparable(&b) && b.check_comparable(&s)`"
+    );
     assert!(!b.check_comparable(&i) && !i.check_comparable(&b), "a boolean is not a number");
-    assert!(t.check_comparable(&t) && !t.check_comparable(&i), "which types can be compared: expected `t.check_comparable(&t) && !t.check_comparable(&i)`");
+    assert!(
+        t.check_comparable(&t) && !t.check_comparable(&i),
+        "which types can be compared: expected `t.check_comparable(&t) && !t.check_comparable(&i)`"
+    );
 }
 
 // ---- 3a-02 · Casting -------------------------------------------------------------------------------------------------------
@@ -271,9 +305,19 @@ fn s3a_02_a_null_becomes_the_null_of_the_target_and_impossible_casts_are_errors(
     }
     assert!(Value::boolean(true).cast_as(Integer).is_err(), "a boolean is not a number");
     assert!(Value::integer(1).cast_as(Boolean).is_err(), "and a number is not a boolean");
-    assert!(Value::timestamp(5).cast_as(Integer).is_err(), "a null becomes the null of the target and impossible casts are errors: expected `Value::timestamp(5).cast_as(Integer).is_err()`");
-    assert_eq!(Value::boolean(true).cast_as(Varchar).unwrap().as_str(), Some("true"), "a null becomes the null of the target and impossible casts are errors");
-    assert!(Value::integer(5).cast_as(Invalid).is_err(), "a null becomes the null of the target and impossible casts are errors: expected `Value::integer(5).cast_as(Invalid).is_err()`");
+    assert!(
+        Value::timestamp(5).cast_as(Integer).is_err(),
+        "a null becomes the null of the target and impossible casts are errors: expected `Value::timestamp(5).cast_as(Integer).is_err()`"
+    );
+    assert_eq!(
+        Value::boolean(true).cast_as(Varchar).unwrap().as_str(),
+        Some("true"),
+        "a null becomes the null of the target and impossible casts are errors"
+    );
+    assert!(
+        Value::integer(5).cast_as(Invalid).is_err(),
+        "a null becomes the null of the target and impossible casts are errors: expected `Value::integer(5).cast_as(Invalid).is_err()`"
+    );
 }
 
 /// A string to a decimal reads the leading number with its fraction and its exponent (the contract of the stage page).
@@ -281,7 +325,8 @@ fn s3a_02_a_null_becomes_the_null_of_the_target_and_impossible_casts_are_errors(
 fn s3a_02_text_converts_to_a_decimal_with_its_fraction_and_exponent() {
     let cases: [(&str, f64); 6] = [("12.5", 12.5), ("-0.25", -0.25), ("3", 3.0), ("  7.5xyz", 7.5), ("1e3", 1000.0), ("2.5E-1", 0.25)];
     for (text, want) in cases {
-        let got = Value::varchar(text).cast_as(Decimal).unwrap_or_else(|e| panic!("{text:?} as a decimal should be {want}, got the error {e}"));
+        let got =
+            Value::varchar(text).cast_as(Decimal).unwrap_or_else(|e| panic!("{text:?} as a decimal should be {want}, got the error {e}"));
         assert_eq!(got.as_f64(), Some(want), "{text:?} as a decimal reads its fraction and exponent, not only its integer part");
     }
 }
@@ -290,7 +335,11 @@ fn s3a_02_text_converts_to_a_decimal_with_its_fraction_and_exponent() {
 #[test]
 fn s3a_02_text_with_no_digits_is_not_a_decimal() {
     for text in [".", "-.", "+", "e5", ""] {
-        assert_eq!(kind(Value::varchar(text).cast_as(Decimal)), ExceptionType::Conversion, "{text:?} has no digits, so it is a Conversion error, not a zero");
+        assert_eq!(
+            kind(Value::varchar(text).cast_as(Decimal)),
+            ExceptionType::Conversion,
+            "{text:?} has no digits, so it is a Conversion error, not a zero"
+        );
     }
 }
 
@@ -320,7 +369,15 @@ fn s3a_02_a_decimal_at_the_end_of_a_types_range_fits_and_one_beyond_does_not() {
 // ---- 3a-03 · Comparing -----------------------------------------------------------------------------------------------------
 
 fn all_six(a: &Value, b: &Value) -> [CmpBool; 6] {
-    [a.compare_equals(b), a.compare_not_equals(b), a.compare_less_than(b), a.compare_less_than_equals(b), a.compare_greater_than(b), a.compare_greater_than_equals(b)].map(|r| r.unwrap())
+    [
+        a.compare_equals(b),
+        a.compare_not_equals(b),
+        a.compare_less_than(b),
+        a.compare_less_than_equals(b),
+        a.compare_greater_than(b),
+        a.compare_greater_than_equals(b),
+    ]
+    .map(|r| r.unwrap())
 }
 
 fn truth(ord: Ordering) -> [CmpBool; 6] {
@@ -490,10 +547,22 @@ proptest! {
 
 #[test]
 fn s3a_04_strings_on_the_right_are_converted_and_other_types_are_refused() {
-    assert_eq!(Value::integer(5).add(&Value::varchar("7")).unwrap().as_i64(), Some(12), "strings on the right are converted and other types are refused");
+    assert_eq!(
+        Value::integer(5).add(&Value::varchar("7")).unwrap().as_i64(),
+        Some(12),
+        "strings on the right are converted and other types are refused"
+    );
     assert_eq!(Value::integer(5).add(&Value::varchar("7")).unwrap().type_id(), Integer, "the result keeps the left type");
-    assert_eq!(kind(Value::integer(5).divide(&Value::varchar("0"))), ExceptionType::DivideByZero, "strings on the right are converted and other types are refused");
-    assert_eq!(kind(Value::boolean(true).add(&Value::boolean(true))), ExceptionType::NotImplemented, "strings on the right are converted and other types are refused");
+    assert_eq!(
+        kind(Value::integer(5).divide(&Value::varchar("0"))),
+        ExceptionType::DivideByZero,
+        "strings on the right are converted and other types are refused"
+    );
+    assert_eq!(
+        kind(Value::boolean(true).add(&Value::boolean(true))),
+        ExceptionType::NotImplemented,
+        "strings on the right are converted and other types are refused"
+    );
     assert_eq!(kind(Value::varchar("1").add(&Value::integer(1))), ExceptionType::NotImplemented, "a string is only ever on the right");
 }
 
@@ -605,9 +674,17 @@ fn s3a_05_reading_a_reserved_encoding_gives_a_null_and_the_invalid_type_is_an_er
         let v = Value::deserialize_from(&buf, t).unwrap();
         assert!(v.is_null() && v.type_id() == t, "{t:?}");
     }
-    assert_eq!(kind(Value::deserialize_from(&[0u8; 8], Invalid)), ExceptionType::UnknownType, "reading a reserved encoding gives a null and the invalid type is an error");
+    assert_eq!(
+        kind(Value::deserialize_from(&[0u8; 8], Invalid)),
+        ExceptionType::UnknownType,
+        "reading a reserved encoding gives a null and the invalid type is an error"
+    );
     // only the bytes the type needs are read: a longer buffer is fine
-    assert_eq!(Value::deserialize_from(&[7, 0, 0, 0, 99, 99, 99, 99], Integer).unwrap().as_i64(), Some(7), "reading a reserved encoding gives a null and the invalid type is an error");
+    assert_eq!(
+        Value::deserialize_from(&[7, 0, 0, 0, 99, 99, 99, 99], Integer).unwrap().as_i64(),
+        Some(7),
+        "reading a reserved encoding gives a null and the invalid type is an error"
+    );
 }
 
 // ---- 3a-06 · Boss: values end to end -----------------------------------------------------------------------------------------

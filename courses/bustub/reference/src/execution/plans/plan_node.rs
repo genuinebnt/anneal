@@ -117,24 +117,54 @@ pub enum PlanType {
 #[derive(Clone, Debug)]
 pub enum PlanKind {
     /// Reads a whole table. `filter_predicate` is set by the optimizer when a filter is merged into the scan.
-    SeqScan { table_oid: TableOid, table_name: String, filter_predicate: Option<ExprRef> },
+    SeqScan {
+        table_oid: TableOid,
+        table_name: String,
+        filter_predicate: Option<ExprRef>,
+    },
     /// Reads a table through an index: a point lookup (`pred_keys`, one constant per lookup) or a full ordered scan (none).
-    IndexScan { table_oid: TableOid, index_oid: IndexOid, filter_predicate: Option<ExprRef>, pred_keys: Vec<ExprRef> },
+    IndexScan {
+        table_oid: TableOid,
+        index_oid: IndexOid,
+        filter_predicate: Option<ExprRef>,
+        pred_keys: Vec<ExprRef>,
+    },
     /// Inserts the rows of its one child into the table; outputs one row: the count.
-    Insert { table_oid: TableOid },
+    Insert {
+        table_oid: TableOid,
+    },
     /// Replaces each row of its one child with `target_expressions` evaluated on it; outputs the count.
-    Update { table_oid: TableOid, target_expressions: Vec<ExprRef> },
+    Update {
+        table_oid: TableOid,
+        target_expressions: Vec<ExprRef>,
+    },
     /// Deletes the rows of its one child from the table; outputs the count.
-    Delete { table_oid: TableOid },
+    Delete {
+        table_oid: TableOid,
+    },
     /// `GROUP BY group_bys` computing `aggregates` (an expression and a type for each).
-    Aggregation { group_bys: Vec<ExprRef>, aggregates: Vec<ExprRef>, agg_types: Vec<AggregationType> },
-    Limit { limit: usize },
+    Aggregation {
+        group_bys: Vec<ExprRef>,
+        aggregates: Vec<ExprRef>,
+        agg_types: Vec<AggregationType>,
+    },
+    Limit {
+        limit: usize,
+    },
     /// Drops the first `offset` rows of its one child.
-    Offset { offset: usize },
+    Offset {
+        offset: usize,
+    },
     /// Two children with the same columns: `UNION [ALL]`, `INTERSECT [ALL]` or `EXCEPT [ALL]` of their rows.
-    SetOp { op: crate::sql::ast::SetOperator, all: bool },
+    SetOp {
+        op: crate::sql::ast::SetOperator,
+        all: bool,
+    },
     /// Two children (left, right) and a predicate over a pair of tuples.
-    NestedLoopJoin { predicate: ExprRef, join_type: JoinType },
+    NestedLoopJoin {
+        predicate: ExprRef,
+        join_type: JoinType,
+    },
     /// One child (the outer side); the inner side is looked up in `index_oid` with `key_predicate`.
     NestedIndexJoin {
         key_predicate: ExprRef,
@@ -146,19 +176,43 @@ pub enum PlanKind {
         join_type: JoinType,
     },
     /// Two children and the equality keys of each side.
-    HashJoin { left_key_expressions: Vec<ExprRef>, right_key_expressions: Vec<ExprRef>, join_type: JoinType },
-    Filter { predicate: ExprRef },
+    HashJoin {
+        left_key_expressions: Vec<ExprRef>,
+        right_key_expressions: Vec<ExprRef>,
+        join_type: JoinType,
+    },
+    Filter {
+        predicate: ExprRef,
+    },
     /// Rows of expressions evaluated without any input (`VALUES (1, 'a'), (2, 'b')`).
-    Values { values: Vec<Vec<ExprRef>> },
-    Projection { expressions: Vec<ExprRef> },
-    Sort { order_bys: Vec<OrderBy> },
-    TopN { order_bys: Vec<OrderBy>, n: usize },
-    TopNPerGroup { group_bys: Vec<ExprRef>, order_bys: Vec<OrderBy>, n: usize },
+    Values {
+        values: Vec<Vec<ExprRef>>,
+    },
+    Projection {
+        expressions: Vec<ExprRef>,
+    },
+    Sort {
+        order_bys: Vec<OrderBy>,
+    },
+    TopN {
+        order_bys: Vec<OrderBy>,
+        n: usize,
+    },
+    TopNPerGroup {
+        group_bys: Vec<ExprRef>,
+        order_bys: Vec<OrderBy>,
+        n: usize,
+    },
     /// Reads one of the built-in `__mock_*` tables, which have no storage.
-    MockScan { table: String },
+    MockScan {
+        table: String,
+    },
     /// `columns` are the output expressions; a window function's slot holds a placeholder (`col_idx` = `u32::MAX`) and
     /// `window_functions` says, by output index, what to compute there.
-    Window { columns: Vec<ExprRef>, window_functions: BTreeMap<u32, WindowFunction> },
+    Window {
+        columns: Vec<ExprRef>,
+        window_functions: BTreeMap<u32, WindowFunction>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -253,7 +307,11 @@ impl PlanNode {
                 format!("NestedIndexJoin {{ type={join_type}, key_predicate={key_predicate}, index={index_name}, index_table={index_table_name} }}")
             }
             PlanKind::HashJoin { left_key_expressions, right_key_expressions, join_type } => {
-                format!("HashJoin {{ type={join_type}, left_key={}, right_key={} }}", list(left_key_expressions), list(right_key_expressions))
+                format!(
+                    "HashJoin {{ type={join_type}, left_key={}, right_key={} }}",
+                    list(left_key_expressions),
+                    list(right_key_expressions)
+                )
             }
             PlanKind::Filter { predicate } => format!("Filter {{ predicate={predicate} }}"),
             PlanKind::Values { values } => format!("Values {{ rows={} }}", values.len()),

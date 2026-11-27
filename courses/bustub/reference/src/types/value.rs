@@ -223,7 +223,9 @@ impl Value {
         use TypeId::*;
         match self.type_id() {
             Boolean => matches!(other.type_id(), Boolean | Varchar),
-            TinyInt | SmallInt | Integer | BigInt | Decimal => matches!(other.type_id(), TinyInt | SmallInt | Integer | BigInt | Decimal | Varchar),
+            TinyInt | SmallInt | Integer | BigInt | Decimal => {
+                matches!(other.type_id(), TinyInt | SmallInt | Integer | BigInt | Decimal | Varchar)
+            }
             Varchar => true,
             Timestamp => other.type_id() == Timestamp,
             Invalid => false,
@@ -253,7 +255,10 @@ impl Value {
             Invalid => false,
         };
         if !allowed {
-            return Err(err(ExceptionType::Invalid, format!("{} is not coercable to {}", from.type_id_to_string(), to.type_id_to_string())));
+            return Err(err(
+                ExceptionType::Invalid,
+                format!("{} is not coercable to {}", from.type_id_to_string(), to.type_id_to_string()),
+            ));
         }
         if self.is_null() {
             return Ok(Value::Null(to));
@@ -681,7 +686,8 @@ fn cast_text(s: &str, to: TypeId) -> Result<Value> {
             _ => Err(err(ExceptionType::Invalid, "Boolean value format error.")),
         },
         TypeId::Decimal => {
-            let text = leading_number(s, true).ok_or_else(|| err(ExceptionType::Conversion, format!("Cannot convert '{s}' to a number")))?;
+            let text =
+                leading_number(s, true).ok_or_else(|| err(ExceptionType::Conversion, format!("Cannot convert '{s}' to a number")))?;
             let d: f64 = text.parse().map_err(|_| err(ExceptionType::Conversion, format!("Cannot convert '{s}' to a number")))?;
             if d > BUSTUB_DECIMAL_MAX || d < BUSTUB_DECIMAL_MIN {
                 return Err(out_of_range());
@@ -689,7 +695,8 @@ fn cast_text(s: &str, to: TypeId) -> Result<Value> {
             Ok(Value::Decimal(d))
         }
         _ => {
-            let text = leading_number(s, false).ok_or_else(|| err(ExceptionType::Conversion, format!("Cannot convert '{s}' to a number")))?;
+            let text =
+                leading_number(s, false).ok_or_else(|| err(ExceptionType::Conversion, format!("Cannot convert '{s}' to a number")))?;
             let v: i64 = text.parse().map_err(|_| out_of_range())?;
             cast_integer(v, to)
         }

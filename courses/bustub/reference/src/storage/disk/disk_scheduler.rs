@@ -70,7 +70,8 @@ fn run(disk: &dyn DiskIo, is_write: bool, page_id: PageId, data: &mut PageData) 
 fn execute(disk: &dyn DiskIo, request: DiskRequest) {
     let DiskRequest { is_write, mut data, page_id, callback } = request;
     // @begin 1b-04
-    let result = catch_unwind(AssertUnwindSafe(|| run(disk, is_write, page_id, &mut data))).unwrap_or_else(|_| Err(io::Error::other("the disk panicked")));
+    let result = catch_unwind(AssertUnwindSafe(|| run(disk, is_write, page_id, &mut data)))
+        .unwrap_or_else(|_| Err(io::Error::other("the disk panicked")));
     //~ let result = run(disk, is_write, page_id, &mut data);
     // @end
     callback.set(result.map(|()| data));

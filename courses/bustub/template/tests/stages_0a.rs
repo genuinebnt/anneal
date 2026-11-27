@@ -60,8 +60,14 @@ fn s0a_01_a_prefix_that_holds_no_value_is_not_found() {
 #[test]
 fn s0a_01_the_requested_type_must_match_the_stored_one() {
     let trie = test_trie();
-    assert!(trie.get::<String>("test").is_none(), "the requested type must match the stored one: expected `trie.get::<String>(\"test\").is_none()`");
-    assert!(trie.get::<u64>("test").is_none(), "the requested type must match the stored one: expected `trie.get::<u64>(\"test\").is_none()`");
+    assert!(
+        trie.get::<String>("test").is_none(),
+        "the requested type must match the stored one: expected `trie.get::<String>(\"test\").is_none()`"
+    );
+    assert!(
+        trie.get::<u64>("test").is_none(),
+        "the requested type must match the stored one: expected `trie.get::<u64>(\"test\").is_none()`"
+    );
     assert_eq!(trie.get::<u32>("test"), Some(&233), "the requested type must match the stored one");
 }
 
@@ -85,7 +91,10 @@ fn s0a_01_get_shared_gives_an_owner_of_the_value() {
     let shared = trie.get_shared::<String>("k").unwrap();
     drop(trie);
     assert_eq!(*shared, "v", "the value outlives the trie it came from");
-    assert!(test_trie().get_shared::<String>("test").is_none(), "get shared gives an owner of the value: expected `test_trie().get_shared::<String>(\"test\").is_none()`");
+    assert!(
+        test_trie().get_shared::<String>("test").is_none(),
+        "get shared gives an owner of the value: expected `test_trie().get_shared::<String>(\"test\").is_none()`"
+    );
 }
 
 // ---- 0a-02: put -------------------------------------------------------------------------------------------------------------------------
@@ -109,7 +118,10 @@ fn s0a_02_put_replaces_a_value_even_with_another_type() {
     assert_eq!(trie.get::<u32>("test"), Some(&23333333), "put replaces a value even with another type");
     let trie = trie.put("test", String::from("23333333"));
     assert_eq!(trie.get::<String>("test"), Some(&String::from("23333333")), "put replaces a value even with another type");
-    assert!(trie.get::<u32>("test").is_none(), "put replaces a value even with another type: expected `trie.get::<u32>(\"test\").is_none()`");
+    assert!(
+        trie.get::<u32>("test").is_none(),
+        "put replaces a value even with another type: expected `trie.get::<u32>(\"test\").is_none()`"
+    );
 }
 
 #[test]
@@ -118,7 +130,10 @@ fn s0a_02_keys_that_are_prefixes_of_each_other_share_a_path() {
     assert_eq!(trie.get::<u32>("11"), Some(&22), "keys that are prefixes of each other share a path");
     assert_eq!(trie.get::<u32>("111"), Some(&111), "keys that are prefixes of each other share a path");
     assert_eq!(trie.get::<u32>("1111"), Some(&1111), "keys that are prefixes of each other share a path");
-    assert!(trie.get::<u32>("1").is_none(), "keys that are prefixes of each other share a path: expected `trie.get::<u32>(\"1\").is_none()`");
+    assert!(
+        trie.get::<u32>("1").is_none(),
+        "keys that are prefixes of each other share a path: expected `trie.get::<u32>(\"1\").is_none()`"
+    );
 }
 
 #[test]
@@ -155,7 +170,10 @@ fn s0a_02_only_the_path_is_copied_everything_else_is_shared() {
     assert!(!Arc::ptr_eq(old_root, new_root), "the root is on the path");
     assert!(Arc::ptr_eq(&old_root.children[&'x'], &new_root.children[&'x']), "the x branch is shared");
     assert!(Arc::ptr_eq(&old_root.children[&'a'].children[&'c'], &new_root.children[&'a'].children[&'c']), "the sibling leaf is shared");
-    assert!(!Arc::ptr_eq(&old_root.children[&'a'], &new_root.children[&'a']), "only the path is copied everything else is shared: expected `!Arc::ptr_eq(&old_root.children[&'a'], &new_root.children[&'a'])`");
+    assert!(
+        !Arc::ptr_eq(&old_root.children[&'a'], &new_root.children[&'a']),
+        "only the path is copied everything else is shared: expected `!Arc::ptr_eq(&old_root.children[&'a'], &new_root.children[&'a'])`"
+    );
 }
 
 #[test]
@@ -188,7 +206,10 @@ fn s0a_02_removing_everything_leaves_an_empty_trie_with_no_root() {
     }
     assert!(trie.root().is_none(), "removing everything leaves an empty trie with no root: expected `trie.root().is_none()`");
     for k in ["", "te", "tes", "test"] {
-        assert!(trie.get::<u32>(k).is_none(), "removing everything leaves an empty trie with no root: expected `trie.get::<u32>(k).is_none()`");
+        assert!(
+            trie.get::<u32>(k).is_none(),
+            "removing everything leaves an empty trie with no root: expected `trie.get::<u32>(k).is_none()`"
+        );
     }
 }
 
@@ -205,7 +226,10 @@ fn s0a_02_a_node_that_still_leads_somewhere_stays() {
     let trie = t().put("test", 1u32).put("te", 2u32).remove("te");
     assert!(trie.get::<u32>("te").is_none(), "a node that still leads somewhere stays: expected `trie.get::<u32>(\"te\").is_none()`");
     assert_eq!(trie.get::<u32>("test"), Some(&1), "a node that still leads somewhere stays");
-    assert!(!trie.root().unwrap().children[&'t'].children[&'e'].is_value_node(), "a node that still leads somewhere stays: expected `!trie.root().unwrap().children[&'t'].children[&'e'].is_value_node()`");
+    assert!(
+        !trie.root().unwrap().children[&'t'].children[&'e'].is_value_node(),
+        "a node that still leads somewhere stays: expected `!trie.root().unwrap().children[&'t'].children[&'e'].is_value_node()`"
+    );
 }
 
 #[test]
@@ -251,7 +275,10 @@ fn s0a_03_a_guard_stays_valid_after_the_key_is_removed() {
     store.put("233", String::from("2333"));
     let guard = store.get::<String>("233").unwrap();
     store.remove("233");
-    assert!(store.get::<String>("233").is_none(), "a guard stays valid after the key is removed: expected `store.get::<String>(\"233\").is_none()`");
+    assert!(
+        store.get::<String>("233").is_none(),
+        "a guard stays valid after the key is removed: expected `store.get::<String>(\"233\").is_none()`"
+    );
     assert_eq!(*guard, "2333", "a guard stays valid after the key is removed");
 }
 
@@ -273,7 +300,10 @@ fn s0a_03_values_need_not_be_clonable() {
     store.put("te", Box::new(NoClone(23)));
     assert_eq!(store.get::<Box<NoClone>>("te").unwrap().0, 23, "values need not be clonable");
     store.remove("te");
-    assert!(store.get::<Box<NoClone>>("te").is_none(), "values need not be clonable: expected `store.get::<Box<NoClone>>(\"te\").is_none()`");
+    assert!(
+        store.get::<Box<NoClone>>("te").is_none(),
+        "values need not be clonable: expected `store.get::<Box<NoClone>>(\"te\").is_none()`"
+    );
 }
 
 #[test]
@@ -361,7 +391,11 @@ fn s0a_03_a_reader_never_waits_for_a_writer_even_one_stuck_in_a_drop() {
     let got = rx.recv_timeout(Duration::from_secs(2));
     release_tx.send(()).unwrap();
     writer.join().unwrap();
-    assert_eq!(got, Ok(Some(1)), "a reader must not wait for a writer, not even one stuck cleaning up the old version: drop it outside the lock readers take");
+    assert_eq!(
+        got,
+        Ok(Some(1)),
+        "a reader must not wait for a writer, not even one stuck cleaning up the old version: drop it outside the lock readers take"
+    );
 }
 
 #[test]
@@ -469,7 +503,10 @@ fn s0a_04_pointer_stability_and_noncopyable_values() {
     let boxed = Trie::new().put("tes", Box::new(233u32)).put("te", Box::new(23u32)).put("test", Box::new(2333u32));
     assert_eq!(**boxed.get::<Box<u32>>("te").unwrap(), 23, "pointer stability and noncopyable values");
     let boxed = boxed.remove("te").remove("tes").remove("test");
-    assert!(boxed.get::<Box<u32>>("te").is_none(), "pointer stability and noncopyable values: expected `boxed.get::<Box<u32>>(\"te\").is_none()`");
+    assert!(
+        boxed.get::<Box<u32>>("te").is_none(),
+        "pointer stability and noncopyable values: expected `boxed.get::<Box<u32>>(\"te\").is_none()`"
+    );
 }
 
 // ---- properties: the trie against a map, with every old version kept -----------------------------------------------------------------
@@ -503,7 +540,10 @@ struct Draft {
 
 impl Draft {
     fn freeze(self) -> Arc<TrieNode> {
-        Arc::new(TrieNode { children: self.children.into_iter().map(|(c, d)| (c, d.freeze())).collect(), value: self.value.map(|v| Arc::new(v) as _) })
+        Arc::new(TrieNode {
+            children: self.children.into_iter().map(|(c, d)| (c, d.freeze())).collect(),
+            value: self.value.map(|v| Arc::new(v) as _),
+        })
     }
 }
 
@@ -630,7 +670,10 @@ fn s0a_04_a_reader_never_sees_a_value_go_backwards_while_a_writer_counts_up() {
     }
     done.store(true, Ordering::SeqCst);
     for r in readers {
-        assert!(r.join().unwrap() <= 3000, "a reader never sees a value go backwards while a writer counts up: expected `r.join().unwrap() <= 3000`");
+        assert!(
+            r.join().unwrap() <= 3000,
+            "a reader never sees a value go backwards while a writer counts up: expected `r.join().unwrap() <= 3000`"
+        );
     }
     assert_eq!(*store.get::<u64>("counter").unwrap(), 3000, "a reader never sees a value go backwards while a writer counts up");
 }
@@ -797,7 +840,11 @@ mod ch_0a_c3 {
         let old = build(&refs);
         let new = old.put("0123456", 9u32);
         let fresh = node_count(&new) - shared_nodes(&old, &new);
-        assert!(fresh <= "0123456".len() + 1, "{fresh} nodes are new but the path has {}: put copied more than the path", "0123456".len() + 1);
+        assert!(
+            fresh <= "0123456".len() + 1,
+            "{fresh} nodes are new but the path has {}: put copied more than the path",
+            "0123456".len() + 1
+        );
         assert!(shared_nodes(&old, &new) > 50, "almost everything must be shared");
     }
 
@@ -805,7 +852,10 @@ mod ch_0a_c3 {
     fn s0a_c3_removing_a_key_also_copies_only_the_path() {
         let old = build(&["alpha", "alps", "beta", "gamma", "delta", "alphabet"]);
         let new = old.remove("alps");
-        assert!(node_count(&new) - shared_nodes(&old, &new) <= "alps".len() + 1, "this check: expected `node_count(&new) - shared_nodes(&old, &new) <= \"alps\".len() + 1`");
+        assert!(
+            node_count(&new) - shared_nodes(&old, &new) <= "alps".len() + 1,
+            "this check: expected `node_count(&new) - shared_nodes(&old, &new) <= \"alps\".len() + 1`"
+        );
     }
 
     #[test]
@@ -813,7 +863,11 @@ mod ch_0a_c3 {
         let base = build(&["a", "b", "c", "d"]);
         let left = base.put("a1", 1u32);
         let right = base.put("b1", 1u32);
-        assert_eq!(shared_nodes(&left, &right), node_count(&base) - 3, "only the root and the two changed paths differ: c and d are shared");
+        assert_eq!(
+            shared_nodes(&left, &right),
+            node_count(&base) - 3,
+            "only the root and the two changed paths differ: c and d are shared"
+        );
     }
 
     proptest! {

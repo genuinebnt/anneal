@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use proptest::prelude::*;
 
+use bustub::catalog::schema::Schema;
 use bustub::common::bustub_instance::BusTubInstance;
 use bustub::common::exception::{Exception, ExceptionType};
 use bustub::common::result_writer::SimpleStreamWriter;
@@ -15,7 +16,6 @@ use bustub::execution::expressions::like_expression::like_matches;
 use bustub::execution::expressions::operator_expression::{Operator, OperatorExpression};
 use bustub::planner::planner::Planner;
 use bustub::storage::table::tuple::Tuple;
-use bustub::catalog::schema::Schema;
 use bustub::types::type_id::TypeId;
 use bustub::types::value::Value;
 
@@ -70,14 +70,26 @@ fn eval(e: &ExprRef) -> Value {
 #[test]
 fn s3i_01_multiplication_division_and_remainder_follow_the_usual_precedence() {
     let db = db();
-    assert_eq!(rows(&db, "select 2 + 3 * 4, (2 + 3) * 4, 17 / 5, 17 % 5"), ["14 20 3 2"], "* binds tighter than +, / truncates, % is the remainder");
-    assert_eq!(rows(&db, "select -17 / 5, -17 % 5, 10 - 2 * 3 - 1"), ["-3 -2 3"], "division and remainder round toward zero; operators of one level go left to right");
+    assert_eq!(
+        rows(&db, "select 2 + 3 * 4, (2 + 3) * 4, 17 / 5, 17 % 5"),
+        ["14 20 3 2"],
+        "* binds tighter than +, / truncates, % is the remainder"
+    );
+    assert_eq!(
+        rows(&db, "select -17 / 5, -17 % 5, 10 - 2 * 3 - 1"),
+        ["-3 -2 3"],
+        "division and remainder round toward zero; operators of one level go left to right"
+    );
 }
 
 #[test]
 fn s3i_01_a_null_operand_makes_the_arithmetic_result_null() {
     let db = db();
-    assert_eq!(rows(&db, "select 1 * null, null / 2, null % 3, -null"), ["integer_null integer_null integer_null integer_null"], "an arithmetic operator with a NULL operand returns NULL");
+    assert_eq!(
+        rows(&db, "select 1 * null, null / 2, null % 3, -null"),
+        ["integer_null integer_null integer_null integer_null"],
+        "an arithmetic operator with a NULL operand returns NULL"
+    );
 }
 
 #[test]
@@ -85,13 +97,21 @@ fn s3i_01_division_by_zero_and_overflow_are_errors_not_panics() {
     let db = db();
     assert_eq!(error_kind(&db, "select 1 / 0"), ExceptionType::DivideByZero, "division by zero is an error");
     assert_eq!(error_kind(&db, "select 5 % 0"), ExceptionType::DivideByZero, "remainder by zero is an error");
-    assert_eq!(error_kind(&db, "select 65536 * 65536"), ExceptionType::OutOfRange, "an INTEGER product that does not fit is an out-of-range error");
+    assert_eq!(
+        error_kind(&db, "select 65536 * 65536"),
+        ExceptionType::OutOfRange,
+        "an INTEGER product that does not fit is an out-of-range error"
+    );
 }
 
 #[test]
 fn s3i_01_plus_and_minus_also_work_on_decimals_and_mixed_numbers() {
     let db = db();
-    assert_eq!(rows(&db, "select 1.5 + 2, 5 - 0.5, 1.5 * 2, 7 / 2.0"), ["3.500000 4.500000 3.000000 3.500000"], "an operator on a decimal and an integer gives a decimal");
+    assert_eq!(
+        rows(&db, "select 1.5 + 2, 5 - 0.5, 1.5 * 2, 7 / 2.0"),
+        ["3.500000 4.500000 3.000000 3.500000"],
+        "an operator on a decimal and an integer gives a decimal"
+    );
 }
 
 #[test]
@@ -104,10 +124,18 @@ fn s3i_01_not_flips_a_boolean_and_keeps_null_as_null() {
 #[test]
 fn s3i_01_is_null_and_is_not_null_never_return_null() {
     let db = db_with_t();
-    assert_eq!(rows(&db, "select a, a is null, a is not null from t where b = 30"), ["integer_null true false"], "IS NULL is true for a NULL");
+    assert_eq!(
+        rows(&db, "select a, a is null, a is not null from t where b = 30"),
+        ["integer_null true false"],
+        "IS NULL is true for a NULL"
+    );
     assert_eq!(rows(&db, "select count(*) from t where a is null"), ["1"], "IS NULL in WHERE");
     assert_eq!(rows(&db, "select count(*) from t where b is not null"), ["4"], "IS NOT NULL in WHERE");
-    assert_eq!(rows(&db, "select null is null, 1 is null, (1 > null) is null"), ["true false true"], "IS NULL on constants and on a NULL comparison");
+    assert_eq!(
+        rows(&db, "select null is null, 1 is null, (1 > null) is null"),
+        ["true false true"],
+        "IS NULL on constants and on a NULL comparison"
+    );
 }
 
 #[test]
@@ -141,7 +169,11 @@ fn s3i_01_the_expression_computes_and_types_its_result() {
     assert_eq!(product.return_type().type_id(), TypeId::Integer, "integer times integer is INTEGER");
     let product: ExprRef = Arc::new(product);
     assert_eq!(eval(&product), Value::integer(6), "2 * 3");
-    assert_eq!(OperatorExpression::new(Operator::Multiply, vec![two.clone(), half]).unwrap().return_type().type_id(), TypeId::Decimal, "a decimal operand makes the result DECIMAL");
+    assert_eq!(
+        OperatorExpression::new(Operator::Multiply, vec![two.clone(), half]).unwrap().return_type().type_id(),
+        TypeId::Decimal,
+        "a decimal operand makes the result DECIMAL"
+    );
     assert!(OperatorExpression::new(Operator::Concat, vec![two.clone(), three]).is_err(), "|| refuses numbers");
     assert!(OperatorExpression::new(Operator::Negate, vec![two.clone(), two]).is_err(), "unary minus takes one operand");
     let factory = Planner::get_binary_expression_from_factory("*", constant(Value::integer(7)), constant(Value::integer(6))).unwrap();
@@ -176,8 +208,16 @@ proptest! {
 #[test]
 fn s3i_02_between_includes_both_ends_and_skips_nulls() {
     let db = db_with_t();
-    assert_eq!(rows(&db, "select a from t where a between 2 and 4"), ["2", "4"], "BETWEEN includes both bounds and a NULL is not between anything");
-    assert_eq!(rows(&db, "select a from t where a not between 2 and 4"), ["1", "5"], "NOT BETWEEN selects the others, but still not the NULL");
+    assert_eq!(
+        rows(&db, "select a from t where a between 2 and 4"),
+        ["2", "4"],
+        "BETWEEN includes both bounds and a NULL is not between anything"
+    );
+    assert_eq!(
+        rows(&db, "select a from t where a not between 2 and 4"),
+        ["1", "5"],
+        "NOT BETWEEN selects the others, but still not the NULL"
+    );
 }
 
 #[test]
@@ -201,29 +241,56 @@ fn s3i_02_in_matches_any_item_of_the_list() {
 fn s3i_02_not_in_with_a_null_in_the_list_selects_nothing() {
     let db = db_with_t();
     assert_eq!(rows(&db, "select a from t where a not in (1, 4)"), ["2", "5"], "NOT IN without NULLs selects the rest (not the NULL row)");
-    assert_eq!(rows(&db, "select a from t where a not in (1, null)"), Vec::<String>::new(), "x NOT IN (1, NULL) is never TRUE: it is FALSE for 1 and NULL for everything else");
-    assert_eq!(rows(&db, "select a from t where a in (1, null)"), ["1"], "x IN (1, NULL) is TRUE for 1 and NULL (not selected) for the rest");
+    assert_eq!(
+        rows(&db, "select a from t where a not in (1, null)"),
+        Vec::<String>::new(),
+        "x NOT IN (1, NULL) is never TRUE: it is FALSE for 1 and NULL for everything else"
+    );
+    assert_eq!(
+        rows(&db, "select a from t where a in (1, null)"),
+        ["1"],
+        "x IN (1, NULL) is TRUE for 1 and NULL (not selected) for the rest"
+    );
 }
 
 #[test]
 fn s3i_02_a_null_on_the_left_is_never_in_and_never_not_in() {
     let db = db_with_t();
-    assert_eq!(rows(&db, "select null in (1, 2), null not in (1, 2), 1 in (2, 3)"), ["boolean_null boolean_null false"], "NULL IN list is NULL");
-    assert_eq!(rows(&db, "select count(*) from t where a in (1, 2, 4, 5) or a not in (1, 2, 4, 5)"), ["4"], "the NULL row satisfies neither IN nor NOT IN");
+    assert_eq!(
+        rows(&db, "select null in (1, 2), null not in (1, 2), 1 in (2, 3)"),
+        ["boolean_null boolean_null false"],
+        "NULL IN list is NULL"
+    );
+    assert_eq!(
+        rows(&db, "select count(*) from t where a in (1, 2, 4, 5) or a not in (1, 2, 4, 5)"),
+        ["4"],
+        "the NULL row satisfies neither IN nor NOT IN"
+    );
 }
 
 #[test]
 fn s3i_02_the_between_and_does_not_end_the_condition() {
     let db = db_with_t();
-    assert_eq!(rows(&db, "select a from t where a between 1 and 4 and b >= 10"), ["1", "2"], "the AND after the bounds belongs to the WHERE");
+    assert_eq!(
+        rows(&db, "select a from t where a between 1 and 4 and b >= 10"),
+        ["1", "2"],
+        "the AND after the bounds belongs to the WHERE"
+    );
     assert_eq!(rows(&db, "select a from t where a + 1 between 2 and 3"), ["1", "2"], "the bounds bind looser than +");
-    assert_eq!(rows(&db, "select a from t where not a in (1, 2) and a is not null"), ["4", "5"], "NOT before the predicate negates the whole test");
+    assert_eq!(
+        rows(&db, "select a from t where not a in (1, 2) and a is not null"),
+        ["4", "5"],
+        "NOT before the predicate negates the whole test"
+    );
 }
 
 #[test]
 fn s3i_02_a_subquery_in_the_list_is_not_part_of_this_module() {
     let db = db_with_t();
-    assert!(run(&db, "select a from t where a in (select b from t)").is_err(), "IN (subquery) is a later module: refuse it, do not misparse it");
+    assert!(
+        run(&db, "select a from t where a in (select b from t)").is_err(),
+        "IN (subquery) is a later module: refuse it, do not misparse it"
+    );
 }
 
 proptest! {
@@ -280,44 +347,88 @@ fn s3i_03_a_searched_case_takes_the_first_branch_that_is_true() {
 #[test]
 fn s3i_03_without_else_an_unmatched_case_is_null_and_a_null_condition_is_not_a_match() {
     let db = db_with_t();
-    assert_eq!(rows(&db, "select a, case when a > 2 then 'x' end from t where b = 20 or b = 30"), ["2 varlen_null", "integer_null varlen_null"], "no ELSE: NULL; a NULL condition is not TRUE");
-    assert_eq!(rows(&db, "select case when a > 2 then 'x' else 'y' end from t where b = 30"), ["y"], "a condition that is NULL falls through to ELSE");
+    assert_eq!(
+        rows(&db, "select a, case when a > 2 then 'x' end from t where b = 20 or b = 30"),
+        ["2 varlen_null", "integer_null varlen_null"],
+        "no ELSE: NULL; a NULL condition is not TRUE"
+    );
+    assert_eq!(
+        rows(&db, "select case when a > 2 then 'x' else 'y' end from t where b = 30"),
+        ["y"],
+        "a condition that is NULL falls through to ELSE"
+    );
 }
 
 #[test]
 fn s3i_03_the_operand_form_compares_with_equals() {
     let db = db_with_t();
-    assert_eq!(rows(&db, "select a, case a when 1 then 100 when 4 then 400 else 0 end from t where b >= 10 or b = 0"), ["1 100", "2 0", "integer_null 0", "4 400"], "CASE x WHEN v is x = v");
+    assert_eq!(
+        rows(&db, "select a, case a when 1 then 100 when 4 then 400 else 0 end from t where b >= 10 or b = 0"),
+        ["1 100", "2 0", "integer_null 0", "4 400"],
+        "CASE x WHEN v is x = v"
+    );
     assert_eq!(rows(&db, "select case null when null then 1 else 2 end"), ["2"], "NULL = NULL is not TRUE, so WHEN NULL never matches");
 }
 
 #[test]
 fn s3i_03_only_the_chosen_branch_is_evaluated() {
     let db = db_with_t();
-    assert_eq!(rows(&db, "select a, case when b = 0 then -1 else a / b end from t where b is not null and a is not null"), ["1 0", "2 0", "4 -1"], "a / 0 in a branch that is not taken must not fail");
-    assert_eq!(rows(&db, "select a, case when b <> 0 then a / b else -1 end from t where b is not null and a is not null"), ["1 0", "2 0", "4 -1"], "the same guard with the division in the THEN branch");
-    assert_eq!(error_kind(&db, "select a / b from t where b is not null"), ExceptionType::DivideByZero, "the same division without CASE does fail");
+    assert_eq!(
+        rows(&db, "select a, case when b = 0 then -1 else a / b end from t where b is not null and a is not null"),
+        ["1 0", "2 0", "4 -1"],
+        "a / 0 in a branch that is not taken must not fail"
+    );
+    assert_eq!(
+        rows(&db, "select a, case when b <> 0 then a / b else -1 end from t where b is not null and a is not null"),
+        ["1 0", "2 0", "4 -1"],
+        "the same guard with the division in the THEN branch"
+    );
+    assert_eq!(
+        error_kind(&db, "select a / b from t where b is not null"),
+        ExceptionType::DivideByZero,
+        "the same division without CASE does fail"
+    );
 }
 
 #[test]
 fn s3i_03_coalesce_is_the_first_argument_that_is_not_null() {
     let db = db_with_t();
-    assert_eq!(rows(&db, "select a, coalesce(a, b, -1) from t where b >= 20 or b is null"), ["2 2", "integer_null 30", "5 5"], "the first non-NULL argument");
-    assert_eq!(rows(&db, "select coalesce(null, null, 7), coalesce(null, null), coalesce(5)"), ["7 integer_null 5"], "all NULL gives NULL; one argument is itself");
+    assert_eq!(
+        rows(&db, "select a, coalesce(a, b, -1) from t where b >= 20 or b is null"),
+        ["2 2", "integer_null 30", "5 5"],
+        "the first non-NULL argument"
+    );
+    assert_eq!(
+        rows(&db, "select coalesce(null, null, 7), coalesce(null, null), coalesce(5)"),
+        ["7 integer_null 5"],
+        "all NULL gives NULL; one argument is itself"
+    );
 }
 
 #[test]
 fn s3i_03_nullif_turns_a_value_into_null() {
     let db = db_with_t();
-    assert_eq!(rows(&db, "select a, nullif(a, 2) from t where a in (1, 2)"), ["1 1", "2 integer_null"], "NULLIF(a, b) is NULL when a = b, else a");
-    assert_eq!(rows(&db, "select a / nullif(b, 0) from t where a = 4"), ["integer_null"], "the classic: dividing by NULLIF(x, 0) gives NULL instead of an error");
+    assert_eq!(
+        rows(&db, "select a, nullif(a, 2) from t where a in (1, 2)"),
+        ["1 1", "2 integer_null"],
+        "NULLIF(a, b) is NULL when a = b, else a"
+    );
+    assert_eq!(
+        rows(&db, "select a / nullif(b, 0) from t where a = 4"),
+        ["integer_null"],
+        "the classic: dividing by NULLIF(x, 0) gives NULL instead of an error"
+    );
     assert_eq!(rows(&db, "select nullif('a', 'a') || 'x'"), ["varlen_null"], "a NULL string makes a concatenation NULL");
 }
 
 #[test]
 fn s3i_03_branches_must_have_one_type_and_a_bare_null_takes_it() {
     let db = db_with_t();
-    assert_eq!(error_kind(&db, "select case when a > 1 then 'x' else 1 end from t"), ExceptionType::MismatchType, "VARCHAR and INTEGER results do not mix");
+    assert_eq!(
+        error_kind(&db, "select case when a > 1 then 'x' else 1 end from t"),
+        ExceptionType::MismatchType,
+        "VARCHAR and INTEGER results do not mix"
+    );
     assert_eq!(error_kind(&db, "select case when 1 then 'x' else 'y' end"), ExceptionType::MismatchType, "a condition must be a boolean");
     assert_eq!(rows(&db, "select case when 1 > 2 then 'x' else null end"), ["varlen_null"], "a NULL branch takes the type of the others");
 }
@@ -325,7 +436,11 @@ fn s3i_03_branches_must_have_one_type_and_a_bare_null_takes_it() {
 #[test]
 fn s3i_03_case_works_inside_aggregates_and_around_them() {
     let db = db_with_t();
-    assert_eq!(rows(&db, "select sum(case when a > 1 then 1 else 0 end), count(case when a > 1 then 1 end) from t"), ["3 3"], "the classic conditional count");
+    assert_eq!(
+        rows(&db, "select sum(case when a > 1 then 1 else 0 end), count(case when a > 1 then 1 end) from t"),
+        ["3 3"],
+        "the classic conditional count"
+    );
     assert_eq!(rows(&db, "select case when count(*) > 3 then 'many' else 'few' end from t"), ["many"], "a CASE over an aggregate");
 }
 
@@ -389,15 +504,31 @@ fn s3i_04_like_in_sql_with_not_and_with_a_pattern_taken_from_a_column() {
     let db = db_with_words();
     assert_eq!(rows(&db, "select name from w where name like 'a%'"), ["apple", "a_b%"], "LIKE in WHERE");
     assert_eq!(rows(&db, "select name from w where name like '_____'"), ["apple", "Apple"], "five characters");
-    assert_eq!(rows(&db, "select name from w where name not like '%a%' and name <> ''"), ["cherry", "Apple"], "NOT LIKE (the capital A is not an a)");
-    assert_eq!(rows(&db, "select name from w where name like 'a\\_b\\%'"), ["a_b%"], "escapes through SQL: the string literal keeps the backslash");
-    assert_eq!(rows(&db, "select count(*) from w where 'xapplex' like '%' || name || '%'"), ["2"], "the pattern may be an expression: '' and 'apple' occur in the text");
+    assert_eq!(
+        rows(&db, "select name from w where name not like '%a%' and name <> ''"),
+        ["cherry", "Apple"],
+        "NOT LIKE (the capital A is not an a)"
+    );
+    assert_eq!(
+        rows(&db, "select name from w where name like 'a\\_b\\%'"),
+        ["a_b%"],
+        "escapes through SQL: the string literal keeps the backslash"
+    );
+    assert_eq!(
+        rows(&db, "select count(*) from w where 'xapplex' like '%' || name || '%'"),
+        ["2"],
+        "the pattern may be an expression: '' and 'apple' occur in the text"
+    );
 }
 
 #[test]
 fn s3i_04_a_null_operand_gives_null_and_non_strings_are_refused() {
     let db = db_with_words();
-    assert_eq!(rows(&db, "select nullif('a', 'a') like 'a%', 'a' like nullif('a', 'a'), 'a' not like nullif('a', 'a')"), ["boolean_null boolean_null boolean_null"], "NULL LIKE x, x LIKE NULL and NOT LIKE are NULL");
+    assert_eq!(
+        rows(&db, "select nullif('a', 'a') like 'a%', 'a' like nullif('a', 'a'), 'a' not like nullif('a', 'a')"),
+        ["boolean_null boolean_null boolean_null"],
+        "NULL LIKE x, x LIKE NULL and NOT LIKE are NULL"
+    );
     assert_eq!(error_kind(&db, "select 1 like 'a'"), ExceptionType::NotImplemented, "LIKE needs strings");
 }
 
@@ -450,7 +581,11 @@ fn db_with_numbers() -> BusTubInstance {
 fn s3i_05_offset_skips_rows_before_limit_counts() {
     let db = db_with_numbers();
     assert_eq!(rows(&db, "select x from n where x is not null order by x limit 2 offset 2"), ["5", "7"], "LIMIT 2 OFFSET 2 of 5 5 5 7 9");
-    assert_eq!(rows(&db, "select x from n where x is not null order by x desc limit 1 offset 1"), ["7"], "descending order, one row after skipping the first");
+    assert_eq!(
+        rows(&db, "select x from n where x is not null order by x desc limit 1 offset 1"),
+        ["7"],
+        "descending order, one row after skipping the first"
+    );
 }
 
 #[test]
@@ -458,8 +593,16 @@ fn s3i_05_offset_alone_and_offset_past_the_end() {
     let db = db_with_numbers();
     assert_eq!(rows(&db, "select x from n where x is not null order by x offset 3"), ["7", "9"], "OFFSET without LIMIT returns the rest");
     assert_eq!(rows(&db, "select x from n offset 100"), Vec::<String>::new(), "an offset past the end returns nothing");
-    assert_eq!(rows(&db, "select x from n where x is not null order by x limit 0 offset 1"), Vec::<String>::new(), "LIMIT 0 returns nothing");
-    assert_eq!(rows(&db, "select x from n where x is not null order by x offset 0 limit 2"), ["5", "5"], "OFFSET 0 changes nothing, in either clause order");
+    assert_eq!(
+        rows(&db, "select x from n where x is not null order by x limit 0 offset 1"),
+        Vec::<String>::new(),
+        "LIMIT 0 returns nothing"
+    );
+    assert_eq!(
+        rows(&db, "select x from n where x is not null order by x offset 0 limit 2"),
+        ["5", "5"],
+        "OFFSET 0 changes nothing, in either clause order"
+    );
 }
 
 #[test]
@@ -471,8 +614,16 @@ fn s3i_05_offset_works_across_many_batches() {
         rows(&db, &format!("insert into big values {}", values.join(", ")));
     }
     let got = rows(&db, "select i from big order by i limit 7 offset 63");
-    assert_eq!(got, (63..70).map(|i| i.to_string()).collect::<Vec<_>>(), "an offset that is not a multiple of the batch size lands in the middle of a batch");
-    assert_eq!(rows(&db, "select count(*) from (select i from big offset 249) as r"), ["1"], "the last row survives an offset of count - 1");
+    assert_eq!(
+        got,
+        (63..70).map(|i| i.to_string()).collect::<Vec<_>>(),
+        "an offset that is not a multiple of the batch size lands in the middle of a batch"
+    );
+    assert_eq!(
+        rows(&db, "select count(*) from (select i from big offset 249) as r"),
+        ["1"],
+        "the last row survives an offset of count - 1"
+    );
 }
 
 #[test]
@@ -489,13 +640,21 @@ fn s3i_05_distinct_aggregates_work_per_group_and_in_having() {
     let mut per_group = rows(&db, "select g, count(distinct x) from n group by g");
     per_group.sort();
     assert_eq!(per_group, ["1 2", "2 1", "3 1"], "per group (the order of groups is not defined)");
-    assert_eq!(rows(&db, "select g, sum(distinct x) from n group by g having count(distinct x) > 1"), ["1 12"], "a DISTINCT aggregate in HAVING");
+    assert_eq!(
+        rows(&db, "select g, sum(distinct x) from n group by g having count(distinct x) > 1"),
+        ["1 12"],
+        "a DISTINCT aggregate in HAVING"
+    );
 }
 
 #[test]
 fn s3i_05_distinct_on_an_empty_input_and_over_expressions() {
     let db = db_with_numbers();
-    assert_eq!(rows(&db, "select count(distinct x) from n where g = 99"), rows(&db, "select count(x) from n where g = 99"), "no rows: the same answer as the plain aggregate gives");
+    assert_eq!(
+        rows(&db, "select count(distinct x) from n where g = 99"),
+        rows(&db, "select count(x) from n where g = 99"),
+        "no rows: the same answer as the plain aggregate gives"
+    );
     assert_eq!(rows(&db, "select count(distinct x % 2) from n"), ["1"], "DISTINCT over an expression: 5, 7, 9 are all odd");
     assert_eq!(rows(&db, "select count(distinct x) + 1 from n"), ["4"], "an arithmetic expression around a DISTINCT aggregate");
 }
@@ -560,7 +719,14 @@ fn analyze(db: &BusTubInstance, sql: &str) -> Vec<Node> {
             let at = stats.find(&format!("{key}=")).unwrap_or_else(|| panic!("no {key}= in {line:?}")) + key.len() + 1;
             stats[at..].split([',', ' ', 'm']).next().unwrap().parse().unwrap_or_else(|_| panic!("{key} is not a number in {line:?}"))
         };
-        nodes.push(Node { depth, op: line[..open].trim().to_string(), rows: num("rows") as usize, batches: num("batches") as usize, loops: num("loops") as usize, millis: num("time") });
+        nodes.push(Node {
+            depth,
+            op: line[..open].trim().to_string(),
+            rows: num("rows") as usize,
+            batches: num("batches") as usize,
+            loops: num("loops") as usize,
+            millis: num("time"),
+        });
     }
     nodes
 }
@@ -622,7 +788,12 @@ fn s3i_06_the_inner_side_of_a_nested_loop_join_is_started_once_per_outer_row() {
     assert_eq!(scans.len(), 2, "two scans: {nodes:?}");
     let (outer, inner) = (scans[0], scans[1]);
     assert_eq!(outer.loops, 1, "the outer side is started once");
-    assert!(inner.loops >= outer.rows, "the inner side is started again for every outer row: {} loops for {} rows", inner.loops, outer.rows);
+    assert!(
+        inner.loops >= outer.rows,
+        "the inner side is started again for every outer row: {} loops for {} rows",
+        inner.loops,
+        outer.rows
+    );
     assert_eq!(inner.rows, 5 * 4, "and read in full each time: 5 rows, 4 times");
 }
 
@@ -634,7 +805,12 @@ fn s3i_06_time_is_inclusive_and_never_negative() {
     // a parent's time includes its children's: compare each node with the first node below it
     for i in 0..nodes.len() - 1 {
         if nodes[i + 1].depth == nodes[i].depth + 1 {
-            assert!(nodes[i].millis + 0.001 >= nodes[i + 1].millis, "a node's time includes its child's: {:?} then {:?}", nodes[i], nodes[i + 1]);
+            assert!(
+                nodes[i].millis + 0.001 >= nodes[i + 1].millis,
+                "a node's time includes its child's: {:?} then {:?}",
+                nodes[i],
+                nodes[i + 1]
+            );
         }
     }
 }
@@ -645,9 +821,17 @@ fn s3i_06_analysing_a_query_does_not_change_its_result_or_the_data() {
     let before = rows(&db, "select count(*), sum(a) from s");
     let first = analyze(&db, "select a from s where a > 90");
     let second = analyze(&db, "select a from s where a > 90");
-    assert_eq!(first.iter().map(|n| n.rows).collect::<Vec<_>>(), second.iter().map(|n| n.rows).collect::<Vec<_>>(), "the same counts every time");
+    assert_eq!(
+        first.iter().map(|n| n.rows).collect::<Vec<_>>(),
+        second.iter().map(|n| n.rows).collect::<Vec<_>>(),
+        "the same counts every time"
+    );
     assert_eq!(rows(&db, "select count(*), sum(a) from s"), before, "the table is untouched");
-    assert_eq!(error_kind(&db, "explain analyze delete from s where a = 1"), ExceptionType::NotImplemented, "a statement that changes data is refused, not executed");
+    assert_eq!(
+        error_kind(&db, "explain analyze delete from s where a = 1"),
+        ExceptionType::NotImplemented,
+        "a statement that changes data is refused, not executed"
+    );
     assert_eq!(rows(&db, "select count(*) from s"), ["100"], "and nothing was deleted");
 }
 
@@ -664,7 +848,11 @@ fn s3i_07_placeholders_are_counted_in_order() {
     let db = db_with_t();
     assert_eq!(db.prepare("select a from t").unwrap().param_count(), 0, "no placeholders");
     assert_eq!(db.prepare("select a from t where a = ? and b > ?").unwrap().param_count(), 2, "two placeholders");
-    assert_eq!(db.prepare("select a from t where a between ? and ? limit ? offset ?").unwrap().param_count(), 4, "in BETWEEN, LIMIT and OFFSET");
+    assert_eq!(
+        db.prepare("select a from t where a between ? and ? limit ? offset ?").unwrap().param_count(),
+        4,
+        "in BETWEEN, LIMIT and OFFSET"
+    );
     assert_eq!(db.prepare("insert into t values (?, ?), (?, ?)").unwrap().param_count(), 4, "in VALUES rows");
 }
 
@@ -673,7 +861,11 @@ fn s3i_07_values_take_the_place_of_the_placeholders_left_to_right() {
     let db = db_with_t();
     let p = db.prepare("select a, b from t where a >= ? and b < ?").unwrap();
     assert_eq!(exec(&db, &p, &[Value::integer(2), Value::integer(25)]).unwrap(), ["2 20", "4 0"], "a >= 2 and b < 25");
-    assert_eq!(exec(&db, &p, &[Value::integer(5), Value::integer(100)]).unwrap(), Vec::<String>::new(), "the same statement with other values: b is NULL for a = 5");
+    assert_eq!(
+        exec(&db, &p, &[Value::integer(5), Value::integer(100)]).unwrap(),
+        Vec::<String>::new(),
+        "the same statement with other values: b is NULL for a = 5"
+    );
     assert_eq!(exec(&db, &p, &[Value::integer(4), Value::integer(1)]).unwrap(), ["4 0"], "and again");
     let l = db.prepare("select a from t where a is not null order by a limit ? offset ?").unwrap();
     assert_eq!(exec(&db, &l, &[Value::integer(2), Value::integer(1)]).unwrap(), ["2", "4"], "LIMIT and OFFSET are placeholders too");
@@ -690,7 +882,11 @@ fn s3i_07_a_string_value_stays_a_string_whatever_it_contains() {
     assert_eq!(rows(&db, "select name from u"), [nasty, "plain"], "the text went in as data");
     let find = db.prepare("select name from u where name = ?").unwrap();
     assert_eq!(exec(&db, &find, &[Value::varchar(nasty)]).unwrap(), [nasty], "and is found by comparing, not by parsing");
-    assert_eq!(exec(&db, &find, &[Value::varchar("' or '1'='1")]).unwrap(), Vec::<String>::new(), "a quote that tries to end the literal matches nothing");
+    assert_eq!(
+        exec(&db, &find, &[Value::varchar("' or '1'='1")]).unwrap(),
+        Vec::<String>::new(),
+        "a quote that tries to end the literal matches nothing"
+    );
 }
 
 #[test]
@@ -698,8 +894,16 @@ fn s3i_07_the_number_of_values_must_match_the_number_of_placeholders() {
     let db = db_with_t();
     let p = db.prepare("select a from t where a = ? or a = ?").unwrap();
     assert_eq!(exec(&db, &p, &[Value::integer(1)]).unwrap_err().kind, ExceptionType::Invalid, "too few values");
-    assert_eq!(exec(&db, &p, &[Value::integer(1), Value::integer(2), Value::integer(3)]).unwrap_err().kind, ExceptionType::Invalid, "too many values");
-    assert_eq!(exec(&db, &p, &[Value::integer(1), Value::integer(2)]).unwrap(), ["1", "2"], "and the right number works afterwards: nothing was left half-bound");
+    assert_eq!(
+        exec(&db, &p, &[Value::integer(1), Value::integer(2), Value::integer(3)]).unwrap_err().kind,
+        ExceptionType::Invalid,
+        "too many values"
+    );
+    assert_eq!(
+        exec(&db, &p, &[Value::integer(1), Value::integer(2)]).unwrap(),
+        ["1", "2"],
+        "and the right number works afterwards: nothing was left half-bound"
+    );
 }
 
 #[test]
@@ -708,7 +912,11 @@ fn s3i_07_a_null_decimal_and_boolean_value_keep_their_meaning() {
     let null = db.prepare("select count(*) from t where a = ?").unwrap();
     assert_eq!(exec(&db, &null, &[Value::null(TypeId::Integer)]).unwrap(), ["0"], "= NULL is never true");
     let isnull = db.prepare("select ? is null, ? + 1, ? and true").unwrap();
-    assert_eq!(exec(&db, &isnull, &[Value::null(TypeId::Integer), Value::decimal(1.5), Value::boolean(false)]).unwrap(), ["true 2.500000 false"], "a NULL, a decimal and a boolean");
+    assert_eq!(
+        exec(&db, &isnull, &[Value::null(TypeId::Integer), Value::decimal(1.5), Value::boolean(false)]).unwrap(),
+        ["true 2.500000 false"],
+        "a NULL, a decimal and a boolean"
+    );
 }
 
 #[test]
@@ -834,10 +1042,18 @@ fn ev_i(e: &I, a: Option<i64>, b: Option<i64>) -> Option<i64> {
         I::Coalesce(x, y) => ev_i(x, a, b).or(ev_i(y, a, b)),
         I::Nullif(x, y) => {
             let v = ev_i(x, a, b);
-            if v.is_some() && v == ev_i(y, a, b) { None } else { v }
+            if v.is_some() && v == ev_i(y, a, b) {
+                None
+            } else {
+                v
+            }
         }
         I::Case(c, x, y) => {
-            if ev_b(c, a, b) == Some(true) { ev_i(x, a, b) } else { ev_i(y, a, b) }
+            if ev_b(c, a, b) == Some(true) {
+                ev_i(x, a, b)
+            } else {
+                ev_i(y, a, b)
+            }
         }
     }
 }
@@ -868,7 +1084,13 @@ fn ev_b(e: &Bo, a: Option<i64>, b: Option<i64>) -> Option<bool> {
         Bo::Between(x, lo, hi) => ev_i(x, a, b).map(|v| *lo <= v && v <= *hi),
         Bo::In(x, list) => {
             let Some(v) = ev_i(x, a, b) else { return None };
-            if list.contains(&Some(v)) { Some(true) } else if list.contains(&None) { None } else { Some(false) }
+            if list.contains(&Some(v)) {
+                Some(true)
+            } else if list.contains(&None) {
+                None
+            } else {
+                Some(false)
+            }
         }
     }
 }
@@ -892,7 +1114,8 @@ fn arb_i() -> BoxedStrategy<I> {
 }
 
 fn arb_b_over(i: BoxedStrategy<I>) -> BoxedStrategy<Bo> {
-    let cmp = (prop_oneof![Just("="), Just("<>"), Just("<"), Just(">")], i.clone(), i.clone()).prop_map(|(op, x, y)| Bo::Cmp(op, x.into(), y.into()));
+    let cmp = (prop_oneof![Just("="), Just("<>"), Just("<"), Just(">")], i.clone(), i.clone())
+        .prop_map(|(op, x, y)| Bo::Cmp(op, x.into(), y.into()));
     let isnull = i.clone().prop_map(|x| Bo::IsNull(x.into()));
     let between = (i.clone(), -4i64..5, -4i64..5).prop_map(|(x, lo, hi)| Bo::Between(x.into(), lo, hi));
     let in_list = (i, proptest::collection::vec(proptest::option::of(-4i64..5), 1..4)).prop_map(|(x, l)| Bo::In(x.into(), l));
@@ -911,8 +1134,17 @@ fn arb_b() -> BoxedStrategy<Bo> {
     .boxed()
 }
 
-const MODEL_ROWS: [(Option<i64>, Option<i64>); 9] =
-    [(Some(0), Some(0)), (Some(1), Some(-2)), (Some(-3), Some(3)), (Some(4), None), (None, Some(2)), (None, None), (Some(2), Some(2)), (Some(-1), Some(1)), (Some(3), Some(0))];
+const MODEL_ROWS: [(Option<i64>, Option<i64>); 9] = [
+    (Some(0), Some(0)),
+    (Some(1), Some(-2)),
+    (Some(-3), Some(3)),
+    (Some(4), None),
+    (None, Some(2)),
+    (None, None),
+    (Some(2), Some(2)),
+    (Some(-1), Some(1)),
+    (Some(3), Some(0)),
+];
 
 fn model_db() -> BusTubInstance {
     let db = db();
@@ -955,7 +1187,13 @@ mod ch_3i_c1 {
 
     /// The definition: an OR chain of equalities in three-valued logic.
     fn chain(x: Option<i64>, list: &[Option<i64>]) -> Option<bool> {
-        let cmp: Vec<Option<bool>> = list.iter().map(|v| match (x, v) { (Some(a), Some(b)) => Some(a == *b), _ => None }).collect();
+        let cmp: Vec<Option<bool>> = list
+            .iter()
+            .map(|v| match (x, v) {
+                (Some(a), Some(b)) => Some(a == *b),
+                _ => None,
+            })
+            .collect();
         if cmp.contains(&Some(true)) {
             Some(true)
         } else if cmp.contains(&None) {
@@ -984,7 +1222,11 @@ mod ch_3i_c1 {
     #[test]
     fn s3i_c1_the_empty_list_and_duplicates() {
         let e = InSet::new(&[]);
-        assert_eq!((e.contains(Some(1)), e.contains(None), e.not_in(None)), (Some(false), Some(false), Some(true)), "nothing equals anything");
+        assert_eq!(
+            (e.contains(Some(1)), e.contains(None), e.not_in(None)),
+            (Some(false), Some(false), Some(true)),
+            "nothing equals anything"
+        );
         let d = InSet::new(&[Some(5), Some(5), None, None]);
         assert_eq!(d.len(), 1, "distinct non-NULL values");
         assert_eq!(d.contains(Some(5)), Some(true), "this check");
@@ -1096,7 +1338,11 @@ mod ch_3i_c3 {
     #[test]
     fn s3i_c3_branches_that_can_never_be_taken_are_removed() {
         let c = case(&[(False, 1), (Unknown(0), 2), (Null, 3), (Unknown(1), 4)], Some(9));
-        assert_eq!(fold_case(&c), Folded::Case(case(&[(Unknown(0), 2), (Unknown(1), 4)], Some(9))), "FALSE and NULL conditions are never TRUE");
+        assert_eq!(
+            fold_case(&c),
+            Folded::Case(case(&[(Unknown(0), 2), (Unknown(1), 4)], Some(9))),
+            "FALSE and NULL conditions are never TRUE"
+        );
     }
 
     #[test]
@@ -1122,7 +1368,11 @@ mod ch_3i_c3 {
     fn s3i_c3_branch_order_is_kept() {
         let c = case(&[(Unknown(2), 1), (False, 9), (Unknown(0), 2), (Unknown(1), 3)], Some(0));
         match fold_case(&c) {
-            Folded::Case(f) => assert_eq!(f.branches, vec![(Unknown(2), 1), (Unknown(0), 2), (Unknown(1), 3)], "first match wins: the order is the meaning"),
+            Folded::Case(f) => assert_eq!(
+                f.branches,
+                vec![(Unknown(2), 1), (Unknown(0), 2), (Unknown(1), 3)],
+                "first match wins: the order is the meaning"
+            ),
             other => panic!("{other:?}"),
         }
     }
@@ -1194,7 +1444,11 @@ mod ch_3i_c4 {
     #[test]
     fn s3i_c4_the_upper_bound_at_the_end_of_the_alphabet() {
         assert_eq!(successor("az"), Some("a{".into()), "z + 1");
-        assert_eq!(successor(&format!("a{}", char::MAX)), Some("b".into()), "the largest character is dropped and the one before increased");
+        assert_eq!(
+            successor(&format!("a{}", char::MAX)),
+            Some("b".into()),
+            "the largest character is dropped and the one before increased"
+        );
         assert_eq!(successor(&char::MAX.to_string()), None, "nothing is above it");
         assert_eq!(successor("a\u{D7FF}"), Some("a\u{E000}".into()), "surrogates are not characters: skip them");
     }
@@ -1275,7 +1529,8 @@ mod ch_3i_c5 {
 
     #[test]
     fn s3i_c5_a_node_that_never_ran_costs_nothing_and_negatives_are_clamped() {
-        let text = lines(&["Projection { exprs=[#0.0] } (rows=0, batches=0, loops=1, time=0.100ms)", "  SeqScan { table=t } (never executed)"]);
+        let text =
+            lines(&["Projection { exprs=[#0.0] } (rows=0, batches=0, loops=1, time=0.100ms)", "  SeqScan { table=t } (never executed)"]);
         let ops = exclusive_times(&text);
         assert_eq!(ops[1].inclusive_ms, 0.0, "(never executed) is zero");
         assert!((ops[0].exclusive_ms - 0.1).abs() < 1e-9, "this check: expected `(ops[0].exclusive_ms - 0.1).abs() < 1e-9`");
@@ -1349,7 +1604,8 @@ mod ch_3i_c6 {
 
     fn probe(value: Value, fails: bool) -> (ExprRef, Arc<AtomicUsize>) {
         let calls = Arc::new(AtomicUsize::new(0));
-        let ret = if value.type_id() == TypeId::Varchar { Column::new_varchar("<probe>", 64) } else { Column::new("<probe>", value.type_id()) };
+        let ret =
+            if value.type_id() == TypeId::Varchar { Column::new_varchar("<probe>", 64) } else { Column::new("<probe>", value.type_id()) };
         (Arc::new(Probe { value, calls: calls.clone(), fails, ret }), calls)
     }
 
@@ -1396,7 +1652,11 @@ mod ch_3i_c6 {
         let (c, cc) = probe(Value::integer(9), true);
         let e = CoalesceExpression::new(vec![a, b, c]).unwrap();
         assert_eq!(eval_c(&e).unwrap(), Value::integer(7), "the second child");
-        assert_eq!((ca.load(Ordering::SeqCst), cb.load(Ordering::SeqCst), cc.load(Ordering::SeqCst)), (1, 1, 0), "each earlier child once, the third never");
+        assert_eq!(
+            (ca.load(Ordering::SeqCst), cb.load(Ordering::SeqCst), cc.load(Ordering::SeqCst)),
+            (1, 1, 0),
+            "each earlier child once, the third never"
+        );
     }
 
     #[test]

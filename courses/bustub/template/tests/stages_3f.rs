@@ -13,9 +13,9 @@ use bustub::catalog::schema::Schema;
 use bustub::common::bustub_instance::BusTubInstance;
 use bustub::common::exception::ExceptionType;
 use bustub::common::result_writer::SimpleStreamWriter;
-use bustub::execution::executors::aggregation_executor::{AggregateKey, AggregateValue, SimpleAggregationHashTable};
 use bustub::execution::execution_engine::ExecutionEngine;
 use bustub::execution::executor_context::ExecutorContext;
+use bustub::execution::executors::aggregation_executor::{AggregateKey, AggregateValue, SimpleAggregationHashTable};
 use bustub::execution::expressions::abstract_expression::ExprRef;
 use bustub::execution::expressions::column_value_expression::ColumnValueExpression;
 use bustub::execution::plans::plan_node::{AggregationType, JoinType, PlanKind, PlanNode, PlanRef};
@@ -92,7 +92,11 @@ fn s3f_01_two_nulls_are_the_same_group() {
 #[test]
 fn s3f_01_equal_integers_of_different_widths_are_the_same_group() {
     assert_eq!(key(vec![Value::tinyint(5)]), key(vec![Value::bigint(5)]), "equal integers of different widths are the same group");
-    assert_eq!(hash_of(&key(vec![Value::tinyint(5)])), hash_of(&key(vec![Value::bigint(5)])), "equal integers of different widths are the same group");
+    assert_eq!(
+        hash_of(&key(vec![Value::tinyint(5)])),
+        hash_of(&key(vec![Value::bigint(5)])),
+        "equal integers of different widths are the same group"
+    );
     assert_ne!(key(vec![Value::smallint(5)]), key(vec![Value::smallint(6)]), "equal integers of different widths are the same group");
 }
 
@@ -106,7 +110,11 @@ fn s3f_01_the_number_of_values_matters() {
 #[test]
 fn s3f_01_decimal_zero_and_negative_zero_are_one_group() {
     assert_eq!(key(vec![Value::decimal(0.0)]), key(vec![Value::decimal(-0.0)]), "decimal zero and negative zero are one group");
-    assert_eq!(hash_of(&key(vec![Value::decimal(0.0)])), hash_of(&key(vec![Value::decimal(-0.0)])), "decimal zero and negative zero are one group");
+    assert_eq!(
+        hash_of(&key(vec![Value::decimal(0.0)])),
+        hash_of(&key(vec![Value::decimal(-0.0)])),
+        "decimal zero and negative zero are one group"
+    );
     assert_ne!(key(vec![Value::decimal(1.5)]), key(vec![Value::decimal(2.5)]), "decimal zero and negative zero are one group");
 }
 
@@ -215,7 +223,8 @@ fn s3f_02_group_by_one_column() {
     let db = agg_db();
     assert_eq!(
         sorted(sql(&db, "select g, count(*), sum(v), min(v), max(v), count(v) from t group by g")),
-        vec!["1 2 30 10 20 2", "2 2 30 30 30 1", "integer_null 2 90 40 50 2"], "group by one column"
+        vec!["1 2 30 10 20 2", "2 2 30 30 30 1", "integer_null 2 90 40 50 2"],
+        "group by one column"
     );
 }
 
@@ -224,15 +233,24 @@ fn s3f_02_group_by_several_columns_and_expressions() {
     let db = agg_db();
     assert_eq!(
         sorted(sql(&db, "select g, h, count(*) from t group by g, h")),
-        vec!["1 1 1", "1 2 1", "2 1 2", "integer_null 1 1", "integer_null 2 1"], "group by several columns and expressions"
+        vec!["1 1 1", "1 2 1", "2 1 2", "integer_null 1 1", "integer_null 2 1"],
+        "group by several columns and expressions"
     );
-    assert_eq!(sorted(sql(&db, "select h + 100, sum(v) from t group by h")), vec!["101 80", "102 70"], "group by several columns and expressions");
+    assert_eq!(
+        sorted(sql(&db, "select h + 100, sum(v) from t group by h")),
+        vec!["101 80", "102 70"],
+        "group by several columns and expressions"
+    );
 }
 
 #[test]
 fn s3f_02_aggregates_without_group_by_are_one_row() {
     let db = agg_db();
-    assert_eq!(sql(&db, "select count(*), count(v), sum(v), min(v), max(v) from t"), vec!["6 5 150 10 50"], "aggregates without group by are one row");
+    assert_eq!(
+        sql(&db, "select count(*), count(v), sum(v), min(v), max(v) from t"),
+        vec!["6 5 150 10 50"],
+        "aggregates without group by are one row"
+    );
     assert_eq!(sql(&db, "select sum(v + 1), count(*) + 0 from t").len(), 1, "aggregates without group by are one row");
 }
 
@@ -240,14 +258,22 @@ fn s3f_02_aggregates_without_group_by_are_one_row() {
 fn s3f_02_an_empty_input_has_one_group_without_group_by_and_none_with_it() {
     let db = new_db();
     sql(&db, "create table e(g int, v int)");
-    assert_eq!(sql(&db, "select count(*), count(v), sum(v), min(v), max(v) from e"), vec!["0 integer_null integer_null integer_null integer_null"], "an empty input has one group without group by and none with it");
+    assert_eq!(
+        sql(&db, "select count(*), count(v), sum(v), min(v), max(v) from e"),
+        vec!["0 integer_null integer_null integer_null integer_null"],
+        "an empty input has one group without group by and none with it"
+    );
     assert!(sql(&db, "select g, count(*) from e group by g").is_empty(), "an empty input has one group without group by and none with it: expected `sql(&db, \"select g, count(*) from e group by g\").is_empty()`");
 }
 
 #[test]
 fn s3f_02_having_filters_the_groups() {
     let db = agg_db();
-    assert_eq!(sorted(sql(&db, "select g, count(*) from t group by g having count(*) >= 2 and sum(v) > 50")), vec!["integer_null 2"], "having filters the groups");
+    assert_eq!(
+        sorted(sql(&db, "select g, count(*) from t group by g having count(*) >= 2 and sum(v) > 50")),
+        vec!["integer_null 2"],
+        "having filters the groups"
+    );
     assert_eq!(sql(&db, "select g from t group by g having sum(v) < 0").len(), 0, "having filters the groups");
 }
 
@@ -265,7 +291,11 @@ fn s3f_02_more_groups_than_a_batch() {
 #[test]
 fn s3f_02_select_distinct_is_a_group_by_without_aggregates() {
     let db = agg_db();
-    assert_eq!(sorted(sql(&db, "select distinct g from t")), vec!["1", "2", "integer_null"], "select distinct is a group by without aggregates");
+    assert_eq!(
+        sorted(sql(&db, "select distinct g from t")),
+        vec!["1", "2", "integer_null"],
+        "select distinct is a group by without aggregates"
+    );
     assert_eq!(sql(&db, "select distinct h from t").len(), 2, "select distinct is a group by without aggregates");
 }
 
@@ -295,9 +325,14 @@ fn s3f_03_an_inner_join_outputs_the_matching_pairs() {
     let db = join_db();
     assert_eq!(
         sorted(sql(&db, "select * from a inner join b on a.x = b.y")),
-        vec!["1 one 1 100", "1 one 1 101", "3 three 3 300"], "an inner join outputs the matching pairs"
+        vec!["1 one 1 100", "1 one 1 101", "3 three 3 300"],
+        "an inner join outputs the matching pairs"
     );
-    assert_eq!(sql(&db, "select * from a join b on a.x = b.y and b.z > 200"), vec!["3 three 3 300"], "an inner join outputs the matching pairs");
+    assert_eq!(
+        sql(&db, "select * from a join b on a.x = b.y and b.z > 200"),
+        vec!["3 three 3 300"],
+        "an inner join outputs the matching pairs"
+    );
 }
 
 #[test]
@@ -338,8 +373,14 @@ fn s3f_03_one_left_row_with_more_matches_than_a_batch() {
 fn s3f_03_an_empty_side_gives_no_rows() {
     let db = join_db();
     sql(&db, "create table empty(q int)");
-    assert!(sql(&db, "select * from a join empty on a.x = empty.q").is_empty(), "an empty side gives no rows: expected `sql(&db, \"select * from a join empty on a.x = empty.q\").is_empty()`");
-    assert!(sql(&db, "select * from empty join a on a.x = empty.q").is_empty(), "an empty side gives no rows: expected `sql(&db, \"select * from empty join a on a.x = empty.q\").is_empty()`");
+    assert!(
+        sql(&db, "select * from a join empty on a.x = empty.q").is_empty(),
+        "an empty side gives no rows: expected `sql(&db, \"select * from a join empty on a.x = empty.q\").is_empty()`"
+    );
+    assert!(
+        sql(&db, "select * from empty join a on a.x = empty.q").is_empty(),
+        "an empty side gives no rows: expected `sql(&db, \"select * from empty join a on a.x = empty.q\").is_empty()`"
+    );
 }
 
 #[test]
@@ -347,8 +388,16 @@ fn s3f_03_three_tables_and_a_table_joined_with_itself() {
     let db = join_db();
     sql(&db, "create table c(w int)");
     insert_rows(&db, "c", &["(1)", "(3)"]);
-    assert_eq!(sorted(sql(&db, "select a.x, b.z, c.w from a join b on a.x = b.y join c on c.w = a.x")), vec!["1 100 1", "1 101 1", "3 300 3"], "three tables and a table joined with itself");
-    assert_eq!(sorted(sql(&db, "select p.x, q.x from a p join a q on p.x = q.x")), vec!["1 1", "2 2", "3 3"], "three tables and a table joined with itself");
+    assert_eq!(
+        sorted(sql(&db, "select a.x, b.z, c.w from a join b on a.x = b.y join c on c.w = a.x")),
+        vec!["1 100 1", "1 101 1", "3 300 3"],
+        "three tables and a table joined with itself"
+    );
+    assert_eq!(
+        sorted(sql(&db, "select p.x, q.x from a p join a q on p.x = q.x")),
+        vec!["1 1", "2 2", "3 3"],
+        "three tables and a table joined with itself"
+    );
 }
 
 #[test]
@@ -376,7 +425,14 @@ fn s3f_03_a_left_join_keeps_unmatched_left_rows_with_nulls() {
     let db = join_db();
     assert_eq!(
         sorted(sql(&db, "select * from a left join b on a.x = b.y")),
-        vec!["1 one 1 100", "1 one 1 101", "2 two integer_null integer_null", "3 three 3 300", "integer_null nil integer_null integer_null"], "a left join keeps unmatched left rows with nulls"
+        vec![
+            "1 one 1 100",
+            "1 one 1 101",
+            "2 two integer_null integer_null",
+            "3 three 3 300",
+            "integer_null nil integer_null integer_null"
+        ],
+        "a left join keeps unmatched left rows with nulls"
     );
 }
 
@@ -385,7 +441,16 @@ fn s3f_03_the_padding_has_the_type_of_the_right_columns() {
     let db = join_db();
     sql(&db, "create table r2(k int, name varchar(10))");
     insert_rows(&db, "r2", &["(1, 'x')"]);
-    assert_eq!(sorted(sql(&db, "select * from a left join r2 on a.x = r2.k")), vec!["1 one 1 x", "2 two integer_null varlen_null", "3 three integer_null varlen_null", "integer_null nil integer_null varlen_null"], "the padding has the type of the right columns");
+    assert_eq!(
+        sorted(sql(&db, "select * from a left join r2 on a.x = r2.k")),
+        vec![
+            "1 one 1 x",
+            "2 two integer_null varlen_null",
+            "3 three integer_null varlen_null",
+            "integer_null nil integer_null varlen_null"
+        ],
+        "the padding has the type of the right columns"
+    );
 }
 
 #[test]
@@ -394,14 +459,22 @@ fn s3f_03_a_left_row_is_unmatched_if_no_pair_is_true_even_with_null_answers() {
     // a.x < b.y is NULL for the NULL rows: they are unmatched, not errors
     let rows = sql(&db, "select a.s, b.y from a left join b on a.x < 2 and a.x < b.y");
     let sorted_rows = sorted(rows);
-    assert_eq!(sorted_rows, vec!["nil integer_null", "one 3", "one 4", "three integer_null", "two integer_null"], "a left row is unmatched if no pair is true even with null answers");
+    assert_eq!(
+        sorted_rows,
+        vec!["nil integer_null", "one 3", "one 4", "three integer_null", "two integer_null"],
+        "a left row is unmatched if no pair is true even with null answers"
+    );
 }
 
 #[test]
 fn s3f_03_with_an_empty_right_side_every_left_row_is_unmatched() {
     let db = join_db();
     sql(&db, "create table empty(q int, w int)");
-    assert_eq!(sql(&db, "select * from a left join empty on a.x = empty.q").len(), 4, "with an empty right side every left row is unmatched");
+    assert_eq!(
+        sql(&db, "select * from a left join empty on a.x = empty.q").len(),
+        4,
+        "with an empty right side every left row is unmatched"
+    );
     assert!(sql(&db, "select * from empty left join a on a.x = empty.q").is_empty(), "with an empty right side every left row is unmatched: expected `sql(&db, \"select * from empty left join a on a.x = empty.q\").is_empty()`");
 }
 
@@ -455,7 +528,14 @@ fn col(idx: u32, type_id: TypeId) -> ExprRef {
 }
 
 /// A hash join plan of two tables on `left_keys[i] = right_keys[i]`; the output has all columns of both.
-fn hash_join_plan(db: &BusTubInstance, l: &str, r: &str, left_keys: Vec<ExprRef>, right_keys: Vec<ExprRef>, join_type: JoinType) -> PlanRef {
+fn hash_join_plan(
+    db: &BusTubInstance,
+    l: &str,
+    r: &str,
+    left_keys: Vec<ExprRef>,
+    right_keys: Vec<ExprRef>,
+    join_type: JoinType,
+) -> PlanRef {
     let (lp, rp) = (scan(db, l), scan(db, r));
     let mut cols: Vec<Column> = lp.output_schema.columns().to_vec();
     cols.extend(rp.output_schema.columns().iter().cloned());
@@ -486,7 +566,11 @@ fn s3f_04_matching_pairs_by_hashing() {
 fn s3f_04_it_gives_the_same_rows_as_the_nested_loop_join() {
     let db = join_db();
     let plan = hash_join_plan(&db, "a", "b", vec![col(0, TypeId::Integer)], vec![col(0, TypeId::Integer)], JoinType::Inner);
-    assert_eq!(sorted(run_plan(&db, &plan)), sorted(sql(&db, "select * from a join b on a.x = b.y")), "it gives the same rows as the nested loop join");
+    assert_eq!(
+        sorted(run_plan(&db, &plan)),
+        sorted(sql(&db, "select * from a join b on a.x = b.y")),
+        "it gives the same rows as the nested loop join"
+    );
 }
 
 #[test]
@@ -515,10 +599,28 @@ fn s3f_04_several_key_columns_must_all_match() {
     sql(&db, "create table r(c int, d int)");
     insert_rows(&db, "l", &["(1, 1)", "(1, 2)", "(2, 2)"]);
     insert_rows(&db, "r", &["(1, 2)", "(2, 2)", "(2, 1)"]);
-    let plan = hash_join_plan(&db, "l", "r", vec![col(0, TypeId::Integer), col(1, TypeId::Integer)], vec![col(0, TypeId::Integer), col(1, TypeId::Integer)], JoinType::Inner);
+    let plan = hash_join_plan(
+        &db,
+        "l",
+        "r",
+        vec![col(0, TypeId::Integer), col(1, TypeId::Integer)],
+        vec![col(0, TypeId::Integer), col(1, TypeId::Integer)],
+        JoinType::Inner,
+    );
     assert_eq!(sorted(run_plan(&db, &plan)), vec!["1 2 1 2", "2 2 2 2"], "several key columns must all match");
-    let swapped = hash_join_plan(&db, "l", "r", vec![col(0, TypeId::Integer), col(1, TypeId::Integer)], vec![col(1, TypeId::Integer), col(0, TypeId::Integer)], JoinType::Inner);
-    assert_eq!(sorted(run_plan(&db, &swapped)), vec!["1 2 2 1", "2 2 2 2"], "keys are compared position by position: l.a = r.d and l.b = r.c");
+    let swapped = hash_join_plan(
+        &db,
+        "l",
+        "r",
+        vec![col(0, TypeId::Integer), col(1, TypeId::Integer)],
+        vec![col(1, TypeId::Integer), col(0, TypeId::Integer)],
+        JoinType::Inner,
+    );
+    assert_eq!(
+        sorted(run_plan(&db, &swapped)),
+        vec!["1 2 2 1", "2 2 2 2"],
+        "keys are compared position by position: l.a = r.d and l.b = r.c"
+    );
 }
 
 #[test]
@@ -550,7 +652,14 @@ fn s3f_04_unmatched_left_rows_are_padded_with_nulls() {
     let plan = hash_join_plan(&db, "a", "b", vec![col(0, TypeId::Integer)], vec![col(0, TypeId::Integer)], JoinType::Left);
     assert_eq!(
         sorted(run_plan(&db, &plan)),
-        vec!["1 one 1 100", "1 one 1 101", "2 two integer_null integer_null", "3 three 3 300", "integer_null nil integer_null integer_null"], "unmatched left rows are padded with nulls"
+        vec![
+            "1 one 1 100",
+            "1 one 1 101",
+            "2 two integer_null integer_null",
+            "3 three 3 300",
+            "integer_null nil integer_null integer_null"
+        ],
+        "unmatched left rows are padded with nulls"
     );
 }
 
@@ -567,7 +676,11 @@ fn s3f_04_a_null_key_row_is_unmatched_but_still_output() {
 fn s3f_04_it_gives_the_same_rows_as_the_nested_loop_left_join() {
     let db = join_db();
     let plan = hash_join_plan(&db, "a", "b", vec![col(0, TypeId::Integer)], vec![col(0, TypeId::Integer)], JoinType::Left);
-    assert_eq!(sorted(run_plan(&db, &plan)), sorted(sql(&db, "select * from a left join b on a.x = b.y")), "it gives the same rows as the nested loop left join");
+    assert_eq!(
+        sorted(run_plan(&db, &plan)),
+        sorted(sql(&db, "select * from a left join b on a.x = b.y")),
+        "it gives the same rows as the nested loop left join"
+    );
 }
 
 #[test]
@@ -624,8 +737,16 @@ fn s3f_05_the_optimizer_turns_an_equality_join_on_an_indexed_column_into_an_inde
 #[test]
 fn s3f_05_inner_join_through_the_index() {
     let db = index_join_db();
-    assert_eq!(sorted(sql(&db, "select * from outer_t join inner_t on outer_t.x = inner_t.y")), vec!["1 one 1 100", "3 three 3 300"], "inner join through the index");
-    assert_eq!(sorted(sql(&db, "select * from outer_t join inner_t on inner_t.y = outer_t.x")), vec!["1 one 1 100", "3 three 3 300"], "either side of the = may be written first");
+    assert_eq!(
+        sorted(sql(&db, "select * from outer_t join inner_t on outer_t.x = inner_t.y")),
+        vec!["1 one 1 100", "3 three 3 300"],
+        "inner join through the index"
+    );
+    assert_eq!(
+        sorted(sql(&db, "select * from outer_t join inner_t on inner_t.y = outer_t.x")),
+        vec!["1 one 1 100", "3 three 3 300"],
+        "either side of the = may be written first"
+    );
 }
 
 #[test]
@@ -633,7 +754,8 @@ fn s3f_05_left_join_pads_the_unmatched_outer_rows() {
     let db = index_join_db();
     assert_eq!(
         sorted(sql(&db, "select * from outer_t left join inner_t on outer_t.x = inner_t.y")),
-        vec!["1 one 1 100", "2 two integer_null integer_null", "3 three 3 300", "integer_null nil integer_null integer_null"], "left join pads the unmatched outer rows"
+        vec!["1 one 1 100", "2 two integer_null integer_null", "3 three 3 300", "integer_null nil integer_null integer_null"],
+        "left join pads the unmatched outer rows"
     );
 }
 
@@ -641,15 +763,27 @@ fn s3f_05_left_join_pads_the_unmatched_outer_rows() {
 fn s3f_05_a_deleted_inner_row_is_not_joined() {
     let db = index_join_db();
     sql(&db, "delete from inner_t where y = 3");
-    assert_eq!(sql(&db, "select * from outer_t join inner_t on outer_t.x = inner_t.y"), vec!["1 one 1 100"], "a deleted inner row is not joined");
-    assert_eq!(sql(&db, "select * from outer_t left join inner_t on outer_t.x = inner_t.y where outer_t.x = 3"), vec!["3 three integer_null integer_null"], "a deleted inner row is not joined");
+    assert_eq!(
+        sql(&db, "select * from outer_t join inner_t on outer_t.x = inner_t.y"),
+        vec!["1 one 1 100"],
+        "a deleted inner row is not joined"
+    );
+    assert_eq!(
+        sql(&db, "select * from outer_t left join inner_t on outer_t.x = inner_t.y where outer_t.x = 3"),
+        vec!["3 three integer_null integer_null"],
+        "a deleted inner row is not joined"
+    );
 }
 
 #[test]
 fn s3f_05_rows_inserted_after_the_index_was_made_are_found() {
     let db = index_join_db();
     sql(&db, "insert into inner_t values (2, 200)");
-    assert_eq!(sorted(sql(&db, "select * from outer_t join inner_t on outer_t.x = inner_t.y")), vec!["1 one 1 100", "2 two 2 200", "3 three 3 300"], "rows inserted after the index was made are found");
+    assert_eq!(
+        sorted(sql(&db, "select * from outer_t join inner_t on outer_t.x = inner_t.y")),
+        vec!["1 one 1 100", "2 two 2 200", "3 three 3 300"],
+        "rows inserted after the index was made are found"
+    );
 }
 
 #[test]

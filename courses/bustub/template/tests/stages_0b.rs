@@ -65,7 +65,11 @@ fn s0b_01_the_list_stays_sorted_whatever_the_insertion_order() {
     for k in [12, 16, 2, 6, 15, 8, 13, 1, 11, 14, 0, 4, 19, 10, 9, 5, 7, 3, 17, 18] {
         l.insert(&k);
     }
-    assert_eq!(l.nodes().iter().map(|n| n.0).collect::<Vec<_>>(), (0..20).collect::<Vec<_>>(), "the list stays sorted whatever the insertion order");
+    assert_eq!(
+        l.nodes().iter().map(|n| n.0).collect::<Vec<_>>(),
+        (0..20).collect::<Vec<_>>(),
+        "the list stays sorted whatever the insertion order"
+    );
 }
 
 #[test]
@@ -190,7 +194,10 @@ fn s0b_02_erasing_the_tallest_node_lowers_the_height_of_the_list() {
     // a list that was once tall and is now empty searches on one level again: it still works
     l.insert(&1);
     assert!(l.contains(&1), "erasing the tallest node lowers the height of the list: expected `l.contains(&1)`");
-    assert!(l.level(1).is_empty() || l.level(1) == vec![1], "erasing the tallest node lowers the height of the list: expected `l.level(1).is_empty() || l.level(1) == vec![1]`");
+    assert!(
+        l.level(1).is_empty() || l.level(1) == vec![1],
+        "erasing the tallest node lowers the height of the list: expected `l.level(1).is_empty() || l.level(1) == vec![1]`"
+    );
 }
 
 // ---- 0b-03: BusTub's tests --------------------------------------------------------------------------------------------------------------------
@@ -415,8 +422,15 @@ fn s0b_03_threads_inserting_and_erasing_overlapping_keys_leave_a_well_formed_lis
             std::thread::spawn(move || {
                 for i in 0..500 {
                     let k = (i * 7 + t * 13) % 300;
-                    if (i + t) % 3 == 0 { l.erase(&k); } else { l.insert(&k); }
-                    assert!(l.size() <= 300, "threads inserting and erasing overlapping keys leave a well formed list: expected `l.size() <= 300`");
+                    if (i + t) % 3 == 0 {
+                        l.erase(&k);
+                    } else {
+                        l.insert(&k);
+                    }
+                    assert!(
+                        l.size() <= 300,
+                        "threads inserting and erasing overlapping keys leave a well formed list: expected `l.size() <= 300`"
+                    );
                 }
             })
         })
@@ -455,9 +469,18 @@ mod ch_0b_c1 {
 
     #[test]
     fn s0b_c1_the_same_seed_gives_the_same_sequence() {
-        let a: Vec<_> = { let mut g = LevelGenerator::new(42, 4, 14); (0..200).map(|_| g.next_level()).collect() };
-        let b: Vec<_> = { let mut g = LevelGenerator::new(42, 4, 14); (0..200).map(|_| g.next_level()).collect() };
-        let c: Vec<_> = { let mut g = LevelGenerator::new(43, 4, 14); (0..200).map(|_| g.next_level()).collect() };
+        let a: Vec<_> = {
+            let mut g = LevelGenerator::new(42, 4, 14);
+            (0..200).map(|_| g.next_level()).collect()
+        };
+        let b: Vec<_> = {
+            let mut g = LevelGenerator::new(42, 4, 14);
+            (0..200).map(|_| g.next_level()).collect()
+        };
+        let c: Vec<_> = {
+            let mut g = LevelGenerator::new(43, 4, 14);
+            (0..200).map(|_| g.next_level()).collect()
+        };
         assert_eq!(a, b, "this check");
         assert_ne!(a, c, "this check");
     }
@@ -475,7 +498,11 @@ mod ch_0b_c1 {
             }
             let (p2, p3) = (ge2 as f64 / n as f64, ge3 as f64 / n as f64);
             assert!((p2 - expected).abs() < 0.02, "branching {branching}: P(level >= 2) = {p2}, expected {expected}");
-            assert!((p3 - expected * expected).abs() < 0.02, "branching {branching}: P(level >= 3) = {p3}, expected {}", expected * expected);
+            assert!(
+                (p3 - expected * expected).abs() < 0.02,
+                "branching {branching}: P(level >= 3) = {p3}, expected {}",
+                expected * expected
+            );
         }
     }
 
@@ -510,13 +537,22 @@ mod ch_0b_c2 {
     #[test]
     fn s0b_c2_a_key_on_a_higher_level_but_not_below_is_rejected() {
         let levels = vec![vec![1, 3], vec![2]];
-        assert!(check_levels(&levels, &[(1, 1), (3, 1)], 2).is_err(), "this check: expected `check_levels(&levels, &[(1, 1), (3, 1)], 2).is_err()`");
+        assert!(
+            check_levels(&levels, &[(1, 1), (3, 1)], 2).is_err(),
+            "this check: expected `check_levels(&levels, &[(1, 1), (3, 1)], 2).is_err()`"
+        );
     }
 
     #[test]
     fn s0b_c2_a_level_that_is_not_sorted_or_has_repeats_is_rejected() {
-        assert!(check_levels(&[vec![2, 1]], &[(2, 1), (1, 1)], 2).is_err(), "this check: expected `check_levels(&[vec![2, 1]], &[(2, 1), (1, 1)], 2).is_err()`");
-        assert!(check_levels(&[vec![1, 1]], &[(1, 1), (1, 1)], 2).is_err(), "this check: expected `check_levels(&[vec![1, 1]], &[(1, 1), (1, 1)], 2).is_err()`");
+        assert!(
+            check_levels(&[vec![2, 1]], &[(2, 1), (1, 1)], 2).is_err(),
+            "this check: expected `check_levels(&[vec![2, 1]], &[(2, 1), (1, 1)], 2).is_err()`"
+        );
+        assert!(
+            check_levels(&[vec![1, 1]], &[(1, 1), (1, 1)], 2).is_err(),
+            "this check: expected `check_levels(&[vec![1, 1]], &[(1, 1), (1, 1)], 2).is_err()`"
+        );
     }
 
     #[test]
@@ -622,7 +658,13 @@ mod ch_0b_c4 {
     #[test]
     fn s0b_c4_a_coin_that_is_always_heads_stops_at_the_maximum() {
         let mut flips = 0;
-        let h = random_height(|| { flips += 1; true }, 4);
+        let h = random_height(
+            || {
+                flips += 1;
+                true
+            },
+            4,
+        );
         assert_eq!(h, 4, "this check");
         assert_eq!(flips, 3, "three flips take the height from 1 to 4; none after the cap");
     }
@@ -636,7 +678,17 @@ mod ch_0b_c4 {
     #[test]
     fn s0b_c4_a_maximum_of_one_never_flips() {
         let mut flips = 0;
-        assert_eq!(random_height(|| { flips += 1; true }, 1), 1, "this check");
+        assert_eq!(
+            random_height(
+                || {
+                    flips += 1;
+                    true
+                },
+                1
+            ),
+            1,
+            "this check"
+        );
         assert_eq!(flips, 0, "this check");
     }
 
@@ -646,7 +698,14 @@ mod ch_0b_c4 {
             let mut seq = vec![true; heads];
             seq.push(false);
             let mut flips = 0;
-            let h = random_height(|| { let v = seq[flips]; flips += 1; v }, 10);
+            let h = random_height(
+                || {
+                    let v = seq[flips];
+                    flips += 1;
+                    v
+                },
+                10,
+            );
             assert_eq!((h, flips), (heads + 1, heads + 1), "this check");
         }
     }

@@ -1,10 +1,10 @@
+pub mod analysis;
+pub mod group_commit;
 pub mod log_io;
 pub mod log_manager;
 pub mod log_record;
+pub mod pitr;
 pub mod recover;
+pub mod redo_pass;
 pub mod store;
 pub mod truncation;
-pub mod group_commit;
-pub mod redo_pass;
-pub mod pitr;
-pub mod analysis;

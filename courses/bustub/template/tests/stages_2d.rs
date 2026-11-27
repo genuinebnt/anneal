@@ -85,7 +85,10 @@ fn s2d_01_deleted_pairs_are_not_found_and_not_scanned() {
     assert_eq!(from(1), vec![2, 3, 4, 6, 7], "a scan starting at a deleted key starts at the next live one");
     assert_eq!(from(5), vec![6, 7], "deleted pairs are not found and not scanned");
     assert_eq!(from(7), vec![7], "deleted pairs are not found and not scanned");
-    assert!(tree.begin_at(&index_key(8)).is_end(), "deleted pairs are not found and not scanned: expected `tree.begin_at(&index_key(8)).is_end()`");
+    assert!(
+        tree.begin_at(&index_key(8)).is_end(),
+        "deleted pairs are not found and not scanned: expected `tree.begin_at(&index_key(8)).is_end()`"
+    );
 }
 
 #[test]
@@ -122,8 +125,14 @@ fn s2d_01_a_tree_with_every_pair_deleted_is_empty_to_a_scan_but_still_has_its_pa
     for k in 0..3 {
         remove(&tree, k);
     }
-    assert!(tree.begin().is_end(), "a tree with every pair deleted is empty to a scan but still has its page: expected `tree.begin().is_end()`");
-    assert!(get(&tree, 1).is_empty(), "a tree with every pair deleted is empty to a scan but still has its page: expected `get(&tree, 1).is_empty()`");
+    assert!(
+        tree.begin().is_end(),
+        "a tree with every pair deleted is empty to a scan but still has its page: expected `tree.begin().is_end()`"
+    );
+    assert!(
+        get(&tree, 1).is_empty(),
+        "a tree with every pair deleted is empty to a scan but still has its page: expected `get(&tree, 1).is_empty()`"
+    );
     assert!(tree.get_root_page_id().is_valid(), "the leaf is still there, holding three tombstones");
     assert_eq!(leaves_t(&tree), "[0,1,2~0,1,2]", "a tree with every pair deleted is empty to a scan but still has its page");
     assert!(insert(&tree, 1), "a tree with every pair deleted is empty to a scan but still has its page: expected `insert(&tree, 1)`");
@@ -263,7 +272,11 @@ fn s2d_02_once_the_buffers_overflow_the_dead_pairs_go_for_real_and_leaves_merge_
         remove(&tree, k);
     }
     assert_eq!(keys_by_scan(&tree), vec![99], "once the buffers overflow the dead pairs go for real and leaves merge away");
-    assert!(tree.leaf_sizes().len() < leaves / 3, "one tombstone per leaf cannot hold 99 deletes: {} of {leaves} leaves are left", tree.leaf_sizes().len());
+    assert!(
+        tree.leaf_sizes().len() < leaves / 3,
+        "one tombstone per leaf cannot hold 99 deletes: {} of {leaves} leaves are left",
+        tree.leaf_sizes().len()
+    );
     assert!(tree.leaf_tombstones().concat().len() <= tree.leaf_sizes().len(), "once the buffers overflow the dead pairs go for real and leaves merge away: expected `tree.leaf_tombstones().concat().len() <= tree.leaf_sizes().len()`");
 }
 
@@ -354,7 +367,8 @@ fn s2d_03_long_runs_for_every_buffer_size_agree_with_a_set() {
                 remove(&tree, key);
             }
             if step % 25 == 0 {
-                check_shape_t::<T>(&tree, &live, leaf, internal, true).unwrap_or_else(|e| panic!("T={T} ({leaf},{internal}) seed {seed} step {step}: {e}\n{}", leaves_t(&tree)));
+                check_shape_t::<T>(&tree, &live, leaf, internal, true)
+                    .unwrap_or_else(|e| panic!("T={T} ({leaf},{internal}) seed {seed} step {step}: {e}\n{}", leaves_t(&tree)));
             }
         }
     }
@@ -378,7 +392,11 @@ fn ch_leaves(spec: &[&[Option<i64>]]) -> Vec<Vec<Slot>> {
 #[test]
 fn s2d_c1_live_keys_come_out_in_order_and_tombstones_are_skipped() {
     let leaves = ch_leaves(&[&[Some(1), None, Some(3)], &[Some(4), Some(5), None]]);
-    assert_eq!(LiveKeys::new(&leaves).collect::<Vec<_>>(), vec![1, 3, 4, 5], "s2d c1 live keys come out in order and tombstones are skipped");
+    assert_eq!(
+        LiveKeys::new(&leaves).collect::<Vec<_>>(),
+        vec![1, 3, 4, 5],
+        "s2d c1 live keys come out in order and tombstones are skipped"
+    );
 }
 
 #[test]
@@ -663,7 +681,11 @@ mod ch_2d_c5 {
     #[test]
     fn s2d_c5_a_leaf_with_room_takes_the_key_in_order() {
         let leaf = vec![(1, true), (5, false)];
-        assert_eq!(insert_into_leaf(&leaf, 4, 3), Inserted::Done(vec![(1, true), (3, true), (5, false)]), "tombstones stay while there is room");
+        assert_eq!(
+            insert_into_leaf(&leaf, 4, 3),
+            Inserted::Done(vec![(1, true), (3, true), (5, false)]),
+            "tombstones stay while there is room"
+        );
         assert_eq!(insert_into_leaf(&[], 2, 9), Inserted::Done(vec![(9, true)]), "this check");
     }
 

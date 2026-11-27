@@ -117,8 +117,24 @@ pub fn rejects_nulls(cond: &B, nulls: &[usize]) -> bool {
                 A::AnyOrNull => 3,
                 _ => 1,
             },
-            B::And(x, y) => lift(go(x, nulls), go(y, nulls), |a, b| if a == 2 || b == 2 { 2 } else if a == 4 || b == 4 { 4 } else { 1 }),
-            B::Or(x, y) => lift(go(x, nulls), go(y, nulls), |a, b| if a == 1 || b == 1 { 1 } else if a == 4 || b == 4 { 4 } else { 2 }),
+            B::And(x, y) => lift(go(x, nulls), go(y, nulls), |a, b| {
+                if a == 2 || b == 2 {
+                    2
+                } else if a == 4 || b == 4 {
+                    4
+                } else {
+                    1
+                }
+            }),
+            B::Or(x, y) => lift(go(x, nulls), go(y, nulls), |a, b| {
+                if a == 1 || b == 1 {
+                    1
+                } else if a == 4 || b == 4 {
+                    4
+                } else {
+                    2
+                }
+            }),
             B::Not(x) => {
                 let v = go(x, nulls);
                 (if v & 1 != 0 { 2 } else { 0 }) | (if v & 2 != 0 { 1 } else { 0 }) | (v & 4)

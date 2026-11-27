@@ -65,7 +65,12 @@ pub fn parse(script: &str) -> Vec<Record> {
                     sql.push('\n');
                     i += 1;
                 }
-                records.push(Record::Statement { line: loc, is_error, sql: sql.trim_end().to_string(), extra_options: extra_options(&tokens[2..]) });
+                records.push(Record::Statement {
+                    line: loc,
+                    is_error,
+                    sql: sql.trim_end().to_string(),
+                    extra_options: extra_options(&tokens[2..]),
+                });
             }
             "query" => {
                 let rowsort = tokens.get(1) == Some(&"rowsort");
@@ -89,7 +94,13 @@ pub fn parse(script: &str) -> Vec<Record> {
                     expected.push('\n');
                     i += 1;
                 }
-                records.push(Record::Query { line: loc, rowsort, sql: sql.trim_end().to_string(), expected, extra_options: extra_options(&tokens[1..]) });
+                records.push(Record::Query {
+                    line: loc,
+                    rowsort,
+                    sql: sql.trim_end().to_string(),
+                    expected,
+                    extra_options: extra_options(&tokens[1..]),
+                });
             }
             _ => {}
         }
@@ -117,14 +128,21 @@ fn contains_after(keyword: &str, haystack: &str, needle: &str) -> bool {
 }
 
 /// The `+ensure:...` checks: look at the optimized plan. Returns an error message if one fails.
-fn process_extra_options(sql: &str, db: &BusTubInstance, options: &[String], check_options: &mut CheckOptions, skip: &[&str]) -> Result<(), String> {
+fn process_extra_options(
+    sql: &str,
+    db: &BusTubInstance,
+    options: &[String],
+    check_options: &mut CheckOptions,
+    skip: &[&str],
+) -> Result<(), String> {
     for opt in options {
         if let Some(what) = opt.strip_prefix("ensure:") {
             if skip.contains(&what) {
                 continue;
             }
             let mut plan = String::new();
-            db.execute_sql(&format!("explain (o) {sql}"), &mut SimpleStreamWriter::new(&mut plan, true, "\t"), None).map_err(|e| e.to_string())?;
+            db.execute_sql(&format!("explain (o) {sql}"), &mut SimpleStreamWriter::new(&mut plan, true, "\t"), None)
+                .map_err(|e| e.to_string())?;
             let count = |s: &str| plan.matches(s).count();
             match what {
                 "index_scan" if !plan.contains("IndexScan") => return Err("IndexScan not found".into()),
@@ -135,8 +153,12 @@ fn process_extra_options(sql: &str, db: &BusTubInstance, options: &[String], che
                 "hash_join_no_filter" if count("HashJoin") != 1 || contains_after("OPTIMIZER", &plan, "Filter") => {
                     return Err("Push all filters into HashJoin".into())
                 }
-                "hash_join*2" if count("HashJoin") != 2 && !plan.contains("Filter") => return Err("HashJoin should appear exactly twice".into()),
-                "hash_join*3" if count("HashJoin") != 3 && !plan.contains("Filter") => return Err("HashJoin should appear exactly thrice".into()),
+                "hash_join*2" if count("HashJoin") != 2 && !plan.contains("Filter") => {
+                    return Err("HashJoin should appear exactly twice".into())
+                }
+                "hash_join*3" if count("HashJoin") != 3 && !plan.contains("Filter") => {
+                    return Err("HashJoin should appear exactly thrice".into())
+                }
                 "topn" => {
                     if !plan.contains("TopN") {
                         return Err("TopN not found".into());
@@ -211,7 +233,8 @@ pub fn run_script_skipping(db: &BusTubInstance, name: &str, script: &str, skip: 
             Record::Sleep(s) => std::thread::sleep(std::time::Duration::from_secs(s)),
             Record::Statement { line, is_error, sql, extra_options } => {
                 let mut check_options = CheckOptions::default();
-                process_extra_options(&sql, db, &extra_options, &mut check_options, skip).map_err(|e| format!("{name}:{line}: {e}\n{sql}"))?;
+                process_extra_options(&sql, db, &extra_options, &mut check_options, skip)
+                    .map_err(|e| format!("{name}:{line}: {e}\n{sql}"))?;
                 let mut out = String::new();
                 let result = db.execute_sql(&sql, &mut SimpleStreamWriter::new(&mut out, true, "\t"), Some(&check_options));
                 match (result, is_error) {
@@ -222,7 +245,8 @@ pub fn run_script_skipping(db: &BusTubInstance, name: &str, script: &str, skip: 
             }
             Record::Query { line, rowsort, sql, expected, extra_options } => {
                 let mut check_options = CheckOptions::default();
-                process_extra_options(&sql, db, &extra_options, &mut check_options, skip).map_err(|e| format!("{name}:{line}: {e}\n{sql}"))?;
+                process_extra_options(&sql, db, &extra_options, &mut check_options, skip)
+                    .map_err(|e| format!("{name}:{line}: {e}\n{sql}"))?;
                 let mut out = String::new();
                 db.execute_sql(&sql, &mut SimpleStreamWriter::new(&mut out, true, " "), Some(&check_options))
                     .map_err(|e| format!("{name}:{line}: unexpected error: {e}\n{sql}"))?;
@@ -259,4 +283,3 @@ pub fn run_slt_skipping(file: &str, bpm_size: usize, skip: &[&str]) {
         panic!("{msg}");
     }
 }
-

@@ -33,7 +33,10 @@ pub struct InsertExecutor<'e> {
 impl<'e> InsertExecutor<'e> {
     pub fn new(ctx: &'e ExecutorContext<'e>, plan: PlanRef, child: ExecutorBox<'e>) -> Result<InsertExecutor<'e>> {
         let PlanKind::Insert { table_oid } = &plan.kind else { unreachable!("an InsertExecutor needs an Insert plan") };
-        let table_info = ctx.catalog.table_info(*table_oid).ok_or_else(|| Exception::new(ExceptionType::Execution, "the table of an insert does not exist"))?;
+        let table_info = ctx
+            .catalog
+            .table_info(*table_oid)
+            .ok_or_else(|| Exception::new(ExceptionType::Execution, "the table of an insert does not exist"))?;
         let indexes = ctx.catalog.get_table_indexes(&table_info.name);
         let txn = ctx.txn().cloned().zip(ctx.txn_mgr());
         Ok(InsertExecutor { plan, table_info, indexes, child, done: false, txn })

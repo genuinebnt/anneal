@@ -43,7 +43,11 @@ impl Expression for ColumnValueExpression {
 
     fn evaluate_join(&self, left_tuple: &Tuple, left_schema: &Schema, right_tuple: &Tuple, right_schema: &Schema) -> Result<Value> {
         // @begin 3d-01
-        Ok(if self.tuple_idx == 0 { left_tuple.get_value(left_schema, self.col_idx) } else { right_tuple.get_value(right_schema, self.col_idx) })
+        Ok(if self.tuple_idx == 0 {
+            left_tuple.get_value(left_schema, self.col_idx)
+        } else {
+            right_tuple.get_value(right_schema, self.col_idx)
+        })
         //~ todo!("3d-01: tuple_idx 0 reads the left tuple, anything else the right")
         // @end
     }

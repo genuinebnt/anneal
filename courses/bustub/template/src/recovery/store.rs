@@ -83,10 +83,10 @@ impl<'a> Store<'a> {
         todo!("4c-04: take the next id, remember the transaction as active with no changes, log Begin")
     }
 
-    /// Changes the slot at `rid` from `before` to `after` for `txn`: the **write-ahead rule** says the log record comes first, then the
-    /// page changes. Refused (and nothing happens) if another active transaction has written the record. The caller holds the store's
-    /// lock from the moment it read `before` (or chose the slot), so no other change can come in between.
-    fn change(&self, inner: &mut Inner, txn: TxnId, rid: Rid, before: Option<Vec<u8>>, after: Option<Vec<u8>>) -> StoreResult<()> {
+    /// Changes the slot at `rid` from `before` to `after` for `txn`: the **write-ahead rule** says the log record comes first, then
+    /// the page changes. Refused (and nothing happens) if another active transaction has written the record. Nothing may change the
+    /// record between reading `before` and this change.
+    fn change(&self, txn: TxnId, rid: Rid, before: Option<Vec<u8>>, after: Option<Vec<u8>>) -> StoreResult<()> {
         todo!("4c-04: refused if another transaction holds the record; otherwise the change is logged first, then applied, and remembered for the transaction and the page")
     }
 

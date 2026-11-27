@@ -35,7 +35,9 @@ impl fmt::Display for FormatError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // @begin r-02
         match self {
-            FormatError::Truncated { at, needed, have } => write!(f, "truncated record at byte {at}: needed {needed} more bytes, only {have} left"),
+            FormatError::Truncated { at, needed, have } => {
+                write!(f, "truncated record at byte {at}: needed {needed} more bytes, only {have} left")
+            }
             FormatError::BadKey { at } => write!(f, "the key of the record at byte {at} is not valid UTF-8"),
             FormatError::KeyTooLong { len } => write!(f, "a key of {len} bytes is longer than 255"),
             FormatError::ValueTooLong { len } => write!(f, "a value of {len} bytes is longer than 65535"),

@@ -12,8 +12,8 @@ use bustub::catalog::schema::Schema;
 use bustub::common::config::{PageId, BUSTUB_PAGE_SIZE};
 use bustub::common::rid::Rid;
 use bustub::storage::disk::disk_manager_memory::DiskManagerUnlimitedMemory;
-use bustub::storage::index::index::{generic_key_from_tuple, BPlusTreeIndex, Index, IndexMetadata, IndexType, SchemaComparator};
 use bustub::storage::index::generic_key::KeyComparator;
+use bustub::storage::index::index::{generic_key_from_tuple, BPlusTreeIndex, Index, IndexMetadata, IndexType, SchemaComparator};
 use bustub::storage::page::table_page::TablePage;
 use bustub::storage::table::table_heap::TableHeap;
 use bustub::storage::table::tuple::{Tuple, TupleMeta};
@@ -40,12 +40,24 @@ fn raw_get(bpm: &BufferPoolManager, rid: Rid) -> (TupleMeta, Tuple) {
 }
 
 fn heap_test_schema() -> Schema {
-    Schema::new(vec![Column::new_varchar("a", 20), Column::new("b", SmallInt), Column::new("c", BigInt), Column::new("d", Boolean), Column::new_varchar("e", 16)])
+    Schema::new(vec![
+        Column::new_varchar("a", 20),
+        Column::new("b", SmallInt),
+        Column::new("c", BigInt),
+        Column::new("d", Boolean),
+        Column::new_varchar("e", 16),
+    ])
 }
 
 fn construct_tuple(schema: &Schema, i: usize) -> Tuple {
     Tuple::new(
-        &[Value::varchar(&format!("row{i}")), Value::smallint((i % 100) as i16), Value::bigint(i as i64), Value::boolean(i % 2 == 0), Value::varchar("tail")],
+        &[
+            Value::varchar(&format!("row{i}")),
+            Value::smallint((i % 100) as i16),
+            Value::bigint(i as i64),
+            Value::boolean(i % 2 == 0),
+            Value::varchar("tail"),
+        ],
         schema,
     )
 }
@@ -83,10 +95,17 @@ fn s3c_01_a_full_page_makes_the_heap_start_and_link_a_new_one() {
     let first = heap.get_first_page_id();
     // 66 tuples of 100 bytes fill a page exactly (module 3b)
     let rids: Vec<Rid> = (0..70).map(|i| heap.insert_tuple(&meta(false), &bytes_tuple(i as u8, 100)).unwrap()).collect();
-    assert!(rids[..66].iter().all(|r| r.page_id() == first), "a full page makes the heap start and link a new one: expected `rids[..66].iter().all(|r| r.page_id() == first)`");
+    assert!(
+        rids[..66].iter().all(|r| r.page_id() == first),
+        "a full page makes the heap start and link a new one: expected `rids[..66].iter().all(|r| r.page_id() == first)`"
+    );
     let second = rids[66].page_id();
     assert_ne!(second, first, "a full page makes the heap start and link a new one");
-    assert_eq!(rids[66..].iter().map(|r| (r.page_id(), r.slot_num())).collect::<Vec<_>>(), (0..4).map(|s| (second, s)).collect::<Vec<_>>(), "slots restart at 0 in the new page");
+    assert_eq!(
+        rids[66..].iter().map(|r| (r.page_id(), r.slot_num())).collect::<Vec<_>>(),
+        (0..4).map(|s| (second, s)).collect::<Vec<_>>(),
+        "slots restart at 0 in the new page"
+    );
     assert_eq!(TablePage::new(&bpm.read_page(first)[..]).get_next_page_id(), Some(second), "the full page points at the new one");
     assert_eq!(TablePage::new(&bpm.read_page(second)[..]).get_next_page_id(), None, "a full page makes the heap start and link a new one");
     for (i, rid) in rids.iter().enumerate() {
@@ -100,7 +119,10 @@ fn s3c_01_a_tuple_that_fits_no_page_is_an_error() {
     let heap = TableHeap::new(&bpm);
     let biggest = BUSTUB_PAGE_SIZE - 8 - 24;
     assert!(heap.insert_tuple(&meta(false), &bytes_tuple(0, biggest + 1)).is_err(), "bigger than an empty page can take");
-    assert!(heap.insert_tuple(&meta(false), &bytes_tuple(0, BUSTUB_PAGE_SIZE)).is_err(), "a tuple that fits no page is an error: expected `heap.insert_tuple(&meta(false), &bytes_tuple(0, BUSTUB_PAGE_SIZE)).is_err()`");
+    assert!(
+        heap.insert_tuple(&meta(false), &bytes_tuple(0, BUSTUB_PAGE_SIZE)).is_err(),
+        "a tuple that fits no page is an error: expected `heap.insert_tuple(&meta(false), &bytes_tuple(0, BUSTUB_PAGE_SIZE)).is_err()`"
+    );
     let rid = heap.insert_tuple(&meta(false), &bytes_tuple(7, biggest)).unwrap();
     assert_eq!(raw_get(&bpm, rid).1.get_length() as usize, biggest, "the largest tuple that fits");
     // after an error the heap still works, and the next tuple goes to a new page
@@ -113,8 +135,15 @@ fn s3c_01_a_refused_tuple_leaves_a_heap_with_tuples_as_it_was() {
     let bpm = bpm(10);
     let heap = TableHeap::new(&bpm);
     let first = heap.insert_tuple(&meta(false), &bytes_tuple(1, 100)).unwrap();
-    assert!(heap.insert_tuple(&meta(false), &bytes_tuple(2, BUSTUB_PAGE_SIZE)).is_err(), "a tuple that fits no page is an error, also after other tuples");
-    assert_eq!(heap.make_iterator().count(), 1, "a scan after the refused insert sees exactly the tuple that was there (no empty page left behind)");
+    assert!(
+        heap.insert_tuple(&meta(false), &bytes_tuple(2, BUSTUB_PAGE_SIZE)).is_err(),
+        "a tuple that fits no page is an error, also after other tuples"
+    );
+    assert_eq!(
+        heap.make_iterator().count(),
+        1,
+        "a scan after the refused insert sees exactly the tuple that was there (no empty page left behind)"
+    );
     let next = heap.insert_tuple(&meta(false), &bytes_tuple(3, 100)).unwrap();
     assert_eq!(next.page_id(), first.page_id(), "the refused tuple did not move the heap on to a new page");
     assert_eq!(heap.make_iterator().count(), 2, "the heap goes on working after the refused insert");
@@ -159,10 +188,14 @@ fn s3c_01_threads_inserting_at_once_never_share_a_slot() {
     let bpm = bpm(30);
     let heap = TableHeap::new(&bpm);
     let rids: Vec<Vec<Rid>> = thread::scope(|scope| {
-        let handles: Vec<_> = (0..4u8).map(|t| {
-            let heap = &heap;
-            scope.spawn(move || (0..400).map(|i| heap.insert_tuple(&meta(false), &bytes_tuple(t, 20 + (i % 7))).unwrap()).collect::<Vec<_>>())
-        }).collect();
+        let handles: Vec<_> = (0..4u8)
+            .map(|t| {
+                let heap = &heap;
+                scope.spawn(move || {
+                    (0..400).map(|i| heap.insert_tuple(&meta(false), &bytes_tuple(t, 20 + (i % 7))).unwrap()).collect::<Vec<_>>()
+                })
+            })
+            .collect();
         handles.into_iter().map(|h| h.join().unwrap()).collect()
     });
     let all: std::collections::HashSet<Rid> = rids.iter().flatten().copied().collect();
@@ -182,7 +215,11 @@ fn s3c_01_a_tuple_and_its_meta_come_back_by_rid() {
     let heap = TableHeap::new(&bpm);
     let rid = heap.insert_tuple(&TupleMeta { ts: 7, is_deleted: false }, &bytes_tuple(5, 30)).unwrap();
     let (m, t) = heap.get_tuple(rid).unwrap();
-    assert_eq!((m, t.data(), t.get_rid()), (TupleMeta { ts: 7, is_deleted: false }, vec![5u8; 30].as_slice(), rid), "a tuple and its meta come back by rid");
+    assert_eq!(
+        (m, t.data(), t.get_rid()),
+        (TupleMeta { ts: 7, is_deleted: false }, vec![5u8; 30].as_slice(), rid),
+        "a tuple and its meta come back by rid"
+    );
     assert_eq!(heap.get_tuple_meta(rid).unwrap(), m, "a tuple and its meta come back by rid");
 }
 
@@ -194,8 +231,14 @@ fn s3c_01_a_bad_rid_is_an_error() {
     let bad = Rid::new(rid.page_id(), rid.slot_num() + 1);
     assert!(heap.get_tuple(bad).is_err(), "a bad rid is an error: expected `heap.get_tuple(bad).is_err()`");
     assert!(heap.get_tuple_meta(bad).is_err(), "a bad rid is an error: expected `heap.get_tuple_meta(bad).is_err()`");
-    assert!(heap.update_tuple_meta(&meta(true), bad).is_err(), "a bad rid is an error: expected `heap.update_tuple_meta(&meta(true), bad).is_err()`");
-    assert!(heap.update_tuple_in_place(&meta(true), &bytes_tuple(1, 8), bad, None).is_err(), "a bad rid is an error: expected `heap.update_tuple_in_place(&meta(true), &bytes_tuple(1, 8), bad, None).is_err()`");
+    assert!(
+        heap.update_tuple_meta(&meta(true), bad).is_err(),
+        "a bad rid is an error: expected `heap.update_tuple_meta(&meta(true), bad).is_err()`"
+    );
+    assert!(
+        heap.update_tuple_in_place(&meta(true), &bytes_tuple(1, 8), bad, None).is_err(),
+        "a bad rid is an error: expected `heap.update_tuple_in_place(&meta(true), &bytes_tuple(1, 8), bad, None).is_err()`"
+    );
 }
 
 #[test]
@@ -204,9 +247,16 @@ fn s3c_01_marking_a_tuple_deleted_changes_only_its_meta() {
     let heap = TableHeap::new(&bpm);
     let rids: Vec<Rid> = (0..4).map(|i| heap.insert_tuple(&meta(false), &bytes_tuple(i, 12)).unwrap()).collect();
     heap.update_tuple_meta(&TupleMeta { ts: 3, is_deleted: true }, rids[2]).unwrap();
-    assert_eq!(heap.get_tuple_meta(rids[2]).unwrap(), TupleMeta { ts: 3, is_deleted: true }, "marking a tuple deleted changes only its meta");
+    assert_eq!(
+        heap.get_tuple_meta(rids[2]).unwrap(),
+        TupleMeta { ts: 3, is_deleted: true },
+        "marking a tuple deleted changes only its meta"
+    );
     assert_eq!(heap.get_tuple(rids[2]).unwrap().1.data(), vec![2u8; 12].as_slice(), "the bytes are still there");
-    assert!(!heap.get_tuple_meta(rids[1]).unwrap().is_deleted, "marking a tuple deleted changes only its meta: expected `!heap.get_tuple_meta(rids[1]).unwrap().is_deleted`");
+    assert!(
+        !heap.get_tuple_meta(rids[1]).unwrap().is_deleted,
+        "marking a tuple deleted changes only its meta: expected `!heap.get_tuple_meta(rids[1]).unwrap().is_deleted`"
+    );
 }
 
 #[test]
@@ -220,15 +270,22 @@ fn s3c_01_an_in_place_update_runs_its_check_under_the_latch() {
     // a check that refuses: nothing changes
     let refuse = |_: &TupleMeta, _: &Tuple, _: Rid| false;
     assert!(!heap.update_tuple_in_place(&meta(true), &bytes_tuple(9, 16), rid, Some(&refuse)).unwrap(), "an in place update runs its check under the latch: expected `!heap.update_tuple_in_place(&meta(true), &bytes_tuple(9, 16), rid, Some(&refuse)).unwrap()`");
-    assert_eq!(heap.get_tuple(rid).unwrap(), (TupleMeta { ts: 2, is_deleted: false }, {
-        let mut t = bytes_tuple(2, 16);
-        t.set_rid(rid);
-        t
-    }), "an in place update runs its check under the latch");
+    assert_eq!(
+        heap.get_tuple(rid).unwrap(),
+        (TupleMeta { ts: 2, is_deleted: false }, {
+            let mut t = bytes_tuple(2, 16);
+            t.set_rid(rid);
+            t
+        }),
+        "an in place update runs its check under the latch"
+    );
     // a check that looks at the OLD tuple and meta and rid
     let only_ts_2 = |m: &TupleMeta, t: &Tuple, r: Rid| m.ts == 2 && t.data()[0] == 2 && r == rid;
     assert!(heap.update_tuple_in_place(&TupleMeta { ts: 3, is_deleted: false }, &bytes_tuple(3, 16), rid, Some(&only_ts_2)).unwrap(), "an in place update runs its check under the latch: expected `heap.update_tuple_in_place(&TupleMeta {{ ts: 3, is_deleted: false }}, &bytes_tuple(3, 16), rid, Some(&...`");
-    assert!(!heap.update_tuple_in_place(&meta(true), &bytes_tuple(4, 16), rid, Some(&only_ts_2)).unwrap(), "the tuple is at ts 3 now: the check fails");
+    assert!(
+        !heap.update_tuple_in_place(&meta(true), &bytes_tuple(4, 16), rid, Some(&only_ts_2)).unwrap(),
+        "the tuple is at ts 3 now: the check fails"
+    );
 }
 
 #[test]
@@ -362,7 +419,11 @@ fn key(schema: &Schema, values: &[i32]) -> Tuple {
 fn s3c_03_index_metadata_knows_its_key_schema() {
     let table = three_ints();
     let m = IndexMetadata::new("idx", "t", &table, vec![2, 0], false);
-    assert_eq!((m.get_name(), m.get_table_name(), m.get_key_attrs(), m.get_index_column_count(), m.is_primary_key()), ("idx", "t", &[2u32, 0][..], 2, false), "index metadata knows its key schema");
+    assert_eq!(
+        (m.get_name(), m.get_table_name(), m.get_key_attrs(), m.get_index_column_count(), m.is_primary_key()),
+        ("idx", "t", &[2u32, 0][..], 2, false),
+        "index metadata knows its key schema"
+    );
     let ks = m.get_key_schema();
     assert_eq!(ks.columns().iter().map(|c| c.name()).collect::<Vec<_>>(), vec!["c", "a"], "index metadata knows its key schema");
     assert_eq!(ks.columns().iter().map(|c| c.offset()).collect::<Vec<_>>(), vec![0, 4], "offsets of the key schema, not the table's");
@@ -405,13 +466,22 @@ fn s3c_03_an_index_inserts_scans_and_deletes() {
     let index = BPlusTreeIndex::<4>::new(IndexMetadata::new("i", "t", &table, vec![0], false), &bpm);
     let ks = index.metadata().get_key_schema().clone();
     for i in 0..500 {
-        assert!(index.insert_entry(&key(&ks, &[i * 3]), Rid::new(PageId(1), i as u32)), "an index inserts scans and deletes: expected `index.insert_entry(&key(&ks, &[i * 3]), Rid::new(PageId(1), i as u32))`");
+        assert!(
+            index.insert_entry(&key(&ks, &[i * 3]), Rid::new(PageId(1), i as u32)),
+            "an index inserts scans and deletes: expected `index.insert_entry(&key(&ks, &[i * 3]), Rid::new(PageId(1), i as u32))`"
+        );
     }
     assert!(!index.insert_entry(&key(&ks, &[30]), Rid::new(PageId(9), 9)), "a key is in the index once");
     assert_eq!(index.scan_key(&key(&ks, &[30])), vec![Rid::new(PageId(1), 10)], "an index inserts scans and deletes");
-    assert!(index.scan_key(&key(&ks, &[31])).is_empty(), "an index inserts scans and deletes: expected `index.scan_key(&key(&ks, &[31])).is_empty()`");
+    assert!(
+        index.scan_key(&key(&ks, &[31])).is_empty(),
+        "an index inserts scans and deletes: expected `index.scan_key(&key(&ks, &[31])).is_empty()`"
+    );
     index.delete_entry(&key(&ks, &[30]));
-    assert!(index.scan_key(&key(&ks, &[30])).is_empty(), "an index inserts scans and deletes: expected `index.scan_key(&key(&ks, &[30])).is_empty()`");
+    assert!(
+        index.scan_key(&key(&ks, &[30])).is_empty(),
+        "an index inserts scans and deletes: expected `index.scan_key(&key(&ks, &[30])).is_empty()`"
+    );
     index.delete_entry(&key(&ks, &[30])); // deleting a missing key is not an error
     assert_eq!(index.scan_all().len(), 499, "an index inserts scans and deletes");
 }
@@ -422,7 +492,9 @@ fn s3c_03_a_key_with_a_null_is_not_indexed_and_finds_nothing() {
     let table = three_ints();
     let index = BPlusTreeIndex::<8>::new(IndexMetadata::new("i", "t", &table, vec![0, 1], false), &bpm);
     let ks = index.metadata().get_key_schema().clone();
-    let null_key = |a: Option<i32>, b: Option<i32>| Tuple::new(&[a.map_or(Value::null(Integer), Value::integer), b.map_or(Value::null(Integer), Value::integer)], &ks);
+    let null_key = |a: Option<i32>, b: Option<i32>| {
+        Tuple::new(&[a.map_or(Value::null(Integer), Value::integer), b.map_or(Value::null(Integer), Value::integer)], &ks)
+    };
     assert!(index.insert_entry(&null_key(Some(1), Some(1)), Rid::new(PageId(2), 0)), "a key without NULLs is indexed");
     assert!(!index.insert_entry(&null_key(None, Some(1)), Rid::new(PageId(2), 1)), "a key with a NULL is not indexed");
     assert!(!index.insert_entry(&null_key(Some(1), None), Rid::new(PageId(2), 2)), "in any column");
@@ -447,7 +519,11 @@ fn s3c_03_a_scan_returns_rids_in_key_order_even_for_negative_and_composite_keys(
     let order: Vec<u32> = index.scan_all().iter().map(|r| r.slot_num()).collect();
     let mut expected: Vec<(usize, (i32, i32))> = keys.iter().copied().enumerate().collect();
     expected.sort_by_key(|(_, k)| *k);
-    assert_eq!(order, expected.iter().map(|(n, _)| *n as u32).collect::<Vec<_>>(), "a scan returns rids in key order even for negative and composite keys");
+    assert_eq!(
+        order,
+        expected.iter().map(|(n, _)| *n as u32).collect::<Vec<_>>(),
+        "a scan returns rids in key order even for negative and composite keys"
+    );
     let from: Vec<u32> = index.scan_from(&key(&ks, &[0, 0])).iter().map(|r| r.slot_num()).collect();
     assert_eq!(from, vec![3, 2, 0, 5], "keys from (0, 0) on: (0,0) (2,-1) (2,1) (7,7) are slots 3, 2, 0, 5");
 }
@@ -461,8 +537,14 @@ fn s3c_04_a_created_table_can_be_found_by_name_and_by_oid() {
     let schema = three_ints();
     let t = catalog.create_table("t1", &schema).unwrap();
     assert_eq!((t.name.as_str(), t.oid, &t.schema), ("t1", 0, &schema), "a created table can be found by name and by oid");
-    assert!(Arc::ptr_eq(&catalog.get_table("t1").unwrap(), &t), "a created table can be found by name and by oid: expected `Arc::ptr_eq(&catalog.get_table(\"t1\").unwrap(), &t)`");
-    assert!(Arc::ptr_eq(&catalog.get_table_by_oid(0).unwrap(), &t), "a created table can be found by name and by oid: expected `Arc::ptr_eq(&catalog.get_table_by_oid(0).unwrap(), &t)`");
+    assert!(
+        Arc::ptr_eq(&catalog.get_table("t1").unwrap(), &t),
+        "a created table can be found by name and by oid: expected `Arc::ptr_eq(&catalog.get_table(\"t1\").unwrap(), &t)`"
+    );
+    assert!(
+        Arc::ptr_eq(&catalog.get_table_by_oid(0).unwrap(), &t),
+        "a created table can be found by name and by oid: expected `Arc::ptr_eq(&catalog.get_table_by_oid(0).unwrap(), &t)`"
+    );
     assert!(catalog.get_table("nope").is_none() && catalog.get_table_by_oid(5).is_none(), "a created table can be found by name and by oid: expected `catalog.get_table(\"nope\").is_none() && catalog.get_table_by_oid(5).is_none()`");
 }
 
@@ -497,7 +579,10 @@ fn s3c_04_every_table_has_its_own_heap() {
 fn s3c_04_a_new_catalog_has_no_tables_and_names_are_case_sensitive() {
     let bpm = bpm(20);
     let mut catalog = Catalog::new(&bpm);
-    assert!(catalog.get_table_names().is_empty(), "a new catalog has no tables and names are case sensitive: expected `catalog.get_table_names().is_empty()`");
+    assert!(
+        catalog.get_table_names().is_empty(),
+        "a new catalog has no tables and names are case sensitive: expected `catalog.get_table_names().is_empty()`"
+    );
     assert!(catalog.get_table("t").is_none() && catalog.get_table_by_oid(0).is_none(), "a new catalog has no tables and names are case sensitive: expected `catalog.get_table(\"t\").is_none() && catalog.get_table_by_oid(0).is_none()`");
     let schema = three_ints();
     catalog.create_table("People", &schema).unwrap();
@@ -540,13 +625,21 @@ fn s3c_04_a_new_index_is_filled_with_the_rows_the_table_already_has() {
     let mut catalog = Catalog::new(&bpm);
     let schema = table_with_rows(&mut catalog, "t", 300);
     let index = catalog.create_index("t_a", "t", vec![0], false).unwrap().unwrap();
-    assert_eq!((index.name.as_str(), index.table_name.as_str(), index.key_size, index.is_primary_key, index.index_oid), ("t_a", "t", 4, false, 0), "a new index is filled with the rows the table already has");
+    assert_eq!(
+        (index.name.as_str(), index.table_name.as_str(), index.key_size, index.is_primary_key, index.index_oid),
+        ("t_a", "t", 4, false, 0),
+        "a new index is filled with the rows the table already has"
+    );
     let table = catalog.get_table("t").unwrap();
     let ks = &index.key_schema;
     for i in [0, 17, 299] {
         let rids = index.index.scan_key(&key(ks, &[i]));
         assert_eq!(rids.len(), 1, "a new index is filled with the rows the table already has");
-        assert_eq!(table.table.get_tuple(rids[0]).unwrap().1.get_value(&schema, 2), Value::integer(i * 2), "a new index is filled with the rows the table already has");
+        assert_eq!(
+            table.table.get_tuple(rids[0]).unwrap().1.get_value(&schema, 2),
+            Value::integer(i * 2),
+            "a new index is filled with the rows the table already has"
+        );
     }
     assert_eq!(index.index.scan_all().len(), 300, "a new index is filled with the rows the table already has");
 }
@@ -560,10 +653,17 @@ fn s3c_04_deleted_rows_are_not_indexed_and_two_live_rows_with_one_key_fail_the_i
     let rids: Vec<Rid> = [5, 6, 7, 6].iter().map(|&v| table.table.insert_tuple(&meta(false), &key(&schema, &[v, 0, 0])).unwrap()).collect();
     table.table.update_tuple_meta(&meta(true), rids[1]).unwrap();
     let index = catalog.create_index("i", "t", vec![0], false).unwrap().unwrap();
-    assert_eq!(index.index.scan_all(), vec![rids[0], rids[3], rids[2]], "every live row has one entry; the deleted row with key 6 has none");
+    assert_eq!(
+        index.index.scan_all(),
+        vec![rids[0], rids[3], rids[2]],
+        "every live row has one entry; the deleted row with key 6 has none"
+    );
     table.table.insert_tuple(&meta(false), &key(&schema, &[7, 1, 1])).unwrap();
     let err = catalog.create_index("j", "t", vec![0], false).err().expect("two live rows with the key 7 make creating an index on it fail");
-    assert!(err.message.contains("duplicate key value violates unique constraint \"j\""), "the error names the unique violation and the index: {err}");
+    assert!(
+        err.message.contains("duplicate key value violates unique constraint \"j\""),
+        "the error names the unique violation and the index: {err}"
+    );
     assert!(catalog.get_index("j", "t").is_none(), "an index that failed to fill is not in the catalog");
     let mut with_nulls = vec![];
     let u = catalog.create_table("u", &schema).unwrap();
@@ -571,7 +671,8 @@ fn s3c_04_deleted_rows_are_not_indexed_and_two_live_rows_with_one_key_fail_the_i
         let values = [Value::null(Integer), Value::integer(0), Value::integer(0)];
         with_nulls.push(u.table.insert_tuple(&meta(false), &Tuple::new(&values, &schema)).unwrap());
     }
-    let index = catalog.create_index("i", "u", vec![0], false).unwrap().expect("two rows with a NULL key do not share a key: NULL equals nothing");
+    let index =
+        catalog.create_index("i", "u", vec![0], false).unwrap().expect("two rows with a NULL key do not share a key: NULL equals nothing");
     assert!(index.index.scan_all().is_empty(), "a row whose key has a NULL is not indexed");
 }
 
@@ -581,7 +682,10 @@ fn s3c_04_creating_an_index_can_fail_without_an_error() {
     let mut catalog = Catalog::new(&bpm);
     table_with_rows(&mut catalog, "t", 10);
     assert!(catalog.create_index("i", "nope", vec![0], false).unwrap().is_none(), "no such table");
-    assert!(catalog.create_index("i", "t", vec![0], false).unwrap().is_some(), "creating an index can fail without an error: expected `catalog.create_index(\"i\", \"t\", vec![0], false).unwrap().is_some()`");
+    assert!(
+        catalog.create_index("i", "t", vec![0], false).unwrap().is_some(),
+        "creating an index can fail without an error: expected `catalog.create_index(\"i\", \"t\", vec![0], false).unwrap().is_some()`"
+    );
     assert!(catalog.create_index("i", "t", vec![1], false).unwrap().is_none(), "the table already has an index called i");
     table_with_rows(&mut catalog, "u", 1);
     assert!(catalog.create_index("i", "u", vec![0], false).unwrap().is_some(), "index names are per table");
@@ -599,7 +703,11 @@ fn s3c_04_only_integer_keys_of_at_most_64_bytes() {
     let wide = Schema::new((0..17).map(|i| Column::new(&format!("c{i}"), Integer)).collect());
     catalog.create_table("w", &wide).unwrap();
     assert!(catalog.create_index("i", "w", (0..17).collect(), false).is_err(), "17 integers are 68 bytes");
-    assert_eq!(catalog.create_index("i", "w", (0..16).collect(), false).unwrap().unwrap().key_size, 64, "only integer keys of at most 64 bytes");
+    assert_eq!(
+        catalog.create_index("i", "w", (0..16).collect(), false).unwrap().unwrap().key_size,
+        64,
+        "only integer keys of at most 64 bytes"
+    );
 }
 
 #[test]
@@ -612,14 +720,30 @@ fn s3c_04_indexes_are_found_by_name_by_oid_and_by_table() {
     let b = catalog.create_index("b", "u", vec![0, 1], true).unwrap().unwrap();
     let c = catalog.create_index("c", "t", vec![1], false).unwrap().unwrap();
     assert_eq!((a.index_oid, b.index_oid, c.index_oid), (0, 1, 2), "indexes are found by name by oid and by table");
-    assert!(Arc::ptr_eq(&catalog.get_index("a", "t").unwrap(), &a), "indexes are found by name by oid and by table: expected `Arc::ptr_eq(&catalog.get_index(\"a\", \"t\").unwrap(), &a)`");
-    assert!(Arc::ptr_eq(&catalog.get_index_by_oid(1).unwrap(), &b), "indexes are found by name by oid and by table: expected `Arc::ptr_eq(&catalog.get_index_by_oid(1).unwrap(), &b)`");
+    assert!(
+        Arc::ptr_eq(&catalog.get_index("a", "t").unwrap(), &a),
+        "indexes are found by name by oid and by table: expected `Arc::ptr_eq(&catalog.get_index(\"a\", \"t\").unwrap(), &a)`"
+    );
+    assert!(
+        Arc::ptr_eq(&catalog.get_index_by_oid(1).unwrap(), &b),
+        "indexes are found by name by oid and by table: expected `Arc::ptr_eq(&catalog.get_index_by_oid(1).unwrap(), &b)`"
+    );
     assert!(catalog.get_index("a", "u").is_none() && catalog.get_index("zzz", "t").is_none() && catalog.get_index("a", "nope").is_none(), "indexes are found by name by oid and by table: expected `catalog.get_index(\"a\", \"u\").is_none() && catalog.get_index(\"zzz\", \"t\").is_none() && catalog.get_inde...`");
-    assert!(catalog.get_index_by_oid(9).is_none(), "indexes are found by name by oid and by table: expected `catalog.get_index_by_oid(9).is_none()`");
+    assert!(
+        catalog.get_index_by_oid(9).is_none(),
+        "indexes are found by name by oid and by table: expected `catalog.get_index_by_oid(9).is_none()`"
+    );
     let names: Vec<String> = catalog.get_table_indexes("t").iter().map(|i| i.name.clone()).collect();
     assert_eq!(names, vec!["a", "c"], "in creation order");
-    assert!(catalog.get_table_indexes("nope").is_empty(), "indexes are found by name by oid and by table: expected `catalog.get_table_indexes(\"nope\").is_empty()`");
-    assert_eq!((b.key_size, b.is_primary_key, b.index.metadata().get_index_column_count()), (8, true, 2), "indexes are found by name by oid and by table");
+    assert!(
+        catalog.get_table_indexes("nope").is_empty(),
+        "indexes are found by name by oid and by table: expected `catalog.get_table_indexes(\"nope\").is_empty()`"
+    );
+    assert_eq!(
+        (b.key_size, b.is_primary_key, b.index.metadata().get_index_column_count()),
+        (8, true, 2),
+        "indexes are found by name by oid and by table"
+    );
 }
 
 #[test]
@@ -629,7 +753,8 @@ fn s3c_04_a_composite_index_scans_in_key_order() {
     let schema = table_with_rows(&mut catalog, "t", 100);
     let index = catalog.create_index("ix", "t", vec![1, 0], false).unwrap().unwrap(); // (i % 10, i)
     let table = catalog.get_table("t").unwrap();
-    let order: Vec<i64> = index.index.scan_all().iter().map(|r| table.table.get_tuple(*r).unwrap().1.get_value(&schema, 0).as_i64().unwrap()).collect();
+    let order: Vec<i64> =
+        index.index.scan_all().iter().map(|r| table.table.get_tuple(*r).unwrap().1.get_value(&schema, 0).as_i64().unwrap()).collect();
     let mut expected: Vec<i64> = (0..100).collect();
     expected.sort_by_key(|i| (i % 10, *i));
     assert_eq!(order, expected, "a composite index scans in key order");
@@ -826,12 +951,17 @@ fn s3c_05_a_table_and_its_index_agree_after_inserts_and_deletes_through_the_cata
         }
     }
     assert_eq!(index.index.scan_all(), live.values().copied().collect::<Vec<_>>(), "the index lists the live rows in key order");
-    let scanned: Vec<i32> = table.table.make_iterator().filter(|(m, _)| !m.is_deleted).map(|(_, t)| t.get_value(&schema, 0).as_i64().unwrap() as i32).collect();
+    let scanned: Vec<i32> =
+        table.table.make_iterator().filter(|(m, _)| !m.is_deleted).map(|(_, t)| t.get_value(&schema, 0).as_i64().unwrap() as i32).collect();
     let mut sorted = scanned.clone();
     sorted.sort();
     assert_eq!(sorted, live.keys().copied().collect::<Vec<_>>(), "a scan of the table finds the same rows");
     for (k, rid) in &live {
-        assert_eq!(table.table.get_tuple(*rid).unwrap().1.get_value(&schema, 0), Value::integer(*k), "a table and its index agree after inserts and deletes through the catalog");
+        assert_eq!(
+            table.table.get_tuple(*rid).unwrap().1.get_value(&schema, 0),
+            Value::integer(*k),
+            "a table and its index agree after inserts and deletes through the catalog"
+        );
     }
 }
 

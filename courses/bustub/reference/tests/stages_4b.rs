@@ -19,7 +19,10 @@ fn new_db() -> BusTubInstance {
 /// A statement outside any transaction (DDL).
 fn exec(db: &BusTubInstance, sql: &str) {
     let mut out = String::new();
-    assert!(db.execute_sql(sql, &mut SimpleStreamWriter::new(&mut out, true, " "), None).unwrap_or_else(|e| panic!("{sql}: {e}")), "{sql} failed");
+    assert!(
+        db.execute_sql(sql, &mut SimpleStreamWriter::new(&mut out, true, " "), None).unwrap_or_else(|e| panic!("{sql}: {e}")),
+        "{sql} failed"
+    );
 }
 
 fn begin(db: &BusTubInstance) -> Arc<Transaction> {
@@ -153,10 +156,18 @@ fn s4b_01_the_tuple_carries_the_temporary_timestamp_until_commit() {
     let t = begin(&db);
     run(&db, &t, "INSERT INTO maintable VALUES (1)");
     let rid = *t.write_sets().get(&info.oid).unwrap().iter().next().expect("the insert joined the write set");
-    assert_eq!(info.table.get_tuple_meta(rid).unwrap(), TupleMeta { ts: t.temp_ts(), is_deleted: false }, "the tuple carries the temporary timestamp until commit");
+    assert_eq!(
+        info.table.get_tuple_meta(rid).unwrap(),
+        TupleMeta { ts: t.temp_ts(), is_deleted: false },
+        "the tuple carries the temporary timestamp until commit"
+    );
     assert_eq!(undo_log_num(&t), 0, "a new tuple needs no undo log");
     commit(&db, &t);
-    assert_eq!(info.table.get_tuple_meta(rid).unwrap(), TupleMeta { ts: t.commit_ts(), is_deleted: false }, "the tuple carries the temporary timestamp until commit");
+    assert_eq!(
+        info.table.get_tuple_meta(rid).unwrap(),
+        TupleMeta { ts: t.commit_ts(), is_deleted: false },
+        "the tuple carries the temporary timestamp until commit"
+    );
 }
 
 #[test]
@@ -202,7 +213,10 @@ fn s4b_02_a_tuple_is_in_conflict_if_it_is_newer_than_the_reader_and_not_its_own(
     let db = new_db();
     bump_commit_ts(&db, 2);
     let t = begin(&db); // read ts 2
-    assert!(!is_write_write_conflict(&meta(0), &t), "a tuple is in conflict if it is newer than the reader and not its own: expected `!is_write_write_conflict(&meta(0), &t)`");
+    assert!(
+        !is_write_write_conflict(&meta(0), &t),
+        "a tuple is in conflict if it is newer than the reader and not its own: expected `!is_write_write_conflict(&meta(0), &t)`"
+    );
     assert!(!is_write_write_conflict(&meta(2), &t), "committed at the read timestamp: seen");
     assert!(is_write_write_conflict(&meta(3), &t), "committed after the transaction began");
     assert!(is_write_write_conflict(&meta(TXN_START_ID + 99), &t), "another transaction's uncommitted write");
@@ -238,7 +252,10 @@ fn s4b_02_deleting_a_committed_tuple_leaves_one_full_undo_log() {
     run(&db, &t1, "DELETE FROM maintable");
     assert_eq!(undo_log_columns(&t1), 2, "a delete logs every column");
     let rid = *t1.write_sets().get(&info.oid).unwrap().iter().next().unwrap();
-    assert!(info.table.get_tuple_meta(rid).unwrap().is_deleted, "deleting a committed tuple leaves one full undo log: expected `info.table.get_tuple_meta(rid).unwrap().is_deleted`");
+    assert!(
+        info.table.get_tuple_meta(rid).unwrap().is_deleted,
+        "deleting a committed tuple leaves one full undo log: expected `info.table.get_tuple_meta(rid).unwrap().is_deleted`"
+    );
     assert_eq!(db.txn_manager.get_undo_link(rid).unwrap().prev_txn, t1.id(), "deleting a committed tuple leaves one full undo log");
     assert_eq!(t1.get_undo_log(0).ts, t0.commit_ts(), "the log restores the version committed by t0");
 }
@@ -296,7 +313,10 @@ fn s4b_02_a_tainted_transaction_can_not_commit_or_run_more_statements() {
     let (t1, t2) = (begin(&db), begin(&db));
     run(&db, &t1, "DELETE FROM maintable");
     run_tainted(&db, &t2, "DELETE FROM maintable");
-    assert!(!db.txn_manager.commit(&t2).unwrap(), "a tainted transaction can not commit or run more statements: expected `!db.txn_manager.commit(&t2).unwrap()`");
+    assert!(
+        !db.txn_manager.commit(&t2).unwrap(),
+        "a tainted transaction can not commit or run more statements: expected `!db.txn_manager.commit(&t2).unwrap()`"
+    );
     assert_eq!(t2.state(), TransactionState::Tainted, "a tainted transaction can not commit or run more statements");
     let mut out = String::new();
     assert!(db.execute_sql_txn("SELECT a FROM maintable", &mut SimpleStreamWriter::new(&mut out, true, " "), &t2).is_err(), "a tainted transaction can not commit or run more statements: expected `db.execute_sql_txn(\"SELECT a FROM maintable\", &mut SimpleStreamWriter::new(&mut out, true, \" \"), &t2...`");
@@ -578,7 +598,10 @@ fn s4b_05_tainted_and_running_transactions_are_never_collected() {
     run(&db, &t5, "DELETE FROM table1");
     run_tainted(&db, &t6, "DELETE FROM table1");
     db.txn_manager.garbage_collection();
-    assert!(txn_exists(&db, &t5) && txn_exists(&db, &t6), "tainted and running transactions are never collected: expected `txn_exists(&db, &t5) && txn_exists(&db, &t6)`");
+    assert!(
+        txn_exists(&db, &t5) && txn_exists(&db, &t6),
+        "tainted and running transactions are never collected: expected `txn_exists(&db, &t5) && txn_exists(&db, &t6)`"
+    );
     abort(&db, &t6);
     db.txn_manager.garbage_collection();
     assert!(!txn_exists(&db, &t6), "aborted, and it left no logs in any chain");
@@ -625,7 +648,10 @@ fn s4b_06_a_null_primary_key_is_refused_before_anything_is_written() {
     let refused = |sql: &str| {
         let mut out = String::new();
         let result = db.execute_sql_txn(sql, &mut SimpleStreamWriter::new(&mut out, true, " "), &t1);
-        assert!(matches!(&result, Err(e) if e.to_string().contains("violates not-null constraint")), "{sql}: a NULL primary key is a not-null violation: {result:?}");
+        assert!(
+            matches!(&result, Err(e) if e.to_string().contains("violates not-null constraint")),
+            "{sql}: a NULL primary key is a not-null violation: {result:?}"
+        );
     };
     refused("INSERT INTO maintable VALUES (null, 1)");
     assert_eq!(heap_entries(&info), 0, "the refused row left no tuple in the heap");
@@ -885,7 +911,10 @@ fn s4b_07_a_failed_validation_undoes_the_transactions_writes() {
     run(&db, &t2, "UPDATE maintable SET a = 0 WHERE a = 1");
     run(&db, &t3, "UPDATE maintable SET a = 1 WHERE a = 0");
     commit(&db, &t2);
-    assert!(!db.txn_manager.commit(&t3).unwrap(), "a failed validation undoes the transactions writes: expected `!db.txn_manager.commit(&t3).unwrap()`");
+    assert!(
+        !db.txn_manager.commit(&t3).unwrap(),
+        "a failed validation undoes the transactions writes: expected `!db.txn_manager.commit(&t3).unwrap()`"
+    );
     expect(&db, &begin(&db), "SELECT a, b FROM maintable", &["0 1", "0 2"]);
 }
 
@@ -903,7 +932,10 @@ fn s4b_07_garbage_collection_keeps_what_a_running_serializable_transaction_valid
     commit(&db, &t2);
     db.txn_manager.garbage_collection();
     assert!(txn_exists(&db, &t2), "t2 committed after t1's read timestamp, and t1 (serializable) is still running: it must stay");
-    assert!(!db.txn_manager.commit(&t1).unwrap(), "t1 read v = 5 and found nothing, t2 then inserted v = 5: t1 must fail validation, collection or not");
+    assert!(
+        !db.txn_manager.commit(&t1).unwrap(),
+        "t1 read v = 5 and found nothing, t2 then inserted v = 5: t1 must fail validation, collection or not"
+    );
 }
 
 #[test]
@@ -1068,7 +1100,10 @@ fn s4b_08_garbage_collection() {
     for w in [&w0, &w1, &w2, &w3, &txn2, &txn3] {
         assert!(txn_exists(&db, w), "txn{} should exist", w.human_readable_id());
     }
-    assert!(!txn_exists(&db, &txn_a) && !txn_exists(&db, &txn_b), "garbage collection: expected `!txn_exists(&db, &txn_a) && !txn_exists(&db, &txn_b)`");
+    assert!(
+        !txn_exists(&db, &txn_a) && !txn_exists(&db, &txn_b),
+        "garbage collection: expected `!txn_exists(&db, &txn_a) && !txn_exists(&db, &txn_b)`"
+    );
     expect(&db, &w0, q, &[]);
     expect(&db, &w1, q, &all0);
     expect(&db, &w2, q, &all10);
@@ -1088,15 +1123,24 @@ fn s4b_08_garbage_collection() {
     // D: the next one; txn2's logs are older than anything w2 can ask for
     commit(&db, &w1);
     db.txn_manager.garbage_collection();
-    assert!(!txn_exists(&db, &w1) && !txn_exists(&db, &txn2), "garbage collection: expected `!txn_exists(&db, &w1) && !txn_exists(&db, &txn2)`");
-    assert!(txn_exists(&db, &w2) && txn_exists(&db, &w3) && txn_exists(&db, &txn3), "garbage collection: expected `txn_exists(&db, &w2) && txn_exists(&db, &w3) && txn_exists(&db, &txn3)`");
+    assert!(
+        !txn_exists(&db, &w1) && !txn_exists(&db, &txn2),
+        "garbage collection: expected `!txn_exists(&db, &w1) && !txn_exists(&db, &txn2)`"
+    );
+    assert!(
+        txn_exists(&db, &w2) && txn_exists(&db, &w3) && txn_exists(&db, &txn3),
+        "garbage collection: expected `txn_exists(&db, &w2) && txn_exists(&db, &w3) && txn_exists(&db, &txn3)`"
+    );
     expect(&db, &w2, q, &all10);
     expect(&db, &w3, q, &after3);
 
     // E
     commit(&db, &w2);
     db.txn_manager.garbage_collection();
-    assert!(!txn_exists(&db, &w2) && !txn_exists(&db, &txn3), "garbage collection: expected `!txn_exists(&db, &w2) && !txn_exists(&db, &txn3)`");
+    assert!(
+        !txn_exists(&db, &w2) && !txn_exists(&db, &txn3),
+        "garbage collection: expected `!txn_exists(&db, &w2) && !txn_exists(&db, &txn3)`"
+    );
     assert!(txn_exists(&db, &w3), "garbage collection: expected `txn_exists(&db, &w3)`");
     expect(&db, &w3, q, &after3);
 
@@ -1145,7 +1189,10 @@ fn s4b_08_garbage_collection_with_tainted_transactions() {
     db.txn_manager.garbage_collection();
     db.txn_manager.garbage_collection();
     assert!(txn_exists(&db, &txn2) && txn_exists(&db, &txn3) && txn_exists(&db, &txn5), "garbage collection with tainted transactions: expected `txn_exists(&db, &txn2) && txn_exists(&db, &txn3) && txn_exists(&db, &txn5)`");
-    assert!(!txn_exists(&db, &txn_a) && !txn_exists(&db, &txn_b), "garbage collection with tainted transactions: expected `!txn_exists(&db, &txn_a) && !txn_exists(&db, &txn_b)`");
+    assert!(
+        !txn_exists(&db, &txn_a) && !txn_exists(&db, &txn_b),
+        "garbage collection with tainted transactions: expected `!txn_exists(&db, &txn_a) && !txn_exists(&db, &txn_b)`"
+    );
 
     // C: txn5 and txn6 conflict with the committed deletes and become tainted; they keep the watermark low
     run(&db, &txn5, "DELETE FROM table1 WHERE a = 12");
@@ -1166,7 +1213,10 @@ fn s4b_08_garbage_collection_with_tainted_transactions() {
     assert!(!txn_exists(&db, &w0) && txn_exists(&db, &txn2) && txn_exists(&db, &txn3), "garbage collection with tainted transactions: expected `!txn_exists(&db, &w0) && txn_exists(&db, &txn2) && txn_exists(&db, &txn3)`");
     commit(&db, &w1);
     db.txn_manager.garbage_collection();
-    assert!(!txn_exists(&db, &w1) && !txn_exists(&db, &txn2), "garbage collection with tainted transactions: expected `!txn_exists(&db, &w1) && !txn_exists(&db, &txn2)`");
+    assert!(
+        !txn_exists(&db, &w1) && !txn_exists(&db, &txn2),
+        "garbage collection with tainted transactions: expected `!txn_exists(&db, &w1) && !txn_exists(&db, &txn2)`"
+    );
     expect(&db, &w2, q, &all10);
     commit(&db, &w2);
     db.txn_manager.garbage_collection();
@@ -1208,7 +1258,14 @@ fn s4b_08_index_concurrent_insert_test() {
                     for n in 0..numbers {
                         let txn = begin(&db);
                         let mut out = String::new();
-                        if db.execute_sql_txn(&format!("INSERT INTO maintable VALUES ({n}, {thread})"), &mut SimpleStreamWriter::new(&mut out, true, " "), &txn).unwrap() {
+                        if db
+                            .execute_sql_txn(
+                                &format!("INSERT INTO maintable VALUES ({n}, {thread})"),
+                                &mut SimpleStreamWriter::new(&mut out, true, " "),
+                                &txn,
+                            )
+                            .unwrap()
+                        {
                             assert!(db.txn_manager.commit(&txn).unwrap(), "cannot commit??");
                             won.push(true);
                         } else {
@@ -1274,7 +1331,8 @@ fn s4b_08_index_concurrent_update_test() {
             })
             .collect();
         let results: Vec<Vec<bool>> = handles.into_iter().map(|h| h.join().unwrap()).collect();
-        let mut want: Vec<String> = (0..numbers).map(|i| format!("{i} {}", (0..threads).filter(|j| results[*j][i]).map(|j| 1 << j).sum::<i32>())).collect();
+        let mut want: Vec<String> =
+            (0..numbers).map(|i| format!("{i} {}", (0..threads).filter(|j| results[*j][i]).map(|j| 1 << j).sum::<i32>())).collect();
         want.sort();
         let query = begin(&db);
         assert_eq!(rows(&db, &query, "SELECT * FROM maintable"), want, "index concurrent update test");
@@ -1310,7 +1368,14 @@ fn s4b_08_index_concurrent_update_abort_test() {
                         }
                         let txn = begin(&db);
                         let mut sink = String::new();
-                        let ok = [x, y].iter().all(|n| db.execute_sql_txn(&format!("UPDATE maintable SET b = b + 1 WHERE a = {n}"), &mut SimpleStreamWriter::new(&mut sink, true, " "), &txn).unwrap());
+                        let ok = [x, y].iter().all(|n| {
+                            db.execute_sql_txn(
+                                &format!("UPDATE maintable SET b = b + 1 WHERE a = {n}"),
+                                &mut SimpleStreamWriter::new(&mut sink, true, " "),
+                                &txn,
+                            )
+                            .unwrap()
+                        });
                         if !ok {
                             db.txn_manager.abort(&txn).unwrap();
                             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -1329,7 +1394,10 @@ fn s4b_08_index_concurrent_update_abort_test() {
         want.sort();
         let query = begin(&db);
         assert_eq!(rows(&db, &query, "SELECT * FROM maintable"), want, "every committed increment is there, no aborted one is");
-        assert!(heap_entries(&table(&db, "maintable")) <= numbers, "index concurrent update abort test: expected `heap_entries(&table(&db, \"maintable\")) <= numbers`");
+        assert!(
+            heap_entries(&table(&db, "maintable")) <= numbers,
+            "index concurrent update abort test: expected `heap_entries(&table(&db, \"maintable\")) <= numbers`"
+        );
     }
 }
 
@@ -1351,11 +1419,19 @@ fn s4b_08_simple_abort_with_ordered_queries_and_a_duplicate_heavy_commit() {
     run(&db, &txn5, "INSERT INTO maintable VALUES (1,999), (1,1000)");
     run(&db, &txn5, "UPDATE maintable SET b = b + 1 WHERE a = 3");
     let (_, out) = try_run(&db, &txn5, q);
-    assert_eq!(out.lines().map(|l| l.trim_end()).collect::<Vec<_>>(), vec!["1 10", "1 999", "1 1000", "2 200", "3 301"], "simple abort with ordered queries and a duplicate heavy commit");
+    assert_eq!(
+        out.lines().map(|l| l.trim_end()).collect::<Vec<_>>(),
+        vec!["1 10", "1 999", "1 1000", "2 200", "3 301"],
+        "simple abort with ordered queries and a duplicate heavy commit"
+    );
     commit(&db, &txn5);
     let fin = begin(&db);
     let (_, out) = try_run(&db, &fin, q);
-    assert_eq!(out.lines().map(|l| l.trim_end()).collect::<Vec<_>>(), vec!["1 10", "1 999", "1 1000", "2 200", "3 301"], "simple abort with ordered queries and a duplicate heavy commit");
+    assert_eq!(
+        out.lines().map(|l| l.trim_end()).collect::<Vec<_>>(),
+        vec!["1 10", "1 999", "1 1000", "2 200", "3 301"],
+        "simple abort with ordered queries and a duplicate heavy commit"
+    );
 }
 
 // ---- properties: sessions of interleaved transactions against a model of versions --------------------------------------------------
@@ -1498,14 +1574,24 @@ fn run_session(steps: &[Step]) -> Result<(), TestCaseError> {
             if phase[ti] != Phase::Running {
                 continue;
             }
-            let mut want: Vec<String> = model.iter().filter_map(|row| row.seen_by(ti, txns[ti].read_ts()).map(|v| format!("{} {v}", row.key))).collect();
+            let mut want: Vec<String> =
+                model.iter().filter_map(|row| row.seen_by(ti, txns[ti].read_ts()).map(|v| format!("{} {v}", row.key))).collect();
             want.sort();
-            prop_assert_eq!(rows(&db, &txns[ti], "SELECT k, v FROM t"), want, "transaction {} (read ts {}) after step {}: {:?}", ti, txns[ti].read_ts(), n, step);
+            prop_assert_eq!(
+                rows(&db, &txns[ti], "SELECT k, v FROM t"),
+                want,
+                "transaction {} (read ts {}) after step {}: {:?}",
+                ti,
+                txns[ti].read_ts(),
+                n,
+                step
+            );
         }
     }
     // a transaction that begins at the end sees every committed version at the latest timestamp
     let last = begin(&db);
-    let mut want: Vec<String> = model.iter().filter_map(|row| row.committed.last().and_then(|(_, v)| *v).map(|v| format!("{} {v}", row.key))).collect();
+    let mut want: Vec<String> =
+        model.iter().filter_map(|row| row.committed.last().and_then(|(_, v)| *v).map(|v| format!("{} {v}", row.key))).collect();
     want.sort();
     prop_assert_eq!(rows(&db, &last, "SELECT k, v FROM t"), want, "a new transaction sees the latest committed state");
     Ok(())
@@ -1949,13 +2035,22 @@ mod ch_4b_c4 {
 
     #[test]
     fn s4b_c4_an_insert_into_the_range_is_a_phantom() {
-        assert!(!validate(&[Pred::Range(0, 10, 20)], &[w(None, Some(&[15]))]), "this check: expected `!validate(&[Pred::Range(0, 10, 20)], &[w(None, Some(&[15]))])`");
-        assert!(validate(&[Pred::Range(0, 10, 20)], &[w(None, Some(&[25]))]), "this check: expected `validate(&[Pred::Range(0, 10, 20)], &[w(None, Some(&[25]))])`");
+        assert!(
+            !validate(&[Pred::Range(0, 10, 20)], &[w(None, Some(&[15]))]),
+            "this check: expected `!validate(&[Pred::Range(0, 10, 20)], &[w(None, Some(&[15]))])`"
+        );
+        assert!(
+            validate(&[Pred::Range(0, 10, 20)], &[w(None, Some(&[25]))]),
+            "this check: expected `validate(&[Pred::Range(0, 10, 20)], &[w(None, Some(&[25]))])`"
+        );
     }
 
     #[test]
     fn s4b_c4_a_delete_from_the_range_matters_too() {
-        assert!(!validate(&[Pred::Range(0, 10, 20)], &[w(Some(&[15]), None)]), "this check: expected `!validate(&[Pred::Range(0, 10, 20)], &[w(Some(&[15]), None)])`");
+        assert!(
+            !validate(&[Pred::Range(0, 10, 20)], &[w(Some(&[15]), None)]),
+            "this check: expected `!validate(&[Pred::Range(0, 10, 20)], &[w(Some(&[15]), None)])`"
+        );
     }
 
     #[test]
@@ -1968,7 +2063,10 @@ mod ch_4b_c4 {
 
     #[test]
     fn s4b_c4_equality_predicates_and_other_columns() {
-        assert!(!validate(&[Pred::Eq(1, 7)], &[w(None, Some(&[0, 7]))]), "this check: expected `!validate(&[Pred::Eq(1, 7)], &[w(None, Some(&[0, 7]))])`");
+        assert!(
+            !validate(&[Pred::Eq(1, 7)], &[w(None, Some(&[0, 7]))]),
+            "this check: expected `!validate(&[Pred::Eq(1, 7)], &[w(None, Some(&[0, 7]))])`"
+        );
         assert!(validate(&[Pred::Eq(1, 7)], &[w(None, Some(&[7, 0]))]), "the value is in another column");
     }
 

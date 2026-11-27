@@ -150,7 +150,11 @@ fn s2b_01_the_seed_changes_the_hash() {
 fn s2b_01_known_strings() {
     assert_eq!(murmur_hash3_x64_128(b"hello", 0), [0xcbd8a7b341bd9b02, 0x5b1e906a48ae1d19], "known strings");
     assert_eq!(murmur_hash3_x64_128(b"a", 0)[0], 9607679276477937801, "known strings");
-    assert_eq!(murmur_hash3_x64_128(b"The quick brown fox jumps over the lazy dog", 0), [16378391709484522348, 8809951995912426311], "known strings");
+    assert_eq!(
+        murmur_hash3_x64_128(b"The quick brown fox jumps over the lazy dog", 0),
+        [16378391709484522348, 8809951995912426311],
+        "known strings"
+    );
     assert_eq!(murmur_hash3_x64_128(b"0123456789abcdef", 0), [5467490433528156583, 9782763267945859290], "known strings");
     assert_eq!(murmur_hash3_x64_128(b"0123456789abcdefX", 0), [14838185036522510071, 10336343437188549415], "known strings");
 }
@@ -213,7 +217,6 @@ fn s2b_01_the_low_bits_spread_small_integers() {
     }
 }
 
-
 // ---- The table under test ---------------------------------------------------------------------------------------------------
 
 type Table<'a> = DiskExtendibleHashTable<'a, i32, i32, IntComparator>;
@@ -243,7 +246,15 @@ fn insert_must_succeed(shape: Shape, model: &HashMap<i32, i32>, key: i32) -> boo
 }
 
 fn table<'a>(bpm: &'a BufferPoolManager, shape: Shape) -> Table<'a> {
-    DiskExtendibleHashTable::new("test", bpm, IntComparator, HashFunction::new(), shape.header_depth, shape.directory_depth, shape.bucket_size)
+    DiskExtendibleHashTable::new(
+        "test",
+        bpm,
+        IntComparator,
+        HashFunction::new(),
+        shape.header_depth,
+        shape.directory_depth,
+        shape.bucket_size,
+    )
 }
 
 /// No page may stay pinned between operations: every guard the table took has been dropped.
@@ -273,7 +284,11 @@ fn ops(keys: i32, with_remove: bool) -> impl Strategy<Value = Vec<Op>> {
 }
 
 fn shapes() -> impl Strategy<Value = Shape> {
-    (0u32..=2, 0u32..=4, 1u32..=4).prop_map(|(header_depth, directory_depth, bucket_size)| Shape { header_depth, directory_depth, bucket_size })
+    (0u32..=2, 0u32..=4, 1u32..=4).prop_map(|(header_depth, directory_depth, bucket_size)| Shape {
+        header_depth,
+        directory_depth,
+        bucket_size,
+    })
 }
 
 fn run_model(shape: Shape, ops: &[Op], frames: usize) -> Result<(), TestCaseError> {
@@ -289,12 +304,22 @@ fn run_model_unwrapped(shape: Shape, ops: &[Op], frames: usize) -> Result<(), Te
         match *op {
             Op::Insert(k, v) => {
                 let want = !model.contains_key(&k) && insert_must_succeed(shape, &model, k);
-                prop_assert_eq!(ht.insert(&k, &v), want, "step {}: insert({}) with {:?}: {}", step, k, shape, if model.contains_key(&k) { "the key is already there" } else { "its class is full or has room" });
+                prop_assert_eq!(
+                    ht.insert(&k, &v),
+                    want,
+                    "step {}: insert({}) with {:?}: {}",
+                    step,
+                    k,
+                    shape,
+                    if model.contains_key(&k) { "the key is already there" } else { "its class is full or has room" }
+                );
                 if want {
                     model.insert(k, v);
                 }
             }
-            Op::Get(k) => prop_assert_eq!(ht.get_value(&k), model.get(&k).map(|&v| vec![v]).unwrap_or_default(), "step {}: get_value({})", step, k),
+            Op::Get(k) => {
+                prop_assert_eq!(ht.get_value(&k), model.get(&k).map(|&v| vec![v]).unwrap_or_default(), "step {}: get_value({})", step, k)
+            }
             Op::Remove(k) => prop_assert_eq!(ht.remove(&k), model.remove(&k).is_some(), "step {}: remove({})", step, k),
         }
         ht.verify_integrity();
@@ -361,7 +386,10 @@ fn s2b_02_keys_in_different_header_slots_do_not_disturb_each_other() {
         assert_eq!(by_slot.len(), 4, "the test hash spreads keys over all four header slots");
         for keys in by_slot.values() {
             for &k in &keys[..3] {
-                assert!(ht.insert(&k, &(k * 2)), "keys in different header slots do not disturb each other: expected `ht.insert(&k, &(k * 2))`");
+                assert!(
+                    ht.insert(&k, &(k * 2)),
+                    "keys in different header slots do not disturb each other: expected `ht.insert(&k, &(k * 2))`"
+                );
             }
         }
         for keys in by_slot.values() {
@@ -387,7 +415,15 @@ fn s2b_02_the_default_sizes_describe_what_a_page_holds() {
 fn s2b_02_a_page_worth_of_keys_fit_without_any_splitting() {
     within("s2b_02_a_page_worth_of_keys_fit_without_any_splitting", || {
         let (bpm, _) = pool_with(Policy::Fifo, 6);
-        let ht = DiskExtendibleHashTable::<i32, i32, IntComparator>::new("big", &bpm, IntComparator, HashFunction::new(), 0, 0, Table::default_bucket_max_size());
+        let ht = DiskExtendibleHashTable::<i32, i32, IntComparator>::new(
+            "big",
+            &bpm,
+            IntComparator,
+            HashFunction::new(),
+            0,
+            0,
+            Table::default_bucket_max_size(),
+        );
         for k in 0..300 {
             assert!(ht.insert(&k, &(k + 1)), "a page worth of keys fit without any splitting: expected `ht.insert(&k, &(k + 1))`");
         }
@@ -454,7 +490,10 @@ fn s2b_03_the_directory_doubles_as_buckets_fill() {
             assert!(depth >= last, "the directory never shrinks while only inserting");
             last = depth;
         }
-        assert!(last >= 5, "100 keys in buckets of 2 need at least 50 buckets, so a directory of 64 slots or more (depth >= 6), not depth {last}");
+        assert!(
+            last >= 5,
+            "100 keys in buckets of 2 need at least 50 buckets, so a directory of 64 slots or more (depth >= 6), not depth {last}"
+        );
         assert!(last <= 9, "the directory doubles as buckets fill: expected `last <= 9`");
     });
 }
@@ -471,7 +510,10 @@ fn s2b_03_keys_that_cannot_be_separated_make_the_insert_fail() {
         assert!(!ht.insert(&keys[2], &3), "three keys with the same low 2 bits cannot fit in a bucket of 2 at directory depth 2");
         assert_eq!(ht.get_value(&keys[0]), vec![1], "keys that cannot be separated make the insert fail");
         assert_eq!(ht.get_value(&keys[1]), vec![2], "keys that cannot be separated make the insert fail");
-        assert!(ht.get_value(&keys[2]).is_empty(), "keys that cannot be separated make the insert fail: expected `ht.get_value(&keys[2]).is_empty()`");
+        assert!(
+            ht.get_value(&keys[2]).is_empty(),
+            "keys that cannot be separated make the insert fail: expected `ht.get_value(&keys[2]).is_empty()`"
+        );
         ht.verify_integrity();
     });
 }
@@ -562,7 +604,10 @@ fn s2b_04_removing_everything_leaves_a_table_that_still_works() {
                 ht.verify_integrity();
             }
             for k in 0..150 {
-                assert!(ht.get_value(&k).is_empty(), "removing everything leaves a table that still works: expected `ht.get_value(&k).is_empty()`");
+                assert!(
+                    ht.get_value(&k).is_empty(),
+                    "removing everything leaves a table that still works: expected `ht.get_value(&k).is_empty()`"
+                );
             }
         }
         assert_nothing_pinned(&bpm);
@@ -601,7 +646,11 @@ fn s2b_04_empty_buckets_are_given_back_to_the_pool() {
         for k in 0..100 {
             ht.remove(&k);
         }
-        assert!(disk.deletes.lock().unwrap().len() >= 20, "after removing every key most of the ~50 bucket pages must have been deleted, only {} were", disk.deletes.lock().unwrap().len());
+        assert!(
+            disk.deletes.lock().unwrap().len() >= 20,
+            "after removing every key most of the ~50 bucket pages must have been deleted, only {} were",
+            disk.deletes.lock().unwrap().len()
+        );
     });
 }
 
@@ -633,7 +682,10 @@ fn s2b_04_merging_makes_room_for_keys_that_could_not_be_inserted_before() {
         let ht = table(&bpm, shape);
         ht.insert(&keys[0], &0);
         ht.insert(&keys[1], &1);
-        assert!(!ht.insert(&keys[2], &2), "merging makes room for keys that could not be inserted before: expected `!ht.insert(&keys[2], &2)`");
+        assert!(
+            !ht.insert(&keys[2], &2),
+            "merging makes room for keys that could not be inserted before: expected `!ht.insert(&keys[2], &2)`"
+        );
         assert!(ht.remove(&keys[0]), "merging makes room for keys that could not be inserted before: expected `ht.remove(&keys[0])`");
         assert!(ht.insert(&keys[2], &2), "a slot freed by a remove can be used");
     });
@@ -684,7 +736,8 @@ fn s2b_05_inserts_removes_and_lookups_at_the_same_time() {
         let (bpm, _) = pool_with(Policy::Arc, 40);
         let ht = table(&bpm, Shape { header_depth: 1, directory_depth: 9, bucket_size: 8 });
         for k in 10_000..10_200 {
-            assert!(ht.insert(&k, &k), "inserts removes and lookups at the same time: expected `ht.insert(&k, &k)`"); // keys the readers expect to find throughout
+            assert!(ht.insert(&k, &k), "inserts removes and lookups at the same time: expected `ht.insert(&k, &k)`");
+            // keys the readers expect to find throughout
         }
         thread::scope(|scope| {
             for t in 0..3 {
@@ -866,8 +919,16 @@ fn s2b_c2_the_first_split_doubles_the_directory_and_separates_on_the_low_bit() {
     within("s2b_c2_the_first_split_doubles_the_directory_and_separates_on_the_low_bit", || {
         let mut d = Directory::new();
         let new = d.split(0);
-        assert_eq!((d.global_depth(), d.bucket_count(), new), (1, 2, 1), "s2b c2 the first split doubles the directory and separates on the low bit");
-        assert_eq!((d.local_depth(0), d.local_depth(1)), (1, 1), "s2b c2 the first split doubles the directory and separates on the low bit");
+        assert_eq!(
+            (d.global_depth(), d.bucket_count(), new),
+            (1, 2, 1),
+            "s2b c2 the first split doubles the directory and separates on the low bit"
+        );
+        assert_eq!(
+            (d.local_depth(0), d.local_depth(1)),
+            (1, 1),
+            "s2b c2 the first split doubles the directory and separates on the low bit"
+        );
         assert_eq!((d.bucket_for(0b10), d.bucket_for(0b11)), (0, 1), "the low bit decides");
     });
 }

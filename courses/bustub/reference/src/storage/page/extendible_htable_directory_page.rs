@@ -95,7 +95,12 @@ impl<B: AsRef<[u8]>> ExtendibleHTableDirectoryPage<B> {
             entry.1 += 1;
         }
         for (page_id, (depth, count)) in pointers {
-            assert_eq!(count, 1 << (global - depth), "bucket {} with local depth {depth} must have 2^({global} - {depth}) slots, has {count}", page_id.0);
+            assert_eq!(
+                count,
+                1 << (global - depth),
+                "bucket {} with local depth {depth} must have 2^({global} - {depth}) slots, has {count}",
+                page_id.0
+            );
         }
     }
 }

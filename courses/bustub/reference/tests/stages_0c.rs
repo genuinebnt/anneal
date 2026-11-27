@@ -40,7 +40,11 @@ fn s0c_01_the_home_bucket_is_the_hash_modulo_the_capacity() {
     for k in [0, 1, 7, 8, 12345, -5] {
         assert_eq!(s.home_bucket(&k), k.robin_hood_hash() % 8, "the home bucket is the hash modulo the capacity");
     }
-    assert_eq!(keys_with_home(8, 3, 2).iter().map(|k| s.home_bucket(k)).collect::<Vec<_>>(), vec![3, 3], "the home bucket is the hash modulo the capacity");
+    assert_eq!(
+        keys_with_home(8, 3, 2).iter().map(|k| s.home_bucket(k)).collect::<Vec<_>>(),
+        vec![3, 3],
+        "the home bucket is the hash modulo the capacity"
+    );
 }
 
 #[test]
@@ -55,7 +59,11 @@ fn s0c_01_the_probe_distance_counts_steps_forward_and_wraps() {
 #[test]
 fn s0c_01_the_int_hash_is_the_multiplicative_one_of_the_course() {
     assert_eq!(1i32.robin_hood_hash(), 0x9e37_79b9_7f4a_7c15u64 as usize, "the int hash is the multiplicative one of the course");
-    assert_eq!(2i64.robin_hood_hash(), 0x9e37_79b9_7f4a_7c15u64.wrapping_mul(2) as usize, "the int hash is the multiplicative one of the course");
+    assert_eq!(
+        2i64.robin_hood_hash(),
+        0x9e37_79b9_7f4a_7c15u64.wrapping_mul(2) as usize,
+        "the int hash is the multiplicative one of the course"
+    );
     assert_eq!(0i32.robin_hood_hash(), 0, "the int hash is the multiplicative one of the course");
     let h = String::from("BusTub").robin_hood_hash();
     assert_eq!(h, String::from("BusTub").robin_hood_hash(), "deterministic");
@@ -71,7 +79,10 @@ fn s0c_02_insert_duplicate_replace_lookup_and_statistics() {
     assert!(s.insert(&1), "insert duplicate replace lookup and statistics: expected `s.insert(&1)`");
     assert!(s.insert(&2), "insert duplicate replace lookup and statistics: expected `s.insert(&2)`");
     assert!(s.insert(&1), "an equal key is replaced and that is a success");
-    assert!(s.contains(&1) && s.contains(&2), "insert duplicate replace lookup and statistics: expected `s.contains(&1) && s.contains(&2)`");
+    assert!(
+        s.contains(&1) && s.contains(&2),
+        "insert duplicate replace lookup and statistics: expected `s.contains(&1) && s.contains(&2)`"
+    );
     assert_eq!(s.size(), 2, "insert duplicate replace lookup and statistics");
     assert_eq!(s.load_factor(), 0.25, "insert duplicate replace lookup and statistics");
 }
@@ -82,7 +93,10 @@ fn s0c_02_strings_are_supported() {
     for w in ["BusTub", "CMU DB", "15-445"] {
         assert!(s.insert(&w.to_string()), "strings are supported: expected `s.insert(&w.to_string())`");
     }
-    assert!(s.contains(&"BusTub".to_string()) && s.contains(&"15-445".to_string()), "strings are supported: expected `s.contains(&\"BusTub\".to_string()) && s.contains(&\"15-445\".to_string())`");
+    assert!(
+        s.contains(&"BusTub".to_string()) && s.contains(&"15-445".to_string()),
+        "strings are supported: expected `s.contains(&\"BusTub\".to_string()) && s.contains(&\"15-445\".to_string())`"
+    );
     assert!(!s.contains(&"missing".to_string()), "strings are supported: expected `!s.contains(&\"missing\".to_string())`");
     assert_eq!(s.size(), 3, "strings are supported");
 }
@@ -137,7 +151,11 @@ fn s0c_02_probing_wraps_around_the_end_of_the_table() {
     for k in &keys {
         assert!(s.insert(k), "probing wraps around the end of the table: expected `s.insert(k)`");
     }
-    assert_eq!([s.get_bucket(&keys[0]), s.get_bucket(&keys[1]), s.get_bucket(&keys[2])], [6, 7, 0], "probing wraps around the end of the table");
+    assert_eq!(
+        [s.get_bucket(&keys[0]), s.get_bucket(&keys[1]), s.get_bucket(&keys[2])],
+        [6, 7, 0],
+        "probing wraps around the end of the table"
+    );
     assert!(s.contains(&keys[2]), "probing wraps around the end of the table: expected `s.contains(&keys[2])`");
 }
 
@@ -210,7 +228,10 @@ fn s0c_03_an_insert_reuses_a_tombstone() {
     assert!(s.remove(&keys[1]), "an insert reuses a tombstone: expected `s.remove(&keys[1])`");
     assert!(s.insert(&keys[3]), "an insert reuses a tombstone: expected `s.insert(&keys[3])`");
     assert_eq!(s.get_bucket(&keys[3]), 7, "an insert reuses a tombstone");
-    assert!(s.contains(&keys[3]) && s.contains(&keys[2]), "an insert reuses a tombstone: expected `s.contains(&keys[3]) && s.contains(&keys[2])`");
+    assert!(
+        s.contains(&keys[3]) && s.contains(&keys[2]),
+        "an insert reuses a tombstone: expected `s.contains(&keys[3]) && s.contains(&keys[2])`"
+    );
     assert_eq!(s.size(), 3, "an insert reuses a tombstone");
 }
 
@@ -222,7 +243,11 @@ fn s0c_03_the_max_probe_distance_ignores_tombstones() {
     for k in &keys {
         s.insert(k);
     }
-    assert_eq!([s.get_bucket(&keys[0]), s.get_bucket(&keys[1]), s.get_bucket(&keys[2])], [0, 1, 2], "the max probe distance ignores tombstones");
+    assert_eq!(
+        [s.get_bucket(&keys[0]), s.get_bucket(&keys[1]), s.get_bucket(&keys[2])],
+        [0, 1, 2],
+        "the max probe distance ignores tombstones"
+    );
     assert_eq!(s.max_probe_distance(), 2, "the max probe distance ignores tombstones");
     assert!(s.remove(&keys[2]), "the max probe distance ignores tombstones: expected `s.remove(&keys[2])`");
     assert_eq!(s.max_probe_distance(), 1, "the max probe distance ignores tombstones");
@@ -279,8 +304,14 @@ fn s0c_03_clear_empties_the_table_but_keeps_the_capacity() {
     s.clear();
     assert_eq!((s.capacity(), s.size()), (8, 0), "clear empties the table but keeps the capacity");
     assert_eq!(s.load_factor(), 0.0, "clear empties the table but keeps the capacity");
-    assert!(!s.contains(&1) && !s.contains(&9), "clear empties the table but keeps the capacity: expected `!s.contains(&1) && !s.contains(&9)`");
-    assert!(s.insert(&17) && s.contains(&17), "clear empties the table but keeps the capacity: expected `s.insert(&17) && s.contains(&17)`");
+    assert!(
+        !s.contains(&1) && !s.contains(&9),
+        "clear empties the table but keeps the capacity: expected `!s.contains(&1) && !s.contains(&9)`"
+    );
+    assert!(
+        s.insert(&17) && s.contains(&17),
+        "clear empties the table but keeps the capacity: expected `s.insert(&17) && s.contains(&17)`"
+    );
 }
 
 #[test]
@@ -377,7 +408,10 @@ fn s0c_04_each_key_is_removed_exactly_once_whoever_races() {
     handles.into_iter().for_each(|h| h.join().unwrap());
     assert_eq!(ok.load(Ordering::SeqCst), 64, "each key is removed exactly once whoever races");
     assert_eq!(s.size(), 0, "each key is removed exactly once whoever races");
-    assert!((0..64).all(|k| !s.contains(&k)), "each key is removed exactly once whoever races: expected `(0..64).all(|k| !s.contains(&k))`");
+    assert!(
+        (0..64).all(|k| !s.contains(&k)),
+        "each key is removed exactly once whoever races: expected `(0..64).all(|k| !s.contains(&k))`"
+    );
 }
 
 #[test]
@@ -399,7 +433,10 @@ fn s0c_04_overlapping_inserts_lookups_and_removes_finish_and_keep_the_size_sane(
         })
         .collect();
     handles.into_iter().for_each(|h| h.join().unwrap());
-    assert!(s.size() <= s.capacity(), "overlapping inserts lookups and removes finish and keep the size sane: expected `s.size() <= s.capacity()`");
+    assert!(
+        s.size() <= s.capacity(),
+        "overlapping inserts lookups and removes finish and keep the size sane: expected `s.size() <= s.capacity()`"
+    );
     let present = (0..96).filter(|k| s.contains(k)).count();
     assert_eq!(present, s.size(), "the count agrees with what a lookup finds");
 }

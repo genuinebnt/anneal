@@ -12,7 +12,9 @@ use bustub::common::result_writer::SimpleStreamWriter;
 use bustub::common::rid::Rid;
 use bustub::concurrency::transaction::{IsolationLevel, Transaction, TransactionState, UndoLink, UndoLog, INVALID_TS, TXN_START_ID};
 use bustub::concurrency::watermark::Watermark;
-use bustub::execution::execution_common::{txn_mgr_dbg, collect_undo_logs, generate_new_undo_log, generate_updated_undo_log, get_undo_log_schema, reconstruct_tuple};
+use bustub::execution::execution_common::{
+    collect_undo_logs, generate_new_undo_log, generate_updated_undo_log, get_undo_log_schema, reconstruct_tuple, txn_mgr_dbg,
+};
 use bustub::storage::table::tuple::{Tuple, TupleMeta};
 use bustub::types::type_id::TypeId;
 use bustub::types::value::Value;
@@ -73,7 +75,10 @@ fn insert(table: &TableInfo<'_>, m: TupleMeta, values: &[Value]) -> Rid {
 /// Runs SQL inside a transaction and returns the rows as lines of space separated cells (sorted).
 fn query(db: &BusTubInstance, txn: &Arc<Transaction>, sql: &str) -> Vec<String> {
     let mut out = String::new();
-    assert!(db.execute_sql_txn(sql, &mut SimpleStreamWriter::new(&mut out, true, " "), txn).unwrap_or_else(|e| panic!("{sql}: {e}")), "{sql} failed");
+    assert!(
+        db.execute_sql_txn(sql, &mut SimpleStreamWriter::new(&mut out, true, " "), txn).unwrap_or_else(|e| panic!("{sql}: {e}")),
+        "{sql} failed"
+    );
     let mut rows: Vec<String> = out.lines().map(|l| l.trim_end().to_string()).collect();
     rows.sort();
     rows
@@ -212,7 +217,10 @@ fn s4a_02_the_transaction_manager_remembers_the_transaction() {
     let t = begin(&db);
     let found = db.txn_manager.get_txn(t.id()).expect("begin puts the transaction in txn_map");
     assert!(Arc::ptr_eq(&t, &found), "the transaction manager remembers the transaction: expected `Arc::ptr_eq(&t, &found)`");
-    assert!(db.txn_manager.get_txn(t.id() + 1).is_none(), "the transaction manager remembers the transaction: expected `db.txn_manager.get_txn(t.id() + 1).is_none()`");
+    assert!(
+        db.txn_manager.get_txn(t.id() + 1).is_none(),
+        "the transaction manager remembers the transaction: expected `db.txn_manager.get_txn(t.id() + 1).is_none()`"
+    );
 }
 
 #[test]
@@ -321,10 +329,16 @@ fn s4a_02_a_tainted_transaction_can_be_aborted_but_a_finished_one_cannot() {
     t.set_tainted();
     db.txn_manager.abort(&t).unwrap();
     assert_eq!(t.state(), TransactionState::Aborted, "a tainted transaction can be aborted but a finished one cannot");
-    assert!(db.txn_manager.abort(&t).is_err(), "a tainted transaction can be aborted but a finished one cannot: expected `db.txn_manager.abort(&t).is_err()`");
+    assert!(
+        db.txn_manager.abort(&t).is_err(),
+        "a tainted transaction can be aborted but a finished one cannot: expected `db.txn_manager.abort(&t).is_err()`"
+    );
     let u = begin(&db);
     commit(&db, &u);
-    assert!(db.txn_manager.abort(&u).is_err(), "a tainted transaction can be aborted but a finished one cannot: expected `db.txn_manager.abort(&u).is_err()`");
+    assert!(
+        db.txn_manager.abort(&u).is_err(),
+        "a tainted transaction can be aborted but a finished one cannot: expected `db.txn_manager.abort(&u).is_err()`"
+    );
 }
 
 // ---- 4a-03: reconstructing a tuple ----------------------------------------------------------------------------------------------------
@@ -341,7 +355,10 @@ fn s4a_03_no_logs_gives_the_base_tuple() {
 fn s4a_03_a_deleted_base_with_no_logs_does_not_exist() {
     let s = abc();
     let base = Tuple::new(&[int_null(), dbl_null(), bool_null()], &s);
-    assert!(reconstruct_tuple(&s, &base, &meta(2333, true), &[]).is_none(), "a deleted base with no logs does not exist: expected `reconstruct_tuple(&s, &base, &meta(2333, true), &[]).is_none()`");
+    assert!(
+        reconstruct_tuple(&s, &base, &meta(2333, true), &[]).is_none(),
+        "a deleted base with no logs does not exist: expected `reconstruct_tuple(&s, &base, &meta(2333, true), &[]).is_none()`"
+    );
 }
 
 #[test]
@@ -363,7 +380,8 @@ fn s4a_03_a_tuple_that_did_not_exist_starts_from_nulls_not_from_the_stale_bytes_
     verify(&s, &t, &[int(1), dbl_null(), bool_null()]);
     // after a deleting log in the middle of a chain the same holds
     let delete = undo_log(true, &[false, false, false], &schema_of(&[]), &[], 2, UndoLink::default());
-    let restore_c = undo_log(false, &[false, false, true], &schema_of(&[("c", TypeId::Boolean)]), &[boolean(false)], 1, UndoLink::default());
+    let restore_c =
+        undo_log(false, &[false, false, true], &schema_of(&[("c", TypeId::Boolean)]), &[boolean(false)], 1, UndoLink::default());
     let live = Tuple::new(&[int(5), dbl(5.5), boolean(true)], &s);
     let t = reconstruct_tuple(&s, &live, &meta(9, false), &[delete, restore_c]).unwrap();
     verify(&s, &t, &[int_null(), dbl_null(), boolean(false)]);
@@ -375,7 +393,14 @@ fn s4a_03_partial_logs_restore_only_their_columns() {
     let base = Tuple::new(&[int(0), dbl(1.0), bool_null()], &s);
     let none = undo_log(false, &[false, false, false], &schema_of(&[]), &[], 1, UndoLink::default());
     let b_only = undo_log(false, &[false, true, false], &schema_of(&[("b", TypeId::Decimal)]), &[dbl(2.0)], 1, UndoLink::default());
-    let a_and_c = undo_log(false, &[true, false, true], &schema_of(&[("a", TypeId::Integer), ("c", TypeId::Boolean)]), &[int(3), boolean(false)], 1, UndoLink::default());
+    let a_and_c = undo_log(
+        false,
+        &[true, false, true],
+        &schema_of(&[("a", TypeId::Integer), ("c", TypeId::Boolean)]),
+        &[int(3), boolean(false)],
+        1,
+        UndoLink::default(),
+    );
     let m = meta(2333, false);
     verify(&s, &reconstruct_tuple(&s, &base, &m, &[none.clone()]).unwrap(), &[int(0), dbl(1.0), bool_null()]);
     verify(&s, &reconstruct_tuple(&s, &base, &m, &[none.clone(), b_only.clone()]).unwrap(), &[int(0), dbl(2.0), bool_null()]);
@@ -458,7 +483,10 @@ fn s4a_03_a_newer_tuple_without_a_chain_did_not_exist_yet() {
     let owner = begin(&db);
     let reader = begin(&db);
     let newer = row_with_chain(&db, &table, &owner, 5, 1, &[]);
-    assert!(collect(&db, &table, newer, &reader).is_none(), "a newer tuple without a chain did not exist yet: expected `collect(&db, &table, newer, &reader).is_none()`");
+    assert!(
+        collect(&db, &table, newer, &reader).is_none(),
+        "a newer tuple without a chain did not exist yet: expected `collect(&db, &table, newer, &reader).is_none()`"
+    );
 }
 
 #[test]
@@ -468,7 +496,10 @@ fn s4a_03_another_transactions_uncommitted_tuple_is_not_visible() {
     let writer = begin(&db);
     let reader = begin(&db);
     let theirs = row_with_chain(&db, &table, &writer, writer.temp_ts(), 1, &[]);
-    assert!(collect(&db, &table, theirs, &reader).is_none(), "another transactions uncommitted tuple is not visible: expected `collect(&db, &table, theirs, &reader).is_none()`");
+    assert!(
+        collect(&db, &table, theirs, &reader).is_none(),
+        "another transactions uncommitted tuple is not visible: expected `collect(&db, &table, theirs, &reader).is_none()`"
+    );
 }
 
 #[test]
@@ -498,7 +529,10 @@ fn s4a_03_a_chain_of_only_newer_versions_means_the_tuple_did_not_exist() {
     let owner = begin(&db);
     let reader = begin(&db);
     let rid = row_with_chain(&db, &table, &owner, 9, 1, &[(7, 2), (4, 3)]);
-    assert!(collect(&db, &table, rid, &reader).is_none(), "a chain of only newer versions means the tuple did not exist: expected `collect(&db, &table, rid, &reader).is_none()`");
+    assert!(
+        collect(&db, &table, rid, &reader).is_none(),
+        "a chain of only newer versions means the tuple did not exist: expected `collect(&db, &table, rid, &reader).is_none()`"
+    );
 }
 
 #[test]
@@ -508,7 +542,10 @@ fn s4a_03_a_log_that_has_been_garbage_collected_ends_the_search() {
     let reader = begin(&db);
     let rid = insert(&table, meta(9, false), &[int(1), dbl(1.0), bool_null()]);
     db.txn_manager.update_undo_link(rid, Some(UndoLink { prev_txn: TXN_START_ID + 999, prev_log_idx: 0 }), None);
-    assert!(collect(&db, &table, rid, &reader).is_none(), "a log that has been garbage collected ends the search: expected `collect(&db, &table, rid, &reader).is_none()`");
+    assert!(
+        collect(&db, &table, rid, &reader).is_none(),
+        "a log that has been garbage collected ends the search: expected `collect(&db, &table, rid, &reader).is_none()`"
+    );
 }
 
 // ---- 4a-04: the undo log for a first change ---------------------------------------------------------------------------------------------
@@ -683,7 +720,10 @@ fn s4a_05_a_transaction_does_not_see_tuples_committed_after_it_began() {
     let rid = insert(&table, meta(w.temp_ts(), false), &[int(1), dbl(1.0), bool_null()]);
     w.append_write_set(table.oid, rid);
     commit(&db, &w);
-    assert!(query(&db, &early, "SELECT a FROM maintable").is_empty(), "a transaction does not see tuples committed after it began: expected `query(&db, &early, \"SELECT a FROM maintable\").is_empty()`");
+    assert!(
+        query(&db, &early, "SELECT a FROM maintable").is_empty(),
+        "a transaction does not see tuples committed after it began: expected `query(&db, &early, \"SELECT a FROM maintable\").is_empty()`"
+    );
     assert_eq!(query(&db, &begin(&db), "SELECT a FROM maintable"), vec!["1"], "a transaction does not see tuples committed after it began");
 }
 
@@ -695,7 +735,10 @@ fn s4a_05_uncommitted_tuples_are_visible_only_to_their_writer() {
     let other = begin(&db);
     insert(&table, meta(w.temp_ts(), false), &[int(1), dbl(1.0), bool_null()]);
     assert_eq!(query(&db, &w, "SELECT a FROM maintable"), vec!["1"], "uncommitted tuples are visible only to their writer");
-    assert!(query(&db, &other, "SELECT a FROM maintable").is_empty(), "uncommitted tuples are visible only to their writer: expected `query(&db, &other, \"SELECT a FROM maintable\").is_empty()`");
+    assert!(
+        query(&db, &other, "SELECT a FROM maintable").is_empty(),
+        "uncommitted tuples are visible only to their writer: expected `query(&db, &other, \"SELECT a FROM maintable\").is_empty()`"
+    );
 }
 
 #[test]
@@ -731,7 +774,10 @@ fn s4a_05_a_deleted_tuple_is_gone_only_for_those_who_see_the_delete() {
     let link = owner.append_undo_log(full);
     db.txn_manager.update_undo_link(rid, Some(link), None);
     assert_eq!(query(&db, &before, "SELECT a FROM maintable"), vec!["7"], "a deleted tuple is gone only for those who see the delete");
-    assert!(query(&db, &after, "SELECT a FROM maintable").is_empty(), "a deleted tuple is gone only for those who see the delete: expected `query(&db, &after, \"SELECT a FROM maintable\").is_empty()`");
+    assert!(
+        query(&db, &after, "SELECT a FROM maintable").is_empty(),
+        "a deleted tuple is gone only for those who see the delete: expected `query(&db, &after, \"SELECT a FROM maintable\").is_empty()`"
+    );
 }
 
 #[test]
@@ -746,7 +792,10 @@ fn s4a_05_the_filter_sees_the_rebuilt_values() {
     commit(&db, &t);
     row_with_chain(&db, &table, &owner, 2, 20, &[(1, 10)]);
     assert_eq!(query(&db, &reader, "SELECT a FROM maintable WHERE a = 10"), vec!["10"], "the filter sees the rebuilt values");
-    assert!(query(&db, &reader, "SELECT a FROM maintable WHERE a = 20").is_empty(), "the filter sees the rebuilt values: expected `query(&db, &reader, \"SELECT a FROM maintable WHERE a = 20\").is_empty()`");
+    assert!(
+        query(&db, &reader, "SELECT a FROM maintable WHERE a = 20").is_empty(),
+        "the filter sees the rebuilt values: expected `query(&db, &reader, \"SELECT a FROM maintable WHERE a = 20\").is_empty()`"
+    );
 }
 
 #[test]
@@ -829,7 +878,14 @@ fn s4a_06_tuple_reconstruct() {
     let m = meta(2333, false);
     let l1 = undo_log(false, &[false, false, false], &schema_of(&[]), &[], 0, UndoLink::default());
     let l2 = undo_log(false, &[false, true, false], &schema_of(&[("b", TypeId::Decimal)]), &[dbl(2.0)], 0, UndoLink::default());
-    let l3 = undo_log(false, &[true, false, true], &schema_of(&[("a", TypeId::Integer), ("c", TypeId::Boolean)]), &[int(3), boolean(false)], 0, UndoLink::default());
+    let l3 = undo_log(
+        false,
+        &[true, false, true],
+        &schema_of(&[("a", TypeId::Integer), ("c", TypeId::Boolean)]),
+        &[int(3), boolean(false)],
+        0,
+        UndoLink::default(),
+    );
     let l4 = undo_log(false, &[true, true, true], &s, &[int(4), dbl(4.0), boolean(true)], 0, UndoLink::default());
     verify(&s, &reconstruct_tuple(&s, &base, &m, &[l1.clone()]).unwrap(), &[int(0), dbl(1.0), bool_null()]);
     verify(&s, &reconstruct_tuple(&s, &base, &m, &[l1.clone(), l2.clone()]).unwrap(), &[int(0), dbl(2.0), bool_null()]);
@@ -838,9 +894,15 @@ fn s4a_06_tuple_reconstruct() {
     let del = undo_log(true, &[false, false, false], &schema_of(&[]), &[], 0, UndoLink::default());
     let one = undo_log(false, &[true, true, true], &s, &[int(1), dbl(1.0), boolean(false)], 0, UndoLink::default());
     let nulls = undo_log(false, &[true, true, true], &s, &[int_null(), dbl_null(), bool_null()], 0, UndoLink::default());
-    assert!(reconstruct_tuple(&s, &base, &m, &[del.clone()]).is_none(), "tuple reconstruct: expected `reconstruct_tuple(&s, &base, &m, &[del.clone()]).is_none()`");
+    assert!(
+        reconstruct_tuple(&s, &base, &m, &[del.clone()]).is_none(),
+        "tuple reconstruct: expected `reconstruct_tuple(&s, &base, &m, &[del.clone()]).is_none()`"
+    );
     verify(&s, &reconstruct_tuple(&s, &base, &m, &[del.clone(), one.clone()]).unwrap(), &[int(1), dbl(1.0), boolean(false)]);
-    assert!(reconstruct_tuple(&s, &base, &m, &[del.clone(), one.clone(), del.clone()]).is_none(), "tuple reconstruct: expected `reconstruct_tuple(&s, &base, &m, &[del.clone(), one.clone(), del.clone()]).is_none()`");
+    assert!(
+        reconstruct_tuple(&s, &base, &m, &[del.clone(), one.clone(), del.clone()]).is_none(),
+        "tuple reconstruct: expected `reconstruct_tuple(&s, &base, &m, &[del.clone(), one.clone(), del.clone()]).is_none()`"
+    );
     verify(&s, &reconstruct_tuple(&s, &base, &m, &[del.clone(), one, del, nulls]).unwrap(), &[int_null(), dbl_null(), bool_null()]);
 }
 
@@ -862,13 +924,15 @@ fn s4a_06_collect_undo_log_test() {
     let txn_to_inspect = begin(&db);
     assert_eq!(txn_to_inspect.read_ts(), 2, "collect undo log test");
     let rid1 = insert(&table, meta(txn1.commit_ts(), false), &[int(2), dbl(2.0), bool_null()]);
-    let link1 = txn1.append_undo_log(undo_log(false, &[true, true, false], &modify, &[int(1), dbl(1.0)], txn0.commit_ts(), UndoLink::default()));
+    let link1 =
+        txn1.append_undo_log(undo_log(false, &[true, true, false], &modify, &[int(1), dbl(1.0)], txn0.commit_ts(), UndoLink::default()));
     m.update_undo_link(rid1, Some(link1), None);
     let txn2 = begin(&db);
     assert_eq!(txn2.read_ts(), 2, "collect undo log test");
     commit(&db, &txn2);
     let rid2 = insert(&table, meta(txn2.commit_ts(), false), &[int(3), dbl(3.0), bool_null()]);
-    let link2 = txn1.append_undo_log(undo_log(false, &[true, true, false], &modify, &[int(1), dbl(1.0)], txn0.commit_ts(), UndoLink::default()));
+    let link2 =
+        txn1.append_undo_log(undo_log(false, &[true, true, false], &modify, &[int(1), dbl(1.0)], txn0.commit_ts(), UndoLink::default()));
     let link3 = txn2.append_undo_log(undo_log(false, &[true, true, false], &modify, &[int(2), dbl(2.0)], txn1.commit_ts(), link2));
     m.update_undo_link(rid2, Some(link3), None);
     let rid3 = insert(&table, meta(txn2.commit_ts(), false), &[int(3), dbl(3.0), bool_null()]);
@@ -876,24 +940,47 @@ fn s4a_06_collect_undo_log_test() {
     assert_eq!(txn3.read_ts(), 3, "collect undo log test");
     commit(&db, &txn3);
     let rid4 = insert(&table, meta(txn3.commit_ts(), false), &[int(4), dbl(4.0), bool_null()]);
-    let link4 = txn3.append_undo_log(undo_log(false, &[true, true, false], &modify, &[int(3), dbl(3.0)], txn2.commit_ts(), UndoLink::default()));
+    let link4 =
+        txn3.append_undo_log(undo_log(false, &[true, true, false], &modify, &[int(3), dbl(3.0)], txn2.commit_ts(), UndoLink::default()));
     m.update_undo_link(rid4, Some(link4), None);
     let rid5 = insert(&table, meta(txn3.commit_ts(), true), &[int(2), dbl(2.0), bool_null()]);
-    let link5 = txn3.append_undo_log(undo_log(false, &[true, true, false], &modify, &[int(2), dbl(2.0)], txn1.commit_ts(), UndoLink::default()));
+    let link5 =
+        txn3.append_undo_log(undo_log(false, &[true, true, false], &modify, &[int(2), dbl(2.0)], txn1.commit_ts(), UndoLink::default()));
     m.update_undo_link(rid5, Some(link5), None);
     let rid6 = insert(&table, meta(txn3.commit_ts(), false), &[int(4), dbl(4.0), bool_null()]);
-    let link6 = txn1.append_undo_log(undo_log(false, &[true, true, true], &s, &[int(1), dbl(1.0), bool_null()], txn0.commit_ts(), UndoLink::default()));
-    let del = UndoLog { is_deleted: true, modified_fields: vec![false, false, false], tuple: Tuple::empty(), ts: txn1.commit_ts(), prev_version: link6 };
+    let link6 = txn1.append_undo_log(undo_log(
+        false,
+        &[true, true, true],
+        &s,
+        &[int(1), dbl(1.0), bool_null()],
+        txn0.commit_ts(),
+        UndoLink::default(),
+    ));
+    let del = UndoLog {
+        is_deleted: true,
+        modified_fields: vec![false, false, false],
+        tuple: Tuple::empty(),
+        ts: txn1.commit_ts(),
+        prev_version: link6,
+    };
     let link7 = txn3.append_undo_log(del);
     m.update_undo_link(rid6, Some(link7), None);
     let rid7 = insert(&table, meta(txn_to_inspect.temp_ts(), false), &[int(100), dbl(100.0), bool_null()]);
     let rid8 = insert(&table, meta(txn_to_inspect.temp_ts(), false), &[int(100), dbl(100.0), bool_null()]);
-    let link8 = txn_to_inspect.append_undo_log(undo_log(false, &[true, true, false], &modify, &[int(1), dbl(1.0)], txn0.commit_ts(), UndoLink::default()));
+    let link8 = txn_to_inspect.append_undo_log(undo_log(
+        false,
+        &[true, true, false],
+        &modify,
+        &[int(1), dbl(1.0)],
+        txn0.commit_ts(),
+        UndoLink::default(),
+    ));
     m.update_undo_link(rid8, Some(link8), None);
     let txn4 = begin(&db);
     assert_eq!(txn4.read_ts(), 4, "collect undo log test");
     let rid9 = insert(&table, meta(txn4.temp_ts(), false), &[int(400), dbl(400.0), bool_null()]);
-    let link9 = txn1.append_undo_log(undo_log(false, &[true, true, false], &modify, &[int(1), dbl(1.0)], txn0.commit_ts(), UndoLink::default()));
+    let link9 =
+        txn1.append_undo_log(undo_log(false, &[true, true, false], &modify, &[int(1), dbl(1.0)], txn0.commit_ts(), UndoLink::default()));
     let link10 = txn4.append_undo_log(undo_log(false, &[true, true, false], &modify, &[int(4), dbl(4.0)], txn3.commit_ts(), link9));
     m.update_undo_link(rid9, Some(link10), None);
 
@@ -930,19 +1017,27 @@ fn s4a_06_scan_test() {
     let txn1 = begin(&db);
     assert_eq!(txn1.read_ts(), 1, "scan test");
     let store2 = begin(&db);
-    let prev_log_3 = store2.append_undo_log(undo_log(false, &[true, true, true], &s, &[int(4), dbl(4.0), boolean(true)], 1, UndoLink::default()));
+    let prev_log_3 =
+        store2.append_undo_log(undo_log(false, &[true, true, true], &s, &[int(4), dbl(4.0), boolean(true)], 1, UndoLink::default()));
     let prev_log_6 = store2.append_undo_log(undo_log(false, &[true, false, false], &only_a, &[int(7)], 1, UndoLink::default()));
     commit(&db, &store2);
     let txn2 = begin(&db);
     assert_eq!(txn2.read_ts(), 2, "scan test");
     let store3 = begin(&db);
-    let prev_log_2 = store3.append_undo_log(UndoLog { is_deleted: true, modified_fields: vec![false; 3], tuple: Tuple::empty(), ts: 2, prev_version: prev_log_3 });
+    let prev_log_2 = store3.append_undo_log(UndoLog {
+        is_deleted: true,
+        modified_fields: vec![false; 3],
+        tuple: Tuple::empty(),
+        ts: 2,
+        prev_version: prev_log_3,
+    });
     commit(&db, &store3);
     let txn3 = begin(&db);
     assert_eq!(txn3.read_ts(), 3, "scan test");
     let prev_log_5 = txn3.append_undo_log(undo_log(false, &[true, true, true], &s, &[int(6), dbl_null(), bool_null()], 2, prev_log_6));
     let store4 = begin(&db);
-    let prev_log_4 = store4.append_undo_log(undo_log(false, &[true, true, true], &s, &[int(5), dbl(3.0), boolean(false)], 3, UndoLink::default()));
+    let prev_log_4 =
+        store4.append_undo_log(undo_log(false, &[true, true, true], &s, &[int(5), dbl(3.0), boolean(false)], 3, UndoLink::default()));
     commit(&db, &store4);
     let txn4 = begin(&db);
     assert_eq!(txn4.read_ts(), 4, "scan test");
@@ -961,7 +1056,10 @@ fn s4a_06_scan_test() {
     m.update_undo_link(rid4, Some(prev_log_5), None);
 
     txn_mgr_dbg("before verify scan", &db.txn_manager, &table);
-    assert!(query(&db, &txn0, "SELECT * FROM maintable").is_empty(), "scan test: expected `query(&db, &txn0, \"SELECT * FROM maintable\").is_empty()`");
+    assert!(
+        query(&db, &txn0, "SELECT * FROM maintable").is_empty(),
+        "scan test: expected `query(&db, &txn0, \"SELECT * FROM maintable\").is_empty()`"
+    );
     let a_of = |txn: &Arc<Transaction>| query(&db, txn, "SELECT a FROM maintable");
     assert_eq!(a_of(&txn1), vec!["2", "4", "7"], "scan test");
     // txn2 (read ts 2): record1 is txn4's uncommitted tuple, its log at ts 1 gives 2; record2 (ts 3) -> log ts 2 is a delete;
@@ -986,38 +1084,62 @@ fn s4a_06_generate_undo_log_test() {
     // simple update
     let (base, target) = (t(0, 0.0, true), t(0, 1.0, false));
     let log = generate_new_undo_log(&s, Some(&base), Some(&target), 0, none);
-    assert!(same(&reconstruct_tuple(&s, &target, &live, &[log]).unwrap(), &base), "generate undo log test: expected `same(&reconstruct_tuple(&s, &target, &live, &[log]).unwrap(), &base)`");
+    assert!(
+        same(&reconstruct_tuple(&s, &target, &live, &[log]).unwrap(), &base),
+        "generate undo log test: expected `same(&reconstruct_tuple(&s, &target, &live, &[log]).unwrap(), &base)`"
+    );
     // simple delete
     let log = generate_new_undo_log(&s, Some(&base), None, 0, none);
-    assert!(same(&reconstruct_tuple(&s, &base, &meta(0, true), &[log]).unwrap(), &base), "generate undo log test: expected `same(&reconstruct_tuple(&s, &base, &meta(0, true), &[log]).unwrap(), &base)`");
+    assert!(
+        same(&reconstruct_tuple(&s, &base, &meta(0, true), &[log]).unwrap(), &base),
+        "generate undo log test: expected `same(&reconstruct_tuple(&s, &base, &meta(0, true), &[log]).unwrap(), &base)`"
+    );
     // simple insert (an insert over a tombstone)
     let target = t(0, 1.0, false);
     let log = generate_new_undo_log(&s, None, Some(&target), 0, none);
-    assert!(reconstruct_tuple(&s, &target, &live, &[log]).is_none(), "generate undo log test: expected `reconstruct_tuple(&s, &target, &live, &[log]).is_none()`");
+    assert!(
+        reconstruct_tuple(&s, &target, &live, &[log]).is_none(),
+        "generate undo log test: expected `reconstruct_tuple(&s, &target, &live, &[log]).is_none()`"
+    );
     // update twice in a txn
     let (base, mid, target) = (t(0, 0.0, true), t(0, 0.0, false), t(0, 1.0, false));
     let log = generate_new_undo_log(&s, Some(&base), Some(&mid), 0, none);
     let log = generate_updated_undo_log(&s, Some(&mid), Some(&target), &log);
-    assert!(same(&reconstruct_tuple(&s, &target, &live, &[log]).unwrap(), &base), "generate undo log test: expected `same(&reconstruct_tuple(&s, &target, &live, &[log]).unwrap(), &base)`");
+    assert!(
+        same(&reconstruct_tuple(&s, &target, &live, &[log]).unwrap(), &base),
+        "generate undo log test: expected `same(&reconstruct_tuple(&s, &target, &live, &[log]).unwrap(), &base)`"
+    );
     // update then delete in a txn
     let (base, target) = (t(0, 0.0, true), t(0, 1.0, false));
     let log = generate_new_undo_log(&s, Some(&base), Some(&target), 0, none);
     let log = generate_updated_undo_log(&s, Some(&target), None, &log);
-    assert!(same(&reconstruct_tuple(&s, &target, &meta(0, true), &[log]).unwrap(), &base), "generate undo log test: expected `same(&reconstruct_tuple(&s, &target, &meta(0, true), &[log]).unwrap(), &base)`");
+    assert!(
+        same(&reconstruct_tuple(&s, &target, &meta(0, true), &[log]).unwrap(), &base),
+        "generate undo log test: expected `same(&reconstruct_tuple(&s, &target, &meta(0, true), &[log]).unwrap(), &base)`"
+    );
     // insert then update in a txn
     let (mid, target) = (t(0, 0.0, false), t(0, 1.0, false));
     let log = generate_new_undo_log(&s, None, Some(&mid), 0, none);
     let log = generate_updated_undo_log(&s, Some(&mid), Some(&target), &log);
-    assert!(reconstruct_tuple(&s, &target, &live, &[log]).is_none(), "generate undo log test: expected `reconstruct_tuple(&s, &target, &live, &[log]).is_none()`");
+    assert!(
+        reconstruct_tuple(&s, &target, &live, &[log]).is_none(),
+        "generate undo log test: expected `reconstruct_tuple(&s, &target, &live, &[log]).is_none()`"
+    );
     // insert then delete in a txn
     let log = generate_new_undo_log(&s, None, Some(&mid), 0, none);
     let log = generate_updated_undo_log(&s, Some(&mid), None, &log);
-    assert!(reconstruct_tuple(&s, &mid, &meta(0, true), &[log]).is_none(), "generate undo log test: expected `reconstruct_tuple(&s, &mid, &meta(0, true), &[log]).is_none()`");
+    assert!(
+        reconstruct_tuple(&s, &mid, &meta(0, true), &[log]).is_none(),
+        "generate undo log test: expected `reconstruct_tuple(&s, &mid, &meta(0, true), &[log]).is_none()`"
+    );
     // delete then insert in a txn
     let (base, target) = (t(0, 0.0, true), t(0, 1.0, false));
     let log = generate_new_undo_log(&s, Some(&base), None, 0, none);
     let log = generate_updated_undo_log(&s, None, Some(&target), &log);
-    assert!(same(&reconstruct_tuple(&s, &target, &live, &[log]).unwrap(), &base), "generate undo log test: expected `same(&reconstruct_tuple(&s, &target, &live, &[log]).unwrap(), &base)`");
+    assert!(
+        same(&reconstruct_tuple(&s, &target, &live, &[log]).unwrap(), &base),
+        "generate undo log test: expected `same(&reconstruct_tuple(&s, &target, &live, &[log]).unwrap(), &base)`"
+    );
 }
 
 // ---- properties: timestamps, chains and snapshots against a model of versions ------------------------------------------------------
@@ -1131,7 +1253,13 @@ fn version_strategy() -> impl Strategy<Value = Version> {
 /// A row with a history: committed versions (timestamp, version) oldest first with increasing timestamps (the first one exists),
 /// then optionally one uncommitted version written by `writer`. The newest version is in the table, the older ones in undo logs owned by
 /// `writer` that restore exactly the columns that differ, chained newest first.
-fn build_row(db: &BusTubInstance, table: &TableInfo<'_>, writer: &Arc<Transaction>, history: &[(i64, Version)], uncommitted: Option<Version>) -> Rid {
+fn build_row(
+    db: &BusTubInstance,
+    table: &TableInfo<'_>,
+    writer: &Arc<Transaction>,
+    history: &[(i64, Version)],
+    uncommitted: Option<Version>,
+) -> Rid {
     let s = &table.schema;
     let mut all: Vec<(i64, Version)> = history.to_vec();
     if let Some(v) = uncommitted {
@@ -1144,11 +1272,19 @@ fn build_row(db: &BusTubInstance, table: &TableInfo<'_>, writer: &Arc<Transactio
     for i in 0..all.len() - 1 {
         let ((older_ts, older), (_, newer)) = (all[i], all[i + 1]);
         let log = match older {
-            None => UndoLog { is_deleted: true, modified_fields: vec![false, false], tuple: Tuple::empty(), ts: older_ts, prev_version: link },
+            None => {
+                UndoLog { is_deleted: true, modified_fields: vec![false, false], tuple: Tuple::empty(), ts: older_ts, prev_version: link }
+            }
             Some(o) => {
                 let modified: Vec<bool> = (0..2).map(|c| newer.is_none_or(|n| n[c] != o[c])).collect();
                 let values: Vec<Value> = (0..2).filter(|c| modified[*c]).map(|c| cell_value(o[c])).collect();
-                UndoLog { is_deleted: false, modified_fields: modified.clone(), tuple: Tuple::new(&values, &get_undo_log_schema(s, &modified)), ts: older_ts, prev_version: link }
+                UndoLog {
+                    is_deleted: false,
+                    modified_fields: modified.clone(),
+                    tuple: Tuple::new(&values, &get_undo_log_schema(s, &modified)),
+                    ts: older_ts,
+                    prev_version: link,
+                }
             }
         };
         link = writer.append_undo_log(log);
@@ -1161,15 +1297,19 @@ fn build_row(db: &BusTubInstance, table: &TableInfo<'_>, writer: &Arc<Transactio
 
 /// Increasing timestamps for a history: `gaps` are the steps between consecutive versions.
 fn history_strategy() -> impl Strategy<Value = Vec<(i64, Version)>> {
-    (prop::collection::vec((1i64..3, version_strategy()), 1..6), (1i64..3, version_strategy().prop_filter("a row starts to exist", |v| v.is_some()))).prop_map(|(rest, (g0, first))| {
-        let mut ts = g0;
-        let mut out = vec![(ts, first)];
-        for (gap, v) in rest {
-            ts += gap;
-            out.push((ts, v));
-        }
-        out
-    })
+    (
+        prop::collection::vec((1i64..3, version_strategy()), 1..6),
+        (1i64..3, version_strategy().prop_filter("a row starts to exist", |v| v.is_some())),
+    )
+        .prop_map(|(rest, (g0, first))| {
+            let mut ts = g0;
+            let mut out = vec![(ts, first)];
+            for (gap, v) in rest {
+                ts += gap;
+                out.push((ts, v));
+            }
+            out
+        })
 }
 
 /// What a reader at `read_ts` sees of a history, if it did not write anything itself.
@@ -1296,10 +1436,13 @@ struct RowModel {
 
 /// What `txn` (number `ti`) must see: for every row its own pending version, else the committed one at its read timestamp.
 fn expected_rows(model: &[RowModel], ti: usize, txn: &Transaction) -> Vec<String> {
-    let mut want: Vec<String> = model.iter().filter_map(|row| {
-        let mine = row.pending.filter(|(owner, _)| *owner == ti).map(|(_, v)| v);
-        cells_text(&mine.unwrap_or_else(|| visible(&row.committed, txn.read_ts())))
-    }).collect();
+    let mut want: Vec<String> = model
+        .iter()
+        .filter_map(|row| {
+            let mine = row.pending.filter(|(owner, _)| *owner == ti).map(|(_, v)| v);
+            cells_text(&mine.unwrap_or_else(|| visible(&row.committed, txn.read_ts())))
+        })
+        .collect();
     want.sort();
     want
 }

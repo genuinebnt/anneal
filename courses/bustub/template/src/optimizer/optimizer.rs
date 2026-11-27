@@ -104,7 +104,11 @@ impl<'c, 'a> Optimizer<'c, 'a> {
     /// In `SELECT * FROM a, b WHERE a.x = b.y` the filter says `#0.x = #0.y`; in the join it must say `#0.x = #1.y`: work out which side
     /// each column belongs to.
     pub fn rewrite_expression_for_join(expr: &ExprRef, left_column_cnt: usize, right_column_cnt: usize) -> Result<ExprRef> {
-        let children = expr.children().iter().map(|c| Self::rewrite_expression_for_join(c, left_column_cnt, right_column_cnt)).collect::<Result<Vec<_>>>()?;
+        let children = expr
+            .children()
+            .iter()
+            .map(|c| Self::rewrite_expression_for_join(c, left_column_cnt, right_column_cnt))
+            .collect::<Result<Vec<_>>>()?;
         if let Some(cv) = expr.as_any().downcast_ref::<ColumnValueExpression>() {
             assert_eq!(cv.tuple_idx(), 0, "tuple_idx cannot be value other than 0 before this stage.");
             let col_idx = cv.col_idx() as usize;
@@ -132,8 +136,12 @@ impl<'c, 'a> Optimizer<'c, 'a> {
             if let PlanKind::NestedLoopJoin { predicate: join_predicate, join_type } = &child.kind {
                 if Self::is_predicate_true(join_predicate) {
                     let (left, right) = (&child.children[0], &child.children[1]);
-                    let rewritten = Self::rewrite_expression_for_join(predicate, left.output_schema.column_count() as usize, right.output_schema.column_count() as usize)
-                        .expect("the filter's columns come from the join's inputs");
+                    let rewritten = Self::rewrite_expression_for_join(
+                        predicate,
+                        left.output_schema.column_count() as usize,
+                        right.output_schema.column_count() as usize,
+                    )
+                    .expect("the filter's columns come from the join's inputs");
                     return PlanNode::new(
                         optimized.output_schema.clone(),
                         vec![left.clone(), right.clone()],
@@ -202,7 +210,10 @@ impl<'c, 'a> Optimizer<'c, 'a> {
             assert_eq!(optimized.children.len(), 2, "NLJ should have exactly 2 children.");
             if let Some(cmp) = predicate.as_any().downcast_ref::<ComparisonExpression>() {
                 if cmp.comp_type == ComparisonType::Equal {
-                    let (l, r) = (cmp.children()[0].as_any().downcast_ref::<ColumnValueExpression>(), cmp.children()[1].as_any().downcast_ref::<ColumnValueExpression>());
+                    let (l, r) = (
+                        cmp.children()[0].as_any().downcast_ref::<ColumnValueExpression>(),
+                        cmp.children()[1].as_any().downcast_ref::<ColumnValueExpression>(),
+                    );
                     if let (Some(left_expr), Some(right_expr)) = (l, r) {
                         let right_plan = &optimized.children[1];
                         if let PlanKind::SeqScan { table_oid, table_name, .. } = &right_plan.kind {
@@ -214,9 +225,12 @@ impl<'c, 'a> Optimizer<'c, 'a> {
                             } else {
                                 None
                             };
-                            if let Some((outer_expr, inner_expr)) = sides.filter(|(o, i)| o.return_type().type_id() == i.return_type().type_id()) {
+                            if let Some((outer_expr, inner_expr)) =
+                                sides.filter(|(o, i)| o.return_type().type_id() == i.return_type().type_id())
+                            {
                                 if let Some((index_oid, index_name)) = self.match_index(table_name, inner_expr.col_idx()) {
-                                    let key: ExprRef = Arc::new(ColumnValueExpression::new(0, outer_expr.col_idx(), outer_expr.return_type().clone()));
+                                    let key: ExprRef =
+                                        Arc::new(ColumnValueExpression::new(0, outer_expr.col_idx(), outer_expr.return_type().clone()));
                                     return PlanNode::new(
                                         optimized.output_schema.clone(),
                                         vec![optimized.children[0].clone()],
@@ -263,7 +277,12 @@ impl<'c, 'a> Optimizer<'c, 'a> {
                         return PlanNode::new(
                             optimized.output_schema.clone(),
                             vec![],
-                            PlanKind::IndexScan { table_oid: table_info.oid, index_oid: index.index_oid, filter_predicate: None, pred_keys: vec![] },
+                            PlanKind::IndexScan {
+                                table_oid: table_info.oid,
+                                index_oid: index.index_oid,
+                                filter_predicate: None,
+                                pred_keys: vec![],
+                            },
                         );
                     }
                 }
@@ -271,7 +290,6 @@ impl<'c, 'a> Optimizer<'c, 'a> {
         }
         optimized
     }
-
 
     // ---- filters and outer joins --------------------------------------------------------------------------------
 

@@ -2,11 +2,11 @@
 //! as a syntax tree (`ast`); the binder turns names into catalog objects.
 
 pub mod ast;
-pub mod lexer;
-pub mod parser;
-pub mod mini_lexer;
-pub mod mini_expr;
-pub mod mini_parse;
 pub mod error_render;
+pub mod lexer;
+pub mod mini_expr;
+pub mod mini_lexer;
+pub mod mini_parse;
+pub mod parser;
 pub mod resolve;
 pub mod split;

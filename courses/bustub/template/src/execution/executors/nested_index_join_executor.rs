@@ -39,7 +39,16 @@ impl<'e> NestedIndexJoinExecutor<'e> {
         let inner_table = ctx.catalog.table_info(*inner_table_oid).ok_or_else(|| missing("inner table"))?;
         let index = ctx.catalog.get_index_by_oid(*index_oid).ok_or_else(|| missing("index"))?;
         let (key_predicate, join_type, inner_schema) = (key_predicate.clone(), *join_type, inner_table_schema.clone());
-        Ok(NestedIndexJoinExecutor { plan, key_predicate, join_type, inner_table, inner_schema, index, child: TupleStream::new(child), pending: VecDeque::new() })
+        Ok(NestedIndexJoinExecutor {
+            plan,
+            key_predicate,
+            join_type,
+            inner_table,
+            inner_schema,
+            index,
+            child: TupleStream::new(child),
+            pending: VecDeque::new(),
+        })
     }
 
     /// The live inner tuples whose index key equals the key of `outer`.

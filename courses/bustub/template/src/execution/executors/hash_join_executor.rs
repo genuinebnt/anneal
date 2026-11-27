@@ -29,12 +29,23 @@ pub struct HashJoinExecutor<'e> {
 
 impl<'e> HashJoinExecutor<'e> {
     pub fn new(plan: PlanRef, left: ExecutorBox<'e>, right: ExecutorBox<'e>) -> Result<HashJoinExecutor<'e>> {
-        let PlanKind::HashJoin { left_key_expressions, right_key_expressions, join_type } = &plan.kind else { unreachable!("a HashJoinExecutor needs a HashJoin plan") };
+        let PlanKind::HashJoin { left_key_expressions, right_key_expressions, join_type } = &plan.kind else {
+            unreachable!("a HashJoinExecutor needs a HashJoin plan")
+        };
         if !matches!(join_type, JoinType::Left | JoinType::Inner) {
             return Err(Exception::new(ExceptionType::NotImplemented, format!("join type {join_type} not supported")));
         }
         let (left_keys, right_keys, join_type) = (left_key_expressions.clone(), right_key_expressions.clone(), *join_type);
-        Ok(HashJoinExecutor { plan, left_keys, right_keys, join_type, left: TupleStream::new(left), right: TupleStream::new(right), table: HashMap::new(), pending: VecDeque::new() })
+        Ok(HashJoinExecutor {
+            plan,
+            left_keys,
+            right_keys,
+            join_type,
+            left: TupleStream::new(left),
+            right: TupleStream::new(right),
+            table: HashMap::new(),
+            pending: VecDeque::new(),
+        })
     }
 
     /// The join key of a tuple: the key expressions evaluated on it with the schema of its side. `None` if any part is NULL.

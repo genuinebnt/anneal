@@ -69,7 +69,13 @@ pub struct ORSetDriver<T: Ord + Clone> {
 
 impl<T: Ord + Clone + Display> ORSetDriver<T> {
     pub fn new(n: usize) -> ORSetDriver<T> {
-        ORSetDriver { nodes: vec![ORSet::new(); n], saved: vec![ORSet::new(); n], version: vec![0; n], last_read: vec![vec![0; n]; n], next_uid: 0 }
+        ORSetDriver {
+            nodes: vec![ORSet::new(); n],
+            saved: vec![ORSet::new(); n],
+            version: vec![0; n],
+            last_read: vec![vec![0; n]; n],
+            next_uid: 0,
+        }
     }
 
     pub fn add(&mut self, node: usize, elem: &T) {

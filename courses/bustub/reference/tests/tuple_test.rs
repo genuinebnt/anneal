@@ -40,7 +40,13 @@ fn construct_tuple(schema: &Schema) -> Tuple {
 #[test]
 fn table_heap_test() {
     // test1: parse create sql statement
-    let schema = Schema::new(vec![Column::new_varchar("a", 20), Column::new("b", SmallInt), Column::new("c", BigInt), Column::new("d", Boolean), Column::new_varchar("e", 16)]);
+    let schema = Schema::new(vec![
+        Column::new_varchar("a", 20),
+        Column::new("b", SmallInt),
+        Column::new("c", BigInt),
+        Column::new("d", Boolean),
+        Column::new_varchar("e", 16),
+    ]);
     let tuple = construct_tuple(&schema);
 
     let buffer_pool_manager = BufferPoolManager::new(50, Arc::new(DiskManagerUnlimitedMemory::new()));
@@ -92,6 +98,7 @@ fn a_table_and_an_index_through_the_catalog() {
     assert!(by_score.is_err(), "an index over a column with repeated values fails");
     assert!(catalog.get_index("people_score", "people").is_none(), "the failed index is not in the catalog");
     // the index scan is ordered by key: ids come back 0, 1, 2, ...
-    let ids: Vec<i64> = by_id.index.scan_all().iter().map(|r| info.table.get_tuple(*r).unwrap().1.get_value(&schema, 0).as_i64().unwrap()).collect();
+    let ids: Vec<i64> =
+        by_id.index.scan_all().iter().map(|r| info.table.get_tuple(*r).unwrap().1.get_value(&schema, 0).as_i64().unwrap()).collect();
     assert_eq!(ids, (0..2000).collect::<Vec<i64>>());
 }

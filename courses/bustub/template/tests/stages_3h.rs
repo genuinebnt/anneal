@@ -72,7 +72,11 @@ fn texts(exprs: &[ExprRef]) -> Vec<String> {
 #[test]
 fn s3h_01_one_equality_between_the_sides_gives_a_key_pair() {
     let (l, r) = Optimizer::extract_equi_join_keys(&eq(col(0, 1), col(1, 2))).unwrap();
-    assert_eq!((texts(&l), texts(&r)), (vec!["#0.1".to_string()], vec!["#0.2".to_string()]), "each side's key refers to its own input as tuple 0");
+    assert_eq!(
+        (texts(&l), texts(&r)),
+        (vec!["#0.1".to_string()], vec!["#0.2".to_string()]),
+        "each side's key refers to its own input as tuple 0"
+    );
 }
 
 #[test]
@@ -92,7 +96,10 @@ fn s3h_01_several_equalities_in_any_nesting_give_keys_in_order() {
 #[test]
 fn s3h_01_one_conjunct_that_is_not_such_an_equality_rules_it_out() {
     let key = eq(col(0, 0), col(1, 0));
-    assert!(Optimizer::extract_equi_join_keys(&and(key.clone(), cmp(col(1, 1), constant(10), ComparisonType::GreaterThan))).is_none(), "a residual condition");
+    assert!(
+        Optimizer::extract_equi_join_keys(&and(key.clone(), cmp(col(1, 1), constant(10), ComparisonType::GreaterThan))).is_none(),
+        "a residual condition"
+    );
     assert!(Optimizer::extract_equi_join_keys(&and(key.clone(), eq(col(1, 1), constant(10)))).is_none(), "a constant is not a join key");
     assert!(Optimizer::extract_equi_join_keys(&cmp(col(0, 0), col(1, 0), ComparisonType::LessThan)).is_none(), "one conjunct that is not such an equality rules it out: expected `Optimizer::extract_equi_join_keys(&cmp(col(0, 0), col(1, 0), ComparisonType::LessThan)).is_none()`");
     assert!(Optimizer::extract_equi_join_keys(&cmp(col(0, 0), col(1, 0), ComparisonType::NotEqual)).is_none(), "one conjunct that is not such an equality rules it out: expected `Optimizer::extract_equi_join_keys(&cmp(col(0, 0), col(1, 0), ComparisonType::NotEqual)).is_none()`");
@@ -103,12 +110,18 @@ fn s3h_01_both_columns_on_one_side_or_an_or_is_not_a_join_key() {
     assert!(Optimizer::extract_equi_join_keys(&eq(col(0, 0), col(0, 1))).is_none(), "both columns on one side or an or is not a join key: expected `Optimizer::extract_equi_join_keys(&eq(col(0, 0), col(0, 1))).is_none()`");
     assert!(Optimizer::extract_equi_join_keys(&eq(col(1, 0), col(1, 1))).is_none(), "both columns on one side or an or is not a join key: expected `Optimizer::extract_equi_join_keys(&eq(col(1, 0), col(1, 1))).is_none()`");
     assert!(Optimizer::extract_equi_join_keys(&or(eq(col(0, 0), col(1, 0)), eq(col(0, 1), col(1, 1)))).is_none(), "both columns on one side or an or is not a join key: expected `Optimizer::extract_equi_join_keys(&or(eq(col(0, 0), col(1, 0)), eq(col(0, 1), col(1, 1)))).is_none()`");
-    assert!(Optimizer::extract_equi_join_keys(&constant(1)).is_none(), "both columns on one side or an or is not a join key: expected `Optimizer::extract_equi_join_keys(&constant(1)).is_none()`");
+    assert!(
+        Optimizer::extract_equi_join_keys(&constant(1)).is_none(),
+        "both columns on one side or an or is not a join key: expected `Optimizer::extract_equi_join_keys(&constant(1)).is_none()`"
+    );
 }
 
 #[test]
 fn s3h_01_conjuncts_flatten_ands_and_keep_ors_whole() {
-    let p = and(and(eq(col(0, 0), col(1, 0)), or(eq(col(0, 1), constant(1)), eq(col(0, 1), constant(2)))), cmp(col(1, 0), constant(5), ComparisonType::GreaterThan));
+    let p = and(
+        and(eq(col(0, 0), col(1, 0)), or(eq(col(0, 1), constant(1)), eq(col(0, 1), constant(2)))),
+        cmp(col(1, 0), constant(5), ComparisonType::GreaterThan),
+    );
     let mut out = vec![];
     Optimizer::conjuncts(&p, &mut out);
     assert_eq!(out.len(), 3, "conjuncts flatten ands and keep ors whole");
@@ -188,7 +201,10 @@ fn s3h_01_the_results_are_the_same_as_with_nested_loops() {
     ] {
         let (h, n) = both_ways(&db, q);
         assert_eq!(h, n, "{q}");
-        assert!(!h.is_empty() || q.contains("a.y = b.q"), "he results are the same as with nested loops: expected `!h.is_empty() || q.contains(\"a.y = b.q\")`");
+        assert!(
+            !h.is_empty() || q.contains("a.y = b.q"),
+            "he results are the same as with nested loops: expected `!h.is_empty() || q.contains(\"a.y = b.q\")`"
+        );
     }
 }
 
@@ -201,7 +217,10 @@ fn s3h_01_keys_of_different_types_keep_the_nested_loop() {
     sql(&db, "insert into s values ('1'), ('2'), ('7')");
     let q = "select * from n join s on n.a = s.t";
     let p = plan(&db, q);
-    assert!(p.contains("NestedLoopJoin") && !p.contains("HashJoin"), "an INTEGER key and a VARCHAR key are equal only after a cast, which a hash key does not make\n{p}");
+    assert!(
+        p.contains("NestedLoopJoin") && !p.contains("HashJoin"),
+        "an INTEGER key and a VARCHAR key are equal only after a cast, which a hash key does not make\n{p}"
+    );
     let (optimized, plain) = both_ways(&db, q);
     assert_eq!(optimized, vec!["1 1", "2 2"], "the join compares with `=`, which casts the text to a number");
     assert_eq!(optimized, plain, "the optimised plan returns the rows of the nested loop join");
@@ -274,7 +293,10 @@ fn s3h_02_ties_come_out_as_a_stable_sort_followed_by_a_limit_would_give() {
 #[test]
 fn s3h_02_limit_zero_and_a_limit_larger_than_the_table() {
     let db = topn_db();
-    assert!(sql(&db, "select * from t order by a limit 0").is_empty(), "imit zero and a limit larger than the table: expected `sql(&db, \"select * from t order by a limit 0\").is_empty()`");
+    assert!(
+        sql(&db, "select * from t order by a limit 0").is_empty(),
+        "imit zero and a limit larger than the table: expected `sql(&db, \"select * from t order by a limit 0\").is_empty()`"
+    );
     assert_eq!(sql(&db, "select * from t order by a limit 1000").len(), 60, "imit zero and a limit larger than the table");
 }
 
@@ -287,7 +309,11 @@ fn s3h_02_two_top_ns_in_one_query_and_top_n_inside_a_join() {
     assert_eq!(rows.len(), 3, "wo top ns in one query and top n inside a join");
     let joined = plan(&db, "select * from t x, (select * from t order by b desc limit 4) y where x.b = y.b");
     assert!(joined.contains("TopN"), "{joined}");
-    assert_eq!(sql(&db, "select * from t x, (select * from t order by b desc limit 4) y where x.b = y.b").len(), 4, "wo top ns in one query and top n inside a join");
+    assert_eq!(
+        sql(&db, "select * from t x, (select * from t order by b desc limit 4) y where x.b = y.b").len(),
+        4,
+        "wo top ns in one query and top n inside a join"
+    );
 }
 
 // ---- 3h-03 · point lookups ---------------------------------------------------------------------------------------------------------
@@ -304,9 +330,17 @@ fn s3h_03_column_equals_constant_either_way_round() {
 fn s3h_03_an_or_of_equalities_on_one_column_gives_all_the_keys_in_order() {
     let p = or(eq(constant(4), col(0, 0)), eq(col(0, 0), constant(7)));
     let (c, keys) = Optimizer::extract_point_lookup(&p).unwrap();
-    assert_eq!((c, texts(&keys)), (0, vec!["4".to_string(), "7".to_string()]), "n or of equalities on one column gives all the keys in order");
+    assert_eq!(
+        (c, texts(&keys)),
+        (0, vec!["4".to_string(), "7".to_string()]),
+        "n or of equalities on one column gives all the keys in order"
+    );
     let three = or(or(eq(col(0, 2), constant(1)), eq(col(0, 2), constant(2))), eq(col(0, 2), constant(3)));
-    assert_eq!(texts(&Optimizer::extract_point_lookup(&three).unwrap().1), vec!["1", "2", "3"], "n or of equalities on one column gives all the keys in order");
+    assert_eq!(
+        texts(&Optimizer::extract_point_lookup(&three).unwrap().1),
+        vec!["1", "2", "3"],
+        "n or of equalities on one column gives all the keys in order"
+    );
 }
 
 #[test]
@@ -321,12 +355,19 @@ fn s3h_03_other_predicates_are_not_point_lookups() {
 fn s3h_03_an_or_over_different_columns_or_with_another_condition_is_not_one() {
     assert!(Optimizer::extract_point_lookup(&or(eq(col(0, 0), constant(1)), eq(col(0, 1), constant(2)))).is_none(), "n or over different columns or with another condition is not one: expected `Optimizer::extract_point_lookup(&or(eq(col(0, 0), constant(1)), eq(col(0, 1), constant(2)))).is_none...`");
     assert!(Optimizer::extract_point_lookup(&or(eq(col(0, 0), constant(1)), cmp(col(0, 0), constant(2), ComparisonType::LessThan))).is_none(), "n or over different columns or with another condition is not one: expected `Optimizer::extract_point_lookup(&or(eq(col(0, 0), constant(1)), cmp(col(0, 0), constant(2), Comparis...`");
-    assert!(Optimizer::extract_point_lookup(&and(eq(col(0, 0), constant(1)), eq(col(0, 0), constant(1)))).is_none(), "an AND is handled by the rule, conjunct by conjunct");
+    assert!(
+        Optimizer::extract_point_lookup(&and(eq(col(0, 0), constant(1)), eq(col(0, 0), constant(1)))).is_none(),
+        "an AND is handled by the rule, conjunct by conjunct"
+    );
 }
 
 #[test]
 fn s3h_03_the_constant_may_be_negative_and_a_computed_key_is_refused() {
-    assert_eq!(texts(&Optimizer::extract_point_lookup(&eq(col(0, 0), constant(-5))).unwrap().1), vec!["-5"], "the constant may be negative");
+    assert_eq!(
+        texts(&Optimizer::extract_point_lookup(&eq(col(0, 0), constant(-5))).unwrap().1),
+        vec!["-5"],
+        "the constant may be negative"
+    );
     let arithmetic = eq(col(0, 0), cmp(constant(1), constant(2), ComparisonType::Equal));
     assert!(Optimizer::extract_point_lookup(&arithmetic).is_none(), "the key must be a constant expression node, not a computation");
 }
@@ -354,8 +395,15 @@ fn s3h_03_equality_on_an_indexed_column_uses_the_index() {
 #[test]
 fn s3h_03_an_or_of_equalities_looks_up_each_key() {
     let db = index_db();
-    assert!(plan(&db, "select * from t where 4 = v1 or v1 = 5").contains("IndexScan"), "n or of equalities looks up each key: expected `plan(&db, \"select * from t where 4 = v1 or v1 = 5\").contains(\"IndexScan\")`");
-    assert_eq!(sorted(sql(&db, "select * from t where 4 = v1 or v1 = 5")), vec!["4 20 445", "5 10 445"], "n or of equalities looks up each key");
+    assert!(
+        plan(&db, "select * from t where 4 = v1 or v1 = 5").contains("IndexScan"),
+        "n or of equalities looks up each key: expected `plan(&db, \"select * from t where 4 = v1 or v1 = 5\").contains(\"IndexScan\")`"
+    );
+    assert_eq!(
+        sorted(sql(&db, "select * from t where 4 = v1 or v1 = 5")),
+        vec!["4 20 445", "5 10 445"],
+        "n or of equalities looks up each key"
+    );
     assert_eq!(sql(&db, "select * from t where v1 = 99 or v1 = 98").len(), 0, "n or of equalities looks up each key");
 }
 
@@ -365,7 +413,10 @@ fn s3h_03_other_predicates_and_other_columns_stay_sequential_scans() {
     assert!(plan(&db, "select * from t where v1 > 2").contains("SeqScan"), "ther predicates and other columns stay sequential scans: expected `plan(&db, \"select * from t where v1 > 2\").contains(\"SeqScan\")`");
     assert!(plan(&db, "select * from t where v2 = 20").contains("SeqScan"), "no index on v2");
     assert!(plan(&db, "select * from t where v1 = 2 or v2 = 20").contains("SeqScan"), "an OR over two columns");
-    assert!(plan(&db, "select * from t").contains("SeqScan"), "ther predicates and other columns stay sequential scans: expected `plan(&db, \"select * from t\").contains(\"SeqScan\")`");
+    assert!(
+        plan(&db, "select * from t").contains("SeqScan"),
+        "ther predicates and other columns stay sequential scans: expected `plan(&db, \"select * from t\").contains(\"SeqScan\")`"
+    );
 }
 
 #[test]
@@ -373,7 +424,11 @@ fn s3h_03_another_condition_is_checked_on_what_the_index_finds() {
     let db = index_db();
     let p = plan(&db, "select * from t where v1 = 5 and v3 = 445");
     assert!(p.contains("IndexScan"), "{p}");
-    assert_eq!(sql(&db, "select * from t where v1 = 5 and v3 = 445"), vec!["5 10 445"], "nother condition is checked on what the index finds");
+    assert_eq!(
+        sql(&db, "select * from t where v1 = 5 and v3 = 445"),
+        vec!["5 10 445"],
+        "nother condition is checked on what the index finds"
+    );
     assert_eq!(sql(&db, "select * from t where v1 = 5 and v3 = 1").len(), 0, "the whole predicate still applies");
     assert_eq!(sql(&db, "select * from t where v3 = 645 and v1 = 3"), vec!["3 30 645"], "the indexed conjunct may be second");
 }
@@ -388,9 +443,18 @@ fn s3h_03_a_key_of_another_type_gives_the_rows_of_a_sequential_scan() {
         let scanned = sorted(sql(&db, &format!("select * from u where {condition}")));
         assert_eq!(indexed, scanned, "where {condition}: the indexed table returns the rows of a sequential scan");
     }
-    assert!(plan(&db, "select * from t where v1 = '2'").contains("IndexScan"), "'2' converts to the INTEGER 2 without loss: the index can be used");
-    assert!(plan(&db, "select * from t where v1 = 3000000000").contains("SeqScan"), "no INTEGER equals 3000000000: the scan stays sequential");
-    assert!(plan(&db, "select * from t where v1 = '2x'").contains("SeqScan"), "'2x' is not the text of an INTEGER: the scan stays sequential");
+    assert!(
+        plan(&db, "select * from t where v1 = '2'").contains("IndexScan"),
+        "'2' converts to the INTEGER 2 without loss: the index can be used"
+    );
+    assert!(
+        plan(&db, "select * from t where v1 = 3000000000").contains("SeqScan"),
+        "no INTEGER equals 3000000000: the scan stays sequential"
+    );
+    assert!(
+        plan(&db, "select * from t where v1 = '2x'").contains("SeqScan"),
+        "'2x' is not the text of an INTEGER: the scan stays sequential"
+    );
 }
 
 #[test]
@@ -416,8 +480,14 @@ fn s3h_03_an_empty_table_with_an_index() {
     let db = new_db();
     sql(&db, "create table e(v1 int)");
     sql(&db, "create index e_v1 on e(v1)");
-    assert!(plan(&db, "select * from e where v1 = 1").contains("IndexScan"), "n empty table with an index: expected `plan(&db, \"select * from e where v1 = 1\").contains(\"IndexScan\")`");
-    assert!(sql(&db, "select * from e where v1 = 1").is_empty(), "n empty table with an index: expected `sql(&db, \"select * from e where v1 = 1\").is_empty()`");
+    assert!(
+        plan(&db, "select * from e where v1 = 1").contains("IndexScan"),
+        "n empty table with an index: expected `plan(&db, \"select * from e where v1 = 1\").contains(\"IndexScan\")`"
+    );
+    assert!(
+        sql(&db, "select * from e where v1 = 1").is_empty(),
+        "n empty table with an index: expected `sql(&db, \"select * from e where v1 = 1\").is_empty()`"
+    );
     sql(&db, "insert into e values (1)");
     assert_eq!(sql(&db, "select * from e where v1 = 1"), vec!["1"], "n empty table with an index");
 }
@@ -896,14 +966,21 @@ mod ch_3h_c3 {
         let (cost, order) = best_join_order(&card, &sel);
         assert_eq!(cost_of(&order, &card, &sel), cost, "left joins become hash joins too");
         assert!(order[..2].contains(&0) && order[..2].contains(&1), "tables 0 and 1 join first: {order:?}");
-        assert!((cost - (10.0 + 1000.0)).abs() < 1e-6, "left joins become hash joins too: expected `(cost - (10.0 + 1000.0)).abs() < 1e-6`");
+        assert!(
+            (cost - (10.0 + 1000.0)).abs() < 1e-6,
+            "left joins become hash joins too: expected `(cost - (10.0 + 1000.0)).abs() < 1e-6`"
+        );
     }
 
     #[test]
     fn s3h_c3_without_predicates_the_smallest_tables_go_first() {
         let card = [500.0, 5.0, 50.0, 2.0];
         let (_, order) = best_join_order(&card, &unit(4));
-        assert_eq!(order[0..2].iter().copied().collect::<std::collections::BTreeSet<_>>(), [1usize, 3].into_iter().collect(), "left joins become hash joins too");
+        assert_eq!(
+            order[0..2].iter().copied().collect::<std::collections::BTreeSet<_>>(),
+            [1usize, 3].into_iter().collect(),
+            "left joins become hash joins too"
+        );
         assert_eq!(*order.last().unwrap(), 0, "left joins become hash joins too");
     }
 
@@ -940,7 +1017,10 @@ mod ch_3h_c3 {
         let mut sorted = order.clone();
         sorted.sort();
         assert_eq!(sorted, vec![0, 1, 2, 3, 4], "left joins become hash joins too");
-        assert!((cost_of(&order, &card, &sel) - cost).abs() < 1e-6, "left joins become hash joins too: expected `(cost_of(&order, &card, &sel) - cost).abs() < 1e-6`");
+        assert!(
+            (cost_of(&order, &card, &sel) - cost).abs() < 1e-6,
+            "left joins become hash joins too: expected `(cost_of(&order, &card, &sel) - cost).abs() < 1e-6`"
+        );
     }
 
     proptest! {
@@ -1056,9 +1136,15 @@ mod ch_3h_c5 {
     fn s3h_c5_bucket_boundaries_are_exact_for_evenly_spread_data() {
         let v: Vec<i64> = (0..100).collect();
         let h = Histogram::build(&v, 10);
-        assert!((h.estimate_le(49) - 50.0).abs() < 1e-9, "left joins become hash joins too: expected `(h.estimate_le(49) - 50.0).abs() < 1e-9`");
+        assert!(
+            (h.estimate_le(49) - 50.0).abs() < 1e-9,
+            "left joins become hash joins too: expected `(h.estimate_le(49) - 50.0).abs() < 1e-9`"
+        );
         assert!((h.estimate_le(54) - 55.0).abs() < 1e-9, "half of the sixth bucket, linearly");
-        assert!((h.estimate_range(10, 29) - 20.0).abs() < 1e-9, "left joins become hash joins too: expected `(h.estimate_range(10, 29) - 20.0).abs() < 1e-9`");
+        assert!(
+            (h.estimate_range(10, 29) - 20.0).abs() < 1e-9,
+            "left joins become hash joins too: expected `(h.estimate_range(10, 29) - 20.0).abs() < 1e-9`"
+        );
     }
 
     #[test]
@@ -1067,8 +1153,15 @@ mod ch_3h_c5 {
         v.extend(90..100);
         let h = Histogram::build(&v, 10);
         assert_eq!(h.bucket_counts()[0], 90, "left joins become hash joins too");
-        assert!((h.estimate_le(9) - 90.0).abs() < 1e-9, "left joins become hash joins too: expected `(h.estimate_le(9) - 90.0).abs() < 1e-9`");
-        assert!(h.estimate_le(4) > 40.0 && h.estimate_le(4) < 50.0, "inside the first bucket the values are assumed even: {}", h.estimate_le(4));
+        assert!(
+            (h.estimate_le(9) - 90.0).abs() < 1e-9,
+            "left joins become hash joins too: expected `(h.estimate_le(9) - 90.0).abs() < 1e-9`"
+        );
+        assert!(
+            h.estimate_le(4) > 40.0 && h.estimate_le(4) < 50.0,
+            "inside the first bucket the values are assumed even: {}",
+            h.estimate_le(4)
+        );
     }
 
     #[test]

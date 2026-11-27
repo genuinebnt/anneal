@@ -213,10 +213,21 @@ fn sr_02_a_key_that_is_not_utf8_is_an_error_not_a_panic() {
 #[test]
 fn sr_02_a_key_or_value_that_does_not_fit_is_refused() {
     let long_key = "k".repeat(256);
-    assert_eq!(encode_records(&[rec(&long_key, b"")]), Err(FormatError::KeyTooLong { len: 256 }), "sr 02 a key or value that does not fit is refused");
+    assert_eq!(
+        encode_records(&[rec(&long_key, b"")]),
+        Err(FormatError::KeyTooLong { len: 256 }),
+        "sr 02 a key or value that does not fit is refused"
+    );
     assert!(encode_records(&[rec(&"k".repeat(255), b"")]).is_ok(), "255 bytes still fit");
-    assert_eq!(encode_records(&[rec("k", &vec![0; 65536])]), Err(FormatError::ValueTooLong { len: 65536 }), "sr 02 a key or value that does not fit is refused");
-    assert!(encode_records(&[rec("k", &vec![0; 65535])]).is_ok(), "sr 02 a key or value that does not fit is refused: expected `encode_records(&[rec(\"k\", &vec![0; 65535])]).is_ok()`");
+    assert_eq!(
+        encode_records(&[rec("k", &vec![0; 65536])]),
+        Err(FormatError::ValueTooLong { len: 65536 }),
+        "sr 02 a key or value that does not fit is refused"
+    );
+    assert!(
+        encode_records(&[rec("k", &vec![0; 65535])]).is_ok(),
+        "sr 02 a key or value that does not fit is refused: expected `encode_records(&[rec(\"k\", &vec![0; 65535])]).is_ok()`"
+    );
 }
 
 #[test]
@@ -233,12 +244,17 @@ fn sr_02_a_load_error_keeps_its_cause_and_tells_the_two_failures_apart() {
     use std::error::Error;
     let missing = load_records(temp_path("does-not-exist"));
     match missing {
-        Err(LoadError::Io(ref e)) => assert_eq!(e.kind(), std::io::ErrorKind::NotFound, "sr 02 a load error keeps its cause and tells the two failures apart"),
+        Err(LoadError::Io(ref e)) => {
+            assert_eq!(e.kind(), std::io::ErrorKind::NotFound, "sr 02 a load error keeps its cause and tells the two failures apart")
+        }
         other => panic!("a missing file is an I/O error, got {other:?}"),
     }
     let err = missing.unwrap_err();
     assert!(err.source().is_some(), "`source()` is the wrapped error");
-    assert!(!err.to_string().is_empty(), "sr 02 a load error keeps its cause and tells the two failures apart: expected `!err.to_string().is_empty()`");
+    assert!(
+        !err.to_string().is_empty(),
+        "sr 02 a load error keeps its cause and tells the two failures apart: expected `!err.to_string().is_empty()`"
+    );
 
     let path = temp_path("broken-records");
     std::fs::write(&path, [5, 0, 0, b'x']).unwrap();
@@ -291,7 +307,10 @@ proptest! {
 #[test]
 fn sr_03_a_stack_pops_in_reverse_order() {
     let mut s = Stack::new();
-    assert!(s.is_empty() && s.pop().is_none() && s.peek().is_none(), "sr 03 a stack pops in reverse order: expected `s.is_empty() && s.pop().is_none() && s.peek().is_none()`");
+    assert!(
+        s.is_empty() && s.pop().is_none() && s.peek().is_none(),
+        "sr 03 a stack pops in reverse order: expected `s.is_empty() && s.pop().is_none() && s.peek().is_none()`"
+    );
     for i in 1..=3 {
         s.push(i);
     }
@@ -452,7 +471,10 @@ proptest! {
 #[test]
 fn sr_04_a_queue_gives_values_back_in_order() {
     let q = BoundedQueue::new(4);
-    assert!(q.is_empty() && q.try_pop().is_none(), "sr 04 a queue gives values back in order: expected `q.is_empty() && q.try_pop().is_none()`");
+    assert!(
+        q.is_empty() && q.try_pop().is_none(),
+        "sr 04 a queue gives values back in order: expected `q.is_empty() && q.try_pop().is_none()`"
+    );
     for i in 0..3 {
         q.push(i).unwrap();
     }
@@ -606,7 +628,10 @@ proptest! {
 #[test]
 fn sr_05_a_ring_buffer_is_first_in_first_out() {
     let mut r = RingBuffer::new(3);
-    assert!(r.is_empty() && !r.is_full() && r.capacity() == 3, "sr 05 a ring buffer is first in first out: expected `r.is_empty() && !r.is_full() && r.capacity() == 3`");
+    assert!(
+        r.is_empty() && !r.is_full() && r.capacity() == 3,
+        "sr 05 a ring buffer is first in first out: expected `r.is_empty() && !r.is_full() && r.capacity() == 3`"
+    );
     assert_eq!((r.pop(), r.front(), r.back()), (None, None, None), "sr 05 a ring buffer is first in first out");
     r.push('a').unwrap();
     r.push('b').unwrap();
@@ -651,7 +676,10 @@ fn sr_05_push_overwriting_drops_the_oldest() {
     let mut zero = RingBuffer::new(0);
     assert_eq!(zero.push(5), Err(5), "sr 05 push overwriting drops the oldest");
     assert_eq!(zero.push_overwriting(6), Some(6), "a buffer of capacity 0 cannot hold anything");
-    assert!(zero.is_empty() && zero.pop().is_none(), "sr 05 push overwriting drops the oldest: expected `zero.is_empty() && zero.pop().is_none()`");
+    assert!(
+        zero.is_empty() && zero.pop().is_none(),
+        "sr 05 push overwriting drops the oldest: expected `zero.is_empty() && zero.pop().is_none()`"
+    );
 }
 
 #[test]

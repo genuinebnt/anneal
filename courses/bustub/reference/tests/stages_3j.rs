@@ -152,7 +152,10 @@ fn s3j_01_a_right_join_keeps_every_right_row_and_pads_the_left_with_nulls() {
     let (a, b) = sample();
     let db = db_ab(&a, &b);
     assert_eq!(bag(&db, "select a.x, a.y, b.x, b.z from a right join b on a.x = b.x"), model_join(Kind::Right, &a, &b), "RIGHT JOIN");
-    assert!(bag(&db, "select a.x, a.y, b.x, b.z from a right join b on a.x = b.x").contains(&"integer_null integer_null 4 400".to_string()), "b's 4 has no partner: a's columns are NULL");
+    assert!(
+        bag(&db, "select a.x, a.y, b.x, b.z from a right join b on a.x = b.x").contains(&"integer_null integer_null 4 400".to_string()),
+        "b's 4 has no partner: a's columns are NULL"
+    );
 }
 
 #[test]
@@ -170,8 +173,16 @@ fn s3j_01_null_keys_never_match_each_other_but_are_still_kept() {
     let a = vec![(None, Some(1))];
     let b = vec![(None, Some(2))];
     let db = db_ab(&a, &b);
-    assert_eq!(bag(&db, "select a.y, b.z from a full join b on a.x = b.x"), ["1 integer_null", "integer_null 2"], "two NULL keys: two unmatched rows, not one match");
-    assert_eq!(bag(&db, "select a.y, b.z from a right join b on a.x = b.x"), ["integer_null 2"], "only the right row survives a RIGHT join");
+    assert_eq!(
+        bag(&db, "select a.y, b.z from a full join b on a.x = b.x"),
+        ["1 integer_null", "integer_null 2"],
+        "two NULL keys: two unmatched rows, not one match"
+    );
+    assert_eq!(
+        bag(&db, "select a.y, b.z from a right join b on a.x = b.x"),
+        ["integer_null 2"],
+        "only the right row survives a RIGHT join"
+    );
 }
 
 #[test]
@@ -202,7 +213,11 @@ fn s3j_01_the_condition_may_be_any_predicate_not_only_an_equality() {
     let want = matches + lu.iter().filter(|u| !**u).count() + ru.iter().filter(|u| !**u).count();
     assert_eq!(got, [want.to_string()], "pairs that satisfy a.x < b.x, plus every row that has none");
     let on_extra = bag(&db, "select a.y, b.z from a right join b on a.x = b.x and b.z > 250");
-    assert_eq!(on_extra.len(), 5, "b has five rows; a condition in ON can only make a row unmatched, never remove it from a RIGHT join: {on_extra:?}");
+    assert_eq!(
+        on_extra.len(),
+        5,
+        "b has five rows; a condition in ON can only make a row unmatched, never remove it from a RIGHT join: {on_extra:?}"
+    );
 }
 
 #[test]
@@ -239,8 +254,13 @@ fn s3j_01_a_second_execution_of_the_same_join_gives_the_same_rows() {
     // a non-equality condition makes the outer loop start the FULL join again for every row of its left side
     let full = model_join(Kind::Full, &a, &b).len();
     let outer_rows = b.iter().filter(|r| r.0.map_or(false, |x| x < 100)).count();
-    let nested = rows(&db, "select count(*) from b as bb join (select a.y as p, b.z as q from a full join b on a.x = b.x) as t on bb.x < 100");
-    assert_eq!(nested, [(outer_rows * full).to_string()], "a FULL join used as the inner side of another join gives all its rows every time it is started");
+    let nested =
+        rows(&db, "select count(*) from b as bb join (select a.y as p, b.z as q from a full join b on a.x = b.x) as t on bb.x < 100");
+    assert_eq!(
+        nested,
+        [(outer_rows * full).to_string()],
+        "a FULL join used as the inner side of another join gives all its rows every time it is started"
+    );
 }
 
 proptest! {
@@ -268,7 +288,10 @@ fn s3j_02_filters_on_one_side_of_an_inner_join_move_to_that_side() {
     assert!(p.contains("SeqScan { table=b, filter="), "and the one on b while scanning b:\n{p}");
     assert!(!p.contains("Filter {"), "nothing is left to filter above the join:\n{p}");
     let p = plan(&db, "select a.x, b.z from a, b where a.x = b.x and a.y > 15 and b.z < 450");
-    assert!(p.contains("SeqScan { table=a, filter=") && p.contains("SeqScan { table=b, filter="), "the same for a join written with a comma:\n{p}");
+    assert!(
+        p.contains("SeqScan { table=a, filter=") && p.contains("SeqScan { table=b, filter="),
+        "the same for a join written with a comma:\n{p}"
+    );
 }
 
 #[test]
@@ -278,7 +301,11 @@ fn s3j_02_a_filter_that_reads_both_sides_stays_above_the_join() {
     let p = plan(&db, "select a.x from a join b on a.x = b.x where a.y + b.z > 100 and a.y > 15");
     assert!(p.contains("SeqScan { table=a, filter="), "the part about a alone moves:\n{p}");
     assert!(p.contains("Filter {") || p.contains("predicate="), "the part about both stays with the join:\n{p}");
-    assert_eq!(bag(&db, "select a.x, a.y, b.z from a join b on a.x = b.x where a.y + b.z > 100 and a.y > 15"), plain(&db, "select a.x, a.y, b.z from a join b on a.x = b.x where a.y + b.z > 100 and a.y > 15"), "and the answer does not change");
+    assert_eq!(
+        bag(&db, "select a.x, a.y, b.z from a join b on a.x = b.x where a.y + b.z > 100 and a.y > 15"),
+        plain(&db, "select a.x, a.y, b.z from a join b on a.x = b.x where a.y + b.z > 100 and a.y > 15"),
+        "and the answer does not change"
+    );
 }
 
 #[test]
@@ -364,9 +391,21 @@ proptest! {
 fn s3j_03_a_left_join_filtered_on_the_right_side_is_an_inner_join() {
     let (a, b) = sample();
     let db = db_ab(&a, &b);
-    for cond in ["b.z > 250", "b.z is not null", "b.z = 300", "b.z + 1 > 5", "b.z > 250 and a.y > 5", "b.z <> 0", "b.z > 250 or (b.z < 5 and a.y > 5)"] {
+    for cond in [
+        "b.z > 250",
+        "b.z is not null",
+        "b.z = 300",
+        "b.z + 1 > 5",
+        "b.z > 250 and a.y > 5",
+        "b.z <> 0",
+        "b.z > 250 or (b.z < 5 and a.y > 5)",
+    ] {
         let sql = format!("select a.x, b.z from a left join b on a.x = b.x where {cond}");
-        assert_eq!(join_types(&plan(&db, &sql)), ["Inner"], "{cond}: a row padded with NULLs fails the filter, so the padding is pointless");
+        assert_eq!(
+            join_types(&plan(&db, &sql)),
+            ["Inner"],
+            "{cond}: a row padded with NULLs fails the filter, so the padding is pointless"
+        );
         assert_eq!(bag(&db, &sql), plain(&db, &sql), "{cond}: and the answer is the same");
     }
 }
@@ -397,7 +436,8 @@ fn s3j_03_a_right_join_filtered_on_the_left_side_is_an_inner_join() {
 fn s3j_03_a_full_join_loses_the_side_the_filter_rejects() {
     let (a, b) = sample();
     let db = db_ab(&a, &b);
-    let cases = [("b.z > 250", "Right"), ("a.y > 15", "Left"), ("b.z > 250 and a.y > 15", "Inner"), ("a.y is null or b.z is null", "Outer")];
+    let cases =
+        [("b.z > 250", "Right"), ("a.y > 15", "Left"), ("b.z > 250 and a.y > 15", "Inner"), ("a.y is null or b.z is null", "Outer")];
     for (cond, want) in cases {
         let sql = format!("select a.x, b.z from a full join b on a.x = b.x where {cond}");
         assert_eq!(join_types(&plan(&db, &sql)), [want], "{cond}");
@@ -414,7 +454,11 @@ fn s3j_03_only_the_conditions_that_fail_on_nulls_count() {
         let sql = format!("select a.x, b.z from a left join b on a.x = b.x where {cond}");
         assert_eq!(bag(&db, &sql), plain(&db, &sql), "{cond}");
     }
-    assert_eq!(join_types(&plan(&db, "select a.x from a left join b on a.x = b.x where b.z is null and a.y > 5")), ["Left"], "IS NULL keeps the join outer");
+    assert_eq!(
+        join_types(&plan(&db, "select a.x from a left join b on a.x = b.x where b.z is null and a.y > 5")),
+        ["Left"],
+        "IS NULL keeps the join outer"
+    );
 }
 
 #[test]
@@ -423,7 +467,10 @@ fn s3j_03_after_the_join_is_inner_the_filter_can_move_into_the_scan() {
     let db = db_ab(&a, &b);
     let p = plan(&db, "select a.x, b.z from a left join b on a.x = b.x where b.z > 250 and a.y > 5");
     assert_eq!(join_types(&p), ["Inner"], "the join became inner");
-    assert!(p.contains("SeqScan { table=b, filter=") && p.contains("SeqScan { table=a, filter="), "and both filters reached their scans:\n{p}");
+    assert!(
+        p.contains("SeqScan { table=b, filter=") && p.contains("SeqScan { table=a, filter="),
+        "and both filters reached their scans:\n{p}"
+    );
 }
 
 proptest! {
@@ -489,22 +536,30 @@ fn s3j_04_the_two_sides_must_agree_on_columns() {
 fn s3j_04_the_result_can_be_used_as_a_table() {
     let (a, b) = sample();
     let db = db_ab(&a, &b);
-    assert_eq!(bag(&db, "select t.x, count(*) from (select x from a union all select x from b) as t group by t.x"), {
-        let mut counts: BTreeMap<Cell, usize> = BTreeMap::new();
-        for r in a.iter().chain(&b) {
-            *counts.entry(r.0).or_insert(0) += 1;
-        }
-        let mut v: Vec<String> = counts.iter().map(|(k, n)| format!("{} {n}", show(k))).collect();
-        v.sort();
-        v
-    }, "a union as a table in FROM, with a group by");
+    assert_eq!(
+        bag(&db, "select t.x, count(*) from (select x from a union all select x from b) as t group by t.x"),
+        {
+            let mut counts: BTreeMap<Cell, usize> = BTreeMap::new();
+            for r in a.iter().chain(&b) {
+                *counts.entry(r.0).or_insert(0) += 1;
+            }
+            let mut v: Vec<String> = counts.iter().map(|(k, n)| format!("{} {n}", show(k))).collect();
+            v.sort();
+            v
+        },
+        "a union as a table in FROM, with a group by"
+    );
     assert_eq!(bag(&db, "select t.x from (select x from a union all select x from b) as t where t.x > 2"), ["3", "3", "4"], "and filtered");
 }
 
 #[test]
 fn s3j_04_the_columns_are_named_after_the_left_side() {
     let db = db_ab(&[(Some(1), Some(10))], &[(Some(2), Some(20))]);
-    assert_eq!(bag(&db, "select t.p from (select x as p from a union all select z from b) as t"), ["1", "20"], "the left query's alias is the column name");
+    assert_eq!(
+        bag(&db, "select t.p from (select x as p from a union all select z from b) as t"),
+        ["1", "20"],
+        "the left query's alias is the column name"
+    );
 }
 
 #[test]
@@ -512,9 +567,17 @@ fn s3j_04_union_all_feeds_insert_and_a_join() {
     let (a, b) = sample();
     let db = db_ab(&a, &b);
     rows(&db, "create table c(x int, y int)");
-    assert_eq!(rows(&db, "insert into c select x, y from a union all select x, z from b"), [(a.len() + b.len()).to_string()], "INSERT ... SELECT of a union");
+    assert_eq!(
+        rows(&db, "insert into c select x, y from a union all select x, z from b"),
+        [(a.len() + b.len()).to_string()],
+        "INSERT ... SELECT of a union"
+    );
     assert_eq!(rows(&db, "select count(*) from c"), [(a.len() + b.len()).to_string()], "all rows arrived");
-    assert_eq!(bag(&db, "select count(*) from (select x as k from a union all select x from b) as t join a on t.k = a.x").len(), 1, "a union joined with a table");
+    assert_eq!(
+        bag(&db, "select count(*) from (select x as k from a union all select x from b) as t join a on t.k = a.x").len(),
+        1,
+        "a union joined with a table"
+    );
 }
 
 #[test]
@@ -593,14 +656,19 @@ fn s3j_05_union_without_all_removes_duplicates() {
 fn s3j_05_two_nulls_are_the_same_row_here() {
     let db = db_ab(&[(None, Some(1)), (None, Some(1))], &[(None, Some(1))]);
     assert_eq!(bag(&db, &set_sql("union", false)), ["integer_null 1"], "UNION: the three rows are one");
-    assert_eq!(bag(&db, &set_sql("intersect", false)), ["integer_null 1"], "INTERSECT finds the NULL row on both sides (a WHERE a.x = b.x would not)");
+    assert_eq!(
+        bag(&db, &set_sql("intersect", false)),
+        ["integer_null 1"],
+        "INTERSECT finds the NULL row on both sides (a WHERE a.x = b.x would not)"
+    );
     assert_eq!(bag(&db, &set_sql("except", false)), Vec::<String>::new(), "EXCEPT removes it");
 }
 
 #[test]
 fn s3j_05_intersect_and_except_without_all() {
     let (a, b) = sample();
-    let db = db_ab(&[(Some(1), Some(1)), (Some(2), Some(2)), (Some(2), Some(2)), (Some(3), Some(3))], &[(Some(2), Some(2)), (Some(3), Some(9))]);
+    let db =
+        db_ab(&[(Some(1), Some(1)), (Some(2), Some(2)), (Some(2), Some(2)), (Some(3), Some(3))], &[(Some(2), Some(2)), (Some(3), Some(9))]);
     assert_eq!(bag(&db, &set_sql("intersect", false)), ["2 2"], "rows on both sides, once");
     assert_eq!(bag(&db, &set_sql("except", false)), ["1 1", "3 3"], "rows of a that are not in b, once each");
     let db = db_ab(&a, &b);
@@ -615,7 +683,11 @@ fn s3j_05_all_counts_the_rows() {
     let b = vec![(Some(1), Some(1)), (Some(1), Some(1)), (Some(3), Some(3))];
     let db = db_ab(&a, &b);
     assert_eq!(bag(&db, &set_sql("intersect", true)), ["1 1", "1 1"], "INTERSECT ALL keeps the smaller count: min(3, 2) = 2");
-    assert_eq!(bag(&db, &set_sql("except", true)), ["1 1", "2 2"], "EXCEPT ALL keeps the difference of the counts: 3 - 2 = 1 (and never below 0)");
+    assert_eq!(
+        bag(&db, &set_sql("except", true)),
+        ["1 1", "2 2"],
+        "EXCEPT ALL keeps the difference of the counts: 3 - 2 = 1 (and never below 0)"
+    );
     assert_eq!(bag(&db, &set_sql("union", true)).len(), 7, "UNION ALL adds them");
 }
 
@@ -638,9 +710,17 @@ fn s3j_05_strings_and_mixed_rows() {
     rows(&db, "create table t(name varchar(10), n int)");
     rows(&db, "insert into s values ('ann', 1), ('bob', 2), ('ann', 1)");
     rows(&db, "insert into t values ('ann', 1), ('cy', 3)");
-    assert_eq!(bag(&db, "select name, n from s union select name, n from t"), ["ann 1", "bob 2", "cy 3"], "strings of different declared lengths");
+    assert_eq!(
+        bag(&db, "select name, n from s union select name, n from t"),
+        ["ann 1", "bob 2", "cy 3"],
+        "strings of different declared lengths"
+    );
     assert_eq!(bag(&db, "select name, n from s intersect select name, n from t"), ["ann 1"], "INTERSECT on strings");
-    assert_eq!(bag(&db, "select name, n from s except all select name, n from t"), ["ann 1", "bob 2"], "EXCEPT ALL: one of the two ann rows is cancelled");
+    assert_eq!(
+        bag(&db, "select name, n from s except all select name, n from t"),
+        ["ann 1", "bob 2"],
+        "EXCEPT ALL: one of the two ann rows is cancelled"
+    );
 }
 
 #[test]
@@ -698,13 +778,21 @@ fn s3j_06_union_and_except_go_left_to_right() {
     let db = db_abc(&single(&[1, 2, 3]), &single(&[2]), &single(&[3, 4]));
     assert_eq!(bag(&db, "select x from a except select x from b union select x from c"), ["1", "3", "4"], "(a EXCEPT b) UNION c");
     assert_eq!(bag(&db, "select x from a union select x from c except select x from b"), ["1", "3", "4"], "(a UNION c) EXCEPT b");
-    assert_eq!(bag(&db, "select x from a except select x from b except select x from c"), ["1"], "(a EXCEPT b) EXCEPT c, not a EXCEPT (b EXCEPT c)");
+    assert_eq!(
+        bag(&db, "select x from a except select x from b except select x from c"),
+        ["1"],
+        "(a EXCEPT b) EXCEPT c, not a EXCEPT (b EXCEPT c)"
+    );
 }
 
 #[test]
 fn s3j_06_parentheses_override_the_precedence() {
     let db = db_abc(&single(&[1, 2]), &single(&[2, 3]), &single(&[3, 4]));
-    assert_eq!(bag(&db, "select x from a union (select x from b intersect select x from c)"), ["1", "2", "3"], "parentheses around the second operand");
+    assert_eq!(
+        bag(&db, "select x from a union (select x from b intersect select x from c)"),
+        ["1", "2", "3"],
+        "parentheses around the second operand"
+    );
     assert_eq!(bag(&db, "(select x from a union select x from b) intersect select x from c"), ["3"], "parentheses around the first");
     assert_eq!(bag(&db, "select x from a except (select x from b union select x from c)"), ["1"], "a EXCEPT (b UNION c)");
 }
@@ -712,7 +800,11 @@ fn s3j_06_parentheses_override_the_precedence() {
 #[test]
 fn s3j_06_order_by_and_limit_apply_to_the_whole_result() {
     let db = db_abc(&single(&[5, 1, 3]), &single(&[4, 2, 6]), &[]);
-    assert_eq!(rows(&db, "select x from a union all select x from b order by x"), ["1", "2", "3", "4", "5", "6"], "ORDER BY after the last operand sorts the union");
+    assert_eq!(
+        rows(&db, "select x from a union all select x from b order by x"),
+        ["1", "2", "3", "4", "5", "6"],
+        "ORDER BY after the last operand sorts the union"
+    );
     assert_eq!(rows(&db, "select x from a union all select x from b order by x desc limit 2"), ["6", "5"], "with LIMIT");
     assert_eq!(rows(&db, "select x from a union all select x from b order by x limit 2 offset 3"), ["4", "5"], "and OFFSET");
 }
@@ -720,8 +812,16 @@ fn s3j_06_order_by_and_limit_apply_to_the_whole_result() {
 #[test]
 fn s3j_06_a_parenthesised_operand_keeps_its_own_order_by_and_limit() {
     let db = db_abc(&single(&[5, 1, 3]), &single(&[4, 2, 6]), &[]);
-    assert_eq!(rows(&db, "(select x from a order by x limit 1) union all (select x from b order by x desc limit 1)"), ["1", "6"], "the smallest of a and the largest of b");
-    assert_eq!(rows(&db, "(select x from a order by x limit 2) union all (select x from b order by x limit 2) order by x desc"), ["4", "3", "2", "1"], "each side limited, then the whole sorted");
+    assert_eq!(
+        rows(&db, "(select x from a order by x limit 1) union all (select x from b order by x desc limit 1)"),
+        ["1", "6"],
+        "the smallest of a and the largest of b"
+    );
+    assert_eq!(
+        rows(&db, "(select x from a order by x limit 2) union all (select x from b order by x limit 2) order by x desc"),
+        ["4", "3", "2", "1"],
+        "each side limited, then the whole sorted"
+    );
 }
 
 #[test]
@@ -877,8 +977,16 @@ mod ch_3j_c1 {
         let l = [(Some(1), 10), (Some(2), 20), (None, 30)];
         let r = [(Some(2), 200), (Some(3), 300), (None, 400)];
         assert_eq!(sorted(hash_join(&l, &r, JoinKind::Inner)), [(Some(20), Some(200))], "inner");
-        assert_eq!(sorted(hash_join(&l, &r, JoinKind::Left)), sorted(vec![(Some(20), Some(200)), (Some(10), None), (Some(30), None)]), "left");
-        assert_eq!(sorted(hash_join(&l, &r, JoinKind::Right)), sorted(vec![(Some(20), Some(200)), (None, Some(300)), (None, Some(400))]), "right");
+        assert_eq!(
+            sorted(hash_join(&l, &r, JoinKind::Left)),
+            sorted(vec![(Some(20), Some(200)), (Some(10), None), (Some(30), None)]),
+            "left"
+        );
+        assert_eq!(
+            sorted(hash_join(&l, &r, JoinKind::Right)),
+            sorted(vec![(Some(20), Some(200)), (None, Some(300)), (None, Some(400))]),
+            "right"
+        );
         assert_eq!(hash_join(&l, &r, JoinKind::Full).len(), 5, "full: one pair, two padded left rows, two padded right rows");
     }
 
@@ -887,7 +995,11 @@ mod ch_3j_c1 {
         let l = [(None, 1)];
         let r = [(None, 2)];
         assert!(hash_join(&l, &r, JoinKind::Inner).is_empty(), "NULL = NULL is not a match");
-        assert_eq!(sorted(hash_join(&l, &r, JoinKind::Full)), sorted(vec![(Some(1), None), (None, Some(2))]), "a FULL join keeps both rows, padded");
+        assert_eq!(
+            sorted(hash_join(&l, &r, JoinKind::Full)),
+            sorted(vec![(Some(1), None), (None, Some(2))]),
+            "a FULL join keeps both rows, padded"
+        );
     }
 
     #[test]
@@ -1157,7 +1269,12 @@ mod ch_3j_c4 {
         let right = (0i64..1_000_000).inspect(move |_| b.set(b.get() + 1));
         let mut it = merge_set_op(left, right, Op::Union, true);
         assert_eq!(it.next(), Some(0), "filters on one side of an inner join move to that side");
-        assert!(pulled_l.get() <= 3 && pulled_r.get() <= 3, "one output item pulled {} and {} input items: it must not read ahead", pulled_l.get(), pulled_r.get());
+        assert!(
+            pulled_l.get() <= 3 && pulled_r.get() <= 3,
+            "one output item pulled {} and {} input items: it must not read ahead",
+            pulled_l.get(),
+            pulled_r.get()
+        );
     }
 
     #[test]
@@ -1247,7 +1364,10 @@ mod ch_3j_c5 {
         assert!(rejects_nulls(&p, &[0, 1]), "OR: both sides unknown");
         assert!(rejects_nulls(&and(B::Gt(c(0), l(3)), B::Gt(c(1), l(3))), &[0]), "AND: one unknown side is enough");
         assert!(rejects_nulls(&not(and(B::Gt(c(0), l(3)), B::Gt(c(1), l(3)))), &[0, 1]), "NOT (unknown AND unknown)");
-        assert!(!rejects_nulls(&not(and(B::Gt(c(0), l(3)), B::Gt(c(1), l(3)))), &[0]), "NOT (unknown AND c1 > 3): when c1 <= 3 the AND is false and the NOT true");
+        assert!(
+            !rejects_nulls(&not(and(B::Gt(c(0), l(3)), B::Gt(c(1), l(3)))), &[0]),
+            "NOT (unknown AND c1 > 3): when c1 <= 3 the AND is false and the NOT true"
+        );
     }
 
     #[test]

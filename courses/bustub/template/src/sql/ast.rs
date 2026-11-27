@@ -2,18 +2,49 @@
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Statement {
-    CreateTable { name: String, columns: Vec<ColumnDef>, primary_key: Vec<String> },
-    CreateIndex { name: String, table: String, columns: Vec<String>, using: Option<String> },
-    Insert { table: String, columns: Option<Vec<String>>, query: Box<Query> },
-    Update { table: String, assignments: Vec<(String, Expr)>, filter: Option<Expr>, has_from: bool },
-    Delete { table: String, filter: Option<Expr> },
+    CreateTable {
+        name: String,
+        columns: Vec<ColumnDef>,
+        primary_key: Vec<String>,
+    },
+    CreateIndex {
+        name: String,
+        table: String,
+        columns: Vec<String>,
+        using: Option<String>,
+    },
+    Insert {
+        table: String,
+        columns: Option<Vec<String>>,
+        query: Box<Query>,
+    },
+    Update {
+        table: String,
+        assignments: Vec<(String, Expr)>,
+        filter: Option<Expr>,
+        has_from: bool,
+    },
+    Delete {
+        table: String,
+        filter: Option<Expr>,
+    },
     Select(Box<Query>),
     /// `EXPLAIN [(option, ...)] statement`.
-    Explain { options: Vec<String>, statement: Box<Statement> },
-    Set { name: String, value: Expr },
-    Show { name: String },
+    Explain {
+        options: Vec<String>,
+        statement: Box<Statement>,
+    },
+    Set {
+        name: String,
+        value: Expr,
+    },
+    Show {
+        name: String,
+    },
     /// `BEGIN [TRANSACTION] [ISOLATION LEVEL level]`: the level's words as written, lower-case and joined by one space.
-    Begin { isolation: Option<String> },
+    Begin {
+        isolation: Option<String>,
+    },
     Commit,
     Rollback,
 }
@@ -56,7 +87,12 @@ pub enum QueryBody {
     Select(Box<SelectCore>),
     Values(Vec<Vec<Expr>>),
     /// `left UNION [ALL] right`, also `INTERSECT` and `EXCEPT`. Each side is a whole query: a parenthesised one keeps its own ORDER BY and LIMIT.
-    SetOp { op: SetOperator, all: bool, left: Box<Query>, right: Box<Query> },
+    SetOp {
+        op: SetOperator,
+        all: bool,
+        left: Box<Query>,
+        right: Box<Query>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -123,14 +159,32 @@ pub enum Expr {
     Null,
     /// `a`, `t.a`.
     Column(Vec<String>),
-    Binary { op: String, left: Box<Expr>, right: Box<Expr> },
-    Unary { op: String, expr: Box<Expr> },
-    IsNull { expr: Box<Expr>, negated: bool },
+    Binary {
+        op: String,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    Unary {
+        op: String,
+        expr: Box<Expr>,
+    },
+    IsNull {
+        expr: Box<Expr>,
+        negated: bool,
+    },
     /// `CASE WHEN c THEN r ... [ELSE e] END`; the form `CASE x WHEN v THEN r` is rewritten by the parser to `CASE WHEN x = v THEN r`.
-    Case { branches: Vec<(Expr, Expr)>, otherwise: Option<Box<Expr>> },
+    Case {
+        branches: Vec<(Expr, Expr)>,
+        otherwise: Option<Box<Expr>>,
+    },
     /// The `i`th `?` of a statement, counted from 0 in the order they appear (a prepared statement's placeholder).
     Param(usize),
-    Function { name: String, args: Vec<Expr>, distinct: bool, over: Option<Box<WindowSpec>> },
+    Function {
+        name: String,
+        args: Vec<Expr>,
+        distinct: bool,
+        over: Option<Box<WindowSpec>>,
+    },
     /// `count(*)` is `Function { name: "count", args: [] }`; a bare `*` in an argument list is this.
     Star,
 }
@@ -194,7 +248,14 @@ pub fn visit_exprs_mut(statements: &mut [Statement], f: &mut dyn FnMut(&mut Expr
                     expr(o, f);
                 }
             }
-            Expr::Integer(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Null | Expr::Column(_) | Expr::Star | Expr::Param(_) => {}
+            Expr::Integer(_)
+            | Expr::Float(_)
+            | Expr::Str(_)
+            | Expr::Bool(_)
+            | Expr::Null
+            | Expr::Column(_)
+            | Expr::Star
+            | Expr::Param(_) => {}
         }
     }
     fn table_ref(t: &mut TableRef, f: &mut dyn FnMut(&mut Expr)) {
@@ -258,7 +319,12 @@ pub fn visit_exprs_mut(statements: &mut [Statement], f: &mut dyn FnMut(&mut Expr
             Statement::Select(q) => query(q, f),
             Statement::Explain { statement: inner, .. } => statement(inner, f),
             Statement::Set { value, .. } => expr(value, f),
-            Statement::CreateTable { .. } | Statement::CreateIndex { .. } | Statement::Show { .. } | Statement::Begin { .. } | Statement::Commit | Statement::Rollback => {}
+            Statement::CreateTable { .. }
+            | Statement::CreateIndex { .. }
+            | Statement::Show { .. }
+            | Statement::Begin { .. }
+            | Statement::Commit
+            | Statement::Rollback => {}
         }
     }
     statements.iter_mut().for_each(|s| statement(s, f));

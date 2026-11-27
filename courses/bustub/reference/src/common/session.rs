@@ -121,7 +121,12 @@ impl<'a> Session<'a> {
             None => self.db.txn_manager.begin(self.default_isolation)?,
         };
         let mut out = String::new();
-        let outcome = self.db.execute_statements(std::slice::from_ref(statement), &mut SimpleStreamWriter::new(&mut out, true, " "), None, Some(&txn));
+        let outcome = self.db.execute_statements(
+            std::slice::from_ref(statement),
+            &mut SimpleStreamWriter::new(&mut out, true, " "),
+            None,
+            Some(&txn),
+        );
         let ok = matches!(outcome, Ok(true));
         if !ok {
             // a failed statement ends the transaction's usefulness: undo it at once
@@ -135,7 +140,10 @@ impl<'a> Session<'a> {
             // @end
             return match outcome {
                 Err(e) => Err(e),
-                Ok(_) => Err(Exception::new(ExceptionType::Execution, "could not execute the statement: it conflicts with a concurrent transaction")),
+                Ok(_) => Err(Exception::new(
+                    ExceptionType::Execution,
+                    "could not execute the statement: it conflicts with a concurrent transaction",
+                )),
             };
         }
         if autocommit {
