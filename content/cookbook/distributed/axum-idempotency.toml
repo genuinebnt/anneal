@@ -26,7 +26,9 @@ heading = "Design notes"
 body = """
 Pattern: the client sends `Idempotency-Key: <uuid>`. First time: do the work, remember key -> result, return 201. Retry with the same key: return the **same** result (200), do **not** create a second execution.
 
-This is what makes client retries and at-least-once delivery safe. (Real systems also persist the key in the DB in the same transaction as the work, and compare the request body hash.) Background: <https://stripe.com/blog/idempotency>
+This is what makes client retries and at-least-once delivery safe. (Real systems also persist the key in the DB in the same transaction as the work, and compare the request body hash.) **limits**: here the "work" is one counter under the same lock as the key table, which is why check-and-record is atomic.
+
+Keys are not tied to a caller, route or body (a reused key silently gets the old result), live in memory only, and are never evicted. An empty key is refused: clients that all send one would otherwise share one result. Background: <https://stripe.com/blog/idempotency>
 """
 
 [[sources]]

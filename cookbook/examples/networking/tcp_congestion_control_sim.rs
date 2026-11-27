@@ -32,12 +32,13 @@
 //!  * LOSS RECOVERY DETAIL: Reno runs without SACK (RFC 5681 baseline: one hole per RTT, timeouts on multi-loss);
 //!    NewReno, CUBIC and BBR run with a SACK scoreboard (3 sack blocks per ack, a hole is lost when 3 packets
 //!    above it are sacked, a retransmission outstanding for 2 RTTs is presumed lost), like every modern stack.
-//!  * RTO: RFC 6298 estimator with exponential backoff and Karn's rule (see udp_sockets_reliable).
+//!  * RTO: RFC 6298 estimator with exponential backoff and Karn's rule (see udp_sockets_reliable), with a 200 ms floor
+//!    (the RFC says 1 s).
 //!
 //! METRICS: utilisation (delivered/capacity), mean queue length seen by arriving packets (BUFFERBLOAT: a deep
 //! queue keeps the link full but adds latency), RTT inflation (mean RTT / base RTT), loss rate, Jain's fairness
-//! index J = (sum x)^2 / (n sum x^2) (1 = perfectly equal). Asserted: slow start doubles per RTT, Reno's sawtooth
-//! halves the window on loss, equal-RTT Reno flows share fairly, throughput follows Mathis' 1/sqrt(p) law.
+//! index J = (sum x)^2 / (n sum x^2) (1 = perfectly equal). Asserted: slow start doubles per RTT, NewReno's sawtooth
+//! halves the window on loss, equal-RTT NewReno flows share fairly, Reno's throughput follows Mathis' 1/sqrt(p) law.
 //! The simulator is deterministic (seeded), so the numbers printed are reproducible.
 //!
 //! COMMON USES: Linux CUBIC/BBR tuning, QUIC congestion controllers (quinn, Google's QUIC), datacenter variants

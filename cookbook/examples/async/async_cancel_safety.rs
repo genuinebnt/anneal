@@ -8,6 +8,8 @@
 //! but not yet returned it, the data is gone. `mpsc::Receiver::recv` is cancel-safe (nothing is consumed unless it returns).
 //! A user-written `async fn` that does recv + recv is NOT: the first value lives only in the future's local variable.
 //! Fix: keep progress in state OWNED BY THE CALLER (outside the future) and only await cancel-safe primitives inside `select!`.
+//! The demo runs on tokio's PAUSED clock (one thread, virtual time that jumps to the next timer; feature `test-util`), so
+//! which side of each race wins is the same on every run, however loaded the machine is.
 //! Tokio documents the cancel-safety of every method: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -31,11 +33,14 @@ async fn read_pair(rx: &mut mpsc::Receiver<u32>) -> Option<(u32, u32)> {
     Some((a, b))
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread", start_paused = true)]
 async fn main() {
     // BUGGY: timeout (50ms) is shorter than the gap between items (60ms), so every pair attempt is cancelled
     let mut rx = producer();
     let mut pairs = vec![];
+    // a stall of the whole thread: with a real clock several items would pile up and one pair would get through
+    tokio::task::yield_now().await;
+    std::thread::sleep(Duration::from_millis(200));
     loop {
         tokio::select! {
             r = read_pair(&mut rx) => match r {

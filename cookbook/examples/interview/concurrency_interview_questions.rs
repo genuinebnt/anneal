@@ -2,7 +2,8 @@
 //! LEVEL: advanced
 //! Use in: interview preparation for systems/backend roles, reviewing hand-rolled synchronisation, teaching Mutex+Condvar patterns.   Run: cargo run --release --example concurrency_interview_questions
 //! COMMON USES: every primitive here is something production code re-implements or wraps: bounded channels, token buckets in API gateways, sharded caches, thread pools, singleflight in caches (Go's `singleflight`, Rust's `moka`), lock-order checkers (Linux lockdep).
-//! SPOILER: Q11 (lock-order graph) contains graph cycle detection; skip Q11 if you have not yet solved FlowForge's cycle-detection stage yourself.
+//!
+//! SPOILER: Q11 (lock-order graph) contains graph cycle detection (skip Q11 if you want to work that out yourself first).
 #![allow(dead_code)]
 //! Read: https://marabos.nl/atomics/ (Rust Atomics and Locks) and https://doc.rust-lang.org/nomicon/send-and-sync.html and https://doc.rust-lang.org/std/sync/struct.Condvar.html
 //! Practice: the LeetCode "Concurrency" problem list (FooBar, ZeroEvenOdd, print in order); named only, the site refuses automated link checks.
@@ -63,6 +64,10 @@ impl Rng {
         self.next() % n
     }
 }
+/// True if `f` panics (its message is not printed).
+fn panics(f: impl FnOnce()) -> bool {
+    quiet(|| std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).is_err())
+}
 fn quiet<R>(f: impl FnOnce() -> R) -> R {
     let old = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
@@ -91,6 +96,7 @@ struct BoundedQueue<T> {
 }
 impl<T> BoundedQueue<T> {
     fn new(cap: usize) -> Self {
+        assert!(cap > 0, "with no room every push would wait for ever");
         BoundedQueue {
             state: Mutex::new((VecDeque::new(), false)),
             not_empty: Condvar::new(),
@@ -161,6 +167,10 @@ fn q1_bounded_queue() {
     assert_eq!(sum.load(Relaxed), expect, "lost or duplicated items");
     assert!(q.max_len_seen.load(Relaxed) <= 8, "capacity exceeded");
     assert_eq!(q.push(1), Err(1), "push after close is rejected");
+    assert!(
+        panics(|| drop(BoundedQueue::<u8>::new(0))),
+        "capacity 0 is refused"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -183,9 +193,9 @@ struct TokenBucket {
 impl TokenBucket {
     fn new(burst: u64, rate_per_s: u64) -> Self {
         TokenBucket {
-            state: Mutex::new((burst * 1000, 0, 0)),
-            burst_milli: burst * 1000,
-            rate_milli_per_s: rate_per_s * 1000,
+            state: Mutex::new((burst.saturating_mul(1000), 0, 0)),
+            burst_milli: burst.saturating_mul(1000),
+            rate_milli_per_s: rate_per_s.saturating_mul(1000),
         }
     }
     fn try_acquire(&self, now_ns: u64, n: u64) -> bool {
@@ -199,11 +209,13 @@ impl TokenBucket {
             (g.0, g.2) = (total as u64, (earned % 1_000_000_000) as u64);
         }
         g.1 = g.1.max(now_ns); // never back: an earlier time must not be credited again
-        if g.0 >= n * 1000 {
-            g.0 -= n * 1000;
-            true
-        } else {
-            false
+        // `n` may come from a request: a cost too large to express is refused, not wrapped round to a small one
+        match n.checked_mul(1000) {
+            Some(cost) if g.0 >= cost => {
+                g.0 -= cost;
+                true
+            }
+            _ => false,
         }
     }
 }
@@ -242,6 +254,10 @@ fn q2_token_bucket() {
     assert!(!b.try_acquire(5_000_000, 1));
     assert!(!b.try_acquire(1_009_999_999, 1));
     assert!(b.try_acquire(1_010_000_000, 1));
+    // a cost whose milli-token count overflows u64 (this one would wrap to 384) is refused and takes nothing
+    let b = TokenBucket::new(10, 1);
+    assert!(!b.try_acquire(0, u64::MAX / 1000 + 1) && !b.try_acquire(0, u64::MAX));
+    assert!(b.try_acquire(0, 10));
     // 8 threads at the same instant: exactly `burst` admissions, never more
     let b = Arc::new(TokenBucket::new(25, 10));
     let admitted = Arc::new(AtomicUsize::new(0));
@@ -306,6 +322,9 @@ impl<K: Hash + Eq + Clone, V: Clone> Lru<K, V> {
             self.touch(&k);
             return;
         }
+        if self.cap == 0 {
+            return; // holds nothing: there is no entry to evict
+        }
         if self.map.len() == self.cap {
             let (&oldest, _) = self.order.iter().next().unwrap();
             let victim = self.order.remove(&oldest).unwrap();
@@ -363,6 +382,13 @@ fn q3_lru() {
         }
         assert_eq!(lru.len(), model.len());
     }
+    let mut empty = Lru::new(0);
+    empty.put(1u64, 1u64);
+    assert_eq!(
+        (empty.get(&1), empty.len()),
+        (None, 0),
+        "capacity 0 holds nothing"
+    );
     let sh = Arc::new(ShardedLru::new(8, 64));
     let hs: Vec<_> = (0..8u64)
         .map(|t| {
@@ -640,8 +666,9 @@ fn q7_zero_even_odd() {
 // Q8. reusable barrier
 // ---------------------------------------------------------------------------
 /// ANSWER: count arrivals; the LAST arrival resets the count, bumps a GENERATION number and `notify_all`s. Waiters wait until the generation
-/// changes (not until count==n: a fast thread could re-enter the barrier for the next round before slow ones wake and see the count again
-/// reach... that is the reuse bug). `std::sync::Barrier` is exactly this and also returns a `is_leader` flag.
+/// changes, not until `count == n`: the last arrival resets the count, and a fast thread can start the next round before a slow one wakes,
+/// so the slow one may never see the value it waits for. That is the reuse bug. `std::sync::Barrier` works this way, and its `wait` result
+/// has `is_leader()`.
 ///
 /// REALLY TESTING: the generation counter (reusability) and predicate-loop discipline.
 /// WRONG: a one-shot barrier built on a bare counter and `wait` without a predicate.
@@ -653,6 +680,7 @@ struct Barrier {
 }
 impl Barrier {
     fn new(n: usize) -> Self {
+        assert!(n > 0, "a barrier for nobody would never open");
         Barrier {
             st: Mutex::new((0, 0)),
             cv: Condvar::new(),
@@ -689,11 +717,11 @@ fn q8_barrier() {
                     if b.wait() {
                         leaders.fetch_add(1, Relaxed);
                     }
-                    // after the barrier EVERY thread has finished this phase; nobody can be more than one phase ahead
+                    // after the barrier EVERY thread has reached this phase, and none can start the next one yet
                     for j in 0..T {
                         let v = p[j].load(SeqCst);
                         assert!(
-                            v == phase || v == phase + 1,
+                            v == phase,
                             "thread {j} at phase {v} while we are past phase {phase}"
                         );
                     }
@@ -707,6 +735,10 @@ fn q8_barrier() {
         leaders.load(Relaxed),
         PHASES,
         "exactly one leader per round"
+    );
+    assert!(
+        panics(|| drop(Barrier::new(0))),
+        "a barrier for 0 threads is refused"
     );
 }
 
@@ -837,8 +869,8 @@ fn q10_lazy() {
 // ---------------------------------------------------------------------------
 /// ANSWER: deadlock potential = a CYCLE in the "lock A was held while acquiring lock B" graph, even if the deadlock never happened in this run.
 /// Record an edge `h -> L` for every lock `h` the thread holds when it takes `L`; if adding the edge closes a cycle, report both orders.
-/// This is how Linux lockdep and tools like `parking_lot`'s deadlock detector (a wait-for-graph variant) work. Prevention: a global lock
-/// hierarchy. Detection of an ACTUAL deadlock uses the wait-for graph (thread -> lock it waits for -> thread that holds it).
+/// This is the idea behind Linux lockdep. Prevention: a global lock hierarchy. Detection of an ACTUAL deadlock uses the wait-for graph
+/// instead (thread -> lock it waits for -> thread that holds it), as `parking_lot`'s optional deadlock detector does.
 ///
 /// REALLY TESTING: graph thinking; potential vs actual deadlock.
 /// WRONG: relying on timeouts in production to "detect" deadlocks; reasoning only about two locks.
@@ -972,6 +1004,7 @@ struct Pool {
 }
 impl Pool {
     fn new(n: usize) -> Self {
+        assert!(n > 0, "a pool without workers would run nothing");
         let (tx, rx) = mpsc::channel::<Job>();
         let rx = Arc::new(Mutex::new(rx));
         let workers = (0..n)
@@ -1025,6 +1058,7 @@ fn q12_pool() {
         1000 - 10,
         "every non-panicking job ran before shutdown returned"
     );
+    assert!(panics(|| drop(Pool::new(0))), "0 workers is refused");
 }
 
 // ---------------------------------------------------------------------------
@@ -1445,8 +1479,9 @@ fn q18_async_vs_threads() {
 /// ANSWER: Rust cannot (safely) kill a thread: no `pthread_cancel`, it would skip destructors and leave locks held. Cancellation is
 /// COOPERATIVE: share a token (`AtomicBool` for polling loops; a `Mutex<bool>` + `Condvar` so SLEEPING workers wake immediately), check it at
 /// loop heads/between chunks, and make blocking calls interruptible (`recv_timeout`, `wait_timeout`, closing the channel, shutting down the socket).
-/// Make cancellation structured: a guard that cancels on Drop so a scope exit stops its children. Async is similar: dropping a future cancels
-/// it at its next `.await`, so state must be consistent at every await point (see `structured_concurrency_cancellation`).
+/// Make cancellation structured: a guard that cancels on Drop so a scope exit stops its children (it asks; join to know they stopped). Async is
+/// similar: a dropped future stops at the `.await` where it is suspended, so state must be consistent at every await point (see
+/// `structured_concurrency_cancellation`).
 ///
 /// REALLY TESTING: do you know there is no kill, and how to make blocked threads interruptible?
 /// WRONG: `AtomicBool` flag + `thread::sleep(10s)` (the flag is not seen for 10 s).
@@ -1502,12 +1537,16 @@ fn q19_cancellation() {
     );
     // scope-exit cancels children
     let tok = CancelToken::new();
+    let (running_tx, running_rx) = mpsc::channel();
     let h = {
         let tok = tok.clone();
         thread::spawn(move || {
             let mut n = 0u64;
             while !tok.is_cancelled() {
                 n += 1;
+                if n == 1 {
+                    running_tx.send(()).unwrap();
+                }
                 thread::yield_now();
             }
             n
@@ -1515,7 +1554,7 @@ fn q19_cancellation() {
     };
     {
         let _guard = CancelOnDrop(tok.clone());
-        thread::sleep(Duration::from_millis(5));
+        running_rx.recv().unwrap(); // the child has done some work, however late it was scheduled
     } // guard dropped here
     assert!(h.join().unwrap() > 0 && tok.is_cancelled());
 }
@@ -1625,7 +1664,12 @@ fn q21_wakeups() {
     pair.1.notify_one();
     *pair.0.lock().unwrap() = true;
     let g = pair.0.lock().unwrap();
-    let (_g, res) = pair.1.wait_timeout(g, Duration::from_millis(30)).unwrap(); // BARE wait: sleeps although the state is already `true`
+    // A wait that does not look at the state sleeps although it is already `true`. (`|_| true` ignores the state and, unlike one
+    // `wait_timeout` call, goes back to sleep after a spurious wakeup, so the timeout is the only way out.)
+    let (_g, res) = pair
+        .1
+        .wait_timeout_while(g, Duration::from_millis(30), |_| true)
+        .unwrap();
     assert!(
         res.timed_out(),
         "a bare wait after a missed notify sleeps until the timeout (forever without one)"
@@ -1674,8 +1718,32 @@ fn q21_wakeups() {
 ///
 /// REALLY TESTING: lock scope (never hold the map lock during the slow load), cleanup of the in-flight entry, error propagation.
 /// WRONG: holding one global lock during the load (serialises unrelated keys); forgetting to remove the entry (the value never refreshes).
-/// FOLLOW-UP: what if the leader panics? followers must not wait forever: store an `Err`/`None` via a drop guard.
-type Slot<V> = Arc<(Mutex<Option<V>>, Condvar)>;
+/// FOLLOW-UP: what if the leader panics? Followers must not wait forever. Here a drop guard marks the flight as abandoned and removes the
+/// entry; each waiting follower then tries again with its own loader (one of them leads). Returning the error to all followers is the
+/// other choice. A loader that never returns still blocks them all: real code adds a timeout.
+enum Flight<V> {
+    Loading,
+    Done(V),
+    Abandoned, // the leader panicked
+}
+type Slot<V> = Arc<(Mutex<Flight<V>>, Condvar)>;
+/// Held by the leader. Dropping it ends the flight, whether the load returned or panicked.
+struct Leading<'a, V> {
+    group: &'a SingleFlight<V>,
+    key: &'a str,
+    slot: Slot<V>,
+}
+impl<V> Drop for Leading<'_, V> {
+    fn drop(&mut self) {
+        let mut state = self.slot.0.lock().unwrap();
+        if matches!(*state, Flight::Loading) {
+            *state = Flight::Abandoned;
+        }
+        drop(state);
+        self.group.inflight.lock().unwrap().remove(self.key); // later calls start a fresh load
+        self.slot.1.notify_all();
+    }
+}
 struct SingleFlight<V> {
     inflight: Mutex<HashMap<String, Slot<V>>>,
     followers: AtomicUsize,
@@ -1688,30 +1756,36 @@ impl<V: Clone> SingleFlight<V> {
         }
     }
     fn call(&self, key: &str, load: impl FnOnce() -> V) -> V {
-        let (slot, leader) = {
-            let mut m = self.inflight.lock().unwrap();
-            match m.get(key) {
-                Some(s) => (s.clone(), false),
-                None => {
-                    let s: Slot<V> = Arc::new((Mutex::new(None), Condvar::new()));
-                    m.insert(key.to_string(), s.clone());
-                    (s, true)
+        loop {
+            let (slot, leader) = {
+                let mut m = self.inflight.lock().unwrap();
+                match m.get(key) {
+                    Some(s) => (s.clone(), false),
+                    None => {
+                        let s: Slot<V> = Arc::new((Mutex::new(Flight::Loading), Condvar::new()));
+                        m.insert(key.to_string(), s.clone());
+                        (s, true)
+                    }
                 }
+            };
+            if leader {
+                let flight = Leading {
+                    group: self,
+                    key,
+                    slot,
+                };
+                let v = load(); // slow work with NO lock held
+                *flight.slot.0.lock().unwrap() = Flight::Done(v.clone());
+                return v; // dropping `flight` removes the entry and wakes the followers
             }
-        };
-        if leader {
-            let v = load(); // slow work with NO lock held
-            *slot.0.lock().unwrap() = Some(v.clone());
-            self.inflight.lock().unwrap().remove(key); // later calls start a fresh load
-            slot.1.notify_all();
-            v
-        } else {
             self.followers.fetch_add(1, SeqCst);
-            let g = slot
+            let state = slot
                 .1
-                .wait_while(slot.0.lock().unwrap(), |v| v.is_none())
+                .wait_while(slot.0.lock().unwrap(), |s| matches!(s, Flight::Loading))
                 .unwrap();
-            g.clone().unwrap()
+            if let Flight::Done(v) = &*state {
+                return v.clone();
+            }
         }
     }
 }
@@ -1743,6 +1817,36 @@ fn q22_singleflight() {
         100,
         "after completion a new call loads again (no caching here)"
     );
+    assert!(sf.inflight.lock().unwrap().is_empty());
+    // a leader that panics while a follower waits: the follower must finish with its own load, not hang
+    let sf = Arc::new(SingleFlight::<u64>::new());
+    let (leading_tx, leading_rx) = mpsc::channel();
+    let leader = {
+        let sf = sf.clone();
+        thread::spawn(move || {
+            sf.call("bad", || {
+                leading_tx.send(()).unwrap();
+                while sf.followers.load(SeqCst) < 1 {
+                    thread::yield_now();
+                }
+                std::panic::resume_unwind(Box::new("the load failed")) // a panic without the printed message
+            })
+        })
+    };
+    leading_rx.recv().unwrap();
+    let (got_tx, got_rx) = mpsc::channel();
+    let follower = {
+        let sf = sf.clone();
+        thread::spawn(move || got_tx.send(sf.call("bad", || 5)).unwrap())
+    };
+    assert!(leader.join().is_err());
+    // the time limit only turns a hang into a failure
+    assert_eq!(
+        got_rx.recv_timeout(Duration::from_secs(20)),
+        Ok(5),
+        "the follower is stuck behind a leader that is gone"
+    );
+    follower.join().unwrap();
     assert!(sf.inflight.lock().unwrap().is_empty());
 }
 

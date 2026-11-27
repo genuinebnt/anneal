@@ -53,6 +53,8 @@ det = e1.p, u = (o-a).p / det, q = (o-a) x e1, v = d.q / det, t = e2.q / det.
 **Gimbal lock**: with R = Rz(yaw) Ry(pitch) Rx(roll), at pitch = 90 degrees R depends only on yaw - roll, so one degree of freedom is lost: many (yaw, roll) pairs give the **same** rotation. Quaternions have no such singularity.
 
 **Shadow acne**: a ray starting exactly on a surface can re-hit it at t &#126; 1e-7 from rounding; fix with a t_min epsilon or by offsetting the origin along the normal.
+
+**Limits**: the tolerances are absolute, so they depend on scale: `ray_triangle` calls a determinant below 1e-9 parallel and so misses very small triangles (edges of 1e-5 head on), and `inverse` calls a pivot below 1e-12 singular. `look_at` needs an `up` that is not parallel to the view direction. `transform_point` returns the undivided x, y, z when w is about 0 and divides by a negative w (a point behind a perspective camera): clipping is the caller's job.
 """
 
 [[sections]]

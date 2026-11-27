@@ -7,6 +7,9 @@
 //! (remove elements, shrink values) while it STILL fails. You get a tiny counterexample instead of a
 //! 40-element wall of noise. In real projects use the crates: https://github.com/BurntSushi/quickcheck
 //! and https://github.com/proptest-rs/proptest
+//! LIMITS: greedy shrinking finds a LOCAL minimum (no single removal or halving still fails), which in general need not be
+//! the smallest failing input. Here two equal values stay as they are: halving only one of
+//! them makes them differ, and the test passes. A property that panics instead of returning false would end this program at once.
 #![allow(dead_code)]
 struct Rng(u64);
 impl Rng {
@@ -71,9 +74,11 @@ fn main() {
             let small = shrink(v.clone());
             println!("case {case}: failing input had {} elements: {v:?}", v.len());
             println!("shrunk to {} elements: {small:?}", small.len());
-            assert!(small.len() <= 2);
+            // it must still FAIL, with nothing left to remove: one value twice (not always zero, see LIMITS)
+            assert!(!holds(&small), "the shrinker lost the failure");
+            assert!(small.len() == 2 && small[0] == small[1], "{small:?}");
             return;
         }
     }
-    println!("no counterexample found");
+    panic!("no counterexample found, although the sort is broken");
 }

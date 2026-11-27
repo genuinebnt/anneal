@@ -26,7 +26,9 @@ The IDAT payload is a ZLIB stream: 2 header bytes (0x78 0x01), **deflate** block
 [[sections]]
 heading = "Why it matters"
 body = """
-knowing the byte layout lets you emit pictures from any program, and a decoder for the same subset proves the encoder correct by round trip (including CRC and Adler checks) instead of "it opens in a viewer".
+knowing the byte layout lets you emit pictures from any program, and a decoder for the same subset checks the encoder by round trip (including CRC and Adler checks) instead of "it opens in a viewer". A round trip only shows that the two agree, so the 2x2 PNG is also compared byte for byte and the Huffman decoder reads a stream made by zlib.
+
+**Limits**: the decoder reads only what is described here (8-bit RGB, no interlace, stored and fixed-Huffman blocks), so most PNG files from other programs are refused. Both decoders refuse images above 2&#94;26 pixels, and inflate stops as soon as there is more data than the header's size needs.
 """
 
 [[sections]]

@@ -46,9 +46,11 @@ body = """
 
 Litmus tests that show reordering live in `memory_ordering_litmus`; seqlocks in `seqlock_and_priority_inversion`. **What the assertions prove**: exact totals and invariants on **this** run and **this** machine. A passing test does **not** prove an ordering is strong enough: the orderings below rest on the happens-before argument written next to them.
 
-Miri (rustc 1.100.0-nightly (5a2be9f5f 2026-09-06), 2026-11-26) reported nothing on the default run, seeds 1-6 and Tree Borrows, with reduced loop counts; that samples some schedules, it does not explore all of them. loom was not run. **Portability**: `from_mut` / `from_mut_slice` exist only on targets where the atomic's alignment equals the integer's size.
+Miri (rustc 1.100.0-nightly (5a2be9f5f 2026-09-06), 2026-11-27) reported no error on the default run, seeds 1-6, Tree Borrows and `-Zmiri-address-reuse-rate=1.0 -Zmiri-address-reuse-cross-thread-rate=0 -Zmiri-compare-exchange-weak-failure-rate=0`, with reduced loop counts; that samples some schedules, it does not explore all of them. loom was not run.
 
-**Version note**: in the 1.98.1 source `fetch_update` is marked deprecated since 1.99.0 ("renamed to `try_update`"); `try_update` and `update` are 1.95.
+The last of those runs is what checks section 6's address-reuse case: with `next` followed as a plain pointer it reports a use-after-free. The fix uses exposed provenance, so Miri warns "integer-to-pointer cast" and checks those pointers less strictly.
+
+**Portability**: `from_mut` / `from_mut_slice` exist only on targets where the atomic's alignment equals the integer's size. **Version note**: in the 1.98.1 source `fetch_update` is marked deprecated since 1.99.0 ("renamed to `try_update`"); `try_update` and `update` are 1.95.
 """
 
 [[sections]]

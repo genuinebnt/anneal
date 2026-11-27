@@ -28,7 +28,7 @@ each generator implements `Rng32`. On top of that we build the parts people get 
 
 Then four cheap statistical sanity tests (monobit, byte chi-square, lag-1 serial correlation, runs) with generous thresholds: they cannot certify quality (use PractRand/TestU01 for that) but they catch gross defects, and the LCG fails one.
 
-**Security**: none of these except the ChaCha-based one is designed against an attacker; xorshift/PCG/LCG state is recoverable from a few outputs. Secrets, tokens and keys need an OS CSPRNG (`getrandom`, or `rand::rngs::OsRng` / `StdRng`); even ChaCha8 here is a teaching version (reduced rounds, naive seeding).
+**Security**: none of these except the ChaCha-based one is designed against an attacker; xorshift/PCG/LCG state is recoverable from a few outputs. Secrets, tokens and keys need the OS CSPRNG (`getrandom`) or a cryptographic generator seeded from it (such as `rand`'s `StdRng` made that way); even ChaCha8 here is a teaching version (reduced rounds, naive seeding).
 """
 
 [[sections]]

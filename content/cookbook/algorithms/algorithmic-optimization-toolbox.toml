@@ -48,6 +48,14 @@ each section is one idea in &#126;20 lines. Ideas only described (not coded) are
 """
 
 [[sections]]
+heading = "Design notes"
+body = """
+**Limits**: these are teaching versions. Sums and squares must fit in their integer types (nothing checks for overflow, also not `d * d` in `prime_6k` for n close to `u64::MAX`). The group-split and Knuth optimisations are only valid for non-negative numbers, and the convex hull trick expects the heights in increasing order.
+
+The pair count of the two-pointer version leaves out the sort. A random pivot does **not** save this quickselect from many equal values: its two-way partition then takes a quadratic number of comparisons (a three-way partition avoids that).
+"""
+
+[[sections]]
 heading = "Further reading"
 body = """
 <ul class="cb-g-reading"><li><a href="https://en.wikipedia.org/wiki/Amortized_analysis" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Amortized_analysis</a> and <a href="https://en.wikipedia.org/wiki/Cache-oblivious_algorithm" target="_blank" rel="noreferrer">https://en.wikipedia.org/wiki/Cache-oblivious_algorithm</a> and <a href="https://cp-algorithms.com/" target="_blank" rel="noreferrer">https://cp-algorithms.com/</a> (sections: sqrt decomposition, Mo's algorithm, convex hull trick, divide and conquer DP, Knuth optimisation</li><li>page names checked only at the site root, so search there)</li></ul>

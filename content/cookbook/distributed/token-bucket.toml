@@ -26,7 +26,9 @@ heading = "Design notes"
 body = """
 Pattern: tokens refill continuously up to `capacity`; each request spends one. Bursts up to `capacity` are allowed, the long-run rate is `refill_per_sec`. Take time from a `Clock` trait so tests control it (no sleeping, no flakiness).
 
-Compare: <https://github.com/boinkor-net/governor> and <https://docs.rs/tower/latest/tower/limit/index.html>
+A clock that steps back earns nothing. The rate must be a finite number >= 0 (`f64::min` ignores a NaN, so a NaN or infinite rate would keep the bucket full: no limit at all). **Limits**: floating-point tokens round, so a request that lands exactly when a token is due may have to wait a moment longer.
+
+One caller at a time (`&mut self`): share it behind a lock. Compare: <https://github.com/boinkor-net/governor> and <https://docs.rs/tower/latest/tower/limit/index.html>
 """
 
 [[sources]]

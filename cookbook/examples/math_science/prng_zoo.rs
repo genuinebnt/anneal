@@ -11,8 +11,8 @@
 //! (monobit, byte chi-square, lag-1 serial correlation, runs) with generous thresholds: they cannot certify
 //! quality (use PractRand/TestU01 for that) but they catch gross defects, and the LCG fails one.
 //! SECURITY: none of these except the ChaCha-based one is designed against an attacker; xorshift/PCG/LCG
-//! state is recoverable from a few outputs. Secrets, tokens and keys need an OS CSPRNG (`getrandom`, or
-//! `rand::rngs::OsRng` / `StdRng`); even ChaCha8 here is a teaching version (reduced rounds, naive seeding).
+//! state is recoverable from a few outputs. Secrets, tokens and keys need the OS CSPRNG (`getrandom`) or a
+//! cryptographic generator seeded from it (such as `rand`'s `StdRng` made that way); even ChaCha8 here is a teaching version (reduced rounds, naive seeding).
 //!
 //! COMMON USES: reproducible simulation and property tests (seed it, log the seed), Monte Carlo, game logic,
 //! randomized algorithms (hashing, skip lists, treaps), load/chaos generators, deterministic fuzzing corpora.
@@ -162,7 +162,10 @@ fn biased(n: u32, mut src: impl FnMut() -> u32) -> u32 {
 }
 /// Lemire: map a `bits`-wide uniform x to [0,n) with (x*n) >> bits; reject the few low products that would
 /// make some outputs one count more likely. No division on the fast path.
+/// `src` must return uniform values below 2^bits. Panics unless 1 <= n <= 2^bits: there is no number below 0, and a
+/// narrower source cannot reach every value of a wider range.
 fn lemire(bits: u32, n: u32, mut src: impl FnMut() -> u32) -> u32 {
+    assert!(n >= 1 && u64::from(n) <= 1 << bits, "bad range {n}");
     let mask = (1u64 << bits) - 1;
     let mut m = src() as u64 * n as u64;
     if (m & mask) < n as u64 {
@@ -349,6 +352,14 @@ fn main() {
     let mut pcg = Pcg32::new(5, 5);
     (0..200_000).for_each(|_| hist[below(&mut pcg, 10) as usize] += 1);
     assert!(chi_square(&hist, 20_000.0) < 40.0);
+
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let refused = [(32, 0), (8, 257)]
+        .map(|(bits, n)| std::panic::catch_unwind(|| lemire(bits, n, || 0)).is_err());
+    std::panic::set_hook(hook);
+    assert_eq!(refused, [true; 2]);
+    assert_eq!(lemire(8, 256, || 255), 255);
 
     // Floats and Gaussians.
     let mut rng = ChaCha8::from_seed(2024);

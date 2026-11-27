@@ -15,7 +15,13 @@
 //! PER-CONNECTION STATE MACHINE: `rbuf` holds an incomplete trailing line (TCP delivers arbitrary fragments);
 //! `out` + `wpos` is the write queue (a partial `write` leaves a tail to resume later). WRITABLE interest is
 //! toggled on only while `out` is non-empty: a socket that is always writable would otherwise wake us pointlessly.
-//! Half-close (peer EOF) is remembered; we flush all pending output before closing, so no response is lost.
+//! Half-close (peer EOF) is remembered; we flush all pending output before closing, so no complete line goes unanswered (text after
+//! the last newline gets no reply).
+//!
+//! HOSTILE PEERS: both buffers are bounded, so a peer that never sends a newline, or sends and never reads, is disconnected. A
+//! connection that was reset before `accept` must not stop the server (on macOS, setting an option on it fails).
+//! LIMITS: one peer that keeps its socket readable is read until `WouldBlock` before others get a turn; running out of file
+//! descriptors stops the server; a connection that stays open makes shutdown give up after 5 seconds with an error.
 //!
 //! `mio::Waker`: other threads cannot interrupt `poll` by touching your data, so they `wake()`, which makes the
 //! loop return an event with the waker's token (eventfd on Linux, a user event on kqueue). Here it requests
@@ -42,6 +48,10 @@ use std::time::{Duration, Instant};
 
 const WAKER: Token = Token(0);
 const LISTENER: Token = Token(1);
+/// An unfinished line longer than this ends the connection (checked after each read, so up to one read more is held).
+const MAX_LINE: usize = 64 * 1024;
+/// So does this much output that the peer has not taken.
+const MAX_PENDING: usize = 32 * 1024 * 1024;
 
 #[derive(Default, Debug)]
 struct Stats {
@@ -79,24 +89,40 @@ impl Conn {
                 }
                 Ok(n) => {
                     st.bytes_in += n;
-                    self.rbuf.extend_from_slice(&buf[..n]);
+                    self.take_lines(&buf[..n], st);
+                    if self.rbuf.len() > MAX_LINE {
+                        return Err(io::Error::new(ErrorKind::InvalidData, "line too long"));
+                    }
+                    if self.out.len() - self.wpos > MAX_PENDING {
+                        self.flush(st)?; // the peer may be reading: send what it will take first
+                        if self.out.len() - self.wpos > MAX_PENDING {
+                            return Err(io::Error::other("the peer does not read its replies"));
+                        }
+                    }
                 }
                 Err(e) if e.kind() == ErrorKind::WouldBlock => break, // drained: now wait for the next edge
                 Err(e) if e.kind() == ErrorKind::Interrupted => continue,
                 Err(e) => return Err(e),
             }
         }
-        // extract complete lines; keep the incomplete tail in rbuf
+        Ok(())
+    }
+
+    /// Queue a reply for every complete line; keep the incomplete tail in rbuf.
+    fn take_lines(&mut self, new: &[u8], st: &mut Stats) {
+        let mut seen = self.rbuf.len(); // no newline before this: do not search it again
+        self.rbuf.extend_from_slice(new);
         let mut start = 0;
-        while let Some(i) = self.rbuf[start..].iter().position(|&b| b == b'\n') {
-            let line = &self.rbuf[start..start + i];
+        while let Some(i) = self.rbuf[seen..].iter().position(|&b| b == b'\n') {
+            let end = seen + i;
+            let line = &self.rbuf[start..end];
             self.out.extend(line.iter().map(|b| b.to_ascii_uppercase()));
             self.out.push(b'\n');
             st.lines += 1;
-            start += i + 1;
+            start = end + 1;
+            seen = start;
         }
         self.rbuf.drain(..start);
-        Ok(())
     }
 
     /// Write until everything is sent or the kernel buffer is full (WouldBlock).
@@ -110,6 +136,10 @@ impl Conn {
                 }
                 Err(e) if e.kind() == ErrorKind::WouldBlock => {
                     st.write_would_block += 1;
+                    if self.wpos > self.out.len() / 2 {
+                        self.out.drain(..self.wpos); // do not keep what has been sent
+                        self.wpos = 0;
+                    }
                     return Ok(()); // partial write: keep the tail, wait for WRITABLE
                 }
                 Err(e) if e.kind() == ErrorKind::Interrupted => continue,
@@ -162,7 +192,8 @@ fn run_server(mut poll: Poll, mut listener: TcpListener) -> io::Result<Stats> {
                             if stopping.is_some() {
                                 continue; // dropped: refuse late arrivals
                             }
-                            s.set_nodelay(true)?;
+                            // only a latency hint, and it fails on a connection the peer already reset
+                            let _ = s.set_nodelay(true);
                             let t = Token(next);
                             next += 1;
                             poll.registry().register(&mut s, t, Interest::READABLE)?;
@@ -182,6 +213,7 @@ fn run_server(mut poll: Poll, mut listener: TcpListener) -> io::Result<Stats> {
                         }
                         Err(e) if e.kind() == ErrorKind::WouldBlock => break,
                         Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                        Err(e) if e.kind() == ErrorKind::ConnectionAborted => continue,
                         Err(e) => return Err(e),
                     }
                 },
@@ -295,6 +327,74 @@ fn bulk_client(addr: SocketAddr, lines: usize) {
     writer.join().unwrap();
 }
 
+/// Close with a reset instead of a normal shutdown.
+fn reset(s: std::net::TcpStream) {
+    use std::os::fd::AsRawFd;
+    let linger = libc::linger {
+        l_onoff: 1,
+        l_linger: 0,
+    };
+    // SAFETY: the descriptor is open (we own `s`), and the pointer and length describe `linger`, which outlives the call.
+    let rc = unsafe {
+        libc::setsockopt(
+            s.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_LINGER,
+            (&raw const linger).cast(),
+            size_of::<libc::linger>() as libc::socklen_t,
+        )
+    };
+    assert_eq!(rc, 0, "setsockopt(SO_LINGER)");
+}
+
+fn timed_out(e: &io::Error) -> bool {
+    matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
+}
+
+/// A second server, attacked: it must drop the bad peers, keep serving, and shut down cleanly.
+fn hostile_peers() -> io::Result<()> {
+    let poll = Poll::new()?;
+    let waker = Waker::new(poll.registry(), WAKER)?;
+    let listener = TcpListener::bind("127.0.0.1:0".parse().unwrap())?;
+    let addr = listener.local_addr()?;
+    // reset while still waiting to be accepted: the loop is not running yet
+    for _ in 0..20 {
+        reset(client(addr));
+    }
+    let server = thread::spawn(move || run_server(poll, listener));
+
+    // no newline, ever. The write may fail part way; what matters is that the server hangs up.
+    let mut endless = client(addr);
+    let _ = endless.write_all(&vec![b'x'; 4 * MAX_LINE]);
+    match endless.read(&mut [0u8; 1]) {
+        Ok(0) => {}
+        Ok(_) => panic!("a reply to a line that never ended"),
+        Err(e) => assert!(!timed_out(&e), "an endless line was kept: {e}"),
+    }
+
+    // sends and never reads: far more than the limit and both socket buffers
+    let mut deaf = client(addr);
+    let chunk = "y\n".repeat(512 * 1024);
+    let refused =
+        (0..4 * MAX_PENDING / chunk.len()).find_map(|_| deaf.write_all(chunk.as_bytes()).err());
+    assert!(
+        refused.is_some_and(|e| !timed_out(&e)),
+        "unread replies were buffered without limit"
+    );
+
+    let mut good = client(addr);
+    good.write_all(b"still here\n")
+        .expect("the server is alive");
+    let mut line = String::new();
+    BufReader::new(good.try_clone()?).read_line(&mut line)?;
+    assert_eq!(line, "STILL HERE\n");
+    drop((endless, deaf, good));
+    waker.wake()?;
+    server.join().unwrap()?;
+    println!("reset, endless-line and never-reading peers: all dropped, server kept serving");
+    Ok(())
+}
+
 fn main() -> io::Result<()> {
     thread::spawn(|| {
         thread::sleep(Duration::from_secs(60));
@@ -339,6 +439,7 @@ fn main() -> io::Result<()> {
         st.write_would_block > 0,
         "the partial-write path was exercised"
     );
+    hostile_peers()?;
     println!("all mio event-loop assertions passed");
     Ok(())
 }

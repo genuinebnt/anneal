@@ -12,8 +12,13 @@
 //! (Re-parsing from the start on every read is O(n^2) for one huge frame; real servers keep resumable parser state.)
 //! ZERO-COPY: bulk/simple/error payloads are `Cow::Borrowed` slices of the input; only replies we build are `Owned`.
 //! HOSTILE INPUT: every length is untrusted. `$99999999999` must not allocate, `*1\r\n` repeated 100k times must not
-//! recurse 100k deep, and a line with no CRLF must not buffer forever. `Limits` caps line, bulk, array and depth, and we never
-//! pre-allocate from a declared count (capacity is `min(n, 64)`); memory is then bounded by bytes actually received.
+//! recurse 100k deep, and a line with no CRLF must not buffer forever. `Limits` caps line, bulk, array, depth and the whole frame
+//! (many elements that are each within limits must not add up without end), and we never pre-allocate from a declared count
+//! (capacity is `min(n, 64)`). The caller must still read in modest chunks and call `serve` after each. REPLIES are hostile too:
+//! an error message that quotes the client's bytes could contain CRLF and forge further replies, so the encoder turns CR and LF in
+//! simple strings and errors into spaces.
+//! LIMITS: the whole-frame limit does not bound the quadratic re-parsing by itself (a frame of many tiny elements arriving in tiny
+//! pieces is still expensive), and the store has no memory limit.
 //! COMMON USES: Redis/Valkey clients and servers, protocol proxies and load balancers (e.g. connection-pool middleware),
 //! test doubles for Redis, and the same length-prefixed "need more bytes" parser shape in HTTP/1, Postgres and Kafka framing.
 //! Read: https://redis.io/docs/latest/develop/reference/protocol-spec/
@@ -99,6 +104,8 @@ struct Limits {
     max_bulk: usize,
     max_array: usize,
     max_depth: usize,
+    /// bytes in one top-level frame
+    max_frame: usize,
 }
 
 impl Default for Limits {
@@ -108,6 +115,7 @@ impl Default for Limits {
             max_bulk: 8 << 20,
             max_array: 1 << 20,
             max_depth: 32,
+            max_frame: 16 << 20,
         }
     }
 }
@@ -121,7 +129,11 @@ fn parse(buf: &[u8]) -> Parsed<'_> {
 }
 
 fn parse_with<'a>(buf: &'a [u8], lim: &Limits) -> Parsed<'a> {
-    parse_at(buf, 0, lim)
+    match parse_at(buf, 0, lim)? {
+        Some((_, used)) if used > lim.max_frame => Err(ProtoError::TooLarge("frame")),
+        None if buf.len() > lim.max_frame => Err(ProtoError::TooLarge("frame")),
+        parsed => Ok(parsed),
+    }
 }
 
 /// Find a CRLF-terminated line. The limit applies even when the CRLF has not arrived yet:
@@ -130,7 +142,10 @@ fn take_line<'a>(buf: &'a [u8], lim: &Limits) -> Result<Option<(&'a [u8], usize)
     match buf.windows(2).position(|w| w == b"\r\n") {
         Some(i) if i > lim.max_line => Err(ProtoError::LineTooLong),
         Some(i) => Ok(Some((&buf[..i], i + 2))),
-        None if buf.len() > lim.max_line => Err(ProtoError::LineTooLong),
+        // a trailing CR may be the first half of the terminator: it does not count
+        None if buf.strip_suffix(b"\r").unwrap_or(buf).len() > lim.max_line => {
+            Err(ProtoError::LineTooLong)
+        }
         None => Ok(None),
     }
 }
@@ -227,13 +242,16 @@ fn parse_inline<'a>(buf: &'a [u8], depth: usize, lim: &Limits) -> Parsed<'a> {
         return Err(ProtoError::InlineInArray);
     }
     let Some(nl) = buf.iter().position(|&b| b == b'\n') else {
-        return if buf.len() > lim.max_line {
+        return if buf.strip_suffix(b"\r").unwrap_or(buf).len() > lim.max_line {
             Err(ProtoError::LineTooLong)
         } else {
             Ok(None)
         };
     };
     let line = buf[..nl].strip_suffix(b"\r").unwrap_or(&buf[..nl]);
+    if line.len() > lim.max_line {
+        return Err(ProtoError::LineTooLong); // also when the newline came in the same read
+    }
     let words = line
         .split(|b| b.is_ascii_whitespace())
         .filter(|w| !w.is_empty())
@@ -250,9 +268,11 @@ fn encode(frame: &Frame, out: &mut Vec<u8>) {
         out.extend_from_slice(body);
         out.extend_from_slice(b"\r\n");
     };
+    // these two end at the first CRLF, so their text must not contain one
+    let one_line = |s: &str| s.replace(['\r', '\n'], " ").into_bytes();
     match frame {
-        Frame::Simple(s) => line(out, b'+', s.as_bytes()),
-        Frame::Error(s) => line(out, b'-', s.as_bytes()),
+        Frame::Simple(s) => line(out, b'+', &one_line(s)),
+        Frame::Error(s) => line(out, b'-', &one_line(s)),
         Frame::Integer(n) => line(out, b':', n.to_string().as_bytes()),
         Frame::Null => line(out, b'$', b"-1"),
         Frame::NullArray => line(out, b'*', b"-1"),
@@ -428,7 +448,9 @@ impl<C: Clock> Store<C> {
         };
         let now = self.clock.now_ms();
         if s <= 0 {
-            return Frame::Integer(self.map.remove(k).is_some() as i64);
+            let existed = self.live(k).is_some(); // an expired key no longer exists
+            self.map.remove(k);
+            return Frame::Integer(existed as i64);
         }
         match self.live(k) {
             Some(e) => {
@@ -449,7 +471,7 @@ impl<C: Clock> Store<C> {
             Some(Entry {
                 expires_at: Some(t),
                 ..
-            }) => ((*t - now + 500) / 1000) as i64, // rounds like Redis
+            }) => ((*t - now).saturating_add(500) / 1000) as i64, // rounds like Redis
         })
     }
 
@@ -682,6 +704,72 @@ fn test_limits_and_malformed() {
     assert_eq!(parse(b"PING\n").unwrap().unwrap().1, 5);
 }
 
+fn test_hostile() {
+    // client bytes quoted in an error must not forge a second reply
+    let mut store = Store::new(Rc::new(FakeClock(Cell::new(0))));
+    let mut out = Vec::new();
+    serve(&mut store, &mut encode_command(&["x\r\n+OK"]), &mut out).unwrap();
+    let (reply, used) = parse(&out).unwrap().unwrap();
+    assert!(
+        matches!(reply, Frame::Error(_)) && used == out.len(),
+        "one command, one reply: {out:?}"
+    );
+    out.clear();
+    encode(&Frame::simple("a\nb"), &mut out);
+    assert_eq!(out, b"+a b\r\n");
+
+    // the line limit does not depend on how the bytes were split
+    let long = [&vec![b'a'; 70_000][..], b"\n"].concat();
+    assert_eq!(parse(&long), Err(ProtoError::LineTooLong));
+    let max = Limits::default().max_line;
+    for full in [
+        [&b"+"[..], &vec![b'a'; max - 1], b"\r\n"].concat(),
+        [&vec![b'a'; max][..], b"\r\n"].concat(),
+    ] {
+        assert!(matches!(parse(&full), Ok(Some(_))));
+        assert_eq!(
+            parse(&full[..full.len() - 1]),
+            Ok(None),
+            "CR arrived, LF not yet"
+        );
+    }
+
+    // elements within every other limit must not add up for ever
+    let small = Limits {
+        max_frame: 64,
+        ..Limits::default()
+    };
+    let mut frame = b"*100\r\n".to_vec();
+    frame.extend(b"$4\r\nabcd\r\n".repeat(8));
+    assert_eq!(
+        parse_with(&frame, &small),
+        Err(ProtoError::TooLarge("frame"))
+    );
+    let whole = [&b"$100\r\n"[..], &[b'a'; 100], b"\r\n"].concat();
+    assert_eq!(
+        parse_with(&whole, &small),
+        Err(ProtoError::TooLarge("frame"))
+    );
+    let pipelined = b"+ok\r\n".repeat(100); // many small frames are fine
+    assert_eq!(drain_all(&pipelined, &small), Ok(100));
+
+    // expiry at the edges
+    let clock = Rc::new(FakeClock(Cell::new(0)));
+    let mut store = Store::new(clock.clone());
+    let mut run = |words: &[&str]| {
+        let mut out = Vec::new();
+        serve(&mut store, &mut encode_command(words), &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    };
+    run(&["SET", "k", "v", "EX", "1"]);
+    clock.advance(1000);
+    assert_eq!(run(&["EXPIRE", "k", "-1"]), ":0\r\n", "it was already gone");
+    clock.0.set(0); // with the time below 500 ms, adding the rounding after the subtraction would overflow
+    run(&["SET", "k", "v", "EX", "9223372036854775807"]);
+    // the expiry saturates at u64::MAX ms; a sum that wrapped round would answer 0 in a release build
+    assert_eq!(run(&["TTL", "k"]), format!(":{}\r\n", u64::MAX / 1000));
+}
+
 fn test_fuzz() {
     let mut rng = Rng(0xDEAD_BEEF_1234_5678);
     let lim = Limits {
@@ -689,6 +777,7 @@ fn test_fuzz() {
         max_bulk: 4096,
         max_array: 1024,
         max_depth: 8,
+        max_frame: 8192,
     };
     let alphabet = b"*$+-:\r\n0123456789-abc ";
     let (mut errs, mut oks) = (0, 0);
@@ -821,6 +910,7 @@ fn main() {
     println!("round trip, every-prefix, byte-by-byte and pipelining: ok");
     test_limits_and_malformed();
     println!("limits (bulk, array, depth 100000, line) enforced: ok");
+    test_hostile();
     test_glob();
     run_script();
     test_fuzz();

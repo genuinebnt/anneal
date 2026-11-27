@@ -30,7 +30,11 @@ Same for writes: write until `WouldBlock`, then ask for `WRITABLE` interest and 
 
 **Per-connection state machine**: `rbuf` holds an incomplete trailing line (TCP delivers arbitrary fragments); `out` + `wpos` is the write queue (a partial `write` leaves a tail to resume later). **Writable** interest is toggled on only while `out` is non-empty: a socket that is always writable would otherwise wake us pointlessly.
 
-Half-close (peer EOF) is remembered; we flush all pending output before closing, so no response is lost.
+Half-close (peer EOF) is remembered; we flush all pending output before closing, so no complete line goes unanswered (text after the last newline gets no reply).
+
+**Hostile peers**: both buffers are bounded, so a peer that never sends a newline, or sends and never reads, is disconnected. A connection that was reset before `accept` must not stop the server (on macOS, setting an option on it fails).
+
+**Limits**: one peer that keeps its socket readable is read until `WouldBlock` before others get a turn; running out of file descriptors stops the server; a connection that stays open makes shutdown give up after 5 seconds with an error.
 
 `mio::Waker`: other threads cannot interrupt `poll` by touching your data, so they `wake()`, which makes the loop return an event with the waker's token (eventfd on Linux, a user event on kqueue). Here it requests graceful shutdown: stop accepting, drain the open connections, then exit.
 

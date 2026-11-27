@@ -13,8 +13,11 @@
 //! `futex`-style waiting (not in std). Litmus tests that show reordering live in `memory_ordering_litmus`; seqlocks in `seqlock_and_priority_inversion`.
 //! WHAT THE ASSERTIONS PROVE: exact totals and invariants on THIS run and THIS machine. A passing test does NOT prove an ordering is strong enough:
 //! the orderings below rest on the happens-before argument written next to them. Miri
-//! (rustc 1.100.0-nightly (5a2be9f5f 2026-09-06), 2026-11-26) reported nothing on the default run, seeds 1-6 and Tree Borrows, with reduced loop counts;
-//! that samples some schedules, it does not explore all of them. loom was not run.
+//! (rustc 1.100.0-nightly (5a2be9f5f 2026-09-06), 2026-11-27) reported no error on the default run, seeds 1-6, Tree Borrows and
+//! `-Zmiri-address-reuse-rate=1.0 -Zmiri-address-reuse-cross-thread-rate=0 -Zmiri-compare-exchange-weak-failure-rate=0`,
+//! with reduced loop counts; that samples some schedules, it does not explore all of them. loom was not run.
+//! The last of those runs is what checks section 6's address-reuse case: with `next` followed as a plain pointer it reports a
+//! use-after-free. The fix uses exposed provenance, so Miri warns "integer-to-pointer cast" and checks those pointers less strictly.
 //! PORTABILITY: `from_mut` / `from_mut_slice` exist only on targets where the atomic's alignment equals the integer's size.
 //! VERSION NOTE: in the 1.98.1 source `fetch_update` is marked deprecated since 1.99.0 ("renamed to `try_update`"); `try_update` and `update` are 1.95.
 //!
@@ -72,7 +75,7 @@ fn spawn_n(n: usize, f: impl Fn(usize) + Sync) {
 
 /// Spin briefly, then give up the time slice: pure spinning wastes whole quanta when there are more threads than cores.
 fn backoff(tries: &mut u32) {
-    *tries += 1;
+    *tries = tries.saturating_add(1); // a long wait must not overflow: a panic here would strand a ticket
     if *tries < 64 {
         std::hint::spin_loop();
     } else {
@@ -511,6 +514,7 @@ fn s05_locks() {
 // ------------------------------------------------------------ 6. AtomicPtr: push-only stack, drained all at once
 struct Node<T> {
     value: T,
+    // Only the ADDRESS in `next` is used; `take_all` rebuilds the pointer from it (see `push_with`).
     next: *mut Node<T>,
 }
 /// Many producers push; `take_all` detaches the whole list. There is deliberately NO single-node pop: popping needs
@@ -534,14 +538,25 @@ impl<T> Stack<T> {
         }
     }
     fn push(&self, value: T) {
+        self.push_with(value, || {});
+    }
+    /// `push`, calling `before_cas` between reading `head` and the CAS, so a check can run other operations there.
+    fn push_with(&self, value: T, mut before_cas: impl FnMut()) {
         let node = Box::into_raw(Box::new(Node {
             value,
             next: ptr::null_mut(),
         }));
+        // A pointer is more than its address: it also carries the right to use one allocation (provenance). The CAS
+        // below compares addresses only. Between the load and the CAS, `take_all` may free the old head node and
+        // another push may get the same address: the CAS succeeds, and `next` is then the stale pointer to the FREED
+        // node. Following it is undefined behaviour, although the address is right (Miri reports it). So every node
+        // exposes its provenance here, and `take_all` rebuilds each `next` from the address alone.
+        let _ = node.expose_provenance();
         let mut head = self.head.load(Relaxed);
         loop {
             // SAFETY: `node` is not yet published, so this thread has exclusive access to it.
             unsafe { (*node).next = head };
+            before_cas();
             // Release publishes the node's contents to whoever takes the list with Acquire.
             match self
                 .head
@@ -558,8 +573,12 @@ impl<T> Stack<T> {
         while !p.is_null() {
             // SAFETY: the swap made this thread the sole owner of the detached chain. Each pointer came from
             // Box::into_raw in `push`, is visited once, and pushers never dereference a node after publishing it.
+            // The first pointer is the one the last CAS stored; the later ones are rebuilt with exposed provenance.
             let node = unsafe { Box::from_raw(p) };
-            p = node.next;
+            p = match node.next.addr() {
+                0 => ptr::null_mut(),
+                a => ptr::with_exposed_provenance_mut(a),
+            };
             out.push(node.value);
         }
         out
@@ -603,6 +622,20 @@ fn s06_atomic_ptr() {
         next[t] += 1;
     }
     drop(got);
+    // The head changes under a push and comes back to the same ADDRESS: take everything (frees node 1), push again
+    // (the allocator may reuse that address), then let the first push finish. A normal run cannot tell whether the old
+    // pointer was used; Miri with `-Zmiri-address-reuse-rate=1.0 -Zmiri-address-reuse-cross-thread-rate=0` can.
+    let aba = Stack::new();
+    aba.push(1);
+    let mut interfered = false;
+    aba.push_with(2, || {
+        if !interfered {
+            interfered = true;
+            assert_eq!(aba.take_all(), [1]);
+            aba.push(3);
+        }
+    });
+    assert_eq!(aba.take_all(), [2, 3], "newest first; neither push is lost");
     // un-taken nodes are freed by Drop
     let token = std::sync::Arc::new(());
     {

@@ -6,6 +6,10 @@
 //! Pattern: handlers return `Result<T, AppError>`. `AppError` implements `IntoResponse`, mapping each variant
 //! to a status code and ONE JSON shape `{"error":{"code":..,"message":..}}`. Internal errors are logged but their
 //! details are never leaked to the client. Same idea as your CLI's error enum: errors are values.
+//! LIMIT: the shape covers only what a handler returns as `AppError`. axum's own rejections keep their own bodies: an
+//! unmatched route (404) and a wrong method (405) have empty ones, and a path that is not UTF-8 gets a plain-text 400. For
+//! one shape everywhere add fallbacks and wrap the extractors. This demo logs with `eprintln!` and sends the variant's
+//! message, so never put a secret in the text of a variant the client sees.
 #![allow(dead_code)]
 use axum::{
     Json, Router,

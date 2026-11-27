@@ -571,12 +571,13 @@ async fn blocking_work() {
     heart.abort();
 }
 
-/// Graceful shutdown: signal, let each worker finish its current job and drain, then WAIT for all of them.
-async fn graceful_shutdown() {
-    let root = CancellationToken::new();
-    let (tx, rx) = mpsc::channel::<u32>(100);
+/// Three workers on one queue.
+fn spawn_workers(
+    root: &CancellationToken,
+    rx: mpsc::Receiver<u32>,
+    done: &Arc<AtomicUsize>,
+) -> JoinSet<()> {
     let rx = Arc::new(Mutex::new(rx));
-    let done = Arc::new(AtomicUsize::new(0));
     let mut workers = JoinSet::new();
     for _ in 0..3 {
         let (token, rx, done) = (root.child_token(), rx.clone(), done.clone());
@@ -586,8 +587,15 @@ async fn graceful_shutdown() {
                     let mut rx = rx.lock().await;
                     tokio::select! {
                         biased;
-                        job = rx.recv() => job,                      // drain queued work first
-                        _ = token.cancelled() => rx.try_recv().ok(), // then stop when asked and the queue is empty
+                        // Cancellation is looked at FIRST: if queued work came first, a producer that keeps the queue
+                        // full would keep this branch from ever being reached.
+                        _ = token.cancelled() => {
+                            // Stop accepting, THEN drain. `try_recv` alone would leave the queue open: a send that
+                            // succeeds after the last worker looked would be lost without anyone being told.
+                            rx.close(); // harmless when already closed
+                            rx.recv().await // what was accepted, including reserved slots; then None
+                        }
+                        job = rx.recv() => job,
                     }
                 };
                 let Some(_job) = job else { break };
@@ -596,15 +604,54 @@ async fn graceful_shutdown() {
             }
         });
     }
+    workers
+}
+
+/// A producer that never stops by itself: shutdown must still end, and run every job the queue accepted.
+async fn shutdown_under_load() {
+    let root = CancellationToken::new();
+    let (tx, rx) = mpsc::channel::<u32>(10);
+    let done = Arc::new(AtomicUsize::new(0));
+    let workers = spawn_workers(&root, rx, &done);
+    let producer = tokio::spawn(async move {
+        let mut accepted = 0;
+        while tx.send(accepted as u32).await.is_ok() {
+            accepted += 1;
+        }
+        accepted // the queue was closed under it
+    });
+    sleep(Duration::from_millis(2500)).await;
+    root.cancel();
+    timeout(secs(60), workers.join_all())
+        .await
+        .expect("shutdown deadline: the queue was never closed");
+    assert_eq!(done.load(SEQ), producer.await.unwrap());
+}
+
+/// Graceful shutdown: signal, close the queue, let each worker finish its current job and drain, then WAIT for all of them.
+/// The deadline matters: closing waits for every reserved slot to be used or dropped.
+async fn graceful_shutdown() {
+    let root = CancellationToken::new();
+    let (tx, rx) = mpsc::channel::<u32>(100);
+    let done = Arc::new(AtomicUsize::new(0));
+    let workers = spawn_workers(&root, rx, &done);
     for j in 0..10 {
         tx.send(j).await.unwrap();
     }
     sleep(Duration::from_millis(1500)).await;
+    // a producer that already holds a slot in the queue, and fills it only after the workers have run out of work
+    let slot = tx.clone().reserve_owned().await.unwrap();
+    let late = tokio::spawn(async move {
+        sleep(secs(30)).await;
+        slot.send(10);
+    });
     root.cancel();
     timeout(secs(60), workers.join_all())
         .await
         .expect("shutdown deadline");
-    assert_eq!(done.load(SEQ), 10);
+    late.await.unwrap();
+    assert_eq!(done.load(SEQ), 11, "a job the queue had accepted was lost");
+    assert!(tx.try_send(11).is_err(), "new work is refused, not dropped");
     // A child can be cancelled without touching the parent; not the other way round.
     let parent = CancellationToken::new();
     let child = parent.child_token();
@@ -649,6 +696,7 @@ pub fn main() {
         sync_primitives().await;
         std_mutex_across_await().await;
         graceful_shutdown().await;
+        shutdown_under_load().await;
         local_tasks().await;
     });
     // Real clock for the section that involves real blocking.

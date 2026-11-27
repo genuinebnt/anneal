@@ -27,7 +27,11 @@
 //!    The chaos test runs the same schedules with: no check, check only, check + fence-before-read.
 //! SIMULATION: single threaded and seeded; each node is a state machine advanced one step at a time, so a "pause" is simply not
 //! being scheduled while the store clock runs. In-flight messages are delayed and reordered. Not modelled: the lease store itself
-//! failing (that is consensus: see the Raft recipes), or Byzantine nodes that forge tokens.
+//! failing (that is consensus: see the Raft recipes), or Byzantine nodes that forge tokens. Nor a message delivered TWICE: a token
+//! check alone accepts a repeated write from the current leader, which can undo its later write; that also needs a sequence number
+//! or a version check. LIMITS: `IdemStore` never evicts a key (an expired one stays until the same key is used again), and a key
+//! left in flight by a crash stays tied to its first request body. `Window::accept` panics on sequence number 0, so check
+//! untrusted input before calling it; and one forged huge number moves the window past all real ones (authenticate first).
 //! Read: https://stripe.com/blog/idempotency , https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html
 //! Read: https://etcd.io/docs/v3.5/learning/api/ and https://www.rfc-editor.org/rfc/rfc4303#section-3.4.3 (anti-replay window)
 //!
@@ -822,5 +826,7 @@ fn main() {
         "== D. fenced resource under pauses, clock skew and delayed messages (2000 schedules each) =="
     );
     chaos_test();
-    println!("all exactly-once and fencing checks passed");
+    println!(
+        "all checks passed (not simulated: one message delivered twice, which a token check alone does not stop)"
+    );
 }

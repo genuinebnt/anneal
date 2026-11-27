@@ -24,7 +24,7 @@ three small building blocks written from scratch (the production versions are `t
 2. `TaskTracker`: counts spawned tasks through a guard owned by the task future, so the count drops even when a task panics or is aborted before its first poll. `close()` then `wait()` returns when closed **and** count == 0.
 3. `Scope`: tasks spawned in a scope cannot outlive it. `join()` waits for all of them; the **first** error or panic cancels the scope's token (fail-fast) so siblings stop at their next cancellation point; after cancellation there is a **grace** period, then stragglers are aborted (counted as `forced`).
 
-   Dropping a scope without `join` aborts everything (JoinSet semantics). Real borrowing scopes (like `std::thread::scope`) are impossible for async without unsafe, hence `'static` futures plus a runtime guarantee of joining.
+   Dropping a scope without `join` aborts everything (JoinSet semantics), but an abort only asks: the tasks end a little later. Only a finished `join()` means that they are gone. Real borrowing scopes (like `std::thread::scope`) are impossible for async without unsafe, hence `'static` futures plus a runtime guarantee of joining.
 
    **Shutdown order** (servers): (1) stop accepting new work, (2) cancel in-flight work cooperatively, (3) drain with a **deadline**, (4) abort whatever is still running. Skipping (1) lets new work arrive during the drain; skipping (4) lets one stuck task hang the process forever.
 
@@ -42,7 +42,9 @@ body = """
 - `JoinSet::join_next*`: safe, a completed task is returned by the next call. `mpsc::Receiver::recv`: safe.
 - `tokio::time::sleep` / `timeout_at`: safe (timeout_at drops the inner future on expiry; that is our intent).
 - `JoinHandle` await: dropping a `JoinHandle` **detaches** the task, it does not cancel it.
-- A hand written `async fn` with two awaits holding locals is **not** cancel-safe (see async_cancel_safety).
+- A hand written `async fn` with several awaits is not cancel-safe if what it has taken so far lives only in its locals (see async_cancel_safety).
+
+   **Limits** of the token: a second `cancel()` racing the first may return before every descendant is marked; propagation (and dropping a very long chain of child tokens) recurses; `child()` scans the parent's live children, so very many are slow. A grace period near `Duration::MAX` overflows the deadline and panics.
 """
 
 [[sections]]

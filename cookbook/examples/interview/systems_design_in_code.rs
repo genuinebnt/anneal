@@ -119,6 +119,9 @@ impl Shortener {
     fn create(&mut self, url: &str, alias: Option<&str>) -> Result<String, &'static str> {
         if let Some(a) = alias {
             // aliases must not be exactly 7 chars: that keeps them out of the generated namespace for ever
+            if a.is_empty() {
+                return Err("alias is empty");
+            }
             if a.len() == 7 {
                 return Err("alias length 7 is reserved");
             }
@@ -174,6 +177,7 @@ fn q1_url_shortener() {
         s.create("v", Some("abcdefg")),
         Err("alias length 7 is reserved")
     );
+    assert_eq!(s.create("v", Some("")), Err("alias is empty"));
     // a deliberately tiny space forces collisions in the hashed variant
     let (mut table, mut probes, mut codes) = (HashMap::new(), 0, HashMap::new());
     for i in 0..900 {
@@ -204,7 +208,8 @@ fn q1_url_shortener() {
 /// NUMBERS: 1 M active keys x ~50 B = 50 MB (counter/GCRA) versus 1 M x L=1000 x 8 B = 8 GB for a sliding LOG.
 /// API: allow(key, now) -> bool (plus Retry-After). DATA: key -> small state, with TTL; atomic update (Redis script or owner shard).
 /// CORE: fixed window is cheap but admits 2L around a boundary; the log is exact but big; the weighted counter approximates it;
-///   token bucket and GCRA are the SAME policy: GCRA stores one timestamp (the theoretical arrival time) instead of a level.
+///   token bucket and GCRA are the SAME policy while time does not go back: GCRA stores one timestamp (the theoretical arrival
+///   time) instead of a level. On a time that went back, none of these four grants new allowance (GCRA gets stricter).
 /// FAILURES: limiter store down (fail open or closed? decide per endpoint); clock skew between gateways (use the store's clock).
 /// TRADE-OFFS: a local limit of L/N per gateway needs no shared store but is wrong under uneven balancing.
 /// REALLY TESTING: boundary behaviour and memory per key. WRONG: read-then-write without atomicity.
@@ -217,7 +222,8 @@ struct FixedWindow {
 }
 impl FixedWindow {
     fn allow(&mut self, now: u64) -> bool {
-        if now / self.window != self.cur {
+        if now / self.window > self.cur {
+            // only FORWARD: a gateway with a slow clock must not reopen an old window
             (self.cur, self.count) = (now / self.window, 0);
         }
         let ok = self.count < self.limit;
@@ -251,6 +257,7 @@ struct SlidingCounter {
 }
 impl SlidingCounter {
     fn allow(&mut self, now: u64) -> bool {
+        let now = now.max(self.cur * self.window); // a clock that stepped back must not reopen an old window
         let w = now / self.window;
         if w != self.cur {
             self.prev = if w == self.cur + 1 { self.count } else { 0 };
@@ -280,8 +287,12 @@ impl TokenBucket {
         }
     }
     fn allow(&mut self, now: u64) -> bool {
-        self.level = (self.level + (now - self.last)).min(self.burst * self.every);
-        self.last = now;
+        let elapsed = now.saturating_sub(self.last); // an earlier `now` earns nothing (plain `-` wraps in release)
+        self.level = self
+            .level
+            .saturating_add(elapsed)
+            .min(self.burst * self.every);
+        self.last = self.last.max(now);
         let ok = self.level >= self.every;
         if ok {
             self.level -= self.every;
@@ -296,7 +307,7 @@ struct Gcra {
 }
 impl Gcra {
     fn allow(&mut self, now: u64) -> bool {
-        let ok = self.tat.saturating_sub(now) <= (self.burst - 1) * self.every;
+        let ok = self.burst > 0 && self.tat.saturating_sub(now) <= (self.burst - 1) * self.every;
         if ok {
             self.tat = self.tat.max(now) + self.every;
         }
@@ -318,6 +329,38 @@ fn worst_in_window(admitted: &[u64], window: u64) -> usize {
         .unwrap_or(0)
 }
 fn q2_rate_limiter() {
+    // a time that goes back (another gateway's clock) must not buy more admissions
+    const SKEWED: [u64; 6] = [500, 500, 399, 399, 500, 500];
+    let mut f = FixedWindow {
+        limit: 2,
+        window: 100,
+        cur: 0,
+        count: 0,
+    };
+    assert_eq!(SKEWED.iter().filter(|&&t| f.allow(t)).count(), 2, "fixed");
+    let mut c = SlidingCounter {
+        limit: 2,
+        window: 100,
+        cur: 0,
+        count: 0,
+        prev: 0,
+    };
+    assert_eq!(SKEWED.iter().filter(|&&t| c.allow(t)).count(), 2, "counter");
+    let mut b = TokenBucket::new(2, 1000);
+    assert_eq!(SKEWED.iter().filter(|&&t| b.allow(t)).count(), 2, "bucket");
+    assert!(
+        !b.allow(0) && !b.allow(1000),
+        "no credit for the same span twice"
+    );
+    let mut none = Gcra {
+        burst: 0,
+        every: 100,
+        tat: 0,
+    };
+    assert!(
+        !none.allow(0) && !TokenBucket::new(0, 100).allow(0),
+        "burst 0"
+    );
     let mut fixed = FixedWindow {
         limit: 10,
         window: 1000,
@@ -430,11 +473,11 @@ impl Ring {
         let h = hash(key);
         let mut out = Vec::new();
         for (_, &node) in self.points.range(h..).chain(self.points.range(..h)) {
+            if out.len() == n {
+                break;
+            }
             if !out.contains(&node) {
                 out.push(node);
-                if out.len() == n {
-                    break;
-                }
             }
         }
         out
@@ -455,6 +498,12 @@ fn q3_cache() {
     assert!(
         min > 1200 && max < 3000,
         "160 vnodes keep primaries within a factor of the 2000 mean: {load:?}"
+    );
+    assert!(ring.replicas("user:1", 0).is_empty());
+    assert_eq!(
+        ring.replicas("user:1", 99).len(),
+        10,
+        "only 10 distinct nodes"
     );
     ring.add(10);
     let moved: Vec<usize> = (0..keys.len())
@@ -637,7 +686,11 @@ impl Queue {
         }
     }
     fn ack(&mut self, id: u64, receipt: u64) -> bool {
-        let current = self.msgs.get(&id).is_some_and(|m| m.2 == receipt);
+        // deliveries > 0: a message nobody has received has no receipt, not receipt 0
+        let current = self
+            .msgs
+            .get(&id)
+            .is_some_and(|m| m.1 > 0 && m.2 == receipt);
         if current {
             self.msgs.remove(&id);
         }
@@ -646,6 +699,9 @@ impl Queue {
 }
 fn q5_queue() {
     let mut r = Rng(5);
+    let mut unread = Queue::default();
+    let id = unread.send();
+    assert!(!unread.ack(id, 0) && unread.msgs.contains_key(&id));
     let (mut redeliveries, mut stale_acks) = (0, 0);
     for _ in 0..200 {
         let mut q = Queue::default();
@@ -1083,6 +1139,7 @@ fn q9_pubsub() {
 /// FAILURES: worker dies (lease + heartbeat); duplicate firing (idempotent jobs); starvation of low priority (aging or quotas).
 /// TRADE-OFFS: strict priority is simple and can starve.
 /// REALLY TESTING: choosing the two orderings. WRONG: polling the whole table every tick.
+/// NOT CODED: `fail` and the retry limit. The check resubmits a failed job itself, so it says nothing about bounded retries.
 /// FOLLOW-UP: cron schedules and missed runs after downtime: run once, run all, or skip?
 type ReadyKey = (u8, Reverse<u64>, u64); // (priority, older first, job)
 #[derive(Default)]
@@ -1140,10 +1197,9 @@ fn q10_scheduler() {
                 }
             }
         }
-        assert!(attempts.values().all(|&n| n <= 3));
     }
     println!(
-        "   200 random runs: two-heap scheduler matched a linear-scan model, retries capped at 3 attempts"
+        "   200 random runs with resubmitted failures: two-heap scheduler matched a linear-scan model"
     );
 }
 
@@ -1195,6 +1251,17 @@ impl Resource {
         true
     }
 }
+/// Writes accepted after a write with a HIGHER token had been accepted (not only the first one after it).
+fn stale_writes(accepted: &[u64]) -> usize {
+    let mut highest = 0;
+    accepted
+        .iter()
+        .filter(|&&t| {
+            highest = t.max(highest);
+            t < highest
+        })
+        .count()
+}
 /// Returns (stale writes accepted, writes rejected).
 fn lease_chaos(seed: u64, fenced: bool) -> (usize, usize) {
     let mut r = Rng(seed);
@@ -1212,10 +1279,10 @@ fn lease_chaos(seed: u64, fenced: bool) -> (usize, usize) {
             rejected += usize::from(!res.write(t, fenced));
         }
     }
-    let stale = res.accepted.windows(2).filter(|w| w[1] < w[0]).count();
-    (stale, rejected)
+    (stale_writes(&res.accepted), rejected)
 }
 fn q11_lease() {
+    assert_eq!(stale_writes(&[1, 2, 1, 1, 2, 3, 2]), 3);
     let (mut unfenced_stale, mut fenced_rejected) = (0, 0);
     for seed in 0..500 {
         unfenced_stale += lease_chaos(seed, false).0;

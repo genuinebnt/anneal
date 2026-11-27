@@ -24,7 +24,11 @@ finding minimal failing inputs in any property test (proptest/quickcheck do this
 [[sections]]
 heading = "Design notes"
 body = """
-Pattern: generate random input until the property fails, then greedily simplify the failing input (remove elements, shrink values) while it **still** fails. You get a tiny counterexample instead of a 40-element wall of noise. In real projects use the crates: <https://github.com/BurntSushi/quickcheck> and <https://github.com/proptest-rs/proptest>
+Pattern: generate random input until the property fails, then greedily simplify the failing input (remove elements, shrink values) while it **still** fails. You get a tiny counterexample instead of a 40-element wall of noise.
+
+In real projects use the crates: <https://github.com/BurntSushi/quickcheck> and <https://github.com/proptest-rs/proptest> **Limits**: greedy shrinking finds a **local** minimum (no single removal or halving still fails), which in general need not be the smallest failing input.
+
+Here two equal values stay as they are: halving only one of them makes them differ, and the test passes. A property that panics instead of returning false would end this program at once.
 """
 
 [[sources]]

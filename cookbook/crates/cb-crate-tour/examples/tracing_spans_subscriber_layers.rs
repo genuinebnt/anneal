@@ -221,7 +221,15 @@ impl std::fmt::Display for Declined {
         f.write_str("card declined")
     }
 }
-#[instrument(name = "charge", skip(card_number), fields(last4 = %&card_number[card_number.len() - 4..], outcome = tracing::field::Empty), err)]
+/// A span field is computed before the function body runs, so before any validation: it must not panic on any input.
+/// (`&s[s.len() - 4..]` panics on a short string and inside a multi-byte character.) Nor may a short input be shown whole.
+fn last4(s: &str) -> &str {
+    match s.len().checked_sub(4) {
+        Some(start) if s.len() >= 12 => s.get(start..).unwrap_or("?"),
+        _ => "?",
+    }
+}
+#[instrument(name = "charge", skip(card_number), fields(last4 = %last4(card_number), outcome = tracing::field::Empty), err)]
 fn charge(user: u32, card_number: &str, cents: u64) -> Result<(), Declined> {
     info!("charging");
     let ok = cents <= 1000;
@@ -269,6 +277,17 @@ fn spans_and_instrument() {
     // Lifecycle: enter/exit may happen many times, close exactly once, children before parents.
     let closes: Vec<&String> = log.iter().filter(|l| l.starts_with("close")).collect();
     assert_eq!(closes, ["close charge", "close double", "close request"]);
+
+    // bad input reaches the span's fields before it reaches any check in the body
+    let (events, _) = captured(|| {
+        for bad in ["", "12", "123456", "4111€€€€€"] {
+            charge(5, bad, 1).unwrap();
+        }
+    });
+    assert!(
+        events.iter().all(|e| e.spans[0].contains("last4=?")),
+        "{events:?}"
+    );
 
     let (events, _) = captured(|| {
         let s = info_span!("job", n = 1);

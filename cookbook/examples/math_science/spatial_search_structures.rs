@@ -1,11 +1,12 @@
 //! RECIPE 277 (geometry): spatial search structures: k-d tree, quadtree, STR R-tree, grid hash, BK-tree, VP-tree.
 //! LEVEL: advanced
 //! Use in: GIS and map queries, game collision/neighbour search, nearest-neighbour ML features, fuzzy matching and spell checking.   Run: cargo run --release --example spatial_search_structures
+//! OVERFLOW-CHECKS: the grid hash's overflow check only fails with them; `check.sh` runs this file a second time with them.
 #![allow(dead_code)]
 //!
 //! WHAT: six indexes that answer "what is near this?" without scanning everything. Every one is verified against a
-//! brute-force oracle on seeded random data, and the work done is COUNTED (nodes visited / distance evaluations) so the
-//! speed-up is a number, not a claim.
+//! brute-force oracle on seeded random data. For all but the grid the work done is COUNTED (nodes visited / distance
+//! evaluations), so the speed-up is a number, not a claim.
 //!  1. K-D TREE: median split on a cycling axis (select_nth, implicit balanced layout in one index array). Nearest neighbour
 //!     with branch pruning (skip the far side when the splitting plane is farther than the best so far), k-nearest with a
 //!     bounded max-heap, orthogonal range (box) query. The CURSE OF DIMENSIONALITY table (d = 2, 5, 10, 20) shows pruning
@@ -25,6 +26,11 @@
 //! dynamic); many moving objects with a known interaction radius (games, particles) -> grid; strings/edit distance ->
 //! BK-tree; arbitrary metric, moderate intrinsic dimension -> VP-tree; high-dimensional embeddings (50-1000 dims) ->
 //! approximate indexes, see ivf_flat (IVF-Flat), hnsw_lite (HNSW), vamana_diskann_lite (Vamana/DiskANN), product_quantization (product quantization).
+//!
+//! LIMITS: teaching versions, built for finite coordinates (NaN is not handled). The quadtree covers only the unit square and
+//! refuses points outside it. The R-tree is bulk-loaded and takes no later inserts; its fan-out must be at least 2. The grid
+//! answers only radii from 0 up to its cell size, and a distance within rounding error of a cell edge is not specially treated.
+//! The BK-tree and the string demo measure edit distance in BYTES, so one changed non-ASCII letter can count as two edits.
 //!
 //! COMMON USES: GIS bounding-box queries and spatial joins in geospatial databases (R-tree family, as in PostGIS GiST
 //! indexes and SQLite's R*Tree module); collision culling and neighbour lookup in games and particle simulations (grids and
@@ -137,7 +143,9 @@ impl<'a> KdTree<'a> {
     fn knn(&self, q: &[f64], k: usize) -> (Vec<(f64, usize)>, u64) {
         let mut heap: BinaryHeap<(u64, usize)> = BinaryHeap::new(); // max-heap on dist2 bits (positive f64 sorts like u64)
         let mut visited = 0;
-        self.knn_rec(0, self.idx.len(), 0, q, k, &mut heap, &mut visited);
+        if k > 0 {
+            self.knn_rec(0, self.idx.len(), 0, q, k, &mut heap, &mut visited);
+        }
         let mut v: Vec<(f64, usize)> = heap
             .into_iter()
             .map(|(b, i)| (f64::from_bits(b), i))
@@ -245,7 +253,15 @@ struct Quadtree<'a> {
 const Q_CAP: usize = 8;
 const Q_MAX_DEPTH: u32 = 24;
 impl<'a> Quadtree<'a> {
+    /// Every point must lie in the unit square: queries skip a node by its box, so a point outside the root's box would
+    /// silently be missing from their answers.
     fn new(pts: &'a [(f64, f64)]) -> Self {
+        let unit = 0.0..=1.0;
+        assert!(
+            pts.iter()
+                .all(|p| unit.contains(&p.0) && unit.contains(&p.1)),
+            "a point outside the unit square"
+        );
         let mut t = Quadtree {
             pts,
             nodes: vec![QNode {
@@ -401,6 +417,10 @@ struct RTree {
 impl RTree {
     /// Sort-Tile-Recursive packing, fan-out m.
     fn bulk_load(rects: Vec<Rect>, m: usize) -> Self {
+        assert!(
+            m >= 2,
+            "with a fan-out below 2 the tree never narrows to a root"
+        );
         let mut t = RTree {
             rects,
             nodes: vec![],
@@ -413,6 +433,21 @@ impl RTree {
             .enumerate()
             .map(|(i, r)| (r, i))
             .collect();
+        if level.is_empty() {
+            // one empty leaf whose box meets nothing
+            let (lo, hi) = (f64::INFINITY, f64::NEG_INFINITY);
+            t.nodes.push(RNode {
+                mbr: Rect {
+                    x0: lo,
+                    y0: lo,
+                    x1: hi,
+                    y1: hi,
+                },
+                kids: vec![],
+                leaf: true,
+            });
+            return t;
+        }
         let mut leaf = true;
         loop {
             let packed = t.pack(level, m, leaf);
@@ -484,6 +519,10 @@ struct Grid<'a> {
 }
 impl<'a> Grid<'a> {
     fn new(pts: &'a [(f64, f64)], cell: f64) -> Self {
+        assert!(
+            cell > 0.0 && cell.is_finite(),
+            "the cell size must be positive"
+        );
         let mut cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
         for (i, p) in pts.iter().enumerate() {
             cells.entry(Self::key(*p, cell)).or_default().push(i);
@@ -495,12 +534,16 @@ impl<'a> Grid<'a> {
     }
     /// All points within distance r <= cell of q (r must not exceed the cell size).
     fn within(&self, q: (f64, f64), r: f64) -> Vec<usize> {
-        assert!(r <= self.cell);
+        assert!((0.0..=self.cell).contains(&r));
         let (cx, cy) = Self::key(q, self.cell);
         let mut out = vec![];
         for dx in -1..=1 {
             for dy in -1..=1 {
-                if let Some(v) = self.cells.get(&(cx + dx, cy + dy)) {
+                // a query very far out lands on the last cell number there is: it has no neighbour beyond it
+                let (Some(x), Some(y)) = (cx.checked_add(dx), cy.checked_add(dy)) else {
+                    continue;
+                };
+                if let Some(v) = self.cells.get(&(x, y)) {
                     out.extend(v.iter().copied().filter(|&i| {
                         (self.pts[i].0 - q.0).powi(2) + (self.pts[i].1 - q.1).powi(2) <= r * r
                     }));
@@ -563,7 +606,8 @@ impl BkTree {
     }
     /// All words within edit distance r; returns (matches, distance evaluations).
     fn query(&self, q: &str, r: usize) -> (Vec<String>, u64) {
-        let (mut out, mut calls, mut stack) = (vec![], 0, vec![0usize]);
+        let root = (!self.words.is_empty()).then_some(0usize);
+        let (mut out, mut calls, mut stack) = (vec![], 0, Vec::from_iter(root));
         while let Some(c) = stack.pop() {
             let d = levenshtein(q.as_bytes(), self.words[c].as_bytes());
             calls += 1;
@@ -571,7 +615,7 @@ impl BkTree {
                 out.push(self.words[c].clone());
             }
             for &(kd, child) in &self.kids[c] {
-                if kd + r >= d && kd <= d + r {
+                if kd.saturating_add(r) >= d && kd <= d.saturating_add(r) {
                     stack.push(child); // triangle inequality: |kd - d| <= r
                 }
             }
@@ -640,7 +684,9 @@ impl VpTree {
     fn knn(&self, qd: &impl Fn(usize) -> f64, k: usize) -> (Vec<(f64, usize)>, u64) {
         let mut heap: BinaryHeap<(u64, usize)> = BinaryHeap::new();
         let mut calls = 0;
-        self.search(self.root, qd, k, &mut heap, &mut calls);
+        if k > 0 {
+            self.search(self.root, qd, k, &mut heap, &mut calls);
+        }
         let mut v: Vec<(f64, usize)> = heap
             .into_iter()
             .map(|(b, i)| (f64::from_bits(b), i))
@@ -980,10 +1026,63 @@ fn main() {
         ("any metric, modest intrinsic dimension", "VP-tree"),
         (
             "embeddings with 100+ dims",
-            "approximate: r140-r143 (IVF, HNSW, DiskANN, PQ)",
+            "approximate: IVF, HNSW, DiskANN, product quantization",
         ),
     ] {
         println!("  {w:<43} -> {i}");
     }
+    edge_cases();
     println!("OK");
+}
+
+/// True if `f` panics (its message is not printed).
+fn panics(f: impl FnOnce()) -> bool {
+    let old = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    std::panic::set_hook(old);
+    r.is_err()
+}
+
+/// Empty indexes, zero results asked for, and arguments at the limits.
+fn edge_cases() {
+    let pts = [0.1, 0.2, 0.3, 0.4];
+    assert!(KdTree::build(&pts, 2).knn(&[0.0, 0.0], 0).0.is_empty());
+    let apart = |a: usize, b: usize| a.abs_diff(b) as f64;
+    let vp = VpTree::build(vec![0, 1, 2], &apart, &mut Rng::new(1));
+    assert!(vp.knn(&|i| i as f64, 0).0.is_empty());
+
+    assert!(panics(|| drop(Quadtree::new(&[(0.5, 0.5), (2.0, 0.5)]))));
+    assert_eq!(
+        Quadtree::new(&[(1.0, 1.0)]).range(0.9, 0.9, 1.0, 1.0).0,
+        [0]
+    );
+
+    let mut bk = BkTree::new();
+    assert!(bk.query("a", 1).0.is_empty());
+    bk.insert("a");
+    bk.insert("bc");
+    assert_eq!(bk.query("zz", usize::MAX).0.len(), 2);
+
+    let corner = [(0.0, 0.0)];
+    let grid = Grid::new(&corner, 0.01);
+    assert!(grid.within((1e300, -1e300), 0.01).is_empty());
+
+    assert!(panics(|| drop(RTree::bulk_load(vec![], 1))), "fan-out 1");
+    // the time limit only turns an endless loop into a failure
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let everywhere = Rect {
+            x0: -1e9,
+            y0: -1e9,
+            x1: 1e9,
+            y1: 1e9,
+        };
+        tx.send(RTree::bulk_load(vec![], 16).window(&everywhere).0)
+    });
+    assert_eq!(
+        rx.recv_timeout(std::time::Duration::from_secs(20)),
+        Ok(vec![]),
+        "loading no rectangles must end"
+    );
 }

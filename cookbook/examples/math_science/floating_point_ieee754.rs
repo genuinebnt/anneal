@@ -12,14 +12,17 @@
 //!      five rounding modes (nearest-even, nearest-away, toward zero, up, down). The 8-bit minifloat (1-4-3) is checked
 //!      EXHAUSTIVELY (all 65536 operand pairs, all modes) against an independent reference: exact f64 arithmetic
 //!      (exact because operands are tiny) followed by "pick the nearest representable value" from a table of all codes.
-//!      binary16 (1-5-10) is checked on random pairs. Ties-to-even is the default because it is unbiased: ties go up
-//!      and down equally often, so errors do not drift.
+//!      binary16 (1-5-10) is checked on random pairs. Soft ADD aligns its operands exactly in an i128, so it refuses
+//!      layouts with a wide exponent (bfloat16, f32, f64); soft multiply has no such limit. Ties-to-even is the default
+//!      because on varied data ties go up and down about equally often, so they do not push a sum one way (a particular
+//!      input can still: the demo adds the same tie again and again and nearest-even never moves).
 //!   3. ulp, next_up/next_down by bit twiddling (compared with std), and a monotone integer key that turns
 //!      float comparison into integer comparison; ulp distance; why "relative + absolute + ulps" tolerance tests.
 //!   4. Catastrophic cancellation: (1-cos x)/x^2 and the quadratic formula, naive vs stable.
 //!   5. FMA: exact product error `fma(a,b,-a*b)`, checked against Dekker's FMA-free two_prod; Kahan's accurate 2x2 determinant.
 //!   6. Summation: naive, Kahan, Neumaier, pairwise, and exact (Shewchuk partials, as in Python's `math.fsum`),
-//!      with the exact one verified against i128 integer arithmetic and the others ranked by measured error.
+//!      with the exact one verified against i128 integer arithmetic and the others ranked by measured error. The exact one
+//!      PANICS on finite input when a partial sum overflows, also in cases where the exact total would fit.
 //!   7. Comparison pitfalls: NaN != NaN, `total_cmp`, signed zero, `min`/`max` with NaN, floats as hash keys.
 //!   8. Shortest round-trip printing (Rust's `{}`/`{:?}`): parse(print(x)) == x for random bit patterns and no
 //!      shorter digit string round-trips; why 0.1 + 0.2 != 0.3; why money should use integers (see `decimal_fixed_point_money`).
@@ -51,6 +54,15 @@ impl Rng {
     fn unit(&mut self) -> f64 {
         (self.next() >> 11) as f64 / (1u64 << 52) as f64 - 1.0
     }
+}
+
+/// Did `f` panic? (silently: these are the expected refusals)
+fn panics(f: impl FnOnce() + std::panic::UnwindSafe) -> bool {
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let r = std::panic::catch_unwind(f);
+    std::panic::set_hook(hook);
+    r.is_err()
 }
 
 // ============================================================ 1. layouts
@@ -320,7 +332,12 @@ fn unpack(l: Layout, p: &Parts) -> (i128, i32) {
     (if p.sign { -sig } else { sig }, e)
 }
 
+/// Only for layouts whose whole exponent range fits beside the significand in an i128 (up to 6 exponent bits always does).
 fn soft_add(l: Layout, a: u64, b: u64, mode: Mode) -> u64 {
+    assert!(
+        l.exp_max_field() + u64::from(l.mbits) <= 125,
+        "soft_add aligns exactly in an i128: {l:?} is too wide"
+    );
     let (pa, pb) = (decode(l, a), decode(l, b));
     if pa.class == Class::Nan || pb.class == Class::Nan {
         return l.nan_code();
@@ -463,6 +480,11 @@ fn exhaustive_minifloat() {
     println!(
         "minifloat 1-4-3: {checked} soft add/mul results (65536 pairs x 5 modes x 2 ops) equal the table reference"
     );
+    // bfloat16 (1-8-7) needs far more than 128 bits to align exactly: refused, not silently wrong
+    let bfloat16 = Layout { ebits: 8, mbits: 7 };
+    assert!(panics(|| {
+        soft_add(bfloat16, 127 << 7, 1, Mode::NearestEven);
+    }));
     // tie-to-even in action: 1 + 2^-4 is a tie between 1.0 and 1.125 -> even mantissa (1.0); 1.125 + 2^-4 -> 1.25
     let one = 0x38; // exp field 7, frac 0
     let tiny = soft_mul(l, one, make(l, false, 0x18), Mode::NearestEven); // 2^-4 is code exp field 3
@@ -546,7 +568,11 @@ fn ulps_between(a: f64, b: f64) -> u64 {
 }
 /// the tolerance recipe: absolute for values near zero, relative elsewhere, ulps as a stricter alternative
 fn approx_eq(a: f64, b: f64, rel: f64, abs: f64) -> bool {
-    (a - b).abs() <= abs.max(rel * a.abs().max(b.abs()))
+    if a == b {
+        return true; // includes equal infinities, whose difference is NaN
+    }
+    // otherwise an infinity must never pass: `rel * inf` is an infinite tolerance
+    a.is_finite() && b.is_finite() && (a - b).abs() <= abs.max(rel * a.abs().max(b.abs()))
 }
 
 fn check_ulps(rng: &mut Rng) {
@@ -575,6 +601,17 @@ fn check_ulps(rng: &mut Rng) {
     );
     println!("  exact value of the double nearest 0.1: {:.60}", 0.1f64);
     assert!(s != 0.3 && ulps_between(s, 0.3) == 1 && approx_eq(s, 0.3, 1e-12, 1e-15));
+    let (inf, nan) = (f64::INFINITY, f64::NAN);
+    assert!(approx_eq(inf, inf, 1e-12, 1e-15));
+    for (a, b) in [
+        (1.0, inf),
+        (-inf, 1.0),
+        (inf, -inf),
+        (f64::MAX, inf),
+        (nan, nan),
+    ] {
+        assert!(!approx_eq(a, b, 1e-12, 1e-15), "{a} is not about {b}");
+    }
     // the same sum in f32 happens to round differently: do not generalise from one example
     println!("  in f32: 0.1+0.2 == 0.3 is {}", 0.1f32 + 0.2f32 == 0.3f32);
     // ten additions of 0.1 do not make 1.0, but ten cents as integers do
@@ -709,7 +746,12 @@ fn pairwise_sum(v: &[f64]) -> f64 {
     pairwise_sum(l) + pairwise_sum(r) // error grows like log n instead of n
 }
 /// Exact sum rounded once (Shewchuk's non-overlapping partials; same algorithm as Python's math.fsum)
+/// An infinity or NaN among the terms decides the result. Panics if a partial sum of finite terms overflows, even when
+/// the exact total would fit (math.fsum raises there too): the error terms would silently become NaN.
 fn fsum(v: &[f64]) -> f64 {
+    if v.iter().any(|x| !x.is_finite()) {
+        return v.iter().filter(|x| !x.is_finite()).sum(); // inf + -inf and anything with NaN give NaN
+    }
     let mut partials: Vec<f64> = vec![];
     for &x0 in v {
         let mut x = x0;
@@ -720,6 +762,7 @@ fn fsum(v: &[f64]) -> f64 {
                 std::mem::swap(&mut a, &mut b);
             }
             let hi = a + b;
+            assert!(hi.is_finite(), "fsum: intermediate overflow");
             let lo = b - (hi - a);
             if lo != 0.0 {
                 next.push(lo);
@@ -771,6 +814,16 @@ fn summation_study(rng: &mut Rng) {
         (naive_sum(&v), kahan_sum(&v), neumaier_sum(&v), fsum(&v)),
         (0.0, 0.0, 2.0, 2.0)
     );
+
+    let inf = f64::INFINITY;
+    assert_eq!(
+        (fsum(&[inf, 1.0]), fsum(&[1.0, -inf, f64::MAX, f64::MAX])),
+        (inf, -inf)
+    );
+    assert!(fsum(&[inf, -inf]).is_nan() && fsum(&[f64::NAN, 1.0]).is_nan());
+    assert!(panics(|| {
+        fsum(&[f64::MAX, f64::MAX, -f64::MAX]);
+    }));
 
     // exact oracle: integers m * 2^s with 52-bit m are exact doubles; sum them in i128 and round once
     for case in 0..2000 {

@@ -26,5 +26,7 @@ heading = "Design notes"
 body = """
 Pattern: a middleware is `async fn(Request, Next) -> Response`. It can inspect/modify the request before calling `next.run(req)` and the response after. Here: reuse the caller's `x-request-id` or mint one, and echo it back so logs across services can be joined.
 
-Layers wrap routes added **before** `.layer(..)`.
+Layers wrap routes added **before** `.layer(..)`. **Limits**: the caller's id is copied as it comes (any length the server accepts for a header), so check or replace it before trusting it in logs, and never use it for access control. The minted ids come from a counter: they repeat after a restart and between instances.
+
+Use a random or time-based unique id (a UUID, say) to join logs across services.
 """

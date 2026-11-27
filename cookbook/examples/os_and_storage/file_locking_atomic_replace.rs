@@ -4,7 +4,8 @@
 #![allow(dead_code)]
 //!
 //! ATOMIC REPLACE: to update `state.json` so a crash leaves either the OLD or the NEW file, never a mix:
-//!   1. write the new bytes to a temp file IN THE SAME DIRECTORY (rename is atomic only within a filesystem);
+//!   1. write the new bytes to a NEW temp file IN THE SAME DIRECTORY (rename is atomic only within a filesystem). Each
+//!      writer needs its own name: two writers sharing one can install a mix of both;
 //!   2. `fsync` the temp file (data durable BEFORE it becomes visible);
 //!   3. `rename(tmp, target)` (atomic replace on POSIX);
 //!   4. `fsync` the DIRECTORY (the rename is a directory-entry change; without this it may be lost on power failure
@@ -16,27 +17,36 @@
 //! does this on macOS, noted below); drives or VMs that lie about flushes defeat it; and a failed fsync may have
 //! dropped dirty pages, so never "retry fsync and carry on" (PostgreSQL's 2018 "fsyncgate"): treat it as fatal.
 //! Without any fsync, `rename` still gives atomicity against process crashes, just not durability on power loss.
+//! LIMITS OF THIS CODE: it keeps the old file's permission bits, not its owner, ACLs or extended attributes. A target that
+//! is a symlink is replaced by a regular file (with the mode of the file the link pointed to). Concurrent replaces each
+//! install a whole file and the last rename wins: an update that reads first still needs a lock. An error from the
+//! directory sync means the new content is already visible but may not be durable. A crash leaves its temp file behind and
+//! nothing here removes it. A name close to the filesystem's length limit leaves no room for the temp suffix.
 //!
 //! LOCKS (all ADVISORY: they only work if every party cooperates; nothing stops a rogue `write`):
-//!  * `flock(2)`: whole-file lock attached to the open file description; auto-released when the descriptor is closed
-//!    or the process dies (no stale locks!). Two separate `open`s conflict, even within one process (so it works between
+//!  * `flock(2)`: whole-file lock attached to the open file description; auto-released when the last descriptor for that
+//!    open file description is closed (`dup` and `fork` share it), as happens when its processes die (no stale locks!). Two separate `open`s conflict, even within one process (so it works between
 //!    threads here). Shared (LOCK_SH, many readers) vs exclusive (LOCK_EX); `LOCK_NB` returns EWOULDBLOCK instead of waiting.
 //!    Lock a dedicated `.lock` file, NOT the data file you replace by rename (the lock would stay on the old inode).
 //!    Not reliable on some network filesystems (NFS).
 //!  * PID lock file: create-exclusive, write your pid, delete on exit. Crashes leave the file behind, so a new starter
 //!    checks `kill(pid, 0)` (signal 0 = existence check only): ESRCH means dead, so the lock is stale. Caveats: PID reuse,
-//!    and two starters may both decide a lock is stale (the check-then-remove is racy; flock avoids that).
+//!    and two starters may both decide a lock is stale (the check-then-remove is racy; flock avoids that). A crash between
+//!    create and write leaves a file with no pid, and every later starter refuses until someone removes it.
 //!  * `O_EXCL|O_CREAT` (`create_new`): the kernel guarantees exactly one creator wins. A primitive for lock files and unique names.
 //!
 //! COMMON USES: editors and package managers saving files atomically (`git` and `apt` use lock files + rename), SQLite and
 //! other embedded DBs using file locks, daemons refusing to start twice (pid files), cron-style jobs that must not overlap,
 //! `.lock` files in build tools such as cargo's package-cache lock.
 //! Read: https://man7.org/linux/man-pages/man2/flock.2.html and https://man7.org/linux/man-pages/man2/fsync.2.html and https://www.postgresql.org/docs/current/wal-reliability.html
+use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, ErrorKind, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
@@ -46,29 +56,80 @@ fn sync_dir(dir: &Path) -> io::Result<()> {
     File::open(dir)?.sync_all() // opening a directory read-only works on Unix; fsync persists its entries
 }
 
-fn atomic_replace(target: &Path, data: &[u8]) -> io::Result<()> {
-    let dir = target.parent().expect("target has a parent directory");
-    let tmp = dir.join(format!(
-        ".{}.{}.tmp",
-        target.file_name().unwrap().to_string_lossy(),
-        std::process::id()
-    ));
-    let result = (|| {
-        let mut f = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&tmp)?;
-        f.write_all(data)?;
-        f.sync_all()?; // (2) data durable before it becomes visible (macOS: Rust uses F_FULLFSYNC here)
-        drop(f);
-        fs::rename(&tmp, target)?; // (3) atomic swap
-        sync_dir(dir) // (4) make the rename itself durable
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp); // do not leave temp litter on failure
+/// The directory that holds `target`. A bare name like `state.json` has the empty parent `""`, which cannot be opened.
+fn parent_dir(target: &Path) -> &Path {
+    match target.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
     }
-    result
+}
+
+fn temp_path(target: &Path, n: u64) -> io::Result<PathBuf> {
+    let name = target
+        .file_name()
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "target has no file name"))?;
+    let mut tmp = OsString::from(".");
+    tmp.push(name);
+    tmp.push(format!(".{}.{n}.tmp", std::process::id()));
+    Ok(parent_dir(target).join(tmp))
+}
+
+/// Steps 1 and 2 done, 3 and 4 not yet. Dropping it removes the temp file.
+struct Staged {
+    tmp: PathBuf,
+    target: PathBuf,
+}
+impl Staged {
+    fn new(target: &Path, data: &[u8]) -> io::Result<Staged> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let old = match fs::metadata(target) {
+            Ok(m) => Some(m.permissions()),
+            Err(e) if e.kind() == ErrorKind::NotFound => None,
+            Err(e) => return Err(e),
+        };
+        for _ in 0..100 {
+            let tmp = temp_path(target, NEXT.fetch_add(1, Ordering::Relaxed))?;
+            // (1) every writer needs its OWN temp file. `create_new` also refuses to follow a symlink someone put there.
+            let opened = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(if old.is_some() { 0o600 } else { 0o666 }) // both are narrowed by the umask
+                .open(&tmp);
+            let mut f = match opened {
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => continue, // e.g. litter from a crash
+                other => other?,
+            };
+            let staged = Staged {
+                tmp,
+                target: target.to_owned(),
+            };
+            if let Some(perms) = old {
+                f.set_permissions(perms)?; // a private file must not become readable; set before the data goes in
+            }
+            f.write_all(data)?;
+            f.sync_all()?; // (2) data durable before it becomes visible (macOS: Rust uses F_FULLFSYNC here)
+            return Ok(staged);
+        }
+        Err(io::Error::new(
+            ErrorKind::AlreadyExists,
+            "no free temp name",
+        ))
+    }
+
+    /// An error from the LAST step means the new content is already visible, but may not survive a power failure.
+    fn commit(self) -> io::Result<()> {
+        fs::rename(&self.tmp, &self.target)?; // (3) atomic swap
+        sync_dir(parent_dir(&self.target)) // (4) make the rename itself durable
+    }
+}
+impl Drop for Staged {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.tmp); // after a successful rename there is nothing left under this name
+    }
+}
+
+fn atomic_replace(target: &Path, data: &[u8]) -> io::Result<()> {
+    Staged::new(target, data)?.commit()
 }
 
 // ---------- 2. flock RAII guard ----------
@@ -139,6 +200,8 @@ impl PidLock {
                     match fs::read_to_string(path)
                         .ok()
                         .and_then(|s| s.trim().parse::<i32>().ok())
+                        // kill(0, 0) and kill(-n, 0) ask about process GROUPS, so those are not a pid
+                        .filter(|&pid| pid > 0)
                     {
                         Some(pid) if process_alive(pid) => {
                             return Err(io::Error::new(
@@ -211,12 +274,55 @@ fn main() -> io::Result<()> {
     atomic_replace(&target, br#"{"v":1}"#)?;
     atomic_replace(&target, br#"{"v":2,"more":"data"}"#)?;
     assert_eq!(fs::read_to_string(&target)?, r#"{"v":2,"more":"data"}"#);
-    // a "crash" between steps 1 and 3 leaves a stray temp file but the target is still the complete old version
-    fs::write(dir.join(".state.json.99999.tmp"), b"{\"v\":3,TRUNC")?;
+    // a "crash" between steps 2 and 3 (nothing runs, not even drop): the target is still the complete old version
+    let crashed = Staged::new(&target, br#"{"v":3}"#)?;
+    let litter = crashed.tmp.clone();
+    std::mem::forget(crashed);
     assert_eq!(fs::read_to_string(&target)?, r#"{"v":2,"more":"data"}"#);
-    fs::remove_file(dir.join(".state.json.99999.tmp"))?;
-    // failure path cleans its temp file: parent directory does not exist => error, nothing left behind
-    assert!(atomic_replace(&dir.join("missing_dir/x"), b"x").is_err());
+    fs::remove_file(litter)?;
+    // two writers of one target, interleaved: each has its own temp file, and each commit installs its own bytes whole
+    let first = Staged::new(&target, b"first writer, the longer content")?;
+    let second = Staged::new(&target, b"second")?;
+    first.commit()?;
+    assert_eq!(fs::read(&target)?, b"first writer, the longer content");
+    second.commit()?;
+    assert_eq!(fs::read(&target)?, b"second");
+    // symlinks already sitting at the next temp names are skipped, never written through
+    let victim = dir.join("victim");
+    fs::write(&victim, b"precious")?;
+    let guarded = dir.join("guarded");
+    for n in 0..50 {
+        let _ = std::os::unix::fs::symlink(&victim, temp_path(&guarded, n)?);
+    }
+    atomic_replace(&guarded, b"new")?;
+    assert_eq!(
+        (fs::read(&victim)?, fs::read(&guarded)?),
+        (b"precious".to_vec(), b"new".to_vec())
+    );
+    for n in 0..50 {
+        let _ = fs::remove_file(temp_path(&guarded, n)?);
+    }
+    // the permission bits of the file being replaced are kept
+    // (0o755 matters: the temp file starts as 0o600, so a private file alone would pass without the copy)
+    for mode in [0o600, 0o755] {
+        fs::set_permissions(&target, fs::Permissions::from_mode(mode))?;
+        atomic_replace(&target, b"secret")?;
+        assert_eq!(fs::metadata(&target)?.permissions().mode() & 0o777, mode);
+    }
+    // a bare file name is relative to the current directory
+    let cwd = std::env::current_dir()?;
+    std::env::set_current_dir(&dir)?;
+    let bare = atomic_replace(Path::new("bare.json"), b"{}");
+    std::env::set_current_dir(cwd)?;
+    bare?;
+    assert_eq!(fs::read(dir.join("bare.json"))?, b"{}");
+    // a failed rename removes its temp file (the target here is a directory, so the temp file was already written)
+    fs::create_dir(dir.join("a_directory"))?;
+    assert!(atomic_replace(&dir.join("a_directory"), b"x").is_err());
+    assert!(
+        atomic_replace(&dir.join(".."), b"x").is_err(),
+        "no file name"
+    );
     let leftovers = fs::read_dir(&dir)?
         .filter_map(|e| e.ok())
         .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
@@ -270,6 +376,14 @@ fn main() -> io::Result<()> {
     assert_eq!(fs::read_to_string(&pl)?, std::process::id().to_string());
     drop(taken);
     println!("   stale lock of dead pid {dead_pid} was reclaimed");
+
+    // "-1" and "0" are not pids: kill(2) would answer about process groups
+    for bad in ["-1", "0", "junk", ""] {
+        fs::write(&pl, bad)?;
+        let e = PidLock::acquire(&pl).err().expect("must refuse");
+        assert_eq!(e.to_string(), "lock file unreadable", "content {bad:?}");
+    }
+    fs::remove_file(&pl)?;
 
     // 4. O_EXCL: of 16 racing threads exactly one creates the file
     let excl = Arc::new(dir.join("only_one"));

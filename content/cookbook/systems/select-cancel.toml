@@ -24,9 +24,11 @@ body = """
 [[sections]]
 heading = "Design notes"
 body = """
-Pattern: race the real work against a cancel signal. When one branch wins, the other future is DROPPED, which cancels it at its next `.await`. A future must therefore be "cancel-safe": dropping it midway must not lose data.
+Pattern: race the real work against a cancel signal. When one branch wins, `select!` drops the other branches' futures: a dropped future is never polled again, so its work stops at the `.await` where it was waiting. What it had done up to there stays done.
 
-`timeout` is the same idea with a clock. Tokio docs: <https://tokio.rs/tokio/tutorial/select>
+A branch built from a reference (`&mut cancel_rx`) drops only the reference, so the same future can be waited on again in the next turn of a loop. A future is "cancel-safe" if dropping it before it finishes loses nothing: `mpsc::Receiver::recv` is; `read_exact` and `write_all` are not. `timeout` is the same idea with a clock.
+
+**Limits**: cancellation only happens when a future yields; a future that blocks or loops without awaiting cannot be timed out. Dropping a `JoinHandle` does not cancel a spawned task (`abort` does). Tokio docs: <https://tokio.rs/tokio/tutorial/select>
 """
 
 [[sources]]

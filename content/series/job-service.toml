@@ -144,7 +144,7 @@ helpful = [
 used_again = ["b22-run-the-jobs"]
 real_uses = "Upload processing, image pipelines, limits on database connections."
 cookbook = [
-    { level = "similar", page = "joinset-semaphore", note = "A JoinSet with a Semaphore that proves a limit.", hidden = true },
+    { level = "similar", page = "joinset-semaphore", note = "A JoinSet with a Semaphore, and a run that checks the limit.", hidden = true },
 ]
 
 [[part]]
