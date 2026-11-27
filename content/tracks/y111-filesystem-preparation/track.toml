@@ -1,0 +1,21 @@
+code = "Y111"
+name = "Toy filesystem: preparation"
+section = "Y"
+tier = "sde3"
+order = 111
+summary = "Preparation for the toy filesystem capstone: numbered pages and numbers on loan, sparse lists, folders and names, changes that survive a power cut and taking stock of damage."
+
+[[stages]]
+slug = "space"
+name = "Pages and space"
+band = "medium"
+
+[[stages]]
+slug = "names"
+name = "Names"
+band = "medium"
+
+[[stages]]
+slug = "damage"
+name = "Crashes and damage"
+band = "hard"

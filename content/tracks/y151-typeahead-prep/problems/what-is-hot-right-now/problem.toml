@@ -1,0 +1,37 @@
+slug = "what-is-hot-right-now"
+title = "What is hot right now?"
+mode = "write"
+level = "medium"
+stage = "what-comes-first"
+order = 4
+status = "ready"
+tags = ["ranking", "exponential decay", "floating point", "overflow"]
+teaches = [
+  "All scores fade by the same factor, so their order does not change while nothing happens. Nothing needs rescoring on a clock tick.",
+  "Weighting new events up is the same as fading old ones down, and it gives a number that only grows.",
+  "A number that grows as a power of two overflows an f64 after about a thousand half-lives. Keep its logarithm, and add in that form.",
+]
+follow_up = "1) How would you remove a report that turned out to be false? 2) What would you store to merge the charts of two stations? 3) A sliding window of one week is another way to forget. What does it cost?"
+related = ["Y151", "M3"]
+
+[[hints]]
+kind = "approach"
+text = "Between two reports, every song's score is multiplied by the same factor. So pick one fixed moment and ask what each report would be worth then."
+
+[[hints]]
+kind = "rust"
+text = "`f64::log2`, `exp2` and `ln_1p` are enough. `log2(2^a + 2^b)` equals `max + log2(1 + 2^(min - max))`. `total_cmp` sorts floats."
+
+[[hints]]
+kind = "edge"
+text = "Two to the power of a billion is not an `f64`. A report older than the newest one is still old. A report of zero plays lists nothing."
+
+[solution]
+explanation = "Each report is worth plays times 2^(at / half_life) when measured against time zero. That sum never needs updating as time passes, and it orders songs exactly as their current scores do. It is far too large for an f64, so its base-2 logarithm is stored, and two such numbers are added without leaving that form. A score is 2 to the power of the stored logarithm minus now / half_life."
+time = "O(1) per report and score; O(s log s) for top, with s songs"
+space = "O(s)"
+
+[[cookbook]]
+level = "similar"
+page = "typeahead-service"
+note = "Its term weights use this idea. This problem adds late reports and a stated accuracy."

@@ -1,0 +1,31 @@
+slug = "bytes-through-pointers"
+title = "Capstone 4: where a file's bytes are"
+mode = "write"
+level = "hard"
+stage = "files"
+order = 4
+status = "ready"
+tags = ["indirect blocks", "sparse files", "truncate", "pointer trees", "hostile input"]
+teaches = [
+  "A small fixed record can reach a huge file through a few levels of pointer blocks.",
+  "Zero means nothing is there, so a file's size and its cost are separate numbers.",
+  "Freeing the end of a tree must free pointer blocks too, and clear the numbers that named them.",
+]
+follow_up = "1) ext4 replaced most indirect blocks with extents (start, length). Which files get cheaper, and which do not? 2) Shrinking a nearly empty 4 GiB file: what does your code visit, and what should it visit? 3) Why is it safe to leave an empty pointer block behind, and when would you rather not?"
+
+[[hints]]
+kind = "approach"
+text = "Write one helper: 'what does slot s of pointer block p name, and allocate it if asked'. The indirect case is one call of it and the double case is two. For freeing, think of one function that is told how many file blocks to keep below a pointer block."
+
+[[hints]]
+kind = "rust"
+text = "Read a block as an owned `Box<Block>`, change a slot, write it back. `div_ceil` gives the number of kept blocks. `saturating_sub` turns 'keep this many of the file' into 'keep this many of this tree'."
+
+[[hints]]
+kind = "edge"
+text = "Allocating a data block can happen after you read the pointer block: write back the copy you changed. A slot that you clear must be cleared on the disk too, not only in your copy of the pointer block."
+
+[solution]
+explanation = "Reading and writing go one block at a time through one mapping function. Cutting walks each tree with the number of blocks to keep, frees whole subtrees past it and frees a pointer block when it is told to keep none."
+time = "one block lookup is O(1); shrinking is O(blocks owned)"
+space = "O(1) beyond the changed blocks"

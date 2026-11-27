@@ -1,0 +1,37 @@
+slug = "suggest-by-what-starts-a-term"
+title = "Suggest by what starts a term"
+mode = "write"
+level = "hard"
+stage = "rank"
+order = 1
+status = "ready"
+tags = ["type-ahead", "capstone", "ranking", "autocomplete"]
+teaches = [
+  "One key per term lets many spellings share one popularity, while the first spelling stays on show.",
+  "Two ideas meet here: scores that fade without being rewritten, and a best list kept at every beginning. The first keeps the second valid.",
+  "A batch is a series of single changes. Finish each one before starting the next.",
+]
+follow_up = "1) How would you remove a term? 2) The best lists cost memory at every node. Which nodes could share one? 3) How would you load a million terms at start-up faster than one by one?"
+related = ["Y151", "F4"]
+
+[[hints]]
+kind = "approach"
+text = "Keep one table of terms found by key, and beside it a structure over the keys that answers for any beginning. Which of the two must change when a term is chosen?"
+
+[[hints]]
+kind = "rust"
+text = "Numbers into a `Vec` of terms avoid borrowing trouble: the nodes hold `usize`s, and a `HashMap<String, usize>` finds a term. Pass the terms to the comparison."
+
+[[hints]]
+kind = "edge"
+text = "A batch may name one term twice, or move two terms under one beginning. A time of 999 000 000 seconds is 277 500 half-lives. A term added with count 0 is still a term."
+
+[solution]
+explanation = "Terms live in a vector and are found by key. Each term stores the base-2 logarithm of its choices weighted by 2 to the power of at / HALF_LIFE, which keeps the order without rescoring. A tree over the key characters keeps the twenty best terms at every node. After each single change, that term is moved within each list on its path by binary search."
+time = "O(L * MOST) per change, O(L + limit) per question"
+space = "O(total key characters * MOST)"
+
+[[cookbook]]
+level = "similar"
+page = "typeahead-service"
+note = "The whole Cookbook service. Its tie rules and matching differ."

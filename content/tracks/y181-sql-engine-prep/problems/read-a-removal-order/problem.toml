@@ -1,0 +1,32 @@
+slug = "read-a-removal-order"
+title = "Read a removal order"
+mode = "write"
+level = "medium"
+stage = "read"
+order = 1
+status = "ready"
+tags = ["parsing", "grammars", "error positions"]
+teaches = [
+  "Keep one position in a list of pieces. A few tiny helpers (look, take this word if it is next, demand it) turn each line of a grammar into one line of code.",
+  "An optional clause is \"take its first word if it is next\". A required one is the same, plus an error when it is not there.",
+  "The best place to point at is the first piece that cannot continue any correct input, or the end when the input stops too early. And a complete order followed by more words is still wrong.",
+]
+follow_up = "1) How would you suggest the word the writer probably meant? 2) What changes if the two optional clauses may come in either order? 3) How would you report two mistakes in one message?"
+related = ["Y182", "Y14"]
+
+[[hints]]
+kind = "approach"
+text = "Read the grammar line by line and write one piece of code for each line, in the same order. Keep the position in one place, so that every error can ask \"where am I now?\"."
+
+[[hints]]
+kind = "rust"
+text = "A small struct holding the pieces and a `usize` is enough. Methods such as `eat(word) -> bool` and `expect(word, wanted) -> Result<(), Mistake>` keep the rest short. `eq_ignore_ascii_case` compares keywords."
+
+[[hints]]
+kind = "edge"
+text = "A keyword is not a name, even in the right place. `u32` parsing accepts `+5`, which is not a count here. After a comma another item must follow."
+
+[solution]
+explanation = "A cursor holds the pieces and the index of the next one. `fail` builds a mistake at that piece, or at the end of the message when no piece is left, so every error position comes from one function. Each grammar line becomes calls to `eat`, `expect`, `count` and `name`. An optional clause is an `eat` that guards its body. At the end, any piece left over is an error."
+time = "O(n) in the length of the message"
+space = "O(n) for the pieces and the items"

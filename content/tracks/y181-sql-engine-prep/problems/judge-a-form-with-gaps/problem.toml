@@ -1,0 +1,32 @@
+slug = "judge-a-form-with-gaps"
+title = "Judge a form with missing answers"
+mode = "write"
+level = "medium"
+stage = "check"
+order = 4
+status = "ready"
+tags = ["three-valued logic", "expression trees", "missing values"]
+teaches = [
+  "A missing answer is not \"no\". A rule about it has a third result: not known yet.",
+  "\"Both\" is already no when one side is no, and \"either\" is already yes when one side is yes, whatever the unknown side turns out to be. Only otherwise does the unknown spread.",
+  "With three results, \"not yes\" and \"no\" are different lists. Decide which one each caller means.",
+]
+follow_up = "1) How would you say which single answer to ask for first? 2) A rule says \"answer 2 is 5, or answer 2 is not 5\". Why is it unknown while the answer is missing, and when would that matter? 3) How would a database index treat the missing values?"
+related = ["Y182", "S1"]
+
+[[hints]]
+kind = "approach"
+text = "Write one function from a rule to a verdict, calling itself on the parts. Decide each rule's table on paper first, with three values on each side."
+
+[[hints]]
+kind = "rust"
+text = "`Option<bool>` or your own three-value enum both work. `answers.get(i).copied().flatten()` reads an answer that may be absent in two ways. A `match` on a pair shows every case."
+
+[[hints]]
+kind = "edge"
+text = "Two missing answers are not known to be equal, even for the same question. `Missing` is never unknown. `All` of nothing is yes and `Any` of nothing is no."
+
+[solution]
+explanation = "Comparisons give unknown as soon as an answer they need is missing. `Missing` looks only at whether it is there. `Not` swaps yes and no and leaves unknown. For `All`, one no settles it; otherwise one unknown makes it unknown. `Any` is the same with yes and no swapped. The two lists keep the forms whose verdict is yes, and those whose verdict is unknown."
+time = "O(size of the rule) for each form"
+space = "O(depth of the rule)"

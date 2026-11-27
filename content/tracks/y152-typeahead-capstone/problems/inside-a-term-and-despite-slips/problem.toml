@@ -1,0 +1,37 @@
+slug = "inside-a-term-and-despite-slips"
+title = "Find it inside a term, and despite slips"
+mode = "write"
+level = "hard"
+stage = "rank"
+order = 2
+status = "ready"
+tags = ["type-ahead", "capstone", "typo tolerance", "ranking"]
+teaches = [
+  "Write the matching rule once, as a plain function. The index only has to find every term the rule might accept.",
+  "Two lookups share one index: all inner windows for a substring, enough padded windows for a typo.",
+  "The cheap list of beginnings answers most keystrokes. The costlier search runs only when that list is short.",
+]
+follow_up = "1) Which typed texts make the candidate list large, and what would you do about them? 2) How would you light up the matched part for each kind of match? 3) The rule drops `rsut` for `rustacean`. What would you change, and what would it cost?"
+related = ["Y151", "Y10"]
+
+[[hints]]
+kind = "approach"
+text = "Get `classify` right first; every later check leans on it. Then ask what an index must hold so that, for a typed key, you can list the terms that pass either of the two window conditions."
+
+[[hints]]
+kind = "rust"
+text = "A window is `[Option<char>; 3]`. A `HashMap` from window to term numbers, filled once per new term, gives rising lists. Count shared windows in a `HashMap<usize, usize>`; intersect the inner lists with `binary_search`."
+
+[[hints]]
+kind = "edge"
+text = "Choosing a term changes no windows. The beginnings list, when not full, already holds every term that starts with the typed key. Compare distinct windows on both sides."
+
+[solution]
+explanation = "classify applies the rule in order, and the index maps each distinct padded window to its terms. The best list for the beginning may not fill the answer.\n\nThen the candidates are the terms that share enough padded windows, plus those with every inner window. Each is judged once, then sorted by distance and rank, and appended."
+time = "O(lengths of the lists read + candidates * judging) per search that needs more than beginnings"
+space = "O(total key characters)"
+
+[[cookbook]]
+level = "similar"
+page = "typeahead-service"
+note = "Its Index::search does the same two lookups. Its tie rule differs."

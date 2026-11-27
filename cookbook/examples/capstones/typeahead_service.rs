@@ -21,21 +21,26 @@
 //! WHY each piece:
 //!  * trie with cached top-K: a query for "a" must not scan every word starting with "a"; each node already holds its
 //!    K best term ids, so a lookup is a walk of |q| nodes plus a clone of <= 20 ids. Writes pay: an event re-sorts one
-//!    small list per node on the term's path. Scores only ever grow (popularity += 2^(t/half_life)), so promoting one
+//!    small list per node on the term's path. Scores only ever grow (popularity += 2^(t/half_life), kept as its log2), so promoting one
 //!    term never invalidates the order of the others (see autocomplete_engine for the decay trick).
 //!  * trigrams: a trie cannot find "script" inside "javascript" or repair "rsut". Every term is indexed by its padded
 //!    character trigrams. Candidates are found by counting shared trigrams (cheap, set arithmetic on posting lists),
 //!    then VERIFIED with the real predicate (substring / Damerau-Levenshtein): filter-then-verify, no false positives.
 //!    Matching policy (like pg_trgm's similarity threshold): a typo match needs >= max(2, grams(q) - 4*d) shared
 //!    trigrams AND distance <= d, d = 1 for 3-5 chars, 2 beyond; queries under 3 chars match by prefix only.
+//!    LIMIT: the shared-trigram floor is stricter than the distance. A half-typed word loses the end padding, so a
+//!    short typo in the start of a long word can be missed ("rsut" does not find "rustacean", one swap away).
 //!  * one ranker, one total order, so results are deterministic and testable against a brute-force oracle.
 //!  * cache invalidation: a change to term t can only alter cached queries that t matches (prefix, infix or typo), so
-//!    only those entries are dropped; hot unrelated prefixes keep their hits. Each entry is stamped with the index
-//!    generation, so a reader that raced with a writer can never install a stale answer.
+//!    only those entries are dropped; hot unrelated prefixes keep their hits. The cache records which index
+//!    generation its entries are valid for; a reader of any other generation neither takes from it nor adds to it.
 //!  * RwLock vs copy-on-write snapshots: the engine can run on either; main() MEASURES both under reader/writer load
 //!    and picks the better one. In-place RwLock updates cost O(path); a snapshot swap costs a full index clone per
 //!    write but readers never wait. The clone grows with index size (hundreds of writes/s on 5000 terms is fine, millions of terms is not), so big indexes
 //!    use in-place updates or persistent/segmented structures; snapshots win for rare bulk rebuilds.
+//!  * limits: one request may carry 128 characters of text and 1000 terms. The index as a whole is not capped, there
+//!    is no authentication or rate limit, handlers run the search on the async worker threads, and the `epoch` that
+//!    a write returns is read after the write, so under concurrent writers it may belong to a later one.
 //!  * request coalescing / debouncing (design note, not coded): clients should debounce keystrokes (~100-150 ms) and
 //!    cancel in-flight requests when a newer one is sent (the response to "ru" is useless once "rus" is typed). The
 //!    server can additionally coalesce identical concurrent misses ("single flight"): the first request computes,
@@ -174,14 +179,15 @@ fn fold(c: char) -> Option<&'static str> {
     })
 }
 
+fn is_mark(c: char) -> bool {
+    ('\u{300}'..='\u{36f}').contains(&c)
+}
+
 /// Lowercase, strip accents via the table, drop combining marks (decomposed accents), collapse whitespace.
 fn normalize(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut last_space = true;
     for c in s.chars() {
-        if ('\u{300}'..='\u{36f}').contains(&c) {
-            continue;
-        }
         if c.is_whitespace() {
             if !last_space {
                 out.push(' ');
@@ -189,8 +195,12 @@ fn normalize(s: &str) -> String {
             }
             continue;
         }
-        last_space = false;
-        for lc in c.to_lowercase() {
+        if c.is_control() {
+            continue; // never let input forge the '\u{1}' padding of the trigram index
+        }
+        // marks are dropped AFTER lowercasing: lowercasing a dotted capital I produces one
+        for lc in c.to_lowercase().filter(|&l| !is_mark(l)) {
+            last_space = false;
             match fold(lc) {
                 Some(r) => out.push_str(r),
                 None => out.push(lc),
@@ -243,7 +253,7 @@ fn osa_max(a: &[char], b: &[char], max: usize) -> usize {
 }
 
 /// Typo distance of query `q` to term `t`: the better of "whole term" and "the first |q| chars of the term" (so a typo in a
-/// half-typed word still matches). Only values <= `max` are meaningful (the other variant may be skipped when it cannot fit).
+/// half-typed word can match, if enough trigrams survive: see `class_of`). Only values <= `max` are meaningful (the other variant may be skipped when it cannot fit).
 fn fuzzy_within(q: &[char], t: &str, max: usize) -> Option<usize> {
     let tc: Vec<char> = t.chars().collect();
     let mut best = usize::MAX;
@@ -337,15 +347,32 @@ fn class_of(qn: &str, tnorm: &str) -> Option<(Kind, u8)> {
 struct Term {
     text: String,
     norm: String,
-    weight: f64, // sum of count * 2^(t / HALF_LIFE): grows, but the ORDER of terms is what decay preserves
+    /// log2 of the sum of count * 2^(t / HALF_LIFE). It only grows, and the ORDER of terms is what decay preserves.
+    /// The sum itself would overflow f64 after 1024 half-lives; -inf means "never counted".
+    weight: f64,
     last: u64,
     hits: u64,
 }
 
 const HALF_LIFE: f64 = 3600.0;
 
-fn boost(now: u64) -> f64 {
-    (now as f64 / HALF_LIFE).exp2()
+/// log2 of `count` selections made at time `now`.
+fn boost(count: u32, now: u64) -> f64 {
+    f64::from(count).log2() + now as f64 / HALF_LIFE
+}
+
+/// log2(2^a + 2^b), without ever forming 2^a or 2^b.
+fn log_add(a: f64, b: f64) -> f64 {
+    let (hi, lo) = if a >= b { (a, b) } else { (b, a) };
+    if lo == f64::NEG_INFINITY {
+        return hi;
+    }
+    hi + (lo - hi).exp2().ln_1p() / std::f64::consts::LN_2
+}
+
+/// The popularity shown to clients: the sum decayed to time `now`.
+fn score_at(weight: f64, now: u64) -> f64 {
+    (weight - now as f64 / HALF_LIFE).exp2()
 }
 
 #[derive(Clone)]
@@ -363,13 +390,14 @@ struct Terms {
 impl Terms {
     fn bump(&mut self, id: u32, count: u32, now: u64) {
         let t = &mut self.list[id as usize];
-        t.weight += count as f64 * boost(now);
+        t.weight = log_add(t.weight, boost(count, now));
         t.last = t.last.max(now);
         t.hits += count as u64;
     }
-    /// Applies an operation to the term table; returns the touched (id, is_new) pairs, or None when nothing changed.
-    fn apply(&mut self, op: &Op, now: u64) -> Option<Vec<(u32, bool)>> {
-        let mut touched = Vec::new();
+    /// Applies an operation to the term table; returns false when nothing changed. `on_touch(table, id, is_new)` runs
+    /// after EACH change, before the next one: a sorted list can only absorb one moved element at a time.
+    fn apply(&mut self, op: &Op, now: u64, mut on_touch: impl FnMut(&Terms, u32, bool)) -> bool {
+        let mut touched = false;
         match op {
             Op::Add(list) => {
                 for (text, count) in list {
@@ -379,35 +407,39 @@ impl Terms {
                     }
                     if let Some(&id) = self.by_norm.get(&norm) {
                         self.bump(id, *count, now);
-                        touched.push((id, false));
+                        on_touch(self, id, false);
+                        touched = true;
                     } else {
                         let id = self.list.len() as u32;
                         self.by_norm.insert(norm.clone(), id);
                         self.list.push(Term {
                             text: text.trim().to_string(),
                             norm,
-                            weight: *count as f64 * boost(now),
+                            weight: boost(*count, now),
                             last: now,
                             hits: *count as u64,
                         });
-                        touched.push((id, true));
+                        on_touch(self, id, true);
+                        touched = true;
                     }
                 }
             }
             Op::Event(text) => {
-                let id = *self.by_norm.get(&normalize(text))?;
+                let Some(&id) = self.by_norm.get(&normalize(text)) else {
+                    return false;
+                };
                 self.bump(id, 1, now);
-                touched.push((id, false));
+                on_touch(self, id, false);
+                touched = true;
             }
         }
-        (!touched.is_empty()).then_some(touched)
+        touched
     }
     /// Total order: more popular, then more recent, then text, then id (so no two terms ever tie).
     fn rank_cmp(&self, a: u32, b: u32) -> Ordering {
         let (x, y) = (&self.list[a as usize], &self.list[b as usize]);
         y.weight
-            .partial_cmp(&x.weight)
-            .unwrap_or(Ordering::Equal)
+            .total_cmp(&x.weight)
             .then(y.last.cmp(&x.last))
             .then_with(|| x.norm.cmp(&y.norm))
             .then(a.cmp(&b))
@@ -415,6 +447,12 @@ impl Terms {
 }
 
 const K: usize = 20; // top-K cached per trie node; also the maximum `limit`
+
+// What one request may carry. Without these, one long term builds one trie node per character, one long query makes
+// every candidate an expensive edit-distance run, and a huge batch holds the cache lock while it is matched against
+// every cached query.
+const MAX_TEXT_CHARS: usize = 128;
+const MAX_BATCH: usize = 1_000;
 
 #[derive(Clone, Default)]
 struct Node {
@@ -552,32 +590,28 @@ impl Index {
         }
     }
     fn apply(&mut self, op: &Op, now: u64) -> Applied {
-        let Some(touched) = self.terms.apply(op, now) else {
-            return Applied {
-                changed: false,
-                norms: vec![],
-                added: 0,
-                existing: 0,
-            };
-        };
         let mut a = Applied {
-            changed: true,
+            changed: false,
             norms: vec![],
             added: 0,
             existing: 0,
         };
-        for (id, is_new) in touched {
-            let norm = self.terms.list[id as usize].norm.clone();
-            self.trie.promote(&norm, id, &self.terms);
+        let (trie, tri) = (&mut self.trie, &mut self.tri);
+        let changed = self.terms.apply(op, now, |terms, id, is_new| {
+            let norm = terms.list[id as usize].norm.clone();
+            trie.promote(&norm, id, terms);
             if is_new {
-                self.tri.add(&norm, id);
+                tri.add(&norm, id);
                 a.added += 1;
             } else {
                 a.existing += 1;
             }
             a.norms.push(norm);
+        });
+        a.changed = changed;
+        if changed {
+            self.epoch += 1;
         }
-        self.epoch += 1;
         a
     }
 
@@ -891,10 +925,7 @@ impl Engine {
                 }
             }
             let hits = Arc::new(idx.search(&norm, limit));
-            let mut c = self.cache.lock().unwrap();
-            if c.epoch == epoch {
-                c.lru.put(key.clone(), hits.clone()); // never install an answer computed from an older generation
-            }
+            self.remember(key.clone(), hits.clone(), epoch);
             (epoch, hits, false)
         });
         (if cached {
@@ -908,6 +939,15 @@ impl Engine {
             cached,
             norm,
             hits,
+        }
+    }
+
+    /// Stores an answer computed from generation `epoch`, but never one computed from an older generation: with
+    /// snapshots, a writer may have changed the index and cleaned the cache while the search was running.
+    fn remember(&self, key: CKey, hits: Arc<Vec<Hit>>, epoch: u64) {
+        let mut c = self.cache.lock().unwrap();
+        if c.epoch == epoch {
+            c.lru.put(key, hits);
         }
     }
 
@@ -1043,23 +1083,45 @@ struct IndexBody {
 
 type Shared = Arc<Engine>;
 
-async fn h_suggest(State(e): State<Shared>, Query(p): Query<SuggestParams>) -> Json<Value> {
+fn too_long(s: &str) -> bool {
+    s.chars().nth(MAX_TEXT_CHARS).is_some()
+}
+
+fn refuse(why: &str) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"ok": false, "error": why})),
+    )
+}
+
+async fn h_suggest(
+    State(e): State<Shared>,
+    Query(p): Query<SuggestParams>,
+) -> (StatusCode, Json<Value>) {
+    if p.q.as_deref().is_some_and(too_long) {
+        return refuse("q is too long");
+    }
     let t = Instant::now();
     let ans = e.suggest(p.q.as_deref().unwrap_or(""), p.limit.unwrap_or(5));
     e.stats.latency.record(t.elapsed().as_micros() as u64);
     let now = e.clock.now();
-    let decay = (-(now as f64) / HALF_LIFE).exp2();
     let items: Vec<Value> = ans
         .hits
         .iter()
-        .map(|h| json!({"term": h.term, "score": (h.weight * decay * 1000.0).round() / 1000.0, "kind": h.kind.name(), "dist": h.dist}))
+        .map(|h| json!({"term": h.term, "score": (score_at(h.weight, now) * 1000.0).round() / 1000.0, "kind": h.kind.name(), "dist": h.dist}))
         .collect();
-    Json(
-        json!({"q": p.q.unwrap_or_default(), "normalized": ans.norm, "epoch": ans.epoch, "cached": ans.cached, "suggestions": items}),
+    (
+        StatusCode::OK,
+        Json(
+            json!({"q": p.q.unwrap_or_default(), "normalized": ans.norm, "epoch": ans.epoch, "cached": ans.cached, "suggestions": items}),
+        ),
     )
 }
 
 async fn h_events(State(e): State<Shared>, Json(b): Json<EventBody>) -> (StatusCode, Json<Value>) {
+    if too_long(&b.term) {
+        return refuse("term is too long");
+    }
     let a = e.apply(Op::Event(b.term.clone()));
     if a.changed {
         (
@@ -1074,11 +1136,17 @@ async fn h_events(State(e): State<Shared>, Json(b): Json<EventBody>) -> (StatusC
     }
 }
 
-async fn h_index(State(e): State<Shared>, Json(b): Json<IndexBody>) -> Json<Value> {
+async fn h_index(State(e): State<Shared>, Json(b): Json<IndexBody>) -> (StatusCode, Json<Value>) {
+    if b.terms.len() > MAX_BATCH || b.terms.iter().any(|t| too_long(&t.term)) {
+        return refuse("too many terms, or a term is too long");
+    }
     let a = e.apply(Op::Add(
         b.terms.into_iter().map(|t| (t.term, t.count)).collect(),
     ));
-    Json(json!({"added": a.added, "existing": a.existing, "epoch": e.epoch()}))
+    (
+        StatusCode::OK,
+        Json(json!({"added": a.added, "existing": a.existing, "epoch": e.epoch()})),
+    )
 }
 
 async fn h_metrics(State(e): State<Shared>) -> String {
@@ -1384,6 +1452,66 @@ async fn main() {
         (4375..=5625).contains(&hist.quantile(0.5)) && hist.quantile(0.99) >= 8660,
     );
 
+    // each of these failed before the matching fix
+    check(
+        "normalize is idempotent for every char, drops control chars and the dot of a capital dotted I",
+        normalize("\u{130}stanbul") == "istanbul"
+            && normalize("a\u{1}b") == "ab"
+            && ('\0'..=char::MAX).all(|c| {
+                let once = normalize(&format!("a{c}b"));
+                normalize(&once) == once
+            }),
+    );
+    // One batch that moves two terms of one list. Re-ranking after the whole batch binary-searches an unsorted list.
+    let add = |l: &[(&str, u32)]| Op::Add(l.iter().map(|(t, c)| (t.to_string(), *c)).collect());
+    let mut idx = Index::new();
+    idx.apply(&add(&[("za", 100), ("zb", 90), ("zc", 80), ("zd", 70)]), 0);
+    idx.apply(&add(&[("ze", 95), ("zc", 1000)]), 0);
+    check(
+        "a batch that moves several terms keeps every trie list sorted",
+        ["", "z"]
+            .iter()
+            .all(|q| ids(&idx.search(q, 20)) == oracle(&idx.terms, q, 20)),
+    );
+    // 2000 half-lives (83 days of uptime): 2^2000 does not fit in an f64.
+    let late = Arc::new(ManualClock::new(2_000 * HALF_LIFE as u64));
+    let old = Engine::new(
+        StoreKind::RwLock,
+        late.clone(),
+        8,
+        vec![("aa".into(), 1), ("ab".into(), 5), ("ac".into(), 0)],
+    );
+    old.apply(Op::Event("aa".into()));
+    let shown: Vec<(String, f64)> = old
+        .suggest("a", 3)
+        .hits
+        .iter()
+        .map(|h| (h.term.clone(), score_at(h.weight, late.now())))
+        .collect();
+    check(
+        "popularity stays finite and ordered after 2000 half-lives",
+        shown.iter().map(|s| s.0.as_str()).collect::<Vec<_>>() == ["ab", "aa", "ac"]
+            && (shown[0].1 - 5.0).abs() < 1e-6
+            && (shown[1].1 - 2.0).abs() < 1e-6
+            && shown[2].1 == 0.0,
+    );
+
+    // The late reader of a snapshot store, replayed step by step: search, then a write, then the store of the answer.
+    let racy = Engine::new(
+        StoreKind::Snapshot,
+        Arc::new(ManualClock::new(0)),
+        8,
+        vec![("aa".into(), 5), ("ab".into(), 1)],
+    );
+    let (old_epoch, old_hits) = racy.store.with(|i| (i.epoch, Arc::new(i.search("a", 5))));
+    racy.apply(Op::Add(vec![("ac".into(), 9)]));
+    racy.remember(("a".into(), 5), old_hits, old_epoch);
+    let after = racy.suggest("a", 5);
+    check(
+        "an answer computed before a write is not stored after it",
+        !after.cached && ids(&after.hits) == racy.oracle_now("a", 5),
+    );
+
     // ---- 2. exact equality with a brute-force oracle
     println!(
         "\n[2] 5000 random terms, 2000 random queries: engine == brute-force oracle (cold cache, then warm cache)"
@@ -1414,7 +1542,10 @@ async fn main() {
         assert_eq!(ids(&cold.hits), want, "query {q:?} limit {limit}");
         let warm = engine.suggest(q, *limit);
         assert_eq!(ids(&warm.hits), want, "warm query {q:?}");
-        assert!(warm.cached || engine.stats.hits.load(SeqCst) > 0);
+        assert!(
+            warm.cached,
+            "the same query again must come from the cache: {q:?}"
+        );
         with_typo += want.iter().any(|h| h.1 == Kind::Typo) as usize;
         with_infix += want.iter().any(|h| h.1 == Kind::Infix) as usize;
         non_ascii += (!q.is_ascii()) as usize;
@@ -1717,6 +1848,41 @@ async fn main() {
         m.contains("typeahead_cache_hits_total")
             && m.contains("typeahead_suggest_latency_us{quantile=\"0.99\"}"),
     );
+    let long = "r".repeat(MAX_TEXT_CHARS + 1);
+    let many: Vec<Value> = (0..=MAX_BATCH)
+        .map(|i| json!({"term": format!("t{i}")}))
+        .collect();
+    let before = svc.term_count();
+    let refused = [
+        c.get(format!("{base}/suggest"))
+            .query(&[("q", long.as_str())])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        c.post(format!("{base}/events"))
+            .json(&json!({"term": long}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        c.post(format!("{base}/index"))
+            .json(&json!({"terms": [{"term": "fine"}, {"term": long}]}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        c.post(format!("{base}/index"))
+            .json(&json!({"terms": many}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+    ];
+    check(
+        "over-long text and over-large batches are refused with 400 and index nothing",
+        refused.iter().all(|s| *s == 400) && svc.term_count() == before,
+    );
     drop(c);
     http.stop().await;
 
@@ -1839,9 +2005,8 @@ async fn main() {
             "response claims a generation from the future: {epoch}"
         );
         while applied < k {
-            terms_at
-                .apply(&ops[applied].0, ops[applied].1)
-                .expect("replayed op changes the index");
+            let changed = terms_at.apply(&ops[applied].0, ops[applied].1, |_, _, _| {});
+            assert!(changed, "replayed op changes the index");
             applied += 1;
         }
         let want: Vec<String> = oracle(&terms_at, q, *limit)

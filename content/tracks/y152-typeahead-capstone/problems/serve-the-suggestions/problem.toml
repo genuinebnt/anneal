@@ -1,0 +1,38 @@
+slug = "serve-the-suggestions"
+title = "Serve the suggestions over HTTP"
+mode = "write"
+level = "hard"
+stage = "serve"
+order = 4
+status = "ready"
+tags = ["type-ahead", "capstone", "axum", "input limits", "metrics"]
+teaches = [
+  "Time comes in through a trait, so a test can set both the date and how long a request seemed to take.",
+  "Text from a stranger needs a limit before it reaches the index or the search. Check the whole batch before the first change.",
+  "Metrics say what happened to requests that were answered. Decide for each counter what a refusal does to it, and write it down.",
+]
+follow_up = "1) How would a browser avoid sending a request on every keystroke, and what should the server do when an old one is still running? 2) A slow search runs on an async worker thread. When is `spawn_blocking` worth it? 3) What would you need before putting this on the open internet?"
+related = ["B1", "Y151"]
+crates = ["axum", "tokio", "serde", "serde_json", "tower"]
+
+[[hints]]
+kind = "approach"
+text = "Write one handler per route over a shared state that holds the service, the clock and the counters. Do all checks of a request before any change."
+
+[[hints]]
+kind = "rust"
+text = "`Router::new().route(..).with_state(Arc<App>)`; the extractors `State`, `Query` and `Json`. A handler may return `(StatusCode, Json<Value>)`. Keep counters and `Latencies` behind one `Mutex`, and never hold it across the search."
+
+[[hints]]
+kind = "edge"
+text = "`chars().nth(128)` tells you whether a text is too long without counting all of it. A refused request calls no `micros()`. `count` is a `u32`."
+
+[solution]
+explanation = "The router's state holds the service, the clock and the counters. Each handler checks its limits first, in characters, and refuses with one error shape. The suggest handler times only the call into the service. The counters and the latency buckets share one lock, which is taken after the search. axum's own extractor rejections cover malformed requests."
+time = "O(request size) plus the service call"
+space = "O(1) per request beyond the body"
+
+[[cookbook]]
+level = "similar"
+page = "typeahead-service"
+note = "The whole Cookbook service. Its response fields and limits differ in places."

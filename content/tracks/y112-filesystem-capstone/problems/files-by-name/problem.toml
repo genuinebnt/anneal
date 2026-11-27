@@ -1,0 +1,31 @@
+slug = "files-by-name"
+title = "Capstone 5: files by name"
+mode = "write"
+level = "hard"
+stage = "files"
+order = 5
+status = "ready"
+tags = ["directories", "path resolution", "directory entries", "link counts", "hostile input"]
+teaches = [
+  "A directory is a file of records, so the code that stores files also stores the names.",
+  "When '.' and '..' are ordinary entries, path walking has no special cases.",
+  "Cut a long operation into pieces that are each atomic, and say plainly that the whole is not.",
+]
+follow_up = "1) Looking a name up reads the whole directory. What would you store instead for a directory of a million files? 2) Two programs append to one file with your `write`. What can the file hold afterwards? 3) A path of 100 000 parts: what does your resolver cost?"
+
+[[hints]]
+kind = "approach"
+text = "The directory layer is given, so start with a walk over path parts. Then write 'find the parent and the last part', which every changing operation needs. Each operation is then a few checks inside one transaction."
+
+[[hints]]
+kind = "rust"
+text = "The given `components` splits a path into its parts. A `fn parent_of<'p>(&mut self, path: &'p str) -> R<(u32, &'p str)>` can hand back a slice of the path."
+
+[[hints]]
+kind = "edge"
+text = "For pieces, the first one may start in the middle of a block, so it is shorter than W whole blocks."
+
+[solution]
+explanation = "Directories reuse the file code, so names cost only a record format. Every operation resolves a parent, checks and changes inside one transaction, and only `write` uses several."
+time = "a lookup is O(entries); a path is O(parts x entries)"
+space = "O(directory size)"

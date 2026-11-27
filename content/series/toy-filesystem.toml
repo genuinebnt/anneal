@@ -1,0 +1,573 @@
+# The series "From numbered pages to a filesystem": an order over existing and new problems, not a track. It copies and
+# moves nothing. required: do these first. helpful: keep closed (hidden = true); reveals_method = true means the link gives
+# away how to solve the part. cookbook: reference pages (slugs in content/cookbook), also closed by default; level is exact
+# (solves the task), similar (same technique, different task) or related (explains the idea). Minutes are estimates;
+# nobody has been timed.
+
+[series]
+id = "toy-filesystem"
+rank = 11
+title = "From numbered pages to a filesystem"
+summary = "Small parts give you what the capstone needs. Then you build a small UNIX filesystem on a disk of blocks, one step at a time."
+note = "All times are estimates; nobody has been timed."
+capstone_title = "Capstone: build a filesystem"
+capstone_summary = "A disk and its first block, free space, files with holes, directories, a disk that loses writes, surviving a power cut and a checker for damaged disks."
+capstone_note = "From step 2 on, each starter holds reference code for earlier steps, which gives those steps away. Some starters also give parts of their own step, as their statements say. The filesystem takes one caller at a time and has no permission checks or open file handles. Only the superblock and journal carry checksums, and a test disk imitates power loss."
+capstone_cookbook = "toy-filesystem"
+
+[[stage]]
+id = "pages"
+name = "Bytes in fixed places"
+
+[[stage]]
+id = "space"
+name = "Keep track of space"
+
+[[stage]]
+id = "waiting"
+name = "Changes that wait"
+
+[[stage]]
+id = "names"
+name = "Names for things"
+
+[[stage]]
+id = "damage"
+name = "Crashes and damage"
+
+[[part]]
+number = 1
+id = "y111-a-file-of-numbered-pages"
+stage = "pages"
+status = "new"
+minutes = 60
+blurb = "Keep data in one file and touch one piece at a time"
+new_idea = "Reading and writing at a position, and open options that say what is meant"
+reuses = "nothing"
+know_first = "Slices, Result and the ? operator"
+required = []
+helpful = []
+used_again = ["y112-survive-a-power-cut"]
+real_uses = "Database page files, disk images, swap files."
+cookbook = [
+    { level = "similar", page = "toy-filesystem", note = "FileDevice does the same with fixed 4096-byte blocks; it empties an existing file on create, which this task forbids.", source = "examples/capstones/toy_filesystem.rs", hidden = true },
+]
+
+[[part]]
+number = 2
+id = "l3-binary-frame-parser"
+stage = "pages"
+status = "existing"
+minutes = 45
+blurb = "Read structured data out of raw bytes without trusting it"
+new_idea = "Fixed fields at fixed offsets, with every length checked before use"
+reuses = "slices"
+know_first = "Slices and Option"
+required = []
+helpful = []
+used_again = ["y112-the-first-block", "y112-files-by-name"]
+real_uses = "File headers, wire protocols, on-disk records. The capstone uses little-endian fields; this part uses big-endian ones."
+cookbook = []
+
+[[part]]
+number = 3
+id = "l5-const-fn-crc-table"
+stage = "pages"
+status = "existing"
+minutes = 45
+blurb = "Make a cheap check for changed bytes"
+new_idea = "A checksum table built by the compiler"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y112-the-first-block", "y112-survive-a-power-cut"]
+real_uses = "Superblocks, journals, network frames. Step 1 uses a 32-bit, bit-reflected relative that continues from an earlier result."
+cookbook = []
+
+[[part]]
+number = 4
+id = "y111-numbers-on-loan"
+stage = "space"
+status = "new"
+minutes = 60
+blurb = "Hand out numbers, take them back, and remember it in very little room"
+new_idea = "One bit per item, searched on from the last answer"
+reuses = "fields at fixed places"
+required = []
+helpful = []
+used_again = ["y112-empty-disk-to-inodes"]
+real_uses = "Block and inode bitmaps, port and process-id allocators."
+cookbook = [
+    { level = "similar", page = "toy-filesystem", note = "alloc_bit is the same search, over bitmap blocks. It does not keep reserved numbers or a free count.", source = "examples/capstones/toy_filesystem.rs", hidden = true },
+]
+
+[[part]]
+number = 5
+id = "y111-a-long-list-mostly-empty"
+stage = "space"
+status = "new"
+minutes = 105
+blurb = "Store a gigantic list that is nearly all zeros"
+new_idea = "The digits of an index lead through a tree whose empty branches do not exist"
+reuses = "running out leaves no trace, a first taste of transactions"
+know_first = "Implementing a trait, and code generic over it"
+required = []
+helpful = [
+    { id = "y111-numbers-on-loan", why = "handing out a limited supply and taking it back", reveals_method = false, hidden = true },
+]
+used_again = ["y112-bytes-through-pointers"]
+real_uses = "Page tables, sparse files, radix trees in kernels."
+cookbook = [
+    { level = "related", page = "toy-filesystem", note = "bmap and free_range walk a lopsided pointer tree; unlike this task, they may keep an empty pointer block.", source = "examples/capstones/toy_filesystem.rs", hidden = true },
+]
+
+[[part]]
+number = 6
+id = "f4-lru-cache-arena"
+stage = "waiting"
+status = "existing"
+minutes = 60
+blurb = "Keep the most useful things close, in limited room"
+new_idea = "Evicting the entry used longest ago"
+reuses = "nothing"
+know_first = "Implementing a trait, and code generic over it"
+required = []
+helpful = []
+used_again = ["y112-changes-held-back"]
+real_uses = "Page caches, buffer pools. Step 2 needs the rule, not the constant-time lists."
+cookbook = []
+
+[[part]]
+number = 7
+id = "y17-unsaved-changes"
+stage = "waiting"
+status = "existing"
+minutes = 75
+blurb = "Show data as it will be before anything is saved"
+new_idea = "Changes held in a layer above data they have not touched"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y112-changes-held-back", "y112-empty-disk-to-inodes"]
+real_uses = "Draft editing, overlay filesystems, transaction buffers."
+cookbook = []
+
+[[part]]
+number = 8
+id = "l1-rollback-guard"
+stage = "waiting"
+status = "existing"
+minutes = 20
+blurb = "Leave things as they were when a step fails halfway"
+new_idea = "Running a closure and undoing its work if it does not finish"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y112-empty-disk-to-inodes"]
+real_uses = "Transaction wrappers and cleanup guards."
+cookbook = []
+
+[[part]]
+number = 9
+id = "y111-folders-that-move"
+stage = "names"
+status = "new"
+minutes = 75
+blurb = "Let people drag folders around without breaking the tree"
+new_idea = "Numbered nodes with parent links, and refusing a move that would close a loop"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y112-files-by-name", "y112-remove-link-and-move"]
+real_uses = "File managers, outline editors, category trees."
+cookbook = []
+
+[[part]]
+number = 10
+id = "y111-one-thing-many-names"
+stage = "names"
+status = "new"
+minutes = 45
+blurb = "Delete something only when nobody can reach it any more"
+new_idea = "Names point at a number; the thing counts its names"
+reuses = "checking everything before changing anything"
+required = []
+helpful = []
+used_again = ["y112-remove-link-and-move", "y112-check-the-disk"]
+real_uses = "Hard links, content stores, shared assets."
+cookbook = [
+    { level = "related", page = "toy-filesystem", note = "link, unlink and rename apply the same counting to inodes, with directory rules on top.", source = "examples/capstones/toy_filesystem.rs", hidden = true },
+]
+
+[[part]]
+number = 11
+id = "y17-after-the-power-cut"
+stage = "damage"
+status = "existing"
+minutes = 60
+blurb = "Work out what may be on a disk after the power fails"
+new_idea = "Every state a crash may leave, given what was synced"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y112-a-disk-that-forgets", "y112-survive-a-power-cut"]
+real_uses = "Reasoning about durability in any storage code."
+cookbook = []
+
+[[part]]
+number = 12
+id = "y111-several-sectors-as-one"
+stage = "damage"
+status = "new"
+minutes = 120
+blurb = "Change several records so that a power cut cannot split them"
+new_idea = "A complete description of the change is made safe before the change itself"
+reuses = "what a power cut leaves, and a checksum"
+required = ["y17-after-the-power-cut"]
+helpful = [
+    { id = "y9-kv-store-wal", why = "telling a whole record from a torn one", reveals_method = true, hidden = true },
+    { id = "l5-const-fn-crc-table", why = "a checksum", reveals_method = true, hidden = true },
+]
+used_again = ["y112-survive-a-power-cut"]
+real_uses = "Database and filesystem journals, firmware updates."
+cookbook = [
+    { level = "similar", page = "toy-filesystem", note = "The commit and replay_journal functions apply one method inside the filesystem. They show how to solve this part.", source = "examples/capstones/toy_filesystem.rs", hidden = true },
+]
+
+[[part]]
+number = 13
+id = "y111-lost-and-claimed-twice"
+stage = "damage"
+status = "new"
+minutes = 90
+blurb = "Find what a damaged store has lost, and repair it without making it worse"
+new_idea = "Work out what the summaries should say, and repair only what a complete view supports"
+reuses = "trees and counts from parts 9 and 10"
+required = []
+helpful = [
+    { id = "y111-folders-that-move", why = "nodes kept by number", reveals_method = false, hidden = true },
+    { id = "y111-one-thing-many-names", why = "counting references", reveals_method = false, hidden = true },
+]
+used_again = ["y112-check-the-disk"]
+real_uses = "fsck, git fsck, garbage collectors, storage scrubbers."
+cookbook = [
+    { level = "similar", page = "toy-filesystem", note = "fsck walks a directory tree and compares it with bitmaps and link counts. It shows the method.", source = "examples/capstones/toy_filesystem.rs", hidden = true },
+]
+
+[[capstone]]
+step = 1
+id = "y112-the-first-block"
+title = "The disk and its first block"
+status = "new"
+minutes = 90
+blurb = "Describe a disk so that nothing wrong is ever trusted"
+required = ["y111-a-file-of-numbered-pages", "l5-const-fn-crc-table"]
+prepared_by = ["y111-a-file-of-numbered-pages", "l3-binary-frame-parser", "l5-const-fn-crc-table"]
+helpful = []
+real_uses = "Every filesystem and database file starts with a block like this."
+cookbook = [
+    { level = "similar", page = "toy-filesystem", note = "The Cookbook filesystem. It shows how to solve this step. Its names, error rules and some behaviour differ.", source = "examples/capstones/toy_filesystem.rs", hidden = true },
+]
+
+[[capstone]]
+step = 2
+id = "y112-changes-held-back"
+title = "Changes that wait"
+status = "new"
+minutes = 60
+blurb = "Hold changes away from the disk until you decide"
+required = ["y112-the-first-block", "f4-lru-cache-arena"]
+prepared_by = ["f4-lru-cache-arena", "y17-unsaved-changes"]
+helpful = []
+real_uses = "Buffer pools and page caches."
+cookbook = [
+    { level = "similar", page = "toy-filesystem", note = "The Cookbook filesystem. It shows how to solve this step. Its names, error rules and some behaviour differ.", source = "examples/capstones/toy_filesystem.rs", hidden = true },
+]
+
+[[capstone]]
+step = 3
+id = "y112-empty-disk-to-inodes"
+title = "Format, mount and hand out space"
+status = "new"
+minutes = 120
+blurb = "Make an empty filesystem and share out its room"
+required = ["y112-changes-held-back", "y111-numbers-on-loan"]
+prepared_by = ["y111-numbers-on-loan", "l1-rollback-guard", "y17-unsaved-changes"]
+helpful = []
+real_uses = "ext2-style filesystems."
+cookbook = [
+    { level = "similar", page = "toy-filesystem", note = "The Cookbook filesystem. It shows how to solve this step. Its names, error rules and some behaviour differ.", source = "examples/capstones/toy_filesystem.rs", hidden = true },
+]
+
+[[capstone]]
+step = 4
+id = "y112-bytes-through-pointers"
+title = "Where a file's bytes are"
+status = "new"
+minutes = 105
+blurb = "Give files any size, and charge only for what is written"
+required = ["y112-empty-disk-to-inodes", "y111-a-long-list-mostly-empty"]
+prepared_by = ["y111-a-long-list-mostly-empty"]
+helpful = []
+real_uses = "Unix filesystems before extents; page tables."
+cookbook = [
+    { level = "similar", page = "toy-filesystem", note = "The Cookbook filesystem. It shows how to solve this step. Its names, error rules and some behaviour differ.", source = "examples/capstones/toy_filesystem.rs", hidden = true },
+]
+
+[[capstone]]
+step = 5
+id = "y112-files-by-name"
+title = "Files by name"
+status = "new"
+minutes = 105
+blurb = "Find files by their paths"
+required = ["y112-bytes-through-pointers", "y111-folders-that-move"]
+prepared_by = ["y111-folders-that-move", "l3-binary-frame-parser"]
+helpful = []
+real_uses = "Directory formats and path lookup."
+cookbook = [
+    { level = "similar", page = "toy-filesystem", note = "The Cookbook filesystem. It shows how to solve this step. Its names, error rules and some behaviour differ.", source = "examples/capstones/toy_filesystem.rs", hidden = true },
+]
+
+[[capstone]]
+step = 6
+id = "y112-remove-link-and-move"
+title = "Remove, link and move"
+status = "new"
+minutes = 90
+blurb = "Delete, rename and share files without losing any"
+required = ["y112-files-by-name", "y111-one-thing-many-names"]
+prepared_by = ["y111-one-thing-many-names", "y111-folders-that-move"]
+helpful = []
+real_uses = "The POSIX unlink and rename rules that safe saving depends on."
+cookbook = [
+    { level = "similar", page = "toy-filesystem", note = "The Cookbook filesystem. It shows how to solve this step. Its names, error rules and some behaviour differ.", source = "examples/capstones/toy_filesystem.rs", hidden = true },
+]
+
+[[capstone]]
+step = 7
+id = "y112-a-disk-that-forgets"
+title = "A disk that loses writes"
+status = "new"
+minutes = 75
+blurb = "Build a disk that fails on demand"
+required = ["y112-remove-link-and-move", "y17-after-the-power-cut"]
+prepared_by = ["y17-after-the-power-cut"]
+helpful = []
+real_uses = "Crash-consistency testing of storage engines."
+cookbook = [
+    { level = "similar", page = "toy-filesystem", note = "The Cookbook filesystem. It shows how to solve this step. Its names, error rules and some behaviour differ.", source = "examples/capstones/toy_filesystem.rs", hidden = true },
+]
+
+[[capstone]]
+step = 8
+id = "y112-survive-a-power-cut"
+title = "Survive a power cut"
+status = "new"
+minutes = 120
+blurb = "Keep the filesystem whole whenever the power fails"
+required = ["y112-a-disk-that-forgets", "y111-several-sectors-as-one"]
+prepared_by = ["y111-several-sectors-as-one", "l5-const-fn-crc-table", "y111-a-file-of-numbered-pages"]
+helpful = []
+real_uses = "ext3 and ext4 journals, database redo logs."
+cookbook = [
+    { level = "similar", page = "toy-filesystem", note = "The Cookbook filesystem. It shows how to solve this step. Its names, error rules and some behaviour differ.", source = "examples/capstones/toy_filesystem.rs", hidden = true },
+]
+
+[[capstone]]
+step = 9
+id = "y112-check-the-disk"
+title = "Check the disk and repair it"
+status = "new"
+minutes = 120
+blurb = "Find damage and repair it without destroying data"
+required = ["y112-survive-a-power-cut", "y111-lost-and-claimed-twice"]
+prepared_by = ["y111-lost-and-claimed-twice", "y111-one-thing-many-names"]
+helpful = []
+real_uses = "fsck and storage scrubbers."
+cookbook = [
+    { level = "similar", page = "toy-filesystem", note = "The Cookbook filesystem. It shows how to solve this step. Its names, error rules and some behaviour differ.", source = "examples/capstones/toy_filesystem.rs", hidden = true },
+]
+
+[[revisit]]
+part = "y111-a-long-list-mostly-empty"
+before = "y112-bytes-through-pointers"
+how = "Solve part 5 again. Say when each node may be freed, then compare with the rule of step 4."
+
+[[revisit]]
+part = "y111-several-sectors-as-one"
+before = "y112-survive-a-power-cut"
+how = "From memory, name the disk that each of your syncs rules out. Then solve part 12 again."
+
+[[revisit]]
+part = "y111-lost-and-claimed-twice"
+before = "y112-check-the-disk"
+how = "Solve part 13 again, and say why some repairs must wait."
+
+[[readiness]]
+group = "The disk"
+concept = "Positional file I/O: OpenOptions, FileExt, set_len, sync_data"
+steps = [1]
+parts = ["y111-a-file-of-numbered-pages"]
+note = "The starter of step 8 gives the image file as code."
+
+[[readiness]]
+group = "The disk"
+concept = "Fixed fields at fixed offsets, every length checked"
+steps = [1, 3, 5, 8]
+parts = ["l3-binary-frame-parser"]
+note = "The capstone uses to_le_bytes and from_le_bytes; step 1 gives the tables of offsets."
+
+[[readiness]]
+group = "The disk"
+concept = "checked_mul, checked_add and div_ceil on untrusted numbers"
+steps = [1, 4]
+parts = ["y111-a-file-of-numbered-pages", "y111-numbers-on-loan"]
+
+[[readiness]]
+group = "The disk"
+concept = "A table-driven checksum built in a const"
+steps = [1, 8]
+parts = ["l5-const-fn-crc-table"]
+note = "Step 1 needs the 32-bit reflected form and continuing from an earlier result. Its statement defines both."
+
+[[readiness]]
+group = "The disk"
+concept = "Implementing a trait, and code generic over it"
+steps = [1, 2, 3]
+parts = ["y111-a-long-list-mostly-empty", "y111-several-sectors-as-one"]
+note = "Part 5 is the first generic code. Know trait syntax before you start it."
+
+[[readiness]]
+group = "Space and files"
+concept = "Bit operations on a bitmap; searching on from the last answer"
+steps = [3, 9]
+parts = ["y111-numbers-on-loan"]
+
+[[readiness]]
+group = "Space and files"
+concept = "Evicting the least recently used; HashMap with retain and min_by_key"
+steps = [2]
+parts = ["f4-lru-cache-arena"]
+note = "retain and min_by_key are new in step 2 and named in its hints."
+
+[[readiness]]
+group = "Space and files"
+concept = "A layer of changes above stored data"
+steps = [2, 3]
+parts = ["y17-unsaved-changes"]
+
+[[readiness]]
+group = "Space and files"
+concept = "FnOnce closures that change a value, and undoing on failure"
+steps = [3]
+parts = ["l1-rollback-guard"]
+note = "Step 3 passes the whole filesystem to the closure and returns a Result."
+
+[[readiness]]
+group = "Space and files"
+concept = "A trait object (Box<dyn Clock>) for an injected clock"
+steps = [3]
+parts = []
+note = "New in step 3; the trait and a ticking clock are given in its starter."
+
+[[readiness]]
+group = "Space and files"
+concept = "A tree of pointer blocks with holes, and cutting off its end"
+steps = [4]
+parts = ["y111-a-long-list-mostly-empty"]
+note = "The three regions of an inode and when to keep an empty pointer block are new in step 4."
+
+[[readiness]]
+group = "Names"
+concept = "Paths with . and .., parent walks and refusing loops"
+steps = [5, 6]
+parts = ["y111-folders-that-move"]
+note = "strip_prefix, split and chunks_exact are used; step 5 names them in its hints."
+
+[[readiness]]
+group = "Names"
+concept = "Reference counts and rename-over rules"
+steps = [6]
+parts = ["y111-one-thing-many-names"]
+
+[[readiness]]
+group = "Crashes and damage"
+concept = "What unsynced writes may leave behind"
+steps = [7, 8]
+parts = ["y17-after-the-power-cut"]
+
+[[readiness]]
+group = "Crashes and damage"
+concept = "A seeded generator and a shuffle"
+steps = [7]
+parts = []
+note = "New in step 7; any generator will do, and its hint names two."
+
+[[readiness]]
+group = "Crashes and damage"
+concept = "Atomic multi-block updates, torn records, write barriers, replay that can repeat"
+steps = [8]
+parts = ["y111-several-sectors-as-one"]
+note = "Step 8 fixes the exact format and calls. Sequence numbers with wrapping_add are in its statement."
+
+[[readiness]]
+group = "Crashes and damage"
+concept = "Walking with an explicit stack; BTreeMap, HashSet, sort and dedup"
+steps = [9]
+parts = ["y111-lost-and-claimed-twice"]
+
+[[readiness]]
+group = "Crashes and damage"
+concept = "Repair that only adds when the view is incomplete"
+steps = [9]
+parts = ["y111-lost-and-claimed-twice"]
+
+[[connection]]
+idea = "Numbers read from a disk are claims"
+learn = ["l3-binary-frame-parser"]
+again = ["y111-a-file-of-numbered-pages", "y111-numbers-on-loan"]
+apply = ["y112-the-first-block", "y112-bytes-through-pointers", "y112-files-by-name", "y112-check-the-disk"]
+
+[[connection]]
+idea = "All of a change or none of it"
+learn = ["l1-rollback-guard"]
+again = ["y111-a-long-list-mostly-empty", "y111-several-sectors-as-one"]
+apply = ["y112-empty-disk-to-inodes", "y112-survive-a-power-cut"]
+
+[[connection]]
+idea = "A name is only a way to reach something"
+learn = ["y111-folders-that-move"]
+again = ["y111-one-thing-many-names"]
+apply = ["y112-files-by-name", "y112-remove-link-and-move"]
+
+[[connection]]
+idea = "Only sync tells you what is stored"
+learn = ["y17-after-the-power-cut"]
+again = ["y111-several-sectors-as-one"]
+apply = ["y112-a-disk-that-forgets", "y112-survive-a-power-cut"]
+
+[[connection]]
+idea = "Do not destroy what you could not see"
+learn = ["y111-lost-and-claimed-twice"]
+apply = ["y112-check-the-disk"]
+
+[[side_path]]
+id = "f2-slotted-page"
+why = "after part 2: many little-endian records packed into one 4096-byte block"
+after = "l3-binary-frame-parser"
+
+[[side_path]]
+id = "y9-kv-store-wal"
+why = "after part 12: the same worry for a log that only grows"
+after = "y111-several-sectors-as-one"
+
+[[side_path]]
+id = "y17-save-without-tearing"
+why = "before capstone step 8: what a real directory adds when the image is a new file"
+before = "y112-survive-a-power-cut"
+
+[[side_path]]
+id = "y5-catch-the-broken-queue"
+why = "before capstone step 9: tests that no wrong implementation gets past"
+before = "y112-check-the-disk"

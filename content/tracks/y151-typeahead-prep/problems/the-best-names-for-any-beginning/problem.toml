@@ -1,0 +1,42 @@
+slug = "the-best-names-for-any-beginning"
+title = "The best players for any beginning of a name"
+mode = "write"
+level = "hard"
+stage = "what-comes-first"
+order = 5
+status = "ready"
+tags = ["precomputation", "top-k", "key-value store", "autocomplete"]
+teaches = [
+  "Keep the answer where the question will ask for it: a saved best list for each beginning, so a question is one fetch.",
+  "The work moves to the write: one change touches one list for each beginning of the name.",
+  "A short list is enough only because scores never fall. Whoever dropped out can come back only by rising, and rising is when you look again.",
+]
+follow_up = "1) What would you need if a score could go down, or a player could leave? 2) Two servers raise players under one beginning at the same moment. What can the store lose? 3) How would you save space for beginnings that only one name has?"
+related = ["F4", "Y151", "D10"]
+
+[[hints]]
+kind = "approach"
+text = "A question may fetch only a few short lists. So its answer must already be saved before it is asked. Which questions can a change of one player affect?"
+
+[[hints]]
+kind = "rust"
+text = "`char_indices` gives the byte positions where `&name[..end]` is a whole beginning; add `name.len()`. `partition_point` finds a pair's place in a sorted list."
+
+[[hints]]
+kind = "edge"
+text = "A lower score must change nothing, even for a player who is not in the list. Think about why an old score can never get into a full list. `usize::MAX` places must not be reserved."
+
+[solution]
+explanation = "Each beginning of a name is a key, and its list holds the k best players under it. A raise offers the pair to each of those lists and saves a list only when it changes.\n\nThe list alone is enough to ignore a lower score. A player outside a full list ranks below its last pair, and a lower score ranks lower still. So no table of all scores is needed, and a question is one load."
+time = "O(L) loads and saves per change, one load per question"
+space = "O(total characters * k)"
+
+[[cookbook]]
+level = "similar"
+page = "typeahead-service"
+note = "Its trie keeps a short best list per node, in memory."
+
+[[cookbook]]
+level = "related"
+page = "trie-radix"
+note = "Tries and their compact forms."

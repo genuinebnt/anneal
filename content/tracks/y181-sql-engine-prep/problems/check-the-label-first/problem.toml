@@ -1,0 +1,32 @@
+slug = "check-the-label-first"
+title = "Check a label before anything is printed"
+mode = "write"
+level = "medium"
+stage = "check"
+order = 3
+status = "ready"
+tags = ["type checking", "expression trees", "name resolution"]
+teaches = [
+  "The kind of every part of a formula can be worked out from the kinds of its parts, with no data at all. So a mistake is found before the first row, even when there are no rows.",
+  "\"Blank\" is not a fourth kind. It is \"not known\", and it agrees with everything: `Option<Kind>` says exactly that.",
+  "Replace each name by its position while checking. The checked form cannot name a field that is not there, so printing never has to look.",
+]
+follow_up = "1) How would you report every mistake and not only the first, without one mistake causing ten more? 2) Where would a conversion from number to words be added? 3) What changes if a formula may define its own short names?"
+related = ["Y182", "Y6"]
+
+[[hints]]
+kind = "approach"
+text = "One function that walks the tree and returns two things for a node: its checked copy and its kind, if known. Each node first calls it on an operand, then compares that operand's kind with what the node needs."
+
+[[hints]]
+kind = "rust"
+text = "`Option<Kind>` is the kind: `None` for \"fits anything\". A small helper `need(found, needed)` covers most nodes. `a.or(b)` is the kind of two parts that must agree."
+
+[[hints]]
+kind = "edge"
+text = "A list of words may be empty. In a choice, a blank first branch leaves the kind to the second. A mistake inside the first operand comes before anything about the second."
+
+[solution]
+explanation = "`walk` checks one node. For each operand in turn it walks the operand and then checks the operand's kind against what is needed, so the first mistake in that order is returned by `?`. `None` passes every check. For the two places where operands must agree with each other, the first operand's kind becomes what the second one needs. Field names become positions, so the result needs no names."
+time = "O(nodes × fields) with a linear search for each field"
+space = "O(nodes)"

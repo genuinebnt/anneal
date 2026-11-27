@@ -1,0 +1,31 @@
+slug = "numbers-on-loan"
+title = "Lend numbers and take them back"
+mode = "write"
+level = "medium"
+stage = "space"
+order = 2
+status = "ready"
+tags = ["bitmap", "allocator", "next-fit", "bit operations", "serialisation"]
+teaches = [
+  "One bit per item is the smallest record of what is in use, and it can be saved as it is.",
+  "Searching on from the last answer is cheap and does not reuse a number at once.",
+  "Saved state is input: check its length and clean the bits that mean nothing.",
+]
+follow_up = "1) With 4 billion numbers and almost all lent, what would you add so that `take` does not read half a gigabyte? 2) Two threads call `take`. Which part of it must be one step? 3) Why might a disk filesystem prefer to search near a related block instead of after the last one?"
+
+[[hints]]
+kind = "approach"
+text = "Keep the map, the place to search from and a count of free numbers. With the count, you know before searching whether the search will end."
+
+[[hints]]
+kind = "rust"
+text = "`byte >> (n % 8) & 1` reads a bit, `|= 1 << ..` sets it and `&= !(1 << ..)` clears it. `u8::count_ones` counts a byte. `slice.get(..len)` is `None` when the slice is too short."
+
+[[hints]]
+kind = "edge"
+text = "The place to search from can equal `count`. When `count` is a multiple of 8 there are no extra bits, and a shift by 8 would overflow."
+
+[solution]
+explanation = "The bitmap is both the working state and the saved form. The search begins where the last one ended, steps over full bytes and wraps once, and the free count guarantees that it finds something."
+time = "take: O(count) at worst; give_back: O(1)"
+space = "count / 8 bytes"

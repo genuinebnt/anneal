@@ -1,0 +1,413 @@
+# The series "Build a small SQL engine": an order over existing and new problems, not a track.
+# required: do these first. helpful: keep closed (hidden = true); reveals_method = true means the link gives away how to
+# solve the part. cookbook: reference pages (slugs in content/cookbook), also closed by default; level is exact (solves
+# the task), similar (same technique, different task) or related (explains the idea). Minutes are estimates; nobody has
+# been timed.
+
+[series]
+id = "sql-engine"
+rank = 14
+title = "Build a small SQL engine"
+summary = "Small parts give you what the capstone needs. Then you build a database that reads SQL, refuses mistakes and answers queries."
+note = "All times are estimates; nobody has been timed."
+capstone_title = "Capstone: build a small SQL engine"
+capstone_summary = "Tokens, statements, checked expressions, tables and queries, and grouped results."
+capstone_note = "Step 2 starts with reference code for step 1, while steps 4 and 5 start with reference code from step 3 on, which gives those steps away. No starter holds step 2's parser, so you join it to your engine yourself. The Cookbook file's caret messages, table printing and random-query checks are left out. Some steps overlap the BusTub course, so choose which to do first."
+capstone_cookbook = "tiny-sql-engine"
+
+[[stage]]
+id = "read"
+name = "Read a request"
+
+[[stage]]
+id = "check"
+name = "Refuse it early"
+
+[[stage]]
+id = "run"
+name = "Do only what is needed"
+
+[[part]]
+number = 1
+id = "l3-zero-copy-tokenizer"
+stage = "read"
+status = "existing"
+minutes = 45
+blurb = "Cut source text into pieces without copying it"
+new_idea = "Walking through text and handing out pieces of it"
+reuses = "nothing"
+required = []
+helpful = [
+    { id = "s2-bytes-chars-char-indices", why = "positions in bytes and in characters", reveals_method = false, hidden = true },
+    { id = "y9-shell-line-parser", why = "quoted text, where the same characters mean something else", reveals_method = false, hidden = true },
+]
+used_again = ["y182-split-into-tokens"]
+real_uses = "The first stage of compilers, linters, query engines and config readers."
+
+[[part]]
+number = 2
+id = "y181-read-one-exported-line"
+stage = "read"
+status = "new"
+minutes = 45
+blurb = "Read a spreadsheet line whose values hold commas and quote marks"
+new_idea = "Inside quotes the usual rules stop, and a doubled quote stands for one"
+reuses = "walking through text from part 1"
+required = []
+helpful = [
+    { id = "y9-shell-line-parser", why = "another notation where quoted characters mean something else", reveals_method = false, hidden = true },
+]
+used_again = ["y182-split-into-tokens"]
+real_uses = "CSV import, log formats, string literals in every language."
+
+[[part]]
+number = 3
+id = "y14-pratt-parser"
+stage = "read"
+status = "existing"
+minutes = 75
+blurb = "Group an expression the way people mean it"
+new_idea = "One loop that handles every strength of operator"
+reuses = "nothing"
+required = []
+used_again = ["y182-read-a-statement"]
+real_uses = "Expression readers in compilers, query languages and spreadsheets."
+
+[[part]]
+number = 4
+id = "y181-read-a-removal-order"
+stage = "read"
+status = "new"
+minutes = 60
+blurb = "Read short text orders, and point at the first wrong word"
+new_idea = "A cursor over pieces, one small step for each line of a grammar, and optional clauses"
+reuses = "nothing"
+required = []
+helpful = [
+    { id = "y121-every-broken-line", why = "a reader that goes on after a mistake", reveals_method = false, hidden = true },
+]
+used_again = ["y182-read-a-statement"]
+real_uses = "Command lines, query languages, protocol and config readers."
+
+[[part]]
+number = 5
+id = "y181-check-the-label-first"
+stage = "check"
+status = "new"
+minutes = 60
+blurb = "Refuse a broken label formula before printing starts"
+new_idea = "Working out each part's kind without data, with \"not known\" agreeing with everything"
+reuses = "nothing"
+required = []
+used_again = ["y182-refuse-before-any-row"]
+real_uses = "Query binders, template checkers, spreadsheet validation, compilers."
+cookbook = [
+    { level = "similar", page = "tiny-sql-engine", note = "bind and expect_ty check a query's expressions the same way.", source = "examples/capstones/tiny_sql_engine.rs", hidden = true },
+]
+
+[[part]]
+number = 6
+id = "y181-judge-a-form-with-gaps"
+stage = "check"
+status = "new"
+minutes = 60
+blurb = "Decide applications when some answers are blank"
+new_idea = "Three verdicts: yes, no and not known yet, and when a known side settles the whole"
+reuses = "walking a tree from part 5"
+required = []
+used_again = ["y182-refuse-before-any-row", "y182-keep-tables-and-answer"]
+real_uses = "SQL's NULL, rule engines, forms, feature flags with unknown inputs."
+cookbook = [
+    { level = "similar", page = "tiny-sql-engine", note = "apply and eval follow the same truth tables for a query.", source = "examples/capstones/tiny_sql_engine.rs", hidden = true },
+]
+
+[[part]]
+number = 7
+id = "s1-order-total"
+stage = "check"
+status = "existing"
+minutes = 15
+blurb = "Add up an order without ever giving a wrong total"
+new_idea = "Checked addition and multiplication, which answer None when a number does not fit"
+reuses = "nothing"
+required = []
+used_again = ["y182-refuse-before-any-row", "y182-answer-about-groups"]
+real_uses = "Money, quotas, sizes read from strangers."
+
+[[part]]
+number = 8
+id = "s1-collect-into-result"
+stage = "run"
+status = "existing"
+minutes = 25
+blurb = "Many results into one: the first error, or all of them"
+new_idea = "Collecting into a Result, which gives everything or the first error"
+reuses = "nothing"
+required = []
+used_again = ["y182-keep-tables-and-answer"]
+real_uses = "Validating batches, config loading, bulk inserts."
+
+[[part]]
+number = 9
+id = "y181-a-shortlist-without-waste"
+stage = "run"
+status = "new"
+minutes = 60
+blurb = "Build a shortlist without asking a single needless question"
+new_idea = "How much work is done decides which errors happen, and sorting changes how much"
+reuses = "stopping at the first error from part 8"
+required = ["s1-collect-into-result"]
+helpful = [
+    { id = "s6-merge-sorted-streams", why = "another task where reading too far is wrong", reveals_method = false, hidden = true },
+]
+used_again = ["y182-keep-tables-and-answer", "y182-answer-about-groups"]
+real_uses = "Query LIMIT, search result pages, paid API calls."
+
+[[capstone]]
+step = 1
+id = "y182-split-into-tokens"
+title = "Cut a statement into tokens"
+minutes = 45
+blurb = "Cut SQL text into words, numbers, texts and symbols"
+new_idea = "Tokens with their bytes, quoted text, and the longer symbol first"
+prepared_by = ["l3-zero-copy-tokenizer", "y181-read-one-exported-line"]
+required = ["y181-read-one-exported-line"]
+cookbook = [
+    { level = "similar", page = "tiny-sql-engine", note = "lex does this. Its errors carry messages.", source = "examples/capstones/tiny_sql_engine.rs", hidden = true },
+]
+
+[[capstone]]
+step = 2
+id = "y182-read-a-statement"
+title = "Read one statement"
+minutes = 105
+blurb = "Turn SQL text into a tree, or point at what is wrong"
+new_idea = "A whole statement grammar over tokens, and a limit on how tall a tree may grow"
+prepared_by = ["y14-pratt-parser", "y181-read-a-removal-order"]
+required = ["y182-split-into-tokens", "y14-pratt-parser"]
+helpful = [
+    { id = "y15-expand-the-braces", why = "a depth limit against hostile nesting", reveals_method = false, hidden = true },
+]
+cookbook = [
+    { level = "similar", page = "tiny-sql-engine", note = "Parser reads the same statements. Its errors carry messages, and its tree types differ.", source = "examples/capstones/tiny_sql_engine.rs", hidden = true },
+]
+
+[[capstone]]
+step = 3
+id = "y182-refuse-before-any-row"
+title = "Refuse a bad condition before any row"
+minutes = 105
+blurb = "Check an expression against a table, then run it on rows"
+new_idea = "A checked form that runs with three-valued logic"
+prepared_by = ["y181-check-the-label-first", "y181-judge-a-form-with-gaps", "s1-order-total"]
+required = ["y181-check-the-label-first", "y181-judge-a-form-with-gaps"]
+helpful = [
+    { id = "s1-order-total", why = "adding and multiplying without overflow", reveals_method = false, hidden = true },
+]
+cookbook = [
+    { level = "similar", page = "tiny-sql-engine", note = "bind and eval. Its AND and OR always run both sides, which this step does not allow.", source = "examples/capstones/tiny_sql_engine.rs", hidden = true },
+]
+
+[[capstone]]
+step = 4
+id = "y182-keep-tables-and-answer"
+title = "Keep tables and answer questions"
+minutes = 105
+blurb = "Store rows safely, and answer queries doing only what is needed"
+new_idea = "All checks first, inserts that are all or nothing, and the order of filter, sort and limit"
+prepared_by = ["s1-collect-into-result", "y181-a-shortlist-without-waste"]
+required = ["y182-refuse-before-any-row", "y181-a-shortlist-without-waste"]
+cookbook = [
+    { level = "similar", page = "tiny-sql-engine", note = "Database and plan_plain, built from operators that pull rows. Its error kinds differ.", source = "examples/capstones/tiny_sql_engine.rs", hidden = true },
+]
+
+[[capstone]]
+step = 5
+id = "y182-answer-about-groups"
+title = "Answer questions about groups"
+minutes = 90
+blurb = "Count and add up rows group by group"
+new_idea = "A small state per group, and rules for the columns of a grouped result"
+prepared_by = ["s1-order-total", "y181-a-shortlist-without-waste"]
+required = ["y182-keep-tables-and-answer"]
+helpful = [
+    { id = "s4-group-by-length", why = "a map from a key to what belongs to it", reveals_method = false, hidden = true },
+]
+cookbook = [
+    { level = "similar", page = "tiny-sql-engine", note = "Acc, Aggregate and plan_aggregate. Its error kinds differ.", source = "examples/capstones/tiny_sql_engine.rs", hidden = true },
+]
+
+[[revisit]]
+part = "y14-pratt-parser"
+before = "y182-read-a-statement"
+how = "Write part 3's operator loop again from a blank starter before capstone step 2."
+minutes = 30
+
+[[revisit]]
+part = "y181-check-the-label-first"
+before = "y182-refuse-before-any-row"
+how = "Solve part 5 again from a blank starter before capstone step 3."
+minutes = 30
+
+[[revisit]]
+part = "y181-a-shortlist-without-waste"
+before = "y182-keep-tables-and-answer"
+how = "Write both of part 9's branches again from memory, then list which calls each one must not make."
+minutes = 30
+
+[[readiness]]
+group = "Reading text"
+concept = "Walking through text one token at a time; slicing with split_at; len_utf8 for a wide character"
+parts = ["l3-zero-copy-tokenizer"]
+steps = [1]
+
+[[readiness]]
+group = "Reading text"
+concept = "Quoted text where a doubled quote stands for one; an unclosed quote; ranges in bytes"
+parts = ["y181-read-one-exported-line"]
+steps = [1]
+
+[[readiness]]
+group = "Reading text"
+concept = "Trying the longer symbol first; parsing a number that may not fit"
+parts = []
+steps = [1]
+note = "No part teaches these. Step 1's statement gives the rules, and its hints name the calls."
+
+[[readiness]]
+group = "Reading text"
+concept = "One cursor with look, take and demand; fixed words and names; optional clauses; a mistake at a piece or at the end"
+parts = ["y181-read-a-removal-order"]
+steps = [2]
+
+[[readiness]]
+group = "Reading text"
+concept = "Operator strengths; grouping from the left; positions in errors; a depth limit on nesting"
+parts = ["y14-pratt-parser"]
+steps = [2]
+note = "Where NOT and IS NULL sit, and the long chain that a loop makes tall, are new in step 2. Its statement and hints explain them."
+
+[[readiness]]
+group = "Checking"
+concept = "Recursion over an enum tree of boxes that returns a checked copy and its kind; Option for \"fits anything\"; names to positions with iter().position"
+parts = ["y181-check-the-label-first"]
+steps = [2, 3, 4]
+
+[[readiness]]
+group = "Checking"
+concept = "Three-valued logic: unknown values in comparisons, AND, OR, NOT and \"is it missing\""
+parts = ["y181-judge-a-form-with-gaps"]
+steps = [3, 4]
+note = "Step 3 adds rules about which side runs; its statement gives them."
+
+[[readiness]]
+group = "Checking"
+concept = "An error enum returned early with ?"
+parts = ["y181-read-a-removal-order", "y181-check-the-label-first"]
+steps = [1, 2, 3, 4, 5]
+note = "The enums are given in the starters."
+
+[[readiness]]
+group = "Checking"
+concept = "checked_add and checked_mul, where None means the result does not fit"
+parts = ["s1-order-total"]
+steps = [3, 5]
+
+[[readiness]]
+group = "Checking"
+concept = "checked_sub, checked_div and checked_neg"
+parts = []
+steps = [3]
+note = "The same pattern as part 7, with no part of their own. Step 3's statement lists the cases."
+
+[[readiness]]
+group = "Running"
+concept = "collect::<Result<Vec<_>, _>>() to stop at the first error and keep nothing half done"
+parts = ["s1-collect-into-result"]
+steps = [4]
+
+[[readiness]]
+group = "Running"
+concept = "Leaving a loop as soon as enough is done; costly work only after the cut; a stable sort"
+parts = ["y181-a-shortlist-without-waste"]
+steps = [4, 5]
+
+[[readiness]]
+group = "Running"
+concept = "Ordering::reverse to keep ties in order downwards; sorting references instead of rows"
+parts = []
+steps = [4]
+note = "No part teaches these. Step 4's hint names both."
+
+[[readiness]]
+group = "Running"
+concept = "A derived Ord on an enum, whose variant order puts NULL first"
+parts = []
+steps = [4, 5]
+note = "The starter's Value type derives it."
+
+[[readiness]]
+group = "Running"
+concept = "HashMap get, get_mut, contains_key and insert; HashSet insert to find repeats; usize::try_from"
+parts = []
+steps = [4]
+note = "Everyday std calls, with no part of their own."
+
+[[readiness]]
+group = "Groups"
+concept = "BTreeMap with entry and or_insert_with: one state per key, read back in key order"
+parts = []
+steps = [5]
+note = "Step 5's hint names the calls. The optional link there practises entry on a HashMap, which works the same way."
+
+[[connection]]
+idea = "Text into tokens"
+learn = ["l3-zero-copy-tokenizer"]
+again = ["y181-read-one-exported-line"]
+apply = ["y182-split-into-tokens"]
+
+[[connection]]
+idea = "Tokens into a tree"
+learn = ["y14-pratt-parser"]
+again = ["y181-read-a-removal-order"]
+apply = ["y182-read-a-statement"]
+
+[[connection]]
+idea = "What is not known"
+learn = ["y181-judge-a-form-with-gaps"]
+apply = ["y182-refuse-before-any-row", "y182-keep-tables-and-answer", "y182-answer-about-groups"]
+
+[[connection]]
+idea = "Refuse before doing anything"
+learn = ["y181-check-the-label-first"]
+apply = ["y182-refuse-before-any-row", "y182-keep-tables-and-answer", "y182-answer-about-groups"]
+
+[[connection]]
+idea = "All of it or none of it"
+learn = ["s1-collect-into-result"]
+apply = ["y182-keep-tables-and-answer"]
+
+[[connection]]
+idea = "Work that must not happen"
+learn = ["y181-a-shortlist-without-waste"]
+apply = ["y182-keep-tables-and-answer", "y182-answer-about-groups"]
+
+[[side_path]]
+id = "y15-print-it-so-it-reads-back"
+why = "after capstone step 2: random trees as a way to test a reader"
+after = "y182-read-a-statement"
+
+[[side_path]]
+id = "y91-tidy-a-drawing"
+why = "after capstone step 3: simplify a tree without changing its meaning"
+after = "y182-refuse-before-any-row"
+
+[[side_path]]
+id = "y92-run-a-plan-row-by-row"
+why = "after capstone step 4: the same pipeline as operators that pull rows"
+after = "y182-keep-tables-and-answer"
+
+[[side_path]]
+id = "y12-mvcc-snapshot-isolation"
+why = "after the capstone: another piece that sits inside a database"
+after = "y182-answer-about-groups"

@@ -1,0 +1,31 @@
+slug = "a-long-list-mostly-empty"
+title = "A very long list that is mostly empty"
+mode = "write"
+level = "hard"
+stage = "space"
+order = 3
+status = "ready"
+tags = ["radix tree", "sparse data", "node pool", "truncate", "work limits"]
+teaches = [
+  "The digits of an index can be the route through a tree, so absent branches cost nothing.",
+  "Take every resource an operation needs before changing anything, and it can fail without a trace.",
+  "Removing from a tree is a bottom-up question: is this node still needed?",
+]
+follow_up = "1) Checking whether a node is empty reads all its slots. What could each node store to answer at once, and what must keep it right? 2) Where have you seen a tree indexed by the digits of a number in an operating system? 3) How would you make the first few indices cheaper than the rest?"
+
+[[hints]]
+kind = "approach"
+text = "For `set`, walk down what exists and remember each node and slot. Then you know how many nodes are missing, before you take any. For erasing, the remembered path is what you check from the bottom."
+
+[[hints]]
+kind = "rust"
+text = "A `Vec<(NodeId, usize)>` is the path. `u64::checked_pow` returns `None` when the capacity does not fit, and `saturating_pow` is handy for the width of a slot. A recursive `cut` can return whether its node is now empty."
+
+[[hints]]
+kind = "edge"
+text = "A slot whose whole range is below `len` needs no visit at all. The root can become empty too. Erasing an index whose branch does not exist must not create it."
+
+[solution]
+explanation = "Each level picks one digit of the index. `set` finds the missing part of the path first and allocates all of it before linking, so running out leaves nothing behind. `cut` visits only existing nodes that cross the cut and reports upwards when one empties."
+time = "get O(levels); set O(levels x fan); cut O(nodes x fan)"
+space = "O(values x levels x fan) at worst"

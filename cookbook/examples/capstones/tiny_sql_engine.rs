@@ -4,7 +4,7 @@
 #![allow(dead_code)]
 //!
 //! WHAT: CREATE TABLE / INSERT / SELECT (WHERE, GROUP BY with COUNT/SUM/MIN/MAX, ORDER BY, LIMIT) over typed INT/TEXT/BOOL columns.
-//! WHY: every database is this pipeline at a different scale; seeing it in ~450 lines makes DataFusion or SQLite readable.
+//! WHY: every database is this pipeline at a different scale; seeing it in one file of about 1200 lines (tests not counted) makes DataFusion or SQLite readable.
 //! HOW (each stage is a plain function you can test alone):
 //!   lex      bytes -> tokens carrying byte spans         parse   tokens -> AST (recursive descent + Pratt for expressions)
 //!   bind     AST expr -> `Bound` expr (column names become indices, static type check, so type errors surface BEFORE any row is read)
@@ -15,6 +15,10 @@
 //!   NULLs sort first in ASC order (last in DESC); aggregates ignore NULLs; SUM/MIN/MAX of nothing is NULL, COUNT of nothing is 0.
 //! ERRORS are values: parse errors carry a span and render compiler-style with a caret line; type, catalog and runtime
 //!   (division by zero, overflow) errors are `SqlError` variants. Nothing in the engine panics on user input.
+//! LIMITS: an expression tree may be 100 nodes tall (nesting is bounded too). AND and OR evaluate both sides, so
+//!   `false AND 1 / 0 = 1` is a runtime error. ORDER BY takes one column name (no expressions, no aliases), so a result
+//!   cannot be ordered by `count(*)`. The smallest INT cannot be written as a literal. SUM fails if the running total
+//!   overflows, even if the final total would fit. Everything lives in memory and nothing bounds a table's size.
 //! VERIFICATION: hand-checked results on a small table, then seeded random tables/predicates compared with an independent
 //!   brute-force Rust oracle (sortedness, LIMIT = min(n, rows), WHERE = closure filter, GROUP BY = BTreeMap fold).
 //! COMMON USES: query layers over in-memory data (DataFusion, DuckDB-style engines), SQLite-like embedded stores, log/CSV query tools,
@@ -22,6 +26,7 @@
 //! Read: https://github.com/apache/datafusion and https://15445.courses.cs.cmu.edu/ and https://craftinginterpreters.com/
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::rc::Rc;
 use thiserror::Error;
 
 // ---------- values, types, errors ----------
@@ -273,10 +278,16 @@ const RESERVED: [&str; 21] = [
     "into", "values", "create", "table", "asc", "desc", "is", "null", "true", "false",
 ];
 
+/// The tallest expression tree accepted. Binding, evaluating and dropping a tree all recurse once per level.
+const MAX_HEIGHT: usize = 100;
+/// The deepest the parser itself may recurse (parentheses add a level here but none to the tree).
+const MAX_NESTING: usize = 200;
+
 struct Parser<'a> {
     src: &'a str,
     toks: Vec<Token>,
     pos: usize,
+    nesting: usize,
 }
 
 impl Parser<'_> {
@@ -361,9 +372,9 @@ impl Parser<'_> {
         let mut rows = vec![];
         loop {
             self.expect_sym("(")?;
-            let mut row = vec![self.expr(0)?];
+            let mut row = vec![self.expression()?];
             while self.eat_sym(",") {
-                row.push(self.expr(0)?);
+                row.push(self.expression()?);
             }
             self.expect_sym(")")?;
             rows.push(row);
@@ -392,7 +403,7 @@ impl Parser<'_> {
             }
         }
         let first = self.pos;
-        let e = self.expr(0)?;
+        let e = self.expression()?;
         let name = match &e {
             Expr::Col(c) => c.clone(),
             _ => {
@@ -410,7 +421,7 @@ impl Parser<'_> {
         self.expect_kw("from")?;
         let table = self.ident("a table name")?;
         let filter = if self.eat_kw("where") {
-            Some(self.expr(0)?)
+            Some(self.expression()?)
         } else {
             None
         };
@@ -424,7 +435,9 @@ impl Parser<'_> {
             self.expect_kw("by")?;
             let col = self.ident("a column name")?;
             let desc = self.eat_kw("desc");
-            self.eat_kw("asc");
+            if !desc {
+                self.eat_kw("asc");
+            }
             Some((col, desc))
         } else {
             None
@@ -450,8 +463,32 @@ impl Parser<'_> {
     }
 
     /// Binding powers (higher binds tighter): OR 1, AND 2, NOT 3, comparison/IS 4, + - 5, * / 6, unary minus 7.
-    fn expr(&mut self, min_bp: u8) -> Res<Expr> {
-        let mut lhs = self.prefix()?;
+    /// Returns the tree and its height. A chain such as `1+1+1+...` grows the tree inside the loop, without any
+    /// recursion here, so the height is checked as well as the parser's own nesting.
+    fn expr(&mut self, min_bp: u8) -> Res<(Expr, usize)> {
+        if self.nesting == MAX_NESTING {
+            return self.fail("expression is nested too deeply");
+        }
+        self.nesting += 1;
+        let out = self.expr_loop(min_bp);
+        self.nesting -= 1;
+        out
+    }
+
+    fn expression(&mut self) -> Res<Expr> {
+        Ok(self.expr(0)?.0)
+    }
+
+    /// One more node on top of a subtree of height `below`.
+    fn grow(&self, below: usize) -> Res<usize> {
+        if below >= MAX_HEIGHT {
+            return self.fail("expression is nested too deeply");
+        }
+        Ok(below + 1)
+    }
+
+    fn expr_loop(&mut self, min_bp: u8) -> Res<(Expr, usize)> {
+        let (mut lhs, mut height) = self.prefix(min_bp)?;
         loop {
             if self.at_kw("is") {
                 if 4 < min_bp {
@@ -460,6 +497,7 @@ impl Parser<'_> {
                 self.pos += 1;
                 let negated = self.eat_kw("not");
                 self.expect_kw("null")?;
+                height = self.grow(height)?;
                 lhs = Expr::IsNull(Box::new(lhs), negated);
                 continue;
             }
@@ -470,13 +508,14 @@ impl Parser<'_> {
                 break;
             }
             self.pos += 1;
-            let rhs = self.expr(bp + 1)?; // +1 makes every operator left-associative
+            let (rhs, right) = self.expr(bp + 1)?; // +1 makes every operator left-associative
+            height = self.grow(height.max(right))?;
             lhs = Expr::Bin(op, Box::new(lhs), Box::new(rhs));
         }
-        Ok(lhs)
+        Ok((lhs, height))
     }
 
-    fn prefix(&mut self) -> Res<Expr> {
+    fn prefix(&mut self, min_bp: u8) -> Res<(Expr, usize)> {
         let Some(tk) = self.peek_tk(0).cloned() else {
             return self.fail("expected an expression");
         };
@@ -490,22 +529,26 @@ impl Parser<'_> {
             }
             Tk::Sym("-") => {
                 self.pos += 1;
-                return Ok(Expr::Neg(Box::new(self.expr(7)?)));
+                let (e, height) = self.expr(7)?;
+                return Ok((Expr::Neg(Box::new(e)), self.grow(height)?));
             }
             Tk::Ident(w) => match w.as_str() {
-                "not" => {
+                // NOT binds looser than comparisons, so it cannot start an operand of one: `a = NOT b = c`
+                // would otherwise silently mean `a = NOT (b = c)`.
+                "not" if min_bp <= 3 => {
                     self.pos += 1;
-                    return Ok(Expr::Not(Box::new(self.expr(3)?)));
+                    let (e, height) = self.expr(3)?;
+                    return Ok((Expr::Not(Box::new(e)), self.grow(height)?));
                 }
                 "true" => Expr::Lit(Value::Bool(true)),
                 "false" => Expr::Lit(Value::Bool(false)),
                 "null" => Expr::Lit(Value::Null),
-                _ => return self.ident("an expression").map(Expr::Col),
+                _ => return self.ident("an expression").map(|c| (Expr::Col(c), 1)),
             },
             _ => return self.fail("expected an expression"),
         };
         self.pos += 1;
-        Ok(e)
+        Ok((e, 1))
     }
 }
 
@@ -532,6 +575,7 @@ fn parse(src: &str) -> Res<Stmt> {
         src,
         toks: lex(src)?,
         pos: 0,
+        nesting: 0,
     };
     let stmt = if p.eat_kw("create") {
         p.create()?
@@ -710,12 +754,16 @@ trait Operator {
     fn next(&mut self) -> Res<Option<Row>>;
 }
 
+/// Shares the table's rows and copies one only when it is asked for, so LIMIT also saves the copying.
 struct Scan {
-    rows: std::vec::IntoIter<Row>,
+    rows: Rc<Vec<Row>>,
+    at: usize,
 }
 impl Operator for Scan {
     fn next(&mut self) -> Res<Option<Row>> {
-        Ok(self.rows.next())
+        let row = self.rows.get(self.at).cloned();
+        self.at += usize::from(row.is_some());
+        Ok(row)
     }
 }
 
@@ -858,7 +906,8 @@ impl Operator for Aggregate {
                 }
             }
             if self.group.is_none() && groups.is_empty() {
-                groups.insert(Value::Null, vec![Acc::default(); self.aggs.len()]); // SELECT COUNT(*) on no rows still yields one row
+                groups.insert(Value::Null, vec![Acc::default(); self.aggs.len()]);
+                // SELECT COUNT(*) on no rows still yields one row
             }
             let rows: Vec<Row> = groups
                 .iter()
@@ -881,7 +930,7 @@ impl Operator for Aggregate {
 // ---------- planner ----------
 struct Table {
     cols: Vec<(String, Ty)>,
-    rows: Vec<Row>,
+    rows: Rc<Vec<Row>>,
 }
 
 fn plan(sel: &Select, tables: &HashMap<String, Table>) -> Res<(Box<dyn Operator>, Vec<String>)> {
@@ -889,7 +938,8 @@ fn plan(sel: &Select, tables: &HashMap<String, Table>) -> Res<(Box<dyn Operator>
         .get(&sel.table)
         .ok_or_else(|| SqlError::Catalog(format!("no such table `{}`", sel.table)))?;
     let mut node: Box<dyn Operator> = Box::new(Scan {
-        rows: t.rows.clone().into_iter(),
+        rows: Rc::clone(&t.rows),
+        at: 0,
     });
     if let Some(f) = &sel.filter {
         let (pred, ty) = bind(f, &t.cols)?;
@@ -1032,7 +1082,13 @@ impl Database {
                 if self.tables.contains_key(&name) {
                     return Err(SqlError::Catalog(format!("table `{name}` already exists")));
                 }
-                self.tables.insert(name, Table { cols, rows: vec![] });
+                for (i, (col, _)) in cols.iter().enumerate() {
+                    if cols[..i].iter().any(|(c, _)| c == col) {
+                        return Err(SqlError::Catalog(format!("duplicate column `{col}`")));
+                    }
+                }
+                let rows = Rc::default();
+                self.tables.insert(name, Table { cols, rows });
                 Ok(Output::Created)
             }
             Stmt::Insert { table, rows } => {
@@ -1051,16 +1107,17 @@ impl Database {
                     }
                     let mut row = vec![];
                     for (e, (name, ty)) in exprs.iter().zip(&t.cols) {
-                        let v = eval(&bind(e, &[])?.0, &[])?;
-                        if v.ty().is_some_and(|vt| vt != *ty) {
-                            return type_err(format!("column `{name}` is {ty:?}, got {v:?}"));
+                        // the static type decides, as in a query: `NULL = 1` is a BOOL although its value is NULL
+                        let (bound, got) = bind(e, &[])?;
+                        if let Some(got) = got.filter(|got| got != ty) {
+                            return type_err(format!("column `{name}` is {ty:?}, got {got:?}"));
                         }
-                        row.push(v);
+                        row.push(eval(&bound, &[])?);
                     }
                     staged.push(row);
                 }
                 let n = staged.len();
-                t.rows.extend(staged); // all-or-nothing: nothing is appended unless every row validated
+                Rc::make_mut(&mut t.rows).extend(staged); // all-or-nothing: nothing is appended unless every row validated
                 Ok(Output::Inserted(n))
             }
             Stmt::Select(sel) => {
@@ -1311,6 +1368,63 @@ fn error_cases() {
         0,
         "LIMIT 0 never pulls rows, so no error"
     );
+}
+
+/// One check for each bug a review found. Each fails if its fix is taken out.
+fn regression_checks() {
+    let mut db = Database::default();
+    db.execute("CREATE TABLE t (a INT, b BOOL)").unwrap();
+    db.execute("INSERT INTO t VALUES (1, true), (2, false)")
+        .unwrap();
+
+    // hostile nesting is an error, not a stack overflow: parentheses, prefix operators, and a chain built by a loop
+    let n = 100_000;
+    for bad in [
+        format!("SELECT {}1{} FROM t", "(".repeat(n), ")".repeat(n)),
+        format!("SELECT a FROM t WHERE {}b", "NOT ".repeat(n)),
+        format!("SELECT {}1 FROM t", "- ".repeat(n)),
+        format!("SELECT 1{} FROM t", " + 1".repeat(n)),
+        format!("SELECT a{} FROM t", " IS NULL".repeat(n)),
+    ] {
+        assert!(matches!(db.execute(&bad), Err(SqlError::Parse { .. })));
+    }
+    let tallest = format!("SELECT 1{} FROM t LIMIT 1", " + 1".repeat(MAX_HEIGHT - 1));
+    assert_eq!(cells(&db.query(&tallest).unwrap()), ["100"]);
+    let too_tall = format!("SELECT 1{} FROM t", " + 1".repeat(MAX_HEIGHT));
+    assert!(db.execute(&too_tall).is_err());
+
+    assert!(
+        matches!(
+            db.execute("CREATE TABLE d (x INT, x TEXT)"),
+            Err(SqlError::Catalog(_))
+        ),
+        "a column name used twice"
+    );
+    for bad in [
+        "SELECT a FROM t ORDER BY a DESC ASC",
+        "SELECT a = NOT b = b FROM t",
+        "SELECT 1 + NOT b FROM t",
+    ] {
+        assert!(
+            matches!(db.execute(bad), Err(SqlError::Parse { .. })),
+            "{bad}"
+        );
+    }
+    assert!(
+        matches!(
+            db.execute("INSERT INTO t VALUES (NULL = 1, true)"),
+            Err(SqlError::Type(_))
+        ),
+        "a BOOL expression does not go into an INT column because its value is NULL"
+    );
+
+    // a plan shares the table's rows instead of copying all of them before the first one is asked for
+    let Ok(Stmt::Select(sel)) = parse("SELECT a FROM t LIMIT 1") else {
+        panic!("a select");
+    };
+    let (op, _) = plan(&sel, &db.tables).unwrap();
+    assert_eq!(Rc::strong_count(&db.tables["t"].rows), 2);
+    drop(op);
 }
 
 const GRPS: [&str; 4] = ["a", "b", "c", "it's"];
@@ -1569,6 +1683,7 @@ fn main() {
 
     hand_checked();
     error_cases();
+    regression_checks();
     property_tests(0x5EED_C0DE, 400);
     property_tests(0xDEAD_BEEF_1234_5678, 400);
     println!(

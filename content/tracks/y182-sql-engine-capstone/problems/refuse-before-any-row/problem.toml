@@ -1,0 +1,32 @@
+slug = "refuse-before-any-row"
+title = "Refuse a bad condition before any row"
+mode = "write"
+level = "hard"
+stage = "front"
+order = 3
+status = "ready"
+tags = ["type checking", "three-valued logic", "checked arithmetic", "compilation"]
+teaches = [
+  "Split the work in two: one step that can refuse an expression without any data, and one that runs it. Whatever the first step proves, the second never has to ask again.",
+  "NULL means \"not known\". FALSE AND unknown is already FALSE; TRUE AND unknown is unknown. A comparison with unknown is unknown, even with itself.",
+  "A checked form that holds positions instead of names makes each row cheap, and makes \"unknown column\" impossible while running.",
+]
+follow_up = "1) How would you compute constant parts once, and which errors would then appear earlier? 2) Real databases do not promise that AND skips its right side. What can they do that you may not? 3) How would you evaluate a thousand rows at a time?"
+related = ["Y181", "Y122", "L8"]
+
+[[hints]]
+kind = "approach"
+text = "Give your compiled form its own tree, with column positions in place of names. Build it in one recursive walk that returns each node's type. Handle `AND` and `OR` apart from the other operators when running."
+
+[[hints]]
+kind = "rust"
+text = "`Option<Type>` for the type, `None` for the NULL literal. For three-valued logic, `Option<bool>` and a `match` on a pair is short and complete. `checked_add` and friends return `None` on overflow."
+
+[[hints]]
+kind = "edge"
+text = "`NULL + 1 / 0` is still a division by zero: both sides of `+` run. `FALSE AND 1 / 0 = 1` is just FALSE. `i64::MIN / -1` and `- i64::MIN` overflow. `NULL / 0` is NULL."
+
+[solution]
+explanation = "`compile` walks the expression once. For each node it first compiles the operands, then checks their types, and records the result type; names become positions. `run` walks the compiled tree. `AND` and `OR` look at the left value first and return at once if it settles the answer; otherwise a three-way match combines both. Every other operator runs both sides, gives NULL if either is NULL, and uses checked arithmetic."
+time = "O(nodes × columns) to compile; O(nodes) per row, apart from the length of texts copied or compared"
+space = "O(nodes)"

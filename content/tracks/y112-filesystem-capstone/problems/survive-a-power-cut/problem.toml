@@ -1,0 +1,31 @@
+slug = "survive-a-power-cut"
+title = "Capstone 8: survive a power cut"
+mode = "write"
+level = "hard"
+stage = "trust-it"
+order = 8
+status = "ready"
+tags = ["write-ahead journal", "redo log", "crash recovery", "idempotent replay", "write barriers"]
+teaches = [
+  "Write the new content somewhere safe first. One small record then decides whether the whole change happened.",
+  "Each sync in the protocol protects against one particular cut: remove it and you can name the disk that breaks.",
+  "Recovery can itself be cut, so doing it twice must give the same result as doing it once.",
+]
+follow_up = "1) Every block is written twice. ext4 can journal only metadata: which promise is lost, and what ordering rule keeps old data from appearing in new files? 2) The checksum covers the copies. Which of the four syncs could a design with this checksum drop? 3) How would you let many callers share one commit?"
+
+[[hints]]
+kind = "approach"
+text = "Write the commit exactly as the list says, using the cache's list of changed blocks. For recovery, first decide yes or no from what the journal holds, without writing anything. Only then act."
+
+[[hints]]
+kind = "rust"
+text = "`crc32_extend` lets you sum the header and then each copy without joining them. `(a..b).contains(&x)` with `.iter().all(..)` checks the home blocks. `wrapping_add` for the sequence number."
+
+[[hints]]
+kind = "edge"
+text = "Judge `n` before reading `n` blocks. Keep the sequence number from a clean header, or an old commit record could match a new header. `TxTooBig` is decided before the first write and must not poison."
+
+[solution]
+explanation = "The commit record is the single point where the change becomes true: before it, recovery ignores the copies, and after it, recovery can finish the job as often as needed. The syncs keep the record from arriving before the copies, and the clean header from arriving before the blocks are home."
+time = "commit writes 2n + 2 blocks for n changed ones"
+space = "O(n)"

@@ -1,0 +1,31 @@
+slug = "several-sectors-as-one"
+title = "Change several sectors as one"
+mode = "write"
+level = "hard"
+stage = "damage"
+order = 6
+status = "ready"
+tags = ["crash consistency", "atomic update", "checksums", "write barriers", "recovery"]
+teaches = [
+  "To change several things at once, first make a complete description of the change safe, then act on it.",
+  "One small record, checked so that a torn one is recognised, decides which side of the change you are on.",
+  "Each sync exists to rule out one particular disk. Find that disk before you remove the sync.",
+]
+follow_up = "1) You could save the old content instead of the new. What would recovery do then, and which design needs fewer syncs? 2) Which of your syncs does your checksum make unnecessary? 3) How would two updates at once share the spare area?"
+
+[[hints]]
+kind = "approach"
+text = "You have room for a full copy of what is about to change. Decide what must be safe before you touch the first data sector, and how a restart can tell that it was."
+
+[[hints]]
+kind = "rust"
+text = "Any small hash over bytes will do as a checksum, such as FNV-1a. Put the count, the sector numbers and the checksum in one sector. `u32::to_le_bytes` and `from_le_bytes` convert numbers."
+
+[[hints]]
+kind = "edge"
+text = "A record left from the last update must not come back to life during the next one. Rubbish in the spare area can claim any count and any sector numbers: check them before using them."
+
+[solution]
+explanation = "The reference copies the new content aside and syncs, writes one record naming the targets with a checksum over itself and the copies, and syncs. Only then does it write the data, sync, and drop the record. Recovery replays a record that checks out, and replaying twice is harmless. Saving the old content and undoing instead is just as good."
+time = "O(changes)"
+space = "O(changes)"

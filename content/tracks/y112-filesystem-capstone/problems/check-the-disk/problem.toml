@@ -1,0 +1,31 @@
+slug = "check-the-disk"
+title = "Capstone 9: check the disk and repair it"
+mode = "write"
+level = "hard"
+stage = "trust-it"
+order = 9
+status = "ready"
+tags = ["fsck", "reachability", "consistency checking", "safe repair", "hostile input"]
+teaches = [
+  "Rebuild from the tree what the bitmaps and counts should say, then compare.",
+  "A repair that rests on an incomplete view destroys data. When you could not look everywhere, only add.",
+  "Damaged data can describe loops and impossible sizes, so every walk needs a bound and a record of where it has been.",
+]
+follow_up = "1) Your check reads the whole disk. What does the journal let you skip after a crash, and when do you still need fsck? 2) Design `lost+found`: which orphans get a name there, and in what order? 3) How would checksums on inodes and directory blocks change what you can safely repair?"
+
+[[hints]]
+kind = "approach"
+text = "The walk collects who was reached, how often each inode is named and which blocks are claimed, noting problems as it goes. The given comparison needs exactly those three. Repair is a filter over the problem list, then batches."
+
+[[hints]]
+kind = "rust"
+text = "Derive `Ord` on the problem type, then `sort` and `dedup`. An explicit stack and a `HashSet` of directories replace recursion. `chunks` splits the fixes into transaction-sized batches."
+
+[[hints]]
+kind = "edge"
+text = "A single clear inode bit must not hide a live file. Remember separately that something could not be followed. Count the blocks each kind of fix can change. They are not all the same, and that decides how many fit in a transaction."
+
+[solution]
+explanation = "The walk derives the truth that the tree implies, and every other structure is compared with it. Fixes that remove things depend on that truth being complete, so one unreadable branch turns them all off."
+time = "O(inodes + entries + blocks)"
+space = "O(inodes + blocks)"

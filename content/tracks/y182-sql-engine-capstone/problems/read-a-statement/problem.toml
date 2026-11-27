@@ -1,0 +1,32 @@
+slug = "read-a-statement"
+title = "Read one statement"
+mode = "write"
+level = "hard"
+stage = "front"
+order = 2
+status = "ready"
+tags = ["parsing", "expression grammar", "error spans", "input limits"]
+teaches = [
+  "Two passes keep each one simple: the first turns characters into tokens with their positions, the second only ever looks at tokens.",
+  "The strength of an operator decides who gets the operand between two operators. One rule about strengths handles every level, NOT and IS NULL included.",
+  "A tree can grow tall without any bracket: a long chain of `+` does it in a loop. Limit the height of the tree itself, because everything that later walks or drops it recurses once per level.",
+]
+follow_up = "1) How would you report several mistakes in one statement? 2) What would `x BETWEEN a AND b` do to your grammar? 3) Where would you keep positions so that a later type error could point at the text?"
+related = ["Y14", "Y15", "Y181", "L8"]
+
+[[hints]]
+kind = "approach"
+text = "Write one function per part of the statement grammar. For expressions, either write one function per row of the table, or one function that takes the weakest operator it may consume."
+
+[[hints]]
+kind = "rust"
+text = "Keep the tokens `lex` gives you and walk an index over them. Slice the source with those ranges for column names. To check the height before the tree exists, return it next to each subtree, and pass down how many operators are already above."
+
+[[hints]]
+kind = "edge"
+text = "`DESC ASC` is a mistake. So is `a = NOT b`. `count` alone is a column name. 100 000 `NOT`s and 100 000 `+ 1`s both build tall trees by different routes: one by recursion, one by a loop."
+
+[solution]
+explanation = "The text is cut into tokens first, and a bad token ends the work there.\n\nThe parser holds an index into the tokens and reports every grammar mistake at the current token, or at the end of the text. Expressions use one loop with a strength for each infix operator.\n\nEvery call is told how many operators sit above it. That stops a run of prefix operators before the recursion gets deep. Every node returns its height, which stops a chain built by the loop. Open brackets are counted apart, because they add no height."
+time = "O(n) in the length of the statement"
+space = "O(n) for the tokens and the tree"

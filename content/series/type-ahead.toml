@@ -1,0 +1,457 @@
+# The series "Build a type-ahead service": an order over existing and new problems, not a track.
+# required: do these first. helpful: keep closed (hidden = true); reveals_method = true means the link gives away how to
+# solve the part. cookbook: reference pages (slugs in content/cookbook), also closed by default; level is exact (solves
+# the task), similar (same technique, different task) or related (explains the idea). Minutes are estimates; nobody has
+# been timed.
+
+[series]
+id = "type-ahead"
+rank = 15
+title = "Build a type-ahead service"
+summary = "Small parts give you what the capstone needs. Then you build the service behind a search box that suggests as you type."
+note = "All times are estimates; nobody has been timed."
+capstone_title = "Capstone: build a type-ahead service"
+capstone_summary = "Ranked beginnings, matches inside terms and despite slips, a cache that stays fresh under writes, and an HTTP API."
+capstone_note = "Each step's starter carries reference code for the earlier steps. It is a stand-in until the app can carry your own code from step to step, and it gives away those steps and some of the preparation. The service keeps everything in memory and never deletes a term. A real socket, shutdown, access control and a limit on the number of terms are left out."
+capstone_cookbook = "typeahead-service"
+
+[[stage]]
+id = "what-was-meant"
+name = "Work out what was meant"
+
+[[stage]]
+id = "what-comes-first"
+name = "Decide what comes first"
+
+[[stage]]
+id = "stay-fresh"
+name = "Stay fresh"
+
+[[stage]]
+id = "go-live"
+name = "Go online"
+
+[[part]]
+number = 1
+id = "y151-light-up-what-was-typed"
+stage = "what-was-meant"
+status = "new"
+minutes = 60
+blurb = "Match what a user typed against a name written differently, and light up that part"
+new_idea = "One key for many spellings, cleaned after lowercasing, with positions mapped back to the original"
+reuses = "nothing"
+know_first = "char, char_indices, String"
+required = []
+helpful = [
+    { id = "s2-fix-slicing-mid-utf8", why = "optional warm-up on character boundaries", reveals_method = false, hidden = true },
+]
+used_again = ["y152-suggest-by-what-starts-a-term", "y152-inside-a-term-and-despite-slips", "y152-serve-the-suggestions"]
+real_uses = "Search boxes, command palettes, contact pickers."
+cookbook = [
+    { level = "similar", page = "typeahead-service", note = "normalize builds a key the same way. It has no way to light up the original text.", source = "examples/capstones/typeahead_service.rs", hidden = true },
+]
+
+[[part]]
+number = 2
+id = "y151-a-slip-of-the-finger"
+stage = "what-was-meant"
+status = "new"
+minutes = 75
+blurb = "Say how close two hand-typed codes are, without much work"
+new_idea = "A distance with swaps, worked out only near the diagonal"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y151-names-worth-a-closer-look", "y152-inside-a-term-and-despite-slips"]
+real_uses = "Spell checkers, record matching, DNA reads."
+cookbook = [
+    { level = "similar", page = "typeahead-service", note = "osa_max keeps three rows and stops early. It fills whole rows, so it would pass this budget only for short texts.", source = "examples/capstones/typeahead_service.rs", hidden = true },
+]
+
+[[part]]
+number = 3
+id = "y10-trigram-index"
+stage = "what-was-meant"
+status = "existing"
+minutes = 60
+blurb = "Search inside documents without reading every one"
+new_idea = "Ruling documents out by three-character windows, then checking the rest"
+reuses = "nothing from this series"
+know_first = "HashMap, BTreeSet, windows"
+required = []
+helpful = []
+used_again = ["y151-names-worth-a-closer-look", "y152-inside-a-term-and-despite-slips"]
+real_uses = "Code search, log search, LIKE indexes in databases."
+cookbook = []
+
+[[part]]
+number = 4
+id = "y151-names-worth-a-closer-look"
+stage = "what-was-meant"
+status = "new"
+minutes = 75
+blurb = "Find the few names worth an expensive comparison in an index that never shows you a name"
+new_idea = "Filing names under pieces that survive a slip, with a lower bound that never skips a close name"
+reuses = "the distance of part 2 and the windows of part 3"
+required = ["y151-a-slip-of-the-finger", "y10-trigram-index"]
+helpful = []
+used_again = ["y152-inside-a-term-and-despite-slips"]
+real_uses = "Spell correction, fuzzy lookup in databases (pg_trgm), duplicate detection."
+cookbook = [
+    { level = "similar", page = "typeahead-service", note = "typo_candidates counts shared trigrams. Its threshold has a floor of two, which this task does not allow.", source = "examples/capstones/typeahead_service.rs", hidden = true },
+]
+
+[[part]]
+number = 5
+id = "f4-prefix-trie"
+stage = "what-comes-first"
+status = "existing"
+minutes = 60
+blurb = "Answer questions about the beginnings of words"
+new_idea = "A tree with one node for each beginning"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y151-the-best-names-for-any-beginning", "y152-suggest-by-what-starts-a-term"]
+real_uses = "Command completion, routers, IP lookup."
+cookbook = [
+    { level = "similar", page = "typeahead-service", note = "Its Trie walks one node per character. It cannot remove words.", source = "examples/capstones/typeahead_service.rs", hidden = true },
+]
+
+[[part]]
+number = 6
+id = "y151-what-is-hot-right-now"
+stage = "what-comes-first"
+status = "new"
+minutes = 60
+blurb = "Keep a chart in which old plays fade, for years"
+new_idea = "Scores that fade without ever being rewritten, kept where they cannot overflow"
+reuses = "nothing"
+know_first = "f64"
+required = []
+helpful = []
+used_again = ["y151-the-best-names-for-any-beginning", "y152-suggest-by-what-starts-a-term"]
+real_uses = "Trending lists, cache admission, shell history ranking."
+cookbook = [
+    { level = "similar", page = "typeahead-service", note = "Its term weights fade this way. It has no late reports to describe.", source = "examples/capstones/typeahead_service.rs", hidden = true },
+]
+
+[[part]]
+number = 7
+id = "y151-the-best-names-for-any-beginning"
+stage = "what-comes-first"
+status = "new"
+minutes = 90
+blurb = "Show the best players for whatever has been typed, as scores keep rising"
+new_idea = "A short best list saved for every beginning, valid because scores only rise"
+reuses = "the beginnings of part 5"
+required = ["f4-prefix-trie"]
+helpful = [
+    { id = "y51-the-best-few-of-many", why = "keeping the best k of a stream", reveals_method = false, hidden = true },
+]
+used_again = ["y152-suggest-by-what-starts-a-term"]
+real_uses = "Autocomplete, leaderboards, search suggestions."
+cookbook = [
+    { level = "similar", page = "typeahead-service", note = "Its Trie::promote keeps a list at each node.", source = "examples/capstones/typeahead_service.rs", hidden = true },
+]
+
+[[part]]
+number = 8
+id = "f4-lru-cache-arena"
+stage = "stay-fresh"
+status = "existing"
+minutes = 60
+blurb = "Remember a fixed number of answers and forget the one unused longest"
+new_idea = "A linked list kept inside a Vec, beside a map"
+reuses = "nothing from this series"
+required = []
+helpful = []
+used_again = ["y152-fresh-answers-while-terms-change"]
+real_uses = "Page caches, DNS caches, memoisation."
+cookbook = [
+    { level = "similar", page = "typeahead-service", note = "Its Lru is an index-linked list. It has no peek and does not report what it evicted.", source = "examples/capstones/typeahead_service.rs", hidden = true },
+]
+
+[[part]]
+number = 9
+id = "y151-never-the-answer-from-before"
+stage = "stay-fresh"
+status = "new"
+minutes = 75
+blurb = "Share stored answers between threads while the facts change under them"
+new_idea = "Marking work in progress, so that a result made before a change is never stored"
+reuses = "nothing new"
+know_first = "Mutex, closures, Drop"
+required = []
+helpful = [
+    { id = "f4-lru-cache-arena", why = "a cache with a size limit", reveals_method = false, hidden = true },
+]
+used_again = ["y152-fresh-answers-while-terms-change"]
+real_uses = "Web caches, query caches, build caches."
+cookbook = [
+    { level = "related", page = "typeahead-service", note = "Its Engine guards its cache with one generation number, which drops more than this task allows.", source = "examples/capstones/typeahead_service.rs", hidden = true },
+]
+
+[[part]]
+number = 10
+id = "b7-how-long-requests-take"
+stage = "go-live"
+status = "existing"
+minutes = 90
+blurb = "Report how long requests take without using ever more memory"
+new_idea = "Percentiles from fixed memory"
+reuses = "nothing from this series"
+required = []
+helpful = [
+    { id = "c3-atomic-stats", why = "shared counters with atomics, if they are new to you", reveals_method = false, hidden = true },
+]
+used_again = ["y152-serve-the-suggestions"]
+real_uses = "Prometheus histograms, latency targets."
+cookbook = [
+    { level = "similar", page = "typeahead-service", note = "Its Histogram uses eight buckets per doubling. It has no report by limits.", source = "examples/capstones/typeahead_service.rs", hidden = true },
+]
+
+[[part]]
+number = 11
+id = "b1-api-error-response"
+stage = "go-live"
+status = "existing"
+minutes = 75
+blurb = "Give every failure of a web API the same shape"
+new_idea = "axum routers, extractors and one error type"
+reuses = "nothing from this series"
+know_first = "async fn, serde_json::json!"
+required = []
+helpful = []
+used_again = ["y152-serve-the-suggestions"]
+real_uses = "Any HTTP API."
+cookbook = [
+    { level = "related", page = "typeahead-service", note = "Four axum routes with serde request types.", source = "examples/capstones/typeahead_service.rs", hidden = true },
+]
+
+[[capstone]]
+step = 1
+id = "y152-suggest-by-what-starts-a-term"
+minutes = 90
+blurb = "Suggest terms by how they begin, the ones chosen often and lately first"
+new_idea = "A term table, fading popularity and a best list per beginning working as one"
+prepared_by = ["y151-light-up-what-was-typed", "f4-prefix-trie", "y151-what-is-hot-right-now", "y151-the-best-names-for-any-beginning"]
+required = ["y151-what-is-hot-right-now", "y151-the-best-names-for-any-beginning"]
+helpful = []
+cookbook = [
+    { level = "similar", page = "typeahead-service", note = "Terms and Trie. Its tie rules use recency.", source = "examples/capstones/typeahead_service.rs", hidden = true },
+]
+
+[[capstone]]
+step = 2
+id = "y152-inside-a-term-and-despite-slips"
+minutes = 90
+blurb = "Find terms by a piece inside them, or despite a typing slip"
+new_idea = "One written matching rule and an index that finds every term it might accept"
+prepared_by = ["y151-a-slip-of-the-finger", "y10-trigram-index", "y151-names-worth-a-closer-look"]
+required = ["y152-suggest-by-what-starts-a-term", "y151-names-worth-a-closer-look"]
+helpful = []
+cookbook = [
+    { level = "similar", page = "typeahead-service", note = "class_of is nearly this rule, and Index::search does the two lookups.", source = "examples/capstones/typeahead_service.rs", hidden = true },
+]
+
+[[capstone]]
+step = 3
+id = "y152-fresh-answers-while-terms-change"
+minutes = 90
+blurb = "Cache answers for many threads while terms keep changing"
+new_idea = "Dropping exactly the answers a write may alter, with no gap for a late one"
+prepared_by = ["f4-lru-cache-arena", "y151-never-the-answer-from-before"]
+required = ["y152-inside-a-term-and-despite-slips", "y151-never-the-answer-from-before"]
+helpful = [
+    { id = "c1-rwlock-writer-preferring", why = "how a read-write lock behaves", reveals_method = false, hidden = true },
+    { id = "y51-a-history-in-sealed-parts", why = "another way to let readers carry on: data that never changes", reveals_method = false, hidden = true },
+]
+cookbook = [
+    { level = "similar", page = "typeahead-service", note = "Engine::suggest and Engine::apply. It stamps the cache with a generation, and can also swap whole snapshots.", source = "examples/capstones/typeahead_service.rs", hidden = true },
+]
+
+[[capstone]]
+step = 4
+id = "y152-serve-the-suggestions"
+minutes = 75
+blurb = "Put the service on the network, with limits and numbers to watch"
+new_idea = "Routes, size limits that change nothing when broken, and metrics with a clock you control"
+prepared_by = ["b7-how-long-requests-take", "b1-api-error-response"]
+required = ["y152-fresh-answers-while-terms-change", "b1-api-error-response"]
+helpful = [
+    { id = "b22-serve-the-jobs", why = "query parameters and shared state in axum", reveals_method = false, hidden = true },
+    { id = "f7-wire-format-json", why = "serde defaults", reveals_method = false, hidden = true },
+]
+cookbook = [
+    { level = "similar", page = "typeahead-service", note = "The HTTP layer and metrics_text. Its fields differ in places.", source = "examples/capstones/typeahead_service.rs", hidden = true },
+]
+
+[[revisit]]
+part = "y151-the-best-names-for-any-beginning"
+before = "y152-suggest-by-what-starts-a-term"
+how = "Write the per-beginning lists again from a blank file before the first capstone step."
+minutes = 30
+
+[[revisit]]
+part = "y151-names-worth-a-closer-look"
+before = "y152-inside-a-term-and-despite-slips"
+how = "State from memory why a close name must share windows, then write the threshold again."
+minutes = 20
+
+[[revisit]]
+part = "y151-never-the-answer-from-before"
+before = "y152-fresh-answers-while-terms-change"
+how = "Write the marking of work in progress again from memory."
+minutes = 25
+
+[[readiness]]
+group = "Text"
+concept = "char::to_lowercase, is_whitespace, is_control; combining marks; char boundaries"
+parts = ["y151-light-up-what-was-typed"]
+steps = [1, 4]
+
+[[readiness]]
+group = "Text"
+concept = "Edit distance with swaps, a limit, three rows swapped with std::mem::swap"
+parts = ["y151-a-slip-of-the-finger"]
+steps = [2]
+note = "Steps 2 to 4 give you the code."
+
+[[readiness]]
+group = "Text"
+concept = "Windows of three characters, inner and padded, collected in maps and sets"
+parts = ["y10-trigram-index", "y151-names-worth-a-closer-look"]
+steps = [2]
+
+[[readiness]]
+group = "Text"
+concept = "Windows as Option<char> arrays; binary_search in a sorted list"
+steps = [2]
+note = "No earlier part requires these. Step 2's Rust hint names them, and sets work too."
+
+[[readiness]]
+group = "Ranking"
+concept = "A tree of beginnings in a Vec, linked by indices"
+parts = ["f4-prefix-trie"]
+steps = [1]
+note = "Part 5 forbids BTreeMap and BTreeSet. Step 1 does not; its reference links nodes with a BTreeMap."
+
+[[readiness]]
+group = "Ranking"
+concept = "A short sorted list per beginning; partition_point"
+parts = ["y151-the-best-names-for-any-beginning"]
+steps = [1]
+
+[[readiness]]
+group = "Ranking"
+concept = "f64 log2, exp2, ln_1p and total_cmp"
+parts = ["y151-what-is-hot-right-now"]
+steps = [1]
+note = "The hints of part 6 name them."
+
+[[readiness]]
+group = "Ranking"
+concept = "An injected clock, or time passed as an argument"
+parts = ["y151-what-is-hot-right-now", "b7-how-long-requests-take"]
+steps = [1, 3, 4]
+note = "Steps 1 to 3 take now as an argument. Step 4 takes a Clock trait."
+
+[[readiness]]
+group = "Caching"
+concept = "An LRU cache; removing entries by a test on the key"
+parts = ["f4-lru-cache-arena"]
+steps = [3]
+note = "Step 3's starter has a small cache with retain."
+
+[[readiness]]
+group = "Caching"
+concept = "No stale answer after a change; lock order; poisoned locks"
+parts = ["y151-never-the-answer-from-before"]
+steps = [3]
+
+[[readiness]]
+group = "Threads"
+concept = "Send and Sync, Arc, Mutex"
+parts = ["y151-never-the-answer-from-before"]
+steps = [3]
+
+[[readiness]]
+group = "Threads"
+concept = "std::sync::RwLock, and holding one guard across several steps"
+steps = [3]
+note = "RwLock is not required: one Mutex around everything passes step 3. No earlier part uses RwLock; step 3's Rust hint names it, and the RwLock exercise is a closed link."
+
+[[readiness]]
+group = "Threads"
+concept = "A boxed Fn that is Send + Sync"
+steps = [3, 4]
+note = "Step 3's starter declares the type. You only call it."
+
+[[readiness]]
+group = "Web"
+concept = "axum Router, Json, status codes, testing without a socket"
+parts = ["b1-api-error-response"]
+steps = [4]
+
+[[readiness]]
+group = "Web"
+concept = "Query and State extractors; serde default"
+steps = [4]
+note = "The starter declares the request structs. Step 4's Rust hint names the extractors."
+
+[[readiness]]
+group = "Web"
+concept = "Percentiles from fixed memory; a text metrics report"
+parts = ["b7-how-long-requests-take"]
+steps = [4]
+note = "Step 4's starter has the histogram."
+
+[[connection]]
+idea = "One key, many spellings"
+learn = ["y151-light-up-what-was-typed"]
+apply = ["y152-suggest-by-what-starts-a-term", "y152-serve-the-suggestions"]
+
+[[connection]]
+idea = "Filter cheaply, then check properly"
+learn = ["y10-trigram-index"]
+again = ["y151-names-worth-a-closer-look"]
+apply = ["y152-inside-a-term-and-despite-slips"]
+
+[[connection]]
+idea = "How far apart two texts are"
+learn = ["y151-a-slip-of-the-finger"]
+again = ["y151-names-worth-a-closer-look"]
+apply = ["y152-inside-a-term-and-despite-slips"]
+
+[[connection]]
+idea = "Do the work at write time"
+learn = ["f4-prefix-trie"]
+again = ["y151-the-best-names-for-any-beginning"]
+apply = ["y152-suggest-by-what-starts-a-term"]
+
+[[connection]]
+idea = "Forgetting without rewriting"
+learn = ["y151-what-is-hot-right-now"]
+apply = ["y152-suggest-by-what-starts-a-term"]
+
+[[connection]]
+idea = "Nothing old after a change"
+learn = ["y151-never-the-answer-from-before"]
+again = ["f4-lru-cache-arena"]
+apply = ["y152-fresh-answers-while-terms-change"]
+
+[[connection]]
+idea = "Limits and numbers for a service"
+learn = ["b7-how-long-requests-take", "b1-api-error-response"]
+apply = ["y152-serve-the-suggestions"]
+
+[[side_path]]
+id = "y51-a-history-in-sealed-parts"
+why = "after capstone step 3: let readers use a view that never changes, one way to stop writers and readers waiting for each other"
+after = "y152-fresh-answers-while-terms-change"
+
+[[side_path]]
+id = "c4-drain-with-deadline"
+why = "after capstone step 4: run a server and stop it on time"
+after = "y152-serve-the-suggestions"

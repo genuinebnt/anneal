@@ -1,0 +1,32 @@
+slug = "a-slip-of-the-finger"
+title = "How many slips of the finger?"
+mode = "write"
+level = "hard"
+stage = "what-was-meant"
+order = 2
+status = "ready"
+tags = ["edit distance", "dynamic programming", "typo", "bounded work"]
+teaches = [
+  "A swap of two neighbours is one mistake. It reaches back two rows of the table, so three rows are enough.",
+  "When only distances up to a limit matter, only cells near the diagonal can matter. The work then grows with the length times the limit.",
+  "Cells just outside the part you compute must hold 'too far', or an old value leaks in.",
+]
+follow_up = "1) What does the rule that no item is touched twice give up? Is the result still a metric? 2) How would you find the slips themselves, not only their number? 3) When would a bit-parallel method be worth it?"
+related = ["D12", "Y151"]
+
+[[hints]]
+kind = "approach"
+text = "Start with the full table of distances between beginnings of `a` and of `b`. Then ask how far `i` and `j` can differ in a cell whose value is at most `max`."
+
+[[hints]]
+kind = "rust"
+text = "Keep three `Vec<usize>` rows and rotate them with `std::mem::swap`. Use a large value that is still safe to add 1 to. `saturating_sub` and `min` keep the limits in range."
+
+[[hints]]
+kind = "edge"
+text = "Check the difference in length first. Cap `max` at the longer length before doing arithmetic with it. The rows are reused, so clear the cell on each side of the part you fill."
+
+[solution]
+explanation = "A cell at row i and column j needs at least |i - j| insertions or deletions. So only cells within max of the diagonal are computed. The cells on both sides are marked as too far. The swap rule reads two rows back. Differences in length larger than max return at once."
+time = "O(n * min(max, m))"
+space = "O(m)"

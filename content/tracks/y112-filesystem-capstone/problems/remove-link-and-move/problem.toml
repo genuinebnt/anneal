@@ -1,0 +1,31 @@
+slug = "remove-link-and-move"
+title = "Capstone 6: remove, link and move"
+mode = "write"
+level = "hard"
+stage = "files"
+order = 6
+status = "ready"
+tags = ["unlink", "hard links", "rename", "link counts", "cycles"]
+teaches = [
+  "A name is a reference. The data goes when the count of references reaches zero.",
+  "Whether one directory is inside another is a question about the tree, never about the text of two paths.",
+  "Check everything that can refuse an operation before changing anything, or let the transaction undo it.",
+]
+follow_up = "1) A program has a file open while another unlinks it. What would your filesystem need so that reads go on working, and what happens after a crash? 2) Why do UNIX filesystems forbid hard links to directories? 3) Programs save safely by writing a new file and renaming it over the old one. Which promise of your `rename` do they depend on?"
+
+[[hints]]
+kind = "approach"
+text = "Write two helpers first: 'take one name away from a file' and 'remove an empty directory'. `unlink`, `rmdir` and the replacing part of `rename` are each one of these."
+
+[[hints]]
+kind = "rust"
+text = "`matches!` and a `match (is_dir, target_is_dir)` with four arms keep the replace rules readable. A `for _ in 0..=n` loop that falls through to an error is a loop with a bound."
+
+[[hints]]
+kind = "edge"
+text = "Moving onto another name of the same file must not remove anything. A directory moved within one parent changes no link counts. Removing the old entry frees a slot that the new entry may take."
+
+[solution]
+explanation = "The two removal helpers hold the link-count rules in one place, so rename's replacing case reuses them. The cycle check walks '..' from the target's directory, with a bound, and compares inode numbers."
+time = "O(entries) per directory touched, O(depth x entries) for the cycle check"
+space = "O(directory size)"

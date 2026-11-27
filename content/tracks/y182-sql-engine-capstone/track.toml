@@ -1,0 +1,16 @@
+code = "Y182"
+name = "SQL engine: capstone"
+section = "Y"
+tier = "sde3"
+order = 182
+summary = "Build a small in-memory SQL engine in five steps: tokens, statements, checked expressions, tables and groups."
+
+[[stages]]
+slug = "front"
+name = "Understand the request"
+band = "hard"
+
+[[stages]]
+slug = "engine"
+name = "Answer it"
+band = "hard"

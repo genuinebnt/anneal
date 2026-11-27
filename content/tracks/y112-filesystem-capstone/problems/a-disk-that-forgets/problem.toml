@@ -1,0 +1,31 @@
+slug = "a-disk-that-forgets"
+title = "Capstone 7: a disk that loses writes"
+mode = "write"
+level = "medium"
+stage = "trust-it"
+order = 7
+status = "ready"
+tags = ["fault injection", "write cache", "torn writes", "reordering", "deterministic testing"]
+teaches = [
+  "A test can only find the failures that its fake disk is able to produce.",
+  "Seeded faults make a one-in-a-thousand crash happen again on demand.",
+  "A sync is the only point at which a program learns anything about what is stored.",
+]
+follow_up = "1) Name two things real disks do that this model never does. 2) With 20 pending writes, how many distinct disks can a cut leave? Why test random ones and not all? 3) What would you log so that a failing seed can be understood and not only repeated?"
+
+[[hints]]
+kind = "approach"
+text = "Keep the safe bytes and a list of pending writes. A read looks at the list from the newest end first. For chaos, shuffle the order of the pending writes, then decide the fate of each."
+
+[[hints]]
+kind = "rust"
+text = "A tiny generator such as splitmix64 or xorshift is a few lines. A Fisher-Yates shuffle swaps position i with a random position at or before i. `chunks_exact(512)` walks the sectors."
+
+[[hints]]
+kind = "edge"
+text = "Check the block number before counting the write. `post_crash_image` takes `&self`: seed a local generator from the mode, so that asking twice gives the same bytes."
+
+[solution]
+explanation = "The pending list is the whole model: sync empties it into the safe copy, and a crash image applies a chosen part of it. Taking the choices from the seed makes every failure repeatable."
+time = "post_crash_image is O(disk + pending)"
+space = "O(disk + pending)"

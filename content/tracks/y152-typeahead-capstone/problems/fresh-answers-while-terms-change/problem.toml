@@ -1,0 +1,38 @@
+slug = "fresh-answers-while-terms-change"
+title = "Fresh answers while terms change"
+mode = "write"
+level = "hard"
+stage = "serve"
+order = 3
+status = "ready"
+tags = ["type-ahead", "capstone", "caching", "concurrency"]
+teaches = [
+  "A change can alter an answer that does not mention the changed term, because the term may now belong in it. Ask whether the term matches the question, not whether the answer lists it.",
+  "The same matching rule serves twice: it finds terms for a question, and finds questions touched by a term.",
+  "A change has two halves: the data and the cache. A reader must not get between them and leave an old answer behind.",
+  "Holding the read lock until the answer is stored, and the write lock until the cache is clean, closes both gaps.",
+]
+follow_up = "1) A long search now delays every writer. How would copy-on-write snapshots change that, and what then guards the cache? 2) Cleaning costs stored answers times written terms. When would you empty the cache instead? 3) How would you stop many threads working out the same missing answer at once?"
+related = ["Y151", "C1"]
+
+[[hints]]
+kind = "approach"
+text = "Draw one reader and one writer, each in two steps. Find every way the reader can store an answer that the writer has already finished cleaning up after."
+
+[[hints]]
+kind = "rust"
+text = "`RwLock` around the index and a `Mutex` around the cache are enough. Decide which lock is taken first and never the other way round. A read guard can live from the cache lookup to the store."
+
+[[hints]]
+kind = "edge"
+text = "An answer that is empty can become non-empty. A cached entry must keep what is needed to compute scores later. `choose` of an unknown term changes nothing."
+
+[solution]
+explanation = "A reader holds the index for reading until its answer is stored. A writer holds it for writing until the cache has dropped every entry whose typed key matches a written term, so nothing old is stored late.\n\nThe cache holds term numbers, so scores are computed at each question. Its lock is taken after the index lock and is not held during a search."
+time = "O(1) lock work per hit; a write also costs stored answers times written terms"
+space = "O(capacity * MOST) for the cache"
+
+[[cookbook]]
+level = "similar"
+page = "typeahead-service"
+note = "Its Engine uses a generation stamp instead of holding the read lock across the insert into the cache."
