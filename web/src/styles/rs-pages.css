@@ -93,6 +93,19 @@
 .k-root .rs-stagepage .k-tabs{border:0}
 .k-root .rs-stagepage .k-tabs button{padding-inline:14px;border-radius:10px}
 .k-root .rs-stagepage .k-tabs button.k-on{background:var(--panel)}
+.k-root .rs-stagepage .k-tabs .k-ts{display:none}
+/* on a phone the five tabs share one row of equal segments: a short label, and under it the tab's count or last result */
+@media (max-width:640px){
+    .k-root .rs-stagepage .k-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;padding:4px;border-radius:14px;background:var(--raise);overflow:visible}
+    .k-root .rs-stagepage .k-tabs button{flex-direction:column;justify-content:center;gap:1px;min-width:0;min-height:44px;padding:4px 2px;font-size:12.5px}
+    .k-root .rs-stagepage .k-tabs button.k-on{box-shadow:0 1px 0 var(--line2)}
+    .k-root .rs-stagepage .k-tabs .k-tl{display:none}
+    .k-root .rs-stagepage .k-tabs .k-ts{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .k-root .rs-stagepage .k-tabs small{border:0;padding:0;font-size:10px;color:var(--dim)}
+    .k-root .rs-stagepage .k-tabs button.k-on small{color:var(--acc)}
+    .k-root .rs-stagepage .k-tabs small.k-ok{color:var(--grn)}
+    .k-root .rs-stagepage .k-tabs small.k-bad{color:var(--bad)}
+}
 .k-root .rs-stagepage .k-read2 .k-sh{margin-top:36px;font-size:15px}
 .k-root .rs-stagepage .k-sh::after{display:none}
 .k-root .rs-how{list-style:none;margin:18px 0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}

@@ -407,13 +407,15 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
     // a test that hit the time limit comes first: it is the one to look at, and the others may only have been waiting behind it
     const failedFirst = run?.tests.find((t) => !t.ok && t.detail.startsWith(LIMIT)) ?? run?.tests.find((t) => !t.ok);
     const outlineEntries: [string, string][] = [["s-top", "Overview"], ...entries.map((e): [string, string] => [e.id, e.title])];
-    const tabs: [Tab, string, string][] = [
-        ["instructions", "Instructions", ""],
-        ["hints", "Hints", p.hints.total ? `${p.hints.revealed.length}/${p.hints.total}` : ""],
-        ["solution", "Solution", ""],
-        ["concepts", "Concepts", reqConcepts.length ? `${reqDone}/${reqConcepts.length}` : p.concepts.length ? String(p.concepts.length) : ""],
-        ["run", "Last run", run ? (run.problem ? "—" : `${run.passed}/${run.total}`) : ""],
+    // [tab, label, short label for a phone, badge]; on a phone the five tabs share one row, the badge under the short label
+    const tabs: [Tab, string, string, string][] = [
+        ["instructions", "Instructions", "Task", ""],
+        ["hints", "Hints", "Hints", p.hints.total ? `${p.hints.revealed.length}/${p.hints.total}` : ""],
+        ["solution", "Solution", "Solution", ""],
+        ["concepts", "Concepts", "Concepts", reqConcepts.length ? `${reqDone}/${reqConcepts.length}` : p.concepts.length ? String(p.concepts.length) : ""],
+        ["run", "Last run", "Run", run ? (run.problem ? "—" : `${run.passed}/${run.total}`) : ""],
     ];
+    const runState = run && !run.problem ? (run.passed === run.total ? " k-ok" : " k-bad") : "";
     const hidden = (id: string) => optHidden && !flipped.has(id);
     const flip = (id: string) =>
         setFlipped((f) => {
@@ -507,10 +509,18 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                                 setTimeout(() => tabsRef.current?.querySelectorAll<HTMLElement>("[role=tab]")[n]?.focus(), 0);
                             }}
                         >
-                            {tabs.map(([k, label, n]) => (
-                                <button key={k} role="tab" aria-selected={tab === k} aria-controls={`pane-${k}`} tabIndex={tab === k ? 0 : -1} className={tab === k ? "k-on" : ""} onClick={() => pick(k)}>
-                                    {label}
-                                    {n !== "" && <> <small>{n}</small></>}
+                            {tabs.map(([k, label, short, n]) => (
+                                <button key={k} role="tab" aria-selected={tab === k} aria-controls={`pane-${k}`} aria-label={n !== "" ? `${label} ${n}` : label} tabIndex={tab === k ? 0 : -1} className={tab === k ? "k-on" : ""} onClick={() => pick(k)}>
+                                    <span className="k-tl">{label}</span>
+                                    <span className="k-ts" aria-hidden="true">
+                                        {short}
+                                    </span>
+                                    {n !== "" && (
+                                        <>
+                                            {" "}
+                                            <small className={k === "run" ? runState.trim() : undefined}>{n}</small>
+                                        </>
+                                    )}
                                 </button>
                             ))}
                         </div>
