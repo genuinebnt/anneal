@@ -1410,32 +1410,32 @@ mod ch_4a_c1 {
         let v = ReadView::new(5, &[3, 5, 7], 9);
         assert!(v.visible(2), "committed before the snapshot");
         assert!(!v.visible(3), "was active");
-        assert!(v.visible(4));
+        assert!(v.visible(4), "this check: expected `v.visible(4)`");
         assert!(v.visible(5), "my own writes");
-        assert!(!v.visible(7));
+        assert!(!v.visible(7), "this check: expected `!v.visible(7)`");
         assert!(!v.visible(9), "began after the snapshot");
-        assert!(!v.visible(100));
+        assert!(!v.visible(100), "this check: expected `!v.visible(100)`");
     }
 
     #[test]
     fn s4a_c1_an_empty_active_set_sees_every_older_transaction() {
         let v = ReadView::new(10, &[], 10);
-        assert!((0..10).all(|w| v.visible(w)));
-        assert!(v.visible(10));
-        assert!(!v.visible(11));
+        assert!((0..10).all(|w| v.visible(w)), "this check: expected `(0..10).all(|w| v.visible(w))`");
+        assert!(v.visible(10), "this check: expected `v.visible(10)`");
+        assert!(!v.visible(11), "this check: expected `!v.visible(11)`");
     }
 
     #[test]
     fn s4a_c1_own_writes_are_visible_even_when_listed_active() {
         let v = ReadView::new(3, &[3], 4);
-        assert!(v.visible(3));
+        assert!(v.visible(3), "this check: expected `v.visible(3)`");
     }
 
     #[test]
     fn s4a_c1_the_boundary_id_is_exclusive() {
         let v = ReadView::new(1, &[], 6);
-        assert!(v.visible(5));
-        assert!(!v.visible(6));
+        assert!(v.visible(5), "this check: expected `v.visible(5)`");
+        assert!(!v.visible(6), "this check: expected `!v.visible(6)`");
     }
 
     proptest! {
@@ -1474,34 +1474,34 @@ mod ch_4a_c2 {
     #[test]
     fn s4a_c2_a_reader_sees_the_newest_committed_version_at_its_timestamp() {
         assert_eq!(read_version(&chain(), 1, 9), None, "nothing was committed yet at ts 1");
-        assert_eq!(read_version(&chain(), 4, 9), Some(10));
-        assert_eq!(read_version(&chain(), 5, 9), Some(20));
-        assert_eq!(read_version(&chain(), 100, 9), Some(20));
+        assert_eq!(read_version(&chain(), 4, 9), Some(10), "this check");
+        assert_eq!(read_version(&chain(), 5, 9), Some(20), "this check");
+        assert_eq!(read_version(&chain(), 100, 9), Some(20), "this check");
     }
 
     #[test]
     fn s4a_c2_the_writer_sees_its_own_pending_version() {
-        assert_eq!(read_version(&chain(), 5, 7), Some(30));
+        assert_eq!(read_version(&chain(), 5, 7), Some(30), "this check");
         assert_eq!(read_version(&chain(), 0, 7), Some(30), "its own write is visible whatever the timestamp");
     }
 
     #[test]
     fn s4a_c2_a_committed_delete_hides_the_row_after_its_timestamp() {
         let c = vec![v(3, Commit(5), None), v(1, Commit(2), Some(10))];
-        assert_eq!(read_version(&c, 3, 9), Some(10));
-        assert_eq!(read_version(&c, 6, 9), None);
+        assert_eq!(read_version(&c, 3, 9), Some(10), "this check");
+        assert_eq!(read_version(&c, 6, 9), None, "this check");
     }
 
     #[test]
     fn s4a_c2_a_pending_delete_by_someone_else_is_invisible() {
         let c = vec![v(7, Pending, None), v(1, Commit(2), Some(10))];
-        assert_eq!(read_version(&c, 5, 9), Some(10));
+        assert_eq!(read_version(&c, 5, 9), Some(10), "this check");
         assert_eq!(read_version(&c, 5, 7), None, "but the deleter sees its own delete");
     }
 
     #[test]
     fn s4a_c2_an_empty_chain_is_no_row() {
-        assert_eq!(read_version(&[], 10, 1), None);
+        assert_eq!(read_version(&[], 10, 1), None, "this check");
     }
 
     proptest! {
@@ -1536,19 +1536,19 @@ mod ch_4a_c3 {
     #[test]
     fn s4a_c3_a_commit_that_finished_early_does_not_pull_the_snapshot_over_a_gap() {
         let mut o = TsOracle::new();
-        assert_eq!((o.reserve(), o.reserve(), o.reserve()), (1, 2, 3));
-        assert_eq!(o.begin(), 0);
+        assert_eq!((o.reserve(), o.reserve(), o.reserve()), (1, 2, 3), "this check");
+        assert_eq!(o.begin(), 0, "this check");
         o.finish(2);
         assert_eq!(o.begin(), 0, "commit 1 is not finished: a snapshot at 2 would show commit 2 without commit 1");
         o.finish(1);
-        assert_eq!(o.begin(), 2);
+        assert_eq!(o.begin(), 2, "this check");
         o.finish(3);
-        assert_eq!(o.begin(), 3);
+        assert_eq!(o.begin(), 3, "this check");
     }
 
     #[test]
     fn s4a_c3_nothing_reserved_means_timestamp_zero() {
-        assert_eq!(TsOracle::new().begin(), 0);
+        assert_eq!(TsOracle::new().begin(), 0, "this check");
     }
 
     #[test]
@@ -1557,7 +1557,7 @@ mod ch_4a_c3 {
         for i in 1..=5 {
             o.reserve();
             o.finish(i);
-            assert_eq!(o.begin(), i);
+            assert_eq!(o.begin(), i, "this check");
         }
     }
 
@@ -1567,10 +1567,10 @@ mod ch_4a_c3 {
         o.reserve();
         o.finish(5);
         o.finish(0);
-        assert_eq!(o.begin(), 0);
+        assert_eq!(o.begin(), 0, "this check");
         o.finish(1);
         o.finish(1);
-        assert_eq!(o.begin(), 1);
+        assert_eq!(o.begin(), 1, "this check");
     }
 
     proptest! {
@@ -1607,24 +1607,24 @@ mod ch_4a_c4 {
     #[test]
     fn s4a_c4_an_update_records_only_the_changed_columns() {
         let log = make_undo(Some(&[1, 2, 3]), Some(&[1, 9, 3]));
-        assert_eq!(log, UndoLog::Columns { mask: vec![false, true, false], values: vec![2] });
-        assert_eq!(apply_undo(Some(&[1, 9, 3]), &log), Some(vec![1, 2, 3]));
+        assert_eq!(log, UndoLog::Columns { mask: vec![false, true, false], values: vec![2] }, "this check");
+        assert_eq!(apply_undo(Some(&[1, 9, 3]), &log), Some(vec![1, 2, 3]), "this check");
     }
 
     #[test]
     fn s4a_c4_an_insert_is_undone_by_removing_and_a_delete_by_restoring() {
-        assert_eq!(make_undo(None, Some(&[4])), UndoLog::Remove);
-        assert_eq!(apply_undo(Some(&[4]), &UndoLog::Remove), None);
+        assert_eq!(make_undo(None, Some(&[4])), UndoLog::Remove, "this check");
+        assert_eq!(apply_undo(Some(&[4]), &UndoLog::Remove), None, "this check");
         let del = make_undo(Some(&[4, 5]), None);
-        assert_eq!(del, UndoLog::Restore(vec![4, 5]));
-        assert_eq!(apply_undo(None, &del), Some(vec![4, 5]));
+        assert_eq!(del, UndoLog::Restore(vec![4, 5]), "this check");
+        assert_eq!(apply_undo(None, &del), Some(vec![4, 5]), "this check");
     }
 
     #[test]
     fn s4a_c4_an_unchanged_row_has_an_empty_mask_and_changes_nothing() {
         let log = make_undo(Some(&[7, 8]), Some(&[7, 8]));
-        assert_eq!(log, UndoLog::Columns { mask: vec![false, false], values: vec![] });
-        assert_eq!(apply_undo(Some(&[7, 8]), &log), Some(vec![7, 8]));
+        assert_eq!(log, UndoLog::Columns { mask: vec![false, false], values: vec![] }, "this check");
+        assert_eq!(apply_undo(Some(&[7, 8]), &log), Some(vec![7, 8]), "this check");
     }
 
     #[test]
@@ -1672,27 +1672,27 @@ mod ch_4a_c5 {
     #[test]
     fn s4a_c5_a_read_that_arrives_after_a_younger_write_aborts() {
         let mut i = ToItem::new(0);
-        assert_eq!(i.write(5, 1), Ok(()));
-        assert_eq!(i.read(3), Err(Abort));
-        assert_eq!(i.read(5), Ok(1));
-        assert_eq!(i.read(7), Ok(1));
+        assert_eq!(i.write(5, 1), Ok(()), "this check");
+        assert_eq!(i.read(3), Err(Abort), "this check");
+        assert_eq!(i.read(5), Ok(1), "this check");
+        assert_eq!(i.read(7), Ok(1), "this check");
     }
 
     #[test]
     fn s4a_c5_a_write_that_arrives_after_a_younger_read_aborts() {
         let mut i = ToItem::new(0);
         i.read(7).unwrap();
-        assert_eq!(i.write(6, 2), Err(Abort));
-        assert_eq!(i.write(8, 3), Ok(()));
-        assert_eq!(i.read(9), Ok(3));
+        assert_eq!(i.write(6, 2), Err(Abort), "this check");
+        assert_eq!(i.write(8, 3), Ok(()), "this check");
+        assert_eq!(i.read(9), Ok(3), "this check");
     }
 
     #[test]
     fn s4a_c5_a_write_older_than_the_last_write_aborts() {
         let mut i = ToItem::new(0);
         i.write(5, 1).unwrap();
-        assert_eq!(i.write(4, 2), Err(Abort));
-        assert_eq!(i.read(6), Ok(1));
+        assert_eq!(i.write(4, 2), Err(Abort), "this check");
+        assert_eq!(i.read(6), Ok(1), "this check");
     }
 
     #[test]
@@ -1702,16 +1702,16 @@ mod ch_4a_c5 {
         let before = i.timestamps();
         let _ = i.read(2);
         let _ = i.write(3, 77);
-        assert_eq!(i.timestamps(), before);
-        assert_eq!(i.read(5), Ok(1));
+        assert_eq!(i.timestamps(), before, "this check");
+        assert_eq!(i.read(5), Ok(1), "this check");
     }
 
     #[test]
     fn s4a_c5_the_largest_timestamp_is_never_refused() {
         let mut i = ToItem::new(0);
         for ts in 1..20 {
-            assert!(i.write(ts, ts as i64).is_ok());
-            assert_eq!(i.read(ts), Ok(ts as i64));
+            assert!(i.write(ts, ts as i64).is_ok(), "this check: expected `i.write(ts, ts as i64).is_ok()`");
+            assert_eq!(i.read(ts), Ok(ts as i64), "this check");
         }
     }
 

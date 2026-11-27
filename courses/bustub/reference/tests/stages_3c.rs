@@ -816,7 +816,7 @@ fn s3c_05_a_table_and_its_index_agree_after_inserts_and_deletes_through_the_cata
         let k = (i * 37) % 401;
         let tuple = key(&schema, &[k, i, 0]);
         let rid = table.table.insert_tuple(&meta(false), &tuple).unwrap();
-        assert!(index.index.insert_entry(&key(&index.key_schema, &[k]), rid));
+        assert!(index.index.insert_entry(&key(&index.key_schema, &[k]), rid), "a table and its index agree after inserts and deletes through the catalog: expected `index.index.insert_entry(&key(&index.key_schema, &[k]), rid)`");
         live.insert(k, rid);
     }
     for k in (0..401).step_by(3) {
@@ -831,7 +831,7 @@ fn s3c_05_a_table_and_its_index_agree_after_inserts_and_deletes_through_the_cata
     sorted.sort();
     assert_eq!(sorted, live.keys().copied().collect::<Vec<_>>(), "a scan of the table finds the same rows");
     for (k, rid) in &live {
-        assert_eq!(table.table.get_tuple(*rid).unwrap().1.get_value(&schema, 0), Value::integer(*k));
+        assert_eq!(table.table.get_tuple(*rid).unwrap().1.get_value(&schema, 0), Value::integer(*k), "a table and its index agree after inserts and deletes through the catalog");
     }
 }
 
@@ -847,33 +847,33 @@ mod ch_3c_c1 {
         for (p, f) in [(1, 50), (2, 20), (3, 80)] {
             m.set(p, f);
         }
-        assert_eq!((m.find(10), m.find(60), m.find(100)), (Some(1), Some(3), None));
+        assert_eq!((m.find(10), m.find(60), m.find(100)), (Some(1), Some(3), None), "this check");
         m.set(0, 70);
-        assert_eq!(m.find(60), Some(0));
-        assert_eq!(m.get(0), 70);
+        assert_eq!(m.find(60), Some(0), "this check");
+        assert_eq!(m.get(0), 70, "this check");
     }
 
     #[test]
     fn s3c_c1_nothing_has_room_in_a_new_map() {
         let m = FreeSpaceMap::new(5);
-        assert_eq!(m.find(1), None);
+        assert_eq!(m.find(1), None, "this check");
         assert_eq!(m.find(0), Some(0), "every page has at least 0 bytes");
     }
 
     #[test]
     fn s3c_c1_no_pages_and_one_page() {
         let m = FreeSpaceMap::new(0);
-        assert_eq!((m.find(0), m.pages()), (None, 0));
+        assert_eq!((m.find(0), m.pages()), (None, 0), "this check");
         let mut one = FreeSpaceMap::new(1);
         one.set(0, 5);
-        assert_eq!((one.find(5), one.find(6)), (Some(0), None));
+        assert_eq!((one.find(5), one.find(6)), (Some(0), None), "this check");
     }
 
     #[test]
     fn s3c_c1_pages_that_do_not_fill_the_tree_are_never_returned() {
         let mut m = FreeSpaceMap::new(5);
         m.set(4, 9);
-        assert_eq!(m.find(9), Some(4));
+        assert_eq!(m.find(9), Some(4), "this check");
         assert_eq!(m.find(10), None, "the padding leaves of the tree are not pages");
     }
 
@@ -884,7 +884,7 @@ mod ch_3c_c1 {
         m.set(n - 1, 100);
         let t = std::time::Instant::now();
         for _ in 0..200_000 {
-            assert_eq!(m.find(100), Some(n - 1));
+            assert_eq!(m.find(100), Some(n - 1), "this check");
         }
         assert!(t.elapsed() < std::time::Duration::from_secs(5), "200 000 finds took {:?}: find must not scan", t.elapsed());
     }
@@ -922,21 +922,21 @@ mod ch_3c_c2 {
     #[test]
     fn s3c_c2_names_are_case_insensitive_and_unique() {
         let mut c = NameCatalog::new();
-        assert_eq!(c.create("Users"), Ok(1));
-        assert_eq!(c.create("USERS"), Err(NameError::Exists));
-        assert_eq!(c.lookup("users"), Some(1));
-        assert_eq!(c.create(""), Err(NameError::Invalid));
-        assert_eq!(c.names(), vec!["users".to_string()]);
+        assert_eq!(c.create("Users"), Ok(1), "this check");
+        assert_eq!(c.create("USERS"), Err(NameError::Exists), "this check");
+        assert_eq!(c.lookup("users"), Some(1), "this check");
+        assert_eq!(c.create(""), Err(NameError::Invalid), "this check");
+        assert_eq!(c.names(), vec!["users".to_string()], "this check");
     }
 
     #[test]
     fn s3c_c2_an_id_is_never_reused() {
         let mut c = NameCatalog::new();
-        assert_eq!(c.create("a"), Ok(1));
-        assert!(c.drop("A"));
-        assert!(!c.drop("a"));
+        assert_eq!(c.create("a"), Ok(1), "this check");
+        assert!(c.drop("A"), "this check: expected `c.drop(\"A\")`");
+        assert!(!c.drop("a"), "this check: expected `!c.drop(\"a\")`");
         assert_eq!(c.create("a"), Ok(2), "the dropped table's id must not come back");
-        assert_eq!(c.create("b"), Ok(3));
+        assert_eq!(c.create("b"), Ok(3), "this check");
     }
 
     #[test]
@@ -944,19 +944,19 @@ mod ch_3c_c2 {
         let mut c = NameCatalog::new();
         c.create("old").unwrap();
         c.create("other").unwrap();
-        assert_eq!(c.rename("OLD", "New"), Ok(()));
-        assert_eq!((c.lookup("old"), c.lookup("new")), (None, Some(1)));
-        assert_eq!(c.rename("missing", "x"), Err(NameError::Missing));
-        assert_eq!(c.rename("new", "OTHER"), Err(NameError::Exists));
+        assert_eq!(c.rename("OLD", "New"), Ok(()), "this check");
+        assert_eq!((c.lookup("old"), c.lookup("new")), (None, Some(1)), "this check");
+        assert_eq!(c.rename("missing", "x"), Err(NameError::Missing), "this check");
+        assert_eq!(c.rename("new", "OTHER"), Err(NameError::Exists), "this check");
         assert_eq!(c.rename("new", "NEW"), Ok(()), "renaming to the same name in another case is fine");
     }
 
     #[test]
     fn s3c_c2_an_empty_catalog_has_no_names_and_dropping_a_missing_table_is_false() {
         let mut c = NameCatalog::new();
-        assert!(c.names().is_empty());
-        assert_eq!(c.lookup("x"), None);
-        assert!(!c.drop("x"));
+        assert!(c.names().is_empty(), "this check: expected `c.names().is_empty()`");
+        assert_eq!(c.lookup("x"), None, "this check");
+        assert!(!c.drop("x"), "this check: expected `!c.drop(\"x\")`");
         assert_eq!(c.create("x"), Ok(1), "a failed drop does not use up an id");
     }
 
@@ -1010,29 +1010,29 @@ mod ch_3c_c3 {
     #[test]
     fn s3c_c3_each_matching_row_is_raised_once() {
         let mut rows = vec![Some((1, 100)), Some((2, 5000))];
-        assert_eq!(give_raise(&mut rows, 1000, 2), 1);
-        assert_eq!(live(&rows), BTreeMap::from([(1, 200), (2, 5000)]));
+        assert_eq!(give_raise(&mut rows, 1000, 2), 1, "this check");
+        assert_eq!(live(&rows), BTreeMap::from([(1, 200), (2, 5000)]), "this check");
     }
 
     #[test]
     fn s3c_c3_the_update_ends_even_when_the_new_salary_is_still_below_the_limit() {
         let mut rows = vec![Some((1, 1)), Some((2, 2))];
         assert_eq!(give_raise(&mut rows, 1_000_000, 3), 2, "each row once, not until it passes the limit");
-        assert_eq!(live(&rows), BTreeMap::from([(1, 3), (2, 6)]));
+        assert_eq!(live(&rows), BTreeMap::from([(1, 3), (2, 6)]), "this check");
     }
 
     #[test]
     fn s3c_c3_nothing_matches_and_dead_slots_are_skipped() {
         let mut rows = vec![None, Some((1, 5000)), None];
-        assert_eq!(give_raise(&mut rows, 1000, 2), 0);
+        assert_eq!(give_raise(&mut rows, 1000, 2), 0, "this check");
         assert_eq!(rows.len(), 3, "nothing was appended");
     }
 
     #[test]
     fn s3c_c3_a_salary_at_the_limit_is_not_below_it() {
         let mut rows = vec![Some((1, 1000)), Some((2, 999))];
-        assert_eq!(give_raise(&mut rows, 1000, 2), 1);
-        assert_eq!(live(&rows), BTreeMap::from([(1, 1000), (2, 1998)]));
+        assert_eq!(give_raise(&mut rows, 1000, 2), 1, "this check");
+        assert_eq!(live(&rows), BTreeMap::from([(1, 1000), (2, 1998)]), "this check");
     }
 
     proptest! {
@@ -1064,9 +1064,9 @@ mod ch_3c_c4 {
         let mut h = MovingHeap::new(10);
         let a = h.insert(&[1; 6]).unwrap();
         let b = h.insert(&[2; 6]).unwrap();
-        assert_eq!((a, b), (0, 1));
+        assert_eq!((a, b), (0, 1), "this check");
         assert_ne!(h.page_of(a), h.page_of(b), "6 + 6 does not fit in a page of 10");
-        assert_eq!((h.get(a), h.get(b)), (Some(&[1u8; 6][..]), Some(&[2u8; 6][..])));
+        assert_eq!((h.get(a), h.get(b)), (Some(&[1u8; 6][..]), Some(&[2u8; 6][..])), "this check");
     }
 
     #[test]
@@ -1074,9 +1074,9 @@ mod ch_3c_c4 {
         let mut h = MovingHeap::new(10);
         let a = h.insert(&[1; 4]).unwrap();
         let page = h.page_of(a);
-        assert!(h.update(a, &[9; 9]));
-        assert_eq!(h.page_of(a), page);
-        assert_eq!(h.get(a), Some(&[9u8; 9][..]));
+        assert!(h.update(a, &[9; 9]), "this check: expected `h.update(a, &[9; 9])`");
+        assert_eq!(h.page_of(a), page, "this check");
+        assert_eq!(h.get(a), Some(&[9u8; 9][..]), "this check");
     }
 
     #[test]
@@ -1084,25 +1084,25 @@ mod ch_3c_c4 {
         let mut h = MovingHeap::new(10);
         let a = h.insert(&[1; 5]).unwrap();
         let b = h.insert(&[2; 5]).unwrap();
-        assert_eq!(h.page_of(a), h.page_of(b));
+        assert_eq!(h.page_of(a), h.page_of(b), "this check");
         assert!(h.update(a, &[7; 8]), "8 does not fit beside b's 5, so a moves");
-        assert_ne!(h.page_of(a), h.page_of(b));
-        assert_eq!((h.get(a), h.get(b)), (Some(&[7u8; 8][..]), Some(&[2u8; 5][..])));
+        assert_ne!(h.page_of(a), h.page_of(b), "this check");
+        assert_eq!((h.get(a), h.get(b)), (Some(&[7u8; 8][..]), Some(&[2u8; 5][..])), "this check");
         for p in 0..h.pages() {
-            assert!(h.used(p) <= 10);
+            assert!(h.used(p) <= 10, "this check: expected `h.used(p) <= 10`");
         }
     }
 
     #[test]
     fn s3c_c4_oversized_rows_and_unknown_ids_are_refused() {
         let mut h = MovingHeap::new(10);
-        assert_eq!(h.insert(&[0; 11]), None);
+        assert_eq!(h.insert(&[0; 11]), None, "this check");
         let a = h.insert(&[1; 3]).unwrap();
-        assert!(!h.update(a, &[0; 11]));
-        assert!(!h.update(99, &[1]));
-        assert!(h.delete(a));
-        assert!(!h.delete(a));
-        assert_eq!(h.get(a), None);
+        assert!(!h.update(a, &[0; 11]), "this check: expected `!h.update(a, &[0; 11])`");
+        assert!(!h.update(99, &[1]), "this check: expected `!h.update(99, &[1])`");
+        assert!(h.delete(a), "this check: expected `h.delete(a)`");
+        assert!(!h.delete(a), "this check: expected `!h.delete(a)`");
+        assert_eq!(h.get(a), None, "this check");
         assert_eq!(h.insert(&[1]).unwrap(), 1, "ids are not reused");
     }
 
@@ -1151,9 +1151,9 @@ mod ch_3c_c5 {
         let a = t.insert(&[1, 2]).unwrap();
         t.add_column(7);
         let b = t.insert(&[3, 4, 5]).unwrap();
-        assert_eq!(t.get(a), Some(vec![1, 2, 7]));
-        assert_eq!(t.get(b), Some(vec![3, 4, 5]));
-        assert_eq!(t.columns(), 3);
+        assert_eq!(t.get(a), Some(vec![1, 2, 7]), "this check");
+        assert_eq!(t.get(b), Some(vec![3, 4, 5]), "this check");
+        assert_eq!(t.columns(), 3, "this check");
     }
 
     #[test]
@@ -1161,18 +1161,18 @@ mod ch_3c_c5 {
         let mut t = EvolvingTable::new(2);
         let a = t.insert(&[1, 2]).unwrap();
         t.add_column(7);
-        assert!(t.drop_column(0));
-        assert_eq!(t.get(a), Some(vec![2, 7]));
-        assert!(!t.drop_column(5));
+        assert!(t.drop_column(0), "this check: expected `t.drop_column(0)`");
+        assert_eq!(t.get(a), Some(vec![2, 7]), "this check");
+        assert!(!t.drop_column(5), "this check: expected `!t.drop_column(5)`");
     }
 
     #[test]
     fn s3c_c5_a_row_of_the_wrong_width_is_refused() {
         let mut t = EvolvingTable::new(2);
-        assert_eq!(t.insert(&[1]), None);
-        assert_eq!(t.insert(&[1, 2, 3]), None);
+        assert_eq!(t.insert(&[1]), None, "this check");
+        assert_eq!(t.insert(&[1, 2, 3]), None, "this check");
         t.add_column(0);
-        assert!(t.insert(&[1, 2, 3]).is_some());
+        assert!(t.insert(&[1, 2, 3]).is_some(), "this check: expected `t.insert(&[1, 2, 3]).is_some()`");
     }
 
     #[test]
@@ -1182,7 +1182,7 @@ mod ch_3c_c5 {
         t.add_column(10);
         let b = t.insert(&[2, 20]).unwrap();
         t.add_column(30);
-        assert_eq!((t.get(a), t.get(b)), (Some(vec![1, 10, 30]), Some(vec![2, 20, 30])));
+        assert_eq!((t.get(a), t.get(b)), (Some(vec![1, 10, 30]), Some(vec![2, 20, 30])), "this check");
     }
 
     proptest! {

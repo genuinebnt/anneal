@@ -29,7 +29,7 @@ How you group rows (a `HashMap` of indexes or sorting), how you fold peers, and 
 
 **Reuse stage 3f's table.** `SimpleAggregationHashTable::new(vec![agg_type])`, `generate_initial_aggregate_value`, `combine_aggregate_values`: the window aggregate is a one-aggregate group.
 
-**Peers.** `while end < n && cmp.compare_keys(&keys[p[start]], &keys[p[end]]) == Ordering::Equal { end += 1 }` finds a peer group.
+**Peers.** In sorted order, a peer group is a run of rows whose sort keys compare `Equal`: one pass that extends a run while the comparison says `Equal` finds every group.
 
 **Cloning values out.** `out[i] = value.clone();` for every row of the peer group.
 

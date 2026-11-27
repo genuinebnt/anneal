@@ -695,27 +695,27 @@ mod ch_3h_c1 {
     #[test]
     fn s3h_c1_subtrees_without_columns_are_evaluated() {
         let e = Mul(b(Add(b(Int(1)), b(Int(2)))), b(Col(0)));
-        assert_eq!(fold(&e), Mul(b(Int(3)), b(Col(0))));
-        assert_eq!(fold(&Lt(b(Int(1)), b(Int(2)))), Bool(true));
+        assert_eq!(fold(&e), Mul(b(Int(3)), b(Col(0))), "left joins become hash joins too");
+        assert_eq!(fold(&Lt(b(Int(1)), b(Int(2)))), Bool(true), "left joins become hash joins too");
     }
 
     #[test]
     fn s3h_c1_arithmetic_identities() {
-        assert_eq!(fold(&Add(b(Col(0)), b(Int(0)))), Col(0));
-        assert_eq!(fold(&Add(b(Add(b(Int(2)), b(Int(-2)))), b(Col(1)))), Col(1));
-        assert_eq!(fold(&Mul(b(Int(1)), b(Col(0)))), Col(0));
-        assert_eq!(fold(&Mul(b(Col(0)), b(Add(b(Int(1)), b(Int(-1)))))), Int(0));
+        assert_eq!(fold(&Add(b(Col(0)), b(Int(0)))), Col(0), "left joins become hash joins too");
+        assert_eq!(fold(&Add(b(Add(b(Int(2)), b(Int(-2)))), b(Col(1)))), Col(1), "left joins become hash joins too");
+        assert_eq!(fold(&Mul(b(Int(1)), b(Col(0)))), Col(0), "left joins become hash joins too");
+        assert_eq!(fold(&Mul(b(Col(0)), b(Add(b(Int(1)), b(Int(-1)))))), Int(0), "left joins become hash joins too");
     }
 
     #[test]
     fn s3h_c1_boolean_identities() {
         let p = || Lt(b(Col(0)), b(Int(5)));
-        assert_eq!(fold(&And(b(Bool(true)), b(p()))), p());
-        assert_eq!(fold(&And(b(p()), b(Bool(false)))), Bool(false));
-        assert_eq!(fold(&Or(b(Bool(false)), b(p()))), p());
-        assert_eq!(fold(&Or(b(p()), b(Bool(true)))), Bool(true));
-        assert_eq!(fold(&Not(b(Not(b(p()))))), p());
-        assert_eq!(fold(&Not(b(Bool(false)))), Bool(true));
+        assert_eq!(fold(&And(b(Bool(true)), b(p()))), p(), "left joins become hash joins too");
+        assert_eq!(fold(&And(b(p()), b(Bool(false)))), Bool(false), "left joins become hash joins too");
+        assert_eq!(fold(&Or(b(Bool(false)), b(p()))), p(), "left joins become hash joins too");
+        assert_eq!(fold(&Or(b(p()), b(Bool(true)))), Bool(true), "left joins become hash joins too");
+        assert_eq!(fold(&Not(b(Not(b(p()))))), p(), "left joins become hash joins too");
+        assert_eq!(fold(&Not(b(Bool(false)))), Bool(true), "left joins become hash joins too");
     }
 
     #[test]
@@ -801,9 +801,9 @@ mod ch_3h_c2 {
     #[test]
     fn s3h_c2_nested_ands_are_flattened_in_order() {
         let p = And(vec![Cmp(0, Eq, 1), And(vec![Cmp(1, Gt, 3), And(vec![])]), Cmp(2, Lt, 9)]);
-        assert_eq!(conjuncts(&p), vec![Cmp(0, Eq, 1), Cmp(1, Gt, 3), Cmp(2, Lt, 9)]);
-        assert_eq!(conjuncts(&And(vec![])), Vec::<Pred>::new());
-        assert_eq!(conjuncts(&Cmp(0, Eq, 1)), vec![Cmp(0, Eq, 1)]);
+        assert_eq!(conjuncts(&p), vec![Cmp(0, Eq, 1), Cmp(1, Gt, 3), Cmp(2, Lt, 9)], "left joins become hash joins too");
+        assert_eq!(conjuncts(&And(vec![])), Vec::<Pred>::new(), "left joins become hash joins too");
+        assert_eq!(conjuncts(&Cmp(0, Eq, 1)), vec![Cmp(0, Eq, 1)], "left joins become hash joins too");
     }
 
     #[test]
@@ -811,22 +811,22 @@ mod ch_3h_c2 {
         // left has columns 0 and 1; right has columns 2 and 3
         let p = And(vec![Cmp(0, Eq, 1), Cmp(3, Gt, 3), ColCmp(1, Lt, 2)]);
         let (l, r, b) = split_for_join(&p, 2);
-        assert_eq!((l, r, b), (vec![Cmp(0, Eq, 1)], vec![Cmp(3, Gt, 3)], vec![ColCmp(1, Lt, 2)]));
+        assert_eq!((l, r, b), (vec![Cmp(0, Eq, 1)], vec![Cmp(3, Gt, 3)], vec![ColCmp(1, Lt, 2)]), "left joins become hash joins too");
     }
 
     #[test]
     fn s3h_c2_an_or_is_never_split() {
         let p = And(vec![Or(vec![Cmp(0, Eq, 1), Cmp(3, Eq, 2)]), Cmp(1, Gt, 0)]);
         let (l, r, b) = split_for_join(&p, 2);
-        assert_eq!((l.len(), r.len(), b.len()), (1, 0, 1));
-        assert_eq!(b[0], Or(vec![Cmp(0, Eq, 1), Cmp(3, Eq, 2)]));
+        assert_eq!((l.len(), r.len(), b.len()), (1, 0, 1), "left joins become hash joins too");
+        assert_eq!(b[0], Or(vec![Cmp(0, Eq, 1), Cmp(3, Eq, 2)]), "left joins become hash joins too");
     }
 
     #[test]
     fn s3h_c2_a_negation_stays_whole_and_goes_by_its_columns() {
         let p = And(vec![Not(Box::new(Cmp(2, Eq, 0))), Not(Box::new(ColCmp(0, Eq, 3)))]);
         let (l, r, b) = split_for_join(&p, 2);
-        assert_eq!((l.len(), r.len(), b.len()), (0, 1, 1));
+        assert_eq!((l.len(), r.len(), b.len()), (0, 1, 1), "left joins become hash joins too");
     }
 
     fn arb_pred() -> impl Strategy<Value = Pred> {
@@ -894,23 +894,23 @@ mod ch_3h_c3 {
         sel[0][1] = 0.001;
         sel[1][0] = 0.001;
         let (cost, order) = best_join_order(&card, &sel);
-        assert_eq!(cost_of(&order, &card, &sel), cost);
+        assert_eq!(cost_of(&order, &card, &sel), cost, "left joins become hash joins too");
         assert!(order[..2].contains(&0) && order[..2].contains(&1), "tables 0 and 1 join first: {order:?}");
-        assert!((cost - (10.0 + 1000.0)).abs() < 1e-6);
+        assert!((cost - (10.0 + 1000.0)).abs() < 1e-6, "left joins become hash joins too: expected `(cost - (10.0 + 1000.0)).abs() < 1e-6`");
     }
 
     #[test]
     fn s3h_c3_without_predicates_the_smallest_tables_go_first() {
         let card = [500.0, 5.0, 50.0, 2.0];
         let (_, order) = best_join_order(&card, &unit(4));
-        assert_eq!(order[0..2].iter().copied().collect::<std::collections::BTreeSet<_>>(), [1usize, 3].into_iter().collect());
-        assert_eq!(*order.last().unwrap(), 0);
+        assert_eq!(order[0..2].iter().copied().collect::<std::collections::BTreeSet<_>>(), [1usize, 3].into_iter().collect(), "left joins become hash joins too");
+        assert_eq!(*order.last().unwrap(), 0, "left joins become hash joins too");
     }
 
     #[test]
     fn s3h_c3_one_table_and_no_tables() {
-        assert_eq!(best_join_order(&[7.0], &unit(1)), (0.0, vec![0]));
-        assert_eq!(best_join_order(&[], &[]), (0.0, vec![]));
+        assert_eq!(best_join_order(&[7.0], &unit(1)), (0.0, vec![0]), "left joins become hash joins too");
+        assert_eq!(best_join_order(&[], &[]), (0.0, vec![]), "left joins become hash joins too");
     }
 
     fn permutations(n: usize) -> Vec<Vec<usize>> {
@@ -939,8 +939,8 @@ mod ch_3h_c3 {
         let (cost, order) = best_join_order(&card, &sel);
         let mut sorted = order.clone();
         sorted.sort();
-        assert_eq!(sorted, vec![0, 1, 2, 3, 4]);
-        assert!((cost_of(&order, &card, &sel) - cost).abs() < 1e-6);
+        assert_eq!(sorted, vec![0, 1, 2, 3, 4], "left joins become hash joins too");
+        assert!((cost_of(&order, &card, &sel) - cost).abs() < 1e-6, "left joins become hash joins too: expected `(cost_of(&order, &card, &sel) - cost).abs() < 1e-6`");
     }
 
     proptest! {
@@ -978,18 +978,18 @@ mod ch_3h_c4 {
     #[test]
     fn s3h_c4_not_over_and_becomes_or_of_nots() {
         let e = Not(b(And(b(Var(0)), b(Var(1)))));
-        assert_eq!(push_not(&e), Or(b(Not(b(Var(0)))), b(Not(b(Var(1))))));
+        assert_eq!(push_not(&e), Or(b(Not(b(Var(0)))), b(Not(b(Var(1))))), "left joins become hash joins too");
     }
 
     #[test]
     fn s3h_c4_not_over_or_becomes_and_of_nots() {
         let e = Not(b(Or(b(Var(0)), b(Not(b(Var(1)))))));
-        assert_eq!(push_not(&e), And(b(Not(b(Var(0)))), b(Var(1))));
+        assert_eq!(push_not(&e), And(b(Not(b(Var(0)))), b(Var(1))), "left joins become hash joins too");
     }
 
     #[test]
     fn s3h_c4_double_negation_disappears() {
-        assert_eq!(push_not(&Not(b(Not(b(Var(2)))))), Var(2));
+        assert_eq!(push_not(&Not(b(Not(b(Var(2)))))), Var(2), "left joins become hash joins too");
     }
 
     fn arb() -> impl Strategy<Value = B> {
@@ -1012,9 +1012,9 @@ mod ch_3h_c4 {
 
     #[test]
     fn s3h_c4_triple_negation_leaves_one_and_negated_variables_stay() {
-        assert_eq!(push_not(&Not(b(Not(b(Not(b(Var(1)))))))), Not(b(Var(1))));
-        assert_eq!(push_not(&Not(b(Var(0)))), Not(b(Var(0))));
-        assert_eq!(push_not(&And(b(Var(0)), b(Not(b(Not(b(Var(1)))))))), And(b(Var(0)), b(Var(1))));
+        assert_eq!(push_not(&Not(b(Not(b(Not(b(Var(1)))))))), Not(b(Var(1))), "left joins become hash joins too");
+        assert_eq!(push_not(&Not(b(Var(0)))), Not(b(Var(0))), "left joins become hash joins too");
+        assert_eq!(push_not(&And(b(Var(0)), b(Not(b(Not(b(Var(1)))))))), And(b(Var(0)), b(Var(1))), "left joins become hash joins too");
     }
 
     proptest! {
@@ -1045,20 +1045,20 @@ mod ch_3h_c5 {
     fn s3h_c5_counts_add_up_and_the_edges_are_exact() {
         let v: Vec<i64> = (0..100).collect();
         let h = Histogram::build(&v, 10);
-        assert_eq!(h.bucket_counts().iter().sum::<u64>(), 100);
-        assert_eq!(h.count(), 100);
-        assert_eq!(h.estimate_le(-1), 0.0);
-        assert_eq!(h.estimate_le(99), 100.0);
-        assert_eq!(h.estimate_le(1000), 100.0);
+        assert_eq!(h.bucket_counts().iter().sum::<u64>(), 100, "left joins become hash joins too");
+        assert_eq!(h.count(), 100, "left joins become hash joins too");
+        assert_eq!(h.estimate_le(-1), 0.0, "left joins become hash joins too");
+        assert_eq!(h.estimate_le(99), 100.0, "left joins become hash joins too");
+        assert_eq!(h.estimate_le(1000), 100.0, "left joins become hash joins too");
     }
 
     #[test]
     fn s3h_c5_bucket_boundaries_are_exact_for_evenly_spread_data() {
         let v: Vec<i64> = (0..100).collect();
         let h = Histogram::build(&v, 10);
-        assert!((h.estimate_le(49) - 50.0).abs() < 1e-9);
+        assert!((h.estimate_le(49) - 50.0).abs() < 1e-9, "left joins become hash joins too: expected `(h.estimate_le(49) - 50.0).abs() < 1e-9`");
         assert!((h.estimate_le(54) - 55.0).abs() < 1e-9, "half of the sixth bucket, linearly");
-        assert!((h.estimate_range(10, 29) - 20.0).abs() < 1e-9);
+        assert!((h.estimate_range(10, 29) - 20.0).abs() < 1e-9, "left joins become hash joins too: expected `(h.estimate_range(10, 29) - 20.0).abs() < 1e-9`");
     }
 
     #[test]
@@ -1066,17 +1066,17 @@ mod ch_3h_c5 {
         let mut v = vec![0i64; 90];
         v.extend(90..100);
         let h = Histogram::build(&v, 10);
-        assert_eq!(h.bucket_counts()[0], 90);
-        assert!((h.estimate_le(9) - 90.0).abs() < 1e-9);
+        assert_eq!(h.bucket_counts()[0], 90, "left joins become hash joins too");
+        assert!((h.estimate_le(9) - 90.0).abs() < 1e-9, "left joins become hash joins too: expected `(h.estimate_le(9) - 90.0).abs() < 1e-9`");
         assert!(h.estimate_le(4) > 40.0 && h.estimate_le(4) < 50.0, "inside the first bucket the values are assumed even: {}", h.estimate_le(4));
     }
 
     #[test]
     fn s3h_c5_empty_and_constant_columns() {
         let e = Histogram::build(&[], 4);
-        assert_eq!((e.count(), e.estimate_le(10)), (0, 0.0));
+        assert_eq!((e.count(), e.estimate_le(10)), (0, 0.0), "left joins become hash joins too");
         let c = Histogram::build(&[7, 7, 7], 4);
-        assert_eq!((c.estimate_le(6), c.estimate_le(7)), (0.0, 3.0));
+        assert_eq!((c.estimate_le(6), c.estimate_le(7)), (0.0, 3.0), "left joins become hash joins too");
     }
 
     proptest! {

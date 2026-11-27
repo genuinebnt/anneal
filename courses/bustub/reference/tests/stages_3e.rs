@@ -1167,7 +1167,7 @@ mod ch_3e_c1 {
         let (scan, _) = VecScan::new(rows(6));
         let f = Filter::new(Box::new(scan), |r| r[0] % 2 == 0);
         let p = Project::new(Box::new(f), vec![1, 0]);
-        assert_eq!(drain(Box::new(p)), vec![vec![20, 2], vec![40, 4], vec![60, 6]]);
+        assert_eq!(drain(Box::new(p)), vec![vec![20, 2], vec![40, 4], vec![60, 6]], "this check");
     }
 
     #[test]
@@ -1175,22 +1175,22 @@ mod ch_3e_c1 {
         let (scan, pulled) = VecScan::new(rows(10));
         let f = Filter::new(Box::new(scan), |r| r[0] % 2 == 0);
         let l = Limit::new(Box::new(f), 2, 1);
-        assert_eq!(drain(Box::new(l)), vec![vec![4, 40], vec![6, 60]]);
+        assert_eq!(drain(Box::new(l)), vec![vec![4, 40], vec![6, 60]], "this check");
         assert_eq!(pulled.get(), 6, "rows 1..=6 were enough: nothing may be read ahead");
     }
 
     #[test]
     fn s3e_c1_a_limit_of_zero_pulls_nothing() {
         let (scan, pulled) = VecScan::new(rows(5));
-        assert_eq!(drain(Box::new(Limit::new(Box::new(scan), 0, 3))), Vec::<Row>::new());
-        assert_eq!(pulled.get(), 0);
+        assert_eq!(drain(Box::new(Limit::new(Box::new(scan), 0, 3))), Vec::<Row>::new(), "this check");
+        assert_eq!(pulled.get(), 0, "this check");
     }
 
     #[test]
     fn s3e_c1_a_limit_past_the_end_just_ends() {
         let (scan, pulled) = VecScan::new(rows(3));
-        assert_eq!(drain(Box::new(Limit::new(Box::new(scan), 10, 2))), vec![vec![3, 30]]);
-        assert_eq!(pulled.get(), 3);
+        assert_eq!(drain(Box::new(Limit::new(Box::new(scan), 10, 2))), vec![vec![3, 30]], "this check");
+        assert_eq!(pulled.get(), 3, "this check");
     }
 
     #[test]
@@ -1198,12 +1198,12 @@ mod ch_3e_c1 {
         let (a, pa) = VecScan::new(rows(2));
         let (b, pb) = VecScan::new(rows(2));
         let mut c = Concat::new(Box::new(a), Box::new(b));
-        assert_eq!(c.next(), Some(vec![1, 10]));
-        assert_eq!((pa.get(), pb.get()), (1, 0));
+        assert_eq!(c.next(), Some(vec![1, 10]), "this check");
+        assert_eq!((pa.get(), pb.get()), (1, 0), "this check");
         c.next();
         assert_eq!(pb.get(), 0, "the first child is not exhausted until it says None");
-        assert_eq!(c.next(), Some(vec![1, 10]));
-        assert_eq!(pb.get(), 1);
+        assert_eq!(c.next(), Some(vec![1, 10]), "this check");
+        assert_eq!(pb.get(), 1, "this check");
     }
 
     proptest! {
@@ -1242,31 +1242,31 @@ mod ch_3e_c2 {
     fn s3e_c2_add_sums_conflicting_values_and_counts_each_row() {
         let mut t = BTreeMap::from([(1, 10)]);
         let c = upsert(&mut t, &[(1, 5), (2, 7), (2, 1)], Conflict::Add);
-        assert_eq!(t, BTreeMap::from([(1, 15), (2, 8)]));
-        assert_eq!(c, Counts { inserted: 1, updated: 2, ignored: 0 });
+        assert_eq!(t, BTreeMap::from([(1, 15), (2, 8)]), "this check");
+        assert_eq!(c, Counts { inserted: 1, updated: 2, ignored: 0 }, "this check");
     }
 
     #[test]
     fn s3e_c2_do_nothing_keeps_the_first_row_for_a_key() {
         let mut t = BTreeMap::from([(1, 10)]);
         let c = upsert(&mut t, &[(1, 5), (2, 7), (2, 1)], Conflict::DoNothing);
-        assert_eq!(t, BTreeMap::from([(1, 10), (2, 7)]));
-        assert_eq!(c, Counts { inserted: 1, updated: 0, ignored: 2 });
+        assert_eq!(t, BTreeMap::from([(1, 10), (2, 7)]), "this check");
+        assert_eq!(c, Counts { inserted: 1, updated: 0, ignored: 2 }, "this check");
     }
 
     #[test]
     fn s3e_c2_replace_keeps_the_last_row_for_a_key() {
         let mut t = BTreeMap::new();
         let c = upsert(&mut t, &[(1, 1), (1, 2), (1, 3)], Conflict::Replace);
-        assert_eq!(t, BTreeMap::from([(1, 3)]));
-        assert_eq!(c, Counts { inserted: 1, updated: 2, ignored: 0 });
+        assert_eq!(t, BTreeMap::from([(1, 3)]), "this check");
+        assert_eq!(c, Counts { inserted: 1, updated: 2, ignored: 0 }, "this check");
     }
 
     #[test]
     fn s3e_c2_an_empty_batch_changes_nothing() {
         let mut t = BTreeMap::from([(1, 1)]);
-        assert_eq!(upsert(&mut t, &[], Conflict::Add), Counts::default());
-        assert_eq!(t.len(), 1);
+        assert_eq!(upsert(&mut t, &[], Conflict::Add), Counts::default(), "this check");
+        assert_eq!(t.len(), 1, "this check");
     }
 
     proptest! {
@@ -1304,28 +1304,28 @@ mod ch_3e_c3 {
 
     #[test]
     fn s3e_c3_limit_zero_returns_no_rows() {
-        assert_eq!(limit_offset(&[1, 2, 3], Some(0), 0), Vec::<i64>::new());
-        assert_eq!(limit_offset(&[1, 2, 3], Some(0), 2), Vec::<i64>::new());
+        assert_eq!(limit_offset(&[1, 2, 3], Some(0), 0), Vec::<i64>::new(), "this check");
+        assert_eq!(limit_offset(&[1, 2, 3], Some(0), 2), Vec::<i64>::new(), "this check");
     }
 
     #[test]
     fn s3e_c3_limit_and_offset() {
-        assert_eq!(limit_offset(&[1, 2, 3], Some(2), 1), vec![2, 3]);
-        assert_eq!(limit_offset(&[1, 2, 3], Some(1), 0), vec![1]);
-        assert_eq!(limit_offset(&[1, 2, 3], None, 1), vec![2, 3]);
+        assert_eq!(limit_offset(&[1, 2, 3], Some(2), 1), vec![2, 3], "this check");
+        assert_eq!(limit_offset(&[1, 2, 3], Some(1), 0), vec![1], "this check");
+        assert_eq!(limit_offset(&[1, 2, 3], None, 1), vec![2, 3], "this check");
     }
 
     #[test]
     fn s3e_c3_offsets_at_and_past_the_end() {
-        assert_eq!(limit_offset(&[1, 2, 3], None, 3), Vec::<i64>::new());
-        assert_eq!(limit_offset(&[1, 2, 3], Some(5), 5), Vec::<i64>::new());
-        assert_eq!(limit_offset(&[], Some(3), 0), Vec::<i64>::new());
+        assert_eq!(limit_offset(&[1, 2, 3], None, 3), Vec::<i64>::new(), "this check");
+        assert_eq!(limit_offset(&[1, 2, 3], Some(5), 5), Vec::<i64>::new(), "this check");
+        assert_eq!(limit_offset(&[], Some(3), 0), Vec::<i64>::new(), "this check");
     }
 
     #[test]
     fn s3e_c3_a_limit_larger_than_what_is_left_returns_what_is_left() {
-        assert_eq!(limit_offset(&[1, 2, 3, 4], Some(10), 2), vec![3, 4]);
-        assert_eq!(limit_offset(&[1, 2, 3, 4], Some(2), 2), vec![3, 4]);
+        assert_eq!(limit_offset(&[1, 2, 3, 4], Some(10), 2), vec![3, 4], "this check");
+        assert_eq!(limit_offset(&[1, 2, 3, 4], Some(2), 2), vec![3, 4], "this check");
     }
 
     proptest! {
@@ -1352,37 +1352,36 @@ mod ch_3e_c4 {
     use proptest::prelude::*;
 
     use bustub::execution::rid_sets::{difference_sorted, intersect_sorted, union_sorted};
-    use std::collections::BTreeSet;
 
     #[test]
     fn s3e_c4_the_three_operations_on_a_small_example() {
         let (a, b) = ([1, 3, 5], [3, 4, 5, 6]);
-        assert_eq!(union_sorted(&a, &b), vec![1, 3, 4, 5, 6]);
-        assert_eq!(intersect_sorted(&a, &b), vec![3, 5]);
-        assert_eq!(difference_sorted(&a, &b), vec![1]);
-        assert_eq!(difference_sorted(&b, &a), vec![4, 6]);
+        assert_eq!(union_sorted(&a, &b), vec![1, 3, 4, 5, 6], "this check");
+        assert_eq!(intersect_sorted(&a, &b), vec![3, 5], "this check");
+        assert_eq!(difference_sorted(&a, &b), vec![1], "this check");
+        assert_eq!(difference_sorted(&b, &a), vec![4, 6], "this check");
     }
 
     #[test]
     fn s3e_c4_an_id_in_both_lists_appears_once_in_the_union() {
         assert_eq!(union_sorted(&[4, 4 + 1], &[4, 5]), vec![4, 5], "v1 = 4 OR v1 = 4 returns each row once");
-        assert_eq!(union_sorted(&[7], &[7]), vec![7]);
+        assert_eq!(union_sorted(&[7], &[7]), vec![7], "this check");
     }
 
     #[test]
     fn s3e_c4_empty_inputs() {
-        assert_eq!(union_sorted(&[], &[1, 2]), vec![1, 2]);
-        assert_eq!(intersect_sorted(&[], &[1, 2]), Vec::<u64>::new());
-        assert_eq!(difference_sorted(&[1, 2], &[]), vec![1, 2]);
-        assert_eq!(difference_sorted(&[], &[1]), Vec::<u64>::new());
+        assert_eq!(union_sorted(&[], &[1, 2]), vec![1, 2], "this check");
+        assert_eq!(intersect_sorted(&[], &[1, 2]), Vec::<u64>::new(), "this check");
+        assert_eq!(difference_sorted(&[1, 2], &[]), vec![1, 2], "this check");
+        assert_eq!(difference_sorted(&[], &[1]), Vec::<u64>::new(), "this check");
     }
 
     #[test]
     fn s3e_c4_a_list_combined_with_itself() {
         let a = [2, 4, 6, 8];
-        assert_eq!(union_sorted(&a, &a), a.to_vec());
-        assert_eq!(intersect_sorted(&a, &a), a.to_vec());
-        assert_eq!(difference_sorted(&a, &a), Vec::<u64>::new());
+        assert_eq!(union_sorted(&a, &a), a.to_vec(), "this check");
+        assert_eq!(intersect_sorted(&a, &a), a.to_vec(), "this check");
+        assert_eq!(difference_sorted(&a, &a), Vec::<u64>::new(), "this check");
     }
 
     proptest! {
@@ -1420,9 +1419,9 @@ mod ch_3e_c5 {
         let (it, pulls) = counted(5);
         let mut r = Rewindable::new(it);
         r.mark();
-        assert_eq!((r.next(), r.next()), (Some(1), Some(2)));
+        assert_eq!((r.next(), r.next()), (Some(1), Some(2)), "this check");
         r.reset();
-        assert_eq!((r.next(), r.next(), r.next()), (Some(1), Some(2), Some(3)));
+        assert_eq!((r.next(), r.next(), r.next()), (Some(1), Some(2), Some(3)), "this check");
         assert_eq!(pulls.get(), 3, "the source is pulled once per item, ever");
     }
 
@@ -1432,7 +1431,7 @@ mod ch_3e_c5 {
         let mut r = Rewindable::new(it);
         r.next();
         r.next();
-        assert_eq!(r.buffered(), 0);
+        assert_eq!(r.buffered(), 0, "this check");
         r.reset();
         assert_eq!(r.next(), Some(3), "reset without a mark goes nowhere");
     }
@@ -1445,10 +1444,10 @@ mod ch_3e_c5 {
         r.next();
         r.next();
         r.mark();
-        assert_eq!(r.buffered(), 0);
+        assert_eq!(r.buffered(), 0, "this check");
         r.next();
         r.reset();
-        assert_eq!(r.next(), Some(3));
+        assert_eq!(r.next(), Some(3), "this check");
     }
 
     #[test]
@@ -1460,7 +1459,7 @@ mod ch_3e_c5 {
         r.next();
         for _ in 0..3 {
             r.reset();
-            assert_eq!((r.next(), r.next()), (Some(1), Some(2)));
+            assert_eq!((r.next(), r.next()), (Some(1), Some(2)), "this check");
         }
     }
 

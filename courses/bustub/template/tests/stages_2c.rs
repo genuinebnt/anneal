@@ -62,33 +62,33 @@ fn assert_nothing_pinned(bpm: &BufferPoolManager) {
 fn s2c_01_a_new_tree_is_empty() {
     let bpm = new_pool(10);
     let tree = new_tree(&bpm, 4, 4);
-    assert!(tree.is_empty());
-    assert_eq!(tree.get_root_page_id(), PageId::INVALID);
-    assert_eq!((tree.depth(), tree.leaf_sizes()), (0, vec![]));
-    assert!(get(&tree, 7).is_empty());
-    assert_eq!(tree.index_name(), "foo_pk");
+    assert!(tree.is_empty(), "a new tree is empty: expected `tree.is_empty()`");
+    assert_eq!(tree.get_root_page_id(), PageId::INVALID, "a new tree is empty");
+    assert_eq!((tree.depth(), tree.leaf_sizes()), (0, vec![]), "a new tree is empty");
+    assert!(get(&tree, 7).is_empty(), "a new tree is empty: expected `get(&tree, 7).is_empty()`");
+    assert_eq!(tree.index_name(), "foo_pk", "a new tree is empty");
 }
 
 #[test]
 fn s2c_01_the_first_key_makes_a_root_leaf() {
     let bpm = new_pool(10);
     let tree = new_tree(&bpm, 4, 4);
-    assert!(insert(&tree, 42));
-    assert!(!tree.is_empty());
-    assert!(tree.get_root_page_id().is_valid());
-    assert_eq!((tree.depth(), tree.leaf_sizes()), (1, vec![1]));
-    assert_eq!(get(&tree, 42), vec![rid_of(42)]);
-    assert!(get(&tree, 41).is_empty());
+    assert!(insert(&tree, 42), "the first key makes a root leaf: expected `insert(&tree, 42)`");
+    assert!(!tree.is_empty(), "the first key makes a root leaf: expected `!tree.is_empty()`");
+    assert!(tree.get_root_page_id().is_valid(), "the first key makes a root leaf: expected `tree.get_root_page_id().is_valid()`");
+    assert_eq!((tree.depth(), tree.leaf_sizes()), (1, vec![1]), "the first key makes a root leaf");
+    assert_eq!(get(&tree, 42), vec![rid_of(42)], "the first key makes a root leaf");
+    assert!(get(&tree, 41).is_empty(), "the first key makes a root leaf: expected `get(&tree, 41).is_empty()`");
 }
 
 #[test]
 fn s2c_01_a_duplicate_key_is_refused_and_keeps_its_value() {
     let bpm = new_pool(10);
     let tree = new_tree(&bpm, 8, 4);
-    assert!(insert(&tree, 5));
+    assert!(insert(&tree, 5), "a duplicate key is refused and keeps its value: expected `insert(&tree, 5)`");
     assert!(!tree.insert(&index_key(5), &rid_of(999)), "keys are unique");
     assert_eq!(get(&tree, 5), vec![rid_of(5)], "the first value stays");
-    assert_eq!(tree.leaf_sizes(), vec![1]);
+    assert_eq!(tree.leaf_sizes(), vec![1], "a duplicate key is refused and keeps its value");
 }
 
 #[test]
@@ -98,12 +98,12 @@ fn s2c_01_creating_a_tree_formats_its_header_page_whatever_it_held() {
     bpm.write_page(header).get_data_mut().fill(0xFF); // a recycled page full of garbage
     let tree: Tree = BPlusTree::new("t", header, &bpm, GenericComparator::<8>, 4, 4);
     assert!(tree.is_empty(), "a new tree on a dirty page is still empty");
-    assert!(!tree.get_root_page_id().is_valid());
-    assert!(insert(&tree, 1));
+    assert!(!tree.get_root_page_id().is_valid(), "creating a tree formats its header page whatever it held: expected `!tree.get_root_page_id().is_valid()`");
+    assert!(insert(&tree, 1), "creating a tree formats its header page whatever it held: expected `insert(&tree, 1)`");
     // a second tree on another header page is independent
     let other = new_tree(&bpm, 4, 4);
-    assert!(other.is_empty());
-    assert!(get(&other, 1).is_empty());
+    assert!(other.is_empty(), "creating a tree formats its header page whatever it held: expected `other.is_empty()`");
+    assert!(get(&other, 1).is_empty(), "creating a tree formats its header page whatever it held: expected `get(&other, 1).is_empty()`");
 }
 
 #[test]
@@ -164,14 +164,14 @@ fn s2c_02_a_leaf_that_reaches_max_size_splits_in_two() {
     let bpm = new_pool(20);
     let tree = new_tree(&bpm, 4, 3);
     for k in 1..=3 {
-        assert!(insert(&tree, k));
+        assert!(insert(&tree, k), "a leaf that reaches max size splits in two: expected `insert(&tree, k)`");
     }
     assert_eq!((tree.depth(), tree.leaf_sizes()), (1, vec![3]), "three pairs fit in a leaf of max size 4");
-    assert!(insert(&tree, 4));
+    assert!(insert(&tree, 4), "a leaf that reaches max size splits in two: expected `insert(&tree, 4)`");
     assert_eq!(tree.depth(), 2, "the fourth pair fills the leaf, which splits under a new root");
     assert_eq!(tree.leaf_sizes(), vec![2, 2], "a split gives half of the pairs to each leaf");
     for k in 1..=4 {
-        assert_eq!(get(&tree, k), vec![rid_of(k)]);
+        assert_eq!(get(&tree, k), vec![rid_of(k)], "a leaf that reaches max size splits in two");
     }
 }
 
@@ -181,7 +181,7 @@ fn s2c_02_the_tree_grows_taller_only_at_the_root_and_by_one_level_at_a_time() {
     let tree = new_tree(&bpm, 2, 3);
     let mut last = 0;
     for k in 0..300 {
-        assert!(insert(&tree, k * 13 % 301));
+        assert!(insert(&tree, k * 13 % 301), "the tree grows taller only at the root and by one level at a time: expected `insert(&tree, k * 13 % 301)`");
         let d = tree.depth();
         assert!(d == last || d == last + 1, "inserting key {k} took the depth from {last} to {d}");
         last = d;
@@ -195,7 +195,7 @@ fn s2c_02_ascending_inserts_keep_every_rule() {
     let tree = new_tree(&bpm, 4, 4);
     let mut live = BTreeSet::new();
     for k in 0..200 {
-        assert!(insert(&tree, k));
+        assert!(insert(&tree, k), "ascending inserts keep every rule: expected `insert(&tree, k)`");
         live.insert(k);
         check_shape(&tree, &live, 4, 4, false).unwrap_or_else(|e| panic!("after inserting {k}: {e}"));
     }
@@ -207,7 +207,7 @@ fn s2c_02_descending_inserts_keep_every_rule() {
     let tree = new_tree(&bpm, 5, 3);
     let mut live = BTreeSet::new();
     for k in (0..200).rev() {
-        assert!(insert(&tree, k));
+        assert!(insert(&tree, k), "descending inserts keep every rule: expected `insert(&tree, k)`");
         live.insert(k);
         check_shape(&tree, &live, 5, 3, false).unwrap_or_else(|e| panic!("after inserting {k}: {e}"));
     }
@@ -222,9 +222,9 @@ fn s2c_02_a_refused_duplicate_changes_nothing() {
     }
     let (depth, sizes) = (tree.depth(), tree.leaf_sizes());
     for k in (0..50).step_by(3) {
-        assert!(!tree.insert(&index_key(k), &rid_of(-1)));
+        assert!(!tree.insert(&index_key(k), &rid_of(-1)), "a refused duplicate changes nothing: expected `!tree.insert(&index_key(k), &rid_of(-1))`");
     }
-    assert_eq!((tree.depth(), tree.leaf_sizes()), (depth, sizes));
+    assert_eq!((tree.depth(), tree.leaf_sizes()), (depth, sizes), "a refused duplicate changes nothing");
     for k in 0..50 {
         assert_eq!(get(&tree, k), vec![rid_of(k)], "key {k} keeps its first value");
     }
@@ -277,10 +277,10 @@ fn filled<'a>(bpm: &'a BufferPoolManager, leaf_max: u32, internal_max: u32, keys
 fn s2c_03_an_empty_tree_begins_where_it_ends() {
     let bpm = new_pool(10);
     let tree = new_tree(&bpm, 4, 4);
-    assert!(tree.begin().is_end());
-    assert!(tree.begin() == tree.end());
-    assert_eq!(tree.begin().next(), None);
-    assert!(tree.begin_at(&index_key(3)).is_end());
+    assert!(tree.begin().is_end(), "an empty tree begins where it ends: expected `tree.begin().is_end()`");
+    assert!(tree.begin() == tree.end(), "an empty tree begins where it ends: expected `tree.begin() == tree.end()`");
+    assert_eq!(tree.begin().next(), None, "an empty tree begins where it ends");
+    assert!(tree.begin_at(&index_key(3)).is_end(), "an empty tree begins where it ends: expected `tree.begin_at(&index_key(3)).is_end()`");
 }
 
 #[test]
@@ -292,7 +292,7 @@ fn s2c_03_a_scan_visits_every_key_once_in_order_across_leaves() {
     let scanned: Vec<(i64, _)> = tree.begin().map(|(k, v)| (k.get_as_integer(), v)).collect();
     let mut want: Vec<i64> = keys.clone();
     want.sort();
-    assert_eq!(scanned.iter().map(|p| p.0).collect::<Vec<_>>(), want);
+    assert_eq!(scanned.iter().map(|p| p.0).collect::<Vec<_>>(), want, "a scan visits every key once in order across leaves");
     assert!(scanned.iter().all(|(k, v)| *v == rid_of(*k)), "each key comes with its own value");
 }
 
@@ -305,22 +305,22 @@ fn s2c_03_begin_at_starts_at_the_first_key_not_less_than_the_argument() {
     assert_eq!(from(41).first(), Some(&42), "a key that is absent: the next one");
     assert_eq!(from(-5).len(), 100, "below every key: everything");
     assert!(tree.begin_at(&index_key(199)).is_end(), "above every key: the end");
-    assert_eq!(from(196), vec![196, 198]);
+    assert_eq!(from(196), vec![196, 198], "begin at starts at the first key not less than the argument");
 }
 
 #[test]
 fn s2c_03_iterators_compare_by_position_and_the_end_is_reached_exactly_once() {
     let bpm = new_pool(30);
     let tree = filled(&bpm, 3, 3, &[1, 2, 3, 4, 5, 6, 7]);
-    assert!(tree.begin() == tree.begin());
-    assert!(tree.begin() != tree.end());
-    assert!(tree.begin_at(&index_key(4)) == { let mut it = tree.begin(); for _ in 0..3 { it.next(); } it });
+    assert!(tree.begin() == tree.begin(), "iterators compare by position and the end is reached exactly once: expected `tree.begin() == tree.begin()`");
+    assert!(tree.begin() != tree.end(), "iterators compare by position and the end is reached exactly once: expected `tree.begin() != tree.end()`");
+    assert!(tree.begin_at(&index_key(4)) == { let mut it = tree.begin(); for _ in 0..3 { it.next(); } it }, "iterators compare by position and the end is reached exactly once: expected `tree.begin_at(&index_key(4)) == {{ let mut it = tree.begin(); for _ in 0..3 {{ it.next(); }} it }}`");
     let mut it = tree.begin();
     for _ in 0..7 {
-        assert!(!it.is_end());
+        assert!(!it.is_end(), "iterators compare by position and the end is reached exactly once: expected `!it.is_end()`");
         it.next();
     }
-    assert!(it.is_end() && it == tree.end() && it.next().is_none());
+    assert!(it.is_end() && it == tree.end() && it.next().is_none(), "iterators compare by position and the end is reached exactly once: expected `it.is_end() && it == tree.end() && it.next().is_none()`");
 }
 
 #[test]
@@ -351,7 +351,7 @@ fn s2c_03_an_iterator_keeps_no_page_latched_or_pinned() {
         it.next();
     }
     // and the tree can still be changed while they exist
-    assert!(insert(&tree, 100));
+    assert!(insert(&tree, 100), "an iterator keeps no page latched or pinned: expected `insert(&tree, 100)`");
     assert_nothing_pinned(&bpm);
 }
 
@@ -404,10 +404,10 @@ fn s2c_04_removing_a_key_that_is_not_there_changes_nothing() {
     let before = (tree.depth(), tree.leaf_sizes());
     remove(&tree, 100);
     remove(&tree, -1);
-    assert_eq!((tree.depth(), tree.leaf_sizes()), before);
+    assert_eq!((tree.depth(), tree.leaf_sizes()), before, "removing a key that is not there changes nothing");
     let empty = new_tree(&bpm, 3, 3);
     remove(&empty, 1); // from an empty tree
-    assert!(empty.is_empty());
+    assert!(empty.is_empty(), "removing a key that is not there changes nothing: expected `empty.is_empty()`");
 }
 
 #[test]
@@ -416,12 +416,12 @@ fn s2c_04_removing_the_last_key_empties_the_tree_and_it_can_be_used_again() {
     let tree = new_tree(&bpm, 3, 3);
     insert(&tree, 2);
     remove(&tree, 2);
-    assert!(tree.is_empty());
-    assert_eq!(tree.get_root_page_id(), PageId::INVALID);
-    assert_eq!((tree.depth(), tree.leaf_sizes()), (0, vec![]));
-    assert!(get(&tree, 2).is_empty());
-    assert!(insert(&tree, 9));
-    assert_eq!(keys_by_scan(&tree), vec![9]);
+    assert!(tree.is_empty(), "removing the last key empties the tree and it can be used again: expected `tree.is_empty()`");
+    assert_eq!(tree.get_root_page_id(), PageId::INVALID, "removing the last key empties the tree and it can be used again");
+    assert_eq!((tree.depth(), tree.leaf_sizes()), (0, vec![]), "removing the last key empties the tree and it can be used again");
+    assert!(get(&tree, 2).is_empty(), "removing the last key empties the tree and it can be used again: expected `get(&tree, 2).is_empty()`");
+    assert!(insert(&tree, 9), "removing the last key empties the tree and it can be used again: expected `insert(&tree, 9)`");
+    assert_eq!(keys_by_scan(&tree), vec![9], "removing the last key empties the tree and it can be used again");
 }
 
 #[test]
@@ -435,7 +435,7 @@ fn s2c_04_removing_everything_in_any_order_keeps_every_rule_all_the_way_down() {
             live.remove(&k);
             check_shape(&tree, &live, 4, 3, true).unwrap_or_else(|e| panic!("{name}: after removing {k}: {e}"));
         }
-        assert!(tree.is_empty());
+        assert!(tree.is_empty(), "removing everything in any order keeps every rule all the way down: expected `tree.is_empty()`");
         assert_nothing_pinned(&bpm);
     }
 }
@@ -448,7 +448,7 @@ fn s2c_04_the_tree_gets_shorter_when_its_keys_go() {
     for k in 0..198 {
         remove(&tree, k);
     }
-    assert_eq!(keys_by_scan(&tree), vec![198, 199]);
+    assert_eq!(keys_by_scan(&tree), vec![198, 199], "the tree gets shorter when its keys go");
     assert_eq!((tree.depth(), tree.leaf_sizes()), (1, vec![2]), "two keys fit in one leaf: the tree is back to a single root leaf (it was {tall} levels)");
 }
 
@@ -498,7 +498,7 @@ fn s2c_05_an_insert_into_a_leaf_with_room_write_latches_only_that_leaf() {
     let firsts = leaf_first_keys(&tree);
     let roomy = tree.leaf_sizes().iter().position(|&s| (s as u32) + 1 < 4).expect("a leaf with room");
     let (r0, w0) = (tree.bpm.get_reads(), tree.bpm.get_writes());
-    assert!(insert(&tree, firsts[roomy] + 1));
+    assert!(insert(&tree, firsts[roomy] + 1), "an insert into a leaf with room write latches only that leaf: expected `insert(&tree, firsts[roomy] + 1)`");
     assert!(tree.bpm.get_reads() > r0, "the descent read-latches the path");
     assert_eq!(tree.bpm.get_writes() - w0, 1, "only the leaf is write-latched when it cannot split");
 }
@@ -533,7 +533,7 @@ fn s2c_05_an_insert_that_splits_holds_more_than_the_leaf() {
             splits += 1;
         }
     }
-    assert!(splits > 0 && tree.bpm.get_writes() > w0);
+    assert!(splits > 0 && tree.bpm.get_writes() > w0, "an insert that splits holds more than the leaf: expected `splits > 0 && tree.bpm.get_writes() > w0`");
 }
 
 #[test]
@@ -544,7 +544,7 @@ fn s2c_05_lookups_and_scans_take_no_write_latch() {
     for k in 0..60 {
         get(&tree, k);
     }
-    assert_eq!(keys_by_scan(&tree).len(), 60);
+    assert_eq!(keys_by_scan(&tree).len(), 60, "lookups and scans take no write latch");
     assert_eq!(tree.bpm.get_writes(), w0, "reads must not write-latch");
 }
 
@@ -575,7 +575,7 @@ fn s2c_05_threads_that_insert_remove_and_read_at_once_agree_with_their_models() 
         let bpm = new_pool(80);
         let tree = new_tree(&bpm, 3, 4);
         for k in 10_000..10_150 {
-            assert!(insert(&tree, k)); // stable keys the readers expect throughout
+            assert!(insert(&tree, k), "threads that insert remove and read at once agree with their models: expected `insert(&tree, k)`"); // stable keys the readers expect throughout
         }
         let models: Vec<BTreeSet<i64>> = thread::scope(|scope| {
             let writers: Vec<_> = (0..3i64)
@@ -693,9 +693,9 @@ fn ch_config() -> ProptestConfig {
 
 #[test]
 fn s2c_c1_exact_leaf_sizes_for_small_cases() {
-    assert_eq!(leaf_sizes(0, 4), Vec::<usize>::new());
+    assert_eq!(leaf_sizes(0, 4), Vec::<usize>::new(), "s2c c1 exact leaf sizes for small cases");
     assert_eq!(leaf_sizes(3, 4), vec![3], "a single leaf may be below the minimum");
-    assert_eq!(leaf_sizes(8, 4), vec![4, 4]);
+    assert_eq!(leaf_sizes(8, 4), vec![4, 4], "s2c c1 exact leaf sizes for small cases");
     assert_eq!(leaf_sizes(9, 4), vec![4, 3, 2], "the last two share 4 + 1 keys: 3 and 2");
     assert_eq!(leaf_sizes(10, 4), vec![4, 4, 2], "2 is enough for max 4 (min 2)");
 }
@@ -709,19 +709,19 @@ fn s2c_c1_an_uneven_end_is_shared_between_the_last_two_leaves() {
 
 #[test]
 fn s2c_c1_levels_up_to_a_single_root() {
-    assert_eq!(level_widths(0, 4, 4), Vec::<usize>::new());
+    assert_eq!(level_widths(0, 4, 4), Vec::<usize>::new(), "s2c c1 levels up to a single root");
     assert_eq!(level_widths(3, 4, 4), vec![1], "one leaf is the root");
-    assert_eq!(level_widths(16, 4, 4), vec![4, 1]);
-    assert_eq!(level_widths(17, 4, 4), vec![5, 2, 1]);
-    assert_eq!(level_widths(1000, 10, 5), vec![100, 20, 4, 1]);
+    assert_eq!(level_widths(16, 4, 4), vec![4, 1], "s2c c1 levels up to a single root");
+    assert_eq!(level_widths(17, 4, 4), vec![5, 2, 1], "s2c c1 levels up to a single root");
+    assert_eq!(level_widths(1000, 10, 5), vec![100, 20, 4, 1], "s2c c1 levels up to a single root");
 }
 
 #[test]
 fn s2c_c1_a_big_tree_is_planned_without_building_it() {
     let sizes = leaf_sizes(1_000_000, 100);
-    assert_eq!(sizes.len(), 10_000);
-    assert_eq!(sizes.iter().sum::<usize>(), 1_000_000);
-    assert_eq!(level_widths(1_000_000, 100, 100), vec![10_000, 100, 1]);
+    assert_eq!(sizes.len(), 10_000, "s2c c1 a big tree is planned without building it");
+    assert_eq!(sizes.iter().sum::<usize>(), 1_000_000, "s2c c1 a big tree is planned without building it");
+    assert_eq!(level_widths(1_000_000, 100, 100), vec![10_000, 100, 1], "s2c c1 a big tree is planned without building it");
 }
 
 proptest! {
@@ -760,21 +760,21 @@ proptest! {
 #[test]
 fn s2c_c2_a_leaf_split_copies_the_separator_up_and_keeps_it_in_the_right_node() {
     let s = split_keys(&[1, 2, 3, 4], true);
-    assert_eq!((s.left, s.separator, s.right), (vec![1, 2], 3, vec![3, 4]));
+    assert_eq!((s.left, s.separator, s.right), (vec![1, 2], 3, vec![3, 4]), "s2c c2 a leaf split copies the separator up and keeps it in the right node");
 }
 
 #[test]
 fn s2c_c2_an_inner_split_moves_the_separator_up_and_out_of_both_nodes() {
     let s = split_keys(&[10, 20, 30, 40, 50], false);
-    assert_eq!((s.left, s.separator, s.right), (vec![10, 20, 30], 40, vec![50]));
+    assert_eq!((s.left, s.separator, s.right), (vec![10, 20, 30], 40, vec![50]), "s2c c2 an inner split moves the separator up and out of both nodes");
 }
 
 #[test]
 fn s2c_c2_odd_and_even_counts_give_the_left_node_the_extra_key() {
-    assert_eq!(split_keys(&[1, 2, 3], true).left, vec![1, 2]);
-    assert_eq!(split_keys(&[1, 2, 3], true).right, vec![3]);
-    assert_eq!(split_keys(&[1, 2], true).left, vec![1]);
-    assert_eq!(split_keys(&[1, 2], true).right, vec![2]);
+    assert_eq!(split_keys(&[1, 2, 3], true).left, vec![1, 2], "s2c c2 odd and even counts give the left node the extra key");
+    assert_eq!(split_keys(&[1, 2, 3], true).right, vec![3], "s2c c2 odd and even counts give the left node the extra key");
+    assert_eq!(split_keys(&[1, 2], true).left, vec![1], "s2c c2 odd and even counts give the left node the extra key");
+    assert_eq!(split_keys(&[1, 2], true).right, vec![2], "s2c c2 odd and even counts give the left node the extra key");
 }
 
 #[test]
@@ -823,21 +823,21 @@ mod ch_2c_c3 {
 
     #[test]
     fn s2c_c3_the_next_string_after_a_prefix() {
-        assert_eq!(prefix_end(b"abc"), Some(b"abd".to_vec()));
-        assert_eq!(prefix_end(&[0x61]), Some(vec![0x62]));
+        assert_eq!(prefix_end(b"abc"), Some(b"abd".to_vec()), "this check");
+        assert_eq!(prefix_end(&[0x61]), Some(vec![0x62]), "this check");
     }
 
     #[test]
     fn s2c_c3_trailing_ff_bytes_carry() {
-        assert_eq!(prefix_end(&[0x61, 0xFF]), Some(vec![0x62]));
-        assert_eq!(prefix_end(&[0x61, 0xFF, 0xFF]), Some(vec![0x62]));
-        assert_eq!(prefix_end(&[0x00, 0xFF]), Some(vec![0x01]));
+        assert_eq!(prefix_end(&[0x61, 0xFF]), Some(vec![0x62]), "this check");
+        assert_eq!(prefix_end(&[0x61, 0xFF, 0xFF]), Some(vec![0x62]), "this check");
+        assert_eq!(prefix_end(&[0x00, 0xFF]), Some(vec![0x01]), "this check");
     }
 
     #[test]
     fn s2c_c3_no_bound_when_every_byte_is_ff_or_there_are_none() {
-        assert_eq!(prefix_end(&[0xFF, 0xFF]), None);
-        assert_eq!(prefix_end(&[]), None);
+        assert_eq!(prefix_end(&[0xFF, 0xFF]), None, "this check");
+        assert_eq!(prefix_end(&[]), None, "this check");
     }
 
     proptest! {
@@ -873,24 +873,24 @@ mod ch_2c_c4 {
     #[test]
     fn s2c_c4_two_runs_with_a_tie_go_in_run_order() {
         let out: Vec<_> = KMerge::new(vec![vec![1, 4], vec![2, 4]]).collect();
-        assert_eq!(out, vec![(1, 0), (2, 1), (4, 0), (4, 1)]);
+        assert_eq!(out, vec![(1, 0), (2, 1), (4, 0), (4, 1)], "this check");
     }
 
     #[test]
     fn s2c_c4_empty_runs_and_no_runs() {
-        assert_eq!(KMerge::new(vec![]).count(), 0);
-        assert_eq!(KMerge::new(vec![vec![], vec![]]).count(), 0);
+        assert_eq!(KMerge::new(vec![]).count(), 0, "this check");
+        assert_eq!(KMerge::new(vec![vec![], vec![]]).count(), 0, "this check");
         let out: Vec<_> = KMerge::new(vec![vec![], vec![3], vec![]]).collect();
-        assert_eq!(out, vec![(3, 1)]);
+        assert_eq!(out, vec![(3, 1)], "this check");
     }
 
     #[test]
     fn s2c_c4_runs_of_very_different_lengths() {
         let big: Vec<i64> = (0..1000).map(|i| i * 2).collect();
         let out: Vec<_> = KMerge::new(vec![big, vec![1, 3, 5], vec![-5]]).collect();
-        assert_eq!(out.len(), 1004);
-        assert!(out.windows(2).all(|w| w[0] <= w[1]));
-        assert_eq!(out[0], (-5, 2));
+        assert_eq!(out.len(), 1004, "this check");
+        assert!(out.windows(2).all(|w| w[0] <= w[1]), "this check: expected `out.windows(2).all(|w| w[0] <= w[1])`");
+        assert_eq!(out[0], (-5, 2), "this check");
     }
 
     #[test]
@@ -900,7 +900,7 @@ mod ch_2c_c4 {
         let _ = Count;
         let runs: Vec<Vec<i64>> = (0..100).map(|r| (0..2000).map(|i| i * 100 + r).collect()).collect();
         let first3: Vec<_> = KMerge::new(runs).take(3).collect();
-        assert_eq!(first3, vec![(0, 0), (1, 1), (2, 2)]);
+        assert_eq!(first3, vec![(0, 0), (1, 1), (2, 2)], "this check");
     }
 
     proptest! {
@@ -926,31 +926,31 @@ mod ch_2c_c5 {
 
     #[test]
     fn s2c_c5_a_node_with_enough_keys_needs_nothing() {
-        assert_eq!(after_delete(2, 2, 4, Some(2), Some(4)), Action::Nothing);
-        assert_eq!(after_delete(4, 2, 4, None, None), Action::Nothing);
+        assert_eq!(after_delete(2, 2, 4, Some(2), Some(4)), Action::Nothing, "this check");
+        assert_eq!(after_delete(4, 2, 4, None, None), Action::Nothing, "this check");
     }
 
     #[test]
     fn s2c_c5_borrowing_is_preferred_to_merging() {
         assert_eq!(after_delete(1, 2, 4, Some(3), Some(2)), Action::BorrowLeft, "the left sibling has a key to spare, and merging would also fit");
-        assert_eq!(after_delete(1, 2, 4, Some(2), Some(3)), Action::BorrowRight);
+        assert_eq!(after_delete(1, 2, 4, Some(2), Some(3)), Action::BorrowRight, "this check");
     }
 
     #[test]
     fn s2c_c5_the_left_sibling_is_tried_first() {
-        assert_eq!(after_delete(1, 2, 4, Some(3), Some(4)), Action::BorrowLeft);
-        assert_eq!(after_delete(1, 2, 4, None, Some(3)), Action::BorrowRight);
+        assert_eq!(after_delete(1, 2, 4, Some(3), Some(4)), Action::BorrowLeft, "this check");
+        assert_eq!(after_delete(1, 2, 4, None, Some(3)), Action::BorrowRight, "this check");
     }
 
     #[test]
     fn s2c_c5_merging_only_when_no_sibling_can_spare_a_key() {
-        assert_eq!(after_delete(1, 2, 4, Some(2), Some(2)), Action::MergeLeft);
-        assert_eq!(after_delete(1, 2, 4, None, Some(2)), Action::MergeRight);
+        assert_eq!(after_delete(1, 2, 4, Some(2), Some(2)), Action::MergeLeft, "this check");
+        assert_eq!(after_delete(1, 2, 4, None, Some(2)), Action::MergeRight, "this check");
     }
 
     #[test]
     fn s2c_c5_a_node_alone_stays_underfull() {
-        assert_eq!(after_delete(1, 2, 4, None, None), Action::Underfull);
+        assert_eq!(after_delete(1, 2, 4, None, None), Action::Underfull, "this check");
     }
 
     proptest! {

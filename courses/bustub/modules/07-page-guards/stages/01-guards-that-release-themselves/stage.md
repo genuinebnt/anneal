@@ -28,7 +28,7 @@ What a guard stores: the pool and page id; the latch guard itself (`RwLockReadGu
 
 **A lifetime ties the guard to the pool.** `ReadPageGuard<'a>` holds `&'a BufferPoolManager`, so the compiler guarantees the pool outlives every guard. The `'a` also appears in the latch guard `RwLockReadGuard<'a, ..>`, which borrows the frame's `RwLock` from the pool. If the compiler says "borrowed value does not live long enough" about the pool, a guard has escaped the scope of the pool.
 
-**`Option` makes release idempotent.** Store the latch as `Option<RwLockReadGuard<..>>`. `release` does `if let Some(latch) = self.latch.take() { drop(latch); self.bpm.unpin_page(..); }`: the first call takes it, the second finds `None`. `Drop` just calls `release`.
+**`Option` makes release idempotent.** Keep what a release gives back in an `Option`: the first release `take()`s it and does the work, a second finds `None` and does nothing, so an explicit release and `Drop` can share one piece of code without ever unpinning twice.
 
 **Dropping in a chosen order.** `drop(latch)` before the unpin call makes the order explicit; relying on field declaration order is fragile. Fields are dropped in the order they are declared, but explicit is clearer.
 

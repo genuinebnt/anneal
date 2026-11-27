@@ -419,7 +419,7 @@ fn s1a_03_the_log_file_on_disk_holds_exactly_what_was_appended_and_survives_reop
     dm.write_log(b"again").unwrap();
     assert_eq!(std::fs::read(dm.log_file_name()).unwrap(), b"hello again", "the log is appended to, never truncated by reopening");
     let mut buf = [0u8; 11];
-    assert!(dm.read_log(&mut buf, 0).unwrap());
+    assert!(dm.read_log(&mut buf, 0).unwrap(), "the log file on disk holds exactly what was appended and survives reopening: expected `dm.read_log(&mut buf, 0).unwrap()`");
     assert_eq!(&buf, b"hello again", "read_log sees the earlier session's bytes too");
 }
 
@@ -622,7 +622,7 @@ fn s1a_05_concurrent_writes_deletes_and_log_appends_keep_the_counters_exact() {
     }
     assert_eq!((dm.get_num_writes(), dm.get_num_deletes(), dm.get_num_flushes()), (200, 200, 200), "writes, deletes and flushes, all exact");
     let mut buf = vec![0u8; 1000];
-    assert!(dm.read_log(&mut buf, 0).unwrap());
+    assert!(dm.read_log(&mut buf, 0).unwrap(), "concurrent writes deletes and log appends keep the counters exact: expected `dm.read_log(&mut buf, 0).unwrap()`");
     assert!(buf.iter().all(|&b| b < 4), "1000 bytes were appended, each from one of the four threads");
 }
 
@@ -637,7 +637,7 @@ fn s1a_05_shut_down_makes_the_log_available_to_the_next_manager() {
     }
     let dm = new_dm(&dir);
     let mut buf = [0u8; 8];
-    assert!(dm.read_log(&mut buf, 0).unwrap());
+    assert!(dm.read_log(&mut buf, 0).unwrap(), "shut down makes the log available to the next manager: expected `dm.read_log(&mut buf, 0).unwrap()`");
     assert_eq!(&buf, b"commit 1", "the log written before shut_down is there when the same files are opened again");
 }
 
@@ -699,8 +699,8 @@ fn s1a_c1_a_mirror_acts_like_one_disk_when_both_work() {
     let m = MirroredDisk::new(a.clone(), b.clone());
     m.write_page(PageId(3), &pattern(3)).unwrap();
     m.write_page(PageId(9), &pattern(9)).unwrap();
-    assert_eq!(read(&m, PageId(3)), pattern(3));
-    assert_eq!(read(&m, PageId(9)), pattern(9));
+    assert_eq!(read(&m, PageId(3)), pattern(3), "s1a c1 a mirror acts like one disk when both work");
+    assert_eq!(read(&m, PageId(9)), pattern(9), "s1a c1 a mirror acts like one disk when both work");
     assert_eq!(read(&m, PageId(5)), ZERO, "a page never written reads as zeros");
     m.delete_page(PageId(3));
     assert_eq!(read(&m, PageId(3)), ZERO, "deleted pages read as zeros");
@@ -727,7 +727,7 @@ fn s1a_c1_a_write_while_one_disk_is_down_still_succeeds() {
     a.set_down(true);
     m.write_page(PageId(2), &pattern(2)).expect("one disk is enough");
     a.set_down(false);
-    assert_eq!(read(&m, PageId(2)), pattern(2));
+    assert_eq!(read(&m, PageId(2)), pattern(2), "s1a c1 a write while one disk is down still succeeds");
     b.set_down(true);
     assert_eq!(read(&m, PageId(2)), pattern(2), "the first disk came back and now holds the page too");
 }
@@ -751,9 +751,9 @@ fn s1a_c1_a_write_fails_only_when_both_disks_fail() {
     let m = MirroredDisk::new(a.clone(), b.clone());
     a.set_down(true);
     b.set_down(true);
-    assert!(m.write_page(PageId(1), &pattern(1)).is_err());
+    assert!(m.write_page(PageId(1), &pattern(1)).is_err(), "s1a c1 a write fails only when both disks fail: expected `m.write_page(PageId(1), &pattern(1)).is_err()`");
     let mut buf = ZERO;
-    assert!(m.read_page(PageId(1), &mut buf).is_err());
+    assert!(m.read_page(PageId(1), &mut buf).is_err(), "s1a c1 a write fails only when both disks fail: expected `m.read_page(PageId(1), &mut buf).is_err()`");
 }
 
 #[derive(Clone, Debug)]
@@ -828,8 +828,8 @@ fn s1a_c2_a_cache_hit_does_not_reach_the_disk() {
     let c = CachedDisk::new(inner.clone(), 4);
     c.write_page(PageId(1), &pattern(1)).unwrap();
     let before = inner.reads.load(Ordering::SeqCst);
-    assert_eq!(read(&c, PageId(1)), pattern(1));
-    assert_eq!(read(&c, PageId(1)), pattern(1));
+    assert_eq!(read(&c, PageId(1)), pattern(1), "s1a c2 a cache hit does not reach the disk");
+    assert_eq!(read(&c, PageId(1)), pattern(1), "s1a c2 a cache hit does not reach the disk");
     assert_eq!(inner.reads.load(Ordering::SeqCst), before, "a page just written is served from memory");
 }
 
@@ -850,7 +850,7 @@ fn s1a_c2_a_deleted_page_reads_as_zeros() {
     let inner = Flaky::new();
     let c = CachedDisk::new(inner.clone(), 4);
     c.write_page(PageId(7), &pattern(7)).unwrap();
-    assert_eq!(read(&c, PageId(7)), pattern(7));
+    assert_eq!(read(&c, PageId(7)), pattern(7), "s1a c2 a deleted page reads as zeros");
     c.delete_page(PageId(7));
     assert_eq!(read(&c, PageId(7)), ZERO, "after a delete the page is gone, cached or not");
 }
@@ -864,7 +864,7 @@ fn s1a_c2_the_cache_and_the_disk_underneath_agree() {
     assert_eq!(read(&c, PageId(1)), pattern(2), "a rewrite replaces the cached page");
     assert_eq!(read(&*inner, PageId(1)), pattern(2), "write-through: the disk is current");
     c.delete_page(PageId(1));
-    assert_eq!(read(&*inner, PageId(1)), ZERO);
+    assert_eq!(read(&*inner, PageId(1)), ZERO, "s1a c2 the cache and the disk underneath agree");
 }
 
 #[derive(Clone, Debug)]
@@ -917,8 +917,8 @@ mod ch_1a_c3 {
     #[test]
     fn s1a_c3_pages_are_handed_out_in_increasing_order_until_none_is_left() {
         let mut b = PageBitmap::new(3);
-        assert_eq!((b.allocate(), b.allocate(), b.allocate(), b.allocate()), (Some(0), Some(1), Some(2), None));
-        assert_eq!(b.used(), 3);
+        assert_eq!((b.allocate(), b.allocate(), b.allocate(), b.allocate()), (Some(0), Some(1), Some(2), None), "this check");
+        assert_eq!(b.used(), 3, "this check");
     }
 
     #[test]
@@ -929,19 +929,19 @@ mod ch_1a_c3 {
         }
         b.free(3).unwrap();
         b.free(1).unwrap();
-        assert_eq!(b.allocate(), Some(1));
-        assert_eq!(b.allocate(), Some(3));
-        assert_eq!(b.allocate(), None);
+        assert_eq!(b.allocate(), Some(1), "this check");
+        assert_eq!(b.allocate(), Some(3), "this check");
+        assert_eq!(b.allocate(), None, "this check");
     }
 
     #[test]
     fn s1a_c3_a_double_free_and_an_out_of_range_free_are_refused() {
         let mut b = PageBitmap::new(4);
         let p = b.allocate().unwrap();
-        assert_eq!(b.free(p), Ok(()));
-        assert_eq!(b.free(p), Err(FreeError::DoubleFree));
+        assert_eq!(b.free(p), Ok(()), "this check");
+        assert_eq!(b.free(p), Err(FreeError::DoubleFree), "this check");
         assert_eq!(b.free(2), Err(FreeError::DoubleFree), "never allocated, so already free");
-        assert_eq!(b.free(4), Err(FreeError::OutOfRange));
+        assert_eq!(b.free(4), Err(FreeError::OutOfRange), "this check");
         assert_eq!(b.used(), 0, "errors change nothing");
         assert_eq!((b.allocate(), b.allocate()), (Some(0), Some(1)), "and no page is handed out twice after a refused free");
     }
@@ -949,16 +949,16 @@ mod ch_1a_c3 {
     #[test]
     fn s1a_c3_is_allocated_tracks_the_state() {
         let mut b = PageBitmap::new(2);
-        assert!(!b.is_allocated(0) && !b.is_allocated(9));
+        assert!(!b.is_allocated(0) && !b.is_allocated(9), "this check: expected `!b.is_allocated(0) && !b.is_allocated(9)`");
         b.allocate();
-        assert!(b.is_allocated(0) && !b.is_allocated(1));
+        assert!(b.is_allocated(0) && !b.is_allocated(1), "this check: expected `b.is_allocated(0) && !b.is_allocated(1)`");
     }
 
     #[test]
     fn s1a_c3_an_empty_bitmap_has_nothing_to_give() {
         let mut b = PageBitmap::new(0);
-        assert_eq!(b.allocate(), None);
-        assert_eq!(b.free(0), Err(FreeError::OutOfRange));
+        assert_eq!(b.allocate(), None, "this check");
+        assert_eq!(b.free(0), Err(FreeError::OutOfRange), "this check");
     }
 
     proptest! {
@@ -1002,7 +1002,7 @@ mod ch_1a_c4 {
         s.write(1, 10);
         let snap = s.snapshot();
         s.write(1, 20);
-        assert_eq!((s.read(1), s.read_at(snap, 1)), (Some(20), Some(10)));
+        assert_eq!((s.read(1), s.read_at(snap, 1)), (Some(20), Some(10)), "this check");
     }
 
     #[test]
@@ -1010,7 +1010,7 @@ mod ch_1a_c4 {
         let mut s = VersionedPages::new();
         let snap = s.snapshot();
         s.write(2, 5);
-        assert_eq!((s.read(2), s.read_at(snap, 2)), (Some(5), None));
+        assert_eq!((s.read(2), s.read_at(snap, 2)), (Some(5), None), "this check");
     }
 
     #[test]
@@ -1021,7 +1021,7 @@ mod ch_1a_c4 {
         s.write(0, 2);
         let b = s.snapshot();
         s.write(0, 3);
-        assert_eq!((s.read_at(a, 0), s.read_at(b, 0), s.read(0)), (Some(1), Some(2), Some(3)));
+        assert_eq!((s.read_at(a, 0), s.read_at(b, 0), s.read(0)), (Some(1), Some(2), Some(3)), "this check");
     }
 
     #[test]
@@ -1030,11 +1030,11 @@ mod ch_1a_c4 {
         s.write(0, 1);
         let a = s.snapshot();
         let b = s.snapshot();
-        assert!(s.drop_snapshot(a));
+        assert!(s.drop_snapshot(a), "this check: expected `s.drop_snapshot(a)`");
         assert!(!s.drop_snapshot(a), "already dropped");
-        assert!(!s.drop_snapshot(99));
-        assert_eq!(s.read_at(a, 0), None);
-        assert_eq!(s.read_at(b, 0), Some(1));
+        assert!(!s.drop_snapshot(99), "this check: expected `!s.drop_snapshot(99)`");
+        assert_eq!(s.read_at(a, 0), None, "this check");
+        assert_eq!(s.read_at(b, 0), Some(1), "this check");
         let c = s.snapshot();
         assert!(c != a && c != b, "ids are never reused");
     }
@@ -1047,7 +1047,7 @@ mod ch_1a_c4 {
         }
         let (a, b) = (s.snapshot(), s.snapshot());
         for p in 0..6 {
-            assert_eq!(s.read_at(a, p), s.read_at(b, p));
+            assert_eq!(s.read_at(a, p), s.read_at(b, p), "this check");
         }
     }
 
@@ -1094,10 +1094,10 @@ mod ch_1a_c5 {
     #[test]
     fn s1a_c5_slots_are_handed_out_and_reused() {
         let mut a = SlotAllocator::new();
-        assert_eq!((a.allocate(), a.allocate(), a.allocate()), (0, 1, 2));
-        assert!(a.free(1));
+        assert_eq!((a.allocate(), a.allocate(), a.allocate()), (0, 1, 2), "this check");
+        assert!(a.free(1), "this check: expected `a.free(1)`");
         assert_eq!(a.allocate(), 1, "a freed slot is reused before a fresh one");
-        assert_eq!(a.in_use(), 3);
+        assert_eq!(a.in_use(), 3, "this check");
     }
 
     #[test]
@@ -1105,9 +1105,9 @@ mod ch_1a_c5 {
         let mut a = SlotAllocator::new();
         a.allocate();
         a.allocate();
-        assert!(a.free(0));
+        assert!(a.free(0), "this check: expected `a.free(0)`");
         assert!(!a.free(0), "already free");
-        assert_eq!(a.in_use(), 1);
+        assert_eq!(a.in_use(), 1, "this check");
         let (x, y) = (a.allocate(), a.allocate());
         assert_ne!(x, y, "the freed slot must not be handed out twice");
     }
@@ -1115,8 +1115,8 @@ mod ch_1a_c5 {
     #[test]
     fn s1a_c5_a_slot_that_was_never_handed_out_cannot_be_freed() {
         let mut a = SlotAllocator::new();
-        assert!(!a.free(5));
-        assert_eq!(a.in_use(), 0);
+        assert!(!a.free(5), "this check: expected `!a.free(5)`");
+        assert_eq!(a.in_use(), 0, "this check");
         assert_eq!(a.allocate(), 0, "and it does not enter the free list");
     }
 
@@ -1128,7 +1128,7 @@ mod ch_1a_c5 {
             a.free(x);
             a.free(x);
         }
-        assert_eq!(a.in_use(), 2);
+        assert_eq!(a.in_use(), 2, "this check");
     }
 
     proptest! {

@@ -29,7 +29,7 @@ How the builder buffers (a `Vec<u8>` and a count, or writing into a pinned page 
 
 **A write guard for a page.** `let mut guard = bpm.write_page(id); guard.get_data_mut()[..n].copy_from_slice(&bytes);` the latch and the pin are released when `guard` goes out of scope.
 
-**`Vec::resize` and slices.** `buf.resize(at + size, 0); tuple.serialize_to(&mut buf[at..]);` grows the buffer then fills the new part.
+**`Vec::resize` and slices.** `v.resize(n, 0)` grows a `Vec<u8>` with zeros; a function that writes into `&mut v[at..]` then fills the new part in place.
 
 **A structure that borrows the pool.** `MergeSortRun<'e>` holds `&'e BufferPoolManager`: the run cannot outlive the pool, and the compiler checks it.
 

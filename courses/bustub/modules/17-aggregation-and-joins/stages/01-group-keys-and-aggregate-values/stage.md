@@ -23,7 +23,7 @@ Not much here, because the contract is exact; the freedom is in how you write th
 
 ## The Rust toolbox
 
-**`Eq` and `Hash` by hand.** `impl PartialEq for AggregateKey { fn eq(&self, other: &Self) -> bool { ... } }`, `impl Eq for AggregateKey {}`, `impl Hash for AggregateKey { fn hash<H: Hasher>(&self, state: &mut H) { ... } }`. A tuple of primitives already implements `Hash`, so `canonical(v).hash(state)` is one line.
+**`Eq` and `Hash` by hand.** `impl PartialEq for AggregateKey { fn eq(&self, other: &Self) -> bool { ... } }`, `impl Eq for AggregateKey {}`, `impl Hash for AggregateKey { fn hash<H: Hasher>(&self, state: &mut H) { ... } }`. A tuple of primitives already implements `Hash`, so hashing the same normalised form you compare by keeps the two in step is one line.
 
 **Comparing canonical forms.** Derive nothing for `Value`: `canonical(a) == canonical(b)` compares two plain tuples.
 

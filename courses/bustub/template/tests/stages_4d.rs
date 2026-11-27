@@ -125,11 +125,11 @@ fn s4d_01_intention_shared_only_conflicts_with_exclusive() {
 
 #[test]
 fn s4d_01_readers_and_intending_writers_do_not_mix() {
-    assert!(compatible(Shared, Shared));
+    assert!(compatible(Shared, Shared), "readers and intending writers do not mix: expected `compatible(Shared, Shared)`");
     assert!(compatible(IntentionExclusive, IntentionExclusive), "two writers of different rows can share a table");
     assert!(!compatible(Shared, IntentionExclusive), "a reader of the whole table and a writer of one row of it conflict");
-    assert!(!compatible(SharedIntentionExclusive, SharedIntentionExclusive));
-    assert!(!compatible(SharedIntentionExclusive, Shared));
+    assert!(!compatible(SharedIntentionExclusive, SharedIntentionExclusive), "readers and intending writers do not mix: expected `!compatible(SharedIntentionExclusive, SharedIntentionExclusive)`");
+    assert!(!compatible(SharedIntentionExclusive, Shared), "readers and intending writers do not mix: expected `!compatible(SharedIntentionExclusive, Shared)`");
 }
 
 #[test]
@@ -175,36 +175,36 @@ proptest! {
 #[test]
 fn s4d_02_a_new_lock_has_no_holders() {
     let q = LockQueue::new();
-    assert!(q.holders().is_empty());
-    assert!(q.is_empty());
-    assert_eq!(q.mode_of(1), None);
+    assert!(q.holders().is_empty(), "a new lock has no holders: expected `q.holders().is_empty()`");
+    assert!(q.is_empty(), "a new lock has no holders: expected `q.is_empty()`");
+    assert_eq!(q.mode_of(1), None, "a new lock has no holders");
 }
 
 #[test]
 fn s4d_02_compatible_requests_share_the_lock() {
     let mut q = LockQueue::new();
-    assert_eq!(q.try_acquire(2, Shared), Ok(true));
-    assert_eq!(q.try_acquire(1, Shared), Ok(true));
-    assert_eq!(q.try_acquire(3, IntentionShared), Ok(true));
+    assert_eq!(q.try_acquire(2, Shared), Ok(true), "compatible requests share the lock");
+    assert_eq!(q.try_acquire(1, Shared), Ok(true), "compatible requests share the lock");
+    assert_eq!(q.try_acquire(3, IntentionShared), Ok(true), "compatible requests share the lock");
     assert_eq!(q.holders(), vec![(1, Shared), (2, Shared), (3, IntentionShared)], "holders come back ordered by transaction id");
-    assert_eq!(q.mode_of(2), Some(Shared));
+    assert_eq!(q.mode_of(2), Some(Shared), "compatible requests share the lock");
 }
 
 #[test]
 fn s4d_02_an_incompatible_request_is_refused_and_changes_nothing() {
     let mut q = LockQueue::new();
-    assert_eq!(q.try_acquire(1, Exclusive), Ok(true));
-    assert_eq!(q.try_acquire(2, Shared), Ok(false));
-    assert_eq!(q.try_acquire(2, IntentionShared), Ok(false));
-    assert_eq!(q.holders(), vec![(1, Exclusive)]);
-    assert_eq!(q.mode_of(2), None);
+    assert_eq!(q.try_acquire(1, Exclusive), Ok(true), "an incompatible request is refused and changes nothing");
+    assert_eq!(q.try_acquire(2, Shared), Ok(false), "an incompatible request is refused and changes nothing");
+    assert_eq!(q.try_acquire(2, IntentionShared), Ok(false), "an incompatible request is refused and changes nothing");
+    assert_eq!(q.holders(), vec![(1, Exclusive)], "an incompatible request is refused and changes nothing");
+    assert_eq!(q.mode_of(2), None, "an incompatible request is refused and changes nothing");
 }
 
 #[test]
 fn s4d_02_asking_again_for_the_mode_you_hold_is_fine() {
     let mut q = LockQueue::new();
-    assert_eq!(q.try_acquire(1, Shared), Ok(true));
-    assert_eq!(q.try_acquire(1, Shared), Ok(true));
+    assert_eq!(q.try_acquire(1, Shared), Ok(true), "asking again for the mode you hold is fine");
+    assert_eq!(q.try_acquire(1, Shared), Ok(true), "asking again for the mode you hold is fine");
     assert_eq!(q.holders(), vec![(1, Shared)], "still one entry");
 }
 
@@ -212,26 +212,26 @@ fn s4d_02_asking_again_for_the_mode_you_hold_is_fine() {
 fn s4d_02_an_upgrade_replaces_the_mode_when_nobody_is_in_the_way() {
     let mut q = LockQueue::new();
     q.try_acquire(1, Shared).unwrap();
-    assert_eq!(q.try_acquire(1, Exclusive), Ok(true));
+    assert_eq!(q.try_acquire(1, Exclusive), Ok(true), "an upgrade replaces the mode when nobody is in the way");
     assert_eq!(q.holders(), vec![(1, Exclusive)], "the old mode is replaced, not added");
     let mut q = LockQueue::new();
     q.try_acquire(1, Shared).unwrap();
     q.try_acquire(2, Shared).unwrap();
     assert_eq!(q.try_acquire(1, Exclusive), Ok(false), "another holder is in the way");
     assert_eq!(q.mode_of(1), Some(Shared), "a refused upgrade leaves the old lock alone");
-    assert!(q.release(2));
-    assert_eq!(q.try_acquire(1, Exclusive), Ok(true));
+    assert!(q.release(2), "an upgrade replaces the mode when nobody is in the way: expected `q.release(2)`");
+    assert_eq!(q.try_acquire(1, Exclusive), Ok(true), "an upgrade replaces the mode when nobody is in the way");
 }
 
 #[test]
 fn s4d_02_asking_for_a_weaker_mode_is_an_error() {
     let mut q = LockQueue::new();
     q.try_acquire(1, Exclusive).unwrap();
-    assert_eq!(q.try_acquire(1, Shared), Err(LockErrorKind::IncompatibleUpgrade));
+    assert_eq!(q.try_acquire(1, Shared), Err(LockErrorKind::IncompatibleUpgrade), "asking for a weaker mode is an error");
     q.release(1);
     q.try_acquire(1, IntentionExclusive).unwrap();
     assert_eq!(q.try_acquire(1, Shared), Err(LockErrorKind::IncompatibleUpgrade), "IX to S is not an upgrade either");
-    assert_eq!(q.mode_of(1), Some(IntentionExclusive));
+    assert_eq!(q.mode_of(1), Some(IntentionExclusive), "asking for a weaker mode is an error");
 }
 
 #[test]
@@ -239,9 +239,9 @@ fn s4d_02_releasing_frees_the_lock_for_others() {
     let mut q = LockQueue::new();
     q.try_acquire(1, Exclusive).unwrap();
     assert!(!q.release(2), "2 held nothing");
-    assert!(q.release(1));
+    assert!(q.release(1), "releasing frees the lock for others: expected `q.release(1)`");
     assert!(!q.release(1), "already released");
-    assert_eq!(q.try_acquire(2, Exclusive), Ok(true));
+    assert_eq!(q.try_acquire(2, Exclusive), Ok(true), "releasing frees the lock for others");
 }
 
 #[derive(Clone, Debug)]
@@ -319,9 +319,9 @@ fn s4d_03_try_lock_of_a_mode_already_held_is_true_even_with_a_writer_waiting() {
 #[test]
 fn s4d_03_a_free_lock_is_granted_at_once_and_shows_its_holder() {
     let m = LockManager::new();
-    assert_eq!(m.lock(1, table(1), Shared), Ok(()));
-    assert_eq!(m.holders(table(1)), vec![(1, Shared)]);
-    assert_eq!(m.waiting(table(1)), 0);
+    assert_eq!(m.lock(1, table(1), Shared), Ok(()), "a free lock is granted at once and shows its holder");
+    assert_eq!(m.holders(table(1)), vec![(1, Shared)], "a free lock is granted at once and shows its holder");
+    assert_eq!(m.waiting(table(1)), 0, "a free lock is granted at once and shows its holder");
     assert!(m.holders(table(2)).is_empty(), "another table is untouched");
 }
 
@@ -338,7 +338,7 @@ fn s4d_03_shared_locks_are_granted_together() {
         for h in hs {
             h.join().unwrap();
         }
-        assert_eq!(m.holders(table(1)).len(), 4);
+        assert_eq!(m.holders(table(1)).len(), 4, "shared locks are granted together");
     });
 }
 
@@ -353,12 +353,12 @@ fn s4d_03_an_exclusive_request_waits_until_the_holder_lets_go() {
         });
         pause();
         assert!(!finished(&done), "the second exclusive request must wait");
-        assert_eq!(m.waiting(table(1)), 1);
-        assert_eq!(m.holders(table(1)), vec![(1, Exclusive)]);
+        assert_eq!(m.waiting(table(1)), 1, "an exclusive request waits until the holder lets go");
+        assert_eq!(m.holders(table(1)), vec![(1, Exclusive)], "an exclusive request waits until the holder lets go");
         m.unlock(1, table(1)).unwrap();
         h.join().unwrap();
-        assert_eq!(m.holders(table(1)), vec![(2, Exclusive)]);
-        assert_eq!(m.waiting(table(1)), 0);
+        assert_eq!(m.holders(table(1)), vec![(2, Exclusive)], "an exclusive request waits until the holder lets go");
+        assert_eq!(m.waiting(table(1)), 0, "an exclusive request waits until the holder lets go");
     });
 }
 
@@ -388,7 +388,7 @@ fn s4d_03_a_reader_does_not_jump_a_waiting_writer() {
         };
         pause();
         assert_eq!(m.waiting(table(1)), 2, "both wait: the reader is behind the writer");
-        assert_eq!(m.holders(table(1)), vec![(1, Shared)]);
+        assert_eq!(m.holders(table(1)), vec![(1, Shared)], "a reader does not jump a waiting writer");
         m.unlock(1, table(1)).unwrap();
         writer.join().unwrap();
         reader.join().unwrap();
@@ -416,7 +416,7 @@ fn s4d_03_waiting_requests_are_granted_in_the_order_they_arrived() {
         for h in hs {
             h.join().unwrap();
         }
-        assert_eq!(*order.lock().unwrap(), vec![1, 2, 3, 4]);
+        assert_eq!(*order.lock().unwrap(), vec![1, 2, 3, 4], "waiting requests are granted in the order they arrived");
     });
 }
 
@@ -444,21 +444,21 @@ fn s4d_03_readers_that_queued_together_are_granted_together() {
 #[test]
 fn s4d_03_unlocking_what_you_do_not_hold_is_an_error() {
     let m = LockManager::new();
-    assert_eq!(kind(m.unlock(1, table(1))), LockErrorKind::AttemptedUnlockButNoLockHeld);
+    assert_eq!(kind(m.unlock(1, table(1))), LockErrorKind::AttemptedUnlockButNoLockHeld, "unlocking what you do not hold is an error");
     m.lock(2, table(1), Shared).unwrap();
     assert_eq!(kind(m.unlock(1, table(1))), LockErrorKind::AttemptedUnlockButNoLockHeld, "1 does not hold what 2 holds");
-    assert_eq!(m.holders(table(1)), vec![(2, Shared)]);
+    assert_eq!(m.holders(table(1)), vec![(2, Shared)], "unlocking what you do not hold is an error");
 }
 
 #[test]
 fn s4d_03_try_lock_never_waits() {
     let m = LockManager::new();
-    assert_eq!(m.try_lock(1, row(1, 1), Exclusive), Ok(true));
-    assert_eq!(m.try_lock(2, row(1, 1), Shared), Ok(false));
+    assert_eq!(m.try_lock(1, row(1, 1), Exclusive), Ok(true), "try lock never waits");
+    assert_eq!(m.try_lock(2, row(1, 1), Shared), Ok(false), "try lock never waits");
     assert_eq!(m.try_lock(2, row(1, 2), Shared), Ok(true), "another row is free");
     assert_eq!(m.waiting(row(1, 1)), 0, "a refused try_lock leaves nobody waiting");
     m.unlock(1, row(1, 1)).unwrap();
-    assert_eq!(m.try_lock(2, row(1, 1), Shared), Ok(true));
+    assert_eq!(m.try_lock(2, row(1, 1), Shared), Ok(true), "try lock never waits");
 }
 
 #[test]
@@ -517,19 +517,19 @@ proptest! {
 fn s4d_04_a_lone_holder_upgrades_at_once() {
     let m = LockManager::new();
     m.lock(1, table(1), Shared).unwrap();
-    assert_eq!(m.lock(1, table(1), Exclusive), Ok(()));
+    assert_eq!(m.lock(1, table(1), Exclusive), Ok(()), "a lone holder upgrades at once");
     assert_eq!(m.holders(table(1)), vec![(1, Exclusive)], "the shared lock became an exclusive one");
     m.lock(2, table(2), IntentionShared).unwrap();
     m.lock(2, table(2), SharedIntentionExclusive).unwrap();
-    assert_eq!(m.holders(table(2)), vec![(2, SharedIntentionExclusive)]);
+    assert_eq!(m.holders(table(2)), vec![(2, SharedIntentionExclusive)], "a lone holder upgrades at once");
 }
 
 #[test]
 fn s4d_04_asking_again_for_the_mode_you_hold_changes_nothing() {
     let m = LockManager::new();
     m.lock(1, table(1), Exclusive).unwrap();
-    assert_eq!(m.lock(1, table(1), Exclusive), Ok(()));
-    assert_eq!(m.holders(table(1)), vec![(1, Exclusive)]);
+    assert_eq!(m.lock(1, table(1), Exclusive), Ok(()), "asking again for the mode you hold changes nothing");
+    assert_eq!(m.holders(table(1)), vec![(1, Exclusive)], "asking again for the mode you hold changes nothing");
 }
 
 #[test]
@@ -547,7 +547,7 @@ fn s4d_04_an_upgrade_waits_for_the_other_holders() {
         assert_eq!(m.holders(table(1)).len(), 2, "nothing changes while the upgrade waits");
         m.unlock(2, table(1)).unwrap();
         h.join().unwrap();
-        assert_eq!(m.holders(table(1)), vec![(1, Exclusive)]);
+        assert_eq!(m.holders(table(1)), vec![(1, Exclusive)], "an upgrade waits for the other holders");
     });
 }
 
@@ -597,7 +597,7 @@ fn s4d_04_a_second_upgrade_of_the_same_lock_is_refused() {
         assert_eq!(kind(m.lock(2, table(1), Exclusive)), LockErrorKind::UpgradeConflict, "only one transaction may be upgrading");
         m.unlock(2, table(1)).unwrap();
         assert_eq!(first.join().unwrap(), Ok(()), "the first upgrade is not harmed by the refused one");
-        assert_eq!(m.holders(table(1)), vec![(1, Exclusive)]);
+        assert_eq!(m.holders(table(1)), vec![(1, Exclusive)], "a second upgrade of the same lock is refused");
     });
 }
 
@@ -605,8 +605,8 @@ fn s4d_04_a_second_upgrade_of_the_same_lock_is_refused() {
 fn s4d_04_a_weaker_mode_than_the_one_held_is_not_an_upgrade() {
     let m = LockManager::new();
     m.lock(1, table(1), Exclusive).unwrap();
-    assert_eq!(kind(m.lock(1, table(1), Shared)), LockErrorKind::IncompatibleUpgrade);
-    assert_eq!(kind(m.lock(1, table(1), IntentionShared)), LockErrorKind::IncompatibleUpgrade);
+    assert_eq!(kind(m.lock(1, table(1), Shared)), LockErrorKind::IncompatibleUpgrade, "a weaker mode than the one held is not an upgrade");
+    assert_eq!(kind(m.lock(1, table(1), IntentionShared)), LockErrorKind::IncompatibleUpgrade, "a weaker mode than the one held is not an upgrade");
     m.lock(2, table(2), IntentionExclusive).unwrap();
     assert_eq!(kind(m.lock(2, table(2), Shared)), LockErrorKind::IncompatibleUpgrade, "IX to S is sideways, not up");
     assert_eq!(m.holders(table(1)), vec![(1, Exclusive)], "a refused request changes nothing");
@@ -628,13 +628,13 @@ fn s4d_04_an_upgrade_in_the_middle_of_a_queue_does_not_lose_the_others() {
             pause();
         }
         m.lock(1, table(1), Shared).unwrap();
-        assert_eq!(m.holders(table(1)), vec![(1, Shared), (2, IntentionShared)]);
+        assert_eq!(m.holders(table(1)), vec![(1, Shared), (2, IntentionShared)], "an upgrade in the middle of a queue does not lose the others");
         m.unlock(1, table(1)).unwrap();
         m.unlock(2, table(1)).unwrap();
         for h in hs {
             h.join().unwrap();
         }
-        assert!(m.holders(table(1)).is_empty());
+        assert!(m.holders(table(1)).is_empty(), "an upgrade in the middle of a queue does not lose the others: expected `m.holders(table(1)).is_empty()`");
     });
 }
 
@@ -654,9 +654,9 @@ fn s4d_05_read_uncommitted_never_takes_shared_locks() {
     }
     let m = LockManager::new();
     let t = txn(1, LockIsolation::ReadUncommitted);
-    assert_eq!(m.lock_table(&t, IntentionExclusive, 1), Ok(()));
-    assert_eq!(m.lock_table(&t, Exclusive, 2), Ok(()));
-    assert_eq!(t.state(), LockState::Growing);
+    assert_eq!(m.lock_table(&t, IntentionExclusive, 1), Ok(()), "read uncommitted never takes shared locks");
+    assert_eq!(m.lock_table(&t, Exclusive, 2), Ok(()), "read uncommitted never takes shared locks");
+    assert_eq!(t.state(), LockState::Growing, "read uncommitted never takes shared locks");
 }
 
 #[test]
@@ -668,7 +668,7 @@ fn s4d_05_releasing_an_exclusive_lock_starts_the_shrinking_phase_at_every_level(
         m.unlock_table(&t, 1).unwrap();
         assert_eq!(t.state(), LockState::Shrinking, "{iso:?}");
         assert_eq!(kind(m.lock_table(&t, Exclusive, 2)), LockErrorKind::LockOnShrinking, "{iso:?}: no new exclusive lock once shrinking");
-        assert_eq!(t.state(), LockState::Aborted);
+        assert_eq!(t.state(), LockState::Aborted, "releasing an exclusive lock starts the shrinking phase at every level");
     }
 }
 
@@ -678,14 +678,14 @@ fn s4d_05_releasing_a_shared_lock_shrinks_only_under_repeatable_read() {
     let rr = txn(1, LockIsolation::RepeatableRead);
     m.lock_table(&rr, Shared, 1).unwrap();
     m.unlock_table(&rr, 1).unwrap();
-    assert_eq!(rr.state(), LockState::Shrinking);
+    assert_eq!(rr.state(), LockState::Shrinking, "releasing a shared lock shrinks only under repeatable read");
     assert_eq!(kind(m.lock_table(&rr, Shared, 2)), LockErrorKind::LockOnShrinking, "repeatable read takes no lock at all once shrinking");
 
     let rc = txn(2, LockIsolation::ReadCommitted);
     m.lock_table(&rc, Shared, 3).unwrap();
     m.unlock_table(&rc, 3).unwrap();
     assert_eq!(rc.state(), LockState::Growing, "read committed lets go of its read locks freely");
-    assert_eq!(m.lock_table(&rc, Shared, 4), Ok(()));
+    assert_eq!(m.lock_table(&rc, Shared, 4), Ok(()), "releasing a shared lock shrinks only under repeatable read");
 }
 
 #[test]
@@ -694,7 +694,7 @@ fn s4d_05_read_committed_may_still_read_while_shrinking() {
     let t = txn(1, LockIsolation::ReadCommitted);
     m.lock_table(&t, Exclusive, 1).unwrap();
     m.unlock_table(&t, 1).unwrap();
-    assert_eq!(t.state(), LockState::Shrinking);
+    assert_eq!(t.state(), LockState::Shrinking, "read committed may still read while shrinking");
     assert_eq!(m.lock_table(&t, IntentionShared, 2), Ok(()), "IS is allowed while shrinking");
     assert_eq!(m.lock_table(&t, Shared, 3), Ok(()), "S is allowed while shrinking");
     assert_eq!(kind(m.lock_table(&t, IntentionExclusive, 4)), LockErrorKind::LockOnShrinking, "writes are not");
@@ -709,10 +709,10 @@ fn s4d_05_a_row_can_only_be_locked_shared_or_exclusive() {
         let t2 = txn(2, LockIsolation::RepeatableRead);
         m.lock_table(&t2, IntentionExclusive, 2).unwrap();
         assert_eq!(kind(m.lock_row(&t2, mode, 2, rid(1))), LockErrorKind::AttemptedIntentionLockOnRow, "{mode:?}");
-        assert_eq!(t2.state(), LockState::Aborted);
+        assert_eq!(t2.state(), LockState::Aborted, "a row can only be locked shared or exclusive");
         m.release_all(&t2);
     }
-    assert_eq!(m.lock_row(&t, Exclusive, 1, rid(1)), Ok(()));
+    assert_eq!(m.lock_row(&t, Exclusive, 1, rid(1)), Ok(()), "a row can only be locked shared or exclusive");
 }
 
 #[test]
@@ -743,8 +743,8 @@ fn s4d_05_a_table_cannot_be_unlocked_while_its_rows_are() {
     let t = txn(1, LockIsolation::RepeatableRead);
     m.lock_table(&t, IntentionExclusive, 1).unwrap();
     m.lock_row(&t, Exclusive, 1, rid(1)).unwrap();
-    assert_eq!(kind(m.unlock_table(&t, 1)), LockErrorKind::TableUnlockedBeforeUnlockingRows);
-    assert_eq!(t.state(), LockState::Aborted);
+    assert_eq!(kind(m.unlock_table(&t, 1)), LockErrorKind::TableUnlockedBeforeUnlockingRows, "a table cannot be unlocked while its rows are");
+    assert_eq!(t.state(), LockState::Aborted, "a table cannot be unlocked while its rows are");
 
     let t = txn(2, LockIsolation::RepeatableRead);
     m.lock_table(&t, IntentionShared, 2).unwrap();
@@ -757,11 +757,11 @@ fn s4d_05_a_table_cannot_be_unlocked_while_its_rows_are() {
 fn s4d_05_unlocking_what_is_not_locked_aborts() {
     let m = LockManager::new();
     let t = txn(1, LockIsolation::RepeatableRead);
-    assert_eq!(kind(m.unlock_table(&t, 1)), LockErrorKind::AttemptedUnlockButNoLockHeld);
-    assert_eq!(t.state(), LockState::Aborted);
+    assert_eq!(kind(m.unlock_table(&t, 1)), LockErrorKind::AttemptedUnlockButNoLockHeld, "unlocking what is not locked aborts");
+    assert_eq!(t.state(), LockState::Aborted, "unlocking what is not locked aborts");
     let t = txn(2, LockIsolation::RepeatableRead);
     m.lock_table(&t, IntentionShared, 1).unwrap();
-    assert_eq!(kind(m.unlock_row(&t, 1, rid(5))), LockErrorKind::AttemptedUnlockButNoLockHeld);
+    assert_eq!(kind(m.unlock_row(&t, 1, rid(5))), LockErrorKind::AttemptedUnlockButNoLockHeld, "unlocking what is not locked aborts");
 }
 
 #[test]
@@ -769,10 +769,10 @@ fn s4d_05_upgrades_follow_the_rules_and_a_bad_one_aborts() {
     let m = LockManager::new();
     let t = txn(1, LockIsolation::RepeatableRead);
     m.lock_table(&t, IntentionShared, 1).unwrap();
-    assert_eq!(m.lock_table(&t, Exclusive, 1), Ok(()));
-    assert_eq!(m.holders(table(1)), vec![(1, Exclusive)]);
-    assert_eq!(kind(m.lock_table(&t, Shared, 1)), LockErrorKind::IncompatibleUpgrade);
-    assert_eq!(t.state(), LockState::Aborted);
+    assert_eq!(m.lock_table(&t, Exclusive, 1), Ok(()), "upgrades follow the rules and a bad one aborts");
+    assert_eq!(m.holders(table(1)), vec![(1, Exclusive)], "upgrades follow the rules and a bad one aborts");
+    assert_eq!(kind(m.lock_table(&t, Shared, 1)), LockErrorKind::IncompatibleUpgrade, "upgrades follow the rules and a bad one aborts");
+    assert_eq!(t.state(), LockState::Aborted, "upgrades follow the rules and a bad one aborts");
 }
 
 #[test]
@@ -780,11 +780,11 @@ fn s4d_05_an_aborted_or_committed_transaction_takes_no_locks() {
     let m = LockManager::new();
     let t = txn(1, LockIsolation::RepeatableRead);
     t.set_state(LockState::Aborted);
-    assert_eq!(kind(m.lock_table(&t, Shared, 1)), LockErrorKind::NotRunning);
+    assert_eq!(kind(m.lock_table(&t, Shared, 1)), LockErrorKind::NotRunning, "an aborted or committed transaction takes no locks");
     let t = txn(2, LockIsolation::RepeatableRead);
     t.set_state(LockState::Committed);
-    assert_eq!(kind(m.lock_table(&t, Shared, 1)), LockErrorKind::NotRunning);
-    assert!(m.holders(table(1)).is_empty());
+    assert_eq!(kind(m.lock_table(&t, Shared, 1)), LockErrorKind::NotRunning, "an aborted or committed transaction takes no locks");
+    assert!(m.holders(table(1)).is_empty(), "an aborted or committed transaction takes no locks: expected `m.holders(table(1)).is_empty()`");
 }
 
 #[test]
@@ -801,7 +801,7 @@ fn s4d_05_release_all_lets_go_of_rows_then_tables_and_leaves_the_phase_alone() {
     }
     assert_eq!(t.state(), LockState::Growing, "commit and abort set the state themselves");
     let other = txn(2, LockIsolation::RepeatableRead);
-    assert_eq!(m.lock_table(&other, Exclusive, 1), Ok(()));
+    assert_eq!(m.lock_table(&other, Exclusive, 1), Ok(()), "release all lets go of rows then tables and leaves the phase alone");
 }
 
 #[derive(Clone, Debug)]
@@ -879,15 +879,15 @@ fn graph(edges: &[(TxnId, TxnId)]) -> WaitsForGraph {
 
 #[test]
 fn s4d_06_a_graph_without_cycles_has_no_victim() {
-    assert_eq!(WaitsForGraph::new().has_cycle(), None);
+    assert_eq!(WaitsForGraph::new().has_cycle(), None, "a graph without cycles has no victim");
     assert_eq!(graph(&[(1, 2), (2, 3), (3, 4)]).has_cycle(), None, "a chain");
     assert_eq!(graph(&[(1, 2), (1, 3), (2, 4), (3, 4)]).has_cycle(), None, "a diamond is not a cycle");
 }
 
 #[test]
 fn s4d_06_the_victim_is_the_youngest_transaction_on_the_cycle() {
-    assert_eq!(graph(&[(1, 2), (2, 1)]).has_cycle(), Some(2));
-    assert_eq!(graph(&[(1, 2), (2, 3), (3, 1)]).has_cycle(), Some(3));
+    assert_eq!(graph(&[(1, 2), (2, 1)]).has_cycle(), Some(2), "the victim is the youngest transaction on the cycle");
+    assert_eq!(graph(&[(1, 2), (2, 3), (3, 1)]).has_cycle(), Some(3), "the victim is the youngest transaction on the cycle");
     assert_eq!(graph(&[(7, 3), (3, 9), (9, 7)]).has_cycle(), Some(9), "ids need not be small or in order");
     assert_eq!(graph(&[(5, 5)]).has_cycle(), Some(5), "waiting for yourself is a cycle");
 }
@@ -895,17 +895,17 @@ fn s4d_06_the_victim_is_the_youngest_transaction_on_the_cycle() {
 #[test]
 fn s4d_06_a_cycle_reached_through_a_tail_is_found() {
     assert_eq!(graph(&[(1, 2), (2, 3), (3, 4), (4, 2)]).has_cycle(), Some(4), "1 is not on the cycle, so it is not the victim");
-    assert_eq!(graph(&[(10, 1), (1, 2), (2, 1)]).has_cycle(), Some(2));
+    assert_eq!(graph(&[(10, 1), (1, 2), (2, 1)]).has_cycle(), Some(2), "a cycle reached through a tail is found");
 }
 
 #[test]
 fn s4d_06_removing_an_edge_can_break_the_cycle() {
     let mut g = graph(&[(1, 2), (2, 3), (3, 1)]);
     g.remove_edge(3, 1);
-    assert_eq!(g.has_cycle(), None);
+    assert_eq!(g.has_cycle(), None, "removing an edge can break the cycle");
     g.add_edge(3, 1);
     g.add_edge(3, 1);
-    assert_eq!(g.has_cycle(), Some(3));
+    assert_eq!(g.has_cycle(), Some(3), "removing an edge can break the cycle");
     g.remove_edge(9, 9);
     assert_eq!(g.edge_list().len(), 3, "an edge added twice is one edge, and removing a missing edge does nothing");
 }
@@ -913,7 +913,7 @@ fn s4d_06_removing_an_edge_can_break_the_cycle() {
 #[test]
 fn s4d_06_the_edge_list_is_ordered() {
     let g = graph(&[(3, 1), (1, 3), (1, 2), (2, 1)]);
-    assert_eq!(g.edge_list(), vec![(1, 2), (1, 3), (2, 1), (3, 1)]);
+    assert_eq!(g.edge_list(), vec![(1, 2), (1, 3), (2, 1), (3, 1)], "the edge list is ordered");
 }
 
 #[test]
@@ -973,7 +973,7 @@ fn s4d_06_a_cycle_of_three_loses_its_youngest() {
         }
         assert_eq!(victims, vec![3], "the youngest of the three");
         let results: Vec<_> = hs.into_iter().map(|h| h.join().unwrap()).collect();
-        assert_eq!(kind(results[2].clone()), LockErrorKind::Deadlock);
+        assert_eq!(kind(results[2].clone()), LockErrorKind::Deadlock, "a cycle of three loses its youngest");
         assert!(results[0].is_ok() && results[1].is_ok(), "the other two get their locks once the victim lets go");
     });
 }
@@ -1007,8 +1007,8 @@ fn s4d_06_two_separate_deadlocks_are_both_broken_in_one_pass() {
         }
         assert_eq!(m.detect_deadlocks(), vec![2, 4], "one pass breaks every cycle: the youngest of each pair");
         let results: Vec<_> = hs.into_iter().map(|h| h.join().unwrap()).collect();
-        assert_eq!(kind(results[1].clone()), LockErrorKind::Deadlock);
-        assert_eq!(kind(results[3].clone()), LockErrorKind::Deadlock);
+        assert_eq!(kind(results[1].clone()), LockErrorKind::Deadlock, "two separate deadlocks are both broken in one pass");
+        assert_eq!(kind(results[3].clone()), LockErrorKind::Deadlock, "two separate deadlocks are both broken in one pass");
         assert!(results[0].is_ok() && results[2].is_ok(), "the older transaction of each pair goes on");
     });
 }
@@ -1074,7 +1074,7 @@ fn s4d_06_the_detector_thread_breaks_a_deadlock_by_itself() {
             })
         };
         assert_eq!(kind(t2.join().unwrap()), LockErrorKind::Deadlock, "the youngest was aborted without anyone calling detect_deadlocks");
-        assert_eq!(t1.join().unwrap(), Ok(()));
+        assert_eq!(t1.join().unwrap(), Ok(()), "the detector thread breaks a deadlock by itself");
     });
 }
 
@@ -1090,7 +1090,7 @@ fn s4d_06_a_waiting_request_that_is_no_deadlock_is_left_alone() {
         pause();
         assert!(m.detect_deadlocks().is_empty(), "2 waits for 1, and 1 waits for nobody");
         m.unlock(1, table(1)).unwrap();
-        assert_eq!(h.join().unwrap(), Ok(()));
+        assert_eq!(h.join().unwrap(), Ok(()), "a waiting request that is no deadlock is left alone");
     });
 }
 
@@ -1188,10 +1188,10 @@ fn s4d_07_the_serializability_check_itself_is_right() {
     // two transactions that each read before the other writes: a cycle, so not serializable
     let a: History = vec![(1, 1, false), (4, 2, true)];
     let b: History = vec![(2, 2, false), (3, 1, true)];
-    assert!(!serializable(&[a, b]));
+    assert!(!serializable(&[a, b]), "the serializability check itself is right: expected `!serializable(&[a, b])`");
     let c: History = vec![(1, 1, false), (2, 2, true)];
     let d: History = vec![(3, 1, false), (4, 2, true)];
-    assert!(serializable(&[c, d]));
+    assert!(serializable(&[c, d]), "the serializability check itself is right: expected `serializable(&[c, d])`");
 }
 
 /// A bank of `rows` accounts, each started with 100. Each worker runs `transfers` transactions (move an amount between two random accounts, locking
@@ -1286,8 +1286,8 @@ fn s4d_07_deadlocks_really_happen_in_the_workload_and_are_always_resolved() {
         for _ in 0..3 {
             let (histories, balances, aborts) = run_bank(LockIsolation::RepeatableRead, 6, 12, 3);
             total_aborts += aborts;
-            assert_eq!(histories.len(), 6 * 12);
-            assert_eq!(balances.iter().sum::<i64>(), 300);
+            assert_eq!(histories.len(), 6 * 12, "deadlocks really happen in the workload and are always resolved");
+            assert_eq!(balances.iter().sum::<i64>(), 300, "deadlocks really happen in the workload and are always resolved");
         }
         assert!(total_aborts > 0, "three accounts locked in random order by six threads must have deadlocked at least once; the test would prove nothing otherwise");
     });
@@ -1386,9 +1386,9 @@ fn s4d_07_a_victim_that_is_waiting_for_a_row_gives_up_and_the_survivor_commits()
                 r
             })
         };
-        assert_eq!(kind(hb.join().unwrap()), LockErrorKind::Deadlock);
+        assert_eq!(kind(hb.join().unwrap()), LockErrorKind::Deadlock, "a victim that is waiting for a row gives up and the survivor commits");
         assert_eq!(b.state(), LockState::Aborted, "the victim's transaction is aborted");
-        assert_eq!(ha.join().unwrap(), Ok(()));
+        assert_eq!(ha.join().unwrap(), Ok(()), "a victim that is waiting for a row gives up and the survivor commits");
         assert_eq!(a.state(), LockState::Growing, "the survivor goes on");
     });
 }
@@ -1414,16 +1414,16 @@ mod ch_4d_c1 {
     #[test]
     fn s4d_c1_the_decision_depends_only_on_the_order() {
         for p in [WaitDie, WoundWait] {
-            assert_eq!(decide(p, 1, 2), decide(p, 100, 200));
-            assert_eq!(decide(p, 2, 1), decide(p, 200, 100));
+            assert_eq!(decide(p, 1, 2), decide(p, 100, 200), "this check");
+            assert_eq!(decide(p, 2, 1), decide(p, 200, 100), "this check");
         }
     }
 
     #[test]
     fn s4d_c1_swapping_the_two_transactions_swaps_who_gives_way() {
         for (a, b) in [(1, 2), (10, 11), (3, 400)] {
-            assert_eq!((decide(WaitDie, a, b), decide(WaitDie, b, a)), (Wait, AbortRequester));
-            assert_eq!((decide(WoundWait, a, b), decide(WoundWait, b, a)), (AbortHolder, Wait));
+            assert_eq!((decide(WaitDie, a, b), decide(WaitDie, b, a)), (Wait, AbortRequester), "this check");
+            assert_eq!((decide(WoundWait, a, b), decide(WoundWait, b, a)), (AbortHolder, Wait), "this check");
         }
     }
 
@@ -1469,10 +1469,10 @@ mod ch_4d_c2 {
     #[test]
     fn s4d_c2_shared_ranges_overlap_freely_and_exclusive_ones_do_not() {
         let mut l = RangeLocks::new();
-        assert_eq!(l.try_lock(1, 0, 10, Shared), Ok(true));
-        assert_eq!(l.try_lock(2, 5, 15, Shared), Ok(true));
-        assert_eq!(l.try_lock(3, 9, 12, Exclusive), Ok(false));
-        assert_eq!(l.try_lock(3, 20, 30, Exclusive), Ok(true));
+        assert_eq!(l.try_lock(1, 0, 10, Shared), Ok(true), "this check");
+        assert_eq!(l.try_lock(2, 5, 15, Shared), Ok(true), "this check");
+        assert_eq!(l.try_lock(3, 9, 12, Exclusive), Ok(false), "this check");
+        assert_eq!(l.try_lock(3, 20, 30, Exclusive), Ok(true), "this check");
     }
 
     #[test]
@@ -1480,33 +1480,33 @@ mod ch_4d_c2 {
         let mut l = RangeLocks::new();
         l.try_lock(1, 30, 41, Shared).unwrap();
         assert_eq!(l.try_lock(2, 35, 36, Exclusive), Ok(false), "inserting 35 would change what the scan returns");
-        assert_eq!(l.try_lock(2, 41, 42, Exclusive), Ok(true));
+        assert_eq!(l.try_lock(2, 41, 42, Exclusive), Ok(true), "this check");
     }
 
     #[test]
     fn s4d_c2_adjacent_ranges_do_not_overlap() {
         let mut l = RangeLocks::new();
         l.try_lock(1, 0, 5, Exclusive).unwrap();
-        assert_eq!(l.try_lock(2, 5, 9, Exclusive), Ok(true));
-        assert_eq!(l.try_lock(3, 4, 6, Shared), Ok(false));
+        assert_eq!(l.try_lock(2, 5, 9, Exclusive), Ok(true), "this check");
+        assert_eq!(l.try_lock(3, 4, 6, Shared), Ok(false), "this check");
     }
 
     #[test]
     fn s4d_c2_a_transaction_does_not_conflict_with_itself_and_unlock_frees_the_range() {
         let mut l = RangeLocks::new();
-        assert_eq!(l.try_lock(1, 0, 10, Exclusive), Ok(true));
-        assert_eq!(l.try_lock(1, 5, 15, Exclusive), Ok(true));
-        assert_eq!(l.held_by(1), 2);
-        assert_eq!(l.try_lock(2, 12, 13, Shared), Ok(false));
-        assert_eq!(l.unlock_all(1), 2);
-        assert_eq!(l.try_lock(2, 12, 13, Shared), Ok(true));
+        assert_eq!(l.try_lock(1, 0, 10, Exclusive), Ok(true), "this check");
+        assert_eq!(l.try_lock(1, 5, 15, Exclusive), Ok(true), "this check");
+        assert_eq!(l.held_by(1), 2, "this check");
+        assert_eq!(l.try_lock(2, 12, 13, Shared), Ok(false), "this check");
+        assert_eq!(l.unlock_all(1), 2, "this check");
+        assert_eq!(l.try_lock(2, 12, 13, Shared), Ok(true), "this check");
     }
 
     #[test]
     fn s4d_c2_empty_ranges_are_refused() {
         let mut l = RangeLocks::new();
-        assert_eq!(l.try_lock(1, 5, 5, Shared), Err(EmptyRange));
-        assert_eq!(l.try_lock(1, 7, 3, Exclusive), Err(EmptyRange));
+        assert_eq!(l.try_lock(1, 5, 5, Shared), Err(EmptyRange), "this check");
+        assert_eq!(l.try_lock(1, 7, 3, Exclusive), Err(EmptyRange), "this check");
     }
 
     proptest! {
@@ -1545,9 +1545,9 @@ mod ch_4d_c3 {
 
     #[test]
     fn s4d_c3_each_policy_picks_by_its_attribute() {
-        assert_eq!(choose_victim(Youngest, &cycle()), Some(1));
-        assert_eq!(choose_victim(FewestLocks, &cycle()), Some(2));
-        assert_eq!(choose_victim(LeastWork, &cycle()), Some(1));
+        assert_eq!(choose_victim(Youngest, &cycle()), Some(1), "this check");
+        assert_eq!(choose_victim(FewestLocks, &cycle()), Some(2), "this check");
+        assert_eq!(choose_victim(LeastWork, &cycle()), Some(1), "this check");
     }
 
     #[test]
@@ -1560,8 +1560,8 @@ mod ch_4d_c3 {
 
     #[test]
     fn s4d_c3_empty_and_single_cycles() {
-        assert_eq!(choose_victim(Youngest, &[]), None);
-        assert_eq!(choose_victim(LeastWork, &[t(1, 1, 1, 1)]), Some(0));
+        assert_eq!(choose_victim(Youngest, &[]), None, "this check");
+        assert_eq!(choose_victim(LeastWork, &[t(1, 1, 1, 1)]), Some(0), "this check");
     }
 
     #[test]
@@ -1603,26 +1603,26 @@ mod ch_4d_c4 {
 
     #[test]
     fn s4d_c4_a_reader_may_not_pass_a_waiting_writer() {
-        assert_eq!(grantable(&[S], &[X, S]), Vec::<usize>::new());
-        assert_eq!(grantable(&[S, S], &[X, S, S]), Vec::<usize>::new());
+        assert_eq!(grantable(&[S], &[X, S]), Vec::<usize>::new(), "this check");
+        assert_eq!(grantable(&[S, S], &[X, S, S]), Vec::<usize>::new(), "this check");
     }
 
     #[test]
     fn s4d_c4_readers_at_the_front_are_granted_together_up_to_the_first_writer() {
-        assert_eq!(grantable(&[], &[S, S, X, S]), vec![0, 1]);
-        assert_eq!(grantable(&[S], &[S, S, X]), vec![0, 1]);
+        assert_eq!(grantable(&[], &[S, S, X, S]), vec![0, 1], "this check");
+        assert_eq!(grantable(&[S], &[S, S, X]), vec![0, 1], "this check");
     }
 
     #[test]
     fn s4d_c4_a_writer_at_the_front_goes_alone_when_free() {
-        assert_eq!(grantable(&[], &[X, S, S]), vec![0]);
-        assert_eq!(grantable(&[X], &[S]), Vec::<usize>::new());
+        assert_eq!(grantable(&[], &[X, S, S]), vec![0], "this check");
+        assert_eq!(grantable(&[X], &[S]), Vec::<usize>::new(), "this check");
     }
 
     #[test]
     fn s4d_c4_nothing_waiting_nothing_granted() {
-        assert_eq!(grantable(&[S], &[]), Vec::<usize>::new());
-        assert_eq!(grantable(&[], &[]), Vec::<usize>::new());
+        assert_eq!(grantable(&[S], &[]), Vec::<usize>::new(), "this check");
+        assert_eq!(grantable(&[], &[]), Vec::<usize>::new(), "this check");
     }
 
     proptest! {
@@ -1659,33 +1659,33 @@ mod ch_4d_c5 {
     #[test]
     fn s4d_c5_the_row_after_the_threshold_escalates_and_then_everything_is_covered() {
         let mut e = Escalator::new(2);
-        assert_eq!(e.row_lock(1, 7, 10), Granted);
-        assert_eq!(e.row_lock(1, 7, 11), Granted);
-        assert_eq!(e.row_lock(1, 7, 12), Escalate { table: 7, released: vec![10, 11] });
-        assert!(e.holds_table(1, 7));
-        assert_eq!(e.row_count(1, 7), 0);
-        assert_eq!(e.row_lock(1, 7, 13), Covered);
+        assert_eq!(e.row_lock(1, 7, 10), Granted, "this check");
+        assert_eq!(e.row_lock(1, 7, 11), Granted, "this check");
+        assert_eq!(e.row_lock(1, 7, 12), Escalate { table: 7, released: vec![10, 11] }, "this check");
+        assert!(e.holds_table(1, 7), "this check: expected `e.holds_table(1, 7)`");
+        assert_eq!(e.row_count(1, 7), 0, "this check");
+        assert_eq!(e.row_lock(1, 7, 13), Covered, "this check");
     }
 
     #[test]
     fn s4d_c5_the_same_row_twice_is_not_counted_twice() {
         let mut e = Escalator::new(2);
         for _ in 0..5 {
-            assert_eq!(e.row_lock(1, 7, 10), Granted);
+            assert_eq!(e.row_lock(1, 7, 10), Granted, "this check");
         }
-        assert_eq!(e.row_count(1, 7), 1);
+        assert_eq!(e.row_count(1, 7), 1, "this check");
     }
 
     #[test]
     fn s4d_c5_tables_and_transactions_are_counted_separately() {
         let mut e = Escalator::new(1);
-        assert_eq!(e.row_lock(1, 7, 1), Granted);
-        assert_eq!(e.row_lock(1, 8, 1), Granted);
-        assert_eq!(e.row_lock(2, 7, 1), Granted);
-        assert!(matches!(e.row_lock(1, 7, 2), Escalate { .. }));
-        assert!(!e.holds_table(1, 8));
-        assert!(!e.holds_table(2, 7));
-        assert_eq!(e.row_lock(1, 8, 2), Escalate { table: 8, released: vec![1] });
+        assert_eq!(e.row_lock(1, 7, 1), Granted, "this check");
+        assert_eq!(e.row_lock(1, 8, 1), Granted, "this check");
+        assert_eq!(e.row_lock(2, 7, 1), Granted, "this check");
+        assert!(matches!(e.row_lock(1, 7, 2), Escalate { .. }), "this check: expected `matches!(e.row_lock(1, 7, 2), Escalate {{ .. }})`");
+        assert!(!e.holds_table(1, 8), "this check: expected `!e.holds_table(1, 8)`");
+        assert!(!e.holds_table(2, 7), "this check: expected `!e.holds_table(2, 7)`");
+        assert_eq!(e.row_lock(1, 8, 2), Escalate { table: 8, released: vec![1] }, "this check");
     }
 
     #[test]
@@ -1693,10 +1693,10 @@ mod ch_4d_c5 {
         let mut e = Escalator::new(1);
         e.row_lock(1, 7, 1);
         e.row_lock(1, 7, 2);
-        assert!(e.holds_table(1, 7));
+        assert!(e.holds_table(1, 7), "this check: expected `e.holds_table(1, 7)`");
         e.release_all(1);
-        assert!(!e.holds_table(1, 7));
-        assert_eq!(e.row_lock(1, 7, 3), Granted);
+        assert!(!e.holds_table(1, 7), "this check: expected `!e.holds_table(1, 7)`");
+        assert_eq!(e.row_lock(1, 7, 3), Granted, "this check");
     }
 
     proptest! {
@@ -1773,9 +1773,9 @@ mod ch_4d_c6 {
         s.commit(b);
         assert_eq!(s.get(&a, 1), Some(10), "a began before b committed");
         let c = s.begin();
-        assert_eq!(s.get(&c, 1), Some(50));
+        assert_eq!(s.get(&c, 1), Some(50), "this check");
         assert_eq!(s.get(&a, 1), Some(10), "and keeps reading the same value");
-        assert_eq!(s.get(&a, 2), None);
+        assert_eq!(s.get(&a, 2), None, "this check");
     }
 
     #[test]
@@ -1825,19 +1825,19 @@ mod ch_4d_c6 {
         let s2 = s.clone();
         finish_within(5, "a writer after an abort", move || {
             let t = s2.begin();
-            assert_eq!(s2.get(&t, 1), Some(10));
+            assert_eq!(s2.get(&t, 1), Some(10), "this check");
             s2.put(&t, 1, 11).unwrap();
             s2.commit(t);
         });
         let r = s.begin();
-        assert_eq!(s.get(&r, 1), Some(11));
+        assert_eq!(s.get(&r, 1), Some(11), "this check");
     }
 
     #[test]
     fn s4d_c6_for_update_reads_the_newest_committed_value_not_the_snapshot() {
         let s = store_with(&[(1, 0)]);
         let a = s.begin();
-        assert_eq!(s.get(&a, 1), Some(0));
+        assert_eq!(s.get(&a, 1), Some(0), "this check");
         let b = s.begin();
         s.put(&b, 1, 5).unwrap();
         s.commit(b);
@@ -1874,7 +1874,7 @@ mod ch_4d_c6 {
             }
         });
         let r = s.begin();
-        assert_eq!(s.get(&r, 1), Some(200));
+        assert_eq!(s.get(&r, 1), Some(200), "this check");
     }
 
     #[test]

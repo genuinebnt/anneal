@@ -62,8 +62,8 @@ fn sr_01_a_header_reads_back_and_wrong_sizes_are_refused() {
 #[test]
 fn sr_01_numbers_pack_four_bytes_each() {
     assert_eq!(pack_u32s(&[1, 256]), vec![1, 0, 0, 0, 0, 1, 0, 0], "1 and 256, little-endian");
-    assert_eq!(pack_u32s(&[]), Vec::<u8>::new());
-    assert_eq!(unpack_u32s(&[1, 0, 0, 0, 0, 1, 0, 0]), vec![1, 256]);
+    assert_eq!(pack_u32s(&[]), Vec::<u8>::new(), "sr 01 numbers pack four bytes each");
+    assert_eq!(unpack_u32s(&[1, 0, 0, 0, 0, 1, 0, 0]), vec![1, 256], "sr 01 numbers pack four bytes each");
     assert_eq!(unpack_u32s(&[1, 0, 0, 0, 9, 9]), vec![1], "a last group of fewer than 4 bytes is ignored");
 }
 
@@ -74,8 +74,8 @@ fn sr_01_a_page_file_keeps_what_was_written_where_it_was_written() {
         let file = PageFile::open(&path).unwrap();
         file.write_page(2, &page_of(0xAA)).unwrap();
         file.write_page(0, &page_of(0x11)).unwrap();
-        assert_eq!(file.read_page(2).unwrap(), page_of(0xAA));
-        assert_eq!(file.read_page(0).unwrap(), page_of(0x11));
+        assert_eq!(file.read_page(2).unwrap(), page_of(0xAA), "sr 01 a page file keeps what was written where it was written");
+        assert_eq!(file.read_page(0).unwrap(), page_of(0x11), "sr 01 a page file keeps what was written where it was written");
         assert_eq!(file.read_page(1).unwrap(), page_of(0), "page 1 was never written: zeros (a hole in the file)");
         assert_eq!(file.page_count().unwrap(), 3, "pages 0 to 2 exist");
         let _ = std::fs::remove_file(&path);
@@ -107,7 +107,7 @@ fn sr_01_a_partly_written_last_page_reads_with_zeros_after_its_bytes() {
         let file = PageFile::open(&path).unwrap();
         assert_eq!(file.page_count().unwrap(), 2, "256 + 10 bytes: one full page and a part of a second");
         let page = file.read_page(1).unwrap();
-        assert_eq!(&page[..10], &[5u8; 10]);
+        assert_eq!(&page[..10], &[5u8; 10], "sr 01 a partly written last page reads with zeros after its bytes");
         assert!(page[10..].iter().all(|&b| b == 0), "the part after the end of the file reads as zeros");
         let _ = std::fs::remove_file(&path);
     });
@@ -176,15 +176,15 @@ fn rec(key: &str, value: &[u8]) -> Record {
 fn sr_02_records_are_a_length_header_then_the_key_then_the_value() {
     let bytes = encode_records(&[rec("ab", &[9, 8, 7])]).unwrap();
     assert_eq!(bytes, vec![2, 3, 0, b'a', b'b', 9, 8, 7], "key_len (u8), value_len (u16 little-endian), key, value");
-    assert_eq!(encode_records(&[]).unwrap(), Vec::<u8>::new());
+    assert_eq!(encode_records(&[]).unwrap(), Vec::<u8>::new(), "sr 02 records are a length header then the key then the value");
 }
 
 #[test]
 fn sr_02_records_read_back_in_order() {
     let records = vec![rec("a", b"1"), rec("", b""), rec("héllo", &[0; 300])];
     let bytes = encode_records(&records).unwrap();
-    assert_eq!(parse_records(&bytes), Ok(records));
-    assert_eq!(parse_records(&[]), Ok(vec![]));
+    assert_eq!(parse_records(&bytes), Ok(records), "sr 02 records read back in order");
+    assert_eq!(parse_records(&[]), Ok(vec![]), "sr 02 records read back in order");
 }
 
 #[test]
@@ -203,7 +203,7 @@ fn sr_02_a_truncated_stream_says_where_and_how_much_is_missing() {
 #[test]
 fn sr_02_a_key_that_is_not_utf8_is_an_error_not_a_panic() {
     let bytes = vec![2, 0, 0, 0xFF, 0xFE];
-    assert_eq!(parse_records(&bytes), Err(FormatError::BadKey { at: 0 }));
+    assert_eq!(parse_records(&bytes), Err(FormatError::BadKey { at: 0 }), "sr 02 a key that is not utf8 is an error not a panic");
     let mut two = encode_records(&[rec("ok", b"")]).unwrap();
     let at = two.len();
     two.extend_from_slice(&[1, 0, 0, 0xC0]);
@@ -213,10 +213,10 @@ fn sr_02_a_key_that_is_not_utf8_is_an_error_not_a_panic() {
 #[test]
 fn sr_02_a_key_or_value_that_does_not_fit_is_refused() {
     let long_key = "k".repeat(256);
-    assert_eq!(encode_records(&[rec(&long_key, b"")]), Err(FormatError::KeyTooLong { len: 256 }));
+    assert_eq!(encode_records(&[rec(&long_key, b"")]), Err(FormatError::KeyTooLong { len: 256 }), "sr 02 a key or value that does not fit is refused");
     assert!(encode_records(&[rec(&"k".repeat(255), b"")]).is_ok(), "255 bytes still fit");
-    assert_eq!(encode_records(&[rec("k", &vec![0; 65536])]), Err(FormatError::ValueTooLong { len: 65536 }));
-    assert!(encode_records(&[rec("k", &vec![0; 65535])]).is_ok());
+    assert_eq!(encode_records(&[rec("k", &vec![0; 65536])]), Err(FormatError::ValueTooLong { len: 65536 }), "sr 02 a key or value that does not fit is refused");
+    assert!(encode_records(&[rec("k", &vec![0; 65535])]).is_ok(), "sr 02 a key or value that does not fit is refused: expected `encode_records(&[rec(\"k\", &vec![0; 65535])]).is_ok()`");
 }
 
 #[test]
@@ -233,12 +233,12 @@ fn sr_02_a_load_error_keeps_its_cause_and_tells_the_two_failures_apart() {
     use std::error::Error;
     let missing = load_records(temp_path("does-not-exist"));
     match missing {
-        Err(LoadError::Io(ref e)) => assert_eq!(e.kind(), std::io::ErrorKind::NotFound),
+        Err(LoadError::Io(ref e)) => assert_eq!(e.kind(), std::io::ErrorKind::NotFound, "sr 02 a load error keeps its cause and tells the two failures apart"),
         other => panic!("a missing file is an I/O error, got {other:?}"),
     }
     let err = missing.unwrap_err();
     assert!(err.source().is_some(), "`source()` is the wrapped error");
-    assert!(!err.to_string().is_empty());
+    assert!(!err.to_string().is_empty(), "sr 02 a load error keeps its cause and tells the two failures apart: expected `!err.to_string().is_empty()`");
 
     let path = temp_path("broken-records");
     std::fs::write(&path, [5, 0, 0, b'x']).unwrap();
@@ -247,7 +247,7 @@ fn sr_02_a_load_error_keeps_its_cause_and_tells_the_two_failures_apart() {
         other => panic!("a truncated file is a format error, got {other:?}"),
     }
     std::fs::write(&path, encode_records(&[rec("a", b"b")]).unwrap()).unwrap();
-    assert_eq!(load_records(&path).unwrap(), vec![rec("a", b"b")]);
+    assert_eq!(load_records(&path).unwrap(), vec![rec("a", b"b")], "sr 02 a load error keeps its cause and tells the two failures apart");
     let _ = std::fs::remove_file(&path);
 }
 
@@ -291,17 +291,17 @@ proptest! {
 #[test]
 fn sr_03_a_stack_pops_in_reverse_order() {
     let mut s = Stack::new();
-    assert!(s.is_empty() && s.pop().is_none() && s.peek().is_none());
+    assert!(s.is_empty() && s.pop().is_none() && s.peek().is_none(), "sr 03 a stack pops in reverse order: expected `s.is_empty() && s.pop().is_none() && s.peek().is_none()`");
     for i in 1..=3 {
         s.push(i);
     }
-    assert_eq!(s.len(), 3);
-    assert_eq!(s.peek(), Some(&3));
-    assert_eq!(s.pop(), Some(3));
-    assert_eq!(s.pop(), Some(2));
-    assert_eq!(s.pop(), Some(1));
-    assert_eq!(s.pop(), None);
-    assert_eq!(s.len(), 0);
+    assert_eq!(s.len(), 3, "sr 03 a stack pops in reverse order");
+    assert_eq!(s.peek(), Some(&3), "sr 03 a stack pops in reverse order");
+    assert_eq!(s.pop(), Some(3), "sr 03 a stack pops in reverse order");
+    assert_eq!(s.pop(), Some(2), "sr 03 a stack pops in reverse order");
+    assert_eq!(s.pop(), Some(1), "sr 03 a stack pops in reverse order");
+    assert_eq!(s.pop(), None, "sr 03 a stack pops in reverse order");
+    assert_eq!(s.len(), 0, "sr 03 a stack pops in reverse order");
 }
 
 #[test]
@@ -310,7 +310,7 @@ fn sr_03_peek_mut_changes_the_top_in_place() {
     s.push(String::from("a"));
     s.push(String::from("b"));
     s.peek_mut().unwrap().push('!');
-    assert_eq!(s.to_vec(), vec!["b!".to_string(), "a".to_string()]);
+    assert_eq!(s.to_vec(), vec!["b!".to_string(), "a".to_string()], "sr 03 peek mut changes the top in place");
 }
 
 #[test]
@@ -320,11 +320,11 @@ fn sr_03_reverse_turns_the_stack_upside_down() {
         s.push(i);
     }
     s.reverse();
-    assert_eq!(s.to_vec(), vec![0, 1, 2, 3, 4]);
-    assert_eq!(s.len(), 5);
+    assert_eq!(s.to_vec(), vec![0, 1, 2, 3, 4], "sr 03 reverse turns the stack upside down");
+    assert_eq!(s.len(), 5, "sr 03 reverse turns the stack upside down");
     let mut empty: Stack<i32> = Stack::new();
     empty.reverse();
-    assert!(empty.is_empty());
+    assert!(empty.is_empty(), "sr 03 reverse turns the stack upside down: expected `empty.is_empty()`");
 }
 
 #[test]
@@ -373,14 +373,14 @@ fn sr_03_a_slab_hands_out_handles_and_gives_values_back() {
     let mut slab = Slab::new();
     let a = slab.insert("a");
     let b = slab.insert("b");
-    assert_eq!((slab.get(a), slab.get(b)), (Some(&"a"), Some(&"b")));
-    assert_eq!(slab.len(), 2);
+    assert_eq!((slab.get(a), slab.get(b)), (Some(&"a"), Some(&"b")), "sr 03 a slab hands out handles and gives values back");
+    assert_eq!(slab.len(), 2, "sr 03 a slab hands out handles and gives values back");
     *slab.get_mut(a).unwrap() = "A";
-    assert_eq!(slab.get(a), Some(&"A"));
-    assert_eq!(slab.remove(a), Some("A"));
+    assert_eq!(slab.get(a), Some(&"A"), "sr 03 a slab hands out handles and gives values back");
+    assert_eq!(slab.remove(a), Some("A"), "sr 03 a slab hands out handles and gives values back");
     assert_eq!(slab.get(a), None, "a removed value is gone");
     assert_eq!(slab.remove(a), None, "removing twice finds nothing");
-    assert_eq!(slab.len(), 1);
+    assert_eq!(slab.len(), 1, "sr 03 a slab hands out handles and gives values back");
 }
 
 #[test]
@@ -391,9 +391,9 @@ fn sr_03_a_handle_to_a_removed_value_never_finds_the_value_that_reuses_its_slot(
     let new = slab.insert(2);
     assert_ne!(old, new, "same slot, other generation: the handles differ");
     assert_eq!(slab.get(old), None, "the old handle is dead even though its slot is in use again");
-    assert_eq!(slab.get(new), Some(&2));
-    assert_eq!(slab.remove(old), None);
-    assert_eq!(slab.len(), 1);
+    assert_eq!(slab.get(new), Some(&2), "sr 03 a handle to a removed value never finds the value that reuses its slot");
+    assert_eq!(slab.remove(old), None, "sr 03 a handle to a removed value never finds the value that reuses its slot");
+    assert_eq!(slab.len(), 1, "sr 03 a handle to a removed value never finds the value that reuses its slot");
 }
 
 proptest! {
@@ -452,13 +452,13 @@ proptest! {
 #[test]
 fn sr_04_a_queue_gives_values_back_in_order() {
     let q = BoundedQueue::new(4);
-    assert!(q.is_empty() && q.try_pop().is_none());
+    assert!(q.is_empty() && q.try_pop().is_none(), "sr 04 a queue gives values back in order: expected `q.is_empty() && q.try_pop().is_none()`");
     for i in 0..3 {
         q.push(i).unwrap();
     }
-    assert_eq!(q.len(), 3);
-    assert_eq!((q.pop(), q.try_pop(), q.pop()), (Some(0), Some(1), Some(2)));
-    assert!(q.try_pop().is_none());
+    assert_eq!(q.len(), 3, "sr 04 a queue gives values back in order");
+    assert_eq!((q.pop(), q.try_pop(), q.pop()), (Some(0), Some(1), Some(2)), "sr 04 a queue gives values back in order");
+    assert!(q.try_pop().is_none(), "sr 04 a queue gives values back in order: expected `q.try_pop().is_none()`");
 }
 
 #[test]
@@ -468,8 +468,8 @@ fn sr_04_a_closed_queue_refuses_pushes_and_drains_what_is_left() {
     q.push(2).unwrap();
     q.close();
     assert_eq!(q.push(3), Err(3), "push after close gives the value back");
-    assert_eq!(q.pop(), Some(1));
-    assert_eq!(q.pop(), Some(2));
+    assert_eq!(q.pop(), Some(1), "sr 04 a closed queue refuses pushes and drains what is left");
+    assert_eq!(q.pop(), Some(2), "sr 04 a closed queue refuses pushes and drains what is left");
     assert_eq!(q.pop(), None, "closed and empty: None, not waiting forever");
 }
 
@@ -504,9 +504,9 @@ fn sr_04_push_waits_while_the_queue_is_full() {
         };
         thread::sleep(Duration::from_millis(80));
         assert!(!done.load(Ordering::SeqCst), "the queue holds 1 value of 1: the second push must wait");
-        assert_eq!(q.pop(), Some(1));
+        assert_eq!(q.pop(), Some(1), "sr 04 push waits while the queue is full");
         pusher.join().unwrap();
-        assert_eq!(q.pop(), Some(2));
+        assert_eq!(q.pop(), Some(2), "sr 04 push waits while the queue is full");
     });
 }
 
@@ -521,14 +521,14 @@ fn sr_04_close_wakes_a_waiting_push_with_its_value() {
         };
         thread::sleep(Duration::from_millis(60));
         q.close();
-        assert_eq!(pusher.join().unwrap(), Err(2));
+        assert_eq!(pusher.join().unwrap(), Err(2), "sr 04 close wakes a waiting push with its value");
     });
 }
 
 #[test]
 fn sr_04_ids_are_handed_out_once_each() {
     let ids = Arc::new(IdGenerator::new());
-    assert_eq!((ids.next(), ids.next(), ids.next()), (0, 1, 2));
+    assert_eq!((ids.next(), ids.next(), ids.next()), (0, 1, 2), "sr 04 ids are handed out once each");
     let workers: Vec<_> = (0..4)
         .map(|_| {
             let ids = Arc::clone(&ids);
@@ -539,7 +539,7 @@ fn sr_04_ids_are_handed_out_once_each() {
     all.sort_unstable();
     all.dedup();
     assert_eq!(all.len(), 8000, "four threads took 2000 numbers each and no number was handed out twice");
-    assert_eq!(ids.next(), 8003);
+    assert_eq!(ids.next(), 8003, "sr 04 ids are handed out once each");
 }
 
 #[test]
@@ -586,7 +586,7 @@ fn sr_04_a_parallel_sum_is_the_sum() {
     for threads in [0, 1, 3, 7, 1000, 5000] {
         assert_eq!(parallel_sum(&values, threads), 500_500, "{threads} threads");
     }
-    assert_eq!(parallel_sum(&[], 4), 0);
+    assert_eq!(parallel_sum(&[], 4), 0, "sr 04 a parallel sum is the sum");
     assert_eq!(parallel_sum(&[u64::MAX, 2], 2), 1, "the sum wraps");
 }
 
@@ -606,14 +606,14 @@ proptest! {
 #[test]
 fn sr_05_a_ring_buffer_is_first_in_first_out() {
     let mut r = RingBuffer::new(3);
-    assert!(r.is_empty() && !r.is_full() && r.capacity() == 3);
-    assert_eq!((r.pop(), r.front(), r.back()), (None, None, None));
+    assert!(r.is_empty() && !r.is_full() && r.capacity() == 3, "sr 05 a ring buffer is first in first out: expected `r.is_empty() && !r.is_full() && r.capacity() == 3`");
+    assert_eq!((r.pop(), r.front(), r.back()), (None, None, None), "sr 05 a ring buffer is first in first out");
     r.push('a').unwrap();
     r.push('b').unwrap();
     r.push('c').unwrap();
-    assert!(r.is_full());
-    assert_eq!((r.front(), r.back()), (Some(&'a'), Some(&'c')));
-    assert_eq!((r.pop(), r.pop(), r.pop(), r.pop()), (Some('a'), Some('b'), Some('c'), None));
+    assert!(r.is_full(), "sr 05 a ring buffer is first in first out: expected `r.is_full()`");
+    assert_eq!((r.front(), r.back()), (Some(&'a'), Some(&'c')), "sr 05 a ring buffer is first in first out");
+    assert_eq!((r.pop(), r.pop(), r.pop(), r.pop()), (Some('a'), Some('b'), Some('c'), None), "sr 05 a ring buffer is first in first out");
 }
 
 #[test]
@@ -622,7 +622,7 @@ fn sr_05_a_full_buffer_gives_the_value_back() {
     r.push(String::from("x")).unwrap();
     r.push(String::from("y")).unwrap();
     assert_eq!(r.push(String::from("z")), Err(String::from("z")), "refused, and the caller gets the value back");
-    assert_eq!(r.len(), 2);
+    assert_eq!(r.len(), 2, "sr 05 a full buffer gives the value back");
 }
 
 #[test]
@@ -631,27 +631,27 @@ fn sr_05_the_buffer_wraps_around_the_end_of_its_array() {
     for round in 0..10 {
         r.push(round * 2).unwrap();
         r.push(round * 2 + 1).unwrap();
-        assert_eq!(r.pop(), Some(round * 2));
-        assert_eq!(r.pop(), Some(round * 2 + 1));
+        assert_eq!(r.pop(), Some(round * 2), "sr 05 the buffer wraps around the end of its array");
+        assert_eq!(r.pop(), Some(round * 2 + 1), "sr 05 the buffer wraps around the end of its array");
     }
     r.push(100).unwrap();
     r.push(101).unwrap();
     r.push(102).unwrap();
     assert_eq!(r.iter().copied().collect::<Vec<_>>(), vec![100, 101, 102], "after many wraps the order is still the order of the pushes");
-    assert_eq!(r.back(), Some(&102));
+    assert_eq!(r.back(), Some(&102), "sr 05 the buffer wraps around the end of its array");
 }
 
 #[test]
 fn sr_05_push_overwriting_drops_the_oldest() {
     let mut r = RingBuffer::new(2);
-    assert_eq!(r.push_overwriting(1), None);
-    assert_eq!(r.push_overwriting(2), None);
+    assert_eq!(r.push_overwriting(1), None, "sr 05 push overwriting drops the oldest");
+    assert_eq!(r.push_overwriting(2), None, "sr 05 push overwriting drops the oldest");
     assert_eq!(r.push_overwriting(3), Some(1), "the oldest value was dropped to make room, and is returned");
-    assert_eq!(r.iter().copied().collect::<Vec<_>>(), vec![2, 3]);
+    assert_eq!(r.iter().copied().collect::<Vec<_>>(), vec![2, 3], "sr 05 push overwriting drops the oldest");
     let mut zero = RingBuffer::new(0);
-    assert_eq!(zero.push(5), Err(5));
+    assert_eq!(zero.push(5), Err(5), "sr 05 push overwriting drops the oldest");
     assert_eq!(zero.push_overwriting(6), Some(6), "a buffer of capacity 0 cannot hold anything");
-    assert!(zero.is_empty() && zero.pop().is_none());
+    assert!(zero.is_empty() && zero.pop().is_none(), "sr 05 push overwriting drops the oldest: expected `zero.is_empty() && zero.pop().is_none()`");
 }
 
 #[test]
@@ -665,9 +665,9 @@ fn sr_05_clear_drops_the_values_at_once_and_the_buffer_is_reusable() {
     r.pop();
     r.clear();
     assert_eq!(Rc::strong_count(&token), 1, "clear drops every value now, not later");
-    assert!(r.is_empty());
+    assert!(r.is_empty(), "sr 05 clear drops the values at once and the buffer is reusable: expected `r.is_empty()`");
     r.push(Rc::clone(&token)).unwrap();
-    assert_eq!(r.len(), 1);
+    assert_eq!(r.len(), 1, "sr 05 clear drops the values at once and the buffer is reusable");
 }
 
 /// One operation on a ring buffer.
@@ -738,13 +738,13 @@ fn varint(v: u64) -> Vec<u8> {
 
 #[test]
 fn sr_c1_small_numbers_take_one_byte_and_bigger_ones_follow_the_format() {
-    assert_eq!(varint(0), vec![0]);
-    assert_eq!(varint(1), vec![1]);
-    assert_eq!(varint(127), vec![0x7f]);
+    assert_eq!(varint(0), vec![0], "sr c1 small numbers take one byte and bigger ones follow the format");
+    assert_eq!(varint(1), vec![1], "sr c1 small numbers take one byte and bigger ones follow the format");
+    assert_eq!(varint(127), vec![0x7f], "sr c1 small numbers take one byte and bigger ones follow the format");
     assert_eq!(varint(128), vec![0x80, 0x01], "128 needs a second byte: the low 7 bits first with the high bit set");
-    assert_eq!(varint(300), vec![0xac, 0x02]);
-    assert_eq!(varint(16_384), vec![0x80, 0x80, 0x01]);
-    assert_eq!(varint(u64::MAX).len(), 10);
+    assert_eq!(varint(300), vec![0xac, 0x02], "sr c1 small numbers take one byte and bigger ones follow the format");
+    assert_eq!(varint(16_384), vec![0x80, 0x80, 0x01], "sr c1 small numbers take one byte and bigger ones follow the format");
+    assert_eq!(varint(u64::MAX).len(), 10, "sr c1 small numbers take one byte and bigger ones follow the format");
     let mut out = vec![9, 9];
     encode_varint(5, &mut out);
     assert_eq!(out, vec![9, 9, 5], "encoding appends; it does not clear");
@@ -752,19 +752,19 @@ fn sr_c1_small_numbers_take_one_byte_and_bigger_ones_follow_the_format() {
 
 #[test]
 fn sr_c1_decoding_reports_the_number_and_how_many_bytes_it_took() {
-    assert_eq!(decode_varint(&[0x7f]), Ok((127, 1)));
-    assert_eq!(decode_varint(&[0xac, 0x02]), Ok((300, 2)));
+    assert_eq!(decode_varint(&[0x7f]), Ok((127, 1)), "sr c1 decoding reports the number and how many bytes it took");
+    assert_eq!(decode_varint(&[0xac, 0x02]), Ok((300, 2)), "sr c1 decoding reports the number and how many bytes it took");
     assert_eq!(decode_varint(&[0xac, 0x02, 0xff, 0xff]), Ok((300, 2)), "bytes after the number are not looked at");
-    assert_eq!(decode_varint(&[1, 2, 3]), Ok((1, 1)));
-    assert_eq!(decode_varint(&varint(u64::MAX)), Ok((u64::MAX, 10)));
+    assert_eq!(decode_varint(&[1, 2, 3]), Ok((1, 1)), "sr c1 decoding reports the number and how many bytes it took");
+    assert_eq!(decode_varint(&varint(u64::MAX)), Ok((u64::MAX, 10)), "sr c1 decoding reports the number and how many bytes it took");
 }
 
 #[test]
 fn sr_c1_bad_bytes_are_errors_not_panics() {
-    assert_eq!(decode_varint(&[]), Err(VarintError::Truncated));
+    assert_eq!(decode_varint(&[]), Err(VarintError::Truncated), "sr c1 bad bytes are errors not panics");
     assert_eq!(decode_varint(&[0x80]), Err(VarintError::Truncated), "a continuation bit with nothing after it");
     assert_eq!(decode_varint(&[0x80, 0x00]), Err(VarintError::NonMinimal), "0 written with two bytes");
-    assert_eq!(decode_varint(&[0xac, 0x82, 0x00]), Err(VarintError::NonMinimal));
+    assert_eq!(decode_varint(&[0xac, 0x82, 0x00]), Err(VarintError::NonMinimal), "sr c1 bad bytes are errors not panics");
     let too_big = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02];
     assert_eq!(decode_varint(&too_big), Err(VarintError::Overflow), "needs 65 bits");
     assert_eq!(decode_varint(&[0x80; 12]), Err(VarintError::Overflow), "more than ten bytes of continuation");
@@ -820,26 +820,26 @@ proptest! {
 
 #[test]
 fn sr_c2_runs_become_count_and_byte_pairs() {
-    assert_eq!(rle_encode(b""), Vec::<u8>::new());
-    assert_eq!(rle_encode(b"aaab"), vec![3, b'a', 1, b'b']);
-    assert_eq!(rle_encode(b"abc"), vec![1, b'a', 1, b'b', 1, b'c']);
+    assert_eq!(rle_encode(b""), Vec::<u8>::new(), "sr c2 runs become count and byte pairs");
+    assert_eq!(rle_encode(b"aaab"), vec![3, b'a', 1, b'b'], "sr c2 runs become count and byte pairs");
+    assert_eq!(rle_encode(b"abc"), vec![1, b'a', 1, b'b', 1, b'c'], "sr c2 runs become count and byte pairs");
     assert_eq!(rle_encode(&[7; 255]), vec![255, 7], "255 is the longest run one pair can hold");
 }
 
 #[test]
 fn sr_c2_a_run_longer_than_a_pair_can_hold_is_split() {
-    assert_eq!(rle_encode(&[7; 256]), vec![255, 7, 1, 7]);
-    assert_eq!(rle_encode(&[7; 600]), vec![255, 7, 255, 7, 90, 7]);
+    assert_eq!(rle_encode(&[7; 256]), vec![255, 7, 1, 7], "sr c2 a run longer than a pair can hold is split");
+    assert_eq!(rle_encode(&[7; 600]), vec![255, 7, 255, 7, 90, 7], "sr c2 a run longer than a pair can hold is split");
     assert_eq!(rle_decode(&rle_encode(&[1; 1000])).unwrap(), vec![1; 1000], "a long run of equal bytes comes back whole");
 }
 
 #[test]
 fn sr_c2_decoding_rejects_what_is_not_pairs() {
-    assert_eq!(rle_decode(&[3]), Err(RleError::Truncated));
-    assert_eq!(rle_decode(&[2, b'a', 1]), Err(RleError::Truncated));
-    assert_eq!(rle_decode(&[0, b'a']), Err(RleError::ZeroRun));
-    assert_eq!(rle_decode(&[]), Ok(vec![]));
-    assert_eq!(rle_decode(&[2, b'a', 1, b'b']), Ok(b"aab".to_vec()));
+    assert_eq!(rle_decode(&[3]), Err(RleError::Truncated), "sr c2 decoding rejects what is not pairs");
+    assert_eq!(rle_decode(&[2, b'a', 1]), Err(RleError::Truncated), "sr c2 decoding rejects what is not pairs");
+    assert_eq!(rle_decode(&[0, b'a']), Err(RleError::ZeroRun), "sr c2 decoding rejects what is not pairs");
+    assert_eq!(rle_decode(&[]), Ok(vec![]), "sr c2 decoding rejects what is not pairs");
+    assert_eq!(rle_decode(&[2, b'a', 1, b'b']), Ok(b"aab".to_vec()), "sr c2 decoding rejects what is not pairs");
 }
 
 proptest! {
@@ -878,48 +878,48 @@ mod ch_r_c3 {
         for i in [0, 63, 64, 69] {
             assert!(b.set(i), "bit {i} was clear");
         }
-        assert_eq!(b.count(), 4);
-        assert_eq!(b.iter().collect::<Vec<_>>(), vec![0, 63, 64, 69]);
-        assert!(b.test(63) && b.test(64) && !b.test(65));
+        assert_eq!(b.count(), 4, "this check");
+        assert_eq!(b.iter().collect::<Vec<_>>(), vec![0, 63, 64, 69], "this check");
+        assert!(b.test(63) && b.test(64) && !b.test(65), "this check: expected `b.test(63) && b.test(64) && !b.test(65)`");
     }
 
     #[test]
     fn sr_c3_set_and_clear_report_whether_they_changed_anything() {
         let mut b = BitSet::new(10);
-        assert!(b.set(3));
+        assert!(b.set(3), "this check: expected `b.set(3)`");
         assert!(!b.set(3), "already set");
-        assert!(b.clear(3));
+        assert!(b.clear(3), "this check: expected `b.clear(3)`");
         assert!(!b.clear(3), "already clear");
-        assert_eq!(b.count(), 0);
+        assert_eq!(b.count(), 0, "this check");
     }
 
     #[test]
     fn sr_c3_indexes_past_the_capacity_change_nothing() {
         let mut b = BitSet::new(70);
-        assert!(!b.set(70));
+        assert!(!b.set(70), "this check: expected `!b.set(70)`");
         assert!(!b.set(127), "inside the last word but past the capacity");
-        assert!(!b.set(10_000));
-        assert!(!b.test(70) && !b.test(10_000));
-        assert!(!b.clear(70));
-        assert_eq!(b.count(), 0);
-        assert_eq!(b.capacity(), 70);
+        assert!(!b.set(10_000), "this check: expected `!b.set(10_000)`");
+        assert!(!b.test(70) && !b.test(10_000), "this check: expected `!b.test(70) && !b.test(10_000)`");
+        assert!(!b.clear(70), "this check: expected `!b.clear(70)`");
+        assert_eq!(b.count(), 0, "this check");
+        assert_eq!(b.capacity(), 70, "this check");
     }
 
     #[test]
     fn sr_c3_first_clear_on_empty_partial_and_full_sets() {
         let mut b = BitSet::new(130);
-        assert_eq!(b.first_clear(), Some(0));
+        assert_eq!(b.first_clear(), Some(0), "this check");
         for i in 0..65 {
             b.set(i);
         }
-        assert_eq!(b.first_clear(), Some(65));
+        assert_eq!(b.first_clear(), Some(65), "this check");
         for i in 0..130 {
             b.set(i);
         }
         assert_eq!(b.first_clear(), None, "a full set has no clear bit, and the unused bits of the last word do not count");
         b.clear(100);
-        assert_eq!(b.first_clear(), Some(100));
-        assert_eq!(BitSet::new(0).first_clear(), None);
+        assert_eq!(b.first_clear(), Some(100), "this check");
+        assert_eq!(BitSet::new(0).first_clear(), None, "this check");
     }
 
     #[test]
@@ -975,40 +975,40 @@ mod ch_r_c4 {
         let mut bytes = frame(b"abc");
         bytes.extend(frame(b""));
         bytes.extend(frame(b"z"));
-        assert_eq!(d.push(&bytes).unwrap(), vec![b"abc".to_vec(), b"".to_vec(), b"z".to_vec()]);
-        assert_eq!(d.buffered(), 0);
+        assert_eq!(d.push(&bytes).unwrap(), vec![b"abc".to_vec(), b"".to_vec(), b"z".to_vec()], "this check");
+        assert_eq!(d.buffered(), 0, "this check");
     }
 
     #[test]
     fn sr_c4_a_frame_split_across_pushes_waits_for_the_rest() {
         let mut d = FrameDecoder::new(100);
-        assert_eq!(d.push(&[0, 3, b'a']).unwrap(), Vec::<Vec<u8>>::new());
-        assert_eq!(d.buffered(), 3);
-        assert_eq!(d.push(&[b'b', b'c', 0, 1, b'z']).unwrap(), vec![b"abc".to_vec(), b"z".to_vec()]);
+        assert_eq!(d.push(&[0, 3, b'a']).unwrap(), Vec::<Vec<u8>>::new(), "this check");
+        assert_eq!(d.buffered(), 3, "this check");
+        assert_eq!(d.push(&[b'b', b'c', 0, 1, b'z']).unwrap(), vec![b"abc".to_vec(), b"z".to_vec()], "this check");
     }
 
     #[test]
     fn sr_c4_a_header_cut_in_the_middle_is_not_lost() {
         let mut d = FrameDecoder::new(100);
-        assert!(d.push(&[0]).unwrap().is_empty());
-        assert_eq!(d.buffered(), 1);
-        assert_eq!(d.push(&[2, 9, 8]).unwrap(), vec![vec![9, 8]]);
+        assert!(d.push(&[0]).unwrap().is_empty(), "this check: expected `d.push(&[0]).unwrap().is_empty()`");
+        assert_eq!(d.buffered(), 1, "this check");
+        assert_eq!(d.push(&[2, 9, 8]).unwrap(), vec![vec![9, 8]], "this check");
     }
 
     #[test]
     fn sr_c4_pushing_nothing_changes_nothing() {
         let mut d = FrameDecoder::new(100);
         d.push(&[0, 5, 1]).unwrap();
-        assert!(d.push(&[]).unwrap().is_empty());
-        assert_eq!(d.buffered(), 3);
+        assert!(d.push(&[]).unwrap().is_empty(), "this check: expected `d.push(&[]).unwrap().is_empty()`");
+        assert_eq!(d.buffered(), 3, "this check");
     }
 
     #[test]
     fn sr_c4_a_frame_that_is_too_long_is_an_error_and_the_decoder_recovers() {
         let mut d = FrameDecoder::new(10);
-        assert_eq!(d.push(&[0, 11, 1, 2]), Err(FrameError::TooLong { len: 11 }));
+        assert_eq!(d.push(&[0, 11, 1, 2]), Err(FrameError::TooLong { len: 11 }), "this check");
         assert_eq!(d.buffered(), 0, "the buffered bytes are forgotten");
-        assert_eq!(d.push(&frame(b"ok")).unwrap(), vec![b"ok".to_vec()]);
+        assert_eq!(d.push(&frame(b"ok")).unwrap(), vec![b"ok".to_vec()], "this check");
         assert!(d.push(&frame(&[7; 10])).is_ok(), "exactly the maximum is fine");
     }
 
@@ -1046,33 +1046,33 @@ mod ch_r_c5 {
 
     #[test]
     fn sr_c5_ordinary_values() {
-        assert_eq!(page_offset(3, 4096), Some(12288));
-        assert_eq!(page_offset(0, 4096), Some(0));
-        assert_eq!(pages_for(0, 4096), Some(0));
-        assert_eq!(pages_for(1, 4096), Some(1));
-        assert_eq!(pages_for(4096, 4096), Some(1));
-        assert_eq!(pages_for(4097, 4096), Some(2));
+        assert_eq!(page_offset(3, 4096), Some(12288), "this check");
+        assert_eq!(page_offset(0, 4096), Some(0), "this check");
+        assert_eq!(pages_for(0, 4096), Some(0), "this check");
+        assert_eq!(pages_for(1, 4096), Some(1), "this check");
+        assert_eq!(pages_for(4096, 4096), Some(1), "this check");
+        assert_eq!(pages_for(4097, 4096), Some(2), "this check");
     }
 
     #[test]
     fn sr_c5_a_page_size_of_zero_has_no_answer() {
-        assert_eq!(page_offset(5, 0), None);
-        assert_eq!(pages_for(5, 0), None);
+        assert_eq!(page_offset(5, 0), None, "this check");
+        assert_eq!(pages_for(5, 0), None, "this check");
     }
 
     #[test]
     fn sr_c5_an_offset_that_does_not_fit_is_none_not_a_wrapped_number() {
-        assert_eq!(page_offset(u64::MAX, 2), None);
-        assert_eq!(page_offset(1 << 63, 2), None);
-        assert_eq!(page_offset((1 << 63) - 1, 2), Some(u64::MAX - 1));
+        assert_eq!(page_offset(u64::MAX, 2), None, "this check");
+        assert_eq!(page_offset(1 << 63, 2), None, "this check");
+        assert_eq!(page_offset((1 << 63) - 1, 2), Some(u64::MAX - 1), "this check");
     }
 
     #[test]
     fn sr_c5_the_page_count_of_a_huge_file_is_right() {
         assert_eq!(pages_for(u64::MAX, 4096), Some(4_503_599_627_370_496), "2^64 / 4096 = 2^52, rounded up from just below");
         assert_eq!(pages_for(u64::MAX - 3, 4), Some((1 << 62) - 1), "2^64 - 4 is exactly 2^62 - 1 pages of 4");
-        assert_eq!(pages_for(u64::MAX, 1), Some(u64::MAX));
-        assert_eq!(pages_for(u64::MAX, u64::MAX), Some(1));
+        assert_eq!(pages_for(u64::MAX, 1), Some(u64::MAX), "this check");
+        assert_eq!(pages_for(u64::MAX, u64::MAX), Some(1), "this check");
     }
 
     proptest! {

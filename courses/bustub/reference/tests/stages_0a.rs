@@ -630,9 +630,9 @@ fn s0a_04_a_reader_never_sees_a_value_go_backwards_while_a_writer_counts_up() {
     }
     done.store(true, Ordering::SeqCst);
     for r in readers {
-        assert!(r.join().unwrap() <= 3000);
+        assert!(r.join().unwrap() <= 3000, "a reader never sees a value go backwards while a writer counts up: expected `r.join().unwrap() <= 3000`");
     }
-    assert_eq!(*store.get::<u64>("counter").unwrap(), 3000);
+    assert_eq!(*store.get::<u64>("counter").unwrap(), 3000, "a reader never sees a value go backwards while a writer counts up");
 }
 
 // @@ challenge 0a-c1 begin
@@ -652,9 +652,9 @@ mod ch_0a_c1 {
     #[test]
     fn s0a_c1_the_longest_matching_prefix_wins() {
         let t = table();
-        assert_eq!(t.lookup("10110"), Some(("1011", &'C')));
-        assert_eq!(t.lookup("1001"), Some(("10", &'B')));
-        assert_eq!(t.lookup("0"), Some(("", &'A')));
+        assert_eq!(t.lookup("10110"), Some(("1011", &'C')), "this check");
+        assert_eq!(t.lookup("1001"), Some(("10", &'B')), "this check");
+        assert_eq!(t.lookup("0"), Some(("", &'A')), "this check");
         assert_eq!(t.lookup("1011"), Some(("1011", &'C')), "an address equal to a prefix matches it");
     }
 
@@ -662,20 +662,20 @@ mod ch_0a_c1 {
     fn s0a_c1_without_a_default_entry_some_addresses_match_nothing() {
         let mut t = PrefixTable::new();
         t.insert("11", 1);
-        assert_eq!(t.lookup("10"), None);
+        assert_eq!(t.lookup("10"), None, "this check");
         assert_eq!(t.lookup("1"), None, "a prefix longer than the address cannot match");
-        assert_eq!(t.lookup("110"), Some(("11", &1)));
+        assert_eq!(t.lookup("110"), Some(("11", &1)), "this check");
     }
 
     #[test]
     fn s0a_c1_replacing_and_removing() {
         let mut t = table();
-        assert_eq!(t.insert("10", 'Z'), Some('B'));
-        assert_eq!(t.lookup("100"), Some(("10", &'Z')));
-        assert_eq!(t.remove("1011"), Some('C'));
+        assert_eq!(t.insert("10", 'Z'), Some('B'), "this check");
+        assert_eq!(t.lookup("100"), Some(("10", &'Z')), "this check");
+        assert_eq!(t.remove("1011"), Some('C'), "this check");
         assert_eq!(t.lookup("10110"), Some(("10", &'Z')), "falls back to the next longest");
-        assert_eq!(t.remove("1011"), None);
-        assert_eq!(t.len(), 2);
+        assert_eq!(t.remove("1011"), None, "this check");
+        assert_eq!(t.len(), 2, "this check");
     }
 
     #[test]
@@ -683,8 +683,8 @@ mod ch_0a_c1 {
         let mut t = PrefixTable::new();
         t.insert("01", 'x');
         assert_eq!(t.lookup("101"), None, "01 occurs inside the address, not at its start");
-        assert_eq!(t.lookup("011"), Some(("01", &'x')));
-        assert_eq!(t.len(), 1);
+        assert_eq!(t.lookup("011"), Some(("01", &'x')), "this check");
+        assert_eq!(t.len(), 1, "this check");
     }
 
     proptest! {
@@ -720,32 +720,32 @@ mod ch_0a_c2 {
     #[test]
     fn s0a_c2_keys_under_a_prefix_come_out_sorted() {
         let t = build(&["abc", "b", "a", "ab"]);
-        assert_eq!(keys_with_prefix(&t, "a"), vec!["a", "ab", "abc"]);
-        assert_eq!(keys_with_prefix(&t, "ab"), vec!["ab", "abc"]);
-        assert_eq!(keys_with_prefix(&t, ""), vec!["a", "ab", "abc", "b"]);
+        assert_eq!(keys_with_prefix(&t, "a"), vec!["a", "ab", "abc"], "this check");
+        assert_eq!(keys_with_prefix(&t, "ab"), vec!["ab", "abc"], "this check");
+        assert_eq!(keys_with_prefix(&t, ""), vec!["a", "ab", "abc", "b"], "this check");
     }
 
     #[test]
     fn s0a_c2_a_prefix_that_leads_nowhere_lists_nothing() {
         let t = build(&["abc"]);
-        assert_eq!(keys_with_prefix(&t, "x"), Vec::<String>::new());
-        assert_eq!(keys_with_prefix(&t, "abcd"), Vec::<String>::new());
-        assert_eq!(keys_with_prefix(&Trie::new(), ""), Vec::<String>::new());
+        assert_eq!(keys_with_prefix(&t, "x"), Vec::<String>::new(), "this check");
+        assert_eq!(keys_with_prefix(&t, "abcd"), Vec::<String>::new(), "this check");
+        assert_eq!(keys_with_prefix(&Trie::new(), ""), Vec::<String>::new(), "this check");
     }
 
     #[test]
     fn s0a_c2_an_interior_node_without_a_value_is_not_a_key() {
         let t = build(&["abc"]);
-        assert_eq!(keys_with_prefix(&t, "a"), vec!["abc"]);
-        assert_eq!(keys_with_prefix(&t, "ab"), vec!["abc"]);
+        assert_eq!(keys_with_prefix(&t, "a"), vec!["abc"], "this check");
+        assert_eq!(keys_with_prefix(&t, "ab"), vec!["abc"], "this check");
     }
 
     #[test]
     fn s0a_c2_old_versions_keep_their_keys() {
         let v1 = build(&["a", "b"]);
         let v2 = v1.put("c", 1u32).remove("a");
-        assert_eq!(keys_with_prefix(&v1, ""), vec!["a", "b"]);
-        assert_eq!(keys_with_prefix(&v2, ""), vec!["b", "c"]);
+        assert_eq!(keys_with_prefix(&v1, ""), vec!["a", "b"], "this check");
+        assert_eq!(keys_with_prefix(&v2, ""), vec!["b", "c"], "this check");
     }
 
     proptest! {
@@ -778,16 +778,16 @@ mod ch_0a_c3 {
 
     #[test]
     fn s0a_c3_counting_nodes() {
-        assert_eq!(node_count(&Trie::new()), 0);
+        assert_eq!(node_count(&Trie::new()), 0, "this check");
         assert_eq!(node_count(&build(&["abc"])), 4, "the root and three letters");
-        assert_eq!(node_count(&build(&["abc", "abd", "x"])), 1 + 4 + 1);
+        assert_eq!(node_count(&build(&["abc", "abd", "x"])), 1 + 4 + 1, "this check");
     }
 
     #[test]
     fn s0a_c3_a_trie_shares_everything_with_itself_and_nothing_with_an_empty_one() {
         let t = build(&["a", "ab", "b"]);
-        assert_eq!(shared_nodes(&t, &t), node_count(&t));
-        assert_eq!(shared_nodes(&t, &Trie::new()), 0);
+        assert_eq!(shared_nodes(&t, &t), node_count(&t), "this check");
+        assert_eq!(shared_nodes(&t, &Trie::new()), 0, "this check");
     }
 
     #[test]
@@ -805,7 +805,7 @@ mod ch_0a_c3 {
     fn s0a_c3_removing_a_key_also_copies_only_the_path() {
         let old = build(&["alpha", "alps", "beta", "gamma", "delta", "alphabet"]);
         let new = old.remove("alps");
-        assert!(node_count(&new) - shared_nodes(&old, &new) <= "alps".len() + 1);
+        assert!(node_count(&new) - shared_nodes(&old, &new) <= "alps".len() + 1, "this check: expected `node_count(&new) - shared_nodes(&old, &new) <= \"alps\".len() + 1`");
     }
 
     #[test]
@@ -844,8 +844,8 @@ mod ch_0a_c4 {
     fn s0a_c4_pushing_does_not_change_the_old_version() {
         let a = PList::new();
         let b = a.push(1);
-        assert_eq!(a.to_vec(), Vec::<i64>::new());
-        assert_eq!(b.to_vec(), vec![1]);
+        assert_eq!(a.to_vec(), Vec::<i64>::new(), "this check");
+        assert_eq!(b.to_vec(), vec![1], "this check");
     }
 
     #[test]
@@ -853,7 +853,7 @@ mod ch_0a_c4 {
         let b = PList::new().push(1);
         let c = b.push(2);
         let d = b.push(3);
-        assert_eq!((b.to_vec(), c.to_vec(), d.to_vec()), (vec![1], vec![2, 1], vec![3, 1]));
+        assert_eq!((b.to_vec(), c.to_vec(), d.to_vec()), (vec![1], vec![2, 1], vec![3, 1]), "this check");
     }
 
     #[test]
@@ -863,16 +863,16 @@ mod ch_0a_c4 {
             let _tmp = base.push(99);
         }
         let after = base.push(7);
-        assert_eq!(base.to_vec(), vec![2, 1]);
-        assert_eq!(after.to_vec(), vec![7, 2, 1]);
+        assert_eq!(base.to_vec(), vec![2, 1], "this check");
+        assert_eq!(after.to_vec(), vec![7, 2, 1], "this check");
     }
 
     #[test]
     fn s0a_c4_lengths_are_fixed_at_creation() {
         let a = PList::new().push(5);
         let b = a.push(6);
-        assert_eq!((a.len(), b.len()), (1, 2));
-        assert!(PList::new().is_empty());
+        assert_eq!((a.len(), b.len()), (1, 2), "this check");
+        assert!(PList::new().is_empty(), "this check: expected `PList::new().is_empty()`");
     }
 
     proptest! {
@@ -912,32 +912,32 @@ mod ch_0a_c5 {
     #[test]
     fn s0a_c5_a_question_mark_matches_exactly_one_character() {
         let t = build(&["abc", "abd", "aec", "xyz"]);
-        assert_eq!(keys_matching(&t, "a?c"), vec!["abc", "aec"]);
-        assert_eq!(keys_matching(&t, "ab?"), vec!["abc", "abd"]);
-        assert_eq!(keys_matching(&t, "???"), vec!["abc", "abd", "aec", "xyz"]);
+        assert_eq!(keys_matching(&t, "a?c"), vec!["abc", "aec"], "this check");
+        assert_eq!(keys_matching(&t, "ab?"), vec!["abc", "abd"], "this check");
+        assert_eq!(keys_matching(&t, "???"), vec!["abc", "abd", "aec", "xyz"], "this check");
     }
 
     #[test]
     fn s0a_c5_the_length_must_match() {
         let t = build(&["a", "ab", "abc"]);
-        assert_eq!(keys_matching(&t, "a?"), vec!["ab"]);
-        assert_eq!(keys_matching(&t, "?"), vec!["a"]);
-        assert_eq!(keys_matching(&t, "????"), Vec::<String>::new());
+        assert_eq!(keys_matching(&t, "a?"), vec!["ab"], "this check");
+        assert_eq!(keys_matching(&t, "?"), vec!["a"], "this check");
+        assert_eq!(keys_matching(&t, "????"), Vec::<String>::new(), "this check");
     }
 
     #[test]
     fn s0a_c5_literals_only_and_the_empty_pattern() {
         let t = build(&["", "a", "ab"]);
-        assert_eq!(keys_matching(&t, "ab"), vec!["ab"]);
+        assert_eq!(keys_matching(&t, "ab"), vec!["ab"], "this check");
         assert_eq!(keys_matching(&t, ""), vec![""], "the empty key matches the empty pattern");
-        assert_eq!(keys_matching(&Trie::new(), "?"), Vec::<String>::new());
+        assert_eq!(keys_matching(&Trie::new(), "?"), Vec::<String>::new(), "this check");
     }
 
     #[test]
     fn s0a_c5_results_come_back_in_key_order() {
         let t = build(&["ac", "ab", "bb", "aa"]);
-        assert_eq!(keys_matching(&t, "a?"), vec!["aa", "ab", "ac"]);
-        assert_eq!(keys_matching(&t, "?b"), vec!["ab", "bb"]);
+        assert_eq!(keys_matching(&t, "a?"), vec!["aa", "ab", "ac"], "this check");
+        assert_eq!(keys_matching(&t, "?b"), vec!["ab", "bb"], "this check");
     }
 
     proptest! {

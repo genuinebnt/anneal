@@ -72,7 +72,7 @@ fn s4c_01_records_follow_each_other_and_each_says_how_long_it_was() {
     let mut at = 0;
     for r in &all {
         let (got, n) = LogRecord::deserialize(&bytes[at..]).expect("a record starts here");
-        assert_eq!(&got, r);
+        assert_eq!(&got, r, "records follow each other and each says how long it was");
         at += n;
     }
     assert_eq!(at, bytes.len(), "the lengths add up to the whole stream");
@@ -114,15 +114,15 @@ fn s4c_01_the_log_ends_where_the_first_bad_record_starts() {
         bytes.extend(r.serialize());
     }
     let (good, intact) = parse_log(&bytes);
-    assert_eq!(good.len(), all.len());
-    assert_eq!(intact, bytes.len());
+    assert_eq!(good.len(), all.len(), "the log ends where the first bad record starts");
+    assert_eq!(intact, bytes.len(), "the log ends where the first bad record starts");
     assert_eq!(good.iter().map(|(at, _)| *at).collect::<Vec<_>>(), starts, "each record comes with where it starts");
     // damage the fourth record: the first three survive, nothing after
     let mut torn = bytes.clone();
     torn[starts[3] as usize + 9] ^= 0xff;
     let (good, intact) = parse_log(&torn);
     assert_eq!(good.len(), 3, "the log ends at the damaged record");
-    assert_eq!(intact as u64, starts[3]);
+    assert_eq!(intact as u64, starts[3], "the log ends where the first bad record starts");
 }
 
 fn record_strategy() -> impl Strategy<Value = LogRecord> {
@@ -214,7 +214,7 @@ fn s4c_02_flush_moves_the_durable_end_to_the_end_of_the_log() {
     let l1 = log.append(&begin(1));
     let l2 = log.append(&begin(2));
     log.flush().unwrap();
-    assert_eq!(log.flushed_lsn(), log.end_lsn());
+    assert_eq!(log.flushed_lsn(), log.end_lsn(), "flush moves the durable end to the end of the log");
     assert!(l1 < log.flushed_lsn() && l2 < log.flushed_lsn(), "a record is durable when its LSN is below the durable end");
     let l3 = log.append(&begin(3));
     assert!(l3 >= log.flushed_lsn(), "the new record is not durable yet");
@@ -231,8 +231,8 @@ fn s4c_02_flush_to_only_flushes_when_the_record_is_not_durable_yet() {
     let l1 = log.append(&begin(1));
     log.flush_to(l1).unwrap();
     let writes = disk.log_appends.load(std::sync::atomic::Ordering::SeqCst);
-    assert_eq!(writes, 1);
-    assert!(l1 < log.flushed_lsn());
+    assert_eq!(writes, 1, "flush to only flushes when the record is not durable yet");
+    assert!(l1 < log.flushed_lsn(), "flush to only flushes when the record is not durable yet: expected `l1 < log.flushed_lsn()`");
     log.flush_to(l1).unwrap();
     log.flush_to(0).unwrap();
     assert_eq!(disk.log_appends.load(std::sync::atomic::Ordering::SeqCst), writes, "the record is durable already: no write");
@@ -250,10 +250,10 @@ fn s4c_02_after_a_restart_the_log_goes_on_after_the_last_intact_record() {
     log.flush().unwrap();
     let end = log.flushed_lsn();
     let restarted = LogManager::new(disk.crash()).unwrap();
-    assert_eq!(restarted.flushed_lsn(), end);
+    assert_eq!(restarted.flushed_lsn(), end, "after a restart the log goes on after the last intact record");
     assert_eq!(restarted.append(&begin(3)), end, "the next LSN continues the numbering");
     restarted.flush().unwrap();
-    assert_eq!(restarted.records().unwrap().len(), 3);
+    assert_eq!(restarted.records().unwrap().len(), 3, "after a restart the log goes on after the last intact record");
 }
 
 #[test]
@@ -268,7 +268,7 @@ fn s4c_02_a_torn_tail_is_cut_away_before_new_records_are_added() {
     let torn = disk.crash_tearing(5); // the last record was cut in the middle
     let restarted = LogManager::new(torn.clone()).unwrap();
     assert_eq!(restarted.records().unwrap().len(), 2, "the cut record is gone");
-    assert_eq!(restarted.flushed_lsn(), 2 * one);
+    assert_eq!(restarted.flushed_lsn(), 2 * one, "a torn tail is cut away before new records are added");
     assert_eq!(restarted.append(&begin(9)), 2 * one, "and the new one starts where it was");
     restarted.flush().unwrap();
     let again = LogManager::new(torn).unwrap();
@@ -347,9 +347,9 @@ fn s4c_03_the_next_slot_is_created_and_an_existing_one_is_overwritten() {
     let p = w.pages[0];
     s.set_state(Rid::new(p, 0), &Some(rec(1))).unwrap();
     s.set_state(Rid::new(p, 1), &Some(rec(2))).unwrap();
-    assert_eq!(s.get(Rid::new(p, 0)), Some(rec(1)));
+    assert_eq!(s.get(Rid::new(p, 0)), Some(rec(1)), "the next slot is created and an existing one is overwritten");
     s.set_state(Rid::new(p, 0), &Some(rec(9))).unwrap();
-    assert_eq!(s.get(Rid::new(p, 0)), Some(rec(9)));
+    assert_eq!(s.get(Rid::new(p, 0)), Some(rec(9)), "the next slot is created and an existing one is overwritten");
     assert_eq!(s.scan().len(), 2, "overwriting adds no slot");
 }
 
@@ -360,8 +360,8 @@ fn s4c_03_none_marks_a_slot_deleted_and_some_brings_it_back() {
     let r = Rid::new(w.pages[0], 0);
     s.set_state(r, &Some(rec(1))).unwrap();
     s.set_state(r, &None).unwrap();
-    assert_eq!(s.get(r), None);
-    assert!(s.scan().is_empty());
+    assert_eq!(s.get(r), None, "none marks a slot deleted and some brings it back");
+    assert!(s.scan().is_empty(), "none marks a slot deleted and some brings it back: expected `s.scan().is_empty()`");
     s.set_state(r, &Some(rec(2))).unwrap();
     assert_eq!(s.get(r), Some(rec(2)), "a deleted slot lives again with the new bytes");
 }
@@ -388,7 +388,7 @@ fn s4c_03_a_slot_cannot_be_skipped_and_a_missing_one_cannot_be_deleted() {
     assert!(s.set_state(Rid::new(p, 0), &None).is_err(), "deleting a slot that does not exist");
     assert!(s.scan().is_empty(), "the failed calls changed nothing");
     s.set_state(Rid::new(p, 0), &Some(rec(1))).unwrap();
-    assert!(s.set_state(Rid::new(p, 2), &Some(rec(2))).is_err());
+    assert!(s.set_state(Rid::new(p, 2), &Some(rec(2))).is_err(), "a slot cannot be skipped and a missing one cannot be deleted: expected `s.set_state(Rid::new(p, 2), &Some(rec(2))).is_err()`");
 }
 
 #[test]
@@ -396,10 +396,10 @@ fn s4c_03_a_record_has_the_fixed_length() {
     let w = World::fresh(1);
     let s = w.store(1);
     let r = Rid::new(w.pages[0], 0);
-    assert_eq!(RECORD_LEN, 16);
-    assert!(s.set_state(r, &Some(vec![1; 5])).is_err());
-    assert!(s.set_state(r, &Some(vec![1; 17])).is_err());
-    assert!(s.scan().is_empty());
+    assert_eq!(RECORD_LEN, 16, "a record has the fixed length");
+    assert!(s.set_state(r, &Some(vec![1; 5])).is_err(), "a record has the fixed length: expected `s.set_state(r, &Some(vec![1; 5])).is_err()`");
+    assert!(s.set_state(r, &Some(vec![1; 17])).is_err(), "a record has the fixed length: expected `s.set_state(r, &Some(vec![1; 17])).is_err()`");
+    assert!(s.scan().is_empty(), "a record has the fixed length: expected `s.scan().is_empty()`");
 }
 
 #[test]
@@ -501,9 +501,9 @@ fn s4c_04_inserts_fill_the_first_page_slot_by_slot_and_read_back() {
     let s = w.store(1);
     let t = s.begin();
     let rids: Vec<Rid> = (0..5).map(|i| s.insert(t, &rec(i)).unwrap()).collect();
-    assert_eq!(rids, (0..5).map(|i| Rid::new(w.pages[0], i)).collect::<Vec<_>>());
+    assert_eq!(rids, (0..5).map(|i| Rid::new(w.pages[0], i)).collect::<Vec<_>>(), "inserts fill the first page slot by slot and read back");
     for (i, r) in rids.iter().enumerate() {
-        assert_eq!(s.get(*r), Some(rec(i as u64)));
+        assert_eq!(s.get(*r), Some(rec(i as u64)), "inserts fill the first page slot by slot and read back");
     }
     s.commit(t).unwrap();
 }
@@ -542,7 +542,7 @@ fn s4c_04_commit_makes_the_transaction_durable_and_nothing_before_it_is_lost() {
     assert!(log.contains(&LogRecord::Commit { txn: a }), "the commit record is on disk when commit returns");
     assert!(log.contains(&LogRecord::Change { txn: a, rid: ra, before: None, after: Some(rec(1)) }), "so is everything a transaction logged before it");
     assert!(log.contains(&LogRecord::Change { txn: b, rid: Rid::new(w.pages[0], 1), before: None, after: Some(rec(2)) }), "and what was logged before it by others");
-    assert!(!log.contains(&LogRecord::Commit { txn: b }));
+    assert!(!log.contains(&LogRecord::Commit { txn: b }), "commit makes the transaction durable and nothing before it is lost: expected `!log.contains(&LogRecord::Commit {{ txn: b }})`");
 }
 
 #[test]
@@ -598,14 +598,14 @@ fn s4c_04_a_record_written_by_another_active_transaction_is_refused_until_it_end
     let (a, b) = (s.begin(), s.begin());
     let r = s.insert(a, &rec(1)).unwrap();
     assert!(s.update(b, r, &rec(2)).is_err(), "a has written it");
-    assert!(s.delete(b, r).is_err());
+    assert!(s.delete(b, r).is_err(), "a record written by another active transaction is refused until it ends: expected `s.delete(b, r).is_err()`");
     assert_eq!(s.get(r), Some(rec(1)), "the refused calls changed nothing");
     s.update(a, r, &rec(3)).unwrap();
     s.commit(a).unwrap();
     s.update(b, r, &rec(4)).unwrap();
-    assert_eq!(s.get(r), Some(rec(4)));
+    assert_eq!(s.get(r), Some(rec(4)), "a record written by another active transaction is refused until it ends");
     s.abort(b).unwrap();
-    assert_eq!(s.get(r), Some(rec(3)));
+    assert_eq!(s.get(r), Some(rec(3)), "a record written by another active transaction is refused until it ends");
 }
 
 #[test]
@@ -824,21 +824,21 @@ fn s4c_05_a_transaction_with_a_commit_or_an_abort_record_finished() {
         LogRecord::Change { txn: 3, rid: rid(0, 1), before: None, after: Some(rec(2)) },
         LogRecord::Abort { txn: 3 },
     ]);
-    assert_eq!(analyse(&log), Analysis { redo_from: 0, finished: vec![1, 3], losers: vec![2] });
+    assert_eq!(analyse(&log), Analysis { redo_from: 0, finished: vec![1, 3], losers: vec![2] }, "a transaction with a commit or an abort record finished");
 }
 
 #[test]
 fn s4c_05_losers_are_listed_in_the_order_they_began() {
     let log = numbered(vec![begin(5), begin(2), begin(9), LogRecord::Commit { txn: 2 }, begin(1)]);
-    assert_eq!(analyse(&log).losers, vec![5, 9, 1]);
-    assert_eq!(analyse(&log).finished, vec![2]);
+    assert_eq!(analyse(&log).losers, vec![5, 9, 1], "losers are listed in the order they began");
+    assert_eq!(analyse(&log).finished, vec![2], "losers are listed in the order they began");
 }
 
 #[test]
 fn s4c_05_a_change_with_no_begin_still_belongs_to_a_loser() {
     // the Begin may be before a checkpoint, or its record lost with the buffer: the change is what counts
     let log = numbered(vec![LogRecord::Change { txn: 4, rid: rid(0, 0), before: None, after: Some(rec(1)) }]);
-    assert_eq!(analyse(&log).losers, vec![4]);
+    assert_eq!(analyse(&log).losers, vec![4], "a change with no begin still belongs to a loser");
     assert_eq!(analyse(&[]), Analysis::default(), "an empty log: nothing happened");
 }
 
@@ -872,10 +872,10 @@ fn s4c_05_redo_is_harmless_where_the_pages_already_have_the_change() {
     s.commit(t).unwrap();
     let w2 = w.crash_and_restart();
     let s2 = w2.store(100);
-    assert_eq!(contents(&s2), BTreeMap::from([(key(r), rec(2))]));
+    assert_eq!(contents(&s2), BTreeMap::from([(key(r), rec(2))]), "redo is harmless where the pages already have the change");
     let records = w2.log.records().unwrap();
     redo(&s2, &records, 0).unwrap();
-    assert_eq!(contents(&s2), BTreeMap::from([(key(r), rec(2)), (key(r2), rec(3))]));
+    assert_eq!(contents(&s2), BTreeMap::from([(key(r), rec(2)), (key(r2), rec(3))]), "redo is harmless where the pages already have the change");
 }
 
 #[test]
@@ -894,8 +894,8 @@ fn s4c_05_redo_twice_gives_what_redo_once_gives() {
     redo(&s2, &records, 0).unwrap();
     let once = contents(&s2);
     redo(&s2, &records, 0).unwrap();
-    assert_eq!(contents(&s2), once);
-    assert_eq!(once, BTreeMap::from([(key(r), rec(2))]));
+    assert_eq!(contents(&s2), once, "redo twice gives what redo once gives");
+    assert_eq!(once, BTreeMap::from([(key(r), rec(2))]), "redo twice gives what redo once gives");
 }
 
 #[test]
@@ -912,7 +912,7 @@ fn s4c_05_redo_starts_where_it_is_told_to() {
     let records = w2.log.records().unwrap();
     let from = records.iter().position(|(_, r)| matches!(r, LogRecord::Change { rid, .. } if *rid == r1)).unwrap();
     assert_eq!(redo(&s2, &records, from).unwrap(), 1, "only the second change is re-applied");
-    assert_eq!(contents(&s2), BTreeMap::from([(key(r0), rec(1)), (key(r1), rec(2))]));
+    assert_eq!(contents(&s2), BTreeMap::from([(key(r0), rec(1)), (key(r1), rec(2))]), "redo starts where it is told to");
 }
 
 proptest! {
@@ -966,10 +966,10 @@ fn s4c_06_a_losers_insert_update_and_delete_are_all_rolled_back() {
     w.log.flush().unwrap(); // the loser's records are durable, its commit never happened
     let (w2, report) = full_recovery(&w);
     let s2 = w2.store(99_000);
-    assert_eq!(contents(&s2), BTreeMap::from([(key(keep), rec(1)), (key(edit), rec(2)), (key(drop_me), rec(3))]));
-    assert_eq!(report.losers, vec![t]);
-    assert_eq!(report.finished, vec![setup]);
-    assert_eq!(report.undone, 3);
+    assert_eq!(contents(&s2), BTreeMap::from([(key(keep), rec(1)), (key(edit), rec(2)), (key(drop_me), rec(3))]), "a losers insert update and delete are all rolled back");
+    assert_eq!(report.losers, vec![t], "a losers insert update and delete are all rolled back");
+    assert_eq!(report.finished, vec![setup], "a losers insert update and delete are all rolled back");
+    assert_eq!(report.undone, 3, "a losers insert update and delete are all rolled back");
 }
 
 #[test]
@@ -1003,7 +1003,7 @@ fn s4c_06_several_losers_and_a_winner_in_the_same_pages() {
     s.flush_page(w.pages[0]).unwrap(); // the loser's data is on disk
     let (w2, report) = full_recovery(&w);
     assert_eq!(contents(&w2.store(1)), BTreeMap::from([(key(rc), rec(3))]), "only c's record is left");
-    assert_eq!(report.losers, vec![a, b]);
+    assert_eq!(report.losers, vec![a, b], "several losers and a winner in the same pages");
     let _ = ra;
 }
 
@@ -1020,7 +1020,7 @@ fn s4c_06_recovery_leaves_the_pages_on_disk_so_a_second_crash_needs_no_log() {
     let (w2, _) = full_recovery(&w);
     // crash again at once and read the pages without any recovery
     let w3 = World::restart(w2.disk.crash(), &w.pages);
-    assert_eq!(contents(&w3.store(1)), BTreeMap::from([(key(r), rec(1))]));
+    assert_eq!(contents(&w3.store(1)), BTreeMap::from([(key(r), rec(1))]), "recovery leaves the pages on disk so a second crash needs no log");
 }
 
 #[test]
@@ -1035,11 +1035,11 @@ fn s4c_06_recovering_twice_changes_nothing_the_second_time() {
     w.log.flush().unwrap();
     let (w2, first) = full_recovery(&w);
     let state = contents(&w2.store(1));
-    assert_eq!(first.losers, vec![a]);
+    assert_eq!(first.losers, vec![a], "recovering twice changes nothing the second time");
     let (w3, second) = full_recovery(&w2);
-    assert_eq!(contents(&w3.store(1)), state);
+    assert_eq!(contents(&w3.store(1)), state, "recovering twice changes nothing the second time");
     assert!(second.losers.is_empty(), "the loser has an Abort record now");
-    assert_eq!(second.undone, 0);
+    assert_eq!(second.undone, 0, "recovering twice changes nothing the second time");
 }
 
 #[test]
@@ -1054,8 +1054,8 @@ fn s4c_06_a_rollback_that_was_half_logged_when_the_crash_came_is_finished() {
     w.log.flush().unwrap();
     let (w2, report) = full_recovery(&w);
     assert!(contents(&w2.store(1)).is_empty(), "both inserts are rolled back");
-    assert_eq!(report.losers, vec![t]);
-    assert_eq!(w2.store(1).get(r0), None);
+    assert_eq!(report.losers, vec![t], "a rollback that was half logged when the crash came is finished");
+    assert_eq!(w2.store(1).get(r0), None, "a rollback that was half logged when the crash came is finished");
 }
 
 proptest! {
@@ -1117,8 +1117,8 @@ fn s4c_07_analysis_starts_redo_at_the_last_checkpoint() {
     let log = numbered(vec![begin(1), LogRecord::Checkpoint { active: vec![1] }, begin(2), LogRecord::Checkpoint { active: vec![1, 2] }, LogRecord::Commit { txn: 1 }]);
     let a = analyse(&log);
     assert_eq!(a.redo_from, 3, "the second checkpoint");
-    assert_eq!(a.losers, vec![2]);
-    assert_eq!(a.finished, vec![1]);
+    assert_eq!(a.losers, vec![2], "analysis starts redo at the last checkpoint");
+    assert_eq!(a.finished, vec![1], "analysis starts redo at the last checkpoint");
     assert_eq!(analyse(&numbered(vec![begin(1)])).redo_from, 0, "no checkpoint: from the start");
 }
 
@@ -1127,7 +1127,7 @@ fn s4c_07_a_transaction_active_at_the_checkpoint_is_a_loser_even_if_its_begin_is
     let log = numbered(vec![LogRecord::Checkpoint { active: vec![7, 8] }, LogRecord::Commit { txn: 8 }]);
     let a = analyse(&log);
     assert_eq!(a.losers, vec![7], "7 was running at the checkpoint and never finished");
-    assert_eq!(a.finished, vec![8]);
+    assert_eq!(a.finished, vec![8], "a transaction active at the checkpoint is a loser even if its begin is not read");
 }
 
 #[test]
@@ -1147,7 +1147,7 @@ fn s4c_07_recovery_after_a_checkpoint_redoes_only_what_came_after_it() {
     s.commit(u).unwrap();
     let (w2, report) = full_recovery(&w);
     assert_eq!(report.redone, 3, "ten changes are before the checkpoint, three after it");
-    assert_eq!(contents(&w2.store(1)).len(), 13);
+    assert_eq!(contents(&w2.store(1)).len(), 13, "recovery after a checkpoint redoes only what came after it");
 }
 
 #[test]
@@ -1165,7 +1165,7 @@ fn s4c_07_a_transaction_that_spans_a_checkpoint_is_rolled_back_whole() {
     w.log.flush().unwrap();
     let (w2, report) = full_recovery(&w);
     assert_eq!(contents(&w2.store(1)), BTreeMap::from([(key(base), rec(0))]), "the changes before the checkpoint (on disk already) and after it are all undone");
-    assert_eq!(report.undone, 3);
+    assert_eq!(report.undone, 3, "a transaction that spans a checkpoint is rolled back whole");
 }
 
 #[test]
@@ -1178,7 +1178,7 @@ fn s4c_07_a_transaction_that_began_before_the_checkpoint_and_committed_after_it_
     let r2 = s.insert(t, &rec(2)).unwrap();
     s.commit(t).unwrap();
     let (w2, _) = full_recovery(&w);
-    assert_eq!(contents(&w2.store(1)), BTreeMap::from([(key(r), rec(1)), (key(r2), rec(2))]));
+    assert_eq!(contents(&w2.store(1)), BTreeMap::from([(key(r), rec(1)), (key(r2), rec(2))]), "a transaction that began before the checkpoint and committed after it is kept");
 }
 
 proptest! {
@@ -1294,7 +1294,7 @@ fn s4c_08_a_garbage_tail_on_the_log_is_ignored_and_does_not_get_in_the_way_of_ne
     {
         let s2 = w2.store(500);
         recover(&s2, &w2.log).unwrap();
-        assert_eq!(contents(&s2), BTreeMap::from([(key(r), rec(1))]));
+        assert_eq!(contents(&s2), BTreeMap::from([(key(r), rec(1))]), "a garbage tail on the log is ignored and does not get in the way of new work");
         let t2 = s2.begin();
         let r2 = s2.insert(t2, &rec(7)).unwrap();
         s2.commit(t2).unwrap();
@@ -1322,8 +1322,8 @@ fn s4c_08_a_crash_between_redo_and_undo_is_recovered_like_any_other() {
         s2.flush_all_pages().unwrap();
     }
     let (w3, report) = full_recovery(&w2);
-    assert_eq!(contents(&w3.store(1)), BTreeMap::from([(key(ra), rec(3))]));
-    assert_eq!(report.losers, vec![b]);
+    assert_eq!(contents(&w3.store(1)), BTreeMap::from([(key(ra), rec(3))]), "a crash between redo and undo is recovered like any other");
+    assert_eq!(report.losers, vec![b], "a crash between redo and undo is recovered like any other");
 }
 
 proptest! {
@@ -1382,7 +1382,7 @@ mod ch_4c_c1 {
 
     #[test]
     fn s4c_c1_each_bound_can_be_the_one_that_matters() {
-        assert_eq!(truncation_lsn(100, &[], &[]), 100);
+        assert_eq!(truncation_lsn(100, &[], &[]), 100, "this check");
         assert_eq!(truncation_lsn(100, &[90, 120], &[110]), 90, "a page dirty since 90 needs redo from 90");
         assert_eq!(truncation_lsn(100, &[150], &[95]), 95, "an active transaction may need undo back to 95");
         assert_eq!(truncation_lsn(100, &[150], &[180]), 100, "the checkpoint start itself");
@@ -1390,21 +1390,21 @@ mod ch_4c_c1 {
 
     #[test]
     fn s4c_c1_a_checkpoint_at_zero_keeps_everything() {
-        assert_eq!(truncation_lsn(0, &[5], &[7]), 0);
+        assert_eq!(truncation_lsn(0, &[5], &[7]), 0, "this check");
     }
 
     #[test]
     fn s4c_c1_removing_the_oldest_dirty_page_raises_the_bound() {
-        assert_eq!(truncation_lsn(100, &[40, 60], &[]), 40);
-        assert_eq!(truncation_lsn(100, &[60], &[]), 60);
-        assert_eq!(truncation_lsn(100, &[], &[]), 100);
+        assert_eq!(truncation_lsn(100, &[40, 60], &[]), 40, "this check");
+        assert_eq!(truncation_lsn(100, &[60], &[]), 60, "this check");
+        assert_eq!(truncation_lsn(100, &[], &[]), 100, "this check");
     }
 
     #[test]
     fn s4c_c1_the_smallest_of_all_three_wins_whatever_the_order_of_the_lists() {
-        assert_eq!(truncation_lsn(100, &[70, 90], &[80, 60]), 60);
-        assert_eq!(truncation_lsn(100, &[90, 70], &[60, 80]), 60);
-        assert_eq!(truncation_lsn(50, &[70, 90], &[80, 60]), 50);
+        assert_eq!(truncation_lsn(100, &[70, 90], &[80, 60]), 60, "this check");
+        assert_eq!(truncation_lsn(100, &[90, 70], &[60, 80]), 60, "this check");
+        assert_eq!(truncation_lsn(50, &[70, 90], &[80, 60]), 50, "this check");
     }
 
     proptest! {
@@ -1435,18 +1435,18 @@ mod ch_4c_c2 {
         let mut g = GroupCommit::new(3, 10);
         g.submit(1, 0);
         g.submit(2, 1);
-        assert_eq!(g.poll(2), None);
+        assert_eq!(g.poll(2), None, "this check");
         g.submit(3, 2);
-        assert_eq!(g.poll(2), Some(vec![1, 2, 3]));
-        assert_eq!(g.pending(), 0);
+        assert_eq!(g.poll(2), Some(vec![1, 2, 3]), "this check");
+        assert_eq!(g.pending(), 0, "this check");
     }
 
     #[test]
     fn s4c_c2_the_oldest_commit_never_waits_longer_than_the_limit() {
         let mut g = GroupCommit::new(10, 10);
         g.submit(4, 5);
-        assert_eq!(g.poll(14), None);
-        assert_eq!(g.poll(15), Some(vec![4]));
+        assert_eq!(g.poll(14), None, "this check");
+        assert_eq!(g.poll(15), Some(vec![4]), "this check");
     }
 
     #[test]
@@ -1460,11 +1460,11 @@ mod ch_4c_c2 {
     #[test]
     fn s4c_c2_polling_an_empty_queue_and_polling_twice() {
         let mut g = GroupCommit::new(2, 5);
-        assert_eq!(g.poll(100), None);
+        assert_eq!(g.poll(100), None, "this check");
         g.submit(1, 0);
         g.submit(2, 0);
-        assert!(g.poll(0).is_some());
-        assert_eq!(g.poll(0), None);
+        assert!(g.poll(0).is_some(), "this check: expected `g.poll(0).is_some()`");
+        assert_eq!(g.poll(0), None, "this check");
     }
 
     #[test]
@@ -1473,8 +1473,8 @@ mod ch_4c_c2 {
         for l in [5, 6, 7] {
             g.submit(l, 0);
         }
-        assert_eq!(g.flush_all(), vec![5, 6, 7]);
-        assert_eq!(g.flush_all(), Vec::<u64>::new());
+        assert_eq!(g.flush_all(), vec![5, 6, 7], "this check");
+        assert_eq!(g.flush_all(), Vec::<u64>::new(), "this check");
     }
 
     proptest! {
@@ -1519,7 +1519,7 @@ mod ch_4c_c3 {
     fn s4c_c3_a_page_that_is_ahead_of_a_record_is_left_alone() {
         let mut pages = vec![(5, 100)];
         redo(&mut pages, &[(3, 0, 1), (7, 0, 2)]);
-        assert_eq!(pages, vec![(7, 2)]);
+        assert_eq!(pages, vec![(7, 2)], "this check");
     }
 
     #[test]
@@ -1529,8 +1529,8 @@ mod ch_4c_c3 {
         redo(&mut once, &log);
         let mut twice = once.clone();
         redo(&mut twice, &log);
-        assert_eq!(once, twice);
-        assert_eq!(once, vec![(3, 30), (2, 20)]);
+        assert_eq!(once, twice, "this check");
+        assert_eq!(once, vec![(3, 30), (2, 20)], "this check");
     }
 
     #[test]
@@ -1544,7 +1544,7 @@ mod ch_4c_c3 {
     fn s4c_c3_unrelated_pages_are_independent() {
         let mut pages = vec![(10, 1), (0, 0)];
         redo(&mut pages, &[(2, 0, 7), (3, 1, 8)]);
-        assert_eq!(pages, vec![(10, 1), (3, 8)]);
+        assert_eq!(pages, vec![(10, 1), (3, 8)], "this check");
     }
 
     proptest! {
@@ -1582,34 +1582,34 @@ mod ch_4c_c4 {
 
     #[test]
     fn s4c_c4_a_commit_after_the_point_does_not_count() {
-        assert_eq!(recover_until(&log(), 5), BTreeMap::from([(7, 1)]));
+        assert_eq!(recover_until(&log(), 5), BTreeMap::from([(7, 1)]), "this check");
         assert_eq!(recover_until(&log(), 7), BTreeMap::from([(7, 1)]), "writes of an uncommitted transaction are not applied");
     }
 
     #[test]
     fn s4c_c4_the_whole_log_gives_the_full_recovery() {
-        assert_eq!(recover_until(&log(), 8), BTreeMap::from([(7, 2), (8, 5)]));
-        assert_eq!(recover_until(&log(), u64::MAX), BTreeMap::from([(7, 2), (8, 5)]));
+        assert_eq!(recover_until(&log(), 8), BTreeMap::from([(7, 2), (8, 5)]), "this check");
+        assert_eq!(recover_until(&log(), u64::MAX), BTreeMap::from([(7, 2), (8, 5)]), "this check");
     }
 
     #[test]
     fn s4c_c4_before_the_first_commit_nothing_is_there() {
-        assert_eq!(recover_until(&log(), 3), BTreeMap::new());
-        assert_eq!(recover_until(&[], 100), BTreeMap::new());
+        assert_eq!(recover_until(&log(), 3), BTreeMap::new(), "this check");
+        assert_eq!(recover_until(&[], 100), BTreeMap::new(), "this check");
     }
 
     #[test]
     fn s4c_c4_aborted_transactions_never_appear() {
         let l = vec![(1, Begin(1)), (2, Set(1, 1, 1)), (3, Abort(1)), (4, Begin(2)), (5, Set(2, 2, 2)), (6, Commit(2))];
-        assert_eq!(recover_until(&l, 100), BTreeMap::from([(2, 2)]));
+        assert_eq!(recover_until(&l, 100), BTreeMap::from([(2, 2)]), "this check");
     }
 
     #[test]
     fn s4c_c4_interleaved_transactions_apply_in_log_order() {
         let l = vec![(1, Set(2, 5, 20)), (2, Set(1, 5, 10)), (3, Commit(1)), (4, Commit(2))];
         assert_eq!(recover_until(&l, 100), BTreeMap::from([(5, 10)]), "the writes are applied in log order: transaction 1 wrote last, though transaction 2 committed last");
-        assert_eq!(recover_until(&l, 3), BTreeMap::from([(5, 10)]));
-        assert_eq!(recover_until(&l, 2), BTreeMap::new());
+        assert_eq!(recover_until(&l, 3), BTreeMap::from([(5, 10)]), "this check");
+        assert_eq!(recover_until(&l, 2), BTreeMap::new(), "this check");
     }
 
     proptest! {
@@ -1652,31 +1652,31 @@ mod ch_4c_c5 {
     fn s4c_c5_the_checkpoint_state_is_carried_forward() {
         let cp = a(&[1], &[(0, 10)]);
         let after = vec![(12, Update(1, 0)), (13, Begin(2)), (14, Update(2, 5)), (15, Commit(1))];
-        assert_eq!(analyze(&cp, &after), a(&[2], &[(0, 10), (5, 14)]));
+        assert_eq!(analyze(&cp, &after), a(&[2], &[(0, 10), (5, 14)]), "this check");
     }
 
     #[test]
     fn s4c_c5_a_page_keeps_the_lsn_of_its_first_dirtying() {
         let after = vec![(1, Update(1, 7)), (2, Update(1, 7)), (3, Update(2, 7))];
-        assert_eq!(analyze(&Analysis::default(), &after).dirty, BTreeMap::from([(7, 1)]));
+        assert_eq!(analyze(&Analysis::default(), &after).dirty, BTreeMap::from([(7, 1)]), "this check");
     }
 
     #[test]
     fn s4c_c5_a_transaction_first_seen_in_an_update_is_active() {
         let after = vec![(5, Update(9, 1))];
-        assert_eq!(analyze(&Analysis::default(), &after).active, BTreeSet::from([9]));
+        assert_eq!(analyze(&Analysis::default(), &after).active, BTreeSet::from([9]), "this check");
     }
 
     #[test]
     fn s4c_c5_commit_and_abort_both_end_a_transaction() {
         let after = vec![(1, Begin(1)), (2, Begin(2)), (3, Commit(1)), (4, Abort(2))];
-        assert_eq!(analyze(&Analysis::default(), &after).active, BTreeSet::new());
+        assert_eq!(analyze(&Analysis::default(), &after).active, BTreeSet::new(), "this check");
     }
 
     #[test]
     fn s4c_c5_no_records_after_the_checkpoint_gives_the_checkpoint() {
         let cp = a(&[3], &[(1, 2)]);
-        assert_eq!(analyze(&cp, &[]), cp);
+        assert_eq!(analyze(&cp, &[]), cp, "this check");
     }
 
     proptest! {

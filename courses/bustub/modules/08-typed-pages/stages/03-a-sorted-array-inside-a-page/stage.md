@@ -23,7 +23,7 @@ How you compute offsets, whether you decode through `T::decode` for every access
 
 ## The Rust toolbox
 
-**A view is a struct with a byte container.** `PageArray<B, T> { bytes: B, _entry: PhantomData<T> }`: `B` can be `&[u8]` (read-only), `&mut [u8]` (writable) or `Vec<u8>` (owned). The bounds `B: AsRef<[u8]>` and `B: AsRef<[u8]> + AsMut<[u8]>` on separate `impl` blocks give read methods to every view and write methods only to writable ones, so writing through a read-only view is a compile error, not a runtime one.
+**A view is a struct with a byte container.** `View<B> { bytes: B }`: `B` can be `&[u8]` (read-only), `&mut [u8]` (writable) or `Vec<u8>` (owned). The bounds `B: AsRef<[u8]>` and `B: AsRef<[u8]> + AsMut<[u8]>` on separate `impl` blocks give read methods to every view and write methods only to writable ones, so writing through a read-only view is a compile error, not a runtime one.
 
 **`PhantomData<T>`** tells the compiler the struct "uses" `T` although it stores no `T`.
 

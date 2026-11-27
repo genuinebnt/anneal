@@ -656,7 +656,7 @@ mod ch_1g_c1 {
             let _g = Defer::new(move || l2.borrow_mut().push(1));
             l.borrow_mut().push(0);
         }
-        assert_eq!(*l.borrow(), vec![0, 1]);
+        assert_eq!(*l.borrow(), vec![0, 1], "this check");
     }
 
     #[test]
@@ -667,7 +667,7 @@ mod ch_1g_c1 {
             let mut g = Defer::new(move || l2.borrow_mut().push(1));
             g.cancel();
         }
-        assert!(l.borrow().is_empty());
+        assert!(l.borrow().is_empty(), "this check: expected `l.borrow().is_empty()`");
     }
 
     #[test]
@@ -678,9 +678,9 @@ mod ch_1g_c1 {
             let mut g = Defer::new(move || l2.borrow_mut().push(1));
             g.run_now();
             g.run_now();
-            assert_eq!(*l.borrow(), vec![1]);
+            assert_eq!(*l.borrow(), vec![1], "this check");
         }
-        assert_eq!(*l.borrow(), vec![1]);
+        assert_eq!(*l.borrow(), vec![1], "this check");
     }
 
     #[test]
@@ -692,7 +692,7 @@ mod ch_1g_c1 {
             let _y = Defer::new(move || b.borrow_mut().push(2));
             let _z = Defer::new(move || c.borrow_mut().push(3));
         }
-        assert_eq!(*l.borrow(), vec![3, 2, 1]);
+        assert_eq!(*l.borrow(), vec![3, 2, 1], "this check");
     }
 
     #[test]
@@ -706,9 +706,9 @@ mod ch_1g_c1 {
             Ok(1)
         }
         let l = log();
-        assert_eq!(work(l.clone(), true), Err(()));
-        assert_eq!(work(l.clone(), false), Ok(1));
-        assert_eq!(*l.borrow(), vec![99, 99]);
+        assert_eq!(work(l.clone(), true), Err(()), "this check");
+        assert_eq!(work(l.clone(), false), Ok(1), "this check");
+        assert_eq!(*l.borrow(), vec![99, 99], "this check");
     }
 
     #[test]
@@ -720,8 +720,8 @@ mod ch_1g_c1 {
             let _g = Defer::new(move || l2.lock().unwrap().push(1));
             panic!("boom");
         }));
-        assert!(r.is_err());
-        assert_eq!(*l.lock().unwrap(), vec![1]);
+        assert!(r.is_err(), "this check: expected `r.is_err()`");
+        assert_eq!(*l.lock().unwrap(), vec![1], "this check");
     }
 
     #[test]
@@ -732,7 +732,7 @@ mod ch_1g_c1 {
         let holder = vec![g];
         assert!(l.borrow().is_empty(), "moving a guard into a vector does not run it");
         drop(holder);
-        assert_eq!(*l.borrow(), vec![7]);
+        assert_eq!(*l.borrow(), vec![7], "this check");
     }
 }
 // @@ challenge 1g-c1 end
@@ -748,14 +748,14 @@ mod ch_1g_c2 {
         let pins = Pins::new();
         let a = pins.pin();
         let b = pins.pin();
-        assert_eq!(pins.count(), 2);
+        assert_eq!(pins.count(), 2, "this check");
         let c = a.clone();
-        assert_eq!(pins.count(), 3);
+        assert_eq!(pins.count(), 3, "this check");
         drop(b);
         drop(a);
-        assert_eq!(pins.count(), 1);
+        assert_eq!(pins.count(), 1, "this check");
         drop(c);
-        assert_eq!(pins.count(), 0);
+        assert_eq!(pins.count(), 0, "this check");
     }
 
     #[test]
@@ -765,9 +765,9 @@ mod ch_1g_c2 {
         {
             let h = pins.pin();
             let _c = h.clone();
-            assert_eq!(pins.count(), 3);
+            assert_eq!(pins.count(), 3, "this check");
         }
-        assert_eq!(pins.count(), 1);
+        assert_eq!(pins.count(), 1, "this check");
         drop(keep);
     }
 
@@ -775,12 +775,12 @@ mod ch_1g_c2 {
     fn s1g_c2_handles_on_other_threads_count_and_uncount() {
         let pins = Pins::new();
         let hs: Vec<_> = (0..8).map(|_| pins.pin()).collect();
-        assert_eq!(pins.count(), 8);
+        assert_eq!(pins.count(), 8, "this check");
         let threads: Vec<_> = hs.into_iter().map(|h| std::thread::spawn(move || drop(h))).collect();
         for t in threads {
             t.join().unwrap();
         }
-        assert_eq!(pins.count(), 0);
+        assert_eq!(pins.count(), 0, "this check");
     }
 
     #[test]
@@ -788,9 +788,9 @@ mod ch_1g_c2 {
         let pins = Pins::new();
         let h = pins.pin();
         let moved = h;
-        assert_eq!(pins.count(), 1);
+        assert_eq!(pins.count(), 1, "this check");
         drop(moved);
-        assert_eq!(pins.count(), 0);
+        assert_eq!(pins.count(), 0, "this check");
     }
 
     proptest! {
@@ -828,9 +828,9 @@ mod ch_1g_c3 {
         {
             let _a = ScopedPin::new(&c);
             let _b = ScopedPin::new(&c);
-            assert_eq!(c.get(), 2);
+            assert_eq!(c.get(), 2, "this check");
         }
-        assert_eq!(c.get(), 0);
+        assert_eq!(c.get(), 0, "this check");
     }
 
     #[test]
@@ -838,7 +838,7 @@ mod ch_1g_c3 {
         let c = Cell::new(0);
         let a = ScopedPin::new(&c);
         let _b = ScopedPin::new(&c);
-        assert_eq!(a.release(), 1);
+        assert_eq!(a.release(), 1, "this check");
         assert_eq!(c.get(), 1, "the released guard must not uncount again when it goes out of scope");
     }
 
@@ -850,21 +850,21 @@ mod ch_1g_c3 {
         for (i, g) in guards.into_iter().enumerate() {
             if i % 2 == 0 {
                 left -= 1;
-                assert_eq!(g.release(), left);
+                assert_eq!(g.release(), left, "this check");
             } else {
                 drop(g);
                 left -= 1;
             }
-            assert_eq!(c.get(), left);
+            assert_eq!(c.get(), left, "this check");
         }
-        assert_eq!(c.get(), 0);
+        assert_eq!(c.get(), 0, "this check");
     }
 
     #[test]
     fn s1g_c3_releasing_the_last_guard_leaves_zero_and_the_value_returned_is_zero() {
         let c = Cell::new(0);
         let g = ScopedPin::new(&c);
-        assert_eq!(g.release(), 0);
+        assert_eq!(g.release(), 0, "this check");
         assert_eq!(c.get(), 0, "it must stay at zero: a second uncount would underflow");
     }
 
@@ -901,10 +901,10 @@ mod ch_1g_c4 {
     #[test]
     fn s1g_c4_a_free_latch_is_taken_at_once() {
         let l = TimedLatch::new();
-        assert!(l.try_acquire());
-        assert!(!l.try_acquire());
-        assert!(l.release());
-        assert!(l.acquire_timeout(Duration::from_millis(0)));
+        assert!(l.try_acquire(), "this check: expected `l.try_acquire()`");
+        assert!(!l.try_acquire(), "this check: expected `!l.try_acquire()`");
+        assert!(l.release(), "this check: expected `l.release()`");
+        assert!(l.acquire_timeout(Duration::from_millis(0)), "this check: expected `l.acquire_timeout(Duration::from_millis(0))`");
     }
 
     #[test]
@@ -912,10 +912,10 @@ mod ch_1g_c4 {
         let l = TimedLatch::new();
         l.try_acquire();
         let t = Instant::now();
-        assert!(!l.acquire_timeout(Duration::from_millis(60)));
+        assert!(!l.acquire_timeout(Duration::from_millis(60)), "this check: expected `!l.acquire_timeout(Duration::from_millis(60))`");
         let waited = t.elapsed();
         assert!(waited >= Duration::from_millis(55), "returned after {waited:?}, before the timeout");
-        assert!(waited < Duration::from_secs(5));
+        assert!(waited < Duration::from_secs(5), "this check: expected `waited < Duration::from_secs(5)`");
         assert!(l.release(), "a timed-out wait leaves the latch held by its owner");
     }
 
@@ -926,7 +926,7 @@ mod ch_1g_c4 {
         let l2 = l.clone();
         let h = std::thread::spawn(move || l2.acquire_timeout(Duration::from_secs(10)));
         std::thread::sleep(Duration::from_millis(40));
-        assert!(l.release());
+        assert!(l.release(), "this check: expected `l.release()`");
         assert!(h.join().unwrap(), "the waiter must be woken by the release");
         assert!(!l.try_acquire(), "and now the waiter holds it");
     }
@@ -934,8 +934,8 @@ mod ch_1g_c4 {
     #[test]
     fn s1g_c4_releasing_a_latch_that_is_not_held_says_so() {
         let l = TimedLatch::new();
-        assert!(!l.release());
-        assert!(l.try_acquire());
+        assert!(!l.release(), "this check: expected `!l.release()`");
+        assert!(l.try_acquire(), "this check: expected `l.try_acquire()`");
     }
 
     #[test]
@@ -982,13 +982,13 @@ mod ch_1g_c5 {
     #[test]
     fn s1g_c5_a_transfer_moves_the_amount_and_failures_change_nothing() {
         let s = Slots::new(&[10, 5]);
-        assert_eq!(s.transfer(0, 1, 4), Ok(()));
-        assert_eq!((s.balance(0), s.balance(1)), (Some(6), Some(9)));
-        assert_eq!(s.transfer(1, 0, 20), Err(TransferError::Insufficient));
-        assert_eq!(s.transfer(0, 7, 1), Err(TransferError::NoSuchSlot(7)));
-        assert_eq!(s.transfer(9, 1, 1), Err(TransferError::NoSuchSlot(9)));
-        assert_eq!((s.balance(0), s.balance(1), s.total()), (Some(6), Some(9), 15));
-        assert_eq!(s.balance(2), None);
+        assert_eq!(s.transfer(0, 1, 4), Ok(()), "this check");
+        assert_eq!((s.balance(0), s.balance(1)), (Some(6), Some(9)), "this check");
+        assert_eq!(s.transfer(1, 0, 20), Err(TransferError::Insufficient), "this check");
+        assert_eq!(s.transfer(0, 7, 1), Err(TransferError::NoSuchSlot(7)), "this check");
+        assert_eq!(s.transfer(9, 1, 1), Err(TransferError::NoSuchSlot(9)), "this check");
+        assert_eq!((s.balance(0), s.balance(1), s.total()), (Some(6), Some(9), 15), "this check");
+        assert_eq!(s.balance(2), None, "this check");
     }
 
     #[test]
@@ -996,8 +996,8 @@ mod ch_1g_c5 {
         let s = Arc::new(Slots::new(&[3, 3]));
         let s2 = s.clone();
         let r = finish_within(5, move || s2.transfer(1, 1, 2));
-        assert_eq!(r, Ok(()));
-        assert_eq!(s.balance(1), Some(3));
+        assert_eq!(r, Ok(()), "this check");
+        assert_eq!(s.balance(1), Some(3), "this check");
     }
 
     #[test]
@@ -1018,7 +1018,7 @@ mod ch_1g_c5 {
             t1.join().unwrap();
             t2.join().unwrap();
         });
-        assert_eq!(s.total(), 200);
+        assert_eq!(s.total(), 200, "this check");
     }
 
     #[test]
@@ -1043,8 +1043,8 @@ mod ch_1g_c5 {
                 h.join().unwrap();
             }
         });
-        assert_eq!(s.total(), 300);
-        assert!((0..6).all(|i| s.balance(i).unwrap() >= 0));
+        assert_eq!(s.total(), 300, "this check");
+        assert!((0..6).all(|i| s.balance(i).unwrap() >= 0), "this check: expected `(0..6).all(|i| s.balance(i).unwrap() >= 0)`");
     }
 
     #[test]

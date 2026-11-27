@@ -184,7 +184,7 @@ fn run_model(bpm: &BufferPoolManager, disk: &MemDisk, frames: usize, ops: &[Op],
 #[test]
 fn s1f_01_the_pool_reports_its_size() {
     let (bpm, _) = pool(7);
-    assert_eq!(bpm.size(), 7);
+    assert_eq!(bpm.size(), 7, "the pool reports its size");
 }
 
 #[test]
@@ -226,12 +226,12 @@ fn s1f_01_fetching_pins_and_unpinning_releases() {
     assert_eq!(bpm.get_pin_count(a), None, "a page that was not fetched is not in memory");
     for expected in 1..=3 {
         bpm.fetch_page(a).unwrap();
-        assert_eq!(bpm.get_pin_count(a), Some(expected));
+        assert_eq!(bpm.get_pin_count(a), Some(expected), "fetching pins and unpinning releases");
     }
-    assert!(bpm.unpin_page(a, false));
-    assert_eq!(bpm.get_pin_count(a), Some(2));
-    assert!(bpm.unpin_page(a, false) && bpm.unpin_page(a, false));
-    assert_eq!(bpm.get_pin_count(a), Some(0));
+    assert!(bpm.unpin_page(a, false), "fetching pins and unpinning releases: expected `bpm.unpin_page(a, false)`");
+    assert_eq!(bpm.get_pin_count(a), Some(2), "fetching pins and unpinning releases");
+    assert!(bpm.unpin_page(a, false) && bpm.unpin_page(a, false), "fetching pins and unpinning releases: expected `bpm.unpin_page(a, false) && bpm.unpin_page(a, false)`");
+    assert_eq!(bpm.get_pin_count(a), Some(0), "fetching pins and unpinning releases");
     assert!(!bpm.unpin_page(a, false), "a page that is not pinned cannot be unpinned");
     assert!(!bpm.unpin_page(p(99), false), "neither can a page that is not in memory");
 }
@@ -279,7 +279,7 @@ fn s1f_02_an_unpinned_page_makes_room_for_another() {
     let (a, b, c) = (bpm.new_page(), bpm.new_page(), bpm.new_page());
     bpm.fetch_page(a).unwrap();
     bpm.fetch_page(b).unwrap();
-    assert_eq!(bpm.fetch_page(c), None);
+    assert_eq!(bpm.fetch_page(c), None, "an unpinned page makes room for another");
     bpm.unpin_page(a, false);
     assert!(bpm.fetch_page(c).is_some(), "page a is not pinned, so its frame can be reused");
     assert_eq!(bpm.get_pin_count(a), None, "and page a is no longer in memory");
@@ -353,7 +353,7 @@ fn s1f_02_the_pool_tells_the_replacer_when_a_page_is_in_use_and_when_it_is_not()
     assert_eq!(spy.size(), 0, "fetching an unpinned page that is in memory makes it non-evictable again");
     bpm.unpin_page(a, false);
     bpm.unpin_page(b, false);
-    assert_eq!(spy.size(), 2);
+    assert_eq!(spy.size(), 2, "the pool tells the replacer when a page is in use and when it is not");
 }
 
 #[test]
@@ -365,7 +365,7 @@ fn s1f_02_many_pages_pass_through_a_small_pool() {
     }
     for (i, &page) in pages.iter().enumerate().rev() {
         let text = format!("page number {i}");
-        assert_eq!(read_text(&bpm, page, text.len()), text);
+        assert_eq!(read_text(&bpm, page, text.len()), text, "many pages pass through a small pool");
     }
 }
 
@@ -402,7 +402,7 @@ fn s1f_02_the_pool_works_under_the_replacers_you_built() {
                 assert_eq!(read_text(&bpm, page, text.len()), text, "{policy:?}: page {i}");
             }
         }
-        assert!(disk.written_pages().len() <= 40);
+        assert!(disk.written_pages().len() <= 40, "the pool works under the replacers you built: expected `disk.written_pages().len() <= 40`");
     }
 }
 
@@ -413,15 +413,15 @@ fn s1f_03_flush_page_writes_the_page_even_when_it_is_clean() {
     let (bpm, disk) = pool(2);
     let a = bpm.new_page();
     write_text(&bpm, a, "flushed", false); // not reported dirty
-    assert!(bpm.flush_page(a));
+    assert!(bpm.flush_page(a), "flush page writes the page even when it is clean: expected `bpm.flush_page(a)`");
     assert_eq!(&disk.stored(a.0)[..7], b"flushed", "flush writes the page's current bytes");
 }
 
 #[test]
 fn s1f_03_flushing_a_page_that_is_not_in_memory_fails() {
     let (bpm, disk) = pool(2);
-    assert!(!bpm.flush_page(p(5)));
-    assert!(disk.writes().is_empty());
+    assert!(!bpm.flush_page(p(5)), "flushing a page that is not in memory fails: expected `!bpm.flush_page(p(5))`");
+    assert!(disk.writes().is_empty(), "flushing a page that is not in memory fails: expected `disk.writes().is_empty()`");
 }
 
 #[test]
@@ -429,8 +429,8 @@ fn s1f_03_a_flushed_page_is_clean_so_eviction_does_not_write_it_again() {
     let (bpm, disk) = pool(1);
     let (a, b) = (bpm.new_page(), bpm.new_page());
     write_text(&bpm, a, "x", true);
-    assert!(bpm.flush_page(a));
-    assert_eq!(disk.writes(), vec![a.0]);
+    assert!(bpm.flush_page(a), "a flushed page is clean so eviction does not write it again: expected `bpm.flush_page(a)`");
+    assert_eq!(disk.writes(), vec![a.0], "a flushed page is clean so eviction does not write it again");
     bpm.fetch_page(b).unwrap(); // evicts a
     assert_eq!(disk.writes(), vec![a.0], "page a was clean after the flush: evicting it writes nothing more");
 }
@@ -441,8 +441,8 @@ fn s1f_03_a_pinned_page_can_be_flushed_and_stays_pinned() {
     let a = bpm.new_page();
     let frame = bpm.fetch_page(a).unwrap();
     bpm.frame_data(frame).write().unwrap()[0] = 42;
-    assert!(bpm.flush_page(a));
-    assert_eq!(disk.stored(a.0)[0], 42);
+    assert!(bpm.flush_page(a), "a pinned page can be flushed and stays pinned: expected `bpm.flush_page(a)`");
+    assert_eq!(disk.stored(a.0)[0], 42, "a pinned page can be flushed and stays pinned");
     assert_eq!(bpm.get_pin_count(a), Some(1), "flushing does not change the pin count");
 }
 
@@ -454,7 +454,7 @@ fn s1f_03_flush_all_pages_writes_every_page_in_memory() {
         write_text(&bpm, page, &format!("p{i}"), false);
     }
     bpm.flush_all_pages();
-    assert_eq!(disk.written_pages(), pages.iter().map(|q| q.0).collect::<BTreeSet<_>>());
+    assert_eq!(disk.written_pages(), pages.iter().map(|q| q.0).collect::<BTreeSet<_>>(), "flush all pages writes every page in memory");
 }
 
 #[test]
@@ -464,7 +464,7 @@ fn s1f_03_a_pinned_page_cannot_be_deleted_but_an_unpinned_one_can_and_its_frame_
     bpm.fetch_page(a).unwrap();
     assert!(!bpm.delete_page(a), "a pinned page cannot be deleted");
     bpm.unpin_page(a, false);
-    assert!(bpm.delete_page(a));
+    assert!(bpm.delete_page(a), "a pinned page cannot be deleted but an unpinned one can and its frame is free again: expected `bpm.delete_page(a)`");
     assert_eq!(bpm.get_pin_count(a), None, "a deleted page is not in memory");
     assert!(bpm.fetch_page(b).is_some(), "and its frame can be used again");
     assert!(disk.deletes.lock().unwrap().contains(&a.0), "the disk is told to free the page");
@@ -476,8 +476,8 @@ fn s1f_03_deleting_a_page_makes_the_replacer_forget_its_frame() {
     let a = bpm.new_page();
     bpm.fetch_page(a).unwrap();
     bpm.unpin_page(a, false);
-    assert_eq!(spy.size(), 1);
-    assert!(bpm.delete_page(a));
+    assert_eq!(spy.size(), 1, "deleting a page makes the replacer forget its frame");
+    assert!(bpm.delete_page(a), "deleting a page makes the replacer forget its frame: expected `bpm.delete_page(a)`");
     assert_eq!(spy.size(), 0, "the frame is free now, so it must not be offered as a victim any more");
 }
 
@@ -487,7 +487,7 @@ fn s1f_03_deleting_a_page_that_is_not_in_memory_succeeds_and_a_deleted_dirty_pag
     assert!(bpm.delete_page(p(77)), "nothing to do counts as success");
     let a = bpm.new_page();
     write_text(&bpm, a, "doomed", true);
-    assert!(bpm.delete_page(a));
+    assert!(bpm.delete_page(a), "deleting a page that is not in memory succeeds and a deleted dirty page is not written: expected `bpm.delete_page(a)`");
     assert!(bpm.delete_page(a), "deleting twice is fine");
     assert!(disk.writes().is_empty(), "a page that is deleted is not written back");
 }
@@ -533,7 +533,7 @@ fn s1f_04_threads_share_a_small_pool_without_losing_updates() {
                         data[..4].copy_from_slice(&n.to_le_bytes());
                     }
                     applied[i].fetch_add(1, Ordering::SeqCst);
-                    assert!(bpm.unpin_page(pages[i], true));
+                    assert!(bpm.unpin_page(pages[i], true), "threads share a small pool without losing updates: expected `bpm.unpin_page(pages[i], true)`");
                 }
             })
         })
@@ -589,30 +589,30 @@ mod ch_1f_c1 {
     #[test]
     fn s1f_c1_pins_count_up_and_down() {
         let mut t = PinTable::new();
-        assert_eq!((t.pin(3), t.pin(3)), (1, 2));
-        assert_eq!(t.unpin(3), Ok(1));
-        assert_eq!(t.unpin(3), Ok(0));
-        assert!(!t.is_pinned(3));
-        assert_eq!(t.unpin(3), Err(NotPinned));
+        assert_eq!((t.pin(3), t.pin(3)), (1, 2), "this check");
+        assert_eq!(t.unpin(3), Ok(1), "this check");
+        assert_eq!(t.unpin(3), Ok(0), "this check");
+        assert!(!t.is_pinned(3), "this check: expected `!t.is_pinned(3)`");
+        assert_eq!(t.unpin(3), Err(NotPinned), "this check");
     }
 
     #[test]
     fn s1f_c1_unpinning_what_was_never_pinned_changes_nothing() {
         let mut t = PinTable::new();
         t.pin(1);
-        assert_eq!(t.unpin(2), Err(NotPinned));
-        assert_eq!(t.pinned_pages(), vec![1]);
-        assert_eq!(t.count(1), 1);
+        assert_eq!(t.unpin(2), Err(NotPinned), "this check");
+        assert_eq!(t.pinned_pages(), vec![1], "this check");
+        assert_eq!(t.count(1), 1, "this check");
     }
 
     #[test]
     fn s1f_c1_a_page_can_be_pinned_again_after_its_pins_reach_zero() {
         let mut t = PinTable::new();
         t.pin(4);
-        assert_eq!(t.unpin(4), Ok(0));
-        assert!(!t.is_pinned(4));
+        assert_eq!(t.unpin(4), Ok(0), "this check");
+        assert!(!t.is_pinned(4), "this check: expected `!t.is_pinned(4)`");
         assert_eq!(t.pin(4), 1, "the count starts again from one");
-        assert_eq!(t.pinned_pages(), vec![4]);
+        assert_eq!(t.pinned_pages(), vec![4], "this check");
     }
 
     #[test]
@@ -621,8 +621,8 @@ mod ch_1f_c1 {
         for p in [9, 2, 5, 2] {
             t.pin(p);
         }
-        assert_eq!(t.pinned_pages(), vec![2, 5, 9]);
-        assert_eq!((t.count(2), t.count(5), t.count(7)), (2, 1, 0));
+        assert_eq!(t.pinned_pages(), vec![2, 5, 9], "this check");
+        assert_eq!((t.count(2), t.count(5), t.count(7)), (2, 1, 0), "this check");
         t.unpin(5).unwrap();
         assert_eq!(t.pinned_pages(), vec![2, 9], "a page with no pins is not listed");
     }
@@ -662,24 +662,24 @@ mod ch_1f_c2 {
 
     #[test]
     fn s1f_c2_neighbours_merge_and_the_rest_stand_alone() {
-        assert_eq!(flush_runs(&[5, 3, 4, 10, 3], 8), vec![(3, 3), (10, 1)]);
+        assert_eq!(flush_runs(&[5, 3, 4, 10, 3], 8), vec![(3, 3), (10, 1)], "this check");
     }
 
     #[test]
     fn s1f_c2_the_cap_splits_a_long_stretch() {
-        assert_eq!(flush_runs(&[1, 2, 3, 4, 5], 2), vec![(1, 2), (3, 2), (5, 1)]);
-        assert_eq!(flush_runs(&[1, 2, 3], 1), vec![(1, 1), (2, 1), (3, 1)]);
+        assert_eq!(flush_runs(&[1, 2, 3, 4, 5], 2), vec![(1, 2), (3, 2), (5, 1)], "this check");
+        assert_eq!(flush_runs(&[1, 2, 3], 1), vec![(1, 1), (2, 1), (3, 1)], "this check");
     }
 
     #[test]
     fn s1f_c2_nothing_in_nothing_out() {
-        assert_eq!(flush_runs(&[], 4), vec![]);
-        assert_eq!(flush_runs(&[7, 7, 7], 4), vec![(7, 1)]);
+        assert_eq!(flush_runs(&[], 4), vec![], "this check");
+        assert_eq!(flush_runs(&[7, 7, 7], 4), vec![(7, 1)], "this check");
     }
 
     #[test]
     fn s1f_c2_the_largest_page_numbers_do_not_overflow() {
-        assert_eq!(flush_runs(&[u32::MAX, u32::MAX - 1], 8), vec![(u32::MAX - 1, 2)]);
+        assert_eq!(flush_runs(&[u32::MAX, u32::MAX - 1], 8), vec![(u32::MAX - 1, 2)], "this check");
     }
 
     proptest! {
@@ -725,8 +725,8 @@ mod ch_1f_c3 {
         w.mark_dirty(3, 5);
         w.mark_dirty(2, 5);
         assert_eq!(w.due(10, 5), vec![1, 2, 3], "ties are by page number");
-        assert_eq!(w.due(10, 6), vec![1]);
-        assert_eq!(w.due(4, 5), Vec::<u32>::new());
+        assert_eq!(w.due(10, 6), vec![1], "this check");
+        assert_eq!(w.due(4, 5), Vec::<u32>::new(), "this check");
     }
 
     #[test]
@@ -734,28 +734,28 @@ mod ch_1f_c3 {
         let mut w = WriteBehind::new();
         w.mark_dirty(1, 0);
         w.mark_dirty(1, 8);
-        assert_eq!(w.oldest(), Some((1, 0)));
-        assert_eq!(w.due(10, 10), vec![1]);
+        assert_eq!(w.oldest(), Some((1, 0)), "this check");
+        assert_eq!(w.due(10, 10), vec![1], "this check");
     }
 
     #[test]
     fn s1f_c3_a_flushed_page_is_clean_and_starts_again_when_dirtied() {
         let mut w = WriteBehind::new();
         w.mark_dirty(1, 0);
-        assert!(w.flushed(1));
-        assert!(!w.flushed(1));
-        assert_eq!((w.dirty_count(), w.oldest()), (0, None));
+        assert!(w.flushed(1), "this check: expected `w.flushed(1)`");
+        assert!(!w.flushed(1), "this check: expected `!w.flushed(1)`");
+        assert_eq!((w.dirty_count(), w.oldest()), (0, None), "this check");
         w.mark_dirty(1, 20);
-        assert_eq!(w.oldest(), Some((1, 20)));
+        assert_eq!(w.oldest(), Some((1, 20)), "this check");
     }
 
     #[test]
     fn s1f_c3_a_clock_behind_the_dirty_time_counts_as_age_zero() {
         let mut w = WriteBehind::new();
         w.mark_dirty(1, 100);
-        assert_eq!(w.due(50, 0), vec![1]);
-        assert_eq!(w.due(50, 1), Vec::<u32>::new());
-        assert_eq!(w.due(100, 0), vec![1]);
+        assert_eq!(w.due(50, 0), vec![1], "this check");
+        assert_eq!(w.due(50, 1), Vec::<u32>::new(), "this check");
+        assert_eq!(w.due(100, 0), vec![1], "this check");
     }
 
     proptest! {
@@ -792,9 +792,9 @@ mod ch_1f_c4 {
     #[test]
     fn s1f_c4_nothing_is_suggested_before_the_run_is_long_enough() {
         let mut d = SeqDetector::new(3, 2);
-        assert_eq!(d.access(1), Vec::<u32>::new());
-        assert_eq!(d.access(2), Vec::<u32>::new());
-        assert_eq!(d.access(3), vec![4, 5]);
+        assert_eq!(d.access(1), Vec::<u32>::new(), "this check");
+        assert_eq!(d.access(2), Vec::<u32>::new(), "this check");
+        assert_eq!(d.access(3), vec![4, 5], "this check");
     }
 
     #[test]
@@ -804,14 +804,14 @@ mod ch_1f_c4 {
             d.access(p);
         }
         assert_eq!(d.access(4), vec![6], "5 was suggested already");
-        assert_eq!(d.access(5), vec![7]);
+        assert_eq!(d.access(5), vec![7], "this check");
     }
 
     #[test]
     fn s1f_c4_a_jump_or_a_repeat_starts_over() {
         let mut d = SeqDetector::new(2, 3);
         d.access(10);
-        assert_eq!(d.access(11), vec![12, 13, 14]);
+        assert_eq!(d.access(11), vec![12, 13, 14], "this check");
         assert_eq!(d.access(30), Vec::<u32>::new(), "a jump resets the run");
         assert_eq!(d.access(31), vec![32, 33, 34], "and the next run can be prefetched afresh");
         assert_eq!(d.access(31), Vec::<u32>::new(), "a repeat is not sequential");
@@ -821,9 +821,9 @@ mod ch_1f_c4 {
     fn s1f_c4_a_depth_of_zero_never_suggests_and_a_trigger_of_one_suggests_at_once() {
         let mut z = SeqDetector::new(2, 0);
         z.access(1);
-        assert_eq!(z.access(2), Vec::<u32>::new());
+        assert_eq!(z.access(2), Vec::<u32>::new(), "this check");
         let mut one = SeqDetector::new(1, 1);
-        assert_eq!(one.access(7), vec![8]);
+        assert_eq!(one.access(7), vec![8], "this check");
     }
 
     proptest! {
@@ -866,16 +866,16 @@ mod ch_1f_c5 {
     fn s1f_c5_insert_and_look_up_both_ways() {
         let mut t = PageTable::new();
         t.insert(1, 10);
-        assert_eq!((t.frame_of(1), t.page_of(10), t.len()), (Some(10), Some(1), 1));
+        assert_eq!((t.frame_of(1), t.page_of(10), t.len()), (Some(10), Some(1), 1), "this check");
     }
 
     #[test]
     fn s1f_c5_a_removed_page_leaves_no_trace_in_either_direction() {
         let mut t = PageTable::new();
         t.insert(1, 10);
-        assert_eq!(t.remove_page(1), Some(10));
+        assert_eq!(t.remove_page(1), Some(10), "this check");
         assert_eq!((t.frame_of(1), t.page_of(10), t.len()), (None, None, 0), "the frame no longer claims to hold page 1");
-        assert_eq!(t.remove_page(1), None);
+        assert_eq!(t.remove_page(1), None, "this check");
     }
 
     #[test]
@@ -884,7 +884,7 @@ mod ch_1f_c5 {
         t.insert(1, 10);
         t.remove_page(1);
         t.insert(2, 10);
-        assert_eq!((t.page_of(10), t.frame_of(1), t.frame_of(2)), (Some(2), None, Some(10)));
+        assert_eq!((t.page_of(10), t.frame_of(1), t.frame_of(2)), (Some(2), None, Some(10)), "this check");
     }
 
     #[test]
@@ -892,7 +892,7 @@ mod ch_1f_c5 {
         let mut t = PageTable::new();
         t.insert(1, 10);
         t.insert(1, 11);
-        assert_eq!((t.page_of(10), t.page_of(11), t.len()), (None, Some(1), 1));
+        assert_eq!((t.page_of(10), t.page_of(11), t.len()), (None, Some(1), 1), "this check");
     }
 
     #[test]
@@ -900,7 +900,7 @@ mod ch_1f_c5 {
         let mut t = PageTable::new();
         t.insert(1, 10);
         t.insert(2, 10);
-        assert_eq!((t.frame_of(1), t.frame_of(2), t.len()), (None, Some(10), 1));
+        assert_eq!((t.frame_of(1), t.frame_of(2), t.len()), (None, Some(10), 1), "this check");
     }
 
     proptest! {

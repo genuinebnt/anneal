@@ -799,8 +799,8 @@ mod ch_4e_c4 {
 
     #[test]
     fn s4e_c4_no_sessions_no_work() {
-        assert!(expired(&[], 10, 5).is_empty());
-        assert_eq!(next_check_in(&[], 10, 5), None);
+        assert!(expired(&[], 10, 5).is_empty(), "this check: expected `expired(&[], 10, 5).is_empty()`");
+        assert_eq!(next_check_in(&[], 10, 5), None, "this check");
     }
 
     proptest! {
@@ -861,7 +861,7 @@ mod ch_4e_c5 {
         let pool = SessionPool::new(&db, 1);
         pool.with(|s| {
             exec(s, "begin");
-            assert!(s.execute("select 1 / 0").is_err());
+            assert!(s.execute("select 1 / 0").is_err(), "this check: expected `s.execute(\"select 1 / 0\").is_err()`");
             assert!(s.is_failed(), "left failed");
         });
         pool.with(|s| {

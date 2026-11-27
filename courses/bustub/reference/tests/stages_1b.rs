@@ -116,7 +116,7 @@ fn s1b_01_put_never_blocks_and_len_counts_what_is_waiting() {
         ch
     });
     assert_eq!(ch.len(), 10_000, "ten thousand elements are waiting");
-    assert!(!ch.is_empty());
+    assert!(!ch.is_empty(), "put never blocks and len counts what is waiting: expected `!ch.is_empty()`");
     assert!(Channel::<u8>::new().is_empty(), "a new channel is empty");
 }
 
@@ -130,7 +130,7 @@ fn s1b_01_get_waits_until_something_is_put() {
     };
     assert!(rx.recv_timeout(SHORT).is_err(), "get returned from an empty channel instead of waiting");
     ch.put(42);
-    assert_eq!(rx.recv_timeout(WAIT).expect("get never noticed the put: a waiting getter must be woken"), 42);
+    assert_eq!(rx.recv_timeout(WAIT).expect("get never noticed the put: a waiting getter must be woken"), 42, "get waits until something is put");
     getter.join().unwrap();
 }
 
@@ -235,7 +235,7 @@ fn s1b_02_get_waits_for_a_promise_that_is_set_later_on_another_thread() {
     let waiter = thread::spawn(move || tx.send(f.get()).unwrap());
     assert!(rx.recv_timeout(SHORT).is_err(), "get returned before anything was set");
     p.set("hello".to_string());
-    assert_eq!(rx.recv_timeout(WAIT).expect("a set value must wake the waiting future"), Ok("hello".to_string()));
+    assert_eq!(rx.recv_timeout(WAIT).expect("a set value must wake the waiting future"), Ok("hello".to_string()), "get waits for a promise that is set later on another thread");
     waiter.join().unwrap();
 }
 
@@ -244,7 +244,7 @@ fn s1b_02_a_promise_dropped_without_a_value_breaks_the_future() {
     let (p, f) = promise::<u32>();
     drop(p);
     assert!(f.is_ready(), "a broken promise makes get return at once");
-    assert_eq!(f.get(), Err(BrokenPromise));
+    assert_eq!(f.get(), Err(BrokenPromise), "a promise dropped without a value breaks the future");
 }
 
 #[test]
@@ -254,7 +254,7 @@ fn s1b_02_dropping_the_promise_wakes_a_future_that_is_already_waiting() {
     let waiter = thread::spawn(move || tx.send(f.get()).unwrap());
     assert!(rx.recv_timeout(SHORT).is_err(), "get returned before the promise was dropped");
     drop(p);
-    assert_eq!(rx.recv_timeout(WAIT).expect("a dropped promise must wake the waiting future, or the waiter hangs forever"), Err(BrokenPromise));
+    assert_eq!(rx.recv_timeout(WAIT).expect("a dropped promise must wake the waiting future, or the waiter hangs forever"), Err(BrokenPromise), "dropping the promise wakes a future that is already waiting");
     waiter.join().unwrap();
 }
 
@@ -323,7 +323,7 @@ fn s1b_03_schedule_returns_before_the_io_is_done() {
     let start = Instant::now();
     sched.schedule(vec![w]);
     assert!(start.elapsed() < Duration::from_millis(300), "schedule must hand the request over and return, not do the I/O itself");
-    assert!(wait(wf).unwrap().is_ok());
+    assert!(wait(wf).unwrap().is_ok(), "schedule returns before the io is done: expected `wait(wf).unwrap().is_ok()`");
 }
 
 #[test]
@@ -439,7 +439,7 @@ proptest! {
 fn s1b_05_a_write_changes_what_the_next_read_sees() {
     let latch = ReaderWriterLatch::new(vec![1, 2]);
     latch.write().push(3);
-    assert_eq!(*latch.read(), vec![1, 2, 3]);
+    assert_eq!(*latch.read(), vec![1, 2, 3], "a write changes what the next read sees");
 }
 
 #[test]
@@ -519,7 +519,7 @@ fn s1b_05_a_writer_keeps_readers_out_until_it_lets_go() {
     };
     assert!(rx.recv_timeout(SHORT).is_err(), "a reader got in while a writer held the latch");
     drop(guard);
-    assert_eq!(rx.recv_timeout(WAIT).expect("the reader must be let in when the writer lets go"), 0);
+    assert_eq!(rx.recv_timeout(WAIT).expect("the reader must be let in when the writer lets go"), 0, "a writer keeps readers out until it lets go");
     reader.join().unwrap();
 }
 
@@ -534,7 +534,7 @@ fn s1b_05_a_latch_is_still_usable_after_a_holder_panicked() {
     .join();
     assert_eq!(*latch.read(), 5, "a latch whose holder panicked must still give its guard (poisoning is not this latch's business)");
     *latch.write() = 6;
-    assert_eq!(*latch.read(), 6);
+    assert_eq!(*latch.read(), 6, "a latch is still usable after a holder panicked");
 }
 
 // ---- 1b-06 · Several workers, one page at a time ---------------------------------------------------------------
@@ -559,7 +559,7 @@ fn s1b_06_requests_for_different_pages_overlap_in_time() {
         })
         .collect();
     for f in futures {
-        assert!(wait(f).unwrap().is_ok());
+        assert!(wait(f).unwrap().is_ok(), "requests for different pages overlap in time: expected `wait(f).unwrap().is_ok()`");
     }
     let took = start.elapsed();
     assert!(took < Duration::from_millis(8 * 100 * 3 / 4), "8 writes of 100 ms to different pages on 4 workers took {took:?}: one worker would take 800 ms, they should overlap");
@@ -619,7 +619,7 @@ fn s1b_07_many_threads_scheduling_at_once_each_get_their_own_answers() {
                     let (r, rf) = DiskRequest::read(PageId(page));
                     sched.schedule(vec![w]);
                     sched.schedule(vec![r]);
-                    assert!(wait(wf).unwrap().is_ok());
+                    assert!(wait(wf).unwrap().is_ok(), "many threads scheduling at once each get their own answers: expected `wait(wf).unwrap().is_ok()`");
                     let got = wait(rf).unwrap().unwrap();
                     assert!(got.iter().all(|&b| b == (page % 251) as u8), "thread {t} read the wrong bytes for page {page}");
                 }
@@ -638,7 +638,7 @@ fn s1b_07_the_scheduler_works_over_the_real_disk_manager_too() {
     let (w, wf) = write_req(7, 0x5A);
     let (r, rf) = DiskRequest::read(PageId(7));
     sched.schedule(vec![w, r]);
-    assert!(wait(wf).unwrap().is_ok());
+    assert!(wait(wf).unwrap().is_ok(), "the scheduler works over the real disk manager too: expected `wait(wf).unwrap().is_ok()`");
     assert!(wait(rf).unwrap().unwrap().iter().all(|&b| b == 0x5A), "a page written through the scheduler to a real file reads back");
     drop(sched);
     let _ = std::fs::remove_dir_all(&dir);
@@ -684,7 +684,7 @@ fn s1b_c1_a_full_bucket_lets_a_burst_through_and_then_refuses() {
         d.write_page(PageId(i), &page(1)).expect("the first three writes use the burst");
     }
     let err = d.write_page(PageId(3), &page(1)).expect_err("the bucket is empty");
-    assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+    assert_eq!(err.kind(), io::ErrorKind::WouldBlock, "s1b c1 a full bucket lets a burst through and then refuses");
     let mut buf = [0u8; PS];
     inner.read_page(PageId(3), &mut buf).unwrap();
     assert_eq!(buf, [0u8; PS], "a refused write never reaches the disk underneath");
@@ -694,20 +694,20 @@ fn s1b_c1_a_full_bucket_lets_a_burst_through_and_then_refuses() {
 fn s1b_c1_tokens_come_back_with_time_continuously() {
     let (d, clock, _inner) = throttled(2, 1);
     d.write_page(PageId(0), &page(1)).unwrap();
-    assert!(d.write_page(PageId(1), &page(1)).is_err());
+    assert!(d.write_page(PageId(1), &page(1)).is_err(), "s1b c1 tokens come back with time continuously: expected `d.write_page(PageId(1), &page(1)).is_err()`");
     clock.advance(Duration::from_millis(250));
     assert!(d.write_page(PageId(1), &page(1)).is_err(), "a quarter of a second at 2 per second is half a token");
     clock.advance(Duration::from_millis(250));
     assert!(d.write_page(PageId(1), &page(1)).is_ok(), "two quarters make a whole token: tokens add up between calls");
-    assert!(d.write_page(PageId(2), &page(1)).is_err());
+    assert!(d.write_page(PageId(2), &page(1)).is_err(), "s1b c1 tokens come back with time continuously: expected `d.write_page(PageId(2), &page(1)).is_err()`");
 }
 
 #[test]
 fn s1b_c1_the_bucket_never_holds_more_than_the_burst() {
     let (d, clock, _inner) = throttled(10, 2);
     clock.advance(Duration::from_secs(100));
-    assert!(d.write_page(PageId(0), &page(1)).is_ok());
-    assert!(d.write_page(PageId(1), &page(1)).is_ok());
+    assert!(d.write_page(PageId(0), &page(1)).is_ok(), "s1b c1 the bucket never holds more than the burst: expected `d.write_page(PageId(0), &page(1)).is_ok()`");
+    assert!(d.write_page(PageId(1), &page(1)).is_ok(), "s1b c1 the bucket never holds more than the burst: expected `d.write_page(PageId(1), &page(1)).is_ok()`");
     assert!(d.write_page(PageId(2), &page(1)).is_err(), "100 seconds of idleness do not buy more than the burst of 2");
 }
 
@@ -715,11 +715,11 @@ fn s1b_c1_the_bucket_never_holds_more_than_the_burst() {
 fn s1b_c1_reads_and_deletes_are_never_limited() {
     let (d, _clock, _inner) = throttled(1, 1);
     d.write_page(PageId(0), &page(7)).unwrap();
-    assert!(d.write_page(PageId(1), &page(8)).is_err());
+    assert!(d.write_page(PageId(1), &page(8)).is_err(), "s1b c1 reads and deletes are never limited: expected `d.write_page(PageId(1), &page(8)).is_err()`");
     let mut buf = [0u8; PS];
     for _ in 0..100 {
         d.read_page(PageId(0), &mut buf).unwrap();
-        assert_eq!(buf, page(7));
+        assert_eq!(buf, page(7), "s1b c1 reads and deletes are never limited");
     }
     d.delete_page(PageId(0));
 }
@@ -773,9 +773,9 @@ proptest! {
 #[test]
 fn s1b_c2_a_gate_that_is_open_lets_everybody_through() {
     let g = Gate::new();
-    assert!(!g.is_open());
+    assert!(!g.is_open(), "s1b c2 a gate that is open lets everybody through: expected `!g.is_open()`");
     g.open();
-    assert!(g.is_open());
+    assert!(g.is_open(), "s1b c2 a gate that is open lets everybody through: expected `g.is_open()`");
     g.wait();
     g.wait();
     g.open();
@@ -819,7 +819,7 @@ fn s1b_c2_every_waiter_goes_on_not_just_one() {
         got.push(rx.recv_timeout(WAIT).expect("a waiter was left behind: opening the gate must release everyone who waits at it"));
     }
     got.sort();
-    assert_eq!(got, vec![0, 1, 2, 3]);
+    assert_eq!(got, vec![0, 1, 2, 3], "s1b c2 every waiter goes on not just one");
     for h in hs {
         h.join().unwrap();
     }
@@ -871,8 +871,8 @@ mod ch_1b_c3 {
         for (p, x) in [(1, 'a'), (3, 'b'), (3, 'c'), (2, 'd')] {
             q.push(p, x);
         }
-        assert_eq!(q.peek_priority(), Some(3));
-        assert_eq!((q.pop(), q.pop(), q.pop(), q.pop(), q.pop()), (Some('b'), Some('c'), Some('d'), Some('a'), None));
+        assert_eq!(q.peek_priority(), Some(3), "this check");
+        assert_eq!((q.pop(), q.pop(), q.pop(), q.pop(), q.pop()), (Some('b'), Some('c'), Some('d'), Some('a'), None), "this check");
     }
 
     #[test]
@@ -881,15 +881,15 @@ mod ch_1b_c3 {
         q.push(1, "old1");
         q.push(1, "old2");
         q.push(9, "urgent");
-        assert_eq!(q.pop(), Some("urgent"));
+        assert_eq!(q.pop(), Some("urgent"), "this check");
         assert_eq!(q.pop(), Some("old1"), "equals keep their arrival order");
     }
 
     #[test]
     fn s1b_c3_an_empty_queue_has_nothing() {
         let mut q: RequestQueue<u8> = RequestQueue::new();
-        assert!(q.is_empty());
-        assert_eq!((q.pop(), q.peek_priority(), q.len()), (None, None, 0));
+        assert!(q.is_empty(), "this check: expected `q.is_empty()`");
+        assert_eq!((q.pop(), q.peek_priority(), q.len()), (None, None, 0), "this check");
     }
 
     #[test]
@@ -898,7 +898,7 @@ mod ch_1b_c3 {
         let mut q = RequestQueue::new();
         q.push(2, NoOrd(10));
         q.push(2, NoOrd(20));
-        assert_eq!(q.pop().map(|x| x.0), Some(10));
+        assert_eq!(q.pop().map(|x| x.0), Some(10), "this check");
     }
 
     proptest! {
@@ -953,29 +953,29 @@ mod ch_1b_c4 {
 
     #[test]
     fn s1b_c4_repeated_writes_to_one_page_become_the_last_one() {
-        assert_eq!(coalesce(&[W(1, 1), W(1, 2), W(1, 3)]), vec![W(1, 3)]);
+        assert_eq!(coalesce(&[W(1, 1), W(1, 2), W(1, 3)]), vec![W(1, 3)], "this check");
     }
 
     #[test]
     fn s1b_c4_a_read_in_between_protects_the_write_it_would_see() {
-        assert_eq!(coalesce(&[W(1, 1), R(1), W(1, 2)]), vec![W(1, 1), R(1), W(1, 2)]);
+        assert_eq!(coalesce(&[W(1, 1), R(1), W(1, 2)]), vec![W(1, 1), R(1), W(1, 2)], "this check");
     }
 
     #[test]
     fn s1b_c4_writes_to_other_pages_in_between_do_not_matter() {
-        assert_eq!(coalesce(&[W(1, 1), W(2, 9), W(1, 2)]), vec![W(2, 9), W(1, 2)]);
+        assert_eq!(coalesce(&[W(1, 1), W(2, 9), W(1, 2)]), vec![W(2, 9), W(1, 2)], "this check");
     }
 
     #[test]
     fn s1b_c4_a_read_of_another_page_does_not_protect_a_write() {
-        assert_eq!(coalesce(&[W(1, 1), R(2), W(1, 2)]), vec![R(2), W(1, 2)]);
+        assert_eq!(coalesce(&[W(1, 1), R(2), W(1, 2)]), vec![R(2), W(1, 2)], "this check");
     }
 
     #[test]
     fn s1b_c4_empty_and_single_operations() {
-        assert_eq!(coalesce(&[]), vec![]);
-        assert_eq!(coalesce(&[R(5)]), vec![R(5)]);
-        assert_eq!(coalesce(&[W(5, 1)]), vec![W(5, 1)]);
+        assert_eq!(coalesce(&[]), vec![], "this check");
+        assert_eq!(coalesce(&[R(5)]), vec![R(5)], "this check");
+        assert_eq!(coalesce(&[W(5, 1)]), vec![W(5, 1)], "this check");
     }
 
     proptest! {
@@ -1029,7 +1029,7 @@ mod ch_1b_c5 {
             }
         }
         pool.shutdown();
-        assert_eq!(accepted, jobs);
+        assert_eq!(accepted, jobs, "this check");
         counter.load(Ordering::SeqCst)
     }
 
@@ -1040,8 +1040,8 @@ mod ch_1b_c5 {
 
     #[test]
     fn s1b_c5_one_worker_and_many_workers() {
-        assert_eq!(run(1, 100), 100);
-        assert_eq!(run(8, 300), 300);
+        assert_eq!(run(1, 100), 100, "this check");
+        assert_eq!(run(8, 300), 300, "this check");
     }
 
     #[test]
@@ -1052,8 +1052,8 @@ mod ch_1b_c5 {
         let r = Arc::clone(&ran);
         assert!(!pool.submit(move || {
             r.fetch_add(1, Ordering::SeqCst);
-        }));
-        assert_eq!(ran.load(Ordering::SeqCst), 0);
+        }), "this check: expected `!pool.submit(move || {{ r.fetch_add(1, Ordering::SeqCst); }})`");
+        assert_eq!(ran.load(Ordering::SeqCst), 0, "this check");
     }
 
     #[test]
@@ -1069,7 +1069,7 @@ mod ch_1b_c5 {
         pool.shutdown();
         pool.shutdown();
         drop(pool);
-        assert_eq!(c.load(Ordering::SeqCst), 20);
+        assert_eq!(c.load(Ordering::SeqCst), 20, "this check");
     }
 
     #[test]
@@ -1085,7 +1085,7 @@ mod ch_1b_c5 {
                 });
             }
         }
-        assert_eq!(c.load(Ordering::SeqCst), 150);
+        assert_eq!(c.load(Ordering::SeqCst), 150, "this check");
     }
 }
 // @@ challenge 1b-c5 end

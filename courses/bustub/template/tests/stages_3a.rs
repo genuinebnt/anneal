@@ -80,7 +80,7 @@ fn s3a_01_every_type_has_a_size_in_bytes_and_a_name() {
     assert_eq!(kind(Invalid.type_size()), ExceptionType::UnknownType, "the invalid type has no size");
     let names = [(Invalid, "INVALID"), (Boolean, "BOOLEAN"), (TinyInt, "TINYINT"), (SmallInt, "SMALLINT"), (Integer, "INTEGER"), (BigInt, "BIGINT"), (Decimal, "DECIMAL"), (Varchar, "VARCHAR"), (Timestamp, "TIMESTAMP")];
     for (t, name) in names {
-        assert_eq!(t.type_id_to_string(), name);
+        assert_eq!(t.type_id_to_string(), name, "every type has a size in bytes and a name");
     }
 }
 
@@ -138,7 +138,7 @@ fn s3a_01_minimum_and_maximum_values_are_values_in_order() {
     for t in [TinyInt, SmallInt, Integer, BigInt, Decimal, Timestamp, Boolean] {
         let (lo, hi) = (t.min_value().unwrap(), t.max_value().unwrap());
         assert!(!lo.is_null() && !hi.is_null(), "{t:?}: the smallest and largest values are real values");
-        assert_eq!((lo.type_id(), hi.type_id()), (t, t));
+        assert_eq!((lo.type_id(), hi.type_id()), (t, t), "minimum and maximum values are values in order");
         let num = |v: &Value| match v {
             Value::Timestamp(x) => *x as f64,
             Value::Boolean(b) => *b as u8 as f64,
@@ -147,32 +147,32 @@ fn s3a_01_minimum_and_maximum_values_are_values_in_order() {
         assert!(num(&lo) <= num(&hi), "{t:?}: min <= max");
     }
     assert_eq!(Integer.min_value().unwrap(), Value::Integer(i32::MIN + 1), "one above the reserved NULL number");
-    assert_eq!(Varchar.min_value().unwrap(), Value::varchar(""));
+    assert_eq!(Varchar.min_value().unwrap(), Value::varchar(""), "minimum and maximum values are values in order");
     assert!(Varchar.max_value().unwrap().is_null(), "there is no largest string");
-    assert_eq!(kind(Invalid.min_value()), ExceptionType::MismatchType);
-    assert_eq!(kind(Invalid.max_value()), ExceptionType::MismatchType);
+    assert_eq!(kind(Invalid.min_value()), ExceptionType::MismatchType, "minimum and maximum values are values in order");
+    assert_eq!(kind(Invalid.max_value()), ExceptionType::MismatchType, "minimum and maximum values are values in order");
 }
 
 #[test]
 fn s3a_01_values_print_like_bustub() {
-    assert_eq!(Value::boolean(true).to_string(), "true");
-    assert_eq!(Value::integer(-5).to_string(), "-5");
+    assert_eq!(Value::boolean(true).to_string(), "true", "values print like bustub");
+    assert_eq!(Value::integer(-5).to_string(), "-5", "values print like bustub");
     assert_eq!(Value::decimal(3.14).to_string(), "3.140000", "six digits after the point, like std::to_string");
-    assert_eq!(Value::varchar("hi there").to_string(), "hi there");
-    assert_eq!(Value::timestamp(77).to_string(), "77");
+    assert_eq!(Value::varchar("hi there").to_string(), "hi there", "values print like bustub");
+    assert_eq!(Value::timestamp(77).to_string(), "77", "values print like bustub");
     for (t, text) in [(Integer, "integer_null"), (Varchar, "varlen_null"), (Decimal, "decimal_null"), (Boolean, "boolean_null"), (TinyInt, "tinyint_null"), (SmallInt, "smallint_null"), (BigInt, "bigint_null"), (Timestamp, "timestamp_null")] {
-        assert_eq!(Value::null(t).to_string(), text);
+        assert_eq!(Value::null(t).to_string(), text, "values print like bustub");
     }
 }
 
 #[test]
 fn s3a_01_which_types_can_be_compared() {
     let (i, d, s, b, t) = (Value::integer(1), Value::decimal(1.0), Value::varchar("1"), Value::boolean(true), Value::timestamp(5));
-    assert!(i.check_comparable(&d) && d.check_comparable(&i) && i.check_comparable(&s));
+    assert!(i.check_comparable(&d) && d.check_comparable(&i) && i.check_comparable(&s), "which types can be compared: expected `i.check_comparable(&d) && d.check_comparable(&i) && i.check_comparable(&s)`");
     assert!(s.check_comparable(&b) && s.check_comparable(&t) && s.check_comparable(&i), "anything can be compared with a string");
-    assert!(b.check_comparable(&b) && b.check_comparable(&s));
+    assert!(b.check_comparable(&b) && b.check_comparable(&s), "which types can be compared: expected `b.check_comparable(&b) && b.check_comparable(&s)`");
     assert!(!b.check_comparable(&i) && !i.check_comparable(&b), "a boolean is not a number");
-    assert!(t.check_comparable(&t) && !t.check_comparable(&i));
+    assert!(t.check_comparable(&t) && !t.check_comparable(&i), "which types can be compared: expected `t.check_comparable(&t) && !t.check_comparable(&i)`");
 }
 
 // ---- 3a-02 · Casting -------------------------------------------------------------------------------------------------------
@@ -271,9 +271,9 @@ fn s3a_02_a_null_becomes_the_null_of_the_target_and_impossible_casts_are_errors(
     }
     assert!(Value::boolean(true).cast_as(Integer).is_err(), "a boolean is not a number");
     assert!(Value::integer(1).cast_as(Boolean).is_err(), "and a number is not a boolean");
-    assert!(Value::timestamp(5).cast_as(Integer).is_err());
-    assert_eq!(Value::boolean(true).cast_as(Varchar).unwrap().as_str(), Some("true"));
-    assert!(Value::integer(5).cast_as(Invalid).is_err());
+    assert!(Value::timestamp(5).cast_as(Integer).is_err(), "a null becomes the null of the target and impossible casts are errors: expected `Value::timestamp(5).cast_as(Integer).is_err()`");
+    assert_eq!(Value::boolean(true).cast_as(Varchar).unwrap().as_str(), Some("true"), "a null becomes the null of the target and impossible casts are errors");
+    assert!(Value::integer(5).cast_as(Invalid).is_err(), "a null becomes the null of the target and impossible casts are errors: expected `Value::integer(5).cast_as(Invalid).is_err()`");
 }
 
 /// A string to a decimal reads the leading number with its fraction and its exponent (the contract of the stage page).
@@ -392,12 +392,12 @@ proptest! {
 #[test]
 fn s3a_03_incomparable_types_are_errors_and_exact_equality_is_for_grouping() {
     assert!(Value::boolean(true).compare_equals(&Value::integer(1)).is_err(), "a boolean and a number cannot be compared");
-    assert!(Value::timestamp(1).compare_less_than(&Value::integer(1)).is_err());
+    assert!(Value::timestamp(1).compare_less_than(&Value::integer(1)).is_err(), "incomparable types are errors and exact equality is for grouping: expected `Value::timestamp(1).compare_less_than(&Value::integer(1)).is_err()`");
     assert!(Value::null(Integer).compare_exactly_equals(&Value::null(Integer)), "two NULLs are the same group");
-    assert!(Value::null(Integer).compare_exactly_equals(&Value::null(Varchar)));
-    assert!(!Value::null(Integer).compare_exactly_equals(&Value::integer(1)));
+    assert!(Value::null(Integer).compare_exactly_equals(&Value::null(Varchar)), "incomparable types are errors and exact equality is for grouping: expected `Value::null(Integer).compare_exactly_equals(&Value::null(Varchar))`");
+    assert!(!Value::null(Integer).compare_exactly_equals(&Value::integer(1)), "incomparable types are errors and exact equality is for grouping: expected `!Value::null(Integer).compare_exactly_equals(&Value::integer(1))`");
     assert!(Value::integer(7).compare_exactly_equals(&Value::bigint(7)), "7 is 7 whatever the width");
-    assert!(!Value::integer(7).compare_exactly_equals(&Value::integer(8)));
+    assert!(!Value::integer(7).compare_exactly_equals(&Value::integer(8)), "incomparable types are errors and exact equality is for grouping: expected `!Value::integer(7).compare_exactly_equals(&Value::integer(8))`");
     assert!(!Value::boolean(true).compare_exactly_equals(&Value::integer(1)), "an error counts as not equal");
 }
 
@@ -490,21 +490,21 @@ proptest! {
 
 #[test]
 fn s3a_04_strings_on_the_right_are_converted_and_other_types_are_refused() {
-    assert_eq!(Value::integer(5).add(&Value::varchar("7")).unwrap().as_i64(), Some(12));
+    assert_eq!(Value::integer(5).add(&Value::varchar("7")).unwrap().as_i64(), Some(12), "strings on the right are converted and other types are refused");
     assert_eq!(Value::integer(5).add(&Value::varchar("7")).unwrap().type_id(), Integer, "the result keeps the left type");
-    assert_eq!(kind(Value::integer(5).divide(&Value::varchar("0"))), ExceptionType::DivideByZero);
-    assert_eq!(kind(Value::boolean(true).add(&Value::boolean(true))), ExceptionType::NotImplemented);
+    assert_eq!(kind(Value::integer(5).divide(&Value::varchar("0"))), ExceptionType::DivideByZero, "strings on the right are converted and other types are refused");
+    assert_eq!(kind(Value::boolean(true).add(&Value::boolean(true))), ExceptionType::NotImplemented, "strings on the right are converted and other types are refused");
     assert_eq!(kind(Value::varchar("1").add(&Value::integer(1))), ExceptionType::NotImplemented, "a string is only ever on the right");
 }
 
 #[test]
 fn s3a_04_sqrt_and_is_zero() {
-    assert_eq!(Value::integer(9).sqrt().unwrap(), Value::decimal(3.0));
-    assert_eq!(Value::decimal(2.0).sqrt().unwrap().as_f64(), Some(2.0f64.sqrt()));
-    assert!(Value::null(Integer).sqrt().unwrap().is_null());
-    assert_eq!(kind(Value::integer(-1).sqrt()), ExceptionType::Decimal);
-    assert!(Value::integer(0).is_zero().unwrap() && Value::decimal(0.0).is_zero().unwrap() && !Value::bigint(5).is_zero().unwrap());
-    assert!(Value::varchar("0").is_zero().is_err());
+    assert_eq!(Value::integer(9).sqrt().unwrap(), Value::decimal(3.0), "sqrt and is zero");
+    assert_eq!(Value::decimal(2.0).sqrt().unwrap().as_f64(), Some(2.0f64.sqrt()), "sqrt and is zero");
+    assert!(Value::null(Integer).sqrt().unwrap().is_null(), "sqrt and is zero: expected `Value::null(Integer).sqrt().unwrap().is_null()`");
+    assert_eq!(kind(Value::integer(-1).sqrt()), ExceptionType::Decimal, "sqrt and is zero");
+    assert!(Value::integer(0).is_zero().unwrap() && Value::decimal(0.0).is_zero().unwrap() && !Value::bigint(5).is_zero().unwrap(), "sqrt and is zero: expected `Value::integer(0).is_zero().unwrap() && Value::decimal(0.0).is_zero().unwrap() && !Value::bigint(5)....`");
+    assert!(Value::varchar("0").is_zero().is_err(), "sqrt and is zero: expected `Value::varchar(\"0\").is_zero().is_err()`");
 }
 
 // ---- 3a-05 · Storing values as bytes ---------------------------------------------------------------------------------------
@@ -586,15 +586,15 @@ fn s3a_05_the_byte_formats_are_bustubs() {
         b
     };
     assert_eq!(bytes(&Value::integer(0x0102_0304)), vec![4, 3, 2, 1], "little-endian");
-    assert_eq!(bytes(&Value::smallint(-2)), vec![0xFE, 0xFF]);
-    assert_eq!(bytes(&Value::boolean(true)), vec![1]);
-    assert_eq!(bytes(&Value::bigint(1)), vec![1, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(bytes(&Value::smallint(-2)), vec![0xFE, 0xFF], "the byte formats are bustubs");
+    assert_eq!(bytes(&Value::boolean(true)), vec![1], "the byte formats are bustubs");
+    assert_eq!(bytes(&Value::bigint(1)), vec![1, 0, 0, 0, 0, 0, 0, 0], "the byte formats are bustubs");
     assert_eq!(bytes(&Value::varchar("ab")), vec![3, 0, 0, 0, b'a', b'b', 0], "a length that counts the zero byte, the text, a zero byte");
     assert_eq!(bytes(&Value::null(Varchar)), vec![0xFF, 0xFF, 0xFF, 0xFF], "a NULL string is the length u32::MAX and nothing else");
     assert_eq!(bytes(&Value::null(Integer)), i32::MIN.to_le_bytes().to_vec(), "a NULL is its reserved number");
-    assert_eq!(bytes(&Value::null(TinyInt)), vec![0x80]);
-    assert_eq!(Value::varchar("ab").storage_size(), 7);
-    assert_eq!(Value::null(Varchar).storage_size(), 4);
+    assert_eq!(bytes(&Value::null(TinyInt)), vec![0x80], "the byte formats are bustubs");
+    assert_eq!(Value::varchar("ab").storage_size(), 7, "the byte formats are bustubs");
+    assert_eq!(Value::null(Varchar).storage_size(), 4, "the byte formats are bustubs");
 }
 
 #[test]
@@ -605,9 +605,9 @@ fn s3a_05_reading_a_reserved_encoding_gives_a_null_and_the_invalid_type_is_an_er
         let v = Value::deserialize_from(&buf, t).unwrap();
         assert!(v.is_null() && v.type_id() == t, "{t:?}");
     }
-    assert_eq!(kind(Value::deserialize_from(&[0u8; 8], Invalid)), ExceptionType::UnknownType);
+    assert_eq!(kind(Value::deserialize_from(&[0u8; 8], Invalid)), ExceptionType::UnknownType, "reading a reserved encoding gives a null and the invalid type is an error");
     // only the bytes the type needs are read: a longer buffer is fine
-    assert_eq!(Value::deserialize_from(&[7, 0, 0, 0, 99, 99, 99, 99], Integer).unwrap().as_i64(), Some(7));
+    assert_eq!(Value::deserialize_from(&[7, 0, 0, 0, 99, 99, 99, 99], Integer).unwrap().as_i64(), Some(7), "reading a reserved encoding gives a null and the invalid type is an error");
 }
 
 // ---- 3a-06 · Boss: values end to end -----------------------------------------------------------------------------------------
@@ -647,11 +647,11 @@ mod ch_3a_c1 {
 
     #[test]
     fn s3a_c1_parsing_and_printing() {
-        assert_eq!(d("12.5").to_string(), "12.50");
-        assert_eq!(d("-0.07").to_string(), "-0.07");
-        assert_eq!(d("+3").to_string(), "3.00");
-        assert_eq!(d("-0.00").to_string(), "0.00");
-        assert_eq!(d("-0.00"), d("0"));
+        assert_eq!(d("12.5").to_string(), "12.50", "this check");
+        assert_eq!(d("-0.07").to_string(), "-0.07", "this check");
+        assert_eq!(d("+3").to_string(), "3.00", "this check");
+        assert_eq!(d("-0.00").to_string(), "0.00", "this check");
+        assert_eq!(d("-0.00"), d("0"), "this check");
     }
 
     #[test]
@@ -663,27 +663,27 @@ mod ch_3a_c1 {
 
     #[test]
     fn s3a_c1_addition_is_exact_where_floats_are_not() {
-        assert_eq!(d("0.1").add(d("0.2")).unwrap(), d("0.30"));
-        assert_eq!(d("10").sub(d("0.01")).unwrap().to_string(), "9.99");
-        assert_eq!(Decimal::from_cents(i128::MAX).add(d("0.01")), None);
-        assert_eq!(Decimal::from_cents(i128::MIN).sub(d("0.01")), None);
+        assert_eq!(d("0.1").add(d("0.2")).unwrap(), d("0.30"), "this check");
+        assert_eq!(d("10").sub(d("0.01")).unwrap().to_string(), "9.99", "this check");
+        assert_eq!(Decimal::from_cents(i128::MAX).add(d("0.01")), None, "this check");
+        assert_eq!(Decimal::from_cents(i128::MIN).sub(d("0.01")), None, "this check");
     }
 
     #[test]
     fn s3a_c1_multiplication_rounds_half_away_from_zero() {
-        assert_eq!(d("1.25").mul(d("1.25")).unwrap().to_string(), "1.56");
-        assert_eq!(d("-1.25").mul(d("1.25")).unwrap().to_string(), "-1.56");
+        assert_eq!(d("1.25").mul(d("1.25")).unwrap().to_string(), "1.56", "this check");
+        assert_eq!(d("-1.25").mul(d("1.25")).unwrap().to_string(), "-1.56", "this check");
         assert_eq!(d("0.05").mul(d("0.10")).unwrap().to_string(), "0.01", "0.005 rounds to 0.01");
-        assert_eq!(d("0.04").mul(d("0.10")).unwrap().to_string(), "0.00");
+        assert_eq!(d("0.04").mul(d("0.10")).unwrap().to_string(), "0.00", "this check");
     }
 
     #[test]
     fn s3a_c1_division_rounds_and_refuses_zero() {
-        assert_eq!(d("1").div(d("3")).unwrap().to_string(), "0.33");
-        assert_eq!(d("2").div(d("3")).unwrap().to_string(), "0.67");
-        assert_eq!(d("-2").div(d("3")).unwrap().to_string(), "-0.67");
-        assert_eq!(d("1").div(d("0")), None);
-        assert_eq!(d("5").div(d("2")).unwrap().to_string(), "2.50");
+        assert_eq!(d("1").div(d("3")).unwrap().to_string(), "0.33", "this check");
+        assert_eq!(d("2").div(d("3")).unwrap().to_string(), "0.67", "this check");
+        assert_eq!(d("-2").div(d("3")).unwrap().to_string(), "-0.67", "this check");
+        assert_eq!(d("1").div(d("0")), None, "this check");
+        assert_eq!(d("5").div(d("2")).unwrap().to_string(), "2.50", "this check");
     }
 
     proptest! {
@@ -723,27 +723,27 @@ mod ch_3a_c2 {
 
     #[test]
     fn s3a_c2_ascending_nulls_last() {
-        assert_eq!(sorted(&ROWS, Dir::Asc, Nulls::Last), vec![Some(1), Some(3), None]);
+        assert_eq!(sorted(&ROWS, Dir::Asc, Nulls::Last), vec![Some(1), Some(3), None], "this check");
     }
 
     #[test]
     fn s3a_c2_descending_nulls_first_puts_nulls_first_and_values_downwards() {
-        assert_eq!(sorted(&ROWS, Dir::Desc, Nulls::First), vec![None, Some(3), Some(1)]);
+        assert_eq!(sorted(&ROWS, Dir::Desc, Nulls::First), vec![None, Some(3), Some(1)], "this check");
     }
 
     #[test]
     fn s3a_c2_the_placement_is_independent_of_the_direction() {
-        assert_eq!(sorted(&ROWS, Dir::Asc, Nulls::First), vec![None, Some(1), Some(3)]);
-        assert_eq!(sorted(&ROWS, Dir::Desc, Nulls::Last), vec![Some(3), Some(1), None]);
+        assert_eq!(sorted(&ROWS, Dir::Asc, Nulls::First), vec![None, Some(1), Some(3)], "this check");
+        assert_eq!(sorted(&ROWS, Dir::Desc, Nulls::Last), vec![Some(3), Some(1), None], "this check");
     }
 
     #[test]
     fn s3a_c2_two_nulls_are_equal_and_sorting_is_stable() {
         use std::cmp::Ordering::Equal;
-        assert_eq!(cmp_nullable(None, None, Dir::Desc, Nulls::First), Equal);
+        assert_eq!(cmp_nullable(None, None, Dir::Desc, Nulls::First), Equal, "this check");
         let mut tagged = vec![(None, 'a'), (Some(1), 'b'), (None, 'c'), (Some(1), 'd')];
         tagged.sort_by(|x, y| cmp_nullable(x.0, y.0, Dir::Asc, Nulls::Last));
-        assert_eq!(tagged.iter().map(|t| t.1).collect::<String>(), "bdac");
+        assert_eq!(tagged.iter().map(|t| t.1).collect::<String>(), "bdac", "this check");
     }
 
     proptest! {
@@ -778,26 +778,26 @@ mod ch_3a_c3 {
 
     #[test]
     fn s3a_c3_numbers_with_surrounding_whitespace_and_signs() {
-        assert_eq!(parse_sql_int("  42 "), Ok(42));
-        assert_eq!(parse_sql_int("+5"), Ok(5));
-        assert_eq!(parse_sql_int("-0"), Ok(0));
-        assert_eq!(parse_sql_int("\t-17\n"), Ok(-17));
-        assert_eq!(parse_sql_int("007"), Ok(7));
+        assert_eq!(parse_sql_int("  42 "), Ok(42), "this check");
+        assert_eq!(parse_sql_int("+5"), Ok(5), "this check");
+        assert_eq!(parse_sql_int("-0"), Ok(0), "this check");
+        assert_eq!(parse_sql_int("\t-17\n"), Ok(-17), "this check");
+        assert_eq!(parse_sql_int("007"), Ok(7), "this check");
     }
 
     #[test]
     fn s3a_c3_the_edges_of_i64() {
-        assert_eq!(parse_sql_int("9223372036854775807"), Ok(i64::MAX));
-        assert_eq!(parse_sql_int("-9223372036854775808"), Ok(i64::MIN));
-        assert_eq!(parse_sql_int("9223372036854775808"), Err(IntError::OutOfRange));
-        assert_eq!(parse_sql_int("-9223372036854775809"), Err(IntError::OutOfRange));
-        assert_eq!(parse_sql_int("99999999999999999999999999"), Err(IntError::OutOfRange));
+        assert_eq!(parse_sql_int("9223372036854775807"), Ok(i64::MAX), "this check");
+        assert_eq!(parse_sql_int("-9223372036854775808"), Ok(i64::MIN), "this check");
+        assert_eq!(parse_sql_int("9223372036854775808"), Err(IntError::OutOfRange), "this check");
+        assert_eq!(parse_sql_int("-9223372036854775809"), Err(IntError::OutOfRange), "this check");
+        assert_eq!(parse_sql_int("99999999999999999999999999"), Err(IntError::OutOfRange), "this check");
     }
 
     #[test]
     fn s3a_c3_empty_and_invalid_are_different_errors() {
-        assert_eq!(parse_sql_int(""), Err(IntError::Empty));
-        assert_eq!(parse_sql_int("   "), Err(IntError::Empty));
+        assert_eq!(parse_sql_int(""), Err(IntError::Empty), "this check");
+        assert_eq!(parse_sql_int("   "), Err(IntError::Empty), "this check");
         for s in ["+", "-", "4 2", "1_0", "0x1", "1.0", "1e3", "--1", "+-1", "12a", "\u{0663}"] {
             assert_eq!(parse_sql_int(s), Err(IntError::Invalid), "{s:?}");
         }
@@ -835,31 +835,31 @@ mod ch_3a_c4 {
 
     #[test]
     fn s3a_c4_ordinary_values() {
-        assert_eq!(checked_add_i32(2, 3), Ok(5));
-        assert_eq!(checked_neg_i32(7), Ok(-7));
-        assert_eq!(checked_abs_i32(-7), Ok(7));
+        assert_eq!(checked_add_i32(2, 3), Ok(5), "this check");
+        assert_eq!(checked_neg_i32(7), Ok(-7), "this check");
+        assert_eq!(checked_abs_i32(-7), Ok(7), "this check");
         assert_eq!(checked_div_i32(-7, 2), Ok(-3), "truncation towards zero, as SQL does");
     }
 
     #[test]
     fn s3a_c4_division_by_zero_is_an_error() {
-        assert_eq!(checked_div_i32(5, 0), Err(IntOpError::DivisionByZero));
-        assert_eq!(checked_div_i32(i32::MIN, 0), Err(IntOpError::DivisionByZero));
+        assert_eq!(checked_div_i32(5, 0), Err(IntOpError::DivisionByZero), "this check");
+        assert_eq!(checked_div_i32(i32::MIN, 0), Err(IntOpError::DivisionByZero), "this check");
     }
 
     #[test]
     fn s3a_c4_the_one_division_that_overflows_is_an_error_not_a_panic() {
-        assert_eq!(checked_div_i32(i32::MIN, -1), Err(IntOpError::Overflow));
-        assert_eq!(checked_div_i32(i32::MIN, 1), Ok(i32::MIN));
-        assert_eq!(checked_div_i32(i32::MAX, -1), Ok(-i32::MAX));
+        assert_eq!(checked_div_i32(i32::MIN, -1), Err(IntOpError::Overflow), "this check");
+        assert_eq!(checked_div_i32(i32::MIN, 1), Ok(i32::MIN), "this check");
+        assert_eq!(checked_div_i32(i32::MAX, -1), Ok(-i32::MAX), "this check");
     }
 
     #[test]
     fn s3a_c4_the_other_extremes() {
-        assert_eq!(checked_abs_i32(i32::MIN), Err(IntOpError::Overflow));
-        assert_eq!(checked_neg_i32(i32::MIN), Err(IntOpError::Overflow));
-        assert_eq!(checked_add_i32(i32::MAX, 1), Err(IntOpError::Overflow));
-        assert_eq!(checked_add_i32(i32::MIN, -1), Err(IntOpError::Overflow));
+        assert_eq!(checked_abs_i32(i32::MIN), Err(IntOpError::Overflow), "this check");
+        assert_eq!(checked_neg_i32(i32::MIN), Err(IntOpError::Overflow), "this check");
+        assert_eq!(checked_add_i32(i32::MAX, 1), Err(IntOpError::Overflow), "this check");
+        assert_eq!(checked_add_i32(i32::MIN, -1), Err(IntOpError::Overflow), "this check");
     }
 
     proptest! {
@@ -887,36 +887,36 @@ mod ch_3a_c5 {
 
     #[test]
     fn s3a_c5_wildcards_and_literals() {
-        assert_eq!(like("hello", "h%o", None), Ok(true));
-        assert_eq!(like("hello", "h_llo", None), Ok(true));
-        assert_eq!(like("hello", "h_lo", None), Ok(false));
-        assert_eq!(like("hello", "%", None), Ok(true));
-        assert_eq!(like("", "%", None), Ok(true));
-        assert_eq!(like("", "_", None), Ok(false));
+        assert_eq!(like("hello", "h%o", None), Ok(true), "this check");
+        assert_eq!(like("hello", "h_llo", None), Ok(true), "this check");
+        assert_eq!(like("hello", "h_lo", None), Ok(false), "this check");
+        assert_eq!(like("hello", "%", None), Ok(true), "this check");
+        assert_eq!(like("", "%", None), Ok(true), "this check");
+        assert_eq!(like("", "_", None), Ok(false), "this check");
         assert_eq!(like("hello", "HELLO", None), Ok(false), "case-sensitive");
         assert_eq!(like("hello", "hell", None), Ok(false), "the whole text must match");
     }
 
     #[test]
     fn s3a_c5_the_escape_character_makes_the_next_character_literal() {
-        assert_eq!(like("100%", "100\\%", Some('\\')), Ok(true));
-        assert_eq!(like("1000", "100\\%", Some('\\')), Ok(false));
-        assert_eq!(like("a_b", "a\\_b", Some('\\')), Ok(true));
-        assert_eq!(like("axb", "a\\_b", Some('\\')), Ok(false));
+        assert_eq!(like("100%", "100\\%", Some('\\')), Ok(true), "this check");
+        assert_eq!(like("1000", "100\\%", Some('\\')), Ok(false), "this check");
+        assert_eq!(like("a_b", "a\\_b", Some('\\')), Ok(true), "this check");
+        assert_eq!(like("axb", "a\\_b", Some('\\')), Ok(false), "this check");
         assert_eq!(like("a\\b", "a\\\\b", Some('\\')), Ok(true), "an escaped escape is a literal escape");
     }
 
     #[test]
     fn s3a_c5_a_trailing_escape_is_an_error() {
-        assert_eq!(like("ab", "a\\", Some('\\')), Err(LikeError::TrailingEscape));
+        assert_eq!(like("ab", "a\\", Some('\\')), Err(LikeError::TrailingEscape), "this check");
         assert_eq!(like("a\\", "a\\", None), Ok(true), "without an escape character it is just a character");
     }
 
     #[test]
     fn s3a_c5_unicode_characters_count_as_one() {
-        assert_eq!(like("héllo", "h_llo", None), Ok(true));
-        assert_eq!(like("日本語", "___", None), Ok(true));
-        assert_eq!(like("日本語", "__", None), Ok(false));
+        assert_eq!(like("héllo", "h_llo", None), Ok(true), "this check");
+        assert_eq!(like("日本語", "___", None), Ok(true), "this check");
+        assert_eq!(like("日本語", "__", None), Ok(false), "this check");
     }
 
     #[test]
@@ -924,7 +924,7 @@ mod ch_3a_c5 {
         let text = "a".repeat(20_000);
         let pat = format!("{}b", "%a".repeat(12));
         let t = std::time::Instant::now();
-        assert_eq!(like(&text, &pat, None), Ok(false));
+        assert_eq!(like(&text, &pat, None), Ok(false), "this check");
         assert!(t.elapsed() < std::time::Duration::from_secs(3), "took {:?}: a recursive matcher is exponential here", t.elapsed());
     }
 

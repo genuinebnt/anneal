@@ -242,7 +242,7 @@ fn s1e_01_a_new_frame_is_not_evictable_until_it_is_marked_so() {
     r.set_evictable(f(0), true);
     assert_eq!(r.size(), 1, "each evictable frame counts once");
     r.set_evictable(f(0), false);
-    assert_eq!(r.size(), 0);
+    assert_eq!(r.size(), 0, "a new frame is not evictable until it is marked so");
 }
 
 #[test]
@@ -252,7 +252,7 @@ fn s1e_01_accessing_a_live_frame_again_keeps_it_live_and_keeps_its_flag() {
     r.set_evictable(f(0), true);
     r.record_access(f(0), pg(10)); // a hit
     assert_eq!(r.size(), 1, "a hit does not change whether the frame is evictable");
-    assert_eq!(r.evict(), Some(f(0)));
+    assert_eq!(r.evict(), Some(f(0)), "accessing a live frame again keeps it live and keeps its flag");
     assert_eq!(r.evict(), None, "and the frame is on the lists once, not twice");
 }
 
@@ -261,8 +261,8 @@ fn s1e_01_evicting_forgets_the_frame() {
     let mut r = ArcReplacer::new(4);
     r.record_access(f(2), pg(5));
     r.set_evictable(f(2), true);
-    assert_eq!(r.evict(), Some(f(2)));
-    assert_eq!(r.size(), 0);
+    assert_eq!(r.evict(), Some(f(2)), "evicting forgets the frame");
+    assert_eq!(r.size(), 0, "evicting forgets the frame");
     r.set_evictable(f(2), true); // not live any more: ignored
     assert_eq!(r.size(), 0, "marking an evicted frame evictable does nothing");
 }
@@ -276,7 +276,7 @@ fn s1e_01_remove_forgets_an_evictable_frame_ignores_unknown_ones_and_panics_for_
         r.set_evictable(f(x), true);
     }
     r.remove(f(0));
-    assert_eq!((r.size(), r.evict(), r.evict()), (1, Some(f(1)), None));
+    assert_eq!((r.size(), r.evict(), r.evict()), (1, Some(f(1)), None), "remove forgets an evictable frame ignores unknown ones and panics for pinned ones");
     let result = std::panic::catch_unwind(|| {
         let mut r = ArcReplacer::new(4);
         r.record_access(f(0), pg(0));
@@ -330,7 +330,7 @@ fn s1e_02_a_hit_moves_the_frame_to_the_newest_end_of_mfu() {
     }
     r.record_access(f(1), pg(1)); // frame 1 is newest on mfu again
     evictable(&mut r, &[1, 2]);
-    assert_eq!(drain(&mut r), [2, 1]);
+    assert_eq!(drain(&mut r), [2, 1], "a hit moves the frame to the newest end of mfu");
 }
 
 #[test]
@@ -340,9 +340,9 @@ fn s1e_02_a_frame_that_is_not_evictable_is_skipped_not_dropped() {
         r.record_access(f(x), pg(x as i32));
     }
     evictable(&mut r, &[2, 3]); // frame 1, the oldest, is in use
-    assert_eq!(r.evict(), Some(f(2)));
-    assert_eq!(r.evict(), Some(f(3)));
-    assert_eq!(r.evict(), None);
+    assert_eq!(r.evict(), Some(f(2)), "a frame that is not evictable is skipped not dropped");
+    assert_eq!(r.evict(), Some(f(3)), "a frame that is not evictable is skipped not dropped");
+    assert_eq!(r.evict(), None, "a frame that is not evictable is skipped not dropped");
     r.set_evictable(f(1), true);
     assert_eq!(r.evict(), Some(f(1)), "the pinned frame was only skipped");
 }
@@ -355,7 +355,7 @@ fn s1e_02_removing_a_frame_takes_it_off_its_list() {
     }
     evictable(&mut r, &[1, 2, 3]);
     r.remove(f(2));
-    assert_eq!(drain(&mut r), [1, 3]);
+    assert_eq!(drain(&mut r), [1, 3], "removing a frame takes it off its list");
 }
 
 proptest! {
@@ -384,7 +384,7 @@ fn s1e_02_a_hit_on_a_very_long_list_stays_fast() {
             r.record_access(f(at), pg(at as i32));
             at = (at + 1) % n;
         }
-        assert_eq!(r.size(), n);
+        assert_eq!(r.size(), n, "a hit on a very long list stays fast");
     });
 }
 
@@ -413,7 +413,7 @@ fn s1e_03_without_ghost_hits_the_target_stays_zero_and_mru_always_goes_first() {
         r.record_access(f(x), pg(x as i32));
     }
     evictable(&mut r, &[0, 1, 2, 3]);
-    assert_eq!([r.evict(), r.evict()], [Some(f(0)), Some(f(1))]);
+    assert_eq!([r.evict(), r.evict()], [Some(f(0)), Some(f(1))], "without ghost hits the target stays zero and mru always goes first");
     r.record_access(f(0), pg(10)); // new pages, not ghosts
     r.record_access(f(1), pg(11));
     evictable(&mut r, &[0, 1]);
@@ -441,7 +441,7 @@ fn s1e_03_a_ghost_that_has_been_pushed_out_of_its_list_is_forgotten() {
     let mut r = ArcReplacer::new(2);
     r.record_access(f(0), pg(0));
     r.set_evictable(f(0), true);
-    assert_eq!(r.evict(), Some(f(0))); // page 0 is a ghost
+    assert_eq!(r.evict(), Some(f(0)), "a ghost that has been pushed out of its list is forgotten"); // page 0 is a ghost
     r.record_access(f(0), pg(1));
     r.set_evictable(f(0), true);
     r.record_access(f(1), pg(2)); // mru + mru_ghost would exceed 2: the oldest ghost, page 0, is dropped

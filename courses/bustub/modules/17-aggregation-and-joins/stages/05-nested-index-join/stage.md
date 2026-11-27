@@ -29,9 +29,9 @@ Whether you probe row by row or batch the probes, and how you handle the heap fe
 
 **Through the trait object.** `self.index.index.scan_key(&key)` returns `Vec<Rid>`; the index is a `Box<dyn Index>` and you do not know which kind.
 
-**The heap says what is alive.** `let (meta, tuple) = self.inner_table.table.get_tuple(rid)?; if meta.is_deleted { continue }`.
+**The heap says what is alive.** An index entry names a rid, not a live row: the heap's metadata says whether that row still exists.
 
-**Queueing a row.** `self.pending.push_back(self.joined(&outer, &inner))` as in stages 3 and 4.
+**Queueing a row.** As in stages 3 and 4.
 
 ## If this is new
 

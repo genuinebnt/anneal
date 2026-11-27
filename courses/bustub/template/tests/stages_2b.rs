@@ -319,8 +319,8 @@ fn s2b_02_an_empty_table_has_no_values() {
         let ht = table(&bpm, Shape { header_depth: 2, directory_depth: 3, bucket_size: 4 });
         assert!(ht.get_value(&7).is_empty(), "nothing was inserted");
         ht.verify_integrity();
-        assert_eq!(ht.index_name(), "test");
-        assert!(ht.get_header_page_id().is_valid());
+        assert_eq!(ht.index_name(), "test", "an empty table has no values");
+        assert!(ht.get_header_page_id().is_valid(), "an empty table has no values: expected `ht.get_header_page_id().is_valid()`");
     });
 }
 
@@ -329,9 +329,9 @@ fn s2b_02_an_inserted_key_is_found_with_its_value() {
     within("s2b_02_an_inserted_key_is_found_with_its_value", || {
         let (bpm, _) = pool_with(Policy::Fifo, 6);
         let ht = table(&bpm, Shape { header_depth: 0, directory_depth: 3, bucket_size: 10 });
-        assert!(ht.insert(&5, &50));
-        assert_eq!(ht.get_value(&5), vec![50]);
-        assert!(ht.get_value(&6).is_empty());
+        assert!(ht.insert(&5, &50), "an inserted key is found with its value: expected `ht.insert(&5, &50)`");
+        assert_eq!(ht.get_value(&5), vec![50], "an inserted key is found with its value");
+        assert!(ht.get_value(&6).is_empty(), "an inserted key is found with its value: expected `ht.get_value(&6).is_empty()`");
         ht.verify_integrity();
     });
 }
@@ -341,9 +341,9 @@ fn s2b_02_a_duplicate_key_is_refused_and_keeps_its_value() {
     within("s2b_02_a_duplicate_key_is_refused_and_keeps_its_value", || {
         let (bpm, _) = pool_with(Policy::Fifo, 6);
         let ht = table(&bpm, Shape { header_depth: 0, directory_depth: 3, bucket_size: 10 });
-        assert!(ht.insert(&5, &50));
+        assert!(ht.insert(&5, &50), "a duplicate key is refused and keeps its value: expected `ht.insert(&5, &50)`");
         assert!(!ht.insert(&5, &99), "keys are unique");
-        assert_eq!(ht.get_value(&5), vec![50]);
+        assert_eq!(ht.get_value(&5), vec![50], "a duplicate key is refused and keeps its value");
     });
 }
 
@@ -361,12 +361,12 @@ fn s2b_02_keys_in_different_header_slots_do_not_disturb_each_other() {
         assert_eq!(by_slot.len(), 4, "the test hash spreads keys over all four header slots");
         for keys in by_slot.values() {
             for &k in &keys[..3] {
-                assert!(ht.insert(&k, &(k * 2)));
+                assert!(ht.insert(&k, &(k * 2)), "keys in different header slots do not disturb each other: expected `ht.insert(&k, &(k * 2))`");
             }
         }
         for keys in by_slot.values() {
             for &k in &keys[..3] {
-                assert_eq!(ht.get_value(&k), vec![k * 2]);
+                assert_eq!(ht.get_value(&k), vec![k * 2], "keys in different header slots do not disturb each other");
             }
         }
         ht.verify_integrity();
@@ -376,8 +376,8 @@ fn s2b_02_keys_in_different_header_slots_do_not_disturb_each_other() {
 #[test]
 fn s2b_02_the_default_sizes_describe_what_a_page_holds() {
     within("s2b_02_the_default_sizes_describe_what_a_page_holds", || {
-        assert_eq!(Table::default_header_max_depth(), 9);
-        assert_eq!(Table::default_directory_max_depth(), 9);
+        assert_eq!(Table::default_header_max_depth(), 9, "the default sizes describe what a page holds");
+        assert_eq!(Table::default_directory_max_depth(), 9, "the default sizes describe what a page holds");
         let n = Table::default_bucket_max_size();
         assert!((400..=1100).contains(&n), "a bucket of (i32, i32) pairs holds hundreds in an 8 KiB page, not {n}");
     });
@@ -389,10 +389,10 @@ fn s2b_02_a_page_worth_of_keys_fit_without_any_splitting() {
         let (bpm, _) = pool_with(Policy::Fifo, 6);
         let ht = DiskExtendibleHashTable::<i32, i32, IntComparator>::new("big", &bpm, IntComparator, HashFunction::new(), 0, 0, Table::default_bucket_max_size());
         for k in 0..300 {
-            assert!(ht.insert(&k, &(k + 1)));
+            assert!(ht.insert(&k, &(k + 1)), "a page worth of keys fit without any splitting: expected `ht.insert(&k, &(k + 1))`");
         }
         for k in 0..300 {
-            assert_eq!(ht.get_value(&k), vec![k + 1]);
+            assert_eq!(ht.get_value(&k), vec![k + 1], "a page worth of keys fit without any splitting");
         }
         assert_nothing_pinned(&bpm);
     });
@@ -455,7 +455,7 @@ fn s2b_03_the_directory_doubles_as_buckets_fill() {
             last = depth;
         }
         assert!(last >= 5, "100 keys in buckets of 2 need at least 50 buckets, so a directory of 64 slots or more (depth >= 6), not depth {last}");
-        assert!(last <= 9);
+        assert!(last <= 9, "the directory doubles as buckets fill: expected `last <= 9`");
     });
 }
 
@@ -466,12 +466,12 @@ fn s2b_03_keys_that_cannot_be_separated_make_the_insert_fail() {
         let keys = colliding_keys(shape, 3);
         let (bpm, _) = pool_with(Policy::Fifo, 8);
         let ht = table(&bpm, shape);
-        assert!(ht.insert(&keys[0], &1));
-        assert!(ht.insert(&keys[1], &2));
+        assert!(ht.insert(&keys[0], &1), "keys that cannot be separated make the insert fail: expected `ht.insert(&keys[0], &1)`");
+        assert!(ht.insert(&keys[1], &2), "keys that cannot be separated make the insert fail: expected `ht.insert(&keys[1], &2)`");
         assert!(!ht.insert(&keys[2], &3), "three keys with the same low 2 bits cannot fit in a bucket of 2 at directory depth 2");
-        assert_eq!(ht.get_value(&keys[0]), vec![1]);
-        assert_eq!(ht.get_value(&keys[1]), vec![2]);
-        assert!(ht.get_value(&keys[2]).is_empty());
+        assert_eq!(ht.get_value(&keys[0]), vec![1], "keys that cannot be separated make the insert fail");
+        assert_eq!(ht.get_value(&keys[1]), vec![2], "keys that cannot be separated make the insert fail");
+        assert!(ht.get_value(&keys[2]).is_empty(), "keys that cannot be separated make the insert fail: expected `ht.get_value(&keys[2]).is_empty()`");
         ht.verify_integrity();
     });
 }
@@ -483,7 +483,7 @@ fn s2b_03_a_directory_that_may_not_grow_is_full_when_its_bucket_is() {
         let (bpm, _) = pool_with(Policy::Fifo, 8);
         let ht = table(&bpm, shape);
         for k in 0..3 {
-            assert!(ht.insert(&k, &k));
+            assert!(ht.insert(&k, &k), "a directory that may not grow is full when its bucket is: expected `ht.insert(&k, &k)`");
         }
         assert!(!ht.insert(&3, &3), "one bucket, three slots, no room to split");
     });
@@ -515,7 +515,7 @@ fn s2b_03_a_small_pool_is_enough_because_guards_are_released() {
         let (bpm, _) = pool_with(Policy::Fifo, 4);
         let ht = table(&bpm, Shape { header_depth: 2, directory_depth: 9, bucket_size: 3 });
         for k in 0..500 {
-            assert!(ht.insert(&k, &k));
+            assert!(ht.insert(&k, &k), "a small pool is enough because guards are released: expected `ht.insert(&k, &k)`");
         }
         assert_nothing_pinned(&bpm);
     });
@@ -541,10 +541,10 @@ fn s2b_04_remove_says_whether_the_key_was_there() {
         assert!(!ht.remove(&1), "removing from an empty table");
         ht.insert(&1, &10);
         ht.insert(&2, &20);
-        assert!(ht.remove(&1));
+        assert!(ht.remove(&1), "remove says whether the key was there: expected `ht.remove(&1)`");
         assert!(!ht.remove(&1), "a second remove");
-        assert!(ht.get_value(&1).is_empty());
-        assert_eq!(ht.get_value(&2), vec![20]);
+        assert!(ht.get_value(&1).is_empty(), "remove says whether the key was there: expected `ht.get_value(&1).is_empty()`");
+        assert_eq!(ht.get_value(&2), vec![20], "remove says whether the key was there");
     });
 }
 
@@ -562,7 +562,7 @@ fn s2b_04_removing_everything_leaves_a_table_that_still_works() {
                 ht.verify_integrity();
             }
             for k in 0..150 {
-                assert!(ht.get_value(&k).is_empty());
+                assert!(ht.get_value(&k).is_empty(), "removing everything leaves a table that still works: expected `ht.get_value(&k).is_empty()`");
             }
         }
         assert_nothing_pinned(&bpm);
@@ -578,7 +578,7 @@ fn s2b_04_the_directory_shrinks_back_when_the_buckets_are_gone() {
             ht.insert(&k, &k);
         }
         let grown = ht.global_depth(&0).unwrap();
-        assert!(grown >= 5);
+        assert!(grown >= 5, "the directory shrinks back when the buckets are gone: expected `grown >= 5`");
         for k in 0..100 {
             ht.remove(&k);
         }
@@ -614,7 +614,7 @@ fn s2b_04_removing_one_key_does_not_disturb_its_neighbours_in_a_merged_bucket() 
             ht.insert(&k, &(k * 7));
         }
         for k in (0..40).step_by(2) {
-            assert!(ht.remove(&k));
+            assert!(ht.remove(&k), "removing one key does not disturb its neighbours in a merged bucket: expected `ht.remove(&k)`");
         }
         for k in 0..40 {
             let want = if k % 2 == 0 { vec![] } else { vec![k * 7] };
@@ -633,8 +633,8 @@ fn s2b_04_merging_makes_room_for_keys_that_could_not_be_inserted_before() {
         let ht = table(&bpm, shape);
         ht.insert(&keys[0], &0);
         ht.insert(&keys[1], &1);
-        assert!(!ht.insert(&keys[2], &2));
-        assert!(ht.remove(&keys[0]));
+        assert!(!ht.insert(&keys[2], &2), "merging makes room for keys that could not be inserted before: expected `!ht.insert(&keys[2], &2)`");
+        assert!(ht.remove(&keys[0]), "merging makes room for keys that could not be inserted before: expected `ht.remove(&keys[0])`");
         assert!(ht.insert(&keys[2], &2), "a slot freed by a remove can be used");
     });
 }
@@ -684,7 +684,7 @@ fn s2b_05_inserts_removes_and_lookups_at_the_same_time() {
         let (bpm, _) = pool_with(Policy::Arc, 40);
         let ht = table(&bpm, Shape { header_depth: 1, directory_depth: 9, bucket_size: 8 });
         for k in 10_000..10_200 {
-            assert!(ht.insert(&k, &k)); // keys the readers expect to find throughout
+            assert!(ht.insert(&k, &k), "inserts removes and lookups at the same time: expected `ht.insert(&k, &k)`"); // keys the readers expect to find throughout
         }
         thread::scope(|scope| {
             for t in 0..3 {
@@ -764,13 +764,13 @@ fn s2b_c1_keys_are_found_after_any_number_of_splits() {
     within("s2b_c1_keys_are_found_after_any_number_of_splits", || {
         let mut s = LinearHashSet::new(2, 2.0);
         for k in 0..500u64 {
-            assert!(s.insert(k * 7919));
+            assert!(s.insert(k * 7919), "s2b c1 keys are found after any number of splits: expected `s.insert(k * 7919)`");
         }
-        assert_eq!(s.len(), 500);
+        assert_eq!(s.len(), 500, "s2b c1 keys are found after any number of splits");
         for k in 0..500u64 {
             assert!(s.contains(k * 7919), "key {} lost after the table grew", k * 7919);
         }
-        assert!(!s.contains(1));
+        assert!(!s.contains(1), "s2b c1 keys are found after any number of splits: expected `!s.contains(1)`");
         assert!(s.bucket_count() > 2, "500 keys at a load of at most 2 need more than 2 buckets");
     });
 }
@@ -793,12 +793,12 @@ fn s2b_c1_the_table_grows_one_bucket_at_a_time_and_keeps_its_load() {
 fn s2b_c1_duplicates_and_removals() {
     within("s2b_c1_duplicates_and_removals", || {
         let mut s = LinearHashSet::new(4, 4.0);
-        assert!(s.insert(10));
-        assert!(!s.insert(10));
-        assert_eq!(s.len(), 1);
-        assert!(s.remove(10));
-        assert!(!s.remove(10));
-        assert!(s.is_empty() && !s.contains(10));
+        assert!(s.insert(10), "s2b c1 duplicates and removals: expected `s.insert(10)`");
+        assert!(!s.insert(10), "s2b c1 duplicates and removals: expected `!s.insert(10)`");
+        assert_eq!(s.len(), 1, "s2b c1 duplicates and removals");
+        assert!(s.remove(10), "s2b c1 duplicates and removals: expected `s.remove(10)`");
+        assert!(!s.remove(10), "s2b c1 duplicates and removals: expected `!s.remove(10)`");
+        assert!(s.is_empty() && !s.contains(10), "s2b c1 duplicates and removals: expected `s.is_empty() && !s.contains(10)`");
     });
 }
 
@@ -821,7 +821,7 @@ fn s2b_c1_a_split_moves_only_the_keys_of_one_bucket() {
 fn s2b_c1_the_first_bucket_of_a_round_is_split_first() {
     within("s2b_c1_the_first_bucket_of_a_round_is_split_first", || {
         let mut s = LinearHashSet::new(1, 1.0);
-        assert_eq!(s.bucket_count(), 1);
+        assert_eq!(s.bucket_count(), 1, "s2b c1 the first bucket of a round is split first");
         s.insert(1);
         assert_eq!(s.bucket_count(), 1, "one key in one bucket is a load of 1, not over it");
         s.insert(2);
@@ -856,8 +856,8 @@ proptest! {
 fn s2b_c2_a_new_directory_is_one_bucket_in_one_slot() {
     within("s2b_c2_a_new_directory_is_one_bucket_in_one_slot", || {
         let d = Directory::new();
-        assert_eq!((d.global_depth(), d.bucket_count(), d.local_depth(0)), (0, 1, 0));
-        assert_eq!(d.bucket_for(0xdead_beef), 0);
+        assert_eq!((d.global_depth(), d.bucket_count(), d.local_depth(0)), (0, 1, 0), "s2b c2 a new directory is one bucket in one slot");
+        assert_eq!(d.bucket_for(0xdead_beef), 0, "s2b c2 a new directory is one bucket in one slot");
     });
 }
 
@@ -866,8 +866,8 @@ fn s2b_c2_the_first_split_doubles_the_directory_and_separates_on_the_low_bit() {
     within("s2b_c2_the_first_split_doubles_the_directory_and_separates_on_the_low_bit", || {
         let mut d = Directory::new();
         let new = d.split(0);
-        assert_eq!((d.global_depth(), d.bucket_count(), new), (1, 2, 1));
-        assert_eq!((d.local_depth(0), d.local_depth(1)), (1, 1));
+        assert_eq!((d.global_depth(), d.bucket_count(), new), (1, 2, 1), "s2b c2 the first split doubles the directory and separates on the low bit");
+        assert_eq!((d.local_depth(0), d.local_depth(1)), (1, 1), "s2b c2 the first split doubles the directory and separates on the low bit");
         assert_eq!((d.bucket_for(0b10), d.bucket_for(0b11)), (0, 1), "the low bit decides");
     });
 }
@@ -878,13 +878,13 @@ fn s2b_c2_splitting_a_shallow_bucket_does_not_double_the_directory() {
         let mut d = Directory::new();
         d.split(0); // depth 1, slots [0, 1]
         let b = d.split(1); // bucket 1 -> depth 2, the directory doubles to 4 slots
-        assert_eq!(d.global_depth(), 2);
+        assert_eq!(d.global_depth(), 2, "s2b c2 splitting a shallow bucket does not double the directory");
         assert_eq!(d.slots_of(0), vec![0, 2], "bucket 0 stays at depth 1 and is still reached by both slots ending in 0");
-        assert_eq!((d.slots_of(1), d.slots_of(b)), (vec![1], vec![3]));
+        assert_eq!((d.slots_of(1), d.slots_of(b)), (vec![1], vec![3]), "s2b c2 splitting a shallow bucket does not double the directory");
         let before = d.global_depth();
         d.split(0); // bucket 0 has local depth 1 < 2: no doubling
-        assert_eq!(d.global_depth(), before);
-        assert_eq!(d.local_depth(0), 2);
+        assert_eq!(d.global_depth(), before, "s2b c2 splitting a shallow bucket does not double the directory");
+        assert_eq!(d.local_depth(0), 2, "s2b c2 splitting a shallow bucket does not double the directory");
     });
 }
 
@@ -949,11 +949,11 @@ mod ch_2b_c3 {
     #[test]
     fn s2b_c3_an_empty_ring_owns_nothing_and_one_node_owns_everything() {
         let mut r = HashRing::new(8);
-        assert_eq!(r.node_for(5), None);
-        assert!(r.add_node("a"));
-        assert!(!r.add_node("a"));
-        assert!((0..200).all(|k| r.node_for(k) == Some("a")));
-        assert_eq!(r.node_count(), 1);
+        assert_eq!(r.node_for(5), None, "this check");
+        assert!(r.add_node("a"), "this check: expected `r.add_node(\"a\")`");
+        assert!(!r.add_node("a"), "this check: expected `!r.add_node(\"a\")`");
+        assert!((0..200).all(|k| r.node_for(k) == Some("a")), "this check: expected `(0..200).all(|k| r.node_for(k) == Some(\"a\"))`");
+        assert_eq!(r.node_count(), 1, "this check");
     }
 
     #[test]
@@ -977,12 +977,12 @@ mod ch_2b_c3 {
             r.add_node(n);
         }
         let before = owners(&r, 2000);
-        assert!(r.remove_node("c"));
-        assert!(!r.remove_node("c"));
+        assert!(r.remove_node("c"), "this check: expected `r.remove_node(\"c\")`");
+        assert!(!r.remove_node("c"), "this check: expected `!r.remove_node(\"c\")`");
         let during = owners(&r, 2000);
         for (b, d) in before.iter().zip(&during) {
             assert!(b == d || b == "c", "key moved although its node stayed");
-            assert_ne!(d, "c");
+            assert_ne!(d, "c", "this check");
         }
         r.add_node("c");
         assert_eq!(owners(&r, 2000), before, "the ring is a function of its nodes, not of the order they were added in");
@@ -998,7 +998,7 @@ mod ch_2b_c3 {
         for o in owners(&r, 10_000) {
             *count.entry(o).or_default() += 1;
         }
-        assert_eq!(count.len(), 4);
+        assert_eq!(count.len(), 4, "this check");
         assert!(count.values().all(|&c| c > 1250 && c < 5000), "uneven spread: {count:?}");
     }
 
@@ -1039,26 +1039,26 @@ mod ch_2b_c4 {
     fn s2b_c4_inserted_keys_are_found_and_sit_at_one_of_their_two_homes() {
         let mut s = CuckooSet::new();
         for k in 0..1000u64 {
-            assert!(s.insert(k * 7919));
+            assert!(s.insert(k * 7919), "this check: expected `s.insert(k * 7919)`");
         }
-        assert_eq!(s.len(), 1000);
+        assert_eq!(s.len(), 1000, "this check");
         for k in 0..1000u64 {
             let key = k * 7919;
-            assert!(s.contains(key));
+            assert!(s.contains(key), "this check: expected `s.contains(key)`");
             let pos = s.position(key).unwrap();
             assert!(s.homes(key).contains(&pos), "key {key} is not at one of its homes");
         }
-        assert!(!s.contains(1));
+        assert!(!s.contains(1), "this check: expected `!s.contains(1)`");
     }
 
     #[test]
     fn s2b_c4_duplicates_and_removals() {
         let mut s = CuckooSet::new();
-        assert!(s.insert(5));
-        assert!(!s.insert(5));
-        assert!(s.remove(5));
-        assert!(!s.remove(5));
-        assert!(s.is_empty() && !s.contains(5));
+        assert!(s.insert(5), "this check: expected `s.insert(5)`");
+        assert!(!s.insert(5), "this check: expected `!s.insert(5)`");
+        assert!(s.remove(5), "this check: expected `s.remove(5)`");
+        assert!(!s.remove(5), "this check: expected `!s.remove(5)`");
+        assert!(s.is_empty() && !s.contains(5), "this check: expected `s.is_empty() && !s.contains(5)`");
     }
 
     #[test]
@@ -1079,8 +1079,8 @@ mod ch_2b_c4 {
         for k in 0..40u64 {
             s.insert(k);
         }
-        assert_eq!(s.len(), 40);
-        assert!((0..40).all(|k| s.contains(k)));
+        assert_eq!(s.len(), 40, "this check");
+        assert!((0..40).all(|k| s.contains(k)), "this check: expected `(0..40).all(|k| s.contains(k))`");
     }
 
     proptest! {
@@ -1112,29 +1112,29 @@ mod ch_2b_c5 {
 
     #[test]
     fn s2b_c5_a_directory_shrinks_only_when_no_bucket_uses_the_full_depth() {
-        assert!(can_shrink(&[1, 1, 0], 2));
+        assert!(can_shrink(&[1, 1, 0], 2), "this check: expected `can_shrink(&[1, 1, 0], 2)`");
         assert!(!can_shrink(&[2, 1], 2), "one bucket at full depth needs the whole directory");
-        assert!(!can_shrink(&[1, 1, 2], 2));
+        assert!(!can_shrink(&[1, 1, 2], 2), "this check: expected `!can_shrink(&[1, 1, 2], 2)`");
     }
 
     #[test]
     fn s2b_c5_a_depth_zero_directory_cannot_shrink() {
-        assert!(!can_shrink(&[0], 0));
-        assert!(!can_shrink(&[], 0));
+        assert!(!can_shrink(&[0], 0), "this check: expected `!can_shrink(&[0], 0)`");
+        assert!(!can_shrink(&[], 0), "this check: expected `!can_shrink(&[], 0)`");
     }
 
     #[test]
     fn s2b_c5_all_buckets_shallow_is_enough() {
-        assert!(can_shrink(&[0, 0, 0, 0], 3));
-        assert!(can_shrink(&[2, 2, 2], 3));
+        assert!(can_shrink(&[0, 0, 0, 0], 3), "this check: expected `can_shrink(&[0, 0, 0, 0], 3)`");
+        assert!(can_shrink(&[2, 2, 2], 3), "this check: expected `can_shrink(&[2, 2, 2], 3)`");
     }
 
     #[test]
     fn s2b_c5_shrink_slots_halves_a_mirrored_directory_and_refuses_others() {
-        assert_eq!(shrink_slots(&[0, 1, 0, 1]), Some(vec![0, 1]));
-        assert_eq!(shrink_slots(&[0, 1, 2, 3]), None);
-        assert_eq!(shrink_slots(&[0, 1, 0]), None);
-        assert_eq!(shrink_slots(&[]), None);
+        assert_eq!(shrink_slots(&[0, 1, 0, 1]), Some(vec![0, 1]), "this check");
+        assert_eq!(shrink_slots(&[0, 1, 2, 3]), None, "this check");
+        assert_eq!(shrink_slots(&[0, 1, 0]), None, "this check");
+        assert_eq!(shrink_slots(&[]), None, "this check");
     }
 
     proptest! {

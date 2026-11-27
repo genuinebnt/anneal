@@ -1040,22 +1040,22 @@ mod ch_3j_c3 {
     #[test]
     fn s3j_c3_the_other_five_operations() {
         let (l, r) = ([1, 1, 1, 2], [1, 1, 3]);
-        assert_eq!(union_all(&l, &r).len(), 7);
-        assert_eq!(intersect(&l, &r), [1]);
-        assert_eq!(intersect_all(&l, &r), [1, 1]);
-        assert_eq!(except(&l, &r), [2]);
-        assert_eq!(except_all(&l, &r), [1, 2]);
+        assert_eq!(union_all(&l, &r).len(), 7, "filters on one side of an inner join move to that side");
+        assert_eq!(intersect(&l, &r), [1], "filters on one side of an inner join move to that side");
+        assert_eq!(intersect_all(&l, &r), [1, 1], "filters on one side of an inner join move to that side");
+        assert_eq!(except(&l, &r), [2], "filters on one side of an inner join move to that side");
+        assert_eq!(except_all(&l, &r), [1, 2], "filters on one side of an inner join move to that side");
     }
 
     #[test]
     fn s3j_c3_union_with_itself_is_the_distinct_rows() {
-        assert_eq!(union(&[5, 3, 5, 3, 1], &[5, 3, 5, 3, 1]), [1, 3, 5]);
+        assert_eq!(union(&[5, 3, 5, 3, 1], &[5, 3, 5, 3, 1]), [1, 3, 5], "filters on one side of an inner join move to that side");
     }
 
     #[test]
     fn s3j_c3_results_are_sorted_and_duplicates_free() {
         let u = union(&[9, 7, 9, 8, 7], &[8, 9, 6, 6]);
-        assert_eq!(u, [6, 7, 8, 9]);
+        assert_eq!(u, [6, 7, 8, 9], "filters on one side of an inner join move to that side");
     }
 
     proptest! {
@@ -1119,11 +1119,11 @@ mod ch_3j_c4 {
 
     #[test]
     fn s3j_c4_the_worked_examples() {
-        assert_eq!(run(&[1, 1, 3], &[1, 2], Op::Union, true), [1, 1, 1, 2, 3]);
-        assert_eq!(run(&[1, 1, 1, 2], &[1, 1, 3], Op::Intersect, true), [1, 1]);
-        assert_eq!(run(&[1, 1, 1, 2], &[1, 1, 3], Op::Except, true), [1, 2]);
-        assert_eq!(run(&[1, 1, 1, 2], &[1, 1, 3], Op::Except, false), [2]);
-        assert_eq!(run(&[1, 1, 1, 2], &[1, 1, 3], Op::Union, false), [1, 2, 3]);
+        assert_eq!(run(&[1, 1, 3], &[1, 2], Op::Union, true), [1, 1, 1, 2, 3], "filters on one side of an inner join move to that side");
+        assert_eq!(run(&[1, 1, 1, 2], &[1, 1, 3], Op::Intersect, true), [1, 1], "filters on one side of an inner join move to that side");
+        assert_eq!(run(&[1, 1, 1, 2], &[1, 1, 3], Op::Except, true), [1, 2], "filters on one side of an inner join move to that side");
+        assert_eq!(run(&[1, 1, 1, 2], &[1, 1, 3], Op::Except, false), [2], "filters on one side of an inner join move to that side");
+        assert_eq!(run(&[1, 1, 1, 2], &[1, 1, 3], Op::Union, false), [1, 2, 3], "filters on one side of an inner join move to that side");
     }
 
     #[test]
@@ -1156,7 +1156,7 @@ mod ch_3j_c4 {
         let left = (0i64..1_000_000).inspect(move |_| a.set(a.get() + 1));
         let right = (0i64..1_000_000).inspect(move |_| b.set(b.get() + 1));
         let mut it = merge_set_op(left, right, Op::Union, true);
-        assert_eq!(it.next(), Some(0));
+        assert_eq!(it.next(), Some(0), "filters on one side of an inner join move to that side");
         assert!(pulled_l.get() <= 3 && pulled_r.get() <= 3, "one output item pulled {} and {} input items: it must not read ahead", pulled_l.get(), pulled_r.get());
     }
 

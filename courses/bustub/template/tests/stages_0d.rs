@@ -955,18 +955,18 @@ mod ch_0d_c1 {
         for k in 0..200u64 {
             f.insert(k * 7919);
         }
-        assert!((0..200u64).all(|k| f.contains(k * 7919)));
+        assert!((0..200u64).all(|k| f.contains(k * 7919)), "this check: expected `(0..200u64).all(|k| f.contains(k * 7919))`");
     }
 
     #[test]
     fn s0d_c1_an_empty_filter_contains_nothing_and_inserting_twice_changes_nothing() {
         let mut f = BloomFilter::new(512, 3);
-        assert!(!f.contains(1) && f.bits_set() == 0);
+        assert!(!f.contains(1) && f.bits_set() == 0, "this check: expected `!f.contains(1) && f.bits_set() == 0`");
         f.insert(1);
         let once = f.bits_set();
         f.insert(1);
-        assert_eq!(f.bits_set(), once);
-        assert!(once <= 3);
+        assert_eq!(f.bits_set(), once, "this check");
+        assert!(once <= 3, "this check: expected `once <= 3`");
     }
 
     #[test]
@@ -986,14 +986,14 @@ mod ch_0d_c1 {
         for k in 0..50u64 { a.insert(k); }
         for k in 100..150u64 { b.insert(k); }
         let u = a.union(&b).unwrap();
-        assert!((0..50u64).chain(100..150).all(|k| u.contains(k)));
+        assert!((0..50u64).chain(100..150).all(|k| u.contains(k)), "this check: expected `(0..50u64).chain(100..150).all(|k| u.contains(k))`");
         assert_eq!(u.bits_set() , {
             let mut both = BloomFilter::new(1024, 4);
             for k in (0..50u64).chain(100..150) { both.insert(k); }
             both.bits_set()
-        });
-        assert!(a.union(&BloomFilter::new(512, 4)).is_none());
-        assert!(a.union(&BloomFilter::new(1024, 5)).is_none());
+        }, "this check");
+        assert!(a.union(&BloomFilter::new(512, 4)).is_none(), "this check: expected `a.union(&BloomFilter::new(512, 4)).is_none()`");
+        assert!(a.union(&BloomFilter::new(1024, 5)).is_none(), "this check: expected `a.union(&BloomFilter::new(1024, 5)).is_none()`");
     }
 
     proptest! {
@@ -1025,7 +1025,7 @@ mod ch_0d_c2 {
         }
         let mut s = r.sample().to_vec();
         s.sort();
-        assert_eq!((s, r.seen()), (vec![0, 1, 2], 3));
+        assert_eq!((s, r.seen()), (vec![0, 1, 2], 3), "this check");
     }
 
     #[test]
@@ -1033,9 +1033,9 @@ mod ch_0d_c2 {
         let mut r = Reservoir::new(4, 9);
         for i in 0..1000 {
             r.offer(i);
-            assert!(r.sample().len() <= 4);
+            assert!(r.sample().len() <= 4, "this check: expected `r.sample().len() <= 4`");
         }
-        assert_eq!((r.sample().len(), r.seen()), (4, 1000));
+        assert_eq!((r.sample().len(), r.seen()), (4, 1000), "this check");
     }
 
     #[test]
@@ -1044,7 +1044,7 @@ mod ch_0d_c2 {
         for i in 0..10 {
             r.offer(i);
         }
-        assert_eq!((r.sample().len(), r.seen()), (0, 10));
+        assert_eq!((r.sample().len(), r.seen()), (0, 10), "this check");
     }
 
     #[test]
@@ -1056,8 +1056,8 @@ mod ch_0d_c2 {
             }
             r.sample().to_vec()
         };
-        assert_eq!(run(7), run(7));
-        assert_ne!(run(7), run(8));
+        assert_eq!(run(7), run(7), "this check");
+        assert_ne!(run(7), run(8), "this check");
     }
 
     #[test]
@@ -1113,11 +1113,11 @@ mod ch_0d_c3 {
 
     #[test]
     fn s0d_c3_roots_of_small_trees_by_hand() {
-        assert_eq!(MerkleTree::new(&[]).root(), 0);
+        assert_eq!(MerkleTree::new(&[]).root(), 0, "this check");
         let one = leaves(1);
-        assert_eq!(MerkleTree::new(&one).root(), leaf_hash(&one[0]));
+        assert_eq!(MerkleTree::new(&one).root(), leaf_hash(&one[0]), "this check");
         let two = leaves(2);
-        assert_eq!(MerkleTree::new(&two).root(), node_hash(leaf_hash(&two[0]), leaf_hash(&two[1])));
+        assert_eq!(MerkleTree::new(&two).root(), node_hash(leaf_hash(&two[0]), leaf_hash(&two[1])), "this check");
         let three = leaves(3);
         let (a, b, c) = (leaf_hash(&three[0]), leaf_hash(&three[1]), leaf_hash(&three[2]));
         assert_eq!(MerkleTree::new(&three).root(), node_hash(node_hash(a, b), node_hash(c, c)), "an odd node is paired with itself");
@@ -1131,9 +1131,9 @@ mod ch_0d_c3 {
             for (i, l) in ls.iter().enumerate() {
                 let p = t.proof(i).unwrap();
                 assert!(verify(t.root(), l, &p), "n {n}, leaf {i}");
-                assert_eq!(p.len(), (n as f64).log2().ceil() as usize);
+                assert_eq!(p.len(), (n as f64).log2().ceil() as usize, "this check");
             }
-            assert!(t.proof(n).is_none());
+            assert!(t.proof(n).is_none(), "this check: expected `t.proof(n).is_none()`");
         }
     }
 
@@ -1145,10 +1145,10 @@ mod ch_0d_c3 {
         assert!(!verify(t.root(), b"leaf-3", &p), "a proof is for one leaf");
         let mut bad = p.clone();
         bad[0].0 ^= 1;
-        assert!(!verify(t.root(), &ls[2], &bad));
+        assert!(!verify(t.root(), &ls[2], &bad), "this check: expected `!verify(t.root(), &ls[2], &bad)`");
         let mut flipped = p.clone();
         flipped[1].1 = !flipped[1].1;
-        assert!(!verify(t.root(), &ls[2], &flipped));
+        assert!(!verify(t.root(), &ls[2], &flipped), "this check: expected `!verify(t.root(), &ls[2], &flipped)`");
     }
 
     #[test]
@@ -1162,7 +1162,7 @@ mod ch_0d_c3 {
         }
         let mut swapped = ls.clone();
         swapped.swap(0, 4);
-        assert_ne!(MerkleTree::new(&swapped).root(), root);
+        assert_ne!(MerkleTree::new(&swapped).root(), root, "this check");
         assert_eq!(MerkleTree::new(&ls).root(), root, "the root is a function of the leaves");
     }
 
@@ -1202,9 +1202,9 @@ mod ch_0d_c4 {
     #[test]
     fn s0d_c4_values_add_and_subtract() {
         let c = counter(&[(1, true, 5), (1, false, 2), (2, true, 10)]);
-        assert_eq!(c.value(), 13);
-        assert_eq!(PnCounter::new().value(), 0);
-        assert_eq!(counter(&[(1, false, 4)]).value(), -4);
+        assert_eq!(c.value(), 13, "this check");
+        assert_eq!(PnCounter::new().value(), 0, "this check");
+        assert_eq!(counter(&[(1, false, 4)]).value(), -4, "this check");
     }
 
     #[test]
@@ -1212,7 +1212,7 @@ mod ch_0d_c4 {
         let mut a = counter(&[(1, true, 5)]);
         let b = counter(&[(2, true, 3), (2, false, 1)]);
         a.merge(&b);
-        assert_eq!(a.value(), 7);
+        assert_eq!(a.value(), 7, "this check");
         a.merge(&b);
         assert_eq!(a.value(), 7, "merging again changes nothing");
     }
@@ -1234,8 +1234,8 @@ mod ch_0d_c4 {
         a.inc(1, 1);
         a.merge(&b);
         b.merge(&a);
-        assert_eq!((a.value(), b.value()), (7, 7));
-        assert_eq!(a, b);
+        assert_eq!((a.value(), b.value()), (7, 7), "this check");
+        assert_eq!(a, b, "this check");
     }
 
     proptest! {
@@ -1292,7 +1292,7 @@ mod ch_0d_c5 {
         let mut m = a.clone();
         m.merge(&b).unwrap();
         for i in 0..16 {
-            assert_eq!(m.registers()[i], a.registers()[i].max(b.registers()[i]));
+            assert_eq!(m.registers()[i], a.registers()[i].max(b.registers()[i]), "this check");
         }
     }
 
@@ -1302,7 +1302,7 @@ mod ch_0d_c5 {
         let whole = sketch(&all);
         let mut parts = sketch(&all[..70]);
         parts.merge(&sketch(&all[70..])).unwrap();
-        assert_eq!(parts, whole);
+        assert_eq!(parts, whole, "this check");
         let mut again = parts.clone();
         again.merge(&sketch(&all[..70])).unwrap();
         assert_eq!(again, whole, "merging in a part that was already included changes nothing");
@@ -1311,7 +1311,7 @@ mod ch_0d_c5 {
     #[test]
     fn s0d_c5_sketches_of_different_sizes_do_not_merge() {
         let mut a = Registers::new(4);
-        assert_eq!(a.merge(&Registers::new(5)), Err(SizeMismatch));
+        assert_eq!(a.merge(&Registers::new(5)), Err(SizeMismatch), "this check");
     }
 
     proptest! {

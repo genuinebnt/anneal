@@ -24,11 +24,11 @@ How the dirty flag is stored, where the victim's write happens relative to the l
 
 ## The Rust toolbox
 
-**`Option<FrameId>` from `evict()?`.** `let frame = inner.replacer.evict()?;` returns `None` from your function when there is no victim: `?` works on `Option` in a function that returns `Option`.
+**`Option<FrameId>` from `evict()?`.** In a function that returns `Option`, `expr?` returns `None` at once when `expr` is `None`: `let first = queue.front()?;`. It keeps the no-victim path to one character.
 
-**`Option::take` to move a value out of a struct.** `let old = inner.meta[frame.0].page_id.take().expect("an evicted frame holds a page");` leaves `None` in the field and gives you the page id.
+**`Option::take` to move a value out of a struct.** `entry.owner.take()` moves the value out of an `Option` field and leaves `None` behind, in one step: no clone, and no moment where two places claim it.
 
-**Copy before you write.** To write a frame's bytes to the disk scheduler you need an owned `Box<PageData>`: `let mut copy = Box::new([0u8; PS]); copy.copy_from_slice(&**frame.read().unwrap());`. The request owns its buffer (module 1b); the frame goes on being used.
+**Copy before you write.** A disk request owns its buffer (module 1b), and the frame goes on being used, so the bytes are copied into a buffer of their own first. `dst.copy_from_slice(src)` copies one slice into another of the same length (it panics if the lengths differ).
 
 **Waiting on a future.** `future.get().expect("the scheduler is running").expect("writing a page")`: the first `expect` is for a broken promise, the second for the I/O error. Decide what your pool does with an `Err` (this one panics; a database would report it).
 
@@ -94,7 +94,7 @@ BusTub's `CheckedWritePage` and `CheckedReadPage` follow the same steps: look in
 
 | C / C++ | Rust |
 |---|---|
-| `if (frame->is_dirty_) { disk_scheduler_->Schedule(...); promise.get(); }` | `if meta.dirty { self.store(old, frame); }` with the copy and the future inside |
+| `if (frame->is_dirty_) { disk_scheduler_->Schedule(...); promise.get(); }` | a dirty victim is written back (a copy of its bytes, a request, a wait on its future) before the frame is reused |
 | `std::optional<frame_id_t> victim = replacer_->Evict(); if (!victim) return std::nullopt;` | `let frame = inner.replacer.evict()?;` |
 | `memcpy(frame->data, buf, PAGE_SIZE)` | `frame.copy_from_slice(&buf)` |
 

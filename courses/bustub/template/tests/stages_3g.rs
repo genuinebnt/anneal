@@ -1129,27 +1129,27 @@ mod ch_3g_c1 {
 
     #[test]
     fn s3g_c1_a_typical_plan() {
-        assert_eq!(plan_sort(100, 10), Some(SortPlan { initial_runs: 10, passes: 3, io_pages: 600 }));
+        assert_eq!(plan_sort(100, 10), Some(SortPlan { initial_runs: 10, passes: 3, io_pages: 600 }), "this check");
     }
 
     #[test]
     fn s3g_c1_an_input_that_fits_in_memory_is_one_pass() {
-        assert_eq!(plan_sort(8, 10), Some(SortPlan { initial_runs: 1, passes: 1, io_pages: 16 }));
-        assert_eq!(plan_sort(10, 10), Some(SortPlan { initial_runs: 1, passes: 1, io_pages: 20 }));
+        assert_eq!(plan_sort(8, 10), Some(SortPlan { initial_runs: 1, passes: 1, io_pages: 16 }), "this check");
+        assert_eq!(plan_sort(10, 10), Some(SortPlan { initial_runs: 1, passes: 1, io_pages: 20 }), "this check");
     }
 
     #[test]
     fn s3g_c1_exact_powers_of_the_fan_in_do_not_cost_an_extra_pass() {
         // buffer 5: fan-in 4. 5 * 4^3 pages -> 64 runs -> 16 -> 4 -> 1: three merge passes
-        assert_eq!(plan_sort(5 * 64, 5).unwrap().passes, 4);
+        assert_eq!(plan_sort(5 * 64, 5).unwrap().passes, 4, "this check");
         assert_eq!(plan_sort(5 * 64 + 1, 5).unwrap().passes, 5, "one page more makes 65 runs and one more pass");
     }
 
     #[test]
     fn s3g_c1_no_pages_and_not_enough_memory() {
-        assert_eq!(plan_sort(0, 10), Some(SortPlan { initial_runs: 0, passes: 0, io_pages: 0 }));
-        assert_eq!(plan_sort(100, 2), None);
-        assert_eq!(plan_sort(100, 0), None);
+        assert_eq!(plan_sort(0, 10), Some(SortPlan { initial_runs: 0, passes: 0, io_pages: 0 }), "this check");
+        assert_eq!(plan_sort(100, 2), None, "this check");
+        assert_eq!(plan_sort(100, 0), None, "this check");
     }
 
     proptest! {
@@ -1184,7 +1184,7 @@ mod ch_3g_c2 {
         for (k, p) in [(5, 0), (1, 1), (5, 2), (1, 3)] {
             t.push(k, p);
         }
-        assert_eq!(t.finish(), vec![(1, 1), (1, 3)]);
+        assert_eq!(t.finish(), vec![(1, 1), (1, 3)], "this check");
     }
 
     #[test]
@@ -1193,28 +1193,28 @@ mod ch_3g_c2 {
         for (k, p) in [(3, 10), (3, 11), (3, 12)] {
             t.push(k, p);
         }
-        assert_eq!(t.finish(), vec![(3, 10), (3, 11)]);
+        assert_eq!(t.finish(), vec![(3, 10), (3, 11)], "this check");
     }
 
     #[test]
     fn s3g_c2_n_zero_holds_nothing() {
         let mut t = TopN::new(0);
         t.push(1, 1);
-        assert_eq!((t.len(), t.is_empty()), (0, true));
-        assert_eq!(t.finish(), vec![]);
+        assert_eq!((t.len(), t.is_empty()), (0, true), "this check");
+        assert_eq!(t.finish(), vec![], "this check");
     }
 
     #[test]
     fn s3g_c2_fewer_rows_than_n_and_bounded_memory() {
         let mut t = TopN::new(3);
         t.push(9, 0);
-        assert_eq!(t.len(), 1);
+        assert_eq!(t.len(), 1, "this check");
         for i in 0..1000 {
             t.push(1000 - i, i as u32);
-            assert!(t.len() <= 3);
+            assert!(t.len() <= 3, "this check: expected `t.len() <= 3`");
         }
         let r = t.finish();
-        assert_eq!(r.iter().map(|x| x.0).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert_eq!(r.iter().map(|x| x.0).collect::<Vec<_>>(), vec![1, 2, 3], "this check");
     }
 
     proptest! {
@@ -1246,27 +1246,27 @@ mod ch_3g_c3 {
 
     #[test]
     fn s3g_c3_a_running_total_and_a_trailing_window() {
-        assert_eq!(moving_sum(&s(&[1, 2, 3, 4]), 100, 0), s(&[1, 3, 6, 10]));
-        assert_eq!(moving_sum(&s(&[1, 2, 3, 4]), 1, 0), s(&[1, 3, 5, 7]));
+        assert_eq!(moving_sum(&s(&[1, 2, 3, 4]), 100, 0), s(&[1, 3, 6, 10]), "this check");
+        assert_eq!(moving_sum(&s(&[1, 2, 3, 4]), 1, 0), s(&[1, 3, 5, 7]), "this check");
     }
 
     #[test]
     fn s3g_c3_a_centred_window_is_clipped_at_both_ends() {
-        assert_eq!(moving_sum(&s(&[1, 2, 3, 4]), 1, 1), s(&[3, 6, 9, 7]));
+        assert_eq!(moving_sum(&s(&[1, 2, 3, 4]), 1, 1), s(&[3, 6, 9, 7]), "this check");
     }
 
     #[test]
     fn s3g_c3_nulls_contribute_nothing_and_an_all_null_frame_is_null() {
         let v = [Some(1), None, Some(3)];
-        assert_eq!(moving_sum(&v, 1, 1), s(&[1, 4, 3]));
-        assert_eq!(moving_sum(&[None, None], 1, 1), vec![None, None]);
-        assert_eq!(moving_sum(&[None, Some(5)], 0, 0), vec![None, Some(5)]);
+        assert_eq!(moving_sum(&v, 1, 1), s(&[1, 4, 3]), "this check");
+        assert_eq!(moving_sum(&[None, None], 1, 1), vec![None, None], "this check");
+        assert_eq!(moving_sum(&[None, Some(5)], 0, 0), vec![None, Some(5)], "this check");
     }
 
     #[test]
     fn s3g_c3_empty_input_and_a_zero_frame() {
-        assert_eq!(moving_sum(&[], 2, 2), vec![]);
-        assert_eq!(moving_sum(&s(&[7, 8]), 0, 0), s(&[7, 8]));
+        assert_eq!(moving_sum(&[], 2, 2), vec![], "this check");
+        assert_eq!(moving_sum(&s(&[7, 8]), 0, 0), s(&[7, 8]), "this check");
     }
 
     #[test]
@@ -1274,7 +1274,7 @@ mod ch_3g_c3 {
         let v: Vec<Option<i64>> = (0..200_000).map(|i| Some(i % 7)).collect();
         let t = std::time::Instant::now();
         let r = moving_sum(&v, 50_000, 50_000);
-        assert_eq!(r.len(), v.len());
+        assert_eq!(r.len(), v.len(), "this check");
         assert!(t.elapsed() < std::time::Duration::from_secs(3), "took {:?}: recomputing each frame is quadratic", t.elapsed());
     }
 
@@ -1305,32 +1305,32 @@ mod ch_3g_c4 {
     #[test]
     fn s3g_c4_the_three_functions_on_data_with_a_tie() {
         let k = [10, 20, 20, 30];
-        assert_eq!(row_number(&k), vec![1, 2, 3, 4]);
-        assert_eq!(rank(&k), vec![1, 2, 2, 4]);
-        assert_eq!(dense_rank(&k), vec![1, 2, 2, 3]);
+        assert_eq!(row_number(&k), vec![1, 2, 3, 4], "this check");
+        assert_eq!(rank(&k), vec![1, 2, 2, 4], "this check");
+        assert_eq!(dense_rank(&k), vec![1, 2, 2, 3], "this check");
     }
 
     #[test]
     fn s3g_c4_a_big_tie_group_makes_a_big_gap() {
         let k = [1, 1, 1, 1, 2];
-        assert_eq!(rank(&k), vec![1, 1, 1, 1, 5]);
-        assert_eq!(dense_rank(&k), vec![1, 1, 1, 1, 2]);
+        assert_eq!(rank(&k), vec![1, 1, 1, 1, 5], "this check");
+        assert_eq!(dense_rank(&k), vec![1, 1, 1, 1, 2], "this check");
     }
 
     #[test]
     fn s3g_c4_without_ties_all_three_agree_and_empty_is_empty() {
         let k = [1, 2, 3];
-        assert_eq!(rank(&k), row_number(&k));
-        assert_eq!(dense_rank(&k), row_number(&k));
-        assert_eq!(rank(&[]), Vec::<usize>::new());
+        assert_eq!(rank(&k), row_number(&k), "this check");
+        assert_eq!(dense_rank(&k), row_number(&k), "this check");
+        assert_eq!(rank(&[]), Vec::<usize>::new(), "this check");
     }
 
     #[test]
     fn s3g_c4_all_keys_equal() {
         let k = [5, 5, 5];
-        assert_eq!(rank(&k), vec![1, 1, 1]);
-        assert_eq!(dense_rank(&k), vec![1, 1, 1]);
-        assert_eq!(row_number(&k), vec![1, 2, 3]);
+        assert_eq!(rank(&k), vec![1, 1, 1], "this check");
+        assert_eq!(dense_rank(&k), vec![1, 1, 1], "this check");
+        assert_eq!(row_number(&k), vec![1, 2, 3], "this check");
     }
 
     proptest! {
@@ -1363,28 +1363,28 @@ mod ch_3g_c5 {
     fn s3g_c5_sorts_by_key_keeping_the_order_of_equal_keys() {
         let mut v = vec![(3, 1), (1, 2), (3, 3), (2, 4)];
         radix_sort(&mut v);
-        assert_eq!(v, vec![(1, 2), (2, 4), (3, 1), (3, 3)]);
+        assert_eq!(v, vec![(1, 2), (2, 4), (3, 1), (3, 3)], "this check");
     }
 
     #[test]
     fn s3g_c5_keys_that_differ_only_in_a_high_byte() {
         let mut v = vec![(0x0100_0000, 0), (0x00FF_FFFF, 1), (0xFF00_0000, 2), (0, 3)];
         radix_sort(&mut v);
-        assert_eq!(v.iter().map(|r| r.1).collect::<Vec<_>>(), vec![3, 1, 0, 2]);
+        assert_eq!(v.iter().map(|r| r.1).collect::<Vec<_>>(), vec![3, 1, 0, 2], "this check");
     }
 
     #[test]
     fn s3g_c5_empty_single_and_already_sorted() {
         let mut e: Vec<(u32, u32)> = vec![];
         radix_sort(&mut e);
-        assert!(e.is_empty());
+        assert!(e.is_empty(), "this check: expected `e.is_empty()`");
         let mut one = vec![(5, 5)];
         radix_sort(&mut one);
-        assert_eq!(one, vec![(5, 5)]);
+        assert_eq!(one, vec![(5, 5)], "this check");
         let mut sorted: Vec<(u32, u32)> = (0..100).map(|i| (i, i)).collect();
         let copy = sorted.clone();
         radix_sort(&mut sorted);
-        assert_eq!(sorted, copy);
+        assert_eq!(sorted, copy, "this check");
     }
 
     #[test]
@@ -1395,7 +1395,7 @@ mod ch_3g_c5 {
         assert_eq!(same, copy, "equal keys keep their input order");
         let mut rev: Vec<(u32, u32)> = (0..50).rev().map(|i| (i, i)).collect();
         radix_sort(&mut rev);
-        assert!(rev.windows(2).all(|w| w[0].0 < w[1].0));
+        assert!(rev.windows(2).all(|w| w[0].0 < w[1].0), "this check: expected `rev.windows(2).all(|w| w[0].0 < w[1].0)`");
     }
 
     proptest! {

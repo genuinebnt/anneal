@@ -24,13 +24,13 @@ What the table holds (whole right tuples, or row positions), whether you build i
 
 ## The Rust toolbox
 
-**`HashMap<AggregateKey, Vec<Tuple>>`.** `self.table.entry(key).or_default().push(tuple)` builds a multimap; `self.table.get(&key)` finds the matches.
+**`HashMap<AggregateKey, Vec<Tuple>>`.** `map.entry(k).or_default().push(v)` builds a multimap (a key with a list of values); `map.get(&k)` finds the list.
 
-**`Option<Key>` for "no key".** `let Some(key) = self.join_key(..)? else { queue unmatched; continue }` handles NULL keys and misses with the same path.
+**`Option<Key>` for "no key".** `let Some(x) = lookup()? else { continue };` gives one early path for every case that has no value, so a NULL key and a miss need not be two branches.
 
 **The `entry` API.** `entry(key).or_default()` inserts an empty `Vec` if the key is new and returns a `&mut Vec`.
 
-**Cloning tuples out of the table.** `matches.iter().map(|r| self.joined(&left, r))`: the table keeps its tuples for the next probe, so you clone or build new ones.
+**Cloning tuples out of the table.** The table keeps its tuples for the next probe: what you emit is built from them (`iter().map(..)`), not moved out.
 
 **Reuse.** The `pending` queue, `TupleStream`, `joined`, `values_of` and `nulls_for` are the same ones you used in stage 3.
 

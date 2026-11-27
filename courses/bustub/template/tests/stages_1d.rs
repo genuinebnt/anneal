@@ -143,9 +143,9 @@ fn s1d_01_a_frame_is_not_evictable_until_it_is_marked_so() {
     assert_eq!(r.evict(), None, "nothing is evictable yet");
     r.set_evictable(f(1), true);
     r.set_evictable(f(1), true); // setting it again changes nothing
-    assert_eq!(r.size(), 1);
+    assert_eq!(r.size(), 1, "a frame is not evictable until it is marked so");
     r.set_evictable(f(2), true);
-    assert_eq!(r.size(), 2);
+    assert_eq!(r.size(), 2, "a frame is not evictable until it is marked so");
     r.set_evictable(f(1), false);
     r.set_evictable(f(1), false);
     assert_eq!(r.size(), 1, "size counts evictable frames, each once");
@@ -156,8 +156,8 @@ fn s1d_01_evicting_forgets_the_frame() {
     let mut r = LruKReplacer::new(4, 2);
     r.record_access(f(0));
     r.set_evictable(f(0), true);
-    assert_eq!(r.evict(), Some(f(0)));
-    assert_eq!(r.size(), 0);
+    assert_eq!(r.evict(), Some(f(0)), "evicting forgets the frame");
+    assert_eq!(r.size(), 0, "evicting forgets the frame");
     assert_eq!(r.evict(), None, "the only frame is gone");
     r.set_evictable(f(0), true); // not tracked any more: ignored
     assert_eq!(r.size(), 0, "an evicted frame is forgotten, so marking it evictable does nothing");
@@ -170,8 +170,8 @@ fn s1d_01_unknown_frames_are_ignored_by_set_evictable_and_remove() {
     let mut r = LruKReplacer::new(4, 2);
     r.set_evictable(f(3), true);
     r.remove(f(3));
-    assert_eq!(r.size(), 0);
-    assert_eq!(r.evict(), None);
+    assert_eq!(r.size(), 0, "unknown frames are ignored by set evictable and remove");
+    assert_eq!(r.evict(), None, "unknown frames are ignored by set evictable and remove");
 }
 
 #[test]
@@ -182,7 +182,7 @@ fn s1d_01_remove_takes_out_an_evictable_frame_whatever_its_distance() {
         r.set_evictable(f(x), true);
     }
     r.remove(f(1));
-    assert_eq!(r.size(), 2);
+    assert_eq!(r.size(), 2, "remove takes out an evictable frame whatever its distance");
     let mut left = vec![r.evict().unwrap(), r.evict().unwrap()];
     left.sort();
     assert_eq!(left, [f(0), f(2)], "frame 1 is gone");
@@ -237,8 +237,8 @@ fn s1d_02_among_frames_with_k_accesses_the_oldest_kth_access_goes_first() {
     r.set_evictable(f(0), true);
     r.set_evictable(f(1), true);
     // frame 0's 2nd most recent access is time 0, frame 1's is time 3: frame 0 has the larger backward distance
-    assert_eq!(r.evict(), Some(f(0)));
-    assert_eq!(r.evict(), Some(f(1)));
+    assert_eq!(r.evict(), Some(f(0)), "among frames with k accesses the oldest kth access goes first");
+    assert_eq!(r.evict(), Some(f(1)), "among frames with k accesses the oldest kth access goes first");
 }
 
 #[test]
@@ -262,9 +262,9 @@ fn s1d_02_marking_a_frame_non_evictable_keeps_its_history() {
     r.set_evictable(f(0), true);
     r.set_evictable(f(1), true);
     r.set_evictable(f(0), false); // pinned for a while
-    assert_eq!(r.evict(), Some(f(1)));
+    assert_eq!(r.evict(), Some(f(1)), "marking a frame non evictable keeps its history");
     r.set_evictable(f(0), true);
-    assert_eq!(r.evict(), Some(f(0)));
+    assert_eq!(r.evict(), Some(f(0)), "marking a frame non evictable keeps its history");
 }
 
 proptest! {
@@ -351,7 +351,7 @@ fn s1d_03_eviction_stays_fast_with_a_hundred_thousand_frames() {
             }
             r.set_evictable(f(x), true);
         }
-        assert_eq!(r.size(), n);
+        assert_eq!(r.size(), n, "eviction stays fast with a hundred thousand frames");
         let mut rng = Lcg(5);
         let start = Instant::now();
         for _ in 0..n {
@@ -386,9 +386,9 @@ fn s1d_03_a_frame_that_stops_being_evictable_is_no_longer_a_candidate() {
         r.set_evictable(f(x), true);
     }
     r.set_evictable(f(0), false); // the best victim is pinned
-    assert_eq!(r.evict(), Some(f(1)));
+    assert_eq!(r.evict(), Some(f(1)), "a frame that stops being evictable is no longer a candidate");
     r.record_access(f(0)); // accessing a pinned frame must not make it a candidate
-    assert_eq!(r.evict(), Some(f(2)));
+    assert_eq!(r.evict(), Some(f(2)), "a frame that stops being evictable is no longer a candidate");
     assert_eq!(r.evict(), None, "frame 0 is still not evictable");
 }
 
@@ -400,7 +400,7 @@ fn s1d_03_removing_the_best_victim_leaves_the_next_best() {
         r.set_evictable(f(x), true);
     }
     r.remove(f(0));
-    assert_eq!([r.evict(), r.evict(), r.evict()], [Some(f(1)), Some(f(2)), None]);
+    assert_eq!([r.evict(), r.evict(), r.evict()], [Some(f(1)), Some(f(2)), None], "removing the best victim leaves the next best");
 }
 
 #[test]
@@ -527,22 +527,22 @@ fn lru() -> Box<dyn FrameReplacer> {
 fn s1d_c1_a_pool_big_enough_for_every_page_only_misses_the_first_time() {
     let trace = [1, 2, 3, 1, 2, 3, 1, 2, 3];
     assert_eq!(simulate(&trace, 3, lru()), 6, "three misses, six hits");
-    assert_eq!(simulate(&trace, 10, lru()), 6);
-    assert_eq!(belady_hits(&trace, 3), 6);
+    assert_eq!(simulate(&trace, 10, lru()), 6, "s1d c1 a pool big enough for every page only misses the first time");
+    assert_eq!(belady_hits(&trace, 3), 6, "s1d c1 a pool big enough for every page only misses the first time");
 }
 
 #[test]
 fn s1d_c1_a_pool_of_one_frame_hits_only_on_immediate_repeats() {
     assert_eq!(simulate(&[1, 1, 2, 2, 2, 1, 3], 1, lru()), 3, "the repeats of 1, 2 and 2");
-    assert_eq!(belady_hits(&[1, 1, 2, 2, 2, 1, 3], 1), 3);
+    assert_eq!(belady_hits(&[1, 1, 2, 2, 2, 1, 3], 1), 3, "s1d c1 a pool of one frame hits only on immediate repeats");
 }
 
 #[test]
 fn s1d_c1_no_frames_means_no_hits_and_an_empty_trace_has_none() {
-    assert_eq!(simulate(&[1, 2, 1], 0, lru()), 0);
-    assert_eq!(belady_hits(&[1, 2, 1], 0), 0);
-    assert_eq!(simulate(&[], 4, lru()), 0);
-    assert_eq!(belady_hits(&[], 4), 0);
+    assert_eq!(simulate(&[1, 2, 1], 0, lru()), 0, "s1d c1 no frames means no hits and an empty trace has none");
+    assert_eq!(belady_hits(&[1, 2, 1], 0), 0, "s1d c1 no frames means no hits and an empty trace has none");
+    assert_eq!(simulate(&[], 4, lru()), 0, "s1d c1 no frames means no hits and an empty trace has none");
+    assert_eq!(belady_hits(&[], 4), 0, "s1d c1 no frames means no hits and an empty trace has none");
 }
 
 #[test]
@@ -557,15 +557,15 @@ fn s1d_c1_a_scan_is_what_separates_lru_from_least_frequently_used() {
     let lfu_hits = simulate(&trace, 3, Box::new(LfuReplacer::new()));
     assert!(lfu_hits >= 59, "the hot page is never evicted by a frequency policy: {lfu_hits}");
     assert!(lfu_hits >= lru_hits, "on this trace LFU is at least as good as LRU");
-    assert!(belady_hits(&trace, 3) >= lfu_hits);
+    assert!(belady_hits(&trace, 3) >= lfu_hits, "s1d c1 a scan is what separates lru from least frequently used: expected `belady_hits(&trace, 3) >= lfu_hits`");
 }
 
 #[test]
 fn s1d_c1_belady_on_a_trace_worked_by_hand() {
     // capacity 2: 1 2 3 1 2 -> evict 2 at the miss of 3 (next use of 2 is further than 1's), then 1 hits, 2 misses
-    assert_eq!(belady_hits(&[1, 2, 3, 1, 2], 2), 1);
+    assert_eq!(belady_hits(&[1, 2, 3, 1, 2], 2), 1, "s1d c1 belady on a trace worked by hand");
     // FIFO on the same trace: evicts 1 for 3, then 1 misses (evicting 2), then 2 misses: no hits at all
-    assert_eq!(simulate(&[1, 2, 3, 1, 2], 2, Box::new(FifoReplacer::new())), 0);
+    assert_eq!(simulate(&[1, 2, 3, 1, 2], 2, Box::new(FifoReplacer::new())), 0, "s1d c1 belady on a trace worked by hand");
 }
 
 proptest! {
@@ -605,7 +605,7 @@ proptest! {
 #[test]
 fn s1d_c2_a_page_with_fewer_than_k_accesses_has_no_distance() {
     let mut h = KHistory::new(3);
-    assert_eq!(h.k_distance(10), None);
+    assert_eq!(h.k_distance(10), None, "s1d c2 a page with fewer than k accesses has no distance");
     h.record(1);
     h.record(4);
     assert_eq!(h.k_distance(10), None, "two accesses of three");
@@ -625,9 +625,9 @@ fn s1d_c2_the_distance_is_measured_to_the_kth_most_recent_access() {
 fn s1d_c2_with_k_equal_to_one_it_is_plain_recency() {
     let mut h = KHistory::new(1);
     h.record(3);
-    assert_eq!(h.k_distance(10), Some(7));
+    assert_eq!(h.k_distance(10), Some(7), "s1d c2 with k equal to one it is plain recency");
     h.record(8);
-    assert_eq!(h.k_distance(10), Some(2));
+    assert_eq!(h.k_distance(10), Some(2), "s1d c2 with k equal to one it is plain recency");
 }
 
 #[test]

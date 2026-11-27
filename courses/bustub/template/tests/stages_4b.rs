@@ -1739,17 +1739,17 @@ mod ch_4b_c1 {
     #[test]
     fn s4b_c1_the_first_claimant_wins_and_the_second_is_told_who() {
         let mut c = WriteClaims::new();
-        assert_eq!(c.claim(1, 10), Ok(()));
-        assert_eq!(c.claim(2, 10), Err(Conflict { owner: 1 }));
-        assert_eq!(c.owner_of(10), Some(1));
+        assert_eq!(c.claim(1, 10), Ok(()), "this check");
+        assert_eq!(c.claim(2, 10), Err(Conflict { owner: 1 }), "this check");
+        assert_eq!(c.owner_of(10), Some(1), "this check");
     }
 
     #[test]
     fn s4b_c1_claiming_your_own_key_again_is_fine() {
         let mut c = WriteClaims::new();
         c.claim(1, 10).unwrap();
-        assert_eq!(c.claim(1, 10), Ok(()));
-        assert_eq!(c.release_all(1), 1);
+        assert_eq!(c.claim(1, 10), Ok(()), "this check");
+        assert_eq!(c.release_all(1), 1, "this check");
     }
 
     #[test]
@@ -1759,21 +1759,21 @@ mod ch_4b_c1 {
             c.claim(1, k).unwrap();
         }
         c.claim(2, 4).unwrap();
-        assert_eq!(c.release_all(1), 3);
-        assert_eq!((c.owner_of(1), c.owner_of(4)), (None, Some(2)));
+        assert_eq!(c.release_all(1), 3, "this check");
+        assert_eq!((c.owner_of(1), c.owner_of(4)), (None, Some(2)), "this check");
         assert_eq!(c.claim(2, 1), Ok(()), "a released key can be claimed by another");
-        assert_eq!(c.release_all(9), 0);
+        assert_eq!(c.release_all(9), 0, "this check");
     }
 
     #[test]
     fn s4b_c1_a_conflict_changes_neither_the_owner_nor_the_losers_claims() {
         let mut c = WriteClaims::new();
         c.claim(1, 10).unwrap();
-        assert!(c.claim(2, 10).is_err());
-        assert_eq!(c.owner_of(10), Some(1));
+        assert!(c.claim(2, 10).is_err(), "this check: expected `c.claim(2, 10).is_err()`");
+        assert_eq!(c.owner_of(10), Some(1), "this check");
         assert_eq!(c.release_all(2), 0, "the loser holds nothing");
-        assert_eq!(c.release_all(1), 1);
-        assert_eq!(c.owner_of(10), None);
+        assert_eq!(c.release_all(1), 1, "this check");
+        assert_eq!(c.owner_of(10), None, "this check");
     }
 
     proptest! {
@@ -1813,40 +1813,40 @@ mod ch_4b_c2 {
     #[test]
     fn s4b_c2_a_reader_that_started_before_a_commit_does_not_see_it() {
         let h = [t(1, 1, 3, &[], &[(0, 1)]), t(2, 2, 4, &[(0, 0)], &[])];
-        assert_eq!(check_si(&h), Ok(()));
+        assert_eq!(check_si(&h), Ok(()), "this check");
     }
 
     #[test]
     fn s4b_c2_a_reader_that_started_after_a_commit_must_see_it() {
         let h = [t(1, 1, 2, &[], &[(0, 1)]), t(2, 3, 4, &[(0, 1)], &[])];
-        assert_eq!(check_si(&h), Ok(()));
+        assert_eq!(check_si(&h), Ok(()), "this check");
         let stale = [t(1, 1, 2, &[], &[(0, 1)]), t(2, 3, 4, &[(0, 0)], &[])];
-        assert_eq!(check_si(&stale), Err(StaleRead { txn: 2, key: 0 }));
+        assert_eq!(check_si(&stale), Err(StaleRead { txn: 2, key: 0 }), "this check");
     }
 
     #[test]
     fn s4b_c2_reading_a_value_that_was_not_yet_committed_is_a_violation() {
         let h = [t(1, 1, 4, &[], &[(0, 1)]), t(2, 2, 5, &[(0, 1)], &[])];
-        assert_eq!(check_si(&h), Err(StaleRead { txn: 2, key: 0 }));
+        assert_eq!(check_si(&h), Err(StaleRead { txn: 2, key: 0 }), "this check");
     }
 
     #[test]
     fn s4b_c2_overlapping_writers_of_one_key_are_a_lost_update() {
         let h = [t(1, 1, 4, &[(0, 0)], &[(0, 5)]), t(2, 2, 5, &[(0, 0)], &[(0, 7)])];
-        assert_eq!(check_si(&h), Err(LostUpdate { a: 1, b: 2, key: 0 }));
+        assert_eq!(check_si(&h), Err(LostUpdate { a: 1, b: 2, key: 0 }), "this check");
     }
 
     #[test]
     fn s4b_c2_writers_of_one_key_that_do_not_overlap_are_fine() {
         let h = [t(1, 1, 2, &[(0, 0)], &[(0, 5)]), t(2, 3, 4, &[(0, 5)], &[(0, 7)])];
-        assert_eq!(check_si(&h), Ok(()));
+        assert_eq!(check_si(&h), Ok(()), "this check");
     }
 
     #[test]
     fn s4b_c2_write_skew_is_allowed_by_snapshot_isolation() {
         // both read x and y = 0, then write different keys: legal under SI, an anomaly under serializability
         let h = [t(1, 1, 3, &[(0, 0), (1, 0)], &[(0, 1)]), t(2, 2, 4, &[(0, 0), (1, 0)], &[(1, 1)])];
-        assert_eq!(check_si(&h), Ok(()));
+        assert_eq!(check_si(&h), Ok(()), "this check");
     }
 
     proptest! {
@@ -1891,8 +1891,8 @@ mod ch_4b_c3 {
     #[test]
     fn s4b_c3_the_newest_version_at_or_below_the_watermark_stays() {
         let mut c = vec![(9, 30), (5, 20), (2, 10)];
-        assert_eq!(gc_chain(&mut c, 6), 1);
-        assert_eq!(c, vec![(9, 30), (5, 20)]);
+        assert_eq!(gc_chain(&mut c, 6), 1, "this check");
+        assert_eq!(c, vec![(9, 30), (5, 20)], "this check");
         assert_eq!(read_at(&c, 6), Some(20), "a reader at the watermark still reads version 5");
     }
 
@@ -1900,21 +1900,21 @@ mod ch_4b_c3 {
     fn s4b_c3_a_watermark_exactly_on_a_version_keeps_that_version() {
         let mut c = vec![(9, 30), (5, 20), (2, 10)];
         gc_chain(&mut c, 5);
-        assert_eq!(c, vec![(9, 30), (5, 20)]);
+        assert_eq!(c, vec![(9, 30), (5, 20)], "this check");
     }
 
     #[test]
     fn s4b_c3_a_watermark_below_everything_removes_nothing() {
         let mut c = vec![(9, 30), (5, 20)];
-        assert_eq!(gc_chain(&mut c, 1), 0);
-        assert_eq!(c.len(), 2);
+        assert_eq!(gc_chain(&mut c, 1), 0, "this check");
+        assert_eq!(c.len(), 2, "this check");
     }
 
     #[test]
     fn s4b_c3_a_watermark_above_everything_keeps_only_the_newest() {
         let mut c = vec![(9, 30), (5, 20), (2, 10)];
-        assert_eq!(gc_chain(&mut c, 100), 2);
-        assert_eq!(c, vec![(9, 30)]);
+        assert_eq!(gc_chain(&mut c, 100), 2, "this check");
+        assert_eq!(c, vec![(9, 30)], "this check");
     }
 
     proptest! {
@@ -1949,13 +1949,13 @@ mod ch_4b_c4 {
 
     #[test]
     fn s4b_c4_an_insert_into_the_range_is_a_phantom() {
-        assert!(!validate(&[Pred::Range(0, 10, 20)], &[w(None, Some(&[15]))]));
-        assert!(validate(&[Pred::Range(0, 10, 20)], &[w(None, Some(&[25]))]));
+        assert!(!validate(&[Pred::Range(0, 10, 20)], &[w(None, Some(&[15]))]), "this check: expected `!validate(&[Pred::Range(0, 10, 20)], &[w(None, Some(&[15]))])`");
+        assert!(validate(&[Pred::Range(0, 10, 20)], &[w(None, Some(&[25]))]), "this check: expected `validate(&[Pred::Range(0, 10, 20)], &[w(None, Some(&[25]))])`");
     }
 
     #[test]
     fn s4b_c4_a_delete_from_the_range_matters_too() {
-        assert!(!validate(&[Pred::Range(0, 10, 20)], &[w(Some(&[15]), None)]));
+        assert!(!validate(&[Pred::Range(0, 10, 20)], &[w(Some(&[15]), None)]), "this check: expected `!validate(&[Pred::Range(0, 10, 20)], &[w(Some(&[15]), None)])`");
     }
 
     #[test]
@@ -1968,15 +1968,15 @@ mod ch_4b_c4 {
 
     #[test]
     fn s4b_c4_equality_predicates_and_other_columns() {
-        assert!(!validate(&[Pred::Eq(1, 7)], &[w(None, Some(&[0, 7]))]));
+        assert!(!validate(&[Pred::Eq(1, 7)], &[w(None, Some(&[0, 7]))]), "this check: expected `!validate(&[Pred::Eq(1, 7)], &[w(None, Some(&[0, 7]))])`");
         assert!(validate(&[Pred::Eq(1, 7)], &[w(None, Some(&[7, 0]))]), "the value is in another column");
     }
 
     #[test]
     fn s4b_c4_nothing_to_check_is_valid() {
-        assert!(validate(&[], &[w(None, Some(&[1]))]));
-        assert!(validate(&[Pred::Eq(0, 1)], &[]));
-        assert!(validate(&[Pred::Eq(0, 1)], &[w(None, None)]));
+        assert!(validate(&[], &[w(None, Some(&[1]))]), "this check: expected `validate(&[], &[w(None, Some(&[1]))])`");
+        assert!(validate(&[Pred::Eq(0, 1)], &[]), "this check: expected `validate(&[Pred::Eq(0, 1)], &[])`");
+        assert!(validate(&[Pred::Eq(0, 1)], &[w(None, None)]), "this check: expected `validate(&[Pred::Eq(0, 1)], &[w(None, None)])`");
     }
 
     proptest! {
@@ -2010,9 +2010,9 @@ mod ch_4b_c5 {
         t.set(1, 2);
         t.set(2, 9);
         t.delete(1);
-        assert_eq!(t.rollback_to(a), Ok(()));
-        assert_eq!((t.get(1), t.get(2)), (Some(1), None));
-        assert_eq!(t.commit(), BTreeMap::from([(1, 1)]));
+        assert_eq!(t.rollback_to(a), Ok(()), "this check");
+        assert_eq!((t.get(1), t.get(2)), (Some(1), None), "this check");
+        assert_eq!(t.commit(), BTreeMap::from([(1, 1)]), "this check");
     }
 
     #[test]
@@ -2023,9 +2023,9 @@ mod ch_4b_c5 {
         let b = t.savepoint();
         t.set(2, 2);
         t.rollback_to(a).unwrap();
-        assert_eq!(t.rollback_to(b), Err(NoSuchSavepoint));
+        assert_eq!(t.rollback_to(b), Err(NoSuchSavepoint), "this check");
         assert_eq!(t.rollback_to(a), Ok(()), "the savepoint itself can be used again");
-        assert_eq!(t.commit(), BTreeMap::new());
+        assert_eq!(t.commit(), BTreeMap::new(), "this check");
     }
 
     #[test]
@@ -2036,9 +2036,9 @@ mod ch_4b_c5 {
         let b = t.savepoint();
         t.set(1, 30);
         t.rollback_to(b).unwrap();
-        assert_eq!(t.get(1), Some(20));
+        assert_eq!(t.get(1), Some(20), "this check");
         t.rollback_to(a).unwrap();
-        assert_eq!(t.get(1), Some(10));
+        assert_eq!(t.get(1), Some(10), "this check");
     }
 
     #[test]
@@ -2048,10 +2048,10 @@ mod ch_4b_c5 {
         t.set(1, 1);
         let b = t.savepoint();
         t.set(2, 2);
-        assert_eq!(t.release(a), Ok(()));
+        assert_eq!(t.release(a), Ok(()), "this check");
         assert_eq!(t.rollback_to(b), Err(NoSuchSavepoint), "releasing a savepoint releases the later ones too");
-        assert_eq!(t.release(99), Err(NoSuchSavepoint));
-        assert_eq!(t.commit(), BTreeMap::from([(1, 1), (2, 2)]));
+        assert_eq!(t.release(99), Err(NoSuchSavepoint), "this check");
+        assert_eq!(t.commit(), BTreeMap::from([(1, 1), (2, 2)]), "this check");
     }
 
     #[test]
@@ -2062,7 +2062,7 @@ mod ch_4b_c5 {
         t.delete(2);
         t.set(3, 3);
         t.rollback_all();
-        assert_eq!(t.commit(), init);
+        assert_eq!(t.commit(), init, "this check");
     }
 
     proptest! {

@@ -89,10 +89,10 @@ fn s3b_01_a_column_has_its_types_size_or_its_declared_length() {
         assert_eq!((c.name(), c.type_id(), c.storage_size(), c.offset(), c.is_inlined()), ("x", t, size, 0, true), "{t:?}");
     }
     let v = Column::new_varchar("name", 32);
-    assert_eq!((v.type_id(), v.storage_size(), v.is_inlined()), (Varchar, 32, false));
+    assert_eq!((v.type_id(), v.storage_size(), v.is_inlined()), (Varchar, 32, false), "a column has its types size or its declared length");
     let r = v.with_column_name("renamed");
-    assert_eq!((r.name(), r.type_id(), r.storage_size()), ("renamed", Varchar, 32));
-    assert_eq!(v.name(), "name");
+    assert_eq!((r.name(), r.type_id(), r.storage_size()), ("renamed", Varchar, 32), "a column has its types size or its declared length");
+    assert_eq!(v.name(), "name", "a column has its types size or its declared length");
 }
 
 #[test]
@@ -104,14 +104,14 @@ fn s3b_01_wrong_constructors_are_bugs_and_panic() {
 
 #[test]
 fn s3b_01_columns_and_schemas_print_like_bustub() {
-    assert_eq!(Column::new("a", Integer).to_string(true), "a:INTEGER");
-    assert_eq!(Column::new_varchar("b", 20).to_string(true), "b:VARCHAR(20)");
-    assert_eq!(Column::new("c", BigInt).to_string(false), "Column[c, BIGINT, Offset:0, Length:8]");
+    assert_eq!(Column::new("a", Integer).to_string(true), "a:INTEGER", "columns and schemas print like bustub");
+    assert_eq!(Column::new_varchar("b", 20).to_string(true), "b:VARCHAR(20)", "columns and schemas print like bustub");
+    assert_eq!(Column::new("c", BigInt).to_string(false), "Column[c, BIGINT, Offset:0, Length:8]", "columns and schemas print like bustub");
     let s = Schema::new(vec![Column::new("a", Integer), Column::new_varchar("b", 20)]);
-    assert_eq!(s.to_string(true), "(a:INTEGER, b:VARCHAR(20))");
-    assert_eq!(s.to_string(false), "Schema[NumColumns:2, IsInlined:0, Length:8] :: (Column[a, INTEGER, Offset:0, Length:4], Column[b, VARCHAR, Offset:4, Length:20])");
+    assert_eq!(s.to_string(true), "(a:INTEGER, b:VARCHAR(20))", "columns and schemas print like bustub");
+    assert_eq!(s.to_string(false), "Schema[NumColumns:2, IsInlined:0, Length:8] :: (Column[a, INTEGER, Offset:0, Length:4], Column[b, VARCHAR, Offset:4, Length:20])", "columns and schemas print like bustub");
     let e = Schema::new(vec![]);
-    assert_eq!((e.column_count(), e.inlined_storage_size(), e.is_inlined(), e.to_string(true).as_str()), (0, 0, true, "()"));
+    assert_eq!((e.column_count(), e.inlined_storage_size(), e.is_inlined(), e.to_string(true).as_str()), (0, 0, true, "()"), "columns and schemas print like bustub");
 }
 
 proptest! {
@@ -229,13 +229,13 @@ fn s3b_02_a_tuple_needs_one_value_per_column_of_the_right_type() {
 fn s3b_02_tuples_print_and_can_be_made_from_bytes() {
     let s = Schema::new(vec![Column::new("a", Integer), Column::new_varchar("b", 10), Column::new("c", Decimal)]);
     let t = Tuple::new(&[Value::integer(4), Value::null(Varchar), Value::decimal(1.5)], &s);
-    assert!(!t.is_null(&s, 0) && t.is_null(&s, 1));
-    assert_eq!(t.to_string(&s), "(4, <NULL>, 1.500000)");
-    assert_eq!(Tuple::new(&[Value::integer(-1), Value::varchar("x y"), Value::decimal(0.0)], &s).to_string(&s), "(-1, x y, 0.000000)");
+    assert!(!t.is_null(&s, 0) && t.is_null(&s, 1), "tuples print and can be made from bytes: expected `!t.is_null(&s, 0) && t.is_null(&s, 1)`");
+    assert_eq!(t.to_string(&s), "(4, <NULL>, 1.500000)", "tuples print and can be made from bytes");
+    assert_eq!(Tuple::new(&[Value::integer(-1), Value::varchar("x y"), Value::decimal(0.0)], &s).to_string(&s), "(-1, x y, 0.000000)", "tuples print and can be made from bytes");
     let copy = Tuple::from_bytes(Rid::new(PageId(3), 4), t.data());
-    assert_eq!((copy.get_rid(), copy.data()), (Rid::new(PageId(3), 4), t.data()));
-    assert_eq!(copy.to_string(&s), t.to_string(&s));
-    assert!(!Tuple::empty().get_rid().page_id().is_valid());
+    assert_eq!((copy.get_rid(), copy.data()), (Rid::new(PageId(3), 4), t.data()), "tuples print and can be made from bytes");
+    assert_eq!(copy.to_string(&s), t.to_string(&s), "tuples print and can be made from bytes");
+    assert!(!Tuple::empty().get_rid().page_id().is_valid(), "tuples print and can be made from bytes: expected `!Tuple::empty().get_rid().page_id().is_valid()`");
 }
 
 // ---- 3b-03 · A table page: inserting ---------------------------------------------------------------------------------------
@@ -249,7 +249,7 @@ fn s3b_03_a_fresh_page_is_empty() {
     let mut bytes = [0xFFu8; BUSTUB_PAGE_SIZE]; // a recycled page full of garbage
     let mut page = TablePage::new(&mut bytes[..]);
     page.init();
-    assert_eq!((page.get_num_tuples(), page.get_num_deleted_tuples(), page.get_next_page_id()), (0, 0, None));
+    assert_eq!((page.get_num_tuples(), page.get_num_deleted_tuples(), page.get_next_page_id()), (0, 0, None), "a fresh page is empty");
 }
 
 #[test]
@@ -258,8 +258,8 @@ fn s3b_03_tuples_get_consecutive_slot_numbers() {
     let mut page = TablePage::new(&mut bytes[..]);
     page.init();
     for i in 0..20u16 {
-        assert_eq!(page.insert_tuple(&meta(false), &blob(i as u8, 50)), Some(i));
-        assert_eq!(page.get_num_tuples(), i as u32 + 1);
+        assert_eq!(page.insert_tuple(&meta(false), &blob(i as u8, 50)), Some(i), "tuples get consecutive slot numbers");
+        assert_eq!(page.get_num_tuples(), i as u32 + 1, "tuples get consecutive slot numbers");
     }
 }
 
@@ -272,7 +272,7 @@ fn s3b_03_the_next_page_id_is_kept_and_can_be_cleared() {
     page.insert_tuple(&meta(false), &blob(1, 10));
     assert_eq!(page.get_next_page_id(), Some(PageId(7)), "inserting does not disturb it");
     page.set_next_page_id(None);
-    assert_eq!(page.get_next_page_id(), None);
+    assert_eq!(page.get_next_page_id(), None, "the next page id is kept and can be cleared");
 }
 
 #[test]
@@ -281,9 +281,9 @@ fn s3b_03_a_tuple_larger_than_the_page_is_refused_and_the_page_is_unchanged() {
     let mut page = TablePage::new(&mut bytes[..]);
     page.init();
     page.insert_tuple(&meta(false), &blob(1, 100)).unwrap();
-    assert!(page.get_next_tuple_offset(&meta(false), &blob(2, BUSTUB_PAGE_SIZE)).is_none());
-    assert_eq!(page.insert_tuple(&meta(false), &blob(2, BUSTUB_PAGE_SIZE)), None);
-    assert_eq!(page.get_num_tuples(), 1);
+    assert!(page.get_next_tuple_offset(&meta(false), &blob(2, BUSTUB_PAGE_SIZE)).is_none(), "a tuple larger than the page is refused and the page is unchanged: expected `page.get_next_tuple_offset(&meta(false), &blob(2, BUSTUB_PAGE_SIZE)).is_none()`");
+    assert_eq!(page.insert_tuple(&meta(false), &blob(2, BUSTUB_PAGE_SIZE)), None, "a tuple larger than the page is refused and the page is unchanged");
+    assert_eq!(page.get_num_tuples(), 1, "a tuple larger than the page is refused and the page is unchanged");
     // the biggest tuple an empty page can take is almost the whole page (the header and one slot are the only overhead)
     let mut other = [0u8; BUSTUB_PAGE_SIZE];
     let mut empty = TablePage::new(&mut other[..]);
@@ -434,7 +434,7 @@ fn s3b_04_marking_deleted_counts_once_and_keeps_the_bytes() {
     page.update_tuple_meta(&meta(true), rid).unwrap();
     assert_eq!(page.get_num_deleted_tuples(), 1, "a tuple is counted once however often it is marked");
     let (m, t) = page.get_tuple(rid).unwrap();
-    assert!(m.is_deleted && t.data() == &[7u8; 30][..]);
+    assert!(m.is_deleted && t.data() == &[7u8; 30][..], "marking deleted counts once and keeps the bytes: expected `m.is_deleted && t.data() == &[7u8; 30][..]`");
 }
 
 #[test]
@@ -464,10 +464,10 @@ fn s3b_04_a_page_is_nothing_but_its_bytes() {
     }
     let copy = bytes; // the page's bytes copied somewhere else, as the buffer pool does when it writes and reads a page
     let page = TablePage::new(&copy[..]);
-    assert_eq!((page.get_num_tuples(), page.get_next_page_id()), (30, Some(PageId(3))));
+    assert_eq!((page.get_num_tuples(), page.get_next_page_id()), (30, Some(PageId(3))), "a page is nothing but its bytes");
     for i in 0..30u8 {
         let (m, t) = page.get_tuple(Rid::new(PageId(0), i as u32)).unwrap();
-        assert_eq!((m.ts, m.is_deleted, t.data()), (i as i64, i % 4 == 0, &vec![i; 20 + i as usize][..]));
+        assert_eq!((m.ts, m.is_deleted, t.data()), (i as i64, i % 4 == 0, &vec![i; 20 + i as usize][..]), "a page is nothing but its bytes");
     }
 }
 
@@ -492,7 +492,7 @@ fn s3b_04_errors_from_a_bad_slot_have_a_kind() {
     let mut page = TablePage::new(&mut bytes[..]);
     page.init();
     let e = page.get_tuple(Rid::new(PageId(0), 0)).unwrap_err();
-    assert_eq!(e.kind, ExceptionType::Invalid);
+    assert_eq!(e.kind, ExceptionType::Invalid, "errors from a bad slot have a kind");
 }
 
 // ---- 3b-05 · Boss: everything together ------------------------------------------------------------------------------------
@@ -567,22 +567,22 @@ mod ch_3b_c1 {
         want.extend_from_slice(&1i64.to_le_bytes());
         want.extend_from_slice(&2u32.to_le_bytes());
         want.extend_from_slice(b"ab");
-        assert_eq!(bytes, want);
-        assert_eq!(encode_row(&[None, None]), vec![0b11]);
+        assert_eq!(bytes, want, "this check");
+        assert_eq!(encode_row(&[None, None]), vec![0b11], "this check");
     }
 
     #[test]
     fn s3b_c1_rows_round_trip_including_more_than_eight_columns() {
         let row: Vec<Option<Cell>> = (0..11).map(|n| if n % 3 == 0 { None } else if n % 2 == 0 { t("x") } else { i(n) }).collect();
         let types: Vec<Ty> = row.iter().enumerate().map(|(n, _)| if n % 2 == 0 { Ty::Text } else { Ty::Int }).collect();
-        assert_eq!(decode_row(&encode_row(&row), &types), Some(row));
+        assert_eq!(decode_row(&encode_row(&row), &types), Some(row), "this check");
     }
 
     #[test]
     fn s3b_c1_a_null_costs_one_bit_not_a_value() {
         let full = encode_row(&[i(1), i(2), i(3)]);
         let nulls = encode_row(&[None, None, None]);
-        assert_eq!((full.len(), nulls.len()), (1 + 24, 1));
+        assert_eq!((full.len(), nulls.len()), (1 + 24, 1), "this check");
     }
 
     #[test]
@@ -594,10 +594,10 @@ mod ch_3b_c1 {
         }
         let mut trailing = good.clone();
         trailing.push(0);
-        assert_eq!(decode_row(&trailing, &types), None);
+        assert_eq!(decode_row(&trailing, &types), None, "this check");
         let mut bad_utf8 = vec![0u8, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0xFF];
         bad_utf8[9] = 1;
-        assert_eq!(decode_row(&bad_utf8, &types), None);
+        assert_eq!(decode_row(&bad_utf8, &types), None, "this check");
         assert_eq!(decode_row(&[0b100], &types), None, "a bit set past the last column");
     }
 
@@ -634,27 +634,27 @@ mod ch_3b_c2 {
     #[test]
     fn s3b_c2_padding_between_and_after_fields() {
         let l = layout(&[(1, 1), (8, 8), (2, 2)]);
-        assert_eq!(l, Layout { offsets: vec![0, 8, 16], size: 24, align: 8 });
+        assert_eq!(l, Layout { offsets: vec![0, 8, 16], size: 24, align: 8 }, "this check");
     }
 
     #[test]
     fn s3b_c2_no_fields_and_one_field() {
-        assert_eq!(layout(&[]), Layout { offsets: vec![], size: 0, align: 1 });
-        assert_eq!(layout(&[(4, 4)]), Layout { offsets: vec![0], size: 4, align: 4 });
+        assert_eq!(layout(&[]), Layout { offsets: vec![], size: 0, align: 1 }, "this check");
+        assert_eq!(layout(&[(4, 4)]), Layout { offsets: vec![0], size: 4, align: 4 }, "this check");
     }
 
     #[test]
     fn s3b_c2_the_packed_order_removes_the_padding() {
         let fields = [(1, 1), (8, 8), (2, 2)];
         let order = packed_order(&fields);
-        assert_eq!(order, vec![1, 2, 0]);
+        assert_eq!(order, vec![1, 2, 0], "this check");
         let packed: Vec<_> = order.iter().map(|&i| fields[i]).collect();
-        assert_eq!(layout(&packed).size, 16);
+        assert_eq!(layout(&packed).size, 16, "this check");
     }
 
     #[test]
     fn s3b_c2_equal_alignments_keep_their_order() {
-        assert_eq!(packed_order(&[(4, 4), (4, 4), (4, 4)]), vec![0, 1, 2]);
+        assert_eq!(packed_order(&[(4, 4), (4, 4), (4, 4)]), vec![0, 1, 2], "this check");
     }
 
     fn permutations(n: usize) -> Vec<Vec<usize>> {
@@ -711,30 +711,30 @@ mod ch_3b_c3 {
     #[test]
     fn s3b_c3_each_column_comes_back() {
         let b = encode(&cols(&["ab", "", "cde"]));
-        assert_eq!(column(&b, 0), Some(&b"ab"[..]));
-        assert_eq!(column(&b, 1), Some(&b""[..]));
-        assert_eq!(column(&b, 2), Some(&b"cde"[..]));
+        assert_eq!(column(&b, 0), Some(&b"ab"[..]), "this check");
+        assert_eq!(column(&b, 1), Some(&b""[..]), "this check");
+        assert_eq!(column(&b, 2), Some(&b"cde"[..]), "this check");
     }
 
     #[test]
     fn s3b_c3_an_index_past_the_end_is_none() {
         let b = encode(&cols(&["x"]));
-        assert_eq!(column(&b, 1), None);
-        assert_eq!(column(&[], 0), None);
+        assert_eq!(column(&b, 1), None, "this check");
+        assert_eq!(column(&[], 0), None, "this check");
     }
 
     #[test]
     fn s3b_c3_the_first_column_starts_at_zero_and_a_single_column_row_works() {
         let b = encode(&cols(&["hello"]));
-        assert_eq!(column(&b, 0), Some(&b"hello"[..]));
+        assert_eq!(column(&b, 0), Some(&b"hello"[..]), "this check");
     }
 
     #[test]
     fn s3b_c3_empty_columns_at_the_end_and_a_row_of_only_empty_columns() {
         let b = encode(&cols(&["x", "", ""]));
-        assert_eq!((column(&b, 0), column(&b, 1), column(&b, 2)), (Some(&b"x"[..]), Some(&b""[..]), Some(&b""[..])));
+        assert_eq!((column(&b, 0), column(&b, 1), column(&b, 2)), (Some(&b"x"[..]), Some(&b""[..]), Some(&b""[..])), "this check");
         let e = encode(&cols(&["", ""]));
-        assert_eq!((column(&e, 0), column(&e, 1), column(&e, 2)), (Some(&b""[..]), Some(&b""[..]), None));
+        assert_eq!((column(&e, 0), column(&e, 1), column(&e, 2)), (Some(&b""[..]), Some(&b""[..]), None), "this check");
     }
 
     proptest! {
@@ -764,28 +764,28 @@ mod ch_3b_c4 {
 
     #[test]
     fn s3b_c4_the_standard_check_values() {
-        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
-        assert_eq!(crc32(b""), 0);
-        assert_eq!(crc32(b"a"), 0xE8B7_BE43);
-        assert_eq!(crc32(b"The quick brown fox jumps over the lazy dog"), 0x414F_A339);
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926, "this check");
+        assert_eq!(crc32(b""), 0, "this check");
+        assert_eq!(crc32(b"a"), 0xE8B7_BE43, "this check");
+        assert_eq!(crc32(b"The quick brown fox jumps over the lazy dog"), 0x414F_A339, "this check");
     }
 
     #[test]
     fn s3b_c4_sealing_appends_the_crc_in_little_endian() {
         let s = seal(b"abc");
-        assert_eq!(&s[..3], b"abc");
-        assert_eq!(&s[3..], &crc32(b"abc").to_le_bytes());
-        assert_eq!(unseal(&s), Ok(&b"abc"[..]));
-        assert_eq!(unseal(&seal(b"")), Ok(&b""[..]));
+        assert_eq!(&s[..3], b"abc", "this check");
+        assert_eq!(&s[3..], &crc32(b"abc").to_le_bytes(), "this check");
+        assert_eq!(unseal(&s), Ok(&b"abc"[..]), "this check");
+        assert_eq!(unseal(&seal(b"")), Ok(&b""[..]), "this check");
     }
 
     #[test]
     fn s3b_c4_short_and_damaged_buffers_are_refused() {
-        assert_eq!(unseal(b"abc"), Err(SealError::TooShort));
-        assert_eq!(unseal(b""), Err(SealError::TooShort));
+        assert_eq!(unseal(b"abc"), Err(SealError::TooShort), "this check");
+        assert_eq!(unseal(b""), Err(SealError::TooShort), "this check");
         let mut s = seal(b"hello world");
         s[2] ^= 1;
-        assert_eq!(unseal(&s), Err(SealError::Mismatch));
+        assert_eq!(unseal(&s), Err(SealError::Mismatch), "this check");
     }
 
     #[test]
@@ -835,26 +835,26 @@ mod ch_3b_c5 {
     #[test]
     fn s3b_c5_nulls_are_the_same_for_distinct() {
         let rows = vec![r(&[Some(1), None]), r(&[Some(1), None]), r(&[Some(2), Some(3)]), r(&[Some(1), None])];
-        assert_eq!(distinct_rows(&rows), vec![r(&[Some(1), None]), r(&[Some(2), Some(3)])]);
-        assert_eq!(distinct_count(&rows), 2);
+        assert_eq!(distinct_rows(&rows), vec![r(&[Some(1), None]), r(&[Some(2), Some(3)])], "this check");
+        assert_eq!(distinct_count(&rows), 2, "this check");
     }
 
     #[test]
     fn s3b_c5_null_and_zero_are_different() {
         let rows = vec![r(&[None]), r(&[Some(0)]), r(&[None])];
-        assert_eq!(distinct_rows(&rows), vec![r(&[None]), r(&[Some(0)])]);
+        assert_eq!(distinct_rows(&rows), vec![r(&[None]), r(&[Some(0)])], "this check");
     }
 
     #[test]
     fn s3b_c5_first_occurrences_keep_their_order() {
         let rows = vec![r(&[Some(3)]), r(&[Some(1)]), r(&[Some(3)]), r(&[Some(2)]), r(&[Some(1)])];
-        assert_eq!(distinct_rows(&rows), vec![r(&[Some(3)]), r(&[Some(1)]), r(&[Some(2)])]);
+        assert_eq!(distinct_rows(&rows), vec![r(&[Some(3)]), r(&[Some(1)]), r(&[Some(2)])], "this check");
     }
 
     #[test]
     fn s3b_c5_empty_input_and_rows_of_different_lengths() {
-        assert_eq!(distinct_rows(&[]), Vec::<Row>::new());
-        assert_eq!(distinct_rows(&[r(&[]), r(&[]), r(&[None])]), vec![r(&[]), r(&[None])]);
+        assert_eq!(distinct_rows(&[]), Vec::<Row>::new(), "this check");
+        assert_eq!(distinct_rows(&[r(&[]), r(&[]), r(&[None])]), vec![r(&[]), r(&[None])], "this check");
     }
 
     proptest! {

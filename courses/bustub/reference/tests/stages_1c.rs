@@ -79,9 +79,9 @@ fn list_ops() -> impl Strategy<Value = Vec<ListOp>> {
 fn s1c_01_a_new_list_is_empty() {
     let list: IndexList<u32> = IndexList::new();
     assert!(list.is_empty(), "a new list is empty");
-    assert_eq!(list.len(), 0);
-    assert_eq!(list.front(), None);
-    assert_eq!(all(&list), Vec::<u32>::new());
+    assert_eq!(list.len(), 0, "a new list is empty");
+    assert_eq!(list.front(), None, "a new list is empty");
+    assert_eq!(all(&list), Vec::<u32>::new(), "a new list is empty");
     let mut list = list;
     assert_eq!(list.pop_front(), None, "popping an empty list gives nothing");
 }
@@ -90,9 +90,9 @@ fn s1c_01_a_new_list_is_empty() {
 fn s1c_01_push_back_keeps_order_and_each_handle_finds_its_element() {
     let mut list = IndexList::new();
     let hs: Vec<Handle> = ["a", "b", "c"].into_iter().map(|s| list.push_back(String::from(s))).collect();
-    assert_eq!(list.len(), 3);
+    assert_eq!(list.len(), 3, "push back keeps order and each handle finds its element");
     assert_eq!(list.iter().map(|s| s.as_str()).collect::<Vec<_>>(), ["a", "b", "c"], "elements are ordered front to back in the order pushed (and need not be Clone)");
-    assert_eq!(list.front().map(|s| s.as_str()), Some("a"));
+    assert_eq!(list.front().map(|s| s.as_str()), Some("a"), "push back keeps order and each handle finds its element");
     assert_eq!(hs.iter().map(|h| list.get(*h).unwrap().as_str()).collect::<Vec<_>>(), ["a", "b", "c"], "each handle finds the element it was returned for");
     assert!(hs[0] != hs[1] && hs[1] != hs[2] && hs[0] != hs[2], "handles for different elements differ");
 }
@@ -101,7 +101,7 @@ fn s1c_01_push_back_keeps_order_and_each_handle_finds_its_element() {
 fn s1c_01_a_removed_handle_never_names_another_element_even_when_the_space_is_reused() {
     let mut list = IndexList::new();
     let a = list.push_back("a");
-    assert_eq!(list.remove(a), Some("a"));
+    assert_eq!(list.remove(a), Some("a"), "a removed handle never names another element even when the space is reused");
     assert_eq!(list.get(a), None, "a removed element is gone");
     let b = list.push_back("b"); // may well be stored where `a` was
     let c = list.push_back("c");
@@ -116,14 +116,14 @@ fn s1c_01_a_removed_handle_never_names_another_element_even_when_the_space_is_re
 fn s1c_01_moving_to_the_back_keeps_the_handle_valid() {
     let mut list = IndexList::new();
     let hs: Vec<Handle> = (0..4).map(|i| list.push_back(i)).collect();
-    assert!(list.move_to_back(hs[1]));
-    assert_eq!(all(&list), [0, 2, 3, 1]);
+    assert!(list.move_to_back(hs[1]), "moving to the back keeps the handle valid: expected `list.move_to_back(hs[1])`");
+    assert_eq!(all(&list), [0, 2, 3, 1], "moving to the back keeps the handle valid");
     assert!(list.move_to_back(hs[1]), "moving the last element to the back succeeds and changes nothing");
-    assert_eq!(all(&list), [0, 2, 3, 1]);
-    assert!(list.move_to_back(hs[0]));
-    assert_eq!(all(&list), [2, 3, 1, 0]);
+    assert_eq!(all(&list), [0, 2, 3, 1], "moving to the back keeps the handle valid");
+    assert!(list.move_to_back(hs[0]), "moving to the back keeps the handle valid: expected `list.move_to_back(hs[0])`");
+    assert_eq!(all(&list), [2, 3, 1, 0], "moving to the back keeps the handle valid");
     assert_eq!(hs.iter().map(|h| list.get(*h).copied()).collect::<Vec<_>>(), [Some(0), Some(1), Some(2), Some(3)], "every handle still names its own element");
-    assert_eq!(list.pop_front(), Some(2));
+    assert_eq!(list.pop_front(), Some(2), "moving to the back keeps the handle valid");
 }
 
 proptest! {
@@ -203,13 +203,13 @@ fn s1c_01_removing_from_the_middle_by_handle_takes_constant_time() {
             order.swap(i, rng.next(i + 1));
         }
         for &i in &order {
-            assert_eq!(list.remove(handles[i]), Some(i));
+            assert_eq!(list.remove(handles[i]), Some(i), "removing from the middle by handle takes constant time");
         }
-        assert!(list.is_empty());
+        assert!(list.is_empty(), "removing from the middle by handle takes constant time: expected `list.is_empty()`");
         // and the space is reused, so churn does not grow the list for ever
         for round in 0..200_000 {
             let h = list.push_back(round);
-            assert_eq!(list.remove(h), Some(round));
+            assert_eq!(list.remove(h), Some(round), "removing from the middle by handle takes constant time");
         }
     });
 }
@@ -394,9 +394,9 @@ fn s1c_02_frames_leave_in_the_order_they_were_unpinned() {
     for x in [3, 1, 4, 2] {
         r.unpin(f(x));
     }
-    assert_eq!(r.size(), 4);
+    assert_eq!(r.size(), 4, "frames leave in the order they were unpinned");
     assert_eq!([r.victim(), r.victim(), r.victim(), r.victim(), r.victim()], [Some(f(3)), Some(f(1)), Some(f(4)), Some(f(2)), None], "least recently unpinned first, then nothing");
-    assert_eq!(r.size(), 0);
+    assert_eq!(r.size(), 0, "frames leave in the order they were unpinned");
 }
 
 #[test]
@@ -417,7 +417,7 @@ fn s1c_02_pinning_removes_a_frame_and_a_later_unpin_makes_it_the_most_recent() {
     }
     r.pin(f(1));
     r.pin(f(9)); // never there: nothing happens
-    assert_eq!(r.size(), 2);
+    assert_eq!(r.size(), 2, "pinning removes a frame and a later unpin makes it the most recent");
     r.unpin(f(1));
     assert_eq!([r.victim(), r.victim(), r.victim()], [Some(f(2)), Some(f(3)), Some(f(1))], "frame 1 came back last, so it leaves last");
 }
@@ -464,7 +464,7 @@ fn s1c_02_every_operation_stays_fast_with_four_hundred_thousand_frames() {
         for x in 0..n {
             r.unpin(f(x));
         }
-        assert_eq!(r.size(), n);
+        assert_eq!(r.size(), n, "every operation stays fast with four hundred thousand frames");
         let mut rng = Lcg(42);
         let start = Instant::now();
         for _ in 0..3_000_000 {
@@ -477,7 +477,7 @@ fn s1c_02_every_operation_stays_fast_with_four_hundred_thousand_frames() {
                 }
             }
         }
-        assert!(r.size() <= n);
+        assert!(r.size() <= n, "every operation stays fast with four hundred thousand frames: expected `r.size() <= n`");
         eprintln!("3 000 000 operations took {:?}", start.elapsed());
     });
 }
@@ -493,8 +493,8 @@ fn s1c_03_a_frame_whose_bit_was_set_again_gets_a_second_chance() {
     assert_eq!(r.victim(), Some(f(1)), "all bits are set, so the hand clears them all and comes back to the first frame");
     r.unpin(f(2)); // sets frame 2's bit again
     assert_eq!(r.victim(), Some(f(3)), "frame 2 has its bit set, so the hand passes it (clearing the bit) and takes frame 3");
-    assert_eq!(r.victim(), Some(f(2)));
-    assert_eq!(r.victim(), None);
+    assert_eq!(r.victim(), Some(f(2)), "a frame whose bit was set again gets a second chance");
+    assert_eq!(r.victim(), None, "a frame whose bit was set again gets a second chance");
 }
 
 #[test]
@@ -503,8 +503,8 @@ fn s1c_03_unpinning_a_frame_on_the_ring_does_not_change_its_place_or_the_size() 
     for x in [1, 2, 3, 2, 2] {
         r.unpin(f(x));
     }
-    assert_eq!(r.size(), 3);
-    assert_eq!([r.victim(), r.victim(), r.victim()], [Some(f(1)), Some(f(2)), Some(f(3))]);
+    assert_eq!(r.size(), 3, "unpinning a frame on the ring does not change its place or the size");
+    assert_eq!([r.victim(), r.victim(), r.victim()], [Some(f(1)), Some(f(2)), Some(f(3))], "unpinning a frame on the ring does not change its place or the size");
 }
 
 #[test]
@@ -513,11 +513,11 @@ fn s1c_03_pinning_a_frame_behind_the_hand_leaves_the_hand_on_the_same_frame() {
     for x in [1, 2, 3] {
         r.unpin(f(x));
     }
-    assert_eq!(r.victim(), Some(f(1))); // the hand now points at frame 2, whose bit is clear
+    assert_eq!(r.victim(), Some(f(1)), "pinning a frame behind the hand leaves the hand on the same frame"); // the hand now points at frame 2, whose bit is clear
     r.unpin(f(4)); // joins just behind the hand
     r.pin(f(4)); // and leaves again
     assert_eq!(r.victim(), Some(f(2)), "the hand still points at frame 2");
-    assert_eq!(r.victim(), Some(f(3)));
+    assert_eq!(r.victim(), Some(f(3)), "pinning a frame behind the hand leaves the hand on the same frame");
 }
 
 #[test]
@@ -526,10 +526,10 @@ fn s1c_03_pinning_the_frame_under_the_hand_moves_the_hand_to_the_next() {
     for x in [1, 2, 3] {
         r.unpin(f(x));
     }
-    assert_eq!(r.victim(), Some(f(1))); // the hand points at frame 2
+    assert_eq!(r.victim(), Some(f(1)), "pinning the frame under the hand moves the hand to the next"); // the hand points at frame 2
     r.pin(f(2));
     assert_eq!(r.victim(), Some(f(3)), "frame 2 left, so the hand is on frame 3");
-    assert_eq!(r.victim(), None);
+    assert_eq!(r.victim(), None, "pinning the frame under the hand moves the hand to the next");
 }
 
 proptest! {
@@ -664,10 +664,10 @@ fn s1c_c1_the_least_used_evictable_frame_goes_first() {
         r.set_evictable(f(fr), true);
     }
     // counts: frame 0 -> 3, frame 1 -> 2, frame 2 -> 1
-    assert_eq!(r.evict(), Some(f(2)));
-    assert_eq!(r.evict(), Some(f(1)));
-    assert_eq!(r.evict(), Some(f(0)));
-    assert_eq!(r.evict(), None);
+    assert_eq!(r.evict(), Some(f(2)), "s1c c1 the least used evictable frame goes first");
+    assert_eq!(r.evict(), Some(f(1)), "s1c c1 the least used evictable frame goes first");
+    assert_eq!(r.evict(), Some(f(0)), "s1c c1 the least used evictable frame goes first");
+    assert_eq!(r.evict(), None, "s1c c1 the least used evictable frame goes first");
 }
 
 #[test]
@@ -681,17 +681,17 @@ fn s1c_c1_among_equals_the_oldest_last_access_goes_first() {
     }
     r.record_access(f(1), chpg()); // frame 1 now has 2 accesses, the others 1
     assert_eq!(r.evict(), Some(f(2)), "frames 2 and 3 are tied on one access; 2 was used first");
-    assert_eq!(r.evict(), Some(f(3)));
-    assert_eq!(r.evict(), Some(f(1)));
+    assert_eq!(r.evict(), Some(f(3)), "s1c c1 among equals the oldest last access goes first");
+    assert_eq!(r.evict(), Some(f(1)), "s1c c1 among equals the oldest last access goes first");
 }
 
 #[test]
 fn s1c_c1_a_new_frame_is_not_evictable_until_it_is_set() {
     let mut r = LfuReplacer::new();
     r.record_access(f(5), chpg());
-    assert_eq!((r.size(), r.evict()), (0, None));
+    assert_eq!((r.size(), r.evict()), (0, None), "s1c c1 a new frame is not evictable until it is set");
     r.set_evictable(f(5), true);
-    assert_eq!(r.size(), 1);
+    assert_eq!(r.size(), 1, "s1c c1 a new frame is not evictable until it is set");
     r.set_evictable(f(5), false);
     assert_eq!((r.size(), r.evict()), (0, None), "pinned again");
     r.set_evictable(f(9), true);
@@ -708,8 +708,8 @@ fn s1c_c1_an_evicted_frame_starts_again_from_one_access() {
     r.record_access(f(2), chpg());
     r.set_evictable(f(1), true);
     r.set_evictable(f(2), true);
-    assert_eq!(r.evict(), Some(f(2)));
-    assert_eq!(r.evict(), Some(f(1)));
+    assert_eq!(r.evict(), Some(f(2)), "s1c c1 an evicted frame starts again from one access");
+    assert_eq!(r.evict(), Some(f(1)), "s1c c1 an evicted frame starts again from one access");
     r.record_access(f(1), chpg());
     r.record_access(f(2), chpg());
     r.record_access(f(2), chpg());
@@ -724,7 +724,7 @@ fn s1c_c1_remove_forgets_an_evictable_frame_and_refuses_a_pinned_one() {
     r.record_access(f(1), chpg());
     r.set_evictable(f(1), true);
     r.remove(f(1));
-    assert_eq!(r.size(), 0);
+    assert_eq!(r.size(), 0, "s1c c1 remove forgets an evictable frame and refuses a pinned one");
     r.remove(f(7)); // unknown: nothing happens
     r.record_access(f(2), chpg());
     let pinned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| r.remove(f(2))));
@@ -784,7 +784,7 @@ fn s1c_c2_the_oldest_arrival_goes_first_however_often_frames_are_used() {
         r.record_access(f(0), chpg());
     }
     assert_eq!(r.evict(), Some(f(0)), "using frame 0 again does not move it: this is first in, first out");
-    assert_eq!(r.evict(), Some(f(1)));
+    assert_eq!(r.evict(), Some(f(1)), "s1c c2 the oldest arrival goes first however often frames are used");
 }
 
 #[test]
@@ -805,10 +805,10 @@ fn s1c_c2_size_counts_the_evictable_frames_through_every_change() {
     let mut r = FifoReplacer::new();
     r.record_access(f(1), chpg());
     r.record_access(f(2), chpg());
-    assert_eq!(r.size(), 0);
+    assert_eq!(r.size(), 0, "s1c c2 size counts the evictable frames through every change");
     r.set_evictable(f(1), true);
     r.set_evictable(f(2), true);
-    assert_eq!(r.size(), 2);
+    assert_eq!(r.size(), 2, "s1c c2 size counts the evictable frames through every change");
     r.set_evictable(f(1), false);
     assert_eq!(r.size(), 1, "a frame that is in use again is not counted");
     r.set_evictable(f(1), false);
@@ -820,9 +820,9 @@ fn s1c_c2_size_counts_the_evictable_frames_through_every_change() {
 #[test]
 fn s1c_c2_nothing_to_evict_is_none_and_unknown_frames_are_ignored() {
     let mut r = FifoReplacer::new();
-    assert_eq!(r.evict(), None);
+    assert_eq!(r.evict(), None, "s1c c2 nothing to evict is none and unknown frames are ignored");
     r.set_evictable(f(4), true);
-    assert_eq!((r.size(), r.evict()), (0, None));
+    assert_eq!((r.size(), r.evict()), (0, None), "s1c c2 nothing to evict is none and unknown frames are ignored");
     r.record_access(f(4), chpg());
     assert_eq!(r.evict(), None, "known but not evictable");
 }
@@ -833,7 +833,7 @@ fn s1c_c2_remove_forgets_a_frame_and_its_count() {
     r.record_access(f(1), chpg());
     r.set_evictable(f(1), true);
     r.remove(f(1));
-    assert_eq!((r.size(), r.evict()), (0, None));
+    assert_eq!((r.size(), r.evict()), (0, None), "s1c c2 remove forgets a frame and its count");
 }
 
 proptest! {

@@ -932,21 +932,21 @@ mod ch_3f_c1 {
     fn s3f_c1_duplicates_on_both_sides_give_the_cross_product() {
         let l = [(1, 10), (2, 11), (2, 12)];
         let r = [(2, 20), (2, 21), (3, 22)];
-        assert_eq!(merge_join(&l, &r), vec![(11, 20), (11, 21), (12, 20), (12, 21)]);
+        assert_eq!(merge_join(&l, &r), vec![(11, 20), (11, 21), (12, 20), (12, 21)], "this check");
     }
 
     #[test]
     fn s3f_c1_disjoint_and_empty_inputs() {
-        assert_eq!(merge_join(&[(1, 1)], &[(2, 2)]), vec![]);
-        assert_eq!(merge_join(&[], &[(2, 2)]), vec![]);
-        assert_eq!(merge_join(&[(1, 1)], &[]), vec![]);
+        assert_eq!(merge_join(&[(1, 1)], &[(2, 2)]), vec![], "this check");
+        assert_eq!(merge_join(&[], &[(2, 2)]), vec![], "this check");
+        assert_eq!(merge_join(&[(1, 1)], &[]), vec![], "this check");
     }
 
     #[test]
     fn s3f_c1_every_key_matches_in_turn() {
         let l: Vec<_> = (0..5).map(|k| (k, k as u32)).collect();
         let r: Vec<_> = (0..5).map(|k| (k, 100 + k as u32)).collect();
-        assert_eq!(merge_join(&l, &r), (0..5u32).map(|k| (k, 100 + k)).collect::<Vec<_>>());
+        assert_eq!(merge_join(&l, &r), (0..5u32).map(|k| (k, 100 + k)).collect::<Vec<_>>(), "this check");
     }
 
     #[test]
@@ -955,7 +955,7 @@ mod ch_3f_c1 {
         let r: Vec<_> = (0..200_000i64).map(|k| (k * 2, k as u32)).collect();
         let t = std::time::Instant::now();
         let out = merge_join(&l, &r);
-        assert_eq!(out.len(), 100_000);
+        assert_eq!(out.len(), 100_000, "this check");
         assert!(t.elapsed() < std::time::Duration::from_secs(3), "took {:?}", t.elapsed());
     }
 
@@ -987,8 +987,8 @@ mod ch_3f_c2 {
     fn s3f_c2_without_nulls_in_the_subquery() {
         let left = [Some(1), Some(2), None];
         let right = [Some(2), Some(3)];
-        assert_eq!(semi_join(&left, &right), vec![1]);
-        assert_eq!(anti_join(&left, &right), vec![0, 2]);
+        assert_eq!(semi_join(&left, &right), vec![1], "this check");
+        assert_eq!(anti_join(&left, &right), vec![0, 2], "this check");
         assert_eq!(not_in(&left, &right), vec![0], "a NULL left key is not provably absent");
     }
 
@@ -996,23 +996,23 @@ mod ch_3f_c2 {
     fn s3f_c2_a_null_in_the_subquery_empties_not_in_but_not_not_exists() {
         let left = [Some(1), Some(2), None];
         let right = [Some(2), None];
-        assert_eq!(semi_join(&left, &right), vec![1]);
-        assert_eq!(anti_join(&left, &right), vec![0, 2]);
-        assert_eq!(not_in(&left, &right), Vec::<usize>::new());
+        assert_eq!(semi_join(&left, &right), vec![1], "this check");
+        assert_eq!(anti_join(&left, &right), vec![0, 2], "this check");
+        assert_eq!(not_in(&left, &right), Vec::<usize>::new(), "this check");
     }
 
     #[test]
     fn s3f_c2_an_empty_subquery_keeps_everything_for_not_in() {
         let left = [Some(1), None];
         assert_eq!(not_in(&left, &[]), vec![0, 1], "NOT IN over nothing is true for every row, NULL or not");
-        assert_eq!(semi_join(&left, &[]), Vec::<usize>::new());
-        assert_eq!(anti_join(&left, &[]), vec![0, 1]);
+        assert_eq!(semi_join(&left, &[]), Vec::<usize>::new(), "this check");
+        assert_eq!(anti_join(&left, &[]), vec![0, 1], "this check");
     }
 
     #[test]
     fn s3f_c2_no_left_rows() {
-        assert!(semi_join(&[], &[Some(1)]).is_empty());
-        assert!(not_in(&[], &[Some(1)]).is_empty());
+        assert!(semi_join(&[], &[Some(1)]).is_empty(), "this check: expected `semi_join(&[], &[Some(1)]).is_empty()`");
+        assert!(not_in(&[], &[Some(1)]).is_empty(), "this check: expected `not_in(&[], &[Some(1)]).is_empty()`");
     }
 
     proptest! {
@@ -1049,10 +1049,10 @@ mod ch_3f_c3 {
     fn s3f_c3_equal_keys_share_a_bucket_and_nothing_is_lost() {
         let rows: Vec<(i64, u32)> = (0..100).map(|i| ((i % 7) as i64, i as u32)).collect();
         let parts = partition(&rows, 5);
-        assert_eq!(parts.len(), 5);
-        assert_eq!(parts.iter().map(Vec::len).sum::<usize>(), 100);
+        assert_eq!(parts.len(), 5, "this check");
+        assert_eq!(parts.iter().map(Vec::len).sum::<usize>(), 100, "this check");
         for (b, p) in parts.iter().enumerate() {
-            assert!(p.iter().all(|r| bucket_of(r.0, 5) == b));
+            assert!(p.iter().all(|r| bucket_of(r.0, 5) == b), "this check: expected `p.iter().all(|r| bucket_of(r.0, 5) == b)`");
         }
         assert!(parts.iter().all(|p| p.windows(2).all(|w| w[0].1 < w[1].1)), "input order is kept inside a bucket");
     }
@@ -1063,7 +1063,7 @@ mod ch_3f_c3 {
         let r = [(2, 20), (3, 21), (2, 22)];
         let mut got = grace_join(&l, &r, 3);
         got.sort();
-        assert_eq!(got, vec![(11, 20), (11, 22), (12, 20), (12, 22)]);
+        assert_eq!(got, vec![(11, 20), (11, 22), (12, 20), (12, 22)], "this check");
     }
 
     #[test]
@@ -1072,7 +1072,7 @@ mod ch_3f_c3 {
         let r = [(1, 9)];
         let mut got = grace_join(&l, &r, 1);
         got.sort();
-        assert_eq!(got, vec![(1, 9), (2, 9)]);
+        assert_eq!(got, vec![(1, 9), (2, 9)], "this check");
     }
 
     #[test]
@@ -1082,7 +1082,7 @@ mod ch_3f_c3 {
         for k in [1, 2, 7, 64] {
             assert_eq!(grace_join(&l, &r, k), Vec::<(u32, u32)>::new(), "k = {k}");
         }
-        assert_eq!(grace_join(&[], &r, 4), Vec::<(u32, u32)>::new());
+        assert_eq!(grace_join(&[], &r, 4), Vec::<(u32, u32)>::new(), "this check");
     }
 
     proptest! {
@@ -1113,27 +1113,27 @@ mod ch_3f_c4 {
     #[test]
     fn s3f_c4_nulls_are_skipped_by_everything_but_count_star() {
         let v = [Some(1), None, Some(3)];
-        assert_eq!((count_star(&v), count_col(&v), sum(&v)), (3, 2, Some(4)));
-        assert_eq!(avg(&v), Some(2.0));
+        assert_eq!((count_star(&v), count_col(&v), sum(&v)), (3, 2, Some(4)), "this check");
+        assert_eq!(avg(&v), Some(2.0), "this check");
     }
 
     #[test]
     fn s3f_c4_a_column_of_nulls_has_no_sum_and_no_average() {
         let v = [None, None];
-        assert_eq!((count_star(&v), count_col(&v), sum(&v), avg(&v)), (2, 0, None, None));
-        assert_eq!(avg(&[]), None);
+        assert_eq!((count_star(&v), count_col(&v), sum(&v), avg(&v)), (2, 0, None, None), "this check");
+        assert_eq!(avg(&[]), None, "this check");
     }
 
     #[test]
     fn s3f_c4_no_nulls_is_the_ordinary_mean() {
-        assert_eq!(avg(&[Some(2), Some(4), Some(9)]), Some(5.0));
+        assert_eq!(avg(&[Some(2), Some(4), Some(9)]), Some(5.0), "this check");
     }
 
     #[test]
     fn s3f_c4_the_average_is_not_rounded_and_a_zero_sum_is_not_null() {
-        assert_eq!(avg(&[Some(1), Some(2)]), Some(1.5));
-        assert_eq!(avg(&[Some(-1), None, Some(-2)]), Some(-1.5));
-        assert_eq!(sum(&[Some(-3), Some(3)]), Some(0));
+        assert_eq!(avg(&[Some(1), Some(2)]), Some(1.5), "this check");
+        assert_eq!(avg(&[Some(-1), None, Some(-2)]), Some(-1.5), "this check");
+        assert_eq!(sum(&[Some(-3), Some(3)]), Some(0), "this check");
     }
 
     proptest! {
@@ -1162,26 +1162,26 @@ mod ch_3f_c5 {
 
     #[test]
     fn s3f_c5_groups_of_adjacent_equal_keys() {
-        assert_eq!(stream_group_sums(&[(1, 5), (1, 7), (2, 1)]), Ok(vec![(1, 12, 2), (2, 1, 1)]));
+        assert_eq!(stream_group_sums(&[(1, 5), (1, 7), (2, 1)]), Ok(vec![(1, 12, 2), (2, 1, 1)]), "this check");
     }
 
     #[test]
     fn s3f_c5_empty_and_single_row_inputs() {
-        assert_eq!(stream_group_sums(&[]), Ok(vec![]));
-        assert_eq!(stream_group_sums(&[(9, -4)]), Ok(vec![(9, -4, 1)]));
+        assert_eq!(stream_group_sums(&[]), Ok(vec![]), "this check");
+        assert_eq!(stream_group_sums(&[(9, -4)]), Ok(vec![(9, -4, 1)]), "this check");
     }
 
     #[test]
     fn s3f_c5_a_decreasing_key_is_reported_at_its_row() {
-        assert_eq!(stream_group_sums(&[(2, 1), (1, 1)]), Err(NotSorted { at: 1 }));
-        assert_eq!(stream_group_sums(&[(1, 1), (2, 1), (2, 1), (1, 1)]), Err(NotSorted { at: 3 }));
+        assert_eq!(stream_group_sums(&[(2, 1), (1, 1)]), Err(NotSorted { at: 1 }), "this check");
+        assert_eq!(stream_group_sums(&[(1, 1), (2, 1), (2, 1), (1, 1)]), Err(NotSorted { at: 3 }), "this check");
     }
 
     #[test]
     fn s3f_c5_negative_keys_and_a_long_run() {
         let mut rows: Vec<(i64, i64)> = vec![(-3, 1); 50];
         rows.push((-1, 7));
-        assert_eq!(stream_group_sums(&rows), Ok(vec![(-3, 50, 50), (-1, 7, 1)]));
+        assert_eq!(stream_group_sums(&rows), Ok(vec![(-3, 50, 50), (-1, 7, 1)]), "this check");
     }
 
     proptest! {

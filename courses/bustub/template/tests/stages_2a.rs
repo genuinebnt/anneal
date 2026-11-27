@@ -82,15 +82,15 @@ proptest! {
 
 #[test]
 fn s2a_01_sizes_are_what_a_page_layout_can_count_on() {
-    assert_eq!((<i32 as FixedSize>::SIZE, <u32 as FixedSize>::SIZE, <i64 as FixedSize>::SIZE), (4, 4, 8));
-    assert_eq!((<PageId as FixedSize>::SIZE, <Rid as FixedSize>::SIZE), (4, 8));
+    assert_eq!((<i32 as FixedSize>::SIZE, <u32 as FixedSize>::SIZE, <i64 as FixedSize>::SIZE), (4, 4, 8), "sizes are what a page layout can count on");
+    assert_eq!((<PageId as FixedSize>::SIZE, <Rid as FixedSize>::SIZE), (4, 8), "sizes are what a page layout can count on");
 }
 
 #[test]
 fn s2a_01_the_default_rid_names_no_page_and_page_zero_is_a_real_page() {
     assert!(!Rid::default().page_id().is_valid(), "the default rid is invalid");
     let zero = Rid::new(PageId(0), 7);
-    assert!(zero.page_id().is_valid());
+    assert!(zero.page_id().is_valid(), "the default rid names no page and page zero is a real page: expected `zero.page_id().is_valid()`");
     assert_eq!(Rid::from_i64(zero.get()), zero, "page 0, slot 7 is not confused with an invalid rid");
 }
 
@@ -154,18 +154,18 @@ proptest! {
 
 #[test]
 fn s2a_02_array_size_is_what_fits_after_the_metadata() {
-    assert_eq!(array_size(8, 16), (BUSTUB_PAGE_SIZE - 8) / 16);
-    assert_eq!(array_size(0, 8192), 1);
-    assert_eq!(array_size(HTABLE_BUCKET_PAGE_METADATA_SIZE, <(GenericKey<8>, Rid) as FixedSize>::SIZE), 511);
+    assert_eq!(array_size(8, 16), (BUSTUB_PAGE_SIZE - 8) / 16, "array size is what fits after the metadata");
+    assert_eq!(array_size(0, 8192), 1, "array size is what fits after the metadata");
+    assert_eq!(array_size(HTABLE_BUCKET_PAGE_METADATA_SIZE, <(GenericKey<8>, Rid) as FixedSize>::SIZE), 511, "array size is what fits after the metadata");
     const AT_COMPILE_TIME: usize = array_size(8, 12);
-    assert_eq!(AT_COMPILE_TIME, 682);
+    assert_eq!(AT_COMPILE_TIME, 682, "array size is what fits after the metadata");
 }
 
 #[test]
 fn s2a_02_keys_of_other_sizes_and_a_zero_key() {
-    assert_eq!(GenericKey::<8>::default().get_as_integer(), 0);
-    assert_eq!(<GenericKey<64> as FixedSize>::SIZE, 64);
-    assert_eq!(key::<64>(-5).get_as_integer(), -5);
+    assert_eq!(GenericKey::<8>::default().get_as_integer(), 0, "keys of other sizes and a zero key");
+    assert_eq!(<GenericKey<64> as FixedSize>::SIZE, 64, "keys of other sizes and a zero key");
+    assert_eq!(key::<64>(-5).get_as_integer(), -5, "keys of other sizes and a zero key");
 }
 
 // ---- 2a-03 · A sorted array inside a page -----------------------------------------------------------------------------------
@@ -245,8 +245,8 @@ fn s2a_03_it_works_over_a_read_only_view_and_an_owned_buffer() {
     owned.set(2, &77);
     let bytes: Vec<u8> = (0..16).map(|i| i as u8).collect();
     let view = PageArray::<_, u32>::new(&bytes[..]);
-    assert_eq!(owned.get(2), 77);
-    assert_eq!(view.capacity(), 4);
+    assert_eq!(owned.get(2), 77, "it works over a read only view and an owned buffer");
+    assert_eq!(view.capacity(), 4, "it works over a read only view and an owned buffer");
 }
 
 #[test]
@@ -336,8 +336,8 @@ proptest! {
 #[test]
 fn s2a_04_a_target_larger_than_everything_gives_len() {
     let array = sorted_array(&[1, 3, 5]);
-    assert_eq!(array.lower_bound(3, |e| e.cmp(&9)), 3);
-    assert_eq!(array.lower_bound(3, |e| e.cmp(&0)), 0);
+    assert_eq!(array.lower_bound(3, |e| e.cmp(&9)), 3, "a target larger than everything gives len");
+    assert_eq!(array.lower_bound(3, |e| e.cmp(&0)), 0, "a target larger than everything gives len");
     assert_eq!(array.lower_bound(0, |e| e.cmp(&0)), 0, "an empty array");
 }
 
@@ -350,7 +350,7 @@ fn s2a_04_the_comparison_closure_is_called_logarithmically_often() {
         calls += 1;
         e.cmp(&700)
     });
-    assert_eq!(at, 700);
+    assert_eq!(at, 700, "the comparison closure is called logarithmically often");
     assert!(calls <= 12, "binary search on 1024 entries needs about 10 comparisons, yours made {calls}");
 }
 
@@ -414,7 +414,7 @@ fn s2a_05_an_ordering_is_a_total_order_on_the_keys_it_will_index() {
     let g = GenericComparator::<8>;
     let ks: Vec<GenericKey<8>> = [-3i64, -1, 0, 0, 5, i64::MIN, i64::MAX].iter().map(|&n| key(n)).collect();
     for a in &ks {
-        assert_eq!(g.compare(a, a), Ordering::Equal);
+        assert_eq!(g.compare(a, a), Ordering::Equal, "an ordering is a total order on the keys it will index");
         for b in &ks {
             assert_eq!(g.compare(a, b), g.compare(b, a).reverse(), "antisymmetry");
             for c in &ks {
@@ -439,9 +439,9 @@ fn ch_config() -> ProptestConfig {
 fn s2a_c1_rank_counts_the_smaller_numbers_whether_or_not_the_number_is_there() {
     let mut s = RankedSet::new();
     for x in [10, 30, 20, 40] {
-        assert!(s.insert(x));
+        assert!(s.insert(x), "s2a c1 rank counts the smaller numbers whether or not the number is there: expected `s.insert(x)`");
     }
-    assert_eq!((s.rank(5), s.rank(10), s.rank(15), s.rank(40), s.rank(41)), (0, 0, 1, 3, 4));
+    assert_eq!((s.rank(5), s.rank(10), s.rank(15), s.rank(40), s.rank(41)), (0, 0, 1, 3, 4), "s2a c1 rank counts the smaller numbers whether or not the number is there");
 }
 
 #[test]
@@ -450,22 +450,22 @@ fn s2a_c1_select_is_the_inverse_of_rank() {
     for x in [7, 3, 9, 5] {
         s.insert(x);
     }
-    assert_eq!((s.select(0), s.select(1), s.select(3), s.select(4)), (Some(3), Some(5), Some(9), None));
+    assert_eq!((s.select(0), s.select(1), s.select(3), s.select(4)), (Some(3), Some(5), Some(9), None), "s2a c1 select is the inverse of rank");
     for i in 0..s.len() {
-        assert_eq!(s.rank(s.select(i).unwrap()), i);
+        assert_eq!(s.rank(s.select(i).unwrap()), i, "s2a c1 select is the inverse of rank");
     }
 }
 
 #[test]
 fn s2a_c1_inserting_twice_and_removing_what_is_not_there_say_so() {
     let mut s = RankedSet::new();
-    assert!(s.insert(1));
-    assert!(!s.insert(1));
-    assert_eq!(s.len(), 1);
-    assert!(!s.remove(2));
-    assert!(s.remove(1));
-    assert!(s.is_empty());
-    assert_eq!((s.rank(100), s.select(0)), (0, None));
+    assert!(s.insert(1), "s2a c1 inserting twice and removing what is not there say so: expected `s.insert(1)`");
+    assert!(!s.insert(1), "s2a c1 inserting twice and removing what is not there say so: expected `!s.insert(1)`");
+    assert_eq!(s.len(), 1, "s2a c1 inserting twice and removing what is not there say so");
+    assert!(!s.remove(2), "s2a c1 inserting twice and removing what is not there say so: expected `!s.remove(2)`");
+    assert!(s.remove(1), "s2a c1 inserting twice and removing what is not there say so: expected `s.remove(1)`");
+    assert!(s.is_empty(), "s2a c1 inserting twice and removing what is not there say so: expected `s.is_empty()`");
+    assert_eq!((s.rank(100), s.select(0)), (0, None), "s2a c1 inserting twice and removing what is not there say so");
 }
 
 #[test]
@@ -475,10 +475,10 @@ fn s2a_c1_count_range_is_half_open_and_forgiving() {
         s.insert(x * 10);
     }
     assert_eq!(s.count_range(20, 50), 3, "20, 30 and 40");
-    assert_eq!(s.count_range(20, 21), 1);
+    assert_eq!(s.count_range(20, 21), 1, "s2a c1 count range is half open and forgiving");
     assert_eq!(s.count_range(50, 20), 0, "an empty or reversed range");
-    assert_eq!(s.count_range(0, u64::MAX), 10);
-    assert_eq!(s.count_range(91, 1000), 0);
+    assert_eq!(s.count_range(0, u64::MAX), 10, "s2a c1 count range is half open and forgiving");
+    assert_eq!(s.count_range(91, 1000), 0, "s2a c1 count range is half open and forgiving");
 }
 
 #[test]
@@ -492,7 +492,7 @@ fn s2a_c1_a_large_set_answers_quickly() {
     for q in 0..200_000u64 {
         total += s.rank(q);
     }
-    assert!(total > 0);
+    assert!(total > 0, "s2a c1 a large set answers quickly: expected `total > 0`");
     assert!(t.elapsed() < std::time::Duration::from_secs(5), "200 000 ranks over 20 000 numbers took {:?}: rank must not scan", t.elapsed());
 }
 
@@ -521,36 +521,36 @@ proptest! {
 #[test]
 fn s2a_c2_the_bounds_of_a_run_of_equal_keys() {
     let v = [1, 3, 3, 3, 7];
-    assert_eq!((lower_bound(&v, 3), upper_bound(&v, 3)), (1, 4));
-    assert_eq!(count_of(&v, 3), 3);
-    assert_eq!(count_of(&v, 1), 1);
+    assert_eq!((lower_bound(&v, 3), upper_bound(&v, 3)), (1, 4), "s2a c2 the bounds of a run of equal keys");
+    assert_eq!(count_of(&v, 3), 3, "s2a c2 the bounds of a run of equal keys");
+    assert_eq!(count_of(&v, 1), 1, "s2a c2 the bounds of a run of equal keys");
 }
 
 #[test]
 fn s2a_c2_a_key_that_is_not_there_has_equal_bounds() {
     let v = [1, 3, 3, 7];
-    assert_eq!((lower_bound(&v, 5), upper_bound(&v, 5)), (3, 3));
-    assert_eq!((lower_bound(&v, 0), upper_bound(&v, 0)), (0, 0));
-    assert_eq!((lower_bound(&v, 100), upper_bound(&v, 100)), (4, 4));
-    assert_eq!(count_of(&v, 5), 0);
+    assert_eq!((lower_bound(&v, 5), upper_bound(&v, 5)), (3, 3), "s2a c2 a key that is not there has equal bounds");
+    assert_eq!((lower_bound(&v, 0), upper_bound(&v, 0)), (0, 0), "s2a c2 a key that is not there has equal bounds");
+    assert_eq!((lower_bound(&v, 100), upper_bound(&v, 100)), (4, 4), "s2a c2 a key that is not there has equal bounds");
+    assert_eq!(count_of(&v, 5), 0, "s2a c2 a key that is not there has equal bounds");
 }
 
 #[test]
 fn s2a_c2_the_empty_slice_and_the_all_equal_slice() {
-    assert_eq!((lower_bound(&[], 1), upper_bound(&[], 1)), (0, 0));
+    assert_eq!((lower_bound(&[], 1), upper_bound(&[], 1)), (0, 0), "s2a c2 the empty slice and the all equal slice");
     let v = [5; 9];
-    assert_eq!((lower_bound(&v, 5), upper_bound(&v, 5)), (0, 9));
-    assert_eq!((lower_bound(&v, 4), upper_bound(&v, 4)), (0, 0));
-    assert_eq!((lower_bound(&v, 6), upper_bound(&v, 6)), (9, 9));
+    assert_eq!((lower_bound(&v, 5), upper_bound(&v, 5)), (0, 9), "s2a c2 the empty slice and the all equal slice");
+    assert_eq!((lower_bound(&v, 4), upper_bound(&v, 4)), (0, 0), "s2a c2 the empty slice and the all equal slice");
+    assert_eq!((lower_bound(&v, 6), upper_bound(&v, 6)), (9, 9), "s2a c2 the empty slice and the all equal slice");
 }
 
 #[test]
 fn s2a_c2_negative_keys_and_the_extremes() {
     let v = [i64::MIN, -5, -5, 0, i64::MAX];
-    assert_eq!(count_of(&v, -5), 2);
-    assert_eq!(count_of(&v, i64::MIN), 1);
-    assert_eq!(count_of(&v, i64::MAX), 1);
-    assert_eq!(upper_bound(&v, i64::MAX), 5);
+    assert_eq!(count_of(&v, -5), 2, "s2a c2 negative keys and the extremes");
+    assert_eq!(count_of(&v, i64::MIN), 1, "s2a c2 negative keys and the extremes");
+    assert_eq!(count_of(&v, i64::MAX), 1, "s2a c2 negative keys and the extremes");
+    assert_eq!(upper_bound(&v, i64::MAX), 5, "s2a c2 negative keys and the extremes");
 }
 
 proptest! {
@@ -575,12 +575,12 @@ mod ch_2a_c3 {
     #[test]
     fn s2a_c3_records_come_back_and_space_is_accounted() {
         let mut p = SlottedPage::new(20);
-        assert_eq!(p.insert(b"abcd"), Some(0));
-        assert_eq!(p.free_space(), 12);
-        assert_eq!(p.insert(b"wxyz"), Some(1));
-        assert_eq!(p.free_space(), 4);
+        assert_eq!(p.insert(b"abcd"), Some(0), "this check");
+        assert_eq!(p.free_space(), 12, "this check");
+        assert_eq!(p.insert(b"wxyz"), Some(1), "this check");
+        assert_eq!(p.free_space(), 4, "this check");
         assert_eq!(p.insert(b"q"), None, "1 byte + 4 does not fit in 4... it needs 5");
-        assert_eq!((p.get(0), p.get(1), p.get(2)), (Some(&b"abcd"[..]), Some(&b"wxyz"[..]), None));
+        assert_eq!((p.get(0), p.get(1), p.get(2)), (Some(&b"abcd"[..]), Some(&b"wxyz"[..]), None), "this check");
     }
 
     #[test]
@@ -588,33 +588,33 @@ mod ch_2a_c3 {
         let mut p = SlottedPage::new(20);
         p.insert(b"abcd");
         p.insert(b"wxyz");
-        assert!(p.delete(0));
+        assert!(p.delete(0), "this check: expected `p.delete(0)`");
         assert!(!p.delete(0), "already free");
-        assert_eq!(p.free_space(), 12);
+        assert_eq!(p.free_space(), 12, "this check");
         assert_eq!(p.insert(b"1234"), Some(0), "the lowest free slot is reused");
-        assert_eq!(p.get(0), Some(&b"1234"[..]));
+        assert_eq!(p.get(0), Some(&b"1234"[..]), "this check");
     }
 
     #[test]
     fn s2a_c3_scattered_free_space_is_usable_for_one_bigger_record() {
         let mut p = SlottedPage::new(100);
         let slots: Vec<_> = (0..4).map(|i| p.insert(&[i as u8; 20]).unwrap()).collect(); // 4 * 24 = 96 bytes
-        assert_eq!(p.insert(&[9; 5]), None);
+        assert_eq!(p.insert(&[9; 5]), None, "this check");
         p.delete(slots[0]);
         p.delete(slots[2]);
-        assert_eq!(p.free_space(), 52);
+        assert_eq!(p.free_space(), 52, "this check");
         assert!(p.insert(&[7; 48]).is_some(), "48 + 4 = 52: two holes of 24 make room for one record of 48");
-        assert_eq!(p.get(slots[1]), Some(&[1u8; 20][..]));
+        assert_eq!(p.get(slots[1]), Some(&[1u8; 20][..]), "this check");
         assert_eq!(p.get(slots[3]), Some(&[3u8; 20][..]), "the records that stayed are intact");
     }
 
     #[test]
     fn s2a_c3_empty_records_cost_only_their_slot_entry() {
         let mut p = SlottedPage::new(8);
-        assert_eq!(p.insert(b""), Some(0));
-        assert_eq!(p.insert(b""), Some(1));
-        assert_eq!(p.insert(b""), None);
-        assert_eq!(p.get(0), Some(&b""[..]));
+        assert_eq!(p.insert(b""), Some(0), "this check");
+        assert_eq!(p.insert(b""), Some(1), "this check");
+        assert_eq!(p.insert(b""), None, "this check");
+        assert_eq!(p.get(0), Some(&b""[..]), "this check");
     }
 
     proptest! {
@@ -670,7 +670,7 @@ mod ch_2a_c4 {
         want.extend_from_slice(b"y");
         want.extend_from_slice(&[0, 6]);
         want.extend_from_slice(b"banana");
-        assert_eq!(block, want);
+        assert_eq!(block, want, "this check");
     }
 
     #[test]
@@ -738,28 +738,28 @@ mod ch_2a_c5 {
     #[test]
     fn s2a_c5_inserting_in_the_middle_shifts_the_tail_without_smearing() {
         let mut a = [1, 2, 3, 0];
-        assert_eq!(insert_at(&mut a, 3, 1, 9), 4);
-        assert_eq!(a, [1, 9, 2, 3]);
+        assert_eq!(insert_at(&mut a, 3, 1, 9), 4, "this check");
+        assert_eq!(a, [1, 9, 2, 3], "this check");
     }
 
     #[test]
     fn s2a_c5_inserting_at_the_front_and_at_the_end() {
         let mut a = [5, 6, 7, 0, 0];
-        assert_eq!(insert_at(&mut a, 3, 0, 1), 4);
-        assert_eq!(a, [1, 5, 6, 7, 0]);
-        assert_eq!(insert_at(&mut a, 4, 4, 8), 5);
-        assert_eq!(a, [1, 5, 6, 7, 8]);
+        assert_eq!(insert_at(&mut a, 3, 0, 1), 4, "this check");
+        assert_eq!(a, [1, 5, 6, 7, 0], "this check");
+        assert_eq!(insert_at(&mut a, 4, 4, 8), 5, "this check");
+        assert_eq!(a, [1, 5, 6, 7, 8], "this check");
     }
 
     #[test]
     fn s2a_c5_removing_closes_the_gap() {
         let mut a = [1, 9, 2, 3];
-        assert_eq!(remove_at(&mut a, 4, 1), 3);
-        assert_eq!(&a[..3], &[1, 2, 3]);
-        assert_eq!(remove_at(&mut a, 3, 0), 2);
-        assert_eq!(&a[..2], &[2, 3]);
-        assert_eq!(remove_at(&mut a, 2, 1), 1);
-        assert_eq!(&a[..1], &[2]);
+        assert_eq!(remove_at(&mut a, 4, 1), 3, "this check");
+        assert_eq!(&a[..3], &[1, 2, 3], "this check");
+        assert_eq!(remove_at(&mut a, 3, 0), 2, "this check");
+        assert_eq!(&a[..2], &[2, 3], "this check");
+        assert_eq!(remove_at(&mut a, 2, 1), 1, "this check");
+        assert_eq!(&a[..1], &[2], "this check");
     }
 
     #[test]
@@ -773,7 +773,7 @@ mod ch_2a_c5 {
         while len > 0 {
             len = remove_at(&mut a, len, 0);
         }
-        assert_eq!(len, 0);
+        assert_eq!(len, 0, "this check");
     }
 
     proptest! {

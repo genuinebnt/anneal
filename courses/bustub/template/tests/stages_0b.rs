@@ -416,7 +416,7 @@ fn s0b_03_threads_inserting_and_erasing_overlapping_keys_leave_a_well_formed_lis
                 for i in 0..500 {
                     let k = (i * 7 + t * 13) % 300;
                     if (i + t) % 3 == 0 { l.erase(&k); } else { l.insert(&k); }
-                    assert!(l.size() <= 300);
+                    assert!(l.size() <= 300, "threads inserting and erasing overlapping keys leave a well formed list: expected `l.size() <= 300`");
                 }
             })
         })
@@ -426,9 +426,9 @@ fn s0b_03_threads_inserting_and_erasing_overlapping_keys_leave_a_well_formed_lis
     }
     let keys: Vec<i32> = l.nodes().iter().map(|n| n.0).collect();
     assert!(keys.windows(2).all(|w| w[0] < w[1]), "the keys are strictly increasing");
-    assert_eq!(keys.len(), l.size());
+    assert_eq!(keys.len(), l.size(), "threads inserting and erasing overlapping keys leave a well formed list");
     for k in &keys {
-        assert!(l.contains(k));
+        assert!(l.contains(k), "threads inserting and erasing overlapping keys leave a well formed list: expected `l.contains(k)`");
     }
 }
 
@@ -450,7 +450,7 @@ mod ch_0b_c1 {
     #[test]
     fn s0b_c1_a_maximum_of_one_is_always_one() {
         let mut g = LevelGenerator::new(1, 2, 1);
-        assert!((0..100).all(|_| g.next_level() == 1));
+        assert!((0..100).all(|_| g.next_level() == 1), "this check: expected `(0..100).all(|_| g.next_level() == 1)`");
     }
 
     #[test]
@@ -458,8 +458,8 @@ mod ch_0b_c1 {
         let a: Vec<_> = { let mut g = LevelGenerator::new(42, 4, 14); (0..200).map(|_| g.next_level()).collect() };
         let b: Vec<_> = { let mut g = LevelGenerator::new(42, 4, 14); (0..200).map(|_| g.next_level()).collect() };
         let c: Vec<_> = { let mut g = LevelGenerator::new(43, 4, 14); (0..200).map(|_| g.next_level()).collect() };
-        assert_eq!(a, b);
-        assert_ne!(a, c);
+        assert_eq!(a, b, "this check");
+        assert_ne!(a, c, "this check");
     }
 
     #[test]
@@ -503,20 +503,20 @@ mod ch_0b_c2 {
     fn s0b_c2_a_well_formed_view_passes() {
         let levels = vec![vec![1, 2, 3], vec![2, 3], vec![2]];
         let nodes = vec![(1, 1), (2, 3), (3, 2)];
-        assert_eq!(check_levels(&levels, &nodes, 3), Ok(()));
-        assert_eq!(check_levels(&[], &[], 0), Ok(()));
+        assert_eq!(check_levels(&levels, &nodes, 3), Ok(()), "this check");
+        assert_eq!(check_levels(&[], &[], 0), Ok(()), "this check");
     }
 
     #[test]
     fn s0b_c2_a_key_on_a_higher_level_but_not_below_is_rejected() {
         let levels = vec![vec![1, 3], vec![2]];
-        assert!(check_levels(&levels, &[(1, 1), (3, 1)], 2).is_err());
+        assert!(check_levels(&levels, &[(1, 1), (3, 1)], 2).is_err(), "this check: expected `check_levels(&levels, &[(1, 1), (3, 1)], 2).is_err()`");
     }
 
     #[test]
     fn s0b_c2_a_level_that_is_not_sorted_or_has_repeats_is_rejected() {
-        assert!(check_levels(&[vec![2, 1]], &[(2, 1), (1, 1)], 2).is_err());
-        assert!(check_levels(&[vec![1, 1]], &[(1, 1), (1, 1)], 2).is_err());
+        assert!(check_levels(&[vec![2, 1]], &[(2, 1), (1, 1)], 2).is_err(), "this check: expected `check_levels(&[vec![2, 1]], &[(2, 1), (1, 1)], 2).is_err()`");
+        assert!(check_levels(&[vec![1, 1]], &[(1, 1), (1, 1)], 2).is_err(), "this check: expected `check_levels(&[vec![1, 1]], &[(1, 1), (1, 1)], 2).is_err()`");
     }
 
     #[test]
@@ -524,7 +524,7 @@ mod ch_0b_c2 {
         let levels = vec![vec![1, 2], vec![2]];
         assert!(check_levels(&levels, &[(1, 1), (2, 1)], 2).is_err(), "key 2 appears on two levels but claims height 1");
         assert!(check_levels(&levels, &[(1, 1), (2, 2)], 3).is_err(), "size 3 but two keys");
-        assert!(check_levels(&[], &[(1, 1)], 0).is_err());
+        assert!(check_levels(&[], &[(1, 1)], 0).is_err(), "this check: expected `check_levels(&[], &[(1, 1)], 0).is_err()`");
     }
 
     proptest! {
@@ -564,30 +564,30 @@ mod ch_0b_c3 {
     #[test]
     fn s0b_c3_range_counts_include_both_ends() {
         let l = list_of(&[10, 20, 30]);
-        assert_eq!(range_count(&l, 15, 30), 2);
-        assert_eq!(range_count(&l, 10, 10), 1);
-        assert_eq!(range_count(&l, 0, 100), 3);
-        assert_eq!(range_count(&l, 21, 29), 0);
+        assert_eq!(range_count(&l, 15, 30), 2, "this check");
+        assert_eq!(range_count(&l, 10, 10), 1, "this check");
+        assert_eq!(range_count(&l, 0, 100), 3, "this check");
+        assert_eq!(range_count(&l, 21, 29), 0, "this check");
     }
 
     #[test]
     fn s0b_c3_reversed_ranges_and_the_empty_list() {
-        assert_eq!(range_count(&list_of(&[1, 2, 3]), 3, 1), 0);
-        assert_eq!(range_count(&list_of(&[]), 0, 10), 0);
+        assert_eq!(range_count(&list_of(&[1, 2, 3]), 3, 1), 0, "this check");
+        assert_eq!(range_count(&list_of(&[]), 0, 10), 0, "this check");
     }
 
     #[test]
     fn s0b_c3_floor_is_the_largest_key_not_above() {
         let l = list_of(&[10, 20, 30]);
-        assert_eq!((floor(&l, 25), floor(&l, 20), floor(&l, 5), floor(&l, 99)), (Some(20), Some(20), None, Some(30)));
-        assert_eq!(floor(&list_of(&[]), 1), None);
+        assert_eq!((floor(&l, 25), floor(&l, 20), floor(&l, 5), floor(&l, 99)), (Some(20), Some(20), None, Some(30)), "this check");
+        assert_eq!(floor(&list_of(&[]), 1), None, "this check");
     }
 
     #[test]
     fn s0b_c3_negative_keys_and_a_key_inserted_twice() {
         let l = list_of(&[-5, -5, 0, 5]);
-        assert_eq!(range_count(&l, -10, -1), 1);
-        assert_eq!((floor(&l, -5), floor(&l, -6)), (Some(-5), None));
+        assert_eq!(range_count(&l, -10, -1), 1, "this check");
+        assert_eq!((floor(&l, -5), floor(&l, -6)), (Some(-5), None), "this check");
     }
 
     proptest! {
@@ -623,21 +623,21 @@ mod ch_0b_c4 {
     fn s0b_c4_a_coin_that_is_always_heads_stops_at_the_maximum() {
         let mut flips = 0;
         let h = random_height(|| { flips += 1; true }, 4);
-        assert_eq!(h, 4);
+        assert_eq!(h, 4, "this check");
         assert_eq!(flips, 3, "three flips take the height from 1 to 4; none after the cap");
     }
 
     #[test]
     fn s0b_c4_tails_ends_the_climb() {
-        assert_eq!(random_height(coin(&[true, true, false]), 8), 3);
-        assert_eq!(random_height(coin(&[false]), 8), 1);
+        assert_eq!(random_height(coin(&[true, true, false]), 8), 3, "this check");
+        assert_eq!(random_height(coin(&[false]), 8), 1, "this check");
     }
 
     #[test]
     fn s0b_c4_a_maximum_of_one_never_flips() {
         let mut flips = 0;
-        assert_eq!(random_height(|| { flips += 1; true }, 1), 1);
-        assert_eq!(flips, 0);
+        assert_eq!(random_height(|| { flips += 1; true }, 1), 1, "this check");
+        assert_eq!(flips, 0, "this check");
     }
 
     #[test]
@@ -647,7 +647,7 @@ mod ch_0b_c4 {
             seq.push(false);
             let mut flips = 0;
             let h = random_height(|| { let v = seq[flips]; flips += 1; v }, 10);
-            assert_eq!((h, flips), (heads + 1, heads + 1));
+            assert_eq!((h, flips), (heads + 1, heads + 1), "this check");
         }
     }
 
@@ -687,31 +687,31 @@ mod ch_0b_c5 {
     #[test]
     fn s0b_c5_a_key_in_both_lists_appears_once() {
         let u = union(&list_of(&[1, 3, 5]), &list_of(&[3, 4]));
-        assert_eq!(u.level(0), vec![1, 3, 4, 5]);
-        assert_eq!(u.size(), 4);
+        assert_eq!(u.level(0), vec![1, 3, 4, 5], "this check");
+        assert_eq!(u.size(), 4, "this check");
     }
 
     #[test]
     fn s0b_c5_the_inputs_are_left_alone() {
         let (a, b) = (list_of(&[1, 2]), list_of(&[2, 3]));
         let _ = union(&a, &b);
-        assert_eq!((a.level(0), b.level(0)), (vec![1, 2], vec![2, 3]));
+        assert_eq!((a.level(0), b.level(0)), (vec![1, 2], vec![2, 3]), "this check");
     }
 
     #[test]
     fn s0b_c5_empty_inputs() {
-        assert_eq!(union(&list_of(&[]), &list_of(&[])).size(), 0);
-        assert_eq!(union(&list_of(&[7]), &list_of(&[])).level(0), vec![7]);
-        assert_eq!(union(&list_of(&[]), &list_of(&[7])).level(0), vec![7]);
+        assert_eq!(union(&list_of(&[]), &list_of(&[])).size(), 0, "this check");
+        assert_eq!(union(&list_of(&[7]), &list_of(&[])).level(0), vec![7], "this check");
+        assert_eq!(union(&list_of(&[]), &list_of(&[7])).level(0), vec![7], "this check");
     }
 
     #[test]
     fn s0b_c5_the_union_is_a_valid_list_you_can_keep_using() {
         let u = union(&list_of(&[2, 4]), &list_of(&[1, 4, 6]));
-        assert_eq!(check_integrity(&u), Ok(()));
-        assert!(u.insert(&3));
+        assert_eq!(check_integrity(&u), Ok(()), "this check");
+        assert!(u.insert(&3), "this check: expected `u.insert(&3)`");
         assert!(!u.insert(&4), "4 is already there");
-        assert_eq!(u.level(0), vec![1, 2, 3, 4, 6]);
+        assert_eq!(u.level(0), vec![1, 2, 3, 4, 6], "this check");
     }
 
     proptest! {

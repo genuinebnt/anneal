@@ -519,9 +519,9 @@ mod ch_0c_c1 {
         let mut s = ShiftSet::new(8);
         let ks = same_home(8, 2, 3);
         for &k in &ks {
-            assert_eq!(s.insert(k), Ok(true));
+            assert_eq!(s.insert(k), Ok(true), "this check");
         }
-        assert_eq!(ks.iter().map(|&k| s.probe_len(k).unwrap()).collect::<Vec<_>>(), vec![0, 1, 2]);
+        assert_eq!(ks.iter().map(|&k| s.probe_len(k).unwrap()).collect::<Vec<_>>(), vec![0, 1, 2], "this check");
     }
 
     #[test]
@@ -531,10 +531,10 @@ mod ch_0c_c1 {
         for &k in &ks {
             s.insert(k).unwrap();
         }
-        assert!(s.remove(ks[0]));
+        assert!(s.remove(ks[0]), "this check: expected `s.remove(ks[0])`");
         assert_eq!((s.probe_len(ks[1]), s.probe_len(ks[2])), (Some(0), Some(1)), "no hole left in the run");
-        assert!(!s.contains(ks[0]));
-        assert!(!s.remove(ks[0]));
+        assert!(!s.contains(ks[0]), "this check: expected `!s.contains(ks[0])`");
+        assert!(!s.remove(ks[0]), "this check: expected `!s.remove(ks[0])`");
     }
 
     #[test]
@@ -546,8 +546,8 @@ mod ch_0c_c1 {
         s.insert(a[1]).unwrap(); // slot 3
         s.insert(b).unwrap(); // slot 4: its own home
         s.remove(a[0]);
-        assert_eq!(s.probe_len(b), Some(0));
-        assert_eq!(s.probe_len(a[1]), Some(0));
+        assert_eq!(s.probe_len(b), Some(0), "this check");
+        assert_eq!(s.probe_len(a[1]), Some(0), "this check");
     }
 
     #[test]
@@ -555,12 +555,12 @@ mod ch_0c_c1 {
         let mut s = ShiftSet::new(4);
         let ks = same_home(4, 3, 4);
         for &k in &ks {
-            assert_eq!(s.insert(k), Ok(true));
+            assert_eq!(s.insert(k), Ok(true), "this check");
         }
-        assert_eq!(s.insert(999_999), Err(Full));
-        assert!(s.remove(ks[1]));
+        assert_eq!(s.insert(999_999), Err(Full), "this check");
+        assert!(s.remove(ks[1]), "this check: expected `s.remove(ks[1])`");
         assert!(ks.iter().filter(|&&k| k != ks[1]).all(|&k| s.contains(k)), "wrapping around the end must keep every key reachable");
-        assert_eq!(s.insert(999_999), Ok(true));
+        assert_eq!(s.insert(999_999), Ok(true), "this check");
     }
 
     proptest! {
@@ -609,15 +609,15 @@ mod ch_0c_c2 {
         let keys: Vec<i32> = (1..=8).collect();
         let s = filled(16, &keys);
         let h = probe_histogram(&s, &keys);
-        assert_eq!(h.iter().sum::<usize>(), 8);
-        assert!(!h.is_empty());
+        assert_eq!(h.iter().sum::<usize>(), 8, "this check");
+        assert!(!h.is_empty(), "this check: expected `!h.is_empty()`");
     }
 
     #[test]
     fn s0c_c2_absent_keys_are_skipped_and_an_empty_input_gives_an_empty_histogram() {
         let s = filled(16, &[1, 2, 3]);
-        assert_eq!(probe_histogram(&s, &[100, 200]), Vec::<usize>::new());
-        assert_eq!(mean_probe(&s, &[]), 0.0);
+        assert_eq!(probe_histogram(&s, &[100, 200]), Vec::<usize>::new(), "this check");
+        assert_eq!(mean_probe(&s, &[]), 0.0, "this check");
         assert_eq!(probe_histogram(&s, &[1, 1]).iter().sum::<usize>(), 2, "each occurrence counts");
     }
 
@@ -626,8 +626,8 @@ mod ch_0c_c2 {
         let keys = [3, 4];
         let s = filled(64, &keys);
         let h = probe_histogram(&s, &keys);
-        assert_eq!(h[0], 2);
-        assert!(mean_probe(&s, &keys) < 1.0);
+        assert_eq!(h[0], 2, "this check");
+        assert!(mean_probe(&s, &keys) < 1.0, "this check: expected `mean_probe(&s, &keys) < 1.0`");
     }
 
     #[test]
@@ -666,14 +666,14 @@ mod ch_0c_c3 {
 
     #[test]
     fn s0c_c3_distances_that_do_not_wrap() {
-        assert_eq!(probe_distance(2, 5, 8), 3);
-        assert_eq!(probe_distance(4, 4, 8), 0);
+        assert_eq!(probe_distance(2, 5, 8), 3, "this check");
+        assert_eq!(probe_distance(4, 4, 8), 0, "this check");
     }
 
     #[test]
     fn s0c_c3_distances_that_wrap_around_the_end() {
         assert_eq!(probe_distance(6, 1, 8), 3, "6, 7, 0, 1");
-        assert_eq!(probe_distance(7, 0, 8), 1);
+        assert_eq!(probe_distance(7, 0, 8), 1, "this check");
         assert_eq!(probe_distance(5, 4, 8), 7, "all the way around but one");
     }
 
@@ -696,7 +696,7 @@ mod ch_0c_c3 {
             for h in 0..c {
                 for s in 0..c {
                     for k in 0..c {
-                        assert_eq!(probe_distance((h + k) % c, (s + k) % c, c), probe_distance(h, s, c));
+                        assert_eq!(probe_distance((h + k) % c, (s + k) % c, c), probe_distance(h, s, c), "this check");
                     }
                 }
             }
@@ -728,11 +728,11 @@ mod ch_0c_c4 {
 
     #[test]
     fn s0c_c4_the_ends_and_the_middle() {
-        assert_eq!(reduce(0, 10), 0);
-        assert_eq!(reduce(u32::MAX, 10), 9);
-        assert_eq!(reduce(1 << 31, 10), 5);
-        assert_eq!(reduce(12345, 1), 0);
-        assert_eq!(reduce(12345, 0), 0);
+        assert_eq!(reduce(0, 10), 0, "this check");
+        assert_eq!(reduce(u32::MAX, 10), 9, "this check");
+        assert_eq!(reduce(1 << 31, 10), 5, "this check");
+        assert_eq!(reduce(12345, 1), 0, "this check");
+        assert_eq!(reduce(12345, 0), 0, "this check");
     }
 
     #[test]
@@ -761,7 +761,7 @@ mod ch_0c_c4 {
     fn s0c_c4_halving_a_fine_bucket_gives_the_coarse_one() {
         for h in [0u32, 1, 12345, 0x8000_0000, 0xDEAD_BEEF, u32::MAX] {
             assert_eq!(reduce(h, 20) / 2, reduce(h, 10), "h {h:#x}");
-            assert!(reduce(h, 10) <= reduce(h, 20));
+            assert!(reduce(h, 10) <= reduce(h, 20), "this check: expected `reduce(h, 10) <= reduce(h, 20)`");
         }
     }
 
@@ -793,10 +793,10 @@ mod ch_0c_c5 {
     fn s0c_c5_flags_the_matching_bytes_and_only_them() {
         let g = pack([1, 7, 7, 0, 255, 7, 2, 9]);
         let m = match_byte(g, 7);
-        assert_eq!(m, (1u64 << 15) | (1u64 << 23) | (1u64 << 47));
-        assert_eq!(first_match(m), Some(1));
-        assert_eq!(match_byte(g, 8), 0);
-        assert_eq!(first_match(0), None);
+        assert_eq!(m, (1u64 << 15) | (1u64 << 23) | (1u64 << 47), "this check");
+        assert_eq!(first_match(m), Some(1), "this check");
+        assert_eq!(match_byte(g, 8), 0, "this check");
+        assert_eq!(first_match(0), None, "this check");
     }
 
     #[test]
@@ -807,15 +807,15 @@ mod ch_0c_c5 {
             let m = match_byte(g, b);
             let idx: Vec<usize> = (0..8).filter(|i| m >> (8 * i + 7) & 1 == 1).collect();
             assert_eq!(idx, want, "byte {b:#x}");
-            assert_eq!(m & !0x8080_8080_8080_8080, 0);
+            assert_eq!(m & !0x8080_8080_8080_8080, 0, "this check");
         }
     }
 
     #[test]
     fn s0c_c5_all_equal_and_none_equal() {
-        assert_eq!(match_byte(u64::MAX, 0xFF), 0x8080_8080_8080_8080);
-        assert_eq!(match_byte(0, 0), 0x8080_8080_8080_8080);
-        assert_eq!(match_byte(0, 1), 0);
+        assert_eq!(match_byte(u64::MAX, 0xFF), 0x8080_8080_8080_8080, "this check");
+        assert_eq!(match_byte(0, 0), 0x8080_8080_8080_8080, "this check");
+        assert_eq!(match_byte(0, 1), 0, "this check");
     }
 
     #[test]
@@ -823,8 +823,8 @@ mod ch_0c_c5 {
         for i in 0..8 {
             let mut bytes = [0xAAu8; 8];
             bytes[i] = 0x17;
-            assert_eq!(match_byte(pack(bytes), 0x17), 1u64 << (8 * i + 7));
-            assert_eq!(first_match(match_byte(pack(bytes), 0x17)), Some(i));
+            assert_eq!(match_byte(pack(bytes), 0x17), 1u64 << (8 * i + 7), "this check");
+            assert_eq!(first_match(match_byte(pack(bytes), 0x17)), Some(i), "this check");
         }
     }
 

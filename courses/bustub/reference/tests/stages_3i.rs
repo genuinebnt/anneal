@@ -968,8 +968,8 @@ mod ch_3i_c1 {
     #[test]
     fn s3i_c1_hits_misses_and_a_null_on_the_left() {
         let s = InSet::new(&[Some(1), Some(2)]);
-        assert_eq!((s.contains(Some(2)), s.contains(Some(3)), s.contains(None)), (Some(true), Some(false), None));
-        assert_eq!((s.not_in(Some(2)), s.not_in(Some(3)), s.not_in(None)), (Some(false), Some(true), None));
+        assert_eq!((s.contains(Some(2)), s.contains(Some(3)), s.contains(None)), (Some(true), Some(false), None), "this check");
+        assert_eq!((s.not_in(Some(2)), s.not_in(Some(3)), s.not_in(None)), (Some(false), Some(true), None), "this check");
     }
 
     #[test]
@@ -977,7 +977,7 @@ mod ch_3i_c1 {
         let s = InSet::new(&[Some(1), None]);
         assert_eq!(s.contains(Some(1)), Some(true), "a hit is still a hit");
         assert_eq!(s.contains(Some(3)), None, "a miss might have been equal to the NULL");
-        assert_eq!(s.not_in(Some(1)), Some(false));
+        assert_eq!(s.not_in(Some(1)), Some(false), "this check");
         assert_eq!(s.not_in(Some(3)), None, "NOT IN with a NULL in the list is never TRUE");
     }
 
@@ -987,7 +987,7 @@ mod ch_3i_c1 {
         assert_eq!((e.contains(Some(1)), e.contains(None), e.not_in(None)), (Some(false), Some(false), Some(true)), "nothing equals anything");
         let d = InSet::new(&[Some(5), Some(5), None, None]);
         assert_eq!(d.len(), 1, "distinct non-NULL values");
-        assert_eq!(d.contains(Some(5)), Some(true));
+        assert_eq!(d.contains(Some(5)), Some(true), "this check");
     }
 
     #[test]
@@ -1178,10 +1178,10 @@ mod ch_3i_c4 {
 
     #[test]
     fn s3i_c4_a_leading_wildcard_has_no_prefix_and_no_wildcard_is_exact() {
-        assert_eq!(prefix_range("%abc"), LikeRange::Everything);
-        assert_eq!(prefix_range("_abc"), LikeRange::Everything);
-        assert_eq!(prefix_range("%"), LikeRange::Everything);
-        assert_eq!(prefix_range("abc"), LikeRange::Exact("abc".into()));
+        assert_eq!(prefix_range("%abc"), LikeRange::Everything, "this check");
+        assert_eq!(prefix_range("_abc"), LikeRange::Everything, "this check");
+        assert_eq!(prefix_range("%"), LikeRange::Everything, "this check");
+        assert_eq!(prefix_range("abc"), LikeRange::Exact("abc".into()), "this check");
         assert_eq!(prefix_range(""), LikeRange::Exact(String::new()), "the empty pattern matches only the empty string");
     }
 
@@ -1249,7 +1249,7 @@ mod ch_3i_c5 {
         assert_eq!(ops.len(), 3, "one entry per operator, the header skipped");
         assert_eq!(ops.iter().map(|o| o.depth).collect::<Vec<_>>(), [0, 1, 2], "indentation is depth");
         assert_eq!(ops[0].op, "Limit { limit=5 }", "the text without the statistics");
-        assert_eq!(ops.iter().map(|o| o.inclusive_ms).collect::<Vec<_>>(), [0.9, 0.8, 0.5]);
+        assert_eq!(ops.iter().map(|o| o.inclusive_ms).collect::<Vec<_>>(), [0.9, 0.8, 0.5], "this check");
     }
 
     #[test]
@@ -1278,15 +1278,15 @@ mod ch_3i_c5 {
         let text = lines(&["Projection { exprs=[#0.0] } (rows=0, batches=0, loops=1, time=0.100ms)", "  SeqScan { table=t } (never executed)"]);
         let ops = exclusive_times(&text);
         assert_eq!(ops[1].inclusive_ms, 0.0, "(never executed) is zero");
-        assert!((ops[0].exclusive_ms - 0.1).abs() < 1e-9);
+        assert!((ops[0].exclusive_ms - 0.1).abs() < 1e-9, "this check: expected `(ops[0].exclusive_ms - 0.1).abs() < 1e-9`");
         let jitter = "A (rows=1, batches=1, loops=1, time=1.000ms)\n  B (rows=1, batches=1, loops=1, time=1.200ms)\n";
         assert_eq!(exclusive_times(jitter)[0].exclusive_ms, 0.0, "a child that measured longer than its parent: never below zero");
     }
 
     #[test]
     fn s3i_c5_no_operators_no_slowest() {
-        assert!(exclusive_times("").is_empty());
-        assert_eq!(slowest("=== ANALYZE ===\n"), None);
+        assert!(exclusive_times("").is_empty(), "this check: expected `exclusive_times(\"\").is_empty()`");
+        assert_eq!(slowest("=== ANALYZE ===\n"), None, "this check");
     }
 
     proptest! {
@@ -1414,7 +1414,7 @@ mod ch_3i_c6 {
         let (b, _) = probe(null(), false);
         let e = CoalesceExpression::new(vec![a, b]).unwrap();
         assert!(eval_c(&e).unwrap().is_null(), "every argument NULL");
-        assert_eq!(e.return_type().type_id(), TypeId::Integer);
+        assert_eq!(e.return_type().type_id(), TypeId::Integer, "this check");
         let (only, calls) = probe(Value::integer(5), false);
         assert_eq!(eval_c(&CoalesceExpression::new(vec![only]).unwrap()).unwrap(), Value::integer(5), "coalesce(a) is a");
         assert_eq!(calls.load(Ordering::SeqCst), 1, "evaluated once");
