@@ -1,4 +1,4 @@
-Pages are read by many queries and written by few. A plain mutex lets one thread in at a time, readers included, which wastes the parallelism that is the whole point of a buffer pool. A **reader-writer latch** admits any number of readers *or* one writer. The buffer pool's page guards, the B+ tree's latch crabbing and the table heap will all be built on this small type.
+Pages are read by many queries and written by few. A plain mutex lets one thread in at a time, readers included, which wastes the parallelism that is the whole point of a buffer pool. A **reader-writer latch** admits any number of readers *or* one writer. Every frame of the buffer pool (1f) sits behind a latch with exactly this contract, the page guards (1g) hand its guards out, and the B+ tree's latch crabbing (2c) is a discipline for taking them in order: this stage is where the contract and its policy questions are met on their own.
 
 > [!CHECK] A page is held by a reader. A writer arrives and waits. Then a second reader arrives. Should the second reader be let in? Argue for each answer: what does each cost, to whom? Which starvation can each policy produce?
 > ||Letting the reader in keeps throughput high (readers never wait for each other), but a steady stream of readers can keep the writer waiting forever: **writer starvation**. Making the second reader wait behind the writer is fair to the writer but lowers read concurrency and risks deadlock in code that takes a read latch twice in a row (the second read waits for the writer, the writer waits for the first read). Standard libraries make different choices; the operating system's `RwLock` usually leaves it unspecified, and so should code that depends on it.||
@@ -21,7 +21,7 @@ The properties the tests check: no update is lost under many writers; a reader n
 
 ## Your freedom
 
-What you build the latch from: the standard library's `RwLock`, a `Mutex` and a `Condvar` that count readers, atomics, or a lock from a crate you add. The signatures give the guards' types; the policy for waiting readers and writers is yours.
+The signatures return the standard library's guards (`RwLockReadGuard`, `RwLockWriteGuard`), so the latch wraps a `std::sync::RwLock`. What is yours is the poisoning policy and the reason you write down for it. A latch built from scratch, with guards of its own, is the first experiment.
 
 ## The Rust toolbox
 
@@ -71,7 +71,7 @@ An uncontended read latch is an atomic increment: about 5 to 20 ns. Under conten
 
 Optional. Predict first, then run.
 
-1. **Build your own.** Replace the `RwLock` with a `Mutex<(usize, bool)>` plus a `Condvar` (reader count and a writer flag). Which of the five tests are the hardest to pass, and why?
+1. **Build your own.** In a scratch file, write `MyLatch<T>` from a `Mutex<(usize, bool)>` (reader count, writer flag), a `Condvar` and an `UnsafeCell<T>`, with guard types of your own that implement `Deref` (and `DerefMut` for the writer) and release in `Drop`. Copy the six tests over. Which are the hardest to pass, and why does the type need `unsafe impl Sync`?
 2. **Starve a writer.** With the standard `RwLock`, run eight threads that read in a loop and one that writes. Does the writer finish? On your platform? Relate it to the check-yourself question.
 
 ## Other designs

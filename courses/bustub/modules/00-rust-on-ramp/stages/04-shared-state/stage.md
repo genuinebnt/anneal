@@ -1,5 +1,12 @@
 A database runs many threads on one set of data, and from module 1 on you will share a buffer pool, a replacer and a log between them. Rust does not stop you from sharing; it makes you say how: `Arc` for owners, a `Mutex` for exclusive access, a `Condvar` for waiting until a condition is true, atomics for single numbers. This stage builds three small shared things in `src/rust_primer/shared.rs`.
 
+> [!CHECK] A `BoundedQueue` of capacity 1 is empty, and two consumers are blocked in `pop`. A producer pushes one value, then calls `close`. Trace what each consumer returns. What goes wrong if `close` wakes only one waiter, and what if the waits used `if` instead of `while`?
+> ||The push wakes one consumer, which takes the value. `close` wakes the other, which checks its condition again, finds the queue empty and closed, and returns `None`. If `close` woke only one waiter, a second sleeper (or a producer blocked on a full queue) could sleep for ever. With `if` instead of `while`, a woken thread would not check again: woken spuriously, or after another thread took the value first, it would pop from an empty queue.||
+>
+> - Which condition does a waiting `pop` sleep on?
+> - How many threads does `close` have to wake?
+> - Can a thread wake up when nothing it waits for has changed?
+
 ## The task
 
 - `BoundedQueue<T>`: at most `capacity` values wait in it. `push` **blocks while it is full**, `pop` **blocks while it is empty**, `try_pop` never blocks, and `close` ends the queue: after it, `push` gives the value back as `Err(value)`, and `pop` returns what is left and then `None`. `close` must wake every thread that is waiting.

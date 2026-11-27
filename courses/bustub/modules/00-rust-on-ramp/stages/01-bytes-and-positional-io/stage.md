@@ -1,5 +1,12 @@
 A database is a file of fixed-size pages, and a page is bytes. Everything in module 1a rests on two skills: **turning numbers into bytes and back** in a layout you choose, and **reading and writing a file at a byte offset**. This stage practises both on a small scale, in `src/rust_primer/bytes.rs`.
 
+> [!CHECK] Pages 0 and 5 of a `PageFile` have been written, nothing else. What does `read_page(3)` return, how long is the file in bytes, and what does `page_count` say? What changes if a crash cut the file off 100 bytes into page 5?
+> ||Page 3 reads as 256 zeros: it lies inside the file, in a hole the operating system fills with zeros. The file is 6 × 256 = 1 536 bytes, so `page_count` is 6. If the file ends 100 bytes into page 5, it is 5 × 256 + 100 = 1 380 bytes; `page_count` is still 6 because a partly written page counts, and `read_page(5)` returns those 100 bytes and then 156 zeros. So a read at the end of the file must accept getting fewer bytes than it asked for, not treat it as an error.||
+>
+> - At which byte does page `i` start?
+> - What does a read inside the file return where nothing was ever written?
+> - What does `read_at` return when the file ends before the buffer is full?
+
 ## The task
 
 - `Header::to_bytes` / `Header::from_bytes`: a header of 16 bytes: `magic` (u32), `version` (u16), `flags` (u16), `len` (u64), each **little-endian**, in this order. `from_bytes` gives `None` unless it gets exactly 16 bytes.

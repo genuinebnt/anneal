@@ -1,5 +1,12 @@
 Most of this course's tests have one shape: run a long random sequence of operations on **your** structure and on a **model**, a simple structure nobody doubts, and compare after every step. When they differ, the framework shrinks the sequence to the shortest one that still differs, and that is your bug report. This last stage lets you meet the technique on a small structure: a ring buffer in `src/rust_primer/ring.rs`.
 
+> [!CHECK] Capacity 3. Push 1, 2, 3, then `push_overwriting(4)`, then `pop`, then `push(5)`. Write down what each call returns and what `iter` gives after it, as the `VecDeque` model would. Then: a random test differs from the model at step 40 of 200. What does shrinking hand you, and why is it a better bug report?
+> ||`iter` gives [1], [1, 2], [1, 2, 3]; `push_overwriting(4)` returns `Some(1)` and leaves [2, 3, 4]; `pop` returns `Some(2)`, leaving [3, 4]; `push(5)` returns `Ok(())` and gives [3, 4, 5], with the start of the queue now past the end of the array, so 5 lands at the front of it. Shrinking deletes steps and makes values smaller for as long as the difference stays, so the report is the handful of operations that matter (often: fill, overwrite, pop, push across the end), not 200 steps of noise.||
+>
+> - Which value does an overwrite drop, the oldest or the newest?
+> - Where in the array does 5 land?
+> - What does the framework try first when a case fails?
+
 ## The task
 
 `RingBuffer<T>`: a queue of fixed capacity in one array that wraps around.

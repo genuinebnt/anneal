@@ -2,6 +2,13 @@ A storage engine reads bytes that someone else wrote, or that a crash left half-
 
 A stream of records is, record after record: `key_len` (u8), `value_len` (u16, little-endian), the key's bytes (UTF-8), the value's bytes.
 
+> [!CHECK] The stream is the 7 bytes `03 05 00 61 62 63 78`. What does `parse_records` return, with which numbers? And if the third byte (`00`) were lost?
+> ||`Truncated { at: 0, needed: 11, have: 7 }`: the header says a 3-byte key and a 5-byte value (`05 00`, little-endian), so the record needs 1 + 2 + 3 + 5 = 11 bytes and only 7 are there. Without the `00`, the value length is read from `05 61`, which is 0x6105 = 24 837, so the answer is `Truncated { at: 0, needed: 24 843, have: 6 }`. One lost byte does not give a local error: every later length is read from the wrong place, which is why real formats add checksums.||
+>
+> - Which two bytes form `value_len`, and in which order are they read?
+> - Does `needed` count the header bytes too?
+> - Without the `00`, which two bytes become the value length?
+
 ## The task
 
 - `encode_records` writes the stream; a key longer than 255 bytes is `FormatError::KeyTooLong`, a value longer than 65 535 is `ValueTooLong` (use `u8::try_from` / `u16::try_from` and `map_err`).

@@ -1,5 +1,12 @@
 Rust's checker rejects data that points at itself, and databases are full of it: a node refers to its parent, a page to its frame, a frame to a page. Two shapes cover almost all of it: a structure that **owns** its parts, moving values out of places with `take` and `replace`, and a structure that refers to parts **by handle**, an index into an arena. The buffer pool and the replacers of project 1 use the second all the time. This stage builds one of each in `src/rust_primer/shapes.rs`.
 
+> [!CHECK] A `Slab` holds one value under the handle (index 2, generation 0). It is removed, and the next `insert` reuses slot 2. What generation does the new handle carry, and what does `get` return for the old handle? Why is checking the index alone not enough?
+> ||The slot's generation changes when its value is removed (say to 1), so the new handle is (2, 1). `get((2, 0))` finds a generation that is not its own and returns `None`. A check on the index alone would hand the old holder the new value: the same use-after-free a dangling C pointer gives, without a crash. The replacers' list handles in 1c work the same way.||
+>
+> - What does a slot remember besides its value?
+> - When does a slot's generation change?
+> - What would a C program still holding a pointer to the removed node see?
+
 ## The task
 
 - `Stack<T>`: a stack as a linked list where each node owns the next: `push`, `pop`, `peek`, `peek_mut`, `len`, `reverse` (in place, in `O(n)`, no clones, no allocation) and `to_vec`. **Dropping a long stack must not overflow the call stack**: the default drop of a chain of `Box`es is recursive, so write `Drop` as a loop.
