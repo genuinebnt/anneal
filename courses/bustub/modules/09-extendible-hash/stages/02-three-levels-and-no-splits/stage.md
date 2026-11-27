@@ -20,7 +20,7 @@ Operations in this stage:
 - `get_value(&key) -> Vec<V>`: empty or one element. Read-latch downward: header, then directory, then bucket, letting go of each parent once its child is held.
 - `insert(&key, &value) -> bool`: false if the key is already present; creates the directory and the first bucket on demand; true if it went into a bucket that had room. (A full bucket is the next stage: until then it returns false.)
 - `remove(&key) -> bool` need not work yet.
-- `verify_integrity()`: **you write the checker**. It must panic if your own structure's invariants are broken. The tests call it after every operation.
+- `verify_integrity()`: **you write the checker**. It must panic if your own structure's invariants are broken. The tests call it after every operation, but cannot check what it checks (your layout is yours): an empty body passes them. It is for you, and it pays off in 2b-03 and 2b-04, where a split or merge that breaks a rule fails at the operation that broke it instead of at a lookup much later.
 - `global_depth(&key) -> Option<u32>`: the global depth of the directory that serves the key's header slot (`None` if it has none yet). A read-only observer so that growth and shrinking can be tested without looking inside your pages.
 - `get_header_page_id()`, `index_name()`, `default_header_max_depth()` (9), `default_directory_max_depth()` (9) and `default_bucket_max_size()` (as many pairs as fit in your bucket page, hundreds for `(i32, i32)`).
 

@@ -9,13 +9,18 @@ Insertion made the table grow; removal must let it shrink. `remove` deletes a ke
 
 ## The task
 
-`remove(&key) -> bool`: false if the key was not there. Otherwise remove it from its bucket and, if the bucket is now empty, **merge**:
+`remove(&key) -> bool`: false if the key was not there; otherwise the key is gone and the table gives space back:
 
-1. If the bucket's local depth is 0 there is nothing to merge with.
-2. Find the split image slot (`slot ^ (1 << (local_depth - 1))`). If its local depth differs from this bucket's, stop: the sibling has been split further.
-3. If at least one of the two buckets is empty, keep the other (either, if both are empty), point every slot that referred to the empty one at the survivor, lower the local depth of every slot referring to the survivor, and delete the empty bucket's page from the pool.
-4. Repeat from step 1 with the survivor, as long as the merged bucket or its new split image is empty.
-5. Finally, while the directory can shrink (every local depth is below the global depth), halve it.
+- **Empty buckets merge.** A bucket left empty is merged with its split image when the two have the same local depth (a sibling that has been split further cannot take it), and merging goes on while the merged bucket or its new split image is empty. The page of a bucket that merged away is deleted from the pool.
+- **The directory shrinks.** Whenever every bucket's local depth is below the global depth, the directory halves.
+- **The invariants of 2b-03 hold after every remove.**
+
+> [!ASIDE] The steps, if you would rather not work them out
+> 1. If the bucket's local depth is 0 there is nothing to merge with.
+> 2. Find the split image slot (`slot ^ (1 << (local_depth - 1))`). If its local depth differs from this bucket's, stop: the sibling has been split further.
+> 3. If at least one of the two buckets is empty, keep the other (either, if both are empty), point every slot that referred to the empty one at the survivor, lower the local depth of every slot referring to the survivor, and delete the empty bucket's page from the pool.
+> 4. Repeat from step 1 with the survivor, as long as the merged bucket or its new split image is empty.
+> 5. Finally, while the directory can shrink (every local depth is below the global depth), halve it.
 
 Tests: remove reports presence correctly; emptying a table leaves one that still works through repeated fill and empty rounds; empty buckets are given back (the disk sees `delete_page` calls); removing a key does not disturb its neighbours; a slot freed by a remove can be used again; and the full model (inserts, lookups and removals on random table shapes) with `verify_integrity` after every operation and no leaked pins.
 

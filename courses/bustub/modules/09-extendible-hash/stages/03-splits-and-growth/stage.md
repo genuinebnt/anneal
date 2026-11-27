@@ -9,12 +9,16 @@ A bucket fills up. Instead of rehashing the whole table, an extendible hash tabl
 
 ## The task
 
-`insert` now handles a full bucket:
+`insert` now handles a full bucket. After every call:
 
-1. If the key is present: false. Otherwise find the bucket; if it has room, insert.
-2. If the bucket is full: if its local depth equals the directory's global depth, then if the global depth is already `directory_max_depth` the insert **fails** (false, and the table is unchanged); otherwise **double the directory** (global depth + 1; the new half mirrors the old).
-3. **Split** the full bucket: allocate a new bucket; local depth + 1 for both; move the entries whose hash has the new bit (bit `new_depth - 1`) set to the new bucket; update every directory slot that pointed at the old bucket: the ones with the new bit set point at the new bucket, all get the new local depth.
-4. Try again: the key may still land in a full bucket (all the old keys moved the same way), in which case you split again, until it fits or the directory cannot grow.
+- **It succeeds exactly when the key is new and the table can make room.** A full bucket is split, the directory doubling first when the bucket already uses every bit the directory has, as many times as it takes for the key to fit. It fails (false) only when that would need more than `directory_max_depth` bits, and a failed insert leaves the table exactly as it was.
+- **The structure stays extendible.** No bucket's local depth exceeds the global depth; the `2^(global - local)` slots that share a bucket's low `local` bits all point at it, with that local depth; and every key sits in the bucket its hash's low bits select.
+
+> [!ASIDE] The steps, if you would rather not work them out
+> 1. If the key is present: false. Otherwise find the bucket; if it has room, insert.
+> 2. If the bucket is full: if its local depth equals the directory's global depth, then if the global depth is already `directory_max_depth` the insert **fails** (false, and the table is unchanged); otherwise **double the directory** (global depth + 1; the new half mirrors the old).
+> 3. **Split** the full bucket: allocate a new bucket; local depth + 1 for both; move the entries whose hash has the new bit (bit `new_depth - 1`) set to the new bucket; update every directory slot that pointed at the old bucket: the ones with the new bit set point at the new bucket, all get the new local depth.
+> 4. Try again: the key may still land in a full bucket (all the old keys moved the same way), in which case you split again, until it fits or the directory cannot grow.
 
 The tests check, for random keys and many table shapes, that `insert` succeeds **exactly when** the keys already present that share the new key's header slot and low `directory_max_depth` hash bits number fewer than `bucket_max_size` (nothing can separate keys that agree on all those bits); that every inserted key is found afterwards; that a failed insert leaves everything as it was; that `verify_integrity` passes after every operation; and that guards are released (a pool of four frames is enough for 500 keys).
 
