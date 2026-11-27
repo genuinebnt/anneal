@@ -507,6 +507,9 @@ path = "examples/database/distributed_query_shuffle_broadcast_join.rs"
 name = "dremel_nested_columnar_shredding"
 path = "examples/database/dremel_nested_columnar_shredding.rs"
 [[example]]
+name = "evidence_log"
+path = "examples/database/evidence_log.rs"
+[[example]]
 name = "external_sort_hash_aggregation"
 path = "examples/database/external_sort_hash_aggregation.rs"
 [[example]]
@@ -569,6 +572,9 @@ path = "examples/database/query_rewrite_rules_magic_sets.rs"
 [[example]]
 name = "radix_partitioned_hash_join"
 path = "examples/database/radix_partitioned_hash_join.rs"
+[[example]]
+name = "record_matching"
+path = "examples/database/record_matching.rs"
 [[example]]
 name = "relational_algebra_engine"
 path = "examples/database/relational_algebra_engine.rs"

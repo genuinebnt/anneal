@@ -1,0 +1,266 @@
+title = "Matching the same thing from different sources"
+module = "Databases"
+module_order = 8
+chapter = "Data from many sources"
+chapter_order = 10
+order = 462
+kind = "lesson"
+level = "intermediate"
+code = ["examples/database/record_matching.rs"]
+code_spoils = ["/p/lc-accounts-merge"]
+lede = "Decide which records from different lists describe one thing, and keep a way back when you are wrong."
+summary = """
+Record matching finds entries for the same thing when no shared ID can be trusted. Clean each field into a comparable key, compare only likely pairs, score them, then group the strong ones. The trade-off is between wrong and missed merges. Keep the source records unchanged, forbid pairs that must stay apart, and save the reason for every link.
+"""
+
+[[sections]]
+heading = "Why is matching hard?"
+body = """
+A library loads its own catalogue, a shared one and a list of donated books. One writes `Le Guin, Ursula K.` and another `Ursula K. Le Guin`. Some entries lack an ISBN, and a few have typing mistakes.
+
+Start by saying what "the same" means. Here it means one printed ISBN edition in one binding. If you meant "the same work", a hardback and a paperback would belong together.
+
+A **missed merge** leaves a duplicate to fix later. A **wrong merge** mixes two things, so doubt should keep records apart.
+"""
+
+[[sections]]
+heading = "How do you make values comparable?"
+body = """
+A **canonical key** is a cleaned form of a field, made only for comparing. Keep the original beside it, because you will improve the cleaning and run it again.
+
+| Field | What the example does | Where it can go wrong |
+|---|---|---|
+| ISBN | Drops hyphens and spaces, tests the check digit, writes ISBN-10 as ISBN-13 | A valid number may still be on the wrong record |
+| Title | Lowercases, turns punctuation into spaces | `C++` and `C#` both become `c` |
+| Author | Turns `surname, rest` into `rest surname` | Name order differs between cultures, and `Jr.` adds commas |
+| Year | Uses it as given | Printing year and first publication get mixed |
+
+A failed ISBN test gives **no key**. Yet filler such as `0000000000` or `1111111111` passes it, so the example also rejects nine repeated digits. A valid check digit **never proves** that an ID is real, or that it belongs to this record.
+
+`Rémy` may store `é` as one character, or as `e` plus an accent mark. Without Unicode normalisation, the example turns these into `rémy` and `re my`.
+"""
+
+[[sections]]
+heading = "Which pairs should you compare?"
+body = """
+Comparing every pair grows fast. A hundred thousand records make about five billion pairs.
+
+**Blocking** compares two records only if they share a cheap key. The example uses the ISBN, or the author's last word with the first real title word. With several keys, one damaged field needn't hide a pair.
+
+Blocking can lose matches silently. In the example, one donated copy is spelled `A Wizzard of Earthsea`. It shares no key with the correct spellings, so it is never scored. To find such losses, score **all** pairs in a sample and list the good ones that blocking skipped.
+
+A third key, surname and year, empties the list of missed pairs. But candidates rise from 6 of 10 pairs to all 10, which saves no work.
+
+A common key makes a huge block. The example skips blocks over a size limit, and reports them. For long, messy text, [MinHash and locality-sensitive hashing](/cookbook/p/minhash-simhash-lsh) can propose candidates instead.
+"""
+
+[[sections]]
+heading = "How do you score a pair?"
+body = """
+Give points for agreement, take points away for disagreement, and keep each reason.
+
+| Evidence | Points |
+|---|---|
+| Same ISBN | 60 |
+| Title words | Up to 40, by the share of words in common |
+| Same author, or a different one | 25, or -15 |
+| Same year, or a different one | 10, or -10 |
+
+A missing value adds nothing, as not knowing is not disagreeing. Two thresholds give three outcomes: merge at 70, ask a person from 40, and otherwise stay apart.
+
+These numbers are invented. To choose real ones, have people label pairs, including many near each threshold. **Precision** is the share of proposed merges that were right, and **recall** the share of true matches found.
+"""
+
+[[sections]]
+heading = "How can good pairs make a bad group?"
+body = """
+Matching is not automatically **transitive**: A like B and B like C don't make A like C. A donated copy with no ISBN can score 75 against a hardback and 75 against a paperback. Merge both pairs, and two editions with different ISBNs become one record.
+
+So some pairs get a **cannot-link** rule: they may never share a group. Here that covers two different valid ISBNs, and any pair a person marked as different. Before a merge, check every pair across the two groups, not only the two linked records.
+
+```stepper
+caption = "One copy without an ISBN looks like two editions"
+[[frame]]
+title = "Three records"
+text = "The hardback and paperback have different ISBNs, so they may not meet. The donated copy has none."
+lanes = [ { name = "Group A", items = ["hardback"] }, { name = "Group B", items = ["donated copy"] }, { name = "Group C", items = ["paperback"] } ]
+[[frame]]
+title = "The first strong pair merges"
+text = "No forbidden pair would be brought together."
+lanes = [ { name = "Group A", items = ["hardback", "donated copy"] }, { name = "Group C", items = ["paperback"] } ]
+[[frame]]
+title = "The second strong pair is refused"
+text = "It would bring hardback and paperback together. The refusal and its blocking pair are saved for a person to review."
+lanes = [ { name = "Group A", items = ["hardback", "donated copy"] }, { name = "Group C", items = ["paperback"] } ]
+```
+
+People's decisions apply first, then the strongest scores. With equal scores, the lower record IDs decide which edition gets the donated copy. That is repeatable, **not right**, so show refused links to a person. This greedy rule doesn't promise the best grouping.
+
+:::deeper The difference in a few lines (hints at the grouping in "Accounts Merge")
+```compare
+takeaway = "A rule about two records must be checked between whole groups. The price is more checks for each merge."
+[wrong]
+title = "Check the linked pair"
+code = '''
+fn main() {
+    // 0 and 2 have different ISBNs; 1 has none and looks like both
+    let isbn = [Some("hardback"), None, Some("paperback")];
+    let mut group = vec![0, 1, 2];
+    for (a, b) in [(0, 1), (1, 2)] {
+        let clash = matches!((isbn[a], isbn[b]), (Some(x), Some(y)) if x != y);
+        if !clash {
+            let (keep, old) = (group[a], group[b]);
+            group
+                .iter_mut()
+                .filter(|g| **g == old)
+                .for_each(|g| *g = keep);
+        }
+    }
+    println!("{group:?}");
+}
+'''
+result = "It prints `[0, 0, 0]`. Both editions are in one group."
+[fixed]
+title = "Check across both groups"
+code = '''
+fn main() {
+    // 0 and 2 have different ISBNs; 1 has none and looks like both
+    let isbn = [Some("hardback"), None, Some("paperback")];
+    let mut group = vec![0, 1, 2];
+    for (a, b) in [(0, 1), (1, 2)] {
+        let (keep, old) = (group[a], group[b]);
+        // every ISBN in one group against every ISBN in the other
+        let clash = (0..3).any(|i| {
+            (0..3).any(|j| {
+                group[i] == keep
+                    && group[j] == old
+                    && matches!((isbn[i], isbn[j]), (Some(x), Some(y)) if x != y)
+            })
+        });
+        if !clash {
+            group
+                .iter_mut()
+                .filter(|g| **g == old)
+                .for_each(|g| *g = keep);
+        }
+    }
+    println!("{group:?}");
+}
+'''
+result = "It prints `[0, 0, 2]`."
+```
+:::
+
+The same mistake in the full example changes `[[1, 2, 3], [4], [5]]` to `[[1, 2, 3, 4], [5]]`, and a check fails.
+"""
+
+[[sections]]
+heading = "How do you undo a wrong merge?"
+body = """
+Never overwrite source records with a combined one, or you lose where each value came from. Keep three things apart:
+
+1. The source records, unchanged.
+2. A log of people's decisions, in time order: pair, entry, who and why.
+3. The groups, which you **compute** from the other two.
+
+An entry says **same**, **different** or **withdrawn**. A later entry about a pair replaces the earlier one. To split a wrong merge, add "different". It must act as a cannot-link rule, or the two could meet again through a third record.
+
+In the example, a librarian says that records 1 and 3 differ. The groups become `[[1, 2], [3, 4], [5]]`, so record 4's group changes too. Show people every group that a decision would change.
+
+If that was a mistake, **withdraw** it. The pair returns to the automatic rules, not to any earlier decision, and here the first groups come back. Adding "same" instead is a new claim and may group records differently.
+
+Decisions about different pairs can clash. Records 1 and 2 "same", 2 and 3 "same", but 1 and 3 "different" can't all hold. The rule is:
+
+- "Different" always holds.
+- "Same" decisions apply newest first.
+- A "same" that can't hold is reported as refused, with the pair that blocks it.
+
+"Same" overrules the ISBN rule for **that pair only**, as catalogues contain wrong ISBNs. Other pairs can still block the merge.
+"""
+
+[[sections]]
+heading = "What should each merge remember?"
+body = """
+This is the merge's **provenance**. With every link, save a rule's version, score and reasons, or a person's name and note. A printed chain of links then answers "why are these one record?".
+
+If a group shows one chosen title, store which record supplied it. Groups also merge and split, so let other data point at source record IDs.
+"""
+
+[[sections]]
+heading = "How does the code make keys and scores?"
+body = """
+:::deeper The keys and the score, step by step (the viewer holds the whole file, which gives away much of "Accounts Merge")
+```walkthrough
+file = "examples/database/record_matching.rs"
+[[step]]
+title = "The check digit"
+lines = "54-62"
+text = "The weights alternate between one and three. ISBN-13 uses this digit, including one converted from ISBN-10."
+[[step]]
+title = "Read an ISBN-10"
+lines = "64-91"
+text = "Long input is refused first. Only the last place may be `X`. A valid number gets the `978` prefix and a new check digit."
+[[step]]
+title = "Check and filter"
+lines = "92-111"
+text = "An ISBN-13 needs a known prefix and the right check digit. Filler with nine repeated digits gives no key."
+[[step]]
+title = "Clean names and titles"
+lines = "113-129"
+text = "Text becomes lowercase words. A comma moves the surname to the end."
+[[step]]
+title = "Keep the keys together"
+lines = "131-147"
+text = "The keys are new values built from a record. The record is not changed."
+[[step]]
+title = "Score one pair"
+lines = "198-239"
+text = "Each piece of evidence adds a named reason with its points. The total is their sum, and a missing value adds nothing."
+```
+:::
+"""
+
+[[sections]]
+heading = "What does the example not do?"
+body = """
+It recomputes everything after each change, and it has no learned weights or transliteration.
+
+On 3,000 random catalogues, it checks that no group holds a forbidden pair and that every grouped pair has a chain of links. Shuffling the records before blocking changes nothing. A small named case covers each rule.
+
+```sh
+cargo run --release --example record_matching
+```
+"""
+
+[[connections]]
+kind = "before"
+title = "Union-find"
+link = "/cookbook/p/union-find"
+why = "The plain way to group linked pairs. This page keeps member lists instead, to check each merge."
+
+[[connections]]
+kind = "before"
+title = "MinHash, LSH and SimHash"
+link = "/cookbook/p/minhash-simhash-lsh"
+why = "Another way to propose candidate pairs, for long or noisy text."
+
+[[connections]]
+kind = "returns"
+title = "Tracking where evidence came from"
+link = "/cookbook/p/evidence-log"
+why = "Keeping sources, times and corrections for any conclusion."
+
+[[sources]]
+title = "Record linkage (Wikipedia)"
+url = "https://en.wikipedia.org/wiki/Record_linkage"
+note = "Blocking, and the Fellegi and Sunter model with its two thresholds and a review band."
+
+[[sources]]
+title = "Splink documentation"
+url = "https://moj-analytical-services.github.io/splink/index.html"
+note = "A library for linking records without a shared ID, with weights estimated from data."
+
+[[sources]]
+title = "ISBN (Wikipedia)"
+url = "https://en.wikipedia.org/wiki/ISBN"
+note = "Both check digit rules and how ISBN-10 maps to ISBN-13."

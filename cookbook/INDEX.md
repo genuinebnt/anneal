@@ -509,3 +509,5 @@ Recipes were first numbered (`RECIPE NN` in each header). Files are now named by
 | r763 | [`adaptive_feedback_reoptimization`](examples/database/adaptive_feedback_reoptimization.rs) | database |
 | r764 | [`adaptive_query_processing_eddies_sip`](examples/database/adaptive_query_processing_eddies_sip.rs) | database |
 | r765 | [`plan_cache_multiplan_trial`](examples/database/plan_cache_multiplan_trial.rs) | database |
+| r1207 | [`record_matching`](examples/database/record_matching.rs) | database |
+| r1208 | [`evidence_log`](examples/database/evidence_log.rs) | database |

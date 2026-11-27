@@ -1,0 +1,50 @@
+title = "Keeping the evidence behind each answer"
+module = "Databases"
+module_order = 8
+chapter = "Data from many sources"
+chapter_order = 10
+order = 463
+kind = "recipe"
+lede = "Observations, coverage, corrections and as-of questions."
+level = "intermediate"
+code = ["examples/database/evidence_log.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>stock and shelf checks</li><li>sensor readings</li><li>data merged from several sources</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>inventory</li><li>asset registers</li><li>reports that must be explained or reproduced later</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+The log holds what each source reported and is only ever added to. An answer such as "on shelf F2" is worked out from it each time, together with the numbers of the records behind it. Every record has two times: when it was seen and when the log learned of it.
+
+A sweep says which shelf it covered and whether it finished, so only a finished sweep of the right shelf can count as "looked and did not find". A retraction cancels a record from the moment the retraction arrives; questions about earlier knowledge still get the earlier answer.
+
+Each record is recorded later than the one before (whole hours, so one record per hour here). An answer "as known at K" is fixed once the last record is at K or later, and provisional until then. A retraction cannot be retracted: if it was wrong, add the observation again.
+
+A finished sweep that misses the copy in the same hour as a sighting is not counted against it, and the answer does not mention it.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+wrong or drifting clocks, how much to trust each source, indexes (every question reads the whole log).
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://www.w3.org/TR/prov-overview/>
+"""
+
+[[sources]]
+title = "w3.org/TR/prov-overview"
+url = "https://www.w3.org/TR/prov-overview/"

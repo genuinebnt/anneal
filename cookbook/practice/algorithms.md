@@ -461,15 +461,15 @@ Attempt your FlowForge cycle-detection stage first; Tarjan is the post-hoc gener
 ## union_find
 
 **Prove you got it**
-1. Show with a measurement that path compression alone or union-by-size alone each give most of the speed-up. What is the worst case without either?
+1. Show with a measurement that path halving alone or union by size alone each give most of the speed-up. What is the worst case without either?
 2. `connected(a, b)` takes `&mut self`. Why, and what would a `&self` version cost?
 
 **Try next**
-- [S] Add `size(x)` and `components()` counters; assert `sum of sizes == n`.
+- [S] Add `size(x)` beside the group count; assert that the sizes of all groups add up to `n`.
 - [M] Add rollback (union without path compression, with an undo stack) and use it in an offline dynamic-connectivity toy. Oracle: recompute components from scratch after each op.
 - [A] Use union-find to solve image segmentation by region merging on a PNG you generate (`graphics/png_ppm_writer`): union neighbouring pixels with colour distance under a threshold and report component count versus threshold.
 
-**Use in**: Kruskal, duplicate grouping, percolation. Real: `UnionFind` in [petgraph](https://github.com/petgraph/petgraph).
+**Use in**: grouping connected items, image regions, merging matched records, percolation. Real: `UnionFind` in [petgraph](https://github.com/petgraph/petgraph).
 
 **Pitfall**: recursive `find` blowing the stack on a chain of 10^6 nodes created by unlucky unions; make it iterative and test the chain.
 

@@ -1,0 +1,258 @@
+title = "Tracking where evidence came from"
+module = "Databases"
+module_order = 8
+chapter = "Data from many sources"
+chapter_order = 10
+order = 463
+kind = "lesson"
+level = "intermediate"
+code = ["examples/database/evidence_log.rs"]
+code_spoils = ["/p/y71-a-stock-book-in-ink", "/p/lc-time-based-key-value-store"]
+lede = "Store what each source saw, and work out what you believe from it."
+summary = """
+Keep observations apart from conclusions, and store who saw what, when it was seen and when you learned of it. A search also says what it covered, so that "not found" can be told from "not looked". Compute answers with their supporting records, and correct mistakes by adding records. This lets you explain old reports, at the cost of storing and reading more.
+"""
+
+[[sections]]
+heading = "Why not store just the current value?"
+body = """
+A library keeps one field for each book copy: its shelf. A scanner reads the shelves now and then, and desks report copies they handle. Each report overwrites the field.
+
+One day the field says a copy is missing. A reader asks why. You can't say who looked, when, or where. You also can't tell what last Tuesday's report was based on.
+
+The fix is to store two kinds of data separately. An **observation** is what one source reported, such as "scanner A read shelf F2 on day 1 and saw copy C17". A **conclusion** is what you believe because of the observations, such as "C17 is on F2". You keep every observation, so you can work out conclusions again.
+
+An observation is only a record of what was **reported**, as a scanner may misread.
+"""
+
+[[sections]]
+heading = "What should an observation record?"
+body = """
+| Part | Why you need it |
+|---|---|
+| A number that never changes | So that conclusions and corrections can point at it |
+| Source | To judge it, and to find all reports from a faulty device |
+| What was seen | The claim, kept as reported |
+| When it was **seen** | Orders events in the world |
+| When it was **recorded** | Orders what you knew. Here each is later than the last |
+| Coverage | What was searched, and whether the search finished |
+
+The two times often differ. A desk may note a book on day 5 and upload the note on day 6. With one time, you lose either the order of events or the history of your knowledge.
+
+Real systems also keep the file and the program version behind a report. The W3C's [PROV overview](https://www.w3.org/TR/prov-overview/) gives common words for such records.
+"""
+
+[[sections]]
+heading = "When does \"not seen\" mean \"gone\"?"
+body = """
+A scanner's list doesn't include C17. What does that tell you? It depends on what the scanner **covered**.
+
+| The search | What a missing C17 tells you |
+|---|---|
+| Never read the shelf | Nothing |
+| Read part of the shelf, then stopped | Nothing, unless you know which part |
+| Finished the shelf | It was looked for and not found there |
+| Finished another shelf | Nothing about this shelf |
+
+So the example stores each **sweep** with its shelf, the copies found and a `finished` flag. A found copy counts even in an unfinished sweep. Only a finished sweep of the right shelf can count against a copy.
+
+Even then, say "not found", not "gone". A reader may hold the copy, or the scanner may miss it. "Gone" is a **decision** with its own rule, such as a person checking after two failed sweeps. Two misses by one faulty scanner are not independent evidence.
+
+:::deeper The mistake in a few lines
+```compare
+takeaway = "A missing item counts only when the search could have found it. The answer needs a third value: nobody knows."
+[wrong]
+title = "The latest sweep decides"
+code = '''
+#[allow(dead_code)]
+struct Sweep {
+    finished: bool,
+    found: &'static [&'static str],
+}
+
+fn main() {
+    let sweeps = [
+        Sweep {
+            finished: true,
+            found: &["C17", "C20"],
+        },
+        Sweep {
+            finished: false,
+            found: &["C20"],
+        },
+    ];
+    let latest = sweeps.last().expect("one sweep");
+    println!("C17 on the shelf: {}", latest.found.contains(&"C17"));
+}
+'''
+result = "It prints `C17 on the shelf: false`, although the second sweep never finished."
+[fixed]
+title = "Ask what each sweep can say"
+code = '''
+struct Sweep {
+    finished: bool,
+    found: &'static [&'static str],
+}
+
+fn main() {
+    let sweeps = [
+        Sweep {
+            finished: true,
+            found: &["C17", "C20"],
+        },
+        Sweep {
+            finished: false,
+            found: &["C20"],
+        },
+    ];
+    // only a sweep that found it, or finished without it, says anything
+    let answer = sweeps.iter().rev().find_map(|s| {
+        let found = s.found.contains(&"C17");
+        (found || s.finished).then_some(found)
+    });
+    println!("C17 found when last checked: {answer:?}");
+}
+'''
+result = "It prints `C17 found when last checked: Some(true)`. With no useful sweep, it would print `None`."
+```
+:::
+"""
+
+[[sections]]
+heading = "What if sources disagree?"
+body = """
+At one moment, a desk reports C17 at the loan desk, and a scanner reports it on F3. One copy can't be in both places.
+
+You could pick a winner: the later recording, or a source you trust more. If you do, write the rule down, give it a version and keep the losing report. The example doesn't pick. It answers `Conflict`, names both places and returns both record numbers.
+
+Every answer has the same shape:
+
+| Answer | Meaning |
+|---|---|
+| `NoSighting` | No report of this copy. It doesn't mean the copy doesn't exist |
+| `LastSeen` | Seen there, and no later finished sweep of that shelf missed it |
+| `NotFoundSince` | Seen there, then looked for and not found |
+| `Conflict` | The newest reports name different places |
+
+One disagreement is **not** reported: a finished sweep misses the copy in the same hour that another source sees it there. The sighting wins, and `against` stays empty.
+
+Alongside the state, `support` lists the records for it, and `against` lists the sweeps that missed it. Someone can open those records and check your reasoning. `LastSeen` always carries a time, because a sighting from last year says little about today.
+"""
+
+[[sections]]
+heading = "What did we know last week?"
+body = """
+An **as-of** question needs two times. **When** asks about the world: where was the copy then? **Known** limits the evidence: use only what the log held at that moment. Keeping both is often called a **bitemporal** record.
+
+```stepper
+caption = "One question about day 5, asked twice"
+[[frame]]
+title = "Day 4: a finished sweep misses the copy"
+text = "The copy was on F2 on day 1 and missed on day 4. Knowledge up to day 5 is beyond the last record, so this answer is still provisional."
+lanes = [ { name = "Log holds", items = ["day 1 sweep", "day 4 sweep"] }, { name = "About day 5", items = ["not found since"] } ]
+[[frame]]
+title = "Day 6: an old note arrives"
+text = "A desk note about day 5 arrives. The day-5 answer stays the same and is now fixed. Knowledge beyond this note gives a new answer, still provisional."
+lanes = [ { name = "Log holds", items = ["day 1 sweep", "day 4 sweep", "day 5 note"] }, { name = "About day 5", items = ["returns cart"] } ]
+```
+
+The first answer explains what an old report showed. The second is your best view of day 5 today. Make callers say which one they want.
+
+An old answer stays put only if nothing new is filed under an old time. So each record must be recorded **later** than the one before. Time here is whole hours, so the log takes one record per hour. Finer ticks or sequence numbers would lift that limit.
+
+An answer for `known` is fixed once the last record is at that time or later. If `known` is beyond the last record, the answer is **provisional**, as a new record may still be filed before it.
+"""
+
+[[sections]]
+heading = "How do you correct a mistake without erasing it?"
+body = """
+On day 7, a supervisor learns that the day 4 sweep read F1 under an F2 label. Deleting the sweep would hide why someone searched for the book on day 4.
+
+So you add a **retraction**: which record was wrong, who says so, when and why. From that moment, answers ignore the record. Questions limited to earlier knowledge still use it. To replace a wrong value, add a retraction and then a new observation.
+
+A retraction can't itself be retracted. If it was wrong, add the observation again as a new record. It counts only from its new recorded time.
+
+A retraction doesn't undo actions, such as ordering a replacement copy. To find them, each action must save the record numbers it used.
+
+Personal data may have to be deleted, so keep it out of the log or plan its removal. Appending also doesn't stop an administrator from editing the file. [Merkle trees](/cookbook/p/merkle-tree) can help show that records changed, given a trusted copy of the root.
+"""
+
+[[sections]]
+heading = "How does the code do it?"
+body = """
+:::deeper The code, step by step (gives away much of "Correct a stock book without rubbing anything out" and "Time Based Key-Value Store")
+```walkthrough
+file = "examples/database/evidence_log.rs"
+[[step]]
+title = "Three kinds of record"
+lines = "27-51"
+text = "A sighting, a sweep with its coverage, and a retraction. Every record has a source and a recorded time."
+[[step]]
+title = "Add, never change"
+lines = "66-91"
+text = "Each recorded time must be later than the last. Nothing can be seen after it was recorded, and only an observation can be retracted."
+[[step]]
+title = "Choose the usable records"
+lines = "93-110"
+text = "First cut the log at `known`, and only then collect retractions. A later retraction can't change an earlier answer."
+[[step]]
+title = "Find the newest sightings"
+lines = "116-151"
+text = "Sightings and sweeps that found the copy count alike. Two places at the newest time make a conflict."
+[[step]]
+title = "Collect evidence against"
+lines = "154-188"
+text = "A sweep must be finished, cover that shelf, be later than the sighting, and not include the copy."
+```
+:::
+"""
+
+[[sections]]
+heading = "How do you test it?"
+body = """
+A second method walks through time, updating its belief. Both must give the same state and the same record numbers, for and against. The example also checks rules on 20,000 random logs:
+
+- Records that arrive after `known` change nothing.
+- An unfinished sweep that didn't find the copy changes nothing.
+- A finished sweep of another shelf changes nothing, if it didn't find the copy.
+- A known retraction acts as if its target held no observation.
+
+To see a check fail, remove the test for `finished` and run it again. After the unfinished sweep on day 2, the copy is wrongly reported as `NotFoundSince`.
+
+The example trusts all times and sources equally, although real clocks drift. A sweep has one time here, although reading a shelf takes a while. 
+
+A conflict lasts until a later sighting, even if a sweep of one of those places misses the copy. Each question reads the whole log, so a large system needs indexes or saved summaries.
+
+```sh
+cargo run --release --example evidence_log
+```
+"""
+
+[[connections]]
+kind = "before"
+title = "Matching the same thing from different sources"
+link = "/cookbook/p/record-matching"
+why = "How to tell that reports from two sources are about one thing."
+
+[[connections]]
+kind = "practise"
+title = "Correct a stock book without rubbing anything out"
+link = "/p/y71-a-stock-book-in-ink"
+level = "related"
+why = "Corrections by new entries, with different rules about what may be undone."
+
+[[connections]]
+kind = "returns"
+title = "Event sourced ledger"
+link = "/cookbook/p/event-sourced-ledger"
+why = "A larger system where stored events are the source of all state."
+
+[[sources]]
+title = "W3C: PROV overview"
+url = "https://www.w3.org/TR/prov-overview/"
+note = "Common terms for who and what produced a piece of data."
+
+[[sources]]
+title = "Martin Fowler: Bitemporal history"
+url = "https://martinfowler.com/articles/bitemporal-history.html"
+note = "A salary example with actual history and record history."

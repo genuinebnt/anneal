@@ -1,0 +1,50 @@
+title = "Record matching"
+module = "Databases"
+module_order = 8
+chapter = "Data from many sources"
+chapter_order = 10
+order = 462
+kind = "recipe"
+lede = "matching records from several sources that describe the same thing."
+level = "intermediate"
+code = ["examples/database/record_matching.rs"]
+
+[[sections]]
+heading = "Where you would use it"
+body = """
+<ul class="cb-g-uses"><li>library catalogues</li><li>product lists</li><li>importing data from partners</li></ul>
+"""
+
+[[sections]]
+heading = "Common uses"
+body = """
+<ul class="cb-g-uses"><li>merging catalogues</li><li>cleaning imported lists</li><li>joining datasets that share no reliable key</li></ul>
+"""
+
+[[sections]]
+heading = "Design notes"
+body = """
+Source records are never changed. The program makes canonical keys, picks candidate pairs by blocking, scores each pair with named reasons, and groups the strong ones. Two records with different valid ISBNs, or that a person marked as different, never share a group, however they are linked.
+
+Groups are computed again from the records and a log of decisions, so a wrong merge is undone by adding to it. A later entry about a pair replaces the earlier one; withdrawing a pair gives it back to the rules. "Different" always holds.
+
+"Same" decisions apply newest first, and one that cannot hold is reported. A valid ISBN check digit does not prove that the number is real or that it belongs to the record. One thing here is a printed ISBN edition in one binding.
+
+The weights and limits are made up for the example: tune real ones against pairs that people have labelled.
+"""
+
+[[sections]]
+heading = "Not covered"
+body = """
+Unicode normalisation, transliteration, learned weights, updating groups one record at a time.
+"""
+
+[[sections]]
+heading = "Further reading"
+body = """
+<https://en.wikipedia.org/wiki/ISBN>
+"""
+
+[[sources]]
+title = "en.wikipedia.org/wiki/ISBN"
+url = "https://en.wikipedia.org/wiki/ISBN"

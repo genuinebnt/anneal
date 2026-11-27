@@ -1,0 +1,223 @@
+title = "Union-find"
+module = "Data structures and algorithms"
+module_order = 5
+chapter = "Graph algorithms"
+chapter_order = 4
+order = 196
+kind = "lesson"
+level = "intermediate"
+code = ["examples/algorithms/union_find.rs"]
+code_spoils = ["/p/f4-union-find", "/p/p1-cable-network", "/p/lc-number-of-connected-components-in-an-undirected-graph", "/p/lc-number-of-provinces", "/p/lc-redundant-connection", "/p/lc-graph-valid-tree", "/p/lc-accounts-merge", "/p/lc-most-stones-removed-with-same-row-or-column", "/p/lc-smallest-string-with-swaps", "/p/lc-similar-string-groups"]
+lede = "Keep items in groups while new connections between them keep arriving."
+summary = """
+Union-find, also called disjoint sets, keeps items in groups that only ever merge. It quickly tells whether two items share a group, and joins two groups. Each group is a small tree in an array. Use it when connections arrive one at a time, but note that it can't split a group, and it forgets which connections built it.
+"""
+
+[[sections]]
+heading = "What problem does it solve?"
+body = """
+A library has several catalogue records for the same work: an old edition, an annotated one and an audiobook. Over time, librarians mark pairs as "same work". They never list a whole group at once.
+
+If record 0 matches record 1, and record 1 matches record 3, then 0 and 3 belong together too. You want that answer at once, while new pairs keep arriving.
+
+The simplest answer gives each record a group label. Joining two groups then means finding every record with one label and changing it. That is correct, and fine for a few hundred records, but each join reads the whole list. The example keeps this slow version and checks the fast one against it.
+
+You could also store all the pairs and search them for each question. That works, but you would repeat the same search again and again.
+"""
+
+[[sections]]
+heading = "How are the groups stored?"
+body = """
+> [!WARNING]
+> **Spoiler.** This section and the next explain the core method of "Groups that merge, and can be undone" and "Cable Network". It is also the core of DSA problems such as "Accounts Merge", "Redundant Connection" and "Smallest String With Swaps". To solve one yourself, stop here and try it first.
+
+Give each item a number from 0. One array, `parent`, holds for each item the number of another item in its group, or its own number. An item that points to itself is a **root**.
+
+Follow the pointers from any item and you reach its group's root. So two items are in one group exactly when they reach the same root. Looking up the root is called **find**.
+
+Joining two groups is called **union**. You find both roots, and make one root point at the other. Only that one pointer changes, however large the groups are.
+
+```stepper
+caption = "Three pairs arrive for five catalogue records"
+[[frame]]
+title = "Every record is alone"
+text = "Each record is its own root. There are five groups."
+lanes = [ { name = "Root 0", items = ["0"] }, { name = "Root 1", items = ["1"] }, { name = "Root 2", items = ["2"] }, { name = "Root 3", items = ["3"] }, { name = "Root 4", items = ["4"] } ]
+[[frame]]
+title = "0 and 1 are the same work"
+text = "The groups are the same size, so either root may go below. Here 1 now points at 0."
+lanes = [ { name = "Root 0", items = ["0", "1 → 0"] }, { name = "Root 2", items = ["2"] }, { name = "Root 3", items = ["3"] }, { name = "Root 4", items = ["4"] } ]
+[[frame]]
+title = "2 and 4 are the same work"
+text = "A second group of two forms."
+lanes = [ { name = "Root 0", items = ["0", "1 → 0"] }, { name = "Root 2", items = ["2", "4 → 2"] }, { name = "Root 3", items = ["3"] } ]
+[[frame]]
+title = "3 and 1 are the same work"
+text = "Find 1 and you reach root 0. The group of 3 is smaller, so 3 points at that root, not at 1."
+lanes = [ { name = "Root 0", items = ["0", "1 → 0", "3 → 0"] }, { name = "Root 2", items = ["2", "4 → 2"] } ]
+```
+
+Notice the last step. The pair named records 3 and 1, but the new pointer joins two **roots**.
+
+:::deeper Why link the roots? (gives away part of "Groups that merge, and can be undone")
+```compare
+takeaway = "Always find both roots first. A pointer set on a root can't cut anything off, because a root has no pointer to lose."
+[wrong]
+title = "Link the two named items"
+code = '''
+fn root(parent: &[usize], mut item: usize) -> usize {
+    while parent[item] != item {
+        item = parent[item];
+    }
+    item
+}
+
+fn main() {
+    let mut parent = vec![0, 1, 2];
+    for (a, b) in [(0, 1), (2, 1)] {
+        // links the two items that were named
+        parent[b] = a;
+    }
+    println!("{}", root(&parent, 0) == root(&parent, 1));
+}
+'''
+result = "It prints `false`. The second pair overwrote the pointer of item 1, so the first pair is lost."
+[fixed]
+title = "Link the two roots"
+code = '''
+fn root(parent: &[usize], mut item: usize) -> usize {
+    while parent[item] != item {
+        item = parent[item];
+    }
+    item
+}
+
+fn main() {
+    let mut parent = vec![0, 1, 2];
+    for (a, b) in [(0, 1), (2, 1)] {
+        // links one group's root under the other's
+        let (ra, rb) = (root(&parent, a), root(&parent, b));
+        parent[rb] = ra;
+    }
+    println!("{}", root(&parent, 0) == root(&parent, 1));
+}
+'''
+result = "It prints `true`."
+```
+:::
+"""
+
+[[sections]]
+heading = "How do the trees stay short?"
+body = """
+Find costs one step for each pointer on the way. If every join hangs the old group under a newcomer, you get a long chain. Then each find walks all of it. Two small rules prevent this.
+
+**Union by size** hangs the smaller tree under the root of the larger one. An item moves one step further from its root only when its tree goes under another. That new group is at least twice as large as its old one. With `n` items, this can happen at most log2(n) times.
+
+So a million items never need more than 19 steps.
+
+**Path halving** repairs paths while find walks them. Each time, an item is pointed at its parent's parent, and the walk jumps there. About every second item on the path is changed, and the next walk is shorter. A related rule, **full path compression**, points every walked item straight at the root.
+
+With size and compression together, a long run of operations costs almost constant time each. The precise bound uses the inverse Ackermann function, which grows extremely slowly. It is an average over the whole run, not a promise for each call. [Amortised analysis](/cookbook/p/amortized-analysis-online-algorithms) explains that kind of promise.
+"""
+
+[[sections]]
+heading = "How does the code do it?"
+body = """
+:::deeper The code, step by step (gives away much of "Groups that merge, and can be undone", "Cable Network" and the connected-groups exercises)
+```walkthrough
+file = "examples/algorithms/union_find.rs"
+[[step]]
+title = "Three fields"
+lines = "16-29"
+text = "`parent` is the forest. `size` matters only at roots. `count` is the number of groups, so you never have to count them."
+[[step]]
+title = "Find"
+lines = "31-39"
+text = "A loop, not recursion. The first line in the loop skips a level, and the second moves there."
+[[step]]
+title = "Union"
+lines = "41-54"
+text = "Equal roots mean the pair adds nothing. Otherwise the swap makes sure the smaller tree goes below, and the count drops by one."
+[[step]]
+title = "List the groups"
+lines = "60-70"
+text = "The structure stores no member lists. Collect items by root, then sort, so the output doesn't depend on which item became root."
+[[step]]
+title = "Compare with the slow version"
+lines = "135-152"
+text = "Seeded random pairs go to both versions. Every answer must agree."
+[[step]]
+title = "Check the shape"
+lines = "174-192"
+text = "Wrong shape gives right answers, only slowly. So the checks measure depth directly."
+```
+:::
+"""
+
+[[sections]]
+heading = "How can you tell it is still fast?"
+body = """
+Answers alone won't tell you. Remove either rule and every group is still correct. So the example builds trees and counts steps.
+
+To see it, remove the `if` that swaps by size, then run the example again. One check lets a large group take in 999 single items. It stops with `one big group took in singles, depth 999`.
+
+Next, put the swap back and remove the halving line. The other check builds the tallest tree that union by size allows for 1,024 items. Its deepest item is 10 steps down. One find should leave it 5 steps down, but now it stays at 10.
+
+Run the real version from the `cookbook` folder:
+
+```sh
+cargo run --release --example union_find
+```
+"""
+
+[[sections]]
+heading = "What can't it do?"
+body = """
+| You need | What happens | What to do |
+|---|---|---|
+| To remove a connection | There is no split | Keep your own list of pairs and build the groups again without that one |
+| To explain a group | The pointers are not your pairs | Keep the pairs, with who added each one |
+| A lasting name for a group | The root can change at any union | Don't save root numbers outside the structure |
+| Connections with a direction | "a to b" and "b to a" look the same | Use a graph that keeps direction |
+| To forbid two items from meeting | It joins whatever you pass it | Check before you call union |
+
+One wrong pair can fuse two large, unrelated groups, and every member is affected. This is the main risk when the pairs come from guesses. [Matching records](/cookbook/p/record-matching) shows how to guard the merge and take it back.
+
+If your items are text or IDs, keep a map from each one to its number, and a list for the way back. If all connections are known before the first question, a plain graph search finds the groups too. Union-find pays off when questions and new connections are mixed.
+"""
+
+[[connections]]
+kind = "before"
+title = "Amortised analysis"
+link = "/cookbook/p/amortized-analysis-online-algorithms"
+why = "What an average cost over many operations does and doesn't promise."
+
+[[connections]]
+kind = "practise"
+title = "Groups that merge, and can be undone"
+link = "/p/f4-union-find"
+level = "exact"
+why = "Build it, then meet two extra demands. This page covers only the first part, so try before opening the code."
+
+[[connections]]
+kind = "returns"
+title = "Minimum spanning tree and bridges"
+link = "/cookbook/p/mst-bridges"
+why = "Kruskal's algorithm adds the cheapest edges first and uses union-find to decide which to keep."
+
+[[connections]]
+kind = "returns"
+title = "Matching the same thing from different sources"
+link = "/cookbook/p/record-matching"
+why = "Grouping when some items must never share a group."
+
+[[sources]]
+title = "cp-algorithms: disjoint set union"
+url = "https://cp-algorithms.com/data_structures/disjoint_set_union.html"
+note = "The two rules, their costs and many variations."
+
+[[sources]]
+title = "petgraph's UnionFind source"
+url = "https://docs.rs/petgraph/latest/src/petgraph/unionfind.rs.html"
+note = "A library version. Compare its rank array with the size array here, and read how its find shortens paths."

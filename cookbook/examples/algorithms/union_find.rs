@@ -1,102 +1,224 @@
-//! RECIPE 68 (graphs): union-find (disjoint sets): "are these two connected?" in near-constant time.
+//! RECIPE 68 (graphs): union-find (disjoint sets): keep items in groups while "these two belong together" facts arrive.
 //! LEVEL: intermediate
-//! Use in: connected components of UNDIRECTED relations, Kruskal's MST, grouping duplicates, incremental connectivity.   Run: cargo run --release --example union_find
-//! COMMON USES: network connectivity, Kruskal MST, image segmentation, deduplicating equivalent records.
+//! Use in: grouping connected items, image regions, joining equal variables.   Run: cargo run --release --example union_find
+//! COMMON USES: network connectivity, image segmentation, merging matched records, type inference.
 #![allow(dead_code)]
 //!
-//! Each set is a tree; `find` returns the root. Two optimisations make it effectively O(1) amortised
-//! (inverse Ackermann): PATH COMPRESSION (flatten trees while finding) and UNION BY SIZE (attach the small tree under the big).
-//! Note: this answers connectivity for UNDIRECTED edges and can only ADD edges; it cannot detect directed cycles.
+//! Each group is a tree stored in a vector of parent numbers; `find` walks to the root, which stands for the group.
+//! UNION BY SIZE hangs the smaller tree under the larger root, so no path is longer than log2(n).
+//! Path halving makes every other item on a walked path skip one step, so later walks are shorter.
+//! It can join groups but cannot split them, and it does not remember why two items are together.
+//! The checks compare it with a slow version that relabels items, on seeded random pairs, and measure tree depth.
 //! Read: https://cp-algorithms.com/data_structures/disjoint_set_union.html
-struct Dsu {
+
+use std::collections::BTreeMap;
+
+struct Groups {
     parent: Vec<usize>,
-    size: Vec<usize>,
-    sets: usize,
+    size: Vec<usize>, // only meaningful at a root
+    count: usize,
 }
 
-impl Dsu {
-    fn new(n: usize) -> Self {
-        Dsu {
-            parent: (0..n).collect(),
-            size: vec![1; n],
-            sets: n,
+impl Groups {
+    fn new(items: usize) -> Self {
+        Groups {
+            parent: (0..items).collect(),
+            size: vec![1; items],
+            count: items,
         }
     }
-    fn find(&mut self, mut x: usize) -> usize {
-        while self.parent[x] != x {
-            self.parent[x] = self.parent[self.parent[x]]; // path halving
-            x = self.parent[x];
+
+    /// The root of the item's group. Panics if `item` is out of range.
+    fn find(&mut self, mut item: usize) -> usize {
+        while self.parent[item] != item {
+            // path halving: point at the grandparent, then move there
+            self.parent[item] = self.parent[self.parent[item]];
+            item = self.parent[item];
         }
-        x
+        item
     }
-    /// returns true if a and b were in different sets (i.e. this edge MERGED two components)
+
+    /// Joins the two groups. `false` means they were one group already.
     fn union(&mut self, a: usize, b: usize) -> bool {
-        let (mut ra, mut rb) = (self.find(a), self.find(b));
-        if ra == rb {
+        let (mut big, mut small) = (self.find(a), self.find(b));
+        if big == small {
             return false;
         }
-        if self.size[ra] < self.size[rb] {
-            std::mem::swap(&mut ra, &mut rb);
+        if self.size[big] < self.size[small] {
+            std::mem::swap(&mut big, &mut small);
         }
-        self.parent[rb] = ra;
-        self.size[ra] += self.size[rb];
-        self.sets -= 1;
+        self.parent[small] = big;
+        self.size[big] += self.size[small];
+        self.count -= 1;
         true
     }
+
     fn connected(&mut self, a: usize, b: usize) -> bool {
         self.find(a) == self.find(b)
     }
+
+    /// Every group, members in rising order, groups ordered by their first member.
+    fn members(&mut self) -> Vec<Vec<usize>> {
+        let mut by_root: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for item in 0..self.parent.len() {
+            let root = self.find(item);
+            by_root.entry(root).or_default().push(item);
+        }
+        let mut groups: Vec<Vec<usize>> = by_root.into_values().collect();
+        groups.sort();
+        groups
+    }
+
+    /// Steps from the item to its root, without changing the tree.
+    fn depth(&self, mut item: usize) -> usize {
+        let mut steps = 0;
+        while self.parent[item] != item {
+            item = self.parent[item];
+            steps += 1;
+        }
+        steps
+    }
+
+    fn deepest(&self) -> (usize, usize) {
+        (0..self.parent.len())
+            .map(|i| (self.depth(i), i))
+            .max()
+            .unwrap_or((0, 0))
+    }
+
+    fn root_without_changes(&self, mut item: usize) -> usize {
+        while self.parent[item] != item {
+            item = self.parent[item];
+        }
+        item
+    }
+}
+
+/// The slow, obvious version: every item carries a group label.
+struct Labels(Vec<usize>);
+
+impl Labels {
+    fn union(&mut self, a: usize, b: usize) -> bool {
+        let (keep, replace) = (self.0[a], self.0[b]);
+        if keep == replace {
+            return false;
+        }
+        for label in &mut self.0 {
+            if *label == replace {
+                *label = keep;
+            }
+        }
+        true
+    }
+
+    fn members(&self) -> Vec<Vec<usize>> {
+        let mut by_label: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (item, &label) in self.0.iter().enumerate() {
+            by_label.entry(label).or_default().push(item);
+        }
+        let mut groups: Vec<Vec<usize>> = by_label.into_values().collect();
+        groups.sort();
+        groups
+    }
+}
+
+struct Rng(u64);
+impl Rng {
+    fn below(&mut self, n: usize) -> usize {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 % n as u64) as usize
+    }
+}
+
+fn check_against_labels() {
+    let mut rng = Rng(0x5EED);
+    for _ in 0..500 {
+        let n = 1 + rng.below(30);
+        let mut fast = Groups::new(n);
+        let mut slow = Labels((0..n).collect());
+        for _ in 0..rng.below(60) {
+            let (a, b) = (rng.below(n), rng.below(n));
+            assert_eq!(fast.union(a, b), slow.union(a, b), "union({a}, {b})");
+            let (c, d) = (rng.below(n), rng.below(n));
+            assert_eq!(fast.connected(c, d), slow.0[c] == slow.0[d]);
+            let groups = slow.members();
+            assert_eq!(fast.count, groups.len());
+            assert_eq!(fast.members(), groups);
+        }
+    }
+}
+
+/// One large group takes in single items. Both argument orders are tried, so a rule that
+/// follows the argument order instead of the sizes builds a long chain in one of them.
+fn check_newcomers_stay_near_the_root() {
+    const N: usize = 1_000;
+    for newcomer_first in [false, true] {
+        let mut groups = Groups::new(N);
+        for item in 1..N {
+            let root = groups.root_without_changes(0);
+            if newcomer_first {
+                groups.union(item, root);
+            } else {
+                groups.union(root, item);
+            }
+        }
+        let (depth, _) = groups.deepest();
+        assert!(depth <= 1, "one big group took in singles, depth {depth}");
+    }
+}
+
+/// Joining equal groups, round after round, is how union by size gets its tallest tree.
+/// Roots are joined directly, so no walk shortens a path while the tree is built.
+fn check_tallest_tree_and_halving() {
+    const N: usize = 1_024;
+    let mut groups = Groups::new(N);
+    let mut width = 1;
+    while width < N {
+        for start in (0..N).step_by(width * 2) {
+            let a = groups.root_without_changes(start);
+            let b = groups.root_without_changes(start + width);
+            groups.union(a, b);
+        }
+        width *= 2;
+    }
+    let (before, item) = groups.deepest();
+    assert_eq!(before, 10, "the tallest tree for 1,024 items has depth 10");
+    groups.find(item);
+    let after = groups.depth(item);
+    assert_eq!(after, 5, "one find should halve the walked path");
+    println!("1,024 items: deepest item {before} steps from the root, {after} after one find");
 }
 
 fn main() {
-    // computers in a network, cables are undirected
-    let names = ["a", "b", "c", "d", "e", "f"];
-    let cables = [(0, 1), (1, 2), (3, 4), (2, 0)]; // last one is redundant (forms a loop)
-    let mut dsu = Dsu::new(names.len());
-    for (x, y) in cables {
-        let merged = dsu.union(x, y);
-        println!(
-            "cable {}-{}: {}",
-            names[x],
-            names[y],
-            if merged {
-                "joins two groups"
-            } else {
-                "redundant (already connected)"
-            }
-        );
+    // library records, and pairs that a librarian marked as "same work"
+    let records = [
+        "Emma (1816)",
+        "Emma, annotated",
+        "Persuasion",
+        "Emma audiobook",
+        "Persuasion, large print",
+        "Sanditon",
+    ];
+    let mut works = Groups::new(records.len());
+    for (a, b) in [(0, 1), (2, 4), (3, 1), (0, 3)] {
+        let news = if works.union(a, b) {
+            "joins two groups"
+        } else {
+            "already known"
+        };
+        println!("{} = {}: {news}", records[a], records[b]);
     }
-    println!("groups: {}", dsu.sets);
-    let root_f = dsu.find(5);
-    let f_alone = dsu.size[root_f] == 1;
-    println!(
-        "a~c {} a~d {} d~e {} f alone {f_alone}",
-        dsu.connected(0, 2),
-        dsu.connected(0, 3),
-        dsu.connected(3, 4)
-    );
-    assert_eq!(dsu.sets, 3);
-
-    // Kruskal-style: minimum spanning tree = take cheapest edges that merge components
-    let mut weighted = vec![(4, 0, 1), (1, 1, 2), (3, 0, 2), (2, 2, 3), (7, 1, 3)];
-    weighted.sort();
-    let mut dsu = Dsu::new(4);
-    let mst: Vec<_> = weighted
-        .into_iter()
-        .filter(|&(_, a, b)| dsu.union(a, b))
-        .collect();
-    println!(
-        "MST edges (w,a,b): {mst:?} total={}",
-        mst.iter().map(|e| e.0).sum::<i32>()
-    );
-    assert_eq!(mst.iter().map(|e| e.0).sum::<i32>(), 6);
-
-    let mut big = Dsu::new(1_000_000);
-    for i in 1..1_000_000 {
-        big.union(i - 1, i);
+    println!("works: {}", works.count);
+    for group in works.members() {
+        let titles: Vec<_> = group.iter().map(|&i| records[i]).collect();
+        println!("  {}", titles.join(" | "));
     }
-    println!(
-        "1M chain merged: {} set(s), find is fast thanks to compression",
-        big.sets
-    );
+    assert_eq!(works.members(), [vec![0, 1, 3], vec![2, 4], vec![5]]);
+
+    check_against_labels();
+    check_newcomers_stay_near_the_root();
+    check_tallest_tree_and_halving();
+    println!("all checks passed");
 }

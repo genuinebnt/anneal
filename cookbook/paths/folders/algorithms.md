@@ -15,7 +15,7 @@ Ordered simple -> intermediate -> advanced (then alphabetical). Skim `Use in:` a
 | 9 | [`dp_lcs_diff`](../../examples/algorithms/dp_lcs_diff.rs) | intermediate | longest common subsequence, and turning it into a diff between two versions. |
 | 10 | [`index_graph`](../../examples/algorithms/index_graph.rs) | intermediate | index-based graph, interning names once, iterative BFS. |
 | 11 | [`shortest_path_zoo`](../../examples/algorithms/shortest_path_zoo.rs) | intermediate | shortest-path zoo: Bellman-Ford, Floyd-Warshall, A*, bidirectional BFS, 0-1 BFS (and which to choose). |
-| 12 | [`union_find`](../../examples/algorithms/union_find.rs) | intermediate | union-find (disjoint sets): "are these two connected?" in near-constant time. |
+| 12 | [`union_find`](../../examples/algorithms/union_find.rs) | intermediate | union-find (disjoint sets): keep items in groups while "these two belong together" facts arrive. |
 | 13 | [`aho_corasick`](../../examples/algorithms/aho_corasick.rs) | advanced | Aho-Corasick multi-pattern matching: trie + failure links + dictionary links. |
 | 14 | [`backtracking_branch_bound`](../../examples/algorithms/backtracking_branch_bound.rs) | advanced | backtracking, branch and bound, and constraint propagation on NP-hard problems. |
 | 15 | [`combinatorial_generation`](../../examples/algorithms/combinatorial_generation.rs) | advanced | generating combinatorial objects as iterators (Gray codes, combinations, permutations, partitions, Catalan, necklaces, de Bruijn). |

@@ -1225,6 +1225,14 @@
      ]
     ],
     "recipes": []
+   },
+   {
+    "title": "Data from many sources",
+    "sections": [],
+    "recipes": [
+     "examples/database/record_matching.rs",
+     "examples/database/evidence_log.rs"
+    ]
    }
   ]
  },

@@ -744,7 +744,7 @@ Examples with titles from the guides: [HyperLogLog: the analysis of a near-optim
 | 5.4.5 | `mst_bridges` | recipe · advanced | minimum spanning tree (Prim, Kruskal) and bridges / articulation points via iterative low-link DFS |
 | 5.4.6 | `bipartite_matching` | recipe · intermediate | bipartite matching (Kuhn's augmenting paths): assign each worker to at most one job |
 | 5.4.7 | `max_flow_dinic` | recipe · advanced | max-flow with Dinic's algorithm, min-cut extraction, bipartite matching and project selection |
-| 5.4.8 | `union_find` | recipe · intermediate | union-find (disjoint sets): "are these two connected?" in near-constant time |
+| 5.4.8 | `union_find` | recipe · intermediate | union-find (disjoint sets): keep items in groups while "these two belong together" facts arrive |
 | 5.4.9 | `tarjan_scc` | recipe · advanced | strongly connected components (iterative Tarjan): find circular groups in a directed graph |
 
 **Further resources:** 15 article or blog, 1 code load; 1 broken, 0 unconfirmed.

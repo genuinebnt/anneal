@@ -5,28 +5,28 @@ chapter = "Graph algorithms"
 chapter_order = 4
 order = 196
 kind = "recipe"
-lede = "union-find (disjoint sets): \"are these two connected?\" in near-constant time."
+lede = "union-find (disjoint sets): keep items in groups while \"these two belong together\" facts arrive."
 level = "intermediate"
 code = ["examples/algorithms/union_find.rs"]
 
 [[sections]]
 heading = "Where you would use it"
 body = """
-<ul class="cb-g-uses"><li>connected components of <strong>undirected</strong> relations</li><li>Kruskal's MST</li><li>grouping duplicates</li><li>incremental connectivity</li></ul>
+<ul class="cb-g-uses"><li>grouping connected items</li><li>image regions</li><li>joining equal variables</li></ul>
 """
 
 [[sections]]
 heading = "Common uses"
 body = """
-<ul class="cb-g-uses"><li>network connectivity</li><li>Kruskal MST</li><li>image segmentation</li><li>deduplicating equivalent records</li></ul>
+<ul class="cb-g-uses"><li>network connectivity</li><li>image segmentation</li><li>merging matched records</li><li>type inference</li></ul>
 """
 
 [[sections]]
 heading = "Design notes"
 body = """
-Each set is a tree; `find` returns the root. Two optimisations make it effectively O(1) amortised (inverse Ackermann): **path compression** (flatten trees while finding) and **union by size** (attach the small tree under the big).
+Each group is a tree stored in a vector of parent numbers; `find` walks to the root, which stands for the group. **Union by size** hangs the smaller tree under the larger root, so no path is longer than log2(n). Path halving makes every other item on a walked path skip one step, so later walks are shorter.
 
-**Note.** This answers connectivity for **undirected** edges and can only **add** edges; it cannot detect directed cycles.
+It can join groups but cannot split them, and it does not remember why two items are together. The checks compare it with a slow version that relabels items, on seeded random pairs, and measure tree depth.
 """
 
 [[sections]]
