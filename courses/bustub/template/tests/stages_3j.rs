@@ -343,6 +343,31 @@ fn s3j_02_a_full_join_takes_no_filter() {
     assert!(p.contains("Filter { predicate="), "a filter above a FULL join cannot move:\n{p}");
     assert!(!p.contains("filter="), "no scan received it:\n{p}");
     assert_eq!(bag(&db, sql), plain(&db, sql), "the answer");
+    // a filter on one side only: below a FULL join it would let the other side's unmatched rows through, padded (3j-03 may turn this
+    // join into a LEFT join first, which is right: a.y = 10 rejects every row padded on a's side)
+    let one_side = "select a.x, b.x from a full join b on a.x = b.x where a.y = 10";
+    assert_eq!(
+        bag(&db, one_side),
+        vec!["1 integer_null".to_string()],
+        "only a.y = 10 survives: the row (1, 10) has no partner in b, and no row of b may come back padded"
+    );
+}
+
+#[test]
+fn s3j_02_a_filter_above_an_outer_join_on_true_stays_a_filter() {
+    // With ON TRUE every left row matches every right row, so nothing is padded and WHERE keeps only a.y = 10. Moving the WHERE into
+    // ON would turn it into a join condition: the other left rows would come back padded with NULLs.
+    let (a, b) = sample();
+    let db = db_ab(&a, &b);
+    let want: Vec<String> = ["1 200", "1 201", "1 300", "1 400", "1 500"].iter().map(|s| s.to_string()).collect();
+    for kind in ["left", "full"] {
+        let sql = format!("select a.x, b.z from a {kind} join b on true where a.y = 10");
+        assert_eq!(
+            bag(&db, &sql),
+            want,
+            "{kind} join on true where a.y = 10 keeps exactly the rows of a.y = 10; a WHERE above an outer join is not its ON"
+        );
+    }
 }
 
 #[test]

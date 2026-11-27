@@ -140,7 +140,8 @@ impl<'c, 'a> Optimizer<'c, 'a> {
         if let PlanKind::Filter { predicate } = &optimized.kind {
             let child = &optimized.children[0];
             if let PlanKind::NestedLoopJoin { predicate: join_predicate, join_type } = &child.kind {
-                if Self::is_predicate_true(join_predicate) {
+                // Only an inner join: a filter above an outer join also removes padded rows, which the same condition in ON keeps.
+                if *join_type == JoinType::Inner && Self::is_predicate_true(join_predicate) {
                     let (left, right) = (&child.children[0], &child.children[1]);
                     let rewritten = Self::rewrite_expression_for_join(
                         predicate,
