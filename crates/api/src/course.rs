@@ -210,7 +210,8 @@ pub async fn concept(State(s): State<AppState>, Path((course, id)): Path<(String
 
 /// The ids of the concepts marked as read.
 async fn read_concepts(s: &AppState, course: &str) -> ApiResult<std::collections::HashSet<String>> {
-    let rows: Vec<(String,)> = sqlx::query_as("SELECT concept FROM course_concept_state WHERE course = $1").bind(course).fetch_all(&s.db).await?;
+    let rows: Vec<(String,)> =
+        sqlx::query_as("SELECT concept FROM course_concept_state WHERE course = $1 AND unread_at IS NULL").bind(course).fetch_all(&s.db).await?;
     Ok(rows.into_iter().map(|(c,)| c).collect())
 }
 
@@ -224,9 +225,22 @@ pub async fn set_concept_read(State(s): State<AppState>, Path((course, id)): Pat
     let c = find(&s, &course)?;
     c.concept(&id).ok_or_else(|| ApiError::NotFound(format!("concept {id}")))?;
     if body.read {
-        sqlx::query("INSERT INTO course_concept_state (course, concept) VALUES ($1, $2) ON CONFLICT DO NOTHING").bind(&c.id).bind(&id).execute(&s.db).await?;
+        // the first time it was read stays; a concept marked unread before is read again
+        sqlx::query(
+            "INSERT INTO course_concept_state (course, concept) VALUES ($1, $2)
+             ON CONFLICT (course, concept) DO UPDATE SET unread_at = NULL",
+        )
+        .bind(&c.id)
+        .bind(&id)
+        .execute(&s.db)
+        .await?;
     } else {
-        sqlx::query("DELETE FROM course_concept_state WHERE course = $1 AND concept = $2").bind(&c.id).bind(&id).execute(&s.db).await?;
+        // never deleted: the row keeps when it was first read, and is marked unread
+        sqlx::query("UPDATE course_concept_state SET unread_at = now() WHERE course = $1 AND concept = $2 AND unread_at IS NULL")
+            .bind(&c.id)
+            .bind(&id)
+            .execute(&s.db)
+            .await?;
     }
     Ok(Json(json!({ "read": body.read })))
 }
