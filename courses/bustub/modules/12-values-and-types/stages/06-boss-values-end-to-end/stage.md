@@ -1,7 +1,7 @@
 **Where this fits.** The end of the values module: the pieces together, then BusTub's own `type_test`.
 
 > [!CHECK] A value is computed (`a * b`), stored in a page, read back and compared with the value you started from. Name two bugs in different stages of this module that this one round trip can reveal even though each stage's own tests passed.
-> ||A cast or arithmetic that produces a value of the wrong *type* (say a `BIGINT` where an `INTEGER` was promised) serialises with the wrong width, so reading back with the stated type gives a different number or garbage; a comparison that is wrong for some pair of types makes the final `compare_equals` disagree although each side was right. Stage tests check one function at a time against its own oracle; the chain checks that the functions agree on what a value of a type *is*.||
+> ||Each stage's tests check one function against its own oracle, so two functions can each pass and still disagree about a value: a cast that produces NULL in a form the comparison does not treat as NULL, or a comparison that is wrong for one pair of types, makes the final `compare_equals` disagree although every step passed its own tests. Stage tests check one function at a time against its own oracle; the chain checks that the functions agree on what a value of a type *is*.||
 >
 > - Which function produces the type the reader is told?
 > - Which function decides the final answer?

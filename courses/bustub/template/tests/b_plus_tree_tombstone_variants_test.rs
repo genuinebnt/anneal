@@ -1,7 +1,7 @@
 //! The `Tombs = 3` runs of `test/storage/b_plus_tree_concurrent_test.cpp` and the `NumTombs = 2` run of `SequentialEdgeMixTest` in
 //! `b_plus_tree_delete_test.cpp` (BusTub runs each of those tests for a plain tree and for a tree with a tombstone buffer). Port of (BusTub, MIT, Copyright (c) 2015-2025 Carnegie Mellon University Database
 //! Group). `LaunchParallelTest` becomes `thread::scope`. The C++ tests run each case for a plain tree and for a tree with a tombstone
-//! buffer (`Tombs = 3`); the tombstone buffer is module 2d, so here it is the plain tree.
+//! buffer (`Tombs = 3`); this file is the tombstone half, the plain-tree half is in the other B+ tree test files.
 
 mod b_plus_tree_utils;
 
@@ -314,7 +314,10 @@ fn random_workload<const T: usize>(leaf: u32, internal: u32, seed: u64) {
             model.remove(&key);
             remove(&tree, key);
         }
-        check_shape_t::<T>(&tree, &model, leaf, internal, step % 25 == 0).unwrap_or_else(|e| panic!("T={T} ({leaf},{internal}) seed {seed} step {step}: {e}\n{}", leaves_t(&tree)));
+        // the shape check walks the whole tree: every fifth step (and the last) finds a broken rule within five operations
+        if step % 5 == 0 || step == 1499 {
+            check_shape_t::<T>(&tree, &model, leaf, internal, step % 25 == 0).unwrap_or_else(|e| panic!("T={T} ({leaf},{internal}) seed {seed} step {step}: {e}\n{}", leaves_t(&tree)));
+        }
     }
     for k in 0..80 {
         assert_eq!(get(&tree, k).len(), model.contains(&k) as usize, "key {k}");

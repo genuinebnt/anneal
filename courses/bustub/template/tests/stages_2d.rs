@@ -330,8 +330,12 @@ fn s2d_03_threads_deleting_and_inserting_keep_every_live_key() {
         }
         tx.send(()).unwrap();
     });
-    assert!(rx.recv_timeout(Duration::from_secs(90)).is_ok(), "the workload did not finish: a deadlock?");
-    handle.join().unwrap();
+    match rx.recv_timeout(Duration::from_secs(90)) {
+        Ok(()) => handle.join().unwrap(),
+        // a worker that panicked (a failed assert, a todo!) ends the scope early: show its message, not a deadlock
+        Err(mpsc::RecvTimeoutError::Disconnected) => std::panic::resume_unwind(handle.join().unwrap_err()),
+        Err(mpsc::RecvTimeoutError::Timeout) => panic!("the workload did not finish in 90 s: a deadlock?"),
+    }
 }
 
 #[test]

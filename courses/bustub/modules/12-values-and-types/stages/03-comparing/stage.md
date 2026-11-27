@@ -19,6 +19,8 @@ In Rust, `1 == 2` is `false` and `NULL` does not exist. In SQL, `NULL = 1` is ne
 
 The tests are properties: all six operators on random integers of random types agree with `i128`'s `Ord`; a NULL on either side gives `Null` for every operator; the six answers agree with each other (`=`/`<>` opposites, `<`/`>=` opposites, `<=`/`>` opposites, `a < b` is `b > a`); `<` is transitive; decimals compare as floats; strings compare bytewise; a number and a string compare as numbers; incomparable types are errors; exact equality.
 
+The laws hold within one family of types (integers among themselves, decimals, strings). Across families they do not, and the tests do not pretend they do: as in BusTub, `5 < '10'` converts the string and is True, while `'10' > 5` compares text and is False; a decimal NaN compares equal to everything; and `tinyint 5 < '1000'` is an out-of-range error.
+
 ## Your freedom
 
 One private function returning `Option<Ordering>` and six one-liners (the reference), or six independent matches; how you convert the mixed cases; where the comparability check goes.
@@ -76,6 +78,7 @@ Optional. Predict first, then run.
 
 1. **Two-valued by mistake.** Return `False` for NULL comparisons. Which property fails first, and what real query would give a wrong answer?
 2. **NaN.** Compare `decimal(NaN)` with `decimal(1.0)`. What does yours say, and what does PostgreSQL say?
+3. **Order that depends on the side.** Find two values of different types for which `a < b` and `b > a` disagree in your engine. Which conversion rule causes it, and what rule would make every comparison symmetric?
 
 ## Other designs
 

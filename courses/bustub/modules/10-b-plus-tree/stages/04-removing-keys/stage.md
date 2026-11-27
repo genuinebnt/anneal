@@ -24,7 +24,7 @@ Which sibling you prefer when both could lend, how you repair the parent, whethe
 
 ## The Rust toolbox
 
-**Several guards at once.** Rebalancing needs write guards on the parent, the node and a sibling. Take them in a fixed order (parent first, then the siblings left to right) so two threads never wait for each other. `Option<WritePageGuard>` for "a sibling that may not exist".
+**Several guards at once.** Rebalancing needs write guards on the parent, the node and a sibling. Take them in a fixed order, parent first, then the siblings. With the parent write-latched no other writer can reach its children, so the order among the siblings cannot deadlock here; a fixed order is still the habit that keeps the code safe when that stops being true. `Option<WritePageGuard>` for "a sibling that may not exist".
 
 **Free pages after you let go.** `delete_page` fails while the page is pinned, so collect the ids to free in a `Vec<PageId>` and delete them once the guards are dropped, at the end of the operation.
 
@@ -52,6 +52,7 @@ Which sibling you prefer when both could lend, how you repair the parent, whethe
 - Ascending, descending and scattered removals keep every rule down to empty.
 - After removing most keys the tree is a single root leaf again.
 - Pages that left the tree are deleted from the pool.
+- An iterator left open while its leaf shrinks or is merged away finishes with real keys in order: the position your 2c-03 iterator remembers can go stale between two calls.
 - Random inserts and removes on random shapes: after every operation the rules hold and the scan equals the model.
 
 ## Hints
@@ -78,7 +79,7 @@ A delete without underflow costs one leaf write; a borrow three pages; a merge t
 
 Optional. Predict first, then run.
 
-1. **Merge, never borrow.** Skip borrowing. Which tests fail? (The shape checker should stay quiet; what does the tree cost?)
+1. **Merge, never borrow.** Skip borrowing. Which tests fail, and which rule does the shape checker report? (Merge a 1-pair leaf into a 3-pair sibling with a leaf maximum of 4 and count.) What does the tree cost?
 2. **Lazy delete.** Delete from the leaf and rebalance only when it is empty. Which rule breaks, and what does the tree look like after a thousand deletes? This is the idea tombstones take further in module 2d.
 
 ## Other designs

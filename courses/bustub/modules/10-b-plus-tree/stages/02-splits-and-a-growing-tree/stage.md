@@ -28,9 +28,9 @@ How you find the parent after a split (remember the path on the way down, or sea
 
 **Splitting a page's entries.** Collect the entries into a `Vec<(K, PageId)>`, insert the new one with `partition_point`, then split the vector with `entries.split_off(keep)` or `entries[keep..]`: it is easier to reason about than shifting bytes in place, and the copy is small (a page). `Vec::insert(at, x)` places the new entry; `div_ceil` rounds up.
 
-**`partition_point` to find a slot.** `entries.partition_point(|(k, _)| cmp.compare(k, &key).is_le())` is "how many entries are at or below the key": the slot of the child that covers it.
+**`partition_point` to find a slot.** On a slice partitioned by a predicate (true first, then false), `slice.partition_point(pred)` returns the first index where it is false. With "at or below the target" as the predicate over sorted keys, that is how many keys are at or below the target. Which keys of an internal page belong in the slice is a question for you (see the hints).
 
-**A loop instead of recursion.** `loop { let Some(parent) = path.pop() else { /* new root */ return }; if parent has room { insert; return } else { split parent; key = middle; continue } }` walks up the tree; every iteration deals with one level.
+**What one level of the climb carries.** After a split you hand the level above three things: the left page, the separator and the new right page. Decide whether you climb by recursion or by popping a path you kept on the way down, and what ends the climb.
 
 **Creating a page.** `let id = self.bpm.new_page(); let mut guard = self.bpm.write_page(id);` then format it before using it: `new_page` hands out a zeroed page.
 
@@ -52,6 +52,10 @@ How you find the parent after a split (remember the path on the way down, or sea
 - For random shapes (`leaf_max` 2 to 8, `internal_max` 3 to 6) and random key orders, `check_shape` holds after every insert and every key is found.
 
 ## Hints
+
+### Slot 0 of an internal page
+
+An internal page with `n` children has `n - 1` separators, but it is usually stored as `n` key slots with the first one unused. What does that unused slot hold, and what happens to a binary search that includes it?
 
 ### Do it on paper with `L = 3, M = 3`
 

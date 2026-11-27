@@ -324,6 +324,24 @@ fn s2c_03_iterators_compare_by_position_and_the_end_is_reached_exactly_once() {
 }
 
 #[test]
+fn s2c_03_an_open_iterator_survives_a_split_of_its_leaf() {
+    // Nothing is latched between two calls of next, so the tree may change under an open iterator. A split moves pairs out of the
+    // leaf it is on: the scan must not read a slot that is gone, and goes on with real keys in order.
+    let bpm = new_pool(50);
+    let tree = new_tree(&bpm, 4, 4);
+    for k in [1, 2, 3] {
+        insert(&tree, k);
+    }
+    let mut it = tree.begin();
+    assert_eq!(it.next().map(|(k, _)| k.get_as_integer()), Some(1), "the scan starts at the smallest key");
+    assert_eq!(it.next().map(|(k, _)| k.get_as_integer()), Some(2), "and goes on in order");
+    insert(&tree, 4); // the leaf the iterator is on reaches its maximum and splits
+    let rest: Vec<i64> = it.map(|(k, _)| k.get_as_integer()).collect();
+    assert!(rest.iter().all(|k| (3..=4).contains(k)), "after the split the scan returns only real keys it has not passed: {rest:?}");
+    assert!(rest.windows(2).all(|w| w[0] < w[1]), "and still in order: {rest:?}");
+}
+
+#[test]
 fn s2c_03_an_iterator_keeps_no_page_latched_or_pinned() {
     // five frames, ten live iterators: if an iterator pinned a page, the pool would run out
     let bpm = new_pool(5);
@@ -355,6 +373,29 @@ proptest! {
 }
 
 // ---- 2c-04 · Remove: borrow, merge, shrink ---------------------------------------------------------------------------------
+
+#[test]
+fn s2c_04_an_open_iterator_survives_its_leaf_shrinking_or_merging_away() {
+    // Removes under an open iterator shrink the leaf it is on, and merges free it. The scan must not read a slot or a page that is
+    // gone: it finishes, and every key it returns is real and in order.
+    let bpm = new_pool(80);
+    let tree = new_tree(&bpm, 3, 4);
+    for k in 0..60 {
+        insert(&tree, k);
+    }
+    let mut it = tree.begin();
+    let mut seen = vec![];
+    for _ in 0..20 {
+        seen.extend(it.next().map(|(k, _)| k.get_as_integer()));
+    }
+    for k in 15..45 {
+        remove(&tree, k); // the iterator's leaf and its neighbours shrink and merge
+    }
+    seen.extend(it.map(|(k, _)| k.get_as_integer()));
+    assert!(seen.iter().all(|k| (0..60).contains(k)), "the scan returns only keys that were inserted: {seen:?}");
+    assert!(seen.windows(2).all(|w| w[0] < w[1]), "in order, each at most once: {seen:?}");
+    assert_eq!(keys_by_scan(&tree), (0..15).chain(45..60).collect::<Vec<_>>(), "a fresh scan afterwards sees exactly the keys left");
+}
 
 #[test]
 fn s2c_04_removing_a_key_that_is_not_there_changes_nothing() {
@@ -582,7 +623,7 @@ fn s2c_05_a_scan_that_runs_while_writers_work_finishes_and_leaves_a_sound_tree()
     within("scan and writers", || {
         let bpm = new_pool(80);
         let tree = new_tree(&bpm, 3, 4);
-        let mut live: BTreeSet<i64> = (0..600).step_by(3).collect();
+        let live: BTreeSet<i64> = (0..600).step_by(3).collect();
         for &k in &live {
             insert(&tree, k); // the stable keys: multiples of 3
         }
@@ -590,9 +631,10 @@ fn s2c_05_a_scan_that_runs_while_writers_work_finishes_and_leaves_a_sound_tree()
             for t in 0..2i64 {
                 let tree = &tree;
                 scope.spawn(move || {
-                    for i in 0..300 {
-                        let k = (i * 3 + 1 + t) % 600; // never a multiple of 3
-                        if i % 2 == 0 { insert(tree, k); } else { remove(tree, k); }
+                    // insert 200 keys, then remove them again: leaves split while the scan runs, then shrink and merge under it
+                    for i in 0..400 {
+                        let k = (i % 200) * 3 + 1 + t; // never a multiple of 3, and each writer has its own keys
+                        if i < 200 { insert(tree, k); } else { remove(tree, k); }
                     }
                 });
             }
@@ -606,13 +648,7 @@ fn s2c_05_a_scan_that_runs_while_writers_work_finishes_and_leaves_a_sound_tree()
                 }
             });
         });
-        // The two writers touch different keys, so the final contents do not depend on how they interleaved.
-        for t in 0..2i64 {
-            for i in 0..300 {
-                let k = (i * 3 + 1 + t) % 600;
-                if i % 2 == 0 { live.insert(k); } else { live.remove(&k); }
-            }
-        }
+        // Each writer removed every key it inserted, so only the stable keys are left, however they interleaved.
         check_shape(&tree, &live, 3, 4, true).unwrap_or_else(|e| panic!("{e}"));
         assert_nothing_pinned(&bpm);
     });

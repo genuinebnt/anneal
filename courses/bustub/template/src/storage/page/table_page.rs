@@ -31,7 +31,7 @@ impl<B: AsRef<[u8]>> TablePage<B> {
         todo!("3b-03: the u16 at byte 4")
     }
 
-    /// How many of them are marked deleted.
+    /// How many times a tuple went from live to deleted. The count never goes down: undeleting a tuple does not lower it.
     pub fn get_num_deleted_tuples(&self) -> u32 {
         todo!("3b-03: the u16 at byte 6")
     }

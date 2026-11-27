@@ -12,6 +12,7 @@ use std::marker::PhantomData;
 use crate::buffer::buffer_pool_manager::BufferPoolManager;
 use crate::common::config::PageId;
 use crate::storage::page::b_plus_tree_leaf_page::BPlusTreeLeafPage;
+use crate::storage::page::b_plus_tree_page::BPlusTreePage;
 //~ // TODO(2c-03): your imports go here.
 // @end
 
@@ -47,6 +48,11 @@ impl<'a, K: FixedSize + Clone, V: FixedSize + Clone, const TOMBS: usize> IndexIt
     fn skip_past_the_end_of_leaves(&mut self) {
         while let Some(page_id) = self.page_id {
             let guard = self.bpm.read_page(page_id);
+            // a leaf merged away and freed since the last call is no longer a leaf: the scan cannot go on from it
+            if !BPlusTreePage::new(&guard[..]).is_leaf_page() {
+                self.page_id = None;
+                return;
+            }
             let leaf = BPlusTreeLeafPage::<_, K, V, TOMBS>::new(&guard[..]);
             // @begin 2d-01
             // a deleted (tombstoned) pair is not part of the scan: step over it
@@ -82,14 +88,28 @@ impl<K: FixedSize + Clone, V: FixedSize + Clone, const TOMBS: usize> Iterator fo
     /// The current pair, and move to the next one.
     fn next(&mut self) -> Option<(K, V)> {
         // @begin 2c-03
-        let page_id = self.page_id?;
-        let pair = {
-            let guard = self.bpm.read_page(page_id);
-            BPlusTreeLeafPage::<_, K, V, TOMBS>::new(&guard[..]).entry_at(self.index)
-        };
-        self.index += 1;
-        self.skip_past_the_end_of_leaves();
-        Some(pair)
+        // Nothing is latched between calls, so the leaf may have shrunk (a remove, a split) or stopped being a leaf (merged away)
+        // since the position was found: check under the latch, and move on instead of reading a slot that is gone.
+        loop {
+            let page_id = self.page_id?;
+            let pair = {
+                let guard = self.bpm.read_page(page_id);
+                if !BPlusTreePage::new(&guard[..]).is_leaf_page() {
+                    self.page_id = None;
+                    return None;
+                }
+                let leaf = BPlusTreeLeafPage::<_, K, V, TOMBS>::new(&guard[..]);
+                (self.index < leaf.size()).then(|| leaf.entry_at(self.index))
+            };
+            match pair {
+                Some(pair) => {
+                    self.index += 1;
+                    self.skip_past_the_end_of_leaves();
+                    return Some(pair);
+                }
+                None => self.skip_past_the_end_of_leaves(),
+            }
+        }
         //~ todo!("2c-03: copy the pair at the current position out of its leaf (latch, read, unlatch), advance, and return the pair; None at the end")
         // @end
     }

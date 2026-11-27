@@ -48,6 +48,7 @@ What an iterator holds (the pool, a leaf id, a slot, a copy of the current leaf'
 - `begin_at` starts at the first key not less than its argument (present, absent, below all, above all).
 - Iterators compare by position; the end is reached exactly once.
 - An iterator keeps no page latched or pinned: ten live iterators in a five-frame pool, and the tree can still be changed.
+- An open iterator survives a split of its leaf: it never reads a slot that is gone, and goes on with real keys in order.
 - A property: scans and `begin_at(k)` equal the sorted model and its `range(k..)` for random trees.
 
 ## Hints

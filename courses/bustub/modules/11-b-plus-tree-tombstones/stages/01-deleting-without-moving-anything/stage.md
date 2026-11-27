@@ -72,7 +72,7 @@ If a leaf holds 511 pairs without tombstones and your buffer takes `4 + TOMBS * 
 
 A logical delete is a binary search and an append to the buffer (a few bytes written), against a shift of up to 8 KiB. Reads cost one extra check per key. The price is space (the buffer, and dead pairs that stay until the buffer overflows) and a scan that must step over dead pairs.
 
-**Measure it.** Delete a thousand keys from the middle of a 500-pair leaf with `TOMBS = 0` and with `TOMBS = 3`: count bytes moved (or time it) and predict the ratio.
+**Measure it.** Delete one key at a time from the middle of a 500-pair leaf, a thousand times (re-inserting it after each delete), with `TOMBS = 0` and with `TOMBS = 3`: count bytes moved (or time it) and predict the ratio.
 
 ## Experiment
 

@@ -67,7 +67,7 @@ impl<B: AsRef<[u8]>> TablePage<B> {
         // @end
     }
 
-    /// How many of them are marked deleted.
+    /// How many times a tuple went from live to deleted. The count never goes down: undeleting a tuple does not lower it.
     pub fn get_num_deleted_tuples(&self) -> u32 {
         // @begin 3b-03
         u16::from_le_bytes(self.bytes()[NUM_DELETED_OFFSET..NUM_DELETED_OFFSET + 2].try_into().unwrap()) as u32

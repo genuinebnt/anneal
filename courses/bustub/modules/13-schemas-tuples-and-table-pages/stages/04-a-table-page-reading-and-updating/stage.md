@@ -30,7 +30,7 @@ Your layout (from the last stage), how you share slot-reading code between the t
 
 **Early `return Err(..)` with `?` helpers.** A small `fn check(&self, rid) -> Result<u32>` that validates the slot and returns its index avoids repeating the same three lines in the three functions.
 
-**Compare old and new metadata.** `if !old.is_deleted && meta.is_deleted { count += 1 }` is the whole counting rule.
+**Compare old and new metadata.** The counter moves only when a tuple goes from live to deleted; the metadata before and after an update say whether this one did. (Undeleting does not count back: the counter is BusTub's, one way.)
 
 **Property testing a stateful object.** The test keeps a `Vec` model next to the page; reading it is the specification of "what the page should hold now". Write the same kind of model for your own code when you debug.
 
