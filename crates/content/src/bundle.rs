@@ -1,4 +1,4 @@
-//! The learner-facing part of a course (`course.toml`, `lectures.toml`, `modules/`, `template/`) as one blob.
+//! The learner-facing part of a course (`course.toml`, `lectures.toml`, `concepts/`, `modules/`, `template/`) as one blob.
 //!
 //! The CLI's build script packs every course into its binary with this module, and the app serves one course's blob at
 //! `/courses-bundle/<id>`, so `anneal course update` can bring in new stages and tests without a new binary. The reference solution is
@@ -30,7 +30,7 @@ fn walk(base: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// The learner-facing files of the courses under `courses/` (only `only`, if given), as (path relative to `courses/`, bytes), in a fixed
-/// order: courses by id; per course its two files, then `modules/`, then `template/`.
+/// order: courses by id; per course its two files, then `concepts/`, `modules/` and `template/`.
 pub fn collect(courses: &Path, only: Option<&str>) -> Vec<(String, Vec<u8>)> {
     let mut files: Vec<PathBuf> = Vec::new();
     if let Ok(ids) = fs::read_dir(courses) {
@@ -46,7 +46,7 @@ pub fn collect(courses: &Path, only: Option<&str>) -> Vec<(String, Vec<u8>)> {
                     files.push(Path::new(&name).join(single));
                 }
             }
-            for sub in ["modules", "template"] {
+            for sub in ["concepts", "modules", "template"] {
                 walk(courses, &id.join(sub), &mut files);
             }
         }

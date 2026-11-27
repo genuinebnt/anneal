@@ -82,4 +82,14 @@ mod tests {
         assert!(dir.join(".complete").exists());
         let _ = fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn the_built_in_courses_carry_their_concept_articles_and_never_the_reference() {
+        let paths: Vec<&str> = entries(BLOB).into_iter().map(|(p, _)| p).collect();
+        if paths.is_empty() {
+            return; // built without a courses/ directory
+        }
+        assert!(paths.iter().any(|p| p.starts_with("bustub/concepts/") && p.ends_with(".md")), "concepts/ is packed");
+        assert!(!paths.iter().any(|p| p.split('/').nth(1) == Some("reference")), "reference/ is never packed");
+    }
 }

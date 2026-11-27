@@ -1,4 +1,4 @@
-//! Packs the learner-facing part of every course (course.toml, lectures.toml, modules/, template/) into one blob that is compiled into the
+//! Packs the learner-facing part of every course (course.toml, lectures.toml, concepts/, modules/, template/) into one blob that is compiled into the
 //! binary, so `cargo install --git ...` gives an `anneal` that can `course init` with no checkout of the repository. The reference solution
 //! is never included (it is not part of those directories). A missing `courses/` directory (a build context without it) gives an empty blob.
 //!
@@ -18,7 +18,7 @@ fn main() {
         let mut ids: Vec<_> = ids.flatten().map(|e| e.path()).filter(|p| p.join("course.toml").is_file()).collect();
         ids.sort();
         for id in ids {
-            for sub in ["modules", "template"] {
+            for sub in ["concepts", "modules", "template"] {
                 println!("cargo:rerun-if-changed={}", id.join(sub).display());
             }
             println!("cargo:rerun-if-changed={}", id.join("course.toml").display());

@@ -21,6 +21,7 @@ fn fixture() -> Fixture {
     let downloads = dir.path().join("downloads");
     for (path, text) in [
         ("demo/course.toml", "id = \"demo\"\n"),
+        ("demo/concepts/pages.md", "---\ntitle: Pages\n---\nA page.\n"),
         ("demo/modules/1a/stage.md", "# stage\n"),
         ("demo/template/src/lib.rs", "// start\n"),
         ("demo/reference/src/lib.rs", "// THE SOLUTION\n"),
@@ -65,7 +66,7 @@ async fn a_bundle_holds_the_learner_files_and_never_the_reference() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers["x-anneal-bundle-format"], bundle::FORMAT.to_string());
     let paths: Vec<&str> = bundle::unpack(&body).unwrap().into_iter().map(|(p, _)| p).collect();
-    assert_eq!(paths, ["demo/course.toml", "demo/modules/1a/stage.md", "demo/template/src/lib.rs"]);
+    assert_eq!(paths, ["demo/course.toml", "demo/concepts/pages.md", "demo/modules/1a/stage.md", "demo/template/src/lib.rs"]);
     assert!(!String::from_utf8_lossy(&body).contains("THE SOLUTION"));
     // the version endpoint names the same fingerprint, and it is the ETag
     let (_, _, v) = get(&f.app, "/courses-bundle/demo/version", None).await;
