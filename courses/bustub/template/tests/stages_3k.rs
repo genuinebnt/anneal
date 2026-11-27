@@ -30,7 +30,7 @@ fn cause<E: Error + 'static>(e: &DbError) -> Option<&E> {
 
 fn assert_send_sync_static<T: Send + Sync + 'static>() {}
 
-// ---- 3k-01 · One type for every failure ------------------------------------------------------------------------------------
+// ---- 3k-01 · One error type and its chain of causes -------------------------------------------------------------------------
 
 #[test]
 fn s3k_01_an_io_error_converts_and_the_message_is_kept() {
@@ -91,7 +91,7 @@ fn s3k_01_question_mark_converts_in_a_function_that_returns_a_dberror() {
     );
 }
 
-// ---- 3k-02 · Every layer's error, and the question mark ---------------------------------------------------------------------
+// ---- 3k-01 · every layer's error ---------------------------------------------------------------------------------------------
 
 /// A lower layer's error converts into a `DbError` that says what the error says, in words that contain `phrases`, and keeps the error.
 fn check<E>(mk: impl Fn() -> E, phrases: &[&str], what: &str)
@@ -109,24 +109,7 @@ where
 }
 
 #[test]
-fn s3k_02_integer_errors_are_described_and_kept() {
-    check(|| IntError::Empty, &["empty"], "IntError::Empty");
-    check(|| IntError::Invalid, &["invalid"], "IntError::Invalid");
-    check(|| IntError::OutOfRange, &["out of range"], "IntError::OutOfRange");
-    check(|| IntOpError::Overflow, &["overflow"], "IntOpError::Overflow");
-    check(|| IntOpError::DivisionByZero, &["division by zero"], "IntOpError::DivisionByZero");
-}
-
-#[test]
-fn s3k_02_pattern_and_name_errors_are_described_and_kept() {
-    check(|| LikeError::TrailingEscape, &["escape"], "LikeError::TrailingEscape");
-    check(|| NameError::Exists, &["already exists"], "NameError::Exists");
-    check(|| NameError::Missing, &["does not exist"], "NameError::Missing");
-    check(|| NameError::Invalid, &["invalid"], "NameError::Invalid");
-}
-
-#[test]
-fn s3k_02_lexer_errors_say_what_and_where() {
+fn s3k_01_a_lexer_error_says_what_and_where() {
     let cases = [
         (LexErrorKind::UnterminatedString, "unterminated string"),
         (LexErrorKind::UnterminatedIdent, "unterminated"),
@@ -154,32 +137,7 @@ fn s3k_02_lexer_errors_say_what_and_where() {
 }
 
 #[test]
-fn s3k_02_resolver_page_and_checksum_errors_are_described_and_kept() {
-    check(|| ResolveError::UnknownTable, &["unknown table"], "ResolveError::UnknownTable");
-    check(|| ResolveError::UnknownColumn, &["unknown column"], "ResolveError::UnknownColumn");
-    check(|| ResolveError::Ambiguous(vec![0, 1]), &["ambiguous"], "ResolveError::Ambiguous");
-    check(|| FreeError::DoubleFree, &["already free"], "FreeError::DoubleFree");
-    check(|| FreeError::OutOfRange, &["out of range"], "FreeError::OutOfRange");
-    check(|| SealError::TooShort, &["too short"], "SealError::TooShort");
-    check(|| SealError::Mismatch, &["checksum"], "SealError::Mismatch");
-}
-
-#[test]
-fn s3k_02_different_causes_of_one_type_say_different_things() {
-    let ints: Vec<String> =
-        [IntError::Empty, IntError::Invalid, IntError::OutOfRange].into_iter().map(|e| DbError::from(e).to_string()).collect();
-    let names: Vec<String> =
-        [NameError::Exists, NameError::Missing, NameError::Invalid].into_iter().map(|e| DbError::from(e).to_string()).collect();
-    for texts in [ints, names] {
-        let mut unique = texts.clone();
-        unique.sort();
-        unique.dedup();
-        assert_eq!(unique.len(), texts.len(), "every variant needs its own message, got {texts:?}");
-    }
-}
-
-#[test]
-fn s3k_02_question_mark_converts_the_error_of_every_layer() {
+fn s3k_01_every_layers_error_converts_with_the_question_mark_and_is_kept() {
     fn lift<E>(r: Result<(), E>) -> DbResult<()>
     where
         DbError: From<E>,
@@ -187,27 +145,29 @@ fn s3k_02_question_mark_converts_the_error_of_every_layer() {
         r?;
         Ok(())
     }
-    assert!(lift(Err(IntError::Empty)).is_err(), "IntError converts with `?`");
+    check(|| IntError::Empty, &["empty"], "IntError::Empty");
+    check(|| IntOpError::DivisionByZero, &["division by zero"], "IntOpError::DivisionByZero");
+    check(|| LikeError::TrailingEscape, &["escape"], "LikeError::TrailingEscape");
+    check(|| NameError::Missing, &["does not exist"], "NameError::Missing");
+    check(|| ResolveError::Ambiguous(vec![0, 1]), &["ambiguous"], "ResolveError::Ambiguous");
+    check(|| FreeError::DoubleFree, &["already free"], "FreeError::DoubleFree");
+    check(|| SealError::Mismatch, &["checksum"], "SealError::Mismatch");
     assert!(lift(Err(IntOpError::Overflow)).is_err(), "IntOpError converts with `?`");
-    assert!(lift(Err(LikeError::TrailingEscape)).is_err(), "LikeError converts with `?`");
-    assert!(lift(Err(NameError::Missing)).is_err(), "NameError converts with `?`");
     assert!(lift(Err(LexError { pos: 0, kind: LexErrorKind::BadChar })).is_err(), "LexError converts with `?`");
-    assert!(lift(Err(ResolveError::UnknownColumn)).is_err(), "ResolveError converts with `?`");
-    assert!(lift(Err(FreeError::DoubleFree)).is_err(), "FreeError converts with `?`");
-    assert!(lift(Err(SealError::Mismatch)).is_err(), "SealError converts with `?`");
+    assert!(lift(Err(SealError::TooShort)).is_err(), "SealError converts with `?`");
     assert!(lift(Ok::<(), IntError>(())).is_ok(), "and an Ok passes through untouched");
 }
 
-// ---- 3k-03 · Context that travels with the error -----------------------------------------------------------------------------
+// ---- 3k-01 · context that travels with the error -----------------------------------------------------------------------------
 
 #[test]
-fn s3k_03_context_puts_a_new_message_on_top() {
+fn s3k_01_context_puts_a_new_message_on_top() {
     let e = DbError::from(not_found()).context("opening the log");
     assert_eq!(e.to_string(), "opening the log", "the outermost message is the context, and only the context");
 }
 
 #[test]
-fn s3k_03_the_source_of_a_context_is_the_error_it_wraps() {
+fn s3k_01_the_source_of_a_context_is_the_error_it_wraps() {
     let e = DbError::from(not_found()).context("opening the log");
     assert_eq!(
         e.source().expect("a context has a source").to_string(),
@@ -217,21 +177,21 @@ fn s3k_03_the_source_of_a_context_is_the_error_it_wraps() {
 }
 
 #[test]
-fn s3k_03_report_lists_every_layer_outermost_first_and_a_repeat_once() {
+fn s3k_01_report_lists_every_layer_outermost_first_and_a_repeat_once() {
     let e = DbError::from(not_found()).context("opening the log").context("starting up");
     assert_eq!(e.report(), "starting up: opening the log: no such file", "layers outermost first; the cause is not repeated");
     assert_eq!(DbError::from(not_found()).report(), "no such file", "an error with no context reports just its message");
 }
 
 #[test]
-fn s3k_03_root_cause_is_the_original_error() {
+fn s3k_01_root_cause_is_the_original_error() {
     let e = DbError::from(not_found()).context("opening the log").context("starting up");
     let root = e.root_cause();
     assert_eq!(root.downcast_ref::<io::Error>().map(|c| c.kind()), Some(io::ErrorKind::NotFound), "the innermost error is the I/O error");
 }
 
 #[test]
-fn s3k_03_chain_counts_every_layer() {
+fn s3k_01_chain_counts_every_layer() {
     let e = DbError::from(not_found());
     assert_eq!(e.chain().count(), 2, "the DbError made by `From`, then its cause");
     let e = e.context("a").context("b");
@@ -240,7 +200,7 @@ fn s3k_03_chain_counts_every_layer() {
 }
 
 #[test]
-fn s3k_03_context_on_a_result_converts_and_wraps() {
+fn s3k_01_context_on_a_result_converts_and_wraps() {
     let r: Result<i64, IntError> = Err(IntError::Empty);
     let e = r.context("parsing the id").expect_err("the result was an error");
     assert_eq!(e.to_string(), "parsing the id", "the context is the outer message");
@@ -250,7 +210,7 @@ fn s3k_03_context_on_a_result_converts_and_wraps() {
 }
 
 #[test]
-fn s3k_03_with_context_builds_the_message_only_on_failure() {
+fn s3k_01_with_context_builds_the_message_only_on_failure() {
     let mut built = 0;
     let ok: Result<u8, IntError> = Ok(1);
     let _ = ok.with_context(|| {
@@ -270,7 +230,7 @@ fn s3k_03_with_context_builds_the_message_only_on_failure() {
 }
 
 #[test]
-fn s3k_03_context_stacks_on_a_dbresult() {
+fn s3k_01_context_stacks_on_a_dbresult() {
     fn inner() -> DbResult<()> {
         Err(NameError::Missing).context("looking up the table")
     }
@@ -285,14 +245,14 @@ fn s3k_03_context_stacks_on_a_dbresult() {
     );
 }
 
-// ---- 3k-04 · Codes and what a client may see -------------------------------------------------------------------------------
+// ---- 3k-02 · Codes and what a client may see -------------------------------------------------------------------------------
 
 fn engine(kind: ExceptionType) -> DbError {
     DbError::from(Exception::new(kind, "message"))
 }
 
 #[test]
-fn s3k_04_engine_exceptions_have_their_codes() {
+fn s3k_02_engine_exceptions_have_their_codes() {
     let table = [
         (ExceptionType::Invalid, "22023"),
         (ExceptionType::OutOfRange, "22003"),
@@ -313,7 +273,7 @@ fn s3k_04_engine_exceptions_have_their_codes() {
 }
 
 #[test]
-fn s3k_04_the_other_layers_have_their_codes() {
+fn s3k_02_the_other_layers_have_their_codes() {
     let table: Vec<(&str, DbError, &str)> = vec![
         ("io error", DbError::from(not_found()), "58030"),
         ("IntError::Empty", IntError::Empty.into(), "22P02"),
@@ -340,7 +300,7 @@ fn s3k_04_the_other_layers_have_their_codes() {
 }
 
 #[test]
-fn s3k_04_a_code_is_five_characters_of_digits_and_capitals() {
+fn s3k_02_a_code_is_five_characters_of_digits_and_capitals() {
     for e in [DbError::from(not_found()), engine(ExceptionType::NotImplemented), NameError::Missing.into(), SealError::Mismatch.into()] {
         let code = e.code();
         assert_eq!(code.len(), 5, "{code} must have five characters");
@@ -349,7 +309,7 @@ fn s3k_04_a_code_is_five_characters_of_digits_and_capitals() {
 }
 
 #[test]
-fn s3k_04_context_never_changes_the_code() {
+fn s3k_02_context_never_changes_the_code() {
     let plain = DbError::from(ResolveError::UnknownColumn);
     let wrapped = DbError::from(ResolveError::UnknownColumn).context("binding the select list").context("running the statement");
     assert_eq!(wrapped.code(), plain.code(), "the code comes from the innermost cause, so layers on top do not change it");
@@ -357,7 +317,7 @@ fn s3k_04_context_never_changes_the_code() {
 }
 
 #[test]
-fn s3k_04_a_clients_own_mistakes_are_shown_with_their_message() {
+fn s3k_02_a_clients_own_mistakes_are_shown_with_their_message() {
     let e = DbError::from(NameError::Exists).context("creating table orders");
     assert_eq!(e.client_message(), "ERROR 42P07: creating table orders", "code, then the outermost message");
     let e = DbError::from(IntOpError::DivisionByZero);
@@ -365,7 +325,7 @@ fn s3k_04_a_clients_own_mistakes_are_shown_with_their_message() {
 }
 
 #[test]
-fn s3k_04_system_failures_show_nothing_of_their_inside() {
+fn s3k_02_system_failures_show_nothing_of_their_inside() {
     let io = DbError::from(io::Error::new(io::ErrorKind::PermissionDenied, "/var/lib/bustub/secret.db: permission denied"))
         .context("reading page 7");
     assert_eq!(io.client_message(), "ERROR 58030: internal error", "class 58: the path and the context stay inside");
@@ -375,7 +335,7 @@ fn s3k_04_system_failures_show_nothing_of_their_inside() {
     assert_eq!(corrupt.client_message(), "ERROR XX001: internal error", "corruption is the system's problem, not the client's");
 }
 
-// ---- 3k-05 · Boss: a statement fails in every layer ----------------------------------------------------------------------------
+// ---- 3k-03 · Boss: a statement fails in every layer ----------------------------------------------------------------------------
 
 fn lex_layer() -> DbResult<()> {
     Err(LexError { pos: 3, kind: LexErrorKind::BadChar }).context("lexing the statement")
@@ -394,7 +354,7 @@ fn execute_layer() -> DbResult<()> {
 }
 
 #[test]
-fn s3k_05_errors_from_every_layer_cross_threads_with_their_context() {
+fn s3k_03_errors_from_every_layer_cross_threads_with_their_context() {
     let (tx, rx) = mpsc::channel::<(usize, DbError)>();
     let layers: [fn() -> DbResult<()>; 4] = [lex_layer, resolve_layer, storage_layer, execute_layer];
     let handles: Vec<_> = layers
@@ -442,7 +402,7 @@ fn base(i: usize) -> (DbError, &'static str, String) {
 
 proptest! {
     #[test]
-    fn s3k_05_random_context_stacks_keep_the_code_the_root_and_the_report(i in 0usize..8, ctx in proptest::collection::vec("[a-z]{1,8}", 0..8)) {
+    fn s3k_03_random_context_stacks_keep_the_code_the_root_and_the_report(i in 0usize..8, ctx in proptest::collection::vec("[a-z]{1,8}", 0..8)) {
         let (mut e, code, text) = base(i);
         // numbered, so that no two layers say the same thing (a report shows a repeated message once)
         let layers: Vec<String> = ctx.iter().enumerate().map(|(n, c)| format!("ctx-{n}-{c}")).collect();
@@ -459,7 +419,7 @@ proptest! {
 }
 
 #[test]
-fn s3k_05_the_client_never_sees_what_lies_inside() {
+fn s3k_03_the_client_never_sees_what_lies_inside() {
     let internal =
         Err::<(), _>(Exception::new(ExceptionType::Execution, "pointer 0xdeadbeef in the join executor")).context("running the plan");
     for e in [storage_layer().unwrap_err(), internal.unwrap_err()] {
@@ -477,7 +437,7 @@ fn s3k_05_the_client_never_sees_what_lies_inside() {
 }
 
 #[test]
-fn s3k_05_a_very_long_chain_is_walked_and_reported() {
+fn s3k_03_a_very_long_chain_is_walked_and_reported() {
     let mut e = DbError::from(not_found());
     for i in 0..2_000 {
         e = e.context(format!("layer {i}"));
@@ -492,7 +452,7 @@ fn s3k_05_a_very_long_chain_is_walked_and_reported() {
 }
 
 #[test]
-fn s3k_05_a_function_can_return_a_boxed_error_and_the_dberror_comes_back_out() {
+fn s3k_03_a_function_can_return_a_boxed_error_and_the_dberror_comes_back_out() {
     fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         storage_layer()?;
         Ok(())

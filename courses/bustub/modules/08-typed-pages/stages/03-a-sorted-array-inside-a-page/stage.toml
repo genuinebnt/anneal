@@ -1,8 +1,0 @@
-id = "2a-03"
-title = "A sorted array inside a page"
-kind = "build"
-difficulty = "medium"
-tests = ["stages_2a::s2a_03"]
-learn = ["a view over bytes that behaves like a Vec of fixed-size entries", "shifting a range inside one buffer (copy_within)", "panics for caller bugs at the edges"]
-concepts = ["slices-copy-within-and-binary-search"]
-concepts_optional = ["slotted-pages", "bytes-endianness-and-views", "model-based-testing", "property-testing-and-fuzzing", "reading-compiler-errors", "errors-2a"]

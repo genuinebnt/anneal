@@ -18,18 +18,18 @@ impl<const KEY_SIZE: usize> Default for GenericKey<KEY_SIZE> {
 impl<const KEY_SIZE: usize> GenericKey<KEY_SIZE> {
     /// Fills the key with zeros and stores `key` in the first 8 bytes, little-endian.
     pub fn set_from_integer(&mut self, key: i64) {
-        // @begin 2a-02
+        // @begin 2a-01
         self.data = [0; KEY_SIZE];
         self.data[..8].copy_from_slice(&key.to_le_bytes());
-        //~ todo!("2a-02: zero the key, then store the i64 in its first 8 bytes")
+        //~ todo!("2a-01: zero the key, then store the i64 in its first 8 bytes")
         // @end
     }
 
     /// The first 8 bytes as an `i64`.
     pub fn get_as_integer(&self) -> i64 {
-        // @begin 2a-02
+        // @begin 2a-01
         i64::from_le_bytes(self.data[..8].try_into().expect("a key is at least 8 bytes"))
-        //~ todo!("2a-02: the first 8 bytes, little-endian")
+        //~ todo!("2a-01: the first 8 bytes, little-endian")
         // @end
     }
 }
@@ -37,17 +37,17 @@ impl<const KEY_SIZE: usize> GenericKey<KEY_SIZE> {
 impl<const KEY_SIZE: usize> FixedSize for GenericKey<KEY_SIZE> {
     const SIZE: usize = KEY_SIZE;
     fn encode(&self, out: &mut [u8]) {
-        // @begin 2a-02
+        // @begin 2a-01
         out.copy_from_slice(&self.data);
-        //~ todo!("2a-02: the key's bytes")
+        //~ todo!("2a-01: the key's bytes")
         // @end
     }
     fn decode(bytes: &[u8]) -> Self {
-        // @begin 2a-02
+        // @begin 2a-01
         let mut key = GenericKey { data: [0; KEY_SIZE] };
         key.data.copy_from_slice(bytes);
         key
-        //~ todo!("2a-02: a key made of these bytes")
+        //~ todo!("2a-01: a key made of these bytes")
         // @end
     }
 }
@@ -63,9 +63,9 @@ pub struct GenericComparator<const KEY_SIZE: usize>;
 
 impl<const KEY_SIZE: usize> KeyComparator<GenericKey<KEY_SIZE>> for GenericComparator<KEY_SIZE> {
     fn compare(&self, lhs: &GenericKey<KEY_SIZE>, rhs: &GenericKey<KEY_SIZE>) -> Ordering {
-        // @begin 2a-02
+        // @begin 2a-01
         lhs.get_as_integer().cmp(&rhs.get_as_integer())
-        //~ todo!("2a-02: compare the integers in the first 8 bytes of the keys")
+        //~ todo!("2a-01: compare the integers in the first 8 bytes of the keys")
         // @end
     }
 }

@@ -13,7 +13,7 @@ Two features, both of which the planner refuses by name today: `select ... limit
 - **`count(distinct e)`, `sum(distinct e)`, `min`/`max(distinct e)`**: each value of `e` once per group, NULLs ignored as ever, per group and in HAVING and in expressions around them.
 - A query that mixes DISTINCT and plain aggregates (`count(distinct x), count(*)`) is either answered correctly or refused with a `NotImplemented` error that says why: never answered wrongly.
 
-Where to work: `plan_select` and `plan_select_agg` in `src/planner/planner.rs` (the two error messages above are where to start), the new `PlanKind::Offset` (given, with its plan type and `EXPLAIN` text), `create_executor` in `src/execution/executor_factory.rs` (an `Offset` plan has no executor yet: wire yours in, as 3d-06 wired the functions), and `OffsetExecutor` in `src/execution/executors/offset_executor.rs`.
+Where to work: `plan_select` and `plan_select_agg` in `src/planner/planner.rs` (the two error messages above are where to start), the new `PlanKind::Offset` (given, with its plan type and `EXPLAIN` text), `create_executor` in `src/execution/executor_factory.rs` (an `Offset` plan has no executor yet: wire yours in, as 3d-02 wired the functions), and `OffsetExecutor` in `src/execution/executors/offset_executor.rs`.
 
 ## Your freedom
 

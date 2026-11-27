@@ -149,7 +149,7 @@ fn the_checker_stops_at_the_operation_that_broke_the_rule() {
 - **1c-01 and 1c-03:** a private `check()` for the list (every live node reachable from the front exactly once, `len` equal to the walk) and for the CLOCK ring (the hand in range) turns every test into a test of the structure's own rules as well.
 - **1d-02, 1d-03:** "the set holds exactly the evictable frames, each under its current key" is the invariant to assert after every step of a random run.
 - **1e-01, 1e-03:** ARC's bounds and the disjointness of the four lists, as in the ARC concept's `check`.
-- **2a-03, 2a-04:** a page array's entries are sorted and `len <= capacity`; binary search is stated as a loop invariant.
+- **2a-02:** a page array's entries are sorted and `len <= capacity`; binary search is stated as a loop invariant.
 - **2b-02 to 2b-04:** `verify_integrity` is written by you and called after every operation by the tests; the three rules of the first example (depths, slot counts, key placement) are the usual ones.
 
 ### Where it is used

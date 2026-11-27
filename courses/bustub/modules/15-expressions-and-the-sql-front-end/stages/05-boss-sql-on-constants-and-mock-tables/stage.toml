@@ -1,0 +1,9 @@
+id = "3d-05"
+title = "Boss: SQL on constants and mock tables"
+kind = "boss"
+difficulty = "hard"
+tests = ["stages_3d::s3d_05", "slt_expressions_test"]
+renamed_from = ["3d-07"]
+retest = true
+concepts = ["the-sql-pipeline"]
+concepts_optional = ["model-based-testing", "property-testing-and-fuzzing", "errors-3d"]

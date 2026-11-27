@@ -90,54 +90,42 @@ impl Error for SealError {}
 
 impl fmt::Display for IntError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // @begin 3k-02
         f.write_str(match self {
             IntError::Empty => "the text is empty, not an integer",
             IntError::Invalid => "invalid integer",
             IntError::OutOfRange => "integer out of range for 64 bits",
         })
-        //~ todo!("3k-02: empty / invalid / out of range, in words (see the table on the stage page)")
-        // @end
     }
 }
 
 impl fmt::Display for IntOpError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // @begin 3k-02
         f.write_str(match self {
             IntOpError::Overflow => "integer overflow",
             IntOpError::DivisionByZero => "division by zero",
         })
-        //~ todo!("3k-02: overflow / division by zero")
-        // @end
     }
 }
 
 impl fmt::Display for LikeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // @begin 3k-02
         f.write_str("LIKE pattern ends with an escape character")
-        //~ todo!("3k-02: a trailing escape character")
-        // @end
     }
 }
 
 impl fmt::Display for NameError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // @begin 3k-02
         f.write_str(match self {
             NameError::Exists => "name already exists",
             NameError::Missing => "name does not exist",
             NameError::Invalid => "invalid name",
         })
-        //~ todo!("3k-02: already exists / does not exist / invalid")
-        // @end
     }
 }
 
 impl fmt::Display for LexError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // @begin 3k-02
+        // @begin 3k-01
         let what = match self.kind {
             LexErrorKind::UnterminatedString => "unterminated string literal",
             LexErrorKind::UnterminatedIdent => "unterminated quoted identifier",
@@ -146,49 +134,40 @@ impl fmt::Display for LexError {
             LexErrorKind::IntegerOverflow => "integer literal out of range",
         };
         write!(f, "{what} at position {}", self.pos)
-        //~ todo!("3k-02: what went wrong and the position, in words")
+        //~ todo!("3k-01: what went wrong and the position, in words (see the table on the stage page)")
         // @end
     }
 }
 
 impl fmt::Display for ResolveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // @begin 3k-02
         match self {
             ResolveError::UnknownTable => f.write_str("unknown table"),
             ResolveError::UnknownColumn => f.write_str("unknown column"),
             ResolveError::Ambiguous(candidates) => write!(f, "ambiguous column reference ({} candidates)", candidates.len()),
         }
-        //~ todo!("3k-02: unknown table / unknown column / ambiguous")
-        // @end
     }
 }
 
 impl fmt::Display for FreeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // @begin 3k-02
         f.write_str(match self {
             FreeError::DoubleFree => "page is already free",
             FreeError::OutOfRange => "page id out of range",
         })
-        //~ todo!("3k-02: already free / out of range")
-        // @end
     }
 }
 
 impl fmt::Display for SealError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // @begin 3k-02
         f.write_str(match self {
             SealError::TooShort => "sealed data is too short",
             SealError::Mismatch => "checksum mismatch",
         })
-        //~ todo!("3k-02: too short / checksum mismatch")
-        // @end
     }
 }
 
-// @begin 3k-02
+// @begin 3k-01
 macro_rules! convert_from {
     ($($t:ty),* $(,)?) => {
         $(impl From<$t> for DbError {
@@ -199,46 +178,46 @@ macro_rules! convert_from {
     };
 }
 convert_from!(IntError, IntOpError, LikeError, NameError, LexError, ResolveError, FreeError, SealError);
-//~ // TODO(3k-02): the eight conversions below are stubs. Each keeps its cause as a value, like the two above. Write them by hand, or
+//~ // TODO(3k-01): the eight conversions below are stubs. Each keeps its cause as a value, like the two above. Write them by hand, or
 //~ // replace all eight with one macro; delete these lines either way (two impls for one type do not compile).
-//~ impl From<IntError> for DbError { fn from(_: IntError) -> DbError { todo!("3k-02: keep the IntError as the cause") } }
-//~ impl From<IntOpError> for DbError { fn from(_: IntOpError) -> DbError { todo!("3k-02: keep the IntOpError as the cause") } }
-//~ impl From<LikeError> for DbError { fn from(_: LikeError) -> DbError { todo!("3k-02: keep the LikeError as the cause") } }
-//~ impl From<NameError> for DbError { fn from(_: NameError) -> DbError { todo!("3k-02: keep the NameError as the cause") } }
-//~ impl From<LexError> for DbError { fn from(_: LexError) -> DbError { todo!("3k-02: keep the LexError as the cause") } }
-//~ impl From<ResolveError> for DbError { fn from(_: ResolveError) -> DbError { todo!("3k-02: keep the ResolveError as the cause") } }
-//~ impl From<FreeError> for DbError { fn from(_: FreeError) -> DbError { todo!("3k-02: keep the FreeError as the cause") } }
-//~ impl From<SealError> for DbError { fn from(_: SealError) -> DbError { todo!("3k-02: keep the SealError as the cause") } }
+//~ impl From<IntError> for DbError { fn from(_: IntError) -> DbError { todo!("3k-01: keep the IntError as the cause") } }
+//~ impl From<IntOpError> for DbError { fn from(_: IntOpError) -> DbError { todo!("3k-01: keep the IntOpError as the cause") } }
+//~ impl From<LikeError> for DbError { fn from(_: LikeError) -> DbError { todo!("3k-01: keep the LikeError as the cause") } }
+//~ impl From<NameError> for DbError { fn from(_: NameError) -> DbError { todo!("3k-01: keep the NameError as the cause") } }
+//~ impl From<LexError> for DbError { fn from(_: LexError) -> DbError { todo!("3k-01: keep the LexError as the cause") } }
+//~ impl From<ResolveError> for DbError { fn from(_: ResolveError) -> DbError { todo!("3k-01: keep the ResolveError as the cause") } }
+//~ impl From<FreeError> for DbError { fn from(_: FreeError) -> DbError { todo!("3k-01: keep the FreeError as the cause") } }
+//~ impl From<SealError> for DbError { fn from(_: SealError) -> DbError { todo!("3k-01: keep the SealError as the cause") } }
 // @end
 
 impl DbError {
     /// Adds a layer: an error that says `message` and has this one as its cause.
     pub fn context(self, message: impl Into<String>) -> DbError {
-        // @begin 3k-03
+        // @begin 3k-01
         DbError { message: message.into(), source: Some(Box::new(self)) }
-        //~ todo!("3k-03: a new error whose cause is this one")
+        //~ todo!("3k-01: a new error whose cause is this one")
         // @end
     }
 
     /// This error, then its cause, then the cause's cause, and so on to the innermost.
     pub fn chain(&self) -> Box<dyn Iterator<Item = &(dyn Error + 'static)> + '_> {
-        // @begin 3k-03
+        // @begin 3k-01
         Box::new(std::iter::successors(Some(self as &(dyn Error + 'static)), |&e| e.source()))
-        //~ todo!("3k-03: walk `source()` until it runs out")
+        //~ todo!("3k-01: walk `source()` until it runs out")
         // @end
     }
 
     /// The innermost error of the chain: what really went wrong.
     pub fn root_cause(&self) -> &(dyn Error + 'static) {
-        // @begin 3k-03
+        // @begin 3k-01
         self.chain().last().expect("a chain has at least this error")
-        //~ todo!("3k-03: the last element of the chain")
+        //~ todo!("3k-01: the last element of the chain")
         // @end
     }
 
     /// Every layer's message, outermost first, joined with ": ". A layer that says exactly what the one below it says is shown once.
     pub fn report(&self) -> String {
-        // @begin 3k-03
+        // @begin 3k-01
         let mut parts: Vec<String> = Vec::new();
         for e in self.chain() {
             let text = e.to_string();
@@ -247,7 +226,7 @@ impl DbError {
             }
         }
         parts.join(": ")
-        //~ todo!("3k-03: the messages of the chain, outermost first, a repeated message once")
+        //~ todo!("3k-01: the messages of the chain, outermost first, a repeated message once")
         // @end
     }
 }
@@ -264,16 +243,16 @@ where
     DbError: From<E>,
 {
     fn context(self, message: impl Into<String>) -> DbResult<T> {
-        // @begin 3k-03
+        // @begin 3k-01
         self.map_err(|e| DbError::from(e).context(message))
-        //~ todo!("3k-03: convert the error, then add the layer")
+        //~ todo!("3k-01: convert the error, then add the layer")
         // @end
     }
 
     fn with_context<F: FnOnce() -> String>(self, message: F) -> DbResult<T> {
-        // @begin 3k-03
+        // @begin 3k-01
         self.map_err(|e| DbError::from(e).context(message()))
-        //~ todo!("3k-03: the same, building the message only on failure")
+        //~ todo!("3k-01: the same, building the message only on failure")
         // @end
     }
 }
@@ -283,7 +262,7 @@ impl DbError {
     ///
     /// It comes from the innermost cause, so adding context never changes it.
     pub fn code(&self) -> &'static str {
-        // @begin 3k-04
+        // @begin 3k-02
         let root = self.root_cause();
         if let Some(e) = root.downcast_ref::<Exception>() {
             return match e.kind {
@@ -331,21 +310,21 @@ impl DbError {
             return "XX001";
         }
         "XX000"
-        //~ todo!("3k-04: look at the innermost cause and answer from the table on the stage page; anything not listed is XX000")
+        //~ todo!("3k-02: look at the innermost cause and answer from the table on the stage page; anything not listed is XX000")
         // @end
     }
 
     /// What a client of the database may be shown: the code and, for the user's own mistakes, this error's message. Failures of the
     /// system itself (class 58, class XX) say only that something went wrong inside: their messages can hold paths and internals.
     pub fn client_message(&self) -> String {
-        // @begin 3k-04
+        // @begin 3k-02
         let code = self.code();
         if code.starts_with("58") || code.starts_with("XX") {
             format!("ERROR {code}: internal error")
         } else {
             format!("ERROR {code}: {self}")
         }
-        //~ todo!("3k-04: `ERROR <code>: <message>`, but `ERROR <code>: internal error` for codes of class 58 and XX")
+        //~ todo!("3k-02: `ERROR <code>: <message>`, but `ERROR <code>: internal error` for codes of class 58 and XX")
         // @end
     }
 }

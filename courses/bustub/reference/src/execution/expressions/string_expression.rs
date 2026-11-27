@@ -44,23 +44,23 @@ impl StringExpression {
 
     /// The lower- or upper-case form of `val`.
     pub fn compute(&self, val: &str) -> String {
-        // @begin 3d-03
+        // @begin 3d-02
         match self.expr_type {
             StringExpressionType::Lower => val.to_lowercase(),
             StringExpressionType::Upper => val.to_uppercase(),
         }
-        //~ todo!("3d-03: lower case or upper case, as the expression asks")
+        //~ todo!("3d-02: lower case or upper case, as the expression asks")
         // @end
     }
 
     /// The transformed string as a VARCHAR value; the VARCHAR NULL stays NULL.
     fn result(&self, val: &Value) -> Value {
-        // @begin 3d-03
+        // @begin 3d-02
         match val.as_str() {
             Some(s) => Value::varchar(&self.compute(s)),
             None => Value::null(TypeId::Varchar),
         }
-        //~ todo!("3d-03: the transformed string as a VARCHAR value; the VARCHAR NULL stays NULL")
+        //~ todo!("3d-02: the transformed string as a VARCHAR value; the VARCHAR NULL stays NULL")
         // @end
     }
 }

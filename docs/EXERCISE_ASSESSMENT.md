@@ -20,7 +20,7 @@ are far larger than the rest** (section 4). None is a reason to rework the cours
 |---|---|
 | core stages / tests | 169 stages (124 build, 31 boss, 14 learn), 1,389 tests, plus 148 optional challenges at 5 tests or more |
 | tests per learn/build stage | median 8, minimum 5, maximum 18 |
-| boss stages with fewer than 4 tests | 5 (1d-04, 2a-05, 3c-05, 3i-08, 3j-07); each runs a whole script or property, so the count understates them |
+| boss stages with fewer than 4 tests | 5 (1d-04, 2a-03, 3c-05, 3i-08, 3j-07); each runs a whole script or property, so the count understates them |
 | bare assertions | 0 (`tools/add_assert_messages.py --check`) |
 | stages with a model or property test | at least 104 of 164 (by name, an undercount) |
 | concurrency tests / crash-at-every-step tests | about 74 / 21 (counted by pattern, so approximate) |
@@ -87,7 +87,7 @@ Median solution size of a learn/build stage is 38 lines (75th percentile 57, 90t
 
 Both are deliberate: designing the page types is the lesson, and they are labelled hard. The risk is that they are where a learner
 can stall for hours with only 6 tests of feedback. Size against label is otherwise sane (median 18 lines easy, 37 medium, 48 hard).
-Nine more stages are over 100 lines (3a-01, 2c-04, 3d-04, 0b-01, 3i-01, 3i-03, 3a-02, 4d-05, 4c-01).
+Nine more stages are over 100 lines (3a-01, 2c-04, 3d-03, 0b-01, 3i-01, 3i-03, 3a-02, 4d-05, 4c-01).
 
 ## 5. What was done, and the recommendations that remain
 

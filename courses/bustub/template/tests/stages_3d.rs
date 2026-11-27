@@ -65,7 +65,7 @@ fn boolean_null() -> Value {
 // ---- 3d-01 · constants and columns ----------------------------------------------------------------------------------------------
 
 #[test]
-fn s3d_01_a_constant_is_its_value_for_any_tuple() {
+fn s3d_01_a_constant_is_its_value_for_any_tuple_and_in_a_join() {
     let c = constant(int(42));
     assert_eq!(eval(&c), int(42), "a constant is its value for any tuple");
     let schema = schema_abc();
@@ -81,11 +81,6 @@ fn s3d_01_a_constant_is_its_value_for_any_tuple() {
         Value::null(TypeId::Integer),
         "a constant is its value for any tuple"
     );
-}
-
-#[test]
-fn s3d_01_a_constant_evaluated_in_a_join_is_still_its_value() {
-    let (schema, t) = (schema_abc(), tuple_abc(int(1), "x", int(2)));
     let c = constant(Value::boolean(true));
     assert_eq!(
         c.evaluate_join(&t, &schema, &t, &schema).unwrap(),
@@ -95,7 +90,7 @@ fn s3d_01_a_constant_evaluated_in_a_join_is_still_its_value() {
 }
 
 #[test]
-fn s3d_01_a_column_value_reads_the_column_of_the_tuple() {
+fn s3d_01_a_column_value_reads_the_column_of_the_tuple_null_included() {
     let (schema, t) = (schema_abc(), tuple_abc(int(7), "seven", int(70)));
     assert_eq!(col(0, 0, TypeId::Integer).evaluate(&t, &schema).unwrap(), int(7), "a column value reads the column of the tuple");
     assert_eq!(
@@ -104,10 +99,6 @@ fn s3d_01_a_column_value_reads_the_column_of_the_tuple() {
         "a column value reads the column of the tuple"
     );
     assert_eq!(col(0, 2, TypeId::Integer).evaluate(&t, &schema).unwrap(), int(70), "a column value reads the column of the tuple");
-}
-
-#[test]
-fn s3d_01_a_column_value_can_be_null() {
     let (schema, t) = (schema_abc(), tuple_abc(Value::null(TypeId::Integer), "x", int(1)));
     assert_eq!(col(0, 0, TypeId::Integer).evaluate(&t, &schema).unwrap(), Value::null(TypeId::Integer), "a column value can be null");
 }
@@ -148,10 +139,10 @@ fn s3d_01_expressions_describe_themselves() {
     assert!(constant(int(1)).children().is_empty(), "expressions describe themselves: expected `constant(int(1)).children().is_empty()`");
 }
 
-// ---- 3d-02 · comparisons --------------------------------------------------------------------------------------------------------
+// ---- 3d-01 · comparisons --------------------------------------------------------------------------------------------------------
 
 #[test]
-fn s3d_02_the_six_comparisons_on_integers() {
+fn s3d_01_the_six_comparisons_on_integers() {
     use ComparisonType::*;
     let t = Value::boolean(true);
     let f = Value::boolean(false);
@@ -168,7 +159,7 @@ fn s3d_02_the_six_comparisons_on_integers() {
 }
 
 #[test]
-fn s3d_02_comparing_with_null_is_null_not_false() {
+fn s3d_01_comparing_with_null_is_null_not_false() {
     use ComparisonType::*;
     let null = Value::null(TypeId::Integer);
     for t in [Equal, NotEqual, LessThan, LessThanOrEqual, GreaterThan, GreaterThanOrEqual] {
@@ -179,7 +170,7 @@ fn s3d_02_comparing_with_null_is_null_not_false() {
 }
 
 #[test]
-fn s3d_02_strings_and_mixed_numbers_compare_by_value() {
+fn s3d_01_strings_and_mixed_numbers_compare_by_value() {
     use ComparisonType::*;
     assert_eq!(
         cmp(Value::varchar("abc"), Value::varchar("abd"), LessThan),
@@ -192,7 +183,7 @@ fn s3d_02_strings_and_mixed_numbers_compare_by_value() {
 }
 
 #[test]
-fn s3d_02_a_comparison_of_columns_in_a_join_and_in_a_row() {
+fn s3d_01_a_comparison_of_columns_in_a_join_and_in_a_row() {
     let schema = schema_abc();
     let t = tuple_abc(int(5), "x", int(5));
     let same_row: ExprRef =
@@ -211,7 +202,7 @@ fn s3d_02_a_comparison_of_columns_in_a_join_and_in_a_row() {
 }
 
 #[test]
-fn s3d_02_a_comparison_describes_itself_and_returns_a_boolean() {
+fn s3d_01_a_comparison_describes_itself_and_returns_a_boolean() {
     let e = ComparisonExpression::new(col(0, 0, TypeId::Integer), constant(int(5)), ComparisonType::GreaterThanOrEqual);
     assert_eq!(Expression::to_string(&e), "(#0.0>=5)", "a comparison describes itself and returns a boolean");
     assert_eq!(e.return_type().type_id(), TypeId::Boolean, "a comparison describes itself and returns a boolean");
@@ -220,7 +211,7 @@ fn s3d_02_a_comparison_describes_itself_and_returns_a_boolean() {
     assert_eq!(Expression::to_string(&ne), "(1!=2)", "a comparison describes itself and returns a boolean");
 }
 
-// ---- 3d-02 · arithmetic ---------------------------------------------------------------------------------------------------------
+// ---- 3d-01 · arithmetic ---------------------------------------------------------------------------------------------------------
 
 fn arith(l: Value, r: Value, t: ArithmeticType) -> bustub::common::exception::Result<Value> {
     let e: ExprRef = Arc::new(ArithmeticExpression::new(constant(l), constant(r), t)?);
@@ -229,7 +220,7 @@ fn arith(l: Value, r: Value, t: ArithmeticType) -> bustub::common::exception::Re
 }
 
 #[test]
-fn s3d_02_plus_and_minus() {
+fn s3d_01_plus_and_minus() {
     assert_eq!(arith(int(1), int(2), ArithmeticType::Plus).unwrap(), int(3), "plus and minus");
     assert_eq!(arith(int(1), int(2), ArithmeticType::Minus).unwrap(), int(-1), "plus and minus");
     assert_eq!(arith(int(-5), int(-7), ArithmeticType::Minus).unwrap(), int(2), "plus and minus");
@@ -237,7 +228,7 @@ fn s3d_02_plus_and_minus() {
 }
 
 #[test]
-fn s3d_02_a_null_operand_makes_a_null_result_of_type_integer() {
+fn s3d_01_a_null_operand_makes_a_null_result_of_type_integer() {
     let null = Value::null(TypeId::Integer);
     assert_eq!(arith(int(1), null.clone(), ArithmeticType::Plus).unwrap(), null, "a null operand makes a null result of type integer");
     assert_eq!(arith(null.clone(), int(1), ArithmeticType::Minus).unwrap(), null, "a null operand makes a null result of type integer");
@@ -249,7 +240,7 @@ fn s3d_02_a_null_operand_makes_a_null_result_of_type_integer() {
 }
 
 #[test]
-fn s3d_02_overflow_is_an_error_not_a_wrapped_number() {
+fn s3d_01_overflow_is_an_error_not_a_wrapped_number() {
     let e = arith(int(i32::MAX), int(1), ArithmeticType::Plus).unwrap_err();
     assert_eq!(e.kind, ExceptionType::OutOfRange, "overflow is an error not a wrapped number");
     assert_eq!(
@@ -267,7 +258,7 @@ fn s3d_02_overflow_is_an_error_not_a_wrapped_number() {
 }
 
 #[test]
-fn s3d_02_i32_min_is_the_null_encoding_so_it_is_not_a_result() {
+fn s3d_01_i32_min_is_the_null_encoding_so_it_is_not_a_result() {
     // -2147483647 - 1 = i32::MIN would be stored as a NULL: an error is better than a quietly wrong NULL
     assert_eq!(
         arith(int(-i32::MAX), int(1), ArithmeticType::Minus).unwrap_err().kind,
@@ -277,7 +268,7 @@ fn s3d_02_i32_min_is_the_null_encoding_so_it_is_not_a_result() {
 }
 
 #[test]
-fn s3d_02_only_integers_are_accepted_when_the_expression_is_built() {
+fn s3d_01_only_integers_are_accepted_when_the_expression_is_built() {
     let e = ArithmeticExpression::new(constant(Value::varchar("a")), constant(int(1)), ArithmeticType::Plus).unwrap_err();
     assert_eq!(e.kind, ExceptionType::NotImplemented, "only integers are accepted when the expression is built");
     assert!(
@@ -289,7 +280,7 @@ fn s3d_02_only_integers_are_accepted_when_the_expression_is_built() {
 }
 
 #[test]
-fn s3d_02_arithmetic_on_columns_in_a_row_and_in_a_join_and_nested() {
+fn s3d_01_arithmetic_on_columns_in_a_row_and_in_a_join_and_nested() {
     let schema = schema_abc();
     let t = tuple_abc(int(10), "x", int(3));
     let a_minus_c: ExprRef =
@@ -312,7 +303,7 @@ fn s3d_02_arithmetic_on_columns_in_a_row_and_in_a_join_and_nested() {
     assert_eq!(join.return_type().type_id(), TypeId::Integer, "arithmetic on columns in a row and in a join and nested");
 }
 
-// ---- 3d-03 · logic --------------------------------------------------------------------------------------------------------------
+// ---- 3d-02 · logic --------------------------------------------------------------------------------------------------------------
 
 fn logic(l: Value, r: Value, t: LogicType) -> Value {
     let e: ExprRef = Arc::new(LogicExpression::new(constant(l), constant(r), t).unwrap());
@@ -320,7 +311,7 @@ fn logic(l: Value, r: Value, t: LogicType) -> Value {
 }
 
 #[test]
-fn s3d_03_and_truth_table() {
+fn s3d_02_and_truth_table() {
     let (t, f, n) = (Value::boolean(true), Value::boolean(false), boolean_null());
     let cases =
         [(&t, &t, &t), (&t, &f, &f), (&f, &t, &f), (&f, &f, &f), (&t, &n, &n), (&n, &t, &n), (&f, &n, &f), (&n, &f, &f), (&n, &n, &n)];
@@ -330,7 +321,7 @@ fn s3d_03_and_truth_table() {
 }
 
 #[test]
-fn s3d_03_or_truth_table() {
+fn s3d_02_or_truth_table() {
     let (t, f, n) = (Value::boolean(true), Value::boolean(false), boolean_null());
     let cases =
         [(&t, &t, &t), (&t, &f, &t), (&f, &t, &t), (&f, &f, &f), (&t, &n, &t), (&n, &t, &t), (&f, &n, &n), (&n, &f, &n), (&n, &n, &n)];
@@ -340,14 +331,14 @@ fn s3d_03_or_truth_table() {
 }
 
 #[test]
-fn s3d_03_both_sides_must_be_boolean() {
+fn s3d_02_both_sides_must_be_boolean() {
     let e = LogicExpression::new(constant(int(1)), constant(Value::boolean(true)), LogicType::And).unwrap_err();
     assert_eq!(e.kind, ExceptionType::NotImplemented, "both sides must be boolean");
     assert!(LogicExpression::new(constant(Value::boolean(true)), constant(Value::varchar("x")), LogicType::Or).is_err(), "both sides must be boolean: expected `LogicExpression::new(constant(Value::boolean(true)), constant(Value::varchar(\"x\")), LogicType::Or).i...`");
 }
 
 #[test]
-fn s3d_03_logic_of_comparisons_in_a_row_and_a_join() {
+fn s3d_02_logic_of_comparisons_in_a_row_and_a_join() {
     let schema = schema_abc();
     let t = tuple_abc(int(5), "x", Value::null(TypeId::Integer));
     let a_gt_1: ExprRef = Arc::new(ComparisonExpression::new(col(0, 0, TypeId::Integer), constant(int(1)), ComparisonType::GreaterThan));
@@ -370,13 +361,13 @@ fn s3d_03_logic_of_comparisons_in_a_row_and_a_join() {
 }
 
 #[test]
-fn s3d_03_logic_describes_itself() {
+fn s3d_02_logic_describes_itself() {
     let e = LogicExpression::new(constant(Value::boolean(true)), constant(Value::boolean(false)), LogicType::Or).unwrap();
     assert_eq!(Expression::to_string(&e), "(trueorfalse)", "logic describes itself");
     assert_eq!(e.return_type().type_id(), TypeId::Boolean, "logic describes itself");
 }
 
-// ---- 3d-03 · strings ------------------------------------------------------------------------------------------------------------
+// ---- 3d-02 · strings ------------------------------------------------------------------------------------------------------------
 
 fn string_fn(arg: Value, t: StringExpressionType) -> Value {
     let e: ExprRef = Arc::new(StringExpression::new(constant(arg), t).unwrap());
@@ -384,7 +375,7 @@ fn string_fn(arg: Value, t: StringExpressionType) -> Value {
 }
 
 #[test]
-fn s3d_03_lower_and_upper() {
+fn s3d_02_lower_and_upper() {
     assert_eq!(
         string_fn(Value::varchar("CMU 15-445 Database Systems"), StringExpressionType::Lower),
         Value::varchar("cmu 15-445 database systems"),
@@ -400,7 +391,7 @@ fn s3d_03_lower_and_upper() {
 }
 
 #[test]
-fn s3d_03_unicode_letters_change_case_too() {
+fn s3d_02_unicode_letters_change_case_too() {
     assert_eq!(string_fn(Value::varchar("ÉCOLE"), StringExpressionType::Lower), Value::varchar("école"), "unicode letters change case too");
     assert_eq!(
         string_fn(Value::varchar("école straße"), StringExpressionType::Upper),
@@ -415,20 +406,20 @@ fn s3d_03_unicode_letters_change_case_too() {
 }
 
 #[test]
-fn s3d_03_null_in_null_out() {
+fn s3d_02_null_in_null_out() {
     assert_eq!(string_fn(Value::null(TypeId::Varchar), StringExpressionType::Lower), Value::null(TypeId::Varchar), "null in null out");
     assert_eq!(string_fn(Value::null(TypeId::Varchar), StringExpressionType::Upper), Value::null(TypeId::Varchar), "null in null out");
 }
 
 #[test]
-fn s3d_03_the_argument_must_be_a_varchar() {
+fn s3d_02_the_argument_must_be_a_varchar() {
     let e = StringExpression::new(constant(int(1)), StringExpressionType::Lower).unwrap_err();
     assert_eq!(e.kind, ExceptionType::Execution, "the argument must be a varchar");
     assert!(StringExpression::new(constant(Value::boolean(true)), StringExpressionType::Upper).is_err(), "the argument must be a varchar: expected `StringExpression::new(constant(Value::boolean(true)), StringExpressionType::Upper).is_err()`");
 }
 
 #[test]
-fn s3d_03_strings_from_columns_in_a_row_and_a_join_and_nested() {
+fn s3d_02_strings_from_columns_in_a_row_and_a_join_and_nested() {
     let schema = schema_abc();
     let t = tuple_abc(int(1), "Hello World", int(2));
     let upper: ExprRef = Arc::new(StringExpression::new(col(0, 1, TypeId::Varchar), StringExpressionType::Upper).unwrap());
@@ -453,23 +444,17 @@ fn s3d_03_strings_from_columns_in_a_row_and_a_join_and_nested() {
 }
 
 #[test]
-fn s3d_03_compute_is_a_plain_string_function() {
+fn s3d_02_compute_is_a_plain_string_function() {
     let lower = StringExpression::new(constant(Value::varchar("x")), StringExpressionType::Lower).unwrap();
     let upper = StringExpression::new(constant(Value::varchar("x")), StringExpressionType::Upper).unwrap();
     assert_eq!(lower.compute("AbC"), "abc", "compute is a plain string function");
     assert_eq!(upper.compute("AbC"), "ABC", "compute is a plain string function");
 }
 
-// ---- 3d-06 · the function factory in the planner -------------------------------------------------------------------------------
-
-fn run(db: &BusTubInstance, sql: &str) -> bustub::common::exception::Result<String> {
-    let mut out = String::new();
-    db.execute_sql(sql, &mut SimpleStreamWriter::new(&mut out, true, " "), None)?;
-    Ok(out)
-}
+// ---- 3d-02 · the function factory ------------------------------------------------------------------------------------------------
 
 #[test]
-fn s3d_06_the_factory_builds_lower_and_upper() {
+fn s3d_02_the_factory_builds_lower_and_upper() {
     let lower = Planner::get_func_call_from_factory("lower", vec![constant(Value::varchar("ABC"))]).unwrap();
     assert_eq!(eval(&lower), Value::varchar("abc"), "the factory builds lower and upper");
     let upper = Planner::get_func_call_from_factory("upper", vec![constant(Value::varchar("abc"))]).unwrap();
@@ -478,52 +463,16 @@ fn s3d_06_the_factory_builds_lower_and_upper() {
 }
 
 #[test]
-fn s3d_06_the_factory_refuses_other_names_and_other_argument_counts() {
+fn s3d_02_the_factory_refuses_other_names_and_other_argument_counts() {
     assert!(Planner::get_func_call_from_factory("reverse", vec![constant(Value::varchar("a"))]).is_err(), "the factory refuses other names and other argument counts: expected `Planner::get_func_call_from_factory(\"reverse\", vec![constant(Value::varchar(\"a\"))]).is_err()`");
     assert!(Planner::get_func_call_from_factory("lower", vec![]).is_err(), "the factory refuses other names and other argument counts: expected `Planner::get_func_call_from_factory(\"lower\", vec![]).is_err()`");
     assert!(Planner::get_func_call_from_factory("upper", vec![constant(Value::varchar("a")), constant(Value::varchar("b"))]).is_err(), "the factory refuses other names and other argument counts: expected `Planner::get_func_call_from_factory(\"upper\", vec![constant(Value::varchar(\"a\")), constant(Value::var...`");
 }
 
 #[test]
-fn s3d_06_the_factory_refuses_arguments_that_are_not_strings() {
+fn s3d_02_the_factory_refuses_arguments_that_are_not_strings() {
     assert!(Planner::get_func_call_from_factory("lower", vec![constant(int(1))]).is_err(), "the factory refuses arguments that are not strings: expected `Planner::get_func_call_from_factory(\"lower\", vec![constant(int(1))]).is_err()`");
     assert!(Planner::get_func_call_from_factory("upper", vec![constant(Value::boolean(true))]).is_err(), "the factory refuses arguments that are not strings: expected `Planner::get_func_call_from_factory(\"upper\", vec![constant(Value::boolean(true))]).is_err()`");
-}
-
-#[test]
-fn s3d_06_sql_lower_and_upper_end_to_end() {
-    let db = BusTubInstance::new(32);
-    assert_eq!(run(&db, "select lower('MiXeD')").unwrap().trim(), "mixed", "sql lower and upper end to end");
-    assert_eq!(run(&db, "select upper('MiXeD'), lower('MiXeD')").unwrap().trim(), "MIXED mixed", "sql lower and upper end to end");
-    assert_eq!(run(&db, "select UPPER(lower('aBc'))").unwrap().trim(), "ABC", "function names are not case sensitive");
-}
-
-#[test]
-fn s3d_06_sql_with_a_wrong_call_is_an_error() {
-    let db = BusTubInstance::new(32);
-    assert!(run(&db, "select upper(1)").is_err(), "sql with a wrong call is an error: expected `run(&db, \"select upper(1)\").is_err()`");
-    assert!(
-        run(&db, "select lower('a', 'b')").is_err(),
-        "sql with a wrong call is an error: expected `run(&db, \"select lower('a', 'b')\").is_err()`"
-    );
-    assert!(
-        run(&db, "select nosuchfunction('a')").is_err(),
-        "sql with a wrong call is an error: expected `run(&db, \"select nosuchfunction('a')\").is_err()`"
-    );
-    assert!(run(&db, "select lower()").is_err(), "sql with a wrong call is an error: expected `run(&db, \"select lower()\").is_err()`");
-}
-
-#[test]
-fn s3d_06_the_function_is_planned_over_a_columns_and_shows_in_explain() {
-    let db = BusTubInstance::new(32);
-    db.generate_mock_table();
-    let out = run(&db, "select upper(day_of_week) from __mock_table_schedule where has_lecture = 1").unwrap();
-    let mut days: Vec<&str> = out.split_whitespace().collect();
-    days.sort();
-    assert_eq!(days, ["MONDAY", "WEDNESDAY"], "the function is planned over a columns and shows in explain");
-    let plan = run(&db, "explain (o) select upper(day_of_week) from __mock_table_schedule").unwrap();
-    assert!(plan.contains("upper(#0.0)"), "{plan}");
-    assert!(plan.contains("MockScan { table=__mock_table_schedule }"), "{plan}");
 }
 
 // ---- properties over the evaluators -----------------------------------------------------------------------------------------------
@@ -569,7 +518,7 @@ proptest! {
 
     /// Comparisons agree with Rust's own on integers, and any NULL operand makes the answer NULL.
     #[test]
-    fn s3d_02_comparisons_agree_with_rust_and_null_wins(l in opt_int(), r in opt_int()) {
+    fn s3d_01_comparisons_agree_with_rust_and_null_wins(l in opt_int(), r in opt_int()) {
         use ComparisonType::*;
         let ops: [(ComparisonType, fn(&i32, &i32) -> bool); 6] = [(Equal, i32::eq), (NotEqual, i32::ne), (LessThan, i32::lt), (LessThanOrEqual, i32::le), (GreaterThan, i32::gt), (GreaterThanOrEqual, i32::ge)];
         for (op, f) in ops {
@@ -584,7 +533,7 @@ proptest! {
     /// Plus and minus agree with 64-bit arithmetic when the answer is an INTEGER (not the NULL encoding), are errors when it is not,
     /// and are NULL when an operand is.
     #[test]
-    fn s3d_02_arithmetic_agrees_with_a_wider_oracle(l in opt_int(), r in opt_int(), plus in any::<bool>()) {
+    fn s3d_01_arithmetic_agrees_with_a_wider_oracle(l in opt_int(), r in opt_int(), plus in any::<bool>()) {
         let op = if plus { ArithmeticType::Plus } else { ArithmeticType::Minus };
         let got = arith(int_or_null(l), int_or_null(r), op);
         match (l, r) {
@@ -602,7 +551,7 @@ proptest! {
 
     /// AND and OR follow Kleene's three-valued logic: false beats unknown for AND, true beats it for OR; both are commutative.
     #[test]
-    fn s3d_03_and_or_are_three_valued_and_commutative(l in opt_bool(), r in opt_bool()) {
+    fn s3d_02_and_or_are_three_valued_and_commutative(l in opt_bool(), r in opt_bool()) {
         let and = |a: Option<bool>, b: Option<bool>| match (a, b) {
             (Some(false), _) | (_, Some(false)) => Some(false),
             (Some(true), Some(true)) => Some(true),
@@ -620,7 +569,7 @@ proptest! {
 
     /// `lower` and `upper` are Rust's own `to_lowercase` and `to_uppercase`, for any text, and are idempotent.
     #[test]
-    fn s3d_03_lower_and_upper_match_the_standard_library(s in "\\PC{0,24}") {
+    fn s3d_02_lower_and_upper_match_the_standard_library(s in "\\PC{0,24}") {
         prop_assert_eq!(string_fn(Value::varchar(&s), StringExpressionType::Lower), Value::varchar(&s.to_lowercase()));
         prop_assert_eq!(string_fn(Value::varchar(&s), StringExpressionType::Upper), Value::varchar(&s.to_uppercase()));
         let once = s.to_uppercase();
@@ -628,7 +577,7 @@ proptest! {
     }
 }
 
-// ---- 3d-04 · the lexer ------------------------------------------------------------------------------------------------------------
+// ---- 3d-03 · the lexer ------------------------------------------------------------------------------------------------------------
 
 fn toks(sql: &str) -> Vec<Token> {
     tokenize(sql).unwrap()
@@ -639,7 +588,7 @@ fn word(s: &str) -> Token {
 }
 
 #[test]
-fn s3d_04_words_numbers_and_symbols() {
+fn s3d_03_words_numbers_and_symbols() {
     assert_eq!(
         toks("select a1, 42 from t"),
         vec![word("select"), word("a1"), Token::Symbol(","), Token::Number("42".into()), word("from"), word("t")],
@@ -650,7 +599,7 @@ fn s3d_04_words_numbers_and_symbols() {
 }
 
 #[test]
-fn s3d_04_unquoted_words_fold_to_lower_case_quoted_ones_do_not() {
+fn s3d_03_unquoted_words_fold_to_lower_case_quoted_ones_do_not() {
     assert_eq!(
         toks("SeLeCt Foo \"Foo Bar\""),
         vec![word("select"), word("foo"), Token::Quoted("Foo Bar".into())],
@@ -660,7 +609,7 @@ fn s3d_04_unquoted_words_fold_to_lower_case_quoted_ones_do_not() {
 }
 
 #[test]
-fn s3d_04_numbers_are_kept_as_written() {
+fn s3d_03_numbers_are_kept_as_written() {
     for n in ["0", "42", "1.5", ".5", "7.", "1e3", "2.5E-4", "1E+10"] {
         assert_eq!(toks(n), vec![Token::Number(n.into())], "{n} is one number");
     }
@@ -670,7 +619,7 @@ fn s3d_04_numbers_are_kept_as_written() {
 }
 
 #[test]
-fn s3d_04_strings_double_the_quote_to_contain_one() {
+fn s3d_03_strings_double_the_quote_to_contain_one() {
     assert_eq!(toks("'it''s'"), vec![Token::Str("it's".into())], "strings double the quote to contain one");
     assert_eq!(toks("''"), vec![Token::Str(String::new())], "strings double the quote to contain one");
     assert_eq!(toks("'a -- b /* c */'"), vec![Token::Str("a -- b /* c */".into())], "comment marks inside a string are text");
@@ -678,7 +627,7 @@ fn s3d_04_strings_double_the_quote_to_contain_one() {
 }
 
 #[test]
-fn s3d_04_two_character_symbols_win_over_one() {
+fn s3d_03_two_character_symbols_win_over_one() {
     assert_eq!(
         toks("a<=b<>c>=d!=e||f::g"),
         vec![
@@ -707,7 +656,7 @@ fn s3d_04_two_character_symbols_win_over_one() {
 }
 
 #[test]
-fn s3d_04_comments_are_skipped() {
+fn s3d_03_comments_are_skipped() {
     assert_eq!(toks("a -- the rest of the line\nb"), vec![word("a"), word("b")], "comments are skipped");
     assert_eq!(toks("a /* x\ny */ b"), vec![word("a"), word("b")], "comments are skipped");
     assert_eq!(
@@ -719,7 +668,7 @@ fn s3d_04_comments_are_skipped() {
 }
 
 #[test]
-fn s3d_04_bad_input_is_an_error_not_a_panic() {
+fn s3d_03_bad_input_is_an_error_not_a_panic() {
     for bad in ["'open", "\"open", "a @ b", "#", "select ~ 1", "a $ b"] {
         let e = tokenize(bad).unwrap_err();
         assert_eq!(e.kind, ExceptionType::Invalid, "{bad:?} is a parse error");
@@ -758,19 +707,19 @@ proptest! {
 
     /// Print any list of tokens with spaces between them (and a comment in some gaps) and the lexer returns the same list.
     #[test]
-    fn s3d_04_lexing_printed_tokens_gives_the_tokens_back(ts in prop::collection::vec(token_strategy(), 0..24), gap in prop::sample::select(vec![" ", "  \n", " /* c */ ", " -- c\n"])) {
+    fn s3d_03_lexing_printed_tokens_gives_the_tokens_back(ts in prop::collection::vec(token_strategy(), 0..24), gap in prop::sample::select(vec![" ", "  \n", " /* c */ ", " -- c\n"])) {
         let sql = ts.iter().map(print_token).collect::<Vec<_>>().join(gap);
         prop_assert_eq!(tokenize(&sql).unwrap(), ts, "for {:?}", sql);
     }
 
     /// Whatever the text, the lexer answers (tokens or an error); it never panics, and upper-casing the input changes only words.
     #[test]
-    fn s3d_04_the_lexer_answers_for_any_text(s in "\\PC{0,40}") {
+    fn s3d_03_the_lexer_answers_for_any_text(s in "\\PC{0,40}") {
         let _ = tokenize(&s);
     }
 }
 
-// ---- 3d-05 · expressions from text -----------------------------------------------------------------------------------------------
+// ---- 3d-04 · expressions from text -----------------------------------------------------------------------------------------------
 
 fn parse(sql: &str) -> Expr {
     parse_expr(sql).unwrap_or_else(|e| panic!("{sql:?} should parse: {e}"))
@@ -785,7 +734,7 @@ fn bin(op: &str, l: Expr, r: Expr) -> Expr {
 }
 
 #[test]
-fn s3d_05_atoms() {
+fn s3d_04_atoms() {
     assert_eq!(parse("42"), Expr::Integer(42), "atoms");
     assert_eq!(parse("'x'"), Expr::Str("x".into()), "atoms");
     assert_eq!(parse("TRUE"), Expr::Bool(true), "atoms");
@@ -801,7 +750,7 @@ fn s3d_05_atoms() {
 }
 
 #[test]
-fn s3d_05_times_binds_tighter_than_plus() {
+fn s3d_04_times_binds_tighter_than_plus() {
     assert_eq!(
         parse("1 + 2 * 3"),
         bin("+", Expr::Integer(1), bin("*", Expr::Integer(2), Expr::Integer(3))),
@@ -820,7 +769,7 @@ fn s3d_05_times_binds_tighter_than_plus() {
 }
 
 #[test]
-fn s3d_05_operators_of_one_level_associate_to_the_left() {
+fn s3d_04_operators_of_one_level_associate_to_the_left() {
     assert_eq!(
         parse("10 - 3 - 2"),
         bin("-", bin("-", Expr::Integer(10), Expr::Integer(3)), Expr::Integer(2)),
@@ -839,7 +788,7 @@ fn s3d_05_operators_of_one_level_associate_to_the_left() {
 }
 
 #[test]
-fn s3d_05_and_binds_tighter_than_or_and_comparison_tighter_than_and() {
+fn s3d_04_and_binds_tighter_than_or_and_comparison_tighter_than_and() {
     assert_eq!(parse("a or b and c"), bin("or", column("a"), bin("and", column("b"), column("c"))), "and binds tighter than or");
     assert_eq!(
         parse("a = 1 and b < 2"),
@@ -854,7 +803,7 @@ fn s3d_05_and_binds_tighter_than_or_and_comparison_tighter_than_and() {
 }
 
 #[test]
-fn s3d_05_not_is_looser_than_comparison_and_tighter_than_and() {
+fn s3d_04_not_is_looser_than_comparison_and_tighter_than_and() {
     assert_eq!(
         parse("not a = b"),
         Expr::Unary { op: "not".into(), expr: Box::new(bin("=", column("a"), column("b"))) },
@@ -873,7 +822,7 @@ fn s3d_05_not_is_looser_than_comparison_and_tighter_than_and() {
 }
 
 #[test]
-fn s3d_05_is_null_and_unary_minus() {
+fn s3d_04_is_null_and_unary_minus() {
     assert_eq!(parse("a is null"), Expr::IsNull { expr: Box::new(column("a")), negated: false }, "is null");
     assert_eq!(
         parse("a + 1 is not null"),
@@ -891,7 +840,7 @@ fn s3d_05_is_null_and_unary_minus() {
 }
 
 #[test]
-fn s3d_05_text_that_is_not_one_expression_is_an_error() {
+fn s3d_04_text_that_is_not_one_expression_is_an_error() {
     for bad in ["", "1 +", "(1", "1)", "1 2", "* 3", "a and", "f(1,", "1 = = 2", "select", "from"] {
         let e = parse_expr(bad).unwrap_err();
         assert_eq!(e.kind, ExceptionType::Invalid, "{bad:?} is a parse error");
@@ -991,14 +940,14 @@ proptest! {
     /// Print any expression tree with the fewest parentheses its precedences allow and parse it back: the same tree. This pins
     /// every precedence and every associativity at once.
     #[test]
-    fn s3d_05_printing_a_tree_and_parsing_it_gives_the_tree_back(e in expr_strategy()) {
+    fn s3d_04_printing_a_tree_and_parsing_it_gives_the_tree_back(e in expr_strategy()) {
         let sql = show(&e);
         prop_assert_eq!(parse_expr(&sql).unwrap(), e, "for {:?}", sql);
     }
 
     /// Wrapping the whole text in parentheses changes nothing, and so does extra white space and comments between the tokens.
     #[test]
-    fn s3d_05_parentheses_and_spacing_do_not_change_the_tree(e in expr_strategy()) {
+    fn s3d_04_parentheses_and_spacing_do_not_change_the_tree(e in expr_strategy()) {
         let sql = show(&e);
         prop_assert_eq!(parse_expr(&format!("( {sql} )")).unwrap(), parse_expr(&sql).unwrap());
         let spaced = tokenize(&sql).unwrap().iter().map(print_token).collect::<Vec<_>>().join(" /* gap */ ");
@@ -1007,13 +956,55 @@ proptest! {
 
     /// A random run of tokens is parsed or refused; it never panics or loops.
     #[test]
-    fn s3d_05_the_parser_answers_for_any_run_of_tokens(ts in prop::collection::vec(token_strategy(), 0..14)) {
+    fn s3d_04_the_parser_answers_for_any_run_of_tokens(ts in prop::collection::vec(token_strategy(), 0..14)) {
         let sql = ts.iter().map(print_token).collect::<Vec<_>>().join(" ");
         let _ = parse_expr(&sql);
     }
 }
 
-// ---- 3d-07 · SQL on constants, end to end -----------------------------------------------------------------------------------------
+// ---- 3d-05 · SQL on constants, end to end -----------------------------------------------------------------------------------------
+
+fn run(db: &BusTubInstance, sql: &str) -> bustub::common::exception::Result<String> {
+    let mut out = String::new();
+    db.execute_sql(sql, &mut SimpleStreamWriter::new(&mut out, true, " "), None)?;
+    Ok(out)
+}
+
+#[test]
+fn s3d_05_sql_lower_and_upper_end_to_end() {
+    let db = BusTubInstance::new(32);
+    assert_eq!(run(&db, "select lower('MiXeD')").unwrap().trim(), "mixed", "sql lower and upper end to end");
+    assert_eq!(run(&db, "select upper('MiXeD'), lower('MiXeD')").unwrap().trim(), "MIXED mixed", "sql lower and upper end to end");
+    assert_eq!(run(&db, "select UPPER(lower('aBc'))").unwrap().trim(), "ABC", "function names are not case sensitive");
+}
+
+#[test]
+fn s3d_05_sql_with_a_wrong_call_is_an_error() {
+    let db = BusTubInstance::new(32);
+    assert!(run(&db, "select upper(1)").is_err(), "sql with a wrong call is an error: expected `run(&db, \"select upper(1)\").is_err()`");
+    assert!(
+        run(&db, "select lower('a', 'b')").is_err(),
+        "sql with a wrong call is an error: expected `run(&db, \"select lower('a', 'b')\").is_err()`"
+    );
+    assert!(
+        run(&db, "select nosuchfunction('a')").is_err(),
+        "sql with a wrong call is an error: expected `run(&db, \"select nosuchfunction('a')\").is_err()`"
+    );
+    assert!(run(&db, "select lower()").is_err(), "sql with a wrong call is an error: expected `run(&db, \"select lower()\").is_err()`");
+}
+
+#[test]
+fn s3d_05_the_function_is_planned_over_a_column_and_shows_in_explain() {
+    let db = BusTubInstance::new(32);
+    db.generate_mock_table();
+    let out = run(&db, "select upper(day_of_week) from __mock_table_schedule where has_lecture = 1").unwrap();
+    let mut days: Vec<&str> = out.split_whitespace().collect();
+    days.sort();
+    assert_eq!(days, ["MONDAY", "WEDNESDAY"], "the function is planned over a column and shows in explain");
+    let plan = run(&db, "explain (o) select upper(day_of_week) from __mock_table_schedule").unwrap();
+    assert!(plan.contains("upper(#0.0)"), "{plan}");
+    assert!(plan.contains("MockScan { table=__mock_table_schedule }"), "{plan}");
+}
 
 fn sql_value(db: &BusTubInstance, e: &Expr) -> bustub::common::exception::Result<String> {
     Ok(run(db, &format!("select {}", show(e)))?.trim().to_string())
@@ -1091,7 +1082,7 @@ proptest! {
     /// `select <integer expression>` through the lexer, the parser, the binder, the planner and the evaluator answers what a 64-bit
     /// computation does: the value, `integer_null`, or an overflow error.
     #[test]
-    fn s3d_07_sql_integer_expressions_agree_with_an_oracle(e in int_expr(false)) {
+    fn s3d_05_sql_integer_expressions_agree_with_an_oracle(e in int_expr(false)) {
         let db = BusTubInstance::new(32);
         match (int_oracle(&e), sql_value(&db, &e)) {
             (Ok(Some(v)), Ok(got)) => prop_assert_eq!(got, v.to_string(), "for {}", show(&e)),
@@ -1103,7 +1094,7 @@ proptest! {
 
     /// `select <boolean expression>` with comparisons, AND and OR over integers that may be NULL follows three-valued logic.
     #[test]
-    fn s3d_07_sql_boolean_expressions_follow_three_valued_logic(e in bool_expr()) {
+    fn s3d_05_sql_boolean_expressions_follow_three_valued_logic(e in bool_expr()) {
         let db = BusTubInstance::new(32);
         let want = match bool_oracle(&e) { Some(b) => b.to_string(), None => "boolean_null".into() };
         prop_assert_eq!(sql_value(&db, &e).unwrap(), want, "for {}", show(&e));
@@ -1111,7 +1102,7 @@ proptest! {
 }
 
 #[test]
-fn s3d_07_a_statement_with_a_syntax_error_says_so() {
+fn s3d_05_a_statement_with_a_syntax_error_says_so() {
     let db = BusTubInstance::new(32);
     for bad in ["select 1 +", "select (1", "select 'open", "selec 1", "select 1 @ 2"] {
         let e = run(&db, bad).unwrap_err();
@@ -1120,7 +1111,7 @@ fn s3d_07_a_statement_with_a_syntax_error_says_so() {
 }
 
 #[test]
-fn s3d_07_comments_and_case_do_not_matter_to_a_query() {
+fn s3d_05_comments_and_case_do_not_matter_to_a_query() {
     let db = BusTubInstance::new(32);
     assert_eq!(run(&db, "SELECT /* the answer */ 40 + 2 -- done").unwrap().trim(), "42", "comments and case do not matter to a query");
     assert_eq!(run(&db, "select\n  upper(  'mixed'  )").unwrap().trim(), "MIXED", "white space does not matter to a query");

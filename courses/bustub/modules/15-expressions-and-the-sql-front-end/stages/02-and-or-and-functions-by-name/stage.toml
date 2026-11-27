@@ -1,0 +1,9 @@
+id = "3d-02"
+title = "AND, OR and functions by name"
+kind = "build"
+difficulty = "medium"
+tests = ["stages_3d::s3d_02"]
+renamed_from = ["3d-06"]
+learn = ["SQL's three-valued truth tables, and why FALSE AND NULL is FALSE", "case mapping is not a byte operation", "how a SQL function name becomes an expression node: a match or a registry", "errors for wrong names, argument counts and types, each in its layer"]
+concepts = ["sql-types-and-three-valued-logic"]
+concepts_optional = ["unicode-and-case-mapping", "the-sql-pipeline", "name-resolution-and-the-binder", "expression-trees", "checking-invariants", "enums-with-data-and-match", "errors-as-values-with-result", "property-testing-and-fuzzing", "errors-3d"]

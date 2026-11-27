@@ -1,8 +1,0 @@
-id = "2a-05"
-title = "Boss: a sorted bucket from the pieces"
-kind = "boss"
-difficulty = "easy"
-tests = ["stages_2a::s2a_05"]
-retest = true
-concepts = ["slotted-pages"]
-concepts_optional = ["model-based-testing", "checking-invariants", "errors-2a"]

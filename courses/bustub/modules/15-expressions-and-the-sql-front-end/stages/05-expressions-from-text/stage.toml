@@ -1,8 +1,0 @@
-id = "3d-05"
-title = "Expressions from text"
-kind = "build"
-difficulty = "hard"
-tests = ["stages_3d::s3d_05"]
-learn = ["precedence and associativity in a hand-written parser", "recursive descent or binding powers", "printing a tree and parsing it back as the one test that pins the whole grammar"]
-concepts = ["lexers-and-precedence-climbing"]
-concepts_optional = ["expression-trees", "enums-with-data-and-match", "errors-as-values-with-result", "property-testing-and-fuzzing", "model-based-testing", "errors-3d"]

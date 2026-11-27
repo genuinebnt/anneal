@@ -1,0 +1,8 @@
+id = "2a-01"
+title = "Values that survive bytes"
+kind = "learn"
+difficulty = "easy"
+tests = ["stages_2a::s2a_01"]
+learn = ["a trait that fixes a value's size and byte encoding", "which bytes are a format others read and which are yours to lay out", "packing two numbers into one i64 without losing the sign", "a key as opaque bytes, ordered by a comparator", "computing a page's capacity at compile time"]
+concepts = ["bytes-endianness-and-views"]
+concepts_optional = ["traits-with-associated-consts", "const-generics-for-page-layouts", "integers-and-casts", "sort-keys-and-null-ordering", "eq-hash-ord-contracts", "shifts-masks-and-bit-tricks", "newtypes-and-type-driven-design", "generics-and-static-dispatch", "reading-compiler-errors", "errors-2a"]

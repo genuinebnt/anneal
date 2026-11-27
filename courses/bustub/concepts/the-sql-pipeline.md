@@ -136,10 +136,9 @@ fn binding_replaces_names_by_positions() {
 
 ### In the exercises
 
-- **3d-01 to 3d-03:** you write the nodes the *engine* evaluates.
-- **3d-04 and 3d-05:** you write the front of the pipeline for expressions: the lexer and the expression parser.
-- **3d-06:** the factory you write is called by the *planner*; `explain` shows the result.
-- **3d-07:** `execute_sql` runs all five stages for each record of the `.slt` files.
+- **3d-01 and 3d-02:** you write the nodes the *engine* evaluates, and the function factory the *planner* calls; `explain` shows the result.
+- **3d-03 and 3d-04:** you write the front of the pipeline for expressions: the lexer and the expression parser.
+- **3d-05:** `execute_sql` runs all five stages for each record of the `.slt` files.
 - **Modules 3e to 3h:** executors (the engine), then the optimizer rules.
 
 ### Where it is used

@@ -1,0 +1,9 @@
+id = "2a-02"
+title = "A page array you can search"
+kind = "build"
+difficulty = "medium"
+tests = ["stages_2a::s2a_02"]
+renamed_from = ["2a-04", "2a-c5"]
+learn = ["a view over bytes that behaves like a Vec of fixed-size entries", "shifting a range inside one buffer without smearing it", "a binary search that returns a position: lookup, insert point and range start in one answer", "testing against a reference: a Vec model and partition_point"]
+concepts = ["slices-copy-within-and-binary-search"]
+concepts_optional = ["slotted-pages", "bytes-endianness-and-views", "model-based-testing", "property-testing-and-fuzzing", "checking-invariants", "iterators-and-closures", "reading-compiler-errors", "errors-2a"]

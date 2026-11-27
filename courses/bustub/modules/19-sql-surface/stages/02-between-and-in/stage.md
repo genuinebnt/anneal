@@ -9,7 +9,7 @@
 
 ## The task
 
-Make these parse and run (in `src/sql/parser.rs`, inside the expression grammar you wrote in 3d-05, in the loop that handles comparisons and `IS NULL`):
+Make these parse and run (in `src/sql/parser.rs`, inside the expression grammar you wrote in 3d-04, in the loop that handles comparisons and `IS NULL`):
 
 - `x [not] between lo and hi`: both bounds inclusive; the `and` after `lo` belongs to BETWEEN, not to the enclosing condition. `not between` negates the whole test.
 - `x [not] in (e1, e2, ...)`: one or more expressions. Each item is an expression of the row, not only a constant.

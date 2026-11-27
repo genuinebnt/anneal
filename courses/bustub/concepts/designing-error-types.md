@@ -131,7 +131,7 @@ fn a_broken_invariant_panics_with_its_reason() {
 ### In the exercises
 
 - **1a-01:** `DiskManager::new` returns the `io::Error` instead of panicking when a file cannot be opened; `rust_io_errors` covers their kinds.
-- **3d-02:** arithmetic errors in SQL (overflow, division by zero) are `Exception`s, distinguished from panics.
+- **3d-01:** arithmetic errors in SQL (overflow, division by zero) are `Exception`s, distinguished from panics.
 - **4a-01:** `Watermark::add_txn` returns an error for an impossible read timestamp.
 - **4b-02:** `write_write_conflict` builds the error and taints the transaction in one place.
 

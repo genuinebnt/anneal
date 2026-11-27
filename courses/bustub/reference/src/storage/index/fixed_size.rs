@@ -84,41 +84,41 @@ impl FixedSize for Rid {
     fn encode(&self, out: &mut [u8]) {
         // @begin 2a-01
         self.get().encode(out);
-        //~ todo!("2a-01: a rid is its i64")
+        //~ todo!("2a-01: the page id and the slot in 8 bytes that decode reads back")
         // @end
     }
     fn decode(bytes: &[u8]) -> Rid {
         // @begin 2a-01
         Rid::from_i64(i64::decode(bytes))
-        //~ todo!("2a-01: a rid is its i64")
+        //~ todo!("2a-01: the rid that encode wrote")
         // @end
     }
 }
 
-/// A pair is its first value followed by its second. Index entries are `(key, value)` pairs.
+/// A pair of fixed-size values takes the two sizes added. Index entries are `(key, value)` pairs.
 impl<A: FixedSize, B: FixedSize> FixedSize for (A, B) {
     const SIZE: usize = A::SIZE + B::SIZE;
     fn encode(&self, out: &mut [u8]) {
-        // @begin 2a-02
+        // @begin 2a-01
         let (first, second) = out.split_at_mut(A::SIZE);
         self.0.encode(first);
         self.1.encode(second);
-        //~ todo!("2a-02: encode the first value into the first A::SIZE bytes and the second into the rest (split_at_mut gives you both halves at once)")
+        //~ todo!("2a-01: both values in the pair's SIZE bytes, laid out so that decode reads them back")
         // @end
     }
     fn decode(bytes: &[u8]) -> (A, B) {
-        // @begin 2a-02
+        // @begin 2a-01
         let (first, second) = bytes.split_at(A::SIZE);
         (A::decode(first), B::decode(second))
-        //~ todo!("2a-02: decode a pair from its two halves")
+        //~ todo!("2a-01: the pair that encode wrote")
         // @end
     }
 }
 
 /// How many entries of `entry_size` bytes fit in a page after `metadata_size` bytes of header.
 pub const fn array_size(metadata_size: usize, entry_size: usize) -> usize {
-    // @begin 2a-02
+    // @begin 2a-01
     (crate::common::config::BUSTUB_PAGE_SIZE - metadata_size) / entry_size
-    //~ 0 // TODO(2a-02): the space left after the metadata, divided by the entry size
+    //~ 0 // TODO(2a-01): the space left after the metadata, divided by the entry size
     // @end
 }

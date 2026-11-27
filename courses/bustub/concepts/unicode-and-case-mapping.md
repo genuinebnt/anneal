@@ -90,7 +90,7 @@ fn a_round_trip_through_lower_is_not_case_folding() {
 
 ### In the exercises
 
-- **3d-03:** `StringExpression::compute` is `to_lowercase`/`to_uppercase`; the tests include `école`, `ß` and an emoji.
+- **3d-02:** `StringExpression::compute` is `to_lowercase`/`to_uppercase`; the tests include `école`, `ß` and an emoji.
 - **Module 3e onwards:** the mock tables contain `🥰` and `💩` strings, so every executor that copies a string exercises UTF-8.
 
 ### Where it is used

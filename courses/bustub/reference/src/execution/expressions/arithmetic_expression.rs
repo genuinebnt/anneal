@@ -44,7 +44,7 @@ impl ArithmeticExpression {
 
     /// `None` (a NULL result) if either side is NULL. An overflow is an `OutOfRange` error.
     fn perform_computation(&self, lhs: &Value, rhs: &Value) -> Result<Option<i32>> {
-        // @begin 3d-02
+        // @begin 3d-01
         let (Value::Integer(l), Value::Integer(r)) = (lhs, rhs) else {
             return Ok(None);
         };
@@ -55,7 +55,7 @@ impl ArithmeticExpression {
         };
         // `i32::MIN` is the stored encoding of the INTEGER NULL (module 3a), so it is not a usable result either
         Ok(Some(result.filter(|v| *v != i32::MIN).ok_or_else(out_of_range)?))
-        //~ todo!("3d-02: None if either side is NULL; otherwise the sum or difference; an overflow, or a result equal to the NULL encoding, is an OutOfRange error")
+        //~ todo!("3d-01: None if either side is NULL; otherwise the sum or difference; an overflow, or a result equal to the NULL encoding, is an OutOfRange error")
         // @end
     }
 
@@ -69,20 +69,20 @@ impl ArithmeticExpression {
 
 impl Expression for ArithmeticExpression {
     fn evaluate(&self, tuple: &Tuple, schema: &Schema) -> Result<Value> {
-        // @begin 3d-02
+        // @begin 3d-01
         let lhs = self.children[0].evaluate(tuple, schema)?;
         let rhs = self.children[1].evaluate(tuple, schema)?;
         self.result(&lhs, &rhs)
-        //~ todo!("3d-02: evaluates both children and combines them; a None result is the INTEGER NULL")
+        //~ todo!("3d-01: evaluates both children and combines them; a None result is the INTEGER NULL")
         // @end
     }
 
     fn evaluate_join(&self, left_tuple: &Tuple, left_schema: &Schema, right_tuple: &Tuple, right_schema: &Schema) -> Result<Value> {
-        // @begin 3d-02
+        // @begin 3d-01
         let lhs = self.children[0].evaluate_join(left_tuple, left_schema, right_tuple, right_schema)?;
         let rhs = self.children[1].evaluate_join(left_tuple, left_schema, right_tuple, right_schema)?;
         self.result(&lhs, &rhs)
-        //~ todo!("3d-02: the same with evaluate_join")
+        //~ todo!("3d-01: the same with evaluate_join")
         // @end
     }
 

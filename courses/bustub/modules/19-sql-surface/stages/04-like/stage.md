@@ -14,7 +14,7 @@
 - `NULL like x`, `x like NULL` and the `not like` forms are NULL. Both operands must be VARCHARs (else `NotImplemented`).
 - The matcher `like_matches(text, pattern) -> bool` must be at most proportional to `text length * pattern length`: the tests include a 4000-character text and a pattern with twelve percents and give it ten seconds.
 
-Where to work: the parser's comparison loop (in the expression grammar from 3d-05: `like` and `not like` produce a binary operator named `like`), `get_binary_expression_from_factory` in `src/planner/planner.rs`, and `src/execution/expressions/like_expression.rs`.
+Where to work: the parser's comparison loop (in the expression grammar from 3d-04: `like` and `not like` produce a binary operator named `like`), `get_binary_expression_from_factory` in `src/planner/planner.rs`, and `src/execution/expressions/like_expression.rs`.
 
 ## Your freedom
 

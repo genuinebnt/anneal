@@ -105,7 +105,7 @@ fn an_alias_hides_the_table_name() {
 
 ### In the exercises
 
-- **3d-06:** the binder (given) does this before your factory is called: `lower(day_of_week)` is bound to `__mock_table_schedule.day_of_week`.
+- **3d-02:** the binder (given) does this before your factory is called: `lower(day_of_week)` is bound to `__mock_table_schedule.day_of_week`.
 - **Module 3f (joins):** `select * from t1 inner join t1 temp on ...` works because of aliases; the plan's schemas carry the bound names.
 
 ### Where it is used
