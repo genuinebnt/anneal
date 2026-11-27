@@ -11,7 +11,7 @@
 
 Nothing new to write. Make both pass:
 
-- **`stages_3f::s3f_06`**: for random tables `l` (duplicate keys, NULLs) and `r` (unique keys, an index on the key), the join `l [left] join r on l.k = r.k` through the nested loop join (plain SQL), the hash join (a hand-built plan) and the nested index join (`set force_optimizer_starter_rule=yes`) returns the rows of the naive join; an inner join with the tables swapped returns the same pairs; and `count(*)` over the join equals the number of those rows.
+- **`stages_3f::s3f_06`**: for random tables `l` and `r` (duplicate keys and NULLs on both sides, an index on `r.k`), the join `l [left] join r on l.k = r.k` through the nested loop join (plain SQL), the hash join (a hand-built plan) and the nested index join (`set force_optimizer_starter_rule=yes`) returns the rows of the naive join; an inner join with the tables swapped returns the same pairs; and `count(*)` over the join equals the number of those rows.
 - **`sql_aggregation_and_joins_test`** (`cargo test --test sql_aggregation_and_joins_test`): BusTub's `p3.07-simple-agg`, `p3.08-group-agg-1`, `p3.09-group-agg-2`, `p3.10-simple-join`, `p3.11-multi-way-join`, `p3.12-repeat-execute` and `p3.13-nested-index-join`. (`p3.14` and `p3.15`, the hash join files, wait for module 3h's optimizer rule.)
 
 ## Your freedom

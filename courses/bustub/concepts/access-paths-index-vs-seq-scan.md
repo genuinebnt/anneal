@@ -64,12 +64,12 @@ A B+ tree keeps its keys sorted, and its leaves are linked (module 2c): a full s
 |---|---|
 | `index->ScanKey(key, &rids, txn)` fills an out-vector | `index.scan_key(&key) -> Vec<Rid>` returns it |
 | `table_heap->GetTuple(rid)` returns `pair<TupleMeta, Tuple>` | `table.get_tuple(rid)? -> (TupleMeta, Tuple)` |
-| iterate the B+ tree with `IndexIterator` (lazy) | `index.scan_all() -> Vec<Rid>` (materialised; simpler, uses memory) |
+| iterate the B+ tree with `IndexIterator` (lazy) | `index.scan_all() -> Vec<(Tuple, Rid)>`, the entries (materialised; simpler, uses memory) |
 
 
 ## Indexes and NULLs
 
-An index answers "which rows have this key?". A NULL is not a key: `NULL = 5` and `NULL = NULL` are never true, so no query can ask for it by equality. The indexes in this course therefore do not store rows whose key has a NULL in it, and a lookup of NULL finds nothing, which is exactly what SQL says `WHERE v1 = NULL` means. One consequence to know: reading a table **in key order through its index** (an index scan without keys) lists only the rows whose key is not NULL, so it is a correct way to answer `ORDER BY v1` only for a column that cannot be NULL (a primary key). Real databases that index NULLs (PostgreSQL's B-trees do) pay for it with a more complicated comparison and sort NULLs first or last.
+An index answers "which rows have this key?". `NULL = 5` and `NULL = NULL` are never true, so a lookup of NULL finds nothing, which is exactly what SQL says `WHERE v1 = NULL` means. The row is still in the index: every row has an entry, and a NULL key orders before every value. That makes reading a table **in key order through its index** (an index scan without keys) a correct answer to `ORDER BY v1`, NULLs first; an `ORDER BY v1 NULLS LAST` needs a different order than the index has and keeps its sort. PostgreSQL's B-trees index NULLs the same way (last by default; `NULLS FIRST` in `CREATE INDEX` flips it). A **primary key** has no NULL at all.
 
 ## In real code
 

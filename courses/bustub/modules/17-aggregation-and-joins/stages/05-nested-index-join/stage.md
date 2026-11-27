@@ -4,7 +4,7 @@ If the right table has an **index on the join column**, there is a third way: fo
 > ||The deleted row is not a match (the heap says which rows are alive; module 3e's delete removes the index entry, but a reader must still check): an inner join outputs nothing for it, a left join outputs the outer row padded with NULLs. A million lookups at about a microsecond each is a second or so, which beats building a hash table of a big inner table; but if the outer side is nearly as large as the inner side, a hash join does one pass over each side and avoids the random heap reads.||
 >
 > - What if the outer key is NULL?
-> - What if several inner rows have the key (the index of this course has unique keys)?
+> - What if several inner rows have the key?
 > - Which table is indexed?
 
 ## The task
@@ -20,7 +20,7 @@ In `src/execution/executors/nested_index_join_executor.rs` (the struct, `new` (i
 > - `init`: forget pending output and initialise the child.
 > - `next`: until the batch is full: hand out `pending` first; take the next outer tuple (none: stop); `probe` it; for every inner tuple queue `outer values ++ inner values` (laid out with the plan's output schema); if there is none and the join is a **LEFT** join, queue the outer values followed by NULLs for the inner columns (`nulls_for(&self.inner_schema)`).
 
-The tests (SQL with `set force_optimizer_starter_rule=yes`, which makes the optimizer pick the index join): the optimizer turns an equality join on an indexed column into an index join; inner and left joins; either side of the `=` may be written first; a deleted inner row is not joined; rows inserted after the index was made are found; a NULL outer key matches nothing; and a property: **for random tables with a unique indexed key on the right**, inner and left joins return exactly the naive join's rows, and the plan says `NestedIndexJoin`.
+The tests (SQL with `set force_optimizer_starter_rule=yes`, which makes the optimizer pick the index join): the optimizer turns an equality join on an indexed column into an index join; inner and left joins; either side of the `=` may be written first; a deleted inner row is not joined; rows inserted after the index was made are found; a NULL outer key matches nothing; and a property: **for random tables whose indexed key on the right repeats and may be NULL**, inner and left joins return exactly the naive join's rows, and the plan says `NestedIndexJoin`.
 
 ## Your freedom
 
