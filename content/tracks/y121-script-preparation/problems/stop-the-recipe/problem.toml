@@ -1,0 +1,30 @@
+slug = "stop-the-recipe"
+title = "Say where the script stopped"
+mode = "write"
+level = "medium"
+stage = "meaning"
+order = 4
+status = "ready"
+tags = ["interpreters", "control flow", "stack traces", "fuel"]
+teaches = [
+  "Each step returns how it ended: normally, next round, end the repeat, or return. A repeat handles the first three and passes `Return` up; a procedure call handles `Return` and treats the repeat endings as mistakes. Failures travel as `Err`, carrying a trace built from the list of running procedures at the moment of failure. Every step and every round pays fuel, so any script ends.",
+]
+follow_up = "1) How would you add the line of each step to the trace? 2) How would you resume a script after an alarm?"
+related = ["Y121", "Y122"]
+
+[[hints]]
+kind = "approach"
+text = "Running a list of steps can end in more ways than one. Name all of them, and decide for each construct which ones it handles and which it passes to its caller."
+
+[[hints]]
+kind = "rust"
+text = "Make an enum for how a step ended, and wrap it in `Result` for failures. Then `?` carries a failure all the way out, and the other endings are matched one level at a time."
+
+[[hints]]
+kind = "edge"
+text = "If you build the trace when the failure happens, it is right even though `?` then unwinds everything. Think about what a repeat with an empty body costs."
+
+[solution]
+explanation = "Each step returns how it ended: normally, next round, end the repeat, or return. A repeat handles the first three and passes `Return` up; a procedure call handles `Return` and treats the repeat endings as mistakes. Failures travel as `Err`, carrying a trace built from the list of running procedures at the moment of failure. Every step and every round pays fuel, so any script ends."
+time = "O(fuel)"
+space = "O(depth)"

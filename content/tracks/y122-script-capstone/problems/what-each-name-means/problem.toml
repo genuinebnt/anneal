@@ -1,0 +1,35 @@
+slug = "what-each-name-means"
+title = "Decide what every name means before running"
+mode = "write"
+level = "hard"
+stage = "front"
+order = 3
+status = "ready"
+tags = ["interpreters", "static scoping", "semantic checks", "warnings"]
+teaches = [
+  "One pass over the tree keeps a stack of scopes that mirrors the ones the program will create. Declaring and defining are separate, which catches a name used in its own initializer. The number of scopes between a use and its declaration is stored on the name, so running never has to search. The same walk carries 'am I in a function, a class, a loop', saved and restored around each.",
+]
+follow_up = "1) How would you also give each local its index within its scope, so running needs no names at all? 2) What would a 'declared but only written' warning need?"
+related = ["Y121", "Y122"]
+
+[[hints]]
+kind = "approach"
+text = "Walk the tree with a stack of scopes, each a map from a name to what you know about it. A declaration has two moments: the name appears, and later it becomes usable. The initializer sits between them."
+
+[[hints]]
+kind = "rust"
+text = "`depth` is a `Cell`, so a `&Stmt` is enough to fill it in. `scopes.iter_mut().rev().enumerate()` gives the distance directly."
+
+[[hints]]
+kind = "edge"
+text = "Entering a function or a class changes what is allowed. Save the old context, set the new one, and put the old one back afterwards. The loop count is part of that context."
+
+[solution]
+explanation = "One pass over the tree keeps a stack of scopes that mirrors the ones the program will create. Declaring and defining are separate, which catches a name used in its own initializer. The number of scopes between a use and its declaration is stored on the name, so running never has to search. The same walk carries 'am I in a function, a class, a loop', saved and restored around each."
+time = "O(nodes × scope depth)"
+space = "O(names)"
+
+[[cookbook]]
+level = "similar"
+page = "toy-language-interpreter"
+note = "The capstone file's resolver covers this step with its own types and names. It used to miss assigning inside an own initializer; that is fixed."

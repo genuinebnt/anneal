@@ -1,0 +1,685 @@
+# The series "Build a scripting language": an order over existing and new problems, not a track.
+# required: do these first. helpful: keep closed (hidden = true); reveals_method = true means the link gives away how to
+# solve the part. cookbook: reference pages (slugs in content/cookbook), also closed by default; level is exact (solves
+# the task), similar (same technique, different task) or related (explains the idea). Minutes are estimates; nobody has
+# been timed.
+
+[series]
+id = "scripting-language"
+rank = 12
+title = "Build a scripting language"
+summary = "Small parts give you what the capstone needs. Then you build a language with variables, functions and classes, and run it two ways."
+note = "All times are estimates; nobody has been timed."
+capstone_title = "Capstone: build a scripting language"
+capstone_summary = "A scanner, a parser that reports every mistake, name checking, a tree interpreter, and a compiler with its own machine."
+capstone_note = "From step 2 on, each starter contains reference code for earlier steps. It is a stand-in until the app can carry your own code from step to step, and it gives away those steps and much of the preparation before them."
+capstone_cookbook = "toy-language-interpreter"
+
+[[stage]]
+id = "read"
+name = "Read text"
+
+[[stage]]
+id = "meaning"
+name = "Give it a meaning"
+
+[[stage]]
+id = "machine"
+name = "Run flat code"
+
+[[part]]
+number = 1
+id = "l3-zero-copy-tokenizer"
+stage = "read"
+status = "existing"
+minutes = 45
+blurb = "Cut source text into pieces without copying it"
+new_idea = "Walking through text and handing out pieces of it"
+reuses = "nothing"
+required = []
+helpful = [
+    { id = "s2-bytes-chars-char-indices", why = "positions in bytes and in characters", reveals_method = false, hidden = true },
+    { id = "s2-fix-slicing-mid-utf8", why = "what goes wrong when a position splits a character", reveals_method = false, hidden = true },
+]
+used_again = ["y122-read-the-source"]
+real_uses = "The first stage of compilers, linters and config readers."
+cookbook = [
+    { level = "similar", page = "zero-copy-lexer", note = "A lexer whose tokens borrow from the source.", hidden = true },
+]
+
+[[part]]
+number = 2
+id = "y9-shell-line-parser"
+stage = "read"
+status = "existing"
+minutes = 75
+blurb = "Take a command line apart the way a shell does"
+new_idea = "A reader that works in different modes: plain text, quotes, escapes, comments"
+reuses = "walking through text from part 1"
+required = ["l3-zero-copy-tokenizer"]
+helpful = []
+used_again = ["y122-read-the-source"]
+real_uses = "Shells, config readers, every language with string literals."
+
+[[part]]
+number = 3
+id = "y15-expand-the-braces"
+stage = "read"
+status = "existing"
+minutes = 75
+blurb = "Work out every word a short pattern stands for"
+new_idea = "One function for each level of a nested notation, with errors that name a position and a depth limit"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y14-pratt-parser", "y121-every-broken-line", "y122-read-the-whole-language"]
+real_uses = "Shells, build tools, route patterns."
+
+[[part]]
+number = 4
+id = "y14-pratt-parser"
+stage = "read"
+status = "existing"
+minutes = 75
+blurb = "Group an expression the way people mean it"
+new_idea = "One loop that handles every strength of operator"
+reuses = "recursion over a grammar from part 3"
+required = ["y15-expand-the-braces"]
+helpful = []
+used_again = ["y122-read-the-whole-language"]
+real_uses = "Expression readers in compilers, query languages and spreadsheets."
+
+[[part]]
+number = 5
+id = "y121-every-broken-line"
+stage = "read"
+status = "new"
+minutes = 75
+blurb = "Tell the user about every mistake in one go"
+new_idea = "After a mistake, pass over the broken piece and carry on"
+reuses = "levels of a grammar and a depth limit from part 3"
+required = ["y15-expand-the-braces"]
+helpful = []
+used_again = ["y122-read-the-whole-language"]
+real_uses = "Compilers, linters, config checkers, editors."
+cookbook = [
+    { level = "related", page = "fully-recoverable-parsers", note = "Parsers that keep a tree through errors, for editors. A further step than this task.", hidden = true },
+]
+
+[[part]]
+number = 6
+id = "y121-same-formula-other-names"
+stage = "meaning"
+status = "new"
+minutes = 60
+blurb = "Tell whether two formulas say the same thing"
+new_idea = "A use of a name is fixed by where it stands, and can be written as a distance"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y122-what-each-name-means"]
+real_uses = "Compilers, proof checkers, query rewriters, caching by structure."
+cookbook = [
+    { level = "related", page = "semantics-and-the-lambda-calculus", note = "Names that are replaced by a count of the places in between. It gives the method away.", hidden = true },
+]
+
+[[part]]
+number = 7
+id = "l2-fix-borrowmuterror"
+stage = "meaning"
+status = "existing"
+minutes = 45
+blurb = "Find the borrows that live longer than they look"
+new_idea = "A RefCell borrow lasts as long as the value that holds it"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y121-boxes-that-hold-themselves", "y121-functions-made-here", "y122-run-the-tree"]
+real_uses = "Every single-threaded shared structure in Rust."
+
+[[part]]
+number = 8
+id = "l1-raii-span-guard"
+stage = "meaning"
+status = "existing"
+minutes = 45
+blurb = "Make sure something happens on every way out"
+new_idea = "A value whose Drop runs however its scope is left"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y122-run-the-tree"]
+real_uses = "Lock guards, file handles, tracing spans, counters of what is alive."
+
+[[part]]
+number = 9
+id = "y121-boxes-that-hold-themselves"
+stage = "meaning"
+status = "new"
+minutes = 60
+blurb = "Print values that can contain themselves, however big they unfold"
+new_idea = "Bounding work by the output wanted, when the data may loop and share"
+reuses = "short RefCell borrows from part 7"
+required = ["l2-fix-borrowmuterror"]
+helpful = []
+used_again = ["y122-run-the-tree"]
+real_uses = "Debuggers, loggers, serializers, language runtimes."
+
+[[part]]
+number = 10
+id = "y121-functions-made-here"
+stage = "meaning"
+status = "new"
+minutes = 90
+blurb = "Run formulas that define functions of their own"
+new_idea = "A function value keeps the variables of the place where it was made"
+reuses = "binding from part 6, shared cells from part 7"
+required = ["y121-same-formula-other-names", "l2-fix-borrowmuterror"]
+helpful = []
+used_again = ["y122-functions-and-closures"]
+real_uses = "Scripting languages, rule engines, template languages, spreadsheet lambdas."
+cookbook = [
+    { level = "related", page = "functions-and-closures", note = "A course page on the same rules in a tree-walking interpreter.", hidden = true },
+]
+
+[[part]]
+number = 11
+id = "y121-stop-the-recipe"
+stage = "meaning"
+status = "new"
+minutes = 75
+blurb = "Run a nested script and say exactly where it stopped"
+new_idea = "Leaving early as an ordinary result, and a trace of who was running"
+reuses = "nothing"
+required = []
+helpful = [
+    { id = "y15-lay-a-program-out-flat", why = "the same exits, decided before running", reveals_method = false, hidden = true },
+]
+used_again = ["y122-run-the-tree", "y122-functions-and-closures"]
+real_uses = "Interpreters, workflow runners, test benches."
+
+[[part]]
+number = 12
+id = "y121-whose-method"
+stage = "meaning"
+status = "new"
+minutes = 75
+blurb = "Decide which version of a method runs"
+new_idea = "Some lookups start from the object, others from where the code is written"
+reuses = "nothing"
+required = []
+helpful = []
+used_again = ["y122-classes"]
+real_uses = "Every language with inheritance; plugin and override systems."
+cookbook = [
+    { level = "related", page = "classes-and-inheritance", note = "A course page on this object model in a tree-walking interpreter.", hidden = true },
+]
+
+[[part]]
+number = 13
+id = "y15-lay-a-program-out-flat"
+stage = "machine"
+status = "existing"
+minutes = 105
+blurb = "Turn nested instructions into a flat list a simple machine can run"
+new_idea = "A nested program as a flat graph of operations"
+reuses = "nothing"
+required = []
+helpful = [
+    { id = "y6-wasm-stack-interpreter", why = "running structured control flow without flattening it first", reveals_method = false, hidden = true },
+    { id = "f2-eight-byte-instructions", why = "how small an instruction can be", reveals_method = false, hidden = true },
+]
+used_again = ["y121-ask-no-more-than-needed", "y122-compile-to-instructions"]
+real_uses = "Compilers, query plans, workflow engines."
+
+[[part]]
+number = 14
+id = "y121-ask-no-more-than-needed"
+stage = "machine"
+status = "new"
+minutes = 90
+blurb = "Make a tiny forward-only machine ask just the questions it must"
+new_idea = "Jumps whose length is filled in after the code they skip"
+reuses = "nothing"
+required = ["y15-lay-a-program-out-flat"]
+helpful = []
+used_again = ["y122-compile-to-instructions"]
+real_uses = "and/or in every compiler, query predicate evaluation, rule engines."
+cookbook = [
+    { level = "related", page = "jumps-and-control-flow", note = "A course page on forward and backward jumps in a bytecode compiler.", hidden = true },
+]
+
+[[part]]
+number = 15
+id = "y121-one-pile"
+stage = "machine"
+status = "new"
+minutes = 90
+blurb = "Compile variables for a machine that only has a stack"
+new_idea = "Knowing, while compiling, what every stack slot will hold"
+reuses = "filled-in jumps from part 14, scopes from part 6"
+required = ["y121-ask-no-more-than-needed"]
+helpful = []
+used_again = ["y122-compile-to-instructions"]
+real_uses = "clox, the JVM and CPython give locals numbered slots."
+cookbook = [
+    { level = "related", page = "globals-locals-and-statements", note = "A course page on local slots in a bytecode compiler.", hidden = true },
+]
+
+[[part]]
+number = 16
+id = "y121-where-it-crashed"
+stage = "machine"
+status = "new"
+minutes = 90
+blurb = "Run compiled routines and report exactly how they crashed"
+new_idea = "Calls as records in a list, each seeing only its own part of one stack"
+reuses = "traces from part 11"
+required = ["y121-stop-the-recipe"]
+helpful = []
+used_again = ["y122-calls-on-the-machine"]
+real_uses = "Virtual machines, embedded interpreters, smart-contract engines."
+cookbook = [
+    { level = "related", page = "calls-and-functions", note = "A course page on call frames in a bytecode machine.", hidden = true },
+]
+
+[[part]]
+number = 17
+id = "y121-outlive-the-slot"
+stage = "machine"
+status = "new"
+minutes = 75
+blurb = "Let something keep a variable after its stack slot is gone"
+new_idea = "A variable that lives on the stack until the last moment, then moves"
+reuses = "shared cells from part 7"
+required = ["l2-fix-borrowmuterror"]
+helpful = []
+used_again = ["y122-closures-on-the-machine"]
+real_uses = "Lua and clox closures; any fast path that must later hand out a lasting reference."
+cookbook = [
+    { level = "similar", page = "closures-and-upvalues", note = "A course page on this in a bytecode machine. It gives the method away.", hidden = true },
+]
+
+[[capstone]]
+step = 1
+id = "y122-read-the-source"
+title = "Read the source into tokens"
+minutes = 90
+blurb = "Cut the source into tokens, and point at what is wrong"
+new_idea = "A scanner that never stops at the first mistake, and carets under a span"
+prepared_by = ["l3-zero-copy-tokenizer", "y9-shell-line-parser"]
+required = []
+cookbook = [
+    { level = "similar", page = "toy-language-interpreter", note = "The capstone file's scanner and diagnostics. Its names differ.", hidden = true },
+]
+
+[[capstone]]
+step = 2
+id = "y122-read-the-whole-language"
+title = "Build the tree for the whole language"
+minutes = 120
+blurb = "Understand every statement, and report every mistake"
+new_idea = "A whole grammar with recovery, lowering of for loops and a depth bound"
+prepared_by = ["y15-expand-the-braces", "y14-pratt-parser", "y121-every-broken-line"]
+required = ["y122-read-the-source"]
+cookbook = [
+    { level = "similar", page = "toy-language-interpreter", note = "The capstone file's parser. Its names differ.", hidden = true },
+]
+
+[[capstone]]
+step = 3
+id = "y122-what-each-name-means"
+title = "Decide what every name means before running"
+minutes = 105
+blurb = "Settle every name, and refuse programs that make no sense"
+new_idea = "A static pass over the tree: scope distances, context rules and warnings"
+prepared_by = ["y121-same-formula-other-names"]
+required = ["y122-read-the-whole-language"]
+cookbook = [
+    { level = "similar", page = "toy-language-interpreter", note = "The capstone file's resolver. Its names differ.", hidden = true },
+]
+
+[[capstone]]
+step = 4
+id = "y122-run-the-tree"
+title = "Run a program: values, variables and loops"
+minutes = 120
+blurb = "Make checked programs run, and survive hostile ones"
+new_idea = "A tree-walking interpreter with bounded memory, text and time"
+prepared_by = ["y121-boxes-that-hold-themselves", "y121-stop-the-recipe", "l2-fix-borrowmuterror", "l1-raii-span-guard"]
+required = ["y122-what-each-name-means"]
+cookbook = [
+    { level = "similar", page = "toy-language-interpreter", note = "The capstone file's tree-walking back end. Its names differ.", hidden = true },
+]
+
+[[capstone]]
+step = 5
+id = "y122-functions-and-closures"
+title = "Functions that remember where they were written"
+minutes = 90
+blurb = "Add functions that can be passed around and called later"
+new_idea = "Closures over shared scopes, call frames, traces and a depth limit"
+prepared_by = ["y121-functions-made-here", "y121-stop-the-recipe"]
+required = ["y122-run-the-tree"]
+cookbook = [
+    { level = "similar", page = "toy-language-interpreter", note = "The capstone file's functions. Its call depth differs.", hidden = true },
+]
+
+[[capstone]]
+step = 6
+id = "y122-classes"
+title = "Classes, methods and inheritance"
+minutes = 105
+blurb = "Add classes, objects and methods that can be handed around"
+new_idea = "An object model made out of the scopes you already have"
+prepared_by = ["y121-whose-method"]
+required = ["y122-functions-and-closures"]
+cookbook = [
+    { level = "similar", page = "toy-language-interpreter", note = "The capstone file's classes. Its names differ.", hidden = true },
+]
+
+[[capstone]]
+step = 7
+id = "y122-compile-to-instructions"
+title = "Compile to instructions and run them"
+minutes = 120
+blurb = "Build a second, flatter way to run the same programs"
+new_idea = "A bytecode compiler with local slots and patched jumps, and its machine"
+prepared_by = ["y121-ask-no-more-than-needed", "y121-one-pile", "y15-lay-a-program-out-flat"]
+required = ["y122-run-the-tree"]
+cookbook = [
+    { level = "similar", page = "toy-language-interpreter", note = "The capstone file's bytecode back end. Its names differ.", hidden = true },
+]
+
+[[capstone]]
+step = 8
+id = "y122-calls-on-the-machine"
+title = "Function calls on the machine"
+minutes = 90
+blurb = "Teach the machine to call functions"
+new_idea = "Call frames over one stack, with the same traces as before"
+prepared_by = ["y121-where-it-crashed"]
+required = ["y122-compile-to-instructions", "y122-functions-and-closures"]
+cookbook = [
+    { level = "similar", page = "toy-language-interpreter", note = "The capstone file's machine. Its names differ.", hidden = true },
+]
+
+[[capstone]]
+step = 9
+id = "y122-closures-on-the-machine"
+title = "Closures on the machine"
+minutes = 105
+blurb = "Close the last gap between your two ways of running"
+new_idea = "Captured variables that start on the stack and move off it"
+prepared_by = ["y121-outlive-the-slot"]
+required = ["y122-calls-on-the-machine"]
+cookbook = [
+    { level = "similar", page = "toy-language-interpreter", note = "The capstone file's captured variables. Its names differ.", hidden = true },
+]
+
+[[revisit]]
+part = "y15-expand-the-braces"
+before = "y122-read-the-whole-language"
+how = "Solve part 3 again from a blank starter before capstone step 2."
+minutes = 35
+
+[[revisit]]
+part = "y121-functions-made-here"
+before = "y122-functions-and-closures"
+how = "Solve part 10 again from a blank starter before capstone step 5."
+minutes = 45
+
+[[revisit]]
+part = "y121-one-pile"
+before = "y122-compile-to-instructions"
+how = "Write part 15's block ending and early exit again from memory."
+minutes = 30
+
+[[revisit]]
+part = "y121-outlive-the-slot"
+before = "y122-closures-on-the-machine"
+how = "Solve part 17 again from a blank starter."
+minutes = 35
+
+[[readiness]]
+group = "Reading text"
+concept = "A byte position through source text; slicing only at character boundaries; char_indices and len_utf8"
+parts = ["l3-zero-copy-tokenizer", "y9-shell-line-parser"]
+steps = [1]
+
+[[readiness]]
+group = "Reading text"
+concept = "String literals and escapes as a separate mode; comments"
+parts = ["y9-shell-line-parser"]
+steps = [1]
+
+[[readiness]]
+group = "Reading text"
+concept = "Line and column from a byte offset, and a line of carets"
+parts = ["l3-zero-copy-tokenizer"]
+steps = [1]
+note = "No part teaches this on its own. Step 1's statement gives the exact rules: count line ends before the offset, then characters after the last one."
+
+[[readiness]]
+group = "Reading text"
+concept = "One function per level of a grammar; errors that carry a position"
+parts = ["y15-expand-the-braces"]
+steps = [2]
+
+[[readiness]]
+group = "Reading text"
+concept = "Operator strengths in one loop; left and right grouping; assignment targets"
+parts = ["y14-pratt-parser"]
+steps = [2]
+
+[[readiness]]
+group = "Reading text"
+concept = "Recording a mistake, skipping to a safe place and carrying on"
+parts = ["y121-every-broken-line"]
+steps = [2]
+
+[[readiness]]
+group = "Reading text"
+concept = "A depth limit that also covers long chains built by a loop"
+parts = ["y15-expand-the-braces", "y121-every-broken-line"]
+steps = [2]
+note = "The chain case is new in step 2; its hint explains it."
+
+[[readiness]]
+group = "Reading text"
+concept = "Rewriting one statement form into others (a for loop into a while loop)"
+parts = []
+steps = [2]
+note = "Step 2's statement gives the rewrite."
+
+[[readiness]]
+group = "Names and values"
+concept = "A stack of scopes; distance from a use to its declaration"
+parts = ["y121-same-formula-other-names"]
+steps = [3]
+
+[[readiness]]
+group = "Names and values"
+concept = "Cell to write into a tree you only borrow"
+parts = []
+steps = [3]
+note = "The tree type already uses Cell<Option<usize>>; set() is all you need, and step 3's hint says so."
+
+[[readiness]]
+group = "Names and values"
+concept = "Saving and restoring 'where am I' around nested constructs"
+parts = ["y15-lay-a-program-out-flat"]
+steps = [3]
+
+[[readiness]]
+group = "Names and values"
+concept = "Rc and RefCell values shared by several owners; ending borrows before a drop"
+parts = ["l2-fix-borrowmuterror", "y121-boxes-that-hold-themselves"]
+steps = [4, 5, 6]
+
+[[readiness]]
+group = "Names and values"
+concept = "Printing shared and self-containing values within a size limit"
+parts = ["y121-boxes-that-hold-themselves"]
+steps = [4]
+note = "Step 4 cuts off by depth, which is simpler than part 9's rule."
+
+[[readiness]]
+group = "Names and values"
+concept = "A guard whose Drop gives something back (impl Drop)"
+parts = ["l1-raii-span-guard"]
+steps = [4, 5, 6]
+note = "Part 8 runs code on every way out. Step 4 uses the same hook to give a count back; its Rust hint says how."
+
+[[readiness]]
+group = "Names and values"
+concept = "break, continue and return as results of running a statement"
+parts = ["y121-stop-the-recipe"]
+steps = [4, 5]
+
+[[readiness]]
+group = "Names and values"
+concept = "A step budget so that any program ends"
+parts = ["y121-stop-the-recipe"]
+steps = [4, 7]
+
+[[readiness]]
+group = "Names and values"
+concept = "Parent-linked scopes; closures that share variables"
+parts = ["y121-functions-made-here"]
+steps = [5]
+
+[[readiness]]
+group = "Names and values"
+concept = "Call frames, a stack trace and a depth limit"
+parts = ["y121-stop-the-recipe", "y121-where-it-crashed"]
+steps = [5, 8]
+
+[[readiness]]
+group = "Names and values"
+concept = "std::thread::Builder::stack_size and scoped threads"
+parts = []
+steps = [4, 5, 7]
+note = "The starters provide this; you never write it."
+
+[[readiness]]
+group = "Names and values"
+concept = "Method lookup up a chain, bound methods, super fixed by the text"
+parts = ["y121-whose-method"]
+steps = [6]
+
+[[readiness]]
+group = "Names and values"
+concept = "std::iter::successors to walk a parent chain without recursion"
+parts = ["y121-whose-method"]
+steps = [6]
+note = "Given in step 6's Rust hint."
+
+[[readiness]]
+group = "Flat code and the machine"
+concept = "A flat program with jump targets; loops with break and continue"
+parts = ["y15-lay-a-program-out-flat"]
+steps = [7]
+
+[[readiness]]
+group = "Flat code and the machine"
+concept = "Forward jumps filled in later; and/or that keep a value"
+parts = ["y121-ask-no-more-than-needed"]
+steps = [7]
+
+[[readiness]]
+group = "Flat code and the machine"
+concept = "A compile-time list of locals that mirrors the stack; pops on early exits"
+parts = ["y121-one-pile"]
+steps = [7, 8]
+
+[[readiness]]
+group = "Flat code and the machine"
+concept = "A dispatch loop over an instruction enum"
+parts = ["y121-where-it-crashed"]
+steps = [7, 8]
+
+[[readiness]]
+group = "Flat code and the machine"
+concept = "Frames with a base slot over one value stack"
+parts = ["y121-where-it-crashed"]
+steps = [8]
+
+[[readiness]]
+group = "Flat code and the machine"
+concept = "Variables shared between a stack slot and a longer-lived owner"
+parts = ["y121-outlive-the-slot"]
+steps = [9]
+
+[[readiness]]
+group = "Flat code and the machine"
+concept = "Finding a name through enclosing functions at compile time"
+parts = ["y121-functions-made-here"]
+steps = [9]
+note = "Step 9's statement and hint describe the capture lists; the search itself is the new work of the step."
+
+[[connection]]
+idea = "Reading text one level at a time"
+learn = ["y15-expand-the-braces"]
+again = ["y14-pratt-parser"]
+apply = ["y122-read-the-whole-language"]
+
+[[connection]]
+idea = "Mistakes are data: keep going and report them"
+learn = ["y121-every-broken-line"]
+apply = ["y122-read-the-source", "y122-read-the-whole-language"]
+
+[[connection]]
+idea = "A name means a place"
+learn = ["y121-same-formula-other-names"]
+again = ["y121-functions-made-here", "y121-one-pile"]
+apply = ["y122-what-each-name-means", "y122-compile-to-instructions"]
+
+[[connection]]
+idea = "Variables that outlive their block"
+learn = ["y121-functions-made-here"]
+again = ["y121-outlive-the-slot"]
+apply = ["y122-functions-and-closures", "y122-closures-on-the-machine"]
+
+[[connection]]
+idea = "Saying where a program was"
+learn = ["y121-stop-the-recipe"]
+again = ["y121-where-it-crashed"]
+apply = ["y122-functions-and-closures", "y122-calls-on-the-machine"]
+
+[[connection]]
+idea = "Untrusted programs must not hurt the host"
+learn = ["y121-boxes-that-hold-themselves"]
+again = ["y121-where-it-crashed"]
+apply = ["y122-run-the-tree"]
+
+[[connection]]
+idea = "Nested code made flat"
+learn = ["y15-lay-a-program-out-flat"]
+again = ["y121-ask-no-more-than-needed"]
+apply = ["y122-compile-to-instructions"]
+
+[[side_path]]
+id = "f3-string-interner"
+why = "after capstone step 2: how compilers store each name once"
+after = "y122-read-the-whole-language"
+
+[[side_path]]
+id = "y6-wasm-stack-interpreter"
+why = "before capstone step 7: another stack machine, with checks before running"
+before = "y122-compile-to-instructions"
+
+[[side_path]]
+id = "y15-print-it-so-it-reads-back"
+why = "before capstone step 9: random programs from a grammar, which the step's tests use"
+before = "y122-closures-on-the-machine"
+
+[[side_path]]
+id = "y16-catch-a-wrong-engine"
+why = "after capstone step 9: hunt for the program on which two engines differ"
+after = "y122-closures-on-the-machine"
+
+[[side_path]]
+id = "y5-shrink-failing-input"
+why = "after capstone step 9: make a failing program small"
+after = "y122-closures-on-the-machine"

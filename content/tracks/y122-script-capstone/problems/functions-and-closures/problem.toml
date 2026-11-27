@@ -1,0 +1,35 @@
+slug = "functions-and-closures"
+title = "Functions that remember where they were written"
+mode = "write"
+level = "hard"
+stage = "tree"
+order = 5
+status = "ready"
+tags = ["interpreters", "closures", "stack traces", "call depth"]
+teaches = [
+  "A function value pairs its declaration with the scope in which it was created. Calling it makes a child of that scope for the parameters, which is all lexical scoping needs, and sharing the scope gives closures by reference. `return` travels up as a statement result until the call takes it. A list of frames, each with the function's name and the call's line, gives the trace and the depth limit.",
+]
+follow_up = "1) A closure keeps its whole scope chain alive. What would keeping only the used variables need? 2) A function stored in the scope it captured is never freed. How do real languages handle that?"
+related = ["Y121", "Y122"]
+
+[[hints]]
+kind = "approach"
+text = "A function value needs two things: the declaration, and the scope that was current when it was created. A call makes a new scope whose parent is that stored one. `return` is one more way for a statement to end."
+
+[[hints]]
+kind = "rust"
+text = "The stored scope is an `Rc` clone, which shares the variables. The tree must outlive the program too: keep `Rc<FunDecl>` in the value. Push a frame for each call, and build the trace from the frames only when there is an error."
+
+[[hints]]
+kind = "edge"
+text = "If a call returns an error through `?`, think about when its frame is popped. The trace is built where the error happens, so the frames must still be there."
+
+[solution]
+explanation = "A function value pairs its declaration with the scope in which it was created. Calling it makes a child of that scope for the parameters, which is all lexical scoping needs, and sharing the scope gives closures by reference. `return` travels up as a statement result until the call takes it. A list of frames, each with the function's name and the call's line, gives the trace and the depth limit."
+time = "O(1) per call plus the body"
+space = "O(live scopes + call depth)"
+
+[[cookbook]]
+level = "similar"
+page = "toy-language-interpreter"
+note = "The capstone file covers this step. Its call depth is 400 and it prints some numbers differently, such as -0 as 0. The live limit that stops endless function chains is a fix."

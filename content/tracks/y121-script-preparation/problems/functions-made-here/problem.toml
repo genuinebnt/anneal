@@ -1,0 +1,30 @@
+slug = "functions-made-here"
+title = "Formulas that make their own functions"
+mode = "write"
+level = "hard"
+stage = "meaning"
+order = 6
+status = "ready"
+tags = ["interpreters", "closures", "lexical scoping", "Rc and RefCell"]
+teaches = [
+  "A scope is an immutable chain of variables, newest first; each variable's value is in a `RefCell`. A new variable extends the chain without touching it, so older holders keep their view. A function value stores the chain that was current when it was made, and a call extends that chain with the parameters. A recursive function first adds its variable, builds the function over that chain, then stores the function in the variable.",
+]
+follow_up = "1) Which values in your design are never freed? 2) How would you replace the search by name with a number worked out before running?"
+related = ["Y121", "Y122"]
+
+[[hints]]
+kind = "approach"
+text = "Ask what a function value has to remember besides its body so that every rule about variables holds. Then ask what 'the variables here' is as a value you can hold on to."
+
+[[hints]]
+kind = "rust"
+text = "If a scope is an `Rc` chain, cloning it is cheap and shares the variables. Put each value in a `RefCell` so that `Set` works through a shared reference."
+
+[[hints]]
+kind = "edge"
+text = "A `Let` that comes after a function was made must not change what that function sees, even in the same block of code. And a recursive function needs a variable that exists before the function value does."
+
+[solution]
+explanation = "A scope is an immutable chain of variables, newest first; each variable's value is in a `RefCell`. A new variable extends the chain without touching it, so older holders keep their view. A function value stores the chain that was current when it was made, and a call extends that chain with the parameters. A recursive function first adds its variable, builds the function over that chain, then stores the function in the variable."
+time = "O(steps × variables in view)"
+space = "O(live variables)"

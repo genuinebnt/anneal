@@ -1,0 +1,30 @@
+slug = "ask-no-more-than-needed"
+title = "Ask no more than you must"
+mode = "write"
+level = "hard"
+stage = "machine"
+order = 7
+status = "ready"
+tags = ["compilers", "jumps", "short-circuit evaluation", "stack machine"]
+teaches = [
+  "Every rule compiles to code that adds exactly one value. `All` runs a part, and if it is false skips to the end, leaving that false as the result; otherwise it pops and goes on. `Any` does the same with the sense reversed, using a skip over a skip. `Choose` skips to one of two branches. Skip lengths are filled in after the skipped code is emitted, and each part is emitted once.",
+]
+follow_up = "1) Which skips land on another skip, and how would you shorten them? 2) What one extra instruction would make `Any` shorter?"
+related = ["Y121", "Y122"]
+
+[[hints]]
+kind = "approach"
+text = "Start with one promise that every compiled rule keeps: what it leaves on the stack. Then each kind of rule can be built from its parts' programs without knowing what is inside them."
+
+[[hints]]
+kind = "rust"
+text = "You do not know how far to skip until the skipped code exists. Push the instruction with a dummy length, remember its index, and fill it in later."
+
+[[hints]]
+kind = "edge"
+text = "When the first part of `Any` is true, nothing more may be asked, and its value must be the one left. Never compile the same part twice: nesting would double it each time."
+
+[solution]
+explanation = "Every rule compiles to code that adds exactly one value. `All` runs a part, and if it is false skips to the end, leaving that false as the result; otherwise it pops and goes on. `Any` does the same with the sense reversed, using a skip over a skip. `Choose` skips to one of two branches. Skip lengths are filled in after the skipped code is emitted, and each part is emitted once."
+time = "O(nodes)"
+space = "O(nodes)"

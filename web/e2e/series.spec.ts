@@ -248,7 +248,8 @@ test("every problem link on a series page carries the series, except the optiona
 
 test("a shared problem opened without a series offers a switch that stays on the problem", async ({ page, request }) => {
     const picked = await (await request.get(`/api/problems/${PART}/series`)).json();
-    expect(picked.others).toHaveLength(1);
+    // three series have it, so two switches are offered; the first goes to the next in the stable order
+    expect(picked.others).toHaveLength(2);
     const other = await placeIn(request, picked.others[0].id);
     await page.goto("/rust");
     await page.goto(`/p/${PART}`);
@@ -256,7 +257,7 @@ test("a shared problem opened without a series offers a switch that stays on the
     // the code in the editor stays put
     await page.locator(".edit-host:not([hidden]) .cm-content").click();
     const code = await page.locator(".edit-host:not([hidden]) .cm-content").innerText();
-    const swap = page.getByRole("list", { name: "Other series with this problem" }).getByRole("link");
+    const swap = page.getByRole("list", { name: "Other series with this problem" }).getByRole("link").first();
     await expect(swap).toHaveText(`Switch series: ${other.series.title} (part ${other.number} there)`);
     await swap.focus();
     await page.keyboard.press("Enter");
@@ -326,7 +327,7 @@ test("on a phone the switch sits close to its neighbours without losing its size
 test("on a phone the switch is a full-size target and nothing is wider than the screen", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`/p/${PART}?series=rate-limiter`);
-    const swap = page.getByRole("list", { name: "Other series with this problem" }).getByRole("link");
+    const swap = page.getByRole("list", { name: "Other series with this problem" }).getByRole("link").first();
     await expect(swap).toBeVisible();
     expect((await swap.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);

@@ -1,0 +1,30 @@
+slug = "outlive-the-slot"
+title = "Hold on to a variable after its slot is gone"
+mode = "write"
+level = "hard"
+stage = "machine"
+order = 10
+status = "ready"
+tags = ["virtual machines", "closures", "Rc and RefCell", "shared mutable state"]
+teaches = [
+  "A kept variable is a shared cell with two states. While its slot exists the cell holds only the slot number, so the slice stays the single home of the value and the machine pays nothing. The stack lists the cells that point into it, one per slot. Just before slots are removed, each of their cells takes the value and leaves the list. Handles then own the value.",
+]
+follow_up = "1) What would it cost to keep every slot in its own cell from the start, and why would the slice then be impossible? 2) Who frees a cell?"
+related = ["Y121", "Y122"]
+
+[[hints]]
+kind = "approach"
+text = "While the slot exists there is only one place the value can be: the slice. So what can a handle hold during that time? And what has to happen at the moment the slot is removed?"
+
+[[hints]]
+kind = "rust"
+text = "`Rc<RefCell<..>>` around a two-case enum gives clones that stay one variable. `Rc::ptr_eq` answers `same`."
+
+[[hints]]
+kind = "edge"
+text = "Two claims on one live slot must find each other, so the stack has to know which slots are claimed. A removed slot must be taken off that list, or the next variable there inherits it."
+
+[solution]
+explanation = "A kept variable is a shared cell with two states. While its slot exists the cell holds only the slot number, so the slice stays the single home of the value and the machine pays nothing. The stack lists the cells that point into it, one per slot. Just before slots are removed, each of their cells takes the value and leaves the list. Handles then own the value."
+time = "O(log open) to keep; O(removed) to truncate"
+space = "one cell per kept variable"

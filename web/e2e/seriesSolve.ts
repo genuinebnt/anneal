@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { APIRequestContext } from "@playwright/test";
 
-/** A series part with a quick reference solution: a spec can solve it to reach the completion view. Two series have it. */
+/** A series part with a quick reference solution: a spec can solve it to reach the completion view. Three series have it. */
 export const PART = "l1-raii-span-guard";
 export const SOLUTION = () => readFileSync(new URL("../../content/tracks/l1-ownership-moves/problems/raii-span-guard/solution.rs", import.meta.url), "utf8");
 

@@ -1,0 +1,35 @@
+slug = "read-the-source"
+title = "Read the source into tokens"
+mode = "write"
+level = "medium"
+stage = "front"
+order = 1
+status = "ready"
+tags = ["interpreters", "scanning", "diagnostics", "UTF-8"]
+teaches = [
+  "One loop reads one token or one piece of skippable text per turn. Every path moves forward by whole characters, so spans can always be sliced. Mistakes are collected beside the tokens, so one run reports them all. Line and column are worked out only when a diagnostic is printed.",
+]
+follow_up = "1) Printing many diagnostics walks the source each time. How would you make each one cheap? 2) How would you give every token its column without slowing the scanner?"
+related = ["Y121", "Y122"]
+
+[[hints]]
+kind = "approach"
+text = "Walk through the source with a byte position. Look at one byte to decide what kind of thing starts here, then consume the whole of it. Only move the position by whole characters."
+
+[[hints]]
+kind = "rust"
+text = "`src.as_bytes()` is handy for the ASCII cases. Inside strings and for strays, `src[i..].chars().next()` gives the whole character, and `len_utf8()` says how far to move."
+
+[[hints]]
+kind = "edge"
+text = "Count comment depth with a number, not with recursion. In `render`, an unterminated string's span can start on one line while the text runs on: clip the carets to the first line."
+
+[solution]
+explanation = "One loop reads one token or one piece of skippable text per turn. Every path moves forward by whole characters, so spans can always be sliced. Mistakes are collected beside the tokens, so one run reports them all. Line and column are worked out only when a diagnostic is printed."
+time = "O(source) to scan; O(source) for each diagnostic printed"
+space = "O(tokens)"
+
+[[cookbook]]
+level = "similar"
+page = "toy-language-interpreter"
+note = "The capstone file covers scanning and diagnostics. Its names differ, and it draws at most 40 carets."

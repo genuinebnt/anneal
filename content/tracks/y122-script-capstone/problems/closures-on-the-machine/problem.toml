@@ -1,0 +1,35 @@
+slug = "closures-on-the-machine"
+title = "Closures on the machine"
+mode = "write"
+level = "hard"
+stage = "machine"
+order = 9
+status = "ready"
+tags = ["interpreters", "closures", "bytecode", "differential testing"]
+teaches = [
+  "A captured variable is a shared cell. While its scope runs, the cell only names the stack slot, so ordinary locals stay fast and both sides see one value. When the slot is about to go, at scope exit or return, the value moves into the cell. At most one open cell exists per slot, so closures share it. The compiler resolves a name through enclosing functions and records the path in each function's capture list.",
+]
+follow_up = "1) How would you make finding an open cell faster, and does it matter? 2) The two back ends now agree on random programs. What kinds of program does your generator never make?"
+related = ["Y121", "Y122"]
+
+[[hints]]
+kind = "approach"
+text = "While a captured variable's scope is running, the declaring code and the closure must see one value, and the declaring code only knows the stack slot. So the closure should point at the slot. What has to happen at the moment the slot disappears?"
+
+[[hints]]
+kind = "rust"
+text = "An `Rc<RefCell<Captured>>` that is either 'at stack slot s' or 'holds this value' does it. Keep a list of the ones still pointing into the stack, so that two closures capturing one slot get the same cell."
+
+[[hints]]
+kind = "edge"
+text = "Find captures at compile time by asking the enclosing function for a local, then, recursively, for a capture of its own. Leaving a scope happens in more places than the closing brace: `Return` must deal with the frame's slots too."
+
+[solution]
+explanation = "A captured variable is a shared cell. While its scope runs, the cell only names the stack slot, so ordinary locals stay fast and both sides see one value. When the slot is about to go, at scope exit or return, the value moves into the cell. At most one open cell exists per slot, so closures share it. The compiler resolves a name through enclosing functions and records the path in each function's capture list."
+time = "O(open cells) to capture or close"
+space = "one cell per captured variable"
+
+[[cookbook]]
+level = "similar"
+page = "toy-language-interpreter"
+note = "The capstone file's captured variables show the technique. Its types and names differ, and it prints -0 as 0."

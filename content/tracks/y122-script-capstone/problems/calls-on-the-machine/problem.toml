@@ -1,0 +1,35 @@
+slug = "calls-on-the-machine"
+title = "Function calls on the machine"
+mode = "write"
+level = "hard"
+stage = "machine"
+order = 8
+status = "ready"
+tags = ["interpreters", "call frames", "stack traces", "bytecode"]
+teaches = [
+  "Each function compiles separately, with its own slots starting at the callee. The machine keeps one value stack and a stack of frames; a frame is code, position and base. Calling pushes a frame whose base is the callee's slot, so the arguments are already in place. The trace reads each frame's saved position from the line table. At this step, a name that belongs to an enclosing function is refused.",
+]
+follow_up = "1) What would a tail call need? 2) Where would you put a profiler's hook, and what would it record?"
+related = ["Y121", "Y122"]
+
+[[hints]]
+kind = "approach"
+text = "Each active call is a record: which code, where in it, and where its slot 0 is on the one shared stack. Local slots in the instructions are relative to that place. What has to be saved to come back?"
+
+[[hints]]
+kind = "rust"
+text = "Compile a function by pushing a fresh builder on a stack of builders; its parameters are its first locals. Keep the frames in a `Vec`, and let the loop always work on the last one."
+
+[[hints]]
+kind = "edge"
+text = "The frame's saved position is one past the instruction it is running, which is exactly what the trace needs for the callers. A function declared inside a block is itself a local: its slot is taken before its body is compiled."
+
+[solution]
+explanation = "Each function compiles separately, with its own slots starting at the callee. The machine keeps one value stack and a stack of frames; a frame is code, position and base. Calling pushes a frame whose base is the callee's slot, so the arguments are already in place. The trace reads each frame's saved position from the line table. At this step, a name that belongs to an enclosing function is refused."
+time = "O(1) per call"
+space = "O(call depth × slots)"
+
+[[cookbook]]
+level = "similar"
+page = "toy-language-interpreter"
+note = "The capstone file's machine makes calls in its own way. Its names and call depth differ, and it prints -0 as 0."

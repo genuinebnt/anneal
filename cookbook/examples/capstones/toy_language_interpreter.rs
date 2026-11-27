@@ -21,6 +21,9 @@
 //!             the VM covers everything except classes (compile reports "unsupported" and the differential test skips those programs)
 //! `for` is desugared to `while` (+ an increment slot so `continue` still runs it). Division by zero is a runtime error (not inf) so both
 //!   back ends agree. Rc cycles (closure <-> environment) are never collected: acceptable for short-lived scripts, a real VM would use a GC.
+//! LIMITS: source nesting, reported diagnostics, one string, one list, printed output and live objects are each capped (see the
+//!   constants below). They are not a total memory budget, native work (comparing or printing) costs one fuel step however big,
+//!   and the interpreter expects the 512 MB (reserved, not used up front) thread that `main` starts.
 //! VERIFICATION: a hand-written suite with exact expected output (fib, closures, higher-order functions, sieve, sorts, JSON printer, classes,
 //!   mutual recursion, the loop-closure capture rule) and exact error messages + stack traces; then 300 seeded random programs run on BOTH back
 //!   ends must produce identical output and identical errors. Timing of tree-walk vs bytecode on fib(27) is printed (not asserted).
@@ -36,6 +39,13 @@ use std::time::Instant;
 
 const MAX_CALL_DEPTH: usize = 400;
 const DEFAULT_FUEL: u64 = 20_000_000_000;
+/// Bounds on what a script or its source may ask for. They cap one thing each; together they are not a memory budget.
+const MAX_NESTING: usize = 200; // parser levels, so every later recursive walk of the tree is bounded too
+const MAX_DIAGS: usize = 100; // each diagnostic costs one pass over the source to find its line and column
+const MAX_TEXT: usize = 1 << 20; // bytes in one string, made by `+` or by turning a value into text
+const MAX_LIST: usize = 100_000; // items in one list
+const MAX_OUTPUT: usize = 1 << 22; // bytes printed by one run
+const MAX_LIVE: usize = 100_000; // lists, functions, classes and instances alive at once: bounds how deep a value chain gets
 
 // =====================================================================================================================
 // Spans and diagnostics
@@ -288,9 +298,11 @@ fn scan(src: &str) -> (Vec<Token>, Vec<Diag>) {
                             match esc {
                                 Some(e) => buf.push(e),
                                 None => {
+                                    // The whole character after the backslash: never split a UTF-8 sequence.
+                                    let width = src[i..].chars().next().map_or(0, char::len_utf8);
                                     let span = Span {
                                         start: i - 1,
-                                        end: (i + 1).min(b.len()),
+                                        end: i + width,
                                         line,
                                     };
                                     diags.push(Diag::error(
@@ -300,7 +312,10 @@ fn scan(src: &str) -> (Vec<Token>, Vec<Diag>) {
                                     ));
                                 }
                             }
-                            i += 1;
+                            i += src
+                                .get(i..)
+                                .and_then(|rest| rest.chars().next())
+                                .map_or(1, char::len_utf8);
                         }
                         b'\n' => {
                             line += 1;
@@ -480,6 +495,7 @@ struct Parser {
     toks: Vec<Token>,
     cur: usize,
     diags: Vec<Diag>,
+    depth: usize,
 }
 /// `Err(())` means "the error is already recorded in `diags`; unwind to the nearest declaration and synchronise".
 type PR<X> = Result<X, ()>;
@@ -579,6 +595,15 @@ impl Parser {
         }
     }
 
+    /// One level deeper in the tree. Callers restore `depth` when they leave; `declaration` restores it after an error.
+    fn deeper(&mut self) -> PR<()> {
+        self.depth += 1;
+        if self.depth > MAX_NESTING {
+            return self.fail("Too deeply nested.");
+        }
+        Ok(())
+    }
+
     fn program(&mut self) -> Vec<Stmt> {
         let mut out = vec![];
         while !self.at_end() {
@@ -587,6 +612,7 @@ impl Parser {
         out
     }
     fn declaration(&mut self) -> Option<Stmt> {
+        let depth = self.depth;
         let r = if self.eat(&T::Class) {
             self.class_decl()
         } else if self.eat(&T::Fun) {
@@ -599,6 +625,7 @@ impl Parser {
         match r {
             Ok(s) => Some(s),
             Err(()) => {
+                self.depth = depth;
                 self.sync();
                 None
             }
@@ -666,14 +693,22 @@ impl Parser {
         }))
     }
     fn block(&mut self) -> PR<Vec<Stmt>> {
+        self.deeper()?;
         let mut out = vec![];
         while !self.is(&T::RBrace) && !self.at_end() {
             out.extend(self.declaration());
         }
         self.consume(&T::RBrace, "Expect '}' after block.")?;
+        self.depth -= 1;
         Ok(out)
     }
     fn statement(&mut self) -> PR<Stmt> {
+        self.deeper()?;
+        let s = self.plain_statement()?;
+        self.depth -= 1;
+        Ok(s)
+    }
+    fn plain_statement(&mut self) -> PR<Stmt> {
         if self.eat(&T::If) {
             return self.if_stmt();
         }
@@ -759,6 +794,12 @@ impl Parser {
 
     // ----- expressions -----
     fn expression(&mut self) -> PR<Expr> {
+        self.deeper()?;
+        let e = self.assignment()?;
+        self.depth -= 1;
+        Ok(e)
+    }
+    fn assignment(&mut self) -> PR<Expr> {
         let lhs = self.pratt(1)?;
         if self.is(&T::Eq) {
             let eq = self.advance();
@@ -776,11 +817,13 @@ impl Parser {
     }
     /// Pratt loop: parse a prefix item, then keep folding in operators whose binding power is >= `min`.
     fn pratt(&mut self, min: u8) -> PR<Expr> {
+        let depth = self.depth;
         let mut left = self.unary()?;
         while let Some((bp, kind)) = infix(&self.peek().t) {
             if bp < min {
                 break;
             }
+            self.deeper()?; // a long chain is a deep, left-leaning tree
             let op_span = self.advance().span;
             let right = self.pratt(bp + 1)?; // +1 => left associative
             left = match kind {
@@ -789,6 +832,7 @@ impl Parser {
                 Infix::Bin(op) => Expr::Binary(Box::new(left), op, Box::new(right), op_span),
             };
         }
+        self.depth = depth;
         Ok(left)
     }
     fn unary(&mut self) -> PR<Expr> {
@@ -797,12 +841,19 @@ impl Parser {
             T::Bang => UnOp::Not,
             _ => return self.call(),
         };
+        self.deeper()?;
         let span = self.advance().span;
-        Ok(Expr::Unary(op, Box::new(self.unary()?), span))
+        let operand = self.unary()?;
+        self.depth -= 1;
+        Ok(Expr::Unary(op, Box::new(operand), span))
     }
     fn call(&mut self) -> PR<Expr> {
+        let depth = self.depth;
         let mut e = self.primary()?;
         loop {
+            if self.is(&T::LParen) || self.is(&T::Dot) {
+                self.deeper()?;
+            }
             if self.eat(&T::LParen) {
                 let mut args = vec![];
                 if !self.is(&T::RParen) {
@@ -823,6 +874,7 @@ impl Parser {
                 let n = self.ident("Expect property name after '.'.")?;
                 e = Expr::Get(Box::new(e), n.name, n.span);
             } else {
+                self.depth = depth;
                 return Ok(e);
             }
         }
@@ -929,6 +981,12 @@ impl Resolver {
         if let Some(v) = self.scopes.last_mut().and_then(|s| s.get_mut(&n.name)) {
             v.defined = true;
         }
+    }
+    fn in_own_initializer(&self, n: &Name) -> bool {
+        self.scopes
+            .last()
+            .and_then(|s| s.get(&n.name))
+            .is_some_and(|v| !v.defined)
     }
     /// Distance = how many scopes to walk up at runtime; no hit = global.
     fn local(&mut self, n: &Name, mark_used: bool) {
@@ -1061,18 +1119,20 @@ impl Resolver {
         match e {
             Expr::Nil | Expr::Bool(_) | Expr::Num(_) | Expr::Str(_) => {}
             Expr::Var(n) => {
-                if self
-                    .scopes
-                    .last()
-                    .and_then(|s| s.get(&n.name))
-                    .is_some_and(|v| !v.defined)
-                {
+                if self.in_own_initializer(n) {
                     self.error(n.span, "Can't read local variable in its own initializer.");
                 }
                 self.local(n, true);
             }
             Expr::Assign(n, v) => {
                 self.expr(v);
+                // The tree-walker has no slot for it yet and the VM would take it for a global.
+                if self.in_own_initializer(n) {
+                    self.error(
+                        n.span,
+                        "Can't assign to local variable in its own initializer.",
+                    );
+                }
                 self.local(n, false); // writing does not count as using
             }
             Expr::Unary(_, x, _) => self.expr(x),
@@ -1124,7 +1184,7 @@ enum Value {
     Bool(bool),
     Num(f64),
     Str(Rc<str>),
-    List(Rc<RefCell<Vec<Value>>>),
+    List(Rc<List>),
     Native(&'static NativeFn),
     Func(Rc<TwFunc>),
     Class(Rc<Class>),
@@ -1132,25 +1192,52 @@ enum Value {
     Closure(Rc<VmClosure>),
 }
 
+thread_local! {
+    static LIVE: Cell<usize> = const { Cell::new(0) };
+}
+/// One live object. Every chain of values (list in list, closure in closure, instance in field) passes through objects
+/// that hold one of these, so the limit also bounds how deeply Rust recurses when it frees such a chain.
+struct Alive;
+impl Alive {
+    fn new() -> Result<Alive, String> {
+        let live = LIVE.get() + 1;
+        if live > MAX_LIVE {
+            return Err("Out of memory: too many live objects.".into());
+        }
+        LIVE.set(live);
+        Ok(Alive)
+    }
+}
+impl Drop for Alive {
+    fn drop(&mut self) {
+        LIVE.set(LIVE.get().saturating_sub(1));
+    }
+}
+struct List {
+    items: RefCell<Vec<Value>>,
+    _alive: Alive,
+}
+
 struct TwFunc {
+    _alive: Alive,
     decl: Rc<FunDecl>,
     closure: Rc<Env>,
     is_init: bool,
 }
 struct Class {
+    _alive: Alive,
     name: Rc<str>,
     superclass: Option<Rc<Class>>,
     methods: HashMap<Rc<str>, Rc<TwFunc>>,
 }
 impl Class {
     fn find_method(&self, name: &str) -> Option<Rc<TwFunc>> {
-        self.methods
-            .get(name)
-            .cloned()
-            .or_else(|| self.superclass.as_ref().and_then(|s| s.find_method(name)))
+        std::iter::successors(Some(self), |c| c.superclass.as_deref())
+            .find_map(|c| c.methods.get(name).cloned())
     }
 }
 struct Instance {
+    _alive: Alive,
     class: Rc<Class>,
     fields: RefCell<HashMap<Rc<str>, Value>>,
 }
@@ -1177,37 +1264,67 @@ fn fmt_num(n: f64) -> String {
     if n.is_nan() {
         "nan".into()
     } else if n.is_infinite() {
-        if n > 0.0 { "inf".into() } else { "-inf".into() }
+        if n > 0.0 {
+            "inf".into()
+        } else {
+            "-inf".into()
+        }
     } else if n == n.trunc() && n.abs() < 1e15 {
         format!("{}", n as i64)
     } else {
         format!("{n}")
     }
 }
-fn stringify(v: &Value) -> String {
-    stringify_depth(v, 0)
+/// A list may hold the same list many times, so its text can be exponentially longer than the value: stop at the limit.
+fn stringify(v: &Value) -> Result<String, String> {
+    let mut out = String::new();
+    write_value(&mut out, v, 0)?;
+    Ok(out)
 }
-fn stringify_depth(v: &Value, depth: usize) -> String {
-    match v {
-        Value::Nil => "nil".into(),
-        Value::Bool(b) => b.to_string(),
-        Value::Num(n) => fmt_num(*n),
-        Value::Str(s) => s.to_string(),
-        Value::List(_) if depth > 8 => "[...]".into(), // a list that contains itself must not recurse forever
-        Value::List(l) => {
-            let items: Vec<String> = l
-                .borrow()
-                .iter()
-                .map(|x| stringify_depth(x, depth + 1))
-                .collect();
-            format!("[{}]", items.join(", "))
-        }
-        Value::Native(n) => format!("<native {}>", n.name),
-        Value::Func(f) => format!("<fn {}>", f.decl.name.name),
-        Value::Closure(c) => format!("<fn {}>", c.proto.name),
-        Value::Class(c) => format!("<class {}>", c.name),
-        Value::Instance(i) => format!("{} instance", i.class.name),
+fn room(len: usize) -> Result<(), String> {
+    if len > MAX_TEXT {
+        return Err("String too long.".into());
     }
+    Ok(())
+}
+fn write_value(out: &mut String, v: &Value, depth: usize) -> Result<(), String> {
+    match v {
+        Value::Nil => out.push_str("nil"),
+        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Value::Num(n) => out.push_str(&fmt_num(*n)),
+        Value::Str(s) => {
+            room(out.len() + s.len())?;
+            out.push_str(s);
+        }
+        Value::List(_) if depth > 8 => out.push_str("[...]"), // a list that contains itself must not recurse forever
+        Value::List(l) => {
+            out.push('[');
+            for (i, x) in l.items.borrow().iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                write_value(out, x, depth + 1)?;
+                room(out.len())?;
+            }
+            out.push(']');
+        }
+        Value::Native(n) => {
+            let _ = write!(out, "<native {}>", n.name);
+        }
+        Value::Func(f) => {
+            let _ = write!(out, "<fn {}>", f.decl.name.name);
+        }
+        Value::Closure(c) => {
+            let _ = write!(out, "<fn {}>", c.proto.name);
+        }
+        Value::Class(c) => {
+            let _ = write!(out, "<class {}>", c.name);
+        }
+        Value::Instance(i) => {
+            let _ = write!(out, "{} instance", i.class.name);
+        }
+    }
+    room(out.len())
 }
 fn type_name(v: &Value) -> &'static str {
     match v {
@@ -1228,7 +1345,10 @@ fn arith(op: BinOp, l: &Value, r: &Value) -> NR {
     match (op, l, r) {
         (Eq, _, _) => Ok(Value::Bool(equals(l, r))),
         (Ne, _, _) => Ok(Value::Bool(!equals(l, r))),
-        (Add, Value::Str(a), Value::Str(b)) => Ok(Value::Str(Rc::from(format!("{a}{b}")))),
+        (Add, Value::Str(a), Value::Str(b)) => {
+            room(a.len() + b.len())?;
+            Ok(Value::Str(Rc::from(format!("{a}{b}"))))
+        }
         (Add, Value::Num(_), Value::Num(_)) => num_op(op, l, r),
         (Add, _, _) => Err("Operands must be two numbers or two strings.".into()),
         _ => num_op(op, l, r),
@@ -1261,7 +1381,7 @@ fn negate(v: &Value) -> NR {
     }
 }
 
-fn as_list(v: &Value, who: &str) -> Result<Rc<RefCell<Vec<Value>>>, String> {
+fn as_list(v: &Value, who: &str) -> Result<Rc<List>, String> {
     match v {
         Value::List(l) => Ok(l.clone()),
         _ => Err(format!("{who}() expects a list as its first argument.")),
@@ -1274,19 +1394,23 @@ fn as_index(v: &Value, len: usize) -> Result<usize, String> {
     }
 }
 fn n_print(out: &mut String, a: &[Value]) -> NR {
-    out.push_str(&stringify(&a[0]));
+    let text = stringify(&a[0])?;
+    if out.len() + text.len() >= MAX_OUTPUT {
+        return Err("Output limit exceeded.".into());
+    }
+    out.push_str(&text);
     out.push('\n');
     Ok(Value::Nil)
 }
 fn n_len(_: &mut String, a: &[Value]) -> NR {
     match &a[0] {
         Value::Str(s) => Ok(Value::Num(s.chars().count() as f64)),
-        Value::List(l) => Ok(Value::Num(l.borrow().len() as f64)),
+        Value::List(l) => Ok(Value::Num(l.items.borrow().len() as f64)),
         _ => Err("len() expects a string or a list.".into()),
     }
 }
 fn n_str(_: &mut String, a: &[Value]) -> NR {
-    Ok(Value::Str(Rc::from(stringify(&a[0]))))
+    Ok(Value::Str(Rc::from(stringify(&a[0])?)))
 }
 fn n_num(_: &mut String, a: &[Value]) -> NR {
     Ok(match &a[0] {
@@ -1308,31 +1432,38 @@ fn n_assert(_: &mut String, a: &[Value]) -> NR {
         return Ok(Value::Nil);
     }
     Err(match a.get(1) {
-        Some(m) => format!("Assertion failed: {}", stringify(m)),
+        Some(m) => format!("Assertion failed: {}", stringify(m)?),
         None => "Assertion failed.".into(),
     })
 }
 fn n_list(_: &mut String, _: &[Value]) -> NR {
-    Ok(Value::List(Rc::new(RefCell::new(Vec::new()))))
+    Ok(Value::List(Rc::new(List {
+        items: RefCell::new(Vec::new()),
+        _alive: Alive::new()?,
+    })))
 }
 fn n_push(_: &mut String, a: &[Value]) -> NR {
-    as_list(&a[0], "push")?.borrow_mut().push(a[1].clone());
+    let list = as_list(&a[0], "push")?;
+    let mut items = list.items.borrow_mut();
+    if items.len() >= MAX_LIST {
+        return Err("List too long.".into());
+    }
+    items.push(a[1].clone());
     Ok(Value::Nil)
 }
 fn n_pop(_: &mut String, a: &[Value]) -> NR {
-    Ok(as_list(&a[0], "pop")?
-        .borrow_mut()
-        .pop()
-        .unwrap_or(Value::Nil))
+    let list = as_list(&a[0], "pop")?;
+    let last = list.items.borrow_mut().pop();
+    Ok(last.unwrap_or(Value::Nil))
 }
 fn n_get(_: &mut String, a: &[Value]) -> NR {
     let l = as_list(&a[0], "get")?;
-    let l = l.borrow();
+    let l = l.items.borrow();
     Ok(l[as_index(&a[1], l.len())?].clone())
 }
 fn n_set(_: &mut String, a: &[Value]) -> NR {
     let l = as_list(&a[0], "set")?;
-    let mut l = l.borrow_mut();
+    let mut l = l.items.borrow_mut();
     let i = as_index(&a[1], l.len())?;
     l[i] = a[2].clone();
     Ok(Value::Nil)
@@ -1620,7 +1751,9 @@ impl Interp {
                 return Ok(Flow::Return(v));
             }
             Stmt::Fun(d) => {
+                let alive = Alive::new().map_err(|m| self.rt(d.name.span.line, m))?;
                 let f = Value::Func(Rc::new(TwFunc {
+                    _alive: alive,
                     decl: d.clone(),
                     closure: env.clone(),
                     is_init: false,
@@ -1648,21 +1781,22 @@ impl Interp {
             }
             None => env.clone(),
         };
-        let methods = c
-            .methods
-            .iter()
-            .map(|m| {
-                (
-                    m.name.name.clone(),
-                    Rc::new(TwFunc {
-                        decl: m.clone(),
-                        closure: method_env.clone(),
-                        is_init: m.kind == FnKind::Initializer,
-                    }),
-                )
-            })
-            .collect();
+        let line = c.name.span.line;
+        let mut methods = HashMap::new();
+        for m in &c.methods {
+            let alive = Alive::new().map_err(|e| self.rt(line, e))?;
+            methods.insert(
+                m.name.name.clone(),
+                Rc::new(TwFunc {
+                    _alive: alive,
+                    decl: m.clone(),
+                    closure: method_env.clone(),
+                    is_init: m.kind == FnKind::Initializer,
+                }),
+            );
+        }
         let class = Value::Class(Rc::new(Class {
+            _alive: Alive::new().map_err(|e| self.rt(line, e))?,
             name: c.name.name.clone(),
             superclass,
             methods,
@@ -1749,7 +1883,9 @@ impl Interp {
                     return Ok(v.clone());
                 }
                 match inst.class.find_method(name) {
-                    Some(m) => Ok(Value::Func(bind(&m, Value::Instance(inst.clone())))),
+                    Some(m) => bind(&m, Value::Instance(inst.clone()))
+                        .map(Value::Func)
+                        .map_err(|e| self.rt(sp.line, e)),
                     None => Err(self.rt(sp.line, format!("Undefined property '{name}'."))),
                 }
             }
@@ -1776,7 +1912,9 @@ impl Interp {
                     return Err(self.rt(sp.line, "Invalid use of 'super'."));
                 };
                 match sup.find_method(method) {
-                    Some(m) => Ok(Value::Func(bind(&m, this))),
+                    Some(m) => bind(&m, this)
+                        .map(Value::Func)
+                        .map_err(|e| self.rt(sp.line, e)),
                     None => Err(self.rt(sp.line, format!("Undefined property '{method}'."))),
                 }
             }
@@ -1791,13 +1929,16 @@ impl Interp {
                 (n.f)(&mut self.out, &args).map_err(|m| self.rt(line, m))
             }
             Value::Class(k) => {
+                let alive = Alive::new().map_err(|m| self.rt(line, m))?;
                 let inst = Value::Instance(Rc::new(Instance {
+                    _alive: alive,
                     class: k.clone(),
                     fields: RefCell::new(HashMap::new()),
                 }));
                 match k.find_method("init") {
                     Some(init) => {
-                        self.call_function(&bind(&init, inst.clone()), args, line)?;
+                        let bound = bind(&init, inst.clone()).map_err(|m| self.rt(line, m))?;
+                        self.call_function(&bound, args, line)?;
                     }
                     None if args.is_empty() => {}
                     None => {
@@ -1847,14 +1988,16 @@ impl Interp {
 }
 
 /// Method binding = a copy of the function whose closure has one extra scope holding `this`.
-fn bind(m: &Rc<TwFunc>, this: Value) -> Rc<TwFunc> {
+fn bind(m: &Rc<TwFunc>, this: Value) -> Result<Rc<TwFunc>, String> {
+    let alive = Alive::new()?;
     let env = Env::new(Some(m.closure.clone()));
     env.define(Rc::from("this"), this);
-    Rc::new(TwFunc {
+    Ok(Rc::new(TwFunc {
+        _alive: alive,
         decl: m.decl.clone(),
         closure: env,
         is_init: m.is_init,
-    })
+    }))
 }
 
 // =====================================================================================================================
@@ -1897,6 +2040,7 @@ struct Proto {
     upvals: Vec<(bool, usize)>, // (captures a local of the enclosing function?, slot or upvalue index)
 }
 struct VmClosure {
+    _alive: Alive,
     proto: Rc<Proto>,
     upvalues: Vec<Rc<RefCell<Upv>>>,
 }
@@ -1964,6 +2108,11 @@ impl Compiler {
     fn emit(&mut self, op: Op, line: u32) -> usize {
         let f = self.f();
         f.code.push(op);
+        // 0 means "no position of its own" (pops, jumps, constants): it belongs to the line before it.
+        let line = match line {
+            0 => f.lines.last().copied().unwrap_or(1),
+            n => n,
+        };
         f.lines.push(line);
         f.code.len() - 1
     }
@@ -2386,7 +2535,9 @@ impl Vm {
         });
     }
     fn run(&mut self, script: Rc<Proto>) -> Ev<()> {
+        let alive = Alive::new().map_err(|m| self.err(0, m))?;
         let closure = Rc::new(VmClosure {
+            _alive: alive,
             proto: script,
             upvalues: vec![],
         });
@@ -2490,8 +2641,15 @@ impl Vm {
                             }
                         })
                         .collect();
-                    self.stack
-                        .push(Value::Closure(Rc::new(VmClosure { proto, upvalues })));
+                    let alive = match Alive::new() {
+                        Ok(alive) => alive,
+                        Err(m) => return Err(self.err(ip, m)),
+                    };
+                    self.stack.push(Value::Closure(Rc::new(VmClosure {
+                        _alive: alive,
+                        proto,
+                        upvalues,
+                    })));
                 }
                 Op::CloseUpvalue => {
                     self.close_upvalues(self.stack.len().saturating_sub(1));
@@ -2582,6 +2740,7 @@ fn front_end(src: &str) -> Result<(Vec<Stmt>, Vec<Diag>), Vec<Diag>> {
         toks,
         cur: 0,
         diags: vec![],
+        depth: 0,
     };
     let prog = p.program();
     diags.extend(p.diags);
@@ -2598,6 +2757,10 @@ fn front_end(src: &str) -> Result<(Vec<Stmt>, Vec<Diag>), Vec<Diag>> {
     }
     diags.sort_by_key(|d| d.span.start);
     if diags.iter().any(|d| !d.warn) {
+        diags.retain(|d| !d.warn);
+    }
+    diags.truncate(MAX_DIAGS);
+    if diags.iter().any(|d| !d.warn) {
         Err(diags)
     } else {
         Ok((prog, diags))
@@ -2605,6 +2768,7 @@ fn front_end(src: &str) -> Result<(Vec<Stmt>, Vec<Diag>), Vec<Diag>> {
 }
 
 fn run_source(src: &str, backend: Backend, fuel: u64) -> Outcome {
+    LIVE.set(0); // objects leaked by an earlier script's cycles do not count against this one
     let (prog, diags) = match front_end(src) {
         Ok(ok) => ok,
         Err(diags) => {
@@ -3439,6 +3603,105 @@ fn check_limits() {
     }
 }
 
+/// Hostile source and hostile scripts: each of these once panicked, aborted, hung or made the back ends disagree.
+fn check_hostile() -> usize {
+    // an unknown escape before a multi-byte character used to give a span that split it, and `render` panicked
+    let src = "print(\"a\\é\");";
+    let diags = front_end(src).expect_err("a bad escape is an error");
+    assert_eq!(diags.len(), 1);
+    assert!(diags[0].render(src).ends_with("^^"));
+    // assigning to a local inside its own initialiser used to run differently on the two back ends
+    for be in [Backend::Tree, Backend::Vm] {
+        let o = run_source("{ var a = (a = 1); print(a); }", be, 1000);
+        assert_eq!(
+            o.compile_errors,
+            ["[line 1:12] Error at 'a': Can't assign to local variable in its own initializer."]
+        );
+    }
+    // deep or long source is a diagnostic, not a stack overflow
+    let n = 100_000;
+    for src in [
+        format!("print({}1{});", "(".repeat(n), ")".repeat(n)),
+        format!("print(1{});", "+1".repeat(n)),
+        format!("print({}true);", "!".repeat(n)),
+        format!("{}{}", "{".repeat(n), "}".repeat(n)),
+        format!("{}{}", "fun f() {".repeat(n), "}".repeat(n)),
+        format!("{};", "a = ".repeat(n) + "1"),
+        format!("f{};", "()".repeat(n)),
+        format!("{}print(1);", "if (true) ".repeat(n)),
+    ] {
+        let o = run_source(&src, Backend::Tree, 1000);
+        assert!(
+            o.compile_errors[0].ends_with("Too deeply nested."),
+            "{:?}",
+            o.compile_errors.first()
+        );
+        assert!(o.compile_errors.len() <= MAX_DIAGS);
+    }
+    // the deepest accepted tree, at the deepest call depth, fits the interpreter thread
+    let deep = format!(
+        "fun f(n) {{ if (n == 0) return 0; return {}f(n - 1){}; }} print(f(399));",
+        "(1 + ".repeat(60),
+        ")".repeat(60)
+    );
+    assert_eq!(
+        run_source(&deep, Backend::Tree, DEFAULT_FUEL).out,
+        "23940\n"
+    );
+    // many mistakes: only the first MAX_DIAGS are located and reported
+    let o = run_source(&"var = 1;\n".repeat(5_000), Backend::Tree, 1000);
+    assert_eq!(o.compile_errors.len(), MAX_DIAGS);
+    for be in [Backend::Tree, Backend::Vm] {
+        let fails = |src: &str, want: &str| {
+            // enough fuel to reach each limit, so that a missing limit ends in a different error, not a hang
+            let e = run_source(src, be, 2_000_000).error.unwrap_or_default();
+            assert!(e.starts_with(want), "{be:?} {src}: {e:.80}");
+        };
+        // a list holding itself seven times has an exponentially long text
+        fails(
+            "var l = list(); for (var i = 0; i < 7; i = i + 1) push(l, l); print(l);",
+            "String too long.",
+        );
+        fails(
+            "var s = \"x\"; for (var i = 0; i < 40; i = i + 1) s = s + s;",
+            "String too long.",
+        );
+        fails("var l = list(); while (true) push(l, 1);", "List too long.");
+        fails(
+            "var s = \"x\"; for (var i = 0; i < 19; i = i + 1) s = s + s; for (var i = 0; i < 12; i = i + 1) print(s);",
+            "Output limit exceeded.",
+        );
+        // freeing a chain of millions of values used to overflow the stack
+        fails(
+            "var l = list(); while (true) { var m = list(); push(m, l); l = m; }",
+            "Out of memory: too many live objects.",
+        );
+        fails(
+            "fun wrap(f) { fun g() { return f; } return g; } var h = nil; while (true) h = wrap(h);",
+            "Out of memory: too many live objects.",
+        );
+        // temporaries are given back
+        let o = run_source(
+            "for (var i = 0; i < 150000; i = i + 1) { var t = list(); } print(1);",
+            be,
+            DEFAULT_FUEL,
+        );
+        assert_eq!((o.out.as_str(), o.error), ("1\n", None), "{be:?}");
+    }
+    // every instruction has a source line, so a VM trace never says line 0
+    for fuel in 1..40 {
+        let e = run_source(
+            "var n = 0;\nwhile (true) {\n  n = n + 1;\n}",
+            Backend::Vm,
+            fuel,
+        )
+        .error
+        .unwrap_or_default();
+        assert!(!e.contains("[line 0]"), "fuel {fuel}: {e}");
+    }
+    8
+}
+
 fn check_differential(n: u64) -> (usize, usize, usize) {
     let (mut with_output, mut with_error, mut lines) = (0, 0, 0);
     for seed in 1..=n {
@@ -3524,6 +3787,7 @@ fn run_all() {
         "limits: call depth {MAX_CALL_DEPTH} -> 'Stack overflow.' with a {}-frame trace, fuel limit stops runaway loops (both back ends)",
         MAX_CALL_DEPTH + 1
     );
+    println!("hostile input: {} groups of checks (bad escapes, deep source, many errors, huge values and chains)", check_hostile());
     let (ok_n, err_n, lines) = check_differential(300);
     println!(
         "differential: 300 generated programs ({lines} lines) give identical output and errors on both back ends ({ok_n} printed output, {err_n} ended in the same runtime error)"
@@ -3563,7 +3827,7 @@ fn run_all() {
 fn main() {
     // Tree-walking recursion uses several Rust frames per script call, so give the interpreter a roomy stack.
     let h = std::thread::Builder::new()
-        .stack_size(256 * 1024 * 1024)
+        .stack_size(512 * 1024 * 1024)
         .spawn(run_all)
         .expect("spawn interpreter thread");
     if h.join().is_err() {

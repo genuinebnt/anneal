@@ -1,0 +1,30 @@
+slug = "same-formula-other-names"
+title = "The same formula under other names"
+mode = "write"
+level = "medium"
+stage = "meaning"
+order = 2
+status = "ready"
+tags = ["static scoping", "trees", "binding"]
+teaches = [
+  "One walk keeps a stack of the names in force. A use looks from the top of the stack down; the position found is how many binders lie between the use and its own. That number does not depend on what the names are called, so two formulas that differ only in names write the same text. A name not on the stack stays as it is.",
+]
+follow_up = "1) How would you find the distance without searching the stack? 2) What changes if a `let` may be recursive?"
+related = ["Y121", "Y122"]
+
+[[hints]]
+kind = "approach"
+text = "At a use of a name, what do you need to know about the places around it? Carry exactly that down the tree."
+
+[[hints]]
+kind = "rust"
+text = "A `Vec<&str>` of the names in force works as a stack: push before walking a body, pop after. `iter().rev().position(..)` gives a distance."
+
+[[hints]]
+kind = "edge"
+text = "A `Let` has two children that see different things. And a name must stop being in force when you leave its body."
+
+[solution]
+explanation = "One walk keeps a stack of the names in force. A use looks from the top of the stack down; the position found is how many binders lie between the use and its own. That number does not depend on what the names are called, so two formulas that differ only in names write the same text. A name not on the stack stays as it is."
+time = "O(nodes × depth)"
+space = "O(depth)"

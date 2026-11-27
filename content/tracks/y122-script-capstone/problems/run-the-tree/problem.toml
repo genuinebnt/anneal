@@ -1,0 +1,35 @@
+slug = "run-the-tree"
+title = "Run a program: values, variables and loops"
+mode = "write"
+level = "hard"
+stage = "tree"
+order = 4
+status = "ready"
+tags = ["interpreters", "tree-walking", "runtime errors", "resource limits"]
+teaches = [
+  "The interpreter follows the tree. Each statement returns how it ended, so `break` and `continue` travel up as ordinary values until a loop takes them. Runtime scopes mirror the resolver's, and `depth` says how many to walk out. Every list carries a guard that counts it while it lives, which bounds both memory growth and the depth of Rust's recursive drop. Text is checked against its limit while it grows.",
+]
+follow_up = "1) How would you give lookups by index instead of by name? 2) What would it take to free lists that hold each other?"
+related = ["Y121", "Y122"]
+
+[[hints]]
+kind = "approach"
+text = "One function runs a statement and another evaluates an expression. A statement must be able to say how it ended: normally, with `break`, or with `continue`. Scopes at run time should mirror the resolver's, so `depth` is simply how many to walk out."
+
+[[hints]]
+kind = "rust"
+text = "Closures will keep scopes alive later, so share each scope with `Rc` and keep its variables in a `RefCell`. For the live limit, a small type whose constructor counts up and whose `Drop` counts down can sit inside every list."
+
+[[hints]]
+kind = "edge"
+text = "`set(l, 0, v)` may drop the last reference to something that touches `l`: finish the borrow before the old value is freed. Check the output limit before appending, not after."
+
+[solution]
+explanation = "The interpreter follows the tree. Each statement returns how it ended, so `break` and `continue` travel up as ordinary values until a loop takes them. Runtime scopes mirror the resolver's, and `depth` says how many to walk out. Every list carries a guard that counts it while it lives, which bounds both memory growth and the depth of Rust's recursive drop. Text is checked against its limit while it grows."
+time = "proportional to the steps run; a name lookup walks `depth` scopes"
+space = "live values"
+
+[[cookbook]]
+level = "similar"
+page = "toy-language-interpreter"
+note = "The capstone file's tree-walker covers this step with other names. Unlike this task, it prints -0 as 0 and NaN as nan. It had no limits on text, lists, output or live values; that is fixed."

@@ -1,0 +1,21 @@
+code = "Y122"
+name = "Scripting language: capstone"
+section = "Y"
+tier = "sde3"
+order = 122
+summary = "Build a small scripting language and two ways to run it, in nine steps. Each step's starter carries the earlier steps."
+
+[[stages]]
+slug = "front"
+name = "Understand the text"
+band = "hard"
+
+[[stages]]
+slug = "tree"
+name = "Run the tree"
+band = "hard"
+
+[[stages]]
+slug = "machine"
+name = "Run it as instructions"
+band = "hard"

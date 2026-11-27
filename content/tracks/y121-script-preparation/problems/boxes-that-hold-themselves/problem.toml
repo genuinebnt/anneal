@@ -1,0 +1,30 @@
+slug = "boxes-that-hold-themselves"
+title = "Print lists that may hold themselves"
+mode = "write"
+level = "medium"
+stage = "meaning"
+order = 3
+status = "ready"
+tags = ["Rc and RefCell", "cycles", "resource limits", "explicit stack"]
+teaches = [
+  "The writer keeps its own stack of jobs: write a value, write punctuation, or leave a list. A set holds the identities of the lists it is inside, so a cycle is recognised while a list shared side by side is written twice. The length is checked after every job, so the work done is bounded by the limit and not by the size of the unfolded text.",
+]
+follow_up = "1) How would you show which outer list a `[...]` refers to? 2) These lists leak if they form a cycle. What could free them?"
+related = ["Y121", "Y122"]
+
+[[hints]]
+kind = "approach"
+text = "What makes a list 'already being written' is not that you have seen it, but that you are still inside it. So something must be added on the way in and removed on the way out."
+
+[[hints]]
+kind = "rust"
+text = "`Rc::as_ptr` identifies a list without comparing contents. A stack of 'things still to do' can replace recursion; 'leave this list' is one of those things."
+
+[[hints]]
+kind = "edge"
+text = "Check the length as the text grows, not at the end. A very wide list can queue far more work than the limit could ever hold."
+
+[solution]
+explanation = "The writer keeps its own stack of jobs: write a value, write punctuation, or leave a list. A set holds the identities of the lists it is inside, so a cycle is recognised while a list shared side by side is written twice. The length is checked after every job, so the work done is bounded by the limit and not by the size of the unfolded text."
+time = "O(limit)"
+space = "O(limit)"

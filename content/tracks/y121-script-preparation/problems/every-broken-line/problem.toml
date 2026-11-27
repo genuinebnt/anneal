@@ -1,0 +1,30 @@
+slug = "every-broken-line"
+title = "Report every broken line"
+mode = "write"
+level = "medium"
+stage = "text"
+order = 1
+status = "ready"
+tags = ["parsing", "error recovery", "recursion limits"]
+teaches = [
+  "A recursive-descent reader returns the first thing wrong with an item as an error value. The loop over items is the single place that catches it, records it and passes over the rest of the broken item by counting braces. Because it stops at a likely start of the next item, one mistake does not cause others. A depth limit bounds the recursion, and the passing-over is a flat loop.",
+]
+follow_up = "1) What would an editor need to keep the broken item instead of dropping it? 2) How would you suggest the likely fix for a missing `;`?"
+related = ["Y121", "Y122"]
+
+[[hints]]
+kind = "approach"
+text = "Parsing one item either gives the item or one mistake. Write that first. What must happen after a mistake so that the next call starts at a sensible place?"
+
+[[hints]]
+kind = "rust"
+text = "Let the item functions return `Result<_, Mistake>` and use `?`. Only the loop over items catches the error, records it and moves on."
+
+[[hints]]
+kind = "edge"
+text = "The passing-over must not recurse: a file of a hundred thousand `{` is legal input to it. Check that every turn of your item loop takes at least one token."
+
+[solution]
+explanation = "A recursive-descent reader returns the first thing wrong with an item as an error value. The loop over items is the single place that catches it, records it and passes over the rest of the broken item by counting braces. Because it stops at a likely start of the next item, one mistake does not cause others. A depth limit bounds the recursion, and the passing-over is a flat loop."
+time = "O(tokens)"
+space = "O(tokens)"

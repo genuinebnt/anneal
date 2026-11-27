@@ -1,0 +1,30 @@
+slug = "one-pile"
+title = "Keep every variable on one stack"
+mode = "write"
+level = "hard"
+stage = "machine"
+order = 8
+status = "ready"
+tags = ["compilers", "stack slots", "scopes", "jumps"]
+teaches = [
+  "While compiling, a list of the live names mirrors the stack, so a name's index is its slot and a `Let` costs no instruction: its value is already in place. Ending a block pops what it declared. A loop records how many variables existed when it began. Leaving it pops down to that many, on the leaving path only. The jump target is filled in when the loop is finished. The compiler's list is untouched by early exits.",
+]
+follow_up = "1) How would you give each use its slot in O(1)? 2) What changes if functions can capture these variables?"
+related = ["Y121", "Y122"]
+
+[[hints]]
+kind = "approach"
+text = "Imagine the run-time stack while you compile. At each point in the program text you can say exactly what is in every slot. Keep that picture as you go."
+
+[[hints]]
+kind = "rust"
+text = "A `Vec<&str>` that grows with each `Let` and shrinks at block ends is the picture: an index in it is a slot. A stack of loop records holds what each loop needs for its exits."
+
+[[hints]]
+kind = "edge"
+text = "Leaving a loop early must remove what the loop has added at run time. The compiler is not done with those names: the code after the `LeaveIf` still uses them. The test's own value must not be in the way."
+
+[solution]
+explanation = "While compiling, a list of the live names mirrors the stack, so a name's index is its slot and a `Let` costs no instruction: its value is already in place. Ending a block pops what it declared. A loop records how many variables existed when it began. Leaving it pops down to that many, on the leaving path only. The jump target is filled in when the loop is finished. The compiler's list is untouched by early exits."
+time = "O(nodes × live variables)"
+space = "O(nodes)"

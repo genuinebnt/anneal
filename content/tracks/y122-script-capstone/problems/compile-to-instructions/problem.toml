@@ -1,0 +1,35 @@
+slug = "compile-to-instructions"
+title = "Compile to instructions and run them"
+mode = "write"
+level = "hard"
+stage = "machine"
+order = 7
+status = "ready"
+tags = ["interpreters", "bytecode", "jumps", "stack machine"]
+teaches = [
+  "The compiler walks the tree once and emits instructions. Its list of locals mirrors the stack, so a local's index is its slot. Forward jumps are patched when their target is reached; loops remember their `break` and `continue` jumps. Leaving a scope early emits the same pops without forgetting the locals. The machine is one loop over the instructions and shares the value operations with the interpreter.",
+]
+follow_up = "1) Which pairs of instructions could be merged into one? 2) How would you check, before running, that no path can underflow the stack?"
+related = ["Y121", "Y122"]
+
+[[hints]]
+kind = "approach"
+text = "While compiling, keep a list that mirrors the runtime stack: for each slot, which local it holds. Declaring a local then needs no instruction at all. Ending a scope pops as many as it declared."
+
+[[hints]]
+kind = "rust"
+text = "Emit a jump with a dummy target, remember its index, and write the real target in once you get there. Keep a stack of loops, each with the jumps still waiting for a destination."
+
+[[hints]]
+kind = "edge"
+text = "`break` and `continue` must pop the loop's inner locals, but the compiler still needs them for the code that follows. `continue` goes to the loop's step, not straight back to the condition. `and` and `or` keep one operand as their result."
+
+[solution]
+explanation = "The compiler walks the tree once and emits instructions. Its list of locals mirrors the stack, so a local's index is its slot. Forward jumps are patched when their target is reached; loops remember their `break` and `continue` jumps. Leaving a scope early emits the same pops without forgetting the locals. The machine is one loop over the instructions and shares the value operations with the interpreter."
+time = "O(nodes) to compile"
+space = "O(code + stack)"
+
+[[cookbook]]
+level = "similar"
+page = "toy-language-interpreter"
+note = "The capstone file's bytecode back end covers this ground with its own instructions and names. It prints -0 as 0. It recorded line 0 for many instructions; that is fixed."

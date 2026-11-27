@@ -1,0 +1,30 @@
+slug = "where-it-crashed"
+title = "Run routines and report the crash"
+mode = "write"
+level = "hard"
+stage = "machine"
+order = 9
+status = "ready"
+tags = ["virtual machines", "call frames", "stack traces", "resource limits"]
+teaches = [
+  "The machine is one loop over a stack of frames; each frame has its routine, next instruction, base on the shared value stack and current line. A call makes the top values the new frame's first slots by setting its base below them. Every pop and slot access is checked against the base, so a routine cannot reach its caller. Errors leave the frames in place, so the trace is read from them.",
+]
+follow_up = "1) How would you check a routine before running it, so that some of these tests need not be made while running? 2) What would a tail call change?"
+related = ["Y121", "Y122"]
+
+[[hints]]
+kind = "approach"
+text = "What must be remembered about a routine while another one runs? Make a record of it and keep the records in a list."
+
+[[hints]]
+kind = "rust"
+text = "One `Vec<i64>` serves every routine; each record holds where its slot 0 is. Return errors from small helper methods with `?`, and build the trace once, in the caller of your main loop."
+
+[[hints]]
+kind = "edge"
+text = "Popping from the shared stack can succeed and still be wrong. And the arguments of a call are already where the callee wants them."
+
+[solution]
+explanation = "The machine is one loop over a stack of frames; each frame has its routine, next instruction, base on the shared value stack and current line. A call makes the top values the new frame's first slots by setting its base below them. Every pop and slot access is checked against the base, so a routine cannot reach its caller. Errors leave the frames in place, so the trace is read from them."
+time = "O(steps)"
+space = "O(calls + values)"

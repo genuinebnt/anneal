@@ -1,0 +1,35 @@
+slug = "classes"
+title = "Classes, methods and inheritance"
+mode = "write"
+level = "hard"
+stage = "tree"
+order = 6
+status = "ready"
+tags = ["interpreters", "object model", "inheritance", "bound methods"]
+teaches = [
+  "A class is a name, a parent and a table of method functions. All methods of a class close over one scope that holds `super`, so it is fixed by where the text is written. Reading a method wraps it: a new scope holding `this` under the method's scope. The resolver already counted both scopes, so lookups need nothing new. Method search is a loop up the parents.",
+]
+follow_up = "1) Reading a method allocates. How do fast interpreters avoid that for the common `a.m()`? 2) How would you flatten inherited methods, and what would that cost?"
+related = ["Y121", "Y122"]
+
+[[hints]]
+kind = "approach"
+text = "Look at step 3 again: the resolver opened a scope for `super` and one inside it for `this`. If the running program creates the same scopes, `this` and `super` are ordinary variables. When must each be created?"
+
+[[hints]]
+kind = "rust"
+text = "A bound method can be an ordinary function value whose stored scope is a new child of the method's, holding `this`. `std::iter::successors` walks up a superclass chain without recursion."
+
+[[hints]]
+kind = "edge"
+text = "A method inherited by a grandchild still means the same `super`. Do not work it out from the instance. And do not hold a `RefCell` borrow of the fields while evaluating anything."
+
+[solution]
+explanation = "A class is a name, a parent and a table of method functions. All methods of a class close over one scope that holds `super`, so it is fixed by where the text is written. Reading a method wraps it: a new scope holding `this` under the method's scope. The resolver already counted both scopes, so lookups need nothing new. Method search is a loop up the parents."
+time = "O(depth of the class chain) per method read"
+space = "one scope per bound method"
+
+[[cookbook]]
+level = "similar"
+page = "toy-language-interpreter"
+note = "The capstone file covers classes in its tree-walker. Its call depth and names differ, and it prints -0 as 0."

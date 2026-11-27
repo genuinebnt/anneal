@@ -1,0 +1,21 @@
+code = "Y121"
+name = "Scripting language: preparation"
+section = "Y"
+tier = "sde3"
+order = 121
+summary = "Reading broken input, working out what names mean, running trees and running flat instructions."
+
+[[stages]]
+slug = "text"
+name = "Read text"
+band = "medium"
+
+[[stages]]
+slug = "meaning"
+name = "Give it a meaning"
+band = "medium"
+
+[[stages]]
+slug = "machine"
+name = "Run flat code"
+band = "hard"

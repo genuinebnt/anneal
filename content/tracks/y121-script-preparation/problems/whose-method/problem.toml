@@ -1,0 +1,30 @@
+slug = "whose-method"
+title = "Which version runs?"
+mode = "write"
+level = "medium"
+stage = "meaning"
+order = 5
+status = "ready"
+tags = ["object model", "inheritance", "dynamic dispatch", "bound methods"]
+teaches = [
+  "A found method is the pair of its actions and the class that provides it. `Own` searches from the object's class. `Inherited` searches from the parent of the providing class, which is fixed by where the method is written and not by the object. A stored method keeps that pair with the object, so firing it behaves like running it where it was found. Searching walks the parents in a loop.",
+]
+follow_up = "1) How would you make searching O(1), and when would that table be stale? 2) What would several parents change?"
+related = ["Y121", "Y122"]
+
+[[hints]]
+kind = "approach"
+text = "Two different questions get asked: 'what does this object do?' and 'what would my parent do?'. Write down exactly what each one starts from."
+
+[[hints]]
+kind = "rust"
+text = "When you find a method, also remember which class you found it in. A small `Copy` struct that borrows the actions from `classes` can be stored in a field with no cloning."
+
+[[hints]]
+kind = "edge"
+text = "A stored method needs everything it will need later. The object's class is one thing; is it enough?"
+
+[solution]
+explanation = "A found method is the pair of its actions and the class that provides it. `Own` searches from the object's class. `Inherited` searches from the parent of the providing class, which is fixed by where the method is written and not by the object. A stored method keeps that pair with the object, so firing it behaves like running it where it was found. Searching walks the parents in a loop."
+time = "O(depth of the family) per search"
+space = "O(fields)"

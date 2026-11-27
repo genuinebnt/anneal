@@ -313,7 +313,7 @@ async fn the_web_server_series_keeps_its_problems(db: PgPool) {
 #[sqlx::test(migrator = "anneal_api::MIGRATOR")]
 async fn each_shared_exercise_works_in_each_of_its_series(db: PgPool) {
     // in the stable order, so the first is the one shown when nothing says otherwise
-    const SHARED: [(&str, &[&str]); 21] = [
+    const SHARED: [(&str, &[&str]); 24] = [
         ("b4-length-prefixed-codec", &["web-server", "mini-redis"]),
         ("b7-requests-in-pieces", &["web-server", "mini-redis"]),
         ("b7-talk-over-a-connection", &["web-server", "mini-redis"]),
@@ -324,12 +324,15 @@ async fn each_shared_exercise_works_in_each_of_its_series(db: PgPool) {
         ("c4-drain-with-deadline", &["job-service", "mini-redis"]),
         ("c4-fix-cancel-safe-reader", &["mini-redis", "async-runtime"]),
         ("f7-wire-format-json", &["job-service", "event-ledger"]),
-        ("l1-raii-span-guard", &["web-server", "rate-limiter"]),
+        ("l1-raii-span-guard", &["web-server", "rate-limiter", "scripting-language"]),
+        ("l3-zero-copy-tokenizer", &["regex-engine", "scripting-language"]),
         ("l5-const-fn-crc-table", &["key-value-store", "mini-redis"]),
         ("l8-import-errors", &["key-value-store", "event-ledger"]),
         ("m3-claim-without-a-lock", &["rate-limiter", "lease-simulator"]),
         ("s4-btreemap-ranges", &["key-value-store", "mini-redis"]),
         ("s6-merge-sorted-streams", &["key-value-store", "query-optimizer"]),
+        ("y15-expand-the-braces", &["regex-engine", "scripting-language"]),
+        ("y15-lay-a-program-out-flat", &["regex-engine", "scripting-language"]),
         ("y15-print-it-so-it-reads-back", &["regex-engine", "query-optimizer"]),
         ("y17-append-that-fails", &["key-value-store", "event-ledger"]),
         ("y18-records-and-frames", &["key-value-store", "mini-redis"]),

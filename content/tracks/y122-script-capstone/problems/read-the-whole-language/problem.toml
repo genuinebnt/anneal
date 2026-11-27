@@ -1,0 +1,35 @@
+slug = "read-the-whole-language"
+title = "Build the tree for the whole language"
+mode = "write"
+level = "hard"
+stage = "front"
+order = 2
+status = "ready"
+tags = ["interpreters", "parsing", "error recovery", "recursion limits"]
+teaches = [
+  "Statements are recursive descent: the first token picks the function. Infix operators share one loop driven by a table of binding powers. A missing token is recorded and returned as an error value, which unwinds to the declaration loop; that loop skips to a likely statement start and carries on. One counter bounds both recursion and the length of left-leaning chains.",
+]
+follow_up = "1) Which of your messages would be clearer with a second position, such as the unclosed bracket? 2) How would you keep a broken declaration in the tree, so an editor can still use it?"
+related = ["Y121", "Y122"]
+
+[[hints]]
+kind = "approach"
+text = "One function per kind of statement, and one for the infix operators that takes 'how tightly must the next operator bind'. For assignment, parse the left side as an ordinary expression first, then look for `=` and check what you got."
+
+[[hints]]
+kind = "rust"
+text = "Let each parsing function return `Result<T, Reported>` after pushing the diagnostic, so `?` unwinds to the one place that skips ahead. A depth counter in the parser is saved by that same place and restored there."
+
+[[hints]]
+kind = "edge"
+text = "A loop that builds `a + a + a + ...` does not recurse, but the tree it builds does, and so does dropping it. Count each link. `Eof` must never be passed, or skipping runs off the end."
+
+[solution]
+explanation = "Statements are recursive descent: the first token picks the function. Infix operators share one loop driven by a table of binding powers. A missing token is recorded and returned as an error value, which unwinds to the declaration loop; that loop skips to a likely statement start and carries on. One counter bounds both recursion and the length of left-leaning chains."
+time = "O(tokens)"
+space = "O(tokens)"
+
+[[cookbook]]
+level = "similar"
+page = "toy-language-interpreter"
+note = "The capstone file's parser covers this step. It reports the 255 limit again for every extra item, and its names differ."

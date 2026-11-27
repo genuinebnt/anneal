@@ -48,6 +48,18 @@ body = """
 a hand-written suite with exact expected output (fib, closures, higher-order functions, sieve, sorts, JSON printer, classes, mutual recursion, the loop-closure capture rule) and exact error messages + stack traces; then 300 seeded random programs run on **both** back ends must produce identical output and identical errors.
 
 Timing of tree-walk vs bytecode on fib(27) is printed (not asserted).
+
+A last group of checks feeds it hostile source and hostile scripts: a bad escape before a non-ASCII letter, source nested 100 000 deep, thousands of mistakes, text that grows exponentially, and endless chains of values.
+"""
+
+[[sections]]
+heading = "Limits"
+body = """
+Source nesting (200 levels), reported diagnostics (100), one string (1 MiB), one list (100 000 items), printed output (4 MiB) and live objects (100 000) are each capped.
+
+These caps are not a total memory budget: 100 000 lists may each hold many large strings. Fuel counts evaluated nodes or instructions, so one big comparison or print costs a single step, and the two back ends run out of fuel at different places. The interpreter expects the large thread that <code>main</code> starts; on a default thread, deep recursion can still overflow the stack.
+
+In the tree-walker, a local function (or local class) and its scope hold each other. Each one therefore counts as live for the rest of the run, while the VM frees it. A script that declares 100 000 of them runs out of objects on the tree-walker only.
 """
 
 [[sections]]
