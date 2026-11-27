@@ -1,0 +1,31 @@
+slug = "the-same-bad-day"
+title = "Make a rare collision happen again"
+mode = "write"
+level = "medium"
+stage = "survive"
+order = 10
+status = "ready"
+tags = ["deterministic simulation", "seeded randomness", "interleaving", "testing concurrency"]
+teaches = [
+  "Model concurrent work as steps, and let one loop decide who moves next. Every interleaving is then just a list.",
+  "When all chance comes from one seed, a failing run can be run again as often as you like.",
+  "Check the rule after every step. A broken moment that heals itself is still a bug.",
+]
+follow_up = "1) Where must a step end for this to find a real race? What does a step that does two reads hide? 2) You change the order of two random draws. What happens to the failing seeds you saved, and why keep the traces too? 3) What can this never find that running real threads might?"
+
+[[hints]]
+kind = "approach"
+text = "The whole scheduler is a loop: list who is not finished, roll once, step that one, note it down. `hunt` runs the same loop and asks about the world after every step."
+
+[[hints]]
+kind = "rust"
+text = "`workers[i].step(world)` works through the `Box`. Write the loop once, with a closure called after each step that can stop it, and use it for both `run` and `hunt`."
+
+[[hints]]
+kind = "edge"
+text = "Roll exactly once for each step, over the unfinished workers only and in rising order, or your traces differ from everyone else's. A seed of 0 would leave xorshift at 0 for ever."
+
+[solution]
+explanation = "Threads are replaced by workers that move one step when asked. The only choice is who moves, and it comes from a generator seeded by one number, so a seed is a whole schedule. `hunt` tries seeds until the rule breaks and keeps the trace, which replays the failure without the generator."
+time = "O(steps · workers) per run"
+space = "O(steps)"

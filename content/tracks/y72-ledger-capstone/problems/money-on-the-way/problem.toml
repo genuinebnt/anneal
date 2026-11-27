@@ -1,0 +1,32 @@
+slug = "money-on-the-way"
+title = "Capstone 6: money on the way"
+mode = "write"
+level = "hard"
+stage = "the-bank"
+order = 6
+status = "ready"
+crates = ["serde", "serde_json"]
+tags = ["process manager", "saga", "at-least-once", "idempotency", "compensation"]
+teaches = [
+  "A change to two accounts is two changes, with a worker that sees the first and makes the second.",
+  "Make the second command's id from the first event's log position: unique, and the same on every redelivery.",
+  "When the second step cannot happen, undo the first with a new command, and never do both.",
+]
+follow_up = "1) Why not use the sender's transfer number in the command id? 2) Between the two lines the money is in neither account. What must a report or an audit do about it? 3) Two couriers run at once. What still holds, and what could go wrong with a bounce?"
+
+[[hints]]
+kind = "approach"
+text = "For each transfer there are three possible ends: delivered, returned, or stuck. Before trying to deliver, ask whether it has already ended in one particular way that must not be followed by the other."
+
+[[hints]]
+kind = "rust"
+text = "Copy the new lines with `read_all(next_pos).to_vec()` before you start appending. Reuse `execute`: it handles conflicts and duplicates. Move `next_pos` only after a line is fully dealt with."
+
+[[hints]]
+kind = "edge"
+text = "A transfer was returned because the target did not exist. Later someone opens that account, and an older courier position is used again."
+
+[solution]
+explanation = "The courier turns each `TransferredOut` into a command whose id is the line's position, so redelivery is a duplicate and two senders never clash. A refused delivery sends a second command back to the sender under a `Bounce` id. Because the target might accept it later, the courier first checks whether the sender already has the bounce. The position moves only past finished lines, so a store failure is retried."
+time = "O(new lines · load)"
+space = "O(new lines)"

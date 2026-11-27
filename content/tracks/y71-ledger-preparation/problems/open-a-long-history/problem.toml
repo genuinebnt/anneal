@@ -1,0 +1,31 @@
+slug = "open-a-long-history"
+title = "Open a long history without reading all of it"
+mode = "write"
+level = "medium"
+stage = "sharing"
+order = 6
+status = "ready"
+tags = ["caching", "snapshots", "invalidation", "crash recovery"]
+teaches = [
+  "A saved summary of a log is a cache. The log alone must always be enough.",
+  "Store with it what it depends on: how far it read, which entry that was, and which rules made it.",
+  "When in doubt, throw it away and read everything. The cost is time; trusting it can cost the truth.",
+]
+follow_up = "1) How could a saved summary be ahead of its own log? Give a way that involves no bug. 2) Your check looks at one entry. Which change to the log would it miss, and what stronger check would catch it? 3) The state's type gains a field. How does your stored summary say it is out of date?"
+
+[[hints]]
+kind = "approach"
+text = "A bookmark is a claim: 'these rules, applied to this many entries, gave this state'. List each part of the claim, and what could make it false today. Store enough to test every part."
+
+[[hints]]
+kind = "rust"
+text = "`log.get(covers..)` is `None` when the log is shorter than `covers`. `checked_sub(1)` and `get` find the last covered entry without a panic. `checked_div` handles a zero divisor."
+
+[[hints]]
+kind = "edge"
+text = "A log can lose its last entries in a crash, and then grow again with other entries to the same length. A single call can add many entries and jump over a multiple of `every`."
+
+[solution]
+explanation = "The bookmark records the rules version, the number of entries it covers and the id of the last of them. It is used only when all three still hold; otherwise the whole log is read, which is always right. Because ids are never reused, a log that was cut and regrown is noticed. A bookmark is due when the length crosses a multiple of `every`, however far one call jumps."
+time = "O(entries after the bookmark), or O(n) without one"
+space = "O(state)"

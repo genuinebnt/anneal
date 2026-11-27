@@ -1,0 +1,31 @@
+slug = "a-stock-book-in-ink"
+title = "Correct a stock book without rubbing anything out"
+mode = "write"
+level = "medium"
+stage = "history"
+order = 2
+status = "ready"
+tags = ["compensating entry", "audit trail", "invariants", "replay"]
+teaches = [
+  "Correct history by adding to it: a correction is a new entry that cancels an old one's effect.",
+  "Check a correction against the present, not against the moment the old entry was written.",
+  "Put what the correction did inside its own entry, so replaying it needs no look back.",
+]
+follow_up = "1) Why does an accountant never delete a ledger line? Name two things deletion would break. 2) An undo is itself a mistake. How is it put right without undoing an undo? 3) What must the book remember about each entry to answer `undo` in constant time?"
+
+[[hints]]
+kind = "approach"
+text = "An undo is an entry like any other. When you accept one, work out its effect first, check that effect against the stock of today, then record it. Keep enough on the side to answer 'was this already undone?' quickly."
+
+[[hints]]
+kind = "rust"
+text = "A `HashMap<String, u64>` holds the stock and a `HashSet<usize>` the numbers already undone. Funnel every accepted entry through one private method, and let `from_entries` use it too."
+
+[[hints]]
+kind = "edge"
+text = "Undoing a receipt can fail months later, because the goods have gone out since. Undoing a shipment always fits. A rebuilt book must also remember what was undone."
+
+[solution]
+explanation = "The list of entries is the truth; the stock map and the set of undone numbers are summaries of it. `undo` reads the old entry, turns it into a change, and checks that change against today's stock. The new entry carries the change itself, so `apply` handles it without reading older entries. Using the same `apply` for new entries and for rebuilding keeps the two from drifting apart."
+time = "O(1) per operation; O(n) to rebuild"
+space = "O(n)"

@@ -1,0 +1,31 @@
+slug = "totals-from-a-feed"
+title = "Keep a sales board right when the feed repeats itself"
+mode = "write"
+level = "medium"
+stage = "survive"
+order = 8
+status = "ready"
+tags = ["read models", "checkpoints", "idempotent consumers", "replay"]
+teaches = [
+  "A view built from a log is disposable: rebuilding it from the start must give exactly what following it gave.",
+  "Keep the position you have reached with the data it produced, and change both together.",
+  "Skip what you have already seen, and refuse a batch that would leave a hole.",
+]
+follow_up = "1) The board is saved to a database. What must the transaction that saves the totals also save? 2) A bug in the totals ran for a month. What do you do, and what makes it possible? 3) Rebuilding takes six hours. How do you switch to the new board with no gap?"
+
+[[hints]]
+kind = "approach"
+text = "The board needs one number: the position it expects next. Decide first whether the whole batch fits after it. Only then change anything."
+
+[[hints]]
+kind = "rust"
+text = "A first pass that only counts forward a local `want` can return the error before any change. A second pass applies the records whose position equals the board's next one."
+
+[[hints]]
+kind = "edge"
+text = "An old batch must not move the position backwards. A batch can also repeat a record inside itself."
+
+[solution]
+explanation = "The board remembers the next position it needs. Records before it have been counted, so they are skipped; a record after it would leave a hole, so the batch is refused before anything changes. Following the feed and rebuilding go through the same function, so they cannot disagree."
+time = "O(batch log shops); top O(shops log shops)"
+space = "O(shops + days)"

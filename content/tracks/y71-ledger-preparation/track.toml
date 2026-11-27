@@ -1,0 +1,21 @@
+code = "Y71"
+name = "Event ledger: preparation"
+section = "Y"
+tier = "sde3"
+order = 71
+summary = "Preparation for the event ledger capstone: history that is never edited, writers who collide, old records, damaged files and messages that arrive twice."
+
+[[stages]]
+slug = "history"
+name = "Keep what happened"
+band = "medium"
+
+[[stages]]
+slug = "sharing"
+name = "Many writers"
+band = "medium"
+
+[[stages]]
+slug = "survive"
+name = "Damage and followers"
+band = "hard"

@@ -20,9 +20,15 @@ heading = "What it is"
 body = """
 state is never stored, only the facts that produced it. The **event store** is append-only, has one totally ordered global log plus a version counter per stream, and `append(stream, expected_version, events)` fails with a Conflict when another writer got there first (optimistic concurrency, no locks).
 
-Two stores share one trait: in memory, and file-backed with the framing of wal_append_log (len + crc32 per **batch**, so a torn write loses a whole batch, never half of one).
+Two stores share one trait: in memory, and file-backed with one checksummed frame per **batch**, so a torn write loses a whole batch, never half of one.
 
-**Command side**: `decide(state, command) -> Result<Vec<Event>, DomainError>` is pure; `evolve(state, event) -> state` is pure and total (an event is a fact that already happened, so it must never fail). Commands carry an id; the aggregate remembers the ids it has seen, so a retried or duplicated command is a no-op.
+A frame is `len`, `crc32(len)`, `crc32(payload)`, then the payload. The second field says whether the length can be believed. A **torn** end is cut off when the file is opened. **Damage** with more data behind it makes `open` fail, and the file is left as it is.
+
+Opening also checks that positions and versions continue the log, and that every event decodes. After a failed write or sync the store takes no more writes until it is reopened.
+
+**Command side**: `decide(state, command) -> Result<Vec<Event>, DomainError>` is pure; `evolve(state, event) -> state` is pure and total (an event is a fact that already happened, so it must never fail). Commands carry an id. The aggregate remembers each id with a fingerprint of its command, so a retry is a no-op and a **different** command under a used id is refused.
+
+A rejection decided on stale state is not returned as the answer. It is reported as a conflict, so the caller loads again.
 
 **Snapshots** every N events bound replay cost and are only an optimisation: snapshot + tail must equal full replay (asserted). **Query side** (CQRS): read models (balances, daily totals, top spenders) subscribe to the global log with a **checkpoint**. They are disposable: rebuilding from position 0 must give exactly the incrementally maintained model (asserted).
 
@@ -30,13 +36,30 @@ Two stores share one trait: in memory, and file-backed with the framing of wal_a
 
 **Outbox**: events to publish to the outside world are recorded in the same log as the state change (one atomic write), and a relay delivers them **at least once** (acks get lost); the consumer dedupes by event id, giving effectively-once. **Transfers** span two aggregates, which a single-stream append cannot make atomic.
 
-So a transfer is two commands: the source emits `TransferredOut`, a reactor (process manager) later sends `ReceiveTransfer` to the target with a deterministic command id (idempotent under redelivery). Money is conserved as: balances + in-flight (out - in) == external net.
+So a transfer is two commands: the source emits `TransferredOut`, and a reactor (process manager) later sends `ReceiveTransfer` to the target. The command id is made from the log position of the event, so it is the same on every redelivery and no two transfers share it.
+
+A target that was never opened, or whose balance would overflow, cannot take the money. The reactor then sends it back to the source, under a second id for the same position. Money is conserved as: balances + in-flight (out - in) == external net.
 """
 
 [[sections]]
 heading = "How it works"
 body = """
-seeded xorshift drives several writers whose load / commit steps are interleaved deterministically (so stale reads and conflicts really happen), a flaky reactor and relay, then checks every invariant. Finally the file store is truncated mid-batch, reopened, and reprojected.
+a seeded xorshift drives several writers whose load / commit steps are interleaved deterministically (so stale reads and conflicts really happen), a flaky reactor and relay, then checks every invariant. Finally the file store is truncated mid-batch, reopened, and reprojected.
+
+Before all that, hand-made cases cover the edges: a stale rejection, a reused command id, an overflow, two senders with one transfer number, money sent to nobody, a failed write and a failed sync, every cut of a log, and every flipped bit of its first frame.
+"""
+
+[[sections]]
+heading = "Limits"
+body = """
+- Snapshots, projection checkpoints, outbox acknowledgements and the consumer's seen-set live in memory only. After a restart they are rebuilt, and everything publishable is delivered again.
+- An account keeps every command id and every reversible amount for ever, and each load clones them. A real system expires old ids and keeps them outside the aggregate.
+- One process owns the log file. Nothing locks it.
+- Damage to the data of the very **last** frame looks like a torn write, so it is cut off, even if its batch was acknowledged.
+- A crash that leaves zeros before the length and its check are complete is refused as damage. `open` changes nothing, and a person must decide what to cut. A cut-off or zeroed end of the file can silently remove several acknowledged batches, not only a damaged last one.
+- After a failed sync the batch may still be there on reopen. The caller must retry with the same command id.
+- Rejected commands are not remembered, so a retry of one may succeed later.
+- The tests cannot cut the power. The file and directory syncs are there, but nothing here proves them.
 """
 
 [[sections]]

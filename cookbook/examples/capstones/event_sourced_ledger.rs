@@ -5,11 +5,15 @@
 //!
 //! WHAT: state is never stored, only the facts that produced it. The EVENT STORE is append-only, has one totally ordered global
 //! log plus a version counter per stream, and `append(stream, expected_version, events)` fails with a Conflict when another
-//! writer got there first (optimistic concurrency, no locks). Two stores share one trait: in memory, and file-backed with
-//! the framing of wal_append_log (len + crc32 per BATCH, so a torn write loses a whole batch, never half of one).
+//! writer got there first (optimistic concurrency, no locks). Two stores share one trait: in memory, and file-backed with one
+//! checksummed frame per BATCH, so a torn write loses a whole batch, never half of one. A frame is
+//! [len u32][crc32(len) u32][crc32(payload) u32][payload]: the second field says whether the length itself can be believed.
+//! A torn END is cut off; damage with more data behind it makes `open` fail and leaves the file alone. After a failed write or
+//! sync the store takes no more writes until it is reopened.
 //! COMMAND SIDE: `decide(state, command) -> Result<Vec<Event>, DomainError>` is pure; `evolve(state, event) -> state` is
 //! pure and total (an event is a fact that already happened, so it must never fail). Commands carry an id; the aggregate
-//! remembers the ids it has seen, so a retried or duplicated command is a no-op. SNAPSHOTS every N events bound replay cost
+//! remembers the ids it has seen with a fingerprint of the command, so a retry is a no-op and a DIFFERENT command under a
+//! used id is refused. A rejection decided on stale state is reported as a conflict, never as the answer. SNAPSHOTS every N events bound replay cost
 //! and are only an optimisation: snapshot + tail must equal full replay (asserted).
 //! QUERY SIDE (CQRS): read models (balances, daily totals, top spenders) subscribe to the global log with a CHECKPOINT. They
 //! are disposable: rebuilding from position 0 must give exactly the incrementally maintained model (asserted).
@@ -18,8 +22,16 @@
 //! OUTBOX: events to publish to the outside world are recorded in the same log as the state change (one atomic write), and a
 //! relay delivers them AT LEAST ONCE (acks get lost); the consumer dedupes by event id, giving effectively-once.
 //! TRANSFERS span two aggregates, which a single-stream append cannot make atomic. So a transfer is two commands: the source
-//! emits `TransferredOut`, a reactor (process manager) later sends `ReceiveTransfer` to the target with a deterministic
-//! command id (idempotent under redelivery). Money is conserved as: balances + in-flight (out - in) == external net.
+//! emits `TransferredOut`, a reactor (process manager) later sends `ReceiveTransfer` to the target with a command id made
+//! from the log position of that event (unique per transfer, and the same on every redelivery). A target that cannot take
+//! the money (never opened, or its balance would overflow) makes the reactor send it back to the source. Money is conserved
+//! as: balances + in-flight (out - in) == external net.
+//! LIMITS: snapshots, projection checkpoints, outbox acks and the consumer's seen-set live in memory only. An account keeps
+//! every command id and reversible amount for ever, and each load clones them. One process owns the file: nothing locks it.
+//! Damage to the data of the very LAST frame cannot be told apart from a torn write, so it is cut off. A cut or zeroed
+//! tail can silently remove several acknowledged batches. Zeros before the length and its check are complete are
+//! refused as damage. After a failed sync the batch may
+//! still be there on reopen, so a caller must retry with the same command id. Rejected commands are not remembered.
 //! HOW (verification): seeded xorshift drives several writers whose load / commit steps are interleaved deterministically
 //! (so stale reads and conflicts really happen), a flaky reactor and relay, then checks every invariant. Finally the file
 //! store is truncated mid-batch, reopened, and reprojected.
@@ -109,7 +121,7 @@ enum Event {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 enum Command {
     Open,
     Deposit {
@@ -148,6 +160,33 @@ enum DomainError {
     NotReversible(u64),
     #[error("event at version {0} was already reversed")]
     AlreadyReversed(u64),
+    #[error("the balance would not fit")]
+    Overflow,
+    #[error("command id was already used for a different command")]
+    IdReused,
+}
+
+/// Who made up a command id. The two kinds can never collide: a client cannot produce a `Reaction` id by choosing a number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+enum CmdId {
+    Client(u64),
+    /// the answer to the event at this global log position
+    Reaction(u64),
+    /// the return of the money sent by the event at this position
+    Bounce(u64),
+}
+
+impl From<u64> for CmdId {
+    fn from(n: u64) -> CmdId {
+        CmdId::Client(n)
+    }
+}
+
+fn command_print(cmd: &Command) -> u64 {
+    fnv(
+        &serde_json::to_vec(cmd).expect("command serialises"),
+        0xcbf2_9ce4_8422_2325,
+    )
 }
 
 /// The aggregate state. `version` is the stream version it reflects; `cmds` powers idempotency; `deltas` remembers which
@@ -157,7 +196,8 @@ struct Account {
     version: u64,
     open: bool,
     balance: i64,
-    cmds: BTreeSet<u64>,
+    /// command id -> fingerprint of the command it was used for
+    cmds: BTreeMap<CmdId, u64>,
     deltas: BTreeMap<u64, i64>,
     reversed: BTreeSet<u64>,
 }
@@ -168,6 +208,10 @@ fn positive(amount: i64) -> Result<i64, DomainError> {
     } else {
         Err(DomainError::NonPositive)
     }
+}
+
+fn fits(a: &Account, delta: i64) -> Result<i64, DomainError> {
+    a.balance.checked_add(delta).ok_or(DomainError::Overflow)
 }
 
 fn require_funds(a: &Account, need: i64) -> Result<(), DomainError> {
@@ -195,9 +239,10 @@ fn decide(a: &Account, cmd: &Command) -> Result<Vec<Event>, DomainError> {
     }
     let event = match cmd {
         Command::Open => unreachable!("handled above"),
-        Command::Deposit { amount } => Event::Deposited {
-            amount: positive(*amount)?,
-        },
+        Command::Deposit { amount } => {
+            fits(a, positive(*amount)?)?;
+            Event::Deposited { amount: *amount }
+        }
         Command::Withdraw { amount, reason } => {
             require_funds(a, positive(*amount)?)?;
             Event::Withdrawn {
@@ -217,16 +262,20 @@ fn decide(a: &Account, cmd: &Command) -> Result<Vec<Event>, DomainError> {
                 amount: *amount,
             }
         }
-        // the receiving side can never refuse: the money already left the source
+        // no business rule can refuse money that already left the source. Only a missing account or an overflow can,
+        // and then the reactor sends it back
         Command::ReceiveTransfer {
             transfer,
             from,
             amount,
-        } => Event::TransferredIn {
-            transfer: *transfer,
-            from: from.clone(),
-            amount: positive(*amount)?,
-        },
+        } => {
+            fits(a, positive(*amount)?)?;
+            Event::TransferredIn {
+                transfer: *transfer,
+                from: from.clone(),
+                amount: *amount,
+            }
+        }
         Command::Reverse { target } => {
             let delta = *a
                 .deltas
@@ -236,32 +285,36 @@ fn decide(a: &Account, cmd: &Command) -> Result<Vec<Event>, DomainError> {
                 return Err(DomainError::AlreadyReversed(*target));
             }
             require_funds(a, delta)?; // undoing a deposit must not overdraw
+            // a stored event may hold any number, and the smallest one has no negative
+            let back = delta.checked_neg().ok_or(DomainError::Overflow)?;
+            fits(a, back)?;
             Event::Reversed {
                 target: *target,
-                delta: -delta,
+                delta: back,
             }
         }
     };
     Ok(vec![event])
 }
 
-/// PURE and TOTAL: applies a fact that already happened. Never validates (validation belongs to `decide`).
+/// PURE and TOTAL: applies a fact that already happened. Never validates (validation belongs to `decide`), and never
+/// panics: facts from `decide` cannot overflow, and facts from anywhere else saturate.
 fn evolve(mut a: Account, e: &Event) -> Account {
     a.version += 1;
     match e {
         Event::Opened => a.open = true,
         Event::Deposited { amount } => {
-            a.balance += amount;
+            a.balance = a.balance.saturating_add(*amount);
             a.deltas.insert(a.version, *amount);
         }
         Event::Withdrawn { amount, .. } => {
-            a.balance -= amount;
-            a.deltas.insert(a.version, -amount);
+            a.balance = a.balance.saturating_sub(*amount);
+            a.deltas.insert(a.version, amount.saturating_neg());
         }
-        Event::TransferredOut { amount, .. } => a.balance -= amount,
-        Event::TransferredIn { amount, .. } => a.balance += amount,
+        Event::TransferredOut { amount, .. } => a.balance = a.balance.saturating_sub(*amount),
+        Event::TransferredIn { amount, .. } => a.balance = a.balance.saturating_add(*amount),
         Event::Reversed { target, delta } => {
-            a.balance += delta;
+            a.balance = a.balance.saturating_add(*delta);
             a.reversed.insert(*target);
         }
     }
@@ -277,23 +330,26 @@ struct Stored {
     pos: u64, // position in the global log, gapless from 0
     stream: String,
     version: u64, // position in the stream, gapless from 1
-    cmd: u64,
-    ts: u64, // seconds; supplied by the writer's clock, never read inside decide/evolve
+    cmd: CmdId,
+    print: u64, // fingerprint of the command, 0 when unknown (history written before fingerprints)
+    ts: u64,    // seconds; supplied by the writer's clock, never read inside decide/evolve
     schema: u32,
     payload: Value,
 }
 
 struct NewEvent {
-    cmd: u64,
+    cmd: CmdId,
+    print: u64,
     ts: u64,
     schema: u32,
     payload: Value,
 }
 
 impl NewEvent {
-    fn current(cmd: u64, ts: u64, e: &Event) -> NewEvent {
+    fn current(cmd: impl Into<CmdId>, ts: u64, e: &Event) -> NewEvent {
         NewEvent {
-            cmd,
+            cmd: cmd.into(),
+            print: 0,
             ts,
             schema: SCHEMA,
             payload: serde_json::to_value(e).expect("event serialises"),
@@ -333,15 +389,23 @@ fn upcast(schema: u32, mut payload: Value) -> Value {
     payload
 }
 
+/// An error for a schema this code does not know, or a payload that is not an event. A store checks every record with
+/// this when it opens, so nothing it hands out can fail to decode later.
+fn try_decode(s: &Stored) -> Result<Event, String> {
+    if s.schema == 0 || s.schema > SCHEMA {
+        return Err(format!("schema {} is not known here", s.schema));
+    }
+    serde_json::from_value(upcast(s.schema, s.payload.clone())).map_err(|e| e.to_string())
+}
+
 fn decode(s: &Stored) -> Event {
-    serde_json::from_value(upcast(s.schema, s.payload.clone()))
-        .expect("stored event decodes after upcasting")
+    try_decode(s).expect("every stored event was checked when it entered the store")
 }
 
 fn fold(acc: Account, s: &Stored) -> Account {
     debug_assert_eq!(acc.version + 1, s.version, "versions must be gapless");
     let mut next = evolve(acc, &decode(s));
-    next.cmds.insert(s.cmd); // the envelope, not the event, carries the command id
+    next.cmds.insert(s.cmd, s.print); // the envelope, not the event, carries the command id
     next
 }
 
@@ -357,6 +421,10 @@ enum StoreError {
     },
     #[error("io: {0}")]
     Io(#[from] io::Error),
+    #[error("an earlier write failed: reopen the store")]
+    Poisoned,
+    #[error("event refused: {0}")]
+    BadEvent(String),
 }
 
 trait EventStore {
@@ -398,7 +466,7 @@ impl MemStore {
             });
         }
         let base = self.log.len() as u64;
-        Ok(events
+        let batch: Vec<Stored> = events
             .into_iter()
             .enumerate()
             .map(|(i, e)| Stored {
@@ -406,11 +474,32 @@ impl MemStore {
                 stream: stream.into(),
                 version: expected + 1 + i as u64,
                 cmd: e.cmd,
+                print: e.print,
                 ts: e.ts,
                 schema: e.schema,
                 payload: e.payload,
             })
-            .collect())
+            .collect();
+        for s in &batch {
+            try_decode(s).map_err(StoreError::BadEvent)?;
+        }
+        Ok(batch)
+    }
+
+    /// a batch read back from disk must continue the log exactly where it stands
+    fn accepts(&self, batch: &[Stored]) -> Result<(), String> {
+        let mut next: HashMap<&str, u64> = HashMap::new();
+        for (i, s) in batch.iter().enumerate() {
+            let version = next
+                .entry(&s.stream)
+                .or_insert_with(|| self.version(&s.stream));
+            *version += 1;
+            if s.pos != (self.log.len() + i) as u64 || s.version != *version {
+                return Err(format!("position {} is out of sequence", s.pos));
+            }
+            try_decode(s)?;
+        }
+        Ok(())
     }
 
     fn commit(&mut self, batch: Vec<Stored>) {
@@ -458,92 +547,176 @@ impl EventStore for MemStore {
 #[derive(Debug, PartialEq)]
 enum Tail {
     Clean,
-    Truncated { at: u64 },
-    BadChecksum { at: u64 },
+    /// an unfinished last write, safe to cut off
+    Torn {
+        at: u64,
+    },
+    /// bytes that no unfinished write explains: cutting here could lose acknowledged batches
+    Damaged {
+        at: u64,
+    },
 }
 
-/// scan [len u32][crc u32][payload] frames; stop at the first torn or corrupt one (same format as wal_append_log)
+const HEADER: usize = 12;
+
+fn frame(payload: &[u8]) -> Vec<u8> {
+    let len = (payload.len() as u32).to_le_bytes();
+    let mut out = Vec::with_capacity(HEADER + payload.len());
+    out.extend_from_slice(&len);
+    out.extend_from_slice(&crc32(&len).to_le_bytes());
+    out.extend_from_slice(&crc32(payload).to_le_bytes());
+    out.extend_from_slice(payload);
+    out
+}
+
+/// Scan frames from the start. Returns the whole good payloads, the bytes they take, and what follows them.
 fn scan(bytes: &[u8]) -> (Vec<&[u8]>, usize, Tail) {
     let (mut recs, mut pos) = (vec![], 0usize);
+    let zeros = |b: &[u8]| b.iter().all(|&x| x == 0);
+    let word = |b: &[u8]| u32::from_le_bytes(b.try_into().expect("four bytes"));
     loop {
-        if pos == bytes.len() {
+        let rest = &bytes[pos..];
+        if rest.is_empty() {
             return (recs, pos, Tail::Clean);
         }
-        let Some(h) = bytes.get(pos..pos + 8) else {
-            return (recs, pos, Tail::Truncated { at: pos as u64 });
+        let at = pos as u64;
+        let end = if rest.len() < HEADER {
+            return (recs, pos, Tail::Torn { at });
+        } else if crc32(&rest[..4]) != word(&rest[4..8]) || word(&rest[..4]) == 0 {
+            // a file that grew before its data arrived reads as zeros. Anything else here is damage
+            let tail = if zeros(rest) {
+                Tail::Torn { at }
+            } else {
+                Tail::Damaged { at }
+            };
+            return (recs, pos, tail);
+        } else {
+            HEADER + word(&rest[..4]) as usize // the length is trustworthy from here on
         };
-        let len = u32::from_le_bytes(h[..4].try_into().unwrap()) as usize;
-        let crc = u32::from_le_bytes(h[4..].try_into().unwrap());
-        let Some(p) = bytes.get(pos + 8..pos + 8 + len) else {
-            return (recs, pos, Tail::Truncated { at: pos as u64 });
+        let Some(payload) = rest.get(HEADER..end) else {
+            return (recs, pos, Tail::Torn { at });
         };
-        if crc32(p) != crc {
-            return (recs, pos, Tail::BadChecksum { at: pos as u64 });
+        if crc32(payload) != word(&rest[8..HEADER]) {
+            // with nothing but zeros behind it, this is the last write: possibly only partly on disk
+            let tail = if zeros(&rest[end..]) {
+                Tail::Torn { at }
+            } else {
+                Tail::Damaged { at }
+            };
+            return (recs, pos, tail);
         }
-        recs.push(p);
-        pos += 8 + len;
+        recs.push(payload);
+        pos += end;
+    }
+}
+
+/// What the store needs from a file, so that a test can make a write or a sync fail.
+trait Device {
+    fn append(&mut self, bytes: &[u8]) -> io::Result<()>;
+    fn sync(&mut self) -> io::Result<()>;
+}
+
+impl Device for File {
+    fn append(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.write_all(bytes)
+    }
+    fn sync(&mut self) -> io::Result<()> {
+        self.sync_data()
     }
 }
 
 /// File-backed store: WRITE-AHEAD (frame hits the file before the in-memory index changes). One frame = one batch, so
 /// appending several events to a stream is atomic across crashes.
-struct FileStore {
+struct FileStore<D: Device = File> {
     mem: MemStore,
-    file: File,
+    file: D,
     sync_each: bool,
+    /// a write or sync failed: what the file holds is unknown until it is read again
+    poisoned: bool,
 }
 
-impl FileStore {
-    fn open(path: &Path, sync_each: bool) -> io::Result<(FileStore, Tail)> {
-        let bytes = if path.exists() {
-            fs::read(path)?
-        } else {
-            vec![]
-        };
-        let (recs, valid, tail) = scan(&bytes);
-        let mut mem = MemStore::default();
-        for r in recs {
-            mem.commit(serde_json::from_slice(r).map_err(io::Error::other)?);
-        }
+/// Rebuild the in-memory index from the bytes of a log. Returns it with the number of bytes to keep.
+fn recover(bytes: &[u8]) -> io::Result<(MemStore, usize, Tail)> {
+    let bad = |m: String| io::Error::new(io::ErrorKind::InvalidData, m);
+    let (recs, valid, tail) = scan(bytes);
+    if let Tail::Damaged { at } = tail {
+        return Err(bad(format!(
+            "the log is damaged at byte {at}; it was left as it is"
+        )));
+    }
+    let mut mem = MemStore::default();
+    for r in recs {
+        let batch: Vec<Stored> = serde_json::from_slice(r).map_err(|e| bad(e.to_string()))?;
+        mem.accepts(&batch).map_err(bad)?;
+        mem.commit(batch);
+    }
+    Ok((mem, valid, tail))
+}
+
+impl FileStore<File> {
+    fn open(path: &Path, sync_each: bool) -> io::Result<(Self, Tail)> {
+        let existed = path.exists();
+        let bytes = if existed { fs::read(path)? } else { vec![] };
+        let (mem, valid, tail) = recover(&bytes)?; // an error here has changed nothing on disk
         if valid != bytes.len() {
-            // drop the torn tail so new frames start on a clean boundary
-            OpenOptions::new()
-                .write(true)
-                .open(path)?
-                .set_len(valid as u64)?;
+            // drop the torn tail so new frames start on a clean boundary, and make the cut durable
+            let file = OpenOptions::new().write(true).open(path)?;
+            file.set_len(valid as u64)?;
+            file.sync_all()?;
         }
         let file = OpenOptions::new().create(true).append(true).open(path)?;
-        Ok((
-            FileStore {
-                mem,
-                file,
-                sync_each,
-            },
-            tail,
-        ))
-    }
-
-    fn sync(&self) -> io::Result<()> {
-        self.file.sync_data()
+        if !existed {
+            // a new file's NAME is durable only once its directory is synced
+            let dir = path.parent().filter(|d| !d.as_os_str().is_empty());
+            File::open(dir.unwrap_or(Path::new(".")))?.sync_all()?;
+        }
+        Ok((FileStore::over(mem, file, sync_each), tail))
     }
 }
 
-impl EventStore for FileStore {
+impl<D: Device> FileStore<D> {
+    fn over(mem: MemStore, file: D, sync_each: bool) -> Self {
+        FileStore {
+            mem,
+            file,
+            sync_each,
+            poisoned: false,
+        }
+    }
+
+    /// group commit. A failed sync poisons the store like a failed write: trying again proves nothing
+    fn sync(&mut self) -> Result<(), StoreError> {
+        if self.poisoned {
+            return Err(StoreError::Poisoned);
+        }
+        self.file.sync().map_err(|e| {
+            self.poisoned = true;
+            StoreError::Io(e)
+        })
+    }
+}
+
+impl<D: Device> EventStore for FileStore<D> {
     fn append(
         &mut self,
         stream: &str,
         expected: u64,
         events: Vec<NewEvent>,
     ) -> Result<Vec<Stored>, StoreError> {
+        if self.poisoned {
+            return Err(StoreError::Poisoned);
+        }
         let batch = self.mem.prepare(stream, expected, events)?;
+        if batch.is_empty() {
+            return Ok(batch);
+        }
         let payload = serde_json::to_vec(&batch).map_err(io::Error::other)?;
-        let mut frame = Vec::with_capacity(8 + payload.len());
-        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        frame.extend_from_slice(&crc32(&payload).to_le_bytes());
-        frame.extend_from_slice(&payload);
-        self.file.write_all(&frame)?; // one write call keeps the frame contiguous
+        if let Err(e) = self.file.append(&frame(&payload)) {
+            self.poisoned = true; // part of the frame may be there: nothing may be written behind it
+            return Err(e.into());
+        }
         if self.sync_each {
-            self.file.sync_data()?; // fsync per batch is the durable (slow) mode; the simulation batches syncs instead
+            self.sync()?; // fsync per batch is the durable (slow) mode; the simulation batches syncs instead
         }
         self.mem.commit(batch.clone());
         Ok(batch)
@@ -631,34 +804,63 @@ impl<S: EventStore> Ledger<S> {
         &mut self,
         stream: &str,
         loaded: &Account,
-        id: u64,
+        id: impl Into<CmdId>,
         cmd: &Command,
     ) -> Result<Outcome, CmdError> {
-        if loaded.cmds.contains(&id) {
-            return Ok(Outcome::Duplicate); // idempotent: already handled, answer "fine" without new events
+        let (id, print) = (id.into(), command_print(cmd));
+        if let Some(&used) = loaded.cmds.get(&id) {
+            return if used == print || used == 0 {
+                Ok(Outcome::Duplicate) // idempotent: already handled, answer "fine" without new events
+            } else {
+                Err(DomainError::IdReused.into())
+            };
         }
-        let events = decide(loaded, cmd)?;
+        let events = match decide(loaded, cmd) {
+            Ok(events) => events,
+            Err(rule) => {
+                // a "no" is only as good as the state it was based on
+                let actual = self.store.version(stream);
+                if actual != loaded.version {
+                    return Err(StoreError::Conflict {
+                        stream: stream.into(),
+                        expected: loaded.version,
+                        actual,
+                    }
+                    .into());
+                }
+                return Err(rule.into());
+            }
+        };
         let new = events
             .iter()
-            .map(|e| NewEvent::current(id, self.now, e))
+            .map(|e| NewEvent {
+                print,
+                ..NewEvent::current(id, self.now, e)
+            })
             .collect();
         let stored = self.store.append(stream, loaded.version, new)?;
         let next = stored.iter().fold(loaded.clone(), fold);
-        if next.version / self.snap_every > loaded.version / self.snap_every {
+        // snap_every == 0 means no snapshots
+        let crossed = |v: u64| v.checked_div(self.snap_every);
+        if crossed(next.version) > crossed(loaded.version) {
             self.snaps.insert(stream.to_owned(), next); // crossed a multiple of N: keep a snapshot
         }
         Ok(Outcome::Applied(stored.len()))
     }
 
     /// load + commit with retry on conflict (the normal single-threaded path)
-    fn execute(&mut self, stream: &str, id: u64, cmd: &Command) -> Result<Outcome, DomainError> {
+    fn execute(
+        &mut self,
+        stream: &str,
+        id: impl Into<CmdId>,
+        cmd: &Command,
+    ) -> Result<Outcome, CmdError> {
+        let id = id.into();
         loop {
             let acc = self.load(stream);
             match self.try_commit(stream, &acc, id, cmd) {
-                Ok(o) => return Ok(o),
-                Err(CmdError::Domain(d)) => return Err(d),
                 Err(e) if is_conflict(&e) => continue,
-                Err(e) => panic!("unexpected store failure: {e}"),
+                other => return other,
             }
         }
     }
@@ -668,9 +870,11 @@ impl<S: EventStore> Ledger<S> {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 struct Day {
-    deposited: i64,
-    withdrawn: i64,
-    transferred: i64,
+    deposited: i128,
+    withdrawn: i128,
+    transferred: i128,
+    /// net balance change of the reversals made on this day, whatever day they correct
+    reversed: i128,
     events: u64,
 }
 
@@ -680,7 +884,7 @@ struct ReadModels {
     next_pos: u64,
     balances: BTreeMap<String, i64>,
     daily: BTreeMap<u64, Day>,
-    spent: BTreeMap<String, i64>,
+    spent: BTreeMap<String, i128>,
 }
 
 impl ReadModels {
@@ -689,31 +893,30 @@ impl ReadModels {
         day.events += 1;
         let bal = self.balances.entry(s.stream.clone()).or_insert(0);
         let spent = self.spent.entry(s.stream.clone()).or_insert(0);
+        let wide = i128::from;
         match decode(s) {
             Event::Opened => {}
             Event::Deposited { amount } => {
-                *bal += amount;
-                day.deposited += amount;
+                *bal = bal.saturating_add(amount);
+                day.deposited += wide(amount);
             }
             Event::Withdrawn { amount, .. } => {
-                *bal -= amount;
-                *spent += amount;
-                day.withdrawn += amount;
+                *bal = bal.saturating_sub(amount);
+                *spent += wide(amount);
+                day.withdrawn += wide(amount);
             }
             Event::TransferredOut { amount, .. } => {
-                *bal -= amount;
-                *spent += amount;
-                day.transferred += amount;
+                *bal = bal.saturating_sub(amount);
+                *spent += wide(amount);
+                day.transferred += wide(amount);
             }
-            Event::TransferredIn { amount, .. } => *bal += amount,
+            Event::TransferredIn { amount, .. } => *bal = bal.saturating_add(amount),
             Event::Reversed { delta, .. } => {
-                *bal += delta;
-                // a positive delta gave money back (undoing a spend); a negative one removed a deposit
+                *bal = bal.saturating_add(delta);
+                // an earlier day's totals are history: the correction is counted on its own day, in its own column
+                day.reversed += wide(delta);
                 if delta > 0 {
-                    *spent -= delta;
-                    day.withdrawn -= delta;
-                } else {
-                    day.deposited += delta;
+                    *spent -= wide(delta); // a withdrawal that was undone was not spent
                 }
             }
         }
@@ -744,8 +947,8 @@ impl ReadModels {
         rm
     }
 
-    fn top_spenders(&self, n: usize) -> Vec<(String, i64)> {
-        let mut v: Vec<(String, i64)> = self.spent.iter().map(|(k, v)| (k.clone(), *v)).collect();
+    fn top_spenders(&self, n: usize) -> Vec<(String, i128)> {
+        let mut v: Vec<(String, i128)> = self.spent.iter().map(|(k, v)| (k.clone(), *v)).collect();
         v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         v.truncate(n);
         v
@@ -754,20 +957,27 @@ impl ReadModels {
 
 // ---------------------------------------------------------------- reactor (process manager) and outbox
 
-const RECEIVE_BASE: u64 = 1 << 62;
-
 /// Turns `TransferredOut` into `ReceiveTransfer` on the target. At-least-once: it may crash before saving its checkpoint
-/// and re-process, or deliver twice; the deterministic command id makes every repeat a no-op.
+/// and re-process, or deliver twice. The command id is made from the log position of the event being answered, so every
+/// repeat is a no-op and two transfers can never share an id, whatever numbers their senders chose.
 #[derive(Default)]
 struct Reactor {
     next_pos: u64,
     sent: u64,
     absorbed: u64,
+    bounced: u64,
+    /// transfers that could neither arrive nor go back: still in flight, for a person to look at
+    stuck: BTreeSet<u64>,
     crash_pct: u64,
 }
 
 impl Reactor {
-    fn tick<S: EventStore>(&mut self, ledger: &mut Ledger<S>, rng: &mut Rng) {
+    /// A store failure stops the tick before the checkpoint moves, so the same events are seen again.
+    fn tick<S: EventStore>(
+        &mut self,
+        ledger: &mut Ledger<S>,
+        rng: &mut Rng,
+    ) -> Result<(), StoreError> {
         let fresh: Vec<Stored> = ledger.store.read_all(self.next_pos).to_vec();
         for s in &fresh {
             if let Event::TransferredOut {
@@ -776,26 +986,57 @@ impl Reactor {
                 amount,
             } = decode(s)
             {
-                let cmd = Command::ReceiveTransfer {
-                    transfer,
-                    from: s.stream.clone(),
-                    amount,
-                };
                 let times = if rng.chance(25) { 2 } else { 1 }; // duplicate delivery
                 for _ in 0..times {
-                    match ledger
-                        .execute(&to, RECEIVE_BASE | transfer, &cmd)
-                        .expect("receive never fails")
-                    {
-                        Outcome::Applied(_) => self.sent += 1,
-                        Outcome::Duplicate => self.absorbed += 1,
-                    }
+                    self.deliver(ledger, s, transfer, &to, amount)?;
                 }
             }
         }
         if !rng.chance(self.crash_pct) {
             self.next_pos += fresh.len() as u64; // "crash before checkpoint" = skip this line
         }
+        Ok(())
+    }
+
+    fn deliver<S: EventStore>(
+        &mut self,
+        ledger: &mut Ledger<S>,
+        s: &Stored,
+        transfer: u64,
+        to: &str,
+        amount: i64,
+    ) -> Result<(), StoreError> {
+        // once the money has been sent back it must not arrive as well, even if the target can take it now
+        let bounce = CmdId::Bounce(s.pos);
+        if ledger.load(&s.stream).cmds.contains_key(&bounce) {
+            self.absorbed += 1;
+            return Ok(());
+        }
+        let receive = Command::ReceiveTransfer {
+            transfer,
+            from: s.stream.clone(),
+            amount,
+        };
+        match ledger.execute(to, CmdId::Reaction(s.pos), &receive) {
+            Ok(Outcome::Applied(_)) => self.sent += 1,
+            Ok(Outcome::Duplicate) => self.absorbed += 1,
+            Err(CmdError::Store(e)) => return Err(e),
+            Err(CmdError::Domain(_)) => {
+                let back = Command::ReceiveTransfer {
+                    transfer,
+                    from: to.to_owned(),
+                    amount,
+                };
+                match ledger.execute(&s.stream, bounce, &back) {
+                    Ok(_) => self.bounced += 1,
+                    Err(CmdError::Store(e)) => return Err(e),
+                    Err(CmdError::Domain(_)) => {
+                        self.stuck.insert(s.pos);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -963,7 +1204,9 @@ impl<S: EventStore> Sim<S> {
             self.writers[w].1 = self.advance(job);
         }
         if self.rng.chance(30) {
-            self.reactor.tick(&mut self.ledger, &mut self.rng);
+            self.reactor
+                .tick(&mut self.ledger, &mut self.rng)
+                .expect("the store works");
         }
         if self.rng.chance(25) {
             self.rm.catch_up(&self.ledger.store);
@@ -997,7 +1240,10 @@ impl<S: EventStore> Sim<S> {
         for i in 0..steps {
             self.step(true);
             if i % 700 == 699 {
-                check_money(&self.ledger.store, &self.rm.clone_balances(), false);
+                check_money(&self.ledger.store, false);
+                // a lagging read model is still exactly the log up to its checkpoint
+                let then = ReadModels::as_of(&self.ledger.store, self.rm.next_pos);
+                assert_eq!(self.rm, then);
             }
         }
     }
@@ -1008,7 +1254,9 @@ impl<S: EventStore> Sim<S> {
             self.step(false);
         }
         self.reactor.crash_pct = 0;
-        self.reactor.tick(&mut self.ledger, &mut self.rng);
+        self.reactor
+            .tick(&mut self.ledger, &mut self.rng)
+            .expect("the store works");
         self.rm.catch_up(&self.ledger.store);
         while {
             self.outbox.scan(&self.ledger.store);
@@ -1019,31 +1267,26 @@ impl<S: EventStore> Sim<S> {
     }
 }
 
-impl ReadModels {
-    fn clone_balances(&self) -> BTreeMap<String, i64> {
-        self.balances.clone()
-    }
-}
-
 /// external net = money that entered/left the bank; in flight = out - in. Conservation: sum(balances) + in_flight == net
-fn totals<S: EventStore>(store: &S) -> (i64, i64, i64) {
-    let (mut net, mut outs, mut ins) = (0, 0, 0);
+fn totals<S: EventStore>(store: &S) -> (i128, i128, i128) {
+    let (mut net, mut outs, mut ins) = (0i128, 0i128, 0i128);
+    let wide = i128::from;
     for s in store.read_all(0) {
         match decode(s) {
-            Event::Deposited { amount } => net += amount,
-            Event::Withdrawn { amount, .. } => net -= amount,
-            Event::Reversed { delta, .. } => net += delta,
-            Event::TransferredOut { amount, .. } => outs += amount,
-            Event::TransferredIn { amount, .. } => ins += amount,
+            Event::Deposited { amount } => net += wide(amount),
+            Event::Withdrawn { amount, .. } => net -= wide(amount),
+            Event::Reversed { delta, .. } => net += wide(delta),
+            Event::TransferredOut { amount, .. } => outs += wide(amount),
+            Event::TransferredIn { amount, .. } => ins += wide(amount),
             Event::Opened => {}
         }
     }
     (net, outs, ins)
 }
 
-fn check_money<S: EventStore>(store: &S, _rm_balances: &BTreeMap<String, i64>, drained: bool) {
+fn check_money<S: EventStore>(store: &S, drained: bool) {
     let (net, outs, ins) = totals(store);
-    let sum: i64 = store
+    let sum: i128 = store
         .streams()
         .iter()
         .map(|s| {
@@ -1051,7 +1294,7 @@ fn check_money<S: EventStore>(store: &S, _rm_balances: &BTreeMap<String, i64>, d
                 .read_stream(s, 0)
                 .iter()
                 .fold(Account::default(), fold)
-                .balance
+                .balance as i128
         })
         .sum();
     assert_eq!(
@@ -1107,7 +1350,7 @@ fn verify<S: EventStore>(sim: &mut Sim<S>) {
             "balances projection == aggregate"
         );
     }
-    check_money(&sim.ledger.store, &rebuilt.balances, true);
+    check_money(&sim.ledger.store, true);
     // outbox: every publishable event was applied by the consumer exactly once, despite duplicate deliveries
     let want: BTreeSet<u64> = all
         .iter()
@@ -1154,13 +1397,13 @@ fn demo_basics() {
             },
         )
         .unwrap_err();
-    assert_eq!(
+    assert!(matches!(
         err,
-        DomainError::Insufficient {
+        CmdError::Domain(DomainError::Insufficient {
             have: 100,
             need: 500
-        }
-    );
+        })
+    ));
     println!("decide rejected an overdraft: {err}");
 
     // UNDO via compensation: history grows, nothing is deleted
@@ -1181,16 +1424,14 @@ fn demo_basics() {
         4,
         "the mistake AND its correction are both in the log"
     );
-    assert_eq!(
-        l.execute(a, 6, &Command::Reverse { target: 3 })
-            .unwrap_err(),
-        DomainError::AlreadyReversed(3)
-    );
-    assert_eq!(
-        l.execute(a, 7, &Command::Reverse { target: 1 })
-            .unwrap_err(),
-        DomainError::NotReversible(1)
-    );
+    assert!(matches!(
+        l.execute(a, 6, &Command::Reverse { target: 3 }),
+        Err(CmdError::Domain(DomainError::AlreadyReversed(3)))
+    ));
+    assert!(matches!(
+        l.execute(a, 7, &Command::Reverse { target: 1 }),
+        Err(CmdError::Domain(DomainError::NotReversible(1)))
+    ));
 
     // TIME TRAVEL: state as of each version
     let balances: Vec<i64> = (1..=4).map(|v| l.state_at(a, v).balance).collect();
@@ -1209,7 +1450,8 @@ fn demo_upcasting() {
     let mut store = MemStore::default();
     // history written by the OLD code (schema 1): different field names, no `reason`
     let old = |payload: Value| NewEvent {
-        cmd: 0,
+        cmd: CmdId::Client(0),
+        print: 0,
         ts: 0,
         schema: 1,
         payload,
@@ -1283,7 +1525,8 @@ fn demo_optimistic_concurrency() {
 // ---------------------------------------------------------------- crash recovery on the file store
 
 fn demo_crash_recovery(seed: u64) -> io::Result<()> {
-    let dir = std::env::temp_dir().join("flowforge_cookbook_c10");
+    // a directory of this run's own: two runs at once must not share a file
+    let dir = std::env::temp_dir().join(format!("cookbook_ledger_{}", std::process::id()));
     fs::create_dir_all(&dir)?;
     let path = dir.join("ledger.log");
     let _ = fs::remove_file(&path);
@@ -1294,7 +1537,7 @@ fn demo_crash_recovery(seed: u64) -> io::Result<()> {
     sim.run(1500);
     sim.quiesce();
     verify(&mut sim);
-    sim.ledger.store.sync()?; // group commit: one fsync for the whole run
+    sim.ledger.store.sync().expect("sync"); // group commit: one fsync for the whole run
     let original = sim.ledger.store.read_all(0).to_vec();
 
     // the same seed on the in-memory store produces the byte-identical log (store is a pure detail)
@@ -1326,7 +1569,7 @@ fn demo_crash_recovery(seed: u64) -> io::Result<()> {
         kept,
         original.len()
     );
-    assert!(matches!(tail, Tail::Truncated { .. }));
+    assert!(matches!(tail, Tail::Torn { .. }));
     assert!(
         kept < original.len() && kept + 2 >= original.len(),
         "only the last batch is lost"
@@ -1358,21 +1601,225 @@ fn demo_crash_recovery(seed: u64) -> io::Result<()> {
     let (again, tail) = FileStore::open(&path, true)?;
     assert_eq!((tail, again.read_all(0).len()), (Tail::Clean, total));
 
-    // bit rot: flip one payload byte; the checksum stops the scan at that frame
+    // bit rot in the middle: open refuses, and every byte stays where it was for someone to repair
     let mut bytes = fs::read(&path)?;
     bytes[20] ^= 0x40;
     fs::write(&path, &bytes)?;
-    let (_, tail) = FileStore::open(&path, true)?;
-    assert!(matches!(tail, Tail::BadChecksum { at: 0 }));
-    println!("bit flip in the first frame detected: {tail:?}");
-    fs::remove_file(&path)?;
+    let refused = FileStore::open(&path, true).err().expect("damage");
+    assert_eq!(refused.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(fs::read(&path)?, bytes, "nothing was cut off");
+    println!("bit flip in the first frame: {refused}");
+    fs::remove_dir_all(&dir)?;
     Ok(())
+}
+
+// ---------------------------------------------------------------- checks for the edges
+
+fn opened(l: &mut Ledger<MemStore>, name: &str, amount: i64) {
+    l.execute(name, 1, &Command::Open).unwrap();
+    if amount > 0 {
+        l.execute(name, 2, &Command::Deposit { amount }).unwrap();
+    }
+}
+
+fn check_commands() {
+    let mut l = Ledger::new(MemStore::default(), 0); // 0: snapshots off, not a division by zero
+    opened(&mut l, "a", 0);
+    let stale = l.load("a");
+    l.execute("a", 2, &Command::Deposit { amount: 100 })
+        .unwrap();
+    // the stale state says "no funds", the current one does not: that is a conflict, not a refusal
+    let spend = Command::Withdraw {
+        amount: 50,
+        reason: "r".into(),
+    };
+    let err = l.try_commit("a", &stale, 3, &spend).unwrap_err();
+    assert!(is_conflict(&err), "{err}");
+    // the same id for something else is not "already done"
+    assert!(matches!(
+        l.execute("a", 2, &spend),
+        Err(CmdError::Domain(DomainError::IdReused))
+    ));
+    // a balance that would not fit is refused, not a panic or a negative number
+    let huge = Command::Deposit { amount: i64::MAX };
+    assert!(matches!(
+        l.execute("a", 4, &huge),
+        Err(CmdError::Domain(DomainError::Overflow))
+    ));
+    assert_eq!(l.load("a").balance, 100);
+    // facts that `decide` never made still apply without a panic
+    let flood = Event::Deposited { amount: i64::MAX };
+    assert_eq!(evolve(l.load("a"), &flood).balance, i64::MAX);
+    // and reversing such a fact is refused, not a panic
+    let mut odd = evolve(Account::default(), &Event::Opened);
+    odd = evolve(odd, &Event::Deposited { amount: i64::MIN });
+    assert_eq!(
+        decide(&odd, &Command::Reverse { target: 2 }),
+        Err(DomainError::Overflow)
+    );
+    // and a store takes nothing that it could not decode later
+    let junk = NewEvent {
+        payload: json!({"type": "Nonsense"}),
+        ..NewEvent::current(9, 0, &Event::Opened)
+    };
+    let version = l.store.version("a");
+    assert!(matches!(
+        l.store.append("a", version, vec![junk]),
+        Err(StoreError::BadEvent(_))
+    ));
+}
+
+fn check_reactor() {
+    let mut l = Ledger::new(MemStore::default(), 8);
+    for name in ["a", "b", "c"] {
+        opened(&mut l, name, 100);
+    }
+    // two senders happen to pick the same transfer number
+    for (from, amount) in [("a", 10), ("b", 20)] {
+        let cmd = Command::TransferOut {
+            transfer: 7,
+            to: "c".into(),
+            amount,
+        };
+        l.execute(from, 3, &cmd).unwrap();
+    }
+    // and one sends money to an account that was never opened
+    let lost = Command::TransferOut {
+        transfer: 8,
+        to: "nobody".into(),
+        amount: 5,
+    };
+    l.execute("a", 4, &lost).unwrap();
+    let mut reactor = Reactor::default();
+    reactor.tick(&mut l, &mut Rng::new(3)).unwrap();
+    assert_eq!(l.load("c").balance, 130, "both transfers arrived");
+    assert_eq!(l.load("a").balance, 90, "the undeliverable money came back");
+    check_money(&l.store, true);
+    // the target is opened later, then the reactor loses its checkpoint: the bounced money must not also arrive
+    opened(&mut l, "nobody", 0);
+    reactor.next_pos = 0;
+    reactor.tick(&mut l, &mut Rng::new(4)).unwrap();
+    assert_eq!(l.load("nobody").balance, 0);
+    check_money(&l.store, true);
+}
+
+fn check_projection() {
+    let mut l = Ledger::new(MemStore::default(), 8);
+    opened(&mut l, "a", 100);
+    l.now = 90_000;
+    l.execute("a", 3, &Command::Reverse { target: 2 }).unwrap();
+    let rm = ReadModels::rebuild(&l.store);
+    let (first, second) = (rm.daily[&0], rm.daily[&1]);
+    assert_eq!((first.deposited, first.reversed), (100, 0));
+    assert_eq!((second.deposited, second.reversed), (0, -100));
+}
+
+/// A file in memory whose next write can stop half way, or whose next sync can fail.
+#[derive(Default)]
+struct Flaky {
+    bytes: Vec<u8>,
+    short_write: bool,
+    bad_sync: bool,
+}
+
+impl Device for Flaky {
+    fn append(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if std::mem::take(&mut self.short_write) {
+            self.bytes.extend_from_slice(&bytes[..bytes.len() / 2]);
+            return Err(io::Error::other("disk full"));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(())
+    }
+    fn sync(&mut self) -> io::Result<()> {
+        if std::mem::take(&mut self.bad_sync) {
+            return Err(io::Error::other("sync failed"));
+        }
+        Ok(())
+    }
+}
+
+fn check_files() {
+    let ev = |id: u64| vec![NewEvent::current(id, 0, &Event::Opened)];
+    for fail_the_sync in [false, true] {
+        let mut store = FileStore::over(MemStore::default(), Flaky::default(), true);
+        store.append("a", 0, ev(1)).unwrap();
+        store.file.short_write = !fail_the_sync;
+        store.file.bad_sync = fail_the_sync;
+        assert!(matches!(
+            store.append("b", 0, ev(2)),
+            Err(StoreError::Io(_))
+        ));
+        let kept = store.file.bytes.len();
+        // the device works again, but writing now would bury the unknown bytes or repeat a position
+        assert!(matches!(
+            store.append("c", 0, ev(3)),
+            Err(StoreError::Poisoned)
+        ));
+        assert!(matches!(store.sync(), Err(StoreError::Poisoned)));
+        assert_eq!(store.file.bytes.len(), kept);
+        let (mem, _, _) = recover(&store.file.bytes).expect("a readable log");
+        assert_eq!(mem.log.len(), if fail_the_sync { 2 } else { 1 });
+    }
+
+    let mut store = FileStore::over(MemStore::default(), Flaky::default(), false);
+    store.append("a", 0, ev(1)).unwrap();
+    let first = store.file.bytes.len();
+    store.append("b", 0, ev(2)).unwrap();
+    let good = store.file.bytes.clone();
+    // a crash can leave zeros after the data: that is a torn end, not a record
+    for zeros in [1, 11, 12, 4096] {
+        let mut b = good.clone();
+        b.resize(b.len() + zeros, 0);
+        let (mem, valid, tail) = recover(&b).expect("zeros are a torn end");
+        assert_eq!((mem.log.len(), valid), (2, good.len()));
+        assert!(matches!(tail, Tail::Torn { .. }));
+    }
+    // every cut of the file keeps whole batches only
+    for cut in 0..good.len() {
+        let (mem, valid, _) = recover(&good[..cut]).expect("a torn end");
+        assert_eq!(
+            (mem.log.len(), valid),
+            if cut < first { (0, 0) } else { (1, first) }
+        );
+    }
+    // any flipped bit in the first frame, its length included, is damage: nothing may be cut off
+    for bit in 0..first * 8 {
+        let mut b = good.clone();
+        b[bit / 8] ^= 1 << (bit % 8);
+        assert!(recover(&b).is_err(), "bit {bit}");
+    }
+    // a zeroed header in front of a good frame is not a torn end: cutting there would lose an acknowledged batch
+    let mut b = good.clone();
+    b[..HEADER].fill(0);
+    assert!(recover(&b).is_err(), "a zeroed header before good data");
+    // nor is a bad frame with good data far behind it, past any number of zeros
+    let mut b = good[..first].to_vec();
+    b[first - 1] ^= 1;
+    b.resize(first + 4096, 0);
+    b.extend_from_slice(&good[first..]);
+    assert!(recover(&b).is_err(), "data far behind a bad frame");
+    // a frame whose checksums are right but whose content is wrong is refused when opening, not met later
+    let mut batch: Vec<Stored> = serde_json::from_slice(&scan(&good).0[0]).unwrap();
+    assert!(
+        recover(&[good.clone(), frame(&serde_json::to_vec(&batch).unwrap())].concat()).is_err(),
+        "a repeated position"
+    );
+    batch[0].schema = SCHEMA + 1;
+    assert!(
+        recover(&frame(&serde_json::to_vec(&batch).unwrap())).is_err(),
+        "a newer schema"
+    );
 }
 
 // ---------------------------------------------------------------- main
 
 fn main() -> io::Result<()> {
     assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+    check_commands();
+    check_reactor();
+    check_projection();
+    check_files();
     demo_basics();
     demo_upcasting();
     demo_optimistic_concurrency();

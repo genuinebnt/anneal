@@ -1,0 +1,31 @@
+slug = "how-much-to-keep"
+title = "How much of a broken file may you throw away?"
+mode = "write"
+level = "medium"
+stage = "survive"
+order = 7
+status = "ready"
+tags = ["crash recovery", "torn writes", "corruption", "checksums"]
+teaches = [
+  "An unfinished last write is expected after a crash. Cutting it off loses nothing that was promised.",
+  "A bad record with good data behind it is a different thing: cutting there deletes data you said was saved.",
+  "When you cannot explain damage, change nothing and report it.",
+]
+follow_up = "1) One flipped bit in the very last slot is treated as a torn write. What was lost, and could any rule here tell? 2) A disk may keep a later unsynced slot and lose an earlier one. What does your reader do, and is that the right side to err on? 3) With records of different lengths, what new way is there to be fooled?"
+
+[[hints]]
+kind = "approach"
+text = "Find the first thing that is not a good slot. Everything before it is certain. Then ask one question about what comes after it."
+
+[[hints]]
+kind = "rust"
+text = "`chunks_exact(16)` gives whole slots and `remainder()` the rest. `iter().all(|&b| b == 0)` is true for an empty slice, which is what you want here."
+
+[[hints]]
+kind = "edge"
+text = "A crash can leave a piece shorter than a slot, a half-written slot, or a run of zeros. It can also leave a half-written slot followed by zeros."
+
+[solution]
+explanation = "The reader accepts slots until one fails. A crash can only disturb what was being written last, plus zeros where the file grew before its data arrived. So a failure with nothing but zeros after its slot is a torn end. Anything else means bytes that were once written are now wrong, and the file is left for a person."
+time = "O(bytes)"
+space = "O(records)"

@@ -1,0 +1,32 @@
+slug = "last-years-records"
+title = "Read last year's records with this year's code"
+mode = "write"
+level = "medium"
+stage = "history"
+order = 3
+status = "ready"
+tags = ["schema evolution", "serde_json", "versioned data", "compatibility"]
+teaches = [
+  "Never rewrite stored history. Translate old shapes into the current one as you read them.",
+  "Write one small step per version and chain them, so each old shape is described once.",
+  "A version newer than your code is an error: guessing at it loses information silently.",
+]
+follow_up = "1) Why one step per version, and not one converter per old version straight to the newest? 2) A rolling deploy runs old and new code at once. What breaks if the new code writes version 4 at once? 3) A field is removed in version 4 and brought back with another meaning in version 5. What protects an old record?"
+crates = ["serde", "serde_json"]
+
+[[hints]]
+kind = "approach"
+text = "Work on `serde_json::Value` first and only turn it into the typed `Parcel` at the end. Write a function for 1 to 2 and another for 2 to 3. Start at the record's own version and run the steps from there."
+
+[[hints]]
+kind = "rust"
+text = "`Value::as_object_mut`, `Map::remove` and `Map::insert` are enough. `str::rsplit_once` splits at the last match. `serde_json::from_value` does the final typed check, with `#[serde(tag = \"kind\", content = \"data\")]` if you like."
+
+[[hints]]
+kind = "edge"
+text = "A step must build what its new version needs from what its old version had. If an old record happens to carry a field that only a later version defines, that field is just unknown."
+
+[solution]
+explanation = "The reader finds the record's version, rejects what it does not know, then walks it forward one step at a time. Each step knows only two neighbouring shapes. After the last step there is exactly one shape left, which serde checks. The stored text is never changed, so a bug in a step is fixed by fixing the code."
+time = "O(record)"
+space = "O(record)"

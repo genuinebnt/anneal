@@ -1,0 +1,31 @@
+slug = "notices-that-get-lost"
+title = "Tell the warehouse, even when replies get lost"
+mode = "write"
+level = "medium"
+stage = "survive"
+order = 9
+status = "ready"
+tags = ["transactional outbox", "at-least-once delivery", "deduplication", "checkpoints"]
+teaches = [
+  "Send from the committed log, so a notice exists exactly when its change does.",
+  "The saved position may never pass a notice that has not been acknowledged.",
+  "At-least-once delivery plus a receiver that remembers ids gives the effect of once. The id must come from the log, not from the sender's memory.",
+]
+follow_up = "1) Why not send the message inside the same database transaction as the change? 2) The receiver's memory of ids grows for ever. What lets it forget, and what must the sender promise? 3) Two relays run for safety. What still works, and what gets worse?"
+
+[[hints]]
+kind = "approach"
+text = "Keep two things apart: how far the log has been read, and which notices are still waiting. The position to save depends on both."
+
+[[hints]]
+kind = "rust"
+text = "A `VecDeque` or `BTreeMap` of waiting notices works; `retain` or `retain_mut` can send and keep in one pass. A `HashSet<u64>` is the receiver's memory."
+
+[[hints]]
+kind = "edge"
+text = "An early notice stays lost while later ones get through. Then the relay restarts. And think of a stretch of the log with nothing to send."
+
+[solution]
+explanation = "The relay reads each log entry once and queues a notice for those that need one. A notice leaves the queue only on an acknowledgement. The saved position is the oldest waiting notice, or the end of what was read. After a restart it resends some notices, and the inbox drops them because an id is the entry's position."
+time = "O(new entries + waiting) per run"
+space = "O(waiting); the inbox O(notices ever)"

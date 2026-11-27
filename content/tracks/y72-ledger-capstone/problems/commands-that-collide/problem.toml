@@ -1,0 +1,33 @@
+slug = "commands-that-collide"
+title = "Capstone 3: commands that arrive twice or too late"
+mode = "write"
+level = "hard"
+stage = "the-books"
+order = 3
+status = "ready"
+crates = ["serde", "serde_json"]
+tags = ["optimistic concurrency", "idempotency", "snapshots", "retries"]
+teaches = [
+  "Load, decide, then append at the version you loaded. A conflict means start again.",
+  "A refusal made from old state is not an answer: report it as a conflict.",
+  "Remember each command id with a fingerprint, so a retry does nothing and a reused id is caught.",
+  "A snapshot only saves reading. Snapshot plus the tail must equal the whole history.",
+]
+follow_up = "1) Why can `Duplicate` be answered from stale state when a refusal cannot? 2) `execute` retries for as long as there are conflicts. When could that never end, and what would you add? 3) The snapshots live in memory. What changes if they are saved, and `Account` gains a field?"
+
+[[hints]]
+kind = "approach"
+text = "`try_commit` is four questions in order: have I done this id? what do the rules say? if no, am I up to date? if yes, can I append at the version I read? A snapshot is just an account you start folding from."
+
+[[hints]]
+kind = "rust"
+text = "`fold` is `evolve` plus one insert into the command table, from the line's envelope. `read_stream(stream, start.version)` gives exactly the tail. `checked_div` helps tell whether a multiple was passed, also for 0."
+
+[[hints]]
+kind = "edge"
+text = "The command table must survive a snapshot, or old ids are forgotten. A retry must load again. A fingerprint of 0 means the history does not know which command it was."
+
+[solution]
+explanation = "`fold` records every command id with its fingerprint. `try_commit` answers duplicates first. A refusal stands only if the stream has not moved, and an append carries the loaded version. A snapshot is stored when a commit carries the stream past a multiple of N."
+time = "load O(events since the snapshot)"
+space = "O(events) for ids"

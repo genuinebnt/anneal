@@ -1,0 +1,33 @@
+slug = "the-journal-on-disk"
+title = "Capstone 4: the journal on disk"
+mode = "write"
+level = "hard"
+stage = "on-disk"
+order = 4
+status = "ready"
+crates = ["serde", "serde_json"]
+tags = ["write-ahead log", "crash recovery", "checksums", "torn writes", "fsync"]
+teaches = [
+  "One checksummed frame per batch: a torn write loses a whole batch, never half of one.",
+  "Give the length its own checksum, so that a damaged length cannot pass for a torn write.",
+  "Cut a torn end; refuse damage and leave the file untouched.",
+  "After a failed write or sync, take no more writes until the file has been read again.",
+]
+follow_up = "1) After a failed sync, a reopen may find the batch. The caller got an error. What makes a retry safe? 2) One flipped bit in the last frame's data is cut off as torn. Can any format tell those apart? 3) Every append syncs. How would many callers share one sync without any being told 'saved' too early?"
+
+[[hints]]
+kind = "approach"
+text = "`recover` walks the frames. At each step ask in order: is there a whole header? does the length vouch for itself? is the whole payload here? does it match? only then: does it continue the log? Each 'no' has its own verdict."
+
+[[hints]]
+kind = "rust"
+text = "`bytes.get(12..end)` is `None` when the payload is short. `MemStore::admit` does the sequence and decoding checks for you. `File::set_len` cuts, `sync_all` makes the cut durable, and a directory can be opened and synced like a file."
+
+[[hints]]
+kind = "edge"
+text = "A file that grew before its data arrived reads as zeros, after a header, inside a payload, or instead of a header. A whole frame with wrong contents is never a torn write, even at the end."
+
+[solution]
+explanation = "Each frame carries its length, a checksum of that length and a checksum of the payload. So a short payload really is a short write. A bad data checksum is torn only when zeros alone follow. `append` admits lines only after write and sync, and any failure poisons the store."
+time = "open O(bytes); append O(batch)"
+space = "O(log)"

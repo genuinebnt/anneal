@@ -1,0 +1,31 @@
+slug = "the-last-few-seats"
+title = "Sell the last few seats from two windows"
+mode = "write"
+level = "medium"
+stage = "sharing"
+order = 5
+status = "ready"
+tags = ["optimistic concurrency", "retries", "idempotency", "unknown outcome"]
+teaches = [
+  "Read, decide, then write only if nothing moved. When something did, start again from a fresh read.",
+  "A refusal is also a decision. If it rests on old data, it may be wrong, so confirm it before you give it.",
+  "A lost reply leaves the outcome unknown. An id on the request lets the next attempt find out instead of selling twice.",
+]
+follow_up = "1) Why can a reused id be refused without confirming, while 'not enough seats' cannot? 2) Every window retries at once after a conflict. What happens under load, and what would you add? 3) The ids are kept for ever. How would you expire them, and what can go wrong?"
+
+[[hints]]
+kind = "approach"
+text = "One loop, one fresh read at the top of every attempt. Ask first whether this sale is already there. Then decide. Treat each way out of an attempt separately: done, refused for certain, or try again."
+
+[[hints]]
+kind = "rust"
+text = "`for _ in 0..attempts` with `continue` keeps the bound obvious. `let Ok(view) = reg.read() else { continue };` handles a lost reply."
+
+[[hints]]
+kind = "edge"
+text = "Think of a write whose reply was lost although it happened. And think of seats handed back between your read and your 'no'."
+
+[solution]
+explanation = "Every attempt starts from a fresh read, so nothing is carried over from a failed one. The sale id is looked for first, which turns a lost reply into a question the next read answers. A write carries the version it was based on. A 'not enough' answer writes nothing, so it carries no version, and the loop checks the version itself before answering."
+time = "O(attempts) register calls"
+space = "O(1) beyond the view"

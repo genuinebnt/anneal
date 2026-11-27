@@ -1,0 +1,26 @@
+code = "Y72"
+name = "Event ledger capstone"
+section = "Y"
+tier = "sde3"
+order = 72
+summary = "Build a bank ledger that keeps every fact, recovers from a crash and moves money between accounts, in eight steps. Each step's starter carries the earlier work."
+
+[[stages]]
+slug = "the-books"
+name = "The books"
+band = "medium"
+
+[[stages]]
+slug = "on-disk"
+name = "On disk"
+band = "hard"
+
+[[stages]]
+slug = "the-bank"
+name = "The bank"
+band = "hard"
+
+[[stages]]
+slug = "trust-it"
+name = "Trust it"
+band = "hard"

@@ -1,0 +1,31 @@
+slug = "the-account-rules"
+title = "Capstone 1: the rules of an account"
+mode = "write"
+level = "medium"
+stage = "the-books"
+order = 1
+status = "ready"
+tags = ["event sourcing", "pure functions", "compensating events", "checked arithmetic"]
+teaches = [
+  "An account is the fold of its events: one function decides what happens, another applies it.",
+  "A mistake is corrected by a new event that cancels the old one, checked against today's balance.",
+  "Remember in the state what a later correction will need, so deciding never reads history.",
+]
+follow_up = "1) Why can `decide` take `&Account`, and what does that make easy to test? 2) A transfer touches two accounts. Why is it not one command here? 3) The account keeps every reversible amount. How would you bound that, and what would you have to forbid?"
+
+[[hints]]
+kind = "approach"
+text = "Every command except opening is a change to the balance. One helper can say whether a change is allowed. For reversing, ask the account what the old event did to the balance."
+
+[[hints]]
+kind = "rust"
+text = "`checked_add` and `checked_neg` return `None` instead of wrapping. In `evolve`, use `saturating_add`. A `BTreeMap<u64, i64>` from version to effect and a `BTreeSet<u64>` are enough."
+
+[[hints]]
+kind = "edge"
+text = "Undoing a withdrawal adds money, so it can overflow. Undoing a deposit takes money away, so it can find the account too poor."
+
+[solution]
+explanation = "`decide` holds every rule and changes nothing. `evolve` applies facts and cannot fail. The account remembers the effect of each deposit and withdrawal by its version, so a reversal is validated from the state alone. Transfers are not in that table, because one account cannot undo them alone."
+time = "O(log n) per event"
+space = "O(deposits and withdrawals)"

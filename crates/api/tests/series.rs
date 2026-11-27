@@ -308,28 +308,31 @@ async fn the_web_server_series_keeps_its_problems(db: PgPool) {
     assert!(shared > 0, "the test needs a problem that another series has too");
 }
 
-/// The exercises that two series share. Each is shown in whichever of its series was asked for, with that series' own
+/// The exercises that several series share. Each is shown in whichever of its series was asked for, with that series' own
 /// number, neighbours and switch. A new overlap fails here, so that someone decides which series comes first.
 #[sqlx::test(migrator = "anneal_api::MIGRATOR")]
-async fn each_shared_exercise_works_in_both_of_its_series(db: PgPool) {
+async fn each_shared_exercise_works_in_each_of_its_series(db: PgPool) {
     // in the stable order, so the first is the one shown when nothing says otherwise
-    const SHARED: [(&str, [&str; 2]); 16] = [
-        ("b4-length-prefixed-codec", ["web-server", "mini-redis"]),
-        ("b7-requests-in-pieces", ["web-server", "mini-redis"]),
-        ("b7-talk-over-a-connection", ["web-server", "mini-redis"]),
-        ("c1-blocking-queue", ["web-server", "async-runtime"]),
-        ("c2-thread-pool", ["web-server", "async-runtime"]),
-        ("c3-atomic-stats", ["web-server", "rate-limiter"]),
-        ("c4-bounded-fan-out", ["job-service", "mini-redis"]),
-        ("c4-drain-with-deadline", ["job-service", "mini-redis"]),
-        ("c4-fix-cancel-safe-reader", ["mini-redis", "async-runtime"]),
-        ("l1-raii-span-guard", ["web-server", "rate-limiter"]),
-        ("l5-const-fn-crc-table", ["key-value-store", "mini-redis"]),
-        ("m3-claim-without-a-lock", ["rate-limiter", "lease-simulator"]),
-        ("s4-btreemap-ranges", ["key-value-store", "mini-redis"]),
-        ("y18-records-and-frames", ["key-value-store", "mini-redis"]),
-        ("y5-catch-the-broken-queue", ["key-value-store", "regex-engine"]),
-        ("y9-kv-store-wal", ["key-value-store", "mini-redis"]),
+    const SHARED: [(&str, &[&str]); 19] = [
+        ("b4-length-prefixed-codec", &["web-server", "mini-redis"]),
+        ("b7-requests-in-pieces", &["web-server", "mini-redis"]),
+        ("b7-talk-over-a-connection", &["web-server", "mini-redis"]),
+        ("c1-blocking-queue", &["web-server", "async-runtime"]),
+        ("c2-thread-pool", &["web-server", "async-runtime"]),
+        ("c3-atomic-stats", &["web-server", "rate-limiter"]),
+        ("c4-bounded-fan-out", &["job-service", "mini-redis"]),
+        ("c4-drain-with-deadline", &["job-service", "mini-redis"]),
+        ("c4-fix-cancel-safe-reader", &["mini-redis", "async-runtime"]),
+        ("f7-wire-format-json", &["job-service", "event-ledger"]),
+        ("l1-raii-span-guard", &["web-server", "rate-limiter"]),
+        ("l5-const-fn-crc-table", &["key-value-store", "mini-redis"]),
+        ("l8-import-errors", &["key-value-store", "event-ledger"]),
+        ("m3-claim-without-a-lock", &["rate-limiter", "lease-simulator"]),
+        ("s4-btreemap-ranges", &["key-value-store", "mini-redis"]),
+        ("y17-append-that-fails", &["key-value-store", "event-ledger"]),
+        ("y18-records-and-frames", &["key-value-store", "mini-redis"]),
+        ("y5-catch-the-broken-queue", &["key-value-store", "regex-engine", "event-ledger"]),
+        ("y9-kv-store-wal", &["key-value-store", "mini-redis", "event-ledger"]),
     ];
     let app = app_over(db.clone(), &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"));
     // each series' written items in order, as its page lists them
@@ -355,11 +358,14 @@ async fn each_shared_exercise_works_in_both_of_its_series(db: PgPool) {
     let expected: Vec<(String, Vec<String>)> = SHARED.iter().map(|(id, v)| ((*id).to_owned(), sorted(v.iter().map(|x| (*x).to_owned()).collect()))).collect();
     assert_eq!(found, expected);
 
-    for (id, [first, second]) in SHARED {
-        assert_eq!(shown(&app, id, "").await, [first, second], "{id}");
-        assert_eq!(shown(&app, id, "?series=nope").await, [first, second], "{id}");
-        for (asked, other) in [(first, second), (second, first)] {
-            assert_eq!(shown(&app, id, &format!("?series={asked}")).await, [asked, other], "{id}");
+    for (id, order) in SHARED {
+        assert_eq!(shown(&app, id, "").await, order, "{id}");
+        assert_eq!(shown(&app, id, "?series=nope").await, order, "{id}");
+        for &asked in order {
+            // the one asked for, then the rest in the stable order
+            let others: Vec<&str> = order.iter().copied().filter(|s| *s != asked).collect();
+            let want: Vec<&str> = std::iter::once(asked).chain(others.iter().copied()).collect();
+            assert_eq!(shown(&app, id, &format!("?series={asked}")).await, want, "{id}");
             let place = get(&app, &format!("/api/problems/{id}/series?series={asked}")).await;
             let items = &paths.iter().find(|(s, _)| s == asked).unwrap().1;
             let at = items.iter().position(|r| r["id"] == id).unwrap();
@@ -367,8 +373,10 @@ async fn each_shared_exercise_works_in_both_of_its_series(db: PgPool) {
             assert_eq!(place["minutes"], items[at]["minutes"], "{id} in {asked}");
             let side = |i: Option<usize>| i.and_then(|i| items.get(i)).map_or(Value::Null, |r| r["id"].clone());
             assert_eq!((&place["prev"], &place["next"]), (&side(at.checked_sub(1)), &side(Some(at + 1))), "{id} in {asked}");
-            let there = &paths.iter().find(|(s, _)| s == other).unwrap().1;
-            assert_eq!(place["others"][0]["number"], there.iter().find(|r| r["id"] == id).unwrap()["number"], "{id} from {asked}");
+            for (i, other) in others.iter().enumerate() {
+                let there = &paths.iter().find(|(s, _)| s == other).unwrap().1;
+                assert_eq!(place["others"][i]["number"], there.iter().find(|r| r["id"] == id).unwrap()["number"], "{id} from {asked}");
+            }
         }
     }
     assert_eq!(stored_rows(&db).await, (0, 0, 0));

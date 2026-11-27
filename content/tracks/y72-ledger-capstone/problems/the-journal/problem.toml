@@ -1,0 +1,32 @@
+slug = "the-journal"
+title = "Capstone 2: the journal and its old pages"
+mode = "write"
+level = "medium"
+stage = "the-books"
+order = 2
+status = "ready"
+crates = ["serde", "serde_json"]
+tags = ["event store", "serde_json", "schema evolution", "atomic batches"]
+teaches = [
+  "Store each event with the version of its shape, and translate old shapes only when reading.",
+  "Let nothing into the journal that cannot be read back out.",
+  "Split 'check and number' from 'add', so that a store with a disk can write in between.",
+]
+follow_up = "1) Why does `prepare` exist at all, when `append` could do both? 2) Version 3 splits one event into two. What does your decoding return, and what breaks? 3) You find a month of events written with a bug. History may not change. What do you do?"
+
+[[hints]]
+kind = "approach"
+text = "Decoding is two stages: bring the JSON to today's shape, then let serde turn it into an `Event`. For the store, keep all lines in one list and, for each stream, the places of its lines."
+
+[[hints]]
+kind = "rust"
+text = "`Value::get`, `get_mut`, `as_object_mut` and `Map::remove` let you rename a field. `serde_json::from_value` does the typed check. Work on a clone of the payload."
+
+[[hints]]
+kind = "edge"
+text = "`admit` may receive several streams in one batch, so each stream's expected version moves as you walk the batch. Check everything before you push anything."
+
+[solution]
+explanation = "Lines keep the payload and schema they were written with. `decode` upgrades a copy, one version step, before serde reads it, and refuses a schema it does not know. `prepare` checks the expected version and decodes every new event without touching the store. `admit` checks that lines continue the log, then adds them all."
+time = "append O(batch); reads O(lines returned)"
+space = "O(lines)"

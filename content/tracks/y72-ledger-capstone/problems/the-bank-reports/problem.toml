@@ -1,0 +1,32 @@
+slug = "the-bank-reports"
+title = "Capstone 5: the bank's reports"
+mode = "write"
+level = "medium"
+stage = "the-bank"
+order = 5
+status = "ready"
+crates = ["serde", "serde_json"]
+tags = ["read models", "CQRS", "projections", "replay"]
+teaches = [
+  "Answer questions from views built off the journal, never by editing it.",
+  "Following the journal and rebuilding from the start must give the same view.",
+  "A correction made today does not rewrite what an earlier day reported.",
+]
+follow_up = "1) A new report is wanted, covering last year. What do you do, and what makes it possible? 2) The reports lag the journal. Where would that surprise a customer, and what would you do there? 3) The reports are saved to a database. What must be saved in the same transaction?"
+
+[[hints]]
+kind = "approach"
+text = "Write one function that counts one line. Catching up, building from a slice and looking at the past are then three ways of choosing which lines to give it."
+
+[[hints]]
+kind = "rust"
+text = "`read_all(next_pos)` gives exactly what is new. `BTreeMap::entry` makes the first sight of a day or an account easy. Sort the spenders by `b.1.cmp(&a.1).then_with(..)`."
+
+[[hints]]
+kind = "edge"
+text = "A reversal with a positive change gave money back, so it lowers what was spent. One with a negative change removed a deposit, which was never spending."
+
+[solution]
+explanation = "One `count` function applies a line to every table and moves the position, so the position and the numbers cannot drift apart. Catch-up reads from the position; rebuild and as-of are the same function over a prefix. Reversals are shown in their own column on their own day, so reported days never change."
+time = "catch up O(new lines · log n)"
+space = "O(accounts + days)"

@@ -1,0 +1,31 @@
+slug = "the-desk-diary"
+title = "The library desk's diary"
+mode = "write"
+level = "medium"
+stage = "history"
+order = 1
+status = "ready"
+tags = ["state from history", "pure functions", "enums", "business rules"]
+teaches = [
+  "Split a change in two: decide which facts happened, then apply facts to state.",
+  "Keep every rule in the deciding half. Applying a fact never refuses and never panics.",
+  "State is a fold over the facts, so a stored history rebuilds it exactly.",
+]
+follow_up = "1) A rule changes: members may now hold two places in the queue. Which function changes, and what happens to old history? 2) Why must deciding not read the clock or a random number? 3) A fact in the history turns out to be wrong. Why not delete it?"
+
+[[hints]]
+kind = "approach"
+text = "Write `evolve` first, one arm per event, copying the table. It needs no `if` about whether the event makes sense. Then `decide` only looks at the state and returns events."
+
+[[hints]]
+kind = "rust"
+text = "`evolve` takes the book by value: change it and return it. `replay` is `events.iter().fold(..)`. `VecDeque::retain` removes a member wherever they are."
+
+[[hints]]
+kind = "edge"
+text = "Two commands can set the book aside for the next member in the queue. Both must emit the event, and applying it must also take that member out of the queue."
+
+[solution]
+explanation = "`decide` holds every rule: from a state, it returns the facts that follow, or why not. `evolve` only records facts, even ones today's rules would refuse. Only `evolve` changes state, so replaying the saved events gives back the same card."
+time = "O(queue) per command"
+space = "O(queue)"

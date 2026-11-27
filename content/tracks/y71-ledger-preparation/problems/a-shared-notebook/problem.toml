@@ -1,0 +1,31 @@
+slug = "a-shared-notebook"
+title = "A shared notebook that refuses to be written blind"
+mode = "write"
+level = "medium"
+stage = "sharing"
+order = 4
+status = "ready"
+tags = ["append-only log", "optimistic concurrency", "indexes", "atomic batches"]
+teaches = [
+  "A writer says which version it read. If the stream has moved, the write is refused as a whole.",
+  "One global order for everything, and a gapless version inside each stream.",
+  "Check first, then change: a refused batch leaves no trace.",
+]
+follow_up = "1) No writer ever holds a lock between reading and writing. What does that cost when one stream is very busy? 2) Two processes share this journal through a database. Which constraint gives the same guarantee? 3) What would break if positions were reused after a refused write?"
+
+[[hints]]
+kind = "approach"
+text = "Keep one list of all records in order. Beside it, keep for each stream the positions of its records. The stream's version is then something you already know, not something you count."
+
+[[hints]]
+kind = "rust"
+text = "`HashMap<String, Vec<usize>>` maps a stream to its places in the global `Vec`. `slice.get(from..).unwrap_or(&[])` handles a start beyond the end. Convert `u64` with `usize::try_from` or compare before casting."
+
+[[hints]]
+kind = "edge"
+text = "An empty batch still has to pass the version check. It must not make a stream appear that has no records."
+
+[solution]
+explanation = "The expected version turns read-then-write into one safe step: the write happens only if nothing was added since the read. The check comes before any change, so a batch is all or nothing. The per-stream index makes a stream read cost only that stream's records."
+time = "append O(batch); read_stream O(records returned); read_all O(1)"
+space = "O(records)"

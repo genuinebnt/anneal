@@ -1,0 +1,32 @@
+slug = "a-day-at-the-bank"
+title = "Capstone 7: a whole day, replayed at will"
+mode = "write"
+level = "hard"
+stage = "trust-it"
+order = 7
+status = "ready"
+crates = ["serde", "serde_json"]
+tags = ["deterministic simulation", "interleaving", "optimistic concurrency", "testing"]
+teaches = [
+  "Split each writer into a load step and a commit step, and conflicts happen exactly where they would in life.",
+  "Let one function choose who moves: the same choices give the same journal.",
+  "A retried command keeps its id, so a day with conflicts still does each command once.",
+]
+follow_up = "1) What invariants would you check after every step, not only at the end? 2) Where could this day still differ from real threads? 3) How would you add a courier that crashes, and what would the test then have to prove?"
+
+[[hints]]
+kind = "approach"
+text = "A writer is a small state machine: which command it is on, and the account it loaded, if any. A step either loads or tries to commit. The loop builds the list of who can move, asks `choose`, and moves that one."
+
+[[hints]]
+kind = "rust"
+text = "`Option<Account>` with `take()` says which half of the step comes next. `read_all(courier.next_pos).is_empty()` says whether the courier has work. `Vec::get_mut(who)` separates writers from the courier."
+
+[[hints]]
+kind = "edge"
+text = "After a conflict the loaded account is dropped, the command stays, and so does its id. An empty script never moves. A store failure ends the day at once."
+
+[solution]
+explanation = "Each writer holds at most one loaded account, so other participants can write between its load and its commit. The only nondeterminism is `choose`, so a list of choices is a whole schedule. The courier takes part like any writer, and the day ends when nobody has anything left to do."
+time = "O(steps · participants)"
+space = "O(journal)"

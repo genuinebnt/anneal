@@ -1,0 +1,32 @@
+slug = "check-the-books"
+title = "Capstone 8: check the books"
+mode = "write"
+level = "hard"
+stage = "trust-it"
+order = 8
+status = "ready"
+crates = ["serde", "serde_json"]
+tags = ["invariants", "auditing", "verification", "replay"]
+teaches = [
+  "Check a journal independently: replay it and ask, for every line, whether the rules could have written it.",
+  "The rules you already have are the best oracle: derive the command and compare.",
+  "Name each kind of damage precisely, so that a finding points at one line and one cause.",
+]
+follow_up = "1) This auditor trusts `decide`. A bug there would pass. What second check would not share it? 2) Money conservation is not checked directly here. Why do the other findings imply it? 3) The journal is too big to audit from the start each night. What would you save, and how would you check the saved part?"
+
+[[hints]]
+kind = "approach"
+text = "First make sure the numbering is sound. Then replay line by line, with one account per stream. For each event, build the command that would cause it and ask `decide`. Keep a table of transfers sent, by position."
+
+[[hints]]
+kind = "rust"
+text = "`decide(account, &cause) == Ok(vec![event])` checks a whole event at once, reversal amounts included. A `BTreeSet<(&str, CmdId)>` finds repeated ids. `Vec::sort` uses the `Ord` of `Finding`."
+
+[[hints]]
+kind = "edge"
+text = "A bad line still happened: apply it before checking the next. An unreadable line still takes a version. An answer that does not fit answers nothing."
+
+[solution]
+explanation = "The auditor first checks the numbering, because nothing else means anything without it. It then replays every account and asks the rules whether each event could have been produced. Transfers are matched through the position in the answering command id, and each may be answered once. Reports are compared with a fresh build over exactly the lines they say they counted."
+time = "O(lines · log lines)"
+space = "O(accounts + transfers)"
